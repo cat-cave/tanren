@@ -123,6 +123,22 @@ services:
       TANREN_INTERNAL_TLS_CERT: ${TANREN_INTERNAL_TLS_CERT:-}
       TANREN_INTERNAL_TLS_KEY: ${TANREN_INTERNAL_TLS_KEY:-}
       TANREN_INTERNAL_TLS_CA: ${TANREN_INTERNAL_TLS_CA:-}
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - |
+          fetch("http://127.0.0.1:3100/healthz")
+            .then(async (response) => {
+              if (!response.ok) process.exit(1);
+              const body = await response.json();
+              if (body.ok !== true) process.exit(1);
+            })
+            .catch(() => process.exit(1));
+      interval: 5s
+      timeout: 5s
+      retries: 20
     depends_on:
       postgres:
         condition: service_healthy
@@ -193,7 +209,7 @@ services:
         condition: service_started
       # The orchestrator owns the migrate step; wait for it before claiming jobs.
       orchestrator:
-        condition: service_started
+        condition: service_healthy
 
   allocator:
     build:
@@ -242,7 +258,7 @@ services:
       postgres:
         condition: service_healthy
       orchestrator:
-        condition: service_started
+        condition: service_healthy
 
   ntfy:
     image: binwiederhier/ntfy:latest

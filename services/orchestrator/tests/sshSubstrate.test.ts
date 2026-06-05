@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
-import type { Client } from "ssh2";
+import type { Client, ClientChannel } from "ssh2";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RunnerHandle } from "../src/engine/contracts/allocator.js";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
@@ -151,6 +151,31 @@ describe("SSH substrate contract", () => {
     expect(state.destroyCount).toBe(1);
   });
 
+  it("returns ssh_failed with captured output when stdin end triggers a channel error", async () => {
+    const secrets = new FakeSecretStore();
+    await secrets.put({ ref: target.identitySecretRef, value: "private-key" });
+    const { client, state } = createChannelErrorClient();
+    const substrate = new SshCommandSubstrate(secrets, { clientFactory: () => client });
+
+    const result = await substrate.run(target, {
+      command: "cat",
+      stdin: "input",
+      timeoutMs: 100,
+    });
+
+    expect(result.exitCode).toBeNull();
+    expect(result.stdout).toBe("stdout before error");
+    expect(result.stderr).toBe("stderr before error");
+    expect(result.timedOut).toBe(false);
+    expect(result.failure).toEqual({
+      kind: "ssh_failed",
+      target: "tanren@runner:22",
+      message: "channel read failed",
+    });
+    expect(state.destroyCount).toBe(1);
+    expect(state.stdinWritten).toBe("input");
+  });
+
   it("returns ssh_failed with timedOut when the SSH operation exceeds the command timeout", async () => {
     vi.useFakeTimers();
     const secrets = new FakeSecretStore();
@@ -179,6 +204,46 @@ function createNeverReadyClient(): Client {
   });
   return client as unknown as Client;
 }
+
+function createChannelErrorClient(): {
+  client: Client & EventEmitter;
+  state: { destroyCount: number; stdinWritten: string };
+} {
+  const emitter = new EventEmitter();
+  const stderr = new EventEmitter();
+  const state = { destroyCount: 0, stdinWritten: "" };
+  const stream = Object.assign(new EventEmitter(), {
+    stderr,
+    end: (chunk?: string | Buffer) => {
+      state.stdinWritten += chunk?.toString() ?? "";
+      stream.emit("data", Buffer.from("stdout before error"));
+      stderr.emit("data", Buffer.from("stderr before error"));
+      stream.emit("error", new Error("channel read failed"));
+      return stream;
+    },
+  });
+  const client = Object.assign(emitter, {
+    connect: () => {
+      queueMicrotask(() => emitter.emit("ready"));
+      return client;
+    },
+    destroy: () => {
+      state.destroyCount += 1;
+      return client;
+    },
+    end: () => client,
+    exec: (_command: string, callback: (error: Error | undefined, channel: ClientChannel) => void) => {
+      callback(noExecError(), stream as unknown as ClientChannel);
+      return client;
+    },
+  });
+  return {
+    client: client as unknown as Client & EventEmitter,
+    state,
+  };
+}
+
+function noExecError(): Error | undefined {}
 
 /**
  * A fake ssh2 Client whose `destroy()` re-emits "error" — reproducing ssh2's

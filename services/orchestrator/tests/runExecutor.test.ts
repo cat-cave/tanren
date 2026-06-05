@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 import { vcsProviderOver } from "./helpers/vcsProvider.js";
 import { FakeJobQueue } from "../src/engine/contracts/jobQueue.js";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
-import { executeNextPlanJob, RunWorker } from "../src/engine/worker/index.js";
+import { executeNextPlanJob, type ExecuteJobResult, RunWorker } from "../src/engine/worker/index.js";
 import {
   DEFAULT_HEARTBEAT_INTERVAL_MS,
   DEFAULT_LEASE_MS,
@@ -348,30 +348,52 @@ describe("RunWorker default onResult logging classifier", () => {
 });
 
 describe("RunWorker lifecycle (slots, concurrency, drain)", () => {
-  it("converts an infra throw on claim into a worker_infra_error result (slot survives)", async () => {
+  it("backs off after a claim transport throw instead of hot-looping", async () => {
     const { pool, secrets } = await setupSeededRun();
     const jobQueue = new FakeJobQueue();
-    // claim throws once (DB blip), then returns idle so the slot can drain.
-    let calls = 0;
-    jobQueue.claim = async () => {
-      calls += 1;
-      if (calls === 1) {
-        throw new Error("connection reset");
-      }
+    let claims = 0;
+    const claimClient = {
+      async claimJob() {
+        claims += 1;
+        throw new Error("getaddrinfo ENOTFOUND orchestrator");
+      },
     };
 
-    const results: string[] = [];
-    const worker = new RunWorker(deps(pool, secrets, jobQueue, passingGitHub()), {
-      concurrency: 1,
-      pollIntervalMs: 1,
-      onResult: (r) => results.push(r.kind === "failed" ? `failed:${r.failure.kind}` : r.kind),
-    });
+    const results: ExecuteJobResult[] = [];
+    const sleeps: number[] = [];
+    const worker = new RunWorker(
+      { ...deps(pool, secrets, jobQueue, passingGitHub()), claimClient },
+      {
+        concurrency: 1,
+        pollIntervalMs: 250,
+        sleep: (ms) => {
+          sleeps.push(ms);
+          return new Promise<void>(() => {});
+        },
+        onResult: (r) => results.push(r),
+      },
+    );
     worker.start();
-    await delay(20);
+
+    for (let i = 0; i < 20 && sleeps.length === 0; i += 1) {
+      await delay(1);
+    }
+
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({
+      kind: "failed",
+      jobId: "<unclaimed>",
+      failure: { kind: "worker_infra_error", message: "getaddrinfo ENOTFOUND orchestrator" },
+    });
+    expect(sleeps).toEqual([250]);
+    expect(claims).toBe(1);
+
+    await delay(5);
+    expect(claims).toBe(1);
+
     await worker.stop();
 
-    // The infra throw became a worker_infra_error result and the slot kept polling.
-    expect(results.some((r) => r === "failed:worker_infra_error")).toBe(true);
+    expect(claims).toBe(1);
     expect(worker.isDraining).toBe(true);
   });
 

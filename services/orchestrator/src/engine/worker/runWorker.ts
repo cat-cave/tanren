@@ -158,7 +158,10 @@ export class RunWorker {
         };
       }
       this.onResult(result);
-      if (result.kind === "idle") {
+      if (
+        result.kind === "idle" ||
+        (result.kind === "failed" && result.failure.kind === "worker_infra_error" && result.jobId === "<unclaimed>")
+      ) {
         if (this.draining) {
           return;
         }
