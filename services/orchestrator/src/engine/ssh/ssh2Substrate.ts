@@ -8,7 +8,7 @@ import { defineFailure } from "../failure.js";
 import { buildSshExecCommand } from "./command.js";
 import { hostKeyFingerprintMatches } from "./fingerprint.js";
 
-type Ssh2Client = Pick<Client, "connect" | "destroy" | "end" | "exec" | "once">;
+type Ssh2Client = Pick<Client, "connect" | "destroy" | "end" | "exec" | "once" | "on">;
 type Ssh2ClientFactory = () => Ssh2Client;
 
 export interface SshCommandSubstrateOptions {
@@ -119,7 +119,16 @@ export class SshCommandSubstrate implements CommandSubstrate {
           });
         });
       });
-      client.once("error", (error: Error) => fail(hostKeyFailure ?? messageFromError(error)));
+      // PERSISTENT listener (`.on`, not `.once`): ssh2 emits "error" AGAIN during
+      // teardown after a pre-handshake connection loss (e.g. "Connection lost
+      // before handshake" then a second protocol error once `client.destroy()`
+      // runs in settle()). With `.once` that second emission has no listener and
+      // Node's EventEmitter throws an unhandled "error" → the whole control plane
+      // exits(1) on a single transient SSH blip. The `state.settled` guard makes a
+      // repeat invocation a harmless no-op, so we keep listening and swallow it.
+      // A long-lived listener on a destroyed client is fine — it is GC'd with the
+      // client when this run's promise settles.
+      client.on("error", (error: Error) => fail(hostKeyFailure ?? messageFromError(error)));
       client.once("timeout", () => fail(`SSH connection timed out after ${command.timeoutMs}ms`, true));
       client.connect({
         host: target.host,

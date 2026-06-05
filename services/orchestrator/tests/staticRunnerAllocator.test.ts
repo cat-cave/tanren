@@ -18,6 +18,12 @@ class FakeRunnerStore implements RunnerStore {
 interface FakeClientOptions {
   fingerprint?: string;
   emitError?: boolean;
+  /**
+   * Re-emit "error" during destroy() to reproduce ssh2's teardown behaviour
+   * after a pre-handshake connection loss. With a `.once` error listener the
+   * second emission has no listener and Node's EventEmitter throws → crash.
+   */
+  doubleEmitOnDestroy?: boolean;
 }
 
 // The exact ssh2 connect config the discovery handshake builds. Captured so a
@@ -37,7 +43,14 @@ interface CapturedConnect {
 function fakeClientFactory(opts: FakeClientOptions, captured?: CapturedConnect) {
   return () => {
     const emitter = new EventEmitter();
-    return {
+    const client = {
+      // The allocator now registers the error listener with `.on` (persistent),
+      // not `.once`, so the teardown re-emit is swallowed instead of crashing.
+      // The fake must proxy `.on` to actually receive it.
+      on: (event: string, handler: (...args: unknown[]) => void) => {
+        emitter.on(event, handler);
+        return emitter;
+      },
       once: (event: string, handler: (...args: unknown[]) => void) => {
         emitter.once(event, handler);
         return emitter;
@@ -58,9 +71,18 @@ function fakeClientFactory(opts: FakeClientOptions, captured?: CapturedConnect) 
         });
         return emitter;
       },
-      destroy: () => {},
+      destroy: () => {
+        if (opts.doubleEmitOnDestroy ?? false) {
+          // ssh2 re-emits "error" during teardown after a pre-handshake loss.
+          // Real ssh2 fires this on a LATER tick, so it escapes the try/catch
+          // around destroy() in settle(). With `.once` this second emission has
+          // no listener and Node's EventEmitter throws → unhandled crash.
+          queueMicrotask(() => emitter.emit("error", new Error("read ECONNRESET")));
+        }
+      },
       end: () => {},
     };
+    return client;
   };
 }
 
@@ -196,6 +218,39 @@ describe("StaticRunnerAllocator", () => {
         identitySecretRef: "runner/dev/identity",
       }),
     ).rejects.toThrow(/host key discovery failed/u);
+  });
+
+  it("survives a DOUBLE 'error' emission during discovery teardown without crashing", async () => {
+    // Regression for a P0: a single pre-handshake SSH blip crashed the whole
+    // control plane. ssh2 emits "error" once for the failed handshake and AGAIN
+    // during teardown after settle() calls client.destroy(). A `.once` listener
+    // consumes the first emission, leaving the second with no listener, so Node's
+    // EventEmitter throws an unhandled "error" → exit(1). With a persistent `.on`
+    // listener the second emission hits the `settled` guard and is a no-op. If
+    // this regresses, the destroy()-triggered re-emit throws inside the test.
+    const runners = new FakeRunnerStore();
+    const allocator = new StaticRunnerAllocator({
+      host: "runner",
+      port: 22,
+      runners,
+      clientFactory: fakeClientFactory({
+        fingerprint: undefined,
+        emitError: true,
+        doubleEmitOnDestroy: true,
+      }),
+    });
+
+    // Rejects exactly once with the discovery-failed error; the teardown re-emit
+    // does not crash the process and does not re-reject.
+    await expect(
+      allocator.allocate({
+        runId: "run_double_err",
+        projectId: "p",
+        runnerImage: "img",
+        identitySecretRef: "runner/dev/identity",
+      }),
+    ).rejects.toThrow(/host key discovery failed/u);
+    expect(runners.claims).toEqual([]);
   });
 
   it("rejects when the captured host key cannot be parsed into a fingerprint", async () => {
