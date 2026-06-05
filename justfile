@@ -58,6 +58,14 @@ knip:
 refresh-model-prices:
   node scripts/refresh-model-prices.mjs
 
+# Reap agent worktrees (.claude/worktrees/agent-*) whose branch already merged to
+# main. Subagent worktrees each carry their own node_modules + build output and
+# linger after merge; left unattended they accumulate into gigabytes (they once
+# filled the disk). Safe + idempotent — never removes a branch with unmerged
+# commits. Run after merging a subagent PR, or periodically. `--dry-run` reports.
+prune-worktrees *ARGS:
+  scripts/prune-merged-worktrees.sh {{ARGS}}
+
 spelling:
   corepack pnpm run check:spelling
 
