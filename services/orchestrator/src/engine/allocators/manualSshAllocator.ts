@@ -1,5 +1,6 @@
 import {
   persistedRunnerKeys,
+  sshRunnerHandle,
   type AllocationRequest,
   type Allocator,
   type ReleaseReason,
@@ -76,13 +77,13 @@ export class ManualSshAllocator implements Allocator {
     const allocation: RunnerAllocation = {
       runnerId,
       imageSha: `${request.runnerImage}@sha256:manual-ssh`,
-      target: {
+      target: sshRunnerHandle({
         host: host.host,
         port,
         username,
         hostKeyFingerprint: host.hostKeyFingerprint,
         identitySecretRef,
-      },
+      }),
     };
 
     try {

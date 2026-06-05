@@ -1,6 +1,6 @@
-import type { SshTarget } from "../contracts/allocator.js";
+import type { RunnerHandle } from "../contracts/allocator.js";
 import type { SecretStore } from "../contracts/secretStore.js";
-import type { SshSubstrate } from "../contracts/sshSubstrate.js";
+import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import { storeCodexAuthBundle } from "../credentials/codexAuth.js";
 import { codexManagedEnvPath, materializeCodexAuthBundle } from "../credentials/codexMaterializer.js";
 import { quoteSshShellArg } from "../ssh/command.js";
@@ -10,8 +10,8 @@ import { captureBaselineSha, captureGitStateAfterCodex } from "./codexGit.js";
 
 export interface CodexWriterDependencies {
   secrets: SecretStore;
-  ssh: SshSubstrate;
-  target: SshTarget;
+  ssh: CommandSubstrate;
+  target: RunnerHandle;
   credentialRef: string;
   runId: string;
   codexHomeBaseDir?: string;
@@ -231,8 +231,8 @@ export function createCodexAnswerer<TOutput>(dependencies: CodexAnswererDependen
 
 async function persistRefreshedCodexAuthBestEffort(input: {
   secrets: SecretStore;
-  ssh: SshSubstrate;
-  target: SshTarget;
+  ssh: CommandSubstrate;
+  target: RunnerHandle;
   ref: string;
   codexHome: string;
   timeoutMs: number;

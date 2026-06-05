@@ -6,16 +6,16 @@
 // silent empty gate. Invalid YAML/shape throws from the resolver, failing the run
 // loudly rather than gating against nothing.
 import { bootstrapCommand, type CiConfigV1, resolveCiConfig } from "../../ci/index.js";
-import type { SshTarget } from "../../contracts/allocator.js";
-import type { SshSubstrate } from "../../contracts/sshSubstrate.js";
+import type { RunnerHandle } from "../../contracts/allocator.js";
+import type { CommandSubstrate } from "../../contracts/commandSubstrate.js";
 import { quoteSshShellArg } from "../../ssh/command.js";
 
 // The native gate-definition path, relative to the workspace root.
 const CI_CONFIG_FILENAME = ".tanren/ci.yml";
 
 export interface ResolveGateConfigInput {
-  ssh: SshSubstrate;
-  target: SshTarget;
+  ssh: CommandSubstrate;
+  target: RunnerHandle;
   workspacePath: string;
   timeoutMs: number;
 }

@@ -1,9 +1,51 @@
-export interface SshTarget {
+// The set of execution backends a runner handle can belong to. SSH is the one
+// concrete arm today; the others are DOCUMENTED SEAM ARMS — named so the model is
+// explicit, not yet built (Fly Machines micro-VM, Sprites/Daytona native-exec). A
+// new backend extends this union + adds a `RunnerHandle` subtype; it does NOT
+// refactor the consumers.
+export type RunnerBackend = "ssh";
+
+// A RUNNER HANDLE — the address a {@link CommandSubstrate} / {@link FileSubstrate}
+// operates on. This is the CONTRACT SURFACE: the substrate that PRODUCED the handle
+// knows how to reach the runner; engine code threads the handle through unchanged
+// and reads only `backend` off this base — never a backend's reach fields. A
+// concrete backend extends this with its own reach fields (see
+// {@link SshRunnerHandle}); the base stays minimal so consumers cannot accidentally
+// couple to one backend's transport.
+export interface RunnerHandle {
+  readonly backend: RunnerBackend;
+}
+
+// The SSH concrete handle: how the SSH CommandSubstrate / FileSubstrate reach the
+// runner — host/port/username + the verifiable host-key fingerprint + the Vault
+// ref for the identity key (never the key material itself). This is the ONE
+// concrete handle shape today.
+export interface SshRunnerHandle extends RunnerHandle {
+  backend: "ssh";
   host: string;
   port: number;
   username: string;
   hostKeyFingerprint: string;
   identitySecretRef: string;
+}
+
+// Build an SSH runner handle. The single place that stamps `backend: "ssh"`, so
+// allocators (and test fixtures) construct the discriminated handle from their SSH
+// reach fields without repeating the tag. Omit `backend` from the input — it is
+// always "ssh" here.
+export function sshRunnerHandle(fields: Omit<SshRunnerHandle, "backend">): SshRunnerHandle {
+  return { backend: "ssh", ...fields };
+}
+
+// Narrow an opaque RunnerHandle to its SSH shape. The SSH substrate + the SSH
+// allocators are the only places that read SSH reach-fields; they go through this
+// so a non-SSH handle is a LOUD failure (never a silent misread) the day a second
+// backend lands.
+export function asSshRunnerHandle(handle: RunnerHandle): SshRunnerHandle {
+  if (handle.backend !== "ssh") {
+    throw new Error(`expected an SSH runner handle, got backend "${handle.backend}"`);
+  }
+  return handle as SshRunnerHandle;
 }
 
 export interface AllocationRequest {
@@ -65,7 +107,7 @@ export interface AllocationRequest {
 
 export interface RunnerAllocation {
   runnerId: string;
-  target: SshTarget;
+  target: RunnerHandle;
   imageSha: string;
 }
 
@@ -108,13 +150,13 @@ export class FakeAllocator implements Allocator {
     return {
       runnerId: `runner_${request.runId}`,
       imageSha: `${request.runnerImage}@sha256:fake`,
-      target: {
+      target: sshRunnerHandle({
         host: "runner",
         port: 22,
         username: "tanren",
         hostKeyFingerprint: "SHA256:fake",
         identitySecretRef: request.identitySecretRef,
-      },
+      }),
     };
   }
 

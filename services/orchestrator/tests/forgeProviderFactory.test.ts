@@ -12,10 +12,10 @@
 //      answer, and releases — proving the production default reasons with a model.
 
 import { describe, expect, it, vi } from "vitest";
-import type { Allocator, SshTarget } from "../src/engine/contracts/allocator.js";
+import type { Allocator, RunnerHandle } from "../src/engine/contracts/allocator.js";
 import { FakeAllocator } from "../src/engine/contracts/allocator.js";
 import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
-import type { SshCommand, SshCommandResult, SshSubstrate } from "../src/engine/contracts/sshSubstrate.js";
+import type { RunnerCommand, CommandResult, CommandSubstrate } from "../src/engine/contracts/commandSubstrate.js";
 import type { AnswererAdapter } from "../src/engine/providers/types.js";
 import { wrapProviderDiscoveryAnswerer } from "../src/engine/forge/discovery/index.js";
 import { wrapProviderTriageAnswerer } from "../src/engine/forge/inbox/index.js";
@@ -191,16 +191,16 @@ function stubPool() {
   } as never;
 }
 
-function ok(stdout: string): SshCommandResult {
+function ok(stdout: string): CommandResult {
   return { exitCode: 0, stdout, stderr: "", timedOut: false };
 }
 
 // Replays the Codex answerer's SSH command sequence with a final structured
 // answer, so a REAL Codex answerer parses a real structured result.
-class ScriptedSsh implements SshSubstrate {
-  readonly commands: SshCommand[] = [];
-  constructor(private readonly results: SshCommandResult[]) {}
-  async run(_t: SshTarget, command: SshCommand): Promise<SshCommandResult> {
+class ScriptedSsh implements CommandSubstrate {
+  readonly commands: RunnerCommand[] = [];
+  constructor(private readonly results: CommandResult[]) {}
+  async run(_t: RunnerHandle, command: RunnerCommand): Promise<CommandResult> {
     this.commands.push(command);
     const result = this.results.shift();
     if (result === undefined) throw new Error(`unexpected SSH command: ${command.command}`);
@@ -208,7 +208,7 @@ class ScriptedSsh implements SshSubstrate {
   }
 }
 
-async function infraWith(allocator: Allocator, ssh: SshSubstrate): Promise<ForgeAnswererInfra> {
+async function infraWith(allocator: Allocator, ssh: CommandSubstrate): Promise<ForgeAnswererInfra> {
   const secrets = new InMemorySecretStore();
   await secrets.put({ ref: "credential/codex/dev", value: authJson });
   return { pool: stubPool(), secrets, allocator, ssh, identitySecretRef: "runner/test/identity" };

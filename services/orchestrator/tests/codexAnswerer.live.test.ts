@@ -1,12 +1,12 @@
 import { readFile } from "node:fs/promises";
 import type { ServerHostKeyAlgorithm } from "ssh2";
 import { describe, expect, it } from "vitest";
-import type { SshTarget } from "../src/engine/contracts/allocator.js";
+import type { RunnerHandle } from "../src/engine/contracts/allocator.js";
 import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
 import { storeCodexAuthBundle } from "../src/engine/credentials/codexAuth.js";
 import type { AuditAnswer, CheckAnswer } from "../src/engine/providers/answererSchemas.js";
 import { createCodexAnswerer } from "../src/engine/providers/codex.js";
-import { Ssh2Substrate } from "../src/engine/ssh/index.js";
+import { SshCommandSubstrate } from "../src/engine/ssh/index.js";
 import { runWorkspaceSshCommand, workspaceRepoPathForRun } from "../src/engine/workspace/index.js";
 import { prepareGitWorkspace } from "./fixtures/workspaceGit.js";
 import { executeStructuredAuditTask, executeStructuredCheckTask } from "../src/engine/workflow/answererTasks.js";
@@ -29,7 +29,7 @@ describeLive("live Codex Answerer adapter", () => {
         ref: "runner/live/identity",
         value: await readFile(requireEnv("TANREN_SSH_KEY_PATH"), "utf8"),
       });
-      const ssh = new Ssh2Substrate(secrets, {
+      const ssh = new SshCommandSubstrate(secrets, {
         serverHostKeyAlgorithms: parseHostKeyAlgorithms(process.env.TANREN_SSH_HOST_KEY_ALGORITHMS),
       });
       const target = liveTarget();
@@ -86,7 +86,7 @@ describeLive("live Codex Answerer adapter", () => {
   );
 });
 
-async function captureBaselineHead(ssh: Ssh2Substrate, target: SshTarget, workspace: string): Promise<string> {
+async function captureBaselineHead(ssh: SshCommandSubstrate, target: RunnerHandle, workspace: string): Promise<string> {
   const result = await runWorkspaceSshCommand(ssh, target, {
     label: "capture baseline head",
     cwd: workspace,
@@ -96,7 +96,7 @@ async function captureBaselineHead(ssh: Ssh2Substrate, target: SshTarget, worksp
   return result.stdout.trim();
 }
 
-async function commitReadmeMarker(ssh: Ssh2Substrate, target: SshTarget, workspace: string): Promise<void> {
+async function commitReadmeMarker(ssh: SshCommandSubstrate, target: RunnerHandle, workspace: string): Promise<void> {
   await runWorkspaceSshCommand(ssh, target, {
     label: "commit readme marker",
     cwd: workspace,
@@ -110,7 +110,7 @@ async function commitReadmeMarker(ssh: Ssh2Substrate, target: SshTarget, workspa
   });
 }
 
-async function gitStatus(ssh: Ssh2Substrate, target: SshTarget, workspace: string) {
+async function gitStatus(ssh: SshCommandSubstrate, target: RunnerHandle, workspace: string) {
   return await runWorkspaceSshCommand(ssh, target, {
     label: "read answerer workspace status",
     cwd: workspace,
@@ -119,8 +119,9 @@ async function gitStatus(ssh: Ssh2Substrate, target: SshTarget, workspace: strin
   });
 }
 
-function liveTarget(): SshTarget {
+function liveTarget(): RunnerHandle {
   return {
+    backend: "ssh",
     host: process.env.TANREN_SSH_HOST ?? "127.0.0.1",
     port: Number(process.env.TANREN_SSH_PORT ?? "2222"),
     username: process.env.TANREN_SSH_USER ?? "tanren",

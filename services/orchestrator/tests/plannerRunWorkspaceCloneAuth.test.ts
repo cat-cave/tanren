@@ -4,9 +4,9 @@
 // the command string (process args / event log) or in the SSH stdin echoed into
 // any event. Without a token the clone stays the plain public-repo path.
 import { describe, expect, it } from "vitest";
-import type { SshTarget } from "../src/engine/contracts/allocator.js";
+import type { RunnerHandle } from "../src/engine/contracts/allocator.js";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
-import type { SshCommand, SshCommandResult, SshSubstrate } from "../src/engine/contracts/sshSubstrate.js";
+import type { RunnerCommand, CommandResult, CommandSubstrate } from "../src/engine/contracts/commandSubstrate.js";
 import { storeGithubToken } from "../src/engine/credentials/githubToken.js";
 import type { OrgGithubAppInstallation } from "../src/engine/config/orgConfig.js";
 import type { GitHubHttpClient, GitHubHttpRequest, GitHubHttpResponse } from "../src/engine/providers/github.js";
@@ -15,7 +15,8 @@ import type { PlannerRunContext, RunPlannerLoopInput } from "../src/engine/workf
 import { vcsProviderOver } from "./helpers/vcsProvider.js";
 import type { VcsCredentialContext } from "../src/engine/contracts/vcsProvider.js";
 
-const target: SshTarget = {
+const target: RunnerHandle = {
+  backend: "ssh",
   host: "runner",
   port: 22,
   username: "tanren",
@@ -26,10 +27,10 @@ const target: SshTarget = {
 // Captures every command (and its stdin) so the test can assert the token is
 // only ever delivered over stdin. The clone's trailing `git rev-parse HEAD`
 // must return a sha, so the recorder yields a fixed clone HEAD.
-class RecordingSsh implements SshSubstrate {
-  readonly commands: Array<{ target: SshTarget; command: SshCommand }> = [];
+class RecordingSsh implements CommandSubstrate {
+  readonly commands: Array<{ target: RunnerHandle; command: RunnerCommand }> = [];
 
-  async run(sshTarget: SshTarget, command: SshCommand): Promise<SshCommandResult> {
+  async run(sshTarget: RunnerHandle, command: RunnerCommand): Promise<CommandResult> {
     this.commands.push({ target: sshTarget, command });
     return { exitCode: 0, stdout: CLONE_HEAD, stderr: "", timedOut: false };
   }
@@ -125,7 +126,7 @@ function makeContext(overrides: Partial<PlannerRunContext> = {}): PlannerRunCont
 // no-ops so the unit run never touches a real git tree, and an explicit
 // bootstrapCommand skips the SSH config read.
 function makeInput(
-  ssh: SshSubstrate,
+  ssh: CommandSubstrate,
   context: PlannerRunContext,
   opts: {
     githubToken?: string;

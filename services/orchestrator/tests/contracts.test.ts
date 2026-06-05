@@ -6,7 +6,7 @@ import {
   FakeJobQueue,
   FakeNotificationOutbox,
   FakeSecretStore,
-  FakeSshSubstrate,
+  FakeCommandSubstrate,
 } from "../src/engine/contracts/index.js";
 
 describe("orchestrator scaffold contracts", () => {
@@ -18,7 +18,7 @@ describe("orchestrator scaffold contracts", () => {
       runnerImage: "ghcr.io/cat-cave/tanren-runner:v0",
       identitySecretRef: "runner/run_1/identity",
     });
-    const ssh = await new FakeSshSubstrate().run(allocation.target, {
+    const ssh = await new FakeCommandSubstrate().run(allocation.target, {
       command: "echo ok",
       timeoutMs: 100,
     });
@@ -48,11 +48,12 @@ describe("orchestrator scaffold contracts", () => {
     expect(allocation.runnerId).toBe("runner_run_1");
     // Pin the full FakeAllocation shape: every literal the fake derives from the
     // request is a distinct mutation survivor unless asserted here. imageSha is
-    // the request image suffixed with the fake digest; the SshTarget carries the
+    // the request image suffixed with the fake digest; the RunnerHandle carries the
     // fixed dev host/port/user, a SHA256 fingerprint, and echoes the request's
     // identity ref (never inlined key material).
     expect(allocation.imageSha).toBe("ghcr.io/cat-cave/tanren-runner:v0@sha256:fake");
     expect(allocation.target).toEqual({
+      backend: "ssh",
       host: "runner",
       port: 22,
       username: "tanren",

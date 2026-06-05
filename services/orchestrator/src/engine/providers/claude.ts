@@ -1,6 +1,6 @@
-import type { SshTarget } from "../contracts/allocator.js";
+import type { RunnerHandle } from "../contracts/allocator.js";
 import type { SecretStore } from "../contracts/secretStore.js";
-import type { SshSubstrate } from "../contracts/sshSubstrate.js";
+import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import { storeClaudeAuthBundle } from "../credentials/claudeAuth.js";
 import { materializeClaudeAuthBundle } from "../credentials/claudeMaterializer.js";
 import { quoteSshShellArg } from "../ssh/command.js";
@@ -18,8 +18,8 @@ import { captureBaselineSha, captureGitStateAfterWriter } from "./writerGit.js";
 
 export interface ClaudeWriterDependencies {
   secrets: SecretStore;
-  ssh: SshSubstrate;
-  target: SshTarget;
+  ssh: CommandSubstrate;
+  target: RunnerHandle;
   credentialRef: string;
   runId: string;
   // The Claude model id this adapter pins (e.g. the routing chain entry's

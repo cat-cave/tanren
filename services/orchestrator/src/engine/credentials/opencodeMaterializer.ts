@@ -1,6 +1,7 @@
-import type { SshTarget } from "../contracts/allocator.js";
+import type { RunnerHandle } from "../contracts/allocator.js";
 import type { SecretStore } from "../contracts/secretStore.js";
-import type { SshSubstrate } from "../contracts/sshSubstrate.js";
+import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
+import { CommandFileSubstrate } from "../ssh/commandFileSubstrate.js";
 import { quoteSshShellArg } from "../ssh/command.js";
 import { validateOpencodeAuthBundle, validateOpencodeCredentialRef } from "./opencodeAuth.js";
 import { validateCredentialRef } from "./codexAuth.js";
@@ -12,8 +13,8 @@ import { resolveManagedOpenRouterKey } from "./managedKey.js";
 // XDG_DATA_HOME, so the run's writer points XDG_DATA_HOME at this base.
 export interface MaterializeOpencodeAuthInput {
   secrets: SecretStore;
-  ssh: SshSubstrate;
-  target: SshTarget;
+  ssh: CommandSubstrate;
+  target: RunnerHandle;
   ref: string;
   runId: string;
   baseDir?: string;
@@ -63,13 +64,15 @@ export async function materializeOpencodeAuthBundle(
     throw new Error(`missing opencode credential ref: ${ref}`);
   }
   const bundle = validateOpencodeAuthBundle(secret.value);
-  const command = buildOpencodeAuthMaterializationCommand(dataHome);
-  const result = await input.ssh.run(input.target, {
-    command,
-    stdin: bundle.authJson,
+  // Secret bytes ride the FILE SUBSTRATE seam (chmod-600 write, content on stdin)
+  // — the named form of the heredoc that wrote opencode/auth.json inline before.
+  const result = await new CommandFileSubstrate(input.ssh).writeFile(input.target, {
+    path: opencodeAuthJsonPath(dataHome),
+    content: bundle.authJson,
+    mode: 0o600,
     timeoutMs: input.timeoutMs ?? 30_000,
   });
-  assertMaterializationOk(result);
+  assertFileWriteOk(result, "opencode");
   return { XDG_DATA_HOME: dataHome, ref, managed: false, redacted: true };
 }
 
@@ -88,12 +91,14 @@ async function materializeManagedOpencode(input: MaterializeOpencodeAuthInput, d
   const apiKey = await resolveManagedOpenRouterKey(input.secrets, input.ref);
   const configHome = opencodeConfigHomeForRun(input.runId, input.baseDir);
   const authJson = JSON.stringify({ openrouter: { type: "api", key: apiKey } });
-  const authResult = await input.ssh.run(input.target, {
-    command: buildOpencodeAuthMaterializationCommand(dataHome),
-    stdin: authJson,
+  // Same FILE SUBSTRATE secret-write seam as the BYOK path (key on stdin).
+  const authResult = await new CommandFileSubstrate(input.ssh).writeFile(input.target, {
+    path: opencodeAuthJsonPath(dataHome),
+    content: authJson,
+    mode: 0o600,
     timeoutMs: input.timeoutMs ?? 30_000,
   });
-  assertMaterializationOk(authResult);
+  assertFileWriteOk(authResult, "opencode");
   // The opencode.json carries no secret, so it is interpolated into the command.
   const configResult = await input.ssh.run(input.target, {
     command: buildManagedOpencodeConfigCommand(configHome),
@@ -119,6 +124,23 @@ function failureMessage(failure: { message?: string; reason?: string }): string 
   return failure.message ?? failure.reason ?? "unknown failure";
 }
 
+// Assert a FileSubstrate write succeeded — a credential write that did not land
+// must halt the run loudly, never degrade. Mirrors assertMaterializationOk.
+function assertFileWriteOk(
+  result: { ok: boolean; failure?: { message?: string; reason?: string } },
+  cli: string,
+): void {
+  if (!result.ok) {
+    const detail = result.failure === undefined ? "unknown failure" : failureMessage(result.failure);
+    throw new Error(`${cli} credential materialization failed: ${detail}`);
+  }
+}
+
+// opencode reads provider credentials from `<dataHome>/opencode/auth.json`.
+export function opencodeAuthJsonPath(dataHome: string): string {
+  return `${dataHome}/opencode/auth.json`;
+}
+
 export function opencodeDataHomeForRun(runId: string, baseDir = "/home/tanren/.tanren/runs"): string {
   if (!/^[A-Za-z0-9._-]+$/u.test(runId)) {
     throw new Error("run id is not safe for a runner path");
@@ -131,16 +153,6 @@ export function opencodeConfigHomeForRun(runId: string, baseDir = "/home/tanren/
     throw new Error("run id is not safe for a runner path");
   }
   return `${baseDir.replace(/\/$/u, "")}/${runId}/opencode-config`;
-}
-
-export function buildOpencodeAuthMaterializationCommand(dataHome: string): string {
-  const authPath = `${dataHome}/opencode/auth.json`;
-  return [
-    "umask 077",
-    `mkdir -p ${quoteSshShellArg(`${dataHome}/opencode`)}`,
-    `cat > ${quoteSshShellArg(authPath)}`,
-    `chmod 600 ${quoteSshShellArg(authPath)}`,
-  ].join(" && ");
 }
 
 // Writes the managed `opencode.json` (declaring the OpenRouter provider) into

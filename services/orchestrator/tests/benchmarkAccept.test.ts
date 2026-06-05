@@ -5,17 +5,17 @@
 // `benchmark.accept.failed`, short-circuit on first failure, the content-addressed
 // accept-tier hash riding the event, and the bounded output tail.
 import { describe, expect, it } from "vitest";
-import type { SshTarget } from "../src/engine/contracts/allocator.js";
-import type { SshCommand, SshCommandResult, SshSubstrate } from "../src/engine/contracts/sshSubstrate.js";
+import type { RunnerHandle } from "../src/engine/contracts/allocator.js";
+import type { RunnerCommand, CommandResult, CommandSubstrate } from "../src/engine/contracts/commandSubstrate.js";
 import type { EventName, EventPayload } from "../src/engine/events/index.js";
 import { runAcceptStep } from "../src/engine/benchmark/accept.js";
 
-const target = { host: "h", port: 22, username: "u", hostKeyFingerprint: "fp" } as SshTarget;
+const target = { host: "h", port: 22, username: "u", hostKeyFingerprint: "fp" } as RunnerHandle;
 
-class RecordingSsh implements SshSubstrate {
-  readonly commands: SshCommand[] = [];
-  constructor(private readonly script: (command: string) => Partial<SshCommandResult> = () => ({})) {}
-  async run(_target: SshTarget, command: SshCommand): Promise<SshCommandResult> {
+class RecordingSsh implements CommandSubstrate {
+  readonly commands: RunnerCommand[] = [];
+  constructor(private readonly script: (command: string) => Partial<CommandResult> = () => ({})) {}
+  async run(_target: RunnerHandle, command: RunnerCommand): Promise<CommandResult> {
     this.commands.push(command);
     return { exitCode: 0, stdout: "", stderr: "", timedOut: false, ...this.script(command.command) };
   }

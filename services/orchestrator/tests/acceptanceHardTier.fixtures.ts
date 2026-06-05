@@ -6,9 +6,14 @@
 import type { AuditAnswer, CheckAnswer, PlanAnswer } from "../src/engine/answerers/schemas/index.js";
 import { vcsProviderOver } from "./helpers/vcsProvider.js";
 import type { CiWhen } from "../src/engine/ci/index.js";
-import type { AllocationRequest, Allocator, RunnerAllocation, SshTarget } from "../src/engine/contracts/allocator.js";
+import type {
+  AllocationRequest,
+  Allocator,
+  RunnerAllocation,
+  RunnerHandle,
+} from "../src/engine/contracts/allocator.js";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
-import type { SshCommand, SshCommandResult, SshSubstrate } from "../src/engine/contracts/sshSubstrate.js";
+import type { RunnerCommand, CommandResult, CommandSubstrate } from "../src/engine/contracts/commandSubstrate.js";
 import { storeGithubToken } from "../src/engine/credentials/githubToken.js";
 import type { GitHubHttpClient, GitHubHttpRequest, GitHubHttpResponse } from "../src/engine/providers/github.js";
 import type { AnswererAdapter, CcusageAccounting, UsageProbe, WindowObservation } from "../src/engine/usage/index.js";
@@ -28,7 +33,8 @@ import {
 } from "./helpers/plannerLoopHelpers.js";
 import { WorkerPool } from "./helpers/workerPool.js";
 
-export const target: SshTarget = {
+export const target: RunnerHandle = {
+  backend: "ssh",
   host: "runner",
   port: 22,
   username: "tanren",
@@ -262,8 +268,8 @@ export class RecordingAllocator implements Allocator {
   async release(): Promise<void> {}
 }
 
-export class RecordingSsh implements SshSubstrate {
-  async run(_target: SshTarget, _command: SshCommand): Promise<SshCommandResult> {
+export class RecordingSsh implements CommandSubstrate {
+  async run(_target: RunnerHandle, _command: RunnerCommand): Promise<CommandResult> {
     return { exitCode: 0, stdout: "", stderr: "", timedOut: false };
   }
 }

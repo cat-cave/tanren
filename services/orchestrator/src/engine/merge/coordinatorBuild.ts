@@ -23,7 +23,7 @@ import { orgScopingPool } from "../data/orgScopedDb.js";
 import type { Allocator } from "../contracts/allocator.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { SecretStore } from "../contracts/secretStore.js";
-import type { SshSubstrate } from "../contracts/sshSubstrate.js";
+import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import type { VcsProvider } from "../contracts/vcsProvider.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
 import { migrateProjectConfig } from "../config/projectConfig.js";
@@ -58,7 +58,7 @@ export interface BuildMergeCoordinatorDeps {
    */
   allocator: Allocator;
   /** The SSH substrate the drive-path resolver clones + re-gates over. REQUIRED (see allocator). */
-  ssh: SshSubstrate;
+  ssh: CommandSubstrate;
   /** The runner identity key ref (same value the worker boot seeds). REQUIRED for the resolver. */
   identitySecretRef: string;
   /**

@@ -21,6 +21,7 @@ class RecordingAllocator implements Allocator {
       runnerId: `runner_${this.name}_${request.runId}`,
       imageSha: "sha256:x",
       target: {
+        backend: "ssh",
         host: this.name,
         port: 22,
         username: "tanren",

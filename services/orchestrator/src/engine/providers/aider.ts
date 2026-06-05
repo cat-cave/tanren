@@ -1,6 +1,6 @@
-import type { SshTarget } from "../contracts/allocator.js";
+import type { RunnerHandle } from "../contracts/allocator.js";
 import type { SecretStore } from "../contracts/secretStore.js";
-import type { SshSubstrate } from "../contracts/sshSubstrate.js";
+import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import { validateCredentialRef } from "../credentials/codexAuth.js";
 import { quoteSshShellArg } from "../ssh/command.js";
 import type { TokenUsage, UsageLimitSignal, WriterAdapter, WriterResult } from "./types.js";
@@ -46,8 +46,8 @@ const DEFAULT_AIDER_MODEL = "anthropic/claude-opus-4-8";
 
 export interface AiderWriterDependencies {
   secrets: SecretStore;
-  ssh: SshSubstrate;
-  target: SshTarget;
+  ssh: CommandSubstrate;
+  target: RunnerHandle;
   credentialRef: string;
   runId: string;
   // The aider model id this adapter pins (e.g. "anthropic/claude-opus-4-8",
@@ -153,7 +153,7 @@ export function apiKeyEnvVarForModel(model: string): string {
 // Builds the non-interactive aider invocation. The API key is injected as a
 // command-scoped env var (provider-specific) so it never lands in a file and
 // is redacted from the adapter's own result. The workspace is the cwd (the
-// SshCommand.cwd cd's into it), so aider operates on the run's git repo.
+// RunnerCommand.cwd cd's into it), so aider operates on the run's git repo.
 export function buildAiderWriterCommand(input: {
   apiKeyEnvVar: string;
   apiKey: string;

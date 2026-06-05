@@ -6,8 +6,8 @@
 // audit. A failing tier short-circuits at the first nonzero step (later steps
 // are pointless once the tree is known-broken) and routes the run to rework.
 import type { CiStep, CiWhen } from "../../ci/index.js";
-import type { SshTarget } from "../../contracts/allocator.js";
-import type { SshCommandResult, SshSubstrate } from "../../contracts/sshSubstrate.js";
+import type { RunnerHandle } from "../../contracts/allocator.js";
+import type { CommandResult, CommandSubstrate } from "../../contracts/commandSubstrate.js";
 import type { EventName, EventPayload } from "../../events/index.js";
 import { withAppEnv } from "../../ssh/appEnvPrelude.js";
 
@@ -47,8 +47,8 @@ export interface GateAppendEvent {
 }
 
 export interface RunGateTierInput {
-  ssh: SshSubstrate;
-  target: SshTarget;
+  ssh: CommandSubstrate;
+  target: RunnerHandle;
   workspacePath: string;
   tier: string;
   when: CiWhen;
@@ -153,7 +153,7 @@ export async function runGateTier(input: RunGateTierInput): Promise<GateTierResu
 // Shared empty advisory set so the strict (default) path allocates nothing.
 const EMPTY_ADVISORY_SET: ReadonlySet<string> = new Set<string>();
 
-function combinedOutput(result: SshCommandResult): string {
+function combinedOutput(result: CommandResult): string {
   if (result.failure !== undefined) {
     const detail = "message" in result.failure ? result.failure.message : result.failure.reason;
     return [result.stdout, result.stderr, detail].filter((part) => part !== undefined && part !== "").join("\n");

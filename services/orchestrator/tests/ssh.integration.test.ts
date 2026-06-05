@@ -1,9 +1,9 @@
 import { readFile } from "node:fs/promises";
 import type { ServerHostKeyAlgorithm } from "ssh2";
 import { describe, expect, it } from "vitest";
-import type { SshTarget } from "../src/engine/contracts/allocator.js";
+import type { RunnerHandle } from "../src/engine/contracts/allocator.js";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
-import { Ssh2Substrate } from "../src/engine/ssh/index.js";
+import { SshCommandSubstrate } from "../src/engine/ssh/index.js";
 
 const runIntegration = process.env.TANREN_SSH_INTEGRATION === "1";
 const describeIntegration = runIntegration ? describe : describe.skip;
@@ -18,10 +18,11 @@ describeIntegration("SSH substrate live runner integration", () => {
       value: await readFile(keyPath, "utf8"),
     });
 
-    const substrate = new Ssh2Substrate(secrets, {
+    const substrate = new SshCommandSubstrate(secrets, {
       serverHostKeyAlgorithms: parseHostKeyAlgorithms(process.env.TANREN_SSH_HOST_KEY_ALGORITHMS),
     });
-    const target: SshTarget = {
+    const target: RunnerHandle = {
+      backend: "ssh",
       host: process.env.TANREN_SSH_HOST ?? "127.0.0.1",
       port: Number(process.env.TANREN_SSH_PORT ?? "22"),
       username: process.env.TANREN_SSH_USER ?? "tanren",

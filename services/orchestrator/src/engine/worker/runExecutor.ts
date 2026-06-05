@@ -26,7 +26,7 @@ import type { JobQueue } from "../contracts/jobQueue.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { RunCredentialScoping } from "../workflow/plannerRunScopedCreds.js";
-import type { SshSubstrate } from "../contracts/sshSubstrate.js";
+import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import type { EscapeHatches } from "../config/index.js";
 import { CostRecorder } from "../costs/recorder.js";
 import type { VcsProvider } from "../contracts/vcsProvider.js";
@@ -92,7 +92,7 @@ export interface RunExecutorDeps {
   // write to.
   runStateWriter?: RunStateWriter;
   allocator: Allocator;
-  ssh: SshSubstrate;
+  ssh: CommandSubstrate;
   secrets: SecretStore;
   // Managed-hosting dimension D: the per-run credential-scoping seam (Vault backend
   // only). Wired ⇒ the workflow mints a child token scoped to ONLY this run's cred

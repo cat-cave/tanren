@@ -2,18 +2,19 @@ import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import type { Client } from "ssh2";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { SshTarget } from "../src/engine/contracts/allocator.js";
+import type { RunnerHandle } from "../src/engine/contracts/allocator.js";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
-import { FakeSshSubstrate } from "../src/engine/contracts/sshSubstrate.js";
+import { FakeCommandSubstrate } from "../src/engine/contracts/commandSubstrate.js";
 import {
   buildSshExecCommand,
   hostKeyFingerprintMatches,
   normalizeHostKeyFingerprint,
   sshSha256Fingerprint,
-  Ssh2Substrate,
+  SshCommandSubstrate,
 } from "../src/engine/ssh/index.js";
 
-const target: SshTarget = {
+const target: RunnerHandle = {
+  backend: "ssh",
   host: "runner",
   port: 22,
   username: "tanren",
@@ -26,12 +27,12 @@ describe("SSH substrate contract", () => {
     vi.useRealTimers();
   });
 
-  it("preserves the fake SSH substrate", async () => {
-    const result = await new FakeSshSubstrate().run(target, { command: "echo ok", timeoutMs: 100 });
+  it("preserves the fake command substrate", async () => {
+    const result = await new FakeCommandSubstrate().run(target, { command: "echo ok", timeoutMs: 100 });
 
     expect(result).toEqual({
       exitCode: 0,
-      stdout: "fake ssh: echo ok",
+      stdout: "fake command: echo ok",
       stderr: "",
       timedOut: false,
     });
@@ -63,7 +64,7 @@ describe("SSH substrate contract", () => {
   });
 
   it("returns ssh_failed when the identity secret is missing", async () => {
-    const result = await new Ssh2Substrate(new FakeSecretStore()).run(target, {
+    const result = await new SshCommandSubstrate(new FakeSecretStore()).run(target, {
       command: "echo ok",
       timeoutMs: 100,
     });
@@ -101,8 +102,8 @@ describe("SSH substrate contract", () => {
     const mismatch = createHash("sha256").update(otherKey.getPublicSSH()).digest("hex");
 
     const { client, capture } = createCaptureClient();
-    const substrate = new Ssh2Substrate(secrets, { clientFactory: () => client });
-    const pinnedTarget: SshTarget = { ...target, hostKeyFingerprint: pinned };
+    const substrate = new SshCommandSubstrate(secrets, { clientFactory: () => client });
+    const pinnedTarget: RunnerHandle = { ...target, hostKeyFingerprint: pinned };
 
     // Drive a run; the substrate calls client.connect with a hostVerifier we capture.
     const runPromise = substrate.run(pinnedTarget, { command: "echo ok", timeoutMs: 100 });
@@ -124,7 +125,7 @@ describe("SSH substrate contract", () => {
     const secrets = new FakeSecretStore();
     await secrets.put({ ref: target.identitySecretRef, value: "private-key" });
     const client = createNeverReadyClient();
-    const substrate = new Ssh2Substrate(secrets, { clientFactory: () => client });
+    const substrate = new SshCommandSubstrate(secrets, { clientFactory: () => client });
 
     const resultPromise = substrate.run(target, { command: "sleep 10", timeoutMs: 25 });
     await vi.advanceTimersByTimeAsync(25);

@@ -34,7 +34,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { migrate, setSystemPool } from "@tanren/db";
 import { IdentityStore } from "../src/auth/identityStore.js";
 import type { IdentityClaims, IdentityProviderId } from "../src/auth/schemas.js";
-import { InMemorySecretStore, type SshSubstrate } from "../src/engine/contracts/index.js";
+import { InMemorySecretStore, type CommandSubstrate } from "../src/engine/contracts/index.js";
 import { buildApp } from "../src/main.js";
 import { SESSION_COOKIE, CSRF_HEADER, type ActorContextEnv } from "../src/middleware/auth.js";
 
@@ -85,7 +85,7 @@ function signupIdentity(suffix: string): IdentityClaims {
 
 // The draft-pr route reads `ssh` — this test exercises neither it nor the
 // substrate, so a never-invoked stub satisfies the dep shape.
-const ssh = { run: async () => ({}) } as unknown as SshSubstrate;
+const ssh = { run: async () => ({}) } as unknown as CommandSubstrate;
 
 // The REAL production app — `buildApp` wires the auth middleware (now resolving
 // the actor + establishing the per-request org scope INCLUDING the resource→org

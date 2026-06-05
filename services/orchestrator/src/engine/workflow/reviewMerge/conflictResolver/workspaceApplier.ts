@@ -6,14 +6,14 @@
 // Answerer resolves, we write the resolved contents into the SAME tree (markers
 // removed) and re-gate before publishing — never pushing an unverified tree.
 //
-// The git operations run over the existing SshSubstrate seam in the run's
+// The git operations run over the existing CommandSubstrate seam in the run's
 // workspace (the same path the writer/gate/push use). `gather` runs `git merge`
 // WITHOUT throwing on the expected non-zero conflict exit (it reads the conflict
 // state instead); the other operations use the throwing helper since a failure
 // there is a real fault.
 
-import type { SshTarget } from "../../../contracts/allocator.js";
-import type { SshSubstrate } from "../../../contracts/sshSubstrate.js";
+import type { RunnerHandle } from "../../../contracts/allocator.js";
+import type { CommandSubstrate } from "../../../contracts/commandSubstrate.js";
 import type {
   ConflictedFile,
   GatheredConflict,
@@ -22,8 +22,8 @@ import type {
 import { runWorkspaceSshCommand } from "../../../workspace/ssh.js";
 
 export interface SshConflictApplierDeps {
-  ssh: SshSubstrate;
-  target: SshTarget;
+  ssh: CommandSubstrate;
+  target: RunnerHandle;
   workspacePath: string;
   /** The base branch to merge into the PR branch to surface the hunks. */
   baseBranch: string;

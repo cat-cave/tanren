@@ -2,14 +2,14 @@
 // `githubDraftPr.test.ts` so that suite stays under the 500-line file cap. These are
 // TEST FIXTURES ONLY (a scripted HTTP client + recording SSH/pg doubles) — never used
 // in production.
-import type { SshTarget } from "../../src/engine/contracts/allocator.js";
-import type { SshCommand, SshCommandResult, SshSubstrate } from "../../src/engine/contracts/sshSubstrate.js";
+import type { RunnerHandle } from "../../src/engine/contracts/allocator.js";
+import type { RunnerCommand, CommandResult, CommandSubstrate } from "../../src/engine/contracts/commandSubstrate.js";
 import type { GitHubHttpClient, GitHubHttpRequest, GitHubHttpResponse } from "../../src/engine/providers/github.js";
 
-export class RecordingSsh implements SshSubstrate {
-  readonly commands: Array<{ target: SshTarget; command: SshCommand }> = [];
+export class RecordingSsh implements CommandSubstrate {
+  readonly commands: Array<{ target: RunnerHandle; command: RunnerCommand }> = [];
 
-  async run(sshTarget: SshTarget, command: SshCommand): Promise<SshCommandResult> {
+  async run(sshTarget: RunnerHandle, command: RunnerCommand): Promise<CommandResult> {
     this.commands.push({ target: sshTarget, command });
     return { exitCode: 0, stdout: "", stderr: "", timedOut: false };
   }

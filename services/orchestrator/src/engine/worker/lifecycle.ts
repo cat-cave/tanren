@@ -18,7 +18,7 @@ import type { RunCredentialScoping } from "../workflow/plannerRunScopedCreds.js"
 // Re-exported so `boot.ts` builds the dimension-D credential-scoping seam from a
 // module it already depends on (keeping boot's import-dependency count under cap).
 export { buildRunCredentialScoping } from "../workflow/plannerRunScopedCreds.js";
-import type { SshSubstrate } from "../contracts/sshSubstrate.js";
+import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import type { VcsProvider } from "../contracts/vcsProvider.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
 import { JobReaper } from "./jobReaper.js";
@@ -32,7 +32,7 @@ export function runWorkerEnabled(): boolean {
 export interface StartRunWorkerInput {
   pool: pg.Pool;
   allocator: Allocator;
-  ssh: SshSubstrate;
+  ssh: CommandSubstrate;
   secrets: SecretStore;
   // Managed-hosting dimension D: the per-run credential-scoping seam (Vault backend
   // only). Threaded to the executor so the workflow de-privileges the run's

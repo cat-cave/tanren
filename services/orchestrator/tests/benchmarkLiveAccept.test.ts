@@ -7,7 +7,12 @@
 import type pg from "pg";
 import { describe, expect, it } from "vitest";
 import type { AllocationRequest, Allocator, RunnerAllocation } from "../src/engine/contracts/allocator.js";
-import type { SshCommand, SshCommandResult, SshSubstrate, SshTarget } from "../src/engine/contracts/sshSubstrate.js";
+import type {
+  RunnerCommand,
+  CommandResult,
+  CommandSubstrate,
+  RunnerHandle,
+} from "../src/engine/contracts/commandSubstrate.js";
 import { buildLiveRunAccept } from "../src/engine/benchmark/liveAccept.js";
 import type { CellWithExperiment } from "../src/engine/benchmark/index.js";
 import { FrozenConfig } from "../src/engine/benchmark/entities.js";
@@ -55,10 +60,10 @@ function cell(acceptSteps?: { name: string; run: string }[]): CellWithExperiment
 // A scripted SSH substrate: records every command and returns 0 unless a matcher
 // scripts a failure (e.g. a nonzero accept step). The clone/bootstrap/tanren-ci
 // reads return empty/zero so the pipeline proceeds.
-class ScriptedSsh implements SshSubstrate {
+class ScriptedSsh implements CommandSubstrate {
   readonly commands: string[] = [];
-  constructor(private readonly script: (command: string) => Partial<SshCommandResult> = () => ({})) {}
-  async run(_target: SshTarget, command: SshCommand): Promise<SshCommandResult> {
+  constructor(private readonly script: (command: string) => Partial<CommandResult> = () => ({})) {}
+  async run(_target: RunnerHandle, command: RunnerCommand): Promise<CommandResult> {
     this.commands.push(command.command);
     return { exitCode: 0, stdout: "", stderr: "", timedOut: false, ...this.script(command.command) };
   }
@@ -72,7 +77,14 @@ class RecordingAllocator implements Allocator {
     return {
       runnerId: `runner_${request.runId}`,
       imageSha: `${request.runnerImage}@sha256:fake`,
-      target: { host: "runner", port: 22, username: "tanren", hostKeyFingerprint: "fp", identitySecretRef: "ref" },
+      target: {
+        backend: "ssh",
+        host: "runner",
+        port: 22,
+        username: "tanren",
+        hostKeyFingerprint: "fp",
+        identitySecretRef: "ref",
+      },
     };
   }
   async release(runnerId: string, reason?: string): Promise<void> {

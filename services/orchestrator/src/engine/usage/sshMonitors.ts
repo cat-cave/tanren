@@ -1,9 +1,10 @@
-import type { SshTarget } from "../contracts/allocator.js";
-import type { SshCommandResult, SshSubstrate } from "../contracts/sshSubstrate.js";
+import type { RunnerHandle } from "../contracts/allocator.js";
+import type { CommandResult, CommandSubstrate } from "../contracts/commandSubstrate.js";
+import type { CostResolver } from "../contracts/costResolver.js";
 import { quoteSshShellArg } from "../ssh/command.js";
 import { parseCcusageAccounting } from "./ccusageParser.js";
 import { parseCodexbarUsage } from "./codexbarParser.js";
-import type { CcusageAccounting, UsageAccountant, UsageMonitor, WindowUsage } from "./contracts.js";
+import type { CcusageAccounting, UsageAccountant, UsageMeter, UsageMonitor, WindowUsage } from "./contracts.js";
 
 // A best-effort log sink for "no data" notes. These monitors NEVER throw for a
 // missing/empty result — that is an allowed state — but a non-zero exit or a
@@ -20,14 +21,14 @@ const defaultNote: UsageNote = (message) => {
 // use, honoring the no-host-process-spawn rule.
 export class SshCodexbarUsageMonitor implements UsageMonitor {
   constructor(
-    private readonly ssh: SshSubstrate,
+    private readonly ssh: CommandSubstrate,
     private readonly note: UsageNote = defaultNote,
   ) {}
 
   async readWindowState(input: {
     provider: string;
     codexHome: string;
-    target: SshTarget;
+    target: RunnerHandle;
     timeoutMs: number;
   }): Promise<WindowUsage | null> {
     const command = buildCodexbarUsageCommand({
@@ -46,14 +47,14 @@ export class SshCodexbarUsageMonitor implements UsageMonitor {
 // against the per-run materialized CODEX_HOME.
 export class SshCcusageAccountant implements UsageAccountant {
   constructor(
-    private readonly ssh: SshSubstrate,
+    private readonly ssh: CommandSubstrate,
     private readonly note: UsageNote = defaultNote,
   ) {}
 
   async readAccounting(input: {
     cli: string;
     codexHome: string;
-    target: SshTarget;
+    target: RunnerHandle;
     timeoutMs: number;
   }): Promise<CcusageAccounting | null> {
     const command = buildCcusageCommand({ cli: input.cli, codexHome: input.codexHome });
@@ -62,6 +63,24 @@ export class SshCcusageAccountant implements UsageAccountant {
       return null;
     }
     return parseCcusageAccounting(result.stdout, input.cli);
+  }
+}
+
+// The one concrete {@link UsageMeter} today: it bundles the SSH-backed window
+// monitor + ccusage accountant (both over the command substrate) with the run's
+// CostResolver into the single named metering seam. It does not change any read —
+// it NAMES the three reads as one slottable meter so a future native-metering
+// backend can replace all three at once.
+export class SshUsageMeter implements UsageMeter {
+  readonly monitor: UsageMonitor;
+  readonly accountant: UsageAccountant;
+  constructor(
+    ssh: CommandSubstrate,
+    readonly costResolver: CostResolver,
+    note?: UsageNote,
+  ) {
+    this.monitor = new SshCodexbarUsageMonitor(ssh, note);
+    this.accountant = new SshCcusageAccountant(ssh, note);
   }
 }
 
@@ -87,7 +106,7 @@ export function buildCcusageCommand(input: { cli: string; codexHome: string }): 
 // A non-zero exit, a timeout, or an SSH failure is "no data" (return null) plus
 // a logged note — never an exception. A clean exit hands stdout to the parser,
 // which itself tolerates empty / error-envelope output.
-function usableResult(result: SshCommandResult, tool: string, target: string, note: UsageNote): boolean {
+function usableResult(result: CommandResult, tool: string, target: string, note: UsageNote): boolean {
   if (result.timedOut) {
     note(`${tool} timed out for ${target}; treating as no data`);
     return false;

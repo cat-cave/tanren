@@ -28,7 +28,18 @@ export * from "./secretStoreFactory.js";
 // the run's credentials through it (the broad VAULT_TOKEN never reaches a runner).
 export * from "./vaultTokenMinter.js";
 export * from "./vaultTokenMinterImpl.js";
-export * from "./sshSubstrate.js";
+// The EXECUTION-BACKEND SUBSTRATE seams (v21 Track C) — the named boundaries a
+// runner backend must satisfy. The SWAPPABLE BOUNDARY is the RunnerHandle (in
+// ./allocator.js, opaque) + these seams:
+//   - CommandSubstrate — run a command in the runner (SSH is the one impl today).
+//   - FileSubstrate    — put/get/writeFile bytes into the runner (file-over-command).
+//   - CredentialMaterializer — write a CLI's credentials into a per-run config home.
+//   - ReleaseFinalizer — release the runner + record a reconcilable cleanup outcome.
+// (UsageMeter — the metering seam — lives next to its impls in engine/usage.)
+export * from "./commandSubstrate.js";
+export * from "./fileSubstrate.js";
+export * from "./credentialMaterializer.js";
+export * from "./releaseFinalizer.js";
 // The data-access layer seam (Track C): aggregates `engine/repositories/**` into
 // a slottable `Repositories` contract with a pg-backed impl, mirroring the
 // JobQueue/EventStore/SecretStore pattern. The conformance suite lives under

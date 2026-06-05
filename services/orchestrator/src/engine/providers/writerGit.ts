@@ -1,5 +1,5 @@
-import type { SshTarget } from "../contracts/allocator.js";
-import type { SshSubstrate } from "../contracts/sshSubstrate.js";
+import type { RunnerHandle } from "../contracts/allocator.js";
+import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import { runWorkspaceSshCommand } from "../workspace/index.js";
 import type { Commit, WriterResult } from "./types.js";
 
@@ -9,8 +9,8 @@ import type { Commit, WriterResult } from "./types.js";
 // refactored); new adapters (Claude, opencode) share this module.
 
 export async function captureBaselineSha(
-  ssh: SshSubstrate,
-  target: SshTarget,
+  ssh: CommandSubstrate,
+  target: RunnerHandle,
   workspace: string,
   timeoutMs: number,
 ): Promise<string> {
@@ -28,8 +28,8 @@ export async function captureBaselineSha(
 }
 
 export async function captureGitStateAfterWriter(
-  ssh: SshSubstrate,
-  target: SshTarget,
+  ssh: CommandSubstrate,
+  target: RunnerHandle,
   workspace: string,
   baselineSha: string,
   commitMessage: string,
@@ -52,8 +52,8 @@ export async function captureGitStateAfterWriter(
 }
 
 async function commitWorkspaceChanges(
-  ssh: SshSubstrate,
-  target: SshTarget,
+  ssh: CommandSubstrate,
+  target: RunnerHandle,
   workspace: string,
   commitMessage: string,
   timeoutMs: number,

@@ -4,7 +4,7 @@ import { createDbPool, migrate, PgNotifyListener } from "@tanren/db";
 import { Hono } from "hono";
 import type pg from "pg";
 import { buildAuthFromEnv, type BuildAppAuthOptions } from "./mainAuth.js";
-import { buildSecretStore, type SecretStore, type SshSubstrate } from "./engine/contracts/index.js";
+import { buildSecretStore, type SecretStore, type CommandSubstrate } from "./engine/contracts/index.js";
 import { FetchGitHubHttpClient, type GitHubHttpClient } from "./engine/providers/github.js";
 import { buildVcsProvider } from "./engine/providers/buildVcsProvider.js";
 import { GithubAppTokenMinter } from "./engine/providers/githubAppTokenMinter.js";
@@ -12,8 +12,8 @@ import { FetchConfigGateGitHub } from "./engine/config/configGateGithub.js";
 import { loadOrgGithubAppInstallation } from "./engine/credentials/orgGithubApp.js";
 import { resolveGithubToken } from "./engine/credentials/githubTokenResolver.js";
 import type { ConfigGateGithubFactory } from "./routes/orgs/index.js";
-import { TimedGitHubHttpClient, TimedSshSubstrate } from "./engine/observability/index.js";
-import { Ssh2Substrate } from "./engine/ssh/index.js";
+import { TimedGitHubHttpClient, TimedCommandSubstrate } from "./engine/observability/index.js";
+import { SshCommandSubstrate } from "./engine/ssh/index.js";
 import { buildAllocatorFromEnv } from "./engine/allocators/buildAllocator.js";
 import { bootRunWorker, runWorkerEnabled } from "./engine/worker/index.js";
 import { startInternalMtlsServer } from "./internalServer.js";
@@ -74,13 +74,13 @@ export async function createApp() {
     // P3-0029: wrap the SSH substrate so every runner command emits a boundary
     // timing record. Behavior is unchanged; this only measures. The per-run
     // draft-PR route pushes the runner workspace branch over this substrate.
-    ssh: new TimedSshSubstrate(new Ssh2Substrate(runnerSecrets)),
+    ssh: new TimedCommandSubstrate(new SshCommandSubstrate(runnerSecrets)),
   });
 }
 
 export function buildApp(input: {
   pool: pg.Pool;
-  ssh: SshSubstrate;
+  ssh: CommandSubstrate;
   secrets?: SecretStore;
   githubHttp?: GitHubHttpClient;
   runnerIdentitySecretRef?: string;

@@ -13,8 +13,8 @@
 // real `git`-shaped output, and assert BOTH the emitted git plumbing (so the
 // rebase/commit semantics are exercised) AND the values the helpers return.
 import { describe, expect, it } from "vitest";
-import type { SshTarget } from "../src/engine/contracts/allocator.js";
-import type { SshCommand, SshCommandResult, SshSubstrate } from "../src/engine/contracts/sshSubstrate.js";
+import type { RunnerHandle } from "../src/engine/contracts/allocator.js";
+import type { RunnerCommand, CommandResult, CommandSubstrate } from "../src/engine/contracts/commandSubstrate.js";
 import { captureGitStateAfterCodex } from "../src/engine/providers/codexGit.js";
 import {
   BOOTSTRAP_COMMIT_MESSAGE,
@@ -23,7 +23,8 @@ import {
 } from "../src/engine/workspace/bootstrap.js";
 import { PR_CLEAN_REF, prepareCleanPrBranch } from "../src/engine/workspace/githubPush.js";
 
-const target: SshTarget = {
+const target: RunnerHandle = {
+  backend: "ssh",
   host: "runner",
   port: 22,
   username: "tanren",
@@ -37,12 +38,12 @@ const WRITER_SHA = "3".repeat(40);
 
 // Returns scripted stdout per command, keyed by a substring match, and records
 // every command the helpers emit so the git plumbing can be asserted.
-class ScriptedSsh implements SshSubstrate {
+class ScriptedSsh implements CommandSubstrate {
   readonly commands: string[] = [];
 
   constructor(private readonly replies: Array<{ match: string; stdout: string }>) {}
 
-  async run(_target: SshTarget, command: SshCommand): Promise<SshCommandResult> {
+  async run(_target: RunnerHandle, command: RunnerCommand): Promise<CommandResult> {
     this.commands.push(command.command);
     const reply = this.replies.find((entry) => command.command.includes(entry.match));
     return { exitCode: 0, stdout: reply?.stdout ?? "", stderr: "", timedOut: false };

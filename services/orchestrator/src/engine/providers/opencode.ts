@@ -1,6 +1,6 @@
-import type { SshTarget } from "../contracts/allocator.js";
+import type { RunnerHandle } from "../contracts/allocator.js";
 import type { SecretStore } from "../contracts/secretStore.js";
-import type { SshSubstrate } from "../contracts/sshSubstrate.js";
+import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import { storeOpencodeAuthBundle } from "../credentials/opencodeAuth.js";
 import { materializeOpencodeAuthBundle } from "../credentials/opencodeMaterializer.js";
 import { quoteSshShellArg } from "../ssh/command.js";
@@ -27,8 +27,8 @@ export const ZAI_GLM_MODEL = "zai/glm-5.1";
 
 export interface OpencodeWriterDependencies {
   secrets: SecretStore;
-  ssh: SshSubstrate;
-  target: SshTarget;
+  ssh: CommandSubstrate;
+  target: RunnerHandle;
   credentialRef: string;
   runId: string;
   // The opencode model id this adapter pins. Defaults to the Zai GLM 5.1 model

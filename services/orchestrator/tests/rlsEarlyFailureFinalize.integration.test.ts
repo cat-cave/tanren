@@ -34,7 +34,7 @@ import { migrate, setSystemPool } from "@tanren/db";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
 import { PgJobQueue } from "../src/engine/contracts/jobQueue.js";
 import type { Allocator } from "../src/engine/contracts/allocator.js";
-import type { SshSubstrate } from "../src/engine/contracts/sshSubstrate.js";
+import type { CommandSubstrate } from "../src/engine/contracts/commandSubstrate.js";
 import type { GitHubHttpClient } from "../src/engine/providers/github.js";
 import { executeNextPlanJob } from "../src/engine/worker/runExecutor.js";
 
@@ -78,7 +78,7 @@ const INERT_ALLOCATOR: Allocator = {
   },
   async release() {},
 };
-const INERT_SSH: SshSubstrate = {
+const INERT_SSH: CommandSubstrate = {
   async run() {
     throw new Error("ssh should not be reached on an early credential failure");
   },

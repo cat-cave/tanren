@@ -1,6 +1,7 @@
 import { createHash, createHmac } from "node:crypto";
 import {
   persistedRunnerKeys,
+  sshRunnerHandle,
   type AllocationRequest,
   type Allocator,
   type ReleaseReason,
@@ -178,13 +179,13 @@ export class AwsEc2Allocator implements Allocator {
     const allocation: RunnerAllocation = {
       runnerId,
       imageSha: `${request.runnerImage}@sha256:aws-ec2`,
-      target: {
+      target: sshRunnerHandle({
         host: ip,
         port,
         username,
         hostKeyFingerprint: this.options.hostKeyFingerprint,
         identitySecretRef: request.identitySecretRef,
-      },
+      }),
     };
 
     try {

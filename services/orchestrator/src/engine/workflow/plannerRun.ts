@@ -1,24 +1,22 @@
 // The real planner-loop run-trigger. It drives the full planner feedback loop
-// (runSubtaskLoop) with real Codex adapters + a live usage probe. Adapters + the
-// usage probe are built through injectable factories that DEFAULT to real Codex /
-// SSH monitors; tests inject fakes. In production the background run worker drives
-// this with the defaults to exercise the live path end-to-end.
-//
-// On a passing loop the workflow publishes a draft PR, then runs the NATIVE pre-merge
-// gate (the merge authority — the same in-loop gate over SSH, no forge CI poll) and
-// publishes its `tanren/gate` verdict, then drives review→merge and upgrades run
-// state. Non-pass loop outcomes (window_exhausted / retry_budget_exhausted / halted)
-// map to a halted run without a PR. A Codex usage-limit thrown mid-loop is caught and
-// recorded as window_exhausted rather than a generic failure (PROJECT_BRIEF §4.3).
+// (runSubtaskLoop) with real Codex adapters + a live usage probe, built through
+// injectable factories that DEFAULT to real Codex / SSH monitors (tests inject
+// fakes); the background run worker drives this with the defaults in production.
+// On a passing loop the workflow publishes a draft PR, runs the NATIVE pre-merge
+// gate (the merge authority — same in-loop gate over the command substrate, no
+// forge CI poll) + publishes its `tanren/gate` verdict, then drives review→merge.
+// Non-pass outcomes (window_exhausted / retry_budget_exhausted / halted) map to a
+// halted run without a PR. A Codex usage-limit thrown mid-loop is caught and
+// recorded as window_exhausted, not a generic failure (PROJECT_BRIEF §4.3).
 import type pg from "pg";
 import type { CiWhen } from "../ci/index.js";
 import type { EscapeHatches, GovernancePosture, RoutingTable } from "../config/shared.js";
 import type { OrgGithubAppInstallation } from "../config/orgConfig.js";
-import type { Allocator, SshTarget } from "../contracts/allocator.js";
+import type { Allocator, ReleaseReason, RunnerHandle } from "../contracts/allocator.js";
 import type { BudgetGate } from "../contracts/dagWalker.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { SecretStore } from "../contracts/secretStore.js";
-import type { SshSubstrate } from "../contracts/sshSubstrate.js";
+import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import { CostRecorder } from "../costs/index.js";
 import { codexHomeForRun } from "../credentials/codexMaterializer.js";
 import { type EventName, type EventPayload } from "../events/index.js";
@@ -45,6 +43,7 @@ import {
   buildFinalizeRunState,
   finalizeMergeOutcome,
   finalizeNonPass,
+  finalizeRunnerRelease,
   finalizeWorkflowError,
   markRunRunning,
   type RunCredentialScoping,
@@ -113,7 +112,7 @@ export interface PlannerRunContext {
 
 export interface PlannerRunAdapterContext {
   runId: string;
-  target: SshTarget;
+  target: RunnerHandle;
   // The shared per-run CODEX_HOME every Codex role materializes against, so a
   // single ccusage read at run end sees the whole run and the codexbar window
   // pre-flight reads the run's account.
@@ -128,11 +127,10 @@ export interface RunPlannerLoopInput {
   // direct DB write). The run worker injects a writer-backed recorder so the cost
   // INSERT routes through the control-plane endpoint when remote-writes is on.
   recorder?: CostRecorder;
-  // Plane-split P3: how the workflow finalizes the run (the terminal `UPDATE
-  // runs`). Defaults to the in-process org-scoped UPDATE on `pool`; the worker
-  // injects a writer-backed finalizer so the finalize routes through the
-  // control-plane endpoint when remote-writes is on. Returns nothing — the
-  // workflow does not branch on the finalize result.
+  // Plane-split P3: how the workflow finalizes the run (the terminal `UPDATE runs`).
+  // Defaults to the in-process org-scoped UPDATE on `pool`; the worker injects a
+  // writer-backed finalizer that routes through the control-plane endpoint when
+  // remote-writes is on. Returns nothing — the workflow doesn't branch on it.
   finalizeRun?: (input: { runId: string; status: string; outcome: string; fromStatuses: string[] }) => Promise<void>;
   // Plane-split P3c: the run/spec/task LIFECYCLE writer. When present (remote-writes
   // on, the run has an org), every non-finalize `runs` / `specs` / `tasks` write the
@@ -140,17 +138,14 @@ export interface RunPlannerLoopInput {
   // the workflow runs its byte-identical in-process org-scoped writes on `pool`.
   runStateWriter?: RunStateWriter;
   allocator: Allocator;
-  ssh: SshSubstrate;
+  ssh: CommandSubstrate;
   secrets: SecretStore;
   // Dimension D — the per-run credential-scoping seam ({@link applyScopedRunCredentials}).
   credentialScoping?: RunCredentialScoping;
   vcsProvider: VcsProvider;
-  /**
-   * P2a (Part 2): the shared GitHub App installation-token minter (its cache lives
-   * here). Threaded into the App-first clone-token resolution so a private clone
-   * reuses the same minted/cached installation token as the run's other stages.
-   * Omitted (the default) → the provider mints a per-call minter when App-installed.
-   */
+  // P2a (Part 2): the shared GitHub App installation-token minter (cache lives here),
+  // threaded into App-first clone-token resolution so a private clone reuses the run's
+  // minted/cached token. Omitted → the provider mints a per-call minter when installed.
   githubAppMinter?: GithubAppTokenMinter;
   context: PlannerRunContext;
   escapeHatches: Pick<
@@ -177,11 +172,10 @@ export interface RunPlannerLoopInput {
   // becomes the writer's diff base (run baseSha). When omitted, the real
   // commitBootstrapState runs over SSH; tests inject a scripted sha (or "").
   commitBootstrap?: (input: CommitBootstrapStepInput) => Promise<string>;
-  // P3-0005 test seam: the deterministic gate the loop runs per writer
-  // iteration (fast tier) and before audit (slow tier). When omitted, the
-  // default reads the workspace's tanren-ci.yml (or the P3-0004 default) and
-  // runs the mapped tiers over SSH. Tests inject a mock to assert routing
-  // without a live runner.
+  // P3-0005 test seam: the deterministic gate the loop runs per writer iteration
+  // (fast tier) and before audit (slow tier). When omitted, the default reads the
+  // workspace's tanren-ci.yml (or the P3-0004 default) and runs the mapped tiers.
+  // Tests inject a mock to assert routing without a live runner.
   runGate?: (input: { when: CiWhen; taskId?: string }) => Promise<GateOutcome>;
   // Test seams. Omitted in production → real Codex adapters + SSH usage probe.
   buildAdapters?: (ctx: PlannerRunAdapterContext) => SubtaskLoopAdapters;
@@ -203,18 +197,17 @@ export interface RunPlannerLoopInput {
   nativeQueueEnqueuer?: NativeQueueEnqueuer;
   // Max review→rework re-entries before the run halts pending operator action.
   maxReviewReworks?: number;
-  // Plane B (P-APP-ENV-0): the PROJECT's dev+test app env — the env vars + secrets
-  // the product Tanren is BUILDING needs to run + test the app it writes. Resolved
-  // by the worker from `project_app_env` via `resolveAppEnvForScope` (dev+test), with
-  // secret refs read from the secret manager. Materialized over the runner into the
-  // building agent's command env (gate steps + bootstrap), NEVER logged and DISTINCT
-  // from Tanren's own provider creds (`secrets`, `githubToken`). Undefined ⇒ no env.
+  // Plane B (P-APP-ENV-0): the PROJECT's dev+test app env — env vars + secrets the
+  // product Tanren is BUILDING needs to run+test its app. Resolved by the worker
+  // from `project_app_env` (dev+test), materialized over the runner into the building
+  // agent's command env (gate + bootstrap), NEVER logged and DISTINCT from Tanren's
+  // own provider creds. Undefined ⇒ no env.
   appEnv?: Record<string, string>;
 }
 
 export interface BootstrapStepInput {
-  ssh: SshSubstrate;
-  target: SshTarget;
+  ssh: CommandSubstrate;
+  target: RunnerHandle;
   workspacePath: string;
   command?: string;
   // Plane B: the project's dev+test app env, injected at the SSH substrate boundary
@@ -225,8 +218,8 @@ export interface BootstrapStepInput {
 }
 
 export interface CommitBootstrapStepInput {
-  ssh: SshSubstrate;
-  target: SshTarget;
+  ssh: CommandSubstrate;
+  target: RunnerHandle;
   workspacePath: string;
   timeoutMs: number;
 }
@@ -300,14 +293,16 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
   });
   await appendEvent("runner.allocated", runnerPayload(allocation));
 
+  // The release reason handed to the RELEASE FINALIZER in `finally`; starts
+  // `abandoned` and is promoted to completed/failed as the run resolves.
+  let releaseReason: ReleaseReason = "abandoned";
   try {
     // Clone + bootstrap-install + commit-the-bootstrap-state in one stage. The
-    // bootstrap commit's sha is the writer's diff base (so the checker/auditor and
-    // captured diff see only the writer's changes); the clone HEAD is kept so the
-    // PR-branch cleanup can drop the bootstrap commit before the push. P3-0006: deps
-    // install before the writer loop so gating sees a built tree; baseSha is threaded
-    // so replanned done work isn't false-rejected. The clone authenticates with the
-    // run's GitHub token (same seam as push) for PRIVATE repos.
+    // bootstrap commit's sha is the writer's diff base (checker/auditor + captured
+    // diff see only the writer's changes); the clone HEAD is kept so the PR-branch
+    // cleanup drops the bootstrap commit before push. P3-0006: deps install before
+    // the writer loop so gating sees a built tree; baseSha is threaded so replanned
+    // done work isn't false-rejected. Clone auth uses the run's GitHub token (PRIVATE repos).
     const { cloneHeadSha, bootstrapSha, baseSha } = await prepareRunWorkspace(input, allocation.target, workspacePath);
     await appendEvent("workspace.prepared", {
       workspacePath,
@@ -374,6 +369,7 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
 
       if (outcome.kind !== "passed") {
         await finalizeNonPass(finalizeRunState, context.runId, runOutcomeFor(outcome));
+        releaseReason = "failed";
         return { runId: context.runId, workspacePath, outcome };
       }
 
@@ -451,6 +447,7 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
       // exhausted: halt for operator action (surfaces on the review sub-surface
       // + the recovery surface). No merge.
       await finalizeNonPass(finalizeRunState, context.runId, "halted");
+      releaseReason = "failed";
       return { runId: context.runId, workspacePath, outcome, pullRequest, mergeGate, review };
     }
 
@@ -486,15 +483,18 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
 
     // Finalize the run + spec for the merge stage's outcome (a native_queue enqueue leaves the spec NON-done).
     await finalizeMergeOutcome(input, finalizeRunState, context, merge);
+    releaseReason = "completed";
     return { runId: context.runId, workspacePath, outcome, pullRequest, mergeGate, review, merge };
   } catch (error) {
     // Finalize the run for the thrown error (recoverable halt for a known
     // bootstrap/usage-limit fault, else a generic `failed`) + emit its event,
     // then re-throw so the worker's catch path still fails the job.
+    releaseReason = "failed";
     await finalizeWorkflowError(error, { finalizeRunState, appendEvent, runId: context.runId, workspacePath });
     throw error;
   } finally {
-    await input.allocator.release(allocation.runnerId);
-    await appendEvent("runner.released", { runnerId: allocation.runnerId });
+    // Release via the RELEASE FINALIZER seam (helper records the outcome: emit
+    // `runner.released`, or log+sweeper-reconcile a leak; never throws here).
+    await finalizeRunnerRelease(input.allocator, allocation.runnerId, releaseReason, context.runId, appendEvent);
   }
 }

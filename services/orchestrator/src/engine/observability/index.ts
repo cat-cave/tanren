@@ -13,7 +13,7 @@ export {
   type TimingSink,
 } from "./timing.js";
 
-export { TimedSshSubstrate } from "./timedSubstrate.js";
+export { TimedCommandSubstrate } from "./timedSubstrate.js";
 export { TimedGitHubHttpClient, templatizePath } from "./timedGitHubHttp.js";
 export { timedWriterAdapter } from "./timedWriterAdapter.js";
 export { timedAnswererAdapter } from "./timedAnswererAdapter.js";

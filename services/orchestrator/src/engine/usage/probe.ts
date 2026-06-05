@@ -1,4 +1,4 @@
-import type { SshTarget } from "../contracts/allocator.js";
+import type { RunnerHandle } from "../contracts/allocator.js";
 import type { CcusageAccounting, SubscriptionWindow, UsageAccountant, UsageMonitor, WindowUsage } from "./contracts.js";
 import { DEFAULT_WINDOW_PRESSURE_THRESHOLD, evaluateWindowPressure } from "./pressure.js";
 
@@ -28,7 +28,7 @@ export interface SshUsageProbeConfig {
   provider: string;
   cli: string;
   codexHome: string;
-  target: SshTarget;
+  target: RunnerHandle;
   timeoutMs: number;
   // 100 = escalate only when a window is fully consumed; lower to escalate
   // earlier (e.g. 90). Defaults to the shared pressure constant.

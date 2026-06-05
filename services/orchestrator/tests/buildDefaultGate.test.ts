@@ -6,14 +6,15 @@
 // lenient advisory semantics end-to-end — without a live runner. No DB: a
 // FakeEventStore captures the emitted gate.* / gate.advisory_failed events.
 import { describe, expect, it } from "vitest";
-import type { SshTarget } from "../src/engine/contracts/allocator.js";
-import type { SshCommand, SshCommandResult, SshSubstrate } from "../src/engine/contracts/sshSubstrate.js";
+import type { RunnerHandle } from "../src/engine/contracts/allocator.js";
+import type { RunnerCommand, CommandResult, CommandSubstrate } from "../src/engine/contracts/commandSubstrate.js";
 import type { GovernancePosture } from "../src/engine/config/shared.js";
 import { buildDefaultGate } from "../src/engine/workflow/plannerRunAdapters.js";
 import type { PlannerRunContext, RunPlannerLoopInput } from "../src/engine/workflow/plannerRun.js";
 import { FakeEventStore } from "./helpers/fakeEventStore.js";
 
-const target: SshTarget = {
+const target: RunnerHandle = {
+  backend: "ssh",
   host: "runner",
   port: 22,
   username: "tanren",
@@ -61,10 +62,10 @@ interface WorkspaceState {
 //   - the `cat tanren-ci.yml` config read (no file ⇒ default config)
 //   - the deps-ensure guard (install WHENEVER a manifest exists — no node_modules gate)
 //   - the gate steps `pnpm lint` / `pnpm typecheck` / `pnpm test` / `pnpm build`
-class InterpretingSsh implements SshSubstrate {
-  readonly commands: SshCommand[] = [];
+class InterpretingSsh implements CommandSubstrate {
+  readonly commands: RunnerCommand[] = [];
   constructor(private readonly state: WorkspaceState) {}
-  async run(_target: SshTarget, command: SshCommand): Promise<SshCommandResult> {
+  async run(_target: RunnerHandle, command: RunnerCommand): Promise<CommandResult> {
     this.commands.push(command);
     const cmd = command.command;
     const ok = { exitCode: 0, stdout: "", stderr: "", timedOut: false };
@@ -99,7 +100,7 @@ class InterpretingSsh implements SshSubstrate {
   }
 }
 
-function gateInput(ssh: SshSubstrate, ctx: PlannerRunContext): RunPlannerLoopInput {
+function gateInput(ssh: CommandSubstrate, ctx: PlannerRunContext): RunPlannerLoopInput {
   // buildDefaultGate only reads ssh / context / timeoutMs / bootstrapCommand /
   // appEnv off the input; the rest of RunPlannerLoopInput is irrelevant here.
   return { ssh, context: ctx, timeoutMs: 100 } as unknown as RunPlannerLoopInput;

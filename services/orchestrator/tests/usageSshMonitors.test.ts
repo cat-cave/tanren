@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { SshTarget } from "../src/engine/contracts/allocator.js";
-import type { SshCommand, SshCommandResult, SshSubstrate } from "../src/engine/contracts/sshSubstrate.js";
+import type { RunnerHandle } from "../src/engine/contracts/allocator.js";
+import type { RunnerCommand, CommandResult, CommandSubstrate } from "../src/engine/contracts/commandSubstrate.js";
 import {
   SshCcusageAccountant,
   SshCodexbarUsageMonitor,
@@ -8,7 +8,8 @@ import {
   buildCodexbarUsageCommand,
 } from "../src/engine/usage/sshMonitors.js";
 
-const target: SshTarget = {
+const target: RunnerHandle = {
+  backend: "ssh",
   host: "runner",
   port: 22,
   username: "tanren",
@@ -55,16 +56,16 @@ const ccusageJson = JSON.stringify({
   },
 });
 
-class ScriptedSsh implements SshSubstrate {
-  readonly commands: SshCommand[] = [];
-  constructor(private readonly result: SshCommandResult) {}
-  async run(_target: SshTarget, command: SshCommand): Promise<SshCommandResult> {
+class ScriptedSsh implements CommandSubstrate {
+  readonly commands: RunnerCommand[] = [];
+  constructor(private readonly result: CommandResult) {}
+  async run(_target: RunnerHandle, command: RunnerCommand): Promise<CommandResult> {
     this.commands.push(command);
     return this.result;
   }
 }
 
-function ok(stdout: string): SshCommandResult {
+function ok(stdout: string): CommandResult {
   return { exitCode: 0, stdout, stderr: "", timedOut: false };
 }
 

@@ -2,12 +2,12 @@ import { readFile } from "node:fs/promises";
 import { vcsProviderOver } from "./helpers/vcsProvider.js";
 import type { ServerHostKeyAlgorithm } from "ssh2";
 import { describe, expect, it } from "vitest";
-import type { SshTarget } from "../src/engine/contracts/allocator.js";
+import type { RunnerHandle } from "../src/engine/contracts/allocator.js";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
 import { storeGithubToken } from "../src/engine/credentials/githubToken.js";
 import { FakeEventStore } from "./helpers/fakeEventStore.js";
 import { FetchGitHubHttpClient } from "../src/engine/providers/github.js";
-import { Ssh2Substrate } from "../src/engine/ssh/index.js";
+import { SshCommandSubstrate } from "../src/engine/ssh/index.js";
 import { publishDraftPullRequest } from "../src/engine/workflow/githubDraftPr.js";
 import { runWorkspaceSshCommand, workspaceRepoPathForRun } from "../src/engine/workspace/index.js";
 
@@ -33,7 +33,7 @@ describeLive("live GitHub draft PR contract", () => {
         ref: "runner/live/identity",
         value: await readFile(requireEnv("TANREN_SSH_KEY_PATH"), "utf8"),
       });
-      const ssh = new Ssh2Substrate(secrets, {
+      const ssh = new SshCommandSubstrate(secrets, {
         serverHostKeyAlgorithms: parseHostKeyAlgorithms(process.env.TANREN_SSH_HOST_KEY_ALGORITHMS),
       });
       const target = liveTarget();
@@ -93,8 +93,9 @@ class RecordingPool {
   }
 }
 
-function liveTarget(): SshTarget {
+function liveTarget(): RunnerHandle {
   return {
+    backend: "ssh",
     host: process.env.TANREN_SSH_HOST ?? "127.0.0.1",
     port: Number(process.env.TANREN_SSH_PORT ?? "2222"),
     username: process.env.TANREN_SSH_USER ?? "tanren",

@@ -29,6 +29,7 @@ describe("ManualSshAllocator", () => {
       hosts: [
         {
           id: "host-1",
+          backend: "ssh",
           host: "10.0.0.1",
           port: 2200,
           username: "tanren",

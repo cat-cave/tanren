@@ -10,7 +10,7 @@
 
 import type pg from "pg";
 import type { Allocator } from "../contracts/allocator.js";
-import type { SshSubstrate } from "../contracts/sshSubstrate.js";
+import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import type { PgNotifyListener } from "@tanren/db";
 import { buildLiveRunAccept } from "./liveAccept.js";
 import { buildLiveAwaitTerminal } from "./liveAwait.js";
@@ -28,7 +28,7 @@ export interface LiveBenchmarkInfra {
   /** The SAME allocator the run path uses (reused for the accept tier's runner). */
   allocator: Allocator;
   /** The SAME SSH substrate the run path drives the runner over. */
-  ssh: SshSubstrate;
+  ssh: CommandSubstrate;
   /** The runner identity key ref (mirrors the worker's `identitySecretRef`). */
   identitySecretRef: string;
   /** The shared LISTEN connection (the SAME one the SSE source uses) for awaits. */

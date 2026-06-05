@@ -9,7 +9,7 @@
 // `reachedAcceptGreen` on the TrialScorecard + `experiment_trials.accept_result`.
 //
 // This is the benchmark analogue of `engine/workflow/gate/runGateTier.ts`: it
-// reuses the same SshSubstrate + the same bounded-output-tail discipline, but
+// reuses the same CommandSubstrate + the same bounded-output-tail discipline, but
 // keys off the benchmark identities (cell + trial + content-addressed accept-tier
 // hash) rather than the run's loop task, and is run POST-merge rather than
 // in-loop. An un-runnable accept tier (no steps, or a substrate failure with no
@@ -17,8 +17,8 @@
 // actually run green to count.
 
 import type { CiStep } from "../ci/index.js";
-import type { SshTarget } from "../contracts/allocator.js";
-import type { SshCommandResult, SshSubstrate } from "../contracts/sshSubstrate.js";
+import type { RunnerHandle } from "../contracts/allocator.js";
+import type { CommandResult, CommandSubstrate } from "../contracts/commandSubstrate.js";
 import type { EventName, EventPayload } from "../events/index.js";
 import type { AcceptResult } from "./entities.js";
 import type { BenchmarkAcceptStepResult } from "../events/schemas/benchmark.js";
@@ -33,8 +33,8 @@ export interface AcceptAppendEvent {
 }
 
 export interface RunAcceptStepInput {
-  ssh: SshSubstrate;
-  target: SshTarget;
+  ssh: CommandSubstrate;
+  target: RunnerHandle;
   workspacePath: string;
   /** The hidden accept tier's resolved steps (from the cell's frozen config). */
   steps: ReadonlyArray<CiStep>;
@@ -134,7 +134,7 @@ export async function runAcceptStep(input: RunAcceptStepInput): Promise<AcceptSt
   return { result: "passed", steps };
 }
 
-function combinedOutput(result: SshCommandResult): string {
+function combinedOutput(result: CommandResult): string {
   if (result.failure !== undefined) {
     const detail = "message" in result.failure ? result.failure.message : result.failure.reason;
     return [result.stdout, result.stderr, detail].filter((part) => part !== undefined && part !== "").join("\n");

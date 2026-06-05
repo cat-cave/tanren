@@ -26,10 +26,10 @@
 
 import { getSystemPool, runWithJobOrgId, runWithOrgScope, runWithSystemScope } from "@tanren/db";
 import type pg from "pg";
-import type { Allocator, SshTarget } from "../contracts/allocator.js";
+import type { Allocator, RunnerHandle } from "../contracts/allocator.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { SecretStore } from "../contracts/secretStore.js";
-import type { SshSubstrate } from "../contracts/sshSubstrate.js";
+import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import type { VcsProvider } from "../contracts/vcsProvider.js";
 import type { CiWhen } from "../ci/index.js";
 import type { EventStore } from "../eventStore.js";
@@ -109,7 +109,7 @@ export interface DriveConflictResolveDeps {
   scopedPool: pg.Pool;
   facts: DriveConflictResolveFacts;
   allocator: Allocator;
-  ssh: SshSubstrate;
+  ssh: CommandSubstrate;
   secrets: SecretStore;
   vcsProvider: VcsProvider;
   githubAppMinter?: GithubAppTokenMinter;
@@ -128,7 +128,7 @@ export interface DriveConflictResolveDeps {
    * seam is the real impl, never a stub). A test injects a scripted hook to assert
    * the classify-then-escalate + percolation/cap guards WITHOUT a live model/runner.
    */
-  buildResolver?: (target: SshTarget, workspacePath: string, baseSha: string) => ConflictResolverHook;
+  buildResolver?: (target: RunnerHandle, workspacePath: string, baseSha: string) => ConflictResolverHook;
 }
 
 /** The resolved run context the drive-path resolver clones + reasons over. */
@@ -336,7 +336,7 @@ async function loadDriveRunContext(deps: DriveConflictResolveDeps): Promise<Driv
 async function cloneHeadForResolve(
   deps: DriveConflictResolveDeps,
   ctx: DriveRunContext,
-  target: SshTarget,
+  target: RunnerHandle,
   workspacePath: string,
 ): Promise<string> {
   const staticRef = deps.facts.githubCredentialRef;
@@ -407,7 +407,7 @@ function buildCloneHeadCommand(
 function buildResolverForDrive(
   deps: DriveConflictResolveDeps,
   ctx: DriveRunContext,
-  target: SshTarget,
+  target: RunnerHandle,
   workspacePath: string,
   baseSha: string,
 ): ConflictResolverHook {
@@ -455,7 +455,7 @@ function buildResolverForDrive(
 function buildDriveGate(
   deps: DriveConflictResolveDeps,
   ctx: DriveRunContext,
-  target: SshTarget,
+  target: RunnerHandle,
   workspacePath: string,
 ): (gate: { when: CiWhen; taskId?: string }) => Promise<GateOutcome> {
   let configPromise: ReturnType<typeof resolveGateConfig> | undefined;

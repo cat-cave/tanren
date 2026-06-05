@@ -1,4 +1,5 @@
-import type { SshTarget } from "../contracts/allocator.js";
+import type { RunnerHandle } from "../contracts/allocator.js";
+import type { CostResolver } from "../contracts/costResolver.js";
 import type { TokenUsage } from "../providers/types.js";
 
 // Usage monitoring is split across two tools, each with a distinct job:
@@ -47,7 +48,7 @@ export interface UsageMonitor {
   readWindowState(input: {
     provider: string;
     codexHome: string;
-    target: SshTarget;
+    target: RunnerHandle;
     timeoutMs: number;
   }): Promise<WindowUsage | null>;
 }
@@ -72,7 +73,23 @@ export interface UsageAccountant {
   readAccounting(input: {
     cli: string;
     codexHome: string;
-    target: SshTarget;
+    target: RunnerHandle;
     timeoutMs: number;
   }): Promise<CcusageAccounting | null>;
+}
+
+// THE USAGE METER seam — the single named contract over the three usage reads a
+// run draws on: the live subscription-window state ({@link UsageMonitor}), the
+// token-consumption accounting ({@link UsageAccountant}), and the per-call dollar
+// resolution ({@link CostResolver}, in engine/contracts/costResolver.ts). It does
+// NOT replace those three seams (each stays independently slottable) — it NAMES
+// the unified surface so a consumer asks one thing for "what did this credential
+// consume + cost" instead of wiring three references. The cost-as-fact semantics
+// are preserved end-to-end: a dollar figure is the metered FACT or null, never a
+// hardcoded estimate. A backend with a native metering API satisfies this seam
+// by supplying the three members.
+export interface UsageMeter {
+  monitor: UsageMonitor;
+  accountant: UsageAccountant;
+  costResolver: CostResolver;
 }

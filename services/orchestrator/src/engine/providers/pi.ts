@@ -1,6 +1,6 @@
-import type { SshTarget } from "../contracts/allocator.js";
+import type { RunnerHandle } from "../contracts/allocator.js";
 import type { SecretStore } from "../contracts/secretStore.js";
-import type { SshSubstrate } from "../contracts/sshSubstrate.js";
+import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import { validateCredentialRef } from "../credentials/codexAuth.js";
 import { quoteSshShellArg } from "../ssh/command.js";
 import { apiKeyEnvVarForModel } from "./aider.js";
@@ -41,8 +41,8 @@ const DEFAULT_PI_MODEL = "anthropic/claude-opus-4-8";
 
 export interface PiWriterDependencies {
   secrets: SecretStore;
-  ssh: SshSubstrate;
-  target: SshTarget;
+  ssh: CommandSubstrate;
+  target: RunnerHandle;
   credentialRef: string;
   runId: string;
   // The pi model id this adapter pins (e.g. "anthropic/claude-opus-4-8",
@@ -132,7 +132,7 @@ export async function resolvePiApiKey(secrets: SecretStore, ref: string): Promis
 // Builds the non-interactive pi invocation. The API key is injected as a
 // command-scoped env var (provider-specific) so it never lands in a file and is
 // redacted from the adapter's own result. The workspace is the cwd (the
-// SshCommand.cwd cd's into it), so pi operates on the run's git repo.
+// RunnerCommand.cwd cd's into it), so pi operates on the run's git repo.
 export function buildPiWriterCommand(input: {
   apiKeyEnvVar: string;
   apiKey: string;

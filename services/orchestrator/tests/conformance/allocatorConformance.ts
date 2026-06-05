@@ -8,6 +8,7 @@
 // injected mock client. Track C §2 of docs/architecture/portability-and-longevity.md.
 import { describe, expect, it } from "vitest";
 import type { AllocationRequest, Allocator } from "../../src/engine/contracts/allocator.js";
+import { asSshRunnerHandle } from "../../src/engine/contracts/allocator.js";
 
 /**
  * What a per-implementation test file hands the suite. `make()` must return a
@@ -48,8 +49,11 @@ function expectWellFormedAllocation(
   expect(typeof allocation.imageSha).toBe("string");
   expect(allocation.imageSha.length).toBeGreaterThan(0);
 
-  // target: a complete, connectable SshTarget.
-  const target = allocation.target;
+  // target: a RunnerHandle whose opaque contract surface carries a backend
+  // discriminant. SSH is the one backend today, so it must narrow to a complete,
+  // connectable SshRunnerHandle.
+  expect(allocation.target.backend).toBe("ssh");
+  const target = asSshRunnerHandle(allocation.target);
   expect(typeof target.host).toBe("string");
   expect(target.host.length).toBeGreaterThan(0);
   expect(typeof target.port).toBe("number");

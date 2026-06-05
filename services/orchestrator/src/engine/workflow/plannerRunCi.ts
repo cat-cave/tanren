@@ -15,7 +15,7 @@
 // reuses the same in-loop gate closure on a re-pulled head. A passing re-gate is
 // `passed`, a throw is `failed` — the merge stage never merges an unverified rebase.
 
-import type { SshTarget } from "../contracts/allocator.js";
+import type { RunnerHandle } from "../contracts/allocator.js";
 import { resolveWorkspaceHeadSha } from "../workspace/index.js";
 import { type CiWhen } from "../ci/index.js";
 import { type GateOutcome, publishGateVerdict, runNativeMergeGate } from "./gate/index.js";
@@ -26,7 +26,7 @@ import type { RunPlannerLoopInput } from "./plannerRun.js";
 /** The live-runner context the in-loop merge gate runs + publishes against. */
 export interface MergeGateRunContext {
   runGate: (gate: { when: CiWhen; taskId?: string }) => Promise<GateOutcome>;
-  target: SshTarget;
+  target: RunnerHandle;
   workspacePath: string;
   eventStore: EventStore;
 }

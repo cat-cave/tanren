@@ -36,9 +36,9 @@ export type {
 } from "./vcsProviderPublish.js";
 import type { ActorIdentity } from "./vcsProviderErrors.js";
 import type { PublishCheckInput, PublishedCheck, PublishStatusInput } from "./vcsProviderPublish.js";
-import type { SshTarget } from "./allocator.js";
+import type { RunnerHandle } from "./allocator.js";
 import type { SecretStore } from "./secretStore.js";
-import type { SshSubstrate } from "./sshSubstrate.js";
+import type { CommandSubstrate } from "./commandSubstrate.js";
 import type { OrgGithubAppInstallation } from "../config/orgConfig.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
 import type { GitHubPullRequestChecks, GitHubRepository } from "../providers/github.js";
@@ -238,8 +238,8 @@ export interface PushBranchInput {
    * so a provider that lacks a pre-resolved token could fall back to it.
    */
   secrets: SecretStore;
-  ssh: SshSubstrate;
-  target: SshTarget;
+  ssh: CommandSubstrate;
+  target: RunnerHandle;
   workspacePath: string;
   repoUrl: string;
   branch: string;

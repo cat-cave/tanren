@@ -8,7 +8,7 @@ import type pg from "pg";
 import type { Allocator } from "../../contracts/allocator.js";
 import type { RunStateWriter } from "../../contracts/runStateWriter.js";
 import type { SecretStore } from "../../contracts/secretStore.js";
-import type { SshSubstrate } from "../../contracts/sshSubstrate.js";
+import type { CommandSubstrate } from "../../contracts/commandSubstrate.js";
 import type { GitHubHttpClient } from "../../providers/github.js";
 import type { GithubAppTokenMinter } from "../../providers/githubAppTokenMinter.js";
 import { buildForgeAuditAnswererFactory, buildForgeTriageAnswererFactory } from "../providerFactory.js";
@@ -20,7 +20,7 @@ export interface BootIntakeDeps {
   pool: pg.Pool;
   secrets: SecretStore;
   allocator: Allocator;
-  ssh: SshSubstrate;
+  ssh: CommandSubstrate;
   githubHttp: GitHubHttpClient;
   // The shared App-token minter: the poller's per-org GitHub issues connector mints an
   // installation token (App-only intake), and the audit pass runner resolves a repo-read token.

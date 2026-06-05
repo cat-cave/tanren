@@ -10,7 +10,9 @@
 // default path + its mutation suite are unchanged). The `fromStatuses` guard is
 // what the remote endpoint applies for exactly-once.
 
-import type { RunnerAllocation } from "../contracts/allocator.js";
+import type { Allocator, ReleaseReason, RunnerAllocation } from "../contracts/allocator.js";
+import { asSshRunnerHandle } from "../contracts/allocator.js";
+import { AllocatorReleaseFinalizer } from "../contracts/releaseFinalizer.js";
 import { CodexUsageLimitError } from "../providers/codex.js";
 import type { EventName, EventPayload } from "../events/index.js";
 import { WorkspaceBootstrapError } from "../workspace/index.js";
@@ -23,18 +25,43 @@ import type { SubtaskLoopOutcome } from "./subtaskLoop.js";
 // already depends on, keeping that file's dependency count under the cap.
 export { applyScopedRunCredentials, type RunCredentialScoping } from "./plannerRunScopedCreds.js";
 
-/** The `runner.allocated` event payload — runner id/image + the SSH target's public fields. */
+/** The `runner.allocated` event payload — runner id/image + the SSH handle's public fields. */
 export function runnerPayload(allocation: RunnerAllocation) {
+  // The allocation's `target` is the opaque RunnerHandle; the event payload carries
+  // the SSH handle's public reach fields, so narrow to the SSH shape here.
+  const handle = asSshRunnerHandle(allocation.target);
   return {
     runnerId: allocation.runnerId,
     imageSha: allocation.imageSha,
     target: {
-      host: allocation.target.host,
-      port: allocation.target.port,
-      username: allocation.target.username,
-      hostKeyFingerprint: allocation.target.hostKeyFingerprint,
+      host: handle.host,
+      port: handle.port,
+      username: handle.username,
+      hostKeyFingerprint: handle.hostKeyFingerprint,
     },
   };
+}
+
+// Release the run's runner through the RELEASE FINALIZER seam and act on the
+// outcome: emit `runner.released` on a clean teardown, or log a LOUD leak (real
+// cost/capacity) the allocator's sweeper reconciles by age. Never throws for a
+// release failure — called from the run loop's `finally`, where a throw would
+// mask the run's own error.
+export async function finalizeRunnerRelease(
+  allocator: Allocator,
+  runnerId: string,
+  reason: ReleaseReason,
+  runId: string,
+  appendEvent: (eventType: "runner.released", payload: { runnerId: string }) => Promise<void>,
+): Promise<void> {
+  const outcome = await new AllocatorReleaseFinalizer(allocator).finalize(runnerId, reason);
+  if (outcome.kind === "released") {
+    await appendEvent("runner.released", { runnerId });
+    return;
+  }
+  console.error(
+    `[run ${runId}] FAILED to release runner ${runnerId} — leaked (sweeper will reconcile): ${outcome.message}`,
+  );
 }
 
 /** Finalize the run's terminal state, direct (in-process) or remote (control plane). */

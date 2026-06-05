@@ -3,13 +3,13 @@
 // decorators. These prove the layer measures latency and emits structured
 // records WITHOUT changing the wrapped behavior or leaking secrets.
 import { describe, expect, it, vi } from "vitest";
-import type { SshTarget } from "../src/engine/contracts/allocator.js";
-import type { SshCommand, SshCommandResult, SshSubstrate } from "../src/engine/contracts/sshSubstrate.js";
+import type { RunnerHandle } from "../src/engine/contracts/allocator.js";
+import type { RunnerCommand, CommandResult, CommandSubstrate } from "../src/engine/contracts/commandSubstrate.js";
 import { defineFailure } from "../src/engine/failure.js";
 import {
   emitStageTiming,
   TimedGitHubHttpClient,
-  TimedSshSubstrate,
+  TimedCommandSubstrate,
   templatizePath,
   timed,
   timedAnswererAdapter,
@@ -29,7 +29,8 @@ function captureSink() {
   return { records, sink: (record: TimingRecord) => records.push(record) };
 }
 
-const target: SshTarget = {
+const target: RunnerHandle = {
+  backend: "ssh",
   host: "runner",
   port: 22,
   username: "tanren",
@@ -110,18 +111,18 @@ describe("templatizePath", () => {
   });
 });
 
-describe("TimedSshSubstrate", () => {
+describe("TimedCommandSubstrate", () => {
   it("delegates to the inner substrate and emits secret-free SSH timing (no command/stdin)", async () => {
     const { records, sink } = captureSink();
-    const inner: SshSubstrate = {
-      run: async (_t: SshTarget, _c: SshCommand): Promise<SshCommandResult> => ({
+    const inner: CommandSubstrate = {
+      run: async (_t: RunnerHandle, _c: RunnerCommand): Promise<CommandResult> => ({
         exitCode: 0,
         stdout: "ok",
         stderr: "",
         timedOut: false,
       }),
     };
-    const wrapped = new TimedSshSubstrate(inner, sink);
+    const wrapped = new TimedCommandSubstrate(inner, sink);
     const result = await wrapped.run(target, {
       command: "echo SECRET_TOKEN_xyz",
       stdin: "SECRET",
@@ -129,15 +130,17 @@ describe("TimedSshSubstrate", () => {
     });
     expect(result.stdout).toBe("ok");
     const run = records.find((r) => r.operation === "ssh.run");
-    expect(run?.attributes).toEqual({ host: "runner", port: 22, username: "tanren" });
+    // Backend-neutral telemetry: the opaque handle's `backend` tag plus the SSH
+    // backend's (non-secret) host/port/username reach fields.
+    expect(run?.attributes).toEqual({ backend: "ssh", host: "runner", port: 22, username: "tanren" });
     // The command string and stdin must never appear in any emitted record.
     expect(JSON.stringify(records)).not.toContain("SECRET");
   });
 
   it("emits an extra error record when the substrate reports an in-band failure", async () => {
     const { records, sink } = captureSink();
-    const inner: SshSubstrate = {
-      run: async (): Promise<SshCommandResult> => ({
+    const inner: CommandSubstrate = {
+      run: async (): Promise<CommandResult> => ({
         exitCode: null,
         stdout: "",
         stderr: "",
@@ -145,7 +148,7 @@ describe("TimedSshSubstrate", () => {
         failure: defineFailure({ kind: "ssh_failed", target: "runner", message: "x" }),
       }),
     };
-    await new TimedSshSubstrate(inner, sink).run(target, { command: "x", timeoutMs: 10 });
+    await new TimedCommandSubstrate(inner, sink).run(target, { command: "x", timeoutMs: 10 });
     expect(records.some((r) => r.operation === "ssh.run.failed" && r.outcome === "error")).toBe(true);
   });
 });

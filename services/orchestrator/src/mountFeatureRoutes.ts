@@ -9,7 +9,7 @@
 import type { Hono } from "hono";
 import type pg from "pg";
 import { orgScopingPool } from "./engine/data/orgScopedDb.js";
-import type { Allocator, SecretStore, SshSubstrate } from "./engine/contracts/index.js";
+import type { Allocator, SecretStore, CommandSubstrate } from "./engine/contracts/index.js";
 import { buildForgeRouteAnswererFactories } from "./engine/forge/routeFactories.js";
 import type { GitHubHttpClient } from "./engine/providers/github.js";
 import type { VcsProvider } from "./engine/contracts/vcsProvider.js";
@@ -63,7 +63,7 @@ export interface FeatureRouteDeps {
   // run the REAL provider answerer (engine/forge/providerFactory.ts). Same
   // values `buildApp` assembles for the benchmark infra.
   allocator: Allocator;
-  ssh: SshSubstrate;
+  ssh: CommandSubstrate;
   identitySecretRef: string;
   // B1 (webhook provisioning): the public base URL Tanren is reachable at, so the
   // inbox webhook-provision endpoint can construct the GitHub `issues` callback URL.

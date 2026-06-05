@@ -1,14 +1,15 @@
-import type { SshTarget } from "../contracts/allocator.js";
+import type { RunnerHandle } from "../contracts/allocator.js";
 import type { SecretStore } from "../contracts/secretStore.js";
-import type { SshSubstrate } from "../contracts/sshSubstrate.js";
+import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
+import { CommandFileSubstrate } from "../ssh/commandFileSubstrate.js";
 import { quoteSshShellArg } from "../ssh/command.js";
 import { validateCodexAuthBundle, validateCodexCredentialRef, validateCredentialRef } from "./codexAuth.js";
 import { resolveManagedOpenRouterKey } from "./managedKey.js";
 
 export interface MaterializeCodexAuthInput {
   secrets: SecretStore;
-  ssh: SshSubstrate;
-  target: SshTarget;
+  ssh: CommandSubstrate;
+  target: RunnerHandle;
   ref: string;
   runId: string;
   baseDir?: string;
@@ -48,15 +49,18 @@ export async function materializeCodexAuthBundle(input: MaterializeCodexAuthInpu
     return { CODEX_HOME: codexHome, ref: validateCredentialRef(input.ref), managed: true, redacted: true };
   }
   // BYOK (default, unchanged): validate the codex/ ref + the ChatGPT token bundle
-  // and write codex's auth.json.
+  // and write codex's auth.json. The secret bytes go through the FILE SUBSTRATE
+  // seam (a chmod-600 write, content on stdin) — the named form of the heredoc
+  // that wrote auth.json inline before.
   const { ref, authJson } = await resolveCodexBundleAuthJson(input.secrets, input.ref);
-  const command = buildCodexAuthMaterializationCommand(codexHome);
-  const result = await input.ssh.run(input.target, {
-    command,
-    stdin: authJson,
+  const files = new CommandFileSubstrate(input.ssh);
+  const result = await files.writeFile(input.target, {
+    path: `${codexHome}/auth.json`,
+    content: authJson,
+    mode: 0o600,
     timeoutMs: input.timeoutMs ?? 30_000,
   });
-  assertMaterializationOk(result);
+  assertFileWriteOk(result, "Codex");
   return { CODEX_HOME: codexHome, ref, managed: false, redacted: true };
 }
 
@@ -103,6 +107,18 @@ function failureMessage(failure: { message?: string; reason?: string }): string 
   return failure.message ?? failure.reason ?? "unknown failure";
 }
 
+// Assert a FileSubstrate write succeeded, mirroring assertMaterializationOk's loud
+// failure (a credential write that did not land must halt the run, never degrade).
+function assertFileWriteOk(
+  result: { ok: boolean; failure?: { message?: string; reason?: string } },
+  cli: string,
+): void {
+  if (!result.ok) {
+    const detail = result.failure === undefined ? "unknown failure" : failureMessage(result.failure);
+    throw new Error(`${cli} credential materialization failed: ${detail}`);
+  }
+}
+
 /**
  * BYOK resolution (unchanged): the ref must be a `credential/codex/` ref and the
  * stored secret must be a Codex ChatGPT auth-bundle JSON. Returns the validated
@@ -126,16 +142,6 @@ export function codexHomeForRun(runId: string, baseDir = "/home/tanren/.tanren/r
     throw new Error("run id is not safe for a runner path");
   }
   return `${baseDir.replace(/\/$/u, "")}/${runId}/codex-home`;
-}
-
-export function buildCodexAuthMaterializationCommand(codexHome: string): string {
-  const authPath = `${codexHome}/auth.json`;
-  return [
-    "umask 077",
-    `mkdir -p ${quoteSshShellArg(codexHome)}`,
-    `cat > ${quoteSshShellArg(authPath)}`,
-    `chmod 600 ${quoteSshShellArg(authPath)}`,
-  ].join(" && ");
 }
 
 // The per-run env file the managed codex command sources for OPENROUTER_API_KEY.

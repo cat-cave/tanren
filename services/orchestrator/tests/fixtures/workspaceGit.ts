@@ -5,8 +5,8 @@
 // any production/runtime path: production code prepares workspaces and captures
 // diffs through the real writer adapters (codexGit / writerGit). They live under
 // tests/ so they are unreachable from src/.
-import type { SshTarget } from "../../src/engine/contracts/allocator.js";
-import type { SshSubstrate } from "../../src/engine/contracts/sshSubstrate.js";
+import type { RunnerHandle } from "../../src/engine/contracts/allocator.js";
+import type { CommandSubstrate } from "../../src/engine/contracts/commandSubstrate.js";
 import type { Commit, WriterResult } from "../../src/engine/providers/types.js";
 import { quoteSshShellArg } from "../../src/engine/ssh/command.js";
 import { runWorkspaceSshCommand } from "../../src/engine/workspace/index.js";
@@ -22,8 +22,8 @@ const fakeTokenUsage = {
 };
 
 export interface WorkspaceGitInput {
-  ssh: SshSubstrate;
-  target: SshTarget;
+  ssh: CommandSubstrate;
+  target: RunnerHandle;
   workspacePath: string;
   timeoutMs: number;
 }

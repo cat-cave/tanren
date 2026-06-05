@@ -12,11 +12,11 @@ import type {
   AllocationRequest,
   Allocator,
   RunnerAllocation,
-  SshTarget,
+  RunnerHandle,
 } from "../../src/engine/contracts/allocator.js";
 import type { FakeJobQueue } from "../../src/engine/contracts/jobQueue.js";
 import { FakeSecretStore } from "../../src/engine/contracts/secretStore.js";
-import type { SshCommand, SshCommandResult, SshSubstrate } from "../../src/engine/contracts/sshSubstrate.js";
+import type { RunnerCommand, CommandResult, CommandSubstrate } from "../../src/engine/contracts/commandSubstrate.js";
 import { storeGithubToken } from "../../src/engine/credentials/githubToken.js";
 import type { GitHubHttpClient, GitHubHttpRequest, GitHubHttpResponse } from "../../src/engine/providers/github.js";
 import type {
@@ -44,7 +44,8 @@ export const delay = (ms: number): Promise<void> =>
     setTimeout(resolve, ms);
   });
 
-export const target: SshTarget = {
+export const target: RunnerHandle = {
+  backend: "ssh",
   host: "runner",
   port: 22,
   username: "tanren",
@@ -204,8 +205,8 @@ export class RecordingAllocator implements Allocator {
   async release(): Promise<void> {}
 }
 
-export class RecordingSsh implements SshSubstrate {
-  async run(_target: SshTarget, _command: SshCommand): Promise<SshCommandResult> {
+export class RecordingSsh implements CommandSubstrate {
+  async run(_target: RunnerHandle, _command: RunnerCommand): Promise<CommandResult> {
     return { exitCode: 0, stdout: "", stderr: "", timedOut: false };
   }
 }

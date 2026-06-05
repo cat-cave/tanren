@@ -11,7 +11,7 @@ import type pg from "pg";
 import type { ActorContext } from "./auth/index.js";
 import { orgScopingPool } from "./engine/data/orgScopedDb.js";
 import { draftPrInputSchema, projectInputSchema, runInputSchema, specInputSchema } from "./inputSchemas.js";
-import type { SecretStore, SshSubstrate } from "./engine/contracts/index.js";
+import type { SecretStore, CommandSubstrate } from "./engine/contracts/index.js";
 import { parseRawViewOptIn, redactEventRows } from "./routes/runs/redaction.js";
 import type { VcsProvider } from "./engine/contracts/vcsProvider.js";
 import type { GithubAppTokenMinter } from "./engine/providers/githubAppTokenMinter.js";
@@ -39,8 +39,8 @@ export interface RootApiDeps {
   githubAppMinter: GithubAppTokenMinter;
   identitySecretRef: string;
   // The per-run draft-PR route pushes the runner workspace branch over this
-  // substrate (the orchestrator wraps a TimedSshSubstrate(Ssh2Substrate)).
-  ssh: SshSubstrate;
+  // substrate (the orchestrator wraps a TimedCommandSubstrate(SshCommandSubstrate)).
+  ssh: CommandSubstrate;
 }
 
 function messageFromError(error: unknown): string {

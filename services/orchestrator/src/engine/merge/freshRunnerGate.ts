@@ -16,9 +16,9 @@
 // SSH stdin via the shared git credential helper — never on the command line, never
 // logged. The runner is ALWAYS released (loud-on-leak in the finally).
 
-import type { Allocator, SshTarget } from "../contracts/allocator.js";
+import type { Allocator, RunnerHandle } from "../contracts/allocator.js";
 import type { SecretStore } from "../contracts/secretStore.js";
-import type { SshSubstrate } from "../contracts/sshSubstrate.js";
+import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import type { OrgGithubAppInstallation } from "../config/orgConfig.js";
 import type { GovernancePosture } from "../config/shared.js";
 import type { VcsProvider } from "../contracts/vcsProvider.js";
@@ -63,7 +63,7 @@ export interface FreshRunnerGateContext {
 
 export interface FreshRunnerGateDeps {
   allocator: Allocator;
-  ssh: SshSubstrate;
+  ssh: CommandSubstrate;
   secrets: SecretStore;
   vcsProvider: VcsProvider;
   githubAppMinter?: GithubAppTokenMinter;
@@ -136,7 +136,7 @@ export async function runFreshRunnerMergeGate(
 async function cloneRefForGate(
   deps: FreshRunnerGateDeps,
   ctx: FreshRunnerGateContext,
-  target: SshTarget,
+  target: RunnerHandle,
   workspacePath: string,
 ): Promise<string> {
   const staticRef = ctx.githubCredentialRef;
@@ -193,7 +193,11 @@ function buildCloneRefCommand(repoUrl: string, ref: string, token: string | unde
  * `tanren-ci.yml` bootstrap.run when present, else the FROZEN brownfield default (a
  * re-gate never mutates a committed lockfile). A failure throws (no silent skip).
  */
-async function installDepsForGate(deps: FreshRunnerGateDeps, target: SshTarget, workspacePath: string): Promise<void> {
+async function installDepsForGate(
+  deps: FreshRunnerGateDeps,
+  target: RunnerHandle,
+  workspacePath: string,
+): Promise<void> {
   const bootstrapCommand = await resolveBootstrapCommand({
     ssh: deps.ssh,
     target,
@@ -217,7 +221,7 @@ async function installDepsForGate(deps: FreshRunnerGateDeps, target: SshTarget, 
 async function gateClonedRef(
   deps: FreshRunnerGateDeps,
   ctx: FreshRunnerGateContext,
-  target: SshTarget,
+  target: RunnerHandle,
   workspacePath: string,
   headSha: string,
 ): Promise<GateOutcome> {

@@ -4,9 +4,14 @@
  * to keep that file under the 500-line architecture cap.
  */
 import type { AuditAnswer, CheckAnswer, PlanAnswer } from "../src/engine/answerers/schemas/index.js";
-import type { AllocationRequest, Allocator, RunnerAllocation, SshTarget } from "../src/engine/contracts/allocator.js";
+import type {
+  AllocationRequest,
+  Allocator,
+  RunnerAllocation,
+  RunnerHandle,
+} from "../src/engine/contracts/allocator.js";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
-import type { SshCommand, SshCommandResult, SshSubstrate } from "../src/engine/contracts/sshSubstrate.js";
+import type { RunnerCommand, CommandResult, CommandSubstrate } from "../src/engine/contracts/commandSubstrate.js";
 import { storeGithubToken } from "../src/engine/credentials/githubToken.js";
 import { FakeEventStore } from "./helpers/fakeEventStore.js";
 import type { GitHubHttpClient, GitHubHttpRequest, GitHubHttpResponse } from "../src/engine/providers/github.js";
@@ -49,7 +54,8 @@ export {
   passingCheck,
 } from "./helpers/plannerLoopHelpers.js";
 
-export const target: SshTarget = {
+export const target: RunnerHandle = {
+  backend: "ssh",
   host: "runner",
   port: 22,
   username: "tanren",
@@ -330,10 +336,10 @@ export class RecordingAllocator implements Allocator {
   }
 }
 
-export class RecordingSsh implements SshSubstrate {
-  readonly commands: Array<{ target: SshTarget; command: SshCommand }> = [];
+export class RecordingSsh implements CommandSubstrate {
+  readonly commands: Array<{ target: RunnerHandle; command: RunnerCommand }> = [];
 
-  async run(sshTarget: SshTarget, command: SshCommand): Promise<SshCommandResult> {
+  async run(sshTarget: RunnerHandle, command: RunnerCommand): Promise<CommandResult> {
     this.commands.push({ target: sshTarget, command });
     return { exitCode: 0, stdout: "", stderr: "", timedOut: false };
   }

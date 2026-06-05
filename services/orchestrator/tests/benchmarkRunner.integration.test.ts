@@ -19,7 +19,7 @@ import { migrate, runWithOrgScope, setSystemPool } from "@tanren/db";
 import { runExperimentCell } from "../src/engine/benchmark/index.js";
 import { PgEventStore } from "../src/engine/eventStore.js";
 import { runAcceptStep } from "../src/engine/benchmark/accept.js";
-import { FakeSshSubstrate } from "../src/engine/contracts/sshSubstrate.js";
+import { FakeCommandSubstrate } from "../src/engine/contracts/commandSubstrate.js";
 
 const enabled = process.env["TANREN_RLS_DB_TEST"] === "1";
 const describeDb = enabled ? describe : describe.skip;
@@ -183,8 +183,15 @@ describeDb("BenchmarkRunner — runs trials end-to-end under RLS + the accept st
             const project = `proj_${orgId}_${trialIndex}`;
             const spec = `spec_${orgId}_${trialIndex}`;
             const { result: acceptResult } = await runAcceptStep({
-              ssh: new FakeSshSubstrate(),
-              target: { host: "h", port: 22, username: "u", hostKeyFingerprint: "fp", identitySecretRef: "id" },
+              ssh: new FakeCommandSubstrate(),
+              target: {
+                backend: "ssh",
+                host: "h",
+                port: 22,
+                username: "u",
+                hostKeyFingerprint: "fp",
+                identitySecretRef: "id",
+              },
               workspacePath: "/ws",
               steps: cell.frozenConfig.ciTiers.tiers["slow"] ?? [],
               acceptTierHash: cell.seedTaskRef.acceptTierHash,

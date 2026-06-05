@@ -1,6 +1,7 @@
 import { Client } from "ssh2";
 import {
   persistedRunnerKeys,
+  sshRunnerHandle,
   type AllocationRequest,
   type Allocator,
   type ReleaseReason,
@@ -60,13 +61,13 @@ export class StaticRunnerAllocator implements Allocator {
     const allocation: RunnerAllocation = {
       runnerId,
       imageSha: `${request.runnerImage}@sha256:static`,
-      target: {
+      target: sshRunnerHandle({
         host,
         port,
         username,
         hostKeyFingerprint: fingerprint,
         identitySecretRef: request.identitySecretRef,
-      },
+      }),
     };
 
     await this.options.runners.claim({
