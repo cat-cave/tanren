@@ -36,9 +36,10 @@ D (managed-hosting)           ┘ Top remaining builds: Vault per-run scoped cre
 ```
 
 **A is done — it is no longer the gate.** The full real loop went
-plan → real-agent write → draft-PR → CI → review → merge to a **merged PR across
-three tiers** (easy/medium/hard, the hard one a private repo) with real Codex and
-real credentials; the harness-integration frontier is resolved. B's prerequisite
+plan → real-agent write → draft-PR → native gate → review → merge → deploy → demo
+to a **merged PR across three tiers** (easy/medium/hard, the hard one a private
+repo) with real Codex and real credentials; the harness-integration frontier is
+resolved. B's prerequisite
 is therefore met and its toolkit is code-complete (only the seed corpus remains);
 D's de-privilege is live-proven through P3c. The two highest-leverage remaining
 builds are **Vault per-run scoped credentials** (D) and the **remaining
@@ -51,10 +52,11 @@ data-access-layer clusters** (C); C proceeds in parallel.
 The dashboard- and CLI-triggered run path is built, merged, and **live-validated
 to a merged PR across three tiers**. The background run worker
 (`TANREN_RUN_WORKER=1`, `services/orchestrator/src/engine/worker/`) dequeues
-`plan` jobs and drives plan → write → check → audit → in-loop gate → draft PR →
-CI → review → merge with real writer/answerer adapters (Codex/Claude/opencode
-behind a versioned harness protocol). Findings + reproduction:
-`docs/operator-guide/live-validation-findings.md`.
+`plan` jobs and drives `plan → write → check → audit → native gate → merge →
+deploy → demo` with real writer/answerer adapters (Codex/Claude/opencode behind a
+versioned harness protocol). Delivery is Action-less: the `pre_merge` gate runs
+over SSH and is the merge authority (no injected Actions workflow). Findings +
+reproduction: `docs/operator-guide/live-validation-findings.md`.
 
 **The harness-integration frontier is RESOLVED (the P3-0009 close-out is done):**
 
@@ -64,9 +66,11 @@ behind a versioned harness protocol). Findings + reproduction:
    so **private target repos work**.
 2. **The real write stage (done).** A real `codex` writer runs against the cloned
    workspace and produces a diff judged against the post-bootstrap run base.
-3. **Draft-PR → CI → review → merge (done).** Easy (`open`/`direct_merge`/`auto`),
-   medium (same + a two-tier `tanren-ci.yml` gated by real GitHub Actions), and
-   hard (same + `reviewPolicy: simulated`) each reached a merged PR.
+3. **Draft-PR → native gate → review → merge (done).** Easy
+   (`open`/`direct_merge`/`auto`), medium (same + a two-tier `.tanren/ci.yml`
+   native gate run over SSH — no Actions), and hard (same + `reviewPolicy:
+simulated`) each reached a merged PR. The `pre_merge` gate is the merge
+   authority; the verdict publishes as a `tanren/gate` check.
 
 **Tiered integration proven (`reviewPolicy` = `["human","auto","simulated"]`,
 `engine/config/shared.ts`):** the `simulated` reviewer is an orchestrator-managed
@@ -82,9 +86,21 @@ copied into `dist`, `.claude/` excluded from the Docker build context);
 cumulative-diff convergence (planner-actionable subtasks; checker defers
 test/build/lint outcomes to the deterministic gate).
 
-**Remaining near-term:** post-merge auto-issue creation — on a post-merge check
-failure, auto-open a tracking issue. (The merge-queue + human-review paths already
-exist.) _(remaining)_
+**Native delivery — Action-less (v21, done).** The delivery model is fully
+Tanren-native (PRs #323–#334): the **native gate** is the merge authority
+(`.tanren/ci.yml` tiers run over SSH; `tanren/gate` verdict; the dead Actions path
+pruned, JUnit ingested in-process); the **DeployAdapter** triggers deploy-on-merge
+and `verify` polls to READY + URL smoke; **demos-as-evidence** exercise the spec's
+behaviors against the live surface; the **brownfield importer** migrates workflow
+_intent_ into native gates with a migration-risk report; the **audit-evidence +
+security baseline** stamps every governing decision; the execution-backend
+**substrate seams** are named; and the run/spec/task **status vocabulary** is
+unified. See `docs/operator-guide/ci-config.md` + `deploy.md`.
+
+**Post-merge auto-issue creation (done).** On a post-merge check failure on the
+base branch, `engine/postMerge/watcher.ts` opens ONE tracking issue via
+`VcsProvider.createIssue` (label `tanren:post-merge-failure`), idempotent via a
+claim store, woken on the same run-activity bus the DagWalker listens on.
 
 **Held:** hi-fi "Set 2" surfaces await the next hi-fi revision
 (`docs/design/hifi-revision-process.md`); agy/pi/reasonix **live** validation
@@ -144,8 +160,9 @@ JSON-Schema, the harness protocol, mutation testing). Highest-leverage items:
    is promoted alongside `JobQueue` / `EventStore` and has its own conformance
    suite (`tests/conformance/repositories*`). The HTTP routes (projects/specs/
    entities/runs/dora) and the run-lifecycle writes are migrated off raw SQL.
-   **Remaining:** the `engine/forge/**`, `engine/quota/**`, `engine/recovery/**`
-   raw-query clusters onto the seam. _(in-progress)_
+   **Remaining:** the `engine/forge/**` raw-query cluster onto the seam.
+   (`engine/recovery/**` carries no raw SQL; `engine/quota/**` is gone — deleted
+   with `QuotaPolicy`.) _(in-progress)_
 2. **`LISTEN/NOTIFY` (done).** Replaced the 1s polling in the run worker and the
    SSE frame source.
 3. **Finish type-sharing (in-progress).** Dashboard run-detail types are
@@ -206,22 +223,29 @@ live conversion checklist: `docs/roadmap/saas-rls-and-plane-split-plan.md` +
   restart; needed `SecretStore.list(prefix)` (added across all backends). The
   legacy top-level import routes are **deleted** — the org-scoped surface is the
   only import path.
+- **Vault per-run scoped credentials (done — the last big de-privilege).** Before
+  a run touches any credential, `VaultRunTokenMinter` writes a per-run ACL policy
+  granting `read` on exactly that run's KV-v2 cred paths (one stanza per ref) and
+  creates an orphan child token carrying only that policy; the run's `SecretStore`
+  is swapped for a `VaultSecretStore` backed by that scoped token
+  (`buildRunCredentialScoping()` / `applyScopedRunCredentials`,
+  `engine/workflow/plannerRunScopedCreds.ts`). The broad token is never returned or
+  logged; the `?? "dev-root-token"` fallbacks in `main.ts` + `allocator/main.ts`
+  are removed (the broad token is REQUIRED, fail-hard).
 
 **Remaining:**
 
-- **Vault per-run scoped credentials (remaining — the biggest remaining
-  de-privilege).** The data plane still holds the broad `VAULT_TOKEN`; mint a
-  short-lived child token scoped to a single run's cred paths. (Also remove the
-  `?? "dev-root-token"` fallbacks still in `main.ts` + `allocator/main.ts`.)
 - **Prod hardening (remaining).** Rotate the DEV/CI default role passwords
   out-of-band per the migration headers; finalize the prod profile.
 
 **Seams already built (the OSS-enforces / hosting-bills boundary):**
-`QuotaPolicy` + metering-export, credential namespacing
-(`credential/<slug>/<scope>/<ownerId>/<name>`), the managed-provider toggle
-(BYOK ↔ OpenRouter), pluggable secret-stores.
+the **budget gate** (the only run gate — `QuotaPolicy` is deleted) + metering-export,
+credential namespacing (`credential/<slug>/<scope>/<ownerId>/<name>`), the
+managed-provider toggle (BYOK ↔ OpenRouter), pluggable secret-stores.
 
-**Held:** the **VCS / CI / merge-integration abstraction**
-(`docs/roadmap/vcs-adapterization-plan.md`) — deferred until a real 2nd backend;
-GitHub is coupled across PR / merge / CI via Mergify + Actions. It is the
-GitLab / Gitea hosting-flexibility lever.
+**Held:** the **VCS-provider abstraction**
+(`docs/roadmap/vcs-adapterization-plan.md`) — deferred until a real 2nd backend.
+Delivery is already native (Tanren's own merge queue + SSH gate + `tanren/gate`
+publication; no Mergify, no Actions). What remains GitHub-coupled is the thin VCS
+surface behind the `VcsProvider` seam: PR/review APIs, check/status publication,
+clone/push auth. It is the GitLab / Gitea hosting-flexibility lever.

@@ -62,6 +62,8 @@ These are mechanical, enforced at the type system, configuration validation, and
 
 8. **Files are bounded.** Custom lint rule: 500-line maximum per source file. The intent is mechanical — a fresh project can hold this discipline; an old project cannot.
 
+9. **Native, Action-less delivery.** Tanren owns the delivery operating model: software is specified, built, gated, merged, deployed, and demoed through Tanren-native concepts, never through repo-embedded workflow engines. There is **no GitHub Actions (or equivalent) in the delivery path** — no injected workflow, no `runs-on: tanren`, no external CI proving or deploying the code. The gate is Tanren's own (tiered shell checks over SSH; the `pre_merge` tier is the merge authority; verdicts publish to the forge as `tanren/gate` checks). The VCS stores code, hosts the PR review surface, exposes statuses/checks, and accepts merges — it does not orchestrate delivery. Brownfield onboarding migrates workflow _intent_ into native gates and deploy plans, emitting an auditable migration-risk report; it never preserves Actions as the runtime engine. Tanren is **opinionated about the method, flexible about the product** (domain, language, framework, LLM mix, deploy target within the adapter list, human-review level, OSS vs managed). (Tanren's _own_ monorepo CI runs on GitHub Actions; that is the development of Tanren-the-tool, orthogonal to the delivery doctrine for the apps Tanren builds.)
+
 These invariants override every section that follows. If a future revision contradicts one of these, the revision is wrong.
 
 ---
@@ -114,10 +116,10 @@ This is the canonical loop Tanren orchestrates. **Every step is required for v0.
        │                                          │
        │                                          ▼
        │                                   ┌──────────────┐
-       │  CI failure                       │  Poll CI     │
-       └───────────────────────────────────│  (loop)      │
-                                           └──────┬───────┘
-                                                  │ CI green
+       │  gate failure                     │ Native gate  │  (Tanren runs the
+       └───────────────────────────────────│  (over SSH)  │   tiered checks itself;
+                                           └──────┬───────┘   no GitHub Actions)
+                                                  │ gate passed
                                                   ▼
                                            ┌──────────────┐
                                            │  Mark ready  │
@@ -130,7 +132,13 @@ This is the canonical loop Tanren orchestrates. **Every step is required for v0.
        loop to planner                            │ approved (or none required)
                                                   ▼
                                            ┌──────────────┐
-                                           │   Merge      │
+                                           │ pre_merge    │  (the merge authority)
+                                           │ gate + Merge │
+                                           └──────┬───────┘
+                                                  ▼
+                                           ┌──────────────┐
+                                           │ Deploy + Demo│  (deploy-on-merge,
+                                           │              │   verify, behavior demo)
                                            └──────────────┘
 ```
 
@@ -142,22 +150,23 @@ This is the canonical loop Tanren orchestrates. **Every step is required for v0.
 4. **For each subtask, run an Answerer agent (check-task).** The answerer reads the writer's diff and the subtask spec, answers the strict-JSON question "is this subtask complete to acceptance criteria?" If no, route back to the planner with a structured diagnosis.
 5. **After all subtasks complete, run a single Auditor Answerer.** It answers "is this spec complete and verifiable?" against the spec's acceptance criteria. If no, loop back to the planner.
 6. **Submit a draft PR** against the project's target branch.
-7. **Poll for CI status.** If CI fails, loop back to the planner (with the CI failure context).
-8. **CI green** → mark the PR ready for review.
+7. **Run the native gate.** Tanren runs the repo's tiered shell checks (`.tanren/ci.yml`, a `CiConfigV1` — **not** a GitHub Actions workflow) **itself**, over SSH on the runner workspace, and reads the verdict from exit codes; it publishes the verdict to the forge as a `tanren/gate` check. There is no injected Actions workflow and no external CI to poll. If the gate fails, loop back to the planner with the failure context.
+8. **Gate passed** → mark the PR ready for review.
 9. **Poll for review.** If the project's policy requires review and none arrives within the configured window, escalate to a human-intervention notification (§12.3).
 10. **If review arrives with changes requested**, loop back to the planner.
-11. **If review arrives approved (or none required by policy)**, merge.
+11. **If review arrives approved (or none required by policy)**, run the `pre_merge` gate tier (the merge authority) and merge.
+12. **Deploy + demo.** On merge, the `DeployAdapter` deploys the change and `verify` polls the target to READY + smoke-checks it; the demo engine then exercises the spec's declared behaviors against the live surface and records per-behavior evidence. Deployment is any controlled movement of a built artifact into an environment, channel, registry, store track, preview URL, or download — the demo asks whether the behavior is correct; the adapter decides what surface the user sees.
 
-### §2.2 What is explicitly out of v0 but layers on top cleanly
+### §2.2 What layers on top of the core loop — all Tanren-native
 
-These features extend the workflow above. They are not required for v0 ship; they are tracked in §20 as deferred surfaces that the v0 architecture must NOT preclude.
+These extend the core loop above. They are **native** Tanren capabilities — never external workflow engines. (v0 shipped the core five-step loop; these were built since.)
 
-- **Mergify merge queues** (2-tier CI for time efficiency).
-- **Conflict resolver** (intelligent rebase response after a merge conflict, with a hard requirement that branches be up-to-date with main before merging).
-- **Mergify stacks and stack diffs** (higher merge velocity).
-- **Chain PRs** (dependent work starts on the draft PR; "human review required" stops being a velocity killer).
-- **Additional auditor layers**: performance, scalability, security, coding-standards-profile, demo-executor agent (browser-based end-to-end test of a feature from the spec's natural-language description).
-- **Workflow variation per-project** (a project may declare its own planner/writer/answerer composition; v0 ships one canonical composition).
+- **Native intelligent merge queue** — DAG-order serialized merge with speculative batch-check and bisect. Tanren's own queue, not an external one (Mergify is removed entirely; `native_queue` is the merge engine).
+- **Auto-rebase + intent-preserving conflict resolution** — branches are brought up-to-date with `main` before merge; a genuine conflict is resolved by an agent that holds the **acceptance criteria + intent of both conflicting specs** and the DAG edge between them, then re-gated. A text-only mechanical resolver cannot preserve spec intent — this is why the resolver is native.
+- **Speculative execution + change-percolation** — dependent work proceeds against integration branches; a merge percolates to downstream specs.
+- **Deploy + demo** — a `DeployAdapter` deploys on merge and `verify`s the live surface; demos-as-evidence exercise the spec's declared behaviors and record per-behavior evidence, regardless of whether the preview is a URL, package, app channel, or download.
+- **Additional auditor layers**: performance, scalability, security, coding-standards-profile.
+- **Workflow variation per-project** (a project may declare its own planner/writer/answerer composition; the canonical composition is the default).
 
 ### §2.3 Why this is the minimum
 
@@ -166,7 +175,7 @@ Removing any of the five core agent invocations (plan, do, check, audit, plus PR
 - Without the planner step, writers veer off course on tasks that decompose into multiple files or layers.
 - Without the per-subtask checker, writers produce incomplete work that the auditor can't disentangle.
 - Without the final auditor, "all subtasks done" is asserted, not verified.
-- Without the CI loop, the writer's local tests don't prove the integration.
+- Without the native gate, the writer's local tests don't prove the integration — and Tanren runs that gate itself (over SSH, as the merge authority), never delegating proof to an external CI engine.
 - Without the review-and-merge loop, the operator can't trust the PR.
 
 v0 commits to all five. Optimizations (skipping the auditor for trivial specs, parallelizing subtasks) come later; the baseline is the full loop.
@@ -823,34 +832,34 @@ Workers loop with `SELECT ... FOR UPDATE SKIP LOCKED` and wake on `LISTEN/NOTIFY
 
 Each pick is mechanical: pick the tool people are actually using in 2026, not the most-familiar option from earlier years. Each pick is verified against community consensus (sources cited in §22).
 
-| Concern                         | Pick                                                                    | Justification                                                                                                                    |
-| ------------------------------- | ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| Compiler                        | tsgo (TS 7.0)                                                           | 10× faster typecheck than tsc. Stable as of 2026-Q1.                                                                             |
-| Runtime                         | Node 24 LTS                                                             | Active LTS through 2028. Bun considered, deferred to v0+2-weeks evaluation pending its Rust-rewrite stabilization (open in §20). |
-| Package mgr                     | pnpm 11.x                                                               | Current as of 2026-05.                                                                                                           |
-| Database                        | Postgres 18 (18.4 patch)                                                | One backend, one schema, no SQLite path. Compose service.                                                                        |
-| ORM                             | Drizzle (postgres-only)                                                 | Schema-as-code, drizzle-kit migrations, no per-dialect compat.                                                                   |
-| Validation                      | Zod 4                                                                   | Every external boundary (provider stdout, MCP call, dashboard request, secret-manager response) `schema.safeParse(raw)`.         |
-| Errors                          | Plain discriminated unions                                              | tsgo exhaustiveness via `switch (f.kind)`. No Effect, no neverthrow.                                                             |
-| Linter                          | oxlint 1.x                                                              | 50-100× faster than ESLint. CI gate.                                                                                             |
-| Formatter                       | oxfmt 1.x                                                               | Pairs with oxlint. Replaces Prettier.                                                                                            |
-| Type-aware lint                 | oxlint type-aware mode (or eslint-typescript fallback for the one rule) | `switch-exhaustiveness-check` is non-negotiable.                                                                                 |
-| Testing                         | Vitest 3                                                                | Standard for Node TS in 2026.                                                                                                    |
-| Coverage                        | v8 native via Vitest                                                    | No c8.                                                                                                                           |
-| Bundler                         | tsdown                                                                  | Library-author default.                                                                                                          |
-| Queue                           | Postgres `SKIP LOCKED` + `LISTEN/NOTIFY`                                | Already in stack. No Redis. No BullMQ.                                                                                           |
-| MCP                             | (deferred to v1; HTTP, not stdio)                                       | v0 ships no MCP.                                                                                                                 |
-| LLM SDK                         | none in orchestrator                                                    | Every LLM call goes through a CLI subprocess via `ProviderAdapter`.                                                              |
-| Substrate                       | dockerode 5.x (lifecycle) + ssh2 1.17 (workloads)                       | One adapter, three v0 allocators.                                                                                                |
-| Logging                         | pino                                                                    | Structured JSON.                                                                                                                 |
-| Web framework                   | Hono + JSX server-rendered + HTMX                                       | Dashboard service in compose.                                                                                                    |
-| Frontend interactivity          | HTMX (vendored)                                                         | No React/Solid/Vue in v0.                                                                                                        |
-| Secret manager                  | Hashicorp Vault (compose service)                                       | v0; pgcrypto fallback considered (§20 open).                                                                                     |
-| Notifications                   | ntfy.sh (compose service)                                               | Free, push-to-phone.                                                                                                             |
-| Webhooks / remote access        | Cloudflared (compose service)                                           | For incoming webhooks and remote dashboard access from a homelab setup.                                                          |
-| CI                              | GitHub Actions                                                          | Free for OSS.                                                                                                                    |
-| Container runtime target        | Docker Engine 29.x (29.5.1 as of 2026-05-18)                            | The operator must have Docker; that is the only host dependency.                                                                 |
-| 500-line-max custom oxlint rule | yes                                                                     | Hard cap; prevents monolith files.                                                                                               |
+| Concern                         | Pick                                                                    | Justification                                                                                                                                                                                       |
+| ------------------------------- | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Compiler                        | tsgo (TS 7.0)                                                           | 10× faster typecheck than tsc. Stable as of 2026-Q1.                                                                                                                                                |
+| Runtime                         | Node 24 LTS                                                             | Active LTS through 2028. Bun considered, deferred to v0+2-weeks evaluation pending its Rust-rewrite stabilization (open in §20).                                                                    |
+| Package mgr                     | pnpm 11.x                                                               | Current as of 2026-05.                                                                                                                                                                              |
+| Database                        | Postgres 18 (18.4 patch)                                                | One backend, one schema, no SQLite path. Compose service.                                                                                                                                           |
+| ORM                             | Drizzle (postgres-only)                                                 | Schema-as-code, drizzle-kit migrations, no per-dialect compat.                                                                                                                                      |
+| Validation                      | Zod 4                                                                   | Every external boundary (provider stdout, MCP call, dashboard request, secret-manager response) `schema.safeParse(raw)`.                                                                            |
+| Errors                          | Plain discriminated unions                                              | tsgo exhaustiveness via `switch (f.kind)`. No Effect, no neverthrow.                                                                                                                                |
+| Linter                          | oxlint 1.x                                                              | 50-100× faster than ESLint. CI gate.                                                                                                                                                                |
+| Formatter                       | oxfmt 1.x                                                               | Pairs with oxlint. Replaces Prettier.                                                                                                                                                               |
+| Type-aware lint                 | oxlint type-aware mode (or eslint-typescript fallback for the one rule) | `switch-exhaustiveness-check` is non-negotiable.                                                                                                                                                    |
+| Testing                         | Vitest 3                                                                | Standard for Node TS in 2026.                                                                                                                                                                       |
+| Coverage                        | v8 native via Vitest                                                    | No c8.                                                                                                                                                                                              |
+| Bundler                         | tsdown                                                                  | Library-author default.                                                                                                                                                                             |
+| Queue                           | Postgres `SKIP LOCKED` + `LISTEN/NOTIFY`                                | Already in stack. No Redis. No BullMQ.                                                                                                                                                              |
+| MCP                             | (deferred to v1; HTTP, not stdio)                                       | v0 ships no MCP.                                                                                                                                                                                    |
+| LLM SDK                         | none in orchestrator                                                    | Every LLM call goes through a CLI subprocess via `ProviderAdapter`.                                                                                                                                 |
+| Substrate                       | dockerode 5.x (lifecycle) + ssh2 1.17 (workloads)                       | One adapter, three v0 allocators.                                                                                                                                                                   |
+| Logging                         | pino                                                                    | Structured JSON.                                                                                                                                                                                    |
+| Web framework                   | Hono + JSX server-rendered + HTMX                                       | Dashboard service in compose.                                                                                                                                                                       |
+| Frontend interactivity          | HTMX (vendored)                                                         | No React/Solid/Vue in v0.                                                                                                                                                                           |
+| Secret manager                  | Hashicorp Vault (compose service)                                       | v0; pgcrypto fallback considered (§20 open).                                                                                                                                                        |
+| Notifications                   | ntfy.sh (compose service)                                               | Free, push-to-phone.                                                                                                                                                                                |
+| Webhooks / remote access        | Cloudflared (compose service)                                           | For incoming webhooks and remote dashboard access from a homelab setup.                                                                                                                             |
+| CI (Tanren's own repo)          | GitHub Actions                                                          | Free for OSS. Tanren's **own** monorepo CI; orthogonal to the product. The delivery gate for the apps Tanren _builds_ is **native** (no Actions) — see §2.1 and `docs/operator-guide/ci-config.md`. |
+| Container runtime target        | Docker Engine 29.x (29.5.1 as of 2026-05-18)                            | The operator must have Docker; that is the only host dependency.                                                                                                                                    |
+| 500-line-max custom oxlint rule | yes                                                                     | Hard cap; prevents monolith files.                                                                                                                                                                  |
 
 ### §10.1 oxlint custom rules
 

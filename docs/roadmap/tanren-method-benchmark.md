@@ -14,14 +14,14 @@
 ## §0 — Why this exists, and what it is NOT
 
 Tanren's thesis (`PROJECT_BRIEF.md` §0) is that **the workflow is the product**:
-the plan → write → check → audit → gate → PR → CI → review → merge loop is what
+the plan → write → check → audit → native gate → PR → review → merge loop is what
 makes arbitrary tasks reach merged code reliably. If that loop is the product,
 the durable question is not "which model is best" but **"which configuration of
 the Tanren _process_ produces the best delivery outcomes."** We want to answer
 questions like:
 
-- Does enforcing strict typing / code-standards adherence in the in-loop gate
-  (`tanren-ci.yml` tier strictness) improve DORA metrics, or just add lead time?
+- Does enforcing strict typing / code-standards adherence in the native gate
+  (`.tanren/ci.yml` tier strictness) improve DORA metrics, or just add lead time?
 - Do cheapest-models-only routing tables pay off, or cost more long-term via
   more retries, more audited concerns, and more rework?
 - Does a stricter checker/auditor reduce change-failure rate enough to justify
@@ -55,16 +55,16 @@ reasoning agent's opinion, two configs would not be comparable (the judge is par
 of the config under test). So acceptance lives in the seed project's own CI, run
 identically regardless of cell. This maps onto existing entities:
 
-| Benchmark concept        | Existing Tanren entity                                                  |
-| ------------------------ | ----------------------------------------------------------------------- |
-| Seed project             | `projects` row + a real GitHub repo (the fixture-repo pattern)          |
-| End-goal spec            | `specs` row (`description` + `acceptance_criteria` JSONB)               |
-| Machine-checkable accept | the repo's `tanren-ci.yml` tiers (`engine/ci/schema.ts`) run by real CI |
-| A single attempt         | a `runs` row driven by the run worker (`engine/worker/runExecutor.ts`)  |
+| Benchmark concept        | Existing Tanren entity                                                           |
+| ------------------------ | -------------------------------------------------------------------------------- |
+| Seed project             | `projects` row + a real GitHub repo (the fixture-repo pattern)                   |
+| End-goal spec            | `specs` row (`description` + `acceptance_criteria` JSONB)                        |
+| Machine-checkable accept | the repo's `.tanren/ci.yml` tiers (`engine/ci/schema.ts`) run by the native gate |
+| A single attempt         | a `runs` row driven by the run worker (`engine/worker/runExecutor.ts`)           |
 
-The seed repo already carries its own acceptance gate: `tanren-ci.yml` is read by
-**both** GitHub Actions and the in-loop gate (`engine/ci/schema.ts`,
-`fixtures/tanren-ci.sample.yml`). That is the lever that makes "same end behavior"
+The seed repo already carries its own acceptance gate: `.tanren/ci.yml` is run by
+the **native gate** — Tanren executes the tiers itself over SSH (`engine/ci/schema.ts`,
+`fixtures/tanren-ci.sample.yml`); there is no GitHub Actions. That is the lever that makes "same end behavior"
 objective: a **frozen, hidden acceptance tier** in the seed repo — call it the
 `accept` tier — that the _config under test never sees or edits_ and that the
 benchmark scorer runs against the merged result. The configs vary the `fast`/`slow`

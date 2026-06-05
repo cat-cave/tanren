@@ -29,12 +29,13 @@ register in the selector/registry + mocked-API tests) — **no core refactor**.
 
 ### Deferred (NOT a clean adapter) — GitLab / VCS-provider abstraction
 
-GitHub is hardcoded across ~18 files (PR lifecycle, CI status, merge, clone/push
-auth, App tokens, webhooks, repo-read), **and** the merge-integration (Mergify —
-GitHub-org-only) and CI (GitHub Actions executing `tanren-ci.yml`) layers are
-GitHub-coupled. Supporting GitLab/Gitea requires a `VcsProvider` abstraction +
-merge-integration + CI-provider rework (~3–4 wk), not an adapter. **Deferred by
-decision (2026-05-29) for later deliberate design.** Do not build blind.
+Delivery is already native: the merge queue is Tanren's own, and the gate runs
+over SSH and publishes a `tanren/gate` check (no Mergify, no GitHub Actions). What
+is still GitHub-coupled is the thin VCS surface itself — GitHub is hardcoded across
+~18 files (PR lifecycle, check/status publication, merge-accept, clone/push auth,
+App tokens, webhooks, repo-read). Supporting GitLab/Gitea requires a `VcsProvider`
+abstraction over that surface (~2–3 wk), not an adapter. **Deferred by decision
+(2026-05-29) for later deliberate design.** Do not build blind.
 
 ## Track B — strictness & testing ladder (CI-self-validating)
 

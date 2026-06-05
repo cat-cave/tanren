@@ -70,16 +70,17 @@ consequence of Phase 1 working.
 ## 1. Architectural principles
 
 1. **The merge queue is a native, headline Tanren capability — not an external
-   dependency.** We are already building the hard parts an external queue
-   provides (DAG-aware ordering, speculative integration, intent-preserving
-   conflict resolution); the small remaining delta makes it a full **intelligent
-   merge queue for any VCS + actions provider**. The pluggable seam is therefore
-   the **VCS/actions provider** (GitHub Actions now; GitLab/others later), behind
-   a `VcsProvider` contract — _not_ the queue. An external queue (Mergify) drops
-   to an _optional_ adapter, rarely needed. This is the headline differentiator:
-   intelligent velocity, provider-agnostic.
+   dependency.** Tanren owns the hard parts an external queue provides (DAG-aware
+   ordering, speculative integration, intent-preserving conflict resolution) and
+   the verification too — the **native gate** runs over SSH and is the merge
+   authority (no GitHub Actions in the delivery path). The pluggable seam is the
+   thin **VCS provider** (GitHub now; GitLab/others later) behind a `VcsProvider`
+   contract — code/review/check-publication/merge-accept, _not_ delivery. Mergify
+   is gone, not an optional adapter. This is the headline differentiator:
+   intelligent velocity, provider-agnostic, Action-less.
 2. **Conflict resolution is always native + intent-preserving.** A mechanical
-   resolver (Mergify, `git rerere`) can only pick text. Tanren's resolver has
+   resolver (`git rerere`, or any text-only external tool) can only pick text.
+   Tanren's resolver has
    the **acceptance criteria + intent of _both_ conflicting specs** and the DAG
    edge between them, so it resolves to satisfy **both intents** and re-runs the
    checker/auditor/gate against the merged result. No external tool can preserve
@@ -508,8 +509,8 @@ of change they exist to catch.
 - **Speculation threshold default → Moderate** (ancestor CI-green + audited, no
   open P0/P1; human-review-pending does **not** block dependents). §2c.
 - **Merge queue → fully native, headline capability;** the pluggable seam is the
-  `VcsProvider` (GitHub now, GitLab later), not the queue; external Mergify is an
-  optional adapter. §1.1, §2d.
+  thin `VcsProvider` (GitHub now, GitLab later), not the queue; Mergify is removed
+  (not an adapter) and delivery is Action-less. §1.1, §2d.
 - **No milestone-boundary gate** — milestones are human-readability grouping; the
   DAG runs as aggressively as tuned/budgeted. §1.7, §1a.
 - **No quotas** — budget is the only run gate; managed/BYOK billing is transparent

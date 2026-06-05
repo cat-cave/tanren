@@ -81,8 +81,8 @@ the run timeline as the background worker executes it.
 Create a GitHub repo `cat-cave/tanren-fixture-hard` whose single spec is
 **crafted to force all three hard paths** in one run:
 
-1. **Forces ≥ 1 in-loop gate failure → re-plan.** The repo ships a
-   `tanren-ci.yml` whose fast tier runs the unit tests, and the task is
+1. **Forces ≥ 1 native gate failure → re-plan.** The repo ships a
+   `.tanren/ci.yml` whose fast tier runs the unit tests, and the task is
    phrased so a naive first writer attempt leaves the tree failing that
    tier (e.g. a function whose new test the writer is likely to break or
    leave unimplemented on the first pass). A nonzero fast-tier exit routes
@@ -147,10 +147,10 @@ the conflict manually on the PR.
 
 `just acceptance` was the **executable Phase 2A release gate** owned by
 P2A-0015. It ran the easy and medium fixture repos through the real
-Tanren workflow end-to-end and asserted persisted outcome, PR URL, CI
-status, and cost attribution. The gate was **local-only** — it never ran
-in GitHub Actions because it called real Codex CLIs and created real draft
-PRs against the fixture repos.
+Tanren workflow end-to-end and asserted persisted outcome, PR URL, native
+gate verdict, and cost attribution. The gate was **local-only** — it never ran
+in Tanren's own monorepo GitHub Actions CI because it called real Codex CLIs
+and created real draft PRs against the fixture repos.
 
 ## Setup (once per machine)
 

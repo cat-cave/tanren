@@ -18,8 +18,8 @@ it merge — entirely through real adapters (no fakes in the runtime path).
 
 | Tier   | Repo        | Integration policy                                                                  | What it proved                                                                                                                                                                                                                                          |
 | ------ | ----------- | ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Easy   | public      | `governancePosture: open` · `mergeIntegration: direct_merge` · `reviewPolicy: auto` | the full loop `plan → real-agent write → check → audit → in-loop gate → draft PR → CI → review → merge` reaches a merged PR.                                                                                                                            |
-| Medium | public      | same + a two-tier `tanren-ci.yml` (typecheck + tests)                               | the write stage implements functions so a committed test suite passes; the gate + real GitHub Actions CI gate the merge.                                                                                                                                |
+| Easy   | public      | `governancePosture: open` · `mergeIntegration: direct_merge` · `reviewPolicy: auto` | the full loop `plan → real-agent write → check → audit → native gate → merge` reaches a merged PR.                                                                                                                                                      |
+| Medium | public      | same + a two-tier `.tanren/ci.yml` (typecheck + tests)                              | the write stage implements functions so a committed test suite passes; the native `pre_merge` gate (run over SSH, **not** Actions) admits the merge.                                                                                                    |
 | Hard   | **private** | same + `reviewPolicy: simulated`                                                    | private-repo clone auth works; real logic + rigorous CI; the **orchestrator-managed simulated reviewer** posts a real GitHub `COMMENT` review and drives the verdict internally (self-PR-safe) — the human-review path runs end-to-end without a human. |
 
 All three of the project's cost models, the event log, and full run/task
@@ -116,8 +116,8 @@ rejected with `42501` when it tries to write `events`/`cost_records`, then
 2. Onboard via the dashboard or CLI (`cli.md`, `credentials.md`): create an org,
    import real Codex/GitHub creds through the **org-scoped** surface, link a
    fixture repo, and set the project config for the tier you're testing
-   (`reviewPolicy: auto` for easy/medium; add a `tanren-ci.yml` for the gate
-   tiers; `reviewPolicy: simulated` for hard).
+   (`reviewPolicy: auto` for easy/medium; add a `.tanren/ci.yml` to the target
+   repo for the native gate tiers; `reviewPolicy: simulated` for hard).
 3. Submit a spec and `tanren specs run`. Watch it reach a merged PR.
 4. `just smoke` proves the boundaries (connectivity, SSH, the plane-split
    `42501` de-privilege proofs through P3c, the RLS isolation proofs including
