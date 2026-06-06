@@ -302,7 +302,7 @@ export class RecordingMergeQueueEventEmitter implements MergeQueueEventEmitter {
     specId: string;
     reason?: DequeueReason;
     queueDepth?: number;
-    kind?: "ceiling" | "ambiguous";
+    kind?: "ceiling" | "ambiguous" | "missing_required_credential";
     attempts?: number;
   }[] = [];
 
@@ -319,7 +319,7 @@ export class RecordingMergeQueueEventEmitter implements MergeQueueEventEmitter {
   // eslint-disable-next-line @typescript-eslint/require-await
   async emitInfraBlocked(input: {
     entry: MergeQueueEntry;
-    kind: "ceiling" | "ambiguous";
+    kind: "ceiling" | "ambiguous" | "missing_required_credential";
     attempts: number;
   }): Promise<void> {
     this.events.push({

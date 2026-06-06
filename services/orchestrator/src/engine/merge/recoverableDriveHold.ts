@@ -5,12 +5,14 @@
 // still let that candidate leave the old queue slot.
 // This helper keeps that policy shared by the single-entry and batch
 // coordinators: release the claim, back off, and after a ceiling emit a loud
-// terminal infra-blocked halt so the queue never hot-loops indefinitely.
+// infra-blocked alert with longer backoff so the queue neither hot-loops nor
+// removes a retriable candidate permanently.
 
 import type { MergeDriveOutcome, MergeQueueEntry, MergeQueueModel } from "../contracts/mergeCoordinator.js";
 import type { MergeQueueEventEmitter } from "./coordinator.js";
 
 const RECOVERABLE_RETRY_DELAYS_MS = [3_000, 10_000, 30_000, 60_000];
+const RECOVERABLE_ALERT_RETRY_AFTER_MS = 60_000;
 const MAX_RECOVERABLE_DRIVE_ATTEMPTS = 5;
 
 export class RecoverableDriveHoldCeiling {
@@ -34,9 +36,7 @@ export class RecoverableDriveHoldCeiling {
   }
 }
 
-export type RecoverableDriveHoldResult =
-  | { kind: "held"; retryAfterMs: number }
-  | { kind: "terminal"; dequeuedSpecId: string };
+export type RecoverableDriveHoldResult = { kind: "held"; retryAfterMs: number };
 
 export async function holdOrHaltRecoverableDrive(input: {
   ceiling: RecoverableDriveHoldCeiling;
@@ -55,8 +55,11 @@ export async function holdOrHaltRecoverableDrive(input: {
       attempts: next.attempts,
       message: `${input.outcome.kind} merge drive outcome did not clear after ${next.attempts} retries: ${input.outcome.message}`,
     });
-    await input.queue.markDequeued(input.entry.queueId, "blocked");
-    return { kind: "terminal", dequeuedSpecId: input.entry.specId };
+    await input.queue.releaseClaim(input.entry.queueId);
+    console.error(
+      `[merge-coordinator] project ${input.projectId}: merge drive for spec ${input.entry.specId} returned ${input.outcome.kind} for ${next.attempts} retries; alerting and continuing autonomous re-drive after ${RECOVERABLE_ALERT_RETRY_AFTER_MS}ms`,
+    );
+    return { kind: "held", retryAfterMs: RECOVERABLE_ALERT_RETRY_AFTER_MS };
   }
 
   await input.queue.releaseClaim(input.entry.queueId);

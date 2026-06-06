@@ -1,20 +1,6 @@
-// The production MergeCoordinator (autonomy-engine.md §2d — the native intelligent
-// merge queue, the headline capability). A per-project SCHEDULER over the
-// EXISTING per-run merge path: it orders ready-to-merge runs in DAG order
-// (ancestor before dependent, priority within a layer) and SERIALIZES their merges
-// (one at a time) by driving `mergeForRun` in its `native_queue` DRIVE mode — it
-// does NOT implement a second merge path. The queue logic is pure Tanren
-// (`selectNextMerge`); only the VCS/CI calls inside the merge stage go through the
-// VcsProvider, so the coordinator is provider-agnostic.
-//
-// Each pass (`coordinate(projectId)`): recover stale claims (crash recovery) → load
-// the queue snapshot under RLS → select the single DAG-ordered head (or hold) →
-// atomically claim it (serialization lock) → drive its merge → record the outcome +
-// emit the queue events. The LISTEN/NOTIFY subscriber (subscriber.ts) drives it on
-// startup + on every run-terminal / merge.completed notification, so a freshly
-// ready run + a freshly merged ancestor both re-trigger the queue.
-//
-// The pg seam wirings (queue model + merge runner) live in `coordinatorPg.ts`.
+// Production MergeCoordinator (autonomy-engine.md §2d): a per-project scheduler over
+// the existing per-run merge path. It orders ready runs in DAG order, serializes one
+// merge at a time, and relies on `coordinatorPg.ts` for pg queue/event wirings.
 
 import { runWithJobOrgId, runWithOrgScope, runWithSystemScope } from "@tanren/db";
 import type pg from "pg";
@@ -35,16 +21,21 @@ import { isAmbiguousMergeError } from "../providers/mergeOutcomeErrors.js";
 import type { SpecEscalator } from "./coordinatorEscalate.js";
 import { holdOrHaltRecoverableDrive, RecoverableDriveHoldCeiling } from "./recoverableDriveHold.js";
 import { serializedRetryAfterMs } from "./mergeSerializedRetry.js";
+import { isMissingRequiredCredentialError, missingRequiredCredentialMessage } from "./missingRequiredCredential.js";
 
 /** How long after a transient merge-drive infra-hold the subscriber re-drives the project. */
 const TRANSIENT_DRIVE_HOLD_RETRY_AFTER_MS = 3000;
+/** Longer re-drive delay after a ceiling alert so persistent outages do not hot-loop. */
+const TRANSIENT_DRIVE_HOLD_ALERT_RETRY_AFTER_MS = 60_000;
 
 /**
  * GAP #2c: the hold-attempt CEILING — how many CONSECUTIVE transient infra re-drives one
  * entry may take before the coordinator stops re-arming the 3s timer and emits a LOUD
- * terminal halt. Bounds the recover-on-transient loop so a persistent outage (or a
- * logic-bug masquerading as infra) surfaces loudly instead of re-driving forever. The
- * common case (a GitHub blip) recovers in 1–2 re-drives, well under this.
+ * ceiling alert. Bounds the recover-on-transient loop so a persistent outage (or a
+ * logic-bug masquerading as infra) surfaces loudly instead of re-driving forever on the
+ * short timer. The entry stays queued and retries with a longer backoff so recovery
+ * remains autonomous. The common case (a GitHub blip) recovers in 1–2 re-drives, well
+ * under this.
  */
 const MAX_INFRA_HOLD_ATTEMPTS = 5;
 
@@ -69,13 +60,14 @@ export interface MergeQueueEventEmitter {
   }): Promise<void>;
   /**
    * merge.queue.infra_blocked (GAP #2d): a transient merge-drive infra error could no
-   * longer recover on its own — the entry exhausted its re-drive ceiling, or the merge
-   * state was unconfirmable (auto-retry could double-merge). A LOUD operator-visible halt.
+   * longer continue on the short retry — the entry exhausted its re-drive ceiling, or
+   * the merge state was unconfirmable (auto-retry could double-merge). A LOUD
+   * operator-visible alert/halt.
    */
   emitInfraBlocked(input: {
     projectId: string;
     entry: MergeQueueEntry;
-    kind: "ceiling" | "ambiguous";
+    kind: "ceiling" | "ambiguous" | "missing_required_credential";
     attempts: number;
     message: string;
   }): Promise<void>;
@@ -122,7 +114,7 @@ export async function markInfraBlockedAfterEvent(input: {
   events: MergeQueueEventEmitter;
   projectId: string;
   entry: MergeQueueEntry;
-  kind: "ceiling" | "ambiguous";
+  kind: "ceiling" | "ambiguous" | "missing_required_credential";
   attempts: number;
   message: string;
 }): Promise<void> {
@@ -151,7 +143,7 @@ export class EventEmittingMergeCoordinator implements MergeCoordinator {
    * singleton, so the count survives across `coordinate` passes (each re-drive is a
    * fresh pass). A crash resets it, which is correct: `recoverStaleClaims` re-queues the
    * entry, and re-driving an idempotent merge is safe. Reset on any non-infra-hold
-   * settle (merged / dequeued / ceiling-halt) so a recovered entry starts fresh.
+   * settle (merged / dequeued / ceiling-alert) so a recovered entry starts fresh.
    */
   private readonly infraHoldAttempts = new Map<string, number>();
   private readonly recoverableDriveHolds = new RecoverableDriveHoldCeiling();
@@ -196,10 +188,9 @@ export class EventEmittingMergeCoordinator implements MergeCoordinator {
   /**
    * Drive the claimed entry's merge through the existing per-run merge path and
    * settle the queue row from the outcome. A `merged` outcome marks the entry
-   * merged (the next pass picks the next DAG head); a conflict/blocked/failed
-   * outcome DEQUEUES it (it leaves the ready set so independent items proceed) and
-   * emits merge.dequeued — conflict/blocked are recoverable (a re-ready run
-   * re-enqueues a new entry), failed is terminal.
+   * merged (the next pass picks the next DAG head); a `blocked` outcome releases
+   * the claim with bounded backoff; a conflict/failed outcome DEQUEUES it (it leaves
+   * the ready set so independent items proceed) and emits merge.dequeued.
    *
    * GitHub-5xx resilience (GAP #2d): a THROWN drive used to become a `blocked` dequeue —
    * but a `done` run NEVER re-readies, so a transient 504 mid-drive would STRAND a clean
@@ -212,9 +203,11 @@ export class EventEmittingMergeCoordinator implements MergeCoordinator {
    *     PR is still open+unmerged) → RELEASE the claim (entry stays queued) + HOLD with
    *     `holdReason: "infra_error"` + `retryAfterMs` so the subscriber re-drives once the
    *     gateway recovers — BOUNDED by `MAX_INFRA_HOLD_ATTEMPTS`: at the ceiling it emits
-   *     a LOUD `merge.queue.infra_blocked` halt + dequeues so it cannot loop forever.
-   *   - a typed PERMANENT infra error → the prior recoverable `blocked` dequeue.
-   * A GENUINE block/conflict the drive RETURNS keeps its existing dequeue handling.
+   *     a LOUD `merge.queue.infra_blocked` alert, keeps the entry queued, and re-drives
+   *     with longer backoff so it cannot hot-loop or permanently strand.
+   *   - a typed PERMANENT infra error → the recoverable `blocked` hold path.
+   * A GENUINE returned block holds with bounded backoff; a returned conflict/failed
+   * still dequeues.
    */
   private async driveAndSettle(
     projectId: string,
@@ -239,10 +232,9 @@ export class EventEmittingMergeCoordinator implements MergeCoordinator {
         // the hold-attempt ceiling so it cannot recover-loop forever on a persistent outage.
         const attempts = (this.infraHoldAttempts.get(entry.queueId) ?? 0) + 1;
         if (attempts >= MAX_INFRA_HOLD_ATTEMPTS) {
-          return this.haltInfraBlocked(
+          return this.holdInfraBlockedAfterCeiling(
             projectId,
             entry,
-            "ceiling",
             `merge drive kept throwing a transient infra error after ${attempts} re-drives: ${String(error)}`,
             attempts,
           );
@@ -257,8 +249,17 @@ export class EventEmittingMergeCoordinator implements MergeCoordinator {
         );
         return { holdReason: "infra_error", retryAfterMs: TRANSIENT_DRIVE_HOLD_RETRY_AFTER_MS };
       }
-      // A non-retriable thrown error is a genuine (typed-permanent) infra block: keep
-      // the prior recoverable `blocked` dequeue (it leaves the head; never deadlocks).
+      if (isMissingRequiredCredentialError(error)) {
+        return this.haltInfraBlocked(
+          projectId,
+          entry,
+          "missing_required_credential",
+          `merge drive cannot run until required credential/config is repaired: ${missingRequiredCredentialMessage(error)}`,
+        );
+      }
+      // A non-retriable thrown error is a genuine (typed-permanent) infra block: route
+      // through the recoverable `blocked` hold path, which alerts at its ceiling without
+      // permanently removing the candidate.
       outcome = { kind: "blocked", message: `merge drive threw: ${String(error)}` };
     }
 
@@ -303,10 +304,7 @@ export class EventEmittingMergeCoordinator implements MergeCoordinator {
         entry,
         outcome,
       });
-      if (held.kind === "held") {
-        return { holdReason: "merge_retry", retryAfterMs: held.retryAfterMs };
-      }
-      return { dequeuedSpecId: held.dequeuedSpecId };
+      return { holdReason: "merge_retry", retryAfterMs: held.retryAfterMs };
     }
 
     // A returned `conflict` usually means the resolver already routed an
@@ -325,18 +323,16 @@ export class EventEmittingMergeCoordinator implements MergeCoordinator {
   }
 
   /**
-   * GAP #2d/#2c: the LOUD operator-visible infra HALT — emitted when a transient
-   * merge-drive error can no longer recover on its own: the hold-attempt CEILING was
-   * reached (a persistent outage / a logic-bug-as-infra), or the merge state is
-   * AMBIGUOUS (unconfirmable after a 5xx — auto-retry could double-merge). It dequeues
-   * the entry (so it does NOT re-drive forever) + emits `merge.queue.infra_blocked`, and
-   * crucially returns NO `retryAfterMs` so the subscriber arms no further timer. Resets
-   * the entry's infra-hold streak.
+   * GAP #2d/#2c: the LOUD operator-visible infra HALT for ambiguous merge state only.
+   * The merge state is unconfirmable after a 5xx, so auto-retry could double-merge. It
+   * dequeues the entry + emits `merge.queue.infra_blocked`, and crucially returns NO
+   * `retryAfterMs` so the subscriber arms no further timer. Retriable ceiling alerts use
+   * `holdInfraBlockedAfterCeiling` instead and keep the candidate active.
    */
   private async haltInfraBlocked(
     projectId: string,
     entry: MergeQueueEntry,
-    kind: "ceiling" | "ambiguous",
+    kind: "ceiling" | "ambiguous" | "missing_required_credential",
     message: string,
     attempts = this.infraHoldAttempts.get(entry.queueId) ?? 0,
   ): Promise<{ dequeuedSpecId: string }> {
@@ -355,6 +351,35 @@ export class EventEmittingMergeCoordinator implements MergeCoordinator {
       `[merge-coordinator] project ${projectId}: merge drive for spec ${entry.specId} HALTED (${kind}) after ${attempts} infra re-drive(s); operator attention required: ${message}`,
     );
     return { dequeuedSpecId: entry.specId };
+  }
+
+  /**
+   * GAP #2d root fix: a retriable single-entry ceiling is an alert, not a permanent
+   * queue removal. Emit the same observable `merge.queue.infra_blocked` ceiling signal,
+   * reset the short-streak counter, release the claim, and keep autonomous re-drive alive
+   * with a longer backoff. If the event append fails, the fresh `merging` claim remains
+   * active and normal lease recovery re-queues it instead of silently losing the alert.
+   */
+  private async holdInfraBlockedAfterCeiling(
+    projectId: string,
+    entry: MergeQueueEntry,
+    message: string,
+    attempts: number,
+  ): Promise<{ holdReason: "infra_error"; retryAfterMs: number }> {
+    this.infraHoldAttempts.delete(entry.queueId);
+    this.recoverableDriveHolds.reset(entry.queueId);
+    await this.deps.events.emitInfraBlocked({
+      projectId,
+      entry,
+      kind: "ceiling",
+      attempts,
+      message,
+    });
+    await this.deps.queue.releaseClaim(entry.queueId);
+    console.error(
+      `[merge-coordinator] project ${projectId}: merge drive for spec ${entry.specId} ALERTED after ${attempts} infra re-drive(s); continuing autonomous re-drive after backoff: ${message}`,
+    );
+    return { holdReason: "infra_error", retryAfterMs: TRANSIENT_DRIVE_HOLD_ALERT_RETRY_AFTER_MS };
   }
 }
 
@@ -440,7 +465,7 @@ export class PgMergeQueueEventEmitter implements MergeQueueEventEmitter {
   async emitInfraBlocked(input: {
     projectId: string;
     entry: MergeQueueEntry;
-    kind: "ceiling" | "ambiguous";
+    kind: "ceiling" | "ambiguous" | "missing_required_credential";
     attempts: number;
     message: string;
   }): Promise<void> {

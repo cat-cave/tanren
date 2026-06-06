@@ -131,7 +131,8 @@ export class BatchMergeCoordinator implements MergeCoordinator {
   /**
    * GAP #1 (runaway guard): the per-project CROSS-PASS consecutive-infra-hold ceiling.
    * Each delayed re-drive is a fresh `coordinate` pass; without a cross-pass counter a
-   * persistent outage re-drove the 3s timer forever. This bounds it to a terminal halt.
+   * persistent outage re-drove the 3s timer forever. This bounds it to a loud alert with
+   * slower autonomous re-drive.
    */
   private readonly infraHolds = new BatchInfraHoldCeiling();
 
@@ -447,10 +448,7 @@ export class BatchMergeCoordinator implements MergeCoordinator {
 
       const settled = await settleDriveOutcome(this.deps, projectId, entry, outcome);
       if (settled !== "dequeued") {
-        if (settled.kind === "held") {
-          return { projectId, queueDepth, holdReason: "merge_retry", retryAfterMs: settled.retryAfterMs };
-        }
-        return { projectId, queueDepth, dequeuedSpecId: settled.dequeuedSpecId };
+        return { projectId, queueDepth, holdReason: "merge_retry", retryAfterMs: settled.retryAfterMs };
       }
       dequeuedSpecId = entry.specId;
       break;

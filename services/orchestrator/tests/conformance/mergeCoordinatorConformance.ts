@@ -4,8 +4,8 @@
 // public `coordinate(projectId)` surface + the observable queue-state / merge-drive
 // / event effects only: a ready run enters the queue, the coordinator merges in DAG
 // order (ancestor before dependent) + priority within a layer, ONE merge at a time
-// (serialization), a conflict-prone item stays active with bounded retry before
-// terminally freeing the slot, and idempotency (no double-queue / no double-merge).
+// (serialization), a conflict-prone item stays active with bounded retry and loud
+// alerting, and idempotency (no double-queue / no double-merge).
 //
 // It never inspects private fields — only the harness's recorded queue rows, drive
 // calls, and emitted events (the contract's observable surface). The harness
@@ -164,7 +164,7 @@ export function describeMergeCoordinatorConformance(label: string, suite: MergeC
       expect(h.drives[0]).toEqual({ runId: "run_hi" });
     });
 
-    it("keeps a recoverable blocked candidate queued, then frees the slot at the retry ceiling", async () => {
+    it("keeps a recoverable blocked candidate queued through the retry ceiling", async () => {
       const h = suite.make();
       // The head is blocked; it should not be stranded as a recoverable dequeue.
       h.seed({ runId: "run_x", specId: "spec_x", dependsOn: [], priority: "P0" });
@@ -176,15 +176,16 @@ export function describeMergeCoordinatorConformance(label: string, suite: MergeC
       expect(h.statusOf("run_x")).toBe("queued");
       expect(h.events.some((e) => e.type === "merge.dequeued")).toBe(false);
 
-      // Bounded liveness: repeated recoverable holds eventually terminally free
-      // the slot, so the independent P1 item can proceed.
+      // Bounded liveness: repeated recoverable holds eventually alert, but the
+      // retriable candidate stays queued so recovery remains autonomous.
       let last = first;
       for (let i = 0; i < 10 && last.holdReason === "merge_retry"; i += 1) {
         last = await h.coordinator.coordinate(h.projectId);
       }
-      expect(h.statusOf("run_x")).toBe("dequeued");
-      await h.coordinator.coordinate(h.projectId);
-      expect(h.statusOf("run_y")).toBe("merged");
+      expect(h.statusOf("run_x")).toBe("queued");
+      expect(h.statusOf("run_y")).toBe("queued");
+      expect(h.events.some((e) => e.type === "merge.queue.infra_blocked")).toBe(true);
+      expect(h.events.some((e) => e.type === "merge.dequeued")).toBe(false);
     });
 
     it("does not recover and re-drive a legacy terminal conflict with only a dequeue signal", async () => {

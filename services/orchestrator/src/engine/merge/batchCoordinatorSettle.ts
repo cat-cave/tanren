@@ -6,7 +6,7 @@
 //     `needs_attention` (frees its slot) via the shared `SpecEscalator`, then dequeue
 //     the entry `needs_attention` (NEVER re-queued). NOT the recoverable conflict path.
 //   - `blocked` → bounded recoverable hold: release the claim so the same candidate
-//     re-drives with backoff, then terminally halt at the ceiling.
+//     re-drives with backoff, then alert and continue on a slower retry at the ceiling.
 //   - `conflict` / `failed` → dequeue with `merge.dequeued`; `conflict` usually means
 //     the resolver already routed autonomous re-plan/re-execution.
 //
@@ -84,7 +84,7 @@ export async function holdOnRetriableDriveThrow(
 /**
  * Settle a NON-merged real-merge outcome for one batch entry. A `needs_attention`
  * outcome parks the spec (frees its slot) + dequeues `needs_attention`; any other
- * outcome follows the same bounded recoverable-hold / terminal-dequeue policy as
+ * outcome follows the same bounded recoverable-hold / terminal conflict-dequeue policy as
  * `EventEmittingMergeCoordinator.driveAndSettle`.
  */
 export async function settleDriveOutcome(
@@ -184,14 +184,11 @@ export async function driveBaseConflict(
   }
 
   // A non-merged drive outcome: settle via the SAME policy the merge step uses
-  // (recoverable dequeue / needs_attention park). The resolver already classified
+  // (recoverable hold / needs_attention park). The resolver already classified
   // resolve-vs-replan-vs-escalate inside the drive — we never re-decide that here.
   const settled = await settleDriveOutcome(deps, projectId, culprit, outcome);
   if (settled !== "dequeued") {
-    if (settled.kind === "held") {
-      return { projectId, queueDepth, holdReason: "merge_retry", retryAfterMs: settled.retryAfterMs };
-    }
-    return { projectId, queueDepth, dequeuedSpecId: settled.dequeuedSpecId };
+    return { projectId, queueDepth, holdReason: "merge_retry", retryAfterMs: settled.retryAfterMs };
   }
   return { projectId, queueDepth, dequeuedSpecId: culprit.specId };
 }
