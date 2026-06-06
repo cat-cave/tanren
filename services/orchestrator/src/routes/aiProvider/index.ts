@@ -34,6 +34,7 @@ import { z } from "zod";
 import type { ActorContext } from "../../auth/schemas.js";
 import { migrateOrgConfig, type OrgConfigV1 } from "../../engine/config/orgConfig.js";
 import { ProviderMode } from "../../engine/config/managedProvider.js";
+import { PgEventStore, type EventStore } from "../../engine/eventStore.js";
 import {
   AI_PROVIDERS,
   type AiProvider,
@@ -45,7 +46,7 @@ import { storeCodexAuthBundle } from "../../engine/credentials/codexAuth.js";
 import type { SecretStore } from "../../engine/contracts/secretStore.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { actorCanAccessOrg, actorIsOrgAdmin } from "../orgs/access.js";
-import type { CredentialRecord, CredentialRegistry } from "../credentials/index.js";
+import type { CredentialRegistry } from "../credentials/index.js";
 import { SecretStoreCredentialRegistry } from "../credentials/index.js";
 
 interface AiProviderRoutesOptions {
@@ -53,7 +54,11 @@ interface AiProviderRoutesOptions {
   secrets: SecretStore;
   /** Shared credential registry (durable list). Defaults to the SecretStore-backed one. */
   registry?: CredentialRegistry;
+  /** Event store used to publish credential repair signals. Defaults to Postgres. */
+  events?: EventStore;
 }
+
+type CredentialConfiguredKind = "codex_chatgpt_auth" | "opaque";
 
 // The connect body. Exactly one of `apiKey` (OpenRouter/Anthropic/OpenAI) or
 // `authJson` (the Codex ChatGPT bundle) is required, matching the provider's
@@ -90,6 +95,7 @@ interface ConnectedProviderView {
 
 export function createAiProviderRoutes(options: AiProviderRoutesOptions) {
   const registry = options.registry ?? new SecretStoreCredentialRegistry(options.secrets);
+  const events = options.events ?? new PgEventStore(options.pool);
   const app = new Hono<ActorContextEnv>();
 
   // POST /orgs/:orgId/ai-provider — connect a BYOK LLM provider.
@@ -142,7 +148,7 @@ export function createAiProviderRoutes(options: AiProviderRoutesOptions) {
     // The cost classification keys on the ref PREFIX (not this `kind`), so the
     // kind is just metadata: the codex bundle records as `codex_chatgpt_auth`,
     // the API-key providers as `opaque`.
-    const recordKind: CredentialRecord["kind"] = secretKind === "auth_bundle" ? "codex_chatgpt_auth" : "opaque";
+    const recordKind: CredentialConfiguredKind = secretKind === "auth_bundle" ? "codex_chatgpt_auth" : "opaque";
     await registry.put({ ref, kind: recordKind, scope: "org", ownerId: orgId, createdAt: new Date().toISOString() });
 
     // Wire it as the org's default LLM credential for runs, through the SAME
@@ -166,6 +172,12 @@ export function createAiProviderRoutes(options: AiProviderRoutesOptions) {
       await writeOrgConfig(options.pool, orgId, nextConfig);
       isDefault = true;
     }
+    await emitCredentialConfiguredForOrgProjects(options.pool, events, orgId, {
+      provider,
+      credentialKind: recordKind,
+      ref,
+      redacted: true,
+    });
 
     // `classifiedAsLabel` re-classifies the derived ref (throws if it is not a
     // metered prefix), so the returned label can never disagree with how runs
@@ -263,6 +275,26 @@ async function writeOrgConfig(pool: pg.Pool, orgId: string, config: OrgConfigV1)
     JSON.stringify(config),
     orgId,
   ]);
+}
+
+async function emitCredentialConfiguredForOrgProjects(
+  pool: pg.Pool,
+  events: EventStore,
+  orgId: string,
+  payload: { provider: AiProvider; credentialKind: CredentialConfiguredKind; ref: string; redacted: true },
+): Promise<void> {
+  const projects = await pool.query<{ project_id: string }>("SELECT project_id FROM projects WHERE org_id = $1", [
+    orgId,
+  ]);
+  await Promise.all(
+    projects.rows.map((project) =>
+      events.append({
+        projectId: project.project_id,
+        eventType: "credential.configured",
+        payload,
+      }),
+    ),
+  );
 }
 
 function requireActor(c: { var: { actor?: ActorContext } }): ActorContext {

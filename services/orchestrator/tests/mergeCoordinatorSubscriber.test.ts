@@ -133,6 +133,7 @@ describe("MergeCoordinatorSubscriber — pending-hold NOTIFY debounce (Bug B)", 
       PROJECT,
       [],
       new Map([
+        ["41", { project_id: "project_codex", event_type: "credential.configured" }],
         ["42", { project_id: PROJECT, event_type: "credential.github.configured" }],
         [
           "43",
@@ -150,12 +151,14 @@ describe("MergeCoordinatorSubscriber — pending-hold NOTIFY debounce (Bug B)", 
     await sub.start();
     await flush();
 
+    listener.fire(NOTIFICATION_CHANNEL, "41");
+    await flush();
     listener.fire(NOTIFICATION_CHANNEL, "42");
     await flush();
     listener.fire(NOTIFICATION_CHANNEL, "43");
     await flush();
 
-    expect(coordinator.passes).toEqual([PROJECT, "project_app"]);
+    expect(coordinator.passes).toEqual(["project_codex", PROJECT, "project_app"]);
     sub.stop();
   });
 

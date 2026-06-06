@@ -243,6 +243,7 @@ export class PgMergeQueueModel implements MergeQueueModel {
                            OR e.payload ->> 'cause' IN ('missing_required_credential', 'missing_github_credential')
                            OR e.payload ->> 'reason' IN ('missing_required_credential', 'missing_github_credential')
                            OR e.payload ->> 'message' LIKE '%missing GitHub credential ref:%'
+                           OR e.payload ->> 'message' LIKE '%missing % credential ref:%'
                            OR e.payload ->> 'message' LIKE '%No GitHub credential configured%'
                          )
                          AND EXISTS (
@@ -256,7 +257,7 @@ export class PgMergeQueueModel implements MergeQueueModel {
                                   repair.event_type = 'integration.provisioned'
                                   AND repair.payload ->> 'providerKind' = 'github'
                                 )
-                                OR repair.event_type IN ('org.github.connected', 'credential.github.configured')
+                                OR repair.event_type IN ('org.github.connected', 'credential.github.configured', 'credential.configured')
                                 OR repair.payload ->> 'provider' = 'github'
                               )
 	                              AND (
@@ -267,19 +268,19 @@ export class PgMergeQueueModel implements MergeQueueModel {
 	                                  NULLIF(e.payload ->> 'credentialRef', ''),
 	                                  NULLIF(e.payload ->> 'missingRef', ''),
                                   NULLIF(e.payload ->> 'requiredCredentialRef', ''),
-                                  substring(e.payload ->> 'message' from 'missing GitHub credential ref: ([^[:space:]]+)')
+                                  substring(e.payload ->> 'message' from 'missing [^:]* credential ref: ([^[:space:]]+)')
                                 ) IS NULL
                                 OR repair.payload ->> 'credentialRef' = COALESCE(
                                   NULLIF(e.payload ->> 'credentialRef', ''),
                                   NULLIF(e.payload ->> 'missingRef', ''),
                                   NULLIF(e.payload ->> 'requiredCredentialRef', ''),
-                                  substring(e.payload ->> 'message' from 'missing GitHub credential ref: ([^[:space:]]+)')
+                                  substring(e.payload ->> 'message' from 'missing [^:]* credential ref: ([^[:space:]]+)')
                                 )
                                 OR repair.payload ->> 'ref' = COALESCE(
                                   NULLIF(e.payload ->> 'credentialRef', ''),
                                   NULLIF(e.payload ->> 'missingRef', ''),
                                   NULLIF(e.payload ->> 'requiredCredentialRef', ''),
-                                  substring(e.payload ->> 'message' from 'missing GitHub credential ref: ([^[:space:]]+)')
+                                  substring(e.payload ->> 'message' from 'missing [^:]* credential ref: ([^[:space:]]+)')
                                 )
                                 OR EXISTS (
                                   SELECT 1
@@ -293,7 +294,7 @@ export class PgMergeQueueModel implements MergeQueueModel {
                                      NULLIF(e.payload ->> 'credentialRef', ''),
                                      NULLIF(e.payload ->> 'missingRef', ''),
                                      NULLIF(e.payload ->> 'requiredCredentialRef', ''),
-                                     substring(e.payload ->> 'message' from 'missing GitHub credential ref: ([^[:space:]]+)')
+                                     substring(e.payload ->> 'message' from 'missing [^:]* credential ref: ([^[:space:]]+)')
                                    )
                                 )
                               )
