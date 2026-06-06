@@ -52,9 +52,12 @@ describe("isAuditJobDue", () => {
 function stubPool(jobRowOverrides: Record<string, unknown>): {
   pool: pg.Pool;
   candidates: Map<string, Record<string, unknown>>;
+  scopedSpecReadOrgIds: string[];
 } {
   const candidates = new Map<string, Record<string, unknown>>();
   const byExternal = new Map<string, string>();
+  const scopedSpecReadOrgIds: string[] = [];
+  let transactionOrgId: string | null = null;
   const jobRow = {
     id: "audit_1",
     org_id: "org_a",
@@ -72,6 +75,16 @@ function stubPool(jobRowOverrides: Record<string, unknown>): {
   const sources = new Map<string, Record<string, unknown>>();
   const query = async (text: string, params: unknown[] = []): Promise<{ rows: unknown[]; rowCount: number }> => {
     const sql = text.replaceAll(/\s+/gu, " ").trim();
+    const orgScope = sql.match(/^SET LOCAL app\.current_org_id = '([^']+)'$/u);
+    if (orgScope !== null) {
+      transactionOrgId = orgScope[1]!;
+      return { rows: [], rowCount: 0 };
+    }
+    if (sql === "COMMIT" || sql === "ROLLBACK") {
+      transactionOrgId = null;
+      return { rows: [], rowCount: 0 };
+    }
+    if (sql === "BEGIN") return { rows: [], rowCount: 0 };
     if (sql.startsWith("SELECT DISTINCT org_id FROM audit_jobs")) return { rows: [{ org_id: "org_a" }], rowCount: 1 };
     if (sql.includes("FROM audit_jobs WHERE org_id = $1")) return { rows: [jobRow], rowCount: 1 };
     if (sql.includes("FROM inbox_sources WHERE org_id = $1")) {
@@ -92,6 +105,13 @@ function stubPool(jobRowOverrides: Record<string, unknown>): {
       };
       sources.set(String(id), row);
       return { rows: [row], rowCount: 1 };
+    }
+    if (sql.startsWith("SELECT spec_id, title, status FROM specs")) {
+      if (transactionOrgId !== "org_a") {
+        throw new Error(`unscoped audit existing-spec read: ${transactionOrgId ?? "none"}`);
+      }
+      scopedSpecReadOrgIds.push(transactionOrgId);
+      return { rows: [], rowCount: 0 };
     }
     if (sql.startsWith("INSERT INTO candidates")) {
       const [id, sourceId, orgId, projectId, externalId, title, body, severity, status, triage] = params as string[];
@@ -122,7 +142,7 @@ function stubPool(jobRowOverrides: Record<string, unknown>): {
     return { rows: [], rowCount: 0 };
   };
   const pool = { query, connect: async () => ({ query, release() {} }) };
-  return { pool: pool as unknown as pg.Pool, candidates };
+  return { pool: pool as unknown as pg.Pool, candidates, scopedSpecReadOrgIds };
 }
 
 const oneFindingRunner: AuditPassRunner = {
@@ -133,7 +153,7 @@ const oneFindingRunner: AuditPassRunner = {
 
 describe("AuditSchedulerLoop.tick", () => {
   it("runs a due job and auto-routes its finding into the inbox", async () => {
-    const { pool, candidates } = stubPool({ last_run: null });
+    const { pool, candidates, scopedSpecReadOrgIds } = stubPool({ last_run: null });
     const loop = new AuditSchedulerLoop({
       pool,
       passRunner: oneFindingRunner,
@@ -145,6 +165,7 @@ describe("AuditSchedulerLoop.tick", () => {
     // The finding became an auto_routed candidate on the scheduled-audit source.
     const cand = [...candidates.values()][0];
     expect(cand?.status).toBe("auto_routed");
+    expect(scopedSpecReadOrgIds).toEqual(["org_a"]);
   });
 
   it("skips a not-yet-due job (no run)", async () => {

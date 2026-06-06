@@ -28,11 +28,12 @@ import type { ActorContext } from "../src/auth/schemas.js";
 import type { ActorContextEnv } from "../src/middleware/auth.js";
 import { intakeAutoRouteDeps } from "../src/engine/forge/intake/index.js";
 import type { RepoReader } from "../src/engine/forge/brownfield/index.js";
+import type { TriageAnswerer } from "../src/engine/forge/inbox/types.js";
 import { createDeterministicTriageAnswerer } from "./fixtures/forge/deterministicTriageAnswerer.js";
 
 // A stub pool tracking audit_jobs + inbox_sources + candidates + spec INSERTs so
 // the full audit → auto-route → spec hand-off is observable.
-function stubPool(): {
+function stubPool(existingSpecs: Array<{ spec_id: string; title: string; status: string }> = []): {
   pool: pg.Pool;
   candidates: Map<string, Record<string, unknown>>;
   specInserts: Array<{ specId: string; title: string; priority: string }>;
@@ -103,8 +104,9 @@ function stubPool(): {
       return { rows: [{ ...sources.get(String(id))! }], rowCount: 1 };
     }
 
-    // Existing specs (none) for triage grounding + dependency existence checks.
-    if (sql.startsWith("SELECT spec_id, title, status FROM specs")) return { rows: [], rowCount: 0 };
+    if (sql.startsWith("SELECT spec_id, title, status FROM specs")) {
+      return { rows: existingSpecs, rowCount: existingSpecs.length };
+    }
     if (sql.startsWith("SELECT spec_id FROM specs WHERE project_id")) return { rows: [], rowCount: 0 };
     if (sql.startsWith("SELECT project_id FROM projects")) return { rows: [{ project_id: params[0] }], rowCount: 1 };
     if (sql.startsWith("SELECT org_id FROM projects")) return { rows: [{ org_id: "org_a" }], rowCount: 1 };
@@ -118,8 +120,13 @@ function stubPool(): {
     if (sql.startsWith("INSERT INTO candidates")) {
       const [id, sourceId, orgId, projectId, externalId, title, body, severity, status, triage] = params as string[];
       const key = `${sourceId}::${externalId}`;
-      const cid = byExternal.get(key) ?? id;
+      const existingId = byExternal.get(key);
+      const cid = existingId ?? id;
+      const existing = existingId === undefined ? undefined : candidates.get(existingId);
+      const preserveStatus =
+        existing !== undefined && !["new", "triaged", "auto_routed"].includes(String(existing.status));
       candidates.set(cid, {
+        ...existing,
         id: cid,
         source_id: sourceId,
         org_id: orgId,
@@ -128,9 +135,9 @@ function stubPool(): {
         title,
         body,
         severity,
-        status,
+        status: preserveStatus ? existing.status : status,
         triage: JSON.parse(triage),
-        resolved_spec_id: null,
+        resolved_spec_id: existing?.resolved_spec_id ?? null,
       });
       byExternal.set(key, cid);
       return { rows: [candidateRow(cid)], rowCount: 1 };
@@ -208,9 +215,39 @@ describe("runAuditJob → DAG auto-route", () => {
     // One candidate (idempotent on (source_id, external_id)). The re-run upserts
     // the same candidate; no second spec is created for the same finding.
     expect(candidates.size).toBe(1);
-    expect(specInserts.length).toBeGreaterThanOrEqual(1);
-    // The first run created the spec; the candidate already resolved `accepted`.
-    expect(specInserts).toHaveLength(2);
+    expect(specInserts).toHaveLength(1);
+  });
+
+  it("grounds audit triage in the project's existing specs", async () => {
+    const seenExistingSpecs: Array<{ specId: string; title: string; status: string }> = [];
+    const { pool } = stubPool([{ spec_id: "spec_existing", title: "existing audit fix", status: "merged" }]);
+    const deterministic = createDeterministicTriageAnswerer();
+    const answerer: TriageAnswerer = {
+      triage: async (context) => {
+        seenExistingSpecs.push(...context.existingSpecs);
+        return deterministic.triage(context);
+      },
+    };
+    const job = await AuditsStore.createAuditJob(pool, {
+      orgId: "org_a",
+      projectId: "project_a",
+      kind: "security",
+      name: "sec",
+      cadence: "nightly",
+    });
+
+    await runAuditJob(
+      {
+        pool,
+        passRunner: findingRunner([
+          { externalId: "existing-audit-fix", title: "Existing audit fix", body: "already fixed", severity: "warn" },
+        ]),
+        answerer,
+      },
+      job,
+    );
+
+    expect(seenExistingSpecs).toEqual([{ specId: "spec_existing", title: "existing audit fix", status: "merged" }]);
   });
 
   it("a genuinely-empty audit is a clean pass with no spec", async () => {

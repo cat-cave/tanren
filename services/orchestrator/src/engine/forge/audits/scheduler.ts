@@ -17,6 +17,8 @@
 // whole flow with fakes and no provider / SSH — see scheduledAudits.test.ts.
 
 import type pg from "pg";
+import { DiscoveryStore, type ExistingSpecSummary } from "../../repositories/discovery.js";
+import { systemActor } from "../../state/actor.js";
 import { InboxStore } from "../inbox/store.js";
 import { autoRouteCandidate, type AutoRouteDeps } from "../inbox/engine.js";
 import type { Candidate, InboxSource, TriageAnswerer } from "../inbox/types.js";
@@ -73,6 +75,11 @@ export interface RunAuditJobResult {
 // auto-routing source in the inbox (the hi-fi "scheduled audits" source row).
 const AUDIT_SOURCE_NAME = "scheduled audits";
 
+async function loadExistingSpecs(client: QueryClient, projectId: string | null): Promise<ExistingSpecSummary[]> {
+  if (projectId === null) return [];
+  return DiscoveryStore.listExistingSpecs(client, projectId, systemActor);
+}
+
 async function findOrCreateAuditSource(client: QueryClient, orgId: string): Promise<InboxSource> {
   const existing = (await InboxStore.listSources(client, orgId)).find(
     (s) => s.kind === "scheduled_audit" && s.name === AUDIT_SOURCE_NAME,
@@ -125,6 +132,7 @@ export async function runAuditJob(deps: AuditSchedulerDeps, job: AuditJob): Prom
     }
     const answerer = deps.answerer;
     const source = await findOrCreateAuditSource(deps.pool, job.orgId);
+    const existingSpecs = await loadExistingSpecs(deps.pool, job.projectId);
     for (const finding of findings) {
       const triage = await answerer.triage({
         candidate: {
@@ -135,7 +143,7 @@ export async function runAuditJob(deps: AuditSchedulerDeps, job: AuditJob): Prom
           projectId: job.projectId,
         },
         source,
-        existingSpecs: [],
+        existingSpecs,
       });
       // System source ⇒ auto_routable ⇒ candidate rests `auto_routed`.
       const status = triage.verdict === "auto_routable" ? "auto_routed" : "triaged";
@@ -157,7 +165,7 @@ export async function runAuditJob(deps: AuditSchedulerDeps, job: AuditJob): Prom
       // real spec the DagWalker executes — idempotent on (source_id, external_id),
       // so re-running the audit re-resolves the same candidate without a new spec.
       // Mirrors `ingestSource` (inbox/engine.ts) exactly.
-      if (deps.autoRoute !== undefined && status === "auto_routed" && triage.routableSpec !== null) {
+      if (deps.autoRoute !== undefined && candidate.status === "auto_routed" && triage.routableSpec !== null) {
         candidate = (await autoRouteCandidate(deps, candidate, triage.routableSpec, deps.autoRoute)).candidate;
       }
       candidates.push(candidate);
