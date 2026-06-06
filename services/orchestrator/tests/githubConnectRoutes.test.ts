@@ -279,11 +279,32 @@ describe("onboarding-status", () => {
   });
 
   it("surfaces the repo-creation gap as a next step when GitHub lacks it", async () => {
-    const { app } = await buildHarness({ tokenScopes: "read:org" });
+    const { app, pool } = await buildHarness({ tokenScopes: "read:org" });
+    pool.orgs.get("org_acme")!.config = {
+      version: 1,
+      providerMode: "managed",
+      defaultBudget: { ceilingUsd: 50, period: "monthly" },
+    };
     await reqJson(app, "POST", "/orgs/org_acme/github", { token: "ghp_no_repo_scope" });
     const status = await reqJson(app, "GET", "/orgs/org_acme/onboarding-status");
+    expect(status.body.ready).toBe(false);
     expect(status.body.github).toEqual({ connected: true, canCreateRepos: false });
     expect(status.body.nextSteps.some((s: string) => s.includes("repo"))).toBe(true);
+  });
+
+  it("keeps ready false while the budget step is missing", async () => {
+    const { app, pool } = await buildHarness({ tokenScopes: "repo" });
+    pool.orgs.get("org_acme")!.config = { version: 1, providerMode: "managed" };
+    await reqJson(app, "POST", "/orgs/org_acme/github", { token: "ghp_repo" });
+
+    const status = await reqJson(app, "GET", "/orgs/org_acme/onboarding-status");
+    expect(status.body.ready).toBe(false);
+    expect(status.body.aiProvider).toEqual({ connected: true, classifiedAs: "managed" });
+    expect(status.body.github).toEqual({ connected: true, canCreateRepos: true });
+    expect(status.body.budget).toEqual({ ceilingUsd: null });
+    expect(status.body.nextSteps).toEqual([
+      "Set a default budget ceiling: PUT /orgs/:orgId/budget so runs have a spend cap.",
+    ]);
   });
 });
 
