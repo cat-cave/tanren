@@ -5,6 +5,7 @@
 // `isAmbiguousMergeError` singles out the unconfirmable-merge case (loud, no auto-retry).
 
 import { describe, expect, it } from "vitest";
+import { ConflictAnswerInvalidError } from "../src/engine/contracts/conflictResolution.js";
 import {
   RefResetPermanentError,
   RefResetTransientError,
@@ -37,6 +38,10 @@ describe("isRetriableInfraError — structural retriable classification", () => 
   it("honors an explicit retriable:false on an otherwise-untyped Error", () => {
     const e = Object.assign(new Error("typed-ish"), { retriable: false });
     expect(isRetriableInfraError(e)).toBe(false);
+  });
+
+  it("treats invalid conflict answers as non-infra so merge queues do not transient-hold them", () => {
+    expect(isRetriableInfraError(new ConflictAnswerInvalidError("decision 'resolve' must carry files"))).toBe(false);
   });
 });
 

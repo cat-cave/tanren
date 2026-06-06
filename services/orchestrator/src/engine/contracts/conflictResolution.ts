@@ -251,6 +251,8 @@ export type ConflictDecision =
   | { kind: "irreconcilable"; reason: string; replan?: ReplanTarget };
 
 export class ConflictAnswerInvalidError extends Error {
+  readonly retriable = false;
+
   constructor(message: string) {
     super(`conflict answer invalid: ${message}`);
     this.name = "ConflictAnswerInvalidError";

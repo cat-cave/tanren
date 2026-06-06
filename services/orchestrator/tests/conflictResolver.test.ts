@@ -242,6 +242,51 @@ describe("intentPreservingConflictResolver", () => {
     expect(events.events.some((e) => e.eventType === "merge.conflict.resolved")).toBe(false);
   });
 
+  it("routes invalid conflict answers back through replan instead of throwing as infra", async () => {
+    const events = new FakeEventStore();
+    const log: string[] = [];
+    const applier = fakeApplier(conflictedFiles, log);
+    const replan = recordingReplan();
+
+    const resolver = buildIntentPreservingConflictResolver({
+      projectId: "proj_1",
+      mergingSpecIntent: MERGING,
+      eventStore: events,
+      provenance: fakeProvenance({ conflictingSpecId: BASE.specId, conflictingSpecIntent: BASE, dagEdge: true }),
+      applier,
+      answerer: fakeAnswerer(
+        {
+          decision: "resolve",
+          reasoning: "resolved it",
+          resolvedFiles: [],
+          replanSpec: null,
+        },
+        {},
+      ),
+      reGate: fakeReGate({ passed: true, reason: "unused" }),
+      replan,
+    });
+
+    const result = await resolver(CONTEXT);
+
+    expect(result.resolved).toBe(false);
+    expect(log).toEqual(["gather", "abort"]);
+    expect(log).not.toContain("apply");
+    expect(log).not.toContain("publish");
+    expect(replan.calls).toEqual([expect.objectContaining({ specId: "spec_merging", otherSpecId: "spec_base" })]);
+    expect(replan.calls[0]?.newContext).toContain(
+      "conflict answer invalid: decision 'resolve' must carry at least one resolved file",
+    );
+    const irreconcilable = events.events.find((e) => e.eventType === "merge.conflict.irreconcilable");
+    expect(irreconcilable?.payload).toMatchObject({
+      replanned: "merging",
+      replannedSpecId: "spec_merging",
+      fromFailedReGate: false,
+      reason: "conflict answer invalid: decision 'resolve' must carry at least one resolved file",
+    });
+    expect(events.events.some((e) => e.eventType === "merge.conflict.resolved")).toBe(false);
+  });
+
   it("proceeds with the merging spec's intent alone when no other spec is attributed", async () => {
     const events = new FakeEventStore();
     const log: string[] = [];
