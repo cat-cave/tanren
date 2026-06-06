@@ -18,7 +18,8 @@
     "kind": {
       "enum": [
         "ceiling",
-        "ambiguous"
+        "ambiguous",
+        "missing_required_credential"
       ],
       "type": "string"
     },

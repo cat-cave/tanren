@@ -65,13 +65,16 @@ export const MergeDequeuedPayload = z
 // blocked the per-PR coordinator's merge DRIVE — distinct from the recoverable
 // conflict/blocked dequeue. The coordinator HOLDS the entry (it stays queued) + arms a
 // delayed re-drive, bounded by a hold-attempt ceiling. This LOUD event fires when the
-// hold can no longer recover on its own and operator attention is warranted:
+// short retry can no longer recover on its own or operator action is required:
 //   - `kind: "ceiling"`     → the entry exhausted its consecutive infra re-drives (a
 //                             persistent outage / a logic-bug-masquerading-as-infra);
-//                             the entry is removed so it cannot loop forever.
+//                             the entry stays queued and re-drives with longer backoff.
 //   - `kind: "ambiguous"`   → the merge PUT hit a 5xx and the merged state could NOT be
 //                             confirmed; auto-re-driving could double-merge, so the
 //                             coordinator HALTS without re-PUTting (operator decides).
+//   - `kind: "missing_required_credential"` → the merge drive cannot run until a
+//                             required credential/config is repaired; the head is
+//                             dequeued so later entries can proceed.
 // It exists so a persistent infra error / an unconfirmable merge surfaces loudly instead
 // of silently re-driving forever OR risking a double-merge.
 export const MergeQueueInfraBlockedPayload = z
@@ -81,8 +84,8 @@ export const MergeQueueInfraBlockedPayload = z
     integration: MergeIntegrationMode,
     /** The spec whose entry the infra error blocked. */
     specId: z.string(),
-    /** Which loud-halt case fired (a ceiling exhaustion vs an unconfirmable merge). */
-    kind: z.enum(["ceiling", "ambiguous"]),
+    /** Which loud alert/halt case fired. */
+    kind: z.enum(["ceiling", "ambiguous", "missing_required_credential"]),
     /** How many consecutive infra re-drives were attempted before the loud halt. */
     attempts: z.number().int().nonnegative(),
     /** The human-readable detail of the infra error / ambiguity. */

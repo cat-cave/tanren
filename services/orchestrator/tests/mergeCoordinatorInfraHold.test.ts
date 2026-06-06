@@ -7,7 +7,8 @@
 //     holds with `holdReason: "infra_error"` + `retryAfterMs`, emits NO dequeue;
 //   - it RECOVERS: a later re-drive that returns `merged` merges the entry;
 //   - it is BOUNDED: after MAX_INFRA_HOLD_ATTEMPTS consecutive infra throws it emits a
-//     LOUD merge.queue.infra_blocked (kind ceiling) + dequeues (no re-drive forever);
+//     LOUD merge.queue.infra_blocked (kind ceiling), keeps the entry queued, and backs
+//     off so recovery remains autonomous without hot-looping;
 //   - a MergeAmbiguousError → a LOUD infra_blocked (kind ambiguous) + dequeue, NO
 //     re-drive (never re-PUT — could double-merge);
 //   - a THROWN typed-PERMANENT infra error / returned block or conflict → releases
@@ -16,6 +17,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { MergeDriveOutcome, MergeRunner } from "../src/engine/contracts/mergeCoordinator.js";
 import { EventEmittingMergeCoordinator } from "../src/engine/merge/coordinator.js";
+import {
+  MissingGithubCredentialRefError,
+  NoGithubCredentialConfiguredError,
+} from "../src/engine/credentials/githubTokenResolver.js";
 import { RefResetPermanentError, RefResetTransientError } from "../src/engine/providers/githubRefReset.js";
 import { MergeAmbiguousError, MergeTransientError } from "../src/engine/providers/mergeOutcomeErrors.js";
 import {
@@ -155,26 +160,29 @@ describe("EventEmittingMergeCoordinator — transient merge-drive throw → infr
     expect(events.events.some((e) => e.type === "merge.queue.infra_blocked")).toBe(false);
   });
 
-  it("BOUNDED: after MAX_INFRA_HOLD_ATTEMPTS consecutive infra throws → LOUD infra_blocked (ceiling) + dequeue", async () => {
+  it("BOUNDED: after MAX_INFRA_HOLD_ATTEMPTS consecutive infra throws → LOUD infra_blocked (ceiling) + queued backoff", async () => {
     const { queue, runner, events, coordinator } = harness();
     queue.seed({ runId: "run_x", specId: "spec_x", dependsOn: [], priority: "tbd" });
     // A persistent outage: every re-drive throws transient.
     runner.throwFor("run_x", new MergeTransientError("persistent 504"));
 
     // Drive repeatedly (simulating the subscriber's re-drive timer). The first 4 passes
-    // hold; the 5th hits the ceiling (MAX_INFRA_HOLD_ATTEMPTS = 5) → loud halt + dequeue.
-    let last = await coordinator.coordinate(PROJECT);
-    for (let i = 0; i < 10 && last.holdReason === "infra_error"; i += 1) {
+    // hold on the short retry; the 5th hits the ceiling (MAX_INFRA_HOLD_ATTEMPTS = 5)
+    // → loud alert + longer backoff, while the entry remains queued.
+    for (let i = 0; i < 4; i += 1) {
+      const held = await coordinator.coordinate(PROJECT);
+      expect(held.holdReason).toBe("infra_error");
       expect(queue.statusOf("run_x")).toBe("queued");
-      last = await coordinator.coordinate(PROJECT);
+      expect(events.events.some((e) => e.type === "merge.queue.infra_blocked")).toBe(false);
     }
+    const alerted = await coordinator.coordinate(PROJECT);
 
-    // The ceiling fired: a LOUD halt, the entry is dequeued (not re-driven forever), and
-    // NO retryAfterMs (the subscriber arms no further timer).
-    expect(last.dequeuedSpecId).toBe("spec_x");
-    expect(last.holdReason).toBeUndefined();
-    expect(last.retryAfterMs).toBeUndefined();
-    expect(queue.statusOf("run_x")).toBe("dequeued");
+    // The ceiling fired: a LOUD alert, the entry stays queued, and the subscriber keeps
+    // autonomous recovery alive on a slower timer instead of creating a permanent block.
+    expect(alerted.dequeuedSpecId).toBeUndefined();
+    expect(alerted.holdReason).toBe("infra_error");
+    expect(alerted.retryAfterMs).toBe(60_000);
+    expect(queue.statusOf("run_x")).toBe("queued");
     const blocked = events.events.filter((e) => e.type === "merge.queue.infra_blocked");
     expect(blocked).toHaveLength(1);
     expect(blocked[0]?.kind).toBe("ceiling");
@@ -238,6 +246,45 @@ describe("EventEmittingMergeCoordinator — transient merge-drive throw → infr
     expect(events.events.some((e) => e.type === "merge.dequeued")).toBe(false);
   });
 
+  it("a missing configured GitHub credential hard-dequeues the head so later queue entries can proceed", async () => {
+    const { queue, runner, events, coordinator } = harness();
+    queue.seed({ runId: "run_missing_ref", specId: "spec_missing_ref", dependsOn: [], priority: "P0" });
+    queue.seed({ runId: "run_next", specId: "spec_next", dependsOn: [], priority: "P1" });
+    runner.throwFor("run_missing_ref", new MissingGithubCredentialRefError("credential/github/org/org_acme/default"));
+
+    const blocked = await coordinator.coordinate(PROJECT);
+
+    expect(blocked.dequeuedSpecId).toBe("spec_missing_ref");
+    expect(blocked.holdReason).toBeUndefined();
+    expect(blocked.retryAfterMs).toBeUndefined();
+    expect(queue.statusOf("run_missing_ref")).toBe("dequeued");
+    expect(queue.dequeueReasonOf("run_missing_ref")).toBe("blocked");
+    const infraBlocked = events.events.filter((e) => e.type === "merge.queue.infra_blocked");
+    expect(infraBlocked).toHaveLength(1);
+    expect(infraBlocked[0]?.kind).toBe("missing_required_credential");
+    expect(events.events.some((e) => e.type === "merge.dequeued")).toBe(false);
+
+    const next = await coordinator.coordinate(PROJECT);
+    expect(next.mergedSpecId).toBe("spec_next");
+    expect(queue.statusOf("run_next")).toBe("merged");
+  });
+
+  it("a missing required GitHub credential config hard-dequeues instead of retrying forever", async () => {
+    const { queue, runner, events, coordinator } = harness();
+    queue.seed({ runId: "run_no_config", specId: "spec_no_config", dependsOn: [], priority: "tbd" });
+    runner.throwFor("run_no_config", new NoGithubCredentialConfiguredError());
+
+    const result = await coordinator.coordinate(PROJECT);
+
+    expect(result.dequeuedSpecId).toBe("spec_no_config");
+    expect(result.holdReason).toBeUndefined();
+    expect(result.retryAfterMs).toBeUndefined();
+    expect(queue.statusOf("run_no_config")).toBe("dequeued");
+    const infraBlocked = events.events.filter((e) => e.type === "merge.queue.infra_blocked");
+    expect(infraBlocked).toHaveLength(1);
+    expect(infraBlocked[0]?.kind).toBe("missing_required_credential");
+  });
+
   it("a RETURNED recoverable block releases the claim with backoff — not a stranded dequeue", async () => {
     const { queue, runner, events, coordinator } = harness();
     queue.seed({ runId: "run_d", specId: "spec_d", dependsOn: [], priority: "tbd" });
@@ -267,20 +314,23 @@ describe("EventEmittingMergeCoordinator — transient merge-drive throw → infr
     expect(queue.statusOf("run_conflict_then_merge")).toBe("merged");
   });
 
-  it("BOUNDED: repeated returned blocks eventually emit terminal infra_blocked and leave the queue", async () => {
+  it("BOUNDED: repeated returned blocks eventually emit infra_blocked and stay queued with backoff", async () => {
     const { queue, runner, events, coordinator } = harness();
     queue.seed({ runId: "run_loop", specId: "spec_loop", dependsOn: [], priority: "tbd" });
     runner.returnFor("run_loop", { kind: "blocked", message: "still blocked" });
 
-    let last = await coordinator.coordinate(PROJECT);
-    for (let i = 0; i < 10 && last.holdReason === "merge_retry"; i += 1) {
+    for (let i = 0; i < 4; i += 1) {
+      const held = await coordinator.coordinate(PROJECT);
+      expect(held.holdReason).toBe("merge_retry");
       expect(queue.statusOf("run_loop")).toBe("queued");
-      last = await coordinator.coordinate(PROJECT);
+      expect(events.events.some((e) => e.type === "merge.queue.infra_blocked")).toBe(false);
     }
+    const alerted = await coordinator.coordinate(PROJECT);
 
-    expect(last.dequeuedSpecId).toBe("spec_loop");
-    expect(last.retryAfterMs).toBeUndefined();
-    expect(queue.statusOf("run_loop")).toBe("dequeued");
+    expect(alerted.dequeuedSpecId).toBeUndefined();
+    expect(alerted.holdReason).toBe("merge_retry");
+    expect(alerted.retryAfterMs).toBe(60_000);
+    expect(queue.statusOf("run_loop")).toBe("queued");
     const blocked = events.events.filter((e) => e.type === "merge.queue.infra_blocked");
     expect(blocked).toHaveLength(1);
     expect(blocked[0]?.kind).toBe("ceiling");
