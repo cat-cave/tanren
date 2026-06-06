@@ -79,15 +79,17 @@ export function recordingMergeProbe(
   // override these to drive the behind / dirty branches.
   freshness: {
     mergeability?: PullRequestMergeability;
+    mergeabilityReads?: PullRequestMergeability[];
     updateBranch?: UpdateBranchResult;
   } = {},
 ) {
-  const mergeability: PullRequestMergeability = freshness.mergeability ?? {
+  const defaultMergeability: PullRequestMergeability = freshness.mergeability ?? {
     state: "clean",
     behind: false,
     baseBranch: "main",
     headBranch: "tanren/run_1",
   };
+  const mergeabilityReads = freshness.mergeabilityReads ?? [defaultMergeability];
   const update: UpdateBranchResult = freshness.updateBranch ?? { outcome: "up_to_date", message: "up to date" };
   return {
     mergeCalls: 0,
@@ -102,6 +104,7 @@ export function recordingMergeProbe(
       return result;
     },
     async readMergeability() {
+      const mergeability = mergeabilityReads[Math.min(this.mergeabilityCalls, mergeabilityReads.length - 1)];
       this.mergeabilityCalls += 1;
       return mergeability;
     },

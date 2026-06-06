@@ -53,13 +53,21 @@ describe("P2c-1 speculative-merge-hold (merge stage)", () => {
     pool.specDependsOn = ["spec_a", "spec_b"];
     pool.mergedAncestors = ["spec_a", "spec_b"];
     const events = new FakeEventStore();
-    const probe = recordingMergeProbe({
-      merged: true,
-      mergeSha: "merge-sha",
-      conflict: false,
-      status: 200,
-      message: "merged",
-    });
+    const probe = recordingMergeProbe(
+      {
+        merged: true,
+        mergeSha: "merge-sha",
+        conflict: false,
+        status: 200,
+        message: "merged",
+      },
+      {
+        mergeabilityReads: [
+          { state: "clean", behind: false, baseBranch: "tanren/integ/spec_1", headBranch: "tanren/run_1" },
+          { state: "clean", behind: false, baseBranch: "main", headBranch: "tanren/run_1" },
+        ],
+      },
+    );
 
     const result = await mergeForRun({
       pool: pool.asPgPool(),
@@ -100,7 +108,10 @@ describe("P2c-1 speculative-merge-hold (merge stage)", () => {
     const probe = recordingMergeProbe(
       { merged: true, mergeSha: "rebased-sha", conflict: false, status: 200, message: "merged" },
       {
-        mergeability: { state: "behind", behind: true, baseBranch: "main", headBranch: "tanren/run_1" },
+        mergeabilityReads: [
+          { state: "clean", behind: false, baseBranch: "tanren/integ/spec_1", headBranch: "tanren/run_1" },
+          { state: "behind", behind: true, baseBranch: "main", headBranch: "tanren/run_1" },
+        ],
         updateBranch: { outcome: "updated", message: "updated onto main" },
       },
     );
@@ -131,6 +142,73 @@ describe("P2c-1 speculative-merge-hold (merge stage)", () => {
     expect(types).toContain("merge.behind");
     expect(types).toContain("merge.rebased");
     expect(types).toContain("merge.completed");
+  });
+
+  it("skips retarget when the live PR base is already default_branch and merges normally", async () => {
+    const pool = new ReviewMergePool("direct_merge");
+    pool.speculativeBase = "tanren/integ/spec_1";
+    pool.specDependsOn = ["spec_a"];
+    pool.mergedAncestors = ["spec_a"];
+    const events = new FakeEventStore();
+    const probe = recordingMergeProbe(
+      { merged: true, mergeSha: "merge-sha", conflict: false, status: 200, message: "merged" },
+      {
+        mergeability: { state: "clean", behind: false, baseBranch: "main", headBranch: "tanren/run_1" },
+      },
+    );
+
+    const result = await mergeForRun({
+      pool: pool.asPgPool(),
+      eventStore: events,
+      secrets: new FakeSecretStore(),
+      vcsProvider: vcsProviderOver(unusedHttp()),
+      runId: "run_1",
+      mergeProbe: probe,
+      resolveConflict: noopConflictResolver,
+    });
+
+    expect(result.outcome).toBe("merged");
+    expect(probe.retargetedBases).toEqual([]);
+    expect(probe.mergeCalls).toBe(1);
+    const types = events.events.map((e) => e.eventType);
+    expect(types).toContain("merge.completed");
+    expect(types).not.toContain("merge.retargeted");
+  });
+
+  it("skips retarget when the live PR base is already default_branch and routes conflicts normally", async () => {
+    const pool = new ReviewMergePool("direct_merge");
+    pool.speculativeBase = "tanren/integ/spec_1";
+    pool.specDependsOn = ["spec_a"];
+    pool.mergedAncestors = ["spec_a"];
+    const events = new FakeEventStore();
+    const probe = recordingMergeProbe(
+      { merged: true, mergeSha: "merge-sha", conflict: false, status: 200, message: "merged" },
+      {
+        mergeability: { state: "dirty", behind: false, baseBranch: "main", headBranch: "tanren/run_1" },
+      },
+    );
+    let conflictResolverCalls = 0;
+
+    const result = await mergeForRun({
+      pool: pool.asPgPool(),
+      eventStore: events,
+      secrets: new FakeSecretStore(),
+      vcsProvider: vcsProviderOver(unusedHttp()),
+      runId: "run_1",
+      mergeProbe: probe,
+      resolveConflict: async () => {
+        conflictResolverCalls += 1;
+        return { resolved: false };
+      },
+    });
+
+    expect(result.outcome).toBe("conflict");
+    expect(probe.retargetedBases).toEqual([]);
+    expect(probe.mergeCalls).toBe(0);
+    expect(conflictResolverCalls).toBe(1);
+    const types = events.events.map((e) => e.eventType);
+    expect(types).toContain("merge.conflict");
+    expect(types).not.toContain("merge.retargeted");
   });
 
   it("a NON-speculative run merges normally (the hold is a no-op)", async () => {
