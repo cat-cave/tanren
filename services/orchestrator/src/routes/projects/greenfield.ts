@@ -18,14 +18,13 @@ import {
 } from "../../engine/contracts/integrationProvisioner.js";
 import type { SecretStore } from "../../engine/contracts/secretStore.js";
 import {
+  type CreatedRepository,
+  type CreateRepositoryInput,
   RepositoryAlreadyExistsError,
   RepositoryCreationForbiddenError,
   type VcsProvider,
 } from "../../engine/contracts/vcsProvider.js";
-import {
-  loadOrgDefaultGithubCredentialRef,
-  loadOrgGithubAppInstallation,
-} from "../../engine/credentials/orgGithubApp.js";
+import { loadOrgGithubAppInstallation } from "../../engine/credentials/orgGithubApp.js";
 import { OrgIntegrationsStore } from "../../engine/repositories/orgIntegrations.js";
 import {
   productionProvisionerDeps,
@@ -92,9 +91,65 @@ export interface GreenfieldCreateDeps {
   input: GreenfieldCreateInput;
 }
 
+export interface GreenfieldRepositoryCreateDeps {
+  pool: pg.Pool;
+  secrets: SecretStore;
+  vcsProvider: VcsProvider;
+  githubAppMinter?: GithubAppTokenMinter;
+  orgId: string;
+  input: CreateRepositoryInput;
+}
+
+export class GithubCredentialMissingError extends Error {
+  constructor() {
+    super("github credential missing");
+    this.name = "GithubCredentialMissingError";
+  }
+}
+
+export async function createGreenfieldRepository(deps: GreenfieldRepositoryCreateDeps): Promise<CreatedRepository> {
+  const { pool, secrets, vcsProvider, orgId, input } = deps;
+  let token;
+  try {
+    const installation = await loadOrgGithubAppInstallation(pool, orgId);
+    if (installation === undefined) {
+      throw new GithubCredentialMissingError();
+    }
+    token = await vcsProvider.resolveToken({
+      secrets,
+      installation,
+      ...(deps.githubAppMinter === undefined ? {} : { minter: deps.githubAppMinter }),
+    });
+  } catch {
+    throw new GithubCredentialMissingError();
+  }
+
+  return vcsProvider.createRepository(input, token);
+}
+
+export function greenfieldRepositoryErrorResponse(c: Context<ActorContextEnv>, error: unknown): Response | undefined {
+  if (error instanceof GithubCredentialMissingError) {
+    return c.json({ error: "github_credential_missing" }, 400);
+  }
+  if (error instanceof RepositoryAlreadyExistsError) {
+    return c.json({ error: "repository_already_exists", owner: error.owner, name: error.repoName }, 409);
+  }
+  if (error instanceof RepositoryCreationForbiddenError) {
+    return c.json(
+      {
+        error: "repository_creation_forbidden",
+        owner: error.owner,
+        message: error.message,
+        requiredPermission: "administration:write",
+      },
+      403,
+    );
+  }
+  return undefined;
+}
+
 /**
- * Resolve the org's GitHub token (App-first, static fallback — the same policy
- * the brownfield link route uses), create the repo, then create the project
+ * Resolve the org's GitHub App token, create the repo, then create the project
  * bound to the real new repoUrl. The typed repo-create errors map to clean
  * 409/403 responses; the token never appears in a response or a log.
  */
@@ -135,51 +190,25 @@ export async function handleGreenfieldCreate(
     return c.json({ error: "deploy_provision_failed", message: messageOf(error) }, 502);
   }
 
-  let token;
-  try {
-    const installation = await loadOrgGithubAppInstallation(pool, orgId);
-    const staticRef = await loadOrgDefaultGithubCredentialRef(pool, orgId);
-    token = await vcsProvider.resolveToken({
-      secrets,
-      ...(installation === undefined ? {} : { installation }),
-      ...(staticRef === undefined ? {} : { staticRef }),
-      ...(deps.githubAppMinter === undefined ? {} : { minter: deps.githubAppMinter }),
-    });
-  } catch {
-    // No App installation + no default credential ⇒ the org has no GitHub grant
-    // to create a repo under. Same mapping the brownfield route uses.
-    return c.json({ error: "github_credential_missing" }, 400);
-  }
-
   let created;
   try {
-    created = await vcsProvider.createRepository(
-      {
+    created = await createGreenfieldRepository({
+      pool,
+      secrets,
+      vcsProvider,
+      orgId,
+      ...(deps.githubAppMinter === undefined ? {} : { githubAppMinter: deps.githubAppMinter }),
+      input: {
         owner: input.owner,
         name: input.name,
         private: input.private ?? true,
         autoInit: true,
         ...(input.description === undefined ? {} : { description: input.description }),
       },
-      token,
-    );
+    });
   } catch (error) {
-    if (error instanceof RepositoryAlreadyExistsError) {
-      return c.json({ error: "repository_already_exists", owner: error.owner, name: error.repoName }, 409);
-    }
-    if (error instanceof RepositoryCreationForbiddenError) {
-      // Surface the actionable permission gap as a clean 403 — the App
-      // installation must be granted `administration: write` to create repos.
-      return c.json(
-        {
-          error: "repository_creation_forbidden",
-          owner: error.owner,
-          message: error.message,
-          requiredPermission: "administration:write",
-        },
-        403,
-      );
-    }
+    const response = greenfieldRepositoryErrorResponse(c, error);
+    if (response !== undefined) return response;
     throw error;
   }
 

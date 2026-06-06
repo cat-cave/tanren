@@ -32,6 +32,8 @@ const actor: ActorContext = {
   source: "session",
 };
 
+const TEST_REPO_URL = "https://github.com/cat-cave/supply-chain-os";
+
 function preparedDeploy(providerKind: "deploy.vercel" | "deploy.flyio" = "deploy.vercel") {
   return {
     outcome: {
@@ -305,7 +307,7 @@ describe("deriveFromCapture · creates the product graph (no migration)", () => 
           return preparedDeploy();
         },
       },
-      { orgId: "org_a", capture, actor, deploy: { providerKind: "deploy.vercel" } },
+      { orgId: "org_a", capture, actor, repoUrl: TEST_REPO_URL, deploy: { providerKind: "deploy.vercel" } },
     );
 
     expect(state.projects.size).toBe(1);
@@ -344,7 +346,7 @@ describe("deriveFromCapture · creates the product graph (no migration)", () => 
           return preparedDeploy();
         },
       },
-      { orgId: "org_a", capture, actor, deploy: { providerKind: "deploy.vercel" } },
+      { orgId: "org_a", capture, actor, repoUrl: TEST_REPO_URL, deploy: { providerKind: "deploy.vercel" } },
     );
 
     // The scaffold specs are created first, in order: monorepo, build, ci.
@@ -381,7 +383,14 @@ describe("deriveFromCapture · creates the product graph (no migration)", () => 
           return preparedDeploy(request.providerKind);
         },
       },
-      { orgId: "org_a", capture, actor, autonomy: "auto", deploy: { providerKind: "deploy.vercel" } },
+      {
+        orgId: "org_a",
+        capture,
+        actor,
+        repoUrl: TEST_REPO_URL,
+        autonomy: "auto",
+        deploy: { providerKind: "deploy.vercel" },
+      },
     );
 
     const config = configs.get(derived.projectId);
@@ -435,7 +444,7 @@ describe("deriveFromCapture · creates the product graph (no migration)", () => 
           return preparedDeploy();
         },
       },
-      { orgId: "org_a", capture, actor, deploy: { providerKind: "deploy.vercel" } },
+      { orgId: "org_a", capture, actor, repoUrl: TEST_REPO_URL, deploy: { providerKind: "deploy.vercel" } },
     );
 
     const config = configs.get(derived.projectId);
@@ -473,7 +482,7 @@ describe("deriveFromCapture · creates the product graph (no migration)", () => 
           return preparedDeploy();
         },
       },
-      { orgId: "org_a", capture, actor, deploy: { providerKind: "deploy.vercel" } },
+      { orgId: "org_a", capture, actor, repoUrl: TEST_REPO_URL, deploy: { providerKind: "deploy.vercel" } },
     );
 
     // Design-DNA + identity pitch land on `projects.config.productVision` (the

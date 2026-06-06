@@ -7,7 +7,8 @@
 //     resume = stash it client-side), so there is no interview-session table.
 //
 //   POST /:orgId/onboarding/interview/derive
-//     Body: { capture, repoUrl? }. On completion, derives the product graph —
+//     Body: { capture, owner, private?, description? }. On completion, creates
+//     the real greenfield repo and derives the product graph —
 //     project + personas/behaviors/milestones/specs — through the existing
 //     creation paths and returns the new project + derived ids.
 //     The DAG is then read back via the existing project-DAG endpoint.
@@ -24,6 +25,8 @@ import type pg from "pg";
 import { z } from "zod";
 import type { ActorContext } from "../../auth/schemas.js";
 import type { SecretStore } from "../../engine/contracts/secretStore.js";
+import type { VcsProvider } from "../../engine/contracts/vcsProvider.js";
+import { ensureIssuesInboxSource } from "../../engine/forge/inbox/index.js";
 import {
   DeployNotLinkedError,
   DeployProviderInvalidError,
@@ -42,10 +45,13 @@ import {
   ProjectNotFoundError,
   SpecNotFoundError,
 } from "../../engine/workflow/projectSpec.js";
+import type { GithubAppTokenMinter } from "../../engine/providers/githubAppTokenMinter.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { actorCanAccessOrg } from "../orgs/access.js";
 import {
+  createGreenfieldRepository,
   GreenfieldDeploySchema,
+  greenfieldRepositoryErrorResponse,
   SUPPORTED_DEPLOY_PROVIDER_KINDS,
   prepareGreenfieldDeploy,
   preflightGreenfieldDeploy,
@@ -59,6 +65,8 @@ export interface OnboardingRoutesOptions {
   // no project exists yet). Production passes `buildForgeInterviewAnswererFactory`
   // (a real provider answerer); tests pass a fake. REQUIRED — no fallback.
   answererFactory: (target: ForgeAnswererTarget) => InterviewAnswerer;
+  vcsProvider?: VcsProvider;
+  githubAppMinter?: GithubAppTokenMinter;
   preflightDeploy?: DeployPreflightCallback;
   prepareDeploy?: PrepareDeployCallback;
 }
@@ -74,7 +82,9 @@ const RoundBody = z
 const DeriveBody = z
   .object({
     capture: InterviewCapture,
-    repoUrl: z.string().min(1).max(400).optional(),
+    owner: z.string().min(1).max(100),
+    private: z.boolean().optional(),
+    description: z.string().min(1).max(400).optional(),
     // GREENFIELD AUTONOMY: how the derived project is governed at creation. When
     // `auto`/`simulated`, the project lands ALREADY autonomous (a `native_queue`
     // merge engine + the matching review policy) so the DagWalker can advance it
@@ -133,19 +143,44 @@ export function createOnboardingRoutes(options: OnboardingRoutesOptions) {
             projectName: input.projectName,
             deploy: input,
           }));
+      if (options.vcsProvider === undefined) {
+        return c.json({ error: "vcs_provider_missing" }, 500);
+      }
       const result = await deriveFromCapture(
         { pool: options.pool, preflightDeploy, prepareDeploy },
         {
           orgId,
           capture: parsed.data.capture,
           actor: { ...actor, orgId },
-          ...(parsed.data.repoUrl === undefined ? {} : { repoUrl: parsed.data.repoUrl }),
+          owner: parsed.data.owner,
+          ...(parsed.data.private === undefined ? {} : { private: parsed.data.private }),
+          ...(parsed.data.description === undefined ? {} : { description: parsed.data.description }),
+          createRepository: (input) =>
+            createGreenfieldRepository({
+              pool: options.pool,
+              secrets: options.secrets,
+              vcsProvider: options.vcsProvider as VcsProvider,
+              orgId,
+              ...(options.githubAppMinter === undefined ? {} : { githubAppMinter: options.githubAppMinter }),
+              input,
+            }),
           ...(parsed.data.autonomy === undefined ? {} : { autonomy: parsed.data.autonomy }),
           ...(parsed.data.deploy === undefined ? {} : { deploy: parsed.data.deploy }),
         },
       );
-      return c.json(result, 201);
+      if (result.repository === undefined) {
+        throw new Error("greenfield repository missing after derive");
+      }
+      const inbox = await ensureIssuesInboxSource({
+        pool: options.pool,
+        orgId,
+        projectId: result.projectId,
+        repoUrl: result.repository.repoUrl,
+      });
+      return c.json({ ...result, inboxSource: { id: inbox.source.id, created: inbox.created } }, 201);
     } catch (error) {
+      const repoError = greenfieldRepositoryErrorResponse(c, error);
+      if (repoError !== undefined) return repoError;
       if (error instanceof ProjectNotFoundError) {
         return c.json({ error: "project_not_found", message: error.message }, 404);
       }

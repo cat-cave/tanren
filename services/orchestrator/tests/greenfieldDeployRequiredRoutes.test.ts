@@ -1,8 +1,13 @@
 import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
 import type { ActorContext } from "../src/auth/schemas.js";
+import { RepositoryCreationForbiddenError } from "../src/engine/contracts/vcsProvider.js";
 import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
-import { emptyCapture, type InterviewAnswerer } from "../src/engine/forge/interview/index.js";
+import {
+  emptyCapture,
+  type InterviewAnswerer,
+  type PreparedGreenfieldDeploy,
+} from "../src/engine/forge/interview/index.js";
 import { createAuthMiddleware, type ActorContextEnv } from "../src/middleware/auth.js";
 import { createOnboardingRoutes, type OnboardingRoutesOptions } from "../src/routes/onboarding/index.js";
 import { createProjectRoutes } from "../src/routes/projects/index.js";
@@ -49,6 +54,7 @@ function appWithRoutes(
       pool: pool.asPgPool(),
       secrets,
       answererFactory: () => answerer,
+      vcsProvider,
       ...onboardingOverrides,
     }),
   );
@@ -61,6 +67,57 @@ function appWithRoutes(
     }),
   );
   return { app, vcsProvider };
+}
+
+function preparedDeploy(providerKind: "deploy.vercel" | "deploy.flyio" = "deploy.vercel"): PreparedGreenfieldDeploy {
+  return {
+    outcome: {
+      status: "provisioned",
+      capability: "deploy",
+      providerKind,
+      action: "provision",
+      mode: "greenfield",
+      secretRefNames: [`secret://deploy/${providerKind}/app_1/token`],
+      surfaces: { projectConfigKeys: ["deployProvider", "deployAppId"], deployRef: `${providerKind}:app_1` },
+    },
+    projectConfig: {
+      deployProvider: providerKind,
+      deployAppId: "app_1",
+      deployAppName: "apex-url-shortener-v22",
+    },
+  };
+}
+
+function apexCapture() {
+  return {
+    ...emptyCapture(),
+    identity: {
+      slug: "apex-url-shortener-v22",
+      pitch: "A short link service for an operations team.",
+      repoHint: "",
+    },
+  };
+}
+
+function seedGithubAppOrg(pool: RoutesPool): void {
+  pool.seedOrg({
+    id: "org_acme",
+    config: {
+      version: 1,
+      github_app: {
+        installationId: "137492334",
+        appId: "123456",
+        credentialRef: "credential/github_app/org/org_acme/default",
+        installedAt: "2026-06-06T00:00:00.000Z",
+      },
+    },
+  });
+}
+
+class ForbiddenCreateVcsProvider extends InMemoryVcsProvider {
+  override async createRepository(input: Parameters<InMemoryVcsProvider["createRepository"]>[0]) {
+    throw new RepositoryCreationForbiddenError(input.owner);
+  }
 }
 
 class LinkedDeployRoutesPool extends RoutesPool {
@@ -101,7 +158,7 @@ describe("greenfield/apex deploy dependency routes", () => {
     const res = await app.request("/orgs/org_acme/onboarding/interview/derive", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ capture: emptyCapture(), autonomy: "auto" }),
+      body: JSON.stringify({ capture: emptyCapture(), owner: "cat-cave", autonomy: "auto" }),
     });
 
     expect(res.status).toBe(400);
@@ -120,7 +177,7 @@ describe("greenfield/apex deploy dependency routes", () => {
     const res = await app.request("/orgs/org_acme/onboarding/interview/derive", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ capture: emptyCapture() }),
+      body: JSON.stringify({ capture: emptyCapture(), owner: "cat-cave" }),
     });
 
     expect(res.status).toBe(400);
@@ -140,6 +197,7 @@ describe("greenfield/apex deploy dependency routes", () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         capture: emptyCapture(),
+        owner: "cat-cave",
         autonomy: "auto",
         deploy: { providerKind: "deploy.vercel" },
       }),
@@ -174,6 +232,7 @@ describe("greenfield/apex deploy dependency routes", () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         capture: emptyCapture(),
+        owner: "cat-cave",
         deploy: { providerKind: "deploy.vercel" },
       }),
     });
@@ -182,6 +241,109 @@ describe("greenfield/apex deploy dependency routes", () => {
     const body = (await res.json()) as { error: string; message: string };
     expect(body.error).toBe("deploy_provision_failed");
     expect(body.message).toContain("provider token expired");
+    expect(pool.projects.size).toBe(0);
+    expect(pool.specs.size).toBe(0);
+    expect(pool.inboxSources).toEqual([]);
+  });
+
+  it("creates a real repo and issues inbox source when onboarding derive succeeds", async () => {
+    const pool = new RoutesPool();
+    seedGithubAppOrg(pool);
+    pool.seedMembership("org_acme", "user_alice", "admin");
+    const { app, vcsProvider } = appWithRoutes(pool, new InMemoryVcsProvider(), {
+      async preflightDeploy() {},
+      async prepareDeploy() {
+        return preparedDeploy();
+      },
+    });
+
+    const res = await app.request("/orgs/org_acme/onboarding/interview/derive", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        capture: apexCapture(),
+        owner: "cat-cave",
+        private: true,
+        autonomy: "auto",
+        deploy: { providerKind: "deploy.vercel" },
+      }),
+    });
+
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as {
+      projectId: string;
+      repository: { fullName: string; repoUrl: string; defaultBranch: string };
+      inboxSource: { created: boolean };
+    };
+    expect(vcsProvider.createdRepositories).toEqual([
+      { owner: "cat-cave", name: "apex-url-shortener-v22", private: true },
+    ]);
+    expect(body.repository).toEqual({
+      fullName: "cat-cave/apex-url-shortener-v22",
+      repoUrl: "https://github.com/cat-cave/apex-url-shortener-v22",
+      defaultBranch: "main",
+    });
+    expect(pool.projects.get(body.projectId)?.repo_url).toBe("https://github.com/cat-cave/apex-url-shortener-v22");
+    expect(pool.specs.size).toBeGreaterThan(0);
+    expect(pool.inboxSources).toHaveLength(1);
+    expect(body.inboxSource.created).toBe(true);
+  });
+
+  it("rejects onboarding derive when repo creation is forbidden without creating the graph", async () => {
+    const pool = new RoutesPool();
+    seedGithubAppOrg(pool);
+    pool.seedMembership("org_acme", "user_alice", "admin");
+    const { app } = appWithRoutes(pool, new ForbiddenCreateVcsProvider(), {
+      async preflightDeploy() {},
+      async prepareDeploy() {
+        return preparedDeploy();
+      },
+    });
+
+    const res = await app.request("/orgs/org_acme/onboarding/interview/derive", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        capture: apexCapture(),
+        owner: "cat-cave",
+        deploy: { providerKind: "deploy.vercel" },
+      }),
+    });
+
+    expect(res.status).toBe(403);
+    const body = (await res.json()) as { error: string; requiredPermission: string };
+    expect(body.error).toBe("repository_creation_forbidden");
+    expect(body.requiredPermission).toBe("administration:write");
+    expect(pool.projects.size).toBe(0);
+    expect(pool.specs.size).toBe(0);
+    expect(pool.inboxSources).toEqual([]);
+  });
+
+  it("rejects onboarding derive without a GitHub App installation before creating the graph", async () => {
+    const pool = new RoutesPool();
+    pool.seedOrg({ id: "org_acme" });
+    pool.seedMembership("org_acme", "user_alice", "admin");
+    const { app, vcsProvider } = appWithRoutes(pool, new InMemoryVcsProvider(), {
+      async preflightDeploy() {},
+      async prepareDeploy() {
+        return preparedDeploy();
+      },
+    });
+
+    const res = await app.request("/orgs/org_acme/onboarding/interview/derive", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        capture: apexCapture(),
+        owner: "cat-cave",
+        deploy: { providerKind: "deploy.vercel" },
+      }),
+    });
+
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toBe("github_credential_missing");
+    expect(vcsProvider.createdRepositories).toEqual([]);
     expect(pool.projects.size).toBe(0);
     expect(pool.specs.size).toBe(0);
     expect(pool.inboxSources).toEqual([]);
