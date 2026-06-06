@@ -8,6 +8,7 @@ const RUN = "run_blocked";
 const SPEC = "spec_apex";
 const PR_URL = "https://github.com/acme/apex/pull/15";
 const CODEX_REF = "credential/codex/org/org_acme/default";
+const GITHUB_REF = "credential/github/org/org_acme/default";
 
 function seedBlockedDequeued(pool: QueueRecoveryPool, queueId: string, emitDequeued = true): void {
   pool.seedProject(PROJECT, ORG);
@@ -35,33 +36,50 @@ function seedBlockedDequeued(pool: QueueRecoveryPool, queueId: string, emitDeque
   });
 }
 
+function seedCredentialBlock(
+  pool: QueueRecoveryPool,
+  input: { kind?: string; credentialRef?: string; message: string },
+): void {
+  pool.seedEvent({
+    projectId: PROJECT,
+    orgId: ORG,
+    runId: RUN,
+    specId: SPEC,
+    eventType: "merge.batch.infra_blocked",
+    ts: new Date("2026-05-01T00:00:01.000Z"),
+    payload: {
+      integration: "native_queue",
+      terminal: true,
+      kind: input.kind ?? "missing_github_credential",
+      ...(input.credentialRef === undefined ? {} : { credentialRef: input.credentialRef }),
+      message: input.message,
+      members: [{ specId: SPEC, prNumber: 15 }],
+    },
+  });
+}
+
+function seedCredentialRepair(pool: QueueRecoveryPool, eventType: string, payload: Record<string, unknown>): void {
+  pool.seedEvent({
+    projectId: PROJECT,
+    orgId: ORG,
+    runId: null,
+    specId: null,
+    eventType,
+    ts: new Date("2026-05-01T00:00:02.000Z"),
+    payload: { ...payload, redacted: true },
+  });
+}
+
+async function recover(pool: QueueRecoveryPool): Promise<number> {
+  return new PgMergeQueueModel(pool.asPgPool()).recoverDequeuedCandidates(PROJECT);
+}
+
 describe("PgMergeQueueModel.recoverDequeuedCandidates", () => {
   it("revives a recoverable dequeued native-queue row with PR facts and no later terminal candidate event", async () => {
     const pool = new QueueRecoveryPool();
-    pool.seedProject(PROJECT, ORG);
-    pool.seedQueue({
-      queueId: "mq_blocked",
-      runId: RUN,
-      specId: SPEC,
-      projectId: PROJECT,
-      orgId: ORG,
-      prUrl: PR_URL,
-      prNumber: "15",
-      status: "dequeued",
-      dequeueReason: "blocked",
-      settledAt: new Date("2026-05-01T00:00:00.000Z"),
-    });
-    pool.seedEvent({
-      projectId: PROJECT,
-      orgId: ORG,
-      runId: RUN,
-      specId: SPEC,
-      eventType: "merge.dequeued",
-      ts: new Date("2026-05-01T00:00:00.000Z"),
-      payload: { integration: "native_queue", reason: "blocked", prUrl: PR_URL, prNumber: 15 },
-    });
+    seedBlockedDequeued(pool, "mq_blocked");
 
-    const recovered = await new PgMergeQueueModel(pool.asPgPool()).recoverDequeuedCandidates(PROJECT);
+    const recovered = await recover(pool);
 
     expect(recovered).toBe(1);
     expect(pool.queue[0]).toMatchObject({ status: "queued", dequeueReason: null, settledAt: null });
@@ -69,28 +87,7 @@ describe("PgMergeQueueModel.recoverDequeuedCandidates", () => {
 
   it("does not revive when a later same-candidate merge.completed exists", async () => {
     const pool = new QueueRecoveryPool();
-    pool.seedProject(PROJECT, ORG);
-    pool.seedQueue({
-      queueId: "mq_done",
-      runId: RUN,
-      specId: SPEC,
-      projectId: PROJECT,
-      orgId: ORG,
-      prUrl: PR_URL,
-      prNumber: "15",
-      status: "dequeued",
-      dequeueReason: "blocked",
-      settledAt: new Date("2026-05-01T00:00:00.000Z"),
-    });
-    pool.seedEvent({
-      projectId: PROJECT,
-      orgId: ORG,
-      runId: RUN,
-      specId: SPEC,
-      eventType: "merge.dequeued",
-      ts: new Date("2026-05-01T00:00:00.000Z"),
-      payload: { integration: "native_queue", reason: "blocked", prUrl: PR_URL, prNumber: 15 },
-    });
+    seedBlockedDequeued(pool, "mq_done");
     pool.seedEvent({
       projectId: PROJECT,
       orgId: ORG,
@@ -140,28 +137,7 @@ describe("PgMergeQueueModel.recoverDequeuedCandidates", () => {
 
   it("does revive when a later same-spec merge.completed belongs to a different PR", async () => {
     const pool = new QueueRecoveryPool();
-    pool.seedProject(PROJECT, ORG);
-    pool.seedQueue({
-      queueId: "mq_stale_same_spec",
-      runId: RUN,
-      specId: SPEC,
-      projectId: PROJECT,
-      orgId: ORG,
-      prUrl: PR_URL,
-      prNumber: "15",
-      status: "dequeued",
-      dequeueReason: "blocked",
-      settledAt: new Date("2026-05-01T00:00:00.000Z"),
-    });
-    pool.seedEvent({
-      projectId: PROJECT,
-      orgId: ORG,
-      runId: RUN,
-      specId: SPEC,
-      eventType: "merge.dequeued",
-      ts: new Date("2026-05-01T00:00:00.000Z"),
-      payload: { integration: "native_queue", reason: "blocked", prUrl: PR_URL, prNumber: 15 },
-    });
+    seedBlockedDequeued(pool, "mq_stale_same_spec");
     pool.seedEvent({
       projectId: PROJECT,
       orgId: ORG,
@@ -343,67 +319,87 @@ describe("PgMergeQueueModel.recoverDequeuedCandidates", () => {
     expect(pool.queue[0]?.status).toBe("dequeued");
   });
 
-  it("revives a terminal missing-credential halt only after a later matching credential repair event", async () => {
+  it("revives a terminal GitHub credential halt only after a later matching credential repair event", async () => {
     const pool = new QueueRecoveryPool();
-    pool.seedProject(PROJECT, ORG);
-    pool.seedQueue({
-      queueId: "mq_missing_credential_repaired",
-      runId: RUN,
-      specId: SPEC,
-      projectId: PROJECT,
-      orgId: ORG,
-      prUrl: PR_URL,
-      prNumber: "15",
-      status: "dequeued",
-      dequeueReason: "blocked",
-      settledAt: new Date("2026-05-01T00:00:00.000Z"),
-    });
-    pool.seedEvent({
-      projectId: PROJECT,
-      orgId: ORG,
-      runId: RUN,
-      specId: SPEC,
-      eventType: "merge.dequeued",
-      ts: new Date("2026-05-01T00:00:00.000Z"),
-      payload: { integration: "native_queue", reason: "blocked", prUrl: PR_URL, prNumber: 15 },
-    });
-    pool.seedEvent({
-      projectId: PROJECT,
-      orgId: ORG,
-      runId: RUN,
-      specId: SPEC,
-      eventType: "merge.batch.infra_blocked",
-      ts: new Date("2026-05-01T00:00:01.000Z"),
-      payload: {
-        integration: "native_queue",
-        terminal: true,
-        kind: "missing_required_credential",
-        credentialRef: CODEX_REF,
-        message: `missing Codex credential ref: ${CODEX_REF}`,
-        members: [{ specId: SPEC, prNumber: 15 }],
-      },
+    seedBlockedDequeued(pool, "mq_missing_credential_repaired");
+    seedCredentialBlock(pool, {
+      kind: "missing_required_credential",
+      credentialRef: GITHUB_REF,
+      message: `missing GitHub credential ref: ${GITHUB_REF}`,
     });
 
-    const beforeRepair = await new PgMergeQueueModel(pool.asPgPool()).recoverDequeuedCandidates(PROJECT);
+    const beforeRepair = await recover(pool);
     expect(beforeRepair).toBe(0);
     expect(pool.queue[0]?.status).toBe("dequeued");
 
-    pool.seedEvent({
-      projectId: PROJECT,
-      orgId: ORG,
-      runId: null,
-      specId: null,
-      eventType: "credential.configured",
-      ts: new Date("2026-05-01T00:00:02.000Z"),
-      payload: {
-        provider: "codex",
-        credentialKind: "codex_chatgpt_auth",
-        ref: CODEX_REF,
-        redacted: true,
-      },
+    seedCredentialRepair(pool, "credential.configured", {
+      provider: "github",
+      credentialKind: "github_token",
+      ref: GITHUB_REF,
     });
 
-    const recovered = await new PgMergeQueueModel(pool.asPgPool()).recoverDequeuedCandidates(PROJECT);
+    const recovered = await recover(pool);
+
+    expect(recovered).toBe(1);
+    expect(pool.queue[0]).toMatchObject({ status: "queued", dequeueReason: null, settledAt: null });
+  });
+
+  it("revives a sole terminal missing-GitHub-credential batch halt after matching repair", async () => {
+    const pool = new QueueRecoveryPool();
+    seedBlockedDequeued(pool, "mq_missing_github_credential_repaired", false);
+    seedCredentialBlock(pool, {
+      credentialRef: GITHUB_REF,
+      message: `missing GitHub credential ref: ${GITHUB_REF}`,
+    });
+
+    const beforeRepair = await recover(pool);
+    expect(beforeRepair).toBe(0);
+    expect(pool.queue[0]?.status).toBe("dequeued");
+
+    seedCredentialRepair(pool, "credential.github.configured", {
+      provider: "github",
+      credentialKind: "github_token",
+      credentialRef: GITHUB_REF,
+    });
+
+    const recovered = await recover(pool);
+
+    expect(recovered).toBe(1);
+    expect(pool.queue[0]).toMatchObject({ status: "queued", dequeueReason: null, settledAt: null });
+  });
+
+  it("does not revive a null-ref GitHub credential halt after an unrelated generic credential import", async () => {
+    const pool = new QueueRecoveryPool();
+    seedBlockedDequeued(pool, "mq_missing_github_null_ref_unrelated_repair", false);
+    seedCredentialBlock(pool, { message: "No GitHub credential configured" });
+    seedCredentialRepair(pool, "credential.configured", {
+      provider: "codex",
+      credentialKind: "codex_chatgpt_auth",
+      ref: CODEX_REF,
+    });
+
+    const recovered = await recover(pool);
+
+    expect(recovered).toBe(0);
+    expect(pool.queue[0]?.status).toBe("dequeued");
+  });
+
+  it("revives a null-ref GitHub credential halt after GitHub is configured", async () => {
+    const pool = new QueueRecoveryPool();
+    seedBlockedDequeued(pool, "mq_missing_github_null_ref_github_repair", false);
+    seedCredentialBlock(pool, { message: "No GitHub credential configured" });
+
+    const beforeRepair = await recover(pool);
+    expect(beforeRepair).toBe(0);
+    expect(pool.queue[0]?.status).toBe("dequeued");
+
+    seedCredentialRepair(pool, "credential.github.configured", {
+      provider: "github",
+      credentialKind: "github_token",
+      credentialRef: GITHUB_REF,
+    });
+
+    const recovered = await recover(pool);
 
     expect(recovered).toBe(1);
     expect(pool.queue[0]).toMatchObject({ status: "queued", dequeueReason: null, settledAt: null });

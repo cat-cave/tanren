@@ -44,6 +44,97 @@ function asStringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
 }
 
+const RECOVER_DEQUEUED_CANDIDATES_SQL = `
+WITH candidates AS (
+  SELECT mq.queue_id, mq.run_id, mq.dequeue_reason, mq.pr_url, mq.pr_number, anchor.ts AS anchor_ts, anchor.id AS anchor_id
+  FROM merge_queue mq
+  JOIN LATERAL (
+    SELECT e.ts, e.id FROM events e
+    WHERE e.project_id = mq.project_id AND e.org_id = mq.org_id
+      AND (
+        (e.event_type = 'merge.dequeued' AND e.payload ->> 'integration' = 'native_queue' AND e.payload ->> 'reason' = 'blocked')
+        OR (e.event_type = 'merge.batch.infra_blocked' AND e.payload ->> 'terminal' = 'true'
+          AND COALESCE(e.payload ->> 'kind', '') <> 'ambiguous_merge_state'
+          AND COALESCE(e.payload ->> 'message', '') NOT LIKE '%ambiguous%'
+          AND COALESCE(e.payload ->> 'message', '') NOT LIKE '%double-merge%'
+          AND (NOT COALESCE((e.payload ->> 'kind' IN ('missing_required_credential', 'missing_github_credential')
+            OR e.payload ->> 'cause' IN ('missing_required_credential', 'missing_github_credential')
+            OR e.payload ->> 'reason' IN ('missing_required_credential', 'missing_github_credential')
+            OR e.payload ->> 'message' LIKE '%missing GitHub credential ref:%'
+            OR e.payload ->> 'message' LIKE '%missing % credential ref:%'
+            OR e.payload ->> 'message' LIKE '%No GitHub credential configured%'), false)
+            OR EXISTS (
+              SELECT 1 FROM events repair
+              CROSS JOIN LATERAL (SELECT COALESCE(NULLIF(e.payload ->> 'credentialRef', ''), NULLIF(e.payload ->> 'missingRef', ''), NULLIF(e.payload ->> 'requiredCredentialRef', ''), substring(e.payload ->> 'message' from 'missing [^:]* credential ref: ([^[:space:]]+)')) AS missing_ref) missing
+              WHERE repair.project_id = mq.project_id AND repair.org_id = mq.org_id
+                AND (repair.ts > e.ts OR (repair.ts = e.ts AND repair.id > e.id))
+                AND ((repair.event_type = 'integration.provisioned' AND repair.payload ->> 'providerKind' = 'github')
+                  OR repair.event_type IN ('org.github.connected', 'credential.github.configured')
+                  OR repair.payload ->> 'provider' = 'github'
+                  OR repair.payload ->> 'mode' = 'app'
+                  OR repair.payload ->> 'credentialKind' IN ('github_app', 'github_token')
+                  OR (missing.missing_ref ~ '^credential/(github|github_token|github_app)/' AND (repair.payload ->> 'credentialRef' = missing.missing_ref OR repair.payload ->> 'ref' = missing.missing_ref
+                    OR EXISTS (SELECT 1 FROM jsonb_array_elements_text(CASE WHEN jsonb_typeof(repair.payload -> 'secretRefNames') = 'array' THEN repair.payload -> 'secretRefNames' ELSE '[]'::jsonb END) AS secret_ref(ref) WHERE secret_ref.ref = missing.missing_ref))))
+                AND (missing.missing_ref IS NULL OR repair.payload ->> 'mode' = 'app' OR repair.payload ->> 'credentialKind' = 'github_app'
+                  OR repair.payload ->> 'credentialRef' = missing.missing_ref OR repair.payload ->> 'ref' = missing.missing_ref
+                  OR EXISTS (SELECT 1 FROM jsonb_array_elements_text(CASE WHEN jsonb_typeof(repair.payload -> 'secretRefNames') = 'array' THEN repair.payload -> 'secretRefNames' ELSE '[]'::jsonb END) AS secret_ref(ref) WHERE secret_ref.ref = missing.missing_ref)))))
+      )
+      AND ((e.run_id IS NOT NULL AND e.run_id = mq.run_id)
+        OR (NULLIF(e.payload ->> 'runId', '') IS NOT NULL AND e.payload ->> 'runId' = mq.run_id)
+        OR (NULLIF(e.payload ->> 'prUrl', '') IS NOT NULL AND e.payload ->> 'prUrl' = mq.pr_url)
+        OR (NULLIF(e.payload ->> 'prNumber', '') IS NOT NULL AND e.payload ->> 'prNumber' = mq.pr_number)
+        OR EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(e.payload -> 'members') = 'array' THEN e.payload -> 'members' ELSE '[]'::jsonb END) AS member WHERE member ->> 'prNumber' = mq.pr_number OR member ->> 'specId' = mq.spec_id))
+    ORDER BY e.ts DESC, e.id DESC LIMIT 1
+  ) anchor ON TRUE
+  WHERE mq.project_id = $1 AND mq.status = 'dequeued' AND mq.dequeue_reason = 'blocked'
+    AND mq.pr_url IS NOT NULL AND mq.pr_url <> '' AND mq.pr_number IS NOT NULL
+    AND NOT EXISTS (SELECT 1 FROM merge_queue active WHERE active.run_id = mq.run_id AND active.status IN ('queued', 'merging'))
+    AND NOT EXISTS (
+      SELECT 1 FROM events e
+      WHERE e.project_id = mq.project_id AND e.org_id = mq.org_id
+        AND (e.ts > anchor.ts OR (e.ts = anchor.ts AND e.id > anchor.id))
+        AND (e.event_type IN ('merge.completed', 'merge.queue.infra_blocked', 'merge.batch.culprit', 'dag.spec.needs_attention', 'dag.spec.percolation_replan', 'merge.conflict.replan_routed', 'recovery.replan_queued')
+          OR (e.event_type = 'merge.batch.infra_blocked' AND e.payload ->> 'terminal' = 'true'
+            AND (e.payload ->> 'kind' = 'ambiguous_merge_state' OR e.payload ->> 'message' LIKE '%ambiguous%' OR e.payload ->> 'message' LIKE '%double-merge%'
+              OR ((e.payload ->> 'kind' IN ('missing_required_credential', 'missing_github_credential')
+                OR e.payload ->> 'cause' IN ('missing_required_credential', 'missing_github_credential')
+                OR e.payload ->> 'reason' IN ('missing_required_credential', 'missing_github_credential')
+                OR e.payload ->> 'message' LIKE '%missing GitHub credential ref:%'
+                OR e.payload ->> 'message' LIKE '%missing % credential ref:%'
+                OR e.payload ->> 'message' LIKE '%No GitHub credential configured%')
+                AND NOT EXISTS (
+                  SELECT 1 FROM events repair
+                  CROSS JOIN LATERAL (SELECT COALESCE(NULLIF(e.payload ->> 'credentialRef', ''), NULLIF(e.payload ->> 'missingRef', ''), NULLIF(e.payload ->> 'requiredCredentialRef', ''), substring(e.payload ->> 'message' from 'missing [^:]* credential ref: ([^[:space:]]+)')) AS missing_ref) missing
+                  WHERE repair.project_id = mq.project_id AND repair.org_id = mq.org_id
+                    AND (repair.ts > e.ts OR (repair.ts = e.ts AND repair.id > e.id))
+                    AND ((repair.event_type = 'integration.provisioned' AND repair.payload ->> 'providerKind' = 'github')
+                      OR repair.event_type IN ('org.github.connected', 'credential.github.configured')
+                      OR repair.payload ->> 'provider' = 'github'
+                      OR repair.payload ->> 'mode' = 'app'
+                      OR repair.payload ->> 'credentialKind' IN ('github_app', 'github_token')
+                      OR (missing.missing_ref ~ '^credential/(github|github_token|github_app)/' AND (repair.payload ->> 'credentialRef' = missing.missing_ref OR repair.payload ->> 'ref' = missing.missing_ref
+                        OR EXISTS (SELECT 1 FROM jsonb_array_elements_text(CASE WHEN jsonb_typeof(repair.payload -> 'secretRefNames') = 'array' THEN repair.payload -> 'secretRefNames' ELSE '[]'::jsonb END) AS secret_ref(ref) WHERE secret_ref.ref = missing.missing_ref))))
+                    AND (missing.missing_ref IS NULL OR repair.payload ->> 'mode' = 'app' OR repair.payload ->> 'credentialKind' = 'github_app'
+                      OR repair.payload ->> 'credentialRef' = missing.missing_ref OR repair.payload ->> 'ref' = missing.missing_ref
+                      OR EXISTS (SELECT 1 FROM jsonb_array_elements_text(CASE WHEN jsonb_typeof(repair.payload -> 'secretRefNames') = 'array' THEN repair.payload -> 'secretRefNames' ELSE '[]'::jsonb END) AS secret_ref(ref) WHERE secret_ref.ref = missing.missing_ref)))))))
+        AND ((e.run_id IS NOT NULL AND e.run_id = mq.run_id)
+          OR (NULLIF(e.payload ->> 'runId', '') IS NOT NULL AND e.payload ->> 'runId' = mq.run_id)
+          OR (NULLIF(e.payload ->> 'prUrl', '') IS NOT NULL AND e.payload ->> 'prUrl' = mq.pr_url)
+          OR (NULLIF(e.payload ->> 'prNumber', '') IS NOT NULL AND e.payload ->> 'prNumber' = mq.pr_number)
+          OR EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(e.payload -> 'members') = 'array' THEN e.payload -> 'members' ELSE '[]'::jsonb END) AS member WHERE member ->> 'prNumber' = mq.pr_number OR member ->> 'specId' = mq.spec_id)
+          OR (e.event_type IN ('dag.spec.needs_attention', 'dag.spec.percolation_replan', 'merge.conflict.replan_routed', 'recovery.replan_queued') AND e.spec_id = mq.spec_id))
+    )
+  FOR UPDATE OF mq
+), recoverable AS (
+  SELECT c.queue_id, c.run_id, c.dequeue_reason, c.pr_url, c.pr_number FROM candidates c
+  WHERE NOT EXISTS (SELECT 1 FROM merge_queue active WHERE active.run_id = c.run_id AND active.status IN ('queued', 'merging'))
+)
+UPDATE merge_queue mq SET status = 'queued', dequeue_reason = NULL, claimed_at = NULL, settled_at = NULL
+FROM recoverable
+WHERE mq.queue_id = recoverable.queue_id AND mq.status = 'dequeued'
+  AND mq.dequeue_reason = recoverable.dequeue_reason AND mq.pr_url = recoverable.pr_url AND mq.pr_number = recoverable.pr_number
+  AND NOT EXISTS (SELECT 1 FROM merge_queue active WHERE active.run_id = recoverable.run_id AND active.status IN ('queued', 'merging'))`;
+
 /**
  * The pg-backed native-queue model. Resolves the project's org, then reads/writes
  * the `merge_queue` rows UNDER THAT ORG SCOPE (RLS). A read off the wrong scope
@@ -176,215 +267,7 @@ export class PgMergeQueueModel implements MergeQueueModel {
     if (orgId === null) return 0;
     return runWithOrgScope(this.pool, orgId, async (client) => {
       await client.query("LOCK TABLE merge_queue IN SHARE ROW EXCLUSIVE MODE");
-      const result = await client.query(
-        `WITH candidates AS (
-           SELECT mq.queue_id, mq.run_id, mq.dequeue_reason, mq.pr_url, mq.pr_number, anchor.ts AS anchor_ts, anchor.id AS anchor_id
-             FROM merge_queue mq
-             JOIN LATERAL (
-               SELECT e.ts, e.id
-                 FROM events e
-                WHERE e.project_id = mq.project_id
-                  AND e.org_id = mq.org_id
-                  AND (
-                    (
-                      e.event_type = 'merge.dequeued'
-                      AND e.payload ->> 'integration' = 'native_queue'
-                      AND e.payload ->> 'reason' = 'blocked'
-                    )
-                    OR (
-                      e.event_type = 'merge.batch.infra_blocked'
-                      AND e.payload ->> 'terminal' = 'true'
-                      AND COALESCE(e.payload ->> 'kind', '') <> 'ambiguous_merge_state'
-                      AND COALESCE(e.payload ->> 'message', '') NOT LIKE '%ambiguous%'
-                      AND COALESCE(e.payload ->> 'message', '') NOT LIKE '%double-merge%'
-                      AND NOT COALESCE((
-                        e.payload ->> 'kind' IN ('missing_required_credential', 'missing_github_credential')
-                        OR e.payload ->> 'cause' IN ('missing_required_credential', 'missing_github_credential')
-                        OR e.payload ->> 'reason' IN ('missing_required_credential', 'missing_github_credential')
-                        OR e.payload ->> 'message' LIKE '%missing GitHub credential ref:%'
-                        OR e.payload ->> 'message' LIKE '%missing % credential ref:%'
-                        OR e.payload ->> 'message' LIKE '%No GitHub credential configured%'
-                      ), false)
-                    )
-                  )
-                  AND (
-                    (e.run_id IS NOT NULL AND e.run_id = mq.run_id)
-                    OR (NULLIF(e.payload ->> 'runId', '') IS NOT NULL AND e.payload ->> 'runId' = mq.run_id)
-                    OR (NULLIF(e.payload ->> 'prUrl', '') IS NOT NULL AND e.payload ->> 'prUrl' = mq.pr_url)
-                    OR (NULLIF(e.payload ->> 'prNumber', '') IS NOT NULL AND e.payload ->> 'prNumber' = mq.pr_number)
-                    OR EXISTS (
-                      SELECT 1
-                        FROM jsonb_array_elements(
-                          CASE WHEN jsonb_typeof(e.payload -> 'members') = 'array'
-                            THEN e.payload -> 'members'
-                            ELSE '[]'::jsonb
-                          END
-                        ) AS member
-                       WHERE member ->> 'prNumber' = mq.pr_number
-                          OR member ->> 'specId' = mq.spec_id
-                    )
-                  )
-                ORDER BY e.ts DESC, e.id DESC
-                LIMIT 1
-             ) anchor ON TRUE
-            WHERE mq.project_id = $1
-              AND mq.status = 'dequeued'
-              AND mq.dequeue_reason = 'blocked'
-              AND mq.pr_url IS NOT NULL
-              AND mq.pr_url <> ''
-              AND mq.pr_number IS NOT NULL
-              AND NOT EXISTS (
-                SELECT 1
-                  FROM merge_queue active
-                 WHERE active.run_id = mq.run_id
-                   AND active.status IN ('queued', 'merging')
-              )
-              AND NOT EXISTS (
-                SELECT 1
-                  FROM events e
-                 WHERE e.project_id = mq.project_id
-                   AND e.org_id = mq.org_id
-                   AND (e.ts > anchor.ts OR (e.ts = anchor.ts AND e.id > anchor.id))
-                   AND (
-                     e.event_type IN (
-                       'merge.completed',
-                       'merge.queue.infra_blocked',
-                       'merge.batch.culprit',
-                       'dag.spec.needs_attention',
-                       'dag.spec.percolation_replan',
-                       'merge.conflict.replan_routed',
-                       'recovery.replan_queued'
-                     )
-                     OR (
-                       e.event_type = 'merge.batch.infra_blocked'
-                       AND e.payload ->> 'terminal' = 'true'
-                       AND (
-                         e.payload ->> 'kind' = 'ambiguous_merge_state'
-                         OR e.payload ->> 'message' LIKE '%ambiguous%'
-                         OR e.payload ->> 'message' LIKE '%double-merge%'
-                         OR (
-                           (
-                             e.payload ->> 'kind' IN ('missing_required_credential', 'missing_github_credential')
-                             OR e.payload ->> 'cause' IN ('missing_required_credential', 'missing_github_credential')
-                             OR e.payload ->> 'reason' IN ('missing_required_credential', 'missing_github_credential')
-                             OR e.payload ->> 'message' LIKE '%missing GitHub credential ref:%'
-                             OR e.payload ->> 'message' LIKE '%missing % credential ref:%'
-                             OR e.payload ->> 'message' LIKE '%No GitHub credential configured%'
-                           )
-                           AND NOT EXISTS (
-                             SELECT 1
-                               FROM events repair
-                              WHERE repair.project_id = mq.project_id
-                                AND repair.org_id = mq.org_id
-                                AND (repair.ts > e.ts OR (repair.ts = e.ts AND repair.id > e.id))
-                                AND (
-                                  (
-                                    repair.event_type = 'integration.provisioned'
-                                    AND repair.payload ->> 'providerKind' = 'github'
-                                  )
-                                  OR repair.event_type IN ('org.github.connected', 'credential.github.configured', 'credential.configured')
-                                  OR repair.payload ->> 'provider' = 'github'
-                                )
-                                AND (
-                                  repair.payload ->> 'mode' = 'app'
-                                  OR repair.payload ->> 'credentialKind' = 'github_app'
-                                  OR
-                                  COALESCE(
-                                    NULLIF(e.payload ->> 'credentialRef', ''),
-                                    NULLIF(e.payload ->> 'missingRef', ''),
-                                    NULLIF(e.payload ->> 'requiredCredentialRef', ''),
-                                    substring(e.payload ->> 'message' from 'missing [^:]* credential ref: ([^[:space:]]+)')
-                                  ) IS NULL
-                                  OR repair.payload ->> 'credentialRef' = COALESCE(
-                                    NULLIF(e.payload ->> 'credentialRef', ''),
-                                    NULLIF(e.payload ->> 'missingRef', ''),
-                                    NULLIF(e.payload ->> 'requiredCredentialRef', ''),
-                                    substring(e.payload ->> 'message' from 'missing [^:]* credential ref: ([^[:space:]]+)')
-                                  )
-                                  OR repair.payload ->> 'ref' = COALESCE(
-                                    NULLIF(e.payload ->> 'credentialRef', ''),
-                                    NULLIF(e.payload ->> 'missingRef', ''),
-                                    NULLIF(e.payload ->> 'requiredCredentialRef', ''),
-                                    substring(e.payload ->> 'message' from 'missing [^:]* credential ref: ([^[:space:]]+)')
-                                  )
-                                  OR EXISTS (
-                                    SELECT 1
-                                      FROM jsonb_array_elements_text(
-                                        CASE WHEN jsonb_typeof(repair.payload -> 'secretRefNames') = 'array'
-                                          THEN repair.payload -> 'secretRefNames'
-                                          ELSE '[]'::jsonb
-                                        END
-                                      ) AS secret_ref(ref)
-                                     WHERE secret_ref.ref = COALESCE(
-                                       NULLIF(e.payload ->> 'credentialRef', ''),
-                                       NULLIF(e.payload ->> 'missingRef', ''),
-                                       NULLIF(e.payload ->> 'requiredCredentialRef', ''),
-                                       substring(e.payload ->> 'message' from 'missing [^:]* credential ref: ([^[:space:]]+)')
-                                     )
-                                  )
-                                )
-                           )
-                         )
-                       )
-                     )
-                   )
-                   AND (
-                     (e.run_id IS NOT NULL AND e.run_id = mq.run_id)
-                     OR (NULLIF(e.payload ->> 'runId', '') IS NOT NULL AND e.payload ->> 'runId' = mq.run_id)
-                     OR (NULLIF(e.payload ->> 'prUrl', '') IS NOT NULL AND e.payload ->> 'prUrl' = mq.pr_url)
-                     OR (NULLIF(e.payload ->> 'prNumber', '') IS NOT NULL AND e.payload ->> 'prNumber' = mq.pr_number)
-                     OR EXISTS (
-                       SELECT 1
-                         FROM jsonb_array_elements(
-                           CASE WHEN jsonb_typeof(e.payload -> 'members') = 'array'
-                             THEN e.payload -> 'members'
-                             ELSE '[]'::jsonb
-                           END
-                         ) AS member
-                        WHERE member ->> 'prNumber' = mq.pr_number
-                           OR member ->> 'specId' = mq.spec_id
-                     )
-                     OR (
-                       e.event_type IN (
-                         'dag.spec.needs_attention',
-                         'dag.spec.percolation_replan',
-                         'merge.conflict.replan_routed',
-                         'recovery.replan_queued'
-                       )
-                       AND e.spec_id = mq.spec_id
-                     )
-                   )
-              )
-            FOR UPDATE OF mq
-         ), recoverable AS (
-           SELECT c.queue_id, c.run_id, c.dequeue_reason, c.pr_url, c.pr_number
-             FROM candidates c
-            WHERE NOT EXISTS (
-              SELECT 1
-                FROM merge_queue active
-               WHERE active.run_id = c.run_id
-                 AND active.status IN ('queued', 'merging')
-            )
-         )
-         UPDATE merge_queue mq
-            SET status = 'queued',
-                dequeue_reason = NULL,
-                claimed_at = NULL,
-                settled_at = NULL
-           FROM recoverable
-          WHERE mq.queue_id = recoverable.queue_id
-            AND mq.status = 'dequeued'
-            AND mq.dequeue_reason = recoverable.dequeue_reason
-            AND mq.pr_url = recoverable.pr_url
-            AND mq.pr_number = recoverable.pr_number
-            AND NOT EXISTS (
-              SELECT 1
-                FROM merge_queue active
-               WHERE active.run_id = recoverable.run_id
-                 AND active.status IN ('queued', 'merging')
-            )`,
-        [projectId],
-      );
+      const result = await client.query(RECOVER_DEQUEUED_CANDIDATES_SQL, [projectId]);
       return result.rowCount ?? 0;
     });
   }
