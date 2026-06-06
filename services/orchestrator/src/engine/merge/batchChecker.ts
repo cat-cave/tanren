@@ -10,7 +10,7 @@
 //
 // Resolution mirrors PgSpeculativeIntegrator: repo + default_branch from the project,
 // the App installation from the org, the static github credential ref from
-// project/org config, each entry's branch = its latest run branch (the PR head
+// project/org config, each entry's branch = its queued run branch (the PR head
 // branch). The batch ref is named for the LAST (deepest) member's spec so it is a
 // stable, safe ref per batch tail.
 //
@@ -58,6 +58,7 @@ interface BatchProjectRow {
 }
 
 interface BatchBranchRow {
+  run_id: string;
   spec_id: string;
   branch: string;
 }
@@ -105,18 +106,18 @@ export class PgBatchChecker implements BatchChecker {
       const projectRow = await this.loadProject(client, input.projectId);
       const branchRows = await this.loadEntryBranches(
         client,
-        input.entries.map((e) => e.specId),
+        input.entries.map((e) => e.runId),
       );
       return { project: projectRow, branches: branchRows };
     });
 
     // Order the entries' branches in the caller's DAG order — a missing branch is a
     // hard error (we never integrate a phantom). This is the prospective merge order.
-    const branchBySpec = new Map(branches.map((b) => [b.spec_id, b.branch] as const));
+    const branchByRun = new Map(branches.map((b) => [b.run_id, b.branch] as const));
     const ordered: IntegrationAncestor[] = input.entries.map((entry) => {
-      const branch = branchBySpec.get(entry.specId);
+      const branch = branchByRun.get(entry.runId);
       if (branch === undefined) {
-        throw new Error(`batch entry ${entry.specId} has no run branch to integrate`);
+        throw new Error(`batch entry ${entry.specId} run ${entry.runId} has no run branch to integrate`);
       }
       return { specId: entry.specId, branch };
     });
@@ -130,6 +131,18 @@ export class PgBatchChecker implements BatchChecker {
       ...(this.deps.githubAppMinter !== undefined && { minter: this.deps.githubAppMinter }),
     });
     const repo = this.deps.vcsProvider.parseRepository(project.repo_url);
+
+    for (const entry of input.entries) {
+      const mergeability = await this.deps.vcsProvider.readMergeability({ repo, number: entry.prNumber }, token);
+      if (mergeability.state === "dirty") {
+        return {
+          result: "conflict",
+          message: `batch entry ${entry.specId} conflicts with ${project.default_branch}`,
+          conflictsWithBase: true,
+          conflictBetween: { specId: entry.specId, otherSpecId: project.default_branch },
+        };
+      }
+    }
 
     // The ephemeral `tanren/batch/<tail>` ref is EPHEMERAL per check: build it,
     // gate it, then ALWAYS tear it down (pass / fail / conflict / infra-error) so a
@@ -241,14 +254,13 @@ export class PgBatchChecker implements BatchChecker {
     return row;
   }
 
-  private async loadEntryBranches(client: pg.PoolClient, specIds: ReadonlyArray<string>): Promise<BatchBranchRow[]> {
-    if (specIds.length === 0) return [];
+  private async loadEntryBranches(client: pg.PoolClient, runIds: ReadonlyArray<string>): Promise<BatchBranchRow[]> {
+    if (runIds.length === 0) return [];
     const result = await client.query<BatchBranchRow>(
-      `SELECT DISTINCT ON (r.spec_id) r.spec_id, r.branch
+      `SELECT r.run_id, r.spec_id, r.branch
          FROM runs r
-        WHERE r.spec_id = ANY($1::text[])
-        ORDER BY r.spec_id, r.started_at DESC`,
-      [[...specIds]],
+        WHERE r.run_id = ANY($1::text[])`,
+      [[...runIds]],
     );
     return result.rows;
   }

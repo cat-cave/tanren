@@ -22,7 +22,7 @@
  */
 export const MAX_BATCH_INFRA_HOLDS = 5;
 
-import type { CoordinateResult, MergeQueueEntry } from "../contracts/mergeCoordinator.js";
+import type { CoordinateResult, MergeQueueEntry, MergeQueueModel } from "../contracts/mergeCoordinator.js";
 import type { BatchMergeEventEmitter } from "./batchCoordinator.js";
 
 /** The in-pass retry budget already burned before a hold (for the emitted attempt count). */
@@ -40,21 +40,25 @@ const INFRA_HOLD_RETRY_AFTER_MS = 3000;
  *     `infra_error` hold WITH `retryAfterMs` (the subscriber re-drives once more);
  *   - at the cap → emit a TERMINAL merge.batch.infra_blocked (`terminal: true`) + return
  *     an `infra_blocked` halt with NO `retryAfterMs`, so the subscriber arms NO further
- *     timer — a loud operator-visible STOP. NO PR is ever dequeued/blamed (the entries
- *     stay queued for the operator). Mirrors the per-PR coordinator's ceiling.
+ *     timer — a loud operator-visible STOP. The terminal event is appended first, then
+ *     affected entries leave the active queue as `blocked`, mirroring the per-PR
+ *     coordinator's event-before-dequeue split-brain guard.
  */
 export async function holdOnInfra(args: {
   ceiling: BatchInfraHoldCeiling;
+  queue: MergeQueueModel;
   events: BatchMergeEventEmitter;
   projectId: string;
   batch: ReadonlyArray<MergeQueueEntry>;
   message: string;
   queueDepth: number;
 }): Promise<CoordinateResult> {
-  const { ceiling, events, projectId, batch, message, queueDepth } = args;
+  const { ceiling, queue, events, projectId, batch, message, queueDepth } = args;
   const recorded = ceiling.record(projectId);
   if (recorded.reached) {
-    await events.emitInfraBlocked({
+    await markBatchInfraBlockedAfterEvent({
+      queue,
+      events,
       projectId,
       batch,
       message: `batch check kept hitting an infra error across ${recorded.holds} consecutive holds; halting (operator attention required): ${message}`,
@@ -73,24 +77,41 @@ export async function holdOnInfra(args: {
 }
 
 export async function terminalInfraBlock(args: {
+  queue: MergeQueueModel;
   events: BatchMergeEventEmitter;
   projectId: string;
   batch: ReadonlyArray<MergeQueueEntry>;
   message: string;
   queueDepth: number;
 }): Promise<CoordinateResult> {
-  await args.events.emitInfraBlocked({
-    projectId: args.projectId,
-    batch: args.batch,
-    message: args.message,
-    attempts: 1,
-    terminal: true,
-    consecutiveHolds: 1,
-  });
+  await markBatchInfraBlockedAfterEvent({ ...args, attempts: 1, terminal: true, consecutiveHolds: 1 });
   console.error(
     `[batch-coordinator] project ${args.projectId}: batch drive HALTED; operator attention required: ${args.message}`,
   );
   return { projectId: args.projectId, holdReason: "infra_blocked", queueDepth: args.queueDepth };
+}
+
+async function markBatchInfraBlockedAfterEvent(input: {
+  queue: MergeQueueModel;
+  events: BatchMergeEventEmitter;
+  projectId: string;
+  batch: ReadonlyArray<MergeQueueEntry>;
+  message: string;
+  attempts: number;
+  terminal: true;
+  consecutiveHolds: number;
+}): Promise<void> {
+  await input.events.emitInfraBlocked({
+    projectId: input.projectId,
+    batch: input.batch,
+    message: input.message,
+    attempts: input.attempts,
+    terminal: input.terminal,
+    consecutiveHolds: input.consecutiveHolds,
+  });
+  for (const entry of input.batch) {
+    await input.queue.markDequeued(entry.queueId, "blocked");
+  }
 }
 
 /** The bounded per-project consecutive-infra-hold counter (a runaway guard). */

@@ -2,7 +2,11 @@ import { generateKeyPairSync } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
 import { storeGithubAppCredential } from "../src/engine/credentials/githubApp.js";
-import { resolveGithubToken } from "../src/engine/credentials/githubTokenResolver.js";
+import {
+  MissingGithubCredentialRefError,
+  NoGithubCredentialConfiguredError,
+  resolveGithubToken,
+} from "../src/engine/credentials/githubTokenResolver.js";
 import { FetchGitHubHttpClient } from "../src/engine/providers/github.js";
 import { GithubAppTokenMinter } from "../src/engine/providers/githubAppTokenMinter.js";
 
@@ -29,6 +33,11 @@ describe("resolveGithubToken", () => {
     await expect(resolveGithubToken({ secrets, staticRef: "credential/github/org/o1/absent" })).rejects.toThrow(
       "missing GitHub credential ref: credential/github/org/o1/absent",
     );
+    await expect(resolveGithubToken({ secrets, staticRef: "credential/github/org/o1/absent" })).rejects.toMatchObject({
+      name: "MissingGithubCredentialRefError",
+      retriable: false,
+    });
+    expect(new MissingGithubCredentialRefError("credential/github/org/o1/absent").retriable).toBe(false);
   });
 
   it("falls back to TANREN_GITHUB_APP_TOKEN_REF when no staticRef is supplied", async () => {
@@ -56,6 +65,11 @@ describe("resolveGithubToken", () => {
       // No hardcoded default ref: an unconfigured run is a hard config error,
       // NOT a silent fall-through to `credential/github/default`.
       await expect(resolveGithubToken({ secrets })).rejects.toThrow(/No GitHub credential configured for this run/u);
+      await expect(resolveGithubToken({ secrets })).rejects.toMatchObject({
+        name: "NoGithubCredentialConfiguredError",
+        retriable: false,
+      });
+      expect(new NoGithubCredentialConfiguredError().retriable).toBe(false);
     } finally {
       if (prior !== undefined) {
         process.env["TANREN_GITHUB_APP_TOKEN_REF"] = prior;
