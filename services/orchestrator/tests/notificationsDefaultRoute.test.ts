@@ -65,6 +65,7 @@ describe("NotificationDispatcher default route", () => {
     expect(ntfy.calls[0]?.target.destination).toBe("tanren-escalations");
     expect(ntfy.calls[0]?.payload.severity).toBe("fail");
     expect(client.dispatches[0]?.status).toBe("sent");
+    expect(client.dispatches[0]?.tenant_id).toBe("org_1");
     const logPayload = client.dispatches[0]?.payload as { layering?: string } | undefined;
     expect(logPayload?.layering).toBe("default_route");
   });
