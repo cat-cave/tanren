@@ -8,6 +8,7 @@ import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { migrate, resetSystemPool, runWithOrgScope, setSystemPool } from "@tanren/db";
 import { PgEventStore } from "../src/engine/eventStore.js";
+import { selectNextMerge } from "../src/engine/contracts/mergeCoordinator.js";
 import { PgMergeQueueModel } from "../src/engine/merge/coordinatorPg.js";
 import { MERGE_CLAIM_LEASE_MS } from "../src/engine/merge/mergeClaimLease.js";
 
@@ -214,5 +215,85 @@ describeDb("merge queue dequeued recovery under data-plane RLS (real PG)", () =>
       [QUEUE],
     );
     expect(row.rows[0]).toMatchObject({ status: "queued", dequeue_reason: null });
+  });
+
+  it("does not satisfy a queued dependent until a held ancestor has a later merge.completed", async () => {
+    const project = "project_held_resume";
+    const parentSpec = "spec_held_parent";
+    const parentRun = "run_held_parent";
+    const childSpec = "spec_held_child";
+    const childRun = "run_held_child";
+    const childQueue = "mq_held_child";
+
+    await ownerPool.query(
+      `INSERT INTO projects (project_id, name, repo_url, org_id)
+       VALUES ($1, 'held resume', 'https://github.com/acme/native-queue-fixture.git', $2)`,
+      [project, ORG],
+    );
+    await ownerPool.query(
+      `INSERT INTO specs (spec_id, project_id, org_id, title, description, status)
+       VALUES ($1, $2, $3, 'held parent', 'ancestor has unresolved hold', 'merged')`,
+      [parentSpec, project, ORG],
+    );
+    await ownerPool.query(
+      `INSERT INTO specs (spec_id, project_id, org_id, title, description, status, depends_on)
+       VALUES ($1, $2, $3, 'held child', 'dependent waits for parent', 'in_flight', $4)`,
+      [childSpec, project, ORG, [parentSpec]],
+    );
+    await ownerPool.query(
+      `INSERT INTO runs (run_id, spec_id, project_id, org_id, trigger, branch, status)
+       VALUES ($1, $2, $3, $4, 'ci', 'main', 'completed'),
+              ($5, $6, $3, $4, 'ci', 'main', 'completed')`,
+      [parentRun, parentSpec, project, ORG, childRun, childSpec],
+    );
+    await ownerPool.query(
+      `INSERT INTO merge_queue
+         (queue_id, run_id, spec_id, project_id, org_id, status, pr_url, pr_number)
+       VALUES ($1, $2, $3, $4, $5, 'queued', $6, '16')`,
+      [childQueue, childRun, childSpec, project, ORG, `${PR_URL}-held-child`],
+    );
+    await runWithOrgScope(ownerPool, ORG, async (client) => {
+      await new PgEventStore(client).append({
+        runId: parentRun,
+        specId: parentSpec,
+        projectId: project,
+        eventType: "merge.speculative_held",
+        payload: {
+          prUrl: `${PR_URL}-held-parent`,
+          prNumber: 17,
+          integration: "native_queue",
+          speculativeBase: "tanren/integ/spec_held_parent",
+          unmergedAncestors: ["spec_grandparent"],
+        },
+      });
+    });
+
+    const queue = new PgMergeQueueModel(dataPlanePool);
+    const heldSnapshot = await queue.loadSnapshot(project);
+    expect(heldSnapshot.mergedSpecIds.has(parentSpec)).toBe(false);
+    const heldSelection = selectNextMerge(heldSnapshot);
+    expect(heldSelection).toMatchObject({
+      holdReason: "all_blocked",
+      blockedByDependency: [expect.objectContaining({ specId: childSpec })],
+    });
+
+    await runWithOrgScope(ownerPool, ORG, async (client) => {
+      await new PgEventStore(client).append({
+        runId: parentRun,
+        specId: parentSpec,
+        projectId: project,
+        eventType: "merge.completed",
+        payload: {
+          prUrl: `${PR_URL}-held-parent`,
+          prNumber: 17,
+          integration: "native_queue",
+          mergeSha: "parent-merge-sha",
+        },
+      });
+    });
+
+    const resumedSnapshot = await queue.loadSnapshot(project);
+    expect(resumedSnapshot.mergedSpecIds.has(parentSpec)).toBe(true);
+    expect(selectNextMerge(resumedSnapshot).next).toMatchObject({ queueId: childQueue, specId: childSpec });
   });
 });
