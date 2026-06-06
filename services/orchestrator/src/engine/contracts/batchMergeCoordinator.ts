@@ -58,12 +58,12 @@ export interface BatchFormation {
  *   - SERIALIZATION — if a merge is already in flight (`mergingInFlight`), return an
  *     EMPTY batch (the native queue's one-at-a-time lock dominates; the in-flight merge's
  *     completion re-triggers the pass).
- *   - ELIGIBILITY — reuse the native queue's `isEligible` rule against the snapshot's
- *     `mergedSpecIds` + the queued-spec set, AND the batch's own already-included
- *     specs (so an entry whose ancestor is NOT merged but IS earlier in this batch is
- *     still eligible — the batch's ancestor will merge first). An entry whose ancestor
- *     is neither merged, nor earlier-in-batch, nor satisfiable is HELD (never include a
- *     dependent whose ancestor isn't in the batch-or-already-merged).
+ *   - ELIGIBILITY — reuse the native queue's strict dependency rule against the
+ *     snapshot's `mergedSpecIds` AND the batch's own already-included specs (so an
+ *     entry whose ancestor is NOT merged but IS earlier in this batch is still
+ *     eligible — the batch's ancestor will merge first). An entry whose ancestor is
+ *     neither merged nor earlier-in-batch is HELD (never include a dependent whose
+ *     ancestor isn't in the batch-or-already-merged).
  *   - ORDER — sort the eligible set by the native queue's `compareEntries` (priority then a
  *     stable tiebreak), then greedily take entries in that order while their ancestors
  *     are merged-or-already-taken. This yields a prefix whose merge order == the order
@@ -83,8 +83,6 @@ export function formBatch(snapshot: MergeQueueSnapshot, maxBatchSize: number): B
     return { batch: [], capped: false, eligibleCount: 0 };
   }
 
-  const queuedSpecIds = new Set(snapshot.entries.map((e) => e.specId));
-
   // Greedy fixed point over the priority-ordered queue: an entry joins the batch once
   // every ancestor it depends on is merged OR already in the batch. We loop until no
   // more entries become eligible, so a chain A→B→C all enters one batch in order.
@@ -96,11 +94,9 @@ export function formBatch(snapshot: MergeQueueSnapshot, maxBatchSize: number): B
     added = false;
     for (const entry of ordered) {
       if (batchSpecIds.has(entry.specId)) continue;
-      // Eligible iff every dep is merged, NOT-queued (external/handled), OR already
-      // taken into THIS batch (its ancestor will merge first within the batch).
-      const ready = entry.dependsOn.every(
-        (depId) => snapshot.mergedSpecIds.has(depId) || batchSpecIds.has(depId) || !queuedSpecIds.has(depId),
-      );
+      // Eligible iff every dep is merged OR already taken into THIS batch (its
+      // ancestor will merge first within the batch).
+      const ready = entry.dependsOn.every((depId) => snapshot.mergedSpecIds.has(depId) || batchSpecIds.has(depId));
       if (!ready) continue;
       batch.push(entry);
       batchSpecIds.add(entry.specId);

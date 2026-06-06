@@ -66,6 +66,12 @@ describe("formBatch (pure)", () => {
     expect(formation.batch.map((x) => x.specId)).toEqual(["spec_dep"]);
   });
 
+  it("holds a dependent whose ancestor is neither merged nor in the batch", () => {
+    const formation = formBatch(snapshot([entry("spec_dep", ["spec_anc"])]), 5);
+    expect(formation.batch).toEqual([]);
+    expect(formation.eligibleCount).toBe(0);
+  });
+
   it("holds (empty batch) when a merge is already in flight (serialization dominates)", () => {
     const formation = formBatch(snapshot([entry("spec_a")], [], true), 5);
     expect(formation.batch).toEqual([]);

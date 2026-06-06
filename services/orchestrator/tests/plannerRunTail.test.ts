@@ -73,7 +73,7 @@ const baseInput = (over: Record<string, unknown>) => ({
 
 describe("runPlannerLoopWorkflow — review-rework re-entry", () => {
   it("re-plans against a changes-requested review, then completes on approval", async () => {
-    const { ctx, pool, events, secrets, allocator, ssh } = await setup();
+    const { ctx, pool, events, secrets, allocator, ssh } = await setup(directMergeConfig());
     const github = new ScriptedGitHubHttp([...ghRound(), ...ghRound()]);
     // One shared adapter set across both passes; the planner records every call
     // so we can assert the second pass carried the reviewer feedback as steering.
@@ -104,7 +104,7 @@ describe("runPlannerLoopWorkflow — review-rework re-entry", () => {
       }) as Parameters<typeof runPlannerLoopScoped>[0],
     );
 
-    // Approved on the second pass → handed-off (not_configured default) → completed/ok.
+    // Approved on the second pass, then explicitly direct-merged → completed/ok.
     expect(result.outcome.kind).toBe("passed");
     expect(pool.runStatus).toEqual({ status: "completed", outcome: "ok" });
     // The re-entry put the spec back in_flight before the final merged.

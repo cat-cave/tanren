@@ -18,6 +18,7 @@ import type { FakeJobQueue } from "../../src/engine/contracts/jobQueue.js";
 import { FakeSecretStore } from "../../src/engine/contracts/secretStore.js";
 import type { RunnerCommand, CommandResult, CommandSubstrate } from "../../src/engine/contracts/commandSubstrate.js";
 import { storeGithubToken } from "../../src/engine/credentials/githubToken.js";
+import { provisionedGreenfieldProjectConfigProof } from "../../src/engine/workflow/projectConfigWriteGuards.js";
 import type { GitHubHttpClient, GitHubHttpRequest, GitHubHttpResponse } from "../../src/engine/providers/github.js";
 import type {
   AnswererAdapter,
@@ -37,6 +38,15 @@ import {
   passingCheck,
 } from "./plannerLoopHelpers.js";
 import { WorkerPool } from "./workerPool.js";
+
+function directMergeConfig(): Record<string, unknown> {
+  return {
+    version: 1,
+    mergeIntegration: "direct_merge",
+    governancePosture: "open",
+    credentials: { githubCredentialRef },
+  };
+}
 
 // Resolve after `ms` without leaking an executor return (no-promise-executor-return).
 export const delay = (ms: number): Promise<void> =>
@@ -165,12 +175,20 @@ export async function setupSeededRun() {
   const pool = new WorkerPool();
   const secrets = new FakeSecretStore();
   await storeGithubToken(secrets, { ref: githubCredentialRef, token: "ghp_secretToken" });
-  const project = await createProject(pool.asPgPool(), {
-    name: "worker-test",
-    repoUrl: "https://github.com/cat-cave/tanren-fixture-easy",
-    defaultBranch: "main",
-    config: { version: 1, credentials: { codexCredentialRef, githubCredentialRef } },
-  });
+  const project = await createProject(
+    pool.asPgPool(),
+    {
+      name: "worker-test",
+      repoUrl: "https://github.com/cat-cave/tanren-fixture-easy",
+      defaultBranch: "main",
+      config: {
+        ...directMergeConfig(),
+        credentials: { codexCredentialRef, githubCredentialRef },
+      },
+    },
+    undefined,
+    { configWriteProof: provisionedGreenfieldProjectConfigProof },
+  );
   const spec = await createSpec(pool.asPgPool(), {
     projectId: project.projectId,
     title: "Add a marker file",

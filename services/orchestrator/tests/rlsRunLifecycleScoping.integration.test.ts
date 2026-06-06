@@ -279,11 +279,13 @@ async function seedCredentialCompleteRun(owner: Pool): Promise<void> {
      VALUES ($1, 'oidc', $1, $1, $1, '{"version":1}'::jsonb)`,
     [ORG],
   );
-  // A version:1 project config carrying both credential refs, so
-  // resolveCredentialsForRun resolves from project config (no real secrets
-  // needed) and the merge stage hands off (mergeIntegration unset → not_configured).
+  // A version:1 project config carrying both credential refs and an explicit merge
+  // integration, so resolveCredentialsForRun resolves from project config (no real
+  // secrets needed) and this fixture proves the successful direct-merge lifecycle.
   const config = {
     version: 1,
+    mergeIntegration: "direct_merge",
+    governancePosture: "open",
     credentials: { codexCredentialRef: CODEX_REF, githubCredentialRef: GITHUB_REF },
   };
   await owner.query(

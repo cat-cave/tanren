@@ -143,11 +143,11 @@ export interface MergeSelection {
  *      (one merge at a time). The in-flight merge's completion re-triggers the
  *      coordinator, which then picks the next.
  *   2. DAG ORDER — an entry is ELIGIBLE only when EVERY id in its `dependsOn` has
- *      genuinely merged (in `mergedSpecIds`) OR is not itself a queued entry's spec
- *      (an external/already-handled dependency). An entry with an ancestor that is
- *      STILL QUEUED is held (it would merge a dependent before its ancestor) and
- *      surfaced in `blockedByDependency`. This is the invariant that makes the merge-hold's
- *      ordered merge real: A merges, THEN B, THEN C — never a dependent first.
+ *      genuinely merged (in `mergedSpecIds`). A dependency that is queued elsewhere,
+ *      not yet queued, or currently being worked is still unmerged, so this entry is
+ *      held and surfaced in `blockedByDependency`. This is the invariant that makes
+ *      the merge-hold's ordered merge real: A merges, THEN B, THEN C — never a
+ *      dependent first.
  *   3. PRIORITY + TIEBREAK — among eligible entries, pick the one that sorts first
  *      by priority (P0 → tbd), then `orderKey`, then `specId` (total determinism).
  *
@@ -164,14 +164,10 @@ export function selectNextMerge(snapshot: MergeQueueSnapshot): MergeSelection {
     return { holdReason: "empty", blockedByDependency: [] };
   }
 
-  // The set of specs that have a STILL-QUEUED entry — an ancestor in this set is
-  // not yet merged, so a dependent on it must wait (DAG order).
-  const queuedSpecIds = new Set(snapshot.entries.map((e) => e.specId));
-
   const eligible: MergeQueueEntry[] = [];
   const blockedByDependency: MergeQueueEntry[] = [];
   for (const entry of snapshot.entries) {
-    if (isEligible(entry, snapshot.mergedSpecIds, queuedSpecIds)) {
+    if (isEligible(entry, snapshot.mergedSpecIds)) {
       eligible.push(entry);
     } else {
       blockedByDependency.push(entry);
@@ -188,19 +184,15 @@ export function selectNextMerge(snapshot: MergeQueueSnapshot): MergeSelection {
 
 /**
  * An entry is eligible to merge iff every dependency has genuinely merged. A
- * dependency that is STILL QUEUED (has a queued entry) blocks it — a dependent
- * never merges before its ancestor. A dependency that is neither merged nor queued
- * is treated as satisfied: it is outside the queue's concern (already merged
- * earlier, never queued, or handled by another path) — the queue only serializes
- * the runs it actually holds, and the merge stage's own speculative-hold gate is
- * the backstop that no unmerged ancestor code reaches `main`.
+ * dependency that is queued, in-flight outside the queue, or otherwise not marked
+ * `merged` still blocks it — a dependent never merges before its ancestor.
  *
  * Exported so the batch former reuses the EXACT SAME eligibility rule (a
  * batch is a set of mutually-eligible entries — never a second, divergent notion of
  * "ready").
  */
-export function isEligible(entry: MergeQueueEntry, mergedSpecIds: Set<string>, queuedSpecIds: Set<string>): boolean {
-  return entry.dependsOn.every((depId) => mergedSpecIds.has(depId) || !queuedSpecIds.has(depId));
+export function isEligible(entry: MergeQueueEntry, mergedSpecIds: Set<string>): boolean {
+  return entry.dependsOn.every((depId) => mergedSpecIds.has(depId));
 }
 
 /**

@@ -105,16 +105,17 @@ describe("selectNextMerge (pure §2d ordering core)", () => {
     expect(sel.next?.specId).not.toBe("dep");
   });
 
-  it("treats a dependency that is neither queued nor merged as satisfied (outside the queue)", () => {
-    // `external` is not a queued entry and not in mergedSpecIds — the queue only
-    // serializes the runs it holds; the merge stage's speculative-hold is the
-    // backstop for unmerged ancestor code. So `b` is eligible.
+  it("blocks a dependent when its ancestor is neither queued nor merged", () => {
+    // `external` is not a queued entry and not in mergedSpecIds. That still means
+    // it has not genuinely landed, so the dependent cannot merge.
     const sel = selectNextMerge({
       projectId: "p",
       entries: [entry("b", ["external"], 0)],
       mergedSpecIds: new Set(),
       mergingInFlight: false,
     });
-    expect(sel.next?.specId).toBe("b");
+    expect(sel.next).toBeUndefined();
+    expect(sel.holdReason).toBe("all_blocked");
+    expect(sel.blockedByDependency.map((e) => e.specId)).toEqual(["b"]);
   });
 });

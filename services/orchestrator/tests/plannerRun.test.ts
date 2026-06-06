@@ -14,6 +14,7 @@ import {
   accounting,
   approvingReview,
   buildPlan,
+  directMergeConfig,
   exhaustedWindow,
   failingCheck,
   fakeProbe,
@@ -34,7 +35,7 @@ import {
 
 describe("runPlannerLoopWorkflow", () => {
   it("drives the loop, publishes a PR, passes the native merge gate, and records a passing run", async () => {
-    const { ctx, pool, events, secrets, allocator, ssh } = await setup();
+    const { ctx, pool, events, secrets, allocator, ssh } = await setup(directMergeConfig());
     const github = passingGitHub();
 
     const result = await runPlannerLoopScoped({
@@ -79,7 +80,7 @@ describe("runPlannerLoopWorkflow", () => {
   });
 
   it("re-plans on a checker rejection and still completes (medium-tier loop shape)", async () => {
-    const { ctx, pool, events, secrets, allocator, ssh } = await setup();
+    const { ctx, pool, events, secrets, allocator, ssh } = await setup(directMergeConfig());
     const adapters = {
       planner: makePlanner([
         buildPlan([
