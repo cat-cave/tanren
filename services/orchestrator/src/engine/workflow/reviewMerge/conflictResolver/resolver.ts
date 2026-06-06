@@ -27,6 +27,7 @@
 
 import type { EventStore } from "../../../eventStore.js";
 import {
+  ConflictAnswerInvalidError,
   decideConflictResolution,
   isProductVisionEmpty,
   type ConflictAnswererInvoker,
@@ -138,10 +139,25 @@ export function buildIntentPreservingConflictResolver(deps: IntentPreservingReso
       ...(deps.upstreamChange !== undefined && { upstreamChange: deps.upstreamChange }),
     });
 
-    const decision = decideConflictResolution(answer, {
-      mergingSpecId: deps.mergingSpecIntent.specId,
-      ...(provenance.conflictingSpecId !== undefined && { conflictingSpecId: provenance.conflictingSpecId }),
-    });
+    let decision: ReturnType<typeof decideConflictResolution>;
+    try {
+      decision = decideConflictResolution(answer, {
+        mergingSpecId: deps.mergingSpecIntent.specId,
+        ...(provenance.conflictingSpecId !== undefined && { conflictingSpecId: provenance.conflictingSpecId }),
+      });
+    } catch (error) {
+      if (!(error instanceof ConflictAnswerInvalidError)) {
+        throw error;
+      }
+      const reason = error.message;
+      const replan = {
+        which: "merging" as const,
+        specId: deps.mergingSpecIntent.specId,
+        newContext: replanContextFromConflict(provenance.conflictingSpecIntent, reason),
+        ...(provenance.conflictingSpecId !== undefined && { otherSpecId: provenance.conflictingSpecId }),
+      };
+      return routeIrreconcilable(deps, context, provenance, reason, replan, false);
+    }
 
     if (decision.kind === "irreconcilable") {
       return routeIrreconcilable(deps, context, provenance, decision.reason, decision.replan, false);
