@@ -167,23 +167,22 @@ export const MergeBatchInfraBlockedPayload = z
     /** How many check attempts were made before holding (the exhausted retry budget). */
     attempts: z.number().int().nonnegative(),
     /**
-     * The RUNAWAY-GUARD ceiling fired (optional; absent ⇒ the recoverable in-pass hold).
+     * The alert threshold fired (optional; absent ⇒ the recoverable in-pass hold).
      * A recoverable infra hold re-drives every `INFRA_HOLD_RETRY_AFTER_MS` — but a
-     * PERSISTENT outage / permanent-error would otherwise re-drive forever. After
-     * `consecutiveHolds` CROSS-PASS consecutive infra holds the coordinator stops
-     * re-arming the timer and emits this TERMINAL halt (`terminal: true`) — operator
-     * attention required, no further auto-retry. Mirrors the per-PR coordinator's
-     * `merge.queue.infra_blocked` ceiling.
+     * PERSISTENT outage would otherwise stay quiet. After `consecutiveHolds` CROSS-PASS
+     * consecutive infra holds the coordinator emits this TERMINAL alert
+     * (`terminal: true`) — operator attention required — while retriable infra entries
+     * remain queued and continue to re-drive with a longer backoff.
      */
     terminal: z.boolean().optional(),
     /** When terminal: the count of consecutive cross-pass infra holds that hit the cap. */
     consecutiveHolds: z.number().int().nonnegative().optional(),
     /**
      * Machine-readable terminal cause. Missing required credentials are repairable
-     * by a later credential.github.configured event; other terminal infra blocks
-     * stay suppressed.
+     * by a later credential.github.configured/credential.configured event. Ambiguous
+     * merge state stays terminal because auto-retry could double-merge.
      */
-    kind: z.enum(["missing_required_credential"]).optional(),
+    kind: z.enum(["missing_required_credential", "ambiguous_merge_state"]).optional(),
   })
   .strict();
 

@@ -22,7 +22,8 @@
     },
     "kind": {
       "enum": [
-        "missing_required_credential"
+        "missing_required_credential",
+        "ambiguous_merge_state"
       ],
       "type": "string"
     },

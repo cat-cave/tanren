@@ -1,10 +1,11 @@
 // GAP #1 (merge hardening — runaway guard): the per-project CROSS-PASS consecutive
-// infra-hold CEILING for the BatchMergeCoordinator. The batch coordinator already
+// infra-hold ALERT threshold for the BatchMergeCoordinator. The batch coordinator already
 // bounds the IN-PASS re-checks of one batch (`MAX_INFRA_RETRIES`) — but on exhaustion
-// it HOLDS with a 3s `INFRA_HOLD_RETRY_AFTER_MS` re-drive and (before this) NO
-// cross-pass counter. A PERSISTENT outage (or a permanent error mis-routed to the
-// hold) therefore re-drove every 3s FOREVER, never surfacing a terminal halt. This
-// mirrors the per-PR EventEmittingMergeCoordinator's `MAX_INFRA_HOLD_ATTEMPTS`.
+// it HOLDS with a 3s `INFRA_HOLD_RETRY_AFTER_MS` re-drive and (before this) NO loud
+// cross-pass signal. A PERSISTENT outage therefore re-drove every 3s FOREVER without
+// surfacing operator-visible context. The alert threshold emits a terminal
+// `merge.batch.infra_blocked` event but keeps the entries active and backs off; a
+// retriable infra outage must never turn into a permanent dequeued queue state.
 //
 // It is an in-memory per-project counter by design — the coordinator+subscriber are a
 // single long-lived per-worker singleton, so the count survives across `coordinate`
@@ -15,10 +16,9 @@
 
 /**
  * How many CONSECUTIVE cross-pass infra holds one project's batch may take before the
- * coordinator stops re-arming the re-drive timer and escalates to a TERMINAL loud halt.
- * Bounds the recover-on-infra loop so a persistent outage surfaces loudly. The common
- * case (a GitHub blip) clears in 1–2 holds, well under this. Mirrors
- * `MAX_INFRA_HOLD_ATTEMPTS` on the per-PR coordinator.
+ * coordinator emits a TERMINAL loud alert. The entries remain queued and the subscriber
+ * still receives a delayed re-drive, just with a longer backoff after the alert. The
+ * common case (a GitHub blip) clears in 1–2 holds, well under this.
  */
 export const MAX_BATCH_INFRA_HOLDS = 5;
 
@@ -29,6 +29,8 @@ import type { BatchMergeEventEmitter } from "./batchCoordinator.js";
 const HELD_AFTER_ATTEMPTS = 3;
 /** How long after a RECOVERABLE infra hold the subscriber re-drives the project. */
 const INFRA_HOLD_RETRY_AFTER_MS = 3000;
+/** Longer re-drive delay after a terminal alert so persistent outages do not hot-loop. */
+export const INFRA_HOLD_ALERT_RETRY_AFTER_MS = 60_000;
 
 /**
  * GAP #1 (runaway guard): hold the batch on an infra error that could not recover
@@ -38,11 +40,9 @@ const INFRA_HOLD_RETRY_AFTER_MS = 3000;
  * Records the hold, then:
  *   - below the cap → emit a RECOVERABLE merge.batch.infra_blocked + return an
  *     `infra_error` hold WITH `retryAfterMs` (the subscriber re-drives once more);
- *   - at the cap → emit a TERMINAL merge.batch.infra_blocked (`terminal: true`) + return
- *     an `infra_blocked` halt with NO `retryAfterMs`, so the subscriber arms NO further
- *     timer — a loud operator-visible STOP. The terminal event is appended first, then
- *     affected entries leave the active queue as `blocked`, mirroring the per-PR
- *     coordinator's event-before-dequeue split-brain guard.
+ *   - at the cap → emit a TERMINAL merge.batch.infra_blocked (`terminal: true`) but
+ *     keep every affected entry queued + return an `infra_error` hold WITH a longer
+ *     `retryAfterMs`. The alert is loud, but recovery remains autonomous.
  */
 export async function holdOnInfra(args: {
   ceiling: BatchInfraHoldCeiling;
@@ -54,24 +54,21 @@ export async function holdOnInfra(args: {
   queueDepth: number;
   kind?: "missing_required_credential";
 }): Promise<CoordinateResult> {
-  const { ceiling, queue, events, projectId, batch, message, queueDepth } = args;
+  const { ceiling, events, projectId, batch, message, queueDepth } = args;
   const recorded = ceiling.record(projectId);
   if (recorded.reached) {
-    await markBatchInfraBlockedAfterEvent({
-      queue,
-      events,
+    await events.emitInfraBlocked({
       projectId,
       batch,
-      message: `batch check kept hitting an infra error across ${recorded.holds} consecutive holds; halting (operator attention required): ${message}`,
+      message: `batch check kept hitting an infra error across ${recorded.holds} consecutive holds; alerting and continuing autonomous re-drive: ${message}`,
       attempts: HELD_AFTER_ATTEMPTS,
       terminal: true,
       consecutiveHolds: recorded.holds,
     });
     console.error(
-      `[batch-coordinator] project ${projectId}: batch check HALTED after ${recorded.holds} consecutive infra holds; operator attention required: ${message}`,
+      `[batch-coordinator] project ${projectId}: batch check ALERT after ${recorded.holds} consecutive infra holds; continuing autonomous re-drive after backoff: ${message}`,
     );
-    // Terminal: NO retryAfterMs ⇒ the subscriber arms no further timer (no re-drive loop).
-    return { projectId, holdReason: "infra_blocked", queueDepth };
+    return { projectId, holdReason: "infra_error", retryAfterMs: INFRA_HOLD_ALERT_RETRY_AFTER_MS, queueDepth };
   }
   await events.emitInfraBlocked({ projectId, batch, message, attempts: HELD_AFTER_ATTEMPTS });
   return { projectId, holdReason: "infra_error", retryAfterMs: INFRA_HOLD_RETRY_AFTER_MS, queueDepth };
@@ -84,7 +81,7 @@ export async function terminalInfraBlock(args: {
   batch: ReadonlyArray<MergeQueueEntry>;
   message: string;
   queueDepth: number;
-  kind?: "missing_required_credential";
+  kind?: "missing_required_credential" | "ambiguous_merge_state";
 }): Promise<CoordinateResult> {
   await markBatchInfraBlockedAfterEvent({ ...args, attempts: 1, terminal: true, consecutiveHolds: 1 });
   console.error(
@@ -102,7 +99,7 @@ async function markBatchInfraBlockedAfterEvent(input: {
   attempts: number;
   terminal: true;
   consecutiveHolds: number;
-  kind?: "missing_required_credential";
+  kind?: "missing_required_credential" | "ambiguous_merge_state";
 }): Promise<void> {
   const event = {
     projectId: input.projectId,

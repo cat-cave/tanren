@@ -1,21 +1,6 @@
-// The MergeCoordinator subscriber (autonomy-engine.md §2d, §1.5): a long-lived
-// per-process listener that drives the per-project MergeCoordinator on startup and
-// on every run.*-terminal / merge.completed notification — reacting to the events
-// ALREADY on the LISTEN/NOTIFY bus, no new polling. It is the wiring the worker
-// boot starts so the native merge queue self-advances.
-//
-// Mechanism mirrors the DagWalkerSubscriber: the eventStore fires a `tanren_run`
-// NOTIFY (payload = the run id) at every run-state change. This subscriber wakes on
-// that channel, resolves the run's project under the system scope, and coordinates
-// that project's queue. Each pass merges AT MOST ONE entry (serialization); a merge
-// completing fires another `tanren_run` notification (the merge finalizes the run),
-// which re-triggers the coordinator to pick the NEXT DAG-ordered head — so A merges,
-// then B, then C in dependency order, one at a time.
-//
-// Coalesced per project (like the walker): a project already coordinating
-// re-coordinates once when its current pass finishes, so a notification storm
-// collapses to at most one follow-up pass. The atomic queue claim is the hard
-// serialization boundary regardless; coalescing keeps the load sane.
+// Long-lived native-queue subscriber (autonomy-engine.md §2d, §1.5): drives each
+// project's MergeCoordinator on startup and on run/event NOTIFYs. Per-project passes
+// are coalesced, and the queue claim remains the hard serialization boundary.
 
 import { NOTIFICATION_CHANNEL, RUN_ACTIVITY_CHANNEL, type PgNotifyListener, runWithSystemScope } from "@tanren/db";
 import type pg from "pg";
@@ -154,67 +139,84 @@ async function listProjectsWithQueue(pool: pg.Pool): Promise<string[]> {
                    latest.event_type = 'merge.batch.infra_blocked'
                    AND latest.payload ->> 'terminal' = 'true'
                    AND (
-                     latest.payload ->> 'kind' = 'missing_required_credential'
-                     OR latest.payload ->> 'cause' IN ('missing_required_credential', 'missing_github_credential')
-                     OR latest.payload ->> 'reason' IN ('missing_required_credential', 'missing_github_credential')
-                     OR latest.payload ->> 'message' LIKE '%missing GitHub credential ref:%'
-                     OR latest.payload ->> 'message' LIKE '%missing % credential ref:%'
-                     OR latest.payload ->> 'message' LIKE '%No GitHub credential configured%'
+                     (
+                       COALESCE(latest.payload ->> 'kind', '') <> 'ambiguous_merge_state'
+                       AND COALESCE(latest.payload ->> 'message', '') NOT LIKE '%ambiguous%'
+                       AND COALESCE(latest.payload ->> 'message', '') NOT LIKE '%double-merge%'
+                       AND NOT COALESCE((
+                         latest.payload ->> 'kind' IN ('missing_required_credential', 'missing_github_credential')
+                         OR latest.payload ->> 'cause' IN ('missing_required_credential', 'missing_github_credential')
+                         OR latest.payload ->> 'reason' IN ('missing_required_credential', 'missing_github_credential')
+                         OR latest.payload ->> 'message' LIKE '%missing GitHub credential ref:%'
+                         OR latest.payload ->> 'message' LIKE '%missing % credential ref:%'
+                         OR latest.payload ->> 'message' LIKE '%No GitHub credential configured%'
+                       ), false)
+                     )
+                     OR (
+                       (
+                         latest.payload ->> 'kind' IN ('missing_required_credential', 'missing_github_credential')
+                         OR latest.payload ->> 'cause' IN ('missing_required_credential', 'missing_github_credential')
+                         OR latest.payload ->> 'reason' IN ('missing_required_credential', 'missing_github_credential')
+                         OR latest.payload ->> 'message' LIKE '%missing GitHub credential ref:%'
+                         OR latest.payload ->> 'message' LIKE '%missing % credential ref:%'
+                         OR latest.payload ->> 'message' LIKE '%No GitHub credential configured%'
+                       )
+                       AND EXISTS (
+                         SELECT 1
+                           FROM events repair
+                          WHERE repair.project_id = mq.project_id
+                            AND repair.org_id = mq.org_id
+                            AND (repair.ts > latest.ts OR (repair.ts = latest.ts AND repair.id > latest.id))
+                            AND (
+                              repair.event_type IN ('credential.configured', 'credential.github.configured')
+                              OR (
+                                repair.event_type = 'integration.provisioned'
+                                AND repair.payload ->> 'providerKind' = 'github'
+                              )
+                              OR repair.event_type = 'org.github.connected'
+                              OR repair.payload ->> 'provider' = 'github'
+                            )
+                            AND (
+                              repair.payload ->> 'mode' = 'app'
+                              OR repair.payload ->> 'credentialKind' = 'github_app'
+                              OR COALESCE(
+                                NULLIF(latest.payload ->> 'credentialRef', ''),
+                                NULLIF(latest.payload ->> 'missingRef', ''),
+                                NULLIF(latest.payload ->> 'requiredCredentialRef', ''),
+                                substring(latest.payload ->> 'message' from 'missing [^:]* credential ref: ([^[:space:]]+)')
+                              ) IS NULL
+                              OR repair.payload ->> 'credentialRef' = COALESCE(
+                                NULLIF(latest.payload ->> 'credentialRef', ''),
+                                NULLIF(latest.payload ->> 'missingRef', ''),
+                                NULLIF(latest.payload ->> 'requiredCredentialRef', ''),
+                                substring(latest.payload ->> 'message' from 'missing [^:]* credential ref: ([^[:space:]]+)')
+                              )
+                              OR repair.payload ->> 'ref' = COALESCE(
+                                NULLIF(latest.payload ->> 'credentialRef', ''),
+                                NULLIF(latest.payload ->> 'missingRef', ''),
+                                NULLIF(latest.payload ->> 'requiredCredentialRef', ''),
+                                substring(latest.payload ->> 'message' from 'missing [^:]* credential ref: ([^[:space:]]+)')
+                              )
+                              OR EXISTS (
+                                SELECT 1
+                                  FROM jsonb_array_elements_text(
+                                    CASE WHEN jsonb_typeof(repair.payload -> 'secretRefNames') = 'array'
+                                      THEN repair.payload -> 'secretRefNames'
+                                      ELSE '[]'::jsonb
+                                    END
+                                  ) AS secret_ref(ref)
+                                 WHERE secret_ref.ref = COALESCE(
+                                   NULLIF(latest.payload ->> 'credentialRef', ''),
+                                   NULLIF(latest.payload ->> 'missingRef', ''),
+                                   NULLIF(latest.payload ->> 'requiredCredentialRef', ''),
+                                   substring(latest.payload ->> 'message' from 'missing [^:]* credential ref: ([^[:space:]]+)')
+                                 )
+                              )
+                            )
+                       )
+                     )
                    )
-                   AND EXISTS (
-                     SELECT 1
-                       FROM events repair
-                      WHERE repair.project_id = mq.project_id
-                        AND repair.org_id = mq.org_id
-                        AND (repair.ts > latest.ts OR (repair.ts = latest.ts AND repair.id > latest.id))
-                        AND (
-                          repair.event_type IN ('credential.configured', 'credential.github.configured')
-                          OR (
-                            repair.event_type = 'integration.provisioned'
-                            AND repair.payload ->> 'providerKind' = 'github'
-                          )
-                          OR repair.event_type = 'org.github.connected'
-                          OR repair.payload ->> 'provider' = 'github'
-	                        )
-	                        AND (
-	                          repair.payload ->> 'mode' = 'app'
-	                          OR repair.payload ->> 'credentialKind' = 'github_app'
-	                          OR COALESCE(
-	                            NULLIF(latest.payload ->> 'credentialRef', ''),
-	                            NULLIF(latest.payload ->> 'missingRef', ''),
-	                            NULLIF(latest.payload ->> 'requiredCredentialRef', ''),
-                            substring(latest.payload ->> 'message' from 'missing [^:]* credential ref: ([^[:space:]]+)')
-                          ) IS NULL
-                          OR repair.payload ->> 'credentialRef' = COALESCE(
-                            NULLIF(latest.payload ->> 'credentialRef', ''),
-                            NULLIF(latest.payload ->> 'missingRef', ''),
-                            NULLIF(latest.payload ->> 'requiredCredentialRef', ''),
-                            substring(latest.payload ->> 'message' from 'missing [^:]* credential ref: ([^[:space:]]+)')
-                          )
-                          OR repair.payload ->> 'ref' = COALESCE(
-                            NULLIF(latest.payload ->> 'credentialRef', ''),
-                            NULLIF(latest.payload ->> 'missingRef', ''),
-                            NULLIF(latest.payload ->> 'requiredCredentialRef', ''),
-	                            substring(latest.payload ->> 'message' from 'missing [^:]* credential ref: ([^[:space:]]+)')
-	                          )
-	                          OR EXISTS (
-	                            SELECT 1
-	                              FROM jsonb_array_elements_text(
-	                                CASE WHEN jsonb_typeof(repair.payload -> 'secretRefNames') = 'array'
-	                                  THEN repair.payload -> 'secretRefNames'
-	                                  ELSE '[]'::jsonb
-	                                END
-	                              ) AS secret_ref(ref)
-	                             WHERE secret_ref.ref = COALESCE(
-	                               NULLIF(latest.payload ->> 'credentialRef', ''),
-	                               NULLIF(latest.payload ->> 'missingRef', ''),
-	                               NULLIF(latest.payload ->> 'requiredCredentialRef', ''),
-	                               substring(latest.payload ->> 'message' from 'missing [^:]* credential ref: ([^[:space:]]+)')
-	                             )
-	                          )
-	                        )
-	                   )
-	                 )
+                 )
                  FROM events latest
                 WHERE latest.id = (
                   SELECT e.id

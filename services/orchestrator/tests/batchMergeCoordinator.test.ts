@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { MissingGithubCredentialRefError } from "../src/engine/credentials/githubTokenResolver.js";
 import { BatchMergeCoordinator } from "../src/engine/merge/batchCoordinator.js";
-import { MAX_BATCH_INFRA_HOLDS } from "../src/engine/merge/batchInfraHoldCeiling.js";
+import { INFRA_HOLD_ALERT_RETRY_AFTER_MS, MAX_BATCH_INFRA_HOLDS } from "../src/engine/merge/batchInfraHoldCeiling.js";
 import { RefResetTransientError } from "../src/engine/providers/githubRefReset.js";
 import type { SpecPriority } from "../src/engine/state/spec.js";
 import { InMemoryBatchChecker, RecordingBatchMergeEventEmitter } from "./conformance/fakes/inMemoryBatchChecker.js";
@@ -304,7 +304,7 @@ describe("BatchMergeCoordinator — infra-error robustness (a thrown check NEVER
     expect(h.checker.checked.length).toBe(3);
   });
 
-  it("GAP #1 (runaway guard): SUSTAINED infra holds ESCALATE to a TERMINAL merge.batch.infra_blocked after the cap (no infinite re-drive)", async () => {
+  it("GAP #1: sustained retriable infra holds alert terminally but remain queued and re-drivable", async () => {
     const h = makeHarness();
     seed(h, "spec_a");
     seed(h, "spec_b");
@@ -312,30 +312,29 @@ describe("BatchMergeCoordinator — infra-error robustness (a thrown check NEVER
     const dequeueSpy = vi.spyOn(h.queue, "markDequeued");
 
     let last = await h.coordinator.coordinate(PROJECT);
-    let passes = 1;
-    for (let i = 0; i < 20 && last.holdReason === "infra_error"; i += 1) {
+    for (let i = 1; i < MAX_BATCH_INFRA_HOLDS; i += 1) {
+      expect(last.holdReason).toBe("infra_error");
       expect(last.retryAfterMs).toBeGreaterThan(0);
       last = await h.coordinator.coordinate(PROJECT);
-      passes += 1;
     }
 
-    expect(passes).toBe(MAX_BATCH_INFRA_HOLDS);
-    expect(last.holdReason).toBe("infra_blocked");
-    expect(last.retryAfterMs).toBeUndefined();
-    expect(dequeueSpy).toHaveBeenCalledTimes(2);
-    expect(h.queue.statusOf("run_spec_a")).toBe("dequeued");
-    expect(h.queue.statusOf("run_spec_b")).toBe("dequeued");
-    expect(h.queue.dequeueReasonOf("run_spec_a")).toBe("blocked");
-    expect(h.queue.dequeueReasonOf("run_spec_b")).toBe("blocked");
+    expect(last.holdReason).toBe("infra_error");
+    expect(last.retryAfterMs).toBe(INFRA_HOLD_ALERT_RETRY_AFTER_MS);
+    expect(dequeueSpy).not.toHaveBeenCalled();
+    expect(h.queue.statusOf("run_spec_a")).toBe("queued");
+    expect(h.queue.statusOf("run_spec_b")).toBe("queued");
     let terminal = h.batchEvents.events.filter((e) => e.type === "infra_blocked" && e.terminal === true);
     expect(terminal).toHaveLength(1);
     expect(terminal[0]?.consecutiveHolds).toBe(MAX_BATCH_INFRA_HOLDS);
-    const afterTerminal = await h.coordinator.coordinate(PROJECT);
-    expect(afterTerminal.holdReason).toBe("empty");
+    const afterAlert = await h.coordinator.coordinate(PROJECT);
+    expect(afterAlert.holdReason).toBe("infra_error");
+    expect(afterAlert.retryAfterMs).toBeGreaterThan(0);
+    expect(h.queue.statusOf("run_spec_a")).toBe("queued");
+    expect(h.queue.statusOf("run_spec_b")).toBe("queued");
     terminal = h.batchEvents.events.filter((e) => e.type === "infra_blocked" && e.terminal === true);
     expect(terminal).toHaveLength(1);
     const recoverable = h.batchEvents.events.filter((e) => e.type === "infra_blocked" && e.terminal !== true);
-    expect(recoverable).toHaveLength(MAX_BATCH_INFRA_HOLDS - 1);
+    expect(recoverable).toHaveLength(MAX_BATCH_INFRA_HOLDS);
   });
 
   it("GAP #1: a recovering infra hold (transient then pass) RESETS the streak — it never reaches the terminal ceiling", async () => {
@@ -424,7 +423,7 @@ describe("BatchMergeCoordinator — infra-error robustness (a thrown check NEVER
     expect(h.events.events.some((e) => e.type === "merge.dequeued")).toBe(false);
   });
 
-  it("repeated transient real-merge drive throws hit the terminal batch infra ceiling and dequeue as blocked", async () => {
+  it("repeated transient real-merge drive throws alert terminally but keep the entry queued", async () => {
     const h = makeHarness();
     seed(h, "spec_a");
     const dequeueSpy = vi.spyOn(h.queue, "markDequeued");
@@ -434,27 +433,25 @@ describe("BatchMergeCoordinator — infra-error robustness (a thrown check NEVER
     };
 
     let last = await h.coordinator.coordinate(PROJECT);
-    let passes = 1;
-    for (let i = 0; i < 20 && last.holdReason === "infra_error"; i += 1) {
+    for (let i = 1; i < MAX_BATCH_INFRA_HOLDS; i += 1) {
+      expect(last.holdReason).toBe("infra_error");
       expect(last.retryAfterMs).toBeGreaterThan(0);
       expect(h.queue.statusOf("run_spec_a")).toBe("queued");
       expect(h.events.events.some((e) => e.type === "merge.dequeued")).toBe(false);
       last = await h.coordinator.coordinate(PROJECT);
-      passes += 1;
     }
 
-    expect(passes).toBe(MAX_BATCH_INFRA_HOLDS);
-    expect(last.holdReason).toBe("infra_blocked");
-    expect(last.retryAfterMs).toBeUndefined();
-    expect(h.queue.statusOf("run_spec_a")).toBe("dequeued");
-    expect(h.queue.dequeueReasonOf("run_spec_a")).toBe("blocked");
-    expect(dequeueSpy).toHaveBeenCalledTimes(1);
+    expect(last.holdReason).toBe("infra_error");
+    expect(last.retryAfterMs).toBe(INFRA_HOLD_ALERT_RETRY_AFTER_MS);
+    expect(h.queue.statusOf("run_spec_a")).toBe("queued");
+    expect(dequeueSpy).not.toHaveBeenCalled();
     expect(h.events.events.some((e) => e.type === "merge.dequeued")).toBe(false);
     let terminal = h.batchEvents.events.filter((e) => e.type === "infra_blocked" && e.terminal === true);
     expect(terminal).toHaveLength(1);
     expect(terminal[0]?.consecutiveHolds).toBe(MAX_BATCH_INFRA_HOLDS);
-    const afterTerminal = await h.coordinator.coordinate(PROJECT);
-    expect(afterTerminal.holdReason).toBe("empty");
+    const afterAlert = await h.coordinator.coordinate(PROJECT);
+    expect(afterAlert.holdReason).toBe("infra_error");
+    expect(h.queue.statusOf("run_spec_a")).toBe("queued");
     terminal = h.batchEvents.events.filter((e) => e.type === "infra_blocked" && e.terminal === true);
     expect(terminal).toHaveLength(1);
   });
