@@ -3,8 +3,10 @@
 Tanren's preferred GitHub integration is a **per-org GitHub App
 installation** that mints short-lived, auto-rotating installation tokens. These
 tokens are used for repo clone, draft-PR creation, and publishing the native
-`tanren/gate` verdict as a commit status. A static personal-access-token (PAT)
-path is used when no App is installed (the dev / self-hosted no-App path).
+`tanren/gate` verdict as a commit status. For greenfield projects they are also
+used to create the target organization repository. A static
+personal-access-token (PAT) path is used when no App is installed (the dev /
+self-hosted no-App path).
 
 This is an **operator setup step**: you register the App once for the Tanren
 deployment, store its credentials in Vault, and then each org installs it. The
@@ -16,9 +18,11 @@ the static-token path is used unchanged.
 1. GitHub → **Settings → Developer settings → GitHub Apps → New GitHub App**.
 2. Permissions (repository): **Contents: Read & write**, **Pull requests: Read
    & write**, **Metadata: Read-only**, **Checks: Read & write**, **Commit
-   statuses: Read & write** (Tanren publishes its own `tanren/gate` verdict as a
-   commit status / check). Organization: **Members: Read-only** (review-gate
-   routing). Do **not** grant admin/secrets.
+   statuses: Read & write**, and **Administration: Read & write**. Repository
+   administration write is required for greenfield repo creation via
+   `POST /orgs/:owner/repos`. Organization: **Members: Read-only** (review-gate
+   routing). Do not grant Secrets unless a future feature explicitly requires
+   it.
 3. Set the **Setup / Callback URL** to:
    `https://<orchestrator-public-url>/auth/github-app/callback`
 4. Generate a **private key** (downloads a `.pem`). Note the numeric **App ID**.

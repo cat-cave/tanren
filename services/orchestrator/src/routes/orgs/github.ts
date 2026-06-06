@@ -348,10 +348,9 @@ function composeOnboardingStatus(
     nextSteps.push("Set a default budget ceiling: PUT /orgs/:orgId/budget so runs have a spend cap.");
   }
 
-  // Ready to drive a (brownfield) run when an AI provider and GitHub are both
-  // connected. Repo-creation + budget are surfaced as next steps but do not gate
-  // baseline readiness (greenfield needs canCreateRepos; budget is recommended).
-  const ready = aiProvider.connected && github.connected;
+  // `nextSteps` is the readiness contract: anything still listed must keep the
+  // org out of the ready state.
+  const ready = nextSteps.length === 0;
   return {
     aiProvider,
     github: { connected: github.connected, canCreateRepos: github.canCreateRepos },
