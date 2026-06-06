@@ -187,8 +187,25 @@ export class PgMergeQueueModel implements MergeQueueModel {
       await client.query("LOCK TABLE merge_queue IN SHARE ROW EXCLUSIVE MODE");
       const result = await client.query(
         `WITH candidates AS (
-           SELECT mq.queue_id, mq.run_id, mq.dequeue_reason, mq.pr_url, mq.pr_number
+           SELECT mq.queue_id, mq.run_id, mq.dequeue_reason, mq.pr_url, mq.pr_number, anchor.ts AS anchor_ts, anchor.id AS anchor_id
              FROM merge_queue mq
+             JOIN LATERAL (
+               SELECT e.ts, e.id
+                 FROM events e
+                WHERE e.project_id = mq.project_id
+                  AND e.org_id = mq.org_id
+                  AND e.event_type = 'merge.dequeued'
+                  AND e.payload ->> 'integration' = 'native_queue'
+                  AND e.payload ->> 'reason' = 'blocked'
+                  AND (
+                    (e.run_id IS NOT NULL AND e.run_id = mq.run_id)
+                    OR (NULLIF(e.payload ->> 'runId', '') IS NOT NULL AND e.payload ->> 'runId' = mq.run_id)
+                    OR (NULLIF(e.payload ->> 'prUrl', '') IS NOT NULL AND e.payload ->> 'prUrl' = mq.pr_url)
+                    OR (NULLIF(e.payload ->> 'prNumber', '') IS NOT NULL AND e.payload ->> 'prNumber' = mq.pr_number)
+                  )
+                ORDER BY e.ts DESC, e.id DESC
+                LIMIT 1
+             ) anchor ON TRUE
             WHERE mq.project_id = $1
               AND mq.status = 'dequeued'
               AND mq.dequeue_reason = 'blocked'
@@ -201,26 +218,12 @@ export class PgMergeQueueModel implements MergeQueueModel {
                  WHERE active.run_id = mq.run_id
                    AND active.status IN ('queued', 'merging')
               )
-              AND EXISTS (
-                SELECT 1
-                  FROM events e
-                 WHERE e.project_id = mq.project_id
-                   AND e.org_id = mq.org_id
-                   AND e.event_type = 'merge.dequeued'
-                   AND e.payload ->> 'integration' = 'native_queue'
-                   AND e.payload ->> 'reason' = 'blocked'
-                   AND (
-                     (e.run_id IS NOT NULL AND e.run_id = mq.run_id)
-                     OR (NULLIF(e.payload ->> 'runId', '') IS NOT NULL AND e.payload ->> 'runId' = mq.run_id)
-                     OR (NULLIF(e.payload ->> 'prUrl', '') IS NOT NULL AND e.payload ->> 'prUrl' = mq.pr_url)
-                     OR (NULLIF(e.payload ->> 'prNumber', '') IS NOT NULL AND e.payload ->> 'prNumber' = mq.pr_number)
-                   )
-              )
               AND NOT EXISTS (
                 SELECT 1
                   FROM events e
                  WHERE e.project_id = mq.project_id
                    AND e.org_id = mq.org_id
+                   AND (e.ts > anchor.ts OR (e.ts = anchor.ts AND e.id > anchor.id))
                    AND (
                      e.event_type IN (
                        'merge.completed',
@@ -260,7 +263,7 @@ export class PgMergeQueueModel implements MergeQueueModel {
                      )
                    )
               )
-            FOR UPDATE
+            FOR UPDATE OF mq
          ), recoverable AS (
            SELECT c.queue_id, c.run_id, c.dequeue_reason, c.pr_url, c.pr_number
              FROM candidates c
