@@ -26,8 +26,8 @@
 
 import type { MergeIntegration } from "../../config/shared.js";
 import type { RunStateWriter } from "../../contracts/runStateWriter.js";
-import { ensureSystemTask } from "../taskWriteRouting.js";
-import { PgEventStore } from "../../eventStore.js";
+import { ensureSystemTask, routeTaskUpdate } from "../taskWriteRouting.js";
+import { PgEventStore, type EventStore } from "../../eventStore.js";
 import type { PullRequestRef, RepoRef } from "../../contracts/vcsProvider.js";
 import {
   contextOptionsFor,
@@ -124,6 +124,7 @@ export async function mergeForRun(input: MergeForRunInput): Promise<MergeForRunR
         },
       });
       if (integration !== "native_queue" || input.queueDrive === true) {
+        await completeHeldMergeTask(input.pool, eventStore, context, taskId, integration, input.runStateWriter);
         return {
           runId: context.runId,
           taskId,
@@ -403,4 +404,29 @@ async function ensureMergeTask(
   writer?: RunStateWriter,
 ): Promise<string> {
   return ensureSystemTask(pool, { runId: context.runId, kind: "merge", title: "Merge pull request" }, writer);
+}
+
+async function completeHeldMergeTask(
+  pool: RunStateClient,
+  eventStore: EventStore,
+  context: ReviewMergeRunContext,
+  taskId: string,
+  integration: DispatchedIntegration,
+  writer?: RunStateWriter,
+): Promise<void> {
+  await routeTaskUpdate(
+    writer,
+    pool,
+    { taskId, transition: "done", outcome: "ok" },
+    "UPDATE tasks SET status = 'done', outcome = $2, ended_at = now() WHERE task_id = $1",
+    [taskId, "ok"],
+  );
+  await eventStore.append({
+    runId: context.runId,
+    specId: context.specId,
+    projectId: context.projectId,
+    taskId,
+    eventType: "task.completed",
+    payload: { taskKind: "merge", status: integration },
+  });
 }

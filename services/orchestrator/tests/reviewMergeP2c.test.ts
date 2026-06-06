@@ -44,6 +44,8 @@ describe("P2c-1 speculative-merge-hold (merge stage)", () => {
       unmergedAncestors: ["spec_b"],
     });
     expect(events.events.some((e) => e.eventType === "merge.completed")).toBe(false);
+    expect(events.events.some((e) => e.eventType === "task.completed")).toBe(true);
+    expect(pool.tasks).toEqual([expect.objectContaining({ kind: "merge", status: "done", outcome: "ok" })]);
   });
 
   it("ENQUEUES a native_queue first-pass speculative dependent while an ancestor is unmerged", async () => {
@@ -83,6 +85,30 @@ describe("P2c-1 speculative-merge-hold (merge stage)", () => {
     });
   });
 
+  it("COMPLETES the queue-drive merge task when a speculative dependent is held", async () => {
+    const pool = new ReviewMergePool("native_queue");
+    pool.speculativeBase = "tanren/integ/spec_1";
+    pool.specDependsOn = ["spec_a"];
+    const events = new FakeEventStore();
+    const probe = recordingMergeProbe({ merged: true, mergeSha: "x", conflict: false, status: 200, message: "merged" });
+
+    const result = await mergeForRun({
+      pool: pool.asPgPool(),
+      eventStore: events,
+      secrets: new FakeSecretStore(),
+      resolveConflict: noopConflictResolver,
+      vcsProvider: vcsProviderOver(unusedHttp()),
+      runId: "run_1",
+      mergeProbe: probe,
+      queueDrive: true,
+    });
+
+    expect(result.outcome).toBe("blocked");
+    expect(probe.mergeCalls).toBe(0);
+    expect(events.events.map((e) => e.eventType)).toEqual(["task.started", "merge.speculative_held", "task.completed"]);
+    expect(pool.tasks).toEqual([expect.objectContaining({ kind: "merge", status: "done", outcome: "ok" })]);
+  });
+
   it("HOLDS when an ancestor has an unresolved speculative hold even if its spec row says merged", async () => {
     const pool = new ReviewMergePool("direct_merge");
     pool.speculativeBase = "tanren/integ/spec_1";
@@ -108,6 +134,71 @@ describe("P2c-1 speculative-merge-hold (merge stage)", () => {
       unmergedAncestors: ["spec_a"],
     });
     expect(events.events.some((e) => e.eventType === "merge.completed")).toBe(false);
+  });
+
+  it("a held speculative dependent resumes autonomously once the ancestor really merges", async () => {
+    const pool = new ReviewMergePool("direct_merge");
+    pool.speculativeBase = "tanren/integ/spec_1";
+    pool.specDependsOn = ["spec_a"];
+    const events = new FakeEventStore();
+    const probe = recordingMergeProbe(
+      {
+        merged: true,
+        mergeSha: "merge-sha",
+        conflict: false,
+        status: 200,
+        message: "merged",
+      },
+      {
+        mergeabilityReads: [
+          { state: "clean", behind: false, baseBranch: "tanren/integ/spec_1", headBranch: "tanren/run_1" },
+          { state: "clean", behind: false, baseBranch: "main", headBranch: "tanren/run_1" },
+        ],
+      },
+    );
+
+    const held = await mergeForRun({
+      pool: pool.asPgPool(),
+      eventStore: events,
+      secrets: new FakeSecretStore(),
+      resolveConflict: noopConflictResolver,
+      vcsProvider: vcsProviderOver(unusedHttp()),
+      runId: "run_1",
+      mergeProbe: probe,
+    });
+
+    expect(held.outcome).toBe("blocked");
+    expect(probe.mergeCalls).toBe(0);
+    expect(events.events.some((e) => e.eventType === "merge.completed")).toBe(false);
+    expect(pool.tasks).toEqual([expect.objectContaining({ kind: "merge", status: "done", outcome: "ok" })]);
+
+    pool.mergedAncestors = ["spec_a"];
+    const resumed = await mergeForRun({
+      pool: pool.asPgPool(),
+      eventStore: events,
+      secrets: new FakeSecretStore(),
+      resolveConflict: noopConflictResolver,
+      vcsProvider: vcsProviderOver(unusedHttp()),
+      runId: "run_1",
+      mergeProbe: probe,
+    });
+
+    expect(resumed.outcome).toBe("merged");
+    expect(probe.retargetedBases).toEqual(["main"]);
+    expect(probe.mergeCalls).toBe(1);
+    expect(probe.deletedIntegrationBranches).toEqual(["tanren/integ/spec_1"]);
+    expect(events.events.map((e) => e.eventType)).toEqual([
+      "task.started",
+      "merge.speculative_held",
+      "task.completed",
+      "task.started",
+      "merge.retargeted",
+      "merge.queued",
+      "merge.completed",
+      "merge.integration_cleaned",
+      "task.completed",
+    ]);
+    expect(pool.tasks).toEqual([expect.objectContaining({ kind: "merge", status: "done", outcome: "ok" })]);
   });
 
   it("RE-TARGETS to default_branch + merges on real main once ALL ancestors merged, then cleans the integ ref", async () => {
