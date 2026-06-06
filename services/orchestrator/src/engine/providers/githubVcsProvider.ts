@@ -17,6 +17,7 @@ import {
   type PublishStatusInput,
 } from "./githubPublishCheck.js";
 import { createGitHubRepository } from "./githubRepoCreate.js";
+import { retargetGithubPullRequestBase } from "./githubRetargetPullRequestBase.js";
 import { parseCommitLogins } from "../workflow/reviewMerge/commitLogins.js";
 import type { PullRequestContributors } from "../workflow/reviewMerge/governancePosture.js";
 import type {
@@ -438,17 +439,7 @@ export class GitHubVcsProvider implements VcsProvider {
   }
 
   async retargetPullRequestBase(pr: PullRequestRef, newBase: string, token: ResolvedVcsToken): Promise<void> {
-    const response = await this.http.request({
-      method: "PATCH",
-      path: repoApiPath(pr.repo, `/pulls/${pr.number}`),
-      token: token.token,
-      refreshToken: token.refresh,
-      body: { base: newBase },
-    });
-    // 200 = base updated (or already that base — GitHub returns the unchanged PR).
-    if (response.status !== 200) {
-      throw new Error(`GitHub PR base retarget to ${newBase} failed: HTTP ${response.status}`);
-    }
+    await retargetGithubPullRequestBase({ http: this.http, pr, newBase, token });
   }
 
   async deleteBranch(repo: RepoRef, branch: string, token: ResolvedVcsToken): Promise<void> {

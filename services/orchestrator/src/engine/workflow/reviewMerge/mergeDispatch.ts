@@ -139,21 +139,24 @@ export async function mergeForRun(input: MergeForRunInput): Promise<MergeForRunR
     // is re-pointed on the forge BEFORE any merge call, so directMerge's
     // mergeability read + merge act against `default_branch`.
     if (speculative.speculativeBase !== context.baseBranch) {
-      await probe.retargetBase(context.baseBranch);
-      await eventStore.append({
-        runId: context.runId,
-        specId: context.specId,
-        projectId: context.projectId,
-        taskId,
-        eventType: "merge.retargeted",
-        payload: {
-          prUrl: context.prUrl,
-          prNumber: pr.pullNumber,
-          integration,
-          fromBase: speculative.speculativeBase,
-          toBase: context.baseBranch,
-        },
-      });
+      const mergeability = await probe.readMergeability();
+      if (mergeability.baseBranch !== context.baseBranch) {
+        await probe.retargetBase(context.baseBranch);
+        await eventStore.append({
+          runId: context.runId,
+          specId: context.specId,
+          projectId: context.projectId,
+          taskId,
+          eventType: "merge.retargeted",
+          payload: {
+            prUrl: context.prUrl,
+            prNumber: pr.pullNumber,
+            integration,
+            fromBase: speculative.speculativeBase,
+            toBase: context.baseBranch,
+          },
+        });
+      }
     }
   }
 

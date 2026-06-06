@@ -20,6 +20,7 @@ import type { VcsProvider } from "../../src/engine/contracts/vcsProvider.js";
 import { InMemoryVcsProvider } from "./fakes/inMemoryVcsProvider.js";
 import {
   CONFORMANCE_ABSENT_BRANCH,
+  CONFORMANCE_BASE_BRANCH,
   CONFORMANCE_ACTOR_ID,
   CONFORMANCE_ACTOR_LOGIN,
   CONFORMANCE_ANCESTOR_CONFLICT,
@@ -37,6 +38,9 @@ const STATIC_REF = "credential/github/conformance";
 const HEAD_SHA = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
 /** the distinct SHA the FAILING integration ref resolves to (its check-runs fail). */
 const FAILING_SHA = "fa11edfa11edfa11edfa11edfa11edfa11edfa11";
+const RETARGET_ALREADY_MAIN_PR = 17;
+const RETARGET_STILL_OLD_BASE_PR = 19;
+const STALE_INTEGRATION_BASE = "tanren/integ/stale";
 
 const ok = (body: unknown): GitHubHttpResponse => ({ status: 200, body });
 
@@ -86,15 +90,21 @@ class RoutingGitHubHttp implements GitHubHttpClient {
       const number = Number(detailMatch[1]);
       const mergeableState =
         number === CONFORMANCE_BEHIND_PR_NUMBER ? "behind" : number === CONFORMANCE_DIRTY_PR_NUMBER ? "dirty" : "clean";
+      const baseRef = number === RETARGET_STILL_OLD_BASE_PR ? STALE_INTEGRATION_BASE : "main";
       return ok({
         node_id: "PR_node_7",
         head: { sha: HEAD_SHA, ref: CONFORMANCE_HEAD_BRANCH },
-        base: { ref: "main" },
+        base: { ref: baseRef },
         mergeable_state: mergeableState,
       });
     }
     // retargetPullRequestBase: PATCH /pulls/:n { base } → the updated PR.
-    if (input.method === "PATCH" && /\/pulls\/\d+$/u.test(path)) {
+    const retargetMatch = /\/pulls\/(\d+)$/u.exec(path);
+    if (input.method === "PATCH" && retargetMatch !== null) {
+      const number = Number(retargetMatch[1]);
+      if (number === RETARGET_ALREADY_MAIN_PR || number === RETARGET_STILL_OLD_BASE_PR) {
+        return { status: 422, body: { message: "Validation Failed" } };
+      }
       const base = (input.body as { base?: unknown } | undefined)?.base;
       return ok({ number: 7, base: { ref: typeof base === "string" ? base : "main" } });
     }
@@ -207,6 +217,36 @@ describeVcsProviderConformance("GitHubVcsProvider", gitHubProviderHarness());
 describeVcsProviderConformance("InMemoryVcsProvider", {
   make: (): VcsProvider => new InMemoryVcsProvider(),
   creds: () => ({ secrets: new InMemorySecretStore(), staticRef: STATIC_REF }),
+});
+
+describe("GitHubVcsProvider.retargetPullRequestBase 422 reconciliation", () => {
+  it("treats a 422 retarget as success when a reconcile read shows the requested base", async () => {
+    const harness = gitHubProviderHarness();
+    const provider = harness.make();
+    const token = await provider.resolveToken(harness.creds());
+    await expect(
+      provider.retargetPullRequestBase(
+        { repo: { owner: "cat-cave", name: "tanren-conformance" }, number: RETARGET_ALREADY_MAIN_PR },
+        CONFORMANCE_BASE_BRANCH,
+        token,
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  it("keeps a 422 retarget failure loud when the reconcile read shows another base", async () => {
+    const harness = gitHubProviderHarness();
+    const provider = harness.make();
+    const token = await provider.resolveToken(harness.creds());
+    await expect(
+      provider.retargetPullRequestBase(
+        { repo: { owner: "cat-cave", name: "tanren-conformance" }, number: RETARGET_STILL_OLD_BASE_PR },
+        CONFORMANCE_BASE_BRANCH,
+        token,
+      ),
+    ).rejects.toThrow(
+      "GitHub PR base retarget to main failed: HTTP 422: Validation Failed; reconcile GET HTTP 200; observed base tanren/integ/stale",
+    );
+  });
 });
 
 // MERGE-SAFETY (self-identity) — App path: an installation token resolves the
