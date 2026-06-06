@@ -101,6 +101,7 @@ async function resolveCredentialRepairProjects(pool: pg.Pool, eventId: string): 
     if (
       row === undefined ||
       !(
+        row.event_type === "credential.configured" ||
         row.event_type === "credential.github.configured" ||
         row.event_type === "org.github.connected" ||
         (row.event_type === "integration.provisioned" && row.payload?.["providerKind"] === "github") ||
@@ -157,6 +158,7 @@ async function listProjectsWithQueue(pool: pg.Pool): Promise<string[]> {
                      OR latest.payload ->> 'cause' IN ('missing_required_credential', 'missing_github_credential')
                      OR latest.payload ->> 'reason' IN ('missing_required_credential', 'missing_github_credential')
                      OR latest.payload ->> 'message' LIKE '%missing GitHub credential ref:%'
+                     OR latest.payload ->> 'message' LIKE '%missing % credential ref:%'
                      OR latest.payload ->> 'message' LIKE '%No GitHub credential configured%'
                    )
                    AND EXISTS (
@@ -166,7 +168,7 @@ async function listProjectsWithQueue(pool: pg.Pool): Promise<string[]> {
                         AND repair.org_id = mq.org_id
                         AND (repair.ts > latest.ts OR (repair.ts = latest.ts AND repair.id > latest.id))
                         AND (
-                          repair.event_type = 'credential.github.configured'
+                          repair.event_type IN ('credential.configured', 'credential.github.configured')
                           OR (
                             repair.event_type = 'integration.provisioned'
                             AND repair.payload ->> 'providerKind' = 'github'
@@ -181,19 +183,19 @@ async function listProjectsWithQueue(pool: pg.Pool): Promise<string[]> {
 	                            NULLIF(latest.payload ->> 'credentialRef', ''),
 	                            NULLIF(latest.payload ->> 'missingRef', ''),
 	                            NULLIF(latest.payload ->> 'requiredCredentialRef', ''),
-                            substring(latest.payload ->> 'message' from 'missing GitHub credential ref: ([^[:space:]]+)')
+                            substring(latest.payload ->> 'message' from 'missing [^:]* credential ref: ([^[:space:]]+)')
                           ) IS NULL
                           OR repair.payload ->> 'credentialRef' = COALESCE(
                             NULLIF(latest.payload ->> 'credentialRef', ''),
                             NULLIF(latest.payload ->> 'missingRef', ''),
                             NULLIF(latest.payload ->> 'requiredCredentialRef', ''),
-                            substring(latest.payload ->> 'message' from 'missing GitHub credential ref: ([^[:space:]]+)')
+                            substring(latest.payload ->> 'message' from 'missing [^:]* credential ref: ([^[:space:]]+)')
                           )
                           OR repair.payload ->> 'ref' = COALESCE(
                             NULLIF(latest.payload ->> 'credentialRef', ''),
                             NULLIF(latest.payload ->> 'missingRef', ''),
                             NULLIF(latest.payload ->> 'requiredCredentialRef', ''),
-	                            substring(latest.payload ->> 'message' from 'missing GitHub credential ref: ([^[:space:]]+)')
+	                            substring(latest.payload ->> 'message' from 'missing [^:]* credential ref: ([^[:space:]]+)')
 	                          )
 	                          OR EXISTS (
 	                            SELECT 1
@@ -207,7 +209,7 @@ async function listProjectsWithQueue(pool: pg.Pool): Promise<string[]> {
 	                               NULLIF(latest.payload ->> 'credentialRef', ''),
 	                               NULLIF(latest.payload ->> 'missingRef', ''),
 	                               NULLIF(latest.payload ->> 'requiredCredentialRef', ''),
-	                               substring(latest.payload ->> 'message' from 'missing GitHub credential ref: ([^[:space:]]+)')
+	                               substring(latest.payload ->> 'message' from 'missing [^:]* credential ref: ([^[:space:]]+)')
 	                             )
 	                          )
 	                        )

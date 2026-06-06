@@ -140,6 +140,18 @@ export const CredentialFailedPayload = z
   })
   .strict();
 
+// credential.configured — a credential was connected through a product API
+// surface. This is a generic repair signal for terminal missing-credential
+// holds; it carries only a credential REF, never the secret value.
+export const CredentialConfiguredPayload = z
+  .object({
+    provider: z.string(),
+    credentialKind: z.enum(["codex_chatgpt_auth", "github_app", "github_token", "opaque"]),
+    ref: z.string(),
+    redacted: z.literal(true),
+  })
+  .strict();
+
 // credential.github.configured — the operator connected GitHub through the
 // product API. This is a repair signal for previously-terminal missing-GitHub
 // merge holds; it carries only a credential REF, never the secret value.

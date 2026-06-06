@@ -179,6 +179,7 @@ function isRepairableGithubCredentialBlock(payload: Record<string, unknown>): bo
       ["missing_required_credential", "missing_github_credential"].includes(String(payload[key] ?? "")),
     ) ||
     String(payload["message"] ?? "").includes("missing GitHub credential ref:") ||
+    /missing [^:]* credential ref:/u.test(String(payload["message"] ?? "")) ||
     String(payload["message"] ?? "").includes("No GitHub credential configured")
   );
 }
@@ -188,10 +189,11 @@ function missingGithubCredentialRef(payload: Record<string, unknown>): string | 
     const value = stringValue(payload[key]);
     if (value !== null) return value;
   }
-  return /missing GitHub credential ref: ([^\s]+)/u.exec(String(payload["message"] ?? ""))?.[1] ?? null;
+  return /missing [^:]* credential ref: ([^\s]+)/u.exec(String(payload["message"] ?? ""))?.[1] ?? null;
 }
 
 function isGithubConnectionRepair(event: EventRow): boolean {
+  if (event.eventType === "credential.configured") return true;
   if (event.eventType === "integration.provisioned" && event.payload["providerKind"] === "github") return true;
   if (["org.github.connected", "credential.github.configured"].includes(event.eventType)) return true;
   return event.payload["provider"] === "github";

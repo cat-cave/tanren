@@ -14,6 +14,7 @@ import { describe, expect, it } from "vitest";
 import type { ActorContext } from "../src/auth/schemas.js";
 import { classifyAuthRef } from "../src/engine/costs/sources.js";
 import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
+import type { AppendEventInput, EventStore } from "../src/engine/eventStore.js";
 import { createAuthMiddleware, type ActorContextEnv } from "../src/middleware/auth.js";
 import { createAiProviderRoutes } from "../src/routes/aiProvider/index.js";
 import { InMemoryCredentialRegistry } from "./helpers/inMemoryCredentialRegistry.js";
@@ -29,12 +30,22 @@ const admin: ActorContext = {
 
 const member: ActorContext = { ...admin, scopes: ["org:member"] };
 
+class RecordingEventStore implements EventStore {
+  readonly appended: AppendEventInput[] = [];
+
+  async append(input: AppendEventInput): Promise<void> {
+    this.appended.push(input);
+  }
+}
+
 function buildHarness(actor: ActorContext) {
   const pool = new RoutesPool();
   pool.seedOrg({ id: "org_acme" });
   pool.seedMembership("org_acme", "user_alice", "admin");
+  pool.seedProject({ project_id: "project_acme", org_id: "org_acme" });
   const secrets = new InMemorySecretStore();
   const registry = new InMemoryCredentialRegistry();
+  const events = new RecordingEventStore();
   const app = new Hono<ActorContextEnv>();
   app.use(
     "*",
@@ -49,8 +60,8 @@ function buildHarness(actor: ActorContext) {
       localDevActor: actor,
     }),
   );
-  app.route("/orgs", createAiProviderRoutes({ pool: pool.asPgPool(), secrets, registry }));
-  return { app, pool, secrets, registry };
+  app.route("/orgs", createAiProviderRoutes({ pool: pool.asPgPool(), secrets, registry, events }));
+  return { app, pool, secrets, registry, events };
 }
 
 async function connect(app: Hono<ActorContextEnv>, body: Record<string, unknown>) {
@@ -108,7 +119,8 @@ describe("ai-provider routes", () => {
   });
 
   it("connects the Codex ChatGPT bundle as a subscription credential", async () => {
-    const { app } = buildHarness(admin);
+    const { app, events, pool } = buildHarness(admin);
+    pool.seedProject({ project_id: "project_other", org_id: "org_acme" });
     const created = await connect(app, {
       provider: "codex",
       authJson: JSON.stringify({ OPENAI_API_KEY: "sk-codex" }),
@@ -116,6 +128,19 @@ describe("ai-provider routes", () => {
     expect(created.status).toBe(201);
     expect(created.body.classifiedAs).toBe("subscription/openai");
     expect((created.body.ref as string).startsWith("credential/codex/org/org_acme/")).toBe(true);
+    expect(events.appended).toContainEqual(
+      expect.objectContaining({
+        projectId: "project_acme",
+        eventType: "credential.configured",
+        payload: {
+          provider: "codex",
+          credentialKind: "codex_chatgpt_auth",
+          ref: created.body.ref,
+          redacted: true,
+        },
+      }),
+    );
+    expect(events.appended.map((event) => event.projectId).sort()).toEqual(["project_acme", "project_other"]);
   });
 
   it("wires the connected ref as the org default LLM credential + providerMode byok", async () => {

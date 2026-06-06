@@ -32,6 +32,7 @@ import {
   CostOverageUnobservablePayload,
   CostResolvedPayload,
   CostUnattributedPayload,
+  CredentialConfiguredPayload,
   CredentialFailedPayload,
   CredentialGithubConfiguredPayload,
   CredentialLoadedPayload,
@@ -217,6 +218,7 @@ export const EventRegistry = {
   "credential.requested": CredentialRequestedPayload,
   "credential.loaded": CredentialLoadedPayload,
   "credential.failed": CredentialFailedPayload,
+  "credential.configured": CredentialConfiguredPayload,
   "credential.github.configured": CredentialGithubConfiguredPayload,
   // Managed-hosting dimension D: a per-run scoped Vault child token was minted
   // (ref paths + TTL/uses; never the token value).

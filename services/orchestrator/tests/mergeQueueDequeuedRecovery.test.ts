@@ -7,7 +7,7 @@ const ORG = "org_acme";
 const RUN = "run_blocked";
 const SPEC = "spec_apex";
 const PR_URL = "https://github.com/acme/apex/pull/15";
-const GITHUB_REF = "credential/github/org/org_acme/default";
+const CODEX_REF = "credential/codex/org/org_acme/default";
 
 describe("PgMergeQueueModel.recoverDequeuedCandidates", () => {
   it("revives a recoverable dequeued native-queue row with PR facts and no later terminal candidate event", async () => {
@@ -312,11 +312,11 @@ describe("PgMergeQueueModel.recoverDequeuedCandidates", () => {
     expect(pool.queue[0]?.status).toBe("dequeued");
   });
 
-  it("revives a terminal missing-GitHub-credential halt only after a later GitHub connection repair event", async () => {
+  it("revives a terminal missing-credential halt only after a later matching credential repair event", async () => {
     const pool = new QueueRecoveryPool();
     pool.seedProject(PROJECT, ORG);
     pool.seedQueue({
-      queueId: "mq_missing_github_repaired",
+      queueId: "mq_missing_credential_repaired",
       runId: RUN,
       specId: SPEC,
       projectId: PROJECT,
@@ -347,8 +347,8 @@ describe("PgMergeQueueModel.recoverDequeuedCandidates", () => {
         integration: "native_queue",
         terminal: true,
         kind: "missing_required_credential",
-        credentialRef: GITHUB_REF,
-        message: `missing GitHub credential ref: ${GITHUB_REF}`,
+        credentialRef: CODEX_REF,
+        message: `missing Codex credential ref: ${CODEX_REF}`,
         members: [{ specId: SPEC, prNumber: 15 }],
       },
     });
@@ -362,12 +362,12 @@ describe("PgMergeQueueModel.recoverDequeuedCandidates", () => {
       orgId: ORG,
       runId: null,
       specId: null,
-      eventType: "credential.github.configured",
+      eventType: "credential.configured",
       ts: new Date("2026-05-01T00:00:02.000Z"),
       payload: {
-        mode: "app",
-        credentialKind: "github_app",
-        ref: "credential/github-app/platform/default",
+        provider: "codex",
+        credentialKind: "codex_chatgpt_auth",
+        ref: CODEX_REF,
         redacted: true,
       },
     });

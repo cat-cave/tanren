@@ -82,6 +82,12 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["ref", "redacted"],
     ["message", "public"],
   ]),
+  ...rulesFor("credential.configured", [
+    ["provider", "public"],
+    ["credentialKind", "public"],
+    ["ref", "redacted"],
+    ["redacted", "public"],
+  ]),
   ...rulesFor("credential.github.configured", [
     ["mode", "public"],
     ["credentialKind", "public"],
