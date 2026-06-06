@@ -151,6 +151,46 @@ describe("PgMergeQueueModel.recoverDequeuedCandidates", () => {
     expect(pool.queue[0]?.status).toBe("queued");
   });
 
+  it("does revive when an older same-spec conflict replan predates a later blocked dequeue", async () => {
+    const pool = new QueueRecoveryPool();
+    pool.seedProject(PROJECT, ORG);
+    pool.seedQueue({
+      queueId: "mq_apex_later_blocked",
+      runId: RUN,
+      specId: SPEC,
+      projectId: PROJECT,
+      orgId: ORG,
+      prUrl: PR_URL,
+      prNumber: "15",
+      status: "dequeued",
+      dequeueReason: "blocked",
+      settledAt: new Date("2026-06-05T21:47:33.000Z"),
+    });
+    pool.seedEvent({
+      projectId: PROJECT,
+      orgId: ORG,
+      runId: "run_old_conflict",
+      specId: SPEC,
+      eventType: "merge.conflict.replan_routed",
+      ts: new Date("2026-06-05T21:40:00.000Z"),
+      payload: { specId: SPEC, newContext: "autonomous replan routed for an earlier conflict" },
+    });
+    pool.seedEvent({
+      projectId: PROJECT,
+      orgId: ORG,
+      runId: RUN,
+      specId: SPEC,
+      eventType: "merge.dequeued",
+      ts: new Date("2026-06-05T21:47:33.000Z"),
+      payload: { integration: "native_queue", reason: "blocked", prUrl: PR_URL, prNumber: 15 },
+    });
+
+    const recovered = await new PgMergeQueueModel(pool.asPgPool()).recoverDequeuedCandidates(PROJECT);
+
+    expect(recovered).toBe(1);
+    expect(pool.queue[0]?.status).toBe("queued");
+  });
+
   it("does not revive after a terminal same-candidate infra halt", async () => {
     const pool = new QueueRecoveryPool();
     pool.seedProject(PROJECT, ORG);
@@ -165,6 +205,15 @@ describe("PgMergeQueueModel.recoverDequeuedCandidates", () => {
       status: "dequeued",
       dequeueReason: "blocked",
       settledAt: new Date("2026-05-01T00:00:00.000Z"),
+    });
+    pool.seedEvent({
+      projectId: PROJECT,
+      orgId: ORG,
+      runId: RUN,
+      specId: SPEC,
+      eventType: "merge.dequeued",
+      ts: new Date("2026-05-01T00:00:00.500Z"),
+      payload: { integration: "native_queue", reason: "blocked", prUrl: PR_URL, prNumber: 15 },
     });
     pool.seedEvent({
       projectId: PROJECT,

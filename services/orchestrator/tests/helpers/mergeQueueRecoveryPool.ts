@@ -84,13 +84,14 @@ export class QueueRecoveryPool {
       .filter((row) => row.dequeueReason === "blocked")
       .filter((row) => row.prUrl !== null && row.prUrl !== "" && row.prNumber !== null)
       .filter((row) => !this.queue.some((active) => active !== row && active.runId === row.runId && isActive(active)))
-      .filter((row) => hasRecoverableNativeDequeue(row, this.events))
-      .filter((row) => !hasSuppressingSignal(row, this.events))
+      .map((row) => ({ row, anchor: latestRecoverableNativeDequeue(row, this.events) }))
+      .filter((candidate): candidate is { row: QueueRow; anchor: EventRow } => candidate.anchor !== undefined)
+      .filter((candidate) => !hasSuppressingSignal(candidate.row, this.events, candidate.anchor))
       .map((row) => ({
-        row,
-        dequeueReason: row.dequeueReason,
-        prUrl: row.prUrl,
-        prNumber: row.prNumber,
+        row: row.row,
+        dequeueReason: row.row.dequeueReason,
+        prUrl: row.row.prUrl,
+        prNumber: row.row.prNumber,
       }));
     this.beforeWrite?.();
     this.beforeWrite = undefined;
@@ -109,18 +110,22 @@ export class QueueRecoveryPool {
   }
 }
 
-function hasRecoverableNativeDequeue(row: QueueRow, events: EventRow[]): boolean {
-  return events.some(
-    (event) =>
-      event.eventType === "merge.dequeued" &&
-      event.payload["integration"] === "native_queue" &&
-      event.payload["reason"] === "blocked" &&
-      candidateSignalMatches(row, event, false),
-  );
+function latestRecoverableNativeDequeue(row: QueueRow, events: EventRow[]): EventRow | undefined {
+  return events
+    .filter(
+      (event) =>
+        event.eventType === "merge.dequeued" &&
+        event.payload["integration"] === "native_queue" &&
+        event.payload["reason"] === "blocked" &&
+        candidateSignalMatches(row, event, false),
+    )
+    .sort(compareEventsDesc)[0];
 }
 
-function hasSuppressingSignal(row: QueueRow, events: EventRow[]): boolean {
-  return events.some((event) => isSuppressingSignal(event) && candidateSignalMatches(row, event, true));
+function hasSuppressingSignal(row: QueueRow, events: EventRow[], anchor: EventRow): boolean {
+  return events.some(
+    (event) => isAfter(event, anchor) && isSuppressingSignal(event) && candidateSignalMatches(row, event, true),
+  );
 }
 
 function candidateSignalMatches(row: QueueRow, event: EventRow, includeSpecOnlySignals: boolean): boolean {
@@ -171,6 +176,21 @@ function membersMatch(row: QueueRow, value: unknown): boolean {
 
 function isActive(row: QueueRow): boolean {
   return row.status === "queued" || row.status === "merging";
+}
+
+function compareEventsDesc(left: EventRow, right: EventRow): number {
+  const tsDelta = right.ts.getTime() - left.ts.getTime();
+  if (tsDelta !== 0) return tsDelta;
+  return eventId(right) - eventId(left);
+}
+
+function isAfter(event: EventRow, anchor: EventRow): boolean {
+  const tsDelta = event.ts.getTime() - anchor.ts.getTime();
+  return tsDelta > 0 || (tsDelta === 0 && eventId(event) > eventId(anchor));
+}
+
+function eventId(event: EventRow): number {
+  return event.id ?? 0;
 }
 
 function stringValue(value: unknown): string | null {

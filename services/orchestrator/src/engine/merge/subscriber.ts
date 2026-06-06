@@ -98,7 +98,7 @@ async function listProjectsWithQueue(pool: pg.Pool): Promise<string[]> {
         WHERE mq.status IN ('queued', 'merging')
            OR (
              mq.status = 'dequeued'
-             AND mq.dequeue_reason IN ('blocked', 'conflict')
+             AND mq.dequeue_reason = 'blocked'
              AND mq.pr_url IS NOT NULL
              AND mq.pr_url <> ''
              AND mq.pr_number IS NOT NULL
@@ -111,7 +111,7 @@ async function listProjectsWithQueue(pool: pg.Pool): Promise<string[]> {
              AND COALESCE((
                SELECT latest.event_type = 'merge.dequeued'
                   AND latest.payload ->> 'integration' = 'native_queue'
-                  AND latest.payload ->> 'reason' IN ('blocked', 'conflict')
+                  AND latest.payload ->> 'reason' = 'blocked'
                  FROM events latest
                 WHERE latest.id = (
                   SELECT e.id
