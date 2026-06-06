@@ -26,19 +26,13 @@ const roadmapDocs = ["PROJECT_BRIEF.md", "ROADMAP.md", "docs/architecture/autono
 const vendoredData = ["services/orchestrator/src/engine/costs/pricing/model_prices.json"];
 const lineMaxExclusions = new Set([...roadmapDocs, ...vendoredData, "pnpm-lock.yaml"]);
 const invariantDocExclusions = new Set(["PROJECT_BRIEF.md", "docs/contracts/architecture-checks.md"]);
-// these files deliberately attempt (or document) a RAW event insert by
-// the de-privileged data-plane role to PROVE Postgres REJECTS it — exempt from single-event-writer.
-const singleEventWriterExclusions = new Set([
-  // These tests seed `events` via the OWNER pool then PROVE the de-privileged data-plane
-  // role's raw events INSERT/SELECT is REJECTED — exempt from single-event-writer.
-  "services/orchestrator/tests/planeSplitP3bDeprivilege.integration.test.ts",
-  "services/orchestrator/tests/planeSplitP3LifecycleRead.integration.test.ts",
-  "services/orchestrator/tests/planeSplitP3StrandReconcilerRead.integration.test.ts",
-  "services/orchestrator/tests/autonomyLoopRemoteWrites.test.ts",
-  "scripts/smoke/plane-split-deprivilege.ts",
-  "scripts/smoke/plane-split-worker.ts",
-  "justfile",
-]);
+const rawEventWriteProofs = [
+  [
+    "services/orchestrator/tests/planeSplitP3bDeprivilege.integration.test.ts",
+    /REJECTS a direct INSERT INTO events by the data-plane role|control-plane tanren_app role CAN insert the same event \(contrast\)/su,
+  ],
+  ["scripts/smoke/plane-split-deprivilege.ts", /Assert a direct `events` INSERT by the de-privileged/su],
+];
 const requiredDocs = [
   "AGENTS.md",
   "docs/playbooks/spec-template.md",
@@ -61,6 +55,13 @@ function isIgnored(path) {
 
 function lineFor(text, index) {
   return text.slice(0, index).split("\n").length;
+}
+
+function isCommentOnlyMatch(text, index) {
+  const lineStart = text.lastIndexOf("\n", index - 1) + 1;
+  const lineEnd = text.indexOf("\n", index);
+  const line = text.slice(lineStart, lineEnd === -1 ? text.length : lineEnd).trimStart();
+  return line.startsWith("//") || line.startsWith("#") || line.startsWith("*");
 }
 
 function diagnostic(rule, file, message, line = 1) {
@@ -118,12 +119,11 @@ function checkLineMax(projectFiles) {
 
 function checkSingleEventWriter(projectFiles) {
   const diagnostics = [];
-  const sqlInsert = new RegExp("INSERT\\s+INTO\\s+events", "giu");
+  const sqlInsert = /[`"']\s*INSERT\s+INTO\s+events/giu;
   const drizzleInsert = /db\.insert\s*\(\s*events\s*\)/gu;
   for (const { file, text } of projectFiles) {
     if (
       invariantDocExclusions.has(file) ||
-      singleEventWriterExclusions.has(file) ||
       file === "services/orchestrator/src/engine/eventStore.ts" ||
       file.startsWith("db/migrations/")
     ) {
@@ -131,6 +131,9 @@ function checkSingleEventWriter(projectFiles) {
     }
     for (const pattern of [sqlInsert, drizzleInsert]) {
       for (const match of text.matchAll(pattern)) {
+        if (isCommentOnlyMatch(text, match.index) || isRawEventWriteProof(file, text, match.index)) {
+          continue;
+        }
         diagnostics.push(
           diagnostic(
             "single-event-writer",
@@ -143,6 +146,11 @@ function checkSingleEventWriter(projectFiles) {
     }
   }
   return diagnostics;
+}
+
+function isRawEventWriteProof(file, text, index) {
+  const contextBefore = text.slice(Math.max(0, index - 1_200), index);
+  return rawEventWriteProofs.some(([proofFile, proofBefore]) => proofFile === file && proofBefore.test(contextBefore));
 }
 
 function checkFailureVariants(projectFiles) {

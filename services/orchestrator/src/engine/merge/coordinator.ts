@@ -33,6 +33,7 @@ import {
 import { isRetriableInfraError } from "../providers/githubRefReset.js";
 import { isAmbiguousMergeError } from "../providers/mergeOutcomeErrors.js";
 import type { SpecEscalator } from "./coordinatorEscalate.js";
+import { holdOrHaltRecoverableDrive, RecoverableDriveHoldCeiling } from "./recoverableDriveHold.js";
 
 /** How long after a transient merge-drive infra-hold the subscriber re-drives the project. */
 const TRANSIENT_DRIVE_HOLD_RETRY_AFTER_MS = 3000;
@@ -92,6 +93,48 @@ export interface MergeCoordinatorDeps {
 }
 
 /**
+ * Queue/event split-brain guard: terminal dequeue is never made durable before its
+ * durable event. If the event append fails, the entry remains active (`merging` or
+ * `queued`) and the failure is visible to the coordinator instead of producing an
+ * invisible dequeued row that startup/recovery cannot reason about.
+ */
+export async function markDequeuedAfterEvent(input: {
+  queue: MergeQueueModel;
+  events: MergeQueueEventEmitter;
+  projectId: string;
+  entry: MergeQueueEntry;
+  reason: DequeueReason;
+  message: string;
+}): Promise<void> {
+  await input.events.emitDequeued({
+    projectId: input.projectId,
+    entry: input.entry,
+    reason: input.reason,
+    message: input.message,
+  });
+  await input.queue.markDequeued(input.entry.queueId, input.reason);
+}
+
+export async function markInfraBlockedAfterEvent(input: {
+  queue: MergeQueueModel;
+  events: MergeQueueEventEmitter;
+  projectId: string;
+  entry: MergeQueueEntry;
+  kind: "ceiling" | "ambiguous";
+  attempts: number;
+  message: string;
+}): Promise<void> {
+  await input.events.emitInfraBlocked({
+    projectId: input.projectId,
+    entry: input.entry,
+    kind: input.kind,
+    attempts: input.attempts,
+    message: input.message,
+  });
+  await input.queue.markDequeued(input.entry.queueId, "blocked");
+}
+
+/**
  * The production MergeCoordinator. One `coordinate(projectId)` pass merges AT MOST
  * ONE entry (serialization). It reloads the queue every pass (DAG state is the
  * source of truth, never cached): a merge completing re-triggers the coordinator,
@@ -109,6 +152,7 @@ export class EventEmittingMergeCoordinator implements MergeCoordinator {
    * settle (merged / dequeued / ceiling-halt) so a recovered entry starts fresh.
    */
   private readonly infraHoldAttempts = new Map<string, number>();
+  private readonly recoverableDriveHolds = new RecoverableDriveHoldCeiling();
 
   constructor(private readonly deps: MergeCoordinatorDeps) {}
 
@@ -117,6 +161,7 @@ export class EventEmittingMergeCoordinator implements MergeCoordinator {
     // row; return it to `queued` so this pass re-considers it (the GitHub merge is
     // idempotent, so re-driving an already-merged PR is a no-op).
     await this.deps.queue.recoverStaleClaims(projectId);
+    await this.deps.queue.recoverDequeuedCandidates(projectId);
 
     const snapshot = await this.deps.queue.loadSnapshot(projectId);
     const selection = selectNextMerge(snapshot);
@@ -166,7 +211,12 @@ export class EventEmittingMergeCoordinator implements MergeCoordinator {
   private async driveAndSettle(
     projectId: string,
     entry: MergeQueueEntry,
-  ): Promise<{ mergedSpecId?: string; dequeuedSpecId?: string; holdReason?: "infra_error"; retryAfterMs?: number }> {
+  ): Promise<{
+    mergedSpecId?: string;
+    dequeuedSpecId?: string;
+    holdReason?: "infra_error" | "merge_retry";
+    retryAfterMs?: number;
+  }> {
     let outcome: MergeDriveOutcome;
     try {
       outcome = await this.deps.runner.driveMerge({ runId: entry.runId, projectId });
@@ -189,6 +239,7 @@ export class EventEmittingMergeCoordinator implements MergeCoordinator {
             attempts,
           );
         }
+        this.recoverableDriveHolds.reset(entry.queueId);
         this.infraHoldAttempts.set(entry.queueId, attempts);
         // Release the claim so the entry stays queued, then HOLD loudly + arm a re-drive.
         await this.deps.queue.releaseClaim(entry.queueId);
@@ -207,6 +258,7 @@ export class EventEmittingMergeCoordinator implements MergeCoordinator {
     this.infraHoldAttempts.delete(entry.queueId);
 
     if (outcome.kind === "merged") {
+      this.recoverableDriveHolds.reset(entry.queueId);
       await this.deps.queue.markMerged(entry.queueId);
       // The merge stage itself emits merge.completed (it owns the real merge); the
       // coordinator does not double-emit it. The next pass (re-triggered by that
@@ -215,6 +267,7 @@ export class EventEmittingMergeCoordinator implements MergeCoordinator {
     }
 
     if (outcome.kind === "needs_attention") {
+      this.recoverableDriveHolds.reset(entry.queueId);
       // The LOUD TERMINAL ESCALATION (§2c — non-bricking): the resolver judged this spec
       // GENUINELY irreconcilable. PARK it at `needs_attention` (frees its slot — the rest
       // of the DAG keeps moving) FIRST, then dequeue `needs_attention` (the entry leaves
@@ -222,15 +275,44 @@ export class EventEmittingMergeCoordinator implements MergeCoordinator {
       // path — re-executing it would just re-conflict forever. The escalator emits the
       // loud `dag.spec.needs_attention`; the dequeue emits `merge.dequeued`.
       await this.deps.escalator.escalate({ projectId, entry, message: outcome.message });
-      await this.deps.queue.markDequeued(entry.queueId, "needs_attention");
-      await this.deps.events.emitDequeued({ projectId, entry, reason: "needs_attention", message: outcome.message });
+      await markDequeuedAfterEvent({
+        queue: this.deps.queue,
+        events: this.deps.events,
+        projectId,
+        entry,
+        reason: "needs_attention",
+        message: outcome.message,
+      });
       return { dequeuedSpecId: entry.specId };
     }
 
-    // The dequeue reason: "conflict" | "blocked" | "failed".
+    if (outcome.kind === "blocked") {
+      const held = await holdOrHaltRecoverableDrive({
+        ceiling: this.recoverableDriveHolds,
+        queue: this.deps.queue,
+        events: this.deps.events,
+        projectId,
+        entry,
+        outcome,
+      });
+      if (held.kind === "held") {
+        return { holdReason: "merge_retry", retryAfterMs: held.retryAfterMs };
+      }
+      return { dequeuedSpecId: held.dequeuedSpecId };
+    }
+
+    // A returned `conflict` usually means the resolver already routed an
+    // autonomous re-plan; a terminal merge-stage failure also leaves the queue.
+    this.recoverableDriveHolds.reset(entry.queueId);
     const reason = outcome.kind;
-    await this.deps.queue.markDequeued(entry.queueId, reason);
-    await this.deps.events.emitDequeued({ projectId, entry, reason, message: outcome.message });
+    await markDequeuedAfterEvent({
+      queue: this.deps.queue,
+      events: this.deps.events,
+      projectId,
+      entry,
+      reason,
+      message: outcome.message,
+    });
     return { dequeuedSpecId: entry.specId };
   }
 
@@ -251,8 +333,16 @@ export class EventEmittingMergeCoordinator implements MergeCoordinator {
     attempts = this.infraHoldAttempts.get(entry.queueId) ?? 0,
   ): Promise<{ dequeuedSpecId: string }> {
     this.infraHoldAttempts.delete(entry.queueId);
-    await this.deps.queue.markDequeued(entry.queueId, "blocked");
-    await this.deps.events.emitInfraBlocked({ projectId, entry, kind, attempts, message });
+    this.recoverableDriveHolds.reset(entry.queueId);
+    await markInfraBlockedAfterEvent({
+      queue: this.deps.queue,
+      events: this.deps.events,
+      projectId,
+      entry,
+      kind,
+      attempts,
+      message,
+    });
     console.error(
       `[merge-coordinator] project ${projectId}: merge drive for spec ${entry.specId} HALTED (${kind}) after ${attempts} infra re-drive(s); operator attention required: ${message}`,
     );

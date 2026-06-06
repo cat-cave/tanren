@@ -36,6 +36,15 @@ describeMergeCoordinatorConformance("EventEmittingMergeCoordinator (in-memory)",
           priority: (entry.priority ?? "tbd") as SpecPriority,
         });
       },
+      seedLegacyDequeued(entry): void {
+        queue.seedLegacyDequeued({
+          runId: entry.runId,
+          specId: entry.specId,
+          reason: entry.reason,
+          dependsOn: entry.dependsOn,
+          priority: (entry.priority ?? "tbd") as SpecPriority,
+        });
+      },
       setMerged(specId: string): void {
         queue.markSpecMerged(specId);
       },

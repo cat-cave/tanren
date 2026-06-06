@@ -18,10 +18,9 @@
 // any human is notified. Routine low-severity lifecycle events match no route
 // and notify no one (no spam); a fail-severity escalation lands.
 //
-// The events read uses the BYPASSRLS system pool (`getSystemPool() ?? pool`):
-// the de-privileged data-plane role cannot SELECT `events` (migration 0031
-// REVOKE), so a read off the bare pool would throw 42501. This mirrors the
-// strand reconciler's `countPriorUnstrands`.
+// The event wake carries only a row id, not an org id, so the single-row lookup
+// uses the system pool. Tenant-scoped dispatcher work is re-entered under the
+// event's org before reading routes or writing notification rows.
 
 import {
   NOTIFICATION_CHANNEL,
@@ -130,10 +129,9 @@ export class NotificationSubscriber {
   }
 
   /**
-   * Read the appended event row by id. `events` is read on the BYPASSRLS system
-   * pool because the data-plane role cannot SELECT it (migration 0031 REVOKE);
-   * the system scope is cross-org (the wake carries no org), so this is a bare
-   * id lookup — the dispatcher re-applies the org scope when it loads the matrix.
+   * Read the appended event row by id. The system scope is cross-org because the
+   * wake carries no org, so this is a bare id lookup; the dispatcher re-applies the
+   * event org scope when it loads the matrix.
    */
   private async readEvent(eventId: string): Promise<NotificationEventRow | undefined> {
     const readPool = getSystemPool() ?? this.deps.pool;

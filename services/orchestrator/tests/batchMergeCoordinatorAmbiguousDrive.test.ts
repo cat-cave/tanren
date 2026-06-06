@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { BatchMergeCoordinator } from "../src/engine/merge/batchCoordinator.js";
 import { MergeAmbiguousError } from "../src/engine/providers/mergeOutcomeErrors.js";
 import { InMemoryBatchChecker, RecordingBatchMergeEventEmitter } from "./conformance/fakes/inMemoryBatchChecker.js";
@@ -98,5 +98,18 @@ describe("BatchMergeCoordinator — ambiguous drive throw", () => {
     expect(h.batchEvents.events).toContainEqual(
       expect.objectContaining({ type: "infra_blocked", specIds: ["spec_b"], terminal: true, consecutiveHolds: 1 }),
     );
+  });
+
+  it("keeps a passing-batch ambiguity claimed when terminal batch event append fails before settlement", async () => {
+    const h = makeHarness();
+    h.queue.seed({ runId: "run_a", specId: "spec_a", dependsOn: [], priority: "tbd" });
+    h.runner.driveMerge = async () => {
+      throw new MergeAmbiguousError("merge PUT 504 and state could not be confirmed");
+    };
+    vi.spyOn(h.batchEvents, "emitInfraBlocked").mockRejectedValueOnce(new Error("event store unavailable"));
+
+    await expect(h.coordinator.coordinate("project_batch")).rejects.toThrow("event store unavailable");
+
+    expect(h.queue.statusOf("run_a")).toBe("merging");
   });
 });

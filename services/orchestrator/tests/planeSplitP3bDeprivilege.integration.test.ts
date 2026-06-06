@@ -4,17 +4,18 @@
 // migration 0031 DROPS those write grants from the `tanren_dataplane` role the
 // `worker` container connects as. A compromised runner connecting as that role
 // can no longer forge a timeline event or a cost record — Postgres itself
-// rejects the INSERT.
+// rejects the INSERT. Read-only event access is kept under RLS for autonomous
+// worker projections/recovery that need prior event signals.
 //
 // What this proves under the de-privileged `tanren_dataplane` role (the NEGATIVE
 // test is the whole point):
 //   (a) a direct, correctly-org-scoped INSERT INTO events is REJECTED with
-//       `permission denied for table events` — the grant is actually GONE, not
+//       `permission denied for table events` — the write grant is actually GONE, not
 //       merely RLS-filtered (RLS would yield a row-violation, NOT a privilege
 //       error; we assert the privilege error specifically);
 //   (b) a direct INSERT INTO cost_records is likewise REJECTED;
-//   (c) the role can STILL SELECT cost_records (post-run usage accrual keeps
-//       reading it) — we dropped only the writes, not the read;
+//   (c) the role can STILL SELECT events + cost_records under org scope — we
+//       dropped writes, not RLS-enforced reads;
 //   (d) the role can STILL write the tenant tables the workflow legitimately
 //       writes directly this wave — runs (the `running` transition) + tasks (the
 //       subtask-loop lifecycle) — proving we did NOT over-revoke and break runs;
@@ -93,8 +94,8 @@ describeDb("plane-split P3b — the de-privileged tanren_dataplane role (real PG
     await adminPool.end();
 
     ownerPool = new Pool({ connectionString: withDatabase(ADMIN_URL, database) });
-    // The REAL migration set creates `tanren_dataplane` + drops its events /
-    // cost_records write grants (0031), on top of the RLS policies (0030).
+    // The REAL migration set creates `tanren_dataplane`, drops its events /
+    // cost_records write grants, keeps event/cost reads, and installs RLS.
     await migrate(ownerPool);
 
     dataPlanePool = new Pool({ connectionString: withRole(ADMIN_URL, DATAPLANE_ROLE, DATAPLANE_PASSWORD, database) });
@@ -143,7 +144,7 @@ describeDb("plane-split P3b — the de-privileged tanren_dataplane role (real PG
 
   // (a) THE CORE NEGATIVE TEST: a direct, correctly-org-scoped event INSERT by
   // the data-plane role is rejected for lack of the privilege (code 42501 /
-  // "permission denied for table events") — proving the grant is actually gone.
+  // "permission denied for table events") — proving the write grant is actually gone.
   it("(a) REJECTS a direct INSERT INTO events by the data-plane role (grant dropped)", async () => {
     await expect(
       inOrgScope(dataPlanePool, (client) =>
@@ -187,13 +188,20 @@ describeDb("plane-split P3b — the de-privileged tanren_dataplane role (real PG
     ).rejects.toMatchObject({ code: "42501" });
   });
 
-  // (c) The role KEEPS the cost_records READ (post-run usage accrual reads it).
-  it("(c) ALLOWS the data-plane role to SELECT cost_records (read kept)", async () => {
+  // (c) The role KEEPS RLS-enforced event/cost READS. The merge-queue recovery
+  // pass reads `events` signals under `runWithOrgScope`; this must be a row-policy
+  // decision, not a table-privilege denial.
+  it("(c) ALLOWS the data-plane role to SELECT events + cost_records under org scope", async () => {
     await expect(
       inOrgScope(dataPlanePool, (client) =>
-        client.query("SELECT count(*)::int AS n FROM cost_records WHERE run_id = $1", [RUN]),
+        client.query(
+          `SELECT
+             (SELECT count(*)::int FROM events WHERE run_id = $1) AS event_count,
+             (SELECT count(*)::int FROM cost_records WHERE run_id = $1) AS cost_count`,
+          [RUN],
+        ),
       ),
-    ).resolves.toMatchObject({ rows: [{ n: 0 }] });
+    ).resolves.toMatchObject({ rows: [{ event_count: 0, cost_count: 0 }] });
   });
 
   // (d) The role KEEPS the `job_queue` write — a cross-org SYSTEM table OUTSIDE

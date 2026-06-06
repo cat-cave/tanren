@@ -10,15 +10,19 @@
 //     LOUD merge.queue.infra_blocked (kind ceiling) + dequeues (no re-drive forever);
 //   - a MergeAmbiguousError → a LOUD infra_blocked (kind ambiguous) + dequeue, NO
 //     re-drive (never re-PUT — could double-merge);
-//   - a THROWN typed-PERMANENT infra error → keeps the recoverable `blocked` dequeue;
-//   - a RETURNED genuine block/conflict → still dequeues (unchanged).
+//   - a THROWN typed-PERMANENT infra error / returned block or conflict → releases
+//     the claim with bounded merge_retry backoff instead of stranding the candidate.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { MergeDriveOutcome, MergeRunner } from "../src/engine/contracts/mergeCoordinator.js";
 import { EventEmittingMergeCoordinator } from "../src/engine/merge/coordinator.js";
 import { RefResetPermanentError, RefResetTransientError } from "../src/engine/providers/githubRefReset.js";
 import { MergeAmbiguousError, MergeTransientError } from "../src/engine/providers/mergeOutcomeErrors.js";
-import { InMemoryMergeQueueModel, RecordingMergeQueueEventEmitter } from "./conformance/fakes/inMemoryMergeQueue.js";
+import {
+  InMemoryMergeQueueModel,
+  RecordingMergeQueueEventEmitter,
+  RecordingSpecEscalator,
+} from "./conformance/fakes/inMemoryMergeQueue.js";
 
 /**
  * A merge runner that THROWS a scripted error for a given run id (the drive failing).
@@ -70,7 +74,12 @@ function harness(): {
   const queue = new InMemoryMergeQueueModel();
   const runner = new ThrowingMergeRunner();
   const events = new RecordingMergeQueueEventEmitter();
-  const coordinator = new EventEmittingMergeCoordinator({ queue, runner, events });
+  const coordinator = new EventEmittingMergeCoordinator({
+    queue,
+    runner,
+    events,
+    escalator: new RecordingSpecEscalator(),
+  });
   return { queue, runner, events, coordinator };
 }
 
@@ -193,32 +202,88 @@ describe("EventEmittingMergeCoordinator — transient merge-drive throw → infr
     expect(runner.drives.filter((d) => d.runId === "run_m")).toHaveLength(1);
   });
 
-  it("a typed RefResetPermanentError → keeps the recoverable `blocked` dequeue (genuine block)", async () => {
+  it("keeps a conflict claim active when merge.dequeued append fails before settlement", async () => {
+    const { queue, runner, events, coordinator } = harness();
+    queue.seed({ runId: "run_split", specId: "spec_split", dependsOn: [], priority: "tbd" });
+    runner.returnFor("run_split", { kind: "conflict", message: "resolver routed replan" });
+    vi.spyOn(events, "emitDequeued").mockRejectedValueOnce(new Error("event store unavailable"));
+
+    await expect(coordinator.coordinate(PROJECT)).rejects.toThrow("event store unavailable");
+
+    expect(queue.statusOf("run_split")).toBe("merging");
+  });
+
+  it("keeps an ambiguous merge claim active when infra-blocked append fails before settlement", async () => {
+    const { queue, runner, events, coordinator } = harness();
+    queue.seed({ runId: "run_ambiguous_split", specId: "spec_ambiguous_split", dependsOn: [], priority: "tbd" });
+    runner.throwFor("run_ambiguous_split", new MergeAmbiguousError("merge state unconfirmable"));
+    vi.spyOn(events, "emitInfraBlocked").mockRejectedValueOnce(new Error("event store unavailable"));
+
+    await expect(coordinator.coordinate(PROJECT)).rejects.toThrow("event store unavailable");
+
+    expect(queue.statusOf("run_ambiguous_split")).toBe("merging");
+  });
+
+  it("a typed RefResetPermanentError → bounded merge_retry hold, not a stranded dequeue", async () => {
     const { queue, runner, events, coordinator } = harness();
     queue.seed({ runId: "run_c", specId: "spec_c", dependsOn: [], priority: "tbd" });
     runner.throwFor("run_c", new RefResetPermanentError("ref force-update failed: HTTP 404"));
 
     const result = await coordinator.coordinate(PROJECT);
 
-    // A permanent infra error is a genuine block → dequeued (recoverable), NOT held.
-    expect(result.holdReason).toBeUndefined();
-    expect(result.dequeuedSpecId).toBe("spec_c");
-    expect(queue.statusOf("run_c")).toBe("dequeued");
-    const dequeued = events.events.filter((e) => e.type === "merge.dequeued");
-    expect(dequeued).toHaveLength(1);
-    expect(dequeued[0]?.reason).toBe("blocked");
+    expect(result.holdReason).toBe("merge_retry");
+    expect(result.retryAfterMs).toBeGreaterThan(0);
+    expect(result.dequeuedSpecId).toBeUndefined();
+    expect(queue.statusOf("run_c")).toBe("queued");
+    expect(events.events.some((e) => e.type === "merge.dequeued")).toBe(false);
   });
 
-  it("a RETURNED genuine conflict still dequeues (unchanged) — not held", async () => {
+  it("a RETURNED recoverable block releases the claim with backoff — not a stranded dequeue", async () => {
     const { queue, runner, events, coordinator } = harness();
     queue.seed({ runId: "run_d", specId: "spec_d", dependsOn: [], priority: "tbd" });
-    runner.returnFor("run_d", { kind: "conflict", message: "merge conflict on main" });
+    runner.returnFor("run_d", { kind: "blocked", message: "percolation owns the spec" });
 
     const result = await coordinator.coordinate(PROJECT);
 
-    expect(result.holdReason).toBeUndefined();
-    expect(result.dequeuedSpecId).toBe("spec_d");
-    expect(queue.statusOf("run_d")).toBe("dequeued");
-    expect(events.events.some((e) => e.type === "merge.dequeued" && e.reason === "conflict")).toBe(true);
+    expect(result.holdReason).toBe("merge_retry");
+    expect(result.retryAfterMs).toBeGreaterThan(0);
+    expect(result.dequeuedSpecId).toBeUndefined();
+    expect(queue.statusOf("run_d")).toBe("queued");
+    expect(events.events.some((e) => e.type === "merge.dequeued")).toBe(false);
+  });
+
+  it("RECOVERS: a returned blocked hold then later merged drive lands the same queued entry", async () => {
+    const { queue, runner, coordinator } = harness();
+    queue.seed({ runId: "run_conflict_then_merge", specId: "spec_recover", dependsOn: [], priority: "tbd" });
+    runner.returnFor("run_conflict_then_merge", { kind: "blocked", message: "retryable merge posture" });
+
+    const held = await coordinator.coordinate(PROJECT);
+    expect(held.holdReason).toBe("merge_retry");
+    expect(queue.statusOf("run_conflict_then_merge")).toBe("queued");
+
+    runner.returnFor("run_conflict_then_merge", { kind: "merged", mergeSha: "fixed" });
+    const merged = await coordinator.coordinate(PROJECT);
+    expect(merged.mergedSpecId).toBe("spec_recover");
+    expect(queue.statusOf("run_conflict_then_merge")).toBe("merged");
+  });
+
+  it("BOUNDED: repeated returned blocks eventually emit terminal infra_blocked and leave the queue", async () => {
+    const { queue, runner, events, coordinator } = harness();
+    queue.seed({ runId: "run_loop", specId: "spec_loop", dependsOn: [], priority: "tbd" });
+    runner.returnFor("run_loop", { kind: "blocked", message: "still blocked" });
+
+    let last = await coordinator.coordinate(PROJECT);
+    for (let i = 0; i < 10 && last.holdReason === "merge_retry"; i += 1) {
+      expect(queue.statusOf("run_loop")).toBe("queued");
+      last = await coordinator.coordinate(PROJECT);
+    }
+
+    expect(last.dequeuedSpecId).toBe("spec_loop");
+    expect(last.retryAfterMs).toBeUndefined();
+    expect(queue.statusOf("run_loop")).toBe("dequeued");
+    const blocked = events.events.filter((e) => e.type === "merge.queue.infra_blocked");
+    expect(blocked).toHaveLength(1);
+    expect(blocked[0]?.kind).toBe("ceiling");
+    expect(events.events.some((e) => e.type === "merge.dequeued")).toBe(false);
   });
 });

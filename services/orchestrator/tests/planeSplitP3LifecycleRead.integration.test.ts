@@ -1,11 +1,7 @@
-// Plane-split — the DagWalker LIFECYCLE READ gap regression, against a REAL
-// Postgres (no SQL mocks). This is the residual read-gap PR #269 left open: the
-// worker connects as the de-privileged `tanren_dataplane` role (0031 REVOKE ALL
-// ON TABLE events), but `PgDagLifecycleReadModel.loadLifecycle` reads `events`
-// (the lateral join). #269 routed the walker's WRITES through the control
-// plane but left this READ on the dataplane role — so every walk that loaded the
-// lifecycle projection threw `permission denied for table events` (42501) from
-// BOTH the boot walk and the notification walk.
+// Plane-split — the DagWalker lifecycle event read, against a REAL Postgres (no
+// SQL mocks). The worker connects as the de-privileged `tanren_dataplane` role:
+// event WRITES stay denied, but event READS are permitted under RLS so autonomous
+// projections can inspect prior signals without bypassing tenant policy.
 //
 // The fix: the lifecycle read resolves its pool as `getSystemPool() ?? this.pool`
 // — the BYPASSRLS `tanren_system` role (which keeps SELECT on `events`) when a
@@ -13,12 +9,10 @@
 // org scope is STILL applied on top (`runWithOrgScope` sets app.current_org_id),
 // so the read stays org-scoped — only the ROLE changes to one that can SELECT.
 //
-// What this proves (the negative control + the fix together):
-//   (a) NEGATIVE CONTROL: the lifecycle lateral-join `events` SELECT, run on the
-//       dataplane-role pool under the project's org scope, throws 42501
-//       (`permission denied for table events`) — reproducing the exact bug. This
-//       proves the dataplane role genuinely cannot SELECT events, so routing the
-//       read through the system role is load-bearing.
+// What this proves:
+//   (a) the lifecycle lateral-join `events` SELECT, run on the dataplane-role pool
+//       under the project's org scope, is admitted by table grants and filtered by
+//       RLS.
 //   (b) THE FIX: with the system pool wired (the worker's TANREN_SYSTEM_DATABASE_URL),
 //       the SAME `PgDagLifecycleReadModel` (constructed on the dataplane pool)
 //       loads the lifecycle successfully and returns the right ORG-SCOPED
@@ -34,6 +28,7 @@ import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { migrate, resetSystemPool, runWithOrgScope, setSystemPool } from "@tanren/db";
 import { PgDagLifecycleReadModel } from "../src/engine/dag/lifecycle.js";
+import { PgEventStore } from "../src/engine/eventStore.js";
 
 const enabled = process.env["TANREN_RLS_DB_TEST"] === "1";
 const describeDb = enabled ? describe : describe.skip;
@@ -82,9 +77,9 @@ describeDb("plane-split P3 — the DagWalker lifecycle read uses the system pool
     await adminPool.end();
 
     ownerPool = new Pool({ connectionString: withDatabase(ADMIN_URL, database) });
-    // The REAL migration set creates `tanren_dataplane` (0031) + REVOKEs ALL on
-    // `events`, creates the BYPASSRLS `tanren_system` (0030) which KEEPS SELECT on
-    // events, and installs the RLS policies (0030).
+    // The REAL migration set creates `tanren_dataplane`, denies event writes while
+    // keeping RLS-scoped event reads, creates the BYPASSRLS `tanren_system`, and
+    // installs the RLS policies.
     await migrate(ownerPool);
 
     dataPlanePool = new Pool({ connectionString: withRole(ADMIN_URL, DATAPLANE_ROLE, DATAPLANE_PASSWORD, database) });
@@ -120,18 +115,49 @@ describeDb("plane-split P3 — the DagWalker lifecycle read uses the system pool
     );
     // NATIVE delivery: "ci green" is a PASSING pre-merge native gate verdict, so the
     // ladder uses a gate.verdict (passed, when=pre_merge) — not a forge ci.passed.
-    const seeds: Array<{ eventType: string; payload: string }> = [
-      { eventType: "github.pr.created", payload: "{}" },
-      { eventType: "gate.verdict", payload: JSON.stringify({ when: "pre_merge", passed: true, headSha: "abc" }) },
-      { eventType: "merge.completed", payload: "{}" },
-    ];
-    for (const seed of seeds) {
-      await ownerPool.query(
-        `INSERT INTO events (run_id, spec_id, project_id, org_id, event_type, payload)
-         VALUES ($1, $2, $3, $4, $5, $6::jsonb)`,
-        [RUN, SPEC, PROJECT, ORG, seed.eventType, seed.payload],
-      );
-    }
+    await runWithOrgScope(ownerPool, ORG, async (client) => {
+      const events = new PgEventStore(client);
+      await events.append({
+        runId: RUN,
+        specId: SPEC,
+        projectId: PROJECT,
+        eventType: "github.pr.created",
+        payload: {
+          repoUrl: "https://example.com/r.git",
+          branch: "tanren/spec",
+          targetBranch: "main",
+          prUrl: "https://example.com/r/pull/1",
+          prNumber: 1,
+          reused: false,
+        },
+      });
+      await events.append({
+        runId: RUN,
+        specId: SPEC,
+        projectId: PROJECT,
+        eventType: "gate.verdict",
+        payload: {
+          when: "pre_merge",
+          passed: true,
+          headSha: "abc",
+          durationMs: 0,
+          tiers: ["local"],
+          steps: [{ name: "local", tier: "local", passed: true }],
+        },
+      });
+      await events.append({
+        runId: RUN,
+        specId: SPEC,
+        projectId: PROJECT,
+        eventType: "merge.completed",
+        payload: {
+          prUrl: "https://example.com/r/pull/1",
+          prNumber: 1,
+          integration: "native_queue",
+          mergeSha: "merge-sha",
+        },
+      });
+    });
   }, 60_000);
 
   afterAll(async () => {
@@ -148,20 +174,16 @@ describeDb("plane-split P3 — the DagWalker lifecycle read uses the system pool
     await adminPool.end();
   }, 30_000);
 
-  // (a) THE NEGATIVE CONTROL (the exact read PR #269 left on the data plane): the
-  // lifecycle lateral join SELECTs `events` UNDER THE PROJECT'S ORG SCOPE. Run
-  // that SELECT on the de-privileged data-plane role (the role the worker connects
-  // as) and it is rejected for lack of the `events` SELECT grant (42501 /
-  // permission denied for table events) — the throw the live worker hit on every
-  // walk. (org resolution itself goes through the system pool in the real worker,
-  // which is why the read — not the resolve — is the gap; this asserts the read.)
-  it("(a) the lifecycle events read on the data-plane role throws 42501 (the bug)", async () => {
+  // (a) The lifecycle lateral join SELECTs `events` under the project's org scope.
+  // The data-plane role must be able to read those signals; off-org rows remain
+  // filtered by the RLS policy.
+  it("(a) the lifecycle events read on the data-plane role is RLS-admitted", async () => {
     await expect(
       runWithOrgScope(dataPlanePool, ORG, (client) =>
         // The minimal shape of the lifecycle lateral join's `events` read.
         client.query("SELECT bool_or(event_type = 'gate.verdict') FROM events WHERE run_id = $1", [RUN]),
       ),
-    ).rejects.toMatchObject({ code: "42501" });
+    ).resolves.toMatchObject({ rows: [{ bool_or: true }] });
   });
 
   // (b) THE FIX: wire the system pool (the worker's TANREN_SYSTEM_DATABASE_URL).

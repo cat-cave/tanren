@@ -68,13 +68,11 @@ export interface MergeCoordinatorSubscriberDeps {
 }
 
 /**
- * Bug B — the NOTIFY-storm debounce window (ms). While a project is in a PENDING-hold
- * (the batch check returned `pending` — a no-checks settle counting down or a
- * registered-CI batch still running), NOTIFY-driven re-passes are SUPPRESSED for this
- * window so a storm of unrelated `tanren_run` NOTIFYs (concurrent specs emit ~2/sec)
- * does NOT re-run the (expensive) batch integration on every one — the hot loop the
- * live no-CI repo hit. The armed re-drive timer (`retryAfterMs`) is the AUTHORITATIVE
- * re-check; it bypasses the suppression. The window is kept SHORT (≤ the
+ * Bug B — the NOTIFY-storm debounce window (ms). While a project is in a timed hold
+ * (pending batch/no-checks settle, or a same-candidate `merge_retry` backoff),
+ * NOTIFY-driven re-passes are SUPPRESSED for this window so unrelated `tanren_run`
+ * NOTIFYs do not burn retry attempts early. The armed re-drive timer (`retryAfterMs`)
+ * is the AUTHORITATIVE re-check; it bypasses the suppression. The window is kept SHORT (≤ the
  * registered-check settle cadence) so a GENUINE check-completion / merge.completed NOTIFY is still reacted to
  * within one window — the debounce throttles the storm, it never silences a real
  * completion. It applies ONLY to the pending-hold state, never to a clean pass.
@@ -95,7 +93,76 @@ async function resolveRunProject(pool: pg.Pool, runId: string): Promise<string |
 async function listProjectsWithQueue(pool: pg.Pool): Promise<string[]> {
   return runWithSystemScope(pool, async (client) => {
     const result = await client.query<{ project_id: string }>(
-      "SELECT DISTINCT project_id FROM merge_queue WHERE status IN ('queued', 'merging') ORDER BY project_id",
+      `SELECT DISTINCT mq.project_id
+         FROM merge_queue mq
+        WHERE mq.status IN ('queued', 'merging')
+           OR (
+             mq.status = 'dequeued'
+             AND mq.dequeue_reason IN ('blocked', 'conflict')
+             AND mq.pr_url IS NOT NULL
+             AND mq.pr_url <> ''
+             AND mq.pr_number IS NOT NULL
+             AND NOT EXISTS (
+               SELECT 1
+                 FROM merge_queue active
+                WHERE active.run_id = mq.run_id
+                  AND active.status IN ('queued', 'merging')
+             )
+             AND COALESCE((
+               SELECT latest.event_type = 'merge.dequeued'
+                  AND latest.payload ->> 'integration' = 'native_queue'
+                  AND latest.payload ->> 'reason' IN ('blocked', 'conflict')
+                 FROM events latest
+                WHERE latest.id = (
+                  SELECT e.id
+                    FROM events e
+                   WHERE e.project_id = mq.project_id
+                     AND e.org_id = mq.org_id
+                     AND (
+                       e.event_type IN (
+                         'merge.dequeued',
+                         'merge.completed',
+                         'merge.queue.infra_blocked',
+                         'merge.batch.culprit',
+                         'dag.spec.needs_attention',
+                         'dag.spec.percolation_replan',
+                         'merge.conflict.replan_routed',
+                         'recovery.replan_queued'
+                       )
+                       OR (e.event_type = 'merge.batch.infra_blocked' AND e.payload ->> 'terminal' = 'true')
+                     )
+                     AND (
+                       (e.run_id IS NOT NULL AND e.run_id = mq.run_id)
+                       OR (NULLIF(e.payload ->> 'runId', '') IS NOT NULL AND e.payload ->> 'runId' = mq.run_id)
+                       OR (NULLIF(e.payload ->> 'prUrl', '') IS NOT NULL AND e.payload ->> 'prUrl' = mq.pr_url)
+                       OR (NULLIF(e.payload ->> 'prNumber', '') IS NOT NULL AND e.payload ->> 'prNumber' = mq.pr_number)
+                       OR EXISTS (
+                         SELECT 1
+                           FROM jsonb_array_elements(
+                             CASE WHEN jsonb_typeof(e.payload -> 'members') = 'array'
+                               THEN e.payload -> 'members'
+                               ELSE '[]'::jsonb
+                             END
+                           ) AS member
+                          WHERE member ->> 'prNumber' = mq.pr_number
+                             OR member ->> 'specId' = mq.spec_id
+                       )
+                       OR (
+                         e.event_type IN (
+                           'dag.spec.needs_attention',
+                           'dag.spec.percolation_replan',
+                           'merge.conflict.replan_routed',
+                           'recovery.replan_queued'
+                         )
+                         AND e.spec_id = mq.spec_id
+                       )
+                     )
+                   ORDER BY e.ts DESC, e.id DESC
+                   LIMIT 1
+                )
+             ), false)
+           )
+        ORDER BY mq.project_id`,
     );
     return result.rows.map((row) => row.project_id);
   });
@@ -123,8 +190,8 @@ export class MergeCoordinatorSubscriber {
   private readonly retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   /**
    * Bug B debounce: per-project deadline (ms epoch) until which NOTIFY-driven re-passes
-   * are SUPPRESSED because the project is in a pending-hold. Set when a coordinate pass
-   * returns a pending hold; consulted ONLY in the NOTIFY path (`onRunActivity`). The
+   * are SUPPRESSED because the project is in a timed hold. Set when a coordinate pass
+   * returns a pending or merge-retry hold; consulted ONLY in the NOTIFY path (`onRunActivity`). The
    * authoritative re-check is the armed `retryAfterMs` timer, which bypasses this.
    */
   private readonly pendingHoldUntil = new Map<string, number>();
@@ -270,13 +337,17 @@ export class MergeCoordinatorSubscriber {
         // to re-trigger this project on its own (a clean single-PR queue would otherwise
         // hang; a no-checks settle expires on wall time). Arm a bounded, idempotent
         // one-shot re-drive so the held batch is re-checked once it clears.
-        if (result.retryAfterMs !== undefined && !this.rePending.has(projectId)) {
-          // Bug B: a PENDING hold (the batch CI is pending / a no-checks settle is
-          // counting down) opens a NOTIFY-suppression window so a NOTIFY storm does not
-          // re-run the integration ~2/sec. An infra-error hold does NOT suppress NOTIFYs
-          // (a clearing signal should re-check promptly) — only the armed timer recovers
-          // it. The armed re-drive timer is the authoritative re-check in both cases.
-          if (result.holdReason === "all_blocked") {
+        if (
+          result.retryAfterMs !== undefined &&
+          (!this.rePending.has(projectId) || result.holdReason === "merge_retry")
+        ) {
+          // Bug B: a PENDING hold and a merge_retry backoff open a NOTIFY-suppression
+          // window so unrelated run activity does not hot-loop the integration or burn
+          // retry attempts early. Infra-error holds still allow prompt clearing signals.
+          if (result.holdReason === "merge_retry") {
+            this.pendingHoldUntil.set(projectId, this.now() + Math.max(PENDING_DEBOUNCE_MS, result.retryAfterMs));
+            this.rePending.delete(projectId);
+          } else if (result.holdReason === "all_blocked") {
             this.pendingHoldUntil.set(projectId, this.now() + PENDING_DEBOUNCE_MS);
           }
           this.armDelayedReDrive(projectId, result.retryAfterMs);

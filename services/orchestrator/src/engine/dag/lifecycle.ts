@@ -10,17 +10,12 @@
 // bootstrap) then reads UNDER THAT ORG SCOPE — an off-scope read sees zero rows
 // (RLS denies by default), so the snapshot is always exactly the project's DAG.
 //
-// Pool/role: the lateral join READS the `events` table, which the de-privileged
-// data-plane role (`tanren_dataplane`) has ZERO grants on — migration 0031
-// `REVOKE ALL ON TABLE events` (the data plane writes events through the control
-// plane and was assumed to never read them; the lifecycle read landed
-// after). So this read runs on `getSystemPool() ?? this.pool` — the BYPASSRLS
-// `tanren_system` role (which keeps SELECT on `events`) when a system URL is
-// configured, exactly as `walker.ts` does for project listing. The org scope is
-// STILL applied on top (`runWithOrgScope` sets `app.current_org_id`), so RLS /
-// tenant isolation is preserved — only the ROLE changes to one that can SELECT
-// events. Absent a system URL (single-role dev/CI/tests) it uses `this.pool`
-// verbatim, behavior-identical to before.
+// Pool/role: the lateral join READS the `events` table. The data plane keeps
+// SELECT for org-scoped autonomy projections while event WRITES route through the
+// control plane. This read still uses `getSystemPool() ?? this.pool` when a system
+// URL is configured, matching the other project-wide worker reads; the query itself
+// remains under `runWithOrgScope`, so a bare data-plane read is RLS-filtered rather
+// than ACL-denied.
 
 import { getSystemPool, runWithOrgScope, runWithSystemScope } from "@tanren/db";
 import type pg from "pg";
@@ -120,10 +115,8 @@ export class PgDagLifecycleReadModel implements DagLifecycleReadModel {
     if (orgId === null) {
       return { projectId, bySpecId: new Map() };
     }
-    // Read on the BYPASSRLS system role (`getSystemPool() ?? this.pool`): the
-    // lateral join SELECTs `events`, which the de-privileged data-plane role
-    // cannot read (0031 REVOKE ALL). The org scope is still applied on top, so the
-    // read stays org-scoped — only the role changes to one that can SELECT events.
+    // The lateral join SELECTs `events`; keep the projection under the resolved
+    // project's org scope so tenant policy, not caller discipline, bounds the read.
     const readPool = getSystemPool() ?? this.pool;
     const rows = await runWithOrgScope(readPool, orgId, async (client) => {
       const result = await client.query<SpecLifecycleRow>(

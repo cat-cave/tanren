@@ -130,15 +130,11 @@ export class PgSpecStrandReadModel implements SpecStrandReadModel {
   async countPriorUnstrands(input: { projectId: string; specId: string }): Promise<number> {
     const orgId = await resolveProjectOrg(this.pool, input.projectId);
     if (orgId === null) return 0;
-    // Read on the BYPASSRLS system role (`getSystemPool() ?? this.pool`): this
-    // SELECTs `events`, which the de-privileged data-plane role cannot read (0031
-    // REVOKE ALL ON TABLE events) — so on the dataplane pool the COUNT throws
-    // `permission denied for table events` (42501). The org scope is still applied
-    // on top (`runWithOrgScope` sets app.current_org_id), so the read stays
-    // org-scoped — only the ROLE changes to one that can SELECT events. This mirrors
-    // `PgDagLifecycleReadModel.loadLifecycle`. (The specs/runs/merge_queue reads in
-    // `loadStrandCandidates` keep their grants under the dataplane role — 0035 only
-    // revoked WRITES there — so they stay on `this.pool`.)
+    // Count prior strand events under the resolved project's tenant/project
+    // boundary. The data plane keeps SELECT on `events` for autonomy signal reads
+    // while event WRITES route through the control plane; `getSystemPool() ??
+    // this.pool` mirrors `PgDagLifecycleReadModel.loadLifecycle`. Because the
+    // system pool has BYPASSRLS, keep the tenant/project predicates in the SQL too.
     const readPool = getSystemPool() ?? this.pool;
     return runWithOrgScope(readPool, orgId, async (client) => {
       // BUDGET RESET on operator resolution: count only the `dag.spec.unstranded`
@@ -152,12 +148,17 @@ export class PgSpecStrandReadModel implements SpecStrandReadModel {
         `SELECT count(*)::text AS count
            FROM events
           WHERE spec_id = $1
+            AND org_id = $2
+            AND project_id = $3
             AND event_type = 'dag.spec.unstranded'
             AND id > COALESCE(
               (SELECT max(id) FROM events
-                WHERE spec_id = $1 AND event_type = 'dag.spec.attention_resolved'),
+                WHERE spec_id = $1
+                  AND org_id = $2
+                  AND project_id = $3
+                  AND event_type = 'dag.spec.attention_resolved'),
               0)`,
-        [input.specId],
+        [input.specId, orgId, input.projectId],
       );
       return Number(result.rows[0]?.count ?? "0");
     });

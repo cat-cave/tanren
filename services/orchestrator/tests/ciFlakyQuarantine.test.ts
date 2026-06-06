@@ -72,7 +72,7 @@ class FlakyMemoryClient {
       // Params: id, project_id, check_name, test_id, toggled, observation, evidence, now.
       const projectId = String(params[1]);
       const checkName = String(params[2]);
-      const testId = params[3] === null ? null : String(params[3]);
+      const testId = typeof params[3] === "string" ? params[3] : null;
       // honour the partial-unique index on coalesce(test_id, check_name).
       const target = testId ?? checkName;
       const exists = this.quarantined.some(
@@ -214,9 +214,9 @@ describe("detectAndQuarantineFlaky — idempotent", () => {
 });
 
 /**
- * A pg substitute that HARD-FAILS on any `events` query — modelling the worker's
- * `tanren_dataplane` role, which has no `events` grant. The tenant tables
- * (`ci_test_results` + `quarantined_tests`) still answer normally. TEST FIXTURE.
+ * A pg substitute that HARD-FAILS on any `events` query, proving the detector's
+ * event-history loader remains injected rather than implicitly coupled to the
+ * tenant-table client. TEST FIXTURE.
  */
 class DataplaneMemoryClient extends FlakyMemoryClient {
   override async query(

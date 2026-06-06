@@ -180,6 +180,120 @@ export class PgMergeQueueModel implements MergeQueueModel {
     );
   }
 
+  async recoverDequeuedCandidates(projectId: string): Promise<number> {
+    const orgId = await resolveProjectOrg(this.pool, projectId);
+    if (orgId === null) return 0;
+    return runWithOrgScope(this.pool, orgId, async (client) => {
+      await client.query("LOCK TABLE merge_queue IN SHARE ROW EXCLUSIVE MODE");
+      const result = await client.query(
+        `WITH candidates AS (
+           SELECT mq.queue_id, mq.run_id, mq.dequeue_reason, mq.pr_url, mq.pr_number
+             FROM merge_queue mq
+            WHERE mq.project_id = $1
+              AND mq.status = 'dequeued'
+              AND mq.dequeue_reason = 'blocked'
+              AND mq.pr_url IS NOT NULL
+              AND mq.pr_url <> ''
+              AND mq.pr_number IS NOT NULL
+              AND NOT EXISTS (
+                SELECT 1
+                  FROM merge_queue active
+                 WHERE active.run_id = mq.run_id
+                   AND active.status IN ('queued', 'merging')
+              )
+              AND EXISTS (
+                SELECT 1
+                  FROM events e
+                 WHERE e.project_id = mq.project_id
+                   AND e.org_id = mq.org_id
+                   AND e.event_type = 'merge.dequeued'
+                   AND e.payload ->> 'integration' = 'native_queue'
+                   AND e.payload ->> 'reason' = 'blocked'
+                   AND (
+                     (e.run_id IS NOT NULL AND e.run_id = mq.run_id)
+                     OR (NULLIF(e.payload ->> 'runId', '') IS NOT NULL AND e.payload ->> 'runId' = mq.run_id)
+                     OR (NULLIF(e.payload ->> 'prUrl', '') IS NOT NULL AND e.payload ->> 'prUrl' = mq.pr_url)
+                     OR (NULLIF(e.payload ->> 'prNumber', '') IS NOT NULL AND e.payload ->> 'prNumber' = mq.pr_number)
+                   )
+              )
+              AND NOT EXISTS (
+                SELECT 1
+                  FROM events e
+                 WHERE e.project_id = mq.project_id
+                   AND e.org_id = mq.org_id
+                   AND (
+                     e.event_type IN (
+                       'merge.completed',
+                       'merge.queue.infra_blocked',
+                       'merge.batch.culprit',
+                       'dag.spec.needs_attention',
+                       'dag.spec.percolation_replan',
+                       'merge.conflict.replan_routed',
+                       'recovery.replan_queued'
+                     )
+                     OR (e.event_type = 'merge.batch.infra_blocked' AND e.payload ->> 'terminal' = 'true')
+                   )
+                   AND (
+                     (e.run_id IS NOT NULL AND e.run_id = mq.run_id)
+                     OR (NULLIF(e.payload ->> 'runId', '') IS NOT NULL AND e.payload ->> 'runId' = mq.run_id)
+                     OR (NULLIF(e.payload ->> 'prUrl', '') IS NOT NULL AND e.payload ->> 'prUrl' = mq.pr_url)
+                     OR (NULLIF(e.payload ->> 'prNumber', '') IS NOT NULL AND e.payload ->> 'prNumber' = mq.pr_number)
+                     OR EXISTS (
+                       SELECT 1
+                         FROM jsonb_array_elements(
+                           CASE WHEN jsonb_typeof(e.payload -> 'members') = 'array'
+                             THEN e.payload -> 'members'
+                             ELSE '[]'::jsonb
+                           END
+                         ) AS member
+                        WHERE member ->> 'prNumber' = mq.pr_number
+                           OR member ->> 'specId' = mq.spec_id
+                     )
+                     OR (
+                       e.event_type IN (
+                         'dag.spec.needs_attention',
+                         'dag.spec.percolation_replan',
+                         'merge.conflict.replan_routed',
+                         'recovery.replan_queued'
+                       )
+                       AND e.spec_id = mq.spec_id
+                     )
+                   )
+              )
+            FOR UPDATE
+         ), recoverable AS (
+           SELECT c.queue_id, c.run_id, c.dequeue_reason, c.pr_url, c.pr_number
+             FROM candidates c
+            WHERE NOT EXISTS (
+              SELECT 1
+                FROM merge_queue active
+               WHERE active.run_id = c.run_id
+                 AND active.status IN ('queued', 'merging')
+            )
+         )
+         UPDATE merge_queue mq
+            SET status = 'queued',
+                dequeue_reason = NULL,
+                claimed_at = NULL,
+                settled_at = NULL
+           FROM recoverable
+          WHERE mq.queue_id = recoverable.queue_id
+            AND mq.status = 'dequeued'
+            AND mq.dequeue_reason = recoverable.dequeue_reason
+            AND mq.pr_url = recoverable.pr_url
+            AND mq.pr_number = recoverable.pr_number
+            AND NOT EXISTS (
+              SELECT 1
+                FROM merge_queue active
+               WHERE active.run_id = recoverable.run_id
+                 AND active.status IN ('queued', 'merging')
+            )`,
+        [projectId],
+      );
+      return result.rowCount ?? 0;
+    });
+  }
+
   async markDequeued(queueId: string, reason: DequeueReason): Promise<void> {
     await this.settle(
       queueId,
