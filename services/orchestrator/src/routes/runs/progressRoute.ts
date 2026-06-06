@@ -111,13 +111,16 @@ async function fetchCompletionBlockingSpecIds(
             )
             OR (
               event_type = 'merge.dequeued'
-              AND payload ->> 'reason' IN ('blocked', 'failed')
+              AND payload ->> 'reason' IN ('blocked', 'failed', 'conflict')
               AND (NOT (payload ? 'integration') OR payload ->> 'integration' = 'native_queue')
             )
           )
      ),
      payload_member_ids AS (
-       SELECT s.id, NULLIF(member ->> 'specId', '') AS spec_id
+       SELECT s.id,
+              NULLIF(member ->> 'specId', '') AS spec_id,
+              NULLIF(member ->> 'prUrl', '') AS pr_url,
+              NULLIF(member ->> 'prNumber', '') AS pr_number
          FROM signal_events s
          CROSS JOIN LATERAL jsonb_array_elements(
            CASE
@@ -127,16 +130,19 @@ async function fetchCompletionBlockingSpecIds(
          ) AS member
      ),
      payload_spec_ids AS (
-       SELECT id, NULLIF(payload ->> 'specId', '') AS spec_id
+       SELECT id,
+              NULLIF(payload ->> 'specId', '') AS spec_id,
+              NULLIF(payload ->> 'prUrl', '') AS pr_url,
+              NULLIF(payload ->> 'prNumber', '') AS pr_number
          FROM signal_events
      ),
      payload_ids AS (
-       SELECT id, spec_id FROM payload_spec_ids WHERE spec_id IS NOT NULL
+       SELECT id, spec_id, pr_url, pr_number FROM payload_spec_ids WHERE spec_id IS NOT NULL
        UNION
-       SELECT id, spec_id FROM payload_member_ids WHERE spec_id IS NOT NULL
+       SELECT id, spec_id, pr_url, pr_number FROM payload_member_ids WHERE spec_id IS NOT NULL
      ),
      run_spec_ids AS (
-       SELECT s.id, NULLIF(r.spec_id, '') AS spec_id
+       SELECT s.id, NULLIF(r.spec_id, '') AS spec_id, NULLIF(r.pr_url, '') AS pr_url
          FROM signal_events s
          INNER JOIN runs r
                  ON r.run_id = s.run_id
@@ -145,33 +151,88 @@ async function fetchCompletionBlockingSpecIds(
         WHERE s.run_id IS NOT NULL
      ),
      attributed AS (
-       SELECT s.id, s.ts, s.event_type, p.spec_id
+       SELECT s.id,
+              s.ts,
+              s.event_type,
+              s.payload ->> 'reason' AS dequeue_reason,
+              p.spec_id,
+              s.run_id,
+              p.pr_url,
+              COALESCE(p.pr_number, substring(p.pr_url from '/pull/([0-9]+)')) AS pr_number,
+              r.id IS NOT NULL AS run_exists
          FROM signal_events s
          INNER JOIN payload_ids p ON p.id = s.id
+          LEFT JOIN run_spec_ids r ON r.id = s.id
        UNION
-       SELECT s.id, s.ts, s.event_type, s.spec_id
+       SELECT s.id,
+              s.ts,
+              s.event_type,
+              s.payload ->> 'reason' AS dequeue_reason,
+              s.spec_id,
+              s.run_id,
+              NULLIF(s.payload ->> 'prUrl', '') AS pr_url,
+              COALESCE(NULLIF(s.payload ->> 'prNumber', ''), substring(NULLIF(s.payload ->> 'prUrl', '') from '/pull/([0-9]+)')) AS pr_number,
+              r.id IS NOT NULL AS run_exists
          FROM signal_events s
+          LEFT JOIN run_spec_ids r ON r.id = s.id
         WHERE s.spec_id IS NOT NULL
           AND (
             s.event_type <> 'merge.batch.infra_blocked'
             OR NOT EXISTS (SELECT 1 FROM payload_ids p WHERE p.id = s.id)
           )
        UNION
-       SELECT s.id, s.ts, s.event_type, r.spec_id
+       SELECT s.id,
+              s.ts,
+              s.event_type,
+              s.payload ->> 'reason' AS dequeue_reason,
+              r.spec_id,
+              s.run_id,
+              COALESCE(NULLIF(s.payload ->> 'prUrl', ''), r.pr_url) AS pr_url,
+              COALESCE(NULLIF(s.payload ->> 'prNumber', ''), substring(COALESCE(NULLIF(s.payload ->> 'prUrl', ''), r.pr_url) from '/pull/([0-9]+)')) AS pr_number,
+              true AS run_exists
          FROM signal_events s
          INNER JOIN run_spec_ids r ON r.id = s.id
         WHERE r.spec_id IS NOT NULL
           AND s.spec_id IS NULL
           AND NOT EXISTS (SELECT 1 FROM payload_ids p WHERE p.id = s.id)
      ),
-     latest AS (
-       SELECT DISTINCT ON (spec_id) spec_id, event_type
-         FROM attributed
-        ORDER BY spec_id, ts DESC, id DESC
+     active_blockers AS (
+       SELECT b.spec_id
+         FROM attributed b
+        WHERE (
+            b.event_type IN ('merge.queue.infra_blocked', 'merge.batch.infra_blocked')
+            OR (
+              b.event_type = 'merge.dequeued'
+              AND (
+                b.dequeue_reason IN ('blocked', 'failed')
+                OR (
+                  b.dequeue_reason = 'conflict'
+                  AND (b.run_exists OR b.pr_url IS NOT NULL OR b.pr_number IS NOT NULL)
+                )
+              )
+            )
+          )
+          AND NOT EXISTS (
+            SELECT 1
+              FROM attributed done
+             WHERE done.spec_id = b.spec_id
+               AND done.event_type = 'merge.completed'
+               AND (done.ts > b.ts OR (done.ts = b.ts AND done.id > b.id))
+               AND (
+                 (done.run_id IS NOT NULL AND b.run_id IS NOT NULL AND done.run_id = b.run_id)
+                 OR (done.pr_url IS NOT NULL AND b.pr_url IS NOT NULL AND done.pr_url = b.pr_url)
+                 OR (
+                   done.pr_url IS NULL
+                   AND b.pr_url IS NULL
+                   AND done.pr_number IS NOT NULL
+                   AND b.pr_number IS NOT NULL
+                   AND done.pr_number = b.pr_number
+                 )
+               )
+          )
      )
-     SELECT spec_id
-       FROM latest
-      WHERE event_type IN ('merge.queue.infra_blocked', 'merge.batch.infra_blocked', 'merge.dequeued')
+     SELECT DISTINCT spec_id
+       FROM active_blockers
       ORDER BY spec_id`,
     [args.projectId, args.orgId],
   );
