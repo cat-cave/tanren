@@ -16,6 +16,20 @@ export {
   type DeriveFromCaptureInput,
   type DeriveResult,
 } from "./engine.js";
+export {
+  DeployNotLinkedError,
+  DeployProviderInvalidError,
+  DeployProviderMissingError,
+  DeployProvisioningUnavailableError,
+  isDeployNotLinked,
+  missingDeployProviderError,
+  missingDeployProvisionerError,
+  resolveGreenfieldDeployDependency,
+  type DeployPreflightCallback,
+  type GreenfieldDeployDependency,
+  type PrepareDeployCallback,
+  type PreparedGreenfieldDeploy,
+} from "./deployDependency.js";
 
 export { wrapProviderInterviewAnswerer, type WrapProviderInterviewAnswererOptions } from "./providerAnswerer.js";
 export { buildInterviewPrompt } from "./prompt.js";

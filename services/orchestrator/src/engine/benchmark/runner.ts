@@ -20,6 +20,7 @@ import { runWithOrgScope } from "@tanren/db";
 import type pg from "pg";
 import type { ActorContext } from "../../auth/schemas.js";
 import { migrateProjectConfig } from "../config/index.js";
+import { provisionedGreenfieldProjectConfigProof } from "../workflow/projectConfigWriteGuards.js";
 import { createProject, createQueuedRunFromSpec, createSpec } from "../workflow/projectSpec.js";
 import type { AcceptResult, FrozenConfig, SeedTaskRef } from "./entities.js";
 import { loadTrialScorecard, type TrialScorecard } from "./scorecard.js";
@@ -122,6 +123,18 @@ export interface BenchmarkRunnerDeps {
    */
   spaceBeforeNextTrial?: (input: { orgId: string; cell: CellWithExperiment; nextTrialIndex: number }) => Promise<void>;
 }
+
+export interface BenchmarkProvisionWorkflowDeps {
+  createProject: typeof createProject;
+  createSpec: typeof createSpec;
+  createQueuedRunFromSpec: typeof createQueuedRunFromSpec;
+}
+
+const defaultProvisionWorkflowDeps: BenchmarkProvisionWorkflowDeps = {
+  createProject,
+  createSpec,
+  createQueuedRunFromSpec,
+};
 
 const DEFAULT_POLL_INTERVAL_MS = 1_000;
 // 30m — a real trial is a full run (plan→write→check→audit→PR→CI→merge).
@@ -323,8 +336,9 @@ function seedSpecTitle(seed: SeedTaskRef, cellLabel: string, trialIndex: number)
  * execute. The system-scoped actor carries the experiment's org so every write
  * is RLS-scoped to the tenant.
  */
-function defaultProvisionTrial(
+export function defaultProvisionTrial(
   pool: pg.Pool,
+  workflow: BenchmarkProvisionWorkflowDeps = defaultProvisionWorkflowDeps,
 ): (input: { orgId: string; cell: CellWithExperiment; trialIndex: number }) => Promise<ProvisionedTrial> {
   return async ({ orgId, cell, trialIndex }) => {
     const actor: ActorContext = {
@@ -334,7 +348,7 @@ function defaultProvisionTrial(
       scopes: ["platform:admin"],
       source: "local_dev",
     };
-    const project = await createProject(
+    const project = await workflow.createProject(
       pool,
       {
         name: `bench ${cell.cell.label} t${trialIndex}`,
@@ -342,8 +356,9 @@ function defaultProvisionTrial(
         config: projectConfigFromFrozen(cell.frozenConfig),
       },
       actor,
+      { configWriteProof: provisionedGreenfieldProjectConfigProof },
     );
-    const spec = await createSpec(
+    const spec = await workflow.createSpec(
       pool,
       {
         projectId: project.projectId,
@@ -353,7 +368,7 @@ function defaultProvisionTrial(
       },
       actor,
     );
-    const run = await createQueuedRunFromSpec(pool, { specId: spec.specId, trigger: "benchmark" }, actor);
+    const run = await workflow.createQueuedRunFromSpec(pool, { specId: spec.specId, trigger: "benchmark" }, actor);
     return { runId: run.runId, taskId: run.plannerTaskId };
   };
 }

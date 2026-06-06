@@ -28,7 +28,17 @@ import type { ActorContext } from "../../../auth/schemas.js";
 import { BehaviorCreateInput, BehaviorStore } from "../../entities/behaviors.js";
 import { MilestoneCreateInput, MilestoneStore } from "../../entities/milestones.js";
 import { PersonaCreateInput, PersonaStore } from "../../entities/personas.js";
+import { provisionedGreenfieldProjectConfigProof } from "../../workflow/projectConfigWriteGuards.js";
 import { createProject, createSpec, type SpecContract } from "../../workflow/projectSpec.js";
+import {
+  DeployNotLinkedError,
+  isDeployNotLinked,
+  missingDeployProvisionerError,
+  resolveGreenfieldDeployDependency,
+  type DeployPreflightCallback,
+  type GreenfieldDeployDependency,
+  type PrepareDeployCallback,
+} from "./deployDependency.js";
 import { InterviewCapture, type CaptureBehavior, type CaptureInterface } from "./types.js";
 
 export interface DeriveInput {
@@ -45,6 +55,9 @@ export interface DeriveInput {
   // create the project ALREADY autonomous so the DagWalker drives it off an empty
   // repo with no follow-up PATCH. Absent or `human` ⇒ no config ⇒ the safe defaults.
   autonomy?: "auto" | "simulated" | "human";
+  deploy?: GreenfieldDeployDependency;
+  preflightDeploy?: DeployPreflightCallback;
+  prepareDeploy?: PrepareDeployCallback;
 }
 
 // FINDING #1: the autonomous greenfield config. When the operator opts into
@@ -229,6 +242,11 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
   // (no migration shim); `createProject` threads `config` through
   // `migrateProjectConfig` — no new plumbing.
   const autonomousOptIn = input.autonomy === "auto" || input.autonomy === "simulated";
+  const deploy = resolveGreenfieldDeployDependency(input.deploy, { required: true });
+  if (deploy !== undefined && input.preflightDeploy !== undefined) {
+    const notLinked = await input.preflightDeploy({ orgId: input.orgId, providerKind: deploy.providerKind });
+    if (notLinked !== undefined) throw new DeployNotLinkedError(notLinked);
+  }
   const baseConfig = autonomousOptIn
     ? autonomousConfig(input.autonomy as "auto" | "simulated")
     : { version: 1, greenfield: true };
@@ -238,8 +256,28 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
   // `projects.config` blob so the conflict resolver can frame a resolution against
   // the product vision. Only the fields the interview actually captured are
   // written (omit empties) — a real empty state, not a stub.
-  const config = { ...baseConfig, ...productVisionConfig(capture) };
-  const project = await createProject(pool, { name: slug, repoUrl, config }, { ...input.actor, orgId: input.orgId });
+  if (deploy === undefined || input.prepareDeploy === undefined) throw missingDeployProvisionerError();
+  const preparedDeploy = await input.prepareDeploy({
+    orgId: input.orgId,
+    capability: "deploy",
+    providerKind: deploy.providerKind,
+    mode: deploy.mode,
+    projectKey: slug,
+    projectName: slug,
+    ...(deploy.chosenResourceId === undefined ? {} : { chosenResourceId: deploy.chosenResourceId }),
+    ...(deploy.stack === undefined ? {} : { stack: deploy.stack }),
+    name: deploy.name ?? slug,
+  });
+  if (isDeployNotLinked(preparedDeploy)) {
+    throw new DeployNotLinkedError(preparedDeploy);
+  }
+  const config = { ...baseConfig, ...productVisionConfig(capture), ...preparedDeploy.projectConfig };
+  const project = await createProject(
+    pool,
+    { name: slug, repoUrl, config },
+    { ...input.actor, orgId: input.orgId },
+    { configWriteProof: provisionedGreenfieldProjectConfigProof },
+  );
   const projectId = project.projectId;
   const actor: ActorContext = { ...input.actor, orgId: input.orgId, projectId };
 

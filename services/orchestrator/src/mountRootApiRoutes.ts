@@ -31,6 +31,7 @@ import {
   SpecNotFoundError,
 } from "./engine/workflow/projectSpec.js";
 import type { ActorContextEnv } from "./middleware/auth.js";
+import { checkGenericProjectCreateConfig } from "./routes/projects/createConfigGuard.js";
 
 export interface RootApiDeps {
   pool: pg.Pool;
@@ -75,7 +76,13 @@ export function mountRootApiRoutes(app: Hono<ActorContextEnv>, deps: RootApiDeps
     if (!parsed.success) {
       return c.json({ error: "invalid_project", issues: parsed.error.issues }, 400);
     }
-    return c.json(await createProject(pool, parsed.data, actorOf(c)), 201);
+    const configCheck = checkGenericProjectCreateConfig(parsed.data.config);
+    if (!configCheck.ok) {
+      return c.json(configCheck.response, 400);
+    }
+    const projectInput =
+      configCheck.config === undefined ? parsed.data : { ...parsed.data, config: configCheck.config };
+    return c.json(await createProject(pool, projectInput, actorOf(c)), 201);
   });
 
   app.post("/specs", async (c) => {

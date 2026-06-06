@@ -5,6 +5,7 @@ import type { ActorContext } from "../../auth/schemas.js";
 import { type ProjectConfigV1, defaultProjectConfigV1, migrateProjectConfig } from "../config/index.js";
 import { PgEventStore } from "../eventStore.js";
 import { DEFAULT_SPEC_PRIORITY, type SpecPriority } from "../state/spec.js";
+import { assertProjectCreateConfigAllowed, type ProjectConfigWriteProof } from "./projectConfigWriteGuards.js";
 import {
   ProjectAccessDeniedError,
   ProjectNotFoundError,
@@ -32,6 +33,10 @@ export interface CreateProjectInput {
   // missing/unknown `version`). Omitted ⇒ a defaulted V1; supplied ⇒ MUST be an
   // explicit `version: 1` blob (no silent upgrade).
   config?: unknown;
+}
+
+export interface CreateProjectOptions {
+  configWriteProof?: ProjectConfigWriteProof;
 }
 
 export interface ProjectContract {
@@ -114,6 +119,7 @@ export async function createProject(
   pool: pg.Pool,
   input: CreateProjectInput,
   _actor?: ActorContext,
+  options: CreateProjectOptions = {},
 ): Promise<ProjectContract> {
   const projectId = `project_${randomUUID()}`;
   const project: ProjectContract = {
@@ -125,7 +131,10 @@ export async function createProject(
     allocator: input.allocator ?? defaultAllocator,
     // No config ⇒ defaulted V1; a supplied config must be an explicit `version: 1`
     // blob (an unversioned blob / unknown keys are rejected — fail-hard).
-    config: input.config === undefined ? defaultProjectConfigV1() : migrateProjectConfig(input.config),
+    config:
+      input.config === undefined
+        ? defaultProjectConfigV1()
+        : assertProjectCreateConfigAllowed(input.config, options.configWriteProof),
   };
 
   // RLS R3b: an org-carrying operator persists under `runWithOrgScope`; a null-org

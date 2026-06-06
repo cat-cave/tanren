@@ -18,6 +18,7 @@ import { storeGithubToken } from "../src/engine/credentials/githubToken.js";
 import type { GitHubHttpClient, GitHubHttpRequest, GitHubHttpResponse } from "../src/engine/providers/github.js";
 import type { AnswererAdapter, CcusageAccounting, UsageProbe, WindowObservation } from "../src/engine/usage/index.js";
 import type { GateOutcome } from "../src/engine/workflow/gate/index.js";
+import { provisionedGreenfieldProjectConfigProof } from "../src/engine/workflow/projectConfigWriteGuards.js";
 import { createProject, createQueuedRunFromSpec, createSpec } from "../src/engine/workflow/projectSpec.js";
 import { runPlannerLoopWorkflow } from "../src/engine/workflow/plannerRun.js";
 import type { ConflictContext } from "../src/engine/workflow/reviewMerge/index.js";
@@ -234,19 +235,24 @@ export async function setupSeededRun() {
   const pool = new WorkerPool();
   const secrets = new FakeSecretStore();
   await storeGithubToken(secrets, { ref: githubCredentialRef, token: "ghp_secretToken" });
-  const project = await createProject(pool.asPgPool(), {
-    name: "hard-tier-test",
-    repoUrl: "https://github.com/cat-cave/tanren-fixture-hard",
-    defaultBranch: "main",
-    config: {
-      version: 1,
-      credentials: { codexCredentialRef, githubCredentialRef },
-      // direct_merge + open posture so the merge stage actually attempts a merge
-      // (the conflict branch) without needing a contributor probe.
-      mergeIntegration: "direct_merge",
-      governancePosture: "open",
+  const project = await createProject(
+    pool.asPgPool(),
+    {
+      name: "hard-tier-test",
+      repoUrl: "https://github.com/cat-cave/tanren-fixture-hard",
+      defaultBranch: "main",
+      config: {
+        version: 1,
+        credentials: { codexCredentialRef, githubCredentialRef },
+        // direct_merge + open posture so the merge stage actually attempts a merge
+        // (the conflict branch) without needing a contributor probe.
+        mergeIntegration: "direct_merge",
+        governancePosture: "open",
+      },
     },
-  });
+    undefined,
+    { configWriteProof: provisionedGreenfieldProjectConfigProof },
+  );
   const spec = await createSpec(pool.asPgPool(), {
     projectId: project.projectId,
     title: "Hard-tier scenario",

@@ -23,11 +23,18 @@ import { Hono } from "hono";
 import type pg from "pg";
 import { z } from "zod";
 import type { ActorContext } from "../../auth/schemas.js";
+import type { SecretStore } from "../../engine/contracts/secretStore.js";
 import {
+  DeployNotLinkedError,
+  DeployProviderInvalidError,
+  DeployProviderMissingError,
+  DeployProvisioningUnavailableError,
   deriveFromCapture,
   InterviewCapture,
   runRound,
+  type DeployPreflightCallback,
   type InterviewAnswerer,
+  type PrepareDeployCallback,
 } from "../../engine/forge/interview/index.js";
 import type { ForgeAnswererTarget } from "../../engine/forge/providerFactory.js";
 import {
@@ -37,14 +44,23 @@ import {
 } from "../../engine/workflow/projectSpec.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { actorCanAccessOrg } from "../orgs/access.js";
+import {
+  GreenfieldDeploySchema,
+  SUPPORTED_DEPLOY_PROVIDER_KINDS,
+  prepareGreenfieldDeploy,
+  preflightGreenfieldDeploy,
+} from "../projects/greenfield.js";
 
 export interface OnboardingRoutesOptions {
   pool: pg.Pool;
+  secrets: SecretStore;
   // The interview answerer factory, called per-request with the request's org so
   // the answerer resolves the org's default `forge`/LLM credential (greenfield —
   // no project exists yet). Production passes `buildForgeInterviewAnswererFactory`
   // (a real provider answerer); tests pass a fake. REQUIRED — no fallback.
   answererFactory: (target: ForgeAnswererTarget) => InterviewAnswerer;
+  preflightDeploy?: DeployPreflightCallback;
+  prepareDeploy?: PrepareDeployCallback;
 }
 
 const RoundBody = z
@@ -66,6 +82,7 @@ const DeriveBody = z
     // safe defaults (human review, `not_configured` merge), unchanged — the
     // brownfield/managed default.
     autonomy: z.enum(["auto", "simulated", "human"]).optional(),
+    deploy: GreenfieldDeploySchema.optional(),
   })
   .strict();
 
@@ -101,14 +118,30 @@ export function createOnboardingRoutes(options: OnboardingRoutesOptions) {
       return c.json({ error: "invalid_derive", issues: parsed.error.issues }, 400);
     }
     try {
+      const preflightDeploy =
+        options.preflightDeploy ??
+        ((input) => preflightGreenfieldDeploy(options.pool, input.orgId, input.providerKind, actor.userId));
+      const prepareDeploy =
+        options.prepareDeploy ??
+        ((input) =>
+          prepareGreenfieldDeploy({
+            pool: options.pool,
+            secrets: options.secrets,
+            orgId: input.orgId,
+            actorId: actor.userId,
+            projectKey: input.projectKey,
+            projectName: input.projectName,
+            deploy: input,
+          }));
       const result = await deriveFromCapture(
-        { pool: options.pool },
+        { pool: options.pool, preflightDeploy, prepareDeploy },
         {
           orgId,
           capture: parsed.data.capture,
           actor: { ...actor, orgId },
           ...(parsed.data.repoUrl === undefined ? {} : { repoUrl: parsed.data.repoUrl }),
           ...(parsed.data.autonomy === undefined ? {} : { autonomy: parsed.data.autonomy }),
+          ...(parsed.data.deploy === undefined ? {} : { deploy: parsed.data.deploy }),
         },
       );
       return c.json(result, 201);
@@ -121,6 +154,37 @@ export function createOnboardingRoutes(options: OnboardingRoutesOptions) {
       }
       if (error instanceof SpecNotFoundError) {
         return c.json({ error: "spec_dependency_not_found", message: error.message }, 404);
+      }
+      if (error instanceof DeployProviderMissingError) {
+        return c.json(
+          {
+            error: "deploy_provider_missing",
+            capability: "deploy",
+            supportedProviderKinds: SUPPORTED_DEPLOY_PROVIDER_KINDS,
+            message: error.message,
+          },
+          400,
+        );
+      }
+      if (error instanceof DeployProviderInvalidError) {
+        return c.json(
+          {
+            error: "deploy_provider_invalid",
+            capability: "deploy",
+            supportedProviderKinds: SUPPORTED_DEPLOY_PROVIDER_KINDS,
+            message: error.message,
+          },
+          400,
+        );
+      }
+      if (error instanceof DeployNotLinkedError) {
+        return c.json({ error: "deploy_not_linked", ...error.outcome }, 409);
+      }
+      if (error instanceof DeployProvisioningUnavailableError) {
+        return c.json({ error: "deploy_provisioning_unavailable", message: error.message }, 500);
+      }
+      if (error instanceof Error && error.message.startsWith("deploy provision failed:")) {
+        return c.json({ error: "deploy_provision_failed", message: error.message }, 502);
       }
       return c.json({ error: "interview_derive_failed", message: messageOf(error) }, 500);
     }

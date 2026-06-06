@@ -10,15 +10,90 @@
 //   - a merged trial runs the accept step → its result + `reachedAcceptGreen`
 //     flow onto the trial row; a non-merged trial skips accept (null result);
 //   - `projectConfigFromFrozen` maps the frozen dimensions onto a valid V1 config.
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { FrozenConfig } from "../src/engine/benchmark/entities.js";
-import { projectConfigFromFrozen, runCellTrials } from "../src/engine/benchmark/runner.js";
+import {
+  defaultProvisionTrial,
+  projectConfigFromFrozen,
+  runCellTrials,
+  type BenchmarkProvisionWorkflowDeps,
+} from "../src/engine/benchmark/runner.js";
 import type { BenchmarkRunnerDeps, CellWithExperiment } from "../src/engine/benchmark/index.js";
 import type { TrialScorecard } from "../src/engine/benchmark/scorecard.js";
+import { assertProjectCreateConfigAllowed } from "../src/engine/workflow/projectConfigWriteGuards.js";
+
+const workflowCalls = {
+  createProject: [] as Array<{ input: { config?: unknown }; options?: { configWriteProof?: unknown } }>,
+  createSpec: [] as Array<{ input: { projectId: string } }>,
+  createQueuedRunFromSpec: [] as Array<{ input: { specId: string; trigger?: string } }>,
+};
+
+const provisionWorkflow: BenchmarkProvisionWorkflowDeps = {
+  async createProject(_pool, input, _actor, options) {
+    workflowCalls.createProject.push({ input, options });
+    return {
+      projectId: "project_benchmark",
+      name: input.name,
+      repoUrl: input.repoUrl,
+      defaultBranch: "main",
+      runnerImage: "runner",
+      allocator: "local-docker",
+      config: assertProjectCreateConfigAllowed(input.config ?? { version: 1 }, options?.configWriteProof),
+    };
+  },
+  async createSpec(_pool, input) {
+    workflowCalls.createSpec.push({ input });
+    return {
+      specId: "spec_benchmark",
+      projectId: input.projectId,
+      title: input.title,
+      description: input.description,
+      acceptanceCriteria: input.acceptanceCriteria,
+      dependsOn: [],
+      status: "open",
+      priority: "tbd",
+    };
+  },
+  async createQueuedRunFromSpec(_pool, input) {
+    workflowCalls.createQueuedRunFromSpec.push({ input });
+    return {
+      runId: "run_benchmark",
+      specId: input.specId,
+      projectId: "project_benchmark",
+      trigger: input.trigger ?? "manual",
+      branch: input.branch ?? "main",
+      status: "queued",
+      plannerTaskId: "task_benchmark",
+      plannerJobId: "job_benchmark",
+      project: {
+        projectId: "project_benchmark",
+        name: "bench",
+        repoUrl: "https://github.com/cat-cave/tanren-fixture-medium",
+        defaultBranch: "main",
+        runnerImage: "runner",
+        allocator: "local-docker",
+        config: assertProjectCreateConfigAllowed({ version: 1 }),
+      },
+      spec: {
+        specId: "spec_benchmark",
+        projectId: "project_benchmark",
+        title: "benchmark",
+        description: "benchmark",
+        acceptanceCriteria: [],
+        dependsOn: [],
+        status: "open",
+        priority: "tbd",
+      },
+    };
+  },
+};
 
 const ORG = "org_bench";
 
-function frozen(model: string): FrozenConfig {
+function frozen(
+  model: string,
+  overrides: Partial<Pick<FrozenConfig, "governance" | "mergeIntegration">> = {},
+): FrozenConfig {
   return FrozenConfig.parse({
     routing: { write: { chain: [{ cli: "codex", model, authRef: "credential/codex/org/x" }] } },
     escapeHatches: {},
@@ -26,8 +101,8 @@ function frozen(model: string): FrozenConfig {
       tiers: { fast: [{ name: "lint", run: "pnpm lint" }], slow: [{ name: "test", run: "pnpm test" }] },
       when: { fast: ["per_iteration"], slow: ["pre_audit", "pre_merge"] },
     },
-    governance: "strict",
-    mergeIntegration: "not_configured",
+    governance: overrides.governance ?? "strict",
+    mergeIntegration: overrides.mergeIntegration ?? "not_configured",
   });
 }
 
@@ -117,6 +192,12 @@ function deps(cell: CellWithExperiment, opts?: DepsOpts): { deps: BenchmarkRunne
 }
 
 describe("BenchmarkRunner — runCellTrials", () => {
+  beforeEach(() => {
+    workflowCalls.createProject.length = 0;
+    workflowCalls.createSpec.length = 0;
+    workflowCalls.createQueuedRunFromSpec.length = 0;
+  });
+
   it("enqueues exactly trials_target trials, in order, one at a time", async () => {
     const cell = fakeCell(3);
     const { deps: d, cap } = deps(cell);
@@ -181,6 +262,34 @@ describe("BenchmarkRunner — runCellTrials", () => {
     expect(cap.persisted).toEqual([]);
     expect(result.trials[0]!.trialRowWritten).toBe(false);
     expect(result.trials[0]!.terminated).toBe(false);
+  });
+});
+
+describe("defaultProvisionTrial", () => {
+  it("provisions benchmark frozen governance and merge config through the internal proof path", async () => {
+    const cell = fakeCell(1);
+    cell.frozenConfig = frozen("premium", { governance: "open", mergeIntegration: "direct_merge" });
+    cell.cell.frozenConfig = cell.frozenConfig;
+
+    const result = await defaultProvisionTrial({} as never, provisionWorkflow)({ orgId: ORG, cell, trialIndex: 0 });
+
+    expect(result).toEqual({ runId: "run_benchmark", taskId: "task_benchmark" });
+    expect(workflowCalls.createProject).toHaveLength(1);
+    expect(workflowCalls.createProject[0]!.input.config).toMatchObject({
+      governancePosture: "open",
+      mergeIntegration: "direct_merge",
+    });
+    expect(() => assertProjectCreateConfigAllowed(workflowCalls.createProject[0]!.input.config)).toThrow(
+      "autonomous project config",
+    );
+    expect(workflowCalls.createProject[0]!.options?.configWriteProof).toMatchObject({
+      kind: "provisioned_greenfield",
+    });
+    expect(workflowCalls.createSpec[0]!.input.projectId).toBe("project_benchmark");
+    expect(workflowCalls.createQueuedRunFromSpec[0]!.input).toEqual({
+      specId: "spec_benchmark",
+      trigger: "benchmark",
+    });
   });
 });
 
