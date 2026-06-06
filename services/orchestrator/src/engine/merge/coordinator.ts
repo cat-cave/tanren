@@ -34,9 +34,11 @@ import { isRetriableInfraError } from "../providers/githubRefReset.js";
 import { isAmbiguousMergeError } from "../providers/mergeOutcomeErrors.js";
 import type { SpecEscalator } from "./coordinatorEscalate.js";
 import { holdOrHaltRecoverableDrive, RecoverableDriveHoldCeiling } from "./recoverableDriveHold.js";
+import { serializedRetryAfterMs } from "./mergeSerializedRetry.js";
 
 /** How long after a transient merge-drive infra-hold the subscriber re-drives the project. */
 const TRANSIENT_DRIVE_HOLD_RETRY_AFTER_MS = 3000;
+
 /**
  * GAP #2c: the hold-attempt CEILING — how many CONSECUTIVE transient infra re-drives one
  * entry may take before the coordinator stops re-arming the 3s timer and emits a LOUD
@@ -168,7 +170,12 @@ export class EventEmittingMergeCoordinator implements MergeCoordinator {
     const queueDepth = snapshot.entries.length;
 
     if (selection.next === undefined) {
-      return { projectId, holdReason: selection.holdReason, queueDepth };
+      return {
+        projectId,
+        holdReason: selection.holdReason,
+        queueDepth,
+        ...(selection.holdReason === "serialized" && { retryAfterMs: serializedRetryAfterMs(snapshot) }),
+      };
     }
     const entry = selection.next;
 
@@ -176,7 +183,8 @@ export class EventEmittingMergeCoordinator implements MergeCoordinator {
     // merge. A concurrent pass that lost re-evaluates on its own next trigger.
     const claimed = await this.deps.queue.claim(entry.queueId);
     if (!claimed) {
-      return { projectId, holdReason: "serialized", queueDepth };
+      const refreshed = await this.deps.queue.loadSnapshot(projectId);
+      return { projectId, holdReason: "serialized", queueDepth, retryAfterMs: serializedRetryAfterMs(refreshed) };
     }
 
     await this.deps.events.emitAdvanced({ projectId, entry, queueDepth });

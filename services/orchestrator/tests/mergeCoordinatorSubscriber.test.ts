@@ -349,4 +349,35 @@ describe("MergeCoordinatorSubscriber — pending-hold NOTIFY debounce (Bug B)", 
     expect(passes).toEqual([PROJECT, PROJECT]);
     sub.stop();
   });
+
+  it("re-drives a serialized startup hold after its retry timer", async () => {
+    const pool = fakePool(PROJECT, [PROJECT]);
+    const listener = new FakeNotifyListener();
+    let calls = 0;
+    const coordinator = new RecordingCoordinator(() => {
+      calls += 1;
+      return calls === 1
+        ? {
+            projectId: PROJECT,
+            holdReason: "serialized",
+            retryAfterMs: 5,
+            queueDepth: 0,
+          }
+        : { projectId: PROJECT, mergedSpecId: "spec_resumed", queueDepth: 1 };
+    });
+    const sub = new MergeCoordinatorSubscriber({
+      pool,
+      notifyListener: listener as never,
+      coordinator,
+    });
+    await sub.start();
+    await flush();
+
+    expect(coordinator.passes).toEqual([PROJECT]);
+
+    await delay(15);
+    await flush();
+    expect(coordinator.passes).toEqual([PROJECT, PROJECT]);
+    sub.stop();
+  });
 });

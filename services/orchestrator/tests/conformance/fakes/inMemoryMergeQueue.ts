@@ -17,6 +17,7 @@ import type {
 } from "../../../src/engine/contracts/mergeCoordinator.js";
 import type { MergeQueueEventEmitter } from "../../../src/engine/merge/coordinator.js";
 import type { SpecEscalator } from "../../../src/engine/merge/coordinatorEscalate.js";
+import { MERGE_CLAIM_LEASE_MS } from "../../../src/engine/merge/mergeClaimLease.js";
 import type { SpecPriority } from "../../../src/engine/state/spec.js";
 
 interface QueueRow {
@@ -38,11 +39,11 @@ interface QueueRow {
 }
 
 /**
- * The merge-claim lease the fake models (mirrors `MERGE_CLAIM_LEASE_MS`): a
+ * The merge-claim lease the fake models: a
  * `merging` claim newer than this survives `recoverStaleClaims`; an older one is
- * reclaimed. Kept local so the fake's recovery semantics match the pg impl's.
+ * reclaimed. Shared with pg so fake recovery semantics cannot drift.
  */
-const FAKE_CLAIM_LEASE_MS = 15 * 60 * 1000;
+const FAKE_CLAIM_LEASE_MS = MERGE_CLAIM_LEASE_MS;
 
 /** An in-memory native-queue model — the same observable contract as the pg impl. */
 export class InMemoryMergeQueueModel implements MergeQueueModel {
@@ -147,8 +148,16 @@ export class InMemoryMergeQueueModel implements MergeQueueModel {
   async loadSnapshot(projectId: string): Promise<MergeQueueSnapshot> {
     const entries: MergeQueueEntry[] = [];
     let mergingInFlight = false;
+    let serializedRetryAfterMs: number | undefined;
+    const now = this.now();
     for (const row of this.rows.values()) {
-      if (row.status === "merging") mergingInFlight = true;
+      if (row.status === "merging") {
+        mergingInFlight = true;
+        const remaining =
+          row.claimedAt === undefined ? FAKE_CLAIM_LEASE_MS : Math.max(0, FAKE_CLAIM_LEASE_MS - (now - row.claimedAt));
+        serializedRetryAfterMs =
+          serializedRetryAfterMs === undefined ? remaining : Math.min(serializedRetryAfterMs, remaining);
+      }
       if (row.status !== "queued") continue;
       entries.push({
         queueId: row.queueId,
@@ -161,7 +170,13 @@ export class InMemoryMergeQueueModel implements MergeQueueModel {
         orderKey: row.orderKey,
       });
     }
-    return { projectId, entries, mergedSpecIds: new Set(this.mergedSpecs), mergingInFlight };
+    return {
+      projectId,
+      entries,
+      mergedSpecIds: new Set(this.mergedSpecs),
+      mergingInFlight,
+      ...(mergingInFlight && serializedRetryAfterMs !== undefined && { serializedRetryAfterMs }),
+    };
   }
 
   // eslint-disable-next-line @typescript-eslint/require-await

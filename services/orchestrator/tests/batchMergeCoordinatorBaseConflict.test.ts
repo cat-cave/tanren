@@ -136,6 +136,38 @@ describe("BatchMergeCoordinator — base-conflict routing (drive, not bisect)", 
     expect(h.events.events.some((e) => e.type === "merge.dequeued")).toBe(false);
   });
 
+  it("a lost base-conflict claim self-wakes after the winning claim lease", async () => {
+    const h = makeHarness();
+    let now = 1_000_000;
+    h.queue.now = () => now;
+    seed(h, "spec_b");
+    h.checker.baseConflictWhenContains("spec_b");
+    const originalClaim = h.queue.claim.bind(h.queue);
+    let claimAttempts = 0;
+    h.queue.claim = async (queueId) => {
+      claimAttempts += 1;
+      if (claimAttempts === 1) {
+        await originalClaim(queueId);
+        return false;
+      }
+      return originalClaim(queueId);
+    };
+
+    const serialized = await h.coordinator.coordinate(PROJECT);
+
+    expect(serialized.holdReason).toBe("serialized");
+    expect(serialized.retryAfterMs).toBeGreaterThan(0);
+    expect(h.runner.drives).toEqual([]);
+    expect(h.queue.statusOf("run_spec_b")).toBe("merging");
+
+    now += serialized.retryAfterMs!;
+    const recovered = await h.coordinator.coordinate(PROJECT);
+
+    expect(recovered.mergedSpecId).toBe("spec_b");
+    expect(h.queue.statusOf("run_spec_b")).toBe("merged");
+    expect(h.runner.drives).toEqual([{ runId: "run_spec_b" }]);
+  });
+
   it("a SPEC-vs-SPEC conflict (conflictsWithBase false) STILL bisects-and-dequeues (unchanged)", async () => {
     const h = makeHarness();
     seed(h, "spec_a");

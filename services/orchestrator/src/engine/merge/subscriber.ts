@@ -12,6 +12,7 @@ import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import type { VcsProvider } from "../contracts/vcsProvider.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
 import { buildBatchMergeCoordinator } from "./batchCoordinatorBuild.js";
+import { boundedRetryDelayMs } from "./mergeSerializedRetry.js";
 
 export interface MergeCoordinatorSubscriberDeps {
   pool: pg.Pool;
@@ -399,6 +400,7 @@ export class MergeCoordinatorSubscriber {
    */
   private armDelayedReDrive(projectId: string, delayMs: number): void {
     if (this.stopped || this.retryTimers.has(projectId)) return;
+    const boundedDelayMs = boundedRetryDelayMs(delayMs);
     const timer = setTimeout(() => {
       this.retryTimers.delete(projectId);
       // This timer IS the authoritative re-check for a pending/infra hold — clear the
@@ -406,7 +408,7 @@ export class MergeCoordinatorSubscriber {
       this.pendingHoldUntil.delete(projectId);
       if (this.stopped) return;
       void this.schedule(projectId);
-    }, delayMs);
+    }, boundedDelayMs);
     // Do not keep the event loop alive solely for this re-drive timer.
     timer.unref?.();
     this.retryTimers.set(projectId, timer);
@@ -454,9 +456,9 @@ export class MergeCoordinatorSubscriber {
       this.rePending.delete(projectId);
       try {
         const result = await this.coordinator.coordinate(projectId);
-        // A pending/infra hold returns no merge AND no `tanren_run` NOTIFY is guaranteed
-        // to re-trigger this project on its own (a clean single-PR queue would otherwise
-        // hang; a no-checks settle expires on wall time). Arm a bounded, idempotent
+        // A timed hold returns no merge AND no `tanren_run` NOTIFY is guaranteed
+        // to re-trigger this project on its own (a fresh serialized claim, a clean
+        // single-PR queue, or a no-checks settle can expire on wall time). Arm a bounded, idempotent
         // one-shot re-drive so the held batch is re-checked once it clears.
         if (
           result.retryAfterMs !== undefined &&
