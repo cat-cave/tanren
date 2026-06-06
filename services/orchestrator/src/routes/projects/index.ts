@@ -23,6 +23,7 @@ import { createProject, ProjectAccessDeniedError, ProjectNotFoundError } from ".
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { actorCanAccessOrg, actorIsOrgAdmin } from "../orgs/access.js";
 import { BudgetPutSchema, handleBudgetGet, handleBudgetPut } from "./budget.js";
+import { checkFullProjectConfigPatch, checkGenericProjectCreateConfig } from "./createConfigGuard.js";
 import { GovernancePutSchema, handleGovernanceGet, handleGovernancePut } from "./governance.js";
 import { GreenfieldCreateSchema, handleGreenfieldCreate } from "./greenfield.js";
 import { handleProjectArchive, handleProjectUnarchive } from "./lifecycle.js";
@@ -72,18 +73,14 @@ export function createProjectRoutes(options: ProjectRoutesOptions) {
     if (!parsed.success) {
       return c.json({ error: "invalid_project", issues: parsed.error.issues }, 400);
     }
-    // Validate a supplied config up-front: it must be an explicit `version: 1`
-    // blob (an unversioned/malformed config fails hard — no migration shim).
-    // Mirrors the PATCH route's parse-then-400 contract.
-    if (parsed.data.config !== undefined) {
-      try {
-        migrateProjectConfig(parsed.data.config);
-      } catch (error) {
-        return c.json({ error: "invalid_project_config", message: messageOf(error) }, 400);
-      }
+    const configCheck = checkGenericProjectCreateConfig(parsed.data.config);
+    if (!configCheck.ok) {
+      return c.json(configCheck.response, 400);
     }
     const scopedActor: ActorContext = { ...actor, orgId };
-    const project = await createProject(options.pool, parsed.data, scopedActor);
+    const projectInput =
+      configCheck.config === undefined ? parsed.data : { ...parsed.data, config: configCheck.config };
+    const project = await createProject(options.pool, projectInput, scopedActor);
     return c.json(project, 201);
   });
 
@@ -145,18 +142,17 @@ export function createProjectRoutes(options: ProjectRoutesOptions) {
     if (!parsed.success) {
       return c.json({ error: "invalid_project_config", issues: parsed.error.issues }, 400);
     }
-    let nextConfig;
-    try {
-      nextConfig = migrateProjectConfig(parsed.data.config);
-    } catch (error) {
-      return c.json({ error: "invalid_project_config", message: messageOf(error) }, 400);
-    }
     const ownership = await ProjectStore.getOwnership(options.pool, projectId, systemActor);
     if (ownership === undefined || (ownership.orgId !== null && ownership.orgId !== orgId)) {
       return c.json({ error: "project_not_found" }, 404);
     }
-    await ProjectStore.updateConfig(options.pool, projectId, nextConfig, systemActor);
-    return c.json({ projectId, config: nextConfig });
+    const currentConfig = migrateProjectConfig(await ProjectStore.getConfig(options.pool, projectId, systemActor));
+    const configCheck = checkFullProjectConfigPatch(parsed.data.config, currentConfig);
+    if (!configCheck.ok) {
+      return c.json(configCheck.response, 400);
+    }
+    await ProjectStore.updateConfig(options.pool, projectId, configCheck.config, systemActor);
+    return c.json({ projectId, config: configCheck.config });
   });
 
   // The dedicated dollar-budget surface (autonomy-engine.md §3 proof 6): a
@@ -267,8 +263,4 @@ function requireActor(c: { var: { actor?: ActorContext } }): ActorContext {
     throw new Error("actor missing on context");
   }
   return c.var.actor;
-}
-
-function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

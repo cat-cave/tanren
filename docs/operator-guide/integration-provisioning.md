@@ -134,6 +134,10 @@ The boundary model above is realized by:
 3. Onboarding / greenfield flows request capabilities, not leaf secrets:
    "enable Sentry errors" calls the Sentry provisioner, creates the project /
    key / source, and passes the DSN into the generated project.
+   Autonomous greenfield/apex creation also requests `deploy` up front. The
+   caller must name `deploy.vercel` or `deploy.flyio`; when the org has not linked
+   that provider, creation returns structured `not_linked` evidence instead of
+   creating a project with no deploy path.
 4. Leaf-resource manual entry (BYO) remains the path for providers that do not
    expose provisioning APIs or require workspace-owner interactive consent.
 

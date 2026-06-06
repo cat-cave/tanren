@@ -14,6 +14,7 @@ import type pg from "pg";
 import { describe, expect, it } from "vitest";
 import type { ActorContext } from "../src/auth/schemas.js";
 import {
+  DeployProviderMissingError,
   deriveFromCapture,
   emptyCapture,
   mergeCapture,
@@ -30,6 +31,26 @@ const actor: ActorContext = {
   scopes: ["platform:admin"],
   source: "session",
 };
+
+function preparedDeploy(providerKind: "deploy.vercel" | "deploy.flyio" = "deploy.vercel") {
+  return {
+    outcome: {
+      status: "provisioned" as const,
+      capability: "deploy",
+      providerKind,
+      action: "provision" as const,
+      mode: "greenfield" as const,
+      secretRefNames: [`secret://deploy/${providerKind}/app_1/token`],
+      surfaces: { projectConfigKeys: ["deployProvider", "deployAppId"], deployRef: `${providerKind}:app_1` },
+    },
+    projectConfig: {
+      deployProvider: providerKind,
+      deployAppId: "app_1",
+      deployAppName: "supply-chain-os",
+      previewUrlPattern: "https://supply-chain-os.example.test",
+    },
+  };
+}
 
 // In-memory pool tracking inserts so the derive path's create calls are
 // observable. Keyed by SQL substring like the discovery test stub.
@@ -277,7 +298,15 @@ describe("deriveFromCapture · creates the product graph (no migration)", () => 
       complete = result.complete;
     }
 
-    const derived = await deriveFromCapture({ pool }, { orgId: "org_a", capture, actor });
+    const derived = await deriveFromCapture(
+      {
+        pool,
+        async prepareDeploy() {
+          return preparedDeploy();
+        },
+      },
+      { orgId: "org_a", capture, actor, deploy: { providerKind: "deploy.vercel" } },
+    );
 
     expect(state.projects.size).toBe(1);
     expect(derived.projectName).toBe("supply-chain-os");
@@ -308,7 +337,15 @@ describe("deriveFromCapture · creates the product graph (no migration)", () => 
       capture = result.capture;
       complete = result.complete;
     }
-    const derived = await deriveFromCapture({ pool }, { orgId: "org_a", capture, actor });
+    const derived = await deriveFromCapture(
+      {
+        pool,
+        async prepareDeploy() {
+          return preparedDeploy();
+        },
+      },
+      { orgId: "org_a", capture, actor, deploy: { providerKind: "deploy.vercel" } },
+    );
 
     // The scaffold specs are created first, in order: monorepo, build, ci.
     const [scaffoldId, buildId, ciId] = derived.specIds;
@@ -335,7 +372,17 @@ describe("deriveFromCapture · creates the product graph (no migration)", () => 
       capture = result.capture;
       complete = result.complete;
     }
-    const derived = await deriveFromCapture({ pool }, { orgId: "org_a", capture, actor, autonomy: "auto" });
+    const deployRequests: unknown[] = [];
+    const derived = await deriveFromCapture(
+      {
+        pool,
+        async prepareDeploy(request) {
+          deployRequests.push(request);
+          return preparedDeploy(request.providerKind);
+        },
+      },
+      { orgId: "org_a", capture, actor, autonomy: "auto", deploy: { providerKind: "deploy.vercel" } },
+    );
 
     const config = configs.get(derived.projectId);
     expect(config).toBeDefined();
@@ -348,9 +395,30 @@ describe("deriveFromCapture · creates the product graph (no migration)", () => 
     // The interview path always builds off an empty repo ⇒ greenfield (drives the
     // non-frozen in-loop deps-ensure).
     expect(config?.greenfield).toBe(true);
+    expect(deployRequests).toEqual([
+      expect.objectContaining({
+        orgId: "org_a",
+        capability: "deploy",
+        providerKind: "deploy.vercel",
+        mode: "greenfield",
+        projectKey: "supply-chain-os",
+        projectName: "supply-chain-os",
+        name: "supply-chain-os",
+      }),
+    ]);
+    expect(config?.deployProvider).toBe("deploy.vercel");
+    expect(config?.deployAppId).toBe("app_1");
   });
 
-  it("FINDING #1: omitting autonomy keeps the safe schema defaults (human / not_configured)", async () => {
+  it("FINDING deploy: autonomous greenfield rejects missing deploy before project creation", async () => {
+    const { pool, state } = stubPool();
+    await expect(
+      deriveFromCapture({ pool }, { orgId: "org_a", capture: emptyCapture(), actor, autonomy: "auto" }),
+    ).rejects.toBeInstanceOf(DeployProviderMissingError);
+    expect(state.projects.size).toBe(0);
+  });
+
+  it("FINDING #1: omitting autonomy keeps safe human defaults but still requires deploy", async () => {
     const { pool, configs } = stubPool();
     const answerer = createDeterministicInterviewAnswerer();
     let capture: InterviewCapture = emptyCapture();
@@ -360,7 +428,15 @@ describe("deriveFromCapture · creates the product graph (no migration)", () => 
       capture = result.capture;
       complete = result.complete;
     }
-    const derived = await deriveFromCapture({ pool }, { orgId: "org_a", capture, actor });
+    const derived = await deriveFromCapture(
+      {
+        pool,
+        async prepareDeploy() {
+          return preparedDeploy();
+        },
+      },
+      { orgId: "org_a", capture, actor, deploy: { providerKind: "deploy.vercel" } },
+    );
 
     const config = configs.get(derived.projectId);
     expect(config).toBeDefined();
@@ -369,6 +445,15 @@ describe("deriveFromCapture · creates the product graph (no migration)", () => 
     // Even the human tier is greenfield (interview builds off an empty repo) — the
     // safe review/merge defaults hold, but greenfield drives the non-frozen ensure.
     expect(config?.greenfield).toBe(true);
+    expect(config?.deployProvider).toBe("deploy.vercel");
+  });
+
+  it("FINDING deploy: omitting autonomy does not bypass required deploy", async () => {
+    const { pool, state } = stubPool();
+    await expect(
+      deriveFromCapture({ pool }, { orgId: "org_a", capture: emptyCapture(), actor }),
+    ).rejects.toBeInstanceOf(DeployProviderMissingError);
+    expect(state.projects.size).toBe(0);
   });
 
   it("persists the PRODUCT VISION (design-DNA + identity pitch on config; persona surface on metadata) — no migration", async () => {
@@ -381,7 +466,15 @@ describe("deriveFromCapture · creates the product graph (no migration)", () => 
       capture = result.capture;
       complete = result.complete;
     }
-    const derived = await deriveFromCapture({ pool }, { orgId: "org_a", capture, actor });
+    const derived = await deriveFromCapture(
+      {
+        pool,
+        async prepareDeploy() {
+          return preparedDeploy();
+        },
+      },
+      { orgId: "org_a", capture, actor, deploy: { providerKind: "deploy.vercel" } },
+    );
 
     // Design-DNA + identity pitch land on `projects.config.productVision` (the
     // existing jsonb blob — no new table). The interview captured both.

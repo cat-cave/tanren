@@ -22,6 +22,7 @@ import type pg from "pg";
 import type { ActorContext } from "../../../auth/schemas.js";
 import { mergeCapture } from "./capture.js";
 import { deriveProductGraph, type DeriveResult } from "./derive.js";
+import type { DeployPreflightCallback, GreenfieldDeployDependency, PrepareDeployCallback } from "./deployDependency.js";
 import {
   DEFAULT_TOTAL_ROUNDS,
   InterviewCapture,
@@ -40,6 +41,8 @@ export interface InterviewEngineDeps {
   // surface that reasons must use a model or hard-fail (§8a).
   answerer: InterviewAnswerer;
   totalRounds?: number;
+  preflightDeploy?: DeployPreflightCallback;
+  prepareDeploy?: PrepareDeployCallback;
 }
 
 export interface RunRoundInput {
@@ -95,12 +98,13 @@ export interface DeriveFromCaptureInput {
   // already autonomous (`native_queue` + the matching review policy); absent or
   // `human` keeps the schema's safe defaults. Threaded into `deriveProductGraph`.
   autonomy?: "auto" | "simulated" | "human";
+  deploy?: GreenfieldDeployDependency;
 }
 
 export async function deriveFromCapture(
   // Derivation only needs the pool — it commits an already-accumulated capture
   // through the existing creation paths and consults no answerer.
-  deps: Pick<InterviewEngineDeps, "pool">,
+  deps: Pick<InterviewEngineDeps, "pool" | "preflightDeploy" | "prepareDeploy">,
   input: DeriveFromCaptureInput,
 ): Promise<DeriveResult> {
   return deriveProductGraph(deps.pool, {
@@ -109,6 +113,9 @@ export async function deriveFromCapture(
     actor: input.actor,
     ...(input.repoUrl === undefined ? {} : { repoUrl: input.repoUrl }),
     ...(input.autonomy === undefined ? {} : { autonomy: input.autonomy }),
+    ...(input.deploy === undefined ? {} : { deploy: input.deploy }),
+    ...(deps.preflightDeploy === undefined ? {} : { preflightDeploy: deps.preflightDeploy }),
+    ...(deps.prepareDeploy === undefined ? {} : { prepareDeploy: deps.prepareDeploy }),
   });
 }
 

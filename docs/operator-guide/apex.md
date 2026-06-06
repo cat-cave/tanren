@@ -74,6 +74,16 @@ gap, not a reason to reach inside.** Add the endpoint (one CI-gated PR, real
 implementation) and continue over the API. Apex surfacing a missing operator
 endpoint is apex doing its job.
 
+## Deploy is a creation dependency
+
+`apex` is not a greenfield project with deploy added later. Before autonomous
+greenfield creation, link a supported org deploy provider (`deploy.vercel` or
+`deploy.flyio`) through the integration API, then include that provider in the
+greenfield/onboarding request. If no provider is named, or the named provider is
+not linked for the org, creation fails loudly with `deploy_provider_missing` or
+`deploy_not_linked`; Tanren must not create an apex project that has no real path
+to a live deploy.
+
 ## Done, for this phase
 
 Confidence that the full loop closes at least once, weakly, on real
