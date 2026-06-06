@@ -118,14 +118,12 @@ export class NotificationMemoryClient {
       const target = this.targets.get(String(payload.targetId));
       const orgMatches = dispatch.tenant_id === orgId || target?.org_id === orgId;
       if (!orgMatches) continue;
-      if (
+      const hasStatusFilter =
         filterValues.includes("sent") ||
         filterValues.includes("failed") ||
         filterValues.includes("stubbed") ||
-        filterValues.includes("skipped")
-      ) {
-        if (!filterValues.includes(String(dispatch.status))) continue;
-      }
+        filterValues.includes("skipped");
+      if (hasStatusFilter && !filterValues.includes(String(dispatch.status))) continue;
       const eventFilter = filterValues.find((value) => !["sent", "failed", "stubbed", "skipped"].includes(value));
       if (eventFilter !== undefined && payload.eventName !== eventFilter) continue;
       rows.push({
