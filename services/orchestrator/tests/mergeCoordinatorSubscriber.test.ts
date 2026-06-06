@@ -13,8 +13,9 @@
 
 import { NOTIFICATION_CHANNEL, RUN_ACTIVITY_CHANNEL } from "@tanren/db";
 import type pg from "pg";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { CoordinateResult, MergeCoordinator } from "../src/engine/contracts/mergeCoordinator.js";
+import { serializedRetryAfterMs } from "../src/engine/merge/mergeSerializedRetry.js";
 import { MergeCoordinatorSubscriber } from "../src/engine/merge/subscriber.js";
 
 /** Records subscriptions + fires a payload to the registered handler (mirrors the walker test). */
@@ -96,6 +97,11 @@ const tick = (): Promise<void> =>
 const flush = async (): Promise<void> => {
   await tick();
   await tick();
+};
+const flushMicrotasks = async (): Promise<void> => {
+  for (let i = 0; i < 20; i += 1) {
+    await Promise.resolve();
+  }
 };
 const delay = (ms: number): Promise<void> =>
   new Promise((resolve) => {
@@ -379,5 +385,44 @@ describe("MergeCoordinatorSubscriber — pending-hold NOTIFY debounce (Bug B)", 
     await flush();
     expect(coordinator.passes).toEqual([PROJECT, PROJECT]);
     sub.stop();
+  });
+
+  it("self-wakes after a coordinate exception so stale merge claims are recovered", async () => {
+    vi.useFakeTimers();
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    let sub: MergeCoordinatorSubscriber | undefined;
+    try {
+      const pool = fakePool(PROJECT, [PROJECT]);
+      const listener = new FakeNotifyListener();
+      let calls = 0;
+      const coordinator = new RecordingCoordinator((projectId) => {
+        calls += 1;
+        if (calls === 1) {
+          throw new Error("claim write failed after merge claim");
+        }
+        return { projectId, mergedSpecId: "spec_after_exception", queueDepth: 1 };
+      });
+      sub = new MergeCoordinatorSubscriber({
+        pool,
+        notifyListener: listener as never,
+        coordinator,
+      });
+      await sub.start();
+      await flushMicrotasks();
+
+      expect(coordinator.passes).toEqual([PROJECT]);
+
+      await vi.advanceTimersByTimeAsync(serializedRetryAfterMs({}) - 1);
+      await flushMicrotasks();
+      expect(coordinator.passes).toEqual([PROJECT]);
+
+      await vi.advanceTimersByTimeAsync(1);
+      await flushMicrotasks();
+      expect(coordinator.passes).toEqual([PROJECT, PROJECT]);
+    } finally {
+      sub?.stop();
+      consoleError.mockRestore();
+      vi.useRealTimers();
+    }
   });
 });

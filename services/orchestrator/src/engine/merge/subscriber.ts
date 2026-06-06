@@ -12,7 +12,7 @@ import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import type { VcsProvider } from "../contracts/vcsProvider.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
 import { buildBatchMergeCoordinator } from "./batchCoordinatorBuild.js";
-import { boundedRetryDelayMs } from "./mergeSerializedRetry.js";
+import { boundedRetryDelayMs, serializedRetryAfterMs } from "./mergeSerializedRetry.js";
 
 export interface MergeCoordinatorSubscriberDeps {
   pool: pg.Pool;
@@ -482,6 +482,9 @@ export class MergeCoordinatorSubscriber {
         }
       } catch (error) {
         console.error(`[merge-coordinator] coordinate pass failed for project ${projectId}:`, error);
+        if (!this.rePending.has(projectId)) {
+          this.armDelayedReDrive(projectId, serializedRetryAfterMs({}));
+        }
       }
     } while (this.rePending.has(projectId));
   }
