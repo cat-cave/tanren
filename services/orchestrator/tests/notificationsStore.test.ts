@@ -149,6 +149,7 @@ describe("NotificationDispatchLog", () => {
     const client = new NotificationMemoryClient();
     const sentAt = new Date("2026-01-05T12:00:00Z");
     await NotificationDispatchLog.record(client, {
+      orgId: "org_1",
       channel: "ntfy",
       payload: { eventName: "run.failed", title: "x" },
       status: "sent",
@@ -162,5 +163,21 @@ describe("NotificationDispatchLog", () => {
     expect(insert.params[2]).toBe("sent");
     expect(insert.params[3]).toBe(1);
     expect(insert.params[4]).toBe(sentAt);
+    expect(insert.params[5]).toBe("org_1");
+    expect(client.dispatches[0]?.tenant_id).toBe("org_1");
+  });
+
+  it("rejects dispatch log writes without an org id", async () => {
+    const client = new NotificationMemoryClient();
+    await expect(
+      NotificationDispatchLog.record(client, {
+        orgId: "",
+        channel: "ntfy",
+        payload: { eventName: "run.failed", title: "x" },
+        status: "sent",
+        attempts: 1,
+        sentAt: null,
+      }),
+    ).rejects.toThrow("notification dispatch log requires an orgId");
   });
 });

@@ -56,13 +56,19 @@ export class NotificationMemoryClient {
 
     if (trimmed.startsWith("INSERT INTO notifications")) {
       this.dispatches.push({
+        id: this.dispatches.length + 1,
         channel: params[0],
         payload: JSON.parse(String(params[1])),
         status: params[2],
         attempts: params[3],
+        enqueued_at: this.now,
         sent_at: params[4],
+        tenant_id: params[5],
       });
       return { rowCount: 1, rows: [] };
+    }
+    if (trimmed.startsWith("SELECT") && trimmed.includes("FROM notifications n")) {
+      return this.listDispatches(params);
     }
 
     throw new Error(`NotificationMemoryClient: unhandled SQL: ${trimmed}`);
@@ -98,6 +104,48 @@ export class NotificationMemoryClient {
     };
     this.routes.set(String(row.id), row);
     return { rowCount: 1, rows: [row] };
+  }
+
+  private listDispatches(params: ReadonlyArray<unknown>): StubResult {
+    const orgId = String(params[0]);
+    const filterValues = params.slice(1, -1).map(String);
+    const limit = Number(params.at(-1));
+    const rows: Array<Record<string, unknown>> = [];
+
+    for (const dispatch of this.dispatches) {
+      const payload = dispatch.payload as Record<string, unknown>;
+      const target = this.targets.get(String(payload.targetId));
+      const orgMatches = dispatch.tenant_id === orgId || (dispatch.tenant_id === null && target?.org_id === orgId);
+      if (!orgMatches) continue;
+      const hasStatusFilter =
+        filterValues.includes("sent") ||
+        filterValues.includes("failed") ||
+        filterValues.includes("stubbed") ||
+        filterValues.includes("skipped");
+      if (hasStatusFilter && !filterValues.includes(String(dispatch.status))) continue;
+      const eventFilter = filterValues.find((value) => !["sent", "failed", "stubbed", "skipped"].includes(value));
+      if (eventFilter !== undefined && payload.eventName !== eventFilter) continue;
+      rows.push({
+        id: dispatch.id,
+        org_id: dispatch.tenant_id ?? target?.org_id ?? null,
+        channel: dispatch.channel,
+        status: dispatch.status,
+        attempts: dispatch.attempts,
+        enqueued_at: dispatch.enqueued_at,
+        sent_at: dispatch.sent_at,
+        event_name: payload.eventName ?? null,
+        target_id: payload.targetId ?? null,
+        severity: payload.severity ?? null,
+        title: payload.title ?? null,
+        reason: payload.reason ?? null,
+        layering: payload.layering ?? null,
+        target_channel_kind: target?.channel_kind ?? null,
+        target_label: target?.label ?? null,
+      });
+    }
+
+    rows.sort((a, b) => Number(b.id) - Number(a.id));
+    return { rowCount: rows.length, rows: rows.slice(0, limit) };
   }
 }
 

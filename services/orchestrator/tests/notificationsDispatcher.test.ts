@@ -102,6 +102,7 @@ describe("NotificationDispatcher", () => {
     expect(client.dispatches).toHaveLength(1);
     expect(client.dispatches[0]?.status).toBe("sent");
     expect(client.dispatches[0]?.channel).toBe("ntfy");
+    expect(client.dispatches[0]?.tenant_id).toBe("org_1");
   });
 
   it("respects the route's minSeverity floor", async () => {
