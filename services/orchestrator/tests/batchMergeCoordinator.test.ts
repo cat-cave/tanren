@@ -206,6 +206,7 @@ describe("BatchMergeCoordinator — speculative batch-check + bisect", () => {
 
     const result = await h.coordinator.coordinate(PROJECT);
     expect(result.holdReason).toBe("serialized");
+    expect(result.retryAfterMs).toBeGreaterThan(0);
     // No batch check ran (nothing was formed while a merge is in flight).
     expect(h.checker.checked).toEqual([]);
   });

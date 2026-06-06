@@ -25,6 +25,7 @@ import type { SpecEscalator } from "./coordinatorEscalate.js";
 import { isRetriableInfraError } from "../providers/githubRefReset.js";
 import { isAmbiguousMergeError } from "../providers/mergeOutcomeErrors.js";
 import { markDequeuedAfterEvent, type MergeQueueEventEmitter } from "./coordinator.js";
+import { serializedRetryAfterMs } from "./mergeSerializedRetry.js";
 import {
   holdOrHaltRecoverableDrive,
   type RecoverableDriveHoldCeiling,
@@ -168,7 +169,8 @@ export async function driveBaseConflict(
   // can't double-drive. A lost claim means another pass is already driving it — hold.
   const claimed = await deps.queue.claim(culprit.queueId);
   if (!claimed) {
-    return { projectId, holdReason: "serialized", queueDepth };
+    const refreshed = await deps.queue.loadSnapshot(projectId);
+    return { projectId, holdReason: "serialized", queueDepth, retryAfterMs: serializedRetryAfterMs(refreshed) };
   }
   await deps.events.emitAdvanced({ projectId, entry: culprit, queueDepth });
 

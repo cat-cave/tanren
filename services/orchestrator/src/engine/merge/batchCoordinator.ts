@@ -1,8 +1,4 @@
-// The production BatchMergeCoordinator (autonomy-engine.md §2d): speculative
-// batch-check + bisect over the existing native merge queue/runner. It proves
-// `default_branch + batch PRs` before any real merge, drives passing entries in
-// DAG order, routes base conflicts through the per-run resolver, and bisects
-// spec-vs-spec failures so innocent PRs can still merge.
+// Production BatchMergeCoordinator (autonomy-engine.md §2d): batch-check + bisect over the native queue.
 import {
   type BatchCheckVerdict,
   type BatchChecker,
@@ -35,9 +31,9 @@ import {
 } from "./batchCoordinatorSettle.js";
 import { BatchInfraHoldCeiling, holdOnInfra, terminalInfraBlock } from "./batchInfraHoldCeiling.js";
 import { RecoverableDriveHoldCeiling } from "./recoverableDriveHold.js";
+import { serializedRetryAfterMs } from "./mergeSerializedRetry.js";
 
 const MAX_INFRA_RETRIES = 2;
-/** Backoff (ms) between infra-error re-checks — overridable via the `sleep` seam in tests. */
 const INFRA_RETRY_BACKOFF_MS = [250, 500];
 
 const PENDING_RECHECK_MS = 15_000;
@@ -146,9 +142,7 @@ export class BatchMergeCoordinator implements MergeCoordinator {
   }
 
   async coordinate(projectId: string): Promise<CoordinateResult> {
-    // crash recovery FIRST: a coordinator that died mid-merge left a stale
-    // `merging` claim; return it to `queued` (the merge is idempotent) so this pass
-    // re-considers it. The lease (recoverStaleClaims) is the SAME native-queue mechanism.
+    // Crash recovery first; the lease is the same native-queue mechanism.
     await this.deps.queue.recoverStaleClaims(projectId);
     await this.deps.queue.recoverDequeuedCandidates(projectId);
 
@@ -167,7 +161,8 @@ export class BatchMergeCoordinator implements MergeCoordinator {
           : "all_blocked";
       // A non-infra hold (serialized/empty/all_blocked) ends any infra-hold streak.
       this.infraHolds.reset(projectId);
-      return { projectId, holdReason, queueDepth };
+      const retryAfterMs = holdReason === "serialized" ? serializedRetryAfterMs(snapshot) : undefined;
+      return { projectId, holdReason, queueDepth, ...(retryAfterMs !== undefined && { retryAfterMs }) };
     }
 
     // Run the batch through check → (pass: merge all | fail: bisect + re-check). The
@@ -424,9 +419,15 @@ export class BatchMergeCoordinator implements MergeCoordinator {
     for (const entry of batch) {
       const claimed = await this.deps.queue.claim(entry.queueId);
       if (!claimed) {
-        // Another pass already claimed it (serialization) — stop; the winning pass
-        // drives it. The next trigger re-coordinates.
-        break;
+        // The winning pass may die; arm a lease-bound serialized retry.
+        const refreshed = await this.deps.queue.loadSnapshot(projectId);
+        return {
+          projectId,
+          queueDepth,
+          holdReason: "serialized",
+          retryAfterMs: serializedRetryAfterMs(refreshed),
+          ...(mergedSpecId !== undefined && { mergedSpecId }),
+        };
       }
       await this.deps.events.emitAdvanced({ projectId, entry, queueDepth });
 

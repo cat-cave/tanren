@@ -16,17 +16,8 @@ import {
   type SupersededEntry,
 } from "../contracts/mergeCoordinator.js";
 import type { DriveMergeForQueuedRun } from "./coordinator.js";
-
-/**
- * The merge-claim LEASE: how long a `merging` claim is considered fresh before it
- * is treated as STALE (a coordinator died mid-merge). `recoverStaleClaims` only
- * reclaims a `merging` row whose `claimed_at` is OLDER than this — so a fresh,
- * legitimately in-flight claim SURVIVES a concurrent coordinate pass (a second
- * coordinator must NOT reset + double-drive an active merge). A merge drive
- * (up-to-date check + rebase + CI re-poll + GitHub merge) is well under this; the
- * lease only fires when the driving process genuinely crashed.
- */
-export const MERGE_CLAIM_LEASE_MS = 15 * 60 * 1000;
+import { MERGE_CLAIM_LEASE_MS } from "./mergeClaimLease.js";
+import { parseSerializedRetryAfterMs } from "./mergeSerializedRetry.js";
 
 /** Resolve a project's org (the system-scoped bootstrap before any tenant work). */
 async function resolveProjectOrg(pool: pg.Pool, projectId: string): Promise<string | null> {
@@ -122,12 +113,17 @@ export class PgMergeQueueModel implements MergeQueueModel {
         orderKey: Number(row.rn),
       }));
 
-      // Is another entry already merging (serialization signal)?
-      const merging = await client.query<{ count: string }>(
-        "SELECT count(*)::text AS count FROM merge_queue WHERE project_id = $1 AND status = 'merging'",
-        [projectId],
+      const merging = await client.query<{ count: string; retry_after_ms: string | null }>(
+        `SELECT count(*)::text AS count,
+                ceil(greatest(0, extract(epoch from ((min(claimed_at) + ($2::bigint * interval '1 millisecond')) - now())) * 1000))::text AS retry_after_ms
+           FROM merge_queue
+          WHERE project_id = $1
+            AND status = 'merging'`,
+        [projectId, MERGE_CLAIM_LEASE_MS],
       );
-      const mergingInFlight = Number(merging.rows[0]?.count ?? "0") > 0;
+      const mergingRow = merging.rows[0];
+      const mergingInFlight = Number(mergingRow?.count ?? "0") > 0;
+      const serializedRetryAfterMs = parseSerializedRetryAfterMs(mergingRow?.retry_after_ms);
 
       // The specs that have GENUINELY merged — satisfied ancestors.
       const mergedRows = await client.query<{ spec_id: string }>(
@@ -136,7 +132,13 @@ export class PgMergeQueueModel implements MergeQueueModel {
       );
       const mergedSpecIds = new Set(mergedRows.rows.map((r) => r.spec_id));
 
-      return { projectId, entries, mergedSpecIds, mergingInFlight };
+      return {
+        projectId,
+        entries,
+        mergedSpecIds,
+        mergingInFlight,
+        ...(mergingInFlight && serializedRetryAfterMs !== undefined && { serializedRetryAfterMs }),
+      };
     });
   }
 

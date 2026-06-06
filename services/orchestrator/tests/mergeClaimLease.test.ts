@@ -8,9 +8,16 @@
 // lease query). The clock is injectable so the lease boundary is deterministic.
 
 import { describe, expect, it } from "vitest";
-import { InMemoryMergeQueueModel } from "./conformance/fakes/inMemoryMergeQueue.js";
+import { EventEmittingMergeCoordinator } from "../src/engine/merge/coordinator.js";
+import { MERGE_CLAIM_LEASE_MS } from "../src/engine/merge/mergeClaimLease.js";
+import {
+  InMemoryMergeQueueModel,
+  RecordingMergeQueueEventEmitter,
+  RecordingSpecEscalator,
+  ScriptedMergeRunner,
+} from "./conformance/fakes/inMemoryMergeQueue.js";
 
-const LEASE_MS = 15 * 60 * 1000;
+const LEASE_MS = MERGE_CLAIM_LEASE_MS;
 
 describe("recoverStaleClaims lease guard (P2d serialization hardening)", () => {
   it("a FRESH merging claim SURVIVES a concurrent coordinate pass (not reclaimed)", async () => {
@@ -45,5 +52,73 @@ describe("recoverStaleClaims lease guard (P2d serialization hardening)", () => {
     expect(recovered).toBe(1);
     // Reclaimed so the queue makes progress — a new pass can re-drive it.
     expect(queue.statusOf("run_a")).toBe("queued");
+  });
+
+  it("a serialized coordinator pass arms a lease-bound re-drive that later reclaims and merges", async () => {
+    const queue = new InMemoryMergeQueueModel();
+    const runner = new ScriptedMergeRunner();
+    const coordinator = new EventEmittingMergeCoordinator({
+      queue,
+      runner,
+      events: new RecordingMergeQueueEventEmitter(),
+      escalator: new RecordingSpecEscalator(),
+    });
+    let now = 1_000_000;
+    queue.now = () => now;
+    queue.seed({ runId: "run_a", specId: "spec_a", dependsOn: [], priority: "tbd" });
+    const snap = await queue.loadSnapshot("p");
+    await queue.claim(snap.entries[0].queueId);
+
+    const serialized = await coordinator.coordinate("p");
+
+    expect(serialized.holdReason).toBe("serialized");
+    expect(serialized.retryAfterMs).toBeGreaterThan(LEASE_MS);
+    expect(runner.drives).toEqual([]);
+    expect(queue.statusOf("run_a")).toBe("merging");
+
+    now += serialized.retryAfterMs ?? 0;
+    const recovered = await coordinator.coordinate("p");
+
+    expect(recovered.mergedSpecId).toBe("spec_a");
+    expect(queue.statusOf("run_a")).toBe("merged");
+    expect(runner.drives).toEqual([{ runId: "run_a" }]);
+  });
+
+  it("a lost claim arms a lease-bound re-drive for the winning claim", async () => {
+    const queue = new InMemoryMergeQueueModel();
+    const runner = new ScriptedMergeRunner();
+    const coordinator = new EventEmittingMergeCoordinator({
+      queue,
+      runner,
+      events: new RecordingMergeQueueEventEmitter(),
+      escalator: new RecordingSpecEscalator(),
+    });
+    let now = 1_000_000;
+    queue.now = () => now;
+    queue.seed({ runId: "run_a", specId: "spec_a", dependsOn: [], priority: "tbd" });
+    const originalClaim = queue.claim.bind(queue);
+    let claimAttempts = 0;
+    queue.claim = async (queueId) => {
+      claimAttempts += 1;
+      if (claimAttempts === 1) {
+        await originalClaim(queueId);
+        return false;
+      }
+      return originalClaim(queueId);
+    };
+
+    const serialized = await coordinator.coordinate("p");
+
+    expect(serialized.holdReason).toBe("serialized");
+    expect(serialized.retryAfterMs).toBeGreaterThan(LEASE_MS);
+    expect(runner.drives).toEqual([]);
+    expect(queue.statusOf("run_a")).toBe("merging");
+
+    now += serialized.retryAfterMs ?? 0;
+    const recovered = await coordinator.coordinate("p");
+
+    expect(recovered.mergedSpecId).toBe("spec_a");
+    expect(queue.statusOf("run_a")).toBe("merged");
+    expect(runner.drives).toEqual([{ runId: "run_a" }]);
   });
 });

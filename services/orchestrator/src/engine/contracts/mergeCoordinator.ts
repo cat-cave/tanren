@@ -107,6 +107,13 @@ export interface MergeQueueSnapshot {
   mergedSpecIds: Set<string>;
   /** True when another entry is already `merging` (serialization: hold this pass). */
   mergingInFlight: boolean;
+  /**
+   * When `mergingInFlight` is true, the time until the oldest fresh merge claim can
+   * be considered stale. Coordinators surface this as a serialized retry so a
+   * restarted worker wakes itself after the lease instead of waiting for an
+   * unrelated notification.
+   */
+  serializedRetryAfterMs?: number;
 }
 
 // ---- The pure selection core ----------------------------------------------
@@ -339,6 +346,9 @@ export interface CoordinateResult {
   /**
    * Why the pass selected nothing, if it held:
    *   - serialized / empty / all_blocked — the normal holds.
+   *   - serialized — another claim is still fresh; pair with `retryAfterMs` so a
+   *     restarted worker re-checks when that claim can become stale even if no new
+   *     NOTIFY arrives.
    *   - infra_error — the batch check could not be RUN (a transient/transport infra
    *     error); the coordinator bounded-retried then HELD loudly (no PR dequeued). The
    *     entries stay queued; pair with `retryAfterMs` so the subscriber re-drives.
@@ -354,7 +364,8 @@ export interface CoordinateResult {
   /**
    * When set, the pass held on a TRANSIENT/TIMED condition that no `tanren_run` NOTIFY
    * is guaranteed to clear on its own — the subscriber should re-drive THIS project
-   * once after roughly this many ms so a stuck queue recovers. Two cases:
+   * once after roughly this many ms so a stuck queue recovers. Cases:
+   *   - a SERIALIZED hold (fresh merge claim, re-check when its lease can expire);
    *   - an INFRA-ERROR hold (the batch check could not be run);
    *   - a PENDING hold (Bug B) — a no-checks settle counting down, or a registered-CI
    *     batch still running — where `retryAfterMs` is the exact settle remainder when
