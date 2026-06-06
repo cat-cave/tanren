@@ -137,6 +137,59 @@ describe("project progress completion blockers", () => {
     expect(body.blocked).toEqual([]);
   });
 
+  it("clears a number-only conflict blocker by a later same-number merge.completed with a PR URL", async () => {
+    const { app, pool } = buildHarness();
+    pool.seedProject({
+      project_id: "proj_number_to_url",
+      org_id: "org_acme",
+      name: "Number to URL",
+      repo_url: "https://github.com/acme/apex",
+    });
+    pool.seedProjectMember("proj_number_to_url", "user_alice");
+    pool.seedSpec({
+      spec_id: "spec_number_to_url",
+      project_id: "proj_number_to_url",
+      title: "Number to URL",
+      status: "merged",
+    });
+    pool.seedRun({
+      run_id: "run_number_to_url_block",
+      spec_id: "spec_number_to_url",
+      project_id: "proj_number_to_url",
+      status: "completed",
+      outcome: "ok",
+    });
+    pool.seedRun({
+      run_id: "run_number_to_url_done",
+      spec_id: "spec_number_to_url",
+      project_id: "proj_number_to_url",
+      status: "completed",
+      outcome: "ok",
+      pr_url: "https://github.com/acme/apex/pull/15",
+    });
+    pool.seedEvent({
+      id: 1,
+      event_type: "merge.dequeued",
+      spec_id: "spec_number_to_url",
+      run_id: "run_number_to_url_block",
+      project_id: "proj_number_to_url",
+      payload: { integration: "native_queue", reason: "conflict", prNumber: 15 },
+    });
+    pool.seedEvent({
+      id: 2,
+      event_type: "merge.completed",
+      spec_id: "spec_number_to_url",
+      run_id: "run_number_to_url_done",
+      project_id: "proj_number_to_url",
+      payload: { integration: "native_queue", prNumber: 15, prUrl: "https://github.com/acme/apex/pull/15" },
+    });
+
+    const body = await progress(app, "proj_number_to_url");
+    expect(body.v1Reached).toBe(true);
+    expect(body.percentComplete).toBe(100);
+    expect(body.blocked).toEqual([]);
+  });
+
   it("does not clear by prNumber alone when both candidates have different PR URLs", async () => {
     const { app, pool } = buildHarness();
     pool.seedProject({
@@ -267,6 +320,7 @@ describe("project progress completion blockers", () => {
       project_id: "proj_batch_member",
       status: "completed",
       outcome: "ok",
+      pr_url: "https://github.com/acme/apex/pull/15",
     });
     pool.seedEvent({
       id: 1,
@@ -287,7 +341,7 @@ describe("project progress completion blockers", () => {
       spec_id: "spec_member",
       run_id: "run_member_done",
       project_id: "proj_batch_member",
-      payload: { integration: "native_queue", prNumber: 15 },
+      payload: { integration: "native_queue", prNumber: 15, prUrl: "https://github.com/acme/apex/pull/15" },
     });
 
     const body = await progress(app, "proj_batch_member");

@@ -366,7 +366,7 @@ function clearsBlockingSignal(done: AttributedMergeSignal, blocked: AttributedMe
   return (
     samePresentValue(done.runId, blocked.runId) ||
     samePresentValue(done.prUrl, blocked.prUrl) ||
-    (done.prUrl === null && blocked.prUrl === null && samePresentValue(done.prNumber, blocked.prNumber))
+    (samePresentValue(done.prNumber, blocked.prNumber) && (done.prUrl === null || blocked.prUrl === null))
   );
 }
 
