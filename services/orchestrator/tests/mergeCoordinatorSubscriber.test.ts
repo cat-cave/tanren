@@ -1,10 +1,11 @@
 // Unit tests for the MergeCoordinatorSubscriber NOTIFY-storm debounce (Bug B — the
 // no-CI hot-loop fix), over a fake pool + fake PgNotifyListener + a recording
 // coordinator (no Postgres). The live no-CI repo hit a hot loop: a batch stuck
-// `pending` was re-integrated on EVERY unrelated `tanren_run` NOTIFY (~2/sec). The
-// fix: a coordinate pass that returns a PENDING hold (holdReason `all_blocked` WITH
-// `retryAfterMs`) opens a per-project NOTIFY-suppression window — the armed
-// `retryAfterMs` timer is the authoritative re-check, NOT the storm. These prove:
+// `pending` was re-integrated on EVERY unrelated `tanren_run` NOTIFY (~2/sec).
+// `merge_retry` backoff has the same risk: unrelated run activity can burn retry
+// attempts before the backoff timer expires. The fix: a timed hold opens a
+// per-project NOTIFY-suppression window — the armed `retryAfterMs` timer is the
+// authoritative re-check, NOT the storm. These prove:
 //   - a storm of N NOTIFYs in < the debounce window triggers AT MOST ~1 coordinate;
 //   - the suppression applies ONLY to the pending-hold state — once the window
 //     lapses (clock advances), a NOTIFY re-checks promptly (no real-completion regress);
@@ -44,13 +45,15 @@ class FakeNotifyListener {
  *   - SELECT project_id FROM runs WHERE run_id = $1 (trigger resolution).
  * Every run resolves to the SAME project so the storm targets one project's queue.
  */
-function fakePool(projectId: string): pg.Pool {
+function fakePool(projectId: string, startupProjects: string[] = []): pg.Pool {
   const client = {
     // eslint-disable-next-line @typescript-eslint/require-await
     query: async (sql: string, params: unknown[] = []) => {
       const text = sql.trim();
       if (/^(BEGIN|COMMIT|ROLLBACK|SET LOCAL)/u.test(text)) return { rows: [], rowCount: 0 };
-      if (/DISTINCT project_id FROM merge_queue/u.test(sql)) return { rows: [], rowCount: 0 };
+      if (/DISTINCT[\s\S]*project_id[\s\S]*FROM merge_queue/u.test(sql)) {
+        return { rows: startupProjects.map((id) => ({ project_id: id })), rowCount: startupProjects.length };
+      }
       if (/SELECT project_id FROM runs WHERE run_id/u.test(sql)) {
         if (params[0] === undefined) return { rows: [], rowCount: 0 };
         return { rows: [{ project_id: projectId }], rowCount: 1 };
@@ -81,10 +84,37 @@ const flush = async (): Promise<void> => {
   await tick();
   await tick();
 };
+const delay = (ms: number): Promise<void> =>
+  new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((innerResolve) => {
+    resolve = innerResolve;
+  });
+  return { promise, resolve };
+}
 
 const PROJECT = "project_q";
 
 describe("MergeCoordinatorSubscriber — pending-hold NOTIFY debounce (Bug B)", () => {
+  it("startup discovery coordinates projects with queued or recoverable dequeued work", async () => {
+    const pool = fakePool(PROJECT, [PROJECT]);
+    const listener = new FakeNotifyListener();
+    const coordinator = new RecordingCoordinator(() => ({ projectId: PROJECT, holdReason: "empty", queueDepth: 0 }));
+    const sub = new MergeCoordinatorSubscriber({
+      pool,
+      notifyListener: listener as never,
+      coordinator,
+    });
+    await sub.start();
+    await flush();
+
+    expect(coordinator.passes).toEqual([PROJECT]);
+    sub.stop();
+  });
+
   it("suppresses a NOTIFY storm during a pending hold (at most one coordinate)", async () => {
     const pool = fakePool(PROJECT);
     const listener = new FakeNotifyListener();
@@ -185,6 +215,91 @@ describe("MergeCoordinatorSubscriber — pending-hold NOTIFY debounce (Bug B)", 
 
     // Both NOTIFYs coordinated — a clean pass never throttles the next one.
     expect(coordinator.passes).toEqual([PROJECT, PROJECT]);
+    sub.stop();
+  });
+
+  it("suppresses unrelated NOTIFYs during merge_retry backoff; the retry timer re-drives", async () => {
+    const pool = fakePool(PROJECT);
+    const listener = new FakeNotifyListener();
+    let calls = 0;
+    const coordinator = new RecordingCoordinator(() => {
+      calls += 1;
+      return calls === 1
+        ? {
+            projectId: PROJECT,
+            holdReason: "merge_retry",
+            retryAfterMs: 5,
+            queueDepth: 1,
+          }
+        : { projectId: PROJECT, mergedSpecId: "spec_retry", queueDepth: 1 };
+    });
+    let now = 1_000_000;
+    const sub = new MergeCoordinatorSubscriber({
+      pool,
+      notifyListener: listener as never,
+      coordinator,
+      now: () => now,
+    });
+    await sub.start();
+    await flush();
+
+    listener.fire(RUN_ACTIVITY_CHANNEL, "run_0");
+    await flush();
+    expect(coordinator.passes).toEqual([PROJECT]);
+
+    now += 100;
+    for (let i = 1; i <= 5; i += 1) {
+      listener.fire(RUN_ACTIVITY_CHANNEL, `run_${i}`);
+      await flush();
+    }
+    expect(coordinator.passes).toEqual([PROJECT]);
+
+    await delay(15);
+    await flush();
+    expect(coordinator.passes).toEqual([PROJECT, PROJECT]);
+    sub.stop();
+  });
+
+  it("honors merge_retry backoff when a NOTIFY arrives during the coordinate pass", async () => {
+    const pool = fakePool(PROJECT);
+    const listener = new FakeNotifyListener();
+    const firstResult = deferred<CoordinateResult>();
+    const passes: string[] = [];
+    const coordinator: MergeCoordinator = {
+      async coordinate(projectId: string): Promise<CoordinateResult> {
+        passes.push(projectId);
+        if (passes.length === 1) return firstResult.promise;
+        return { projectId, mergedSpecId: "spec_retry", queueDepth: 1 };
+      },
+    };
+    const sub = new MergeCoordinatorSubscriber({
+      pool,
+      notifyListener: listener as never,
+      coordinator,
+    });
+    await sub.start();
+    await flush();
+
+    listener.fire(RUN_ACTIVITY_CHANNEL, "run_0");
+    await flush();
+    expect(passes).toEqual([PROJECT]);
+
+    listener.fire(RUN_ACTIVITY_CHANNEL, "run_1");
+    await flush();
+    expect(passes).toEqual([PROJECT]);
+
+    firstResult.resolve({
+      projectId: PROJECT,
+      holdReason: "merge_retry",
+      retryAfterMs: 20,
+      queueDepth: 1,
+    });
+    await flush();
+    expect(passes).toEqual([PROJECT]);
+
+    await delay(30);
+    await flush();
+    expect(passes).toEqual([PROJECT, PROJECT]);
     sub.stop();
   });
 });

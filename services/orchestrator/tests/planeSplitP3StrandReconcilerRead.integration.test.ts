@@ -1,12 +1,8 @@
-// Plane-split — the NEVER-STRAND reconciler EVENTS-READ gap regression,
-// against a REAL Postgres (no SQL mocks). Same class as PR #270's lifecycle-read
-// gap: the worker connects as the de-privileged `tanren_dataplane` role (0031
-// REVOKE ALL ON TABLE events), but `PgSpecStrandReadModel.countPriorUnstrands`
-// reads `events` (the prior-`dag.spec.unstranded` count that enforces the
-// attempt cap). The reconciler ran that COUNT on the dataplane role, so every
-// reconcile pass threw `permission denied for table events` (42501) —
-// `[dag-walker] strand-reconciler pass failed ... permission denied for table
-// events` at `specStrandReconcilerPg.ts` (the Postgres ACL-check error).
+// Plane-split — the NEVER-STRAND reconciler event read, against a REAL Postgres
+// (no SQL mocks). The worker connects as the de-privileged `tanren_dataplane`
+// role: event WRITES stay denied, but event READS are permitted under RLS so the
+// reconciler can inspect prior `dag.spec.unstranded` signals without bypassing
+// tenant policy.
 //
 // The fix mirrors the lifecycle read: the events COUNT resolves its pool as
 // `getSystemPool() ?? this.pool` — the BYPASSRLS `tanren_system` role (which keeps
@@ -14,19 +10,18 @@
 // applied on top (`runWithOrgScope` sets app.current_org_id), so the read stays
 // org-scoped — only the ROLE changes to one that can SELECT events.
 //
-// What this proves (the negative control + the fix together):
-//   (a) NEGATIVE CONTROL: the `countPriorUnstrands` `events` COUNT, run on the
-//       dataplane-role pool under the project's org scope, throws 42501
-//       (`permission denied for table events`) — reproducing the exact bug. This
-//       proves the dataplane role genuinely cannot SELECT events, so routing the
-//       read through the system role is load-bearing.
+// What this proves:
+//   (a) the `countPriorUnstrands` `events` COUNT, run on the dataplane-role pool
+//       under the project's org scope, is admitted by table grants and filtered by
+//       RLS.
 //   (b) THE FIX: with the system pool wired (the worker's TANREN_SYSTEM_DATABASE_URL),
 //       the SAME `PgSpecStrandReadModel` (constructed on the dataplane pool) counts
 //       the prior unstranded events successfully and returns the right ORG-SCOPED
-//       count — proving the read routes through the system role while org scope is
-//       preserved.
-//   (c) ORG ISOLATION: the system-pool read is still org-scoped — a spec with the
-//       SAME id pattern in a DIFFERENT org never leaks its events into this count.
+//       count — proving the read routes through the system role while the query
+//       keeps its own tenant/project predicates for BYPASSRLS safety.
+//   (c) ORG ISOLATION: the system-pool read is still tenant/project-bounded — a
+//       mismatched project/spec pair across orgs never leaks the other org's events
+//       into this count.
 //
 // Gated behind TANREN_RLS_DB_TEST=1 + an owner/superuser DATABASE_URL (the
 // migration role), exactly like the RLS cohort + P3a/P3b/P3c tests and the
@@ -36,6 +31,7 @@ import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { migrate, resetSystemPool, runWithOrgScope, setSystemPool } from "@tanren/db";
 import { PgSpecStrandReadModel } from "../src/engine/dag/specStrandReconcilerPg.js";
+import { PgEventStore } from "../src/engine/eventStore.js";
 
 const enabled = process.env["TANREN_RLS_DB_TEST"] === "1";
 const describeDb = enabled ? describe : describe.skip;
@@ -85,9 +81,9 @@ describeDb("plane-split P3 — the strand reconciler events read uses the system
     await adminPool.end();
 
     ownerPool = new Pool({ connectionString: withDatabase(ADMIN_URL, database) });
-    // The REAL migration set creates `tanren_dataplane` (0031) + REVOKEs ALL on
-    // `events`, creates the BYPASSRLS `tanren_system` (0030) which KEEPS SELECT on
-    // events, and installs the RLS policies (0030).
+    // The REAL migration set creates `tanren_dataplane`, denies event writes while
+    // keeping RLS-scoped event reads, creates the BYPASSRLS `tanren_system`, and
+    // installs the RLS policies.
     await migrate(ownerPool);
 
     dataPlanePool = new Pool({ connectionString: withRole(ADMIN_URL, DATAPLANE_ROLE, DATAPLANE_PASSWORD, database) });
@@ -128,13 +124,22 @@ describeDb("plane-split P3 — the strand reconciler events read uses the system
       [SPEC, PROJECT, ORG, 2],
       [OTHER_SPEC, OTHER_PROJECT, OTHER_ORG, 1],
     ] as const) {
-      for (let i = 0; i < n; i++) {
-        await ownerPool.query(
-          `INSERT INTO events (spec_id, project_id, org_id, event_type, payload)
-           VALUES ($1, $2, $3, 'dag.spec.unstranded', '{}'::jsonb)`,
-          [spec, project, org],
-        );
-      }
+      await runWithOrgScope(ownerPool, org, async (client) => {
+        const events = new PgEventStore(client);
+        for (let i = 0; i < n; i++) {
+          await events.append({
+            specId: spec,
+            projectId: project,
+            eventType: "dag.spec.unstranded",
+            payload: {
+              specId: spec,
+              reason: "no_live_run",
+              terminalRuns: [],
+              attempt: i + 1,
+            },
+          });
+        }
+      });
     }
   }, 60_000);
 
@@ -152,18 +157,15 @@ describeDb("plane-split P3 — the strand reconciler events read uses the system
     await adminPool.end();
   }, 30_000);
 
-  // (a) THE NEGATIVE CONTROL (the exact read the reconciler ran on the data plane):
-  // the prior-unstranded COUNT SELECTs `events` UNDER THE PROJECT'S ORG SCOPE. Run
-  // that COUNT on the de-privileged data-plane role (the role the worker connects
-  // as) and it is rejected for lack of the `events` SELECT grant (42501 /
-  // permission denied for table events) — the throw the live worker hit on every
-  // reconcile pass.
-  it("(a) the prior-unstranded events count on the data-plane role throws 42501 (the bug)", async () => {
+  // (a) The prior-unstranded COUNT SELECTs `events` under the project's org scope.
+  // The data-plane role must be able to read those signals; off-org rows remain
+  // filtered by the RLS policy.
+  it("(a) the prior-unstranded events count on the data-plane role is RLS-admitted", async () => {
     await expect(
       runWithOrgScope(dataPlanePool, ORG, (client) =>
         client.query("SELECT count(*) FROM events WHERE spec_id = $1 AND event_type = 'dag.spec.unstranded'", [SPEC]),
       ),
-    ).rejects.toMatchObject({ code: "42501" });
+    ).resolves.toMatchObject({ rows: [{ count: "2" }] });
   });
 
   // (b) THE FIX: wire the system pool (the worker's TANREN_SYSTEM_DATABASE_URL). The
@@ -181,16 +183,17 @@ describeDb("plane-split P3 — the strand reconciler events read uses the system
     }
   });
 
-  // (c) ORG ISOLATION: the system-pool read is STILL org-scoped (runWithOrgScope
-  // sets app.current_org_id even on the BYPASSRLS connection). Counting the OTHER
-  // project's spec returns only its own one event — and counting this org's spec is
-  // unchanged at 2, so the other org's events never leak into it.
+  // (c) ORG ISOLATION: the system-pool read is STILL tenant/project-bounded even
+  // though tanren_system bypasses RLS. Counting a mismatched project/spec pair
+  // across orgs returns zero, and matching pairs still return their own counts.
   it("(c) the system-pool read stays org-scoped — no cross-org leak", async () => {
     setSystemPool(systemPool);
     try {
       const model = new PgSpecStrandReadModel(dataPlanePool);
       expect(await model.countPriorUnstrands({ projectId: PROJECT, specId: SPEC })).toBe(2);
       expect(await model.countPriorUnstrands({ projectId: OTHER_PROJECT, specId: OTHER_SPEC })).toBe(1);
+      expect(await model.countPriorUnstrands({ projectId: PROJECT, specId: OTHER_SPEC })).toBe(0);
+      expect(await model.countPriorUnstrands({ projectId: OTHER_PROJECT, specId: SPEC })).toBe(0);
     } finally {
       setSystemPool(undefined);
     }

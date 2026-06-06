@@ -215,11 +215,9 @@ export interface DetectFlakyContext {
   /**
    * Loads the `ci.*` check observations for `[since, now]`. The events read is a
    * caller-provided seam BECAUSE the two callers sit on different DB planes: the
-   * dashboard route runs as `tanren_app` (reads `events` on its own org client),
-   * but the worker loop runs as `tanren_dataplane` — which has NO `events` grant —
-   * and so MUST read them through a system-scoped client. Keeping the read here as
-   * an injected loader is what lets the same detector serve both planes without a
-   * silent permission-denied. `pool` is used only for the tenant tables
+   * dashboard route runs as `tanren_app`, while the worker loop runs as
+   * `tanren_dataplane`. Keeping the read here as an injected loader lets each caller
+   * choose the right org/system scope for its plane. `pool` is used only for the tenant tables
    * (`ci_test_results` + `quarantined_tests`), which both planes can reach.
    */
   loadChecks: (since: Date) => Promise<CiCheckObservation[]>;

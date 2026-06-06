@@ -4,8 +4,8 @@
 // public `coordinate(projectId)` surface + the observable queue-state / merge-drive
 // / event effects only: a ready run enters the queue, the coordinator merges in DAG
 // order (ancestor before dependent) + priority within a layer, ONE merge at a time
-// (serialization), a conflict-prone item dequeues (recoverable) without deadlocking
-// independent items, and idempotency (no double-queue / no double-merge).
+// (serialization), a conflict-prone item stays active with bounded retry before
+// terminally freeing the slot, and idempotency (no double-queue / no double-merge).
 //
 // It never inspects private fields — only the harness's recorded queue rows, drive
 // calls, and emitted events (the contract's observable surface). The harness
@@ -32,7 +32,7 @@ export interface RecordedDrive {
 
 /** A recorded queue event (the §2d visibility surface). */
 export interface RecordedQueueEvent {
-  type: "merge.queue.advanced" | "merge.dequeued";
+  type: "merge.queue.advanced" | "merge.dequeued" | "merge.queue.infra_blocked";
   specId: string;
   reason?: "conflict" | "blocked" | "failed" | "superseded" | "needs_attention";
   queueDepth?: number;
@@ -54,6 +54,8 @@ export interface MergeCoordinatorConformanceHarness {
   readonly projectId: string;
   /** Seed a queued entry (and its spec's DAG facts). */
   seed(entry: SeedEntry): void;
+  /** Seed a legacy dequeued entry that startup recovery may consider. */
+  seedLegacyDequeued(entry: SeedEntry & { reason: "blocked" | "conflict" }): void;
   /** Mark a spec as genuinely merged (a satisfied ancestor). */
   setMerged(specId: string): void;
   /** Script the outcome a run's merge drive returns (default: merged). */
@@ -162,23 +164,46 @@ export function describeMergeCoordinatorConformance(label: string, suite: MergeC
       expect(h.drives[0]).toEqual({ runId: "run_hi" });
     });
 
-    it("routes a conflict to a recoverable dequeue WITHOUT deadlocking independent items", async () => {
+    it("keeps a recoverable blocked candidate queued, then frees the slot at the retry ceiling", async () => {
       const h = suite.make();
-      // The head conflicts; an independent later item must still merge.
+      // The head is blocked; it should not be stranded as a recoverable dequeue.
       h.seed({ runId: "run_x", specId: "spec_x", dependsOn: [], priority: "P0" });
       h.seed({ runId: "run_y", specId: "spec_y", dependsOn: [], priority: "P1" });
-      h.scriptDrive("run_x", { kind: "conflict", message: "branch conflicts with base" });
+      h.scriptDrive("run_x", { kind: "blocked", message: "percolation owns the spec" });
 
-      // Pass 1: the P0 head is driven, conflicts, and is dequeued (not stuck merging).
-      await h.coordinator.coordinate(h.projectId);
+      const first = await h.coordinator.coordinate(h.projectId);
+      expect(first.holdReason).toBe("merge_retry");
+      expect(h.statusOf("run_x")).toBe("queued");
+      expect(h.events.some((e) => e.type === "merge.dequeued")).toBe(false);
+
+      // Bounded liveness: repeated recoverable holds eventually terminally free
+      // the slot, so the independent P1 item can proceed.
+      let last = first;
+      for (let i = 0; i < 10 && last.holdReason === "merge_retry"; i += 1) {
+        last = await h.coordinator.coordinate(h.projectId);
+      }
       expect(h.statusOf("run_x")).toBe("dequeued");
-      const dq = h.events.find((e) => e.type === "merge.dequeued");
-      expect(dq?.specId).toBe("spec_x");
-      expect(dq?.reason).toBe("conflict");
-
-      // Pass 2: the independent P1 item proceeds — the conflict never blocked it.
       await h.coordinator.coordinate(h.projectId);
       expect(h.statusOf("run_y")).toBe("merged");
+    });
+
+    it("does not recover and re-drive a legacy terminal conflict with only a dequeue signal", async () => {
+      const h = suite.make();
+      h.seedLegacyDequeued({
+        runId: "run_conflict",
+        specId: "spec_conflict",
+        dependsOn: [],
+        priority: "P0",
+        reason: "conflict",
+      });
+      h.seed({ runId: "run_next", specId: "spec_next", dependsOn: [], priority: "P1" });
+
+      await h.coordinator.coordinate(h.projectId);
+
+      expect(h.statusOf("run_conflict")).toBe("dequeued");
+      expect(h.drives.some((d) => d.runId === "run_conflict")).toBe(false);
+      expect(h.drives).toEqual([{ runId: "run_next" }]);
+      expect(h.statusOf("run_next")).toBe("merged");
     });
 
     it("a conflict the drive RESOLVES now MERGES (no dequeue + no re-exec) — the real resolver wired", async () => {

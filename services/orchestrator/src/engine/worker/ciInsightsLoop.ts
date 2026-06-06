@@ -27,7 +27,7 @@ export interface CiInsightsLoopDeps {
   pool: pg.Pool;
   /**
    * Plane-split: the control-plane run-state writer. The worker runs as
-   * `tanren_dataplane`, which has NO `events` grant — so the detector's
+   * `tanren_dataplane`, whose event WRITES are denied, so the detector's
    * `ci.flaky.detected` / `ci.test.quarantined` emits CANNOT go through the
    * org-scoped data-plane client; they route through this writer (the control
    * plane) instead. Absent ⇒ in-process via `PgEventStore` (tests / single
@@ -120,9 +120,8 @@ export class CiInsightsLoop {
     const nowDate = new Date(this.now());
     // PLANE-SPLIT: the worker runs as `tanren_dataplane`. Tenant work
     // (`ci_test_results` + `quarantined_tests`) runs on the org-scoped client — both
-    // are RLS-admitted under the project's org. But `events` is OFF this plane: the
-    // `ci.*` READ goes through a system-scoped client (no dataplane `events` grant)
-    // and the `ci.flaky.detected` / `ci.test.quarantined` EMITS route through the
+    // are RLS-admitted under the project's org. The `ci.*` event READ is injected so
+    // this loop can keep its project-wide loader shape, while event EMITS route through the
     // control-plane writer. Both event sites are wrapped in the job org id so the
     // control plane attributes them. Absent a writer (single privileged pool), the
     // in-process `PgEventStore` on the org client serves (tests / non-plane-split).

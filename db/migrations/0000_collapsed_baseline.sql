@@ -788,10 +788,10 @@ ALTER DEFAULT PRIVILEGES FOR ROLE tanren IN SCHEMA public
 
 -- --- Data-plane de-privilege (plane-split P3b/P3c): the worker routes these
 --     writes through the control plane, so the data-plane role loses them.
---     events: dropped entirely (neither read nor written by the data plane).
+--     events: keep SELECT for org-scoped autonomy signal reads; drop writes.
 --     cost_records: keep SELECT (usage accrual), drop writes.
 --     runs/specs/tasks: keep SELECT (drive + contextualize), drop writes.
-REVOKE ALL ON TABLE events FROM tanren_dataplane;--> statement-breakpoint
+REVOKE INSERT, UPDATE, DELETE ON TABLE events FROM tanren_dataplane;--> statement-breakpoint
 REVOKE INSERT, UPDATE, DELETE ON TABLE cost_records FROM tanren_dataplane;--> statement-breakpoint
 REVOKE INSERT, UPDATE, DELETE ON TABLE runs FROM tanren_dataplane;--> statement-breakpoint
 REVOKE INSERT, UPDATE, DELETE ON TABLE specs FROM tanren_dataplane;--> statement-breakpoint

@@ -5,8 +5,10 @@
 //   - `needs_attention` → the NON-BRICKING conflict escalation (§2c): PARK the spec at
 //     `needs_attention` (frees its slot) via the shared `SpecEscalator`, then dequeue
 //     the entry `needs_attention` (NEVER re-queued). NOT the recoverable conflict path.
-//   - `conflict` / `blocked` / `failed` → the recoverable/terminal dequeue: the entry
-//     leaves the ready set + emits `merge.dequeued` with the reason.
+//   - `blocked` → bounded recoverable hold: release the claim so the same candidate
+//     re-drives with backoff, then terminally halt at the ceiling.
+//   - `conflict` / `failed` → dequeue with `merge.dequeued`; `conflict` usually means
+//     the resolver already routed autonomous re-plan/re-execution.
 //
 // `merged` is handled inline by the caller (it advances rather than settling out), so
 // this maps only the NON-merged outcomes.
@@ -19,10 +21,15 @@ import type {
   MergeQueueModel,
   MergeRunner,
 } from "../contracts/mergeCoordinator.js";
-import type { MergeQueueEventEmitter } from "./coordinator.js";
 import type { SpecEscalator } from "./coordinatorEscalate.js";
 import { isRetriableInfraError } from "../providers/githubRefReset.js";
 import { isAmbiguousMergeError } from "../providers/mergeOutcomeErrors.js";
+import { markDequeuedAfterEvent, type MergeQueueEventEmitter } from "./coordinator.js";
+import {
+  holdOrHaltRecoverableDrive,
+  type RecoverableDriveHoldCeiling,
+  type RecoverableDriveHoldResult,
+} from "./recoverableDriveHold.js";
 
 /** How long after a transient batch drive throw the subscriber re-drives the project. */
 export const BATCH_DRIVE_INFRA_RETRY_AFTER_MS = 3000;
@@ -36,6 +43,7 @@ export interface BatchSettleDeps {
   queue: MergeQueueModel;
   events: MergeQueueEventEmitter;
   escalator: SpecEscalator;
+  recoverableDriveHolds?: RecoverableDriveHoldCeiling;
 }
 
 /** The slice of deps the base-conflict drive needs (settle deps + the merge runner). */
@@ -50,7 +58,7 @@ export async function holdOnRetriableDriveThrow(
   error: unknown,
 ): Promise<BatchDriveInfraHold | undefined> {
   if (isAmbiguousMergeError(error)) {
-    await deps.queue.markDequeued(entry.queueId, "blocked");
+    deps.recoverableDriveHolds?.reset(entry.queueId);
     return {
       kind: "infra_terminal",
       message: `merge drive state ambiguous; auto-retry could double-merge: ${String(error)}`,
@@ -58,6 +66,7 @@ export async function holdOnRetriableDriveThrow(
     };
   }
   if (!isRetriableInfraError(error)) return undefined;
+  deps.recoverableDriveHolds?.reset(entry.queueId);
   await deps.queue.releaseClaim(entry.queueId);
   console.warn(
     `[batch-coordinator] project ${projectId}: merge drive for spec ${entry.specId} threw a transient infra error; holding + re-driving (entry stays queued):`,
@@ -73,29 +82,51 @@ export async function holdOnRetriableDriveThrow(
 /**
  * Settle a NON-merged real-merge outcome for one batch entry. A `needs_attention`
  * outcome parks the spec (frees its slot) + dequeues `needs_attention`; any other
- * outcome (`conflict`/`blocked`/`failed`) is a recoverable/terminal dequeue with that
- * reason. Mirrors `EventEmittingMergeCoordinator.driveAndSettle` exactly.
+ * outcome follows the same bounded recoverable-hold / terminal-dequeue policy as
+ * `EventEmittingMergeCoordinator.driveAndSettle`.
  */
 export async function settleDriveOutcome(
   deps: BatchSettleDeps,
   projectId: string,
   entry: MergeQueueEntry,
   outcome: Exclude<MergeDriveOutcome, { kind: "merged" }>,
-): Promise<void> {
+): Promise<"dequeued" | RecoverableDriveHoldResult> {
   if (outcome.kind === "needs_attention") {
     // The LOUD TERMINAL ESCALATION (§2c — non-bricking): park the spec FIRST (frees its
     // slot — the rest of the DAG keeps moving), then dequeue `needs_attention` (NEVER
     // re-queued). The escalator emits `dag.spec.needs_attention`; the dequeue emits
     // `merge.dequeued`. NOT the recoverable conflict path (it would re-conflict forever).
     await deps.escalator.escalate({ projectId, entry, message: outcome.message });
-    await deps.queue.markDequeued(entry.queueId, "needs_attention");
-    await deps.events.emitDequeued({ projectId, entry, reason: "needs_attention", message: outcome.message });
-    return;
+    await markDequeuedAfterEvent({
+      queue: deps.queue,
+      events: deps.events,
+      projectId,
+      entry,
+      reason: "needs_attention",
+      message: outcome.message,
+    });
+    deps.recoverableDriveHolds?.reset(entry.queueId);
+    return "dequeued";
+  }
+
+  if (outcome.kind === "blocked") {
+    const ceiling = deps.recoverableDriveHolds;
+    if (ceiling !== undefined) {
+      return holdOrHaltRecoverableDrive({ ceiling, queue: deps.queue, events: deps.events, projectId, entry, outcome });
+    }
   }
 
   const reason = outcome.kind;
-  await deps.queue.markDequeued(entry.queueId, reason);
-  await deps.events.emitDequeued({ projectId, entry, reason, message: outcome.message });
+  deps.recoverableDriveHolds?.reset(entry.queueId);
+  await markDequeuedAfterEvent({
+    queue: deps.queue,
+    events: deps.events,
+    projectId,
+    entry,
+    reason,
+    message: outcome.message,
+  });
+  return "dequeued";
 }
 
 /**
@@ -109,9 +140,9 @@ export async function settleDriveOutcome(
  * The culprit is the entry whose spec matches `verdict.conflictBetween.specId`. We CLAIM
  * it first (the SAME serialization lease the merge step takes) so a concurrent pass can't
  * double-drive it, then drive + settle from the outcome via {@link settleDriveOutcome}:
- * `merged` advances (markMerged); a recoverable `conflict`/`blocked`/`failed` dequeues with
- * that reason (the resolver re-ready run re-enqueues); `needs_attention` parks the spec
- * (the resolver's genuine-product-clash verdict — frees its slot, never re-queued).
+ * `merged` advances (markMerged); recoverable `blocked` holds with backoff;
+ * `conflict`/`failed` dequeue; `needs_attention` parks the spec (the resolver's
+ * genuine-product-clash verdict — frees its slot, never re-queued).
  */
 export async function driveBaseConflict(
   deps: BatchBaseConflictDeps,
@@ -152,7 +183,13 @@ export async function driveBaseConflict(
   // A non-merged drive outcome: settle via the SAME policy the merge step uses
   // (recoverable dequeue / needs_attention park). The resolver already classified
   // resolve-vs-replan-vs-escalate inside the drive — we never re-decide that here.
-  await settleDriveOutcome(deps, projectId, culprit, outcome);
+  const settled = await settleDriveOutcome(deps, projectId, culprit, outcome);
+  if (settled !== "dequeued") {
+    if (settled.kind === "held") {
+      return { projectId, queueDepth, holdReason: "merge_retry", retryAfterMs: settled.retryAfterMs };
+    }
+    return { projectId, queueDepth, dequeuedSpecId: settled.dequeuedSpecId };
+  }
   return { projectId, queueDepth, dequeuedSpecId: culprit.specId };
 }
 

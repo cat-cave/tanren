@@ -31,6 +31,8 @@ interface QueueRow {
   status: "queued" | "merging" | "merged" | "dequeued";
   /** The reason recorded when status → dequeued (mirrors the pg `dequeue_reason`). */
   dequeueReason?: DequeueReason;
+  /** Test-only model of the latest same-candidate signal used by pg dequeued recovery. */
+  recoverySignal?: "legacy_native_dequeued" | "settled";
   /** When the entry was claimed (status → merging) — the lease anchor (ms epoch). */
   claimedAt?: number;
 }
@@ -64,6 +66,31 @@ export class InMemoryMergeQueueModel implements MergeQueueModel {
       priority: input.priority,
       orderKey: this.order,
       status: "queued",
+    });
+  }
+
+  /** Test helper: seed a legacy stranded native-queue dequeue that production recovery should revive. */
+  seedLegacyDequeued(input: {
+    runId: string;
+    specId: string;
+    reason: Extract<DequeueReason, "blocked" | "conflict">;
+    dependsOn?: string[];
+    priority?: SpecPriority;
+  }): void {
+    const queueId = `mq_${randomUUID()}`;
+    this.order += 1;
+    this.rows.set(queueId, {
+      queueId,
+      runId: input.runId,
+      specId: input.specId,
+      prUrl: `https://github.test/pr/${input.runId}`,
+      prNumber: this.order,
+      dependsOn: input.dependsOn ?? [],
+      priority: input.priority ?? "tbd",
+      orderKey: this.order,
+      status: "dequeued",
+      dequeueReason: input.reason,
+      recoverySignal: "legacy_native_dequeued",
     });
   }
 
@@ -154,7 +181,28 @@ export class InMemoryMergeQueueModel implements MergeQueueModel {
     if (row !== undefined) {
       row.status = "dequeued";
       row.dequeueReason = reason;
+      row.recoverySignal = "settled";
     }
+  }
+
+  // eslint-disable-next-line @typescript-eslint/require-await
+  async recoverDequeuedCandidates(_projectId: string): Promise<number> {
+    let recovered = 0;
+    for (const row of this.rows.values()) {
+      if (
+        row.status === "dequeued" &&
+        row.recoverySignal === "legacy_native_dequeued" &&
+        row.dequeueReason === "blocked" &&
+        !this.hasActiveSameRun(row)
+      ) {
+        row.status = "queued";
+        row.dequeueReason = undefined;
+        row.claimedAt = undefined;
+        row.recoverySignal = undefined;
+        recovered += 1;
+      }
+    }
+    return recovered;
   }
 
   // eslint-disable-next-line @typescript-eslint/require-await
@@ -165,6 +213,7 @@ export class InMemoryMergeQueueModel implements MergeQueueModel {
       if (row.runId === runId && (row.status === "queued" || row.status === "merging")) {
         row.status = "dequeued";
         row.dequeueReason = "superseded";
+        row.recoverySignal = "settled";
         return { queueId: row.queueId, runId, specId: row.specId, prUrl: row.prUrl, prNumber: row.prNumber };
       }
     }
@@ -196,6 +245,14 @@ export class InMemoryMergeQueueModel implements MergeQueueModel {
       }
     }
     return recovered;
+  }
+
+  private hasActiveSameRun(target: QueueRow): boolean {
+    for (const row of this.rows.values()) {
+      if (row === target) continue;
+      if (row.runId === target.runId && (row.status === "queued" || row.status === "merging")) return true;
+    }
+    return false;
   }
 }
 

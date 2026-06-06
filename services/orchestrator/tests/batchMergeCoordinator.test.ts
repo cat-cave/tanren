@@ -1,8 +1,5 @@
-// Behavior tests for the REAL BatchMergeCoordinator (autonomy-engine.md §2d —
-// speculative batch-check + bisect) wired to in-memory fakes (TEST FIXTURES, tests/
-// only): the queue model + merge runner, an in-memory BatchChecker (models a
-// bad-interaction PR WITHOUT a VCS), and recording event emitters. They prove the
-// contract end to end:
+// Behavior tests for the REAL BatchMergeCoordinator (autonomy-engine.md §2d) wired
+// to in-memory fakes. They prove the contract end to end:
 //   - a batch whose combined check PASSES merges every entry in DAG order;
 //   - a batch with ONE bad-interaction PR fails the check, bisect isolates EXACTLY
 //     that PR (not an innocent), the culprit is dequeued to a RECOVERABLE outcome
@@ -94,6 +91,8 @@ describe("BatchMergeCoordinator — speculative batch-check + bisect", () => {
     seed(h, "spec_c");
     seed(h, "spec_d");
     h.checker.failWhenContains("spec_c");
+    const dequeueSpy = vi.spyOn(h.events, "emitDequeued");
+    const culpritSpy = vi.spyOn(h.batchEvents, "emitCulprit");
 
     await h.coordinator.coordinate(PROJECT);
 
@@ -105,6 +104,7 @@ describe("BatchMergeCoordinator — speculative batch-check + bisect", () => {
     const dq = h.events.events.find((e) => e.type === "merge.dequeued");
     expect(dq?.specId).toBe("spec_c");
     expect(dq?.reason).toBe("conflict");
+    expect(culpritSpy.mock.invocationCallOrder[0]).toBeLessThan(dequeueSpy.mock.invocationCallOrder[0] ?? 0);
     // The culprit's drive was NEVER attempted (a failed-check batch never merges it).
     expect(h.runner.drives.map((d) => d.runId)).not.toContain("run_spec_c");
 

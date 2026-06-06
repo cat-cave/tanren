@@ -178,7 +178,9 @@ compose-down: down-dev
 
 wait-for-stack:
   ./scripts/wait-for-url.sh http://localhost:3100/healthz
-  ./scripts/wait-for-url.sh http://localhost:3000/healthz
+  dashboard_port="$(docker compose -f compose.dev.yml port dashboard 3000)"; \
+    dashboard_port="${dashboard_port##*:}"; \
+    ./scripts/wait-for-url.sh "http://localhost:${dashboard_port}/healthz"
 
 # Stack connectivity smoke: the orchestrator's `/healthz` (DB + Vault) via the
 # CLI `doctor`, plus raw SSH reachability of the runner container. This replaces
@@ -385,13 +387,13 @@ smoke-plane-split-p3:
   DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/planeSplitP3RemoteWrites.integration.test.ts
 
 # Plane-split P3b (real PG): the DE-PRIVILEGE proof. Migrates a fresh DB (creates
-# the `tanren_dataplane` role + drops its events/cost_records write grants), then
-# proves under that role: a direct INSERT INTO events / cost_records is REJECTED
-# for the privilege (42501), the cost_records READ is kept, the `job_queue` system
-# write is kept, and the control-plane `tanren_app` role can still insert the same
-# event (contrast). DATABASE_URL is the owner.
+# the `tanren_dataplane` role + drops event/cost WRITE grants), then proves under
+# that role: direct INSERT INTO events / cost_records is REJECTED for the privilege
+# (42501), org-scoped event/cost READS are kept, queue recovery can read event
+# signals under RLS, and the control-plane `tanren_app` role can still insert the
+# same event (contrast). DATABASE_URL is the owner.
 smoke-plane-split-p3b:
-  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/planeSplitP3bDeprivilege.integration.test.ts
+  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/planeSplitP3bDeprivilege.integration.test.ts services/orchestrator/tests/mergeQueueDequeuedRecovery.rls.integration.test.ts
 
 # Plane-split P3c (real PG): the run/spec/task LIFECYCLE de-privilege proof.
 # Migrates a fresh DB (0035 drops the data plane's runs/specs/tasks WRITE grants),

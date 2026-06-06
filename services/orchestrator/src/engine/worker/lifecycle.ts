@@ -115,7 +115,7 @@ export function startRunWorker(input: StartRunWorkerInput): StartedRunWorker {
   // the reaper's dead-letter `events` append is the one worker
   // event-write OUTSIDE the run executor, so when remote-writes is on it must
   // ALSO route through the control plane — otherwise the de-privileged
-  // `tanren_dataplane` role (which has NO `events` grant) would be denied the
+  // `tanren_dataplane` role (which has no `events` write grant) would be denied the
   // INSERT. The `RunStateWriter` IS an `EventStore`, so inject it as the reaper's
   // event store; left direct (the default) it keeps the in-process append.
   const reaper = new JobReaper({

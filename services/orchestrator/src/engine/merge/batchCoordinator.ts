@@ -1,26 +1,8 @@
-// The production BatchMergeCoordinator (autonomy-engine.md §2d — speculative
-// batch-check + bisect, the intelligence layer over the native merge queue).
-// It is a SCHEDULER over the EXISTING per-run merge path (the SAME MergeRunner /
-// MergeQueueModel), NOT a second merge implementation — it adds a speculative
-// validation step BEFORE the real merges:
-//
-// Each pass (`coordinate(projectId)`): (1) recover stale claims (lease) + load
-// the queue snapshot under RLS; (2) FORM a batch (the DAG-ordered mutually-eligible
-// prefix; capped + logged); (3) BATCH-CHECK the prospective merged state (the
-// BatchChecker reuses the SpeculativeIntegrator + the VcsProvider CI seam),
-// emitting merge.batch.checking; (4) on PASS → drive the batch's real merges in DAG
-// order via the native-queue path (one at a time — serialization holds), emitting
-// merge.batch.passed; (5) on FAIL / SPEC-vs-SPEC CONFLICT → BISECT to isolate the single
-// offending PR, DEQUEUE it recoverably (routed to re-execution, NOT dropped), and RE-FORM
-// + RE-CHECK without it so the innocent PRs still merge. A BASE conflict (a single PR dirty
-// against `default_branch`, `conflictsWithBase`) is NOT bisected — it is driven through the
-// per-run intent-preserving resolver (the same path that resolves a dirty PR).
-//
-// INVARIANTS (mirroring the spec): a batch whose check fails NEVER merges to
-// default_branch (only a passing prospective state's entries are driven); ordering
-// (ancestor-before-dependent) is preserved within + across batches; the culprit's
-// work is preserved (recoverable dequeue, never discarded); no innocent PR is dropped;
-// bisect terminates (each step shrinks the suspect set); a crash mid-batch leaves the
+// The production BatchMergeCoordinator (autonomy-engine.md §2d): speculative
+// batch-check + bisect over the existing native merge queue/runner. It proves
+// `default_branch + batch PRs` before any real merge, drives passing entries in
+// DAG order, routes base conflicts through the per-run resolver, and bisects
+// spec-vs-spec failures so innocent PRs can still merge.
 import {
   type BatchCheckVerdict,
   type BatchChecker,
@@ -39,7 +21,7 @@ import {
 } from "../contracts/mergeCoordinator.js";
 import { isRetriableInfraError } from "../providers/githubRefReset.js";
 import { setTimeout as sleepFor } from "node:timers/promises";
-import type { MergeQueueEventEmitter } from "./coordinator.js";
+import { markDequeuedAfterEvent, type MergeQueueEventEmitter } from "./coordinator.js";
 import type { SpecEscalator } from "./coordinatorEscalate.js";
 import {
   driveBaseConflict,
@@ -48,6 +30,7 @@ import {
   settleDriveOutcome,
 } from "./batchCoordinatorSettle.js";
 import { BatchInfraHoldCeiling, holdOnInfra, terminalInfraBlock } from "./batchInfraHoldCeiling.js";
+import { RecoverableDriveHoldCeiling } from "./recoverableDriveHold.js";
 
 /**
  * The bound on in-pass re-checks of the SAME batch after a transient INFRA error (the
@@ -148,6 +131,7 @@ export interface BatchMergeCoordinatorDeps {
    * both paths use, so they can never diverge.
    */
   escalator: SpecEscalator;
+  recoverableDriveHolds?: RecoverableDriveHoldCeiling;
   /**
    * Resolve the per-project max batch size (the config knob). Defaults to a constant
    * `DEFAULT_MAX_BATCH_SIZE` resolver when omitted (tests inject a fixed value). The
@@ -182,6 +166,7 @@ export class BatchMergeCoordinator implements MergeCoordinator {
   constructor(private readonly deps: BatchMergeCoordinatorDeps) {
     this.resolveMaxBatchSize = deps.resolveMaxBatchSize ?? (() => Promise.resolve(DEFAULT_MAX_BATCH_SIZE));
     this.sleep = deps.sleep ?? ((ms) => sleepFor(ms));
+    this.deps.recoverableDriveHolds ??= new RecoverableDriveHoldCeiling();
   }
 
   async coordinate(projectId: string): Promise<CoordinateResult> {
@@ -189,6 +174,7 @@ export class BatchMergeCoordinator implements MergeCoordinator {
     // `merging` claim; return it to `queued` (the merge is idempotent) so this pass
     // re-considers it. The lease (recoverStaleClaims) is the SAME native-queue mechanism.
     await this.deps.queue.recoverStaleClaims(projectId);
+    await this.deps.queue.recoverDequeuedCandidates(projectId);
 
     const maxBatchSize = await this.resolveMaxBatchSize(projectId);
     const snapshot = await this.deps.queue.loadSnapshot(projectId);
@@ -279,8 +265,11 @@ export class BatchMergeCoordinator implements MergeCoordinator {
       if (verdict.result === "conflict" && verdict.conflictsWithBase) {
         const result = await driveBaseConflict(this.deps, projectId, current.batch, verdict, queueDepth);
         if (!("projectId" in result)) {
-          if (result.kind === "infra_terminal")
-            return this.terminalInfraBlock(projectId, [result.entry], result.message, queueDepth);
+          if (result.kind === "infra_terminal") {
+            const terminal = await this.terminalInfraBlock(projectId, [result.entry], result.message, queueDepth);
+            await this.deps.queue.markDequeued(result.entry.queueId, "blocked");
+            return terminal;
+          }
           return this.infraHold(projectId, current.batch, result.message, queueDepth);
         }
         this.infraHolds.reset(projectId);
@@ -306,18 +295,19 @@ export class BatchMergeCoordinator implements MergeCoordinator {
         return this.infraHold(projectId, current.batch, bisect.message, queueDepth);
       }
 
+      const dequeueMessage = `bisected as the offending PR in a failed batch check: ${failMessage}`;
+      const { culprit, checks } = bisect;
+      await this.deps.batchEvents.emitCulprit({ projectId, culprit, checks, message: failMessage });
       // Dequeue the culprit to a RECOVERABLE outcome (conflict reason ⇒ routed to the
       // re-execution path — the run loop re-enqueues it once it re-gates clean; NEVER dropped).
-      await this.deps.queue.markDequeued(bisect.culprit.queueId, "conflict");
-      const dequeueMessage = `bisected as the offending PR in a failed batch check: ${failMessage}`;
-      await this.deps.events.emitDequeued({
+      await markDequeuedAfterEvent({
+        queue: this.deps.queue,
+        events: this.deps.events,
         projectId,
         entry: bisect.culprit,
         reason: "conflict",
         message: dequeueMessage,
       });
-      const { culprit, checks } = bisect;
-      await this.deps.batchEvents.emitCulprit({ projectId, culprit, checks, message: failMessage });
       excludedSpecIds.add(bisect.culprit.specId);
 
       // RE-FORM the batch WITHOUT the culprit (reload the snapshot so the dequeued culprit
@@ -457,15 +447,24 @@ export class BatchMergeCoordinator implements MergeCoordinator {
         return this.infraHold(projectId, batch, outcome.message, queueDepth);
       }
       if (outcome.kind === "infra_terminal") {
-        return this.terminalInfraBlock(projectId, [outcome.entry], outcome.message, queueDepth);
+        const terminal = await this.terminalInfraBlock(projectId, [outcome.entry], outcome.message, queueDepth);
+        await this.deps.queue.markDequeued(outcome.entry.queueId, "blocked");
+        return terminal;
       }
       if (outcome.kind === "merged") {
+        this.deps.recoverableDriveHolds?.reset(entry.queueId);
         await this.deps.queue.markMerged(entry.queueId);
         mergedSpecId = entry.specId;
         continue;
       }
 
-      await settleDriveOutcome(this.deps, projectId, entry, outcome);
+      const settled = await settleDriveOutcome(this.deps, projectId, entry, outcome);
+      if (settled !== "dequeued") {
+        if (settled.kind === "held") {
+          return { projectId, queueDepth, holdReason: "merge_retry", retryAfterMs: settled.retryAfterMs };
+        }
+        return { projectId, queueDepth, dequeuedSpecId: settled.dequeuedSpecId };
+      }
       dequeuedSpecId = entry.specId;
       break;
     }

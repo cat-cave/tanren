@@ -28,10 +28,9 @@ import { priorityRank, type SpecPriority } from "../state/spec.js";
 export type MergeDriveOutcome =
   // The merge landed on `default_branch` (terminal-success for the entry).
   | { kind: "merged"; mergeSha?: string }
-  // A real conflict (or a held/blocked posture/speculative state) — recoverable:
-  // the entry leaves the head so independent items proceed, and is re-queued when
-  // the next signal clears it. `reason` distinguishes conflict from a posture/
-  // speculative block for the merge.dequeued event + the liveness story.
+  // A real conflict usually means the resolver already routed an autonomous
+  // re-plan, so the old candidate leaves the queue. A blocked posture/speculative
+  // state is recoverable and re-driven with bounded backoff.
   | { kind: "conflict"; message: string }
   | { kind: "blocked"; message: string }
   // The merge failed terminally — the entry is removed (NOT re-queued).
@@ -260,16 +259,29 @@ export interface MergeQueueModel {
   releaseClaim(queueId: string): Promise<void>;
 
   /**
-   * Mark an entry as DEQUEUED (left the queue without merging) with the reason —
-   * `conflict`/`blocked` are recoverable (a re-ready run re-enqueues a new entry);
+   * Mark an entry as DEQUEUED (left the queue without merging) with the reason.
    * `failed` is terminal; `superseded` retires the entry of a run replaced by a
    * fresh percolation re-execution (the prior run + its PR are no longer a live
-   * merge candidate — NOT a real conflict); `needs_attention` is the LOUD TERMINAL
-   * escalation of a GENUINELY irreconcilable spec (parked at `needs_attention`, never
-   * re-queued). The entry is removed from the ready set either way, so a blocked head
-   * never deadlocks independent later items (liveness).
+   * merge candidate — NOT a real conflict); `needs_attention` is the LOUD
+   * TERMINAL escalation of a GENUINELY irreconcilable spec (parked at
+   * `needs_attention`, never re-queued). `blocked` is used for legacy recovery rows
+   * and explicit terminal ceilings; normal recoverable blocked drive outcomes use
+   * `releaseClaim` so the candidate stays active. `conflict` still dequeues because
+   * it usually hands off to autonomous re-plan/re-execution.
    */
   markDequeued(queueId: string, reason: DequeueReason): Promise<void>;
+
+  /**
+   * Native-queue liveness repair: revive old recoverable `dequeued`
+   * (`blocked`/`conflict`) rows for this project when the row still has PR facts
+   * and the latest same-candidate signal is the legacy native
+   * `merge.dequeued` event, with no later clearing, terminal, batch-bisect,
+   * supersede, needs-attention, or re-plan signal. This covers rows produced by
+   * older coordinator versions that settled a clean completed run out of the
+   * active queue; a restarted/subsequent coordinator pass brings the same run/PR
+   * back to `queued` instead of requiring a manual retry endpoint.
+   */
+  recoverDequeuedCandidates(projectId: string): Promise<number>;
 
   /**
    * SUPERSEDE the active (queued/merging) merge-queue entry of a PRIOR run that a
@@ -322,7 +334,7 @@ export interface CoordinateResult {
   projectId: string;
   /** The entry merged this pass (its spec id), if any. */
   mergedSpecId?: string;
-  /** The entry dequeued this pass (conflict/blocked/failed), if any. */
+  /** The entry dequeued this pass (failed/needs_attention/terminal ceiling), if any. */
   dequeuedSpecId?: string;
   /**
    * Why the pass selected nothing, if it held:
@@ -330,6 +342,8 @@ export interface CoordinateResult {
    *   - infra_error — the batch check could not be RUN (a transient/transport infra
    *     error); the coordinator bounded-retried then HELD loudly (no PR dequeued). The
    *     entries stay queued; pair with `retryAfterMs` so the subscriber re-drives.
+   *   - merge_retry — a recoverable blocked merge-drive outcome; the same
+   *     candidate stayed queued and will be re-driven after backoff.
    *   - infra_blocked — GAP #1 (runaway guard): a TERMINAL infra halt. The per-project
    *     CROSS-PASS consecutive-infra-hold CEILING fired (a persistent outage / a
    *     permanent error mis-routed to the hold): the coordinator emitted a loud terminal
@@ -337,7 +351,7 @@ export interface CoordinateResult {
    *     NO further timer. No PR is dequeued (the entries stay queued for an operator); the
    *     loop simply STOPS re-driving. Mirrors the per-PR coordinator's ceiling halt.
    */
-  holdReason?: "serialized" | "empty" | "all_blocked" | "infra_error" | "infra_blocked";
+  holdReason?: "serialized" | "empty" | "all_blocked" | "infra_error" | "merge_retry" | "infra_blocked";
   /**
    * When set, the pass held on a TRANSIENT/TIMED condition that no `tanren_run` NOTIFY
    * is guaranteed to clear on its own — the subscriber should re-drive THIS project
