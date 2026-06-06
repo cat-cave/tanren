@@ -17,7 +17,7 @@
 // collapses to at most one follow-up pass. The atomic queue claim is the hard
 // serialization boundary regardless; coalescing keeps the load sane.
 
-import { RUN_ACTIVITY_CHANNEL, type PgNotifyListener, runWithSystemScope } from "@tanren/db";
+import { NOTIFICATION_CHANNEL, RUN_ACTIVITY_CHANNEL, type PgNotifyListener, runWithSystemScope } from "@tanren/db";
 import type pg from "pg";
 import type { Allocator } from "../contracts/allocator.js";
 import type { MergeCoordinator } from "../contracts/mergeCoordinator.js";
@@ -89,6 +89,41 @@ async function resolveRunProject(pool: pg.Pool, runId: string): Promise<string |
   });
 }
 
+async function resolveCredentialRepairProjects(pool: pg.Pool, eventId: string): Promise<string[]> {
+  return runWithSystemScope(pool, async (client) => {
+    const result = await client.query<{
+      project_id: string | null;
+      org_id: string | null;
+      event_type: string;
+      payload: Record<string, unknown> | null;
+    }>("SELECT project_id, org_id, event_type, payload FROM events WHERE id = $1", [eventId]);
+    const row = result.rows[0];
+    if (
+      row === undefined ||
+      !(
+        row.event_type === "credential.github.configured" ||
+        row.event_type === "org.github.connected" ||
+        (row.event_type === "integration.provisioned" && row.payload?.["providerKind"] === "github") ||
+        row.payload?.["provider"] === "github"
+      )
+    ) {
+      return [];
+    }
+    if (row.project_id !== null) return [row.project_id];
+    if (row.org_id === null) return [];
+
+    const projects = await client.query<{ project_id: string }>(
+      `SELECT DISTINCT project_id
+         FROM merge_queue
+        WHERE org_id = $1
+          AND status IN ('queued', 'merging', 'dequeued')
+        ORDER BY project_id`,
+      [row.org_id],
+    );
+    return projects.rows.map((project) => project.project_id);
+  });
+}
+
 /** Discover every project that has a native merge queue to coordinate (system-scoped). */
 async function listProjectsWithQueue(pool: pg.Pool): Promise<string[]> {
   return runWithSystemScope(pool, async (client) => {
@@ -109,9 +144,75 @@ async function listProjectsWithQueue(pool: pg.Pool): Promise<string[]> {
                   AND active.status IN ('queued', 'merging')
              )
              AND COALESCE((
-               SELECT latest.event_type = 'merge.dequeued'
-                  AND latest.payload ->> 'integration' = 'native_queue'
-                  AND latest.payload ->> 'reason' = 'blocked'
+               SELECT (
+                   latest.event_type = 'merge.dequeued'
+                   AND latest.payload ->> 'integration' = 'native_queue'
+                   AND latest.payload ->> 'reason' = 'blocked'
+                 )
+                 OR (
+                   latest.event_type = 'merge.batch.infra_blocked'
+                   AND latest.payload ->> 'terminal' = 'true'
+                   AND (
+                     latest.payload ->> 'kind' = 'missing_required_credential'
+                     OR latest.payload ->> 'cause' IN ('missing_required_credential', 'missing_github_credential')
+                     OR latest.payload ->> 'reason' IN ('missing_required_credential', 'missing_github_credential')
+                     OR latest.payload ->> 'message' LIKE '%missing GitHub credential ref:%'
+                     OR latest.payload ->> 'message' LIKE '%No GitHub credential configured%'
+                   )
+                   AND EXISTS (
+                     SELECT 1
+                       FROM events repair
+                      WHERE repair.project_id = mq.project_id
+                        AND repair.org_id = mq.org_id
+                        AND (repair.ts > latest.ts OR (repair.ts = latest.ts AND repair.id > latest.id))
+                        AND (
+                          repair.event_type = 'credential.github.configured'
+                          OR (
+                            repair.event_type = 'integration.provisioned'
+                            AND repair.payload ->> 'providerKind' = 'github'
+                          )
+                          OR repair.event_type = 'org.github.connected'
+                          OR repair.payload ->> 'provider' = 'github'
+	                        )
+	                        AND (
+	                          repair.payload ->> 'mode' = 'app'
+	                          OR repair.payload ->> 'credentialKind' = 'github_app'
+	                          OR COALESCE(
+	                            NULLIF(latest.payload ->> 'credentialRef', ''),
+	                            NULLIF(latest.payload ->> 'missingRef', ''),
+	                            NULLIF(latest.payload ->> 'requiredCredentialRef', ''),
+                            substring(latest.payload ->> 'message' from 'missing GitHub credential ref: ([^[:space:]]+)')
+                          ) IS NULL
+                          OR repair.payload ->> 'credentialRef' = COALESCE(
+                            NULLIF(latest.payload ->> 'credentialRef', ''),
+                            NULLIF(latest.payload ->> 'missingRef', ''),
+                            NULLIF(latest.payload ->> 'requiredCredentialRef', ''),
+                            substring(latest.payload ->> 'message' from 'missing GitHub credential ref: ([^[:space:]]+)')
+                          )
+                          OR repair.payload ->> 'ref' = COALESCE(
+                            NULLIF(latest.payload ->> 'credentialRef', ''),
+                            NULLIF(latest.payload ->> 'missingRef', ''),
+                            NULLIF(latest.payload ->> 'requiredCredentialRef', ''),
+	                            substring(latest.payload ->> 'message' from 'missing GitHub credential ref: ([^[:space:]]+)')
+	                          )
+	                          OR EXISTS (
+	                            SELECT 1
+	                              FROM jsonb_array_elements_text(
+	                                CASE WHEN jsonb_typeof(repair.payload -> 'secretRefNames') = 'array'
+	                                  THEN repair.payload -> 'secretRefNames'
+	                                  ELSE '[]'::jsonb
+	                                END
+	                              ) AS secret_ref(ref)
+	                             WHERE secret_ref.ref = COALESCE(
+	                               NULLIF(latest.payload ->> 'credentialRef', ''),
+	                               NULLIF(latest.payload ->> 'missingRef', ''),
+	                               NULLIF(latest.payload ->> 'requiredCredentialRef', ''),
+	                               substring(latest.payload ->> 'message' from 'missing GitHub credential ref: ([^[:space:]]+)')
+	                             )
+	                          )
+	                        )
+	                   )
+	                 )
                  FROM events latest
                 WHERE latest.id = (
                   SELECT e.id
@@ -177,6 +278,7 @@ async function listProjectsWithQueue(pool: pg.Pool): Promise<string[]> {
 export class MergeCoordinatorSubscriber {
   private readonly coordinator: MergeCoordinator;
   private unsubscribe: (() => void) | undefined;
+  private eventUnsubscribe: (() => void) | undefined;
   private stopped = false;
   private readonly inFlight = new Map<string, Promise<void>>();
   private readonly rePending = new Set<string>();
@@ -248,11 +350,18 @@ export class MergeCoordinatorSubscriber {
           console.error(`[merge-coordinator] run-activity handler failed for run ${payload}:`, error);
         });
       });
+      const eventUnsubscribe = await this.deps.notifyListener.subscribe(NOTIFICATION_CHANNEL, (payload) => {
+        void this.onEventActivity(payload).catch((error: unknown) => {
+          console.error(`[merge-coordinator] event handler failed for event ${payload}:`, error);
+        });
+      });
       if (this.stopped) {
         unsubscribe();
+        eventUnsubscribe();
         return;
       }
       this.unsubscribe = unsubscribe;
+      this.eventUnsubscribe = eventUnsubscribe;
     } catch (error) {
       console.error("[merge-coordinator] failed to subscribe to the run-activity bus (will not auto-advance):", error);
     }
@@ -272,6 +381,8 @@ export class MergeCoordinatorSubscriber {
     this.stopped = true;
     this.unsubscribe?.();
     this.unsubscribe = undefined;
+    this.eventUnsubscribe?.();
+    this.eventUnsubscribe = undefined;
     for (const timer of this.retryTimers.values()) clearTimeout(timer);
     this.retryTimers.clear();
     this.pendingHoldUntil.clear();
@@ -311,6 +422,12 @@ export class MergeCoordinatorSubscriber {
     const holdUntil = this.pendingHoldUntil.get(projectId);
     if (holdUntil !== undefined && this.now() < holdUntil) return;
     await this.schedule(projectId);
+  }
+
+  private async onEventActivity(eventId: string): Promise<void> {
+    if (eventId === "") return;
+    const projectIds = await resolveCredentialRepairProjects(this.deps.pool, eventId);
+    await Promise.all(projectIds.map((projectId) => this.schedule(projectId)));
   }
 
   /** Coordinate a project, coalescing concurrent requests (latest state, once). */

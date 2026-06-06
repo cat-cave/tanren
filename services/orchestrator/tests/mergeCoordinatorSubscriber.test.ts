@@ -11,7 +11,7 @@
 //     lapses (clock advances), a NOTIFY re-checks promptly (no real-completion regress);
 //   - a NON-pending pass (a clean merge/empty hold) does NOT suppress the next NOTIFY.
 
-import { RUN_ACTIVITY_CHANNEL } from "@tanren/db";
+import { NOTIFICATION_CHANNEL, RUN_ACTIVITY_CHANNEL } from "@tanren/db";
 import type pg from "pg";
 import { describe, expect, it } from "vitest";
 import type { CoordinateResult, MergeCoordinator } from "../src/engine/contracts/mergeCoordinator.js";
@@ -45,7 +45,14 @@ class FakeNotifyListener {
  *   - SELECT project_id FROM runs WHERE run_id = $1 (trigger resolution).
  * Every run resolves to the SAME project so the storm targets one project's queue.
  */
-function fakePool(projectId: string, startupProjects: string[] = []): pg.Pool {
+function fakePool(
+  projectId: string,
+  startupProjects: string[] = [],
+  events = new Map<
+    string,
+    { project_id: string | null; org_id?: string | null; event_type: string; payload?: Record<string, unknown> }
+  >(),
+): pg.Pool {
   const client = {
     // eslint-disable-next-line @typescript-eslint/require-await
     query: async (sql: string, params: unknown[] = []) => {
@@ -57,6 +64,12 @@ function fakePool(projectId: string, startupProjects: string[] = []): pg.Pool {
       if (/SELECT project_id FROM runs WHERE run_id/u.test(sql)) {
         if (params[0] === undefined) return { rows: [], rowCount: 0 };
         return { rows: [{ project_id: projectId }], rowCount: 1 };
+      }
+      if (/SELECT project_id, org_id, event_type, payload FROM events WHERE id/u.test(sql)) {
+        const row = events.get(String(params[0]));
+        return row === undefined
+          ? { rows: [], rowCount: 0 }
+          : { rows: [{ org_id: null, payload: {}, ...row }], rowCount: 1 };
       }
       return { rows: [], rowCount: 0 };
     },
@@ -112,6 +125,37 @@ describe("MergeCoordinatorSubscriber — pending-hold NOTIFY debounce (Bug B)", 
     await flush();
 
     expect(coordinator.passes).toEqual([PROJECT]);
+    sub.stop();
+  });
+
+  it("credential repair events wake the repaired project's merge queue", async () => {
+    const pool = fakePool(
+      PROJECT,
+      [],
+      new Map([
+        ["42", { project_id: PROJECT, event_type: "credential.github.configured" }],
+        [
+          "43",
+          { project_id: "project_app", event_type: "integration.provisioned", payload: { providerKind: "github" } },
+        ],
+      ]),
+    );
+    const listener = new FakeNotifyListener();
+    const coordinator = new RecordingCoordinator(() => ({ projectId: PROJECT, holdReason: "empty", queueDepth: 0 }));
+    const sub = new MergeCoordinatorSubscriber({
+      pool,
+      notifyListener: listener as never,
+      coordinator,
+    });
+    await sub.start();
+    await flush();
+
+    listener.fire(NOTIFICATION_CHANNEL, "42");
+    await flush();
+    listener.fire(NOTIFICATION_CHANNEL, "43");
+    await flush();
+
+    expect(coordinator.passes).toEqual([PROJECT, "project_app"]);
     sub.stop();
   });
 

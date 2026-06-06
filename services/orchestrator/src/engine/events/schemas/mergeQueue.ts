@@ -178,6 +178,12 @@ export const MergeBatchInfraBlockedPayload = z
     terminal: z.boolean().optional(),
     /** When terminal: the count of consecutive cross-pass infra holds that hit the cap. */
     consecutiveHolds: z.number().int().nonnegative().optional(),
+    /**
+     * Machine-readable terminal cause. Missing required credentials are repairable
+     * by a later credential.github.configured event; other terminal infra blocks
+     * stay suppressed.
+     */
+    kind: z.enum(["missing_required_credential"]).optional(),
   })
   .strict();
 

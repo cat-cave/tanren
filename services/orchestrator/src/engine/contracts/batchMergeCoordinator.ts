@@ -265,7 +265,7 @@ export type BatchCheckVerdict =
   // exhaustion, emits a LOUD `merge.batch.infra_blocked` event + HOLDS (entries stay
   // queued). `retriable` is `false` only for a typed PERMANENT infra error (so the
   // coordinator still holds-not-dequeues, but does not burn its retry budget first).
-  | { result: "infra-error"; message: string; retriable: boolean };
+  | { result: "infra-error"; message: string; retriable: boolean; kind?: "missing_required_credential" };
 
 /**
  * Speculatively integrate the given entries (in the supplied DAG order) onto

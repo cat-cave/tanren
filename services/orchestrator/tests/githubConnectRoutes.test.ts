@@ -15,12 +15,21 @@ import type { ActorContext } from "../src/auth/schemas.js";
 import { migrateOrgConfig } from "../src/engine/config/orgConfig.js";
 import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
 import { storeGithubAppCredential } from "../src/engine/credentials/githubApp.js";
+import type { AppendEventInput, EventStore } from "../src/engine/eventStore.js";
 import { GithubAppTokenMinter } from "../src/engine/providers/githubAppTokenMinter.js";
 import { createAuthMiddleware, type ActorContextEnv } from "../src/middleware/auth.js";
 import { createGithubConnectRoutes } from "../src/routes/orgs/github.js";
 import { RoutesPool } from "./helpers/routesPool.js";
 
 const APP_CREDENTIAL_REF = "credential/github_app/org/org_acme/default";
+
+class RecordingEventStore implements EventStore {
+  readonly appended: AppendEventInput[] = [];
+
+  async append(input: AppendEventInput): Promise<void> {
+    this.appended.push(input);
+  }
+}
 
 function pem(): string {
   const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
@@ -88,10 +97,12 @@ function buildFetch(opts: CapabilityFetchOptions = {}): typeof fetch {
 async function buildHarness(opts: CapabilityFetchOptions = {}, actor: ActorContext = admin) {
   const pool = new RoutesPool();
   pool.seedOrg({ id: "org_acme", login: "acme", config: { version: 1 } });
+  pool.seedProject({ project_id: "project_acme", org_id: "org_acme" });
   const secrets = new InMemorySecretStore();
   await storeGithubAppCredential(secrets, { ref: APP_CREDENTIAL_REF, appId: "123456", privateKeyPem: pem() });
   const fetchImpl = buildFetch(opts);
   const minter = new GithubAppTokenMinter({ secrets, fetchImpl });
+  const events = new RecordingEventStore();
 
   const app = new Hono<ActorContextEnv>();
   app.use(
@@ -109,9 +120,10 @@ async function buildHarness(opts: CapabilityFetchOptions = {}, actor: ActorConte
       minter,
       appCredentialRef: APP_CREDENTIAL_REF,
       fetchImpl,
+      events,
     }),
   );
-  return { app, pool, secrets };
+  return { app, pool, secrets, events };
 }
 
 async function reqJson(
@@ -179,15 +191,27 @@ describe("connect GitHub — App install mode", () => {
 
 describe("connect GitHub — token mode", () => {
   it("stores the token as the org default and the capability reflects its scope", async () => {
-    const { app, secrets } = await buildHarness({ tokenScopes: "repo, workflow" });
-    const post = await reqJson(app, "POST", "/orgs/org_acme/github", { token: "ghp_real_token" });
+    const { app, secrets, events } = await buildHarness({ tokenScopes: "repo, workflow" });
+    const post = await reqJson(app, "POST", "/orgs/org_acme/github", { token: "dummy_github_token" });
     expect(post.status).toBe(201);
     expect(post.body.mode).toBe("token");
     // The response carries only the redacted ref — never the secret.
     expect(post.body.credentialRef).toBe("credential/github/org/org_acme/default");
-    expect(JSON.stringify(post.body)).not.toContain("ghp_real_token");
+    expect(JSON.stringify(post.body)).not.toContain("dummy_github_token");
     // The token IS stored under that ref.
-    expect((await secrets.get(post.body.credentialRef))?.value).toBe("ghp_real_token");
+    expect((await secrets.get(post.body.credentialRef))?.value).toBe("dummy_github_token");
+    expect(events.appended).toContainEqual(
+      expect.objectContaining({
+        projectId: "project_acme",
+        eventType: "credential.github.configured",
+        payload: {
+          mode: "token",
+          credentialKind: "github_token",
+          ref: "credential/github/org/org_acme/default",
+          redacted: true,
+        },
+      }),
+    );
 
     const get = await reqJson(app, "GET", "/orgs/org_acme/github");
     expect(get.body).toMatchObject({ connected: true, mode: "token", login: "acme-bot", canCreateRepos: true });

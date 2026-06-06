@@ -140,6 +140,18 @@ export const CredentialFailedPayload = z
   })
   .strict();
 
+// credential.github.configured — the operator connected GitHub through the
+// product API. This is a repair signal for previously-terminal missing-GitHub
+// merge holds; it carries only a credential REF, never the secret value.
+export const CredentialGithubConfiguredPayload = z
+  .object({
+    mode: z.enum(["app", "token"]),
+    credentialKind: z.enum(["github_app", "github_token"]),
+    ref: z.string(),
+    redacted: z.literal(true),
+  })
+  .strict();
+
 // Managed-hosting dimension D (per-run scoped credentials): a short-lived Vault
 // CHILD token was minted, scoped to read ONLY this run's credential ref paths,
 // with a bounded TTL + use count. The audit record carries the SCOPE — the ref
