@@ -344,7 +344,7 @@ describe("PgMergeQueueModel.recoverDequeuedCandidates", () => {
     expect(pool.queue[0]?.status).toBe("dequeued");
   });
 
-  it("revives a terminal missing-credential halt only after a later matching credential repair event", async () => {
+  it("revives a terminal GitHub credential halt only after a later matching credential repair event", async () => {
     const pool = new QueueRecoveryPool();
     pool.seedProject(PROJECT, ORG);
     pool.seedQueue({
@@ -379,8 +379,8 @@ describe("PgMergeQueueModel.recoverDequeuedCandidates", () => {
         integration: "native_queue",
         terminal: true,
         kind: "missing_required_credential",
-        credentialRef: CODEX_REF,
-        message: `missing Codex credential ref: ${CODEX_REF}`,
+        credentialRef: GITHUB_REF,
+        message: `missing GitHub credential ref: ${GITHUB_REF}`,
         members: [{ specId: SPEC, prNumber: 15 }],
       },
     });
@@ -397,9 +397,9 @@ describe("PgMergeQueueModel.recoverDequeuedCandidates", () => {
       eventType: "credential.configured",
       ts: new Date("2026-05-01T00:00:02.000Z"),
       payload: {
-        provider: "codex",
-        credentialKind: "codex_chatgpt_auth",
-        ref: CODEX_REF,
+        provider: "github",
+        credentialKind: "github_token",
+        ref: GITHUB_REF,
         redacted: true,
       },
     });
@@ -426,6 +426,89 @@ describe("PgMergeQueueModel.recoverDequeuedCandidates", () => {
         kind: "missing_github_credential",
         credentialRef: GITHUB_REF,
         message: `missing GitHub credential ref: ${GITHUB_REF}`,
+        members: [{ specId: SPEC, prNumber: 15 }],
+      },
+    });
+
+    const beforeRepair = await new PgMergeQueueModel(pool.asPgPool()).recoverDequeuedCandidates(PROJECT);
+    expect(beforeRepair).toBe(0);
+    expect(pool.queue[0]?.status).toBe("dequeued");
+
+    pool.seedEvent({
+      projectId: PROJECT,
+      orgId: ORG,
+      runId: null,
+      specId: null,
+      eventType: "credential.github.configured",
+      ts: new Date("2026-05-01T00:00:02.000Z"),
+      payload: {
+        provider: "github",
+        credentialKind: "github_token",
+        credentialRef: GITHUB_REF,
+        redacted: true,
+      },
+    });
+
+    const recovered = await new PgMergeQueueModel(pool.asPgPool()).recoverDequeuedCandidates(PROJECT);
+
+    expect(recovered).toBe(1);
+    expect(pool.queue[0]).toMatchObject({ status: "queued", dequeueReason: null, settledAt: null });
+  });
+
+  it("does not revive a null-ref GitHub credential halt after an unrelated generic credential import", async () => {
+    const pool = new QueueRecoveryPool();
+    seedBlockedDequeued(pool, "mq_missing_github_null_ref_unrelated_repair", false);
+    pool.seedEvent({
+      projectId: PROJECT,
+      orgId: ORG,
+      runId: RUN,
+      specId: SPEC,
+      eventType: "merge.batch.infra_blocked",
+      ts: new Date("2026-05-01T00:00:01.000Z"),
+      payload: {
+        integration: "native_queue",
+        terminal: true,
+        kind: "missing_github_credential",
+        message: "No GitHub credential configured",
+        members: [{ specId: SPEC, prNumber: 15 }],
+      },
+    });
+    pool.seedEvent({
+      projectId: PROJECT,
+      orgId: ORG,
+      runId: null,
+      specId: null,
+      eventType: "credential.configured",
+      ts: new Date("2026-05-01T00:00:02.000Z"),
+      payload: {
+        provider: "codex",
+        credentialKind: "codex_chatgpt_auth",
+        ref: CODEX_REF,
+        redacted: true,
+      },
+    });
+
+    const recovered = await new PgMergeQueueModel(pool.asPgPool()).recoverDequeuedCandidates(PROJECT);
+
+    expect(recovered).toBe(0);
+    expect(pool.queue[0]?.status).toBe("dequeued");
+  });
+
+  it("revives a null-ref GitHub credential halt after GitHub is configured", async () => {
+    const pool = new QueueRecoveryPool();
+    seedBlockedDequeued(pool, "mq_missing_github_null_ref_github_repair", false);
+    pool.seedEvent({
+      projectId: PROJECT,
+      orgId: ORG,
+      runId: RUN,
+      specId: SPEC,
+      eventType: "merge.batch.infra_blocked",
+      ts: new Date("2026-05-01T00:00:01.000Z"),
+      payload: {
+        integration: "native_queue",
+        terminal: true,
+        kind: "missing_github_credential",
+        message: "No GitHub credential configured",
         members: [{ specId: SPEC, prNumber: 15 }],
       },
     });

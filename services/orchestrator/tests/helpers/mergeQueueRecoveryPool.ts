@@ -192,7 +192,7 @@ function isRepairedTerminalCredentialBlock(row: QueueRow, event: EventRow, event
   return events.some((repair) => {
     if (!isAfter(repair, event)) return false;
     if (repair.projectId !== row.projectId || repair.orgId !== row.orgId) return false;
-    if (!isGithubConnectionRepair(repair)) return false;
+    if (!isGithubRepairSignal(repair, missingRef)) return false;
     return isGithubAppRepair(repair.payload) || missingRef === null || repairRefs(repair.payload).includes(missingRef);
   });
 }
@@ -216,15 +216,21 @@ function missingGithubCredentialRef(payload: Record<string, unknown>): string | 
   return /missing [^:]* credential ref: ([^\s]+)/u.exec(String(payload["message"] ?? ""))?.[1] ?? null;
 }
 
-function isGithubConnectionRepair(event: EventRow): boolean {
-  if (event.eventType === "credential.configured") return true;
+function isGithubRepairSignal(event: EventRow, missingRef: string | null): boolean {
   if (event.eventType === "integration.provisioned" && event.payload["providerKind"] === "github") return true;
   if (["org.github.connected", "credential.github.configured"].includes(event.eventType)) return true;
-  return event.payload["provider"] === "github";
+  if (event.payload["provider"] === "github") return true;
+  if (isGithubAppRepair(event.payload)) return true;
+  if (event.payload["credentialKind"] === "github_token") return true;
+  return missingRef !== null && isGithubCredentialRef(missingRef) && repairRefs(event.payload).includes(missingRef);
 }
 
 function isGithubAppRepair(payload: Record<string, unknown>): boolean {
   return payload["mode"] === "app" || payload["credentialKind"] === "github_app";
+}
+
+function isGithubCredentialRef(ref: string): boolean {
+  return /^credential\/(?:github|github_token|github_app)\//u.test(ref);
 }
 
 function repairRefs(payload: Record<string, unknown>): string[] {
