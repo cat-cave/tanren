@@ -236,7 +236,7 @@ export class ProgressRoutesPool {
         .flatMap((event) => attributedMergeSignals(event, this.runs));
       for (const signal of signals) {
         if (!isCompletionBlockingSignal(signal)) continue;
-        if (signals.some((done) => clearsBlockingSignal(done, signal))) continue;
+        if (signals.some((done) => clearsBlockingSignal(done, signal, signals))) continue;
         blocked.add(signal.specId);
       }
       const rows = [...blocked].sort().map((spec_id) => ({ spec_id }));
@@ -266,6 +266,7 @@ function isMergeCompletionSignal(event: EventRow): boolean {
   if (event.event_type === "merge.dequeued") {
     return payload["reason"] === "blocked" || payload["reason"] === "failed" || payload["reason"] === "conflict";
   }
+  if (isReplanLineageEvent(event.event_type)) return true;
   return false;
 }
 
@@ -359,14 +360,31 @@ function isCompletionBlockingSignal(signal: AttributedMergeSignal): boolean {
   return signal.reason === "conflict" && hasCandidateIdentity(signal);
 }
 
-function clearsBlockingSignal(done: AttributedMergeSignal, blocked: AttributedMergeSignal): boolean {
+function clearsBlockingSignal(
+  done: AttributedMergeSignal,
+  blocked: AttributedMergeSignal,
+  signals: ReadonlyArray<AttributedMergeSignal>,
+): boolean {
   if (done.event.event_type !== "merge.completed") return false;
   if (done.specId !== blocked.specId) return false;
   if (!isAfter(done.event, blocked.event)) return false;
-  return (
+  if (
     samePresentValue(done.runId, blocked.runId) ||
     samePresentValue(done.prUrl, blocked.prUrl) ||
     (samePresentValue(done.prNumber, blocked.prNumber) && (done.prUrl === null || blocked.prUrl === null))
+  ) {
+    return true;
+  }
+  return (
+    blocked.event.event_type === "merge.dequeued" &&
+    blocked.reason === "conflict" &&
+    signals.some(
+      (lineage) =>
+        lineage.specId === blocked.specId &&
+        isReplanLineageEvent(lineage.event.event_type) &&
+        isAfter(lineage.event, blocked.event) &&
+        isAfter(done.event, lineage.event),
+    )
   );
 }
 
@@ -380,6 +398,14 @@ function hasCandidateIdentity(signal: AttributedMergeSignal): boolean {
 
 function samePresentValue(left: string | null, right: string | null): boolean {
   return left !== null && right !== null && left === right;
+}
+
+function isReplanLineageEvent(eventType: string): boolean {
+  return (
+    eventType === "merge.conflict.replan_routed" ||
+    eventType === "dag.spec.percolation_replan" ||
+    eventType === "recovery.replan_queued"
+  );
 }
 
 function prNumberFromUrl(prUrl: string | null): string | null {

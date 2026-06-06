@@ -96,6 +96,82 @@ describe("project progress completion blockers", () => {
     expect(body.blocked).toEqual([{ specId: "spec_apex", title: "Apex progress", status: "completion_blocked" }]);
   });
 
+  it("clears an old conflict blocker when a durable replan lineage later merges a replacement candidate", async () => {
+    const { app, pool } = buildHarness();
+    pool.seedProject({
+      project_id: "proj_replanned_candidate",
+      org_id: "org_acme",
+      name: "Replanned candidate",
+      repo_url: "https://github.com/acme/apex",
+    });
+    pool.seedProjectMember("proj_replanned_candidate", "user_alice");
+    pool.seedSpec({
+      spec_id: "spec_replanned",
+      project_id: "proj_replanned_candidate",
+      title: "Replanned conflict",
+      status: "merged",
+    });
+    pool.seedRun({
+      run_id: "run_old_candidate",
+      spec_id: "spec_replanned",
+      project_id: "proj_replanned_candidate",
+      status: "completed",
+      outcome: "ok",
+      pr_url: "https://github.com/acme/apex/pull/15",
+    });
+    pool.seedRun({
+      run_id: "run_replacement_candidate",
+      spec_id: "spec_replanned",
+      project_id: "proj_replanned_candidate",
+      status: "completed",
+      outcome: "ok",
+      pr_url: "https://github.com/acme/apex/pull/16",
+    });
+    pool.seedEvent({
+      id: 1,
+      event_type: "merge.dequeued",
+      spec_id: "spec_replanned",
+      run_id: "run_old_candidate",
+      project_id: "proj_replanned_candidate",
+      payload: {
+        integration: "native_queue",
+        reason: "conflict",
+        prNumber: 15,
+        prUrl: "https://github.com/acme/apex/pull/15",
+      },
+    });
+    pool.seedEvent({
+      id: 2,
+      event_type: "merge.conflict.replan_routed",
+      spec_id: "spec_replanned",
+      run_id: "run_old_candidate",
+      project_id: "proj_replanned_candidate",
+      payload: {
+        specId: "spec_replanned",
+        newContext: "Replan on top of main after PR 15 conflicted.",
+        replanStatus: "pending",
+      },
+    });
+    pool.seedEvent({
+      id: 3,
+      event_type: "merge.completed",
+      spec_id: "spec_replanned",
+      run_id: "run_replacement_candidate",
+      project_id: "proj_replanned_candidate",
+      payload: {
+        integration: "native_queue",
+        prNumber: 16,
+        prUrl: "https://github.com/acme/apex/pull/16",
+      },
+    });
+
+    const body = await progress(app, "proj_replanned_candidate");
+    expect(body.specCounts.merged).toBe(1);
+    expect(body.v1Reached).toBe(true);
+    expect(body.percentComplete).toBe(100);
+    expect(body.blocked).toEqual([]);
+  });
+
   it("lets a later same-candidate merge.completed clear an older conflict dequeue", async () => {
     const { app, pool } = buildHarness();
     pool.seedProject({ project_id: "proj_clear_conflict", org_id: "org_acme", name: "Clear", repo_url: "https://x/r" });

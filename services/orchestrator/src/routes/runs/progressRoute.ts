@@ -114,6 +114,11 @@ async function fetchCompletionBlockingSpecIds(
               AND payload ->> 'reason' IN ('blocked', 'failed', 'conflict')
               AND (NOT (payload ? 'integration') OR payload ->> 'integration' = 'native_queue')
             )
+            OR event_type IN (
+              'merge.conflict.replan_routed',
+              'dag.spec.percolation_replan',
+              'recovery.replan_queued'
+            )
           )
      ),
      payload_member_ids AS (
@@ -226,6 +231,22 @@ async function fetchCompletionBlockingSpecIds(
                    AND b.pr_number IS NOT NULL
                    AND done.pr_number = b.pr_number
                    AND (done.pr_url IS NULL OR b.pr_url IS NULL)
+                 )
+                 OR (
+                   b.event_type = 'merge.dequeued'
+                   AND b.dequeue_reason = 'conflict'
+                   AND EXISTS (
+                     SELECT 1
+                       FROM attributed lineage
+                      WHERE lineage.spec_id = b.spec_id
+                        AND lineage.event_type IN (
+                          'merge.conflict.replan_routed',
+                          'dag.spec.percolation_replan',
+                          'recovery.replan_queued'
+                        )
+                        AND (lineage.ts > b.ts OR (lineage.ts = b.ts AND lineage.id > b.id))
+                        AND (done.ts > lineage.ts OR (done.ts = lineage.ts AND done.id > lineage.id))
+                   )
                  )
                )
           )
