@@ -100,6 +100,11 @@ export class InMemoryMergeQueueModel implements MergeQueueModel {
     this.mergedSpecs.add(specId);
   }
 
+  /** Test helper: undo a false merged ancestor after merge-truth reconciliation. */
+  unmarkSpecMerged(specId: string): void {
+    this.mergedSpecs.delete(specId);
+  }
+
   /** Test helper: the status of a run's entry (the observable settle effect). */
   statusOf(runId: string): QueueRow["status"] | undefined {
     for (const row of this.rows.values()) {

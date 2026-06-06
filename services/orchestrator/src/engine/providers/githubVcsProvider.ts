@@ -32,6 +32,7 @@ import type {
   OpenedPullRequest,
   PullRequestMergeability,
   PullRequestRef,
+  PullRequestState,
   PushBranchInput,
   RepoRef,
   ResolvedVcsToken,
@@ -141,6 +142,21 @@ export class GitHubVcsProvider implements VcsProvider {
   parsePullRequest(prUrl: string): PullRequestRef {
     const parsed = parseGitHubPullRequestUrl(prUrl);
     return { repo: parsed.repo, number: parsed.pullNumber };
+  }
+
+  async readPullRequestState(pr: PullRequestRef, token: ResolvedVcsToken): Promise<PullRequestState> {
+    const state = await this.reviewMerge.readPullRequestState({
+      repo: pr.repo,
+      pullNumber: pr.number,
+      token: token.token,
+      refreshToken: token.refresh,
+    });
+    return {
+      confirmed: state.confirmed,
+      merged: state.merged,
+      open: state.open,
+      ...(state.sha !== undefined && { mergeSha: state.sha }),
+    };
   }
 
   async createRepository(input: CreateRepositoryInput, token: ResolvedVcsToken): Promise<CreatedRepository> {

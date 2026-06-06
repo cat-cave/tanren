@@ -22,6 +22,7 @@ import type { SpecEscalator } from "./coordinatorEscalate.js";
 import { holdOrHaltRecoverableDrive, RecoverableDriveHoldCeiling } from "./recoverableDriveHold.js";
 import { serializedRetryAfterMs } from "./mergeSerializedRetry.js";
 import { isMissingRequiredCredentialError, missingRequiredCredentialMessage } from "./missingRequiredCredential.js";
+import type { MergeTruthReconciler } from "./mergeTruthReconciler.js";
 
 /** How long after a transient merge-drive infra-hold the subscriber re-drives the project. */
 const TRANSIENT_DRIVE_HOLD_RETRY_AFTER_MS = 3000;
@@ -77,6 +78,7 @@ export interface MergeCoordinatorDeps {
   queue: MergeQueueModel;
   runner: MergeRunner;
   events: MergeQueueEventEmitter;
+  mergeTruth?: MergeTruthReconciler;
   /**
    * The NON-BRICKING conflict-escalation seam (§2c): parks a GENUINELY irreconcilable
    * spec at `needs_attention` (frees its slot) + emits the loud `dag.spec.needs_attention`
@@ -154,6 +156,7 @@ export class EventEmittingMergeCoordinator implements MergeCoordinator {
     // Crash recovery FIRST: a coordinator that died mid-merge left a `merging`
     // row; return it to `queued` so this pass re-considers it (the GitHub merge is
     // idempotent, so re-driving an already-merged PR is a no-op).
+    await this.deps.mergeTruth?.reconcile(projectId);
     await this.deps.queue.recoverStaleClaims(projectId);
     await this.deps.queue.recoverDequeuedCandidates(projectId);
 

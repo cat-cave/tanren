@@ -10,6 +10,7 @@ import { migrate, resetSystemPool, runWithOrgScope, setSystemPool } from "@tanre
 import { PgEventStore } from "../src/engine/eventStore.js";
 import { PgMergeQueueModel } from "../src/engine/merge/coordinatorPg.js";
 import { MERGE_CLAIM_LEASE_MS } from "../src/engine/merge/mergeClaimLease.js";
+import { LIST_PROJECTS_WITH_QUEUE_SQL } from "../src/engine/merge/subscriberQueueDiscoverySql.js";
 
 const enabled = process.env["TANREN_RLS_DB_TEST"] === "1";
 const describeDb = enabled ? describe : describe.skip;
@@ -45,6 +46,75 @@ const RUN = `run_${ORG}`;
 const QUEUE = `mq_${ORG}`;
 const PR_URL = "https://github.com/cat-cave/apex-url-shortener-v21/pull/15";
 const OTHER_ORG = "org_mq_recovery_other";
+
+function prUrl(prNumber: number): string {
+  return `https://github.com/cat-cave/apex-url-shortener-v21/pull/${prNumber}`;
+}
+
+async function seedFalseMergedCandidate(
+  ownerPool: Pool,
+  input: {
+    projectId: string;
+    specId: string;
+    runId: string;
+    queueId: string;
+    prNumber: number;
+    completed?: boolean;
+  },
+): Promise<void> {
+  const url = prUrl(input.prNumber);
+  await ownerPool.query(
+    `INSERT INTO projects (project_id, name, repo_url, org_id)
+     VALUES ($1, $1, 'https://github.com/cat-cave/apex-url-shortener-v21.git', $2)`,
+    [input.projectId, ORG],
+  );
+  await ownerPool.query(
+    `INSERT INTO specs (spec_id, project_id, org_id, title, description, status)
+     VALUES ($1, $2, $3, $1, 'false terminal discovery', 'merged')`,
+    [input.specId, input.projectId, ORG],
+  );
+  await ownerPool.query(
+    `INSERT INTO runs (run_id, spec_id, project_id, org_id, trigger, branch, status, outcome)
+     VALUES ($1, $2, $3, $4, 'ci', 'main', 'completed', 'ok')`,
+    [input.runId, input.specId, input.projectId, ORG],
+  );
+  await ownerPool.query(
+    `INSERT INTO merge_queue
+       (queue_id, run_id, spec_id, project_id, org_id, status, pr_url, pr_number, settled_at)
+     VALUES ($1, $2, $3, $4, $5, 'merged', $6, $7, now())`,
+    [input.queueId, input.runId, input.specId, input.projectId, ORG, url, String(input.prNumber)],
+  );
+  await runWithOrgScope(ownerPool, ORG, async (client) => {
+    const events = new PgEventStore(client);
+    await events.append({
+      runId: input.runId,
+      specId: input.specId,
+      projectId: input.projectId,
+      eventType: "merge.speculative_held",
+      payload: {
+        integration: "native_queue",
+        prUrl: url,
+        prNumber: input.prNumber,
+        speculativeBase: "tanren/integ/ancestor",
+        unmergedAncestors: ["spec_ancestor"],
+      },
+    });
+    if (input.completed === true) {
+      await events.append({
+        runId: input.runId,
+        specId: input.specId,
+        projectId: input.projectId,
+        eventType: "merge.completed",
+        payload: {
+          integration: "native_queue",
+          prUrl: url,
+          prNumber: input.prNumber,
+          mergeSha: "abc123",
+        },
+      });
+    }
+  });
+}
 
 describeDb("merge queue dequeued recovery under data-plane RLS (real PG)", () => {
   const database = dbName();
@@ -136,6 +206,34 @@ describeDb("merge queue dequeued recovery under data-plane RLS (real PG)", () =>
         client.query("SELECT count(*)::int AS n FROM events WHERE project_id = $1", [PROJECT]),
       ),
     ).resolves.toMatchObject({ rows: [{ n: 0 }] });
+  });
+
+  it("discovers false merged speculative holds on startup and suppresses completed ones", async () => {
+    const heldProject = "project_false_merged_held";
+    const completedProject = "project_false_merged_completed";
+    await seedFalseMergedCandidate(ownerPool, {
+      projectId: heldProject,
+      specId: "spec_false_merged_held",
+      runId: "run_false_merged_held",
+      queueId: "mq_false_merged_held",
+      prNumber: 101,
+    });
+    await seedFalseMergedCandidate(ownerPool, {
+      projectId: completedProject,
+      specId: "spec_false_merged_completed",
+      runId: "run_false_merged_completed",
+      queueId: "mq_false_merged_completed",
+      prNumber: 102,
+      completed: true,
+    });
+
+    const discovered = await runWithOrgScope(dataPlanePool, ORG, (client) =>
+      client.query<{ project_id: string }>(LIST_PROJECTS_WITH_QUEUE_SQL),
+    );
+    const projectIds = discovered.rows.map((row) => row.project_id);
+
+    expect(projectIds).toContain(heldProject);
+    expect(projectIds).not.toContain(completedProject);
   });
 
   it("reports and recovers only stale pg merge claims", async () => {

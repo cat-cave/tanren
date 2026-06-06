@@ -43,6 +43,7 @@ import type {
   OpenedPullRequest,
   PullRequestMergeability,
   PullRequestRef,
+  PullRequestState,
   PushBranchInput,
   RepoRef,
   ResolvedVcsToken,
@@ -80,6 +81,9 @@ export class InMemoryVcsProvider implements VcsProvider {
   }
   parsePullRequest(prUrl: string): PullRequestRef {
     return parsePr(prUrl);
+  }
+  async readPullRequestState(_pr: PullRequestRef, _token: ResolvedVcsToken): Promise<PullRequestState> {
+    return { confirmed: true, merged: false, open: true };
   }
   /** Recorded greenfield repo creations so the suite can assert what was created. */
   readonly createdRepositories: Array<{ owner: string; name: string; private: boolean }> = [];

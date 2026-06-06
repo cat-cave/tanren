@@ -32,6 +32,7 @@ import {
 import { BatchInfraHoldCeiling, holdOnInfra, terminalInfraBlock } from "./batchInfraHoldCeiling.js";
 import { RecoverableDriveHoldCeiling } from "./recoverableDriveHold.js";
 import { serializedRetryAfterMs } from "./mergeSerializedRetry.js";
+import type { MergeTruthReconciler } from "./mergeTruthReconciler.js";
 
 const MAX_INFRA_RETRIES = 2;
 const INFRA_RETRY_BACKOFF_MS = [250, 500];
@@ -104,6 +105,7 @@ export interface BatchMergeCoordinatorDeps {
    */
   escalator: SpecEscalator;
   recoverableDriveHolds?: RecoverableDriveHoldCeiling;
+  mergeTruth?: MergeTruthReconciler;
   /**
    * Resolve the per-project max batch size (the config knob). Defaults to a constant
    * `DEFAULT_MAX_BATCH_SIZE` resolver when omitted (tests inject a fixed value). The
@@ -144,6 +146,7 @@ export class BatchMergeCoordinator implements MergeCoordinator {
 
   async coordinate(projectId: string): Promise<CoordinateResult> {
     // Crash recovery first; the lease is the same native-queue mechanism.
+    await this.deps.mergeTruth?.reconcile(projectId);
     await this.deps.queue.recoverStaleClaims(projectId);
     await this.deps.queue.recoverDequeuedCandidates(projectId);
 

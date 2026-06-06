@@ -101,6 +101,10 @@ async function fetchCompletionBlockingSpecIds(
           AND (
             event_type = 'merge.completed'
             OR (
+              event_type = 'merge.speculative_held'
+              AND (NOT (payload ? 'integration') OR payload ->> 'integration' = 'native_queue')
+            )
+            OR (
               event_type = 'merge.queue.infra_blocked'
               AND (NOT (payload ? 'integration') OR payload ->> 'integration' = 'native_queue')
             )
@@ -204,8 +208,8 @@ async function fetchCompletionBlockingSpecIds(
      active_blockers AS (
        SELECT b.spec_id
          FROM attributed b
-        WHERE (
-            b.event_type IN ('merge.queue.infra_blocked', 'merge.batch.infra_blocked')
+       WHERE (
+            b.event_type IN ('merge.speculative_held', 'merge.queue.infra_blocked', 'merge.batch.infra_blocked')
             OR (
               b.event_type = 'merge.dequeued'
               AND (

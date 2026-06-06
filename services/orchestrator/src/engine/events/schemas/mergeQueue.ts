@@ -93,6 +93,18 @@ export const MergeQueueInfraBlockedPayload = z
   })
   .strict();
 
+export const MergeFalseMergedCorrectedPayload = z
+  .object({
+    prUrl: z.string(),
+    prNumber: z.number().int(),
+    integration: MergeIntegrationMode,
+    specId: z.string(),
+    queueId: z.string(),
+    runId: z.string(),
+    reason: z.enum(["forge_pr_open_unmerged", "forge_pr_closed_unmerged"]),
+  })
+  .strict();
+
 // autonomy-engine.md §2d — speculative batch-check + bisect: the
 // intelligence layer ON TOP OF the native queue. The coordinator forms a BATCH of
 // mutually-eligible entries, speculatively integrates `default_branch + batch PRs`,

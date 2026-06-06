@@ -37,6 +37,7 @@ import type {
   PublishStatusInput,
   PullRequestMergeability,
   PullRequestRef,
+  PullRequestState,
   PushBranchInput,
   RepoRef,
   ResolvedVcsToken,
@@ -77,6 +78,9 @@ export class UnconfiguredVcsProvider implements VcsProvider {
     return this.fail();
   }
   parsePullRequest(_prUrl: string): PullRequestRef {
+    return this.fail();
+  }
+  async readPullRequestState(_pr: PullRequestRef, _token: ResolvedVcsToken): Promise<PullRequestState> {
     return this.fail();
   }
   async pushBranch(_input: PushBranchInput): Promise<void> {

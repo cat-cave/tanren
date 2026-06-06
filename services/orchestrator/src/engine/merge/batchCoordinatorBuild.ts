@@ -24,6 +24,7 @@ import { PgSpecEscalator } from "./coordinatorEscalate.js";
 import { type BuildMergeCoordinatorDeps, buildDriveMerge } from "./coordinatorBuild.js";
 import { PgMergeQueueEventEmitter } from "./coordinator.js";
 import { PgMergeQueueModel, PgMergeRunner } from "./coordinatorPg.js";
+import { PgMergeTruthReconciler } from "./mergeTruthReconciler.js";
 
 /** The timeout (ms) the native batch gate's clone/install/gate ops run under (mirrors the drive resolver). */
 const BATCH_GATE_TIMEOUT_MS = 600_000;
@@ -73,6 +74,13 @@ export function buildBatchMergeCoordinator(deps: BuildMergeCoordinatorDeps): Mer
     // The §2c non-bricking conflict escalator (parks an irreconcilable spec at
     // needs_attention) — REUSED verbatim from the native queue, plane-split-safe via the writer.
     escalator: new PgSpecEscalator(deps.pool, deps.runStateWriter),
+    mergeTruth: new PgMergeTruthReconciler({
+      pool: deps.pool,
+      secrets: deps.secrets,
+      vcsProvider: deps.vcsProvider,
+      ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
+      ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
+    }),
     resolveMaxBatchSize: (projectId) => resolveMaxBatchSize(deps.pool, projectId),
   });
 }
