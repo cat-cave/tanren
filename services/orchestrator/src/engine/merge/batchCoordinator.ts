@@ -96,16 +96,7 @@ export interface BatchMergeEventEmitter {
   emitBisecting(input: { projectId: string; batch: ReadonlyArray<MergeQueueEntry>; message: string }): Promise<void>;
   /** merge.batch.culprit: bisect isolated the single offending PR (dequeued, recoverable). */
   emitCulprit(input: { projectId: string; culprit: MergeQueueEntry; checks: number; message: string }): Promise<void>;
-  /**
-   * merge.batch.infra_blocked: the batch check could NOT be run (a transient/transport
-   * INFRA error) — the coordinator bounded-retried then HOLDS loudly. NO PR is
-   * bisected/dequeued; the entries stay queued (recovered on a delayed re-drive).
-   *
-   * GAP #1 (runaway guard): when `terminal` is set the per-project CROSS-PASS hold
-   * CEILING fired — the coordinator stops re-arming the re-drive timer and surfaces a
-   * TERMINAL halt (operator attention; no further auto-retry). `consecutiveHolds` is
-   * the count of consecutive infra holds that hit the cap.
-   */
+  /** merge.batch.infra_blocked: recoverable infra hold or terminal loud halt. */
   emitInfraBlocked(input: {
     projectId: string;
     batch: ReadonlyArray<MergeQueueEntry>;
@@ -240,6 +231,9 @@ export class BatchMergeCoordinator implements MergeCoordinator {
         );
       }
       const checked = await this.checkBatchWithInfraRetry(projectId, current, maxBatchSize);
+      if (checked.kind === "infra-terminal") {
+        return this.terminalInfraBlock(projectId, current.batch, checked.message, queueDepth);
+      }
       if (checked.kind === "infra-exhausted") {
         return this.infraHold(projectId, current.batch, checked.message, queueDepth);
       }
@@ -266,9 +260,7 @@ export class BatchMergeCoordinator implements MergeCoordinator {
         const result = await driveBaseConflict(this.deps, projectId, current.batch, verdict, queueDepth);
         if (!("projectId" in result)) {
           if (result.kind === "infra_terminal") {
-            const terminal = await this.terminalInfraBlock(projectId, [result.entry], result.message, queueDepth);
-            await this.deps.queue.markDequeued(result.entry.queueId, "blocked");
-            return terminal;
+            return this.terminalInfraBlock(projectId, [result.entry], result.message, queueDepth);
           }
           return this.infraHold(projectId, current.batch, result.message, queueDepth);
         }
@@ -324,39 +316,30 @@ export class BatchMergeCoordinator implements MergeCoordinator {
     return { projectId, holdReason: "all_blocked", queueDepth };
   }
 
-  /**
-   * Check the FULL formed batch, retrying the SAME batch on a transient INFRA error (a
-   * check that could not be RUN — distinct from a CI fail/conflict/pending). Bug 2's
-   * core safety: an infra error NEVER bisects/dequeues/blames a PR. Emits
-   * merge.batch.checking per attempt; a NON-infra verdict returns unchanged; a retriable
-   * `infra-error` with budget remaining backs off (the `sleep` seam) + re-checks the
-   * SAME batch (a typed-permanent one skips the budget); on exhaustion returns the raw
-   * `infra-exhausted` marker, which the caller routes through `holdOnInfra` (the GAP #1
-   * cross-pass ceiling → LOUD merge.batch.infra_blocked, recoverable-hold vs. terminal).
-   */
+  /** Check a formed batch, retrying only typed-retriable infra errors in-pass. */
   private async checkBatchWithInfraRetry(
     projectId: string,
     formation: BatchFormation,
     maxBatchSize: number,
-  ): Promise<{ kind: "verdict"; verdict: BatchCheckVerdict } | { kind: "infra-exhausted"; message: string }> {
+  ): Promise<
+    | { kind: "verdict"; verdict: BatchCheckVerdict }
+    | { kind: "infra-exhausted"; message: string }
+    | { kind: "infra-terminal"; message: string }
+  > {
     let lastMessage = "batch check could not run (infra error)";
     for (let attempt = 0; attempt <= MAX_INFRA_RETRIES; attempt += 1) {
       if (attempt > 0) {
         await this.sleep(INFRA_RETRY_BACKOFF_MS[attempt - 1] ?? 500);
       }
-      // Announce every check attempt (the initial AND each re-pass) so the timeline
-      // shows the batch is being checked — never a silent loop.
       await this.deps.batchEvents.emitChecking({ projectId, batch: formation.batch, formation, maxBatchSize });
       const verdict = await this.checkEntries(projectId, formation.batch);
       if (verdict.result !== "infra-error") {
         return { kind: "verdict", verdict };
       }
       lastMessage = verdict.message;
-      // A typed PERMANENT infra error: do not burn the retry budget — hold loudly now.
-      if (!verdict.retriable) break;
+      // Required config cannot self-heal via timed re-drive.
+      if (!verdict.retriable) return { kind: "infra-terminal", message: lastMessage };
     }
-    // In-pass retries exhausted (or a permanent infra error). The caller holds loudly via
-    // the cross-pass ceiling. NEVER dequeue/blame a PR on an infra error.
     return { kind: "infra-exhausted", message: lastMessage };
   }
 
@@ -368,7 +351,15 @@ export class BatchMergeCoordinator implements MergeCoordinator {
     queueDepth: number,
   ): Promise<CoordinateResult> {
     const ceiling = this.infraHolds;
-    return holdOnInfra({ ceiling, events: this.deps.batchEvents, projectId, batch, message, queueDepth });
+    return holdOnInfra({
+      ceiling,
+      queue: this.deps.queue,
+      events: this.deps.batchEvents,
+      projectId,
+      batch,
+      message,
+      queueDepth,
+    });
   }
 
   /**
@@ -447,9 +438,7 @@ export class BatchMergeCoordinator implements MergeCoordinator {
         return this.infraHold(projectId, batch, outcome.message, queueDepth);
       }
       if (outcome.kind === "infra_terminal") {
-        const terminal = await this.terminalInfraBlock(projectId, [outcome.entry], outcome.message, queueDepth);
-        await this.deps.queue.markDequeued(outcome.entry.queueId, "blocked");
-        return terminal;
+        return this.terminalInfraBlock(projectId, [outcome.entry], outcome.message, queueDepth);
       }
       if (outcome.kind === "merged") {
         this.deps.recoverableDriveHolds?.reset(entry.queueId);
@@ -493,6 +482,13 @@ export class BatchMergeCoordinator implements MergeCoordinator {
     queueDepth: number,
   ): Promise<CoordinateResult> {
     this.infraHolds.reset(projectId);
-    return terminalInfraBlock({ events: this.deps.batchEvents, projectId, batch, message, queueDepth });
+    return terminalInfraBlock({
+      queue: this.deps.queue,
+      events: this.deps.batchEvents,
+      projectId,
+      batch,
+      message,
+      queueDepth,
+    });
   }
 }

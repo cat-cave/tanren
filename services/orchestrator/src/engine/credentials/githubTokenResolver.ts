@@ -44,6 +44,8 @@ export interface GithubTokenResolverInput {
  * credential, install the App, or set the env ref).
  */
 export class NoGithubCredentialConfiguredError extends Error {
+  readonly retriable = false as const;
+
   constructor() {
     super(
       "No GitHub credential configured for this run: no App installation, no resolved project/org credential ref, and TANREN_GITHUB_APP_TOKEN_REF is unset",
@@ -60,6 +62,7 @@ export class NoGithubCredentialConfiguredError extends Error {
  * map it to a precise 400 while letting a real backend failure surface as a 5xx.
  */
 export class MissingGithubCredentialRefError extends Error {
+  readonly retriable = false as const;
   readonly ref: string;
 
   constructor(ref: string) {

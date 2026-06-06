@@ -107,6 +107,14 @@ export class InMemoryMergeQueueModel implements MergeQueueModel {
     return undefined;
   }
 
+  /** Test helper: the recorded dequeue reason for a run's entry. */
+  dequeueReasonOf(runId: string): DequeueReason | undefined {
+    for (const row of this.rows.values()) {
+      if (row.runId === runId) return row.dequeueReason;
+    }
+    return undefined;
+  }
+
   async enqueue(input: {
     projectId: string;
     runId: string;

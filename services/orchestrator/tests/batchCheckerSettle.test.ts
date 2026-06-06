@@ -28,6 +28,8 @@ import type { RunStateWriter } from "../src/engine/contracts/runStateWriter.js";
 import type {
   BuildIntegrationBranchInput,
   BuildIntegrationBranchResult,
+  PullRequestMergeability,
+  PullRequestRef,
   RepoRef,
   ResolvedVcsToken,
   VcsCredentialContext,
@@ -58,6 +60,7 @@ interface FakePoolOptions {
   rejectEventInserts?: boolean;
   requireScopedEventInserts?: boolean;
   queries?: string[];
+  branchesByRunId?: Record<string, string>;
 }
 
 class FakePool {
@@ -110,9 +113,15 @@ class FakeClient {
         ],
       };
     }
-    if (text.includes("FROM runs r") && text.includes("DISTINCT ON")) {
+    if (text.includes("FROM runs r") && text.includes("r.run_id = ANY")) {
       const ids = (params?.[0] as string[]) ?? [];
-      return { rows: ids.map((specId) => ({ spec_id: specId, branch: `tanren/${specId}` })) };
+      return {
+        rows: ids.map((runId) => ({
+          run_id: runId,
+          spec_id: runId.replace(/^run_/u, "spec_"),
+          branch: this.options.branchesByRunId?.[runId] ?? `tanren/${runId}`,
+        })),
+      };
     }
     // The native gate emits its gate.* records through PgEventStore; accept that append.
     if (isEventTableInsert(text) && this.options.rejectEventInserts === true) {
@@ -137,7 +146,12 @@ class FakeClient {
 class FakeVcsProvider implements Partial<VcsProvider> {
   /** The ephemeral batch refs `deleteBranch` was asked to tear down. */
   readonly deletedBranches: string[] = [];
-  constructor(private readonly integration: BuildIntegrationBranchResult) {}
+  readonly integrationInputs: BuildIntegrationBranchInput[] = [];
+  readonly mergeabilityReads: number[] = [];
+  constructor(
+    private readonly integration: BuildIntegrationBranchResult,
+    private readonly mergeabilityByPrNumber: Record<number, PullRequestMergeability["state"]> = {},
+  ) {}
   async resolveToken(_creds: VcsCredentialContext): Promise<ResolvedVcsToken> {
     return { token: "t", source: "static", refresh: async () => "t2" };
   }
@@ -146,18 +160,30 @@ class FakeVcsProvider implements Partial<VcsProvider> {
     return { owner: m[1]!, name: m[2]! };
   }
   async buildIntegrationBranch(_input: BuildIntegrationBranchInput): Promise<BuildIntegrationBranchResult> {
+    this.integrationInputs.push(_input);
     return this.integration;
   }
   async deleteBranch(_repo: RepoRef, branch: string, _token: ResolvedVcsToken): Promise<void> {
     this.deletedBranches.push(branch);
   }
+  async readMergeability(pr: PullRequestRef, _token: ResolvedVcsToken): Promise<PullRequestMergeability> {
+    this.mergeabilityReads.push(pr.number);
+    return {
+      state: this.mergeabilityByPrNumber[pr.number] ?? "clean",
+      behind: false,
+      baseBranch: "main",
+      headBranch: `tanren/pr-${pr.number}`,
+    };
+  }
 }
 
 /** A fake allocator that hands out a fixed target and records releases. */
 class FakeAllocator implements Allocator {
+  readonly allocations: AllocationRequest[] = [];
   readonly releases: string[] = [];
   constructor(private readonly fail = false) {}
   async allocate(_request: AllocationRequest): Promise<RunnerAllocation> {
+    this.allocations.push(_request);
     if (this.fail) throw new Error("allocator unavailable");
     return { runnerId: "runner_batch", imageSha: "sha256:batch", target: TARGET };
   }
@@ -209,13 +235,30 @@ function entry(specId: string): MergeQueueEntry {
   };
 }
 
+function entryForRun(specId: string, runId: string, prNumber = 1): MergeQueueEntry {
+  return {
+    queueId: `q_${runId}`,
+    runId,
+    specId,
+    prUrl: `https://github.com/cat-cave/apex/pull/${prNumber}`,
+    prNumber,
+    dependsOn: [],
+    priority: "tbd",
+    orderKey: 0,
+  };
+}
+
 function makeChecker(
   integration: BuildIntegrationBranchResult,
   ssh: CommandSubstrate,
   allocator: Allocator = new FakeAllocator(),
-  options: { pool?: pg.Pool; runStateWriter?: RunStateWriter } = {},
+  options: {
+    pool?: pg.Pool;
+    runStateWriter?: RunStateWriter;
+    mergeabilityByPrNumber?: Record<number, PullRequestMergeability["state"]>;
+  } = {},
 ): { checker: PgBatchChecker; vcs: FakeVcsProvider } {
-  const vcs = new FakeVcsProvider(integration);
+  const vcs = new FakeVcsProvider(integration, options.mergeabilityByPrNumber);
   const checker = new PgBatchChecker({
     pool: options.pool ?? (new FakePool() as unknown as pg.Pool),
     vcsProvider: vcs as unknown as VcsProvider,
@@ -274,6 +317,46 @@ describe("PgBatchChecker — native gate on the integration ref (no-Actions deli
     expect(allocator.releases).toEqual(["runner_batch"]);
     // The ephemeral batch ref is ALWAYS torn down (next batch/retry starts clean).
     expect(vcs.deletedBranches).toEqual(["tanren/batch/spec_a"]);
+  });
+
+  it("a dirty queued PR returns a base conflict before integration or runner allocation", async () => {
+    const allocator = new FakeAllocator();
+    const { checker, vcs } = makeChecker(INTEGRATED, new GateDrivingSsh(0), allocator, {
+      mergeabilityByPrNumber: { 7: "dirty" },
+    });
+
+    const verdict = await checker.checkBatch({
+      projectId: PROJECT,
+      entries: [entryForRun("spec_a", "run_a", 7)],
+    });
+
+    expect(verdict).toEqual({
+      result: "conflict",
+      message: "batch entry spec_a conflicts with main",
+      conflictsWithBase: true,
+      conflictBetween: { specId: "spec_a", otherSpecId: "main" },
+    });
+    expect(vcs.mergeabilityReads).toEqual([7]);
+    expect(vcs.integrationInputs).toEqual([]);
+    expect(vcs.deletedBranches).toEqual([]);
+    expect(allocator.allocations).toEqual([]);
+  });
+
+  it("integrates the queued run's branch, not the latest branch for the same spec", async () => {
+    const pool = new FakePool({
+      branchesByRunId: {
+        run_queued: "tanren/spec_a-queued",
+      },
+    }) as unknown as pg.Pool;
+    const { checker, vcs } = makeChecker(INTEGRATED, new GateDrivingSsh(0), new FakeAllocator(), { pool });
+
+    const verdict = await checker.checkBatch({
+      projectId: PROJECT,
+      entries: [entryForRun("spec_a", "run_queued")],
+    });
+
+    expect(verdict.result).toBe("pass");
+    expect(vcs.integrationInputs[0]?.ancestors).toEqual([{ specId: "spec_a", branch: "tanren/spec_a-queued" }]);
   });
 
   it("a failing integration gate → fail + tears down the batch ref", async () => {
