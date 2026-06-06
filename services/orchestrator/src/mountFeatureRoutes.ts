@@ -198,7 +198,16 @@ export function mountFeatureRoutes(app: Hono<ActorContextEnv>, deps: FeatureRout
   app.route("/orgs", createDiscoveryRoutes({ pool: scopedPool, answererFactory: forgeAnswerers.discovery }));
   // greenfield onboarding — Forge vision interview → derived product
   // graph via the existing creation paths; the real provider interview answerer.
-  app.route("/orgs", createOnboardingRoutes({ pool: scopedPool, secrets, answererFactory: forgeAnswerers.interview }));
+  app.route(
+    "/orgs",
+    createOnboardingRoutes({
+      pool: scopedPool,
+      secrets,
+      answererFactory: forgeAnswerers.interview,
+      vcsProvider: deps.vcsProvider,
+      githubAppMinter,
+    }),
+  );
   // candidate inbox — issue sources → Forge triage → discovery accept;
   // connector reads via the App resolver, the real provider triage answerer.
   app.route(

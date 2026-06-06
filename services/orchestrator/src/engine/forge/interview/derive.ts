@@ -25,6 +25,7 @@
 
 import type pg from "pg";
 import type { ActorContext } from "../../../auth/schemas.js";
+import type { CreatedRepository, CreateRepositoryInput } from "../../contracts/vcsProvider.js";
 import { BehaviorCreateInput, BehaviorStore } from "../../entities/behaviors.js";
 import { MilestoneCreateInput, MilestoneStore } from "../../entities/milestones.js";
 import { PersonaCreateInput, PersonaStore } from "../../entities/personas.js";
@@ -45,8 +46,13 @@ export interface DeriveInput {
   orgId: string;
   capture: InterviewCapture;
   actor: ActorContext;
-  // Optional repo url override; otherwise derived from the identity slug.
+  // Explicit repo url override for engine-level graph tests. Production
+  // greenfield onboarding must pass createRepository + owner instead.
   repoUrl?: string;
+  owner?: string;
+  private?: boolean;
+  description?: string;
+  createRepository?: (input: CreateRepositoryInput) => Promise<CreatedRepository>;
   // GREENFIELD AUTONOMY (FINDING #1): how the derived project is governed at
   // creation. `createProject`'s schema DEFAULTS (`reviewPolicy: "human"` +
   // `mergeIntegration: "not_configured"`) are the SAFE brownfield/managed default,
@@ -102,6 +108,7 @@ function productVisionConfig(capture: InterviewCapture): { productVision?: Recor
 export interface DeriveResult {
   projectId: string;
   projectName: string;
+  repository?: CreatedRepository;
   specIds: string[];
   personaIds: string[];
   behaviorIds: string[];
@@ -231,7 +238,6 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
   // engine also validates) so a malformed capture never reaches the create path.
   const capture = InterviewCapture.parse(input.capture);
   const slug = capture.identity?.slug ?? "greenfield-project";
-  const repoUrl = input.repoUrl ?? `https://github.com/${slug}`;
 
   // FINDING #1: opt-in autonomous config. `auto`/`simulated` ⇒ create the project
   // already autonomous (`native_queue` + matching review policy) so the DagWalker
@@ -271,10 +277,30 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
   if (isDeployNotLinked(preparedDeploy)) {
     throw new DeployNotLinkedError(preparedDeploy);
   }
+  let repository: CreatedRepository | undefined;
+  let repoUrl = input.repoUrl;
+  if (repoUrl === undefined) {
+    if (input.owner === undefined || input.createRepository === undefined) {
+      throw new Error("greenfield repository owner and creator are required");
+    }
+    repository = await input.createRepository({
+      owner: input.owner,
+      name: slug,
+      private: input.private ?? true,
+      autoInit: true,
+      ...(input.description === undefined ? {} : { description: input.description }),
+    });
+    repoUrl = repository.repoUrl;
+  }
   const config = { ...baseConfig, ...productVisionConfig(capture), ...preparedDeploy.projectConfig };
   const project = await createProject(
     pool,
-    { name: slug, repoUrl, config },
+    {
+      name: slug,
+      repoUrl,
+      config,
+      ...(repository === undefined ? {} : { defaultBranch: repository.defaultBranch }),
+    },
     { ...input.actor, orgId: input.orgId },
     { configWriteProof: provisionedGreenfieldProjectConfigProof },
   );
@@ -403,6 +429,7 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
   return {
     projectId,
     projectName: slug,
+    ...(repository === undefined ? {} : { repository }),
     specIds,
     personaIds: [...personaIdByName.values()],
     behaviorIds,

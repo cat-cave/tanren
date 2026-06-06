@@ -322,6 +322,28 @@ export class RoutesPool {
       return { rows: [{ spec_id: spec.spec_id }], rowCount: 1 };
     }
 
+    if (trimmed.startsWith("INSERT INTO milestones")) {
+      return {
+        rows: [
+          {
+            id: params[0],
+            project_id: params[1],
+            label: params[2],
+            name: params[3],
+            description: params[4],
+            order_index: params[5],
+            eta: params[6],
+            status: params[7],
+            created_at: new Date(),
+            updated_at: new Date(),
+          },
+        ],
+        rowCount: 1,
+      };
+    }
+    if (trimmed.startsWith("DELETE FROM spec_milestones")) return { rows: [], rowCount: 0 };
+    if (trimmed.startsWith("INSERT INTO spec_milestones")) return { rows: [], rowCount: 1 };
+
     // inbox_sources (the repo-link auto-provisioned `issues` source).
     if (trimmed.includes("FROM inbox_sources WHERE org_id = $1")) {
       const rows = this.inboxSources.filter((s) => s["org_id"] === String(params[0]));

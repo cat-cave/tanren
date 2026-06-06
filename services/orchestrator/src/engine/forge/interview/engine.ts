@@ -21,6 +21,7 @@
 import type pg from "pg";
 import type { ActorContext } from "../../../auth/schemas.js";
 import { mergeCapture } from "./capture.js";
+import type { CreatedRepository, CreateRepositoryInput } from "../../contracts/vcsProvider.js";
 import { deriveProductGraph, type DeriveResult } from "./derive.js";
 import type { DeployPreflightCallback, GreenfieldDeployDependency, PrepareDeployCallback } from "./deployDependency.js";
 import {
@@ -94,6 +95,10 @@ export interface DeriveFromCaptureInput {
   capture: InterviewCapture;
   actor: ActorContext;
   repoUrl?: string;
+  owner?: string;
+  private?: boolean;
+  description?: string;
+  createRepository?: (input: CreateRepositoryInput) => Promise<CreatedRepository>;
   // GREENFIELD AUTONOMY: when `auto`/`simulated`, the derived project is created
   // already autonomous (`native_queue` + the matching review policy); absent or
   // `human` keeps the schema's safe defaults. Threaded into `deriveProductGraph`.
@@ -112,6 +117,10 @@ export async function deriveFromCapture(
     capture: InterviewCapture.parse(input.capture),
     actor: input.actor,
     ...(input.repoUrl === undefined ? {} : { repoUrl: input.repoUrl }),
+    ...(input.owner === undefined ? {} : { owner: input.owner }),
+    ...(input.private === undefined ? {} : { private: input.private }),
+    ...(input.description === undefined ? {} : { description: input.description }),
+    ...(input.createRepository === undefined ? {} : { createRepository: input.createRepository }),
     ...(input.autonomy === undefined ? {} : { autonomy: input.autonomy }),
     ...(input.deploy === undefined ? {} : { deploy: input.deploy }),
     ...(deps.preflightDeploy === undefined ? {} : { preflightDeploy: deps.preflightDeploy }),
