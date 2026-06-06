@@ -8,6 +8,7 @@ const RUN = "run_blocked";
 const SPEC = "spec_apex";
 const PR_URL = "https://github.com/acme/apex/pull/15";
 const CODEX_REF = "credential/codex/org/org_acme/default";
+const GITHUB_REF = "credential/github/org/org_acme/default";
 
 function seedBlockedDequeued(pool: QueueRecoveryPool, queueId: string, emitDequeued = true): void {
   pool.seedProject(PROJECT, ORG);
@@ -399,6 +400,51 @@ describe("PgMergeQueueModel.recoverDequeuedCandidates", () => {
         provider: "codex",
         credentialKind: "codex_chatgpt_auth",
         ref: CODEX_REF,
+        redacted: true,
+      },
+    });
+
+    const recovered = await new PgMergeQueueModel(pool.asPgPool()).recoverDequeuedCandidates(PROJECT);
+
+    expect(recovered).toBe(1);
+    expect(pool.queue[0]).toMatchObject({ status: "queued", dequeueReason: null, settledAt: null });
+  });
+
+  it("revives a sole terminal missing-GitHub-credential batch halt after matching repair", async () => {
+    const pool = new QueueRecoveryPool();
+    seedBlockedDequeued(pool, "mq_missing_github_credential_repaired", false);
+    pool.seedEvent({
+      projectId: PROJECT,
+      orgId: ORG,
+      runId: RUN,
+      specId: SPEC,
+      eventType: "merge.batch.infra_blocked",
+      ts: new Date("2026-05-01T00:00:01.000Z"),
+      payload: {
+        integration: "native_queue",
+        terminal: true,
+        kind: "missing_github_credential",
+        credentialRef: GITHUB_REF,
+        message: `missing GitHub credential ref: ${GITHUB_REF}`,
+        members: [{ specId: SPEC, prNumber: 15 }],
+      },
+    });
+
+    const beforeRepair = await new PgMergeQueueModel(pool.asPgPool()).recoverDequeuedCandidates(PROJECT);
+    expect(beforeRepair).toBe(0);
+    expect(pool.queue[0]?.status).toBe("dequeued");
+
+    pool.seedEvent({
+      projectId: PROJECT,
+      orgId: ORG,
+      runId: null,
+      specId: null,
+      eventType: "credential.github.configured",
+      ts: new Date("2026-05-01T00:00:02.000Z"),
+      payload: {
+        provider: "github",
+        credentialKind: "github_token",
+        credentialRef: GITHUB_REF,
         redacted: true,
       },
     });

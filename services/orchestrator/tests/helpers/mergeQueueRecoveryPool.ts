@@ -112,11 +112,11 @@ export class QueueRecoveryPool {
 
 function latestRecoverableAnchor(row: QueueRow, events: EventRow[]): EventRow | undefined {
   return events
-    .filter((event) => isRecoverableAnchor(event) && candidateSignalMatches(row, event, false))
+    .filter((event) => isRecoverableAnchor(row, event, events) && candidateSignalMatches(row, event, false))
     .sort(compareEventsDesc)[0];
 }
 
-function isRecoverableAnchor(event: EventRow): boolean {
+function isRecoverableAnchor(row: QueueRow, event: EventRow, events: EventRow[]): boolean {
   if (
     event.eventType === "merge.dequeued" &&
     event.payload["integration"] === "native_queue" &&
@@ -128,7 +128,7 @@ function isRecoverableAnchor(event: EventRow): boolean {
     event.eventType === "merge.batch.infra_blocked" &&
     event.payload["terminal"] === true &&
     !isAmbiguousBatchBlock(event.payload) &&
-    !isRepairableGithubCredentialBlock(event.payload)
+    (!isRepairableGithubCredentialBlock(event.payload) || isRepairedTerminalCredentialBlock(row, event, events))
   );
 }
 

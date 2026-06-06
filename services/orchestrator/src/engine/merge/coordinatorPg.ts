@@ -197,14 +197,69 @@ export class PgMergeQueueModel implements MergeQueueModel {
                       AND COALESCE(e.payload ->> 'kind', '') <> 'ambiguous_merge_state'
                       AND COALESCE(e.payload ->> 'message', '') NOT LIKE '%ambiguous%'
                       AND COALESCE(e.payload ->> 'message', '') NOT LIKE '%double-merge%'
-                      AND NOT COALESCE((
-                        e.payload ->> 'kind' IN ('missing_required_credential', 'missing_github_credential')
-                        OR e.payload ->> 'cause' IN ('missing_required_credential', 'missing_github_credential')
-                        OR e.payload ->> 'reason' IN ('missing_required_credential', 'missing_github_credential')
-                        OR e.payload ->> 'message' LIKE '%missing GitHub credential ref:%'
-                        OR e.payload ->> 'message' LIKE '%missing % credential ref:%'
-                        OR e.payload ->> 'message' LIKE '%No GitHub credential configured%'
-                      ), false)
+                      AND (
+                        NOT COALESCE((
+                          e.payload ->> 'kind' IN ('missing_required_credential', 'missing_github_credential')
+                          OR e.payload ->> 'cause' IN ('missing_required_credential', 'missing_github_credential')
+                          OR e.payload ->> 'reason' IN ('missing_required_credential', 'missing_github_credential')
+                          OR e.payload ->> 'message' LIKE '%missing GitHub credential ref:%'
+                          OR e.payload ->> 'message' LIKE '%missing % credential ref:%'
+                          OR e.payload ->> 'message' LIKE '%No GitHub credential configured%'
+                        ), false)
+                        OR EXISTS (
+                          SELECT 1
+                            FROM events repair
+                           WHERE repair.project_id = mq.project_id
+                             AND repair.org_id = mq.org_id
+                             AND (repair.ts > e.ts OR (repair.ts = e.ts AND repair.id > e.id))
+                             AND (
+                               (
+                                 repair.event_type = 'integration.provisioned'
+                                 AND repair.payload ->> 'providerKind' = 'github'
+                               )
+                               OR repair.event_type IN ('org.github.connected', 'credential.github.configured', 'credential.configured')
+                               OR repair.payload ->> 'provider' = 'github'
+                             )
+                             AND (
+                               repair.payload ->> 'mode' = 'app'
+                               OR repair.payload ->> 'credentialKind' = 'github_app'
+                               OR
+                               COALESCE(
+                                 NULLIF(e.payload ->> 'credentialRef', ''),
+                                 NULLIF(e.payload ->> 'missingRef', ''),
+                                 NULLIF(e.payload ->> 'requiredCredentialRef', ''),
+                                 substring(e.payload ->> 'message' from 'missing [^:]* credential ref: ([^[:space:]]+)')
+                               ) IS NULL
+                               OR repair.payload ->> 'credentialRef' = COALESCE(
+                                 NULLIF(e.payload ->> 'credentialRef', ''),
+                                 NULLIF(e.payload ->> 'missingRef', ''),
+                                 NULLIF(e.payload ->> 'requiredCredentialRef', ''),
+                                 substring(e.payload ->> 'message' from 'missing [^:]* credential ref: ([^[:space:]]+)')
+                               )
+                               OR repair.payload ->> 'ref' = COALESCE(
+                                 NULLIF(e.payload ->> 'credentialRef', ''),
+                                 NULLIF(e.payload ->> 'missingRef', ''),
+                                 NULLIF(e.payload ->> 'requiredCredentialRef', ''),
+                                 substring(e.payload ->> 'message' from 'missing [^:]* credential ref: ([^[:space:]]+)')
+                               )
+                               OR EXISTS (
+                                 SELECT 1
+                                   FROM jsonb_array_elements_text(
+                                     CASE WHEN jsonb_typeof(repair.payload -> 'secretRefNames') = 'array'
+                                       THEN repair.payload -> 'secretRefNames'
+                                       ELSE '[]'::jsonb
+                                     END
+                                   ) AS secret_ref(ref)
+                                  WHERE secret_ref.ref = COALESCE(
+                                    NULLIF(e.payload ->> 'credentialRef', ''),
+                                    NULLIF(e.payload ->> 'missingRef', ''),
+                                    NULLIF(e.payload ->> 'requiredCredentialRef', ''),
+                                    substring(e.payload ->> 'message' from 'missing [^:]* credential ref: ([^[:space:]]+)')
+                                  )
+                               )
+                             )
+                        )
+                      )
                     )
                   )
                   AND (
