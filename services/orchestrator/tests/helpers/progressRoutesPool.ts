@@ -261,6 +261,7 @@ function isMergeCompletionSignal(event: EventRow): boolean {
   if (event.event_type === "merge.completed") return true;
   const payload = payloadRecord(event);
   if (!isNativeQueueOrLegacyPayload(payload)) return false;
+  if (event.event_type === "merge.speculative_held") return true;
   if (event.event_type === "merge.queue.infra_blocked") return true;
   if (event.event_type === "merge.batch.infra_blocked") return payload["terminal"] === true;
   if (event.event_type === "merge.dequeued") {
@@ -353,6 +354,7 @@ function uniqueSignals(signals: ReadonlyArray<AttributedMergeSignal>): Attribute
 }
 
 function isCompletionBlockingSignal(signal: AttributedMergeSignal): boolean {
+  if (signal.event.event_type === "merge.speculative_held") return true;
   if (signal.event.event_type === "merge.queue.infra_blocked") return true;
   if (signal.event.event_type === "merge.batch.infra_blocked") return true;
   if (signal.event.event_type !== "merge.dequeued") return false;

@@ -96,6 +96,8 @@ class RoutingGitHubHttp implements GitHubHttpClient {
         head: { sha: HEAD_SHA, ref: CONFORMANCE_HEAD_BRANCH },
         base: { ref: baseRef },
         mergeable_state: mergeableState,
+        state: "open",
+        merged: false,
       });
     }
     // retargetPullRequestBase: PATCH /pulls/:n { base } → the updated PR.

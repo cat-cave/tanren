@@ -56,6 +56,13 @@ export interface MergePullRequestResult {
   message: string;
 }
 
+export interface GitHubPullRequestState {
+  confirmed: boolean;
+  merged: boolean;
+  open: boolean;
+  sha?: string;
+}
+
 interface TokenInput {
   token: string;
   refreshToken?: () => Promise<string>;
@@ -248,7 +255,7 @@ export class GitHubReviewMergeService {
       }
       if (isTransientStatus(response.status)) {
         // A gateway timeout on the PUT — re-read the authoritative state before deciding.
-        const merged = await this.readMerged(input);
+        const merged = await this.readPullRequestState(input);
         if (merged.confirmed && merged.merged) {
           // The 504 raced a completed merge — treat as the success it was.
           return { merged: true, mergeSha: merged.sha, conflict: false, status: 200, message: "merged" };
@@ -279,17 +286,10 @@ export class GitHubReviewMergeService {
     }
   }
 
-  /**
-   * Re-read the PR's authoritative merged/open state — the double-merge guard's
-   * reconciliation read after a transient 5xx on the merge PUT (`GET /pulls/{n}` is a
-   * safe idempotent read). `confirmed` is whether the read itself succeeded (the
-   * merged/open booleans are TRUSTWORTHY); a non-200 is `confirmed: false`, which the
-   * caller treats as AMBIGUOUS (never re-PUTs blindly — the merge may have landed),
-   * distinct from a confirmed open+unmerged (which IS safe to re-drive).
-   */
-  private async readMerged(
+  /** Re-read the PR's authoritative merged/open state via safe `GET /pulls/{n}`. */
+  async readPullRequestState(
     input: { repo: GitHubRepository; pullNumber: number } & TokenInput,
-  ): Promise<{ confirmed: boolean; merged: boolean; open: boolean; sha?: string }> {
+  ): Promise<GitHubPullRequestState> {
     const response = await this.http.request({
       method: "GET",
       path: repoPath(input.repo, `/pulls/${input.pullNumber}`),
@@ -297,8 +297,6 @@ export class GitHubReviewMergeService {
       refreshToken: input.refreshToken,
     });
     if (response.status !== 200) {
-      // Could not confirm either way — report unconfirmed so the guard surfaces the
-      // AMBIGUOUS (loud, non-auto-retry) outcome rather than re-PUTting blindly.
       return { confirmed: false, merged: false, open: false };
     }
     return { confirmed: true, ...parseMergedState(response.body) };

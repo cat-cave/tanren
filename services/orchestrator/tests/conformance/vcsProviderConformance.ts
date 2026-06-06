@@ -120,6 +120,13 @@ export function describeVcsProviderConformance(label: string, harness: VcsProvid
       expect(provider.parsePullRequest(CONFORMANCE_PR_URL)).toEqual({ repo: REPO, number: 7 });
     });
 
+    it("readPullRequestState proves an open unmerged PR state", async () => {
+      const provider = harness.make();
+      const token = await resolve(provider);
+      const state = await provider.readPullRequestState({ repo: REPO, number: 7 }, token);
+      expect(state).toEqual({ confirmed: true, merged: false, open: true });
+    });
+
     it("openDraftPullRequest returns a PR with url/number and a reused flag", async () => {
       const provider = harness.make();
       const token = await resolve(provider);

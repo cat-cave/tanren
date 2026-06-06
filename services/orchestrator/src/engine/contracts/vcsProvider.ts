@@ -279,6 +279,13 @@ export interface CreatedIssue {
   url: string;
 }
 
+export interface PullRequestState {
+  confirmed: boolean;
+  merged: boolean;
+  open: boolean;
+  mergeSha?: string;
+}
+
 /**
  * The VcsProvider contract: every VCS/CI operation the run + merge lifecycle
  * performs directly against the forge, behind a provider-neutral seam. Each
@@ -312,6 +319,13 @@ export interface VcsProvider {
 
   /** Parse a pull-request URL into its {@link PullRequestRef}. */
   parsePullRequest(prUrl: string): PullRequestRef;
+
+  /**
+   * Read the forge-authoritative PR terminal state. Used by autonomous recovery
+   * paths before correcting local queue/read-model state; an unconfirmed read is
+   * not proof and must not be used to mutate durable state.
+   */
+  readPullRequestState(pr: PullRequestRef, token: ResolvedVcsToken): Promise<PullRequestState>;
 
   /**
    * GREENFIELD: create a brand-new repository under `input.owner` so a greenfield
