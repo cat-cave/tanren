@@ -103,11 +103,12 @@ export async function mergeForRun(input: MergeForRunInput): Promise<MergeForRunR
 
   const probe = input.mergeProbe ?? (await buildGitHubProbe(input, context, pr.repo, pr.pullNumber));
 
+  const speculativeHold = speculative !== undefined && speculative.unmergedAncestors.length > 0;
   if (speculative !== undefined) {
     // (a) HOLD while any ancestor is still unmerged — no unreviewed ancestor code
     // reaches `main` early. The DagWalker re-walks on the ancestor merge.completed,
     // re-entering this stage once the ancestors land.
-    if (speculative.unmergedAncestors.length > 0) {
+    if (speculativeHold) {
       await eventStore.append({
         runId: context.runId,
         specId: context.specId,
@@ -122,15 +123,17 @@ export async function mergeForRun(input: MergeForRunInput): Promise<MergeForRunR
           unmergedAncestors: speculative.unmergedAncestors,
         },
       });
-      return {
-        runId: context.runId,
-        taskId,
-        integration,
-        outcome: "blocked",
-        prUrl: context.prUrl,
-        prNumber: pr.pullNumber,
-        message: `merge held: ancestors not yet merged (${speculative.unmergedAncestors.join(", ")})`,
-      };
+      if (integration !== "native_queue" || input.queueDrive === true) {
+        return {
+          runId: context.runId,
+          taskId,
+          integration,
+          outcome: "blocked",
+          prUrl: context.prUrl,
+          prNumber: pr.pullNumber,
+          message: `merge held: ancestors not yet merged (${speculative.unmergedAncestors.join(", ")})`,
+        };
+      }
     }
     // (b) HOLD CLEARED (all ancestors merged): RE-TARGET the PR base from the
     // integration ref to `default_branch` (§2c step 3) so the dependent lands on
@@ -138,7 +141,7 @@ export async function mergeForRun(input: MergeForRunInput): Promise<MergeForRunR
     // re-gate below then brings the branch current with `default_branch`. The base
     // is re-pointed on the forge BEFORE any merge call, so directMerge's
     // mergeability read + merge act against `default_branch`.
-    if (speculative.speculativeBase !== context.baseBranch) {
+    if (!speculativeHold && speculative.speculativeBase !== context.baseBranch) {
       const mergeability = await probe.readMergeability();
       if (mergeability.baseBranch !== context.baseBranch) {
         await probe.retargetBase(context.baseBranch);
@@ -193,9 +196,9 @@ export async function mergeForRun(input: MergeForRunInput): Promise<MergeForRunR
     // the run-loop's first pass under `native_queue` ENTERS the queue instead
     // of merging. The native MergeCoordinator later drives the actual merge (a
     // second mergeForRun call with `queueDrive: true` → the directMerge path
-    // below). A speculative dependent whose hold has NOT cleared returned `blocked`
-    // ABOVE and never reaches here — it enters the queue only once its ancestors
-    // merge, so the queue never holds a dependent ahead of its ancestors.
+    // below). A speculative dependent whose hold has NOT cleared still enters
+    // the queue; the queue's DAG ordering holds it until ancestors genuinely
+    // merge, avoiding a false terminal run state.
     return dispatcher.enqueueNative();
   }
   // `direct_merge`, OR `native_queue` on the coordinator DRIVE pass: the SAME

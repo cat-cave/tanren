@@ -1,9 +1,7 @@
 // (autonomy-engine.md §2d) — the run-loop merge finalize. The CARDINAL-SIN
-// fix: under `native_queue`, the first-pass `queued` outcome ENTERED the queue but
-// did NOT merge (Tanren owns the merge — the coordinator's drive pass merges it
-// later), so the spec must NOT be marked `merged` here. Every other mode lands the
-// spec at `merged`: `direct_merge` `merged` → spec `merged`; an `external_reviewer`
-// hand-off → spec `merged` (the actual git merge is left to an operator).
+// fix: only a landed merge may mark the spec `merged`. A `native_queue` first-pass
+// `queued` outcome completed the enqueue but did NOT merge. True handoff/block
+// outcomes park the spec at `needs_attention` so no reconciler silently re-runs it.
 
 import { describe, expect, it } from "vitest";
 import { finalizeMergeOutcome } from "../src/engine/workflow/plannerRunFinalize.js";
@@ -29,6 +27,14 @@ class RecordingPool {
   /** Whether ANY `UPDATE specs` ran (proves the spec status was / was not touched). */
   touchedSpec(): boolean {
     return this.queries.some((q) => q.sql.startsWith("UPDATE specs SET status"));
+  }
+  terminalRunWrite(): { status: string; outcome: string } | undefined {
+    const last = this.queries.findLast((q) => q.sql.startsWith("UPDATE runs SET status"));
+    if (last === undefined) return undefined;
+    if (last.sql.includes("status = 'completed'")) return { status: "completed", outcome: "ok" };
+    if (last.sql.includes("status = 'halted'")) return { status: "halted", outcome: String(last.params[1]) };
+    if (last.sql.includes("status = 'failed'")) return { status: "failed", outcome: "failed" };
+    return undefined;
   }
 }
 
@@ -63,7 +69,7 @@ describe("finalizeMergeOutcome — native_queue spec status (P2d cardinal-sin fi
     // coordinator's drive pass merges it). This is the fix: no `merged`.
     expect(pool.touchedSpec()).toBe(false);
     // The RUN still finalizes completed/ok (the enqueue succeeded).
-    expect(pool.queries.some((q) => q.sql.includes("UPDATE runs SET status = 'completed'"))).toBe(true);
+    expect(pool.terminalRunWrite()).toEqual({ status: "completed", outcome: "ok" });
   });
 
   it("a direct_merge `merged` marks the spec `merged` (unchanged)", async () => {
@@ -72,15 +78,44 @@ describe("finalizeMergeOutcome — native_queue spec status (P2d cardinal-sin fi
     expect(pool.specStatusWritten()).toBe("merged");
   });
 
-  it("an external_reviewer hand-off `handed_off` marks the spec `merged`", async () => {
+  it("an external_reviewer hand-off `handed_off` parks the spec and halts", async () => {
     const pool = new RecordingPool();
     await run(pool, "handed_off", "external_reviewer");
-    expect(pool.specStatusWritten()).toBe("merged");
+    expect(pool.specStatusWritten()).toBe("needs_attention");
+    expect(pool.terminalRunWrite()).toEqual({ status: "halted", outcome: "halted" });
   });
 
   it("a native_queue DRIVE-pass `merged` marks the spec `merged` (the merge landed)", async () => {
     const pool = new RecordingPool();
     await run(pool, "merged", "native_queue");
     expect(pool.specStatusWritten()).toBe("merged");
+  });
+
+  it("a native_queue DRIVE-pass `blocked` outcome parks the spec and halts", async () => {
+    const pool = new RecordingPool();
+    await run(pool, "blocked", "native_queue");
+    expect(pool.specStatusWritten()).toBe("needs_attention");
+    expect(pool.terminalRunWrite()).toEqual({ status: "halted", outcome: "halted" });
+  });
+
+  it("a direct_merge `blocked` outcome parks the spec and halts", async () => {
+    const pool = new RecordingPool();
+    await run(pool, "blocked", "direct_merge");
+    expect(pool.specStatusWritten()).toBe("needs_attention");
+    expect(pool.terminalRunWrite()).toEqual({ status: "halted", outcome: "halted" });
+  });
+
+  it("a non-native `queued` outcome parks the spec and halts", async () => {
+    const pool = new RecordingPool();
+    await run(pool, "queued", "direct_merge");
+    expect(pool.specStatusWritten()).toBe("needs_attention");
+    expect(pool.terminalRunWrite()).toEqual({ status: "halted", outcome: "halted" });
+  });
+
+  it("a `conflict` outcome stays recoverable without parking the spec", async () => {
+    const pool = new RecordingPool();
+    await run(pool, "conflict", "direct_merge");
+    expect(pool.touchedSpec()).toBe(false);
+    expect(pool.terminalRunWrite()).toEqual({ status: "halted", outcome: "halted" });
   });
 });

@@ -2,9 +2,10 @@
 // the safety property that a speculative dependent's MERGE waits until its
 // ancestors are genuinely merged (no unreviewed ancestor code reaches `main`
 // early). Its WORK proceeded against the integration branch, but `mergeForRun`
-// HOLDS the merge (emits merge.speculative_held, returns a `blocked` outcome,
-// never calls the merge API) while any ancestor is unmerged — and proceeds to a
-// real merge once the ancestors have all merged.
+// HOLDS direct/drive merges (emits merge.speculative_held, returns `blocked`,
+// never calls the merge API) while any ancestor is unmerged. A native_queue
+// first pass still ENTERS the queue; the queue's dependency ordering holds it
+// until ancestors land. Once ancestors have all merged, the dependent proceeds.
 
 import { describe, expect, it } from "vitest";
 import { vcsProviderOver } from "./helpers/vcsProvider.js";
@@ -43,6 +44,43 @@ describe("P2c-1 speculative-merge-hold (merge stage)", () => {
       unmergedAncestors: ["spec_b"],
     });
     expect(events.events.some((e) => e.eventType === "merge.completed")).toBe(false);
+  });
+
+  it("ENQUEUES a native_queue first-pass speculative dependent while an ancestor is unmerged", async () => {
+    const pool = new ReviewMergePool("native_queue");
+    pool.speculativeBase = "tanren/integ/spec_1";
+    pool.specDependsOn = ["spec_a", "spec_b"];
+    pool.mergedAncestors = ["spec_a"];
+    const events = new FakeEventStore();
+    const probe = recordingMergeProbe({ merged: true, mergeSha: "x", conflict: false, status: 200, message: "merged" });
+    const enqueued: Array<{ runId: string; specId: string; prNumber: number }> = [];
+
+    const result = await mergeForRun({
+      pool: pool.asPgPool(),
+      eventStore: events,
+      secrets: new FakeSecretStore(),
+      resolveConflict: noopConflictResolver,
+      vcsProvider: vcsProviderOver(unusedHttp()),
+      runId: "run_1",
+      mergeProbe: probe,
+      enqueueNativeQueue: async (entry) => {
+        enqueued.push({ runId: entry.runId, specId: entry.specId, prNumber: entry.prNumber });
+        return { created: true };
+      },
+    });
+
+    expect(result.outcome).toBe("queued");
+    expect(enqueued).toEqual([{ runId: "run_1", specId: "spec_1", prNumber: 7 }]);
+    expect(probe.mergeCalls).toBe(0);
+    expect(probe.mergeabilityCalls).toBe(0);
+    const types = events.events.map((e) => e.eventType);
+    expect(types).toContain("merge.speculative_held");
+    expect(types).toContain("merge.queued");
+    expect(types).not.toContain("merge.completed");
+    expect(events.events.find((e) => e.eventType === "merge.speculative_held")?.payload).toMatchObject({
+      integration: "native_queue",
+      unmergedAncestors: ["spec_b"],
+    });
   });
 
   it("RE-TARGETS to default_branch + merges on real main once ALL ancestors merged, then cleans the integ ref", async () => {

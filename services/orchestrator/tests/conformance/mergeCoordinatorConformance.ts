@@ -155,6 +155,17 @@ export function describeMergeCoordinatorConformance(label: string, suite: MergeC
       expect(h.statusOf("run_dep")).toBe("queued");
     });
 
+    it("holds a dependent when its ancestor is not queued and not merged", async () => {
+      const h = suite.make();
+      h.seed({ runId: "run_dep", specId: "spec_dep", dependsOn: ["spec_missing"], priority: "P0" });
+
+      const result = await h.coordinator.coordinate(h.projectId);
+
+      expect(result.holdReason).toBe("all_blocked");
+      expect(h.drives).toEqual([]);
+      expect(h.statusOf("run_dep")).toBe("queued");
+    });
+
     it("orders by priority WITHIN a DAG layer (P0 before P2)", async () => {
       const h = suite.make();
       // Two independent roots; P0 must merge before P2.

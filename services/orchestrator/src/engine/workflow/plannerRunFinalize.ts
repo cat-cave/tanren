@@ -127,20 +127,13 @@ export async function finalizeNonPass(
 
 /**
  * Finalize the run + spec for the merge stage's terminal outcome:
- *   - conflict → recoverable halt (the conflict event already emitted), spec NOT merged;
+ *   - conflict → recoverable halt, spec NOT merged;
+ *   - blocked/handed_off/non-native queued → spec `needs_attention`, run halted;
  *   - failed → run failed;
  *   - merged → run completed/ok; spec `merged`;
- *   - queued/handed_off → run completed/ok; spec status depends on WHO owns the merge:
- *       - `external_reviewer` / `not_configured` HAND OFF — Tanren is NOT going to
- *         merge, so the spec is `merged` (the actual git merge is left to an operator,
- *         but the spec's work is done).
- *       - `native_queue` does NOT hand off — Tanren OWNS the merge (the run merely
- *         ENTERED the native queue; the coordinator's DRIVE pass merges it later).
- *         So the spec MUST stay in its pre-merge (`in_flight`) status until that drive
- *         merges — otherwise the ordering invariant's two reads (`mergedSpecIds` + the
- *         speculative-hold, both keyed on `status = 'merged'`) would treat a
- *         queued-but-UNMERGED ancestor as merged and let a dependent merge ahead of it
- *         (the cardinal sin).
+ *   - native_queue queued → run completed/ok, spec NOT merged. The enqueue
+ *     succeeded, but Tanren still owns the merge and the coordinator's DRIVE pass
+ *     sets the spec `merged` only after the PR actually lands.
  */
 export async function finalizeMergeOutcome(
   input: RunPlannerLoopInput,
@@ -150,6 +143,11 @@ export async function finalizeMergeOutcome(
 ): Promise<void> {
   const { outcome, integration } = merge;
   if (outcome === "conflict") {
+    await finalizeNonPass(finalizeRunState, context.runId, "halted");
+    return;
+  }
+  if (outcome === "blocked" || outcome === "handed_off") {
+    await setSpecStatus(input, context, "needs_attention");
     await finalizeNonPass(finalizeRunState, context.runId, "halted");
     return;
   }
@@ -163,13 +161,12 @@ export async function finalizeMergeOutcome(
     );
     return;
   }
-  // a `native_queue` first-pass `queued` outcome ENTERED the queue but did NOT
-  // merge — Tanren still owns the merge, so the spec must NOT become `merged` here
-  // (the coordinator's drive-pass merge sets `merged`). Leave the spec in its
-  // in-flight status; only the run finalizes (it successfully enqueued). Every other
-  // mode lands the spec at `merged`: a merge or a hand-off both end the spec there.
-  const isNativeQueueEnqueue = outcome === "queued" && integration === "native_queue";
-  if (!isNativeQueueEnqueue) {
+  if (outcome === "queued" && integration !== "native_queue") {
+    await setSpecStatus(input, context, "needs_attention");
+    await finalizeNonPass(finalizeRunState, context.runId, "halted");
+    return;
+  }
+  if (outcome === "merged") {
     await setSpecStatus(input, context, "merged");
   }
   await finalizeRunState(
