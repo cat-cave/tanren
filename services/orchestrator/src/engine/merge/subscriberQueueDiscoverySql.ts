@@ -149,45 +149,4 @@ SELECT DISTINCT mq.project_id
          )
       ), false)
     )
-    OR (
-      mq.status = 'merged'
-      AND mq.pr_url IS NOT NULL
-      AND mq.pr_url <> ''
-      AND mq.pr_number IS NOT NULL
-      AND NOT EXISTS (
-        SELECT 1
-          FROM merge_queue active
-         WHERE active.run_id = mq.run_id
-           AND active.status IN ('queued', 'merging')
-      )
-      AND EXISTS (
-        SELECT 1
-          FROM events held
-         WHERE held.project_id = mq.project_id
-           AND held.org_id = mq.org_id
-           AND held.event_type = 'merge.speculative_held'
-           AND (NOT (held.payload ? 'integration') OR held.payload ->> 'integration' = 'native_queue')
-           AND (
-             held.run_id = mq.run_id
-             OR held.payload ->> 'runId' = mq.run_id
-             OR held.payload ->> 'prUrl' = mq.pr_url
-             OR held.payload ->> 'prNumber' = mq.pr_number
-             OR held.spec_id = mq.spec_id
-           )
-      )
-      AND NOT EXISTS (
-        SELECT 1
-          FROM events done
-         WHERE done.project_id = mq.project_id
-           AND done.org_id = mq.org_id
-           AND done.event_type = 'merge.completed'
-           AND (
-             done.run_id = mq.run_id
-             OR done.payload ->> 'runId' = mq.run_id
-             OR done.payload ->> 'prUrl' = mq.pr_url
-             OR done.payload ->> 'prNumber' = mq.pr_number
-             OR done.spec_id = mq.spec_id
-           )
-      )
-    )
  ORDER BY mq.project_id`;

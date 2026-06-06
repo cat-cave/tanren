@@ -245,10 +245,31 @@ async function resolveSpeculativeState(
     // re-targets to default_branch before merging (it must not merge into integ).
     return { speculativeBase: run.speculative_base, unmergedAncestors: [] };
   }
-  // The ancestors that are genuinely merged (status `merged`); the rest are
-  // unmerged and the merge must wait on them.
+  // The ancestors that are genuinely merged; an unresolved speculative merge hold
+  // disqualifies the row even if the spec status was advanced incorrectly.
   const mergedResult = await pool.query<{ spec_id: string }>(
-    "SELECT spec_id FROM specs WHERE project_id = $1 AND spec_id = ANY($2::text[]) AND status = 'merged'",
+    `SELECT s.spec_id
+       FROM specs s
+      WHERE s.project_id = $1
+        AND s.spec_id = ANY($2::text[])
+        AND s.status = 'merged'
+        AND NOT EXISTS (
+          SELECT 1
+            FROM events held
+           WHERE held.project_id = s.project_id
+             AND held.org_id = s.org_id
+             AND held.spec_id = s.spec_id
+             AND held.event_type = 'merge.speculative_held'
+             AND NOT EXISTS (
+               SELECT 1
+                 FROM events done
+                WHERE done.project_id = held.project_id
+                  AND done.org_id = held.org_id
+                  AND done.spec_id = held.spec_id
+                  AND done.event_type = 'merge.completed'
+                  AND (done.ts > held.ts OR (done.ts = held.ts AND done.id > held.id))
+             )
+        )`,
     [run.project_id, dependsOn],
   );
   const merged = new Set(mergedResult.rows.map((row) => row.spec_id));
