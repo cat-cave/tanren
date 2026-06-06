@@ -104,6 +104,98 @@ describe("notifications routes (P2B-0002 over P2A-0017)", () => {
     expect(body.enabled).toBe(true);
   });
 
+  it("returns recent delivery evidence scoped to the org without raw payload values", async () => {
+    const { app, pool } = harness();
+    pool.targets.set("notif_target_acme", {
+      id: "notif_target_acme",
+      org_id: "org_acme",
+      scope: "org",
+      user_id: null,
+      channel_kind: "ntfy",
+      destination: "https://ntfy.sh/acme",
+      label: "acme alerts",
+      enabled: 1,
+      weekend_mute: 0,
+      created_at: pool.now,
+      updated_at: pool.now,
+    });
+    pool.targets.set("notif_target_other", {
+      id: "notif_target_other",
+      org_id: "org_other",
+      scope: "org",
+      user_id: null,
+      channel_kind: "ntfy",
+      destination: "https://ntfy.sh/other",
+      label: "other alerts",
+      enabled: 1,
+      weekend_mute: 0,
+      created_at: pool.now,
+      updated_at: pool.now,
+    });
+    pool.dispatches.push(
+      {
+        id: 1,
+        tenant_id: "org_acme",
+        channel: "ntfy",
+        status: "sent",
+        attempts: 1,
+        enqueued_at: pool.now,
+        sent_at: pool.now,
+        payload: {
+          eventName: "run.failed",
+          targetId: "notif_target_acme",
+          severity: "fail",
+          title: "Run failed",
+          token: "must-not-leak",
+        },
+      },
+      {
+        id: 2,
+        tenant_id: "org_other",
+        channel: "ntfy",
+        status: "sent",
+        attempts: 1,
+        enqueued_at: pool.now,
+        sent_at: pool.now,
+        payload: {
+          eventName: "run.failed",
+          targetId: "notif_target_other",
+          severity: "fail",
+          title: "Other run failed",
+        },
+      },
+    );
+
+    const res = await app.request("/orgs/org_acme/notifications/deliveries?eventName=run.failed&status=sent");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      deliveries: Array<{
+        eventName: string;
+        target: { label: string; destination: string };
+        title: string;
+        token?: string;
+        payload?: unknown;
+      }>;
+    };
+    expect(body.deliveries).toHaveLength(1);
+    expect(body.deliveries[0]).toMatchObject({
+      eventName: "run.failed",
+      target: {
+        label: "acme alerts",
+        destination: "https://ntfy.sh/acme",
+      },
+      title: "Run failed",
+    });
+    expect(body.deliveries[0]?.token).toBeUndefined();
+    expect(body.deliveries[0]?.payload).toBeUndefined();
+  });
+
+  it("rejects invalid delivery status filters", async () => {
+    const { app } = harness();
+    const res = await app.request("/orgs/org_acme/notifications/deliveries?status=queued");
+    expect(res.status).toBe(400);
+  });
+
   it("rejects a route bound to a target in another org with 404", async () => {
     const { app, pool } = harness();
     // Seed a target owned by a different org directly in the store.

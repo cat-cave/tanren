@@ -12,10 +12,12 @@ import type pg from "pg";
 import type { ActorContext } from "../../auth/schemas.js";
 import { eventDefaultSeverity } from "../../engine/notifications/eventDefaultSeverity.js";
 import {
+  NotificationDispatchLog,
   NotificationRouteCreateInput,
   NotificationRouteStore,
   NotificationTargetCreateInput,
   NotificationTargetStore,
+  type DispatchStatus,
 } from "../../engine/notifications/index.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { actorCanAccessOrg } from "../orgs/access.js";
@@ -30,6 +32,8 @@ function eventCatalog(): Array<{ eventName: string; defaultSeverity: string }> {
     .map(([eventName, defaultSeverity]) => ({ eventName, defaultSeverity }))
     .sort((a, b) => a.eventName.localeCompare(b.eventName));
 }
+
+const DELIVERY_STATUSES = new Set<DispatchStatus>(["sent", "failed", "stubbed", "skipped"]);
 
 export function createNotificationRoutes(options: NotificationRoutesOptions) {
   const app = new Hono<ActorContextEnv>();
@@ -51,6 +55,45 @@ export function createNotificationRoutes(options: NotificationRoutesOptions) {
       targets: targets.map((target) => toTargetContract(target)),
       routes: routes.map((route) => toRouteContract(route)),
       events: eventCatalog(),
+    });
+  });
+
+  app.get("/:orgId/notifications/deliveries", async (c) => {
+    const actor = requireActor(c);
+    const orgId = c.req.param("orgId");
+    if (!actorCanAccessOrg(actor, orgId)) {
+      return c.json({ error: "org_access_denied" }, 403);
+    }
+
+    const status = c.req.query("status");
+    if (status !== undefined && !DELIVERY_STATUSES.has(status as DispatchStatus)) {
+      return c.json({ error: "invalid_status" }, 400);
+    }
+
+    const deliveries = await NotificationDispatchLog.listForOrg(options.pool, {
+      orgId,
+      limit: parseLimit(c.req.query("limit")),
+      ...(c.req.query("eventName") === undefined ? {} : { eventName: c.req.query("eventName") }),
+      ...(status === undefined ? {} : { status: status as DispatchStatus }),
+    });
+
+    return c.json({
+      deliveries: deliveries.map((delivery) => ({
+        id: delivery.id,
+        orgId: delivery.orgId,
+        channel: delivery.channel,
+        status: delivery.status,
+        attempts: delivery.attempts,
+        enqueuedAt: delivery.enqueuedAt,
+        sentAt: delivery.sentAt,
+        eventName: delivery.eventName,
+        targetId: delivery.targetId,
+        severity: delivery.severity,
+        title: delivery.title,
+        reason: delivery.reason,
+        layering: delivery.layering,
+        target: delivery.target,
+      })),
     });
   });
 
@@ -97,6 +140,13 @@ export function createNotificationRoutes(options: NotificationRoutesOptions) {
   });
 
   return app;
+}
+
+function parseLimit(value: string | undefined): number {
+  if (value === undefined) return 50;
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed)) return 50;
+  return Math.min(Math.max(parsed, 1), 200);
 }
 
 function toTargetContract(row: {

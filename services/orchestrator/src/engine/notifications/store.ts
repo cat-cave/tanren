@@ -1,10 +1,12 @@
 import { randomUUID } from "node:crypto";
 import type pg from "pg";
 import {
+  type NotificationDeliveryRow,
   type NotificationRouteCreateInput,
   type NotificationRouteRow,
   type NotificationTargetCreateInput,
   type NotificationTargetRow,
+  NotificationDeliveryRow as NotificationDeliveryRowSchema,
   NotificationRouteCreateInput as NotificationRouteCreateInputSchema,
   NotificationRouteRow as NotificationRouteRowSchema,
   NotificationTargetCreateInput as NotificationTargetCreateInputSchema,
@@ -42,6 +44,25 @@ interface RawRouteRow {
   updated_at: unknown;
 }
 
+interface RawDeliveryRow {
+  id: unknown;
+  org_id: unknown;
+  channel: unknown;
+  status: unknown;
+  attempts: unknown;
+  enqueued_at: unknown;
+  sent_at: unknown;
+  event_name: unknown;
+  target_id: unknown;
+  severity: unknown;
+  title: unknown;
+  reason: unknown;
+  layering: unknown;
+  target_channel_kind: unknown;
+  target_destination: unknown;
+  target_label: unknown;
+}
+
 const TARGET_COLUMNS = `
   id, org_id, scope, user_id, channel_kind, destination, label,
   enabled, weekend_mute, created_at, updated_at
@@ -76,6 +97,34 @@ function decodeRouteRow(raw: RawRouteRow): NotificationRouteRow {
     minSeverity: raw.min_severity,
     createdAt: raw.created_at,
     updatedAt: raw.updated_at,
+  });
+}
+
+function decodeDeliveryRow(raw: RawDeliveryRow): NotificationDeliveryRow {
+  const targetId = stringOrNull(raw.target_id);
+  return NotificationDeliveryRowSchema.parse({
+    id: Number(raw.id),
+    orgId: stringOrNull(raw.org_id),
+    channel: raw.channel,
+    status: raw.status,
+    attempts: Number(raw.attempts),
+    enqueuedAt: raw.enqueued_at,
+    sentAt: raw.sent_at,
+    eventName: stringOrNull(raw.event_name),
+    targetId,
+    severity: stringOrNull(raw.severity),
+    title: stringOrNull(raw.title),
+    reason: stringOrNull(raw.reason),
+    layering: stringOrNull(raw.layering),
+    target:
+      targetId === null || raw.target_channel_kind === null
+        ? null
+        : {
+            id: targetId,
+            channelKind: raw.target_channel_kind,
+            destination: raw.target_destination,
+            label: raw.target_label,
+          },
   });
 }
 
@@ -179,12 +228,67 @@ export interface DispatchLogInput {
   sentAt: Date | null;
 }
 
+export interface NotificationDeliveryListFilters {
+  orgId: string;
+  limit: number;
+  eventName?: string;
+  status?: DispatchStatus;
+}
+
 export const NotificationDispatchLog = {
   async record(client: QueryClient, input: DispatchLogInput): Promise<void> {
     await client.query(
-      `INSERT INTO notifications (channel, payload, status, attempts, sent_at)
-       VALUES ($1, $2::jsonb, $3, $4, $5)`,
+      `INSERT INTO notifications (channel, payload, status, attempts, sent_at, tenant_id)
+       VALUES ($1, $2::jsonb, $3, $4, $5, NULLIF(current_setting('app.current_org_id', true), ''))`,
       [input.channel, JSON.stringify(input.payload), input.status, input.attempts, input.sentAt],
     );
   },
+
+  async listForOrg(client: QueryClient, filters: NotificationDeliveryListFilters): Promise<NotificationDeliveryRow[]> {
+    const params: unknown[] = [filters.orgId];
+    const where = ["(n.tenant_id = $1 OR t.id IS NOT NULL)"];
+
+    if (filters.eventName !== undefined) {
+      params.push(filters.eventName);
+      where.push(`n.payload->>'eventName' = $${params.length}`);
+    }
+    if (filters.status !== undefined) {
+      params.push(filters.status);
+      where.push(`n.status = $${params.length}`);
+    }
+
+    params.push(filters.limit);
+    const result = await client.query(
+      `SELECT
+          n.id,
+          COALESCE(n.tenant_id, t.org_id) AS org_id,
+          n.channel,
+          n.status,
+          n.attempts,
+          n.enqueued_at,
+          n.sent_at,
+          n.payload->>'eventName' AS event_name,
+          n.payload->>'targetId' AS target_id,
+          n.payload->>'severity' AS severity,
+          n.payload->>'title' AS title,
+          n.payload->>'reason' AS reason,
+          n.payload->>'layering' AS layering,
+          t.channel_kind AS target_channel_kind,
+          t.destination AS target_destination,
+          t.label AS target_label
+         FROM notifications n
+         LEFT JOIN notification_targets t
+           ON t.id = n.payload->>'targetId'
+          AND t.org_id = $1
+        WHERE ${where.join(" AND ")}
+        ORDER BY n.enqueued_at DESC, n.id DESC
+        LIMIT $${params.length}`,
+      params,
+    );
+    return result.rows.map((row) => decodeDeliveryRow(row as RawDeliveryRow));
+  },
 } as const;
+
+function stringOrNull(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}

@@ -6,6 +6,7 @@ export {
   ChannelKind,
   Severity,
   TargetScope,
+  NotificationDeliveryRow,
   NotificationPayload,
   NotificationRouteCreateInput,
   NotificationRouteRow,
@@ -41,6 +42,7 @@ export {
   NotificationDispatchLog,
   type DispatchLogInput,
   type DispatchStatus,
+  type NotificationDeliveryListFilters,
 } from "./store.js";
 
 export {

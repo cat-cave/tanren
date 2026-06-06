@@ -140,3 +140,28 @@ export const NotificationPayload = z.object({
   tags: z.array(z.string()).optional(),
 });
 export type NotificationPayload = z.infer<typeof NotificationPayload>;
+
+export const NotificationDeliveryRow = z.object({
+  id: z.number().int().nonnegative(),
+  orgId: z.string().min(1).nullable(),
+  channel: ChannelKind,
+  status: z.enum(["sent", "failed", "stubbed", "skipped"]),
+  attempts: z.number().int().nonnegative(),
+  enqueuedAt: z.date(),
+  sentAt: z.date().nullable(),
+  eventName: z.string().min(1).nullable(),
+  targetId: z.string().min(1).nullable(),
+  severity: Severity.nullable(),
+  title: z.string().min(1).nullable(),
+  reason: z.string().min(1).nullable(),
+  layering: z.string().min(1).nullable(),
+  target: z
+    .object({
+      id: z.string().min(1),
+      channelKind: ChannelKind,
+      destination: z.string().min(1),
+      label: z.string().min(1),
+    })
+    .nullable(),
+});
+export type NotificationDeliveryRow = z.infer<typeof NotificationDeliveryRow>;
