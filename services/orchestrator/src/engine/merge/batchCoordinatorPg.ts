@@ -117,6 +117,7 @@ export class PgBatchMergeEventEmitter implements BatchMergeEventEmitter {
     attempts: number;
     terminal?: boolean;
     consecutiveHolds?: number;
+    kind?: "missing_required_credential";
   }): Promise<void> {
     const head = input.batch[0];
     await this.withScopedStore(input.projectId, (store) =>
@@ -133,6 +134,7 @@ export class PgBatchMergeEventEmitter implements BatchMergeEventEmitter {
           // the timeline distinguishes the loud STOP from the recoverable in-pass hold.
           ...(input.terminal === true && { terminal: true }),
           ...(input.consecutiveHolds !== undefined && { consecutiveHolds: input.consecutiveHolds }),
+          ...(input.kind !== undefined && { kind: input.kind }),
         },
       }),
     );

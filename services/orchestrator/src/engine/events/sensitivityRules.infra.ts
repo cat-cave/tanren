@@ -82,6 +82,12 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["ref", "redacted"],
     ["message", "public"],
   ]),
+  ...rulesFor("credential.github.configured", [
+    ["mode", "public"],
+    ["credentialKind", "public"],
+    ["ref", "redacted"],
+    ["redacted", "public"],
+  ]),
   // per-run scoped Vault token mint: ref paths embed the tenant (redacted); policy name + bounds public; the token value is NEVER in the payload.
   ...rulesFor("credential.scoped_token_minted", [
     ["policyName", "public"],
@@ -260,6 +266,7 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["attempts", "public"],
     ["terminal", "public"],
     ["consecutiveHolds", "public"],
+    ["kind", "public"],
   ]),
   ...rulesFor("merge.failed", [
     ["prUrl", "public"],

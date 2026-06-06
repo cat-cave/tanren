@@ -20,6 +20,12 @@
       ],
       "type": "string"
     },
+    "kind": {
+      "enum": [
+        "missing_required_credential"
+      ],
+      "type": "string"
+    },
     "members": {
       "items": {
         "additionalProperties": false,

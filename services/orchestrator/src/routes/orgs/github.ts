@@ -32,6 +32,7 @@ import {
   persistOrgGithubAppInstallation,
 } from "../../engine/credentials/orgGithubApp.js";
 import { deriveCredentialRef } from "../../engine/credentials/refNamespace.js";
+import { PgEventStore, type EventStore } from "../../engine/eventStore.js";
 import { GithubAppTokenMinter } from "../../engine/providers/githubAppTokenMinter.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { actorCanAccessOrg, actorIsOrgAdmin } from "./access.js";
@@ -49,6 +50,8 @@ export interface GithubConnectRoutesOptions {
   appCredentialRef?: string;
   /** Injectable fetch for the capability probe (real GitHub by default). */
   fetchImpl?: typeof fetch;
+  /** Event append seam for credential repair signals; defaults to PgEventStore. */
+  events?: EventStore;
 }
 
 // Connect-by-App-install: GitHub gives the operator an `installationId` (+ the
@@ -70,6 +73,7 @@ const TokenConnectSchema = z.object({ token: z.string().min(1) }).strict();
 export function createGithubConnectRoutes(options: GithubConnectRoutesOptions) {
   const app = new Hono<ActorContextEnv>();
   const minter = options.minter ?? new GithubAppTokenMinter({ secrets: options.secrets });
+  const events = options.events ?? new PgEventStore(options.pool);
 
   // POST /:orgId/github — connect GitHub. Body discriminates the two modes:
   //   { installationId, appId, credentialRef? } → App install
@@ -84,11 +88,11 @@ export function createGithubConnectRoutes(options: GithubConnectRoutesOptions) {
 
     const install = InstallConnectSchema.safeParse(raw);
     if (install.success) {
-      return connectViaApp(c, options, minter, orgId, install.data);
+      return connectViaApp(c, options, minter, events, orgId, install.data);
     }
     const token = TokenConnectSchema.safeParse(raw);
     if (token.success) {
-      return connectViaToken(c, options, actor, orgId, token.data.token);
+      return connectViaToken(c, options, events, actor, orgId, token.data.token);
     }
     // Neither shape matched — report the install-mode issues (the richer schema)
     // so the caller sees what a valid body looks like; the secret never echoes.
@@ -194,6 +198,7 @@ async function connectViaApp(
   c: Context<ActorContextEnv>,
   options: GithubConnectRoutesOptions,
   minter: GithubAppTokenMinter,
+  events: EventStore,
   orgId: string,
   body: z.infer<typeof InstallConnectSchema>,
 ): Promise<Response> {
@@ -225,6 +230,12 @@ async function connectViaApp(
   if (!persisted) {
     return c.json({ error: "org_not_found" }, 404);
   }
+  await emitGithubConfiguredForOrgProjects(options, events, orgId, {
+    mode: "app",
+    credentialKind: "github_app",
+    ref: credentialRef,
+    redacted: true,
+  });
   return c.json(
     {
       ok: true,
@@ -243,6 +254,7 @@ async function connectViaApp(
 async function connectViaToken(
   c: Context<ActorContextEnv>,
   options: GithubConnectRoutesOptions,
+  events: EventStore,
   actor: ActorContext,
   orgId: string,
   token: string,
@@ -260,7 +272,39 @@ async function connectViaToken(
     await options.secrets.delete(ref).catch(() => {});
     return c.json({ error: "org_not_found" }, 404);
   }
+  await emitGithubConfiguredForOrgProjects(options, events, orgId, {
+    mode: "token",
+    credentialKind: "github_token",
+    ref,
+    redacted: true,
+  });
   return c.json({ ok: true, mode: "token", credentialRef: ref, redacted: true }, 201);
+}
+
+async function emitGithubConfiguredForOrgProjects(
+  options: GithubConnectRoutesOptions,
+  events: EventStore,
+  orgId: string,
+  payload: {
+    mode: "app" | "token";
+    credentialKind: "github_app" | "github_token";
+    ref: string;
+    redacted: true;
+  },
+): Promise<void> {
+  const projects = await options.pool.query<{ project_id: string }>(
+    "SELECT project_id FROM projects WHERE org_id = $1",
+    [orgId],
+  );
+  await Promise.all(
+    projects.rows.map((project) =>
+      events.append({
+        projectId: project.project_id,
+        eventType: "credential.github.configured",
+        payload,
+      }),
+    ),
+  );
 }
 
 interface AiProviderStatus {

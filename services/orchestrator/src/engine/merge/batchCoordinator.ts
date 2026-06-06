@@ -12,6 +12,10 @@ import {
   formBatch,
 } from "../contracts/batchMergeCoordinator.js";
 import {
+  MissingGithubCredentialRefError,
+  NoGithubCredentialConfiguredError,
+} from "../credentials/githubTokenResolver.js";
+import {
   type CoordinateResult,
   type MergeCoordinator,
   type MergeDriveOutcome,
@@ -32,33 +36,12 @@ import {
 import { BatchInfraHoldCeiling, holdOnInfra, terminalInfraBlock } from "./batchInfraHoldCeiling.js";
 import { RecoverableDriveHoldCeiling } from "./recoverableDriveHold.js";
 
-/**
- * The bound on in-pass re-checks of the SAME batch after a transient INFRA error (the
- * check could not be RUN). After this many additional attempts the coordinator stops
- * retrying and HOLDS loudly (merge.batch.infra_blocked) — never silently spinning, and
- * never dequeuing a clean PR. Each retry re-checks the full batch (it does NOT shrink).
- */
 const MAX_INFRA_RETRIES = 2;
 /** Backoff (ms) between infra-error re-checks — overridable via the `sleep` seam in tests. */
 const INFRA_RETRY_BACKOFF_MS = [250, 500];
 
-/**
- * Bug B — back off a PENDING batch (no hot loop). When a batch check returns `pending`
- * the coordinator HOLDS, but no `tanren_run` NOTIFY is guaranteed to clear it on its own
- * (a no-checks settle expires on wall time; a registered-CI completion fires a webhook,
- * not necessarily a run NOTIFY). So the pass returns a `retryAfterMs` + the subscriber
- * arms ONE idempotent re-drive timer (the SAME armDelayedReDrive infra), instead of
- * re-checking on every unrelated NOTIFY (the ~2/sec hot loop the live no-CI repo hit).
- * When the verdict carries `settleAfterMs` (the no-checks grace remaining) we wake
- * EXACTLY at expiry; otherwise this default recheck interval applies.
- */
 const PENDING_RECHECK_MS = 15_000;
 
-/**
- * Thrown by the bisect callback when a sub-batch's CI is still pending — bisect
- * cannot give a definitive verdict, so the pass aborts the bisect + HOLDS (it never
- * guesses, which could blame an innocent PR). The next CI-completion re-triggers.
- */
 class BatchCheckStillPendingError extends Error {}
 
 /**
@@ -72,6 +55,7 @@ class BatchCheckInfraError extends Error {
   constructor(
     message: string,
     readonly retriable: boolean,
+    readonly kind?: "missing_required_credential",
   ) {
     super(message);
   }
@@ -104,6 +88,7 @@ export interface BatchMergeEventEmitter {
     attempts: number;
     terminal?: boolean;
     consecutiveHolds?: number;
+    kind?: "missing_required_credential";
   }): Promise<void>;
 }
 
@@ -232,7 +217,7 @@ export class BatchMergeCoordinator implements MergeCoordinator {
       }
       const checked = await this.checkBatchWithInfraRetry(projectId, current, maxBatchSize);
       if (checked.kind === "infra-terminal") {
-        return this.terminalInfraBlock(projectId, current.batch, checked.message, queueDepth);
+        return this.terminalInfraBlock(projectId, current.batch, checked.message, queueDepth, checked.cause);
       }
       if (checked.kind === "infra-exhausted") {
         return this.infraHold(projectId, current.batch, checked.message, queueDepth);
@@ -284,6 +269,9 @@ export class BatchMergeCoordinator implements MergeCoordinator {
         // A sub-batch check could NOT be RUN (a transient infra error) — bisect cannot
         // name a culprit from a check that never ran. HOLD loudly (no PR blamed) via the
         // SAME cross-pass ceiling so a persistent bisect-time infra error also terminates.
+        if (bisect.cause !== undefined) {
+          return this.terminalInfraBlock(projectId, current.batch, bisect.message, queueDepth, bisect.cause);
+        }
         return this.infraHold(projectId, current.batch, bisect.message, queueDepth);
       }
 
@@ -324,7 +312,7 @@ export class BatchMergeCoordinator implements MergeCoordinator {
   ): Promise<
     | { kind: "verdict"; verdict: BatchCheckVerdict }
     | { kind: "infra-exhausted"; message: string }
-    | { kind: "infra-terminal"; message: string }
+    | { kind: "infra-terminal"; message: string; cause?: "missing_required_credential" }
   > {
     let lastMessage = "batch check could not run (infra error)";
     for (let attempt = 0; attempt <= MAX_INFRA_RETRIES; attempt += 1) {
@@ -338,7 +326,7 @@ export class BatchMergeCoordinator implements MergeCoordinator {
       }
       lastMessage = verdict.message;
       // Required config cannot self-heal via timed re-drive.
-      if (!verdict.retriable) return { kind: "infra-terminal", message: lastMessage };
+      if (!verdict.retriable) return { kind: "infra-terminal", message: lastMessage, cause: verdict.kind };
     }
     return { kind: "infra-exhausted", message: lastMessage };
   }
@@ -379,6 +367,7 @@ export class BatchMergeCoordinator implements MergeCoordinator {
         result: "infra-error",
         message: `batch check threw: ${String(error)}`,
         retriable: isRetriableInfraError(error),
+        ...(isMissingGithubCredentialError(error) ? { kind: "missing_required_credential" as const } : {}),
       };
     }
   }
@@ -395,7 +384,11 @@ export class BatchMergeCoordinator implements MergeCoordinator {
   private async bisectBatch(
     projectId: string,
     batch: ReadonlyArray<MergeQueueEntry>,
-  ): Promise<Awaited<ReturnType<typeof bisectCulprit>> | "pending" | { kind: "infra"; message: string }> {
+  ): Promise<
+    | Awaited<ReturnType<typeof bisectCulprit>>
+    | "pending"
+    | { kind: "infra"; message: string; cause?: "missing_required_credential" }
+  > {
     try {
       return await bisectCulprit(batch, async (prefixLength) => {
         const v = await this.checkEntries(projectId, batch.slice(0, prefixLength));
@@ -406,13 +399,17 @@ export class BatchMergeCoordinator implements MergeCoordinator {
           throw new BatchCheckInfraError(
             `sub-batch check could not run (prefix length ${prefixLength}): ${v.message}`,
             v.retriable,
+            v.kind,
           );
         }
         return v.result === "pass" ? "pass" : "fail";
       });
     } catch (error) {
       if (error instanceof BatchCheckStillPendingError) return "pending";
-      if (error instanceof BatchCheckInfraError) return { kind: "infra", message: error.message };
+      if (error instanceof BatchCheckInfraError) {
+        if (error.kind === undefined) return { kind: "infra", message: error.message };
+        return { kind: "infra", message: error.message, cause: error.kind };
+      }
       throw error;
     }
   }
@@ -480,15 +477,22 @@ export class BatchMergeCoordinator implements MergeCoordinator {
     batch: ReadonlyArray<MergeQueueEntry>,
     message: string,
     queueDepth: number,
+    kind?: "missing_required_credential",
   ): Promise<CoordinateResult> {
     this.infraHolds.reset(projectId);
-    return terminalInfraBlock({
+    const input = {
       queue: this.deps.queue,
       events: this.deps.batchEvents,
       projectId,
       batch,
       message,
       queueDepth,
-    });
+    };
+    if (kind === undefined) return terminalInfraBlock(input);
+    return terminalInfraBlock({ ...input, kind });
   }
+}
+
+function isMissingGithubCredentialError(error: unknown): boolean {
+  return error instanceof MissingGithubCredentialRefError || error instanceof NoGithubCredentialConfiguredError;
 }

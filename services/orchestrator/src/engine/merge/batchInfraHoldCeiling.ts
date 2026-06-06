@@ -52,6 +52,7 @@ export async function holdOnInfra(args: {
   batch: ReadonlyArray<MergeQueueEntry>;
   message: string;
   queueDepth: number;
+  kind?: "missing_required_credential";
 }): Promise<CoordinateResult> {
   const { ceiling, queue, events, projectId, batch, message, queueDepth } = args;
   const recorded = ceiling.record(projectId);
@@ -83,6 +84,7 @@ export async function terminalInfraBlock(args: {
   batch: ReadonlyArray<MergeQueueEntry>;
   message: string;
   queueDepth: number;
+  kind?: "missing_required_credential";
 }): Promise<CoordinateResult> {
   await markBatchInfraBlockedAfterEvent({ ...args, attempts: 1, terminal: true, consecutiveHolds: 1 });
   console.error(
@@ -100,15 +102,21 @@ async function markBatchInfraBlockedAfterEvent(input: {
   attempts: number;
   terminal: true;
   consecutiveHolds: number;
+  kind?: "missing_required_credential";
 }): Promise<void> {
-  await input.events.emitInfraBlocked({
+  const event = {
     projectId: input.projectId,
     batch: input.batch,
     message: input.message,
     attempts: input.attempts,
     terminal: input.terminal,
     consecutiveHolds: input.consecutiveHolds,
-  });
+  };
+  if (input.kind === undefined) {
+    await input.events.emitInfraBlocked(event);
+  } else {
+    await input.events.emitInfraBlocked({ ...event, kind: input.kind });
+  }
   for (const entry of input.batch) {
     await input.queue.markDequeued(entry.queueId, "blocked");
   }

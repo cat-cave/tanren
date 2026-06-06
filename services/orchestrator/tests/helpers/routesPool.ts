@@ -269,6 +269,13 @@ export class RoutesPool {
       return single(row === undefined ? undefined : { role: row.role });
     }
     if (trimmed.startsWith("SELECT project_id FROM projects")) {
+      if (sql.includes("WHERE org_id = $1")) {
+        const orgId = String(params[0]);
+        const rows = [...this.projects.values()]
+          .filter((project) => project.org_id === orgId)
+          .map((project) => ({ project_id: project.project_id }));
+        return { rows, rowCount: rows.length };
+      }
       const project = this.projects.get(String(params[0]));
       return single(project === undefined ? undefined : { project_id: project.project_id });
     }

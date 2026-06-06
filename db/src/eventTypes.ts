@@ -29,6 +29,7 @@ export const eventTypeNames = [
   "cost.resolved",
   "cost.unattributed",
   "credential.failed",
+  "credential.github.configured",
   "credential.loaded",
   "credential.requested",
   "credential.scoped_token_minted",

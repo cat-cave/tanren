@@ -124,7 +124,11 @@ function latestRecoverableNativeDequeue(row: QueueRow, events: EventRow[]): Even
 
 function hasSuppressingSignal(row: QueueRow, events: EventRow[], anchor: EventRow): boolean {
   return events.some(
-    (event) => isAfter(event, anchor) && isSuppressingSignal(event) && candidateSignalMatches(row, event, true),
+    (event) =>
+      isAfter(event, anchor) &&
+      isSuppressingSignal(event) &&
+      candidateSignalMatches(row, event, true) &&
+      !isRepairedTerminalCredentialBlock(row, event, events),
   );
 }
 
@@ -154,6 +158,55 @@ function isSuppressingSignal(event: EventRow): boolean {
     "merge.conflict.replan_routed",
     "recovery.replan_queued",
   ].includes(event.eventType);
+}
+
+function isRepairedTerminalCredentialBlock(row: QueueRow, event: EventRow, events: EventRow[]): boolean {
+  if (event.eventType !== "merge.batch.infra_blocked") return false;
+  if (event.payload["terminal"] !== true) return false;
+  if (!isRepairableGithubCredentialBlock(event.payload)) return false;
+  const missingRef = missingGithubCredentialRef(event.payload);
+  return events.some((repair) => {
+    if (!isAfter(repair, event)) return false;
+    if (repair.projectId !== row.projectId || repair.orgId !== row.orgId) return false;
+    if (!isGithubConnectionRepair(repair)) return false;
+    return isGithubAppRepair(repair.payload) || missingRef === null || repairRefs(repair.payload).includes(missingRef);
+  });
+}
+
+function isRepairableGithubCredentialBlock(payload: Record<string, unknown>): boolean {
+  return (
+    ["kind", "cause", "reason"].some((key) =>
+      ["missing_required_credential", "missing_github_credential"].includes(String(payload[key] ?? "")),
+    ) ||
+    String(payload["message"] ?? "").includes("missing GitHub credential ref:") ||
+    String(payload["message"] ?? "").includes("No GitHub credential configured")
+  );
+}
+
+function missingGithubCredentialRef(payload: Record<string, unknown>): string | null {
+  for (const key of ["credentialRef", "missingRef", "requiredCredentialRef"]) {
+    const value = stringValue(payload[key]);
+    if (value !== null) return value;
+  }
+  return /missing GitHub credential ref: ([^\s]+)/u.exec(String(payload["message"] ?? ""))?.[1] ?? null;
+}
+
+function isGithubConnectionRepair(event: EventRow): boolean {
+  if (event.eventType === "integration.provisioned" && event.payload["providerKind"] === "github") return true;
+  if (["org.github.connected", "credential.github.configured"].includes(event.eventType)) return true;
+  return event.payload["provider"] === "github";
+}
+
+function isGithubAppRepair(payload: Record<string, unknown>): boolean {
+  return payload["mode"] === "app" || payload["credentialKind"] === "github_app";
+}
+
+function repairRefs(payload: Record<string, unknown>): string[] {
+  const refs = [stringValue(payload["credentialRef"]), stringValue(payload["ref"])];
+  const secretRefs = Array.isArray(payload["secretRefNames"])
+    ? payload["secretRefNames"].map((value) => stringValue(value))
+    : [];
+  return [...refs, ...secretRefs].filter((ref): ref is string => ref !== null);
 }
 
 function isSpecOnlySignal(eventType: string): boolean {
