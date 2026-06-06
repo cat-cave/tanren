@@ -63,6 +63,16 @@ interface EventRow {
   payload: unknown;
 }
 
+interface AttributedMergeSignal {
+  event: EventRow;
+  specId: string;
+  runId: string | null;
+  runExists: boolean;
+  prUrl: string | null;
+  prNumber: string | null;
+  reason: string | null;
+}
+
 export class ProgressRoutesPool {
   readonly projects = new Map<string, ProjectRow>();
   readonly projectMembers = new Set<string>();
@@ -219,23 +229,15 @@ export class ProgressRoutesPool {
     if (trimmed.startsWith("WITH signal_events AS (")) {
       const projectId = String(params[0]);
       const orgId = String(params[1]);
-      const decided = new Set<string>();
       const blocked = new Set<string>();
-      const events = this.events
+      const signals = this.events
         .filter((e) => e.project_id === projectId && e.org_id === orgId)
         .filter((e) => isMergeCompletionSignal(e))
-        .sort((a, b) => b.ts.getTime() - a.ts.getTime() || b.id - a.id);
-      for (const event of events) {
-        const ids = attributedSpecIds(event, this.runs);
-        if (event.event_type === "merge.completed") {
-          for (const id of ids) decided.add(id);
-          continue;
-        }
-        for (const id of ids) {
-          if (decided.has(id)) continue;
-          decided.add(id);
-          blocked.add(id);
-        }
+        .flatMap((event) => attributedMergeSignals(event, this.runs));
+      for (const signal of signals) {
+        if (!isCompletionBlockingSignal(signal)) continue;
+        if (signals.some((done) => clearsBlockingSignal(done, signal))) continue;
+        blocked.add(signal.specId);
       }
       const rows = [...blocked].sort().map((spec_id) => ({ spec_id }));
       return { rows, rowCount: rows.length };
@@ -261,7 +263,9 @@ function isMergeCompletionSignal(event: EventRow): boolean {
   if (!isNativeQueueOrLegacyPayload(payload)) return false;
   if (event.event_type === "merge.queue.infra_blocked") return true;
   if (event.event_type === "merge.batch.infra_blocked") return payload["terminal"] === true;
-  if (event.event_type === "merge.dequeued") return payload["reason"] === "blocked" || payload["reason"] === "failed";
+  if (event.event_type === "merge.dequeued") {
+    return payload["reason"] === "blocked" || payload["reason"] === "failed" || payload["reason"] === "conflict";
+  }
   return false;
 }
 
@@ -270,30 +274,122 @@ function isNativeQueueOrLegacyPayload(payload: Record<string, unknown>): boolean
   return integration === undefined || integration === "native_queue";
 }
 
-function attributedSpecIds(event: EventRow, runs: ReadonlyArray<RunRow>): string[] {
-  const ids: string[] = [];
+function attributedMergeSignals(event: EventRow, runs: ReadonlyArray<RunRow>): AttributedMergeSignal[] {
+  const out: AttributedMergeSignal[] = [];
   const payload = payloadRecord(event);
-  appendSpecId(ids, payload["specId"]);
-  appendMemberSpecIds(ids, payload["members"]);
-  if (event.event_type !== "merge.batch.infra_blocked" || ids.length === 0) {
-    appendSpecId(ids, event.spec_id);
+  const run = runs.find(
+    (candidate) =>
+      candidate.run_id === event.run_id &&
+      candidate.project_id === event.project_id &&
+      candidate.org_id === event.org_id,
+  );
+  appendPayloadSignal(out, event, payload, run);
+  appendMemberSignals(out, event, payload["members"], run);
+  if (event.spec_id !== null && (event.event_type !== "merge.batch.infra_blocked" || out.length === 0)) {
+    out.push(buildSignal(event, event.spec_id, payload, run, false));
   }
-  if (ids.length === 0) {
-    appendSpecId(ids, runs.find((run) => run.run_id === event.run_id)?.spec_id);
+  if (out.length === 0 && run?.spec_id !== undefined) {
+    out.push(buildSignal(event, run.spec_id, payload, run, true));
   }
-  return [...new Set(ids)];
+  return uniqueSignals(out);
 }
 
-function appendMemberSpecIds(ids: string[], members: unknown): void {
+function appendPayloadSignal(
+  out: AttributedMergeSignal[],
+  event: EventRow,
+  payload: Record<string, unknown>,
+  run: RunRow | undefined,
+): void {
+  const specId = stringValue(payload["specId"]);
+  if (specId !== null) out.push(buildSignal(event, specId, payload, run, false));
+}
+
+function appendMemberSignals(
+  out: AttributedMergeSignal[],
+  event: EventRow,
+  members: unknown,
+  run: RunRow | undefined,
+): void {
   if (!Array.isArray(members)) return;
   for (const member of members) {
     if (member === null || typeof member !== "object") continue;
-    appendSpecId(ids, (member as Record<string, unknown>)["specId"]);
+    const record = member as Record<string, unknown>;
+    const specId = stringValue(record["specId"]);
+    if (specId === null) continue;
+    out.push(buildSignal(event, specId, record, run, false));
   }
 }
 
-function appendSpecId(ids: string[], value: unknown): void {
-  if (typeof value === "string" && value !== "") ids.push(value);
+function buildSignal(
+  event: EventRow,
+  specId: string,
+  source: Record<string, unknown>,
+  run: RunRow | undefined,
+  useRunPrUrl: boolean,
+): AttributedMergeSignal {
+  const prUrl = stringValue(source["prUrl"]) ?? (useRunPrUrl ? (run?.pr_url ?? null) : null);
+  return {
+    event,
+    specId,
+    runId: event.run_id,
+    runExists: run !== undefined,
+    prUrl,
+    prNumber: stringValue(source["prNumber"]) ?? prNumberFromUrl(prUrl),
+    reason: stringValue(payloadRecord(event)["reason"]),
+  };
+}
+
+function uniqueSignals(signals: ReadonlyArray<AttributedMergeSignal>): AttributedMergeSignal[] {
+  const seen = new Set<string>();
+  const out: AttributedMergeSignal[] = [];
+  for (const signal of signals) {
+    const key = [signal.event.id, signal.specId, signal.runId, signal.prUrl, signal.prNumber].join("\0");
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(signal);
+  }
+  return out;
+}
+
+function isCompletionBlockingSignal(signal: AttributedMergeSignal): boolean {
+  if (signal.event.event_type === "merge.queue.infra_blocked") return true;
+  if (signal.event.event_type === "merge.batch.infra_blocked") return true;
+  if (signal.event.event_type !== "merge.dequeued") return false;
+  if (signal.reason === "blocked" || signal.reason === "failed") return true;
+  return signal.reason === "conflict" && hasCandidateIdentity(signal);
+}
+
+function clearsBlockingSignal(done: AttributedMergeSignal, blocked: AttributedMergeSignal): boolean {
+  if (done.event.event_type !== "merge.completed") return false;
+  if (done.specId !== blocked.specId) return false;
+  if (!isAfter(done.event, blocked.event)) return false;
+  return (
+    samePresentValue(done.runId, blocked.runId) ||
+    samePresentValue(done.prUrl, blocked.prUrl) ||
+    (done.prUrl === null && blocked.prUrl === null && samePresentValue(done.prNumber, blocked.prNumber))
+  );
+}
+
+function isAfter(left: EventRow, right: EventRow): boolean {
+  return left.ts.getTime() > right.ts.getTime() || (left.ts.getTime() === right.ts.getTime() && left.id > right.id);
+}
+
+function hasCandidateIdentity(signal: AttributedMergeSignal): boolean {
+  return (signal.runId !== null && signal.runExists) || signal.prUrl !== null || signal.prNumber !== null;
+}
+
+function samePresentValue(left: string | null, right: string | null): boolean {
+  return left !== null && right !== null && left === right;
+}
+
+function prNumberFromUrl(prUrl: string | null): string | null {
+  return prUrl?.match(/\/pull\/([0-9]+)/u)?.[1] ?? null;
+}
+
+function stringValue(value: unknown): string | null {
+  if (typeof value === "string" && value !== "") return value;
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  return null;
 }
 
 function payloadRecord(event: EventRow): Record<string, unknown> {
