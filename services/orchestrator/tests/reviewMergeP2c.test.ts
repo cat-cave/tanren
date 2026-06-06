@@ -83,6 +83,33 @@ describe("P2c-1 speculative-merge-hold (merge stage)", () => {
     });
   });
 
+  it("HOLDS when an ancestor has an unresolved speculative hold even if its spec row says merged", async () => {
+    const pool = new ReviewMergePool("direct_merge");
+    pool.speculativeBase = "tanren/integ/spec_1";
+    pool.specDependsOn = ["spec_a"];
+    pool.mergedAncestors = ["spec_a"];
+    pool.unresolvedSpeculativeHolds = ["spec_a"];
+    const events = new FakeEventStore();
+    const probe = recordingMergeProbe({ merged: true, mergeSha: "x", conflict: false, status: 200, message: "merged" });
+
+    const result = await mergeForRun({
+      pool: pool.asPgPool(),
+      eventStore: events,
+      secrets: new FakeSecretStore(),
+      resolveConflict: noopConflictResolver,
+      vcsProvider: vcsProviderOver(unusedHttp()),
+      runId: "run_1",
+      mergeProbe: probe,
+    });
+
+    expect(result.outcome).toBe("blocked");
+    expect(probe.mergeCalls).toBe(0);
+    expect(events.events.find((e) => e.eventType === "merge.speculative_held")?.payload).toMatchObject({
+      unmergedAncestors: ["spec_a"],
+    });
+    expect(events.events.some((e) => e.eventType === "merge.completed")).toBe(false);
+  });
+
   it("RE-TARGETS to default_branch + merges on real main once ALL ancestors merged, then cleans the integ ref", async () => {
     const pool = new ReviewMergePool("direct_merge");
     // Still flagged speculative (PR is based on the integration ref), but every

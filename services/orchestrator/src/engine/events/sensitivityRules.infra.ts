@@ -223,15 +223,6 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["reason", "public"],
     ["message", "public"],
   ]),
-  ...rulesFor("merge.false_merged.corrected", [
-    ["prUrl", "public"],
-    ["prNumber", "public"],
-    ["integration", "public"],
-    ["specId", "public"],
-    ["queueId", "public"],
-    ["runId", "public"],
-    ["reason", "public"],
-  ]),
   // GitHub-5xx resilience (GAP #2d): the per-PR coordinator's loud infra-halt — PR
   // identity + the halt kind + attempt count + the infra message, all public.
   ...rulesFor("merge.queue.infra_blocked", [

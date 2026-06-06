@@ -92,7 +92,6 @@ import {
   MergeBatchInfraBlockedPayload,
   MergeBatchPassedPayload,
   MergeDequeuedPayload,
-  MergeFalseMergedCorrectedPayload,
   MergeQueueAdvancedPayload,
   MergeQueueInfraBlockedPayload,
 } from "./schemas/mergeQueue.js";
@@ -305,7 +304,6 @@ export const EventRegistry = {
   // blocked / failed) records merge.dequeued. Serialized: one merge at a time.
   "merge.queue.advanced": MergeQueueAdvancedPayload,
   "merge.dequeued": MergeDequeuedPayload,
-  "merge.false_merged.corrected": MergeFalseMergedCorrectedPayload,
   // GitHub-5xx resilience (GAP #2d): a transient infra error blocked the per-PR merge
   // DRIVE and the hold can no longer recover on its own — the entry exhausted its
   // re-drive ceiling, or the merge state is unconfirmable (auto-retry could double-

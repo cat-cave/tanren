@@ -156,6 +156,7 @@ export class ReviewMergePool {
   speculativeBase: string | null = null;
   specDependsOn: string[] = [];
   mergedAncestors: string[] = [];
+  unresolvedSpeculativeHolds: string[] = [];
   /**
    * GAP #3: the configurable platform / known-automation committer logins. Set by a test
    * to prove the autonomous-tier auto-approve; absent ⇒ the config omits the key.
@@ -175,8 +176,10 @@ export class ReviewMergePool {
     if (sql.startsWith("SELECT depends_on FROM specs")) {
       return { rows: [{ depends_on: this.specDependsOn }], rowCount: 1 };
     }
-    if (sql.includes("SELECT spec_id FROM specs") && sql.includes("status = 'merged'")) {
-      return { rows: this.mergedAncestors.map((spec_id) => ({ spec_id })), rowCount: this.mergedAncestors.length };
+    if (sql.includes("FROM specs") && sql.includes("status = 'merged'")) {
+      const held = new Set(sql.includes("merge.speculative_held") ? this.unresolvedSpeculativeHolds : []);
+      const merged = this.mergedAncestors.filter((spec_id) => !held.has(spec_id));
+      return { rows: merged.map((spec_id) => ({ spec_id })), rowCount: merged.length };
     }
     if (sql.includes("FROM runs r") && sql.includes("default_branch")) {
       const run = this.runs.find((r) => r.run_id === params[0]);

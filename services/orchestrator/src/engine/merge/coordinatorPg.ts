@@ -216,9 +216,31 @@ export class PgMergeQueueModel implements MergeQueueModel {
       const mergingInFlight = Number(mergingRow?.count ?? "0") > 0;
       const serializedRetryAfterMs = parseSerializedRetryAfterMs(mergingRow?.retry_after_ms);
 
-      // The specs that have GENUINELY merged — satisfied ancestors.
+      // The specs that have GENUINELY merged — satisfied ancestors. An unresolved
+      // speculative hold is not merged for dependency eligibility, even if a stale
+      // status row says otherwise.
       const mergedRows = await client.query<{ spec_id: string }>(
-        "SELECT spec_id FROM specs WHERE project_id = $1 AND status = 'merged'",
+        `SELECT s.spec_id
+           FROM specs s
+          WHERE s.project_id = $1
+            AND s.status = 'merged'
+            AND NOT EXISTS (
+              SELECT 1
+                FROM events held
+               WHERE held.project_id = s.project_id
+                 AND held.org_id = s.org_id
+                 AND held.spec_id = s.spec_id
+                 AND held.event_type = 'merge.speculative_held'
+                 AND NOT EXISTS (
+                   SELECT 1
+                     FROM events done
+                    WHERE done.project_id = held.project_id
+                      AND done.org_id = held.org_id
+                      AND done.spec_id = held.spec_id
+                      AND done.event_type = 'merge.completed'
+                      AND (done.ts > held.ts OR (done.ts = held.ts AND done.id > held.id))
+                 )
+            )`,
         [projectId],
       );
       const mergedSpecIds = new Set(mergedRows.rows.map((r) => r.spec_id));
