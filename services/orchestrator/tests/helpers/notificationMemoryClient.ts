@@ -12,7 +12,6 @@ export class NotificationMemoryClient {
   readonly targets: Map<string, Record<string, unknown>> = new Map();
   readonly routes: Map<string, Record<string, unknown>> = new Map();
   readonly dispatches: Array<Record<string, unknown>> = [];
-  currentOrgId: string | null = null;
   // Monday
   now: Date = new Date("2026-01-05T12:00:00Z");
 
@@ -64,7 +63,7 @@ export class NotificationMemoryClient {
         attempts: params[3],
         enqueued_at: this.now,
         sent_at: params[4],
-        tenant_id: this.currentOrgId,
+        tenant_id: params[5],
       });
       return { rowCount: 1, rows: [] };
     }
@@ -116,7 +115,7 @@ export class NotificationMemoryClient {
     for (const dispatch of this.dispatches) {
       const payload = dispatch.payload as Record<string, unknown>;
       const target = this.targets.get(String(payload.targetId));
-      const orgMatches = dispatch.tenant_id === orgId || target?.org_id === orgId;
+      const orgMatches = dispatch.tenant_id === orgId || (dispatch.tenant_id === null && target?.org_id === orgId);
       if (!orgMatches) continue;
       const hasStatusFilter =
         filterValues.includes("sent") ||
@@ -141,7 +140,6 @@ export class NotificationMemoryClient {
         reason: payload.reason ?? null,
         layering: payload.layering ?? null,
         target_channel_kind: target?.channel_kind ?? null,
-        target_destination: target?.destination ?? null,
         target_label: target?.label ?? null,
       });
     }

@@ -159,7 +159,6 @@ export const NotificationDeliveryRow = z.object({
     .object({
       id: z.string().min(1),
       channelKind: ChannelKind,
-      destination: z.string().min(1),
       label: z.string().min(1),
     })
     .nullable(),

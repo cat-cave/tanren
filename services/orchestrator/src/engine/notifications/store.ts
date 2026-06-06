@@ -59,7 +59,6 @@ interface RawDeliveryRow {
   reason: unknown;
   layering: unknown;
   target_channel_kind: unknown;
-  target_destination: unknown;
   target_label: unknown;
 }
 
@@ -122,7 +121,6 @@ function decodeDeliveryRow(raw: RawDeliveryRow): NotificationDeliveryRow {
         : {
             id: targetId,
             channelKind: raw.target_channel_kind,
-            destination: raw.target_destination,
             label: raw.target_label,
           },
   });
@@ -221,6 +219,7 @@ function qualifiedRouteColumns(): string {
 export type DispatchStatus = "sent" | "failed" | "stubbed" | "skipped";
 
 export interface DispatchLogInput {
+  orgId: string;
   channel: string;
   payload: unknown;
   status: DispatchStatus;
@@ -237,16 +236,19 @@ export interface NotificationDeliveryListFilters {
 
 export const NotificationDispatchLog = {
   async record(client: QueryClient, input: DispatchLogInput): Promise<void> {
+    if (input.orgId.length === 0) {
+      throw new Error("notification dispatch log requires an orgId");
+    }
     await client.query(
       `INSERT INTO notifications (channel, payload, status, attempts, sent_at, tenant_id)
-       VALUES ($1, $2::jsonb, $3, $4, $5, NULLIF(current_setting('app.current_org_id', true), ''))`,
-      [input.channel, JSON.stringify(input.payload), input.status, input.attempts, input.sentAt],
+       VALUES ($1, $2::jsonb, $3, $4, $5, $6)`,
+      [input.channel, JSON.stringify(input.payload), input.status, input.attempts, input.sentAt, input.orgId],
     );
   },
 
   async listForOrg(client: QueryClient, filters: NotificationDeliveryListFilters): Promise<NotificationDeliveryRow[]> {
     const params: unknown[] = [filters.orgId];
-    const where = ["(n.tenant_id = $1 OR t.id IS NOT NULL)"];
+    const where = ["(n.tenant_id = $1 OR (n.tenant_id IS NULL AND t.id IS NOT NULL))"];
 
     if (filters.eventName !== undefined) {
       params.push(filters.eventName);
@@ -274,7 +276,6 @@ export const NotificationDispatchLog = {
           n.payload->>'reason' AS reason,
           n.payload->>'layering' AS layering,
           t.channel_kind AS target_channel_kind,
-          t.destination AS target_destination,
           t.label AS target_label
          FROM notifications n
          LEFT JOIN notification_targets t

@@ -156,6 +156,7 @@ export class NotificationDispatcher {
       try {
         if (match.target.weekendMute && weekend) {
           await this.recordDispatch({
+            orgId: context.orgId,
             channel: match.target.channelKind,
             payload: {
               eventName: event.eventType,
@@ -178,6 +179,7 @@ export class NotificationDispatcher {
         // with one entry per ChannelKind, but registries can drift.
         if (channel === undefined) {
           await this.recordDispatch({
+            orgId: context.orgId,
             channel: match.target.channelKind,
             payload: {
               eventName: event.eventType,
@@ -193,6 +195,7 @@ export class NotificationDispatcher {
 
         const status = await this.invokeChannel(channel, match.target, payload);
         await this.recordDispatch({
+          orgId: context.orgId,
           channel: match.target.channelKind,
           payload: {
             eventName: event.eventType,
@@ -245,7 +248,11 @@ export class NotificationDispatcher {
     }
 
     const route = this.defaultRoute;
-    const target = this.buildDefaultTarget(route, context.orgId ?? "");
+    if (context.orgId === null) {
+      throw new Error("notification default-route dispatch requires an org id");
+    }
+    const orgId = context.orgId;
+    const target = this.buildDefaultTarget(route, orgId);
     const channel = this.channels[route.channelKind];
     if (channel === undefined) {
       // The default route names a kind the registry has no adapter for. Loud,
@@ -261,6 +268,7 @@ export class NotificationDispatcher {
       const payload = this.buildPayload(event, context, severity);
       const status = await this.invokeChannel(channel, target, payload);
       await this.recordDispatch({
+        orgId,
         channel: route.channelKind,
         payload: {
           eventName: event.eventType,

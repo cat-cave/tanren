@@ -164,30 +164,70 @@ describe("notifications routes (P2B-0002 over P2A-0017)", () => {
           title: "Other run failed",
         },
       },
+      {
+        id: 3,
+        tenant_id: "org_other",
+        channel: "ntfy",
+        status: "sent",
+        attempts: 1,
+        enqueued_at: pool.now,
+        sent_at: pool.now,
+        payload: {
+          eventName: "run.failed",
+          targetId: "notif_target_acme",
+          severity: "fail",
+          title: "Mismatched tenant must stay hidden",
+        },
+      },
+      {
+        id: 4,
+        tenant_id: null,
+        channel: "ntfy",
+        status: "sent",
+        attempts: 1,
+        enqueued_at: pool.now,
+        sent_at: pool.now,
+        payload: {
+          eventName: "run.failed",
+          targetId: "notif_target_acme",
+          severity: "fail",
+          title: "Legacy unstamped run failed",
+        },
+      },
     );
 
     const res = await app.request("/orgs/org_acme/notifications/deliveries?eventName=run.failed&status=sent");
     expect(res.status).toBe(200);
     const body = (await res.json()) as {
       deliveries: Array<{
+        id: number;
         eventName: string;
-        target: { label: string; destination: string };
+        target: { label: string; channelKind: string; destination?: string };
         title: string;
         token?: string;
         payload?: unknown;
       }>;
     };
-    expect(body.deliveries).toHaveLength(1);
+    expect(body.deliveries.map((delivery) => delivery.id)).toEqual([4, 1]);
     expect(body.deliveries[0]).toMatchObject({
       eventName: "run.failed",
       target: {
         label: "acme alerts",
-        destination: "https://ntfy.sh/acme",
+        channelKind: "ntfy",
+      },
+      title: "Legacy unstamped run failed",
+    });
+    expect(body.deliveries[1]).toMatchObject({
+      eventName: "run.failed",
+      target: {
+        label: "acme alerts",
+        channelKind: "ntfy",
       },
       title: "Run failed",
     });
-    expect(body.deliveries[0]?.token).toBeUndefined();
-    expect(body.deliveries[0]?.payload).toBeUndefined();
+    expect(body.deliveries[1]?.target.destination).toBeUndefined();
+    expect(body.deliveries[1]?.token).toBeUndefined();
+    expect(body.deliveries[1]?.payload).toBeUndefined();
   });
 
   it("rejects invalid delivery status filters", async () => {
