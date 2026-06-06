@@ -10,7 +10,8 @@
 // starts; it is cross-org (system-scoped) and tolerant of a per-job failure.
 
 import type pg from "pg";
-import { runWithSystemScope } from "@tanren/db";
+import { runWithJobOrgId, runWithSystemScope } from "@tanren/db";
+import { orgScopingPool } from "../../data/orgScopedDb.js";
 import { AuditsStore } from "./store.js";
 import { runAuditJob } from "./scheduler.js";
 import type { AuditCadence, AuditJob, AuditPassRunner } from "./types.js";
@@ -100,17 +101,19 @@ export class AuditSchedulerLoop {
       const ran: AuditJob[] = [];
       for (const job of jobs) {
         try {
-          const result = await runAuditJob(
-            {
-              pool: this.deps.pool,
-              passRunner: this.deps.passRunner,
-              answerer: this.deps.answererFactory({
-                orgId: job.orgId,
-                ...(job.projectId === null ? {} : { projectId: job.projectId }),
-              }),
-              autoRoute: this.deps.autoRoute,
-            },
-            job,
+          const result = await runWithJobOrgId(job.orgId, () =>
+            runAuditJob(
+              {
+                pool: orgScopingPool(this.deps.pool),
+                passRunner: this.deps.passRunner,
+                answerer: this.deps.answererFactory({
+                  orgId: job.orgId,
+                  ...(job.projectId === null ? {} : { projectId: job.projectId }),
+                }),
+                autoRoute: this.deps.autoRoute,
+              },
+              job,
+            ),
           );
           ran.push(result.job);
         } catch (error) {
