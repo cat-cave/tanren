@@ -88,7 +88,7 @@ export interface BatchMergeEventEmitter {
     attempts: number;
     terminal?: boolean;
     consecutiveHolds?: number;
-    kind?: "missing_required_credential";
+    kind?: "missing_required_credential" | "ambiguous_merge_state";
   }): Promise<void>;
 }
 
@@ -245,7 +245,7 @@ export class BatchMergeCoordinator implements MergeCoordinator {
         const result = await driveBaseConflict(this.deps, projectId, current.batch, verdict, queueDepth);
         if (!("projectId" in result)) {
           if (result.kind === "infra_terminal") {
-            return this.terminalInfraBlock(projectId, [result.entry], result.message, queueDepth);
+            return this.terminalInfraBlock(projectId, [result.entry], result.message, queueDepth, result.terminalKind);
           }
           return this.infraHold(projectId, current.batch, result.message, queueDepth);
         }
@@ -435,7 +435,7 @@ export class BatchMergeCoordinator implements MergeCoordinator {
         return this.infraHold(projectId, batch, outcome.message, queueDepth);
       }
       if (outcome.kind === "infra_terminal") {
-        return this.terminalInfraBlock(projectId, [outcome.entry], outcome.message, queueDepth);
+        return this.terminalInfraBlock(projectId, [outcome.entry], outcome.message, queueDepth, outcome.terminalKind);
       }
       if (outcome.kind === "merged") {
         this.deps.recoverableDriveHolds?.reset(entry.queueId);
@@ -477,7 +477,7 @@ export class BatchMergeCoordinator implements MergeCoordinator {
     batch: ReadonlyArray<MergeQueueEntry>,
     message: string,
     queueDepth: number,
-    kind?: "missing_required_credential",
+    kind?: "missing_required_credential" | "ambiguous_merge_state",
   ): Promise<CoordinateResult> {
     this.infraHolds.reset(projectId);
     const input = {

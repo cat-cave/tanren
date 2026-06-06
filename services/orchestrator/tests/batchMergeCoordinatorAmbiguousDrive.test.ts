@@ -47,7 +47,13 @@ describe("BatchMergeCoordinator — ambiguous drive throw", () => {
     expect(drives).toBe(1);
     expect(h.events.events.some((e) => e.type === "merge.dequeued")).toBe(false);
     expect(h.batchEvents.events).toContainEqual(
-      expect.objectContaining({ type: "infra_blocked", specIds: ["spec_a"], terminal: true, consecutiveHolds: 1 }),
+      expect.objectContaining({
+        type: "infra_blocked",
+        specIds: ["spec_a"],
+        terminal: true,
+        consecutiveHolds: 1,
+        kind: "ambiguous_merge_state",
+      }),
     );
   });
 
@@ -72,7 +78,13 @@ describe("BatchMergeCoordinator — ambiguous drive throw", () => {
     expect(drives).toEqual(["run_a", "run_b"]);
     expect(h.events.events.some((e) => e.type === "merge.dequeued")).toBe(false);
     expect(h.batchEvents.events).toContainEqual(
-      expect.objectContaining({ type: "infra_blocked", specIds: ["spec_b"], terminal: true, consecutiveHolds: 1 }),
+      expect.objectContaining({
+        type: "infra_blocked",
+        specIds: ["spec_b"],
+        terminal: true,
+        consecutiveHolds: 1,
+        kind: "ambiguous_merge_state",
+      }),
     );
   });
 
@@ -96,7 +108,13 @@ describe("BatchMergeCoordinator — ambiguous drive throw", () => {
     expect(drives).toBe(1);
     expect(h.events.events.some((e) => e.type === "merge.dequeued")).toBe(false);
     expect(h.batchEvents.events).toContainEqual(
-      expect.objectContaining({ type: "infra_blocked", specIds: ["spec_b"], terminal: true, consecutiveHolds: 1 }),
+      expect.objectContaining({
+        type: "infra_blocked",
+        specIds: ["spec_b"],
+        terminal: true,
+        consecutiveHolds: 1,
+        kind: "ambiguous_merge_state",
+      }),
     );
   });
 

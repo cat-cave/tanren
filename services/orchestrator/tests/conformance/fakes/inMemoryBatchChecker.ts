@@ -135,7 +135,7 @@ export class RecordingBatchMergeEventEmitter implements BatchMergeEventEmitter {
     attempts?: number;
     terminal?: boolean;
     consecutiveHolds?: number;
-    kind?: "missing_required_credential";
+    kind?: "missing_required_credential" | "ambiguous_merge_state";
   }> = [];
 
   // eslint-disable-next-line @typescript-eslint/require-await
@@ -171,7 +171,7 @@ export class RecordingBatchMergeEventEmitter implements BatchMergeEventEmitter {
     attempts: number;
     terminal?: boolean;
     consecutiveHolds?: number;
-    kind?: "missing_required_credential";
+    kind?: "missing_required_credential" | "ambiguous_merge_state";
   }): Promise<void> {
     this.events.push({
       type: "infra_blocked",

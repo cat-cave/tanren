@@ -117,7 +117,7 @@ export class PgBatchMergeEventEmitter implements BatchMergeEventEmitter {
     attempts: number;
     terminal?: boolean;
     consecutiveHolds?: number;
-    kind?: "missing_required_credential";
+    kind?: "missing_required_credential" | "ambiguous_merge_state";
   }): Promise<void> {
     const head = input.batch[0];
     await this.withScopedStore(input.projectId, (store) =>

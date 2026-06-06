@@ -9,6 +9,32 @@ const SPEC = "spec_apex";
 const PR_URL = "https://github.com/acme/apex/pull/15";
 const CODEX_REF = "credential/codex/org/org_acme/default";
 
+function seedBlockedDequeued(pool: QueueRecoveryPool, queueId: string, emitDequeued = true): void {
+  pool.seedProject(PROJECT, ORG);
+  pool.seedQueue({
+    queueId,
+    runId: RUN,
+    specId: SPEC,
+    projectId: PROJECT,
+    orgId: ORG,
+    prUrl: PR_URL,
+    prNumber: "15",
+    status: "dequeued",
+    dequeueReason: "blocked",
+    settledAt: new Date("2026-05-01T00:00:00.000Z"),
+  });
+  if (!emitDequeued) return;
+  pool.seedEvent({
+    projectId: PROJECT,
+    orgId: ORG,
+    runId: RUN,
+    specId: SPEC,
+    eventType: "merge.dequeued",
+    ts: new Date("2026-05-01T00:00:00.000Z"),
+    payload: { integration: "native_queue", reason: "blocked", prUrl: PR_URL, prNumber: 15 },
+  });
+}
+
 describe("PgMergeQueueModel.recoverDequeuedCandidates", () => {
   it("revives a recoverable dequeued native-queue row with PR facts and no later terminal candidate event", async () => {
     const pool = new QueueRecoveryPool();
@@ -272,30 +298,9 @@ describe("PgMergeQueueModel.recoverDequeuedCandidates", () => {
     expect(pool.queue[0]?.status).toBe("dequeued");
   });
 
-  it("does not revive after a terminal batch infra halt", async () => {
+  it("revives a legacy terminal retriable batch infra halt so deployed fixes can re-drive it", async () => {
     const pool = new QueueRecoveryPool();
-    pool.seedProject(PROJECT, ORG);
-    pool.seedQueue({
-      queueId: "mq_batch_terminal",
-      runId: RUN,
-      specId: SPEC,
-      projectId: PROJECT,
-      orgId: ORG,
-      prUrl: PR_URL,
-      prNumber: "15",
-      status: "dequeued",
-      dequeueReason: "blocked",
-      settledAt: new Date("2026-05-01T00:00:00.000Z"),
-    });
-    pool.seedEvent({
-      projectId: PROJECT,
-      orgId: ORG,
-      runId: RUN,
-      specId: SPEC,
-      eventType: "merge.dequeued",
-      ts: new Date("2026-05-01T00:00:00.000Z"),
-      payload: { integration: "native_queue", reason: "blocked", prUrl: PR_URL, prNumber: 15 },
-    });
+    seedBlockedDequeued(pool, "mq_batch_terminal", false);
     pool.seedEvent({
       projectId: PROJECT,
       orgId: ORG,
@@ -304,6 +309,32 @@ describe("PgMergeQueueModel.recoverDequeuedCandidates", () => {
       eventType: "merge.batch.infra_blocked",
       ts: new Date("2026-05-01T00:00:01.000Z"),
       payload: { integration: "native_queue", terminal: true, members: [{ specId: SPEC, prNumber: 15 }] },
+    });
+
+    const recovered = await new PgMergeQueueModel(pool.asPgPool()).recoverDequeuedCandidates(PROJECT);
+
+    expect(recovered).toBe(1);
+    expect(pool.queue[0]?.status).toBe("queued");
+    expect(pool.queue[0]?.dequeueReason).toBe(null);
+  });
+
+  it("does not revive an ambiguous terminal batch infra halt that could double-merge", async () => {
+    const pool = new QueueRecoveryPool();
+    seedBlockedDequeued(pool, "mq_batch_ambiguous_terminal", false);
+    pool.seedEvent({
+      projectId: PROJECT,
+      orgId: ORG,
+      runId: RUN,
+      specId: SPEC,
+      eventType: "merge.batch.infra_blocked",
+      ts: new Date("2026-05-01T00:00:01.000Z"),
+      payload: {
+        integration: "native_queue",
+        terminal: true,
+        kind: "ambiguous_merge_state",
+        message: "merge drive state ambiguous; auto-retry could double-merge",
+        members: [{ specId: SPEC, prNumber: 15 }],
+      },
     });
 
     const recovered = await new PgMergeQueueModel(pool.asPgPool()).recoverDequeuedCandidates(PROJECT);

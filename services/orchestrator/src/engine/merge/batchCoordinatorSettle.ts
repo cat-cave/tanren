@@ -36,7 +36,7 @@ export const BATCH_DRIVE_INFRA_RETRY_AFTER_MS = 3000;
 
 export type BatchDriveInfraHold =
   | { kind: "infra_hold"; message: string; retryAfterMs: number }
-  | { kind: "infra_terminal"; message: string; entry: MergeQueueEntry };
+  | { kind: "infra_terminal"; message: string; entry: MergeQueueEntry; terminalKind: "ambiguous_merge_state" };
 
 /** The slice of the batch coordinator's deps the settle mapping needs. */
 export interface BatchSettleDeps {
@@ -63,6 +63,7 @@ export async function holdOnRetriableDriveThrow(
       kind: "infra_terminal",
       message: `merge drive state ambiguous; auto-retry could double-merge: ${String(error)}`,
       entry,
+      terminalKind: "ambiguous_merge_state",
     };
   }
   if (!isRetriableInfraError(error)) return undefined;

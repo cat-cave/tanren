@@ -342,14 +342,13 @@ export interface CoordinateResult {
    *   - infra_error — the batch check could not be RUN (a transient/transport infra
    *     error); the coordinator bounded-retried then HELD loudly (no PR dequeued). The
    *     entries stay queued; pair with `retryAfterMs` so the subscriber re-drives.
+   *     After the batch infra alert threshold, the event may be terminal/loud, but the
+   *     coordinate result remains retryable so autonomous recovery continues.
    *   - merge_retry — a recoverable blocked merge-drive outcome; the same
    *     candidate stayed queued and will be re-driven after backoff.
-   *   - infra_blocked — GAP #1 (runaway guard): a TERMINAL infra halt. The per-project
-   *     CROSS-PASS consecutive-infra-hold CEILING fired (a persistent outage / a
-   *     permanent error mis-routed to the hold): the coordinator emitted a loud terminal
-   *     `merge.batch.infra_blocked` and returns NO `retryAfterMs`, so the subscriber arms
-   *     NO further timer. No PR is dequeued (the entries stay queued for an operator); the
-   *     loop simply STOPS re-driving. Mirrors the per-PR coordinator's ceiling halt.
+   *   - infra_blocked — a non-retryable terminal infra halt where autonomous re-drive
+   *     would be unsafe or impossible, such as an ambiguous merge state that could
+   *     double-merge or a missing required credential waiting on a repair event.
    */
   holdReason?: "serialized" | "empty" | "all_blocked" | "infra_error" | "merge_retry" | "infra_blocked";
   /**

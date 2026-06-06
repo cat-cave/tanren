@@ -84,7 +84,7 @@ export class QueueRecoveryPool {
       .filter((row) => row.dequeueReason === "blocked")
       .filter((row) => row.prUrl !== null && row.prUrl !== "" && row.prNumber !== null)
       .filter((row) => !this.queue.some((active) => active !== row && active.runId === row.runId && isActive(active)))
-      .map((row) => ({ row, anchor: latestRecoverableNativeDequeue(row, this.events) }))
+      .map((row) => ({ row, anchor: latestRecoverableAnchor(row, this.events) }))
       .filter((candidate): candidate is { row: QueueRow; anchor: EventRow } => candidate.anchor !== undefined)
       .filter((candidate) => !hasSuppressingSignal(candidate.row, this.events, candidate.anchor))
       .map((row) => ({
@@ -110,16 +110,26 @@ export class QueueRecoveryPool {
   }
 }
 
-function latestRecoverableNativeDequeue(row: QueueRow, events: EventRow[]): EventRow | undefined {
+function latestRecoverableAnchor(row: QueueRow, events: EventRow[]): EventRow | undefined {
   return events
-    .filter(
-      (event) =>
-        event.eventType === "merge.dequeued" &&
-        event.payload["integration"] === "native_queue" &&
-        event.payload["reason"] === "blocked" &&
-        candidateSignalMatches(row, event, false),
-    )
+    .filter((event) => isRecoverableAnchor(event) && candidateSignalMatches(row, event, false))
     .sort(compareEventsDesc)[0];
+}
+
+function isRecoverableAnchor(event: EventRow): boolean {
+  if (
+    event.eventType === "merge.dequeued" &&
+    event.payload["integration"] === "native_queue" &&
+    event.payload["reason"] === "blocked"
+  ) {
+    return true;
+  }
+  return (
+    event.eventType === "merge.batch.infra_blocked" &&
+    event.payload["terminal"] === true &&
+    !isAmbiguousBatchBlock(event.payload) &&
+    !isRepairableGithubCredentialBlock(event.payload)
+  );
 }
 
 function hasSuppressingSignal(row: QueueRow, events: EventRow[], anchor: EventRow): boolean {
@@ -148,7 +158,9 @@ function candidateSignalMatches(row: QueueRow, event: EventRow, includeSpecOnlyS
 }
 
 function isSuppressingSignal(event: EventRow): boolean {
-  if (event.eventType === "merge.batch.infra_blocked") return event.payload["terminal"] === true;
+  if (event.eventType === "merge.batch.infra_blocked") {
+    return event.payload["terminal"] === true && isNonRecoverableTerminalBatchBlock(event.payload);
+  }
   return [
     "merge.completed",
     "merge.queue.infra_blocked",
@@ -158,6 +170,18 @@ function isSuppressingSignal(event: EventRow): boolean {
     "merge.conflict.replan_routed",
     "recovery.replan_queued",
   ].includes(event.eventType);
+}
+
+function isNonRecoverableTerminalBatchBlock(payload: Record<string, unknown>): boolean {
+  return isAmbiguousBatchBlock(payload) || isRepairableGithubCredentialBlock(payload);
+}
+
+function isAmbiguousBatchBlock(payload: Record<string, unknown>): boolean {
+  return (
+    payload["kind"] === "ambiguous_merge_state" ||
+    String(payload["message"] ?? "").includes("ambiguous") ||
+    String(payload["message"] ?? "").includes("double-merge")
+  );
 }
 
 function isRepairedTerminalCredentialBlock(row: QueueRow, event: EventRow, events: EventRow[]): boolean {
