@@ -9,6 +9,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { migrate, resetSystemPool, runWithOrgScope, setSystemPool } from "@tanren/db";
 import { PgEventStore } from "../src/engine/eventStore.js";
 import { PgMergeQueueModel } from "../src/engine/merge/coordinatorPg.js";
+import { MERGE_CLAIM_LEASE_MS } from "../src/engine/merge/mergeClaimLease.js";
 
 const enabled = process.env["TANREN_RLS_DB_TEST"] === "1";
 const describeDb = enabled ? describe : describe.skip;
@@ -135,6 +136,73 @@ describeDb("merge queue dequeued recovery under data-plane RLS (real PG)", () =>
         client.query("SELECT count(*)::int AS n FROM events WHERE project_id = $1", [PROJECT]),
       ),
     ).resolves.toMatchObject({ rows: [{ n: 0 }] });
+  });
+
+  it("reports and recovers only stale pg merge claims", async () => {
+    const claims = [
+      { suffix: "fresh", queueId: "mq_pg_lease_fresh", claimSql: "now()" },
+      {
+        suffix: "stale",
+        queueId: "mq_pg_lease_stale",
+        claimSql: `now() - (${MERGE_CLAIM_LEASE_MS + 1}::bigint * interval '1 millisecond')`,
+      },
+      { suffix: "null", queueId: "mq_pg_lease_null", claimSql: "NULL" },
+    ];
+
+    for (const claim of claims) {
+      await ownerPool.query(
+        `INSERT INTO specs (spec_id, project_id, org_id, title, description, status)
+         VALUES ($1, $2, $3, $4, 'pg lease recovery', 'in_flight')`,
+        [`spec_pg_lease_${claim.suffix}`, PROJECT, ORG, `pg lease ${claim.suffix}`],
+      );
+      await ownerPool.query(
+        `INSERT INTO runs (run_id, spec_id, project_id, org_id, trigger, branch, status)
+         VALUES ($1, $2, $3, $4, 'ci', 'main', 'completed')`,
+        [`run_pg_lease_${claim.suffix}`, `spec_pg_lease_${claim.suffix}`, PROJECT, ORG],
+      );
+      await ownerPool.query(
+        `INSERT INTO merge_queue
+           (queue_id, run_id, spec_id, project_id, org_id, status, pr_url, pr_number, claimed_at)
+         VALUES ($1, $2, $3, $4, $5, 'merging', $6, $7, ${claim.claimSql})`,
+        [
+          claim.queueId,
+          `run_pg_lease_${claim.suffix}`,
+          `spec_pg_lease_${claim.suffix}`,
+          PROJECT,
+          ORG,
+          `${PR_URL}-${claim.suffix}`,
+          `15${claim.suffix.length}`,
+        ],
+      );
+    }
+
+    const queue = new PgMergeQueueModel(dataPlanePool);
+    const snapshot = await queue.loadSnapshot(PROJECT);
+    expect(snapshot.mergingInFlight).toBe(true);
+    expect(snapshot.serializedRetryAfterMs).toBeDefined();
+    expect(snapshot.serializedRetryAfterMs).toBeGreaterThanOrEqual(0);
+    expect(snapshot.serializedRetryAfterMs).toBeLessThanOrEqual(MERGE_CLAIM_LEASE_MS);
+
+    const recovered = await queue.recoverStaleClaims(PROJECT);
+    expect(recovered).toBe(2);
+
+    const rows = await ownerPool.query<{
+      queue_id: string;
+      status: string;
+      claimed_at: Date | null;
+    }>(
+      `SELECT queue_id, status, claimed_at
+         FROM merge_queue
+        WHERE queue_id = ANY($1::text[])
+        ORDER BY queue_id`,
+      [claims.map((claim) => claim.queueId)],
+    );
+    expect(rows.rows).toEqual([
+      expect.objectContaining({ queue_id: "mq_pg_lease_fresh", status: "merging" }),
+      { queue_id: "mq_pg_lease_null", status: "queued", claimed_at: null },
+      { queue_id: "mq_pg_lease_stale", status: "queued", claimed_at: null },
+    ]);
+    expect(rows.rows[0]?.claimed_at).toBeInstanceOf(Date);
   });
 
   it("recovers a legacy dequeued row from the worker data-plane pool", async () => {
