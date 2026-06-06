@@ -222,11 +222,10 @@ async function fetchCompletionBlockingSpecIds(
                  (done.run_id IS NOT NULL AND b.run_id IS NOT NULL AND done.run_id = b.run_id)
                  OR (done.pr_url IS NOT NULL AND b.pr_url IS NOT NULL AND done.pr_url = b.pr_url)
                  OR (
-                   done.pr_url IS NULL
-                   AND b.pr_url IS NULL
-                   AND done.pr_number IS NOT NULL
+                   done.pr_number IS NOT NULL
                    AND b.pr_number IS NOT NULL
                    AND done.pr_number = b.pr_number
+                   AND (done.pr_url IS NULL OR b.pr_url IS NULL)
                  )
                )
           )
