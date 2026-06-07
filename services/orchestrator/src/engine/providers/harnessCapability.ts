@@ -16,6 +16,8 @@
 // pi, and reasonix are already wired writer-only; agy is deferred — its headless
 // `-p` mode is broken in non-TTY and it has no usable structured output.)
 
+import type { CredentialType } from "../credentials/credentialType.js";
+
 // The protocol version this capability model targets. Bumped only on a
 // breaking change to the harness invocation/result contract (see
 // docs/architecture/harness-protocol.md §Versioning).
@@ -41,6 +43,14 @@ export interface HarnessCapability {
   // Whether the harness supports the protocol's structured-output channel
   // (schema-constrained JSON). True ⟺ the harness is Answerer-eligible.
   readonly structuredOutput: boolean;
+  // The credential-types this harness's materializer can actually consume —
+  // the third axis (credentialType.ts) the credential model must keep separate
+  // from provider and role. This is what makes a routing entry's (cli, authRef)
+  // pair VALID: an authRef whose inferred CredentialType is not in this set
+  // cannot drive this harness (e.g. a Codex ChatGPT bundle cannot drive aider).
+  // MUST match what the harness's materializer accepts today — pinned by the
+  // conformance test in tests/harnessCredentialCompat.test.ts.
+  readonly acceptedCredentialTypes: readonly CredentialType[];
 }
 
 // The capability table. Two capability classes today:
@@ -56,13 +66,27 @@ export interface HarnessCapability {
 //
 // agy is intentionally NOT wired: its headless `-p` mode is broken in non-TTY
 // and it exposes no usable structured output — deferred until those are fixed.
+//
+// `acceptedCredentialTypes` records what each harness's materializer consumes
+// TODAY: codex/claude validate their own auth BUNDLE on the BYOK path
+// (codexMaterializer/claudeMaterializer); aider/pi/reasonix consume a raw
+// `api_key` (per-provider env var); opencode consumes its own bundle. (codex's
+// managed mode already consumes a raw OpenRouter key via env, so widening the
+// BYOK path to add `api_key` for codex/claude is a follow-up that also adds the
+// type here — kept truthful per-step so the matrix never claims a path the
+// materializer rejects.)
 export const HARNESS_CAPABILITIES: readonly HarnessCapability[] = [
-  { cli: "codex", roles: ["write", "answer"], structuredOutput: true },
-  { cli: "claude", roles: ["write", "answer"], structuredOutput: true },
-  { cli: "opencode", roles: ["write"], structuredOutput: false },
-  { cli: "aider", roles: ["write"], structuredOutput: false },
-  { cli: "pi", roles: ["write"], structuredOutput: false },
-  { cli: "reasonix", roles: ["write"], structuredOutput: false },
+  {
+    cli: "codex",
+    roles: ["write", "answer"],
+    structuredOutput: true,
+    acceptedCredentialTypes: ["codex_chatgpt_bundle"],
+  },
+  { cli: "claude", roles: ["write", "answer"], structuredOutput: true, acceptedCredentialTypes: ["claude_cli_bundle"] },
+  { cli: "opencode", roles: ["write"], structuredOutput: false, acceptedCredentialTypes: ["opencode_bundle"] },
+  { cli: "aider", roles: ["write"], structuredOutput: false, acceptedCredentialTypes: ["api_key"] },
+  { cli: "pi", roles: ["write"], structuredOutput: false, acceptedCredentialTypes: ["api_key"] },
+  { cli: "reasonix", roles: ["write"], structuredOutput: false, acceptedCredentialTypes: ["api_key"] },
 ] as const;
 
 function capabilitiesFor(role: HarnessRole): readonly HarnessCli[] {
@@ -82,4 +106,27 @@ export const ANSWERER_CAPABLE_CLIS: readonly HarnessCli[] = capabilitiesFor("ans
 export function harnessSupportsRole(cli: string, role: HarnessRole): boolean {
   const capability = HARNESS_CAPABILITIES.find((entry) => entry.cli === cli);
   return capability !== undefined && capability.roles.includes(role);
+}
+
+// Whether the given cli's materializer can consume the given credential-type.
+// A routing entry's (cli, authRef) pair is only valid when the authRef's
+// inferred CredentialType (credentialType.ts) satisfies this — the check that
+// stops a stored credential from being routed to a harness that cannot read it
+// (the facade bug: a non-Codex key written as the default then run as `codex`).
+export function harnessAcceptsCredentialType(cli: string, credentialType: CredentialType): boolean {
+  const capability = HARNESS_CAPABILITIES.find((entry) => entry.cli === cli);
+  return capability !== undefined && capability.acceptedCredentialTypes.includes(credentialType);
+}
+
+// The full-role harnesses (write + answer) — the only clis eligible to back a
+// DEFAULT LLM routing entry, since a default must satisfy every role (plan,
+// write, check, audit), not just `write`. Today: codex, claude. Derived from the
+// table so a new full-role harness is automatically eligible.
+export const FULL_ROLE_CLIS: readonly HarnessCli[] = HARNESS_CAPABILITIES.filter(
+  (capability) => capability.roles.includes("write") && capability.roles.includes("answer"),
+).map((capability) => capability.cli);
+
+// Whether a cli is eligible to back a default LLM routing entry (full-role).
+export function harnessCanBeDefault(cli: string): boolean {
+  return FULL_ROLE_CLIS.includes(cli as HarnessCli);
 }
