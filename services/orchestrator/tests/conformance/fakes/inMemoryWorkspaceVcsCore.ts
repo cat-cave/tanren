@@ -4,7 +4,7 @@
 // backend: it models JUST the first-class-conflict + stack behaviors the contract
 // pins (a conflicting rebase SUCCEEDS + records a conflict; resolving an ANCESTOR +
 // restack propagates the resolution to descendants; export refuses a conflicted
-// ref; opUndo reverts). The Wave-1 jj/git impls drive the SAME suite.
+// ref; opUndo reverts). The real jj impl (`JjWorkspaceVcsCore`) drives the SAME suite.
 //
 // A "conflict" is simulated deterministically: rebasing onto a base sha that starts
 // with `conflict-` records a conflict (no real merge engine). Branch parentage is

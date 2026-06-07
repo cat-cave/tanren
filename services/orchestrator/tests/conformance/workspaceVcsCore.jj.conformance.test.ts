@@ -4,7 +4,11 @@
 // a real local git fixture jj clones — NOT the in-memory fake. This proves jj's
 // native first-class-conflict guarantees end to end: a conflicting rebase SUCCEEDS +
 // records the conflict IN the commit, an ancestor resolution auto-PROPAGATES to
-// descendants on restack, export REFUSES a conflicted ref, `jj op undo` reverts.
+// descendants on restack, export REFUSES a conflicted ref, opUndo reverts.
+//
+// Plus impl-specific regression cases (Codex round-2): opUndo restores in-memory
+// state (a stale `currentBranch` would brick the next op); `RecordedConflict.conflictId`
+// is STABLE across reads; `openWorkspace` OWNS its destination dir (no pre-creation).
 //
 // UNCONDITIONAL: jj is the sole WorkspaceVcsCore backend, so this IS the seam's
 // real-backend proof — it runs in `just fast-check` like any test. jj is on the dev
@@ -13,7 +17,7 @@
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { JjRefResolver, JjWorkingEdit } from "../../src/engine/providers/jjWorkspaceVcsCore.js";
 import type {
   OpenWorkspaceInput,
@@ -24,6 +28,8 @@ import { JjWorkspaceVcsCore } from "../../src/engine/providers/jjWorkspaceVcsCor
 import { LOCAL_HANDLE, LocalCommandSubstrate } from "./fakes/localCommandSubstrate.js";
 import { makeGitFixture } from "./fakes/gitWorkspaceFixtureRepo.js";
 import { describeWorkspaceVcsCoreConformance } from "./workspaceVcsCoreConformance.js";
+
+let wsCounter = 0;
 
 // Map the suite's synthetic base tokens onto the jj clone's imported bookmarks (jj
 // imports the git fixture's `conflict-base` / `clean-base` branches as bookmarks).
@@ -48,8 +54,10 @@ function shellQuote(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
-// Remaps the harness's fixed `/w` path onto a fresh temp dir AND points the clone at
-// the per-workspace fixture origin. Pure test plumbing.
+// Remaps the harness's fixed `/w` path onto a fresh per-workspace path AND points the
+// clone at the per-workspace fixture origin. Pure test plumbing. The remapped path is
+// deliberately NON-PRE-CREATED — `openWorkspace` must OWN creating it (issue #3), so
+// pre-creating here would mask the bug.
 class PathRemappingJjCore implements WorkspaceVcsCore {
   constructor(
     private readonly inner: JjWorkspaceVcsCore,
@@ -58,7 +66,7 @@ class PathRemappingJjCore implements WorkspaceVcsCore {
   ) {}
 
   async openWorkspace(input: OpenWorkspaceInput): Promise<WorkspaceHandle> {
-    const path = mkdtempSync(join(this.scratchRoot, "ws-"));
+    const path = join(this.scratchRoot, `ws-${++wsCounter}`);
     return this.inner.openWorkspace({ ...input, repoUrl: this.origin, path });
   }
   branch(ws: WorkspaceHandle, name: string, atBranch?: string): Promise<void> {
@@ -89,19 +97,59 @@ class PathRemappingJjCore implements WorkspaceVcsCore {
   }
 }
 
+function makeJjCore(): WorkspaceVcsCore {
+  const fixture = makeGitFixture();
+  const scratch = mkdtempSync(join(tmpdir(), "tanren-jj-ws-"));
+  const core = new JjWorkspaceVcsCore({
+    substrate: new LocalCommandSubstrate(),
+    target: LOCAL_HANDLE,
+    timeoutMs: 60_000,
+    refResolver: jjRefResolver,
+    workingEdit: jjWorkingEdit,
+  });
+  return new PathRemappingJjCore(core, fixture.originPath, scratch);
+}
+
 describe("WorkspaceVcsCore real-jj conformance", () => {
-  describeWorkspaceVcsCoreConformance("JjWorkspaceVcsCore (real jj)", {
-    make: (): WorkspaceVcsCore => {
-      const fixture = makeGitFixture();
-      const scratch = mkdtempSync(join(tmpdir(), "tanren-jj-ws-"));
-      const core = new JjWorkspaceVcsCore({
-        substrate: new LocalCommandSubstrate(),
-        target: LOCAL_HANDLE,
-        timeoutMs: 60_000,
-        refResolver: jjRefResolver,
-        workingEdit: jjWorkingEdit,
-      });
-      return new PathRemappingJjCore(core, fixture.originPath, scratch);
-    },
+  describeWorkspaceVcsCoreConformance("JjWorkspaceVcsCore (real jj)", { make: makeJjCore });
+});
+
+// Impl-specific regression cases (Codex round-2) the FROZEN harness does not cover.
+describe("JjWorkspaceVcsCore real-jj regressions", () => {
+  it("opUndo restores in-memory currentBranch — a later op works after branch();opUndo()", async () => {
+    const core = makeJjCore();
+    const ws = await core.openWorkspace({ repoUrl: "https://example.com/o/r.git", baseBranch: "main", path: "/w" });
+    // branch() sets currentBranch="feature"; opUndo() must revert it to "main". After
+    // the jj op restore the "feature" bookmark is GONE, so a stale currentBranch would
+    // brick the next op that defaults to it. branch() with NO atBranch defaults to
+    // currentBranch — it must resolve to "main" (the reverted value), not "feature".
+    await core.branch(ws, "feature", "main");
+    await core.opUndo(ws);
+    // atBranch omitted → branch() defaults to the reverted currentBranch ("main").
+    await core.branch(ws, "feature2");
+    await expect(core.commit(ws, "post-undo")).resolves.toBeDefined();
+  });
+
+  it("RecordedConflict.conflictId is STABLE across re-reads of the same conflict", async () => {
+    const core = makeJjCore();
+    const ws = await core.openWorkspace({ repoUrl: "https://example.com/o/r.git", baseBranch: "main", path: "/w" });
+    await core.branch(ws, "feature", "main");
+    await core.commit(ws, "work");
+    // Read the SAME unresolved conflict twice (a fresh rebaseOnto onto the same base is
+    // idempotent on an already-conflicted branch) — the conflictId must be equal.
+    const first = await core.rebaseOnto(ws, "feature", "conflict-base-sha");
+    const second = await core.rebaseOnto(ws, "feature", "conflict-base-sha");
+    expect(first.conflict).toBeDefined();
+    expect(second.conflict).toBeDefined();
+    expect(second.conflict?.conflictId).toBe(first.conflict?.conflictId);
+  });
+
+  it("openWorkspace OWNS its destination dir (no pre-created dir needed)", async () => {
+    // The path-remapping wrapper hands openWorkspace a NON-PRE-CREATED path; a
+    // successful open + branch + commit proves openWorkspace created the dir itself.
+    const core = makeJjCore();
+    const ws = await core.openWorkspace({ repoUrl: "https://example.com/o/r.git", baseBranch: "main", path: "/w" });
+    await core.branch(ws, "feature", "main");
+    await expect(core.commit(ws, "work")).resolves.toBeDefined();
   });
 });

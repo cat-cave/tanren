@@ -1,6 +1,6 @@
 // Seam conformance suite for the `WorkspaceVcsCore` contract
 // (`engine/contracts/workspaceVcsCore.ts`, tanren-owns-the-engine.md §2). The
-// reusable behavior spec EVERY impl (the Wave-1 jj impl + the git fallback) must
+// reusable behavior spec the impl (jj — the sole backend, `JjWorkspaceVcsCore`) must
 // satisfy — the FIRST-CLASS-conflict guarantees that make "a conflict must never
 // brick" true by construction:
 //   - rebaseOnto a CONFLICTING base SUCCEEDS and RECORDS a conflict (never throws,
@@ -12,8 +12,9 @@
 //     NEVER exported to the host (the §2 local/host boundary, fail-closed);
 //   - opUndo reverts the last operation (the reproducible operation log).
 //
-// Parameterized by an impl factory so any Wave-1 backend runs the SAME suite.
-// Mirrors the MergeCoordinator / SpeculativeIntegrator / VcsProvider suites.
+// Parameterized by an impl factory (the in-memory reference fake + the real jj impl
+// run the SAME suite). Mirrors the MergeCoordinator / SpeculativeIntegrator /
+// VcsProvider suites.
 
 import { describe, expect, it } from "vitest";
 import type { WorkspaceVcsCore } from "../../src/engine/contracts/workspaceVcsCore.js";

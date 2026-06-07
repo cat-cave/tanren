@@ -8,10 +8,12 @@
 // machinery Tanren was hand-rolling — a rebase that conflicts STILL SUCCEEDS and
 // records the conflict IN the commit (so "a conflict must never brick" is true by
 // construction, not by a `git merge --abort` dance), automatic descendant rebase +
-// resolution propagation, and a reproducible/undoable operation log. The contract
-// is shaped so BOTH a jj impl (Wave 1, jj-lib as the state authority — never CLI
-// text-parsing per the §7 guardrail) AND a git fallback impl satisfy it. The
-// BOUNDARY (§2): conflicted states stay LOCAL to the runner; only resolved,
+// resolution propagation, and a reproducible/undoable operation log. jj is the SOLE
+// impl ({@link JjWorkspaceVcsCore} — there is no git fallback; a second backend would
+// double the surface for no gain). The contract stays backend-neutral so a future
+// backend could slot in, but jj's first-class conflicts are what make these
+// guarantees true by construction. The BOUNDARY (§2): conflicted states stay LOCAL to
+// the runner; only resolved,
 // git-compatible refs are exported for the host — `exportCleanGitRef` REFUSES a
 // ref that still carries an unresolved conflict. This directly closes the live
 // apex stall (a merge-queue conflict the resolver never engaged) by making
@@ -86,8 +88,8 @@ export interface RestackResult {
 
 /**
  * The `WorkspaceVcsCore` contract. Every op is local to the runner workspace; NO op
- * here touches the host (that is `CodeHost`). The impl owns the VCS backend (jj —
- * preferred, Wave 1; git — fallback). A Wave-1 impl is validated against
+ * here touches the host (that is `CodeHost`). The impl owns the VCS backend (jj — the
+ * sole impl, {@link JjWorkspaceVcsCore}). The impl is validated against
  * `workspaceVcsCoreConformance` (the behaviors below are the acceptance criteria).
  */
 export interface WorkspaceVcsCore {

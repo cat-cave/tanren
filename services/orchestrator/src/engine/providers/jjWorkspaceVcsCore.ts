@@ -21,6 +21,7 @@
 // onto a local fixture repo's refs — the SAME seam shape as the clone-credential
 // thread in plannerRunWorkspace.ts, not a test-only branch baked into the engine.
 
+import { createHash } from "node:crypto";
 import type { RunnerHandle } from "../contracts/allocator.js";
 import type { CommandResult, CommandSubstrate } from "../contracts/commandSubstrate.js";
 import type {
@@ -88,17 +89,45 @@ interface JjWorkspaceState {
   /** The bookmark currently checked out (jj's "current branch"). */
   currentBranch: string;
   /**
-   * The operation-log stack for `opUndo`: each mutating contract op pushes the jj
-   * operation id that was current BEFORE it ran, and `opUndo` pops + `jj op restore`s
-   * to it. A stack (not a single `jj undo`) is required because one contract op runs
-   * several jj sub-ops — restoring to the pre-op id reverts the whole op atomically.
+   * The undo stack for `opUndo`. Each mutating contract op pushes a {@link OpSnapshot}
+   * BEFORE it runs, and `opUndo` pops + restores it. A stack (not a single `jj undo`)
+   * is required because one contract op runs several jj sub-ops — restoring to the
+   * pre-op snapshot reverts the whole op atomically.
    */
-  opStack: string[];
+  opStack: OpSnapshot[];
 }
 
-// jj template that prints a commit's git sha + whether it carries a conflict, on one
-// `--no-graph` line for machine reads. `conflict` is a boolean keyword in jj 0.42.
-const REV_PROBE_TEMPLATE = 'commit_id ++ "\\t" ++ if(conflict, "conflicted", "clean")';
+/**
+ * A point-in-time snapshot of EVERYTHING a contract op mutates, so `opUndo` restores
+ * the workspace to the prior operation state in full: BOTH the jj operation log
+ * (`opId`, restored via `jj op restore`) AND the impl's in-memory state (`currentBranch`).
+ * Restoring only the jj op would leave a stale `currentBranch` pointing at a bookmark
+ * the restore deleted — the next `commit`/op would then fail at `jj edit <branch>`.
+ */
+interface OpSnapshot {
+  opId: string;
+  currentBranch: string;
+}
+
+// jj template that prints a commit's STABLE change id + whether it carries a
+// conflict, on one `--no-graph` line for machine reads. `change_id` survives commit
+// rewrites (so it is the durable identity of a conflict for the life of that
+// conflict); `conflict` is a boolean keyword in jj 0.42.
+const REV_PROBE_TEMPLATE = 'change_id ++ "\\t" ++ if(conflict, "conflicted", "clean")';
+
+/**
+ * A STABLE id for a recorded conflict, derived deterministically from its identity:
+ * the conflicted commit's durable jj change id + the sorted conflicted paths. PURE —
+ * re-reading the same unresolved conflict yields the SAME id (the frozen contract
+ * requires a stable `conflictId`), while two genuinely-different conflicts differ.
+ */
+function stableConflictId(changeId: string, paths: ReadonlyArray<string>): string {
+  const digest = createHash("sha256")
+    .update(`${changeId}\n${[...paths].sort().join("\n")}`)
+    .digest("hex")
+    .slice(0, 16);
+  return `cfl_${digest}`;
+}
 
 export class JjWorkspaceVcsCore implements WorkspaceVcsCore {
   private readonly substrate: CommandSubstrate;
@@ -120,9 +149,13 @@ export class JjWorkspaceVcsCore implements WorkspaceVcsCore {
   async openWorkspace(input: OpenWorkspaceInput): Promise<WorkspaceHandle> {
     const workspaceId = `jjws_${++this.seq}`;
     const source = this.refResolver.cloneSource(input.repoUrl);
-    // `jj git clone --colocate` imports the git repo AND keeps a real .git backend
-    // (so the host stays a plain git remote), checking out the default branch.
-    await this.runJj(input.path, [
+    // openWorkspace OWNS the destination dir: create it first (the dir need not exist
+    // — a fresh runner workspace won't), then `jj git clone --colocate` into it. The
+    // clone runs WITHOUT cwd=dest (the dir is the clone's arg, and cwd=dest would fail
+    // before the dir exists). `--colocate` keeps a real .git backend so the host stays
+    // a plain git remote; the clone checks out the default branch.
+    await this.runJjNoCwd([
+      `mkdir -p ${quoteSshShellArg(input.path)}`,
       `jj git clone --colocate ${quoteSshShellArg(source)} ${quoteSshShellArg(input.path)}`,
     ]);
     // Configure the repo-local jj identity: jj 0.42 commits with the EMPTY identity
@@ -249,15 +282,18 @@ export class JjWorkspaceVcsCore implements WorkspaceVcsCore {
 
   async opUndo(workspace: WorkspaceHandle): Promise<void> {
     const st = this.require(workspace);
-    // Revert the LAST contract op via jj's operation log: restore to the op id that
-    // was current before it ran. jj 0.42 spells single-op undo `jj undo` and renamed
-    // away `jj op undo`; `jj op restore <id>` restores to a precise prior state, which
-    // is what we need since one contract op spans several jj sub-ops.
-    const priorOp = st.opStack.pop();
-    if (priorOp === undefined) {
+    // Revert the LAST contract op to the prior operation state IN FULL: restore both
+    // the jj op log and the in-memory state. jj 0.42 renamed away `jj op undo` (it is
+    // `jj undo` now); `jj op restore <id>` restores to a precise prior state, which we
+    // need since one contract op spans several jj sub-ops.
+    const prior = st.opStack.pop();
+    if (prior === undefined) {
       return;
     }
-    await this.runJj(st.path, [`jj op restore ${quoteSshShellArg(priorOp)}`]);
+    await this.runJj(st.path, [`jj op restore ${quoteSshShellArg(prior.opId)}`]);
+    // Restore the in-memory state too — the restored jj op may have removed the
+    // bookmark `currentBranch` pointed at, so a stale value would brick the next op.
+    st.currentBranch = prior.currentBranch;
   }
 
   // The git sha the bookmark points at. Read via jj's commit_id template so it is
@@ -268,19 +304,22 @@ export class JjWorkspaceVcsCore implements WorkspaceVcsCore {
   }
 
   // The recorded conflict on `branch`, or undefined when clean. Reads jj's own
-  // `conflict` boolean for the branch tip AND its conflicted paths via
+  // `conflict` boolean + the commit's STABLE change id, and the conflicted paths via
   // `jj resolve --list` (machine-stable: one `path` per line).
   private async recordedConflict(path: string, branch: string): Promise<RecordedConflict | undefined> {
     const probe = await this.runJjCapture(path, [
       `jj log -r ${quoteSshShellArg(branch)} --no-graph -T ${quoteSshShellArg(REV_PROBE_TEMPLATE)}`,
     ]);
-    const [, state] = probe.trim().split("\t");
+    const [changeId, state] = probe.trim().split("\t");
     if (state !== "conflicted") {
       return undefined;
     }
     const paths = await this.conflictedPaths(path, branch);
     return {
-      conflictId: `cfl_${branch}_${++this.seq}`,
+      // STABLE id: derived from the conflict's identity (the commit's durable change
+      // id + the sorted conflicted paths), NOT a per-read counter. Re-reading the same
+      // unresolved conflict yields the SAME conflictId, as the frozen contract requires.
+      conflictId: stableConflictId(changeId ?? "", paths),
       between: { specId: branch, otherSpecId: "base" },
       paths,
     };
@@ -317,10 +356,11 @@ export class JjWorkspaceVcsCore implements WorkspaceVcsCore {
     return [...names].sort();
   }
 
-  // Record the jj operation id current BEFORE a mutating contract op, so `opUndo` can
-  // restore precisely to it (one contract op = several jj sub-ops).
+  // Snapshot the FULL workspace state (jj op id + in-memory currentBranch) BEFORE a
+  // mutating contract op, so `opUndo` can restore both precisely (one contract op =
+  // several jj sub-ops).
   private async pushOp(st: JjWorkspaceState): Promise<void> {
-    st.opStack.push(await this.currentOpId(st.path));
+    st.opStack.push({ opId: await this.currentOpId(st.path), currentBranch: st.currentBranch });
   }
 
   // The id of the latest jj operation (the head of `jj op log`).
@@ -335,6 +375,16 @@ export class JjWorkspaceVcsCore implements WorkspaceVcsCore {
     await runWorkspaceSshCommand(this.substrate, this.target, {
       label: `jj ${jjCommands[0] ?? ""}`,
       cwd: path,
+      timeoutMs: this.timeoutMs,
+      command: ["set -eu", ...jjCommands].join(" && "),
+    });
+  }
+
+  // Like {@link runJj} but with NO cwd — for the clone bootstrap, where the workspace
+  // dir does not exist yet (so cwd=dest would fail before the dir is created).
+  private async runJjNoCwd(jjCommands: string[]): Promise<void> {
+    await runWorkspaceSshCommand(this.substrate, this.target, {
+      label: `jj ${jjCommands[0] ?? ""}`,
       timeoutMs: this.timeoutMs,
       command: ["set -eu", ...jjCommands].join(" && "),
     });
