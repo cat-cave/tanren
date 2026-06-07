@@ -1,20 +1,15 @@
 // Drives the FROZEN WorkspaceVcsCore conformance suite
-// (workspaceVcsCoreConformance.ts, tanren-owns-the-engine.md §2) against the REAL,
-// PREFERRED `JjWorkspaceVcsCore` over an ACTUAL `jj` process (the
-// LocalCommandSubstrate) + a real local git fixture jj clones — NOT the in-memory
-// fake. This proves jj's native first-class-conflict guarantees end to end: a
-// conflicting rebase SUCCEEDS + records the conflict IN the commit, an ancestor
-// resolution auto-PROPAGATES to descendants on restack, export REFUSES a conflicted
-// ref, `jj op undo` reverts.
+// (workspaceVcsCoreConformance.ts, tanren-owns-the-engine.md §2) against the REAL +
+// ONLY `JjWorkspaceVcsCore` over an ACTUAL `jj` process (the LocalCommandSubstrate) +
+// a real local git fixture jj clones — NOT the in-memory fake. This proves jj's
+// native first-class-conflict guarantees end to end: a conflicting rebase SUCCEEDS +
+// records the conflict IN the commit, an ancestor resolution auto-PROPAGATES to
+// descendants on restack, export REFUSES a conflicted ref, `jj op undo` reverts.
 //
-// ENV-GATED (skip-with-loud-reason): `jj` is NOT yet in the orchestrator test image
-// / `just fast-check` path — only the runner Dockerfile installs it (Wave-2 wires
-// the live engine onto jj). So when `jj` is absent we SKIP loudly rather than fail
-// `just fast-check`, exactly like the RLS/SSH smoke gates. The git sibling
-// (workspaceVcsCore.git.conformance.test.ts) is the always-on real-backend proof; set
-// `TANREN_JJ_CONFORMANCE=1` (with jj installed) to run this one.
+// UNCONDITIONAL: jj is the sole WorkspaceVcsCore backend, so this IS the seam's
+// real-backend proof — it runs in `just fast-check` like any test. jj is on the dev
+// PATH and installed by both the runner Dockerfile and the monorepo CI workflow.
 
-import { execFileSync } from "node:child_process";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -30,25 +25,16 @@ import { LOCAL_HANDLE, LocalCommandSubstrate } from "./fakes/localCommandSubstra
 import { makeGitFixture } from "./fakes/gitWorkspaceFixtureRepo.js";
 import { describeWorkspaceVcsCoreConformance } from "./workspaceVcsCoreConformance.js";
 
-function jjInstalled(): boolean {
-  try {
-    execFileSync("jj", ["--version"], { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-const RUN_JJ = process.env["TANREN_JJ_CONFORMANCE"] === "1" || jjInstalled();
-
 // Map the suite's synthetic base tokens onto the jj clone's imported bookmarks (jj
 // imports the git fixture's `conflict-base` / `clean-base` branches as bookmarks).
-// `cloneSource` is overridden per-workspace below with the fixture origin path.
+// `cloneSource` is identity — the PathRemappingJjCore below injects the fixture's
+// real origin path as the repoUrl before this resolver sees it.
 const jjRefResolver: JjRefResolver = {
-  cloneSource: () => "",
+  cloneSource: (repoUrl) => repoUrl,
   baseRevision: (baseSha) => {
-    if (baseSha.startsWith("conflict-")) return "conflict-base";
-    if (baseSha.startsWith("clean-")) return "clean-base";
+    // jj imports the fixture's git branches as REMOTE bookmarks (`<name>@origin`).
+    if (baseSha.startsWith("conflict-")) return "conflict-base@origin";
+    if (baseSha.startsWith("clean-")) return "clean-base@origin";
     return baseSha;
   },
 };
@@ -103,11 +89,7 @@ class PathRemappingJjCore implements WorkspaceVcsCore {
   }
 }
 
-// ENV-GATE (no `if`/`.skip` literals — the repo's `describe.skipIf` idiom): when jj
-// is absent the whole suite is SKIPPED loudly (vitest prints this skipped describe);
-// the git sibling is the always-on real-backend proof. `jj` is installed only in the
-// runner image / locally; set TANREN_JJ_CONFORMANCE=1 (with jj on PATH) to run it.
-describe.skipIf(!RUN_JJ)("WorkspaceVcsCore real-jj conformance (env-gated on jj)", () => {
+describe("WorkspaceVcsCore real-jj conformance", () => {
   describeWorkspaceVcsCoreConformance("JjWorkspaceVcsCore (real jj)", {
     make: (): WorkspaceVcsCore => {
       const fixture = makeGitFixture();

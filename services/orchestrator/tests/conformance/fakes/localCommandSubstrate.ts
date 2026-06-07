@@ -1,10 +1,10 @@
 // A LOCAL {@link CommandSubstrate} test fixture: runs each command on the REAL
 // local machine via `/bin/sh`, with the same cwd/stdin/timeout/in-band-failure
 // semantics the SSH substrate gives the engine. This lets the Wave-1 conformance
-// drive the REAL `GitWorkspaceVcsCore` / `JjWorkspaceVcsCore` against an actual
-// git/jj process in a temp dir — the impls are exercised with real VCS plumbing,
-// not a scripted echo. TEST FIXTURE ONLY (lives under tests/, never src/): the live
-// path is always the SSH substrate against an allocated runner.
+// drive the REAL `JjWorkspaceVcsCore` against an actual `jj` process in a temp dir —
+// the impl is exercised with real VCS plumbing, not a scripted echo. TEST FIXTURE
+// ONLY (lives under tests/, never src/): the live path is always the SSH substrate
+// against an allocated runner.
 
 import { spawn } from "node:child_process";
 import type { RunnerHandle } from "../../../src/engine/contracts/allocator.js";

@@ -87,10 +87,17 @@ interface JjWorkspaceState {
   path: string;
   /** The bookmark currently checked out (jj's "current branch"). */
   currentBranch: string;
+  /**
+   * The operation-log stack for `opUndo`: each mutating contract op pushes the jj
+   * operation id that was current BEFORE it ran, and `opUndo` pops + `jj op restore`s
+   * to it. A stack (not a single `jj undo`) is required because one contract op runs
+   * several jj sub-ops — restoring to the pre-op id reverts the whole op atomically.
+   */
+  opStack: string[];
 }
 
-// jj template that prints a commit's change id + whether it carries a conflict, on
-// one line, for `--no-graph` machine reads. `conflict` is a boolean keyword.
+// jj template that prints a commit's git sha + whether it carries a conflict, on one
+// `--no-graph` line for machine reads. `conflict` is a boolean keyword in jj 0.42.
 const REV_PROBE_TEMPLATE = 'commit_id ++ "\\t" ++ if(conflict, "conflicted", "clean")';
 
 export class JjWorkspaceVcsCore implements WorkspaceVcsCore {
@@ -114,55 +121,66 @@ export class JjWorkspaceVcsCore implements WorkspaceVcsCore {
     const workspaceId = `jjws_${++this.seq}`;
     const source = this.refResolver.cloneSource(input.repoUrl);
     // `jj git clone --colocate` imports the git repo AND keeps a real .git backend
-    // (so the host stays a plain git remote), checking out the default branch. We
-    // then ensure a bookmark at `baseBranch` exists and is the working base.
+    // (so the host stays a plain git remote), checking out the default branch.
     await this.runJj(input.path, [
       `jj git clone --colocate ${quoteSshShellArg(source)} ${quoteSshShellArg(input.path)}`,
     ]);
+    // Configure the repo-local jj identity: jj 0.42 commits with the EMPTY identity
+    // (and warns they can't be pushed) until user.name/email are set. Set them once
+    // per workspace so every commit/export carries a real author.
     await this.runJj(input.path, [
-      // Put the working copy onto the base branch (create a working commit on top of
-      // it so edits never land directly on the immutable base bookmark).
+      `jj config set --repo user.name ${quoteSshShellArg("Tanren")}`,
+      `jj config set --repo user.email ${quoteSshShellArg("tanren@local")}`,
+      // Put the working copy onto the base branch (a working commit on top of it, so
+      // edits never land directly on the immutable base bookmark).
       `jj new ${quoteSshShellArg(input.baseBranch)}`,
     ]);
-    this.workspaces.set(workspaceId, { path: input.path, currentBranch: input.baseBranch });
+    this.workspaces.set(workspaceId, { path: input.path, currentBranch: input.baseBranch, opStack: [] });
     return { workspaceId, path: input.path };
   }
 
   async branch(workspace: WorkspaceHandle, name: string, atBranch?: string): Promise<void> {
     const st = this.require(workspace);
+    await this.pushOp(st);
     const parent = atBranch ?? st.currentBranch;
-    // Create the bookmark at the parent's tip, then start a working commit on top of
-    // it. The ancestor→descendant edge (parent→name) is recorded by jj's commit
-    // graph, which is exactly what restack propagation walks.
+    // Start a NEW commit on the parent's tip and point the bookmark at THAT commit
+    // (`-r @`, not `@-`). This makes the branch a DISTINCT commit even before any
+    // `commit`, so a stack A→B→C is real commits and jj's `descendants()` walk (which
+    // restack propagation rides) sees the ancestor→descendant edges.
     await this.runJj(st.path, [
       `jj new ${quoteSshShellArg(parent)}`,
-      `jj bookmark create ${quoteSshShellArg(name)} -r @-`,
+      `jj bookmark create ${quoteSshShellArg(name)} -r @`,
     ]);
     st.currentBranch = name;
   }
 
   async checkout(workspace: WorkspaceHandle, branch: string): Promise<void> {
     const st = this.require(workspace);
-    await this.runJj(st.path, [`jj new ${quoteSshShellArg(branch)}`]);
+    await this.pushOp(st);
+    await this.runJj(st.path, [`jj edit ${quoteSshShellArg(branch)}`]);
     st.currentBranch = branch;
   }
 
   async commit(workspace: WorkspaceHandle, message: string): Promise<{ headSha: string }> {
     const st = this.require(workspace);
-    // Apply the working-tree edit (jj auto-snapshots it), describe the current working
-    // commit, advance the bookmark to it, then start a fresh working commit on top so
-    // the next edit doesn't mutate this one.
+    await this.pushOp(st);
+    // Apply the working-tree edit (jj auto-snapshots it), describe the working commit
+    // `@`, then start a fresh `@` child and leave the bookmark on the just-described
+    // CONTENT commit (`@-`). So the branch head IS the content commit and the next
+    // `commit` edits a clean child — each commit advances the head to a new sha.
     await this.runJj(st.path, [
+      `jj edit ${quoteSshShellArg(st.currentBranch)}`,
       ...this.workingEdit(message),
       `jj describe -m ${quoteSshShellArg(message)}`,
-      `jj bookmark set ${quoteSshShellArg(st.currentBranch)} -r @ --allow-backwards`,
       `jj new`,
+      `jj bookmark set ${quoteSshShellArg(st.currentBranch)} -r @- --allow-backwards`,
     ]);
     return { headSha: await this.branchHeadSha(st.path, st.currentBranch) };
   }
 
   async rebaseOnto(workspace: WorkspaceHandle, branch: string, baseSha: string): Promise<RebaseResult> {
     const st = this.require(workspace);
+    await this.pushOp(st);
     const dest = this.refResolver.baseRevision(baseSha);
     // FIRST-CLASS conflicts (§2): `jj rebase` NEVER aborts — a conflicting rebase
     // SUCCEEDS and records the conflict IN the commit. We rebase the branch's whole
@@ -178,22 +196,23 @@ export class JjWorkspaceVcsCore implements WorkspaceVcsCore {
 
   async resolveConflict(input: ResolveConflictInput): Promise<{ headSha: string }> {
     const st = this.require(input.workspace);
-    // Write the intent-preserving resolution into the conflicted commit. jj resolves
-    // a conflict the moment the conflicted paths no longer contain conflict markers:
-    // we check out the branch's conflicted commit, overwrite each path, and snapshot.
-    // The conflict transitions recorded → resolved IN the commit (never recreated).
+    await this.pushOp(st);
+    // Write the intent-preserving resolution INTO the conflicted branch commit. jj
+    // resolves a conflict the instant the conflicted paths no longer carry conflict
+    // markers: edit the branch's commit, overwrite each path, and jj auto-snapshots
+    // the resolution IN the commit (never recreated) — and AUTO-restacks descendants.
     const writes = input.resolutions.map(
       (r) => `printf %s ${quoteSshShellArg(r.content)} > ${quoteSshShellArg(r.path)}`,
     );
     await this.runJj(st.path, [`jj edit ${quoteSshShellArg(input.branch)}`, ...writes, `jj status`]);
-    // Return to a fresh working commit on the branch tip (leave `@` off the edited
-    // commit so later ops don't keep mutating it).
+    // Move `@` off the resolved commit so later reads/ops don't keep mutating it.
     await this.runJj(st.path, [`jj new ${quoteSshShellArg(input.branch)}`]);
     return { headSha: await this.branchHeadSha(st.path, input.branch) };
   }
 
   async restackDescendants(workspace: WorkspaceHandle, branch: string): Promise<RestackResult> {
     const st = this.require(workspace);
+    await this.pushOp(st);
     // jj AUTO-restacks descendants whenever an ancestor is rewritten (the resolve
     // above already rewrote them and propagated the resolution down). This op is the
     // contract's reporting surface: enumerate the branch's descendant bookmarks and
@@ -230,8 +249,15 @@ export class JjWorkspaceVcsCore implements WorkspaceVcsCore {
 
   async opUndo(workspace: WorkspaceHandle): Promise<void> {
     const st = this.require(workspace);
-    // Revert the last operation via jj's operation log — every op is undoable.
-    await this.runJj(st.path, [`jj op undo`]);
+    // Revert the LAST contract op via jj's operation log: restore to the op id that
+    // was current before it ran. jj 0.42 spells single-op undo `jj undo` and renamed
+    // away `jj op undo`; `jj op restore <id>` restores to a precise prior state, which
+    // is what we need since one contract op spans several jj sub-ops.
+    const priorOp = st.opStack.pop();
+    if (priorOp === undefined) {
+      return;
+    }
+    await this.runJj(st.path, [`jj op restore ${quoteSshShellArg(priorOp)}`]);
   }
 
   // The git sha the bookmark points at. Read via jj's commit_id template so it is
@@ -260,13 +286,12 @@ export class JjWorkspaceVcsCore implements WorkspaceVcsCore {
     };
   }
 
-  // The conflicted paths on `branch`, read from `jj resolve --list` (each line:
-  // `<path>    <kind>`). Empty list ⇒ no conflicted paths.
+  // The conflicted paths on `branch`, read from `jj resolve --list -r <branch>` (jj
+  // 0.42 accepts the revset directly — no `jj edit` side-effect). Each line is
+  // `<path>    <kind>`; we take the leading path token. No conflicts ⇒ jj exits
+  // nonzero with "No conflicts found", which we tolerate as an empty list.
   private async conflictedPaths(path: string, branch: string): Promise<string[]> {
-    const result = await this.runJjRaw(path, [
-      `jj edit ${quoteSshShellArg(branch)} >/dev/null 2>&1 || true`,
-      `jj resolve --list 2>/dev/null || true`,
-    ]);
+    const result = await this.runJjRaw(path, [`jj resolve --list -r ${quoteSshShellArg(branch)} 2>/dev/null || true`]);
     return result.stdout
       .split("\n")
       .map((line) => line.trim())
@@ -290,6 +315,18 @@ export class JjWorkspaceVcsCore implements WorkspaceVcsCore {
       }
     }
     return [...names].sort();
+  }
+
+  // Record the jj operation id current BEFORE a mutating contract op, so `opUndo` can
+  // restore precisely to it (one contract op = several jj sub-ops).
+  private async pushOp(st: JjWorkspaceState): Promise<void> {
+    st.opStack.push(await this.currentOpId(st.path));
+  }
+
+  // The id of the latest jj operation (the head of `jj op log`).
+  private async currentOpId(path: string): Promise<string> {
+    const out = await this.runJjCapture(path, [`jj op log --no-graph --limit 1 -T 'id'`]);
+    return out.trim();
   }
 
   // Run a jj command sequence, throwing on a nonzero exit (a loud failure, never a

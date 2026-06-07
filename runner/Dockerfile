@@ -54,13 +54,14 @@ RUN set -eu; \
   codexbar -V; \
   ccusage --version
 
-# jujutsu (jj) — the Wave-1 `WorkspaceVcsCore` backend (tanren-owns-the-engine.md
-# §2). The runner shells `jj` over SSH exactly like `git`; jj keeps a real git
-# backend so the host stays a plain git remote. Pinned + arch-mapped + sha256-
-# verified against the published release, like codexbar above. Bumping is a one-line
-# --build-arg change. Source verified against upstream on 2026-06-07:
-#   https://github.com/jj-vcs/jj/releases/tag/v0.36.0
-ARG JJ_VERSION=0.36.0
+# jujutsu (jj) — the SOLE `WorkspaceVcsCore` backend (tanren-owns-the-engine.md §2;
+# there is no git fallback). The runner shells `jj` over SSH exactly like `git`; jj
+# keeps a real git backend so the host stays a plain git remote. Pinned + arch-mapped
+# against the published release. The pin MUST match .github/workflows/ci.yml (the
+# WorkspaceVcsCore conformance drives a real jj). Bumping is a one-line --build-arg
+# change. Source verified against upstream on 2026-06-07:
+#   https://github.com/jj-vcs/jj/releases/tag/v0.42.0
+ARG JJ_VERSION=0.42.0
 RUN set -eu; \
   case "$(dpkg --print-architecture)" in \
     amd64) JJ_ARCH="x86_64" ;; \

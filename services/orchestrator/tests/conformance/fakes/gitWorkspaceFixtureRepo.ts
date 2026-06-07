@@ -1,8 +1,8 @@
 // Builds a REAL local git fixture repo for the Wave-1 WorkspaceVcsCore conformance
-// so the git/jj impls run against actual VCS plumbing (not a scripted echo). The
-// conformance harness passes synthetic tokens — a `repoUrl` of
-// `https://example.com/...` and base shas `conflict-base-sha` / `clean-base-sha`; a
-// ref-resolver (built here) maps them onto this fixture's real refs:
+// so the jj impl runs against actual VCS plumbing (`jj git clone` of this bare repo,
+// not a scripted echo). The conformance harness passes synthetic base shas
+// `conflict-base-sha` / `clean-base-sha`; the jj test's ref-resolver maps them onto
+// the bookmarks jj imports from this fixture's git branches:
 //   - `main`           — base branch; `src/conflicted.ts` = "base\n".
 //   - `conflict-base`  — edits `src/conflicted.ts` to "theirs\n" (conflicts with a
 //                        feature commit that ALSO edits `src/conflicted.ts`).
@@ -14,13 +14,10 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { GitRefResolver } from "../../../src/engine/providers/gitWorkspaceVcsCore.js";
 
 export interface GitFixture {
-  /** The bare repo path the impl clones (the resolver maps the synthetic URL here). */
+  /** The bare repo path the impl `jj git clone`s. */
   originPath: string;
-  /** Maps the conformance's synthetic tokens onto this fixture's real refs. */
-  refResolver: GitRefResolver;
   /** A scratch dir under which each workspace `path` is made unique. */
   scratchRoot: string;
 }
@@ -69,17 +66,8 @@ export function makeGitFixture(): GitFixture {
   git(work, ["commit", "--quiet", "-m", "clean base edit"]);
 
   git(work, ["checkout", "--quiet", "main"]);
-  // Publish a bare origin the impl can `git clone`.
+  // Publish a bare origin the impl `jj git clone`s.
   git(work, ["clone", "--quiet", "--bare", work, originPath]);
 
-  const refResolver: GitRefResolver = {
-    cloneSource: () => originPath,
-    baseRevision: (baseSha) => {
-      if (baseSha.startsWith("conflict-")) return "origin/conflict-base";
-      if (baseSha.startsWith("clean-")) return "origin/clean-base";
-      return baseSha;
-    },
-  };
-
-  return { originPath, refResolver, scratchRoot: root };
+  return { originPath, scratchRoot: root };
 }
