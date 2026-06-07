@@ -76,12 +76,14 @@ async function connect(app: Hono<ActorContextEnv>, body: Record<string, unknown>
 describe("ai-provider routes", () => {
   it("connects an OpenRouter key under a cost-classified ref and GET reflects it", async () => {
     const { app, secrets } = buildHarness(admin);
-    const created = await connect(app, { provider: "openrouter", apiKey: "sk-or-secret" });
+    // A raw api_key cannot be a full-role default yet (no full-role harness
+    // consumes api_key until the materializer widening), so connect non-default.
+    const created = await connect(app, { provider: "openrouter", apiKey: "sk-or-secret", makeDefault: false });
 
     expect(created.status).toBe(201);
     expect(created.body.provider).toBe("openrouter");
     expect(created.body.classifiedAs).toBe("per_token/openrouter");
-    expect(created.body.isDefault).toBe(true);
+    expect(created.body.isDefault).toBe(false);
     const ref = created.body.ref as string;
     expect(ref.startsWith("credential/openrouter/org/org_acme/")).toBe(true);
     // The ref prefix guarantees cost classification — the whole point.
@@ -101,7 +103,7 @@ describe("ai-provider routes", () => {
       provider: "openrouter",
       ref,
       classifiedAs: "per_token/openrouter",
-      isDefault: true,
+      isDefault: false,
     });
   });
 
@@ -111,11 +113,21 @@ describe("ai-provider routes", () => {
       ["openai", "per_token/openai"],
     ] as const) {
       const { app } = buildHarness(admin);
-      const created = await connect(app, { provider, apiKey: "k" });
+      const created = await connect(app, { provider, apiKey: "k", makeDefault: false });
       expect(created.status).toBe(201);
       expect(created.body.classifiedAs).toBe(expected);
       expect(classifyAuthRef(created.body.ref as string).billingMode).toBe("per_token");
     }
+  });
+
+  it("rejects an api_key provider as the org default (no full-role harness consumes it yet)", async () => {
+    const { app, pool } = buildHarness(admin);
+    const created = await connect(app, { provider: "openrouter", apiKey: "sk-or-secret", makeDefault: true });
+    expect(created.status).toBe(400);
+    expect(created.body.error).toBe("invalid_ai_provider_default");
+    // No orphaned default was written (validation runs before the store).
+    const config = pool.orgs.get("org_acme")?.config as { defaultCredentials?: { defaultLlm?: unknown } };
+    expect(config?.defaultCredentials?.defaultLlm).toBeUndefined();
   });
 
   it("connects the Codex ChatGPT bundle as a subscription credential", async () => {
@@ -143,23 +155,32 @@ describe("ai-provider routes", () => {
     expect(events.appended.map((event) => event.projectId).sort()).toEqual(["project_acme", "project_other"]);
   });
 
-  it("wires the connected ref as the org default LLM credential + providerMode byok", async () => {
+  it("wires a Codex bundle as the org default LLM entry + providerMode byok", async () => {
     const { app, pool } = buildHarness(admin);
-    const created = await connect(app, { provider: "openrouter", apiKey: "sk-or-secret" });
+    const created = await connect(app, {
+      provider: "codex",
+      authJson: JSON.stringify({ OPENAI_API_KEY: "sk-codex" }),
+      makeDefault: true,
+    });
+    expect(created.body.isDefault).toBe(true);
     const config = pool.orgs.get("org_acme")?.config as {
       providerMode: string;
-      defaultCredentials?: { codex_chatgpt_auth?: string };
+      defaultCredentials?: { defaultLlm?: { cli: string; model: string; authRef: string } };
     };
     expect(config.providerMode).toBe("byok");
-    expect(config.defaultCredentials?.codex_chatgpt_auth).toBe(created.body.ref);
+    expect(config.defaultCredentials?.defaultLlm).toEqual({
+      cli: "codex",
+      model: "default",
+      authRef: created.body.ref,
+    });
   });
 
   it("makeDefault:false connects without changing routing/default", async () => {
     const { app, pool } = buildHarness(admin);
     const created = await connect(app, { provider: "openrouter", apiKey: "k", makeDefault: false });
     expect(created.body.isDefault).toBe(false);
-    const config = pool.orgs.get("org_acme")?.config as { defaultCredentials?: { codex_chatgpt_auth?: string } };
-    expect(config.defaultCredentials?.codex_chatgpt_auth).toBeUndefined();
+    const config = pool.orgs.get("org_acme")?.config as { defaultCredentials?: { defaultLlm?: unknown } };
+    expect(config.defaultCredentials?.defaultLlm).toBeUndefined();
     // The GET still shows it, just not as default.
     const listed = await app.request("/orgs/org_acme/ai-provider");
     const list = (await listed.json()) as { providers: Array<{ isDefault: boolean }> };
@@ -168,7 +189,7 @@ describe("ai-provider routes", () => {
 
   it("never returns or exposes the secret value in any response", async () => {
     const { app } = buildHarness(admin);
-    const created = await connect(app, { provider: "openrouter", apiKey: "TOP-SECRET-KEY" });
+    const created = await connect(app, { provider: "openrouter", apiKey: "TOP-SECRET-KEY", makeDefault: false });
     expect(JSON.stringify(created.body)).not.toContain("TOP-SECRET-KEY");
     expect(created.body).not.toHaveProperty("apiKey");
     expect(created.body).not.toHaveProperty("value");

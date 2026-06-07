@@ -125,7 +125,7 @@ describe("collectRunCredentialRefPaths", () => {
   it("covers routing authRefs + github + codex refs, never the runner SSH identity", () => {
     const ctx = context();
     ctx.orgId = "org-acme";
-    ctx.codexCredentialRef = CODEX_REF;
+    ctx.defaultLlm = { cli: "codex", model: "default", authRef: CODEX_REF };
     ctx.githubCredentialRef = GH_REF;
     ctx.identitySecretRef = "runner/local-docker/identity";
     ctx.routing = {
@@ -186,7 +186,7 @@ describe("runPlannerLoopWorkflow — per-run credential de-privilege wiring", ()
     const { ctx, pool, events, allocator, ssh } = await setup();
     ctx.orgId = "org-acme";
     ctx.githubCredentialRef = GH_REF;
-    ctx.codexCredentialRef = CODEX_REF;
+    ctx.defaultLlm = { cli: "codex", model: "default", authRef: CODEX_REF };
 
     // The scoped store + minter share ONE recording Vault transport; the run's
     // github token is seeded there so the clone-token resolution reads it via the

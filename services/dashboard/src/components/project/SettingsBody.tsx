@@ -83,8 +83,11 @@ export interface SettingsBodyProps {
   saved?: boolean;
   /** Org-scoped credential refs, used to populate the binding dropdowns. */
   orgCredentials?: CredentialRecord[];
-  /** The project's currently-bound credential refs. */
-  boundCredentials?: { codexCredentialRef?: string; githubCredentialRef?: string };
+  /** The project's currently-bound credentials (default LLM entry + github ref). */
+  boundCredentials?: {
+    defaultLlm?: { cli: string; model: string; authRef: string };
+    githubCredentialRef?: string;
+  };
 }
 
 export function SettingsBody(props: SettingsBodyProps) {
@@ -279,7 +282,7 @@ function CredentialsPanel(props: SettingsBodyProps) {
               name="codexCredentialRef"
               label="codex bundle"
               options={codexOptions}
-              selected={props.boundCredentials?.codexCredentialRef}
+              selected={props.boundCredentials?.defaultLlm?.authRef}
               emptyNote="no codex bundles in this org yet"
             />
             <CredentialSelect

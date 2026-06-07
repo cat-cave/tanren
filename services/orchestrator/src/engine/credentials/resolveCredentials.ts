@@ -23,35 +23,36 @@ import {
 } from "../config/managedProvider.js";
 import { migrateOrgConfig, type OrgConfigV1, type OrgDefaultCredentials } from "../config/orgConfig.js";
 import type { ProjectConfigV1 } from "../config/projectConfig.js";
+import type { RoutingChainEntry } from "../config/shared.js";
 
 type OrgConfigClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
 /** Which run-critical credential kinds the resolver covers. */
-export type RunCredentialKind = "codex_chatgpt_auth" | "github_token";
+export type RunCredentialKind = "llm_default" | "github_token";
 
 /**
- * The resolved refs a run needs. Both are guaranteed non-empty on success.
+ * The resolved credentials a run needs. `defaultLlm` is the provider-agnostic
+ * routing entry {cli, model, authRef} that heads every loop-role chain a project
+ * leaves empty — NOT a Codex-specific ref. `githubCredentialRef` is guaranteed
+ * non-empty on success.
  *
- * SaaS Tier-B #5: `providerMode` records WHICH source the LLM credential
- * (`codexCredentialRef`) came from. Under `managed`, `codexCredentialRef` is the
- * platform-owned ref (e.g. `credential/openrouter/platform/default`) instead of
- * the tenant's imported credential, and `endpointOverride` carries the
+ * SaaS Tier-B #5: `providerMode` records WHICH source the default LLM came from.
+ * Under `managed`, `defaultLlm.authRef` is the platform-owned ref (e.g.
+ * `credential/openrouter/platform/default`) and `endpointOverride` carries the
  * OpenAI-compatible base URL the harness must be pointed at. Under `byok`
- * (default) `codexCredentialRef` is the tenant's own ref and `endpointOverride`
- * is undefined (no override — behavior identical to before this seam). The
- * GitHub credential is ALWAYS the tenant's; managed mode only swaps the LLM
- * provider source.
+ * (default) `defaultLlm` is the tenant's own resolved default entry and
+ * `endpointOverride` is undefined. The GitHub credential is ALWAYS the tenant's;
+ * managed mode only swaps the LLM provider source.
  */
 export interface ResolvedRunCredentials {
-  codexCredentialRef: string;
+  defaultLlm: RoutingChainEntry;
   githubCredentialRef: string;
   providerMode: ProviderMode;
   endpointOverride?: HarnessEndpointOverride;
 }
 
-/** Per-kind explicit overrides (e.g. a re-run with a pinned credential ref). */
+/** Per-kind explicit overrides (e.g. a re-run with a pinned GitHub ref). */
 export interface RunCredentialOverride {
-  codexCredentialRef?: string;
   githubCredentialRef?: string;
 }
 
@@ -84,8 +85,8 @@ export class MissingCredentialError extends Error {
 
   constructor(kind: RunCredentialKind) {
     super(
-      kind === "codex_chatgpt_auth"
-        ? "No Codex credential resolved for this run (project config and org default are both unset)"
+      kind === "llm_default"
+        ? "No default LLM resolved for this run (project config and org default are both unset)"
         : "No GitHub credential resolved for this run (project config and org default are both unset)",
     );
     this.name = "MissingCredentialError";
@@ -129,35 +130,27 @@ export async function resolveCredentialsForRun(
   const projectCredentials = input.projectConfig.credentials ?? {};
 
   // Effective provider mode: project override (when set) wins over the org's
-  // default. An explicit credential override forces BYOK — pinning a concrete
-  // tenant ref is incompatible with swapping in the platform credential.
-  const providerMode: ProviderMode =
-    input.override?.codexCredentialRef !== undefined && input.override.codexCredentialRef.trim() !== ""
-      ? "byok"
-      : (input.projectConfig.providerMode ?? orgConfig.providerMode);
+  // default.
+  const providerMode: ProviderMode = input.projectConfig.providerMode ?? orgConfig.providerMode;
 
-  // LLM credential + endpoint. Resolved BEFORE GitHub so a BYOK run with no
-  // resolvable LLM credential throws the codex MissingCredentialError first
-  // (preserving the original error ordering). Managed runs never throw here —
-  // they resolve the platform-owned ref.
-  let codexCredentialRef: string;
+  // Default LLM routing entry + endpoint. Resolved BEFORE GitHub so a BYOK run
+  // with no resolvable default LLM throws MissingCredentialError("llm_default")
+  // first (preserving the original error ordering). Managed runs never throw
+  // here — they resolve the platform-owned entry.
+  let defaultLlm: RoutingChainEntry;
   let endpointOverride: HarnessEndpointOverride | undefined;
   if (providerMode === "managed") {
-    // Managed: resolve the PLATFORM-owned credential (project override of the
-    // managed block wins over the org's) and point the harness at the managed
-    // endpoint. The tenant's own LLM credential is intentionally NOT consulted.
+    // Managed: the PLATFORM-owned credential (project override of the managed
+    // block wins over the org's), run through the codex harness pointed at the
+    // managed OpenRouter endpoint. The tenant's own default LLM is NOT consulted.
     const managed = input.projectConfig.managedProvider ?? orgConfig.managedProvider ?? defaultManagedProviderConfig();
-    codexCredentialRef = managed.credentialRef;
+    defaultLlm = { cli: "codex", model: "default", authRef: managed.credentialRef };
     endpointOverride = resolveHarnessEndpointOverride("managed", managed);
   } else {
-    // BYOK (default): unchanged resolution — the tenant's own credential, no
-    // endpoint override.
-    codexCredentialRef = pickRef(
-      "codex_chatgpt_auth",
-      input.override?.codexCredentialRef,
-      projectCredentials.codexCredentialRef,
-      orgConfig.defaults?.codex_chatgpt_auth,
-    );
+    // BYOK (default): the tenant's own resolved default entry — project over org,
+    // no endpoint override. The (cli, authRef) compatibility + full-role rules
+    // are enforced where the default is SET (the connect route).
+    defaultLlm = pickEntry("llm_default", projectCredentials.defaultLlm, orgConfig.defaults?.defaultLlm);
   }
 
   // GitHub is ALWAYS the tenant's credential — managed mode only swaps the LLM
@@ -169,13 +162,23 @@ export async function resolveCredentialsForRun(
     orgConfig.defaults?.github_token,
   );
 
-  return { codexCredentialRef, githubCredentialRef, providerMode, ...(endpointOverride && { endpointOverride }) };
+  return { defaultLlm, githubCredentialRef, providerMode, ...(endpointOverride && { endpointOverride }) };
 }
 
-/** First non-empty layer wins; otherwise the kind is unresolved. */
+/** First non-empty ref layer wins; otherwise the kind is unresolved. */
 function pickRef(kind: RunCredentialKind, ...layers: Array<string | undefined>): string {
   for (const layer of layers) {
     if (typeof layer === "string" && layer.trim() !== "") {
+      return layer;
+    }
+  }
+  throw new MissingCredentialError(kind);
+}
+
+/** First present routing-entry layer wins; otherwise the kind is unresolved. */
+function pickEntry(kind: RunCredentialKind, ...layers: Array<RoutingChainEntry | undefined>): RoutingChainEntry {
+  for (const layer of layers) {
+    if (layer !== undefined) {
       return layer;
     }
   }

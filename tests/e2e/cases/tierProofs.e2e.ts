@@ -216,7 +216,10 @@ async function driveLiveTier(config: E2eConfig, tier: "easy" | "medium" | "hard"
       // The hard tier closes the human-review tier with the in-loop simulated
       // reviewer (CLAUDE.md: reviewPolicy: simulated); easy/medium auto-merge.
       reviewPolicy: tier === "hard" ? "simulated" : "auto",
-      credentials: { codexCredentialRef, githubCredentialRef },
+      credentials: {
+        defaultLlm: { cli: "codex", model: "default", authRef: codexCredentialRef },
+        githubCredentialRef,
+      },
     },
   })) as { projectId: string };
 

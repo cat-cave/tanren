@@ -12,6 +12,7 @@ import {
   emptyRoutingTable,
   readObservedVersion,
 } from "./shared.js";
+import { DefaultLlmEntry } from "../credentials/defaultLlmEntry.js";
 
 // Top-level versioned Zod schema for org-level config. Persisted as a JSONB
 // column on `organizations.config`. Projects inherit these values unless they
@@ -25,13 +26,20 @@ const defaultEscapeHatches = () => EscapeHatches.parse({});
 const defaultAllocator = () => AllocatorConfig.parse({});
 const defaultForgePersona = () => ForgePersona.parse({});
 
-// org-level default credential refs, keyed by credential
-// kind. A project that binds no credential of a given kind inherits the org
-// default. Stored in `organizations.config` JSONB so no DB migration is needed.
-// Both keys are optional; an org may default only one kind.
+// org-level default credentials. A project that binds no credential of a given
+// kind inherits the org default. Stored in `organizations.config` JSONB so no
+// DB migration is needed. Both keys are optional; an org may default only one.
+//
+// `defaultLlm` is a provider-agnostic routing entry {cli, model, authRef} — NOT
+// a Codex-specific ref. It heads every loop-role chain a project leaves empty,
+// so the DEFAULT harness is a DATA fact (codex, claude, or any full-role harness
+// with a compatible credential), exactly like a per-role override. `cli` MUST be
+// a full-role harness (harnessCanBeDefault) and `authRef`'s credential-type MUST
+// be one the cli accepts (harnessAcceptsCredentialType) — both validated where
+// the default is SET (the connect route), not here.
 export const OrgDefaultCredentials = z
   .object({
-    codex_chatgpt_auth: z.string().min(1).optional(),
+    defaultLlm: DefaultLlmEntry.optional(),
     github_token: z.string().min(1).optional(),
   })
   .strict();

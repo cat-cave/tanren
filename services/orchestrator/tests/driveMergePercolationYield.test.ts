@@ -39,7 +39,7 @@ function projectConfig(): unknown {
     reviewPolicy: "auto",
     credentials: {
       githubCredentialRef: "credential/github/dev",
-      codexCredentialRef: "credential/codex/dev",
+      defaultLlm: { cli: "codex", model: "default", authRef: "credential/codex/dev" },
     },
   };
 }

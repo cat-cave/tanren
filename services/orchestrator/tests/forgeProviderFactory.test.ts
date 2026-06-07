@@ -175,7 +175,12 @@ const PROJECT_ROW = {
   org_id: "org_a",
 };
 
-const ORG_ROW = { config: { version: 1, defaultCredentials: { codex_chatgpt_auth: "credential/codex/dev" } } };
+const ORG_ROW = {
+  config: {
+    version: 1,
+    defaultCredentials: { defaultLlm: { cli: "codex", model: "default", authRef: "credential/codex/dev" } },
+  },
+};
 
 const authJson = JSON.stringify({ auth_mode: "chatgpt", tokens: { access_token: "a", refresh_token: "r" } });
 

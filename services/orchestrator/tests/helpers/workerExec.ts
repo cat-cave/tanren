@@ -183,7 +183,10 @@ export async function setupSeededRun() {
       defaultBranch: "main",
       config: {
         ...directMergeConfig(),
-        credentials: { codexCredentialRef, githubCredentialRef },
+        credentials: {
+          defaultLlm: { cli: "codex", model: "default", authRef: codexCredentialRef },
+          githubCredentialRef,
+        },
       },
     },
     undefined,

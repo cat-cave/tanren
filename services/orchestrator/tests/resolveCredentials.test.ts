@@ -10,7 +10,7 @@ import {
 /**
  * Minimal pg.Pool stub for the single org-config read the resolver performs.
  * `config` is whatever the named org row carries (raw JSONB), so a test can
- * exercise legacy `{}` rows, rows with `defaultCredentials`, and missing rows.
+ * exercise bare `version:1` rows, rows with `defaultCredentials`, and missing rows.
  */
 function fakePool(orgs: Record<string, unknown>): Pick<pg.Pool, "query"> {
   return {
@@ -27,21 +27,26 @@ const githubProjectRef = "credential/github/org/org_1/project";
 const codexOrgRef = "credential/codex/org/org_1/default";
 const githubOrgRef = "credential/github/org/org_1/default";
 
+/** The default LLM routing entry shape stored under `defaultLlm`. */
+function codexEntry(authRef: string) {
+  return { cli: "codex", model: "default", authRef };
+}
+
 describe("resolveCredentialsForRun", () => {
   it("prefers project config over the org default", async () => {
     const pool = fakePool({
       org_1: {
         version: 1,
-        defaultCredentials: { codex_chatgpt_auth: codexOrgRef, github_token: githubOrgRef },
+        defaultCredentials: { defaultLlm: codexEntry(codexOrgRef), github_token: githubOrgRef },
       },
     });
     const projectConfig = migrateProjectConfig({
       version: 1,
-      credentials: { codexCredentialRef: codexProjectRef, githubCredentialRef: githubProjectRef },
+      credentials: { defaultLlm: codexEntry(codexProjectRef), githubCredentialRef: githubProjectRef },
     });
     const resolved = await resolveCredentialsForRun(pool, { projectConfig, orgId: "org_1" });
     expect(resolved).toEqual({
-      codexCredentialRef: codexProjectRef,
+      defaultLlm: codexEntry(codexProjectRef),
       githubCredentialRef: githubProjectRef,
       providerMode: "byok",
     });
@@ -51,60 +56,57 @@ describe("resolveCredentialsForRun", () => {
     const pool = fakePool({
       org_1: {
         version: 1,
-        defaultCredentials: { codex_chatgpt_auth: codexOrgRef, github_token: githubOrgRef },
+        defaultCredentials: { defaultLlm: codexEntry(codexOrgRef), github_token: githubOrgRef },
       },
     });
-    // Project binds only the GitHub ref; Codex inherits the org default.
+    // Project binds only the GitHub ref; the default LLM inherits the org default.
     const projectConfig = migrateProjectConfig({
       version: 1,
       credentials: { githubCredentialRef: githubProjectRef },
     });
     const resolved = await resolveCredentialsForRun(pool, { projectConfig, orgId: "org_1" });
     expect(resolved).toEqual({
-      codexCredentialRef: codexOrgRef,
+      defaultLlm: codexEntry(codexOrgRef),
       githubCredentialRef: githubProjectRef,
       providerMode: "byok",
     });
   });
 
-  it("lets an explicit override win over both project config and org default", async () => {
+  it("lets an explicit GitHub override win over both project config and org default", async () => {
     const pool = fakePool({
       org_1: {
         version: 1,
-        defaultCredentials: { codex_chatgpt_auth: codexOrgRef, github_token: githubOrgRef },
+        defaultCredentials: { defaultLlm: codexEntry(codexOrgRef), github_token: githubOrgRef },
       },
     });
     const projectConfig = migrateProjectConfig({
       version: 1,
-      credentials: { codexCredentialRef: codexProjectRef, githubCredentialRef: githubProjectRef },
+      credentials: { defaultLlm: codexEntry(codexProjectRef), githubCredentialRef: githubProjectRef },
     });
     const resolved = await resolveCredentialsForRun(pool, {
       projectConfig,
       orgId: "org_1",
-      override: {
-        codexCredentialRef: "credential/codex/me/pin",
-        githubCredentialRef: "credential/github/me/pin",
-      },
+      override: { githubCredentialRef: "credential/github/me/pin" },
     });
     expect(resolved).toEqual({
-      codexCredentialRef: "credential/codex/me/pin",
+      defaultLlm: codexEntry(codexProjectRef),
       githubCredentialRef: "credential/github/me/pin",
       providerMode: "byok",
     });
   });
 
-  it("resolves from org defaults when the project binds nothing (legacy row)", async () => {
+  it("resolves from org defaults when the project binds nothing", async () => {
     const pool = fakePool({
       org_1: {
         version: 1,
-        defaultCredentials: { codex_chatgpt_auth: codexOrgRef, github_token: githubOrgRef },
+        defaultCredentials: { defaultLlm: codexEntry(codexOrgRef), github_token: githubOrgRef },
       },
     });
     // A project with no bound credentials key (bare version:1 config).
     const projectConfig = migrateProjectConfig({ version: 1 });
     const resolved = await resolveCredentialsForRun(pool, { projectConfig, orgId: "org_1" });
     expect(resolved).toEqual({
-      codexCredentialRef: codexOrgRef,
+      defaultLlm: codexEntry(codexOrgRef),
       githubCredentialRef: githubOrgRef,
       providerMode: "byok",
     });
@@ -112,7 +114,7 @@ describe("resolveCredentialsForRun", () => {
 
   it("throws MissingCredentialError naming the unresolved kind (github)", async () => {
     const pool = fakePool({
-      org_1: { version: 1, defaultCredentials: { codex_chatgpt_auth: codexOrgRef } },
+      org_1: { version: 1, defaultCredentials: { defaultLlm: codexEntry(codexOrgRef) } },
     });
     const projectConfig = migrateProjectConfig({ version: 1 });
     await expect(resolveCredentialsForRun(pool, { projectConfig, orgId: "org_1" })).rejects.toMatchObject({
@@ -121,7 +123,7 @@ describe("resolveCredentialsForRun", () => {
     });
   });
 
-  it("throws MissingCredentialError for codex first when both are unresolved", async () => {
+  it("throws MissingCredentialError for the default LLM first when both are unresolved", async () => {
     const pool = fakePool({ org_1: { version: 1 } });
     const projectConfig = migrateProjectConfig({ version: 1 });
     let caught: unknown;
@@ -131,14 +133,14 @@ describe("resolveCredentialsForRun", () => {
       caught = error;
     }
     expect(caught).toBeInstanceOf(MissingCredentialError);
-    expect((caught as MissingCredentialError).kind).toBe("codex_chatgpt_auth");
+    expect((caught as MissingCredentialError).kind).toBe("llm_default");
   });
 
   it("THROWS OrgProviderModeUnresolved when a NON-EMPTY org id reads back no row (scoping/denial bug, not 'no config')", async () => {
     const pool = fakePool({});
     const projectConfig = migrateProjectConfig({
       version: 1,
-      credentials: { codexCredentialRef: codexProjectRef, githubCredentialRef: githubProjectRef },
+      credentials: { defaultLlm: codexEntry(codexProjectRef), githubCredentialRef: githubProjectRef },
     });
     let caught: unknown;
     try {
@@ -150,47 +152,47 @@ describe("resolveCredentialsForRun", () => {
     expect((caught as OrgProviderModeUnresolved).orgId).toBe("ghost");
   });
 
-  it("treats an EMPTY org id ('') with no row as no defaults — the legacy project-config-only path", async () => {
+  it("treats an EMPTY org id ('') with no row as no defaults — the project-config-only path", async () => {
     const pool = fakePool({});
     const projectConfig = migrateProjectConfig({
       version: 1,
-      credentials: { codexCredentialRef: codexProjectRef, githubCredentialRef: githubProjectRef },
+      credentials: { defaultLlm: codexEntry(codexProjectRef), githubCredentialRef: githubProjectRef },
     });
     const resolved = await resolveCredentialsForRun(pool, { projectConfig, orgId: "" });
     expect(resolved).toEqual({
-      codexCredentialRef: codexProjectRef,
+      defaultLlm: codexEntry(codexProjectRef),
       githubCredentialRef: githubProjectRef,
       providerMode: "byok",
     });
   });
 
-  it("names Codex vs GitHub in the MissingCredentialError message", async () => {
-    const codexMissing = new MissingCredentialError("codex_chatgpt_auth");
-    expect(codexMissing.message).toContain("Codex credential");
-    expect(codexMissing.kind).toBe("codex_chatgpt_auth");
+  it("names the default LLM vs GitHub in the MissingCredentialError message", async () => {
+    const llmMissing = new MissingCredentialError("llm_default");
+    expect(llmMissing.message).toContain("default LLM");
+    expect(llmMissing.kind).toBe("llm_default");
     const githubMissing = new MissingCredentialError("github_token");
     expect(githubMissing.message).toContain("GitHub credential");
     expect(githubMissing.kind).toBe("github_token");
   });
 
-  it("ignores blank/whitespace refs and falls through to the next layer", async () => {
+  it("ignores blank/whitespace GitHub override refs and falls through to the next layer", async () => {
     const pool = fakePool({
       org_1: {
         version: 1,
-        defaultCredentials: { codex_chatgpt_auth: codexOrgRef, github_token: githubOrgRef },
+        defaultCredentials: { defaultLlm: codexEntry(codexOrgRef), github_token: githubOrgRef },
       },
     });
     const projectConfig = migrateProjectConfig({ version: 1 });
     const resolved = await resolveCredentialsForRun(pool, {
       projectConfig,
       orgId: "org_1",
-      override: { codexCredentialRef: "   " },
+      override: { githubCredentialRef: "   " },
     });
-    expect(resolved.codexCredentialRef).toBe(codexOrgRef);
+    expect(resolved.githubCredentialRef).toBe(githubOrgRef);
   });
 
   // SaaS Tier-B #5: BYOK-vs-managed provider seam. These assert OUTCOMES — the
-  // resolved LLM credential ref + the endpoint override — not mock calls.
+  // resolved default LLM entry + the endpoint override — not mock calls.
   describe("managed provider mode", () => {
     const platformRef = "credential/openrouter/platform/default";
 
@@ -199,15 +201,15 @@ describe("resolveCredentialsForRun", () => {
         org_1: {
           version: 1,
           providerMode: "managed",
-          defaultCredentials: { codex_chatgpt_auth: codexOrgRef, github_token: githubOrgRef },
+          defaultCredentials: { defaultLlm: codexEntry(codexOrgRef), github_token: githubOrgRef },
         },
       });
       const projectConfig = migrateProjectConfig({ version: 1 });
       const resolved = await resolveCredentialsForRun(pool, { projectConfig, orgId: "org_1" });
       expect(resolved.providerMode).toBe("managed");
-      // The tenant's own codex default is NOT used — the platform ref is.
-      expect(resolved.codexCredentialRef).toBe(platformRef);
-      expect(resolved.codexCredentialRef).not.toBe(codexOrgRef);
+      // The tenant's own default LLM is NOT used — the platform ref is.
+      expect(resolved.defaultLlm).toEqual(codexEntry(platformRef));
+      expect(resolved.defaultLlm.authRef).not.toBe(codexOrgRef);
       // GitHub stays the tenant's own credential.
       expect(resolved.githubCredentialRef).toBe(githubOrgRef);
       // The harness is pointed at the OpenRouter OpenAI-compatible endpoint.
@@ -227,7 +229,7 @@ describe("resolveCredentialsForRun", () => {
         projectConfig: migrateProjectConfig({ version: 1 }),
         orgId: "org_1",
       });
-      expect(resolved.codexCredentialRef).toBe("credential/openrouter/platform/eu");
+      expect(resolved.defaultLlm.authRef).toBe("credential/openrouter/platform/eu");
       expect(resolved.endpointOverride).toEqual({ baseUrl: "https://eu.openrouter/v1" });
     });
 
@@ -238,7 +240,7 @@ describe("resolveCredentialsForRun", () => {
       const projectConfig = migrateProjectConfig({ version: 1, providerMode: "managed" });
       const resolved = await resolveCredentialsForRun(pool, { projectConfig, orgId: "org_1" });
       expect(resolved.providerMode).toBe("managed");
-      expect(resolved.codexCredentialRef).toBe(platformRef);
+      expect(resolved.defaultLlm.authRef).toBe(platformRef);
     });
 
     it("lets a project pin back to byok over a managed org default", async () => {
@@ -246,32 +248,18 @@ describe("resolveCredentialsForRun", () => {
         org_1: {
           version: 1,
           providerMode: "managed",
-          defaultCredentials: { codex_chatgpt_auth: codexOrgRef, github_token: githubOrgRef },
+          defaultCredentials: { defaultLlm: codexEntry(codexOrgRef), github_token: githubOrgRef },
         },
       });
       const projectConfig = migrateProjectConfig({ version: 1, providerMode: "byok" });
       const resolved = await resolveCredentialsForRun(pool, { projectConfig, orgId: "org_1" });
       expect(resolved.providerMode).toBe("byok");
-      expect(resolved.codexCredentialRef).toBe(codexOrgRef);
-      expect(resolved.endpointOverride).toBeUndefined();
-    });
-
-    it("an explicit codex override forces byok even under a managed org", async () => {
-      const pool = fakePool({
-        org_1: { version: 1, providerMode: "managed", defaultCredentials: { github_token: githubOrgRef } },
-      });
-      const resolved = await resolveCredentialsForRun(pool, {
-        projectConfig: migrateProjectConfig({ version: 1 }),
-        orgId: "org_1",
-        override: { codexCredentialRef: "credential/codex/me/pin" },
-      });
-      expect(resolved.providerMode).toBe("byok");
-      expect(resolved.codexCredentialRef).toBe("credential/codex/me/pin");
+      expect(resolved.defaultLlm).toEqual(codexEntry(codexOrgRef));
       expect(resolved.endpointOverride).toBeUndefined();
     });
 
     it("never throws MissingCredentialError for the LLM kind in managed mode", async () => {
-      // No codex default anywhere; managed mode resolves the platform ref instead.
+      // No default LLM anywhere; managed mode resolves the platform ref instead.
       const pool = fakePool({
         org_1: { version: 1, providerMode: "managed", defaultCredentials: { github_token: githubOrgRef } },
       });
@@ -279,7 +267,7 @@ describe("resolveCredentialsForRun", () => {
         projectConfig: migrateProjectConfig({ version: 1 }),
         orgId: "org_1",
       });
-      expect(resolved.codexCredentialRef).toBe(platformRef);
+      expect(resolved.defaultLlm.authRef).toBe(platformRef);
     });
   });
 });

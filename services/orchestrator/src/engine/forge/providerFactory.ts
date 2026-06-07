@@ -88,7 +88,7 @@ export class ForgeProjectNotFoundError extends Error {
 interface ForgeRunnerContext {
   runnerImage: string;
   routingForge: RoutingChainEntry | undefined;
-  codexCredentialRef: string;
+  defaultLlm: RoutingChainEntry;
   endpointBaseUrl?: string;
   orgId: string;
 }
@@ -133,13 +133,13 @@ async function resolveForgeRunnerContext(
     override: { githubCredentialRef: FORGE_UNUSED_GITHUB_REF },
   });
   // The `forge` routing chain head, when pinned (e.g. a cheaper model for
-  // ideation). Empty (the default) ⇒ fall back to the resolved Codex credential
+  // ideation). Empty (the default) ⇒ fall back to the resolved default LLM entry
   // below — the same data-default the loop's `buildEffectiveRouting` applies.
   const routingForge = projectConfig.routing.forge.chain[0];
   return {
     runnerImage,
     routingForge,
-    codexCredentialRef: resolved.codexCredentialRef,
+    defaultLlm: resolved.defaultLlm,
     ...(resolved.endpointOverride ? { endpointBaseUrl: resolved.endpointOverride.baseUrl } : {}),
     orgId,
   };
@@ -147,15 +147,15 @@ async function resolveForgeRunnerContext(
 
 /**
  * Build the chain entry the Forge adapter runs: the project's pinned `forge`
- * entry when present, else a default-Codex entry pointing at the resolved LLM
- * credential (managed or BYOK). Mirrors `buildEffectiveRouting`'s per-role
- * default so "Codex is the Forge default" is a DATA fact, not a hardcode.
+ * entry when present, else the resolved DEFAULT LLM entry (managed or BYOK,
+ * provider-agnostic). Mirrors `buildEffectiveRouting`'s per-role default so the
+ * Forge default is a DATA fact, not a hardcode.
  */
 function forgeChainEntry(ctx: {
   routingForge: RoutingChainEntry | undefined;
-  codexCredentialRef: string;
+  defaultLlm: RoutingChainEntry;
 }): RoutingChainEntry {
-  return ctx.routingForge ?? { cli: "codex", model: "default", authRef: ctx.codexCredentialRef };
+  return ctx.routingForge ?? ctx.defaultLlm;
 }
 
 /**

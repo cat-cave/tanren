@@ -286,7 +286,10 @@ async function seedCredentialCompleteRun(owner: Pool): Promise<void> {
     version: 1,
     mergeIntegration: "direct_merge",
     governancePosture: "open",
-    credentials: { codexCredentialRef: CODEX_REF, githubCredentialRef: GITHUB_REF },
+    credentials: {
+      defaultLlm: { cli: "codex", model: "default", authRef: CODEX_REF },
+      githubCredentialRef: GITHUB_REF,
+    },
   };
   await owner.query(
     `INSERT INTO projects (project_id, name, repo_url, default_branch, runner_image, org_id, config)
