@@ -9,7 +9,7 @@ import { FetchGitHubHttpClient, type GitHubHttpClient } from "./engine/providers
 import { buildVcsProvider } from "./engine/providers/buildVcsProvider.js";
 import { GithubAppTokenMinter } from "./engine/providers/githubAppTokenMinter.js";
 import { FetchConfigGateGitHub } from "./engine/config/configGateGithub.js";
-import { loadOrgGithubAppInstallation } from "./engine/credentials/orgGithubApp.js";
+import { loadOrgDefaultGithubCredentialRef, loadOrgGithubAppInstallation } from "./engine/credentials/orgGithubApp.js";
 import { resolveGithubToken } from "./engine/credentials/githubTokenResolver.js";
 import type { ConfigGateGithubFactory } from "./routes/orgs/index.js";
 import { TimedGitHubHttpClient, TimedCommandSubstrate } from "./engine/observability/index.js";
@@ -139,11 +139,20 @@ export function buildApp(input: {
   // an orchestrator restart.
   const credentialRegistry = input.credentialRegistry ?? new SecretStoreCredentialRegistry(secrets);
 
-  // audit-gate GitHub port factory. Mints the org's App token (or the
-  // static fallback) so a Bucket-B write opens a PR in `tanren-config`. Injectable.
+  // audit-gate GitHub port factory. Mints the org's App token, else resolves the
+  // org's default GitHub credential (userland config) so a Bucket-B write opens a
+  // PR in `tanren-config`. No App + no org default ⇒ a loud config error (no
+  // deploy-env fallback). Injectable.
   const configGateGithub: ConfigGateGithubFactory = async (orgId) => {
     const installation = await loadOrgGithubAppInstallation(input.pool, orgId);
-    const resolved = await resolveGithubToken({ secrets, installation, minter: githubAppMinter });
+    const staticRef =
+      installation === undefined ? await loadOrgDefaultGithubCredentialRef(input.pool, orgId) : undefined;
+    const resolved = await resolveGithubToken({
+      secrets,
+      installation,
+      minter: githubAppMinter,
+      ...(staticRef !== undefined && { staticRef }),
+    });
     return new FetchConfigGateGitHub({
       http: githubHttp,
       token: resolved.token,

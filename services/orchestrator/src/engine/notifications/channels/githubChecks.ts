@@ -1,3 +1,5 @@
+import type pg from "pg";
+import { getJobOrgId } from "@tanren/db";
 import type { OrgGithubAppInstallation } from "../../config/orgConfig.js";
 import type { SecretStore } from "../../contracts/secretStore.js";
 import {
@@ -7,6 +9,7 @@ import {
   type GitHubRepository,
 } from "../../providers/github.js";
 import { GithubAppTokenMinter } from "../../providers/githubAppTokenMinter.js";
+import { loadOrgDefaultGithubCredentialRef, loadOrgGithubAppInstallation } from "../../credentials/orgGithubApp.js";
 import { resolveGithubToken, type ResolvedGithubToken } from "../../credentials/githubTokenResolver.js";
 import type { NotificationPayload, NotificationTargetRow } from "../schemas.js";
 import type { NotificationChannel } from "./types.js";
@@ -40,10 +43,16 @@ export interface GithubChecksChannelDeps {
   // HTTP client used to talk to the GitHub REST API. Injected so tests can
   // assert request shape without a real network. Defaults to the fetch client.
   http?: GitHubHttpClient;
-  // Static credential ref (when no App is installed). The resolver also reads
-  // `TANREN_GITHUB_APP_TOKEN_REF` when this is omitted; with no installation,
-  // staticRef, and env ref it raises a hard config error (no hardcoded default).
+  // Static credential ref (when no App is installed) — userland config only. With
+  // no installation and no staticRef the resolver raises a hard config error (no
+  // hardcoded default, no deploy-env fallback).
   staticRef?: string;
+  // Pool for PER-ORG credential resolution at publish time. When neither
+  // `installation` nor `staticRef` is supplied explicitly (the production wiring),
+  // the channel resolves the publishing org's OWN github credential from the
+  // ambient per-event org scope (getJobOrgId) — NOT a global/deploy token (which
+  // would be a cross-tenant leak). Tests inject installation/staticRef directly.
+  pool?: pg.Pool;
 }
 
 const STATUS_CONTEXT = "tanren";
@@ -64,6 +73,7 @@ export class GithubChecksChannel implements NotificationChannel {
   private readonly minter: GithubAppTokenMinter;
   private readonly http: GitHubHttpClient;
   private readonly staticRef: string | undefined;
+  private readonly pool: pg.Pool | undefined;
 
   constructor(deps: GithubChecksChannelDeps) {
     this.secrets = deps.secrets;
@@ -71,6 +81,7 @@ export class GithubChecksChannel implements NotificationChannel {
     this.minter = deps.minter ?? new GithubAppTokenMinter({ secrets: deps.secrets });
     this.http = deps.http ?? new FetchGitHubHttpClient();
     this.staticRef = deps.staticRef;
+    this.pool = deps.pool;
   }
 
   async publish(target: NotificationTargetRow, payload: NotificationPayload): Promise<void> {
@@ -96,11 +107,27 @@ export class GithubChecksChannel implements NotificationChannel {
   }
 
   private async resolveToken(): Promise<ResolvedGithubToken> {
+    // Explicit construction-time deps (tests) win. Otherwise resolve the
+    // PUBLISHING ORG's own github credential from the ambient per-event org scope
+    // — its App installation, else its default github credential ref (userland
+    // config). No global/deploy token: a github_checks publish for org A must use
+    // org A's credential, never a shared one.
+    let installation = this.installation;
+    let staticRef = this.staticRef;
+    if (installation === undefined && staticRef === undefined && this.pool !== undefined) {
+      const orgId = getJobOrgId();
+      if (orgId !== undefined) {
+        installation = await loadOrgGithubAppInstallation(this.pool, orgId);
+        if (installation === undefined) {
+          staticRef = await loadOrgDefaultGithubCredentialRef(this.pool, orgId);
+        }
+      }
+    }
     return resolveGithubToken({
       secrets: this.secrets,
       minter: this.minter,
-      ...(this.installation === undefined ? {} : { installation: this.installation }),
-      ...(this.staticRef === undefined ? {} : { staticRef: this.staticRef }),
+      ...(installation === undefined ? {} : { installation }),
+      ...(staticRef === undefined ? {} : { staticRef }),
     });
   }
 

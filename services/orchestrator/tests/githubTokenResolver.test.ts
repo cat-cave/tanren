@@ -40,14 +40,15 @@ describe("resolveGithubToken", () => {
     expect(new MissingGithubCredentialRefError("credential/github/org/o1/absent").retriable).toBe(false);
   });
 
-  it("falls back to TANREN_GITHUB_APP_TOKEN_REF when no staticRef is supplied", async () => {
+  it("does NOT consult TANREN_GITHUB_APP_TOKEN_REF — deploy env is not a runtime credential source", async () => {
     const secrets = new InMemorySecretStore();
     await secrets.put({ ref: "credential/github/env-ref", value: "ghp_from_env" });
     const prior = process.env["TANREN_GITHUB_APP_TOKEN_REF"];
     process.env["TANREN_GITHUB_APP_TOKEN_REF"] = "credential/github/env-ref";
     try {
-      const viaEnv = await resolveGithubToken({ secrets });
-      expect(viaEnv.token).toBe("ghp_from_env");
+      // No staticRef + no installation ⇒ hard config error, even though the env
+      // ref points at a real secret. The github credential is userland config only.
+      await expect(resolveGithubToken({ secrets })).rejects.toBeInstanceOf(NoGithubCredentialConfiguredError);
     } finally {
       if (prior === undefined) {
         delete process.env["TANREN_GITHUB_APP_TOKEN_REF"];
