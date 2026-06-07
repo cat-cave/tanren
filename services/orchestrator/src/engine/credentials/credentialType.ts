@@ -45,6 +45,21 @@ const BUNDLE_SLUG_TYPES: Record<string, CredentialType> = {
 const API_KEY_SLUGS: readonly string[] = ["openrouter", "anthropic", "openai-api"];
 
 /**
+ * The `credential/<slug>/…` PROVIDER SLUG of a ref (e.g. `openrouter`,
+ * `anthropic`, `openai-api`, `codex`), or `null` when the ref is not a
+ * `credential/<slug>/…` ref at all. This is the SINGLE place that parses the slug
+ * out of a ref — `credentialTypeForRef` (the credential-type axis) and the
+ * api_key delivery dispatch (which env var / config a raw key is delivered as)
+ * both consult it, since for an `api_key` the bare type is too coarse: codex
+ * delivers openrouter/openai-api but NOT anthropic, and claude delivers anthropic
+ * but NOT openrouter/openai-api, so the matrix must gate on the slug too.
+ */
+export function providerSlugForRef(ref: string): string | null {
+  const match = /^credential\/([^/]+)\//u.exec(ref);
+  return match?.[1] ?? null;
+}
+
+/**
  * Infer the CredentialType of a stored credential from its Vault ref prefix, or
  * `null` when the ref is not an LLM credential (e.g. `credential/github/…`,
  * `credential/opaque/…`). Loud-by-omission: an unrecognized LLM-looking slug
@@ -52,9 +67,8 @@ const API_KEY_SLUGS: readonly string[] = ["openrouter", "anthropic", "openai-api
  * concrete type must fail rather than guess.
  */
 export function credentialTypeForRef(ref: string): CredentialType | null {
-  const match = /^credential\/([^/]+)\//u.exec(ref);
-  const slug = match?.[1];
-  if (slug === undefined) {
+  const slug = providerSlugForRef(ref);
+  if (slug === null) {
     return null;
   }
   const bundleType = BUNDLE_SLUG_TYPES[slug];

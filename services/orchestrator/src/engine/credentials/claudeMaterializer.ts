@@ -5,7 +5,8 @@ import { CommandFileSubstrate } from "../ssh/commandFileSubstrate.js";
 import { quoteSshShellArg } from "../ssh/command.js";
 import { validateClaudeAuthBundle, validateClaudeCredentialRef } from "./claudeAuth.js";
 import { validateCredentialRef } from "./codexAuth.js";
-import { resolveManagedOpenRouterKey } from "./managedKey.js";
+import { resolveRawProviderKey } from "./managedKey.js";
+import { credentialTypeForRef, providerSlugForRef } from "./credentialType.js";
 
 // materialize a Claude CLI credential bundle onto the runner under a
 // per-run CLAUDE_CONFIG_DIR, mirroring the Codex materializer. The Claude CLI
@@ -59,6 +60,20 @@ export async function materializeClaudeAuthBundle(input: MaterializeClaudeAuthIn
       redacted: true,
     };
   }
+  // BYOK WIDENING: a raw `api_key` ref delivers the TENANT's own key via the CLI's
+  // native settings env. claude delivers a raw key ONLY for `credential/anthropic/`
+  // (native Anthropic, NO base URL — not OpenRouter); any other api_key slug
+  // (openrouter/openai-api) is NOT a claude-deliverable key and is rejected LOUD —
+  // never silently materialized into ANTHROPIC_API_KEY as the wrong provider's key.
+  if (credentialTypeForRef(input.ref) === "api_key") {
+    const slug = providerSlugForRef(input.ref);
+    if (slug !== "anthropic") {
+      throw new Error(
+        `claude cannot deliver a BYOK api_key for provider slug ${JSON.stringify(slug)} (only anthropic)`,
+      );
+    }
+    return materializeNativeAnthropicClaudeSettings(input, configDir);
+  }
   // BYOK (default, unchanged): validate the claude/ ref + the `.credentials.json`
   // token bundle and materialize it.
   const ref = validateClaudeCredentialRef(input.ref);
@@ -92,8 +107,17 @@ async function materializeManagedClaudeSettings(input: MaterializeClaudeAuthInpu
     // No silent fallback: a managed claude run with no endpoint is a wiring bug.
     throw new Error("managed Claude run requires an endpoint base URL");
   }
+  // Managed claude authenticates THROUGH OpenRouter (ANTHROPIC_BASE_URL=OpenRouter +
+  // the key as ANTHROPIC_AUTH_TOKEN). A non-openrouter key here would be silently
+  // mis-wired as an OpenRouter token — require the openrouter slug LOUD.
+  const slug = providerSlugForRef(input.ref);
+  if (slug !== "openrouter") {
+    throw new Error(
+      `managed/OpenRouter Claude materialization requires a credential/openrouter/ ref; got slug ${JSON.stringify(slug)}`,
+    );
+  }
   const anthropicBaseUrl = claudeAnthropicBaseUrl(input.endpointBaseUrl);
-  const apiKey = await resolveManagedOpenRouterKey(input.secrets, input.ref);
+  const apiKey = await resolveRawProviderKey(input.secrets, input.ref);
   const settingsJson = JSON.stringify({
     env: {
       ANTHROPIC_BASE_URL: anthropicBaseUrl,
@@ -108,6 +132,31 @@ async function materializeManagedClaudeSettings(input: MaterializeClaudeAuthInpu
   });
   assertMaterializationOk(result);
   return anthropicBaseUrl;
+}
+
+/**
+ * NATIVE Anthropic materialization (the BYOK `credential/anthropic/` api_key
+ * path). The Claude CLI hits Anthropic directly, so we write a `settings.json`
+ * (chmod 600) into CLAUDE_CONFIG_DIR carrying ONLY `ANTHROPIC_API_KEY=<key>` —
+ * NO ANTHROPIC_BASE_URL (that is the OpenRouter-routing override, which this path
+ * must NOT set) and no blanked AUTH_TOKEN. The secret key lives ONLY in this file
+ * (fed on stdin), never in the command string/events. Returns no base URL, so the
+ * command builder exports nothing extra.
+ */
+async function materializeNativeAnthropicClaudeSettings(
+  input: MaterializeClaudeAuthInput,
+  configDir: string,
+): Promise<MaterializedClaudeAuth> {
+  const ref = validateCredentialRef(input.ref);
+  const apiKey = await resolveRawProviderKey(input.secrets, input.ref);
+  const settingsJson = JSON.stringify({ env: { ANTHROPIC_API_KEY: apiKey } });
+  const result = await input.ssh.run(input.target, {
+    command: buildManagedClaudeSettingsCommand(configDir),
+    stdin: settingsJson,
+    timeoutMs: input.timeoutMs ?? 30_000,
+  });
+  assertMaterializationOk(result);
+  return { CLAUDE_CONFIG_DIR: configDir, ref, managed: false, redacted: true };
 }
 
 // Maps the resolved OpenRouter endpoint (`…/api/v1`) to the Anthropic-compatible

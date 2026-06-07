@@ -194,11 +194,24 @@ describe("Codex writer adapter", () => {
     expect(command).not.toContain("--ignore-user-config");
   });
 
-  it("keeps --ignore-user-config and sources nothing for a BYOK run", () => {
+  it("keeps --ignore-user-config and sources nothing for a BYOK bundle run", () => {
     const command = buildCodexExecCommand({ codexHome: "/home/tanren/.codex", workspace: "/workspace/repo" });
     expect(command).toContain("--ignore-user-config");
     expect(command).not.toContain("openrouter.env");
     expect(command).not.toContain("OPENROUTER_API_KEY");
+  });
+
+  // BYOK native-OpenAI api_key: sources the OPENAI_API_KEY env file but KEEPS
+  // --ignore-user-config (codex hits OpenAI directly, no config.toml).
+  it("sources the native OPENAI_API_KEY env file + keeps --ignore-user-config for a BYOK openai-api key", () => {
+    const command = buildCodexExecCommand({
+      codexHome: "/home/tanren/.codex",
+      workspace: "/workspace/repo",
+      nativeApiKeyEnvFile: "/home/tanren/.codex/openai.env",
+    });
+    expect(command).toContain(". '/home/tanren/.codex/openai.env' && CODEX_HOME=");
+    expect(command).toContain("--ignore-user-config");
+    expect(command).not.toContain("openrouter.env");
   });
 
   it("does not leak auth secrets through commands or writer results", async () => {

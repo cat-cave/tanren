@@ -43,8 +43,12 @@ import {
   classifiedAsLabel,
   deriveAiProviderRef,
 } from "../../engine/credentials/aiProvider.js";
-import { credentialTypeForRef } from "../../engine/credentials/credentialType.js";
-import { FULL_ROLE_CLIS, harnessAcceptsCredentialType } from "../../engine/providers/harnessCapability.js";
+import { credentialTypeForRef, providerSlugForRef } from "../../engine/credentials/credentialType.js";
+import {
+  FULL_ROLE_CLIS,
+  harnessAcceptsApiKeyProvider,
+  harnessAcceptsCredentialType,
+} from "../../engine/providers/harnessCapability.js";
 import { storeCodexAuthBundle } from "../../engine/credentials/codexAuth.js";
 import type { SecretStore } from "../../engine/contracts/secretStore.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
@@ -125,26 +129,42 @@ export function createAiProviderRoutes(options: AiProviderRoutesOptions) {
     }
 
     // If the caller asked to make this the org default, resolve the full-role
-    // harness for it BEFORE storing — so an incompatible default request (e.g. a
-    // raw api_key today, which no full-role harness consumes) fails LOUD here and
-    // never leaves an orphaned secret. A null/undefined result is a hard 400, not
-    // a silent connect-without-default. Recomputed nowhere else: this `defaultCli`
-    // is the entry's cli when we write the default below.
+    // harness for it BEFORE storing — so an incompatible default request fails LOUD
+    // here and never leaves an orphaned secret. For a raw api_key the choice is
+    // PROVIDER-SLUG-aware (NOT just credential-type): an anthropic key → claude,
+    // an openrouter/openai-api key → codex (the cli whose materializer delivers
+    // that provider's raw key). A bundle credential matches on credential-type.
+    // A null/undefined result is a hard 400, not a silent connect-without-default.
+    // Recomputed nowhere else: this `defaultCli` is the entry's cli below.
     let defaultCli: string | undefined;
     if (makeDefault) {
       const credentialType = credentialTypeForRef(ref);
       if (credentialType === null) {
         return c.json({ error: "invalid_ai_provider_default", message: "connected ref is not an LLM credential" }, 400);
       }
-      defaultCli = FULL_ROLE_CLIS.find((cli) => harnessAcceptsCredentialType(cli, credentialType));
-      if (defaultCli === undefined) {
-        return c.json(
-          {
-            error: "invalid_ai_provider_default",
-            message: `no full-role harness accepts a ${credentialType} credential as a default; connect a Codex/Claude bundle, or route this provider to a writer role explicitly`,
-          },
-          400,
-        );
+      if (credentialType === "api_key") {
+        const slug = providerSlugForRef(ref);
+        defaultCli = slug === null ? undefined : FULL_ROLE_CLIS.find((cli) => harnessAcceptsApiKeyProvider(cli, slug));
+        if (defaultCli === undefined) {
+          return c.json(
+            {
+              error: "invalid_ai_provider_default",
+              message: `no full-role harness delivers a ${JSON.stringify(slug)} api_key as a default; connect a Codex/Claude bundle, or route this provider to a writer role explicitly`,
+            },
+            400,
+          );
+        }
+      } else {
+        defaultCli = FULL_ROLE_CLIS.find((cli) => harnessAcceptsCredentialType(cli, credentialType));
+        if (defaultCli === undefined) {
+          return c.json(
+            {
+              error: "invalid_ai_provider_default",
+              message: `no full-role harness accepts a ${credentialType} credential as a default; connect a Codex/Claude bundle, or route this provider to a writer role explicitly`,
+            },
+            400,
+          );
+        }
       }
     }
 
@@ -180,12 +200,12 @@ export function createAiProviderRoutes(options: AiProviderRoutesOptions) {
 
     // Wire it as the org's default LLM, through the SAME org-config path the rest
     // of config uses (read-modify-write of `organizations.config`). The default is
-    // a provider-agnostic routing entry {cli, model, authRef}: we pick a FULL-ROLE
-    // harness (harnessCanBeDefault) whose materializer ACCEPTS this credential's
-    // type (harnessAcceptsCredentialType) — so the (cli, authRef) pair is valid at
-    // run time, not a facade. A credential with no compatible full-role harness
-    // (e.g. a raw api_key today — only writer-only aider consumes it) is REJECTED
-    // loudly here, never silently wired to a harness that cannot read it.
+    // a provider-agnostic routing entry {cli, model, authRef}: `defaultCli` above
+    // is the FULL-ROLE harness whose materializer can actually deliver THIS
+    // credential (a bundle by credential-type; a raw api_key by PROVIDER SLUG —
+    // anthropic→claude, openrouter/openai-api→codex) — so the (cli, authRef) pair
+    // is valid at run time, not a facade. An incompatible credential is REJECTED
+    // loudly above, never silently wired to a harness that cannot read it.
     // `providerMode: "byok"` resolves the tenant credential. `makeDefault: false`
     // connects without changing routing.
     let isDefault = false;

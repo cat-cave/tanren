@@ -5,7 +5,8 @@ import { CommandFileSubstrate } from "../ssh/commandFileSubstrate.js";
 import { quoteSshShellArg } from "../ssh/command.js";
 import { validateOpencodeAuthBundle, validateOpencodeCredentialRef } from "./opencodeAuth.js";
 import { validateCredentialRef } from "./codexAuth.js";
-import { resolveManagedOpenRouterKey } from "./managedKey.js";
+import { resolveRawProviderKey } from "./managedKey.js";
+import { providerSlugForRef } from "./credentialType.js";
 
 // materialize an opencode credential bundle onto the runner under a
 // per-run data dir, mirroring the Codex/Claude materializers. opencode reads
@@ -88,7 +89,16 @@ export async function materializeOpencodeAuthBundle(
  * Returns the config home for the writer to export as XDG_CONFIG_HOME.
  */
 async function materializeManagedOpencode(input: MaterializeOpencodeAuthInput, dataHome: string): Promise<string> {
-  const apiKey = await resolveManagedOpenRouterKey(input.secrets, input.ref);
+  // Managed opencode authenticates THROUGH OpenRouter; a non-openrouter key here
+  // would be silently mis-wired as an OpenRouter key. Require the openrouter slug
+  // LOUD (same guard as the codex/claude managed paths).
+  const slug = providerSlugForRef(input.ref);
+  if (slug !== "openrouter") {
+    throw new Error(
+      `managed/OpenRouter opencode materialization requires a credential/openrouter/ ref; got slug ${JSON.stringify(slug)}`,
+    );
+  }
+  const apiKey = await resolveRawProviderKey(input.secrets, input.ref);
   const configHome = opencodeConfigHomeForRun(input.runId, input.baseDir);
   const authJson = JSON.stringify({ openrouter: { type: "api", key: apiKey } });
   // Same FILE SUBSTRATE secret-write seam as the BYOK path (key on stdin).

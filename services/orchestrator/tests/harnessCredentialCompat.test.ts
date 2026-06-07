@@ -9,6 +9,7 @@ import { AI_PROVIDERS, deriveAiProviderRef } from "../src/engine/credentials/aiP
 import {
   FULL_ROLE_CLIS,
   HARNESS_CAPABILITIES,
+  harnessAcceptsApiKeyProvider,
   harnessAcceptsCredentialType,
   harnessCanBeDefault,
 } from "../src/engine/providers/harnessCapability.js";
@@ -61,10 +62,12 @@ describe("harness credential-type compatibility matrix", () => {
     }
   });
 
-  it("reflects today's materializer reality (codex/claude bundles, aider/pi/reasonix keys, opencode bundle)", () => {
+  it("reflects today's materializer reality (codex/claude bundle+api_key, aider/pi/reasonix keys, opencode bundle)", () => {
     const expected: Record<string, readonly CredentialType[]> = {
-      codex: ["codex_chatgpt_bundle"],
-      claude: ["claude_cli_bundle"],
+      // codex/claude consume their own bundle OR a raw api_key (the env-key
+      // widening): codex via config.toml/OPENAI_API_KEY, claude via ANTHROPIC_API_KEY.
+      codex: ["codex_chatgpt_bundle", "api_key"],
+      claude: ["claude_cli_bundle", "api_key"],
       opencode: ["opencode_bundle"],
       aider: ["api_key"],
       pi: ["api_key"],
@@ -77,11 +80,45 @@ describe("harness credential-type compatibility matrix", () => {
 
   it("harnessAcceptsCredentialType gates (cli, credential-type) pairs", () => {
     expect(harnessAcceptsCredentialType("codex", "codex_chatgpt_bundle")).toBe(true);
-    // codex+api_key is false until the BYOK widening (PR-2); pinned so the step is explicit.
-    expect(harnessAcceptsCredentialType("codex", "api_key")).toBe(false);
+    // codex+claude now also consume a raw api_key via the materializer env-key path.
+    expect(harnessAcceptsCredentialType("codex", "api_key")).toBe(true);
+    expect(harnessAcceptsCredentialType("claude", "api_key")).toBe(true);
+    expect(harnessAcceptsCredentialType("claude", "claude_cli_bundle")).toBe(true);
     expect(harnessAcceptsCredentialType("aider", "api_key")).toBe(true);
     expect(harnessAcceptsCredentialType("aider", "codex_chatgpt_bundle")).toBe(false);
     expect(harnessAcceptsCredentialType("nonexistent", "api_key")).toBe(false);
+  });
+
+  it("declares the api_key PROVIDER SLUGS each full-role harness actually delivers", () => {
+    const expected: Record<string, readonly string[] | undefined> = {
+      // codex delivers a raw key only as OpenRouter (config.toml) or native OpenAI.
+      codex: ["openrouter", "openai-api"],
+      // claude delivers a raw key only as native Anthropic.
+      claude: ["anthropic"],
+      // bundle-only / provider-agnostic harnesses declare no slug set.
+      opencode: undefined,
+      aider: undefined,
+      pi: undefined,
+      reasonix: undefined,
+    };
+    for (const capability of HARNESS_CAPABILITIES) {
+      expect(capability.acceptedApiKeyProviderSlugs).toEqual(expected[capability.cli]);
+    }
+  });
+
+  it("harnessAcceptsApiKeyProvider gates (cli, provider-slug) — narrower than the coarse api_key accept", () => {
+    // codex delivers openrouter + openai-api, but NOT anthropic.
+    expect(harnessAcceptsApiKeyProvider("codex", "openrouter")).toBe(true);
+    expect(harnessAcceptsApiKeyProvider("codex", "openai-api")).toBe(true);
+    expect(harnessAcceptsApiKeyProvider("codex", "anthropic")).toBe(false);
+    // claude delivers anthropic, but NOT openrouter / openai-api.
+    expect(harnessAcceptsApiKeyProvider("claude", "anthropic")).toBe(true);
+    expect(harnessAcceptsApiKeyProvider("claude", "openrouter")).toBe(false);
+    expect(harnessAcceptsApiKeyProvider("claude", "openai-api")).toBe(false);
+    // a harness without slug-scoped api_key delivery (writer-only / bundle-only) is
+    // NOT eligible here, even though aider "accepts api_key" coarsely.
+    expect(harnessAcceptsApiKeyProvider("aider", "openrouter")).toBe(false);
+    expect(harnessAcceptsApiKeyProvider("nonexistent", "openrouter")).toBe(false);
   });
 });
 

@@ -76,8 +76,8 @@ async function connect(app: Hono<ActorContextEnv>, body: Record<string, unknown>
 describe("ai-provider routes", () => {
   it("connects an OpenRouter key under a cost-classified ref and GET reflects it", async () => {
     const { app, secrets } = buildHarness(admin);
-    // A raw api_key cannot be a full-role default yet (no full-role harness
-    // consumes api_key until the materializer widening), so connect non-default.
+    // Connect non-default here to assert the plain GET-reflects-it behavior; the
+    // makeDefault path is covered by its own test below.
     const created = await connect(app, { provider: "openrouter", apiKey: "sk-or-secret", makeDefault: false });
 
     expect(created.status).toBe(201);
@@ -120,14 +120,48 @@ describe("ai-provider routes", () => {
     }
   });
 
-  it("rejects an api_key provider as the org default (no full-role harness consumes it yet)", async () => {
+  it("wires an openrouter api_key default through codex (the harness that delivers an openrouter key)", async () => {
     const { app, pool } = buildHarness(admin);
     const created = await connect(app, { provider: "openrouter", apiKey: "sk-or-secret", makeDefault: true });
-    expect(created.status).toBe(400);
-    expect(created.body.error).toBe("invalid_ai_provider_default");
-    // No orphaned default was written (validation runs before the store).
-    const config = pool.orgs.get("org_acme")?.config as { defaultCredentials?: { defaultLlm?: unknown } };
-    expect(config?.defaultCredentials?.defaultLlm).toBeUndefined();
+    expect(created.status).toBe(201);
+    expect(created.body.isDefault).toBe(true);
+    // The default cli is PROVIDER-SLUG-aware: openrouter → codex (config.toml env).
+    const config = pool.orgs.get("org_acme")?.config as {
+      providerMode: string;
+      defaultCredentials?: { defaultLlm?: { cli: string; model: string; authRef: string } };
+    };
+    expect(config.providerMode).toBe("byok");
+    expect(config.defaultCredentials?.defaultLlm).toEqual({
+      cli: "codex",
+      model: "default",
+      authRef: created.body.ref,
+    });
+  });
+
+  it("wires an openai api_key default through codex (native OPENAI_API_KEY)", async () => {
+    const { app, pool } = buildHarness(admin);
+    const created = await connect(app, { provider: "openai", apiKey: "sk-openai-secret", makeDefault: true });
+    expect(created.status).toBe(201);
+    expect(created.body.isDefault).toBe(true);
+    const config = pool.orgs.get("org_acme")?.config as {
+      defaultCredentials?: { defaultLlm?: { cli: string; authRef: string } };
+    };
+    expect(config.defaultCredentials?.defaultLlm?.cli).toBe("codex");
+    expect(config.defaultCredentials?.defaultLlm?.authRef).toBe(created.body.ref);
+  });
+
+  it("wires an anthropic api_key default through CLAUDE (not codex — slug-aware selection)", async () => {
+    const { app, pool } = buildHarness(admin);
+    const created = await connect(app, { provider: "anthropic", apiKey: "sk-ant-secret", makeDefault: true });
+    expect(created.status).toBe(201);
+    expect(created.body.isDefault).toBe(true);
+    // anthropic → claude (the harness whose materializer delivers a native
+    // Anthropic key); codex cannot deliver an anthropic key, so it is NOT picked.
+    const config = pool.orgs.get("org_acme")?.config as {
+      defaultCredentials?: { defaultLlm?: { cli: string; authRef: string } };
+    };
+    expect(config.defaultCredentials?.defaultLlm?.cli).toBe("claude");
+    expect(config.defaultCredentials?.defaultLlm?.authRef).toBe(created.body.ref);
   });
 
   it("connects the Codex ChatGPT bundle as a subscription credential", async () => {

@@ -136,6 +136,56 @@ describe("Claude credential contracts", () => {
     expect(JSON.stringify(result)).not.toContain("sk-or-v1-claude");
   });
 
+  it("BYOK api_key (anthropic): writes settings.json with ANTHROPIC_API_KEY ONLY (no base URL)", async () => {
+    const secrets = new FakeSecretStore();
+    // A BYOK Anthropic ref (no managed flag) is the TENANT's own native key.
+    await secrets.put({ ref: "credential/anthropic/org/o1/default", value: "sk-ant-tenant" });
+    const ssh = new CapturingSsh();
+    const result = await materializeClaudeAuthBundle({
+      secrets,
+      ssh,
+      target,
+      ref: "credential/anthropic/org/o1/default",
+      runId: "run_byok_ant",
+    });
+    expect(result).toEqual({
+      CLAUDE_CONFIG_DIR: "/home/tanren/.tanren/runs/run_byok_ant/claude-home",
+      ref: "credential/anthropic/org/o1/default",
+      managed: false,
+      redacted: true,
+    });
+    // settings.json (not .credentials.json) carries the env block; the key arrives
+    // on stdin, never in the command string.
+    expect(ssh.command).toContain("settings.json");
+    expect(ssh.command).not.toContain("sk-ant-tenant");
+    // Native Anthropic: ANTHROPIC_API_KEY ONLY — no ANTHROPIC_BASE_URL (OpenRouter
+    // routing override) and no blanked AUTH_TOKEN.
+    expect(JSON.parse(ssh.stdin ?? "{}")).toEqual({ env: { ANTHROPIC_API_KEY: "sk-ant-tenant" } });
+    expect(JSON.stringify(result)).not.toContain("sk-ant-tenant");
+  });
+
+  it("BYOK api_key: claude REJECTS a non-anthropic slug LOUD (never the wrong provider's key in ANTHROPIC_API_KEY)", async () => {
+    const secrets = new FakeSecretStore();
+    const ssh = new CapturingSsh();
+    // An OpenRouter / OpenAI key is NOT a claude-deliverable raw key — claude only
+    // delivers native Anthropic — so it must fail loud, not be written as an
+    // Anthropic key. (No managed flag ⇒ this is the BYOK api_key path.)
+    for (const slug of ["openrouter", "openai-api"]) {
+      await secrets.put({ ref: `credential/${slug}/org/o1/default`, value: "sk-wrong-provider" });
+      await expect(
+        materializeClaudeAuthBundle({
+          secrets,
+          ssh,
+          target,
+          ref: `credential/${slug}/org/o1/default`,
+          runId: `run_byok_${slug.replaceAll("-", "_")}`,
+        }),
+      ).rejects.toThrow(/claude cannot deliver a BYOK api_key for provider slug/u);
+    }
+    // Nothing was materialized for the rejected slugs.
+    expect(ssh.command).not.toContain("sk-wrong-provider");
+  });
+
   it("MANAGED claude rejects a missing endpoint or empty key loudly", async () => {
     const secrets = new FakeSecretStore();
     const ssh = new CapturingSsh();

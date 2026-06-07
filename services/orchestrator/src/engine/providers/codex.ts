@@ -2,11 +2,16 @@ import type { RunnerHandle } from "../contracts/allocator.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import { storeCodexAuthBundle } from "../credentials/codexAuth.js";
-import { codexManagedEnvPath, materializeCodexAuthBundle } from "../credentials/codexMaterializer.js";
+import { materializeCodexAuthBundle } from "../credentials/codexMaterializer.js";
 import { quoteSshShellArg } from "../ssh/command.js";
 import type { AnswererAdapter, TokenUsage, UsageLimitSignal, WriterAdapter, WriterResult } from "./types.js";
 import { findOpenRouterGenerationId, foldGenerationId } from "./openRouterGenerationId.js";
 import { captureBaselineSha, captureGitStateAfterCodex } from "./codexGit.js";
+import { buildCodexAnswererExecCommand, buildCodexExecCommand } from "./codexExecCommand.js";
+
+// Re-exported from codexExecCommand.ts (split out to keep this adapter under the
+// 500-line cap) so existing importers (and the command-builder tests) are stable.
+export { buildCodexAnswererExecCommand, buildCodexExecCommand };
 
 export interface CodexWriterDependencies {
   secrets: SecretStore;
@@ -99,17 +104,19 @@ export function createCodexWriter(dependencies: CodexWriterDependencies): Writer
           codexHome: auth.CODEX_HOME,
           workspace: opts.workspace,
           managed: auth.managed,
+          nativeApiKeyEnvFile: auth.nativeApiKeyEnvFile,
         }),
         stdin: opts.prompt,
         timeoutMs: opts.timeoutMs,
       });
       const telemetry = parseCodexJsonlTelemetry(codex.stdout);
       // Auth write-back is a ChatGPT-bundle refresh: codex rotates its
-      // access/refresh tokens during a run and we persist the new bundle. A
-      // managed run authenticates with a static API key (no token rotation), and
-      // its auth.json is not a codex bundle, so there is nothing to write back —
-      // skip it (storeCodexAuthBundle would reject the non-codex ref anyway).
-      if (!managed) {
+      // access/refresh tokens during a run and we persist the new bundle. Only the
+      // BYOK bundle path writes an auth.json codex rotates; a managed or BYOK api_key
+      // run authenticates with a static key (no token rotation), and its env/config
+      // is not a codex bundle, so there is nothing to write back — skip it
+      // (storeCodexAuthBundle would reject the non-codex ref anyway).
+      if (auth.bundleAuth) {
         await persistRefreshedCodexAuthBestEffort({
           secrets: dependencies.secrets,
           ssh: dependencies.ssh,
@@ -187,14 +194,15 @@ export function createCodexAnswerer<TOutput>(dependencies: CodexAnswererDependen
           schemaPath,
           outputPath,
           managed: auth.managed,
+          nativeApiKeyEnvFile: auth.nativeApiKeyEnvFile,
         }),
         stdin: opts.prompt,
         timeoutMs: opts.timeoutMs,
       });
       const telemetry = parseCodexJsonlTelemetry(result.stdout);
-      // Managed (API-key) auth has no token to refresh — skip the write-back
-      // (mirrors the writer path).
-      if (!managed) {
+      // Only the BYOK bundle path has a rotating token — managed / BYOK api_key
+      // auth is a static key, so skip the write-back (mirrors the writer path).
+      if (auth.bundleAuth) {
         await persistRefreshedCodexAuthBestEffort({
           secrets: dependencies.secrets,
           ssh: dependencies.ssh,
@@ -250,77 +258,6 @@ async function persistRefreshedCodexAuthBestEffort(input: {
     // best-effort: a failed auth-bundle store is non-fatal to the run
   }
 }
-
-export function buildCodexExecCommand(input: { codexHome: string; workspace: string; managed?: boolean }): string {
-  return [
-    ...managedKeyEnvPrefix(input.codexHome, input.managed),
-    `CODEX_HOME=${quoteSshShellArg(input.codexHome)}`,
-    "codex exec",
-    "--sandbox workspace-write",
-    "--json",
-    // BYOK: ignore any host-level codex config. MANAGED: we DELIBERATELY do NOT
-    // pass --ignore-user-config so codex reads the per-run CODEX_HOME/config.toml
-    // that declares the OpenRouter provider + selects it (the cookbook path).
-    ...codexUserConfigFlag(input.managed),
-    "--cd",
-    quoteSshShellArg(input.workspace),
-    "-",
-  ].join(" ");
-}
-
-export function buildCodexAnswererExecCommand(input: {
-  codexHome: string;
-  workspace: string;
-  schemaPath: string;
-  outputPath: string;
-  managed?: boolean;
-}): string {
-  return [
-    ...managedKeyEnvPrefix(input.codexHome, input.managed),
-    `CODEX_HOME=${quoteSshShellArg(input.codexHome)}`,
-    "codex exec",
-    "--sandbox read-only",
-    "--json",
-    ...codexUserConfigFlag(input.managed),
-    "--ignore-rules",
-    "--skip-git-repo-check",
-    "--cd",
-    quoteSshShellArg(input.workspace),
-    "--output-schema",
-    quoteSshShellArg(input.schemaPath),
-    "--output-last-message",
-    quoteSshShellArg(input.outputPath),
-    "-",
-  ].join(" ");
-}
-
-// SaaS Tier-B #5 (OpenRouter cookbook): a MANAGED run sources the per-run env
-// file the materializer wrote (chmod 600, exporting OPENROUTER_API_KEY — the
-// `env_key` the config.toml provider block names) before invoking codex, so the
-// platform key reaches codex via the env WITHOUT ever appearing in the command
-// string. BYOK ⇒ no prefix (unchanged).
-function managedKeyEnvPrefix(codexHome: string, managed?: boolean): string[] {
-  return managed === true ? [`.`, quoteSshShellArg(codexManagedEnvPath(codexHome)), "&&"] : [];
-}
-
-// BYOK pins `--ignore-user-config`; MANAGED omits it so CODEX_HOME/config.toml is
-// honored. (UNVERIFIED LIVE — see the file-level NOTE below.)
-function codexUserConfigFlag(managed?: boolean): string[] {
-  return managed === true ? [] : ["--ignore-user-config"];
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// NOTE (codex MANAGED path — needs a LIVE codex verification before relying on
-// it in production): OpenRouter's Codex-CLI cookbook configures codex via
-// `config.toml` (`model_provider = "openrouter"` + `[model_providers.openrouter]`
-// with `base_url` + `env_key="OPENROUTER_API_KEY"`). We materialize exactly that
-// into the per-run CODEX_HOME and DROP `--ignore-user-config` for managed runs so
-// codex reads it. It is UNVERIFIED whether `codex exec` (a) honors a CODEX_HOME
-// `config.toml` written this way and (b) routes through OpenRouter end-to-end
-// under these flags. The BYOK path (auth.json + `--ignore-user-config`) is UNCHANGED
-// and remains the proven one. Verify managed codex against a real OpenRouter key
-// before depending on it.
-// ─────────────────────────────────────────────────────────────────────────────
 
 // The tail of a harness stream, whitespace-collapsed, for surfacing the real
 // reason an Answerer failed (e.g. an OpenAI structured-output 400) in the error.
