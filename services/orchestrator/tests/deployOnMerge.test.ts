@@ -19,7 +19,8 @@ const RUN_ID = "run_dep";
 const PROJECT_ID = "project_dep";
 const ORG_ID = "org_dep";
 const PR_URL = "https://github.com/acme/widget/pull/7";
-const BRANCH = "feat/x";
+const MERGE_SHA = "abc1234def5678901234567890abcdef12345678";
+const PRIOR_DEPLOYMENT_ID = "vercel_dep_prior";
 
 interface PoolState {
   /** Whether the run merged. */
@@ -28,8 +29,12 @@ interface PoolState {
   config: Record<string, unknown>;
   /** The org grant row (org_integrations) for the deploy provider, when linked. */
   grant?: { provider_kind: string; credential_ref: string; metadata: Record<string, unknown> };
-  /** Whether a prior deploy.triggered exists for the run (idempotency). */
+  /** Whether a prior deploy.triggered exists for the run (resume-verify path). */
   alreadyDeployed?: boolean;
+  /** Whether a prior deploy.verified exists (full idempotency — skip entirely). */
+  alreadyVerified?: boolean;
+  /** Omit mergeSha from merge.completed (a merge that recorded no SHA — fail loud). */
+  noMergeSha?: boolean;
   /** Runtime app-env rows (project_app_env) the attach flow reads. */
   appEnv?: Record<string, unknown>[];
 }
@@ -40,13 +45,20 @@ function fakePool(state: PoolState): pg.Pool {
     const text = sql.trim();
     if (/^(BEGIN|COMMIT|ROLLBACK|SET LOCAL|SET )/u.test(text)) return { rows: [], rowCount: 0 };
     if (/event_type = 'merge\.completed'/u.test(sql)) {
-      return state.merged ? { rows: [{ payload: { prNumber: 7 } }], rowCount: 1 } : { rows: [], rowCount: 0 };
+      if (!state.merged) return { rows: [], rowCount: 0 };
+      const payload = state.noMergeSha === true ? { prNumber: 7 } : { prNumber: 7, mergeSha: MERGE_SHA };
+      return { rows: [{ payload }], rowCount: 1 };
+    }
+    if (/event_type = 'deploy\.verified'/u.test(sql)) {
+      return state.alreadyVerified === true ? { rows: [{ id: "v1" }], rowCount: 1 } : { rows: [], rowCount: 0 };
     }
     if (/event_type = 'deploy\.triggered'/u.test(sql)) {
-      return state.alreadyDeployed === true ? { rows: [{ id: "e1" }], rowCount: 1 } : { rows: [], rowCount: 0 };
+      return state.alreadyDeployed === true
+        ? { rows: [{ payload: { deploymentId: PRIOR_DEPLOYMENT_ID } }], rowCount: 1 }
+        : { rows: [], rowCount: 0 };
     }
-    if (/FROM runs r JOIN projects p/u.test(sql)) {
-      return { rows: [{ project_id: PROJECT_ID, pr_url: PR_URL, branch: BRANCH }], rowCount: 1 };
+    if (/FROM runs r WHERE/u.test(sql)) {
+      return { rows: [{ project_id: PROJECT_ID, pr_url: PR_URL }], rowCount: 1 };
     }
     if (/SELECT config, org_id FROM projects/u.test(sql)) {
       return { rows: [{ config: state.config, org_id: ORG_ID }], rowCount: 1 };
@@ -140,7 +152,8 @@ describe("DeployOnMergeWatcher (a deploy happened)", () => {
     // A real deploy fired against the deployment endpoint, with the merged ref.
     const triggered = transport.deploysTriggered();
     expect(triggered).toHaveLength(1);
-    expect(triggered[0]!.body["gitSource"]).toEqual({ type: "github", repo: "acme/widget", ref: BRANCH });
+    // The merged COMMIT SHA, not the (now-deleted) PR branch.
+    expect(triggered[0]!.body["gitSource"]).toEqual({ type: "github", repo: "acme/widget", ref: MERGE_SHA });
     // The runtime env reached the deploy transport (keyed on the deployed app id).
     expect(transport.envByApp()[VERCEL_APP_ID]).toEqual({ RESEND_API_KEY: "re_live_secret" });
     // deploy.triggered recorded under the org scope, with a resolved URL (no secret).
@@ -157,7 +170,7 @@ describe("DeployOnMergeWatcher (a deploy happened)", () => {
     expect(payload["policyVersion"]).toBe(1);
     expect(payload["initiatingActor"]).toEqual({ kind: "service", id: "tanren-engine" });
     expect(payload["approvingActor"]).toBeUndefined();
-    expect(payload["artifact"]).toEqual({ provenanceRef: `deploy.vercel:vercel_deploy_1@${BRANCH}` });
+    expect(payload["artifact"]).toEqual({ provenanceRef: `deploy.vercel:vercel_deploy_1@${MERGE_SHA}` });
     expect((payload["artifact"] as Record<string, unknown>)["checksum"]).toBeUndefined();
 
     // The deploy is PROVEN, not fire-and-forget: verify polled to READY + smoked the
@@ -214,12 +227,53 @@ describe("DeployOnMergeWatcher (a deploy happened)", () => {
     expect(transport.deploysTriggered()).toEqual([]);
   });
 
-  it("is idempotent: a re-check after a prior deploy triggers no second deploy", async () => {
+  it("is idempotent on SUCCESS: a re-check after a VERIFIED deploy skips entirely", async () => {
     const transport = scriptedDeployTransport("vercel", []);
     const events = new RecordingEventStore();
-    await run({ merged: true, config: VERCEL_TARGET, grant: VERCEL_GRANT, alreadyDeployed: true }, transport, events);
+    await run({ merged: true, config: VERCEL_TARGET, grant: VERCEL_GRANT, alreadyVerified: true }, transport, events);
     expect(transport.deploysTriggered()).toEqual([]);
     expect(events.appends).toEqual([]);
+  });
+
+  it("RESUMES verification after a prior unverified trigger — re-verifies, never re-triggers", async () => {
+    // A transient verify failure left `deploy.triggered` but no `deploy.verified`.
+    // The re-check must NOT re-deploy (the artifact is live); it re-verifies the SAME
+    // deployment (the prior deploymentId) and records deploy.verified. This is the fix
+    // for a transient verify failure permanently dead-ending the deploy.
+    const transport = scriptedDeployTransport("vercel", []);
+    // Seed the app so verify can resolve the prior deployment's status under the grant.
+    await transport.request({
+      method: "POST",
+      url: "https://api.vercel.com/v9/projects",
+      headers: {},
+      body: { name: "acme-widget" },
+    });
+    const events = new RecordingEventStore();
+    await run({ merged: true, config: VERCEL_TARGET, grant: VERCEL_GRANT, alreadyDeployed: true }, transport, events);
+    // No fresh deploy was triggered.
+    expect(transport.deploysTriggered()).toEqual([]);
+    // Verification actually polled the PRIOR deployment's status (not a no-op).
+    expect(transport.statusPolls(PRIOR_DEPLOYMENT_ID)).toBeGreaterThan(0);
+    // Verification ran against the PRIOR deployment and now succeeded.
+    const verified = events.appends.find((a) => a.eventType === "deploy.verified");
+    expect(verified).toBeDefined();
+    expect((verified!.payload as Record<string, unknown>)["deploymentId"]).toBe(PRIOR_DEPLOYMENT_ID);
+    expect(events.appends.find((a) => a.eventType === "deploy.triggered")).toBeUndefined();
+  });
+
+  it("fails LOUD when merge.completed recorded no mergeSha (cannot determine the merged commit)", async () => {
+    const transport = scriptedDeployTransport("vercel", []);
+    const events = new RecordingEventStore();
+    const watcher = new DeployOnMergeWatcher({
+      pool: fakePool({ merged: true, noMergeSha: true, config: VERCEL_TARGET, grant: VERCEL_GRANT }),
+      secrets: secrets(),
+      transport,
+      eventStore: events,
+      urlProbe: scriptedUrlProbe(),
+      verifyPoll: instantVerifyPollPolicy(),
+    });
+    await expect(watcher.check(RUN_ID)).rejects.toThrow(/no mergeSha/u);
+    expect(transport.deploysTriggered()).toEqual([]);
   });
 
   it("fails LOUD when the project configures a deploy but the org has no matching grant", async () => {

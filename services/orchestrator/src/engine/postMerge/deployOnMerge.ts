@@ -132,8 +132,8 @@ export class DeployOnMergeWatcher {
       );
     }
 
-    // Idempotent: this merge already deployed.
-    if (await this.alreadyDeployed(runId)) return;
+    // Idempotent on SUCCESS: a VERIFIED deploy is done — never re-trigger.
+    if (await this.alreadyVerified(runId)) return;
 
     const grant = await this.loadGrant(target);
     if (grant === undefined) {
@@ -141,6 +141,17 @@ export class DeployOnMergeWatcher {
         `deployOnMerge: project '${merged.projectId}' configures deploy '${target.provider}' but org ` +
           `'${target.orgId}' has no matching grant in org_integrations`,
       );
+    }
+
+    // RESUME: a prior trigger that never reached `deploy.verified` (e.g. a transient
+    // verify failure or a crash between trigger and verify) re-runs VERIFICATION ONLY
+    // against the already-released deployment — it does NOT re-trigger the deploy. This
+    // is the fix for a transient verify failure permanently dead-ending the deploy
+    // (the old gate skipped on `deploy.triggered`, so a failed verify never retried).
+    const priorDeploymentId = await this.priorTriggeredDeploymentId(runId);
+    if (priorDeploymentId !== undefined) {
+      await this.verifyDeploy(runId, merged.projectId, target, grant.providerKind, priorDeploymentId);
+      return;
     }
 
     // Trigger the real build + release of the merged ref onto the app. A configured
@@ -252,16 +263,26 @@ export class DeployOnMergeWatcher {
         [runId],
       );
       if (merge.rows[0] === undefined) return;
-      const run = await client.query<{ project_id: string; pr_url: string | null; branch: string | null }>(
-        `SELECT r.project_id, r.pr_url, r.branch, p.default_branch
-           FROM runs r JOIN projects p ON p.project_id = r.project_id WHERE r.run_id = $1`,
+      const run = await client.query<{ project_id: string; pr_url: string | null }>(
+        `SELECT r.project_id, r.pr_url FROM runs r WHERE r.run_id = $1`,
         [runId],
       );
       const row = run.rows[0];
       if (row === undefined || row.pr_url === null) return;
       const repoSlug = repoSlugFromPrUrl(row.pr_url);
       if (repoSlug === undefined) return;
-      return { projectId: row.project_id, repoSlug, ref: row.branch ?? "main" };
+      // Deploy the MERGED COMMIT, NOT the run's PR branch (the squash-merge deletes the
+      // PR branch) and NOT the mutable default-branch HEAD (which can drift to a LATER
+      // merge between merge and verify). The precise merged commit SHA is recorded on
+      // `merge.completed`; a merge that recorded none is a wiring bug — fail LOUD (no
+      // silent fallback to a branch ref).
+      const ref = mergeShaFromPayload(merge.rows[0].payload);
+      if (ref === undefined) {
+        throw new Error(
+          `deployOnMerge: run ${runId} merge.completed carries no mergeSha — cannot determine the merged commit to deploy`,
+        );
+      }
+      return { projectId: row.project_id, repoSlug, ref };
     });
   }
 
@@ -289,14 +310,33 @@ export class DeployOnMergeWatcher {
     });
   }
 
-  /** Whether this run already fired a `deploy.triggered` (one deploy per merge). */
-  private async alreadyDeployed(runId: string): Promise<boolean> {
+  /** Whether this run already reached `deploy.verified` (the success proof — done). */
+  private async alreadyVerified(runId: string): Promise<boolean> {
     return runWithSystemScope(this.deps.pool, async (client) => {
       const result = await client.query<{ id: string }>(
-        "SELECT id FROM events WHERE run_id = $1 AND event_type = 'deploy.triggered' LIMIT 1",
+        "SELECT id FROM events WHERE run_id = $1 AND event_type = 'deploy.verified' LIMIT 1",
         [runId],
       );
       return result.rows[0] !== undefined;
+    });
+  }
+
+  /**
+   * The deploymentId of this run's latest `deploy.triggered`, if any. Drives the
+   * RESUME path: a deploy that triggered but never verified re-verifies that same
+   * live deployment rather than re-triggering a fresh build.
+   */
+  private async priorTriggeredDeploymentId(runId: string): Promise<string | undefined> {
+    return runWithSystemScope(this.deps.pool, async (client) => {
+      const result = await client.query<{ payload: unknown }>(
+        `SELECT payload FROM events WHERE run_id = $1 AND event_type = 'deploy.triggered'
+           ORDER BY ts DESC, id DESC LIMIT 1`,
+        [runId],
+      );
+      const payload = result.rows[0]?.payload;
+      if (typeof payload !== "object" || payload === null) return;
+      const deploymentId = (payload as Record<string, unknown>)["deploymentId"];
+      return typeof deploymentId === "string" && deploymentId.trim() !== "" ? deploymentId : undefined;
     });
   }
 
@@ -322,6 +362,13 @@ function deployAuditEnvelope(target: ProjectDeployTarget): AuditEnvelope {
 function repoSlugFromPrUrl(prUrl: string): string | undefined {
   const match = /github\.com\/([^/]+)\/([^/]+)\/pull\/\d+/u.exec(prUrl);
   return match === null ? undefined : `${match[1]}/${match[2]}`;
+}
+
+/** The merged commit SHA from a `merge.completed` payload (optional field). */
+function mergeShaFromPayload(payload: unknown): string | undefined {
+  if (typeof payload !== "object" || payload === null) return;
+  const sha = (payload as Record<string, unknown>)["mergeSha"];
+  return typeof sha === "string" && sha.trim() !== "" ? sha : undefined;
 }
 
 /**
