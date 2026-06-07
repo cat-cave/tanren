@@ -216,23 +216,6 @@ describe("resolveCredentialsForRun", () => {
       expect(resolved.endpointOverride).toEqual({ baseUrl: "https://openrouter.ai/api/v1" });
     });
 
-    it("honors an org managedProvider override of ref + endpoint", async () => {
-      const pool = fakePool({
-        org_1: {
-          version: 1,
-          providerMode: "managed",
-          managedProvider: { credentialRef: "credential/openrouter/platform/eu", endpoint: "https://eu.openrouter/v1" },
-          defaultCredentials: { github_token: githubOrgRef },
-        },
-      });
-      const resolved = await resolveCredentialsForRun(pool, {
-        projectConfig: migrateProjectConfig({ version: 1 }),
-        orgId: "org_1",
-      });
-      expect(resolved.defaultLlm.authRef).toBe("credential/openrouter/platform/eu");
-      expect(resolved.endpointOverride).toEqual({ baseUrl: "https://eu.openrouter/v1" });
-    });
-
     it("lets a project override the org's byok default into managed", async () => {
       const pool = fakePool({
         org_1: { version: 1, providerMode: "byok", defaultCredentials: { github_token: githubOrgRef } },

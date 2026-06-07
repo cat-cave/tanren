@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { ManagedProviderConfig, ProviderMode } from "./managedProvider.js";
+import { ProviderMode } from "./managedProvider.js";
 import {
   AllocatorConfig,
   CreditRates,
@@ -93,14 +93,11 @@ export const OrgConfigV1 = z
     github_app: OrgGithubAppInstallation.optional(),
     // SaaS Tier-B #5: the BYOK-vs-managed provider toggle. `byok` (default)
     // resolves the tenant's own credential — unchanged behavior. `managed`
-    // resolves the platform-owned credential (managedProvider.credentialRef)
-    // and points the harness at the managed endpoint. Defaults to `byok`; the
-    // hosting layer flips it.
+    // resolves the platform-owned credential + endpoint, which are DEPLOY/hosting
+    // config (defaultManagedProviderConfig), NOT userland: a tenant chooses the
+    // MODE here, but the platform credential ref/endpoint live in the deploy layer
+    // (no per-org/project override). Defaults to `byok`; the hosting layer flips it.
     providerMode: ProviderMode.default("byok"),
-    // Optional managed-provider override (platform credential ref + endpoint).
-    // Absent ⇒ the managed defaults (platform OpenRouter shell) apply; only
-    // consulted when providerMode === "managed".
-    managedProvider: ManagedProviderConfig.optional(),
     // The ORG-LEVEL DEFAULT dollar budget ceiling (autonomy-engine.md §3 proof 6).
     // A project that sets its own `budget` overrides this; a project that omits it
     // inherits this org default (the DagWalker resolves project-over-org). Optional:

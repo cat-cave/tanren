@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { ManagedProviderConfig, ProviderMode } from "./managedProvider.js";
+import { ProviderMode } from "./managedProvider.js";
 import {
   DEFAULT_MAX_BATCH_SIZE,
   DEFAULT_SPECULATION_THRESHOLD,
@@ -138,10 +138,9 @@ export const ProjectConfigV1 = z
     credentials: ProjectCredentialRefs.optional(),
     // SaaS Tier-B #5: optional per-project override of the org's BYOK-vs-managed
     // toggle. Absent ⇒ inherit the org `providerMode`. When set, it wins over the
-    // org for this project. `managedProvider` likewise overrides the org's platform
-    // credential ref + endpoint for this project only.
+    // org for this project. The platform credential ref/endpoint under `managed`
+    // are DEPLOY config (not per-project) — a project picks the MODE, not the creds.
     providerMode: ProviderMode.optional(),
-    managedProvider: ManagedProviderConfig.optional(),
     // The per-project DOLLAR BUDGET CEILING (autonomy-engine.md §3 proof 6): a
     // governed SETTING, exactly like `governancePosture`/`reviewPolicy`/
     // `allocator` above — NOT an env var. When the project's cumulative spend over

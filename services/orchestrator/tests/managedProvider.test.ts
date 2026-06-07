@@ -48,23 +48,27 @@ describe("managed provider config", () => {
 
 // The toggle round-trips through the versioned config JSONB.
 describe("providerMode in versioned config", () => {
-  it("defaults a bare version:1 org row to byok with no managed block", () => {
+  it("defaults a bare version:1 org row to byok", () => {
     const org = migrateOrgConfig({ version: 1 });
     expect(org.providerMode).toBe("byok");
-    expect(org.managedProvider).toBeUndefined();
   });
 
-  it("round-trips a managed org row untouched", () => {
-    const raw = {
-      version: 1,
-      providerMode: "managed",
-      managedProvider: { credentialRef: "credential/openrouter/platform/eu", endpoint: "https://eu/v1" },
-    };
+  it("round-trips a managed org row (providerMode only — platform creds are deploy config)", () => {
+    const raw = { version: 1, providerMode: "managed" };
     const once = migrateOrgConfig(raw);
     expect(once.providerMode).toBe("managed");
-    expect(once.managedProvider).toEqual(raw.managedProvider);
     // Re-parsing the parsed config is a fixed point (stable persistence).
     expect(migrateOrgConfig(once)).toEqual(once);
+  });
+
+  it("REJECTS a userland managedProvider block — platform creds are deploy config, not org config", () => {
+    expect(() =>
+      migrateOrgConfig({
+        version: 1,
+        providerMode: "managed",
+        managedProvider: { credentialRef: "credential/openrouter/platform/eu", endpoint: "https://eu/v1" },
+      }),
+    ).toThrow(/managedProvider/u);
   });
 
   it("leaves a bare version:1 project row's providerMode absent (inherits org)", () => {
