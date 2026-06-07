@@ -11,9 +11,19 @@ import {
   RepositoryCreationForbiddenError,
   type CreateRepositoryInput,
   type CreatedRepository,
-  type ResolvedVcsToken,
 } from "../contracts/vcsProvider.js";
 import type { GitHubHttpClient } from "./github.js";
+
+/**
+ * The MINIMAL push credential the create needs: the plaintext token + an optional
+ * 401 re-mint. A `ResolvedVcsToken` structurally satisfies this (the VcsProvider
+ * caller passes one); the token-free `CodeHost` seam passes its own minimal shape
+ * — so neither caller has to fabricate a `source` it does not have.
+ */
+export interface RepoCreateToken {
+  token: string;
+  refresh?: () => Promise<string>;
+}
 
 /**
  * Create an ORG-owned repository on GitHub. `auto_init: true` (from
@@ -32,7 +42,7 @@ import type { GitHubHttpClient } from "./github.js";
 export async function createGitHubRepository(
   http: GitHubHttpClient,
   input: CreateRepositoryInput,
-  token: ResolvedVcsToken,
+  token: RepoCreateToken,
 ): Promise<CreatedRepository> {
   const response = await http.request({
     method: "POST",
