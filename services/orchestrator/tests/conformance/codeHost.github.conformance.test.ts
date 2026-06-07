@@ -14,7 +14,7 @@
 // land advances main, and a stale-CAS land is REJECTED.
 
 import { describe, expect, it } from "vitest";
-import { GitHubCodeHost } from "../../src/engine/providers/githubCodeHost.js";
+import { GitHubCodeHost, LandCasRejectedError } from "../../src/engine/providers/githubCodeHost.js";
 import type { GitHubHttpClient, GitHubHttpRequest, GitHubHttpResponse } from "../../src/engine/providers/github.js";
 import { describeCodeHostConformance } from "./codeHostConformance.js";
 
@@ -24,22 +24,48 @@ interface RepoState {
   defaultBranch: string;
   /** branch -> head sha */
   branches: Map<string, string>;
+  /**
+   * sha -> the head sha it was BUILT ON (its parent). A `force: false` (ff-only)
+   * update to `sha` is a fast-forward iff the ref currently points at this base —
+   * the same constraint GitHub enforces. Bare/unregistered shas default to a
+   * fast-forward (the happy land path of the frozen suite).
+   */
+  ffBase: Map<string, string>;
 }
 
 /**
  * A stateful fake GitHub transport answering the exact endpoints `GitHubCodeHost`
- * calls: the git-refs read/create/update, the repo read (default branch). Only the
- * fields the impl reads are populated. Token never inspected (it rides the auth
- * header in the real client; here it is simply ignored).
+ * calls: the git-refs read/create/update, the repo read (default branch). It
+ * MODELS FAST-FORWARD-ONLY semantics (`force: false`) so it can prove the land's
+ * compare-and-swap is real, not message-text theatre. Only the fields the impl
+ * reads are populated. Token never inspected (it rides the auth header in the real
+ * client; here it is simply ignored).
  */
 class StatefulGitHubHttp implements GitHubHttpClient {
   private readonly repos = new Map<string, RepoState>();
+  /**
+   * A one-shot race injector: run (and cleared) JUST BEFORE the next PATCH is
+   * applied, so a test can move main AFTER the land's read-check passed but BEFORE
+   * its ff-only write — exactly the read→write window the CAS must close.
+   */
+  private beforeNextPatch: (() => void) | undefined;
 
   seedRepo(owner: string, name: string, defaultBranch: string, initialSha: string): void {
     this.repos.set(`${owner}/${name}`, {
       defaultBranch,
       branches: new Map([[defaultBranch, initialSha]]),
+      ffBase: new Map(),
     });
+  }
+
+  /** Record that `sha` was built on `base` (so a ff-only update to it requires main == base). */
+  setFastForwardBase(owner: string, name: string, sha: string, base: string): void {
+    this.repos.get(`${owner}/${name}`)?.ffBase.set(sha, base);
+  }
+
+  /** Inject a one-shot mutation that fires right before the next PATCH lands. */
+  injectRaceBeforeNextPatch(fn: () => void): void {
+    this.beforeNextPatch = fn;
   }
 
   async request(input: GitHubHttpRequest): Promise<GitHubHttpResponse> {
@@ -88,18 +114,37 @@ class StatefulGitHubHttp implements GitHubHttpClient {
     // pushRef force-update OR landAuthorizedRef swap: PATCH /git/refs/heads/:branch
     const updateMatch = /^\/git\/refs\/heads\/(.+)$/u.exec(suffix);
     if (input.method === "PATCH" && updateMatch !== null) {
+      // Fire the one-shot race injector FIRST: this is the read→write window the
+      // land's ff-only guard must close (main may move here, after the read-check).
+      const race = this.beforeNextPatch;
+      this.beforeNextPatch = undefined;
+      race?.();
+      // Re-resolve the repo state AFTER the race (the injector may have reseeded it),
+      // so the write observes the post-race head — exactly as GitHub would.
+      const postRace = this.repos.get(`${owner}/${name}`);
+      if (postRace === undefined) {
+        return { status: 404, body: { message: "no such repo" } };
+      }
+
       const branch = decodeURIComponent(updateMatch[1] ?? "");
       const body = input.body as { sha?: unknown; force?: unknown };
       const sha = typeof body.sha === "string" ? body.sha : "";
       const force = body.force === true;
-      const current = repo.branches.get(branch);
-      // Fast-forward-only (`force: false`, the land path): GitHub rejects (422) a
-      // non-existent ref. The CAS guard already read-checked the expected sha, so
-      // here we only model the "ref vanished mid-land" race → 422.
-      if (!force && current === undefined) {
-        return { status: 422, body: { message: "Reference does not exist" } };
+      const current = postRace.branches.get(branch);
+      if (!force) {
+        // FAST-FORWARD-ONLY (`force: false`, the land path). GitHub accepts the
+        // update ONLY if it advances the ref — i.e. the ref still points at the base
+        // `sha` was built on. A vanished ref, or a ref that moved off that base
+        // (a competing update raced ahead), is a non-fast-forward → 422.
+        if (current === undefined) {
+          return { status: 422, body: { message: "Reference does not exist" } };
+        }
+        const base = postRace.ffBase.get(sha);
+        if (base !== undefined && current !== base) {
+          return { status: 422, body: { message: "Update is not a fast forward" } };
+        }
       }
-      repo.branches.set(branch, sha);
+      postRace.branches.set(branch, sha);
       return { status: 200, body: { ref: `refs/heads/${branch}`, object: { sha } } };
     }
 
@@ -107,21 +152,67 @@ class StatefulGitHubHttp implements GitHubHttpClient {
   }
 }
 
+const REPO = { owner: "owner", name: "repo" } as const;
+
 describe("GitHubCodeHost over a fake GitHub transport", () => {
-  it("landAuthorizedRef rejection is LOUD + typed (stale compare-and-swap)", async () => {
+  it("landAuthorizedRef rejects a stale expectation at the READ-check (typed)", async () => {
     const http = new StatefulGitHubHttp();
-    http.seedRepo("owner", "repo", "main", "sha-main-0");
-    // Advance main out-of-band so the expected sha is stale.
+    // main already moved past the expectation (it points at sha-main-1, not sha-main-0).
     http.seedRepo("owner", "repo", "main", "sha-main-1");
     const host = new GitHubCodeHost(http, async () => ({ token: TOKEN }));
-    await expect(
-      host.landAuthorizedRef({
-        repo: { owner: "owner", name: "repo" },
+    const err = await host
+      .landAuthorizedRef({
+        repo: REPO,
         intoMain: "main",
         authorizedSha: "sha-authorized-1",
         expectedMainSha: "sha-main-0",
-      }),
-    ).rejects.toThrow(/stale compare-and-swap/iu);
+      })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(LandCasRejectedError);
+  });
+
+  it("landAuthorizedRef rejects a race that moves main AFTER the read-check but BEFORE the ff-only write", async () => {
+    const http = new StatefulGitHubHttp();
+    http.seedRepo("owner", "repo", "main", "sha-main-0");
+    // The authorized commit was built on sha-main-0 (its ff base). It is a
+    // fast-forward of main ONLY while main still points at sha-main-0.
+    http.setFastForwardBase("owner", "repo", "sha-authorized-1", "sha-main-0");
+    // Inject a competing land that advances main to sha-rival-1 in the read→write
+    // window — so the read-check passes (main is still sha-main-0 when read) but the
+    // ff-only PATCH must be REJECTED (main is now sha-rival-1, not the ff base).
+    http.injectRaceBeforeNextPatch(() => {
+      http.seedRepo("owner", "repo", "main", "sha-rival-1");
+      http.setFastForwardBase("owner", "repo", "sha-authorized-1", "sha-main-0");
+    });
+    const host = new GitHubCodeHost(http, async () => ({ token: TOKEN }));
+
+    const err = await host
+      .landAuthorizedRef({
+        repo: REPO,
+        intoMain: "main",
+        authorizedSha: "sha-authorized-1",
+        expectedMainSha: "sha-main-0",
+      })
+      .catch((e: unknown) => e);
+
+    // The ff-only WRITE (not the read) is what closes the race → typed rejection.
+    expect(err).toBeInstanceOf(LandCasRejectedError);
+    // main is NOT clobbered: it still carries the rival commit, never the authorized one.
+    expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-rival-1");
+  });
+
+  it("pushRef REFUSES to force-update the default branch on a non-fast-forward (main is landAuthorizedRef-only)", async () => {
+    const http = new StatefulGitHubHttp();
+    http.seedRepo("owner", "repo", "main", "sha-main-0");
+    // sha-evil-1 is built on a DIFFERENT base (sha-unrelated) — i.e. it is NOT a
+    // fast-forward of main. Only a force could push it; pushRef must refuse.
+    http.setFastForwardBase("owner", "repo", "sha-evil-1", "sha-unrelated");
+    const host = new GitHubCodeHost(http, async () => ({ token: TOKEN }));
+    await expect(
+      host.pushRef({ repo: REPO, localRef: "refs/heads/main", remoteBranch: "main", sha: "sha-evil-1" }),
+    ).rejects.toThrow(/refused to force-update the default branch/iu);
+    // main is untouched — never force-clobbered.
+    expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-main-0");
   });
 });
 

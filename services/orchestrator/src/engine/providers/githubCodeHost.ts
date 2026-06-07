@@ -66,6 +66,20 @@ function encodeRepoFilePath(path: string): string {
     .join("/");
 }
 
+/**
+ * GitHub signals a rejected fast-forward-only ref update as a 422 whose body
+ * message is "Update is not a fast forward". Belt-and-braces alongside the
+ * `update.status === 422` check (a deviating gateway could carry the message at a
+ * non-422 status); both routes land on the same typed CAS rejection.
+ */
+function isNonFastForward(body: unknown): boolean {
+  if (typeof body !== "object" || body === null || Array.isArray(body)) {
+    return false;
+  }
+  const message = (body as { message?: unknown }).message;
+  return typeof message === "string" && /not a fast forward/iu.test(message);
+}
+
 /** Lift `object.sha` from a `git/ref` / `git/refs` response body, or `undefined`. */
 function refObjectSha(body: unknown): string | undefined {
   if (typeof body !== "object" || body === null || Array.isArray(body)) {
@@ -126,11 +140,17 @@ export class GitHubCodeHost implements CodeHost {
   }
 
   /**
-   * Push a branch ref to its head sha via the git-refs API: create
-   * (`POST /git/refs`), or force-update (`PATCH .../git/refs/heads/:b`) if the ref
-   * already exists. A feature/branch ref is allowed to move freely (NOT a land —
-   * that is `landAuthorizedRef`'s guarded path); the force here is scoped to the
-   * named non-default branch the caller is publishing.
+   * Push a FEATURE/INTEGRATION branch ref to its head sha via the git-refs API:
+   * create (`POST /git/refs`), or update (`PATCH .../git/refs/heads/:b`) if the ref
+   * already exists. A non-default branch is allowed to move freely (force-update).
+   *
+   * SAFETY: `pushRef` NEVER FORCE-updates the default branch. `main` is mutated by
+   * exactly ONE path — `landAuthorizedRef` (read-checked + fast-forward-only) — so
+   * a force-update of the default branch here would be a silent bypass of the merge
+   * authority. When the target IS the default branch and already exists, we attempt
+   * a FAST-FORWARD-ONLY (`force: false`) update; a non-fast-forward (which only a
+   * force could push through) throws LOUDLY rather than clobbering main. We pay the
+   * default-branch read only on the already-exists path.
    */
   async pushRef(input: { repo: CodeHostRepoRef; localRef: string; remoteBranch: string; sha: string }): Promise<void> {
     const token = await this.resolveToken();
@@ -148,14 +168,24 @@ export class GitHubCodeHost implements CodeHost {
     if (create.status !== 422) {
       throw new Error(`GitHub ref create for ${input.remoteBranch} failed: HTTP ${create.status}`);
     }
-    // 422 ⇒ the ref already exists; force-update it to the pushed sha.
+    // 422 ⇒ the ref already exists; update it. The DEFAULT branch is fast-forward-only
+    // (never force-clobbered — main is advanced only by landAuthorizedRef); a feature
+    // branch may force freely.
+    const isDefaultBranch = input.remoteBranch === (await this.readDefaultBranch(input.repo));
     const update = await this.http.request({
       method: "PATCH",
       path: repoPath(input.repo, `/git/refs/heads/${encodeURIComponent(input.remoteBranch)}`),
       token: token.token,
       ...(refresh !== undefined && { refreshToken: refresh }),
-      body: { sha: input.sha, force: true },
+      body: { sha: input.sha, force: !isDefaultBranch },
     });
+    if (isDefaultBranch && (update.status === 422 || isNonFastForward(update.body))) {
+      // A force WOULD have pushed this through; we refuse. Loud — a non-ff update of
+      // the default branch must go through landAuthorizedRef, never pushRef.
+      throw new Error(
+        `pushRef refused to force-update the default branch ${input.remoteBranch}: a non-fast-forward of main must go through landAuthorizedRef`,
+      );
+    }
     if (update.status !== 200) {
       throw new Error(`GitHub ref update for ${input.remoteBranch} failed: HTTP ${update.status}`);
     }
@@ -250,30 +280,43 @@ export class GitHubCodeHost implements CodeHost {
   }
 
   /**
-   * LAND an authorized ref into `main` as a COMPARE-AND-SWAP push (read-then-
-   * conditional-update). 1) read `intoMain`'s current head; 2) REJECT LOUDLY
-   * ({@link LandCasRejectedError}) if it is not `expectedMainSha` (main moved
-   * underneath); 3) otherwise PATCH the ref to `authorizedSha` with `force: false`
-   * (a fast-forward-only advance — GitHub itself rejects a non-ff). NEVER a
-   * force-push; NEVER the host's "merge PR" API (Tanren already authorized the
-   * commit). The land target is `authorizedSha` exactly — the host adds no merge
-   * commit of its own.
+   * LAND an authorized ref into `main` as a COMPARE-AND-SWAP advance of the
+   * default branch. GitHub's ref-update API offers NO native compare-and-swap
+   * (no `If-Match` on the head sha), so the CAS is built from a read-check PLUS a
+   * FAST-FORWARD-ONLY write, and the write is what actually closes the race:
+   *
+   *   (a) read `intoMain`'s current head; if it is not `expectedMainSha` (or the
+   *       ref is absent) → throw {@link LandCasRejectedError} (fail-closed, cheap
+   *       early-out; this alone is NOT the guard — main can still move after it);
+   *   (b) PATCH `/git/refs/heads/:intoMain` with `{ sha: authorizedSha, force:
+   *       false }`. `authorizedSha` was BUILT ON `expectedMainSha`, so it is a
+   *       fast-forward of `intoMain` ONLY while main still points at
+   *       `expectedMainSha`. If main moved off it between (a) and (b), the
+   *       ff-only update is REJECTED by GitHub (422 "Update is not a fast
+   *       forward"). The ff-only WRITE — not the read — is the atomic guard;
+   *   (c) treat ANY 422 / non-fast-forward on that PATCH as the AUTHORITATIVE CAS
+   *       rejection → throw {@link LandCasRejectedError}. NEVER retry, NEVER set
+   *       `force: true` (that would clobber the racing commit). The transactional
+   *       land reconciles on the typed rejection.
+   *
+   * NEVER a force-push; NEVER the host's "merge PR" API (Tanren already authorized
+   * the commit). The land target is `authorizedSha` exactly — no host merge commit.
    */
   async landAuthorizedRef(input: LandAuthorizedRefInput): Promise<LandResult> {
     const token = await this.resolveToken();
     const refresh = token.refresh;
 
-    // 1+2. Compare: the ref must still point at the expected sha. A mismatch (or an
-    // absent ref) is a LOUD CAS rejection the transactional land reconciles — never
-    // a blind overwrite.
+    // (a) Read-check: a cheap fail-closed early-out. NOT the race guard — main can
+    // still advance between this read and the write below; the ff-only write closes
+    // that window.
     const current = await this.readBranchSha(input.repo, input.intoMain);
     if (current !== input.expectedMainSha) {
       throw new LandCasRejectedError(input.intoMain, input.expectedMainSha, current);
     }
 
-    // 3. Swap: advance the ref to the authorized sha, fast-forward-only (`force:
-    // false`). A 422 here means main raced between our read and this write — also a
-    // CAS rejection, surfaced typed.
+    // (b) Fast-forward-only advance. This is the ATOMIC CAS guard: GitHub accepts it
+    // ONLY if `authorizedSha` is still a fast-forward of `intoMain` — i.e. main has
+    // not moved off `expectedMainSha` since (a).
     const update = await this.http.request({
       method: "PATCH",
       path: repoPath(input.repo, `/git/refs/heads/${encodeURIComponent(input.intoMain)}`),
@@ -281,7 +324,9 @@ export class GitHubCodeHost implements CodeHost {
       ...(refresh !== undefined && { refreshToken: refresh }),
       body: { sha: input.authorizedSha, force: false },
     });
-    if (update.status === 422) {
+    // (c) A 422 / non-fast-forward is the AUTHORITATIVE CAS rejection (main raced
+    // ahead). Surfaced typed; never retried, never forced.
+    if (update.status === 422 || isNonFastForward(update.body)) {
       throw new LandCasRejectedError(input.intoMain, input.expectedMainSha, current);
     }
     if (update.status !== 200) {
