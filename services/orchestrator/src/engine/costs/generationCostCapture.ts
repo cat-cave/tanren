@@ -19,6 +19,7 @@
 // run — cost-unknown is an allowed state — and the call already metered tokens).
 import type { SecretStore } from "../contracts/secretStore.js";
 import { resolveRawProviderKey } from "../credentials/managedKey.js";
+import { providerSlugForRef } from "../credentials/credentialType.js";
 import { queryGenerationCost, realProviderCostFrom, type OpenRouterHttpClient } from "./openRouterCost.js";
 
 // The capturer the cost-recording path calls per writer/answerer call: given the
@@ -45,6 +46,14 @@ export interface GenerationCostCaptureDeps {
 export async function buildManagedGenerationCostCapturer(
   deps: GenerationCostCaptureDeps,
 ): Promise<RealProviderCostCapturer> {
+  // The capturer queries OpenRouter's generation-cost API with the platform key, so
+  // the managed credential MUST be an openrouter ref — require the slug LOUD (a
+  // non-openrouter key would only fail opaquely at the cost HTTP call).
+  if (providerSlugForRef(deps.managedCredentialRef) !== "openrouter") {
+    throw new Error(
+      `managed generation-cost capture requires a credential/openrouter/ ref; got ${JSON.stringify(deps.managedCredentialRef)}`,
+    );
+  }
   const token = await resolveRawProviderKey(deps.secrets, deps.managedCredentialRef);
   const client = deps.httpClient ?? fetchOpenRouterHttpClient();
   return async (generationId: string): Promise<number | null> => {
