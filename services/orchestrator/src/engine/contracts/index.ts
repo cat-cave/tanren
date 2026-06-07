@@ -1,5 +1,28 @@
 export * from "./allocator.js";
 export * from "./costResolver.js";
+// "Tanren owns the engine" (tanren-owns-the-engine.md) — the Wave-0 DESIGN-FREEZE
+// seam contracts that replace the 25-method GitHub-shaped VcsProvider with four
+// purpose-based seams + their supporting pure types. ADDITIVE: nothing is wired
+// into the running engine yet (Wave 1 implements them); these are the durable
+// CONTRACT surface the refactor is built on, consumed by the conformance suites
+// under tests/conformance/{workspaceVcsCore,codeHost,mergeAuthority,visibilityProjection}.
+//   - findings/auditPosture     — findings-only audit + the per-project DORA knob.
+//   - money                     — branded NonNegativeFinite (unlimited budget = unrepresentable).
+//   - integrationNodes          — the ONE run model + memberKey/proofReuseKey.
+//   - workspaceVcsCore          — local VCS-core (jj-first; git fallback).
+//   - codeHost                  — minimal host (Tanren lands what it authorized).
+//   - mergeAuthority            — the guaranteed, fail-closed land decision.
+//   - visibilityProjection      — the best-effort PR/check/comment mirror (harden).
+//   - engineSeams               — the pluggable IssueSource + IdentityProvider.
+export * from "./findings.js";
+export * from "./auditPosture.js";
+export * from "./money.js";
+export * from "./integrationNodes.js";
+export * from "./workspaceVcsCore.js";
+export * from "./codeHost.js";
+export * from "./mergeAuthority.js";
+export * from "./visibilityProjection.js";
+export * from "./engineSeams.js";
 // Integration-provisioning foundation: the IntegrationProvisioner port
 // every provider implements (sentry | slack | deploy.* | …), its registry
 // (`buildIntegrationProvisioner`), and the pure `resolveSmartDefault` helper. No
