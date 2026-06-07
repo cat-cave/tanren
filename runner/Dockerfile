@@ -54,6 +54,28 @@ RUN set -eu; \
   codexbar -V; \
   ccusage --version
 
+# jujutsu (jj) — the Wave-1 `WorkspaceVcsCore` backend (tanren-owns-the-engine.md
+# §2). The runner shells `jj` over SSH exactly like `git`; jj keeps a real git
+# backend so the host stays a plain git remote. Pinned + arch-mapped + sha256-
+# verified against the published release, like codexbar above. Bumping is a one-line
+# --build-arg change. Source verified against upstream on 2026-06-07:
+#   https://github.com/jj-vcs/jj/releases/tag/v0.36.0
+ARG JJ_VERSION=0.36.0
+RUN set -eu; \
+  case "$(dpkg --print-architecture)" in \
+    amd64) JJ_ARCH="x86_64" ;; \
+    arm64) JJ_ARCH="aarch64" ;; \
+    *) echo "unsupported arch for jj: $(dpkg --print-architecture)" >&2; exit 1 ;; \
+  esac; \
+  ASSET="jj-v${JJ_VERSION}-${JJ_ARCH}-unknown-linux-musl.tar.gz"; \
+  BASE="https://github.com/jj-vcs/jj/releases/download/v${JJ_VERSION}"; \
+  cd /tmp; \
+  curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 --connect-timeout 30 -o "${ASSET}" "${BASE}/${ASSET}"; \
+  tar xzf "${ASSET}"; \
+  install -m 0755 jj /usr/local/bin/jj; \
+  rm -rf "/tmp/${ASSET}" /tmp/jj; \
+  jj --version
+
 RUN useradd --create-home --shell /bin/bash --uid 1000 tanren \
   && mkdir -p /run/sshd /workspace /home/tanren/.ssh /tanren-runtime /tanren-runtime/codex-home \
   && chown -R tanren:tanren /workspace /home/tanren/.ssh /tanren-runtime \
