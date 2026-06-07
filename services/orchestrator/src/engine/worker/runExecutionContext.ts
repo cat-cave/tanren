@@ -11,7 +11,7 @@ import { z } from "zod";
 import type pg from "pg";
 import { migrateProjectConfig, type ProjectConfigV1 } from "../config/index.js";
 import { creditRatesFromOrgConfig, installationFromOrgConfig } from "../config/orgConfig.js";
-import type { RoutingTable } from "../config/shared.js";
+import type { RoutingChainEntry, RoutingTable } from "../config/shared.js";
 import { resolveCreditUsdRate } from "../costs/index.js";
 import type { ResolvedRunCredentials } from "../credentials/resolveCredentials.js";
 import { resolveCredentialsForRun } from "../credentials/resolveCredentials.js";
@@ -28,22 +28,18 @@ const DEFAULTED_ROUTING_ROLES = ["plan", "write", "check", "audit"] as const;
 
 /**
  * Build the run's EFFECTIVE routing table: the project's per-role routing chains
- * laid on top of a per-role default that heads every loop-role chain with a
- * Codex entry pointing at the run's resolved LLM credential ref.
+ * laid on top of a per-role default that heads every loop-role chain with the
+ * run's resolved DEFAULT LLM entry (provider-agnostic — codex, claude, or any
+ * full-role harness, NOT a hardcoded Codex entry).
  *
- * This is the seam that makes "Codex is the default" a DATA fact, not a code
- * hardcode: a project that overrides a role's chain (e.g. `write` → claude or
- * opencode) runs that provider; a role the project leaves empty falls back to
- * the default-Codex entry. The downstream adapter selector
- * (`buildAdaptersFromRouting`) reads the HEAD of each chain, so a non-empty
- * project override wins and an empty one resolves to Codex.
- *
- * The default entry's `model` is a stable placeholder ("default") — the Codex
- * adapter derives its model from the credential/CLI, not the routing entry, so
- * the value only has to satisfy the schema's non-empty constraint.
+ * This is the seam that makes the default a DATA fact, not a code hardcode: a
+ * project that overrides a role's chain (e.g. `write` → claude or opencode) runs
+ * that provider; a role the project leaves empty falls back to `defaultEntry`.
+ * The downstream adapter selector (`buildAdaptersFromRouting`) reads the HEAD of
+ * each chain, so a non-empty project override wins and an empty one resolves to
+ * the default LLM.
  */
-export function buildEffectiveRouting(projectRouting: RoutingTable, codexCredentialRef: string): RoutingTable {
-  const defaultEntry = { cli: "codex", model: "default", authRef: codexCredentialRef };
+export function buildEffectiveRouting(projectRouting: RoutingTable, defaultEntry: RoutingChainEntry): RoutingTable {
   const effective: RoutingTable = {
     plan: projectRouting.plan,
     write: projectRouting.write,
@@ -153,12 +149,12 @@ export async function loadRunExecutionContext(
   });
 
   // cost PR-C: resolve the run's CONFIGURED per-credential credit→USD rate, keyed on
-  // the resolved Codex credential's ref-KIND, project-`creditRates` over
+  // the resolved default-LLM credential's ref-KIND, project-`creditRates` over
   // org-`defaultCreditRates`. A null resolution (no rate configured for this kind) is
   // threaded as an ABSENT context field, so a real credit drawdown lands
   // NULL-and-loud rather than at a removed magic constant.
   const creditRate = resolveCreditUsdRate({
-    authRef: resolved.codexCredentialRef,
+    authRef: resolved.defaultLlm.authRef,
     projectRates: projectConfig.creditRates,
     orgRates: creditRatesFromOrgConfig(decoded.org_config),
   });
@@ -185,14 +181,14 @@ export async function loadRunExecutionContext(
     ...(installationFromOrgConfig(decoded.org_config) !== undefined && {
       installation: installationFromOrgConfig(decoded.org_config),
     }),
-    codexCredentialRef: resolved.codexCredentialRef,
+    defaultLlm: resolved.defaultLlm,
     // The run's per-role provider routing: project routing chains over a
-    // per-role default-Codex table built from the resolved LLM credential. The
-    // workflow's adapters are resolved from THIS table — Codex is the default by
-    // data, not by a code-level hardcode. Under a managed run the resolved
-    // codexCredentialRef is the platform ref and `endpointBaseUrl` points the
-    // adapters at the managed OpenAI-compatible endpoint.
-    routing: buildEffectiveRouting(projectConfig.routing, resolved.codexCredentialRef),
+    // per-role default table built from the resolved DEFAULT LLM entry. The
+    // workflow's adapters are resolved from THIS table — the default is by data,
+    // not a code-level hardcode. Under a managed run the resolved defaultLlm is
+    // the platform entry and `endpointBaseUrl` points the adapters at the managed
+    // OpenAI-compatible endpoint.
+    routing: buildEffectiveRouting(projectConfig.routing, resolved.defaultLlm),
     ...endpointBaseUrlFrom(resolved),
     // The project's governance posture drives the in-loop gate's advisory-step
     // policy (lenient ⇒ lint/typecheck advisory, build/test blocking). Threaded

@@ -13,7 +13,11 @@ import type { EventStore } from "../eventStore.js";
 import type { ReviewAnswer } from "../answerers/schemas/index.js";
 import { buildAdaptersFromRouting, buildSimulatedReviewerAdapter } from "../providers/adapterSelector.js";
 import type { AnswererAdapter } from "../providers/types.js";
-import { SshCcusageAccountant, SshCodexbarUsageMonitor, SshUsageProbe, type UsageProbe } from "../usage/index.js";
+import type { UsageProbe } from "../usage/index.js";
+import { defaultUsageProbe } from "./plannerRunUsage.js";
+// Re-exported so plannerRun.ts keeps a single import surface for the run's
+// adapter/usage builders (the managed capturer lives in plannerRunUsage).
+export { buildManagedCapturerForRun } from "./plannerRunUsage.js";
 import { PgBudgetGate } from "../dag/budgetGate.js";
 import { runBudgetCeilingPreflight } from "./budgetPreflight.js";
 import {
@@ -33,28 +37,6 @@ import type { PlannerRunAdapterContext, RunPlannerLoopInput } from "./plannerRun
 import type { AppendEvent, SubtaskLoopAdapters } from "./subtaskLoop.js";
 import { buildDefaultConflictResolver } from "./reviewMerge/conflictResolver/index.js";
 import type { ConflictResolverHook } from "./reviewMerge/index.js";
-import { buildManagedGenerationCostCapturer, type RealProviderCostCapturer } from "../costs/generationCostCapture.js";
-
-// Builds the MANAGED-run real-cost capturer (resolves the platform OpenRouter key
-// once and returns a per-call `usage.cost` query). A managed run is identified by
-// the resolved `endpointBaseUrl` (the OpenAI-compatible managed endpoint) + the
-// platform credential ref (`codexCredentialRef`, which under managed mode IS the
-// platform OpenRouter ref). A BYOK / non-managed run sets no `endpointBaseUrl`, so
-// this returns undefined and cost_usd is left a metered FACT-or-NULL (no estimate).
-export async function buildManagedCapturerForRun(
-  input: RunPlannerLoopInput,
-): Promise<RealProviderCostCapturer | undefined> {
-  const endpointBaseUrl = input.context.endpointBaseUrl;
-  const managedCredentialRef = input.context.codexCredentialRef;
-  if (endpointBaseUrl === undefined || managedCredentialRef === undefined || managedCredentialRef === "") {
-    return undefined;
-  }
-  return buildManagedGenerationCostCapturer({
-    secrets: input.secrets,
-    managedCredentialRef,
-    endpointBaseUrl,
-  });
-}
 
 // Builds the run's four role adapters (plan/write/check/audit) by resolving the
 // project's effective routing table through the shared adapter selector. The
@@ -442,30 +424,14 @@ async function ingestGateJunitBestEffort(
   }
 }
 
-export function defaultUsageProbe(input: RunPlannerLoopInput, ctx: PlannerRunAdapterContext): UsageProbe {
-  return new SshUsageProbe({
-    monitor: new SshCodexbarUsageMonitor(input.ssh),
-    accountant: new SshCcusageAccountant(input.ssh),
-    provider: "codex",
-    cli: "codex",
-    codexHome: ctx.codexHome,
-    target: ctx.target,
-    timeoutMs: input.timeoutMs,
-    pressureThresholdPercent: input.pressureThresholdPercent,
-  });
-}
-
 /**
- * Build the run's adapters + usage probe through the injectable factories (the
- * production defaults above, or test-injected ones), then run the BUDGET-SAFETY
- * (M6) ceiling-reachability preflight: a configured dollar ceiling against a
- * subscription/self-hosted credential with no usage probe is structurally
- * unreachable, so the run fails closed at setup (a loud `cost.ceiling_unreachable`
- * event + a thrown error). Consolidated here so plannerRun threads it in one call
- * (keeping that file under the 500-line cap). The budget gate is the injectable
- * `input.budgetGate` seam, defaulting to the pg-backed PgBudgetGate over `input.pool`
- * (a real `pg.Pool` at runtime — deps.pool / orgScopingPool; the narrow type is for
- * test ergonomics, and tests over a query-only pool inject a budget-gate seam).
+ * Build the run's adapters + usage probe through the injectable factories, then
+ * run the BUDGET-SAFETY (M6) ceiling-reachability preflight: a configured dollar
+ * ceiling against a subscription/self-hosted credential with no usage probe is
+ * structurally unreachable, so the run fails closed at setup (a loud
+ * `cost.ceiling_unreachable` event + a thrown error). The budget gate is the
+ * injectable `input.budgetGate` seam, defaulting to the pg-backed PgBudgetGate over
+ * `input.pool` (the narrow type is for test ergonomics; tests inject a gate seam).
  */
 export async function resolveRunAdaptersWithBudgetPreflight(
   input: RunPlannerLoopInput,
@@ -473,13 +439,28 @@ export async function resolveRunAdaptersWithBudgetPreflight(
   appendEvent: AppendEvent,
 ): Promise<{ adapters: SubtaskLoopAdapters; usageProbe: UsageProbe | undefined }> {
   const adapters = (input.buildAdapters ?? ((c) => defaultRoutingAdapters(input, c)))(ctx);
-  const usageProbe = (input.buildUsageProbe ?? ((c) => defaultUsageProbe(input, c)))(ctx);
+  // The codex usage probe (ccusage + codexbar) is codex-specific. Build it when ANY
+  // role adapter is codex (a mixed route still consumes the codex subscription) so
+  // codex window pressure is always observed; a run with no codex role gets none.
+  const usesCodex = [adapters.planner, adapters.writer, adapters.checker, adapters.auditor].some(
+    (a) => a.cli === "codex",
+  );
+  const usageProbe = input.buildUsageProbe
+    ? input.buildUsageProbe(ctx)
+    : usesCodex
+      ? defaultUsageProbe(input, ctx)
+      : undefined;
   const budgetGate = input.budgetGate ?? new PgBudgetGate(input.pool as pg.Pool);
+  // Ceiling reachability is about the WRITER's credential: a subscription writer's
+  // spend is observable only when a probe covers IT (writer is codex AND a codex
+  // probe exists), so a non-codex subscription writer fails closed even if a codex
+  // answerer wired a probe (that probe observes codex, not the writer's provider).
+  const writerObservable = usageProbe !== undefined && adapters.writer.cli === "codex";
   await runBudgetCeilingPreflight(
     budgetGate,
     input.context.projectId,
     adapters.writer.authRef,
-    usageProbe !== undefined,
+    writerObservable,
     appendEvent,
   );
   return { adapters, usageProbe };

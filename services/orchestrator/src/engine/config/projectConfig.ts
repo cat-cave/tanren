@@ -19,17 +19,21 @@ import {
   emptyRoutingTable,
   readObservedVersion,
 } from "./shared.js";
+import { DefaultLlmEntry } from "../credentials/defaultLlmEntry.js";
 
 // Top-level versioned Zod schema for project-level config. Persisted as a
 // JSONB column on `projects.config`. Most fields are partial overrides on
 // top of the org-level defaults; the routing table is a full table at the
 // project layer because the operator UI renders the merged view per role.
 
-// a project's bound credential references. Both fields are optional;
-// a project may bind only one kind and inherit the other from the org default.
+// a project's bound credentials. Both fields are optional; a project may bind
+// only one kind and inherit the other from the org default. `defaultLlm` is a
+// provider-agnostic routing entry {cli, model, authRef} (same shape + rules as
+// the org default — see OrgDefaultCredentials), overriding the org's default LLM
+// for this project; `githubCredentialRef` is the repo identity.
 export const ProjectCredentialRefs = z
   .object({
-    codexCredentialRef: z.string().min(1).optional(),
+    defaultLlm: DefaultLlmEntry.optional(),
     githubCredentialRef: z.string().min(1).optional(),
   })
   .strict();

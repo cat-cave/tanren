@@ -10,7 +10,7 @@
 // recorded as window_exhausted, not a generic failure (PROJECT_BRIEF §4.3).
 import type pg from "pg";
 import type { CiWhen } from "../ci/index.js";
-import type { EscapeHatches, GovernancePosture, RoutingTable } from "../config/shared.js";
+import type { EscapeHatches, GovernancePosture, RoutingChainEntry, RoutingTable } from "../config/shared.js";
 import type { OrgGithubAppInstallation } from "../config/orgConfig.js";
 import type { Allocator, ReleaseReason, RunnerHandle } from "../contracts/allocator.js";
 import type { BudgetGate } from "../contracts/dagWalker.js";
@@ -94,10 +94,11 @@ export interface PlannerRunContext {
   // CLONE resolves its token App-first through the VcsProvider seam (like the CI-poll /
   // merge stages), else falls back to the static `githubCredentialRef`.
   installation?: OrgGithubAppInstallation;
-  // Required to build the default (real Codex) adapters + usage probe. Tests that inject buildAdapters/buildUsageProbe may omit it.
-  codexCredentialRef?: string;
-  // The run's effective per-role provider routing table (project routing merged onto a
-  // per-role default-Codex table from `codexCredentialRef`). Codex is the default by DATA.
+  // The run's resolved DEFAULT LLM routing entry {cli, model, authRef} — heads every
+  // empty loop-role chain (provider-agnostic, NOT Codex-pinned). Tests may omit it.
+  defaultLlm?: RoutingChainEntry;
+  // The run's effective per-role routing table (project routing over a per-role
+  // default built from `defaultLlm`). The default is by DATA, not a hardcode.
   routing?: RoutingTable;
   // SaaS Tier-B #5: a MANAGED run's OpenAI-compatible endpoint override (the base URL every adapter is pointed at + the real-cost capturer queries). Absent ⇒ BYOK.
   endpointBaseUrl?: string;

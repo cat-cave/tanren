@@ -385,8 +385,10 @@ function mountRoutingSettingsScreens(app: Hono, deps: ShellDeps): void {
     return c.redirect(`/settings/routing/${projectId}?saved=1`);
   });
 
-  // Bind the project's Codex + GitHub credential refs. An empty
-  // submitted value clears the binding so the run inherits the org default.
+  // Bind the project's default LLM + GitHub credential refs. An empty submitted
+  // value clears the binding so the run inherits the org default. The selected
+  // codex bundle is wrapped into the provider-agnostic default-LLM entry
+  // ({cli,model,authRef}) the orchestrator config now expects.
   app.post("/settings/routing/:projectId/credentials", async (c) => {
     const projectId = c.req.param("projectId");
     const form = await c.req.parseBody();
@@ -394,8 +396,12 @@ function mountRoutingSettingsScreens(app: Hono, deps: ShellDeps): void {
     const codexCredentialRef = String(form["codexCredentialRef"] ?? "").trim();
     const githubCredentialRef = String(form["githubCredentialRef"] ?? "").trim();
     await mutateConfig(c, deps, orgId, projectId, (config) => {
-      const credentials: { codexCredentialRef?: string; githubCredentialRef?: string } = {};
-      if (codexCredentialRef !== "") credentials.codexCredentialRef = codexCredentialRef;
+      const credentials: {
+        defaultLlm?: { cli: string; model: string; authRef: string };
+        githubCredentialRef?: string;
+      } = {};
+      if (codexCredentialRef !== "")
+        credentials.defaultLlm = { cli: "codex", model: "default", authRef: codexCredentialRef };
       if (githubCredentialRef !== "") credentials.githubCredentialRef = githubCredentialRef;
       if (Object.keys(credentials).length === 0) {
         delete config.credentials;

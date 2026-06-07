@@ -258,7 +258,9 @@ describe("onboarding-status", () => {
     const { app: app2, pool } = await buildHarness({ tokenScopes: "repo" });
     pool.orgs.get("org_acme")!.config = {
       version: 1,
-      defaultCredentials: { codex_chatgpt_auth: "credential/codex/org/org_acme/default" },
+      defaultCredentials: {
+        defaultLlm: { cli: "codex", model: "default", authRef: "credential/codex/org/org_acme/default" },
+      },
       defaultBudget: { ceilingUsd: 50, period: "monthly" },
     };
     await reqJson(app2, "POST", "/orgs/org_acme/github", { token: "ghp_repo" });

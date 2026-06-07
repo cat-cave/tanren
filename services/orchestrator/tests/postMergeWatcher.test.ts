@@ -47,7 +47,10 @@ interface FakePoolState {
 function defaultOrgConfig() {
   return {
     version: 1,
-    defaultCredentials: { codex_chatgpt_auth: CODEX_ORG_REF, github_token: GITHUB_ORG_REF },
+    defaultCredentials: {
+      defaultLlm: { cli: "codex", model: "default", authRef: CODEX_ORG_REF },
+      github_token: GITHUB_ORG_REF,
+    },
   };
 }
 

@@ -363,14 +363,16 @@ function composeOnboardingStatus(
 /**
  * The AI-provider connectivity signal from org config: a managed provider is
  * connected by the platform; otherwise a connected BYOK provider is one whose
- * default Codex credential is set. `classifiedAs` names which.
+ * default LLM routing entry is set. `classifiedAs` names the harness (e.g.
+ * "managed", "codex", "claude").
  */
 function resolveAiProviderStatus(config: ReturnType<typeof migrateOrgConfig>): AiProviderStatus {
   if (config.providerMode === "managed") {
     return { connected: true, classifiedAs: "managed" };
   }
-  if (config.defaultCredentials?.codex_chatgpt_auth !== undefined) {
-    return { connected: true, classifiedAs: "codex" };
+  const defaultLlm = config.defaultCredentials?.defaultLlm;
+  if (defaultLlm !== undefined) {
+    return { connected: true, classifiedAs: defaultLlm.cli };
   }
   return { connected: false };
 }

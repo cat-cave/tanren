@@ -192,12 +192,12 @@ describe("ProjectConfigV1 parser", () => {
     const cfg = migrateProjectConfig({
       version: 1,
       credentials: {
-        codexCredentialRef: "credential/codex/org/o/p",
+        defaultLlm: { cli: "codex", model: "default", authRef: "credential/codex/org/o/p" },
         githubCredentialRef: "credential/github/org/o/p",
       },
     });
     expect(cfg.credentials).toEqual({
-      codexCredentialRef: "credential/codex/org/o/p",
+      defaultLlm: { cli: "codex", model: "default", authRef: "credential/codex/org/o/p" },
       githubCredentialRef: "credential/github/org/o/p",
     });
     expect(migrateProjectConfig(cfg)).toEqual(cfg);
@@ -216,7 +216,12 @@ describe("ProjectConfigV1 parser", () => {
   });
 
   it("rejects an empty-string credential ref", () => {
-    expect(() => migrateProjectConfig({ version: 1, credentials: { codexCredentialRef: "" } })).toThrow(/.+/u);
+    expect(() =>
+      migrateProjectConfig({
+        version: 1,
+        credentials: { defaultLlm: { cli: "codex", model: "default", authRef: "" } },
+      }),
+    ).toThrow(/.+/u);
   });
 
   it("is idempotent on a V1-shaped input (V1 -> V1)", () => {

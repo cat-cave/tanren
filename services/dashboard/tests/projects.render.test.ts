@@ -267,7 +267,7 @@ describe("routing & limits settings", () => {
     });
     expect(res.status).toBe(302);
     expect((patchCalls[0].body as { config: { credentials: unknown } }).config.credentials).toEqual({
-      codexCredentialRef: "credential/codex/org/o/c",
+      defaultLlm: { cli: "codex", model: "default", authRef: "credential/codex/org/o/c" },
       githubCredentialRef: "credential/github/org/o/g",
     });
   });

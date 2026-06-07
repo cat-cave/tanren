@@ -135,7 +135,10 @@ async function seedRunWithOrg(pool: WorkerPool) {
     name: "lifecycle-test",
     repoUrl: "https://github.com/cat-cave/tanren-fixture-easy",
     defaultBranch: "main",
-    config: { version: 1, credentials: { codexCredentialRef, githubCredentialRef } },
+    config: {
+      version: 1,
+      credentials: { defaultLlm: { cli: "codex", model: "default", authRef: codexCredentialRef }, githubCredentialRef },
+    },
   });
   const spec = await createSpec(pool.asPgPool(), {
     projectId: project.projectId,

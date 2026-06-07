@@ -38,7 +38,13 @@ function fullRow(overrides: Record<string, unknown> = {}): Record<string, unknow
     default_branch: "main",
     speculative_base: null,
     runner_image: "ghcr.io/acme/runner:1",
-    config: { version: 1, credentials: { codexCredentialRef: "cred/codex", githubCredentialRef: "cred/gh" } },
+    config: {
+      version: 1,
+      credentials: {
+        defaultLlm: { cli: "codex", model: "default", authRef: "credential/codex/dev" },
+        githubCredentialRef: "cred/gh",
+      },
+    },
     org_id: null,
     title: "Add a marker",
     description: "Create the marker file.",
@@ -68,7 +74,7 @@ describe("loadRunExecutionContext", () => {
       runnerImage: "ghcr.io/acme/runner:1",
       identitySecretRef: "runner/test/identity",
       githubCredentialRef: "cred/gh",
-      codexCredentialRef: "cred/codex",
+      defaultLlm: { cli: "codex", model: "default", authRef: "credential/codex/dev" },
     });
     expect(projectConfig.version).toBe(1);
     expect(orgId).toBeNull();
@@ -157,14 +163,21 @@ describe("loadRunExecutionContext", () => {
     // The four loop roles head with a Codex entry pointing at the resolved ref —
     // Codex by DATA, not a code-level hardcode.
     for (const role of ["plan", "write", "check", "audit"] as const) {
-      expect(context.routing?.[role].chain[0]).toEqual({ cli: "codex", model: "default", authRef: "cred/codex" });
+      expect(context.routing?.[role].chain[0]).toEqual({
+        cli: "codex",
+        model: "default",
+        authRef: "credential/codex/dev",
+      });
     }
   });
 
   it("threads the project routing override (a non-Codex writer) onto the run context", async () => {
     const config = {
       version: 1,
-      credentials: { codexCredentialRef: "cred/codex", githubCredentialRef: "cred/gh" },
+      credentials: {
+        defaultLlm: { cli: "codex", model: "default", authRef: "credential/codex/dev" },
+        githubCredentialRef: "cred/gh",
+      },
       routing: {
         write: { chain: [{ cli: "opencode", model: "zai/glm-5.1", authRef: "cred/opencode" }] },
       },
@@ -186,23 +199,35 @@ describe("loadRunExecutionContext", () => {
 
 describe("buildEffectiveRouting", () => {
   it("fills every empty loop-role chain with a default-Codex entry", () => {
-    const effective = buildEffectiveRouting(emptyRoutingTable(), "cred/codex");
+    const effective = buildEffectiveRouting(emptyRoutingTable(), {
+      cli: "codex",
+      model: "default",
+      authRef: "credential/codex/dev",
+    });
     for (const role of ["plan", "write", "check", "audit"] as const) {
-      expect(effective[role].chain).toEqual([{ cli: "codex", model: "default", authRef: "cred/codex" }]);
+      expect(effective[role].chain).toEqual([{ cli: "codex", model: "default", authRef: "credential/codex/dev" }]);
     }
   });
 
   it("keeps a project's per-role override instead of the Codex default", () => {
     const project = emptyRoutingTable();
     project.write = { chain: [{ cli: "claude", model: "claude-opus-4-8", authRef: "cred/claude" }] };
-    const effective = buildEffectiveRouting(project, "cred/codex");
+    const effective = buildEffectiveRouting(project, {
+      cli: "codex",
+      model: "default",
+      authRef: "credential/codex/dev",
+    });
     expect(effective.write.chain[0]?.cli).toBe("claude");
     // Roles the project did not override still default to Codex.
     expect(effective.check.chain[0]?.cli).toBe("codex");
   });
 
   it("does NOT default demo or forge — they keep their empty chains", () => {
-    const effective = buildEffectiveRouting(emptyRoutingTable(), "cred/codex");
+    const effective = buildEffectiveRouting(emptyRoutingTable(), {
+      cli: "codex",
+      model: "default",
+      authRef: "credential/codex/dev",
+    });
     // demo carries its own empty-chain semantics (narrator template fallback);
     // forge is not a loop adapter — neither is filled with a Codex default.
     expect(effective.demo.chain).toEqual([]);

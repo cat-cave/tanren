@@ -243,7 +243,10 @@ export async function setupSeededRun() {
       defaultBranch: "main",
       config: {
         version: 1,
-        credentials: { codexCredentialRef, githubCredentialRef },
+        credentials: {
+          defaultLlm: { cli: "codex", model: "default", authRef: codexCredentialRef },
+          githubCredentialRef,
+        },
         // direct_merge + open posture so the merge stage actually attempts a merge
         // (the conflict branch) without needing a contributor probe.
         mergeIntegration: "direct_merge",

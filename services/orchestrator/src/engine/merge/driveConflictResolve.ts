@@ -34,7 +34,7 @@ import type { VcsProvider } from "../contracts/vcsProvider.js";
 import type { CiWhen } from "../ci/index.js";
 import type { EventStore } from "../eventStore.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
-import type { GovernancePosture, RoutingTable } from "../config/shared.js";
+import type { GovernancePosture, RoutingChainEntry, RoutingTable } from "../config/shared.js";
 import { migrateProjectConfig } from "../config/projectConfig.js";
 import { installationFromOrgConfig, type OrgGithubAppInstallation } from "../config/orgConfig.js";
 import { buildEffectiveRouting } from "../worker/runExecutionContext.js";
@@ -141,7 +141,7 @@ interface DriveRunContext {
   specDescription: string;
   acceptanceCriteria: string[];
   routing: RoutingTable;
-  codexCredentialRef: string;
+  defaultLlm: RoutingChainEntry;
   endpointBaseUrl?: string;
   installation?: OrgGithubAppInstallation;
   governancePosture: GovernancePosture;
@@ -318,8 +318,8 @@ async function loadDriveRunContext(deps: DriveConflictResolveDeps): Promise<Driv
     specTitle: row.title,
     specDescription: row.description,
     acceptanceCriteria: toStringArray(row.acceptance_criteria),
-    routing: buildEffectiveRouting(projectConfig.routing, resolved.codexCredentialRef),
-    codexCredentialRef: resolved.codexCredentialRef,
+    routing: buildEffectiveRouting(projectConfig.routing, resolved.defaultLlm),
+    defaultLlm: resolved.defaultLlm,
     ...(resolved.endpointOverride ? { endpointBaseUrl: resolved.endpointOverride.baseUrl } : {}),
     ...(installation !== undefined && { installation }),
     governancePosture: projectConfig.governancePosture,

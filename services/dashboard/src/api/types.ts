@@ -276,8 +276,12 @@ export interface ProjectConfig {
   mergeIntegration?: "native_queue" | "direct_merge" | "external_reviewer" | "not_configured";
   // preview-deploy URL pattern ({branch}/{pr})
   previewUrlPattern?: string;
-  /** Project-bound credential refs; org default fills any omitted kind. */
-  credentials?: { codexCredentialRef?: string; githubCredentialRef?: string };
+  /** Project-bound credentials; org default fills any omitted kind. `defaultLlm` is
+   * the provider-agnostic default routing entry {cli,model,authRef}. */
+  credentials?: {
+    defaultLlm?: { cli: string; model: string; authRef: string };
+    githubCredentialRef?: string;
+  };
   [key: string]: unknown;
 }
 

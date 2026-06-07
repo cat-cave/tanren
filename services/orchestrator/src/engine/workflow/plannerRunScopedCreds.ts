@@ -77,11 +77,12 @@ export function collectRunCredentialRefPaths(context: PlannerRunContext): string
       }
     }
   }
-  // The codex credential ref is the LLM auth the default routing heads its chains
-  // with; include it explicitly so a run whose routing was not threaded (older
-  // context) still scopes the LLM auth path.
-  if (context.codexCredentialRef !== undefined && context.codexCredentialRef.trim() !== "") {
-    refs.add(context.codexCredentialRef.trim());
+  // The default-LLM credential ref is the LLM auth the default routing heads its
+  // chains with; include it explicitly so a run whose routing was not threaded
+  // still scopes the LLM auth path.
+  const defaultLlmAuthRef = context.defaultLlm?.authRef;
+  if (defaultLlmAuthRef !== undefined && defaultLlmAuthRef.trim() !== "") {
+    refs.add(defaultLlmAuthRef.trim());
   }
   // The GitHub credential ref — the clone / PR / review / merge stages read it.
   // A blank ref (public-repo, no static credential, no App) contributes nothing.

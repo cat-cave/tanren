@@ -61,7 +61,10 @@ const CONTEXT: ConflictContext = {
 function fakePool(opts: { percolationPending?: unknown; priorReplans: number }): pg.Pool {
   const projectConfig = {
     version: 1,
-    credentials: { githubCredentialRef: "credential/github/dev", codexCredentialRef: "credential/codex/dev" },
+    credentials: {
+      githubCredentialRef: "credential/github/dev",
+      defaultLlm: { cli: "codex", model: "default", authRef: "credential/codex/dev" },
+    },
   };
   const answer = (sql: string): { rows: unknown[]; rowCount: number } => {
     const text = sql.trim();
