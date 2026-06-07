@@ -68,21 +68,24 @@ export interface HarnessCapability {
 // and it exposes no usable structured output — deferred until those are fixed.
 //
 // `acceptedCredentialTypes` records what each harness's materializer consumes
-// TODAY: codex/claude validate their own auth BUNDLE on the BYOK path
-// (codexMaterializer/claudeMaterializer); aider/pi/reasonix consume a raw
-// `api_key` (per-provider env var); opencode consumes its own bundle. (codex's
-// managed mode already consumes a raw OpenRouter key via env, so widening the
-// BYOK path to add `api_key` for codex/claude is a follow-up that also adds the
-// type here — kept truthful per-step so the matrix never claims a path the
-// materializer rejects.)
+// TODAY: codex/claude consume EITHER their own auth BUNDLE (the BYOK bundle path)
+// OR a raw `api_key` via the materializer's env-key path (codexMaterializer:
+// OpenRouter config.toml or native OPENAI_API_KEY; claudeMaterializer: native
+// ANTHROPIC_API_KEY) — the credential-redesign widening; aider/pi/reasonix consume
+// only a raw `api_key` (per-provider env var); opencode consumes only its bundle.
 export const HARNESS_CAPABILITIES: readonly HarnessCapability[] = [
   {
     cli: "codex",
     roles: ["write", "answer"],
     structuredOutput: true,
-    acceptedCredentialTypes: ["codex_chatgpt_bundle"],
+    acceptedCredentialTypes: ["codex_chatgpt_bundle", "api_key"],
   },
-  { cli: "claude", roles: ["write", "answer"], structuredOutput: true, acceptedCredentialTypes: ["claude_cli_bundle"] },
+  {
+    cli: "claude",
+    roles: ["write", "answer"],
+    structuredOutput: true,
+    acceptedCredentialTypes: ["claude_cli_bundle", "api_key"],
+  },
   { cli: "opencode", roles: ["write"], structuredOutput: false, acceptedCredentialTypes: ["opencode_bundle"] },
   { cli: "aider", roles: ["write"], structuredOutput: false, acceptedCredentialTypes: ["api_key"] },
   { cli: "pi", roles: ["write"], structuredOutput: false, acceptedCredentialTypes: ["api_key"] },

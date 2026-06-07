@@ -5,7 +5,8 @@ import { CommandFileSubstrate } from "../ssh/commandFileSubstrate.js";
 import { quoteSshShellArg } from "../ssh/command.js";
 import { validateClaudeAuthBundle, validateClaudeCredentialRef } from "./claudeAuth.js";
 import { validateCredentialRef } from "./codexAuth.js";
-import { resolveManagedOpenRouterKey } from "./managedKey.js";
+import { resolveRawProviderKey } from "./managedKey.js";
+import { credentialTypeForRef } from "./credentialType.js";
 
 // materialize a Claude CLI credential bundle onto the runner under a
 // per-run CLAUDE_CONFIG_DIR, mirroring the Codex materializer. The Claude CLI
@@ -59,6 +60,12 @@ export async function materializeClaudeAuthBundle(input: MaterializeClaudeAuthIn
       redacted: true,
     };
   }
+  // BYOK WIDENING: a raw `api_key` ref (`credential/anthropic/…`, NOT a claude
+  // bundle, NOT managed mode) delivers the TENANT's own Anthropic key via the
+  // CLI's native settings env — NO base URL (native Anthropic, not OpenRouter).
+  if (credentialTypeForRef(input.ref) === "api_key") {
+    return materializeNativeAnthropicClaudeSettings(input, configDir);
+  }
   // BYOK (default, unchanged): validate the claude/ ref + the `.credentials.json`
   // token bundle and materialize it.
   const ref = validateClaudeCredentialRef(input.ref);
@@ -93,7 +100,7 @@ async function materializeManagedClaudeSettings(input: MaterializeClaudeAuthInpu
     throw new Error("managed Claude run requires an endpoint base URL");
   }
   const anthropicBaseUrl = claudeAnthropicBaseUrl(input.endpointBaseUrl);
-  const apiKey = await resolveManagedOpenRouterKey(input.secrets, input.ref);
+  const apiKey = await resolveRawProviderKey(input.secrets, input.ref);
   const settingsJson = JSON.stringify({
     env: {
       ANTHROPIC_BASE_URL: anthropicBaseUrl,
@@ -108,6 +115,31 @@ async function materializeManagedClaudeSettings(input: MaterializeClaudeAuthInpu
   });
   assertMaterializationOk(result);
   return anthropicBaseUrl;
+}
+
+/**
+ * NATIVE Anthropic materialization (the BYOK `credential/anthropic/` api_key
+ * path). The Claude CLI hits Anthropic directly, so we write a `settings.json`
+ * (chmod 600) into CLAUDE_CONFIG_DIR carrying ONLY `ANTHROPIC_API_KEY=<key>` —
+ * NO ANTHROPIC_BASE_URL (that is the OpenRouter-routing override, which this path
+ * must NOT set) and no blanked AUTH_TOKEN. The secret key lives ONLY in this file
+ * (fed on stdin), never in the command string/events. Returns no base URL, so the
+ * command builder exports nothing extra.
+ */
+async function materializeNativeAnthropicClaudeSettings(
+  input: MaterializeClaudeAuthInput,
+  configDir: string,
+): Promise<MaterializedClaudeAuth> {
+  const ref = validateCredentialRef(input.ref);
+  const apiKey = await resolveRawProviderKey(input.secrets, input.ref);
+  const settingsJson = JSON.stringify({ env: { ANTHROPIC_API_KEY: apiKey } });
+  const result = await input.ssh.run(input.target, {
+    command: buildManagedClaudeSettingsCommand(configDir),
+    stdin: settingsJson,
+    timeoutMs: input.timeoutMs ?? 30_000,
+  });
+  assertMaterializationOk(result);
+  return { CLAUDE_CONFIG_DIR: configDir, ref, managed: false, redacted: true };
 }
 
 // Maps the resolved OpenRouter endpoint (`…/api/v1`) to the Anthropic-compatible

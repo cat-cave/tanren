@@ -61,10 +61,12 @@ describe("harness credential-type compatibility matrix", () => {
     }
   });
 
-  it("reflects today's materializer reality (codex/claude bundles, aider/pi/reasonix keys, opencode bundle)", () => {
+  it("reflects today's materializer reality (codex/claude bundle+api_key, aider/pi/reasonix keys, opencode bundle)", () => {
     const expected: Record<string, readonly CredentialType[]> = {
-      codex: ["codex_chatgpt_bundle"],
-      claude: ["claude_cli_bundle"],
+      // codex/claude consume their own bundle OR a raw api_key (the env-key
+      // widening): codex via config.toml/OPENAI_API_KEY, claude via ANTHROPIC_API_KEY.
+      codex: ["codex_chatgpt_bundle", "api_key"],
+      claude: ["claude_cli_bundle", "api_key"],
       opencode: ["opencode_bundle"],
       aider: ["api_key"],
       pi: ["api_key"],
@@ -77,8 +79,10 @@ describe("harness credential-type compatibility matrix", () => {
 
   it("harnessAcceptsCredentialType gates (cli, credential-type) pairs", () => {
     expect(harnessAcceptsCredentialType("codex", "codex_chatgpt_bundle")).toBe(true);
-    // codex+api_key is false until the BYOK widening (PR-2); pinned so the step is explicit.
-    expect(harnessAcceptsCredentialType("codex", "api_key")).toBe(false);
+    // codex+claude now also consume a raw api_key via the materializer env-key path.
+    expect(harnessAcceptsCredentialType("codex", "api_key")).toBe(true);
+    expect(harnessAcceptsCredentialType("claude", "api_key")).toBe(true);
+    expect(harnessAcceptsCredentialType("claude", "claude_cli_bundle")).toBe(true);
     expect(harnessAcceptsCredentialType("aider", "api_key")).toBe(true);
     expect(harnessAcceptsCredentialType("aider", "codex_chatgpt_bundle")).toBe(false);
     expect(harnessAcceptsCredentialType("nonexistent", "api_key")).toBe(false);

@@ -136,6 +136,34 @@ describe("Claude credential contracts", () => {
     expect(JSON.stringify(result)).not.toContain("sk-or-v1-claude");
   });
 
+  it("BYOK api_key (anthropic): writes settings.json with ANTHROPIC_API_KEY ONLY (no base URL)", async () => {
+    const secrets = new FakeSecretStore();
+    // A BYOK Anthropic ref (no managed flag) is the TENANT's own native key.
+    await secrets.put({ ref: "credential/anthropic/org/o1/default", value: "sk-ant-tenant" });
+    const ssh = new CapturingSsh();
+    const result = await materializeClaudeAuthBundle({
+      secrets,
+      ssh,
+      target,
+      ref: "credential/anthropic/org/o1/default",
+      runId: "run_byok_ant",
+    });
+    expect(result).toEqual({
+      CLAUDE_CONFIG_DIR: "/home/tanren/.tanren/runs/run_byok_ant/claude-home",
+      ref: "credential/anthropic/org/o1/default",
+      managed: false,
+      redacted: true,
+    });
+    // settings.json (not .credentials.json) carries the env block; the key arrives
+    // on stdin, never in the command string.
+    expect(ssh.command).toContain("settings.json");
+    expect(ssh.command).not.toContain("sk-ant-tenant");
+    // Native Anthropic: ANTHROPIC_API_KEY ONLY — no ANTHROPIC_BASE_URL (OpenRouter
+    // routing override) and no blanked AUTH_TOKEN.
+    expect(JSON.parse(ssh.stdin ?? "{}")).toEqual({ env: { ANTHROPIC_API_KEY: "sk-ant-tenant" } });
+    expect(JSON.stringify(result)).not.toContain("sk-ant-tenant");
+  });
+
   it("MANAGED claude rejects a missing endpoint or empty key loudly", async () => {
     const secrets = new FakeSecretStore();
     const ssh = new CapturingSsh();

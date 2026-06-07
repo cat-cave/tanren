@@ -23,10 +23,22 @@ describe("DefaultLlmEntry validation", () => {
     ).toThrow(/full-role/u);
   });
 
-  it("rejects a full-role cli paired with a credential it cannot consume (codex + raw api_key)", () => {
-    expect(() =>
-      DefaultLlmEntry.parse({ cli: "codex", model: "default", authRef: "credential/openrouter/org/o1/default" }),
-    ).toThrow(/cannot consume/u);
+  it("accepts a full-role cli paired with a raw api_key it now consumes (codex + openrouter key)", () => {
+    const parsed = DefaultLlmEntry.parse({
+      cli: "codex",
+      model: "default",
+      authRef: "credential/openrouter/org/o1/default",
+    });
+    expect(parsed.cli).toBe("codex");
+  });
+
+  it("accepts claude paired with a raw Anthropic api_key (the native env-key path)", () => {
+    const parsed = DefaultLlmEntry.parse({
+      cli: "claude",
+      model: "default",
+      authRef: "credential/anthropic/org/o1/default",
+    });
+    expect(parsed.cli).toBe("claude");
   });
 
   it("rejects an authRef that is not a recognized LLM credential", () => {
@@ -37,12 +49,12 @@ describe("DefaultLlmEntry validation", () => {
 });
 
 describe("config schemas reject an invalid default LLM via PATCH (the bypass BLOCKING fix)", () => {
-  it("org config PATCH cannot persist an incompatible default", () => {
+  it("org config PATCH cannot persist an incompatible default (codex cannot consume a claude bundle)", () => {
     expect(() =>
       migrateOrgConfig({
         version: 1,
         defaultCredentials: {
-          defaultLlm: { cli: "codex", model: "default", authRef: "credential/openrouter/org/o1/x" },
+          defaultLlm: { cli: "codex", model: "default", authRef: "credential/claude/org/o1/x" },
         },
       }),
     ).toThrow(/cannot consume/u);

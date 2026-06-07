@@ -18,7 +18,7 @@
 // failure is swallowed to null (best-effort: a missed capture must NOT fail the
 // run — cost-unknown is an allowed state — and the call already metered tokens).
 import type { SecretStore } from "../contracts/secretStore.js";
-import { resolveManagedOpenRouterKey } from "../credentials/managedKey.js";
+import { resolveRawProviderKey } from "../credentials/managedKey.js";
 import { queryGenerationCost, realProviderCostFrom, type OpenRouterHttpClient } from "./openRouterCost.js";
 
 // The capturer the cost-recording path calls per writer/answerer call: given the
@@ -39,13 +39,13 @@ export interface GenerationCostCaptureDeps {
 }
 
 // Build the managed-run capturer. Resolves the platform OpenRouter key up front
-// (a missing/empty ref is a LOUD failure from resolveManagedOpenRouterKey — never a
+// (a missing/empty ref is a LOUD failure from resolveRawProviderKey — never a
 // silent degrade) and returns a capturer closed over it. Call ONLY for a managed
 // run; a BYOK run gets no capturer (its cost stays NULL, no estimate).
 export async function buildManagedGenerationCostCapturer(
   deps: GenerationCostCaptureDeps,
 ): Promise<RealProviderCostCapturer> {
-  const token = await resolveManagedOpenRouterKey(deps.secrets, deps.managedCredentialRef);
+  const token = await resolveRawProviderKey(deps.secrets, deps.managedCredentialRef);
   const client = deps.httpClient ?? fetchOpenRouterHttpClient();
   return async (generationId: string): Promise<number | null> => {
     if (generationId === "") {

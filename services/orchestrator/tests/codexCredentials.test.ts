@@ -63,6 +63,7 @@ describe("Codex credential contracts", () => {
       CODEX_HOME: "/home/tanren/.tanren/runs/run_123/codex-home",
       ref: "credential/codex/dev",
       managed: false,
+      bundleAuth: true,
       redacted: true,
     });
     expect(JSON.stringify(result)).not.toContain("secret-token");
@@ -96,6 +97,7 @@ describe("Codex credential contracts", () => {
       CODEX_HOME: "/home/tanren/.tanren/runs/run_managed_1/codex-home",
       ref: "credential/openrouter/platform/default",
       managed: true,
+      bundleAuth: false,
       redacted: true,
     });
     // A single materialization command writes both the key env file and the
@@ -180,20 +182,9 @@ describe("Codex credential contracts", () => {
     ).rejects.toThrow("managed Codex run requires an endpoint base URL");
   });
 
-  it("BYOK mode (managed unset/false) still REQUIRES + validates a codex bundle ref", async () => {
+  it("BYOK bundle mode still REQUIRES + validates a codex bundle for a credential/codex/ ref", async () => {
     const secrets = new FakeSecretStore();
     const ssh = new CapturingSshSubstrate();
-    // A non-codex ref is rejected by the codex-ref validator under BYOK.
-    await secrets.put({ ref: "credential/openrouter/platform/default", value: "sk-or-v1-x" });
-    await expect(
-      materializeCodexAuthBundle({
-        secrets,
-        ssh,
-        target,
-        ref: "credential/openrouter/platform/default",
-        runId: "run_byok_1",
-      }),
-    ).rejects.toThrow("Codex credential ref must start with credential/codex/");
     // A codex ref whose value is a raw key (not a bundle) is rejected by the
     // bundle validator under BYOK (proving the bundle check still runs).
     await secrets.put({ ref: "credential/codex/dev", value: "sk-not-a-bundle" });
@@ -207,6 +198,66 @@ describe("Codex credential contracts", () => {
         managed: false,
       }),
     ).rejects.toThrow("Codex auth bundle must be valid JSON");
+  });
+
+  it("BYOK api_key (openrouter): reuses the OpenRouter config.toml + OPENROUTER_API_KEY env with the tenant key", async () => {
+    const secrets = new FakeSecretStore();
+    const ssh = new CapturingSshSubstrate();
+    // A BYOK OpenRouter ref (no managed flag, no endpoint) is the TENANT's own key.
+    await secrets.put({ ref: "credential/openrouter/org/o1/default", value: "sk-or-tenant" });
+    const result = await materializeCodexAuthBundle({
+      secrets,
+      ssh,
+      target,
+      ref: "credential/openrouter/org/o1/default",
+      runId: "run_byok_or",
+    });
+    expect(result).toEqual({
+      CODEX_HOME: "/home/tanren/.tanren/runs/run_byok_or/codex-home",
+      ref: "credential/openrouter/org/o1/default",
+      // Routes through OpenRouter via config.toml, exactly like managed mode.
+      managed: true,
+      bundleAuth: false,
+      redacted: true,
+    });
+    expect(ssh.commands).toHaveLength(1);
+    expect(ssh.stdin).toBe("export OPENROUTER_API_KEY='sk-or-tenant'\n");
+    expect(ssh.command).toContain("config.toml");
+    expect(ssh.command).toContain('model_provider = "openrouter"');
+    // No endpoint override ⇒ OpenRouter's default base URL.
+    expect(ssh.command).toContain('base_url = "https://openrouter.ai/api/v1"');
+    expect(ssh.command).not.toContain("sk-or-tenant");
+    expect(JSON.stringify(result)).not.toContain("sk-or-tenant");
+  });
+
+  it("BYOK api_key (openai-api): writes a native OPENAI_API_KEY env file, NO config.toml / base_url", async () => {
+    const secrets = new FakeSecretStore();
+    const ssh = new CapturingSshSubstrate();
+    await secrets.put({ ref: "credential/openai-api/org/o1/default", value: "sk-openai-tenant" });
+    const result = await materializeCodexAuthBundle({
+      secrets,
+      ssh,
+      target,
+      ref: "credential/openai-api/org/o1/default",
+      runId: "run_byok_oai",
+    });
+    expect(result).toEqual({
+      CODEX_HOME: "/home/tanren/.tanren/runs/run_byok_oai/codex-home",
+      ref: "credential/openai-api/org/o1/default",
+      managed: false,
+      // The command builder sources this env file (and keeps --ignore-user-config).
+      nativeApiKeyEnvFile: "/home/tanren/.tanren/runs/run_byok_oai/codex-home/openai.env",
+      bundleAuth: false,
+      redacted: true,
+    });
+    expect(ssh.commands).toHaveLength(1);
+    expect(ssh.stdin).toBe("export OPENAI_API_KEY='sk-openai-tenant'\n");
+    expect(ssh.command).toContain("openai.env");
+    // Native OpenAI: NO config.toml / base_url override.
+    expect(ssh.command).not.toContain("config.toml");
+    expect(ssh.command).not.toContain("base_url");
+    expect(ssh.command).not.toContain("sk-openai-tenant");
+    expect(JSON.stringify(result)).not.toContain("sk-openai-tenant");
   });
 
   it("throws when the credential ref is missing and derives a per-run CODEX_HOME", async () => {

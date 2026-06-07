@@ -125,11 +125,13 @@ export function createAiProviderRoutes(options: AiProviderRoutesOptions) {
     }
 
     // If the caller asked to make this the org default, resolve the full-role
-    // harness for it BEFORE storing — so an incompatible default request (e.g. a
-    // raw api_key today, which no full-role harness consumes) fails LOUD here and
-    // never leaves an orphaned secret. A null/undefined result is a hard 400, not
-    // a silent connect-without-default. Recomputed nowhere else: this `defaultCli`
-    // is the entry's cli when we write the default below.
+    // harness for it BEFORE storing — so an incompatible default request (a
+    // credential type NO full-role harness consumes) fails LOUD here and never
+    // leaves an orphaned secret. With the credential-redesign widening, codex AND
+    // claude consume a raw api_key, so `find` resolves to the FIRST full-role cli
+    // (codex) for an api_key default. A null/undefined result is a hard 400, not a
+    // silent connect-without-default. Recomputed nowhere else: this `defaultCli` is
+    // the entry's cli when we write the default below.
     let defaultCli: string | undefined;
     if (makeDefault) {
       const credentialType = credentialTypeForRef(ref);
@@ -183,9 +185,10 @@ export function createAiProviderRoutes(options: AiProviderRoutesOptions) {
     // a provider-agnostic routing entry {cli, model, authRef}: we pick a FULL-ROLE
     // harness (harnessCanBeDefault) whose materializer ACCEPTS this credential's
     // type (harnessAcceptsCredentialType) — so the (cli, authRef) pair is valid at
-    // run time, not a facade. A credential with no compatible full-role harness
-    // (e.g. a raw api_key today — only writer-only aider consumes it) is REJECTED
-    // loudly here, never silently wired to a harness that cannot read it.
+    // run time, not a facade. A raw api_key resolves to codex (the first full-role
+    // harness that consumes api_key via its env-key path). A credential with no
+    // compatible full-role harness is REJECTED loudly above, never silently wired
+    // to a harness that cannot read it.
     // `providerMode: "byok"` resolves the tenant credential. `makeDefault: false`
     // connects without changing routing.
     let isDefault = false;
