@@ -144,6 +144,23 @@ describe("JjWorkspaceVcsCore real-jj regressions", () => {
     expect(second.conflict?.conflictId).toBe(first.conflict?.conflictId);
   });
 
+  it("RecordedConflict.conflictId is DISTINCT for distinct conflicts (no over-stability)", async () => {
+    const core = makeJjCore();
+    const ws = await core.openWorkspace({ repoUrl: "https://example.com/o/r.git", baseBranch: "main", path: "/w" });
+    // Two DISTINCT branches each produce their OWN conflict (different jj change_id) —
+    // the ids must DIFFER, proving the stable derivation does not collapse distinct
+    // conflicts onto a single id.
+    await core.branch(ws, "feat-a", "main");
+    await core.commit(ws, "work-a");
+    const a = await core.rebaseOnto(ws, "feat-a", "conflict-base-sha");
+    await core.branch(ws, "feat-b", "main");
+    await core.commit(ws, "work-b");
+    const b = await core.rebaseOnto(ws, "feat-b", "conflict-base-sha");
+    expect(a.conflict).toBeDefined();
+    expect(b.conflict).toBeDefined();
+    expect(b.conflict?.conflictId).not.toBe(a.conflict?.conflictId);
+  });
+
   it("openWorkspace OWNS its destination dir (no pre-created dir needed)", async () => {
     // The path-remapping wrapper hands openWorkspace a NON-PRE-CREATED path; a
     // successful open + branch + commit proves openWorkspace created the dir itself.
