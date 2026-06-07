@@ -107,6 +107,15 @@ async function materializeManagedClaudeSettings(input: MaterializeClaudeAuthInpu
     // No silent fallback: a managed claude run with no endpoint is a wiring bug.
     throw new Error("managed Claude run requires an endpoint base URL");
   }
+  // Managed claude authenticates THROUGH OpenRouter (ANTHROPIC_BASE_URL=OpenRouter +
+  // the key as ANTHROPIC_AUTH_TOKEN). A non-openrouter key here would be silently
+  // mis-wired as an OpenRouter token — require the openrouter slug LOUD.
+  const slug = providerSlugForRef(input.ref);
+  if (slug !== "openrouter") {
+    throw new Error(
+      `managed/OpenRouter Claude materialization requires a credential/openrouter/ ref; got slug ${JSON.stringify(slug)}`,
+    );
+  }
   const anthropicBaseUrl = claudeAnthropicBaseUrl(input.endpointBaseUrl);
   const apiKey = await resolveRawProviderKey(input.secrets, input.ref);
   const settingsJson = JSON.stringify({

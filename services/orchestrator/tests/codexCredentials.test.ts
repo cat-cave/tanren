@@ -119,21 +119,37 @@ describe("Codex credential contracts", () => {
     const secrets = new FakeSecretStore();
     // A raw key is not valid JSON and would fail validateCodexAuthBundle — the
     // managed path must NOT run it.
-    await secrets.put({ ref: "credential/anthropic/platform/default", value: "sk-ant-managed" });
+    await secrets.put({ ref: "credential/openrouter/platform/default", value: "sk-or-managed-raw" });
     const ssh = new CapturingSshSubstrate();
 
     const result = await materializeCodexAuthBundle({
       secrets,
       ssh,
       target,
-      ref: "credential/anthropic/platform/default",
+      ref: "credential/openrouter/platform/default",
       runId: "run_managed_2",
       managed: true,
       endpointBaseUrl: "https://openrouter.ai/api/v1",
     });
 
-    expect(result.ref).toBe("credential/anthropic/platform/default");
-    expect(ssh.stdin).toBe("export OPENROUTER_API_KEY='sk-ant-managed'\n");
+    expect(result.ref).toBe("credential/openrouter/platform/default");
+    expect(ssh.stdin).toBe("export OPENROUTER_API_KEY='sk-or-managed-raw'\n");
+  });
+
+  it("MANAGED mode REJECTS a non-openrouter platform ref (it authenticates as OpenRouter)", async () => {
+    const secrets = new FakeSecretStore();
+    await secrets.put({ ref: "credential/anthropic/platform/default", value: "sk-ant-managed" });
+    await expect(
+      materializeCodexAuthBundle({
+        secrets,
+        ssh: new CapturingSshSubstrate(),
+        target,
+        ref: "credential/anthropic/platform/default",
+        runId: "run_managed_3",
+        managed: true,
+        endpointBaseUrl: "https://openrouter.ai/api/v1",
+      }),
+    ).rejects.toThrow(/credential\/openrouter/u);
   });
 
   it("MANAGED mode rejects a missing or whitespace-only api key loudly", async () => {

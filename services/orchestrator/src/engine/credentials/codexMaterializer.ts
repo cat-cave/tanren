@@ -168,6 +168,16 @@ async function materializeManagedOpenRouterCodexConfig(
   codexHome: string,
   endpointBaseUrl: string,
 ): Promise<void> {
+  // This wire-up authenticates as OpenRouter (config.toml [model_providers.openrouter]
+  // + OPENROUTER_API_KEY). A non-openrouter key here would be silently mis-wired as an
+  // OpenRouter key — so require the openrouter slug LOUD (managed mode resolves the
+  // platform credential/openrouter/ ref; a BYOK openrouter key reaches here too).
+  const slug = providerSlugForRef(input.ref);
+  if (slug !== "openrouter") {
+    throw new Error(
+      `managed/OpenRouter Codex materialization requires a credential/openrouter/ ref; got slug ${JSON.stringify(slug)}`,
+    );
+  }
   const apiKey = await resolveRawProviderKey(input.secrets, input.ref);
   const result = await input.ssh.run(input.target, {
     command: buildManagedCodexMaterializationCommand(codexHome, endpointBaseUrl),
