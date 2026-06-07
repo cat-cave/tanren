@@ -1,11 +1,13 @@
 // GREENFIELD: the project-create path that needs NO existing repo. An end user
 // posts `{ name, owner, greenfield: true, private?, defaultBranch?, description? }`
-// (no repoUrl) and Tanren creates a brand-new GitHub repo under the org's GitHub
-// App grant via the `VcsProvider.createRepository` seam, then binds a new project
-// to the real new repoUrl. Extracted from `index.ts` so that file stays under the
-// per-file line cap. Org-scoping is preserved: the token resolves against THIS
-// org's App installation/credentials, and `createProject` persists the row under
-// the org actor's RLS scope.
+// (no repoUrl) and Tanren creates a brand-new GitHub repo via the
+// `VcsProvider.createRepository` seam — authenticating with the org's GitHub App
+// installation token when the App is installed, ELSE the org-default static
+// `github_token` (a PAT with repo-create scope) — then binds a new project to the
+// real new repoUrl. Extracted from `index.ts` so that file stays under the per-file
+// line cap. Org-scoping is preserved: the token resolves against THIS org's
+// App-installation/credentials, and `createProject` persists the row under the org
+// actor's RLS scope.
 
 import type { Context } from "hono";
 import type pg from "pg";
@@ -24,7 +26,10 @@ import {
   RepositoryCreationForbiddenError,
   type VcsProvider,
 } from "../../engine/contracts/vcsProvider.js";
-import { loadOrgGithubAppInstallation } from "../../engine/credentials/orgGithubApp.js";
+import {
+  loadOrgDefaultGithubCredentialRef,
+  loadOrgGithubAppInstallation,
+} from "../../engine/credentials/orgGithubApp.js";
 import { OrgIntegrationsStore } from "../../engine/repositories/orgIntegrations.js";
 import {
   productionProvisionerDeps,
@@ -109,15 +114,25 @@ export class GithubCredentialMissingError extends Error {
 
 export async function createGreenfieldRepository(deps: GreenfieldRepositoryCreateDeps): Promise<CreatedRepository> {
   const { pool, secrets, vcsProvider, orgId, input } = deps;
+  // Resolve the org's repo-creation credential the SAME way the rest of the system
+  // does (resolveGithubToken): an App installation token when the org installed the
+  // App, ELSE the org-default static `github_token` (a PAT with repo-create scope).
+  // Repo creation is not App-only — requiring an installation here broke greenfield
+  // for an org that connected a static PAT (the documented fallback path).
+  const installation = await loadOrgGithubAppInstallation(pool, orgId);
+  const staticRef = await loadOrgDefaultGithubCredentialRef(pool, orgId);
+  // No App installation AND no org-default static credential ⇒ a real config gap,
+  // surfaced LOUD (the operator must connect a GitHub credential). Explicit — not a
+  // reliance on the resolver throwing — so the requirement is honest at this seam.
+  if (installation === undefined && staticRef === undefined) {
+    throw new GithubCredentialMissingError();
+  }
   let token;
   try {
-    const installation = await loadOrgGithubAppInstallation(pool, orgId);
-    if (installation === undefined) {
-      throw new GithubCredentialMissingError();
-    }
     token = await vcsProvider.resolveToken({
       secrets,
-      installation,
+      ...(installation !== undefined && { installation }),
+      ...(staticRef !== undefined && { staticRef }),
       ...(deps.githubAppMinter === undefined ? {} : { minter: deps.githubAppMinter }),
     });
   } catch {
