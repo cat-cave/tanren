@@ -117,6 +117,15 @@ const SEVERITY_OVERRIDES: Partial<Record<EventName, Severity>> = {
   // actually reaches a person rather than silently parking.
   "dag.spec.needs_attention": "fail",
 
+  // The GENUINE dollar-budget pause: cumulative spend reached the configured
+  // ceiling and the DagWalker stopped enqueuing. This is operator-ACTIONABLE — the
+  // run halted and the operator must decide (raise the ceiling, or accept the
+  // stop) — so it is `warn`: it clears the matrix warn floor AND the code-level
+  // default route, reaching the operator rather than silently parking at `info`.
+  // (deploy.verified and other success milestones stay `info`: the default route
+  // is the ESCALATION path; success-milestone pings are an opt-in per-org route.)
+  "dag.budget.paused": "warn",
+
   // Review
   "review.requested": "info",
   "review.approved": "ok",
