@@ -49,6 +49,7 @@ export const eventTypeNames = [
   "dag.spec.unstranded",
   "demo.completed",
   "demo.evidence.recorded",
+  "deploy.failed",
   "deploy.triggered",
   "deploy.verified",
   "gate.advisory_failed",

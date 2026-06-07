@@ -53,6 +53,7 @@ import {
   AppEnvRuntimeAttachedPayload,
   DeployTriggeredPayload,
   DeployVerifiedPayload,
+  DeployFailedPayload,
   GithubBranchPushedPayload,
   GithubFailedPayload,
   GithubPrCreatedPayload,
@@ -349,6 +350,11 @@ export const EventRegistry = {
   // provider to a READY terminal + smoke-checked the resolved URL. The proof a
   // triggered deploy actually became reachable — non-secret (provider + url + state).
   "deploy.verified": DeployVerifiedPayload,
+
+  // Deploy FAILED ("could NOT be proven live"): verification failed on every attempt
+  // of the bounded retry — the LOUD terminal so the operator knows (vs a silent
+  // triggered-but-unverified stall). Non-secret (provider + ids + attempts + reason).
+  "deploy.failed": DeployFailedPayload,
 
   // Demos-as-evidence (design doc § "Native Deployment And Demos"): after a deploy is
   // VERIFIED, the demo engine exercises each of the spec's BEHAVIORS against the

@@ -37,6 +37,19 @@ import { buildDeployAdapter } from "../deploy/buildDeployAdapter.js";
 import { DIRECT_API_ADAPTER_KIND } from "../deploy/directApiDeployAdapter.js";
 import type { UrlReachabilityProbe, VerifyPollPolicy } from "../contracts/deployAdapter.js";
 
+// How many times verification is (re-)run before escalating to `deploy.failed`. Each
+// attempt re-polls the deployment (the verify poll budget provides the per-attempt
+// wait), so a transient failure recovers in-process. Bounded so a genuinely-failed
+// deploy escalates LOUD rather than retrying forever.
+const DEFAULT_VERIFY_MAX_ATTEMPTS = 3;
+
+// The FIXED, non-secret `deploy.failed.reason`. Deliberately NOT the raw verify
+// error message: a provider HTTP failure can embed provider-supplied response text
+// (a potential secret), and this reason is persisted + marked public. The full error
+// is preserved via the re-throw (logged by the subscriber) for diagnosis.
+const DEPLOY_FAILED_REASON =
+  "deploy verification did not reach a live deployment within the bounded retry; see the run logs for provider detail";
+
 /** The deploy artifact a project carries in its config once a deploy capability was provisioned. */
 export interface ProjectDeployTarget {
   /** The deploy provider kind (`deploy.vercel` | `deploy.flyio`). */
@@ -85,6 +98,14 @@ export interface DeployOnMergeWatcherDeps {
   /** The verify poll cadence + bound; defaults to the production policy when absent. */
   verifyPoll?: VerifyPollPolicy;
   /**
+   * How many times to (re-)run verification before escalating to `deploy.failed`.
+   * Each attempt re-polls the deployment (the verify poll budget provides the wait),
+   * so a TRANSIENT verify failure (slow-to-ready / a provider read blip) recovers
+   * in-process rather than dead-ending. Defaults to {@link DEFAULT_VERIFY_MAX_ATTEMPTS};
+   * tests inject a small value.
+   */
+  verifyMaxAttempts?: number;
+  /**
    * SECURITY-BASELINE deploy-target allowlist (egressPolicy.ts). Consulted BEFORE a
    * deploy fires so the deploy target is governed by policy, not assumed allowed.
    * Defaults to the default-permissive policy (OSS / self-host posture); a
@@ -132,8 +153,10 @@ export class DeployOnMergeWatcher {
       );
     }
 
-    // Idempotent on SUCCESS: a VERIFIED deploy is done — never re-trigger.
-    if (await this.alreadyVerified(runId)) return;
+    // Idempotent on a TERMINAL outcome: a VERIFIED deploy is done, and a FAILED
+    // deploy (the bounded verify retry exhausted) must NOT be re-verified — both gate
+    // to a no-op so a `deploy.failed` append can't self-loop the run-activity bus.
+    if (await this.alreadyTerminal(runId)) return;
 
     const grant = await this.loadGrant(target);
     if (grant === undefined) {
@@ -150,7 +173,7 @@ export class DeployOnMergeWatcher {
     // (the old gate skipped on `deploy.triggered`, so a failed verify never retried).
     const priorDeploymentId = await this.priorTriggeredDeploymentId(runId);
     if (priorDeploymentId !== undefined) {
-      await this.verifyDeploy(runId, merged.projectId, target, grant.providerKind, priorDeploymentId);
+      await this.verifyWithRetry(runId, merged.projectId, target, grant.providerKind, priorDeploymentId);
       return;
     }
 
@@ -208,7 +231,69 @@ export class DeployOnMergeWatcher {
     // A configured deploy that never becomes ready (or whose URL never serves) throws
     // LOUD here — `deploy.triggered` is no longer the end; `deploy.verified` is the
     // proof. On success emit `deploy.verified` (provider + url + state, non-secret).
-    await this.verifyDeploy(runId, merged.projectId, target, grant.providerKind, result.deploymentId);
+    await this.verifyWithRetry(runId, merged.projectId, target, grant.providerKind, result.deploymentId);
+  }
+
+  /**
+   * Verify with a BOUNDED IN-PROCESS RETRY, then escalate LOUD if it never proves
+   * live. Each attempt re-runs `verifyDeploy` (which re-polls the deployment to READY
+   * + re-smoke-checks), so a TRANSIENT failure (slow-to-ready, a provider read blip)
+   * recovers within this one `check()` call — no reliance on a later run-activity wake
+   * (a merged run is terminal). On the FINAL failure it appends `deploy.failed` (the
+   * LOUD operator signal — the product never came up) and re-throws, rather than
+   * leaving the run silently triggered-but-unverified.
+   */
+  private async verifyWithRetry(
+    runId: string,
+    projectId: string,
+    target: ProjectDeployTarget,
+    providerKind: string,
+    deploymentId: string,
+  ): Promise<void> {
+    const maxAttempts = this.deps.verifyMaxAttempts ?? DEFAULT_VERIFY_MAX_ATTEMPTS;
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        await this.verifyDeploy(runId, projectId, target, providerKind, deploymentId);
+        return;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    await this.appendDeployFailed(runId, projectId, target, deploymentId, maxAttempts);
+    throw lastError instanceof Error ? lastError : new Error(String(lastError));
+  }
+
+  /**
+   * Append the LOUD `deploy.failed` terminal under the org scope. The `reason` is a
+   * FIXED, non-secret summary — never the raw verify error, whose message can embed
+   * provider-supplied HTTP response text (a potential secret) and which would be
+   * persisted + marked public. The full error is preserved for diagnosis by the
+   * re-throw in `verifyWithRetry` (the subscriber logs it); only the bounded,
+   * non-secret summary + attempt count reach the audit event.
+   */
+  private async appendDeployFailed(
+    runId: string,
+    projectId: string,
+    target: ProjectDeployTarget,
+    deploymentId: string,
+    attempts: number,
+  ): Promise<void> {
+    await runWithJobOrgId(target.orgId, async () => {
+      await this.eventStore.append({
+        runId,
+        projectId,
+        eventType: "deploy.failed",
+        payload: {
+          provider: target.provider,
+          appId: target.appId,
+          deploymentId,
+          attempts,
+          reason: DEPLOY_FAILED_REASON,
+          ...deployAuditEnvelope(target),
+        },
+      });
+    });
   }
 
   /**
@@ -311,10 +396,18 @@ export class DeployOnMergeWatcher {
   }
 
   /** Whether this run already reached `deploy.verified` (the success proof — done). */
-  private async alreadyVerified(runId: string): Promise<boolean> {
+  /**
+   * Whether this run reached a TERMINAL deploy outcome — `deploy.verified` (proven
+   * live) OR `deploy.failed` (the bounded verify retry was exhausted). Either gates
+   * `check()` to a no-op: a verified deploy is done, and a FAILED deploy must NOT be
+   * re-verified. `deploy.failed` is run-scoped, so its append wakes the post-merge
+   * subscriber; without treating it as terminal the next pass would re-verify the
+   * still-failed deployment and append another `deploy.failed`, self-looping the bus.
+   */
+  private async alreadyTerminal(runId: string): Promise<boolean> {
     return runWithSystemScope(this.deps.pool, async (client) => {
       const result = await client.query<{ id: string }>(
-        "SELECT id FROM events WHERE run_id = $1 AND event_type = 'deploy.verified' LIMIT 1",
+        "SELECT id FROM events WHERE run_id = $1 AND event_type IN ('deploy.verified', 'deploy.failed') LIMIT 1",
         [runId],
       );
       return result.rows[0] !== undefined;

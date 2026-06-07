@@ -126,6 +126,12 @@ const SEVERITY_OVERRIDES: Partial<Record<EventName, Severity>> = {
   // is the ESCALATION path; success-milestone pings are an opt-in per-org route.)
   "dag.budget.paused": "warn",
 
+  // A deploy that triggered but could NOT be proven live after the bounded verify
+  // retry. Operator-actionable (the product never came up) → `warn` so the failure
+  // reaches the operator rather than a silent triggered-but-unverified stall.
+  // (deploy.triggered / deploy.verified are routine lifecycle → info.)
+  "deploy.failed": "warn",
+
   // Review
   "review.requested": "info",
   "review.approved": "ok",
