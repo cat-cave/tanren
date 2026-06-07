@@ -108,6 +108,44 @@ verifier prompted to **refute** the claim, ideally several with different lenses
 This catches plausible-but-wrong conclusions that a single pass — and green CI —
 miss. Several real merge-safety bugs in this repo were caught this way, not by CI.
 
+The strongest independent verifier is a **different model**. The implementer's
+own blind spots survive its own review; a second model with a different training
+prior does not share them. So the preferred critic is the cross-model lane below,
+not another instance of the implementer.
+
+### The cross-model critic / triage lane (Codex)
+
+A second model is used as a first-class lane alongside the primary implementer:
+the implementer writes the code; an independent critic refutes it. In this repo
+that critic is **Codex (GPT-5.5) via `codex exec`** — the implementer is strong at
+building, the critic is strong at catching what the builder missed. Four uses:
+
+- **Critic** — adversarial, _refute_-prompted review of a diff or a finding,
+  before merge. Cite `file:line`, classify BLOCKING vs non-blocking, end with a
+  SHIP/FIX-FIRST verdict. (The apex "critic-arc" proof is three independent critic
+  rounds coming back clean.)
+- **Triage / root-cause** — when a run or CI fails, the critic investigates the
+  root cause independently rather than the implementer re-reading its own work.
+- **Lull-audit** — during downtime, sweep for _negative implementations_ (silent
+  fallbacks, legacy/back-compat, weak lint rules, sloppy error handling,
+  deploy-config-vs-userland-config violations); surfaced items become queued work.
+- **Forward-look** — audit loops no run has exercised yet (issue-triage, deploy,
+  scheduled tasks) to surface gaps _before_ a live run wastes a full push hitting
+  an obvious bug.
+
+Run it read-only and backgrounded so it can't mutate the tree and the watch is
+harness-tracked:
+
+```sh
+codex exec -s read-only --skip-git-repo-check - < prompt.txt > out.md 2>&1
+```
+
+It streams its reasoning, so the structured report is at the _tail_ of the output
+and the file can exceed read limits — grep for the section headers rather than
+reading the whole file. _Generic fallback:_ any second-model CLI (or a human
+reviewer with a different mental model) prompted to refute serves the same intent;
+the point is **independence of perspective**, not the specific tool.
+
 ### Loop-until-dry
 
 For unknown-size discovery (dead code, bugs, edge cases), keep spawning finders
