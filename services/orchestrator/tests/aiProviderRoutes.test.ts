@@ -120,13 +120,12 @@ describe("ai-provider routes", () => {
     }
   });
 
-  it("wires an api_key provider as the org default via the first full-role harness (codex)", async () => {
+  it("wires an openrouter api_key default through codex (the harness that delivers an openrouter key)", async () => {
     const { app, pool } = buildHarness(admin);
     const created = await connect(app, { provider: "openrouter", apiKey: "sk-or-secret", makeDefault: true });
     expect(created.status).toBe(201);
     expect(created.body.isDefault).toBe(true);
-    // codex+claude both accept api_key now; FULL_ROLE_CLIS.find resolves to the
-    // FIRST full-role cli (codex), which delivers the OpenRouter key via env.
+    // The default cli is PROVIDER-SLUG-aware: openrouter → codex (config.toml env).
     const config = pool.orgs.get("org_acme")?.config as {
       providerMode: string;
       defaultCredentials?: { defaultLlm?: { cli: string; model: string; authRef: string } };
@@ -139,15 +138,29 @@ describe("ai-provider routes", () => {
     });
   });
 
-  it("wires an anthropic api_key default through codex (the first full-role api_key harness)", async () => {
+  it("wires an openai api_key default through codex (native OPENAI_API_KEY)", async () => {
     const { app, pool } = buildHarness(admin);
-    const created = await connect(app, { provider: "anthropic", apiKey: "sk-ant-secret", makeDefault: true });
+    const created = await connect(app, { provider: "openai", apiKey: "sk-openai-secret", makeDefault: true });
     expect(created.status).toBe(201);
     expect(created.body.isDefault).toBe(true);
     const config = pool.orgs.get("org_acme")?.config as {
       defaultCredentials?: { defaultLlm?: { cli: string; authRef: string } };
     };
     expect(config.defaultCredentials?.defaultLlm?.cli).toBe("codex");
+    expect(config.defaultCredentials?.defaultLlm?.authRef).toBe(created.body.ref);
+  });
+
+  it("wires an anthropic api_key default through CLAUDE (not codex — slug-aware selection)", async () => {
+    const { app, pool } = buildHarness(admin);
+    const created = await connect(app, { provider: "anthropic", apiKey: "sk-ant-secret", makeDefault: true });
+    expect(created.status).toBe(201);
+    expect(created.body.isDefault).toBe(true);
+    // anthropic → claude (the harness whose materializer delivers a native
+    // Anthropic key); codex cannot deliver an anthropic key, so it is NOT picked.
+    const config = pool.orgs.get("org_acme")?.config as {
+      defaultCredentials?: { defaultLlm?: { cli: string; authRef: string } };
+    };
+    expect(config.defaultCredentials?.defaultLlm?.cli).toBe("claude");
     expect(config.defaultCredentials?.defaultLlm?.authRef).toBe(created.body.ref);
   });
 

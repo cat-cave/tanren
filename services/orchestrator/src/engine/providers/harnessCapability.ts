@@ -51,6 +51,16 @@ export interface HarnessCapability {
   // MUST match what the harness's materializer accepts today — pinned by the
   // conformance test in tests/harnessCredentialCompat.test.ts.
   readonly acceptedCredentialTypes: readonly CredentialType[];
+  // For a harness that consumes `api_key`, WHICH provider slugs its materializer
+  // can actually deliver — the FOURTH gating axis, because a bare `api_key` is too
+  // coarse for the full-role harnesses: codex delivers a raw key only as OpenRouter
+  // (config.toml) or native OpenAI (OPENAI_API_KEY), and claude only as native
+  // Anthropic (ANTHROPIC_API_KEY). So a `credential/anthropic/` key paired with
+  // codex, or a `credential/openrouter/` key paired with claude, is INVALID even
+  // though both "accept api_key". Undefined ⇒ either the harness does not consume
+  // api_key, or (the writer-only aider/pi/reasonix) its env-key resolution is
+  // provider-agnostic so no slug constraint applies. Pinned by the conformance test.
+  readonly acceptedApiKeyProviderSlugs?: readonly string[];
 }
 
 // The capability table. Two capability classes today:
@@ -69,22 +79,27 @@ export interface HarnessCapability {
 //
 // `acceptedCredentialTypes` records what each harness's materializer consumes
 // TODAY: codex/claude consume EITHER their own auth BUNDLE (the BYOK bundle path)
-// OR a raw `api_key` via the materializer's env-key path (codexMaterializer:
-// OpenRouter config.toml or native OPENAI_API_KEY; claudeMaterializer: native
-// ANTHROPIC_API_KEY) — the credential-redesign widening; aider/pi/reasonix consume
-// only a raw `api_key` (per-provider env var); opencode consumes only its bundle.
+// OR a raw `api_key` via the materializer's env-key path — the credential-redesign
+// widening — but ONLY for the provider slugs they actually deliver
+// (`acceptedApiKeyProviderSlugs`): codex via OpenRouter config.toml (openrouter) or
+// native OPENAI_API_KEY (openai-api); claude via native ANTHROPIC_API_KEY
+// (anthropic). aider/pi/reasonix consume a raw `api_key` for any provider (the env
+// var keys off the model, so no slug constraint); opencode consumes only its
+// bundle.
 export const HARNESS_CAPABILITIES: readonly HarnessCapability[] = [
   {
     cli: "codex",
     roles: ["write", "answer"],
     structuredOutput: true,
     acceptedCredentialTypes: ["codex_chatgpt_bundle", "api_key"],
+    acceptedApiKeyProviderSlugs: ["openrouter", "openai-api"],
   },
   {
     cli: "claude",
     roles: ["write", "answer"],
     structuredOutput: true,
     acceptedCredentialTypes: ["claude_cli_bundle", "api_key"],
+    acceptedApiKeyProviderSlugs: ["anthropic"],
   },
   { cli: "opencode", roles: ["write"], structuredOutput: false, acceptedCredentialTypes: ["opencode_bundle"] },
   { cli: "aider", roles: ["write"], structuredOutput: false, acceptedCredentialTypes: ["api_key"] },
@@ -119,6 +134,19 @@ export function harnessSupportsRole(cli: string, role: HarnessRole): boolean {
 export function harnessAcceptsCredentialType(cli: string, credentialType: CredentialType): boolean {
   const capability = HARNESS_CAPABILITIES.find((entry) => entry.cli === cli);
   return capability !== undefined && capability.acceptedCredentialTypes.includes(credentialType);
+}
+
+// Whether the given cli's materializer can deliver a raw `api_key` for the given
+// PROVIDER SLUG — the finer gate the full-role default path needs (see
+// `acceptedApiKeyProviderSlugs`). A bare `api_key` accept is necessary but NOT
+// sufficient: codex accepts api_key yet cannot deliver `anthropic`, and claude
+// accepts api_key yet cannot deliver `openrouter`/`openai-api`. Returns false for
+// a cli that does not declare slug-scoped api_key delivery (so the writer-only
+// provider-agnostic harnesses are NOT eligible here — they are gated by the
+// coarser credential-type check, never the slug one), and false for an unknown cli.
+export function harnessAcceptsApiKeyProvider(cli: string, providerSlug: string): boolean {
+  const capability = HARNESS_CAPABILITIES.find((entry) => entry.cli === cli);
+  return capability?.acceptedApiKeyProviderSlugs?.includes(providerSlug) ?? false;
 }
 
 // The full-role harnesses (write + answer) — the only clis eligible to back a

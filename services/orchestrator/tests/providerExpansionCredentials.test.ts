@@ -164,6 +164,28 @@ describe("Claude credential contracts", () => {
     expect(JSON.stringify(result)).not.toContain("sk-ant-tenant");
   });
 
+  it("BYOK api_key: claude REJECTS a non-anthropic slug LOUD (never the wrong provider's key in ANTHROPIC_API_KEY)", async () => {
+    const secrets = new FakeSecretStore();
+    const ssh = new CapturingSsh();
+    // An OpenRouter / OpenAI key is NOT a claude-deliverable raw key — claude only
+    // delivers native Anthropic — so it must fail loud, not be written as an
+    // Anthropic key. (No managed flag ⇒ this is the BYOK api_key path.)
+    for (const slug of ["openrouter", "openai-api"]) {
+      await secrets.put({ ref: `credential/${slug}/org/o1/default`, value: "sk-wrong-provider" });
+      await expect(
+        materializeClaudeAuthBundle({
+          secrets,
+          ssh,
+          target,
+          ref: `credential/${slug}/org/o1/default`,
+          runId: `run_byok_${slug.replaceAll("-", "_")}`,
+        }),
+      ).rejects.toThrow(/claude cannot deliver a BYOK api_key for provider slug/u);
+    }
+    // Nothing was materialized for the rejected slugs.
+    expect(ssh.command).not.toContain("sk-wrong-provider");
+  });
+
   it("MANAGED claude rejects a missing endpoint or empty key loudly", async () => {
     const secrets = new FakeSecretStore();
     const ssh = new CapturingSsh();

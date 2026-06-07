@@ -6,7 +6,7 @@ import { quoteSshShellArg } from "../ssh/command.js";
 import { validateClaudeAuthBundle, validateClaudeCredentialRef } from "./claudeAuth.js";
 import { validateCredentialRef } from "./codexAuth.js";
 import { resolveRawProviderKey } from "./managedKey.js";
-import { credentialTypeForRef } from "./credentialType.js";
+import { credentialTypeForRef, providerSlugForRef } from "./credentialType.js";
 
 // materialize a Claude CLI credential bundle onto the runner under a
 // per-run CLAUDE_CONFIG_DIR, mirroring the Codex materializer. The Claude CLI
@@ -60,10 +60,18 @@ export async function materializeClaudeAuthBundle(input: MaterializeClaudeAuthIn
       redacted: true,
     };
   }
-  // BYOK WIDENING: a raw `api_key` ref (`credential/anthropic/…`, NOT a claude
-  // bundle, NOT managed mode) delivers the TENANT's own Anthropic key via the
-  // CLI's native settings env — NO base URL (native Anthropic, not OpenRouter).
+  // BYOK WIDENING: a raw `api_key` ref delivers the TENANT's own key via the CLI's
+  // native settings env. claude delivers a raw key ONLY for `credential/anthropic/`
+  // (native Anthropic, NO base URL — not OpenRouter); any other api_key slug
+  // (openrouter/openai-api) is NOT a claude-deliverable key and is rejected LOUD —
+  // never silently materialized into ANTHROPIC_API_KEY as the wrong provider's key.
   if (credentialTypeForRef(input.ref) === "api_key") {
+    const slug = providerSlugForRef(input.ref);
+    if (slug !== "anthropic") {
+      throw new Error(
+        `claude cannot deliver a BYOK api_key for provider slug ${JSON.stringify(slug)} (only anthropic)`,
+      );
+    }
     return materializeNativeAnthropicClaudeSettings(input, configDir);
   }
   // BYOK (default, unchanged): validate the claude/ ref + the `.credentials.json`

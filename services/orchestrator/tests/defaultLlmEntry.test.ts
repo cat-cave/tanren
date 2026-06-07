@@ -23,13 +23,15 @@ describe("DefaultLlmEntry validation", () => {
     ).toThrow(/full-role/u);
   });
 
-  it("accepts a full-role cli paired with a raw api_key it now consumes (codex + openrouter key)", () => {
-    const parsed = DefaultLlmEntry.parse({
-      cli: "codex",
-      model: "default",
-      authRef: "credential/openrouter/org/o1/default",
-    });
-    expect(parsed.cli).toBe("codex");
+  it("accepts codex with the raw api_key providers it delivers (openrouter + openai-api)", () => {
+    for (const slug of ["openrouter", "openai-api"]) {
+      const parsed = DefaultLlmEntry.parse({
+        cli: "codex",
+        model: "default",
+        authRef: `credential/${slug}/org/o1/default`,
+      });
+      expect(parsed.cli).toBe("codex");
+    }
   });
 
   it("accepts claude paired with a raw Anthropic api_key (the native env-key path)", () => {
@@ -39,6 +41,24 @@ describe("DefaultLlmEntry validation", () => {
       authRef: "credential/anthropic/org/o1/default",
     });
     expect(parsed.cli).toBe("claude");
+  });
+
+  it("REJECTS codex + an anthropic api_key (codex cannot deliver an anthropic key)", () => {
+    expect(() =>
+      DefaultLlmEntry.parse({ cli: "codex", model: "default", authRef: "credential/anthropic/org/o1/default" }),
+    ).toThrow(/cannot deliver a .*anthropic.* api_key/u);
+  });
+
+  it("REJECTS claude + an openrouter api_key (claude cannot deliver an openrouter key)", () => {
+    expect(() =>
+      DefaultLlmEntry.parse({ cli: "claude", model: "default", authRef: "credential/openrouter/org/o1/default" }),
+    ).toThrow(/cannot deliver a .*openrouter.* api_key/u);
+  });
+
+  it("REJECTS claude + an openai-api api_key (claude cannot deliver an openai key)", () => {
+    expect(() =>
+      DefaultLlmEntry.parse({ cli: "claude", model: "default", authRef: "credential/openai-api/org/o1/default" }),
+    ).toThrow(/cannot deliver a .*openai-api.* api_key/u);
   });
 
   it("rejects an authRef that is not a recognized LLM credential", () => {
@@ -58,6 +78,17 @@ describe("config schemas reject an invalid default LLM via PATCH (the bypass BLO
         },
       }),
     ).toThrow(/cannot consume/u);
+  });
+
+  it("org config PATCH cannot persist a slug-incompatible api_key default (codex + anthropic key)", () => {
+    expect(() =>
+      migrateOrgConfig({
+        version: 1,
+        defaultCredentials: {
+          defaultLlm: { cli: "codex", model: "default", authRef: "credential/anthropic/org/o1/x" },
+        },
+      }),
+    ).toThrow(/cannot deliver a .*anthropic.* api_key/u);
   });
 
   it("project config PATCH cannot persist a writer-only default", () => {

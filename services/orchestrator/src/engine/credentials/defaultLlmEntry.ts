@@ -1,7 +1,11 @@
 import type { z } from "zod";
 import { RoutingChainEntry } from "../config/shared.js";
-import { credentialTypeForRef } from "./credentialType.js";
-import { harnessAcceptsCredentialType, harnessCanBeDefault } from "../providers/harnessCapability.js";
+import { credentialTypeForRef, providerSlugForRef } from "./credentialType.js";
+import {
+  harnessAcceptsApiKeyProvider,
+  harnessAcceptsCredentialType,
+  harnessCanBeDefault,
+} from "../providers/harnessCapability.js";
 
 // The DEFAULT LLM routing entry: a RoutingChainEntry constrained so it is
 // actually runnable as the run-wide default. A per-role routing entry may name a
@@ -10,7 +14,14 @@ import { harnessAcceptsCredentialType, harnessCanBeDefault } from "../providers/
 // audit), so it must:
 //   1. name a FULL-ROLE harness (harnessCanBeDefault — codex/claude today), and
 //   2. name an authRef whose inferred credential-type that harness can consume
-//      (harnessAcceptsCredentialType).
+//      (harnessAcceptsCredentialType) — and, for a raw `api_key`, whose PROVIDER
+//      SLUG that harness can actually deliver (harnessAcceptsApiKeyProvider).
+//
+// The slug gate is load-bearing: a bare `api_key` accept is too coarse. codex
+// delivers a raw key only as OpenRouter/native-OpenAI and claude only as native
+// Anthropic, so codex+`credential/anthropic/` and claude+`credential/openrouter/`
+// would pass the coarse check yet fail (or mis-authenticate) at run time. Gating
+// on the slug here keeps the schema honest.
 //
 // This validation runs at PARSE time, so EVERY write path is gated — the connect
 // route AND a generic org/project config PATCH both parse through here. The
@@ -41,6 +52,19 @@ export const DefaultLlmEntry = RoutingChainEntry.superRefine((entry, ctx) => {
       message: `default LLM cli ${JSON.stringify(entry.cli)} cannot consume a ${credentialType} credential`,
       path: ["authRef"],
     });
+    return;
+  }
+  // For a raw api_key, the credential-type accept is necessary but not sufficient:
+  // the harness must be able to deliver THIS provider's key.
+  if (credentialType === "api_key") {
+    const slug = providerSlugForRef(entry.authRef);
+    if (slug === null || !harnessAcceptsApiKeyProvider(entry.cli, slug)) {
+      ctx.addIssue({
+        code: "custom",
+        message: `default LLM cli ${JSON.stringify(entry.cli)} cannot deliver a ${JSON.stringify(slug)} api_key (it delivers a raw key only for specific providers)`,
+        path: ["authRef"],
+      });
+    }
   }
 });
 export type DefaultLlmEntry = z.infer<typeof DefaultLlmEntry>;

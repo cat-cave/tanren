@@ -5,7 +5,7 @@ import { CommandFileSubstrate } from "../ssh/commandFileSubstrate.js";
 import { quoteSshShellArg } from "../ssh/command.js";
 import { validateCodexAuthBundle, validateCodexCredentialRef, validateCredentialRef } from "./codexAuth.js";
 import { resolveRawProviderKey } from "./managedKey.js";
-import { credentialTypeForRef } from "./credentialType.js";
+import { credentialTypeForRef, providerSlugForRef } from "./credentialType.js";
 import { DEFAULT_MANAGED_ENDPOINT } from "../config/managedProvider.js";
 
 export interface MaterializeCodexAuthInput {
@@ -259,17 +259,6 @@ export function codexManagedEnvPath(codexHome: string): string {
 // directly with no config.toml).
 export function codexNativeKeyEnvPath(codexHome: string): string {
   return `${codexHome}/openai.env`;
-}
-
-// The `credential/<slug>/…` provider slug of a ref (e.g. `openrouter`,
-// `openai-api`). Used to dispatch the BYOK api_key path on the provider.
-function providerSlugForRef(ref: string): string {
-  const match = /^credential\/([^/]+)\//u.exec(ref);
-  const slug = match?.[1];
-  if (slug === undefined) {
-    throw new Error(`credential ref ${JSON.stringify(ref)} has no provider slug`);
-  }
-  return slug;
 }
 
 // Builds the BYOK native-OpenAI materialization command: writes ONLY the chmod-600
