@@ -45,6 +45,15 @@ export const integrationProvisioningSensitivityRules: SensitivityRule[] = [
   // The audit envelope on the verify (same governing deploy action), all public.
   ...auditEnvelopeRulesFor("deploy.verified"),
 
+  // deploy.failed: the deploy target + the attempt count + a NON-SECRET reason
+  // (the verify error message). No token/env values.
+  { eventName: "deploy.failed", path: "provider", tag: "public" },
+  { eventName: "deploy.failed", path: "appId", tag: "public" },
+  { eventName: "deploy.failed", path: "deploymentId", tag: "public" },
+  { eventName: "deploy.failed", path: "attempts", tag: "public" },
+  { eventName: "deploy.failed", path: "reason", tag: "public" },
+  ...auditEnvelopeRulesFor("deploy.failed"),
+
   // demos-as-evidence: the per-behavior demo verdict + the summary. Every field is
   // non-secret — a behavior id/title, a surface kind, an outcome, and the OBSERVABLE
   // SHAPE of the reach ("GET /links → HTTP 200"); never a token or a response body.

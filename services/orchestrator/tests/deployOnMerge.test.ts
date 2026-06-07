@@ -33,6 +33,8 @@ interface PoolState {
   alreadyDeployed?: boolean;
   /** Whether a prior deploy.verified exists (full idempotency — skip entirely). */
   alreadyVerified?: boolean;
+  /** Whether a prior deploy.failed exists (TERMINAL — skip entirely, no self-loop). */
+  alreadyFailed?: boolean;
   /** Omit mergeSha from merge.completed (a merge that recorded no SHA — fail loud). */
   noMergeSha?: boolean;
   /** Runtime app-env rows (project_app_env) the attach flow reads. */
@@ -49,8 +51,11 @@ function fakePool(state: PoolState): pg.Pool {
       const payload = state.noMergeSha === true ? { prNumber: 7 } : { prNumber: 7, mergeSha: MERGE_SHA };
       return { rows: [{ payload }], rowCount: 1 };
     }
-    if (/event_type = 'deploy\.verified'/u.test(sql)) {
-      return state.alreadyVerified === true ? { rows: [{ id: "v1" }], rowCount: 1 } : { rows: [], rowCount: 0 };
+    if (/event_type IN \('deploy\.verified', 'deploy\.failed'\)/u.test(sql)) {
+      // The TERMINAL gate (alreadyTerminal): a prior deploy.verified OR deploy.failed.
+      return state.alreadyVerified === true || state.alreadyFailed === true
+        ? { rows: [{ id: "t1" }], rowCount: 1 }
+        : { rows: [], rowCount: 0 };
     }
     if (/event_type = 'deploy\.triggered'/u.test(sql)) {
       return state.alreadyDeployed === true
@@ -205,11 +210,66 @@ describe("DeployOnMergeWatcher (a deploy happened)", () => {
       eventStore: events,
       urlProbe: scriptedUrlProbe(),
       verifyPoll: instantVerifyPollPolicy(3),
+      verifyMaxAttempts: 2,
     });
-    // The triggered deployment reports ERROR — verify must throw, no deploy.verified.
+    // The triggered deployment reports ERROR on every attempt — verify exhausts its
+    // bounded retry, escalates LOUD (deploy.failed), and re-throws. No deploy.verified.
     transport.scriptDeploymentStates("vercel_deploy_1", ["ERROR"]);
     await expect(watcher.check(RUN_ID)).rejects.toThrow(/FAILURE state 'ERROR'/u);
     expect(events.appends.find((a) => a.eventType === "deploy.verified")).toBeUndefined();
+    const failed = events.appends.find((a) => a.eventType === "deploy.failed");
+    expect(failed).toBeDefined();
+    expect(failed!.ambientOrgId).toBe(ORG_ID);
+    const fPayload = failed!.payload as Record<string, unknown>;
+    expect(fPayload["attempts"]).toBe(2);
+    // The reason is a FIXED non-secret summary — NOT the raw verify error (which could
+    // embed provider response text). The provider state string must NOT be persisted.
+    expect(fPayload["reason"]).toContain("did not reach a live deployment");
+    expect(fPayload["reason"]).not.toMatch(/ERROR/u);
+    expect(JSON.stringify(failed)).not.toContain("deploy_token");
+  });
+
+  it("is TERMINAL on deploy.failed: a re-check after a prior failure is a no-op (no self-loop)", async () => {
+    // The self-loop guard: deploy.failed is run-scoped, so its append wakes the
+    // post-merge subscriber. A prior deploy.failed must gate check() to a no-op —
+    // never re-verify the still-failed deployment nor append a second deploy.failed.
+    const transport = scriptedDeployTransport("vercel", []);
+    await transport.request({
+      method: "POST",
+      url: "https://api.vercel.com/v9/projects",
+      headers: {},
+      body: { name: "acme-widget" },
+    });
+    const events = new RecordingEventStore();
+    await run({ merged: true, config: VERCEL_TARGET, grant: VERCEL_GRANT, alreadyFailed: true }, transport, events);
+    expect(events.appends).toHaveLength(0);
+    expect(transport.deploysTriggered()).toEqual([]);
+  });
+
+  it("RECOVERS when a transient verify failure clears on a retry (no deploy.failed)", async () => {
+    const transport = scriptedDeployTransport("vercel", []);
+    await transport.request({
+      method: "POST",
+      url: "https://api.vercel.com/v9/projects",
+      headers: {},
+      body: { name: "acme-widget" },
+    });
+    const events = new RecordingEventStore();
+    const watcher = new DeployOnMergeWatcher({
+      pool: fakePool({ merged: true, config: VERCEL_TARGET, grant: VERCEL_GRANT }),
+      secrets: secrets(),
+      transport,
+      eventStore: events,
+      urlProbe: scriptedUrlProbe(),
+      verifyPoll: instantVerifyPollPolicy(),
+      verifyMaxAttempts: 2,
+    });
+    // Attempt 1 reads ERROR (a transient blip → throws); the in-process retry's
+    // attempt 2 reads READY → the deploy is proven live. No deploy.failed escalation.
+    transport.scriptDeploymentStates("vercel_deploy_1", ["ERROR", "READY"]);
+    await watcher.check(RUN_ID);
+    expect(events.appends.find((a) => a.eventType === "deploy.verified")).toBeDefined();
+    expect(events.appends.find((a) => a.eventType === "deploy.failed")).toBeUndefined();
   });
 
   it("is a clean NO-OP for a project with no deploy integration (no error, no deploy)", async () => {

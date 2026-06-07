@@ -43,6 +43,13 @@
       "when": 1780722598539,
       "tag": "0005_stiff_valkyrie",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1780856451161,
+      "tag": "0006_dusty_chimera",
+      "breakpoints": true
     }
   ]
 }

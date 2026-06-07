@@ -87,3 +87,30 @@ export const DeployVerifiedPayload = z
   // action — it carries the same policy version + initiating actor.
   .extend(AuditEnvelope.shape)
   .strict();
+
+// Deploy FAILED ("the deploy could NOT be proven live"): after `deploy.triggered`,
+// verification (poll-to-READY + URL smoke check) failed on EVERY attempt of the
+// bounded in-process retry. This is the LOUD terminal — the operator must KNOW the
+// deploy never came up (vs the run silently stalling triggered-but-unverified).
+// SECURITY: non-secret (provider + ids + an attempt count + a non-secret reason);
+// the deploy token + env values never reach here.
+export const DeployFailedPayload = z
+  .object({
+    /** The deploy provider kind (`deploy.vercel` | `deploy.flyio`). */
+    provider: z.string(),
+    /** The deployed app/project id the release ran onto. */
+    appId: z.string(),
+    /** The provider's deployment handle the verify polled. */
+    deploymentId: z.string(),
+    /** How many verification attempts were made before giving up (the bounded retry). */
+    attempts: z.number().int().positive(),
+    /**
+     * A FIXED, non-secret failure summary — NOT the raw verify error (which can embed
+     * provider-supplied HTTP response text). The full error is preserved in the run
+     * logs via the verify re-throw; only this bounded summary reaches the audit event.
+     */
+    reason: z.string(),
+  })
+  .extend(AuditEnvelope.shape)
+  .strict();
+export type DeployFailedPayload = z.infer<typeof DeployFailedPayload>;
