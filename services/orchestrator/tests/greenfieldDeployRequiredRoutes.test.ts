@@ -114,6 +114,18 @@ function seedGithubAppOrg(pool: RoutesPool): void {
   });
 }
 
+// An org that connected a static PAT (no GitHub App) — the documented fallback path
+// for repo creation when the App is not installed / lacks administration:write.
+function seedStaticTokenOrg(pool: RoutesPool): void {
+  pool.seedOrg({
+    id: "org_acme",
+    config: {
+      version: 1,
+      defaultCredentials: { github_token: "credential/github/org/org_acme/default" },
+    },
+  });
+}
+
 class ForbiddenCreateVcsProvider extends InMemoryVcsProvider {
   override async createRepository(input: Parameters<InMemoryVcsProvider["createRepository"]>[0]) {
     throw new RepositoryCreationForbiddenError(input.owner);
@@ -319,7 +331,38 @@ describe("greenfield/apex deploy dependency routes", () => {
     expect(pool.inboxSources).toEqual([]);
   });
 
-  it("rejects onboarding derive without a GitHub App installation before creating the graph", async () => {
+  it("creates the repo via the org-default static PAT when no GitHub App is installed", async () => {
+    const pool = new RoutesPool();
+    seedStaticTokenOrg(pool);
+    pool.seedMembership("org_acme", "user_alice", "admin");
+    const { app, vcsProvider } = appWithRoutes(pool, new InMemoryVcsProvider(), {
+      async preflightDeploy() {},
+      async prepareDeploy() {
+        return preparedDeploy();
+      },
+    });
+
+    const res = await app.request("/orgs/org_acme/onboarding/interview/derive", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        capture: apexCapture(),
+        owner: "cat-cave",
+        private: true,
+        autonomy: "auto",
+        deploy: { providerKind: "deploy.vercel" },
+      }),
+    });
+
+    // No App, but a static github_token org default IS configured → repo created.
+    expect(res.status).toBe(201);
+    expect(vcsProvider.createdRepositories).toEqual([
+      { owner: "cat-cave", name: "apex-url-shortener-v22", private: true },
+    ]);
+    expect(pool.specs.size).toBeGreaterThan(0);
+  });
+
+  it("rejects onboarding derive without ANY GitHub credential (no App, no static token)", async () => {
     const pool = new RoutesPool();
     pool.seedOrg({ id: "org_acme" });
     pool.seedMembership("org_acme", "user_alice", "admin");
