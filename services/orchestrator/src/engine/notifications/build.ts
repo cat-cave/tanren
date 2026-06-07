@@ -64,6 +64,10 @@ export function buildNotificationDispatcher(deps: BuildNotificationDispatcherDep
     email: { secrets: deps.secrets },
     github: {
       secrets: deps.secrets,
+      // The pool: github_checks resolves the PUBLISHING org's OWN github credential
+      // from the ambient per-event org scope at publish time (loadOrg* query by the
+      // explicit getJobOrgId), never a shared/deploy token — no cross-tenant leak.
+      pool: deps.pool,
       ...(deps.githubAppMinter !== undefined && { minter: deps.githubAppMinter }),
     },
   });

@@ -5,10 +5,10 @@
 //   1. App installation token — when the org's `organizations.config.github_app`
 //      block is present, mint (or reuse a cached) auto-rotating installation
 //      token via `GithubAppTokenMinter`. This is the preferred long-term model.
-//   2. Static token — read the secret at the configured ref. The ref comes from
-//      the caller's `staticRef` (the run's resolved project/org GitHub
-//      credential) or `TANREN_GITHUB_APP_TOKEN_REF`. There is NO hardcoded
-//      default ref: when no App is installed and neither source supplies a ref,
+//   2. Static token — read the secret at the configured ref. The ref comes ONLY
+//      from the caller's `staticRef` (the run's resolved project/org GitHub
+//      credential — userland config). There is NO hardcoded default ref and NO
+//      deploy-env fallback: when no App is installed and `staticRef` is absent,
 //      that is a hard configuration error, not a silent default.
 //
 // The returned object also carries a `refresh()` supplier so callers (notably
@@ -38,17 +38,17 @@ export interface GithubTokenResolverInput {
 
 /**
  * Thrown when the static path has no credential ref to read: no App
- * installation, no caller `staticRef`, and no `TANREN_GITHUB_APP_TOKEN_REF`.
- * Per the no-fallback directive there is no hardcoded default ref — this is a
- * configuration error the operator must fix (link a project/org GitHub
- * credential, install the App, or set the env ref).
+ * installation and no caller `staticRef`. Per the no-fallback directive there is
+ * no hardcoded default ref and no deploy-env fallback — this is a configuration
+ * error the operator must fix (link a project/org GitHub credential, or install
+ * the App).
  */
 export class NoGithubCredentialConfiguredError extends Error {
   readonly retriable = false as const;
 
   constructor() {
     super(
-      "No GitHub credential configured for this run: no App installation, no resolved project/org credential ref, and TANREN_GITHUB_APP_TOKEN_REF is unset",
+      "No GitHub credential configured for this run: no App installation and no resolved project/org credential ref",
     );
     this.name = "NoGithubCredentialConfiguredError";
   }
@@ -87,7 +87,7 @@ export async function resolveGithubToken(input: GithubTokenResolverInput): Promi
     };
   }
 
-  const ref = input.staticRef ?? process.env["TANREN_GITHUB_APP_TOKEN_REF"];
+  const ref = input.staticRef;
   if (ref === undefined || ref.trim() === "") {
     throw new NoGithubCredentialConfiguredError();
   }
