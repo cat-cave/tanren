@@ -15,7 +15,6 @@
 
 import type pg from "pg";
 import {
-  type ManagedProviderConfig,
   type ProviderMode,
   defaultManagedProviderConfig,
   resolveHarnessEndpointOverride,
@@ -58,7 +57,7 @@ export interface RunCredentialOverride {
 
 export interface ResolveCredentialsInput {
   /** The project's typed config (already migrated to V1). */
-  projectConfig: Pick<ProjectConfigV1, "credentials" | "providerMode" | "managedProvider">;
+  projectConfig: Pick<ProjectConfigV1, "credentials" | "providerMode">;
   /** Org id whose `config.defaultCredentials` provides the fallback layer. */
   orgId: string;
   /** Highest-priority refs; wins over project config + org default. */
@@ -72,7 +71,6 @@ export interface ResolveCredentialsInput {
 interface OrgProviderModeConfig {
   defaults?: OrgDefaultCredentials;
   providerMode: ProviderMode;
-  managedProvider?: ManagedProviderConfig;
 }
 
 /**
@@ -140,10 +138,13 @@ export async function resolveCredentialsForRun(
   let defaultLlm: RoutingChainEntry;
   let endpointOverride: HarnessEndpointOverride | undefined;
   if (providerMode === "managed") {
-    // Managed: the PLATFORM-owned credential (project override of the managed
-    // block wins over the org's), run through the codex harness pointed at the
-    // managed OpenRouter endpoint. The tenant's own default LLM is NOT consulted.
-    const managed = input.projectConfig.managedProvider ?? orgConfig.managedProvider ?? defaultManagedProviderConfig();
+    // Managed: the PLATFORM-owned credential + endpoint, run through the codex
+    // harness pointed at the managed OpenRouter endpoint. These are DEPLOY/hosting
+    // config (defaultManagedProviderConfig — owned by the deploy layer), NOT
+    // userland org/project config: a tenant chooses managed-vs-byok (providerMode),
+    // but does NOT pick the platform credential ref/endpoint. The tenant's own
+    // default LLM is NOT consulted under managed.
+    const managed = defaultManagedProviderConfig();
     defaultLlm = { cli: "codex", model: "default", authRef: managed.credentialRef };
     endpointOverride = resolveHarnessEndpointOverride("managed", managed);
   } else {
@@ -213,6 +214,5 @@ async function loadOrgProviderModeConfig(pool: OrgConfigClient, orgId: string): 
   return {
     defaults: config.defaultCredentials,
     providerMode: config.providerMode,
-    managedProvider: config.managedProvider,
   };
 }
