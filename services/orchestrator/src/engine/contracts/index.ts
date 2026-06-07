@@ -7,14 +7,16 @@ export * from "./costResolver.js";
 // CONTRACT surface the refactor is built on, consumed by the conformance suites
 // under tests/conformance/{workspaceVcsCore,codeHost,mergeAuthority,visibilityProjection}.
 //   - findings/auditPosture     — findings-only audit + the per-project DORA knob.
+//   - money                     — branded NonNegativeFinite (unlimited budget = unrepresentable).
 //   - integrationNodes          — the ONE run model + memberKey/proofReuseKey.
 //   - workspaceVcsCore          — local VCS-core (jj-first; git fallback).
 //   - codeHost                  — minimal host (Tanren lands what it authorized).
 //   - mergeAuthority            — the guaranteed, fail-closed land decision.
-//   - visibilityProjection      — the best-effort PR/check/comment mirror.
+//   - visibilityProjection      — the best-effort PR/check/comment mirror (harden).
 //   - engineSeams               — the pluggable IssueSource + IdentityProvider.
 export * from "./findings.js";
 export * from "./auditPosture.js";
+export * from "./money.js";
 export * from "./integrationNodes.js";
 export * from "./workspaceVcsCore.js";
 export * from "./codeHost.js";

@@ -12,6 +12,8 @@ const REPO = { owner: "owner", name: "repo" };
 
 function buildAuthority(failFinalize: boolean): InMemoryMergeAuthority {
   const host = new InMemoryCodeHost();
+  // Seed main at the CAS base prepareIntegration carries forward, so the land's
+  // compare-and-swap matches (the CAS target is on the authorization, not here).
   host.seed(REPO, CONF_NODE.baseBranch, CONF_NODE.baseSha);
   const finalize = {
     finalize: async (_input: { mainSha: string }) => {
@@ -19,11 +21,7 @@ function buildAuthority(failFinalize: boolean): InMemoryMergeAuthority {
       return { auditId: "audit_1" };
     },
   };
-  return new InMemoryMergeAuthority(host, finalize, {
-    repo: REPO,
-    intoMain: CONF_NODE.baseBranch,
-    expectedMainSha: CONF_NODE.baseSha,
-  });
+  return new InMemoryMergeAuthority(host, finalize);
 }
 
 describeMergeAuthorityConformance("InMemoryMergeAuthority (reference fake + real policy)", {

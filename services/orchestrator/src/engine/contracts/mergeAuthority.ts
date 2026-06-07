@@ -25,6 +25,8 @@
 import type { Finding } from "./findings.js";
 import type { AuditPosture } from "./auditPosture.js";
 import type { IntegrationNode } from "./integrationNodes.js";
+import type { CodeHostRepoRef } from "./codeHost.js";
+import type { NonNegativeFinite } from "./money.js";
 
 // ---- Fail-closed inputs (each models its UNCERTAINTY explicitly) -----------
 
@@ -50,13 +52,15 @@ export type ReviewMergeVerdict = "approved" | "changes_requested" | "pending" | 
 export type MergeabilityState = "clean" | "behind" | "dirty" | "blocked" | "unknown";
 
 /**
- * The budget scope resolution. `resolved` carries the ceiling + spend; `unresolvable`
- * is the uncertainty value that MUST fail closed — closing the §5 P1 hole where an
- * unresolvable scope returned UNLIMITED. There is NO "unlimited" value: an
- * unresolvable budget is `blocked`, never a silent pass.
+ * The budget scope resolution. `resolved` carries the ceiling + spend, BOTH as
+ * {@link NonNegativeFinite} so an UNLIMITED ceiling (`Infinity`/`NaN`/negative) is
+ * UNREPRESENTABLE — closing the §5 P1 hole where a bare `number` ceiling let
+ * `spent >= Infinity` read as "never exhausted". `unresolvable` is the uncertainty
+ * value that MUST fail closed. There is NO "unlimited" value: an unresolvable (or
+ * invalid) budget is `blocked`, never a silent pass.
  */
 export type BudgetScope =
-  | { kind: "resolved"; ceilingUsd: number; spentUsd: number }
+  | { kind: "resolved"; ceilingUsd: NonNegativeFinite; spentUsd: NonNegativeFinite }
   | { kind: "unresolvable"; reason: string };
 
 /**
@@ -66,7 +70,13 @@ export type BudgetScope =
  */
 export type DemoVerification = "verified" | "unverified" | "not_required";
 
-/** The HITL signoff, when the project/spec requires a human to MAKE a decision. */
+/**
+ * The HITL signoff state. ALWAYS explicit (never an absent field): "no HITL
+ * configured" is the EXPLICIT `not_required`, NOT an omission. `pending` (a human
+ * decision is owed) holds; only `not_required` or `approved` clear. Making this a
+ * REQUIRED, fully-enumerated input closes the default-allow hole where an omitted
+ * signoff would slip through the all-clear — nothing defaults to allow.
+ */
 export type HitlSignoff = "approved" | "pending" | "not_required";
 
 /**
@@ -76,14 +86,50 @@ export type HitlSignoff = "approved" | "pending" | "not_required";
  */
 export type ConflictResolution = "resolved" | "unresolved";
 
+/** Input to preparing an integration (resolve the batch into a single ref + tree). */
+export interface PrepareIntegrationInput {
+  node: IntegrationNode;
+  /** The repo the resolved ref lands into (the CAS target's repo). */
+  repo: CodeHostRepoRef;
+  /** The default branch the land advances + its CURRENT sha (the CAS base). */
+  intoMain: string;
+  baseSha: string;
+}
+
 /**
- * The complete input to `authorizeLand` — every guaranteed-internal signal the
- * fail-closed truth table reads. Each carries its OWN uncertainty value so the
- * table can deny on uncertainty without an out-of-band "is this known?" check.
+ * The result of `prepareIntegration`: the MATERIALIZED landable commit, plus any
+ * conflicts surfaced as findings. `headSha` is the concrete resolved commit a batch
+ * prepare produced (a NEW commit, not the original node's `headSha?`) — it is the
+ * thing `authorizeLand` judges and `land` pushes, so the prepare→authorize→land
+ * flow carries ONE concrete commit end-to-end. `conflicts` non-empty means the node
+ * is NOT landable yet (the resolver must engage); reported as findings (the
+ * engine's currency), never thrown away.
+ */
+export interface PrepareIntegrationResult {
+  resolvedRef: string;
+  /** The materialized resolved landable commit (the concrete sha being authorized). */
+  headSha: string;
+  treeSha: string;
+  /** The CAS target carried forward so authorization binds to a concrete land target. */
+  repo: CodeHostRepoRef;
+  intoMain: string;
+  /** The sha `intoMain` is expected to point at — the compare-and-swap base. */
+  expectedMainSha: string;
+  conflicts: Finding[];
+}
+
+/**
+ * The complete input to `authorizeLand` — the PREPARED result (the concrete commit
+ * being authorized) plus every guaranteed-internal signal the fail-closed truth
+ * table reads. Each carries its OWN uncertainty value so the table can deny on
+ * uncertainty without an out-of-band "is this known?" check. The `prepared` handoff
+ * is what binds authorization to the concrete materialized commit + land target.
  */
 export interface AuthorizeLandInput {
   /** The integration node being authorized to land (the unified run base, §3). */
   node: IntegrationNode;
+  /** The materialized prepare result — the concrete commit + CAS land target. */
+  prepared: PrepareIntegrationResult;
   gateVerdict: GateVerdict;
   /** The auditor's emitted findings — the posture decides block/route over them. */
   findings: ReadonlyArray<Finding>;
@@ -93,8 +139,8 @@ export interface AuthorizeLandInput {
   mergeability: MergeabilityState;
   budget: BudgetScope;
   demo: DemoVerification;
-  /** Present only when the project/spec requires a human decision. */
-  hitlSignoff?: HitlSignoff;
+  /** REQUIRED + explicit: `not_required` when no HITL is configured (never omitted). */
+  hitlSignoff: HitlSignoff;
   conflicts: ConflictResolution;
 }
 
@@ -121,35 +167,38 @@ export interface LandBlockReason {
 }
 
 /**
- * The output of `authorizeLand` — the fail-closed truth table's verdict. Carries
- * the authorized ref (only on `authorized`) so `land` has exactly what to push, and
- * the block `reasons` (every failing input) so the decision is auditable. A
- * `LandAuthorization` is the ONLY thing `land` accepts — it cannot land without one.
+ * The CONCRETE land target an `authorized` authorization binds to — everything
+ * `CodeHost.landAuthorizedRef` needs, with NO hidden state. Present ONLY on
+ * `authorized` (a blocked/needs_attention authorization has nothing to land). The
+ * `expectedMainSha` (the compare-and-swap base) is PART of the authorization, not a
+ * value the host impl carries in its constructor — so `land()` type-composes with
+ * the host directly and the CAS base is what was authorized, not what the host
+ * happens to be pre-bound to.
+ */
+export interface AuthorizedLandTarget {
+  repo: CodeHostRepoRef;
+  intoMain: string;
+  /** The materialized commit to land (from the prepare result). */
+  authorizedSha: string;
+  /** The compare-and-swap base — the sha `intoMain` must still point at. */
+  expectedMainSha: string;
+}
+
+/**
+ * The output of `authorizeLand` — the fail-closed truth table's verdict. On
+ * `authorized` it carries the CONCRETE {@link AuthorizedLandTarget} so `land` calls
+ * `CodeHost.landAuthorizedRef` type-safely with no hidden state; on
+ * blocked/needs_attention `target` is absent and `reasons` names every failing
+ * input. A `LandAuthorization` is the ONLY thing `land` accepts — it cannot land
+ * without one.
  */
 export interface LandAuthorization {
   decision: LandDecision;
   node: IntegrationNode;
-  /** The authorized commit sha to land — present ONLY when `decision === 'authorized'`. */
-  authorizedSha?: string;
+  /** The concrete land target — present ONLY when `decision === 'authorized'`. */
+  target?: AuthorizedLandTarget;
   /** Every input that failed closed (empty only on `authorized`). */
   reasons: ReadonlyArray<LandBlockReason>;
-}
-
-/** Input to preparing an integration (resolve the batch into a single ref + tree). */
-export interface PrepareIntegrationInput {
-  node: IntegrationNode;
-}
-
-/**
- * The result of `prepareIntegration`: the resolved ref + its tree sha, plus any
- * conflicts surfaced as findings. `conflicts` non-empty means the node is NOT
- * landable yet (the resolver must engage); it is reported as findings (the engine's
- * currency), never thrown away.
- */
-export interface PrepareIntegrationResult {
-  resolvedRef: string;
-  treeSha: string;
-  conflicts: Finding[];
 }
 
 /**
@@ -172,9 +221,11 @@ export type LandOutcome =
  */
 export interface MergeAuthority {
   /**
-   * Resolve a batch (an integration node) into a single landable ref + tree, OR
-   * surface the conflicts as findings (never discarding the work). The resolved ref
-   * is what `authorizeLand` then judges.
+   * Resolve a batch (an integration node) into a single landable commit — the
+   * MATERIALIZED `headSha` + resolved ref + tree + the CAS land target — OR surface
+   * the conflicts as findings (never discarding the work). The returned result is
+   * what `authorizeLand` then judges + binds the authorization to, so the
+   * prepare→authorize→land flow carries ONE concrete commit end-to-end.
    */
   prepareIntegration(input: PrepareIntegrationInput): Promise<PrepareIntegrationResult>;
 

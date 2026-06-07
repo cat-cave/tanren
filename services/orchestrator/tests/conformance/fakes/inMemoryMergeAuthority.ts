@@ -7,8 +7,11 @@
 //
 // This fake composes the REAL pure policy (`decideFromFindings`) for the
 // findings-vs-posture input, so the audit gate is the production policy, not a
-// re-implementation. `land` reconciles by calling the supplied CodeHost and a
-// supplied durable-finalize hook the test can fail (to exercise merge_state_unknown).
+// re-implementation. `prepareIntegration` MATERIALIZES the concrete landable commit
+// + carries the CAS target forward; `authorizeLand` binds the authorization to that
+// concrete target (NO hidden constructor state); `land` reads the target off the
+// authorization and reconciles via the supplied CodeHost + a durable-finalize hook
+// the test can fail (to exercise merge_state_unknown).
 
 import { decideFromFindings } from "../../../src/engine/contracts/auditPosture.js";
 import type { CodeHost } from "../../../src/engine/contracts/codeHost.js";
@@ -31,14 +34,18 @@ export class InMemoryMergeAuthority implements MergeAuthority {
   constructor(
     private readonly host: CodeHost,
     private readonly finalize: DurableFinalize,
-    /** The repo + expected-main the authorized land targets. */
-    private readonly landTarget: { repo: { owner: string; name: string }; intoMain: string; expectedMainSha: string },
   ) {}
 
   async prepareIntegration(input: PrepareIntegrationInput): Promise<PrepareIntegrationResult> {
+    // Materialize a NEW landable commit for the batch (a real prepare resolves the
+    // members into one commit); carry the CAS target forward into the result.
     return {
       resolvedRef: input.node.ref,
+      headSha: `sha-prepared-${input.node.memberKey}`,
       treeSha: input.node.treeHash ?? `tree-${input.node.memberKey}`,
+      repo: input.repo,
+      intoMain: input.intoMain,
+      expectedMainSha: input.baseSha,
       conflicts: [],
     };
   }
@@ -68,7 +75,7 @@ export class InMemoryMergeAuthority implements MergeAuthority {
       });
       if (input.reviewVerdict === "changes_requested") needsAttention = true;
     }
-    if (input.conflicts !== "resolved") {
+    if (input.conflicts !== "resolved" || input.prepared.conflicts.length > 0) {
       reasons.push({ input: "conflicts", detail: "conflicts unresolved — fail closed (must be resolved before land)" });
     }
     if (input.budget.kind === "unresolvable") {
@@ -85,7 +92,9 @@ export class InMemoryMergeAuthority implements MergeAuthority {
     if (input.demo === "unverified") {
       reasons.push({ input: "demo", detail: "demo unverified — fail closed (a failed/absent demo never clears)" });
     }
-    if (input.hitlSignoff === "pending") {
+    // HITL is REQUIRED + explicit: only `not_required` or `approved` clear; `pending`
+    // holds for a human (there is no "omitted → allow" path — the type forbids it).
+    if (input.hitlSignoff !== "not_required" && input.hitlSignoff !== "approved") {
       reasons.push({ input: "hitlSignoff", detail: "HITL signoff pending — needs a human decision" });
       needsAttention = true;
     }
@@ -97,22 +106,33 @@ export class InMemoryMergeAuthority implements MergeAuthority {
     }
 
     if (reasons.length === 0) {
-      // The explicit all-clear: EVERY input in its pass state.
-      return { decision: "authorized", node: input.node, authorizedSha: input.node.headSha, reasons: [] };
+      // The explicit all-clear: bind the authorization to the CONCRETE prepared target.
+      return {
+        decision: "authorized",
+        node: input.node,
+        target: {
+          repo: input.prepared.repo,
+          intoMain: input.prepared.intoMain,
+          authorizedSha: input.prepared.headSha,
+          expectedMainSha: input.prepared.expectedMainSha,
+        },
+        reasons: [],
+      };
     }
     return { decision: needsAttention ? "needs_attention" : "blocked", node: input.node, reasons };
   }
 
   async land(auth: LandAuthorization): Promise<LandOutcome> {
-    if (auth.decision !== "authorized" || auth.authorizedSha === undefined) {
+    if (auth.decision !== "authorized" || auth.target === undefined) {
       throw new Error("land() refused: authorization is not 'authorized' (land cannot bypass the decision)");
     }
-    // authorize → execute the EXTERNAL land → reconcile the durable finalize.
+    // authorize → execute the EXTERNAL land (CAS target carried ON the authorization,
+    // not hidden in a constructor) → reconcile the durable finalize.
     const landed = await this.host.landAuthorizedRef({
-      repo: this.landTarget.repo,
-      intoMain: this.landTarget.intoMain,
-      authorizedSha: auth.authorizedSha,
-      expectedMainSha: this.landTarget.expectedMainSha,
+      repo: auth.target.repo,
+      intoMain: auth.target.intoMain,
+      authorizedSha: auth.target.authorizedSha,
+      expectedMainSha: auth.target.expectedMainSha,
     });
     try {
       const { auditId } = await this.finalize.finalize({ mainSha: landed.mainSha });

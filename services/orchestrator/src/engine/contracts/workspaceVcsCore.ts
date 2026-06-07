@@ -66,6 +66,8 @@ export interface RebaseResult {
 /** Input to resolving a recorded conflict with the intent-preserving resolution. */
 export interface ResolveConflictInput {
   workspace: WorkspaceHandle;
+  /** The branch carrying the recorded conflict (explicit — never implicit-current). */
+  branch: string;
   conflictId: string;
   /** The per-path resolved content the resolver produced (intent + vision preserving). */
   resolutions: ReadonlyArray<{ path: string; content: string }>;
@@ -92,24 +94,34 @@ export interface WorkspaceVcsCore {
   /** Clone/import a repo at `baseBranch` into a runner-local working copy. */
   openWorkspace(input: OpenWorkspaceInput): Promise<WorkspaceHandle>;
 
-  /** Create a branch at the current head. */
-  branch(workspace: WorkspaceHandle, name: string): Promise<void>;
+  /**
+   * Create a branch `name` at `atBranch`'s head (or the current head when
+   * `atBranch` is omitted) AND check it out as current. Naming the parent
+   * explicitly is what makes a stack A→B→C expressible: branch B at A, branch C at
+   * B records the ancestor→descendant edges restack propagation walks.
+   */
+  branch(workspace: WorkspaceHandle, name: string, atBranch?: string): Promise<void>;
 
-  /** Commit the working changes; returns the new head sha. */
+  /** Check out `branch` as the current branch (explicit stack navigation). */
+  checkout(workspace: WorkspaceHandle, branch: string): Promise<void>;
+
+  /** Commit the working changes on the current branch; returns the new head sha. */
   commit(workspace: WorkspaceHandle, message: string): Promise<{ headSha: string }>;
 
   /**
-   * Rebase the workspace's current branch ONTO `baseSha` (a shifted base — an
-   * ancestor landed, or an unrelated spec landed). FIRST-CLASS conflicts (§2): a
+   * Rebase `branch` ONTO `baseSha` (a shifted base — an ancestor landed, or an
+   * unrelated spec landed). The branch is named EXPLICITLY (never implicit-current)
+   * so a specific ancestor in a stack can be rebased. FIRST-CLASS conflicts (§2): a
    * rebase that conflicts SUCCEEDS and RECORDS the conflict (never throws, never
    * discards). The never-discard guarantee lives HERE.
    */
-  rebaseOnto(workspace: WorkspaceHandle, baseSha: string): Promise<RebaseResult>;
+  rebaseOnto(workspace: WorkspaceHandle, branch: string, baseSha: string): Promise<RebaseResult>;
 
   /**
-   * Resolve a recorded conflict with the intent-preserving resolution. The
-   * conflict transitions from recorded → resolved IN the commit; the work is never
-   * recreated. After this, `restackDescendants` propagates the resolution down.
+   * Resolve a recorded conflict on `input.branch` with the intent-preserving
+   * resolution. The conflict transitions from recorded → resolved IN the commit;
+   * the work is never recreated. After resolving an ANCESTOR, `restackDescendants`
+   * propagates the resolution DOWN to its descendants.
    */
   resolveConflict(input: ResolveConflictInput): Promise<{ headSha: string }>;
 

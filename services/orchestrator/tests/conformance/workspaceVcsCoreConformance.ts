@@ -5,7 +5,9 @@
 // brick" true by construction:
 //   - rebaseOnto a CONFLICTING base SUCCEEDS and RECORDS a conflict (never throws,
 //     never discards the work);
-//   - resolveConflict + restackDescendants PROPAGATE the resolution down the stack;
+//   - resolving a conflict on an ANCESTOR + restackDescendants PROPAGATES the
+//     resolution DOWN a real stack A→B→C (the descendant was conflicted by the
+//     ancestor and clears only after restack — NOT a same-branch shortcut);
 //   - exportCleanGitRef THROWS on an unresolved-conflict state — a conflicted ref is
 //     NEVER exported to the host (the §2 local/host boundary, fail-closed);
 //   - opUndo reverts the last operation (the reproducible operation log).
@@ -28,10 +30,10 @@ export function describeWorkspaceVcsCoreConformance(label: string, harness: Work
     it("rebaseOnto a CONFLICTING base SUCCEEDS and records a conflict (never throws/discards)", async () => {
       const core = harness.make();
       const ws = await core.openWorkspace({ repoUrl: REPO, baseBranch: "main", path: "/w" });
-      await core.branch(ws, "feature");
+      await core.branch(ws, "feature", "main");
       await core.commit(ws, "work");
 
-      const result = await core.rebaseOnto(ws, "conflict-base-sha");
+      const result = await core.rebaseOnto(ws, "feature", "conflict-base-sha");
 
       // The rebase SUCCEEDED (it did not throw) AND recorded a conflict — the work survived.
       expect(result.outcome).toBe("conflicted");
@@ -42,43 +44,51 @@ export function describeWorkspaceVcsCoreConformance(label: string, harness: Work
     it("a CLEAN rebaseOnto applies with no conflict", async () => {
       const core = harness.make();
       const ws = await core.openWorkspace({ repoUrl: REPO, baseBranch: "main", path: "/w" });
-      await core.branch(ws, "feature");
-      const result = await core.rebaseOnto(ws, "clean-base-sha");
+      await core.branch(ws, "feature", "main");
+      const result = await core.rebaseOnto(ws, "feature", "clean-base-sha");
       expect(result.outcome).toBe("clean");
       expect(result.conflict).toBeUndefined();
     });
 
-    it("resolveConflict + restackDescendants PROPAGATES the resolution down the stack", async () => {
+    it("resolving an ANCESTOR conflict + restackDescendants PROPAGATES the fix down a stack A→B→C", async () => {
       const core = harness.make();
       const ws = await core.openWorkspace({ repoUrl: REPO, baseBranch: "main", path: "/w" });
-      await core.branch(ws, "ancestor");
+      // Build a real stack: ancestor (A) on main, then B on A, then C on B.
+      await core.branch(ws, "ancestor", "main");
       await core.commit(ws, "ancestor work");
-      // The descendant stacks on the ancestor.
-      await core.branch(ws, "descendant");
-      await core.commit(ws, "descendant work");
-
-      // Conflict the ancestor, resolve it, then restack: the descendant inherits the fix.
-      // (re-enter the ancestor branch by re-opening — the fake stacks descendants on it)
-      const rebase = await core.rebaseOnto(ws, "conflict-base-sha");
+      // Conflict the ANCESTOR first — the descendants built on it inherit the conflict.
+      const rebase = await core.rebaseOnto(ws, "ancestor", "conflict-base-sha");
       expect(rebase.conflict).toBeDefined();
+      await core.branch(ws, "mid", "ancestor");
+      await core.branch(ws, "leaf", "mid");
+
+      // The descendants are conflicted (inherited) — they CANNOT export yet.
+      await expect(core.exportCleanGitRef(ws, "leaf")).rejects.toThrow(/conflict|refusing|unresolved/iu);
+
+      // Resolve on the ANCESTOR (not the descendant), then restack the descendants.
       await core.resolveConflict({
         workspace: ws,
+        branch: "ancestor",
         conflictId: rebase.conflict?.conflictId ?? "",
         resolutions: [{ path: "src/conflicted.ts", content: "resolved" }],
       });
-
       const restack = await core.restackDescendants(ws, "ancestor");
-      // The resolution propagated: no descendant remains conflicted.
+
+      // The resolution PROPAGATED down: every restacked descendant is now clean.
       expect(restack.stillConflicted).toEqual([]);
+      expect(restack.restacked.map((r) => r.branch).sort()).toEqual(["leaf", "mid"]);
+      // And a descendant now exports clean (the fix reached the leaf).
+      const exported = await core.exportCleanGitRef(ws, "leaf");
+      expect(exported.headSha).not.toBe("");
     });
 
     it("exportCleanGitRef THROWS on an unresolved conflict — NEVER exports a conflicted ref", async () => {
       const core = harness.make();
       const ws = await core.openWorkspace({ repoUrl: REPO, baseBranch: "main", path: "/w" });
-      await core.branch(ws, "feature");
+      await core.branch(ws, "feature", "main");
       await core.commit(ws, "work");
       // Leaves an unresolved conflict on the branch.
-      await core.rebaseOnto(ws, "conflict-base-sha");
+      await core.rebaseOnto(ws, "feature", "conflict-base-sha");
 
       await expect(core.exportCleanGitRef(ws, "feature")).rejects.toThrow(/conflict|refusing|unresolved/iu);
     });
@@ -86,11 +96,12 @@ export function describeWorkspaceVcsCoreConformance(label: string, harness: Work
     it("exportCleanGitRef SUCCEEDS once the conflict is resolved", async () => {
       const core = harness.make();
       const ws = await core.openWorkspace({ repoUrl: REPO, baseBranch: "main", path: "/w" });
-      await core.branch(ws, "feature");
+      await core.branch(ws, "feature", "main");
       await core.commit(ws, "work");
-      const rebase = await core.rebaseOnto(ws, "conflict-base-sha");
+      const rebase = await core.rebaseOnto(ws, "feature", "conflict-base-sha");
       await core.resolveConflict({
         workspace: ws,
+        branch: "feature",
         conflictId: rebase.conflict?.conflictId ?? "",
         resolutions: [{ path: "src/conflicted.ts", content: "resolved" }],
       });
@@ -102,7 +113,7 @@ export function describeWorkspaceVcsCoreConformance(label: string, harness: Work
     it("opUndo REVERTS the last operation (the reproducible operation log)", async () => {
       const core = harness.make();
       const ws = await core.openWorkspace({ repoUrl: REPO, baseBranch: "main", path: "/w" });
-      await core.branch(ws, "feature");
+      await core.branch(ws, "feature", "main");
       await core.commit(ws, "work");
       const before = await core.exportCleanGitRef(ws, "feature");
 
