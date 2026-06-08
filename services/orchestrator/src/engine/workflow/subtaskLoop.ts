@@ -1,23 +1,42 @@
-// real planner workflow. Orchestrates plan -> per-subtask write +
-// check -> audit, with checker- and auditor-rejection loops that re-invoke
-// the planner with structured feedback up to the configured retry budget.
-// On budget exhaustion the run halts with outcome="retry_budget_exhausted"
-// and persists every rejection as a typed event.
+// The spec-implementation loop (docs/roadmap/spec-loop-redesign.md). Orchestrates:
 //
-// Task persistence model: subtasks are stored as child rows in the existing
-// `tasks` table (Option B in the spec). The planner task is the parent; each
-// subtask creates a write task with `parent_task_id = plannerTaskId`. The
-// existing `attempt` column carries the writer-retry attempt number per
-// subtask. No new table is required.
+//   PLANNER → per-task[ WRITER → FAST GATE (tier-1) → CHECKER ] → SPEC GATE (tier-2,
+//   CI-fail=P0) → AUDITOR → DEMO (optional) → findings?
+//      none                → PASS
+//      yes → TRIAGE → all-routed-to-specs → PASS
+//                  → kept-in-spec → CONVERGENCE → progress → loop
+//                                              → velocity → PASS
+//                                              → stall (N consecutive) → HALT
 //
-// Per-stage detail lives in subtaskStages.ts; per-call cost recording lives
-// in subtaskCost.ts; task-row persistence lives in subtaskTasks.ts. This file
-// stays focused on the loop topology under the 500-line architecture cap.
+// HALT RULES (the redesign's core): there is NO retry-cap / per-spec rerun limit /
+// timeout HALT. The ONLY halts are (a) convergence stall (the convergence answerer,
+// after N CONSECUTIVE stalls — a stall counter, NOT a retry counter) and (b) budget
+// exhaustion (handled at the project/walker level, OUTSIDE this loop). A P0 finding, a
+// failed gate, an incomplete task are LOOPBACKS, not halts.
+//
+// Per-stage detail lives in subtaskStages.ts (writer/checker), auditorStage.ts, and
+// loopStages.ts (demo/triage/convergence); per-call cost in subtaskCost.ts; task-row
+// persistence in subtaskTasks.ts. This file stays focused on the loop topology under
+// the 500-line architecture cap.
 import { randomUUID } from "node:crypto";
 import type pg from "pg";
-import type { AuditAnswer, CheckAnswer, PlanAnswer, PlanSubtask } from "../answerers/schemas/index.js";
+import type {
+  AuditAnswer,
+  CheckAnswer,
+  ConvergenceAnswer,
+  DemoRunAnswer,
+  PlanAnswer,
+  PlanSubtask,
+  TriageAnswer,
+} from "../answerers/schemas/index.js";
 import type { CiWhen } from "../ci/index.js";
-import type { EscapeHatches } from "../config/shared.js";
+import {
+  type AuditPostureConfig,
+  type ConvergencePolicyConfig,
+  DEFAULT_AUDIT_POSTURE,
+  DEFAULT_CONVERGENCE_POLICY,
+} from "../config/shared.js";
+import type { Finding } from "../contracts/findings.js";
 import type { CostRecorder } from "../costs/index.js";
 import type { EventName, EventPayload } from "../events/index.js";
 import type { EventStore } from "../eventStore.js";
@@ -27,11 +46,14 @@ import type { UsageProbe } from "../usage/index.js";
 import type { GateOutcome } from "./gate/index.js";
 import type { PlannerRejectionFeedback, PlannerSpecContext } from "./planner/planner.js";
 import { checkWindowPreflight, type CreditState, observeRunAccounting } from "./subtaskAccounting.js";
-import { gateRejection, handleRejection } from "./subtaskRework.js";
 import { buildSubtaskCostContext, type SubtaskCostContext } from "./subtaskCost.js";
 import type { RealProviderCostCapturer } from "../costs/generationCostCapture.js";
 import { insertPlannerTask, markTaskDone } from "./subtaskTasks.js";
-import { runAuditorStage, runCheckerStage, runPlannerStage, runWriterStage } from "./subtaskStages.js";
+import { runAuditorStage, runPlannerStage } from "./subtaskStages.js";
+import { runSubtaskSequence } from "./subtaskInnerLoop.js";
+import { runConvergenceStage, runDemoRunStage, runTriageStage } from "./loopStages.js";
+import { type ConvergenceState } from "./loopPolicy.js";
+import { gateFindings, type TriageSpecValidator } from "./loopFindings.js";
 
 type LoopQueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
@@ -40,6 +62,12 @@ export interface SubtaskLoopAdapters {
   writer: WriterAdapter;
   checker: AnswererAdapter<CheckAnswer>;
   auditor: AnswererAdapter<AuditAnswer>;
+  // SPEC-LOOP REDESIGN stages.
+  triage: AnswererAdapter<TriageAnswer>;
+  convergence: AnswererAdapter<ConvergenceAnswer>;
+  // The OPTIONAL demo-run answerer. Present even when disabled (the policy flag, not
+  // the adapter's absence, governs whether the stage runs) so the slot is always wired.
+  demoRun: AnswererAdapter<DemoRunAnswer>;
 }
 
 export interface SubtaskLoopCostHooks {
@@ -58,12 +86,16 @@ export interface SubtaskLoopCostHooks {
   buildAuditorUsage?: (input: { auditorTaskId: string; verdict: AuditAnswer }) => Record<string, unknown>;
 }
 
+// Only the writer-iteration hatch is read by the loop now (the planner-rerun cap is
+// PURGED — there is no retry-cap halt). Kept as a structural type so the field stays
+// nominal without importing the full EscapeHatches surface.
+interface EscapeHatchesShape {
+  maxWriterIterPerSubtask: number;
+}
+
 export interface SubtaskLoopInput {
   pool: LoopQueryClient;
   eventStore: EventStore;
-  // the lifecycle writer. When present (remote-writes on), the
-  // loop's `tasks` INSERT/UPDATE route through the control plane; absent, the
-  // in-process org-scoped writes run as before.
   runStateWriter?: RunStateWriter;
   recorder: CostRecorder;
   adapters: SubtaskLoopAdapters;
@@ -72,46 +104,44 @@ export interface SubtaskLoopInput {
     specId: string;
     projectId: string;
     workspacePath: string;
-    // The run's BASE sha (clone point), captured once after the workspace
-    // clone, threaded to the writer so each subtask is judged against the
-    // CUMULATIVE diff vs the run base rather than the per-subtask HEAD delta.
-    // The production run path always sets it; unit callers may omit it.
     baseSha?: string;
   };
-  escapeHatches: Pick<
-    EscapeHatches,
-    "maxPlannerRerunsPerSpec" | "maxWriterIterPerSubtask" | "maxRetriesPerTransientFailure"
-  >;
+  // The per-task writer-iteration bound (writer→gate→checker). NOT a HALT trigger: on
+  // exhaustion the residual incompleteness becomes a P0 FINDING fed to triage/
+  // convergence (which own the only loop bound), never a retry-cap halt.
+  escapeHatches: EscapeHatchesShape;
+  // The CONVERGENCE policy (the SOLE loop bound) + the audit posture (triage routing).
+  // Optional → resolve to the balanced defaults.
+  convergencePolicy?: ConvergencePolicyConfig;
+  auditPosture?: AuditPostureConfig;
   timeoutMs: number;
   onEvent?: (event: { eventType: EventName; taskId?: string }) => void;
   costHooks?: SubtaskLoopCostHooks;
-  // Optional usage monitoring for the credential this run uses. When present
-  // the loop runs a window pre-flight before each planner iteration (escalating
-  // PROJECT_BRIEF §4.3 window pressure instead of dispatching a doomed call)
-  // and reconciles the real cost (credit drawdown, else ccusage) into the run's
-  // cost_records at the end.
   usageProbe?: UsageProbe;
-  // Dollar value of one prepaid credit, for credit-drawdown cost. Defaults to
-  // DEFAULT_CREDIT_USD_RATE (the observed Pro-account rate).
   creditUsdRate?: number;
-  // the deterministic, exit-code-driven gate-check seam. Runs the CI
-  // tiers mapped to a lifecycle point over the bootstrapped workspace (NO
-  // Answerer). The loop calls it with when="per_iteration" after each writer
-  // iteration (a fail routes back to writer rework via the planner-rerequest
-  // path) and with when="pre_audit" before the audit (a fail blocks the audit
-  // and routes to rework). Omitted → the gate is skipped (legacy / unit paths
-  // that drive the loop without a workspace). Tests inject a mock to assert
-  // routing without a live runner. `taskId` correlates the gate.* events.
+  // the deterministic, exit-code-driven gate-check seam. `per_iteration` is the
+  // tier-1 FAST gate (per task, BEFORE the checker); `pre_audit` is the tier-2 SPEC
+  // gate (a CI fail becomes a P0 finding). Omitted → the gate is skipped (unit paths).
   runGate?: (input: { when: CiWhen; taskId?: string }) => Promise<GateOutcome>;
-  // prior rejections to seed the planner's rejectionHistory with before
-  // the first plan. Used by the review-rework re-entry to carry a
-  // changes-requested PR review forward as planner steering, so the re-plan
-  // addresses the reviewer's feedback. Empty/omitted on the normal first pass.
+  // prior rejections to seed the planner's rejectionHistory (review-rework re-entry).
   seedRejections?: ReadonlyArray<PlannerRejectionFeedback>;
-  // MANAGED-run real-cost capture: resolves the REAL OpenRouter `usage.cost` for a
-  // call's surfaced generation id so cost_usd is a metered FACT (`provider_response`).
-  // Present only on a managed run; absent (BYOK / non-managed) → cost_usd NULL.
   captureRealProviderCost?: RealProviderCostCapturer;
+  // WORKSTREAM 1 ↔ 2 SEAM — the spec-quality gate (forge/specQuality contract) applied
+  // to the TRIAGE stage's `kind: spec` work items before they become NewSpecRequests.
+  // Resolved per org/project in plannerRun (a real read-only validator answerer + the
+  // re-author loopback). Absent ⇒ the gate is inert (unit paths).
+  specValidator?: TriageSpecValidator;
+}
+
+// A new DAG spec triage routed out of this spec. Emitted through the spec-creating
+// contract (workstream 1) by the caller. The id/title/body/severity come straight from
+// the triaged work item.
+export interface NewSpecRequest {
+  id: string;
+  title: string;
+  body: string;
+  severity: "P0" | "P1" | "P2" | "P3";
+  findingIds: ReadonlyArray<string>;
 }
 
 export type SubtaskLoopOutcome =
@@ -119,17 +149,25 @@ export type SubtaskLoopOutcome =
       kind: "passed";
       plannerTaskId: string;
       subtasks: ReadonlyArray<PlanSubtask>;
-      plannerRerunCount: number;
+      // The new DAG specs triage emitted (routed-to-spec work items + any velocity-
+      // deferred kept items). The caller (workstream-1 spec-creating contract)
+      // materializes these; empty when none.
+      newSpecs: ReadonlyArray<NewSpecRequest>;
+      loopCount: number;
     }
   | {
-      kind: "retry_budget_exhausted";
-      plannerRerunCount: number;
-      lastRejection: PlannerRejectionFeedback;
+      // SPEC-LOOP REDESIGN: replaces `retry_budget_exhausted`. The convergence answerer
+      // reported N CONSECUTIVE stalls — a human action (rework the spec / stronger
+      // model / fix the env) is the genuine next step.
+      kind: "convergence_stalled";
+      loopCount: number;
+      consecutiveStalls: number;
+      reason: string;
     }
-  | { kind: "halted"; plannerRerunCount: number; reason: string }
+  | { kind: "halted"; loopCount: number; reason: string }
   | {
       kind: "window_exhausted";
-      plannerRerunCount: number;
+      loopCount: number;
       provider: string;
       slot: string;
       usedPercent: number;
@@ -164,14 +202,13 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
   );
 
   const plannerTaskId = `task_${randomUUID()}`;
-  // Prepaid-credit balance at the first window pre-flight; the run-end credit
-  // drawdown (atStart - atEnd) is the run's real marginal dollar cost.
   const creditState: CreditState = { atStart: null };
+  const posture = input.auditPosture ?? DEFAULT_AUDIT_POSTURE;
+  const convergencePolicy = input.convergencePolicy ?? DEFAULT_CONVERGENCE_POLICY;
 
-  // finalize runs run-level accounting (the real cost is only known once every
-  // call has run) and reconciles it into cost_records — credit drawdown when
-  // present, else ccusage — then returns the terminal outcome. Routed through
-  // EVERY return so cost is captured regardless of how the run ended.
+  // finalize runs run-level accounting + reconciles cost, then returns the terminal
+  // outcome. Routed through EVERY return so cost is captured regardless of how the run
+  // ended.
   const finalize = async (outcome: SubtaskLoopOutcome): Promise<SubtaskLoopOutcome> => {
     await observeRunAccounting(input, appendEvent, plannerTaskId, creditState);
     return outcome;
@@ -182,13 +219,18 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
   await appendEvent("planner.started", { taskKind: "plan" }, plannerTaskId);
 
   const rejectionHistory: PlannerRejectionFeedback[] = [...(input.seedRejections ?? [])];
-  let plannerRerunCount = 0;
+  // The cross-loop convergence state — the SOLE loop bound (NOT a retry counter). A
+  // `progress`/`velocity_defer` resets it; a `stalled` increments; N consecutive halts.
+  let convergenceState: ConvergenceState = { consecutiveStalls: 0 };
+  // The prior loop's findings, for the convergence delta read.
+  let priorFindings: Finding[] = [];
+  let loopCount = 0;
 
   while (true) {
-    const windowOutcome = await checkWindowPreflight(input, appendEvent, plannerTaskId, plannerRerunCount, creditState);
+    const windowOutcome = await checkWindowPreflight(input, appendEvent, plannerTaskId, loopCount, creditState);
     if (windowOutcome !== null) {
       await markTaskDone(input.pool, plannerTaskId, "window_exhausted", input.runStateWriter);
-      return await finalize(windowOutcome);
+      return await finalize({ ...windowOutcome, loopCount });
     }
     const plan = await runPlannerStage({
       pool: input.pool,
@@ -199,79 +241,27 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
       workspacePath: input.context.workspacePath,
       plannerTaskId,
       appendEvent,
-      attempt: plannerRerunCount + 1,
+      attempt: loopCount + 1,
       rejectionHistory,
       timeoutMs: input.timeoutMs,
       buildUsage: input.costHooks?.buildPlannerUsage,
     });
 
-    const writerResults: { subtask: PlanSubtask; writer: WriterResult }[] = [];
-    const sequence = await runSubtaskSequence({
-      input,
-      costCtx,
-      appendEvent,
-      plan,
-      plannerTaskId,
-      writerResults,
-    });
-
-    // A writer that exhausted its usage window mid-subtask halts the run as
-    // recoverable §4.3 window pressure — the SAME terminal the pre-flight probe
-    // produces. The planner task is stamped window_exhausted, not passed.
+    // Per-task inner loop: WRITER → FAST GATE → CHECKER, for every subtask in order.
+    const sequence = await runSubtaskSequence({ input, costCtx, appendEvent, plan, plannerTaskId });
     if (sequence.kind === "window_exhausted") {
       await markTaskDone(input.pool, plannerTaskId, "window_exhausted", input.runStateWriter);
-      return await finalize(sequence.outcome);
+      return await finalize({ ...sequence.outcome, loopCount });
     }
 
-    // A checker rejection OR a hard writer failure (crashed / timed out) routes
-    // back through the planner-rework path; on budget exhaustion the run halts as
-    // retry_budget_exhausted. Either way the failing subtask was NOT recorded passed.
-    if (sequence.kind === "rejection") {
-      const exhausted = await handleRejection({
-        appendEvent,
-        plannerTaskId,
-        runId: input.context.runId,
-        max: input.escapeHatches.maxPlannerRerunsPerSpec,
-        rejection: sequence.rejection,
-        plannerRerunCount,
-        history: rejectionHistory,
-      });
-      if (exhausted) {
-        return await finalize({
-          kind: "retry_budget_exhausted",
-          plannerRerunCount: plannerRerunCount + 1,
-          lastRejection: sequence.rejection,
-        });
-      }
-      plannerRerunCount += 1;
-      continue;
-    }
+    // Collect ALL spec-level findings: per-task incompleteness + the tier-2 SPEC GATE
+    // (CI fail = P0) + the auditor + the optional demo. They flow as ONE union to triage.
+    const findings: Finding[] = [...sequence.taskFindings];
 
-    // the slow tier (build/test) runs before the audit. A nonzero exit
-    // blocks the audit — auditing a tree that does not build/test is wasted —
-    // and routes the run to rework via the same planner-rerequest path.
     if (input.runGate !== undefined) {
-      const preAuditGate = await input.runGate({ when: "pre_audit", taskId: plannerTaskId });
-      if (!preAuditGate.passed) {
-        const gateReject = gateRejection(preAuditGate, plan.subtasks);
-        const exhausted = await handleRejection({
-          appendEvent,
-          plannerTaskId,
-          runId: input.context.runId,
-          max: input.escapeHatches.maxPlannerRerunsPerSpec,
-          rejection: gateReject,
-          plannerRerunCount,
-          history: rejectionHistory,
-        });
-        if (exhausted) {
-          return await finalize({
-            kind: "retry_budget_exhausted",
-            plannerRerunCount: plannerRerunCount + 1,
-            lastRejection: gateReject,
-          });
-        }
-        plannerRerunCount += 1;
-        continue;
+      const specGate = await input.runGate({ when: "pre_audit", taskId: plannerTaskId });
+      if (!specGate.passed) {
+        findings.push(gateFindings(specGate));
       }
     }
 
@@ -292,198 +282,147 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
       appendEvent,
       buildUsage: input.costHooks?.buildAuditorUsage,
     });
-    if (audit.decision.kind === "pass") {
+    findings.push(...audit.findings);
+
+    // OPTIONAL DEMO-RUN slot (after the auditor), gating the pass when enabled.
+    if (convergencePolicy.demoRunEnabled) {
+      const demo = await runDemoRunStage({
+        pool: input.pool,
+        writer: input.runStateWriter,
+        costCtx,
+        adapter: input.adapters.demoRun,
+        runId: input.context.runId,
+        workspacePath: input.context.workspacePath,
+        plannerTaskId,
+        specTitle: input.context.specTitle,
+        specDescription: input.context.specDescription,
+        acceptanceCriteria: input.context.acceptanceCriteria,
+        baselineSha: input.context.baseSha ?? "HEAD",
+        timeoutMs: input.timeoutMs,
+        appendEvent,
+      });
+      findings.push(...demo.findings);
+    }
+
+    // NO findings ⇒ the spec PASSES (the clean exit).
+    if (findings.length === 0) {
+      await markTaskDone(input.pool, plannerTaskId, "passed", input.runStateWriter);
+      return await finalize({ kind: "passed", plannerTaskId, subtasks: plan.subtasks, newSpecs: [], loopCount });
+    }
+
+    // TRIAGE: dedup findings to root-cause work items + route each (task-here / new spec).
+    const triage = await runTriageStage({
+      pool: input.pool,
+      writer: input.runStateWriter,
+      costCtx,
+      adapter: input.adapters.triage,
+      runId: input.context.runId,
+      workspacePath: input.context.workspacePath,
+      plannerTaskId,
+      specTitle: input.context.specTitle,
+      specDescription: input.context.specDescription,
+      baselineSha: input.context.baseSha ?? "HEAD",
+      findings,
+      posture,
+      ...(input.specValidator !== undefined && { specValidator: input.specValidator }),
+      timeoutMs: input.timeoutMs,
+      appendEvent,
+    });
+    const newSpecs: NewSpecRequest[] = triage.routing.newSpecs.map(routedToNewSpec);
+
+    // TRIAGE → PASSED: every finding became a NEW spec (none kept here).
+    if (triage.routing.outcome === "passed") {
+      await markTaskDone(input.pool, plannerTaskId, "passed", input.runStateWriter);
+      return await finalize({ kind: "passed", plannerTaskId, subtasks: plan.subtasks, newSpecs, loopCount });
+    }
+
+    // Work KEPT in-spec → CONVERGENCE: progress vs stall vs velocity-defer.
+    const convergence = await runConvergenceStage({
+      pool: input.pool,
+      writer: input.runStateWriter,
+      costCtx,
+      adapter: input.adapters.convergence,
+      runId: input.context.runId,
+      workspacePath: input.context.workspacePath,
+      plannerTaskId,
+      specTitle: input.context.specTitle,
+      baselineSha: input.context.baseSha ?? "HEAD",
+      loopIndex: loopCount,
+      currentFindings: findings,
+      priorFindings,
+      state: convergenceState,
+      maxConsecutiveStalls: convergencePolicy.maxConsecutiveStalls,
+      timeoutMs: input.timeoutMs,
+      appendEvent,
+    });
+    convergenceState = convergence.state;
+
+    if (convergence.decision === "halt") {
+      await appendEvent("convergence.stalled", {
+        runId: input.context.runId,
+        consecutiveStalls: convergence.state.consecutiveStalls,
+        maxConsecutiveStalls: convergencePolicy.maxConsecutiveStalls,
+        reason: convergence.reasoning,
+      });
+      await markTaskDone(input.pool, plannerTaskId, "rejected_by_auditor", input.runStateWriter);
+      return await finalize({
+        kind: "convergence_stalled",
+        loopCount,
+        consecutiveStalls: convergence.state.consecutiveStalls,
+        reason: convergence.reasoning,
+      });
+    }
+    if (convergence.decision === "pass") {
+      // Velocity policy: defer the mild kept leftovers as specs and ALLOW the pass.
+      const deferred: NewSpecRequest[] = triage.routing.tasksHere.map(routedToNewSpec);
       await markTaskDone(input.pool, plannerTaskId, "passed", input.runStateWriter);
       return await finalize({
         kind: "passed",
         plannerTaskId,
         subtasks: plan.subtasks,
-        plannerRerunCount,
+        newSpecs: [...newSpecs, ...deferred],
+        loopCount,
       });
     }
-    if (audit.decision.action === "halt") {
-      await markTaskDone(input.pool, plannerTaskId, "rejected_by_auditor", input.runStateWriter);
-      return await finalize({ kind: "halted", plannerRerunCount, reason: audit.decision.reason });
-    }
-    const auditorRejection: PlannerRejectionFeedback = {
-      producer: "auditor",
-      rejectionReason: audit.decision.reason,
-      behaviorIdsFailed: [...audit.decision.outstandingBehaviorIds],
-      previousSubtasks: plan.subtasks,
-    };
-    const exhausted = await handleRejection({
-      appendEvent,
-      plannerTaskId,
-      runId: input.context.runId,
-      max: input.escapeHatches.maxPlannerRerunsPerSpec,
-      rejection: auditorRejection,
-      plannerRerunCount,
-      history: rejectionHistory,
-    });
-    if (exhausted) {
-      return await finalize({
-        kind: "retry_budget_exhausted",
-        plannerRerunCount: plannerRerunCount + 1,
-        lastRejection: auditorRejection,
-      });
-    }
-    plannerRerunCount += 1;
+
+    // progress → loop again. Seed the planner with the kept work as steering, carry the
+    // current findings forward as the next loop's prior, and re-plan.
+    rejectionHistory.push(triageToRejection(triage.routing.tasksHere, plan.subtasks));
+    priorFindings = findings;
+    loopCount += 1;
   }
 }
 
-// The result of walking a plan's subtasks: a clean pass, a rejection routed to
-// rework (checker reject OR a hard crashed/timeout writer), or a window-exhausted
-// halt (a writer whose §4.3 usage window was spent mid-call). Each non-pass case
-// guarantees the failing subtask was NOT recorded as a passed task.
-type SubtaskSequenceResult =
-  | { kind: "passed" }
-  | { kind: "rejection"; rejection: PlannerRejectionFeedback }
-  | { kind: "window_exhausted"; outcome: Extract<SubtaskLoopOutcome, { kind: "window_exhausted" }> };
-
-// runSubtaskSequence walks the plan in order, executing each subtask's
-// writer + check stages. Returns `passed` on success, a `rejection` when the
-// checker rejected OR the writer hard-failed (crashed / timed out), or
-// `window_exhausted` when a writer's usage window was spent mid-subtask.
-async function runSubtaskSequence(args: {
-  input: SubtaskLoopInput;
-  costCtx: SubtaskCostContext;
-  appendEvent: AppendEvent;
-  plan: PlanAnswer;
-  plannerTaskId: string;
-  writerResults: { subtask: PlanSubtask; writer: WriterResult }[];
-}): Promise<SubtaskSequenceResult> {
-  const { input, costCtx, appendEvent, plan, plannerTaskId, writerResults } = args;
-  for (const subtask of plan.subtasks) {
-    const writeTaskId = `task_${randomUUID()}`;
-    const writerOutcome = await runWriterStage({
-      pool: input.pool,
-      writer: input.runStateWriter,
-      costCtx,
-      adapter: input.adapters.writer,
-      runId: input.context.runId,
-      workspacePath: input.context.workspacePath,
-      plannerTaskId,
-      subtask,
-      writeTaskId,
-      prompt: writerPromptFor(input, subtask),
-      timeoutMs: input.timeoutMs,
-      baseSha: input.context.baseSha,
-      appendEvent,
-      buildUsage: input.costHooks?.buildWriterUsage,
-    });
-    // The writer's classified exit (provider `exitReason`) decides routing here —
-    // a non-`completed` writer never proceeds to the checker as a success.
-    if (writerOutcome.kind === "window_exhausted") {
-      return {
-        kind: "window_exhausted",
-        outcome: {
-          kind: "window_exhausted",
-          plannerRerunCount: 0,
-          provider: input.adapters.writer.cli,
-          slot: "writer",
-          usedPercent: 100,
-          resetsAt: new Date().toISOString(),
-        },
-      };
-    }
-    if (writerOutcome.kind === "failed") {
-      return { kind: "rejection", rejection: writerFailureRejection(writerOutcome.failureKind, plan.subtasks) };
-    }
-    const writerResult = writerOutcome.writer;
-    // deterministic per-iteration gate. The fast tier runs over the
-    // bootstrapped workspace right after the writer edits. A nonzero exit means
-    // the tree is broken (build/lint/typecheck/unit), so route straight back to
-    // writer rework via the planner-rerequest path BEFORE spending a checker
-    // call on a known-broken tree.
-    if (input.runGate !== undefined) {
-      const gate = await input.runGate({ when: "per_iteration", taskId: writeTaskId });
-      if (!gate.passed) {
-        return { kind: "rejection", rejection: gateRejection(gate, plan.subtasks) };
-      }
-    }
-    const checkerTaskId = `task_${randomUUID()}`;
-    const decision = await runCheckerStage({
-      pool: input.pool,
-      writer: input.runStateWriter,
-      costCtx,
-      adapter: input.adapters.checker,
-      runId: input.context.runId,
-      workspacePath: input.context.workspacePath,
-      writeTaskId,
-      checkerTaskId,
-      subtask,
-      writerResult,
-      ...(input.context.baseSha === undefined ? {} : { baseSha: input.context.baseSha }),
-      specTitle: input.context.specTitle,
-      specDescription: input.context.specDescription,
-      acceptanceCriteria: input.context.acceptanceCriteria,
-      timeoutMs: input.timeoutMs,
-      appendEvent,
-      buildUsage: input.costHooks?.buildCheckerUsage,
-    });
-    if (decision.kind === "reject") {
-      return {
-        kind: "rejection",
-        rejection: {
-          producer: "checker",
-          rejectionReason: decision.reason,
-          behaviorIdsFailed: [...decision.behaviorIdsFailed],
-          previousSubtasks: plan.subtasks,
-        },
-      };
-    }
-    writerResults.push({ subtask, writer: writerResult });
-  }
-  return { kind: "passed" };
-}
-
-// Turn a hard writer failure (crashed / timed out) into the planner-feedback
-// record routed through the SAME rework path the checker/auditor/gate use, so a
-// non-completing writer re-plans (or exhausts the retry budget) instead of being
-// laundered into a passed subtask. The writer carries no per-behavior verdict, so
-// behaviorIdsFailed is empty.
-function writerFailureRejection(
-  failureKind: "crashed" | "timeout",
-  subtasks: ReadonlyArray<PlanSubtask>,
-): PlannerRejectionFeedback {
-  const detail = failureKind === "timeout" ? "timed out before completing the subtask" : "crashed mid-subtask";
+function routedToNewSpec(r: {
+  item: {
+    id: string;
+    title: string;
+    body: string;
+    severity: NewSpecRequest["severity"];
+    findingIds: ReadonlyArray<string>;
+  };
+}): NewSpecRequest {
   return {
-    producer: "writer",
-    rejectionReason: `writer ${detail} (exitReason="${failureKind}")`,
-    behaviorIdsFailed: [],
-    previousSubtasks: subtasks,
+    id: r.item.id,
+    title: r.item.title,
+    body: r.item.body,
+    severity: r.item.severity,
+    findingIds: [...r.item.findingIds],
   };
 }
 
-// A standing toolchain instruction prepended to every writer prompt. The
-// acceptance criteria reach the CHECKER, but the writer never saw them — so a
-// writer could (and did, in the #273 scaffold) emit `workspace:*` stub packages
-// for the toolchain that the checker then correctly rejected, burning an
-// iteration. Stating the rule up front steers the writer away from the failure
-// mode before it spends the iteration.
-const WRITER_TOOLCHAIN_INSTRUCTION =
-  "Declare real, published devDependencies and a real lockfile. NEVER create local " +
-  "workspace stub packages, `workspace:*` placeholders, or fake binaries for typescript/eslint/vitest " +
-  "or any toolchain — use the real published packages.";
-
-function writerPromptFor(input: SubtaskLoopInput, subtask: PlanSubtask): string {
-  // The spec's acceptance criteria are the SAME bar the checker judges against, so
-  // threading them into the writer prompt lets the writer aim at the gate directly
-  // instead of guessing from the intent + spec description alone. They are already
-  // in scope on `input.context` (PlannerSpecContext); no extra plumbing needed.
-  const criteria =
-    input.context.acceptanceCriteria.length > 0
-      ? ["", "Acceptance criteria:", ...input.context.acceptanceCriteria.map((criterion) => `- ${criterion}`)]
-      : [];
-  return [
-    `Subtask [${subtask.index}]: ${subtask.title}`,
-    `Intent: ${subtask.intent}`,
-    `Behaviors: ${subtask.behaviorIds.join(", ") || "(none)"}`,
-    "",
-    `Spec: ${input.context.specTitle}`,
-    input.context.specDescription,
-    ...criteria,
-    "",
-    WRITER_TOOLCHAIN_INSTRUCTION,
-  ].join("\n");
+// Turn the kept-in-spec triage items into the planner-steering rejection record routed
+// through the SAME planner rejectionHistory the checker/auditor feedback uses, so the
+// re-plan addresses the concrete root causes. `behaviorIdsFailed` carries the work-item
+// ids (the dedup trail).
+function triageToRejection(
+  tasksHere: ReadonlyArray<{ item: { id: string; title: string; body: string } }>,
+  subtasks: ReadonlyArray<PlanSubtask>,
+): PlannerRejectionFeedback {
+  return {
+    producer: "auditor",
+    rejectionReason: tasksHere.map((r) => `${r.item.title}: ${r.item.body}`).join("; "),
+    behaviorIdsFailed: tasksHere.map((r) => r.item.id),
+    previousSubtasks: subtasks,
+  };
 }

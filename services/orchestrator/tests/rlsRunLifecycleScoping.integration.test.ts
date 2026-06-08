@@ -50,7 +50,7 @@ import {
   fakeProbe,
   healthyWindow,
   noopMerge,
-  passingCheck,
+  completeCheck,
   passingGitHub,
   twoSubtaskAdapters,
 } from "./plannerRun.fixtures.js";
@@ -190,7 +190,7 @@ describeDb("RLS run lifecycle — a real org-scoped run writes every lifecycle t
       runWorkflow: (input) =>
         runPlannerLoopWorkflow({
           ...input,
-          buildAdapters: () => twoSubtaskAdapters([passingCheck, passingCheck]),
+          buildAdapters: () => twoSubtaskAdapters([completeCheck, completeCheck]),
           buildUsageProbe: () => fakeProbe(healthyWindow(), accounting(0.5)),
           runBootstrap: async () => {},
           // NO `runGate` stub: the REAL native gate runs over the NoopSsh (every tier

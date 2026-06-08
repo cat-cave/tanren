@@ -9,7 +9,9 @@
     "review",
     "merge",
     "demo",
-    "forge"
+    "forge",
+    "triage",
+    "convergence"
   ],
   "type": "string",
   "x-tanren-schema-id": "tanren.state.tasks_kind"

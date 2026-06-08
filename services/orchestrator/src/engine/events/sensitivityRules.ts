@@ -5,6 +5,7 @@ import { strandSensitivityRules } from "./sensitivityRules.strand.js";
 import { ciIntelSensitivityRules } from "./sensitivityRules.ciIntel.js";
 import { gateSensitivityRules } from "./sensitivityRules.gate.js";
 import { auditorFindingsRoutedSensitivityRules } from "./sensitivityRules.audit.js";
+import { specLoopStageSensitivityRules } from "./sensitivityRules.loop.js";
 
 // Sensitivity rule table. Every payload field reachable from an event must have a
 // registered tag (the eventRegistryFieldCoverage test enforces this as a hard CI
@@ -219,17 +220,8 @@ export const sensitivityRules: SensitivityRule[] = [
     ["kind", "public"],
     ["message", "public"],
   ]),
-  ...rulesFor("checker.verdict", [
-    ["runId", "public"],
-    ["taskId", "public"],
-    ["subtaskIndex", "public"],
-    ["passed", "public"],
-    ["reasoning", "public"],
-    ["behaviorIdsPassed", "public"],
-    ["behaviorIdsPassed[]", "public"],
-    ["behaviorIdsFailed", "public"],
-    ["behaviorIdsFailed[]", "public"],
-  ]),
+  // checker.verdict (completeness-findings) + auditor.verdict (findings-only) live in
+  // the spec-loop split (./sensitivityRules.loop.ts) under the 500-line cap.
   // rejection event emitted by the checker rejection-loop branch
   ...rulesFor("checker.rejected", [
     ["runId", "public"],
@@ -258,23 +250,7 @@ export const sensitivityRules: SensitivityRule[] = [
     ["kind", "public"],
     ["message", "public"],
   ]),
-  ...rulesFor("auditor.verdict", [
-    ["runId", "public"],
-    ["passed", "public"],
-    ["reasoning", "public"],
-    ["outstandingBehaviorIds", "public"],
-    ["outstandingBehaviorIds[]", "public"],
-    ["recommendedAction", "public"],
-    // WAVE-2 / SLICE P-A: the explicit findings list (public — they become DAG
-    // specs / fix-in-place work; nothing here is a secret).
-    ["findings", "public"],
-    ["findings[].id", "public"],
-    ["findings[].severity", "public"],
-    ["findings[].title", "public"],
-    ["findings[].body", "public"],
-    ["findings[].fixHint", "public"],
-  ]),
-  // rejection event emitted by the auditor rejection-loop branch
+  // auditor.verdict (findings-only) lives in the spec-loop split. rejection event:
   ...rulesFor("auditor.rejected", [
     ["runId", "public"],
     ["auditTaskId", "public"],
@@ -286,6 +262,10 @@ export const sensitivityRules: SensitivityRule[] = [
   // S3: the posture-gate's residual P2/P3 disposition (route-to-dag / fix-if-idle) —
   // all public; spread from ./sensitivityRules.audit.ts under the 500-line cap.
   ...auditorFindingsRoutedSensitivityRules,
+
+  // SPEC-LOOP REDESIGN stages (demo-run / triage / convergence) — all public; spread
+  // from ./sensitivityRules.loop.ts under the 500-line cap.
+  ...specLoopStageSensitivityRules,
 
   // The native in-loop gate rules (gate.started/passed/failed/advisory_failed/verdict)
   // are split into ./sensitivityRules.gate.js under the 500-line cap; spread below.

@@ -2,7 +2,9 @@ import { z } from "zod";
 import { ProviderMode } from "./managedProvider.js";
 import {
   AuditPostureConfig,
+  ConvergencePolicyConfig,
   DEFAULT_AUDIT_POSTURE,
+  DEFAULT_CONVERGENCE_POLICY,
   DEFAULT_MAX_BATCH_SIZE,
   DEFAULT_SPECULATION_THRESHOLD,
   DEFAULT_SPECULATIVE_INTEGRATION_DEPTH,
@@ -80,6 +82,12 @@ export const ProjectConfigV1 = z
     // zero-defect shop blocks on even P3, a velocity shop routes everything into the
     // DAG. A governed SETTING (like `governancePosture`/`reviewPolicy`), never an env var.
     auditPosture: AuditPostureConfig.default(DEFAULT_AUDIT_POSTURE),
+    // SPEC-LOOP REDESIGN (docs/roadmap/spec-loop-redesign.md): the CONVERGENCE policy
+    // — the SOLE loop bound (no retry cap / timeout). `maxConsecutiveStalls` halts the
+    // spec loop only after N consecutive convergence-answerer stalls; `demoRunEnabled`
+    // toggles the optional demo-run gate. Defaults to `DEFAULT_CONVERGENCE_POLICY`
+    // (3 stalls, demo off).
+    convergencePolicy: ConvergencePolicyConfig.default(DEFAULT_CONVERGENCE_POLICY),
     // MERGE-SAFETY (self-identity): OPTIONAL extra GitHub logins to treat as Tanren's
     // own pushes in the external-change gate, ADDITIVE to the default bot login + the
     // login resolved live from the active credential (`resolveActorIdentity`). The

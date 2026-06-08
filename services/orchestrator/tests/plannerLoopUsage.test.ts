@@ -5,13 +5,13 @@ import { describe, expect, it } from "vitest";
 import type { CcusageAccounting, UsageProbe, WindowObservation } from "../src/engine/usage/index.js";
 import { runSubtaskLoop } from "../src/engine/workflow/subtaskLoop.js";
 import {
+  cleanAudit,
+  completeCheck,
   defaultLoopInput,
   makeAuditor,
   makeChecker,
   makePlanner,
   makeWriter,
-  passingAudit,
-  passingCheck,
   buildPlan,
 } from "./helpers/plannerLoopHelpers.js";
 
@@ -53,10 +53,11 @@ function drawdownProbe(): UsageProbe {
 // reconcile classifies its credit/overage signal off that ref.
 function adaptersWithAuthRef(authRef: string) {
   return {
+    ...defaultLoopInput().input.adapters,
     planner: makePlanner([buildPlan([{ title: "T1", intent: "Touch README", behaviorIds: ["B1"] }])]),
     writer: { ...makeWriter(["diff --git README\n+ok\n"]), authRef },
-    checker: makeChecker([passingCheck]),
-    auditor: makeAuditor([passingAudit]),
+    checker: makeChecker([completeCheck]),
+    auditor: makeAuditor([cleanAudit]),
   };
 }
 

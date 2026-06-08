@@ -21,14 +21,14 @@ describe("typed event store", () => {
         runId: "run_1",
         taskId: "task_1",
         subtaskIndex: 0,
-        passed: true,
+        complete: true,
         reasoning: "criteria satisfied",
-        behaviorIdsPassed: ["B1"],
         behaviorIdsFailed: [],
+        findings: [],
       },
     });
     expect(store.events).toHaveLength(2);
-    expect(store.events[1]?.payload).toMatchObject({ passed: true, behaviorIdsPassed: ["B1"] });
+    expect(store.events[1]?.payload).toMatchObject({ complete: true, findings: [] });
   });
 
   it("rejects payloads that violate the schema", async () => {

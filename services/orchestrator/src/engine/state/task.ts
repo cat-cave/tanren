@@ -11,6 +11,10 @@ export const TaskKind = z.enum([
   "merge",
   "demo",
   "forge",
+  // SPEC-LOOP REDESIGN (docs/roadmap/spec-loop-redesign.md): the new per-spec stages —
+  // triage (findings → root-cause work items) + convergence (progress/stall read).
+  "triage",
+  "convergence",
 ]);
 export type TaskKind = z.infer<typeof TaskKind>;
 

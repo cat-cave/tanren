@@ -1,0 +1,309 @@
+// The SPEC-LOOP REDESIGN stages (docs/roadmap/spec-loop-redesign.md): DEMO-RUN,
+// TRIAGE, and CONVERGENCE. Each owns a single answerer invocation (task row, event
+// append, cost record) + maps the answer onto the deterministic loop decision. Split
+// out of subtaskLoop.ts so every module stays under the 500-line architecture cap.
+//
+// All three answerers are READ-ONLY + strict-JSON-schema: a malformed answer throws
+// AnswererSchemaValidationError (loud), exactly like the checker/auditor. The cost +
+// event + task-row accounting is preserved at every stage.
+import { randomUUID } from "node:crypto";
+import type pg from "pg";
+import type { RunStateWriter } from "../contracts/runStateWriter.js";
+import {
+  answererOutputSchemaFor,
+  ConvergenceAnswer,
+  DemoRunAnswer,
+  normalizeFinding,
+  TriageAnswer,
+} from "../answerers/schemas/index.js";
+import type { Finding } from "../contracts/findings.js";
+import type { AuditPostureConfig } from "../config/shared.js";
+import { emitStageTiming } from "../observability/index.js";
+import type { AnswererAdapter } from "../providers/types.js";
+import {
+  applyConvergencePolicy,
+  type ConvergenceDecision,
+  type ConvergenceState,
+  routeTriageItems,
+  type RoutedWorkItem,
+  summarizeTriageRouting,
+  type TriageRoutingResult,
+} from "./loopPolicy.js";
+import { buildConvergencePrompt, buildDemoRunPrompt, buildTriagePrompt } from "./loopStagePrompts.js";
+import { recordAnswererCost, secondsSince, type SubtaskCostContext } from "./subtaskCost.js";
+import { insertChildTask, markTaskDone } from "./subtaskTasks.js";
+import type { StageAppendEvent } from "./subtaskStages.js";
+import { gateTriagedSpecs, type TriageSpecValidator } from "./loopFindings.js";
+
+type LoopQueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
+
+interface SpecContext {
+  specTitle: string;
+  specDescription: string;
+  acceptanceCriteria: ReadonlyArray<string>;
+  baselineSha: string;
+}
+
+interface StageBase {
+  pool: LoopQueryClient;
+  writer?: RunStateWriter;
+  costCtx: SubtaskCostContext;
+  runId: string;
+  workspacePath: string;
+  plannerTaskId: string;
+  timeoutMs: number;
+  appendEvent: StageAppendEvent;
+}
+
+// ---- DEMO-RUN (optional) --------------------------------------------------
+
+export interface DemoRunStageInput extends StageBase, SpecContext {
+  adapter: AnswererAdapter<DemoRunAnswer>;
+}
+
+/**
+ * Run the OPTIONAL demo-run stage: exercise the promised user-flow and emit findings
+ * (explicit P0–P3) for what did not work. Returns the findings (normalized to the
+ * frozen `Finding` currency) so the loop merges them with the auditor's into one
+ * triage input. The caller only invokes this when the project enabled the slot.
+ */
+export async function runDemoRunStage(args: DemoRunStageInput): Promise<{ findings: Finding[]; demoTaskId: string }> {
+  const demoTaskId = `task_${randomUUID()}`;
+  await insertChildTask(
+    args.pool,
+    {
+      taskId: demoTaskId,
+      runId: args.runId,
+      kind: "demo",
+      title: "demo-run spec",
+      parentTaskId: args.plannerTaskId,
+      agentKind: "answerer",
+      cli: args.adapter.cli,
+      model: null,
+    },
+    args.writer,
+  );
+  await args.appendEvent("task.started", { taskKind: "demo" }, demoTaskId);
+  await args.appendEvent("demoRun.started", { taskKind: "demo" }, demoTaskId);
+  const outputSchema = answererOutputSchemaFor("demoRun", DemoRunAnswer);
+  const prompt = buildDemoRunPrompt({
+    specTitle: args.specTitle,
+    specDescription: args.specDescription,
+    acceptanceCriteria: args.acceptanceCriteria,
+    baselineSha: args.baselineSha,
+  });
+  const startedAt = Date.now();
+  const verdict = await args.adapter.runAnswerer({
+    prompt,
+    timeoutMs: args.timeoutMs,
+    workspace: args.workspacePath,
+    outputSchema,
+  });
+  const runtimeSeconds = secondsSince(startedAt);
+  emitStageTiming("demo", Date.now() - startedAt, { runId: args.runId });
+  const findings = verdict.findings.map((f) => normalizeFinding(f));
+  await args.appendEvent("demoRun.verdict", { runId: args.runId, summary: verdict.summary, findings }, demoTaskId);
+  await recordAnswererCost({
+    ctx: args.costCtx,
+    adapter: args.adapter,
+    role: "demoRun",
+    taskId: demoTaskId,
+    model: "tanren-demo-run",
+    runtimeSeconds,
+    rawUsage: { role: "demoRun" },
+  });
+  await markTaskDone(args.pool, demoTaskId, "passed", args.writer);
+  await args.appendEvent("task.completed", { taskKind: "demo" }, demoTaskId);
+  return { findings, demoTaskId };
+}
+
+// ---- TRIAGE ---------------------------------------------------------------
+
+export interface TriageStageInput extends StageBase {
+  adapter: AnswererAdapter<TriageAnswer>;
+  specTitle: string;
+  specDescription: string;
+  baselineSha: string;
+  // ALL findings to triage (spec-gate CI-as-P0 + auditor + demo).
+  findings: ReadonlyArray<Finding>;
+  posture: AuditPostureConfig;
+  // WORKSTREAM 1 ↔ 2 SEAM — the spec-quality gate for `kind: spec` items. When wired,
+  // every work item routed to a NEW DAG spec is validated against the spec-quality
+  // contract BEFORE it leaves triage; a persistently-invalid spec raises
+  // `PersistentlyInvalidSpecError` (loud needs_attention). Absent ⇒ inert.
+  specValidator?: TriageSpecValidator;
+}
+
+export interface TriageStageResult {
+  routing: TriageRoutingResult;
+  triageTaskId: string;
+}
+
+/**
+ * Run the TRIAGE stage: dedup the findings to root-cause work items, then route each
+ * DETERMINISTICALLY (by severity + the agent `kind` hint + the project posture) to a
+ * task-here or a new DAG spec. Returns the routing summary — `outcome: 'passed'` when
+ * EVERY item became a new spec (the triage→passed arrow), `'kept'` when at least one
+ * routed to a task in this spec (re-enter the writer loop after convergence).
+ */
+export async function runTriageStage(args: TriageStageInput): Promise<TriageStageResult> {
+  const triageTaskId = `task_${randomUUID()}`;
+  await insertChildTask(
+    args.pool,
+    {
+      taskId: triageTaskId,
+      runId: args.runId,
+      kind: "triage",
+      title: "triage findings",
+      parentTaskId: args.plannerTaskId,
+      agentKind: "answerer",
+      cli: args.adapter.cli,
+      model: null,
+    },
+    args.writer,
+  );
+  await args.appendEvent("task.started", { taskKind: "triage" }, triageTaskId);
+  await args.appendEvent("triage.started", { taskKind: "triage" }, triageTaskId);
+  const outputSchema = answererOutputSchemaFor("triage", TriageAnswer);
+  const prompt = buildTriagePrompt({
+    specTitle: args.specTitle,
+    specDescription: args.specDescription,
+    findings: args.findings,
+    baselineSha: args.baselineSha,
+  });
+  const startedAt = Date.now();
+  const answer = await args.adapter.runAnswerer({
+    prompt,
+    timeoutMs: args.timeoutMs,
+    workspace: args.workspacePath,
+    outputSchema,
+  });
+  const runtimeSeconds = secondsSince(startedAt);
+  emitStageTiming("audit", Date.now() - startedAt, { runId: args.runId });
+  const routed: RoutedWorkItem[] = routeTriageItems(answer.workItems, args.posture);
+  const routing = summarizeTriageRouting(routed);
+  // WORKSTREAM 1 ↔ 2 SEAM — gate every NEW-spec routed item against the spec-quality
+  // contract before it materializes. A persistently-invalid spec throws loud
+  // (PersistentlyInvalidSpecError → the run halts → needs_attention), never a silent
+  // commit. Inert when no validator is wired (unit paths).
+  await gateTriagedSpecs(routing.newSpecs, args.specValidator);
+  await args.appendEvent(
+    "triage.completed",
+    {
+      runId: args.runId,
+      taskId: triageTaskId,
+      outcome: routing.outcome,
+      items: routed.map((r) => ({
+        id: r.item.id,
+        kind: r.item.kind,
+        route: r.route,
+        severity: r.item.severity,
+        title: r.item.title,
+        findingIds: [...r.item.findingIds],
+      })),
+    },
+    triageTaskId,
+  );
+  await recordAnswererCost({
+    ctx: args.costCtx,
+    adapter: args.adapter,
+    role: "triage",
+    taskId: triageTaskId,
+    model: "tanren-triage",
+    runtimeSeconds,
+    rawUsage: { role: "triage" },
+  });
+  await markTaskDone(args.pool, triageTaskId, "passed", args.writer);
+  await args.appendEvent("task.completed", { taskKind: "triage" }, triageTaskId);
+  return { routing, triageTaskId };
+}
+
+// ---- CONVERGENCE ----------------------------------------------------------
+
+export interface ConvergenceStageInput extends StageBase {
+  adapter: AnswererAdapter<ConvergenceAnswer>;
+  specTitle: string;
+  baselineSha: string;
+  loopIndex: number;
+  currentFindings: ReadonlyArray<Finding>;
+  priorFindings: ReadonlyArray<Finding>;
+  state: ConvergenceState;
+  maxConsecutiveStalls: number;
+}
+
+export interface ConvergenceStageResult {
+  decision: ConvergenceDecision;
+  state: ConvergenceState;
+  reasoning: string;
+  convergenceTaskId: string;
+}
+
+/**
+ * Run the CONVERGENCE stage on the loopback when work is kept in-spec. The answerer
+ * reads progress/stall/velocity from the finding-delta + diff; the deterministic
+ * policy (`applyConvergencePolicy`) turns that into the loop decision + the next
+ * consecutive-stall state (the SOLE loop bound — NOT a retry counter). `halt` ⇒ the
+ * caller finalizes the run `convergence_stalled`.
+ */
+export async function runConvergenceStage(args: ConvergenceStageInput): Promise<ConvergenceStageResult> {
+  const convergenceTaskId = `task_${randomUUID()}`;
+  await insertChildTask(
+    args.pool,
+    {
+      taskId: convergenceTaskId,
+      runId: args.runId,
+      kind: "convergence",
+      title: "convergence check",
+      parentTaskId: args.plannerTaskId,
+      agentKind: "answerer",
+      cli: args.adapter.cli,
+      model: null,
+    },
+    args.writer,
+  );
+  await args.appendEvent("task.started", { taskKind: "convergence" }, convergenceTaskId);
+  await args.appendEvent("convergence.started", { taskKind: "convergence" }, convergenceTaskId);
+  const outputSchema = answererOutputSchemaFor("convergence", ConvergenceAnswer);
+  const prompt = buildConvergencePrompt({
+    specTitle: args.specTitle,
+    currentFindings: args.currentFindings,
+    priorFindings: args.priorFindings,
+    baselineSha: args.baselineSha,
+    loopIndex: args.loopIndex,
+  });
+  const startedAt = Date.now();
+  const answer = await args.adapter.runAnswerer({
+    prompt,
+    timeoutMs: args.timeoutMs,
+    workspace: args.workspacePath,
+    outputSchema,
+  });
+  const runtimeSeconds = secondsSince(startedAt);
+  emitStageTiming("audit", Date.now() - startedAt, { runId: args.runId });
+  const { state, decision } = applyConvergencePolicy(answer.assessment, args.state, args.maxConsecutiveStalls);
+  await args.appendEvent(
+    "convergence.assessed",
+    {
+      runId: args.runId,
+      taskId: convergenceTaskId,
+      assessment: answer.assessment,
+      decision,
+      consecutiveStalls: state.consecutiveStalls,
+      maxConsecutiveStalls: args.maxConsecutiveStalls,
+      reasoning: answer.reasoning,
+    },
+    convergenceTaskId,
+  );
+  await recordAnswererCost({
+    ctx: args.costCtx,
+    adapter: args.adapter,
+    role: "convergence",
+    taskId: convergenceTaskId,
+    model: "tanren-convergence",
+    runtimeSeconds,
+    rawUsage: { role: "convergence" },
+  });
+  await markTaskDone(args.pool, convergenceTaskId, "passed", args.writer);
+  await args.appendEvent("task.completed", { taskKind: "convergence" }, convergenceTaskId);
+  return { decision, state, reasoning: answer.reasoning, convergenceTaskId };
+}

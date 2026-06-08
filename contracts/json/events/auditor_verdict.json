@@ -38,36 +38,13 @@
       },
       "type": "array"
     },
-    "outstandingBehaviorIds": {
-      "items": {
-        "type": "string"
-      },
-      "type": "array"
-    },
-    "passed": {
-      "type": "boolean"
-    },
-    "reasoning": {
-      "type": "string"
-    },
-    "recommendedAction": {
-      "enum": [
-        "pass",
-        "loop_to_planner",
-        "halt"
-      ],
-      "type": "string"
-    },
     "runId": {
       "type": "string"
     }
   },
   "required": [
     "runId",
-    "passed",
-    "reasoning",
-    "outstandingBehaviorIds",
-    "recommendedAction"
+    "findings"
   ],
   "type": "object",
   "x-tanren-schema-id": "tanren.event.auditor.verdict"

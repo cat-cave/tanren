@@ -25,7 +25,7 @@ type LoopQueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 // is byte-identical (the server runs the SAME fixed SQL). Absent (the default),
 // the in-process org-scoped write runs as before.
 
-export type ChildTaskKind = "write" | "check" | "audit";
+export type ChildTaskKind = "write" | "check" | "audit" | "triage" | "convergence" | "demo";
 
 export interface ChildTaskInsert {
   taskId: string;

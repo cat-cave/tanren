@@ -1,10 +1,10 @@
-// Apex forward-look strand: an auditor SCHEMA-PARSE MISS must be RECOVERABLE, not a
-// permanent run-`failed` dead-end. When the auditor's model emits output that fails the
-// AuditAnswer schema parse, `runAuditorStage` surfaces it as a loop-to-planner rejection
-// (routed through the SAME bounded planner-rework path) rather than letting the throw
-// escape to the workflow catch-all that lands the run `failed`. Fail-closed is preserved:
-// no `auditor.verdict` is written, so the land gate's synthetic-P0 still blocks any merge.
-// A NON-schema error (real infra/timeout) still propagates — only the schema miss loops.
+// An auditor SCHEMA-PARSE MISS must be RECOVERABLE, not a permanent run-`failed`
+// dead-end. SPEC-LOOP REDESIGN: when the auditor's model emits output that fails the
+// AuditAnswer schema parse, `runAuditorStage` surfaces it as a synthetic P0 FINDING
+// (the loop's triage routes a fix-in-spec task) rather than letting the throw escape to
+// the workflow catch-all that lands the run `failed`. Fail-closed is preserved: no
+// `auditor.verdict` is written, so the land gate's synthetic-P0 still blocks any merge.
+// A NON-schema error (real infra/timeout) still propagates — only the schema miss recovers.
 
 import { describe, expect, it } from "vitest";
 import type { EventName, EventPayload } from "../src/engine/events/index.js";
@@ -77,24 +77,20 @@ function throwingAuditor(error: unknown): AnswererAdapter<AuditAnswer> {
 }
 
 describe("runAuditorStage — auditor schema-miss recovery", () => {
-  it("RECOVERS from a schema-parse miss: loops back to the planner, NEVER dead-ends the run", async () => {
+  it("RECOVERS from a schema-parse miss: returns a synthetic P0 finding, NEVER dead-ends the run", async () => {
     const h = new AuditHarness();
     const adapter = throwingAuditor(
       new AnswererSchemaValidationError("AuditAnswer", "findings: expected array, received undefined"),
     );
-    const { decision, auditorTaskId } = await runAuditorStage(auditorArgs(h, adapter));
+    const { findings, auditorTaskId } = await runAuditorStage(auditorArgs(h, adapter));
 
-    // NOT a throw / NOT a halt: a loop-to-planner rejection (recoverable rework).
-    expect(decision.kind).toBe("reject");
-    expect(decision).toMatchObject({ action: "loop_to_planner", outstandingBehaviorIds: [] });
+    // NOT a throw: a synthetic P0 FINDING the loop's triage routes to a fix-in-spec task.
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({ severity: "P0", id: "auditor-schema-miss" });
     // Fail-closed preserved: NO auditor.verdict was written (the durable record stays
     // un-audited, so the land gate's synthetic-P0 still blocks the merge).
     expect(h.names()).not.toContain("auditor.verdict");
-    // The miss surfaces as a diagnostic auditor.rejected (loop_to_planner) + the audit
-    // task is marked failed with a distinct kind (not dangling, not marked passed).
-    const rejected = h.find("auditor.rejected")!;
-    expect(rejected.payload.recommendedAction).toBe("loop_to_planner");
-    expect(rejected.payload.outstandingBehaviorIds).toEqual([]);
+    // The audit task is marked failed with a distinct kind (not dangling, not passed).
     expect(h.taskOutcomes.get(auditorTaskId)).toBe("auditor_schema_invalid");
     // The stage still closes the audit task cleanly (the "audit" kind).
     expect(h.find("task.completed")!.payload.taskKind).toBe("audit");

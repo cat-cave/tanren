@@ -7,7 +7,14 @@
 // usage-limit mid-loop is caught as window_exhausted, not a failure (PROJECT_BRIEF §4.3).
 import type pg from "pg";
 import type { CiWhen } from "../ci/index.js";
-import type { EscapeHatches, GovernancePosture, RoutingChainEntry, RoutingTable } from "../config/shared.js";
+import type {
+  AuditPostureConfig,
+  ConvergencePolicyConfig,
+  EscapeHatches,
+  GovernancePosture,
+  RoutingChainEntry,
+  RoutingTable,
+} from "../config/shared.js";
 import type { OrgGithubAppInstallation } from "../config/orgConfig.js";
 import type { Allocator, ReleaseReason, RunnerHandle } from "../contracts/allocator.js";
 import type { BudgetGate } from "../contracts/dagWalker.js";
@@ -19,6 +26,7 @@ import { codexHomeForRun } from "../credentials/codexMaterializer.js";
 import type { EventName, EventPayload } from "../events/index.js";
 import { type EventStore, PgEventStore } from "../eventStore.js";
 import type { ReviewAnswer } from "../answerers/schemas/index.js";
+import type { SpecQualityAnswerer } from "../forge/specQuality/index.js";
 import type { VcsProvider } from "../contracts/vcsProvider.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
 import type { AnswererAdapter } from "../providers/types.js";
@@ -31,6 +39,7 @@ import {
   appTokenSeam,
   buildDefaultGate,
   buildManagedCapturerForRun,
+  loopConfigSeam,
   nativeQueueSeam,
   resolveConflictResolverHook,
   resolveRunAdaptersWithBudgetPreflight,
@@ -98,6 +107,12 @@ export interface PlannerRunContext {
   endpointBaseUrl?: string;
   // Governance posture (run worker): drives the gate's advisory policy (`lenient` ⇒ lint/typecheck advisory; absent ⇒ strict).
   governancePosture?: GovernancePosture;
+  // SPEC-LOOP REDESIGN (docs/roadmap/spec-loop-redesign.md): the per-project audit
+  // posture (triage routing of P1–P3 → tasks-here vs new specs) + the convergence
+  // policy (the SOLE loop bound: maxConsecutiveStalls; demoRunEnabled). Absent on unit
+  // paths ⇒ the loop's balanced defaults (DEFAULT_AUDIT_POSTURE / DEFAULT_CONVERGENCE_POLICY).
+  auditPosture?: AuditPostureConfig;
+  convergencePolicy?: ConvergencePolicyConfig;
   // AUDIT-EVIDENCE BASELINE: governance policy version (project config version), stamped onto the `gate.verdict` roll-up. Absent on unit paths with no config.
   policyVersion?: number;
   // GREENFIELD MARKER (ProjectConfigV1.greenfield): drives buildDefaultGate's in-loop deps-ensure MODE — greenfield ⇒ NON-FROZEN install; absent/false ⇒ FROZEN brownfield.
@@ -176,6 +191,8 @@ export interface RunPlannerLoopInput {
   // Test seams. Omitted in production → real Codex adapters + SSH usage probe.
   buildAdapters?: (ctx: PlannerRunAdapterContext) => SubtaskLoopAdapters;
   buildUsageProbe?: (ctx: PlannerRunAdapterContext) => UsageProbe | undefined;
+  // WS1↔WS2 seam. Omitted → spec-quality validator from project routing; tests inject.
+  buildSpecValidator?: (ctx: PlannerRunAdapterContext) => SpecQualityAnswerer;
   // BUDGET-SAFETY (M6): the budget-gate seam the run-setup ceiling preflight resolves the
   // configured ceiling through. Defaults to PgBudgetGate over `pool`; tests inject a fake.
   budgetGate?: BudgetGate;
@@ -291,8 +308,10 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
       target: allocation.target,
       codexHome: codexHomeForRun(context.runId),
     };
-    // Build adapters + usage probe AND run the BUDGET-SAFETY (M6) ceiling preflight (fail closed on an unreachable ceiling).
-    const { adapters, usageProbe } = await resolveRunAdaptersWithBudgetPreflight(input, adapterCtx, appendEvent);
+    // Build adapters + usage probe + the spec-quality validator AND run the
+    // BUDGET-SAFETY (M6) ceiling preflight (fail closed on an unreachable ceiling).
+    const adapterResult = await resolveRunAdaptersWithBudgetPreflight(input, adapterCtx, appendEvent);
+    const { adapters, usageProbe, specValidator } = adapterResult;
     // MANAGED run: the per-call real-`usage.cost` capturer (undefined on BYOK). See its builder.
     const captureRealProviderCost = await buildManagedCapturerForRun(input);
     // the deterministic gate runs on the just-bootstrapped workspace.
@@ -336,11 +355,11 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
         escapeHatches: input.escapeHatches,
         timeoutMs: input.timeoutMs,
         usageProbe,
-        // cost PR-C: the CONFIGURED per-credential credit→USD rate (see context field).
-        ...(context.creditUsdRate !== undefined && { creditUsdRate: context.creditUsdRate }),
         runGate,
         seedRejections: [...seedRejections],
         ...(captureRealProviderCost !== undefined && { captureRealProviderCost }),
+        // triage/convergence knobs + the WS1↔WS2 spec-quality validator (loopConfigSeam).
+        ...loopConfigSeam(context, specValidator),
       });
 
       if (outcome.kind !== "passed") {

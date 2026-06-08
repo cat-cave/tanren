@@ -35,6 +35,11 @@ export {
 
 export * from "./tools/index.js";
 
+// spec-quality contract (workstream 1): the reusable prompt + the spec-validation
+// answerer + the `validateEmittedSpecs` gate that every spec-emitter runs before a
+// spec lands. WS2's TRIAGE also imports from here.
+export * from "./specQuality/index.js";
+
 // thick-Forge LLM conversation backend (the real-LLM answerer for
 // operator-driven questions; the templated v0 narration is the fallback).
 export * from "./conversation/index.js";

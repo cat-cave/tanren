@@ -273,6 +273,7 @@
                 "halted",
                 "escape_hatch_hit",
                 "retry_budget_exhausted",
+                "convergence_stalled",
                 "window_exhausted",
                 "cancelled",
                 "failed"
@@ -424,7 +425,9 @@
               "review",
               "merge",
               "demo",
-              "forge"
+              "forge",
+              "triage",
+              "convergence"
             ],
             "type": "string"
           },

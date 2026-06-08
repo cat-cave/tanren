@@ -2,10 +2,15 @@ import type {
   AuditAnswer,
   CheckAnswer,
   ConflictAnswer,
+  ConvergenceAnswer,
   DemoAnswer,
+  DemoRunAnswer,
   PlanAnswer,
   ReviewAnswer,
+  TriageAnswer,
 } from "../answerers/schemas/index.js";
+import type { SpecQualityAnswer } from "../answerers/schemas/specQuality.js";
+import { type SpecQualityAnswerer, wrapProviderSpecQualityAnswerer } from "../forge/specQuality/index.js";
 import type { RoutingChainEntry, RoutingTable } from "../config/shared.js";
 import type { RunnerHandle } from "../contracts/allocator.js";
 import type { SecretStore } from "../contracts/secretStore.js";
@@ -157,6 +162,10 @@ export interface RoutingDrivenAdapters {
   writer: WriterAdapter;
   checker: AnswererAdapter<CheckAnswer>;
   auditor: AnswererAdapter<AuditAnswer>;
+  // SPEC-LOOP REDESIGN stages (ride the `audit` chain head).
+  triage: AnswererAdapter<TriageAnswer>;
+  convergence: AnswererAdapter<ConvergenceAnswer>;
+  demoRun: AnswererAdapter<DemoRunAnswer>;
 }
 
 export class EmptyRoutingChainError extends Error {
@@ -177,11 +186,18 @@ export function buildAdaptersFromRouting(
   deps: AdapterSelectorDependencies,
   routing: RoutingTable,
 ): RoutingDrivenAdapters {
+  // SPEC-LOOP REDESIGN: triage/convergence/demoRun are answerers with no dedicated
+  // routing chain (like review/conflict) — they ride the `audit` chain head, the same
+  // judge-shaped role, with NO schema/DB migration.
+  const auditHead = chainHead(routing, "audit");
   return {
     planner: buildAnswererAdapter<PlanAnswer>(deps, chainHead(routing, "plan"), "planner"),
     writer: buildWriterAdapter(deps, chainHead(routing, "write")),
     checker: buildAnswererAdapter<CheckAnswer>(deps, chainHead(routing, "check"), "checker"),
-    auditor: buildAnswererAdapter<AuditAnswer>(deps, chainHead(routing, "audit"), "auditor"),
+    auditor: buildAnswererAdapter<AuditAnswer>(deps, auditHead, "auditor"),
+    triage: buildAnswererAdapter<TriageAnswer>(deps, auditHead, "triage"),
+    convergence: buildAnswererAdapter<ConvergenceAnswer>(deps, auditHead, "convergence"),
+    demoRun: buildAnswererAdapter<DemoRunAnswer>(deps, auditHead, "demoRun"),
   };
 }
 
@@ -204,6 +220,20 @@ export function buildSimulatedReviewerAdapter(
   routing: RoutingTable,
 ): AnswererAdapter<ReviewAnswer> {
   return buildAnswererAdapter<ReviewAnswer>(deps, chainHead(routing, "audit"), "review");
+}
+
+// Resolves the spec-quality VALIDATOR (workstream 1 of the spec-loop redesign) — the
+// read-only answerer that gates every spec-emitter's output (incl. the loop's TRIAGE)
+// against the four-part spec-quality contract before it lands in the DAG. Like the
+// reviewer/conflict answerers it has no dedicated routing chain; it is a judge over
+// authored spec content, so it rides the `audit` chain head with NO schema/DB
+// migration. Wrapped so a malformed answer THROWS (loud, never a default pass).
+export function buildSpecQualityValidator(
+  deps: AdapterSelectorDependencies,
+  routing: RoutingTable,
+): SpecQualityAnswerer {
+  const adapter = buildAnswererAdapter<SpecQualityAnswer>(deps, chainHead(routing, "audit"), "specQuality");
+  return wrapProviderSpecQualityAnswerer(adapter);
 }
 
 // Resolves the intent-preserving conflict-resolution Answerer (

@@ -70,10 +70,10 @@ function selfInspectionBlock(baselineSha: string): string[] {
 
 export function buildCheckerPrompt(input: CheckerPromptInput): string {
   return [
-    "You are the Tanren Checker Answerer. Your ONLY job is to judge intent",
-    "satisfaction: does the writer's change fulfil the subtask intent and each",
-    "explicit acceptance criterion in the spec? Judge by reading the change and",
-    "the spec — nothing else.",
+    "You are the Tanren Checker Answerer. Your ONLY job is to judge COMPLETENESS for",
+    "downstream tasks: does the writer's change deliver the subtask intent and each",
+    "explicit acceptance criterion that LATER tasks build on? Judge by reading the",
+    "change and the spec — nothing else. Emit a completeness finding per incompleteness.",
     "",
     ...selfInspectionBlock(input.baselineSha),
     "",
@@ -93,8 +93,8 @@ export function buildCheckerPrompt(input: CheckerPromptInput): string {
     "  'the test suite passes', 'the build succeeds', 'CI is green', 'lint is",
     "  clean') is owned by the deterministic gate, NOT by you. Treat such a",
     "  criterion as DEFERRED — note it in `reasoning` as gate-owned, and do NOT",
-    "  let it block passed=true and do NOT list it as failed. You verify only that",
-    "  the diff implements the behavior such a test would exercise.",
+    "  emit a finding for it. You verify only that the diff implements the behavior",
+    "  such a test would exercise.",
     "",
     "Return only the structured JSON required by the provided schema.",
     "",

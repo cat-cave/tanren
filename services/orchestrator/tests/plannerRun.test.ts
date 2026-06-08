@@ -16,16 +16,17 @@ import {
   buildPlan,
   directMergeConfig,
   exhaustedWindow,
-  failingCheck,
+  incompleteCheck,
   fakeProbe,
   healthyWindow,
+  loopStageAdapters,
   makeAuditor,
   makeChecker,
   makePlanner,
   makeWriter,
   noopMerge,
-  passingAudit,
-  passingCheck,
+  cleanAudit,
+  completeCheck,
   passingGitHub,
   runPlannerLoopScoped,
   ScriptedGitHubHttp,
@@ -54,7 +55,7 @@ describe("runPlannerLoopWorkflow", () => {
       timeoutMs: 100,
       maxCiPolls: 1,
       sleep: async () => {},
-      buildAdapters: () => twoSubtaskAdapters([passingCheck, passingCheck]),
+      buildAdapters: () => twoSubtaskAdapters([completeCheck, completeCheck]),
       buildUsageProbe: () => fakeProbe(healthyWindow(), accounting(0.5)),
       reviewProbe: approvingReview(),
       mergeProbe: noopMerge(),
@@ -79,22 +80,22 @@ describe("runPlannerLoopWorkflow", () => {
     expect(JSON.stringify(events.events)).not.toContain("ghp_secretToken");
   });
 
-  it("re-plans on a checker rejection and still completes (medium-tier loop shape)", async () => {
+  it("re-iterates the writer on a checker incompleteness and still completes (medium-tier loop shape)", async () => {
     const { ctx, pool, events, secrets, allocator, ssh } = await setup(directMergeConfig());
+    // SPEC-LOOP REDESIGN: a checker incompleteness loops back to the WRITER (not the
+    // planner). The first subtask's checker reports incomplete once, then complete; the
+    // writer re-iterates IN-TASK. No planner re-plan is triggered.
     const adapters = {
       planner: makePlanner([
         buildPlan([
           { title: "T1", intent: "ok", behaviorIds: [] },
           { title: "T2", intent: "fail", behaviorIds: [] },
         ]),
-        buildPlan([
-          { title: "T1b", intent: "ok again", behaviorIds: [] },
-          { title: "T2b", intent: "fail again", behaviorIds: [] },
-        ]),
       ]) as AnswererAdapter<PlanAnswer>,
-      writer: makeWriter(["d1\n", "d2\n", "d3\n", "d4\n"]),
-      checker: makeChecker([failingCheck, passingCheck, passingCheck]) as AnswererAdapter<CheckAnswer>,
-      auditor: makeAuditor([passingAudit]) as AnswererAdapter<AuditAnswer>,
+      writer: makeWriter(["d1\n", "d2\n", "d3\n"]),
+      checker: makeChecker([incompleteCheck, completeCheck, completeCheck]) as AnswererAdapter<CheckAnswer>,
+      auditor: makeAuditor([cleanAudit]) as AnswererAdapter<AuditAnswer>,
+      ...loopStageAdapters(),
     };
 
     const result = await runPlannerLoopScoped({
@@ -120,7 +121,8 @@ describe("runPlannerLoopWorkflow", () => {
     });
 
     expect(result.outcome.kind).toBe("passed");
-    expect(events.events.filter((event) => event.eventType === "planner.rerequested")).toHaveLength(1);
+    // The checker incompleteness re-ran the WRITER in-task — never re-planned.
+    expect(events.events.filter((event) => event.eventType === "planner.rerequested")).toHaveLength(0);
     expect(pool.runStatus.outcome).toBe("ok");
   });
 
@@ -143,7 +145,7 @@ describe("runPlannerLoopWorkflow", () => {
         maxRetriesPerTransientFailure: 3,
       },
       timeoutMs: 100,
-      buildAdapters: () => twoSubtaskAdapters([passingCheck, passingCheck]),
+      buildAdapters: () => twoSubtaskAdapters([completeCheck, completeCheck]),
       buildUsageProbe: () => fakeProbe(exhaustedWindow(), accounting(null)),
     });
 
@@ -181,7 +183,7 @@ describe("runPlannerLoopWorkflow", () => {
       runBootstrap: async (input) => {
         bootstrapCalls.push(input.command ?? "<default>");
       },
-      buildAdapters: () => twoSubtaskAdapters([passingCheck, passingCheck]),
+      buildAdapters: () => twoSubtaskAdapters([completeCheck, completeCheck]),
       buildUsageProbe: () => fakeProbe(healthyWindow(), accounting(0.5)),
       reviewProbe: approvingReview(),
       mergeProbe: noopMerge(),
@@ -221,7 +223,7 @@ describe("runPlannerLoopWorkflow", () => {
         order.push("commit-bootstrap");
         return "b".repeat(40);
       },
-      buildAdapters: () => twoSubtaskAdapters([passingCheck, passingCheck]),
+      buildAdapters: () => twoSubtaskAdapters([completeCheck, completeCheck]),
       buildUsageProbe: () => fakeProbe(healthyWindow(), accounting(0.5)),
       reviewProbe: approvingReview(),
       mergeProbe: noopMerge(),
@@ -282,8 +284,9 @@ describe("runPlannerLoopWorkflow", () => {
       buildAdapters: () => ({
         planner: makePlanner([buildPlan([{ title: "T1", intent: "ok", behaviorIds: [] }])]) as never,
         writer: recordingWriter,
-        checker: makeChecker([passingCheck]) as never,
-        auditor: makeAuditor([passingAudit]) as never,
+        checker: makeChecker([completeCheck]) as never,
+        auditor: makeAuditor([cleanAudit]) as never,
+        ...loopStageAdapters(),
       }),
       buildUsageProbe: () => fakeProbe(healthyWindow(), accounting(0.5)),
       reviewProbe: approvingReview(),
@@ -341,7 +344,7 @@ describe("runPlannerLoopWorkflow", () => {
       runBootstrap: async (input) => {
         bootstrapCalls.push(input.command);
       },
-      buildAdapters: () => twoSubtaskAdapters([passingCheck, passingCheck]),
+      buildAdapters: () => twoSubtaskAdapters([completeCheck, completeCheck]),
       buildUsageProbe: () => fakeProbe(healthyWindow(), accounting(0.5)),
       reviewProbe: approvingReview(),
       mergeProbe: noopMerge(),
@@ -374,7 +377,7 @@ describe("runPlannerLoopWorkflow", () => {
       runBootstrap: async (input) => {
         bootstrapCalls.push(input.command);
       },
-      buildAdapters: () => twoSubtaskAdapters([passingCheck, passingCheck]),
+      buildAdapters: () => twoSubtaskAdapters([completeCheck, completeCheck]),
       buildUsageProbe: () => fakeProbe(healthyWindow(), accounting(0.5)),
       reviewProbe: approvingReview(),
       mergeProbe: noopMerge(),
@@ -405,7 +408,7 @@ describe("runPlannerLoopWorkflow", () => {
         runBootstrap: async (input) => {
           throw new WorkspaceBootstrapError(input.workspacePath, "pnpm install", 1, "vitest: not found", false);
         },
-        buildAdapters: () => twoSubtaskAdapters([passingCheck, passingCheck]),
+        buildAdapters: () => twoSubtaskAdapters([completeCheck, completeCheck]),
         buildUsageProbe: () => fakeProbe(healthyWindow(), accounting(null)),
       }),
     ).rejects.toBeInstanceOf(WorkspaceBootstrapError);
@@ -447,8 +450,9 @@ describe("runPlannerLoopWorkflow", () => {
         buildAdapters: () => ({
           planner: throwingPlanner,
           writer: makeWriter(["d\n"]),
-          checker: makeChecker([passingCheck]) as AnswererAdapter<CheckAnswer>,
-          auditor: makeAuditor([passingAudit]) as AnswererAdapter<AuditAnswer>,
+          checker: makeChecker([completeCheck]) as AnswererAdapter<CheckAnswer>,
+          auditor: makeAuditor([cleanAudit]) as AnswererAdapter<AuditAnswer>,
+          ...loopStageAdapters(),
         }),
         buildUsageProbe: () => fakeProbe(healthyWindow(), accounting(null)),
       }),

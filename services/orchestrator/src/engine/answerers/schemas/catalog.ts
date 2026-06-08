@@ -8,12 +8,25 @@ import type { ZodType } from "zod";
 import { AUDIT_ANSWER_SCHEMA_ID, AuditAnswer } from "./audit.js";
 import { CHECK_ANSWER_SCHEMA_ID, CheckAnswer } from "./check.js";
 import { CONFLICT_ANSWER_SCHEMA_ID, ConflictAnswer } from "./conflict.js";
+import { CONVERGENCE_ANSWER_SCHEMA_ID, ConvergenceAnswer } from "./convergence.js";
 import { DEMO_ANSWER_SCHEMA_ID, DemoAnswer } from "./demo.js";
+import { DEMO_RUN_ANSWER_SCHEMA_ID, DemoRunAnswer } from "./demoRun.js";
 import { FORGE_ANSWER_SCHEMA_ID, ForgeAnswer } from "./forge.js";
 import { PLAN_ANSWER_SCHEMA_ID, PlanAnswer } from "./plan.js";
 import { REVIEW_ANSWER_SCHEMA_ID, ReviewAnswer } from "./review.js";
+import { TRIAGE_ANSWER_SCHEMA_ID, TriageAnswer } from "./triage.js";
 
-export type AnswererRole = "plan" | "check" | "audit" | "demo" | "forge" | "review" | "conflict";
+export type AnswererRole =
+  | "plan"
+  | "check"
+  | "audit"
+  | "triage"
+  | "convergence"
+  | "demo"
+  | "demoRun"
+  | "forge"
+  | "review"
+  | "conflict";
 
 export interface AnswererSchemaDescriptor {
   readonly role: AnswererRole;
@@ -46,11 +59,29 @@ export const answererSchemaCatalog: Readonly<Record<AnswererRole, AnswererSchema
     generatedFile: "audit.json",
     zod: AuditAnswer,
   },
+  triage: {
+    role: "triage",
+    schemaId: TRIAGE_ANSWER_SCHEMA_ID,
+    generatedFile: "triage.json",
+    zod: TriageAnswer,
+  },
+  convergence: {
+    role: "convergence",
+    schemaId: CONVERGENCE_ANSWER_SCHEMA_ID,
+    generatedFile: "convergence.json",
+    zod: ConvergenceAnswer,
+  },
   demo: {
     role: "demo",
     schemaId: DEMO_ANSWER_SCHEMA_ID,
     generatedFile: "demo.json",
     zod: DemoAnswer,
+  },
+  demoRun: {
+    role: "demoRun",
+    schemaId: DEMO_RUN_ANSWER_SCHEMA_ID,
+    generatedFile: "demoRun.json",
+    zod: DemoRunAnswer,
   },
   forge: {
     role: "forge",

@@ -13,7 +13,7 @@ import type { AnswererAdapter, AnswererRunOptions } from "../src/engine/provider
 import { buildAuditorPrompt, invokeAuditor } from "../src/engine/workflow/auditor/auditor.js";
 import { buildCheckerPrompt, invokeChecker } from "../src/engine/workflow/checker/checker.js";
 import { buildPlannerPrompt, invokePlanner } from "../src/engine/workflow/planner/planner.js";
-import { passingAudit, passingCheck } from "./helpers/plannerLoopHelpers.js";
+import { cleanAudit, completeCheck } from "./helpers/plannerLoopHelpers.js";
 
 const subtask = (over: Partial<{ index: number; title: string; intent: string; behaviorIds: string[] }> = {}) => ({
   index: over.index ?? 0,
@@ -82,8 +82,10 @@ describe("buildPlannerPrompt — full rendered contract", () => {
     expect(prompt).toContain("write to the workspace.\n\nSpec title: Add status helpers");
     // header → criteria bullets → blank → behaviors block.
     expect(prompt).toContain("- AC-two: fail() exists\n\nDeclared behaviors");
-    // behaviors block → blank → rejection block.
-    expect(prompt).toContain("- B1: ok exists — module exports ok\n\nThis is the first plan");
+    // behaviors block → blank → grading-criteria block (spec-loop redesign §PLANNER).
+    expect(prompt).toContain("- B1: ok exists — module exports ok\n\nHow the resulting work is graded");
+    // grading-criteria block → blank → rejection block.
+    expect(prompt).toContain("produce that observable behavior so the demo can exercise it.\n\nThis is the first plan");
   });
 
   it("renders every footer requirement line", () => {
@@ -151,10 +153,10 @@ describe("buildCheckerPrompt — full rendered contract", () => {
     const prompt = buildCheckerPrompt(ctx);
     // Each continuation line of the multi-line role framing + boundaries is its
     // own array element, so assert a unique fragment of every one.
-    expect(prompt).toContain("You are the Tanren Checker Answerer. Your ONLY job is to judge intent");
-    expect(prompt).toContain("satisfaction: does the writer's change fulfil the subtask intent and each");
-    expect(prompt).toContain("explicit acceptance criterion in the spec? Judge by reading the change and");
-    expect(prompt).toContain("the spec — nothing else.");
+    expect(prompt).toContain("You are the Tanren Checker Answerer. Your ONLY job is to judge COMPLETENESS for");
+    expect(prompt).toContain("downstream tasks: does the writer's change deliver the subtask intent and each");
+    expect(prompt).toContain("explicit acceptance criterion that LATER tasks build on? Judge by reading the");
+    expect(prompt).toContain("change and the spec — nothing else. Emit a completeness finding per incompleteness.");
     // The self-inspection instruction + baseline sha replace the injected diff.
     expect(prompt).toContain("The writer's change is committed on the current branch of your read-only");
     expect(prompt).toContain("Inspect it yourself: run");
@@ -173,7 +175,7 @@ describe("buildCheckerPrompt — full rendered contract", () => {
     expect(prompt).toContain("  satisfies you.");
     expect(prompt).toContain("- An acceptance criterion that is INHERENTLY a test/build/lint OUTCOME (e.g.");
     expect(prompt).toContain("  criterion as DEFERRED — note it in `reasoning` as gate-owned, and do NOT");
-    expect(prompt).toContain("  the diff implements the behavior such a test would exercise.");
+    expect(prompt).toContain("  emit a finding for it. You verify only that the diff implements the behavior");
     expect(prompt).toContain("Return only the structured JSON required by the provided schema.");
   });
 
@@ -189,15 +191,14 @@ describe("buildCheckerPrompt — full rendered contract", () => {
     expect(prompt).toContain("Subtask behavior ids: B1, B2");
   });
 
-  it("renders the verdict-instruction lines and embeds no diff payload", () => {
+  it("renders the completeness-findings output instructions and embeds no diff payload", () => {
     const prompt = buildCheckerPrompt(ctx);
-    expect(prompt).toContain("In `reasoning`, cite each acceptance criterion / behavior by name and state");
-    expect(prompt).toContain("whether the change satisfies its intent and why (marking any test/build/lint-");
-    expect(prompt).toContain("outcome criterion as gate-deferred). Set passed=true when the subtask intent");
-    expect(prompt).toContain("and every diff-assessable acceptance criterion are satisfied by the change;");
-    expect(prompt).toContain("gate-deferred outcome criteria must not block a pass. Always populate");
-    expect(prompt).toContain("behaviorIdsPassed and behaviorIdsFailed (use empty arrays when none),");
-    expect(prompt).toContain("reflecting intent satisfaction — not test/build outcomes.");
+    // SPEC-LOOP REDESIGN: the checker emits completeness findings (no binary passed).
+    expect(prompt).toContain("Emit your answer as a `findings` list — one entry per concrete way THIS task is");
+    expect(prompt).toContain("not yet complete for what DOWNSTREAM tasks build on. Every such finding is");
+    expect(prompt).toContain("blocking (treated as P0): nothing about delivering a task another task depends on");
+    expect(prompt).toContain("`findings` list when the task is complete for downstream needs — never invent a");
+    expect(prompt).toContain("judgment — the loop decides complete-vs-incomplete from your findings.");
     // No diff is injected — the agent reads it from the workspace itself.
     expect(prompt).not.toContain("Writer diff:");
     expect(prompt).not.toContain("diff --git");
@@ -212,12 +213,12 @@ describe("buildCheckerPrompt — full rendered contract", () => {
     const prompt = buildCheckerPrompt(ctx);
     expect(prompt).toContain("read it from the workspace.\n\nHard boundaries");
     expect(prompt).toContain(
-      "  the diff implements the behavior such a test would exercise.\n\nReturn only the structured JSON required by the provided schema.",
+      "such a test would exercise.\n\nReturn only the structured JSON required by the provided schema.",
     );
     expect(prompt).toContain("- AC2: wired\n\nSubtask [0]: Wire the helper");
-    expect(prompt).toContain("Subtask behavior ids: B1, B2\n\nIn `reasoning`,");
-    // The prompt ends on the verdict-instruction block — no trailing diff payload.
-    expect(prompt.trimEnd().endsWith("reflecting intent satisfaction — not test/build outcomes.")).toBe(true);
+    expect(prompt).toContain("Subtask behavior ids: B1, B2\n\nEmit your answer as a `findings` list");
+    // The prompt ends on the completeness-findings instruction block — no trailing diff.
+    expect(prompt.trimEnd().endsWith("the loop decides complete-vs-incomplete from your findings.")).toBe(true);
   });
 });
 
@@ -296,7 +297,7 @@ function recordingChecker(): AnswererAdapter<CheckAnswer> & { last?: AnswererRun
     authRef: "credential/self-hosted/tanren-fake",
     async runAnswerer(opts) {
       adapter.last = opts;
-      return passingCheck;
+      return completeCheck;
     },
   };
   return adapter;
@@ -355,14 +356,14 @@ describe("invoke* forwards prompt, timeout, workspace, and the canonical schema"
   });
 
   it("invokeAuditor forwards prompt + timeout + workspace and reports the audit schema id", async () => {
-    let seen: AnswererRunOptions<typeof passingAudit> | undefined;
-    const adapter: AnswererAdapter<typeof passingAudit> = {
+    let seen: AnswererRunOptions<typeof cleanAudit> | undefined;
+    const adapter: AnswererAdapter<typeof cleanAudit> = {
       kind: "answerer",
       cli: "fake",
       authRef: "credential/self-hosted/tanren-fake",
       async runAnswerer(opts) {
         seen = opts;
-        return passingAudit;
+        return cleanAudit;
       },
     };
     const result = await invokeAuditor(adapter, {

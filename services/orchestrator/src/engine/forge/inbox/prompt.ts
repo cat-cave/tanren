@@ -7,6 +7,7 @@
 // project's existing specs so dedupe + placement reference reality. Asks for
 // exactly one `CandidateTriage`; the strict output schema enforces the rest.
 
+import { SPEC_QUALITY_CONTRACT_PROMPT } from "../../answerers/schemas/specQuality.js";
 import { isCiInsightSource } from "./ciInsightsSource.js";
 import type { TriageAnswererContext } from "./types.js";
 
@@ -71,5 +72,10 @@ export function buildTriagePrompt(context: TriageAnswererContext): string {
     "  commit into the DAG — a `title`, a `description`, concrete `acceptanceCriteria`,",
     "  any `dependsOn` (existing spec-ids above this spec builds on), and a `priority`",
     "  (`P0`/`P1`/`P2`/`tbd`). For every other verdict, set `routableSpec` to null.",
+    "",
+    "When you author the `routableSpec`, it MUST satisfy the spec-quality contract —",
+    "it is gated by the spec-quality validator before it lands, and a spec that fails",
+    "is looped back to you to re-author:",
+    SPEC_QUALITY_CONTRACT_PROMPT,
   ].join("\n");
 }
