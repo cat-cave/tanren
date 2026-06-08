@@ -7,11 +7,16 @@
 // the caller threading the refs by hand.
 //
 // Priority, per kind: explicit override → project config → org default →
-// `MissingCredentialError`. The resolver is PURE w.r.t. the orchestrator
-// workflow — it only reads `organizations.config` for the org defaults; it does
-// NOT mutate state and does NOT itself touch the workflow. The run executor's
-// context loader (runExecutionContext) calls this and threads the result into
-// `PlannerRunContext`.
+// `MissingCredentialError`. The GitHub kind is APP-FIRST: when no static ref
+// resolves but the org installed the GitHub App, it resolves to the empty-string
+// App sentinel (the run mints an installation token downstream from the threaded
+// `context.installation` — the SAME `resolveGithubToken` path greenfield
+// repo-creation, webhook intake, and the merge stage take); only NEITHER a static
+// ref NOR the App throws `MissingCredentialError`. The resolver is PURE w.r.t. the
+// orchestrator workflow — it only reads `organizations.config` for the org
+// defaults + the App-installation block; it does NOT mutate state and does NOT
+// itself touch the workflow. The run executor's context loader (runExecutionContext)
+// calls this and threads the result into `PlannerRunContext`.
 
 import type pg from "pg";
 import {
@@ -32,8 +37,11 @@ export type RunCredentialKind = "llm_default" | "github_token";
 /**
  * The resolved credentials a run needs. `defaultLlm` is the provider-agnostic
  * routing entry {cli, model, authRef} that heads every loop-role chain a project
- * leaves empty — NOT a Codex-specific ref. `githubCredentialRef` is guaranteed
- * non-empty on success.
+ * leaves empty — NOT a Codex-specific ref. `githubCredentialRef` is the STATIC
+ * `github_token` ref when one resolved; it is the EMPTY STRING when no static ref
+ * resolved but the org installed the App (the App-token sentinel — downstream git
+ * ops mint the installation token from the threaded `context.installation`). It is
+ * never empty-AND-no-App: that case throws `MissingCredentialError`.
  *
  * SaaS Tier-B #5: `providerMode` records WHICH source the default LLM came from.
  * Under `managed`, `defaultLlm.authRef` is the platform-owned ref (e.g.
@@ -67,10 +75,15 @@ export interface ResolveCredentialsInput {
 /**
  * The org-config fields the provider-mode resolution reads. Pulled once
  * alongside `defaultCredentials` so a managed run never makes a second org read.
+ * `hasGithubApp` records whether the org installed the GitHub App: when no static
+ * `github_token` ref resolves but the App IS installed, the run resolves an App
+ * installation token downstream (the SAME path greenfield/webhook/merge use) — so
+ * an App-first org never needs a static PAT to RUN.
  */
 interface OrgProviderModeConfig {
   defaults?: OrgDefaultCredentials;
   providerMode: ProviderMode;
+  hasGithubApp: boolean;
 }
 
 /**
@@ -85,7 +98,7 @@ export class MissingCredentialError extends Error {
     super(
       kind === "llm_default"
         ? "No default LLM resolved for this run (project config and org default are both unset)"
-        : "No GitHub credential resolved for this run (project config and org default are both unset)",
+        : "No GitHub credential resolved for this run (no static ref in project config / org default, and the org has not installed the GitHub App)",
     );
     this.name = "MissingCredentialError";
     this.kind = kind;
@@ -156,24 +169,51 @@ export async function resolveCredentialsForRun(
 
   // GitHub is ALWAYS the tenant's credential — managed mode only swaps the LLM
   // provider source, never the repo identity used to publish PRs / poll CI.
-  const githubCredentialRef = pickRef(
-    "github_token",
+  //
+  // App-first: a STATIC `github_token` ref (override → project → org default) wins
+  // when present. When NONE resolves but the org installed the GitHub App, the run
+  // resolves an App INSTALLATION token downstream (the SAME `resolveGithubToken`
+  // path greenfield repo-creation, the webhook intake, and the merge stage take) —
+  // signalled by an EMPTY `githubCredentialRef`, which every downstream git op
+  // already reads as "no static ref ⇒ mint the App token from `context.installation`"
+  // (the installation block is threaded onto the run context independently). So an
+  // org that installed the App but set no PAT can both CREATE the repo AND RUN.
+  //
+  // FAIL-CLOSED: when NEITHER a static ref NOR the App resolves, this still throws
+  // `MissingCredentialError("github_token")` — loud, never a silent default or PAT
+  // workaround.
+  const githubCredentialRef = resolveGithubCredentialRef(
     input.override?.githubCredentialRef,
     projectCredentials.githubCredentialRef,
     orgConfig.defaults?.github_token,
+    orgConfig.hasGithubApp,
   );
 
   return { defaultLlm, githubCredentialRef, providerMode, ...(endpointOverride && { endpointOverride }) };
 }
 
-/** First non-empty ref layer wins; otherwise the kind is unresolved. */
-function pickRef(kind: RunCredentialKind, ...layers: Array<string | undefined>): string {
-  for (const layer of layers) {
+/**
+ * Resolve the run's GitHub credential ref under the App-first policy. A non-empty
+ * STATIC ref (override → project → org default) wins. When none resolves but the
+ * org installed the App (`hasGithubApp`), return the empty-string App sentinel:
+ * downstream git ops mint the installation token from `context.installation`. When
+ * NEITHER resolves, throw `MissingCredentialError("github_token")` (fail-closed).
+ */
+function resolveGithubCredentialRef(
+  override: string | undefined,
+  projectRef: string | undefined,
+  orgDefaultRef: string | undefined,
+  hasGithubApp: boolean,
+): string {
+  for (const layer of [override, projectRef, orgDefaultRef]) {
     if (typeof layer === "string" && layer.trim() !== "") {
       return layer;
     }
   }
-  throw new MissingCredentialError(kind);
+  if (hasGithubApp) {
+    return "";
+  }
+  throw new MissingCredentialError("github_token");
 }
 
 /** First present routing-entry layer wins; otherwise the kind is unresolved. */
@@ -206,7 +246,7 @@ async function loadOrgProviderModeConfig(pool: OrgConfigClient, orgId: string): 
   const row = result.rows[0];
   if (row === undefined) {
     if (orgId === "") {
-      return { providerMode: "byok" };
+      return { providerMode: "byok", hasGithubApp: false };
     }
     throw new OrgProviderModeUnresolved(orgId);
   }
@@ -214,5 +254,9 @@ async function loadOrgProviderModeConfig(pool: OrgConfigClient, orgId: string): 
   return {
     defaults: config.defaultCredentials,
     providerMode: config.providerMode,
+    // App-first run resolution: an installed App lets the run mint an installation
+    // token even with no static `github_token` ref (the empty-org / legacy null-org
+    // path has no row, so no App — it stays static-ref-or-throw).
+    hasGithubApp: config.github_app !== undefined,
   };
 }
