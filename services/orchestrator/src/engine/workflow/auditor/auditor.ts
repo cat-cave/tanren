@@ -114,9 +114,11 @@ export type AuditorDecision =
  * `reasoning`/`recommendedAction` verdict fields are NO LONGER read for the decision.
  */
 export function decideAuditorOutcome(verdict: AuditAnswer): AuditorDecision {
-  // The schema defaults `findings` to `[]`; coalesce defensively for a raw (un-parsed)
-  // fixture verdict so an absent list reads as audited-clean, never throws.
-  const findings: ReadonlyArray<Finding> = (verdict.findings ?? []).map((f) => ({
+  // `findings` is a REQUIRED field on the parsed `AuditAnswer` (no `.default([])`) — a
+  // parsed verdict ALWAYS carries a real, explicitly-emitted findings array. We read it
+  // directly (no `?? []` coalesce): an OMITTED findings list cannot reach here (it fails
+  // to parse upstream), so a clean decision is reachable ONLY from an explicit empty list.
+  const findings: ReadonlyArray<Finding> = verdict.findings.map((f) => ({
     id: f.id,
     severity: f.severity,
     title: f.title,

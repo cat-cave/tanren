@@ -447,8 +447,11 @@ describe("planner prompt + verdict decisions (pure)", () => {
     });
   });
 
-  it("decideAuditorOutcome: a no-findings verdict (un-parsed fixture) is treated as audited-clean (pass)", () => {
+  it("decideAuditorOutcome: a findings-omitted verdict is NEVER treated as clean — it throws (no `?? []` coalesce)", () => {
+    // S3a invariant: clean is reachable ONLY from an explicit findings array. A raw
+    // verdict that omits findings (which cannot pass the schema parse) does NOT silently
+    // read as audited-clean here — accessing the required `.findings` throws loudly.
     const raw = { passed: true, reasoning: "ok", outstandingBehaviorIds: [] } as unknown as typeof passingAudit;
-    expect(decideAuditorOutcome(raw)).toEqual({ kind: "pass" });
+    expect(() => decideAuditorOutcome(raw)).toThrow(/map|findings|undefined/iu);
   });
 });

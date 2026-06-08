@@ -11,6 +11,8 @@ import {
   severityRank,
   type SpecLifecycleSignals,
 } from "../src/engine/contracts/dagLifecycle.js";
+import { maxSeverity } from "../src/engine/contracts/findings.js";
+import { findingsFromPayload } from "../src/engine/dag/lifecycle.js";
 
 function signals(overrides: Partial<SpecLifecycleSignals>): SpecLifecycleSignals {
   return {
@@ -135,5 +137,32 @@ describe("rank helpers", () => {
     expect(severityRank("P2")).toBeLessThan(severityRank("unaudited"));
     expect(severityRank("unaudited")).toBeLessThan(severityRank("P1"));
     expect(severityRank("P1")).toBeLessThan(severityRank("P0"));
+  });
+});
+
+describe("findingsFromPayload — S3a fail-closed: unreadable ⇒ P0, clean ONLY from explicit []", () => {
+  it("a well-formed (possibly-empty) array stays as is — an EXPLICIT [] is audited-clean", () => {
+    expect(findingsFromPayload([])).toEqual([]);
+    const one = findingsFromPayload([{ id: "f", severity: "P2", title: "t", body: "b" }]);
+    expect(one.map((f) => f.severity)).toEqual(["P2"]);
+  });
+
+  it("null findings on a PRESENT verdict ⇒ a synthetic P0 (un-audited), NEVER clean []", () => {
+    const findings = findingsFromPayload(null);
+    expect(maxSeverity(findings)).toBe("P0");
+    expect(findings).not.toEqual([]);
+  });
+
+  it("a non-array (malformed) findings column ⇒ a synthetic P0, NEVER clean []", () => {
+    expect(maxSeverity(findingsFromPayload("oops"))).toBe("P0");
+    expect(maxSeverity(findingsFromPayload({ not: "an array" }))).toBe("P0");
+    expect(maxSeverity(findingsFromPayload(42))).toBe("P0");
+  });
+
+  it("a malformed ENTRY inside the array throws LOUDLY (never silently degrades to clean)", () => {
+    // A present array whose element is not a valid AuditFinding must throw, not coalesce.
+    expect(() => findingsFromPayload([{ id: "f", severity: "NOPE", title: "t", body: "b" }])).toThrow(
+      /severity|enum|Invalid/iu,
+    );
   });
 });

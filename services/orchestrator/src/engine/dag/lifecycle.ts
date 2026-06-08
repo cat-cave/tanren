@@ -31,18 +31,37 @@ import type { Finding } from "../contracts/findings.js";
 import { AuditFinding, normalizeFinding } from "../answerers/schemas/index.js";
 
 /**
- * Parse the `auditor.verdict` payload's `findings` JSON into typed `Finding`s. S3: the
- * findings list is the SOLE severity signal an audited verdict carries — returns `[]`
- * (audited-clean) for an empty-but-present list, and `undefined` ONLY when the column is
- * absent (no findings emitted ⇒ the run is treated as unaudited). A malformed entry
- * throws LOUDLY (`AuditFinding.parse`) — it never silently degrades to a `none` severity.
+ * The synthetic P0 a PRESENT-but-UNREADABLE `auditor.verdict` projects (S3a fail-closed,
+ * §4). When an audit event EXISTS but its `findings` column is null / not an array (a
+ * malformed/legacy payload), the run is UN-AUDITED, NOT audited-clean — so its open-
+ * finding max severity must be the most-severe blocker, never `none`. P0 forces the
+ * moderate threshold to treat the ancestor as not-ready and the merge gate to block.
  */
-function findingsFromPayload(raw: unknown): ReadonlyArray<Finding> | undefined {
-  if (raw === null || raw === undefined) {
-    return undefined;
-  }
+function unreadableAuditFinding(): Finding {
+  return {
+    id: "audit-findings-unreadable",
+    severity: "P0",
+    title: "audit findings unreadable",
+    body: "An auditor.verdict event exists but its findings are missing/malformed — the run is un-audited (fail-closed P0).",
+  };
+}
+
+/**
+ * Parse the `auditor.verdict` payload's `findings` JSON into typed `Finding`s. S3a: the
+ * findings list is the SOLE severity signal an audited verdict carries.
+ *   - a well-formed array → those findings (an EMPTY array ⇒ explicitly audited-clean);
+ *   - null / not-an-array on a PRESENT verdict → the un-audited P0 ({@link
+ *     unreadableAuditFinding}) — NEVER coalesced to clean `[]` (the §4 P1 fail-open);
+ *   - a malformed ENTRY throws LOUDLY (`AuditFinding.parse`) — it never silently
+ *     degrades to a `none` severity.
+ * The invariant: clean `[]` is reachable ONLY from a well-formed, explicitly-empty array.
+ * Exported so the fail-closed invariant (unreadable ⇒ P0, never clean) is unit-tested.
+ */
+export function findingsFromPayload(raw: unknown): ReadonlyArray<Finding> {
   if (!Array.isArray(raw)) {
-    return undefined;
+    // A present audit event with null/non-array findings is unreadable ⇒ fail-closed P0,
+    // never clean. (A genuinely audited-clean verdict carries an explicit empty array.)
+    return [unreadableAuditFinding()];
   }
   return raw.map((entry) => {
     // `normalizeFinding` collapses a strict-schema `fixHint: null` to an absent
@@ -81,9 +100,10 @@ function auditVerdictFromRow(row: SpecLifecycleRow): SpecLifecycleSignals["audit
   if (!row.audit_present) {
     return undefined;
   }
-  // An observed verdict ALWAYS carries findings (S3); coalesce an absent/malformed
-  // column to `[]` (audited-clean) only AFTER confirming a verdict event exists.
-  return { findings: findingsFromPayload(row.audit_findings) ?? [] };
+  // An observed verdict carries findings: a well-formed (possibly-empty) array stays as
+  // is; a null/malformed column yields the un-audited P0 ({@link unreadableAuditFinding})
+  // — NEVER a silent clean `[]`. The merge gate's land-time reader applies the SAME rule.
+  return { findings: findingsFromPayload(row.audit_findings) };
 }
 
 /**

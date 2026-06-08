@@ -439,10 +439,15 @@ export async function runAuditorStage(
   // S3: the auditor emits FINDINGS as its sole severity currency (no dual-emit flag).
   // `findings` is ALWAYS present on `auditor.verdict` — it is the EXPLICIT P0–P3 list
   // the DagLifecycle read model + the `auditPosture` policy (the live merge gate) read.
-  // The adapter returns a PARSED answer (findings defaulted to []); `normalizeFinding`
-  // collapses a strict-schema `fixHint: null` to an absent key so the stored shape
-  // matches the frozen `{ fixHint?: string }` contract. The `passed`/`reasoning`/
-  // `recommendedAction` fields are retained as NARRATION only — no decision reads them.
+  // S3a: the auditor emits FINDINGS as its sole severity currency. `findings` is a
+  // REQUIRED field on the parsed `AuditAnswer` (no `.default([])`) — so the adapter's
+  // verdict ALWAYS carries a real, explicitly-emitted findings array. We persist it
+  // VERBATIM (no `?? []` coalesce): a clean `[]` here can ONLY mean the auditor
+  // explicitly emitted an empty list, never a missing/omitted one (that would have
+  // failed to parse upstream). `normalizeFinding` collapses a strict-schema
+  // `fixHint: null` to an absent key so the stored shape matches the frozen
+  // `{ fixHint?: string }` contract. The `passed`/`reasoning`/`recommendedAction` fields
+  // are persisted as NARRATION only — no decision reads them.
   await args.appendEvent(
     "auditor.verdict",
     {
@@ -451,9 +456,7 @@ export async function runAuditorStage(
       reasoning: result.verdict.reasoning,
       outstandingBehaviorIds: [...result.verdict.outstandingBehaviorIds],
       recommendedAction: result.verdict.recommendedAction,
-      // The adapter returns a PARSED answer (findings defaulted to []); coalesce for a
-      // raw fixture verdict that omits it so the stored shape always carries findings.
-      findings: (result.verdict.findings ?? []).map((f) => normalizeFinding(f)),
+      findings: result.verdict.findings.map((f) => normalizeFinding(f)),
     },
     auditorTaskId,
   );

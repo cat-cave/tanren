@@ -46,6 +46,8 @@ describe("answererOutputSchemaFor", () => {
         reasoning: "ok",
         outstandingBehaviorIds: [],
         recommendedAction: "pass",
+        // S3a: `findings` is REQUIRED (no default) — a clean audit emits an explicit [].
+        findings: [],
       }).recommendedAction,
     ).toBe("pass");
 
