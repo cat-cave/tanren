@@ -1,8 +1,11 @@
 // NATIVE PER-TEST INGEST (the no-Actions delivery model). The native gate reads the
 // runner's JUnit report over SSH after it runs and ingests the per-test rows IN-PROCESS
 // — no webhook, no HMAC. These prove: a present report is parsed + ingested under the
-// run's org; an ABSENT report is a clean no-op (a repo that emits no JUnit simply has no
-// per-test grain); and the gate verdict drives the test-step exit-code guard.
+// run's org; the gate verdict drives the test-step exit-code guard; and — the
+// NO-SILENT-FALLBACK discipline — an absent report is DISCRIMINATED: a clean QUIET no-op
+// when no junit-writing test step ran (`expectReport=false`), but a LOUD `missing_expected`
+// signal when a test step that writes the report actually ran (`expectReport=true`) yet
+// produced nothing (absent / read-failed / empty) — flaky-intelligence went blind.
 
 import type pg from "pg";
 import { describe, expect, it } from "vitest";
@@ -29,14 +32,34 @@ const JUNIT_XML = `<?xml version="1.0"?>
   </testsuite>
 </testsuites>`;
 
-/** An SSH that serves the JUnit report when the gate cats the conventional path. */
+// The marker the read command echoes when the report file does not exist (so the
+// ingest distinguishes a genuinely-absent file from an empty/unreadable one).
+const ABSENT_MARKER = "__TANREN_JUNIT_ABSENT__";
+
+// `absent` = file not found (the read command echoes the marker); `empty` = file
+// exists but whitespace-only; `read_failed` = the SSH read itself failed (transport).
+type ReportState = { kind: "present"; xml: string } | { kind: "absent" } | { kind: "empty" } | { kind: "read_failed" };
+
+/** An SSH that models the file-presence branch of the gate's `cat`-or-marker read. */
 class JunitSsh implements CommandSubstrate {
-  constructor(private readonly xml: string | undefined) {}
+  constructor(private readonly state: ReportState) {}
   async run(_target: RunnerHandle, command: RunnerCommand): Promise<CommandResult> {
-    if (command.command.includes("reports/junit.xml")) {
-      return { exitCode: 0, stdout: this.xml ?? "", stderr: "", timedOut: false };
+    if (!command.command.includes("reports/junit.xml")) {
+      return { exitCode: 0, stdout: "", stderr: "", timedOut: false };
     }
-    return { exitCode: 0, stdout: "", stderr: "", timedOut: false };
+    switch (this.state.kind) {
+      case "present":
+        return { exitCode: 0, stdout: this.state.xml, stderr: "", timedOut: false };
+      case "absent":
+        // The read succeeds but the `else echo` branch ran (file not found).
+        return { exitCode: 0, stdout: `${ABSENT_MARKER}\n`, stderr: "", timedOut: false };
+      case "empty":
+        // The file exists and was `cat`'d, but it is whitespace-only.
+        return { exitCode: 0, stdout: "   \n", stderr: "", timedOut: false };
+      case "read_failed":
+        // The read itself failed — a nonzero exit (a transport/runner problem).
+        return { exitCode: 1, stdout: "", stderr: "ssh: broken pipe", timedOut: false };
+    }
   }
 }
 
@@ -67,7 +90,7 @@ class RecordingClient {
   }
 }
 
-function deps(ssh: CommandSubstrate, client: RecordingClient) {
+function deps(ssh: CommandSubstrate, client: RecordingClient, expectReport: boolean, tier = "slow") {
   return {
     ssh,
     target: TARGET,
@@ -79,14 +102,16 @@ function deps(ssh: CommandSubstrate, client: RecordingClient) {
     headSha: "a".repeat(40),
     timeoutMs: 1000,
     gatePassed: false,
+    expectReport,
+    tier,
   };
 }
 
 describe("ingestGateJunit — native in-process per-test ingest", () => {
   it("parses + ingests the runner's JUnit report under the run's org", async () => {
     const client = new RecordingClient();
-    const inserted = await ingestGateJunit(deps(new JunitSsh(JUNIT_XML), client));
-    expect(inserted).toBe(2);
+    const result = await ingestGateJunit(deps(new JunitSsh({ kind: "present", xml: JUNIT_XML }), client, true));
+    expect(result).toEqual({ kind: "ingested", inserted: 2 });
     // Two per-test rows persisted, org-stamped (org_id is param $3).
     expect(client.inserts).toHaveLength(2);
     expect(client.inserts.every((p) => p[2] === "org_1")).toBe(true);
@@ -94,11 +119,33 @@ describe("ingestGateJunit — native in-process per-test ingest", () => {
     expect(client.events).toContain("ci.tests.reported");
   });
 
-  it("is a clean no-op when the repo emits no JUnit report (absent file)", async () => {
+  it("expectReport=false + absent report → a QUIET no-op (no junit-writing test step ran)", async () => {
     const client = new RecordingClient();
-    const inserted = await ingestGateJunit(deps(new JunitSsh(undefined), client));
-    expect(inserted).toBe(0);
+    const result = await ingestGateJunit(deps(new JunitSsh({ kind: "absent" }), client, false));
+    // No grain expected (e.g. the scaffold fast tier = lint+typecheck) ⇒ skipped, quiet.
+    expect(result).toEqual({ kind: "skipped_no_test_step" });
     expect(client.inserts).toHaveLength(0);
     expect(client.events).toHaveLength(0);
+  });
+
+  it("expectReport=true + absent report → LOUD missing_expected(absent) (flaky-intelligence blind)", async () => {
+    const client = new RecordingClient();
+    const result = await ingestGateJunit(deps(new JunitSsh({ kind: "absent" }), client, true));
+    expect(result).toEqual({ kind: "missing_expected", reason: "absent" });
+    expect(client.inserts).toHaveLength(0);
+  });
+
+  it("expectReport=true + empty report → LOUD missing_expected(empty)", async () => {
+    const client = new RecordingClient();
+    const result = await ingestGateJunit(deps(new JunitSsh({ kind: "empty" }), client, true));
+    expect(result).toEqual({ kind: "missing_expected", reason: "empty" });
+    expect(client.inserts).toHaveLength(0);
+  });
+
+  it("expectReport=true + a failed SSH read → LOUD missing_expected(read_failed), distinct from absent", async () => {
+    const client = new RecordingClient();
+    const result = await ingestGateJunit(deps(new JunitSsh({ kind: "read_failed" }), client, true));
+    expect(result).toEqual({ kind: "missing_expected", reason: "read_failed" });
+    expect(client.inserts).toHaveLength(0);
   });
 });

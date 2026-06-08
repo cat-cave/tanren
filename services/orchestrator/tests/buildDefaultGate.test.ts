@@ -5,7 +5,7 @@
 // idempotent re-install EVERY gate (the P0 fix — no install latch), and the
 // lenient advisory semantics end-to-end — without a live runner. No DB: a
 // FakeEventStore captures the emitted gate.* / gate.advisory_failed events.
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RunnerHandle } from "../src/engine/contracts/allocator.js";
 import type { RunnerCommand, CommandResult, CommandSubstrate } from "../src/engine/contracts/commandSubstrate.js";
 import type { GovernancePosture } from "../src/engine/config/shared.js";
@@ -75,6 +75,11 @@ class InterpretingSsh implements CommandSubstrate {
     const ok = { exitCode: 0, stdout: "", stderr: "", timedOut: false };
     // tanren-ci.yml read (`if [ -f .../tanren-ci.yml ]; then cat ...; fi`): no file.
     if (cmd.includes("tanren-ci.yml")) return ok;
+    // The native JUnit ingest read (`if [ -f .../reports/junit.xml ]; then cat ...; else
+    // echo __TANREN_JUNIT_ABSENT__; fi`). The virtual workspace writes no report, so the
+    // file is ABSENT — model the shell's else-branch marker. A tier with a junit-writing
+    // test step (slow/merge) ⇒ the gate surfaces this as the LOUD `missing_expected`.
+    if (cmd.includes("reports/junit.xml")) return { ...ok, stdout: "__TANREN_JUNIT_ABSENT__\n" };
     // The verdict-anchor read: the workspace HEAD the gate binds gate.verdict to
     // when no headShaOverride is given. A configured `workspaceHead` lets the
     // commit-binding test prove the override is preferred over THIS sha.
@@ -400,5 +405,69 @@ describe("buildDefaultGate — gate.verdict commit-binding (headShaOverride)", (
 
     expect(outcome.passed).toBe(true);
     expect(events.events.some((e) => e.eventType === "gate.verdict")).toBe(false);
+  });
+});
+
+// NO-SILENT-FALLBACK: the native JUnit ingest must DISCRIMINATE "no test step ran"
+// (quiet) from "a junit-writing test step ran but produced no report" (LOUD). The
+// virtual workspace writes no report, so a tier with a junit test step (slow/merge,
+// `pnpm test --reporter=junit --outputFile=reports/junit.xml`) is the expected-but-
+// missing case; the fast tier (lint+typecheck) is the quiet case. The loud mechanism
+// is a structured `console.error` (non-merge-gating — visibility, not a blocker).
+describe("buildDefaultGate — native JUnit ingest (expected-but-missing is LOUD)", () => {
+  // A fuller input than gateInput: a fake pool + an org so the best-effort ingest runs.
+  function ingestInput(ssh: CommandSubstrate): RunPlannerLoopInput {
+    const fakePool = { query: async () => ({ rows: [], rowCount: 0 }) };
+    return {
+      ssh,
+      context: { ...context({ greenfield: true }), orgId: "org_1" },
+      timeoutMs: 100,
+      pool: fakePool,
+    } as unknown as RunPlannerLoopInput;
+  }
+
+  afterEach(() => vi.restoreAllMocks());
+
+  it("pre_audit (junit-writing test step ran) + absent report → a LOUD console.error", async () => {
+    // node_modules present so the gate steps pass; the report is absent (the fake echoes
+    // the absent marker), and pre_audit runs the slow tier's junit-writing test step.
+    const state: WorkspaceState = {
+      manifest: true,
+      nodeModules: true,
+      lintExit: 0,
+      installRuns: 0,
+      workspaceHead: "c".repeat(40),
+    };
+    const errs = vi.spyOn(console, "error").mockImplementation(() => {});
+    const gate = buildDefaultGate(ingestInput(new InterpretingSsh(state)), target, workspacePath, new FakeEventStore());
+
+    const outcome = await gate({ when: "pre_audit" });
+
+    expect(outcome.passed).toBe(true);
+    const loud = errs.mock.calls.map((c) => String(c[0])).find((m) => m.includes("native JUnit report EXPECTED"));
+    expect(loud).toBeDefined();
+    // The signal names the reason (absent) + the tier — never a silent degrade.
+    expect(loud).toContain("absent");
+    expect(loud).toContain("tier=slow");
+  });
+
+  it("per_iteration (no junit-writing test step) + absent report → QUIET (no loud signal)", async () => {
+    const state: WorkspaceState = {
+      manifest: true,
+      nodeModules: true,
+      lintExit: 0,
+      installRuns: 0,
+      workspaceHead: "c".repeat(40),
+    };
+    const errs = vi.spyOn(console, "error").mockImplementation(() => {});
+    const gate = buildDefaultGate(ingestInput(new InterpretingSsh(state)), target, workspacePath, new FakeEventStore());
+
+    const outcome = await gate({ when: "per_iteration" });
+
+    expect(outcome.passed).toBe(true);
+    // The fast tier ran no junit-writing test step ⇒ no loud "expected but missing" log.
+    expect(errs.mock.calls.map((c) => String(c[0])).some((m) => m.includes("native JUnit report EXPECTED"))).toBe(
+      false,
+    );
   });
 });
