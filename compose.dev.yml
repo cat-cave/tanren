@@ -224,14 +224,16 @@ services:
       DATABASE_URL: postgres://tanren:tanren@postgres:5432/tanren
       MIGRATION_DATABASE_URL: postgres://tanren:tanren@postgres:5432/tanren
       TANREN_SYSTEM_DATABASE_URL: postgres://tanren_system:tanren_system@postgres:5432/tanren
-      VAULT_ADDR: http://vault:8200
-      VAULT_TOKEN: dev-root-token
+      # The allocator has NO Vault / secret-store access — it never resolves a
+      # secret VALUE (the CODEX_HOME env-bundle channel is removed). Runner creds
+      # are delivered over the SSH FILE substrate by the orchestrator.
       ALLOCATOR_PORT: "3200"
       TANREN_ALLOCATOR_TOKEN: dev
       TANREN_ALLOCATOR_NETWORK: ${COMPOSE_PROJECT_NAME:-tanren}_default
       TANREN_ALLOCATOR_SSH_HOSTNAME_TEMPLATE: "{container}"
       TANREN_MAX_RUN_HOURS: "6"
-      TANREN_RUNNER_IMAGE: ghcr.io/cat-cave/tanren-runner:v0
+      # Runner image is per-allocate request config, not an allocator env knob —
+      # the allocator never reads TANREN_RUNNER_IMAGE (see compose.prod.yml note).
       TANREN_RUNNER_AUTHORIZED_KEY: ${TANREN_RUNNER_AUTHORIZED_KEY:-}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
@@ -239,8 +241,6 @@ services:
       - "3200:3200"
     depends_on:
       postgres:
-        condition: service_healthy
-      vault:
         condition: service_healthy
 
   dashboard:

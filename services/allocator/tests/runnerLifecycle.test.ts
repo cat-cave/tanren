@@ -1,11 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ContainerInspectResult, CreateContainerSpec, DockerEngineClient } from "../src/dockerEngine.js";
-import {
-  RunnerLifecycle,
-  type RunnerRecord,
-  type RunnerSecretsClient,
-  type RunnerStore,
-} from "../src/runnerLifecycle.js";
+import { RunnerLifecycle, type RunnerRecord, type RunnerStore } from "../src/runnerLifecycle.js";
 
 class FakeDocker implements DockerEngineClient {
   readonly volumeCreates: string[] = [];
@@ -99,23 +94,10 @@ class InMemoryRunnerStore implements RunnerStore {
   }
 }
 
-class StaticSecrets implements RunnerSecretsClient {
-  constructor(private readonly values: Record<string, string>) {}
-  async get(ref: string): Promise<string | undefined> {
-    return this.values[ref];
-  }
-}
-
-const baseLifecycle = (
-  docker: FakeDocker,
-  store: InMemoryRunnerStore,
-  secrets: RunnerSecretsClient = new StaticSecrets({}),
-  now?: () => Date,
-) =>
+const baseLifecycle = (docker: FakeDocker, store: InMemoryRunnerStore, now?: () => Date) =>
   new RunnerLifecycle({
     docker,
     store,
-    secrets,
     networkName: "tanren_default",
     sshHostnameForOrchestrator: (container) => container,
     hostKeyReadAttempts: 4,
@@ -135,7 +117,6 @@ describe("RunnerLifecycle.allocate", () => {
       projectId: "proj_a",
       orgId: "org_test",
       runnerImage: "ghcr.io/cat-cave/tanren-runner:v0",
-      vaultRefs: [],
     });
 
     expect(result.runnerId).toBe("runner_run_42");
@@ -165,7 +146,6 @@ describe("RunnerLifecycle.allocate", () => {
       projectId: "org:org_test",
       orgId: "org_test",
       runnerImage: "ghcr.io/cat-cave/tanren-runner:v0",
-      vaultRefs: [],
       runless: true,
       persistedProjectId: null,
     });
@@ -193,7 +173,6 @@ describe("RunnerLifecycle.allocate", () => {
       projectId: "proj_a",
       orgId: "org_test",
       runnerImage: "ghcr.io/cat-cave/tanren-runner:v0",
-      vaultRefs: [],
       runless: true,
       persistedProjectId: "proj_a",
     });
@@ -203,43 +182,24 @@ describe("RunnerLifecycle.allocate", () => {
     expect(store.records[0]?.projectId).toBe("proj_a");
   });
 
-  it("materializes vault refs into the codex-home env bundle", async () => {
+  it("delivers NO secret VALUE to the runner via Docker env (the bundle channel is gone)", async () => {
     const docker = new FakeDocker();
     const store = new InMemoryRunnerStore();
-    const secrets = new StaticSecrets({ "credential/codex/test": '{"openai":{}}' });
-    const lifecycle = baseLifecycle(docker, store, secrets);
+    const lifecycle = baseLifecycle(docker, store);
 
     await lifecycle.allocate({
       runId: "run_codex",
       projectId: "proj_a",
       orgId: "org_test",
       runnerImage: "ghcr.io/cat-cave/tanren-runner:v0",
-      vaultRefs: ["credential/codex/test"],
     });
 
-    const bundle = docker.containers[0]?.spec.env.TANREN_CODEX_HOME_BUNDLE ?? "";
-    expect(bundle).not.toBe("");
-    const decoded = JSON.parse(Buffer.from(bundle, "base64").toString("utf8")) as Array<{
-      ref: string;
-      value: string;
-    }>;
-    expect(decoded).toEqual([{ ref: "credential/codex/test", value: '{"openai":{}}' }]);
-  });
-
-  it("fails when a vault ref is missing", async () => {
-    const docker = new FakeDocker();
-    const store = new InMemoryRunnerStore();
-    const lifecycle = baseLifecycle(docker, store, new StaticSecrets({}));
-
-    await expect(
-      lifecycle.allocate({
-        runId: "run_missing",
-        projectId: "proj_a",
-        orgId: "org_test",
-        runnerImage: "ghcr.io/cat-cave/tanren-runner:v0",
-        vaultRefs: ["credential/missing"],
-      }),
-    ).rejects.toThrow(/credential\/missing/u);
+    // The only env on the runner is the PUBLIC authorized_keys line + the
+    // ephemeral marker. There is no TANREN_CODEX_HOME_BUNDLE (removed) and no
+    // secret value of any kind — `docker inspect` carries nothing sensitive.
+    const env = docker.containers[0]?.spec.env ?? {};
+    expect(Object.keys(env).sort()).toEqual(["TANREN_RUNNER_AUTHORIZED_KEY", "TANREN_RUNNER_EPHEMERAL"]);
+    expect("TANREN_CODEX_HOME_BUNDLE" in env).toBe(false);
   });
 
   it("retries host-key reads while sshd is still generating keys", async () => {
@@ -253,7 +213,6 @@ describe("RunnerLifecycle.allocate", () => {
       projectId: "proj_a",
       orgId: "org_test",
       runnerImage: "ghcr.io/cat-cave/tanren-runner:v0",
-      vaultRefs: [],
     });
 
     expect(result.hostKeyFingerprint.startsWith("SHA256:")).toBe(true);
@@ -271,7 +230,6 @@ describe("RunnerLifecycle.release", () => {
       projectId: "proj_a",
       orgId: "org_test",
       runnerImage: "ghcr.io/cat-cave/tanren-runner:v0",
-      vaultRefs: [],
     });
 
     const result = await lifecycle.release(allocated.runnerId, "completed");
@@ -295,7 +253,6 @@ describe("RunnerLifecycle.release", () => {
       projectId: "proj_a",
       orgId: "org_test",
       runnerImage: "ghcr.io/cat-cave/tanren-runner:v0",
-      vaultRefs: [],
     });
     await lifecycle.release(allocated.runnerId, "completed");
     const removeCallsAfterFirst = docker.volumeRemoves.length;
@@ -314,7 +271,6 @@ describe("RunnerLifecycle.release", () => {
       projectId: "proj_a",
       orgId: "org_test",
       runnerImage: "ghcr.io/cat-cave/tanren-runner:v0",
-      vaultRefs: [],
     });
     const result = await lifecycle.release(allocated.runnerId, "failed");
 
@@ -330,14 +286,13 @@ describe("RunnerLifecycle.sweepAbandoned", () => {
     const docker = new FakeDocker();
     const store = new InMemoryRunnerStore();
     let nowMs = 1_000_000_000_000;
-    const lifecycle = baseLifecycle(docker, store, new StaticSecrets({}), () => new Date(nowMs));
+    const lifecycle = baseLifecycle(docker, store, () => new Date(nowMs));
 
     await lifecycle.allocate({
       runId: "run_stale",
       projectId: "proj_a",
       orgId: "org_test",
       runnerImage: "ghcr.io/cat-cave/tanren-runner:v0",
-      vaultRefs: [],
     });
 
     // Advance the simulated clock by 7 hours; TTL is 6h.
@@ -356,14 +311,13 @@ describe("RunnerLifecycle.sweepAbandoned", () => {
     const docker = new FakeDocker();
     const store = new InMemoryRunnerStore();
     let nowMs = 1_000_000_000_000;
-    const lifecycle = baseLifecycle(docker, store, new StaticSecrets({}), () => new Date(nowMs));
+    const lifecycle = baseLifecycle(docker, store, () => new Date(nowMs));
 
     await lifecycle.allocate({
       runId: "run_fresh",
       projectId: "proj_a",
       orgId: "org_test",
       runnerImage: "ghcr.io/cat-cave/tanren-runner:v0",
-      vaultRefs: [],
     });
 
     // 1h
@@ -386,7 +340,6 @@ describe("RunnerLifecycle finalizer under simulated crash", () => {
       projectId: "proj_a",
       orgId: "org_test",
       runnerImage: "ghcr.io/cat-cave/tanren-runner:v0",
-      vaultRefs: [],
     });
 
     // Simulate the container crashing: mark it stopped from the outside.

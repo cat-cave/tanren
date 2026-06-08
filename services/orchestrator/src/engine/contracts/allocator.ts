@@ -91,13 +91,6 @@ export interface AllocationRequest {
    */
   persistedProjectId?: string | null;
   /**
-   * Optional list of Vault references whose values the allocator must
-   * materialize into the runner's `CODEX_HOME` mount before signaling that
-   * the runner is ready. The allocator owns the lifetime of any files
-   * derived from these refs and wipes them on release.
-   */
-  vaultRefs?: string[];
-  /**
    * Optional run labels used by the allocator router to pick an
    * allocator kind and apply its pool policy. Allocators that do not route on
    * labels ignore this field. Absent / empty means "use the default kind".

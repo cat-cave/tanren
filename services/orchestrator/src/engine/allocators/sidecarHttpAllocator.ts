@@ -46,7 +46,15 @@ export class SidecarHttpAllocator implements Allocator {
   }
 
   async allocate(request: AllocationRequest): Promise<RunnerAllocation> {
-    const vaultRefs = uniqueRefs([request.identitySecretRef, ...(request.vaultRefs ?? [])]);
+    // SYSTEM-vs-USERLAND credential split: NO secret ref or VALUE is ever sent to
+    // the sidecar. The allocator only creates/destroys containers + persists the
+    // `runners` row; it has no secret-store access and delivers no secret to a
+    // runner via Docker env. `identitySecretRef` (the orchestrator's own SSH
+    // private key, how Tanren reaches the runner) belongs ONLY in the returned
+    // `target` handle, which the orchestrator's SSH substrate resolves to open the
+    // connection. Run-scoped runner creds (the tenant's model/codex auth) are
+    // delivered over the SSH FILE substrate AFTER allocation (codexMaterializer /
+    // opencodeMaterializer).
     const response = await this.fetchImpl(`${this.options.baseUrl.replace(/\/$/u, "")}/allocate`, {
       method: "POST",
       headers: this.authHeaders(),
@@ -63,7 +71,6 @@ export class SidecarHttpAllocator implements Allocator {
         ...(request.runless === true
           ? { runless: true, persistedProjectId: persistedRunnerKeys(request).projectId }
           : {}),
-        vaultRefs,
       }),
     });
     if (!response.ok) {
@@ -106,16 +113,4 @@ export class SidecarHttpAllocator implements Allocator {
       authorization: `Bearer ${this.options.authToken}`,
     };
   }
-}
-
-function uniqueRefs(refs: ReadonlyArray<string | undefined>): string[] {
-  const out: string[] = [];
-  const seen = new Set<string>();
-  for (const ref of refs) {
-    if (ref !== undefined && ref !== "" && !seen.has(ref)) {
-      seen.add(ref);
-      out.push(ref);
-    }
-  }
-  return out;
 }

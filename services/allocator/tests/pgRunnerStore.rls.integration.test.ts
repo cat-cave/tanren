@@ -69,7 +69,6 @@ function recordFor(orgId: string, runnerId: string): RunnerRecord {
     sshPort: 2200,
     hostKeyFingerprint: "SHA256:abc",
     imageSha: "img@sha256:deadbeef",
-    vaultRefs: [],
     createdAt: new Date(),
     released: false,
   };

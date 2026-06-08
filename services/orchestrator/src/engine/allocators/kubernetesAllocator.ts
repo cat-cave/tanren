@@ -340,7 +340,13 @@ function podManifest(input: KubernetesPodInput, namespace: string): unknown {
           ports: [{ containerPort: 22, name: "ssh" }],
           env: [
             {
-              name: "TANREN_SSH_AUTHORIZED_KEY",
+              // Must match the env name the runner entrypoint reads
+              // (`runner/entrypoint.sh`: TANREN_RUNNER_AUTHORIZED_KEY) — a
+              // mismatch silently leaves the Pod with no authorized_keys and the
+              // orchestrator can never SSH in. The PUBLIC authorized_keys line is
+              // safe to deliver via a per-run Secret env; the orchestrator's
+              // PRIVATE key never transits here.
+              name: "TANREN_RUNNER_AUTHORIZED_KEY",
               valueFrom: {
                 secretKeyRef: { name: input.sshKeySecretName, key: "ssh-authorized-key" },
               },
