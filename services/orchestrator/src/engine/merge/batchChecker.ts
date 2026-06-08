@@ -25,17 +25,21 @@ import { runWithJobOrgId, runWithOrgScope, runWithSystemScope } from "@tanren/db
 import type pg from "pg";
 import { type BatchCheckVerdict, type BatchChecker } from "../contracts/batchMergeCoordinator.js";
 import type { MergeQueueEntry } from "../contracts/mergeCoordinator.js";
-import { installationFromOrgConfig, migrateOrgConfig } from "../config/orgConfig.js";
+import { installationFromOrgConfig, migrateOrgConfig, type OrgGithubAppInstallation } from "../config/orgConfig.js";
 import { migrateProjectConfig } from "../config/projectConfig.js";
 import type { GovernancePosture } from "../config/shared.js";
 import type { Allocator } from "../contracts/allocator.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
-import type { IntegrationAncestor, VcsProvider } from "../contracts/vcsProvider.js";
+import type { IntegrationAncestor, RepoRef, ResolvedVcsToken, VcsProvider } from "../contracts/vcsProvider.js";
 import { orgScopingPool } from "../data/orgScopedDb.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
 import { PgEventStore } from "../eventStore.js";
+import { PgIntegrationNodeModel } from "../dag/integrationNodesPg.js";
+import { integrationNodesDrive } from "../dag/integrationNodesDriveFlag.js";
+import { driveBatchThroughNode } from "./batchIntegrationNodeDrive.js";
+import { batchNodeGate, batchNodeResolveConfig } from "./batchNodeGate.js";
 import { runFreshRunnerMergeGate } from "./freshRunnerGate.js";
 
 /** The terminal runner image a batch re-gate allocates against when the project sets none. */
@@ -144,6 +148,26 @@ export class PgBatchChecker implements BatchChecker {
       }
     }
 
+    // §3 INTEGRATION-NODE DRIVE (flag ON, default): assemble the prospective merged state
+    // LOCALLY over jj (no `tanren/batch` host ref), UPSERT the node, and PROOF-REUSE the
+    // gate verdict (skip the re-gate on a recorded passing proof). Fail-closed: a stale
+    // reuse can NEVER merge unproven code (the six-component key guard). Flag OFF reverts
+    // to the server-side `buildIntegrationBranch` + always-recompute path below.
+    if (integrationNodesDrive()) {
+      return await this.driveThroughIntegrationNode({
+        orgId,
+        projectId: input.projectId,
+        project,
+        ordered,
+        installation,
+        staticRef,
+        repo,
+        token,
+        tailSpecId,
+        integrationRef: integrationBranch,
+      });
+    }
+
     // The ephemeral `tanren/batch/<tail>` ref is EPHEMERAL per check: build it,
     // gate it, then ALWAYS tear it down (pass / fail / conflict / infra-error) so a
     // retry or the next batch starts from a clean ref instead of a stale leftover.
@@ -239,6 +263,99 @@ export class PgBatchChecker implements BatchChecker {
     }
   }
 
+  /**
+   * §3 INTEGRATION-NODE DRIVE: assemble the prospective merged state LOCALLY over jj (no
+   * `tanren/batch` host ref), UPSERT the node, and PROOF-REUSE the gate verdict. The
+   * member head SHAs are read inside the jj integration (captured at integration time —
+   * the divergence key the memberKey hashes); the baseSha is the default branch head AT
+   * check time (the node's base identity). Org-scoped: the node UPSERT/proof + the gate
+   * events run under the project's org (`runWithJobOrgId`).
+   */
+  private async driveThroughIntegrationNode(args: {
+    orgId: string;
+    projectId: string;
+    project: BatchProjectRow;
+    ordered: ReadonlyArray<IntegrationAncestor>;
+    installation: OrgGithubAppInstallation | undefined;
+    staticRef: string | undefined;
+    repo: RepoRef;
+    token: ResolvedVcsToken;
+    tailSpecId: string;
+    integrationRef: string;
+  }): Promise<BatchCheckVerdict> {
+    const { orgId, projectId, project, ordered, installation, staticRef, repo, tailSpecId, integrationRef } = args;
+    const baseSha = await this.deps.vcsProvider.readBranchHeadSha({
+      repo,
+      branch: project.default_branch,
+      token: args.token,
+    });
+    if (baseSha === undefined) {
+      // Fail-closed: an unreadable base head is an infra fault (a retriable hold), never a
+      // verdict — the coordinator must not blame/bisect a PR for it.
+      return {
+        result: "infra-error",
+        message: `batch base head ${project.default_branch} could not be read for the integration node`,
+        retriable: true,
+      };
+    }
+    const runnerImage = project.runner_image ?? DEFAULT_BATCH_RUNNER_IMAGE;
+    const governancePosture = resolveGovernancePosture(project.project_config);
+    const policyVersion = resolvePolicyVersion(project.project_config);
+    const eventStore = this.deps.runStateWriter ?? new PgEventStore(orgScopingPool(this.deps.pool));
+    const gateDeps = {
+      ssh: this.deps.ssh,
+      eventStore,
+      governancePosture,
+      integrationRef,
+      projectId,
+      tailSpecId,
+      timeoutMs: this.deps.timeoutMs,
+    } as const;
+    return runWithJobOrgId(orgId, () =>
+      driveBatchThroughNode(
+        {
+          orgId,
+          projectId,
+          baseBranch: project.default_branch,
+          baseSha,
+          repoUrl: project.repo_url,
+          runnerImage,
+          tailSpecId,
+          members: ordered.map((a) => ({ specId: a.specId, branch: a.branch })),
+          policyVersion,
+          // The quarantine (flaky-skip) set version is project-policy-scoped; until a
+          // dedicated quarantine version exists it tracks the policy version (a posture
+          // bump that changes the quarantine set forces a recompute). Honest, not faked.
+          quarantineVersion: policyVersion,
+        },
+        {
+          nodes: new PgIntegrationNodeModel(this.deps.pool),
+          eventStore,
+          jjWorkspaceDeps: {
+            facts: {
+              orgId,
+              projectId,
+              repoUrl: project.repo_url,
+              runnerImage,
+              ...(installation !== undefined && { installation }),
+              githubCredentialRef: staticRef ?? "",
+              identitySecretRef: this.deps.identitySecretRef,
+            },
+            allocator: this.deps.allocator,
+            ssh: this.deps.ssh,
+            secrets: this.deps.secrets,
+            vcsProvider: this.deps.vcsProvider,
+            ...(this.deps.githubAppMinter !== undefined && { githubAppMinter: this.deps.githubAppMinter }),
+            timeoutMs: this.deps.timeoutMs,
+          },
+          resolveConfig: batchNodeResolveConfig(gateDeps),
+          gate: batchNodeGate(gateDeps),
+          timeoutMs: this.deps.timeoutMs,
+        },
+      ),
+    );
+  }
+
   private async loadProject(client: pg.PoolClient, projectId: string): Promise<BatchProjectRow> {
     const result = await client.query<BatchProjectRow>(
       `SELECT p.repo_url, p.default_branch, p.runner_image, p.config AS project_config, o.config AS org_config
@@ -282,6 +399,20 @@ function resolveGovernancePosture(projectConfig: unknown): GovernancePosture {
     return migrateProjectConfig(projectConfig).governancePosture;
   } catch {
     return "strict";
+  }
+}
+
+/**
+ * Resolve the project's policy version (the config version) — the posture the verdict is
+ * judged under, a proof-reuse key component. FAIL-CLOSED: a config that cannot be read
+ * returns `undefined` (the proof-reuse decider forces a recompute on an unresolvable
+ * policyVersion, never a stale reuse). Stringified so it keys the proof uniformly.
+ */
+function resolvePolicyVersion(projectConfig: unknown): string | undefined {
+  try {
+    return String(migrateProjectConfig(projectConfig).version);
+  } catch {
+    return undefined;
   }
 }
 

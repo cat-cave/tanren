@@ -144,6 +144,7 @@ import {
   DagSpecPercolationReplanPayload,
   DagSpecSpeculationHeldPayload,
   DagSpecSpeculativePayload,
+  IntegrationProofReusedPayload,
   IntegrationRebasePayload,
 } from "./schemas/dag.js";
 
@@ -416,6 +417,11 @@ export const EventRegistry = {
   // rebasing the dependent's EXISTING branch in place (same run row) instead of the
   // old supersede+regenerate. The `rebase_vs_rebuild` instrumentation Wave 3 reads.
   "integration.rebase": IntegrationRebasePayload,
+  // §3 PROOF REUSE: the gate/CI verdict site found a recorded PASSING proof whose
+  // six-component `proofReuseKey` matched the live inputs EXACTLY, so it SKIPPED the
+  // re-gate and reused the verdict — the least-repeated-work primitive. Emitted ONLY on
+  // an exact match against a passing proof (any drift / non-pass / unknown key recomputes).
+  "integration.proof.reused": IntegrationProofReusedPayload,
   // A spec parked at the terminal needs_attention status (the DAG frees its slot +
   // blocks only its dependents, asking a human loudly). Reached by the native merge
   // queue's conflict resolver when two intents are genuinely irreconcilable

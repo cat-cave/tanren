@@ -78,6 +78,13 @@
       "when": 1780900134556,
       "tag": "0010_findings_routed_event",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1780910475740,
+      "tag": "0011_integration_proof_reused_event",
+      "breakpoints": true
     }
   ]
 }

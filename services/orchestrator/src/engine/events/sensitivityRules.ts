@@ -440,6 +440,15 @@ export const sensitivityRules: SensitivityRule[] = [
     ["rebaseConflicted", "public"],
     ["decision", "public"],
   ]),
+  // §3 PROOF REUSE (integration.proof.reused) — node ids + content/config hashes + the
+  // verdict label; all public (hashes are not secrets).
+  ...rulesFor("integration.proof.reused", [
+    ["nodeId", "public"],
+    ["recordedOnNodeId", "public"],
+    ["memberKey", "public"],
+    ["proofReuseKey", "public"],
+    ["verdict", "public"],
+  ]),
   // Post-merge auto-issue creation (tempering.md dim A) — PR/merge identity + the
   // failing post-merge checks + the auto-filed issue's number/url/label, all public
   // (the regression + its tracking issue are visible run lineage, no secrets).

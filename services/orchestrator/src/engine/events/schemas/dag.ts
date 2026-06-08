@@ -286,6 +286,36 @@ export const IntegrationRebasePayload = z
   .strict();
 export type IntegrationRebasePayload = z.infer<typeof IntegrationRebasePayload>;
 
+// integration.proof.reused (tanren-owns-the-engine.md §3 — proof reuse, the
+// least-repeated-work primitive): the gate/CI verdict site found a recorded PASSING
+// proof whose `proofReuseKey` matched the LIVE inputs EXACTLY (all six components —
+// memberKey, gateConfigHash, policyVersion, runnerImage, appEnvHash, quarantineVersion),
+// so it SKIPPED the re-gate and reused the prior verdict. THE SAFETY INVARIANT: this is
+// emitted ONLY on an exact six-component match against a PASSING proof; ANY drift, a
+// non-passing recorded verdict, or an unresolvable key component forces a recompute
+// (the gate runs) and this event is NOT emitted — a reuse can never let unproven code
+// merge. `proofReuseKey` is the matched cache key (the audit handle); `nodeId` is the
+// integration node the verdict was reused for; `memberKey` is the integrated-content
+// identity the proof carries; `recordedOnNodeId` is the node the proof was ORIGINALLY
+// recorded on (a batch proof carrying into the real merge reuses across node ids — the
+// content is identical, which is what `memberKey` proves).
+export const IntegrationProofReusedPayload = z
+  .object({
+    // The integration node the verdict was reused FOR (the current node).
+    nodeId: z.string(),
+    // The node the proof was ORIGINALLY recorded on (may differ from `nodeId` — a batch
+    // proof carries into the real merge; the content identity is what matches).
+    recordedOnNodeId: z.string(),
+    // The integrated-content identity the reused proof proves (`memberKey`).
+    memberKey: z.string(),
+    // The full six-component cache key that matched (the audit handle).
+    proofReuseKey: z.string(),
+    // The reused verdict — always `passed` (only a PASSING proof short-circuits the gate).
+    verdict: z.literal("passed"),
+  })
+  .strict();
+export type IntegrationProofReusedPayload = z.infer<typeof IntegrationProofReusedPayload>;
+
 // NEVER-STRAND reconciler events: the DAG's self-healing safety net. A spec can get
 // stuck OCCUPYING A SLOT (`active`/`in_flight`) with NO live run — the recurring
 // stranding bug (a percolation §2c re-exec halts → the spec stays `active`, both its
