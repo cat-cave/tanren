@@ -14,9 +14,9 @@
 //   3. wakes the DagWalker for the project (a re-opened spec has no run-terminal
 //      notification to re-trigger the walker, so we notify the DAG channel directly).
 //
-// The bounded re-enqueue budget RESETS as a consequence: the strand reconciler counts
-// only `dag.spec.unstranded` events AFTER the most recent `dag.spec.attention_resolved`
-// (see PgSpecStrandReadModel.countPriorUnstrands), so the re-queued spec genuinely
+// The `dag.spec.attention_resolved` event also marks the budget-reset boundary for the
+// merge-conflict re-plan cap: the conflict resolver counts only the re-plan-routed
+// events AFTER the most recent resolution, so an operator-requeued spec genuinely
 // re-runs the full retry budget rather than immediately re-escalating.
 
 import { getSystemPool, notifyDagChanged, runWithOrgScope } from "@tanren/db";

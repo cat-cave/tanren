@@ -419,3 +419,114 @@ describe("conflict-resolved land re-enters the MergeAuthority (no parallel merge
     expect(landed).toEqual(["sha-feat"]);
   });
 });
+
+/**
+ * APEX-STALL #1 LOCK (tanren-owns-the-engine.md §7): the live apex run stalled on a
+ * native_queue merge-time conflict that looped the GitHub PR-merge API 90× without ever
+ * engaging the resolver (a 409-retry loop, no conflict resolution). That loop is now
+ * STRUCTURALLY IMPOSSIBLE: a `dirty` mergeability at merge time routes to the conflict
+ * RESOLVER (invoked EXACTLY ONCE), and the land then flows through the `MergeAuthority`
+ * CAS — never the host PR-merge endpoint, so there is no 409 to retry against. These
+ * tests assert the resolver fires once and `probe.merge()` (the host PR-merge call the
+ * 409-loop hammered) is NEVER called on the authority-gated land path.
+ */
+describe("apex-stall #1: a merge-time conflict engages the resolver ONCE, never a 409 retry loop", () => {
+  /** A counting conflict-resolver hook: records every invocation (apex-stall: must be exactly 1). */
+  function countingResolver(resolved: boolean): { hook: () => Promise<{ resolved: boolean }>; calls: () => number } {
+    let calls = 0;
+    return {
+      hook: async () => {
+        calls += 1;
+        return { resolved };
+      },
+      calls: () => calls,
+    };
+  }
+
+  /** Build an authority-gated dispatcher with an injected (counting) conflict resolver. */
+  function dispatcherWithResolver(
+    probe: MergeProbe,
+    events: ReturnType<typeof recordingEventStore>,
+    b: MergeAuthorityBundle,
+    resolveConflict: () => Promise<{ resolved: boolean }>,
+  ): MergeDispatcher {
+    const input = {
+      pool: fakePool,
+      secrets: {},
+      vcsProvider: {},
+      runId: "run_1",
+      resolveConflict,
+      reGateCi: reGate("passed"),
+      mergeAuthority: b,
+    } as unknown as MergeForRunInput;
+    const deps: DispatcherDeps = {
+      input,
+      context: context(),
+      eventStore: events as never,
+      taskId: "task_1",
+      integration: "native_queue",
+      pr: { repo: REPO, pullNumber: 1 },
+      probe,
+    };
+    return new MergeDispatcher(deps);
+  }
+
+  it("a merge-time conflict invokes the resolver EXACTLY ONCE — never a host PR-merge retry loop", async () => {
+    const host = new InMemoryCodeHost();
+    host.seed(REPO, "main", "sha-main");
+    await host.pushRef({ repo: REPO, localRef: "feat", remoteBranch: "feat", sha: "sha-feat" });
+    // First mergeability read (ensureUpToDate) is `dirty` → the conflict path; the
+    // resolution clears it so the next read (driveLand) is `clean` and the authority lands.
+    const probe = scriptedProbe("clean");
+    const events = recordingEventStore();
+    const landed: string[] = [];
+    const resolver = countingResolver(true);
+
+    const result = await dispatcherWithResolver(
+      probe,
+      events,
+      bundle(host, { landed }),
+      resolver.hook,
+    ).directMerge();
+
+    // The resolver was engaged EXACTLY ONCE (not 90×, not 0) — the structural fix for the
+    // apex stall (the conflict is resolved, not retried blindly against a 409).
+    expect(resolver.calls()).toBe(1);
+    // The land went through the authority CAS (main advanced to the authorized head) — the
+    // host PR-merge endpoint (the 409-loop's target) was NEVER polled.
+    expect(probe.mergeCalls).toBe(0);
+    expect(result.outcome).toBe("merged");
+    expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-feat");
+    expect(landed).toEqual(["sha-feat"]);
+    // A merge-time conflict surfaced exactly one conflict route, not a storm of retries.
+    expect(events.events.filter((e) => e === "merge.conflict")).toHaveLength(0);
+  });
+
+  it("an UNRESOLVED merge-time conflict resolves ONCE then HOLDS recoverably — never a 409 retry loop", async () => {
+    const host = new InMemoryCodeHost();
+    host.seed(REPO, "main", "sha-main");
+    await host.pushRef({ repo: REPO, localRef: "feat", remoteBranch: "feat", sha: "sha-feat" });
+    const probe = scriptedProbe("dirty");
+    const events = recordingEventStore();
+    const landed: string[] = [];
+    const resolver = countingResolver(false); // the resolver cannot reconcile.
+
+    const result = await dispatcherWithResolver(
+      probe,
+      events,
+      bundle(host, { landed }),
+      resolver.hook,
+    ).directMerge();
+
+    // Even when the conflict CANNOT be resolved, the resolver is engaged exactly ONCE and
+    // the dispatcher emits the recoverable `merge.conflict` outcome — it does NOT loop the
+    // host PR-merge endpoint hoping the 409 clears (the apex-stall failure mode).
+    expect(resolver.calls()).toBe(1);
+    expect(probe.mergeCalls).toBe(0);
+    expect(result.outcome).toBe("conflict");
+    expect(landed).toEqual([]);
+    expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-main");
+    // Exactly one conflict event (the recoverable hold), not a retry storm.
+    expect(events.events.filter((e) => e === "merge.conflict")).toHaveLength(1);
+  });
+});
