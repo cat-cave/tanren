@@ -5,14 +5,17 @@
 // run-activity bus the post-merge issue-watcher uses — no new poller.
 //
 // GATED on a deploy artifact via a THREE-WAY intent resolution — NONE (legitimate
-// no-op, LOGGED) / INCOMPLETE-but-expected (LOUD fail-closed) / CONFIGURED (fires;
-// a genuine deploy FAILURE also throws LOUD) — so a misconfigured-but-expected
-// deploy can NEVER silently skip and make a run (apex) look "done" without a live
-// deployment. Full rationale in `deployTargetResolution.ts`.
+// no-op, LOGGED) / INCOMPLETE-but-expected (LOUD fail-closed) / CONFIGURED (fires) —
+// so a misconfigured-but-expected deploy can NEVER silently skip and make a run (apex)
+// look "done" without a live deployment. Full rationale in `deployTargetResolution.ts`.
 //
-// IDEMPOTENT per merge: before triggering it checks for a prior `deploy.triggered`
-// event on the run — present ⇒ this merge already deployed and it returns. So a
-// notification storm collapses to one deploy per merge.
+// DURABLE FAILURE: once a target resolves (a deploy is EXPECTED), ANY throw — verify
+// exhaustion OR a trigger/attach failure — records a durable `deploy.failed` (→ a `warn`
+// notification) BEFORE re-throwing, so the failure is loud + persisted, never a swallowed
+// subscriber log line that leaves the merge looking "done" with no live URL.
+//
+// IDEMPOTENT per merge: it gates on a prior TERMINAL `deploy.verified`/`deploy.failed`
+// and resumes a prior unverified `deploy.triggered` — one deploy per merge.
 //
 // SECRET DISCIPLINE: the runtime env VALUES flow only into `attachRuntimeAppEnv`'s
 // provider set-env request; the deploy token only into the provider's bearer. The
@@ -24,8 +27,15 @@ import type pg from "pg";
 import type { EventStore } from "../eventStore.js";
 import { PgEventStore } from "../eventStore.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
-import { serviceAuditActor, type AuditEnvelope } from "../events/schemas/audit.js";
 import { systemActor } from "../state/actor.js";
+import {
+  appendDeployFailed,
+  deployAuditEnvelope,
+  type DeployVerifyContext,
+  mergeShaFromPayload,
+  repoSlugFromPrUrl,
+  verifyDeploy,
+} from "./deployOnMergeReads.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import {
   type DeployTargetResolution,
@@ -37,8 +47,6 @@ import { type DeployHttpTransport, fetchDeployTransport } from "../provisioners/
 import { OrgIntegrationsStore } from "../repositories/orgIntegrations.js";
 import { attachRuntimeAppEnv } from "../workflow/attachRuntimeAppEnv.js";
 import { deployProvisionerFor } from "../workflow/deployProvisionerFor.js";
-import { buildDeployAdapter } from "../deploy/buildDeployAdapter.js";
-import { DIRECT_API_ADAPTER_KIND } from "../deploy/directApiDeployAdapter.js";
 import type { UrlReachabilityProbe, VerifyPollPolicy } from "../contracts/deployAdapter.js";
 
 // How many times verification is (re-)run before escalating to `deploy.failed`. Each
@@ -46,13 +54,6 @@ import type { UrlReachabilityProbe, VerifyPollPolicy } from "../contracts/deploy
 // wait), so a transient failure recovers in-process. Bounded so a genuinely-failed
 // deploy escalates LOUD rather than retrying forever.
 const DEFAULT_VERIFY_MAX_ATTEMPTS = 3;
-
-// The FIXED, non-secret `deploy.failed.reason`. Deliberately NOT the raw verify
-// error message: a provider HTTP failure can embed provider-supplied response text
-// (a potential secret), and this reason is persisted + marked public. The full error
-// is preserved via the re-throw (logged by the subscriber) for diagnosis.
-const DEPLOY_FAILED_REASON =
-  "deploy verification did not reach a live deployment within the bounded retry; see the run logs for provider detail";
 
 /** The deploy artifact a project carries in its config once a deploy capability was provisioned. */
 export interface ProjectDeployTarget {
@@ -154,6 +155,41 @@ export class DeployOnMergeWatcher {
     }
     const target = resolved.target;
 
+    // Idempotent on a TERMINAL outcome: a VERIFIED deploy is done, and a FAILED
+    // deploy (verify exhausted OR a trigger failure) must NOT be re-run — both gate to
+    // a no-op so a `deploy.failed` append can't self-loop the run-activity bus.
+    if (await this.alreadyTerminal(runId)) return;
+
+    // FAIL-CLOSED + LOUD + DURABLE: from here on a deploy is genuinely EXPECTED (a
+    // target resolved). ANY throw — a denied egress target, a missing/lost grant, the
+    // provider build/release failing, the runtime-env attach failing — must surface as
+    // a durable `deploy.failed` (→ a `warn` notification) so the merge can NEVER look
+    // "done" with no live URL while the only trace is a swallowed subscriber log line.
+    // `verifyWithRetry` records its OWN verify-phase `deploy.failed` before re-throwing;
+    // the `deployFailedRecorded` guard skips a duplicate trigger-phase append for it.
+    const recorded = { verifyPhase: false };
+    try {
+      await this.driveExpectedDeploy(runId, merged, target, recorded);
+    } catch (error) {
+      if (!recorded.verifyPhase) {
+        await appendDeployFailed(this.verifyCtx, { runId, projectId: merged.projectId, target, phase: "trigger" });
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Drive an EXPECTED deploy to a verified live URL (resume-verify OR trigger + attach
+   * + verify). Any throw propagates LOUD to {@link check}, which records a durable
+   * trigger-phase `deploy.failed` — UNLESS the verify retry already recorded a
+   * verify-phase one (it sets `recorded.verifyPhase`), so the caller skips the duplicate.
+   */
+  private async driveExpectedDeploy(
+    runId: string,
+    merged: MergedRunInfo,
+    target: ProjectDeployTarget,
+    recorded: { verifyPhase: boolean },
+  ): Promise<void> {
     // SECURITY-BASELINE deploy-target allowlist: a denied target is a LOUD hard
     // failure (no silent fallback) — the deploy never fires against an off-allowlist
     // target. The default policy is permissive (OSS posture), so this is a no-op
@@ -166,11 +202,6 @@ export class DeployOnMergeWatcher {
           `allowed by the egress policy: ${decision.reason}`,
       );
     }
-
-    // Idempotent on a TERMINAL outcome: a VERIFIED deploy is done, and a FAILED
-    // deploy (the bounded verify retry exhausted) must NOT be re-verified — both gate
-    // to a no-op so a `deploy.failed` append can't self-loop the run-activity bus.
-    if (await this.alreadyTerminal(runId)) return;
 
     const grant = await this.loadGrant(target);
     if (grant === undefined) {
@@ -186,7 +217,7 @@ export class DeployOnMergeWatcher {
     // `deploy.triggered`, so a failed verify dead-ended the deploy forever).
     const priorDeploymentId = await this.priorTriggeredDeploymentId(runId);
     if (priorDeploymentId !== undefined) {
-      await this.verifyWithRetry(runId, merged.projectId, target, grant.providerKind, priorDeploymentId);
+      await this.verifyWithRetry(runId, merged.projectId, target, grant.providerKind, priorDeploymentId, recorded);
       return;
     }
 
@@ -244,7 +275,7 @@ export class DeployOnMergeWatcher {
     // A configured deploy that never becomes ready (or whose URL never serves) throws
     // LOUD here — `deploy.triggered` is no longer the end; `deploy.verified` is the
     // proof. On success emit `deploy.verified` (provider + url + state, non-secret).
-    await this.verifyWithRetry(runId, merged.projectId, target, grant.providerKind, result.deploymentId);
+    await this.verifyWithRetry(runId, merged.projectId, target, grant.providerKind, result.deploymentId, recorded);
   }
 
   /**
@@ -260,93 +291,42 @@ export class DeployOnMergeWatcher {
     target: ProjectDeployTarget,
     providerKind: string,
     deploymentId: string,
+    recorded: { verifyPhase: boolean },
   ): Promise<void> {
     const maxAttempts = this.deps.verifyMaxAttempts ?? DEFAULT_VERIFY_MAX_ATTEMPTS;
     let lastError: unknown;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
-        await this.verifyDeploy(runId, projectId, target, providerKind, deploymentId);
+        const grant = await this.loadGrant(target);
+        await verifyDeploy(this.verifyCtx, { runId, projectId, target, providerKind, deploymentId, grant });
         return;
       } catch (error) {
         lastError = error;
       }
     }
-    await this.appendDeployFailed(runId, projectId, target, deploymentId, maxAttempts);
+    await appendDeployFailed(this.verifyCtx, {
+      runId,
+      projectId,
+      target,
+      phase: "verify",
+      deploymentId,
+      attempts: maxAttempts,
+    });
+    // Signal the outer `check()` guard that a verify-phase `deploy.failed` is already
+    // recorded, so it does not append a duplicate trigger-phase one for this same throw.
+    recorded.verifyPhase = true;
     throw lastError instanceof Error ? lastError : new Error(String(lastError));
   }
 
-  /**
-   * Append the LOUD `deploy.failed` terminal under the org scope. The `reason` is a
-   * FIXED, non-secret summary — never the raw verify error (it can embed provider
-   * HTTP response text, a potential secret, and this event is persisted + public).
-   * The full error is preserved by the re-throw in `verifyWithRetry` (subscriber logs
-   * it); only the bounded summary + attempt count reach the audit event.
-   */
-  private async appendDeployFailed(
-    runId: string,
-    projectId: string,
-    target: ProjectDeployTarget,
-    deploymentId: string,
-    attempts: number,
-  ): Promise<void> {
-    await runWithJobOrgId(target.orgId, async () => {
-      await this.eventStore.append({
-        runId,
-        projectId,
-        eventType: "deploy.failed",
-        payload: {
-          provider: target.provider,
-          appId: target.appId,
-          deploymentId,
-          attempts,
-          reason: DEPLOY_FAILED_REASON,
-          ...deployAuditEnvelope(target),
-        },
-      });
-    });
-  }
-
-  /**
-   * Verify the just-triggered deploy is live, then record `deploy.verified`. Builds
-   * the `direct_api` DeployAdapter, polls to READY + smoke-checks the resolved URL
-   * (LOUD throw on failure / never-ready / unreachable), and appends the non-secret
-   * proof under the org scope.
-   */
-  private async verifyDeploy(
-    runId: string,
-    projectId: string,
-    target: ProjectDeployTarget,
-    providerKind: string,
-    deploymentId: string,
-  ): Promise<void> {
-    const grant = await this.loadGrant(target);
-    if (grant === undefined) {
-      // The grant was present moments ago (the trigger resolved it); a disappearance
-      // mid-flight is a hard error, never a skipped verify.
-      throw new Error(`deployOnMerge: verify lost the org grant for '${target.provider}' on project '${projectId}'`);
-    }
-    const adapter = buildDeployAdapter(DIRECT_API_ADAPTER_KIND, {
-      provisioner: { transport: this.deps.transport, secrets: this.deps.secrets },
+  /** The verify/append-failed collaborators' deps subset (built once off `this.deps`). */
+  private get verifyCtx(): DeployVerifyContext {
+    return {
+      eventStore: this.eventStore,
+      transport: this.deps.transport,
+      secrets: this.deps.secrets,
       ...(this.deps.urlProbe !== undefined && { urlProbe: this.deps.urlProbe }),
-      ...(this.deps.verifyPoll !== undefined && { poll: this.deps.verifyPoll }),
-    });
-    const verification = await adapter.verify(grant, { provider: providerKind, appId: target.appId }, deploymentId);
-    await runWithJobOrgId(target.orgId, async () => {
-      await this.eventStore.append({
-        runId,
-        projectId,
-        eventType: "deploy.verified",
-        payload: {
-          provider: target.provider,
-          appId: target.appId,
-          deploymentId,
-          url: verification.url,
-          state: verification.state,
-          smokeStatus: verification.smokeStatus,
-          ...deployAuditEnvelope(target),
-        },
-      });
-    });
+      ...(this.deps.verifyPoll !== undefined && { verifyPoll: this.deps.verifyPoll }),
+    };
   }
 
   /** Read the run's merge coordinates (project, merged repo slug, ref), system-scoped — undefined when not merged. */
@@ -450,29 +430,6 @@ export class DeployOnMergeWatcher {
       OrgIntegrationsStore.getGrant(client, target.orgId, target.provider, systemActor),
     );
   }
-}
-
-/**
- * AUDIT-EVIDENCE BASELINE: the audit envelope stamped onto the governing deploy
- * events. Deploy-on-merge is autonomous (no human), so the initiating actor is the
- * SERVICE with no approving actor; the policy version is the project's governance
- * config revision. Shared by trigger + verify so they carry an identical envelope.
- */
-function deployAuditEnvelope(target: ProjectDeployTarget): AuditEnvelope {
-  return { policyVersion: target.policyVersion, initiatingActor: serviceAuditActor };
-}
-
-/** Derive `owner/name` from a GitHub PR URL (`https://github.com/owner/name/pull/N`). */
-function repoSlugFromPrUrl(prUrl: string): string | undefined {
-  const match = /github\.com\/([^/]+)\/([^/]+)\/pull\/\d+/u.exec(prUrl);
-  return match === null ? undefined : `${match[1]}/${match[2]}`;
-}
-
-/** The merged commit SHA from a `merge.completed` payload (optional field). */
-function mergeShaFromPayload(payload: unknown): string | undefined {
-  if (typeof payload !== "object" || payload === null) return;
-  const sha = (payload as Record<string, unknown>)["mergeSha"];
-  return typeof sha === "string" && sha.trim() !== "" ? sha : undefined;
 }
 
 /**
