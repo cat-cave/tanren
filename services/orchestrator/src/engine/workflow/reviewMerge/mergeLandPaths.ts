@@ -11,6 +11,7 @@
 // is one cohesive module without duplicating those helpers.
 
 import { runAuthorityLand } from "../../merge/mergeAuthorityGate.js";
+import { evaluatePostureGate } from "../../forge/audits/postureGate.js";
 import type { AuditEnvelope } from "../../events/schemas/audit.js";
 import type { PullRequestMergeability } from "../../contracts/vcsProvider.js";
 import type { MergePullRequestResult } from "../../providers/githubReviewMerge.js";
@@ -106,6 +107,11 @@ export async function landViaAuthority(
     case "merged": {
       await ops.cleanupIntegrationBranch();
       await ops.finalize("merged", { taskOutcome: "ok", taskStatus: "done" });
+      // The merge was NOT blocked — so any residual (below-`blockReviewAt`) P2/P3
+      // findings are handled per the project posture (§4): route-to-dag emits
+      // them as new DAG specs; fix-if-idle carries them forward (the land just merged,
+      // so the spec is no longer idle-awaiting-review). Record the disposition.
+      await recordPostureRouting(deps, ops, bundle);
       return ops.result("merged", { mergeSha: disposition.mainSha });
     }
     case "needs_attention": {
@@ -138,6 +144,48 @@ export async function landViaAuthority(
       return ops.result("conflict", { message: disposition.reason });
     }
   }
+}
+
+/**
+ * Record the posture-gate's residual P2/P3 disposition after a merge (§4). The merge
+ * already CLEARED the block decision, so these findings are below `blockReviewAt`; the
+ * project posture decides their fate: `route-to-dag` ⇒ each becomes a new DAG spec;
+ * `fix-if-idle` ⇒ carried forward (the spec just merged, so it is NOT idle-awaiting-
+ * review). The `auditor.findings_routed` event is the durable audit trail of that
+ * disposition — the SAME `evaluatePostureGate` policy that drives the block, now wired
+ * into the live merge flow. Emitted only when there ARE residual findings.
+ */
+async function recordPostureRouting(deps: DispatcherDeps, ops: LandOps, bundle: MergeAuthorityBundle): Promise<void> {
+  // The land just merged, so the spec is not idle-awaiting-review ⇒ fix-if-idle residuals
+  // carry forward rather than spawning mid-run fix work.
+  const result = evaluatePostureGate(bundle.findings, bundle.auditPosture, { idleAwaitingReview: false });
+  const routed = result.dispositions.filter((d) => d.action === "route").map((d) => refOf(d));
+  const fixedInPlace = result.dispositions.filter((d) => d.action === "fix").map((d) => refOf(d));
+  const carriedForward = result.dispositions.filter((d) => d.action === "carryForward").map((d) => refOf(d));
+  if (routed.length === 0 && fixedInPlace.length === 0 && carriedForward.length === 0) {
+    return;
+  }
+  await deps.eventStore.append({
+    ...ops.base(),
+    eventType: "auditor.findings_routed",
+    payload: {
+      runId: deps.context.runId,
+      p2p3Handling: bundle.auditPosture.p2p3Handling,
+      routed,
+      fixedInPlace,
+      carriedForward,
+    },
+  });
+}
+
+/** Project a posture disposition's finding onto the routed-finding-ref event shape. */
+function refOf(d: { finding: { id: string; severity: string; title: string } }): {
+  id: string;
+  severity: "P2" | "P3";
+  title: string;
+} {
+  // The posture gate's residuals are below `blockReviewAt` — P2/P3 by construction.
+  return { id: d.finding.id, severity: d.finding.severity as "P2" | "P3", title: d.finding.title };
 }
 
 /** Emit the authority's fail-closed hold as a `merge.blocked` event (recovery surface). */

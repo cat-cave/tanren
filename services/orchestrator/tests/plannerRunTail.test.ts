@@ -298,7 +298,14 @@ describe("runPlannerLoopWorkflow — non-pass loop outcome mapping", () => {
       writer: makeWriter(["d\n"]),
       checker: makeChecker([passingCheck]) as AnswererAdapter<CheckAnswer>,
       auditor: makeAuditor([
-        { passed: false, reasoning: "unrecoverable", outstandingBehaviorIds: [], recommendedAction: "halt" },
+        {
+          passed: false,
+          reasoning: "unrecoverable",
+          outstandingBehaviorIds: [],
+          recommendedAction: "halt",
+          // S3: the halt is driven by a P0 FINDING, not the legacy verdict enum.
+          findings: [{ id: "unrecoverable-1", severity: "P0", title: "unrecoverable", body: "doomed" }],
+        },
       ]) as AnswererAdapter<AuditAnswer>,
     };
 

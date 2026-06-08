@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "carriedForward": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "severity": {
+            "enum": [
+              "P2",
+              "P3"
+            ],
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "severity",
+          "title"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "fixedInPlace": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "severity": {
+            "enum": [
+              "P2",
+              "P3"
+            ],
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "severity",
+          "title"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "p2p3Handling": {
+      "enum": [
+        "fix-if-idle",
+        "route-to-dag"
+      ],
+      "type": "string"
+    },
+    "routed": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "severity": {
+            "enum": [
+              "P2",
+              "P3"
+            ],
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "severity",
+          "title"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "runId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "runId",
+    "p2p3Handling",
+    "routed",
+    "fixedInPlace",
+    "carriedForward"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.auditor.findings_routed"
+}

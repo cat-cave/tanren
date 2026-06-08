@@ -461,8 +461,8 @@ describe("runAuditorStage", () => {
     const verdict = h.find("auditor.verdict")!;
     expect(verdict.payload.passed).toBe(false);
     expect(verdict.payload.outstandingBehaviorIds).toEqual(["B2"]);
-    // WAVE-2 dual-emit: the explicit P1 finding (with its fixHint) is carried on
-    // the verdict alongside the legacy fields.
+    // S3: the auditor emits the explicit P1 finding (with its fixHint) as its SOLE
+    // severity currency — always present on auditor.verdict (no dual-emit flag).
     expect(verdict.payload.findings).toEqual([
       {
         id: "missed-behavior-B2",
@@ -474,7 +474,9 @@ describe("runAuditorStage", () => {
     ]);
     const rejected = h.find("auditor.rejected")!;
     expect(rejected.payload.recommendedAction).toBe("loop_to_planner");
-    expect(rejected.payload.outstandingBehaviorIds).toEqual(["B2"]);
+    // S3: the rejection's outstanding ids are the BLOCKING FINDING ids (findings-driven
+    // decision), not the legacy verdict's `outstandingBehaviorIds`.
+    expect(rejected.payload.outstandingBehaviorIds).toEqual(["missed-behavior-B2"]);
     expect(h.taskOutcomes.get(auditorTaskId)).toBe("rejected_by_auditor");
     // The reject-branch closes the auditor task with the "audit" kind.
     expect(h.find("task.completed")!.payload.taskKind).toBe("audit");

@@ -4,6 +4,7 @@ import { appEnvSensitivityRules } from "./sensitivityRules.appEnv.js";
 import { strandSensitivityRules } from "./sensitivityRules.strand.js";
 import { ciIntelSensitivityRules } from "./sensitivityRules.ciIntel.js";
 import { gateSensitivityRules } from "./sensitivityRules.gate.js";
+import { auditorFindingsRoutedSensitivityRules } from "./sensitivityRules.audit.js";
 
 // Sensitivity rule table. Every payload field reachable from an event must have a
 // registered tag (the eventRegistryFieldCoverage test enforces this as a hard CI
@@ -282,6 +283,9 @@ export const sensitivityRules: SensitivityRule[] = [
     ["outstandingBehaviorIds[]", "public"],
     ["recommendedAction", "public"],
   ]),
+  // S3: the posture-gate's residual P2/P3 disposition (route-to-dag / fix-if-idle) —
+  // all public; spread from ./sensitivityRules.audit.ts under the 500-line cap.
+  ...auditorFindingsRoutedSensitivityRules,
 
   // The native in-loop gate rules (gate.started/passed/failed/advisory_failed/verdict)
   // are split into ./sensitivityRules.gate.js under the 500-line cap; spread below.

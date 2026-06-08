@@ -29,6 +29,8 @@ import { runWithOrgScope } from "@tanren/db";
 import type pg from "pg";
 import type { GateOutcome } from "../workflow/gate/index.js";
 import type { ReviewVerdict } from "../contracts/dagLifecycle.js";
+import type { Finding } from "../contracts/findings.js";
+import { AuditFinding, normalizeFinding } from "../answerers/schemas/index.js";
 
 /** The fresh land-time signals, as the durable record reflects them right now. */
 export interface LandTimeSignals {
@@ -87,4 +89,68 @@ export async function resolveLandTimeSignals(pool: pg.Pool, orgId: string, runId
     const gatedHeadSha = typeof gatedHeadShaRaw === "string" && gatedHeadShaRaw !== "" ? gatedHeadShaRaw : undefined;
     return { gateOutcome, gatedHeadSha, reviewVerdict };
   });
+}
+
+// ---- The LAND-TIME audit findings (the live audit gate, tanren-owns-the-engine.md §4) ----
+
+/**
+ * The synthetic finding the land path raises when the audit record is MISSING /
+ * UNREADABLE at merge time. `decideFromFindings([], posture)` is `block: false` — an
+ * EMPTY list never blocks — so a missing audit must NOT collapse to an empty list (that
+ * would be a silent pass on an un-audited change). Instead it raises ONE explicit P0
+ * finding: P0 is at-or-above EVERY `blockReviewAt`, so the posture BLOCKS the land under
+ * any DORA knob (strict OR velocity). This is the §4 + §0 fail-closed boundary for the
+ * findings input: "no audit verdict" reads as the most-severe blocker, never as clean.
+ */
+export function auditMissingFinding(runId: string): Finding {
+  return {
+    id: `audit-record-missing-${runId}`,
+    severity: "P0",
+    title: "audit record missing at merge time",
+    body:
+      `No durable auditor.verdict was recorded for run ${runId} — the change is UN-AUDITED. ` +
+      `Fail-closed (§4): a missing audit reads as a P0 blocker, never as audited-clean.`,
+  };
+}
+
+/**
+ * Re-read the LATEST `auditor.verdict` findings for a run, org-scoped, at LAND TIME —
+ * the REAL audit gate the `MergeAuthority` decides over via `decideFromFindings` against
+ * the project `auditPosture` (§4). The auditor EMITS findings; the posture (not this
+ * reader) renders the block/route/fix verdict.
+ *
+ * FAIL-CLOSED (§0, §4): a MISSING audit record (no `auditor.verdict` event) OR an
+ * UNREADABLE payload (the `findings` key absent / malformed) does NOT degrade to an
+ * empty list — it returns a single synthetic P0 ({@link auditMissingFinding}) so the
+ * land BLOCKS under any posture. Only a verdict that carries an EXPLICIT `findings` list
+ * (possibly empty — audited-clean) clears the audit input. A malformed finding entry
+ * throws LOUDLY (`AuditFinding.parse`) rather than silently dropping to a pass.
+ */
+export async function resolveLandTimeFindings(
+  pool: pg.Pool,
+  orgId: string,
+  runId: string,
+): Promise<ReadonlyArray<Finding>> {
+  const verdict = await runWithOrgScope(pool, orgId, async (client) => {
+    const result = await client.query<{ payload: { findings?: unknown } }>(
+      `SELECT payload FROM events
+        WHERE run_id = $1 AND event_type = 'auditor.verdict'
+        ORDER BY ts DESC, id DESC LIMIT 1`,
+      [runId],
+    );
+    return result.rows[0]?.payload;
+  });
+  // No recorded auditor.verdict at all ⇒ the change is un-audited ⇒ fail-closed P0.
+  if (verdict === undefined || verdict === null) {
+    return [auditMissingFinding(runId)];
+  }
+  const rawFindings = verdict.findings;
+  // A verdict WITHOUT a findings list is the post-S3 unreadable case (every live verdict
+  // now carries findings): treat an absent/non-array list as un-audited ⇒ fail-closed P0.
+  if (!Array.isArray(rawFindings)) {
+    return [auditMissingFinding(runId)];
+  }
+  // The findings ARE present (possibly empty = audited-clean). Parse each LOUDLY — a
+  // malformed entry throws rather than silently degrading to a passing (empty) gate.
+  return rawFindings.map((entry) => normalizeFinding(AuditFinding.parse(entry)));
 }

@@ -3,7 +3,6 @@
   "additionalProperties": false,
   "properties": {
     "findings": {
-      "default": [],
       "items": {
         "additionalProperties": false,
         "properties": {
