@@ -299,24 +299,6 @@ const StrandReason = z.enum(["halted_reexec", "orphaned_marker", "no_live_run"])
 // One of the strand's terminal runs (its id + final status) — for the audit trail.
 const StrandTerminalRun = z.object({ runId: z.string(), status: z.string() }).strict();
 
-// dag.spec.unstranded: the reconciler confirmed a strand (a spec OCCUPYING A SLOT
-// with every run terminal, not merge-queued, no LIVE percolation marker) and
-// re-enqueued it (flipped `active → pending` so the DagWalker re-runs it),
-// clearing any orphaned percolation marker. `attempt` is the 1-based re-enqueue
-// count for this spec (it escalates to needs_attention once it would EXCEED the cap).
-export const DagSpecUnstrandedPayload = z
-  .object({
-    specId: z.string(),
-    // Why the strand was reconcilable (the canonical §2c cause is a halted re-exec).
-    reason: StrandReason,
-    // The spec's terminal runs (ids + statuses) that confirmed the strand.
-    terminalRuns: z.array(StrandTerminalRun),
-    // The 1-based attempt number this re-enqueue represents (prior unstrands + 1).
-    attempt: z.number().int().positive(),
-  })
-  .strict();
-export type DagSpecUnstrandedPayload = z.infer<typeof DagSpecUnstrandedPayload>;
-
 // dag.spec.needs_attention: a spec parked at the terminal `needs_attention` status —
 // freeing the DAG slot and blocking ONLY its dependents (never the whole DAG),
 // surfacing a loud, bounded ask-for-help. A discriminated union on `source` because
@@ -366,10 +348,10 @@ export type DagSpecNeedsAttentionPayload = z.infer<typeof DagSpecNeedsAttentionP
 // resolved a `needs_attention` escalation — they ADDRESSED the underlying blocker
 // (e.g. fixed a platform bug, re-scoped a dependency) and told Tanren to retry the
 // spec. The spec transitions `needs_attention → open` so the autonomous DagWalker
-// re-picks it up, and the spec's bounded re-enqueue budget RESETS (the strand
-// reconciler counts only `dag.spec.unstranded` events AFTER the most recent
-// resolution — so a re-queued spec genuinely re-runs the full retry budget rather
-// than immediately re-escalating). This is the human-in-the-loop counterpart to
+// re-picks it up, and the spec's bounded re-plan budget RESETS (the conflict resolver
+// counts only the re-plan-routed events AFTER the most recent resolution — so a
+// re-queued spec genuinely re-runs the full retry budget rather than immediately
+// re-escalating). This is the human-in-the-loop counterpart to
 // `dag.spec.needs_attention`: the loud, actor-stamped "addressed, proceed" decision
 // (the escalation discipline). `fromSource` records which subsystem had parked it.
 export const DagSpecAttentionResolvedPayload = z

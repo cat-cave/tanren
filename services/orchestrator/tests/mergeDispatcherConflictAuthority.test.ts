@@ -11,138 +11,32 @@ import { describe, expect, it } from "vitest";
 import { MergeDispatcher, type DispatcherDeps } from "../src/engine/workflow/reviewMerge/mergeDispatcher.js";
 import { InMemoryCodeHost } from "./conformance/fakes/inMemoryCodeHost.js";
 import type { MergeAuthorityBundle, MergeForRunInput, MergeProbe } from "../src/engine/workflow/reviewMerge/index.js";
-import type { ReviewMergeRunContext } from "../src/engine/workflow/reviewMerge/context.js";
-import type { PullRequestMergeability } from "../src/engine/contracts/vcsProvider.js";
-import type { LandFinalizer } from "../src/engine/merge/mergeAuthorityImpl.js";
-import type { AuditPosture } from "../src/engine/contracts/auditPosture.js";
+import {
+  REPO,
+  bundle,
+  buildDispatcher,
+  context,
+  fakePool,
+  mergeability,
+  reGate,
+  recordingEventStore,
+  scriptedProbe,
+  type ReGateStatus,
+} from "./fixtures/mergeDispatcherConflictFixtures.js";
 
-const REPO = { owner: "o", name: "r" };
-const POSTURE: AuditPosture = { blockReviewAt: "P1", p2p3Handling: "route-to-dag" };
-
-function mergeability(state: PullRequestMergeability["state"]): PullRequestMergeability {
-  return { state, behind: state === "behind", baseBranch: "main", headBranch: "feat" };
-}
-
-/** A probe whose mergeability is `dirty` first (to trigger the conflict), then scripted. */
-function scriptedProbe(postResolution: PullRequestMergeability["state"]): MergeProbe & { mergeCalls: number } {
-  let read = 0;
-  const probe = {
-    mergeCalls: 0,
-    // first read (ensureUpToDate) → dirty → conflict; subsequent (driveLand) → scripted.
-    readMergeability: async (): Promise<PullRequestMergeability> => {
-      read += 1;
-      return mergeability(read === 1 ? "dirty" : postResolution);
-    },
-    merge: async () => {
-      probe.mergeCalls += 1;
-      return { merged: true, mergeSha: "host-merge-sha", conflict: false, status: 200, message: "ok" };
-    },
-    updateBranch: async () => ({ outcome: "up_to_date" as const, message: "" }),
-    retargetBase: async () => {},
-    deleteIntegrationBranch: async () => {},
-  };
-  return probe;
-}
-
-/** A recording event store (captures appended event types). */
-function recordingEventStore() {
-  const events: string[] = [];
-  return { events, append: async (input: { eventType: string }) => void events.push(input.eventType) };
-}
-
-/** A fake pool (no DB): the task-finalize UPDATEs are no-ops here. */
-const fakePool = { query: async () => ({ rows: [], rowCount: 0 }) };
-
-/** The §5 finalizer: records land (or throws for the merge_state_unknown case). */
-function fakeFinalizer(opts: { fail?: boolean; landed: string[] }): LandFinalizer {
-  return {
-    finalizeLanded: async (input) => {
-      if (opts.fail) throw new Error("durable finalize failed");
-      opts.landed.push(input.mainSha);
-      return { auditId: "audit_1" };
-    },
-  };
-}
-
-interface BundleOverrides {
-  reviewVerdict?: MergeAuthorityBundle["reviewVerdict"];
-  /** Override the gate outcome — `null` ⇒ a failing/absent gate (blocks). */
-  gateOutcome?: MergeAuthorityBundle["gateOutcome"] | null;
-  /** The sha the gate verdict was FOR — defaults to the landed head (`sha-feat`). */
-  gatedHeadSha?: string;
-  fail?: boolean;
-  landed: string[];
-}
-
-function bundle(host: InMemoryCodeHost, o: BundleOverrides): MergeAuthorityBundle {
-  const gateOutcome = o.gateOutcome === null ? undefined : (o.gateOutcome ?? { passed: true, results: [] });
-  return {
-    codeHost: host,
-    orgId: "org_1",
-    finalizerFor: () => fakeFinalizer({ fail: o.fail ?? false, landed: o.landed }),
-    gateConfigHash: "gc",
-    policyVersion: "pv",
-    gateOutcome,
-    // The gate verdict was for the landed head (`sha-feat`) unless overridden (TOCTOU lock).
-    gatedHeadSha: o.gatedHeadSha ?? "sha-feat",
-    findings: [],
-    auditPosture: POSTURE,
-    reviewVerdict: o.reviewVerdict ?? "approved",
-    budget: { ceilingUsd: undefined, spentUsd: 0 },
-    demo: "not_required",
-    hitlSignoff: "not_required",
-  };
-}
-
-function context(): ReviewMergeRunContext {
-  return {
-    runId: "run_1",
-    specId: "spec_1",
-    projectId: "proj_1",
-    prUrl: "https://github.com/o/r/pull/1",
-    baseBranch: "main",
-    mergeIntegration: "direct_merge",
-    governancePosture: "open",
-    policyVersion: 1,
-    reviewPolicy: "auto",
-    tanrenLogins: [],
-    platformLogins: [],
-  };
-}
-
-/** A `reGateCi` hook returning the given pre_merge gate status (the resolved-tree gate). */
-type ReGateStatus = "passed" | "failed" | "pending";
-function reGate(status: ReGateStatus): () => Promise<{ status: ReGateStatus }> {
-  return async () => ({ status });
-}
-
+/**
+ * The §5 land path with the default (`resolved:true`) conflict resolver — the
+ * authority-gated `direct_merge` dispatcher every test below the lazy-thunk cases
+ * uses. Wraps the shared `buildDispatcher` (tests/fixtures) with the parent file's
+ * positional signature so the existing call sites read unchanged.
+ */
 function dispatcher(
   probe: MergeProbe,
   events: ReturnType<typeof recordingEventStore>,
   b: MergeAuthorityBundle,
   reGateStatus: ReGateStatus = "passed",
 ): MergeDispatcher {
-  const input = {
-    pool: fakePool,
-    secrets: {},
-    vcsProvider: {},
-    runId: "run_1",
-    resolveConflict: async () => ({ resolved: true }),
-    // The resolved-tree pre_merge re-gate (§5): defaults to passing so the
-    // authority then judges the OTHER fail-closed inputs. A test overrides it.
-    reGateCi: reGate(reGateStatus),
-    mergeAuthority: b,
-  } as unknown as MergeForRunInput;
-  const deps: DispatcherDeps = {
-    input,
-    context: context(),
-    eventStore: events as never,
-    taskId: "task_1",
-    integration: "direct_merge",
-    pr: { repo: REPO, pullNumber: 1 },
-    probe,
-  };
-  return new MergeDispatcher(deps);
+  return buildDispatcher({ probe, events, bundle: b, reGateStatus });
 }
 
 /**

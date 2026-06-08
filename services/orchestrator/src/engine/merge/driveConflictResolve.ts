@@ -54,8 +54,7 @@ import { buildDefaultConflictResolver } from "../workflow/reviewMerge/conflictRe
 import type { ConflictResolverHook } from "../workflow/reviewMerge/index.js";
 
 /**
- * The bounded conflict-RE-PLAN budget (mirrors the strand reconciler's
- * `MAX_UNSTRAND_ATTEMPTS` convention): a spec whose conflict could not be
+ * The bounded conflict-RE-PLAN budget: a spec whose conflict could not be
  * mechanically resolved is routed back to the planner AT MOST this many times,
  * carrying the other side's change. Once the count of prior
  * `merge.conflict.replan_routed` events REACHES this (`>=`), the next drive-pass
@@ -167,8 +166,8 @@ export function buildDriveConflictResolve(deps: DriveConflictResolveDeps): Confl
     }
 
     // CLASSIFY-THEN-ESCALATE — the bounded re-plan budget. Count prior
-    // `merge.conflict.replan_routed` events for this spec (the strand-reconciler
-    // cap convention). At/over the cap the two intents are GENUINELY incompatible:
+    // `merge.conflict.replan_routed` events for this spec (the bounded-cap
+    // convention). At/over the cap the two intents are GENUINELY incompatible:
     // re-planning again would just re-conflict forever, so escalate WITHOUT
     // provisioning a runner or routing another re-plan.
     const priorReplans = await countPriorConflictReplans(deps.pool, deps.facts);
@@ -247,7 +246,7 @@ async function percolationOwnsRun(scopedPool: pg.Pool, facts: DriveConflictResol
 
 /**
  * Count prior `merge.conflict.replan_routed` events for the spec — the bounded
- * re-plan budget key (mirrors the strand reconciler's `countPriorUnstrands`). The
+ * re-plan budget key. The
  * `events` table is unreadable to the de-privileged data-plane role (0031 REVOKE),
  * so read on the BYPASSRLS system pool with the org GUC still applied on top.
  */

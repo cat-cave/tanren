@@ -11,8 +11,6 @@ import type {
   ClearRunPercolationPendingInput,
   InsertTaskInput,
   MergeRunVerifiedAncestorShaInput,
-  ReconcileStrandedSpecInput,
-  ReconcileStrandedSpecResult,
   SetRunPercolationReexecIdInput,
   SetRunPrUrlInput,
   SetRunSpeculativeBaseInput,
@@ -52,51 +50,6 @@ export async function applySetSpecStatus(client: QueryClient, input: SetSpecStat
     return;
   }
   await client.query("UPDATE specs SET status = $2 WHERE spec_id = $1", [input.specId, input.status]);
-}
-
-/**
- * NEVER-STRAND: the ATOMIC, strand-invariant-guarded flip (`in_flight → open`
- * re-enqueue / `in_flight → needs_attention` escalation). The WHERE clause re-checks the
- * FULL strand condition IN THE SAME STATEMENT so the read→flip is not a TOCTOU window:
- *   - `status = 'in_flight'` (the spec still occupies a slot as the stranding column — and
- *     the only legal source state for both flip targets), AND
- *   - NO live (`queued`/`running`) run for the spec (condition 2/5), AND
- *   - NO active (`queued`/`merging`) merge_queue entry for any of its runs (condition 3), AND
- *   - NO `percolation_pending` marker whose `reexecRunId` points at a live run (condition 4).
- * If a concurrent percolation re-exec created a live run / reclaimed the spec
- * (`open → in_flight` via `claimPendingSpec`) between the reconciler's READ and this
- * UPDATE, the guard fails → ZERO rows match → a safe no-op (the reconciler skips
- * emitting / clearing). `RETURNING spec_id` + the row-count is the won/lost signal.
- */
-export async function applyReconcileStrandedSpec(
-  client: QueryClient,
-  input: ReconcileStrandedSpecInput,
-): Promise<ReconcileStrandedSpecResult> {
-  const result = await client.query(
-    `UPDATE specs
-        SET status = $2
-      WHERE spec_id = $1
-        AND status = 'in_flight'
-        AND NOT EXISTS (
-              SELECT 1 FROM runs r
-               WHERE r.spec_id = specs.spec_id AND r.status IN ('queued','running')
-            )
-        AND NOT EXISTS (
-              SELECT 1 FROM merge_queue mq
-               JOIN runs r2 ON r2.run_id = mq.run_id
-               WHERE r2.spec_id = specs.spec_id AND mq.status IN ('queued','merging')
-            )
-        AND NOT EXISTS (
-              SELECT 1 FROM runs rm
-               JOIN runs rx ON rx.run_id = (rm.percolation_pending->>'reexecRunId')
-               WHERE rm.spec_id = specs.spec_id
-                 AND rm.percolation_pending IS NOT NULL
-                 AND rx.status IN ('queued','running')
-            )
-      RETURNING spec_id`,
-    [input.specId, input.status],
-  );
-  return { flipped: (result.rowCount ?? 0) > 0 };
 }
 
 /** The `UPDATE specs SET metadata` (the intake's discovery-provenance stamp). */

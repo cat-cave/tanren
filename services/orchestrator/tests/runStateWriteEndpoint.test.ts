@@ -53,7 +53,6 @@ describe("plane-split P3 — write endpoint authn + validation (no DB)", () => {
       "/internal/set-run-status",
       "/internal/set-run-pr-url",
       "/internal/set-spec-status",
-      "/internal/reconcile-stranded-spec",
       "/internal/supersede-queued-planner-task",
       "/internal/insert-task",
       "/internal/update-task",
