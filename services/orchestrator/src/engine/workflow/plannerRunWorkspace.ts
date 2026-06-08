@@ -41,7 +41,20 @@ export async function prepareRunWorkspace(
   target: RunnerHandle,
   workspacePath: string,
 ): Promise<PreparedRunWorkspace> {
-  const cloneHeadSha = await cloneWorkspace(input, target, workspacePath);
+  // Resolve the run's clone token + MERGE-SAFETY pushing identity ONCE (fail-closed:
+  // an authenticated run with an unresolvable identity throws here, before any clone,
+  // rather than committing as an unattributable author). The SAME resolved value
+  // authenticates the clone AND sets the workspace git author below.
+  const resolved = await resolveCloneCredential(input);
+  const cloneHeadSha = await cloneWorkspace(input, target, workspacePath, resolved);
+
+  // MERGE-SAFETY (self-identity): set the workspace git author IMMEDIATELY after the
+  // clone and BEFORE any commit (the bootstrap commit and every writer/rebase commit
+  // that inherits this repo-local config). git auto-detects `<unix-user>@<host>.(none)`
+  // — an unattributable author GitHub maps to a `null` login → the external-change gate
+  // keys it `<unknown>` and BLOCKS Tanren's own PR. An explicit, separately-failing step
+  // (not the clone command's tail) guarantees the author is configured before the commit.
+  await configureWorkspaceGitIdentity(input, target, workspacePath, resolved.identity);
 
   // Durable node_modules guard: seed the checkout's LOCAL git ignore
   // (`.git/info/exclude`) right after clone, BEFORE any install/commit, so no
@@ -92,19 +105,20 @@ export async function prepareRunWorkspace(
 // stdout is the clone HEAD sha. Returns "" only on a fake SSH that yields no
 // output; the real runner always returns a 40-hex sha.
 //
-// When a GitHub token is threaded (`input.githubToken`) the clone authenticates
-// over HTTPS as `x-access-token:<token>` so a PRIVATE target repo can be cloned.
-// The token is fed to the command over SSH stdin via the shared git credential
-// helper (the same mechanism `githubPush.ts` uses) — it never appears in the
-// command string, the process args, or any emitted `workspace.*` event. Without
-// a token the clone runs unauthenticated against the repo URL as-is (public-repo
-// path), unchanged.
+// When a GitHub token is threaded (`resolved.token`) the clone authenticates over
+// HTTPS as `x-access-token:<token>` so a PRIVATE target repo can be cloned. The
+// token is fed to the command over SSH stdin via the shared git credential helper
+// (the same mechanism `githubPush.ts` uses) — it never appears in the command
+// string, the process args, or any emitted `workspace.*` event. Without a token
+// the clone runs unauthenticated against the repo URL as-is (public-repo path),
+// unchanged. The git AUTHOR is configured by a separate step (configureWorkspace
+// GitIdentity) right after this clone, BEFORE the first commit.
 async function cloneWorkspace(
   input: RunPlannerLoopInput,
   target: RunnerHandle,
   workspacePath: string,
+  resolved: ResolvedCloneCredential,
 ): Promise<string> {
-  const resolved = await resolveCloneCredential(input);
   const result = await runWorkspaceSshCommand(input.ssh, target, {
     label: "prepare planner-loop workspace",
     timeoutMs: input.timeoutMs,
@@ -112,6 +126,34 @@ async function cloneWorkspace(
     ...(resolved.token === undefined ? {} : { stdin: resolved.token }),
   });
   return result.stdout.trim();
+}
+
+// MERGE-SAFETY (self-identity): configure the workspace's repo-local git author so
+// every commit it makes (the bootstrap commit + every writer/rebase commit, which
+// inherit `.git/config`) is ATTRIBUTABLE. Runs as its OWN SSH step after the clone
+// and before any commit — distinct from the clone command so the author is set even
+// if the clone path changes, and so a failure to set it surfaces on its own label.
+//
+// AUTHENTICATED runs set the RESOLVED bot login + its canonical
+// `<id>+<login>@users.noreply.github.com` noreply email, so GitHub maps the commit
+// email back to the bot login, the PR-commits author is populated, and the
+// external-change gate sees TANREN's login (not `<unknown>`). A run with an
+// unresolvable identity already threw in resolveCloneCredential (fail-closed) — it
+// never reaches here. The genuinely UNAUTHENTICATED public-repo clone (no identity)
+// keeps a non-attributable placeholder: it never pushes as Tanren, but git still
+// refuses to commit without SOME configured author, so the bootstrap commit needs one.
+export async function configureWorkspaceGitIdentity(
+  input: RunPlannerLoopInput,
+  target: RunnerHandle,
+  workspacePath: string,
+  identity: ActorIdentity | undefined,
+): Promise<void> {
+  await runWorkspaceSshCommand(input.ssh, target, {
+    label: "configure workspace git identity",
+    cwd: workspacePath,
+    timeoutMs: input.timeoutMs,
+    command: ["set -eu", ...gitIdentityConfig(identity)].join(" && "),
+  });
 }
 
 /**
@@ -182,7 +224,11 @@ function buildCloneCommand(
 ): string {
   const branch = quoteSshShellArg(targetBranch);
   const dest = quoteSshShellArg(workspacePath);
-  const post = [`cd ${dest}`, ...gitIdentityConfig(resolved.identity), "git rev-parse HEAD"];
+  // The git AUTHOR is configured by configureWorkspaceGitIdentity (its own step)
+  // right after this clone — NOT in the clone command's tail. So the clone only
+  // verifies the checkout (`git rev-parse HEAD`) and the author is set separately,
+  // guaranteed before the first commit and failing on its own label if it can't.
+  const post = [`cd ${dest}`, "git rev-parse HEAD"];
   const token = resolved.token;
 
   // No token → plain unauthenticated clone of the repo URL as configured.

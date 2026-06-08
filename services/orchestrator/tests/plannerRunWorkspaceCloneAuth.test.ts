@@ -216,14 +216,20 @@ describe("prepareRunWorkspace clone authentication", () => {
     expect(clone?.stdin).toBe(TOKEN);
     expect(clone?.command).toContain("GIT_ASKPASS");
     expect(clone?.command).not.toContain(TOKEN);
-    // MERGE-SAFETY (self-identity) end-to-end: the RESOLVED identity (from the
-    // clone token's GET /user) lands in the workspace git config, so every writer/
-    // rebase commit is attributable to the real login — NOT `planner@tanren.invalid`.
-    expect(clone?.command).toContain(`git config user.name '${CLONE_ACTOR_LOGIN}'`);
-    expect(clone?.command).toContain(
+    // MERGE-SAFETY (self-identity) end-to-end: the RESOLVED identity (from the clone
+    // token's GET /user) lands in the workspace git config via the DEDICATED
+    // configure-identity step (right after the clone, before any commit), so every
+    // writer/rebase/bootstrap commit is attributable to the real login — NOT
+    // `planner@tanren.invalid`. It is its OWN SSH command, run in the workspace dir.
+    const setIdentity = ssh.commands[1]?.command;
+    expect(setIdentity?.cwd).toBe("/workspace/runs/run_clone/repo");
+    expect(setIdentity?.command).toContain(`git config user.name '${CLONE_ACTOR_LOGIN}'`);
+    expect(setIdentity?.command).toContain(
       `git config user.email '${CLONE_ACTOR_ID}+${CLONE_ACTOR_LOGIN}@users.noreply.github.com'`,
     );
-    expect(clone?.command).not.toContain("planner@tanren.invalid");
+    expect(setIdentity?.command).not.toContain("planner@tanren.invalid");
+    // The identity step runs BEFORE the bootstrap commit (no commit precedes it).
+    expect(clone?.command).not.toContain("git config user.name");
   });
 
   it("P2a Part 2: clone resolves APP-FIRST through the VcsProvider seam when an App is installed", async () => {
@@ -275,6 +281,48 @@ describe("prepareRunWorkspace clone authentication", () => {
     ).rejects.toThrow(/identity read/u);
     // The clone never ran — the run aborts before pushing as an unattributable author.
     expect(ssh.commands).toHaveLength(0);
+  });
+
+  it("sets the bot git identity in a DEDICATED step right after the clone, BEFORE the bootstrap commit", async () => {
+    const ssh = new RecordingSsh();
+    const secrets = new FakeSecretStore();
+    await storeGithubToken(secrets, { ref: "credential/github/dev", token: TOKEN });
+    // Drive the real commitBootstrap over SSH (not the injected no-op) so the
+    // bootstrap commit shows up in the recorded command stream and we can assert
+    // the identity step precedes it.
+    const { commitBootstrap: _omitCommitSeam, ...input } = makeInput(ssh, makeContext(), { secrets });
+    await prepareRunWorkspace(input as unknown as RunPlannerLoopInput, target, "/workspace/runs/run_clone/repo");
+
+    const idx = (predicate: (c: string) => boolean): number =>
+      ssh.commands.findIndex((entry) => predicate(entry.command.command));
+    const cloneIdx = idx((c) => c.includes("git clone"));
+    const identityIdx = idx((c) => c.includes("git config user.name"));
+    const commitIdx = idx((c) => c.includes("git commit"));
+    // The dedicated identity step exists, runs AFTER the clone, and BEFORE the
+    // bootstrap commit — so the commit has a configured author (never the
+    // auto-detected `<unix-user>@<host>.(none)` that GitHub maps to `<unknown>`).
+    expect(cloneIdx).toBeGreaterThanOrEqual(0);
+    expect(identityIdx).toBeGreaterThan(cloneIdx);
+    expect(commitIdx).toBeGreaterThan(identityIdx);
+    // It is its own workspace-scoped command, attributing to the resolved bot login.
+    expect(ssh.commands[identityIdx]?.command.cwd).toBe("/workspace/runs/run_clone/repo");
+    expect(ssh.commands[identityIdx]?.command.command).toContain(
+      `git config user.email '${CLONE_ACTOR_ID}+${CLONE_ACTOR_LOGIN}@users.noreply.github.com'`,
+    );
+  });
+
+  it("the genuinely unauthenticated public clone keeps a non-attributable placeholder identity (git still needs an author)", async () => {
+    const ssh = new RecordingSsh();
+    // No token AND no credential ref → unauthenticated public-repo path: no Tanren
+    // identity, but git refuses to commit without SOME author, so the placeholder is set.
+    await prepareRunWorkspace(
+      makeInput(ssh, makeContext({ githubCredentialRef: "" })),
+      target,
+      "/workspace/runs/run_clone/repo",
+    );
+    const setIdentity = ssh.commands[1]?.command;
+    expect(setIdentity?.command).toContain("git config user.name 'Tanren Planner'");
+    expect(setIdentity?.command).toContain("git config user.email 'planner@tanren.invalid'");
   });
 
   it("P2a Part 2: clone routes through the seam (no installation) carrying the static ref only", async () => {
