@@ -1,457 +1,391 @@
-// planner-feedback-loop integration tests. Each test wires the
-// loop with in-memory adapters from helpers/plannerLoopHelpers and asserts
-// on the event timeline + task-row shape produced by runSubtaskLoop.
+// Spec-implementation loop integration tests (docs/roadmap/spec-loop-redesign.md).
+// Each test wires the loop with in-memory adapters from helpers/plannerLoopHelpers
+// and asserts on the event timeline + task-row shape produced by runSubtaskLoop. The
+// suite covers the redesign's core: fast-gate-before-checker ordering, checker
+// completeness-findings → writer, auditor findings-only + severity routing, triage
+// P0→tasks / all-to-specs→pass, demo gating, and convergence-stall HALT (NOT a retry
+// cap).
 import { describe, expect, it } from "vitest";
 import { runSubtaskLoop } from "../src/engine/workflow/subtaskLoop.js";
-import { decideAuditorOutcome } from "../src/engine/workflow/auditor/auditor.js";
-import { buildCheckerPrompt, decideCheckerOutcome } from "../src/engine/workflow/checker/checker.js";
-import { buildPlannerPrompt } from "../src/engine/workflow/planner/planner.js";
+import { auditorReGateDecision } from "../src/engine/workflow/auditor/auditor.js";
+import { decideCheckerOutcome } from "../src/engine/workflow/checker/checker.js";
+import { applyConvergencePolicy, routeTriageItems, summarizeTriageRouting } from "../src/engine/workflow/loopPolicy.js";
 import {
   buildPlan,
+  cleanAudit,
+  completeCheck,
+  convergenceProgress,
+  convergenceStalled,
+  convergenceVelocity,
   defaultLoopInput,
-  failingCheck,
-  haltAudit,
-  loopAudit,
+  demoBroken,
+  demoClean,
+  incompleteCheck,
   makeAuditor,
   makeChecker,
+  makeConvergence,
+  makeDemoRun,
   makeFailingWriter,
+  makeGate,
   makePlanner,
+  makeTriage,
   makeWriter,
-  passingAudit,
-  passingCheck,
+  p0Audit,
+  p1Audit,
+  p2Audit,
+  triageAllSpecs,
+  triageAllTasks,
 } from "./helpers/plannerLoopHelpers.js";
 
-describe("subtask loop — positive path", () => {
-  it("dispatches subtasks in order and reports pass when checker + auditor agree", async () => {
+describe("spec loop — positive path", () => {
+  it("dispatches subtasks in order and PASSES when checker + auditor are clean (no findings)", async () => {
     const { input, pool, events } = defaultLoopInput();
     const outcome = await runSubtaskLoop(input);
 
     expect(outcome.kind).toBe("passed");
     if (outcome.kind !== "passed") return;
-    expect(outcome.plannerRerunCount).toBe(0);
+    expect(outcome.loopCount).toBe(0);
     expect(outcome.subtasks).toHaveLength(1);
+    expect(outcome.newSpecs).toHaveLength(0);
 
+    // No findings ⇒ no triage / convergence ran (the clean exit).
     const taskKinds = pool.tasks.map((task) => task.kind);
     expect(taskKinds).toEqual(["plan", "write", "check", "audit"]);
-    const planner = pool.tasks.find((task) => task.kind === "plan")!;
-    const writer = pool.tasks.find((task) => task.kind === "write")!;
-    const checker = pool.tasks.find((task) => task.kind === "check")!;
-    const auditor = pool.tasks.find((task) => task.kind === "audit")!;
-    expect(planner.parentTaskId).toBeNull();
-    expect(writer.parentTaskId).toBe(planner.taskId);
-    expect(checker.parentTaskId).toBe(writer.taskId);
-    expect(auditor.parentTaskId).toBe(planner.taskId);
-    expect(planner.outcome).toBe("passed");
-    expect(writer.outcome).toBe("passed");
-    expect(checker.outcome).toBe("passed");
-    expect(auditor.outcome).toBe("passed");
+    expect(taskKinds).not.toContain("triage");
+    expect(taskKinds).not.toContain("convergence");
 
     const eventNames = events.events.map((event) => event.eventType);
-    expect(eventNames).toContain("planner.subtasks.emitted");
-    expect(eventNames).toContain("writer.subtask.completed");
     expect(eventNames).toContain("checker.verdict");
     expect(eventNames).toContain("auditor.verdict");
-    expect(eventNames.filter((name) => name === "cost.resolved")).toHaveLength(4);
-    expect(pool.costInserts).toHaveLength(4);
+    const checkerVerdict = events.events.find((e) => e.eventType === "checker.verdict")!;
+    expect(checkerVerdict.payload).toMatchObject({ complete: true, findings: [] });
+    const auditorVerdict = events.events.find((e) => e.eventType === "auditor.verdict")!;
+    expect(auditorVerdict.payload).toMatchObject({ findings: [] });
   });
 
-  it("executes multiple subtasks in plan order with one writer task per subtask", async () => {
-    const { input, pool, events } = defaultLoopInput({
+  it("runs multiple subtasks in plan order, one writer task per subtask", async () => {
+    const { input, events } = defaultLoopInput({
       adapters: {
+        ...defaultLoopInput().input.adapters,
         planner: makePlanner([
           buildPlan([
-            { title: "T1", intent: "Touch A", behaviorIds: ["B1"] },
-            { title: "T2", intent: "Touch B", behaviorIds: ["B2"] },
-            { title: "T3", intent: "Touch C", behaviorIds: ["B3"] },
+            { title: "T1", intent: "A", behaviorIds: ["B1"] },
+            { title: "T2", intent: "B", behaviorIds: ["B2"] },
+            { title: "T3", intent: "C", behaviorIds: ["B3"] },
           ]),
         ]),
-        writer: makeWriter(["diff a\n", "diff b\n", "diff c\n"]),
-        checker: makeChecker([passingCheck, passingCheck, passingCheck]),
-        auditor: makeAuditor([passingAudit]),
+        writer: makeWriter(["a\n", "b\n", "c\n"]),
+        checker: makeChecker([completeCheck, completeCheck, completeCheck]),
+        auditor: makeAuditor([cleanAudit]),
+      },
+    });
+    const outcome = await runSubtaskLoop(input);
+    expect(outcome.kind).toBe("passed");
+    const writes = events.events.filter((event) => event.eventType === "writer.subtask.completed");
+    expect(writes.map((e) => (e.payload as { subtaskIndex: number }).subtaskIndex)).toEqual([0, 1, 2]);
+  });
+});
+
+describe("spec loop — FAST GATE before CHECKER (ordering)", () => {
+  it("runs the per_iteration gate BEFORE the checker; a gate fail loops to the writer without a checker call", async () => {
+    // First per_iteration gate FAILS → straight back to writer (no checker). Second
+    // per_iteration gate PASSES → checker runs (complete). The pre_audit spec gate passes.
+    const gate = makeGate([{ passed: false }, { passed: true }, { passed: true }]);
+    const checker = makeChecker([completeCheck]);
+    const { input, pool } = defaultLoopInput({
+      adapters: { ...defaultLoopInput().input.adapters, writer: makeWriter(["a\n", "b\n"]), checker },
+      runGate: gate.gate,
+    });
+    const outcome = await runSubtaskLoop(input);
+    expect(outcome.kind).toBe("passed");
+
+    // The checker ran EXACTLY once — only after a passing fast gate (the first, failing
+    // fast gate short-circuited to the writer before any checker call).
+    expect(checker.calls).toHaveLength(1);
+    // Two per_iteration gate calls (fail, pass) preceded the single pre_audit spec gate.
+    const whens = gate.calls.map((c) => c.when);
+    expect(whens).toEqual(["per_iteration", "per_iteration", "pre_audit"]);
+    // Two writer attempts (the gate fail re-ran the writer), one checker.
+    expect(pool.tasks.filter((t) => t.kind === "write")).toHaveLength(2);
+    expect(pool.tasks.filter((t) => t.kind === "check")).toHaveLength(1);
+  });
+});
+
+describe("spec loop — CHECKER findings route back to the WRITER", () => {
+  it("an incomplete checker (any finding) re-runs the writer; a later complete check finishes the task", async () => {
+    const checker = makeChecker([incompleteCheck, completeCheck]);
+    const writer = makeWriter(["first\n", "second\n"]);
+    const { input, events } = defaultLoopInput({
+      adapters: { ...defaultLoopInput().input.adapters, checker, writer },
+    });
+    const outcome = await runSubtaskLoop(input);
+    expect(outcome.kind).toBe("passed");
+
+    // Two writer attempts (incomplete → rewrite), two checker calls.
+    expect(writer.calls).toHaveLength(2);
+    expect(checker.calls).toHaveLength(2);
+    // The first checker verdict was incomplete; the second complete.
+    const verdicts = events.events.filter((e) => e.eventType === "checker.verdict");
+    expect((verdicts[0]!.payload as { complete: boolean }).complete).toBe(false);
+    expect((verdicts[1]!.payload as { complete: boolean }).complete).toBe(true);
+    // The rewrite prompt carried the prior incompleteness as steering.
+    expect(writer.calls[1]!.prompt).toContain("Previous attempt was rejected");
+  });
+
+  it("a task that never completes within maxWriterIterPerSubtask becomes a P0 finding (NOT a halt)", async () => {
+    // The checker stays incomplete every iteration. The task does NOT halt — its
+    // residual incompleteness becomes a P0 finding routed into triage. We bound the test
+    // by having triage route ALL to specs so the loop terminates with a PASS.
+    const { input } = defaultLoopInput({
+      escapeHatches: { maxWriterIterPerSubtask: 2 },
+      adapters: {
+        ...defaultLoopInput().input.adapters,
+        writer: makeWriter(["a\n"]),
+        checker: makeChecker([incompleteCheck]),
+        triage: makeTriage([triageAllSpecs]),
+      },
+    });
+    const outcome = await runSubtaskLoop(input);
+    // It PASSES (the incompleteness was triaged into a new spec) — never halted on a cap.
+    expect(outcome.kind).toBe("passed");
+    if (outcome.kind !== "passed") return;
+    expect(outcome.newSpecs.length).toBeGreaterThan(0);
+  });
+});
+
+describe("spec loop — AUDITOR findings-only + deterministic severity routing", () => {
+  it("a P0 audit finding routes to a task in this spec (triage→task), then converges", async () => {
+    const { input, pool, events } = defaultLoopInput({
+      adapters: {
+        ...defaultLoopInput().input.adapters,
+        // Loop 1: P0 audit → triage(task) → convergence(progress) → re-plan.
+        // Loop 2: clean audit → PASS.
+        auditor: makeAuditor([p0Audit, cleanAudit]),
+        triage: makeTriage([triageAllTasks]),
+        convergence: makeConvergence([convergenceProgress]),
       },
     });
     const outcome = await runSubtaskLoop(input);
     expect(outcome.kind).toBe("passed");
 
-    const subtaskWrites = events.events.filter((event) => event.eventType === "writer.subtask.completed");
-    expect(subtaskWrites.map((event) => (event.payload as { subtaskIndex: number }).subtaskIndex)).toEqual([0, 1, 2]);
-    expect(pool.costInserts).toHaveLength(8);
-    const writes = pool.tasks.filter((task) => task.kind === "write");
-    expect(writes).toHaveLength(3);
-    const plannerTask = pool.tasks.find((t) => t.kind === "plan")!;
-    expect(writes.every((task) => task.parentTaskId === plannerTask.taskId)).toBe(true);
+    // The triage + convergence stages ran on the first loop.
+    expect(pool.tasks.some((t) => t.kind === "triage")).toBe(true);
+    expect(pool.tasks.some((t) => t.kind === "convergence")).toBe(true);
+    const triage = events.events.find((e) => e.eventType === "triage.completed")!;
+    expect((triage.payload as { outcome: string }).outcome).toBe("kept");
+    expect((triage.payload as { items: Array<{ route: string; severity: string }> }).items[0]).toMatchObject({
+      route: "task",
+      severity: "P0",
+    });
+  });
+
+  it("auditorReGateDecision (used by the conflict re-gate) blocks on P0/P1, allows P2/P3 + clean", () => {
+    expect(auditorReGateDecision(cleanAudit).blocked).toBe(false);
+    expect(auditorReGateDecision(p2Audit).blocked).toBe(false);
+    expect(auditorReGateDecision(p1Audit).blocked).toBe(true);
+    expect(auditorReGateDecision(p0Audit).blocked).toBe(true);
   });
 });
 
-describe("subtask loop — checker rejection loop", () => {
-  it("re-invokes the planner with the rejection reason and finishes on second plan", async () => {
-    const failedPlan = buildPlan([{ title: "T1", intent: "Touch README", behaviorIds: ["B1"] }]);
-    const successPlan = buildPlan([{ title: "T2", intent: "Touch README harder", behaviorIds: ["B1"] }]);
-    const planner = makePlanner([failedPlan, successPlan]);
-    const { input, events, pool } = defaultLoopInput({
+describe("spec loop — TRIAGE routing", () => {
+  it("triage routing ALL findings to new specs PASSES the spec (triage→passed), no convergence", async () => {
+    const { input, pool, events } = defaultLoopInput({
       adapters: {
-        planner,
-        writer: makeWriter(["diff first attempt\n", "diff second attempt\n"]),
-        checker: makeChecker([failingCheck, passingCheck]),
-        auditor: makeAuditor([passingAudit]),
+        ...defaultLoopInput().input.adapters,
+        auditor: makeAuditor([p1Audit]),
+        triage: makeTriage([triageAllSpecs]),
       },
     });
     const outcome = await runSubtaskLoop(input);
     expect(outcome.kind).toBe("passed");
     if (outcome.kind !== "passed") return;
-    expect(outcome.plannerRerunCount).toBe(1);
+    // Every finding became a NEW spec; convergence never ran (the triage→passed arrow).
+    expect(outcome.newSpecs).toHaveLength(1);
+    expect(pool.tasks.some((t) => t.kind === "convergence")).toBe(false);
+    const triage = events.events.find((e) => e.eventType === "triage.completed")!;
+    expect((triage.payload as { outcome: string }).outcome).toBe("passed");
+  });
 
-    const rejected = events.events.find((event) => event.eventType === "checker.rejected");
-    expect(rejected?.payload).toMatchObject({
-      reason: failingCheck.reasoning,
-      behaviorIdsFailed: ["B1"],
-    });
-    const rerequested = events.events.find((event) => event.eventType === "planner.rerequested");
-    expect(rerequested?.payload).toMatchObject({
-      producer: "checker",
-      rejectionReason: failingCheck.reasoning,
-      plannerRerunCount: 1,
-      maxPlannerRerunsPerSpec: 3,
-    });
-
-    expect(planner.calls).toHaveLength(2);
-    expect(planner.calls[1]!.prompt).toContain("Prior rejections");
-    expect(planner.calls[1]!.prompt).toContain(failingCheck.reasoning);
-
-    const plannerCosts = pool.costInserts.filter(
-      (insert) => pool.tasks.find((task) => task.taskId === insert.taskId)?.kind === "plan",
-    );
-    expect(plannerCosts).toHaveLength(2);
-    const costResolved = events.events.filter((event) => event.eventType === "cost.resolved");
-    expect(costResolved).toHaveLength(7);
+  it("routeTriageItems: P0 always → task; below-threshold under route-to-dag → spec", () => {
+    const items = [
+      { id: "a", kind: "spec" as const, severity: "P0" as const, title: "t", body: "b", findingIds: [] },
+      { id: "b", kind: "spec" as const, severity: "P3" as const, title: "t", body: "b", findingIds: [] },
+    ];
+    const routed = routeTriageItems(items, { blockReviewAt: "P1", p2p3Handling: "route-to-dag" });
+    // P0 never defers; the below-threshold P3 routes to a new spec under velocity.
+    expect(routed[0]!.route).toBe("task");
+    expect(routed[1]!.route).toBe("spec");
+    const summary = summarizeTriageRouting(routed);
+    // A P0 task was kept in-spec, so the outcome is `kept`, not `passed`.
+    expect(summary.outcome).toBe("kept");
   });
 });
 
-describe("subtask loop — auditor rejection loop", () => {
-  it("loops back to the planner when the auditor recommends loop_to_planner", async () => {
-    const planner = makePlanner([
-      buildPlan([{ title: "T1", intent: "first attempt", behaviorIds: ["B1"] }]),
-      buildPlan([{ title: "T1b", intent: "second attempt", behaviorIds: ["B1", "B2"] }]),
-    ]);
-    const { input, events } = defaultLoopInput({
+describe("spec loop — DEMO-RUN gating (optional slot)", () => {
+  it("when enabled, a broken demo emits findings that route through triage (gates the pass)", async () => {
+    const { input, pool, events } = defaultLoopInput({
+      convergencePolicy: { maxConsecutiveStalls: 3, demoRunEnabled: true },
       adapters: {
-        planner,
-        writer: makeWriter(["diff a\n", "diff b\n"]),
-        checker: makeChecker([passingCheck, passingCheck]),
-        auditor: makeAuditor([loopAudit, passingAudit]),
+        ...defaultLoopInput().input.adapters,
+        // clean checker+auditor BUT a broken demo → triage(spec) → PASS with newSpecs.
+        demoRun: makeDemoRun([demoBroken]),
+        triage: makeTriage([triageAllSpecs]),
       },
     });
     const outcome = await runSubtaskLoop(input);
     expect(outcome.kind).toBe("passed");
     if (outcome.kind !== "passed") return;
-    expect(outcome.plannerRerunCount).toBe(1);
-
-    const rejected = events.events.find((event) => event.eventType === "auditor.rejected");
-    expect(rejected?.payload).toMatchObject({
-      recommendedAction: "loop_to_planner",
-      reason: loopAudit.reasoning,
-    });
-    const rerequested = events.events.find((event) => event.eventType === "planner.rerequested");
-    expect(rerequested?.payload).toMatchObject({ producer: "auditor", plannerRerunCount: 1 });
-
-    expect(planner.calls).toHaveLength(2);
-    expect(planner.calls[1]!.prompt).toContain("Prior rejections");
-    expect(planner.calls[1]!.prompt).toContain(loopAudit.reasoning);
+    // The demo ran (the gating slot) and its finding reached triage.
+    expect(pool.tasks.some((t) => t.kind === "demo")).toBe(true);
+    expect(events.events.some((e) => e.eventType === "demoRun.verdict")).toBe(true);
+    expect(outcome.newSpecs).toHaveLength(1);
   });
 
-  it("halts immediately when the auditor recommends halt", async () => {
+  it("when DISABLED (default), the demo slot does NOT run", async () => {
+    const { input, pool } = defaultLoopInput();
+    const outcome = await runSubtaskLoop(input);
+    expect(outcome.kind).toBe("passed");
+    expect(pool.tasks.some((t) => t.kind === "demo")).toBe(false);
+  });
+
+  it("a clean demo adds no findings (the spec still passes cleanly)", async () => {
+    const { input } = defaultLoopInput({
+      convergencePolicy: { maxConsecutiveStalls: 3, demoRunEnabled: true },
+      adapters: { ...defaultLoopInput().input.adapters, demoRun: makeDemoRun([demoClean]) },
+    });
+    const outcome = await runSubtaskLoop(input);
+    expect(outcome.kind).toBe("passed");
+    if (outcome.kind !== "passed") return;
+    expect(outcome.newSpecs).toHaveLength(0);
+  });
+});
+
+describe("spec loop — CONVERGENCE is the SOLE loop bound (stall HALT, NOT a retry cap)", () => {
+  it("HALTS as convergence_stalled after N CONSECUTIVE stalls — never on a retry/timeout cap", async () => {
+    // The auditor reports a P0 EVERY loop; triage keeps it in-spec; convergence STALLS
+    // every loop. After maxConsecutiveStalls consecutive stalls, the run HALTS as
+    // convergence_stalled. There is NO retry cap: the bound is the stall counter only.
+    const maxConsecutiveStalls = 2;
+    const { input, events } = defaultLoopInput({
+      convergencePolicy: { maxConsecutiveStalls, demoRunEnabled: false },
+      adapters: {
+        ...defaultLoopInput().input.adapters,
+        auditor: makeAuditor([p0Audit]),
+        triage: makeTriage([triageAllTasks]),
+        convergence: makeConvergence([convergenceStalled]),
+      },
+    });
+    const outcome = await runSubtaskLoop(input);
+    expect(outcome.kind).toBe("convergence_stalled");
+    if (outcome.kind !== "convergence_stalled") return;
+    expect(outcome.consecutiveStalls).toBe(maxConsecutiveStalls);
+
+    // The terminal convergence.stalled event was emitted, and exactly N convergence
+    // stages ran (the loop iterated until the stall counter reached the bound).
+    const stalled = events.events.find((e) => e.eventType === "convergence.stalled");
+    expect(stalled?.payload).toMatchObject({ consecutiveStalls: maxConsecutiveStalls, maxConsecutiveStalls });
+    const assessed = events.events.filter((e) => e.eventType === "convergence.assessed");
+    expect(assessed).toHaveLength(maxConsecutiveStalls);
+  });
+
+  it("a velocity_defer convergence PASSES the spec, deferring the kept leftovers as specs", async () => {
     const { input, events } = defaultLoopInput({
       adapters: {
-        planner: makePlanner([buildPlan([{ title: "T1", intent: "doomed", behaviorIds: ["B1"] }])]),
-        writer: makeWriter(["diff a\n"]),
-        checker: makeChecker([passingCheck]),
-        auditor: makeAuditor([haltAudit]),
+        ...defaultLoopInput().input.adapters,
+        auditor: makeAuditor([p2Audit]),
+        triage: makeTriage([triageAllTasks]),
+        convergence: makeConvergence([convergenceVelocity]),
       },
     });
     const outcome = await runSubtaskLoop(input);
-    expect(outcome.kind).toBe("halted");
-    if (outcome.kind !== "halted") return;
-    expect(outcome.plannerRerunCount).toBe(0);
-    expect(outcome.reason).toBe(haltAudit.reasoning);
+    expect(outcome.kind).toBe("passed");
+    if (outcome.kind !== "passed") return;
+    // The kept work was deferred as a new spec (velocity allow).
+    expect(outcome.newSpecs.length).toBeGreaterThan(0);
+    const assessed = events.events.find((e) => e.eventType === "convergence.assessed")!;
+    expect((assessed.payload as { decision: string }).decision).toBe("pass");
+  });
 
-    const rerequested = events.events.find((event) => event.eventType === "planner.rerequested");
-    expect(rerequested).toBeUndefined();
+  it("a PROGRESS convergence resets the stall counter and re-plans (no halt)", async () => {
+    const { input } = defaultLoopInput({
+      convergencePolicy: { maxConsecutiveStalls: 2, demoRunEnabled: false },
+      adapters: {
+        ...defaultLoopInput().input.adapters,
+        // Loop1: P0 → stalled. Loop2: P0 → PROGRESS (resets). Loop3: clean → PASS.
+        auditor: makeAuditor([p0Audit, p0Audit, cleanAudit]),
+        triage: makeTriage([triageAllTasks]),
+        convergence: makeConvergence([convergenceStalled, convergenceProgress]),
+      },
+    });
+    const outcome = await runSubtaskLoop(input);
+    // Progress reset the stall counter, so a single prior stall never reached the bound.
+    expect(outcome.kind).toBe("passed");
   });
 });
 
-describe("subtask loop — budget exhaustion", () => {
-  it("returns retry_budget_exhausted after maxPlannerRerunsPerSpec re-plans without success", async () => {
-    const { input, events, pool } = defaultLoopInput({
-      adapters: {
-        planner: makePlanner([
-          buildPlan([{ title: "T1", intent: "first", behaviorIds: ["B1"] }]),
-          buildPlan([{ title: "T2", intent: "second", behaviorIds: ["B1"] }]),
-          buildPlan([{ title: "T3", intent: "third", behaviorIds: ["B1"] }]),
-        ]),
-        writer: makeWriter(["diff 1\n", "diff 2\n", "diff 3\n"]),
-        checker: makeChecker([failingCheck, failingCheck, failingCheck]),
-        auditor: makeAuditor([passingAudit]),
-      },
-      escapeHatches: {
-        maxPlannerRerunsPerSpec: 2,
-        maxWriterIterPerSubtask: 5,
-        maxRetriesPerTransientFailure: 3,
-      },
-    });
-    const outcome = await runSubtaskLoop(input);
-    expect(outcome.kind).toBe("retry_budget_exhausted");
-    if (outcome.kind !== "retry_budget_exhausted") return;
-    expect(outcome.plannerRerunCount).toBeGreaterThan(2);
-    expect(outcome.lastRejection.producer).toBe("checker");
-
-    const costResolved = events.events.filter((event) => event.eventType === "cost.resolved");
-    expect(costResolved).toHaveLength(9);
-    expect(pool.costInserts).toHaveLength(9);
-
-    const rerequested = events.events.filter((event) => event.eventType === "planner.rerequested");
-    expect(rerequested).toHaveLength(2);
-  });
-});
-
-describe("subtask loop — non-completing writer halts/reworks (never laundered to passed)", () => {
-  it("a crashed writer is NOT marked passed: the write task fails and the run reworks to retry_budget_exhausted", async () => {
-    // The writer crashes on every attempt. Each crash must route through the
-    // planner-rework path (NOT proceed to the checker on a partial diff), and on
-    // budget exhaustion the run halts as retry_budget_exhausted.
-    const { input, events, pool } = defaultLoopInput({
-      adapters: {
-        planner: makePlanner([
-          buildPlan([{ title: "T1", intent: "first", behaviorIds: ["B1"] }]),
-          buildPlan([{ title: "T2", intent: "second", behaviorIds: ["B1"] }]),
-        ]),
-        writer: makeFailingWriter("crashed"),
-        checker: makeChecker([passingCheck, passingCheck]),
-        auditor: makeAuditor([passingAudit]),
-      },
-      escapeHatches: {
-        maxPlannerRerunsPerSpec: 1,
-        maxWriterIterPerSubtask: 5,
-        maxRetriesPerTransientFailure: 3,
-      },
-    });
-    const outcome = await runSubtaskLoop(input);
-
-    expect(outcome.kind).toBe("retry_budget_exhausted");
-    if (outcome.kind !== "retry_budget_exhausted") return;
-    // The rework was driven by the WRITER failure, not a checker reject.
-    expect(outcome.lastRejection.producer).toBe("writer");
-
-    // The write task rows are hard-FAILED with the crashed failure kind — NEVER
-    // a laundered done/passed row.
-    const writes = pool.tasks.filter((task) => task.kind === "write");
-    expect(writes.length).toBeGreaterThan(0);
-    expect(writes.every((task) => task.status === "failed")).toBe(true);
-    expect(writes.every((task) => task.outcome === "failed")).toBe(true);
-    expect(writes.every((task) => task.failureKind === "crashed")).toBe(true);
-    expect(writes.some((task) => task.outcome === "passed")).toBe(false);
-
-    // No checker ever ran on the crashed diff — the failure short-circuits before
-    // the checker stage.
-    expect(pool.tasks.some((task) => task.kind === "check")).toBe(false);
-
-    // The loud failure events were emitted (the previously-latent surface).
-    const writerFailed = events.events.filter((event) => event.eventType === "writer.subtask.failed");
-    expect(writerFailed.length).toBeGreaterThan(0);
-    expect((writerFailed[0]!.payload as { failureKind: string }).failureKind).toBe("crashed");
-    const taskFailed = events.events.filter((event) => event.eventType === "task.failed");
-    expect(taskFailed.some((event) => (event.payload as { taskKind?: string }).taskKind === "write")).toBe(true);
-    // The writer's success event is NEVER emitted for a crashed run.
-    expect(events.events.some((event) => event.eventType === "writer.subtask.completed")).toBe(false);
+describe("pure decisions", () => {
+  it("decideCheckerOutcome: no findings ⇒ pass; any finding ⇒ reject with the gaps", () => {
+    expect(decideCheckerOutcome(completeCheck)).toEqual({ kind: "pass" });
+    const rejected = decideCheckerOutcome(incompleteCheck);
+    expect(rejected.kind).toBe("reject");
+    if (rejected.kind !== "reject") return;
+    expect(rejected.behaviorIdsFailed).toEqual(["B1"]);
+    expect(rejected.findings).toHaveLength(1);
   });
 
-  it("a window_exhausted writer halts the run as window_exhausted (the §4.3 terminal), planner task not passed", async () => {
-    const { input, events, pool } = defaultLoopInput({
-      adapters: {
-        planner: makePlanner([buildPlan([{ title: "T1", intent: "first", behaviorIds: ["B1"] }])]),
-        writer: makeFailingWriter("window_exhausted"),
-        checker: makeChecker([passingCheck]),
-        auditor: makeAuditor([passingAudit]),
-      },
-    });
-    const outcome = await runSubtaskLoop(input);
-
-    expect(outcome.kind).toBe("window_exhausted");
-
-    // The write task is failed (window_exhausted), and the planner task is stamped
-    // window_exhausted — neither is a passed/done success row.
-    const write = pool.tasks.find((task) => task.kind === "write")!;
-    expect(write.status).toBe("failed");
-    expect(write.failureKind).toBe("window_exhausted");
-    const planner = pool.tasks.find((task) => task.kind === "plan")!;
-    expect(planner.outcome).toBe("window_exhausted");
-    expect(planner.outcome).not.toBe("passed");
-
-    // No checker / auditor ran — the run halted at the writer.
-    expect(pool.tasks.some((task) => task.kind === "check")).toBe(false);
-    expect(pool.tasks.some((task) => task.kind === "audit")).toBe(false);
-
-    const writerFailed = events.events.filter((event) => event.eventType === "writer.subtask.failed");
-    expect(writerFailed.length).toBe(1);
-    expect((writerFailed[0]!.payload as { failureKind: string }).failureKind).toBe("window_exhausted");
-  });
-});
-
-describe("planner prompt + verdict decisions (pure)", () => {
-  it("buildPlannerPrompt includes spec, behaviors, and rejection history", () => {
-    const prompt = buildPlannerPrompt({
-      spec: {
-        specTitle: "ABC",
-        specDescription: "do thing",
-        acceptanceCriteria: ["criterion one"],
-        behaviorIds: ["B1"],
-        behaviorContext: [{ id: "B1", title: "B1 title", description: "B1 desc" }],
-      },
-      timeoutMs: 1_000,
-      rejectionHistory: [
-        {
-          producer: "checker",
-          rejectionReason: "missing file",
-          behaviorIdsFailed: ["B1"],
-          previousSubtasks: [
-            {
-              index: 0,
-              title: "old",
-              intent: "old intent",
-              behaviorIds: ["B1"],
-              estimatedTokens: null,
-            },
-          ],
-        },
-      ],
-    });
-    expect(prompt).toContain("ABC");
-    expect(prompt).toContain("criterion one");
-    expect(prompt).toContain("B1: B1 title");
-    expect(prompt).toContain("Rejection #1 from checker");
-    expect(prompt).toContain("missing file");
-    expect(prompt).toContain("[0] old — old intent");
+  it("decideCheckerOutcome: a findings-omitted verdict throws (no `?? []` coalesce)", () => {
+    const raw = { reasoning: "ok" } as unknown as typeof completeCheck;
+    expect(() => decideCheckerOutcome(raw)).toThrow(/length|findings|undefined/iu);
   });
 
-  it("decideCheckerOutcome returns reject with reason+failed when passed=false", () => {
-    expect(decideCheckerOutcome(passingCheck)).toEqual({ kind: "pass" });
-    expect(decideCheckerOutcome(failingCheck)).toEqual({
-      kind: "reject",
-      reason: failingCheck.reasoning,
-      behaviorIdsFailed: failingCheck.behaviorIdsFailed,
-    });
-  });
-
-  // the checker is reframed to judge intent satisfaction only. The
-  // prompt must forbid running/asserting tests/build/lint (a separate
-  // deterministic gate owns correctness) and must require per-criterion
-  // citation against the spec's explicit acceptance criteria.
-  it("buildCheckerPrompt judges intent only and forbids running/asserting tests", () => {
-    const prompt = buildCheckerPrompt({
-      specTitle: "Spec",
-      specDescription: "Do the thing.",
-      acceptanceCriteria: ["AC1: file exists", "AC2: behavior wired"],
-      subtask: {
-        index: 0,
-        title: "T1",
-        intent: "wire the behavior",
-        behaviorIds: ["B1"],
-        estimatedTokens: null,
-      },
-      baselineSha: "f".repeat(40),
-    });
-    // Intent-only framing + explicit criteria are present.
-    expect(prompt).toContain("intent");
-    expect(prompt).toContain("Explicit acceptance criteria");
-    expect(prompt).toContain("AC1: file exists");
-    expect(prompt).toContain("AC2: behavior wired");
-    // The checker self-inspects the change (no injected diff): the prompt carries
-    // the baseline sha + a self-inspection instruction and embeds no diff.
-    expect(prompt).toContain("f".repeat(40));
-    expect(prompt).toContain("Inspect it yourself");
-    expect(prompt).not.toContain("diff --git");
-    // Forbids running, simulating, or asserting tests/build/lint, and defers
-    // correctness to a separate deterministic gate.
-    expect(prompt).toMatch(/Do NOT run, simulate, invoke, or shell out to tests/u);
-    expect(prompt).toMatch(/Do NOT assert, claim, predict, or report whether tests/u);
-    expect(prompt).toMatch(/separate .*deterministic gate/iu);
-    // Requires citing each criterion in the rationale.
-    expect(prompt).toMatch(/cite each acceptance criterion/iu);
-    // Still forbids workspace mutation.
-    expect(prompt).toContain("Do NOT edit files");
-  });
-
-  it("an unmet acceptance criterion routes the checker verdict to rework", () => {
-    // A verdict with passed=false (a criterion's intent is unmet) must drive
-    // the reject/re-plan branch the loop consumes, unchanged by the reframe.
-    const unmet: typeof failingCheck = {
-      passed: false,
-      reasoning: "AC2 intent not satisfied: behavior B1 was never wired.",
-      behaviorIdsPassed: [],
-      behaviorIdsFailed: ["B1"],
-    };
-    expect(decideCheckerOutcome(unmet)).toEqual({
-      kind: "reject",
-      reason: unmet.reasoning,
-      behaviorIdsFailed: ["B1"],
-    });
-  });
-
-  it("decideAuditorOutcome maps the worst FINDING severity into the loop branch (S3: findings-driven)", () => {
-    // Empty findings (audited-clean) ⇒ pass.
-    expect(decideAuditorOutcome(passingAudit)).toEqual({ kind: "pass" });
-    // A P1 finding ⇒ loop_to_planner; the rejection ids name the blocking FINDING ids.
-    const looped = decideAuditorOutcome(loopAudit);
-    expect(looped).toEqual({
-      kind: "reject",
-      action: "loop_to_planner",
-      reason: loopAudit.reasoning,
-      outstandingBehaviorIds: ["missed-behavior-B2"],
-    });
-    // A P0 finding ⇒ halt.
-    const halted = decideAuditorOutcome(haltAudit);
-    expect(halted).toEqual({
-      kind: "reject",
-      action: "halt",
-      reason: haltAudit.reasoning,
-      outstandingBehaviorIds: ["subtask-conflict"],
-    });
-  });
-
-  it("decideAuditorOutcome: a P2/P3-only verdict PASSES the in-loop gate (posture handles residuals at merge)", () => {
-    const p2Only: typeof passingAudit = {
-      ...passingAudit,
-      passed: false,
-      reasoning: "minor polish only",
-      findings: [{ id: "polish-1", severity: "P2", title: "rename a var", body: "b" }],
-    };
-    expect(decideAuditorOutcome(p2Only)).toEqual({ kind: "pass" });
-  });
-
-  it("decideAuditorOutcome: an EMPTY reasoning ⇒ the reason is built from the blocking findings", () => {
-    const noReason: typeof passingAudit = {
-      ...passingAudit,
-      passed: false,
+  it("decideCheckerOutcome: empty reasoning ⇒ reason is built from finding titles; null behaviorIds are dropped", () => {
+    const verdict: typeof completeCheck = {
       reasoning: "",
       findings: [
-        { id: "a", severity: "P1", title: "first blocker", body: "b" },
-        { id: "b", severity: "P1", title: "second blocker", body: "b" },
-        // A P2 is below the worst (P1) ⇒ not a blocking finding ⇒ not in the reason/ids.
-        { id: "c", severity: "P2", title: "polish", body: "b" },
+        { id: "a", title: "missing endpoint", body: "b", behaviorId: "B1" },
+        { id: "c", title: "missing migration", body: "b", behaviorId: null },
       ],
     };
-    expect(decideAuditorOutcome(noReason)).toEqual({
-      kind: "reject",
-      action: "loop_to_planner",
-      reason: "P1 first blocker; P1 second blocker",
-      outstandingBehaviorIds: ["a", "b"],
-    });
+    const decision = decideCheckerOutcome(verdict);
+    expect(decision.kind).toBe("reject");
+    if (decision.kind !== "reject") return;
+    // The reason falls back to the joined finding titles when reasoning is empty.
+    expect(decision.reason).toBe("missing endpoint; missing migration");
+    // A null behaviorId is dropped from the downstream-blocked list.
+    expect(decision.behaviorIdsFailed).toEqual(["B1"]);
   });
 
-  it("decideAuditorOutcome: a findings-omitted verdict is NEVER treated as clean — it throws (no `?? []` coalesce)", () => {
-    // S3a invariant: clean is reachable ONLY from an explicit findings array. A raw
-    // verdict that omits findings (which cannot pass the schema parse) does NOT silently
-    // read as audited-clean here — accessing the required `.findings` throws loudly.
-    const raw = { passed: true, reasoning: "ok", outstandingBehaviorIds: [] } as unknown as typeof passingAudit;
-    expect(() => decideAuditorOutcome(raw)).toThrow(/map|findings|undefined/iu);
+  it("applyConvergencePolicy: progress/velocity reset the counter; stalled increments and halts at the bound", () => {
+    expect(applyConvergencePolicy("progress", { consecutiveStalls: 1 }, 3)).toEqual({
+      state: { consecutiveStalls: 0 },
+      decision: "continue",
+    });
+    expect(applyConvergencePolicy("velocity_defer", { consecutiveStalls: 2 }, 3)).toEqual({
+      state: { consecutiveStalls: 0 },
+      decision: "pass",
+    });
+    // One short of the bound ⇒ continue (a single stall is NOT a halt).
+    expect(applyConvergencePolicy("stalled", { consecutiveStalls: 1 }, 3)).toEqual({
+      state: { consecutiveStalls: 2 },
+      decision: "continue",
+    });
+    // Reaching the bound ⇒ halt.
+    expect(applyConvergencePolicy("stalled", { consecutiveStalls: 2 }, 3)).toEqual({
+      state: { consecutiveStalls: 3 },
+      decision: "halt",
+    });
+  });
+});
+
+describe("spec loop — non-completing writer (never laundered to passed)", () => {
+  it("a window_exhausted writer halts the run as window_exhausted; planner task not passed", async () => {
+    const { input, pool } = defaultLoopInput({
+      adapters: { ...defaultLoopInput().input.adapters, writer: makeFailingWriter("window_exhausted") },
+    });
+    const outcome = await runSubtaskLoop(input);
+    expect(outcome.kind).toBe("window_exhausted");
+    const planner = pool.tasks.find((t) => t.kind === "plan")!;
+    expect(planner.outcome).toBe("window_exhausted");
+    expect(pool.tasks.some((t) => t.kind === "check")).toBe(false);
   });
 });

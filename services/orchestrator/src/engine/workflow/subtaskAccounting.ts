@@ -26,9 +26,11 @@ export async function checkWindowPreflight(
   input: SubtaskLoopInput,
   appendEvent: AppendEvent,
   plannerTaskId: string,
-  plannerRerunCount: number,
+  // The current loop index — narration only; the loop stamps the real `loopCount` onto
+  // the returned outcome. Unused here beyond keeping the call-site signature stable.
+  _loopIndex: number,
   creditState: CreditState,
-): Promise<Extract<SubtaskLoopOutcome, { kind: "window_exhausted" }> | null> {
+): Promise<Omit<Extract<SubtaskLoopOutcome, { kind: "window_exhausted" }>, "loopCount"> | null> {
   if (input.usageProbe === undefined) {
     return null;
   }
@@ -73,7 +75,6 @@ export async function checkWindowPreflight(
   );
   return {
     kind: "window_exhausted",
-    plannerRerunCount,
     provider,
     slot: pressure.slot,
     usedPercent: pressure.usedPercent,

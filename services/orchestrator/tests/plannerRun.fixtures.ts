@@ -3,7 +3,6 @@
  * the runPlannerLoopWorkflow integration tests. Extracted from plannerRun.test.ts
  * to keep that file under the 500-line architecture cap.
  */
-import type { AuditAnswer, CheckAnswer, PlanAnswer } from "../src/engine/answerers/schemas/index.js";
 import type {
   AllocationRequest,
   Allocator,
@@ -15,7 +14,7 @@ import type { RunnerCommand, CommandResult, CommandSubstrate } from "../src/engi
 import { storeGithubToken } from "../src/engine/credentials/githubToken.js";
 import { FakeEventStore } from "./helpers/fakeEventStore.js";
 import type { GitHubHttpClient, GitHubHttpRequest, GitHubHttpResponse } from "../src/engine/providers/github.js";
-import type { AnswererAdapter, CcusageAccounting, UsageProbe, WindowObservation } from "../src/engine/usage/index.js";
+import type { CcusageAccounting, UsageProbe, WindowObservation } from "../src/engine/usage/index.js";
 import { runWithSystemJobScope } from "@tanren/db";
 import {
   runPlannerLoopWorkflow,
@@ -23,14 +22,6 @@ import {
   type PlannerRunResult,
   type RunPlannerLoopInput,
 } from "../src/engine/workflow/plannerRun.js";
-import {
-  buildPlan,
-  makeAuditor,
-  makeChecker,
-  makePlanner,
-  makeWriter,
-  passingAudit,
-} from "./helpers/plannerLoopHelpers.js";
 
 /**
  * Run the planner-loop workflow under the EXPLICIT per-job SYSTEM scope, mirroring
@@ -44,14 +35,22 @@ export function runPlannerLoopScoped(input: RunPlannerLoopInput): Promise<Planne
 
 export {
   buildPlan,
-  failingCheck,
-  loopAudit,
+  cleanAudit,
+  completeCheck,
+  convergenceProgress,
+  convergenceStalled,
+  incompleteCheck,
   makeAuditor,
   makeChecker,
+  makeConvergence,
+  makeDemoRun,
   makePlanner,
+  makeTriage,
   makeWriter,
-  passingAudit,
-  passingCheck,
+  p0Audit,
+  p1Audit,
+  triageAllSpecs,
+  triageAllTasks,
 } from "./helpers/plannerLoopHelpers.js";
 
 export const target: RunnerHandle = {
@@ -151,19 +150,10 @@ export function fakeProbe(window: WindowObservation, acct: CcusageAccounting | n
   };
 }
 
-export function twoSubtaskAdapters(checks: ReadonlyArray<CheckAnswer>) {
-  return {
-    planner: makePlanner([
-      buildPlan([
-        { title: "T1", intent: "add ok()", behaviorIds: [] },
-        { title: "T2", intent: "add fail()", behaviorIds: [] },
-      ]),
-    ]) as AnswererAdapter<PlanAnswer>,
-    writer: makeWriter(["diff ok\n", "diff fail\n"]),
-    checker: makeChecker(checks) as AnswererAdapter<CheckAnswer>,
-    auditor: makeAuditor([passingAudit]) as AnswererAdapter<AuditAnswer>,
-  };
-}
+// The adapter-set fixtures (loopStageAdapters / twoSubtaskAdapters) live in
+// plannerRunAdapterFixtures.ts (split out for the 500-line cap); re-exported here so the
+// existing single import site is unchanged.
+export { loopStageAdapters, twoSubtaskAdapters } from "./plannerRunAdapterFixtures.js";
 
 export async function setup(projectConfig?: Record<string, unknown>) {
   const ctx = context();

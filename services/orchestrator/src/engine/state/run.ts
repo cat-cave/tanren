@@ -23,6 +23,10 @@ export const RunOutcome = z.enum([
   "halted",
   "escape_hatch_hit",
   "retry_budget_exhausted",
+  // SPEC-LOOP REDESIGN (docs/roadmap/spec-loop-redesign.md): the convergence answerer's
+  // consecutive-stall HALT — the SOLE loop halt (besides budget). Replaces the purged
+  // retry-cap halt as the in-loop "a human action is the genuine next step" outcome.
+  "convergence_stalled",
   "window_exhausted",
   "cancelled",
   "failed",

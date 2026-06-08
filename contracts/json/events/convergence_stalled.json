@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "consecutiveStalls": {
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+    },
+    "maxConsecutiveStalls": {
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+    },
+    "reason": {
+      "type": "string"
+    },
+    "runId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "runId",
+    "consecutiveStalls",
+    "maxConsecutiveStalls",
+    "reason"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.convergence.stalled"
+}

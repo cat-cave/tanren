@@ -35,16 +35,14 @@ describe("(a) the auditor emits explicit P0 findings — no verdict field on the
     expect(parsed).not.toHaveProperty("verdict");
   });
 
-  it("the auditor answer dual-emits explicit findings alongside the legacy verdict", () => {
+  it("the auditor answer is findings-only (the findings ARE the verdict)", () => {
     const answer = AuditAnswer.parse({
-      passed: false,
-      reasoning: "P0 blocker present.",
-      outstandingBehaviorIds: [],
-      recommendedAction: "loop_to_planner",
       findings: [{ id: "p0", severity: "P0", title: "blocker", body: "b" }],
     });
     expect(answer.findings).toHaveLength(1);
     expect(answer.findings[0]?.severity).toBe("P0");
+    expect(answer).not.toHaveProperty("passed");
+    expect(answer).not.toHaveProperty("recommendedAction");
   });
 });
 

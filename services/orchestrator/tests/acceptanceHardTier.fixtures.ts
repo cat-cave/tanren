@@ -25,15 +25,44 @@ import { runPlannerLoopWorkflow } from "../src/engine/workflow/plannerRun.js";
 import type { ConflictContext } from "../src/engine/workflow/reviewMerge/index.js";
 import {
   buildPlan,
-  loopAudit,
+  cleanAudit,
+  completeCheck,
+  convergenceProgress,
   makeAuditor,
   makeChecker,
+  makeConvergence,
+  makeDemoRun,
   makePlanner,
+  makeTriage,
   makeWriter,
-  passingAudit,
-  passingCheck,
+  p1Audit,
+  triageAllTasks,
 } from "./helpers/plannerLoopHelpers.js";
+import type { SubtaskLoopAdapters } from "../src/engine/workflow/subtaskLoop.js";
 import { WorkerPool } from "./helpers/workerPool.js";
+
+// Build the FULL SubtaskLoopAdapters set (SPEC-LOOP REDESIGN: planner/writer/checker/
+// auditor + triage/convergence/demoRun) from the four core adapters, defaulting the
+// new stages to route-to-task / progress / clean-demo. Keeps the hard-tier fakes
+// concise while satisfying the loop's adapter contract.
+export function fullAdapters(core: {
+  planner: SubtaskLoopAdapters["planner"];
+  writer: SubtaskLoopAdapters["writer"];
+  checker: SubtaskLoopAdapters["checker"];
+  auditor: SubtaskLoopAdapters["auditor"];
+  triage?: SubtaskLoopAdapters["triage"];
+  convergence?: SubtaskLoopAdapters["convergence"];
+}): SubtaskLoopAdapters {
+  return {
+    planner: core.planner,
+    writer: core.writer,
+    checker: core.checker,
+    auditor: core.auditor,
+    triage: core.triage ?? makeTriage([triageAllTasks]),
+    convergence: core.convergence ?? makeConvergence([convergenceProgress]),
+    demoRun: makeDemoRun([{ findings: [], summary: "ok" }]),
+  };
+}
 
 export const target: RunnerHandle = {
   backend: "ssh",
@@ -155,18 +184,21 @@ export function hardTierWorkflowRunner(github: GitHubHttpClient, trace: HardTier
     buildPlan([{ title: "T1", intent: "address the auditor", behaviorIds: ["B1"] }]),
   ];
   const planner = makePlanner(plans);
-  // Checker always passes — pass 1's re-plan must come from the gate, not the
-  // checker, so the gate branch is unambiguously exercised.
-  const checker = makeChecker([passingCheck]) as AnswererAdapter<CheckAnswer>;
-  // Auditor: reject once (loop_to_planner), then pass.
-  const auditor = makeAuditor([loopAudit, passingAudit]) as AnswererAdapter<AuditAnswer>;
+  // Checker always reports complete — so the writer→gate→checker inner loop turns over
+  // cleanly once the fast gate passes; the re-plan is driven by the AUDITOR's P1 finding
+  // (via triage→convergence), not the checker.
+  const checker = makeChecker([completeCheck]) as AnswererAdapter<CheckAnswer>;
+  // Auditor: a P1 finding once (→ triage routes a task → convergence reports progress →
+  // re-plan), then audited-clean → pass.
+  const auditor = makeAuditor([p1Audit, cleanAudit]) as AnswererAdapter<AuditAnswer>;
   const writer = makeWriter(["diff --git a/file\n+ok\n"]);
 
   let gateCall = 0;
   const runGate = async ({ when }: { when: CiWhen; taskId?: string }): Promise<GateOutcome> => {
     trace.gateCalls.push({ when });
     gateCall += 1;
-    // First gate call (the first per_iteration) fails → forces a re-plan.
+    // The first per_iteration (fast) gate fails → the writer re-iterates (NOT a re-plan);
+    // every later call passes, so the task completes and the spec-gate is green.
     return gateCall === 1 ? failingGate() : passingGate;
   };
 
@@ -181,7 +213,7 @@ export function hardTierWorkflowRunner(github: GitHubHttpClient, trace: HardTier
       sleep: async () => {},
       runBootstrap: async () => {},
       runGate,
-      buildAdapters: () => ({ planner, writer, checker, auditor }),
+      buildAdapters: () => fullAdapters({ planner, writer, checker, auditor }),
       buildUsageProbe: () => fakeProbe(),
       reviewProbe: {
         markReady: async () => {},

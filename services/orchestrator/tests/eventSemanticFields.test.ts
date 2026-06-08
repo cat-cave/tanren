@@ -116,26 +116,23 @@ describe("event semantic fields", () => {
     expect(() => schema.parse(sample)).not.toThrow();
   });
 
-  it("checker.verdict and auditor.verdict carry reasoning + behavior outcomes", () => {
+  it("checker.verdict carries completeness + findings; auditor.verdict is findings-only", () => {
     const verdict = EventRegistry["checker.verdict"].parse({
       runId: "run_1",
       taskId: "task_1",
       subtaskIndex: 0,
-      passed: true,
-      reasoning: "all behaviors satisfied",
-      behaviorIdsPassed: ["B1"],
+      complete: true,
+      reasoning: "all downstream-relevant behaviors delivered",
       behaviorIdsFailed: [],
+      findings: [],
     });
-    expect(verdict.passed).toBe(true);
+    expect(verdict.complete).toBe(true);
 
     const audit = EventRegistry["auditor.verdict"].parse({
       runId: "run_1",
-      passed: false,
-      reasoning: "B2 outstanding",
-      outstandingBehaviorIds: ["B2"],
-      recommendedAction: "loop_to_planner",
+      findings: [{ id: "f", severity: "P1", title: "t", body: "b" }],
     });
-    expect(audit.recommendedAction).toBe("loop_to_planner");
+    expect(audit.findings[0]?.severity).toBe("P1");
   });
 
   it("registered sensitivity rules cover all the documented sensitive fields", () => {

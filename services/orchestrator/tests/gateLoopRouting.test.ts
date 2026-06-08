@@ -1,23 +1,31 @@
-// the gate's routing inside runSubtaskLoop. A mock runGate stands in
-// for the live exit-code gate so we can assert routing without a runner:
-// - a fast-tier (per_iteration) fail routes back to writer rework via the
-//   planner-rerequest path with producer="gate";
-// - a slow-tier (pre_audit) fail blocks the audit and routes to rework;
-// - an all-pass gate routes forward (audit runs, run passes);
-// - gate failures count against the planner-rerun budget.
+// The deterministic gate's routing inside runSubtaskLoop (SPEC-LOOP REDESIGN,
+// docs/roadmap/spec-loop-redesign.md). A mock runGate stands in for the live exit-code
+// gate so we can assert routing without a runner:
+// - the FAST tier (per_iteration) runs BEFORE the checker; a fail loops straight back
+//   to the writer (no checker call on a broken tree);
+// - the SPEC gate (pre_audit) runs at spec completion; a CI fail becomes a P0 FINDING
+//   that joins the triage set (NOT a halt);
+// - an all-pass gate routes forward (audit runs, run passes).
+// There is NO planner-rerun budget / retry-cap halt — the convergence answerer is the
+// sole loop bound.
 import { describe, expect, it } from "vitest";
 import type { CiWhen } from "../src/engine/ci/index.js";
 import type { GateOutcome } from "../src/engine/workflow/gate/index.js";
 import { runSubtaskLoop } from "../src/engine/workflow/subtaskLoop.js";
 import {
-  buildPlan,
+  cleanAudit,
+  completeCheck,
+  convergenceProgress,
   defaultLoopInput,
   makeAuditor,
   makeChecker,
+  makeConvergence,
   makePlanner,
+  makeTriage,
   makeWriter,
-  passingAudit,
-  passingCheck,
+  triageAllSpecs,
+  triageAllTasks,
+  buildPlan,
 } from "./helpers/plannerLoopHelpers.js";
 
 const passGate: GateOutcome = { passed: true, results: [] };
@@ -50,86 +58,76 @@ describe("gate routing in the subtask loop", () => {
     const outcome = await runSubtaskLoop(input);
 
     expect(outcome.kind).toBe("passed");
-    // Fast tier after the writer iteration, slow tier before the audit.
+    // Fast tier after the writer iteration, spec tier before the audit.
     expect(calls.map((c) => c.when)).toEqual(["per_iteration", "pre_audit"]);
     expect(events.events.some((e) => e.eventType === "auditor.verdict")).toBe(true);
   });
 
-  it("routes a fast-tier (per_iteration) fail to writer rework and re-plans", async () => {
-    // First iteration: fast gate fails → rework. Second iteration: all pass.
+  it("routes a FAST-tier (per_iteration) fail straight back to the writer BEFORE the checker", async () => {
+    // First per_iteration gate fails → rewrite (no checker). Second passes → checker.
     const { runGate, calls } = scriptedGate([failGate("fast", "per_iteration", "lint"), passGate, passGate]);
-    const planner = makePlanner([
-      buildPlan([{ title: "T1", intent: "first", behaviorIds: ["B1"] }]),
-      buildPlan([{ title: "T2", intent: "second", behaviorIds: ["B1"] }]),
-    ]);
-    const { input, events } = defaultLoopInput({
+    const checker = makeChecker([completeCheck]);
+    const { input, pool } = defaultLoopInput({
       runGate,
       adapters: {
-        planner,
-        writer: makeWriter(["diff one\n", "diff two\n"]),
-        checker: makeChecker([passingCheck, passingCheck]),
-        auditor: makeAuditor([passingAudit]),
-      },
-    });
-    const outcome = await runSubtaskLoop(input);
-
-    expect(outcome).toMatchObject({ kind: "passed", plannerRerunCount: 1 });
-    const rerequested = events.events.find((e) => e.eventType === "planner.rerequested");
-    expect(rerequested?.payload).toMatchObject({ producer: "gate", plannerRerunCount: 1 });
-    // The first call was the failing fast tier (the checker never ran on the
-    // broken tree — only writer ran before the gate).
-    expect(calls[0]!.when).toBe("per_iteration");
-    expect(planner.calls).toHaveLength(2);
-  });
-
-  it("blocks the audit when the slow tier (pre_audit) fails and routes to rework", async () => {
-    // First plan: fast passes, slow (pre_audit) fails → rework before audit.
-    // Second plan: both pass → audit runs and passes.
-    const { runGate, calls } = scriptedGate([passGate, failGate("slow", "pre_audit", "build"), passGate, passGate]);
-    const planner = makePlanner([
-      buildPlan([{ title: "T1", intent: "first", behaviorIds: ["B1"] }]),
-      buildPlan([{ title: "T2", intent: "second", behaviorIds: ["B1"] }]),
-    ]);
-    const auditor = makeAuditor([passingAudit]);
-    const { input, events } = defaultLoopInput({
-      runGate,
-      adapters: {
-        planner,
-        writer: makeWriter(["diff one\n", "diff two\n"]),
-        checker: makeChecker([passingCheck, passingCheck]),
-        auditor,
+        ...defaultLoopInput().input.adapters,
+        writer: makeWriter(["one\n", "two\n"]),
+        checker,
+        auditor: makeAuditor([cleanAudit]),
       },
     });
     const outcome = await runSubtaskLoop(input);
 
     expect(outcome.kind).toBe("passed");
-    // The auditor ran exactly once — only after the second plan, never on the
-    // first plan whose pre_audit gate failed.
-    expect(auditor.calls).toHaveLength(1);
-    expect(calls.map((c) => c.when)).toEqual(["per_iteration", "pre_audit", "per_iteration", "pre_audit"]);
-    const rerequested = events.events.filter((e) => e.eventType === "planner.rerequested");
-    expect(rerequested).toHaveLength(1);
-    expect(rerequested[0]!.payload).toMatchObject({ producer: "gate" });
+    // The checker ran ONLY after a passing fast gate (the failing fast gate
+    // short-circuited to the writer first).
+    expect(checker.calls).toHaveLength(1);
+    expect(calls[0]!.when).toBe("per_iteration");
+    expect(pool.tasks.filter((t) => t.kind === "write")).toHaveLength(2);
   });
 
-  it("exhausts the planner-rerun budget when the gate keeps failing", async () => {
-    const { runGate } = scriptedGate([failGate("fast", "per_iteration", "lint")]);
-    const { input } = defaultLoopInput({
+  it("a SPEC-gate (pre_audit) CI fail becomes a P0 finding routed through triage (NOT a halt)", async () => {
+    // The spec gate fails on the first loop → its P0 finding joins triage, which routes
+    // ALL to new specs → the spec PASSES (never halts on the gate).
+    const { runGate } = scriptedGate([passGate, failGate("slow", "pre_audit", "build")]);
+    const { input, events } = defaultLoopInput({
       runGate,
-      escapeHatches: {
-        maxPlannerRerunsPerSpec: 1,
-        maxWriterIterPerSubtask: 5,
-        maxRetriesPerTransientFailure: 3,
+      adapters: {
+        ...defaultLoopInput().input.adapters,
+        triage: makeTriage([triageAllSpecs]),
       },
     });
     const outcome = await runSubtaskLoop(input);
-    expect(outcome).toMatchObject({
-      kind: "retry_budget_exhausted",
-      lastRejection: { producer: "gate" },
-    });
+
+    expect(outcome.kind).toBe("passed");
+    if (outcome.kind !== "passed") return;
+    // The gate failure was triaged into a new DAG spec — never a halt.
+    expect(outcome.newSpecs.length).toBeGreaterThan(0);
+    // Triage ran (the spec-gate P0 finding reached it) and routed everything to specs.
+    const triage = events.events.find((e) => e.eventType === "triage.completed")!;
+    expect((triage.payload as { outcome: string }).outcome).toBe("passed");
   });
 
-  it("runs no gate when runGate is omitted (legacy path)", async () => {
+  it("a recurring SPEC-gate fail kept in-spec is bounded by CONVERGENCE, never a retry cap", async () => {
+    // The spec gate fails every loop; triage keeps it in-spec. The loop is bounded ONLY
+    // by the convergence stall counter — here progress on loop 1, then a clean gate on
+    // loop 2 → PASS. (No retry-cap halt exists.)
+    // loop1: fast pass, spec-gate FAILS (→ P0 finding kept in-spec); loop2: both pass.
+    const { runGate } = scriptedGate([passGate, failGate("slow", "pre_audit", "build"), passGate, passGate]);
+    const { input } = defaultLoopInput({
+      runGate,
+      adapters: {
+        ...defaultLoopInput().input.adapters,
+        planner: makePlanner([buildPlan([{ title: "T", intent: "i", behaviorIds: ["B1"] }])]),
+        triage: makeTriage([triageAllTasks]),
+        convergence: makeConvergence([convergenceProgress]),
+      },
+    });
+    const outcome = await runSubtaskLoop(input);
+    expect(outcome.kind).toBe("passed");
+  });
+
+  it("runs no gate when runGate is omitted (unit path)", async () => {
     const { input, events } = defaultLoopInput();
     const outcome = await runSubtaskLoop(input);
     expect(outcome.kind).toBe("passed");

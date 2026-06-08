@@ -401,6 +401,29 @@ export type AuditPostureConfig = z.infer<typeof AuditPostureConfig>;
 // posture an absent project `auditPosture` resolves to.
 export const DEFAULT_AUDIT_POSTURE: AuditPostureConfig = { blockReviewAt: "P1", p2p3Handling: "fix-if-idle" };
 
+// ---- Convergence policy (spec-loop-redesign.md) ---------------------------
+
+// The CONVERGENCE policy — the SOLE loop bound for the spec-implementation loop
+// (docs/roadmap/spec-loop-redesign.md). There is NO retry cap / per-spec rerun limit /
+// timeout halt: the loop iterates until it CONVERGES, and halts ONLY when the
+// convergence answerer reports `maxConsecutiveStalls` CONSECUTIVE stalls (a human
+// action — rework the spec / stronger model / fix the env — is then the genuine next
+// step). A `progress`/`velocity_defer` assessment RESETS the consecutive-stall count.
+//
+// `demoRunEnabled` flags the OPTIONAL demo-run stage (the "does the thing the spec was
+// written for actually work" gate, after the auditor). It is hard for some project
+// types, so it is OFF by default; a project/spec that can be e2e-exercised opts in.
+export const ConvergencePolicyConfig = z
+  .object({
+    maxConsecutiveStalls: z.number().int().min(1).default(3),
+    demoRunEnabled: z.boolean().default(false),
+  })
+  .strict();
+export type ConvergencePolicyConfig = z.infer<typeof ConvergencePolicyConfig>;
+
+// The default convergence policy: halt after 3 consecutive stalls; demo-run off.
+export const DEFAULT_CONVERGENCE_POLICY: ConvergencePolicyConfig = { maxConsecutiveStalls: 3, demoRunEnabled: false };
+
 // ---- Errors --------------------------------------------------------------
 
 // Thrown by the migration helpers when the persisted `version` discriminator

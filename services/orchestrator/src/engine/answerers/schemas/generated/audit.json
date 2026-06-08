@@ -53,37 +53,11 @@
         "type": "object"
       },
       "type": "array"
-    },
-    "outstandingBehaviorIds": {
-      "items": {
-        "minLength": 1,
-        "type": "string"
-      },
-      "type": "array"
-    },
-    "passed": {
-      "type": "boolean"
-    },
-    "reasoning": {
-      "minLength": 1,
-      "type": "string"
-    },
-    "recommendedAction": {
-      "enum": [
-        "pass",
-        "loop_to_planner",
-        "halt"
-      ],
-      "type": "string"
     }
   },
   "required": [
-    "passed",
-    "reasoning",
-    "outstandingBehaviorIds",
-    "recommendedAction",
     "findings"
   ],
   "type": "object",
-  "x-tanren-schema-id": "tanren.audit_answer.v2"
+  "x-tanren-schema-id": "tanren.audit_answer.v3"
 }

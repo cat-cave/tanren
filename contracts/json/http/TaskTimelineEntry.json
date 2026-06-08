@@ -42,7 +42,9 @@
         "review",
         "merge",
         "demo",
-        "forge"
+        "forge",
+        "triage",
+        "convergence"
       ],
       "type": "string"
     },

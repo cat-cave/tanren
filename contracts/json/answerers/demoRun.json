@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "findings": {
+      "description": "Demo findings (explicit P0–P3): one per way the promised user-flow did not work. Empty = it works.",
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "body": {
+            "maxLength": 6000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "fixHint": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "maxLength": 120,
+            "minLength": 1,
+            "type": "string"
+          },
+          "severity": {
+            "enum": [
+              "P0",
+              "P1",
+              "P2",
+              "P3"
+            ],
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 200,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "severity",
+          "title",
+          "body"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "summary": {
+      "description": "What user-flow/e2e steps were exercised to demonstrate the spec's promise.",
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "findings",
+    "summary"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.demo_run_answer.v1"
+}

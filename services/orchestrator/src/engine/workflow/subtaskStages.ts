@@ -324,16 +324,25 @@ export async function runCheckerStage(args: CheckerStageInput): Promise<CheckerD
     runId: args.runId,
     subtaskIndex: args.subtask.index,
   });
+  // SPEC-LOOP REDESIGN: the checker is completeness-FINDINGS-only. `complete` is the
+  // deterministic loop's read (no findings ⇒ task-complete for downstream needs); the
+  // findings + reasoning are the narration. `decideCheckerOutcome` is the SAME read.
+  const decision = decideCheckerOutcome(result.verdict);
   await args.appendEvent(
     "checker.verdict",
     {
       runId: args.runId,
       taskId: args.checkerTaskId,
       subtaskIndex: args.subtask.index,
-      passed: result.verdict.passed,
+      complete: decision.kind === "pass",
       reasoning: result.verdict.reasoning,
-      behaviorIdsPassed: [...result.verdict.behaviorIdsPassed],
-      behaviorIdsFailed: [...result.verdict.behaviorIdsFailed],
+      behaviorIdsFailed: decision.kind === "reject" ? [...decision.behaviorIdsFailed] : [],
+      findings: result.verdict.findings.map((f) => ({
+        id: f.id,
+        title: f.title,
+        body: f.body,
+        behaviorId: f.behaviorId ?? null,
+      })),
     },
     args.checkerTaskId,
   );
@@ -349,7 +358,6 @@ export async function runCheckerStage(args: CheckerStageInput): Promise<CheckerD
       verdict: result.verdict,
     }) ?? { role: "checker", subtaskIndex: args.subtask.index },
   });
-  const decision = decideCheckerOutcome(result.verdict);
   if (decision.kind === "reject") {
     await markTaskDone(args.pool, args.checkerTaskId, "rejected_by_checker", args.writer);
     await args.appendEvent(

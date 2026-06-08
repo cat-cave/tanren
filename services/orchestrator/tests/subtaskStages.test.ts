@@ -11,14 +11,14 @@ import {
 import type { SubtaskCostContext } from "../src/engine/workflow/subtaskCost.js";
 import {
   buildPlan,
-  failingCheck,
-  loopAudit,
+  cleanAudit,
+  completeCheck,
+  incompleteCheck,
   makeAuditor,
   makeChecker,
   makePlanner,
   makeWriter,
-  passingAudit,
-  passingCheck,
+  p1Audit,
 } from "./helpers/plannerLoopHelpers.js";
 
 // subtaskStages.ts owns the per-call event timeline + task-row transitions for
@@ -315,7 +315,7 @@ describe("runWriterStage", () => {
   });
 });
 
-function checkerArgs(h: StageHarness, verdict: typeof passingCheck) {
+function checkerArgs(h: StageHarness, verdict: typeof completeCheck) {
   return {
     pool: { query: h.query },
     costCtx: h.costCtx(),
@@ -334,7 +334,7 @@ function checkerArgs(h: StageHarness, verdict: typeof passingCheck) {
   };
 }
 
-function auditorArgs(h: StageHarness, verdict: typeof passingAudit) {
+function auditorArgs(h: StageHarness, verdict: typeof cleanAudit) {
   return {
     pool: { query: h.query },
     costCtx: h.costCtx(),
@@ -353,15 +353,15 @@ function auditorArgs(h: StageHarness, verdict: typeof passingAudit) {
 }
 
 describe("runCheckerStage", () => {
-  it("emits checker.verdict with the passed flag + behavior id arrays and marks the check passed", async () => {
+  it("emits checker.verdict with complete=true + empty findings and marks the check passed", async () => {
     const h = new StageHarness();
-    const decision = await runCheckerStage(checkerArgs(h, passingCheck));
+    const decision = await runCheckerStage(checkerArgs(h, completeCheck));
 
     expect(decision.kind).toBe("pass");
     const verdict = h.find("checker.verdict")!;
-    expect(verdict.payload.passed).toBe(true);
-    expect(verdict.payload.reasoning).toBe(passingCheck.reasoning);
-    expect(verdict.payload.behaviorIdsPassed).toEqual(["B1"]);
+    expect(verdict.payload.complete).toBe(true);
+    expect(verdict.payload.reasoning).toBe(completeCheck.reasoning);
+    expect(verdict.payload.findings).toEqual([]);
     expect(verdict.payload.behaviorIdsFailed).toEqual([]);
     expect(h.names()).not.toContain("checker.rejected");
     expect(h.taskOutcomes.get("task_check")).toBe("passed");
@@ -387,17 +387,20 @@ describe("runCheckerStage", () => {
     expect(cost.rawUsage).toEqual({ role: "checker", subtaskIndex: 0 });
   });
 
-  it("emits checker.rejected and marks rejected_by_checker on a failing verdict", async () => {
+  it("emits checker.rejected and marks rejected_by_checker on an incomplete (findings) verdict", async () => {
     const h = new StageHarness();
-    const decision = await runCheckerStage(checkerArgs(h, failingCheck));
+    const decision = await runCheckerStage(checkerArgs(h, incompleteCheck));
 
     expect(decision.kind).toBe("reject");
     expect(h.names()).toContain("checker.rejected");
-    // The verdict event (emitted before the decision branch) must carry the
-    // failed behavior ids spread through — pins behaviorIdsFailed: [...].
+    // The verdict event (emitted before the decision branch) carries complete=false +
+    // the emitted completeness findings + the downstream-blocked behavior ids.
     const verdict = h.find("checker.verdict")!;
-    expect(verdict.payload.passed).toBe(false);
+    expect(verdict.payload.complete).toBe(false);
     expect(verdict.payload.behaviorIdsFailed).toEqual(["B1"]);
+    expect(verdict.payload.findings).toEqual([
+      { id: "missing-file", title: "required file not created", body: "downstream tasks import it", behaviorId: "B1" },
+    ]);
     const rejected = h.find("checker.rejected")!;
     expect(rejected.payload.subtaskIndex).toBe(0);
     expect(rejected.payload.behaviorIdsFailed).toEqual(["B1"]);
@@ -409,7 +412,7 @@ describe("runCheckerStage", () => {
   it("uses the buildUsage override for the checker rawUsage when provided", async () => {
     const h = new StageHarness();
     await runCheckerStage({
-      ...checkerArgs(h, passingCheck),
+      ...checkerArgs(h, completeCheck),
       buildUsage: ({ checkerTaskId, subtaskIndex }) => ({ custom: "c", checkerTaskId, subtaskIndex }),
     });
     expect(h.cost("task_check").rawUsage).toEqual({ custom: "c", checkerTaskId: "task_check", subtaskIndex: 0 });
@@ -417,17 +420,18 @@ describe("runCheckerStage", () => {
 });
 
 describe("runAuditorStage", () => {
-  it("emits auditor.verdict and marks the audit passed on a pass decision", async () => {
+  it("emits auditor.verdict (findings-only) and marks the audit passed on a clean audit", async () => {
     const h = new StageHarness();
-    const { decision, auditorTaskId } = await runAuditorStage(auditorArgs(h, passingAudit));
+    const { findings, auditorTaskId } = await runAuditorStage(auditorArgs(h, cleanAudit));
 
-    expect(decision.kind).toBe("pass");
+    expect(findings).toEqual([]);
     // The auditor task id is a generated `task_<uuid>` (not an empty string).
     expect(auditorTaskId).toMatch(/^task_[0-9a-f-]{36}$/u);
     const verdict = h.find("auditor.verdict")!;
-    expect(verdict.payload.passed).toBe(true);
-    expect(verdict.payload.recommendedAction).toBe("pass");
-    expect(verdict.payload.outstandingBehaviorIds).toEqual([]);
+    // SPEC-LOOP REDESIGN: findings-only (no passed/recommendedAction/outstandingBehaviorIds).
+    expect(verdict.payload.findings).toEqual([]);
+    expect(verdict.payload).not.toHaveProperty("passed");
+    expect(verdict.payload).not.toHaveProperty("recommendedAction");
     expect(h.names()).not.toContain("auditor.rejected");
     expect(h.taskOutcomes.get(auditorTaskId)).toBe("passed");
 
@@ -450,42 +454,26 @@ describe("runAuditorStage", () => {
     expect(cost.rawUsage).toEqual({ role: "auditor" });
   });
 
-  it("emits auditor.rejected with the recommended action + outstanding ids on a non-pass decision", async () => {
+  it("returns the emitted findings (findings-only) and marks the audit passed — no auditor.rejected", async () => {
     const h = new StageHarness();
-    const { decision, auditorTaskId } = await runAuditorStage(auditorArgs(h, loopAudit));
+    const { findings, auditorTaskId } = await runAuditorStage(auditorArgs(h, p1Audit));
 
-    expect(decision.kind).not.toBe("pass");
-    expect(h.names()).toContain("auditor.rejected");
-    // The verdict event (before the decision branch) spreads the outstanding
-    // behavior ids through — pins outstandingBehaviorIds: [...].
-    const verdict = h.find("auditor.verdict")!;
-    expect(verdict.payload.passed).toBe(false);
-    expect(verdict.payload.outstandingBehaviorIds).toEqual(["B2"]);
-    // S3: the auditor emits the explicit P1 finding (with its fixHint) as its SOLE
-    // severity currency — always present on auditor.verdict (no dual-emit flag).
-    expect(verdict.payload.findings).toEqual([
-      {
-        id: "missed-behavior-B2",
-        severity: "P1",
-        title: "B2 not implemented",
-        body: "The integrated result does not cover behavior B2.",
-        fixHint: "implement B2 in the writer pass",
-      },
+    // SPEC-LOOP REDESIGN: the auditor renders NO verdict. It returns the emitted findings
+    // (the loop's triage/convergence route them); the audit task always marks `passed`.
+    expect(findings).toEqual([
+      { id: "missed-behavior-B2", severity: "P1", title: "B2 not implemented", body: "B2 is uncovered." },
     ]);
-    const rejected = h.find("auditor.rejected")!;
-    expect(rejected.payload.recommendedAction).toBe("loop_to_planner");
-    // S3: the rejection's outstanding ids are the BLOCKING FINDING ids (findings-driven
-    // decision), not the legacy verdict's `outstandingBehaviorIds`.
-    expect(rejected.payload.outstandingBehaviorIds).toEqual(["missed-behavior-B2"]);
-    expect(h.taskOutcomes.get(auditorTaskId)).toBe("rejected_by_auditor");
-    // The reject-branch closes the auditor task with the "audit" kind.
+    expect(h.names()).not.toContain("auditor.rejected");
+    const verdict = h.find("auditor.verdict")!;
+    expect(verdict.payload.findings).toEqual(findings);
+    expect(h.taskOutcomes.get(auditorTaskId)).toBe("passed");
     expect(h.find("task.completed")!.payload.taskKind).toBe("audit");
   });
 
   it("uses the buildUsage override for the auditor rawUsage when provided", async () => {
     const h = new StageHarness();
     const { auditorTaskId } = await runAuditorStage({
-      ...auditorArgs(h, passingAudit),
+      ...auditorArgs(h, cleanAudit),
       buildUsage: ({ auditorTaskId: id }) => ({ custom: "a", auditorTaskId: id }),
     });
     expect(h.cost(auditorTaskId).rawUsage).toEqual({ custom: "a", auditorTaskId });

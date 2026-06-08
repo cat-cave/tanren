@@ -34,22 +34,13 @@ describe("answererOutputSchemaFor", () => {
   it("bridges check, audit, demo, and forge schemas with their committed JSON Schema", () => {
     const check = answererOutputSchemaFor("check", CheckAnswer);
     expect(check.name).toBe(CHECK_ANSWER_SCHEMA_ID);
-    expect(check.parse({ passed: true, reasoning: "ok", behaviorIdsPassed: [], behaviorIdsFailed: [] }).passed).toBe(
-      true,
-    );
+    // SPEC-LOOP REDESIGN: completeness findings only (no binary passed).
+    expect(check.parse({ findings: [], reasoning: "ok" }).findings).toEqual([]);
 
     const audit = answererOutputSchemaFor("audit", AuditAnswer);
     expect(audit.name).toBe(AUDIT_ANSWER_SCHEMA_ID);
-    expect(
-      audit.parse({
-        passed: true,
-        reasoning: "ok",
-        outstandingBehaviorIds: [],
-        recommendedAction: "pass",
-        // S3a: `findings` is REQUIRED (no default) — a clean audit emits an explicit [].
-        findings: [],
-      }).recommendedAction,
-    ).toBe("pass");
+    // SPEC-LOOP REDESIGN: findings-only; a clean audit emits an explicit [].
+    expect(audit.parse({ findings: [] }).findings).toEqual([]);
 
     const demo = answererOutputSchemaFor("demo", DemoAnswer);
     expect(demo.name).toBe(DEMO_ANSWER_SCHEMA_ID);

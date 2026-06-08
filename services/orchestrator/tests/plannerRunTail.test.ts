@@ -20,24 +20,30 @@ import {
   buildPlan,
   changesThenApproveReview,
   conflictMerge,
+  convergenceStalled,
   directMergeConfig,
   FailingReleaseAllocator,
   failedMerge,
   fakeProbe,
   healthyWindow,
-  loopAudit,
+  loopStageAdapters,
+  p1Audit,
   makeAuditor,
   makeChecker,
+  makeConvergence,
+  makeDemoRun,
   makePlanner,
+  makeTriage,
   makeWriter,
   mergedMerge,
   noopMerge,
-  passingAudit,
-  passingCheck,
+  cleanAudit,
+  completeCheck,
   pendingReview,
   runPlannerLoopScoped,
   ScriptedGitHubHttp,
   setup,
+  triageAllTasks,
   twoSubtaskAdapters,
 } from "./plannerRun.fixtures.js";
 
@@ -84,8 +90,9 @@ describe("runPlannerLoopWorkflow — review-rework re-entry", () => {
     const adapters = {
       planner: planner as AnswererAdapter<PlanAnswer>,
       writer: makeWriter(["diff a\n", "diff b\n"]),
-      checker: makeChecker([passingCheck, passingCheck]) as AnswererAdapter<CheckAnswer>,
-      auditor: makeAuditor([passingAudit, passingAudit]) as AnswererAdapter<AuditAnswer>,
+      checker: makeChecker([completeCheck, completeCheck]) as AnswererAdapter<CheckAnswer>,
+      auditor: makeAuditor([cleanAudit, cleanAudit]) as AnswererAdapter<AuditAnswer>,
+      ...loopStageAdapters(),
     };
 
     const result = await runPlannerLoopScoped(
@@ -133,7 +140,7 @@ describe("runPlannerLoopWorkflow — review-rework re-entry", () => {
         secrets,
         vcsProvider: vcsProviderOver(github),
         context: ctx,
-        buildAdapters: () => twoSubtaskAdapters([passingCheck, passingCheck]),
+        buildAdapters: () => twoSubtaskAdapters([completeCheck, completeCheck]),
         reviewProbe: alwaysChangesReview(),
         mergeProbe: noopMerge(),
         maxReviewReworks: 0,
@@ -162,7 +169,7 @@ describe("runPlannerLoopWorkflow — review-rework re-entry", () => {
         secrets,
         vcsProvider: vcsProviderOver(github),
         context: ctx,
-        buildAdapters: () => twoSubtaskAdapters([passingCheck, passingCheck]),
+        buildAdapters: () => twoSubtaskAdapters([completeCheck, completeCheck]),
         reviewProbe: pendingReview(),
         mergeProbe: noopMerge(),
         maxReviewReworks: 1,
@@ -189,7 +196,7 @@ describe("runPlannerLoopWorkflow — merge-outcome mapping (direct_merge)", () =
         secrets,
         vcsProvider: vcsProviderOver(github),
         context: ctx,
-        buildAdapters: () => twoSubtaskAdapters([passingCheck, passingCheck]),
+        buildAdapters: () => twoSubtaskAdapters([completeCheck, completeCheck]),
         reviewProbe: approvingReview(),
         mergeProbe: mergedMerge(),
       }) as Parameters<typeof runPlannerLoopScoped>[0],
@@ -214,7 +221,7 @@ describe("runPlannerLoopWorkflow — merge-outcome mapping (direct_merge)", () =
         secrets,
         vcsProvider: vcsProviderOver(github),
         context: ctx,
-        buildAdapters: () => twoSubtaskAdapters([passingCheck, passingCheck]),
+        buildAdapters: () => twoSubtaskAdapters([completeCheck, completeCheck]),
         reviewProbe: approvingReview(),
         mergeProbe: conflictMerge(),
         // Isolate the merge-outcome mapping (conflict → halted) from the
@@ -243,7 +250,7 @@ describe("runPlannerLoopWorkflow — merge-outcome mapping (direct_merge)", () =
         secrets,
         vcsProvider: vcsProviderOver(github),
         context: ctx,
-        buildAdapters: () => twoSubtaskAdapters([passingCheck, passingCheck]),
+        buildAdapters: () => twoSubtaskAdapters([completeCheck, completeCheck]),
         reviewProbe: approvingReview(),
         mergeProbe: failedMerge(),
       }) as Parameters<typeof runPlannerLoopScoped>[0],
@@ -257,9 +264,11 @@ describe("runPlannerLoopWorkflow — merge-outcome mapping (direct_merge)", () =
 });
 
 describe("runPlannerLoopWorkflow — non-pass loop outcome mapping", () => {
-  it("maps a retry_budget_exhausted loop to a halted run with that outcome (no PR)", async () => {
+  it("maps a convergence_stalled loop to a halted run with that outcome (no PR)", async () => {
     const { ctx, pool, events, secrets, allocator, ssh } = await setup();
-    // Auditor loops forever; the rerun budget (2) is exhausted → retry_budget_exhausted.
+    // SPEC-LOOP REDESIGN: the auditor surfaces a P1 finding every loop; triage keeps it
+    // in-spec; the convergence answerer STALLS every loop → after N consecutive stalls
+    // the run halts as convergence_stalled (the SOLE loop bound — no retry cap).
     const adapters = {
       planner: makePlanner([
         buildPlan([{ title: "T1", intent: "a", behaviorIds: [] }]),
@@ -267,8 +276,11 @@ describe("runPlannerLoopWorkflow — non-pass loop outcome mapping", () => {
         buildPlan([{ title: "T3", intent: "c", behaviorIds: [] }]),
       ]) as AnswererAdapter<PlanAnswer>,
       writer: makeWriter(["d1\n", "d2\n", "d3\n"]),
-      checker: makeChecker([passingCheck, passingCheck, passingCheck]) as AnswererAdapter<CheckAnswer>,
-      auditor: makeAuditor([loopAudit, loopAudit, loopAudit]) as AnswererAdapter<AuditAnswer>,
+      checker: makeChecker([completeCheck]) as AnswererAdapter<CheckAnswer>,
+      auditor: makeAuditor([p1Audit]) as AnswererAdapter<AuditAnswer>,
+      triage: makeTriage([triageAllTasks]),
+      convergence: makeConvergence([convergenceStalled]),
+      demoRun: makeDemoRun([{ findings: [], summary: "ok" }]),
     };
 
     const result = await runPlannerLoopScoped(
@@ -279,57 +291,18 @@ describe("runPlannerLoopWorkflow — non-pass loop outcome mapping", () => {
         ssh,
         secrets,
         vcsProvider: vcsProviderOver(new ScriptedGitHubHttp([])),
-        context: ctx,
-        escapeHatches: { maxPlannerRerunsPerSpec: 2, maxWriterIterPerSubtask: 5, maxRetriesPerTransientFailure: 3 },
+        context: { ...ctx, convergencePolicy: { maxConsecutiveStalls: 2, demoRunEnabled: false } },
         buildAdapters: () => adapters,
       }) as Parameters<typeof runPlannerLoopScoped>[0],
     );
 
-    expect(result.outcome.kind).toBe("retry_budget_exhausted");
+    expect(result.outcome.kind).toBe("convergence_stalled");
     expect(result.pullRequest).toBeUndefined();
     // The non-pass outcome maps to a halted run carrying the precise reason.
-    expect(pool.runStatus).toEqual({ status: "halted", outcome: "retry_budget_exhausted" });
+    expect(pool.runStatus).toEqual({ status: "halted", outcome: "convergence_stalled" });
     // finding #3 (never-strand): the halted run parks the spec at `needs_attention` so
     // the DAG slot frees + the operator can requeue it — never stuck `in_flight`.
     expect(pool.specStatuses).toContain("needs_attention");
-  });
-
-  it("maps an auditor halt to a halted run with outcome=halted (no PR)", async () => {
-    const { ctx, pool, events, secrets, allocator, ssh } = await setup();
-    const adapters = {
-      planner: makePlanner([
-        buildPlan([{ title: "T1", intent: "doomed", behaviorIds: [] }]),
-      ]) as AnswererAdapter<PlanAnswer>,
-      writer: makeWriter(["d\n"]),
-      checker: makeChecker([passingCheck]) as AnswererAdapter<CheckAnswer>,
-      auditor: makeAuditor([
-        {
-          passed: false,
-          reasoning: "unrecoverable",
-          outstandingBehaviorIds: [],
-          recommendedAction: "halt",
-          // S3: the halt is driven by a P0 FINDING, not the legacy verdict enum.
-          findings: [{ id: "unrecoverable-1", severity: "P0", title: "unrecoverable", body: "doomed" }],
-        },
-      ]) as AnswererAdapter<AuditAnswer>,
-    };
-
-    const result = await runPlannerLoopScoped(
-      baseInput({
-        pool: pool.asPgPool(),
-        eventStore: events,
-        allocator,
-        ssh,
-        secrets,
-        vcsProvider: vcsProviderOver(new ScriptedGitHubHttp([])),
-        context: ctx,
-        buildAdapters: () => adapters,
-      }) as Parameters<typeof runPlannerLoopScoped>[0],
-    );
-
-    expect(result.outcome.kind).toBe("halted");
-    expect(result.pullRequest).toBeUndefined();
-    expect(pool.runStatus).toEqual({ status: "halted", outcome: "halted" });
   });
 });
 
@@ -350,7 +323,7 @@ describe("runPlannerLoopWorkflow — release cleanup-proof", () => {
         secrets,
         vcsProvider: vcsProviderOver(github),
         context: ctx,
-        buildAdapters: () => twoSubtaskAdapters([passingCheck, passingCheck]),
+        buildAdapters: () => twoSubtaskAdapters([completeCheck, completeCheck]),
         reviewProbe: approvingReview(),
         mergeProbe: mergedMerge(),
       }) as Parameters<typeof runPlannerLoopScoped>[0],
@@ -381,7 +354,7 @@ describe("runPlannerLoopWorkflow — release cleanup-proof", () => {
         secrets,
         vcsProvider: vcsProviderOver(github),
         context: ctx,
-        buildAdapters: () => twoSubtaskAdapters([passingCheck, passingCheck]),
+        buildAdapters: () => twoSubtaskAdapters([completeCheck, completeCheck]),
         reviewProbe: approvingReview(),
         mergeProbe: mergedMerge(),
       }) as Parameters<typeof runPlannerLoopScoped>[0],

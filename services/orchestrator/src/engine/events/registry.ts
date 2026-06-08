@@ -11,11 +11,18 @@ import {
   CheckerRejectedPayload,
   CheckerStartedPayload,
   CheckerVerdictPayload,
+  ConvergenceAssessedPayload,
+  ConvergenceStalledPayload,
+  ConvergenceStartedPayload,
+  DemoRunStartedPayload,
+  DemoRunVerdictPayload,
   PlannerCompletedPayload,
   PlannerFailedPayload,
   PlannerRerequestedPayload,
   PlannerStartedPayload,
   PlannerSubtasksEmittedPayload,
+  TriageCompletedPayload,
+  TriageStartedPayload,
   WriterCompletedPayload,
   WriterFailedPayload,
   WriterStartedPayload,
@@ -148,13 +155,11 @@ import {
   IntegrationRebasePayload,
 } from "./schemas/dag.js";
 
-// The EventRegistry is the single source of truth mapping event names to
-// their typed Zod payload schemas. Adding a new event name requires:
-// 1) defining the Zod schema in services/orchestrator/src/engine/events/schemas/
-// 2) wiring it into this registry
-// 3) registering Sensitivity tags for every payload field in sensitivityRules.ts
-// 4) regenerating db migrations for the events.event_type CHECK constraint
-//    via scripts/generate-event-type-check.mjs
+// The EventRegistry is the single source of truth mapping event names to their typed
+// Zod payload schemas. Adding a new event name requires: (1) a Zod schema under
+// events/schemas/, (2) wiring it into this registry, (3) Sensitivity tags for every
+// payload field in sensitivityRules.ts, and (4) regenerating the events.event_type
+// CHECK migration via scripts/generate-event-type-check.mjs.
 export const EventRegistry = {
   // Run lifecycle
   "run.queued": RunQueuedPayload,
@@ -202,6 +207,15 @@ export const EventRegistry = {
   "auditor.rejected": AuditorRejectedPayload,
   // S3: the posture-gate's residual P2/P3 disposition (route-to-dag / fix-if-idle).
   "auditor.findings_routed": AuditorFindingsRoutedPayload,
+
+  // SPEC-LOOP REDESIGN stages (docs/roadmap/spec-loop-redesign.md)
+  "demoRun.started": DemoRunStartedPayload,
+  "demoRun.verdict": DemoRunVerdictPayload,
+  "triage.started": TriageStartedPayload,
+  "triage.completed": TriageCompletedPayload,
+  "convergence.started": ConvergenceStartedPayload,
+  "convergence.assessed": ConvergenceAssessedPayload,
+  "convergence.stalled": ConvergenceStalledPayload,
 
   // Runner allocation
   "runner.allocated": RunnerAllocatedPayload,
@@ -452,9 +466,7 @@ export function isEventName(value: string): value is EventName {
 }
 
 export function assertEventName(value: string): asserts value is EventName {
-  if (!isEventName(value)) {
-    throw new Error(`undeclared event name: ${value}`);
-  }
+  if (!isEventName(value)) throw new Error(`undeclared event name: ${value}`);
 }
 
 export function listEventNames(): EventName[] {
@@ -477,14 +489,12 @@ export interface RawEventRow {
   payload: unknown;
 }
 
-// decodeEvent parses a database row's payload through the registered Zod
-// schema. Producers writing through PgEventStore are already validated at
-// write time, so this is a defense-in-depth pass for replay/import flows.
+// decodeEvent parses a database row's payload through the registered Zod schema (a
+// defense-in-depth pass for replay/import; write-time producers are already validated).
 export function decodeEvent(row: RawEventRow): TypedEvent {
   if (!isEventName(row.event_type)) {
     throw new UnknownEventTypeError(row.event_type);
   }
-  const schema = EventRegistry[row.event_type];
-  const payload = schema.parse(row.payload);
+  const payload = EventRegistry[row.event_type].parse(row.payload);
   return { eventType: row.event_type, payload } as TypedEvent;
 }

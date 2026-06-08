@@ -2,38 +2,59 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
-    "behaviorIdsFailed": {
-      "description": "Behavior ids whose intent the diff does not satisfy.",
+    "findings": {
+      "description": "Completeness findings (ALL treated as P0): one entry per way this task is not yet complete for what downstream tasks depend on. Empty array = complete.",
       "items": {
-        "minLength": 1,
-        "type": "string"
+        "additionalProperties": false,
+        "properties": {
+          "behaviorId": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "body": {
+            "description": "What downstream-relevant part of the task is missing/incomplete, with enough context to act on.",
+            "maxLength": 6000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 120,
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 200,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "body"
+        ],
+        "type": "object"
       },
       "type": "array"
-    },
-    "behaviorIdsPassed": {
-      "description": "Behavior ids whose intent the diff satisfies.",
-      "items": {
-        "minLength": 1,
-        "type": "string"
-      },
-      "type": "array"
-    },
-    "passed": {
-      "description": "Overall intent verdict: true only when the subtask intent and every relevant acceptance criterion are satisfied by the diff. Never reflects test/build/lint outcomes.",
-      "type": "boolean"
     },
     "reasoning": {
-      "description": "Per-criterion rationale: cite each acceptance criterion / behavior and state whether the diff satisfies its intent. Do not assert or speculate about test/build/lint results.",
+      "description": "Per-criterion rationale: cite each acceptance criterion / behavior the downstream depends on and state whether the change delivers it. Do not assert or speculate about test/build/lint results (the gate owns those).",
       "minLength": 1,
       "type": "string"
     }
   },
   "required": [
-    "passed",
-    "reasoning",
-    "behaviorIdsPassed",
-    "behaviorIdsFailed"
+    "findings",
+    "reasoning"
   ],
   "type": "object",
-  "x-tanren-schema-id": "tanren.check_answer.v2"
+  "x-tanren-schema-id": "tanren.check_answer.v3"
 }

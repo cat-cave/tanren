@@ -31,19 +31,24 @@ import { runPlannerLoopWorkflow } from "../src/engine/workflow/plannerRun.js";
 import { executeNextPlanJob } from "../src/engine/worker/index.js";
 import {
   buildPlan,
-  failingCheck,
-  loopAudit,
+  cleanAudit,
+  completeCheck,
+  convergenceStalled,
+  incompleteCheck,
   makeAuditor,
   makeChecker,
+  makeConvergence,
   makePlanner,
+  makeTriage,
   makeWriter,
-  passingAudit,
-  passingCheck,
+  p1Audit,
+  triageAllTasks,
 } from "./helpers/plannerLoopHelpers.js";
 import {
   enqueuePlanJob,
   failingGate,
   fakeProbe,
+  fullAdapters,
   hardTierGitHub,
   hardTierWorkflowRunner,
   identitySecretRef,
@@ -121,11 +126,11 @@ describe("acceptance hard tier (dequeue→execute, all hard paths)", () => {
     // is invoked three times (initial + gate re-plan + auditor re-plan).
     const planner = makePlanner([
       buildPlan([{ title: "T1", intent: "first", behaviorIds: ["B1"] }]),
-      buildPlan([{ title: "T1", intent: "gate-fix", behaviorIds: ["B1"] }]),
       buildPlan([{ title: "T1", intent: "audit-fix", behaviorIds: ["B1"] }]),
     ]) as AnswererAdapter<PlanAnswer> & { calls: unknown[] };
-    const checker = makeChecker([passingCheck]) as AnswererAdapter<CheckAnswer>;
-    const auditor = makeAuditor([loopAudit, passingAudit]) as AnswererAdapter<AuditAnswer>;
+    const checker = makeChecker([completeCheck]) as AnswererAdapter<CheckAnswer>;
+    // A P1 audit finding once (→ triage task → convergence progress → re-plan), then clean.
+    const auditor = makeAuditor([p1Audit, cleanAudit]) as AnswererAdapter<AuditAnswer>;
     const writer = makeWriter(["diff --git a/file\n+ok\n"]);
     let gateCall = 0;
 
@@ -149,7 +154,7 @@ describe("acceptance hard tier (dequeue→execute, all hard paths)", () => {
             gateCall += 1;
             return gateCall === 1 ? failingGate() : passingGate;
           },
-          buildAdapters: () => ({ planner, writer, checker, auditor }),
+          buildAdapters: () => fullAdapters({ planner, writer, checker, auditor }),
           buildUsageProbe: () => fakeProbe(),
           reviewProbe: {
             markReady: async () => {},
@@ -179,29 +184,30 @@ describe("acceptance hard tier (dequeue→execute, all hard paths)", () => {
     });
 
     expect(result.kind).toBe("completed");
-    // Initial plan + gate re-plan + auditor re-plan = 3 planner invocations,
-    // all within the default rerun budget.
-    expect(planner.calls.length).toBe(3);
+    // Initial plan + one re-plan (driven by the auditor's P1 → triage → convergence
+    // progress) = 2 planner invocations.
+    expect(planner.calls.length).toBe(2);
     expect(pool.runStatus.status).toBe("completed");
   });
 
-  it("halts (recoverable) and stays within budget when the checker rejects past the rerun budget", async () => {
-    // The escape-hatch guard: a hard scenario whose checker never accepts must
-    // NOT loop forever — it halts as retry_budget_exhausted once the per-spec
-    // rerun budget is spent. Proves the loops are bounded.
+  it("halts (recoverable) as convergence_stalled when the spec never converges — the SOLE loop bound", async () => {
+    // SPEC-LOOP REDESIGN: there is NO retry-cap halt. A hard scenario that never
+    // converges must NOT loop forever — it halts as convergence_stalled once the
+    // convergence answerer reports N CONSECUTIVE stalls. Proves the loop is bounded by
+    // convergence, not a retry counter.
     const { pool, secrets, run } = await setupSeededRun();
     const jobQueue = new FakeJobQueue();
     await enqueuePlanJob(jobQueue, run);
 
     const planner = makePlanner([
-      buildPlan([{ title: "T1", intent: "never satisfies", behaviorIds: ["B1"] }]),
-    ]) as AnswererAdapter<PlanAnswer> & {
-      calls: unknown[];
-    };
-    const checker = makeChecker([failingCheck]) as AnswererAdapter<CheckAnswer>;
-    const auditor = makeAuditor([passingAudit]) as AnswererAdapter<AuditAnswer>;
+      buildPlan([{ title: "T1", intent: "never converges", behaviorIds: ["B1"] }]),
+    ]) as AnswererAdapter<PlanAnswer> & { calls: unknown[] };
+    // The checker stays incomplete EVERY loop → a P0 task-incomplete finding → triage
+    // routes it to a task → convergence STALLS every loop.
+    const checker = makeChecker([incompleteCheck]) as AnswererAdapter<CheckAnswer>;
+    const auditor = makeAuditor([cleanAudit]) as AnswererAdapter<AuditAnswer>;
     const writer = makeWriter(["diff --git a/file\n+ok\n"]);
-    const maxReruns = 2;
+    const maxConsecutiveStalls = 2;
 
     const result = await executeNextPlanJob({
       pool: pool.asPgPool(),
@@ -211,11 +217,6 @@ describe("acceptance hard tier (dequeue→execute, all hard paths)", () => {
       secrets,
       vcsProvider: vcsProviderOver(hardTierGitHub()),
       identitySecretRef,
-      escapeHatches: {
-        maxPlannerRerunsPerSpec: maxReruns,
-        maxWriterIterPerSubtask: 5,
-        maxRetriesPerTransientFailure: 3,
-      },
       runWorkflow: (input) =>
         runPlannerLoopWorkflow({
           ...input,
@@ -225,16 +226,24 @@ describe("acceptance hard tier (dequeue→execute, all hard paths)", () => {
           sleep: async () => {},
           runBootstrap: async () => {},
           runGate: async () => passingGate,
-          buildAdapters: () => ({ planner, writer, checker, auditor }),
+          // Bound the per-task writer loop tight so the incompleteness becomes a finding
+          // quickly; the convergence policy (maxConsecutiveStalls) is the real bound.
+          context: { ...input.context, convergencePolicy: { maxConsecutiveStalls, demoRunEnabled: false } },
+          buildAdapters: () =>
+            fullAdapters({
+              planner,
+              writer,
+              checker,
+              auditor,
+              triage: makeTriage([triageAllTasks]),
+              convergence: makeConvergence([convergenceStalled]),
+            }),
           buildUsageProbe: () => fakeProbe(),
         }),
     });
 
-    // The workflow finalized the run as a recoverable halt (no PR), and the
-    // worker reports the non-pass loop outcome — the loop did NOT run away.
-    expect(result).toMatchObject({ kind: "completed", outcome: "retry_budget_exhausted" });
-    expect(pool.runStatus).toEqual({ status: "halted", outcome: "retry_budget_exhausted" });
-    // Bounded: initial plan + maxReruns re-plans, then it stops.
-    expect(planner.calls.length).toBe(maxReruns + 1);
+    // The workflow finalized the run as a recoverable halt (no PR) — convergence_stalled.
+    expect(result).toMatchObject({ kind: "completed", outcome: "convergence_stalled" });
+    expect(pool.runStatus).toEqual({ status: "halted", outcome: "convergence_stalled" });
   });
 });
