@@ -24,10 +24,15 @@ const config = {
   // glob does not always resolve the runner; declare it explicitly.
   plugins: ["@stryker-mutator/vitest-runner"],
   // Stryker manages coverage/reporters internally; it points the vitest runner
-  // at the repo-root config so the same module resolution (@tanren/db alias)
-  // and test discovery apply.
+  // at the Stryker-specific config (same module resolution + @tanren/db alias as
+  // the repo root, plus the one extra exclusion the mutation run needs). That
+  // config drops `scripts/gen-dashboard-types.test.ts`: under Stryker the suite
+  // runs from a COPIED sandbox, so that gate's spawned `--check` re-derives the
+  // dashboard types from the sandbox copy and reports drift against the committed
+  // file — aborting the un-mutated initial dry run. It is environmental to the
+  // sandbox, exercises no mutated source, and is already enforced by `just`/CI.
   vitest: {
-    configFile: "vitest.config.ts",
+    configFile: "vitest.stryker.config.ts",
     // `related: true` (the default) uses vitest's changed-file heuristic to
     // pick which test files even load. With this repo's `.js`-extension imports
     // + the `@tanren/db` alias, that heuristic failed to associate the
