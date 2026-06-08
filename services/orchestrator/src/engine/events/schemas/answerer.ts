@@ -310,8 +310,11 @@ export const AuditorFindingsRoutedPayload = z
 
 // rejection events. The planner-feedback-loop emits one of these on
 // every rejection, carrying a structured `producer` (which Answerer rejected),
-// the rejection `reason`, and the resulting `plannerRerunCount` so the run
-// detail timeline can render the loop without joining tasks.
+// the rejection `reason`, and the running `plannerRerunCount` (a count for the
+// timeline — NOT a retry cap) so the run detail timeline can render the loop
+// without joining tasks. The loop is bounded by the convergence answerer's
+// consecutive-stall HALT (spec-loop-redesign.md), never a per-spec rerun limit —
+// so this event carries no retry-cap field.
 export const PlannerRerequestedPayload = z
   .object({
     runId: z.string(),
@@ -325,7 +328,6 @@ export const PlannerRerequestedPayload = z
     rejectionReason: z.string(),
     behaviorIdsFailed: z.array(z.string()),
     plannerRerunCount: z.number().int(),
-    maxPlannerRerunsPerSpec: z.number().int(),
   })
   .strict();
 

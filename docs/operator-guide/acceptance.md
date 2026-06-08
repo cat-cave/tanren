@@ -65,9 +65,11 @@ The test
   once, and the retried merge succeeds.
 - **Coherent terminal state:** the run lands `completed` and the spec
   `merged` — not halted.
-- **Bounded loops:** a companion case proves a never-satisfied checker
-  halts as `retry_budget_exhausted` after exactly `maxPlannerRerunsPerSpec`
-  re-plans, never running away.
+- **Bounded loops:** a companion case proves a never-converging loop
+  halts as `convergence_stalled` after the convergence answerer reports
+  `maxConsecutiveStalls` CONSECUTIVE stalls — the SOLE in-loop halt (besides
+  budget), so the loop never runs away yet is bounded by a real "no forward
+  progress" signal, not a blind per-spec rerun cap.
 
 ## Live fixture-hard scenario (operator, through the dashboard)
 

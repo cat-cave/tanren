@@ -125,7 +125,6 @@ export const RUN_DETAIL: RunDetail = {
         rejectionReason: "race still possible",
         behaviorIdsFailed: ["bhv_no_flash"],
         plannerRerunCount: 3,
-        maxPlannerRerunsPerSpec: 3,
       },
       redactedPaths: [],
     },

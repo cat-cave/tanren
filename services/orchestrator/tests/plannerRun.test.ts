@@ -48,7 +48,6 @@ describe("runPlannerLoopWorkflow", () => {
       vcsProvider: vcsProviderOver(github),
       context: ctx,
       escapeHatches: {
-        maxPlannerRerunsPerSpec: 3,
         maxWriterIterPerSubtask: 5,
         maxRetriesPerTransientFailure: 3,
       },
@@ -107,7 +106,6 @@ describe("runPlannerLoopWorkflow", () => {
       vcsProvider: vcsProviderOver(passingGitHub()),
       context: ctx,
       escapeHatches: {
-        maxPlannerRerunsPerSpec: 3,
         maxWriterIterPerSubtask: 5,
         maxRetriesPerTransientFailure: 3,
       },
@@ -140,7 +138,6 @@ describe("runPlannerLoopWorkflow", () => {
       vcsProvider: vcsProviderOver(github),
       context: ctx,
       escapeHatches: {
-        maxPlannerRerunsPerSpec: 3,
         maxWriterIterPerSubtask: 5,
         maxRetriesPerTransientFailure: 3,
       },
@@ -172,7 +169,6 @@ describe("runPlannerLoopWorkflow", () => {
       vcsProvider: vcsProviderOver(passingGitHub()),
       context: ctx,
       escapeHatches: {
-        maxPlannerRerunsPerSpec: 3,
         maxWriterIterPerSubtask: 5,
         maxRetriesPerTransientFailure: 3,
       },
@@ -207,7 +203,6 @@ describe("runPlannerLoopWorkflow", () => {
       vcsProvider: vcsProviderOver(passingGitHub()),
       context: ctx,
       escapeHatches: {
-        maxPlannerRerunsPerSpec: 3,
         maxWriterIterPerSubtask: 5,
         maxRetriesPerTransientFailure: 3,
       },
@@ -274,7 +269,7 @@ describe("runPlannerLoopWorkflow", () => {
       secrets,
       vcsProvider: vcsProviderOver(passingGitHub()),
       context: ctx,
-      escapeHatches: { maxPlannerRerunsPerSpec: 3, maxWriterIterPerSubtask: 5, maxRetriesPerTransientFailure: 3 },
+      escapeHatches: { maxWriterIterPerSubtask: 5, maxRetriesPerTransientFailure: 3 },
       timeoutMs: 100,
       maxCiPolls: 1,
       sleep: async () => {},
@@ -337,7 +332,7 @@ describe("runPlannerLoopWorkflow", () => {
       secrets,
       vcsProvider: vcsProviderOver(passingGitHub()),
       context: ctx,
-      escapeHatches: { maxPlannerRerunsPerSpec: 3, maxWriterIterPerSubtask: 5, maxRetriesPerTransientFailure: 3 },
+      escapeHatches: { maxWriterIterPerSubtask: 5, maxRetriesPerTransientFailure: 3 },
       timeoutMs: 100,
       maxCiPolls: 1,
       sleep: async () => {},
@@ -370,7 +365,7 @@ describe("runPlannerLoopWorkflow", () => {
       secrets,
       vcsProvider: vcsProviderOver(passingGitHub()),
       context: ctx,
-      escapeHatches: { maxPlannerRerunsPerSpec: 3, maxWriterIterPerSubtask: 5, maxRetriesPerTransientFailure: 3 },
+      escapeHatches: { maxWriterIterPerSubtask: 5, maxRetriesPerTransientFailure: 3 },
       timeoutMs: 100,
       maxCiPolls: 1,
       sleep: async () => {},
@@ -400,7 +395,6 @@ describe("runPlannerLoopWorkflow", () => {
         vcsProvider: vcsProviderOver(new ScriptedGitHubHttp([])),
         context: ctx,
         escapeHatches: {
-          maxPlannerRerunsPerSpec: 3,
           maxWriterIterPerSubtask: 5,
           maxRetriesPerTransientFailure: 3,
         },
@@ -442,7 +436,6 @@ describe("runPlannerLoopWorkflow", () => {
         vcsProvider: vcsProviderOver(new ScriptedGitHubHttp([])),
         context: ctx,
         escapeHatches: {
-          maxPlannerRerunsPerSpec: 3,
           maxWriterIterPerSubtask: 5,
           maxRetriesPerTransientFailure: 3,
         },

@@ -36,7 +36,7 @@ import {
   DEFAULT_AUDIT_POSTURE,
   DEFAULT_CONVERGENCE_POLICY,
 } from "../config/shared.js";
-import type { Finding } from "../contracts/findings.js";
+import { type Finding, type FindingSeverity, severityRank } from "../contracts/findings.js";
 import type { CostRecorder } from "../costs/index.js";
 import type { EventName, EventPayload } from "../events/index.js";
 import type { EventStore } from "../eventStore.js";
@@ -52,10 +52,23 @@ import { insertPlannerTask, markTaskDone } from "./subtaskTasks.js";
 import { runAuditorStage, runPlannerStage } from "./subtaskStages.js";
 import { runSubtaskSequence } from "./subtaskInnerLoop.js";
 import { runConvergenceStage, runDemoRunStage, runTriageStage } from "./loopStages.js";
-import { type ConvergenceState } from "./loopPolicy.js";
+import { type ConvergenceState, type RoutedWorkItem } from "./loopPolicy.js";
 import { gateFindings, type TriageSpecValidator } from "./loopFindings.js";
 
 type LoopQueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
+
+// The worst severity among the work items KEPT in-spec this loopback — the
+// "are the leftovers mild?" input to the velocity-defer policy. Undefined when
+// nothing was kept (the leftover-severity gate is then vacuously satisfied).
+function worstKeptSeverity(kept: ReadonlyArray<RoutedWorkItem>): FindingSeverity | undefined {
+  let worst: FindingSeverity | undefined;
+  for (const { item } of kept) {
+    if (worst === undefined || severityRank(item.severity) < severityRank(worst)) {
+      worst = item.severity;
+    }
+  }
+  return worst;
+}
 
 export interface SubtaskLoopAdapters {
   planner: AnswererAdapter<PlanAnswer>;
@@ -336,7 +349,9 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
       return await finalize({ kind: "passed", plannerTaskId, subtasks: plan.subtasks, newSpecs, loopCount });
     }
 
-    // Work KEPT in-spec → CONVERGENCE: progress vs stall vs velocity-defer.
+    // Work KEPT in-spec → CONVERGENCE: progress vs stall vs velocity-defer. The
+    // velocity-defer gate reasons over the worst severity among the items KEPT here
+    // (the mild-leftovers test) + the configured strategy.
     const convergence = await runConvergenceStage({
       pool: input.pool,
       writer: input.runStateWriter,
@@ -352,6 +367,14 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
       priorFindings,
       state: convergenceState,
       maxConsecutiveStalls: convergencePolicy.maxConsecutiveStalls,
+      velocityPolicy: {
+        enabled: convergencePolicy.velocityDeferEnabled,
+        maxSeverity: convergencePolicy.velocityDeferMaxSeverity,
+        afterStalls: convergencePolicy.velocityDeferAfterStalls,
+      },
+      ...(worstKeptSeverity(triage.routing.tasksHere) !== undefined && {
+        worstLeftoverSeverity: worstKeptSeverity(triage.routing.tasksHere),
+      }),
       timeoutMs: input.timeoutMs,
       appendEvent,
     });
