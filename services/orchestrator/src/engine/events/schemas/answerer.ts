@@ -416,12 +416,17 @@ export const ConvergenceStartedPayload = z
 
 // convergence.assessed: the answerer's progress/stall/velocity read + the loop's
 // applied decision (continue/pass/halt) + the consecutive-stall counter (the SOLE
-// loop bound; NOT a retry counter).
+// loop bound; NOT a retry counter). The v24 cause-not-symptom fix adds the BLOCKING
+// root cause signal: `blockingRootCauseProgress` (the primary stall driver) keyed to
+// the stable `blockingRootCauseId`, so a loop that churns on a stuck blocker while
+// peripheral findings move is visible as the stall it is.
 export const ConvergenceAssessedPayload = z
   .object({
     runId: z.string(),
     taskId: z.string(),
     assessment: z.enum(["progress", "stalled", "velocity_defer"]),
+    blockingRootCauseProgress: z.enum(["retired", "reduced", "unchanged", "regressed", "none"]),
+    blockingRootCauseId: z.string(),
     decision: z.enum(["continue", "pass", "halt"]),
     consecutiveStalls: z.number().int(),
     maxConsecutiveStalls: z.number().int(),

@@ -9,7 +9,12 @@ export { PlanAnswer, PlanSubtask, PLAN_ANSWER_SCHEMA_ID } from "./plan.js";
 export { CheckAnswer, CheckFinding, CHECK_ANSWER_SCHEMA_ID } from "./check.js";
 export { AuditAnswer, AuditFinding, AuditFindingSeverity, normalizeFinding, AUDIT_ANSWER_SCHEMA_ID } from "./audit.js";
 export { TriageAnswer, TriageWorkItem, TriageItemKind, TriageSeverity, TRIAGE_ANSWER_SCHEMA_ID } from "./triage.js";
-export { ConvergenceAnswer, ConvergenceAssessment, CONVERGENCE_ANSWER_SCHEMA_ID } from "./convergence.js";
+export {
+  ConvergenceAnswer,
+  ConvergenceAssessment,
+  BlockingRootCauseProgress,
+  CONVERGENCE_ANSWER_SCHEMA_ID,
+} from "./convergence.js";
 export { DemoAnswer, DemoLink, DEMO_ANSWER_SCHEMA_ID } from "./demo.js";
 export { DemoRunAnswer, DemoRunFinding, DEMO_RUN_ANSWER_SCHEMA_ID } from "./demoRun.js";
 export {

@@ -6,7 +6,7 @@
 // SPEC-LOOP REDESIGN (docs/roadmap/spec-loop-redesign.md).
 
 import { SPEC_QUALITY_CONTRACT_PROMPT } from "../forge/specQuality/index.js";
-import type { Finding } from "../contracts/findings.js";
+import { type Finding, maxSeverity } from "../contracts/findings.js";
 import { totalPScore } from "./loopPolicy.js";
 
 // Render the combined findings (spec-gate CI-as-P0 + auditor + demo) as a stable,
@@ -76,21 +76,49 @@ export interface ConvergencePromptInput {
 // The CONVERGENCE prompt: decide progress vs stall vs velocity-defer from the
 // finding-DELTA across loops + the diff. The agent renders the assessment; the loop
 // applies the configurable policy + the consecutive-stall halt.
+//
+// v24 CAUSE-NOT-SYMPTOM FIX: the prompt now MANDATES the agent track the BLOCKING root
+// cause — the worst-severity / merge-gating finding — across loops by a STABLE id, not
+// surface text. On v24 the loop churned 4+ times on the identical blocking `pnpm test
+// fails` P1 while it kept reporting `progress` because a peripheral, non-blocking
+// finding (an unrelated lockfile fix) changed each round. The blocking-progress signal
+// (keyed to a stable root-cause id) is the deterministic stall driver — peripheral
+// churn must NOT count as progress on the blocker.
 export function buildConvergencePrompt(input: ConvergencePromptInput): string {
+  const worstThis = maxSeverity(input.currentFindings);
   return [
     "You are the Tanren Convergence Answerer. Decide whether this spec's rework loop is",
     "making FORWARD PROGRESS or has STALLED. You see the findings kept in-spec this loop",
     "and the prior loop's findings; reason over the DELTA.",
     "",
-    "Emit `assessment`:",
+    "FIRST identify the BLOCKING ROOT CAUSE: the worst-severity / merge-gating finding",
+    "that prevents this spec from passing (the highest-severity finding kept in-spec).",
+    "Give it a STABLE identity in `blockingRootCauseId` — the finding id or a durable",
+    "root-cause label (e.g. `pnpm-test-fails`), NOT its surface text — so the SAME",
+    "blocker is recognized as recurring across loops. If the prior loop's worst finding",
+    "shares this root cause, it IS the same blocker even if the wording/line changed.",
+    'If there is NO blocking finding this loop, set `blockingRootCauseId` to "".',
+    "",
+    "Then emit `blockingRootCauseProgress` — progress on THAT blocker ONLY (this is the",
+    "primary stall signal; peripheral non-blocking findings changing does NOT count):",
+    "- `retired`   — the blocking root cause is GONE this loop.",
+    "- `reduced`   — materially smaller / lower-severity than the prior loop.",
+    "- `unchanged` — the SAME blocking root cause recurs materially unchanged (a STALL,",
+    "                even if unrelated findings moved this round).",
+    "- `regressed` — the blocking root cause is worse, or a new equal-or-worse blocker",
+    "                replaced it (a STALL).",
+    "- `none`      — there is NO blocking (merge-gating) finding kept this loop.",
+    "",
+    "Also emit your overall `assessment`:",
     "- `progress`       — the finding-delta is shrinking / root causes are being retired.",
     "- `stalled`        — the same root causes recur with no forward progress (a human",
     "                     action — rework the spec / stronger model / fix the env — is",
     "                     the genuine next step).",
     "- `velocity_defer` — only MILD leftovers remain (e.g. P3-only after several rounds);",
     "                     defer them as specs and allow the spec to pass.",
-    "In `reasoning`, cite which root causes were retired, which recurred, and whether the",
-    "total P-score is decreasing. Do NOT edit files or write to the workspace.",
+    "In `reasoning`, name the blocking root cause and its progress, then cite which other",
+    "root causes were retired, which recurred, and whether the total P-score is",
+    "decreasing. Do NOT edit files or write to the workspace.",
     "",
     `The change is committed on the current branch; inspect it via git diff ${input.baselineSha}.`,
     "Return only the structured JSON.",
@@ -100,8 +128,9 @@ export function buildConvergencePrompt(input: ConvergencePromptInput): string {
     // The total P-score (P0=4 … P3=1) this loop vs the prior — a decreasing score is the
     // clearest progress signal the policy weighs.
     `Total P-score this loop: ${totalPScore(input.currentFindings)} (prior loop: ${totalPScore(input.priorFindings)})`,
+    `Worst (merge-gating) severity this loop: ${worstThis ?? "(none)"}`,
     "",
-    "Findings kept in-spec THIS loop:",
+    "Findings kept in-spec THIS loop (worst severity = the blocking root cause):",
     ...renderFindings(input.currentFindings),
     "",
     "Findings from the PRIOR loop:",

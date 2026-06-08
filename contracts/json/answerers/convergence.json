@@ -10,14 +10,30 @@
       ],
       "type": "string"
     },
+    "blockingRootCauseId": {
+      "description": "Stable id/root-cause label of the worst-severity merge-gating finding (NOT surface text), so the same blocker is recognized across loops. Empty when there is no blocking finding.",
+      "type": "string"
+    },
+    "blockingRootCauseProgress": {
+      "enum": [
+        "retired",
+        "reduced",
+        "unchanged",
+        "regressed",
+        "none"
+      ],
+      "type": "string"
+    },
     "reasoning": {
-      "description": "Cite the finding-delta across loops: which root causes were retired, which recurred, and whether the total P-score is decreasing.",
+      "description": "Cite the BLOCKING root cause + the finding-delta across loops: which root causes were retired, which recurred, and whether the total P-score is decreasing.",
       "minLength": 1,
       "type": "string"
     }
   },
   "required": [
     "assessment",
+    "blockingRootCauseId",
+    "blockingRootCauseProgress",
     "reasoning"
   ],
   "type": "object",

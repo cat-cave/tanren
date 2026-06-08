@@ -10,6 +10,19 @@
       ],
       "type": "string"
     },
+    "blockingRootCauseId": {
+      "type": "string"
+    },
+    "blockingRootCauseProgress": {
+      "enum": [
+        "retired",
+        "reduced",
+        "unchanged",
+        "regressed",
+        "none"
+      ],
+      "type": "string"
+    },
     "consecutiveStalls": {
       "maximum": 9007199254740991,
       "minimum": -9007199254740991,
@@ -42,6 +55,8 @@
     "runId",
     "taskId",
     "assessment",
+    "blockingRootCauseProgress",
+    "blockingRootCauseId",
     "decision",
     "consecutiveStalls",
     "maxConsecutiveStalls",

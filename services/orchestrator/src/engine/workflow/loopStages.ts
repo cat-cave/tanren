@@ -288,6 +288,7 @@ export async function runConvergenceStage(args: ConvergenceStageInput): Promise<
   emitStageTiming("audit", Date.now() - startedAt, { runId: args.runId });
   const { state, decision } = applyConvergencePolicy(
     answer.assessment,
+    answer.blockingRootCauseProgress,
     args.state,
     args.maxConsecutiveStalls,
     args.velocityPolicy,
@@ -299,6 +300,11 @@ export async function runConvergenceStage(args: ConvergenceStageInput): Promise<
       runId: args.runId,
       taskId: convergenceTaskId,
       assessment: answer.assessment,
+      // The v24 cause-not-symptom signal: progress on the BLOCKING root cause + its
+      // stable identity, so the timeline shows WHY a loop stalled (the blocker recurred
+      // unchanged) even when peripheral findings moved.
+      blockingRootCauseProgress: answer.blockingRootCauseProgress,
+      blockingRootCauseId: answer.blockingRootCauseId,
       decision,
       consecutiveStalls: state.consecutiveStalls,
       maxConsecutiveStalls: args.maxConsecutiveStalls,

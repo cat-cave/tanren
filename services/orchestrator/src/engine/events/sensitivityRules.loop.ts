@@ -67,6 +67,8 @@ export const specLoopStageSensitivityRules: SensitivityRule[] = [
     ["runId", "public"],
     ["taskId", "public"],
     ["assessment", "public"],
+    ["blockingRootCauseProgress", "public"],
+    ["blockingRootCauseId", "public"],
     ["decision", "public"],
     ["consecutiveStalls", "public"],
     ["maxConsecutiveStalls", "public"],
