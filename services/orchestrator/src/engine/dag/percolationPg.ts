@@ -27,6 +27,7 @@ import type { SecretStore } from "../contracts/secretStore.js";
 import { migrateOrgConfig } from "../config/orgConfig.js";
 import { migrateProjectConfig } from "../config/projectConfig.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
+import { VcsProviderCodeHost } from "../providers/vcsProviderCodeHost.js";
 import { PgDagLifecycleReadModel } from "./lifecycle.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import { type EventStore, PgEventStore } from "../eventStore.js";
@@ -297,7 +298,13 @@ export class PgPercolationReadModel implements PercolationReadModel {
     branch: string,
     fallback: string,
   ): Promise<string> {
-    const sha = await this.deps.vcsProvider.readBranchHeadSha({ repo, branch, token });
+    // Route the ancestor head-sha read through the host-neutral `CodeHost` seam
+    // (tanren-owns-the-engine.md §6) rather than the GitHub-shaped provider call —
+    // the engine reasons over the `CodeHost` contract, not forge read semantics.
+    // Pure substitution (`fetchRef` ≡ the provider's `readBranchHeadSha`); the
+    // VcsProvider-backed read adapter reuses the existing credential resolution.
+    const codeHost = new VcsProviderCodeHost(this.deps.vcsProvider, async () => token);
+    const sha = await codeHost.fetchRef({ repo, remoteBranch: branch });
     return sha ?? fallback;
   }
 }
