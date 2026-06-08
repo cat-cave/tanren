@@ -13,3 +13,8 @@ export {
   type IntakePollerDeps,
   type PollSourceResult,
 } from "./poller.js";
+export {
+  buildIntakeConnectorMapForOrg,
+  IntakeGithubCredentialMissingError,
+  type BuildIntakeConnectorMapDeps,
+} from "./issueSourceSeam.js";

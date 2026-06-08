@@ -22,8 +22,13 @@ export interface BootIntakeDeps {
   allocator: Allocator;
   ssh: CommandSubstrate;
   githubHttp: GitHubHttpClient;
-  // The shared App-token minter: the poller's per-org GitHub issues connector mints an
-  // installation token (App-only intake), and the audit pass runner resolves a repo-read token.
+  // The shared App-token minter (installation-token cache). The poller resolves
+  // each org's GitHub credential EXPLICITLY via the IssueSource seam — App
+  // installation token when installed (using this minter), ELSE the org's default
+  // static token. The minter is therefore optional: an org on the static-token
+  // path needs none, and its absence does NOT silently disable intake (a configured
+  // GitHub source with no resolvable credential is a LOUD fail-closed error, not a
+  // quiet no-connector). The audit pass runner likewise resolves a repo-read token.
   githubAppMinter?: GithubAppTokenMinter;
   identitySecretRef: string;
   /**
@@ -61,9 +66,10 @@ export function startIntake(deps: BootIntakeDeps): BootedIntake {
 
   const poller = new IntakePoller({
     pool: deps.pool,
-    // App-only intake: the poller rebuilds the connector map PER-ORG (resolving each
-    // org's App installation), so it carries the transports + minter rather than a
-    // single org-agnostic map.
+    // The poller rebuilds the connector map PER-ORG via the IssueSource seam, which
+    // resolves each org's GitHub credential explicitly (App installation token when
+    // installed, else the org-default static token). It therefore carries the
+    // transports + (optional) minter rather than a single org-agnostic map.
     secrets: deps.secrets,
     githubHttp: deps.githubHttp,
     ...(deps.githubAppMinter === undefined ? {} : { githubAppMinter: deps.githubAppMinter }),
