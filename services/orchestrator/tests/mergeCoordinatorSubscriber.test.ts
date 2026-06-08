@@ -103,10 +103,6 @@ const flushMicrotasks = async (): Promise<void> => {
     await Promise.resolve();
   }
 };
-const delay = (ms: number): Promise<void> =>
-  new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
 function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((innerResolve) => {
@@ -272,119 +268,142 @@ describe("MergeCoordinatorSubscriber — pending-hold NOTIFY debounce (Bug B)", 
   });
 
   it("suppresses unrelated NOTIFYs during merge_retry backoff; the retry timer re-drives", async () => {
-    const pool = fakePool(PROJECT);
-    const listener = new FakeNotifyListener();
-    let calls = 0;
-    const coordinator = new RecordingCoordinator(() => {
-      calls += 1;
-      return calls === 1
-        ? {
-            projectId: PROJECT,
-            holdReason: "merge_retry",
-            retryAfterMs: 5,
-            queueDepth: 1,
-          }
-        : { projectId: PROJECT, mergedSpecId: "spec_retry", queueDepth: 1 };
-    });
-    let now = 1_000_000;
-    const sub = new MergeCoordinatorSubscriber({
-      pool,
-      notifyListener: listener as never,
-      coordinator,
-      now: () => now,
-    });
-    await sub.start();
-    await flush();
+    vi.useFakeTimers();
+    let sub: MergeCoordinatorSubscriber | undefined;
+    try {
+      const pool = fakePool(PROJECT);
+      const listener = new FakeNotifyListener();
+      let calls = 0;
+      const coordinator = new RecordingCoordinator(() => {
+        calls += 1;
+        return calls === 1
+          ? {
+              projectId: PROJECT,
+              holdReason: "merge_retry",
+              retryAfterMs: 5,
+              queueDepth: 1,
+            }
+          : { projectId: PROJECT, mergedSpecId: "spec_retry", queueDepth: 1 };
+      });
+      let now = 1_000_000;
+      sub = new MergeCoordinatorSubscriber({
+        pool,
+        notifyListener: listener as never,
+        coordinator,
+        now: () => now,
+      });
+      await sub.start();
+      await flushMicrotasks();
 
-    listener.fire(RUN_ACTIVITY_CHANNEL, "run_0");
-    await flush();
-    expect(coordinator.passes).toEqual([PROJECT]);
+      listener.fire(RUN_ACTIVITY_CHANNEL, "run_0");
+      await flushMicrotasks();
+      expect(coordinator.passes).toEqual([PROJECT]);
 
-    now += 100;
-    for (let i = 1; i <= 5; i += 1) {
-      listener.fire(RUN_ACTIVITY_CHANNEL, `run_${i}`);
-      await flush();
+      now += 100;
+      for (let i = 1; i <= 5; i += 1) {
+        listener.fire(RUN_ACTIVITY_CHANNEL, `run_${i}`);
+        await flushMicrotasks();
+      }
+      expect(coordinator.passes).toEqual([PROJECT]);
+
+      // Advance the fake clock past the armed retry timer (retryAfterMs: 5) — the
+      // re-drive timer is the authoritative re-check and fires deterministically.
+      await vi.advanceTimersByTimeAsync(10);
+      await flushMicrotasks();
+      expect(coordinator.passes).toEqual([PROJECT, PROJECT]);
+    } finally {
+      sub?.stop();
+      vi.useRealTimers();
     }
-    expect(coordinator.passes).toEqual([PROJECT]);
-
-    await delay(15);
-    await flush();
-    expect(coordinator.passes).toEqual([PROJECT, PROJECT]);
-    sub.stop();
   });
 
   it("honors merge_retry backoff when a NOTIFY arrives during the coordinate pass", async () => {
-    const pool = fakePool(PROJECT);
-    const listener = new FakeNotifyListener();
-    const firstResult = deferred<CoordinateResult>();
-    const passes: string[] = [];
-    const coordinator: MergeCoordinator = {
-      async coordinate(projectId: string): Promise<CoordinateResult> {
-        passes.push(projectId);
-        if (passes.length === 1) return firstResult.promise;
-        return { projectId, mergedSpecId: "spec_retry", queueDepth: 1 };
-      },
-    };
-    const sub = new MergeCoordinatorSubscriber({
-      pool,
-      notifyListener: listener as never,
-      coordinator,
-    });
-    await sub.start();
-    await flush();
+    vi.useFakeTimers();
+    let sub: MergeCoordinatorSubscriber | undefined;
+    try {
+      const pool = fakePool(PROJECT);
+      const listener = new FakeNotifyListener();
+      const firstResult = deferred<CoordinateResult>();
+      const passes: string[] = [];
+      const coordinator: MergeCoordinator = {
+        async coordinate(projectId: string): Promise<CoordinateResult> {
+          passes.push(projectId);
+          if (passes.length === 1) return firstResult.promise;
+          return { projectId, mergedSpecId: "spec_retry", queueDepth: 1 };
+        },
+      };
+      sub = new MergeCoordinatorSubscriber({
+        pool,
+        notifyListener: listener as never,
+        coordinator,
+      });
+      await sub.start();
+      await flushMicrotasks();
 
-    listener.fire(RUN_ACTIVITY_CHANNEL, "run_0");
-    await flush();
-    expect(passes).toEqual([PROJECT]);
+      listener.fire(RUN_ACTIVITY_CHANNEL, "run_0");
+      await flushMicrotasks();
+      expect(passes).toEqual([PROJECT]);
 
-    listener.fire(RUN_ACTIVITY_CHANNEL, "run_1");
-    await flush();
-    expect(passes).toEqual([PROJECT]);
+      listener.fire(RUN_ACTIVITY_CHANNEL, "run_1");
+      await flushMicrotasks();
+      expect(passes).toEqual([PROJECT]);
 
-    firstResult.resolve({
-      projectId: PROJECT,
-      holdReason: "merge_retry",
-      retryAfterMs: 20,
-      queueDepth: 1,
-    });
-    await flush();
-    expect(passes).toEqual([PROJECT]);
+      firstResult.resolve({
+        projectId: PROJECT,
+        holdReason: "merge_retry",
+        retryAfterMs: 20,
+        queueDepth: 1,
+      });
+      await flushMicrotasks();
+      expect(passes).toEqual([PROJECT]);
 
-    await delay(30);
-    await flush();
-    expect(passes).toEqual([PROJECT, PROJECT]);
-    sub.stop();
+      // The armed retry timer (retryAfterMs: 20) is the authoritative re-check —
+      // advance the fake clock past it to deterministically re-drive the pass.
+      await vi.advanceTimersByTimeAsync(25);
+      await flushMicrotasks();
+      expect(passes).toEqual([PROJECT, PROJECT]);
+    } finally {
+      sub?.stop();
+      vi.useRealTimers();
+    }
   });
 
   it("re-drives a serialized startup hold after its retry timer", async () => {
-    const pool = fakePool(PROJECT, [PROJECT]);
-    const listener = new FakeNotifyListener();
-    let calls = 0;
-    const coordinator = new RecordingCoordinator(() => {
-      calls += 1;
-      return calls === 1
-        ? {
-            projectId: PROJECT,
-            holdReason: "serialized",
-            retryAfterMs: 5,
-            queueDepth: 0,
-          }
-        : { projectId: PROJECT, mergedSpecId: "spec_resumed", queueDepth: 1 };
-    });
-    const sub = new MergeCoordinatorSubscriber({
-      pool,
-      notifyListener: listener as never,
-      coordinator,
-    });
-    await sub.start();
-    await flush();
+    vi.useFakeTimers();
+    let sub: MergeCoordinatorSubscriber | undefined;
+    try {
+      const pool = fakePool(PROJECT, [PROJECT]);
+      const listener = new FakeNotifyListener();
+      let calls = 0;
+      const coordinator = new RecordingCoordinator(() => {
+        calls += 1;
+        return calls === 1
+          ? {
+              projectId: PROJECT,
+              holdReason: "serialized",
+              retryAfterMs: 5,
+              queueDepth: 0,
+            }
+          : { projectId: PROJECT, mergedSpecId: "spec_resumed", queueDepth: 1 };
+      });
+      sub = new MergeCoordinatorSubscriber({
+        pool,
+        notifyListener: listener as never,
+        coordinator,
+      });
+      await sub.start();
+      await flushMicrotasks();
 
-    expect(coordinator.passes).toEqual([PROJECT]);
+      expect(coordinator.passes).toEqual([PROJECT]);
 
-    await delay(15);
-    await flush();
-    expect(coordinator.passes).toEqual([PROJECT, PROJECT]);
-    sub.stop();
+      // Advance past the armed serialized re-drive timer (retryAfterMs: 5).
+      await vi.advanceTimersByTimeAsync(10);
+      await flushMicrotasks();
+      expect(coordinator.passes).toEqual([PROJECT, PROJECT]);
+    } finally {
+      sub?.stop();
+      vi.useRealTimers();
+    }
   });
 
   it("self-wakes after a coordinate exception so stale merge claims are recovered", async () => {
