@@ -77,6 +77,18 @@ export interface BaseShiftConflictResolver {
     dependent: SpeculativeDependent;
     workspace: { workspaceId: string; path: string };
     rebase: RebaseResult & { outcome: "conflicted" };
+    /**
+     * The SHIFTED base the conflict must be resolved + re-gated AGAINST — the SAME base the
+     * initial `rebaseOnto` used (the rebuilt speculative integration ref, or plain
+     * `default_branch` when non-speculative), NOT the project default. The resolver MUST
+     * gather/replay the conflict against THIS base, else it would resolve against the wrong
+     * base and mark work `rebased_resolved` that was never proven against the base it lands
+     * on (a fail-OPEN). `newBaseRef` is the branch the resolver re-clones + the conflict is
+     * gathered onto; `nonSpeculative` is true when EVERY ancestor merged (rebase onto plain
+     * `default_branch`).
+     */
+    newBaseRef: string;
+    nonSpeculative: boolean;
   }): Promise<ConflictResolution>;
 }
 
@@ -322,6 +334,10 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
         dependent: input.dependent,
         workspace: input.ws,
         rebase: input.rebase,
+        // Resolve + re-gate against the SAME shifted base the initial rebase used (the
+        // speculative integration ref, or plain default_branch) — NEVER the project default.
+        newBaseRef: input.newBaseRef,
+        nonSpeculative: input.nonSpeculative,
       });
     } catch (error) {
       // A resolver INFRA failure is fail-closed HOLD — the recorded conflict (and the
