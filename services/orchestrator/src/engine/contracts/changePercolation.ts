@@ -234,14 +234,29 @@ export type SettleVerdict = "absorbed" | "replanned" | "in_flight";
  * could not reconcile), or still IN-FLIGHT (the re-run is still building). This is
  * what makes the absorbed key advance ONLY after a real clean re-gate.
  *
- *   - the re-exec reached `audited`/`review`/`merged` with NO open P0/P1
- *                                          ⇒ `absorbed` (gate+checker+auditor clean).
- *   - the re-exec is `blocked` (halted/cancelled) OR audited with an open P0/P1 that
+ *   - the re-exec reached `audited`/`review`/`merged` with NO open P0/P1 AND its
+ *     review verdict is NOT `changes_requested` ⇒ `absorbed` (gate+checker+auditor
+ *     clean AND the reviewer did not request changes).
+ *   - the re-exec is `blocked` (halted/cancelled), OR audited with an open P0/P1, OR
+ *     its review verdict is `changes_requested` (a reviewer asked for changes) that
  *     the planner/resolver could not clear ⇒ `replanned` (kept alive, routed back).
  *   - the re-exec is still `building`/`pr_open`/`ci_green` (pre-audit)
  *                                          ⇒ `in_flight` (wait — no re-emit).
+ *
+ * READING THE REVIEW VERDICT closes the §5 P0 hole (tanren-owns-the-engine.md §5):
+ * percolation previously absorbed on `audited`/`review`/`merged` WITHOUT reading the
+ * verdict, so a `changes_requested` re-exec could advance `verified_ancestor_shas`
+ * and unblock the merge. The verdict is now a FIRST-CLASS settle input:
+ * `changes_requested` NEVER absorbs (it is a human signal to route back). An
+ * `undefined` verdict (the re-exec has not reached review, or a no-review tier) does
+ * NOT block absorption on its own — the lifecycle + severity still govern — so a
+ * clean auto-review tier absorbs exactly as before.
  */
-export function decideSettle(reexecState: SpecLifecycleState, reexecSeverity: OpenFindingSeverity): SettleVerdict {
+export function decideSettle(
+  reexecState: SpecLifecycleState,
+  reexecSeverity: OpenFindingSeverity,
+  reexecReviewVerdict?: ReviewVerdict,
+): SettleVerdict {
   if (reexecState === "blocked") {
     return "replanned";
   }
@@ -253,6 +268,12 @@ export function decideSettle(reexecState: SpecLifecycleState, reexecSeverity: Op
   // A clean audit (no open P0/P1) is an absorbed re-gate; an audited run still
   // carrying an open P0/P1 is irreconcilable for now ⇒ keep alive via replan.
   if (reexecSeverity === "P0" || reexecSeverity === "P1") {
+    return "replanned";
+  }
+  // FAIL-CLOSED on the review verdict: a `changes_requested` re-exec NEVER absorbs —
+  // the reviewer asked for changes, so the upstream delta is not yet reconciled.
+  // Route it back (kept alive), never silently advance the absorbed key (§5 P0).
+  if (reexecReviewVerdict === "changes_requested") {
     return "replanned";
   }
   return "absorbed";
@@ -293,6 +314,14 @@ export interface SpeculativeDependent {
   lifecycleState: SpecLifecycleState;
   /** The dependent's OWN current open-finding max severity (for settling). */
   openFindingMaxSeverity: OpenFindingSeverity;
+  /**
+   * The dependent's OWN current review verdict, when its re-execution reached review
+   * (the §5 P0 settle input). `changes_requested` BLOCKS absorption — percolation
+   * must never advance the verified SHA on a re-exec the reviewer asked to change.
+   * Undefined ⇒ the re-exec has not reached review / a no-review tier (the lifecycle
+   * + severity still govern; absorption is not blocked on the verdict alone).
+   */
+  reviewVerdict?: ReviewVerdict;
 }
 
 /**

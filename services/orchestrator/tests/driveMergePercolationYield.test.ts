@@ -89,6 +89,11 @@ function fakePool(): pg.Pool {
     if (/SELECT percolation_pending FROM runs/u.test(sql)) {
       return { rows: [{ percolation_pending: { ancestorSpecId: "spec_anc", toSha: "deadbeef" } }], rowCount: 1 };
     }
+    // §5 cutover: the drive's land-signal reads (the recorded pre_merge gate verdict +
+    // the review verdict). This drive YIELDS to percolation before any land, so these
+    // return empty (no recorded verdict) and never gate a merge here.
+    if (/FROM events/u.test(sql) && /gate\.verdict/u.test(sql)) return { rows: [], rowCount: 0 };
+    if (/FROM events/u.test(sql) && /review\.approved/u.test(sql)) return { rows: [], rowCount: 0 };
     if (text.startsWith(EVENTS_INSERT_PREFIX)) return { rows: [], rowCount: 1 };
     throw new Error(`unexpected SQL in percolation-yield fake: ${text}`);
   };

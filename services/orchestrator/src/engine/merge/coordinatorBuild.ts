@@ -38,6 +38,7 @@ import {
 } from "./driveConflictResolve.js";
 import { mergeForRun } from "../workflow/reviewMerge/index.js";
 import type { NativeQueueEnqueuer } from "../workflow/reviewMerge/index.js";
+import type { GateOutcome } from "../workflow/gate/index.js";
 import type { MergeDriveOutcome } from "../contracts/mergeCoordinator.js";
 import type { DriveMergeForQueuedRun } from "./coordinator.js";
 import { PgMergeQueueModel } from "./coordinatorPg.js";
@@ -79,6 +80,48 @@ interface RunFacts {
   specId: string;
   runId: string;
   githubCredentialRef: string;
+}
+
+/**
+ * §5 cutover (drive pass): the land signals the coordinator re-reads for the
+ * authority. The original run's runner is gone by drive time, so the gate verdict +
+ * review verdict are read from the DURABLE event record (the recorded proof, §3
+ * proof-reuse): the latest `pre_merge` `gate.verdict` and the latest review verdict.
+ * A NOT-FOUND verdict resolves to `undefined`, which the authority maps to its
+ * blocking enum (gate `unknown` / review `unread`) — fail-closed, never assumed pass.
+ * The post-rebase `reGateCi` re-proves a rebased branch separately; this carries the
+ * already-proven verdict into the authority's first land authorization.
+ */
+async function resolveDriveLandSignals(
+  pool: pg.Pool,
+  facts: RunFacts,
+): Promise<{
+  gatePassed: boolean | undefined;
+  reviewVerdict: "approved" | "changes_requested" | "pending" | undefined;
+}> {
+  return runWithOrgScope(pool, facts.orgId, async (client) => {
+    const gate = await client.query<{ payload: { passed?: boolean } }>(
+      `SELECT payload FROM events
+        WHERE run_id = $1 AND event_type = 'gate.verdict' AND payload->>'when' = 'pre_merge'
+        ORDER BY ts DESC, id DESC LIMIT 1`,
+      [facts.runId],
+    );
+    const gatePassed = gate.rows[0]?.payload?.passed;
+    const review = await client.query<{ event_type: string }>(
+      `SELECT event_type FROM events
+        WHERE run_id = $1 AND event_type IN ('review.approved','review.auto_approved','review.changes_requested')
+        ORDER BY ts DESC, id DESC LIMIT 1`,
+      [facts.runId],
+    );
+    const reviewType = review.rows[0]?.event_type;
+    const reviewVerdict =
+      reviewType === "review.approved" || reviewType === "review.auto_approved"
+        ? ("approved" as const)
+        : reviewType === "review.changes_requested"
+          ? ("changes_requested" as const)
+          : undefined;
+    return { gatePassed: typeof gatePassed === "boolean" ? gatePassed : undefined, reviewVerdict };
+  });
 }
 
 /** Resolve the queued run's org/project/spec + its GitHub credential ref (system-scoped). */
@@ -160,12 +203,23 @@ export function buildDriveMerge(deps: BuildMergeCoordinatorDeps): DriveMergeForQ
     // HERE for the outcome map below. The conflict resolver provisions a fresh runner +
     // workspace + runs the REAL intent-preserving resolver (the blind-re-exec stub is gone).
     const verdict: DriveConflictVerdict = {};
+    // §5 cutover: re-read the already-proven land signals (gate + review verdict) for
+    // the authority's first land authorization. A not-found verdict stays undefined →
+    // the authority blocks (gate unknown / review unread) — never assumed passing.
+    const landSignals = await resolveDriveLandSignals(deps.pool, facts);
+    // Only a recorded PASSED pre_merge gate clears; anything else (failed, or no
+    // recorded verdict) stays undefined → the authority's gate input is `unknown`
+    // (BLOCKS). The post-rebase `reGateCi` re-proves a rebased branch separately.
+    const gateOutcome: GateOutcome | undefined =
+      landSignals.gatePassed === true ? { passed: true, results: [] } : undefined;
     let merge;
     try {
       merge = await runWithJobOrgId(facts.orgId, () =>
         mergeForRun({
           pool: scopedPool,
           eventStore,
+          ...(gateOutcome !== undefined && { gateOutcome }),
+          ...(landSignals.reviewVerdict !== undefined && { reviewVerdict: landSignals.reviewVerdict }),
           // Plane-split: route the merge stage's run/spec/task lifecycle writes
           // through the control plane when wired (else the in-process org-scoped
           // writes run — byte-identical to today).

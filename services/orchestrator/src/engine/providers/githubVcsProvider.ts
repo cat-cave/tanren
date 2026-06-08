@@ -104,7 +104,8 @@ export class GitHubVcsProvider implements VcsProvider {
   private readonly sleep: (ms: number) => Promise<void>;
 
   constructor(
-    private readonly http: GitHubHttpClient,
+    // §5: public-READABLE so the merge stage builds its `CodeHost` over the SAME client.
+    readonly http: GitHubHttpClient,
     opts?: { sleep?: (ms: number) => Promise<void> },
   ) {
     this.pulls = new GitHubPullRequestService(http);

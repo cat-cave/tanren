@@ -364,6 +364,16 @@ smoke-rls-allocator:
 smoke-e2e-artifacts:
   DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run tests/e2e/lib/readRunArtifacts.db.test.ts
 
+# §5 cutover gate (tanren-owns-the-engine §5): the frozen MergeAuthority fail-closed
+# truth table driven against the REAL writer-backed LandFinalizer over a real Postgres
+# — a clean land flows authorize → CodeHost.landAuthorizedRef (the ff-only CAS) →
+# durable finalize (merge.completed + spec `merged` in ONE transaction). Includes the
+# THREE audit-7 P0 regression locks (unknown-mergeability blocks; a post-land finalize
+# failure reconciles to merge_state_unknown; a changes_requested review → needs_attention).
+# Provisions an ephemeral DB + migrates it; gated behind the same TANREN_RLS_DB_TEST switch.
+smoke-merge-authority:
+  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/mergeAuthority.writerBacked.integration.test.ts
+
 # Plane-split P1 cross-process proof: the run-executor worker is a STANDALONE
 # deployable. Seeds a queued plan job against the shared Postgres (the same
 # job_queue insert the control-plane API does), then waits for the SEPARATE
@@ -415,7 +425,7 @@ smoke-plane-split-worker-remote-writes: gen-mtls-certs
   TANREN_RUNNER_AUTHORIZED_KEY="$(cat /tmp/tanren_runner_key.pub)" TANREN_RUNNER_IDENTITY_PRIVATE_KEY="$(cat /tmp/tanren_runner_key)" docker compose -f compose.dev.yml up -d --no-deps --force-recreate worker
   TANREN_PLANE_SPLIT_PROVE_DEPRIVILEGE=1 DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" corepack pnpm exec tsx scripts/smoke/plane-split-worker.ts
 
-smoke: compose-build compose-up wait-for-stack smoke-connectivity smoke-ssh-integration smoke-plane-split-worker smoke-plane-split-worker-remote-writes smoke-plane-split-p3 smoke-plane-split-p3b smoke-plane-split-p3c smoke-rls-r1 smoke-rls-r2 smoke-rls-r2-cohort2 smoke-rls-r2-cohort3 smoke-rls-r2-cohort4 smoke-rls-r3a smoke-rls-r3a-worker smoke-rls-r3b smoke-rls-early-finalize smoke-rls-org-bootstrap smoke-rls-operator-flow smoke-rls-http-route-scoping smoke-rls-run-lifecycle smoke-rls-allocator smoke-e2e-artifacts
+smoke: compose-build compose-up wait-for-stack smoke-connectivity smoke-ssh-integration smoke-plane-split-worker smoke-plane-split-worker-remote-writes smoke-plane-split-p3 smoke-plane-split-p3b smoke-plane-split-p3c smoke-rls-r1 smoke-rls-r2 smoke-rls-r2-cohort2 smoke-rls-r2-cohort3 smoke-rls-r2-cohort4 smoke-rls-r3a smoke-rls-r3a-worker smoke-rls-r3b smoke-rls-early-finalize smoke-rls-org-bootstrap smoke-rls-operator-flow smoke-rls-http-route-scoping smoke-rls-run-lifecycle smoke-rls-allocator smoke-e2e-artifacts smoke-merge-authority
 
 # P3-0001: the Phase 2A direct-execution acceptance gate (`just acceptance`,
 # scripts/acceptance/easy.ts + medium.ts) was removed once the run executor

@@ -135,6 +135,16 @@ function fakeDrivePool(): DrivePoolHandle {
     if (/FROM tasks/u.test(sql) && /LIMIT 1/u.test(sql)) return { rows: [], rowCount: 0 };
     if (text.startsWith("INSERT INTO tasks")) return { rows: [], rowCount: 1 };
     if (text.startsWith("UPDATE tasks SET status")) return { rows: [], rowCount: 1 };
+    // §5 cutover: the drive's land-signal reads (the recorded pre_merge gate verdict +
+    // the review verdict) — both tenant reads that must run under a GUC scope. This
+    // is an external_reviewer hand-off, so the bundle never lands; the reads return
+    // empty (no recorded verdict) and the drive hands off as before.
+    if (/FROM events/u.test(sql) && /gate\.verdict/u.test(sql)) {
+      return admitted ? { rows: [], rowCount: 0 } : denied;
+    }
+    if (/FROM events/u.test(sql) && /review\.approved/u.test(sql)) {
+      return admitted ? { rows: [], rowCount: 0 } : denied;
+    }
     // event appends — record the type (param index 4 is event_type).
     if (text.startsWith(EVENTS_INSERT_PREFIX)) {
       events.push(String(params[4]));

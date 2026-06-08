@@ -129,6 +129,9 @@ export class PgPercolationReadModel implements PercolationReadModel {
           ...(pending !== undefined && { pending }),
           lifecycleState: life?.state ?? "building",
           openFindingMaxSeverity: life?.openFindingMaxSeverity ?? "unaudited",
+          // §5 P0: the dependent's OWN review verdict feeds the settle decision — a
+          // `changes_requested` re-exec must NEVER absorb the upstream change.
+          ...(life?.review?.verdict !== undefined && { reviewVerdict: life.review.verdict }),
         };
       })
       // A run whose build-base map decoded empty has nothing to DETECT against —

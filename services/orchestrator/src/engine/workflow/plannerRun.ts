@@ -416,16 +416,13 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
         secrets: input.secrets,
         vcsProvider: input.vcsProvider,
         runId: context.runId,
-        // Resolve the review-stage GitHub token from the SAME ref the
-        // PR-creation + CI-poll steps used (project record → org default), not
-        // the project-config JSONB alone.
+        // Same token ref as PR-creation + CI-poll (project record → org default).
         resolvedGithubCredentialRef: context.githubCredentialRef,
         maxPolls: input.maxCiPolls,
         pollDelayMs: input.ciPollDelayMs,
         sleep: input.sleep,
         reviewProbe: input.reviewProbe,
-        // reviewPolicy: "simulated": the lazy reviewer-Answerer factory + the
-        // spec it judges. Used ONLY on the simulated branch (see reviewPolling).
+        // reviewPolicy "simulated": the lazy reviewer-Answerer + the spec it judges.
         ...simulatedReviewSeam(input, adapterCtx),
       });
 
@@ -458,10 +455,9 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
       // Same source as PR-creation + CI-poll (project record → org default).
       resolvedGithubCredentialRef: context.githubCredentialRef,
       mergeProbe: input.mergeProbe,
-      // the intent-preserving conflict resolver is the PRODUCTION DEFAULT
-      // for the resolveConflict hook (replacing noopConflictResolver). Tests
-      // inject input.resolveConflict to skip the live runner/model; production
-      // omits it → the real resolver, built from the run's merge-stage context.
+      // the intent-preserving conflict resolver is the PRODUCTION DEFAULT for the
+      // resolveConflict hook. Tests inject input.resolveConflict to skip the live
+      // runner/model; production omits it → the real resolver, from the merge context.
       resolveConflict: resolveConflictResolverHook(input, {
         eventStore,
         target: allocation.target,
@@ -474,7 +470,9 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
       // After an auto-rebase the prior verdict is stale, so re-run the native
       // `pre_merge` gate + re-publish before merging — the merge authority, no forge poll.
       reGateCi: buildReGateCi(input, mergeGateCtx),
-      // under `native_queue` the merge stage enters this run into the queue.
+      // §5 cutover: the gate outcome + review verdict the authority re-verifies at land time.
+      ...(mergeGate !== undefined && { gateOutcome: mergeGate }),
+      reviewVerdict: review.verdict,
       ...nativeQueueSeam(input),
     });
 
