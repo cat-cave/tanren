@@ -315,6 +315,12 @@ export const triageAllTasks: TriageAnswer = {
   ],
 };
 
+// Like triageAllTasks but the kept item is a MILD (P3) leftover — the realistic
+// "only P3 left after several rounds" shape the velocity-defer policy may defer.
+export const triageMildTasks: TriageAnswer = {
+  workItems: [{ id: "wi-mild", kind: "task", severity: "P3", title: "tidy later", body: "a nit", findingIds: ["f1"] }],
+};
+
 // Route every finding to a NEW SPEC (P3 leftover ⇒ velocity); the loop PASSES.
 export const triageAllSpecs: TriageAnswer = {
   workItems: [

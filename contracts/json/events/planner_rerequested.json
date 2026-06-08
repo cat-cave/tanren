@@ -8,11 +8,6 @@
       },
       "type": "array"
     },
-    "maxPlannerRerunsPerSpec": {
-      "maximum": 9007199254740991,
-      "minimum": -9007199254740991,
-      "type": "integer"
-    },
     "plannerRerunCount": {
       "maximum": 9007199254740991,
       "minimum": -9007199254740991,
@@ -44,8 +39,7 @@
     "producer",
     "rejectionReason",
     "behaviorIdsFailed",
-    "plannerRerunCount",
-    "maxPlannerRerunsPerSpec"
+    "plannerRerunCount"
   ],
   "type": "object",
   "x-tanren-schema-id": "tanren.event.planner.rerequested"

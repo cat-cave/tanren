@@ -211,8 +211,8 @@ cell pins:
   `RoutingTable`: plan/write/check/audit/demo/forge, each `(cli, model,
 authRef)[]`). This is where "fixed models × harnesses" is expressed: the cell
   freezes the cli+model per role.
-- **Escape hatches** — `maxWriterIterPerSubtask`, `maxPlannerRerunsPerSpec`,
-  `maxRetriesPerTransientFailure` (`EscapeHatches`).
+- **Escape hatches + convergence policy** — `maxWriterIterPerSubtask` /
+  `maxRetriesPerTransientFailure` (`EscapeHatches`; per-spec rerun cap GONE) + the SOLE loop bound (`ConvergencePolicyConfig`): `maxConsecutiveStalls`, velocity-defer (`velocityDefer{Enabled,MaxSeverity,AfterStalls}`), `demoRunEnabled`.
 - **Gate strictness** — the seed repo's `fast`/`slow` `tanren-ci.yml` tiers + the
   `when` policy (`engine/ci/schema.ts`).
 - **Governance posture** — `strict`/`open`/`audit_only` + merge-integration mode.

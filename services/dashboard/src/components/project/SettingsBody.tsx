@@ -37,7 +37,6 @@ export const ROLE_DESCRIPTIONS: Record<RoleId, string> = {
 /** Default escape-hatch values (schema defaults) shown as the diff cue. */
 export const ESCAPE_HATCH_DEFAULTS: EscapeHatches = {
   maxWriterIterPerSubtask: 5,
-  maxPlannerRerunsPerSpec: 3,
   maxRetriesPerTransientFailure: 3,
   maxSpecDiscoveryRoundsWithForge: 20,
 };
@@ -340,12 +339,7 @@ const HATCH_CARDS: HatchCard[] = [
   {
     field: "maxWriterIterPerSubtask",
     label: "max writer iter per subtask",
-    onExceed: "→ escalate to operator (halt)",
-  },
-  {
-    field: "maxPlannerRerunsPerSpec",
-    label: "max planner re-runs per spec",
-    onExceed: "→ revise spec (halt)",
+    onExceed: "→ P0 finding (loop back, not a halt)",
   },
   {
     field: "maxRetriesPerTransientFailure",

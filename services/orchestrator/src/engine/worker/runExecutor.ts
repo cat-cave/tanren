@@ -41,14 +41,11 @@ import { loadRunExecutionContext, type RunExecutionContext } from "./runExecutio
 import { runPlannerLoopWorkflow, type PlannerRunResult, type RunPlannerLoopInput } from "../workflow/plannerRun.js";
 
 /** Escape-hatch + CI-poll defaults the run worker applies to a dequeued plan job. */
-export const DEFAULT_ESCAPE_HATCHES: Pick<
-  EscapeHatches,
-  "maxPlannerRerunsPerSpec" | "maxWriterIterPerSubtask" | "maxRetriesPerTransientFailure"
-> = {
-  maxPlannerRerunsPerSpec: 5,
-  maxWriterIterPerSubtask: 5,
-  maxRetriesPerTransientFailure: 3,
-};
+export const DEFAULT_ESCAPE_HATCHES: Pick<EscapeHatches, "maxWriterIterPerSubtask" | "maxRetriesPerTransientFailure"> =
+  {
+    maxWriterIterPerSubtask: 5,
+    maxRetriesPerTransientFailure: 3,
+  };
 
 // Per-stage agent/SSH timeout CAP (a ceiling, not a fixed wait). Bumped 5min→10min
 // for the #273 scaffold-convergence fix: the hardest first spec (a greenfield
@@ -105,10 +102,7 @@ export interface RunExecutorDeps {
   // the CI-poll / merge stages. Optional — the provider mints per-call when absent.
   githubAppMinter?: GithubAppTokenMinter;
   identitySecretRef: string;
-  escapeHatches?: Pick<
-    EscapeHatches,
-    "maxPlannerRerunsPerSpec" | "maxWriterIterPerSubtask" | "maxRetriesPerTransientFailure"
-  >;
+  escapeHatches?: Pick<EscapeHatches, "maxWriterIterPerSubtask" | "maxRetriesPerTransientFailure">;
   timeoutMs?: number;
   maxCiPolls?: number;
   ciPollDelayMs?: number;

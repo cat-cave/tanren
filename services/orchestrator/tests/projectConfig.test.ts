@@ -159,7 +159,7 @@ describe("ProjectConfigV1 parser", () => {
     expect(cfg.escapeHatches.maxWriterIterPerSubtask).toBe(9);
     // Other fields remain unspecified (project layer is partial); merge with
     // org defaults happens at the engine layer.
-    expect(cfg.escapeHatches.maxPlannerRerunsPerSpec).toBeUndefined();
+    expect(cfg.escapeHatches.maxRetriesPerTransientFailure).toBeUndefined();
   });
 
   it("rejects negative numeric escape hatches", () => {

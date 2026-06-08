@@ -66,7 +66,7 @@ function ghRound(): GitHubHttpResponse[] {
   ];
 }
 
-const escapeHatches = { maxPlannerRerunsPerSpec: 3, maxWriterIterPerSubtask: 5, maxRetriesPerTransientFailure: 3 };
+const escapeHatches = { maxWriterIterPerSubtask: 5, maxRetriesPerTransientFailure: 3 };
 
 const baseInput = (over: Record<string, unknown>) => ({
   escapeHatches,

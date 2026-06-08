@@ -223,7 +223,7 @@ describe("runPlannerLoopWorkflow — per-run credential de-privilege wiring", ()
       credentialScoping: { minter, addr: "http://vault:8200", fetchImpl: vault.fetch },
       vcsProvider: vcsProviderOver(passingGitHub()),
       context: ctx,
-      escapeHatches: { maxPlannerRerunsPerSpec: 3, maxWriterIterPerSubtask: 5, maxRetriesPerTransientFailure: 3 },
+      escapeHatches: { maxWriterIterPerSubtask: 5, maxRetriesPerTransientFailure: 3 },
       timeoutMs: 100,
       maxCiPolls: 1,
       sleep: async () => {},

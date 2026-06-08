@@ -159,7 +159,6 @@ function emptyRouting(): OrgConfig["routing"] {
 function defaultHatches(): OrgConfig["escapeHatches"] {
   return {
     maxWriterIterPerSubtask: 5,
-    maxPlannerRerunsPerSpec: 3,
     maxRetriesPerTransientFailure: 3,
     maxSpecDiscoveryRoundsWithForge: 20,
   };
