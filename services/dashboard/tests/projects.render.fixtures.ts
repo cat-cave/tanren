@@ -153,7 +153,6 @@ const PROJECT_DETAIL = {
     },
     escapeHatches: {
       maxWriterIterPerSubtask: 5,
-      maxPlannerRerunsPerSpec: 3,
       maxRetriesPerTransientFailure: 3,
     },
   },

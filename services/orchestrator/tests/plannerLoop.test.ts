@@ -10,7 +10,14 @@ import { runSubtaskLoop } from "../src/engine/workflow/subtaskLoop.js";
 import { PersistentlyInvalidSpecError } from "../src/engine/forge/specQuality/index.js";
 import { auditorReGateDecision } from "../src/engine/workflow/auditor/auditor.js";
 import { decideCheckerOutcome } from "../src/engine/workflow/checker/checker.js";
-import { applyConvergencePolicy, routeTriageItems, summarizeTriageRouting } from "../src/engine/workflow/loopPolicy.js";
+import { routeTriageItems, summarizeTriageRouting } from "../src/engine/workflow/loopPolicy.js";
+import { type ConvergencePolicyConfig, DEFAULT_CONVERGENCE_POLICY } from "../src/engine/config/shared.js";
+
+// A convergence policy that overrides only the named fields over the redesign default
+// (so a test states just the knob it exercises; the rest stay at today's behavior).
+function convergencePolicyWith(overrides: Partial<ConvergencePolicyConfig>): ConvergencePolicyConfig {
+  return { ...DEFAULT_CONVERGENCE_POLICY, ...overrides };
+}
 import {
   buildPlan,
   cleanAudit,
@@ -36,6 +43,7 @@ import {
   p2Audit,
   triageAllSpecs,
   triageAllTasks,
+  triageMildTasks,
 } from "./helpers/plannerLoopHelpers.js";
 
 describe("spec loop — positive path", () => {
@@ -282,7 +290,7 @@ describe("spec loop — WS1↔WS2 spec-quality gate over triage's new specs", ()
 describe("spec loop — DEMO-RUN gating (optional slot)", () => {
   it("when enabled, a broken demo emits findings that route through triage (gates the pass)", async () => {
     const { input, pool, events } = defaultLoopInput({
-      convergencePolicy: { maxConsecutiveStalls: 3, demoRunEnabled: true },
+      convergencePolicy: convergencePolicyWith({ maxConsecutiveStalls: 3, demoRunEnabled: true }),
       adapters: {
         ...defaultLoopInput().input.adapters,
         // clean checker+auditor BUT a broken demo → triage(spec) → PASS with newSpecs.
@@ -308,7 +316,7 @@ describe("spec loop — DEMO-RUN gating (optional slot)", () => {
 
   it("a clean demo adds no findings (the spec still passes cleanly)", async () => {
     const { input } = defaultLoopInput({
-      convergencePolicy: { maxConsecutiveStalls: 3, demoRunEnabled: true },
+      convergencePolicy: convergencePolicyWith({ maxConsecutiveStalls: 3, demoRunEnabled: true }),
       adapters: { ...defaultLoopInput().input.adapters, demoRun: makeDemoRun([demoClean]) },
     });
     const outcome = await runSubtaskLoop(input);
@@ -325,7 +333,7 @@ describe("spec loop — CONVERGENCE is the SOLE loop bound (stall HALT, NOT a re
     // convergence_stalled. There is NO retry cap: the bound is the stall counter only.
     const maxConsecutiveStalls = 2;
     const { input, events } = defaultLoopInput({
-      convergencePolicy: { maxConsecutiveStalls, demoRunEnabled: false },
+      convergencePolicy: convergencePolicyWith({ maxConsecutiveStalls, demoRunEnabled: false }),
       adapters: {
         ...defaultLoopInput().input.adapters,
         auditor: makeAuditor([p0Audit]),
@@ -346,12 +354,14 @@ describe("spec loop — CONVERGENCE is the SOLE loop bound (stall HALT, NOT a re
     expect(assessed).toHaveLength(maxConsecutiveStalls);
   });
 
-  it("a velocity_defer convergence PASSES the spec, deferring the kept leftovers as specs", async () => {
+  it("a velocity_defer convergence PASSES the spec, deferring the MILD (≤ default P3) leftovers as specs", async () => {
+    // The kept leftover is P3 (`triageMildTasks`) — at-or-below the DEFAULT
+    // velocityDeferMaxSeverity (P3), so the default velocity policy HONORS the defer.
     const { input, events } = defaultLoopInput({
       adapters: {
         ...defaultLoopInput().input.adapters,
         auditor: makeAuditor([p2Audit]),
-        triage: makeTriage([triageAllTasks]),
+        triage: makeTriage([triageMildTasks]),
         convergence: makeConvergence([convergenceVelocity]),
       },
     });
@@ -364,9 +374,32 @@ describe("spec loop — CONVERGENCE is the SOLE loop bound (stall HALT, NOT a re
     expect((assessed.payload as { decision: string }).decision).toBe("pass");
   });
 
+  it("a velocity_defer with leftovers ABOVE the configured max-severity is REFUSED (keeps iterating)", async () => {
+    // The kept leftover is P0 (`triageAllTasks`), above the default P3 ceiling, so the
+    // velocity defer is REFUSED — the loop iterates instead of passing. Here loop 2
+    // then comes back clean, so the spec passes WITHOUT a velocity-defer.
+    const { input, events } = defaultLoopInput({
+      convergencePolicy: convergencePolicyWith({ maxConsecutiveStalls: 3 }),
+      adapters: {
+        ...defaultLoopInput().input.adapters,
+        // Loop 1: P0 audit → kept-P0 → velocity_defer REFUSED → continue. Loop 2: clean.
+        auditor: makeAuditor([p0Audit, cleanAudit]),
+        triage: makeTriage([triageAllTasks]),
+        convergence: makeConvergence([convergenceVelocity]),
+      },
+    });
+    const outcome = await runSubtaskLoop(input);
+    expect(outcome.kind).toBe("passed");
+    if (outcome.kind !== "passed") return;
+    // The defer was refused, so nothing was deferred as a new spec.
+    expect(outcome.newSpecs).toHaveLength(0);
+    const assessed = events.events.find((e) => e.eventType === "convergence.assessed")!;
+    expect((assessed.payload as { decision: string }).decision).toBe("continue");
+  });
+
   it("a PROGRESS convergence resets the stall counter and re-plans (no halt)", async () => {
     const { input } = defaultLoopInput({
-      convergencePolicy: { maxConsecutiveStalls: 2, demoRunEnabled: false },
+      convergencePolicy: convergencePolicyWith({ maxConsecutiveStalls: 2, demoRunEnabled: false }),
       adapters: {
         ...defaultLoopInput().input.adapters,
         // Loop1: P0 → stalled. Loop2: P0 → PROGRESS (resets). Loop3: clean → PASS.
@@ -413,26 +446,8 @@ describe("pure decisions", () => {
     expect(decision.behaviorIdsFailed).toEqual(["B1"]);
   });
 
-  it("applyConvergencePolicy: progress/velocity reset the counter; stalled increments and halts at the bound", () => {
-    expect(applyConvergencePolicy("progress", { consecutiveStalls: 1 }, 3)).toEqual({
-      state: { consecutiveStalls: 0 },
-      decision: "continue",
-    });
-    expect(applyConvergencePolicy("velocity_defer", { consecutiveStalls: 2 }, 3)).toEqual({
-      state: { consecutiveStalls: 0 },
-      decision: "pass",
-    });
-    // One short of the bound ⇒ continue (a single stall is NOT a halt).
-    expect(applyConvergencePolicy("stalled", { consecutiveStalls: 1 }, 3)).toEqual({
-      state: { consecutiveStalls: 2 },
-      decision: "continue",
-    });
-    // Reaching the bound ⇒ halt.
-    expect(applyConvergencePolicy("stalled", { consecutiveStalls: 2 }, 3)).toEqual({
-      state: { consecutiveStalls: 3 },
-      decision: "halt",
-    });
-  });
+  // The pure `applyConvergencePolicy` decisions (incl. the configurable velocity
+  // policy) live in loopPolicy.test.ts.
 });
 
 describe("spec loop — non-completing writer (never laundered to passed)", () => {

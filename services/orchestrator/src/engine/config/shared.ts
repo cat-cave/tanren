@@ -59,7 +59,6 @@ export function emptyRoutingTable(): RoutingTable {
 export const EscapeHatches = z
   .object({
     maxWriterIterPerSubtask: z.number().int().min(1).default(5),
-    maxPlannerRerunsPerSpec: z.number().int().min(1).default(3),
     maxRetriesPerTransientFailure: z.number().int().min(0).default(3),
     maxSpecDiscoveryRoundsWithForge: z.number().int().min(1).default(20),
   })
@@ -75,7 +74,6 @@ export type EscapeHatches = z.infer<typeof EscapeHatches>;
 export const PartialEscapeHatches = z
   .object({
     maxWriterIterPerSubtask: z.number().int().min(1).optional(),
-    maxPlannerRerunsPerSpec: z.number().int().min(1).optional(),
     maxRetriesPerTransientFailure: z.number().int().min(0).optional(),
     maxSpecDiscoveryRoundsWithForge: z.number().int().min(1).optional(),
   })
@@ -413,16 +411,44 @@ export const DEFAULT_AUDIT_POSTURE: AuditPostureConfig = { blockReviewAt: "P1", 
 // `demoRunEnabled` flags the OPTIONAL demo-run stage (the "does the thing the spec was
 // written for actually work" gate, after the auditor). It is hard for some project
 // types, so it is OFF by default; a project/spec that can be e2e-exercised opts in.
+//
+// The VELOCITY-DEFER policy (spec-loop-redesign.md §convergence (c)) — the
+// "leftovers are mild → defer them as specs + ALLOW the merge" middle-ground —
+// is a CONFIGURABLE strategy, not a hard-coded one:
+//   - `velocityDeferEnabled` — master switch for honoring a `velocity_defer`
+//     assessment (default ON: today's behavior is to honor it).
+//   - `velocityDeferMaxSeverity` — the WORST leftover severity that may be
+//     deferred. A `velocity_defer` is honored only when EVERY kept leftover finding
+//     is at-or-below this severity; a finding above it forbids the defer (the loop
+//     keeps iterating instead of passing). Default `P3` — only P3-mild leftovers
+//     defer, the documented "only P3 after several rounds" strategy.
+//   - `velocityDeferAfterStalls` — the round count (consecutive non-progress reads
+//     SO FAR) at-or-above which a `velocity_defer` may be honored. Default `0` — a
+//     defer is allowed from the first round (today's behavior); raise it to require
+//     the loop to grind for N rounds before mild leftovers are deferred.
+// The defaults reproduce today's behavior EXACTLY: any `velocity_defer` the answerer
+// emits is honored (enabled, P3-leftovers, from round 0).
 export const ConvergencePolicyConfig = z
   .object({
     maxConsecutiveStalls: z.number().int().min(1).default(3),
     demoRunEnabled: z.boolean().default(false),
+    velocityDeferEnabled: z.boolean().default(true),
+    velocityDeferMaxSeverity: FindingSeverityConfig.default("P3"),
+    velocityDeferAfterStalls: z.number().int().min(0).default(0),
   })
   .strict();
 export type ConvergencePolicyConfig = z.infer<typeof ConvergencePolicyConfig>;
 
-// The default convergence policy: halt after 3 consecutive stalls; demo-run off.
-export const DEFAULT_CONVERGENCE_POLICY: ConvergencePolicyConfig = { maxConsecutiveStalls: 3, demoRunEnabled: false };
+// The default convergence policy: halt after 3 consecutive stalls; demo-run off;
+// velocity-defer ON, honoring up to P3-mild leftovers from the first round (so the
+// default reproduces today's "any velocity_defer → pass" behavior byte-for-byte).
+export const DEFAULT_CONVERGENCE_POLICY: ConvergencePolicyConfig = {
+  maxConsecutiveStalls: 3,
+  demoRunEnabled: false,
+  velocityDeferEnabled: true,
+  velocityDeferMaxSeverity: "P3",
+  velocityDeferAfterStalls: 0,
+};
 
 // ---- Errors --------------------------------------------------------------
 

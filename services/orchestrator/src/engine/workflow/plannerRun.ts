@@ -3,7 +3,7 @@
 // loop it publishes a draft PR, runs the NATIVE pre-merge gate (the merge authority,
 // in-loop over the command substrate — no forge CI poll) + publishes the `tanren/gate`
 // verdict, then drives review→merge. Non-pass outcomes (window_exhausted /
-// retry_budget_exhausted / halted) map to a halted run without a PR; a Codex
+// convergence_stalled / halted) map to a halted run without a PR; a Codex
 // usage-limit mid-loop is caught as window_exhausted, not a failure (PROJECT_BRIEF §4.3).
 import type pg from "pg";
 import type { CiWhen } from "../ci/index.js";
@@ -159,10 +159,7 @@ export interface RunPlannerLoopInput {
   // minted/cached token. Omitted → the provider mints a per-call minter when installed.
   githubAppMinter?: GithubAppTokenMinter;
   context: PlannerRunContext;
-  escapeHatches: Pick<
-    EscapeHatches,
-    "maxPlannerRerunsPerSpec" | "maxWriterIterPerSubtask" | "maxRetriesPerTransientFailure"
-  >;
+  escapeHatches: Pick<EscapeHatches, "maxWriterIterPerSubtask" | "maxRetriesPerTransientFailure">;
   timeoutMs: number;
   workspacePath?: string;
   // Test seam: a pre-resolved GitHub clone token. Production omits it (prepareRunWorkspace resolves it from secrets + context.githubCredentialRef).

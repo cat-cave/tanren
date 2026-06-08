@@ -199,7 +199,6 @@ export const sensitivityRules: SensitivityRule[] = [
     ["behaviorIdsFailed", "public"],
     ["behaviorIdsFailed[]", "public"],
     ["plannerRerunCount", "public"],
-    ["maxPlannerRerunsPerSpec", "public"],
   ]),
 
   // checker role

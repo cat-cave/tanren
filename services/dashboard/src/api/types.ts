@@ -258,7 +258,6 @@ export type RoutingTable = Record<RoleId, RoutingChain>;
 
 export interface EscapeHatches {
   maxWriterIterPerSubtask: number;
-  maxPlannerRerunsPerSpec: number;
   maxRetriesPerTransientFailure: number;
   maxSpecDiscoveryRoundsWithForge: number;
 }

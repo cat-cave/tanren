@@ -85,30 +85,90 @@ export interface ConvergenceState {
   consecutiveStalls: number;
 }
 
+// The VELOCITY-DEFER policy the loop applies OVER a `velocity_defer` assessment —
+// lifted out of `applyConvergencePolicy` so a project can TUNE the "defer mild
+// leftovers as specs + allow the merge" middle-ground (spec-loop-redesign.md
+// §convergence (c)) rather than it being hard-coded. Mirrors the `velocityDefer*`
+// fields on `ConvergencePolicyConfig`. A `velocity_defer` is HONORED (→ `pass`)
+// only when:
+//   - `enabled` is true, AND
+//   - the WORST kept-leftover severity is at-or-below `maxSeverity` (mild enough),
+//     AND
+//   - `consecutiveStalls` SO FAR is at-or-above `afterStalls` (ground for N rounds
+//     first).
+// When any gate fails the answerer's defer is REFUSED: the loop keeps iterating
+// (`continue`) instead of passing — fail-closed (never merge too-severe leftovers
+// just because the answerer wanted to defer).
+export interface VelocityDeferPolicy {
+  enabled: boolean;
+  maxSeverity: FindingSeverity;
+  afterStalls: number;
+}
+
 /**
  * Apply the convergence policy. PURE. Returns the next state + the loop decision:
  *   - `progress`       → reset the stall counter, `continue`.
- *   - `velocity_defer` → reset the stall counter, `pass` (defer leftovers as specs).
+ *   - `velocity_defer` → reset the stall counter; `pass` if the velocity policy
+ *                        HONORS it (enabled · leftovers ≤ maxSeverity · stalls ≥
+ *                        afterStalls), else `continue` (the defer is refused — keep
+ *                        iterating, fail-closed).
  *   - `stalled`        → increment the stall counter; `halt` once it reaches
  *                        `maxConsecutiveStalls`, else `continue` (give it another
  *                        round — a single stalled read is not yet a human-action halt).
- * `maxConsecutiveStalls` is the SOLE loop bound — there is NO retry cap / timeout.
+ * `maxConsecutiveStalls` is the SOLE halt bound — there is NO retry cap / timeout.
+ *
+ * `worstLeftoverSeverity` is the worst severity among the findings KEPT in-spec on
+ * this loopback (undefined ⇒ no kept findings, so the leftover-severity gate is
+ * vacuously satisfied). It is only consulted for a `velocity_defer`.
  */
 export function applyConvergencePolicy(
   assessment: ConvergenceAssessment,
   state: ConvergenceState,
   maxConsecutiveStalls: number,
+  velocityPolicy: VelocityDeferPolicy,
+  worstLeftoverSeverity?: FindingSeverity,
 ): { state: ConvergenceState; decision: ConvergenceDecision } {
   if (assessment === "progress") {
     return { state: { consecutiveStalls: 0 }, decision: "continue" };
   }
   if (assessment === "velocity_defer") {
-    return { state: { consecutiveStalls: 0 }, decision: "pass" };
+    // A defer RESETS the stall counter (it is not a stall — forward motion was made,
+    // the remainder is just deferred). The policy decides whether to honor it.
+    const decision: ConvergenceDecision = honorsVelocityDefer(velocityPolicy, state, worstLeftoverSeverity)
+      ? "pass"
+      : "continue";
+    return { state: { consecutiveStalls: 0 }, decision };
   }
   // stalled
   const consecutiveStalls = state.consecutiveStalls + 1;
   const decision: ConvergenceDecision = consecutiveStalls >= maxConsecutiveStalls ? "halt" : "continue";
   return { state: { consecutiveStalls }, decision };
+}
+
+// True iff the velocity policy HONORS a `velocity_defer` for the given state +
+// worst-leftover severity. A finding worse than `maxSeverity` (rank below it) or a
+// stall count below `afterStalls` refuses the defer.
+function honorsVelocityDefer(
+  policy: VelocityDeferPolicy,
+  state: ConvergenceState,
+  worstLeftoverSeverity?: FindingSeverity,
+): boolean {
+  if (!policy.enabled) {
+    return false;
+  }
+  if (state.consecutiveStalls < policy.afterStalls) {
+    return false;
+  }
+  if (worstLeftoverSeverity !== undefined && !atOrBelow(worstLeftoverSeverity, policy.maxSeverity)) {
+    return false;
+  }
+  return true;
+}
+
+// `severity` is no worse than `threshold` (mild enough to defer). severityRank is
+// 0=P0 … 3=P3, so "at-or-below in severity" is rank at-or-above the threshold's.
+function atOrBelow(severity: FindingSeverity, threshold: FindingSeverity): boolean {
+  return severityRank(severity) >= severityRank(threshold);
 }
 
 /** The total P-score of a findings list (lower-rank severities weigh more). Used by

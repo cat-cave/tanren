@@ -69,7 +69,6 @@ function limitLines(hatches: OrgConfigV1["escapeHatches"]): string[] {
   return [
     "[limits]",
     `  max_writer_iter = ${hatches.maxWriterIterPerSubtask}`,
-    `  max_planner_reruns = ${hatches.maxPlannerRerunsPerSpec}`,
     `  max_transient_retries = ${hatches.maxRetriesPerTransientFailure}`,
   ];
 }

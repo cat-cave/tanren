@@ -80,10 +80,8 @@ describe("acceptance hard tier (dequeue→execute, all hard paths)", () => {
       secrets,
       vcsProvider: vcsProviderOver(github),
       identitySecretRef,
-      // Budgets generous enough that the scripted loops stay well within them
-      // (1 gate re-plan + 1 auditor re-plan = 2 reruns < 5).
+      // Budgets generous enough that the scripted loops stay well within them.
       escapeHatches: {
-        maxPlannerRerunsPerSpec: 5,
         maxWriterIterPerSubtask: 5,
         maxRetriesPerTransientFailure: 3,
       },

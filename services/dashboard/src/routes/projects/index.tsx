@@ -418,11 +418,7 @@ function mountRoutingSettingsScreens(app: Hono, deps: ShellDeps): void {
     const orgId = String(form["orgId"] ?? "");
     await mutateConfig(c, deps, orgId, projectId, (config) => {
       const next: Partial<EscapeHatches> = { ...config.escapeHatches };
-      for (const field of [
-        "maxWriterIterPerSubtask",
-        "maxPlannerRerunsPerSpec",
-        "maxRetriesPerTransientFailure",
-      ] as const) {
+      for (const field of ["maxWriterIterPerSubtask", "maxRetriesPerTransientFailure"] as const) {
         const raw = form[field];
         if (raw !== undefined) {
           const parsed = Number(raw);

@@ -29,7 +29,6 @@ describe("OrgConfigV1 parser", () => {
     expect(cfg.notificationTargets).toEqual([]);
     expect(cfg.escapeHatches).toEqual({
       maxWriterIterPerSubtask: 5,
-      maxPlannerRerunsPerSpec: 3,
       maxRetriesPerTransientFailure: 3,
       maxSpecDiscoveryRoundsWithForge: 20,
     });

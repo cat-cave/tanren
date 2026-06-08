@@ -45,7 +45,6 @@ function orgConfig(): unknown {
     },
     escapeHatches: {
       maxWriterIterPerSubtask: 5,
-      maxPlannerRerunsPerSpec: 3,
       maxRetriesPerTransientFailure: 3,
       maxSpecDiscoveryRoundsWithForge: 20,
     },

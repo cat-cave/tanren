@@ -16,7 +16,7 @@ import {
   normalizeFinding,
   TriageAnswer,
 } from "../answerers/schemas/index.js";
-import type { Finding } from "../contracts/findings.js";
+import type { Finding, FindingSeverity } from "../contracts/findings.js";
 import type { AuditPostureConfig } from "../config/shared.js";
 import { emitStageTiming } from "../observability/index.js";
 import type { AnswererAdapter } from "../providers/types.js";
@@ -28,6 +28,7 @@ import {
   type RoutedWorkItem,
   summarizeTriageRouting,
   type TriageRoutingResult,
+  type VelocityDeferPolicy,
 } from "./loopPolicy.js";
 import { buildConvergencePrompt, buildDemoRunPrompt, buildTriagePrompt } from "./loopStagePrompts.js";
 import { recordAnswererCost, secondsSince, type SubtaskCostContext } from "./subtaskCost.js";
@@ -229,6 +230,11 @@ export interface ConvergenceStageInput extends StageBase {
   priorFindings: ReadonlyArray<Finding>;
   state: ConvergenceState;
   maxConsecutiveStalls: number;
+  // The configurable velocity-defer strategy + the worst severity among the
+  // findings KEPT in-spec this loopback (undefined ⇒ no kept findings). Together
+  // they gate whether a `velocity_defer` assessment is honored (→ `pass`).
+  velocityPolicy: VelocityDeferPolicy;
+  worstLeftoverSeverity?: FindingSeverity;
 }
 
 export interface ConvergenceStageResult {
@@ -280,7 +286,13 @@ export async function runConvergenceStage(args: ConvergenceStageInput): Promise<
   });
   const runtimeSeconds = secondsSince(startedAt);
   emitStageTiming("audit", Date.now() - startedAt, { runId: args.runId });
-  const { state, decision } = applyConvergencePolicy(answer.assessment, args.state, args.maxConsecutiveStalls);
+  const { state, decision } = applyConvergencePolicy(
+    answer.assessment,
+    args.state,
+    args.maxConsecutiveStalls,
+    args.velocityPolicy,
+    args.worstLeftoverSeverity,
+  );
   await args.appendEvent(
     "convergence.assessed",
     {
