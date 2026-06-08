@@ -65,7 +65,7 @@ export function buildDefaultGate(
   target: RunnerHandle,
   workspacePath: string,
   eventStore: EventStore,
-): (gate: { when: CiWhen; taskId?: string }) => Promise<GateOutcome> {
+): (gate: { when: CiWhen; taskId?: string; headShaOverride?: string }) => Promise<GateOutcome> {
   const context = input.context;
   let configPromise: ReturnType<typeof resolveGateConfig> | undefined;
   // The lazily-resolved EXPLICIT install command, cached alongside configPromise.
@@ -89,7 +89,7 @@ export function buildDefaultGate(
       payload,
     });
   };
-  return async ({ when, taskId }) => {
+  return async ({ when, taskId, headShaOverride }) => {
     if (configPromise === undefined) {
       configPromise = resolveGateConfig({
         ssh: input.ssh,
@@ -136,14 +136,22 @@ export function buildDefaultGate(
       timeoutMs: input.timeoutMs,
     });
     const config = await configPromise;
-    // Anchor the native verdict on the commit the gate is about to verify (the
-    // workspace HEAD). "" on a fake-SSH unit path ⇒ runGateForWhen emits no verdict.
-    const headSha = await resolveWorkspaceHeadSha({
-      ssh: input.ssh,
-      target,
-      workspacePath,
-      timeoutMs: input.timeoutMs,
-    });
+    // Anchor the native verdict on the commit the gate is about to verify. By default
+    // that is the workspace HEAD. COMMIT-BINDING (§5): the `pre_merge` merge gate passes
+    // a `headShaOverride` — the PUSHED PR head (the cleaned ref, bootstrap commit
+    // dropped) — because the workspace HEAD is left at the writer tip (a DIFFERENT sha)
+    // so a review-rework can keep diffing vs its base. Recording the verdict on the
+    // override is what lets the land authority's `gatedHeadSha == landing head` hold.
+    // "" on a fake-SSH unit path ⇒ runGateForWhen emits no verdict.
+    const headSha =
+      headShaOverride !== undefined && headShaOverride !== ""
+        ? headShaOverride
+        : await resolveWorkspaceHeadSha({
+            ssh: input.ssh,
+            target,
+            workspacePath,
+            timeoutMs: input.timeoutMs,
+          });
     const outcome = await runGateForWhen({
       ssh: input.ssh,
       target,

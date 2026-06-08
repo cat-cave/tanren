@@ -376,7 +376,7 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
       // the synthetic bootstrap commit (+ install artifacts), so the pushed branch / PR
       // carries only the writer's changes. The working HEAD is left intact so a
       // review-rework re-entry keeps its bootstrapSha diff base. No-op on fake-SSH.
-      const pushSourceRef = await prepareCleanPrBranch({
+      const pushSource = await prepareCleanPrBranch({
         ssh: input.ssh,
         target: allocation.target,
         workspacePath,
@@ -394,7 +394,7 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
         vcsProvider: input.vcsProvider,
         ssh: input.ssh,
         target: allocation.target,
-        sourceRef: pushSourceRef,
+        sourceRef: pushSource.ref,
         runId: context.runId,
         specId: context.specId,
         projectId: context.projectId,
@@ -410,7 +410,9 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
       });
       // THE MERGE AUTHORITY (native delivery): run the `pre_merge` gate on the live
       // runner + publish the `tanren/gate` verdict. Passing proceeds; failing THROWS.
-      mergeGate = await runMergeGateForRun(input, mergeGateCtx);
+      // COMMIT-BINDING (§5): the gate anchors its verdict on the PUSHED PR head sha (the
+      // cleaned ref) — NOT the workspace HEAD — so the authority's gatedHeadSha matches.
+      mergeGate = await runMergeGateForRun(input, mergeGateCtx, pushSource.headSha);
 
       review = await pollReviewForRun({
         pool: input.pool,
