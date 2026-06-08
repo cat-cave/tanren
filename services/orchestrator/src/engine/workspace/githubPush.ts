@@ -48,6 +48,28 @@ export interface PrepareCleanPrBranchInput {
   timeoutMs: number;
 }
 
+/**
+ * The cleaned push source: the gitref the caller pushes the PR branch from, plus the
+ * EXACT sha that ref resolves to — the commit that becomes the PR head on the forge.
+ *
+ * COMMIT-BINDING (the gate↔land TOCTOU guard, tanren-owns-the-engine.md §5): the
+ * pushed sha is DISTINCT from the workspace HEAD whenever a real bootstrap commit was
+ * dropped (the working HEAD stays at the writer tip — bootstrap commit and all — so a
+ * review-rework can keep diffing vs its base). The `pre_merge` gate MUST anchor its
+ * `gate.verdict` on THIS `headSha` (the future PR head), not the workspace HEAD, or the
+ * land authority blocks forever (`gatedHeadSha != landing head`).
+ */
+export interface CleanedPushSource {
+  /** The gitref to push from: {@link PR_CLEAN_REF} (cleaned) or "HEAD" (nothing to drop). */
+  ref: string;
+  /**
+   * The sha `ref` resolves to — the commit that becomes the PR head. "" only on a
+   * fake-SSH unit path (no real workspace); the merge gate then anchors on the
+   * workspace HEAD as before (also "" there ⇒ no verdict event).
+   */
+  headSha: string;
+}
+
 // Builds a ref ({@link PR_CLEAN_REF}) holding the writer's commits replayed onto
 // the clone HEAD — i.e. with the synthetic bootstrap commit (and its install
 // artifacts: lockfiles, node_modules) dropped — and points the push branch at
@@ -61,11 +83,24 @@ export interface PrepareCleanPrBranchInput {
 // When cloneHeadSha/bootstrapSha are empty (fake-SSH unit paths) or equal (no
 // real bootstrap commit), there is nothing to drop and the working HEAD is
 // pushed unchanged.
-export async function prepareCleanPrBranch(input: PrepareCleanPrBranchInput): Promise<string> {
+//
+// Returns the push ref AND the sha it resolves to (the future PR head) — see
+// {@link CleanedPushSource}. The merge gate anchors its verdict on this sha so the
+// land authority's gate↔land commit-binding (§5) holds (the workspace HEAD, left at
+// the writer tip with the bootstrap commit, is a DIFFERENT sha than what is pushed).
+export async function prepareCleanPrBranch(input: PrepareCleanPrBranchInput): Promise<CleanedPushSource> {
   if (input.cloneHeadSha === "" || input.bootstrapSha === "" || input.cloneHeadSha === input.bootstrapSha) {
-    return "HEAD";
+    // Nothing to drop: the working HEAD IS the PR head. Resolve its sha so the merge
+    // gate still anchors on the exact pushed commit ("" on a fake SSH ⇒ no verdict).
+    const head = await runWorkspaceSshCommand(input.ssh, input.target, {
+      label: "resolve clean PR head sha",
+      cwd: input.workspacePath,
+      timeoutMs: input.timeoutMs,
+      command: "git rev-parse HEAD",
+    });
+    return { ref: "HEAD", headSha: validateResolvedSha(head.stdout.trim()) };
   }
-  await runWorkspaceSshCommand(input.ssh, input.target, {
+  const result = await runWorkspaceSshCommand(input.ssh, input.target, {
     label: "prepare clean PR branch",
     cwd: input.workspacePath,
     timeoutMs: input.timeoutMs,
@@ -82,9 +117,23 @@ export async function prepareCleanPrBranch(input: PrepareCleanPrBranchInput): Pr
       // Capture the cleaned tip into the push ref, then restore the working HEAD.
       `git update-ref ${quoteSshShellArg(PR_CLEAN_REF)} HEAD`,
       'git checkout --quiet --detach "$orig_head"',
+      // Echo the cleaned tip (the future PR head) LAST so it is the command's stdout —
+      // the sha the merge gate anchors its verdict on (the gate↔land commit-binding).
+      `git rev-parse ${quoteSshShellArg(PR_CLEAN_REF)}`,
     ].join(" && "),
   });
-  return PR_CLEAN_REF;
+  return { ref: PR_CLEAN_REF, headSha: validateResolvedSha(result.stdout.trim()) };
+}
+
+// Guards the sha echoed from the clean-PR prep: a real runner returns a 40-hex sha;
+// a fake-SSH unit path yields "" (the merge gate then falls back to the workspace
+// HEAD, also "" there ⇒ no verdict event). Anything else is a corrupt read — throw
+// loudly rather than anchor the merge gate on a bogus commit.
+function validateResolvedSha(sha: string): string {
+  if (sha !== "" && !/^[0-9a-f]{40}$/u.test(sha)) {
+    throw new Error(`clean PR head resolution returned invalid sha: ${sha}`);
+  }
+  return sha;
 }
 
 export async function pushWorkspaceBranchToGitHub(input: GitHubWorkspacePushInput): Promise<void> {

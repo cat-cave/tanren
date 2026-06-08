@@ -227,8 +227,17 @@ export interface MergeProbe {
  * rebase. Returns the CI status so the stage knows whether to merge (`passed`),
  * fail (`failed`), or hold (`pending` after the budget). Production resolves
  * this to a `pollCiForRun` loop; tests inject a scripted result.
+ *
+ * COMMIT-BINDING (§5): the optional `rebasedHeadSha` is the EXACT head the behind-
+ * rebase advanced the PR branch to. The re-gate MUST anchor its `pre_merge`
+ * gate.verdict on it (not the local workspace HEAD, which the forge-side rebase did
+ * not necessarily advance) so the land authority's `gatedHeadSha === landedHeadSha`
+ * holds for the behind path too — not just the clean path. Absent (resolved-tree
+ * re-gate, where the workspace IS the head) ⇒ the gate binds to the workspace HEAD.
  */
-export type ReGateCiHook = () => Promise<{ status: "passed" | "failed" | "pending" }>;
+export type ReGateCiHook = (input?: {
+  rebasedHeadSha?: string;
+}) => Promise<{ status: "passed" | "failed" | "pending" }>;
 
 /**
  * THE ONE BASE-SHIFT HANDLER on the merge path (tanren-owns-the-engine.md §7 — "the two
@@ -244,11 +253,15 @@ export type ReGateCiHook = () => Promise<{ status: "passed" | "failed" | "pendin
  * Production wires this to the unified base-shift path; tests inject a recording hook to
  * prove the `behind` mergeability flows through the one handler.
  */
-export type BaseShiftRebaseHook = (input: {
-  runId: string;
-  baseBranch: string;
-  headBranch?: string;
-}) => Promise<{ outcome: "rebased" | "up_to_date" | "conflict" | "held"; message?: string }>;
+export type BaseShiftRebaseHook = (input: { runId: string; baseBranch: string; headBranch?: string }) => Promise<{
+  outcome: "rebased" | "up_to_date" | "conflict" | "held";
+  message?: string;
+  // COMMIT-BINDING (§5): the EXACT sha the branch was rebased to, surfaced on `rebased`
+  // so the dispatcher's re-gate anchors its verdict on the rebased PR head (not the
+  // local workspace HEAD). Absent on the legacy server-side `updateBranch` fallback,
+  // which has no head sha to report ⇒ the re-gate binds to the workspace HEAD as before.
+  rebasedHeadSha?: string;
+}>;
 
 export interface ConflictContext {
   runId: string;

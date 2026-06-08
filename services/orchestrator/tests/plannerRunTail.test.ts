@@ -143,8 +143,10 @@ describe("runPlannerLoopWorkflow — review-rework re-entry", () => {
     expect(result.outcome.kind).toBe("passed");
     expect(result.merge).toBeUndefined();
     expect(pool.runStatus).toEqual({ status: "halted", outcome: "halted" });
-    // No re-entry → no in_flight write, and the spec was never marked done/merged.
-    expect(pool.specStatuses).toEqual([]);
+    // finding #3 (never-strand): no re-entry → no in_flight/done/merged write, but the
+    // halted run MUST park the spec at `needs_attention` (frees the DAG slot + operator-
+    // requeueable) rather than leaving it stranded at `in_flight` with a dead run.
+    expect(pool.specStatuses).toEqual(["needs_attention"]);
   });
 
   it("halts when the review stays pending after the poll budget", async () => {
@@ -287,6 +289,9 @@ describe("runPlannerLoopWorkflow — non-pass loop outcome mapping", () => {
     expect(result.pullRequest).toBeUndefined();
     // The non-pass outcome maps to a halted run carrying the precise reason.
     expect(pool.runStatus).toEqual({ status: "halted", outcome: "retry_budget_exhausted" });
+    // finding #3 (never-strand): the halted run parks the spec at `needs_attention` so
+    // the DAG slot frees + the operator can requeue it — never stuck `in_flight`.
+    expect(pool.specStatuses).toContain("needs_attention");
   });
 
   it("maps an auditor halt to a halted run with outcome=halted (no PR)", async () => {

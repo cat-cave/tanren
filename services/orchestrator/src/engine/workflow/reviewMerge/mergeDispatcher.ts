@@ -312,7 +312,9 @@ export class MergeDispatcher implements LandOps {
         result: await this.emitConflict("post-rebase CI re-gate hook is absent; cannot verify rebased branch"),
       };
     }
-    const ci = await reGate();
+    // COMMIT-BINDING (§5): bind the re-gate verdict to the EXACT rebased PR head so
+    // `gatedHeadSha === landedHeadSha` holds for the behind path (absent ⇒ workspace HEAD).
+    const ci = await reGate(updated.rebasedHeadSha === undefined ? {} : { rebasedHeadSha: updated.rebasedHeadSha });
     await eventStore.append({
       ...this.base(),
       eventType: "merge.rebased",

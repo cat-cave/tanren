@@ -315,6 +315,10 @@ describe("P2c-1 speculative-merge-hold (merge stage)", () => {
       },
     );
     const baseShiftCalls: Array<{ runId: string; baseBranch: string }> = [];
+    // RESIDUAL #4 (§5 commit-binding): capture the head sha the dispatcher threads into
+    // the re-gate so we can assert it is the rebased PR head, not the workspace HEAD.
+    const reGateCalls: Array<{ rebasedHeadSha?: string }> = [];
+    const REBASED_PR_HEAD = "d".repeat(40);
 
     const result = await mergeForRun({
       pool: pool.asPgPool(),
@@ -325,11 +329,15 @@ describe("P2c-1 speculative-merge-hold (merge stage)", () => {
       runId: "run_1",
       mergeProbe: probe,
       // THE ONE BASE-SHIFT HANDLER: the behind rebase routes here, not to updateBranch.
+      // It surfaces the EXACT rebased PR head sha for the re-gate to bind to.
       baseShiftRebase: async (input) => {
         baseShiftCalls.push({ runId: input.runId, baseBranch: input.baseBranch });
-        return { outcome: "rebased" };
+        return { outcome: "rebased", rebasedHeadSha: REBASED_PR_HEAD };
       },
-      reGateCi: async () => ({ status: "passed" }),
+      reGateCi: async (hook) => {
+        reGateCalls.push({ ...(hook?.rebasedHeadSha !== undefined && { rebasedHeadSha: hook.rebasedHeadSha }) });
+        return { status: "passed" };
+      },
     });
 
     expect(result.outcome).toBe("merged");
@@ -337,6 +345,9 @@ describe("P2c-1 speculative-merge-hold (merge stage)", () => {
     expect(baseShiftCalls).toEqual([{ runId: "run_1", baseBranch: "main" }]);
     // …and the separate server-side update-branch was NEVER called (one path).
     expect(probe.updateBranchCalls).toBe(0);
+    // §5 COMMIT-BINDING: the dispatcher threaded the rebased PR-head sha into the re-gate
+    // (so the re-gate verdict binds to the landed commit, not the stale workspace HEAD).
+    expect(reGateCalls).toEqual([{ rebasedHeadSha: REBASED_PR_HEAD }]);
     const types = events.events.map((e) => e.eventType);
     expect(types).toContain("merge.behind");
     expect(types).toContain("merge.rebased");

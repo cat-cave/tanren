@@ -16,7 +16,7 @@ import type { SecretStore } from "../contracts/secretStore.js";
 import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import { CostRecorder } from "../costs/index.js";
 import { codexHomeForRun } from "../credentials/codexMaterializer.js";
-import { type EventName, type EventPayload } from "../events/index.js";
+import type { EventName, EventPayload } from "../events/index.js";
 import { type EventStore, PgEventStore } from "../eventStore.js";
 import type { ReviewAnswer } from "../answerers/schemas/index.js";
 import type { VcsProvider } from "../contracts/vcsProvider.js";
@@ -28,18 +28,21 @@ import { prepareCleanPrBranch } from "../workspace/githubPush.js";
 import { buildReGateCi, type MergeGateRunContext, runMergeGateForRun } from "./plannerRunCi.js";
 import type { GateOutcome } from "./gate/index.js";
 import {
+  appTokenSeam,
   buildDefaultGate,
   buildManagedCapturerForRun,
+  nativeQueueSeam,
   resolveConflictResolverHook,
   resolveRunAdaptersWithBudgetPreflight,
   simulatedReviewSeam,
+  writerSeam,
 } from "./plannerRunAdapters.js";
 import { prepareRunWorkspace } from "./plannerRunWorkspace.js";
 import {
   applyScopedRunCredentials,
   buildFinalizeRunState,
   finalizeMergeOutcome,
-  finalizeNonPass,
+  finalizeNonPassAndPark,
   finalizeWorkflowError,
   markRunRunning,
   releaseRunnerWithCleanupProof,
@@ -232,31 +235,6 @@ export interface PlannerRunResult {
   merge?: MergeForRunResult;
 }
 
-/**
- * the optional lifecycle-writer seam for a sub-stage input — the
- * `runStateWriter` when one is wired, else `{}` (the sub-stage does its in-process
- * write). One helper so the workflow threads it into each stage with no per-call
- * `exactOptionalPropertyTypes` ternary (keeping the workflow's branch count down).
- */
-function writerSeam(input: RunPlannerLoopInput): { runStateWriter?: RunStateWriter } {
-  return input.runStateWriter === undefined ? {} : { runStateWriter: input.runStateWriter };
-}
-
-function nativeQueueSeam(input: RunPlannerLoopInput): { enqueueNativeQueue?: NativeQueueEnqueuer } {
-  return input.nativeQueueEnqueuer === undefined ? {} : { enqueueNativeQueue: input.nativeQueueEnqueuer };
-}
-
-// App-first push/PR-create credential seam (clone-path parity): mint the App token when installed, else the static ref.
-function appTokenSeam(
-  context: PlannerRunContext,
-  input: RunPlannerLoopInput,
-): { installation?: OrgGithubAppInstallation; githubAppMinter?: GithubAppTokenMinter } {
-  return {
-    ...(context.installation !== undefined && { installation: context.installation }),
-    ...(input.githubAppMinter !== undefined && { githubAppMinter: input.githubAppMinter }),
-  };
-}
-
 export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Promise<PlannerRunResult> {
   const eventStore = rawInput.eventStore ?? new PgEventStore(rawInput.pool);
   const context = rawInput.context;
@@ -366,7 +344,8 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
       });
 
       if (outcome.kind !== "passed") {
-        await finalizeNonPass(finalizeRunState, context.runId, runOutcomeFor(outcome));
+        // finding #3: halt the run AND park the spec (requeueable, never stuck in_flight).
+        await finalizeNonPassAndPark(input, finalizeRunState, context, appendEvent, runOutcomeFor(outcome));
         releaseReason = "failed";
         return { runId: context.runId, workspacePath, outcome };
       }
@@ -375,7 +354,7 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
       // the synthetic bootstrap commit (+ install artifacts), so the pushed branch / PR
       // carries only the writer's changes. The working HEAD is left intact so a
       // review-rework re-entry keeps its bootstrapSha diff base. No-op on fake-SSH.
-      const pushSourceRef = await prepareCleanPrBranch({
+      const pushSource = await prepareCleanPrBranch({
         ssh: input.ssh,
         target: allocation.target,
         workspacePath,
@@ -393,7 +372,7 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
         vcsProvider: input.vcsProvider,
         ssh: input.ssh,
         target: allocation.target,
-        sourceRef: pushSourceRef,
+        sourceRef: pushSource.ref,
         runId: context.runId,
         specId: context.specId,
         projectId: context.projectId,
@@ -409,7 +388,9 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
       });
       // THE MERGE AUTHORITY (native delivery): run the `pre_merge` gate on the live
       // runner + publish the `tanren/gate` verdict. Passing proceeds; failing THROWS.
-      mergeGate = await runMergeGateForRun(input, mergeGateCtx);
+      // COMMIT-BINDING (§5): the gate anchors its verdict on the PUSHED PR head sha (the
+      // cleaned ref) — NOT the workspace HEAD — so the authority's gatedHeadSha matches.
+      mergeGate = await runMergeGateForRun(input, mergeGateCtx, pushSource.headSha);
 
       review = await pollReviewForRun({
         pool: input.pool,
@@ -440,9 +421,9 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
         continue;
       }
       // Pending after the budget, or changes-requested with the rework budget
-      // exhausted: halt for operator action (surfaces on the review sub-surface
-      // + the recovery surface). No merge.
-      await finalizeNonPass(finalizeRunState, context.runId, "halted");
+      // exhausted: halt for operator action + park the spec (finding #3: requeueable,
+      // surfaces on the review/recovery surface). No merge.
+      await finalizeNonPassAndPark(input, finalizeRunState, context, appendEvent, "halted");
       releaseReason = "failed";
       return { runId: context.runId, workspacePath, outcome, pullRequest, mergeGate, review };
     }
@@ -483,11 +464,11 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
     releaseReason = "completed";
     return { runId: context.runId, workspacePath, outcome, pullRequest, mergeGate, review, merge };
   } catch (error) {
-    // Finalize the run for the thrown error (recoverable halt for a known
-    // bootstrap/usage-limit fault, else a generic `failed`) + emit its event,
-    // then re-throw so the worker's catch path still fails the job.
+    // Finalize the run for the thrown error (recoverable halt for a known bootstrap/
+    // usage-limit fault, else a generic `failed`) + park the SPEC (finding #3:
+    // requeueable, never stuck in_flight), then re-throw so the worker fails the job.
     releaseReason = "failed";
-    await finalizeWorkflowError(error, { finalizeRunState, appendEvent, runId: context.runId, workspacePath });
+    await finalizeWorkflowError(error, { finalizeRunState, appendEvent, workspacePath, input, context });
     throw error;
   } finally {
     // SECURITY-BASELINE CLEANUP-PROOF: remove the run's `/workspace/runs/<runId>`

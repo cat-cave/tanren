@@ -30,7 +30,10 @@ import type { RunPlannerLoopInput } from "./plannerRun.js";
 
 /** The live-runner context the in-loop merge gate runs + publishes against. */
 export interface MergeGateRunContext {
-  runGate: (gate: { when: CiWhen; taskId?: string }) => Promise<GateOutcome>;
+  // The run's gate closure. `headShaOverride` anchors the `pre_merge` `gate.verdict`
+  // on the PUSHED PR head (the cleaned ref) instead of the workspace HEAD — the
+  // gate↔land commit-binding (§5). Optional: per_iteration / pre_audit omit it.
+  runGate: (gate: { when: CiWhen; taskId?: string; headShaOverride?: string }) => Promise<GateOutcome>;
   target: RunnerHandle;
   workspacePath: string;
   eventStore: EventStore;
@@ -44,9 +47,22 @@ export interface MergeGateRunContext {
  * had. A failed forge PUBLISH of a passing verdict is NON-fatal (it never aborts the
  * run): the publish is informational; the internal verdict decides the merge.
  */
-export async function runMergeGateForRun(input: RunPlannerLoopInput, ctx: MergeGateRunContext): Promise<GateOutcome> {
-  const outcome = await runNativeMergeGate({ runGate: ctx.runGate });
-  await publishMergeVerdict(input, ctx, outcome);
+export async function runMergeGateForRun(
+  input: RunPlannerLoopInput,
+  ctx: MergeGateRunContext,
+  prHeadSha: string,
+): Promise<GateOutcome> {
+  // COMMIT-BINDING (§5): anchor the `pre_merge` verdict on the PUSHED PR head (the
+  // cleaned ref) — the commit the land authority resolves from the forge — NOT the
+  // workspace HEAD (left at the writer tip with the dropped bootstrap commit). Without
+  // this the recorded `gatedHeadSha` never equals the landing head and the authority
+  // blocks forever. "" only on a fake-SSH unit path ⇒ the gate falls back to the
+  // workspace HEAD (also "" there ⇒ no verdict event), behavior-unchanged for tests.
+  const outcome = await runNativeMergeGate({
+    runGate: ctx.runGate,
+    ...(prHeadSha !== "" && { headShaOverride: prHeadSha }),
+  });
+  await publishMergeVerdict(input, ctx, outcome, prHeadSha);
   if (!outcome.passed) {
     throw new Error(`planner-loop native gate failed: tier ${outcome.failure.tier} step ${outcome.failure.failedStep}`);
   }
@@ -66,6 +82,7 @@ async function publishMergeVerdict(
   input: RunPlannerLoopInput,
   ctx: MergeGateRunContext,
   outcome: GateOutcome,
+  prHeadSha?: string,
 ): Promise<void> {
   const context = input.context;
   const staticRef = context.githubCredentialRef;
@@ -73,12 +90,19 @@ async function publishMergeVerdict(
   if (context.installation === undefined && staticRef.trim() === "") {
     return;
   }
-  const headSha = await resolveWorkspaceHeadSha({
-    ssh: input.ssh,
-    target: ctx.target,
-    workspacePath: ctx.workspacePath,
-    timeoutMs: input.timeoutMs,
-  });
+  // COMMIT-BINDING: publish the forge commit status on the SAME sha the verdict was
+  // recorded for — the PUSHED PR head when known (the initial merge gate), falling back
+  // to the workspace HEAD (the re-gate path, where the local workspace IS the head). A
+  // mismatched status sha would mirror the verdict onto the wrong commit on the PR.
+  const headSha =
+    prHeadSha !== undefined && prHeadSha !== ""
+      ? prHeadSha
+      : await resolveWorkspaceHeadSha({
+          ssh: input.ssh,
+          target: ctx.target,
+          workspacePath: ctx.workspacePath,
+          timeoutMs: input.timeoutMs,
+        });
   if (headSha === "") {
     return;
   }
@@ -118,12 +142,25 @@ async function publishMergeVerdict(
  * verdict is stale, so re-run the in-loop `pre_merge` gate on the run's live runner
  * and re-publish the verdict (the head sha changed). A passing re-gate is `passed`;
  * a throw is `failed`, so the merge stage never merges an unverified rebase.
+ *
+ * COMMIT-BINDING (§5): the BEHIND re-gate passes the EXACT rebased PR-head sha
+ * (`rebasedHeadSha`) so the re-gate's `pre_merge` verdict is anchored on the commit
+ * the authority lands — the forge-side rebase did NOT necessarily advance the local
+ * workspace HEAD, so binding to the workspace HEAD there is unproven. Absent (the
+ * resolved-tree re-gate, where the local workspace IS the resolved head) ⇒ the gate
+ * binds to the workspace HEAD. A bad/absent override on the pre_merge path is a
+ * FAIL-CLOSED throw in `buildDefaultGate` (→ `status: "failed"`), never a silent
+ * wrong-commit bind.
  */
 export function buildReGateCi(input: RunPlannerLoopInput, ctx: MergeGateRunContext): ReGateCiHook {
-  return async () => {
+  return async (hook) => {
+    const rebasedHeadSha = hook?.rebasedHeadSha;
     try {
-      const outcome = await runNativeMergeGate({ runGate: ctx.runGate });
-      await publishMergeVerdict(input, ctx, outcome);
+      const outcome = await runNativeMergeGate({
+        runGate: ctx.runGate,
+        ...(rebasedHeadSha !== undefined && rebasedHeadSha !== "" && { headShaOverride: rebasedHeadSha }),
+      });
+      await publishMergeVerdict(input, ctx, outcome, rebasedHeadSha);
       return { status: outcome.passed ? "passed" : "failed" };
     } catch {
       return { status: "failed" };

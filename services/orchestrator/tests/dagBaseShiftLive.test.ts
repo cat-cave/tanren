@@ -273,8 +273,10 @@ describe("buildBaseShiftRebaseHook — the merge `behind` path routes through th
     expect(events.decisions).toEqual([{ runId: DEP_RUN, decision: "rebased_resolved" }]);
     expect(persistence.repointCalls).toEqual([DEP_RUN]);
     expect(persistence.replanned).toEqual([]);
-    // The merge `behind` path reads this as `rebased` (advance + re-gate + merge), NOT held.
-    expect(outcome).toEqual({ outcome: "rebased" });
+    // The merge `behind` path reads this as `rebased` (advance + re-gate + merge), NOT
+    // held — and surfaces the RESOLVED head sha so the dispatcher's re-gate binds its
+    // verdict to the rebased PR head (§5 commit-binding), not the stale workspace HEAD.
+    expect(outcome).toEqual({ outcome: "rebased", rebasedHeadSha: "sha-resolved" });
   });
 
   it("an IRRECONCILABLE shift ⇒ the coordinator `replanned` (work ALIVE, same run) ⇒ the hook `held`", async () => {
@@ -292,7 +294,8 @@ describe("buildBaseShiftRebaseHook — the merge `behind` path routes through th
     const { outcome, persistence, events } = await runHook({ conflictOnRebase: false, reGate: "passed" });
     expect(events.decisions).toEqual([{ runId: DEP_RUN, decision: "rebased_clean" }]);
     expect(persistence.replanned).toEqual([]);
-    expect(outcome).toEqual({ outcome: "rebased" });
+    // §5 commit-binding: the CLEAN rebase surfaces its rebased head sha for the re-gate.
+    expect(outcome).toEqual({ outcome: "rebased", rebasedHeadSha: "sha-rebased-clean" });
   });
 
   it("FAIL-CLOSED: a re-gate `pending` ⇒ a BaseShiftHeldError ⇒ the hook `held` (work survives, never merged)", async () => {
@@ -328,7 +331,7 @@ describe("P1: the `behind` rebase NEVER stamps percolation_pending (no mis-routi
   it("a clean behind rebase KEEPS the run (repoint) but writes NO percolation_pending marker", async () => {
     const { outcome, persistence } = await runBehind({ conflictOnRebase: false, reGate: "passed" });
     // The run row is kept (repoint), the merge proceeds (`rebased`)…
-    expect(outcome).toEqual({ outcome: "rebased" });
+    expect(outcome).toMatchObject({ outcome: "rebased" });
     expect(persistence.repointCalls).toEqual([DEP_RUN]);
     // …but NO `percolation_pending` was stamped — so the percolation poller (which selects on
     // that marker) can NEVER pick this synchronous merge-queue run up + falsely settle it.
@@ -341,7 +344,7 @@ describe("P1: the `behind` rebase NEVER stamps percolation_pending (no mis-routi
       reGate: "passed",
       resolution: { resolved: true, headSha: "sha-resolved" },
     });
-    expect(outcome).toEqual({ outcome: "rebased" });
+    expect(outcome).toMatchObject({ outcome: "rebased" });
     // never-discard: the SAME run kept; never mis-routed to the percolation poller.
     expect(persistence.repointCalls).toEqual([DEP_RUN]);
     expect(persistence.markedInFlight).toEqual([]);
