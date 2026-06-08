@@ -139,6 +139,52 @@ describe("SshUsageProbe.observeWindow", () => {
     const result = await probe(new FakeMonitor(usage), new FakeAccountant(null)).observeWindow();
     expect(result.pressure?.usedPercent).toBe(100);
   });
+
+  it("MANAGED run (NO monitor wired): a clean-empty window read, NOT a loud failure", async () => {
+    // A managed OpenRouter run has no codex subscription window — codexbar would
+    // exit nonzero by design, so the probe wires NO monitor. observeWindow must be
+    // QUIET (no window concept applies), never a spurious usage.read_failed.
+    const managedProbe = new SshUsageProbe({
+      accountant: new FakeAccountant(null),
+      provider: "codex",
+      cli: "codex",
+      codexHome: "/home/tanren/.tanren/runs/run_x/codex-home",
+      target,
+      timeoutMs: 1000,
+    });
+    const result = await managedProbe.observeWindow();
+    expect(result.usage).toBeNull();
+    expect(result.pressure).toBeNull();
+    expect(result.failure).toBeNull();
+  });
+
+  it("MANAGED run (NO monitor): ccusage accounting STILL works — token accounting is unaffected", async () => {
+    // The TOKEN accountant (ccusage) is always wired — it reads the per-run session
+    // logs and works in a managed run, so notional cost still has a source.
+    const accounting: CcusageAccounting = {
+      cli: "codex",
+      totals: {
+        inputTokens: 100,
+        cachedInputTokens: 0,
+        cacheCreationTokens: 0,
+        outputTokens: 50,
+        reasoningOutputTokens: 0,
+        totalTokens: 150,
+      },
+      costUsd: null,
+      perModel: [],
+      capturedAt: "2026-06-08T00:00:00Z",
+    };
+    const managedProbe = new SshUsageProbe({
+      accountant: new FakeAccountant(accounting),
+      provider: "codex",
+      cli: "codex",
+      codexHome: "/home/tanren/.tanren/runs/run_x/codex-home",
+      target,
+      timeoutMs: 1000,
+    });
+    expect(await managedProbe.observeAccounting()).toEqual({ ok: accounting });
+  });
 });
 
 describe("SshUsageProbe.observeAccounting", () => {

@@ -63,6 +63,38 @@ describe("Codex Answerer adapter", () => {
     expect(result.done).toBe(true);
   });
 
+  it("surfaces the call's per-call token usage via lastTokenUsage (for REAL notional accounting)", async () => {
+    const answer = JSON.stringify({ done: true, reason: "ok", suggested_fixes: null });
+    // A codex `--json` token-count event (input includes cached, output includes reasoning).
+    const tokenEvent = JSON.stringify({
+      type: "token_count",
+      input_tokens: 1000,
+      cached_input_tokens: 200,
+      output_tokens: 300,
+      reasoning_output_tokens: 50,
+    });
+    const ssh = new ScriptedSsh([ok(""), ok(""), ok(""), ok(`${tokenEvent}\n`), ok(authJson), ok(answer)]);
+    const secrets = new InMemorySecretStore();
+    await secrets.put({ ref: "credential/codex/dev", value: authJson });
+    const answerer = createCodexAnswerer<CheckAnswer>({
+      secrets,
+      ssh,
+      target,
+      credentialRef: "credential/codex/dev",
+      runId: "run_tok",
+    });
+    // No usage before the first call.
+    expect(answerer.lastTokenUsage?.()).toBeUndefined();
+    await answerer.runAnswerer({ prompt: "judge", timeoutMs: 1000, outputSchema: checkAnswerSchema });
+    // De-overlapped disjoint buckets: input 1000-200=800, output 300-50=250.
+    expect(answerer.lastTokenUsage?.()).toMatchObject({
+      inputTokens: 800,
+      cachedInputTokens: 200,
+      outputTokens: 250,
+      reasoningOutputTokens: 50,
+    });
+  });
+
   it("fails LOUD when the workspace mkdir is denied (no swallowed os-error-2)", async () => {
     // The per-run scratch base is /home/tanren/.tanren/runs (tanren-writable), NOT /tmp.
     // If that mkdir is ever denied, prep must throw — not let codex --cd into a missing dir.

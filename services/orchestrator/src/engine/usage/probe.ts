@@ -37,7 +37,16 @@ export interface UsageProbe {
 }
 
 export interface SshUsageProbeConfig {
-  monitor: UsageMonitor;
+  // The live subscription-window monitor (codexbar). OPTIONAL: a MANAGED
+  // (OpenRouter-routed) run has NO ChatGPT subscription window — codex
+  // authenticates as a plain OpenRouter API key, not an account, so codexbar
+  // exits nonzero BY DESIGN ("codex account authentication required to read rate
+  // limits"). There is genuinely no window to read, so a managed run wires NO
+  // monitor and `observeWindow` returns a clean-empty read. This is NOT a silent
+  // fallback: the window concept does not apply, so there is nothing to fail
+  // loudly about. codexbar stays LOUD for a BYOK-subscription run where the
+  // window DOES exist (a monitor IS wired) and a genuine read breaks.
+  monitor?: UsageMonitor;
   accountant: UsageAccountant;
   provider: string;
   cli: string;
@@ -53,6 +62,11 @@ export class SshUsageProbe implements UsageProbe {
   constructor(private readonly config: SshUsageProbeConfig) {}
 
   async observeWindow(): Promise<WindowObservation> {
+    // No window monitor wired (a MANAGED OpenRouter run has no subscription
+    // window) → a clean-empty read, NOT a failure: there is nothing to probe.
+    if (this.config.monitor === undefined) {
+      return { usage: null, pressure: null, failure: null };
+    }
     const read = await this.config.monitor.readWindowState({
       provider: this.config.provider,
       codexHome: this.config.codexHome,
