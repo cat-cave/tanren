@@ -51,7 +51,7 @@ export async function resolveGithubActorIdentity(
     if (creds.installation === undefined) {
       throw new Error("resolveActorIdentity: github_app token has no installation context to resolve the bot identity");
     }
-    return resolveAppBotIdentity(http, creds.installation.credentialRef, creds.secrets);
+    return resolveAppBotIdentity(http, creds.installation.credentialRef, creds.secrets, token.token);
   }
   return resolveStaticUserIdentity(http, token);
 }
@@ -97,6 +97,7 @@ async function resolveAppBotIdentity(
   http: GitHubHttpClient,
   credentialRef: string,
   secrets: VcsCredentialContext["secrets"],
+  installationToken: string,
 ): Promise<ActorIdentity> {
   const credential = await loadGithubAppCredential(secrets, credentialRef);
   const jwt = signAppJwt(credential.appId, credential.privateKeyPem, Math.floor(Date.now() / 1000));
@@ -110,11 +111,12 @@ async function resolveAppBotIdentity(
   }
   const login = `${slug}[bot]`;
   // Resolve the BOT-USER id (NOT the App id) so the noreply attributes commits to
-  // the bot account. `GET /users/<slug>[bot]` is a public read; the App JWT auths it.
+  // the bot account. `GET /users/<slug>[bot]` is a public read — auth it with the
+  // INSTALLATION token (the App JWT is only valid for `/app*` endpoints and 401s here).
   const userResponse = await http.request({
     method: "GET",
     path: `/users/${encodeURIComponent(login)}`,
-    token: jwt,
+    token: installationToken,
   });
   if (userResponse.status !== 200 || typeof userResponse.body !== "object" || userResponse.body === null) {
     throw new Error(`GitHub App bot-user identity read (GET /users/${login}) failed: HTTP ${userResponse.status}`);
