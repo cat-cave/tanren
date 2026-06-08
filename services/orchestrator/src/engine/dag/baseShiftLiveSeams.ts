@@ -1,0 +1,244 @@
+// The LIVE base-shift seams (tanren-owns-the-engine.md §3 never-discard, §0 fail-closed) —
+// the Wave-3/Slice-2 cutover that replaces the `Held*` stubs. A base shift now ACTUALLY
+// rebases the dependent's existing branch onto the shifted base over a live allocated
+// runner, re-gates it, and resolves a recorded conflict in place — never-discard, never a
+// silent merge. Three seams, each fail-closed (any infra/alloc/clone/gate/resolver failure
+// throws, which the coordinator maps to a loud `BaseShiftHeldError`: the work SURVIVES):
+//
+//   • LiveBaseShiftWorkspaceProvider — BOTH the `BaseShiftWorkspaceOpener` (allocate a live
+//     jj workspace via A1's `buildLiveJjWorkspace`, clone the shifted base, track the
+//     dependent's OWN head branch, resolve the rebase target) AND the `WorkspaceVcsCore`
+//     the coordinator's `rebaseOnto` runs over (it delegates to the per-shift live core,
+//     then RELEASES the runner — the coordinator only ever calls `workspace.rebaseOnto`,
+//     once, so release-after-rebase leaks nothing).
+//   • LiveBaseShiftReGate — the fresh-runner native gate (`runFreshRunnerMergeGate`, the
+//     SAME re-gate machinery the queued-run / drive re-gates use) over the rebased head;
+//     `passed`→clean, `failed`→replan-or-hold, a throw→HOLD (never merge unverified).
+//   • LiveBaseShiftConflictResolver — the answerer-backed Slice-1 jj resolver
+//     (`buildDefaultConflictResolver` + the `JjWorkspaceConflictApplier`) over a freshly
+//     provisioned live jj workspace (mirroring `driveResolveOverJj`); on a fit it reads the
+//     resolved head sha back from the forge, else `irreconcilable` → the coordinator
+//     replans (keeping the work alive).
+
+import type pg from "pg";
+import type { Allocator } from "../contracts/allocator.js";
+import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
+import type { EventStore } from "../eventStore.js";
+import type { RunStateWriter } from "../contracts/runStateWriter.js";
+import type { SecretStore } from "../contracts/secretStore.js";
+import type { SpeculativeDependent } from "../contracts/changePercolation.js";
+import type { VcsProvider } from "../contracts/vcsProvider.js";
+import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
+import {
+  type BaseShiftConflictResolver,
+  type BaseShiftReGate,
+  type BaseShiftWorkspaceOpener,
+  type ConflictResolution,
+  type ReGateVerdict,
+} from "./baseShiftCoordinator.js";
+import { loadBaseShiftRunContext, type BaseShiftRunContext } from "./baseShiftLiveContext.js";
+import { openLiveBaseShiftWorkspace, type LiveBaseShiftWorkspaceCore } from "./baseShiftLiveRebase.js";
+import { resolveBaseShiftConflict } from "./baseShiftLiveResolve.js";
+import { runFreshRunnerMergeGate } from "../merge/freshRunnerGate.js";
+
+/** The per-base-shift timeout (ms) the live seams run their SSH ops + the re-gate under. */
+const BASE_SHIFT_TIMEOUT_MS = 600_000;
+
+/** Everything the live base-shift seams need to allocate runners + clone + re-gate + resolve. */
+export interface LiveBaseShiftDeps {
+  /** The raw pool (the system/credential bootstrap context read runs on it). */
+  pool: pg.Pool;
+  allocator: Allocator;
+  ssh: CommandSubstrate;
+  secrets: SecretStore;
+  vcsProvider: VcsProvider;
+  githubAppMinter?: GithubAppTokenMinter;
+  runStateWriter?: RunStateWriter;
+  /** The event store the re-gate + the resolver's re-gate emit `gate.*` through. */
+  eventStore: EventStore;
+  /** The org-scoping pool the resolver's tenant reads/writes self-route through. */
+  scopedPool: pg.Pool;
+  /** The runner identity key ref (same value the worker boot seeds). */
+  identitySecretRef: string;
+  timeoutMs?: number;
+}
+
+/**
+ * The LIVE `BaseShiftWorkspaceOpener` + `WorkspaceVcsCore`. The opener allocates a live jj
+ * workspace, clones the shifted base, tracks the dependent's OWN head branch, and resolves
+ * the rebase target; the coordinator then calls `rebaseOnto` on THIS same object, which
+ * delegates to the per-shift live core and releases the runner (the coordinator calls
+ * `workspace.rebaseOnto` exactly once and never another `workspace` op, so the
+ * release-after-rebase is leak-free). FAIL-CLOSED: an alloc/clone/rebase failure throws.
+ */
+export class LiveBaseShiftWorkspaceProvider implements BaseShiftWorkspaceOpener {
+  /** The per-shift live cores, keyed by the workspace handle id the opener returned. */
+  private readonly openWorkspaces = new Map<string, LiveBaseShiftWorkspaceCore>();
+
+  constructor(private readonly deps: LiveBaseShiftDeps) {}
+
+  async open(input: {
+    projectId: string;
+    dependent: SpeculativeDependent;
+    newBaseRef: string;
+    nonSpeculative: boolean;
+  }): Promise<{ workspaceId: string; path: string; branch: string; newBaseSha: string }> {
+    const ctx = await loadBaseShiftRunContext(this.deps.pool, input.dependent.runId);
+    // Non-speculative (every ancestor merged) rebases onto plain `default_branch`; else the
+    // rebuilt speculative integration ref. Either way it is a real ref the clone imports.
+    const baseRef = input.nonSpeculative ? ctx.defaultBranch : input.newBaseRef;
+    const live = await openLiveBaseShiftWorkspace({
+      deps: this.deps,
+      ctx,
+      baseRef,
+      timeoutMs: this.timeoutMs(),
+    });
+    this.openWorkspaces.set(live.handle.workspaceId, live);
+    return {
+      workspaceId: live.handle.workspaceId,
+      path: live.handle.path,
+      branch: ctx.headBranch,
+      // jj rebases ONTO a revision; the freshly-cloned base is the remote-tracking
+      // bookmark `<baseRef>@origin` (identityJjRefResolver passes it through verbatim).
+      newBaseSha: `${baseRef}@origin`,
+    };
+  }
+
+  /**
+   * The coordinator's rebase: delegate to the per-shift live core, then RELEASE the runner
+   * (LOUD on leak). jj's `rebaseOnto` RECORDS a conflict in the commit (never throws on a
+   * conflict); an infra/auth failure DOES throw — the coordinator maps it to a hold. The
+   * recorded conflict is consumed by the resolver (which re-provisions its own workspace),
+   * so this short-lived detection workspace is safe to release here.
+   */
+  async rebaseOnto(
+    workspace: { workspaceId: string; path: string },
+    branch: string,
+    baseSha: string,
+  ): ReturnType<LiveBaseShiftWorkspaceCore["core"]["rebaseOnto"]> {
+    const live = this.openWorkspaces.get(workspace.workspaceId);
+    if (live === undefined) {
+      throw new Error(`live base-shift rebase: no open workspace for ${workspace.workspaceId}`);
+    }
+    this.openWorkspaces.delete(workspace.workspaceId);
+    try {
+      return await live.core.rebaseOnto(live.handle, branch, baseSha);
+    } finally {
+      // The detection workspace's purpose is done after the rebase (clean vs conflicted);
+      // release it (LOUD on leak). The resolver re-provisions its OWN live workspace.
+      await live.release();
+    }
+  }
+
+  // ---- WorkspaceVcsCore methods the coordinator NEVER calls (it only rebaseOnto's). ----
+  // They are part of the contract surface but UNREACHABLE on the base-shift path; throw
+  // loudly so the never-discard boundary stays literal (no silent mutate/discard).
+  openWorkspace(): never {
+    this.unreachable("openWorkspace");
+  }
+  branch(): never {
+    this.unreachable("branch");
+  }
+  checkout(): never {
+    this.unreachable("checkout");
+  }
+  commit(): never {
+    this.unreachable("commit");
+  }
+  resolveConflict(): never {
+    this.unreachable("resolveConflict");
+  }
+  restackDescendants(): never {
+    this.unreachable("restackDescendants");
+  }
+  exportCleanGitRef(): never {
+    this.unreachable("exportCleanGitRef");
+  }
+  opUndo(): never {
+    this.unreachable("opUndo");
+  }
+
+  private unreachable(op: string): never {
+    throw new Error(`live base-shift workspace: ${op} is unreachable (the coordinator only rebaseOnto's)`);
+  }
+
+  private timeoutMs(): number {
+    return this.deps.timeoutMs ?? BASE_SHIFT_TIMEOUT_MS;
+  }
+}
+
+/**
+ * The LIVE re-gate: the fresh-runner native gate over the rebased head (the SAME
+ * `runFreshRunnerMergeGate` the queued-run / drive re-gates use). Maps the gate outcome to
+ * the coordinator's verdict: `passed`→`passed` (the work FITS — no replan), `failed`→
+ * `failed` (route back to the planner WITH the shift), and a THROW propagates so the
+ * coordinator's `reGateOrHold` HOLDS (never merge on an unverified rebase).
+ */
+export class LiveBaseShiftReGate implements BaseShiftReGate {
+  constructor(private readonly deps: LiveBaseShiftDeps) {}
+
+  async reGate(input: {
+    projectId: string;
+    dependent: SpeculativeDependent;
+    rebasedHeadSha: string;
+  }): Promise<ReGateVerdict> {
+    const ctx = await loadBaseShiftRunContext(this.deps.pool, input.dependent.runId);
+    const result = await runFreshRunnerMergeGate(
+      {
+        allocator: this.deps.allocator,
+        ssh: this.deps.ssh,
+        secrets: this.deps.secrets,
+        vcsProvider: this.deps.vcsProvider,
+        ...(this.deps.githubAppMinter !== undefined && { githubAppMinter: this.deps.githubAppMinter }),
+        eventStore: this.deps.eventStore,
+        identitySecretRef: this.deps.identitySecretRef,
+        timeoutMs: this.deps.timeoutMs ?? BASE_SHIFT_TIMEOUT_MS,
+      },
+      {
+        repoUrl: ctx.repoUrl,
+        // Re-gate the dependent's OWN head branch — the rebase advanced it in place.
+        ref: ctx.headBranch,
+        runnerImage: ctx.runnerImage,
+        governancePosture: ctx.governancePosture,
+        ...(ctx.installation !== undefined && { installation: ctx.installation }),
+        githubCredentialRef: ctx.githubCredentialRef,
+        orgId: ctx.orgId,
+        projectId: ctx.projectId,
+        runId: ctx.runId,
+        specId: ctx.specId,
+      },
+    );
+    // The fresh-runner gate is synchronous over SSH: it either passed every tier or a tier
+    // failed — there is no async "pending". An inconclusive state would surface as a throw
+    // (mapped to HOLD by the coordinator), so a completed gate is `passed`/`failed`.
+    return result.outcome.passed ? "passed" : "failed";
+  }
+}
+
+/**
+ * The LIVE conflict resolver: the answerer-backed Slice-1 jj resolver
+ * (`buildDefaultConflictResolver` + the `JjWorkspaceConflictApplier`) over a freshly
+ * provisioned live jj workspace (mirroring `driveResolveOverJj`). On a fit it reads the
+ * resolved head sha back from the forge (the resolver force-pushed the resolved head);
+ * an unresolved/irreconcilable conflict returns `{resolved:false}` so the coordinator
+ * replans (keeping the work ALIVE — never discarded).
+ */
+export class LiveBaseShiftConflictResolver implements BaseShiftConflictResolver {
+  constructor(private readonly deps: LiveBaseShiftDeps) {}
+
+  async resolve(input: {
+    projectId: string;
+    dependent: SpeculativeDependent;
+    workspace: { workspaceId: string; path: string };
+    rebase: { headSha: string };
+  }): Promise<ConflictResolution> {
+    const ctx = await loadBaseShiftRunContext(this.deps.pool, input.dependent.runId);
+    return resolveBaseShiftConflict({
+      deps: this.deps,
+      ctx,
+      timeoutMs: this.deps.timeoutMs ?? BASE_SHIFT_TIMEOUT_MS,
+    });
+  }
+}
+
+export type { BaseShiftRunContext };

@@ -41,6 +41,8 @@ import type { NativeQueueEnqueuer } from "../workflow/reviewMerge/index.js";
 import type { MergeDriveOutcome } from "../contracts/mergeCoordinator.js";
 import type { DriveMergeForQueuedRun } from "./coordinator.js";
 import { PgMergeQueueModel } from "./coordinatorPg.js";
+import { buildBaseShiftCoordinator } from "../dag/percolationBuild.js";
+import { buildBaseShiftRebaseHook } from "../dag/baseShiftRebaseHook.js";
 
 /** The default timeout (ms) the drive-path resolver's SSH/git/model ops run under. */
 const DRIVE_RESOLVER_TIMEOUT_MS = 600_000;
@@ -127,6 +129,21 @@ async function resolveRunFacts(pool: pg.Pool, runId: string): Promise<RunFacts> 
  * batch-coordinator assembly (batchCoordinatorBuild.ts) reuses the SAME drive path.
  */
 export function buildDriveMerge(deps: BuildMergeCoordinatorDeps): DriveMergeForQueuedRun {
+  // THE ONE BASE-SHIFT HANDLER (§7): the merge-path `behind` rebase routes through the
+  // SAME `BaseShiftCoordinator` the change-percolation kick-off uses (live seams under
+  // `baseShiftLive()`, default ON; the allocator/ssh/identity are the SAME the drive
+  // resolver uses) — never a second server-side update-branch. Built once per drive build.
+  const baseShiftCoordinator = buildBaseShiftCoordinator({
+    pool: deps.pool,
+    vcsProvider: deps.vcsProvider,
+    secrets: deps.secrets,
+    ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
+    ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
+    allocator: deps.allocator,
+    ssh: deps.ssh,
+    identitySecretRef: deps.identitySecretRef,
+  });
+  const baseShiftRebase = buildBaseShiftRebaseHook({ pool: deps.pool, coordinator: baseShiftCoordinator });
   return async ({ runId }): Promise<MergeDriveOutcome> => {
     const facts = await resolveRunFacts(deps.pool, runId);
     // RLS scope for the merge drive's TENANT-TABLE READS. The coordinator subscriber
@@ -228,6 +245,10 @@ export function buildDriveMerge(deps: BuildMergeCoordinatorDeps): DriveMergeForQ
             ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
             timeoutMs: DRIVE_RESOLVER_TIMEOUT_MS,
           }),
+          // THE ONE BASE-SHIFT HANDLER (§7): a `behind` PR branch rebases in place over
+          // jj through the SAME coordinator the percolation kick-off uses — never a
+          // separate server-side update-branch. `held` is a fail-closed recoverable hold.
+          baseShiftRebase,
         }),
       );
     } catch (error) {

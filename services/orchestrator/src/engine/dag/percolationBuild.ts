@@ -20,12 +20,22 @@
 // handle the settle reads), never a new run.
 
 import type pg from "pg";
+import type { Allocator } from "../contracts/allocator.js";
+import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import type { PercolationPending, PercolationSettler, SpeculativeDependent } from "../contracts/changePercolation.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { VcsProvider } from "../contracts/vcsProvider.js";
+import type { WorkspaceVcsCore } from "../contracts/workspaceVcsCore.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
-import { BaseShiftCoordinator } from "./baseShiftCoordinator.js";
+import { orgScopingPool } from "../data/orgScopedDb.js";
+import { PgEventStore } from "../eventStore.js";
+import {
+  type BaseShiftConflictResolver,
+  type BaseShiftReGate,
+  type BaseShiftWorkspaceOpener,
+  BaseShiftCoordinator,
+} from "./baseShiftCoordinator.js";
 import { PgBaseShiftEventEmitter, PgBaseShiftNodeReader, PgBaseShiftPersistence } from "./baseShiftCoordinatorPg.js";
 import {
   HeldBaseShiftConflictResolver,
@@ -33,6 +43,13 @@ import {
   HeldBaseShiftWorkspaceOpener,
   HeldWorkspaceVcsCore,
 } from "./baseShiftHeldSeams.js";
+import {
+  LiveBaseShiftConflictResolver,
+  LiveBaseShiftReGate,
+  LiveBaseShiftWorkspaceProvider,
+  type LiveBaseShiftDeps,
+} from "./baseShiftLiveSeams.js";
+import { baseShiftLive } from "./baseShiftLiveFlag.js";
 import { PgSpeculativeIntegrator } from "./speculativeIntegrator.js";
 import { type ChangePercolationCoordinator, PercolatingCoordinator } from "./percolation.js";
 import { PercolatingKickOff } from "./percolationOperation.js";
@@ -52,6 +69,17 @@ export interface BuildPercolationCoordinatorDeps {
    * no longer write those tables directly); absent, direct on the pool.
    */
   runStateWriter?: RunStateWriter;
+  /**
+   * Wave-3/Slice-2 LIVE base-shift seams. When present (the autonomy loops wire them),
+   * the base-shift handler's workspace/re-gate/resolver are the LIVE seams (allocate a
+   * runner, rebase the dependent's branch in place over jj, re-gate it, resolve a recorded
+   * conflict) under the `baseShiftLive()` flag (default ON). Absent — or with the flag OFF
+   * — the fail-closed `Held*` stubs hold the work loudly (never-discard, never-merge). The
+   * runner allocator + SSH substrate + identity ref are the SAME the merge coordinator uses.
+   */
+  allocator?: Allocator;
+  ssh?: CommandSubstrate;
+  identitySecretRef?: string;
 }
 
 /**
@@ -147,20 +175,86 @@ export class PgPercolationSettler implements PercolationSettler {
  * Assemble the production `BaseShiftCoordinator` — the ONE base-shift handler that the
  * percolation kick-off (and the merge-path `behind` mergeability) route through. The
  * keep-run-row persistence + the S0 node read + the `integration.rebase` emitter are
- * production-LIVE now; the live-jj workspace/re-gate/resolver are FAIL-CLOSED HOLDS
- * until Wave 3 plumbs the runner allocation (so a base shift on the live engine HOLDS
- * the work, never silently discards/merges — see baseShiftCoordinatorPg.ts).
+ * production-LIVE. The workspace/re-gate/resolver seams are selected by `baseShiftLive()`
+ * (default ON — the Wave-3/Slice-2 cutover): the LIVE seams (allocate a runner, rebase in
+ * place over jj, re-gate, resolve a recorded conflict) when the flag is on AND the runner
+ * deps are wired; the fail-closed `Held*` stubs (the kill-switch — they HOLD the work
+ * loudly, never-discard/never-merge) when the flag is OFF or the deps are absent. No
+ * half-state: either the live seams own the whole flow or the held stubs hold.
  */
 export function buildBaseShiftCoordinator(deps: BuildPercolationCoordinatorDeps): BaseShiftCoordinator {
+  const seams = selectBaseShiftSeams(deps);
   return new BaseShiftCoordinator({
-    workspace: new HeldWorkspaceVcsCore(),
-    opener: new HeldBaseShiftWorkspaceOpener(),
-    reGate: new HeldBaseShiftReGate(),
-    resolver: new HeldBaseShiftConflictResolver(),
+    workspace: seams.workspace,
+    opener: seams.opener,
+    reGate: seams.reGate,
+    resolver: seams.resolver,
     persistence: new PgBaseShiftPersistence(deps.pool, deps.runStateWriter),
     nodes: new PgBaseShiftNodeReader(deps.pool),
     events: new PgBaseShiftEventEmitter(deps.pool, deps.runStateWriter),
   });
+}
+
+/** The workspace/re-gate/resolver seam set the base shift drives — LIVE (flag ON + deps) or HELD. */
+interface BaseShiftSeams {
+  workspace: WorkspaceVcsCore;
+  opener: BaseShiftWorkspaceOpener;
+  reGate: BaseShiftReGate;
+  resolver: BaseShiftConflictResolver;
+}
+
+/**
+ * Select the base-shift seams by the `baseShiftLive()` flag (default ON). Flag ON with the
+ * runner deps wired ⇒ the LIVE seams; flag OFF ⇒ the fail-closed `Held*` stubs (the
+ * kill-switch). When the flag is ON but the runner deps are NOT wired (a build site that
+ * cannot drive a live runner), fall back to the `Held*` stubs — which HOLD the work loudly
+ * (never-discard/never-merge), so an un-wired live path is a loud hold, never a silent
+ * degrade (the §0 fail-closed boundary).
+ */
+function selectBaseShiftSeams(deps: BuildPercolationCoordinatorDeps): BaseShiftSeams {
+  const liveDeps = liveBaseShiftDeps(deps);
+  if (!baseShiftLive() || liveDeps === undefined) {
+    return {
+      workspace: new HeldWorkspaceVcsCore(),
+      opener: new HeldBaseShiftWorkspaceOpener(),
+      reGate: new HeldBaseShiftReGate(),
+      resolver: new HeldBaseShiftConflictResolver(),
+    };
+  }
+  // The opener IS the workspace core (it holds the per-shift live jj cores the coordinator's
+  // `rebaseOnto` delegates to — the coordinator only ever calls `workspace.rebaseOnto`).
+  const provider = new LiveBaseShiftWorkspaceProvider(liveDeps);
+  return {
+    workspace: provider,
+    opener: provider,
+    reGate: new LiveBaseShiftReGate(liveDeps),
+    resolver: new LiveBaseShiftConflictResolver(liveDeps),
+  };
+}
+
+/**
+ * Assemble the {@link LiveBaseShiftDeps} from the build deps, or `undefined` when the
+ * runner allocator / SSH substrate / identity ref are not wired (the held fallback). The
+ * org-scoping pool + the event store mirror the merge coordinator's construction
+ * (`orgScopingPool` + `PgEventStore`, routed through the control plane when a writer is set).
+ */
+function liveBaseShiftDeps(deps: BuildPercolationCoordinatorDeps): LiveBaseShiftDeps | undefined {
+  if (deps.allocator === undefined || deps.ssh === undefined || deps.identitySecretRef === undefined) {
+    return undefined;
+  }
+  const scopedPool = orgScopingPool(deps.pool);
+  return {
+    pool: deps.pool,
+    scopedPool,
+    allocator: deps.allocator,
+    ssh: deps.ssh,
+    secrets: deps.secrets,
+    vcsProvider: deps.vcsProvider,
+    ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
+    ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
+    eventStore: deps.runStateWriter ?? new PgEventStore(scopedPool),
+    identitySecretRef: deps.identitySecretRef,
+  };
 }
 
 /** Assemble the production change-percolation coordinator. */
