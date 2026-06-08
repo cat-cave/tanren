@@ -154,22 +154,6 @@ export interface MergeForRunInput {
    */
   queueDrive?: boolean;
   /**
-   * The native gate outcome the run loop produced for this run (the `pre_merge`
-   * gate). `mergeForRun` maps it into the authority's `GateVerdict` — an absent/
-   * not-run/errored gate is `unknown` (BLOCKS). The coordinator DRIVE pass re-runs
-   * the gate via `reGateCi` after a rebase; the first land authorizes against this.
-   */
-  gateOutcome?: GateOutcome;
-  /**
-   * The review poll's verdict for this run. `mergeForRun` maps it into the
-   * authority's `ReviewMergeVerdict` — only `approved` clears; `changes_requested`
-   * routes to needs_attention; an absent verdict is `unread` (BLOCKS). The land path
-   * reaches `mergeForRun` only after review returns `approved`, so this is normally
-   * `approved`; threading it lets the authority RE-VERIFY at land time (never absorb
-   * without reading the verdict, §5 P0).
-   */
-  reviewVerdict?: ReviewVerdict;
-  /**
    * The pre-built LIVE `MergeAuthority` bundle (§5) — present when an out-of-band
    * caller constructs it directly OR a test injects a fake, bypassing the lazy build.
    * Production normally leaves it absent: `mergeForRun` provides a LAZY

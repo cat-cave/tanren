@@ -66,18 +66,21 @@ function fakeFinalizer(opts: { fail?: boolean; landed: string[] }): LandFinalize
 
 interface BundleOverrides {
   reviewVerdict?: MergeAuthorityBundle["reviewVerdict"];
+  /** Override the gate outcome — `null` ⇒ a failing/absent gate (blocks). */
+  gateOutcome?: MergeAuthorityBundle["gateOutcome"] | null;
   fail?: boolean;
   landed: string[];
 }
 
 function bundle(host: InMemoryCodeHost, o: BundleOverrides): MergeAuthorityBundle {
+  const gateOutcome = o.gateOutcome === null ? undefined : (o.gateOutcome ?? { passed: true, results: [] });
   return {
     codeHost: host,
     orgId: "org_1",
     finalizerFor: () => fakeFinalizer({ fail: o.fail ?? false, landed: o.landed }),
     gateConfigHash: "gc",
     policyVersion: "pv",
-    gateOutcome: { passed: true, results: [] },
+    gateOutcome,
     findings: [],
     auditPosture: POSTURE,
     reviewVerdict: o.reviewVerdict ?? "approved",
@@ -126,6 +129,42 @@ function dispatcher(
     probe,
   };
   return new MergeDispatcher(deps);
+}
+
+/**
+ * A dispatcher whose authority bundle is built LAZILY (the `buildMergeAuthority` thunk
+ * — the production wiring): the dispatcher invokes it inside `driveLand`, AFTER the
+ * conflict resolver ran. `buildBundle` is what production's `buildBundleForMergeStage`
+ * does (re-read FRESH land-time signals), so a thunk that reflects post-resolution
+ * state proves the land authorizes against land-time, not pre-conflict, inputs.
+ */
+function dispatcherLazy(
+  probe: MergeProbe,
+  events: ReturnType<typeof recordingEventStore>,
+  buildBundle: () => Promise<MergeAuthorityBundle>,
+): { dispatcher: MergeDispatcher; builds: () => number } {
+  const state = { builds: 0 };
+  const input = {
+    pool: fakePool,
+    secrets: {},
+    vcsProvider: {},
+    runId: "run_1",
+    resolveConflict: async () => ({ resolved: true }),
+    buildMergeAuthority: async () => {
+      state.builds += 1;
+      return buildBundle();
+    },
+  } as unknown as MergeForRunInput;
+  const deps: DispatcherDeps = {
+    input,
+    context: context(),
+    eventStore: events as never,
+    taskId: "task_1",
+    integration: "direct_merge",
+    pr: { repo: REPO, pullNumber: 1 },
+    probe,
+  };
+  return { dispatcher: new MergeDispatcher(deps), builds: () => state.builds };
 }
 
 describe("conflict-resolved land re-enters the MergeAuthority (no parallel merge authority)", () => {
@@ -202,6 +241,50 @@ describe("conflict-resolved land re-enters the MergeAuthority (no parallel merge
     expect(result.outcome).toBe("conflict");
     expect(result.message).toMatch(/merge_state_unknown|durable finalize/u);
     expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-feat");
+    expect(events.events).not.toContain("merge.completed");
+  });
+
+  it("REGRESSION LOCK (fresh land-time gate): gate passed PRE-conflict but the FRESH land-time gate FAILS → BLOCKED", async () => {
+    const host = new InMemoryCodeHost();
+    host.seed(REPO, "main", "sha-main");
+    await host.pushRef({ repo: REPO, localRef: "feat", remoteBranch: "feat", sha: "sha-feat" });
+    // mergeability clears post-resolution; the conflict resolved `true`.
+    const probe = scriptedProbe("clean");
+    const events = recordingEventStore();
+    const landed: string[] = [];
+    // The bundle is built LAZILY (the production thunk), AFTER the resolver ran — and
+    // the FRESH land-time gate now FAILS (a re-gate during resolution flipped it). This
+    // mirrors `buildBundleForMergeStage` re-reading the latest gate.verdict: the
+    // pre-conflict passing gate is NOT used; the land-time failing gate blocks.
+    const lazy = dispatcherLazy(probe, events, async () => bundle(host, { gateOutcome: null, landed }));
+    const result = await lazy.dispatcher.directMerge();
+
+    expect(result.outcome).not.toBe("merged");
+    expect(landed).toEqual([]);
+    expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-main");
+    // The bundle was built at LAND time (after resolution), not pre-conflict.
+    expect(lazy.builds()).toBe(1);
+    expect(events.events).not.toContain("merge.completed");
+  });
+
+  it("REGRESSION LOCK (fresh land-time review): review flipped to changes_requested during resolution → BLOCKED", async () => {
+    const host = new InMemoryCodeHost();
+    host.seed(REPO, "main", "sha-main");
+    await host.pushRef({ repo: REPO, localRef: "feat", remoteBranch: "feat", sha: "sha-feat" });
+    const probe = scriptedProbe("clean");
+    const events = recordingEventStore();
+    const landed: string[] = [];
+    // The FRESH land-time review (built lazily after resolution) is changes_requested —
+    // the pre-conflict `approved` is NOT used.
+    const lazy = dispatcherLazy(probe, events, async () =>
+      bundle(host, { reviewVerdict: "changes_requested", landed }),
+    );
+    const result = await lazy.dispatcher.directMerge();
+
+    expect(result.outcome).not.toBe("merged");
+    expect(landed).toEqual([]);
+    expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-main");
+    expect(lazy.builds()).toBe(1);
     expect(events.events).not.toContain("merge.completed");
   });
 });

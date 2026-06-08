@@ -470,9 +470,9 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
       // After an auto-rebase the prior verdict is stale, so re-run the native
       // `pre_merge` gate + re-publish before merging — the merge authority, no forge poll.
       reGateCi: buildReGateCi(input, mergeGateCtx),
-      // §5 cutover: the gate outcome + review verdict the authority re-verifies at land time.
-      ...(mergeGate !== undefined && { gateOutcome: mergeGate }),
-      reviewVerdict: review.verdict,
+      // §5 cutover: the authority RE-READS the gate + review verdicts FRESH at land
+      // time (post-resolution) from the durable record — the in-loop path no longer
+      // threads pre-conflict captures (that risked authorizing against stale state).
       ...nativeQueueSeam(input),
     });
 

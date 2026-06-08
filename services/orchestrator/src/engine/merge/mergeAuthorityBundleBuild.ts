@@ -15,6 +15,7 @@
 import type pg from "pg";
 import { migrateProjectConfig } from "../config/projectConfig.js";
 import { buildLandFinalizer } from "./mergeAuthorityLandFinalizer.js";
+import { resolveLandTimeSignals } from "./landSignals.js";
 import { PgBudgetGate } from "../dag/budgetGate.js";
 import { GitHubCodeHost } from "../providers/githubCodeHost.js";
 import { GitHubVcsProvider } from "../providers/githubVcsProvider.js";
@@ -132,8 +133,19 @@ export function buildMergeAuthorityBundle(input: BuildMergeAuthorityBundleInput)
  * `mergeForRun` input + the loaded run context. Resolves the token (the SAME
  * credential context the merge probe uses), the project config raw (→ auditPosture),
  * and the budget state (the SAME `PgBudgetGate` the walker gates on — fail-closed on
- * unparseable/unpriced). The pool is the worker pool (a real `pg.Pool` in production
- * — the durable finalize opens its org-scoped transaction on it); a caller without a
+ * unparseable/unpriced).
+ *
+ * FRESH LAND-TIME SIGNALS (§5): the gate verdict + review verdict are RE-READ from the
+ * DURABLE event record HERE, at LAND time — NOT the values captured before
+ * `mergeForRun`. This bundle is built LAZILY inside `driveLand`, AFTER any conflict
+ * resolver ran (a resolver can RE-GATE), so the latest `pre_merge` gate verdict + the
+ * latest review verdict reflect the POST-resolution state. A stale/now-failing gate or
+ * a review that flipped to `changes_requested` during resolution therefore BLOCKS —
+ * the SAME freshness the native DRIVE pass already applies. Both paths build from
+ * land-time signals; neither authorizes against pre-conflict state.
+ *
+ * The pool is the worker pool (a real `pg.Pool` in production — the durable finalize +
+ * the land-signal read open their org-scoped transactions on it); a caller without a
  * real pool injects a pre-built `input.mergeAuthority` instead, so this is not reached.
  */
 export async function buildBundleForMergeStage(
@@ -152,6 +164,9 @@ export async function buildBundleForMergeStage(
     throw new Error(`merge authority bundle: run ${context.runId} has no resolvable project/org`);
   }
   const budgetState = await new PgBudgetGate(pool).resolveBudget(context.projectId);
+  // Re-read the gate + review verdicts FRESH at land time (post-resolution), so a
+  // conflict-resolved retry never authorizes against the pre-conflict gate/review.
+  const landSignals = await resolveLandTimeSignals(pool, row.org_id, context.runId);
   return buildMergeAuthorityBundle({
     pool,
     vcsProvider: input.vcsProvider,
@@ -165,8 +180,8 @@ export async function buildBundleForMergeStage(
     orgId: row.org_id,
     projectConfigRaw: row.project_config,
     policyVersion: context.policyVersion,
-    gateOutcome: input.gateOutcome,
-    reviewVerdict: input.reviewVerdict,
+    gateOutcome: landSignals.gateOutcome,
+    reviewVerdict: landSignals.reviewVerdict,
     budgetState,
     // The in-loop / drive land precedes the post-deploy demo stage — an explicit
     // configured absence, NOT a skipped check (a future pre-merge demo threads here).

@@ -26,6 +26,8 @@ import {
 } from "./conformance/mergeAuthorityConformance.js";
 import { type LandFinalizer, MergeAuthorityImpl } from "../src/engine/merge/mergeAuthorityImpl.js";
 import { buildLandFinalizer, type LandFinalizeContext } from "../src/engine/merge/mergeAuthorityLandFinalizer.js";
+import { resolveLandTimeSignals } from "../src/engine/merge/landSignals.js";
+import { PgEventStore } from "../src/engine/eventStore.js";
 import { serviceAuditActor } from "../src/engine/events/schemas/audit.js";
 
 const enabled = process.env["TANREN_RLS_DB_TEST"] === "1";
@@ -190,6 +192,59 @@ describeDb("MergeAuthority — writer-backed LandFinalizer over real Postgres", 
     );
     expect(events.rowCount).toBe(1);
   });
+
+  // ---- FRESH LAND-TIME signals: resolveLandTimeSignals reads the LATEST, fail-closed ----
+
+  it("resolveLandTimeSignals: no recorded verdict → both undefined (the authority blocks)", async () => {
+    const signals = await resolveLandTimeSignals(ownerPool, ORG_ID, RUN_ID);
+    expect(signals.gateOutcome).toBeUndefined();
+    expect(signals.reviewVerdict).toBeUndefined();
+  });
+
+  it("resolveLandTimeSignals: returns the LATEST pre_merge gate + review (a re-gate/flip wins)", async () => {
+    // A passing gate + approved review first, then a LATER failing re-gate + a flipped
+    // changes_requested review (e.g. emitted DURING conflict resolution). The reader
+    // must return the LATEST — the pre-conflict passing values are NOT used.
+    await appendGateVerdict(true);
+    await appendReview("review.approved");
+    let signals = await resolveLandTimeSignals(ownerPool, ORG_ID, RUN_ID);
+    expect(signals.gateOutcome?.passed).toBe(true);
+    expect(signals.reviewVerdict).toBe("approved");
+
+    // a re-gate that now FAILS + the review flipped to changes_requested.
+    await appendGateVerdict(false);
+    await appendReview("review.changes_requested");
+    signals = await resolveLandTimeSignals(ownerPool, ORG_ID, RUN_ID);
+    // The LATEST wins: a failing gate → undefined (blocks); changes_requested review.
+    expect(signals.gateOutcome).toBeUndefined();
+    expect(signals.reviewVerdict).toBe("changes_requested");
+  });
+
+  /** Append a `pre_merge` gate.verdict with the given `passed`, through the eventStore. */
+  async function appendGateVerdict(passed: boolean): Promise<void> {
+    await runWithOrgScope(ownerPool, ORG_ID, (client) =>
+      new PgEventStore(client).append({
+        runId: RUN_ID,
+        specId: SPEC_ID,
+        projectId: PROJECT_ID,
+        eventType: "gate.verdict",
+        payload: { when: "pre_merge", headSha: "h", passed, durationMs: 1, tiers: [], steps: [] },
+      }),
+    );
+  }
+
+  /** Append a review verdict event through the eventStore. */
+  async function appendReview(eventType: "review.approved" | "review.changes_requested"): Promise<void> {
+    await runWithOrgScope(ownerPool, ORG_ID, (client) =>
+      new PgEventStore(client).append({
+        runId: RUN_ID,
+        specId: SPEC_ID,
+        projectId: PROJECT_ID,
+        eventType,
+        payload: { prUrl: "https://github.com/owner/repo/pull/1", prNumber: 1 },
+      }),
+    );
+  }
 
   async function specStatus(): Promise<string | undefined> {
     const result = await runWithOrgScope(ownerPool, ORG_ID, (client) =>

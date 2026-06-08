@@ -385,6 +385,16 @@ export class MergeDispatcher implements LandOps {
     });
   }
 
+  /**
+   * The KILL-SWITCH conflict retry: a merge-time conflict on the LEGACY host-merge
+   * path. NOT a live-default land path — `tryResolveConflict` is called ONLY by
+   * `landViaHostMerge`, which `driveLand` reaches ONLY when `MERGE_AUTHORITY_LIVE` is
+   * OFF (or no authority bundle). With the flag ON (the default) the land flows through
+   * `landViaAuthority` and this `probe.merge()` is unreachable. So the `probe.merge()`
+   * here is the flag-OFF break-glass retry, not a second merge authority that bypasses
+   * the §5 truth table. (The DEFAULT-path conflict-resolved land is authority-gated +
+   * transactional via `handleBranchConflict` → `driveLand`.)
+   */
   async tryResolveConflict(merge: MergePullRequestResult): Promise<MergePullRequestResult | undefined> {
     const { probe } = this.deps;
     const outcome = await this.runConflictResolver(merge.message);
