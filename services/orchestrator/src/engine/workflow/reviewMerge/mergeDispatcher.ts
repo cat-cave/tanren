@@ -20,6 +20,8 @@ import {
   type MergeOutcomeKind,
   type MergeProbe,
 } from "./mergeDispatchTypes.js";
+import { mergeAuthorityLive } from "../../merge/mergeAuthorityFlag.js";
+import { landViaAuthority, landViaHostMerge, reGateResolvedTree, type LandOps } from "./mergeLandPaths.js";
 
 export interface DispatcherDeps {
   input: MergeForRunInput;
@@ -37,15 +39,15 @@ export interface DispatcherDeps {
   speculativeCleanup?: string;
 }
 
-export class MergeDispatcher {
-  constructor(private readonly deps: DispatcherDeps) {}
+export class MergeDispatcher implements LandOps {
+  constructor(readonly deps: DispatcherDeps) {}
 
-  private base() {
+  base() {
     const { context, taskId } = this.deps;
     return { runId: context.runId, specId: context.specId, projectId: context.projectId, taskId };
   }
 
-  private prFields() {
+  prFields() {
     const { context, pr } = this.deps;
     return { prUrl: context.prUrl, prNumber: pr.pullNumber };
   }
@@ -60,7 +62,7 @@ export class MergeDispatcher {
    * the field is absent (a true empty state, never a placeholder actor). The policy
    * version is the run's governance config revision.
    */
-  private auditEnvelope(): AuditEnvelope {
+  auditEnvelope(): AuditEnvelope {
     const humanApproved = this.deps.context.reviewPolicy === "human";
     return {
       policyVersion: this.deps.context.policyVersion,
@@ -75,7 +77,7 @@ export class MergeDispatcher {
    * SAME path for a queued head — so the events read `native_queue` without a
    * second merge implementation. Only these two modes reach directMerge.
    */
-  private mergeLabel(): "direct_merge" | "native_queue" {
+  mergeLabel(): "direct_merge" | "native_queue" {
     return this.deps.integration === "native_queue" ? "native_queue" : "direct_merge";
   }
 
@@ -150,61 +152,62 @@ export class MergeDispatcher {
     return this.result("queued", { message: created ? "entered native merge queue" : "already in native merge queue" });
   }
 
-  /** direct_merge: GitHub merge, with a single conflict-resolver retry. */
+  /**
+   * direct_merge / native_queue DRIVE: drive the land through `MergeAuthority` (§5)
+   * — the SOLE merge decision. The up-to-date enforcement below (rebase a `behind`
+   * branch, route a `dirty` branch to the conflict resolver) is a WORKSPACE
+   * operation, not the merge decision: it brings the branch to a `clean` mergeability
+   * the authority then authorizes. The decision itself — gate + findings/posture +
+   * review + mergeability + budget + demo + HITL + conflicts — is the fail-closed
+   * truth table, and the host land is `CodeHost.landAuthorizedRef` (the ff-only CAS),
+   * NOT the host's "merge PR" API.
+   */
   async directMerge(): Promise<MergeForRunResult> {
-    const { eventStore, probe } = this.deps;
+    const { eventStore } = this.deps;
     await eventStore.append({
       ...this.base(),
       eventType: "merge.queued",
       payload: { ...this.prFields(), integration: this.mergeLabel() },
     });
-    // up-to-date enforcement: BEFORE merging, ensure the PR branch is current
-    // with its base. A stale branch is rebased + re-gated here; a real conflict is
-    // routed to the resolver hook — so we never discover a 405/409 at merge time
-    // and never merge broken work.
+    // up-to-date enforcement: BEFORE the land decision, ensure the PR branch is
+    // current with its base. A stale branch is rebased + re-gated here; a real
+    // conflict is routed to the resolver hook — so the branch reaches the authority
+    // with a settled mergeability, never stale/broken work.
     const freshness = await this.ensureUpToDate();
     if (freshness.kind !== "proceed") {
       return freshness.result;
     }
-    let merge = await probe.merge();
-    if (!merge.merged && merge.conflict) {
-      const retried = await this.tryResolveConflict(merge);
-      if (retried !== undefined) {
-        merge = retried;
-      }
+    return this.driveLand();
+  }
+
+  /**
+   * The §5 LAND DECISION — the SINGLE point every land flows through (initial pass AND
+   * post-conflict-resolution retry). The host-merge break-glass (`landViaHostMerge`) is
+   * reachable ONLY via two EXPLICIT opt-ins, NEVER a silent fall-through:
+   * `MERGE_AUTHORITY_LIVE=0` (the kill-switch), OR an injected `mergeProbe` (a TEST seam
+   * production NEVER sets). In PRODUCTION (flag default-ON, no probe) the land is ALWAYS
+   * authorized via `MergeAuthority`, and a MISSING bundle is a FAIL-CLOSED BLOCK (loud)
+   * — never a fall-through to the non-authority host merge (the Round-3 fail-open).
+   */
+  private async driveLand(): Promise<MergeForRunResult> {
+    const { input } = this.deps;
+    // EXPLICIT legacy opt-ins only: the kill-switch flag, or a test-injected probe
+    // (production never injects one). Otherwise the authority is mandatory.
+    if (!mergeAuthorityLive() || input.mergeProbe !== undefined) {
+      return landViaHostMerge(this.deps, this);
     }
-    if (merge.merged) {
-      await eventStore.append({
-        ...this.base(),
-        eventType: "merge.completed",
-        payload: {
-          ...this.prFields(),
-          integration: this.mergeLabel(),
-          mergeSha: merge.mergeSha,
-          ...this.auditEnvelope(),
-        },
-      });
-      // §2c cleanup: the dependent merged onto `default_branch`; delete its
-      // ephemeral integration ref. Best-effort — a cleanup failure never undoes the
-      // merge (the merge already landed), so it is logged and swallowed.
-      await this.cleanupIntegrationBranch();
-      await this.finalize("merged", { taskOutcome: "ok", taskStatus: "done" });
-      return this.result("merged", { mergeSha: merge.mergeSha });
+    // The bundle is pre-supplied (a test/out-of-band caller) OR built lazily HERE —
+    // only now that the branch is settled, so a conflict-out path never paid for it.
+    const bundle = input.mergeAuthority ?? (await input.buildMergeAuthority?.());
+    if (bundle === undefined) {
+      // FAIL-CLOSED: the authority is live but no bundle is available — the land CANNOT
+      // be authorized. Hold loudly (recoverable); NEVER fall to the legacy host-merge
+      // (that would be a fail-open bypass of the guaranteed truth table).
+      return this.emitConflict(
+        "merge authority live but no authority bundle available — land blocked (no silent host-merge fallback)",
+      );
     }
-    if (merge.conflict) {
-      return this.emitConflict(merge.message);
-    }
-    await eventStore.append({
-      ...this.base(),
-      eventType: "merge.failed",
-      payload: { ...this.prFields(), integration: this.mergeLabel(), message: merge.message },
-    });
-    await this.finalize("failed", {
-      taskOutcome: "failed",
-      taskStatus: "failed",
-      failureKind: "merge_failed",
-    });
-    return this.result("failed", { message: merge.message });
+    return landViaAuthority(this.deps, this, bundle);
   }
 
   /**
@@ -214,7 +217,7 @@ export class MergeDispatcher {
    * landed, so cleanup must never turn a successful merge into a failure. Emits
    * `merge.integration_cleaned` on success for the audit trail.
    */
-  private async cleanupIntegrationBranch(): Promise<void> {
+  async cleanupIntegrationBranch(): Promise<void> {
     const { speculativeCleanup, probe, eventStore, integration } = this.deps;
     if (speculativeCleanup === undefined) {
       return;
@@ -235,18 +238,19 @@ export class MergeDispatcher {
   }
 
   /**
-   * ensure the PR branch is up to date with its base before the merge.
+   * Bring the PR branch up to date with its base (a WORKSPACE step that precedes the
+   * land decision — it does NOT decide whether to merge; `MergeAuthority` does).
    *
-   *   clean / blocked / unknown → proceed (the merge API itself gates on
-   *       required checks / protection; `unknown` means GitHub has not computed
-   *       freshness yet, so we let the merge attempt surface it rather than
-   *       blindly rebasing).
    *   dirty → a real conflict with base: route to the conflict hook + emit
-   *       merge.conflict (recoverable) — NEVER merge.
-   *   behind → update the branch onto base, re-poll CI to green, then proceed.
+   *       merge.conflict (recoverable) — the resolver engages; never merged.
+   *   behind → update the branch onto base, re-poll CI to green, then continue.
    *       If update-branch reports a conflict, route to the conflict hook. If the
-   *       re-gated CI fails, fail the stage. The branch never reaches the merge
-   *       call stale.
+   *       re-gated CI fails, fail the stage. The branch never reaches the authority stale.
+   *   clean / blocked / unknown → no workspace action. Note: this is NOT a
+   *       fail-open "proceed to merge" (the §5-P0 ensureUpToDate hole) — it only
+   *       means "nothing to rebase". The AUTHORITY then BLOCKS on `blocked`/`unknown`
+   *       mergeability (only `clean` clears), so an uncertain mergeability can never
+   *       reach a land. The decision moved to the guaranteed truth table.
    */
   private async ensureUpToDate(): Promise<{ kind: "proceed" } | { kind: "halt"; result: MergeForRunResult }> {
     const { probe, eventStore, context } = this.deps;
@@ -255,7 +259,8 @@ export class MergeDispatcher {
       return { kind: "halt", result: await this.handleBranchConflict(mergeability, "branch conflicts with base") };
     }
     if (mergeability.state !== "behind") {
-      // clean / blocked / unknown: nothing to rebase here.
+      // clean / blocked / unknown: nothing to rebase. The authority decides the land
+      // (it blocks on blocked/unknown) — this is no longer a merge-proceed decision.
       return { kind: "proceed" };
     }
 
@@ -341,33 +346,33 @@ export class MergeDispatcher {
   }
 
   /**
-   * a behind/dirty branch surfaced a real conflict (the `dirty` state or a
-   * 422 from update-branch). Route it through the SAME conflict-resolver hook as
-   * a merge-time conflict; if the resolver resolves it we retry the merge once,
-   * otherwise emit the recoverable merge.conflict outcome — never a raw merge.
+   * a behind/dirty branch surfaced a real conflict. Route it through the conflict
+   * resolver; on resolution, run a FRESH `pre_merge` gate on the resolved tree then
+   * re-enter the §5 land decision (`driveLand` → `MergeAuthority`), so the land judges
+   * the RESOLVED tree on FRESH gate/mergeability/review/budget/demo state, fail-closed —
+   * never a raw `probe.merge()`. An unresolved conflict emits the recoverable outcome.
    */
   private async handleBranchConflict(
     mergeability: PullRequestMergeability,
     message: string,
   ): Promise<MergeForRunResult> {
-    const { probe } = this.deps;
     const resolution = await this.runConflictResolver(message);
     if (resolution.resolved) {
-      const merge = await probe.merge();
-      if (merge.merged) {
-        await this.deps.eventStore.append({
-          ...this.base(),
-          eventType: "merge.completed",
-          payload: {
-            ...this.prFields(),
-            integration: this.mergeLabel(),
-            mergeSha: merge.mergeSha,
-            ...this.auditEnvelope(),
-          },
-        });
-        await this.finalize("merged", { taskOutcome: "ok", taskStatus: "done" });
-        return this.result("merged", { mergeSha: merge.mergeSha });
+      // §5 land-authoritative gate on the RESOLVED tree: the resolver re-gates with
+      // `pre_audit`, but the land reads `pre_merge` (else the stale pre-conflict
+      // pre_merge PASS of the OLD tree wins). So run a FRESH `pre_merge` gate on the
+      // resolved tree, fail-closed (a failed/pending/absent re-gate HOLDS the land).
+      // Skipped on the EXPLICIT legacy opt-ins (flag off, or a test-injected probe),
+      // where `driveLand` → the host-merge path runs its own retry.
+      if (mergeAuthorityLive() && this.deps.input.mergeProbe === undefined) {
+        const gated = await reGateResolvedTree(this.deps, this);
+        if (gated.kind !== "proceed") {
+          return gated.result;
+        }
       }
+      // Re-enter the authority-gated, transactional land — never `probe.merge()` + a
+      // hand-rolled `merge.completed` (the §5 finalizer records it transactionally).
+      return this.driveLand();
     }
     return this.emitConflict(message, mergeability.headBranch || undefined);
   }
@@ -391,14 +396,24 @@ export class MergeDispatcher {
     });
   }
 
-  private async tryResolveConflict(merge: MergePullRequestResult): Promise<MergePullRequestResult | undefined> {
+  /**
+   * The LEGACY conflict retry: a merge-time conflict on the host-merge path. NOT a
+   * live-default land path — `tryResolveConflict` is called ONLY by `landViaHostMerge`,
+   * which `driveLand` reaches ONLY via the EXPLICIT legacy opt-ins
+   * (`MERGE_AUTHORITY_LIVE=0`, or a test-injected `mergeProbe` production never sets).
+   * In production (flag default-ON, no probe) the land flows through `landViaAuthority`
+   * and this `probe.merge()` is UNREACHABLE — it is the break-glass retry, not a second
+   * merge authority. (The default-path conflict-resolved land is authority-gated +
+   * transactional via `handleBranchConflict` → resolved-tree re-gate → `driveLand`.)
+   */
+  async tryResolveConflict(merge: MergePullRequestResult): Promise<MergePullRequestResult | undefined> {
     const { probe } = this.deps;
     const outcome = await this.runConflictResolver(merge.message);
     return outcome.resolved ? await probe.merge() : undefined;
   }
 
   /** Emit the recoverable conflict outcome (the resolver-scaffolding hook). */
-  private async emitConflict(message: string, headBranch?: string): Promise<MergeForRunResult> {
+  async emitConflict(message: string, headBranch?: string): Promise<MergeForRunResult> {
     const { eventStore, context } = this.deps;
     await eventStore.append({
       ...this.base(),
@@ -417,7 +432,7 @@ export class MergeDispatcher {
     return this.result("conflict", { message });
   }
 
-  private async finalize(
+  async finalize(
     _outcome: MergeOutcomeKind,
     state: {
       taskOutcome: "ok" | "failed" | "pending";
@@ -467,7 +482,7 @@ export class MergeDispatcher {
     );
   }
 
-  private result(outcome: MergeOutcomeKind, extra: { mergeSha?: string; message?: string } = {}): MergeForRunResult {
+  result(outcome: MergeOutcomeKind, extra: { mergeSha?: string; message?: string } = {}): MergeForRunResult {
     const { context, taskId, integration, pr } = this.deps;
     return {
       runId: context.runId,

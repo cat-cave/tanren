@@ -160,6 +160,11 @@ export function buildDriveMerge(deps: BuildMergeCoordinatorDeps): DriveMergeForQ
     // HERE for the outcome map below. The conflict resolver provisions a fresh runner +
     // workspace + runs the REAL intent-preserving resolver (the blind-re-exec stub is gone).
     const verdict: DriveConflictVerdict = {};
+    // §5 cutover: the gate + review verdicts are RE-READ FRESH at land time by the
+    // bundle builder (`buildBundleForMergeStage` → `resolveLandTimeSignals`), AFTER any
+    // drive-pass resolver re-gates — so the DRIVE pass authorizes against the LATEST
+    // durable verdict, identical to the in-loop path. The coordinator no longer threads
+    // a pre-captured verdict (that risked authorizing against pre-resolution state).
     let merge;
     try {
       merge = await runWithJobOrgId(facts.orgId, () =>

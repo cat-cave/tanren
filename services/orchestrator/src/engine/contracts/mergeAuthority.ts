@@ -55,12 +55,24 @@ export type MergeabilityState = "clean" | "behind" | "dirty" | "blocked" | "unkn
  * The budget scope resolution. `resolved` carries the ceiling + spend, BOTH as
  * {@link NonNegativeFinite} so an UNLIMITED ceiling (`Infinity`/`NaN`/negative) is
  * UNREPRESENTABLE — closing the §5 P1 hole where a bare `number` ceiling let
- * `spent >= Infinity` read as "never exhausted". `unresolvable` is the uncertainty
- * value that MUST fail closed. There is NO "unlimited" value: an unresolvable (or
- * invalid) budget is `blocked`, never a silent pass.
+ * `spent >= Infinity` read as "never exhausted".
+ *
+ * `unresolvable` is the uncertainty value that MUST fail closed: the scope could not
+ * be resolved to a known figure (an UNPARSEABLE config blob, or an UN-PRICED real-spend
+ * row whose true cost is unknown — it may already exceed the ceiling). A bare
+ * `number` ceiling is NEVER reachable: an unresolvable (or invalid) budget is
+ * `blocked`, never a silent pass.
+ *
+ * `not_required` is the EXPLICIT "this project configured NO budget ceiling" — which
+ * the budget doctrine treats as legitimately unbounded AND the DagWalker's budget
+ * gate already enforces upstream BEFORE a run is even enqueued. It is NOT the
+ * fail-open §5-P1 hole (that was an UNRESOLVABLE scope silently reading as unlimited):
+ * this is a resolved, deliberate, configured absence — distinct from `unresolvable`,
+ * which a failed/unknown resolution maps to. There is still NO unlimited *number*.
  */
 export type BudgetScope =
   | { kind: "resolved"; ceilingUsd: NonNegativeFinite; spentUsd: NonNegativeFinite }
+  | { kind: "not_required" }
   | { kind: "unresolvable"; reason: string };
 
 /**

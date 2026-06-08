@@ -12,9 +12,66 @@ import type { MergePullRequestResult } from "../../providers/githubReviewMerge.j
 import type { PullRequestMergeability, UpdateBranchResult, VcsProvider } from "../../contracts/vcsProvider.js";
 import type { RunStateClient } from "./context.js";
 import type { ContributorProbe } from "./governancePosture.js";
+import type { CodeHost } from "../../contracts/codeHost.js";
+import type { Finding } from "../../contracts/findings.js";
+import type { AuditPosture } from "../../contracts/auditPosture.js";
+import type { GateOutcome } from "../gate/index.js";
+import type { ReviewVerdict } from "../../contracts/dagLifecycle.js";
+import type { RawBudgetScope, RawDemoVerification, RawHitlSignoff } from "../../merge/mergeAuthorityInputs.js";
+import type { LandFinalizer } from "../../merge/mergeAuthorityImpl.js";
+import type { LandFinalizeContext } from "../../merge/mergeAuthorityLandFinalizer.js";
 
 /** The integration modes the merge stage actually dispatches to. */
 export type DispatchedIntegration = "native_queue" | "direct_merge" | "external_reviewer";
+
+/**
+ * The LIVE `MergeAuthority` bundle (tanren-owns-the-engine.md §5) — the inputs the
+ * `direct_merge` / `native_queue` DRIVE land path hands to the guaranteed core when
+ * `MERGE_AUTHORITY_LIVE` is on (the default). The dispatcher resolves mergeability +
+ * conflict state itself (it owns the probe); the rest of the fail-closed signals are
+ * gathered upstream (the run loop / coordinator) and passed RAW here, so an absent
+ * signal maps to its blocking enum — never a synthesized passing value.
+ *
+ * Required for the live land path; when omitted (e.g. the kill-switch is off, or a
+ * legacy out-of-band caller), the dispatcher falls back to the retained host merge.
+ */
+export interface MergeAuthorityBundle {
+  /** The minimal host the authorized commit lands through (the ff-only CAS push). */
+  codeHost: CodeHost;
+  /** The owning org, so the durable finalize is org-scoped (RLS). */
+  orgId: string;
+  /**
+   * Build the writer-backed `LandFinalizer` for this land (§5). Built at the call
+   * site (which owns the real pg.Pool); the dispatcher supplies the run-stage
+   * `LandFinalizeContext` (task id + audit envelope it computes). The finalize is the
+   * §5 transactional record (`merge.completed` + spec `merged` in ONE org-scoped tx).
+   */
+  finalizerFor: (context: LandFinalizeContext) => LandFinalizer;
+  /** The gate-config + policy identity stamped onto the integration node's proof key. */
+  gateConfigHash: string;
+  policyVersion: string;
+  /** The native gate's outcome (a not-yet-run / errored / absent gate → blocks). */
+  gateOutcome: GateOutcome | undefined;
+  /**
+   * The sha the latest `pre_merge` gate verdict was FOR (its `payload.headSha`). The
+   * authority requires this EQUALS the head being landed — binding the verdict to the
+   * EXACT commit (the gate↔land TOCTOU guard). A head-advance after the gate but before
+   * the land makes `gatedHeadSha != landedHeadSha` → BLOCK. `undefined` when no verdict
+   * is recorded (the gate already blocks via `gateOutcome === undefined`).
+   */
+  gatedHeadSha: string | undefined;
+  /** The auditor's emitted findings + the project posture (the DORA block decision). */
+  findings: ReadonlyArray<Finding>;
+  auditPosture: AuditPosture;
+  /** The review poll's verdict (only `approved` clears; absent → unread → blocks). */
+  reviewVerdict: ReviewVerdict | undefined;
+  /** The resolved budget scope (unresolvable → blocks; there is no unlimited). */
+  budget: RawBudgetScope;
+  /** The demo-verification verdict (absent/failed → unverified → blocks). */
+  demo: RawDemoVerification | undefined;
+  /** The HITL signoff (REQUIRED + explicit; absent → pending → needs_attention). */
+  hitlSignoff: RawHitlSignoff | undefined;
+}
 
 /**
  * The outcome of the merge stage. `conflict` is the recoverable branch;
@@ -104,6 +161,22 @@ export interface MergeForRunInput {
    * coordinator reuses the per-run merge path without a second merge impl.
    */
   queueDrive?: boolean;
+  /**
+   * The pre-built LIVE `MergeAuthority` bundle (§5) — present when an out-of-band
+   * caller constructs it directly OR a test injects a fake, bypassing the lazy build.
+   * Production normally leaves it absent: `mergeForRun` provides a LAZY
+   * `buildMergeAuthority` thunk instead (so the bundle's DB reads + CodeHost build
+   * happen ONLY when a land is actually authorized, never on a conflict-out path).
+   */
+  mergeAuthority?: MergeAuthorityBundle;
+  /**
+   * LAZY builder for the `MergeAuthority` bundle (§5). `mergeForRun` provides this on
+   * the live land path (direct_merge / native_queue DRIVE) when the authority is on;
+   * the dispatcher invokes it ONLY inside `landViaAuthority`, AFTER `ensureUpToDate`
+   * proceeds — so a branch that conflicts/holds first never pays the bundle build.
+   * Absent ⇒ no live authority for this pass (the retained kill-switch host merge).
+   */
+  buildMergeAuthority?: () => Promise<MergeAuthorityBundle>;
 }
 
 /**

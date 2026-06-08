@@ -162,7 +162,10 @@ export class PercolatingCoordinator implements ChangePercolationCoordinator {
     pending: PercolationPending,
     result: PercolationPassResult,
   ): Promise<void> {
-    const verdict = decideSettle(dependent.lifecycleState, dependent.openFindingMaxSeverity);
+    // §5 P0: the dependent's OWN review verdict is now a settle input — a
+    // `changes_requested` re-exec NEVER absorbs (it does not advance the verified
+    // SHA), closing the absorb-without-reading-the-verdict hole.
+    const verdict = decideSettle(dependent.lifecycleState, dependent.openFindingMaxSeverity, dependent.reviewVerdict);
     if (verdict === "in_flight") {
       // The re-execution is still building/pre-audit — wait; do NOT re-emit.
       result.inFlight.push(dependent.specId);

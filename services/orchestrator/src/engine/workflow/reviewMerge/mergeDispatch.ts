@@ -29,6 +29,8 @@ import type { RunStateWriter } from "../../contracts/runStateWriter.js";
 import { ensureSystemTask, routeTaskUpdate } from "../taskWriteRouting.js";
 import { PgEventStore, type EventStore } from "../../eventStore.js";
 import type { PullRequestRef, RepoRef } from "../../contracts/vcsProvider.js";
+import { mergeAuthorityLive } from "../../merge/mergeAuthorityFlag.js";
+import { buildBundleForMergeStage } from "../../merge/mergeAuthorityBundleBuild.js";
 import {
   contextOptionsFor,
   loadReviewMergeRunContext,
@@ -164,8 +166,28 @@ export async function mergeForRun(input: MergeForRunInput): Promise<MergeForRunR
     }
   }
 
+  // §5 cutover: when this pass WILL drive the land (direct_merge, or the
+  // native_queue coordinator DRIVE pass) AND the authority is live (the default),
+  // provide a LAZY `buildMergeAuthority` thunk. The dispatcher invokes it ONLY when a
+  // land is actually authorized (inside `landViaAuthority`, after `ensureUpToDate`
+  // proceeds) — so a branch that conflicts/holds first never pays the bundle's DB
+  // reads + CodeHost build. The thunk gathers the run context + gate/review signals +
+  // the resolved CodeHost, then runs the guaranteed truth table.
+  //
+  // The thunk is SKIPPED when a `mergeProbe` is injected: that seam means the caller
+  // exercises the host-merge operations directly (the legacy break-glass path), so
+  // the dispatcher uses the probe. PRODUCTION omits `mergeProbe`, so the live path
+  // always reaches the authority — the cutover is real; only an explicit
+  // probe-injecting test stays on the retained host-merge path.
+  const willDriveLand = integration === "direct_merge" || (integration === "native_queue" && input.queueDrive === true);
+  const liveAuthority =
+    input.mergeAuthority === undefined && willDriveLand && mergeAuthorityLive() && input.mergeProbe === undefined;
+  const mergeInput: MergeForRunInput = liveAuthority
+    ? { ...input, buildMergeAuthority: () => buildBundleForMergeStage(input, context) }
+    : input;
+
   const dispatcher = new MergeDispatcher({
-    input,
+    input: mergeInput,
     context,
     eventStore,
     taskId,

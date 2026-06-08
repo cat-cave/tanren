@@ -152,13 +152,16 @@ export class MergeAuthorityImpl implements MergeAuthority {
       });
     }
 
-    // budget — `unresolvable` fails closed (there is NO unlimited); else exhausted blocks.
+    // budget — `unresolvable` fails closed (a failed/unknown resolution is NEVER
+    // unlimited). `not_required` (the project configured no ceiling — already
+    // enforced upstream by the walker's budget gate) clears. A `resolved` scope
+    // blocks only when exhausted.
     if (input.budget.kind === "unresolvable") {
       reasons.push({
         input: "budget",
         detail: `budget scope unresolvable (${input.budget.reason}) — fail closed (never unlimited)`,
       });
-    } else if (input.budget.spentUsd >= input.budget.ceilingUsd) {
+    } else if (input.budget.kind === "resolved" && input.budget.spentUsd >= input.budget.ceilingUsd) {
       reasons.push({
         input: "budget",
         detail: `budget exhausted (spent ${input.budget.spentUsd} >= ceiling ${input.budget.ceilingUsd})`,
