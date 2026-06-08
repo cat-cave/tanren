@@ -177,10 +177,22 @@ export class MergeDispatcher implements LandOps {
     if (freshness.kind !== "proceed") {
       return freshness.result;
     }
+    return this.driveLand();
+  }
+
+  /**
+   * The §5 LAND DECISION — the SINGLE point every land flows through (the initial
+   * direct_merge/DRIVE pass AND the post-conflict-resolution retry). With
+   * `MERGE_AUTHORITY_LIVE` on (the default) the land is authorized + transactional via
+   * `MergeAuthority` (`landViaAuthority` re-reads mergeability + the bundle re-gathers
+   * the land-time inputs, so a freshly-resolved conflict is judged on CURRENT state,
+   * fail-closed). With the flag OFF (or no bundle) the retained host-merge break-glass
+   * runs. There is NO second merge authority — the conflict-resolved path re-enters
+   * HERE, never `probe.merge()` + a hand-rolled `merge.completed`.
+   */
+  private async driveLand(): Promise<MergeForRunResult> {
     // The bundle is pre-supplied (a test/out-of-band caller) OR built lazily HERE —
-    // only now that `ensureUpToDate` proceeded, so a conflict-out path never paid for
-    // it. When neither is present (or the kill-switch is off), the retained
-    // host-merge break-glass runs.
+    // only now that the branch is settled, so a conflict-out path never paid for it.
     const { input } = this.deps;
     if (mergeAuthorityLive()) {
       const bundle = input.mergeAuthority ?? (await input.buildMergeAuthority?.());
@@ -331,31 +343,25 @@ export class MergeDispatcher implements LandOps {
   /**
    * a behind/dirty branch surfaced a real conflict (the `dirty` state or a
    * 422 from update-branch). Route it through the SAME conflict-resolver hook as
-   * a merge-time conflict; if the resolver resolves it we retry the merge once,
-   * otherwise emit the recoverable merge.conflict outcome — never a raw merge.
+   * a merge-time conflict; if the resolver resolves it the land RE-ENTERS the
+   * §5 land decision (`driveLand` → the SAME `MergeAuthority` path as every other
+   * merge), NOT a raw `probe.merge()`. The resolution may have changed the
+   * gate/mergeability/conflict state, so `driveLand` re-reads them fail-closed: a
+   * conflict that resolves `true` but whose land-time authority state is BLOCKING
+   * (stale gate, changes_requested review, over-budget, unverified demo, unknown
+   * mergeability) is BLOCKED, not merged — there is no second merge authority. An
+   * unresolved conflict emits the recoverable merge.conflict outcome.
    */
   private async handleBranchConflict(
     mergeability: PullRequestMergeability,
     message: string,
   ): Promise<MergeForRunResult> {
-    const { probe } = this.deps;
     const resolution = await this.runConflictResolver(message);
     if (resolution.resolved) {
-      const merge = await probe.merge();
-      if (merge.merged) {
-        await this.deps.eventStore.append({
-          ...this.base(),
-          eventType: "merge.completed",
-          payload: {
-            ...this.prFields(),
-            integration: this.mergeLabel(),
-            mergeSha: merge.mergeSha,
-            ...this.auditEnvelope(),
-          },
-        });
-        await this.finalize("merged", { taskOutcome: "ok", taskStatus: "done" });
-        return this.result("merged", { mergeSha: merge.mergeSha });
-      }
+      // Re-enter the authority-gated, transactional land — never `probe.merge()` +
+      // a hand-rolled `merge.completed`. The §5 finalizer records merge.completed in
+      // ONE transaction (merge_state_unknown on a post-land durable-write failure).
+      return this.driveLand();
     }
     return this.emitConflict(message, mergeability.headBranch || undefined);
   }
