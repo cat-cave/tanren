@@ -279,10 +279,11 @@ describe("buildAuditorPrompt — full rendered contract", () => {
     // turned into spurious text.
     expect(prompt).toContain("- AC1: all helpers exist\n\nExecuted subtasks:");
     expect(prompt).toContain("behaviors: (none))\n\nSet passed=true only when");
-    // The prompt ends on the recommendation rules — no trailing diff payload.
-    expect(
-      prompt.trimEnd().endsWith("Set recommendedAction='halt' when the spec is not recoverable in this run."),
-    ).toBe(true);
+    // WAVE-2: the prompt now ends on the findings-emission instruction (the
+    // recommendation rules are still present, followed by the findings block) —
+    // no trailing diff payload.
+    expect(prompt).toContain("Set recommendedAction='halt' when the spec is not recoverable in this run.");
+    expect(prompt.trimEnd().endsWith("never invent a finding.")).toBe(true);
   });
 });
 

@@ -7,7 +7,13 @@ import { z, type ZodType } from "zod";
 
 export { PlanAnswer, PlanSubtask, PLAN_ANSWER_SCHEMA_ID } from "./plan.js";
 export { CheckAnswer, CHECK_ANSWER_SCHEMA_ID } from "./check.js";
-export { AuditAnswer, AuditRecommendedAction, AUDIT_ANSWER_SCHEMA_ID } from "./audit.js";
+export {
+  AuditAnswer,
+  AuditRecommendedAction,
+  AuditFinding,
+  AuditFindingSeverity,
+  AUDIT_ANSWER_SCHEMA_ID,
+} from "./audit.js";
 export { DemoAnswer, DemoLink, DEMO_ANSWER_SCHEMA_ID } from "./demo.js";
 export {
   ForgeAnswer,

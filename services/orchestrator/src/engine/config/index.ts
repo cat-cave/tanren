@@ -2,6 +2,10 @@
 export {
   AllocatorConfig,
   AllocatorKind,
+  AuditPostureConfig,
+  DEFAULT_AUDIT_POSTURE,
+  FindingSeverityConfig,
+  P2P3HandlingConfig,
   BudgetGatedFigure,
   BudgetPeriod,
   CreditRates,

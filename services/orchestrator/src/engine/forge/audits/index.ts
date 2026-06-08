@@ -38,3 +38,13 @@ export {
 } from "./answererPassRunner.js";
 
 export { AuditSchedulerLoop, isAuditJobDue, type AuditSchedulerLoopDeps } from "./loop.js";
+
+// WAVE-2 / SLICE P-A — the findings-only posture gate + the dual-emit de-risk flag.
+export {
+  evaluatePostureGate,
+  findingToRoutableSpec,
+  type PostureGateContext,
+  type PostureGateResult,
+  type PostureFindingDisposition,
+} from "./postureGate.js";
+export { AUDIT_FINDINGS_DUAL_EMIT_DEFAULT } from "./findingsDualEmit.js";

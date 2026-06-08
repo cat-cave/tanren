@@ -96,7 +96,8 @@ describe("AuditAnswer", () => {
       outstandingBehaviorIds: [],
       recommendedAction: "pass",
     };
-    expect(AuditAnswer.parse(value)).toEqual(value);
+    // WAVE-2: `findings` defaults to an empty list (audited-clean) when omitted.
+    expect(AuditAnswer.parse(value)).toEqual({ ...value, findings: [] });
   });
 
   it("accepts a loop_to_planner recommendation with outstanding behavior ids", () => {
@@ -106,7 +107,30 @@ describe("AuditAnswer", () => {
       outstandingBehaviorIds: ["beh_readme_summary"],
       recommendedAction: "loop_to_planner",
     };
-    expect(AuditAnswer.parse(value)).toEqual(value);
+    // WAVE-2: a legacy verdict with no `findings` key parses with `findings: []`.
+    expect(AuditAnswer.parse(value)).toEqual({ ...value, findings: [] });
+  });
+
+  it("accepts explicit P0–P3 findings dual-emitted alongside the legacy verdict", () => {
+    const value = {
+      passed: false,
+      reasoning: "A null-deref crashes the import path; planner must rework.",
+      outstandingBehaviorIds: ["beh_import"],
+      recommendedAction: "loop_to_planner",
+      findings: [
+        { id: "null-deref-import", severity: "P0", title: "Null deref on import", body: "x.y is read when x is null." },
+        {
+          id: "missing-test",
+          severity: "P2",
+          title: "No test for empty file",
+          body: "Add a coverage case.",
+          fixHint: "add empty-file test",
+        },
+      ],
+    };
+    const parsed = AuditAnswer.parse(value);
+    expect(parsed.findings.map((f) => f.severity)).toEqual(["P0", "P2"]);
+    expect(parsed.findings[1]?.fixHint).toBe("add empty-file test");
   });
 
   it("rejects unknown recommendedAction values", () => {
