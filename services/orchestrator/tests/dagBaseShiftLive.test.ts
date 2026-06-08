@@ -33,7 +33,7 @@ import {
   type RebaseDecision,
   type ReGateVerdict,
 } from "../src/engine/dag/baseShiftCoordinator.js";
-import { buildBaseShiftCoordinator } from "../src/engine/dag/percolationBuild.js";
+import { buildBaseShiftCoordinator, MarkerSuppressedBaseShiftPersistence } from "../src/engine/dag/percolationBuild.js";
 import { buildBaseShiftRebaseHook } from "../src/engine/dag/baseShiftRebaseHook.js";
 
 const PROJECT = "project_live";
@@ -121,11 +121,16 @@ const nodes: BaseShiftNodeReader = {
 
 class RecordingPersistence implements BaseShiftPersistence {
   readonly repointCalls: string[] = [];
+  readonly markedInFlight: Array<{ runId: string; ancestorSpecId: string }> = [];
   readonly replanned: Array<{ runId: string; specId: string }> = [];
   async repointBase(input: { runId: string }): Promise<void> {
     this.repointCalls.push(input.runId);
   }
-  async markInFlight(): Promise<void> {}
+  async markInFlight(input: { runId: string; pending: { ancestorSpecId: string } }): Promise<void> {
+    // A `percolation_pending` marker write — the percolation poller's selector. The P1
+    // behind path must NOT reach here (it is wrapped by MarkerSuppressedBaseShiftPersistence).
+    this.markedInFlight.push({ runId: input.runId, ancestorSpecId: input.pending.ancestorSpecId });
+  }
   async recordReplan(input: { runId: string; specId: string }): Promise<void> {
     this.replanned.push({ runId: input.runId, specId: input.specId });
   }
@@ -138,7 +143,13 @@ class RecordingEvents implements BaseShiftEventEmitter {
   }
 }
 
-function coordinator(opts: { conflictOnRebase?: boolean; reGate?: ReGateVerdict; resolution?: ConflictResolution }): {
+function coordinator(opts: {
+  conflictOnRebase?: boolean;
+  reGate?: ReGateVerdict;
+  resolution?: ConflictResolution;
+  /** Wrap the recording persistence in the behind-path marker suppressor (the P1 fix). */
+  suppressMarker?: boolean;
+}): {
   coord: BaseShiftCoordinator;
   persistence: RecordingPersistence;
   events: RecordingEvents;
@@ -150,7 +161,7 @@ function coordinator(opts: { conflictOnRebase?: boolean; reGate?: ReGateVerdict;
     opener,
     reGate: reGate(opts.reGate ?? "passed"),
     resolver: resolver(opts.resolution ?? { resolved: true, headSha: "sha-resolved" }),
-    persistence,
+    persistence: opts.suppressMarker === true ? new MarkerSuppressedBaseShiftPersistence(persistence) : persistence,
     nodes,
     events,
   });
@@ -301,5 +312,80 @@ describe("buildBaseShiftRebaseHook — the merge `behind` path routes through th
     const hook = buildBaseShiftRebaseHook({ pool: emptyPool, coordinator: coord });
     const outcome = await hook({ runId: "run_missing", baseBranch: "main" });
     expect(outcome.outcome).toBe("held");
+  });
+});
+
+// ---- (3) P1: the merge-queue `behind` rebase is NOT a deferred percolation ----
+
+describe("P1: the `behind` rebase NEVER stamps percolation_pending (no mis-routing to the poller)", () => {
+  async function runBehind(opts: Parameters<typeof coordinator>[0]) {
+    const { coord, persistence, events } = coordinator({ ...opts, suppressMarker: true });
+    const hook = buildBaseShiftRebaseHook({ pool: fakeRunsPool(), coordinator: coord });
+    const outcome = await hook({ runId: DEP_RUN, baseBranch: "main", headBranch: DEP_BRANCH });
+    return { outcome, persistence, events };
+  }
+
+  it("a clean behind rebase KEEPS the run (repoint) but writes NO percolation_pending marker", async () => {
+    const { outcome, persistence } = await runBehind({ conflictOnRebase: false, reGate: "passed" });
+    // The run row is kept (repoint), the merge proceeds (`rebased`)…
+    expect(outcome).toEqual({ outcome: "rebased" });
+    expect(persistence.repointCalls).toEqual([DEP_RUN]);
+    // …but NO `percolation_pending` was stamped — so the percolation poller (which selects on
+    // that marker) can NEVER pick this synchronous merge-queue run up + falsely settle it.
+    expect(persistence.markedInFlight).toEqual([]);
+  });
+
+  it("a resolved-conflict behind rebase (same run_id never-discard) also writes NO marker", async () => {
+    const { outcome, persistence } = await runBehind({
+      conflictOnRebase: true,
+      reGate: "passed",
+      resolution: { resolved: true, headSha: "sha-resolved" },
+    });
+    expect(outcome).toEqual({ outcome: "rebased" });
+    // never-discard: the SAME run kept; never mis-routed to the percolation poller.
+    expect(persistence.repointCalls).toEqual([DEP_RUN]);
+    expect(persistence.markedInFlight).toEqual([]);
+  });
+
+  it("the change-percolation path (un-suppressed persistence) STILL stamps the marker — only `behind` is decoupled", async () => {
+    // The default coordinator (no suppressMarker wrap) is the percolation path: it MUST keep the
+    // marker (the settle reads it). This guards against over-suppressing the real deferral.
+    const { coord, persistence } = coordinator({ conflictOnRebase: false, reGate: "passed" });
+    await coord.reexecute({
+      projectId: PROJECT,
+      dependent: dependent(),
+      decision: {
+        ancestorSpecId: "spec_a",
+        promptness: "immediate",
+        fromSha: "sha-old",
+        toSha: "sha-new",
+        immediateSeverity: "P0",
+      },
+      integrationBranch: "tanren/integ/spec_b",
+      ancestorHeadShas: { spec_a: "sha-new" },
+      nonSpeculative: false,
+    });
+    expect(persistence.markedInFlight).toEqual([{ runId: DEP_RUN, ancestorSpecId: "spec_a" }]);
+  });
+});
+
+describe("MarkerSuppressedBaseShiftPersistence — the behind-path marker suppressor (unit)", () => {
+  it("no-ops markInFlight; delegates repointBase + recordReplan", async () => {
+    const inner = new RecordingPersistence();
+    const wrapped = new MarkerSuppressedBaseShiftPersistence(inner);
+    await wrapped.repointBase({ projectId: PROJECT, runId: DEP_RUN, speculativeBase: null });
+    await wrapped.markInFlight({ projectId: PROJECT, runId: DEP_RUN, pending: { ancestorSpecId: "x", toSha: "y" } });
+    await wrapped.recordReplan({
+      projectId: PROJECT,
+      specId: DEP_SPEC,
+      runId: DEP_RUN,
+      ancestorSpecId: "x",
+      ancestorSha: "y",
+      reason: "r",
+    });
+    expect(inner.repointCalls).toEqual([DEP_RUN]);
+    expect(inner.replanned).toEqual([{ runId: DEP_RUN, specId: DEP_SPEC }]);
+    // The marker write — the poller's selector — was DROPPED.
+    expect(inner.markedInFlight).toEqual([]);
   });
 });

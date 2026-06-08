@@ -32,6 +32,7 @@ import { orgScopingPool } from "../data/orgScopedDb.js";
 import { PgEventStore } from "../eventStore.js";
 import {
   type BaseShiftConflictResolver,
+  type BaseShiftPersistence,
   type BaseShiftReGate,
   type BaseShiftWorkspaceOpener,
   BaseShiftCoordinator,
@@ -182,17 +183,59 @@ export class PgPercolationSettler implements PercolationSettler {
  * loudly, never-discard/never-merge) when the flag is OFF or the deps are absent. No
  * half-state: either the live seams own the whole flow or the held stubs hold.
  */
-export function buildBaseShiftCoordinator(deps: BuildPercolationCoordinatorDeps): BaseShiftCoordinator {
+export function buildBaseShiftCoordinator(
+  deps: BuildPercolationCoordinatorDeps,
+  options: { suppressInFlightMarker?: boolean } = {},
+): BaseShiftCoordinator {
   const seams = selectBaseShiftSeams(deps);
+  const base = new PgBaseShiftPersistence(deps.pool, deps.runStateWriter);
+  // P1 fix: the merge-queue `behind` path is a SYNCHRONOUS merge-dispatcher rebase, NOT a
+  // deferred ancestor-percolation — so it must NOT stamp `percolation_pending` (which the
+  // percolation read-model selects, and would falsely settle/replan the run as a
+  // percolation). The marker-suppressing persistence no-ops `markInFlight` for it; the
+  // change-percolation kick-off (the real deferral the settle reads) keeps the live marker.
+  const persistence = options.suppressInFlightMarker === true ? new MarkerSuppressedBaseShiftPersistence(base) : base;
   return new BaseShiftCoordinator({
     workspace: seams.workspace,
     opener: seams.opener,
     reGate: seams.reGate,
     resolver: seams.resolver,
-    persistence: new PgBaseShiftPersistence(deps.pool, deps.runStateWriter),
+    persistence,
     nodes: new PgBaseShiftNodeReader(deps.pool),
     events: new PgBaseShiftEventEmitter(deps.pool, deps.runStateWriter),
   });
+}
+
+/**
+ * A keep-run-row persistence that SUPPRESSES the in-flight `percolation_pending` marker —
+ * for the merge-queue `behind` rebase, which is owned synchronously by the merge dispatcher
+ * and must NEVER be picked up by the change-percolation poller (the P1 mis-routing fix).
+ * `repointBase` (re-point to NULL for a non-speculative behind run — inert) and
+ * `recordReplan` (route the work back, kept alive) still delegate; only `markInFlight` — the
+ * deferred-percolation settle handle — is dropped, so a `behind` run is never selectable as
+ * a percolation. NEVER fakes percolation identity for a non-percolation run.
+ */
+export class MarkerSuppressedBaseShiftPersistence implements BaseShiftPersistence {
+  constructor(private readonly inner: BaseShiftPersistence) {}
+  async repointBase(input: { projectId: string; runId: string; speculativeBase: string | null }): Promise<void> {
+    await this.inner.repointBase(input);
+  }
+  async markInFlight(): Promise<void> {
+    // Intentionally a NO-OP: the merge-queue `behind` rebase is synchronous (the dispatcher
+    // re-gates + merges in the same pass), so there is no deferred re-execution for the
+    // percolation settle to resolve. Stamping the marker would mis-route the run to the
+    // percolation poller (P1). The change-percolation path uses the un-suppressed persistence.
+  }
+  async recordReplan(input: {
+    projectId: string;
+    specId: string;
+    runId: string;
+    ancestorSpecId: string;
+    ancestorSha: string;
+    reason: string;
+  }): Promise<void> {
+    await this.inner.recordReplan(input);
+  }
 }
 
 /** The workspace/re-gate/resolver seam set the base shift drives — LIVE (flag ON + deps) or HELD. */

@@ -231,11 +231,19 @@ export class LiveBaseShiftConflictResolver implements BaseShiftConflictResolver 
     dependent: SpeculativeDependent;
     workspace: { workspaceId: string; path: string };
     rebase: { headSha: string };
+    newBaseRef: string;
+    nonSpeculative: boolean;
   }): Promise<ConflictResolution> {
     const ctx = await loadBaseShiftRunContext(this.deps.pool, input.dependent.runId);
+    // P0 fix: resolve + re-gate against the SHIFTED base the initial rebase used, NOT the
+    // project default. Non-speculative ⇒ plain default_branch; else the speculative
+    // integration ref (`newBaseRef`). A resolution proven against the wrong base would be a
+    // fail-OPEN (work marked `rebased_resolved` that never met the base it lands on).
+    const shiftedBase = input.nonSpeculative ? ctx.defaultBranch : input.newBaseRef;
     return resolveBaseShiftConflict({
       deps: this.deps,
       ctx,
+      shiftedBase,
       timeoutMs: this.deps.timeoutMs ?? BASE_SHIFT_TIMEOUT_MS,
     });
   }

@@ -18,7 +18,10 @@ import type { GateOutcome } from "../workflow/gate/index.js";
 import { advisoryStepNamesForPosture, resolveGateConfig, runGateForWhen } from "../workflow/gate/index.js";
 import type { RunnerHandle } from "../contracts/allocator.js";
 import { buildAdaptersFromRouting } from "../providers/adapterSelector.js";
-import { buildJjConflictApplier } from "../workflow/reviewMerge/conflictResolver/jjWorkspaceApplier.js";
+import {
+  buildJjConflictApplier,
+  type JjConflictApplierFacts,
+} from "../workflow/reviewMerge/conflictResolver/jjWorkspaceApplier.js";
 import { buildDefaultConflictResolver } from "../workflow/reviewMerge/conflictResolver/index.js";
 import { buildLiveJjWorkspace, type LiveJjWorkspace } from "../providers/liveJjWorkspace.js";
 import type { BaseShiftRunContext } from "./baseShiftLiveContext.js";
@@ -27,16 +30,21 @@ import type { LiveBaseShiftDeps } from "./baseShiftLiveSeams.js";
 
 /**
  * Run the live intent-preserving jj resolver over a freshly provisioned live jj workspace,
- * re-gating + force-pushing the resolved head on a fit. Returns `{resolved, headSha}` (the
- * resolved head read back from the forge) or `{resolved:false, reason}` (the coordinator
- * replans — the work stays alive). All tenant reads/writes run under the dependent's org.
+ * re-gating + force-pushing the resolved head on a fit. The conflict is gathered + re-gated
+ * against `shiftedBase` — the SAME base the initial `rebaseOnto` used (the speculative
+ * integration ref, or plain `default_branch`), NEVER the project default (a P0 fail-open).
+ * Returns `{resolved, headSha}` (the resolved head read back from the forge) or
+ * `{resolved:false, reason}` (the coordinator replans — the work stays alive). All tenant
+ * reads/writes run under the dependent's org.
  */
 export async function resolveBaseShiftConflict(input: {
   deps: LiveBaseShiftDeps;
   ctx: BaseShiftRunContext;
+  /** The shifted base the conflict is gathered + re-gated against (NOT the project default). */
+  shiftedBase: string;
   timeoutMs: number;
 }): Promise<ConflictResolution> {
-  const { deps, ctx, timeoutMs } = input;
+  const { deps, ctx, shiftedBase, timeoutMs } = input;
   return runWithJobOrgId(ctx.orgId, async () => {
     const live = await buildLiveJjWorkspace({
       facts: {
@@ -55,13 +63,15 @@ export async function resolveBaseShiftConflict(input: {
       ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
       timeoutMs,
     });
-    const resolved = await runResolverOverWorkspace({ deps, ctx, live, timeoutMs }).catch(async (error: unknown) => {
-      // FAIL-CLOSED: a failure BEFORE the applier's gather() took ownership would leak the
-      // runner — release it loudly. (Once gather() runs, the applier's terminal step owns
-      // release; a second release is a no-op.)
-      await live.release();
-      throw error;
-    });
+    const resolved = await runResolverOverWorkspace({ deps, ctx, shiftedBase, live, timeoutMs }).catch(
+      async (error: unknown) => {
+        // FAIL-CLOSED: a failure BEFORE the applier's gather() took ownership would leak the
+        // runner — release it loudly. (Once gather() runs, the applier's terminal step owns
+        // release; a second release is a no-op.)
+        await live.release();
+        throw error;
+      },
+    );
     if (!resolved) {
       // The resolver routed ONE spec back to the planner (bounded re-plan) OR judged the
       // intents irreconcilable — either way the old work no longer fits as-is. The
@@ -79,28 +89,43 @@ export async function resolveBaseShiftConflict(input: {
   });
 }
 
+/**
+ * The jj applier facts for a base-shift conflict resolve — the P0-fixed BASE WIRING, pure
+ * (no I/O) so it is unit-asserted directly. The conflict is gathered against the SHIFTED
+ * base (the SAME one the initial `rebaseOnto` used — the speculative integration ref, or
+ * plain `default_branch`), NEVER the project default: `buildLiveJjWorkspace` cloned
+ * `shiftedBase`, so its remote bookmark is `<shiftedBase>@origin`. A regression to
+ * `ctx.defaultBranch` here is the fail-OPEN the P0 fix closes (work proven against the wrong
+ * base then marked `rebased_resolved`).
+ */
+export function baseShiftApplierFacts(ctx: BaseShiftRunContext, shiftedBase: string): JjConflictApplierFacts {
+  return {
+    repoUrl: ctx.repoUrl,
+    baseBranch: shiftedBase,
+    baseRevision: `${shiftedBase}@origin`,
+    headBranch: ctx.headBranch,
+    ...(ctx.installation !== undefined && { installation: ctx.installation }),
+    githubCredentialRef: ctx.githubCredentialRef,
+  };
+}
+
 /** Build the jj applier + the intent-preserving resolver over the live workspace + run it. */
 async function runResolverOverWorkspace(input: {
   deps: LiveBaseShiftDeps;
   ctx: BaseShiftRunContext;
+  /** The shifted base the conflict is gathered + re-gated against (NOT the project default). */
+  shiftedBase: string;
   live: LiveJjWorkspace;
   timeoutMs: number;
 }): Promise<boolean> {
-  const { deps, ctx, live, timeoutMs } = input;
+  const { deps, ctx, shiftedBase, live, timeoutMs } = input;
   const applier = buildJjConflictApplier({
     live,
     ssh: deps.ssh,
     secrets: deps.secrets,
     vcsProvider: deps.vcsProvider,
     ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
-    facts: {
-      repoUrl: ctx.repoUrl,
-      baseBranch: ctx.defaultBranch,
-      baseRevision: `${ctx.defaultBranch}@origin`,
-      headBranch: ctx.headBranch,
-      ...(ctx.installation !== undefined && { installation: ctx.installation }),
-      githubCredentialRef: ctx.githubCredentialRef,
-    },
+    facts: baseShiftApplierFacts(ctx, shiftedBase),
     timeoutMs,
   });
   const adapters = buildAdaptersFromRouting(
@@ -122,7 +147,9 @@ async function runResolverOverWorkspace(input: {
     secrets: deps.secrets,
     target: live.target,
     workspacePath: live.workspacePath,
-    baseSha: ctx.defaultBranch,
+    // The re-gate baseline is the SHIFTED base the resolved tree sits on (the resolution is
+    // proven against the base it lands on, not the project default).
+    baseSha: shiftedBase,
     timeoutMs,
     runId: ctx.runId,
     projectId: ctx.projectId,
@@ -131,7 +158,7 @@ async function runResolverOverWorkspace(input: {
     specTitle: ctx.specTitle,
     specDescription: ctx.specDescription,
     acceptanceCriteria: ctx.acceptanceCriteria,
-    baseBranch: ctx.defaultBranch,
+    baseBranch: shiftedBase,
     headBranch: ctx.headBranch,
     ...(ctx.endpointBaseUrl !== undefined && { endpointBaseUrl: ctx.endpointBaseUrl }),
     routing: ctx.routing,
@@ -143,7 +170,7 @@ async function runResolverOverWorkspace(input: {
     runId: ctx.runId,
     prUrl: ctx.repoUrl,
     prNumber: 0,
-    baseBranch: ctx.defaultBranch,
+    baseBranch: shiftedBase,
     message: "base-shift rebase conflict",
   });
   return result.resolved;

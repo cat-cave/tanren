@@ -133,16 +133,22 @@ export function buildDriveMerge(deps: BuildMergeCoordinatorDeps): DriveMergeForQ
   // SAME `BaseShiftCoordinator` the change-percolation kick-off uses (live seams under
   // `baseShiftLive()`, default ON; the allocator/ssh/identity are the SAME the drive
   // resolver uses) — never a second server-side update-branch. Built once per drive build.
-  const baseShiftCoordinator = buildBaseShiftCoordinator({
-    pool: deps.pool,
-    vcsProvider: deps.vcsProvider,
-    secrets: deps.secrets,
-    ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
-    ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
-    allocator: deps.allocator,
-    ssh: deps.ssh,
-    identitySecretRef: deps.identitySecretRef,
-  });
+  const baseShiftCoordinator = buildBaseShiftCoordinator(
+    {
+      pool: deps.pool,
+      vcsProvider: deps.vcsProvider,
+      secrets: deps.secrets,
+      ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
+      ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
+      allocator: deps.allocator,
+      ssh: deps.ssh,
+      identitySecretRef: deps.identitySecretRef,
+    },
+    // P1 fix: the merge-queue `behind` rebase is SYNCHRONOUS (this drive re-gates + merges
+    // in the same pass) — suppress the `percolation_pending` marker so the run is NEVER
+    // picked up + mis-settled by the change-percolation poller.
+    { suppressInFlightMarker: true },
+  );
   const baseShiftRebase = buildBaseShiftRebaseHook({ pool: deps.pool, coordinator: baseShiftCoordinator });
   return async ({ runId }): Promise<MergeDriveOutcome> => {
     const facts = await resolveRunFacts(deps.pool, runId);
