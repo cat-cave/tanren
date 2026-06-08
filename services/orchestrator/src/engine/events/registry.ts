@@ -144,6 +144,7 @@ import {
   DagSpecSpeculationHeldPayload,
   DagSpecSpeculativePayload,
   DagSpecUnstrandedPayload,
+  IntegrationRebasePayload,
 } from "./schemas/dag.js";
 
 // The EventRegistry is the single source of truth mapping event names to
@@ -409,6 +410,10 @@ export const EventRegistry = {
   "dag.spec.percolated": DagSpecPercolatedPayload,
   "dag.spec.percolation_deferred": DagSpecPercolationDeferredPayload,
   "dag.spec.percolation_replan": DagSpecPercolationReplanPayload,
+  // §3/§7 NEVER-DISCARD REBASE: the BaseShiftCoordinator handled a base shift by
+  // rebasing the dependent's EXISTING branch in place (same run row) instead of the
+  // old supersede+regenerate. The `rebase_vs_rebuild` instrumentation Wave 3 reads.
+  "integration.rebase": IntegrationRebasePayload,
   // NEVER-STRAND reconciler (the DAG self-heal safety net): a spec stuck OCCUPYING
   // A SLOT with no live run was re-enqueued (dag.spec.unstranded), or — once it
   // exceeded the bounded re-enqueue cap — escalated to the terminal needs_attention

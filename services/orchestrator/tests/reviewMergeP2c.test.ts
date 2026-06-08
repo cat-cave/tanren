@@ -300,6 +300,75 @@ describe("P2c-1 speculative-merge-hold (merge stage)", () => {
     expect(types).toContain("merge.completed");
   });
 
+  it("§7 ONE HANDLER: a `behind` mergeability routes its rebase through the unified baseShiftRebase hook (NOT probe.updateBranch)", async () => {
+    // tanren-owns-the-engine.md §7: the two divergent base-shift handlers collapse into
+    // ONE. When the `baseShiftRebase` hook is wired, a `behind` branch rebases via the
+    // unified `BaseShiftCoordinator.rebaseOnto`, NOT the separate server-side update-branch.
+    const pool = new ReviewMergePool("direct_merge");
+    const events = new FakeEventStore();
+    const probe = recordingMergeProbe(
+      { merged: true, mergeSha: "rebased-sha", conflict: false, status: 200, message: "merged" },
+      {
+        mergeabilityReads: [{ state: "behind", behind: true, baseBranch: "main", headBranch: "tanren/run_1" }],
+        // Wire updateBranch too — to PROVE the unified hook is used INSTEAD (it stays 0).
+        updateBranch: { outcome: "updated", message: "server-side update (must NOT be used)" },
+      },
+    );
+    const baseShiftCalls: Array<{ runId: string; baseBranch: string }> = [];
+
+    const result = await mergeForRun({
+      pool: pool.asPgPool(),
+      eventStore: events,
+      secrets: new FakeSecretStore(),
+      resolveConflict: noopConflictResolver,
+      vcsProvider: vcsProviderOver(unusedHttp()),
+      runId: "run_1",
+      mergeProbe: probe,
+      // THE ONE BASE-SHIFT HANDLER: the behind rebase routes here, not to updateBranch.
+      baseShiftRebase: async (input) => {
+        baseShiftCalls.push({ runId: input.runId, baseBranch: input.baseBranch });
+        return { outcome: "rebased" };
+      },
+      reGateCi: async () => ({ status: "passed" }),
+    });
+
+    expect(result.outcome).toBe("merged");
+    // The UNIFIED hook drove the rebase…
+    expect(baseShiftCalls).toEqual([{ runId: "run_1", baseBranch: "main" }]);
+    // …and the separate server-side update-branch was NEVER called (one path).
+    expect(probe.updateBranchCalls).toBe(0);
+    const types = events.events.map((e) => e.eventType);
+    expect(types).toContain("merge.behind");
+    expect(types).toContain("merge.rebased");
+    expect(types).toContain("merge.completed");
+  });
+
+  it("§7 ONE HANDLER: a `held` outcome from the unified baseShiftRebase is a fail-closed recoverable conflict (no merge)", async () => {
+    const pool = new ReviewMergePool("direct_merge");
+    const events = new FakeEventStore();
+    const probe = recordingMergeProbe(
+      { merged: true, mergeSha: "x", conflict: false, status: 200, message: "merged" },
+      { mergeabilityReads: [{ state: "behind", behind: true, baseBranch: "main", headBranch: "tanren/run_1" }] },
+    );
+
+    const result = await mergeForRun({
+      pool: pool.asPgPool(),
+      eventStore: events,
+      secrets: new FakeSecretStore(),
+      resolveConflict: noopConflictResolver,
+      vcsProvider: vcsProviderOver(unusedHttp()),
+      runId: "run_1",
+      mergeProbe: probe,
+      baseShiftRebase: async () => ({ outcome: "held", message: "base-shift rebase held (fail-closed)" }),
+      reGateCi: async () => ({ status: "passed" }),
+    });
+
+    // Fail-closed: a held rebase is a recoverable conflict, NEVER a merge.
+    expect(result.outcome).toBe("conflict");
+    expect(probe.mergeCalls).toBe(0);
+    expect(events.events.map((e) => e.eventType)).toContain("merge.conflict");
+  });
+
   it("skips retarget when the live PR base is already default_branch and merges normally", async () => {
     const pool = new ReviewMergePool("direct_merge");
     pool.speculativeBase = "tanren/integ/spec_1";

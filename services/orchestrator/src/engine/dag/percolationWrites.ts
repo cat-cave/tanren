@@ -17,6 +17,51 @@ import type { ReviewVerdict } from "../contracts/dagLifecycle.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import { PgEventStore } from "../eventStore.js";
 
+/**
+ * Append `integration.rebase` (tanren-owns-the-engine.md §3/§7 — the never-discard
+ * `rebase_vs_rebuild` instrumentation Wave 3 reads). Org-scoped; routes through the
+ * control plane when a writer is wired (same plane-split as the percolation events).
+ * `sameRunId` is ALWAYS true on this path — the run row survives every base shift.
+ */
+export async function appendIntegrationRebaseEvent(
+  pool: pg.Pool,
+  input: {
+    projectId: string;
+    specId: string;
+    runId: string;
+    branch: string;
+    newBaseSha: string;
+    headSha: string;
+    rebaseConflicted: boolean;
+    decision: "rebased_clean" | "rebased_resolved" | "replanned" | "held";
+  },
+  runStateWriter?: RunStateWriter,
+): Promise<void> {
+  const event = {
+    runId: input.runId,
+    specId: input.specId,
+    projectId: input.projectId,
+    eventType: "integration.rebase" as const,
+    payload: {
+      specId: input.specId,
+      runId: input.runId,
+      sameRunId: true,
+      branch: input.branch,
+      newBaseSha: input.newBaseSha,
+      headSha: input.headSha,
+      rebaseConflicted: input.rebaseConflicted,
+      decision: input.decision,
+    },
+  };
+  const orgId = await resolveProjectOrg(pool, input.projectId);
+  if (orgId === null) return;
+  if (runStateWriter !== undefined) {
+    await runWithJobOrgId(orgId, () => runStateWriter.append(event));
+    return;
+  }
+  await runWithOrgScope(pool, orgId, (client) => new PgEventStore(client).append(event));
+}
+
 /** Resolve the project's org id (system-scoped bootstrap, the same hop the walker uses). */
 export async function resolveProjectOrg(pool: pg.Pool, projectId: string): Promise<string | null> {
   return runWithSystemScope(pool, async (client) => {
@@ -151,6 +196,67 @@ export async function recordVerifiedAncestorSha(
         WHERE run_id = $1`,
       [input.runId, input.ancestorSpecId, JSON.stringify(entry)],
     );
+  });
+}
+
+/**
+ * Stamp the FULL in-flight percolation marker on the dependent's EXISTING run (the
+ * never-discard keep-run-row write, tanren-owns-the-engine.md §3): the
+ * (ancestorSpecId, toSha, reviewVerdict?, reexecRunId) the SETTLE phase resolves
+ * against. For a never-discard rebase the `reexecRunId` IS the dependent's own run id
+ * (the SAME row re-gates — no new run), which is what makes the existing settle pass
+ * advance `verified_ancestor_shas` against this run. Org-scoped; replaces the marker
+ * wholesale (the prior marker, if any, settled before a new shift could mark again).
+ *
+ * Plane-split: the control-plane writer has no full-marker method yet (only the
+ * reexec-id stamp + clear), so this stamps via a direct org-scoped UPDATE. The data
+ * plane retains the run-column grant the old reexec-id stamp used. A control-plane
+ * full-marker route is a Wave-3 follow-up (the live-jj base-shift path it feeds is
+ * itself Wave-3-plumbed).
+ */
+export async function recordPercolationPending(
+  pool: pg.Pool,
+  input: {
+    projectId: string;
+    runId: string;
+    ancestorSpecId: string;
+    toSha: string;
+    reexecRunId: string;
+    reviewVerdict?: ReviewVerdict;
+  },
+): Promise<void> {
+  const marker: PercolationPending = {
+    ancestorSpecId: input.ancestorSpecId,
+    toSha: input.toSha,
+    reexecRunId: input.reexecRunId,
+    ...(input.reviewVerdict !== undefined && { reviewVerdict: input.reviewVerdict }),
+  };
+  await orgScopedWrite(pool, input.projectId, async (client) => {
+    await client.query("UPDATE runs SET percolation_pending = $2::jsonb WHERE run_id = $1", [
+      input.runId,
+      JSON.stringify(marker),
+    ]);
+  });
+}
+
+/** Re-point an EXISTING run's dynamic base onto the shifted base (NULL ⇒ non-speculative). */
+export async function repointRunSpeculativeBase(
+  pool: pg.Pool,
+  input: { projectId: string; runId: string; speculativeBase: string | null },
+  runStateWriter?: RunStateWriter,
+): Promise<void> {
+  if (runStateWriter !== undefined) {
+    const orgId = await resolveProjectOrg(pool, input.projectId);
+    if (orgId === null) throw new Error(`project ${input.projectId} has no org for the base-shift re-point`);
+    await runStateWriter.setRunSpeculativeBase({
+      runId: input.runId,
+      orgId,
+      speculativeBase: input.speculativeBase,
+    });
+    return;
+  }
+  await orgScopedWrite(pool, input.projectId, async (client) => {
+    await client.query("UPDATE runs SET speculative_base = $2 WHERE run_id = $1", [input.runId, input.speculativeBase]);
   });
 }
 

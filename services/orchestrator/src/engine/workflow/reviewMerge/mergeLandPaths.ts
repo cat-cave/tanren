@@ -12,9 +12,37 @@
 
 import { runAuthorityLand } from "../../merge/mergeAuthorityGate.js";
 import type { AuditEnvelope } from "../../events/schemas/audit.js";
+import type { PullRequestMergeability } from "../../contracts/vcsProvider.js";
 import type { MergePullRequestResult } from "../../providers/githubReviewMerge.js";
 import type { MergeAuthorityBundle, MergeForRunResult, MergeOutcomeKind } from "./mergeDispatchTypes.js";
 import type { DispatcherDeps } from "./mergeDispatcher.js";
+
+/**
+ * THE ONE BASE-SHIFT HANDLER (tanren-owns-the-engine.md §7): rebase a `behind` branch
+ * onto its base through the unified `baseShiftRebase` hook (`BaseShiftCoordinator.rebaseOnto`
+ * — the SAME path change-percolation uses; the two divergent base-shift handlers collapse
+ * into ONE). Absent ⇒ the pre-fold server-side `probe.updateBranch()` (retained through
+ * S2 so a not-yet-wired caller still rebases — never a silent skip), with its `updated`
+ * mapped onto the unified `rebased`. Extracted as a free function to keep the dispatcher
+ * under the 500-line cap.
+ */
+export async function rebaseBehindBranch(
+  deps: DispatcherDeps,
+  mergeability: PullRequestMergeability,
+): Promise<{ outcome: "rebased" | "up_to_date" | "conflict" | "held"; message?: string }> {
+  const { input, context, probe } = deps;
+  if (input.baseShiftRebase !== undefined) {
+    const head = mergeability.headBranch;
+    return input.baseShiftRebase({
+      runId: context.runId,
+      baseBranch: mergeability.baseBranch || context.baseBranch,
+      ...(head !== "" && head !== undefined && { headBranch: head }),
+    });
+  }
+  const updated = await probe.updateBranch();
+  const outcome = updated.outcome === "updated" ? "rebased" : updated.outcome;
+  return { outcome, ...(updated.message !== undefined && { message: updated.message }) };
+}
 
 /**
  * The shared dispatcher operations the land paths reuse (the event base, the PR
