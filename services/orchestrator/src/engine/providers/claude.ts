@@ -45,6 +45,10 @@ export interface ClaudeEventTelemetry {
   // The OpenRouter generation id, when a managed (OpenRouter-routed) run surfaced
   // one. Folded onto tokenUsage so the recorder can query the REAL `usage.cost`.
   openRouterGenerationId?: string;
+  // Count of NON-empty `stream-json` lines that failed to parse as JSON. Claude's
+  // `stream-json` is one JSON object per line, so a positive count is contract
+  // drift (silent-fallback hardening: a malformed line is no longer silently skipped).
+  malformedLineCount?: number;
 }
 
 // Raised by the Answerer path when Claude authenticated but the account's usage
@@ -258,9 +262,14 @@ export function parseClaudeStreamTelemetry(stdout: string): ClaudeEventTelemetry
   let tokenUsage: TokenUsage | undefined;
   let usageLimit: UsageLimitSignal | undefined;
   let openRouterGenerationId: string | undefined;
+  // `stream-json` is one JSON object per line — a non-empty line that fails to
+  // parse is contract drift, not a benign blank. Count it (silent-fallback
+  // hardening) so a malformed line surfaces instead of being silently skipped.
+  let malformedLineCount = 0;
   for (const line of lines) {
     const parsed = parseJsonObject(line);
     if (parsed === undefined) {
+      malformedLineCount += 1;
       continue;
     }
     tokenUsage = findTokenUsage(parsed) ?? tokenUsage;
@@ -272,6 +281,7 @@ export function parseClaudeStreamTelemetry(stdout: string): ClaudeEventTelemetry
     tokenUsage: foldGenerationId(tokenUsage, openRouterGenerationId),
     usageLimit,
     openRouterGenerationId,
+    malformedLineCount,
   };
 }
 

@@ -231,6 +231,14 @@ describe("Claude writer adapter", () => {
       totalTokens: 155,
     });
   });
+
+  it("COUNTS a malformed non-empty stream-json line (loud), and reports zero for an all-valid stream", () => {
+    // `stream-json` is one JSON object per line — a non-empty line that fails to
+    // parse is contract drift, surfaced via malformedLineCount (not silently skipped).
+    const malformed = parseClaudeStreamTelemetry('{"type":"x"}\noops not json\n');
+    expect(malformed.malformedLineCount).toBe(1);
+    expect(parseClaudeStreamTelemetry('{"type":"x"}\n{"type":"y"}\n').malformedLineCount).toBe(0);
+  });
 });
 
 function ok(stdout: string): CommandResult {

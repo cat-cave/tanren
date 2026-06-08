@@ -33,6 +33,7 @@ import type { VcsProvider } from "../contracts/vcsProvider.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
 import { buildNativeQueueEnqueuer } from "../merge/coordinatorBuild.js";
 import { finalizeRunRecoverable } from "./runFinalize.js";
+import { startHeartbeat, type HeartbeatMiss } from "./runHeartbeat.js";
 import { systemActor } from "../state/actor.js";
 import { resolveAppEnvForScope } from "../workflow/resolveAppEnv.js";
 import type { AppEnvScope } from "../repositories/appEnvironment.js";
@@ -116,6 +117,12 @@ export interface RunExecutorDeps {
   // while the workflow runs.
   leaseMs?: number;
   heartbeatIntervalMs?: number;
+  // Observability seam for heartbeat health (silent-fallback hardening, finding 9):
+  // invoked on EVERY heartbeat miss with the running consecutive-miss count, and
+  // once `atRisk` flips true when consecutive misses have consumed the lease window
+  // (the reaper may now requeue this still-running job → duplicate execution). The
+  // default sink logs loudly; tests inject to assert the loud accounting.
+  onHeartbeatMiss?: (miss: HeartbeatMiss) => void;
   // Test seam: defaults to the real planner-loop workflow. Tests inject a
   // wrapper that calls the real workflow with fake adapters / usage probe so
   // the dequeue→execute seam is proven without real Codex/SSH.
@@ -174,7 +181,13 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
   // renew the lease on an interval so a healthy worker holds its claim
   // while the (potentially long) workflow runs. The reaper only recovers a job
   // whose lease has lapsed — i.e. a crashed worker that stopped heartbeating.
-  const stopHeartbeat = startHeartbeat(deps, job.id, leaseMs);
+  const stopHeartbeat = startHeartbeat({
+    heartbeat: (jobId, lease) => deps.jobQueue.heartbeat(jobId, lease),
+    jobId: job.id,
+    leaseMs,
+    intervalMs: deps.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS,
+    ...(deps.onHeartbeatMiss !== undefined && { onMiss: deps.onHeartbeatMiss }),
+  });
   // RLS: the catch-path recoverable finalize must org-scope its UPDATE runs, or
   // the enforced `tanren_app` policy denies the unscoped write and the run sticks
   // `queued` forever. The owning run's org is KNOWN from the claim itself — the
@@ -388,49 +401,6 @@ export class JobOrgContextLostError extends Error {
     super(`run ${runId} not reachable under org context ${orgId}`);
     this.name = "JobOrgContextLostError";
   }
-}
-
-/**
- * Start a periodic lease-renewal loop for a claimed job. Returns a stopper that
- * cancels the loop and resolves once it has stopped. The interval defaults to a
- * fraction of the lease window so a single slow/missed beat does not lapse the
- * lease. Heartbeat failures are swallowed — a transient DB blip should not kill
- * the job; if the worker has truly crashed the lease lapses and the reaper acts.
- */
-function startHeartbeat(deps: RunExecutorDeps, jobId: string, leaseMs: number): () => Promise<void> {
-  const intervalMs = Math.max(1, deps.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS);
-  const control = {
-    running: true,
-    inFlight: Promise.resolve(),
-    timer: undefined as ReturnType<typeof setTimeout> | undefined,
-  };
-
-  const schedule = (): void => {
-    if (!control.running) {
-      return;
-    }
-    control.timer = setTimeout(() => {
-      // Swallow heartbeat failures: a transient DB blip should not kill the
-      // job; a truly crashed worker stops beating and the reaper recovers it.
-      control.inFlight = deps.jobQueue
-        .heartbeat(jobId, leaseMs)
-        .catch(() => {})
-        .then(schedule);
-    }, intervalMs);
-    if (typeof control.timer.unref === "function") {
-      control.timer.unref();
-    }
-  };
-
-  schedule();
-
-  return async () => {
-    control.running = false;
-    if (control.timer !== undefined) {
-      clearTimeout(control.timer);
-    }
-    await control.inFlight;
-  };
 }
 
 /**

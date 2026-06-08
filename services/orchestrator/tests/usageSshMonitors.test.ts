@@ -81,11 +81,20 @@ describe("command builders", () => {
   });
 });
 
+// A monitor/accountant read is DISCRIMINATED: `{ ok }` (parsed, or null for a
+// clean-but-empty read) vs `{ failed }` (LOUD — timeout / SSH / nonzero / malformed).
+function okRead<T>(read: { ok: T } | { failed: unknown }): T {
+  if (!("ok" in read)) {
+    throw new Error(`expected an ok read, got ${JSON.stringify(read)}`);
+  }
+  return read.ok;
+}
+
 describe("SshCodexbarUsageMonitor", () => {
   it("runs codexbar over SSH and parses the window state", async () => {
     const ssh = new ScriptedSsh(ok(codexbarJson));
     const monitor = new SshCodexbarUsageMonitor(ssh);
-    const usage = await monitor.readWindowState({
+    const read = await monitor.readWindowState({
       provider: "codex",
       codexHome,
       target,
@@ -93,26 +102,49 @@ describe("SshCodexbarUsageMonitor", () => {
     });
     expect(ssh.commands[0]?.command).toContain("codexbar usage --provider 'codex'");
     expect(ssh.commands[0]?.command).toContain(`CODEX_HOME='${codexHome}'`);
+    const usage = okRead(read);
     expect(usage?.windows.map((window) => window.slot)).toEqual(["primary", "secondary"]);
     expect(usage?.creditsRemaining).toBe(0);
   });
 
-  it("returns null on a non-zero exit and logs a note (never throws)", async () => {
+  it("returns a LOUD `{ failed }` read on a non-zero exit + a note (never throws)", async () => {
     const notes: string[] = [];
     const ssh = new ScriptedSsh({ exitCode: 1, stdout: "", stderr: "boom", timedOut: false });
     const monitor = new SshCodexbarUsageMonitor(ssh, (message) => notes.push(message));
-    await expect(
-      monitor.readWindowState({ provider: "codex", codexHome, target, timeoutMs: 5000 }),
-    ).resolves.toBeNull();
-    expect(notes[0]).toContain("codexbar exited 1");
+    const read = await monitor.readWindowState({ provider: "codex", codexHome, target, timeoutMs: 5000 });
+    expect(read).toEqual({
+      failed: { tool: "codexbar", target: "codex", reason: "nonzero_exit", exitCode: 1, detail: "boom" },
+    });
+    expect(notes[0]).toContain("codexbar read failed");
+    expect(notes[0]).toContain("usage.read_failed");
   });
 
-  it("returns null on timeout", async () => {
+  it("returns a LOUD `{ failed }` read on timeout", async () => {
     const ssh = new ScriptedSsh({ exitCode: null, stdout: "", stderr: "", timedOut: true });
     const monitor = new SshCodexbarUsageMonitor(ssh, () => {});
-    await expect(
-      monitor.readWindowState({ provider: "codex", codexHome, target, timeoutMs: 5000 }),
-    ).resolves.toBeNull();
+    const read = await monitor.readWindowState({ provider: "codex", codexHome, target, timeoutMs: 5000 });
+    expect(read).toEqual({
+      failed: { tool: "codexbar", target: "codex", reason: "timeout", exitCode: null, detail: "" },
+    });
+  });
+
+  it("on a CLEAN exit with MALFORMED non-empty output, fails LOUD (distinct from empty)", async () => {
+    const notes: string[] = [];
+    const ssh = new ScriptedSsh(ok("not json at all"));
+    const monitor = new SshCodexbarUsageMonitor(ssh, (m) => notes.push(m));
+    const read = await monitor.readWindowState({ provider: "codex", codexHome, target, timeoutMs: 5000 });
+    expect(read).toMatchObject({ failed: { reason: "malformed_output", exitCode: 0 } });
+    expect(notes[0]).toContain("usage.read_failed");
+  });
+
+  it("on a clean exit with the EMPTY `[]` envelope, is a quiet `{ ok: null }` (legitimate-empty)", async () => {
+    const notes: string[] = [];
+    const ssh = new ScriptedSsh(ok("[]"));
+    const monitor = new SshCodexbarUsageMonitor(ssh, (m) => notes.push(m));
+    const read = await monitor.readWindowState({ provider: "codex", codexHome, target, timeoutMs: 5000 });
+    expect(read).toEqual({ ok: null });
+    // legitimate-empty stays QUIET — no read-failed note.
+    expect(notes).toEqual([]);
   });
 });
 
@@ -120,19 +152,20 @@ describe("SshCcusageAccountant", () => {
   it("runs ccusage over SSH and parses the accounting", async () => {
     const ssh = new ScriptedSsh(ok(ccusageJson));
     const accountant = new SshCcusageAccountant(ssh);
-    const accounting = await accountant.readAccounting({
+    const read = await accountant.readAccounting({
       cli: "codex",
       codexHome,
       target,
       timeoutMs: 5000,
     });
     expect(ssh.commands[0]?.command).toContain("ccusage 'codex' --json");
+    const accounting = okRead(read);
     expect(accounting?.cli).toBe("codex");
     expect(accounting?.costUsd).toBeNull();
     expect(accounting?.totals.totalTokens).toBe(13);
   });
 
-  it("returns null on an ssh failure (never throws)", async () => {
+  it("returns a LOUD `{ failed }` read on an ssh failure (never throws)", async () => {
     const ssh = new ScriptedSsh({
       exitCode: 0,
       stdout: "",
@@ -141,6 +174,27 @@ describe("SshCcusageAccountant", () => {
       failure: { kind: "ssh_failed", target: "runner", message: "down" },
     });
     const accountant = new SshCcusageAccountant(ssh, () => {});
-    await expect(accountant.readAccounting({ cli: "codex", codexHome, target, timeoutMs: 5000 })).resolves.toBeNull();
+    const read = await accountant.readAccounting({ cli: "codex", codexHome, target, timeoutMs: 5000 });
+    expect(read).toEqual({
+      failed: { tool: "ccusage", target: "codex", reason: "ssh_failure", exitCode: 0, detail: "down" },
+    });
+  });
+
+  it("on a CLEAN exit with MALFORMED non-empty ccusage output, fails LOUD (not zero usage)", async () => {
+    const notes: string[] = [];
+    const ssh = new ScriptedSsh(ok(JSON.stringify({ unexpected: true })));
+    const accountant = new SshCcusageAccountant(ssh, (m) => notes.push(m));
+    const read = await accountant.readAccounting({ cli: "codex", codexHome, target, timeoutMs: 5000 });
+    expect(read).toMatchObject({ failed: { reason: "malformed_output" } });
+    expect(notes[0]).toContain("usage.read_failed");
+  });
+
+  it("on a clean exit with EMPTY ccusage stdout, is a quiet `{ ok: null }` (legitimate-empty)", async () => {
+    const notes: string[] = [];
+    const ssh = new ScriptedSsh(ok("   "));
+    const accountant = new SshCcusageAccountant(ssh, (m) => notes.push(m));
+    const read = await accountant.readAccounting({ cli: "codex", codexHome, target, timeoutMs: 5000 });
+    expect(read).toEqual({ ok: null });
+    expect(notes).toEqual([]);
   });
 });

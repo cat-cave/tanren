@@ -55,9 +55,17 @@ const realCcusageOutput = JSON.stringify({
   },
 });
 
+// Unwrap the DISCRIMINATED `{ ok }` read; throw if the parser flagged a `{ failed }`.
+function okAccounting(result: ReturnType<typeof parseCcusageAccounting>) {
+  if ("failed" in result) {
+    throw new Error(`expected an ok parse, got failed: ${result.failed.detail}`);
+  }
+  return result.ok;
+}
+
 describe("parseCcusageAccounting", () => {
   it("parses the real daily/totals shape and treats subscription costUSD 0 as null", () => {
-    const accounting = parseCcusageAccounting(realCcusageOutput, "codex");
+    const accounting = okAccounting(parseCcusageAccounting(realCcusageOutput, "codex"));
     expect(accounting).not.toBeNull();
     expect(accounting?.cli).toBe("codex");
     expect(accounting?.costUsd).toBeNull();
@@ -84,20 +92,22 @@ describe("parseCcusageAccounting", () => {
     ]);
   });
 
-  it("yields zero totals and null cost for an empty ccusage report", () => {
-    const accounting = parseCcusageAccounting(
-      JSON.stringify({
-        daily: [],
-        totals: {
-          inputTokens: 0,
-          outputTokens: 0,
-          cachedInputTokens: 0,
-          reasoningOutputTokens: 0,
-          totalTokens: 0,
-          costUSD: 0,
-        },
-      }),
-      "codex",
+  it("yields zero totals and null cost for an empty ccusage report (legitimate `{ ok }`)", () => {
+    const accounting = okAccounting(
+      parseCcusageAccounting(
+        JSON.stringify({
+          daily: [],
+          totals: {
+            inputTokens: 0,
+            outputTokens: 0,
+            cachedInputTokens: 0,
+            reasoningOutputTokens: 0,
+            totalTokens: 0,
+            costUSD: 0,
+          },
+        }),
+        "codex",
+      ),
     );
     expect(accounting?.costUsd).toBeNull();
     expect(accounting?.totals.totalTokens).toBe(0);
@@ -105,25 +115,33 @@ describe("parseCcusageAccounting", () => {
   });
 
   it("surfaces a positive ccusage costUSD as a real cost figure", () => {
-    const accounting = parseCcusageAccounting(
-      JSON.stringify({
-        daily: [],
-        totals: {
-          inputTokens: 100,
-          outputTokens: 20,
-          cachedInputTokens: 0,
-          reasoningOutputTokens: 0,
-          totalTokens: 120,
-          costUSD: 1.234,
-        },
-      }),
-      "codex",
+    const accounting = okAccounting(
+      parseCcusageAccounting(
+        JSON.stringify({
+          daily: [],
+          totals: {
+            inputTokens: 100,
+            outputTokens: 20,
+            cachedInputTokens: 0,
+            reasoningOutputTokens: 0,
+            totalTokens: 120,
+            costUSD: 1.234,
+          },
+        }),
+        "codex",
+      ),
     );
     expect(accounting?.costUsd).toBe(1.234);
   });
 
-  it("returns null for non-JSON / unrecognized shape", () => {
-    expect(parseCcusageAccounting("not json", "codex")).toBeNull();
-    expect(parseCcusageAccounting(JSON.stringify({ unexpected: true }), "codex")).toBeNull();
+  it("whitespace-only stdout is a quiet `{ ok: null }` (the tool emitted nothing)", () => {
+    expect(parseCcusageAccounting("   \n ", "codex")).toEqual({ ok: null });
+  });
+
+  it("MALFORMED non-empty output is a LOUD `{ failed }` with a stdout tail (NOT zero usage)", () => {
+    expect(parseCcusageAccounting("not json", "codex")).toMatchObject({ failed: { detail: "not json" } });
+    // A parseable object that is NOT a ccusage report (neither daily nor totals)
+    // is contract drift → loud, never silently a zero-token accounting.
+    expect(parseCcusageAccounting(JSON.stringify({ unexpected: true }), "codex")).toHaveProperty("failed");
   });
 });

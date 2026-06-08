@@ -30,7 +30,10 @@ import {
   CostCeilingUnreachablePayload,
   CostCreditRateUnknownPayload,
   CostFailedPayload,
+  CostNotionalUnpricedPayload,
   CostOverageUnobservablePayload,
+  CostProviderCaptureFailedPayload,
+  CostReconcileFailedPayload,
   CostResolvedPayload,
   CostUnattributedPayload,
   CredentialConfiguredPayload,
@@ -44,6 +47,8 @@ import {
   RunnerFailedPayload,
   RunnerReleasedPayload,
   UsageAccountingObservedPayload,
+  UsageReadFailedPayload,
+  UsageTokenAccountingFailedPayload,
   UsageWindowObservedPayload,
   UsageWindowPressurePayload,
   WorkspaceFailedPayload,
@@ -234,17 +239,22 @@ export const EventRegistry = {
   "cost.failed": CostFailedPayload,
   "cost.unattributed": CostUnattributedPayload,
   "cost.ceiling_unreachable": CostCeilingUnreachablePayload,
-  // cost PR-C: a real credit drawdown with no configured per-credential rate
-  // (NULL real spend, loud) + a subscription whose overage is not locally
-  // observable (Claude; NULL real spend, loud honest gap).
+  // cost PR-C: credit-rate-unknown + overage-unobservable (NULL real spend, loud).
   "cost.credit_rate_unknown": CostCreditRateUnknownPayload,
   "cost.overage_unobservable": CostOverageUnobservablePayload,
+  // silent-fallback hardening (loud discriminated cost failures).
+  "cost.provider_capture_failed": CostProviderCaptureFailedPayload,
+  "cost.notional_unpriced": CostNotionalUnpricedPayload,
+  "cost.reconcile_failed": CostReconcileFailedPayload,
 
-  // Usage monitoring: codexbar live subscription windows
-  // + ccusage token-consumption accounting, captured runner-side over SSH.
+  // Usage monitoring: codexbar windows + ccusage accounting, runner-side over SSH.
   "usage.window.observed": UsageWindowObservedPayload,
   "usage.window.pressure": UsageWindowPressurePayload,
   "usage.accounting.observed": UsageAccountingObservedPayload,
+  // silent-fallback hardening: a usage READ failed (loud, never empty), and a real
+  // CLI call recorded its cost with no token telemetry (mandatory accounting, loud).
+  "usage.read_failed": UsageReadFailedPayload,
+  "usage.token_accounting_failed": UsageTokenAccountingFailedPayload,
 
   // GitHub integration
   "github.branch.pushed": GithubBranchPushedPayload,

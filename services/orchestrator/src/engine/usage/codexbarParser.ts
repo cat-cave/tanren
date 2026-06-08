@@ -5,11 +5,35 @@ import type { SubscriptionWindow, WindowUsage } from "./contracts.js";
 // entry's `usage` carries up to three concurrent windows (primary/secondary/
 // tertiary; any may be null) reported as percent-of-window consumed.
 //
-// Tolerant by contract: an `[{error:...}]` envelope, an empty array, or any
-// shape we cannot recognize returns null ("no data" — never throws). We pick
-// the FIRST entry whose provider matches, else the first entry, so a runner
-// that surfaces a single provider still parses.
+// LEGITIMATE-EMPTY by contract: an `[{error:...}]` envelope or an empty array is
+// "the tool ran clean but has no window data" → null. We pick the FIRST entry
+// whose provider matches, else the first entry, so a runner that surfaces a
+// single provider still parses.
 const WINDOW_SLOTS = ["primary", "secondary", "tertiary"] as const;
+
+// A DISCRIMINATED codexbar parse. `{ ok: null }` is a clean-but-empty read (an
+// empty array / `[{error}]` envelope); `{ ok: <usage> }` is a parsed window;
+// `{ failed }` is malformed NON-empty output (non-JSON / not-an-array) — parser
+// or CLI-contract drift that must be LOUD, never a silent "no window pressure".
+export type CodexbarParseResult = { ok: WindowUsage | null } | { failed: { detail: string } };
+
+export function parseCodexbarUsageResult(stdout: string, provider: string): CodexbarParseResult {
+  if (stdout.trim() === "") {
+    return { ok: null };
+  }
+  const parsed = parseJson(stdout);
+  // codexbar ALWAYS emits a JSON array (possibly empty). Non-JSON or a non-array
+  // is contract drift → loud failure, not "no data".
+  if (parsed === undefined || !Array.isArray(parsed)) {
+    return { failed: { detail: codexbarTail(stdout) } };
+  }
+  return { ok: parseCodexbarUsage(stdout, provider) };
+}
+
+// A secret-free, bounded, whitespace-collapsed stdout tail for the diagnostic.
+function codexbarTail(stdout: string): string {
+  return stdout.slice(-500).replaceAll(/\s+/gu, " ").trim();
+}
 
 export function parseCodexbarUsage(stdout: string, provider: string): WindowUsage | null {
   const parsed = parseJson(stdout);

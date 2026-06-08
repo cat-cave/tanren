@@ -2,10 +2,13 @@ import { describe, expect, it } from "vitest";
 import type { RunnerHandle } from "../src/engine/contracts/allocator.js";
 import {
   SshUsageProbe,
+  type AccountingRead,
   type CcusageAccounting,
   type SubscriptionWindow,
   type UsageAccountant,
   type UsageMonitor,
+  type UsageReadFailure,
+  type WindowRead,
   type WindowUsage,
 } from "../src/engine/usage/index.js";
 
@@ -42,15 +45,30 @@ function windowUsage(windows: SubscriptionWindow[], creditsRemaining: number | n
 
 class FakeMonitor implements UsageMonitor {
   constructor(private readonly result: WindowUsage | null) {}
-  async readWindowState(): Promise<WindowUsage | null> {
-    return this.result;
+  async readWindowState(): Promise<WindowRead> {
+    return { ok: this.result };
+  }
+}
+
+// A monitor that returns a LOUD read failure (timeout / SSH / nonzero / malformed).
+class FailingMonitor implements UsageMonitor {
+  constructor(private readonly failure: UsageReadFailure) {}
+  async readWindowState(): Promise<WindowRead> {
+    return { failed: this.failure };
   }
 }
 
 class FakeAccountant implements UsageAccountant {
   constructor(private readonly result: CcusageAccounting | null) {}
-  async readAccounting(): Promise<CcusageAccounting | null> {
-    return this.result;
+  async readAccounting(): Promise<AccountingRead> {
+    return { ok: this.result };
+  }
+}
+
+class FailingAccountant implements UsageAccountant {
+  constructor(private readonly failure: UsageReadFailure) {}
+  async readAccounting(): Promise<AccountingRead> {
+    return { failed: this.failure };
   }
 }
 
@@ -85,8 +103,25 @@ describe("SshUsageProbe.observeWindow", () => {
     expect(result.pressure).toBeNull();
   });
 
-  it("treats no monitor data as no usage and no pressure (an allowed state)", async () => {
+  it("treats a CLEAN-but-empty monitor read as no usage, no pressure, NO failure", async () => {
     const result = await probe(new FakeMonitor(null), new FakeAccountant(null)).observeWindow();
+    expect(result.usage).toBeNull();
+    expect(result.pressure).toBeNull();
+    // legitimate-empty is QUIET — distinct from a read failure.
+    expect(result.failure).toBeNull();
+  });
+
+  it("surfaces a window READ FAILURE as a loud discriminated failure (NOT empty, NOT pressure)", async () => {
+    const failure: UsageReadFailure = {
+      tool: "codexbar",
+      target: "codex",
+      reason: "timeout",
+      exitCode: null,
+      detail: "timed out",
+    };
+    const result = await probe(new FailingMonitor(failure), new FakeAccountant(null)).observeWindow();
+    // A read failure is NEVER conflated with a legitimately-empty window.
+    expect(result.failure).toEqual(failure);
     expect(result.usage).toBeNull();
     expect(result.pressure).toBeNull();
   });
@@ -107,7 +142,7 @@ describe("SshUsageProbe.observeWindow", () => {
 });
 
 describe("SshUsageProbe.observeAccounting", () => {
-  it("passes ccusage accounting through unchanged", async () => {
+  it("passes ccusage accounting through as a `{ ok }` read", async () => {
     const accounting: CcusageAccounting = {
       cli: "codex",
       totals: {
@@ -122,10 +157,24 @@ describe("SshUsageProbe.observeAccounting", () => {
       perModel: [],
       capturedAt: "2026-05-28T00:00:00Z",
     };
-    expect(await probe(new FakeMonitor(null), new FakeAccountant(accounting)).observeAccounting()).toBe(accounting);
+    const read = await probe(new FakeMonitor(null), new FakeAccountant(accounting)).observeAccounting();
+    expect(read).toEqual({ ok: accounting });
   });
 
-  it("returns null when ccusage has no data", async () => {
-    expect(await probe(new FakeMonitor(null), new FakeAccountant(null)).observeAccounting()).toBeNull();
+  it("returns `{ ok: null }` (legitimately-empty) when ccusage has no data", async () => {
+    const read = await probe(new FakeMonitor(null), new FakeAccountant(null)).observeAccounting();
+    expect(read).toEqual({ ok: null });
+  });
+
+  it("surfaces a ccusage READ FAILURE as a loud `{ failed }` (distinct from empty)", async () => {
+    const failure: UsageReadFailure = {
+      tool: "ccusage",
+      target: "codex",
+      reason: "nonzero_exit",
+      exitCode: 1,
+      detail: "boom",
+    };
+    const read = await probe(new FakeMonitor(null), new FailingAccountant(failure)).observeAccounting();
+    expect(read).toEqual({ failed: failure });
   });
 });

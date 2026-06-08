@@ -124,6 +124,7 @@ export async function runAuditorStage(
   await recordAnswererCost({
     ctx: args.costCtx,
     adapter: args.adapter,
+    role: "auditor",
     taskId: auditorTaskId,
     model: "tanren-auditor",
     runtimeSeconds,

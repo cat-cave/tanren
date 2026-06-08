@@ -277,7 +277,7 @@ describe("Codex writer adapter", () => {
     await expect(secrets.get("credential/codex/dev")).resolves.toMatchObject({ value: authJson });
   });
 
-  it("parses raw Codex JSONL count and optional token usage", () => {
+  it("parses raw Codex JSONL count and optional token usage; COUNTS a malformed non-empty line (loud, not silent)", () => {
     expect(parseCodexJsonlTelemetry('{}\nnot-json\n{"usage":{"promptTokens":7,"completionTokens":4}}\n')).toEqual({
       rawEventCount: 3,
       tokenUsage: {
@@ -288,7 +288,14 @@ describe("Codex writer adapter", () => {
         reasoningOutputTokens: 0,
         totalTokens: 11,
       },
+      // `--json` means every non-empty line is a JSON event — `not-json` is counted.
+      malformedLineCount: 1,
     });
+  });
+
+  it("a fully-valid Codex JSONL stream reports ZERO malformed lines (legitimate, quiet)", () => {
+    const out = parseCodexJsonlTelemetry('{"type":"x"}\n{"usage":{"promptTokens":1,"completionTokens":1}}\n');
+    expect(out.malformedLineCount).toBe(0);
   });
 
   it("de-overlaps Codex inclusive token shape into disjoint buckets", () => {

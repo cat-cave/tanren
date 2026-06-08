@@ -15,6 +15,18 @@ import type pg from "pg";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import { PgEventStore } from "../eventStore.js";
 
+// A finalize-path best-effort write (event append / spec park / occupancy read)
+// is allowed to FAIL without masking the original run-failure path it runs
+// inside — but the failure must NOT be SILENT (silent-fallback hardening, finding
+// 8): a swallowed spec-park can leave a spec stuck `in_flight` with a dead run,
+// invisible to the operator. Each swallow now logs LOUDLY (run/spec id + cause)
+// so a stranded spec is at least surfaced rather than vanishing without trace.
+function logFinalizeSwallow(op: string, ids: { runId: string; specId?: string }, error: unknown): void {
+  const detail = error instanceof Error ? error.message : String(error);
+  const spec = ids.specId !== undefined && ids.specId !== "" ? ` spec ${ids.specId}` : "";
+  console.error(`[run-finalize] ${op} failed for run ${ids.runId}${spec} (best-effort, surfaced): ${detail}`);
+}
+
 /**
  * Force a run that a failed workflow left in a non-recoverable terminal state
  * (`failed`) or still `running` (crash) into a recoverable `halted` outcome so
@@ -54,16 +66,18 @@ export async function finalizeRunRecoverable(
             eventType: "run.failed",
             payload: { status: "halted", message },
           })
-          .catch(() => {}),
+          .catch((error: unknown) => logFinalizeSwallow("run.failed append (remote)", { runId }, error)),
       );
       // NEVER-STRAND (finding #3): a worker-level force-halt (a crash the workflow's
       // own spec-aware finalize never reached) must not leave the spec at `in_flight`
       // with a dead run. Park it at `needs_attention` (guarded so the workflow's
       // earlier park / a merged spec is a no-op) so the slot frees + the operator can
-      // requeue it. Best-effort — never mask the original failure path.
+      // requeue it. Best-effort — but a park FAILURE is LOGGED LOUDLY (a stranded
+      // spec must never vanish silently), not swallowed.
       if (result.specId !== undefined && result.specId !== "") {
         await parkStrandedSpecRemote(pool, writer, orgId, result.specId, result.projectId ?? "", runId, message).catch(
-          () => {},
+          (error: unknown) =>
+            logFinalizeSwallow("stranded-spec park (remote)", { runId, specId: result.specId }, error),
         );
       }
     }
@@ -97,13 +111,16 @@ export async function finalizeRunRecoverable(
           eventType: "run.failed",
           payload: { status: "halted", message },
         })
-        .catch(() => {});
+        .catch((error: unknown) => logFinalizeSwallow("run.failed append (in-process)", { runId }, error));
       // NEVER-STRAND (finding #3): park the spec at `needs_attention` (guarded so a
       // merged spec or the workflow's earlier park is a no-op) so a worker-level
       // force-halt frees the DAG slot + the operator can requeue it — the spec is
-      // never left `in_flight` with a dead run.
+      // never left `in_flight` with a dead run. A park FAILURE is LOGGED LOUDLY (a
+      // stranded spec must never vanish silently), not swallowed.
       if (specId !== "") {
-        await parkStrandedSpecInProcess(client, specId, projectId, runId, message).catch(() => {});
+        await parkStrandedSpecInProcess(client, specId, projectId, runId, message).catch((error: unknown) =>
+          logFinalizeSwallow("stranded-spec park (in-process)", { runId, specId }, error),
+        );
       }
     }
   });
@@ -145,11 +162,17 @@ async function parkStrandedSpecRemote(
 ): Promise<void> {
   // Read the current status FIRST: only an occupying spec (in_flight/review) is a
   // genuine strand. A spec already parked/merged/open means another finalize handled
-  // it — flip nothing, emit nothing (no double-escalate).
+  // it — flip nothing, emit nothing (no double-escalate). FAIL-CLOSED on a read
+  // FAILURE: rather than silently returning false (which would leave a genuinely
+  // stranded spec not parked + invisible), log loudly and ATTEMPT the guarded park —
+  // `setSpecStatus`'s `notFromStatuses` guard makes it a safe no-op on a non-strand.
   const occupying = await runWithOrgScope(pool, orgId, async (client) => {
     const result = await client.query<{ status: string }>("SELECT status FROM specs WHERE spec_id = $1", [specId]);
     return result.rows[0]?.status === "in_flight" || result.rows[0]?.status === "review";
-  }).catch(() => false);
+  }).catch((error: unknown) => {
+    logFinalizeSwallow("occupancy read (remote, fail-closed → attempting guarded park)", { runId, specId }, error);
+    return true;
+  });
   if (!occupying) return;
   await writer.setSpecStatus({
     specId,
@@ -166,7 +189,9 @@ async function parkStrandedSpecRemote(
         eventType: "dag.spec.needs_attention",
         payload: strandNeedsAttentionPayload(runId, specId, message),
       })
-      .catch(() => {}),
+      .catch((error: unknown) =>
+        logFinalizeSwallow("dag.spec.needs_attention append (remote)", { runId, specId }, error),
+      ),
   );
 }
 
@@ -201,7 +226,9 @@ async function parkStrandedSpecInProcess(
       eventType: "dag.spec.needs_attention",
       payload: strandNeedsAttentionPayload(runId, specId, message),
     })
-    .catch(() => {});
+    .catch((error: unknown) =>
+      logFinalizeSwallow("dag.spec.needs_attention append (in-process)", { runId, specId }, error),
+    );
 }
 
 /**

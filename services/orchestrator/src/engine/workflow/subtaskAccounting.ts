@@ -10,7 +10,22 @@
  * costs/creditRate.ts + costs/claudeOverage.ts.
  */
 import { classifyOverageReachability, credentialSlugOf } from "../costs/index.js";
+import { usageReadFailedPayload } from "../usage/index.js";
+import type { UsageReadFailure } from "../usage/index.js";
 import type { AppendEvent, SubtaskLoopInput, SubtaskLoopOutcome } from "./subtaskLoop.js";
+
+// Emit the LOUD `usage.read_failed` event for a discriminated usage-probe read
+// failure (timeout / SSH / nonzero-exit / malformed). This is the seam that keeps
+// a FAILED read from silently becoming a normal zero-usage run: the probe returns
+// `{ failed }` distinct from a clean-but-empty `null`, and only the failure path
+// reaches here. Never throws (the loud event IS the surfacing).
+async function emitUsageReadFailed(
+  appendEvent: AppendEvent,
+  failure: UsageReadFailure,
+  plannerTaskId: string,
+): Promise<void> {
+  await appendEvent("usage.read_failed", usageReadFailedPayload(failure), plannerTaskId);
+}
 
 export interface CreditState {
   atStart: number | null;
@@ -20,8 +35,14 @@ export interface CreditState {
 // the run's credential and escalates PROJECT_BRIEF §4.3 window pressure. It
 // emits usage.window.observed for the live state and, when a window is at/over
 // the pressure threshold, usage.window.pressure plus a window_exhausted
-// outcome so the loop halts BEFORE dispatching a doomed planner call. No probe
-// (or no data) → returns null (proceed normally).
+// outcome so the loop halts BEFORE dispatching a doomed planner call.
+//
+// DISCRIMINATED reads (no-silent-fallbacks): no probe wired → null (proceed); a
+// CLEAN-but-empty read (usage null, no failure) → null (proceed, an allowed
+// state); a FAILED read → emit the loud `usage.read_failed` and proceed WITHOUT
+// inventing window pressure — the failure is surfaced, never conflated with an
+// empty window. (A read failure does not BLOCK the planner — window pressure is
+// the only escalation here — but it is no longer SILENT.)
 export async function checkWindowPreflight(
   input: SubtaskLoopInput,
   appendEvent: AppendEvent,
@@ -32,7 +53,12 @@ export async function checkWindowPreflight(
   if (input.usageProbe === undefined) {
     return null;
   }
-  const { usage, pressure } = await input.usageProbe.observeWindow();
+  const { usage, pressure, failure } = await input.usageProbe.observeWindow();
+  if (failure !== null) {
+    // A FAILED read is LOUD, not a silent "no window pressure" — surface it.
+    await emitUsageReadFailed(appendEvent, failure, plannerTaskId);
+    return null;
+  }
   // Capture the credit balance at the first observation that reports one; the
   // run-end drawdown against this baseline is the run's marginal dollar cost.
   if (creditState.atStart === null && usage !== null && usage.creditsRemaining !== null) {
@@ -101,7 +127,14 @@ export async function observeRunAccounting(
   if (input.usageProbe === undefined) {
     return;
   }
-  const accounting = await input.usageProbe.observeAccounting();
+  const accountingRead = await input.usageProbe.observeAccounting();
+  // DISCRIMINATED: a FAILED ccusage read is LOUD — emit usage.read_failed so the
+  // run's end-of-run reconcile gap is visible, NEVER silently a zero-cost reconcile.
+  if ("failed" in accountingRead) {
+    await emitUsageReadFailed(appendEvent, accountingRead.failed, plannerTaskId);
+  }
+  // A clean read is `{ ok: <accounting> | null }`; null is legitimate-empty (quiet).
+  const accounting = "failed" in accountingRead ? null : accountingRead.ok;
   if (accounting !== null) {
     await appendEvent(
       "usage.accounting.observed",
@@ -203,7 +236,12 @@ async function readEndingCreditDrawdown(
   if (input.usageProbe === undefined || creditState.atStart === null) {
     return null;
   }
-  const { usage } = await input.usageProbe.observeWindow();
+  const { usage, failure } = await input.usageProbe.observeWindow();
+  if (failure !== null) {
+    // A FAILED ending-window read is LOUD — the drawdown is unmeasurable, not $0.
+    await emitUsageReadFailed(appendEvent, failure, plannerTaskId);
+    return null;
+  }
   if (usage === null) {
     return null;
   }

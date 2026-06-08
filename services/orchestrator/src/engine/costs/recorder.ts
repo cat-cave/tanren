@@ -238,6 +238,33 @@ export class CostRecorder {
         },
       });
     }
+    // NOTIONAL-UNPRICED (finding 6): a REAL, token-bearing call whose MODEL is not
+    // in the maintained price source records notional_cost_usd=NULL. Notional is
+    // the comparable, forecastable figure for EVERY billing mode; a model-id drift
+    // silently dropping it must be LOUD (not conflated with a legitimately-empty
+    // zero-token answerer row, nor an unattributed misconfig already covered above).
+    if (
+      notionalCostUsd === null &&
+      tokens.totalTokens > 0 &&
+      context.model !== "" &&
+      source.billingMode !== "unattributed"
+    ) {
+      await this.eventStore.append({
+        runId: context.runId,
+        taskId: context.taskId,
+        specId: context.specId,
+        projectId: context.projectId,
+        eventType: "cost.notional_unpriced",
+        payload: {
+          provider: source.provider,
+          model: context.model,
+          cli: context.cli,
+          taskId: context.taskId,
+          reason:
+            "the call's model is not in the maintained notional price source; notional list-value recorded as NULL — surfaced loudly so the price-source gap is visible",
+        },
+      });
+    }
     return {
       billingMode: source.billingMode,
       costBasis: source.costBasis,
@@ -340,8 +367,18 @@ export class CostRecorder {
       "SELECT id, total_tokens, billing_mode FROM cost_records WHERE run_id = $1",
       [runId],
     );
+    // RECONCILE-FAILED (finding 7): a POSITIVE real total (ccusage / credit drawdown)
+    // that lands on NO row — no cost_records rows for the run, or a zero total-token
+    // denominator — means observed real spend would silently VANISH. Surface it
+    // LOUDLY rather than returning a quiet `{ updated: 0 }`. (apportionRunCost has
+    // already guaranteed totalCostUsd > 0 before reaching here.)
+    if (rows.rows.length === 0) {
+      await this.emitReconcileFailed(client, runId, totalCostUsd, basis, "no_rows");
+      return { updated: 0 };
+    }
     const totalTokens = rows.rows.reduce((sum, row) => sum + Number(row.total_tokens), 0);
     if (totalTokens <= 0) {
+      await this.emitReconcileFailed(client, runId, totalCostUsd, basis, "zero_token_denominator");
       return { updated: 0 };
     }
     let updated = 0;
@@ -389,5 +426,40 @@ export class CostRecorder {
       ]);
     }
     return 1;
+  }
+
+  // Emit the LOUD `cost.reconcile_failed` event for a POSITIVE real total that
+  // could be applied to no cost_records row (finding 7). Reads the run's
+  // project/spec on the SAME client (the append requires a projectId) so the
+  // event lands org-scoped in the reconcile's own transaction. Best-effort on the
+  // lookup: the loud event is the surfacing, never a new failure of its own.
+  private async emitReconcileFailed(
+    client: QueryClient,
+    runId: string,
+    totalCostUsd: number,
+    basis: "ccusage" | "credits",
+    reason: "no_rows" | "zero_token_denominator",
+  ): Promise<void> {
+    const run = await client.query<{ project_id: string; spec_id: string | null }>(
+      "SELECT project_id, spec_id FROM runs WHERE run_id = $1",
+      [runId],
+    );
+    const projectId = run.rows[0]?.project_id ?? "";
+    const specId = run.rows[0]?.spec_id ?? undefined;
+    await this.eventStore.append({
+      runId,
+      ...(specId !== undefined && specId !== null ? { specId } : {}),
+      projectId,
+      eventType: "cost.reconcile_failed",
+      payload: {
+        basis,
+        totalCostUsd,
+        reason,
+        reasonText:
+          reason === "no_rows"
+            ? "a positive real cost total was resolved but the run has no cost_records rows to receive it; observed real spend would otherwise silently vanish"
+            : "a positive real cost total was resolved but the run's cost_records carry zero total tokens, so it cannot be apportioned; observed real spend would otherwise silently vanish",
+      },
+    });
   }
 }

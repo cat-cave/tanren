@@ -99,6 +99,7 @@ export function healthyWindow(): WindowObservation {
       capturedAt: "2026-05-28T00:00:00Z",
     },
     pressure: null,
+    failure: null,
   };
 }
 
@@ -120,24 +121,20 @@ export function exhaustedWindow(): WindowObservation {
       capturedAt: "x",
     },
     pressure: slot,
+    failure: null,
   };
 }
 
 export function accounting(costUsd: number | null): CcusageAccounting {
-  return {
-    cli: "codex",
-    totals: {
-      inputTokens: 8,
-      cachedInputTokens: 0,
-      cacheCreationTokens: 0,
-      outputTokens: 4,
-      reasoningOutputTokens: 0,
-      totalTokens: 12,
-    },
-    costUsd,
-    perModel: [],
-    capturedAt: "2026-05-28T00:00:00Z",
+  const totals = {
+    inputTokens: 8,
+    cachedInputTokens: 0,
+    cacheCreationTokens: 0,
+    outputTokens: 4,
+    reasoningOutputTokens: 0,
+    totalTokens: 12,
   };
+  return { cli: "codex", totals, costUsd, perModel: [], capturedAt: "2026-05-28T00:00:00Z" };
 }
 
 export function fakeProbe(window: WindowObservation, acct: CcusageAccounting | null): UsageProbe {
@@ -146,7 +143,7 @@ export function fakeProbe(window: WindowObservation, acct: CcusageAccounting | n
       return window;
     },
     async observeAccounting() {
-      return acct;
+      return { ok: acct };
     },
   };
 }

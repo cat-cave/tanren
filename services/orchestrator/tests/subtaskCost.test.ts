@@ -1,17 +1,29 @@
 import { describe, expect, it, vi } from "vitest";
 import type { CostRecorder } from "../src/engine/costs/index.js";
+import type { ProviderCostCapture } from "../src/engine/costs/generationCostCapture.js";
 import {
+  buildSubtaskCostContext,
   recordAnswererCost,
   recordWriterCost,
   secondsSince,
   type SubtaskCostContext,
+  type TokenAccountingRole,
 } from "../src/engine/workflow/subtaskCost.js";
+import type { AppendEvent } from "../src/engine/workflow/subtaskLoop.js";
 import {
   emptyTokenUsage,
   type AnswererAdapter,
   type TokenUsage,
   type WriterAdapter,
 } from "../src/engine/providers/types.js";
+
+// Capture loud usage.token_accounting_failed emissions for the assertions below.
+interface AccountingFailure {
+  role: TokenAccountingRole;
+  cli: string;
+  model: string;
+  taskId: string;
+}
 
 // subtaskCost.ts owns the cost-record context every planner/checker/auditor/
 // writer call funnels through. The mutation survivors were that the recorded
@@ -37,9 +49,22 @@ function recordingRecorder(): { recorder: CostRecorder; calls: RecordCall[] } {
   return { recorder, calls };
 }
 
-function ctx(recorder: CostRecorder): SubtaskCostContext {
-  return { recorder, runId: "run_1", specId: "spec_1", projectId: "proj_1" };
+function ctx(recorder: CostRecorder, accountingFailures?: AccountingFailure[]): SubtaskCostContext {
+  return {
+    recorder,
+    runId: "run_1",
+    specId: "spec_1",
+    projectId: "proj_1",
+    ...(accountingFailures !== undefined && {
+      emitTokenAccountingFailed: async (input) => {
+        accountingFailures.push(input);
+      },
+    }),
+  };
 }
+
+// A module-scope capturer (identity-stable) for the threading assertion.
+const sharedCapturer = async (): Promise<ProviderCostCapture> => ({ cost: 1 });
 
 const answererAdapter: AnswererAdapter<unknown> = {
   kind: "answerer",
@@ -65,6 +90,7 @@ describe("recordAnswererCost", () => {
     await recordAnswererCost({
       ctx: ctx(recorder),
       adapter: answererAdapter,
+      role: "planner",
       taskId: "task_planner",
       model: "tanren-planner",
       runtimeSeconds: 4.5,
@@ -86,6 +112,37 @@ describe("recordAnswererCost", () => {
     // Answerer calls have no token breakdown -> the empty (all-zero) usage.
     expect(call.tokens).toEqual(emptyTokenUsage);
     expect(call.rawUsage).toEqual({ role: "planner" });
+  });
+
+  it("LOUD: a REAL answerer call with no token telemetry emits usage.token_accounting_failed", async () => {
+    const { recorder } = recordingRecorder();
+    const failures: AccountingFailure[] = [];
+    await recordAnswererCost({
+      ctx: ctx(recorder, failures),
+      adapter: answererAdapter,
+      role: "auditor",
+      taskId: "task_audit",
+      model: "tanren-auditor",
+      runtimeSeconds: 1,
+      rawUsage: {},
+    });
+    // A real CLI (codex) recorded zero tokens → surfaced loudly, NOT a silent $0 row.
+    expect(failures).toEqual([{ role: "auditor", cli: "codex", model: "tanren-auditor", taskId: "task_audit" }]);
+  });
+
+  it("QUIET: a FAKE-fixture answerer (legitimate zero) does NOT emit token_accounting_failed", async () => {
+    const { recorder } = recordingRecorder();
+    const failures: AccountingFailure[] = [];
+    await recordAnswererCost({
+      ctx: ctx(recorder, failures),
+      adapter: { ...answererAdapter, cli: "fake" },
+      role: "checker",
+      taskId: "task_check",
+      model: "tanren-checker",
+      runtimeSeconds: 1,
+      rawUsage: {},
+    });
+    expect(failures).toEqual([]);
   });
 });
 
@@ -120,10 +177,11 @@ describe("recordWriterCost", () => {
     expect(call.tokens).toBe(tokenUsage);
   });
 
-  it("falls back to the empty token usage when the writer reports none", async () => {
+  it("falls back to the empty token usage AND emits a LOUD token_accounting_failed when the writer reports none", async () => {
     const { recorder, calls } = recordingRecorder();
+    const failures: AccountingFailure[] = [];
     await recordWriterCost({
-      ctx: ctx(recorder),
+      ctx: ctx(recorder, failures),
       adapter: writerAdapter,
       taskId: "task_write",
       runtimeSeconds: 1,
@@ -131,6 +189,8 @@ describe("recordWriterCost", () => {
       rawUsage: {},
     });
     expect(calls[0]!.tokens).toEqual(emptyTokenUsage);
+    // A REAL writer call missing telemetry is surfaced loudly, NOT a silent zero-token row.
+    expect(failures).toEqual([{ role: "writer", cli: "claude", model: "tanren-writer", taskId: "task_write" }]);
   });
 
   it("captures the REAL provider cost for a managed call carrying an OpenRouter generation id", async () => {
@@ -139,31 +199,55 @@ describe("recordWriterCost", () => {
     // cost_usd becomes a metered figure (provider_response) downstream.
     const { recorder, calls } = recordingRecorder();
     const captured: string[] = [];
-    const capturer = async (generationId: string): Promise<number | null> => {
+    const capturer = async (generationId: string): Promise<ProviderCostCapture> => {
       captured.push(generationId);
-      return 0.0321;
+      return { cost: 0.0321 };
     };
     await recordWriterCost({
       ctx: { ...ctx(recorder), captureRealProviderCost: capturer },
       adapter: writerAdapter,
       taskId: "task_write",
       runtimeSeconds: 1,
-      tokenUsage: { ...emptyTokenUsage, openRouterGenerationId: "gen-abc123" },
+      tokenUsage: { ...emptyTokenUsage, inputTokens: 1, totalTokens: 1, openRouterGenerationId: "gen-abc123" },
       rawUsage: {},
     });
     expect(captured).toEqual(["gen-abc123"]);
     expect(calls[0]!.context).toMatchObject({ realProviderCostUsd: 0.0321 });
   });
 
+  it("LOUD: a managed capture FAILURE emits cost.provider_capture_failed and records null cost", async () => {
+    const { recorder, calls } = recordingRecorder();
+    const captureFailures: { generationId: string; detail: string; taskId: string }[] = [];
+    await recordWriterCost({
+      ctx: {
+        ...ctx(recorder),
+        captureRealProviderCost: async (generationId): Promise<ProviderCostCapture> => ({
+          failed: { generationId, detail: "boom 500" },
+        }),
+        emitProviderCaptureFailed: async (input) => {
+          captureFailures.push(input);
+        },
+      },
+      adapter: writerAdapter,
+      taskId: "task_write",
+      runtimeSeconds: 1,
+      tokenUsage: { ...emptyTokenUsage, inputTokens: 1, totalTokens: 1, openRouterGenerationId: "gen-fail" },
+      rawUsage: {},
+    });
+    // Authoritative platform spend could not be captured → surfaced loudly, cost null.
+    expect(captureFailures).toEqual([{ generationId: "gen-fail", detail: "boom 500", taskId: "task_write" }]);
+    expect(calls[0]!.context).toMatchObject({ realProviderCostUsd: null });
+  });
+
   it("does NOT capture (real cost null) when no generation id is present, even with a capturer wired", async () => {
     const { recorder, calls } = recordingRecorder();
-    const capturer = vi.fn<(generationId: string) => Promise<number | null>>(async () => 0.5);
+    const capturer = vi.fn<(generationId: string) => Promise<ProviderCostCapture>>(async () => ({ cost: 0.5 }));
     await recordWriterCost({
       ctx: { ...ctx(recorder), captureRealProviderCost: capturer },
       adapter: writerAdapter,
       taskId: "task_write",
       runtimeSeconds: 1,
-      tokenUsage: emptyTokenUsage,
+      tokenUsage: { ...emptyTokenUsage, inputTokens: 1, totalTokens: 1 },
       rawUsage: {},
     });
     expect(capturer).not.toHaveBeenCalled();
@@ -177,10 +261,39 @@ describe("recordWriterCost", () => {
       adapter: writerAdapter,
       taskId: "task_write",
       runtimeSeconds: 1,
-      tokenUsage: { ...emptyTokenUsage, openRouterGenerationId: "gen-xyz" },
+      tokenUsage: { ...emptyTokenUsage, inputTokens: 1, totalTokens: 1, openRouterGenerationId: "gen-xyz" },
       rawUsage: {},
     });
     expect(calls[0]!.context).toMatchObject({ realProviderCostUsd: null });
+  });
+});
+
+describe("buildSubtaskCostContext", () => {
+  it("wires both loud event sinks over the loop's appendEvent (token_accounting_failed + provider_capture_failed)", async () => {
+    const { recorder } = recordingRecorder();
+    const appended: Array<{ type: string; payload: Record<string, unknown>; taskId?: string }> = [];
+    const appendEvent = (async (type, payload, taskId) => {
+      appended.push({ type, payload: payload as Record<string, unknown>, taskId });
+    }) as AppendEvent;
+    const built = buildSubtaskCostContext(
+      { recorder, runId: "run_1", specId: "spec_1", projectId: "proj_1" },
+      appendEvent,
+    );
+    await built.emitTokenAccountingFailed?.({ role: "writer", cli: "claude", model: "tanren-writer", taskId: "t1" });
+    await built.emitProviderCaptureFailed?.({ generationId: "gen-1", detail: "boom", taskId: "t2" });
+    expect(appended.map((a) => a.type)).toEqual(["usage.token_accounting_failed", "cost.provider_capture_failed"]);
+    expect(appended[0]).toMatchObject({ payload: { role: "writer", cli: "claude" }, taskId: "t1" });
+    expect(appended[1]).toMatchObject({ payload: { generationId: "gen-1", detail: "boom" }, taskId: "t2" });
+  });
+
+  it("threads the managed capturer through when supplied", () => {
+    const { recorder } = recordingRecorder();
+    const appendEvent = (async () => {}) as AppendEvent;
+    const built = buildSubtaskCostContext(
+      { recorder, runId: "r", specId: "s", projectId: "p", captureRealProviderCost: sharedCapturer },
+      appendEvent,
+    );
+    expect(built.captureRealProviderCost).toBe(sharedCapturer);
   });
 });
 

@@ -33,11 +33,11 @@ describe("buildManagedGenerationCostCapturer", () => {
       endpointBaseUrl: "https://openrouter.ai/api/v1",
       httpClient: client,
     });
-    expect(await capture("gen-abc")).toBe(0.0421);
+    expect(await capture("gen-abc")).toEqual({ cost: 0.0421 });
     expect(requests).toEqual(["/generation?id=gen-abc"]);
   });
 
-  it("returns null for an empty generation id (no query)", async () => {
+  it("returns `{ cost: null }` for an empty generation id (no query — honest no-capture)", async () => {
     const { client, requests } = fakeClient({ data: { total_cost: 1 } });
     const capture = await buildManagedGenerationCostCapturer({
       secrets: fakeSecrets("sk-or-fake"),
@@ -45,11 +45,11 @@ describe("buildManagedGenerationCostCapturer", () => {
       endpointBaseUrl: "https://openrouter.ai/api/v1",
       httpClient: client,
     });
-    expect(await capture("")).toBeNull();
+    expect(await capture("")).toEqual({ cost: null });
     expect(requests).toEqual([]);
   });
 
-  it("returns null (best-effort, no throw) when OpenRouter returns a non-200 — a missed capture must not fail the run", async () => {
+  it("LOUD `{ failed }` (no throw) when OpenRouter returns a non-200 — authoritative platform spend must not silently vanish", async () => {
     const { client } = fakeClient({}, 500);
     const capture = await buildManagedGenerationCostCapturer({
       secrets: fakeSecrets("sk-or-fake"),
@@ -57,10 +57,11 @@ describe("buildManagedGenerationCostCapturer", () => {
       endpointBaseUrl: "https://openrouter.ai/api/v1",
       httpClient: client,
     });
-    expect(await capture("gen-xyz")).toBeNull();
+    const result = await capture("gen-xyz");
+    expect(result).toMatchObject({ failed: { generationId: "gen-xyz", detail: expect.stringContaining("500") } });
   });
 
-  it("returns null when total_cost is absent/non-positive (honest no-capture, never a fabricated $0)", async () => {
+  it("returns `{ cost: null }` when total_cost is absent/non-positive (honest no-capture, never a fabricated $0)", async () => {
     const { client } = fakeClient({ data: { total_cost: 0 } });
     const capture = await buildManagedGenerationCostCapturer({
       secrets: fakeSecrets("sk-or-fake"),
@@ -68,7 +69,7 @@ describe("buildManagedGenerationCostCapturer", () => {
       endpointBaseUrl: "https://openrouter.ai/api/v1",
       httpClient: client,
     });
-    expect(await capture("gen-zero")).toBeNull();
+    expect(await capture("gen-zero")).toEqual({ cost: null });
   });
 
   it("LOUD: a missing managed credential ref throws at build time (no silent degrade)", async () => {

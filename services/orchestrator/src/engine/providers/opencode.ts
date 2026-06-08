@@ -49,6 +49,11 @@ export interface OpencodeEventTelemetry {
   // The OpenRouter generation id, when a managed (OpenRouter-routed) run surfaced
   // one. Folded onto tokenUsage so the recorder can query the REAL `usage.cost`.
   openRouterGenerationId?: string;
+  // Count of lines that LOOK like JSON (leading `{`) but failed to parse. opencode's
+  // `--print-logs` interleaves human log text with JSON events, so a plain-text line
+  // is BENIGN (not counted); only a JSON-shaped-but-malformed line is contract drift
+  // (silent-fallback hardening: no longer silently skipped).
+  malformedLineCount?: number;
 }
 
 export function createOpencodeWriter(dependencies: OpencodeWriterDependencies): WriterAdapter {
@@ -162,9 +167,16 @@ export function parseOpencodeStreamTelemetry(stdout: string): OpencodeEventTelem
   let tokenUsage: TokenUsage | undefined;
   let usageLimit: UsageLimitSignal | undefined;
   let openRouterGenerationId: string | undefined;
+  // `--print-logs` interleaves human log text with JSON events. A plain-text line
+  // is BENIGN; only a JSON-shaped line (leading `{`) that fails to parse is contract
+  // drift — count THOSE so a malformed event line is no longer silently skipped.
+  let malformedLineCount = 0;
   for (const line of lines) {
     const parsed = parseJsonObject(line);
     if (parsed === undefined) {
+      if (line.trimStart().startsWith("{")) {
+        malformedLineCount += 1;
+      }
       continue;
     }
     tokenUsage = findTokenUsage(parsed) ?? tokenUsage;
@@ -176,6 +188,7 @@ export function parseOpencodeStreamTelemetry(stdout: string): OpencodeEventTelem
     tokenUsage: foldGenerationId(tokenUsage, openRouterGenerationId),
     usageLimit,
     openRouterGenerationId,
+    malformedLineCount,
   };
 }
 

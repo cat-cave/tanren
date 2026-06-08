@@ -85,6 +85,7 @@ function healthyWindow(): WindowObservation {
       capturedAt: "2026-05-28T00:00:00Z",
     },
     pressure: null,
+    failure: null,
   };
 }
 
@@ -111,7 +112,7 @@ function fakeProbe(): UsageProbe {
       return healthyWindow();
     },
     async observeAccounting() {
-      return accounting();
+      return { ok: accounting() };
     },
   };
 }
