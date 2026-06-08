@@ -41,6 +41,7 @@ import {
   passingCheck,
 } from "./helpers/plannerLoopHelpers.js";
 import {
+  enqueuePlanJob,
   failingGate,
   fakeProbe,
   hardTierGitHub,
@@ -57,12 +58,7 @@ describe("acceptance hard tier (dequeue→execute, all hard paths)", () => {
   it("drives re-plan + auditor rejection + conflict resolution through the worker to a coherent terminal state", async () => {
     const { pool, secrets, run } = await setupSeededRun();
     const jobQueue = new FakeJobQueue();
-    await jobQueue.enqueue({
-      runId: run.runId,
-      taskId: run.plannerTaskId,
-      taskKind: "plan",
-      payload: {},
-    });
+    await enqueuePlanJob(jobQueue, run);
 
     const github = hardTierGitHub();
     const trace: HardTierTrace = {
@@ -116,12 +112,7 @@ describe("acceptance hard tier (dequeue→execute, all hard paths)", () => {
   it("re-plans on the in-loop gate failure and on the auditor rejection (planner re-invoked across passes)", async () => {
     const { pool, secrets, run } = await setupSeededRun();
     const jobQueue = new FakeJobQueue();
-    await jobQueue.enqueue({
-      runId: run.runId,
-      taskId: run.plannerTaskId,
-      taskKind: "plan",
-      payload: {},
-    });
+    await enqueuePlanJob(jobQueue, run);
 
     const github = hardTierGitHub();
     // Capture planner.rerequested events through the real workflow's event seam
@@ -200,12 +191,7 @@ describe("acceptance hard tier (dequeue→execute, all hard paths)", () => {
     // rerun budget is spent. Proves the loops are bounded.
     const { pool, secrets, run } = await setupSeededRun();
     const jobQueue = new FakeJobQueue();
-    await jobQueue.enqueue({
-      runId: run.runId,
-      taskId: run.plannerTaskId,
-      taskKind: "plan",
-      payload: {},
-    });
+    await enqueuePlanJob(jobQueue, run);
 
     const planner = makePlanner([
       buildPlan([{ title: "T1", intent: "never satisfies", behaviorIds: ["B1"] }]),

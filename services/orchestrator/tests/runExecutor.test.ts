@@ -21,20 +21,23 @@ import {
   passingGitHub,
   RecordingAllocator,
   RecordingSsh,
+  SEEDED_ORG_ID,
   setupSeededRun,
 } from "./helpers/workerExec.js";
 import { WorkerPool } from "./helpers/workerPool.js";
 
 const ORG = "org_worker_test";
 
-async function enqueuePlanJob(jobQueue: FakeJobQueue, run: { runId: string; plannerTaskId: string }, orgId?: string) {
-  await jobQueue.enqueue({
-    runId: run.runId,
-    taskId: run.plannerTaskId,
-    taskKind: "plan",
-    payload: {},
-    ...(orgId === undefined ? {} : { orgId }),
-  });
+// A plan run ALWAYS carries an org (the worker fails closed on a null-org plan job),
+// so the enqueue defaults to the seeded run's org (which `setupSeededRun` makes the
+// pool report). A test exercising the fail-closed guard enqueues without an org
+// directly (not via this helper).
+async function enqueuePlanJob(
+  jobQueue: FakeJobQueue,
+  run: { runId: string; plannerTaskId: string },
+  orgId: string = SEEDED_ORG_ID,
+) {
+  await jobQueue.enqueue({ runId: run.runId, taskId: run.plannerTaskId, taskKind: "plan", payload: {}, orgId });
 }
 
 describe("run worker — org-scoped execution (runExecutor RLS seam)", () => {
@@ -52,16 +55,37 @@ describe("run worker — org-scoped execution (runExecutor RLS seam)", () => {
     expect(pool.runStatus).toEqual({ status: "completed", outcome: "ok" });
   });
 
-  it("runs a legacy/unscoped job (org_id NULL) on the bare-pool path", async () => {
+  it("FAILS LOUD (fail-closed) when a claimed plan job carries no org_id — never BYPASSRLS", async () => {
+    // Every plan run is a tenant run: `runs.org_id` is NOT NULL and a plan job's
+    // org_id is stamped from the run at enqueue, so a claimed plan job ALWAYS carries
+    // a concrete org. A null org is therefore a wiring bug — admitting it would load
+    // the run's context + run the workflow under the BYPASSRLS system pool, silently
+    // executing a tenant's work with RLS disabled. The guard rejects it BEFORE any
+    // context load / workflow, so the run is never touched.
     const { pool, secrets, run } = await setupSeededRun();
-    // No forced org → org_id NULL, so every `orgId !== null` branch is skipped.
     const jobQueue = new FakeJobQueue();
-    await enqueuePlanJob(jobQueue, run);
+    // Enqueue WITHOUT an org_id (bypassing the org-defaulting helper) → a null-org
+    // plan job, the wiring bug the guard must reject.
+    await jobQueue.enqueue({ runId: run.runId, taskId: run.plannerTaskId, taskKind: "plan", payload: {} });
 
-    const result = await executeNextPlanJob(deps(pool, secrets, jobQueue, passingGitHub()));
+    let workflowRan = false;
+    const result = await executeNextPlanJob({
+      ...deps(pool, secrets, jobQueue, passingGitHub()),
+      runWorkflow: async (input) => {
+        // Must be UNREACHABLE — the fail-closed guard rejects the org-less job first.
+        workflowRan = true;
+        return fakeWorkflowRunner(passingGitHub())(input);
+      },
+    });
 
-    expect(result.kind).toBe("completed");
-    expect(pool.runStatus).toEqual({ status: "completed", outcome: "ok" });
+    expect(result).toMatchObject({ kind: "failed", runId: run.runId, failure: { kind: "missing_job_org" } });
+    expect((result as { failure: { message: string } }).failure.message).toContain("must carry org scope");
+    // The workflow never ran and the run was never executed/finalized — it stays
+    // exactly as enqueued (`queued`), untouched, rather than running cross-RLS.
+    expect(workflowRan).toBe(false);
+    expect(pool.runStatus).toEqual({ status: "queued", outcome: null });
+    // The org-less job is failed (terminal), not left claimable for a silent retry.
+    expect(await jobQueue.claim("plan")).toBeUndefined();
   });
 
   it("fails the job loudly when the claimed run is not reachable under its own org (JobOrgContextLost)", async () => {

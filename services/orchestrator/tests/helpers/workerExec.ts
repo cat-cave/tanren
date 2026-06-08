@@ -202,7 +202,29 @@ export async function setupSeededRun() {
     specId: spec.specId,
     branch: "tanren/worker-test",
   });
-  return { pool, secrets, run };
+  // Every plan run is a TENANT run (runs.org_id is NOT NULL). The worker now
+  // FAILS CLOSED on a null-org plan job, so the seeded run carries a concrete org:
+  // the pool reports it for the project/run, and `seededOrgId` is the org the
+  // enqueue stamps + the worker scopes to. (Tests that need a different org override
+  // `pool.forcedProjectOrgId`.)
+  pool.forcedProjectOrgId = SEEDED_ORG_ID;
+  return { pool, secrets, run, orgId: SEEDED_ORG_ID };
+}
+
+/** The org the seeded worker run belongs to (a plan run always carries an org). */
+export const SEEDED_ORG_ID = "org_worker_seed";
+
+/**
+ * Enqueue the seeded run's plan job carrying its org (the queue row's org_id the
+ * worker scopes execution to). A plan job ALWAYS carries an org — the worker fails
+ * closed otherwise — so this is the canonical enqueue helper the worker suites share.
+ */
+export async function enqueuePlanJob(
+  jobQueue: FakeJobQueue,
+  run: { runId: string; plannerTaskId: string },
+  orgId: string = SEEDED_ORG_ID,
+): Promise<void> {
+  await jobQueue.enqueue({ runId: run.runId, taskId: run.plannerTaskId, taskKind: "plan", payload: {}, orgId });
 }
 
 export function deps(pool: WorkerPool, secrets: FakeSecretStore, jobQueue: FakeJobQueue, github: GitHubHttpClient) {
