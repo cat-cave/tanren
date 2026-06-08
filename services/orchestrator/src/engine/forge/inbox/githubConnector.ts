@@ -15,6 +15,7 @@ import type { GitHubHttpClient } from "../../providers/github.js";
 import { GithubAppTokenMinter } from "../../providers/githubAppTokenMinter.js";
 import { resolveGithubToken } from "../../credentials/githubTokenResolver.js";
 import { z } from "zod";
+import { assertIntakeResponseOk, IntakeSourceFetchError } from "./connectorErrors.js";
 import type { IngestedItem, InboxSource, SourceConnector } from "./types.js";
 
 // The `config` shape a GitHub Issues source carries. `owner`/`repo` name the
@@ -102,8 +103,14 @@ export function createGitHubIssuesConnector(deps: GitHubConnectorDeps): SourceCo
         token: resolved.token,
         refreshToken: resolved.refresh,
       });
-      if (response.status !== 200 || !Array.isArray(response.body)) {
-        return [];
+      // No-silent-fallbacks: a non-200 is a LOUD throw (a 401/403 ⇒ auth error
+      // the poller re-throws; any other non-200 ⇒ a transient fetch error), NEVER
+      // an empty list masking a failed fetch. Only a genuine 200-with-an-array is
+      // an empty result. A 200 whose body is not the expected array is itself a
+      // failed read (the API shape changed / an error envelope) — also LOUD.
+      assertIntakeResponseOk("github", response.status);
+      if (!Array.isArray(response.body)) {
+        throw new IntakeSourceFetchError("github", response.status, "200 body was not an issues array");
       }
 
       const issues = response.body as RawIssue[];

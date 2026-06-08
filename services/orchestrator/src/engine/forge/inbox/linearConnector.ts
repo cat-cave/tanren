@@ -16,6 +16,7 @@
 
 import { z } from "zod";
 import type { SecretStore } from "../../contracts/secretStore.js";
+import { assertIntakeResponseOk, IntakeSourceFetchError } from "./connectorErrors.js";
 import type { IngestedItem, InboxSource, SourceConnector } from "./types.js";
 
 // The `config` shape a Linear `issues` source carries. `provider: "linear"`
@@ -180,6 +181,8 @@ function matchesFilters(issue: RawLinearIssue, config: LinearConfig): boolean {
 
 interface IssuesResponse {
   data?: { issues?: { nodes?: RawLinearIssue[] } };
+  // GraphQL surfaces query failures here (with `data` null/absent), even on a 200.
+  errors?: Array<{ message?: unknown }>;
 }
 
 export function createLinearConnector(deps: LinearConnectorDeps): SourceConnector {
@@ -201,10 +204,21 @@ export function createLinearConnector(deps: LinearConnectorDeps): SourceConnecto
         query: ISSUES_QUERY,
         variables: { filter: buildFilter(config), first: 50 },
       });
-      if (response.status !== 200) return [];
-
-      const nodes = (response.body as IssuesResponse).data?.issues?.nodes;
-      if (!Array.isArray(nodes)) return [];
+      // No-silent-fallbacks: a non-200 is a LOUD throw (401/403 ⇒ auth, else ⇒
+      // transient), NEVER an empty list. A 200 GraphQL response may STILL be a
+      // failure — Linear returns query errors in an `errors` envelope (with `data`
+      // null), which is NOT "no issues"; surface it loudly. Only a 200 with a real
+      // `data.issues.nodes` array is a genuine (possibly empty) result.
+      assertIntakeResponseOk("linear", response.status);
+      const envelope = response.body as IssuesResponse;
+      if (Array.isArray(envelope.errors) && envelope.errors.length > 0) {
+        const message = envelope.errors.map((e) => (typeof e.message === "string" ? e.message : "")).join("; ");
+        throw new IntakeSourceFetchError("linear", response.status, `GraphQL errors: ${message}`);
+      }
+      const nodes = envelope.data?.issues?.nodes;
+      if (!Array.isArray(nodes)) {
+        throw new IntakeSourceFetchError("linear", response.status, "200 body had no data.issues.nodes array");
+      }
 
       const items: IngestedItem[] = [];
       for (const issue of nodes) {

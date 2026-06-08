@@ -27,6 +27,7 @@ import {
   intakeAutoRouteDeps,
 } from "../src/engine/forge/intake/index.js";
 import { MissingGithubCredentialRefError } from "../src/engine/credentials/githubTokenResolver.js";
+import { IntakeSourceAuthError } from "../src/engine/forge/inbox/index.js";
 import type { InboxSource, TriageAnswerer } from "../src/engine/forge/inbox/index.js";
 
 const githubSource: InboxSource = {
@@ -214,5 +215,38 @@ describe("intake credential resolution — source-owned staticRef unresolvable (
     // The credential-resolution error surfaces LOUD at the tick boundary, NOT
     // swallowed as a per-source transient (which would silently never ingest).
     await expect(poller.tick()).rejects.toBeInstanceOf(MissingGithubCredentialRefError);
+  });
+});
+
+describe("intake fetch auth — a connector 401/403 surfaces LOUD at the tick boundary", () => {
+  it("tick() re-throws IntakeSourceAuthError — a denied fetch is NOT swallowed as a per-source transient", async () => {
+    // The source's staticRef DOES resolve (a real token), so the connector reaches
+    // the HTTP call — but GitHub rejects it with a 401. Per the no-silent-fallbacks
+    // doctrine that is a credential-resolution failure (the token is revoked/wrong),
+    // classed alongside the resolver errors so the poller re-throws it LOUD instead
+    // of swallowing it as "this source simply had no issues this tick".
+    const staticRefSource: InboxSource = {
+      ...githubSource,
+      config: { owner: "cat-cave", repo: "app", staticRef: "gh/live" },
+    };
+    const pool = pollerStubPool(staticRefSource, { version: 1 });
+    const secrets = {
+      get: async (ref: string) => (ref === "gh/live" ? { ref, value: "ghs_live_but_denied" } : undefined),
+    } as never;
+    const deniedHttp = {
+      request: async () => ({ status: 401, body: { message: "Bad credentials" } }),
+    } as never;
+    const poller = new IntakePoller(
+      {
+        pool,
+        secrets,
+        githubHttp: deniedHttp,
+        answererFactory: () => fixedTriage,
+        autoRoute: intakeAutoRouteDeps(),
+      },
+      60_000,
+    );
+
+    await expect(poller.tick()).rejects.toBeInstanceOf(IntakeSourceAuthError);
   });
 });

@@ -145,10 +145,23 @@ async function resolveActorForRequest(
     platformAdminUserIds: options.platformAdminUserIds,
   });
   // Arm 3: the request addressed no org and none was resolved from a resource,
-  // and the actor carries none — fall back to the user's SOLE org when there is
-  // exactly one (re-resolving so the membership scopes are derived too). A user
-  // in zero or multiple orgs gets no implicit scope (the bootstrap routes that
-  // list-my-orgs are correctly system-scoped and need none).
+  // and the actor carries none — resolve the user's SOLE org when there is exactly
+  // one (re-resolving so the membership scopes are derived too). A user in zero OR
+  // multiple orgs gets no implicit scope (the bootstrap routes that list-my-orgs
+  // are correctly system-scoped and need none).
+  //
+  // No-silent-fallbacks doctrine — this is a DELIBERATE single-org UX affordance,
+  // NOT a swallowed scope failure, and it is fail-closed by construction:
+  //   • it fires ONLY when the request is genuinely org-AMBIGUITY-FREE (a body-only
+  //     root POST like `/projects` from a user who belongs to exactly one org), so
+  //     there is no required-but-denied org being masked — there is simply no other
+  //     org the request could mean;
+  //   • the AMBIGUOUS case (a multi-org user) resolves to `undefined`
+  //     (`resolveSoleOrgForUser` returns the org only on `rowCount === 1`), so it
+  //     NEVER silently picks one of several orgs — that would be the violation;
+  //   • it cannot widen access: the chosen org is re-run through
+  //     `resolveActorContext`, which re-checks membership, so a non-member never
+  //     gains scope.
   if (orgId === undefined && actor.orgId === null) {
     const soleOrgId = await options.store.resolveSoleOrgForUser(userId);
     if (soleOrgId !== undefined) {

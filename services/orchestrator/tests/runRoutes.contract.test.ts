@@ -29,6 +29,18 @@ const alice: ActorContext = {
   source: "session",
 };
 
+// A pool that fails the Forge thread read — simulates a store/transport fault on
+// `forge_threads`, proving the run-detail route surfaces it (500) instead of
+// swallowing it to an empty Forge panel.
+class ForgeFailingRunRoutesPool extends RunRoutesPool {
+  override async query(sql: string, params: unknown[] = []): Promise<{ rows: unknown[]; rowCount: number }> {
+    if (/FROM forge_threads\s+WHERE org_id = \$1 AND project_id = \$2 AND run_id = \$3/u.test(sql.trim())) {
+      throw new Error("forge_threads read failed (store fault)");
+    }
+    return super.query(sql, params);
+  }
+}
+
 function buildHarness(actor: ActorContext | undefined = alice) {
   const pool = new RunRoutesPool();
   const app = new Hono<ActorContextEnv>();
@@ -219,6 +231,48 @@ describe("P2A-0014 run-detail API — run detail", () => {
     pool.seedProject({ project_id: "project_other", org_id: "org_other" });
     const response = await app.request("/orgs/org_other/projects/project_other/runs/whatever");
     expect(response.status).toBe(403);
+  });
+
+  // No-silent-fallbacks: a run ALWAYS references a real spec (FK). A run whose
+  // spec row is missing/RLS-denied is a required relation failure — surface a loud
+  // 404, NEVER a fabricated `(spec not found)` placeholder that masks it.
+  it("returns 404 run_spec_not_found when the run's required spec is missing (no fabricated fallback)", async () => {
+    const { app, pool } = buildHarness();
+    const projectId = "project_missing_spec";
+    pool.seedProject({ project_id: projectId, org_id: "org_acme" });
+    // Seed the run but NOT its spec — the spec relation is broken.
+    pool.seedRun({ run_id: "run_missing_spec", spec_id: "spec_gone", project_id: projectId, status: "completed" });
+    const response = await app.request(`/orgs/org_acme/projects/${projectId}/runs/run_missing_spec`);
+    expect(response.status).toBe(404);
+    const body = (await response.json()) as { error: string; specId: string };
+    expect(body.error).toBe("run_spec_not_found");
+    expect(body.specId).toBe("spec_gone");
+  });
+
+  // No-silent-fallbacks: a Forge thread store/read error is NOT "no narration" — it
+  // is a failed read. It must surface (the route 500s), never be swallowed to a
+  // falsely-empty Forge panel.
+  it("surfaces a Forge thread store error (500) rather than swallowing it to an empty Forge panel", async () => {
+    const pool = new ForgeFailingRunRoutesPool();
+    const app = new Hono<ActorContextEnv>();
+    app.use(
+      "*",
+      createAuthMiddleware({
+        store: {
+          async findApiTokenByRaw() {},
+          async loadSession() {},
+          async resolveActorContext() {
+            return alice;
+          },
+        } as never,
+        localDevActor: alice,
+      }),
+    );
+    app.route("/orgs", createRunRoutes({ pool: pool.asPgPool() }));
+    const { runId, projectId } = seedRunFixture(pool);
+    const response = await app.request(`/orgs/org_acme/projects/${projectId}/runs/${runId}`);
+    // The thrown store error propagates — a loud 500, not a 200-with-null-forgeThread.
+    expect(response.status).toBe(500);
   });
 });
 

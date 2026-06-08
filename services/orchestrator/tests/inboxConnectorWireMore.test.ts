@@ -11,6 +11,8 @@ import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
 import {
   createJiraConnector,
   createLinearConnector,
+  IntakeSourceAuthError,
+  IntakeSourceFetchError,
   type InboxSource,
   type JiraHttpClient,
   type JiraHttpRequest,
@@ -212,17 +214,40 @@ describe("linear connector — normalization", () => {
     expect(items.map((i) => i.externalId)).toEqual(["linear-a"]);
   });
 
-  it("skips nodes missing an id or title and returns no items on a non-200 / non-array body", async () => {
+  it("skips nodes missing an id or title (a genuine partial-200), keeping the well-formed ones", async () => {
     const { client } = recordLinear({
       data: { issues: { nodes: [{ title: "no id" }, { id: "x" }, { id: "y", title: "kept" }] } },
     });
     const items = await createLinearConnector({ secrets, linearHttp: client }).fetch(linearSource);
     expect(items.map((i) => i.externalId)).toEqual(["linear-y"]);
+  });
 
+  it("THROWS loudly on a failed fetch (no-silent-fallbacks): non-200, a GraphQL error envelope, and a no-data 200 are not 'no issues'", async () => {
+    // A 5xx is a LOUD transient fetch error, never an empty list.
     const notOk = recordLinear({ data: { issues: { nodes: [{ id: "z", title: "x" }] } } }, 500);
-    expect(await createLinearConnector({ secrets, linearHttp: notOk.client }).fetch(linearSource)).toHaveLength(0);
+    await expect(createLinearConnector({ secrets, linearHttp: notOk.client }).fetch(linearSource)).rejects.toThrow(
+      IntakeSourceFetchError,
+    );
+    // A 401 is a LOUD auth error.
+    const denied = recordLinear({ errors: [{ message: "authentication required" }] }, 401);
+    await expect(createLinearConnector({ secrets, linearHttp: denied.client }).fetch(linearSource)).rejects.toThrow(
+      IntakeSourceAuthError,
+    );
+    // A 200 GraphQL *error envelope* (data null) is a failed query, NOT "no issues".
+    const gqlErr = recordLinear({ errors: [{ message: "field 'issues' is not defined" }] });
+    await expect(createLinearConnector({ secrets, linearHttp: gqlErr.client }).fetch(linearSource)).rejects.toThrow(
+      IntakeSourceFetchError,
+    );
+    // A 200 lacking data.issues.nodes is a failed read — LOUD.
     const noData = recordLinear({ data: {} });
-    expect(await createLinearConnector({ secrets, linearHttp: noData.client }).fetch(linearSource)).toHaveLength(0);
+    await expect(createLinearConnector({ secrets, linearHttp: noData.client }).fetch(linearSource)).rejects.toThrow(
+      IntakeSourceFetchError,
+    );
+  });
+
+  it("returns a genuine empty list on a 200-with-an-empty-nodes-array", async () => {
+    const empty = recordLinear({ data: { issues: { nodes: [] } } });
+    expect(await createLinearConnector({ secrets, linearHttp: empty.client }).fetch(linearSource)).toHaveLength(0);
   });
 });
 
@@ -345,7 +370,7 @@ describe("jira connector — normalization", () => {
     expect(items.map((i) => i.severity)).toEqual(["fail", "fail", "fail", "warn", "info", "info"]);
   });
 
-  it("skips issues missing a key or a summary and returns no items on non-200 / non-array body", async () => {
+  it("skips issues missing a key or a summary (a genuine partial-200), keeping the well-formed ones", async () => {
     const { client } = recordJira({
       issues: [
         { fields: { summary: "no key" } },
@@ -356,11 +381,24 @@ describe("jira connector — normalization", () => {
     });
     const items = await createJiraConnector({ secrets, jiraHttp: client }).fetch(jiraSource);
     expect(items.map((i) => i.externalId)).toEqual(["jira-CAT-10"]);
+  });
 
-    const notOk = recordJira({ issues: [{ key: "X", fields: { summary: "x" } }] }, 403);
-    expect(await createJiraConnector({ secrets, jiraHttp: notOk.client }).fetch(jiraSource)).toHaveLength(0);
+  it("THROWS loudly on a failed fetch (no-silent-fallbacks): a 403 is an auth error, a non-array 200 is a failed read", async () => {
+    // A 403 is a LOUD auth error (the token lacks access), never silently "no issues".
+    const denied = recordJira({ issues: [{ key: "X", fields: { summary: "x" } }] }, 403);
+    await expect(createJiraConnector({ secrets, jiraHttp: denied.client }).fetch(jiraSource)).rejects.toThrow(
+      IntakeSourceAuthError,
+    );
+    // A 200 whose body carries no `issues` array is a failed read — LOUD.
     const notArray = recordJira({ issues: "nope" });
-    expect(await createJiraConnector({ secrets, jiraHttp: notArray.client }).fetch(jiraSource)).toHaveLength(0);
+    await expect(createJiraConnector({ secrets, jiraHttp: notArray.client }).fetch(jiraSource)).rejects.toThrow(
+      IntakeSourceFetchError,
+    );
+  });
+
+  it("returns a genuine empty list on a 200-with-an-empty-issues-array", async () => {
+    const empty = recordJira({ issues: [] });
+    expect(await createJiraConnector({ secrets, jiraHttp: empty.client }).fetch(jiraSource)).toHaveLength(0);
   });
 
   it("throws when the configured tokenRef is absent from the secret store", async () => {
