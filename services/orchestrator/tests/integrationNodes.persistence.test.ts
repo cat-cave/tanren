@@ -132,6 +132,22 @@ function withDatabase(url: string, database: string): string {
   return parsed.toString();
 }
 
+// A query-intercepting wrapper: forces the observe write's `INSERT INTO
+// integration_nodes` to error MID-STATEMENT (a real Postgres error that poisons the
+// tx), while every other statement passes through untouched. Used to prove the
+// SAVEPOINT un-poisons the run-create tx.
+function failingNodeWriteClient(real: { query: (...args: never[]) => Promise<unknown> }) {
+  return {
+    async query(text: unknown, ...rest: never[]): Promise<unknown> {
+      if (typeof text === "string" && text.includes("INSERT INTO integration_nodes")) {
+        // A guaranteed mid-tx statement error (undefined column) — the poisoning trigger.
+        return real.query("INSERT INTO integration_nodes (no_such_column) VALUES (1)" as never);
+      }
+      return real.query(text as never, ...rest);
+    },
+  };
+}
+
 describeDb("integration-nodes persistence (real DB + fail-closed RLS)", () => {
   const database = dbName();
   let ownerPool: Pool;
@@ -311,5 +327,56 @@ describeDb("integration-nodes persistence (real DB + fail-closed RLS)", () => {
     const found = await model.findByMemberKey(ORG, key);
     expect(found).toBeDefined();
     expect(found?.purpose).toBe("eager_base");
+  });
+
+  it("a FAILING observe write is SAVEPOINT-isolated: surrounding writes in the same tx still COMMIT (no poisoning)", async () => {
+    // Reproduce the exact run-create flow: a real write BEFORE the observe hook, a
+    // FORCED node-write failure inside it, then a real write AFTER — all in ONE tx.
+    // The SAVEPOINT must un-poison the tx so the after-write succeeds and the tx
+    // commits. WITHOUT the savepoint, the forced error aborts the tx and the
+    // after-write (and the whole run) fails — this test would then throw.
+    const RUN_BEFORE = `run_savepoint_before_${ORG}`;
+    const RUN_AFTER = `run_savepoint_after_${ORG}`;
+
+    await runWithJobOrgId(ORG, async () => {
+      await runWithOrgScope(appPool, ORG, async (client) => {
+        // BEFORE: a real tenant write in this tx.
+        await client.query(
+          `INSERT INTO runs (run_id, spec_id, project_id, org_id, trigger, branch, status)
+           VALUES ($1, $2, $3, $4, 'cli', 'tanren/before', 'queued')`,
+          [RUN_BEFORE, SPEC_DEP, PROJECT, ORG],
+        );
+        // The observe write FORCED to fail mid-statement (poisons the tx unless the
+        // savepoint rolls it back). The hook must swallow it without throwing.
+        await observeRunAsIntegrationNode(
+          failingNodeWriteClient(client) as never,
+          {
+            runId: RUN_DEP,
+            specId: SPEC_DEP,
+            branch: "tanren/dep",
+            projectId: PROJECT,
+            project: { defaultBranch: "main" },
+          },
+          { speculativeBase: "tanren/integration-dep", integratedAncestorShas: { [SPEC_ANCESTOR]: "a".repeat(40) } },
+        );
+        // AFTER: another real tenant write. WITHOUT the savepoint fix this throws
+        // "current transaction is aborted"; WITH it, it succeeds and the tx commits.
+        await client.query(
+          `INSERT INTO runs (run_id, spec_id, project_id, org_id, trigger, branch, status)
+           VALUES ($1, $2, $3, $4, 'cli', 'tanren/after', 'queued')`,
+          [RUN_AFTER, SPEC_DEP, PROJECT, ORG],
+        );
+      });
+    });
+
+    // Both surrounding writes COMMITTED (the tx was not poisoned).
+    const committed = await runWithOrgScope(appPool, ORG, async (client) => {
+      const r = await client.query<{ run_id: string }>(
+        "SELECT run_id FROM runs WHERE run_id = ANY($1::text[]) ORDER BY run_id",
+        [[RUN_BEFORE, RUN_AFTER]],
+      );
+      return r.rows.map((row) => row.run_id);
+    });
+    expect(committed).toEqual([RUN_AFTER, RUN_BEFORE]);
   });
 });
