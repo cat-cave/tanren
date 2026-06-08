@@ -209,6 +209,32 @@ describe("HetznerAllocator", () => {
     expect(await secrets.list("hetzner/")).toEqual([]);
   });
 
+  // Fail-closed (system credential split): the INTERNAL secret-store delete of
+  // the per-run SSH PRIVATE key is NOT best-effort. If it fails, the private key
+  // is leaked in our own store, so `release` must throw LOUD — never swallow it.
+  // The EXTERNAL cloud teardown (server + ssh_key) still runs first; only the
+  // internal credential-wipe failure is loud.
+  it("on release throws LOUD when the internal secret-store delete fails (credential leak)", async () => {
+    class DeleteFailsSecretStore extends InMemorySecretStore {
+      override async delete(): Promise<void> {
+        throw new Error("vault delete 500");
+      }
+    }
+    const client = new FakeHetznerClient();
+    const runners = new FakeRunnerStore();
+    const secrets = new DeleteFailsSecretStore();
+    const alloc = allocator(client, runners, secrets);
+    const allocation = await alloc.allocate(req("run_leak"));
+
+    await expect(alloc.release(allocation.runnerId, "completed")).rejects.toThrow(/may be LEAKED/u);
+    // The external cloud teardown still ran (best-effort, before the loud wipe).
+    expect(client.deleted).toEqual([42]);
+    expect(client.deletedKeys).toEqual([555]);
+    // The mirror-row release never runs because cleanup threw first — the loud
+    // failure blocks release completion rather than reporting a clean release.
+    expect(runners.releases).toEqual([]);
+  });
+
   it("release of an unknown runner is a no-op", async () => {
     const client = new FakeHetznerClient();
     const runners = new FakeRunnerStore();

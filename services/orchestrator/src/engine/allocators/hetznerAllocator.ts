@@ -245,11 +245,19 @@ export class HetznerAllocator implements Allocator {
   }
 
   /**
-   * Best-effort teardown of every per-allocation resource. Each id is optional
-   * so the `allocate` failure path can call this no matter how far provisioning
-   * got (a throw before `createServer` leaves `serverId` undefined, a throw
-   * before `createSshKey` leaves `sshKeyId` undefined). Missing ids are skipped;
-   * the secret ref is always wiped (idempotent if it was never stored).
+   * Teardown of every per-allocation resource. Each id is optional so the
+   * `allocate` failure path can call this no matter how far provisioning got (a
+   * throw before `createServer` leaves `serverId` undefined, a throw before
+   * `createSshKey` leaves `sshKeyId` undefined). Missing ids are skipped.
+   *
+   * SYSTEM-vs-USERLAND fail-closed: the EXTERNAL cloud teardown (deleteServer /
+   * deleteSshKey) is best-effort — the cloud provider is an external system we
+   * cannot guarantee, and a leaked Hetzner server is the operator's billing
+   * concern, not a credential leak. But the INTERNAL secret-store delete of the
+   * per-run SSH PRIVATE key is a credential we OWN: if it fails, the private key
+   * is leaked in our own store. That is NOT best-effort — it throws LOUD so the
+   * delete is run last (after the external best-effort cleanups) and its failure
+   * blocks release completion / surfaces on the allocate-failure path.
    */
   private async cleanup(resources: { serverId?: number; sshKeyId?: number; identitySecretRef: string }): Promise<void> {
     if (resources.serverId !== undefined) {
@@ -258,7 +266,14 @@ export class HetznerAllocator implements Allocator {
     if (resources.sshKeyId !== undefined) {
       await this.client.deleteSshKey(resources.sshKeyId).catch(() => {});
     }
-    await this.options.secrets.delete(resources.identitySecretRef).catch(() => {});
+    try {
+      await this.options.secrets.delete(resources.identitySecretRef);
+    } catch (error) {
+      throw new Error(
+        `hetzner allocator failed to delete the per-run SSH private key from the secret store (ref ${resources.identitySecretRef}); the credential may be LEAKED and release cannot complete`,
+        { cause: error },
+      );
+    }
   }
 
   private async waitForRunning(serverId: number): Promise<HetznerServer> {

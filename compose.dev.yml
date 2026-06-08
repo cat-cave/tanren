@@ -231,7 +231,8 @@ services:
       TANREN_ALLOCATOR_NETWORK: ${COMPOSE_PROJECT_NAME:-tanren}_default
       TANREN_ALLOCATOR_SSH_HOSTNAME_TEMPLATE: "{container}"
       TANREN_MAX_RUN_HOURS: "6"
-      TANREN_RUNNER_IMAGE: ghcr.io/cat-cave/tanren-runner:v0
+      # Runner image is per-allocate request config, not an allocator env knob —
+      # the allocator never reads TANREN_RUNNER_IMAGE (see compose.prod.yml note).
       TANREN_RUNNER_AUTHORIZED_KEY: ${TANREN_RUNNER_AUTHORIZED_KEY:-}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock

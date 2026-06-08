@@ -239,14 +239,20 @@ function getProductionPool(): pg.Pool {
  * `tanren_app` role (NOBYPASSRLS, no DDL grants), so it CANNOT run CREATE/ALTER
  * TABLE. Migrations therefore use a dedicated owner connection
  * (MIGRATION_DATABASE_URL), opened only for the migrate step and closed
- * immediately. When MIGRATION_DATABASE_URL is unset (single-role dev / no flip)
- * we fall back to the runtime pool — behavior-identical to before R3b.
+ * immediately.
+ *
+ * No-silent-fallback doctrine: `MIGRATION_DATABASE_URL` is REQUIRED (both the dev
+ * and prod compose profiles always set it). A missing value used to silently
+ * fall back to the runtime pool, which — under R3b — is the NOBYPASSRLS
+ * `tanren_app` role that cannot run DDL, so the fallback would fail the migration
+ * obscurely anyway. We fail LOUD up front instead, naming the missing var.
  */
 async function runMigrationsAsOwner(): Promise<void> {
   const ownerUrl = process.env["MIGRATION_DATABASE_URL"];
   if (ownerUrl === undefined || ownerUrl === "") {
-    await migrate(getProductionPool());
-    return;
+    throw new Error(
+      "MIGRATION_DATABASE_URL is required: migrations run as the table OWNER (the runtime DATABASE_URL is the restricted, NOBYPASSRLS app role that cannot run DDL). Set MIGRATION_DATABASE_URL to the owner connection string.",
+    );
   }
   const ownerPool = createDbPool(ownerUrl);
   try {

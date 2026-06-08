@@ -78,7 +78,13 @@ describe("SidecarHttpAllocator", () => {
     expect(captured.headers?.authorization).toBe("Bearer supersecret");
     const sentBody = JSON.parse(captured.body ?? "{}") as { vaultRefs: string[]; runId: string; orgId: string };
     expect(sentBody.runId).toBe("run_1");
-    expect(sentBody.vaultRefs).toEqual(["runner/identity", "credential/codex"]);
+    // SYSTEM-vs-USERLAND split: the orchestrator's SSH private key
+    // (`identitySecretRef`) must NEVER be sent to the sidecar — the sidecar
+    // materializes every sent ref's VALUE into runner Docker env, which would
+    // leak the orchestrator key into runner container state. Only caller-supplied
+    // `vaultRefs` flow over the wire.
+    expect(sentBody.vaultRefs).toEqual(["credential/codex"]);
+    expect(sentBody.vaultRefs).not.toContain("runner/identity");
     // De-priv: the run's org is threaded into the /allocate POST body so the
     // service writes the `runners` row under that org's RLS scope.
     expect(sentBody.orgId).toBe("org_1");
@@ -201,7 +207,7 @@ describe("SidecarHttpAllocator", () => {
     expect(overridden.target.username).toBe("operator");
   });
 
-  it("dedupes vaultRefs and drops empty refs, keeping the identity ref first", async () => {
+  it("dedupes vaultRefs, drops empty refs, and NEVER sends the orchestrator identity ref", async () => {
     let sentRefs: string[] = [];
     const fetchImpl = (async (_url: string | URL | Request, init?: RequestInit): Promise<Response> => {
       sentRefs = (JSON.parse(String(init?.body)) as { vaultRefs: string[] }).vaultRefs;
@@ -226,10 +232,13 @@ describe("SidecarHttpAllocator", () => {
       projectId: "p",
       runnerImage: "img",
       identitySecretRef: "runner/identity",
+      // The identity ref appears here too (a caller could pass it both ways); it
+      // must STILL be stripped — it is never delivered to the runner over Docker
+      // env. Only the unique non-empty userland refs survive, in order.
       vaultRefs: ["runner/identity", "credential/a", "", "credential/a", "credential/b"],
     });
-    // identity first, then unique non-empty refs in order, no duplicates/empties.
-    expect(sentRefs).toEqual(["runner/identity", "credential/a", "credential/b"]);
+    expect(sentRefs).toEqual(["credential/a", "credential/b"]);
+    expect(sentRefs).not.toContain("runner/identity");
   });
 
   // /release is a POST to the release path carrying { runnerId, reason } as the
