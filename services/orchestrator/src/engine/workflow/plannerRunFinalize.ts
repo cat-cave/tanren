@@ -126,6 +126,67 @@ export async function finalizeNonPass(
 }
 
 /**
+ * NEVER-STRAND the spec when its run finalizes TERMINAL-WITHOUT-MERGE (apex v22
+ * run-discipline finding #3). A halted/failed planner run otherwise leaves the SPEC
+ * at `in_flight`, which the DagWalker maps to OCCUPYING-A-SLOT — so the walker never
+ * re-attempts, and neither operator-API path can recover it (`requeue` only handles
+ * `needs_attention`; `runs` only queues from `open`). The spec is permanently stuck.
+ *
+ * This is the fail-closed, LOUD recovery: park the spec at the terminal
+ * `needs_attention` status (freeing its DAG slot, blocking ONLY its dependents) +
+ * emit the `dag.spec.needs_attention` event so the parked state reaches a human AND
+ * the operator `requeue` endpoint can re-enter it at `open`. An infra failure (e.g.
+ * `MissingCredentialError`) thus SURFACES as an explicit ask-for-help rather than
+ * silently stranding the spec — the autonomy loop survives a run failure without a
+ * human DB poke.
+ *
+ * The spec-status flip goes through the SAME `setSpecStatus` seam (control-plane when
+ * wired, else in-process org-scoped). The `dag.spec.needs_attention` event reuses the
+ * `strand` source (one parked-state vocabulary the operator `requeue` reads) with
+ * reason `halted_reexec`.
+ */
+export async function parkSpecNeedsAttentionForHaltedRun(
+  input: RunPlannerLoopInput,
+  context: PlannerRunContext,
+  appendEvent: <N extends EventName>(eventType: N, payload: EventPayload<N>, taskId?: string) => Promise<void>,
+  outcome: "window_exhausted" | "retry_budget_exhausted" | "halted" | "failed",
+): Promise<void> {
+  // The spec is `in_flight` at every halted-run finalize site (the claim set it; the
+  // rework re-entry re-set it), so this is the intended `in_flight → needs_attention`
+  // transition. Mirrors the merge stage's blocked/handed_off escalation.
+  await setSpecStatus(input, context, "needs_attention");
+  await appendEvent("dag.spec.needs_attention", {
+    source: "strand",
+    specId: context.specId,
+    reason: "halted_reexec",
+    // The run that just halted (its terminal status) — the parked-state halt history.
+    terminalRuns: [{ runId: context.runId, status: "halted" }],
+    // No bounded re-enqueue counter exists for a run-terminal strand: the run made one
+    // halted attempt, so the visible attempt count is 1.
+    attempts: 1,
+    // The DECISION ask (escalation discipline): "self-heal could not make progress — a
+    // human must decide", not "an error occurred".
+    message: `run halted (${outcome}); the spec cannot self-heal — requeue after addressing the cause`,
+  });
+}
+
+/**
+ * Finalize a non-pass loop outcome (run → halted) AND park its spec at
+ * `needs_attention` (finding #3 never-strand) — the genuine-strand pair used by the
+ * planner-loop's non-pass + rework-exhausted exits, which have NO further driver.
+ */
+export async function finalizeNonPassAndPark(
+  input: RunPlannerLoopInput,
+  finalizeRunState: FinalizeRunState,
+  context: PlannerRunContext,
+  appendEvent: <N extends EventName>(eventType: N, payload: EventPayload<N>, taskId?: string) => Promise<void>,
+  outcome: "window_exhausted" | "retry_budget_exhausted" | "halted",
+): Promise<void> {
+  await finalizeNonPass(finalizeRunState, context.runId, outcome);
+  await parkSpecNeedsAttentionForHaltedRun(input, context, appendEvent, outcome);
+}
+
+/**
  * Finalize the run + spec for the merge stage's terminal outcome:
  *   - conflict → recoverable halt, spec NOT merged;
  *   - blocked/handed_off/non-native queued → spec `needs_attention`, run halted;
@@ -182,8 +243,13 @@ export async function finalizeMergeOutcome(
 export interface WorkflowErrorContext {
   finalizeRunState: FinalizeRunState;
   appendEvent: <N extends EventName>(eventType: N, payload: EventPayload<N>, taskId?: string) => Promise<void>;
-  runId: string;
   workspacePath: string;
+  // NEVER-STRAND (finding #3): the loop input + run context (`context.runId` is the run
+  // id) so a thrown-error finalize can park the SPEC at `needs_attention` (not just the
+  // run at halted/failed) — an infra failure (e.g. MissingCredentialError) frees the DAG
+  // slot + becomes operator-requeueable instead of stranding at `in_flight` forever.
+  input: RunPlannerLoopInput;
+  context: PlannerRunContext;
 }
 
 /**
@@ -191,6 +257,11 @@ export interface WorkflowErrorContext {
  * failure or a Codex usage-limit are RECOVERABLE (a halt with a distinct
  * outcome), not a crash; anything else lands the run `failed`. The caller
  * re-throws after this so the worker still fails the job.
+ *
+ * NEVER-STRAND (finding #3): EVERY branch also parks the SPEC at `needs_attention`
+ * via {@link parkSpecNeedsAttentionForHaltedRun}, so a thrown error (recoverable OR a
+ * hard `failed`, including an infra `MissingCredentialError`) leaves the spec in a
+ * non-occupying, operator-requeueable state — never `in_flight` with a dead run.
  */
 export async function finalizeWorkflowError(error: unknown, ctx: WorkflowErrorContext): Promise<void> {
   if (error instanceof WorkspaceBootstrapError) {
@@ -199,19 +270,21 @@ export async function finalizeWorkflowError(error: unknown, ctx: WorkflowErrorCo
     // recovery surface) rather than a crash, reusing the
     // workspace.failed event + the halted run state.
     await ctx.appendEvent("workspace.failed", { workspacePath: ctx.workspacePath, message: error.message });
-    await finalizeNonPass(ctx.finalizeRunState, ctx.runId, "halted");
+    await finalizeNonPass(ctx.finalizeRunState, ctx.context.runId, "halted");
+    await parkSpecNeedsAttentionForHaltedRun(ctx.input, ctx.context, ctx.appendEvent, "halted");
     return;
   }
   if (error instanceof CodexUsageLimitError) {
     // Authenticated but out of quota mid-loop: a recoverable window state, not a
     // crash (PROJECT_BRIEF §4.3). Record it as such.
-    await finalizeNonPass(ctx.finalizeRunState, ctx.runId, "window_exhausted");
+    await finalizeNonPass(ctx.finalizeRunState, ctx.context.runId, "window_exhausted");
     await ctx.appendEvent("usage.window.pressure", {
       provider: "openai",
       slot: "primary",
       usedPercent: 100,
       resetsAt: new Date().toISOString(),
     });
+    await parkSpecNeedsAttentionForHaltedRun(ctx.input, ctx.context, ctx.appendEvent, "window_exhausted");
     return;
   }
   await ctx.finalizeRunState(
@@ -219,8 +292,9 @@ export async function finalizeWorkflowError(error: unknown, ctx: WorkflowErrorCo
     "failed",
     ["running", "queued"],
     "UPDATE runs SET status = 'failed', outcome = 'failed', ended_at = now() WHERE run_id = $1",
-    [ctx.runId],
+    [ctx.context.runId],
   );
+  await parkSpecNeedsAttentionForHaltedRun(ctx.input, ctx.context, ctx.appendEvent, "failed");
 }
 
 // The spec-run trigger pre-creates a queued 'plan' task + job_queue row for the

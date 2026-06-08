@@ -56,6 +56,16 @@ export async function finalizeRunRecoverable(
           })
           .catch(() => {}),
       );
+      // NEVER-STRAND (finding #3): a worker-level force-halt (a crash the workflow's
+      // own spec-aware finalize never reached) must not leave the spec at `in_flight`
+      // with a dead run. Park it at `needs_attention` (guarded so the workflow's
+      // earlier park / a merged spec is a no-op) so the slot frees + the operator can
+      // requeue it. Best-effort — never mask the original failure path.
+      if (result.specId !== undefined && result.specId !== "") {
+        await parkStrandedSpecRemote(pool, writer, orgId, result.specId, result.projectId ?? "", runId, message).catch(
+          () => {},
+        );
+      }
     }
     return;
   }
@@ -73,6 +83,8 @@ export async function finalizeRunRecoverable(
     );
     const row = updated.rows[0] as { spec_id?: unknown; project_id?: unknown } | undefined;
     if (row !== undefined) {
+      const specId = String(row.spec_id ?? "");
+      const projectId = String(row.project_id ?? "");
       // Mirror the workflow's recoverable-finalize: emit run.failed so the
       // timeline/notifications surface the worker-level failure. Best-effort —
       // never let an event write mask the original error path. PgEventStore is
@@ -80,14 +92,116 @@ export async function finalizeRunRecoverable(
       await new PgEventStore(client)
         .append({
           runId,
-          specId: String(row.spec_id ?? ""),
-          projectId: String(row.project_id ?? ""),
+          specId,
+          projectId,
           eventType: "run.failed",
           payload: { status: "halted", message },
         })
         .catch(() => {});
+      // NEVER-STRAND (finding #3): park the spec at `needs_attention` (guarded so a
+      // merged spec or the workflow's earlier park is a no-op) so a worker-level
+      // force-halt frees the DAG slot + the operator can requeue it — the spec is
+      // never left `in_flight` with a dead run.
+      if (specId !== "") {
+        await parkStrandedSpecInProcess(client, specId, projectId, runId, message).catch(() => {});
+      }
     }
   });
+}
+
+/** The reason a worker-level force-halt parks the spec (one parked-state message). */
+function strandMessage(runId: string, message: string): string {
+  return `run ${runId} force-halted by the worker (${message}); the spec cannot self-heal — requeue after addressing the cause`;
+}
+
+/** The `dag.spec.needs_attention` payload a worker-level strand emits (source `strand`). */
+function strandNeedsAttentionPayload(runId: string, specId: string, message: string) {
+  return {
+    source: "strand" as const,
+    specId,
+    reason: "no_live_run" as const,
+    terminalRuns: [{ runId, status: "halted" }],
+    attempts: 1,
+    message: strandMessage(runId, message),
+  };
+}
+
+/**
+ * Park a worker-force-halted run's spec at `needs_attention` over the control plane.
+ * The guarded `setSpecStatus` (`notFromStatuses`) makes the flip a no-op when the
+ * spec is already `merged` or `needs_attention`. The event is emitted ONLY when the
+ * spec was still OCCUPYING a slot (`in_flight`/`review`) — so a spec the workflow's
+ * own finalize already parked never gets a DUPLICATE `dag.spec.needs_attention` event
+ * (the worker-level park is a safety net for crashes that bypass the workflow finalize).
+ */
+async function parkStrandedSpecRemote(
+  pool: pg.Pool,
+  writer: RunStateWriter,
+  orgId: string,
+  specId: string,
+  projectId: string,
+  runId: string,
+  message: string,
+): Promise<void> {
+  // Read the current status FIRST: only an occupying spec (in_flight/review) is a
+  // genuine strand. A spec already parked/merged/open means another finalize handled
+  // it — flip nothing, emit nothing (no double-escalate).
+  const occupying = await runWithOrgScope(pool, orgId, async (client) => {
+    const result = await client.query<{ status: string }>("SELECT status FROM specs WHERE spec_id = $1", [specId]);
+    return result.rows[0]?.status === "in_flight" || result.rows[0]?.status === "review";
+  }).catch(() => false);
+  if (!occupying) return;
+  await writer.setSpecStatus({
+    specId,
+    orgId,
+    status: "needs_attention",
+    notFromStatuses: ["merged", "needs_attention"],
+  });
+  await runWithJobOrgId(orgId, () =>
+    writer
+      .append({
+        runId,
+        specId,
+        projectId,
+        eventType: "dag.spec.needs_attention",
+        payload: strandNeedsAttentionPayload(runId, specId, message),
+      })
+      .catch(() => {}),
+  );
+}
+
+/**
+ * Park a worker-force-halted run's spec at `needs_attention` in-process (the
+ * single-role path). The guarded UPDATE (`status NOT IN ('merged','needs_attention')`)
+ * makes it a no-op when the spec is already terminal — idempotent with the workflow's
+ * earlier park. The event append joins the in-scope transaction (org-scoped client).
+ */
+async function parkStrandedSpecInProcess(
+  client: pg.PoolClient,
+  specId: string,
+  projectId: string,
+  runId: string,
+  message: string,
+): Promise<void> {
+  // Park ONLY an occupying spec (`in_flight`/`review`) — a guarded flip that RETURNS
+  // the row only when it moved. A spec already parked/merged/open matches zero rows,
+  // so the event is NOT emitted (idempotent with the workflow's own park — no
+  // duplicate `dag.spec.needs_attention`).
+  const flipped = await client.query(
+    `UPDATE specs SET status = 'needs_attention'
+       WHERE spec_id = $1 AND status IN ('in_flight', 'review') RETURNING spec_id`,
+    [specId],
+  );
+  if (flipped.rowCount === 0) return;
+  await new PgEventStore(client)
+    .append({
+      runId,
+      specId,
+      projectId,
+      eventType: "dag.spec.needs_attention",
+      payload: strandNeedsAttentionPayload(runId, specId, message),
+    })
+    .catch(() => {});
 }
 
 /**

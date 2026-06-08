@@ -188,6 +188,18 @@ describeDb("RLS early-failure finalize — a pre-scope throw still finalizes the
       [RUN],
     );
     expect(event.rows[0]?.org_id).toBe(ORG);
+
+    // finding #3 (never-strand): the SPEC was seeded `in_flight`; an early infra
+    // failure (MissingCredentialError) must NOT leave it occupying a DAG slot with a
+    // dead run. The worker-level finalize reclaims it to the operator-recoverable
+    // `needs_attention` (freeing the slot) + emits the loud dag.spec.needs_attention.
+    const specAfter = await ownerPool.query<{ status: string }>("SELECT status FROM specs WHERE spec_id = $1", [SPEC]);
+    expect(specAfter.rows[0]?.status).toBe("needs_attention");
+    const parked = await ownerPool.query<{ org_id: string }>(
+      "SELECT org_id FROM events WHERE spec_id = $1 AND event_type = 'dag.spec.needs_attention'",
+      [SPEC],
+    );
+    expect(parked.rows[0]?.org_id).toBe(ORG);
   });
 });
 

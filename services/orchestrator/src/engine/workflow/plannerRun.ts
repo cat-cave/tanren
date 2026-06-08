@@ -39,7 +39,7 @@ import {
   applyScopedRunCredentials,
   buildFinalizeRunState,
   finalizeMergeOutcome,
-  finalizeNonPass,
+  finalizeNonPassAndPark,
   finalizeWorkflowError,
   markRunRunning,
   releaseRunnerWithCleanupProof,
@@ -366,7 +366,8 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
       });
 
       if (outcome.kind !== "passed") {
-        await finalizeNonPass(finalizeRunState, context.runId, runOutcomeFor(outcome));
+        // finding #3: halt the run AND park the spec (requeueable, never stuck in_flight).
+        await finalizeNonPassAndPark(input, finalizeRunState, context, appendEvent, runOutcomeFor(outcome));
         releaseReason = "failed";
         return { runId: context.runId, workspacePath, outcome };
       }
@@ -440,9 +441,9 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
         continue;
       }
       // Pending after the budget, or changes-requested with the rework budget
-      // exhausted: halt for operator action (surfaces on the review sub-surface
-      // + the recovery surface). No merge.
-      await finalizeNonPass(finalizeRunState, context.runId, "halted");
+      // exhausted: halt for operator action + park the spec (finding #3: requeueable,
+      // surfaces on the review/recovery surface). No merge.
+      await finalizeNonPassAndPark(input, finalizeRunState, context, appendEvent, "halted");
       releaseReason = "failed";
       return { runId: context.runId, workspacePath, outcome, pullRequest, mergeGate, review };
     }
@@ -483,11 +484,11 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
     releaseReason = "completed";
     return { runId: context.runId, workspacePath, outcome, pullRequest, mergeGate, review, merge };
   } catch (error) {
-    // Finalize the run for the thrown error (recoverable halt for a known
-    // bootstrap/usage-limit fault, else a generic `failed`) + emit its event,
-    // then re-throw so the worker's catch path still fails the job.
+    // Finalize the run for the thrown error (recoverable halt for a known bootstrap/
+    // usage-limit fault, else a generic `failed`) + park the SPEC (finding #3:
+    // requeueable, never stuck in_flight), then re-throw so the worker fails the job.
     releaseReason = "failed";
-    await finalizeWorkflowError(error, { finalizeRunState, appendEvent, runId: context.runId, workspacePath });
+    await finalizeWorkflowError(error, { finalizeRunState, appendEvent, workspacePath, input, context });
     throw error;
   } finally {
     // SECURITY-BASELINE CLEANUP-PROOF: remove the run's `/workspace/runs/<runId>`
