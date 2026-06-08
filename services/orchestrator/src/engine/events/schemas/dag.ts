@@ -244,9 +244,16 @@ export type DagSpecPercolationReplanPayload = z.infer<typeof DagSpecPercolationR
 //   - `rebased_resolved` — the rebase conflicted (recorded IN the commit, work survived),
 //                          the resolver reconciled it (intent-preserving), and the re-gate
 //                          passed — still NO re-plan (the existing work fit after resolve).
-//   - `replanned`        — the rebase conflicted AND the resolver + re-gate said the old
-//                          work no longer fits, so it was routed back to the planner WITH
-//                          the shift as context (work KEPT ALIVE, never discarded/merged).
+//   - `replanned`        — the rebased work NO LONGER FITS the new base, so it was routed
+//                          back to the planner WITH the shift as context (work KEPT ALIVE,
+//                          never discarded/merged). "No longer fits" has TWO legitimate
+//                          forms, distinguished by `rebaseConflicted`: (a) the rebase
+//                          CONFLICTED and the resolver could not reconcile it
+//                          (`rebaseConflicted: true`), OR (b) the rebase was CLEAN but the
+//                          fresh re-gate FAILED on the new base (`rebaseConflicted: false`).
+//                          Both are real "the old work doesn't fit the shifted base" replans
+//                          — a clean rebase whose gate fails on the new base genuinely needs
+//                          re-planning, NOT a pretend-conflict.
 //   - `held`             — a fail-closed hold (the rebase/resolver/gate could not settle);
 //                          the work survives and is retried on the next notification.
 // `sameRunId` is ALWAYS true on this path — it is the never-discard assertion made
@@ -266,10 +273,14 @@ export const IntegrationRebasePayload = z
     newBaseSha: z.string(),
     // The branch head after the rebase (carries a recorded conflict when conflicted).
     headSha: z.string(),
-    // Whether the jj rebase itself conflicted (a SUCCESS that recorded the conflict).
+    // INFORMATIONAL: whether the jj rebase itself conflicted (a SUCCESS that recorded the
+    // conflict). On `replanned` it distinguishes the two "no longer fits" forms — `true`
+    // = the conflict was irreconcilable, `false` = the rebase was clean but the re-gate
+    // failed on the new base. It does NOT gate the decision (a clean-rebase gate-failure
+    // is a real replan).
     rebaseConflicted: z.boolean(),
     // What the base shift cost — the `rebase_vs_rebuild` signal (NO re-plan unless the
-    // old work genuinely no longer fits). `held` is a fail-closed hold.
+    // old work genuinely no longer fits the new base). `held` is a fail-closed hold.
     decision: z.enum(["rebased_clean", "rebased_resolved", "replanned", "held"]),
   })
   .strict();

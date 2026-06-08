@@ -20,6 +20,7 @@ import {
 } from "../src/engine/contracts/changePercolation.js";
 import type { IntegrationNode } from "../src/engine/contracts/integrationNodes.js";
 import type { RebaseResult, RecordedConflict, WorkspaceVcsCore } from "../src/engine/contracts/workspaceVcsCore.js";
+import { IntegrationRebasePayload } from "../src/engine/events/schemas/dag.js";
 import {
   BaseShiftCoordinator,
   BaseShiftHeldError,
@@ -177,12 +178,33 @@ class RecordingPersistence implements BaseShiftPersistence {
 
 class RecordingEventEmitter implements BaseShiftEventEmitter {
   readonly events: Array<{ runId: string; decision: RebaseDecision; rebaseConflicted: boolean; sameRunId: true }> = [];
-  async emitRebase(input: { runId: string; rebaseConflicted: boolean; decision: RebaseDecision }): Promise<void> {
+  // The FULL emitted payload (the never-discard `sameRunId: true` mirror the production
+  // `appendIntegrationRebaseEvent` builds) — for asserting contract-validity.
+  readonly rawEvents: Array<Record<string, unknown>> = [];
+  async emitRebase(input: {
+    specId: string;
+    runId: string;
+    branch: string;
+    newBaseSha: string;
+    headSha: string;
+    rebaseConflicted: boolean;
+    decision: RebaseDecision;
+  }): Promise<void> {
     this.events.push({
       runId: input.runId,
       decision: input.decision,
       rebaseConflicted: input.rebaseConflicted,
       sameRunId: true,
+    });
+    this.rawEvents.push({
+      specId: input.specId,
+      runId: input.runId,
+      sameRunId: true,
+      branch: input.branch,
+      newBaseSha: input.newBaseSha,
+      headSha: input.headSha,
+      rebaseConflicted: input.rebaseConflicted,
+      decision: input.decision,
     });
   }
 }
@@ -287,12 +309,19 @@ describe("BaseShiftCoordinator — never-discard rebase (NOT supersede+regenerat
     ]);
   });
 
-  it("a CLEAN rebase whose re-gate FAILED ⇒ re-plan (the work no longer fits the shifted base)", async () => {
+  it("a CLEAN rebase whose re-gate FAILED ⇒ replanned with rebaseConflicted:false (the work no longer fits the new base)", async () => {
+    // BLOCKING-1: a clean rebase whose fresh re-gate FAILS on the new base is a LEGITIMATE
+    // replan — the old work no longer fits — emitted as `replanned` with `rebaseConflicted:
+    // false` (NOT a pretend-conflict). It must NOT be skipped just because the rebase was clean.
     const h = harness({ conflictOnRebase: false, reGate: "failed" });
     await reexec(h);
     expect(h.persistence.replanned).toHaveLength(1);
     expect(h.persistence.repointCalls).toEqual([]);
-    expect(h.events.events[0]?.decision).toBe("replanned");
+    const event = h.events.rawEvents[0];
+    expect(event).toMatchObject({ decision: "replanned", rebaseConflicted: false, sameRunId: true });
+    // CONTRACT-VALID: the emitted payload parses against the frozen IntegrationRebasePayload
+    // schema (a clean-rebase gate-failure replan is a valid `replanned`, rebaseConflicted:false).
+    expect(() => IntegrationRebasePayload.parse(event)).not.toThrow();
   });
 
   it("FAIL-CLOSED: a `pending` (inconclusive) re-gate HOLDS — never merges, never discards", async () => {

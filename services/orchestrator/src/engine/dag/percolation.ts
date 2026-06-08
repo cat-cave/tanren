@@ -38,6 +38,7 @@ import {
   type SpeculativeDependent,
 } from "../contracts/changePercolation.js";
 import { SpecNotRunnableError } from "../workflow/projectSpecErrors.js";
+import { BaseShiftHeldError } from "./baseShiftCoordinator.js";
 
 /** What one full percolation pass over a project produced (for the subscriber + tests). */
 export interface PercolationPassResult {
@@ -52,7 +53,13 @@ export interface PercolationPassResult {
   reexecuting: string[];
   /** Dependents whose re-execution is still IN FLIGHT (the loop guard — no re-emit). */
   inFlight: string[];
-  /** Dependents HELD this pass (an ancestor-vs-ancestor conflict; retried next notification). */
+  /**
+   * Dependents HELD this pass — a RECOVERABLE hold (NOT a failure), retried on the next
+   * notification: an ancestor-vs-ancestor rebuild conflict, OR a fail-closed
+   * `BaseShiftHeldError` (the never-discard base-shift rebase/resolver/gate could not
+   * settle — the work survives untouched; Wave 3 resumes it once the live runner is
+   * plumbed). Distinct from `failed` (a real, non-recoverable error).
+   */
   held: string[];
   /** Dependents with NO actionable change (the termination key — verified SHA matches). */
   unchanged: string[];
@@ -129,6 +136,18 @@ export class PercolatingCoordinator implements ChangePercolationCoordinator {
       try {
         await this.processDependent(projectId, dependent, result);
       } catch (error) {
+        // A fail-closed HOLD (the never-discard base-shift rebase/resolver/gate could not
+        // settle) is NOT a failure — the work survives untouched and is retried on the
+        // next notification (Wave 3 resumes it once the live runner is plumbed). Classify
+        // it as `held` (a distinct recoverable outcome), so "the live engine HOLDS the
+        // work" is observable + visibly recoverable, never mislabeled a real failure.
+        if (error instanceof BaseShiftHeldError) {
+          console.warn(
+            `[change-percolation] dependent ${dependent.specId} HELD (fail-closed; work survives, retried next notification): ${error.message}`,
+          );
+          result.held.push(dependent.specId);
+          continue;
+        }
         console.error(
           `[change-percolation] dependent ${dependent.specId} threw while percolating (recorded + continuing; other dependents still process):`,
           error,
