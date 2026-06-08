@@ -31,7 +31,6 @@ const allocateSchema = z.object({
   // project-scoped Forge surface (preserves attribution), or null/absent for the
   // project-less greenfield interview. Ignored when `runless` is false.
   persistedProjectId: z.string().min(1).nullish(),
-  vaultRefs: z.array(z.string().min(1)).default([]),
 });
 
 const releaseSchema = z.object({

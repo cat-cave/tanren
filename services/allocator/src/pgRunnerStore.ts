@@ -38,9 +38,9 @@ function handleFromRunnerId(runnerId: string): string {
  * context), so findActive / markReleased / listActiveOlderThan stay on the
  * system pool where they can see every tenant's rows.
  *
- * The volume names and vault refs are persisted in the `image_sha` companion
- * label-style fields so the abandoned sweeper can wipe them even after the
- * allocator process restarts. Active rows are the ones whose `status` is one of
+ * The volume names are derived from the naming handle (not persisted as columns)
+ * so the abandoned sweeper can wipe them even after the allocator process
+ * restarts. Active rows are the ones whose `status` is one of
  * the in-flight values; releasing flips the row to `released` and stamps
  * `released_at`.
  */
@@ -113,7 +113,6 @@ export class PgRunnerStore implements RunnerStore {
       sshPort: row.ssh_port,
       hostKeyFingerprint: row.host_key_fingerprint,
       imageSha: row.image_sha,
-      vaultRefs: [],
       createdAt: row.created_at,
       released: true,
     };
@@ -162,7 +161,6 @@ function materialize(row: RunnerRow): RunnerRecord {
     sshPort: row.ssh_port,
     hostKeyFingerprint: row.host_key_fingerprint,
     imageSha: row.image_sha,
-    vaultRefs: [],
     createdAt: row.created_at,
     released: false,
   };

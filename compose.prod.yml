@@ -10,11 +10,12 @@
 ##   TANREN_GITHUB_OAUTH_CLIENT_ID       GitHub OAuth app client id.
 ##   TANREN_GITHUB_OAUTH_CLIENT_SECRET   GitHub OAuth app client secret.
 ##   TANREN_RUNNER_AUTHORIZED_KEY        SSH authorized_keys entry the orchestrator uses (PUBLIC key line; safe in env).
-##   TANREN_RUNNER_IDENTITY_KEY_PATH     Path, mounted into the orchestrator + worker, to the PRIVATE key file the
-##                                       orchestrator uses to SSH into runners. The private key is delivered as a
-##                                       mounted SECRET FILE (like the mTLS keys below), never as an env VALUE, so the
-##                                       key material never transits Docker env / container inspect state. Mount the
-##                                       file with your platform's secret mechanism before `up-prod`.
+##   TANREN_RUNNER_IDENTITY_KEY_FILE     HOST path to the PRIVATE key file the orchestrator uses to SSH into runners.
+##                                       Wired below as a compose `secret` mounted into the orchestrator + worker at
+##                                       /run/secrets/tanren_runner_identity_key; the services read the key from that
+##                                       file (TANREN_RUNNER_IDENTITY_KEY_PATH), so the key material is delivered as a
+##                                       mounted SECRET FILE, never as an env VALUE — it never transits Docker env /
+##                                       `docker inspect`. Self-contained: just point this at the key file on the host.
 ##   TANREN_PUBLIC_BASE_URL              Absolute URL the orchestrator is reachable at (used for OAuth redirect URI).
 ##   TANREN_ALLOCATOR_TOKEN              Bearer token the orchestrator uses to talk to the allocator sidecar.
 ##   TANREN_INTERNAL_TLS_CERT            Control-plane internal mTLS server cert path mounted in the orchestrator.
@@ -105,11 +106,11 @@ services:
       VAULT_TOKEN: ${VAULT_ROOT_TOKEN:?VAULT_ROOT_TOKEN must be set for the prod profile}
       ORCHESTRATOR_PORT: "3100"
       # SYSTEM credential split: the orchestrator's SSH PRIVATE key is delivered as
-      # a MOUNTED SECRET FILE (path ref), never as a Docker env VALUE — so the key
-      # material never lands in `docker inspect` / container env. The boot seeder
-      # reads the file at this path and stores it in the secret store. Mount the
-      # file (see `volumes:` below) with your platform secret mechanism.
-      TANREN_RUNNER_IDENTITY_KEY_PATH: ${TANREN_RUNNER_IDENTITY_KEY_PATH:?TANREN_RUNNER_IDENTITY_KEY_PATH must be set for the prod profile}
+      # a MOUNTED SECRET FILE (the `tanren_runner_identity_key` compose secret,
+      # wired below), never as a Docker env VALUE — so the key material never lands
+      # in `docker inspect` / container env. The boot seeder reads the file at this
+      # in-container path and stores it in the secret store.
+      TANREN_RUNNER_IDENTITY_KEY_PATH: /run/secrets/tanren_runner_identity_key
       TANREN_GITHUB_OAUTH_CLIENT_ID: ${TANREN_GITHUB_OAUTH_CLIENT_ID:?TANREN_GITHUB_OAUTH_CLIENT_ID must be set for the prod profile}
       TANREN_GITHUB_OAUTH_CLIENT_SECRET: ${TANREN_GITHUB_OAUTH_CLIENT_SECRET:?TANREN_GITHUB_OAUTH_CLIENT_SECRET must be set for the prod profile}
       TANREN_PUBLIC_BASE_URL: ${TANREN_PUBLIC_BASE_URL:?TANREN_PUBLIC_BASE_URL must be set for the prod profile}
@@ -166,6 +167,9 @@ services:
         condition: service_healthy
       allocator:
         condition: service_started
+    # Mount the SSH PRIVATE key as a file under /run/secrets, not as an env value.
+    secrets:
+      - tanren_runner_identity_key
 
   worker:
     # Plane-split P1: the run-executor worker as a STANDALONE deployable (the
@@ -197,9 +201,10 @@ services:
       TANREN_SECRET_STORE: vault
       VAULT_ADDR: http://vault:8200
       VAULT_TOKEN: ${VAULT_ROOT_TOKEN:?VAULT_ROOT_TOKEN must be set for the prod profile}
-      # SSH PRIVATE key via a mounted secret FILE path, not an env value (same as
-      # the orchestrator above — the worker seeds the same runner identity).
-      TANREN_RUNNER_IDENTITY_KEY_PATH: ${TANREN_RUNNER_IDENTITY_KEY_PATH:?TANREN_RUNNER_IDENTITY_KEY_PATH must be set for the prod profile}
+      # SSH PRIVATE key via the mounted secret FILE (the `tanren_runner_identity_key`
+      # compose secret), not an env value — same as the orchestrator above; the
+      # worker seeds the same runner identity.
+      TANREN_RUNNER_IDENTITY_KEY_PATH: /run/secrets/tanren_runner_identity_key
       TANREN_RUN_WORKER_CONCURRENCY: ${TANREN_RUN_WORKER_CONCURRENCY:-2}
       # Same sidecar allocator the orchestrator uses (ephemeral runners on demand).
       TANREN_ALLOCATOR_URL: http://allocator:3200
@@ -231,6 +236,9 @@ services:
       # The orchestrator owns the migrate step; wait for it before claiming jobs.
       orchestrator:
         condition: service_healthy
+    # Same SSH PRIVATE key file mount as the orchestrator (under /run/secrets).
+    secrets:
+      - tanren_runner_identity_key
 
   allocator:
     build:
@@ -248,8 +256,10 @@ services:
       DATABASE_URL: postgres://tanren_app:${TANREN_APP_DB_PASSWORD:?TANREN_APP_DB_PASSWORD must be set for the prod profile}@postgres:5432/tanren
       MIGRATION_DATABASE_URL: postgres://tanren:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set for the prod profile}@postgres:5432/tanren
       TANREN_SYSTEM_DATABASE_URL: postgres://tanren_system:${TANREN_SYSTEM_DB_PASSWORD:?TANREN_SYSTEM_DB_PASSWORD must be set for the prod profile}@postgres:5432/tanren
-      VAULT_ADDR: http://vault:8200
-      VAULT_TOKEN: ${VAULT_ROOT_TOKEN:?VAULT_ROOT_TOKEN must be set for the prod profile}
+      # The allocator has NO Vault / secret-store access: it never resolves a
+      # secret VALUE (the CODEX_HOME env-bundle channel is removed). Run-scoped
+      # runner creds are delivered over the SSH FILE substrate by the orchestrator
+      # after allocation, so the allocator only touches Docker + the runners table.
       ALLOCATOR_PORT: "3200"
       TANREN_ALLOCATOR_TOKEN: ${TANREN_ALLOCATOR_TOKEN:?TANREN_ALLOCATOR_TOKEN must be set for the prod profile}
       TANREN_ALLOCATOR_NETWORK: ${COMPOSE_PROJECT_NAME:-tanren}_default
@@ -265,8 +275,6 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       postgres:
-        condition: service_healthy
-      vault:
         condition: service_healthy
 
   dashboard:
@@ -315,3 +323,11 @@ services:
 
 volumes:
   pgdata:
+
+secrets:
+  # The orchestrator's SSH PRIVATE key, delivered to the orchestrator + worker as
+  # a mounted file under /run/secrets (never an env value). Point
+  # TANREN_RUNNER_IDENTITY_KEY_FILE at the key file on the host; compose mounts it
+  # read-only. Self-contained — no out-of-band mount step required.
+  tanren_runner_identity_key:
+    file: ${TANREN_RUNNER_IDENTITY_KEY_FILE:?TANREN_RUNNER_IDENTITY_KEY_FILE must be set for the prod profile (host path to the SSH private key file)}

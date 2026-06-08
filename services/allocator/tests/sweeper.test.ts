@@ -1,11 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ContainerInspectResult, CreateContainerSpec, DockerEngineClient } from "../src/dockerEngine.js";
-import {
-  RunnerLifecycle,
-  type RunnerRecord,
-  type RunnerSecretsClient,
-  type RunnerStore,
-} from "../src/runnerLifecycle.js";
+import { RunnerLifecycle, type RunnerRecord, type RunnerStore } from "../src/runnerLifecycle.js";
 import { AbandonedRunSweeper } from "../src/sweeper.js";
 
 class NoopDocker implements DockerEngineClient {
@@ -47,12 +42,6 @@ class MemoryStore implements RunnerStore {
   }
 }
 
-class NoSecrets implements RunnerSecretsClient {
-  async get(): Promise<string | undefined> {
-    return undefined;
-  }
-}
-
 describe("AbandonedRunSweeper", () => {
   it("reclaims runners older than maxRunHours and reports them via onReclaim", async () => {
     let nowMs = 1_700_000_000_000;
@@ -61,7 +50,6 @@ describe("AbandonedRunSweeper", () => {
     const lifecycle = new RunnerLifecycle({
       docker,
       store,
-      secrets: new NoSecrets(),
       networkName: "tanren_default",
       sshHostnameForOrchestrator: (container) => container,
       sleep: () => Promise.resolve(),
@@ -75,7 +63,6 @@ describe("AbandonedRunSweeper", () => {
       projectId: "proj_a",
       orgId: "org_test",
       runnerImage: "img",
-      vaultRefs: [],
     });
 
     nowMs += 7 * 60 * 60 * 1000;
@@ -103,7 +90,6 @@ describe("AbandonedRunSweeper", () => {
     const lifecycle = new RunnerLifecycle({
       docker,
       store,
-      secrets: new NoSecrets(),
       networkName: "tanren_default",
       sshHostnameForOrchestrator: (container) => container,
       sleep: () => Promise.resolve(),

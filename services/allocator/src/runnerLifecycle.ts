@@ -1,11 +1,6 @@
 import { createHash } from "node:crypto";
 import type { DockerEngineClient } from "./dockerEngine.js";
 
-export interface RunnerSecretsClient {
-  /** Returns the secret value for a Vault ref, or undefined when missing. */
-  get(ref: string): Promise<string | undefined>;
-}
-
 export interface RunnerRecord {
   runnerId: string;
   /**
@@ -32,7 +27,6 @@ export interface RunnerRecord {
   sshPort: number;
   hostKeyFingerprint: string;
   imageSha: string;
-  vaultRefs: string[];
   createdAt: Date;
   released: boolean;
 }
@@ -48,7 +42,6 @@ export interface AllocateInput {
   runId: string;
   projectId: string;
   runnerImage: string;
-  vaultRefs: string[];
   /** The org the run belongs to; the runner row is persisted under its RLS scope. */
   orgId: string;
   /**
@@ -77,7 +70,6 @@ export interface AllocateResult {
 export interface RunnerLifecycleConfig {
   docker: DockerEngineClient;
   store: RunnerStore;
-  secrets: RunnerSecretsClient;
   /** Internal docker network name the allocator attaches each runner to. */
   networkName: string;
   /** When set (dev profile), publishes the runner SSH port on the host. */
@@ -99,7 +91,6 @@ export interface RunnerLifecycleConfig {
 export class RunnerLifecycle {
   private readonly docker: DockerEngineClient;
   private readonly store: RunnerStore;
-  private readonly secrets: RunnerSecretsClient;
   private readonly networkName: string;
   private readonly hostSshPort: number | undefined;
   private readonly hostnameForOrchestrator: (containerName: string) => string;
@@ -113,7 +104,6 @@ export class RunnerLifecycle {
   constructor(config: RunnerLifecycleConfig) {
     this.docker = config.docker;
     this.store = config.store;
-    this.secrets = config.secrets;
     this.networkName = config.networkName;
     this.hostSshPort = config.hostSshPort;
     this.hostnameForOrchestrator = config.sshHostnameForOrchestrator;
@@ -136,7 +126,6 @@ export class RunnerLifecycle {
     const containerName = slug;
     const workspaceVolume = volumeNamesFor(input.runId).workspace;
     const codexHomeVolume = volumeNamesFor(input.runId).codexHome;
-    const codexHomeBundle = await this.materializeCodexHome(input.vaultRefs);
 
     await this.docker.createVolume(workspaceVolume, allocatorLabels(input.runId));
     await this.docker.createVolume(codexHomeVolume, allocatorLabels(input.runId));
@@ -144,9 +133,14 @@ export class RunnerLifecycle {
     const containerId = await this.docker.createContainer({
       name: containerName,
       image: input.runnerImage,
+      // No secret VALUE is ever delivered to a runner via Docker env. The only
+      // env here is the PUBLIC authorized_keys line (safe) + the ephemeral
+      // marker. Run-scoped runner credentials (the tenant's model/codex auth) are
+      // written into CODEX_HOME over the SSH FILE substrate AFTER allocation
+      // (orchestrator codexMaterializer / opencodeMaterializer), so `docker
+      // inspect` on a runner can carry no secret.
       env: {
         TANREN_RUNNER_AUTHORIZED_KEY: process.env["TANREN_RUNNER_AUTHORIZED_KEY"] ?? "",
-        TANREN_CODEX_HOME_BUNDLE: codexHomeBundle,
         TANREN_RUNNER_EPHEMERAL: "1",
       },
       labels: allocatorLabels(input.runId),
@@ -183,7 +177,6 @@ export class RunnerLifecycle {
       sshPort,
       hostKeyFingerprint,
       imageSha: inspected.imageSha,
-      vaultRefs: input.vaultRefs,
       createdAt: this.clock(),
       released: false,
     };
@@ -225,21 +218,6 @@ export class RunnerLifecycle {
       }
     }
     return reclaimed;
-  }
-
-  private async materializeCodexHome(vaultRefs: string[]): Promise<string> {
-    if (vaultRefs.length === 0) {
-      return "";
-    }
-    const files: Array<{ ref: string; value: string }> = [];
-    for (const ref of vaultRefs) {
-      const value = await this.secrets.get(ref);
-      if (value === undefined) {
-        throw new Error(`vault ref ${ref} did not resolve to a secret value`);
-      }
-      files.push({ ref, value });
-    }
-    return Buffer.from(JSON.stringify(files)).toString("base64");
   }
 
   private async readHostKeyFingerprint(containerId: string): Promise<string> {

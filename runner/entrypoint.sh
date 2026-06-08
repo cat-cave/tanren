@@ -25,23 +25,17 @@ if [ "${TANREN_RUNNER_EPHEMERAL:-0}" = "1" ]; then
   fi
 fi
 
-# CODEX_HOME is materialized at /tanren-runtime/codex-home. The allocator
-# unpacks any supplied vault refs there before starting sshd. Make CODEX_HOME
-# visible to interactive ssh sessions.
+# CODEX_HOME is an empty per-run directory at /tanren-runtime/codex-home, made
+# visible to interactive ssh sessions. NO secret is delivered to the runner via
+# Docker env: run-scoped credentials (the tenant's model/codex auth.json) are
+# written here over the SSH FILE substrate by the orchestrator AFTER allocation
+# (codexMaterializer / opencodeMaterializer). The runner therefore starts with an
+# empty CODEX_HOME and `docker inspect` carries no secret value.
 mkdir -p /tanren-runtime/codex-home
 chown -R tanren:tanren /tanren-runtime/codex-home
 chmod 700 /tanren-runtime/codex-home
 echo "export CODEX_HOME=/tanren-runtime/codex-home" > /etc/profile.d/codex-home.sh
 chmod 644 /etc/profile.d/codex-home.sh
-
-# Optionally decode the supplied codex auth bundle (base64 JSON {ref,value}[])
-# into CODEX_HOME files. The allocator sets TANREN_CODEX_HOME_BUNDLE when
-# vaultRefs were supplied in the /allocate request.
-if [ -n "${TANREN_CODEX_HOME_BUNDLE:-}" ]; then
-  printf '%s' "$TANREN_CODEX_HOME_BUNDLE" | base64 -d > /tanren-runtime/codex-home/bundle.json
-  chown tanren:tanren /tanren-runtime/codex-home/bundle.json
-  chmod 600 /tanren-runtime/codex-home/bundle.json
-fi
 
 if [ -n "${TANREN_RUNNER_AUTHORIZED_KEY:-}" ]; then
   printf '%s\n' "$TANREN_RUNNER_AUTHORIZED_KEY" > /home/tanren/.ssh/authorized_keys

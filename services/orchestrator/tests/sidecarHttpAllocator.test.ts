@@ -70,27 +70,28 @@ describe("SidecarHttpAllocator", () => {
       orgId: "org_1",
       runnerImage: "ghcr.io/cat-cave/tanren-runner:v0",
       identitySecretRef: "runner/identity",
-      vaultRefs: ["credential/codex"],
     });
 
     expect(captured.url).toBe("http://allocator:3200/allocate");
     expect(captured.method).toBe("POST");
     expect(captured.headers?.authorization).toBe("Bearer supersecret");
-    const sentBody = JSON.parse(captured.body ?? "{}") as { vaultRefs: string[]; runId: string; orgId: string };
+    const sentBody = JSON.parse(captured.body ?? "{}") as Record<string, unknown>;
     expect(sentBody.runId).toBe("run_1");
-    // SYSTEM-vs-USERLAND split: the orchestrator's SSH private key
-    // (`identitySecretRef`) must NEVER be sent to the sidecar — the sidecar
-    // materializes every sent ref's VALUE into runner Docker env, which would
-    // leak the orchestrator key into runner container state. Only caller-supplied
-    // `vaultRefs` flow over the wire.
-    expect(sentBody.vaultRefs).toEqual(["credential/codex"]);
-    expect(sentBody.vaultRefs).not.toContain("runner/identity");
+    // SYSTEM-vs-USERLAND split: NO secret ref or value is ever sent to the
+    // sidecar. The orchestrator's SSH private key (`identitySecretRef`) stays in
+    // the returned target handle ONLY; the allocator has no secret-store access
+    // and delivers no secret to the runner via Docker env. The POST body carries
+    // no `vaultRefs` and no ref string anywhere.
+    expect("vaultRefs" in sentBody).toBe(false);
+    expect(JSON.stringify(sentBody)).not.toContain("runner/identity");
     // De-priv: the run's org is threaded into the /allocate POST body so the
     // service writes the `runners` row under that org's RLS scope.
     expect(sentBody.orgId).toBe("org_1");
 
     expect(result.runnerId).toBe("runner_run_1");
     expect(result.target.host).toBe("tanren-runner-run_1");
+    // The identity ref still rides the returned target handle — that is how the
+    // orchestrator's SSH substrate reaches the runner.
     expect(result.target.identitySecretRef).toBe("runner/identity");
     // The allocator sidecar already persisted the `runners` row under org RLS;
     // the orchestrator client must not double-insert the same primary key.
@@ -207,10 +208,10 @@ describe("SidecarHttpAllocator", () => {
     expect(overridden.target.username).toBe("operator");
   });
 
-  it("dedupes vaultRefs, drops empty refs, and NEVER sends the orchestrator identity ref", async () => {
-    let sentRefs: string[] = [];
+  it("never puts a secret ref in the /allocate body (the env-bundle channel is gone)", async () => {
+    let sentBody: Record<string, unknown> = {};
     const fetchImpl = (async (_url: string | URL | Request, init?: RequestInit): Promise<Response> => {
-      sentRefs = (JSON.parse(String(init?.body)) as { vaultRefs: string[] }).vaultRefs;
+      sentBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
       return new Response(
         JSON.stringify({
           runnerId: "runner_d",
@@ -230,15 +231,17 @@ describe("SidecarHttpAllocator", () => {
     }).allocate({
       runId: "r",
       projectId: "p",
+      orgId: "org_x",
       runnerImage: "img",
+      // The orchestrator's SSH private key ref — must NOT appear anywhere in the
+      // body. The allocator never resolves a secret value; runner creds arrive via
+      // the SSH file substrate after allocation.
       identitySecretRef: "runner/identity",
-      // The identity ref appears here too (a caller could pass it both ways); it
-      // must STILL be stripped — it is never delivered to the runner over Docker
-      // env. Only the unique non-empty userland refs survive, in order.
-      vaultRefs: ["runner/identity", "credential/a", "", "credential/a", "credential/b"],
     });
-    expect(sentRefs).toEqual(["credential/a", "credential/b"]);
-    expect(sentRefs).not.toContain("runner/identity");
+    expect("vaultRefs" in sentBody).toBe(false);
+    expect(JSON.stringify(sentBody)).not.toContain("runner/identity");
+    // The body is purely naming/orchestration metadata.
+    expect(Object.keys(sentBody).sort()).toEqual(["orgId", "projectId", "runId", "runnerImage"]);
   });
 
   // /release is a POST to the release path carrying { runnerId, reason } as the

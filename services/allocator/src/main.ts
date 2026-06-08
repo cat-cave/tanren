@@ -5,7 +5,6 @@ import { HttpDockerEngineClient } from "./dockerEngine.js";
 import { PgRunnerStore } from "./pgRunnerStore.js";
 import { RunnerLifecycle } from "./runnerLifecycle.js";
 import { AbandonedRunSweeper } from "./sweeper.js";
-import { VaultSecretsClient } from "./vaultSecrets.js";
 import { requireEnv } from "./requireEnv.js";
 
 const port = Number(process.env["ALLOCATOR_PORT"] ?? 3200);
@@ -37,17 +36,15 @@ async function main(): Promise<void> {
   const systemPool = createDbPool(process.env["TANREN_SYSTEM_DATABASE_URL"] || process.env["DATABASE_URL"]);
   const appPool = createDbPool(process.env["DATABASE_URL"]);
   const store = new PgRunnerStore(systemPool, appPool);
-  const secrets = new VaultSecretsClient({
-    addr: process.env["VAULT_ADDR"] ?? "http://vault:8200",
-    // The Vault token is REQUIRED — no `dev-root-token` fallback (the dev stack
-    // sets a real VAULT_TOKEN in env). A blank/unset value fails hard.
-    token: requireEnv("VAULT_TOKEN"),
-  });
 
+  // The allocator has NO secret-store access: it never resolves a secret VALUE.
+  // Run-scoped runner credentials are delivered to the runner over the SSH FILE
+  // substrate by the orchestrator AFTER allocation (codexMaterializer), so the
+  // allocator only creates/destroys containers + persists the `runners` row. The
+  // old VAULT_TOKEN-backed CODEX_HOME env-bundle channel is removed.
   const lifecycle = new RunnerLifecycle({
     docker,
     store,
-    secrets,
     networkName,
     hostSshPort: hostSshPortEnv === undefined || hostSshPortEnv === "" ? undefined : Number(hostSshPortEnv),
     sshHostnameForOrchestrator: (container) => sshHostnameTemplate.replace("{container}", container),
@@ -82,15 +79,17 @@ async function main(): Promise<void> {
   console.log(`allocator listening on :${port}`);
 }
 
-/** Run migrations as the owner (MIGRATION_DATABASE_URL), closing the pool after. */
+/**
+ * Run migrations as the table OWNER, closing the pool after.
+ *
+ * No-silent-fallback doctrine: `MIGRATION_DATABASE_URL` is REQUIRED (both compose
+ * profiles set it). A missing value used to silently fall back to the runtime
+ * pool — which under R3b is the restricted `tanren_app` role that cannot run DDL,
+ * so the fallback would fail the migration obscurely anyway. We fail LOUD up
+ * front instead, mirroring the orchestrator (services/orchestrator/src/main.ts).
+ */
 async function runAllocatorMigrations(): Promise<void> {
-  const ownerUrl = process.env["MIGRATION_DATABASE_URL"];
-  if (ownerUrl === undefined || ownerUrl === "") {
-    const pool = createDbPool();
-    await migrate(pool);
-    await pool.end();
-    return;
-  }
+  const ownerUrl = requireEnv("MIGRATION_DATABASE_URL");
   const ownerPool = createDbPool(ownerUrl);
   try {
     await migrate(ownerPool);

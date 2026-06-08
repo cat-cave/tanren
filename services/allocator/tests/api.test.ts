@@ -1,12 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createAllocatorApi } from "../src/api.js";
 import type { ContainerInspectResult, CreateContainerSpec, DockerEngineClient } from "../src/dockerEngine.js";
-import {
-  RunnerLifecycle,
-  type RunnerRecord,
-  type RunnerSecretsClient,
-  type RunnerStore,
-} from "../src/runnerLifecycle.js";
+import { RunnerLifecycle, type RunnerRecord, type RunnerStore } from "../src/runnerLifecycle.js";
 
 class FakeDocker implements DockerEngineClient {
   readonly volumeCreates: string[] = [];
@@ -59,19 +54,12 @@ class MemoryStore implements RunnerStore {
   }
 }
 
-class StaticSecrets implements RunnerSecretsClient {
-  async get(): Promise<string | undefined> {
-    return undefined;
-  }
-}
-
 function buildApp() {
   const docker = new FakeDocker();
   const store = new MemoryStore();
   const lifecycle = new RunnerLifecycle({
     docker,
     store,
-    secrets: new StaticSecrets(),
     networkName: "tanren_default",
     sshHostnameForOrchestrator: (container) => container,
     sleep: () => Promise.resolve(),
@@ -108,7 +96,7 @@ describe("allocator HTTP API", () => {
       new Request("http://allocator/allocate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ runId: "run_1", projectId: "p", runnerImage: "img", vaultRefs: [] }),
+        body: JSON.stringify({ runId: "run_1", projectId: "p", runnerImage: "img" }),
       }),
     );
     expect(response.status).toBe(401);
@@ -126,7 +114,6 @@ describe("allocator HTTP API", () => {
       runId: "run_no_org",
       projectId: "proj",
       runnerImage: "ghcr.io/cat-cave/tanren-runner:v0",
-      vaultRefs: [],
     });
     expect(response.status).toBe(400);
     expect(store.records).toHaveLength(0);
@@ -140,7 +127,6 @@ describe("allocator HTTP API", () => {
       projectId: "proj",
       orgId: "org_api",
       runnerImage: "ghcr.io/cat-cave/tanren-runner:v0",
-      vaultRefs: [],
     });
     expect(allocated.status).toBe(201);
     const allocatedBody = (await allocated.json()) as { runnerId: string };
@@ -170,7 +156,6 @@ describe("allocator HTTP API", () => {
       runnerImage: "ghcr.io/cat-cave/tanren-runner:v0",
       runless: true,
       persistedProjectId: "proj_real",
-      vaultRefs: [],
     });
     expect(allocated.status).toBe(201);
     // The persisted runners row has NULL run_id (no `runs` row) and the REAL
