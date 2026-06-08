@@ -13,6 +13,7 @@ import type { CheckAnswer, AuditAnswer, ConflictAnswer } from "../../../answerer
 import type { RunnerHandle } from "../../../contracts/allocator.js";
 import type { RunStateWriter } from "../../../contracts/runStateWriter.js";
 import type { CommandSubstrate } from "../../../contracts/commandSubstrate.js";
+import type { WorkspaceConflictApplier } from "../../../contracts/conflictResolution.js";
 import type { EventStore } from "../../../eventStore.js";
 import { buildConflictResolverAdapter } from "../../../providers/adapterSelector.js";
 import type { AnswererAdapter } from "../../../providers/types.js";
@@ -62,6 +63,16 @@ export interface DefaultConflictResolverDeps {
   // present when this run is a change-percolation re-execution — reframes the
   // resolver into upstream-change mode (the ancestor's change flows INTO this spec).
   upstreamChange?: { ancestorSpecId: string; changeSummary: string };
+  /**
+   * The workspace mechanism the resolver gathers/applies/publishes the conflict over.
+   * OMITTED ⇒ the git-merge-abort `SshWorkspaceConflictApplier` over `deps.ssh` +
+   * `deps.target` + `deps.workspacePath` (the kill-switch default). The two live
+   * wiring sites (the in-loop `direct_merge` resolver + the drive-pass resolver) inject
+   * the jj `JjWorkspaceConflictApplier` when `conflictResolverJjLive()` is on — the
+   * Wave-3/S1 cutover. ONLY the workspace mechanism changes; the resolver's
+   * classify-then-escalate / re-gate / replan logic above it is identical either way.
+   */
+  applier?: WorkspaceConflictApplier;
 }
 
 export function buildDefaultConflictResolver(deps: DefaultConflictResolverDeps): ConflictResolverHook {
@@ -97,14 +108,18 @@ export function buildDefaultConflictResolver(deps: DefaultConflictResolverDeps):
       client: deps.pool,
       ...(deps.orgId !== undefined && { orgId: deps.orgId }),
     }),
-    applier: new SshWorkspaceConflictApplier({
-      ssh: deps.ssh,
-      target: deps.target,
-      workspacePath: deps.workspacePath,
-      baseBranch: deps.baseBranch,
-      headBranch: deps.headBranch,
-      timeoutMs: deps.timeoutMs,
-    }),
+    // The workspace mechanism: the injected jj applier (the cutover default the live
+    // wiring sites build) or the git-merge-abort fallback (the kill-switch path).
+    applier:
+      deps.applier ??
+      new SshWorkspaceConflictApplier({
+        ssh: deps.ssh,
+        target: deps.target,
+        workspacePath: deps.workspacePath,
+        baseBranch: deps.baseBranch,
+        headBranch: deps.headBranch,
+        timeoutMs: deps.timeoutMs,
+      }),
     answerer: new AnswererBackedConflictInvoker({
       adapter: conflictAdapter,
       timeoutMs: deps.timeoutMs,

@@ -8,7 +8,6 @@
 import type pg from "pg";
 import type { CiWhen } from "../ci/index.js";
 import type { RunnerHandle } from "../contracts/allocator.js";
-import type { EventName, EventPayload } from "../events/index.js";
 import type { EventStore } from "../eventStore.js";
 import type { ReviewAnswer } from "../answerers/schemas/index.js";
 import { buildAdaptersFromRouting, buildSimulatedReviewerAdapter } from "../providers/adapterSelector.js";
@@ -20,22 +19,18 @@ import { defaultUsageProbe } from "./plannerRunUsage.js";
 export { buildManagedCapturerForRun } from "./plannerRunUsage.js";
 import { PgBudgetGate } from "../dag/budgetGate.js";
 import { runBudgetCeilingPreflight } from "./budgetPreflight.js";
-import {
-  advisoryStepNamesForPosture,
-  type GateOutcome,
-  ingestGateJunit,
-  resolveBootstrapCommand,
-  resolveGateConfig,
-  runGateForWhen,
-} from "./gate/index.js";
-import {
-  DEFAULT_BOOTSTRAP_COMMAND,
-  ensureWorkspaceDepsInstalled,
-  resolveWorkspaceHeadSha,
-} from "../workspace/index.js";
+import type { GateOutcome } from "./gate/index.js";
+import { buildDefaultGate } from "./plannerRunGate.js";
+// Re-exported so plannerRun.ts keeps a single import surface for the run's
+// adapter/gate builders (the gate callback + JUnit ingest live in plannerRunGate).
+export { buildDefaultGate } from "./plannerRunGate.js";
 import type { PlannerRunAdapterContext, RunPlannerLoopInput } from "./plannerRun.js";
 import type { AppendEvent, SubtaskLoopAdapters } from "./subtaskLoop.js";
 import { buildDefaultConflictResolver } from "./reviewMerge/conflictResolver/index.js";
+import { buildJjConflictApplier } from "./reviewMerge/conflictResolver/jjWorkspaceApplier.js";
+import { buildLiveJjWorkspace } from "../providers/liveJjWorkspace.js";
+import { conflictResolverJjLive } from "../merge/conflictResolverJjFlag.js";
+import type { WorkspaceConflictApplier } from "../contracts/conflictResolution.js";
 import type { ConflictResolverHook } from "./reviewMerge/index.js";
 
 // Builds the run's four role adapters (plan/write/check/audit) by resolving the
@@ -130,15 +125,7 @@ export function simulatedReviewSeam(
 // the REAL impl, never a stub).
 export function resolveConflictResolverHook(
   input: RunPlannerLoopInput,
-  deps: {
-    eventStore: EventStore;
-    target: RunnerHandle;
-    workspacePath: string;
-    baseSha: string;
-    runGate: (gate: { when: CiWhen; taskId?: string }) => Promise<GateOutcome>;
-    checker: SubtaskLoopAdapters["checker"];
-    auditor: SubtaskLoopAdapters["auditor"];
-  },
+  deps: ConflictResolverDeps,
 ): ConflictResolverHook {
   // Test seam: a scripted resolver skips the live runner/model. Production omits
   // it → the real intent-preserving resolver is the default. The `??` lives HERE
@@ -147,18 +134,18 @@ export function resolveConflictResolverHook(
   return input.resolveConflict ?? defaultConflictResolver(input, deps);
 }
 
-function defaultConflictResolver(
-  input: RunPlannerLoopInput,
-  deps: {
-    eventStore: EventStore;
-    target: RunnerHandle;
-    workspacePath: string;
-    baseSha: string;
-    runGate: (gate: { when: CiWhen; taskId?: string }) => Promise<GateOutcome>;
-    checker: SubtaskLoopAdapters["checker"];
-    auditor: SubtaskLoopAdapters["auditor"];
-  },
-): ConflictResolverHook {
+/** The runner/workspace + gate/answerer deps the conflict resolver assembles over. */
+interface ConflictResolverDeps {
+  eventStore: EventStore;
+  target: RunnerHandle;
+  workspacePath: string;
+  baseSha: string;
+  runGate: (gate: { when: CiWhen; taskId?: string }) => Promise<GateOutcome>;
+  checker: SubtaskLoopAdapters["checker"];
+  auditor: SubtaskLoopAdapters["auditor"];
+}
+
+function defaultConflictResolver(input: RunPlannerLoopInput, deps: ConflictResolverDeps): ConflictResolverHook {
   // LAZY construction: the real resolver (which needs the project routing to
   // resolve its conflict Answerer) is built only when a conflict ACTUALLY occurs
   // and the hook is invoked. So a run that merges cleanly never constructs it —
@@ -168,8 +155,114 @@ function defaultConflictResolver(
   // a percolation re-execution's conflict is resolved in UPSTREAM-CHANGE mode.
   return async (conflictContext) => {
     const upstreamChange = await readPercolationUpstreamChange(input);
+    // Wave-3/S1 CUTOVER (`conflictResolverJjLive()`, default ON): provision a live jj
+    // workspace (A1's `buildLiveJjWorkspace`) and run the WHOLE resolver — adapters +
+    // re-gate + applier — over that runner + path, so the re-gate judges the
+    // jj-resolved tree. `rebaseOnto` RECORDS the conflict (fail-closed, no
+    // `git merge --abort` / `|| true` fail-open). A clean run never reaches here, so no
+    // jj runner is allocated for the common path. Flag OFF is the clean kill-switch:
+    // the run's own runner + the git-merge-abort `SshWorkspaceConflictApplier`.
+    if (conflictResolverJjLive()) {
+      return resolveOverLiveJj(input, deps, upstreamChange, conflictContext);
+    }
     return buildResolver(input, deps, upstreamChange)(conflictContext);
   };
+}
+
+/**
+ * Resolve an in-loop conflict over a freshly-provisioned live jj workspace. Mirrors the
+ * drive-path jj resolve: build the live workspace, build the conflict adapters + re-gate
+ * over its runner + path (so the re-gate runs against the jj-resolved tree), build the jj
+ * applier, assemble the resolver, run it. The jj applier owns releasing the live
+ * workspace on its terminal step; a failure BEFORE its gather() took ownership releases
+ * the runner loudly here (never a leaked runner).
+ */
+async function resolveOverLiveJj(
+  input: RunPlannerLoopInput,
+  deps: ConflictResolverDeps,
+  upstreamChange: { ancestorSpecId: string; changeSummary: string } | undefined,
+  conflictContext: Parameters<ConflictResolverHook>[0],
+): Promise<{ resolved: boolean }> {
+  const context = input.context;
+  const orgId = typeof context.orgId === "string" ? context.orgId : "";
+  const live = await buildLiveJjWorkspace({
+    facts: {
+      orgId,
+      projectId: context.projectId,
+      repoUrl: context.repoUrl,
+      runnerImage: context.runnerImage,
+      ...(context.installation !== undefined && { installation: context.installation }),
+      githubCredentialRef: context.githubCredentialRef,
+      identitySecretRef: context.identitySecretRef,
+    },
+    allocator: input.allocator,
+    ssh: input.ssh,
+    secrets: input.secrets,
+    vcsProvider: input.vcsProvider,
+    ...(input.githubAppMinter !== undefined && { githubAppMinter: input.githubAppMinter }),
+    timeoutMs: input.timeoutMs,
+  });
+  const applier = buildJjConflictApplier({
+    live,
+    ssh: input.ssh,
+    secrets: input.secrets,
+    vcsProvider: input.vcsProvider,
+    ...(input.githubAppMinter !== undefined && { githubAppMinter: input.githubAppMinter }),
+    facts: {
+      repoUrl: context.repoUrl,
+      baseBranch: context.targetBranch,
+      // The freshly-cloned base bookmark jj imports — the merge-time base the PR head
+      // rebases onto (never-discard, conflict recorded).
+      baseRevision: `${context.targetBranch}@origin`,
+      headBranch: context.runBranch,
+      ...(context.installation !== undefined && { installation: context.installation }),
+      githubCredentialRef: context.githubCredentialRef,
+    },
+    timeoutMs: input.timeoutMs,
+  });
+  try {
+    // The adapters + re-gate run over the jj workspace's runner + path; the re-gate
+    // baseline is the merge-time base branch (the resolved tree sits on it). ONLY the
+    // workspace mechanism changed — the classify/re-gate/replan logic is identical.
+    const jjAdapters = buildAdaptersFromRouting(
+      {
+        secrets: input.secrets,
+        ssh: input.ssh,
+        target: live.target,
+        runId: context.runId,
+        ...(context.endpointBaseUrl !== undefined && { endpointBaseUrl: context.endpointBaseUrl }),
+      },
+      requireRouting(context.routing),
+    );
+    const resolver = buildResolver(
+      input,
+      {
+        eventStore: deps.eventStore,
+        target: live.target,
+        workspacePath: live.workspacePath,
+        baseSha: context.targetBranch,
+        runGate: buildDefaultGate(input, live.target, live.workspacePath, deps.eventStore),
+        checker: jjAdapters.checker,
+        auditor: jjAdapters.auditor,
+      },
+      upstreamChange,
+      applier,
+    );
+    return await resolver(conflictContext);
+  } catch (error) {
+    // FAIL-CLOSED: a failure before the applier's gather() took workspace ownership
+    // would leak the runner — release it loudly. (Once gather() runs, the applier's
+    // terminal publish/abort owns release; releasing twice is a no-op there.)
+    await live.release();
+    throw error;
+  }
+}
+
+function requireRouting(routing: RunPlannerLoopInput["context"]["routing"]): NonNullable<typeof routing> {
+  if (routing === undefined) {
+    throw new Error("context.routing is required to build the intent-preserving conflict resolver");
+  }
+  return routing;
 }
 
 /**
@@ -198,24 +291,15 @@ async function readPercolationUpstreamChange(
 
 function buildResolver(
   input: RunPlannerLoopInput,
-  deps: {
-    eventStore: EventStore;
-    target: RunnerHandle;
-    workspacePath: string;
-    baseSha: string;
-    runGate: (gate: { when: CiWhen; taskId?: string }) => Promise<GateOutcome>;
-    checker: SubtaskLoopAdapters["checker"];
-    auditor: SubtaskLoopAdapters["auditor"];
-  },
+  deps: ConflictResolverDeps,
   upstreamChange?: { ancestorSpecId: string; changeSummary: string },
+  applier?: WorkspaceConflictApplier,
 ): ConflictResolverHook {
   const context = input.context;
-  const routing = context.routing;
-  if (routing === undefined) {
-    throw new Error("context.routing is required to build the intent-preserving conflict resolver");
-  }
+  const routing = requireRouting(context.routing);
   const orgId = typeof context.orgId === "string" ? context.orgId : undefined;
   return buildDefaultConflictResolver({
+    ...(applier !== undefined && { applier }),
     pool: input.pool,
     ...(input.runStateWriter !== undefined && { runStateWriter: input.runStateWriter }),
     eventStore: deps.eventStore,
@@ -241,187 +325,6 @@ function buildResolver(
     runGate: deps.runGate,
     ...(upstreamChange !== undefined && { upstreamChange }),
   });
-}
-
-// Builds the production gate callback. The CI config is resolved lazily on the
-// first gate call (the workspace is bootstrapped by then) and cached for the
-// rest of the run, so a malformed .tanren/ci.yml surfaces at the first gate
-// rather than crashing the workflow before the loop starts. Each call runs the
-// tiers mapped to `when` over SSH and emits gate.* through the run's store.
-//
-// GREENFIELD DEPS-ENSURE: before EVERY gate the callback runs a guarded
-// `ensureWorkspaceDepsInstalled` (install whenever a manifest exists).
-// prepareRunWorkspace bootstraps ONCE right after clone, before the writer — but a
-// greenfield clone HEAD ships no manifest, so that cold bootstrap skips install;
-// the writer THEN authors `package.json`, and without this the first
-// per-iteration gate would run `pnpm lint` against an uninstalled tree
-// (`turbo: not found` / `vitest: not found`). The install command is resolved
-// LAZILY (cached alongside the config) so a writer-authored `.tanren/ci.yml`
-// `bootstrap.run` is honored.
-//
-// INSTALL MODE (greenfield vs brownfield): when NO explicit install command is set
-// (no `input.bootstrapCommand`, no `.tanren/ci.yml` `bootstrap.run`), the DEFAULT
-// is chosen by `context.greenfield`. A greenfield run (Tanren authored the repo
-// live) uses the NON-FROZEN deps-ensure default so a writer-added devDep installs
-// even without a perfectly-regenerated lockfile. A brownfield run keeps the
-// FROZEN, lockfile-safe `DEFAULT_BOOTSTRAP_COMMAND` (`pnpm install
-// --frozen-lockfile` / `npm ci`) so an existing committed lockfile is NEVER
-// silently mutated / upgraded — main's safe default, restored.
-//
-// NO `installed` LATCH (the P0 fix): the ensure is re-run before EVERY gate and
-// its result is NOT cached. The greenfield manifest MUTATES between writer
-// iterations — a writer can add a devDep (e.g. `vitest`) AFTER an earlier
-// iteration's partial install already created node_modules, and a one-shot
-// "installed once → skip forever" latch would then never install that new devDep,
-// so the gate would die on `vitest: not found`. ensureWorkspaceDepsInstalled now
-// installs whenever a manifest exists (pnpm/npm is the idempotency authority — a
-// redundant install is a cheap no-op), so re-running it each gate is correct and
-// safe. Brownfield → each re-install is the FROZEN command, a cheap, lockfile-safe
-// no-op when deps already agree, behavior-equivalent to main.
-export function buildDefaultGate(
-  input: RunPlannerLoopInput,
-  target: RunnerHandle,
-  workspacePath: string,
-  eventStore: EventStore,
-): (gate: { when: CiWhen; taskId?: string }) => Promise<GateOutcome> {
-  const context = input.context;
-  let configPromise: ReturnType<typeof resolveGateConfig> | undefined;
-  // The lazily-resolved EXPLICIT install command, cached alongside configPromise.
-  // An explicit input.bootstrapCommand wins; otherwise the writer-authored
-  // .tanren/ci.yml `bootstrap.run` is picked up. Undefined here ⇒ no explicit
-  // command, and the per-gate DEFAULT is chosen by `context.greenfield`
-  // (greenfield ⇒ non-frozen DEPS_ENSURE_DEFAULT_COMMAND; brownfield ⇒ frozen
-  // DEFAULT_BOOTSTRAP_COMMAND) — see the install-mode block below.
-  let installCommandPromise: Promise<string | undefined> | undefined;
-  // The advisory (warn-but-don't-block) step names for the run's governance
-  // posture: `lenient` ⇒ {lint, typecheck} are advisory; every other posture ⇒
-  // empty set (strict default — every step blocks, behavior unchanged).
-  const advisoryStepNames = advisoryStepNamesForPosture(context.governancePosture);
-  const appendEvent = async <N extends EventName>(eventType: N, payload: EventPayload<N>, taskId?: string) => {
-    await eventStore.append({
-      runId: context.runId,
-      specId: context.specId,
-      projectId: context.projectId,
-      taskId,
-      eventType,
-      payload,
-    });
-  };
-  return async ({ when, taskId }) => {
-    if (configPromise === undefined) {
-      configPromise = resolveGateConfig({
-        ssh: input.ssh,
-        target,
-        workspacePath,
-        timeoutMs: input.timeoutMs,
-      });
-    }
-    if (installCommandPromise === undefined) {
-      // Resolve the EXPLICIT install command, if any: an `input.bootstrapCommand`
-      // override wins; otherwise the repo's `.tanren/ci.yml` `bootstrap.run`
-      // (undefined when the repo ships no `bootstrap:` key). The greenfield-vs-
-      // brownfield DEFAULT (applied below only when this is undefined) is NOT
-      // baked in here, so an explicit command always wins verbatim in both cases.
-      installCommandPromise =
-        input.bootstrapCommand === undefined
-          ? resolveBootstrapCommand({ ssh: input.ssh, target, workspacePath, timeoutMs: input.timeoutMs })
-          : Promise.resolve(input.bootstrapCommand);
-    }
-    // Install deps before the gate runs, EVERY gate (no latch). The install is
-    // idempotent (pnpm/npm reconciles an already-installed tree as a cheap no-op),
-    // and re-running it each gate is what catches a writer-added devDep authored
-    // AFTER an earlier iteration's install — a one-shot latch would skip it and the
-    // gate would die on `vitest: not found`. A real install failure throws
-    // WorkspaceDepsInstallError and halts the run loudly (no silent skip).
-    //
-    // INSTALL MODE (no explicit command): a GREENFIELD run leaves `command`
-    // undefined → ensureWorkspaceDepsInstalled uses its NON-FROZEN
-    // DEPS_ENSURE_DEFAULT_COMMAND (a writer-added devDep installs even without a
-    // perfectly-regenerated lockfile). A BROWNFIELD run uses the FROZEN,
-    // lockfile-safe DEFAULT_BOOTSTRAP_COMMAND (`pnpm install --frozen-lockfile` /
-    // `npm ci`) so an existing committed lockfile is NEVER silently mutated /
-    // upgraded — restoring main's safe brownfield default. An explicit command
-    // (resolved above) overrides this in either case.
-    const resolvedInstallCommand = await installCommandPromise;
-    const installCommand =
-      resolvedInstallCommand ?? (input.context.greenfield === true ? undefined : DEFAULT_BOOTSTRAP_COMMAND);
-    await ensureWorkspaceDepsInstalled({
-      ssh: input.ssh,
-      target,
-      workspacePath,
-      ...(installCommand === undefined ? {} : { command: installCommand }),
-      ...(input.appEnv === undefined ? {} : { appEnv: input.appEnv }),
-      timeoutMs: input.timeoutMs,
-    });
-    const config = await configPromise;
-    // Anchor the native verdict on the commit the gate is about to verify (the
-    // workspace HEAD). "" on a fake-SSH unit path ⇒ runGateForWhen emits no verdict.
-    const headSha = await resolveWorkspaceHeadSha({
-      ssh: input.ssh,
-      target,
-      workspacePath,
-      timeoutMs: input.timeoutMs,
-    });
-    const outcome = await runGateForWhen({
-      ssh: input.ssh,
-      target,
-      workspacePath,
-      config,
-      when,
-      timeoutMs: input.timeoutMs,
-      appendEvent,
-      taskId,
-      advisoryStepNames,
-      // AUDIT-EVIDENCE BASELINE: the governance policy version, threaded so the
-      // gate.verdict roll-up records which policy revision the gate was judged under.
-      ...(input.context.policyVersion === undefined ? {} : { policyVersion: input.context.policyVersion }),
-      ...(headSha === "" ? {} : { headSha }),
-      // Plane B: the project's dev+test app env, so the building agent's gate
-      // commands run with it. Never logged/emitted. Distinct from Tanren creds.
-      ...(input.appEnv === undefined ? {} : { appEnv: input.appEnv }),
-    });
-    // NATIVE PER-TEST INGEST: read the runner's JUnit report (if the gate's test step
-    // emitted one) + persist the per-test rows IN-PROCESS — the CI-intelligence grain,
-    // straight from the runner, no webhook. Best-effort: it never affects the verdict.
-    await ingestGateJunitBestEffort(input, target, workspacePath, headSha, outcome.passed);
-    return outcome;
-  };
-}
-
-/**
- * Ingest the gate's JUnit report in-process, best-effort. Skipped when there is no
- * head-sha anchor (fake-SSH unit path) or no org (a legacy/unscoped run — the
- * `ci_test_results` row is org-stamped). The run already runs under the org's ambient
- * scope, so `input.pool` self-scopes the INSERT. A read/parse error is logged + swallowed
- * (the per-test grain is an enrichment, never a gate-blocker), so it can NEVER fail the run.
- */
-async function ingestGateJunitBestEffort(
-  input: RunPlannerLoopInput,
-  target: RunnerHandle,
-  workspacePath: string,
-  headSha: string,
-  gatePassed: boolean,
-): Promise<void> {
-  const orgId = input.context.orgId;
-  if (headSha === "" || orgId === undefined || orgId === null) {
-    return;
-  }
-  try {
-    await ingestGateJunit({
-      ssh: input.ssh,
-      target,
-      workspacePath,
-      client: input.pool,
-      runId: input.context.runId,
-      projectId: input.context.projectId,
-      orgId,
-      headSha,
-      timeoutMs: input.timeoutMs,
-      gatePassed,
-    });
-  } catch (error) {
-    console.error(`[gate] native JUnit ingest failed for run ${input.context.runId} (non-blocking):`, error);
-  }
 }
 
 /**

@@ -23,7 +23,8 @@ const ignoredDirs = new Set(["node_modules", "dist", "coverage", ".git"]);
 const roadmapDocs = ["PROJECT_BRIEF.md", "ROADMAP.md", "docs/architecture/autonomy-engine.md"];
 // The vendored LiteLLM model-price snapshot is DATA (refreshed by
 // scripts/refresh-model-prices.mjs), exempt from the 500-line source cap.
-const vendoredData = ["services/orchestrator/src/engine/costs/pricing/model_prices.json"];
+// cspell.json is appended: a DATA word-list (grows with the codebase), exempt like the vendored data.
+const vendoredData = ["services/orchestrator/src/engine/costs/pricing/model_prices.json", "cspell.json"];
 const lineMaxExclusions = new Set([...roadmapDocs, ...vendoredData, "pnpm-lock.yaml"]);
 const invariantDocExclusions = new Set(["PROJECT_BRIEF.md", "docs/contracts/architecture-checks.md"]);
 const rawEventWriteProofs = [

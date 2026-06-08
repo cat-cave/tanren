@@ -18,12 +18,13 @@
 // injected (the `buildResolver` test seam) so we assert the wrapper's classification
 // without driving the live model/SSH machinery (which the resolver-core suite covers).
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import type pg from "pg";
 import { FakeAllocator } from "../src/engine/contracts/allocator.js";
-import type { AllocationRequest } from "../src/engine/contracts/allocator.js";
+import type { AllocationRequest, RunnerHandle } from "../src/engine/contracts/allocator.js";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
 import { FakeCommandSubstrate } from "../src/engine/contracts/commandSubstrate.js";
+import type { CommandResult, RunnerCommand } from "../src/engine/contracts/commandSubstrate.js";
 import {
   buildDriveConflictResolve,
   type DriveConflictResolveDeps,
@@ -133,13 +134,14 @@ function makeDeps(
   allocator: SpyAllocator,
   verdict: DriveConflictVerdict,
   buildResolver?: DriveConflictResolveDeps["buildResolver"],
+  ssh: DriveConflictResolveDeps["ssh"] = new FakeCommandSubstrate(),
 ): DriveConflictResolveDeps {
   return {
     pool,
     scopedPool: pool,
     facts: FACTS,
     allocator,
-    ssh: new FakeCommandSubstrate(),
+    ssh,
     secrets: new FakeSecretStore(),
     vcsProvider: new InMemoryVcsProvider(),
     eventStore: new FakeEventStore(),
@@ -153,6 +155,15 @@ function makeDeps(
 /** A scripted resolver hook (the injected test seam) returning a fixed outcome. */
 function scriptedResolver(resolved: boolean): DriveConflictResolveDeps["buildResolver"] {
   return () => (async () => ({ resolved })) satisfies ConflictResolverHook;
+}
+
+/** A command substrate that records every command run (to assert the workspace mechanism). */
+class RecordingSubstrate extends FakeCommandSubstrate {
+  readonly commands: string[] = [];
+  override async run(handle: RunnerHandle, command: RunnerCommand): Promise<CommandResult> {
+    this.commands.push(command.command);
+    return super.run(handle, command);
+  }
 }
 
 describe("buildDriveConflictResolve — classify-then-escalate + percolation/cap guards", () => {
@@ -250,3 +261,54 @@ describe("buildDriveConflictResolve — classify-then-escalate + percolation/cap
     expect(allocator.allocateCalls).toBe(0);
   });
 });
+
+// The Wave-3/S1 cutover: with NO `buildResolver` seam (the production shape), the flag
+// selects the WORKSPACE MECHANISM — jj (default ON) vs the git-merge-abort path (OFF).
+// Asserted by which clone command the workspace mechanism issues over the substrate.
+describe("buildDriveConflictResolve — jj cutover flag selects the workspace mechanism", () => {
+  const prior = process.env["CONFLICT_RESOLVER_JJ_LIVE"];
+  afterEach(() => {
+    if (prior === undefined) delete process.env["CONFLICT_RESOLVER_JJ_LIVE"];
+    else process.env["CONFLICT_RESOLVER_JJ_LIVE"] = prior;
+  });
+
+  it("FLAG ON (default): provisions the live jj workspace — the clone is `jj git clone`, never `git clone`", async () => {
+    delete process.env["CONFLICT_RESOLVER_JJ_LIVE"];
+    const pool = fakePool({ priorReplans: 0 });
+    const allocator = new SpyAllocator();
+    const ssh = new RecordingSubstrate();
+    // No buildResolver seam → the real workspace mechanism runs. The fake substrate
+    // returns exit 0 for everything, so the jj rebase probe reads "clean" → an empty
+    // conflict → {resolved:false} (a real "nothing to resolve" state, NOT a swallow).
+    const hook = buildDriveConflictResolve(makeDeps(pool, allocator, {}, undefined, ssh));
+
+    // The downstream resolver reads provenance over the fake pool (unscripted SQL) and
+    // may reject AFTER the clone — we assert the clone the workspace mechanism issued,
+    // so tolerate a later throw.
+    await hook(CONTEXT).catch(() => {});
+
+    expect(allocator.allocateCalls).toBe(1);
+    expect(ssh.commands.some((c) => c.includes("jj git clone"))).toBe(true);
+    // No PLAIN `git clone` (the git-merge-abort path's clone) — only `jj git clone`.
+    expect(ssh.commands.some((c) => isPlainGitClone(c))).toBe(false);
+  });
+
+  it("FLAG OFF (kill-switch): reverts to the git-clone path — `git clone`, never `jj git clone`", async () => {
+    process.env["CONFLICT_RESOLVER_JJ_LIVE"] = "0";
+    const pool = fakePool({ priorReplans: 0 });
+    const allocator = new SpyAllocator();
+    const ssh = new RecordingSubstrate();
+    const hook = buildDriveConflictResolve(makeDeps(pool, allocator, {}, undefined, ssh));
+
+    await hook(CONTEXT).catch(() => {});
+
+    expect(allocator.allocateCalls).toBe(1);
+    expect(ssh.commands.some((c) => isPlainGitClone(c))).toBe(true);
+    expect(ssh.commands.some((c) => c.includes("jj git clone"))).toBe(false);
+  });
+});
+
+/** True for a PLAIN `git clone` (the git-merge-abort path) — NOT the jj `jj git clone`. */
+function isPlainGitClone(command: string): boolean {
+  return /(?<!jj )(?<![A-Za-z])git clone\b/u.test(command);
+}

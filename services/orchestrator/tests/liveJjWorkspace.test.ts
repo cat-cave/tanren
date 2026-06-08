@@ -116,4 +116,39 @@ describe("buildLiveJjWorkspace — fail-closed / no-leak error path", () => {
     expect((thrown as Error).message).toBe(TOKEN_FAILURE);
     expect(allocator.releasedRunnerIds).toHaveLength(1);
   });
+
+  it("release() is IDEMPOTENT — a second call (after the applier already released) is a no-op", async () => {
+    // A SUCCESSFUL build (a static-only credential resolves clean) returns the workspace
+    // + its `release`. The SAME closure is held by the applier (terminal publish/abort)
+    // AND the wiring's fail-closed catch; a later resolver step throwing must NOT
+    // double-release the runner. Calling release() twice releases exactly once.
+    const allocator = new ScriptedAllocator(() => Promise.resolve());
+    const okSecrets = new FakeSecretStore();
+    await okSecrets.put({ ref: "github/static/token", value: "ghp_fake" });
+    const ws = await buildLiveJjWorkspace({
+      ...deps(allocator),
+      secrets: okSecrets,
+      // A provider that resolves the static token cleanly (build SUCCEEDS this time).
+      vcsProvider: staticTokenVcsProvider(),
+    });
+
+    await ws.release();
+    await ws.release();
+
+    // Exactly one allocator.release — the second call short-circuited (idempotent).
+    expect(allocator.releasedRunnerIds).toHaveLength(1);
+    expect(allocator.releasedRunnerIds[0]).toMatch(/^runner_run_live_jj_/u);
+  });
 });
+
+/** A VcsProvider whose `resolveToken` resolves a static token (build SUCCEEDS). */
+function staticTokenVcsProvider(): VcsProvider {
+  return new Proxy({} as VcsProvider, {
+    get: (_t, prop) =>
+      prop === "resolveToken"
+        ? () => Promise.resolve({ token: "ghp_fake", source: "static" as const })
+        : () => {
+            throw new Error(`unexpected VcsProvider.${String(prop)}`);
+          },
+  });
+}

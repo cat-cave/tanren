@@ -134,7 +134,19 @@ export async function buildLiveJjWorkspace(deps: LiveJjWorkspaceDeps): Promise<L
 
   // The LOUD-on-leak release finalizer (driveConflictResolve's exact shape): a leaked
   // runner is a real cost+capacity fault, so surface it rather than swallow it.
+  //
+  // IDEMPOTENT (released-exactly-once): the SAME `release` closure is held by the applier
+  // (run on its terminal publish/abort) AND by the wiring's fail-closed catch blocks
+  // (run if a LATER resolver step — e.g. the resolved-event append — throws AFTER publish
+  // already released). A second call MUST be a no-op so the runner is released exactly
+  // once, never double-released-into-an-error. The flag is set BEFORE the await so the
+  // release runs at most once; the FIRST call stays LOUD on a real release failure.
+  let released = false;
   const release = async (): Promise<void> => {
+    if (released) {
+      return;
+    }
+    released = true;
     await deps.allocator.release(allocation.runnerId, "completed").catch((error: unknown) => {
       console.error(
         `[live-jj-workspace] FAILED to release runner ${allocation.runnerId} for ${handle} — leaked runner:`,
