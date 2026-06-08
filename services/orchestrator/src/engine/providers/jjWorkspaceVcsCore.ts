@@ -70,6 +70,20 @@ export type JjWorkingEdit = (message: string) => string[];
  */
 export const autoSnapshotWorkingEdit: JjWorkingEdit = () => [];
 
+/**
+ * MERGE-SAFETY (self-identity, finding #7): the git author every commit this jj
+ * workspace makes attributes to. A commit jj exports + pushes onto a PR (the
+ * conflict-resolution commit) MUST carry the bot login the external-change gate
+ * recognizes as Tanren's — `name` = the bot login, `email` = the canonical
+ * `<bot-user-id>+<slug>[bot]@users.noreply.github.com` noreply. Absent ⇒ the
+ * non-attributable conformance/public default (`Tanren` / `tanren@local`), which
+ * never lands on a real PR.
+ */
+export interface JjCommitIdentity {
+  name: string;
+  email: string;
+}
+
 export interface JjWorkspaceVcsCoreDeps {
   /** The command substrate (SSH today) jj is shelled through, like git. */
   substrate: CommandSubstrate;
@@ -81,7 +95,16 @@ export interface JjWorkspaceVcsCoreDeps {
   refResolver?: JjRefResolver;
   /** Working-tree edit applied on each `commit` (default: auto-snapshot / production). */
   workingEdit?: JjWorkingEdit;
+  /**
+   * MERGE-SAFETY: the bot git author every commit carries (see {@link JjCommitIdentity}).
+   * Absent ⇒ the non-attributable `Tanren` / `tanren@local` default (conformance +
+   * the public/unauthenticated path, which never pushes a commit onto a real PR).
+   */
+  commitIdentity?: JjCommitIdentity;
 }
+
+/** The non-attributable jj author the conformance + public/unauthenticated paths use. */
+const DEFAULT_JJ_COMMIT_IDENTITY: JjCommitIdentity = { name: "Tanren", email: "tanren@local" };
 
 // Internal per-workspace state held by the impl (NOT exposed on the handle).
 interface JjWorkspaceState {
@@ -135,6 +158,7 @@ export class JjWorkspaceVcsCore implements WorkspaceVcsCore {
   private readonly timeoutMs: number;
   private readonly refResolver: JjRefResolver;
   private readonly workingEdit: JjWorkingEdit;
+  private readonly commitIdentity: JjCommitIdentity;
   private readonly workspaces = new Map<string, JjWorkspaceState>();
   private seq = 0;
 
@@ -144,6 +168,7 @@ export class JjWorkspaceVcsCore implements WorkspaceVcsCore {
     this.timeoutMs = deps.timeoutMs;
     this.refResolver = deps.refResolver ?? identityJjRefResolver;
     this.workingEdit = deps.workingEdit ?? autoSnapshotWorkingEdit;
+    this.commitIdentity = deps.commitIdentity ?? DEFAULT_JJ_COMMIT_IDENTITY;
   }
 
   async openWorkspace(input: OpenWorkspaceInput): Promise<WorkspaceHandle> {
@@ -161,9 +186,15 @@ export class JjWorkspaceVcsCore implements WorkspaceVcsCore {
     // Configure the repo-local jj identity: jj 0.42 commits with the EMPTY identity
     // (and warns they can't be pushed) until user.name/email are set. Set them once
     // per workspace so every commit/export carries a real author.
+    //
+    // MERGE-SAFETY (self-identity, finding #7): when a bot `commitIdentity` is set
+    // (the live conflict-resolve path), every commit jj exports + pushes onto a PR
+    // attributes to the bot login the external-change gate recognizes as Tanren's.
+    // Absent ⇒ the non-attributable `Tanren` / `tanren@local` default (conformance +
+    // the public/unauthenticated path, which never lands a commit on a real PR).
     await this.runJj(input.path, [
-      `jj config set --repo user.name ${quoteSshShellArg("Tanren")}`,
-      `jj config set --repo user.email ${quoteSshShellArg("tanren@local")}`,
+      `jj config set --repo user.name ${quoteSshShellArg(this.commitIdentity.name)}`,
+      `jj config set --repo user.email ${quoteSshShellArg(this.commitIdentity.email)}`,
       // Put the working copy onto the base branch (a working commit on top of it, so
       // edits never land directly on the immutable base bookmark).
       `jj new ${quoteSshShellArg(input.baseBranch)}`,
