@@ -26,7 +26,7 @@ import { ForgeThreadStore, ForgeTurnStore } from "../../engine/forge/index.js";
 import { loadInsightsForProject } from "../../engine/insights/index.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { actorCanAccessOrg } from "../orgs/access.js";
-import { type RunDetail, type RunListItem, type RunSpecSummary, RECENT_EVENT_CAP } from "./contract.js";
+import { type RunDetail, type RunListItem, RECENT_EVENT_CAP } from "./contract.js";
 import {
   fetchCostsPage,
   fetchEventsPage,
@@ -132,6 +132,14 @@ export function createRunRoutes(options: RunRoutesOptions) {
         fetchRunCostsForSnapshot(client, runId, orgId),
       ]),
     );
+    // No silent fallback: a run ALWAYS references a real spec (FK), so a missing
+    // spec here is a required relation failure — the row is gone or RLS-denied it.
+    // Surface it loudly (404) rather than fabricating a `(spec not found)`
+    // placeholder that masks the broken run→spec relation.
+    if (spec === undefined) {
+      return c.json({ error: "run_spec_not_found", specId: summary.specId }, 404);
+    }
+
     const [insights, forgeThread] = await Promise.all([
       fetchRunInsights(options.pool, summary.projectId, summary.specId, runId),
       fetchForgeBundle(options.pool, { orgId, projectId, runId, actor }),
@@ -139,7 +147,7 @@ export function createRunRoutes(options: RunRoutesOptions) {
 
     const detail: RunDetail = {
       run: summary,
-      spec: spec ?? fallbackSpec(summary.specId),
+      spec,
       tasks,
       recentEvents,
       costs,
@@ -389,42 +397,28 @@ interface ForgeBundleArgs {
 }
 
 async function fetchForgeBundle(pool: pg.Pool, args: ForgeBundleArgs): Promise<RunDetail["forgeThread"]> {
-  try {
-    // RLS R2 cohort-4 (forge): the run-detail Forge bundle's cross-store reads
-    // (listForRun + turns) run in one org-scoped txn (org = args.orgId, already
-    // validated against the actor at the route). Cohort-1 left this on the pool
-    // as a cross-store read; this is its conversion. Inert in R1.
-    return await runWithOrgScope(pool, args.orgId, async (client) => {
-      const threads = await ForgeThreadStore.listForRun(
-        client,
-        { orgId: args.orgId, projectId: args.projectId, runId: args.runId },
-        args.actor,
-      );
-      const head = threads[0];
-      if (head === undefined) return null;
-      const turns = await ForgeTurnStore.list(client, { threadId: head.id, limit: 50 }, args.actor);
-      return { threadId: head.id, recentTurns: turns };
-    });
-  } catch {
-    // ForgeThreadStore throws when the actor cannot reach the thread's
-    // scope. Treat that as "no bundle" so the rest of the run detail still
-    // renders rather than returning a 403 for the whole snapshot.
-    return null;
-  }
-}
-
-function fallbackSpec(specId: string): RunSpecSummary {
-  // A fixture run may reference a spec_id that has no row in
-  // the specs table. The contract requires a spec object on RunDetail, so we
-  // return a degraded-but-typed shape rather than 500ing. The dashboard can
-  // render "spec missing".
-  return {
-    specId,
-    title: "(spec not found)",
-    description: "",
-    behaviorIds: [],
-    milestoneId: null,
-  };
+  // RLS R2 cohort-4 (forge): the run-detail Forge bundle's cross-store reads
+  // (listForRun + turns) run in one org-scoped txn (org = args.orgId, already
+  // validated against the actor at the route, and the project access gated). The
+  // genuine "no Forge narration yet" case is `head === undefined → null`.
+  //
+  // No silent fallback: a thrown store/read error here is NOT "no narration" — it
+  // is a failed read (a transport error, a corrupt thread row, an unexpectedly
+  // denied scope). The actor was already validated against the org/project at the
+  // route, so an access throw is itself a real fault to surface, not a benign
+  // "this actor can't see the thread". Let it PROPAGATE so the route 500s loudly
+  // rather than rendering a falsely-empty Forge panel that masks the failure.
+  return await runWithOrgScope(pool, args.orgId, async (client) => {
+    const threads = await ForgeThreadStore.listForRun(
+      client,
+      { orgId: args.orgId, projectId: args.projectId, runId: args.runId },
+      args.actor,
+    );
+    const head = threads[0];
+    if (head === undefined) return null;
+    const turns = await ForgeTurnStore.list(client, { threadId: head.id, limit: 50 }, args.actor);
+    return { threadId: head.id, recentTurns: turns };
+  });
 }
 
 // Re-export so 2B can import insight typing from a single point.

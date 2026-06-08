@@ -18,6 +18,7 @@ import {
   createIssuesConnector,
   createJiraConnector,
   createLinearConnector,
+  IntakeSourceAuthError,
   ingestSource,
   type InboxEngineDeps,
   type InboxSource,
@@ -243,14 +244,15 @@ describe("jira connector (mocked)", () => {
     expect(calls[0]?.body["jql"]).toBe('project = "CAT" AND status = "To Do" ORDER BY updated DESC');
   });
 
-  it("returns no items on a non-200 response", async () => {
+  it("THROWS a loud auth error on a 401 (no-silent-fallbacks: a denied fetch is NOT 'no issues')", async () => {
     const client: JiraHttpClient = {
       async request() {
         return { status: 401, body: { errorMessages: ["bad creds"] } };
       },
     };
-    const items = await createJiraConnector({ secrets, jiraHttp: client }).fetch(jiraSource);
-    expect(items).toHaveLength(0);
+    await expect(createJiraConnector({ secrets, jiraHttp: client }).fetch(jiraSource)).rejects.toThrow(
+      IntakeSourceAuthError,
+    );
   });
 
   it("throws when the configured token ref is missing from the secret store", async () => {

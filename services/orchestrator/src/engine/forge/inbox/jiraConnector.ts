@@ -17,6 +17,7 @@
 
 import { z } from "zod";
 import type { SecretStore } from "../../contracts/secretStore.js";
+import { assertIntakeResponseOk, IntakeSourceFetchError } from "./connectorErrors.js";
 import type { IngestedItem, InboxSource, SourceConnector } from "./types.js";
 
 // The `config` shape a Jira `issues` source carries. `provider: "jira"` selects
@@ -200,10 +201,15 @@ export function createJiraConnector(deps: JiraConnectorDeps): SourceConnector {
           fields: ["summary", "description", "priority"],
         },
       });
-      if (response.status !== 200) return [];
-
+      // No-silent-fallbacks: a non-200 is a LOUD throw (401/403 ⇒ auth, else ⇒
+      // transient), NEVER an empty list. A genuinely empty project returns 200 with
+      // `{ issues: [] }`; a 200 whose body carries no `issues` array is a failed
+      // read (an error envelope / shape change) — also LOUD.
+      assertIntakeResponseOk("jira", response.status);
       const issues = (response.body as SearchResponse).issues;
-      if (!Array.isArray(issues)) return [];
+      if (!Array.isArray(issues)) {
+        throw new IntakeSourceFetchError("jira", response.status, "200 body had no issues array");
+      }
 
       const items: IngestedItem[] = [];
       for (const issue of issues) {
