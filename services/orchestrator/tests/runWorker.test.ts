@@ -16,7 +16,7 @@ import type { PgNotifyListener } from "@tanren/db";
 import { describe, expect, it } from "vitest";
 import { FakeJobQueue } from "../src/engine/contracts/jobQueue.js";
 import { executeNextPlanJob, RunWorker } from "../src/engine/worker/index.js";
-import { deps, passingGitHub, setupSeededRun } from "./helpers/workerExec.js";
+import { deps, enqueuePlanJob, passingGitHub, setupSeededRun } from "./helpers/workerExec.js";
 
 // A fake LISTEN/NOTIFY listener that captures the subscribed handler so a test
 // can fire a "job enqueued" wake on demand. `fire()` simulates an inbound
@@ -39,12 +39,7 @@ describe("run worker (dequeue→execute seam)", () => {
   it("claims the queued plan job, runs the workflow, completes the job, and lands a terminal run", async () => {
     const { pool, secrets, run } = await setupSeededRun();
     const jobQueue = new FakeJobQueue();
-    await jobQueue.enqueue({
-      runId: run.runId,
-      taskId: run.plannerTaskId,
-      taskKind: "plan",
-      payload: {},
-    });
+    await enqueuePlanJob(jobQueue, run);
 
     const github = passingGitHub();
     const result = await executeNextPlanJob(deps(pool, secrets, jobQueue, github));
@@ -60,12 +55,7 @@ describe("run worker (dequeue→execute seam)", () => {
   it("heartbeats the claimed job's lease while the workflow runs (P3-0028)", async () => {
     const { pool, secrets, run } = await setupSeededRun();
     const jobQueue = new FakeJobQueue();
-    await jobQueue.enqueue({
-      runId: run.runId,
-      taskId: run.plannerTaskId,
-      taskKind: "plan",
-      payload: {},
-    });
+    await enqueuePlanJob(jobQueue, run);
 
     let heartbeats = 0;
     const original = jobQueue.heartbeat.bind(jobQueue);
@@ -104,12 +94,7 @@ describe("run worker (dequeue→execute seam)", () => {
   it("fails the job and lands the run in a recoverable state when the workflow throws", async () => {
     const { pool, secrets, run } = await setupSeededRun();
     const jobQueue = new FakeJobQueue();
-    await jobQueue.enqueue({
-      runId: run.runId,
-      taskId: run.plannerTaskId,
-      taskKind: "plan",
-      payload: {},
-    });
+    await enqueuePlanJob(jobQueue, run);
 
     const throwingDeps = {
       ...deps(pool, secrets, jobQueue, passingGitHub()),
@@ -132,12 +117,7 @@ describe("run worker (dequeue→execute seam)", () => {
   it("drains in-flight work on stop and stops claiming", async () => {
     const { pool, secrets, run } = await setupSeededRun();
     const jobQueue = new FakeJobQueue();
-    await jobQueue.enqueue({
-      runId: run.runId,
-      taskId: run.plannerTaskId,
-      taskKind: "plan",
-      payload: {},
-    });
+    await enqueuePlanJob(jobQueue, run);
 
     const results: string[] = [];
     const worker = new RunWorker(deps(pool, secrets, jobQueue, passingGitHub()), {
@@ -188,7 +168,7 @@ describe("run worker (dequeue→execute seam)", () => {
 
     // Enqueue a job, then fire the wake — the parked slot must re-claim WITHOUT
     // waiting out the 60s backstop.
-    await jobQueue.enqueue({ runId: run.runId, taskId: run.plannerTaskId, taskKind: "plan", payload: {} });
+    await enqueuePlanJob(jobQueue, run);
     fire();
 
     // Poll for the woken execution (fast: the slot re-claimed on wake).

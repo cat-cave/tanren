@@ -5,10 +5,14 @@
 //     `auto_routed` + a new spec id (the candidate became a DAG spec).
 //   • a non-routable event → 200 `inboxed` (the candidate rests in the inbox).
 //   • a missing/bad signature → 401, with NO ingest (signature is mandatory).
+//   • the intake runs UNDER the source's org scope (the poller-parity fix: the
+//     webhook path establishes `runWithJobOrgId(source.orgId)` so the tenant
+//     candidate-upsert + DAG insert are admitted by RLS, not a silent dead-end).
 
 import type pg from "pg";
 import { describe, expect, it } from "vitest";
 import { createHmac } from "node:crypto";
+import { getJobOrgId } from "@tanren/db";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
 import { createIssueWebhookRoutes } from "../src/routes/githubWebhooks/issues.js";
 import type {
@@ -209,5 +213,41 @@ describe("issues webhook route (P1d)", () => {
       body,
     });
     expect(res.status).toBe(404);
+  });
+
+  it("runs the intake UNDER the source's org scope (poller-parity — not a silent dead-end)", async () => {
+    // The fix: the webhook path establishes `runWithJobOrgId(source.orgId)` + the
+    // org-scoping pool BEFORE the tenant intake (candidate upsert + DAG insert),
+    // exactly like the poller. On the BARE pool those tenant ops run with no
+    // `app.current_org_id` and RLS denies them → the issue dead-ends (202, never the
+    // DAG) under `tanren_app`. We prove the scope is established by capturing the
+    // ambient job-org-id INSIDE the triage answerer (which runs within the intake).
+    const pool = stubPool();
+    let seenJobOrg: string | undefined = "sentinel";
+    const capturingTriage: TriageAnswerer = {
+      async triage(): Promise<CandidateTriage> {
+        seenJobOrg = getJobOrgId();
+        return {
+          dedupe: "no match",
+          match: "new behavior",
+          placement: "auto",
+          verdict: "needs_call",
+          duplicateOfSpecId: null,
+          discoveryVariant: "feature",
+          routableSpec: null,
+        };
+      },
+    };
+    const app = await buildApp(capturingTriage, pool.pool);
+    const body = issuesBody(6, "scoped");
+    const res = await app.request(`/github/webhooks/issues/${source.id}`, {
+      method: "POST",
+      headers: { "x-github-event": "issues", "x-hub-signature-256": sign(body), "content-type": "application/json" },
+      body,
+    });
+    expect(res.status).toBe(200);
+    // The intake ran under the source's org — the scope the RLS-protected tenant
+    // writes need. Off scope (the old bare-pool path) this would be `undefined`.
+    expect(seenJobOrg).toBe(source.orgId);
   });
 });

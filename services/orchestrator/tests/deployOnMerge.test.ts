@@ -1,9 +1,11 @@
 // Deploy-on-merge ("a deploy happened") coverage: a merged run whose project has a
 // deploy integration TRIGGERS a real deploy of the merged ref onto the Vercel/Fly
-// app + attaches the runtime app env; a project with NO deploy integration is a
-// clean no-op; a re-check after a prior deploy is idempotent; a configured-but-
-// missing grant fails LOUD. Driven over a fake pool (the watcher's system-scoped
-// reads) + the scripted deploy transport — no Postgres, no real provider.
+// app + attaches the runtime app env; a project with NO deploy configured AND no
+// deploy intent is a clean no-op; a deploy that IS expected (the org links a deploy
+// integration) but whose config is INCOMPLETE fails LOUD (never a silent skip); a
+// re-check after a prior deploy is idempotent; a configured-but-missing grant fails
+// LOUD. Driven over a fake pool (the watcher's system-scoped reads) + the scripted
+// deploy transport — no Postgres, no real provider.
 
 import { describe, expect, it } from "vitest";
 import type pg from "pg";
@@ -29,6 +31,13 @@ interface PoolState {
   config: Record<string, unknown>;
   /** The org grant row (org_integrations) for the deploy provider, when linked. */
   grant?: { provider_kind: string; credential_ref: string; metadata: Record<string, unknown> };
+  /**
+   * The org's `org_integrations` grant LIST the deploy-intent probe reads
+   * (loadDeployTarget → OrgIntegrationsStore.list). Used to distinguish a legitimate
+   * "no deploy configured" no-op from an "incomplete deploy config when a deploy was
+   * expected" loud failure. Defaults to [] (no deploy intent).
+   */
+  linkedGrants?: Array<{ provider_kind: string; capabilities?: string[]; credential_ref?: string }>;
   /** Whether a prior deploy.triggered exists for the run (resume-verify path). */
   alreadyDeployed?: boolean;
   /** Whether a prior deploy.verified exists (full idempotency — skip entirely). */
@@ -70,6 +79,20 @@ function fakePool(state: PoolState): pg.Pool {
     }
     if (/FROM org_integrations WHERE org_id = \$1 AND provider_kind = \$2/u.test(sql)) {
       return state.grant === undefined ? { rows: [], rowCount: 0 } : { rows: [{ ...state.grant }], rowCount: 1 };
+    }
+    if (/FROM org_integrations WHERE org_id = \$1 ORDER BY provider_kind/u.test(sql)) {
+      // The deploy-intent probe (OrgIntegrationsStore.list). Map domain rows into the
+      // store's row shape (id/credential_ref/metadata/capabilities/status).
+      const rows = (state.linkedGrants ?? []).map((g, i) => ({
+        id: `int_${i}`,
+        org_id: ORG_ID,
+        provider_kind: g.provider_kind,
+        credential_ref: g.credential_ref ?? "secret://org/x",
+        metadata: {},
+        capabilities: g.capabilities ?? [],
+        status: "linked",
+      }));
+      return { rows, rowCount: rows.length };
     }
     if (/FROM project_app_env WHERE project_id/u.test(sql)) {
       return { rows: state.appEnv ?? [], rowCount: (state.appEnv ?? []).length };
@@ -272,12 +295,56 @@ describe("DeployOnMergeWatcher (a deploy happened)", () => {
     expect(events.appends.find((a) => a.eventType === "deploy.failed")).toBeUndefined();
   });
 
-  it("is a clean NO-OP for a project with no deploy integration (no error, no deploy)", async () => {
+  it("is a clean NO-OP for a project with no deploy config AND no deploy intent (no error, no deploy)", async () => {
+    // No deployProvider/deployAppId AND the org links NO deploy-capable integration ⇒
+    // a LEGITIMATE no-op (most projects have no deploy target). Logged, never an error.
     const transport = scriptedDeployTransport("vercel");
     const events = new RecordingEventStore();
-    await run({ merged: true, config: {} }, transport, events);
+    await run({ merged: true, config: {}, linkedGrants: [] }, transport, events);
     expect(transport.deploysTriggered()).toEqual([]);
     expect(events.appends).toEqual([]);
+  });
+
+  it("fails LOUD when a deploy IS expected (a deploy integration is linked) but the config is INCOMPLETE", async () => {
+    // The org links a deploy-capable integration (deploy is EXPECTED) but the project
+    // config carries no complete deploy target. For apex (which proves a live URL) this
+    // must NEVER silently skip and make the run look "done" without a deployment — it is
+    // a LOUD fail-closed misconfiguration. Probed via a grant whose CAPABILITY is deploy.
+    const transport = scriptedDeployTransport("vercel");
+    const events = new RecordingEventStore();
+    await expect(
+      run(
+        {
+          merged: true,
+          config: { version: 1 },
+          linkedGrants: [{ provider_kind: "ci.something", capabilities: ["deploy"] }],
+        },
+        transport,
+        events,
+      ),
+    ).rejects.toThrow(/links a deploy integration .*no complete deploy target/u);
+    expect(transport.deploysTriggered()).toEqual([]);
+    // No deploy event was appended — it dead-ended LOUD before any trigger.
+    expect(events.appends).toEqual([]);
+  });
+
+  it("fails LOUD on an INCOMPLETE config when the deploy intent comes from a deploy PROVIDER grant kind", async () => {
+    // Deploy intent is also signalled by a grant whose provider_kind IS a deploy
+    // provider (deploy.vercel/deploy.flyio), even with no explicit `deploy` capability.
+    const transport = scriptedDeployTransport("vercel");
+    const events = new RecordingEventStore();
+    await expect(
+      run(
+        {
+          merged: true,
+          config: { version: 1, deployProvider: "deploy.vercel" },
+          linkedGrants: [{ provider_kind: "deploy.vercel" }],
+        },
+        transport,
+        events,
+      ),
+    ).rejects.toThrow(/missing deployAppId/u);
+    expect(transport.deploysTriggered()).toEqual([]);
   });
 
   it("is a no-op when the run has not merged", async () => {

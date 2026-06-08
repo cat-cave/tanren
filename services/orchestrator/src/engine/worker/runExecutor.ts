@@ -17,7 +17,7 @@
 // and finalize leaves the job `running`; the recovery surface + a future
 // reaper own re-queueing — the worker never double-executes a claimed job.
 
-import { runWithJobOrgId, runWithOrgScope, runWithSystemJobScope, runWithSystemScope } from "@tanren/db";
+import { runWithJobOrgId, runWithOrgScope } from "@tanren/db";
 import type pg from "pg";
 import { orgScopingPool } from "../data/orgScopedDb.js";
 import type { Allocator } from "../contracts/allocator.js";
@@ -87,9 +87,8 @@ export interface RunExecutorDeps {
   // TANREN_DATA_PLANE_REMOTE_WRITES=1) → those writes route through the
   // control-plane `/internal/*` write endpoints over mTLS, so the data plane
   // writes no tenant tables directly. Keeping DIRECT the default makes the cutover
-  // REVERSIBLE: nothing changes unless the flag is set. A legacy/unscoped run
-  // (org_id NULL) ALWAYS uses the direct path — it has no org to scope a remote
-  // write to.
+  // REVERSIBLE: nothing changes unless the flag is set. A plan run always carries
+  // an org (the fail-closed guard), so a remote write always has a scope.
   runStateWriter?: RunStateWriter;
   allocator: Allocator;
   ssh: CommandSubstrate;
@@ -153,6 +152,25 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
     return { kind: "failed", jobId: job.id, failure };
   }
 
+  // FAIL-CLOSED tenant scope: EVERY plan run is a tenant run. `runs.org_id` is NOT
+  // NULL, and a plan job's `job_queue.org_id` is stamped from `(SELECT org_id FROM
+  // runs …)` at enqueue (projectSpec.ts / PgJobQueue), so a claimed plan job ALWAYS
+  // carries a concrete org. A null `job.orgId` is therefore NEVER a legitimate
+  // "platform/system run" — it can only be a wiring bug (a job_queue row that lost
+  // its org). Admitting it would load the run's context + run the workflow under the
+  // BYPASSRLS system pool, silently executing a tenant's work with RLS disabled —
+  // the exact silent-fallback archetype the no-silent-fallbacks doctrine bans. So a
+  // missing org is a LOUD, fail-closed error BEFORE any context load / workflow: the
+  // job is failed and the run surfaces, never executed cross-RLS under a guessed scope.
+  if ((job.orgId ?? null) === null) {
+    const failure = {
+      kind: "missing_job_org",
+      message: `plan job for run ${runId} carries no org_id (a tenant run must carry org scope; refusing BYPASSRLS execution)`,
+    };
+    await deps.jobQueue.fail(job.id, failure);
+    return { kind: "failed", jobId: job.id, runId, failure };
+  }
+
   // renew the lease on an interval so a healthy worker holds its claim
   // while the (potentially long) workflow runs. The reaper only recovers a job
   // whose lease has lapsed — i.e. a crashed worker that stopped heartbeating.
@@ -161,28 +179,27 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
   // the enforced `tanren_app` policy denies the unscoped write and the run sticks
   // `queued` forever. The owning run's org is KNOWN from the claim itself — the
   // queue carries it (job_queue stays OUTSIDE RLS; org_id is threaded onto the
-  // row and returned from the claim). So we seed the finalize scope from the
-  // CLAIMED org immediately, BEFORE any work that can throw (credential
-  // resolution / context hydration). An EARLY failure — e.g. misconfigured
-  // credentials throwing in `loadRunContextScoped` before `resolvedOrgId` could
-  // be reassigned — then still finalizes org-scoped, so the policy admits the
-  // write and the run cleanly reaches `halted` instead of being stuck `queued`.
-  // The later context load reassigns this to the run's actual org; the two agree
-  // (the scoped hydration cross-checks them), so this is a no-op narrowing in the
-  // common case. A legacy/unscoped job (org_id NULL) stays null — the finalize
-  // falls back to the pool, behavior-identical to before RLS.
-  let resolvedOrgId: string | null = job.orgId ?? null;
+  // row and returned from the claim) and the fail-closed guard above already
+  // proved it non-null. So we seed the finalize scope from the CLAIMED org
+  // immediately, BEFORE any work that can throw (credential resolution / context
+  // hydration). An EARLY failure — e.g. misconfigured credentials throwing in
+  // `loadRunContextScoped` before `resolvedOrgId` could be reassigned — then still
+  // finalizes org-scoped, so the policy admits the write and the run cleanly
+  // reaches `halted` instead of being stuck `queued`. The later context load
+  // reassigns this to the run's actual org; the two agree (the scoped hydration
+  // cross-checks them), so this is a no-op narrowing in the common case.
+  const claimedOrgId: string = job.orgId as string;
+  let resolvedOrgId: string = claimedOrgId;
   try {
     // RLS R3b: the claimed job carries its owning run's org_id on the queue row
     // (job_queue stays OUTSIDE RLS — the claim above resolved it cross-org). That
     // is the worker's tenant BOOTSTRAP source: instead of an RLS-protected `runs`
     // read to discover the org, we read it from the job envelope and scope the
-    // run⋈spec⋈project hydration to it. A job with an org runs `loadRunExecutionContext`
-    // under `runWithOrgScope` (so every read carries `app.current_org_id` and the
-    // policy admits the run's own rows); a legacy/unscoped job (org_id NULL) keeps
-    // the system-scope read (BYPASSRLS pool) — its rows have no policy to satisfy.
-    const jobOrgId = job.orgId ?? null;
-    const { context, orgId } = await loadRunContextScoped(deps, runId, jobOrgId);
+    // run⋈spec⋈project hydration to it. The org is ALWAYS concrete (the guard
+    // above fail-closed a null one), so the hydration ALWAYS runs under
+    // `runWithOrgScope` — every read carries `app.current_org_id` and the policy
+    // admits the run's own rows. There is no null-org BYPASSRLS hydration path.
+    const { context, orgId } = await loadRunContextScoped(deps, runId, claimedOrgId);
     resolvedOrgId = orgId;
 
     // RLS wave R1: the claim above ran under the worker's SYSTEM context — the
@@ -190,19 +207,16 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
     // must NOT carry an org. Now that the claimed job's org is resolved, the
     // worker establishes the PER-JOB org session context and confirms the run is
     // reachable under it. Inert in R1 (no policies read the GUC); R2's policy
-    // will key off this `SET LOCAL app.current_org_id`. A legacy/unscoped run
-    // (org_id NULL) has no org to set — the per-job context is skipped.
-    if (orgId !== null) {
-      await establishJobOrgContext(deps.pool, orgId, runId);
-    }
+    // keys off this `SET LOCAL app.current_org_id`. Always runs — a tenant run
+    // always carries an org.
+    await establishJobOrgContext(deps.pool, orgId, runId);
 
     // Plane B: resolve the PROJECT's dev+test app env — the env vars
     // + secrets the product Tanren is BUILDING needs to run + test the app it
     // writes — from the `project_app_env` store (secret refs read from the secret
     // manager). Materialized over the runner into the building agent's command env
     // (gate steps + bootstrap), NEVER logged and DISTINCT from Tanren's own
-    // provider creds. Resolved under the run's org scope so RLS gates visibility; a
-    // legacy/unscoped run (org_id NULL) resolves nothing (no app env).
+    // provider creds. Resolved under the run's org scope so RLS gates visibility.
     const appEnv = await resolveRunAppEnv(deps, context.projectId, orgId);
 
     // The ONLY thing that ever stops a run is BUDGET — there are no quotas
@@ -219,17 +233,16 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
     // every tenant-table op the workflow drives — direct `input.pool.query` AND
     // the self-routing stores (PgEventStore/CostRecorder/task helpers) — opens
     // its OWN short org-scoped txn from that org-id, so a connection is held only
-    // for one DB op, never across I/O. A legacy/unscoped run (org_id NULL) sets
-    // no org-id and the proxy is behavior-identical to the bare pool (inert).
-    // When a remote run-state writer is wired AND the run has an
-    // org (so server-side scoping is possible), route the workflow's tenant
+    // for one DB op, never across I/O. The org is ALWAYS concrete (the fail-closed
+    // guard), so this is always a real per-job org scope — never a BYPASSRLS handoff.
+    // When a remote run-state writer is wired, route the workflow's tenant
     // run-state writes — events, cost_records, the terminal run finalize —
     // through it (the control-plane endpoints). Otherwise inject nothing: the
     // workflow uses its own in-process org-scoped stores over `orgScopingPool`,
     // BYTE-IDENTICAL to the direct in-process path (and its mutation suite).
-    const remoteWriter = orgId === null ? undefined : deps.runStateWriter;
+    const remoteWriter = deps.runStateWriter;
     const remoteWorkflowSeams =
-      remoteWriter === undefined || orgId === null
+      remoteWriter === undefined
         ? {}
         : {
             eventStore: remoteWriter,
@@ -252,9 +265,9 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
     const result = await withJobOrg(orgId, () =>
       runWorkflow({
         // The workflow ALWAYS gets the org-scoping proxy so its tenant ops
-        // self-route per-op: under an org → a short `runWithOrgScope`; under a
-        // null-org SYSTEM job → a short `runWithSystemScope` (BYPASSRLS). The
-        // implicit bare-pool handoff is gone (no silent unscoped tenant op).
+        // self-route per-op under the run's org → a short `runWithOrgScope`. The
+        // implicit bare-pool handoff is gone (no silent unscoped tenant op), and
+        // there is no null-org BYPASSRLS path — the run always carries an org.
         pool: orgScopingPool(deps.pool),
         ...remoteWorkflowSeams,
         allocator: deps.allocator,
@@ -293,28 +306,31 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
 }
 
 /**
- * RLS R3b: hydrate the claimed job's run⋈spec⋈project context under the right
- * scope. When the job carries an org (the common case post-R3b), run the read
- * under `runWithOrgScope(jobOrgId)` so every SELECT carries `app.current_org_id`
- * and the enforced policy admits the run's own rows. When the job has no org
- * (a legacy/unscoped run), fall back to `runWithSystemScope` — its BYPASSRLS
- * pool resolves the rows cross-org exactly as before R3b.
+ * RLS R3b: hydrate the claimed job's run⋈spec⋈project context under the run's org
+ * scope. The job ALWAYS carries a concrete org (the fail-closed guard rejected a
+ * null one upstream), so the read ALWAYS runs under `runWithOrgScope(jobOrgId)` —
+ * every SELECT carries `app.current_org_id` and the enforced policy admits the
+ * run's own rows. There is no null-org `runWithSystemScope` BYPASSRLS fallback: a
+ * tenant run is never hydrated cross-RLS.
  *
  * Cross-check: if the job's org and the run's actual `org_id` ever disagree, the
  * scoped read returns no row → `RunExecutionContextNotFoundError`, which fails
- * the job loudly rather than silently executing under the wrong tenant.
+ * the job loudly rather than silently executing under the wrong tenant. The
+ * loaded `orgId` is then asserted non-null (defense in depth: `runs.org_id` is
+ * NOT NULL, so a null here is a corruption — fail loud, never run BYPASSRLS).
  */
 async function loadRunContextScoped(
   deps: RunExecutorDeps,
   runId: string,
-  jobOrgId: string | null,
-): Promise<RunExecutionContext> {
+  jobOrgId: string,
+): Promise<RunExecutionContext & { orgId: string }> {
   const load = (client: pg.Pool | pg.PoolClient): Promise<RunExecutionContext> =>
     loadRunExecutionContext(client, { runId, identitySecretRef: deps.identitySecretRef });
-  if (jobOrgId === null) {
-    return runWithSystemScope(deps.pool, load);
+  const loaded = await runWithOrgScope(deps.pool, jobOrgId, load);
+  if (loaded.orgId === null) {
+    throw new Error(`run ${runId} loaded with a null org_id under org scope ${jobOrgId} (a tenant run must carry org)`);
   }
-  return runWithOrgScope(deps.pool, jobOrgId, load);
+  return { ...loaded, orgId: loaded.orgId };
 }
 
 // Plane B: resolve + MERGE the project's dev and test app-env into
@@ -322,18 +338,15 @@ async function loadRunContextScoped(
 // run's org scope (so RLS gates which project's entries are visible) with secret
 // refs read from the secret manager. dev and test overlap is intentional (both
 // feed the building agent's run+test commands); on a key in both, test wins (the
-// later spread). A legacy/unscoped run (org_id NULL) has no org GUC to scope the
-// read, so it resolves to an empty map — no app env, behavior-identical to before.
+// later spread). The org is always concrete (the fail-closed guard), so the read
+// always runs org-scoped — there is no null-org empty-map path.
 const RUN_WORKSPACE_APP_ENV_SCOPES: readonly AppEnvScope[] = ["dev", "test"];
 
 async function resolveRunAppEnv(
   deps: RunExecutorDeps,
   projectId: string,
-  orgId: string | null,
+  orgId: string,
 ): Promise<Record<string, string>> {
-  if (orgId === null) {
-    return {};
-  }
   return runWithOrgScope(deps.pool, orgId, async (client) => {
     const merged: Record<string, string> = {};
     for (const scope of RUN_WORKSPACE_APP_ENV_SCOPES) {
@@ -421,14 +434,13 @@ function startHeartbeat(deps: RunExecutorDeps, jobId: string, leaseMs: number): 
 }
 
 /**
- * Run `work` with the run's org as the per-job ambient org-id (R3a-worker) when
- * the org is known, else under the EXPLICIT per-job SYSTEM scope. A legacy/
- * unscoped run (org_id NULL) has no org GUC, so its workflow's tenant ops route
- * through the BYPASSRLS system pool (`runWithSystemScope` per op) rather than the
- * old implicit bare-pool handoff — an unscoped tenant op never silently degrades.
+ * Run `work` with the run's org as the per-job ambient org-id (R3a-worker). A plan
+ * run ALWAYS carries an org (the fail-closed guard rejected a null one), so the
+ * workflow's tenant ops always self-route through `runWithJobOrgId` under that org
+ * — there is no null-org per-job SYSTEM (BYPASSRLS) scope for a tenant run.
  */
-function withJobOrg<T>(orgId: string | null, work: () => Promise<T>): Promise<T> {
-  return orgId === null ? runWithSystemJobScope(work) : runWithJobOrgId(orgId, work);
+function withJobOrg<T>(orgId: string, work: () => Promise<T>): Promise<T> {
+  return runWithJobOrgId(orgId, work);
 }
 
 function failureKind(error: unknown): string {

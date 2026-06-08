@@ -13,6 +13,7 @@ import type {
   RunnerHandle,
 } from "../src/engine/contracts/allocator.js";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
+import type { FakeJobQueue } from "../src/engine/contracts/jobQueue.js";
 import type { RunnerCommand, CommandResult, CommandSubstrate } from "../src/engine/contracts/commandSubstrate.js";
 import { storeGithubToken } from "../src/engine/credentials/githubToken.js";
 import type { GitHubHttpClient, GitHubHttpRequest, GitHubHttpResponse } from "../src/engine/providers/github.js";
@@ -266,7 +267,23 @@ export async function setupSeededRun() {
     specId: spec.specId,
     branch: "tanren/hard-tier",
   });
-  return { pool, secrets, run };
+  // A plan run is a TENANT run (runs.org_id NOT NULL); the worker fails closed on a
+  // null-org plan job. So the seeded run carries a concrete org — the pool reports
+  // it and the enqueue stamps it.
+  pool.forcedProjectOrgId = SEEDED_ORG_ID;
+  return { pool, secrets, run, orgId: SEEDED_ORG_ID };
+}
+
+/** The org the seeded hard-tier run belongs to (a plan run always carries an org). */
+export const SEEDED_ORG_ID = "org_hard_tier_seed";
+
+/** Enqueue the seeded run's plan job carrying its org (a plan job always carries one). */
+export async function enqueuePlanJob(
+  jobQueue: FakeJobQueue,
+  run: { runId: string; plannerTaskId: string },
+  orgId: string = SEEDED_ORG_ID,
+): Promise<void> {
+  await jobQueue.enqueue({ runId: run.runId, taskId: run.plannerTaskId, taskKind: "plan", payload: {}, orgId });
 }
 
 export class RecordingAllocator implements Allocator {

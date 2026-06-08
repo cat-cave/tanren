@@ -13,7 +13,8 @@
 
 import { Hono } from "hono";
 import type pg from "pg";
-import { runWithSystemScope } from "@tanren/db";
+import { runWithJobOrgId, runWithSystemScope } from "@tanren/db";
+import { orgScopingPool } from "../../engine/data/orgScopedDb.js";
 import type { SecretStore } from "../../engine/contracts/secretStore.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import {
@@ -112,16 +113,29 @@ async function runIntake(
   source: InboxSource,
   item: Parameters<typeof intakeItem>[2],
 ): Promise<IntakeOutcome> {
-  return intakeItem(
-    {
-      pool: deps.pool,
-      answerer: deps.answererFactory({
-        orgId: source.orgId,
-        ...(source.projectId === null ? {} : { projectId: source.projectId }),
-      }),
-      autoRoute: intakeAutoRouteDeps(),
-    },
-    source,
-    item,
+  // ORG-SCOPE the intake exactly like the POLLER path (intake/poller.ts). The
+  // receiver wakes on a GitHub push with NO ambient tenant scope, but `intakeItem`
+  // does tenant reads + writes (existing-spec read, candidate upsert, and — on
+  // auto-route — the discovery accept + DAG insert) directly on its pool. On the
+  // BARE pool under `tanren_app` those run with an empty `app.current_org_id` GUC
+  // and RLS denies them — so a webhook-ingested issue would dead-end (never enter
+  // the DAG) while the route reports a 202, a SILENT no-op. The source carries a
+  // concrete `orgId`, so we ingest under the source's per-job org id AND hand the
+  // pipeline the org-scoping proxy: each direct `.query` opens a short
+  // `runWithOrgScope` carrying the source's org GUC, so the auto-route reaches the
+  // DAG under that tenant — identical to the poller, no manual click required.
+  return runWithJobOrgId(source.orgId, () =>
+    intakeItem(
+      {
+        pool: orgScopingPool(deps.pool),
+        answerer: deps.answererFactory({
+          orgId: source.orgId,
+          ...(source.projectId === null ? {} : { projectId: source.projectId }),
+        }),
+        autoRoute: intakeAutoRouteDeps(),
+      },
+      source,
+      item,
+    ),
   );
 }
