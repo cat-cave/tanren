@@ -114,14 +114,18 @@ export interface WriterCostInput {
   rawUsage: Record<string, unknown>;
 }
 
-// recordAnswererCost wraps the CostRecorder for the planner/checker/auditor
-// call sites. Today's answerer adapters do not surface a token breakdown, so a
-// REAL answerer call records zero tokens — which is mandatory-accounting drift,
-// NOT a genuine zero-token call. We record the row (cost stays best-effort NULL)
-// AND emit the loud `usage.token_accounting_failed` so the systematic
-// zero-token-answerer gap is visible rather than silently accepted. A `fake`
-// fixture is legitimately zero and stays quiet.
+// recordAnswererCost wraps the CostRecorder for the planner/checker/auditor (+
+// triage/convergence/demoRun) call sites. The answerer adapter now SURFACES the
+// most recent call's per-call token usage (`lastTokenUsage()`, parsed from the
+// harness JSONL/stream-json), read here right after the awaited call (same adapter
+// instance). So a REAL answerer call records its ACTUAL tokens → REAL notional cost
+// (LiteLLM rates), INDEPENDENT of the codexbar/ccusage window probe. Token
+// accounting is mandatory: a real call that surfaces NO telemetry (or all-zero) is
+// genuine parser/adapter drift — recorded as the row (cost best-effort NULL) AND
+// surfaced LOUDLY (`usage.token_accounting_failed`), distinct from a genuine
+// zero-token call. A `fake` fixture is legitimately zero and stays quiet.
 export async function recordAnswererCost<TOutput>(input: AnswererCostInput<TOutput>): Promise<void> {
+  const tokenUsage = input.adapter.lastTokenUsage?.();
   await input.ctx.recorder.record(
     {
       runId: input.ctx.runId,
@@ -133,11 +137,14 @@ export async function recordAnswererCost<TOutput>(input: AnswererCostInput<TOutp
       authRef: input.adapter.authRef,
       runtimeSeconds: input.runtimeSeconds,
     },
-    emptyTokenUsage,
+    tokenUsage ?? emptyTokenUsage,
     input.rawUsage,
   );
-  // An answerer surfaces no telemetry today → emptyTokenUsage → loud for a real CLI.
-  if (isRealCli(input.adapter.cli)) {
+  // A REAL answerer call missing token telemetry (undefined / all-zero) is
+  // mandatory-accounting drift — surface it LOUDLY, distinct from a genuine
+  // zero-token call. A real call that DID surface tokens stays quiet (the working
+  // path); a `fake` fixture is legitimately zero and stays quiet.
+  if (isRealMissingTelemetry(input.adapter.cli, tokenUsage)) {
     await input.ctx.emitTokenAccountingFailed?.({
       role: input.role,
       cli: input.adapter.cli,

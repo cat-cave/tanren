@@ -122,10 +122,14 @@ export function createClaudeWriter(dependencies: ClaudeWriterDependencies): Writ
 }
 
 export function createClaudeAnswerer<TOutput>(dependencies: ClaudeAnswererDependencies): AnswererAdapter<TOutput> {
+  // The most recent call's per-call token usage (parsed from claude's stream-json
+  // `usage`), surfaced for the cost path — see createCodexAnswerer for the rationale.
+  let lastTokenUsage: TokenUsage | undefined;
   return {
     kind: "answerer",
     cli: "claude",
     authRef: dependencies.credentialRef,
+    lastTokenUsage: () => lastTokenUsage,
     async runAnswerer(opts): Promise<TOutput> {
       const auth = await materializeClaudeAuthBundle({
         secrets: dependencies.secrets,
@@ -156,6 +160,7 @@ export function createClaudeAnswerer<TOutput>(dependencies: ClaudeAnswererDepend
         timeoutMs: opts.timeoutMs,
       });
       const telemetry = parseClaudeStreamTelemetry(result.stdout);
+      lastTokenUsage = telemetry.tokenUsage;
       if (result.timedOut) {
         throw new Error(`Claude Answerer timed out for schema ${opts.outputSchema.name}`);
       }

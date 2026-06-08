@@ -18,6 +18,10 @@ export function timedAnswererAdapter<TOutput>(
     kind: inner.kind,
     cli: inner.cli,
     authRef: inner.authRef,
+    // Forward the wrapped adapter's per-call token telemetry so the cost path can
+    // read it through this timing decorator (the decorator is the instance the loop
+    // holds). Absent when the inner adapter exposes none (e.g. a fake fixture).
+    ...(inner.lastTokenUsage !== undefined && { lastTokenUsage: () => inner.lastTokenUsage?.() }),
     runAnswerer: (opts: AnswererRunOptions<TOutput>) =>
       timed<TOutput>(
         {

@@ -162,10 +162,16 @@ export function createCodexWriter(dependencies: CodexWriterDependencies): Writer
 }
 
 export function createCodexAnswerer<TOutput>(dependencies: CodexAnswererDependencies): AnswererAdapter<TOutput> {
+  // Captures the MOST RECENT call's per-call token usage so the cost path can read
+  // it right after the awaited runAnswerer (same adapter instance) and record REAL
+  // tokens → REAL notional cost, instead of an all-zero answerer row. Codex emits
+  // usage in its `--json` JSONL stream; parseCodexJsonlTelemetry already extracts it.
+  let lastTokenUsage: TokenUsage | undefined;
   return {
     kind: "answerer",
     cli: "codex",
     authRef: dependencies.credentialRef,
+    lastTokenUsage: () => lastTokenUsage,
     async runAnswerer(opts): Promise<TOutput> {
       // SaaS Tier-B #5: managed ⇒ config.toml OpenRouter provider block + an
       // OPENROUTER_API_KEY env file (see the writer path for the rationale).
@@ -204,6 +210,8 @@ export function createCodexAnswerer<TOutput>(dependencies: CodexAnswererDependen
         timeoutMs: opts.timeoutMs,
       });
       const telemetry = parseCodexJsonlTelemetry(result.stdout);
+      // Surface this call's per-call token usage for the cost path (lastTokenUsage).
+      lastTokenUsage = telemetry.tokenUsage;
       // Only the BYOK bundle path has a rotating token — managed / BYOK api_key
       // auth is a static key, so skip the write-back (mirrors the writer path).
       if (auth.bundleAuth) {

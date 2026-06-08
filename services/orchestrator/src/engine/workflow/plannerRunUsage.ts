@@ -36,12 +36,23 @@ export async function buildManagedCapturerForRun(
   });
 }
 
-// The default CODEX usage probe: the ccusage accountant + codexbar window monitor
-// over the run's shared CODEX_HOME. Built only when the run uses codex (gated by
-// the caller) — provider/cli are codex-specific.
+// The default CODEX usage probe: the ccusage accountant + (BYOK only) codexbar
+// window monitor over the run's shared CODEX_HOME. Built only when the run uses
+// codex (gated by the caller) — provider/cli are codex-specific.
+//
+// The codexbar WINDOW monitor reads the codex ChatGPT-account subscription
+// window, which only EXISTS on a BYOK-subscription run (an account auth.json in
+// CODEX_HOME). A MANAGED run routes codex THROUGH OpenRouter as a plain API key
+// — there is no account window, so codexbar exits nonzero by design ("codex
+// account authentication required to read rate limits"). Wiring it there would
+// fire a SPURIOUS `usage.read_failed` every preflight. So the monitor is wired
+// ONLY for a BYOK (non-managed) run; a managed run omits it (clean-empty window
+// read). ccusage — the TOKEN accountant feeding notional cost — is ALWAYS wired:
+// it reads the per-run CODEX_HOME session logs and works in BOTH modes.
 export function defaultUsageProbe(input: RunPlannerLoopInput, ctx: PlannerRunAdapterContext): UsageProbe {
+  const managed = input.context.endpointBaseUrl !== undefined;
   return new SshUsageProbe({
-    monitor: new SshCodexbarUsageMonitor(input.ssh),
+    ...(managed ? {} : { monitor: new SshCodexbarUsageMonitor(input.ssh) }),
     accountant: new SshCcusageAccountant(input.ssh),
     provider: "codex",
     cli: "codex",

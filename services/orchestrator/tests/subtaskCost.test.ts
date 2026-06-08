@@ -75,6 +75,12 @@ const answererAdapter: AnswererAdapter<unknown> = {
   },
 };
 
+// A real codex answerer whose most-recent call surfaced token telemetry — the
+// WORKING per-call accounting path: real tokens recorded, NO loud event.
+function answererWithTelemetry(tokenUsage: TokenUsage): AnswererAdapter<unknown> {
+  return { ...answererAdapter, lastTokenUsage: () => tokenUsage };
+}
+
 const writerAdapter: WriterAdapter = {
   kind: "writer",
   cli: "claude",
@@ -85,11 +91,20 @@ const writerAdapter: WriterAdapter = {
 };
 
 describe("recordAnswererCost", () => {
-  it("records zero tokens, the answerer's cli/authRef, and the supplied model + runtime", async () => {
+  it("WORKING PATH: records the answerer's REAL per-call tokens (lastTokenUsage) + cli/authRef/model/runtime, NO loud event", async () => {
     const { recorder, calls } = recordingRecorder();
+    const failures: AccountingFailure[] = [];
+    const tokenUsage: TokenUsage = {
+      inputTokens: 1200,
+      cachedInputTokens: 300,
+      cacheCreationTokens: 0,
+      outputTokens: 400,
+      reasoningOutputTokens: 100,
+      totalTokens: 2000,
+    };
     await recordAnswererCost({
-      ctx: ctx(recorder),
-      adapter: answererAdapter,
+      ctx: ctx(recorder, failures),
+      adapter: answererWithTelemetry(tokenUsage),
       role: "planner",
       taskId: "task_planner",
       model: "tanren-planner",
@@ -109,16 +124,19 @@ describe("recordAnswererCost", () => {
       authRef: "vault://codex/key",
       runtimeSeconds: 4.5,
     });
-    // Answerer calls have no token breakdown -> the empty (all-zero) usage.
-    expect(call.tokens).toEqual(emptyTokenUsage);
+    // The REAL per-call token breakdown is recorded → REAL notional cost downstream.
+    expect(call.tokens).toEqual(tokenUsage);
     expect(call.rawUsage).toEqual({ role: "planner" });
+    // A real call that DID surface tokens is the normal working case — NOT loud.
+    expect(failures).toEqual([]);
   });
 
-  it("LOUD: a REAL answerer call with no token telemetry emits usage.token_accounting_failed", async () => {
-    const { recorder } = recordingRecorder();
+  it("LOUD: a REAL answerer call with NO token telemetry (lastTokenUsage undefined) records zero AND emits usage.token_accounting_failed", async () => {
+    const { recorder, calls } = recordingRecorder();
     const failures: AccountingFailure[] = [];
     await recordAnswererCost({
       ctx: ctx(recorder, failures),
+      // answererAdapter has no lastTokenUsage → genuine telemetry breakage.
       adapter: answererAdapter,
       role: "auditor",
       taskId: "task_audit",
@@ -126,8 +144,24 @@ describe("recordAnswererCost", () => {
       runtimeSeconds: 1,
       rawUsage: {},
     });
-    // A real CLI (codex) recorded zero tokens → surfaced loudly, NOT a silent $0 row.
+    // No telemetry → the empty (all-zero) usage row, surfaced LOUDLY (not a silent $0).
+    expect(calls[0]!.tokens).toEqual(emptyTokenUsage);
     expect(failures).toEqual([{ role: "auditor", cli: "codex", model: "tanren-auditor", taskId: "task_audit" }]);
+  });
+
+  it("LOUD: a REAL answerer call whose telemetry is ALL-ZERO is treated as missing → token_accounting_failed", async () => {
+    const { recorder } = recordingRecorder();
+    const failures: AccountingFailure[] = [];
+    await recordAnswererCost({
+      ctx: ctx(recorder, failures),
+      adapter: answererWithTelemetry(emptyTokenUsage),
+      role: "checker",
+      taskId: "task_check",
+      model: "tanren-checker",
+      runtimeSeconds: 1,
+      rawUsage: {},
+    });
+    expect(failures).toEqual([{ role: "checker", cli: "codex", model: "tanren-checker", taskId: "task_check" }]);
   });
 
   it("QUIET: a FAKE-fixture answerer (legitimate zero) does NOT emit token_accounting_failed", async () => {

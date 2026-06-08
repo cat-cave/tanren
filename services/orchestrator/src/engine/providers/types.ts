@@ -100,4 +100,13 @@ export interface AnswererAdapter<TOutput> {
   // every real Codex planner/writer/checker/auditor call.
   readonly authRef: string;
   runAnswerer(opts: AnswererRunOptions<TOutput>): Promise<TOutput>;
+  // The token telemetry parsed from the MOST RECENT runAnswerer call's harness
+  // output (codex/claude emit per-call usage in their JSONL/stream-json events),
+  // or undefined when the call surfaced none. The cost path reads this right
+  // after the awaited call (same adapter instance) to record the REAL per-call
+  // TokenUsage — so notional cost is computed from actual tokens (LiteLLM rates)
+  // INDEPENDENT of the separate codexbar/ccusage window probe. Absent on a `fake`
+  // fixture (legitimately zero-token). A real call that returns undefined here is
+  // genuine token-telemetry breakage → the loud `usage.token_accounting_failed`.
+  lastTokenUsage?(): TokenUsage | undefined;
 }
