@@ -222,6 +222,7 @@
     "lefthook",
     "libsodium",
     "litellm",
+    "localcmd",
     "liverun",
     "localappdata",
     "localhost",
