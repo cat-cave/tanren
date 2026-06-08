@@ -172,10 +172,25 @@ export async function buildLiveJjWorkspace(deps: LiveJjWorkspaceDeps): Promise<L
     };
   } catch (error) {
     // FAIL-CLOSED: a half-built workspace must NOT leave a runner allocated. Release the
-    // runner we already allocated (LOUD on a leak) before re-throwing the original error.
-    await release().catch((releaseError: unknown) => {
-      console.error(`[live-jj-workspace] release after a build failure ALSO failed for ${handle}:`, releaseError);
-    });
+    // runner we already allocated before re-throwing. A release failure here means the
+    // runner ACTUALLY LEAKED, so it must NEVER be swallowed (driveConflictResolve's
+    // loud-release intent): surface BOTH faults — the original build failure AND the
+    // leak — as an AggregateError that NAMES the leaked runnerId, so the caller learns
+    // about the leak even though the build is what failed first. release()'s own
+    // catch already logged the leak LOUDLY via console.error.
+    try {
+      await release();
+    } catch (releaseError: unknown) {
+      // `errors` carries BOTH faults (the build failure AND the leak) so neither is
+      // lost; `cause` is the original build failure (the primary fault), set on the
+      // instance so the cross-cause chain is preserved.
+      const leaked = new AggregateError(
+        [error, releaseError],
+        `[live-jj-workspace] build failed for ${handle} AND the cleanup release LEAKED runner ${allocation.runnerId}`,
+      );
+      leaked.cause = error;
+      throw leaked;
+    }
     throw error;
   }
 }
