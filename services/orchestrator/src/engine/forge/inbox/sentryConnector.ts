@@ -15,6 +15,7 @@
 
 import { z } from "zod";
 import type { SecretStore } from "../../contracts/secretStore.js";
+import { assertIntakeResponseOk, IntakeSourceFetchError } from "./connectorErrors.js";
 import type { IngestedItem, InboxSource, SourceConnector } from "./types.js";
 
 // The `config` shape a Sentry source carries. `org`/`project` are the Sentry
@@ -172,8 +173,13 @@ export function createSentryConnector(deps: SentryConnectorDeps): SourceConnecto
         token: secret.value,
         baseUrl: config.baseUrl,
       });
-      if (response.status !== 200 || !Array.isArray(response.body)) {
-        return [];
+      // No-silent-fallbacks: a non-200 is a LOUD throw (401/403 ⇒ auth, else ⇒
+      // transient), NEVER an empty list. Only a genuine 200-with-an-array is "no
+      // unresolved issues". A 200 whose body is not the expected array is a failed
+      // read (shape changed / error envelope) — also LOUD.
+      assertIntakeResponseOk("sentry", response.status);
+      if (!Array.isArray(response.body)) {
+        throw new IntakeSourceFetchError("sentry", response.status, "200 body was not an issues array");
       }
 
       const issues = response.body as RawSentryIssue[];
