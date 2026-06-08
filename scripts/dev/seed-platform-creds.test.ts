@@ -42,7 +42,9 @@ describe("seedPlatformCredentials", () => {
 
   it("FAILS LOUD when the key env var is blank/whitespace, and writes nothing", async () => {
     const store = new InMemorySecretStore();
-    await expect(seedPlatformCredentials(store, { [MANAGED_ROUTER_KEY_ENV]: "   " })).rejects.toThrow();
+    await expect(seedPlatformCredentials(store, { [MANAGED_ROUTER_KEY_ENV]: "   " })).rejects.toThrow(
+      "missing or blank",
+    );
     // Fail-before-write: a blank value must not leave a half-seeded platform ref.
     expect(await store.list("credential/")).toStrictEqual([]);
   });
