@@ -8,6 +8,12 @@ set -eu
 rm -f /etc/ssh/ssh_host_*_key /etc/ssh/ssh_host_*_key.pub
 ssh-keygen -A
 
+# Standard world-writable + sticky /tmp. The base image ships /tmp owned by a
+# non-`tanren` uid with mode 755, so the run user can't `mktemp` there — git's
+# askpass-token tempfile, codex scratch, etc. fail with "Permission denied".
+# 1777 is the canonical /tmp permission; restore it (root, before any run command).
+chmod 1777 /tmp
+
 # Validate the per-run scratch mount is empty. The allocator wipes the
 # /workspace volume on /release; if a stale file survives the container has
 # leaked between runs and we must fail loudly rather than reuse it. The check
