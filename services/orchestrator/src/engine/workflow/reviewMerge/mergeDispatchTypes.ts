@@ -52,6 +52,14 @@ export interface MergeAuthorityBundle {
   policyVersion: string;
   /** The native gate's outcome (a not-yet-run / errored / absent gate → blocks). */
   gateOutcome: GateOutcome | undefined;
+  /**
+   * The sha the latest `pre_merge` gate verdict was FOR (its `payload.headSha`). The
+   * authority requires this EQUALS the head being landed — binding the verdict to the
+   * EXACT commit (the gate↔land TOCTOU guard). A head-advance after the gate but before
+   * the land makes `gatedHeadSha != landedHeadSha` → BLOCK. `undefined` when no verdict
+   * is recorded (the gate already blocks via `gateOutcome === undefined`).
+   */
+  gatedHeadSha: string | undefined;
   /** The auditor's emitted findings + the project posture (the DORA block decision). */
   findings: ReadonlyArray<Finding>;
   auditPosture: AuditPosture;

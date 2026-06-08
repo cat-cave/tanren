@@ -43,6 +43,8 @@ export interface BuildMergeAuthorityBundleInput {
   policyVersion: number;
   /** The native gate outcome the run loop produced (absent → blocks). */
   gateOutcome: GateOutcome | undefined;
+  /** The sha the latest `pre_merge` gate verdict was FOR (the TOCTOU commit-binding). */
+  gatedHeadSha: string | undefined;
   /** The review poll's verdict (only `approved` clears; absent → unread → blocks). */
   reviewVerdict: ReviewVerdict | undefined;
   /**
@@ -119,6 +121,7 @@ export function buildMergeAuthorityBundle(input: BuildMergeAuthorityBundleInput)
     gateConfigHash: "",
     policyVersion: String(input.policyVersion),
     gateOutcome: input.gateOutcome,
+    gatedHeadSha: input.gatedHeadSha,
     findings: [],
     auditPosture: resolveAuditPosture(input.projectConfigRaw),
     reviewVerdict: input.reviewVerdict,
@@ -181,6 +184,7 @@ export async function buildBundleForMergeStage(
     projectConfigRaw: row.project_config,
     policyVersion: context.policyVersion,
     gateOutcome: landSignals.gateOutcome,
+    gatedHeadSha: landSignals.gatedHeadSha,
     reviewVerdict: landSignals.reviewVerdict,
     budgetState,
     // The in-loop / drive land precedes the post-deploy demo stage — an explicit

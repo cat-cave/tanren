@@ -59,6 +59,13 @@ export interface MergeAuthorityGateInput {
   specId: string;
   gateConfigHash: string;
   policyVersion: string;
+  /**
+   * The sha the latest passed `pre_merge` gate verdict was FOR. The land authorizes
+   * ONLY when this EQUALS the head being landed (the gate↔land TOCTOU guard). A
+   * head-advance after the gate but before the land makes them differ → BLOCK.
+   * `undefined` ⇒ no recorded verdict (the gate input already blocks).
+   */
+  gatedHeadSha: string | undefined;
   /** The fail-closed signals to authorize against. */
   signals: LiveMergeSignals;
   /** The writer-backed durable finalize bound to this run's merge-stage context. */
@@ -140,6 +147,7 @@ export async function runAuthorityLand(input: {
     specId: context.specId,
     gateConfigHash: bundle.gateConfigHash,
     policyVersion: bundle.policyVersion,
+    gatedHeadSha: bundle.gatedHeadSha,
     signals,
     finalizer,
   });
@@ -192,6 +200,25 @@ export async function authorizeAndLand(input: MergeAuthorityGateInput): Promise<
   const baseSha = await requireBranchSha(codeHost, repo, input.intoMain);
   const headSha = await requireBranchSha(codeHost, repo, input.headBranch);
   const node = buildNode(input, baseSha, headSha);
+
+  // COMMIT-BINDING (the gate↔land TOCTOU guard, §5): the gate verdict must be FOR
+  // EXACTLY the commit being landed. A passing gate is honored ONLY when its
+  // gated-sha equals the head being landed (`headSha`, resolved fresh above). If the
+  // head advanced AFTER the gate but BEFORE the land (eager base-shift / concurrent
+  // rebase / any push), the verdict is fresh-in-time yet for a DIFFERENT commit →
+  // BLOCK (a fresh re-gate on the new head is then required). When the gate did not
+  // pass (`gateOutcome === undefined`) the gate input already blocks, so the
+  // commit-binding only adds a block when a PASSING verdict is for the wrong sha.
+  const gatePassing = input.signals.gateOutcome?.passed === true;
+  if (gatePassing && input.gatedHeadSha !== headSha) {
+    return {
+      kind: "blocked",
+      reasons: [
+        `gateVerdict: gate verdict is for a different commit than the one being landed ` +
+          `(gated '${input.gatedHeadSha ?? "unknown"}' != landing '${headSha}') — fail closed (re-gate the current head)`,
+      ],
+    };
+  }
 
   const authority = new MergeAuthorityImpl(codeHost, input.finalizer);
   const prepared = await authority.prepareIntegration({ node, repo, intoMain: input.intoMain, baseSha });

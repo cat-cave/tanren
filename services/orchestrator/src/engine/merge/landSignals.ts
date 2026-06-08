@@ -11,6 +11,15 @@
 // `unread`). A stale/now-failing gate or a review that flipped to `changes_requested`
 // during resolution therefore BLOCKS — neither path can authorize against stale state.
 //
+// COMMIT-BOUND (the deepest §5 invariant — closing the gate↔land TOCTOU): the gate
+// verdict is anchored to a SPECIFIC commit (`payload.headSha` — the sha the gate
+// actually passed FOR). This reader returns that `gatedHeadSha` so the authority can
+// require it EQUALS the head being landed. A head-advance AFTER the gate but BEFORE the
+// land (eager base-shifts / a concurrent rebase / any push) makes `gatedHeadSha !=
+// landedHeadSha` → BLOCK: a verdict is "fresh in time" yet NOT for the commit being
+// landed. The land authorizes ONLY when a PASSED `pre_merge` gate exists FOR EXACTLY the
+// commit being landed; a head-advance forces a fresh re-gate on the new head.
+//
 // The read is ORG-SCOPED (RLS) — the caller passes the org the run belongs to. The
 // `gate.verdict` roll-up is the headSha-anchored native gate verdict
 // (`workflow/gate/runGateForWhen.ts`); the review verdict is the latest
@@ -26,6 +35,14 @@ export interface LandTimeSignals {
   /** A synthesized passed `GateOutcome` for the latest passed `pre_merge` gate, else
    * `undefined` (a failed gate OR no recorded verdict) — which the authority blocks on. */
   gateOutcome: GateOutcome | undefined;
+  /**
+   * The sha the latest `pre_merge` gate verdict was FOR (`payload.headSha`), or
+   * `undefined` when no verdict is recorded. The authority requires this EQUALS the
+   * head being landed — binding the verdict to the exact commit (the gate↔land TOCTOU
+   * guard). Present even for a FAILED gate (so the mismatch reason can name the sha),
+   * but a failed gate already blocks via `gateOutcome === undefined`.
+   */
+  gatedHeadSha: string | undefined;
   /** The latest review verdict, or `undefined` (no recorded verdict) — which blocks. */
   reviewVerdict: ReviewVerdict | undefined;
 }
@@ -41,13 +58,14 @@ export interface LandTimeSignals {
  */
 export async function resolveLandTimeSignals(pool: pg.Pool, orgId: string, runId: string): Promise<LandTimeSignals> {
   return runWithOrgScope(pool, orgId, async (client) => {
-    const gate = await client.query<{ payload: { passed?: boolean } }>(
+    const gate = await client.query<{ payload: { passed?: boolean; headSha?: string } }>(
       `SELECT payload FROM events
         WHERE run_id = $1 AND event_type = 'gate.verdict' AND payload->>'when' = 'pre_merge'
         ORDER BY ts DESC, id DESC LIMIT 1`,
       [runId],
     );
     const gatePassed = gate.rows[0]?.payload?.passed;
+    const gatedHeadShaRaw = gate.rows[0]?.payload?.headSha;
     const review = await client.query<{ event_type: string }>(
       `SELECT event_type FROM events
         WHERE run_id = $1 AND event_type IN ('review.approved','review.auto_approved','review.changes_requested')
@@ -65,6 +83,8 @@ export async function resolveLandTimeSignals(pool: pg.Pool, orgId: string, runId
     // stays undefined → the authority blocks (gate `unknown`). The post-rebase re-gate
     // emits a fresh `pre_merge` gate.verdict, so the LATEST read reflects the re-gate.
     const gateOutcome: GateOutcome | undefined = gatePassed === true ? { passed: true, results: [] } : undefined;
-    return { gateOutcome, reviewVerdict };
+    // The sha the verdict was for (anchors the verdict to a commit — the TOCTOU guard).
+    const gatedHeadSha = typeof gatedHeadShaRaw === "string" && gatedHeadShaRaw !== "" ? gatedHeadShaRaw : undefined;
+    return { gateOutcome, gatedHeadSha, reviewVerdict };
   });
 }

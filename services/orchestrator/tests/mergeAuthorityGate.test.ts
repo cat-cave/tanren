@@ -69,6 +69,8 @@ function gateInput(host: InMemoryCodeHost) {
     specId: "s",
     gateConfigHash: "gc",
     policyVersion: "pv",
+    // The gate verdict was for the EXACT commit being landed (the `feat` head, sha-feat).
+    gatedHeadSha: "sha-feat",
     finalizer: FINALIZER,
     signals: {
       gateOutcome: { passed: true, results: [] } as GateOutcome,
@@ -119,5 +121,32 @@ describe("authorizeAndLand — clean land via CodeHost.landAuthorizedRef CAS", (
     const disposition = await authorizeAndLand(input);
     expect(disposition.kind).toBe("blocked");
     expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-main");
+  });
+
+  it("TOCTOU LOCK: gate PASSED for sha A, head advanced to sha B before land → BLOCKED (commit-bound, not just time-fresh)", async () => {
+    const host = new InMemoryCodeHost();
+    host.seed(REPO, "main", "sha-main");
+    // The head ADVANCED to sha-B after the gate passed for sha-A (an eager base-shift /
+    // concurrent rebase / push between the fresh pre_merge gate and the land).
+    await host.pushRef({ repo: REPO, localRef: "feat", remoteBranch: "feat", sha: "sha-B" });
+    const input = gateInput(host);
+    // The gate verdict is for the OLD head sha-A — not the current head sha-B.
+    input.gatedHeadSha = "sha-A";
+    const disposition = await authorizeAndLand(input);
+    expect(disposition.kind).toBe("blocked");
+    const reasons = disposition.kind === "blocked" ? disposition.reasons.join(" ") : "";
+    expect(reasons).toMatch(/different commit|gated 'sha-A'.*sha-B/u);
+    // The un-gated commit (sha-B) was NEVER landed; main untouched.
+    expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-main");
+  });
+
+  it("TOCTOU LOCK: gate PASSED for the CURRENT head (sha unchanged) → lands (commit-binding satisfied)", async () => {
+    const host = new InMemoryCodeHost();
+    host.seed(REPO, "main", "sha-main");
+    await host.pushRef({ repo: REPO, localRef: "feat", remoteBranch: "feat", sha: "sha-feat" });
+    // gatedHeadSha === the landed head (sha-feat) — the binding is satisfied.
+    const disposition = await authorizeAndLand(gateInput(host));
+    expect(disposition.kind).toBe("merged");
+    expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-feat");
   });
 });

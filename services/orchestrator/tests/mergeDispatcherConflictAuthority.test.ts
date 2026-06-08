@@ -68,6 +68,8 @@ interface BundleOverrides {
   reviewVerdict?: MergeAuthorityBundle["reviewVerdict"];
   /** Override the gate outcome — `null` ⇒ a failing/absent gate (blocks). */
   gateOutcome?: MergeAuthorityBundle["gateOutcome"] | null;
+  /** The sha the gate verdict was FOR — defaults to the landed head (`sha-feat`). */
+  gatedHeadSha?: string;
   fail?: boolean;
   landed: string[];
 }
@@ -81,6 +83,8 @@ function bundle(host: InMemoryCodeHost, o: BundleOverrides): MergeAuthorityBundl
     gateConfigHash: "gc",
     policyVersion: "pv",
     gateOutcome,
+    // The gate verdict was for the landed head (`sha-feat`) unless overridden (TOCTOU lock).
+    gatedHeadSha: o.gatedHeadSha ?? "sha-feat",
     findings: [],
     auditPosture: POSTURE,
     reviewVerdict: o.reviewVerdict ?? "approved",
@@ -373,5 +377,45 @@ describe("conflict-resolved land re-enters the MergeAuthority (no parallel merge
     expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-feat");
     expect(landed).toEqual(["sha-feat"]);
     expect(probe.mergeCalls).toBe(0);
+  });
+
+  it("TOCTOU LOCK: fresh pre_merge gate PASSED for sha A, head advanced to sha B before land → BLOCKED (gate is commit-bound)", async () => {
+    const host = new InMemoryCodeHost();
+    host.seed(REPO, "main", "sha-main");
+    // The PR head ADVANCED to sha-B after the fresh pre_merge gate passed for sha-A.
+    await host.pushRef({ repo: REPO, localRef: "feat", remoteBranch: "feat", sha: "sha-B" });
+    const probe = scriptedProbe("clean");
+    const events = recordingEventStore();
+    const landed: string[] = [];
+    // The bundle's gate is for sha-A (the OLD head), but the head being landed is sha-B
+    // → the commit-binding blocks the land (no un-gated commit lands).
+    const result = await dispatcher(
+      probe,
+      events,
+      bundle(host, { landed, gatedHeadSha: "sha-A" }),
+      "passed",
+    ).directMerge();
+
+    expect(result.outcome).not.toBe("merged");
+    expect(landed).toEqual([]);
+    // sha-B (un-gated) was NEVER landed; main untouched.
+    expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-main");
+    expect(probe.mergeCalls).toBe(0);
+    expect(events.events).not.toContain("merge.completed");
+  });
+
+  it("TOCTOU LOCK: gate PASSED for the CURRENT head (sha unchanged) → lands (binding satisfied)", async () => {
+    const host = new InMemoryCodeHost();
+    host.seed(REPO, "main", "sha-main");
+    await host.pushRef({ repo: REPO, localRef: "feat", remoteBranch: "feat", sha: "sha-feat" });
+    const probe = scriptedProbe("clean");
+    const events = recordingEventStore();
+    const landed: string[] = [];
+    // gatedHeadSha === the landed head (sha-feat, the default) → the binding clears.
+    const result = await dispatcher(probe, events, bundle(host, { landed }), "passed").directMerge();
+
+    expect(result.outcome).toBe("merged");
+    expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-feat");
+    expect(landed).toEqual(["sha-feat"]);
   });
 });

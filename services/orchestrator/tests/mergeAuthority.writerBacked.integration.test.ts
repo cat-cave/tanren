@@ -27,6 +27,7 @@ import {
 import { type LandFinalizer, MergeAuthorityImpl } from "../src/engine/merge/mergeAuthorityImpl.js";
 import { buildLandFinalizer, type LandFinalizeContext } from "../src/engine/merge/mergeAuthorityLandFinalizer.js";
 import { resolveLandTimeSignals } from "../src/engine/merge/landSignals.js";
+import { authorizeAndLand } from "../src/engine/merge/mergeAuthorityGate.js";
 import { PgEventStore } from "../src/engine/eventStore.js";
 import { serviceAuditActor } from "../src/engine/events/schemas/audit.js";
 
@@ -201,18 +202,19 @@ describeDb("MergeAuthority — writer-backed LandFinalizer over real Postgres", 
     expect(signals.reviewVerdict).toBeUndefined();
   });
 
-  it("resolveLandTimeSignals: returns the LATEST pre_merge gate + review (a re-gate/flip wins)", async () => {
-    // A passing gate + approved review first, then a LATER failing re-gate + a flipped
-    // changes_requested review (e.g. emitted DURING conflict resolution). The reader
-    // must return the LATEST — the pre-conflict passing values are NOT used.
-    await appendGateVerdict(true);
+  it("resolveLandTimeSignals: returns the LATEST pre_merge gate (+ its gated sha) + review (a re-gate/flip wins)", async () => {
+    // A passing gate for sha-A + approved review first, then a LATER failing re-gate +
+    // a flipped changes_requested review (e.g. emitted DURING conflict resolution). The
+    // reader must return the LATEST — the pre-conflict passing values are NOT used.
+    await appendGateVerdict(true, "sha-A");
     await appendReview("review.approved");
     let signals = await resolveLandTimeSignals(ownerPool, ORG_ID, RUN_ID);
     expect(signals.gateOutcome?.passed).toBe(true);
+    expect(signals.gatedHeadSha).toBe("sha-A");
     expect(signals.reviewVerdict).toBe("approved");
 
     // a re-gate that now FAILS + the review flipped to changes_requested.
-    await appendGateVerdict(false);
+    await appendGateVerdict(false, "sha-A");
     await appendReview("review.changes_requested");
     signals = await resolveLandTimeSignals(ownerPool, ORG_ID, RUN_ID);
     // The LATEST wins: a failing gate → undefined (blocks); changes_requested review.
@@ -220,15 +222,55 @@ describeDb("MergeAuthority — writer-backed LandFinalizer over real Postgres", 
     expect(signals.reviewVerdict).toBe("changes_requested");
   });
 
-  /** Append a `pre_merge` gate.verdict with the given `passed`, through the eventStore. */
-  async function appendGateVerdict(passed: boolean): Promise<void> {
+  it("TOCTOU LOCK (DB): a fresh pre_merge gate PASSED for sha A, the head being landed is sha B → BLOCKED (commit-bound)", async () => {
+    // The reader returns the gate's gatedHeadSha (sha-A) from the durable record.
+    await appendGateVerdict(true, "sha-A");
+    const signals = await resolveLandTimeSignals(ownerPool, ORG_ID, RUN_ID);
+    expect(signals.gateOutcome?.passed).toBe(true);
+    expect(signals.gatedHeadSha).toBe("sha-A");
+
+    // Land sha-B (head advanced after the gate). The CodeHost reports the head as sha-B;
+    // authorizeAndLand must BLOCK because the gate (sha-A) != the head being landed (sha-B).
+    const host = new InMemoryCodeHost();
+    host.seed(REPO, "main", "sha-main");
+    await host.pushRef({ repo: REPO, localRef: "feat", remoteBranch: "feat", sha: "sha-B" });
+    const disposition = await authorizeAndLand({
+      codeHost: host,
+      repo: REPO,
+      intoMain: "main",
+      headBranch: "feat",
+      runId: RUN_ID,
+      specId: SPEC_ID,
+      gateConfigHash: "gc",
+      policyVersion: "pv",
+      gatedHeadSha: signals.gatedHeadSha,
+      finalizer: { finalizeLanded: async () => ({ auditId: "a" }) },
+      signals: {
+        gateOutcome: signals.gateOutcome,
+        findings: [],
+        auditPosture: { blockReviewAt: "P1", p2p3Handling: "route-to-dag" },
+        reviewVerdict: "approved",
+        mergeability: { state: "clean", behind: false, baseBranch: "main", headBranch: "feat" },
+        budget: { ceilingUsd: undefined, spentUsd: 0 },
+        demo: "not_required",
+        hitlSignoff: "not_required",
+        conflictsResolved: true,
+      },
+    });
+    expect(disposition.kind).toBe("blocked");
+    // sha-B was never landed; main untouched.
+    expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-main");
+  });
+
+  /** Append a `pre_merge` gate.verdict with the given `passed` + gated `headSha`. */
+  async function appendGateVerdict(passed: boolean, headSha: string): Promise<void> {
     await runWithOrgScope(ownerPool, ORG_ID, (client) =>
       new PgEventStore(client).append({
         runId: RUN_ID,
         specId: SPEC_ID,
         projectId: PROJECT_ID,
         eventType: "gate.verdict",
-        payload: { when: "pre_merge", headSha: "h", passed, durationMs: 1, tiers: [], steps: [] },
+        payload: { when: "pre_merge", headSha, passed, durationMs: 1, tiers: [], steps: [] },
       }),
     );
   }
