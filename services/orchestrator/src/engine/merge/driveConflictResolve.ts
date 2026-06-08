@@ -51,6 +51,9 @@ import {
 } from "../workflow/gate/index.js";
 import { buildAdaptersFromRouting } from "../providers/adapterSelector.js";
 import { buildDefaultConflictResolver } from "../workflow/reviewMerge/conflictResolver/index.js";
+import { driveResolveOverJj } from "./driveConflictResolveJj.js";
+import { conflictResolverJjLive } from "./conflictResolverJjFlag.js";
+import type { WorkspaceConflictApplier } from "../contracts/conflictResolution.js";
 import type { ConflictResolverHook } from "../workflow/reviewMerge/index.js";
 
 /**
@@ -181,50 +184,110 @@ export function buildDriveConflictResolve(deps: DriveConflictResolveDeps): Confl
     }
 
     const ctx = await loadDriveRunContext(deps);
-    const resolverHandle = `${deps.facts.runId}-resolve-${crypto.randomUUID()}`;
-    const allocation = await deps.allocator.allocate({
-      // Runless: use a synthetic naming handle so retained `runner_${runId}` rows
-      // from the original run cannot collide with this short-lived resolver.
-      runId: resolverHandle,
-      projectId: deps.facts.projectId,
-      runnerImage: ctx.runnerImage,
-      identitySecretRef: deps.identitySecretRef,
-      orgId: deps.facts.orgId,
-      runless: true,
-      persistedRunId: null,
-      persistedProjectId: deps.facts.projectId,
-    });
-    const workspacePath = workspaceRepoPathForRun(resolverHandle);
-    try {
-      // Clone the HEAD (PR) branch into the workspace; the resolver's
-      // SshWorkspaceConflictApplier.gather() then merges base INTO it to surface
-      // the conflict hunks (it needs the head checked out as HEAD).
-      const baseSha = await cloneHeadForResolve(deps, ctx, allocation.target, workspacePath);
 
-      const resolver = (deps.buildResolver ?? ((t, w, b) => buildResolverForDrive(deps, ctx, t, w, b)))(
-        allocation.target,
-        workspacePath,
-        baseSha,
-      );
-      const result = await resolver(conflictContext);
+    // Wave-3/S1 CUTOVER (`conflictResolverJjLive()`, default ON): provision a live jj
+    // workspace (A1's `buildLiveJjWorkspace`) and run the resolver over jj's FIRST-CLASS
+    // conflicts — `rebaseOnto` RECORDS the conflict (fail-closed, no `git merge --abort`
+    // / `|| true` fail-open). Flag OFF is the clean kill-switch: the git-clone +
+    // `SshWorkspaceConflictApplier` path, unchanged. The `buildResolver` TEST SEAM
+    // (production omits it) scripts the WHOLE resolver, so it short-circuits the flag —
+    // it always runs the git-style allocate-then-resolve so the classify/cap/yield
+    // wrapper is asserted identically under BOTH flag states.
+    const result =
+      deps.buildResolver !== undefined || !conflictResolverJjLive()
+        ? await driveResolveOverGit(deps, ctx, conflictContext)
+        : await driveResolveViaJj(deps, ctx, conflictContext);
 
-      // RESOLVED → the merge retries + lands (autonomous). UNRESOLVED → the resolver
-      // already routed ONE spec back to the planner (the real intent-carrying re-plan)
-      // under the cap, so this is a bounded autonomous RE-PLAN — recoverable, NOT escalation.
-      deps.verdict.disposition = result.resolved ? "resolved" : "replanned";
-      return result;
-    } finally {
-      // LOUD on release error: a leaked runner is a real fault (cost + capacity), so
-      // surface it rather than swallow it (no silent leak).
-      await deps.allocator.release(allocation.runnerId, "completed").catch((error: unknown) => {
-        console.error(
-          `[merge-coordinator] FAILED to release drive-path resolver runner ${allocation.runnerId} for run ${deps.facts.runId} — leaked runner:`,
-          error,
-        );
-        throw error;
-      });
-    }
+    // RESOLVED → the merge retries + lands (autonomous). UNRESOLVED → the resolver
+    // already routed ONE spec back to the planner (the real intent-carrying re-plan)
+    // under the cap, so this is a bounded autonomous RE-PLAN — recoverable, NOT escalation.
+    deps.verdict.disposition = result.resolved ? "resolved" : "replanned";
+    return result;
   };
+}
+
+/**
+ * The jj-backed drive resolve (the Wave-3/S1 cutover default): delegate to the extracted
+ * `driveResolveOverJj` (which provisions the live jj workspace + the jj applier), passing
+ * a `buildResolver` closure that assembles this file's adapters + re-gate over the SAME
+ * runner + path the applier resolves into, so the re-gate judges the jj-resolved tree.
+ */
+async function driveResolveViaJj(
+  deps: DriveConflictResolveDeps,
+  ctx: DriveRunContext,
+  conflictContext: Parameters<ConflictResolverHook>[0],
+): Promise<{ resolved: boolean }> {
+  return driveResolveOverJj(
+    {
+      facts: {
+        orgId: deps.facts.orgId,
+        projectId: deps.facts.projectId,
+        repoUrl: ctx.repoUrl,
+        baseBranch: ctx.baseBranch,
+        headBranch: ctx.headBranch,
+        runnerImage: ctx.runnerImage,
+        ...(ctx.installation !== undefined && { installation: ctx.installation }),
+        githubCredentialRef: deps.facts.githubCredentialRef,
+        identitySecretRef: deps.identitySecretRef,
+      },
+      allocator: deps.allocator,
+      ssh: deps.ssh,
+      secrets: deps.secrets,
+      vcsProvider: deps.vcsProvider,
+      ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
+      timeoutMs: deps.timeoutMs,
+      buildResolver: ({ target, workspacePath, baseSha, applier }) =>
+        buildResolverForDrive(deps, ctx, target, workspacePath, baseSha, applier),
+    },
+    conflictContext,
+  );
+}
+
+/**
+ * The git-clone + `SshWorkspaceConflictApplier` drive resolve — the kill-switch path
+ * (`CONFLICT_RESOLVER_JJ_LIVE=0`), the pre-cutover mechanism unchanged.
+ */
+async function driveResolveOverGit(
+  deps: DriveConflictResolveDeps,
+  ctx: DriveRunContext,
+  conflictContext: Parameters<ConflictResolverHook>[0],
+): Promise<{ resolved: boolean }> {
+  const resolverHandle = `${deps.facts.runId}-resolve-${crypto.randomUUID()}`;
+  const allocation = await deps.allocator.allocate({
+    // Runless: use a synthetic naming handle so retained `runner_${runId}` rows
+    // from the original run cannot collide with this short-lived resolver.
+    runId: resolverHandle,
+    projectId: deps.facts.projectId,
+    runnerImage: ctx.runnerImage,
+    identitySecretRef: deps.identitySecretRef,
+    orgId: deps.facts.orgId,
+    runless: true,
+    persistedRunId: null,
+    persistedProjectId: deps.facts.projectId,
+  });
+  const workspacePath = workspaceRepoPathForRun(resolverHandle);
+  try {
+    // Clone the HEAD (PR) branch into the workspace; the resolver's
+    // SshWorkspaceConflictApplier.gather() then merges base INTO it to surface
+    // the conflict hunks (it needs the head checked out as HEAD).
+    const baseSha = await cloneHeadForResolve(deps, ctx, allocation.target, workspacePath);
+    const resolver = (deps.buildResolver ?? ((t, w, b) => buildResolverForDrive(deps, ctx, t, w, b)))(
+      allocation.target,
+      workspacePath,
+      baseSha,
+    );
+    return await resolver(conflictContext);
+  } finally {
+    // LOUD on release error: a leaked runner is a real fault (cost + capacity), so
+    // surface it rather than swallow it (no silent leak).
+    await deps.allocator.release(allocation.runnerId, "completed").catch((error: unknown) => {
+      console.error(
+        `[merge-coordinator] FAILED to release drive-path resolver runner ${allocation.runnerId} for run ${deps.facts.runId} — leaked runner:`,
+        error,
+      );
+      throw error;
+    });
+  }
 }
 
 /**
@@ -409,6 +472,7 @@ function buildResolverForDrive(
   target: RunnerHandle,
   workspacePath: string,
   baseSha: string,
+  applier?: WorkspaceConflictApplier,
 ): ConflictResolverHook {
   const adapterDeps = {
     secrets: deps.secrets,
@@ -419,6 +483,8 @@ function buildResolverForDrive(
   };
   const adapters = buildAdaptersFromRouting(adapterDeps, ctx.routing);
   return buildDefaultConflictResolver({
+    // The injected jj applier (the cutover) or the git-merge-abort default (kill-switch).
+    ...(applier !== undefined && { applier }),
     pool: deps.scopedPool,
     ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
     eventStore: deps.eventStore,

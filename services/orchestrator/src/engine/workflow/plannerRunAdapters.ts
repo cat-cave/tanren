@@ -36,6 +36,10 @@ import {
 import type { PlannerRunAdapterContext, RunPlannerLoopInput } from "./plannerRun.js";
 import type { AppendEvent, SubtaskLoopAdapters } from "./subtaskLoop.js";
 import { buildDefaultConflictResolver } from "./reviewMerge/conflictResolver/index.js";
+import { buildJjConflictApplier } from "./reviewMerge/conflictResolver/jjWorkspaceApplier.js";
+import { buildLiveJjWorkspace } from "../providers/liveJjWorkspace.js";
+import { conflictResolverJjLive } from "../merge/conflictResolverJjFlag.js";
+import type { WorkspaceConflictApplier } from "../contracts/conflictResolution.js";
 import type { ConflictResolverHook } from "./reviewMerge/index.js";
 
 // Builds the run's four role adapters (plan/write/check/audit) by resolving the
@@ -130,15 +134,7 @@ export function simulatedReviewSeam(
 // the REAL impl, never a stub).
 export function resolveConflictResolverHook(
   input: RunPlannerLoopInput,
-  deps: {
-    eventStore: EventStore;
-    target: RunnerHandle;
-    workspacePath: string;
-    baseSha: string;
-    runGate: (gate: { when: CiWhen; taskId?: string }) => Promise<GateOutcome>;
-    checker: SubtaskLoopAdapters["checker"];
-    auditor: SubtaskLoopAdapters["auditor"];
-  },
+  deps: ConflictResolverDeps,
 ): ConflictResolverHook {
   // Test seam: a scripted resolver skips the live runner/model. Production omits
   // it → the real intent-preserving resolver is the default. The `??` lives HERE
@@ -147,18 +143,18 @@ export function resolveConflictResolverHook(
   return input.resolveConflict ?? defaultConflictResolver(input, deps);
 }
 
-function defaultConflictResolver(
-  input: RunPlannerLoopInput,
-  deps: {
-    eventStore: EventStore;
-    target: RunnerHandle;
-    workspacePath: string;
-    baseSha: string;
-    runGate: (gate: { when: CiWhen; taskId?: string }) => Promise<GateOutcome>;
-    checker: SubtaskLoopAdapters["checker"];
-    auditor: SubtaskLoopAdapters["auditor"];
-  },
-): ConflictResolverHook {
+/** The runner/workspace + gate/answerer deps the conflict resolver assembles over. */
+interface ConflictResolverDeps {
+  eventStore: EventStore;
+  target: RunnerHandle;
+  workspacePath: string;
+  baseSha: string;
+  runGate: (gate: { when: CiWhen; taskId?: string }) => Promise<GateOutcome>;
+  checker: SubtaskLoopAdapters["checker"];
+  auditor: SubtaskLoopAdapters["auditor"];
+}
+
+function defaultConflictResolver(input: RunPlannerLoopInput, deps: ConflictResolverDeps): ConflictResolverHook {
   // LAZY construction: the real resolver (which needs the project routing to
   // resolve its conflict Answerer) is built only when a conflict ACTUALLY occurs
   // and the hook is invoked. So a run that merges cleanly never constructs it —
@@ -168,8 +164,114 @@ function defaultConflictResolver(
   // a percolation re-execution's conflict is resolved in UPSTREAM-CHANGE mode.
   return async (conflictContext) => {
     const upstreamChange = await readPercolationUpstreamChange(input);
+    // Wave-3/S1 CUTOVER (`conflictResolverJjLive()`, default ON): provision a live jj
+    // workspace (A1's `buildLiveJjWorkspace`) and run the WHOLE resolver — adapters +
+    // re-gate + applier — over that runner + path, so the re-gate judges the
+    // jj-resolved tree. `rebaseOnto` RECORDS the conflict (fail-closed, no
+    // `git merge --abort` / `|| true` fail-open). A clean run never reaches here, so no
+    // jj runner is allocated for the common path. Flag OFF is the clean kill-switch:
+    // the run's own runner + the git-merge-abort `SshWorkspaceConflictApplier`.
+    if (conflictResolverJjLive()) {
+      return resolveOverLiveJj(input, deps, upstreamChange, conflictContext);
+    }
     return buildResolver(input, deps, upstreamChange)(conflictContext);
   };
+}
+
+/**
+ * Resolve an in-loop conflict over a freshly-provisioned live jj workspace. Mirrors the
+ * drive-path jj resolve: build the live workspace, build the conflict adapters + re-gate
+ * over its runner + path (so the re-gate runs against the jj-resolved tree), build the jj
+ * applier, assemble the resolver, run it. The jj applier owns releasing the live
+ * workspace on its terminal step; a failure BEFORE its gather() took ownership releases
+ * the runner loudly here (never a leaked runner).
+ */
+async function resolveOverLiveJj(
+  input: RunPlannerLoopInput,
+  deps: ConflictResolverDeps,
+  upstreamChange: { ancestorSpecId: string; changeSummary: string } | undefined,
+  conflictContext: Parameters<ConflictResolverHook>[0],
+): Promise<{ resolved: boolean }> {
+  const context = input.context;
+  const orgId = typeof context.orgId === "string" ? context.orgId : "";
+  const live = await buildLiveJjWorkspace({
+    facts: {
+      orgId,
+      projectId: context.projectId,
+      repoUrl: context.repoUrl,
+      runnerImage: context.runnerImage,
+      ...(context.installation !== undefined && { installation: context.installation }),
+      githubCredentialRef: context.githubCredentialRef,
+      identitySecretRef: context.identitySecretRef,
+    },
+    allocator: input.allocator,
+    ssh: input.ssh,
+    secrets: input.secrets,
+    vcsProvider: input.vcsProvider,
+    ...(input.githubAppMinter !== undefined && { githubAppMinter: input.githubAppMinter }),
+    timeoutMs: input.timeoutMs,
+  });
+  const applier = buildJjConflictApplier({
+    live,
+    ssh: input.ssh,
+    secrets: input.secrets,
+    vcsProvider: input.vcsProvider,
+    ...(input.githubAppMinter !== undefined && { githubAppMinter: input.githubAppMinter }),
+    facts: {
+      repoUrl: context.repoUrl,
+      baseBranch: context.targetBranch,
+      // The freshly-cloned base bookmark jj imports — the merge-time base the PR head
+      // rebases onto (never-discard, conflict recorded).
+      baseRevision: `${context.targetBranch}@origin`,
+      headBranch: context.runBranch,
+      ...(context.installation !== undefined && { installation: context.installation }),
+      githubCredentialRef: context.githubCredentialRef,
+    },
+    timeoutMs: input.timeoutMs,
+  });
+  try {
+    // The adapters + re-gate run over the jj workspace's runner + path; the re-gate
+    // baseline is the merge-time base branch (the resolved tree sits on it). ONLY the
+    // workspace mechanism changed — the classify/re-gate/replan logic is identical.
+    const jjAdapters = buildAdaptersFromRouting(
+      {
+        secrets: input.secrets,
+        ssh: input.ssh,
+        target: live.target,
+        runId: context.runId,
+        ...(context.endpointBaseUrl !== undefined && { endpointBaseUrl: context.endpointBaseUrl }),
+      },
+      requireRouting(context.routing),
+    );
+    const resolver = buildResolver(
+      input,
+      {
+        eventStore: deps.eventStore,
+        target: live.target,
+        workspacePath: live.workspacePath,
+        baseSha: context.targetBranch,
+        runGate: buildDefaultGate(input, live.target, live.workspacePath, deps.eventStore),
+        checker: jjAdapters.checker,
+        auditor: jjAdapters.auditor,
+      },
+      upstreamChange,
+      applier,
+    );
+    return await resolver(conflictContext);
+  } catch (error) {
+    // FAIL-CLOSED: a failure before the applier's gather() took workspace ownership
+    // would leak the runner — release it loudly. (Once gather() runs, the applier's
+    // terminal publish/abort owns release; releasing twice is a no-op there.)
+    await live.release();
+    throw error;
+  }
+}
+
+function requireRouting(routing: RunPlannerLoopInput["context"]["routing"]): NonNullable<typeof routing> {
+  if (routing === undefined) {
+    throw new Error("context.routing is required to build the intent-preserving conflict resolver");
+  }
+  return routing;
 }
 
 /**
@@ -198,24 +300,15 @@ async function readPercolationUpstreamChange(
 
 function buildResolver(
   input: RunPlannerLoopInput,
-  deps: {
-    eventStore: EventStore;
-    target: RunnerHandle;
-    workspacePath: string;
-    baseSha: string;
-    runGate: (gate: { when: CiWhen; taskId?: string }) => Promise<GateOutcome>;
-    checker: SubtaskLoopAdapters["checker"];
-    auditor: SubtaskLoopAdapters["auditor"];
-  },
+  deps: ConflictResolverDeps,
   upstreamChange?: { ancestorSpecId: string; changeSummary: string },
+  applier?: WorkspaceConflictApplier,
 ): ConflictResolverHook {
   const context = input.context;
-  const routing = context.routing;
-  if (routing === undefined) {
-    throw new Error("context.routing is required to build the intent-preserving conflict resolver");
-  }
+  const routing = requireRouting(context.routing);
   const orgId = typeof context.orgId === "string" ? context.orgId : undefined;
   return buildDefaultConflictResolver({
+    ...(applier !== undefined && { applier }),
     pool: input.pool,
     ...(input.runStateWriter !== undefined && { runStateWriter: input.runStateWriter }),
     eventStore: deps.eventStore,
