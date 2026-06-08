@@ -144,6 +144,20 @@ describe("collectRunCredentialRefPaths", () => {
     // never via the run's scoped credential token.
     expect(refs).not.toContain("runner/local-docker/identity");
   });
+
+  it("scopes in the App private-key path when the org uses the App (empty github sentinel)", () => {
+    const ctx = context();
+    ctx.orgId = "org-acme";
+    ctx.defaultLlm = { cli: "codex", model: "default", authRef: CODEX_REF };
+    // App-installed org: the static github ref is the empty sentinel; the run mints
+    // its installation token by reading the App private-key credential.
+    ctx.githubCredentialRef = "";
+    ctx.installation = { installationId: "137492334", credentialRef: "credential/github_app/org/org-acme/default" };
+    const refs = collectRunCredentialRefPaths(ctx);
+    expect(refs).toContain("credential/github_app/org/org-acme/default");
+    // The empty sentinel itself is never a path.
+    expect(refs).not.toContain("");
+  });
 });
 
 describe("buildRunCredentialScoping (env → seam)", () => {

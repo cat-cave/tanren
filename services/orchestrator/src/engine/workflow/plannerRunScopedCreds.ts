@@ -89,6 +89,14 @@ export function collectRunCredentialRefPaths(context: PlannerRunContext): string
   if (context.githubCredentialRef.trim() !== "") {
     refs.add(context.githubCredentialRef.trim());
   }
+  // App-installed org: the static github ref is the empty sentinel, but the run
+  // MINTS its installation token by reading the App private-key credential — scope
+  // THAT path in, else the scoped token gets 403 on the mint (the clone/push/PR/CI
+  // stages all need it). Without the App, this contributes nothing.
+  const installationRef = context.installation?.credentialRef;
+  if (installationRef !== undefined && installationRef.trim() !== "") {
+    refs.add(installationRef.trim());
+  }
   return [...refs].sort();
 }
 
