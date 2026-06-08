@@ -37,6 +37,18 @@ jobs:
       - run: corepack enable
       - run: corepack prepare pnpm@11.1.0 --activate
       - run: pnpm install --frozen-lockfile
+      # jj — the WorkspaceVcsCore conformance drives a real jj process; the
+      # mutation dry-run runs the full suite, so jj must be on PATH (matches ci.yml).
+      - name: Install jj
+        run: |
+          set -euo pipefail
+          JJ_VERSION=0.42.0
+          ASSET="jj-v${JJ_VERSION}-x86_64-unknown-linux-musl.tar.gz"
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 --connect-timeout 30 -o "/tmp/${ASSET}" "https://github.com/jj-vcs/jj/releases/download/v${JJ_VERSION}/${ASSET}"
+          mkdir -p /tmp/jjx && tar xzf "/tmp/${ASSET}" -C /tmp/jjx
+          sudo install -m 0755 /tmp/jjx/jj /usr/local/bin/jj
+          rm -rf "/tmp/${ASSET}" /tmp/jjx
+          jj --version
       # Whole-repo mutation trend. `continue-on-error` so a single regressing
       # cluster floor does not abort the report upload — the artifact is the
       # point of the weekly job.
@@ -83,5 +95,17 @@ jobs:
       - run: corepack enable
       - run: corepack prepare pnpm@11.1.0 --activate
       - run: pnpm install --frozen-lockfile
+      # jj — the WorkspaceVcsCore conformance drives a real jj process; the
+      # mutation dry-run runs the full suite, so jj must be on PATH (matches ci.yml).
+      - name: Install jj
+        run: |
+          set -euo pipefail
+          JJ_VERSION=0.42.0
+          ASSET="jj-v${JJ_VERSION}-x86_64-unknown-linux-musl.tar.gz"
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 --connect-timeout 30 -o "/tmp/${ASSET}" "https://github.com/jj-vcs/jj/releases/download/v${JJ_VERSION}/${ASSET}"
+          mkdir -p /tmp/jjx && tar xzf "/tmp/${ASSET}" -C /tmp/jjx
+          sudo install -m 0755 /tmp/jjx/jj /usr/local/bin/jj
+          rm -rf "/tmp/${ASSET}" /tmp/jjx
+          jj --version
       - name: mutation cluster ${{ matrix.cluster }}
         run: just mutation-cluster ${{ matrix.cluster }}
