@@ -50,7 +50,7 @@ describe("workspace git contract", () => {
         command: "sleep 10",
         timeoutMs: 50,
       }),
-    ).rejects.toThrow("slow step timed out");
+    ).rejects.toThrow("slow step failed: timed out");
 
     const failed = new ScriptedSsh([
       {
@@ -68,6 +68,31 @@ describe("workspace git contract", () => {
     await expect(
       runWorkspaceSshCommand(failed, target, { label: "ssh step", command: "true", timeoutMs: 50 }),
     ).rejects.toThrow("ssh step failed: connection failed");
+  });
+
+  it("surfaces the FAILED COMMAND + stderr tail on a workspace command failure (no opaque `failed: exit 1`)", async () => {
+    // The exact apex-v23 shape: a bootstrap commit that exits 1 with the git
+    // auto-detect-email error on stderr. The loud message must name the command
+    // that failed AND carry its stderr — not just `… failed: exit 1`.
+    const stderr = "fatal: unable to auto-detect email address (got 'tanren@host.(none)')";
+    const ssh = new ScriptedSsh([{ exitCode: 1, stdout: "", stderr, timedOut: false }]);
+    let error: unknown;
+    try {
+      await runWorkspaceSshCommand(ssh, target, {
+        label: "commit bootstrap state",
+        command: "git add -A && git commit -m bootstrap",
+        timeoutMs: 50,
+      });
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toBeInstanceOf(WorkspaceCommandError);
+    const message = (error as WorkspaceCommandError).message;
+    expect(message).toContain("commit bootstrap state failed: exit 1");
+    // The failed command is surfaced.
+    expect(message).toContain("command: git add -A && git commit -m bootstrap");
+    // The stderr tail is surfaced (the actual root-cause line).
+    expect(message).toContain(`stderr: ${stderr}`);
   });
 
   it("parses captured git commit metadata", () => {
