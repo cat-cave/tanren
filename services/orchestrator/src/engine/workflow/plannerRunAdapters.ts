@@ -31,7 +31,7 @@ import { buildDefaultGate } from "./plannerRunGate.js";
 export { buildDefaultGate } from "./plannerRunGate.js";
 // Re-exported so plannerRun.ts keeps a single import surface for the run's
 // input-shaping seams (the optional-property folders live in plannerRunSeams).
-export { appTokenSeam, nativeQueueSeam, writerSeam } from "./plannerRunSeams.js";
+export { appTokenSeam, loopConfigSeam, nativeQueueSeam, writerSeam } from "./plannerRunSeams.js";
 import type { PlannerRunAdapterContext, RunPlannerLoopInput } from "./plannerRun.js";
 import type { AppendEvent, SubtaskLoopAdapters } from "./subtaskLoop.js";
 import { buildDefaultConflictResolver } from "./reviewMerge/conflictResolver/index.js";
@@ -99,27 +99,43 @@ export function defaultSimulatedReviewer(
 
 // Builds the spec-quality VALIDATOR (workstream 1) from the project routing — the
 // read-only judge over the loop's TRIAGE `kind: spec` items, riding the `audit` chain
-// head like the simulated reviewer. Resolved once per run and threaded into the loop's
-// triage seam so a triaged spec meets the SAME accomplishable/demo-able/non-trivial/
-// legible bar as every spec-emitter before it materializes into the DAG.
+// head like the simulated reviewer, so a triaged spec meets the SAME accomplishable/
+// demo-able/non-trivial/legible bar as every spec-emitter before it materializes.
+//
+// LAZY: the underlying provider validator is resolved on the FIRST `.validate()` call,
+// not at run setup. The loop's triage only validates when it routes a `kind: spec`
+// item, so a run that never emits a new spec never needs it. This keeps the seam off
+// the unconditional setup path (where a test injecting fake adapters has no routing),
+// while production resolves the REAL validator (and fails loud if routing is genuinely
+// absent) exactly when a spec is about to materialize.
 export function defaultSpecQualityValidator(
   input: RunPlannerLoopInput,
   ctx: PlannerRunAdapterContext,
 ): SpecQualityAnswerer {
-  const routing = input.context.routing;
-  if (routing === undefined) {
-    throw new Error("context.routing is required to build the spec-quality validator from the project routing table");
-  }
-  return buildSpecQualityValidator(
-    {
-      secrets: input.secrets,
-      ssh: input.ssh,
-      target: ctx.target,
-      runId: ctx.runId,
-      endpointBaseUrl: input.context.endpointBaseUrl,
+  let resolved: SpecQualityAnswerer | undefined;
+  return {
+    validate(spec) {
+      if (resolved === undefined) {
+        const routing = input.context.routing;
+        if (routing === undefined) {
+          throw new Error(
+            "context.routing is required to build the spec-quality validator from the project routing table",
+          );
+        }
+        resolved = buildSpecQualityValidator(
+          {
+            secrets: input.secrets,
+            ssh: input.ssh,
+            target: ctx.target,
+            runId: ctx.runId,
+            endpointBaseUrl: input.context.endpointBaseUrl,
+          },
+          routing,
+        );
+      }
+      return resolved.validate(spec);
     },
-    routing,
-  );
+  };
 }
 
 // The `pollReviewForRun` fields for reviewPolicy: "simulated". The reviewer

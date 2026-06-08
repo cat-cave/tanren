@@ -438,3 +438,17 @@ export const ConvergenceStalledPayload = z
     reason: z.string(),
   })
   .strict();
+
+// The SPEC-LOOP REDESIGN stage events (demo-run/triage/convergence), grouped here so
+// the EventRegistry spreads them in with ONE import (keeping registry.ts under both
+// its line cap and its max-dependencies cap as the loop adds events). The validation /
+// decoding path is unchanged — one source-of-truth registry object.
+export const loopEventRegistry = {
+  "demoRun.started": DemoRunStartedPayload,
+  "demoRun.verdict": DemoRunVerdictPayload,
+  "triage.started": TriageStartedPayload,
+  "triage.completed": TriageCompletedPayload,
+  "convergence.started": ConvergenceStartedPayload,
+  "convergence.assessed": ConvergenceAssessedPayload,
+  "convergence.stalled": ConvergenceStalledPayload,
+} as const;

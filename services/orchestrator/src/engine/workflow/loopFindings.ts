@@ -3,7 +3,11 @@
 // FINDING (not a halt) so it joins the triage set alongside the auditor + demo
 // findings. Kept here so subtaskLoop.ts stays under the 500-line architecture cap.
 import type { Finding } from "../contracts/findings.js";
-import { type CandidateSpec, validateEmittedSpecs, type ValidateEmittedSpecsInput } from "../forge/specQuality/index.js";
+import {
+  type CandidateSpec,
+  validateEmittedSpecs,
+  type ValidateEmittedSpecsInput,
+} from "../forge/specQuality/index.js";
 import type { RoutedWorkItem } from "./loopPolicy.js";
 import type { GateOutcome } from "./gate/index.js";
 
@@ -55,7 +59,7 @@ export async function gateTriagedSpecs(
 ): Promise<void> {
   if (gate === undefined || newSpecs.length === 0) return;
   await validateEmittedSpecs({
-    specs: newSpecs.map(triagedSpecToCandidate),
+    specs: newSpecs.map((routed) => triagedSpecToCandidate(routed)),
     validator: gate.validator,
     ...(gate.reviseSpec !== undefined && { reviseSpec: gate.reviseSpec }),
     ...(gate.maxRevisions !== undefined && { maxRevisions: gate.maxRevisions }),

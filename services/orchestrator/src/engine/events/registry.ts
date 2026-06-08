@@ -11,22 +11,16 @@ import {
   CheckerRejectedPayload,
   CheckerStartedPayload,
   CheckerVerdictPayload,
-  ConvergenceAssessedPayload,
-  ConvergenceStalledPayload,
-  ConvergenceStartedPayload,
-  DemoRunStartedPayload,
-  DemoRunVerdictPayload,
   PlannerCompletedPayload,
   PlannerFailedPayload,
   PlannerRerequestedPayload,
   PlannerStartedPayload,
   PlannerSubtasksEmittedPayload,
-  TriageCompletedPayload,
-  TriageStartedPayload,
   WriterCompletedPayload,
   WriterFailedPayload,
   WriterStartedPayload,
   WriterSubtaskCompletedPayload,
+  loopEventRegistry,
   WriterSubtaskFailedPayload,
   WriterSubtaskStartedPayload,
 } from "./schemas/answerer.js";
@@ -213,14 +207,9 @@ export const EventRegistry = {
   // S3: the posture-gate's residual P2/P3 disposition (route-to-dag / fix-if-idle).
   "auditor.findings_routed": AuditorFindingsRoutedPayload,
 
-  // SPEC-LOOP REDESIGN stages (docs/roadmap/spec-loop-redesign.md)
-  "demoRun.started": DemoRunStartedPayload,
-  "demoRun.verdict": DemoRunVerdictPayload,
-  "triage.started": TriageStartedPayload,
-  "triage.completed": TriageCompletedPayload,
-  "convergence.started": ConvergenceStartedPayload,
-  "convergence.assessed": ConvergenceAssessedPayload,
-  "convergence.stalled": ConvergenceStalledPayload,
+  // SPEC-LOOP REDESIGN stages (demo-run/triage/convergence) — split into
+  // registry.loop.ts to keep this file under the 500-line cap.
+  ...loopEventRegistry,
 
   // Runner allocation
   "runner.allocated": RunnerAllocatedPayload,

@@ -39,6 +39,7 @@ import {
   appTokenSeam,
   buildDefaultGate,
   buildManagedCapturerForRun,
+  loopConfigSeam,
   nativeQueueSeam,
   resolveConflictResolverHook,
   resolveRunAdaptersWithBudgetPreflight,
@@ -190,9 +191,7 @@ export interface RunPlannerLoopInput {
   // Test seams. Omitted in production → real Codex adapters + SSH usage probe.
   buildAdapters?: (ctx: PlannerRunAdapterContext) => SubtaskLoopAdapters;
   buildUsageProbe?: (ctx: PlannerRunAdapterContext) => UsageProbe | undefined;
-  // WORKSTREAM 1 ↔ 2 SEAM. Omitted in production → the spec-quality validator is
-  // resolved from the project routing (audit chain head; Codex by default) and gates
-  // the loop's TRIAGE `kind: spec` items. Tests inject a fake validator.
+  // WS1↔WS2 seam. Omitted → spec-quality validator from project routing; tests inject.
   buildSpecValidator?: (ctx: PlannerRunAdapterContext) => SpecQualityAnswerer;
   // BUDGET-SAFETY (M6): the budget-gate seam the run-setup ceiling preflight resolves the
   // configured ceiling through. Defaults to PgBudgetGate over `pool`; tests inject a fake.
@@ -309,12 +308,10 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
       target: allocation.target,
       codexHome: codexHomeForRun(context.runId),
     };
-    // Build adapters + usage probe AND run the BUDGET-SAFETY (M6) ceiling preflight (fail closed on an unreachable ceiling).
-    const { adapters, usageProbe, specValidator } = await resolveRunAdaptersWithBudgetPreflight(
-      input,
-      adapterCtx,
-      appendEvent,
-    );
+    // Build adapters + usage probe + the spec-quality validator AND run the
+    // BUDGET-SAFETY (M6) ceiling preflight (fail closed on an unreachable ceiling).
+    const adapterResult = await resolveRunAdaptersWithBudgetPreflight(input, adapterCtx, appendEvent);
+    const { adapters, usageProbe, specValidator } = adapterResult;
     // MANAGED run: the per-call real-`usage.cost` capturer (undefined on BYOK). See its builder.
     const captureRealProviderCost = await buildManagedCapturerForRun(input);
     // the deterministic gate runs on the just-bootstrapped workspace.
@@ -356,22 +353,13 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
           baseSha,
         },
         escapeHatches: input.escapeHatches,
-        // SPEC-LOOP REDESIGN: thread the project audit posture (triage routing) + the
-        // convergence policy (the SOLE loop bound). Absent ⇒ the loop's balanced defaults.
-        ...(context.auditPosture !== undefined && { auditPosture: context.auditPosture }),
-        ...(context.convergencePolicy !== undefined && { convergencePolicy: context.convergencePolicy }),
         timeoutMs: input.timeoutMs,
         usageProbe,
-        // cost PR-C: the CONFIGURED per-credential credit→USD rate (see context field).
-        ...(context.creditUsdRate !== undefined && { creditUsdRate: context.creditUsdRate }),
         runGate,
         seedRejections: [...seedRejections],
         ...(captureRealProviderCost !== undefined && { captureRealProviderCost }),
-        // WORKSTREAM 1 ↔ 2 SEAM — gate the loop's TRIAGE `kind: spec` items against the
-        // spec-quality contract. STRICT (no reviseSpec): the triage answerer cannot
-        // cheaply re-author a single spec, so a persistently-invalid spec escalates
-        // loud (PersistentlyInvalidSpecError → run halts → needs_attention).
-        specValidator: { validator: specValidator },
+        // triage/convergence knobs + the WS1↔WS2 spec-quality validator (loopConfigSeam).
+        ...loopConfigSeam(context, specValidator),
       });
 
       if (outcome.kind !== "passed") {
