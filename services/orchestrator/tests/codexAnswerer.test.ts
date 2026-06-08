@@ -56,11 +56,29 @@ describe("Codex Answerer adapter", () => {
     expect(ssh.commands[2]?.command.command).toContain("cat >");
     expect(ssh.commands[2]?.command.stdin).toBe(JSON.stringify(checkAnswerSchema.jsonSchema));
     expect(ssh.commands[3]?.command.command).toBe(
-      "CODEX_HOME='/home/tanren/.tanren/runs/run_answerer_1/codex-home' codex exec --sandbox read-only --json --ignore-user-config --ignore-rules --skip-git-repo-check --cd '/tmp/tanren-answerer-runs/run_answerer_1/tanren.check_answer.v1' --output-schema '/home/tanren/.tanren/runs/run_answerer_1/codex-home/tanren.check_answer.v1.schema.json' --output-last-message '/home/tanren/.tanren/runs/run_answerer_1/codex-home/tanren.check_answer.v1.response.json' -",
+      "CODEX_HOME='/home/tanren/.tanren/runs/run_answerer_1/codex-home' codex exec --sandbox read-only --json --ignore-user-config --ignore-rules --skip-git-repo-check --cd '/home/tanren/.tanren/runs/run_answerer_1/tanren.check_answer.v1' --output-schema '/home/tanren/.tanren/runs/run_answerer_1/codex-home/tanren.check_answer.v1.schema.json' --output-last-message '/home/tanren/.tanren/runs/run_answerer_1/codex-home/tanren.check_answer.v1.response.json' -",
     );
     expect(ssh.commands[3]?.command.command).not.toContain("workspace-write");
     expect(ssh.commands[3]?.command.stdin).toBe("judge this diff");
     expect(result.done).toBe(true);
+  });
+
+  it("fails LOUD when the workspace mkdir is denied (no swallowed os-error-2)", async () => {
+    // The per-run scratch base is /home/tanren/.tanren/runs (tanren-writable), NOT /tmp.
+    // If that mkdir is ever denied, prep must throw — not let codex --cd into a missing dir.
+    const ssh = new FailOnMatchSsh(/mkdir -p.*tanren\.check_answer/u, [ok(""), ok(""), ok(""), ok(authJson)]);
+    const secrets = new InMemorySecretStore();
+    await secrets.put({ ref: "credential/codex/dev", value: authJson });
+    const answerer = createCodexAnswerer<CheckAnswer>({
+      secrets,
+      ssh,
+      target,
+      credentialRef: "credential/codex/dev",
+      runId: "run_answerer_1",
+    });
+    await expect(
+      answerer.runAnswerer({ prompt: "judge this diff", timeoutMs: 1000, outputSchema: checkAnswerSchema }),
+    ).rejects.toThrow(/workspace prep failed/u);
   });
 
   it("keeps answerer command construction read-only and schema-driven", () => {
@@ -151,6 +169,23 @@ describe("Codex Answerer adapter", () => {
 
 function ok(stdout: string): CommandResult {
   return { exitCode: 0, stdout, stderr: "", timedOut: false };
+}
+
+// A CommandSubstrate that fails any command matching `match` (default exit 1), ok
+// otherwise — used to prove a denied workspace mkdir is a LOUD failure, not swallowed.
+class FailOnMatchSsh implements CommandSubstrate {
+  readonly commands: Array<{ target: RunnerHandle; command: RunnerCommand }> = [];
+  constructor(
+    private readonly match: RegExp,
+    private readonly okResults: CommandResult[],
+  ) {}
+  async run(sshTarget: RunnerHandle, command: RunnerCommand): Promise<CommandResult> {
+    this.commands.push({ target: sshTarget, command });
+    if (this.match.test(command.command)) {
+      return { exitCode: 1, stdout: "", stderr: "mkdir: cannot create directory: Permission denied", timedOut: false };
+    }
+    return this.okResults.shift() ?? ok("");
+  }
 }
 
 class ScriptedSsh implements CommandSubstrate {

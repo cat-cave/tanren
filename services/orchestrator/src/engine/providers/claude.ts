@@ -1,6 +1,6 @@
 import type { RunnerHandle } from "../contracts/allocator.js";
 import type { SecretStore } from "../contracts/secretStore.js";
-import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
+import type { CommandResult, CommandSubstrate } from "../contracts/commandSubstrate.js";
 import { storeClaudeAuthBundle } from "../credentials/claudeAuth.js";
 import { materializeClaudeAuthBundle } from "../credentials/claudeMaterializer.js";
 import { quoteSshShellArg } from "../ssh/command.js";
@@ -135,10 +135,11 @@ export function createClaudeAnswerer<TOutput>(dependencies: ClaudeAnswererDepend
         endpointBaseUrl: dependencies.endpointBaseUrl,
       });
       const workspace = opts.workspace ?? answererWorkspacePath(dependencies, opts.outputSchema.name);
-      await dependencies.ssh.run(dependencies.target, {
+      const made = await dependencies.ssh.run(dependencies.target, {
         command: `mkdir -p ${quoteSshShellArg(workspace)}`,
         timeoutMs: Math.min(opts.timeoutMs, 30_000),
       });
+      assertAnswererWorkspaceStep(made, `mkdir -p ${workspace}`);
       const result = await dependencies.ssh.run(dependencies.target, {
         command: buildClaudeAnswererCommand({
           configDir: auth.CLAUDE_CONFIG_DIR,
@@ -423,7 +424,9 @@ function parseJsonObject(line: string): Record<string, unknown> | undefined {
 }
 
 function answererWorkspacePath(dependencies: ClaudeAnswererDependencies, schemaName: string): string {
-  const baseDir = dependencies.answererWorkspaceBaseDir ?? "/tmp/tanren-answerer-runs";
+  // Writable by the runner's `tanren` user — /tmp is uid-owned + denies mkdir, so
+  // the per-run scratch lives under tanren's home (same base as the materializers).
+  const baseDir = dependencies.answererWorkspaceBaseDir ?? "/home/tanren/.tanren/runs";
   return `${baseDir}/${dependencies.runId}/${safeSchemaFileName(schemaName)}`;
 }
 
@@ -433,6 +436,18 @@ function safeSchemaFileName(schemaName: string): string {
 
 function messageFromUnknown(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+// A failed workspace-prep SSH step (e.g. mkdir denied on a non-writable base) must
+// be LOUD — otherwise the harness `--cd`s into a dir that was never created and the
+// real cause is masked by a cryptic downstream error. (no-silent-fallbacks doctrine.)
+function assertAnswererWorkspaceStep(result: CommandResult, step: string): void {
+  if (result.exitCode !== 0 || result.failure !== undefined || result.timedOut) {
+    throw new Error(
+      `Claude Answerer workspace prep failed (${step}): exit ${result.exitCode ?? "unknown"}` +
+        `${result.timedOut ? " (timed out)" : ""} | stderr: ${result.stderr.slice(-500)}`,
+    );
+  }
 }
 
 function failedResult(
