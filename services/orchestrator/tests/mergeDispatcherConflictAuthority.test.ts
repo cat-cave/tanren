@@ -106,10 +106,17 @@ function context(): ReviewMergeRunContext {
   };
 }
 
+/** A `reGateCi` hook returning the given pre_merge gate status (the resolved-tree gate). */
+type ReGateStatus = "passed" | "failed" | "pending";
+function reGate(status: ReGateStatus): () => Promise<{ status: ReGateStatus }> {
+  return async () => ({ status });
+}
+
 function dispatcher(
   probe: MergeProbe,
   events: ReturnType<typeof recordingEventStore>,
   b: MergeAuthorityBundle,
+  reGateStatus: ReGateStatus = "passed",
 ): MergeDispatcher {
   const input = {
     pool: fakePool,
@@ -117,6 +124,9 @@ function dispatcher(
     vcsProvider: {},
     runId: "run_1",
     resolveConflict: async () => ({ resolved: true }),
+    // The resolved-tree pre_merge re-gate (§5): defaults to passing so the
+    // authority then judges the OTHER fail-closed inputs. A test overrides it.
+    reGateCi: reGate(reGateStatus),
     mergeAuthority: b,
   } as unknown as MergeForRunInput;
   const deps: DispatcherDeps = {
@@ -142,6 +152,7 @@ function dispatcherLazy(
   probe: MergeProbe,
   events: ReturnType<typeof recordingEventStore>,
   buildBundle: () => Promise<MergeAuthorityBundle>,
+  reGateStatus: ReGateStatus = "passed",
 ): { dispatcher: MergeDispatcher; builds: () => number } {
   const state = { builds: 0 };
   const input = {
@@ -150,6 +161,8 @@ function dispatcherLazy(
     vcsProvider: {},
     runId: "run_1",
     resolveConflict: async () => ({ resolved: true }),
+    // The resolved-tree pre_merge re-gate runs BEFORE the lazy bundle build.
+    reGateCi: reGate(reGateStatus),
     buildMergeAuthority: async () => {
       state.builds += 1;
       return buildBundle();
@@ -286,5 +299,79 @@ describe("conflict-resolved land re-enters the MergeAuthority (no parallel merge
     expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-main");
     expect(lazy.builds()).toBe(1);
     expect(events.events).not.toContain("merge.completed");
+  });
+
+  it("REGRESSION LOCK (a): flag ON + NO bundle → BLOCKED, NEVER probe.merge (no silent host-merge fallback)", async () => {
+    const host = new InMemoryCodeHost();
+    host.seed(REPO, "main", "sha-main");
+    await host.pushRef({ repo: REPO, localRef: "feat", remoteBranch: "feat", sha: "sha-feat" });
+    // A CLEAN branch (no conflict) so directMerge goes straight to driveLand — with the
+    // authority live but NEITHER a pre-built bundle NOR a builder → fail-closed BLOCK,
+    // never a fall-through to landViaHostMerge (probe.merge).
+    const probe = scriptedProbe("clean");
+    // Override mergeability to always `clean` (no conflict) so directMerge → driveLand
+    // directly. The `merge` closure still mutates the original `probe.mergeCalls`.
+    const cleanProbe = { ...probe, readMergeability: async () => mergeability("clean") } as MergeProbe;
+    const events = recordingEventStore();
+    const input = {
+      pool: fakePool,
+      secrets: {},
+      vcsProvider: {},
+      runId: "run_1",
+      resolveConflict: async () => ({ resolved: true }),
+      // NO mergeAuthority, NO buildMergeAuthority — the authority is live (default flag).
+    } as unknown as MergeForRunInput;
+    const deps: DispatcherDeps = {
+      input,
+      context: context(),
+      eventStore: events as never,
+      taskId: "task_1",
+      integration: "direct_merge",
+      pr: { repo: REPO, pullNumber: 1 },
+      probe: cleanProbe,
+    };
+    const result = await new MergeDispatcher(deps).directMerge();
+
+    expect(result.outcome).not.toBe("merged");
+    // NEVER the legacy host-merge: probe.merge was not called, main untouched.
+    expect(probe.mergeCalls).toBe(0);
+    expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-main");
+    expect(events.events).not.toContain("merge.completed");
+  });
+
+  it("REGRESSION LOCK (b): resolved-tree fresh pre_merge RE-GATE FAILS → BLOCKED (lands on the resolved tree, not the stale pre-conflict pass)", async () => {
+    const host = new InMemoryCodeHost();
+    host.seed(REPO, "main", "sha-main");
+    await host.pushRef({ repo: REPO, localRef: "feat", remoteBranch: "feat", sha: "sha-feat" });
+    const probe = scriptedProbe("clean");
+    const events = recordingEventStore();
+    const landed: string[] = [];
+    // The conflict resolves true, but the FRESH pre_merge re-gate on the RESOLVED TREE
+    // FAILS — even though the bundle's gate (the stale pre-conflict pre_merge pass)
+    // would clear. The resolved-tree gate blocks the land BEFORE authorization.
+    const result = await dispatcher(probe, events, bundle(host, { landed }), "failed").directMerge();
+
+    expect(result.outcome).not.toBe("merged");
+    expect(landed).toEqual([]);
+    expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-main");
+    expect(probe.mergeCalls).toBe(0);
+    expect(events.events).not.toContain("merge.completed");
+  });
+
+  it("REGRESSION LOCK (c): resolved-tree fresh pre_merge re-gate PASSES → lands via the authority + CAS + finalizer", async () => {
+    const host = new InMemoryCodeHost();
+    host.seed(REPO, "main", "sha-main");
+    await host.pushRef({ repo: REPO, localRef: "feat", remoteBranch: "feat", sha: "sha-feat" });
+    const probe = scriptedProbe("clean");
+    const events = recordingEventStore();
+    const landed: string[] = [];
+    // The resolved-tree pre_merge re-gate PASSES → the authority authorizes + lands via
+    // the ff-only CAS + the §5 finalizer (not probe.merge).
+    const result = await dispatcher(probe, events, bundle(host, { landed }), "passed").directMerge();
+
+    expect(result.outcome).toBe("merged");
+    expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-feat");
+    expect(landed).toEqual(["sha-feat"]);
+    expect(probe.mergeCalls).toBe(0);
   });
 });

@@ -163,3 +163,43 @@ export async function landViaHostMerge(deps: DispatcherDeps, ops: LandOps): Prom
   await ops.finalize("failed", { taskOutcome: "failed", taskStatus: "failed", failureKind: "merge_failed" });
   return ops.result("failed", { message: merge.message });
 }
+
+/**
+ * Run a FRESH `pre_merge` gate on the RESOLVED tree (§5) before the land authority
+ * judges it — so the land authority's gate verdict is a `pre_merge` gate on the EXACT
+ * tree being landed (post-resolution), not the stale pre-conflict pre_merge pass. The
+ * resolver re-gates with the `pre_audit` tier; the land reads only `pre_merge`, so a
+ * fresh `pre_merge` gate MUST run on the resolved tree here. REQUIRED + fail-closed: an
+ * ABSENT re-gate hook, a FAILED gate, or a PENDING (non-converged) gate all HOLD
+ * (recoverable) — the resolved tree is never landed on an unverified or stale gate.
+ * `reGateCi` runs `runNativeMergeGate` (`pre_merge`), emitting a fresh `pre_merge`
+ * gate.verdict the land reader (`resolveLandTimeSignals`) then picks up.
+ */
+export async function reGateResolvedTree(
+  deps: DispatcherDeps,
+  ops: LandOps,
+): Promise<{ kind: "proceed" } | { kind: "halt"; result: MergeForRunResult }> {
+  const reGate = deps.input.reGateCi;
+  if (reGate === undefined) {
+    return {
+      kind: "halt",
+      result: await ops.emitConflict(
+        "resolved-tree pre_merge re-gate hook is absent; cannot verify the resolved tree — land held",
+      ),
+    };
+  }
+  const ci = await reGate();
+  if (ci.status === "failed") {
+    await deps.eventStore.append({
+      ...ops.base(),
+      eventType: "merge.failed",
+      payload: { ...ops.prFields(), integration: ops.mergeLabel(), message: "pre_merge gate failed on resolved tree" },
+    });
+    await ops.finalize("failed", { taskOutcome: "failed", taskStatus: "failed", failureKind: "merge_failed" });
+    return { kind: "halt", result: ops.result("failed", { message: "pre_merge gate failed on resolved tree" }) };
+  }
+  if (ci.status === "pending") {
+    return { kind: "halt", result: await ops.emitConflict("pre_merge gate did not converge on the resolved tree") };
+  }
+  return { kind: "proceed" };
+}
