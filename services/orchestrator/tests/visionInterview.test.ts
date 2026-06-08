@@ -54,11 +54,40 @@ function preparedDeploy(providerKind: "deploy.vercel" | "deploy.flyio" = "deploy
   };
 }
 
+// Drive the full deterministic interview to completion, then derive the product
+// graph — the boilerplate every derive test shares. Returns the derive result + the
+// in-memory state so callers can assert on the created specs/configs.
+async function runInterviewAndDerive(overrides: Partial<Parameters<typeof deriveFromCapture>[1]> = {}): Promise<{
+  derived: Awaited<ReturnType<typeof deriveFromCapture>>;
+  state: StubState;
+  configs: Map<string, Record<string, unknown>>;
+}> {
+  const { pool, state, configs } = stubPool();
+  const answerer = createDeterministicInterviewAnswerer();
+  let capture: InterviewCapture = emptyCapture();
+  let complete = false;
+  for (let round = 1; round <= 20 && !complete; round += 1) {
+    const result = await runRound({ pool, answerer }, { round, answer: "ok", capture });
+    capture = result.capture;
+    complete = result.complete;
+  }
+  const derived = await deriveFromCapture(
+    {
+      pool,
+      async prepareDeploy(request) {
+        return preparedDeploy(request.providerKind as "deploy.vercel" | "deploy.flyio");
+      },
+    },
+    { orgId: "org_a", capture, actor, repoUrl: TEST_REPO_URL, deploy: { providerKind: "deploy.vercel" }, ...overrides },
+  );
+  return { derived, state, configs };
+}
+
 // In-memory pool tracking inserts so the derive path's create calls are
 // observable. Keyed by SQL substring like the discovery test stub.
 interface StubState {
   projects: Set<string>;
-  specs: Map<string, { dependsOn: string[] }>;
+  specs: Map<string, { dependsOn: string[]; title: string; description: string; acceptanceCriteria: string[] }>;
   personas: number;
   // The metadata jsonb persisted per persona INSERT (where the derive persists
   // the persona `surface`, there being no `surface` column).
@@ -114,8 +143,13 @@ function stubPool(): {
     }
     if (sql.startsWith("INSERT INTO specs")) {
       const specId = String(params[0]);
+      // Column order: specId, projectId, title, description, acceptance_criteria(json),
+      // depends_on, status, priority (see projectSpec.ts createSpec).
+      const title = String(params[2]);
+      const description = String(params[3]);
+      const acceptanceCriteria = typeof params[4] === "string" ? (JSON.parse(params[4]) as string[]) : [];
       const dependsOn = (params[5] as string[]) ?? [];
-      state.specs.set(specId, { dependsOn });
+      state.specs.set(specId, { dependsOn, title, description, acceptanceCriteria });
       return { rows: [], rowCount: 1 };
     }
     if (sql.startsWith("INSERT INTO personas")) {
@@ -290,25 +324,7 @@ describe("mergeCapture · monotonic union", () => {
 
 describe("deriveFromCapture · creates the product graph (no migration)", () => {
   it("derives project + personas + behaviors + milestones + specs through existing stores", async () => {
-    const { pool, state } = stubPool();
-    const answerer = createDeterministicInterviewAnswerer();
-    let capture: InterviewCapture = emptyCapture();
-    let complete = false;
-    for (let round = 1; round <= 20 && !complete; round += 1) {
-      const result = await runRound({ pool, answerer }, { round, answer: "ok", capture });
-      capture = result.capture;
-      complete = result.complete;
-    }
-
-    const derived = await deriveFromCapture(
-      {
-        pool,
-        async prepareDeploy() {
-          return preparedDeploy();
-        },
-      },
-      { orgId: "org_a", capture, actor, repoUrl: TEST_REPO_URL, deploy: { providerKind: "deploy.vercel" } },
-    );
+    const { derived, state } = await runInterviewAndDerive();
 
     expect(state.projects.size).toBe(1);
     expect(derived.projectName).toBe("supply-chain-os");
@@ -330,24 +346,7 @@ describe("deriveFromCapture · creates the product graph (no migration)", () => 
   });
 
   it("FINDING #3: derives a serialized scaffold CHAIN (build→scaffold, ci→build), not 3 roots", async () => {
-    const { pool, state } = stubPool();
-    const answerer = createDeterministicInterviewAnswerer();
-    let capture: InterviewCapture = emptyCapture();
-    let complete = false;
-    for (let round = 1; round <= 20 && !complete; round += 1) {
-      const result = await runRound({ pool, answerer }, { round, answer: "ok", capture });
-      capture = result.capture;
-      complete = result.complete;
-    }
-    const derived = await deriveFromCapture(
-      {
-        pool,
-        async prepareDeploy() {
-          return preparedDeploy();
-        },
-      },
-      { orgId: "org_a", capture, actor, repoUrl: TEST_REPO_URL, deploy: { providerKind: "deploy.vercel" } },
-    );
+    const { derived, state } = await runInterviewAndDerive();
 
     // The scaffold specs are created first, in order: monorepo, build, ci.
     const [scaffoldId, buildId, ciId] = derived.specIds;
@@ -362,6 +361,39 @@ describe("deriveFromCapture · creates the product graph (no migration)", () => 
     // Exactly ONE foundation spec is a root (would have been 3 before the fix).
     const scaffoldRoots = [scaffold, build, ci].filter((s) => (s?.dependsOn.length ?? 0) === 0).length;
     expect(scaffoldRoots).toBe(1);
+  });
+
+  it("3-tier CI: the monorepo scaffold spec authors a 3-tier .tanren/ci.yml with JUnit + a structure/build acceptance bar (no green-test tier)", async () => {
+    const { derived, state } = await runInterviewAndDerive();
+
+    const scaffold = state.specs.get(derived.specIds[0]!);
+    expect(scaffold?.title).toBe("monorepo scaffold");
+
+    // The description instructs the writer to author the 3-tier native gate with the
+    // three lifecycle points + JUnit evidence to the path the per-test ingest reads.
+    const desc = scaffold?.description ?? "";
+    expect(desc).toContain(".tanren/ci.yml");
+    for (const point of ["per_iteration", "pre_audit", "pre_merge"]) expect(desc).toContain(point);
+    expect(desc).toContain("--reporter=junit");
+    expect(desc).toContain("--outputFile=reports/junit.xml");
+    // NO tests in the fast tier — tests arrive with features.
+    expect(desc).toMatch(/no tests in the fast tier/iu);
+
+    // The acceptance bar is STRUCTURE + lint/typecheck/build — NOT a green test tier.
+    const criteria = scaffold?.acceptanceCriteria ?? [];
+    const ciTierCriterion = criteria.find((c) => c.includes(".tanren/ci.yml"));
+    expect(ciTierCriterion).toBeDefined();
+    expect(ciTierCriterion).toContain("three tiers");
+    // The "gate is green" criterion runs lint/typecheck/build only — `pnpm test` must
+    // NOT be a required-green tier at scaffold (the v23 regression that blocked the loop).
+    const greenCriterion = criteria.find((c) => /each exits 0|are green/u.test(c));
+    expect(greenCriterion).toBeDefined();
+    expect(greenCriterion).toContain("pnpm lint");
+    expect(greenCriterion).toContain("pnpm typecheck");
+    expect(greenCriterion).toContain("pnpm build");
+    expect(greenCriterion).not.toContain("pnpm test");
+    // And NO acceptance criterion requires `pnpm test` to pass.
+    expect(criteria.some((c) => /pnpm test\b.*exits 0|`pnpm test`.*green/u.test(c))).toBe(false);
   });
 
   it('FINDING #1: autonomy:"auto" creates an autonomous project config (no follow-up PATCH)', async () => {
@@ -428,24 +460,7 @@ describe("deriveFromCapture · creates the product graph (no migration)", () => 
   });
 
   it("FINDING #1: omitting autonomy keeps safe human defaults but still requires deploy", async () => {
-    const { pool, configs } = stubPool();
-    const answerer = createDeterministicInterviewAnswerer();
-    let capture: InterviewCapture = emptyCapture();
-    let complete = false;
-    for (let round = 1; round <= 20 && !complete; round += 1) {
-      const result = await runRound({ pool, answerer }, { round, answer: "ok", capture });
-      capture = result.capture;
-      complete = result.complete;
-    }
-    const derived = await deriveFromCapture(
-      {
-        pool,
-        async prepareDeploy() {
-          return preparedDeploy();
-        },
-      },
-      { orgId: "org_a", capture, actor, repoUrl: TEST_REPO_URL, deploy: { providerKind: "deploy.vercel" } },
-    );
+    const { derived, configs } = await runInterviewAndDerive();
 
     const config = configs.get(derived.projectId);
     expect(config).toBeDefined();
@@ -466,24 +481,7 @@ describe("deriveFromCapture · creates the product graph (no migration)", () => 
   });
 
   it("persists the PRODUCT VISION (design-DNA + identity pitch on config; persona surface on metadata) — no migration", async () => {
-    const { pool, configs, state } = stubPool();
-    const answerer = createDeterministicInterviewAnswerer();
-    let capture: InterviewCapture = emptyCapture();
-    let complete = false;
-    for (let round = 1; round <= 20 && !complete; round += 1) {
-      const result = await runRound({ pool, answerer }, { round, answer: "ok", capture });
-      capture = result.capture;
-      complete = result.complete;
-    }
-    const derived = await deriveFromCapture(
-      {
-        pool,
-        async prepareDeploy() {
-          return preparedDeploy();
-        },
-      },
-      { orgId: "org_a", capture, actor, repoUrl: TEST_REPO_URL, deploy: { providerKind: "deploy.vercel" } },
-    );
+    const { derived, configs, state } = await runInterviewAndDerive();
 
     // Design-DNA + identity pitch land on `projects.config.productVision` (the
     // existing jsonb blob — no new table). The interview captured both.

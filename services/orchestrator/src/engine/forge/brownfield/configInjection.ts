@@ -14,6 +14,7 @@
 // files + returns a synthetic PR. No new entity, no migration — the files land
 // in the target repo via a PR, not in our database.
 
+import { JUNIT_REPORT_PATH } from "../../ci/index.js";
 import type { GovernancePosture } from "../../config/shared.js";
 import type { ReconReport } from "./types.js";
 
@@ -84,10 +85,16 @@ ${architecture}
 // The native gate DEFINITION (`.tanren/ci.yml` — a CiConfigV1, NOT a GitHub Actions
 // workflow). This is the SAME file Tanren's in-loop native gate consumes via
 // `resolveGateConfig`: it declares the tiered shell steps + the `when` policy that
-// maps each tier to a lifecycle point. There is NO Actions job, no JUnit upload, no
-// HMAC secret — Tanren runs these steps itself over SSH on the runner and reads the
-// verdict from exit codes (the no-Actions delivery model). The `pre_merge` tier is
-// the merge authority. A repo can edit this file to change what the gate runs.
+// maps each tier to a lifecycle point. There is NO Actions job, no JUnit upload step,
+// no HMAC secret — Tanren runs these steps itself over SSH on the runner and reads
+// the verdict from exit codes (the no-Actions delivery model).
+//
+// THREE tiers mapped 1:1 to the spec-loop lifecycle points (the spec-loop-redesign
+// 3-tier CI requirement): `fast` (per_iteration — cheap lint+typecheck, NO tests),
+// `slow` (pre_audit — build + tests with JUnit evidence), and `merge` (pre_merge —
+// the heaviest thorough gate, the merge authority). The test tier emits JUnit XML
+// to ${JUNIT_REPORT_PATH} so Tanren's per-test ingest feeds CI-intelligence (flaky
+// detection). A repo can edit this file to change what the gate runs.
 const TANREN_CI_CONFIG = `# .tanren/ci.yml — added by tanren config-injection.
 # The native gate definition (CiConfigV1) Tanren runs over SSH on the runner. NOT a
 # GitHub Actions workflow: there is no forge CI here — Tanren's gate is the authority.
@@ -95,25 +102,37 @@ version: 1
 bootstrap:
   run: corepack pnpm install --frozen-lockfile
 tiers:
-  # The cheap tier — runs after every writer iteration.
+  # tier-1 (per_iteration) — the cheap gate after every writer iteration. NO tests:
+  # tests arrive with features, so a scaffold pass is never blocked by a test tier.
   fast:
     - name: lint
       run: corepack pnpm run lint
     - name: typecheck
       run: corepack pnpm run typecheck
-    - name: unit
-      run: corepack pnpm run test
-  # The expensive tier — runs before the audit AND before the merge (the authority).
+  # tier-2 (pre_audit) — build + tests at spec completion, emitting JUnit evidence
+  # to ${JUNIT_REPORT_PATH} (the path Tanren's per-test ingest reads).
   slow:
     - name: build
       run: corepack pnpm run build
     - name: test
-      run: corepack pnpm run test
+      run: corepack pnpm run test -- --reporter=junit --outputFile=${JUNIT_REPORT_PATH}
+  # tier-3 (pre_merge) — the heaviest thorough gate (the merge authority): a clean
+  # full lint + typecheck + build + tests run.
+  merge:
+    - name: lint
+      run: corepack pnpm run lint
+    - name: typecheck
+      run: corepack pnpm run typecheck
+    - name: build
+      run: corepack pnpm run build
+    - name: test
+      run: corepack pnpm run test -- --reporter=junit --outputFile=${JUNIT_REPORT_PATH}
 when:
   fast:
     - per_iteration
   slow:
     - pre_audit
+  merge:
     - pre_merge
 `;
 

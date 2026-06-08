@@ -16,6 +16,8 @@ export {
   CiConfigValidationError,
   CiYamlParseError,
   DEFAULT_CI_CONFIG,
+  JUNIT_REPORT_PATH,
+  JUNIT_TEST_RUN,
   bootstrapCommand,
   resolveCiConfig,
   stepsFor,

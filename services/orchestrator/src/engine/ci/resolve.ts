@@ -24,9 +24,30 @@ export class CiConfigValidationError extends Error {
 
 export { CiYamlParseError };
 
-// The built-in default used when a repo ships no `tanren-ci.yml`. Mirrors the
-// monorepo's own conventions: fast = lint/typecheck/unit (cheap, every
-// iteration), slow = build/test (expensive, before audit and merge).
+// The conventional workspace path the test tier writes its JUnit report to. The
+// native gate's per-test ingest (`ingestGateJunit`) reads back EXACTLY this path
+// over SSH to feed CI-intelligence (flaky detection + quarantine). The generated
+// `.tanren/ci.yml` test step MUST emit to this path or there is no per-test grain;
+// keep this the single source of truth so the writer side and the read side agree.
+export const JUNIT_REPORT_PATH = "reports/junit.xml";
+
+// The vitest JUnit reporter invocation the generated test tiers use, writing to
+// JUNIT_REPORT_PATH so the native per-test ingest can read it back. Domain-default
+// (vitest is the scaffold toolchain); a repo with another runner overrides its own
+// `.tanren/ci.yml`, but the OUTPUT path convention is fixed.
+export const JUNIT_TEST_RUN = `pnpm test --reporter=junit --outputFile=${JUNIT_REPORT_PATH}`;
+
+// The built-in 3-tier default used when a repo ships no `.tanren/ci.yml`. The three
+// tiers map 1:1 to the spec-loop's lifecycle points (the spec-loop-redesign 3-tier
+// CI requirement):
+//   - fast   (per_iteration) — tier-1: lint + typecheck. CHEAP, runs after every
+//     writer iteration. NO tests here — tests arrive with features, so a scaffold
+//     pass is never blocked by a test tier.
+//   - slow   (pre_audit)     — tier-2: build + tests, emitting JUnit evidence (the
+//     CI-intelligence per-test grain). Runs once at spec completion before the audit.
+//   - merge  (pre_merge)     — tier-3: the heaviest, thorough gate — a clean full
+//     lint + typecheck + build + tests run, the merge-queue authority.
+// `unit`-as-a-cheap-test in the fast tier is GONE: tests are tier-2+ only.
 export const DEFAULT_CI_CONFIG: CiConfigV1 = Object.freeze(
   CiConfigV1.parse({
     version: 1,
@@ -35,16 +56,22 @@ export const DEFAULT_CI_CONFIG: CiConfigV1 = Object.freeze(
       fast: [
         { name: "lint", run: "pnpm lint" },
         { name: "typecheck", run: "pnpm typecheck" },
-        { name: "unit", run: "pnpm test" },
       ],
       slow: [
         { name: "build", run: "pnpm build" },
-        { name: "test", run: "pnpm test" },
+        { name: "test", run: JUNIT_TEST_RUN },
+      ],
+      merge: [
+        { name: "lint", run: "pnpm lint" },
+        { name: "typecheck", run: "pnpm typecheck" },
+        { name: "build", run: "pnpm build" },
+        { name: "test", run: JUNIT_TEST_RUN },
       ],
     },
     when: {
       fast: ["per_iteration"],
-      slow: ["pre_audit", "pre_merge"],
+      slow: ["pre_audit"],
+      merge: ["pre_merge"],
     },
   }),
 );
