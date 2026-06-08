@@ -116,5 +116,40 @@ recipe (`just live-codex-*`, `just live-github-draft-pr`, …) or the targeted
 
 **CI automation:** store the `TANREN_E2E_*` material as CI secrets on a
 credentialed runner; the nightly/weekly job points `TANREN_CONNECTIONS_MANIFEST`
-at the filled-in manifest; the e2e harness imports everything and runs the
-cadence's suite; run IDs + PR URLs + the deployed URL are the release evidence.
+at the filled-in manifest; the e2e harness imports the **tenant-scoped**
+connectors through the operator credential API and runs the cadence's suite; run
+IDs + PR URLs + the deployed URL are the release evidence.
+
+### Platform-scoped vs tenant-scoped refs (the deploy-config split)
+
+The manifest mixes two planes, and they are seeded by **different** mechanisms —
+do not conflate them:
+
+- **Tenant-scoped connectors** (`home: managed`, an org's GitHub App / deploy /
+  Slack / Sentry / … credential) are imported through the **operator credential
+  API** (`POST /orgs/:orgId/credentials`), which derives a tenant-namespaced ref
+  `credential/<kind>/org/<orgId>/<name>`. This is the only userland import path.
+- **Platform-scoped refs** (`platform/`-prefixed) are HOSTING config the operator
+  API cannot — by design — write: it always anchors a ref to the authenticated
+  tenant. Today the sole platform ref is the managed-LLM router key at
+  `credential/openrouter/platform/default` (the manifest's `managed-router`
+  connector, read from `TANREN_E2E_MANAGED_ROUTER_KEY`). Under
+  `providerMode: managed` every tenant routes through it, and a fresh stack
+  (`just down-dev -v` wipes the dev Vault) leaves it unseeded — managed mode then
+  hard-fails at credential resolution (correctly; no silent fallback).
+
+Seed the platform refs with the sanctioned hosting seeder:
+
+```sh
+just seed-platform-creds
+```
+
+It reads `TANREN_E2E_MANAGED_ROUTER_KEY` (sourced from `.env.validation.local`
+when present), writes the platform ref into the configured secret store
+(`scripts/dev/seed-platform-creds.ts`), is **idempotent**, and **fails loud** if
+the key env var is absent (never a silent skip). It is also folded into
+`just up-dev`, so a normal dev bring-up seeds it automatically when the key is
+present. This is the deploy-layer's job — kept strictly separate from the
+tenant credential routes; if a future platform-scoped ref is needed on a fresh
+stack, add it to `PLATFORM_REFS` in that seeder (tenant creds stay on the
+operator API).

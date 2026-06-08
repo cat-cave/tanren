@@ -152,9 +152,40 @@ usage provider="codex" cli="codex" codex_home="":
 # Postgres/runner SSH/orchestrator/dashboard/ntfy host ports, no required env.
 up-dev: runner-key gen-mtls-certs
   TANREN_RUNNER_AUTHORIZED_KEY="$(cat /tmp/tanren_runner_key.pub)" TANREN_RUNNER_IDENTITY_PRIVATE_KEY="$(cat /tmp/tanren_runner_key)" docker compose -f compose.dev.yml up -d postgres vault orchestrator worker allocator dashboard runner ntfy
+  # Seed PLATFORM-scoped secret-store refs (managed-LLM router key) so a fresh
+  # stack can resolve `providerMode: managed`. Skipped (with a notice) when the
+  # key env var is absent, so a BYOK-only dev stack still comes up cleanly.
+  if set -a; [ -f .env.validation.local ] && . ./.env.validation.local; set +a; [ -n "${TANREN_E2E_MANAGED_ROUTER_KEY:-}" ]; then \
+    just seed-platform-creds; \
+  else \
+    echo "up-dev: TANREN_E2E_MANAGED_ROUTER_KEY unset — skipping platform-cred seed (managed mode will be unavailable until you run 'just seed-platform-creds')"; \
+  fi
 
 down-dev:
   docker compose -f compose.dev.yml down -v
+
+# Hosting/boot seeder for PLATFORM-scoped secret-store refs (deploy-layer config,
+# NOT a tenant/userland credential route). Seeds the managed-LLM router key at
+# `credential/openrouter/platform/default` so `providerMode: managed` runs can
+# resolve it; a fresh `down-dev -v` wipes the dev Vault, leaving that ref unseeded
+# and managed mode hard-failing (correctly, no silent fallback). Idempotent and
+# fail-LOUD if the key env var is absent. Reads the key from
+# `TANREN_E2E_MANAGED_ROUTER_KEY` (sourced from `.env.validation.local` when
+# present — the same env the validation connections manifest points at).
+#
+# Vault targeting: the seeder runs HOST-side, so it talks to the host-exposed dev
+# Vault (default `http://127.0.0.1:18200`, `dev-root-token`). The manifest's own
+# `VAULT_ADDR`/`VAULT_TOKEN` are the CONTAINER-internal view (`vault:8200`/
+# `127.0.0.1:8200`) and must NOT leak into this host-side run — so the recipe
+# sources the file only for the key, then hard-overrides Vault targeting via
+# `TANREN_SEED_VAULT_ADDR`/`TANREN_SEED_VAULT_TOKEN` (override to point at a
+# different Vault). Folded into `up-dev`; also runnable on demand after a rebuild.
+seed-platform-creds:
+  set -a; [ -f .env.validation.local ] && . ./.env.validation.local; set +a; \
+  TANREN_SECRET_STORE=vault \
+    VAULT_ADDR="${TANREN_SEED_VAULT_ADDR:-http://127.0.0.1:18200}" \
+    VAULT_TOKEN="${TANREN_SEED_VAULT_TOKEN:-dev-root-token}" \
+    corepack pnpm exec tsx scripts/dev/seed-platform-creds.ts
 
 # Prod profile: fails fast if required env is missing. Operator must run
 # `just vault-init-prod` once before `just up-prod`. See
