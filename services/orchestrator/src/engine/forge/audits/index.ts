@@ -47,4 +47,3 @@ export {
   type PostureGateResult,
   type PostureFindingDisposition,
 } from "./postureGate.js";
-export { AUDIT_FINDINGS_DUAL_EMIT_DEFAULT } from "./findingsDualEmit.js";

@@ -9,6 +9,7 @@ export const eventTypeNames = [
   "app_env.runtime_attached",
   "auditor.completed",
   "auditor.failed",
+  "auditor.findings_routed",
   "auditor.rejected",
   "auditor.started",
   "auditor.verdict",

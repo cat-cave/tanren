@@ -11,6 +11,8 @@ import {
   severityRank,
   type SpecLifecycleSignals,
 } from "../src/engine/contracts/dagLifecycle.js";
+import { maxSeverity } from "../src/engine/contracts/findings.js";
+import { findingsFromPayload } from "../src/engine/dag/lifecycle.js";
 
 function signals(overrides: Partial<SpecLifecycleSignals>): SpecLifecycleSignals {
   return {
@@ -42,12 +44,12 @@ describe("projectSpecLifecycle — state derivation", () => {
     expect(projectSpecLifecycle(signals({ prOpened: true, ciPassed: true })).state).toBe("ci_green");
   });
 
-  it("an audit verdict is audited", () => {
+  it("an audit verdict (empty findings = clean) is audited", () => {
     const life = projectSpecLifecycle(
       signals({
         prOpened: true,
         ciPassed: true,
-        auditVerdict: { passed: true, recommendedAction: "pass", outstandingCount: 0 },
+        auditVerdict: { findings: [] },
       }),
     );
     expect(life.state).toBe("audited");
@@ -76,53 +78,19 @@ describe("projectSpecLifecycle — state derivation", () => {
   });
 });
 
-describe("projectSpecLifecycle — open-finding max severity (the moderate gate input)", () => {
-  it("recommendedAction halt → P0", () => {
-    const life = projectSpecLifecycle(
-      signals({ auditVerdict: { passed: false, recommendedAction: "halt", outstandingCount: 1 } }),
-    );
-    expect(life.openFindingMaxSeverity).toBe("P0");
-  });
-
-  it("loop_to_planner (or passed:false) → P1", () => {
-    expect(
-      projectSpecLifecycle(
-        signals({ auditVerdict: { passed: false, recommendedAction: "loop_to_planner", outstandingCount: 1 } }),
-      ).openFindingMaxSeverity,
-    ).toBe("P1");
-  });
-
-  it("passed with outstanding behaviors → P2 (non-blocking polish)", () => {
-    expect(
-      projectSpecLifecycle(signals({ auditVerdict: { passed: true, recommendedAction: "pass", outstandingCount: 3 } }))
-        .openFindingMaxSeverity,
-    ).toBe("P2");
-  });
-
-  it("passed clean → none", () => {
-    expect(
-      projectSpecLifecycle(signals({ auditVerdict: { passed: true, recommendedAction: "pass", outstandingCount: 0 } }))
-        .openFindingMaxSeverity,
-    ).toBe("none");
-  });
-
+describe("projectSpecLifecycle — open-finding max severity (S3: findings-only)", () => {
   it("an un-audited run is unaudited (the moderate gate treats this as not-ready)", () => {
     expect(projectSpecLifecycle(signals({ prOpened: true, ciPassed: true })).openFindingMaxSeverity).toBe("unaudited");
   });
 });
 
-describe("projectSpecLifecycle — EXPLICIT findings win (WAVE-2: kill inferred severity)", () => {
-  it("reads the max severity DIRECTLY off explicit findings, not from passed/recommendedAction", () => {
-    // passed=true + recommendedAction=pass would INFER `none`; the explicit P1
-    // finding overrides — the severity is read off the findings, never inferred.
+describe("projectSpecLifecycle — EXPLICIT findings are the SOLE severity (S3: inferred severity deleted)", () => {
+  it("reads the max severity DIRECTLY off the explicit findings list", () => {
     const life = projectSpecLifecycle(
       signals({
         prOpened: true,
         ciPassed: true,
         auditVerdict: {
-          passed: true,
-          recommendedAction: "pass",
-          outstandingCount: 0,
           findings: [
             { id: "f-p2", severity: "P2", title: "polish", body: "b" },
             { id: "f-p1", severity: "P1", title: "blocker", body: "b" },
@@ -133,23 +101,16 @@ describe("projectSpecLifecycle — EXPLICIT findings win (WAVE-2: kill inferred 
     expect(life.openFindingMaxSeverity).toBe("P1");
   });
 
-  it("an EMPTY explicit findings list is audited-clean (none), even with passed=false legacy fields", () => {
+  it("a single P0 finding → P0", () => {
     const life = projectSpecLifecycle(
-      signals({
-        prOpened: true,
-        ciPassed: true,
-        // Legacy inference would yield P1 (passed=false); explicit empty findings win.
-        auditVerdict: { passed: false, recommendedAction: "loop_to_planner", outstandingCount: 2, findings: [] },
-      }),
-    );
-    expect(life.openFindingMaxSeverity).toBe("none");
-  });
-
-  it("falls back to legacy inference ONLY when findings are absent (dual-emit transition)", () => {
-    const life = projectSpecLifecycle(
-      signals({ auditVerdict: { passed: false, recommendedAction: "halt", outstandingCount: 1 } }),
+      signals({ auditVerdict: { findings: [{ id: "f-p0", severity: "P0", title: "blocker", body: "b" }] } }),
     );
     expect(life.openFindingMaxSeverity).toBe("P0");
+  });
+
+  it("an EMPTY explicit findings list is audited-clean (none)", () => {
+    const life = projectSpecLifecycle(signals({ prOpened: true, ciPassed: true, auditVerdict: { findings: [] } }));
+    expect(life.openFindingMaxSeverity).toBe("none");
   });
 });
 
@@ -176,5 +137,32 @@ describe("rank helpers", () => {
     expect(severityRank("P2")).toBeLessThan(severityRank("unaudited"));
     expect(severityRank("unaudited")).toBeLessThan(severityRank("P1"));
     expect(severityRank("P1")).toBeLessThan(severityRank("P0"));
+  });
+});
+
+describe("findingsFromPayload — S3a fail-closed: unreadable ⇒ P0, clean ONLY from explicit []", () => {
+  it("a well-formed (possibly-empty) array stays as is — an EXPLICIT [] is audited-clean", () => {
+    expect(findingsFromPayload([])).toEqual([]);
+    const one = findingsFromPayload([{ id: "f", severity: "P2", title: "t", body: "b" }]);
+    expect(one.map((f) => f.severity)).toEqual(["P2"]);
+  });
+
+  it("null findings on a PRESENT verdict ⇒ a synthetic P0 (un-audited), NEVER clean []", () => {
+    const findings = findingsFromPayload(null);
+    expect(maxSeverity(findings)).toBe("P0");
+    expect(findings).not.toEqual([]);
+  });
+
+  it("a non-array (malformed) findings column ⇒ a synthetic P0, NEVER clean []", () => {
+    expect(maxSeverity(findingsFromPayload("oops"))).toBe("P0");
+    expect(maxSeverity(findingsFromPayload({ not: "an array" }))).toBe("P0");
+    expect(maxSeverity(findingsFromPayload(42))).toBe("P0");
+  });
+
+  it("a malformed ENTRY inside the array throws LOUDLY (never silently degrades to clean)", () => {
+    // A present array whose element is not a valid AuditFinding must throw, not coalesce.
+    expect(() => findingsFromPayload([{ id: "f", severity: "NOPE", title: "t", body: "b" }])).toThrow(
+      /severity|enum|Invalid/iu,
+    );
   });
 });

@@ -91,29 +91,55 @@ describe("CheckAnswer", () => {
 });
 
 describe("AuditAnswer", () => {
-  it("accepts a passing Phase-1-shaped fixture audit with recommendedAction pass", () => {
+  it("S3a: an audited-CLEAN answer MUST emit an EXPLICIT `findings: []` (the only way to a clean verdict)", () => {
     const value = {
       passed: true,
       reasoning: "Checker accepted the diff and the marker file matches the spec.",
       outstandingBehaviorIds: [],
-      recommendedAction: "pass",
+      recommendedAction: "pass" as const,
+      // The clean state is an EXPLICIT empty array — never a defaulted/omitted one.
+      findings: [],
     };
-    // WAVE-2: `findings` defaults to an empty list (audited-clean) when omitted.
-    expect(AuditAnswer.parse(value)).toEqual({ ...value, findings: [] });
+    expect(AuditAnswer.parse(value)).toEqual(value);
+    expect(AuditAnswer.parse(value).findings).toEqual([]);
   });
 
-  it("accepts a loop_to_planner recommendation with outstanding behavior ids", () => {
-    const value = {
+  it("S3a: an answer that OMITS `findings` is INVALID — it FAILS TO PARSE (no clean-[] default)", () => {
+    // The §4 P0 fix: there is NO `.default([])`. A legacy-shaped / findings-omitted
+    // answer cannot become a durable clean verdict — it is rejected loudly, so no
+    // auditor.verdict event is ever recorded and the run is treated as un-audited.
+    const omitted = {
+      passed: true,
+      reasoning: "looks fine",
+      outstandingBehaviorIds: [],
+      recommendedAction: "pass",
+    };
+    expect(() => AuditAnswer.parse(omitted)).toThrow(/findings/iu);
+  });
+
+  it("S3a: a findings-omitted answer does NOT produce a clean verdict (parse fails; no `{ findings: [] }`)", () => {
+    const result = AuditAnswer.safeParse({
       passed: false,
       reasoning: "beh_readme_summary still uncovered after one writer pass; planner should split the spec.",
       outstandingBehaviorIds: ["beh_readme_summary"],
       recommendedAction: "loop_to_planner",
-    };
-    // WAVE-2: a legacy verdict with no `findings` key parses with `findings: []`.
-    expect(AuditAnswer.parse(value)).toEqual({ ...value, findings: [] });
+    });
+    // The parse FAILS — it never yields a value, so there is no clean `[]` to read.
+    expect(result.success).toBe(false);
   });
 
-  it("accepts explicit P0–P3 findings dual-emitted alongside the legacy verdict", () => {
+  it("accepts a loop_to_planner verdict that carries an EXPLICIT findings list", () => {
+    const value = {
+      passed: false,
+      reasoning: "beh_readme_summary still uncovered after one writer pass; planner should split the spec.",
+      outstandingBehaviorIds: ["beh_readme_summary"],
+      recommendedAction: "loop_to_planner" as const,
+      findings: [{ id: "uncovered-beh", severity: "P1" as const, title: "behavior uncovered", body: "b" }],
+    };
+    expect(AuditAnswer.parse(value).findings.map((f) => f.severity)).toEqual(["P1"]);
+  });
+
+  it("accepts explicit P0–P3 findings alongside the (non-gating) narration fields", () => {
     const value = {
       passed: false,
       reasoning: "A null-deref crashes the import path; planner must rework.",
@@ -175,6 +201,8 @@ describe("AuditAnswer", () => {
         reasoning: "x",
         outstandingBehaviorIds: [],
         recommendedAction: "retry",
+        // Findings present + valid so ONLY the recommendedAction is the parse failure.
+        findings: [],
       }),
     ).toThrow(/Invalid (?:input|option)/u);
   });

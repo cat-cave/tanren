@@ -21,14 +21,12 @@
 // `specCrossedThreshold`) — this module only answers "what lifecycle state is this
 // spec in, and what is its open-finding max severity + review verdict."
 //
-// WAVE-2 / SLICE P-A (tanren-owns-the-engine.md §4 + §7): the auditor now EMITS an
-// explicit `findings: Finding[]` list. The open-finding max severity is read
-// DIRECTLY off that list (`maxSeverity`) — the EXPLICIT field, not an inference
-// from `passed`/`recommendedAction`. This is the kill-site for "inferred severity":
-// when the verdict carries `findings`, that explicit list wins. The legacy
-// `passed`/`recommendedAction` → P0/P1/P2/none inference is retained ONLY as a
-// fallback for verdicts recorded BEFORE this slice (dual-emit transition); S3
-// deletes it once every live verdict carries findings.
+// WAVE-2 / SLICE S3 (tanren-owns-the-engine.md §4 + §7): the auditor EMITS an
+// explicit `findings: Finding[]` list as its SOLE severity currency. The open-finding
+// max severity is read DIRECTLY off that list (`maxSeverity`) — the EXPLICIT field.
+// "Inferred severity" is DELETED (§7): there is NO `passed`/`recommendedAction` →
+// P0/P1/P2/none fallback. An audited run's verdict ALWAYS carries `findings` (an empty
+// list = audited-clean `none`); the legacy inference path is gone.
 
 import { type Finding, maxSeverity } from "./findings.js";
 
@@ -69,14 +67,9 @@ export type SpecLifecycleState =
  * moderate predicate treats as NOT-ready (audits gate: "technically complete but
  * pending automated audits is NOT ready").
  *
- * Derivation from the in-loop auditor verdict (the only per-run finding signal
- * Tanren records today, `auditor.verdict`):
- *   - `recommendedAction: "halt"`         → an irrecoverable blocker → `P0`.
- *   - `recommendedAction: "loop_to_planner"` (or `passed: false`) → a blocking
- *                                            finding that must be reworked → `P1`.
- *   - `passed: true` with `outstandingBehaviorIds` non-empty → non-blocking
- *                                            polish (the spec passed) → `P2`.
- *   - `passed: true`, no outstanding ids   → audited-clean → `none`.
+ * S3 derivation: the open-finding max severity IS the most-severe explicit finding the
+ * auditor emitted (`maxSeverity(auditVerdict.findings)`), or `none` when it emitted an
+ * empty list (audited-clean). There is no inference from `passed`/`recommendedAction`.
  */
 export type OpenFindingSeverity = "none" | "P3" | "P2" | "P1" | "P0" | "unaudited";
 
@@ -164,15 +157,14 @@ export interface SpecLifecycleSignals {
   /** The lifecycle events observed on the latest run (presence = reached). */
   prOpened: boolean;
   ciPassed: boolean;
-  /** The auditor verdict on the latest run, when one was reached. */
+  /**
+   * The auditor verdict on the latest run, when one was reached. S3: the verdict's
+   * ONLY severity signal is its explicit `findings` list — the open-finding max
+   * severity is `maxSeverity(findings)` (empty list = audited-clean `none`). There is
+   * no `passed`/`recommendedAction` inference (deleted, §7).
+   */
   auditVerdict?: {
-    passed: boolean;
-    recommendedAction: "pass" | "loop_to_planner" | "halt";
-    outstandingCount: number;
-    // WAVE-2: the explicit findings the auditor emitted. When present, the
-    // open-finding max severity is read DIRECTLY off this list (no inference).
-    // Undefined for legacy verdicts recorded before the findings slice.
-    findings?: ReadonlyArray<Finding>;
+    findings: ReadonlyArray<Finding>;
   };
   /** The review channel + verdict observed on the latest run, when any. */
   review?: SpecReviewState;
@@ -243,13 +235,10 @@ function deriveState(signals: SpecLifecycleSignals): SpecLifecycleState {
 }
 
 /**
- * Map the auditor verdict signal to the open-finding max severity (§2c).
- *
- * WAVE-2 / SLICE P-A: the EXPLICIT findings list wins. When the verdict carries
- * `findings`, the open-finding max severity IS `maxSeverity(findings)` — the
- * explicit P0–P3 field, read directly (an empty list ⇒ audited-clean `none`).
- * The legacy `passed`/`recommendedAction` inference below is the TRANSITION-ONLY
- * fallback for verdicts recorded before the findings slice (S3 deletes it).
+ * Map the auditor verdict signal to the open-finding max severity (§2c). S3: the
+ * EXPLICIT findings list is the SOLE source. The open-finding max severity IS
+ * `maxSeverity(findings)` — the explicit P0–P3 field, read directly (an empty list ⇒
+ * audited-clean `none`). There is no `passed`/`recommendedAction` inference (deleted).
  */
 function deriveSeverity(signals: SpecLifecycleSignals): OpenFindingSeverity {
   const verdict = signals.auditVerdict;
@@ -258,21 +247,7 @@ function deriveSeverity(signals: SpecLifecycleSignals): OpenFindingSeverity {
     // simply unknown/unaudited; once it IS audited this branch is not taken.
     return "unaudited";
   }
-  // (1) EXPLICIT findings — the new first-class currency. When present, the
-  // open-finding max severity is the most-severe finding (P0–P3), or `none` when
-  // the auditor emitted an empty findings list (audited-clean).
-  if (verdict.findings !== undefined) {
-    return maxSeverity(verdict.findings) ?? "none";
-  }
-  // (2) Legacy inference (dual-emit transition fallback). DELETED in S3.
-  if (verdict.recommendedAction === "halt") {
-    return "P0";
-  }
-  if (verdict.recommendedAction === "loop_to_planner" || !verdict.passed) {
-    return "P1";
-  }
-  // passed === true here. Outstanding (non-blocking) behaviors ⇒ P2 polish.
-  return verdict.outstandingCount > 0 ? "P2" : "none";
+  return maxSeverity(verdict.findings) ?? "none";
 }
 
 // ---- The read-model seam ---------------------------------------------------

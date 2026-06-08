@@ -15,12 +15,13 @@
 import type pg from "pg";
 import { migrateProjectConfig } from "../config/projectConfig.js";
 import { buildLandFinalizer } from "./mergeAuthorityLandFinalizer.js";
-import { resolveLandTimeSignals } from "./landSignals.js";
+import { resolveLandTimeSignals, resolveLandTimeFindings } from "./landSignals.js";
 import { PgBudgetGate } from "../dag/budgetGate.js";
 import { GitHubCodeHost } from "../providers/githubCodeHost.js";
 import { GitHubVcsProvider } from "../providers/githubVcsProvider.js";
 import type { CodeHost } from "../contracts/codeHost.js";
 import type { AuditPosture } from "../contracts/auditPosture.js";
+import type { Finding } from "../contracts/findings.js";
 import type { GateOutcome } from "../workflow/gate/index.js";
 import type { ReviewVerdict } from "../contracts/dagLifecycle.js";
 import type { ProjectBudgetState } from "../contracts/dagWalker.js";
@@ -45,6 +46,14 @@ export interface BuildMergeAuthorityBundleInput {
   gateOutcome: GateOutcome | undefined;
   /** The sha the latest `pre_merge` gate verdict was FOR (the TOCTOU commit-binding). */
   gatedHeadSha: string | undefined;
+  /**
+   * The REAL audit findings the auditor emitted on the run's latest `auditor.verdict`
+   * (read fresh at land time; §4). `decideFromFindings(findings, auditPosture)` in the
+   * authority is the LIVE audit gate. A MISSING/unreadable audit record is passed as a
+   * single synthetic P0 (`auditMissingFinding`) so the land BLOCKS under any posture —
+   * the fail-closed boundary is resolved by the reader, never by an empty list here.
+   */
+  findings: ReadonlyArray<Finding>;
   /** The review poll's verdict (only `approved` clears; absent → unread → blocks). */
   reviewVerdict: ReviewVerdict | undefined;
   /**
@@ -89,13 +98,6 @@ function rawBudgetFrom(state: ProjectBudgetState): RawBudgetScope {
 }
 
 /**
- * Build the bundle. The `findings` are left empty for S1 (the audit-as-findings
- * PRODUCER is the Wave-2 P-A path that dual-emits but does not yet feed the live
- * merge; with an empty list + the project posture, the findings input clears — the
- * gate/review/mergeability/budget/demo/HITL inputs carry the fail-closed weight). The
- * findings wiring lands when the producer is promoted to the sole audit path.
- */
-/**
  * Build the minimal `CodeHost` the `MergeAuthority` lands through, over the SAME
  * GitHub HTTP client the run's `VcsProvider` already holds (no second http client
  * threaded into the merge path). A non-GitHub provider has no host land yet — a LOUD
@@ -122,7 +124,7 @@ export function buildMergeAuthorityBundle(input: BuildMergeAuthorityBundleInput)
     policyVersion: String(input.policyVersion),
     gateOutcome: input.gateOutcome,
     gatedHeadSha: input.gatedHeadSha,
-    findings: [],
+    findings: input.findings,
     auditPosture: resolveAuditPosture(input.projectConfigRaw),
     reviewVerdict: input.reviewVerdict,
     budget: rawBudgetFrom(input.budgetState),
@@ -138,14 +140,21 @@ export function buildMergeAuthorityBundle(input: BuildMergeAuthorityBundleInput)
  * and the budget state (the SAME `PgBudgetGate` the walker gates on — fail-closed on
  * unparseable/unpriced).
  *
- * FRESH LAND-TIME SIGNALS (§5): the gate verdict + review verdict are RE-READ from the
- * DURABLE event record HERE, at LAND time — NOT the values captured before
- * `mergeForRun`. This bundle is built LAZILY inside `driveLand`, AFTER any conflict
- * resolver ran (a resolver can RE-GATE), so the latest `pre_merge` gate verdict + the
- * latest review verdict reflect the POST-resolution state. A stale/now-failing gate or
- * a review that flipped to `changes_requested` during resolution therefore BLOCKS —
- * the SAME freshness the native DRIVE pass already applies. Both paths build from
- * land-time signals; neither authorizes against pre-conflict state.
+ * FRESH LAND-TIME SIGNALS (§5): the gate verdict, review verdict, AND audit findings
+ * are RE-READ from the DURABLE event record HERE, at LAND time — NOT the values
+ * captured before `mergeForRun`. This bundle is built LAZILY inside `driveLand`, AFTER
+ * any conflict resolver ran (a resolver can RE-GATE + RE-AUDIT), so the latest
+ * `pre_merge` gate verdict + the latest review verdict + the latest `auditor.verdict`
+ * findings reflect the POST-resolution state. A stale/now-failing gate, a review that
+ * flipped to `changes_requested`, or a re-audit that surfaced a P0/P1 finding during
+ * resolution therefore BLOCKS — the SAME freshness the native DRIVE pass already
+ * applies. Both paths build from land-time signals; neither authorizes against
+ * pre-conflict state.
+ *
+ * THE AUDIT GATE (§4): `findings` are read via `resolveLandTimeFindings` — the REAL
+ * auditor findings, decided by `decideFromFindings` against the project `auditPosture`
+ * inside the authority. FAIL-CLOSED: a missing/unreadable audit record resolves to a
+ * synthetic P0 (blocks under any posture), never a silent pass.
  *
  * The pool is the worker pool (a real `pg.Pool` in production — the durable finalize +
  * the land-signal read open their org-scoped transactions on it); a caller without a
@@ -170,6 +179,9 @@ export async function buildBundleForMergeStage(
   // Re-read the gate + review verdicts FRESH at land time (post-resolution), so a
   // conflict-resolved retry never authorizes against the pre-conflict gate/review.
   const landSignals = await resolveLandTimeSignals(pool, row.org_id, context.runId);
+  // The REAL audit findings (§4) — the live audit gate at merge time. Fail-closed: a
+  // missing/unreadable audit record resolves to a synthetic P0 (blocks any posture).
+  const findings = await resolveLandTimeFindings(pool, row.org_id, context.runId);
   return buildMergeAuthorityBundle({
     pool,
     vcsProvider: input.vcsProvider,
@@ -185,6 +197,7 @@ export async function buildBundleForMergeStage(
     policyVersion: context.policyVersion,
     gateOutcome: landSignals.gateOutcome,
     gatedHeadSha: landSignals.gatedHeadSha,
+    findings,
     reviewVerdict: landSignals.reviewVerdict,
     budgetState,
     // The in-loop / drive land precedes the post-deploy demo stage — an explicit
