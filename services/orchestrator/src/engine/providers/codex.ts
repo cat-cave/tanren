@@ -1,6 +1,6 @@
 import type { RunnerHandle } from "../contracts/allocator.js";
 import type { SecretStore } from "../contracts/secretStore.js";
-import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
+import type { CommandResult, CommandSubstrate } from "../contracts/commandSubstrate.js";
 import { storeCodexAuthBundle } from "../credentials/codexAuth.js";
 import { materializeCodexAuthBundle } from "../credentials/codexMaterializer.js";
 import { quoteSshShellArg } from "../ssh/command.js";
@@ -334,19 +334,36 @@ async function prepareCodexAnswererWorkspace(
   jsonSchema: Record<string, unknown>,
   timeoutMs: number,
 ): Promise<void> {
-  await dependencies.ssh.run(dependencies.target, {
+  const made = await dependencies.ssh.run(dependencies.target, {
     command: `mkdir -p ${quoteSshShellArg(workspace)}`,
     timeoutMs: Math.min(timeoutMs, 30_000),
   });
-  await dependencies.ssh.run(dependencies.target, {
+  assertAnswererWorkspaceStep(made, `mkdir -p ${workspace}`);
+  const wrote = await dependencies.ssh.run(dependencies.target, {
     command: `cat > ${quoteSshShellArg(schemaPath)}`,
     stdin: JSON.stringify(jsonSchema),
     timeoutMs: Math.min(timeoutMs, 30_000),
   });
+  assertAnswererWorkspaceStep(wrote, `write ${schemaPath}`);
+}
+
+// A failed workspace-prep SSH step (e.g. mkdir denied on a non-writable base) must
+// be LOUD: otherwise codex `--cd`s into a dir that was never created and surfaces a
+// cryptic `os error 2`, masking the real cause. (no-silent-fallbacks doctrine.)
+function assertAnswererWorkspaceStep(result: CommandResult, step: string): void {
+  if (result.exitCode !== 0 || result.failure !== undefined || result.timedOut) {
+    throw new Error(
+      `Codex Answerer workspace prep failed (${step}): exit ${result.exitCode ?? "unknown"}` +
+        `${result.timedOut ? " (timed out)" : ""} | stderr: ${harnessOutputTail(result.stderr)}`,
+    );
+  }
 }
 
 function answererWorkspacePath(dependencies: CodexAnswererDependencies, schemaName: string): string {
-  const baseDir = dependencies.answererWorkspaceBaseDir ?? "/tmp/tanren-answerer-runs";
+  // Must be writable by the runner's `tanren` user — /tmp is uid-owned and denies
+  // mkdir, so the per-run answerer scratch lives under tanren's home (same base as
+  // opencodeDataHomeForRun), NOT /tmp.
+  const baseDir = dependencies.answererWorkspaceBaseDir ?? "/home/tanren/.tanren/runs";
   return `${baseDir}/${dependencies.runId}/${safeSchemaFileName(schemaName)}`;
 }
 
