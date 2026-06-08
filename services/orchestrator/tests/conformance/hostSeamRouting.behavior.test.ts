@@ -135,6 +135,35 @@ describe("(a) VisibilityProjection never blocks — recorded decision is byte-id
     // Both undefined; neither throws.
     expect(okResult).toBe(failResult);
   });
+
+  it("COMPOUND failure: projection fails AND the failure-note emit throws → still resolves", async () => {
+    // The real never-blocks guarantee. The projection rejects (403) AND the
+    // best-effort `gate.publish_failed` note write ALSO rejects (a transient
+    // event-store failure). publishGateVerdictBestEffort must STILL resolve — the
+    // failure-reporting path cannot be allowed to halt a passing gate. The recorded
+    // decision (proceed-to-merge on the internal verdict) is unchanged: this resolves
+    // to void exactly as the all-success path does.
+    let emitAttempted = false;
+    const result = await publishGateVerdictBestEffort(
+      {
+        vcsProvider: new ThrowingStatusVcsProvider(),
+        repo: { ...REPO },
+        token: fakeToken(),
+        headSha: HEAD_SHA,
+        outcome: PASSED_OUTCOME,
+      },
+      "pre_merge",
+      true,
+      async () => {
+        emitAttempted = true;
+        throw new Error("event store unavailable (simulated)");
+      },
+    );
+    // The note WAS attempted (the failure path ran)...
+    expect(emitAttempted).toBe(true);
+    // ...and it STILL resolved to void — never rejected.
+    expect(result).toBeUndefined();
+  });
 });
 
 /** A stateful github transport answering the git-ref read `GitHubCodeHost.fetchRef` issues. */
