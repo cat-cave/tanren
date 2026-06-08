@@ -1,5 +1,12 @@
 import type { RunnerHandle } from "../contracts/allocator.js";
-import type { CcusageAccounting, SubscriptionWindow, UsageAccountant, UsageMonitor, WindowUsage } from "./contracts.js";
+import type {
+  AccountingRead,
+  SubscriptionWindow,
+  UsageAccountant,
+  UsageMonitor,
+  UsageReadFailure,
+  WindowUsage,
+} from "./contracts.js";
 import { DEFAULT_WINDOW_PRESSURE_THRESHOLD, evaluateWindowPressure } from "./pressure.js";
 
 // A UsageProbe binds the two usage tools (codexbar window monitor + ccusage
@@ -7,19 +14,26 @@ import { DEFAULT_WINDOW_PRESSURE_THRESHOLD, evaluateWindowPressure } from "./pre
 // materialized CODEX_HOME and SSH target the run uses. The planner loop calls
 // it without having to know how the tools are invoked (runner-side over SSH).
 export interface WindowObservation {
-  // Null when the tool returned no data (not an error) — an allowed state.
+  // The parsed window state, or null for a CLEAN-but-empty read (the tool ran,
+  // no window data) — an allowed, quiet state. Null ALSO when `failure` is set,
+  // but the two are DISCRIMINATED: `failure !== null` means the read FAILED
+  // (loud), `failure === null` with `usage === null` means legitimate-empty.
   usage: WindowUsage | null;
-  // The worst window at/over the pressure threshold, or null when every
-  // window is below it (or there is no data). When non-null the loop should
-  // escalate window pressure instead of dispatching a doomed call.
+  // The worst window at/over the pressure threshold, or null when every window
+  // is below it (or there is no data / a read failure).
   pressure: SubscriptionWindow | null;
+  // Non-null when the read FAILED (timeout / SSH / nonzero-exit / malformed) —
+  // the loud signal the loop must NOT conflate with a zero-usage window.
+  failure: UsageReadFailure | null;
 }
 
 export interface UsageProbe {
   // Pre-flight: read the live subscription-window state for this credential.
   observeWindow(): Promise<WindowObservation>;
-  // Post-run: read token-consumption accounting for this credential.
-  observeAccounting(): Promise<CcusageAccounting | null>;
+  // Post-run: read token-consumption accounting for this credential. Returns the
+  // DISCRIMINATED {@link AccountingRead} so a read failure is loud, never a
+  // silent zero-token accounting.
+  observeAccounting(): Promise<AccountingRead>;
 }
 
 export interface SshUsageProbeConfig {
@@ -39,12 +53,17 @@ export class SshUsageProbe implements UsageProbe {
   constructor(private readonly config: SshUsageProbeConfig) {}
 
   async observeWindow(): Promise<WindowObservation> {
-    const usage = await this.config.monitor.readWindowState({
+    const read = await this.config.monitor.readWindowState({
       provider: this.config.provider,
       codexHome: this.config.codexHome,
       target: this.config.target,
       timeoutMs: this.config.timeoutMs,
     });
+    // A read FAILURE is loud + distinct: no usage, no pressure, but `failure` set.
+    if ("failed" in read) {
+      return { usage: null, pressure: null, failure: read.failed };
+    }
+    const usage = read.ok;
     // Window pressure is credit-aware: a maxed subscription window is NOT a
     // doomed call when prepaid credits are available, because overage draws
     // those credits (verified live — Codex Pro runs against credits with the
@@ -58,10 +77,10 @@ export class SshUsageProbe implements UsageProbe {
             usage.windows,
             this.config.pressureThresholdPercent ?? DEFAULT_WINDOW_PRESSURE_THRESHOLD,
           );
-    return { usage, pressure };
+    return { usage, pressure, failure: null };
   }
 
-  async observeAccounting(): Promise<CcusageAccounting | null> {
+  async observeAccounting(): Promise<AccountingRead> {
     return this.config.accountant.readAccounting({
       cli: this.config.cli,
       codexHome: this.config.codexHome,

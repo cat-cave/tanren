@@ -28,7 +28,7 @@ import type { GateOutcome } from "./gate/index.js";
 import type { PlannerRejectionFeedback, PlannerSpecContext } from "./planner/planner.js";
 import { checkWindowPreflight, type CreditState, observeRunAccounting } from "./subtaskAccounting.js";
 import { gateRejection, handleRejection } from "./subtaskRework.js";
-import { type SubtaskCostContext } from "./subtaskCost.js";
+import { buildSubtaskCostContext, type SubtaskCostContext } from "./subtaskCost.js";
 import type { RealProviderCostCapturer } from "../costs/generationCostCapture.js";
 import { insertPlannerTask, markTaskDone } from "./subtaskTasks.js";
 import { runAuditorStage, runCheckerStage, runPlannerStage, runWriterStage } from "./subtaskStages.js";
@@ -152,13 +152,16 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
     });
     input.onEvent?.({ eventType, taskId });
   };
-  const costCtx: SubtaskCostContext = {
-    recorder: input.recorder,
-    runId: input.context.runId,
-    specId: input.context.specId,
-    projectId: input.context.projectId,
-    ...(input.captureRealProviderCost !== undefined && { captureRealProviderCost: input.captureRealProviderCost }),
-  };
+  const costCtx: SubtaskCostContext = buildSubtaskCostContext(
+    {
+      recorder: input.recorder,
+      runId: input.context.runId,
+      specId: input.context.specId,
+      projectId: input.context.projectId,
+      captureRealProviderCost: input.captureRealProviderCost,
+    },
+    appendEvent,
+  );
 
   const plannerTaskId = `task_${randomUUID()}`;
   // Prepaid-credit balance at the first window pre-flight; the run-end credit

@@ -94,6 +94,21 @@ const SEVERITY_OVERRIDES: Partial<Record<EventName, Severity>> = {
   // A configured dollar ceiling can never fire against this credential — the run
   // fails closed; a setup-time misconfig the operator must fix; fail.
   "cost.ceiling_unreachable": "fail",
+  // silent-fallback hardening. A managed OpenRouter per-call real-cost capture
+  // failed — authoritative platform spend that would otherwise silently vanish;
+  // fail. A run-end reconcile resolved a positive real total that landed on no
+  // row — observed real spend lost; fail. A model is unpriced in the notional
+  // source — list-value tracking silently drops; operator-actionable drift; warn.
+  "cost.provider_capture_failed": "fail",
+  "cost.reconcile_failed": "fail",
+  "cost.notional_unpriced": "warn",
+
+  // Usage probe reads (silent-fallback hardening). A read FAILED (timeout / SSH /
+  // nonzero-exit / malformed) — it erases usage/window-pressure/reconcile, so it
+  // is `fail` (NEVER a silent no-data run). A real CLI call missing token telemetry
+  // is mandatory-accounting drift the operator must fix; warn.
+  "usage.read_failed": "fail",
+  "usage.token_accounting_failed": "warn",
 
   // GitHub integration
   "github.branch.pushed": "info",

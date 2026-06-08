@@ -53,6 +53,31 @@ export const costSensitivityRules: SensitivityRule[] = [
     ["authoritativeSource", "public"],
     ["reason", "public"],
   ]),
+  // cost.provider_capture_failed (silent-fallback hardening) — generationId is an
+  // opaque OpenRouter id, detail is a bounded secret-free diagnostic tail, reason
+  // is a fixed diagnosis. No secret value; all public operational telemetry.
+  ...rulesFor("cost.provider_capture_failed", [
+    ["generationId", "public"],
+    ["detail", "public"],
+    ["reason", "public"],
+  ]),
+  // cost.notional_unpriced (silent-fallback hardening) — provider/model/cli/taskId
+  // are secret-free identifiers, reason is a fixed diagnosis string; all public.
+  ...rulesFor("cost.notional_unpriced", [
+    ["provider", "public"],
+    ["model", "public"],
+    ["cli", "public"],
+    ["taskId", "public"],
+    ["reason", "public"],
+  ]),
+  // cost.reconcile_failed (silent-fallback hardening) — basis/total/reason are
+  // non-sensitive operational figures; no secret value. All public.
+  ...rulesFor("cost.reconcile_failed", [
+    ["basis", "public"],
+    ["totalCostUsd", "public"],
+    ["reason", "public"],
+    ["reasonText", "public"],
+  ]),
 ];
 
 function rulesFor(eventName: string, entries: ReadonlyArray<[string, SensitivityRule["tag"]]>): SensitivityRule[] {

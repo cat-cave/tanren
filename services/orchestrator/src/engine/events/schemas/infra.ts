@@ -335,3 +335,80 @@ export const UsageAccountingObservedPayload = z
     capturedAt: z.string(),
   })
   .strict();
+
+// usage.read_failed (silent-fallback hardening, finding 1/2) — a usage probe
+// read (codexbar window state / ccusage accounting) FAILED: a timeout, an SSH
+// transport failure, a non-zero exit, or malformed NON-empty output. This is the
+// LOUD discriminated signal that must NEVER be conflated with a legitimately-empty
+// read — an erased read would otherwise silently become a normal zero-usage run
+// (no window pressure, no ccusage reconcile, lost notional visibility). Carries
+// NO secret value: `target` is a provider/cli label, `detail` is a bounded,
+// whitespace-collapsed stderr/stdout tail.
+export const UsageReadFailedPayload = z
+  .object({
+    tool: z.enum(["codexbar", "ccusage"]),
+    target: z.string(),
+    reason: z.enum(["timeout", "ssh_failure", "nonzero_exit", "malformed_output"]),
+    exitCode: z.number().int().nullable(),
+    detail: z.string(),
+    reasonText: z.string(),
+  })
+  .strict();
+
+// usage.token_accounting_failed (silent-fallback hardening, finding 4) — a REAL
+// CLI call (writer / answerer, NOT a fake fixture) recorded its cost with NO token
+// telemetry. Token accounting is mandatory; a real call missing it is parser /
+// adapter drift that would silently land as a zero-token, zero-notional row — so
+// it is surfaced LOUDLY rather than conflated with a genuine zero-token call.
+// Carries the role + cli + model (secret-free), never a secret value.
+export const UsageTokenAccountingFailedPayload = z
+  .object({
+    // The agent role whose real call lacked token telemetry.
+    role: z.enum(["planner", "checker", "auditor", "writer"]),
+    cli: z.string(),
+    model: z.string(),
+    reason: z.string(),
+  })
+  .strict();
+
+// cost.provider_capture_failed (silent-fallback hardening, finding 5) — the
+// MANAGED OpenRouter per-call real-cost query (`/api/v1/generation`) failed
+// (auth / transport / API error). The platform IS the biller, so this erases
+// AUTHORITATIVE real platform spend — surfaced LOUDLY (not silently nulled).
+// Names the generation id + a secret-free diagnostic tail; no secret value.
+export const CostProviderCaptureFailedPayload = z
+  .object({
+    generationId: z.string(),
+    detail: z.string(),
+    reason: z.string(),
+  })
+  .strict();
+
+// cost.notional_unpriced (silent-fallback hardening, finding 6) — a call's MODEL
+// is not in the maintained LiteLLM price source, so its NOTIONAL (list-value)
+// figure is NULL. Notional is the comparable, forecastable figure for every
+// billing mode; a model-id drift silently dropping it is surfaced LOUDLY so an
+// operator notices the price-source gap. Names the provider + model (secret-free).
+export const CostNotionalUnpricedPayload = z
+  .object({
+    provider: z.string(),
+    model: z.string(),
+    cli: z.string(),
+    taskId: z.string(),
+    reason: z.string(),
+  })
+  .strict();
+
+// cost.reconcile_failed (silent-fallback hardening, finding 7) — a run-end cost
+// reconcile resolved a POSITIVE real dollar total (ccusage / credit drawdown) but
+// could apply it to NO cost_records row (no rows for the run, or a zero total-token
+// denominator). The observed real spend would otherwise silently vanish — surfaced
+// LOUDLY so the lost attribution is visible. Names the basis + the un-applied total.
+export const CostReconcileFailedPayload = z
+  .object({
+    basis: z.enum(["ccusage", "credits"]),
+    totalCostUsd: z.number(),
+    reason: z.enum(["no_rows", "zero_token_denominator"]),
+    reasonText: z.string(),
+  })
+  .strict();

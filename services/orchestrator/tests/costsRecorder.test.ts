@@ -372,7 +372,7 @@ describe("CostRecorder.reconcileRunCostFromCcusage", () => {
     expect(pool.updates).toHaveLength(0);
   });
 
-  it("is a no-op when the run recorded zero tokens (cannot apportion)", async () => {
+  it("is a no-op when the run recorded zero tokens (cannot apportion) — see costsReconcileLoud for the loud event", async () => {
     const pool = new ReconcilePool([{ id: "1", total_tokens: 0 }]);
     const recorder = new CostRecorder(pool as never, new FakeEventStore());
     expect(await recorder.reconcileRunCostFromCcusage("run_test", 5)).toEqual({ updated: 0 });

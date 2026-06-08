@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseCodexbarUsage } from "../src/engine/usage/codexbarParser.js";
+import { parseCodexbarUsage, parseCodexbarUsageResult } from "../src/engine/usage/codexbarParser.js";
 
 // The real `codexbar usage --provider codex --source cli --format json` shape:
 // an ARRAY (one entry per account/provider), with up to three concurrent
@@ -109,5 +109,28 @@ describe("parseCodexbarUsage", () => {
     const usage = parseCodexbarUsage(output, "codex");
     expect(usage?.provider).toBe("codex");
     expect(usage?.windows[0]?.usedPercent).toBe(7);
+  });
+});
+
+describe("parseCodexbarUsageResult (discriminated)", () => {
+  it("a real array shape is `{ ok: <usage> }`", () => {
+    expect(parseCodexbarUsageResult(realCodexbarOutput, "codex")).toMatchObject({ ok: { provider: "codex" } });
+  });
+
+  it("the EMPTY `[]` array and `[{error}]` envelope are LEGITIMATE-empty `{ ok: null }` (quiet)", () => {
+    expect(parseCodexbarUsageResult("[]", "codex")).toEqual({ ok: null });
+    expect(parseCodexbarUsageResult(JSON.stringify([{ error: "no codex session found" }]), "codex")).toEqual({
+      ok: null,
+    });
+  });
+
+  it("whitespace-only stdout is a quiet `{ ok: null }`", () => {
+    expect(parseCodexbarUsageResult("  ", "codex")).toEqual({ ok: null });
+  });
+
+  it("MALFORMED non-empty output (non-JSON / non-array) is a LOUD `{ failed }` (NOT no-data)", () => {
+    expect(parseCodexbarUsageResult("not json", "codex")).toMatchObject({ failed: { detail: "not json" } });
+    // codexbar ALWAYS emits a JSON array; an object is contract drift → loud.
+    expect("failed" in parseCodexbarUsageResult(JSON.stringify({ unexpected: true }), "codex")).toBe(true);
   });
 });

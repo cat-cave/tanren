@@ -70,6 +70,7 @@ export async function runPlannerStage(args: PlannerStageInput): Promise<PlanAnsw
   await recordAnswererCost({
     ctx: args.costCtx,
     adapter: args.adapter,
+    role: "planner",
     taskId: args.plannerTaskId,
     model: "tanren-planner",
     runtimeSeconds,
@@ -340,6 +341,7 @@ export async function runCheckerStage(args: CheckerStageInput): Promise<CheckerD
   await recordAnswererCost({
     ctx: args.costCtx,
     adapter: args.adapter,
+    role: "checker",
     taskId: args.checkerTaskId,
     model: "tanren-checker",
     runtimeSeconds,

@@ -85,6 +85,13 @@
       "when": 1780910475740,
       "tag": "0011_integration_proof_reused_event",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1780948700324,
+      "tag": "0012_silent_fallback_loud_events",
+      "breakpoints": true
     }
   ]
 }

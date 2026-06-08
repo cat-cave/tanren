@@ -12,19 +12,26 @@
 //
 // The platform OpenRouter KEY is resolved once at build time (the run's resolved
 // managed credential ref → the secret store). The capturer is then a pure
-// (generationId) → Promise<number | null>: it queries `/api/v1/generation`,
-// returns the platform real cost when OpenRouter reports a positive `total_cost`,
-// else null (an honest no-capture — never a fabricated figure). A transport/auth
-// failure is swallowed to null (best-effort: a missed capture must NOT fail the
-// run — cost-unknown is an allowed state — and the call already metered tokens).
+// (generationId) → Promise<ProviderCostCapture>: it queries `/api/v1/generation`
+// and returns a DISCRIMINATED result — `{ cost: <usd> }` when OpenRouter reports a
+// positive `total_cost`, `{ cost: null }` for an honest no-capture (absent/non-
+// positive figure, or an empty generation id), and `{ failed }` for an auth /
+// transport / API error. The managed platform IS the biller, so a `{ failed }`
+// erases AUTHORITATIVE real platform spend — it is surfaced LOUDLY
+// (`cost.provider_capture_failed`), NEVER silently nulled to a $0 row.
 import type { SecretStore } from "../contracts/secretStore.js";
 import { resolveRawProviderKey } from "../credentials/managedKey.js";
 import { providerSlugForRef } from "../credentials/credentialType.js";
 import { queryGenerationCost, realProviderCostFrom, type OpenRouterHttpClient } from "./openRouterCost.js";
 
+// A DISCRIMINATED managed real-cost capture. `cost` is the captured real figure
+// (or null — an honest no-capture); `failed` is a LOUD auth/transport/API error
+// carrying the generation id + a secret-free diagnostic detail.
+export type ProviderCostCapture = { cost: number | null } | { failed: { generationId: string; detail: string } };
+
 // The capturer the cost-recording path calls per writer/answerer call: given the
-// generation id the adapter surfaced, resolve the REAL platform cost or null.
-export type RealProviderCostCapturer = (generationId: string) => Promise<number | null>;
+// generation id the adapter surfaced, resolve the REAL platform cost — DISCRIMINATED.
+export type RealProviderCostCapturer = (generationId: string) => Promise<ProviderCostCapture>;
 
 export interface GenerationCostCaptureDeps {
   secrets: SecretStore;
@@ -56,9 +63,10 @@ export async function buildManagedGenerationCostCapturer(
   }
   const token = await resolveRawProviderKey(deps.secrets, deps.managedCredentialRef);
   const client = deps.httpClient ?? fetchOpenRouterHttpClient();
-  return async (generationId: string): Promise<number | null> => {
+  return async (generationId: string): Promise<ProviderCostCapture> => {
     if (generationId === "") {
-      return null;
+      // No id to query — an honest no-capture, NOT a failure.
+      return { cost: null };
     }
     try {
       const cost = await queryGenerationCost(client, {
@@ -67,13 +75,20 @@ export async function buildManagedGenerationCostCapturer(
         billingModel: "platform",
         baseUrl: deps.endpointBaseUrl,
       });
-      return realProviderCostFrom(cost);
-    } catch {
-      // Best-effort: a transport/auth miss must NOT fail the run. cost_usd then
-      // stays NULL (`unknown`) for this call — an honest no-capture, no estimate.
-      return null;
+      return { cost: realProviderCostFrom(cost) };
+    } catch (error) {
+      // The managed platform IS the biller — an auth/transport/API miss erases
+      // AUTHORITATIVE real platform spend. Surface it LOUD (`{ failed }`), NEVER a
+      // silent null $0; the caller emits `cost.provider_capture_failed`.
+      return { failed: { generationId, detail: messageOf(error) } };
     }
   };
+}
+
+// A secret-free, bounded message for the capture-failure diagnostic.
+function messageOf(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.slice(-500).replaceAll(/\s+/gu, " ").trim();
 }
 
 // A fetch-backed OpenRouterHttpClient (production). Bearer-authenticates the GET

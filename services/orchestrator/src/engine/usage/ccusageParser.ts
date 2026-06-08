@@ -16,26 +16,48 @@ import type { CcusageAccounting, CcusageModelUsage } from "./contracts.js";
 // We treat 0 (and absent) as NULL — a subscription cost is not a real dollar
 // figure. Only a POSITIVE costUSD becomes a cost_basis='ccusage' figure.
 //
-// Tolerant by contract: empty (`daily: []`) → zero totals + null cost; any
-// unrecognized shape → null ("no data"). Never throws.
-export function parseCcusageAccounting(stdout: string, cli: string): CcusageAccounting | null {
+// DISCRIMINATED, NOT tolerant-to-a-fault. A read failure is LOUD, distinct from
+// legitimately-empty (no-silent-fallbacks doctrine):
+//   - whitespace-only stdout → `{ ok: null }` (the tool emitted nothing — an
+//     allowed clean-empty read; the SSH layer only reaches here on a 0 exit).
+//   - a valid object with `daily`/`totals` → `{ ok: <accounting> }` (incl.
+//     `daily: []` zero totals, a legitimate empty report).
+//   - non-JSON, a non-object, or an object carrying NEITHER `daily` NOR `totals`
+//     → `{ failed }` with a stdout tail: a real ccusage run ALWAYS emits one of
+//     those keys, so its absence is parser/contract drift, NOT "no usage". This
+//     must never silently record zero usage.
+export type CcusageParseResult = { ok: CcusageAccounting | null } | { failed: { detail: string } };
+
+export function parseCcusageAccounting(stdout: string, cli: string): CcusageParseResult {
+  if (stdout.trim() === "") {
+    return { ok: null };
+  }
   const parsed = parseJson(stdout);
   if (!isObject(parsed)) {
-    return null;
+    return { failed: { detail: stdoutTail(stdout) } };
   }
   const totalsRecord = isObject(parsed["totals"]) ? (parsed["totals"] as Record<string, unknown>) : undefined;
   const dailyArray = Array.isArray(parsed["daily"]) ? parsed["daily"] : undefined;
   if (totalsRecord === undefined && dailyArray === undefined) {
-    return null;
+    // A parseable object that is NOT a ccusage report — contract drift, loud.
+    return { failed: { detail: stdoutTail(stdout) } };
   }
   const totals = totalsRecord === undefined ? emptyUsage() : tokenUsageFromRecord(totalsRecord);
   return {
-    cli,
-    totals,
-    costUsd: positiveCostOrNull(totalsRecord?.["costUSD"]),
-    perModel: collectPerModel(dailyArray ?? []),
-    capturedAt: new Date().toISOString(),
+    ok: {
+      cli,
+      totals,
+      costUsd: positiveCostOrNull(totalsRecord?.["costUSD"]),
+      perModel: collectPerModel(dailyArray ?? []),
+      capturedAt: new Date().toISOString(),
+    },
   };
+}
+
+// A secret-free stdout tail for a malformed-output diagnostic (whitespace
+// collapsed, bounded) — names WHAT the parser choked on without dumping a body.
+function stdoutTail(stdout: string): string {
+  return stdout.slice(-500).replaceAll(/\s+/gu, " ").trim();
 }
 
 // Aggregates per-model token usage across every daily bucket so a multi-day

@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "cli": {
+      "type": "string"
+    },
+    "model": {
+      "type": "string"
+    },
+    "reason": {
+      "type": "string"
+    },
+    "role": {
+      "enum": [
+        "planner",
+        "checker",
+        "auditor",
+        "writer"
+      ],
+      "type": "string"
+    }
+  },
+  "required": [
+    "role",
+    "cli",
+    "model",
+    "reason"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.usage.token_accounting_failed"
+}

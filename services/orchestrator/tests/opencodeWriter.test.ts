@@ -206,6 +206,18 @@ describe("opencode writer adapter", () => {
       totalTokens: 87,
     });
   });
+
+  it("counts a JSON-shaped-but-malformed line LOUD, but treats human log text as BENIGN (quiet)", () => {
+    // `--print-logs` interleaves human log lines with JSON events: a plain-text log
+    // line is benign (NOT counted); only a `{`-leading line that fails to parse is
+    // contract drift, surfaced via malformedLineCount.
+    const out = parseOpencodeStreamTelemetry(
+      'INFO booting up\n{"usage":{"input_tokens":1,"output_tokens":1}}\n{ broken json\n',
+    );
+    expect(out.malformedLineCount).toBe(1);
+    // A run with only valid JSON + benign log text reports zero.
+    expect(parseOpencodeStreamTelemetry('INFO ready\n{"type":"x"}\n').malformedLineCount).toBe(0);
+  });
 });
 
 function ok(stdout: string): CommandResult {

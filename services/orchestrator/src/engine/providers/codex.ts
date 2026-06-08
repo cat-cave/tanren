@@ -34,6 +34,10 @@ export interface CodexEventTelemetry {
   // The OpenRouter generation id (managed run); folded onto tokenUsage so the cost
   // recorder can query the REAL `usage.cost` (see TokenUsage.openRouterGenerationId).
   openRouterGenerationId?: string;
+  // Count of NON-empty lines that failed to parse as JSON. Codex runs `--json`, so
+  // every non-empty line MUST be a JSON event — a positive count is contract drift
+  // (silent-fallback hardening: a malformed line is no longer silently skipped).
+  malformedLineCount?: number;
 }
 
 // Raised by the Answerer path when Codex authenticated but the account's
@@ -270,9 +274,15 @@ export function parseCodexJsonlTelemetry(stdout: string): CodexEventTelemetry {
   let tokenUsage: TokenUsage | undefined;
   let usageLimit: UsageLimitSignal | undefined;
   let openRouterGenerationId: string | undefined;
+  // Codex runs with `--json`: EVERY non-empty line is a JSON event. A line that
+  // fails to parse is contract drift (a malformed NON-empty line), NOT a benign
+  // blank — count it so a silent skip becomes a VISIBLE signal the adapter surfaces
+  // (`usage.token_accounting_failed` upstream) rather than quietly losing usage.
+  let malformedLineCount = 0;
   for (const line of lines) {
     const parsed = parseJsonObject(line);
     if (parsed === undefined) {
+      malformedLineCount += 1;
       continue;
     }
     tokenUsage = findTokenUsage(parsed) ?? tokenUsage;
@@ -284,6 +294,7 @@ export function parseCodexJsonlTelemetry(stdout: string): CodexEventTelemetry {
     tokenUsage: foldGenerationId(tokenUsage, openRouterGenerationId),
     usageLimit,
     openRouterGenerationId,
+    malformedLineCount,
   };
 }
 

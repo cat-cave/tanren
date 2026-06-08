@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "detail": {
+      "type": "string"
+    },
+    "exitCode": {
+      "anyOf": [
+        {
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "reason": {
+      "enum": [
+        "timeout",
+        "ssh_failure",
+        "nonzero_exit",
+        "malformed_output"
+      ],
+      "type": "string"
+    },
+    "reasonText": {
+      "type": "string"
+    },
+    "target": {
+      "type": "string"
+    },
+    "tool": {
+      "enum": [
+        "codexbar",
+        "ccusage"
+      ],
+      "type": "string"
+    }
+  },
+  "required": [
+    "tool",
+    "target",
+    "reason",
+    "exitCode",
+    "detail",
+    "reasonText"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.usage.read_failed"
+}

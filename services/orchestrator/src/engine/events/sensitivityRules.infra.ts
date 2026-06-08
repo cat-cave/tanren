@@ -134,6 +134,25 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["costUsd", "public"],
     ["capturedAt", "public"],
   ]),
+  // usage.read_failed (silent-fallback hardening) — tool/target/reason/exitCode are
+  // secret-free, detail is a bounded whitespace-collapsed stderr/stdout tail; all
+  // public operational telemetry (a usage read that could not report).
+  ...rulesFor("usage.read_failed", [
+    ["tool", "public"],
+    ["target", "public"],
+    ["reason", "public"],
+    ["exitCode", "public"],
+    ["detail", "public"],
+    ["reasonText", "public"],
+  ]),
+  // usage.token_accounting_failed (silent-fallback hardening) — role/cli/model are
+  // secret-free identifiers, reason is a fixed diagnosis; all public.
+  ...rulesFor("usage.token_accounting_failed", [
+    ["role", "public"],
+    ["cli", "public"],
+    ["model", "public"],
+    ["reason", "public"],
+  ]),
 
   // github
   ...rulesFor("github.branch.pushed", [

@@ -40,10 +40,11 @@ function drawdownProbe(): UsageProbe {
           capturedAt: "2026-05-28T00:00:00Z",
         },
         pressure: null,
+        failure: null,
       };
     },
     async observeAccounting() {
-      return accounting(5);
+      return { ok: accounting(5) };
     },
   };
 }
@@ -78,6 +79,7 @@ function healthyWindow(): WindowObservation {
       capturedAt: "2026-05-28T00:00:00Z",
     },
     pressure: null,
+    failure: null,
   };
 }
 
@@ -108,6 +110,7 @@ function exhaustedWindow(): WindowObservation {
       capturedAt: "2026-05-28T00:00:00Z",
     },
     pressure: slot,
+    failure: null,
   };
 }
 
@@ -134,7 +137,7 @@ function fakeProbe(window: WindowObservation, acct: CcusageAccounting | null): U
       return window;
     },
     async observeAccounting() {
-      return acct;
+      return { ok: acct };
     },
   };
 }
@@ -223,10 +226,11 @@ describe("subtask loop — usage probe wiring", () => {
             capturedAt: "2026-05-28T00:00:00Z",
           },
           pressure: null,
+          failure: null,
         };
       },
       async observeAccounting() {
-        return accounting(5);
+        return { ok: accounting(5) };
       },
     };
 

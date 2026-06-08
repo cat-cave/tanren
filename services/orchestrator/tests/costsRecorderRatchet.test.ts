@@ -138,15 +138,19 @@ describe("CostRecorder.record — exact persisted column shape", () => {
       usage({ outputTokens: 1_000_000, totalTokens: 1_000_000 }),
       {},
     );
-    expect(events.events).toHaveLength(1);
-    const ev = events.events[0]!;
-    expect(ev.eventType).toBe("cost.resolved");
+    const ev = events.events.find((e) => e.eventType === "cost.resolved")!;
+    expect(ev).toBeDefined();
     const payload = ev.payload as { provider: string; costBasis: string; billingMode: string; costUsd: string };
     expect(payload.provider).toBe("openrouter");
     expect(payload.billingMode).toBe("per_token");
     expect(payload.costBasis).toBe("provider_response");
     // The captured OpenRouter usage.cost is the verbatim real figure (a metered FACT).
     expect(payload.costUsd).toBe("0.073100");
+    // The model `deepseek` is not in the default notional price source, so a
+    // token-bearing call ALSO emits the loud cost.notional_unpriced (finding 6).
+    const unpriced = events.events.find((e) => e.eventType === "cost.notional_unpriced");
+    expect(unpriced).toBeDefined();
+    expect((unpriced!.payload as { model: string }).model).toBe("deepseek");
   });
 
   it("delegates to the persist override and does NOT touch the pool when one is wired", async () => {
