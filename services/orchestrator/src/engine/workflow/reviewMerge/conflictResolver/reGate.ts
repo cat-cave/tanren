@@ -15,7 +15,7 @@ import type { ReGateVerdict, ResolvedTreeReGate } from "../../../contracts/confl
 import type { AnswererAdapter } from "../../../providers/types.js";
 import type { GateOutcome } from "../../gate/index.js";
 import { decideCheckerOutcome, invokeChecker } from "../../checker/checker.js";
-import { decideAuditorOutcome, invokeAuditor } from "../../auditor/auditor.js";
+import { auditorReGateDecision, invokeAuditor } from "../../auditor/auditor.js";
 
 export interface ResolvedTreeReGateDeps {
   workspacePath: string;
@@ -82,8 +82,8 @@ export class RunPathResolvedTreeReGate implements ResolvedTreeReGate {
       timeoutMs: this.deps.timeoutMs,
       workspace: this.deps.workspacePath,
     });
-    const auditDecision = decideAuditorOutcome(audit.verdict);
-    if (auditDecision.kind === "reject") {
+    const auditDecision = auditorReGateDecision(audit.verdict);
+    if (auditDecision.blocked) {
       return { passed: false, failedStage: "auditor", reason: auditDecision.reason };
     }
 

@@ -20,7 +20,7 @@ describe("buildCheckerPrompt — shared body", () => {
       baselineSha,
       outputInstructions: ["CLOSING-CHECK"],
     });
-    expect(prompt).toContain("You are the Tanren Checker Answerer. Your ONLY job is to judge intent");
+    expect(prompt).toContain("You are the Tanren Checker Answerer. Your ONLY job is to judge COMPLETENESS for");
     // Self-inspection — the verified behaviour: the agent diffs the change itself.
     expect(prompt).toContain("Inspect it yourself: run");
     expect(prompt).toContain(`  git diff ${baselineSha} -- . ':(exclude)node_modules'`);

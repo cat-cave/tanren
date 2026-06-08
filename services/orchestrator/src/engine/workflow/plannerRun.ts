@@ -7,7 +7,14 @@
 // usage-limit mid-loop is caught as window_exhausted, not a failure (PROJECT_BRIEF §4.3).
 import type pg from "pg";
 import type { CiWhen } from "../ci/index.js";
-import type { EscapeHatches, GovernancePosture, RoutingChainEntry, RoutingTable } from "../config/shared.js";
+import type {
+  AuditPostureConfig,
+  ConvergencePolicyConfig,
+  EscapeHatches,
+  GovernancePosture,
+  RoutingChainEntry,
+  RoutingTable,
+} from "../config/shared.js";
 import type { OrgGithubAppInstallation } from "../config/orgConfig.js";
 import type { Allocator, ReleaseReason, RunnerHandle } from "../contracts/allocator.js";
 import type { BudgetGate } from "../contracts/dagWalker.js";
@@ -98,6 +105,12 @@ export interface PlannerRunContext {
   endpointBaseUrl?: string;
   // Governance posture (run worker): drives the gate's advisory policy (`lenient` ⇒ lint/typecheck advisory; absent ⇒ strict).
   governancePosture?: GovernancePosture;
+  // SPEC-LOOP REDESIGN (docs/roadmap/spec-loop-redesign.md): the per-project audit
+  // posture (triage routing of P1–P3 → tasks-here vs new specs) + the convergence
+  // policy (the SOLE loop bound: maxConsecutiveStalls; demoRunEnabled). Absent on unit
+  // paths ⇒ the loop's balanced defaults (DEFAULT_AUDIT_POSTURE / DEFAULT_CONVERGENCE_POLICY).
+  auditPosture?: AuditPostureConfig;
+  convergencePolicy?: ConvergencePolicyConfig;
   // AUDIT-EVIDENCE BASELINE: governance policy version (project config version), stamped onto the `gate.verdict` roll-up. Absent on unit paths with no config.
   policyVersion?: number;
   // GREENFIELD MARKER (ProjectConfigV1.greenfield): drives buildDefaultGate's in-loop deps-ensure MODE — greenfield ⇒ NON-FROZEN install; absent/false ⇒ FROZEN brownfield.
@@ -334,6 +347,10 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
           baseSha,
         },
         escapeHatches: input.escapeHatches,
+        // SPEC-LOOP REDESIGN: thread the project audit posture (triage routing) + the
+        // convergence policy (the SOLE loop bound). Absent ⇒ the loop's balanced defaults.
+        ...(context.auditPosture !== undefined && { auditPosture: context.auditPosture }),
+        ...(context.convergencePolicy !== undefined && { convergencePolicy: context.convergencePolicy }),
         timeoutMs: input.timeoutMs,
         usageProbe,
         // cost PR-C: the CONFIGURED per-credential credit→USD rate (see context field).

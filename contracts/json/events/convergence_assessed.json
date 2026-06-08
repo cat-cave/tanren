@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "assessment": {
+      "enum": [
+        "progress",
+        "stalled",
+        "velocity_defer"
+      ],
+      "type": "string"
+    },
+    "consecutiveStalls": {
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+    },
+    "decision": {
+      "enum": [
+        "continue",
+        "pass",
+        "halt"
+      ],
+      "type": "string"
+    },
+    "maxConsecutiveStalls": {
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+    },
+    "reasoning": {
+      "type": "string"
+    },
+    "runId": {
+      "type": "string"
+    },
+    "taskId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "runId",
+    "taskId",
+    "assessment",
+    "decision",
+    "consecutiveStalls",
+    "maxConsecutiveStalls",
+    "reasoning"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.convergence.assessed"
+}

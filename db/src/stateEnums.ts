@@ -22,6 +22,7 @@ export const stateEnumLists = {
     "halted",
     "escape_hatch_hit",
     "retry_budget_exhausted",
+    "convergence_stalled",
     "window_exhausted",
     "cancelled",
     "failed"
@@ -44,7 +45,9 @@ export const stateEnumLists = {
     "review",
     "merge",
     "demo",
-    "forge"
+    "forge",
+    "triage",
+    "convergence"
   ],
   tasks_status: [
     "queued",

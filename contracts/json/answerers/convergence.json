@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "assessment": {
+      "enum": [
+        "progress",
+        "stalled",
+        "velocity_defer"
+      ],
+      "type": "string"
+    },
+    "reasoning": {
+      "description": "Cite the finding-delta across loops: which root causes were retired, which recurred, and whether the total P-score is decreasing.",
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "assessment",
+    "reasoning"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.convergence_answer.v1"
+}

@@ -8,14 +8,42 @@
       },
       "type": "array"
     },
-    "behaviorIdsPassed": {
+    "complete": {
+      "type": "boolean"
+    },
+    "findings": {
       "items": {
-        "type": "string"
+        "additionalProperties": false,
+        "properties": {
+          "behaviorId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "body": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "body",
+          "behaviorId"
+        ],
+        "type": "object"
       },
       "type": "array"
-    },
-    "passed": {
-      "type": "boolean"
     },
     "reasoning": {
       "type": "string"
@@ -36,10 +64,10 @@
     "runId",
     "taskId",
     "subtaskIndex",
-    "passed",
+    "complete",
     "reasoning",
-    "behaviorIdsPassed",
-    "behaviorIdsFailed"
+    "behaviorIdsFailed",
+    "findings"
   ],
   "type": "object",
   "x-tanren-schema-id": "tanren.event.checker.verdict"

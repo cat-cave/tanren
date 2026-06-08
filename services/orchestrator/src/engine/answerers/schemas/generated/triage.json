@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "workItems": {
+      "description": "M work items deduped to root causes (NOT 1:1 with findings), each tagged task|spec + severity.",
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "body": {
+            "maxLength": 6000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "findingIds": {
+            "description": "The ids of the input findings this root-cause item subsumes (the dedup trail).",
+            "items": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "id": {
+            "maxLength": 120,
+            "minLength": 1,
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "task",
+              "spec"
+            ],
+            "type": "string"
+          },
+          "severity": {
+            "enum": [
+              "P0",
+              "P1",
+              "P2",
+              "P3"
+            ],
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 200,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "severity",
+          "title",
+          "body",
+          "findingIds"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "workItems"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.triage_answer.v1"
+}

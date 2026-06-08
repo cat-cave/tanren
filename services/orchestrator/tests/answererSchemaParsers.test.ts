@@ -53,98 +53,63 @@ describe("PlanAnswer", () => {
 });
 
 describe("CheckAnswer", () => {
-  it("accepts a passing Phase-1-shaped fixture answer with empty behavior arrays", () => {
-    // the fixture spec declares no behaviors, so the regression payload
-    // carries empty behavior arrays. This asserts the fixture checker
-    // results validate against the regenerated schema unchanged.
+  it("SPEC-LOOP REDESIGN: a complete task emits an EXPLICIT empty findings list", () => {
     const value = {
-      passed: true,
-      reasoning: "Diff adds PHASE1_FIXTURE.md with the required marker line.",
-      behaviorIdsPassed: [],
-      behaviorIdsFailed: [],
+      findings: [],
+      reasoning: "Diff adds PHASE1_FIXTURE.md with the required marker line for downstream tasks.",
     };
     expect(CheckAnswer.parse(value)).toEqual(value);
   });
 
-  it("accepts a partial-failure case with both behavior lists populated", () => {
+  it("accepts an incomplete task with completeness findings (each tying to a behavior)", () => {
     const value = {
-      passed: false,
+      findings: [
+        {
+          id: "readme-missing",
+          title: "README behavior not touched",
+          body: "downstream docs task needs it",
+          behaviorId: "beh_readme_summary",
+        },
+      ],
       reasoning: "Diff covers beh_marker but the README behavior was not touched.",
-      behaviorIdsPassed: ["beh_marker"],
-      behaviorIdsFailed: ["beh_readme_summary"],
     };
-    expect(CheckAnswer.parse(value)).toEqual(value);
+    expect(CheckAnswer.parse(value).findings).toHaveLength(1);
   });
 
-  it("rejects missing fields and stray keys", () => {
-    expect(() => CheckAnswer.parse({ passed: true })).toThrow(/Invalid input/u);
-    expect(() =>
-      CheckAnswer.parse({
-        passed: true,
-        reasoning: "ok",
-        behaviorIdsPassed: [],
-        behaviorIdsFailed: [],
-        extra: "stop",
-      }),
-    ).toThrow(/Unrecognized key/u);
+  it("rejects a missing findings list (no `.default([])`) and stray keys", () => {
+    expect(() => CheckAnswer.parse({ reasoning: "ok" })).toThrow(/Invalid input/u);
+    expect(() => CheckAnswer.parse({ findings: [], reasoning: "ok", extra: "stop" })).toThrow(/Unrecognized key/u);
   });
 });
 
 describe("AuditAnswer", () => {
-  it("S3a: an audited-CLEAN answer MUST emit an EXPLICIT `findings: []` (the only way to a clean verdict)", () => {
-    const value = {
-      passed: true,
-      reasoning: "Checker accepted the diff and the marker file matches the spec.",
-      outstandingBehaviorIds: [],
-      recommendedAction: "pass" as const,
-      // The clean state is an EXPLICIT empty array — never a defaulted/omitted one.
-      findings: [],
-    };
+  it("SPEC-LOOP REDESIGN: an audited-CLEAN answer MUST emit an EXPLICIT `findings: []` (the only way to clean)", () => {
+    const value = { findings: [] };
     expect(AuditAnswer.parse(value)).toEqual(value);
     expect(AuditAnswer.parse(value).findings).toEqual([]);
   });
 
-  it("S3a: an answer that OMITS `findings` is INVALID — it FAILS TO PARSE (no clean-[] default)", () => {
-    // The §4 P0 fix: there is NO `.default([])`. A legacy-shaped / findings-omitted
-    // answer cannot become a durable clean verdict — it is rejected loudly, so no
-    // auditor.verdict event is ever recorded and the run is treated as un-audited.
-    const omitted = {
-      passed: true,
-      reasoning: "looks fine",
-      outstandingBehaviorIds: [],
-      recommendedAction: "pass",
-    };
-    expect(() => AuditAnswer.parse(omitted)).toThrow(/findings/iu);
+  it("an answer that OMITS `findings` is INVALID — it FAILS TO PARSE (no clean-[] default)", () => {
+    expect(() => AuditAnswer.parse({})).toThrow(/findings/iu);
+    // A legacy-shaped (passed/recommendedAction) answer with no findings also fails.
+    const omitted = { passed: true, reasoning: "looks fine", recommendedAction: "pass" };
+    expect(() => AuditAnswer.parse(omitted)).toThrow(/Invalid|Unrecognized|findings/iu);
   });
 
-  it("S3a: a findings-omitted answer does NOT produce a clean verdict (parse fails; no `{ findings: [] }`)", () => {
-    const result = AuditAnswer.safeParse({
-      passed: false,
-      reasoning: "beh_readme_summary still uncovered after one writer pass; planner should split the spec.",
-      outstandingBehaviorIds: ["beh_readme_summary"],
-      recommendedAction: "loop_to_planner",
-    });
-    // The parse FAILS — it never yields a value, so there is no clean `[]` to read.
-    expect(result.success).toBe(false);
+  it("rejects the DELETED narration fields (passed/recommendedAction) as unknown keys", () => {
+    expect(() => AuditAnswer.parse({ findings: [], passed: true })).toThrow(/Unrecognized key/u);
+    expect(() => AuditAnswer.parse({ findings: [], recommendedAction: "pass" })).toThrow(/Unrecognized key/u);
   });
 
-  it("accepts a loop_to_planner verdict that carries an EXPLICIT findings list", () => {
+  it("accepts a findings list (findings are the SOLE currency)", () => {
     const value = {
-      passed: false,
-      reasoning: "beh_readme_summary still uncovered after one writer pass; planner should split the spec.",
-      outstandingBehaviorIds: ["beh_readme_summary"],
-      recommendedAction: "loop_to_planner" as const,
       findings: [{ id: "uncovered-beh", severity: "P1" as const, title: "behavior uncovered", body: "b" }],
     };
     expect(AuditAnswer.parse(value).findings.map((f) => f.severity)).toEqual(["P1"]);
   });
 
-  it("accepts explicit P0–P3 findings alongside the (non-gating) narration fields", () => {
+  it("accepts explicit P0–P3 findings (with optional fixHint)", () => {
     const value = {
-      passed: false,
-      reasoning: "A null-deref crashes the import path; planner must rework.",
-      outstandingBehaviorIds: ["beh_import"],
-      recommendedAction: "loop_to_planner",
       findings: [
         { id: "null-deref-import", severity: "P0", title: "Null deref on import", body: "x.y is read when x is null." },
         {
@@ -182,29 +147,18 @@ describe("AuditAnswer", () => {
     expect(normalizedNull).toEqual({ id: "f", severity: "P1", title: "t", body: "b" });
   });
 
-  it("the full AuditAnswer parse succeeds with a fixHint:null finding (no throw before dual-emit)", () => {
+  it("the full AuditAnswer parse succeeds with a fixHint:null finding", () => {
     const parsed = AuditAnswer.parse({
-      passed: false,
-      reasoning: "blocker present",
-      outstandingBehaviorIds: [],
-      recommendedAction: "loop_to_planner",
       findings: [{ id: "p1", severity: "P1", title: "t", body: "b", fixHint: null }],
     });
     expect(parsed.findings[0]?.fixHint).toBeNull();
     expect(normalizeFinding(parsed.findings[0]!)).not.toHaveProperty("fixHint");
   });
 
-  it("rejects unknown recommendedAction values", () => {
-    expect(() =>
-      AuditAnswer.parse({
-        passed: false,
-        reasoning: "x",
-        outstandingBehaviorIds: [],
-        recommendedAction: "retry",
-        // Findings present + valid so ONLY the recommendedAction is the parse failure.
-        findings: [],
-      }),
-    ).toThrow(/Invalid (?:input|option)/u);
+  it("rejects an unknown finding severity", () => {
+    expect(() => AuditAnswer.parse({ findings: [{ id: "x", severity: "P9", title: "t", body: "b" }] })).toThrow(
+      /Invalid (?:input|option)/u,
+    );
   });
 });
 

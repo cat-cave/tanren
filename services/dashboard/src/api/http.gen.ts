@@ -91,6 +91,7 @@ export interface RunDetail {
       | "halted"
       | "escape_hatch_hit"
       | "retry_budget_exhausted"
+      | "convergence_stalled"
       | "window_exhausted"
       | "cancelled"
       | "failed"
@@ -115,7 +116,18 @@ export interface RunDetail {
     cli: string;
     endedAt: string | null;
     failureKind: string | null;
-    kind: "plan" | "write" | "check" | "audit" | "ci" | "review" | "merge" | "demo" | "forge";
+    kind:
+      | "plan"
+      | "write"
+      | "check"
+      | "audit"
+      | "ci"
+      | "review"
+      | "merge"
+      | "demo"
+      | "forge"
+      | "triage"
+      | "convergence";
     model: string | null;
     outcome:
       | "passed"
@@ -167,6 +179,7 @@ export interface RunListItem {
     | "halted"
     | "escape_hatch_hit"
     | "retry_budget_exhausted"
+    | "convergence_stalled"
     | "window_exhausted"
     | "cancelled"
     | "failed"
@@ -203,6 +216,7 @@ export interface RunSummary {
     | "halted"
     | "escape_hatch_hit"
     | "retry_budget_exhausted"
+    | "convergence_stalled"
     | "window_exhausted"
     | "cancelled"
     | "failed"
@@ -270,6 +284,7 @@ export interface SseStatusFrame {
     | "halted"
     | "escape_hatch_hit"
     | "retry_budget_exhausted"
+    | "convergence_stalled"
     | "window_exhausted"
     | "cancelled"
     | "failed"
@@ -284,7 +299,7 @@ export interface TaskTimelineEntry {
   cli: string;
   endedAt: string | null;
   failureKind: string | null;
-  kind: "plan" | "write" | "check" | "audit" | "ci" | "review" | "merge" | "demo" | "forge";
+  kind: "plan" | "write" | "check" | "audit" | "ci" | "review" | "merge" | "demo" | "forge" | "triage" | "convergence";
   model: string | null;
   outcome:
     | "passed"

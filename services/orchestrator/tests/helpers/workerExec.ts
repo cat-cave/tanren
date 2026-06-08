@@ -30,12 +30,17 @@ import { createProject, createQueuedRunFromSpec, createSpec } from "../../src/en
 import { runPlannerLoopWorkflow } from "../../src/engine/workflow/plannerRun.js";
 import {
   buildPlan,
+  cleanAudit,
+  completeCheck,
+  convergenceProgress,
   makeAuditor,
   makeChecker,
+  makeConvergence,
+  makeDemoRun,
   makePlanner,
+  makeTriage,
   makeWriter,
-  passingAudit,
-  passingCheck,
+  triageAllTasks,
 } from "./plannerLoopHelpers.js";
 import { WorkerPool } from "./workerPool.js";
 
@@ -123,8 +128,11 @@ function passingAdapters() {
       buildPlan([{ title: "T1", intent: "implement it", behaviorIds: [] }]),
     ]) as AnswererAdapter<PlanAnswer>,
     writer: makeWriter(["diff\n"]),
-    checker: makeChecker([passingCheck]) as AnswererAdapter<CheckAnswer>,
-    auditor: makeAuditor([passingAudit]) as AnswererAdapter<AuditAnswer>,
+    checker: makeChecker([completeCheck]) as AnswererAdapter<CheckAnswer>,
+    auditor: makeAuditor([cleanAudit]) as AnswererAdapter<AuditAnswer>,
+    triage: makeTriage([triageAllTasks]),
+    convergence: makeConvergence([convergenceProgress]),
+    demoRun: makeDemoRun([{ findings: [], summary: "ok" }]),
   };
 }
 

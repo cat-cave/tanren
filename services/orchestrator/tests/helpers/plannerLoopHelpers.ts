@@ -1,10 +1,22 @@
-// Test helpers shared by the planner-loop test suites. Provides:
+// Test helpers shared by the spec-loop test suites (docs/roadmap/spec-loop-redesign.md).
+// Provides:
 // - FakePool, a tiny pg substitute that captures task + cost inserts;
-// - factories for in-memory planner / checker / auditor / writer adapters;
-// - canned PlanAnswer / CheckAnswer / AuditAnswer fixtures;
-// - defaultInput that wires the loop with a runnable single-subtask plan.
-import type { AuditAnswer, CheckAnswer, PlanAnswer } from "../../src/engine/answerers/schemas/index.js";
+// - factories for in-memory planner / checker / auditor / triage / convergence /
+//   demo-run / writer adapters;
+// - canned PlanAnswer / CheckAnswer / AuditAnswer / TriageAnswer / ConvergenceAnswer /
+//   DemoRunAnswer fixtures (the new findings-only contracts);
+// - defaultLoopInput that wires the loop with a runnable single-subtask plan.
+import type {
+  AuditAnswer,
+  CheckAnswer,
+  ConvergenceAnswer,
+  DemoRunAnswer,
+  PlanAnswer,
+  TriageAnswer,
+} from "../../src/engine/answerers/schemas/index.js";
+import type { CiWhen } from "../../src/engine/ci/index.js";
 import { CostRecorder } from "../../src/engine/costs/index.js";
+import type { GateOutcome } from "../../src/engine/workflow/gate/index.js";
 import { FakeEventStore } from "./fakeEventStore.js";
 import type {
   AnswererAdapter,
@@ -29,12 +41,8 @@ interface FakePoolRecord {
 export class FakePool {
   readonly tasks: FakePoolRecord[] = [];
   readonly costInserts: Array<{ taskId: string; cli: string }> = [];
-  // cost_records rows keyed by synthetic id, with the total_tokens needed by
-  // reconcileRunCostFromCcusage. costUpdates captures the apportioning UPDATEs.
   readonly costRows: Array<{ id: string; totalTokens: number; billingMode: string }> = [];
-  // REAL `cost_usd` writes (per_token ccusage + all credits rows).
   readonly costUpdates: Array<{ id: string; costUsd: string; basis: string | null }> = [];
-  // NOTIONAL `notional_cost_usd` writes (the ccusage all-rows axis).
   readonly notionalUpdates: Array<{ id: string; notionalCostUsd: string; basis: string | null }> = [];
   private nextCostId = 1;
 
@@ -53,8 +61,6 @@ export class FakePool {
         rowCount: this.costRows.length,
       };
     }
-    // The two-axis reconcile UPDATEs: anchor on the `SET ` prefix — `notional_cost_usd
-    // = $2` CONTAINS the substring `cost_usd = $2`, so a bare includes() over-matches.
     if (trimmed.startsWith("UPDATE cost_records SET")) {
       const basis = params[2] === undefined ? null : String(params[2]);
       if (trimmed.includes("SET cost_usd = $2")) {
@@ -93,9 +99,6 @@ export class FakePool {
       }
       return { rows: [], rowCount: 1 };
     }
-    // A hard task FAILURE (markTaskFailed): status='failed', outcome='failed',
-    // failure_kind=$2. Distinct from the done update so a non-completing writer's
-    // row reads `failed`, never a laundered `done`/`passed`.
     if (trimmed.startsWith("UPDATE tasks SET status = 'failed'")) {
       const taskId = String(params[0]);
       const failureKind = String(params[1]);
@@ -119,8 +122,6 @@ export class FakePool {
     }
     if (trimmed.startsWith("INSERT INTO cost_records")) {
       this.costInserts.push({ taskId: String(params[0]), cli: String(params[3]) });
-      // total_tokens is param 12 (1-based $12 → 0-based 11); billing_mode is param 15
-      // (the notional_cost_usd column inserted at $14 shifted billing_mode to $15).
       this.costRows.push({
         id: String(this.nextCostId++),
         totalTokens: Number(params[11] ?? 0),
@@ -134,11 +135,9 @@ export class FakePool {
 
 export const fakeAuthRef = "credential/self-hosted/tanren-fake";
 
-export function makePlanner(
-  plans: ReadonlyArray<PlanAnswer>,
-): AnswererAdapter<PlanAnswer> & { calls: AnswererRunOptions<PlanAnswer>[] } {
+function makeAnswerer<T>(answers: ReadonlyArray<T>): AnswererAdapter<T> & { calls: AnswererRunOptions<T>[] } {
   let index = 0;
-  const calls: AnswererRunOptions<PlanAnswer>[] = [];
+  const calls: AnswererRunOptions<T>[] = [];
   return {
     kind: "answerer",
     cli: "fake",
@@ -146,50 +145,19 @@ export function makePlanner(
     calls,
     async runAnswerer(opts) {
       calls.push(opts);
-      const plan = plans[index] ?? plans.at(-1);
+      const answer = answers[index] ?? answers.at(-1);
       index += 1;
-      return plan;
+      return answer as T;
     },
   };
 }
 
-export function makeChecker(
-  verdicts: ReadonlyArray<CheckAnswer>,
-): AnswererAdapter<CheckAnswer> & { calls: AnswererRunOptions<CheckAnswer>[] } {
-  let index = 0;
-  const calls: AnswererRunOptions<CheckAnswer>[] = [];
-  return {
-    kind: "answerer",
-    cli: "fake",
-    authRef: fakeAuthRef,
-    calls,
-    async runAnswerer(opts) {
-      calls.push(opts);
-      const verdict = verdicts[index] ?? verdicts.at(-1);
-      index += 1;
-      return verdict;
-    },
-  };
-}
-
-export function makeAuditor(
-  verdicts: ReadonlyArray<AuditAnswer>,
-): AnswererAdapter<AuditAnswer> & { calls: AnswererRunOptions<AuditAnswer>[] } {
-  let index = 0;
-  const calls: AnswererRunOptions<AuditAnswer>[] = [];
-  return {
-    kind: "answerer",
-    cli: "fake",
-    authRef: fakeAuthRef,
-    calls,
-    async runAnswerer(opts) {
-      calls.push(opts);
-      const verdict = verdicts[index] ?? verdicts.at(-1);
-      index += 1;
-      return verdict;
-    },
-  };
-}
+export const makePlanner = (plans: ReadonlyArray<PlanAnswer>) => makeAnswerer<PlanAnswer>(plans);
+export const makeChecker = (verdicts: ReadonlyArray<CheckAnswer>) => makeAnswerer<CheckAnswer>(verdicts);
+export const makeAuditor = (verdicts: ReadonlyArray<AuditAnswer>) => makeAnswerer<AuditAnswer>(verdicts);
+export const makeTriage = (answers: ReadonlyArray<TriageAnswer>) => makeAnswerer<TriageAnswer>(answers);
+export const makeConvergence = (answers: ReadonlyArray<ConvergenceAnswer>) => makeAnswerer<ConvergenceAnswer>(answers);
+export const makeDemoRun = (answers: ReadonlyArray<DemoRunAnswer>) => makeAnswerer<DemoRunAnswer>(answers);
 
 export function makeWriter(
   diffs: ReadonlyArray<string>,
@@ -203,7 +171,7 @@ export function makeWriter(
     calls,
     async runWriter(opts): Promise<WriterResult> {
       calls.push({ prompt: opts.prompt, workspace: opts.workspace });
-      const diff = diffs[index] ?? diffs.at(-1);
+      const diff = diffs[index] ?? diffs.at(-1) ?? "";
       index += 1;
       return {
         diff,
@@ -223,9 +191,7 @@ export function makeWriter(
   };
 }
 
-// A writer that returns a single result with a non-`completed` exitReason (and
-// an empty diff, as a crashed/timed-out/exhausted writer typically does). Used to
-// prove the loop NEVER marks such a subtask passed and halts/reworks instead.
+// A writer that returns a single result with a non-`completed` exitReason.
 export function makeFailingWriter(
   exitReason: WriterResult["exitReason"],
 ): WriterAdapter & { calls: Array<{ prompt: string; workspace: string }> } {
@@ -255,6 +221,38 @@ export function makeFailingWriter(
   };
 }
 
+// A deterministic gate stub. `results` is the per-CALL pass/fail sequence; an absent
+// entry falls back to the last. Records every call so tests assert ordering (the fast
+// gate runs BEFORE the checker).
+export function makeGate(results: ReadonlyArray<{ passed: boolean }>): {
+  gate: (input: { when: CiWhen; taskId?: string }) => Promise<GateOutcome>;
+  calls: Array<{ when: CiWhen }>;
+} {
+  let index = 0;
+  const calls: Array<{ when: CiWhen }> = [];
+  const gate = async (input: { when: CiWhen; taskId?: string }): Promise<GateOutcome> => {
+    calls.push({ when: input.when });
+    const entry = results[index] ?? results.at(-1) ?? { passed: true };
+    index += 1;
+    if (entry.passed) {
+      return { passed: true, results: [] };
+    }
+    return {
+      passed: false,
+      results: [],
+      failure: {
+        passed: false,
+        tier: "fast",
+        when: input.when,
+        failedStep: "typecheck",
+        exitCode: 1,
+        steps: [],
+      },
+    };
+  };
+  return { gate, calls };
+}
+
 export function buildPlan(
   subtasks: ReadonlyArray<{ title: string; intent: string; behaviorIds?: string[] }>,
 ): PlanAnswer {
@@ -270,56 +268,78 @@ export function buildPlan(
   };
 }
 
-export const passingCheck: CheckAnswer = {
-  passed: true,
-  reasoning: "diff satisfies the subtask intent",
-  behaviorIdsPassed: ["B1"],
-  behaviorIdsFailed: [],
-};
+// ---- CHECKER fixtures (completeness findings only) ------------------------
 
-export const failingCheck: CheckAnswer = {
-  passed: false,
-  reasoning: "diff does not touch the required file",
-  behaviorIdsPassed: [],
-  behaviorIdsFailed: ["B1"],
-};
-
-export const passingAudit: AuditAnswer = {
-  passed: true,
-  reasoning: "every acceptance criterion is met",
-  outstandingBehaviorIds: [],
-  recommendedAction: "pass",
-  // WAVE-2: audited-clean ⇒ an EMPTY explicit findings list.
+// A complete task: an EXPLICIT empty findings list.
+export const completeCheck: CheckAnswer = {
   findings: [],
+  reasoning: "the change delivers the subtask intent for downstream needs",
 };
 
-export const loopAudit: AuditAnswer = {
-  passed: false,
-  reasoning: "integrated result missed a behavior",
-  outstandingBehaviorIds: ["B2"],
-  recommendedAction: "loop_to_planner",
-  // WAVE-2: a blocking defect is an EXPLICIT P1 finding (no inferred severity);
-  // a fixHint exercises the optional-field emission path.
+// An incomplete task: a P0 completeness finding ⇒ back to the writer.
+export const incompleteCheck: CheckAnswer = {
   findings: [
-    {
-      id: "missed-behavior-B2",
-      severity: "P1",
-      title: "B2 not implemented",
-      body: "The integrated result does not cover behavior B2.",
-      fixHint: "implement B2 in the writer pass",
-    },
+    { id: "missing-file", title: "required file not created", body: "downstream tasks import it", behaviorId: "B1" },
   ],
+  reasoning: "the change does not touch the required file",
 };
 
-export const haltAudit: AuditAnswer = {
-  passed: false,
-  reasoning: "unrecoverable conflict between subtasks",
-  outstandingBehaviorIds: ["B3"],
-  recommendedAction: "halt",
-  // WAVE-2: an irrecoverable blocker is an EXPLICIT P0 finding.
+// ---- AUDITOR fixtures (findings only) -------------------------------------
+
+// Audited-clean: an EXPLICIT empty findings list.
+export const cleanAudit: AuditAnswer = { findings: [] };
+
+// A blocking P1 finding.
+export const p1Audit: AuditAnswer = {
+  findings: [{ id: "missed-behavior-B2", severity: "P1", title: "B2 not implemented", body: "B2 is uncovered." }],
+};
+
+// An irrecoverable P0 finding.
+export const p0Audit: AuditAnswer = {
   findings: [
     { id: "subtask-conflict", severity: "P0", title: "Unrecoverable subtask conflict", body: "B3 conflicts." },
   ],
+};
+
+// A P2-only (non-blocking) finding.
+export const p2Audit: AuditAnswer = {
+  findings: [{ id: "polish-1", severity: "P2", title: "rename a var", body: "minor" }],
+};
+
+// ---- TRIAGE fixtures ------------------------------------------------------
+
+// Route every finding to a TASK in this spec (the loop then runs convergence).
+export const triageAllTasks: TriageAnswer = {
+  workItems: [
+    { id: "wi-1", kind: "task", severity: "P0", title: "fix the gap", body: "implement it", findingIds: ["f1"] },
+  ],
+};
+
+// Route every finding to a NEW SPEC (P3 leftover ⇒ velocity); the loop PASSES.
+export const triageAllSpecs: TriageAnswer = {
+  workItems: [
+    { id: "wi-spec", kind: "spec", severity: "P3", title: "polish later", body: "a follow-up", findingIds: ["f1"] },
+  ],
+};
+
+// ---- CONVERGENCE fixtures -------------------------------------------------
+
+export const convergenceProgress: ConvergenceAnswer = {
+  assessment: "progress",
+  reasoning: "fewer findings than last loop",
+};
+export const convergenceStalled: ConvergenceAnswer = { assessment: "stalled", reasoning: "same root cause recurs" };
+export const convergenceVelocity: ConvergenceAnswer = {
+  assessment: "velocity_defer",
+  reasoning: "only P3 left after several rounds",
+};
+
+// ---- DEMO-RUN fixtures ----------------------------------------------------
+
+export const demoClean: DemoRunAnswer = { findings: [], summary: "exercised the create+read flow successfully" };
+export const demoBroken: DemoRunAnswer = {
+  findings: [{ id: "create-fails", severity: "P0", title: "create endpoint 500s", body: "POST /x returns 500" }],
+  summary: "tried the create flow; it failed",
 };
 
 export function defaultLoopInput(overrides: Partial<SubtaskLoopInput> = {}): {
@@ -337,24 +357,25 @@ export function defaultLoopInput(overrides: Partial<SubtaskLoopInput> = {}): {
     adapters: {
       planner: makePlanner([buildPlan([{ title: "T1", intent: "Touch README", behaviorIds: ["B1"] }])]),
       writer: makeWriter(["diff --git README\n+ok\n"]),
-      checker: makeChecker([passingCheck]),
-      auditor: makeAuditor([passingAudit]),
+      checker: makeChecker([completeCheck]),
+      auditor: makeAuditor([cleanAudit]),
+      triage: makeTriage([triageAllTasks]),
+      convergence: makeConvergence([convergenceProgress]),
+      demoRun: makeDemoRun([demoClean]),
     },
     context: {
       runId: "run_test",
       specId: "spec_test",
       projectId: "project_test",
       specTitle: "Test spec",
-      specDescription: "exercise the planner loop",
+      specDescription: "exercise the spec loop",
       acceptanceCriteria: ["README mentions ok"],
       behaviorIds: ["B1"],
       behaviorContext: [{ id: "B1", title: "README mentions ok", description: "the README contains the string ok" }],
       workspacePath: "/workspace/runs/run_test/repo",
     },
     escapeHatches: {
-      maxPlannerRerunsPerSpec: 3,
       maxWriterIterPerSubtask: 5,
-      maxRetriesPerTransientFailure: 3,
     },
     timeoutMs: 1_000,
     ...overrides,

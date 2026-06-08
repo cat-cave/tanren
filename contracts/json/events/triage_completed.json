@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "items": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "findingIds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "task",
+              "spec"
+            ],
+            "type": "string"
+          },
+          "route": {
+            "enum": [
+              "task",
+              "spec"
+            ],
+            "type": "string"
+          },
+          "severity": {
+            "enum": [
+              "P0",
+              "P1",
+              "P2",
+              "P3"
+            ],
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "route",
+          "severity",
+          "title",
+          "findingIds"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "outcome": {
+      "enum": [
+        "passed",
+        "kept"
+      ],
+      "type": "string"
+    },
+    "runId": {
+      "type": "string"
+    },
+    "taskId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "runId",
+    "taskId",
+    "outcome",
+    "items"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.triage.completed"
+}

@@ -207,15 +207,28 @@ export const CheckerCompletedPayload = z
   })
   .strict();
 
+// SPEC-LOOP REDESIGN: the checker is COMPLETENESS-FINDINGS-ONLY (no binary
+// `passed`). `complete` is the deterministic loop's read (findings.length === 0);
+// `findings` is the emitted completeness list (all treated as P0). `reasoning` is the
+// narration; `behaviorIdsFailed` collects the downstream-blocked behaviors.
+const CheckerFindingPayload = z
+  .object({
+    id: z.string(),
+    title: z.string(),
+    body: z.string(),
+    behaviorId: z.string().nullable(),
+  })
+  .strict();
+
 export const CheckerVerdictPayload = z
   .object({
     runId: z.string(),
     taskId: z.string(),
     subtaskIndex: z.number().int(),
-    passed: z.boolean(),
+    complete: z.boolean(),
     reasoning: z.string(),
-    behaviorIdsPassed: z.array(z.string()),
     behaviorIdsFailed: z.array(z.string()),
+    findings: z.array(CheckerFindingPayload),
   })
   .strict();
 
@@ -249,10 +262,9 @@ export const AuditorCompletedPayload = z
   })
   .strict();
 
-// WAVE-2 / SLICE P-A: the explicit findings the auditor emits (the new
-// severity currency). Dual-emitted alongside the legacy verdict on
-// `auditor.verdict`; the DagLifecycle read model + `auditPosture` policy read
-// these directly (no inferred severity). Optional during the transition slice.
+// SPEC-LOOP REDESIGN: the auditor is FINDINGS-ONLY (no `passed`/`recommendedAction`).
+// The explicit P0–P3 findings list IS the verdict; the loop's triage + the project
+// posture decide what each severity means for the merge.
 const AuditorFindingPayload = z
   .object({
     id: z.string(),
@@ -266,13 +278,8 @@ const AuditorFindingPayload = z
 export const AuditorVerdictPayload = z
   .object({
     runId: z.string(),
-    passed: z.boolean(),
-    reasoning: z.string(),
-    outstandingBehaviorIds: z.array(z.string()),
-    recommendedAction: z.enum(["pass", "loop_to_planner", "halt"]),
-    // WAVE-2 dual-emit: the explicit P0–P3 findings list. Optional so a
-    // pre-slice replayed event still parses.
-    findings: z.array(AuditorFindingPayload).optional(),
+    // The explicit P0–P3 findings list — the SOLE audit currency. REQUIRED.
+    findings: z.array(AuditorFindingPayload),
   })
   .strict();
 
@@ -339,5 +346,95 @@ export const AuditorRejectedPayload = z
     reason: z.string(),
     outstandingBehaviorIds: z.array(z.string()),
     recommendedAction: z.enum(["loop_to_planner", "halt"]),
+  })
+  .strict();
+
+// ---- SPEC-LOOP REDESIGN stages: demo-run, triage, convergence -------------
+
+const SeverityFindingPayload = z
+  .object({
+    id: z.string(),
+    severity: z.enum(["P0", "P1", "P2", "P3"]),
+    title: z.string(),
+    body: z.string(),
+    fixHint: z.string().optional(),
+  })
+  .strict();
+
+export const DemoRunStartedPayload = z
+  .object({
+    taskKind: z.string(),
+  })
+  .strict();
+
+// demoRun.verdict: the optional "does the thing actually work" gate's findings +
+// the narration of what user-flow steps were exercised.
+export const DemoRunVerdictPayload = z
+  .object({
+    runId: z.string(),
+    summary: z.string(),
+    findings: z.array(SeverityFindingPayload),
+  })
+  .strict();
+
+export const TriageStartedPayload = z
+  .object({
+    taskKind: z.string(),
+  })
+  .strict();
+
+const TriageItemPayload = z
+  .object({
+    id: z.string(),
+    kind: z.enum(["task", "spec"]),
+    route: z.enum(["task", "spec"]),
+    severity: z.enum(["P0", "P1", "P2", "P3"]),
+    title: z.string(),
+    findingIds: z.array(z.string()),
+  })
+  .strict();
+
+// triage.completed: the deduped work items + their RESOLVED routes (task-here vs new
+// DAG spec) + the terminal outcome (`passed` when ALL items became specs, `kept` when
+// at least one routed to a task in this spec).
+export const TriageCompletedPayload = z
+  .object({
+    runId: z.string(),
+    taskId: z.string(),
+    outcome: z.enum(["passed", "kept"]),
+    items: z.array(TriageItemPayload),
+  })
+  .strict();
+
+export const ConvergenceStartedPayload = z
+  .object({
+    taskKind: z.string(),
+  })
+  .strict();
+
+// convergence.assessed: the answerer's progress/stall/velocity read + the loop's
+// applied decision (continue/pass/halt) + the consecutive-stall counter (the SOLE
+// loop bound; NOT a retry counter).
+export const ConvergenceAssessedPayload = z
+  .object({
+    runId: z.string(),
+    taskId: z.string(),
+    assessment: z.enum(["progress", "stalled", "velocity_defer"]),
+    decision: z.enum(["continue", "pass", "halt"]),
+    consecutiveStalls: z.number().int(),
+    maxConsecutiveStalls: z.number().int(),
+    reasoning: z.string(),
+  })
+  .strict();
+
+// convergence.stalled: the terminal HALT after `maxConsecutiveStalls` consecutive
+// stalls — the SOLE loop halt besides budget. A human action (rework the spec /
+// stronger model / fix the env) is the genuine next step.
+export const ConvergenceStalledPayload = z
+  .object({
+    runId: z.string(),
+    consecutiveStalls: z.number().int(),
+    maxConsecutiveStalls: z.number().int(),
+    reason: z.string(),
   })
   .strict();

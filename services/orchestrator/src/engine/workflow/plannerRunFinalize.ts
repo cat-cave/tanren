@@ -97,12 +97,13 @@ export async function setSpecStatus(
 }
 
 /** Maps a non-pass loop outcome to the persisted run.outcome value (all → halted). */
-export function runOutcomeFor(outcome: SubtaskLoopOutcome): "window_exhausted" | "retry_budget_exhausted" | "halted" {
+export function runOutcomeFor(outcome: SubtaskLoopOutcome): "window_exhausted" | "convergence_stalled" | "halted" {
   if (outcome.kind === "window_exhausted") {
     return "window_exhausted";
   }
-  if (outcome.kind === "retry_budget_exhausted") {
-    return "retry_budget_exhausted";
+  // SPEC-LOOP REDESIGN: the convergence-stall halt replaces the purged retry-cap halt.
+  if (outcome.kind === "convergence_stalled") {
+    return "convergence_stalled";
   }
   return "halted";
 }
@@ -111,7 +112,7 @@ export function runOutcomeFor(outcome: SubtaskLoopOutcome): "window_exhausted" |
 export async function finalizeNonPass(
   finalizeRunState: FinalizeRunState,
   runId: string,
-  outcome: "window_exhausted" | "retry_budget_exhausted" | "halted",
+  outcome: "window_exhausted" | "convergence_stalled" | "halted",
 ): Promise<void> {
   await finalizeRunState(
     "halted",
@@ -149,7 +150,7 @@ export async function parkSpecNeedsAttentionForHaltedRun(
   input: RunPlannerLoopInput,
   context: PlannerRunContext,
   appendEvent: <N extends EventName>(eventType: N, payload: EventPayload<N>, taskId?: string) => Promise<void>,
-  outcome: "window_exhausted" | "retry_budget_exhausted" | "halted" | "failed",
+  outcome: "window_exhausted" | "convergence_stalled" | "halted" | "failed",
 ): Promise<void> {
   // The spec is `in_flight` at every halted-run finalize site (the claim set it; the
   // rework re-entry re-set it), so this is the intended `in_flight → needs_attention`
@@ -180,7 +181,7 @@ export async function finalizeNonPassAndPark(
   finalizeRunState: FinalizeRunState,
   context: PlannerRunContext,
   appendEvent: <N extends EventName>(eventType: N, payload: EventPayload<N>, taskId?: string) => Promise<void>,
-  outcome: "window_exhausted" | "retry_budget_exhausted" | "halted",
+  outcome: "window_exhausted" | "convergence_stalled" | "halted",
 ): Promise<void> {
   await finalizeNonPass(finalizeRunState, context.runId, outcome);
   await parkSpecNeedsAttentionForHaltedRun(input, context, appendEvent, outcome);

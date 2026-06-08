@@ -37,6 +37,9 @@ export const RECOVERABLE_OUTCOMES = new Set([
   "halted",
   "escape_hatch_hit",
   "retry_budget_exhausted",
+  // SPEC-LOOP REDESIGN: a convergence-stall halt is recoverable (rework the spec /
+  // stronger model / fix the env, then re-run) — surfaced like the other halts.
+  "convergence_stalled",
   "window_exhausted",
 ]);
 
