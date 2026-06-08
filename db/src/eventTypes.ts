@@ -67,6 +67,7 @@ export const eventTypeNames = [
   "hello.ssh_completed",
   "hello.ssh_started",
   "hello.started",
+  "integration.proof.reused",
   "integration.provisioned",
   "integration.rebase",
   "issue.opened",

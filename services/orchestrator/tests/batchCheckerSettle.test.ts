@@ -12,7 +12,7 @@
 //   - a runner/clone/bootstrap fault → `infra-error` (a retriable HOLD, never a bisect).
 
 import type pg from "pg";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
 import { PgBatchChecker } from "../src/engine/merge/batchChecker.js";
 import type { AppendEventInput } from "../src/engine/eventStore.js";
@@ -302,6 +302,20 @@ function recordingRunStateWriter(): { writer: RunStateWriter; events: AppendEven
 }
 
 describe("PgBatchChecker — native gate on the integration ref (no-Actions delivery)", () => {
+  // These tests pin the FLAG-OFF (server-side `buildIntegrationBranch`) path — the
+  // kill-switch behavior. The flag-ON (default) §3 integration-node drive (jj-local
+  // integration + proof reuse) is asserted in batchIntegrationNodeDrive.test.ts and
+  // exercised live by apex. Set the kill-switch so this suite drives the server build.
+  let prev: string | undefined;
+  beforeAll(() => {
+    prev = process.env["INTEGRATION_NODES_DRIVE"];
+    process.env["INTEGRATION_NODES_DRIVE"] = "0";
+  });
+  afterAll(() => {
+    if (prev === undefined) delete process.env["INTEGRATION_NODES_DRIVE"];
+    else process.env["INTEGRATION_NODES_DRIVE"] = prev;
+  });
+
   it("an empty batch passes (the bisect lower-bound — the base is green)", async () => {
     const { checker } = makeChecker(INTEGRATED, new GateDrivingSsh(0));
     const verdict = await checker.checkBatch({ projectId: PROJECT, entries: [] });
