@@ -17,6 +17,8 @@ import { eventTypeNames } from "./eventTypes.js";
 import { stateEnumLists } from "./stateEnums.js";
 import {
   enumCheck,
+  integrationNodes,
+  integrationProofs,
   mergeQueue,
   organizations,
   postMergeIssueClaims,
@@ -30,7 +32,18 @@ import {
 // sub-schema files can reference them without importing schema.ts (see
 // schemaCore.ts for the cycle-avoidance rationale). Re-exported here so
 // consumers + the migration generator still see one `schema.*` namespace.
-export { enumCheck, mergeQueue, organizations, postMergeIssueClaims, projects, runs, specs, users };
+export {
+  enumCheck,
+  integrationNodes,
+  integrationProofs,
+  mergeQueue,
+  organizations,
+  postMergeIssueClaims,
+  projects,
+  runs,
+  specs,
+  users,
+};
 
 export const tasks = pgTable(
   "tasks",
