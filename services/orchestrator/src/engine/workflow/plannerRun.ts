@@ -403,6 +403,11 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
         title: `Tanren: ${context.specTitle}`,
         body: context.specDescription,
         githubCredentialRef: context.githubCredentialRef,
+        // App-aware PR publication: when the org installed the App (githubCredentialRef
+        // is the empty sentinel), the push/PR-create must mint the App token — thread
+        // the installation + minter exactly as the clone path does (plannerRunWorkspace).
+        ...(context.installation !== undefined && { installation: context.installation }),
+        ...(input.githubAppMinter !== undefined && { githubAppMinter: input.githubAppMinter }),
         timeoutMs: input.timeoutMs,
       });
       // THE MERGE AUTHORITY (native delivery): run the `pre_merge` gate on the live
