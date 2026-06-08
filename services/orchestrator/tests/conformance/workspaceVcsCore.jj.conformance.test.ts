@@ -169,4 +169,49 @@ describe("JjWorkspaceVcsCore real-jj regressions", () => {
     await core.branch(ws, "feature", "main");
     await expect(core.commit(ws, "work")).resolves.toBeDefined();
   });
+
+  // §5-P1: an INFRA failure enumerating the conflicted paths of a CONFLICTED rev must be
+  // a LOUD THROW — never a silent degrade to empty paths (which `gather()` would read as
+  // `files: []`, a false-clean merge). The `|| true` that once swallowed this is removed.
+  it("rebaseOnto THROWS when conflicted-path enumeration fails (infra) — never empty paths", async () => {
+    const fixture = makeGitFixture();
+    const scratch = mkdtempSync(join(tmpdir(), "tanren-jj-ws-"));
+    // The real conflict is recorded by jj; ONLY the `jj resolve --list` enumeration is
+    // failed (a simulated runner/infra fault), so the rev IS conflicted but its paths
+    // cannot be read. The impl must throw, not return `paths: []`.
+    const core = new JjWorkspaceVcsCore({
+      substrate: new ResolveListFailingSubstrate(),
+      target: LOCAL_HANDLE,
+      timeoutMs: 60_000,
+      refResolver: jjRefResolver,
+      workingEdit: jjWorkingEdit,
+    });
+    const remapped = new PathRemappingJjCore(core, fixture.originPath, scratch);
+    const ws = await remapped.openWorkspace({ repoUrl: "https://example.com/o/r.git", baseBranch: "main", path: "/w" });
+    await remapped.branch(ws, "feature", "main");
+    await remapped.commit(ws, "work");
+
+    await expect(remapped.rebaseOnto(ws, "feature", "conflict-base-sha")).rejects.toThrow(
+      /enumerate conflicted paths|infra|runner/iu,
+    );
+  });
 });
+
+// A LocalCommandSubstrate that injects an INFRA failure ONLY on the `jj resolve --list`
+// enumeration command (a simulated runner/exec fault), leaving every other jj command
+// real. Proves the §5-P1 fail-closed: a conflicted rev whose path enumeration fails is a
+// LOUD throw, not empty paths. cwd-isolated like its parent.
+class ResolveListFailingSubstrate extends LocalCommandSubstrate {
+  override async run(handle: typeof LOCAL_HANDLE, command: Parameters<LocalCommandSubstrate["run"]>[1]) {
+    if (command.command.includes("jj resolve --list")) {
+      return {
+        exitCode: null,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        failure: { kind: "ssh_failed" as const, target: "local", message: "simulated runner failure" },
+      };
+    }
+    return super.run(handle, command);
+  }
+}

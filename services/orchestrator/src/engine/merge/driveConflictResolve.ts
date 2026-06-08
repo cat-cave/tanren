@@ -39,10 +39,6 @@ import { migrateProjectConfig } from "../config/projectConfig.js";
 import { installationFromOrgConfig, type OrgGithubAppInstallation } from "../config/orgConfig.js";
 import { buildEffectiveRouting } from "../worker/runExecutionContext.js";
 import { resolveCredentialsForRun } from "../credentials/resolveCredentials.js";
-import { githubHttpsRemote, parseGitHubRepository } from "../providers/github.js";
-import { gitAuthedCommand, gitTokenAuthPrelude } from "../workspace/githubPush.js";
-import { quoteSshShellArg } from "../ssh/command.js";
-import { runWorkspaceSshCommand, workspaceRepoPathForRun } from "../workspace/index.js";
 import {
   advisoryStepNamesForPosture,
   type GateOutcome,
@@ -52,6 +48,7 @@ import {
 import { buildAdaptersFromRouting } from "../providers/adapterSelector.js";
 import { buildDefaultConflictResolver } from "../workflow/reviewMerge/conflictResolver/index.js";
 import { driveResolveOverJj } from "./driveConflictResolveJj.js";
+import { driveResolveOverGit } from "./driveConflictResolveGit.js";
 import { conflictResolverJjLive } from "./conflictResolverJjFlag.js";
 import type { WorkspaceConflictApplier } from "../contracts/conflictResolution.js";
 import type { ConflictResolverHook } from "../workflow/reviewMerge/index.js";
@@ -195,7 +192,7 @@ export function buildDriveConflictResolve(deps: DriveConflictResolveDeps): Confl
     // wrapper is asserted identically under BOTH flag states.
     const result =
       deps.buildResolver !== undefined || !conflictResolverJjLive()
-        ? await driveResolveOverGit(deps, ctx, conflictContext)
+        ? await driveResolveViaGit(deps, ctx, conflictContext)
         : await driveResolveViaJj(deps, ctx, conflictContext);
 
     // RESOLVED → the merge retries + lands (autonomous). UNRESOLVED → the resolver
@@ -245,49 +242,38 @@ async function driveResolveViaJj(
 
 /**
  * The git-clone + `SshWorkspaceConflictApplier` drive resolve — the kill-switch path
- * (`CONFLICT_RESOLVER_JJ_LIVE=0`), the pre-cutover mechanism unchanged.
+ * (`CONFLICT_RESOLVER_JJ_LIVE=0`), the pre-cutover mechanism unchanged. Delegates to the
+ * extracted `driveResolveOverGit` (allocate + clone-head + release), threading the
+ * `buildResolver` TEST SEAM when present (production assembles the real resolver).
  */
-async function driveResolveOverGit(
+async function driveResolveViaGit(
   deps: DriveConflictResolveDeps,
   ctx: DriveRunContext,
   conflictContext: Parameters<ConflictResolverHook>[0],
 ): Promise<{ resolved: boolean }> {
-  const resolverHandle = `${deps.facts.runId}-resolve-${crypto.randomUUID()}`;
-  const allocation = await deps.allocator.allocate({
-    // Runless: use a synthetic naming handle so retained `runner_${runId}` rows
-    // from the original run cannot collide with this short-lived resolver.
-    runId: resolverHandle,
-    projectId: deps.facts.projectId,
-    runnerImage: ctx.runnerImage,
-    identitySecretRef: deps.identitySecretRef,
-    orgId: deps.facts.orgId,
-    runless: true,
-    persistedRunId: null,
-    persistedProjectId: deps.facts.projectId,
-  });
-  const workspacePath = workspaceRepoPathForRun(resolverHandle);
-  try {
-    // Clone the HEAD (PR) branch into the workspace; the resolver's
-    // SshWorkspaceConflictApplier.gather() then merges base INTO it to surface
-    // the conflict hunks (it needs the head checked out as HEAD).
-    const baseSha = await cloneHeadForResolve(deps, ctx, allocation.target, workspacePath);
-    const resolver = (deps.buildResolver ?? ((t, w, b) => buildResolverForDrive(deps, ctx, t, w, b)))(
-      allocation.target,
-      workspacePath,
-      baseSha,
-    );
-    return await resolver(conflictContext);
-  } finally {
-    // LOUD on release error: a leaked runner is a real fault (cost + capacity), so
-    // surface it rather than swallow it (no silent leak).
-    await deps.allocator.release(allocation.runnerId, "completed").catch((error: unknown) => {
-      console.error(
-        `[merge-coordinator] FAILED to release drive-path resolver runner ${allocation.runnerId} for run ${deps.facts.runId} — leaked runner:`,
-        error,
-      );
-      throw error;
-    });
-  }
+  return driveResolveOverGit(
+    {
+      facts: {
+        orgId: deps.facts.orgId,
+        projectId: deps.facts.projectId,
+        runId: deps.facts.runId,
+        repoUrl: ctx.repoUrl,
+        headBranch: ctx.headBranch,
+        runnerImage: ctx.runnerImage,
+        ...(ctx.installation !== undefined && { installation: ctx.installation }),
+        githubCredentialRef: deps.facts.githubCredentialRef,
+        identitySecretRef: deps.identitySecretRef,
+      },
+      allocator: deps.allocator,
+      ssh: deps.ssh,
+      secrets: deps.secrets,
+      vcsProvider: deps.vcsProvider,
+      ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
+      timeoutMs: deps.timeoutMs,
+      buildResolver: deps.buildResolver ?? ((t, w, b) => buildResolverForDrive(deps, ctx, t, w, b)),
+    },
+    conflictContext,
+  );
 }
 
 /**
@@ -386,76 +372,6 @@ async function loadDriveRunContext(deps: DriveConflictResolveDeps): Promise<Driv
     ...(installation !== undefined && { installation }),
     governancePosture: projectConfig.governancePosture,
   };
-}
-
-/**
- * Clone the PR HEAD branch into the runner workspace so the resolver's applier can
- * merge base INTO it to surface the hunks. Authenticates App-first (the same seam
- * the run-loop clone uses) so a PRIVATE target clones; returns the clone HEAD as
- * the diff base the re-gate reasons against. Reuses the run-loop clone primitives
- * (gitTokenAuthPrelude / gitAuthedCommand) so the token never hits the command line.
- */
-async function cloneHeadForResolve(
-  deps: DriveConflictResolveDeps,
-  ctx: DriveRunContext,
-  target: RunnerHandle,
-  workspacePath: string,
-): Promise<string> {
-  const staticRef = deps.facts.githubCredentialRef;
-  const token =
-    ctx.installation === undefined && staticRef.trim() === ""
-      ? undefined
-      : (
-          await deps.vcsProvider.resolveToken({
-            secrets: deps.secrets,
-            ...(ctx.installation !== undefined && { installation: ctx.installation }),
-            ...(staticRef.trim() !== "" && { staticRef }),
-            ...(deps.githubAppMinter !== undefined && { minter: deps.githubAppMinter }),
-          })
-        ).token;
-  const result = await runWorkspaceSshCommand(deps.ssh, target, {
-    label: "prepare conflict-resolve workspace",
-    timeoutMs: deps.timeoutMs,
-    command: buildCloneHeadCommand(ctx.repoUrl, ctx.headBranch, token, workspacePath),
-    ...(token === undefined ? {} : { stdin: token }),
-  });
-  return result.stdout.trim();
-}
-
-/** The git clone of the HEAD branch (authenticated via stdin when a token is present). */
-function buildCloneHeadCommand(
-  repoUrl: string,
-  headBranch: string,
-  token: string | undefined,
-  workspacePath: string,
-): string {
-  const branch = quoteSshShellArg(headBranch);
-  const dest = quoteSshShellArg(workspacePath);
-  // Configure a non-attributable resolver identity for the in-progress merge
-  // commit (the resolution is published on the PR branch, attributed by the push
-  // token's account; the local commit author is set by the applier's publish step).
-  const post = [
-    `cd ${dest}`,
-    "git config user.name 'Tanren Conflict Resolver'",
-    "git config user.email 'resolver@tanren.invalid'",
-    "git rev-parse HEAD",
-  ];
-  if (token === undefined) {
-    return [
-      "set -eu",
-      `rm -rf ${dest}`,
-      `git clone --branch ${branch} ${quoteSshShellArg(repoUrl)} ${dest}`,
-      ...post,
-    ].join(" && ");
-  }
-  const remote = quoteSshShellArg(githubHttpsRemote(parseGitHubRepository(repoUrl)));
-  return [
-    "set -eu",
-    ...gitTokenAuthPrelude(),
-    `rm -rf ${dest}`,
-    gitAuthedCommand(["clone", "--branch", branch, remote, dest]),
-    ...post,
-  ].join(" && ");
 }
 
 /**

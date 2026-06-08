@@ -327,10 +327,42 @@ export class JjWorkspaceVcsCore implements WorkspaceVcsCore {
 
   // The conflicted paths on `branch`, read from `jj resolve --list -r <branch>` (jj
   // 0.42 accepts the revset directly — no `jj edit` side-effect). Each line is
-  // `<path>    <kind>`; we take the leading path token. No conflicts ⇒ jj exits
-  // nonzero with "No conflicts found", which we tolerate as an empty list.
+  // `<path>    <kind>`; we take the leading path token.
+  //
+  // FAIL-CLOSED (§5-P1): NO blanket `|| true`. `conflictedPaths` is only reached when the
+  // rev IS conflicted (recordedConflict gated on the `conflict` template), so an empty
+  // path enumeration must NEVER silently degrade `gather()` to `files: []` (a false-clean
+  // merge). We distinguish jj's BENIGN no-conflict signal — exit 2 with the exact
+  // "No conflicts found at this revision" on stderr — from an INFRA/runner failure:
+  //   - a substrate-level `failure` (ssh/exec died) ⇒ LOUD THROW;
+  //   - the benign no-conflict signal here is a CONTRADICTION (the conflict template said
+  //     conflicted, resolve --list says none) ⇒ LOUD THROW (never empty paths);
+  //   - any other nonzero exit ⇒ LOUD THROW (a real enumeration failure);
+  //   - exit 0 ⇒ parse the path lines.
   private async conflictedPaths(path: string, branch: string): Promise<string[]> {
-    const result = await this.runJjRaw(path, [`jj resolve --list -r ${quoteSshShellArg(branch)} 2>/dev/null || true`]);
+    const result = await this.runJjRaw(path, [`jj resolve --list -r ${quoteSshShellArg(branch)}`]);
+    if (result.failure !== undefined || result.timedOut) {
+      const detail =
+        result.failure === undefined
+          ? "timed out"
+          : "message" in result.failure
+            ? result.failure.message
+            : result.failure.reason;
+      throw new Error(
+        `jj resolve --list -r ${branch} failed to enumerate conflicted paths on a conflicted rev (infra/runner failure): ${detail}`,
+      );
+    }
+    if (result.exitCode !== 0) {
+      // A conflicted rev whose path enumeration reports "no conflicts" is a CONTRADICTION
+      // (we only got here because the conflict template said conflicted) — never degrade
+      // to empty paths; surface it loudly. Any other nonzero exit is a real failure.
+      const benignNoConflicts = /No conflicts found at this revision/u.test(result.stderr);
+      throw new Error(
+        benignNoConflicts
+          ? `jj reported ${branch} as conflicted but resolve --list found NO conflicts — refusing to degrade to empty conflicted paths (a false-clean would merge)`
+          : `jj resolve --list -r ${branch} exited ${result.exitCode ?? "null"} enumerating conflicted paths: ${result.stderr.trim()}`,
+      );
+    }
     return result.stdout
       .split("\n")
       .map((line) => line.trim())
