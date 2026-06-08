@@ -117,9 +117,12 @@ describe("bootstrap-artifact isolation", () => {
   it("(b) prepares the PR branch by dropping the bootstrap commit, keeping the writer's", async () => {
     // prepareCleanPrBranch replays the writer commits (bootstrapSha..HEAD) onto
     // the clone HEAD into PR_CLEAN_REF, so the pushed branch carries only the
-    // writer's changes — the bootstrap commit (and its artifacts) is dropped.
-    const ssh = new ScriptedSsh([{ match: "git rev-parse HEAD", stdout: `${WRITER_SHA}\n` }]);
-    const pushRef = await prepareCleanPrBranch({
+    // writer's changes — the bootstrap commit (and its artifacts) is dropped. The
+    // trailing `git rev-parse PR_CLEAN_REF` echoes the cleaned tip (the future PR
+    // head) as the command's stdout — the COMMIT-BINDING sha the merge gate anchors on.
+    const CLEAN_SHA = "4".repeat(40);
+    const ssh = new ScriptedSsh([{ match: "git rebase --onto", stdout: `${CLEAN_SHA}\n` }]);
+    const pushSource = await prepareCleanPrBranch({
       ssh,
       target,
       workspacePath,
@@ -128,7 +131,9 @@ describe("bootstrap-artifact isolation", () => {
       timeoutMs,
     });
 
-    expect(pushRef).toBe(PR_CLEAN_REF);
+    // The ref pushed AND the exact sha it resolves to (the PR head the gate binds to).
+    expect(pushSource.ref).toBe(PR_CLEAN_REF);
+    expect(pushSource.headSha).toBe(CLEAN_SHA);
     const cmd = ssh.commands[0] ?? "";
     // Replay writer commits onto the clone HEAD, dropping the bootstrap commit.
     expect(cmd).toContain(`git rebase --onto '${CLONE_HEAD}' '${BOOTSTRAP_SHA}'`);
@@ -136,32 +141,41 @@ describe("bootstrap-artifact isolation", () => {
     // (so a review-rework re-entry keeps its bootstrapSha diff base intact).
     expect(cmd).toContain(`git update-ref '${PR_CLEAN_REF}' HEAD`);
     expect(cmd).toContain('git checkout --quiet --detach "$orig_head"');
+    // The cleaned tip is echoed LAST so it is the command's stdout (the PR-head sha).
+    expect(cmd).toContain(`git rev-parse '${PR_CLEAN_REF}'`);
   });
 
   it("(b) no-ops the PR-branch cleanup when there is no real bootstrap commit", async () => {
     // Fake-SSH unit paths yield empty shas (and the no-bootstrap case yields a
-    // bootstrapSha equal to the clone HEAD) — nothing to drop, push the HEAD.
-    const ssh = new ScriptedSsh([]);
+    // bootstrapSha equal to the clone HEAD) — nothing to drop, push the working HEAD.
+    // The helper STILL resolves the working HEAD sha (a single `git rev-parse HEAD`)
+    // so the merge gate can bind its verdict to the exact pushed commit.
     const empty = await prepareCleanPrBranch({
-      ssh,
+      ssh: new ScriptedSsh([]),
       target,
       workspacePath,
       cloneHeadSha: "",
       bootstrapSha: "",
       timeoutMs,
     });
-    expect(empty).toBe("HEAD");
+    // No real workspace on a fake SSH ⇒ "" sha (the gate emits no verdict).
+    expect(empty.ref).toBe("HEAD");
+    expect(empty.headSha).toBe("");
 
+    const equalSsh = new ScriptedSsh([{ match: "git rev-parse HEAD", stdout: `${WRITER_SHA}\n` }]);
     const equal = await prepareCleanPrBranch({
-      ssh,
+      ssh: equalSsh,
       target,
       workspacePath,
       cloneHeadSha: CLONE_HEAD,
       bootstrapSha: CLONE_HEAD,
       timeoutMs,
     });
-    expect(equal).toBe("HEAD");
-    // No git ran in either no-op case.
-    expect(ssh.commands).toHaveLength(0);
+    // No bootstrap commit to drop, but the working HEAD IS the PR head — its sha is
+    // resolved so the merge gate binds to it (rather than re-resolving the same HEAD).
+    expect(equal.ref).toBe("HEAD");
+    expect(equal.headSha).toBe(WRITER_SHA);
+    // Only the single rev-parse ran (no rebase) in the no-drop case.
+    expect(equalSsh.commands).toEqual(["git rev-parse HEAD"]);
   });
 });

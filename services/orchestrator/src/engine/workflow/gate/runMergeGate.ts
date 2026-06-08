@@ -22,11 +22,16 @@ import type { GateOutcome } from "./runGateForWhen.js";
  * from the run loop's merge-decision point.
  */
 export async function runNativeMergeGate(input: {
-  runGate: (gate: { when: CiWhen; taskId?: string }) => Promise<GateOutcome>;
+  runGate: (gate: { when: CiWhen; taskId?: string; headShaOverride?: string }) => Promise<GateOutcome>;
   taskId?: string;
+  // COMMIT-BINDING (§5): the PUSHED PR head sha the `pre_merge` verdict must anchor on
+  // (the cleaned ref, not the workspace HEAD). Absent ⇒ the gate resolves the workspace
+  // HEAD itself (the fake-SSH unit path / a caller without a separate PR head).
+  headShaOverride?: string;
 }): Promise<GateOutcome> {
   return input.runGate({
     when: "pre_merge",
     ...(input.taskId === undefined ? {} : { taskId: input.taskId }),
+    ...(input.headShaOverride === undefined ? {} : { headShaOverride: input.headShaOverride }),
   });
 }

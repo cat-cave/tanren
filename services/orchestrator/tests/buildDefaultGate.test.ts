@@ -56,6 +56,10 @@ interface WorkspaceState {
   // How many times the deps-ensure install actually ran (manifest present). The
   // P0 fix re-runs the install every gate, so this counts each gate's ensure.
   installRuns: number;
+  // The workspace HEAD sha `git rev-parse HEAD` returns — the verdict anchor the
+  // gate uses ABSENT a headShaOverride. Absent ⇒ "" ⇒ no verdict event (the existing
+  // tests don't assert on the verdict; only the commit-binding test sets it).
+  workspaceHead?: string;
 }
 
 // Interprets the small command vocabulary buildDefaultGate issues over SSH:
@@ -71,6 +75,10 @@ class InterpretingSsh implements CommandSubstrate {
     const ok = { exitCode: 0, stdout: "", stderr: "", timedOut: false };
     // tanren-ci.yml read (`if [ -f .../tanren-ci.yml ]; then cat ...; fi`): no file.
     if (cmd.includes("tanren-ci.yml")) return ok;
+    // The verdict-anchor read: the workspace HEAD the gate binds gate.verdict to
+    // when no headShaOverride is given. A configured `workspaceHead` lets the
+    // commit-binding test prove the override is preferred over THIS sha.
+    if (cmd === "git rev-parse HEAD") return { ...ok, stdout: `${this.state.workspaceHead ?? ""}\n` };
     // The deps-ensure guard, recognized by its sentinel marker. The P0 guard runs
     // the install WHENEVER a manifest exists (it no longer probes node_modules), so
     // it installs even when node_modules is already present — re-running every gate.
@@ -260,5 +268,63 @@ describe("buildDefaultGate — lenient posture", () => {
     expect(outcome.passed).toBe(false);
     expect(events.events.some((e) => e.eventType === "gate.failed")).toBe(true);
     expect(events.events.some((e) => e.eventType === "gate.advisory_failed")).toBe(false);
+  });
+});
+
+// COMMIT-BINDING (the gate↔land TOCTOU guard, tanren-owns-the-engine.md §5): the
+// `pre_merge` merge gate runs on the live workspace whose HEAD is left at the WRITER
+// TIP (bootstrap commit and all), but the PR was pushed from the CLEANED ref (bootstrap
+// dropped) — a DIFFERENT sha. The merge authority resolves the landing head from the
+// forge PR head, so the `gate.verdict` MUST be anchored on the PUSHED PR head, not the
+// workspace HEAD, or `gatedHeadSha != landing head` blocks the merge forever. The gate
+// honors a `headShaOverride` for exactly this — these tests prove it is preferred over
+// (and the workspace-HEAD read is the absent-override default of) the verdict anchor.
+describe("buildDefaultGate — gate.verdict commit-binding (headShaOverride)", () => {
+  // WORKSPACE_HEAD = the writer tip (with the bootstrap commit); PR_HEAD = the cleaned
+  // ref the PR was pushed from (bootstrap dropped) — the commit the authority lands.
+  const WORKSPACE_HEAD = "a".repeat(40);
+  const PR_HEAD = "b".repeat(40);
+
+  it("anchors the pre_merge gate.verdict on the PUSHED PR head when a headShaOverride is given (not the workspace HEAD)", async () => {
+    const state: WorkspaceState = {
+      manifest: true,
+      nodeModules: false,
+      lintExit: 0,
+      installRuns: 0,
+      workspaceHead: WORKSPACE_HEAD,
+    };
+    const ssh = new InterpretingSsh(state);
+    const events = new FakeEventStore();
+    const gate = buildDefaultGate(gateInput(ssh, context({ greenfield: true })), target, workspacePath, events);
+
+    // The merge authority calls the closure with the PUSHED PR head (the cleaned ref).
+    const outcome = await gate({ when: "pre_merge", headShaOverride: PR_HEAD });
+
+    expect(outcome.passed).toBe(true);
+    const verdict = events.events.find((e) => e.eventType === "gate.verdict");
+    expect(verdict).toBeDefined();
+    // The verdict is bound to the PR head (what the authority lands), NOT the writer tip.
+    expect((verdict!.payload as { headSha: string }).headSha).toBe(PR_HEAD);
+    expect((verdict!.payload as { headSha: string }).headSha).not.toBe(WORKSPACE_HEAD);
+  });
+
+  it("falls back to the workspace HEAD as the verdict anchor when no override is given (per_iteration / pre_audit)", async () => {
+    const state: WorkspaceState = {
+      manifest: true,
+      nodeModules: false,
+      lintExit: 0,
+      installRuns: 0,
+      workspaceHead: WORKSPACE_HEAD,
+    };
+    const ssh = new InterpretingSsh(state);
+    const events = new FakeEventStore();
+    const gate = buildDefaultGate(gateInput(ssh, context({ greenfield: true })), target, workspacePath, events);
+
+    // The writer-loop gates (no override) bind the verdict to the live workspace HEAD.
+    await gate({ when: "per_iteration" });
+
+    const verdict = events.events.find((e) => e.eventType === "gate.verdict");
+    expect(verdict).toBeDefined();
+    expect((verdict!.payload as { headSha: string }).headSha).toBe(WORKSPACE_HEAD);
   });
 });
