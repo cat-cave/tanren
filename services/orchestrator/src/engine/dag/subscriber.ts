@@ -37,17 +37,7 @@ import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { SpeculativeIntegrator } from "../contracts/speculativeIntegrator.js";
 import { isTerminalStatus } from "../benchmark/runnerDb.js";
 import type { ChangePercolationCoordinator } from "./percolation.js";
-import type { SpecStrandReconcilerContract } from "../contracts/specStrandReconciler.js";
 import { buildDagWalker, listWalkableProjectIds } from "./walker.js";
-
-/**
- * The PERIODIC backstop cadence (ms): how often the strand reconciler re-checks
- * every project even with NO new notification. A strand by definition has no live
- * run, so its `tanren_run` channel never fires again — the timer is the only thing
- * that re-detects it. Low-frequency on purpose (it's a safety net, not the primary
- * heal path: the in-chain reconcile already runs on every walk).
- */
-const STRAND_BACKSTOP_INTERVAL_MS = 60_000;
 
 export interface DagWalkerSubscriberDeps {
   pool: pg.Pool;
@@ -74,24 +64,6 @@ export interface DagWalkerSubscriberDeps {
    * so a freshly-enqueued dependent's SHAs are already recorded before detection.
    */
   percolation?: ChangePercolationCoordinator;
-  /**
-   * NEVER-STRAND safety net: the strand reconciler that, after the walk + the
-   * percolation pass, detects any spec stuck OCCUPYING A SLOT with no live run (the
-   * recurring stranding bug) and re-enqueues it (bounded escalation to
-   * needs_attention). It runs LAST in the chain so percolation owns any spec whose
-   * marker points at a LIVE run (the condition-4 hand-off); the reconciler only acts
-   * on what neither the walk nor percolation legitimately claimed. Optional — a test
-   * asserting walk/percolate alone omits it; the worker boot always supplies it. When
-   * present, the subscriber ALSO arms a low-frequency periodic backstop so a strand
-   * self-heals even with no new notification (a strand emits no `tanren_run` wake).
-   */
-  reconciler?: SpecStrandReconcilerContract;
-  /**
-   * Injectable backstop interval (ms) — defaults to {@link STRAND_BACKSTOP_INTERVAL_MS}.
-   * A test sets it small (or drives the timer with fake timers) to assert the periodic
-   * self-heal without waiting a real minute.
-   */
-  strandBackstopIntervalMs?: number;
   /**
    * Plane-split (autonomy loops): the control-plane run-state writer. When present
    * (remote-writes on), the production walker routes its run-CREATION
@@ -140,14 +112,6 @@ export class DagWalkerSubscriber {
   // once and never drop a trigger that arrived mid-walk.
   private readonly inFlight = new Map<string, Promise<void>>();
   private readonly reWalkPending = new Set<string>();
-  /**
-   * The periodic strand-backstop timer (the NEVER-STRAND safety net). Armed once on
-   * start when a `reconciler` is wired; on each tick it re-walks EVERY project so a
-   * strand (which emits no `tanren_run` wake) still self-heals. IDEMPOTENT (at most
-   * one timer), `.unref()`'d (never keeps the event loop alive on its own), and
-   * cleared on `stop()`.
-   */
-  private strandBackstopTimer: ReturnType<typeof setInterval> | undefined;
 
   constructor(private readonly deps: DagWalkerSubscriberDeps) {
     this.walker = deps.walker ?? this.buildProductionWalker();
@@ -180,24 +144,6 @@ export class DagWalkerSubscriber {
   async start(): Promise<void> {
     void this.subscribeInBackground();
     void this.driveAllProjects();
-    this.armStrandBackstop();
-  }
-
-  /**
-   * Arm the periodic strand-backstop (only when a reconciler is wired). Each tick
-   * re-walks every project through the coalescing guard, so a strand — which never
-   * fires another `tanren_run` wake — still self-heals. Idempotent (never stacks),
-   * `.unref()`'d (does not keep the process alive), and cleared on `stop()`.
-   */
-  private armStrandBackstop(): void {
-    if (this.deps.reconciler === undefined || this.strandBackstopTimer !== undefined || this.stopped) return;
-    const intervalMs = this.deps.strandBackstopIntervalMs ?? STRAND_BACKSTOP_INTERVAL_MS;
-    const timer = setInterval(() => {
-      if (this.stopped) return;
-      void this.driveAllProjects();
-    }, intervalMs);
-    timer.unref?.();
-    this.strandBackstopTimer = timer;
   }
 
   /** Subscribe to both wake channels off the boot path; tolerant of a not-yet-ready DB. */
@@ -251,10 +197,6 @@ export class DagWalkerSubscriber {
     while (this.unsubscribes.length > 0) {
       this.unsubscribes.pop()?.();
     }
-    if (this.strandBackstopTimer !== undefined) {
-      clearInterval(this.strandBackstopTimer);
-      this.strandBackstopTimer = undefined;
-    }
   }
 
   /** Handle one `tanren_run` wake: walk the run's project only when it terminated. */
@@ -299,27 +241,18 @@ export class DagWalkerSubscriber {
     do {
       this.reWalkPending.delete(projectId);
       await this.walker.walk(projectId);
-      // walk → baseShift → reconcile (tanren-owns-the-engine.md §3/§7): after the walk
-      // (so any just-enqueued speculative dependent's integrated SHAs are already
-      // recorded), the change-percolation coordinator detects ancestor changes under
-      // in-flight dependents and routes each through the ONE base-shift handler
+      // walk → baseShift (tanren-owns-the-engine.md §3/§7): after the walk (so any
+      // just-enqueued speculative dependent's integrated SHAs are already recorded),
+      // the change-percolation coordinator detects ancestor changes under in-flight
+      // dependents and routes each through the ONE base-shift handler
       // (`BaseShiftCoordinator.rebaseOnto`) — a never-discard REBASE of the dependent's
       // existing run/branch in place, NOT the deleted supersede+regenerate. A failure
       // is logged, never fatal to the walk loop — the next notification re-detects.
+      // (No strand reconciler: never-discard rebase keeps the run row, so a spec can
+      // no longer be stranded with no live run — the §7 deletion.)
       if (this.deps.percolation !== undefined) {
         await this.deps.percolation.percolate(projectId).catch((error: unknown) => {
           console.error(`[dag-walker] change-percolation pass failed for project ${projectId}:`, error);
-        });
-      }
-      // NEVER-STRAND: AFTER the walk + the percolation pass (so percolation owns any
-      // spec whose marker points at a LIVE run — the condition-4 hand-off), the
-      // reconciler re-enqueues any spec stranded OCCUPYING A SLOT with no live run
-      // (bounded escalation to needs_attention). It runs LAST so it only acts on what
-      // neither the walk nor percolation legitimately claimed. A failure is logged,
-      // never fatal — the next notification (or the periodic backstop) re-detects.
-      if (this.deps.reconciler !== undefined) {
-        await this.deps.reconciler.reconcile(projectId).catch((error: unknown) => {
-          console.error(`[dag-walker] strand-reconciler pass failed for project ${projectId}:`, error);
         });
       }
     } while (this.reWalkPending.has(projectId));

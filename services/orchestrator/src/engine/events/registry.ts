@@ -143,7 +143,6 @@ import {
   DagSpecPercolationReplanPayload,
   DagSpecSpeculationHeldPayload,
   DagSpecSpeculativePayload,
-  DagSpecUnstrandedPayload,
   IntegrationRebasePayload,
 } from "./schemas/dag.js";
 
@@ -414,11 +413,11 @@ export const EventRegistry = {
   // rebasing the dependent's EXISTING branch in place (same run row) instead of the
   // old supersede+regenerate. The `rebase_vs_rebuild` instrumentation Wave 3 reads.
   "integration.rebase": IntegrationRebasePayload,
-  // NEVER-STRAND reconciler (the DAG self-heal safety net): a spec stuck OCCUPYING
-  // A SLOT with no live run was re-enqueued (dag.spec.unstranded), or — once it
-  // exceeded the bounded re-enqueue cap — escalated to the terminal needs_attention
-  // status (dag.spec.needs_attention), so the DAG either advances or asks loudly.
-  "dag.spec.unstranded": DagSpecUnstrandedPayload,
+  // A spec parked at the terminal needs_attention status (the DAG frees its slot +
+  // blocks only its dependents, asking a human loudly). Reached by the native merge
+  // queue's conflict resolver when two intents are genuinely irreconcilable
+  // (source: merge_conflict). (The never-strand reconciler's strand source is gone —
+  // §7: never-discard rebase keeps the run row, so a spec can no longer be stranded.)
   "dag.spec.needs_attention": DagSpecNeedsAttentionPayload,
   // The human-in-the-loop resolution of a needs_attention escalation: the operator
   // addressed the blocker and re-queued the spec (needs_attention → open), resetting

@@ -289,7 +289,6 @@ function recordingRunStateWriter(): { writer: RunStateWriter; events: AppendEven
     setRunStatus: () => unexpectedWriterMethod("setRunStatus"),
     setRunPrUrl: () => unexpectedWriterMethod("setRunPrUrl"),
     setSpecStatus: () => unexpectedWriterMethod("setSpecStatus"),
-    reconcileStrandedSpec: () => unexpectedWriterMethod("reconcileStrandedSpec"),
     setSpecMetadata: () => unexpectedWriterMethod("setSpecMetadata"),
     setRunSpeculativeBase: () => unexpectedWriterMethod("setRunSpeculativeBase"),
     setRunPercolationReexecId: () => unexpectedWriterMethod("setRunPercolationReexecId"),
