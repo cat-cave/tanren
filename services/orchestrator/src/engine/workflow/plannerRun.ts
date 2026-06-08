@@ -1,13 +1,10 @@
-// The real planner-loop run-trigger. It drives the full planner feedback loop
-// (runSubtaskLoop) with real Codex adapters + a live usage probe, built through
-// injectable factories that DEFAULT to real Codex / SSH monitors (tests inject
-// fakes); the background run worker drives this with the defaults in production.
-// On a passing loop the workflow publishes a draft PR, runs the NATIVE pre-merge
-// gate (the merge authority — same in-loop gate over the command substrate, no
-// forge CI poll) + publishes its `tanren/gate` verdict, then drives review→merge.
-// Non-pass outcomes (window_exhausted / retry_budget_exhausted / halted) map to a
-// halted run without a PR. A Codex usage-limit thrown mid-loop is caught and
-// recorded as window_exhausted, not a generic failure (PROJECT_BRIEF §4.3).
+// The real planner-loop run-trigger: drives runSubtaskLoop with real Codex adapters
+// (injectable factories default to real Codex/SSH; tests inject fakes). On a passing
+// loop it publishes a draft PR, runs the NATIVE pre-merge gate (the merge authority,
+// in-loop over the command substrate — no forge CI poll) + publishes the `tanren/gate`
+// verdict, then drives review→merge. Non-pass outcomes (window_exhausted /
+// retry_budget_exhausted / halted) map to a halted run without a PR; a Codex
+// usage-limit mid-loop is caught as window_exhausted, not a failure (PROJECT_BRIEF §4.3).
 import type pg from "pg";
 import type { CiWhen } from "../ci/index.js";
 import type { EscapeHatches, GovernancePosture, RoutingChainEntry, RoutingTable } from "../config/shared.js";
@@ -73,11 +70,8 @@ export interface PlannerRunContext {
   runId: string;
   specId: string;
   projectId: string;
-  /**
-   * The org the run belongs to (null for legacy/unscoped runs). Threaded into
-   * the allocate request so a backend that persists a `runners` row (the sidecar
-   * allocator service) writes it under the org's RLS scope.
-   */
+  // The org the run belongs to (null = unscoped); threaded into allocate so the
+  // sidecar allocator persists its `runners` row under the org's RLS scope.
   orgId?: string | null;
   repoUrl: string;
   targetBranch: string;
@@ -90,15 +84,12 @@ export interface PlannerRunContext {
   runnerImage: string;
   identitySecretRef: string;
   githubCredentialRef: string;
-  // Part 2: the org's GitHub App installation, when installed. The workspace
-  // CLONE resolves its token App-first through the VcsProvider seam (like the CI-poll /
-  // merge stages), else falls back to the static `githubCredentialRef`.
+  // Part 2: the org's GitHub App installation, when installed. Clone/push/PR/CI/merge
+  // mint the token App-first through the seam, else the static `githubCredentialRef`.
   installation?: OrgGithubAppInstallation;
-  // The run's resolved DEFAULT LLM routing entry {cli, model, authRef} — heads every
-  // empty loop-role chain (provider-agnostic, NOT Codex-pinned). Tests may omit it.
+  // Resolved DEFAULT LLM entry {cli, model, authRef} — heads every empty loop-role chain (provider-agnostic). Tests may omit.
   defaultLlm?: RoutingChainEntry;
-  // The run's effective per-role routing table (project routing over a per-role
-  // default built from `defaultLlm`). The default is by DATA, not a hardcode.
+  // Effective per-role routing table (project routing over a per-role default from `defaultLlm`) — by DATA, not a hardcode.
   routing?: RoutingTable;
   // SaaS Tier-B #5: a MANAGED run's OpenAI-compatible endpoint override (the base URL every adapter is pointed at + the real-cost capturer queries). Absent ⇒ BYOK.
   endpointBaseUrl?: string;
@@ -108,8 +99,7 @@ export interface PlannerRunContext {
   policyVersion?: number;
   // GREENFIELD MARKER (ProjectConfigV1.greenfield): drives buildDefaultGate's in-loop deps-ensure MODE — greenfield ⇒ NON-FROZEN install; absent/false ⇒ FROZEN brownfield.
   greenfield?: boolean;
-  // cost PR-C: the CONFIGURED per-credential credit→USD rate (runExecutionContext
-  // resolves it from project/org `creditRates`). Absent ⇒ a real drawdown is NULL-and-loud.
+  // cost PR-C: CONFIGURED per-credential credit→USD rate (from project/org `creditRates`). Absent ⇒ a real drawdown is NULL-and-loud.
   creditUsdRate?: number;
 }
 
@@ -254,6 +244,17 @@ function writerSeam(input: RunPlannerLoopInput): { runStateWriter?: RunStateWrit
 
 function nativeQueueSeam(input: RunPlannerLoopInput): { enqueueNativeQueue?: NativeQueueEnqueuer } {
   return input.nativeQueueEnqueuer === undefined ? {} : { enqueueNativeQueue: input.nativeQueueEnqueuer };
+}
+
+// App-first push/PR-create credential seam (clone-path parity): mint the App token when installed, else the static ref.
+function appTokenSeam(
+  context: PlannerRunContext,
+  input: RunPlannerLoopInput,
+): { installation?: OrgGithubAppInstallation; githubAppMinter?: GithubAppTokenMinter } {
+  return {
+    ...(context.installation !== undefined && { installation: context.installation }),
+    ...(input.githubAppMinter !== undefined && { githubAppMinter: input.githubAppMinter }),
+  };
 }
 
 export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Promise<PlannerRunResult> {
@@ -403,6 +404,7 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
         title: `Tanren: ${context.specTitle}`,
         body: context.specDescription,
         githubCredentialRef: context.githubCredentialRef,
+        ...appTokenSeam(context, input),
         timeoutMs: input.timeoutMs,
       });
       // THE MERGE AUTHORITY (native delivery): run the `pre_merge` gate on the live
