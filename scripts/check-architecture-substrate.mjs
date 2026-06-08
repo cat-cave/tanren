@@ -21,7 +21,12 @@ export function checkNoHostProcessSpawn(projectFiles) {
     if (
       invariantDocExclusions.has(file) ||
       file.startsWith("services/orchestrator/src/engine/cli-runner/") ||
-      file.startsWith("scripts/")
+      file.startsWith("scripts/") ||
+      // Test fixtures may spawn local processes: the ban targets the ENGINE (which
+      // must route through the CommandSubstrate seam), not a tests/ fixture that
+      // IMPLEMENTS a local CommandSubstrate to drive a real git/jj process in a
+      // conformance suite (the test-only arm of the substrate seam).
+      file.includes("/tests/")
     ) {
       continue;
     }

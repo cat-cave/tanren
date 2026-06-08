@@ -28,6 +28,9 @@
   ],
   "words": [
     "Abramowitz",
+    "revset",
+    "jjws",
+    "wvcs",
     "dedupable",
     "landable",
     "transactionally",
@@ -219,6 +222,7 @@
     "lefthook",
     "libsodium",
     "litellm",
+    "localcmd",
     "liverun",
     "localappdata",
     "localhost",
