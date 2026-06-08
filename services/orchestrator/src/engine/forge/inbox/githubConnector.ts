@@ -39,6 +39,11 @@ export interface GitHubConnectorDeps {
   // Optional org App installation; when present the resolver mints an App token.
   installation?: OrgGithubAppInstallation;
   minter?: GithubAppTokenMinter;
+  // The org-default static credential ref, used when no App is installed and the
+  // source pins no own `config.staticRef`. The intake poller threads the org's
+  // resolved default here (App-installation-OR-org-default-static, the engine's
+  // standard GitHub resolution); the source's own `staticRef` takes precedence.
+  defaultStaticRef?: string;
 }
 
 // A GitHub issue as the Issues API returns it (the fields we map). `pull_request`
@@ -74,10 +79,15 @@ export function createGitHubIssuesConnector(deps: GitHubConnectorDeps): SourceCo
     kind: "issues",
     async fetch(source: InboxSource): Promise<IngestedItem[]> {
       const config = GitHubIssuesConfig.parse(source.config);
+      // The source's own `staticRef` takes precedence; else the org-default static
+      // ref the poller resolved (App-installation-OR-org-default-static). When
+      // neither is present and no App is installed, `resolveGithubToken` raises a
+      // LOUD `NoGithubCredentialConfiguredError` — never a silent empty fetch.
+      const staticRef = config.staticRef ?? deps.defaultStaticRef;
       const resolved = await resolveGithubToken({
         secrets: deps.secrets,
         ...(deps.installation === undefined ? {} : { installation: deps.installation }),
-        ...(config.staticRef === undefined ? {} : { staticRef: config.staticRef }),
+        ...(staticRef === undefined ? {} : { staticRef }),
         minter: deps.minter ?? new GithubAppTokenMinter({ secrets: deps.secrets }),
       });
 
