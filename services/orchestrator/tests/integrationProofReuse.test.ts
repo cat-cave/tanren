@@ -7,6 +7,7 @@
 // proof store + spies, asserting the gate is or is NOT invoked.
 
 import { describe, expect, it, vi } from "vitest";
+import type { CiConfigV1 } from "../src/engine/ci/index.js";
 import {
   type IntegrationNode,
   type ProofReuseKeyInput,
@@ -20,6 +21,7 @@ import {
   resolvedComponent,
   unresolvableComponent,
 } from "../src/engine/dag/integrationProofReuse.js";
+import { resolveLiveKeyComponents } from "../src/engine/dag/integrationProofKey.js";
 
 /** An in-memory proof store (the pg model's findProof/recordProof, behavior-equivalent). */
 class InMemoryProofStore implements ProofStorePort {
@@ -238,5 +240,62 @@ describe("recordProofVerdict — what a recompute persists", () => {
       emit: vi.fn<() => Promise<void>>(async () => {}),
     });
     expect(second.kind).toBe("recompute");
+  });
+});
+
+// THE gate-verdict fail-open fix, end-to-end: a real CiConfigV1 whose `when` tier
+// mapping changed (so `pre_merge` runs a DIFFERENT tier set) must NOT reuse the prior
+// PASS. This drives the FULL path config → resolveLiveKeyComponents → proofReuseKey →
+// decideProofReuse, proving the changed gate misses the cache and the gate re-runs.
+/** Resolve the six live components from a real CiConfigV1 (the rest of the key fixed). */
+function componentsFor(config: CiConfigV1): LiveProofKeyComponents {
+  return resolveLiveKeyComponents({
+    config,
+    runnerImage: "ghcr.io/tanren/runner:latest",
+    policyVersion: "1",
+    quarantineVersion: "1",
+  });
+}
+
+describe("decideProofReuse — a changed `when` tier mapping forces a recompute (no stale reuse)", () => {
+  const baseConfig: CiConfigV1 = {
+    version: 1,
+    tiers: { fast: [{ name: "lint", run: "oxlint" }], slow: [{ name: "test", run: "vitest" }] },
+    when: { fast: ["pre_merge"], slow: ["pre_merge"] },
+  };
+  // Identical tiers + steps; ONLY `when` differs — `slow` no longer runs at pre_merge.
+  const remappedConfig: CiConfigV1 = { ...baseConfig, when: { fast: ["pre_merge"], slow: ["pre_audit"] } };
+
+  it("reuses on the SAME config but RECOMPUTES when ONLY `when` changed (the gate re-runs)", async () => {
+    const store = new InMemoryProofStore();
+    const emit = vi.fn<() => Promise<void>>(async () => {});
+
+    // 1. First gate under the base config: cache miss → recompute → record a PASS.
+    const baseComponents = componentsFor(baseConfig);
+    const first = await decideProofReuse({ orgId: "o", node: NODE, components: baseComponents, store, emit });
+    expect(first.kind).toBe("recompute");
+    await recordProofVerdict({ decision: first, store, orgId: "o", projectId: "p", node: NODE, passed: true });
+
+    // 2. SAME config again → the recorded PASS is reused (the gate is skipped).
+    const reuse = await decideProofReuse({
+      orgId: "o",
+      node: NODE,
+      components: componentsFor(baseConfig),
+      store,
+      emit,
+    });
+    expect(reuse.kind).toBe("reuse");
+
+    // 3. ONLY `when` changed (a different pre_merge tier set) → a DIFFERENT proofReuseKey
+    //    → cache MISS → RECOMPUTE. The stale PASS is NOT reused (the gate re-runs). This
+    //    is the gate-verdict fail-open the `when`-in-hash fix closes.
+    const drift = await decideProofReuse({
+      orgId: "o",
+      node: NODE,
+      components: componentsFor(remappedConfig),
+      store,
+      emit,
+    });
+    expect(drift.kind).toBe("recompute");
   });
 });

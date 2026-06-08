@@ -32,6 +32,39 @@ describe("hashGateConfig", () => {
     const withBootstrap: CiConfigV1 = { ...CONFIG, bootstrap: { run: "pnpm i" } };
     expect(hashGateConfig(withBootstrap)).not.toBe(hashGateConfig(CONFIG));
   });
+
+  // THE gate-verdict fail-open fix: `when` selects WHICH tiers run for `pre_merge`
+  // (tiersFor reads config.when), so two configs that differ ONLY in `when` run
+  // DIFFERENT tiers and MUST hash differently — else a stale PASS would be reused for a
+  // changed gate (unproven code merges via a wrong reuse).
+  it("changes when the `when` tier mapping changes (a different pre_merge tier set ⇒ recompute)", () => {
+    // Same tiers + steps; ONLY the `when` mapping differs — `slow` no longer runs at
+    // pre_merge. The gate would run a DIFFERENT set of tiers, so the hash MUST differ.
+    const remapped: CiConfigV1 = { ...CONFIG, when: { fast: ["pre_merge"], slow: ["pre_audit"] } };
+    expect(hashGateConfig(remapped)).not.toBe(hashGateConfig(CONFIG));
+  });
+
+  it("changes when a tier is ADDED to the pre_merge mapping (more tiers run ⇒ recompute)", () => {
+    const extraPreMerge: CiConfigV1 = {
+      ...CONFIG,
+      tiers: { ...CONFIG.tiers, integration: [{ name: "e2e", run: "playwright" }] },
+      when: { fast: ["pre_merge"], slow: ["pre_merge"], integration: ["pre_merge"] },
+    };
+    expect(hashGateConfig(extraPreMerge)).not.toBe(hashGateConfig(CONFIG));
+  });
+
+  it("is order-INDEPENDENT in the `when` points (a re-ordering does NOT force a recompute)", () => {
+    const reorderedPoints: CiConfigV1 = {
+      ...CONFIG,
+      tiers: { ...CONFIG.tiers, fast: [{ name: "lint", run: "oxlint" }] },
+      when: { fast: ["pre_audit", "pre_merge"], slow: ["pre_merge"] },
+    };
+    const sameSwapped: CiConfigV1 = {
+      ...reorderedPoints,
+      when: { fast: ["pre_merge", "pre_audit"], slow: ["pre_merge"] },
+    };
+    expect(hashGateConfig(reorderedPoints)).toBe(hashGateConfig(sameSwapped));
+  });
 });
 
 describe("hashAppEnv", () => {
