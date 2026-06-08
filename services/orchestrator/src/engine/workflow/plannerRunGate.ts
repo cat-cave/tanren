@@ -60,6 +60,50 @@ import type { RunPlannerLoopInput } from "./plannerRun.js";
 // redundant install is a cheap no-op), so re-running it each gate is correct and
 // safe. Brownfield → each re-install is the FROZEN command, a cheap, lockfile-safe
 // no-op when deps already agree, behavior-equivalent to main.
+
+// A full 40-hex git object id (the only shape the verdict anchor may bind to).
+const FULL_SHA = /^[0-9a-f]{40}$/u;
+
+/**
+ * Resolve the commit the gate.verdict is anchored on — FAIL-CLOSED at the gate
+ * boundary (no-silent-fallback doctrine). COMMIT-BINDING (§5):
+ *
+ *   - A NON-EMPTY override must be a full 40-hex sha. A garbage/truncated override is
+ *     a corrupt read — THROW, never anchor the verdict (and the forge status) on a
+ *     bogus commit. (Holds for every `when`.)
+ *   - `pre_merge` EXPECTS a pushed PR-head override. A missing/empty override there
+ *     would silently fall back to the workspace HEAD — the exact wrong-commit binding
+ *     the fix prevents (the workspace HEAD is the writer tip, NOT the pushed PR head).
+ *     So `pre_merge` + (absent/empty override) THROWS the moment the workspace HEAD is
+ *     a real sha. The ONLY tolerated case is the fake-SSH unit path, where the
+ *     workspace HEAD itself resolves to "" ⇒ no override is needed and no verdict is
+ *     emitted (runGateForWhen skips a "" anchor).
+ *   - per_iteration / pre_audit legitimately have no override ⇒ the workspace HEAD IS
+ *     the gated commit; bind to it (a "" fake-SSH head ⇒ no verdict).
+ */
+async function resolveVerdictAnchorSha(
+  when: CiWhen,
+  headShaOverride: string | undefined,
+  resolveWorkspaceHead: () => Promise<string>,
+): Promise<string> {
+  if (headShaOverride !== undefined && headShaOverride !== "") {
+    if (!FULL_SHA.test(headShaOverride)) {
+      throw new Error(`gate verdict head-sha override is not a 40-hex sha: ${headShaOverride}`);
+    }
+    return headShaOverride;
+  }
+  const workspaceHead = await resolveWorkspaceHead();
+  // pre_merge with no valid override + a REAL workspace HEAD: the silent wrong-commit
+  // binding. Fail closed — the merge gate MUST anchor on the pushed PR head, never the
+  // writer tip. (A "" head is the fake-SSH unit path ⇒ no verdict, tolerated.)
+  if (when === "pre_merge" && workspaceHead !== "") {
+    throw new Error(
+      "pre_merge gate requires a pushed PR-head sha override; refusing to silently bind the verdict to the workspace HEAD",
+    );
+  }
+  return workspaceHead;
+}
+
 export function buildDefaultGate(
   input: RunPlannerLoopInput,
   target: RunnerHandle,
@@ -136,22 +180,16 @@ export function buildDefaultGate(
       timeoutMs: input.timeoutMs,
     });
     const config = await configPromise;
-    // Anchor the native verdict on the commit the gate is about to verify. By default
-    // that is the workspace HEAD. COMMIT-BINDING (§5): the `pre_merge` merge gate passes
-    // a `headShaOverride` — the PUSHED PR head (the cleaned ref, bootstrap commit
-    // dropped) — because the workspace HEAD is left at the writer tip (a DIFFERENT sha)
-    // so a review-rework can keep diffing vs its base. Recording the verdict on the
-    // override is what lets the land authority's `gatedHeadSha == landing head` hold.
-    // "" on a fake-SSH unit path ⇒ runGateForWhen emits no verdict.
-    const headSha =
-      headShaOverride !== undefined && headShaOverride !== ""
-        ? headShaOverride
-        : await resolveWorkspaceHeadSha({
-            ssh: input.ssh,
-            target,
-            workspacePath,
-            timeoutMs: input.timeoutMs,
-          });
+    // Anchor the native verdict on the commit the gate is about to verify. COMMIT-BINDING
+    // (§5): the `pre_merge` gate passes a `headShaOverride` — the PUSHED PR head (the
+    // cleaned ref, bootstrap commit dropped) — because the workspace HEAD is left at the
+    // writer tip (a DIFFERENT sha) so a review-rework can keep diffing vs its base.
+    // Recording the verdict on the override is what lets the authority's `gatedHeadSha ==
+    // landing head` hold. The override is validated + FAIL-CLOSED at this boundary (no
+    // silent fallback to a wrong commit): see {@link resolveVerdictAnchorSha}.
+    const headSha = await resolveVerdictAnchorSha(when, headShaOverride, () =>
+      resolveWorkspaceHeadSha({ ssh: input.ssh, target, workspacePath, timeoutMs: input.timeoutMs }),
+    );
     const outcome = await runGateForWhen({
       ssh: input.ssh,
       target,

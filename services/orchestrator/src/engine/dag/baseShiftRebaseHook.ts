@@ -43,7 +43,7 @@ export function buildBaseShiftRebaseHook(deps: {
     }
     const { dependent, projectId } = loaded;
     try {
-      const { decision } = await deps.coordinator.rebaseOnto({
+      const { decision, headSha } = await deps.coordinator.rebaseOnto({
         projectId,
         dependent,
         newBaseRef: input.baseBranch,
@@ -58,8 +58,10 @@ export function buildBaseShiftRebaseHook(deps: {
       });
       // `rebased_clean` / `rebased_resolved` ⇒ the branch advanced onto base (the dispatcher
       // re-gates then merges); `replanned` ⇒ the work was routed back (hold the merge).
+      // COMMIT-BINDING (§5): surface the rebased head sha so the dispatcher's re-gate
+      // anchors its verdict on the rebased PR head (never the stale workspace HEAD).
       if (decision === "rebased_clean" || decision === "rebased_resolved") {
-        return { outcome: "rebased" };
+        return { outcome: "rebased", ...(headSha !== "" && { rebasedHeadSha: headSha }) };
       }
       return { outcome: "held", message: "base shift re-planned the work (routed back to the planner; merge held)" };
     } catch (error) {

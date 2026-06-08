@@ -327,4 +327,76 @@ describe("buildDefaultGate — gate.verdict commit-binding (headShaOverride)", (
     expect(verdict).toBeDefined();
     expect((verdict!.payload as { headSha: string }).headSha).toBe(WORKSPACE_HEAD);
   });
+
+  // RESIDUAL #3 — FAIL-CLOSED at the gate boundary (no-silent-fallback doctrine). The
+  // pre_merge gate EXPECTS a pushed PR-head override. An empty/absent override there
+  // would silently fall back to the workspace HEAD (the writer tip) — the exact
+  // wrong-commit binding the fix prevents. So pre_merge + (absent/empty/invalid
+  // override) is a LOUD throw the moment the workspace HEAD is a real sha, never a
+  // silent fallback.
+  it("THROWS on a pre_merge gate with an EMPTY override (no silent workspace-HEAD fallback)", async () => {
+    const state: WorkspaceState = {
+      manifest: true,
+      nodeModules: false,
+      lintExit: 0,
+      installRuns: 0,
+      workspaceHead: WORKSPACE_HEAD,
+    };
+    const ssh = new InterpretingSsh(state);
+    const events = new FakeEventStore();
+    const gate = buildDefaultGate(gateInput(ssh, context({ greenfield: true })), target, workspacePath, events);
+
+    // pre_merge with an empty override + a REAL workspace HEAD: must fail closed.
+    await expect(gate({ when: "pre_merge", headShaOverride: "" })).rejects.toThrow(/pushed PR-head sha override/u);
+    // No verdict was bound to the wrong (workspace HEAD) commit.
+    expect(events.events.some((e) => e.eventType === "gate.verdict")).toBe(false);
+  });
+
+  it("THROWS on a pre_merge gate with NO override at all (absent ⇒ same fail-closed as empty)", async () => {
+    const state: WorkspaceState = {
+      manifest: true,
+      nodeModules: false,
+      lintExit: 0,
+      installRuns: 0,
+      workspaceHead: WORKSPACE_HEAD,
+    };
+    const ssh = new InterpretingSsh(state);
+    const events = new FakeEventStore();
+    const gate = buildDefaultGate(gateInput(ssh, context({ greenfield: true })), target, workspacePath, events);
+
+    await expect(gate({ when: "pre_merge" })).rejects.toThrow(/pushed PR-head sha override/u);
+    expect(events.events.some((e) => e.eventType === "gate.verdict")).toBe(false);
+  });
+
+  it("THROWS on a NON-40-hex override (corrupt read) at ANY when — never anchors on a bogus commit", async () => {
+    const state: WorkspaceState = {
+      manifest: true,
+      nodeModules: false,
+      lintExit: 0,
+      installRuns: 0,
+      workspaceHead: WORKSPACE_HEAD,
+    };
+    const ssh = new InterpretingSsh(state);
+    const events = new FakeEventStore();
+    const gate = buildDefaultGate(gateInput(ssh, context({ greenfield: true })), target, workspacePath, events);
+
+    // A truncated/garbage override is corrupt — reject it (here on the pre_merge path).
+    await expect(gate({ when: "pre_merge", headShaOverride: "not-a-sha" })).rejects.toThrow(/not a 40-hex sha/u);
+    expect(events.events.some((e) => e.eventType === "gate.verdict")).toBe(false);
+  });
+
+  it("the fake-SSH unit path (workspace HEAD resolves to '') is tolerated on pre_merge — no throw, no verdict", async () => {
+    // workspaceHead omitted ⇒ `git rev-parse HEAD` yields "" (the fake-SSH unit path).
+    // pre_merge + empty override + empty workspace HEAD is the ONLY tolerated no-override
+    // case: there is no real commit to bind, so the gate emits no verdict (not a throw).
+    const state: WorkspaceState = { manifest: true, nodeModules: false, lintExit: 0, installRuns: 0 };
+    const ssh = new InterpretingSsh(state);
+    const events = new FakeEventStore();
+    const gate = buildDefaultGate(gateInput(ssh, context({ greenfield: true })), target, workspacePath, events);
+
+    const outcome = await gate({ when: "pre_merge", headShaOverride: "" });
+
+    expect(outcome.passed).toBe(true);
+    expect(events.events.some((e) => e.eventType === "gate.verdict")).toBe(false);
+  });
 });

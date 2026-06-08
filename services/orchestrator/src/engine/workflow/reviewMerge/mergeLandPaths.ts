@@ -30,7 +30,15 @@ import type { DispatcherDeps } from "./mergeDispatcher.js";
 export async function rebaseBehindBranch(
   deps: DispatcherDeps,
   mergeability: PullRequestMergeability,
-): Promise<{ outcome: "rebased" | "up_to_date" | "conflict" | "held"; message?: string }> {
+): Promise<{
+  outcome: "rebased" | "up_to_date" | "conflict" | "held";
+  message?: string;
+  // COMMIT-BINDING (§5): the rebased PR head sha the dispatcher anchors the re-gate
+  // verdict on. Present only via the unified `baseShiftRebase` hook; ABSENT on the
+  // legacy server-side `updateBranch` fallback (no head sha to report) ⇒ the re-gate
+  // has no proven head ⇒ the pre_merge gate fails closed rather than binding wrong.
+  rebasedHeadSha?: string;
+}> {
   const { input, context, probe } = deps;
   if (input.baseShiftRebase !== undefined) {
     const head = mergeability.headBranch;
