@@ -123,6 +123,60 @@ describe("resolveCredentialsForRun", () => {
     });
   });
 
+  // App-first run resolution (apex v22 finding #2): an org that installed the
+  // GitHub App but bound NO static `github_token` can both create the repo
+  // (greenfield) AND RUN — the run resolves to the empty-string App sentinel, so
+  // downstream git ops mint the installation token from `context.installation`.
+  const githubAppBlock = {
+    installationId: "12345678",
+    appId: "987654",
+    credentialRef: "credential/github_app/org_1/private_key",
+    installedAt: "2026-06-08T00:00:00.000Z",
+  };
+
+  it("App-only org (App installed, NO static github_token) resolves the empty App sentinel, NOT MissingCredentialError", async () => {
+    const pool = fakePool({
+      org_1: {
+        version: 1,
+        github_app: githubAppBlock,
+        // The LLM is bound (so resolution reaches the github kind); GitHub has NO
+        // static ref anywhere — only the installed App.
+        defaultCredentials: { defaultLlm: codexEntry(codexOrgRef) },
+      },
+    });
+    const projectConfig = migrateProjectConfig({ version: 1 });
+    const resolved = await resolveCredentialsForRun(pool, { projectConfig, orgId: "org_1" });
+    // The empty sentinel — downstream reads "" as "no static ref ⇒ mint the App token".
+    expect(resolved.githubCredentialRef).toBe("");
+    expect(resolved.providerMode).toBe("byok");
+    expect(resolved.defaultLlm).toEqual(codexEntry(codexOrgRef));
+  });
+
+  it("a STATIC github_token still wins over an installed App (explicit ref is authoritative)", async () => {
+    const pool = fakePool({
+      org_1: {
+        version: 1,
+        github_app: githubAppBlock,
+        defaultCredentials: { defaultLlm: codexEntry(codexOrgRef), github_token: githubOrgRef },
+      },
+    });
+    const projectConfig = migrateProjectConfig({ version: 1 });
+    const resolved = await resolveCredentialsForRun(pool, { projectConfig, orgId: "org_1" });
+    expect(resolved.githubCredentialRef).toBe(githubOrgRef);
+  });
+
+  it("FAIL-CLOSED: neither a static github_token NOR the App ⇒ MissingCredentialError stays loud", async () => {
+    const pool = fakePool({
+      // No github_app, no github_token — only the LLM is bound.
+      org_1: { version: 1, defaultCredentials: { defaultLlm: codexEntry(codexOrgRef) } },
+    });
+    const projectConfig = migrateProjectConfig({ version: 1 });
+    await expect(resolveCredentialsForRun(pool, { projectConfig, orgId: "org_1" })).rejects.toMatchObject({
+      name: "MissingCredentialError",
+      kind: "github_token",
+    });
+  });
+
   it("throws MissingCredentialError for the default LLM first when both are unresolved", async () => {
     const pool = fakePool({ org_1: { version: 1 } });
     const projectConfig = migrateProjectConfig({ version: 1 });
