@@ -53,9 +53,21 @@ describe("SSH substrate contract", () => {
       }),
     ).toBe(
       `cd '/work/path with spaces/it'\\''s fine' && ` +
-        `export TMPDIR="$PWD/${WORKSPACE_TMPDIR_REL_PATH}"; mkdir -p "$TMPDIR"; pwd`,
+        `export TMPDIR="$PWD/${WORKSPACE_TMPDIR_REL_PATH}" && mkdir -p "$TMPDIR" && pwd`,
     );
     expect(() => buildSshExecCommand({ command: "pwd", cwd: "bad\0path", timeoutMs: 100 })).toThrow("null byte");
+  });
+
+  it("chains cd+TMPDIR+mkdir+command with && so a failed cd aborts (never wrong-cwd)", () => {
+    // Shell-safety: the prefix hangs off `cd <cwd> &&`, and is itself &&-chained, so a
+    // failed `cd` (or `mkdir`) short-circuits the ENTIRE line — the real command must
+    // never run in the original cwd or with an unwritable TMPDIR. A stray `;` would
+    // break that (the command would run after a failed cd), so assert there is none.
+    const wrapped = buildSshExecCommand({ command: "pnpm test", cwd: "/workspace/runs/run_x/repo", timeoutMs: 100 });
+    expect(wrapped).not.toContain(";");
+    expect(wrapped).toBe(
+      `cd '/workspace/runs/run_x/repo' && export TMPDIR="$PWD/${WORKSPACE_TMPDIR_REL_PATH}" && mkdir -p "$TMPDIR" && pnpm test`,
+    );
   });
 
   it("points the workspace TMPDIR at a per-run, git-ignored, non-/tmp scratch dir", () => {

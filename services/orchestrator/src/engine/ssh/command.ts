@@ -35,8 +35,13 @@ export const WORKSPACE_TMPDIR_REL_PATH = ".git/tanren-tmp";
 // command's tooling resolves `os.tmpdir()`. Emitted ONLY when a cwd is present:
 // a cwd-less command (a reaper `find`, a host probe) has no workspace to anchor to
 // and keeps the OS default.
+//
+// Chained with `&&` (NOT `;`): the whole prefix hangs off the preceding `cd … &&`,
+// so a failed `cd` (or a failed `mkdir`) ABORTS — it must never fall through to
+// running the real command in the wrong cwd or with an unwritable `TMPDIR`. This
+// preserves the original `cd <cwd> && <command>` fail-on-cd-error semantics.
 function workspaceTmpdirPrefix(): string {
-  return `export TMPDIR="$PWD/${WORKSPACE_TMPDIR_REL_PATH}"; mkdir -p "$TMPDIR"; `;
+  return `export TMPDIR="$PWD/${WORKSPACE_TMPDIR_REL_PATH}" && mkdir -p "$TMPDIR" && `;
 }
 
 export function buildSshExecCommand(command: RunnerCommand): string {
