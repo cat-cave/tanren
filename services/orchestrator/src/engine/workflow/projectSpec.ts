@@ -14,6 +14,7 @@ import {
   SpecNotRunnableError,
 } from "./projectSpecErrors.js";
 import { SpecProjectRowSchema } from "./projectSpecRowSchema.js";
+import { observeRunAsIntegrationNode } from "../dag/integrationNodesPg.js";
 
 /** The pool or a checked-out client — anything that can run a query. */
 type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
@@ -74,14 +75,12 @@ export interface CreateSpecRunInput {
   specId: string;
   trigger?: string;
   branch?: string;
-  // (§2c) SPECULATIVE start;: `integratedAncestorShas` = build base,
-  // `verifiedAncestorShas` = re-gated-clean (absorbed) carry-forward, `percolationPending` = in-flight marker.
-  //
+  // (§2c) SPECULATIVE start: `integratedAncestorShas` = build base,
+  // `verifiedAncestorShas` = absorbed carry-forward, `percolationPending` = marker.
   // `speculativeBase: null` is the §2c "ancestor-merged → non-speculative re-base":
-  // a percolation re-execution where EVERY ancestor has merged re-bases onto plain
-  // `default_branch`, so `speculative_base` is NULL (a real run against main) — but it
-  // still carries the percolation marker and SKIPS the done-only dependency gate (the
-  // ancestor is genuinely merged; the percolation walker owns the ordering).
+  // a percolation re-exec where EVERY ancestor has merged re-bases onto plain
+  // `default_branch` (a real run against main) — but it still carries the percolation
+  // marker and SKIPS the done-only dependency gate (the percolation walker owns order).
   speculative?: {
     speculativeBase: string | null;
     integratedAncestorShas?: Record<string, string>;
@@ -345,6 +344,8 @@ async function createQueuedRunFromSpecOnClient(
       jsonbOrNull(spec?.percolationPending),
     ],
   );
+  // OBSERVE-ONLY: UPSERT the `integration_nodes` row mirroring this run (see the hook header). NEVER fails a run.
+  await observeRunAsIntegrationNode(client, run, spec);
   await claimPendingSpec(client, loaded.spec);
   await client.query(
     `INSERT INTO tasks (task_id, run_id, org_id, kind, title, status, agent_kind, cli, model)
