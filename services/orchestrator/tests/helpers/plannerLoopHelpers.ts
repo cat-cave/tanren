@@ -289,6 +289,8 @@ export const passingAudit: AuditAnswer = {
   reasoning: "every acceptance criterion is met",
   outstandingBehaviorIds: [],
   recommendedAction: "pass",
+  // WAVE-2: audited-clean ⇒ an EMPTY explicit findings list.
+  findings: [],
 };
 
 export const loopAudit: AuditAnswer = {
@@ -296,6 +298,17 @@ export const loopAudit: AuditAnswer = {
   reasoning: "integrated result missed a behavior",
   outstandingBehaviorIds: ["B2"],
   recommendedAction: "loop_to_planner",
+  // WAVE-2: a blocking defect is an EXPLICIT P1 finding (no inferred severity);
+  // a fixHint exercises the optional-field emission path.
+  findings: [
+    {
+      id: "missed-behavior-B2",
+      severity: "P1",
+      title: "B2 not implemented",
+      body: "The integrated result does not cover behavior B2.",
+      fixHint: "implement B2 in the writer pass",
+    },
+  ],
 };
 
 export const haltAudit: AuditAnswer = {
@@ -303,6 +316,10 @@ export const haltAudit: AuditAnswer = {
   reasoning: "unrecoverable conflict between subtasks",
   outstandingBehaviorIds: ["B3"],
   recommendedAction: "halt",
+  // WAVE-2: an irrecoverable blocker is an EXPLICIT P0 finding.
+  findings: [
+    { id: "subtask-conflict", severity: "P0", title: "Unrecoverable subtask conflict", body: "B3 conflicts." },
+  ],
 };
 
 export function defaultLoopInput(overrides: Partial<SubtaskLoopInput> = {}): {

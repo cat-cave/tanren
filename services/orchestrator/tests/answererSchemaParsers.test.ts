@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 
 import {
   AuditAnswer,
+  AuditFinding,
   CheckAnswer,
   DemoAnswer,
   ForgeAnswer,
+  normalizeFinding,
   PlanAnswer,
 } from "../src/engine/answerers/schemas/index.js";
 
@@ -96,7 +98,8 @@ describe("AuditAnswer", () => {
       outstandingBehaviorIds: [],
       recommendedAction: "pass",
     };
-    expect(AuditAnswer.parse(value)).toEqual(value);
+    // WAVE-2: `findings` defaults to an empty list (audited-clean) when omitted.
+    expect(AuditAnswer.parse(value)).toEqual({ ...value, findings: [] });
   });
 
   it("accepts a loop_to_planner recommendation with outstanding behavior ids", () => {
@@ -106,7 +109,63 @@ describe("AuditAnswer", () => {
       outstandingBehaviorIds: ["beh_readme_summary"],
       recommendedAction: "loop_to_planner",
     };
-    expect(AuditAnswer.parse(value)).toEqual(value);
+    // WAVE-2: a legacy verdict with no `findings` key parses with `findings: []`.
+    expect(AuditAnswer.parse(value)).toEqual({ ...value, findings: [] });
+  });
+
+  it("accepts explicit P0–P3 findings dual-emitted alongside the legacy verdict", () => {
+    const value = {
+      passed: false,
+      reasoning: "A null-deref crashes the import path; planner must rework.",
+      outstandingBehaviorIds: ["beh_import"],
+      recommendedAction: "loop_to_planner",
+      findings: [
+        { id: "null-deref-import", severity: "P0", title: "Null deref on import", body: "x.y is read when x is null." },
+        {
+          id: "missing-test",
+          severity: "P2",
+          title: "No test for empty file",
+          body: "Add a coverage case.",
+          fixHint: "add empty-file test",
+        },
+      ],
+    };
+    const parsed = AuditAnswer.parse(value);
+    expect(parsed.findings.map((f) => f.severity)).toEqual(["P0", "P2"]);
+    expect(parsed.findings[1]?.fixHint).toBe("add empty-file test");
+  });
+
+  it("accepts a finding with fixHint:null (the strict-schema omitted form) AND with fixHint omitted, normalizing both to the same stored shape", () => {
+    // Regression (P-A review): the GENERATED strict schema the CLI is sent makes
+    // every key required + expresses an omitted `fixHint` as `null`. The Zod source
+    // (the runtime parser) MUST accept that `null`, else a valid no-hint finding is
+    // rejected before the verdict can be recorded. Both forms normalize to the frozen
+    // `{ fixHint?: string }` Finding contract — byte-identical, with NO `fixHint` key.
+    const withNull = AuditFinding.parse({ id: "f", severity: "P1", title: "t", body: "b", fixHint: null });
+    const withOmitted = AuditFinding.parse({ id: "f", severity: "P1", title: "t", body: "b" });
+
+    // The raw parse accepts the null (it does not throw) and keeps it null/undefined.
+    expect(withNull.fixHint).toBeNull();
+    expect(withOmitted.fixHint).toBeUndefined();
+
+    // Normalization collapses BOTH to an absent key — identical stored shape.
+    const normalizedNull = normalizeFinding(withNull);
+    const normalizedOmitted = normalizeFinding(withOmitted);
+    expect(normalizedNull).toEqual(normalizedOmitted);
+    expect(normalizedNull).not.toHaveProperty("fixHint");
+    expect(normalizedNull).toEqual({ id: "f", severity: "P1", title: "t", body: "b" });
+  });
+
+  it("the full AuditAnswer parse succeeds with a fixHint:null finding (no throw before dual-emit)", () => {
+    const parsed = AuditAnswer.parse({
+      passed: false,
+      reasoning: "blocker present",
+      outstandingBehaviorIds: [],
+      recommendedAction: "loop_to_planner",
+      findings: [{ id: "p1", severity: "P1", title: "t", body: "b", fixHint: null }],
+    });
+    expect(parsed.findings[0]?.fixHint).toBeNull();
+    expect(normalizeFinding(parsed.findings[0]!)).not.toHaveProperty("fixHint");
   });
 
   it("rejects unknown recommendedAction values", () => {

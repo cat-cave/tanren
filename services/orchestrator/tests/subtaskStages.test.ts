@@ -461,6 +461,17 @@ describe("runAuditorStage", () => {
     const verdict = h.find("auditor.verdict")!;
     expect(verdict.payload.passed).toBe(false);
     expect(verdict.payload.outstandingBehaviorIds).toEqual(["B2"]);
+    // WAVE-2 dual-emit: the explicit P1 finding (with its fixHint) is carried on
+    // the verdict alongside the legacy fields.
+    expect(verdict.payload.findings).toEqual([
+      {
+        id: "missed-behavior-B2",
+        severity: "P1",
+        title: "B2 not implemented",
+        body: "The integrated result does not cover behavior B2.",
+        fixHint: "implement B2 in the writer pass",
+      },
+    ]);
     const rejected = h.find("auditor.rejected")!;
     expect(rejected.payload.recommendedAction).toBe("loop_to_planner");
     expect(rejected.payload.outstandingBehaviorIds).toEqual(["B2"]);

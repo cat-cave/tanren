@@ -42,6 +42,27 @@ describe("ProjectConfigV1 parser", () => {
     expect(migrateProjectConfig({ version: 1, greenfield: true }).greenfield).toBe(true);
   });
 
+  it("defaults auditPosture to balanced (P0/P1 block, fix-if-idle) and accepts a velocity override", () => {
+    // WAVE-2 / SLICE P-A: the DORA knob. A bare project resolves to the balanced
+    // posture; a velocity shop overrides to block only P0/P1 + route the residual.
+    expect(migrateProjectConfig({ version: 1 }).auditPosture).toEqual({
+      blockReviewAt: "P1",
+      p2p3Handling: "fix-if-idle",
+    });
+    const velocity = migrateProjectConfig({
+      version: 1,
+      auditPosture: { blockReviewAt: "P1", p2p3Handling: "route-to-dag" },
+    });
+    expect(velocity.auditPosture.p2p3Handling).toBe("route-to-dag");
+    // A zero-defect shop blocks on even P3.
+    const strict = migrateProjectConfig({ version: 1, auditPosture: { blockReviewAt: "P3" } });
+    expect(strict.auditPosture.blockReviewAt).toBe("P3");
+  });
+
+  it("rejects an unknown auditPosture severity", () => {
+    expect(() => migrateProjectConfig({ version: 1, auditPosture: { blockReviewAt: "P9" } })).toThrow(/.+/u);
+  });
+
   it("parses a provisioned deploy target (env not yet attached → envAttachmentRef absent)", () => {
     // Regression: provisioning the `deploy` capability writes these keys onto the
     // project config; `.strict()` rejected the un-declared ones, so every project READ

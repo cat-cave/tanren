@@ -249,6 +249,20 @@ export const AuditorCompletedPayload = z
   })
   .strict();
 
+// WAVE-2 / SLICE P-A: the explicit findings the auditor emits (the new
+// severity currency). Dual-emitted alongside the legacy verdict on
+// `auditor.verdict`; the DagLifecycle read model + `auditPosture` policy read
+// these directly (no inferred severity). Optional during the transition slice.
+const AuditorFindingPayload = z
+  .object({
+    id: z.string(),
+    severity: z.enum(["P0", "P1", "P2", "P3"]),
+    title: z.string(),
+    body: z.string(),
+    fixHint: z.string().optional(),
+  })
+  .strict();
+
 export const AuditorVerdictPayload = z
   .object({
     runId: z.string(),
@@ -256,6 +270,9 @@ export const AuditorVerdictPayload = z
     reasoning: z.string(),
     outstandingBehaviorIds: z.array(z.string()),
     recommendedAction: z.enum(["pass", "loop_to_planner", "halt"]),
+    // WAVE-2 dual-emit: the explicit P0–P3 findings list. Optional so a
+    // pre-slice replayed event still parses.
+    findings: z.array(AuditorFindingPayload).optional(),
   })
   .strict();
 

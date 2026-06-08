@@ -111,6 +111,48 @@ describe("projectSpecLifecycle — open-finding max severity (the moderate gate 
   });
 });
 
+describe("projectSpecLifecycle — EXPLICIT findings win (WAVE-2: kill inferred severity)", () => {
+  it("reads the max severity DIRECTLY off explicit findings, not from passed/recommendedAction", () => {
+    // passed=true + recommendedAction=pass would INFER `none`; the explicit P1
+    // finding overrides — the severity is read off the findings, never inferred.
+    const life = projectSpecLifecycle(
+      signals({
+        prOpened: true,
+        ciPassed: true,
+        auditVerdict: {
+          passed: true,
+          recommendedAction: "pass",
+          outstandingCount: 0,
+          findings: [
+            { id: "f-p2", severity: "P2", title: "polish", body: "b" },
+            { id: "f-p1", severity: "P1", title: "blocker", body: "b" },
+          ],
+        },
+      }),
+    );
+    expect(life.openFindingMaxSeverity).toBe("P1");
+  });
+
+  it("an EMPTY explicit findings list is audited-clean (none), even with passed=false legacy fields", () => {
+    const life = projectSpecLifecycle(
+      signals({
+        prOpened: true,
+        ciPassed: true,
+        // Legacy inference would yield P1 (passed=false); explicit empty findings win.
+        auditVerdict: { passed: false, recommendedAction: "loop_to_planner", outstandingCount: 2, findings: [] },
+      }),
+    );
+    expect(life.openFindingMaxSeverity).toBe("none");
+  });
+
+  it("falls back to legacy inference ONLY when findings are absent (dual-emit transition)", () => {
+    const life = projectSpecLifecycle(
+      signals({ auditVerdict: { passed: false, recommendedAction: "halt", outstandingCount: 1 } }),
+    );
+    expect(life.openFindingMaxSeverity).toBe("P0");
+  });
+});
+
 describe("rank helpers", () => {
   it("lifecycle rank is monotonic along the ladder", () => {
     expect(lifecycleRank("building")).toBeLessThan(lifecycleRank("pr_open"));

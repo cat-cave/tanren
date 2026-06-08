@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 import type pg from "pg";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { AuditAnswer, CheckAnswer, PlanAnswer, PlanSubtask } from "../answerers/schemas/index.js";
+import { normalizeFinding } from "../answerers/schemas/index.js";
 import type { EventName, EventPayload } from "../events/index.js";
 import { emitStageTiming } from "../observability/index.js";
 import type { AnswererAdapter, WriterAdapter, WriterResult } from "../providers/types.js";
@@ -25,6 +26,7 @@ import {
 import { invokePlanner, type PlannerRejectionFeedback, type PlannerSpecContext } from "./planner/planner.js";
 import { recordAnswererCost, recordWriterCost, secondsSince, type SubtaskCostContext } from "./subtaskCost.js";
 import { insertChildTask, markTaskDone, markTaskFailed } from "./subtaskTasks.js";
+import { AUDIT_FINDINGS_DUAL_EMIT_DEFAULT } from "../forge/audits/findingsDualEmit.js";
 
 type LoopQueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
@@ -398,6 +400,10 @@ export interface AuditorStageInput {
   timeoutMs: number;
   appendEvent: StageAppendEvent;
   buildUsage?: (input: { auditorTaskId: string; verdict: AuditAnswer }) => Record<string, unknown>;
+  // WAVE-2 / SLICE P-A de-risk flag: dual-emit the explicit `findings` list on
+  // `auditor.verdict` alongside the legacy verdict. Defaults to the governed
+  // `AUDIT_FINDINGS_DUAL_EMIT_DEFAULT` (ON); a focused test may force it OFF.
+  dualEmitFindings?: boolean;
 }
 
 export async function runAuditorStage(
@@ -435,6 +441,10 @@ export async function runAuditorStage(
   });
   const runtimeSeconds = secondsSince(startedAt);
   emitStageTiming("audit", Date.now() - startedAt, { runId: args.runId });
+  // WAVE-2 dual-emit: carry the explicit findings list alongside the legacy
+  // verdict when the de-risk flag is on (the default). The findings are the new
+  // first-class severity currency the DagLifecycle read model + posture policy read.
+  const emitFindings = args.dualEmitFindings ?? AUDIT_FINDINGS_DUAL_EMIT_DEFAULT;
   await args.appendEvent(
     "auditor.verdict",
     {
@@ -443,6 +453,13 @@ export async function runAuditorStage(
       reasoning: result.verdict.reasoning,
       outstandingBehaviorIds: [...result.verdict.outstandingBehaviorIds],
       recommendedAction: result.verdict.recommendedAction,
+      ...(emitFindings && {
+        // The adapter returns a PARSED answer (findings defaulted to []); a raw
+        // fixture verdict may omit it, so coalesce to an empty list. `normalizeFinding`
+        // collapses a strict-schema `fixHint: null` to an absent key so the stored
+        // shape matches the frozen `{ fixHint?: string }` contract.
+        findings: (result.verdict.findings ?? []).map((f) => normalizeFinding(f)),
+      }),
     },
     auditorTaskId,
   );

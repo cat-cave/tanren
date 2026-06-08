@@ -2,6 +2,58 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
+    "findings": {
+      "default": [],
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "body": {
+            "maxLength": 6000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "fixHint": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "maxLength": 120,
+            "minLength": 1,
+            "type": "string"
+          },
+          "severity": {
+            "enum": [
+              "P0",
+              "P1",
+              "P2",
+              "P3"
+            ],
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 200,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "severity",
+          "title",
+          "body"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
     "outstandingBehaviorIds": {
       "items": {
         "minLength": 1,
@@ -29,7 +81,8 @@
     "passed",
     "reasoning",
     "outstandingBehaviorIds",
-    "recommendedAction"
+    "recommendedAction",
+    "findings"
   ],
   "type": "object",
   "x-tanren-schema-id": "tanren.audit_answer.v2"

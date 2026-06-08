@@ -264,6 +264,14 @@ export const sensitivityRules: SensitivityRule[] = [
     ["outstandingBehaviorIds", "public"],
     ["outstandingBehaviorIds[]", "public"],
     ["recommendedAction", "public"],
+    // WAVE-2 / SLICE P-A: the explicit findings list (public — they become DAG
+    // specs / fix-in-place work; nothing here is a secret).
+    ["findings", "public"],
+    ["findings[].id", "public"],
+    ["findings[].severity", "public"],
+    ["findings[].title", "public"],
+    ["findings[].body", "public"],
+    ["findings[].fixHint", "public"],
   ]),
   // rejection event emitted by the auditor rejection-loop branch
   ...rulesFor("auditor.rejected", [

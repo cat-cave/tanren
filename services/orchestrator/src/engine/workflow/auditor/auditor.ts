@@ -15,6 +15,15 @@ const AUDITOR_V2_OUTPUT_INSTRUCTIONS = [
   "Set recommendedAction='pass' when passed=true.",
   "Set recommendedAction='loop_to_planner' when the spec is recoverable by re-planning.",
   "Set recommendedAction='halt' when the spec is not recoverable in this run.",
+  // WAVE-2 / SLICE P-A: emit EXPLICIT findings — the new severity currency. You
+  // render NO pass/fail judgment from severity; you DECLARE each defect's severity
+  // directly. The project's posture (not you) decides what blocks.
+  "Populate `findings` with one entry per concrete defect you found, each with an",
+  "EXPLICIT severity: P0 (irrecoverable blocker / data-loss / build-breaking),",
+  "P1 (blocking defect that must be reworked), P2 (non-blocking quality gap worth",
+  "fixing), P3 (minor polish). Give each a stable slug `id`, a short `title`, a",
+  "`body` with enough context to act on, and an optional `fixHint`. Emit an EMPTY",
+  "`findings` list when the change is audited-clean — never invent a finding.",
 ];
 
 export interface AuditorSpecContext {

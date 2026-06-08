@@ -27,6 +27,31 @@ import {
   type SpecLifecycleSignals,
   type SpecReviewState,
 } from "../contracts/dagLifecycle.js";
+import type { Finding } from "../contracts/findings.js";
+import { AuditFinding, normalizeFinding } from "../answerers/schemas/index.js";
+
+/**
+ * Parse the `auditor.verdict` payload's `findings` JSON into typed `Finding`s.
+ * Returns undefined when the column is null (a legacy verdict with no findings —
+ * the legacy inference path then applies). A malformed entry is dropped LOUDLY
+ * (it never silently degrades to a `none` severity): each element must parse as
+ * an `AuditFinding`. An empty-but-present list returns `[]` (audited-clean), which
+ * is distinct from undefined (no findings emitted at all).
+ */
+function findingsFromPayload(raw: unknown): ReadonlyArray<Finding> | undefined {
+  if (raw === null || raw === undefined) {
+    return undefined;
+  }
+  if (!Array.isArray(raw)) {
+    return undefined;
+  }
+  return raw.map((entry) => {
+    // `normalizeFinding` collapses a strict-schema `fixHint: null` to an absent
+    // key, yielding the frozen `{ fixHint?: string }` Finding contract.
+    const finding: Finding = normalizeFinding(AuditFinding.parse(entry));
+    return finding;
+  });
+}
 
 interface SpecLifecycleRow {
   spec_id: string;
@@ -38,6 +63,10 @@ interface SpecLifecycleRow {
   audit_passed: boolean | null;
   audit_recommended_action: string | null;
   audit_outstanding_count: number | null;
+  // WAVE-2: the explicit findings JSON the auditor.verdict carries (the new
+  // first-class severity currency). Null for legacy verdicts recorded before the
+  // findings slice — then the legacy `passed`/`recommendedAction` inference applies.
+  audit_findings: unknown;
   review_approved: boolean;
   review_changes_requested: boolean;
   review_auto_approved: boolean;
@@ -55,10 +84,12 @@ function auditVerdictFromRow(row: SpecLifecycleRow): SpecLifecycleSignals["audit
   }
   const action = row.audit_recommended_action;
   const recommendedAction = action === "halt" || action === "loop_to_planner" ? action : "pass";
+  const findings = findingsFromPayload(row.audit_findings);
   return {
     passed: row.audit_passed,
     recommendedAction,
     outstandingCount: row.audit_outstanding_count ?? 0,
+    ...(findings !== undefined && { findings }),
   };
 }
 
@@ -136,6 +167,7 @@ export class PgDagLifecycleReadModel implements DagLifecycleReadModel {
           av.audit_passed,
           av.audit_recommended_action,
           av.audit_outstanding_count,
+          av.audit_findings,
           COALESCE(ev.review_approved, false)      AS review_approved,
           COALESCE(ev.review_changes_requested, false) AS review_changes_requested,
           COALESCE(ev.review_auto_approved, false) AS review_auto_approved,
@@ -168,7 +200,10 @@ export class PgDagLifecycleReadModel implements DagLifecycleReadModel {
           SELECT
             (e.payload ->> 'passed')::boolean        AS audit_passed,
             e.payload ->> 'recommendedAction'        AS audit_recommended_action,
-            COALESCE(jsonb_array_length(e.payload -> 'outstandingBehaviorIds'), 0) AS audit_outstanding_count
+            COALESCE(jsonb_array_length(e.payload -> 'outstandingBehaviorIds'), 0) AS audit_outstanding_count,
+            -- WAVE-2: the explicit findings list (the new severity currency). Null
+            -- when the verdict predates the findings slice (legacy inference applies).
+            e.payload -> 'findings'                  AS audit_findings
           FROM events e
           WHERE e.run_id = lr.run_id
             AND e.event_type = 'auditor.verdict'
