@@ -26,6 +26,7 @@ import { codexHomeForRun } from "../credentials/codexMaterializer.js";
 import type { EventName, EventPayload } from "../events/index.js";
 import { type EventStore, PgEventStore } from "../eventStore.js";
 import type { ReviewAnswer } from "../answerers/schemas/index.js";
+import type { SpecQualityAnswerer } from "../forge/specQuality/index.js";
 import type { VcsProvider } from "../contracts/vcsProvider.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
 import type { AnswererAdapter } from "../providers/types.js";
@@ -189,6 +190,10 @@ export interface RunPlannerLoopInput {
   // Test seams. Omitted in production → real Codex adapters + SSH usage probe.
   buildAdapters?: (ctx: PlannerRunAdapterContext) => SubtaskLoopAdapters;
   buildUsageProbe?: (ctx: PlannerRunAdapterContext) => UsageProbe | undefined;
+  // WORKSTREAM 1 ↔ 2 SEAM. Omitted in production → the spec-quality validator is
+  // resolved from the project routing (audit chain head; Codex by default) and gates
+  // the loop's TRIAGE `kind: spec` items. Tests inject a fake validator.
+  buildSpecValidator?: (ctx: PlannerRunAdapterContext) => SpecQualityAnswerer;
   // BUDGET-SAFETY (M6): the budget-gate seam the run-setup ceiling preflight resolves the
   // configured ceiling through. Defaults to PgBudgetGate over `pool`; tests inject a fake.
   budgetGate?: BudgetGate;
@@ -305,7 +310,11 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
       codexHome: codexHomeForRun(context.runId),
     };
     // Build adapters + usage probe AND run the BUDGET-SAFETY (M6) ceiling preflight (fail closed on an unreachable ceiling).
-    const { adapters, usageProbe } = await resolveRunAdaptersWithBudgetPreflight(input, adapterCtx, appendEvent);
+    const { adapters, usageProbe, specValidator } = await resolveRunAdaptersWithBudgetPreflight(
+      input,
+      adapterCtx,
+      appendEvent,
+    );
     // MANAGED run: the per-call real-`usage.cost` capturer (undefined on BYOK). See its builder.
     const captureRealProviderCost = await buildManagedCapturerForRun(input);
     // the deterministic gate runs on the just-bootstrapped workspace.
@@ -358,6 +367,11 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
         runGate,
         seedRejections: [...seedRejections],
         ...(captureRealProviderCost !== undefined && { captureRealProviderCost }),
+        // WORKSTREAM 1 ↔ 2 SEAM — gate the loop's TRIAGE `kind: spec` items against the
+        // spec-quality contract. STRICT (no reviseSpec): the triage answerer cannot
+        // cheaply re-author a single spec, so a persistently-invalid spec escalates
+        // loud (PersistentlyInvalidSpecError → run halts → needs_attention).
+        specValidator: { validator: specValidator },
       });
 
       if (outcome.kind !== "passed") {

@@ -82,8 +82,10 @@ describe("buildPlannerPrompt — full rendered contract", () => {
     expect(prompt).toContain("write to the workspace.\n\nSpec title: Add status helpers");
     // header → criteria bullets → blank → behaviors block.
     expect(prompt).toContain("- AC-two: fail() exists\n\nDeclared behaviors");
-    // behaviors block → blank → rejection block.
-    expect(prompt).toContain("- B1: ok exists — module exports ok\n\nThis is the first plan");
+    // behaviors block → blank → grading-criteria block (spec-loop redesign §PLANNER).
+    expect(prompt).toContain("- B1: ok exists — module exports ok\n\nHow the resulting work is graded");
+    // grading-criteria block → blank → rejection block.
+    expect(prompt).toContain("produce that observable behavior so the demo can exercise it.\n\nThis is the first plan");
   });
 
   it("renders every footer requirement line", () => {

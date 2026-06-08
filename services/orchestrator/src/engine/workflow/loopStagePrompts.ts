@@ -5,6 +5,7 @@
 //
 // SPEC-LOOP REDESIGN (docs/roadmap/spec-loop-redesign.md).
 
+import { SPEC_QUALITY_CONTRACT_PROMPT } from "../forge/specQuality/index.js";
 import type { Finding } from "../contracts/findings.js";
 import { totalPScore } from "./loopPolicy.js";
 
@@ -41,6 +42,14 @@ export function buildTriagePrompt(input: TriagePromptInput): string {
     "- `severity`    — the WORST severity among the findings this item subsumes.",
     "- `findingIds`  — the ids of the findings this item resolves (the dedup trail).",
     "Render NO pass/fail verdict: the loop routes each item by severity + project posture.",
+    "",
+    // WORKSTREAM 1 — a `kind: spec` item becomes a NEW DAG spec, so it must meet the
+    // SAME spec-quality bar every spec-emitter is held to (and is gated against it
+    // before it materializes). Author each `spec` item's title/body to satisfy this:
+    "A `kind: spec` item is emitted as a NEW DAG spec and is GATED against the",
+    "spec-quality contract below — author its `title` + `body` to MEET this bar (a",
+    "spec that fails is looped back to you):",
+    SPEC_QUALITY_CONTRACT_PROMPT,
     "",
     `The change is committed on the current branch; inspect it via git diff ${input.baselineSha}`,
     "to judge whether a fix is a bounded task or a coherent new unit. Do NOT edit files,",

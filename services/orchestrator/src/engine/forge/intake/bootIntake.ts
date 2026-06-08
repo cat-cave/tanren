@@ -11,7 +11,11 @@ import type { SecretStore } from "../../contracts/secretStore.js";
 import type { CommandSubstrate } from "../../contracts/commandSubstrate.js";
 import type { GitHubHttpClient } from "../../providers/github.js";
 import type { GithubAppTokenMinter } from "../../providers/githubAppTokenMinter.js";
-import { buildForgeAuditAnswererFactory, buildForgeTriageAnswererFactory } from "../providerFactory.js";
+import {
+  buildForgeAuditAnswererFactory,
+  buildForgeSpecQualityAnswererFactory,
+  buildForgeTriageAnswererFactory,
+} from "../providerFactory.js";
 import { AuditSchedulerLoop, createAnswererPassRunner } from "../audits/index.js";
 import { IntakePoller } from "./poller.js";
 import { intakeAutoRouteDeps } from "./systemActor.js";
@@ -62,7 +66,15 @@ export function startIntake(deps: BootIntakeDeps): BootedIntake {
     identitySecretRef: deps.identitySecretRef,
   };
   const triageFactory = buildForgeTriageAnswererFactory(forgeInfra);
-  const autoRoute = intakeAutoRouteDeps(deps.runStateWriter);
+  // Spec-quality gate (workstream 1): every auto-routed spec is validated against
+  // the four-part contract before it lands in the DAG (a persistently-invalid spec
+  // escalates LOUD, never a silent commit). The validator allocates a runner per
+  // call, exactly like triage — resolved per-candidate from its org/project.
+  const specQualityFactory = buildForgeSpecQualityAnswererFactory(forgeInfra);
+  const autoRoute = intakeAutoRouteDeps({
+    ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
+    resolveSpecValidator: (target) => specQualityFactory(target),
+  });
 
   const poller = new IntakePoller({
     pool: deps.pool,

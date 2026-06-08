@@ -9,6 +9,7 @@
 // judgement instead of the hardcoded "add csv export" / "fix session race"
 // templates the deterministic fixture shipped.
 
+import { SPEC_QUALITY_CONTRACT_PROMPT } from "../../answerers/schemas/specQuality.js";
 import type { DiscoveryAnswererContext } from "./types.js";
 
 export function buildDiscoveryPrompt(context: DiscoveryAnswererContext): string {
@@ -35,5 +36,10 @@ export function buildDiscoveryPrompt(context: DiscoveryAnswererContext): string 
     "- `deltas`: which personas/behaviors/specs this insight adds or impacts.",
     "- `summary`: your classification narrative; `readSummary`: what you grounded on.",
     "Derive the DAG from the insight + the existing specs — judgement, not a fixed menu.",
+    "",
+    "Each spec you propose MUST satisfy the spec-quality contract — proposals are",
+    "gated by the spec-quality validator before they land, and a spec that fails is",
+    "looped back to you to re-author:",
+    SPEC_QUALITY_CONTRACT_PROMPT,
   ].join("\n");
 }

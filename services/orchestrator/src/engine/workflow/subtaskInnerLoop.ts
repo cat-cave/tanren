@@ -169,6 +169,19 @@ const WRITER_TOOLCHAIN_INSTRUCTION =
   "workspace stub packages, `workspace:*` placeholders, or fake binaries for typescript/eslint/vitest " +
   "or any toolchain — use the real published packages.";
 
+// How the writer's change will be GRADED (spec-loop redesign §WRITER, workstream 1).
+// Steers the writer to satisfy the gate on the first pass: run the fast deterministic
+// gate (fmt/lint/typecheck) BEFORE finishing — a fast-gate failure loops straight back
+// to it — then names the CHECKER (completeness) + AUDITOR (quality) bars it is judged on.
+const WRITER_GRADING_INSTRUCTION =
+  "How your change will be graded — satisfy these BEFORE you finish: a FAST " +
+  "deterministic gate runs first (formatting, lint, typecheck) — RUN it yourself " +
+  "(the project's fmt/lint/typecheck commands) and make it pass before you stop, " +
+  "since a fast-gate failure loops straight back to you before any reviewer. Then a " +
+  "CHECKER judges whether your change COMPLETES the subtask intent + every relevant " +
+  "acceptance criterion (leave it complete and self-contained), and an AUDITOR " +
+  "reviews quality/security/perf (write correct, secure, clean code).";
+
 function writerPromptFor(input: SubtaskLoopInput, subtask: PlanSubtask, iter: number, lastReason: string): string {
   const criteria =
     input.context.acceptanceCriteria.length > 0
@@ -188,9 +201,8 @@ function writerPromptFor(input: SubtaskLoopInput, subtask: PlanSubtask, iter: nu
     ...criteria,
     ...rework,
     "",
-    "You will be graded by a deterministic FAST GATE (fmt/lint/typecheck) right after you",
-    "finish, then a completeness CHECKER. Run the fast gate yourself before finishing.",
-    "",
     WRITER_TOOLCHAIN_INSTRUCTION,
+    "",
+    WRITER_GRADING_INSTRUCTION,
   ].join("\n");
 }

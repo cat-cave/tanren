@@ -33,6 +33,7 @@ import { buildConvergencePrompt, buildDemoRunPrompt, buildTriagePrompt } from ".
 import { recordAnswererCost, secondsSince, type SubtaskCostContext } from "./subtaskCost.js";
 import { insertChildTask, markTaskDone } from "./subtaskTasks.js";
 import type { StageAppendEvent } from "./subtaskStages.js";
+import { gateTriagedSpecs, type TriageSpecValidator } from "./loopFindings.js";
 
 type LoopQueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
@@ -105,6 +106,7 @@ export async function runDemoRunStage(args: DemoRunStageInput): Promise<{ findin
   await recordAnswererCost({
     ctx: args.costCtx,
     adapter: args.adapter,
+    role: "demoRun",
     taskId: demoTaskId,
     model: "tanren-demo-run",
     runtimeSeconds,
@@ -125,6 +127,11 @@ export interface TriageStageInput extends StageBase {
   // ALL findings to triage (spec-gate CI-as-P0 + auditor + demo).
   findings: ReadonlyArray<Finding>;
   posture: AuditPostureConfig;
+  // WORKSTREAM 1 ↔ 2 SEAM — the spec-quality gate for `kind: spec` items. When wired,
+  // every work item routed to a NEW DAG spec is validated against the spec-quality
+  // contract BEFORE it leaves triage; a persistently-invalid spec raises
+  // `PersistentlyInvalidSpecError` (loud needs_attention). Absent ⇒ inert.
+  specValidator?: TriageSpecValidator;
 }
 
 export interface TriageStageResult {
@@ -175,6 +182,11 @@ export async function runTriageStage(args: TriageStageInput): Promise<TriageStag
   emitStageTiming("audit", Date.now() - startedAt, { runId: args.runId });
   const routed: RoutedWorkItem[] = routeTriageItems(answer.workItems, args.posture);
   const routing = summarizeTriageRouting(routed);
+  // WORKSTREAM 1 ↔ 2 SEAM — gate every NEW-spec routed item against the spec-quality
+  // contract before it materializes. A persistently-invalid spec throws loud
+  // (PersistentlyInvalidSpecError → the run halts → needs_attention), never a silent
+  // commit. Inert when no validator is wired (unit paths).
+  await gateTriagedSpecs(routing.newSpecs, args.specValidator);
   await args.appendEvent(
     "triage.completed",
     {
@@ -195,6 +207,7 @@ export async function runTriageStage(args: TriageStageInput): Promise<TriageStag
   await recordAnswererCost({
     ctx: args.costCtx,
     adapter: args.adapter,
+    role: "triage",
     taskId: triageTaskId,
     model: "tanren-triage",
     runtimeSeconds,
@@ -284,6 +297,7 @@ export async function runConvergenceStage(args: ConvergenceStageInput): Promise<
   await recordAnswererCost({
     ctx: args.costCtx,
     adapter: args.adapter,
+    role: "convergence",
     taskId: convergenceTaskId,
     model: "tanren-convergence",
     runtimeSeconds,

@@ -16,7 +16,10 @@
         "planner",
         "checker",
         "auditor",
-        "writer"
+        "writer",
+        "triage",
+        "convergence",
+        "demoRun"
       ],
       "type": "string"
     }

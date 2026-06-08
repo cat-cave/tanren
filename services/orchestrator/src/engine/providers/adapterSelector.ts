@@ -9,6 +9,8 @@ import type {
   ReviewAnswer,
   TriageAnswer,
 } from "../answerers/schemas/index.js";
+import type { SpecQualityAnswer } from "../answerers/schemas/specQuality.js";
+import { type SpecQualityAnswerer, wrapProviderSpecQualityAnswerer } from "../forge/specQuality/index.js";
 import type { RoutingChainEntry, RoutingTable } from "../config/shared.js";
 import type { RunnerHandle } from "../contracts/allocator.js";
 import type { SecretStore } from "../contracts/secretStore.js";
@@ -218,6 +220,20 @@ export function buildSimulatedReviewerAdapter(
   routing: RoutingTable,
 ): AnswererAdapter<ReviewAnswer> {
   return buildAnswererAdapter<ReviewAnswer>(deps, chainHead(routing, "audit"), "review");
+}
+
+// Resolves the spec-quality VALIDATOR (workstream 1 of the spec-loop redesign) — the
+// read-only answerer that gates every spec-emitter's output (incl. the loop's TRIAGE)
+// against the four-part spec-quality contract before it lands in the DAG. Like the
+// reviewer/conflict answerers it has no dedicated routing chain; it is a judge over
+// authored spec content, so it rides the `audit` chain head with NO schema/DB
+// migration. Wrapped so a malformed answer THROWS (loud, never a default pass).
+export function buildSpecQualityValidator(
+  deps: AdapterSelectorDependencies,
+  routing: RoutingTable,
+): SpecQualityAnswerer {
+  const adapter = buildAnswererAdapter<SpecQualityAnswer>(deps, chainHead(routing, "audit"), "specQuality");
+  return wrapProviderSpecQualityAnswerer(adapter);
 }
 
 // Resolves the intent-preserving conflict-resolution Answerer (

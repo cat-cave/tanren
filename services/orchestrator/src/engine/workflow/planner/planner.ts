@@ -99,6 +99,23 @@ export function buildPlannerPrompt(input: PlannerInvokeInput): string {
           "",
         ];
   const rejectionBlocks = renderRejectionHistory(input.rejectionHistory);
+  // Grading-criteria awareness (spec-loop redesign §PLANNER): the subtasks you emit
+  // are graded against the SAME bars the spec is. Write each task description so it
+  // is gradable against all of them — so the writer aims at the gate, not at a guess.
+  const gradingCriteria = [
+    "How the resulting work is graded — write each subtask so it is GRADABLE against",
+    "these bars (a task that cannot be checked/audited/demonstrated will loop back):",
+    "- DETERMINISTIC GATE (fmt/lint/typecheck, then tests/build): each subtask's",
+    "  change must keep the project building and its checks green. Do NOT plan work",
+    "  that leaves the tree un-buildable for a later subtask to fix.",
+    "- CHECKER (completeness): each subtask must be COMPLETE for what later subtasks",
+    "  depend on — state, in the intent, the observable outcome that proves it done.",
+    "- AUDITOR (quality/security/perf/scalability): plan for correct, secure,",
+    "  reasonably-performant changes — not just ones that compile.",
+    "- DEMO: the spec has a concrete 'show me it works'; ensure the subtasks together",
+    "  produce that observable behavior so the demo can exercise it.",
+    "",
+  ];
   const footer = [
     "Every subtask MUST be an actionable change that modifies the workspace and",
     "produces a git diff advancing the acceptance criteria. Do NOT emit read-only",
@@ -116,7 +133,7 @@ export function buildPlannerPrompt(input: PlannerInvokeInput): string {
     "- estimatedTokens: integer estimate or null when unknown",
     "Provide a top-level rationale explaining the decomposition.",
   ];
-  return [...header, ...behaviors, ...rejectionBlocks, ...footer].join("\n");
+  return [...header, ...behaviors, ...gradingCriteria, ...rejectionBlocks, ...footer].join("\n");
 }
 
 function renderRejectionHistory(history: ReadonlyArray<PlannerRejectionFeedback>): string[] {

@@ -53,7 +53,7 @@ import { runAuditorStage, runPlannerStage } from "./subtaskStages.js";
 import { runSubtaskSequence } from "./subtaskInnerLoop.js";
 import { runConvergenceStage, runDemoRunStage, runTriageStage } from "./loopStages.js";
 import { type ConvergenceState } from "./loopPolicy.js";
-import { gateFindings } from "./loopFindings.js";
+import { gateFindings, type TriageSpecValidator } from "./loopFindings.js";
 
 type LoopQueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
@@ -126,6 +126,11 @@ export interface SubtaskLoopInput {
   // prior rejections to seed the planner's rejectionHistory (review-rework re-entry).
   seedRejections?: ReadonlyArray<PlannerRejectionFeedback>;
   captureRealProviderCost?: RealProviderCostCapturer;
+  // WORKSTREAM 1 ↔ 2 SEAM — the spec-quality gate (forge/specQuality contract) applied
+  // to the TRIAGE stage's `kind: spec` work items before they become NewSpecRequests.
+  // Resolved per org/project in plannerRun (a real read-only validator answerer + the
+  // re-author loopback). Absent ⇒ the gate is inert (unit paths).
+  specValidator?: TriageSpecValidator;
 }
 
 // A new DAG spec triage routed out of this spec. Emitted through the spec-creating
@@ -319,6 +324,7 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
       baselineSha: input.context.baseSha ?? "HEAD",
       findings,
       posture,
+      ...(input.specValidator !== undefined && { specValidator: input.specValidator }),
       timeoutMs: input.timeoutMs,
       appendEvent,
     });

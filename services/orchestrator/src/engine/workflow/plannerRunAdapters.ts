@@ -10,7 +10,12 @@ import type { CiWhen } from "../ci/index.js";
 import type { RunnerHandle } from "../contracts/allocator.js";
 import type { EventStore } from "../eventStore.js";
 import type { ReviewAnswer } from "../answerers/schemas/index.js";
-import { buildAdaptersFromRouting, buildSimulatedReviewerAdapter } from "../providers/adapterSelector.js";
+import {
+  buildAdaptersFromRouting,
+  buildSimulatedReviewerAdapter,
+  buildSpecQualityValidator,
+} from "../providers/adapterSelector.js";
+import type { SpecQualityAnswerer } from "../forge/specQuality/index.js";
 import type { AnswererAdapter } from "../providers/types.js";
 import type { UsageProbe } from "../usage/index.js";
 import { defaultUsageProbe } from "./plannerRunUsage.js";
@@ -81,6 +86,31 @@ export function defaultSimulatedReviewer(
     );
   }
   return buildSimulatedReviewerAdapter(
+    {
+      secrets: input.secrets,
+      ssh: input.ssh,
+      target: ctx.target,
+      runId: ctx.runId,
+      endpointBaseUrl: input.context.endpointBaseUrl,
+    },
+    routing,
+  );
+}
+
+// Builds the spec-quality VALIDATOR (workstream 1) from the project routing — the
+// read-only judge over the loop's TRIAGE `kind: spec` items, riding the `audit` chain
+// head like the simulated reviewer. Resolved once per run and threaded into the loop's
+// triage seam so a triaged spec meets the SAME accomplishable/demo-able/non-trivial/
+// legible bar as every spec-emitter before it materializes into the DAG.
+export function defaultSpecQualityValidator(
+  input: RunPlannerLoopInput,
+  ctx: PlannerRunAdapterContext,
+): SpecQualityAnswerer {
+  const routing = input.context.routing;
+  if (routing === undefined) {
+    throw new Error("context.routing is required to build the spec-quality validator from the project routing table");
+  }
+  return buildSpecQualityValidator(
     {
       secrets: input.secrets,
       ssh: input.ssh,
@@ -343,8 +373,12 @@ export async function resolveRunAdaptersWithBudgetPreflight(
   input: RunPlannerLoopInput,
   ctx: PlannerRunAdapterContext,
   appendEvent: AppendEvent,
-): Promise<{ adapters: SubtaskLoopAdapters; usageProbe: UsageProbe | undefined }> {
+): Promise<{ adapters: SubtaskLoopAdapters; usageProbe: UsageProbe | undefined; specValidator: SpecQualityAnswerer }> {
   const adapters = (input.buildAdapters ?? ((c) => defaultRoutingAdapters(input, c)))(ctx);
+  // WORKSTREAM 1 ↔ 2 SEAM — the spec-quality validator the loop's TRIAGE gates its
+  // `kind: spec` items through. Resolved here (the same place the loop adapters are)
+  // so it shares the run's routing/runner; tests override via `buildSpecValidator`.
+  const specValidator = (input.buildSpecValidator ?? ((c) => defaultSpecQualityValidator(input, c)))(ctx);
   // The codex usage probe (ccusage + codexbar) is codex-specific. Build it when ANY
   // role adapter is codex (a mixed route still consumes the codex subscription) so
   // codex window pressure is always observed; a run with no codex role gets none.
@@ -369,5 +403,5 @@ export async function resolveRunAdaptersWithBudgetPreflight(
     writerObservable,
     appendEvent,
   );
-  return { adapters, usageProbe };
+  return { adapters, usageProbe, specValidator };
 }
