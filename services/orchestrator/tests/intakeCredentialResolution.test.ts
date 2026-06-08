@@ -12,11 +12,22 @@
 //       the source, NOT a silent skip.
 //   (c) intake genuinely NOT configured (no GitHub issues source) → no poller, no
 //       error (the legitimate "no GitHub intake" case).
+//   (d) intake configured with a SOURCE-OWNED `config.staticRef` that does NOT
+//       resolve (the secret store has no secret at that ref) → `IntakePoller.tick()`
+//       throws LOUD, NOT a silent skip. The org-default path is loud via the eager
+//       seam check; the source-static path is loud via the lazy resolver error
+//       (`MissingGithubCredentialRefError`) re-thrown at the tick boundary.
 
 import type pg from "pg";
 import { describe, expect, it } from "vitest";
-import { buildIntakeConnectorMapForOrg, IntakeGithubCredentialMissingError } from "../src/engine/forge/intake/index.js";
-import type { InboxSource } from "../src/engine/forge/inbox/index.js";
+import {
+  buildIntakeConnectorMapForOrg,
+  IntakeGithubCredentialMissingError,
+  IntakePoller,
+  intakeAutoRouteDeps,
+} from "../src/engine/forge/intake/index.js";
+import { MissingGithubCredentialRefError } from "../src/engine/credentials/githubTokenResolver.js";
+import type { InboxSource, TriageAnswerer } from "../src/engine/forge/inbox/index.js";
 
 const githubSource: InboxSource = {
   id: "src_gh",
@@ -125,5 +136,83 @@ describe("intake credential resolution — not configured (legitimate no-poller)
       sentrySource,
     ]);
     expect(connectors.get("errors")).toBeDefined();
+  });
+});
+
+// Map a source to its persisted row shape (the poller reads sources back).
+function sourceRow(s: InboxSource): Record<string, unknown> {
+  return {
+    id: s.id,
+    org_id: s.orgId,
+    project_id: s.projectId,
+    kind: s.kind,
+    name: s.name,
+    detail: s.detail,
+    config: s.config,
+    enabled: s.enabled ? "true" : "false",
+    auto_route: s.autoRoute ? "true" : "false",
+  };
+}
+
+// A stub pool that drives a full `IntakePoller.tick()`: it lists the one source
+// (distinct-org + per-org list) and serves the org-config read (no App, no
+// org-default). The connector is rebuilt per-org (NO fixed `connectors` map), so
+// the source's own `config.staticRef` flows into the real GitHub connector.
+function pollerStubPool(source: InboxSource, orgConfig: unknown): pg.Pool {
+  const query = async (text: string): Promise<{ rows: unknown[]; rowCount: number }> => {
+    const sql = text.replaceAll(/\s+/gu, " ").trim();
+    if (sql.startsWith("SELECT DISTINCT org_id FROM inbox_sources")) {
+      return { rows: [{ org_id: source.orgId }], rowCount: 1 };
+    }
+    if (sql.includes("FROM inbox_sources WHERE org_id = $1")) {
+      return { rows: [sourceRow(source)], rowCount: 1 };
+    }
+    if (sql.includes("SELECT config FROM organizations")) {
+      return { rows: [{ config: orgConfig }], rowCount: 1 };
+    }
+    return { rows: [], rowCount: 0 };
+  };
+  return { query, connect: async () => ({ query, release() {} }) } as unknown as pg.Pool;
+}
+
+const fixedTriage: TriageAnswerer = {
+  triage: async () => ({
+    dedupe: "no match",
+    match: "new",
+    placement: "auto",
+    verdict: "needs_call",
+    duplicateOfSpecId: null,
+    discoveryVariant: "feature",
+    routableSpec: null,
+  }),
+};
+
+describe("intake credential resolution — source-owned staticRef unresolvable (LOUD)", () => {
+  it("tick() throws (loud) when a github source's config.staticRef does not resolve — never a silent skip", async () => {
+    // The source pins its OWN staticRef (so the eager seam check passes — it does
+    // not require an org-default), but the secret store has NO secret at that ref.
+    // The lazy `resolveGithubToken` then raises MissingGithubCredentialRefError
+    // inside the connector's fetch; the poller must re-throw it loud, not swallow.
+    const staticRefSource: InboxSource = {
+      ...githubSource,
+      config: { owner: "cat-cave", repo: "app", staticRef: "gh/broken" },
+    };
+    // No App, no org-default — and the store returns undefined for "gh/broken".
+    const pool = pollerStubPool(staticRefSource, { version: 1 });
+    const { http } = fakeGithubHttp();
+    const poller = new IntakePoller(
+      {
+        pool,
+        secrets: fakeSecrets,
+        githubHttp: http,
+        answererFactory: () => fixedTriage,
+        autoRoute: intakeAutoRouteDeps(),
+      },
+      60_000,
+    );
+
+    // The credential-resolution error surfaces LOUD at the tick boundary, NOT
+    // swallowed as a per-source transient (which would silently never ingest).
+    await expect(poller.tick()).rejects.toBeInstanceOf(MissingGithubCredentialRefError);
   });
 });

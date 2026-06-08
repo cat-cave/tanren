@@ -27,7 +27,7 @@ import {
   type SourceConnector,
   type TriageAnswerer,
 } from "../inbox/index.js";
-import { buildIntakeConnectorMapForOrg, IntakeGithubCredentialMissingError } from "./issueSourceSeam.js";
+import { buildIntakeConnectorMapForOrg, isCredentialResolutionError } from "./issueSourceSeam.js";
 
 // The poll knobs a source carries on its `config` (alongside the connector's own
 // config). `pollIntervalMs` is the per-source cadence; absence ⇒ the org default.
@@ -226,12 +226,15 @@ export class IntakePoller {
           results.push(await pollSourceOnce(this.deps, source));
           this.lastPolledAt.set(source.id, this.now());
         } catch (error) {
-          // A configured-but-missing credential is a MISCONFIGURATION, not a
-          // transient: per the no-silent-fallbacks doctrine it is a LOUD
-          // fail-closed error that must NOT be swallowed-and-retried (which would
-          // quietly degrade to "this source never ingests"). Re-throw it so the
+          // A credential-RESOLUTION failure is a MISCONFIGURATION, not a transient:
+          // per the no-silent-fallbacks doctrine it is a LOUD fail-closed error that
+          // must NOT be swallowed-and-retried (which would quietly degrade to "this
+          // source never ingests"). This covers BOTH paths uniformly via the shared
+          // predicate — the eager org-default resolution (IntakeGithubCredentialMissingError)
+          // AND the lazy source-owned `config.staticRef` resolution inside the
+          // connector's fetch (No/MissingGithubCredentialRefError). Re-throw so the
           // failure surfaces loudly at the tick boundary, naming the credential.
-          if (error instanceof IntakeGithubCredentialMissingError) throw error;
+          if (isCredentialResolutionError(error)) throw error;
           // Any OTHER source failure (rate limit, transient connector error) never
           // stalls the others; it retries on the next due tick.
           console.error(`[intake-poller] poll of source ${source.id} failed:`, error);

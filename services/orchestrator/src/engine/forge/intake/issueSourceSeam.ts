@@ -23,6 +23,10 @@ import type { SecretStore } from "../../contracts/secretStore.js";
 import type { GitHubHttpClient } from "../../providers/github.js";
 import type { GithubAppTokenMinter } from "../../providers/githubAppTokenMinter.js";
 import { loadOrgDefaultGithubCredentialRef, loadOrgGithubAppInstallation } from "../../credentials/orgGithubApp.js";
+import {
+  MissingGithubCredentialRefError,
+  NoGithubCredentialConfiguredError,
+} from "../../credentials/githubTokenResolver.js";
 import { buildInboxConnectorMap, type InboxSource, type SourceConnector } from "../inbox/index.js";
 
 /**
@@ -48,6 +52,32 @@ export class IntakeGithubCredentialMissingError extends Error {
     this.orgId = orgId;
     this.sourceId = sourceId;
   }
+}
+
+/**
+ * Whether `error` is a credential-RESOLUTION failure — a configured source whose
+ * GitHub credential cannot be resolved, on EITHER path:
+ *   • the EAGER org-default path — {@link IntakeGithubCredentialMissingError}
+ *     (no App installed AND no org-default static token), AND
+ *   • the LAZY source-owned `config.staticRef` path — resolved later, inside the
+ *     connector's `fetch`, where `resolveGithubToken` raises
+ *     {@link NoGithubCredentialConfiguredError} (no ref at all) or
+ *     {@link MissingGithubCredentialRefError} (the ref points at nothing).
+ *
+ * The intake poller's `tick()` uses this single predicate so a configured GitHub
+ * source whose credential cannot be resolved — by ANY path — is a LOUD
+ * fail-closed re-throw, never swallowed as an ordinary per-source transient. A
+ * shared predicate (not a per-type check) keeps a future credential-error type
+ * from silently slipping back into the swallowed path: add it here once and both
+ * the eager and lazy paths stay loud. Genuinely transient errors (network, 5xx,
+ * rate-limit) are NOT in this class and remain per-source transients.
+ */
+export function isCredentialResolutionError(error: unknown): boolean {
+  return (
+    error instanceof IntakeGithubCredentialMissingError ||
+    error instanceof NoGithubCredentialConfiguredError ||
+    error instanceof MissingGithubCredentialRefError
+  );
 }
 
 export interface BuildIntakeConnectorMapDeps {
