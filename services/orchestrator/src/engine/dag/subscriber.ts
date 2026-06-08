@@ -299,10 +299,13 @@ export class DagWalkerSubscriber {
     do {
       this.reWalkPending.delete(projectId);
       await this.walker.walk(projectId);
-      // after the walk (so any just-enqueued speculative dependent's
-      // integrated SHAs are already recorded), detect + percolate ancestor changes
-      // into in-flight speculative dependents. A percolation failure is logged,
-      // never fatal to the walk loop — the next notification re-detects.
+      // walk → baseShift → reconcile (tanren-owns-the-engine.md §3/§7): after the walk
+      // (so any just-enqueued speculative dependent's integrated SHAs are already
+      // recorded), the change-percolation coordinator detects ancestor changes under
+      // in-flight dependents and routes each through the ONE base-shift handler
+      // (`BaseShiftCoordinator.rebaseOnto`) — a never-discard REBASE of the dependent's
+      // existing run/branch in place, NOT the deleted supersede+regenerate. A failure
+      // is logged, never fatal to the walk loop — the next notification re-detects.
       if (this.deps.percolation !== undefined) {
         await this.deps.percolation.percolate(projectId).catch((error: unknown) => {
           console.error(`[dag-walker] change-percolation pass failed for project ${projectId}:`, error);

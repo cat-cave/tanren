@@ -21,7 +21,13 @@ import {
   type MergeProbe,
 } from "./mergeDispatchTypes.js";
 import { mergeAuthorityLive } from "../../merge/mergeAuthorityFlag.js";
-import { landViaAuthority, landViaHostMerge, reGateResolvedTree, type LandOps } from "./mergeLandPaths.js";
+import {
+  landViaAuthority,
+  landViaHostMerge,
+  rebaseBehindBranch,
+  reGateResolvedTree,
+  type LandOps,
+} from "./mergeLandPaths.js";
 
 export interface DispatcherDeps {
   input: MergeForRunInput;
@@ -153,14 +159,12 @@ export class MergeDispatcher implements LandOps {
   }
 
   /**
-   * direct_merge / native_queue DRIVE: drive the land through `MergeAuthority` (§5)
-   * — the SOLE merge decision. The up-to-date enforcement below (rebase a `behind`
-   * branch, route a `dirty` branch to the conflict resolver) is a WORKSPACE
-   * operation, not the merge decision: it brings the branch to a `clean` mergeability
-   * the authority then authorizes. The decision itself — gate + findings/posture +
-   * review + mergeability + budget + demo + HITL + conflicts — is the fail-closed
-   * truth table, and the host land is `CodeHost.landAuthorizedRef` (the ff-only CAS),
-   * NOT the host's "merge PR" API.
+   * direct_merge / native_queue DRIVE: drive the land through `MergeAuthority` (§5) —
+   * the SOLE merge decision. The up-to-date enforcement below (rebase a `behind` branch
+   * via the §7 base-shift handler, route a `dirty` branch to the resolver) is a WORKSPACE
+   * step, not the decision: it brings the branch to a `clean` mergeability the authority
+   * then authorizes (gate + findings/posture + review + mergeability + budget + demo +
+   * HITL + conflicts — the fail-closed truth table; the host land is the ff-only CAS).
    */
   async directMerge(): Promise<MergeForRunResult> {
     const { eventStore } = this.deps;
@@ -169,10 +173,8 @@ export class MergeDispatcher implements LandOps {
       eventType: "merge.queued",
       payload: { ...this.prFields(), integration: this.mergeLabel() },
     });
-    // up-to-date enforcement: BEFORE the land decision, ensure the PR branch is
-    // current with its base. A stale branch is rebased + re-gated here; a real
-    // conflict is routed to the resolver hook — so the branch reaches the authority
-    // with a settled mergeability, never stale/broken work.
+    // up-to-date enforcement BEFORE the land decision: a stale branch is rebased +
+    // re-gated; a real conflict routes to the resolver — never stale/broken work lands.
     const freshness = await this.ensureUpToDate();
     if (freshness.kind !== "proceed") {
       return freshness.result;
@@ -240,17 +242,10 @@ export class MergeDispatcher implements LandOps {
   /**
    * Bring the PR branch up to date with its base (a WORKSPACE step that precedes the
    * land decision — it does NOT decide whether to merge; `MergeAuthority` does).
-   *
-   *   dirty → a real conflict with base: route to the conflict hook + emit
-   *       merge.conflict (recoverable) — the resolver engages; never merged.
-   *   behind → update the branch onto base, re-poll CI to green, then continue.
-   *       If update-branch reports a conflict, route to the conflict hook. If the
-   *       re-gated CI fails, fail the stage. The branch never reaches the authority stale.
-   *   clean / blocked / unknown → no workspace action. Note: this is NOT a
-   *       fail-open "proceed to merge" (the §5-P0 ensureUpToDate hole) — it only
-   *       means "nothing to rebase". The AUTHORITY then BLOCKS on `blocked`/`unknown`
-   *       mergeability (only `clean` clears), so an uncertain mergeability can never
-   *       reach a land. The decision moved to the guaranteed truth table.
+   *   dirty → route to the conflict hook (recoverable); never merged.
+   *   behind → rebase via the ONE base-shift handler (§7), re-gate, then continue.
+   *   clean / blocked / unknown → no workspace action (NOT a fail-open proceed — the
+   *       authority BLOCKS on blocked/unknown; only `clean` clears).
    */
   private async ensureUpToDate(): Promise<{ kind: "proceed" } | { kind: "halt"; result: MergeForRunResult }> {
     const { probe, eventStore, context } = this.deps;
@@ -276,24 +271,29 @@ export class MergeDispatcher implements LandOps {
       },
     });
 
-    const updated = await probe.updateBranch();
+    // THE ONE BASE-SHIFT HANDLER (§7): the `behind` rebase routes through the unified
+    // `BaseShiftCoordinator.rebaseOnto` hook (the SAME path change-percolation uses), not
+    // a second server-side update-branch. A `held` is a fail-closed recoverable conflict.
+    const updated = await rebaseBehindBranch(this.deps, mergeability);
     if (updated.outcome === "conflict") {
-      // The server-side update hit a real conflict — route to the intent-
-      // preserving resolver, do NOT merge.
-      return { kind: "halt", result: await this.handleBranchConflict(mergeability, updated.message) };
+      // A real conflict — route to the intent-preserving resolver, do NOT merge.
+      const msg = updated.message ?? "branch conflicts with base";
+      return { kind: "halt", result: await this.handleBranchConflict(mergeability, msg) };
+    }
+    if (updated.outcome === "held") {
+      // Fail-closed: the rebase could not settle — hold (recoverable), never merge.
+      const msg = updated.message ?? "base-shift rebase held";
+      return { kind: "halt", result: await this.emitConflict(msg, mergeability.headBranch || undefined) };
     }
     if (updated.outcome === "up_to_date") {
       // A benign race: it became current between the read and the update.
       return { kind: "proceed" };
     }
 
-    // The branch advanced onto base. Its prior green is now stale, so the CI MUST
-    // be re-verified before merging. Post-rebase re-gating is REQUIRED, not
-    // optional: if the re-gate hook is absent we have no way to confirm the rebased
-    // branch is green, so we HARD-HOLD (emit the recoverable conflict outcome, do
-    // NOT merge) rather than laundering an unverified rebase into a merge. This
-    // mirrors how directMerge already throws loudly when its enqueue hook is
-    // missing — a missing required hook is a hold, never "merge anyway".
+    // The branch advanced onto base — its prior green is now stale, so the CI MUST be
+    // re-verified before merging. Post-rebase re-gating is REQUIRED: an absent re-gate
+    // hook HARD-HOLDS (the recoverable conflict outcome), never laundering an unverified
+    // rebase into a merge.
     const reGate = this.deps.input.reGateCi;
     if (reGate === undefined) {
       await eventStore.append({

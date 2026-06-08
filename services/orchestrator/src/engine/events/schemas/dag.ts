@@ -232,6 +232,60 @@ export const DagSpecPercolationReplanPayload = z
   .strict();
 export type DagSpecPercolationReplanPayload = z.infer<typeof DagSpecPercolationReplanPayload>;
 
+// integration.rebase (tanren-owns-the-engine.md §3, §7 — the never-discard keystone):
+// the BaseShiftCoordinator handled a base shift (an ancestor landed, or an unrelated
+// spec moved a shared base) by REBASING the dependent's EXISTING branch in place via
+// `WorkspaceVcsCore.rebaseOnto` — KEEPING the same run/branch row — instead of the old
+// supersede+regenerate (which cancelled the run, force-pushed a fresh clone, and re-ran
+// the planner from scratch). The `decision` field records what the rebase cost:
+//   - `rebased_clean`    — the rebase applied with no conflict + the re-gate passed; the
+//                          planner/writer/code tokens were REUSED (NO re-plan). This is
+//                          the win the `rebase_vs_rebuild` instrumentation proves.
+//   - `rebased_resolved` — the rebase conflicted (recorded IN the commit, work survived),
+//                          the resolver reconciled it (intent-preserving), and the re-gate
+//                          passed — still NO re-plan (the existing work fit after resolve).
+//   - `replanned`        — the rebased work NO LONGER FITS the new base, so it was routed
+//                          back to the planner WITH the shift as context (work KEPT ALIVE,
+//                          never discarded/merged). "No longer fits" has TWO legitimate
+//                          forms, distinguished by `rebaseConflicted`: (a) the rebase
+//                          CONFLICTED and the resolver could not reconcile it
+//                          (`rebaseConflicted: true`), OR (b) the rebase was CLEAN but the
+//                          fresh re-gate FAILED on the new base (`rebaseConflicted: false`).
+//                          Both are real "the old work doesn't fit the shifted base" replans
+//                          — a clean rebase whose gate fails on the new base genuinely needs
+//                          re-planning, NOT a pretend-conflict.
+//   - `held`             — a fail-closed hold (the rebase/resolver/gate could not settle);
+//                          the work survives and is retried on the next notification.
+// `sameRunId` is ALWAYS true on this path — it is the never-discard assertion made
+// durable (the dependent's run row is the SAME across the shift). Wave 3 reads this
+// event's token/wall-clock fields to PROVE rebase < rebuild.
+export const IntegrationRebasePayload = z
+  .object({
+    // The dependent whose branch was rebased onto the shifted base.
+    specId: z.string(),
+    // The KEPT run id (the never-discard proof — same row across the base shift).
+    runId: z.string(),
+    // Always true on this path: the run/branch row survived the base shift.
+    sameRunId: z.boolean(),
+    // The branch that was rebased in place.
+    branch: z.string(),
+    // The shifted base the dependent was rebased ONTO (the new ancestor/main head).
+    newBaseSha: z.string(),
+    // The branch head after the rebase (carries a recorded conflict when conflicted).
+    headSha: z.string(),
+    // INFORMATIONAL: whether the jj rebase itself conflicted (a SUCCESS that recorded the
+    // conflict). On `replanned` it distinguishes the two "no longer fits" forms — `true`
+    // = the conflict was irreconcilable, `false` = the rebase was clean but the re-gate
+    // failed on the new base. It does NOT gate the decision (a clean-rebase gate-failure
+    // is a real replan).
+    rebaseConflicted: z.boolean(),
+    // What the base shift cost — the `rebase_vs_rebuild` signal (NO re-plan unless the
+    // old work genuinely no longer fits the new base). `held` is a fail-closed hold.
+    decision: z.enum(["rebased_clean", "rebased_resolved", "replanned", "held"]),
+  })
+  .strict();
+export type IntegrationRebasePayload = z.infer<typeof IntegrationRebasePayload>;
+
 // NEVER-STRAND reconciler events: the DAG's self-healing safety net. A spec can get
 // stuck OCCUPYING A SLOT (`active`/`in_flight`) with NO live run — the recurring
 // stranding bug (a percolation §2c re-exec halts → the spec stays `active`, both its

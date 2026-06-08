@@ -16,6 +16,52 @@ import type { PercolationPending } from "../contracts/changePercolation.js";
 import type { ReviewVerdict } from "../contracts/dagLifecycle.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import { PgEventStore } from "../eventStore.js";
+import { SpecStatusReplanRouter } from "../workflow/reviewMerge/conflictResolver/replanRouter.js";
+
+/**
+ * Append `integration.rebase` (tanren-owns-the-engine.md §3/§7 — the never-discard
+ * `rebase_vs_rebuild` instrumentation Wave 3 reads). Org-scoped; routes through the
+ * control plane when a writer is wired (same plane-split as the percolation events).
+ * `sameRunId` is ALWAYS true on this path — the run row survives every base shift.
+ */
+export async function appendIntegrationRebaseEvent(
+  pool: pg.Pool,
+  input: {
+    projectId: string;
+    specId: string;
+    runId: string;
+    branch: string;
+    newBaseSha: string;
+    headSha: string;
+    rebaseConflicted: boolean;
+    decision: "rebased_clean" | "rebased_resolved" | "replanned" | "held";
+  },
+  runStateWriter?: RunStateWriter,
+): Promise<void> {
+  const event = {
+    runId: input.runId,
+    specId: input.specId,
+    projectId: input.projectId,
+    eventType: "integration.rebase" as const,
+    payload: {
+      specId: input.specId,
+      runId: input.runId,
+      sameRunId: true,
+      branch: input.branch,
+      newBaseSha: input.newBaseSha,
+      headSha: input.headSha,
+      rebaseConflicted: input.rebaseConflicted,
+      decision: input.decision,
+    },
+  };
+  const orgId = await resolveProjectOrg(pool, input.projectId);
+  if (orgId === null) return;
+  if (runStateWriter !== undefined) {
+    await runWithJobOrgId(orgId, () => runStateWriter.append(event));
+    return;
+  }
+  await runWithOrgScope(pool, orgId, (client) => new PgEventStore(client).append(event));
+}
 
 /** Resolve the project's org id (system-scoped bootstrap, the same hop the walker uses). */
 export async function resolveProjectOrg(pool: pg.Pool, projectId: string): Promise<string | null> {
@@ -154,6 +200,67 @@ export async function recordVerifiedAncestorSha(
   });
 }
 
+/**
+ * Stamp the FULL in-flight percolation marker on the dependent's EXISTING run (the
+ * never-discard keep-run-row write, tanren-owns-the-engine.md §3): the
+ * (ancestorSpecId, toSha, reviewVerdict?, reexecRunId) the SETTLE phase resolves
+ * against. For a never-discard rebase the `reexecRunId` IS the dependent's own run id
+ * (the SAME row re-gates — no new run), which is what makes the existing settle pass
+ * advance `verified_ancestor_shas` against this run. Org-scoped; replaces the marker
+ * wholesale (the prior marker, if any, settled before a new shift could mark again).
+ *
+ * Plane-split: the control-plane writer has no full-marker method yet (only the
+ * reexec-id stamp + clear), so this stamps via a direct org-scoped UPDATE. The data
+ * plane retains the run-column grant the old reexec-id stamp used. A control-plane
+ * full-marker route is a Wave-3 follow-up (the live-jj base-shift path it feeds is
+ * itself Wave-3-plumbed).
+ */
+export async function recordPercolationPending(
+  pool: pg.Pool,
+  input: {
+    projectId: string;
+    runId: string;
+    ancestorSpecId: string;
+    toSha: string;
+    reexecRunId: string;
+    reviewVerdict?: ReviewVerdict;
+  },
+): Promise<void> {
+  const marker: PercolationPending = {
+    ancestorSpecId: input.ancestorSpecId,
+    toSha: input.toSha,
+    reexecRunId: input.reexecRunId,
+    ...(input.reviewVerdict !== undefined && { reviewVerdict: input.reviewVerdict }),
+  };
+  await orgScopedWrite(pool, input.projectId, async (client) => {
+    await client.query("UPDATE runs SET percolation_pending = $2::jsonb WHERE run_id = $1", [
+      input.runId,
+      JSON.stringify(marker),
+    ]);
+  });
+}
+
+/** Re-point an EXISTING run's dynamic base onto the shifted base (NULL ⇒ non-speculative). */
+export async function repointRunSpeculativeBase(
+  pool: pg.Pool,
+  input: { projectId: string; runId: string; speculativeBase: string | null },
+  runStateWriter?: RunStateWriter,
+): Promise<void> {
+  if (runStateWriter !== undefined) {
+    const orgId = await resolveProjectOrg(pool, input.projectId);
+    if (orgId === null) throw new Error(`project ${input.projectId} has no org for the base-shift re-point`);
+    await runStateWriter.setRunSpeculativeBase({
+      runId: input.runId,
+      orgId,
+      speculativeBase: input.speculativeBase,
+    });
+    return;
+  }
+  await orgScopedWrite(pool, input.projectId, async (client) => {
+    await client.query("UPDATE runs SET speculative_base = $2 WHERE run_id = $1", [input.runId, input.speculativeBase]);
+  });
+}
+
 /** Clear the in-flight percolation marker once a percolation settled (absorbed/replan). */
 export async function clearPercolationPending(
   pool: pg.Pool,
@@ -172,10 +279,15 @@ export async function clearPercolationPending(
 }
 
 /**
- * Record the upstream change as planner context (intent stays alive) when a
- * re-execution could not reconcile. The re-execution already routed the dependent
- * back through the planner/resolver; this is the durable, inspectable carrier of WHY
- * (the "merge.conflict.replan_routed" event, reused). It does NOT drop the spec.
+ * Route the dependent BACK TO THE PLANNER when a re-execution / base-shift rebase could
+ * not reconcile (intent stays alive — NEVER drop, NEVER merge). This shares the SAME
+ * router the merge-path conflict replan uses (`SpecStatusReplanRouter`), so it does the
+ * real two-step that actually re-enters planner control flow: (1) transition the spec's
+ * STATUS back to a status the planner re-plans (`in_flight`, the review-rework re-entry state), and
+ * (2) append the durable `merge.conflict.replan_routed` event the next planner pass reads.
+ * The prior implementation only appended the event (no status change), so the spec never
+ * re-entered the planner — a replan with no control-flow effect. Plane-split: routes the
+ * writes through the control plane when a writer is wired, else the in-process org scope.
  */
 export async function recordReplanContext(
   pool: pg.Pool,
@@ -189,28 +301,32 @@ export async function recordReplanContext(
   },
   runStateWriter?: RunStateWriter,
 ): Promise<void> {
-  const event = {
-    runId: input.runId,
-    specId: input.specId,
-    projectId: input.projectId,
-    eventType: "merge.conflict.replan_routed" as const,
-    payload: {
-      specId: input.specId,
-      otherSpecId: input.ancestorSpecId,
-      newContext: `Percolation: re-plan ON TOP OF the upstream change from ${input.ancestorSpecId} (${input.ancestorSha}). ${input.reason}`,
-      replanStatus: "pending" as const,
-    },
-  };
-  // Plane-split: append the replan-context event through the control plane when
-  // wired (the writer resolves the run's org from the ambient per-job org id, so set
-  // it for the append); else append in-process under a short org scope.
+  const newContext = `Percolation: re-plan ON TOP OF the upstream change from ${input.ancestorSpecId} (${input.ancestorSha}). ${input.reason}`;
+  const orgId = await resolveProjectOrg(pool, input.projectId);
+  if (orgId === null) throw new Error(`project ${input.projectId} has no org for the change-percolation replan`);
+  // Plane-split: the writer IS the EventStore + carries the status write; else the
+  // in-process org-scoped client backs BOTH the status UPDATE and the event append.
   if (runStateWriter !== undefined) {
-    const orgId = await resolveProjectOrg(pool, input.projectId);
-    if (orgId === null) throw new Error(`project ${input.projectId} has no org for the change-percolation write`);
-    await runWithJobOrgId(orgId, () => runStateWriter.append(event));
+    const router = new SpecStatusReplanRouter({
+      pool,
+      runStateWriter,
+      orgId,
+      eventStore: runStateWriter,
+      runId: input.runId,
+      projectId: input.projectId,
+    });
+    await runWithJobOrgId(orgId, () =>
+      router.routeBackToPlanner({ specId: input.specId, newContext, otherSpecId: input.ancestorSpecId }),
+    );
     return;
   }
-  await orgScopedWrite(pool, input.projectId, async (client) => {
-    await new PgEventStore(client).append(event);
+  await runWithOrgScope(pool, orgId, async (client) => {
+    const router = new SpecStatusReplanRouter({
+      pool: client,
+      eventStore: new PgEventStore(client),
+      runId: input.runId,
+      projectId: input.projectId,
+    });
+    await router.routeBackToPlanner({ specId: input.specId, newContext, otherSpecId: input.ancestorSpecId });
   });
 }

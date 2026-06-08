@@ -422,6 +422,20 @@ export const sensitivityRules: SensitivityRule[] = [
     ["ancestorSha", "public"],
     ["reason", "public"],
   ]),
+  // §3/§7 NEVER-DISCARD REBASE (integration.rebase) — spec/run/branch ids, the shifted
+  // base + branch-head SHAs (public: commit hashes are not secrets), the same-run-id
+  // never-discard flag, the rebase-conflicted flag, and the rebase_vs_rebuild decision
+  // label. No diff content, credentials, or command output.
+  ...rulesFor("integration.rebase", [
+    ["specId", "public"],
+    ["runId", "public"],
+    ["sameRunId", "public"],
+    ["branch", "public"],
+    ["newBaseSha", "public"],
+    ["headSha", "public"],
+    ["rebaseConflicted", "public"],
+    ["decision", "public"],
+  ]),
   // Post-merge auto-issue creation (tempering.md dim A) — PR/merge identity + the
   // failing post-merge checks + the auto-filed issue's number/url/label, all public
   // (the regression + its tracking issue are visible run lineage, no secrets).

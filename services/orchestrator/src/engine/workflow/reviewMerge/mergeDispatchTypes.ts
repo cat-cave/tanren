@@ -141,6 +141,16 @@ export interface MergeForRunInput {
    */
   reGateCi?: ReGateCiHook;
   /**
+   * THE ONE BASE-SHIFT HANDLER (§7): when present, a `behind` mergeability routes its
+   * rebase through this unified hook (`BaseShiftCoordinator.rebaseOnto`) instead of the
+   * separate server-side `probe.updateBranch()`. This is the fold that collapses the two
+   * divergent "the base moved, re-derive the work" paths into one. Absent ⇒ the dispatcher
+   * falls back to `probe.updateBranch()` (the pre-fold path retained through S2 so a
+   * caller that has not yet wired the unified hook still rebases a behind branch — never a
+   * silent skip). Production wires it; tests inject a recording hook to prove the route.
+   */
+  baseShiftRebase?: BaseShiftRebaseHook;
+  /**
    * native_queue: the hook that ENTERS a ready run into Tanren's native
    * merge queue (instead of merging immediately). Required ONLY when the resolved
    * integration is `native_queue` AND this is the run-loop's first pass (not the
@@ -219,6 +229,26 @@ export interface MergeProbe {
  * this to a `pollCiForRun` loop; tests inject a scripted result.
  */
 export type ReGateCiHook = () => Promise<{ status: "passed" | "failed" | "pending" }>;
+
+/**
+ * THE ONE BASE-SHIFT HANDLER on the merge path (tanren-owns-the-engine.md §7 — "the two
+ * divergent base-shift handlers → one"). When the PR branch is `behind` its base, the
+ * merge dispatcher routes the rebase through THIS hook instead of a separate server-side
+ * `updateBranch` — the SAME conceptual operation the change-percolation kick-off uses
+ * (`BaseShiftCoordinator.rebaseOnto`): the base moved, re-derive the work by rebasing the
+ * EXISTING branch in place, never regenerate. The outcome the dispatcher reads:
+ *   - `rebased`    — the branch advanced onto base (re-gate then governs the merge).
+ *   - `up_to_date` — a benign race (it was already current); proceed.
+ *   - `conflict`   — a real conflict; route to the intent-preserving resolver.
+ *   - `held`       — a fail-closed hold (the rebase could not settle); recoverable.
+ * Production wires this to the unified base-shift path; tests inject a recording hook to
+ * prove the `behind` mergeability flows through the one handler.
+ */
+export type BaseShiftRebaseHook = (input: {
+  runId: string;
+  baseBranch: string;
+  headBranch?: string;
+}) => Promise<{ outcome: "rebased" | "up_to_date" | "conflict" | "held"; message?: string }>;
 
 export interface ConflictContext {
   runId: string;
