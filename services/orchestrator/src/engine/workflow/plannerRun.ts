@@ -16,7 +16,7 @@ import type { SecretStore } from "../contracts/secretStore.js";
 import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import { CostRecorder } from "../costs/index.js";
 import { codexHomeForRun } from "../credentials/codexMaterializer.js";
-import { type EventName, type EventPayload } from "../events/index.js";
+import type { EventName, EventPayload } from "../events/index.js";
 import { type EventStore, PgEventStore } from "../eventStore.js";
 import type { ReviewAnswer } from "../answerers/schemas/index.js";
 import type { VcsProvider } from "../contracts/vcsProvider.js";
@@ -28,11 +28,14 @@ import { prepareCleanPrBranch } from "../workspace/githubPush.js";
 import { buildReGateCi, type MergeGateRunContext, runMergeGateForRun } from "./plannerRunCi.js";
 import type { GateOutcome } from "./gate/index.js";
 import {
+  appTokenSeam,
   buildDefaultGate,
   buildManagedCapturerForRun,
+  nativeQueueSeam,
   resolveConflictResolverHook,
   resolveRunAdaptersWithBudgetPreflight,
   simulatedReviewSeam,
+  writerSeam,
 } from "./plannerRunAdapters.js";
 import { prepareRunWorkspace } from "./plannerRunWorkspace.js";
 import {
@@ -230,31 +233,6 @@ export interface PlannerRunResult {
   // at changes-requested after exhausting the rework budget.
   review?: PollReviewForRunResult;
   merge?: MergeForRunResult;
-}
-
-/**
- * the optional lifecycle-writer seam for a sub-stage input — the
- * `runStateWriter` when one is wired, else `{}` (the sub-stage does its in-process
- * write). One helper so the workflow threads it into each stage with no per-call
- * `exactOptionalPropertyTypes` ternary (keeping the workflow's branch count down).
- */
-function writerSeam(input: RunPlannerLoopInput): { runStateWriter?: RunStateWriter } {
-  return input.runStateWriter === undefined ? {} : { runStateWriter: input.runStateWriter };
-}
-
-function nativeQueueSeam(input: RunPlannerLoopInput): { enqueueNativeQueue?: NativeQueueEnqueuer } {
-  return input.nativeQueueEnqueuer === undefined ? {} : { enqueueNativeQueue: input.nativeQueueEnqueuer };
-}
-
-// App-first push/PR-create credential seam (clone-path parity): mint the App token when installed, else the static ref.
-function appTokenSeam(
-  context: PlannerRunContext,
-  input: RunPlannerLoopInput,
-): { installation?: OrgGithubAppInstallation; githubAppMinter?: GithubAppTokenMinter } {
-  return {
-    ...(context.installation !== undefined && { installation: context.installation }),
-    ...(input.githubAppMinter !== undefined && { githubAppMinter: input.githubAppMinter }),
-  };
 }
 
 export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Promise<PlannerRunResult> {
