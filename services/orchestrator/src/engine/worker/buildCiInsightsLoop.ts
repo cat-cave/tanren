@@ -11,7 +11,7 @@ import type { Allocator } from "../contracts/allocator.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
-import { buildForgeTriageAnswererFactory } from "../forge/providerFactory.js";
+import { buildForgeSpecQualityAnswererFactory, buildForgeTriageAnswererFactory } from "../forge/providerFactory.js";
 import { intakeAutoRouteDeps } from "../forge/intake/systemActor.js";
 import { CiInsightsLoop } from "./ciInsightsLoop.js";
 
@@ -27,17 +27,24 @@ export interface BuildCiInsightsLoopDeps {
 
 /** Build + start the CI-insights loop (detect+quarantine PR2 · generate-fix PR3). */
 export function buildCiInsightsLoop(deps: BuildCiInsightsLoopDeps): CiInsightsLoop {
-  const triageFactory = buildForgeTriageAnswererFactory({
+  const forgeInfra = {
     pool: deps.pool,
     secrets: deps.secrets,
     allocator: deps.allocator,
     ssh: deps.ssh,
     identitySecretRef: deps.identitySecretRef,
-  });
+  };
+  const triageFactory = buildForgeTriageAnswererFactory(forgeInfra);
+  // Spec-quality gate (workstream 1): a generated CI-fix spec is validated against
+  // the four-part contract before it lands in the DAG.
+  const specQualityFactory = buildForgeSpecQualityAnswererFactory(forgeInfra);
   const loop = new CiInsightsLoop({
     pool: deps.pool,
     answererFactory: triageFactory,
-    autoRoute: intakeAutoRouteDeps(deps.runStateWriter),
+    autoRoute: intakeAutoRouteDeps({
+      ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
+      resolveSpecValidator: (target) => specQualityFactory(target),
+    }),
     ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
   });
   loop.start();

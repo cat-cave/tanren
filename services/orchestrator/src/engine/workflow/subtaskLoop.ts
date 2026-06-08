@@ -463,6 +463,18 @@ const WRITER_TOOLCHAIN_INSTRUCTION =
   "workspace stub packages, `workspace:*` placeholders, or fake binaries for typescript/eslint/vitest " +
   "or any toolchain — use the real published packages.";
 
+// How the writer's change will be GRADED (spec-loop redesign §WRITER). Steers the
+// writer to satisfy the gate on the first pass: run the fast deterministic gate
+// (fmt/lint/typecheck) BEFORE finishing — a fast-gate failure loops back to it.
+const WRITER_GRADING_INSTRUCTION =
+  "How your change will be graded — satisfy these BEFORE you finish: a FAST " +
+  "deterministic gate runs first (formatting, lint, typecheck) — RUN it yourself " +
+  "(the project's fmt/lint/typecheck commands) and make it pass before you stop, " +
+  "since a fast-gate failure loops straight back to you before any reviewer. Then a " +
+  "CHECKER judges whether your change COMPLETES the subtask intent + every relevant " +
+  "acceptance criterion (leave it complete and self-contained), and an AUDITOR " +
+  "reviews quality/security/perf (write correct, secure, clean code).";
+
 function writerPromptFor(input: SubtaskLoopInput, subtask: PlanSubtask): string {
   // The spec's acceptance criteria are the SAME bar the checker judges against, so
   // threading them into the writer prompt lets the writer aim at the gate directly
@@ -482,5 +494,7 @@ function writerPromptFor(input: SubtaskLoopInput, subtask: PlanSubtask): string 
     ...criteria,
     "",
     WRITER_TOOLCHAIN_INSTRUCTION,
+    "",
+    WRITER_GRADING_INSTRUCTION,
   ].join("\n");
 }

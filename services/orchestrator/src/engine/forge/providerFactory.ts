@@ -38,6 +38,8 @@ import { wrapProviderInterviewAnswerer, type InterviewAnswerer } from "./intervi
 import { wrapProviderDiscoveryAnswerer, type DiscoveryAnswerer, type DiscoveryResult } from "./discovery/index.js";
 import { wrapProviderTriageAnswerer, type TriageAnswerer, type CandidateTriage } from "./inbox/index.js";
 import { wrapProviderReconAnswerer, type ReconAnswerer, type ReconReport } from "./brownfield/index.js";
+import { wrapProviderSpecQualityAnswerer, type SpecQualityAnswerer } from "./specQuality/index.js";
+import type { SpecQualityAnswer } from "../answerers/schemas/specQuality.js";
 import { wrapProviderAuditAnswerer, type AuditAnswerer, type AuditPassReport } from "./audits/index.js";
 import {
   wrapProviderAnswerer,
@@ -251,6 +253,18 @@ export function buildForgeTriageAnswererFactory(
   infra: ForgeAnswererInfra,
 ): (target: ForgeAnswererTarget) => TriageAnswerer {
   return (target) => wrapProviderTriageAnswerer(forgeAllocatingAnswererAdapter<CandidateTriage>(infra, target));
+}
+
+/**
+ * Build a production spec-quality VALIDATOR factory (project-scoped). The read-only
+ * gate that judges every emitted spec against the four-part spec-quality contract
+ * (workstream 1) before it lands in the DAG. Spec-emitting paths resolve a validator
+ * from this and run it on their candidate specs.
+ */
+export function buildForgeSpecQualityAnswererFactory(
+  infra: ForgeAnswererInfra,
+): (target: ForgeAnswererTarget) => SpecQualityAnswerer {
+  return (target) => wrapProviderSpecQualityAnswerer(forgeAllocatingAnswererAdapter<SpecQualityAnswer>(infra, target));
 }
 
 /** Build a production brownfield-recon answerer factory (project/org-scoped). */

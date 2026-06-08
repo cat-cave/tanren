@@ -64,6 +64,11 @@ describe("subtask loop — writer prompt rendering (writerPromptFor)", () => {
     expect(prompt).toContain("NEVER create local");
     expect(prompt).toContain("workspace:*");
     expect(prompt).toContain("real published packages");
+    // Spec-loop redesign §WRITER: the writer is told HOW it is graded — run the
+    // fast deterministic gate before finishing, then the checker + auditor.
+    expect(prompt).toContain("How your change will be graded");
+    expect(prompt).toContain("FAST deterministic gate");
+    expect(prompt).toContain("RUN it");
   });
 
   it("falls back to (none) in the writer prompt when the subtask has no behaviors", async () => {

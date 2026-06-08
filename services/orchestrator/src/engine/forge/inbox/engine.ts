@@ -25,6 +25,12 @@ import { systemActor } from "../../state/actor.js";
 import { DiscoveryStore, type ExistingSpecSummary } from "../../repositories/discovery.js";
 import { SpecNotFoundError } from "../../workflow/projectSpec.js";
 import { acceptProposals, type DiscoveryInsight, type PlacementKind, type ProposedSpec } from "../discovery/index.js";
+import {
+  validateEmittedSpecs,
+  type CandidateSpec,
+  type ReviseSpec,
+  type SpecQualityAnswerer,
+} from "../specQuality/index.js";
 import { InboxStore } from "./store.js";
 import type {
   Candidate,
@@ -129,6 +135,23 @@ export interface AutoRouteDeps {
    * longer write `specs` directly); absent, it writes directly — byte-identical.
    */
   runStateWriter?: RunStateWriter;
+  /**
+   * The spec-quality VALIDATOR gate (workstream 1). Resolves a read-only validator
+   * scoped to the candidate's org/project (one allocated runner per model call, the
+   * same per-call model the triage answerer uses). When wired, the triaged
+   * `routableSpec` is validated against the four-part spec-quality contract BEFORE
+   * it lands in the DAG; a failing spec is looped back to the triage emitter (via
+   * `reviseRoutableSpec`, bounded) and a persistently-invalid spec surfaces LOUD
+   * (`PersistentlyInvalidSpecError`) — never silently committed. Absent ⇒ the gate
+   * is inert (the spec commits as before); reconciliation/WS2 wires the validator.
+   */
+  resolveSpecValidator?: (target: { orgId: string; projectId: string }) => SpecQualityAnswerer;
+  /**
+   * Re-author callback used by the validation gate to loop a failing spec back to
+   * the triage emitter with the validator's guidance. Optional: without it the gate
+   * is strict (a first-pass failure escalates immediately).
+   */
+  reviseRoutableSpec?: ReviseSpec;
 }
 
 export interface AutoRouteResult {
@@ -149,6 +172,24 @@ export async function autoRouteCandidate(
   autoRouteDeps: AutoRouteDeps,
 ): Promise<AutoRouteResult> {
   if (candidate.projectId === null) throw new CandidateNotPlaceableError(candidate.id);
+
+  // WORKSTREAM 1 — gate spec emission on the spec-quality contract. When a validator
+  // is wired, the triaged `routableSpec` is judged against the four-part contract
+  // (accomplishable / demo-able / non-trivial / legible) BEFORE it lands; a failing
+  // spec loops back to the triage emitter (bounded) and a persistently-invalid one
+  // raises `PersistentlyInvalidSpecError` (the loud needs_attention surface) — never
+  // a silent commit. The DAG-relevant `dependsOn`/`priority` are preserved; only the
+  // authored title/description/criteria are gated/revised. Inert when no validator
+  // is wired (reconciliation/WS2 supplies it).
+  const gatedSpec =
+    autoRouteDeps.resolveSpecValidator === undefined
+      ? routableSpec
+      : await gateRoutableSpec(
+          routableSpec,
+          autoRouteDeps.resolveSpecValidator({ orgId: candidate.orgId, projectId: candidate.projectId }),
+          autoRouteDeps.reviseRoutableSpec,
+        );
+
   // L1 (intake hardening): the triage LLM can HALLUCINATE a `dependsOn` referencing
   // a spec id that does not exist in this project. That makes `acceptProposals` →
   // `createSpec` → `ensureSpecDependenciesExist` throw `SpecNotFoundError`, which —
@@ -172,11 +213,11 @@ export async function autoRouteCandidate(
         proposals: [
           {
             proposalId: `auto_${candidate.id}`,
-            title: routableSpec.title,
-            description: routableSpec.description,
-            acceptanceCriteria: routableSpec.acceptanceCriteria,
+            title: gatedSpec.title,
+            description: gatedSpec.description,
+            acceptanceCriteria: gatedSpec.acceptanceCriteria,
             dependsOn,
-            priority: routableSpec.priority,
+            priority: gatedSpec.priority,
             estLabel: "",
           } satisfies ProposedSpec,
         ],
@@ -190,15 +231,44 @@ export async function autoRouteCandidate(
 
   let accepted: Awaited<ReturnType<typeof acceptProposals>>["accepted"];
   try {
-    ({ accepted } = await accept(routableSpec.dependsOn));
+    ({ accepted } = await accept(gatedSpec.dependsOn));
   } catch (error) {
     // Only a hallucinated dependency is recoverable; retry once with no edges.
-    if (!(error instanceof SpecNotFoundError) || routableSpec.dependsOn.length === 0) throw error;
+    if (!(error instanceof SpecNotFoundError) || gatedSpec.dependsOn.length === 0) throw error;
     ({ accepted } = await accept([]));
   }
   const specId = accepted[0]?.spec.specId ?? null;
   const resolved = await InboxStore.resolveCandidate(deps.pool, candidate.id, "accepted", specId);
   return { candidate: resolved ?? candidate, specId: specId ?? "" };
+}
+
+// Run the spec-quality gate (workstream 1) over the triaged `routableSpec`'s
+// authored content. Returns the validated spec carrying its original DAG metadata
+// (`dependsOn`/`priority`) with the title/description/criteria swapped for the
+// contract-passing version. Raises `PersistentlyInvalidSpecError` (loud) when the
+// spec cannot be made compliant — the caller lets it propagate to needs_attention.
+async function gateRoutableSpec(
+  routableSpec: TriageRoutableSpec,
+  validator: SpecQualityAnswerer,
+  reviseRoutableSpec: ReviseSpec | undefined,
+): Promise<TriageRoutableSpec> {
+  const candidate: CandidateSpec = {
+    title: routableSpec.title,
+    description: routableSpec.description,
+    acceptanceCriteria: routableSpec.acceptanceCriteria,
+  };
+  const { specs } = await validateEmittedSpecs({
+    specs: [candidate],
+    validator,
+    ...(reviseRoutableSpec !== undefined && { reviseSpec: reviseRoutableSpec }),
+  });
+  const validated = specs[0]!.spec;
+  return {
+    ...routableSpec,
+    title: validated.title,
+    description: validated.description,
+    acceptanceCriteria: validated.acceptanceCriteria as string[],
+  };
 }
 
 // Build a discovery insight from a candidate so the accept hand-off reuses the
