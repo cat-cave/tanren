@@ -88,26 +88,45 @@ export const DeployVerifiedPayload = z
   .extend(AuditEnvelope.shape)
   .strict();
 
-// Deploy FAILED ("the deploy could NOT be proven live"): after `deploy.triggered`,
-// verification (poll-to-READY + URL smoke check) failed on EVERY attempt of the
-// bounded in-process retry. This is the LOUD terminal — the operator must KNOW the
-// deploy never came up (vs the run silently stalling triggered-but-unverified).
-// SECURITY: non-secret (provider + ids + an attempt count + a non-secret reason);
-// the deploy token + env values never reach here.
+// Deploy FAILED ("the deploy could NOT be proven live"): a deploy that WAS expected
+// (a deploy target resolved on merge) did not materialize a verified live URL. Two
+// phases reach here, both LOUD + durable so the operator KNOWS the product never came
+// up (vs the run silently looking "done" with no live URL):
+//   • `verify`  — the deploy TRIGGERED but poll-to-READY + URL smoke check failed on
+//     EVERY attempt of the bounded in-process retry (the `deploymentId` is the
+//     released-but-unproven deployment).
+//   • `trigger` — the deploy could NOT even be triggered/attached (incomplete config,
+//     a missing/lost grant, a denied egress target, or the provider build/release
+//     itself failing). No deployment exists yet, so `deploymentId` is honestly ABSENT.
+// SECURITY: non-secret (provider + ids + a phase + an attempt count + a non-secret
+// reason); the deploy token + env values never reach here.
 export const DeployFailedPayload = z
   .object({
     /** The deploy provider kind (`deploy.vercel` | `deploy.flyio`). */
     provider: z.string(),
     /** The deployed app/project id the release ran onto. */
     appId: z.string(),
-    /** The provider's deployment handle the verify polled. */
-    deploymentId: z.string(),
-    /** How many verification attempts were made before giving up (the bounded retry). */
-    attempts: z.number().int().positive(),
     /**
-     * A FIXED, non-secret failure summary — NOT the raw verify error (which can embed
+     * Where the deploy failed: `verify` (triggered but never proven live) or
+     * `trigger` (could not be triggered/attached at all). Drives whether a
+     * `deploymentId` exists.
+     */
+    phase: z.enum(["trigger", "verify"]),
+    /**
+     * The provider's deployment handle the verify polled. Present only on a `verify`
+     * failure (a `trigger` failure never reached a deployment, so it is absent — an
+     * honest absence, never a placeholder).
+     */
+    deploymentId: z.string().optional(),
+    /**
+     * How many verification attempts were made before giving up (the bounded retry).
+     * Present only on a `verify` failure; absent on a `trigger` failure (no verify ran).
+     */
+    attempts: z.number().int().positive().optional(),
+    /**
+     * A FIXED, non-secret failure summary — NOT the raw error (which can embed
      * provider-supplied HTTP response text). The full error is preserved in the run
-     * logs via the verify re-throw; only this bounded summary reaches the audit event.
+     * logs via the re-throw; only this bounded summary reaches the audit event.
      */
     reason: z.string(),
   })

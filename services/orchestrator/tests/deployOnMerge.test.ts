@@ -252,6 +252,80 @@ describe("DeployOnMergeWatcher (a deploy happened)", () => {
     expect(JSON.stringify(failed)).not.toContain("deploy_token");
   });
 
+  it("records a DURABLE trigger-phase deploy.failed when an EXPECTED deploy throws before any trigger", async () => {
+    // The forward-look gap: a deploy is EXPECTED (a target resolved) but it throws BEFORE
+    // reaching the verify retry — here a denied egress target. Without the durable
+    // trigger-phase record the throw would be swallowed as a subscriber log line, leaving
+    // the merge looking "done" with no live URL. It must instead append a LOUD
+    // `deploy.failed` (phase=trigger, no deploymentId/attempts) before re-throwing, so the
+    // failed deploy reaches the operator via the `deploy.failed` warn notification.
+    const transport = scriptedDeployTransport("vercel", []);
+    await transport.request({
+      method: "POST",
+      url: "https://api.vercel.com/v9/projects",
+      headers: {},
+      body: { name: "acme-widget" },
+    });
+    const events = new RecordingEventStore();
+    const watcher = new DeployOnMergeWatcher({
+      pool: fakePool({ merged: true, config: VERCEL_TARGET, grant: VERCEL_GRANT }),
+      secrets: secrets(),
+      transport,
+      eventStore: events,
+      urlProbe: scriptedUrlProbe(),
+      verifyPoll: instantVerifyPollPolicy(),
+      // A restrictive policy that DENIES the target — a trigger-phase failure (the deploy
+      // never fires) that the watcher must record durably, not swallow.
+      egressPolicy: {
+        allowsEgress: () => ({ allowed: true, reason: "test" }),
+        allowsDeployTarget: () => ({ allowed: false, reason: "off-allowlist deploy target" }),
+      },
+    });
+    await expect(watcher.check(RUN_ID)).rejects.toThrow(/not .*allowed by the egress policy/u);
+    // No deploy fired (the target was denied) and the deploy was NEVER proven live.
+    expect(transport.deploysTriggered()).toEqual([]);
+    expect(events.appends.find((a) => a.eventType === "deploy.verified")).toBeUndefined();
+    // The LOUD + DURABLE record: a trigger-phase deploy.failed under the org scope, with
+    // a fixed non-secret reason and NO deploymentId/attempts (no deployment ever existed).
+    const failed = events.appends.find((a) => a.eventType === "deploy.failed");
+    expect(failed).toBeDefined();
+    expect(failed!.ambientOrgId).toBe(ORG_ID);
+    const fPayload = failed!.payload as Record<string, unknown>;
+    expect(fPayload["phase"]).toBe("trigger");
+    expect(fPayload["deploymentId"]).toBeUndefined();
+    expect(fPayload["attempts"]).toBeUndefined();
+    expect(fPayload["reason"]).toContain("could not be triggered or attached");
+    expect(fPayload["provider"]).toBe("deploy.vercel");
+  });
+
+  it("does NOT double-record on a verify-phase failure (only the verify-phase deploy.failed)", async () => {
+    // Guard against a double-append: a verify exhaustion already records its OWN
+    // verify-phase deploy.failed before re-throwing; the outer trigger-phase guard must
+    // NOT add a second one for the same throw.
+    const transport = scriptedDeployTransport("vercel", []);
+    await transport.request({
+      method: "POST",
+      url: "https://api.vercel.com/v9/projects",
+      headers: {},
+      body: { name: "acme-widget" },
+    });
+    const events = new RecordingEventStore();
+    const watcher = new DeployOnMergeWatcher({
+      pool: fakePool({ merged: true, config: VERCEL_TARGET, grant: VERCEL_GRANT }),
+      secrets: secrets(),
+      transport,
+      eventStore: events,
+      urlProbe: scriptedUrlProbe(),
+      verifyPoll: instantVerifyPollPolicy(3),
+      verifyMaxAttempts: 2,
+    });
+    transport.scriptDeploymentStates("vercel_deploy_1", ["ERROR"]);
+    await expect(watcher.check(RUN_ID)).rejects.toThrow(/FAILURE state 'ERROR'/u);
+    const failures = events.appends.filter((a) => a.eventType === "deploy.failed");
+    expect(failures).toHaveLength(1);
+    expect((failures[0]!.payload as Record<string, unknown>)["phase"]).toBe("verify");
+  });
+
   it("is TERMINAL on deploy.failed: a re-check after a prior failure is a no-op (no self-loop)", async () => {
     // The self-loop guard: deploy.failed is run-scoped, so its append wakes the
     // post-merge subscriber. A prior deploy.failed must gate check() to a no-op —
