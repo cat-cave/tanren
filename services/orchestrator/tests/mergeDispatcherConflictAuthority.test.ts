@@ -482,12 +482,7 @@ describe("apex-stall #1: a merge-time conflict engages the resolver ONCE, never 
     const landed: string[] = [];
     const resolver = countingResolver(true);
 
-    const result = await dispatcherWithResolver(
-      probe,
-      events,
-      bundle(host, { landed }),
-      resolver.hook,
-    ).directMerge();
+    const result = await dispatcherWithResolver(probe, events, bundle(host, { landed }), resolver.hook).directMerge();
 
     // The resolver was engaged EXACTLY ONCE (not 90×, not 0) — the structural fix for the
     // apex stall (the conflict is resolved, not retried blindly against a 409).
@@ -511,12 +506,7 @@ describe("apex-stall #1: a merge-time conflict engages the resolver ONCE, never 
     const landed: string[] = [];
     const resolver = countingResolver(false); // the resolver cannot reconcile.
 
-    const result = await dispatcherWithResolver(
-      probe,
-      events,
-      bundle(host, { landed }),
-      resolver.hook,
-    ).directMerge();
+    const result = await dispatcherWithResolver(probe, events, bundle(host, { landed }), resolver.hook).directMerge();
 
     // Even when the conflict CANNOT be resolved, the resolver is engaged exactly ONCE and
     // the dispatcher emits the recoverable `merge.conflict` outcome — it does NOT loop the

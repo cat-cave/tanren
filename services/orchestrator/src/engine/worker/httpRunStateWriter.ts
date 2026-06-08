@@ -108,7 +108,6 @@ export class HttpRunStateWriter implements RunStateWriter {
     await this.post<void>("/internal/set-spec-status", input);
   }
 
-
   async setSpecMetadata(input: SetSpecMetadataInput): Promise<void> {
     await this.post<void>("/internal/set-spec-metadata", input);
   }
