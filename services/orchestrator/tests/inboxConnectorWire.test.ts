@@ -18,6 +18,8 @@ import {
   createGitHubIssuesConnector,
   createIssuesConnector,
   createSentryConnector,
+  IntakeSourceAuthError,
+  IntakeSourceFetchError,
   type InboxSource,
   type SentryHttpClient,
   type SentryHttpRequest,
@@ -208,15 +210,30 @@ describe("github issues connector — normalization", () => {
     expect(items.map((i) => i.title)).toEqual(["keep"]);
   });
 
-  it("returns no items on a non-200 response and on a non-array body", async () => {
+  it("THROWS loudly on a failed fetch (no-silent-fallbacks): non-200, auth, and non-array 200 are not 'no issues'", async () => {
+    // A 404/5xx-class non-200 is a LOUD transient fetch error, never an empty list.
     const notOk = recordGitHub([{ number: 1, title: "x", labels: [] }], 404);
-    expect(await createGitHubIssuesConnector({ secrets, githubHttp: notOk.client }).fetch(githubSource)).toHaveLength(
+    await expect(
+      createGitHubIssuesConnector({ secrets, githubHttp: notOk.client }).fetch(githubSource),
+    ).rejects.toThrow(IntakeSourceFetchError);
+    // A 401 is a LOUD auth error (a misconfiguration), never "no issues".
+    const denied = recordGitHub({ message: "Bad credentials" }, 401);
+    await expect(
+      createGitHubIssuesConnector({ secrets, githubHttp: denied.client }).fetch(githubSource),
+    ).rejects.toThrow(IntakeSourceAuthError);
+    // A 200 whose body is not an issues array is a failed read (shape changed /
+    // error envelope) — LOUD, not silently zero issues.
+    const notArray = recordGitHub({ message: "boom" }, 200);
+    await expect(
+      createGitHubIssuesConnector({ secrets, githubHttp: notArray.client }).fetch(githubSource),
+    ).rejects.toThrow(IntakeSourceFetchError);
+  });
+
+  it("returns a genuine empty list on a 200-with-an-empty-array (the legitimate 'no open issues')", async () => {
+    const empty = recordGitHub([], 200);
+    expect(await createGitHubIssuesConnector({ secrets, githubHttp: empty.client }).fetch(githubSource)).toHaveLength(
       0,
     );
-    const notArray = recordGitHub({ message: "boom" }, 200);
-    expect(
-      await createGitHubIssuesConnector({ secrets, githubHttp: notArray.client }).fetch(githubSource),
-    ).toHaveLength(0);
   });
 });
 
@@ -347,11 +364,22 @@ describe("sentry connector — normalization", () => {
     expect(items.map((i) => i.externalId)).toEqual(["sentry-6"]);
   });
 
-  it("returns no items on a non-200 status or a non-array body", async () => {
-    const notOk = recordSentry([{ id: "1", title: "x" }], 401);
-    expect(await createSentryConnector({ secrets, sentryHttp: notOk.client }).fetch(sentrySource)).toHaveLength(0);
+  it("THROWS loudly on a failed fetch (no-silent-fallbacks): a 401 is an auth error, a non-array 200 is a failed read", async () => {
+    // A 401 is a LOUD auth error (the token was rejected), never silently "no issues".
+    const denied = recordSentry([{ id: "1", title: "x" }], 401);
+    await expect(createSentryConnector({ secrets, sentryHttp: denied.client }).fetch(sentrySource)).rejects.toThrow(
+      IntakeSourceAuthError,
+    );
+    // A 200 whose body is not an issues array is a failed read — LOUD.
     const notArray = recordSentry({ detail: "nope" });
-    expect(await createSentryConnector({ secrets, sentryHttp: notArray.client }).fetch(sentrySource)).toHaveLength(0);
+    await expect(createSentryConnector({ secrets, sentryHttp: notArray.client }).fetch(sentrySource)).rejects.toThrow(
+      IntakeSourceFetchError,
+    );
+  });
+
+  it("returns a genuine empty list on a 200-with-an-empty-array (no unresolved issues)", async () => {
+    const empty = recordSentry([], 200);
+    expect(await createSentryConnector({ secrets, sentryHttp: empty.client }).fetch(sentrySource)).toHaveLength(0);
   });
 });
 

@@ -18,6 +18,13 @@ export {
 export { wrapProviderTriageAnswerer, type WrapProviderTriageAnswererOptions } from "./providerAnswerer.js";
 export { buildTriagePrompt } from "./prompt.js";
 
+export {
+  IntakeSourceAuthError,
+  IntakeSourceFetchError,
+  assertIntakeResponseOk,
+  type IntakeSourceProvider,
+} from "./connectorErrors.js";
+
 export { GitHubIssuesConfig, createGitHubIssuesConnector, type GitHubConnectorDeps } from "./githubConnector.js";
 
 export {

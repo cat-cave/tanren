@@ -24,7 +24,7 @@ import {
 import { projectSpecLifecycle, type ReviewVerdict, type SpecLifecycle } from "../contracts/dagLifecycle.js";
 import type { ResolvedVcsToken, VcsProvider } from "../contracts/vcsProvider.js";
 import type { SecretStore } from "../contracts/secretStore.js";
-import { migrateOrgConfig } from "../config/orgConfig.js";
+import { installationFromOrgConfig, migrateOrgConfig } from "../config/orgConfig.js";
 import { migrateProjectConfig } from "../config/projectConfig.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
 import { VcsProviderCodeHost } from "../providers/vcsProviderCodeHost.js";
@@ -442,28 +442,46 @@ export class PgPercolationEventEmitter implements PercolationEventEmitter {
   }
 }
 
-/** Resolve the org App installation block from the org config blob (App-first auth). */
+/**
+ * Resolve the org App installation block from the org config blob (App-first auth).
+ *
+ * No silent fallback (the no-silent-fallbacks doctrine): delegates to the shared
+ * {@link installationFromOrgConfig}, where an ABSENT config (`null`/`undefined`)
+ * and a present-but-App-less config both legitimately resolve to `undefined` ("no
+ * App"), but a config that is PRESENT yet UNPARSEABLE is a real corruption — the
+ * `migrateOrgConfig` parse error PROPAGATES rather than being swallowed to
+ * `undefined`, which would silently disable App auth and degrade percolation's
+ * token resolution to a static/unauthenticated read.
+ */
 function orgGithubApp(orgConfig: unknown): ReturnType<typeof migrateOrgConfig>["github_app"] | undefined {
-  if (orgConfig === null || orgConfig === undefined) return undefined;
-  try {
-    return migrateOrgConfig(orgConfig).github_app;
-  } catch {
-    return undefined;
-  }
+  return installationFromOrgConfig(orgConfig);
 }
 
-/** Resolve the static GitHub credential ref: project credentials → org default. */
+/**
+ * Resolve the static GitHub credential ref: project credentials → org default.
+ *
+ * No silent fallback: a PRESENT-yet-UNPARSEABLE project or org config is a real
+ * corruption whose `migrate*Config` parse error PROPAGATES (a loud failure naming
+ * the bad config), never swallowed to `undefined` or quietly skipped to the org
+ * default — either would silently disable the static credential. Only a genuinely
+ * ABSENT (`null`/`undefined`) config or a parseable config with no ref configured
+ * resolves to `undefined` (the legitimate "no static ref" case).
+ */
 function githubStaticRef(projectConfig: unknown, orgConfig: unknown): string | undefined {
-  try {
-    const ref = migrateProjectConfig(projectConfig).credentials?.githubCredentialRef;
-    if (ref !== undefined) return ref;
-  } catch {
-    // fall through to the org default
+  // An ABSENT project config (`null`/`undefined`) legitimately has no project ref —
+  // fall through to the org default. A PRESENT project config is migrated, and a
+  // parse error PROPAGATES loudly (never swallowed to skip to the org default).
+  if (projectConfig !== null && projectConfig !== undefined) {
+    const projectRef = migrateProjectConfig(projectConfig).credentials?.githubCredentialRef;
+    if (projectRef !== undefined) return projectRef;
   }
   if (orgConfig === null || orgConfig === undefined) return undefined;
-  try {
-    return migrateOrgConfig(orgConfig).defaultCredentials?.github_token;
-  } catch {
-    return undefined;
-  }
+  return migrateOrgConfig(orgConfig).defaultCredentials?.github_token;
 }
+
+/**
+ * Test-only surface for the credential-resolution helpers (their no-silent-fallback
+ * loud-propagation contract is behavior-tested in `percolationCredentialResolution.test.ts`).
+ * Not part of the runtime API; the runtime calls them through `resolveAncestorRead`.
+ */
+export const percolationCredentialResolutionInternals = { orgGithubApp, githubStaticRef } as const;
