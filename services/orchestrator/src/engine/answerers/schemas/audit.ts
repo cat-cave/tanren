@@ -39,10 +39,41 @@ export const AuditFinding = z
     severity: AuditFindingSeverity,
     title: z.string().min(1).max(200),
     body: z.string().min(1).max(6000),
-    fixHint: z.string().min(1).max(2000).optional(),
+    // NULLISH (string | null | undefined): OpenAI's STRICT structured-output mode
+    // (which `codex exec --output-schema` uses, via `enforceStrictNode`) requires
+    // EVERY key in `required` and expresses optionality as a NULLABLE type — so the
+    // generated schema sends `fixHint: null` for an omitted hint. The Zod source
+    // (the runtime parser of the CLI response) MUST accept that `null`, else a valid
+    // no-hint finding is rejected before the verdict can be recorded. Stored Findings
+    // keep the frozen `{ fixHint?: string }` contract (contracts/findings.ts) — the
+    // `null` is normalized to `undefined` on emit/read (see `normalizeFinding`).
+    fixHint: z.string().min(1).max(2000).nullish(),
   })
   .strict();
 export type AuditFinding = z.infer<typeof AuditFinding>;
+
+/**
+ * Normalize a parsed `AuditFinding` into the frozen stored `Finding` contract
+ * (`contracts/findings.ts`): a `null` `fixHint` (the strict-schema "omitted" form)
+ * collapses to an ABSENT key, so a finding emitted with `fixHint: null` and one
+ * with `fixHint` omitted yield the BYTE-IDENTICAL stored shape `{ fixHint?: string }`.
+ */
+export function normalizeFinding(parsed: AuditFinding): {
+  id: string;
+  severity: AuditFindingSeverity;
+  title: string;
+  body: string;
+  fixHint?: string;
+} {
+  return {
+    id: parsed.id,
+    severity: parsed.severity,
+    title: parsed.title,
+    body: parsed.body,
+    // null (strict-schema "no hint") OR undefined (omitted) ⇒ absent key.
+    ...(parsed.fixHint !== null && parsed.fixHint !== undefined && { fixHint: parsed.fixHint }),
+  };
+}
 
 export const AuditAnswer = z
   .object({

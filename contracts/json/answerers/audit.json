@@ -13,9 +13,16 @@
             "type": "string"
           },
           "fixHint": {
-            "maxLength": 2000,
-            "minLength": 1,
-            "type": "string"
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "id": {
             "maxLength": 120,

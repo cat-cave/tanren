@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 import type pg from "pg";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { AuditAnswer, CheckAnswer, PlanAnswer, PlanSubtask } from "../answerers/schemas/index.js";
+import { normalizeFinding } from "../answerers/schemas/index.js";
 import type { EventName, EventPayload } from "../events/index.js";
 import { emitStageTiming } from "../observability/index.js";
 import type { AnswererAdapter, WriterAdapter, WriterResult } from "../providers/types.js";
@@ -454,14 +455,10 @@ export async function runAuditorStage(
       recommendedAction: result.verdict.recommendedAction,
       ...(emitFindings && {
         // The adapter returns a PARSED answer (findings defaulted to []); a raw
-        // fixture verdict may omit it, so coalesce to an empty list.
-        findings: (result.verdict.findings ?? []).map((f) => ({
-          id: f.id,
-          severity: f.severity,
-          title: f.title,
-          body: f.body,
-          ...(f.fixHint !== undefined && { fixHint: f.fixHint }),
-        })),
+        // fixture verdict may omit it, so coalesce to an empty list. `normalizeFinding`
+        // collapses a strict-schema `fixHint: null` to an absent key so the stored
+        // shape matches the frozen `{ fixHint?: string }` contract.
+        findings: (result.verdict.findings ?? []).map((f) => normalizeFinding(f)),
       }),
     },
     auditorTaskId,

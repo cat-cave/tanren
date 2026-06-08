@@ -12,6 +12,7 @@ export {
   AuditRecommendedAction,
   AuditFinding,
   AuditFindingSeverity,
+  normalizeFinding,
   AUDIT_ANSWER_SCHEMA_ID,
 } from "./audit.js";
 export { DemoAnswer, DemoLink, DEMO_ANSWER_SCHEMA_ID } from "./demo.js";

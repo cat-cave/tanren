@@ -28,7 +28,7 @@ import {
   type SpecReviewState,
 } from "../contracts/dagLifecycle.js";
 import type { Finding } from "../contracts/findings.js";
-import { AuditFinding } from "../answerers/schemas/index.js";
+import { AuditFinding, normalizeFinding } from "../answerers/schemas/index.js";
 
 /**
  * Parse the `auditor.verdict` payload's `findings` JSON into typed `Finding`s.
@@ -46,14 +46,9 @@ function findingsFromPayload(raw: unknown): ReadonlyArray<Finding> | undefined {
     return undefined;
   }
   return raw.map((entry) => {
-    const parsed = AuditFinding.parse(entry);
-    const finding: Finding = {
-      id: parsed.id,
-      severity: parsed.severity,
-      title: parsed.title,
-      body: parsed.body,
-      ...(parsed.fixHint !== undefined && { fixHint: parsed.fixHint }),
-    };
+    // `normalizeFinding` collapses a strict-schema `fixHint: null` to an absent
+    // key, yielding the frozen `{ fixHint?: string }` Finding contract.
+    const finding: Finding = normalizeFinding(AuditFinding.parse(entry));
     return finding;
   });
 }
