@@ -137,15 +137,28 @@ const SEVERITY_OVERRIDES: Partial<Record<EventName, Severity>> = {
   // run halted and the operator must decide (raise the ceiling, or accept the
   // stop) — so it is `warn`: it clears the matrix warn floor AND the code-level
   // default route, reaching the operator rather than silently parking at `info`.
-  // (deploy.verified and other success milestones stay `info`: the default route
-  // is the ESCALATION path; success-milestone pings are an opt-in per-org route.)
   "dag.budget.paused": "warn",
+
+  // A budget FRACTION milestone (50% / 80% of the ceiling crossed BEFORE the terminal
+  // pause): the "approaching your money ceiling" heads-up a human wants DURING an
+  // autonomous run. It is a milestone the human ACTS on (decide whether to raise the
+  // ceiling before the run pauses), so it is `warn`: it clears the default route and
+  // reaches the org's channels WITHOUT per-event route config — the milestone-
+  // notifications chain. Emitted once per band per budget window (no re-walk spam).
+  "dag.budget.milestone": "warn",
 
   // A deploy that triggered but could NOT be proven live after the bounded verify
   // retry. Operator-actionable (the product never came up) → `warn` so the failure
   // reaches the operator rather than a silent triggered-but-unverified stall.
-  // (deploy.triggered / deploy.verified are routine lifecycle → info.)
   "deploy.failed": "warn",
+
+  // deploy.verified ("a live working URL is up"): the single highest-signal SUCCESS
+  // milestone of an autonomous run — the product is provably reachable. This is the
+  // milestone a human most wants pushed DURING a run, so it routes BY DEFAULT (`warn`,
+  // not the routine `info`): it clears the default-route floor and reaches the org's
+  // channels without per-event route config — the milestone-notifications chain.
+  // (deploy.triggered stays `info`: routine lifecycle, not the proven-live milestone.)
+  "deploy.verified": "warn",
 
   // Review
   "review.requested": "info",

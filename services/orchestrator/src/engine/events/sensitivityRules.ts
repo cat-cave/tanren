@@ -352,6 +352,14 @@ export const sensitivityRules: SensitivityRule[] = [
     ["readyHeldBack", "public"],
     ["reason", "public"],
   ]),
+  // The budget FRACTION milestone (50% / 80%): the band + the ceiling/spend figures +
+  // the period. All non-secret (dollar figures + a band label), exactly like the pause.
+  ...rulesFor("dag.budget.milestone", [
+    ["band", "public"],
+    ["ceilingUsd", "public"],
+    ["spentUsd", "public"],
+    ["period", "public"],
+  ]),
   ...rulesFor("dag.concurrency.saturated", [
     ["readyHeldBack", "public"],
     ["inFlightCount", "public"],

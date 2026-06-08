@@ -21,8 +21,15 @@ import type { SpecPriority } from "../../src/engine/state/spec.js";
 
 /** A recorded dag.* event the walker emitted (the contract's visibility surface). */
 export interface RecordedDagEvent {
-  type: "dag.spec.enqueued" | "dag.drained" | "dag.budget.paused" | "dag.concurrency.saturated";
+  type:
+    | "dag.spec.enqueued"
+    | "dag.drained"
+    | "dag.budget.paused"
+    | "dag.budget.milestone"
+    | "dag.concurrency.saturated";
   specId?: string;
+  // The budget FRACTION milestone band (50 / 80) — present only on dag.budget.milestone.
+  band?: 50 | 80;
   runId?: string;
   inFlightBefore?: number;
   concurrencyCeiling?: number;
@@ -217,6 +224,64 @@ export function describeDagWalkerConformance(label: string, suite: DagWalkerConf
       expect(result.status).toBe("enqueued");
       expect(result.enqueuedSpecIds).toEqual(["spec_root"]);
       expect(h.events.some((e) => e.type === "dag.budget.paused")).toBe(false);
+    });
+
+    it("emits a 50% budget milestone (heads-up, NOT a pause) when spend crosses half the ceiling", async () => {
+      const h = suite.make(3);
+      // Spend at 60% of the ceiling — past 50%, under 80% and under the pause.
+      h.setBudget({ ceilingUsd: 50, period: "total", spentUsd: 30 });
+      h.setSpec(node("spec_root", "pending", [], 0));
+      const result = await h.walker.walk(h.projectId);
+
+      // The run is NOT paused — work still enqueues; the milestone is a heads-up.
+      expect(result.status).toBe("enqueued");
+      expect(h.events.some((e) => e.type === "dag.budget.paused")).toBe(false);
+      const bands = h.events.filter((e) => e.type === "dag.budget.milestone").map((e) => e.band);
+      expect(bands).toEqual([50]);
+    });
+
+    it("emits BOTH the 50% and 80% milestones when spend jumps straight past both", async () => {
+      const h = suite.make(3);
+      // Spend at 90% — both fraction bands are crossed but the ceiling is not reached.
+      h.setBudget({ ceilingUsd: 50, period: "total", spentUsd: 45 });
+      h.setSpec(node("spec_root", "pending", [], 0));
+      const result = await h.walker.walk(h.projectId);
+
+      expect(result.status).toBe("enqueued");
+      expect(h.events.some((e) => e.type === "dag.budget.paused")).toBe(false);
+      const bands = h.events.filter((e) => e.type === "dag.budget.milestone").map((e) => e.band);
+      expect(bands).toEqual([50, 80]);
+      const milestone = h.events.find((e) => e.type === "dag.budget.milestone" && e.band === 80);
+      expect(milestone?.ceilingUsd).toBe(50);
+      expect(milestone?.spentUsd).toBe(45);
+    });
+
+    it("does NOT re-emit a budget milestone on a re-walk (idempotent per band per window)", async () => {
+      const h = suite.make(3);
+      h.setBudget({ ceilingUsd: 50, period: "total", spentUsd: 30 });
+      h.setSpec(node("spec_root", "pending", [], 0));
+      await h.walker.walk(h.projectId);
+      // A second walk under the SAME crossed band must NOT re-ping (no milestone spam).
+      await h.walker.walk(h.projectId);
+      const bands = h.events.filter((e) => e.type === "dag.budget.milestone");
+      expect(bands).toHaveLength(1);
+      expect(bands[0]?.band).toBe(50);
+    });
+
+    it("emits NO budget milestone when spend is below the 50% band", async () => {
+      const h = suite.make(3);
+      h.setBudget({ ceilingUsd: 50, period: "monthly", spentUsd: 10 });
+      h.setSpec(node("spec_root", "pending", [], 0));
+      await h.walker.walk(h.projectId);
+      expect(h.events.some((e) => e.type === "dag.budget.milestone")).toBe(false);
+    });
+
+    it("emits NO budget milestone when there is no ceiling (unlimited)", async () => {
+      const h = suite.make(3);
+      h.setBudget({ ceilingUsd: undefined, period: "monthly", spentUsd: 999999 });
+      h.setSpec(node("spec_root", "pending", [], 0));
+      await h.walker.walk(h.projectId);
+      expect(h.events.some((e) => e.type === "dag.budget.milestone")).toBe(false);
     });
 
     it("pauses on budget and enqueues NOTHING when spend reaches the ceiling", async () => {

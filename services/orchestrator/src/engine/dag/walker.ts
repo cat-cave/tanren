@@ -130,6 +130,13 @@ export class EventEmittingDagWalker implements DagWalker {
       return this.pauseOnBudget(projectId, budget);
     }
 
+    // Budget milestone heads-ups (the milestone-notifications chain): below the
+    // terminal pause, surface the 50% / 80% fraction crossings so the operator gets
+    // an "approaching your money ceiling" ping DURING the run (routes by default —
+    // `dag.budget.milestone` is `warn`). Idempotent per band per budget window (the
+    // emitter dedups against prior milestone events), so re-walks never re-ping.
+    await this.emitBudgetMilestones(projectId, budget);
+
     const ceiling = this.concurrency();
     const plan = planSpeculativeDagTick(snapshot, lifecycle, {
       concurrencyCeiling: ceiling,
@@ -211,6 +218,41 @@ export class EventEmittingDagWalker implements DagWalker {
       ...(budget.failClosed !== undefined && { reason: budget.failClosed }),
     });
     return { projectId, status: "budget_paused", enqueuedSpecIds: [], enqueuedRunIds: [] };
+  }
+
+  /**
+   * Emit the budget FRACTION milestones (50% / 80%) the cumulative spend has crossed —
+   * the "approaching your money ceiling" heads-up. Only fires when a POSITIVE ceiling is
+   * configured (an unlimited project, a zero ceiling, or a fail-closed pause crosses no
+   * fraction). We emit the HIGHEST crossed band whose event has not yet been recorded in
+   * the current budget window; the emitter dedups per band per window (so a re-walk after
+   * a crossing re-pings nothing). The 80% emit does NOT suppress a not-yet-recorded 50%:
+   * each band arms independently, so a run that jumps straight past 50% to 80% still gets
+   * BOTH bands recorded (the 80% ping is the one that reaches the human; the 50% row keeps
+   * the audit honest). A dedup is LOGGED, never silent.
+   */
+  private async emitBudgetMilestones(projectId: string, budget: ProjectBudgetState): Promise<void> {
+    if (budget.failClosed !== undefined) return;
+    const ceilingUsd = budget.ceilingUsd;
+    if (ceilingUsd === undefined || ceilingUsd <= 0) return;
+    const fraction = budget.spentUsd / ceilingUsd;
+    const bands: Array<50 | 80> = [];
+    if (fraction >= 0.5) bands.push(50);
+    if (fraction >= 0.8) bands.push(80);
+    for (const band of bands) {
+      const emitted = await this.deps.events.emitBudgetMilestone({
+        projectId,
+        band,
+        ceilingUsd,
+        spentUsd: budget.spentUsd,
+        period: budget.period,
+      });
+      if (!emitted) {
+        console.debug(
+          `[dag-walker] budget milestone ${band}% for ${projectId} already recorded this window — deduped, no re-ping`,
+        );
+      }
+    }
   }
 
   /**
