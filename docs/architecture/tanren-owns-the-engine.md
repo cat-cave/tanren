@@ -1,9 +1,30 @@
 # Tanren owns the engine — jj workspace, minimal GitHub, unified runs, guaranteed merge authority
 
-> Status: **design, pre-implementation** (2026-06-07). Supersedes the "speculative
-> execution / percolation" framing in `autonomy-engine.md §2c` for the forward path.
+> Status: **implemented, flag-on, apex-validation pending** (Waves 0–3 merged).
+> Supersedes the "speculative execution / percolation" framing in
+> `autonomy-engine.md §2c` — that doc's §2b/§2c are rewritten to this model.
 > Origin: the live apex run stalled on a merge-queue conflict the resolver never
 > engaged (run-discipline trigger); five Codex audits + the operator's reframe.
+>
+> **What is DONE (merged on `main`):** the four seam contracts + conformance
+> suites (Wave 0); the jj `WorkspaceVcsCore`, minimal `CodeHost`, guaranteed
+> `MergeAuthority`, best-effort `VisibilityProjection` impls (Wave 1); the unified
+> `integration_nodes` run model, `MergeAuthority` as the LIVE sole merge decision,
+> the never-discard `BaseShiftCoordinator`, and audit-as-P0–P3-findings gated by
+> `auditPosture` (Wave 2); and the live jj conflict resolver, live base-shift
+> execution, and `integration_nodes` proof-reuse + jj-local integration (Wave 3),
+> all **default-on behind kill-switch env vars** (`MERGE_AUTHORITY_LIVE`,
+> `CONFLICT_RESOLVER_JJ_LIVE`, `BASE_SHIFT_LIVE`, `INTEGRATION_NODES_DRIVE`).
+> Migrations `0007`–`0011` carry the `integration_nodes` table + the new events.
+>
+> **What is PENDING:** the live jj-against-a-runner path is **apex-validation
+> pending** — first exercised by the next apex run; the flags are the
+> kill-switches. The §7 deletions (the now-dead `speculativeIntegrator`, the
+> git-merge-abort `workspaceApplier` dance, `resolveSpeculativeState`, the
+> 25-method `VcsProvider` → ~5-method `CodeHost`), the walker/percolation
+> `speculativeIntegrator` → jj-local cutover, and the `integration.*` metrics
+> read-side are **deferred to post-apex** — they stay until apex proves the
+> flag-on live paths.
 
 ## 0. The governing principle — guaranteed-internal vs best-effort-external
 
@@ -31,7 +52,7 @@ We stop modeling "the forge" and model the **purpose**. Four seams:
 
 | Seam                       | What it is                                                                                                                 | Provider?                               |
 | -------------------------- | -------------------------------------------------------------------------------------------------------------------------- | --------------------------------------- |
-| **`WorkspaceVcsCore`**     | local clone/branch/rebase/record-conflict/resolve/restack                                                                  | **jj** (swappable; git fallback)        |
+| **`WorkspaceVcsCore`**     | local clone/branch/rebase/record-conflict/resolve/restack                                                                  | **jj** (jj-only — no git fallback)      |
 | **`CodeHost`**             | minimal hosting: code source + push/fetch refs + read commits/diffs + **land an authorized ref into `main`** + create repo | GitHub / GitLab / Bitbucket / self-host |
 | **`MergeAuthority`**       | the owned decision: _what makes merging into `main` okay_                                                                  | **Tanren — no provider, guaranteed**    |
 | **`VisibilityProjection`** | best-effort mirror of the change as PR/check/comment                                                                       | optional, per-host                      |
@@ -192,40 +213,54 @@ events through an explicit compatibility read-model, not silent abandonment.
 
 ## 8. Action plan — parallel waves, audits, validation, back to apex
 
-**Wave 0 — lock the design (this doc).** Finalize the four seam contracts +
+The waves below are **merged**; the per-wave status is inline. The flag-on live
+paths are **apex-validation pending** and the §7 deletions are **deferred to
+post-apex** (see the status header).
+
+**Wave 0 — lock the design (this doc). DONE.** The four seam contracts +
 `integration_nodes` schema + `auditPosture` policy shape + the guaranteed/best-effort
-boundary. Write **conformance suites first** (the contracts are the durable asset):
-workspace-core (rebase-succeeds-with-conflict, auto-restack, resolution-propagates,
-op-undo, clean-export, never-push-conflicted), CodeHost (refs/main/land), MergeAuthority
-(fail-closed truth table), VisibilityProjection (best-effort, never blocks).
+boundary, plus the **conformance suites written first** (the contracts are the durable
+asset): workspace-core (rebase-succeeds-with-conflict, auto-restack,
+resolution-propagates, op-undo, clean-export, never-push-conflicted), CodeHost
+(refs/main/land), MergeAuthority (fail-closed truth table), VisibilityProjection
+(best-effort, never blocks).
 
-**Wave 1 — the seams (parallel worktree subagents, disjoint files).**
-`WorkspaceVcsCore` (jj impl behind the contract, git fallback retained) · `CodeHost`
-(GitHub impl, minimal) · `MergeAuthority` (the guaranteed decision, extracted from the
-scattered gate/governance/review/mergeability) · `VisibilityProjection` (PR/check mirror,
-best-effort). Each: Codex-audited + gated + CI + merged.
+**Wave 1 — the seams. DONE.** `WorkspaceVcsCore`
+(`engine/providers/jjWorkspaceVcsCore.ts`, **jj-only — the git fallback was NOT
+retained**) · `CodeHost` (`githubCodeHost.ts`, minimal GitHub host + CAS land-to-main)
+· `MergeAuthority` (the guaranteed fail-closed decision, `engine/merge/
+mergeAuthorityImpl.ts`) · `VisibilityProjection` (`githubVisibilityProjection.ts`, the
+best-effort PR/check mirror). Each was Codex-audited + gated + CI + merged.
 
-**Wave 2 — unify on the seams.** `integration_nodes` (observe-only first) · the unified
-run body (kill speculative-vs-real) · never-discard jj-rebase replacing percolation
-re-exec · audit-as-findings + `auditPosture`. Absorbs the two apex stall fixes
+**Wave 2 — unify on the seams. DONE (flag-on).** `integration_nodes` (persisted,
+observe-only first, with a compat read-model) · the unified run body (the
+speculative-vs-real divergence killed) · the never-discard `BaseShiftCoordinator`
+(jj-rebase in place replacing the percolation supersede+regenerate — the strand
+reconciler **deleted**, net −906 src LOC) · `MergeAuthority` as the LIVE sole merge
+decision (`MERGE_AUTHORITY_LIVE`) · audit-as-P0–P3-findings + `auditPosture`
+(authoritative in the merge decision). Absorbed the two apex stall fixes
 (conflict-resolver-on-the-merge-path, intake-poller App→static cred) as natural
 consequences, not patches.
 
-**Wave 3 — leverage + proof.** proof-reuse keyed cache + the `integration.*` metrics
-(prove rebase<rebuild) · affected-tier gate skipping · the fail-closed fixes from
-audit 7 · stacked-PR projection.
+**Wave 3 — leverage + proof. DONE (flag-on).** jj into the live conflict resolver
+(`CONFLICT_RESOLVER_JJ_LIVE`, §5-P1 closed) · live base-shift execution
+(`BASE_SHIFT_LIVE`, never-discard rebase) · `integration_nodes` proof-reuse + jj-local
+integration (`INTEGRATION_NODES_DRIVE`) · `buildLiveJjWorkspace` (jj against a live
+allocated runner). **Still pending (deferred post-apex):** the `integration.*` metrics
+read-side (prove rebase<rebuild) and the broader affected-tier gate-skipping / stacked-PR
+projection polish.
 
 **Between every wave: validation gates** — `just ci` + `just smoke` + the new
-conformance suites + a Codex adversarial pass on the wave's diff; nothing advances on a
+conformance suites + a Codex adversarial pass on the wave's diff; nothing advanced on a
 red gate. The goal: when these land, **v+1 lands on the first try** because the failure
 modes the audits found are gone.
 
-**Documentation revision (with the code, not after):** `README.md`, `ROADMAP.md`,
-`docs/architecture/autonomy-engine.md` (§2c rewritten to the unified model), the
-parallel-orchestration + conflict-handling playbooks, and the `VcsProvider` → seam
-contracts. Code must embody the doctrine (the doc/reality mismatch — "NOT discard" while
-the code discards — is itself a bug we are deleting).
+**Documentation revision (with the code, not after). DONE.** `README.md`, `ROADMAP.md`,
+`docs/architecture/autonomy-engine.md` (§2b/§2c rewritten to the unified never-discard
+model), and `CLAUDE.md`. Code must embody the doctrine (the former doc/reality mismatch —
+"NOT discard" while the old code discarded — is itself a bug now deleted).
 
-**Back to apex:** rebuild the stack on the refactored `main` → re-provision (codex/
-github/vercel over the API) → fresh derive (v+1) → drive the autonomy loops. The first
-post-refactor run is the proof the refactor worked.
+**Back to apex (next):** rebuild the stack on the refactored `main` → re-provision
+(codex/github/vercel over the API) → fresh derive (v+1) → drive the autonomy loops. The
+first post-refactor apex run is the proof the flag-on live paths work — it is the
+**apex-validation** the cutover is pending on.
