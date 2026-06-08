@@ -8,12 +8,27 @@ real Codex + real credentials.
 
 **v21 native delivery is the doctrine.** Delivery is **Action-less**: the native
 shell-tier gate (`.tanren/ci.yml`, a `CiConfigV1` — _not_ a GitHub Actions
-workflow) runs over SSH and is the **sole merge authority**; the verdict publishes
-back to the forge as the `tanren/gate` commit status. Mergify is fully removed
-(`native_queue` is the merge engine); migrations are collapsed to a single
+workflow) runs over SSH and feeds the **sole merge authority**; the verdict
+publishes back to the forge as the `tanren/gate` commit status. Mergify is fully
+removed (`native_queue` is the merge engine); migrations are collapsed to a single
 baseline; the status vocabulary is unified; Vault per-run scoped credentials are
 done. (Tanren's own monorepo CI runs on GitHub Actions like any repo; the
 no-Actions doctrine governs the delivery path for the apps Tanren _builds_.)
+
+**The tanren-owns-the-engine cutover is merged + flag-on (apex-validation
+pending).** Delivery now runs on the **jj (jujutsu) `WorkspaceVcsCore`** (jj-only,
+no git fallback), the guaranteed fail-closed **`MergeAuthority`** (the sole merge
+decision, replacing the scattered gate/governance/review/mergeability checks), the
+unified **`integration_nodes`** run model, the **never-discard
+`BaseShiftCoordinator`** (jj-rebase dependent work in place — the old percolation
+that _superseded + regenerated_, discarding work, is replaced), and
+**audit-as-P0–P3-findings** gated by an **`auditPosture`** DORA knob. These live
+paths are **default-on behind kill-switch env vars** (`MERGE_AUTHORITY_LIVE`,
+`CONFLICT_RESOLVER_JJ_LIVE`, `BASE_SHIFT_LIVE`, `INTEGRATION_NODES_DRIVE`) and are
+**first exercised by the next apex run**. The §7 deletions (the dead
+`speculativeIntegrator`, the git-merge-abort applier dance, the 25-method
+`VcsProvider`) are **deferred to post-apex**. Rationale:
+`docs/architecture/tanren-owns-the-engine.md`.
 
 ## Read order for a fresh session
 
@@ -23,7 +38,9 @@ no-Actions doctrine governs the delivery path for the apps Tanren _builds_.)
 3. **`PROJECT_BRIEF.md`** — the durable source-of-truth vision.
 4. **`docs/architecture/autonomy-engine.md`** — the durable design rationale for
    the autonomy engine (DagWalker · real-LLM Forge · native merge queue ·
-   speculation + percolation · `apex` · the stub-ban + real-e2e guardrails).
+   never-discard rebase + `MergeAuthority` · `apex` · the stub-ban + real-e2e
+   guardrails); the merge-engine cutover lives in
+   `docs/architecture/tanren-owns-the-engine.md`.
 5. **`docs/operator-guide/live-validation-findings.md`** — what the live
    validation proved across all three tiers + the config gotchas.
 
@@ -32,9 +49,11 @@ no-Actions doctrine governs the delivery path for the apps Tanren _builds_.)
 The core promise — a real user gets merged PRs from specs, on public **and
 private** repos, across easy/medium/hard governance tiers — is **done and
 live-proven**. The **autonomy engine** (autonomy Phases 1 and 2) is **merged on
-`main`**: the DAG drives itself via the **DagWalker** and the **native intelligent
-merge queue** coordinates merges (full design rationale:
-`docs/architecture/autonomy-engine.md`; phase history: `ROADMAP.md` §2).
+`main`**: the DAG drives itself via the **DagWalker**, the **native intelligent
+merge queue** coordinates merges, and the delivery path now runs on the flag-on
+**jj / `MergeAuthority` / `integration_nodes`** engine (the cutover above; full
+design rationale: `docs/architecture/autonomy-engine.md` +
+`docs/architecture/tanren-owns-the-engine.md`; phase history: `ROADMAP.md` §2).
 
 **The only remaining major effort is Phase 3 — `apex`**: the max-difficulty
 fixture (rough operator notes → a deployed product autonomously). It is the
@@ -42,9 +61,16 @@ fixture (rough operator notes → a deployed product autonomously). It is the
 (`docs/operator-guide/apex.md`) and the live-run setup exist, the Tier-1
 credentials (GitHub App + Slack + a deploy target;
 `docs/operator-guide/validation-credentials.md`) are provisioned, and it spends
-real credits under the $50 ceiling. The rest of the forward to-do (`ROADMAP.md`
-§4):
+real credits under the $50 ceiling. The next apex run is also the
+**apex-validation** the cutover is pending on — the first exercise of the flag-on
+live jj-against-a-runner paths. The rest of the forward to-do (`ROADMAP.md` §4):
 
+- **tanren-owns-the-engine — finish the cutover (post-apex).** After apex proves
+  the flag-on live paths: the §7 deletions (the dead `speculativeIntegrator`, the
+  git-merge-abort applier dance, `resolveSpeculativeState`, the 25-method
+  `VcsProvider` → ~5-method `CodeHost`), the walker/percolation → jj-local cutover,
+  and the `integration.*` metrics read-side (prove rebase < rebuild). See
+  `docs/architecture/tanren-owns-the-engine.md` §7–§8.
 - **Benchmark seed corpus.** The tanren-method toolkit is code-complete; what
   remains is the **content** — tiered seed repos + hidden accept tiers + running
   the experiments. See `docs/roadmap/tanren-method-benchmark.md`.
@@ -56,9 +82,10 @@ real credits under the $50 ceiling. The rest of the forward to-do (`ROADMAP.md`
   single-baseline codebase: `schemaCore.ts` `.default('{}'::jsonb)` (latent-500)
   and the `resolveCredentials.ts` `orgId === ''` BYOK branch (a live path
   mislabeled "legacy").
-- **Held / long-horizon:** a second `VcsProvider` backend (GitLab — the seam
-  already shipped; the Mergify/Actions coupling that once justified deferring it is
-  gone); the agy harness (broken headless); the Rust rewrite / native harness.
+- **Held / long-horizon:** a second `CodeHost` backend (GitLab — the seam already
+  shipped, decomposed from `VcsProvider` by the cutover; the Mergify/Actions
+  coupling that once justified deferring it is gone); the agy harness (broken
+  headless); the Rust rewrite / native harness.
 
 ## Working rules
 

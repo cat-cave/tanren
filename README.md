@@ -148,12 +148,31 @@ drives its own spec graph via the autonomous **DagWalker**, with persisted
 **priority**, **real-LLM Forge** (deterministic answerers → `tests/fixtures/`),
 **webhook-first issue intake**, a **stub-ban lint** (`no-production-stubs`), a
 **real-resource `just e2e` gate** (`QuotaPolicy` deleted — budget is the only run
-gate), the **`VcsProvider` seam**, **auto-rebase**, DAG-aware **intent-preserving
-conflict resolution**, **speculative execution + change-percolation**, the
-**native intelligent merge queue** (DAG-order serialized merge + speculative
-batch-check + bisect), **CI-intelligence parity** (flaky-quarantine · CI analytics
-· queue stats), and **Mergify removed entirely**. The durable design rationale is
+gate), DAG-aware **intent-preserving conflict resolution**, the **native
+intelligent merge queue** (DAG-order serialized merge + batch-check + bisect),
+**CI-intelligence parity** (flaky-quarantine · CI analytics · queue stats), and
+**Mergify removed entirely**. The durable design rationale is
 **`docs/architecture/autonomy-engine.md`**.
+
+**The tanren-owns-the-engine cutover is merged and flag-on (apex-validation
+pending).** The GitHub-shaped `VcsProvider` is decomposed by purpose into four
+seams — a **jj (jujutsu) `WorkspaceVcsCore`** (jj-only, no git fallback;
+`engine/providers/jjWorkspaceVcsCore.ts`), a minimal **`CodeHost`**
+(push/fetch/land-to-`main`; `githubCodeHost.ts`), the guaranteed fail-closed
+**`MergeAuthority`** (the sole merge decision; `engine/merge/mergeAuthorityImpl.ts`),
+and best-effort **`VisibilityProjection`** (the PR/check mirror). The unified
+**`integration_nodes`** run model replaces the speculative-vs-real divergence; a
+**never-discard `BaseShiftCoordinator`** rebases dependent work in place (the old
+percolation _superseded + regenerated_ — discarding work; that is replaced, not
+preserved); and the auditor emits **P0–P3 findings** gated by an **`auditPosture`**
+DORA knob. The live paths — jj as the conflict resolver, live base-shift, and
+`integration_nodes` proof-reuse + jj-local integration — are **default-on behind
+kill-switch env vars** (`MERGE_AUTHORITY_LIVE`, `CONFLICT_RESOLVER_JJ_LIVE`,
+`BASE_SHIFT_LIVE`, `INTEGRATION_NODES_DRIVE`) and are **first exercised by the next
+apex run**. The post-apex deletions (the now-dead `speculativeIntegrator`, the
+git-merge-abort applier dance, the 25-method `VcsProvider`) are deferred until apex
+proves the flag-on paths. Full rationale:
+**`docs/architecture/tanren-owns-the-engine.md`**.
 
 **The only remaining major effort is Phase 3 — `apex`**: a max-difficulty fixture
 that takes a one-paragraph brief to a deployed product (URL shortener + Slack bot +
@@ -166,7 +185,7 @@ real credits under the $50 budget ceiling.
 Smaller near-term items: the **benchmark seed corpus** and the **remaining DAL
 clusters** (`forge/audits/store.ts` + `forge/inbox/store.ts` still raw SQL),
 `typify→serde` codegen, and the first whole-repo mutation baseline; long-horizon:
-a second `VcsProvider` backend (GitLab) and the Rust rewrite / native harness.
+a second `CodeHost` backend (GitLab) and the Rust rewrite / native harness.
 (Vault per-run scoped credentials — the last big data-plane de-privilege — is now
 **done**.) None of these block the core promise above.
 

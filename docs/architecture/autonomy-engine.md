@@ -8,23 +8,44 @@ autonomous issue-ingestion loop, all under live budget / DORA / visibility.
 This is an **architecture-rationale doc**, not a build plan. The autonomy engine
 (Phases 1 and 2) is **built and merged** — see `ROADMAP.md` §2 for the phase
 history and the merged surfaces. What lives here is the _why_: the principles,
-the speculation-and-percolation model, the apex intent, and the guardrail
-rationale that the in-code `§`-anchored comments cite. The section anchors below
-(§1.x, §1a, §1b, §1d, §2b, §2c, §2d, §3 proof 6, §8a, §8b) are stable: ~a dozen
-source comments reference them, so the anchored sections survive at this path.
+the merge-coordination model, the apex intent, and the guardrail rationale that
+the in-code `§`-anchored comments cite. The section anchors below (§1.x, §1a,
+§1b, §1d, §2b, §2c, §2d, §3 proof 6, §8a, §8b) are stable: ~a dozen source
+comments reference them, so the anchored sections survive at this path.
+
+> **The tanren-owns-the-engine cutover (merged, flag-on, apex-validation
+> pending).** The merge coordination described in §2 was originally built on a
+> `VcsProvider`-shaped, speculative-integration-plus-change-percolation model.
+> That model has since been **superseded and the cutover merged**: a jj (jujutsu)
+> `WorkspaceVcsCore` is the VCS core, a guaranteed fail-closed **`MergeAuthority`**
+> is the sole merge decision, a **never-discard** `BaseShiftCoordinator` rebases
+> dependent work in place (the old "supersede + regenerate" percolation that _did_
+> discard and re-plan work is replaced — not preserved), and the auditor emits
+> **P0–P3 findings** gated by an **`auditPosture`** DORA knob. These live paths are
+> **default-on behind kill-switch env vars** (`MERGE_AUTHORITY_LIVE`,
+> `CONFLICT_RESOLVER_JJ_LIVE`, `BASE_SHIFT_LIVE`, `INTEGRATION_NODES_DRIVE`) and
+> are **apex-validation pending** — the live jj-against-a-runner path is first
+> exercised by the next apex run; the flags are the kill-switches. §2b/§2c below
+> are rewritten to the never-discard reality; the full rationale, the unified
+> `integration_nodes` run model, and the deferred post-apex deletions are in
+> `docs/architecture/tanren-owns-the-engine.md`.
 
 ## 1. Architectural principles
 
 1. <a id="s11"></a>**§1.1 — The merge queue is a native, headline Tanren
    capability, not an external dependency.** Tanren owns the hard parts an
-   external queue provides (DAG-aware ordering, speculative integration,
+   external queue provides (DAG-aware ordering, in-place rebase integration,
    intent-preserving conflict resolution) and the verification too — the
-   **native gate** runs over SSH and is the merge authority (no GitHub Actions in
-   the delivery path). The pluggable seam is the thin **VCS provider** (GitHub
-   now; GitLab/others later) behind a `VcsProvider` contract —
-   code/review/check-publication/merge-accept, _not_ delivery. Mergify is gone,
-   not an optional adapter. This is the headline differentiator: intelligent
-   velocity, provider-agnostic, Action-less.
+   **native gate** runs over SSH and feeds the guaranteed fail-closed
+   **`MergeAuthority`**, the sole merge decision (no GitHub Actions in the
+   delivery path). Post-cutover the GitHub-shaped `VcsProvider` is decomposed by
+   _purpose_ into four seams — jj `WorkspaceVcsCore` (clone/branch/rebase/resolve),
+   a minimal `CodeHost` (push/fetch refs + land an authorized ref into `main`),
+   the owned `MergeAuthority`, and best-effort `VisibilityProjection` (the
+   PR/check/comment mirror) — so the host stays swappable (GitHub now;
+   GitLab/others later) and code/review/check-publication become best-effort
+   mirrors, not delivery. Mergify is gone, not an optional adapter. This is the
+   headline differentiator: intelligent velocity, provider-agnostic, Action-less.
 2. **Conflict resolution is always native + intent-preserving.** A mechanical
    resolver (`git rerere`, or any text-only external tool) can only pick text.
    Tanren's resolver has the **acceptance criteria + intent of _both_ conflicting
@@ -136,8 +157,9 @@ preferring real-time push over polling where the integration allows.
 ## 2. Native merge coordination
 
 Once specs run in parallel, they go stale and collide. A `MergeCoordinator`
-contract owns this; the run path's merge stage calls it instead of the bare
-`directMerge`.
+contract owns the queue ordering; the guaranteed fail-closed **`MergeAuthority`**
+owns the merge _decision_ (post-cutover, the sole authority — see the intro note);
+the run path's merge stage routes through them instead of the bare `directMerge`.
 
 ### 2b. DAG-aware, intent-preserving conflict resolution
 
@@ -152,10 +174,19 @@ spec and what is now on the base:
    structured diagnosis that routes one spec back to the planner with the other's
    change as new context — intent stays alive, not dropped).
 3. Apply, re-run the in-loop gate + checker/auditor against the resolved tree,
-   then merge. The resolution is itself inspectable (events + the diff).
+   then route to `MergeAuthority`. The resolution is itself inspectable (events +
+   the diff).
 
 This is the principle made concrete: **the DAG knows the intent of every change,
 so a conflict is a re-planning problem, not a text-picking problem.**
+
+Post-cutover (flag-on, default), the live resolver runs over **jj first-class
+conflicts** (`conflictResolverJjLive`): a rebase that conflicts _still succeeds_
+and records the conflict _in_ the commit, which the resolver then resolves — there
+is no `git merge --no-ff` + `--diff-filter=U` + `merge --abort` dance and no
+`|| true` that swallows infra/auth failures. "A conflict must never brick" is true
+by construction: work is never discarded, the conflicted state stays local to the
+runner workspace, and only resolved git-compatible refs are pushed to the host.
 
 ### 2c. Speculative execution + change-percolation (the full story)
 
@@ -179,46 +210,56 @@ ancestor merges? Configurable per project; **default = Moderate**:
 - **Aggressive:** dependent starts as soon as the ancestor's **PR is open**
   (pre-CI). Maximum parallelism, high invalidation risk.
 
-**The mechanism — speculative integration branches.** When C is ready under the
-threshold and depends on A (and/or B) that are unmerged:
+**The mechanism — integration nodes (post-cutover).** When C is ready under the
+threshold and depends on A (and/or B) that are unmerged, there is **one** run
+object: _work on a base that may shift._ The base is `main + an ordered set of
+not-yet-landed ancestor branches` — an **`integration_nodes`** row (the same
+object is an eager dependent build, a merge-queue batch, and a stacked PR; the
+old speculative-vs-real divergence is killed).
 
-1. The coordinator builds an **ephemeral integration branch** =
-   `main + A.branch + B.branch` speculatively merged (in DAG order). If A and B
-   conflict _with each other_, it surfaces **here, early**, on the integration
-   branch — intent-preserving resolution (§2b) runs against it, not against poor C.
-2. C's PR is **based on that integration branch** (dynamic base). C builds against
-   the prospective merged world.
-3. **At real merge time**, the merge queue (§2d) merges ancestors in DAG order;
-   each ancestor merge triggers dependents to **auto-rebase onto the new `main`**
-   — and because a _merged_ ancestor can differ from its _speculative_ form (a
-   reviewer changed A), the rebase **re-runs C's gate + checker/auditor against
-   reality**, not the speculation.
+1. The dependent's branch is integrated jj-locally against its ordered ancestors
+   (`integrationNodesDrive`, flag-on). If ancestors conflict _with each other_, it
+   surfaces **here, early** via jj first-class conflicts — intent-preserving
+   resolution (§2b) runs against it, not against poor C.
+2. C builds against the prospective merged world (the integration node's base).
+3. **When a base shifts** — an ancestor lands, or an unrelated spec lands and
+   moves a shared base — the **never-discard `BaseShiftCoordinator`** treats the
+   shift as **new context**, not a reason to throw work away: it jj-rebases C's
+   **existing** branch onto the shifted base (`rebaseOnto`, same run/branch row,
+   same run_id), re-gates only affected tiers, and **re-plans only** when the
+   rebase conflicted and the resolver + re-gate say the old work no longer fits. A
+   clean rebase + passing gate **never** re-plans. Proof reuse keyed on
+   `member_key + gate_config_hash + policy_version` carries a batch's gate verdict
+   into the real merge so a no-op rebase skips unaffected tiers.
 
 The hard case — C depends on A and B, both pending human review — is handled by
-basing C on the `A+B` integration branch: we do **not** pre-merge A or B to
-unblock C. They merge on their own real review timelines, through the queue, in
-dependency order; C rebases after each. C's _work_ proceeds in parallel, but C's
-_merge_ still waits until A and B are genuinely merged. No unreviewed code reaches
-`main` early.
+the integration node basing C on the ordered `A+B` ancestors: we do **not**
+pre-merge A or B to unblock C. They merge on their own real review timelines,
+through the queue, in dependency order; C rebases in place after each. C's _work_
+proceeds in parallel, but C's _merge_ still waits — `MergeAuthority` only
+authorizes C once A and B are genuinely merged. No unreviewed code reaches `main`
+early.
 
-**Change-percolation — NOT discard.** When an ancestor changes after dependents
-started speculatively (a P3 patch applies to A, a reviewer edits A, a new finding
-lands), the walker must **NOT** throw away B's and C's work. It treats the
-ancestor's change as a **delta to percolate down the chain**: the same
-intent-preserving resolver as §2b — applied to an _intentional upstream change_
-rather than a textual conflict — determines, for `A → B → C`, exactly **what in
-A's change needs to flow into B**, applies it while **keeping B's work intact**,
-re-gates B, then percolates B's resulting delta into C the same way. It is a chain
-re-integration, not a rollback. The cheaper, faster, and more reliable this
-percolation is, the **earlier B can safely start in A's journey** — percolation
-quality is what makes an aggressive speculation threshold (and deeper speculative
-stacks) economical. It is a first-class capability, co-designed with §2b/§2d, not
-an error path.
+**Base shift = never discard (replacing the old supersede + regenerate).** The
+**original** change-percolation implementation, despite the prose here once
+claiming "NOT discard," actually **superseded** the dependent's run — cancelled
+it, dequeued it, force-pushed a fresh clone, and re-planned from scratch —
+discarding every planner/writer/code token (and spawning a strand reconciler to
+clean up the cancel+recreate, a whole bug-class now **deleted**, not fixed). The
+post-cutover `BaseShiftCoordinator` is the real never-discard: when an ancestor
+changes after dependents started (a P3 patch, a reviewer edit, a new finding), it
+**jj-rebases B's existing branch in place** — keeping B's work intact, re-gating,
+propagating the resolution down the stack via jj's automatic descendant rebase —
+rather than cancel-and-regenerate. It is a chain re-integration, not a rollback.
+Because work is never discarded, deeper eager chains are just more rebases, all
+useful; the `integration.*` metrics (read-side **apex-validation pending**, see
+§7 of `tanren-owns-the-engine.md`) instrument `rebase_vs_rebuild` to _prove_
+resolution costs less than rebuild rather than assume it.
 
-Severity gates _whether_ percolation is needed promptly: a **P0/P1** finding or
-**changes-requested** on A triggers immediate percolation; **P2/P3** changes
-percolate lazily (batched into the next rebase). Nothing is ever silently merged
-on stale work — but nothing is ever needlessly thrown away either.
+Severity gates _whether_ a rebase is needed promptly: a **P0/P1** finding or
+**changes-requested** on A triggers immediate re-integration; **P2/P3** changes
+batch lazily into the next rebase. Nothing is ever silently merged on stale work —
+and, now genuinely, nothing is ever discarded.
 
 ### 2d. The native intelligent merge queue (headline capability)
 
@@ -227,20 +268,22 @@ The `MergeCoordinator` runs an in-Tanren queue that:
 
 - **Orders** ready-to-merge PRs in **DAG order** (ancestors before dependents), by
   priority within a layer.
-- **Speculatively integrates + batch-checks** the prospective merged state (the
-  `A+B+…` integration branch from §2c), so a bad _interaction_ is caught before it
-  hits `main` — and **bisects a failed batch** to find the offending PR rather
-  than blocking the whole batch.
+- **Integrates + batch-checks** the prospective merged state (the ordered `A+B+…`
+  integration node from §2c), so a bad _interaction_ is caught before it hits
+  `main` — and **bisects a failed batch** to find the offending PR rather than
+  blocking the whole batch (proof-reuse lets bisection read prefix-node verdicts).
 - **Serializes conflict-prone merges** and invokes intent-preserving resolution
-  (§2b) when a real conflict surfaces, then re-gates and merges.
-- Is **provider-agnostic** via the `VcsProvider` seam — GitHub today;
-  GitLab/others later. The queue logic is Tanren's; only the VCS calls are behind
-  the adapter.
+  (§2b) when a real conflict surfaces, then re-gates and routes to `MergeAuthority`.
+- Is **host-agnostic** via the purpose-decomposed seams (post-cutover): the queue
+  logic + the `MergeAuthority` decision are Tanren's; only the thin `CodeHost`
+  (push/fetch/land) and best-effort `VisibilityProjection` calls are behind the
+  host adapter — GitHub today, GitLab/others later.
 
 The native engine is strictly more capable than an external queue because it has
 the DAG + spec intent that an external tool never sees. It absorbs what an
-external queue would provide — merge queue + speculative checks (§2d), DAG-derived
-stacks (§2c), auto-rebase (§2a), **flaky-test detection + auto-quarantine**, **CI
+external queue would provide — merge queue + batch checks (§2d), DAG-derived
+integration nodes (§2c), never-discard in-place rebase (§2c),
+**flaky-test detection + auto-quarantine**, **CI
 analytics / insights** (timing, pass-rate, slow steps — extending the existing
 workflow-insights compute), and **queue statistics** (derived from the native
 queue's own events). These are things Tanren _acts on_, not delegates.
@@ -288,9 +331,10 @@ plus shared-file pressure (router/types/migrations) that forces real conflicts.
 
 <a id="proof6"></a>A single `apex` launch must demonstrate, autonomously: ideation
 from rough notes (real LLM); DAG derivation; autonomous DAG execution (N in
-parallel, governed concurrency, speculative unblock, no milestone pauses, zero
-per-spec triggers); merge coordination (auto-rebase, intent-preserving conflict
-resolution, stacked dependents, the native queue); the issue loop (planted
+parallel, governed concurrency, eager dependent unblock, no milestone pauses, zero
+per-spec triggers); merge coordination (never-discard in-place rebase,
+intent-preserving conflict resolution, stacked dependents, the native queue +
+`MergeAuthority`); the issue loop (planted
 deficiency → real issue → triage → spec → DAG-insert → execute → merge); and
 **observability** — the **budget ceiling enforced** (run pauses on exhaustion via
 `dag.budget.paused`), live token usage per role, 4-source cost incl. the

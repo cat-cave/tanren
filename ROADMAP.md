@@ -47,6 +47,41 @@ The shape of the platform today:
   an orphan child token with a per-ref ACL; the `dev-root-token` fallbacks are
   removed from `main.ts` + `allocator/main.ts` (broad token REQUIRED, fail-hard).
 
+### tanren-owns-the-engine cutover (merged, flag-on, apex-validation pending)
+
+The merge/integration subsystem has been cut over from the GitHub-shaped
+`VcsProvider` + speculative-integration + change-percolation model to the
+**tanren-owns-the-engine** model (`docs/architecture/tanren-owns-the-engine.md`).
+**Merged on `main`, default-on behind kill-switch env vars, apex-validation
+pending** (the live jj-against-a-runner path is first exercised by the next apex
+run):
+
+- **Four purpose-decomposed seams** (Wave 1): a jj (jujutsu) `WorkspaceVcsCore`
+  (jj-only, **no git fallback**), a minimal `CodeHost` (push/fetch/land-to-`main`),
+  the guaranteed fail-closed `MergeAuthority` (the sole merge decision), and a
+  best-effort `VisibilityProjection` (the PR/check/comment mirror) — under
+  `engine/contracts/` + `engine/providers/` + `engine/merge/`, each with a
+  conformance suite written first (Wave 0).
+- **Unified run model** (Wave 2): `integration_nodes` (one run object — eager
+  dependent, merge batch, and stacked PR are the same thing), `MergeAuthority` as
+  the LIVE sole merge decision (`MERGE_AUTHORITY_LIVE`), the **never-discard**
+  `BaseShiftCoordinator` (jj-rebase in place — the old percolation
+  supersede+regenerate, and the strand reconciler it spawned, **deleted**, net
+  −906 src LOC), and audit-as-P0–P3-findings gated by an `auditPosture` DORA knob.
+  Migrations `0007`–`0011`.
+- **Live cutover** (Wave 3, flag-on): jj as the live conflict resolver
+  (`CONFLICT_RESOLVER_JJ_LIVE`), live base-shift execution (`BASE_SHIFT_LIVE`), and
+  `integration_nodes` proof-reuse + jj-local integration (`INTEGRATION_NODES_DRIVE`)
+  — all default-on with kill-switch env vars.
+- **Pre-apex hardening** (merged): the SSH-token-as-env leak closed (the runner
+  gets no secret value via Docker env), intake connectors fail loud on auth/HTTP
+  failure, deploy no-op → loud when a deploy is expected, and the null-org
+  BYPASSRLS fallback removed (fail-closed).
+
+The §7 deletions, the walker/percolation → jj-local cutover, and the
+`integration.*` metrics read-side are **deferred to post-apex** (§4) — they stay
+until apex proves the flag-on live paths.
+
 ---
 
 ## 2. Phase history (frozen)
@@ -115,6 +150,15 @@ conflictResolver/`, a real resolver — `noopConflictResolver` retired),
   · CI analytics · queue stats), and **Mergify removed entirely**. Each unit was
   adversarially verified before merge.
 
+  > **Superseded by the cutover.** The `VcsProvider` seam, the
+  > speculative-integration mechanism, and the change-percolation
+  > supersede+regenerate path delivered here are **superseded** by the
+  > tanren-owns-the-engine cutover (§1): the seam is decomposed into
+  > jj `WorkspaceVcsCore` / `CodeHost` / `MergeAuthority` / `VisibilityProjection`,
+  > and percolation's discard-and-regenerate is replaced by the never-discard
+  > `BaseShiftCoordinator`. The intent-preserving conflict resolution + native
+  > queue survive; only the discard-bearing parts were replaced.
+
 > **Note (historical).** Earlier phase plans referenced "Mergify stacks" as the
 > branch/PR coordination model and recommended `mergify stack sync` / `stack push`
 > for dependent work. **That guidance is superseded:** Mergify was removed and
@@ -148,28 +192,37 @@ conflictResolver/`, a real resolver — `noopConflictResolver` retired),
 ## 3. Architecture posture (durable)
 
 The durable design decisions Tanren is built to keep. The deeper rationale for
-the autonomy engine — the speculation-threshold + change-percolation design, the
+the autonomy engine — the integration-node + never-discard rebase design, the
 stub-ban + real-e2e guardrails, the intent-preserving conflict resolution, the
 apex intent, and the usage-based billing principle — lives in
 `docs/architecture/autonomy-engine.md` (the doc the in-code `§`-anchored comments
-cite). The 10 → 1M north-star is `docs/architecture/future-refactor-and-scale.md`.
+cite); the merge-engine cutover rationale is
+`docs/architecture/tanren-owns-the-engine.md`. The 10 → 1M north-star is
+`docs/architecture/future-refactor-and-scale.md`.
 
 - **Clean adapter seams behind contracts + conformance suites.** Allocators,
   inbox source connectors, agent-harness adapters, notification channels, identity
-  providers, secret stores, cost resolvers, the `Repositories` DAL, and the
-  `VcsProvider` are each a contract with a conformance suite. Adding a backend is a
-  new impl + a registry entry, never a refactor. The full Track-A expansion is
-  shipped: every adapter family above has real implementations (e.g. all nine
-  notification channels, the eight-strong allocator family, Vault/GCP-SM/AWS-SM/
-  1Password secret stores, github_oauth/OIDC/Authentik/local_dev identity).
-- **The `VcsProvider` seam is shipped** (`engine/contracts/vcsProvider.ts`,
-  `engine/providers/{buildVcsProvider,githubVcsProvider}.ts`, conformance suite).
-  Delivery is already native — the merge queue is Tanren's own and the gate runs
-  over SSH publishing a `tanren/gate` check (no Mergify, no Actions) — so the only
-  residual GitHub coupling is the thin VCS surface the seam abstracts: PR/review
-  APIs, check/status publication, merge-accept, and clone/push auth. A second
-  backend (GitLab/Gitea) is a new `VcsProvider` impl, held until a real
-  second-backend requirement exists (§5).
+  providers, secret stores, cost resolvers, the `Repositories` DAL, and the merge
+  engine's purpose-decomposed seams are each a contract with a conformance suite.
+  Adding a backend is a new impl + a registry entry, never a refactor. The full
+  Track-A expansion is shipped: every adapter family above has real implementations
+  (e.g. all nine notification channels, the eight-strong allocator family,
+  Vault/GCP-SM/AWS-SM/1Password secret stores, github_oauth/OIDC/Authentik/local_dev
+  identity).
+- **The merge engine is decomposed by purpose (cutover, §1).** The original
+  GitHub-shaped `VcsProvider` seam is superseded by four contracts: a jj
+  `WorkspaceVcsCore` (`engine/contracts/workspaceVcsCore.ts` +
+  `engine/providers/jjWorkspaceVcsCore.ts`), a minimal `CodeHost`
+  (`codeHost.ts` + `githubCodeHost.ts`), the guaranteed `MergeAuthority`
+  (`mergeAuthority.ts` + `engine/merge/mergeAuthorityImpl.ts`), and best-effort
+  `VisibilityProjection` (`visibilityProjection.ts` + `githubVisibilityProjection.ts`)
+  — each with a conformance suite. Delivery is native — the merge queue +
+  `MergeAuthority` are Tanren's own and the gate runs over SSH publishing a
+  `tanren/gate` check (no Mergify, no Actions) — so the residual GitHub coupling is
+  the thin `CodeHost` surface (push/fetch refs + land-to-`main`) plus the optional
+  `VisibilityProjection` mirror. The legacy `VcsProvider` impls remain on disk
+  pending the post-apex §7 deletions (§4). A second backend (GitLab/Gitea) is a new
+  `CodeHost` impl, held until a real second-backend requirement exists (§5).
 - **The strictness & testing ladder is the standing quality posture.** The gate is
   a 15-step `just fast-check` (format-check, lint, types-lint, architecture,
   schema/state/event/answerer/contract drift, knip, spelling, typecheck, test,
@@ -212,7 +265,25 @@ cite). The 10 → 1M north-star is `docs/architecture/future-refactor-and-scale.
   defect, and never hand-fixes the generated repo. The operator contract is
   `docs/operator-guide/apex.md` and the live-run setup exists; it spends real
   credits under the $50 ceiling on already-provisioned Tier-1 creds. It is the
-  **active live-validation vehicle**, not a not-yet-started milestone.
+  **active live-validation vehicle**, not a not-yet-started milestone. The next
+  apex run is also the **apex-validation** the tanren-owns-the-engine cutover (§1)
+  is pending on — it is the first exercise of the flag-on live jj/MergeAuthority/
+  integration_nodes paths against a real runner.
+- **tanren-owns-the-engine — finish the cutover (post-apex).** The cutover is
+  merged + flag-on (§1); these forward items stay until apex proves the live paths,
+  then land (`docs/architecture/tanren-owns-the-engine.md` §7–§8):
+  - **The §7 deletions** — remove the now-dead old code the cutover replaced:
+    `speculativeIntegrator` (contract + dag impl), the git-merge-abort
+    `workspaceApplier` `merge --abort` / `--diff-filter=U` dance,
+    `resolveSpeculativeState`, and the 25-method GitHub-PR-shaped `VcsProvider` →
+    the ~5-method `CodeHost`. (They remain on disk as the flag-off fallback until
+    apex validates flag-on.)
+  - **The walker/percolation → jj-local cutover** — route the DagWalker +
+    percolation eager-integration through jj-local `integration_nodes` rather than
+    the old server-side speculative merge refs.
+  - **The `integration.*` metrics read-side** — surface `rebase_vs_rebuild`
+    (tokens / wall-clock / CI-minutes) to _prove_ never-discard rebase costs less
+    than rebuild, rather than assume it.
 - **Benchmark seed corpus.** The tanren-method benchmark toolkit is code-complete
   (`engine/benchmark/**` — runner, scorecard, reducers, accept, store, stats;
   experiments routes; `tanren experiments`/`cells` CLI). What remains is the
@@ -243,10 +314,11 @@ cite). The 10 → 1M north-star is `docs/architecture/future-refactor-and-scale.
 
 ## 5. Held / long-horizon (explicit triggers, not the calendar)
 
-- **GitLab / VCS beyond the thin `VcsProvider` surface.** The seam already shipped
-  (§3); the Mergify/Actions coupling that previously justified deferring this is
-  gone. A second backend is a new `VcsProvider` impl, built when a real
-  second-backend requirement exists.
+- **GitLab / VCS beyond the thin `CodeHost` surface.** The seam already shipped
+  (§3 — the cutover decomposed it from `VcsProvider` into `CodeHost` +
+  `VisibilityProjection`); the Mergify/Actions coupling that previously justified
+  deferring this is gone. A second backend is a new `CodeHost` impl, built when a
+  real second-backend requirement exists.
 - **agy / pi / reasonix live-harness validation.** pi/reasonix writer-only
   adapters are built; agy is deferred (broken headless). Awaits credentials.
 - **The Rust rewrite / native harness.** Long-horizon. The prepwork —
