@@ -45,10 +45,11 @@ export const integrationProvisioningSensitivityRules: SensitivityRule[] = [
   // The audit envelope on the verify (same governing deploy action), all public.
   ...auditEnvelopeRulesFor("deploy.verified"),
 
-  // deploy.failed: the deploy target + the attempt count + a NON-SECRET reason
-  // (the verify error message). No token/env values.
+  // deploy.failed: the deploy target + the failure phase + the attempt count + a
+  // NON-SECRET reason (the bounded summary). No token/env values.
   { eventName: "deploy.failed", path: "provider", tag: "public" },
   { eventName: "deploy.failed", path: "appId", tag: "public" },
+  { eventName: "deploy.failed", path: "phase", tag: "public" },
   { eventName: "deploy.failed", path: "deploymentId", tag: "public" },
   { eventName: "deploy.failed", path: "attempts", tag: "public" },
   { eventName: "deploy.failed", path: "reason", tag: "public" },

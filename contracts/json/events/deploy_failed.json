@@ -61,6 +61,13 @@
       ],
       "type": "object"
     },
+    "phase": {
+      "enum": [
+        "trigger",
+        "verify"
+      ],
+      "type": "string"
+    },
     "policyVersion": {
       "maximum": 9007199254740991,
       "minimum": 0,
@@ -76,8 +83,7 @@
   "required": [
     "provider",
     "appId",
-    "deploymentId",
-    "attempts",
+    "phase",
     "reason"
   ],
   "type": "object",

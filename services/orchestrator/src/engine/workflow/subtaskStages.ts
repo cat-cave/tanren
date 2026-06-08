@@ -3,20 +3,12 @@
 // (event append, cost record, task-row update). The orchestrator in
 // subtaskLoop.ts sequences these stages; this file holds the inner detail
 // so each module stays under the 500-line architecture cap.
-import { randomUUID } from "node:crypto";
 import type pg from "pg";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
-import type { AuditAnswer, CheckAnswer, PlanAnswer, PlanSubtask } from "../answerers/schemas/index.js";
-import { normalizeFinding } from "../answerers/schemas/index.js";
+import type { CheckAnswer, PlanAnswer, PlanSubtask } from "../answerers/schemas/index.js";
 import type { EventName, EventPayload } from "../events/index.js";
 import { emitStageTiming } from "../observability/index.js";
 import type { AnswererAdapter, WriterAdapter, WriterResult } from "../providers/types.js";
-import {
-  decideAuditorOutcome,
-  invokeAuditor,
-  type AuditorDecision,
-  type AuditorSpecContext,
-} from "./auditor/auditor.js";
 import {
   decideCheckerOutcome,
   invokeChecker,
@@ -379,113 +371,7 @@ export async function runCheckerStage(args: CheckerStageInput): Promise<CheckerD
   return decision;
 }
 
-export interface AuditorStageInput {
-  pool: LoopQueryClient;
-  /** route the auditor task INSERT/UPDATE remote when wired. */
-  writer?: RunStateWriter;
-  costCtx: SubtaskCostContext;
-  adapter: AnswererAdapter<AuditAnswer>;
-  runId: string;
-  workspacePath: string;
-  plannerTaskId: string;
-  plan: PlanAnswer;
-  // The run base the combined writer change is diffed against. The auditor
-  // inspects the change itself in its read-only workspace rather than receiving
-  // an injected combined diff. Omitted by unit callers without a base sha.
-  baseSha?: string;
-  specTitle: string;
-  specDescription: string;
-  acceptanceCriteria: ReadonlyArray<string>;
-  timeoutMs: number;
-  appendEvent: StageAppendEvent;
-  buildUsage?: (input: { auditorTaskId: string; verdict: AuditAnswer }) => Record<string, unknown>;
-}
-
-export async function runAuditorStage(
-  args: AuditorStageInput,
-): Promise<{ decision: AuditorDecision; auditorTaskId: string }> {
-  const auditorTaskId = `task_${randomUUID()}`;
-  await insertChildTask(
-    args.pool,
-    {
-      taskId: auditorTaskId,
-      runId: args.runId,
-      kind: "audit",
-      title: "audit plan",
-      parentTaskId: args.plannerTaskId,
-      agentKind: "answerer",
-      cli: args.adapter.cli,
-      model: null,
-    },
-    args.writer,
-  );
-  await args.appendEvent("task.started", { taskKind: "audit" }, auditorTaskId);
-  await args.appendEvent("auditor.started", { taskKind: "audit" }, auditorTaskId);
-  const auditorContext: AuditorSpecContext = {
-    specTitle: args.specTitle,
-    specDescription: args.specDescription,
-    acceptanceCriteria: args.acceptanceCriteria,
-    subtasks: args.plan.subtasks,
-    baselineSha: args.baseSha ?? "HEAD",
-  };
-  const startedAt = Date.now();
-  const result = await invokeAuditor(args.adapter, {
-    context: auditorContext,
-    timeoutMs: args.timeoutMs,
-    workspace: args.workspacePath,
-  });
-  const runtimeSeconds = secondsSince(startedAt);
-  emitStageTiming("audit", Date.now() - startedAt, { runId: args.runId });
-  // S3: the auditor emits FINDINGS as its sole severity currency (no dual-emit flag).
-  // `findings` is ALWAYS present on `auditor.verdict` — it is the EXPLICIT P0–P3 list
-  // the DagLifecycle read model + the `auditPosture` policy (the live merge gate) read.
-  // S3a: the auditor emits FINDINGS as its sole severity currency. `findings` is a
-  // REQUIRED field on the parsed `AuditAnswer` (no `.default([])`) — so the adapter's
-  // verdict ALWAYS carries a real, explicitly-emitted findings array. We persist it
-  // VERBATIM (no `?? []` coalesce): a clean `[]` here can ONLY mean the auditor
-  // explicitly emitted an empty list, never a missing/omitted one (that would have
-  // failed to parse upstream). `normalizeFinding` collapses a strict-schema
-  // `fixHint: null` to an absent key so the stored shape matches the frozen
-  // `{ fixHint?: string }` contract. The `passed`/`reasoning`/`recommendedAction` fields
-  // are persisted as NARRATION only — no decision reads them.
-  await args.appendEvent(
-    "auditor.verdict",
-    {
-      runId: args.runId,
-      passed: result.verdict.passed,
-      reasoning: result.verdict.reasoning,
-      outstandingBehaviorIds: [...result.verdict.outstandingBehaviorIds],
-      recommendedAction: result.verdict.recommendedAction,
-      findings: result.verdict.findings.map((f) => normalizeFinding(f)),
-    },
-    auditorTaskId,
-  );
-  await recordAnswererCost({
-    ctx: args.costCtx,
-    adapter: args.adapter,
-    taskId: auditorTaskId,
-    model: "tanren-auditor",
-    runtimeSeconds,
-    rawUsage: args.buildUsage?.({ auditorTaskId, verdict: result.verdict }) ?? { role: "auditor" },
-  });
-  const decision = decideAuditorOutcome(result.verdict);
-  if (decision.kind === "pass") {
-    await markTaskDone(args.pool, auditorTaskId, "passed", args.writer);
-    await args.appendEvent("task.completed", { taskKind: "audit" }, auditorTaskId);
-    return { decision, auditorTaskId };
-  }
-  await markTaskDone(args.pool, auditorTaskId, "rejected_by_auditor", args.writer);
-  await args.appendEvent(
-    "auditor.rejected",
-    {
-      runId: args.runId,
-      auditTaskId: auditorTaskId,
-      reason: decision.reason,
-      outstandingBehaviorIds: [...decision.outstandingBehaviorIds],
-      recommendedAction: decision.action,
-    },
-    auditorTaskId,
-  );
-  await args.appendEvent("task.completed", { taskKind: "audit" }, auditorTaskId);
-  return { decision, auditorTaskId };
-}
+// The AUDITOR stage lives in `auditorStage.ts` (split out to keep both modules under
+// the 500-line cap); re-exported here so the subtask loop's single import site is
+// unchanged. It owns the recoverable auditor-schema-miss loop-back.
+export { runAuditorStage, type AuditorStageInput } from "./auditorStage.js";
