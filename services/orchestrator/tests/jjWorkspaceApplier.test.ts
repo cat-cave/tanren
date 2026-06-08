@@ -35,7 +35,7 @@ const noTokenVcsProvider = {
 } as unknown as VcsProvider;
 
 const emptySecrets: SecretStore = {
-  get: () => Promise.resolve(undefined),
+  async get() {},
   put: () => Promise.resolve(),
   delete: () => Promise.resolve(),
   list: () => Promise.resolve([]),
