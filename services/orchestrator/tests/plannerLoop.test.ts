@@ -396,21 +396,59 @@ describe("planner prompt + verdict decisions (pure)", () => {
     });
   });
 
-  it("decideAuditorOutcome maps recommendedAction into the loop branch", () => {
+  it("decideAuditorOutcome maps the worst FINDING severity into the loop branch (S3: findings-driven)", () => {
+    // Empty findings (audited-clean) ⇒ pass.
     expect(decideAuditorOutcome(passingAudit)).toEqual({ kind: "pass" });
+    // A P1 finding ⇒ loop_to_planner; the rejection ids name the blocking FINDING ids.
     const looped = decideAuditorOutcome(loopAudit);
     expect(looped).toEqual({
       kind: "reject",
       action: "loop_to_planner",
       reason: loopAudit.reasoning,
-      outstandingBehaviorIds: loopAudit.outstandingBehaviorIds,
+      outstandingBehaviorIds: ["missed-behavior-B2"],
     });
+    // A P0 finding ⇒ halt.
     const halted = decideAuditorOutcome(haltAudit);
     expect(halted).toEqual({
       kind: "reject",
       action: "halt",
       reason: haltAudit.reasoning,
-      outstandingBehaviorIds: haltAudit.outstandingBehaviorIds,
+      outstandingBehaviorIds: ["subtask-conflict"],
     });
+  });
+
+  it("decideAuditorOutcome: a P2/P3-only verdict PASSES the in-loop gate (posture handles residuals at merge)", () => {
+    const p2Only: typeof passingAudit = {
+      ...passingAudit,
+      passed: false,
+      reasoning: "minor polish only",
+      findings: [{ id: "polish-1", severity: "P2", title: "rename a var", body: "b" }],
+    };
+    expect(decideAuditorOutcome(p2Only)).toEqual({ kind: "pass" });
+  });
+
+  it("decideAuditorOutcome: an EMPTY reasoning ⇒ the reason is built from the blocking findings", () => {
+    const noReason: typeof passingAudit = {
+      ...passingAudit,
+      passed: false,
+      reasoning: "",
+      findings: [
+        { id: "a", severity: "P1", title: "first blocker", body: "b" },
+        { id: "b", severity: "P1", title: "second blocker", body: "b" },
+        // A P2 is below the worst (P1) ⇒ not a blocking finding ⇒ not in the reason/ids.
+        { id: "c", severity: "P2", title: "polish", body: "b" },
+      ],
+    };
+    expect(decideAuditorOutcome(noReason)).toEqual({
+      kind: "reject",
+      action: "loop_to_planner",
+      reason: "P1 first blocker; P1 second blocker",
+      outstandingBehaviorIds: ["a", "b"],
+    });
+  });
+
+  it("decideAuditorOutcome: a no-findings verdict (un-parsed fixture) is treated as audited-clean (pass)", () => {
+    const raw = { passed: true, reasoning: "ok", outstandingBehaviorIds: [] } as unknown as typeof passingAudit;
+    expect(decideAuditorOutcome(raw)).toEqual({ kind: "pass" });
   });
 });

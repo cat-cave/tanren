@@ -283,6 +283,24 @@ export const AuditorFailedPayload = z
   })
   .strict();
 
+// S3 (tanren-owns-the-engine.md §4): the durable record of how the project `auditPosture`
+// HANDLED the residual (below-`blockReviewAt`) P2/P3 findings at merge time. Under
+// `route-to-dag` the residuals become new DAG specs (`routed` carries each title + id);
+// under `fix-if-idle` they are fixed in place when the spec idles, else carried forward
+// (`fixedInPlace`/`carriedForward`). This is the live posture-gate path's audit trail —
+// the merge was NOT blocked by these findings; they were handled per the DORA knob.
+const RoutedFindingRef = z.object({ id: z.string(), severity: z.enum(["P2", "P3"]), title: z.string() }).strict();
+
+export const AuditorFindingsRoutedPayload = z
+  .object({
+    runId: z.string(),
+    p2p3Handling: z.enum(["fix-if-idle", "route-to-dag"]),
+    routed: z.array(RoutedFindingRef),
+    fixedInPlace: z.array(RoutedFindingRef),
+    carriedForward: z.array(RoutedFindingRef),
+  })
+  .strict();
+
 // rejection events. The planner-feedback-loop emits one of these on
 // every rejection, carrying a structured `producer` (which Answerer rejected),
 // the rejection `reason`, and the resulting `plannerRerunCount` so the run

@@ -2,6 +2,7 @@ import type { z } from "zod";
 import {
   AuditorCompletedPayload,
   AuditorFailedPayload,
+  AuditorFindingsRoutedPayload,
   AuditorRejectedPayload,
   AuditorStartedPayload,
   AuditorVerdictPayload,
@@ -199,6 +200,8 @@ export const EventRegistry = {
   "auditor.failed": AuditorFailedPayload,
   "auditor.verdict": AuditorVerdictPayload,
   "auditor.rejected": AuditorRejectedPayload,
+  // S3: the posture-gate's residual P2/P3 disposition (route-to-dag / fix-if-idle).
+  "auditor.findings_routed": AuditorFindingsRoutedPayload,
 
   // Runner allocation
   "runner.allocated": RunnerAllocatedPayload,

@@ -26,7 +26,6 @@ import {
 import { invokePlanner, type PlannerRejectionFeedback, type PlannerSpecContext } from "./planner/planner.js";
 import { recordAnswererCost, recordWriterCost, secondsSince, type SubtaskCostContext } from "./subtaskCost.js";
 import { insertChildTask, markTaskDone, markTaskFailed } from "./subtaskTasks.js";
-import { AUDIT_FINDINGS_DUAL_EMIT_DEFAULT } from "../forge/audits/findingsDualEmit.js";
 
 type LoopQueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
@@ -400,10 +399,6 @@ export interface AuditorStageInput {
   timeoutMs: number;
   appendEvent: StageAppendEvent;
   buildUsage?: (input: { auditorTaskId: string; verdict: AuditAnswer }) => Record<string, unknown>;
-  // WAVE-2 / SLICE P-A de-risk flag: dual-emit the explicit `findings` list on
-  // `auditor.verdict` alongside the legacy verdict. Defaults to the governed
-  // `AUDIT_FINDINGS_DUAL_EMIT_DEFAULT` (ON); a focused test may force it OFF.
-  dualEmitFindings?: boolean;
 }
 
 export async function runAuditorStage(
@@ -441,10 +436,13 @@ export async function runAuditorStage(
   });
   const runtimeSeconds = secondsSince(startedAt);
   emitStageTiming("audit", Date.now() - startedAt, { runId: args.runId });
-  // WAVE-2 dual-emit: carry the explicit findings list alongside the legacy
-  // verdict when the de-risk flag is on (the default). The findings are the new
-  // first-class severity currency the DagLifecycle read model + posture policy read.
-  const emitFindings = args.dualEmitFindings ?? AUDIT_FINDINGS_DUAL_EMIT_DEFAULT;
+  // S3: the auditor emits FINDINGS as its sole severity currency (no dual-emit flag).
+  // `findings` is ALWAYS present on `auditor.verdict` — it is the EXPLICIT P0–P3 list
+  // the DagLifecycle read model + the `auditPosture` policy (the live merge gate) read.
+  // The adapter returns a PARSED answer (findings defaulted to []); `normalizeFinding`
+  // collapses a strict-schema `fixHint: null` to an absent key so the stored shape
+  // matches the frozen `{ fixHint?: string }` contract. The `passed`/`reasoning`/
+  // `recommendedAction` fields are retained as NARRATION only — no decision reads them.
   await args.appendEvent(
     "auditor.verdict",
     {
@@ -453,13 +451,9 @@ export async function runAuditorStage(
       reasoning: result.verdict.reasoning,
       outstandingBehaviorIds: [...result.verdict.outstandingBehaviorIds],
       recommendedAction: result.verdict.recommendedAction,
-      ...(emitFindings && {
-        // The adapter returns a PARSED answer (findings defaulted to []); a raw
-        // fixture verdict may omit it, so coalesce to an empty list. `normalizeFinding`
-        // collapses a strict-schema `fixHint: null` to an absent key so the stored
-        // shape matches the frozen `{ fixHint?: string }` contract.
-        findings: (result.verdict.findings ?? []).map((f) => normalizeFinding(f)),
-      }),
+      // The adapter returns a PARSED answer (findings defaulted to []); coalesce for a
+      // raw fixture verdict that omits it so the stored shape always carries findings.
+      findings: (result.verdict.findings ?? []).map((f) => normalizeFinding(f)),
     },
     auditorTaskId,
   );

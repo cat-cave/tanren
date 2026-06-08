@@ -64,6 +64,13 @@
       "when": 1780894321640,
       "tag": "0008_left_vindicator",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1780898223948,
+      "tag": "0009_classy_the_hand",
+      "breakpoints": true
     }
   ]
 }

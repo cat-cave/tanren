@@ -37,3 +37,23 @@ export const auditBaselineSensitivityRules: SensitivityRule[] = [
   { eventName: "deploy.triggered", path: "artifact.checksum", tag: "public" },
   { eventName: "deploy.triggered", path: "artifact.provenanceRef", tag: "public" },
 ];
+
+// S3 (tanren-owns-the-engine.md §4): the posture-gate's residual P2/P3 disposition
+// after a merge — which residual findings were ROUTED as DAG specs vs FIXED IN PLACE
+// vs CARRIED FORWARD, under the project `auditPosture.p2p3Handling`. All public: a
+// finding id/severity/title is non-secret (it becomes a real, visible spec). Lives in
+// the audit split so the main rules file stays under the 500-line cap.
+export const auditorFindingsRoutedSensitivityRules: SensitivityRule[] = (() => {
+  const fields = ["routed", "fixedInPlace", "carriedForward"] as const;
+  const base: SensitivityRule[] = [
+    { eventName: "auditor.findings_routed", path: "runId", tag: "public" },
+    { eventName: "auditor.findings_routed", path: "p2p3Handling", tag: "public" },
+  ];
+  for (const f of fields) {
+    base.push({ eventName: "auditor.findings_routed", path: f, tag: "public" });
+    for (const sub of ["id", "severity", "title"]) {
+      base.push({ eventName: "auditor.findings_routed", path: `${f}[].${sub}`, tag: "public" });
+    }
+  }
+  return base;
+})();

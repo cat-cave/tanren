@@ -26,7 +26,7 @@ import {
 } from "./conformance/mergeAuthorityConformance.js";
 import { type LandFinalizer, MergeAuthorityImpl } from "../src/engine/merge/mergeAuthorityImpl.js";
 import { buildLandFinalizer, type LandFinalizeContext } from "../src/engine/merge/mergeAuthorityLandFinalizer.js";
-import { resolveLandTimeSignals } from "../src/engine/merge/landSignals.js";
+import { resolveLandTimeSignals, resolveLandTimeFindings } from "../src/engine/merge/landSignals.js";
 import { authorizeAndLand } from "../src/engine/merge/mergeAuthorityGate.js";
 import { PgEventStore } from "../src/engine/eventStore.js";
 import { serviceAuditActor } from "../src/engine/events/schemas/audit.js";
@@ -261,6 +261,50 @@ describeDb("MergeAuthority — writer-backed LandFinalizer over real Postgres", 
     // sha-B was never landed; main untouched.
     expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-main");
   });
+
+  // ---- S3a: resolveLandTimeFindings — the LIVE audit gate, fail-closed on missing ----
+
+  it("resolveLandTimeFindings: NO auditor.verdict recorded → a synthetic P0 (fail-closed, blocks any posture)", async () => {
+    const findings = await resolveLandTimeFindings(ownerPool, ORG_ID, RUN_ID);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.severity).toBe("P0");
+    expect(findings[0]!.id).toContain("audit-record-missing");
+  });
+
+  it("resolveLandTimeFindings: an audited-CLEAN verdict (empty findings) → [] (the audit input clears)", async () => {
+    await appendAuditorVerdict([]);
+    const findings = await resolveLandTimeFindings(ownerPool, ORG_ID, RUN_ID);
+    expect(findings).toEqual([]);
+  });
+
+  it("resolveLandTimeFindings: returns the EXPLICIT findings the auditor emitted (a P1 surfaces)", async () => {
+    await appendAuditorVerdict([{ id: "f1", severity: "P1", title: "blocking", body: "b" }]);
+    const findings = await resolveLandTimeFindings(ownerPool, ORG_ID, RUN_ID);
+    expect(findings.map((f) => f.severity)).toEqual(["P1"]);
+    expect(findings[0]!.id).toBe("f1");
+  });
+
+  /** Append an `auditor.verdict` carrying an explicit findings list. */
+  async function appendAuditorVerdict(
+    findings: ReadonlyArray<{ id: string; severity: "P0" | "P1" | "P2" | "P3"; title: string; body: string }>,
+  ): Promise<void> {
+    await runWithOrgScope(ownerPool, ORG_ID, (client) =>
+      new PgEventStore(client).append({
+        runId: RUN_ID,
+        specId: SPEC_ID,
+        projectId: PROJECT_ID,
+        eventType: "auditor.verdict",
+        payload: {
+          runId: RUN_ID,
+          passed: findings.length === 0,
+          reasoning: "audit",
+          outstandingBehaviorIds: [],
+          recommendedAction: "pass",
+          findings: [...findings],
+        },
+      }),
+    );
+  }
 
   /** Append a `pre_merge` gate.verdict with the given `passed` + gated `headSha`. */
   async function appendGateVerdict(passed: boolean, headSha: string): Promise<void> {

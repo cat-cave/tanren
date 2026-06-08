@@ -260,14 +260,14 @@ describe("buildAuditorPrompt — full rendered contract", () => {
     expect(prompt).toContain("- [1] S1 (intent: i1, behaviors: (none))");
   });
 
-  it("renders the pass/loop/halt recommendation rules and embeds no diff payload", () => {
+  it("renders the findings-only emission instruction and embeds no diff payload (S3)", () => {
     const prompt = buildAuditorPrompt(ctx);
-    expect(prompt).toContain(
-      "Set passed=true only when every acceptance criterion is satisfied by the combined writer change.",
-    );
-    expect(prompt).toContain("Set recommendedAction='pass' when passed=true.");
-    expect(prompt).toContain("Set recommendedAction='loop_to_planner' when the spec is recoverable by re-planning.");
-    expect(prompt).toContain("Set recommendedAction='halt' when the spec is not recoverable in this run.");
+    // S3: the auditor emits FINDINGS only — no pass/recommendedAction instructions.
+    expect(prompt).toContain("Emit your audit as a `findings` list");
+    expect(prompt).toContain("EXPLICIT severity: P0");
+    expect(prompt).toContain("NOT render a pass/fail/halt judgment yourself");
+    expect(prompt).not.toContain("Set recommendedAction=");
+    expect(prompt).not.toContain("Set passed=true");
     // No combined diff is injected — the auditor reads it from the workspace.
     expect(prompt).not.toContain("Combined writer diff:");
   });
@@ -278,12 +278,10 @@ describe("buildAuditorPrompt — full rendered contract", () => {
     // subtasks/rules, and rules/diff. Exact "\n\n" adjacency catches a separator
     // turned into spurious text.
     expect(prompt).toContain("- AC1: all helpers exist\n\nExecuted subtasks:");
-    expect(prompt).toContain("behaviors: (none))\n\nSet passed=true only when");
-    // WAVE-2: the prompt now ends on the findings-emission instruction (the
-    // recommendation rules are still present, followed by the findings block) —
-    // no trailing diff payload.
-    expect(prompt).toContain("Set recommendedAction='halt' when the spec is not recoverable in this run.");
-    expect(prompt.trimEnd().endsWith("never invent a finding.")).toBe(true);
+    // S3: the rules block is the findings-emission instruction.
+    expect(prompt).toContain("behaviors: (none))\n\nEmit your audit as a `findings` list");
+    // The prompt ends on the findings-emission instruction — no trailing diff payload.
+    expect(prompt.trimEnd().endsWith("finding's severity means for the merge.")).toBe(true);
   });
 });
 
