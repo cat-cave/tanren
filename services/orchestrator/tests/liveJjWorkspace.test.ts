@@ -141,14 +141,29 @@ describe("buildLiveJjWorkspace — fail-closed / no-leak error path", () => {
   });
 });
 
-/** A VcsProvider whose `resolveToken` resolves a static token (build SUCCEEDS). */
+/**
+ * A VcsProvider whose `resolveToken` resolves a static token (build SUCCEEDS) AND whose
+ * `resolveActorIdentity` resolves the bot identity — the build now resolves the bot
+ * pushing identity (finding #7) off the SAME credential so the jj commit author is
+ * bot-attributed, so the success path needs both.
+ */
 function staticTokenVcsProvider(): VcsProvider {
   return new Proxy({} as VcsProvider, {
-    get: (_t, prop) =>
-      prop === "resolveToken"
-        ? () => Promise.resolve({ token: "ghp_fake", source: "static" as const })
-        : () => {
-            throw new Error(`unexpected VcsProvider.${String(prop)}`);
-          },
+    get: (_t, prop) => {
+      if (prop === "resolveToken") {
+        return () => Promise.resolve({ token: "ghp_fake", source: "static" as const });
+      }
+      if (prop === "resolveActorIdentity") {
+        return () =>
+          Promise.resolve({
+            login: "tanren-bot[bot]",
+            id: "999",
+            noreplyEmail: "999+tanren-bot[bot]@users.noreply.github.com",
+          });
+      }
+      return () => {
+        throw new Error(`unexpected VcsProvider.${String(prop)}`);
+      };
+    },
   });
 }

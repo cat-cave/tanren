@@ -33,7 +33,13 @@ import type { VcsProvider } from "../contracts/vcsProvider.js";
 import type { WorkspaceVcsCore } from "../contracts/workspaceVcsCore.js";
 import type { OrgGithubAppInstallation } from "../config/orgConfig.js";
 import { workspaceRepoPathForRun } from "../workspace/paths.js";
-import { autoSnapshotWorkingEdit, identityJjRefResolver, JjWorkspaceVcsCore } from "./jjWorkspaceVcsCore.js";
+import {
+  autoSnapshotWorkingEdit,
+  identityJjRefResolver,
+  type JjCommitIdentity,
+  JjWorkspaceVcsCore,
+} from "./jjWorkspaceVcsCore.js";
+import { resolveBotPushIdentity } from "./botPushIdentity.js";
 import type { GithubAppTokenMinter } from "./githubAppTokenMinter.js";
 
 /** The terminal runner image a live jj workspace allocates against when none is given. */
@@ -160,19 +166,36 @@ export async function buildLiveJjWorkspace(deps: LiveJjWorkspaceDeps): Promise<L
     // App-first, static fallback, anonymous only when NEITHER is configured — the same
     // policy `cloneHeadForResolve` threads. The provider owns the policy; we only decide
     // whether to ask at all (no installation AND no static ref ⇒ a public clone).
+    //
+    // MERGE-SAFETY (self-identity, finding #7): resolve the BOT pushing identity off the
+    // SAME credential (App-first / static), fail-closed on an authenticated path. Its
+    // canonical noreply email becomes the jj commit author, so a conflict-resolution
+    // commit jj exports + pushes onto a PR attributes to the bot login the
+    // external-change gate recognizes as Tanren's (not `tanren@local` → `<unknown>`).
     const staticRef = facts.githubCredentialRef.trim();
-    const tokenSource = await resolveCloneTokenSource(deps, staticRef);
+    const identity = await resolveBotPushIdentity({
+      secrets: deps.secrets,
+      vcsProvider: deps.vcsProvider,
+      ...(facts.installation !== undefined && { installation: facts.installation }),
+      githubCredentialRef: facts.githubCredentialRef,
+      ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
+    });
+    const tokenSource = cloneTokenSource(facts.installation, staticRef);
 
     // Construct the jj core over the LIVE substrate + allocated runner with the
     // PRODUCTION defaults — identity ref resolver (real URL/sha) + auto-snapshot edit.
     // The conformance suite has already pinned every jj-CLI behavior; this is just the
-    // live binding.
+    // live binding. When the path is authenticated the resolved BOT identity is set as
+    // the jj commit author (else the core's non-attributable default — public path).
+    const commitIdentity: JjCommitIdentity | undefined =
+      identity === undefined ? undefined : { name: identity.login, email: identity.noreplyEmail };
     const core = new JjWorkspaceVcsCore({
       substrate: deps.ssh,
       target: allocation.target,
       timeoutMs,
       refResolver: identityJjRefResolver,
       workingEdit: autoSnapshotWorkingEdit,
+      ...(commitIdentity !== undefined && { commitIdentity }),
     });
 
     return {
@@ -208,27 +231,20 @@ export async function buildLiveJjWorkspace(deps: LiveJjWorkspaceDeps): Promise<L
 }
 
 /**
- * Resolve the clone credential App-first / static-fallback (the policy
- * `cloneHeadForResolve` threads), returning ONLY which source it came from — the jj
- * `git clone` itself authenticates via the runner's own credential helper, so the factory
- * does not hold the token; it resolves to PROVE the credential exists (fail-closed: a
- * required-but-missing credential is a LOUD throw inside the provider) and to surface the
- * source for diagnostics. When neither an installation nor a static ref is configured the
- * target is public — anonymous clone, no resolution.
+ * Which credential the clone token came from (diagnostics), by the SAME App-first /
+ * static-fallback / anonymous precedence `resolveBotPushIdentity` follows: an App
+ * installation ⇒ `github_app`; else a non-empty static ref ⇒ `static`; else neither
+ * is configured ⇒ `anonymous` (a public clone).
  */
-async function resolveCloneTokenSource(
-  deps: LiveJjWorkspaceDeps,
+function cloneTokenSource(
+  installation: OrgGithubAppInstallation | undefined,
   staticRef: string,
-): Promise<"github_app" | "static" | "anonymous"> {
-  const { facts } = deps;
-  if (facts.installation === undefined && staticRef === "") {
-    return "anonymous";
+): LiveJjWorkspace["tokenSource"] {
+  if (installation !== undefined) {
+    return "github_app";
   }
-  const resolved = await deps.vcsProvider.resolveToken({
-    secrets: deps.secrets,
-    ...(facts.installation !== undefined && { installation: facts.installation }),
-    ...(staticRef !== "" && { staticRef }),
-    ...(deps.githubAppMinter !== undefined && { minter: deps.githubAppMinter }),
-  });
-  return resolved.source;
+  if (staticRef !== "") {
+    return "static";
+  }
+  return "anonymous";
 }

@@ -11,8 +11,10 @@ import type { SecretStore } from "../contracts/secretStore.js";
 import type { VcsProvider } from "../contracts/vcsProvider.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
 import type { OrgGithubAppInstallation } from "../config/orgConfig.js";
+import type { ActorIdentity } from "../contracts/vcsProvider.js";
 import type { ConflictResolverHook } from "../workflow/reviewMerge/index.js";
 import { githubHttpsRemote, parseGitHubRepository } from "../providers/github.js";
+import { botGitIdentityConfig, resolveBotPushIdentity } from "../providers/botPushIdentity.js";
 import { gitAuthedCommand, gitTokenAuthPrelude } from "../workspace/githubPush.js";
 import { quoteSshShellArg } from "../ssh/command.js";
 import { runWorkspaceSshCommand, workspaceRepoPathForRun } from "../workspace/index.js";
@@ -98,6 +100,15 @@ export async function driveResolveOverGit(
  * the run-loop clone uses) so a PRIVATE target clones; returns the clone HEAD as
  * the diff base the re-gate reasons against. Reuses the run-loop clone primitives
  * (gitTokenAuthPrelude / gitAuthedCommand) so the token never hits the command line.
+ *
+ * MERGE-SAFETY (self-identity, finding #7): the conflict-resolution commit the
+ * applier authors here LANDS ON THE PR. It must attribute to the bot login the
+ * external-change gate recognizes as Tanren's — NOT `resolver@tanren.invalid`,
+ * which GitHub maps to a `null` login → `<unknown>` → the gate BLOCKS Tanren's own
+ * PR. So we resolve the bot identity (App-first / static-fallback) off the same
+ * credential the clone token came from and set it as the workspace git author.
+ * Fail-closed: an authenticated resolve with an unresolvable identity throws here
+ * (in resolveBotPushIdentity), before the clone — never an unattributable commit.
  */
 async function cloneHeadForResolve(
   deps: DriveGitResolveDeps,
@@ -106,6 +117,16 @@ async function cloneHeadForResolve(
 ): Promise<string> {
   const { facts } = deps;
   const staticRef = facts.githubCredentialRef;
+  // Resolve the bot pushing identity FIRST (fail-closed on an authenticated path):
+  // its noreply email becomes the workspace git author so the resolution commit is
+  // bot-attributed. The token threaded to the clone is the SAME credential's token.
+  const identity = await resolveBotPushIdentity({
+    secrets: deps.secrets,
+    vcsProvider: deps.vcsProvider,
+    ...(facts.installation !== undefined && { installation: facts.installation }),
+    githubCredentialRef: staticRef,
+    ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
+  });
   const token =
     facts.installation === undefined && staticRef.trim() === ""
       ? undefined
@@ -120,7 +141,7 @@ async function cloneHeadForResolve(
   const result = await runWorkspaceSshCommand(deps.ssh, target, {
     label: "prepare conflict-resolve workspace",
     timeoutMs: deps.timeoutMs,
-    command: buildCloneHeadCommand(facts.repoUrl, facts.headBranch, token, workspacePath),
+    command: buildCloneHeadCommand(facts.repoUrl, facts.headBranch, token, workspacePath, identity),
     ...(token === undefined ? {} : { stdin: token }),
   });
   return result.stdout.trim();
@@ -132,16 +153,18 @@ function buildCloneHeadCommand(
   headBranch: string,
   token: string | undefined,
   workspacePath: string,
+  identity: ActorIdentity | undefined,
 ): string {
   const branch = quoteSshShellArg(headBranch);
   const dest = quoteSshShellArg(workspacePath);
-  // Configure a non-attributable resolver identity for the in-progress merge
-  // commit (the resolution is published on the PR branch, attributed by the push
-  // token's account; the local commit author is set by the applier's publish step).
+  // MERGE-SAFETY: set the BOT identity as the workspace git author so the
+  // conflict-resolution commit (authored by the applier's publish step into THIS
+  // repo-local config) attributes to the bot login the external-change gate
+  // recognizes. The unauthenticated public path keeps a non-attributable
+  // placeholder (it never pushes as Tanren, but git still needs an author).
   const post = [
     `cd ${dest}`,
-    "git config user.name 'Tanren Conflict Resolver'",
-    "git config user.email 'resolver@tanren.invalid'",
+    ...botGitIdentityConfig(identity, "Tanren Conflict Resolver", "resolver@tanren.invalid", quoteSshShellArg),
     "git rev-parse HEAD",
   ];
   if (token === undefined) {

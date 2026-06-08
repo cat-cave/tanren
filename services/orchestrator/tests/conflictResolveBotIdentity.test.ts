@@ -1,0 +1,128 @@
+// MERGE-SAFETY (finding #7): the on-runner conflict-resolution commit must attribute
+// to Tanren's BOT login — NOT a `*@tanren.invalid` placeholder. A placeholder author
+// maps to a GitHub `null` login → reviewMerge `assessExternalChange` keys it
+// `<unknown>` → external → a strict-posture run BLOCKS its own PR (a dependent spec
+// that hit a conflict in v23 would strand at merge). These tests drive the two
+// on-runner authored-commit paths (the git-clone drive resolve + the live jj
+// workspace) with fakes and assert the bot identity (the resolved `<slug>[bot]`
+// login + its canonical `<id>+<login>@users.noreply.github.com` noreply email) is the
+// git author — and is recognized as Tanren's by the external-change gate.
+
+import { describe, expect, it } from "vitest";
+import type { RunnerHandle } from "../src/engine/contracts/allocator.js";
+import { FakeAllocator } from "../src/engine/contracts/allocator.js";
+import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
+import { FakeCommandSubstrate } from "../src/engine/contracts/commandSubstrate.js";
+import type { CommandResult, RunnerCommand } from "../src/engine/contracts/commandSubstrate.js";
+import type { ConflictResolverHook } from "../src/engine/workflow/reviewMerge/index.js";
+import { assessExternalChange, tanrenIdentity } from "../src/engine/workflow/reviewMerge/governancePosture.js";
+import { driveResolveOverGit, type DriveGitResolveDeps } from "../src/engine/merge/driveConflictResolveGit.js";
+import { buildLiveJjWorkspace, type LiveJjWorkspaceDeps } from "../src/engine/providers/liveJjWorkspace.js";
+import { InMemoryVcsProvider } from "./conformance/fakes/inMemoryVcsProvider.js";
+import { CONFORMANCE_ACTOR_LOGIN, CONFORMANCE_ACTOR_NOREPLY_EMAIL } from "./conformance/vcsProviderConformance.js";
+
+/** Records every command the workspace mechanism runs so the test reads the clone/config. */
+class RecordingSubstrate extends FakeCommandSubstrate {
+  readonly commands: string[] = [];
+  override async run(handle: RunnerHandle, command: RunnerCommand): Promise<CommandResult> {
+    this.commands.push(command.command);
+    return super.run(handle, command);
+  }
+}
+
+const AUTHENTICATED_REF = "credential/github/dev";
+
+describe("conflict-resolve bot identity (finding #7)", () => {
+  it("git drive resolve: sets the BOT identity as the workspace git author (not resolver@tanren.invalid)", async () => {
+    const ssh = new RecordingSubstrate();
+    let resolverBuilt = false;
+    const deps: DriveGitResolveDeps = {
+      facts: {
+        orgId: "org_x",
+        projectId: "project_x",
+        runId: "run_x",
+        repoUrl: "https://github.com/o/r",
+        headBranch: "run_x",
+        runnerImage: "ghcr.io/o/runner:latest",
+        // AUTHENTICATED path (a static credential ref is configured) → the bot identity
+        // MUST resolve and be set as the git author (fail-closed otherwise).
+        githubCredentialRef: AUTHENTICATED_REF,
+        identitySecretRef: "secret/runner/identity",
+      },
+      allocator: new FakeAllocator(),
+      ssh,
+      secrets: new FakeSecretStore(),
+      vcsProvider: new InMemoryVcsProvider(),
+      timeoutMs: 1000,
+      // The resolver hook is not the unit under test — a no-op that records it ran.
+      buildResolver: (): ConflictResolverHook => {
+        resolverBuilt = true;
+        return async () => ({ resolved: true });
+      },
+    };
+
+    const result = await driveResolveOverGit(deps, {
+      runId: "run_x",
+      prUrl: "https://github.com/o/r/pull/7",
+      prNumber: 7,
+      baseBranch: "main",
+      message: "merge conflict in src/router.ts",
+    });
+    expect(result.resolved).toBe(true);
+    expect(resolverBuilt).toBe(true);
+
+    const clone = ssh.commands.find((c) => c.includes("git config user.name"));
+    expect(clone).toBeDefined();
+    // BOT-ATTRIBUTED: the resolved bot login + canonical noreply email — not the old
+    // `resolver@tanren.invalid` placeholder GitHub maps to a `null` login.
+    expect(clone).toContain(`git config user.name '${CONFORMANCE_ACTOR_LOGIN}'`);
+    expect(clone).toContain(`git config user.email '${CONFORMANCE_ACTOR_NOREPLY_EMAIL}'`);
+    expect(clone).not.toContain("resolver@tanren.invalid");
+  });
+
+  it("live jj workspace: sets the BOT identity as the jj commit author (not tanren@local)", async () => {
+    const ssh = new RecordingSubstrate();
+    const deps: LiveJjWorkspaceDeps = {
+      facts: {
+        orgId: "org_x",
+        projectId: "project_x",
+        repoUrl: "https://github.com/o/r",
+        githubCredentialRef: AUTHENTICATED_REF,
+        identitySecretRef: "secret/runner/identity",
+      },
+      allocator: new FakeAllocator(),
+      ssh,
+      secrets: new FakeSecretStore(),
+      vcsProvider: new InMemoryVcsProvider(),
+      timeoutMs: 1000,
+    };
+    const live = await buildLiveJjWorkspace(deps);
+    // Open a workspace so the jj identity config is issued over the substrate.
+    await live.core.openWorkspace({ repoUrl: "https://github.com/o/r", baseBranch: "main", path: "/ws/repo" });
+    await live.release();
+
+    const identityCmd = ssh.commands.find((c) => c.includes("jj config set --repo user.email"));
+    expect(identityCmd).toBeDefined();
+    // BOT-ATTRIBUTED: the jj author is the resolved bot login + noreply, so a commit jj
+    // exports + pushes onto a PR is recognized as Tanren's — not `tanren@local`.
+    expect(identityCmd).toContain(`jj config set --repo user.name '${CONFORMANCE_ACTOR_LOGIN}'`);
+    expect(identityCmd).toContain(`jj config set --repo user.email '${CONFORMANCE_ACTOR_NOREPLY_EMAIL}'`);
+    expect(identityCmd).not.toContain("tanren@local");
+  });
+
+  it("a bot-attributed resolution commit is NOT external (the merge-safety gate recognizes it)", () => {
+    // The PR's commit authors, as the external-change gate sees them (lower-cased GitHub
+    // logins). A conflict-resolution commit authored by the bot noreply email maps to the
+    // bot LOGIN; the gate's Tanren-identity set carries that same login.
+    const identity = tanrenIdentity([CONFORMANCE_ACTOR_LOGIN]);
+    const botAuthored = assessExternalChange({ logins: [CONFORMANCE_ACTOR_LOGIN] }, identity);
+    expect(botAuthored.hasExternalChange).toBe(false);
+    expect(botAuthored.externalLogins).toEqual([]);
+
+    // Contrast: the OLD placeholder mapped to a `null`/empty login → keyed `<unknown>` →
+    // external → it would BLOCK Tanren's own PR. This is exactly the bug finding #7 fixes.
+    const placeholderAuthored = assessExternalChange({ logins: [""] }, identity);
+    expect(placeholderAuthored.hasExternalChange).toBe(true);
+    expect(placeholderAuthored.externalLogins).toEqual(["<unknown>"]);
+  });
+});
