@@ -116,6 +116,9 @@ class RecordingEmitter implements DagEventEmitter {
     this.drained.push(input.plan);
   }
   async emitBudgetPaused(): Promise<void> {}
+  async emitBudgetMilestone(): Promise<boolean> {
+    return true;
+  }
   async emitConcurrencySaturated(): Promise<void> {}
 }
 

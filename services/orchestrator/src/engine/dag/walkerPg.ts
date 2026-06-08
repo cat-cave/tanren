@@ -4,14 +4,13 @@
 // composes:
 //   - PgDagReadModel: the org-scoped DAG snapshot read (DAG state is the source of
 //     truth; read fresh each tick, RLS-scoped to the project's org).
-//   - SpecRunDagEnqueuer: createQueuedRunFromSpec under a platform-admin actor
-//     carrying the project's org (the atomic pending→active claim is the
-//     idempotency boundary). A speculative start threads the dynamic base + skips
-//     the done-only dependency gate.
+//   - SpecRunDagEnqueuer: createQueuedRunFromSpec under a platform-admin actor carrying
+//     the project's org (the atomic pending→active claim is the idempotency boundary). A
+//     speculative start threads the dynamic base + skips the done-only dependency gate.
 //   - PgDagEventEmitter: writes dag.spec.enqueued / dag.spec.speculative /
-//     dag.spec.speculation_held / dag.drained / dag.budget.paused (the GENUINE
-//     dollar-budget pause) / dag.concurrency.saturated (the slot-saturation hold)
-//     through the single org-scoped event-writer seam.
+//     dag.spec.speculation_held / dag.drained / dag.budget.paused / dag.budget.milestone
+//     (the budget-fraction heads-up) / dag.concurrency.saturated through the single
+//     org-scoped event-writer seam.
 
 import { runWithJobOrgId, runWithOrgScope, runWithSystemScope } from "@tanren/db";
 import type pg from "pg";
@@ -244,6 +243,19 @@ interface DagEventEmitter {
     readyHeldBack: number;
     reason?: "unpriced_spend" | "unparseable_config";
   }): Promise<void>;
+  /**
+   * A budget FRACTION milestone (50% / 80% of the ceiling crossed before the terminal
+   * pause). IDEMPOTENT per band per budget window: appends ONLY if no `dag.budget.milestone`
+   * for the same band exists in the current calendar window (so re-walks never re-ping).
+   * Returns true when appended, false when deduped — the walker logs the dedup, never silent.
+   */
+  emitBudgetMilestone(input: {
+    projectId: string;
+    band: 50 | 80;
+    ceilingUsd: number;
+    spentUsd: number;
+    period: BudgetPeriod;
+  }): Promise<boolean>;
   /** The concurrency-saturation hold: ready specs held back because no slot is free. */
   emitConcurrencySaturated(input: { projectId: string; plan: DagTickPlan }): Promise<void>;
 }
@@ -396,6 +408,60 @@ export class PgDagEventEmitter implements DagEventEmitter {
     );
   }
 
+  /**
+   * Append a budget milestone (50% / 80%) IDEMPOTENTLY per band per budget window: in ONE
+   * org-scoped tx, skip if a `dag.budget.milestone` for this band already exists in the
+   * current calendar window (return false; the walker logs the dedup, never silent), else
+   * append. A concurrent double-walk is benign (at worst a duplicate heads-up, never missed).
+   */
+  async emitBudgetMilestone(input: {
+    projectId: string;
+    band: 50 | 80;
+    ceilingUsd: number;
+    spentUsd: number;
+    period: BudgetPeriod;
+  }): Promise<boolean> {
+    const orgId = await runWithSystemScope(this.pool, async (client) => {
+      const result = await client.query<{ org_id: string | null }>(
+        "SELECT org_id FROM projects WHERE project_id = $1",
+        [input.projectId],
+      );
+      return result.rows[0]?.org_id ?? null;
+    });
+    if (orgId === null) return false;
+    const windowClause = budgetMilestoneWindowClause(input.period);
+    return runWithOrgScope(this.pool, orgId, async (client) => {
+      const existing = await client.query<{ id: string }>(
+        `SELECT id FROM events
+          WHERE project_id = $1
+            AND event_type = 'dag.budget.milestone'
+            AND (payload->>'band')::int = $2${windowClause}
+          LIMIT 1`,
+        [input.projectId, input.band],
+      );
+      if (existing.rows.length > 0) return false;
+
+      const store: EventStore = this.runStateWriter ?? new PgEventStore(client);
+      const append = () =>
+        store.append({
+          projectId: input.projectId,
+          eventType: "dag.budget.milestone",
+          payload: {
+            band: input.band,
+            ceilingUsd: input.ceilingUsd,
+            spentUsd: input.spentUsd,
+            period: input.period,
+          },
+        });
+      if (this.runStateWriter === undefined) {
+        await append();
+      } else {
+        await runWithJobOrgId(orgId, append);
+      }
+      return true;
+    });
+  }
+
   async emitConcurrencySaturated(input: { projectId: string; plan: DagTickPlan }): Promise<void> {
     await this.withScopedStore(input.projectId, (store) =>
       store.append({
@@ -408,6 +474,26 @@ export class PgDagEventEmitter implements DagEventEmitter {
         },
       }),
     );
+  }
+}
+
+/**
+ * The `ts` window clause for a budget milestone dedup — mirrors the budget-sum window in
+ * `budgetGate.ts` so a milestone re-arms at the SAME calendar boundary the spend window
+ * resets at. `total` is the lifetime cap (no clause); the rest are calendar-anchored via
+ * `date_trunc`. The period is a frozen `BudgetPeriod` enum member (never user input), so
+ * the trunc unit is constant and the query stays parameter-free for project + band.
+ */
+function budgetMilestoneWindowClause(period: BudgetPeriod): string {
+  switch (period) {
+    case "monthly":
+      return " AND ts >= date_trunc('month', now())";
+    case "quarterly":
+      return " AND ts >= date_trunc('quarter', now())";
+    case "annual":
+      return " AND ts >= date_trunc('year', now())";
+    case "total":
+      return "";
   }
 }
 

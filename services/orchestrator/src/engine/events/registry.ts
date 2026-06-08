@@ -138,6 +138,7 @@ import {
 import { RedactionRawAccessPayload } from "./schemas/redaction.js";
 import { BenchmarkAcceptFailedPayload, BenchmarkAcceptPassedPayload } from "./schemas/benchmark.js";
 import {
+  DagBudgetMilestonePayload,
   DagBudgetPausedPayload,
   DagConcurrencySaturatedPayload,
   DagDrainedPayload,
@@ -406,17 +407,18 @@ export const EventRegistry = {
   "benchmark.accept.failed": BenchmarkAcceptFailedPayload,
 
   // DagWalker (autonomy-engine.md §1a): the per-project background scheduler's
-  // autonomous decisions — a spec auto-enqueued, the DAG drained, or a pause for
-  // lack of governed concurrency headroom. Milestones are labels, not gates, so
-  // there is no milestone-boundary event.
+  // autonomous decisions — a spec auto-enqueued, the DAG drained, a pause for lack of
+  // headroom, or a budget-fraction milestone crossing.
   "dag.spec.enqueued": DagSpecEnqueuedPayload,
   "dag.drained": DagDrainedPayload,
-  // The GENUINE dollar-budget pause (cumulative spend reached the ceiling) vs. the
-  // concurrency-saturation hold (no in-flight slot free) — two distinct outcomes.
+  // The GENUINE dollar-budget pause (spend reached the ceiling) — distinct from the
+  // concurrency-saturation hold (no in-flight slot free) below.
   "dag.budget.paused": DagBudgetPausedPayload,
+  // The 50% / 80% budget-fraction "approaching your ceiling" heads-up (routes by default).
+  "dag.budget.milestone": DagBudgetMilestonePayload,
   "dag.concurrency.saturated": DagConcurrencySaturatedPayload,
-  // §2c: speculative execution — a dependent started early on a
-  // speculative integration branch, or was held over the depth cap.
+  // §2c: speculative execution — a dependent started early on a speculative
+  // integration branch, or was held over the depth cap.
   "dag.spec.speculative": DagSpecSpeculativePayload,
   "dag.spec.speculation_held": DagSpecSpeculationHeldPayload,
   // §2c CHANGE-PERCOLATION: an ancestor changed after a dependent started
@@ -438,8 +440,7 @@ export const EventRegistry = {
   // A spec parked at the terminal needs_attention status (the DAG frees its slot +
   // blocks only its dependents, asking a human loudly). Reached by the native merge
   // queue's conflict resolver when two intents are genuinely irreconcilable
-  // (source: merge_conflict). (The never-strand reconciler's strand source is gone —
-  // §7: never-discard rebase keeps the run row, so a spec can no longer be stranded.)
+  // (source: merge_conflict; the never-strand strand source is gone per §7 rebase).
   "dag.spec.needs_attention": DagSpecNeedsAttentionPayload,
   // The human-in-the-loop resolution of a needs_attention escalation: the operator
   // addressed the blocker and re-queued the spec (needs_attention → open), resetting

@@ -147,6 +147,101 @@ describe("NotificationDispatcher default route", () => {
     expect(loud?.level).toBe("error");
   });
 
+  it("routes deploy.verified (live-URL-up milestone) via the default channel BY DEFAULT", async () => {
+    // The milestone-notifications chain: a deploy proven live must reach a human
+    // without any per-event route config. `deploy.verified` is `warn` (it clears the
+    // default route's warn floor), so on an org with NO configured route it still
+    // lands on the code-level default channel.
+    const client = new NotificationMemoryClient();
+    const ntfy = new CapturingChannel("ntfy");
+    const dispatcher = new NotificationDispatcher({
+      query: client as unknown as pg.Pool,
+      channels: baseRegistry(ntfy),
+      now: () => new Date("2026-01-05T12:00:00Z"),
+      defaultRoute: { channelKind: "ntfy", destination: "tanren-milestones" },
+    });
+
+    await dispatcher.onEvent(
+      {
+        eventType: "deploy.verified",
+        payload: {
+          provider: "deploy.vercel",
+          appId: "app_1",
+          deploymentId: "dpl_1",
+          url: "https://apex-url-shortener.example.app",
+          state: "READY",
+          smokeStatus: 200,
+        },
+      },
+      { orgId: "org_1", actorUserId: null, runId: "run_1", projectId: "project_1" },
+    );
+
+    // The live-URL milestone LANDED via the default route — no manual route needed.
+    expect(ntfy.calls).toHaveLength(1);
+    expect(ntfy.calls[0]?.target.destination).toBe("tanren-milestones");
+    expect(ntfy.calls[0]?.payload.severity).toBe("warn");
+    expect(client.dispatches[0]?.status).toBe("sent");
+    const logPayload = client.dispatches[0]?.payload as { layering?: string } | undefined;
+    expect(logPayload?.layering).toBe("default_route");
+  });
+
+  it("routes a budget milestone (50% / 80% of ceiling) via the default channel BY DEFAULT", async () => {
+    // The other milestone-notifications signal: cumulative spend crossed a budget
+    // fraction. `dag.budget.milestone` is `warn`, so it clears the default route's
+    // floor and reaches the org's channel without per-event route config.
+    const client = new NotificationMemoryClient();
+    const ntfy = new CapturingChannel("ntfy");
+    const dispatcher = new NotificationDispatcher({
+      query: client as unknown as pg.Pool,
+      channels: baseRegistry(ntfy),
+      now: () => new Date("2026-01-05T12:00:00Z"),
+      defaultRoute: { channelKind: "ntfy", destination: "tanren-milestones" },
+    });
+
+    await dispatcher.onEvent(
+      {
+        eventType: "dag.budget.milestone",
+        payload: { band: 80, ceilingUsd: 50, spentUsd: 41.2, period: "total" },
+      },
+      { orgId: "org_1", actorUserId: null, projectId: "project_1" },
+    );
+
+    expect(ntfy.calls).toHaveLength(1);
+    expect(ntfy.calls[0]?.target.destination).toBe("tanren-milestones");
+    expect(ntfy.calls[0]?.payload.severity).toBe("warn");
+    expect(client.dispatches[0]?.status).toBe("sent");
+  });
+
+  it("LOUD-logs a budget milestone when no route AND no default channel (never a silent drop)", async () => {
+    // The doctrine: a REQUIRED-but-missing channel must fail loud. A budget milestone
+    // on an org with NO configured route AND no code-level default emits a LOUD log
+    // rather than silently swallowing the heads-up.
+    const client = new NotificationMemoryClient();
+    const ntfy = new CapturingChannel("ntfy");
+    const logs: Array<{ level: string; message: string }> = [];
+    const dispatcher = new NotificationDispatcher({
+      query: client as unknown as pg.Pool,
+      channels: baseRegistry(ntfy),
+      now: () => new Date("2026-01-05T12:00:00Z"),
+      log: (level, message) => logs.push({ level, message }),
+      // No defaultRoute configured.
+    });
+
+    await dispatcher.onEvent(
+      {
+        eventType: "dag.budget.milestone",
+        payload: { band: 50, ceilingUsd: 50, spentUsd: 26, period: "total" },
+      },
+      { orgId: "org_1", actorUserId: null, projectId: "project_1" },
+    );
+
+    expect(ntfy.calls).toHaveLength(0);
+    expect(client.dispatches).toHaveLength(0);
+    const loud = logs.find((l) => l.message.includes("no notification route configured for a fail-severity event"));
+    expect(loud).toBeDefined();
+    expect(loud?.level).toBe("error");
+  });
+
   it("does NOT route a routine low-severity event via the default (no spam)", async () => {
     const client = new NotificationMemoryClient();
     const ntfy = new CapturingChannel("ntfy");

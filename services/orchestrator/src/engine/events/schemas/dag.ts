@@ -123,6 +123,36 @@ export const DagBudgetPausedPayload = z
   .strict();
 export type DagBudgetPausedPayload = z.infer<typeof DagBudgetPausedPayload>;
 
+// dag.budget.milestone: cumulative DOLLAR SPEND crossed a budget-FRACTION boundary
+// (50% / 80% of the configured ceiling) WITHOUT yet exhausting it — the
+// "you're burning through the ceiling" heads-up a human wants DURING an autonomous
+// run, distinct from the terminal `dag.budget.paused` (100%, run halted). Unlike
+// the §1a "milestones are labels" note above, THIS is a real first-class event,
+// because it is exactly the autonomy-loop signal a human cares about: the run is
+// approaching its money ceiling and may soon pause. It is emitted ONCE PER BAND PER
+// BUDGET WINDOW (the emitter dedups against prior milestone events in the same
+// calendar window — a `monthly` ceiling re-arms each month, a `total` ceiling once
+// for the project's lifetime), so re-walks never re-ping. It routes by default
+// (severity `warn`) so the heads-up reaches the org's channels without per-event
+// route config. Only fires when a ceiling is configured (an unlimited project
+// crosses no fraction).
+export const DagBudgetMilestonePayload = z
+  .object({
+    // The fraction band crossed — 50 or 80 (percent of the ceiling). 100 is the
+    // terminal pause (`dag.budget.paused`), not a milestone heads-up.
+    band: z.union([z.literal(50), z.literal(80)]),
+    // The configured dollar ceiling, and the cumulative spend that crossed the band
+    // (both in USD). `spentUsd / ceilingUsd >= band/100` at emit time.
+    ceilingUsd: z.number().positive(),
+    spentUsd: z.number().nonnegative(),
+    // The budget period the spend was summed over — mirrors the config `BudgetPeriod`
+    // enum. A calendar-anchored window re-arms the milestone bands at its boundary;
+    // `total` arms each band once for the project's lifetime.
+    period: z.enum(["monthly", "quarterly", "annual", "total"]),
+  })
+  .strict();
+export type DagBudgetMilestonePayload = z.infer<typeof DagBudgetMilestonePayload>;
+
 // dag.concurrency.saturated: the walker had ready specs to enqueue but the
 // project's in-flight count is already at the governed CONCURRENCY ceiling (the
 // headroom is zero) — distinct from a dollar-budget pause. This was historically

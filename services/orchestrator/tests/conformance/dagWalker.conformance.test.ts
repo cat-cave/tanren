@@ -124,6 +124,10 @@ class RecordingEnqueuer implements DagEnqueuer {
 }
 
 class RecordingEventEmitter implements DagEventEmitter {
+  // Mirrors the PgDagEventEmitter's once-per-band-per-window dedup: a band already
+  // recorded for this project+period is NOT re-emitted (a re-walk re-pings nothing).
+  private readonly milestonesSeen = new Set<string>();
+
   constructor(readonly records: RecordedDagEvent[]) {}
 
   async emitSpecEnqueued(input: {
@@ -174,6 +178,26 @@ class RecordingEventEmitter implements DagEventEmitter {
       readyHeldBack: input.readyHeldBack,
       ...(input.reason !== undefined && { reason: input.reason }),
     });
+  }
+
+  async emitBudgetMilestone(input: {
+    projectId: string;
+    band: 50 | 80;
+    ceilingUsd: number;
+    spentUsd: number;
+    period: "monthly" | "total";
+  }): Promise<boolean> {
+    const key = `${input.projectId}:${input.period}:${input.band}`;
+    if (this.milestonesSeen.has(key)) return false;
+    this.milestonesSeen.add(key);
+    this.records.push({
+      type: "dag.budget.milestone",
+      band: input.band,
+      ceilingUsd: input.ceilingUsd,
+      spentUsd: input.spentUsd,
+      period: input.period,
+    });
+    return true;
   }
 
   async emitConcurrencySaturated(input: { projectId: string; plan: DagTickPlan }): Promise<void> {

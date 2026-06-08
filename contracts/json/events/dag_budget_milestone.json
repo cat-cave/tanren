@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "band": {
+      "anyOf": [
+        {
+          "const": 50,
+          "type": "number"
+        },
+        {
+          "const": 80,
+          "type": "number"
+        }
+      ]
+    },
+    "ceilingUsd": {
+      "exclusiveMinimum": 0,
+      "type": "number"
+    },
+    "period": {
+      "enum": [
+        "monthly",
+        "quarterly",
+        "annual",
+        "total"
+      ],
+      "type": "string"
+    },
+    "spentUsd": {
+      "minimum": 0,
+      "type": "number"
+    }
+  },
+  "required": [
+    "band",
+    "ceilingUsd",
+    "spentUsd",
+    "period"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.dag.budget.milestone"
+}
