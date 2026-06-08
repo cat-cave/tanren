@@ -65,7 +65,7 @@ interface WorkspaceState {
 // Interprets the small command vocabulary buildDefaultGate issues over SSH:
 //   - the `cat tanren-ci.yml` config read (no file ⇒ default config)
 //   - the deps-ensure guard (install WHENEVER a manifest exists — no node_modules gate)
-//   - the gate steps `pnpm lint` / `pnpm typecheck` / `pnpm test` / `pnpm build`
+//   - the gate steps `pnpm lint` / `pnpm typecheck` / `pnpm build` / `pnpm test ...`
 class InterpretingSsh implements CommandSubstrate {
   readonly commands: RunnerCommand[] = [];
   constructor(private readonly state: WorkspaceState) {}
@@ -252,8 +252,10 @@ describe("buildDefaultGate — lenient posture", () => {
     expect(advisory).toBeDefined();
     expect((advisory!.payload as { advisoryStep: string }).advisoryStep).toBe("lint");
     expect(events.events.some((e) => e.eventType === "gate.failed")).toBe(false);
-    // The tier still ran the later steps (lint did not short-circuit).
-    expect(ssh.commands.some((c) => c.command === "pnpm test")).toBe(true);
+    // The tier still ran the later steps (advisory lint did not short-circuit). The
+    // per_iteration fast tier is lint+typecheck (NO tests — the 3-tier default keeps
+    // tests to tier-2+), so the proof the later step ran is `pnpm typecheck`.
+    expect(ssh.commands.some((c) => c.command === "pnpm typecheck")).toBe(true);
   });
 
   it("under the strict default the same failing lint FAILS the gate", async () => {

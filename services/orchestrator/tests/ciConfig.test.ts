@@ -3,6 +3,7 @@ import {
   CiConfigValidationError,
   CiYamlParseError,
   DEFAULT_CI_CONFIG,
+  JUNIT_REPORT_PATH,
   bootstrapCommand,
   parseYaml,
   resolveCiConfig,
@@ -43,18 +44,36 @@ function expectValidationError(yamlText: string): CiConfigValidationError {
 }
 
 describe("resolveCiConfig — missing", () => {
-  it("returns the frozen default when no file is present", () => {
+  it("returns the frozen 3-tier default when no file is present", () => {
     const cfg = resolveCiConfig();
     expect(cfg).toBe(DEFAULT_CI_CONFIG);
-    expect(Object.keys(cfg.tiers)).toEqual(["fast", "slow"]);
-    expect(cfg.tiers.fast.map((s) => s.name)).toEqual(["lint", "typecheck", "unit"]);
+    // Three tiers, mapped 1:1 to the three lifecycle points (3-tier CI requirement).
+    expect(Object.keys(cfg.tiers).toSorted()).toEqual(["fast", "merge", "slow"]);
+    // tier-1 (fast) is cheap: lint + typecheck ONLY — NO tests in the per-iteration tier.
+    expect(cfg.tiers.fast.map((s) => s.name)).toEqual(["lint", "typecheck"]);
+    expect(cfg.tiers.fast.some((s) => s.name === "unit" || /test/u.test(s.run))).toBe(false);
+    // tier-2 (slow) is build + tests at spec completion.
     expect(cfg.tiers.slow.map((s) => s.name)).toEqual(["build", "test"]);
+    // tier-3 (merge) is the heaviest thorough gate.
+    expect(cfg.tiers.merge?.map((s) => s.name)).toEqual(["lint", "typecheck", "build", "test"]);
   });
 
-  it("maps the default fast tier to per_iteration and slow to audit + merge", () => {
+  it("emits JUnit evidence from the test tiers to the path the per-test ingest reads", () => {
+    const cfg = DEFAULT_CI_CONFIG;
+    // The JUnit ingest (`ingestGateJunit`) reads back exactly `reports/junit.xml`.
+    expect(JUNIT_REPORT_PATH).toBe("reports/junit.xml");
+    for (const tier of ["slow", "merge"] as const) {
+      const testStep = (cfg.tiers[tier] ?? []).find((s) => s.name === "test");
+      expect(testStep).toBeDefined();
+      expect(testStep?.run).toContain("--reporter=junit");
+      expect(testStep?.run).toContain(`--outputFile=${JUNIT_REPORT_PATH}`);
+    }
+  });
+
+  it("maps fast→per_iteration, slow→pre_audit, merge→pre_merge (3 distinct tiers)", () => {
     expect(tiersFor(DEFAULT_CI_CONFIG, "per_iteration")).toEqual(["fast"]);
     expect(tiersFor(DEFAULT_CI_CONFIG, "pre_audit")).toEqual(["slow"]);
-    expect(tiersFor(DEFAULT_CI_CONFIG, "pre_merge")).toEqual(["slow"]);
+    expect(tiersFor(DEFAULT_CI_CONFIG, "pre_merge")).toEqual(["merge"]);
   });
 });
 

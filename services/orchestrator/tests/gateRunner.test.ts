@@ -274,8 +274,9 @@ describe("runGateForWhen", () => {
     };
     expect(payload.headSha).toBe("a".repeat(40));
     expect(payload.passed).toBe(true);
-    // The fast tier's three steps are flattened onto the verdict.
-    expect(payload.steps.map((s) => s.name)).toEqual(["lint", "typecheck", "unit"]);
+    // The fast tier's two cheap steps are flattened onto the verdict (NO tests in the
+    // per-iteration tier — the 3-tier default keeps tests to tier-2+).
+    expect(payload.steps.map((s) => s.name)).toEqual(["lint", "typecheck"]);
     // AUDIT-EVIDENCE BASELINE: the verdict carries the governance policy version + the
     // initiating SERVICE actor (the gate runs autonomously — no approver, a machine
     // judgment). The merge authority's verdict is now an audit-grade governing event.

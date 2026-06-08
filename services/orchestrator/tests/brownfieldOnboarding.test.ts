@@ -148,9 +148,11 @@ describe("config-injection · 5 files + per-file exclude + open PR", () => {
     expect(yaml).toContain("version: 1");
     expect(yaml).toContain("bootstrap:");
     expect(yaml).toMatch(/tiers:/u);
+    // THREE tiers (the 3-tier CI requirement): fast/slow/merge.
     expect(yaml).toContain("fast:");
     expect(yaml).toContain("slow:");
-    // The `when` policy maps slow → pre_merge (the native gate is the merge authority).
+    expect(yaml).toContain("merge:");
+    // The `when` policy maps merge → pre_merge (the native gate is the merge authority).
     expect(yaml).toContain("pre_merge");
     // It is NOT a GitHub Actions workflow and carries NO forge-CI / JUnit-upload plumbing.
     expect(yaml).not.toContain("runs-on:");
@@ -158,10 +160,19 @@ describe("config-injection · 5 files + per-file exclude + open PR", () => {
     expect(yaml).not.toContain("/webhooks/ci/junit");
     expect(yaml).not.toContain("x-hub-signature-256");
     // CRUCIAL: it resolves as a valid CiConfigV1 (the native runner consumes it via
-    // resolveGateConfig) — slow runs at pre_merge (the merge authority).
+    // resolveGateConfig) — the three tiers map 1:1 to the three lifecycle points, and
+    // the test tier emits JUnit to the path the per-test ingest reads.
     const config = resolveCiConfig(yaml);
     expect(config.version).toBe(1);
-    expect(config.when.slow).toContain("pre_merge");
+    expect(config.when.fast).toEqual(["per_iteration"]);
+    expect(config.when.slow).toEqual(["pre_audit"]);
+    expect(config.when.merge).toEqual(["pre_merge"]);
+    // tier-1 (fast) runs NO tests — tests arrive with features.
+    expect((config.tiers.fast ?? []).some((s) => /test/u.test(s.run))).toBe(false);
+    // The test step emits JUnit to reports/junit.xml (the per-test ingest path).
+    const slowTest = (config.tiers.slow ?? []).find((s) => s.name === "test");
+    expect(slowTest?.run).toContain("--reporter=junit");
+    expect(slowTest?.run).toContain("--outputFile=reports/junit.xml");
   });
 
   it("honors per-file exclude", () => {

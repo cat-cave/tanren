@@ -121,34 +121,28 @@ export interface DeriveResult {
 // `npm workspaces`, which the default pnpm gate rejects with exit 254) and they never
 // converged (no authoritative toolchain on `main`, can't see each other's branches).
 //
-// Two fixes encoded here (the right place for this DOMAIN knowledge — not a
-// walker-wide rule):
-//   1. `dependsOnPrev` SERIALIZES the foundation into a chain: `monorepo scaffold`
-//      is the sole root; `build · turbo` depends on it; `ci · gh actions` depends on
-//      build. So one branch establishes the authoritative toolchain before the next
-//      builds on it.
-//   2. The `monorepo scaffold` description + acceptance criteria PIN the toolchain
-//      the default gate (`pnpm lint`/`typecheck`/`test`/`build`, per the CI
-//      `DEFAULT_CI_CONFIG`) accepts — pnpm workspaces with a `pnpm-workspace.yaml`,
-//      a root `package.json` whose `lint`/`typecheck`/`test`/`build` scripts call
-//      DIRECT tools (eslint/tsc/vitest), and a committed pnpm lockfile — so the
-//      foundation is deterministic and gate-compatible (NOT the whole repo, just the
-//      toolchain the gate expects). NO turbo in the scaffold: a direct-tool toolchain
-//      is the simplest thing that satisfies the gate's script NAMES, and turbo is
-//      introduced later by the `build · turbo` spec once the toolchain is stable on
-//      `main` (so the foundation never depends on turbo being installed first).
+// Fixes encoded here (DOMAIN knowledge — not a walker-wide rule):
+//   1. `dependsOnPrev` SERIALIZES the foundation into a chain (`monorepo scaffold` is
+//      the sole root; `build · turbo` then `ci · gh actions` chain off it), so one
+//      branch establishes the authoritative toolchain before the next builds on it.
+//   2. The `monorepo scaffold` description + criteria PIN the toolchain the gate
+//      (`pnpm lint`/`typecheck`/`build`) accepts — a pnpm workspace, a root
+//      `package.json` whose scripts call DIRECT tools (eslint/tsc/vitest), and a
+//      committed lockfile — gate-compatible without turbo (a later spec adds turbo).
+//   3. The scaffold ALSO authors the 3-tier native gate `.tanren/ci.yml` (the
+//      spec-loop-redesign 3-tier CI requirement): `fast` (per_iteration —
+//      lint+typecheck, NO tests), `slow` (pre_audit — build + JUnit-emitting tests),
+//      `merge` (pre_merge — the full thorough gate). The v23 scaffold shipped a flat
+//      config that ran the test step per-iteration and blocked the loop before any
+//      tests existed. The SCAFFOLD BAR is structure + lint/typecheck/build — a green
+//      test SUITE is NOT required at scaffold (tests arrive with the feature specs),
+//      so a freshly-scaffolded repo with a trivial test never gets a blocking finding.
 //
-// SCOPE (#273 convergence): the FIRST scaffold spec is deliberately MINIMAL — a
-// pnpm workspace with just the root + ONE trivial package, no shared-types
-// package and no tsconfig project-references. The over-prescribed earlier version
-// (shared-types + project-references + base tsconfig + lockfile in one pass) was
-// too big for a single ~10-min writer pass: most reruns TIMED OUT, and the one
-// that split the work emitted `workspace:*` STUB packages for the toolchain
-// (which the checker correctly rejected). The workspace SHAPE is preserved
-// (later specs assume a `pnpm-workspace.yaml`); shared-types / project-references
-// are deferred to a FOLLOW-ON spec if a later milestone actually needs them. An
-// EXPLICIT criterion forbids stub/`workspace:*`/fake toolchain packages —
-// typescript/eslint/vitest MUST be real published devDependencies.
+// SCOPE (#273 convergence): the FIRST scaffold spec is deliberately MINIMAL — a pnpm
+// workspace (root + ONE trivial package), no shared-types package or tsconfig
+// project-references (an over-prescribed earlier version timed out / emitted
+// `workspace:*` STUBS). Those defer to a FOLLOW-ON spec; an EXPLICIT criterion forbids
+// stub/`workspace:*`/fake toolchain packages — the toolchain must be real devDeps.
 interface ScaffoldSpecDef {
   title: string;
   description: string;
@@ -171,22 +165,32 @@ const SCAFFOLD_SPECS: ScaffoldSpecDef[] = [
       '`"lint": "eslint ."`, `"typecheck": "tsc --noEmit"`, `"test": "vitest run"`, `"build": "tsc -b"` ' +
       "— with `eslint`, `typescript`, and `vitest` as REAL published devDependencies; a real " +
       "`eslint.config.js` flat config that exists and passes; a `tsconfig.json`; one trivial " +
-      "`src/index.ts`; one trivial PASSING vitest test; a COMMITTED `.gitignore` that ignores " +
-      "`node_modules` and `dist` (so build/install artifacts are never committed); and a COMMITTED " +
-      "`pnpm-lock.yaml`. " +
+      "`src/index.ts`; a COMMITTED `.gitignore` that ignores `node_modules`, `dist`, and `reports` " +
+      "(so build/install/junit artifacts are never committed); and a COMMITTED `pnpm-lock.yaml`. " +
+      "ALSO author the 3-tier native gate `.tanren/ci.yml` (a CiConfigV1, NOT a GitHub Actions " +
+      "workflow). It MUST have exactly three tiers mapped to the three lifecycle points: `fast` " +
+      "(`when: [per_iteration]`) running `pnpm lint` + `pnpm typecheck` ONLY (no tests in the fast " +
+      "tier — tests arrive with features); `slow` (`when: [pre_audit]`) running `pnpm build` then " +
+      "the test step `pnpm test -- --reporter=junit --outputFile=reports/junit.xml` (the JUnit path " +
+      "Tanren's per-test ingest reads); and `merge` (`when: [pre_merge]`) running the full " +
+      "lint+typecheck+build+test (the same JUnit-emitting test step). Add a top-level " +
+      "`bootstrap: { run: pnpm install --frozen-lockfile }`. " +
       "Use the REAL published `typescript`/`eslint`/`vitest` packages — NEVER create local " +
       "workspace stub packages, `workspace:*` placeholders, or fake toolchain binaries. Do NOT add " +
       "a shared-types package or tsconfig project references (a later spec adds those if needed), do " +
       "NOT use turbo (a later spec introduces it once the toolchain is stable), and do NOT use " +
       "npm/yarn workspaces — the gate runs `pnpm install` then `pnpm lint` / `pnpm typecheck` / " +
-      "`pnpm test` / `pnpm build` and rejects a non-pnpm workspace.",
+      "`pnpm build` and rejects a non-pnpm workspace. " +
+      "The scaffold bar is STRUCTURE + lint/typecheck/build — a thorough test SUITE is NOT expected " +
+      "yet (tests land with the feature specs); a trivial placeholder test is fine but is not graded.",
     acceptanceCriteria: [
       "given an empty repo, when the scaffold lands, then a `pnpm-workspace.yaml` and a committed `pnpm-lock.yaml` exist (a minimal pnpm workspace — root only, or root + one trivial package — not npm/yarn)",
       "given the root `package.json`, when inspected, then its `lint`, `typecheck`, `test`, and `build` scripts call direct tools (eslint/tsc/vitest), NOT turbo, with eslint/typescript/vitest as devDependencies",
       "given the toolchain packages, when inspected, then `typescript`, `eslint`, and `vitest` are REAL published devDependencies — NOT local stub packages, `workspace:*` placeholders, or fake binaries",
       "given the lint setup, when inspected, then a real `eslint.config.js` flat config exists (so `eslint .` runs cleanly), a `tsconfig.json` exists, and a trivial `src/index.ts` exists",
-      "given the repo root, when inspected, then a committed `.gitignore` ignores `node_modules` and `dist` (so install/build artifacts are never committed)",
-      "given a trivial passing vitest test exists, when `pnpm install` then `pnpm lint`, `pnpm typecheck`, `pnpm test`, and `pnpm build` run, then each exits 0 (the default CI gate is green)",
+      "given the repo root, when inspected, then a committed `.gitignore` ignores `node_modules`, `dist`, and `reports` (so install/build/junit artifacts are never committed)",
+      "given the native gate `.tanren/ci.yml`, when inspected, then it is a valid CiConfigV1 with exactly three tiers — `fast` mapped to `per_iteration` (lint+typecheck, NO tests), `slow` mapped to `pre_audit` (build+test), and `merge` mapped to `pre_merge` (full lint+typecheck+build+test) — and the test step emits JUnit XML to `reports/junit.xml` via `--reporter=junit --outputFile=reports/junit.xml`",
+      "given the scaffold, when `pnpm install` then `pnpm lint`, `pnpm typecheck`, and `pnpm build` run, then each exits 0 (structure + the fast/build tiers are green — a thorough test SUITE is NOT required at scaffold; tests arrive with the feature specs)",
     ],
   },
   {

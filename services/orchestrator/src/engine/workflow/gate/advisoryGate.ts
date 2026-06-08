@@ -17,10 +17,10 @@
 import type { GovernancePosture } from "../../config/shared.js";
 
 // The step NAMES treated as advisory under the lenient posture. Matched against
-// the CI tier's step `name` (the gate runs steps named lint/typecheck/unit in the
-// fast tier and build/test in the slow tier per DEFAULT_CI_CONFIG). `lint` and
-// `typecheck` are the first-pass quality steps; `build`/`test`/`unit` are never
-// advisory — a tree that won't build or whose tests fail is genuinely broken.
+// the CI tier's step `name` (per the 3-tier DEFAULT_CI_CONFIG: lint/typecheck in the
+// fast tier, build/test in the slow + merge tiers). `lint` and `typecheck` are the
+// first-pass quality steps; `build`/`test` are never advisory — a tree that won't
+// build or whose tests fail is genuinely broken.
 const LENIENT_ADVISORY_STEP_NAMES: ReadonlySet<string> = new Set(["lint", "typecheck"]);
 
 // The advisory (warn-but-don't-block) step names for a governance posture. Only

@@ -13,14 +13,15 @@
 // The INSERT + its event ride on the run's ambient org scope (the gate already runs
 // under `runWithJobOrgId` / `runWithOrgScope`), so RLS admits them.
 import type pg from "pg";
+import { JUNIT_REPORT_PATH } from "../../ci/index.js";
 import { parseJunitReport } from "../../ci/junit.js";
 import { ingestJunitResults } from "../../ci/junitIngest.js";
 import type { RunnerHandle } from "../../contracts/allocator.js";
 import type { CommandSubstrate } from "../../contracts/commandSubstrate.js";
 import { quoteSshShellArg } from "../../ssh/command.js";
 
-/** The conventional workspace path a repo's test step writes its JUnit report to. */
-const JUNIT_REPORT_PATH = "reports/junit.xml";
+// The conventional workspace path a repo's test step writes its JUnit report to is
+// owned by the ci module (single source of truth shared with the generated config).
 
 export interface IngestGateJunitInput {
   ssh: CommandSubstrate;
