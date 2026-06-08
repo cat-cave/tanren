@@ -21,13 +21,18 @@ export interface BuildConnectorMapDeps {
   sentryHttp?: SentryHttpClient;
   linearHttp?: LinearHttpClient;
   jiraHttp?: JiraHttpClient;
-  // App-only intake (creds-audit fix): the org's GitHub App installation + the
-  // shared minter, threaded into the GitHub issues connector so the connector mints
-  // an INSTALLATION token instead of requiring a static PAT. The poller builds this
-  // map PER-ORG (one `loadOrgGithubAppInstallation` per source's org) so App-only
-  // orgs are ingestable; absent ⇒ the connector resolves a static ref (PAT) as before.
+  // Intake credential resolution (no-silent-fallbacks fix): the org's GitHub App
+  // installation + the shared minter, threaded into the GitHub issues connector so
+  // the connector mints an INSTALLATION token. The intake poller builds this map
+  // PER-ORG with EXPLICIT resolution — App installation when installed, ELSE the
+  // org's default static token (`defaultGithubStaticRef`) — exactly how the rest of
+  // the engine resolves a GitHub credential. A source pinning its OWN
+  // `config.staticRef` overrides this default.
   installation?: OrgGithubAppInstallation;
   minter?: GithubAppTokenMinter;
+  // The org-default static GitHub credential ref, used by the GitHub issues
+  // connector when no App is installed and the source pins no own `staticRef`.
+  defaultGithubStaticRef?: string;
 }
 
 /** Build the default `{ issues, errors }` connector map from the shared transports. */
@@ -41,6 +46,7 @@ export function buildInboxConnectorMap(deps: BuildConnectorMapDeps): Map<string,
           githubHttp: deps.githubHttp,
           ...(deps.installation === undefined ? {} : { installation: deps.installation }),
           ...(deps.minter === undefined ? {} : { minter: deps.minter }),
+          ...(deps.defaultGithubStaticRef === undefined ? {} : { defaultStaticRef: deps.defaultGithubStaticRef }),
         }),
         linear: createLinearConnector({
           secrets: deps.secrets,

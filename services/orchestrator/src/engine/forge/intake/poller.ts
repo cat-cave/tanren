@@ -17,9 +17,7 @@ import { orgScopingPool } from "../../data/orgScopedDb.js";
 import type { SecretStore } from "../../contracts/secretStore.js";
 import type { GitHubHttpClient } from "../../providers/github.js";
 import type { GithubAppTokenMinter } from "../../providers/githubAppTokenMinter.js";
-import { loadOrgGithubAppInstallation } from "../../credentials/orgGithubApp.js";
 import {
-  buildInboxConnectorMap,
   ingestSource,
   InboxStore,
   type AutoRouteDeps,
@@ -29,6 +27,7 @@ import {
   type SourceConnector,
   type TriageAnswerer,
 } from "../inbox/index.js";
+import { buildIntakeConnectorMapForOrg, isCredentialResolutionError } from "./issueSourceSeam.js";
 
 // The poll knobs a source carries on its `config` (alongside the connector's own
 // config). `pollIntervalMs` is the per-source cadence; absence ⇒ the org default.
@@ -47,19 +46,22 @@ export const DEFAULT_POLL_INTERVAL_MS = 5 * 60_000;
 export interface IntakePollerDeps {
   pool: pg.Pool;
   // The transports the poller rebuilds a PER-ORG connector map from on each poll.
-  // App-only intake (creds-audit fix): the GitHub issues connector must mint a
-  // per-org INSTALLATION token, so the poller cannot share one org-agnostic
-  // connector map — it builds the map per source-org with that org's App
-  // installation threaded in (see `pollSourceOnce`). `secrets`/`githubHttp`/`minter`
-  // are those transports; `connectors` (when given) is a test override of the whole
-  // built map.
+  // The GitHub credential is resolved per-org via the IssueSource seam — App
+  // installation token when installed, ELSE the org's default static token — so the
+  // poller cannot share one org-agnostic connector map; it builds the map per
+  // source-org with that org's resolved credential threaded in (see
+  // `pollSourceOnce`). `secrets`/`githubHttp`/`minter` are those transports;
+  // `connectors` (when given) is a test override of the whole built map.
   secrets: SecretStore;
   githubHttp: GitHubHttpClient;
-  // The shared App-token minter (installation-token cache); threaded into the
-  // per-org GitHub issues connector so App-only orgs are ingestable.
+  // The shared App-token minter (installation-token cache). Optional: used for the
+  // App-installation path; an org on the static-token path needs none, and its
+  // absence does NOT silently disable intake (a configured GitHub source with no
+  // resolvable credential is a LOUD fail-closed error — see the IssueSource seam).
   githubAppMinter?: GithubAppTokenMinter;
   // Test seam: a fixed connector map, used VERBATIM for every org (bypasses the
-  // per-org App rebuild). Production omits this and the poller builds per-org.
+  // per-org credential resolution + rebuild). Production omits this and the poller
+  // builds per-org.
   connectors?: ReadonlyMap<string, SourceConnector>;
   // Resolve a per-source triage answerer (the source's project `forge` routing).
   // REQUIRED — the poll path triages with a real model (no §8a fallback).
@@ -120,12 +122,15 @@ export async function pollSourceOnce(deps: IntakePollerDeps, source: InboxSource
   // per-job org id AND hand the engine the org-scoping proxy: each direct `.query`
   // opens a short `runWithOrgScope` carrying the source's org GUC.
   //
-  // App-only intake (creds-audit fix): build the connector map for THIS source's
-  // ORG, threading that org's GitHub App installation + the shared minter so the
-  // GitHub issues connector mints an installation token (no PAT required). A test
-  // may pin a fixed `connectors` map (used verbatim); production omits it and we
-  // rebuild per-org — mirroring how run/merge resolve App tokens per org.
-  const connectors = deps.connectors ?? (await buildOrgConnectorMap(deps, source.orgId));
+  // Intake credential resolution (no-silent-fallbacks fix): build the connector map
+  // for THIS source's ORG via the IssueSource seam, which resolves the GitHub
+  // credential EXPLICITLY — App installation token when installed, ELSE the org's
+  // default static token — exactly how the rest of the engine resolves it. When
+  // this source is a configured GitHub issues source but NO credential resolves,
+  // the seam raises a LOUD `IntakeGithubCredentialMissingError` (fail-closed),
+  // never a silent no-connector. A test may pin a fixed `connectors` map (used
+  // verbatim); production omits it and we rebuild per-org.
+  const connectors = deps.connectors ?? (await buildOrgConnectorMap(deps, source));
   const engineDeps: InboxEngineDeps = {
     pool: orgScopingPool(deps.pool),
     connectors,
@@ -138,18 +143,27 @@ export async function pollSourceOnce(deps: IntakePollerDeps, source: InboxSource
   return { source, candidates };
 }
 
-/** Build the inbox connector map for one org, with that org's App installation threaded in. */
+/**
+ * Build the inbox connector map for one source's org via the IssueSource seam.
+ * The seam resolves the GitHub credential EXPLICITLY (App installation when
+ * installed, else the org-default static token) and raises a LOUD fail-closed
+ * error when `source` is a configured GitHub issues source but no credential
+ * resolves — distinct from the legitimate "no GitHub intake configured" case.
+ */
 async function buildOrgConnectorMap(
   deps: IntakePollerDeps,
-  orgId: string,
+  source: InboxSource,
 ): Promise<ReadonlyMap<string, SourceConnector>> {
-  const installation = await loadOrgGithubAppInstallation(deps.pool, orgId);
-  return buildInboxConnectorMap({
-    secrets: deps.secrets,
-    githubHttp: deps.githubHttp,
-    ...(installation === undefined ? {} : { installation }),
-    ...(deps.githubAppMinter === undefined ? {} : { minter: deps.githubAppMinter }),
-  });
+  return buildIntakeConnectorMapForOrg(
+    {
+      pool: deps.pool,
+      secrets: deps.secrets,
+      githubHttp: deps.githubHttp,
+      ...(deps.githubAppMinter === undefined ? {} : { githubAppMinter: deps.githubAppMinter }),
+    },
+    source.orgId,
+    [source],
+  );
 }
 
 /**
@@ -212,7 +226,16 @@ export class IntakePoller {
           results.push(await pollSourceOnce(this.deps, source));
           this.lastPolledAt.set(source.id, this.now());
         } catch (error) {
-          // One source's failure (rate limit, transient connector error) never
+          // A credential-RESOLUTION failure is a MISCONFIGURATION, not a transient:
+          // per the no-silent-fallbacks doctrine it is a LOUD fail-closed error that
+          // must NOT be swallowed-and-retried (which would quietly degrade to "this
+          // source never ingests"). This covers BOTH paths uniformly via the shared
+          // predicate — the eager org-default resolution (IntakeGithubCredentialMissingError)
+          // AND the lazy source-owned `config.staticRef` resolution inside the
+          // connector's fetch (No/MissingGithubCredentialRefError). Re-throw so the
+          // failure surfaces loudly at the tick boundary, naming the credential.
+          if (isCredentialResolutionError(error)) throw error;
+          // Any OTHER source failure (rate limit, transient connector error) never
           // stalls the others; it retries on the next due tick.
           console.error(`[intake-poller] poll of source ${source.id} failed:`, error);
           this.lastPolledAt.set(source.id, this.now());
