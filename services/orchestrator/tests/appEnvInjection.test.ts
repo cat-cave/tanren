@@ -188,6 +188,12 @@ describe("run-workspace app-env injection (bootstrap failure path)", () => {
     // `run.failed` via messageOf(error)). Capture every emitted event payload.
     const events: { eventType: EventName; payload: unknown }[] = [];
     const finalizedStates: string[] = [];
+    // finding #3: the finalizer now ALSO parks the spec (needs_attention) via an
+    // in-process `UPDATE specs` on input.pool — a no-op recording pool suffices here.
+    const noopPool = {
+      // eslint-disable-next-line @typescript-eslint/require-await
+      query: async () => ({ rows: [], rowCount: 1 }),
+    } as unknown as pg.Pool;
     await finalizeWorkflowError(error, {
       finalizeRunState: async (status: string) => {
         finalizedStates.push(status);
@@ -195,8 +201,9 @@ describe("run-workspace app-env injection (bootstrap failure path)", () => {
       appendEvent: async <N extends EventName>(eventType: N, payload: EventPayload<N>) => {
         events.push({ eventType, payload });
       },
-      runId: "run_x",
       workspacePath,
+      input: { pool: noopPool } as never,
+      context: { runId: "run_x", specId: "spec_x", projectId: "project_x" } as never,
     });
 
     // A bootstrap failure is recoverable → the run is finalized `halted`.

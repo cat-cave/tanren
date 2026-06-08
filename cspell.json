@@ -322,6 +322,7 @@
     "repos",
     "repros",
     "requeue",
+    "requeueable",
     "rerequest",
     "rerequested",
     "rerere",
