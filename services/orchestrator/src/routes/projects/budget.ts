@@ -20,6 +20,7 @@
 // Both run org-scoped under RLS: the spend sum (via PgBudgetGate) reads on the
 // org-scoped client; the config write resolves + verifies the project's org first.
 
+import { notifyDagChanged } from "@tanren/db";
 import type { Context } from "hono";
 import type pg from "pg";
 import { z } from "zod";
@@ -112,6 +113,10 @@ export async function handleBudgetPut(
     return c.json({ error: "project_not_found" }, 404);
   }
 
+  // The PRE-write resolved state — so a ceiling RAISE that re-animates a budget-paused
+  // project can fire the re-walk wake below (audit §3.7e).
+  const before = await new PgBudgetGate(pool).resolveBudget(projectId);
+
   const rawConfig = await ProjectStore.getConfig(pool, projectId, systemActor);
   const current = migrateProjectConfig(rawConfig);
   const nextConfig = {
@@ -130,5 +135,22 @@ export async function handleBudgetPut(
   await ProjectStore.updateConfig(pool, projectId, migrateProjectConfig(nextConfig), systemActor);
 
   const state = await new PgBudgetGate(pool).resolveBudget(projectId);
+
+  // RESUME WAKE (audit §3.7e): the DagWalker is driven by the LISTEN/NOTIFY bus, and a
+  // project PAUSED on budget has NO run-terminal / spec-insert notification to re-walk
+  // it — so without an explicit wake here, raising the ceiling would leave it paused
+  // until the periodic backstop (§3.13a) or a worker reboot. When the write LOOSENS the
+  // gate — the project WAS paused and is now NOT (a raised ceiling, a cleared budget, a
+  // rolled period) — fire a `tanren_dag` re-walk so the freed headroom is picked up
+  // immediately. Best-effort (a NOTIFY failure must not fail the budget write); the
+  // backstop tick is the safety net regardless.
+  if (shouldPauseOnBudget(before) && !shouldPauseOnBudget(state)) {
+    try {
+      await notifyDagChanged(pool, projectId);
+    } catch (error) {
+      console.error(`[budget] failed to emit re-walk wake after un-pausing project ${projectId}:`, error);
+    }
+  }
+
   return c.json(toView(state));
 }

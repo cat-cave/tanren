@@ -126,6 +126,13 @@ export interface WriterCostInput {
 // zero-token call. A `fake` fixture is legitimately zero and stays quiet.
 export async function recordAnswererCost<TOutput>(input: AnswererCostInput<TOutput>): Promise<void> {
   const tokenUsage = input.adapter.lastTokenUsage?.();
+  // MANAGED OpenRouter run: query the REAL `usage.cost` for THIS answerer call's
+  // generation id so cost_usd is a metered FACT (`provider_response`) — IDENTICAL to
+  // recordWriterCost. Without this an answerer call (planner/checker/auditor/triage/
+  // convergence/demoRun) on a metered key records a NULL-cost `per_token` row, which
+  // the budget gate's fail-closed `unpriced_spend` pause trips on permanently when
+  // ccusage cannot price the window. null on BYOK / no generation id (no estimate).
+  const realProviderCostUsd = await captureRealProviderCostUsd(input.ctx, tokenUsage, input.taskId);
   await input.ctx.recorder.record(
     {
       runId: input.ctx.runId,
@@ -136,6 +143,7 @@ export async function recordAnswererCost<TOutput>(input: AnswererCostInput<TOutp
       model: input.model,
       authRef: input.adapter.authRef,
       runtimeSeconds: input.runtimeSeconds,
+      realProviderCostUsd,
     },
     tokenUsage ?? emptyTokenUsage,
     input.rawUsage,

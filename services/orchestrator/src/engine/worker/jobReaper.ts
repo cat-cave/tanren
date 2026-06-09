@@ -9,7 +9,7 @@
 // event emission); the worker heartbeat that keeps a live job's lease fresh
 // lives alongside the executor. observability stays OUT of here.
 
-import { runWithJobOrgId, runWithSystemScope } from "@tanren/db";
+import { runWithJobOrgId, runWithOrgScope, runWithSystemScope } from "@tanren/db";
 import type pg from "pg";
 import { orgScopingPool } from "../data/orgScopedDb.js";
 import type { JobQueue, ReapedJob } from "../contracts/jobQueue.js";
@@ -62,6 +62,18 @@ async function emitDeadLetterEvent(pool: pg.Pool, eventStore: EventStore, job: R
   if (context === undefined) {
     return;
   }
+  // DEAD-LETTER FINALIZER (audit §3.13c): a dead-lettered job is TERMINAL — its run is
+  // never re-claimed. Without finalizing the spec it stays `in_flight` FOREVER,
+  // occupying its DAG slot (the walker counts it in-flight and never re-enqueues it) and
+  // blocking every dependent permanently. Park the spec at `needs_attention` — the SAME
+  // terminal escalation a genuine merge conflict uses (coordinatorEscalate.ts): it FREES
+  // the slot (the rest of the DAG advances), blocks ONLY its dependents, and is
+  // operator-visible. The `job.dead_lettered` event below names the cause. Best-effort,
+  // org-scoped, ATOMIC-guarded (an already-terminal spec is left untouched) — a park
+  // failure must never mask the dead-letter event.
+  if (context.specId !== "" && context.orgId !== null) {
+    await parkDeadLetteredSpec(pool, context.orgId, context.specId).catch(() => {});
+  }
   const append = (): Promise<void> =>
     eventStore.append({
       runId: job.runId!,
@@ -82,6 +94,24 @@ async function emitDeadLetterEvent(pool: pg.Pool, eventStore: EventStore, job: R
   // for the INSERT). A legacy/unscoped run (org_id NULL) appends on the pool —
   // inert, identical to before this cohort.
   await (context.orgId === null ? append() : runWithJobOrgId(context.orgId, append));
+}
+
+/**
+ * Park the dead-lettered job's spec at the terminal `needs_attention` status under the
+ * run's org scope (audit §3.13c). ATOMIC-guarded: the `status NOT IN (...)` clause means
+ * an already-terminal spec (merged / done / halted / cancelled / already needs_attention)
+ * is never moved, so a concurrent settle never un-merges or double-parks. Mirrors
+ * `PgSpecEscalator.parkSpec` (the merge-queue conflict escalation) — ONE escalation
+ * policy across both surfaces. The flip FREES the spec's DAG slot.
+ */
+async function parkDeadLetteredSpec(pool: pg.Pool, orgId: string, specId: string): Promise<void> {
+  await runWithOrgScope(pool, orgId, async (client) => {
+    await client.query(
+      `UPDATE specs SET status = 'needs_attention'
+         WHERE spec_id = $1 AND status NOT IN ('merged', 'done', 'halted', 'cancelled', 'needs_attention')`,
+      [specId],
+    );
+  });
 }
 
 async function loadRunLineage(
