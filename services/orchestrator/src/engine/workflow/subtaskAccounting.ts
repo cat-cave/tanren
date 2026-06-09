@@ -63,6 +63,13 @@ export async function checkWindowPreflight(
   }
   // Capture the credit balance at the first observation that reports one; the
   // run-end drawdown against this baseline is the run's marginal dollar cost.
+  //
+  // KNOWN HAZARD (audit §3.7f, NOT yet fixed): `creditsRemaining` is the credential's
+  // GLOBAL balance. When two runs share one credential and overlap, EACH captures the
+  // same baseline and EACH attributes the WHOLE concurrent drawdown — the spend is
+  // double-counted. A correct per-run attribution needs an `auth_ref` column on `runs`
+  // + a concurrency query (a migration + a new event), out of scope of this budget
+  // wave; tracked as a follow-up. Documented here so the over-attribution is not silent.
   if (creditState.atStart === null && usage !== null && usage.creditsRemaining !== null) {
     creditState.atStart = usage.creditsRemaining;
   }

@@ -488,7 +488,7 @@ export const specDependencies = pgTable(
 export { notificationTargets, notificationRoutes } from "./schemaNotifications.js";
 export { forgeThreads, forgeTurns, forgeActionProposals } from "./schemaForge.js";
 export { workflowInsights, quarantinedTests, ciTestResults } from "./schemaInsights.js";
-export { inboxSources, candidates } from "./schemaInbox.js";
+export { inboxSources, candidates, webhookEvents } from "./schemaInbox.js";
 export { auditJobs } from "./schemaAudits.js";
 export { experiments, experimentCells, experimentTrials } from "./schemaBenchmark.js";
 // Integration-provisioning foundation (P-INT-0 + P-APP-ENV-0): the org-level

@@ -39,6 +39,12 @@ import { isTerminalStatus } from "../benchmark/runnerDb.js";
 import type { ChangePercolationCoordinator } from "./percolation.js";
 import { buildDagWalker, listWalkableProjectIds } from "./walker.js";
 
+/**
+ * The default periodic re-walk backstop cadence (audit §3.13a): slow on purpose —
+ * the bus is the PRIMARY driver, this only catches a lost NOTIFY / a resumed budget.
+ */
+const DEFAULT_RE_WALK_INTERVAL_MS = 60_000;
+
 export interface DagWalkerSubscriberDeps {
   pool: pg.Pool;
   /** The shared LISTEN connection (the SAME one the SSE source / benchmark use). */
@@ -64,6 +70,24 @@ export interface DagWalkerSubscriberDeps {
    * so a freshly-enqueued dependent's SHAs are already recorded before detection.
    */
   percolation?: ChangePercolationCoordinator;
+  /**
+   * PERIODIC RE-WALK BACKSTOP (audit §3.13a): how often to re-walk EVERY walkable
+   * project regardless of notifications. The DagWalker is otherwise driven PURELY by
+   * the LISTEN/NOTIFY bus — but a NOTIFY lost in the listener's reconnect gap
+   * (`db/notify.ts` re-LISTEN window) would de-animate the DAG until the next worker
+   * reboot, AND a project paused on budget has NO notification that re-animates it when
+   * its ceiling is later raised. This backstop tick re-walks all projects on a slow
+   * cadence so a lost wake (or a resumed budget) self-heals within one interval.
+   * Defaults to 60s; a test injects a small value (and its own `setInterval` seam).
+   */
+  reWalkIntervalMs?: number;
+  /**
+   * Test seam for the periodic backstop's timer. Defaults to the global
+   * `setInterval`/`clearInterval`; a test injects a controllable pair so the tick is
+   * deterministic. The handle type is opaque (the matching `clear` consumes it).
+   */
+  setIntervalFn?: (handler: () => void, ms: number) => unknown;
+  clearIntervalFn?: (handle: unknown) => void;
   /**
    * Plane-split (autonomy loops): the control-plane run-state writer. When present
    * (remote-writes on), the production walker routes its run-CREATION
@@ -112,9 +136,18 @@ export class DagWalkerSubscriber {
   // once and never drop a trigger that arrived mid-walk.
   private readonly inFlight = new Map<string, Promise<void>>();
   private readonly reWalkPending = new Set<string>();
+  // The periodic-backstop timer handle (audit §3.13a); undefined until start().
+  private reWalkTimer: unknown;
+  private readonly reWalkIntervalMs: number;
+  private readonly setIntervalFn: (handler: () => void, ms: number) => unknown;
+  private readonly clearIntervalFn: (handle: unknown) => void;
 
   constructor(private readonly deps: DagWalkerSubscriberDeps) {
     this.walker = deps.walker ?? this.buildProductionWalker();
+    this.reWalkIntervalMs = deps.reWalkIntervalMs ?? DEFAULT_RE_WALK_INTERVAL_MS;
+    this.setIntervalFn = deps.setIntervalFn ?? ((handler, ms) => setInterval(handler, ms));
+    this.clearIntervalFn =
+      deps.clearIntervalFn ?? ((handle) => clearInterval(handle as ReturnType<typeof setInterval>));
   }
 
   /** Build the production walker; requires the integrator (no walker injected). */
@@ -144,6 +177,23 @@ export class DagWalkerSubscriber {
   async start(): Promise<void> {
     void this.subscribeInBackground();
     void this.driveAllProjects();
+    this.startPeriodicBackstop();
+  }
+
+  /**
+   * Arm the PERIODIC RE-WALK BACKSTOP (audit §3.13a): every `reWalkIntervalMs`, re-walk
+   * every walkable project so a NOTIFY lost in the listener's reconnect gap (or a
+   * project paused on budget whose ceiling was later raised — §3.7e) self-heals within
+   * one interval rather than staying de-animated until a worker reboot. Walks route
+   * through the SAME per-project coalescing guard, so the tick never double-enqueues
+   * and a still-running walk just marks a re-walk. A pass failure is logged, never
+   * fatal — the next tick retries. Idempotent: re-arming is a no-op while a timer holds.
+   */
+  private startPeriodicBackstop(): void {
+    if (this.stopped || this.reWalkTimer !== undefined || this.reWalkIntervalMs <= 0) return;
+    this.reWalkTimer = this.setIntervalFn(() => {
+      void this.driveAllProjects();
+    }, this.reWalkIntervalMs);
   }
 
   /** Subscribe to both wake channels off the boot path; tolerant of a not-yet-ready DB. */
@@ -194,6 +244,10 @@ export class DagWalkerSubscriber {
   /** Stop listening. Idempotent; in-flight walks finish on their own. */
   stop(): void {
     this.stopped = true;
+    if (this.reWalkTimer !== undefined) {
+      this.clearIntervalFn(this.reWalkTimer);
+      this.reWalkTimer = undefined;
+    }
     while (this.unsubscribes.length > 0) {
       this.unsubscribes.pop()?.();
     }
@@ -236,24 +290,50 @@ export class DagWalkerSubscriber {
     return run;
   }
 
-  /** Walk, then re-walk while a trigger arrived mid-walk (drains the coalesce flag). */
+  /**
+   * Walk, then re-walk while a trigger arrived mid-walk (drains the coalesce flag).
+   *
+   * DRAIN-ON-THROW (audit §3.13d): the coalesce flag is cleared at the TOP of each
+   * iteration and the whole body is guarded so a `walk()`/`percolate()` throw can never
+   * strand a recorded-but-never-drained re-walk. A trigger that arrives mid-walk sets
+   * `reWalkPending`; the `do/while` re-checks it after the body, so even a throwing
+   * iteration loops once more to honor the queued trigger before exiting. Without the
+   * guard a single walk throw would `.finally`-delete the in-flight entry and abandon a
+   * pending re-walk until the next external notification (a microtask-race de-animation).
+   */
   private async runWalkChain(projectId: string): Promise<void> {
     do {
       this.reWalkPending.delete(projectId);
-      await this.walker.walk(projectId);
-      // walk → baseShift (tanren-owns-the-engine.md §3/§7): after the walk (so any
-      // just-enqueued speculative dependent's integrated SHAs are already recorded),
-      // the change-percolation coordinator detects ancestor changes under in-flight
-      // dependents and routes each through the ONE base-shift handler
-      // (`BaseShiftCoordinator.rebaseOnto`) — a never-discard REBASE of the dependent's
-      // existing run/branch in place, NOT the deleted supersede+regenerate. A failure
-      // is logged, never fatal to the walk loop — the next notification re-detects.
-      // (No strand reconciler: never-discard rebase keeps the run row, so a spec can
-      // no longer be stranded with no live run — the §7 deletion.)
-      if (this.deps.percolation !== undefined) {
-        await this.deps.percolation.percolate(projectId).catch((error: unknown) => {
-          console.error(`[dag-walker] change-percolation pass failed for project ${projectId}:`, error);
-        });
+      try {
+        const result = await this.walker.walk(projectId);
+        // BUDGET-PAUSED CHAIN STOP (audit §3.13e): when the walk paused on budget it
+        // enqueued NOTHING — so the change-percolation / base-shift chain must NOT run.
+        // Percolation allocates runners + spends (a live jj rebase + re-gate over a
+        // real runner), which would keep burning money PAST the ceiling the walk just
+        // honored. Skip it on a budget pause; the periodic backstop (§3.13a) re-walks
+        // and resumes percolation once the ceiling is raised / the window rolls.
+        if (result.status === "budget_paused") {
+          console.warn(
+            `[dag-walker] project ${projectId} paused on budget — skipping change-percolation (no runner spend past the ceiling)`,
+          );
+          continue;
+        }
+        // walk → baseShift (tanren-owns-the-engine.md §3/§7): after the walk (so any
+        // just-enqueued speculative dependent's integrated SHAs are already recorded),
+        // the change-percolation coordinator detects ancestor changes under in-flight
+        // dependents and routes each through the ONE base-shift handler
+        // (`BaseShiftCoordinator.rebaseOnto`) — a never-discard REBASE of the dependent's
+        // existing run/branch in place, NOT the deleted supersede+regenerate. A failure
+        // is logged, never fatal to the walk loop — the next notification re-detects.
+        if (this.deps.percolation !== undefined) {
+          await this.deps.percolation.percolate(projectId).catch((error: unknown) => {
+            console.error(`[dag-walker] change-percolation pass failed for project ${projectId}:`, error);
+          });
+        }
+      } catch (error) {
+        // A walk/percolate throw must not abandon a queued re-walk: log it and let the
+        // `do/while` re-check `reWalkPending` so a mid-walk trigger still drains.
+        console.error(`[dag-walker] walk chain iteration failed for project ${projectId}:`, error);
       }
     } while (this.reWalkPending.has(projectId));
   }

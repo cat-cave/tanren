@@ -19,3 +19,16 @@ export {
   IntakeGithubCredentialMissingError,
   type BuildIntakeConnectorMapDeps,
 } from "./issueSourceSeam.js";
+export {
+  WebhookEventStore,
+  type WebhookEvent,
+  type WebhookEventStatus,
+  type PersistWebhookEventInput,
+} from "./webhookEventStore.js";
+export {
+  processWebhookEvent,
+  sweepWebhookEvents,
+  sweepStuckCandidates,
+  WEBHOOK_EVENT_MAX_ATTEMPTS,
+  type WebhookProcessorDeps,
+} from "./webhookProcessor.js";

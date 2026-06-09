@@ -22,6 +22,7 @@ import { defaultUsageProbe } from "./plannerRunUsage.js";
 // Re-exported so plannerRun.ts keeps a single import surface for the run's
 // adapter/usage builders (the managed capturer lives in plannerRunUsage).
 export { resolveManagedCapturer } from "./plannerRunUsage.js";
+import type { BudgetGate } from "../contracts/dagWalker.js";
 import { PgBudgetGate } from "../dag/budgetGate.js";
 import { runBudgetCeilingPreflight } from "./budgetPreflight.js";
 import type { GateOutcome } from "./gate/index.js";
@@ -389,7 +390,14 @@ export async function resolveRunAdaptersWithBudgetPreflight(
   input: RunPlannerLoopInput,
   ctx: PlannerRunAdapterContext,
   appendEvent: AppendEvent,
-): Promise<{ adapters: SubtaskLoopAdapters; usageProbe: UsageProbe | undefined; specValidator: SpecQualityAnswerer }> {
+): Promise<{
+  adapters: SubtaskLoopAdapters;
+  usageProbe: UsageProbe | undefined;
+  specValidator: SpecQualityAnswerer;
+  // The resolved budget gate (audit §3.7a) — threaded into the loop for the PER-ITERATION
+  // halt-on-ceiling, so it shares the SAME gate the preflight used (no second construction).
+  budgetGate: BudgetGate;
+}> {
   const adapters = (input.buildAdapters ?? ((c) => defaultRoutingAdapters(input, c)))(ctx);
   // WORKSTREAM 1 ↔ 2 SEAM — the spec-quality validator the loop's TRIAGE gates its
   // `kind: spec` items through. Resolved here (the same place the loop adapters are)
@@ -419,5 +427,5 @@ export async function resolveRunAdaptersWithBudgetPreflight(
     writerObservable,
     appendEvent,
   );
-  return { adapters, usageProbe, specValidator };
+  return { adapters, usageProbe, specValidator, budgetGate };
 }

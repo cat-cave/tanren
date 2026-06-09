@@ -389,17 +389,17 @@ export class CostRecorder {
     totalCostUsd: number,
     basis: "ccusage" | "credits",
   ): Promise<{ updated: number }> {
-    // The token-share denominator is ALWAYS the run's WHOLE token count (all rows):
-    //   - ccusage's run total is the NOTIONAL value of ALL the run's tokens, so it
-    //     apportions across EVERY row by token share into `notional_cost_usd`. The
-    //     same per-row figure is also the REAL spend (`cost_usd`) — but ONLY for
-    //     `billing_mode='per_token'` rows (for per_token real == notional); a
-    //     subscription/self_hosted row's real spend stays NULL (no marginal cost).
-    //   - a `credits` reconcile is genuine subscription-overage REAL spend, so it
-    //     apportions across ALL rows into `cost_usd` ONLY, leaving the notional value
-    //     each row already carries from write time untouched (unchanged behavior).
+    // The token-share denominator is the run's tokens EXCLUDING `provider_response` rows:
+    //   - ccusage's run total is the NOTIONAL value of the apportioned tokens → it writes
+    //     `notional_cost_usd` on EVERY (non-provider_response) row; that figure is ALSO the
+    //     REAL spend (`cost_usd`) but ONLY for `billing_mode='per_token'` rows (real ==
+    //     notional there) — a subscription/self_hosted row's real spend stays NULL.
+    //   - a `credits` reconcile is genuine subscription-overage REAL spend → it writes
+    //     `cost_usd` on ALL such rows, leaving each row's write-time notional untouched.
+    //   - BASIS FILTER (audit §3.7c): `provider_response` rows are EXCLUDED so an estimate
+    //     never overwrites the provider's OWN charge (all-provider_response → loud `no_rows`).
     const rows = await client.query<{ id: string; total_tokens: number; billing_mode: string }>(
-      "SELECT id, total_tokens, billing_mode FROM cost_records WHERE run_id = $1",
+      "SELECT id, total_tokens, billing_mode FROM cost_records WHERE run_id = $1 AND cost_basis IS DISTINCT FROM 'provider_response'",
       [runId],
     );
     // RECONCILE-FAILED (finding 7): a POSITIVE real total (ccusage / credit drawdown)
