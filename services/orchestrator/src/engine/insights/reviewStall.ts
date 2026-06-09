@@ -32,12 +32,25 @@ interface ReviewEventRow {
   pr_url: string | null;
 }
 
+// Generous hard row cap on the review-event scan. With the time window already
+// bounding the lookback, this is a belt-and-suspenders guard against a pathological
+// project that floods review events inside the window — the query stays O(cap),
+// never lifetime-wide. Ordered newest-first, so the decisive (latest) event per
+// spec is always retained even if older events are truncated.
+const REVIEW_EVENT_SCAN_LIMIT = 10_000;
+
 export async function computeReviewStall(pool: Pick<pg.Pool, "query">, context: ComputeContext): Promise<Insight[]> {
   const t: InsightThresholds = { ...DEFAULT_THRESHOLDS, ...context.thresholds };
   const now = context.now ?? new Date();
+  // BOUND the scan: only review/merge events inside the lookback window. Without
+  // this, the query read EVERY review event over the project's lifetime (no time
+  // bound, no LIMIT — audit §4.3 worst case). The window is generous vs the 48h
+  // stall threshold so a real stall is never missed.
+  const since = new Date(now.getTime() - t.reviewStallWindowDays * 24 * 60 * 60 * 1000);
 
-  // Pull every review/merge event for the project's specs, newest first, so a
-  // single pass can pick the decisive (latest) event per spec.
+  // Pull recent review/merge events for the project's specs, newest first, so a
+  // single pass can pick the decisive (latest) event per spec. Bounded on BOTH a
+  // time window (`e.ts >= $3`) AND a row LIMIT.
   const result = await pool.query<ReviewEventRow>(
     `SELECT e.spec_id,
             s.title AS spec_title,
@@ -50,8 +63,10 @@ export async function computeReviewStall(pool: Pick<pg.Pool, "query">, context: 
        WHERE s.project_id = $1
          AND e.spec_id IS NOT NULL
          AND e.event_type = ANY($2::text[])
-       ORDER BY e.ts DESC`,
-    [context.projectId, REVIEW_EVENT_TYPES],
+         AND e.ts >= $3
+       ORDER BY e.ts DESC
+       LIMIT ${REVIEW_EVENT_SCAN_LIMIT}`,
+    [context.projectId, REVIEW_EVENT_TYPES, since],
   );
   if (result.rows.length === 0) return [];
 

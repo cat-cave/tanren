@@ -55,6 +55,13 @@ export interface FlakyVerdict {
 
 const MAX_SAMPLE_SHAS = 5;
 
+// Generous hard row cap on the time-bounded CI observation scans (gate.verdict
+// events + ci_test_results). The window already bounds the lookback; this caps a
+// pathological flood inside the window so the read can never be unbounded. Rows
+// are ordered newest-first, so the cap retains the most recent (most relevant)
+// observations; the reducers re-sort, so the verdict is order-independent.
+const CI_OBSERVATION_SCAN_LIMIT = 10_000;
+
 /**
  * Pure flaky reducer. Groups observations by check name, then — per check — by
  * head SHA. A check is flaky iff it both passed AND failed on the same SHA on at
@@ -132,12 +139,18 @@ export async function loadCiObservations(
   options: { projectId: string; since: Date },
 ): Promise<CiCheckObservation[]> {
   const result = await pool.query<CiEventRow>(
+    // Time-bounded by `since`, PLUS a hard row LIMIT: a pathological project that
+    // floods gate.verdict events inside the window must not return an unbounded
+    // result set. Ordered DESC so the cap keeps the MOST RECENT verdicts (the ones
+    // that matter for current flakiness); the pure reducer re-sorts by observed
+    // time, so DESC-vs-ASC does not change the verdict.
     `SELECT payload, ts
        FROM events
        WHERE project_id = $1
          AND event_type = 'gate.verdict'
          AND ts >= $2
-       ORDER BY ts ASC`,
+       ORDER BY ts DESC
+       LIMIT ${CI_OBSERVATION_SCAN_LIMIT}`,
     [options.projectId, options.since],
   );
   return flattenCiObservations(result.rows);
@@ -184,11 +197,16 @@ export async function loadCiTestObservations(
   options: { projectId: string; since: Date },
 ): Promise<CiTestObservation[]> {
   const result = await pool.query<CiTestRow>(
+    // Time-bounded by `since`, PLUS a hard row LIMIT. A large suite over a long
+    // window can emit very many per-test rows; the cap keeps the read O(LIMIT).
+    // Ordered DESC so truncation keeps the MOST RECENT results; the pure reducer
+    // re-sorts by observed time, so the verdict is unchanged by the order here.
     `SELECT test_id, file, suite, head_sha, outcome, duration_ms, retries, observed_at
        FROM ci_test_results
       WHERE project_id = $1
         AND observed_at >= $2
-      ORDER BY observed_at ASC`,
+      ORDER BY observed_at DESC
+      LIMIT ${CI_OBSERVATION_SCAN_LIMIT}`,
     [options.projectId, options.since],
   );
   return result.rows.map((row) => ({

@@ -5,6 +5,7 @@ import { validateCredentialRef } from "../credentials/codexAuth.js";
 import { quoteSshShellArg } from "../ssh/command.js";
 import type { TokenUsage, UsageLimitSignal, WriterAdapter, WriterResult } from "./types.js";
 import { captureBaselineSha, captureGitStateAfterWriter } from "./writerGit.js";
+import { findTokenUsageBounded } from "./findTokenUsage.js";
 
 // reasonix harness adapter (DeepSeek-native, npm `reasonix`) — a Writer-only
 // CLI harness conforming to the v1 harness protocol
@@ -164,22 +165,12 @@ function detectUsageLimit(event: Record<string, unknown>): UsageLimitSignal | un
   return undefined;
 }
 
+// Walks one parsed reasonix JSONL event for its usage record. BOUNDED on depth +
+// node count (a hostile/buggy deeply-nested event must not blow the stack); on
+// hitting a bound it emits a LOUD `usage-parse-bounded` signal rather than
+// silently dropping usage. The DeepSeek de-overlap shape is `tokenUsageFromRecord`.
 function findTokenUsage(value: unknown): TokenUsage | undefined {
-  if (typeof value !== "object" || value === null) {
-    return undefined;
-  }
-  const record = value as Record<string, unknown>;
-  const usage = tokenUsageFromRecord(record);
-  if (usage !== undefined) {
-    return usage;
-  }
-  for (const child of Object.values(record)) {
-    const nested = findTokenUsage(child);
-    if (nested !== undefined) {
-      return nested;
-    }
-  }
-  return undefined;
+  return findTokenUsageBounded("reasonix", value, tokenUsageFromRecord);
 }
 
 // DeepSeek reports prompt/completion token counts plus a cache-hit bucket. We
