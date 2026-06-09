@@ -5,7 +5,11 @@ import { sshRunnerHandle } from "../contracts/allocator.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
-import { redactedGithubTokenResult, validateGithubCredentialRef } from "../credentials/githubToken.js";
+import {
+  normalizeStaticGithubRef,
+  redactedGithubTokenResult,
+  validateGithubCredentialRef,
+} from "../credentials/githubToken.js";
 import { type EventStore, PgEventStore } from "../eventStore.js";
 import type { VcsProvider } from "../contracts/vcsProvider.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
@@ -284,7 +288,11 @@ function githubCredentialRefFromInput(input: PublishDraftPullRequestInput): stri
 
 function credentialRefOrUndefined(input: PublishDraftPullRequestInput): string | undefined {
   const configured = input.githubCredentialRef ?? input.projectConfig?.["githubCredentialRef"];
-  return typeof configured === "string" ? validateGithubCredentialRef(configured) : undefined;
+  // App-installed run: the static ref is OPTIONAL. The App sentinel is an
+  // EMPTY-STRING ref (a present-but-empty string, not `undefined`) — collapse it
+  // (and any whitespace-only value) to "no static ref" so the run mints the App
+  // token, NEVER pushing `""` through the grammar validator (apex v30 crash).
+  return normalizeStaticGithubRef(typeof configured === "string" ? configured : undefined);
 }
 
 function eventContext(input: PublishDraftPullRequestInput) {

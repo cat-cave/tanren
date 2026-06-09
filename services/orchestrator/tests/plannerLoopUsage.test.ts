@@ -254,6 +254,29 @@ describe("subtask loop — usage probe wiring", () => {
     expect(names).not.toContain("usage.accounting.observed");
   });
 
+  it("apex v30: a BYOK run's post-task usage/cost accounting does NOT throw on an empty writer ref", async () => {
+    // The v30 sequence: task.completed → usage.accounting.observed →
+    // usage.window.observed → (historically) a crash when the accounting resolved
+    // an empty platform metering ref. A BYOK run has NO managed capturer
+    // (captureRealProviderCost is omitted), so the accounting must reconcile off the
+    // BYOK credential it already has — and even an EMPTY writer authRef (the
+    // no-credential edge) must complete the accounting, never throw an empty-ref
+    // format error.
+    const { input, events } = defaultLoopInput({
+      usageProbe: drawdownProbe(),
+      adapters: adaptersWithAuthRef(""),
+    });
+    const outcome = await runSubtaskLoop(input);
+
+    expect(outcome.kind).toBe("passed");
+    const names = events.events.map((event) => event.eventType);
+    expect(names).toContain("usage.accounting.observed");
+    expect(names).toContain("usage.window.observed");
+    // No managed capturer was wired (BYOK), so no real-provider capture failure and
+    // no empty-ref crash surfaced as a cost event.
+    expect(JSON.stringify(events.events)).not.toContain("invalid format");
+  });
+
   it("cost PR-C: a credit drawdown with NO configured rate is NULL-and-loud, never a constant", async () => {
     // A Codex subscription credential genuinely draws down credits, but the loop is
     // given NO creditUsdRate (no config). Real spend must be recorded as unknown

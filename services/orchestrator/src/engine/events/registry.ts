@@ -32,6 +32,7 @@ import {
   CostCeilingUnreachablePayload,
   CostCreditRateUnknownPayload,
   CostFailedPayload,
+  CostManagedMeteringSkippedPayload,
   CostNotionalUnpricedPayload,
   CostOverageUnobservablePayload,
   CostProviderCaptureFailedPayload,
@@ -174,8 +175,7 @@ export const EventRegistry = {
   "task.completed": TaskCompletedPayload,
   "task.failed": TaskFailedPayload,
 
-  // queue hardening: a job whose retry budget is exhausted is
-  // dead-lettered (terminal) rather than retried forever.
+  // queue hardening: a job whose retry budget is exhausted is dead-lettered (terminal).
   "job.dead_lettered": JobDeadLetteredPayload,
 
   // Planner role (single-pass + subtask emission)
@@ -243,9 +243,10 @@ export const EventRegistry = {
   "cost.failed": CostFailedPayload,
   "cost.unattributed": CostUnattributedPayload,
   "cost.ceiling_unreachable": CostCeilingUnreachablePayload,
-  // cost PR-C: credit-rate-unknown + overage-unobservable (NULL real spend, loud).
+  // cost PR-C: credit-rate-unknown + overage-unobservable + BYOK managed-metering-skipped (NULL real spend, loud).
   "cost.credit_rate_unknown": CostCreditRateUnknownPayload,
   "cost.overage_unobservable": CostOverageUnobservablePayload,
+  "cost.managed_metering_skipped": CostManagedMeteringSkippedPayload,
   // silent-fallback hardening (loud discriminated cost failures).
   "cost.provider_capture_failed": CostProviderCaptureFailedPayload,
   "cost.notional_unpriced": CostNotionalUnpricedPayload,
@@ -255,8 +256,7 @@ export const EventRegistry = {
   "usage.window.observed": UsageWindowObservedPayload,
   "usage.window.pressure": UsageWindowPressurePayload,
   "usage.accounting.observed": UsageAccountingObservedPayload,
-  // silent-fallback hardening: a usage READ failed (loud, never empty), and a real
-  // CLI call recorded its cost with no token telemetry (mandatory accounting, loud).
+  // silent-fallback hardening: a usage READ failed (loud, never empty), and a real CLI call recorded its cost with no token telemetry (mandatory accounting, loud).
   "usage.read_failed": UsageReadFailedPayload,
   "usage.token_accounting_failed": UsageTokenAccountingFailedPayload,
 

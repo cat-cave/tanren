@@ -91,6 +91,17 @@ export class GithubAppTokenMinter {
   }
 
   private async mintUncached(request: GithubInstallationTokenRequest): Promise<MintedInstallationToken> {
+    // An App installation block ALWAYS carries a non-empty `credentialRef` (the
+    // org-config schema enforces `min(1)`). Guard it here with a CLEAR message so a
+    // misconfigured/hand-edited installation fails with "App credential ref is
+    // required" rather than the cryptic generic `credential ref has an invalid
+    // format: ""` from the grammar validator deep in loadGithubAppCredential
+    // (honoring no_silent_fallbacks: a genuinely-missing required ref is loud + named).
+    if (request.credentialRef.trim() === "") {
+      throw new Error(
+        `GitHub App installation ${JSON.stringify(request.installationId)} has no App credential ref configured — cannot mint an installation token`,
+      );
+    }
     const credential = await loadGithubAppCredential(this.secrets, request.credentialRef);
     const jwt = signAppJwt(credential.appId, credential.privateKeyPem, Math.floor(this.now() / 1000));
     const response = await this.fetchImpl(

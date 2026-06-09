@@ -21,7 +21,7 @@ import type { UsageProbe } from "../usage/index.js";
 import { defaultUsageProbe } from "./plannerRunUsage.js";
 // Re-exported so plannerRun.ts keeps a single import surface for the run's
 // adapter/usage builders (the managed capturer lives in plannerRunUsage).
-export { buildManagedCapturerForRun } from "./plannerRunUsage.js";
+export { resolveManagedCapturer } from "./plannerRunUsage.js";
 import { PgBudgetGate } from "../dag/budgetGate.js";
 import { runBudgetCeilingPreflight } from "./budgetPreflight.js";
 import type { GateOutcome } from "./gate/index.js";

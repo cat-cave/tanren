@@ -53,6 +53,12 @@ export const costSensitivityRules: SensitivityRule[] = [
     ["authoritativeSource", "public"],
     ["reason", "public"],
   ]),
+  // cost.managed_metering_skipped (BYOK posture) — providerMode is a fixed enum,
+  // reason is a fixed diagnosis string; no secret value. All public.
+  ...rulesFor("cost.managed_metering_skipped", [
+    ["providerMode", "public"],
+    ["reason", "public"],
+  ]),
   // cost.provider_capture_failed (silent-fallback hardening) — generationId is an
   // opaque OpenRouter id, detail is a bounded secret-free diagnostic tail, reason
   // is a fixed diagnosis. No secret value; all public operational telemetry.

@@ -8,7 +8,7 @@ import { z } from "zod";
 import { installationFromOrgConfig, type OrgGithubAppInstallation } from "../../config/orgConfig.js";
 import { migrateProjectConfig } from "../../config/projectConfig.js";
 import type { GovernancePosture, MergeIntegration, ReviewPolicy } from "../../config/shared.js";
-import { validateGithubCredentialRef } from "../../credentials/githubToken.js";
+import { normalizeStaticGithubRef, validateGithubCredentialRef } from "../../credentials/githubToken.js";
 
 export type RunStateClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
@@ -185,7 +185,10 @@ function credentialRefFromConfig(config: unknown): string | undefined {
       ? (record["credentials"] as Record<string, unknown>)
       : {};
   const ref = credentials["githubCredentialRef"] ?? record["githubCredentialRef"];
-  return typeof ref === "string" ? validateGithubCredentialRef(ref) : undefined;
+  // App-FIRST: an EMPTY-STRING ref (the App sentinel) or whitespace collapses to
+  // "no static ref" → mint the App token, never `validateGithubCredentialRef("")`
+  // (the apex v30 empty-ref crash). A non-empty ref is grammar-validated as before.
+  return normalizeStaticGithubRef(typeof ref === "string" ? ref : undefined);
 }
 
 // Typed row decode (no raw `as` cast — the architecture check forbids those in
