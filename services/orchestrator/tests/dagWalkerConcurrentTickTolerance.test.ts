@@ -23,7 +23,7 @@
 // OTHER ready specs in the same tick (no tick abort), while any OTHER error from
 // the enqueuer still propagates loudly (no silent fallback).
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { EventEmittingDagWalker } from "../src/engine/dag/walker.js";
 import type { DagEventEmitter } from "../src/engine/dag/walkerPg.js";
 import { SpecDependenciesBlockedError, SpecNotRunnableError } from "../src/engine/workflow/projectSpecErrors.js";
@@ -214,8 +214,13 @@ describe("DagWalker benign-skip tolerance — a typed benign per-spec error is a
     },
   );
 
-  it("still propagates a GENUINE enqueuer error loudly (no silent fallback for real failures)", async () => {
-    const { emitter } = recordingEvents();
+  it("a GENUINE enqueuer error on ONE spec is logged LOUD + skipped (per-spec tolerance, audit §3.13b)", async () => {
+    // PER-SPEC TOLERANCE (§3.13b): the walk must NOT abort on a poisoned spec — a genuine
+    // (non-benign) error on one spec is surfaced loudly (console.error) and skipped THIS
+    // tick, never thrown out of `walk` to abort the whole tick and starve every spec
+    // after it. (With a SINGLE ready spec there is nothing else to enqueue → drained.)
+    const { emitter, emitted } = recordingEvents();
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const enqueuer: DagEnqueuer = {
       async enqueueSpecRun(): Promise<{ runId: string }> {
         throw new Error("control plane unreachable (genuine infra fault)");
@@ -223,7 +228,47 @@ describe("DagWalker benign-skip tolerance — a typed benign per-spec error is a
     };
     const walker = buildWalker(enqueuer, emitter);
 
-    // A real failure is NOT swallowed — it bubbles out of the walk.
-    await expect(walker.walk(PROJECT)).rejects.toThrow(/control plane unreachable/u);
+    // The walk completes (no throw) — the poisoned spec is isolated, not a tick abort.
+    const result = await walker.walk(PROJECT);
+    expect(result.enqueuedSpecIds).toEqual([]);
+    expect(emitted).toContain("dag.drained");
+    // The genuine failure was surfaced LOUD (not silently swallowed).
+    expect(errorSpy).toHaveBeenCalled();
+    expect(errorSpy.mock.calls.flat().join(" ")).toContain("control plane unreachable");
+    errorSpy.mockRestore();
+  });
+
+  it("a GENUINE error on ONE poisoned spec STILL enqueues the OTHER ready spec (no starvation, audit §3.13b)", async () => {
+    // The crux of §3.13b: a poisoned spec (e.g. the speculative integrator throwing) must
+    // NOT starve the OTHER ready specs ordered after it in the same tick.
+    const { emitter, emitted } = recordingEvents();
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const enqueuedSpecs: string[] = [];
+    const enqueuer: DagEnqueuer = {
+      async enqueueSpecRun(input: { specId: string }): Promise<{ runId: string }> {
+        if (input.specId === SPEC) throw new Error("speculative integrator blew up");
+        enqueuedSpecs.push(input.specId);
+        return { runId: `run_${input.specId}` };
+      },
+    };
+    const walker = new EventEmittingDagWalker({
+      readModel: twoReadySpecsReadModel(),
+      lifecycleReadModel: twoReadySpecsLifecycle(),
+      enqueuer,
+      events: emitter,
+      integrator: neverIntegrator,
+      speculationConfig: async () => ({ threshold: "conservative", depthCap: 2 }),
+      budgetGate: noBudgetGate,
+      concurrency: () => 4,
+    });
+
+    const result = await walker.walk(PROJECT);
+
+    // The poisoned spec was skipped (logged loud), but the OTHER ready spec enqueued.
+    expect(enqueuedSpecs).toEqual([OTHER_SPEC]);
+    expect(result.enqueuedSpecIds).toEqual([OTHER_SPEC]);
+    expect(emitted).toContain("dag.spec.enqueued");
+    expect(errorSpy).toHaveBeenCalled();
+    errorSpy.mockRestore();
   });
 });

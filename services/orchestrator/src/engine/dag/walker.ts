@@ -157,14 +157,23 @@ export class EventEmittingDagWalker implements DagWalker {
       // already enqueued — the true headroom each spec scheduled into.
       let inFlightBefore = plan.inFlightCount;
       for (const enqueue of plan.enqueues) {
-        const enqueued = await this.enqueueOne(
-          projectId,
-          enqueue,
-          config.threshold,
-          inFlightBefore,
-          ceiling,
-          depsBySpec,
-        );
+        // PER-SPEC TOLERANCE (audit §3.13b): isolate each ready spec's enqueue so ONE
+        // poisoned spec (e.g. the speculative integrator throwing while building its
+        // integration branch) cannot abort the WHOLE tick and starve every spec ordered
+        // after it. A genuine (non-benign) failure on one spec is logged LOUD and skipped
+        // THIS tick — the OTHER ready specs still enqueue, and the next walk re-attempts
+        // the failed one. (The two benign typed conditions are still swallowed quietly
+        // inside `enqueueOrTolerate`; this catch is the backstop for everything else.)
+        let enqueued: { runId: string } | undefined;
+        try {
+          enqueued = await this.enqueueOne(projectId, enqueue, config.threshold, inFlightBefore, ceiling, depsBySpec);
+        } catch (error) {
+          console.error(
+            `[dag-walker] enqueue of ready spec ${enqueue.specId} threw — skipping it this tick so the other ready specs are not starved; the next walk re-attempts it:`,
+            error,
+          );
+          continue;
+        }
         if (enqueued === undefined) {
           // The spec was NOT enqueued this tick, for one of two benign reasons:
           //   - a speculative integration surfaced an ancestor-vs-ancestor conflict

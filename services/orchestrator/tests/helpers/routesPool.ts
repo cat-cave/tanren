@@ -66,6 +66,8 @@ export class RoutesPool {
    * figure for a per-token row, where real == notional).
    */
   readonly costRecords: Array<{ project_id: string; cost_usd: number; notional_cost_usd: number }> = [];
+  /** Captured NOTIFY statements (channel + payload) so a test can assert a re-walk wake. */
+  readonly notifies: Array<{ channel: string; payload: string }> = [];
 
   seedCostRecord(projectId: string, costUsd: number, notionalCostUsd: number = costUsd): void {
     this.costRecords.push({ project_id: projectId, cost_usd: costUsd, notional_cost_usd: notionalCostUsd });
@@ -132,6 +134,13 @@ export class RoutesPool {
   async query(sql: string, params: unknown[] = []): Promise<QueryResult> {
     const trimmed = sql.trim();
     if (["BEGIN", "COMMIT", "ROLLBACK"].includes(trimmed)) {
+      return { rows: [], rowCount: 0 };
+    }
+    // NOTIFY <channel>[, '<payload>'] — capture the re-walk wake (audit §3.7e) so a test
+    // can assert raising a paused project's ceiling fires a `tanren_dag` notification.
+    const notify = /^NOTIFY\s+(\w+)(?:\s*,\s*'([^']*)')?/u.exec(trimmed);
+    if (notify !== null) {
+      this.notifies.push({ channel: notify[1]!, payload: notify[2] ?? "" });
       return { rows: [], rowCount: 0 };
     }
 
