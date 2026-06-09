@@ -43,16 +43,41 @@ export function buildDeployAdapter(kind: string, deps: BuildDeployAdapterDeps): 
 }
 
 /**
+ * The default URL smoke-probe timeout (ms). Bounds the verify smoke check so a deploy
+ * URL that hangs (a half-up server that accepts the connection but never responds)
+ * aborts LOUD rather than wedging the verify poll indefinitely.
+ */
+export const DEFAULT_SMOKE_PROBE_TIMEOUT_MS = 15_000;
+
+/**
  * The production URL smoke probe: a real `fetch` GET that resolves to the observed
  * HTTP status (a transport-level failure — DNS/connection — propagates as a throw,
- * which verify treats as not-reachable). No secret material is involved; the URL is
- * the resolved public preview/deploy URL.
+ * which verify treats as not-reachable). The request is bounded by
+ * {@link DEFAULT_SMOKE_PROBE_TIMEOUT_MS} via an AbortSignal so a hung URL aborts rather
+ * than hanging. No secret material is involved; the URL is the resolved public
+ * preview/deploy URL.
  */
-export function fetchUrlReachabilityProbe(fetchImpl: typeof fetch = fetch): UrlReachabilityProbe {
+export function fetchUrlReachabilityProbe(
+  fetchImpl: typeof fetch = fetch,
+  timeoutMs: number = DEFAULT_SMOKE_PROBE_TIMEOUT_MS,
+): UrlReachabilityProbe {
   return {
     async probe(url: string): Promise<number> {
-      const response = await fetchImpl(url, { method: "GET", redirect: "manual" });
-      return response.status;
+      const controller = new AbortController();
+      const timer = setTimeout(() => {
+        controller.abort();
+      }, timeoutMs);
+      try {
+        const response = await fetchImpl(url, { method: "GET", redirect: "manual", signal: controller.signal });
+        return response.status;
+      } catch (error) {
+        if (controller.signal.aborted) {
+          throw new Error(`deploy smoke probe: GET '${url}' timed out after ${String(timeoutMs)}ms`, { cause: error });
+        }
+        throw error;
+      } finally {
+        clearTimeout(timer);
+      }
     },
   };
 }

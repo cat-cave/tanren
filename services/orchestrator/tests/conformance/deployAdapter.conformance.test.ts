@@ -5,7 +5,7 @@
 // budget exhaustion, or an unreachable URL. Driven entirely over the scripted in-
 // memory deploy transport + a scripted URL probe — NO live Vercel/Fly/network calls.
 
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { InMemorySecretStore } from "../../src/engine/contracts/secretStore.js";
 import type { OrgGrant, ProjectContext } from "../../src/engine/contracts/integrationProvisioner.js";
 import type { DeployRef } from "../../src/engine/contracts/deployAdapter.js";
@@ -36,6 +36,19 @@ const flyGrant: OrgGrant = {
 };
 
 const ctx = (name: string): ProjectContext => ({ projectId: `proj_${name}`, orgId: "org_1", stack: "node", name });
+
+// The Fly arm is NOT merge-reflecting and refuses to trigger unless the operator opts
+// into the static-image semantics. These conformance tests exercise the adapter wiring
+// (not the merge-reflecting property), so opt in for the file's duration.
+let priorFlyOptIn: string | undefined;
+beforeAll(() => {
+  priorFlyOptIn = process.env["TANREN_ALLOW_FLY_STATIC_DEPLOY"];
+  process.env["TANREN_ALLOW_FLY_STATIC_DEPLOY"] = "1";
+});
+afterAll(() => {
+  if (priorFlyOptIn === undefined) delete process.env["TANREN_ALLOW_FLY_STATIC_DEPLOY"];
+  else process.env["TANREN_ALLOW_FLY_STATIC_DEPLOY"] = priorFlyOptIn;
+});
 
 function adapter(transport: ScriptedDeployTransport, urlStatus = 200, maxPolls = 10) {
   const probe = scriptedUrlProbe(urlStatus);
@@ -75,10 +88,17 @@ describe("DirectApiDeployAdapter — delegation", () => {
     const { instance } = adapter(transport);
     const artifact = await instance.provisionOrBind(vercelGrant, ctx("acme-web"), { mode: "provision" });
     const ref: DeployRef = { provider: "deploy.vercel", appId: artifact.deployRef!.appId };
-    const result = await instance.deploy(vercelGrant, ref, { repo: "acme/acme-web", ref: "main" });
+    const result = await instance.deploy(vercelGrant, ref, { repo: "acme/acme-web", ref: "deadbeef" });
     const triggered = transport.deploysTriggered();
     expect(triggered).toHaveLength(1);
-    expect(triggered[0]!.body["gitSource"]).toEqual({ type: "github", repo: "acme/acme-web", ref: "main" });
+    // The REAL v13 github gitSource shape: org (owner) + bare repo + the commit in sha.
+    expect(triggered[0]!.body["gitSource"]).toEqual({
+      type: "github",
+      org: "acme",
+      repo: "acme-web",
+      ref: "deadbeef",
+      sha: "deadbeef",
+    });
     expect(result.url).toMatch(/^https:\/\//u);
   });
 
@@ -172,6 +192,26 @@ describe("DirectApiDeployAdapter — verify (proven deploy)", () => {
     expect(verification.state).toBe("started");
     expect(verification.url).toBe("https://acme-web.fly.dev");
     expect(probe.probed).toEqual(["https://acme-web.fly.dev"]);
+  });
+
+  it("treats a 401 (deployment protection) as REACHABLE, not an unhealthy deploy", async () => {
+    // Vercel Deployment Protection fronts a HEALTHY, running deployment with an auth
+    // gate — the 401 PROVES the server is up. Verify must NOT fail-verify on it.
+    const transport = scriptedDeployTransport("vercel");
+    const { instance } = adapter(transport, 401);
+    const { ref, deploymentId } = await provisionAndDeploy(transport, instance, vercelGrant, "acme-web");
+    transport.scriptDeploymentStates(deploymentId, ["READY"]);
+    const verification = await instance.verify(vercelGrant, ref, deploymentId);
+    expect(verification.ready).toBe(true);
+    expect(verification.smokeStatus).toBe(401);
+  });
+
+  it("still fails LOUD on a non-protection error status (e.g. 500)", async () => {
+    const transport = scriptedDeployTransport("vercel");
+    const { instance } = adapter(transport, 500);
+    const { ref, deploymentId } = await provisionAndDeploy(transport, instance, vercelGrant, "acme-web");
+    transport.scriptDeploymentStates(deploymentId, ["READY"]);
+    await expect(instance.verify(vercelGrant, ref, deploymentId)).rejects.toThrow(/not reachable .*HTTP 500/u);
   });
 
   it("the deploy token VALUE is never returned in a verification result", async () => {

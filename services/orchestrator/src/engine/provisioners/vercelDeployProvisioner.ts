@@ -20,9 +20,10 @@
 // We capture that with a `{branch}` placeholder (the same token the dashboard
 // substitutes) — NOT a `*` wildcard, which the dashboard could not resolve.
 //
-// Deploy trigger: `triggerDeploy` POSTs `/v13/deployments` with a `gitSource`
-// pointing at the merged repo + ref, so Vercel pulls the merged commit and builds
-// + releases it. It returns the live deployment id + the resolved deployment URL.
+// Deploy trigger: `triggerDeploy` POSTs `/v13/deployments` with a `gitSource` in the
+// v13 github variant (`{ type:"github", org, repo, ref, sha }` — org=owner, repo=bare
+// name, sha=the merged commit), so Vercel pulls the merged commit and builds + releases
+// it. It returns the live deployment id + the resolved deployment URL.
 
 import type { OrgGrant, ProjectContext } from "../contracts/integrationProvisioner.js";
 import {
@@ -46,7 +47,18 @@ interface VercelProject {
 
 interface VercelProjectsListResponse {
   projects?: VercelProject[];
+  /**
+   * Continuation-token pagination: `next` is the token to pass as the `from` query
+   * param to fetch the next page (null/absent when the list is exhausted). Without
+   * following this, a team with more projects than one page returns would HIDE the
+   * target app behind the page boundary → a spurious "unknown app" deploy failure.
+   */
+  pagination?: { next?: number | string | null };
 }
+
+// A hard cap on the project-list pages followed, so a pathological pagination loop
+// (a provider that never returns a null `next`) fails LOUD rather than spinning forever.
+const VERCEL_MAX_PROJECT_PAGES = 100;
 
 /** Read the Vercel team id (if any) from the org grant metadata. */
 function teamId(grant: OrgGrant): string | undefined {
@@ -72,6 +84,22 @@ function previewUrlPattern(grant: OrgGrant, projectName: string): string {
   return `https://${projectName}-git-{branch}${suffix}.vercel.app`;
 }
 
+/**
+ * Split a `owner/name` repo slug into the Vercel gitSource `org` (owner) + `repo`
+ * (bare name). The v13 github gitSource variant requires the owner and the bare
+ * repo name as SEPARATE fields — passing the full `owner/name` as `repo` is the
+ * shape Vercel rejects. A slug without exactly one `/` is a wiring bug — fail LOUD.
+ */
+function splitRepoSlug(slug: string): { org: string; name: string } {
+  const parts = slug.split("/");
+  const org = parts[0];
+  const name = parts[1];
+  if (parts.length !== 2 || org === undefined || org === "" || name === undefined || name === "") {
+    throw new Error(`vercel deploy: repo slug '${slug}' is not a valid 'owner/name' (cannot build the gitSource)`);
+  }
+  return { org, name };
+}
+
 /** Append `teamId=` when the grant carries a team id (joined with `&` if the path already has a query). */
 function scoped(grant: OrgGrant, path: string): string {
   const team = teamId(grant);
@@ -89,20 +117,39 @@ class VercelDeployApi implements DeployProviderApi {
   constructor(private readonly transport: DeployProvisionerDeps["transport"]) {}
 
   async listApps(grant: OrgGrant, token: string): Promise<DeployApp[]> {
-    const response = await this.transport.request({
-      method: "GET",
-      url: scoped(grant, "/v9/projects"),
-      headers: { authorization: `Bearer ${token}` },
-    });
-    if (!response.ok) {
-      throw new Error(`vercel list projects failed: ${response.status} ${response.text}`);
+    // PAGINATED: follow `pagination.next` (passed back as the `from` query token) across
+    // every page so a team with more projects than one page returns is fully listed —
+    // an unpaginated single page would HIDE the target app and yield a spurious "unknown
+    // app" deploy failure. Bounded by VERCEL_MAX_PROJECT_PAGES (fail LOUD, never spin).
+    const apps: DeployApp[] = [];
+    let from: string | undefined;
+    for (let page = 0; page < VERCEL_MAX_PROJECT_PAGES; page++) {
+      const path = from === undefined ? "/v9/projects" : `/v9/projects?from=${encodeURIComponent(from)}`;
+      const response = await this.transport.request({
+        method: "GET",
+        url: scoped(grant, path),
+        headers: { authorization: `Bearer ${token}` },
+      });
+      if (!response.ok) {
+        throw new Error(`vercel list projects failed: ${response.status} ${response.text}`);
+      }
+      const body = (response.json ?? {}) as VercelProjectsListResponse;
+      for (const project of body.projects ?? []) {
+        apps.push({
+          appId: project.id,
+          name: project.name,
+          previewUrlPattern: previewUrlPattern(grant, project.name),
+        });
+      }
+      const next = body.pagination?.next;
+      if (next === undefined || next === null || next === "") {
+        return apps;
+      }
+      from = String(next);
     }
-    const body = (response.json ?? {}) as VercelProjectsListResponse;
-    return (body.projects ?? []).map((project) => ({
-      appId: project.id,
-      name: project.name,
-      previewUrlPattern: previewUrlPattern(grant, project.name),
-    }));
+    throw new Error(
+      `vercel list projects: exceeded ${String(VERCEL_MAX_PROJECT_PAGES)} pages (pagination did not terminate)`,
+    );
   }
 
   async createApp(grant: OrgGrant, token: string, name: string, _projectCtx: ProjectContext): Promise<DeployApp> {
@@ -147,10 +194,19 @@ class VercelDeployApi implements DeployProviderApi {
   }
 
   async triggerDeploy(grant: OrgGrant, token: string, app: DeployApp, source: DeploySource): Promise<DeployResult> {
-    // POST /v13/deployments with a `gitSource` so Vercel pulls the MERGED commit
-    // (the repo + ref) and builds + releases it. `name` ties the deployment to the
-    // existing project; `target: production` releases it as the live deploy. Vercel
-    // returns the deployment id + the resolved deployment URL.
+    // POST /v13/deployments with a `gitSource` so Vercel pulls the MERGED commit and
+    // builds + releases it. `name` ties the deployment to the existing project;
+    // `target: production` releases it as the live deploy. Vercel returns the
+    // deployment id + the resolved deployment URL.
+    //
+    // gitSource shape (v13 github variant, per the live REST reference): the github
+    // variant is `{ type:"github", org, repo, ref, sha }` — `org` is the repo OWNER,
+    // `repo` is the BARE repo name (NOT `owner/name`), `ref` the branch/ref, and the
+    // COMMIT goes in `sha`. The merged source's `repo` is the `owner/name` slug, so we
+    // split it into `org`/`repo`. The merged commit SHA pins the exact build: it is set
+    // as `sha` AND as `ref` (Vercel accepts a SHA as a ref; the run's PR branch is
+    // squash-deleted, so the SHA is the only durable handle to the merged commit).
+    const { org, name: repoName } = splitRepoSlug(source.repo);
     const response = await this.transport.request({
       method: "POST",
       url: scoped(grant, "/v13/deployments"),
@@ -159,7 +215,7 @@ class VercelDeployApi implements DeployProviderApi {
         name: app.name,
         project: app.appId,
         target: "production",
-        gitSource: { type: "github", repo: source.repo, ref: source.ref },
+        gitSource: { type: "github", org, repo: repoName, ref: source.ref, sha: source.ref },
       },
     });
     if (!response.ok) {

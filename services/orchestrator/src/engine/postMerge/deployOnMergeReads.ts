@@ -73,6 +73,33 @@ export async function appendDeployFailed(
 }
 
 /**
+ * Append the DURABLE `deploy.skipped` for a PRE-resolution skip (incomplete deploy
+ * config / a missing mergeSha) under the org scope — so the operator + run timeline SEE
+ * the skip instead of a console-only log line. The `reason` is a fixed code; `detail` is
+ * a bounded, non-secret string (the resolution reason / wiring detail). Emitted BEFORE
+ * the watcher fails loud (config_incomplete / merge_sha_missing both still throw).
+ */
+export async function appendDeploySkipped(
+  ctx: Pick<DeployVerifyContext, "eventStore">,
+  args: {
+    runId: string;
+    projectId: string;
+    orgId: string;
+    reason: "config_incomplete" | "merge_sha_missing";
+    detail: string;
+  },
+): Promise<void> {
+  await runWithJobOrgId(args.orgId, async () => {
+    await ctx.eventStore.append({
+      runId: args.runId,
+      projectId: args.projectId,
+      eventType: "deploy.skipped",
+      payload: { projectId: args.projectId, reason: args.reason, detail: args.detail },
+    });
+  });
+}
+
+/**
  * Verify the just-triggered deploy is live, then record `deploy.verified`. Builds the
  * `direct_api` DeployAdapter, polls to READY + smoke-checks the resolved URL (LOUD throw
  * on failure / never-ready / unreachable), and appends the non-secret proof under the

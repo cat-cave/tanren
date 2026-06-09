@@ -61,6 +61,7 @@ export const eventTypeNames = [
   "demoRun.started",
   "demoRun.verdict",
   "deploy.failed",
+  "deploy.skipped",
   "deploy.triggered",
   "deploy.verified",
   "gate.advisory_failed",
