@@ -23,6 +23,12 @@ export interface AuthRoutesOptions {
   publicBaseUrl: string;
   /** Set Secure on cookies (prod). */
   cookieSecure?: boolean;
+  /**
+   * CANONICAL GitHub App install URL (TANREN_GITHUB_APP_INSTALL_URL). Echoed on
+   * `/auth/providers` so the dashboard reads the install URL FROM the orchestrator
+   * rather than carrying its own env copy — one source of truth for the name.
+   */
+  githubAppInstallUrl?: string;
 }
 
 const loginQuerySchema = z.object({
@@ -52,6 +58,9 @@ export function createAuthRoutes(options: AuthRoutesOptions) {
   app.get("/providers", (c) => {
     return c.json({
       providers: [...options.providers.keys()].map((id) => ({ id })),
+      // The canonical GitHub App install URL (when configured) — the dashboard
+      // reads it from here instead of its own env. Omitted when unconfigured.
+      ...(options.githubAppInstallUrl !== undefined && { githubAppInstallUrl: options.githubAppInstallUrl }),
     });
   });
 

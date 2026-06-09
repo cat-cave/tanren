@@ -43,7 +43,7 @@ async function loadCommands(): Promise<CommandModules> {
 
 async function withStub(responseBody: unknown): Promise<CommandModules> {
   server = await startStubServer(responseBody);
-  process.env.TANREN_ORCHESTRATOR_URL = server.url;
+  process.env.TANREN_PUBLIC_BASE_URL = server.url;
   // Isolate from any developer auth file so no bearer header leaks in.
   process.env.TANREN_AUTH_FILE = "/nonexistent/tanren-product-cli-auth.json";
   return loadCommands();
@@ -51,7 +51,7 @@ async function withStub(responseBody: unknown): Promise<CommandModules> {
 
 afterEach(async () => {
   await server?.close();
-  delete process.env.TANREN_ORCHESTRATOR_URL;
+  delete process.env.TANREN_PUBLIC_BASE_URL;
   delete process.env.TANREN_AUTH_FILE;
 });
 

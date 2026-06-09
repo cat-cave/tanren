@@ -54,6 +54,23 @@ export class OrchestratorClient extends OrchestratorOrgConfigClient {
     return (await response.json()) as DashboardSession;
   }
 
+  /**
+   * The orchestrator's configured identity providers + the canonical GitHub App
+   * install URL (`/auth/providers`). The dashboard reads the install URL FROM the
+   * orchestrator (one source of truth) rather than its own env. `undefined` when
+   * the orchestrator is unreachable or has not configured the App.
+   */
+  async authGithubAppInstallUrl(): Promise<string | undefined> {
+    const response = await this.fetchImpl(`${this.orchestratorUrl}/auth/providers`, {
+      headers: this.headers(),
+    }).catch(() => {});
+    if (response === undefined || !response.ok) {
+      return undefined;
+    }
+    const json = (await response.json()) as { githubAppInstallUrl?: string };
+    return json.githubAppInstallUrl;
+  }
+
   /** Orgs the operator is a member of. Empty array when unauthenticated. */
   async listOrgs(): Promise<OrgSummary[]> {
     const response = await this.fetchImpl(`${this.orchestratorUrl}/orgs`, {

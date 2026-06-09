@@ -14,6 +14,7 @@ import {
   IdentityStore,
   type IdentityProvider,
 } from "./auth/index.js";
+import { parseOrchestratorEnv } from "./envSchema.js";
 
 export interface BuildAppAuthOptions {
   store: IdentityStore;
@@ -23,15 +24,24 @@ export interface BuildAppAuthOptions {
   platformAdminUserIds?: ReadonlySet<string>;
   /** When set, requests without a session/token resolve to this actor. Used in tests/dev. */
   localDevActor?: ActorContext;
+  /**
+   * CANONICAL GitHub App install URL (TANREN_GITHUB_APP_INSTALL_URL). Surfaced on
+   * `/auth/providers` so the dashboard reads it from the orchestrator rather than
+   * carrying its own env copy.
+   */
+  githubAppInstallUrl?: string;
 }
 
-export function buildAuthFromEnv(
-  pool: pg.Pool,
-  port: number = Number(process.env["ORCHESTRATOR_PORT"] ?? 3100),
-): BuildAppAuthOptions | undefined {
-  const clientId = process.env["TANREN_GITHUB_OAUTH_CLIENT_ID"];
-  const clientSecret = process.env["TANREN_GITHUB_OAUTH_CLIENT_SECRET"];
-  const publicBaseUrl = process.env["TANREN_PUBLIC_BASE_URL"] ?? `http://localhost:${port}`;
+export function buildAuthFromEnv(pool: pg.Pool, port?: number): BuildAppAuthOptions | undefined {
+  // Re-parse the env FRESH at call time (still Zod-validated, still fail-loud) so
+  // a caller that adjusted process.env — boot, tests, dev — sees the current
+  // values. The module-level `parsedEnv` constant asserts validity at boot for the
+  // top-level reads in main.ts; this assembly point reflects the live env.
+  const env = parseOrchestratorEnv();
+  const resolvedPort = port ?? env.ORCHESTRATOR_PORT;
+  const clientId = env.TANREN_GITHUB_OAUTH_CLIENT_ID;
+  const clientSecret = env.TANREN_GITHUB_OAUTH_CLIENT_SECRET;
+  const publicBaseUrl = env.TANREN_PUBLIC_BASE_URL ?? `http://localhost:${resolvedPort}`;
   const providers = new Map<IdentityProviderId, IdentityProvider>();
   if (clientId !== undefined && clientId !== "" && clientSecret !== undefined && clientSecret !== "") {
     providers.set("github_oauth", new GitHubOAuthProvider({ clientId, clientSecret }));
@@ -50,8 +60,8 @@ export function buildAuthFromEnv(
   // without a registered GitHub OAuth app. Defaults off → byte-for-byte
   // unchanged behavior. Refused (with a loud warning, flag ignored) under a
   // prod-like cookie-secure context as a defense-in-depth guard.
-  if (process.env["TANREN_DEV_LOGIN"] === "1") {
-    if (process.env["TANREN_COOKIE_SECURE"] === "1") {
+  if (env.TANREN_DEV_LOGIN === "1") {
+    if (env.TANREN_COOKIE_SECURE === "1") {
       console.warn(
         "[auth] TANREN_DEV_LOGIN=1 ignored: refusing dev-login escape hatch under TANREN_COOKIE_SECURE=1 (prod-like context)",
       );
@@ -66,6 +76,9 @@ export function buildAuthFromEnv(
     store: new IdentityStore(pool),
     providers,
     publicBaseUrl,
-    cookieSecure: process.env["TANREN_COOKIE_SECURE"] === "1",
+    cookieSecure: env.TANREN_COOKIE_SECURE === "1",
+    ...(env.TANREN_GITHUB_APP_INSTALL_URL !== undefined && {
+      githubAppInstallUrl: env.TANREN_GITHUB_APP_INSTALL_URL,
+    }),
   };
 }

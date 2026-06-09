@@ -5,7 +5,7 @@
 // budget exhaustion, or an unreachable URL. Driven entirely over the scripted in-
 // memory deploy transport + a scripted URL probe — NO live Vercel/Fly/network calls.
 
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { InMemorySecretStore } from "../../src/engine/contracts/secretStore.js";
 import type { OrgGrant, ProjectContext } from "../../src/engine/contracts/integrationProvisioner.js";
 import type { DeployRef } from "../../src/engine/contracts/deployAdapter.js";
@@ -39,21 +39,11 @@ const ctx = (name: string): ProjectContext => ({ projectId: `proj_${name}`, orgI
 
 // The Fly arm is NOT merge-reflecting and refuses to trigger unless the operator opts
 // into the static-image semantics. These conformance tests exercise the adapter wiring
-// (not the merge-reflecting property), so opt in for the file's duration.
-let priorFlyOptIn: string | undefined;
-beforeAll(() => {
-  priorFlyOptIn = process.env["TANREN_ALLOW_FLY_STATIC_DEPLOY"];
-  process.env["TANREN_ALLOW_FLY_STATIC_DEPLOY"] = "1";
-});
-afterAll(() => {
-  if (priorFlyOptIn === undefined) delete process.env["TANREN_ALLOW_FLY_STATIC_DEPLOY"];
-  else process.env["TANREN_ALLOW_FLY_STATIC_DEPLOY"] = priorFlyOptIn;
-});
-
+// (not the merge-reflecting property), so opt in via the injected provisioner deps.
 function adapter(transport: ScriptedDeployTransport, urlStatus = 200, maxPolls = 10) {
   const probe = scriptedUrlProbe(urlStatus);
   const instance = new DirectApiDeployAdapter({
-    provisioner: { transport, secrets: secrets() },
+    provisioner: { transport, secrets: secrets(), allowFlyStaticDeploy: true },
     urlProbe: probe,
     poll: instantVerifyPollPolicy(maxPolls),
   });
