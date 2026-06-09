@@ -25,6 +25,7 @@ import {
   TaskTimelineEntry,
 } from "./contract.js";
 import type { ProjectFeedItem as ProjectFeedItemType, RunDetail } from "./contract.js";
+import { RawCostRowSchema, RawEventRowSchema, RawRunSummaryRowSchema, RawTaskRowSchema } from "./rowSchemas.js";
 
 // RLS R1: loaders accept the pool OR an org-scoped client (both expose `.query`).
 type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
@@ -42,6 +43,9 @@ interface RawRunRow {
 }
 
 function decodeRunSummary(raw: RawRunRow): RunSummary {
+  // Decode the timestamp columns at the boundary: a real Date (or a parse throw
+  // on a malformed row), never a laundered `as Date`.
+  const ts = RawRunSummaryRowSchema.parse(raw);
   return RunSummary.parse({
     runId: String(raw.run_id),
     specId: String(raw.spec_id),
@@ -50,8 +54,8 @@ function decodeRunSummary(raw: RawRunRow): RunSummary {
     branch: String(raw.branch),
     status: RunStatus.parse(raw.status),
     outcome: raw.outcome === null || raw.outcome === undefined ? null : RunOutcome.parse(raw.outcome),
-    startedAt: raw.started_at as Date,
-    endedAt: raw.ended_at === null || raw.ended_at === undefined ? null : (raw.ended_at as Date),
+    startedAt: ts.started_at,
+    endedAt: ts.ended_at,
     prUrl: raw.pr_url === null || raw.pr_url === undefined ? null : String(raw.pr_url),
   });
 }
@@ -71,8 +75,10 @@ export async function fetchRunSummary(
 
 export async function fetchRunTasks(pool: QueryClient, runId: string, orgId: string): Promise<TaskTimelineEntry[]> {
   const rows = await TaskStore.selectTimeline(pool, runId, orgId, systemActor);
-  return rows.map((row) =>
-    TaskTimelineEntry.parse({
+  return rows.map((row) => {
+    // Decode the (nullable) task timestamps at the boundary into real Dates.
+    const ts = RawTaskRowSchema.parse(row);
+    return TaskTimelineEntry.parse({
       taskId: String(row["task_id"]),
       runId: String(row["run_id"]),
       kind: TaskKind.parse(row["kind"]),
@@ -86,10 +92,10 @@ export async function fetchRunTasks(pool: QueryClient, runId: string, orgId: str
       attempt: Number(row["attempt"] ?? 1),
       cli: String(row["cli"] ?? ""),
       model: row["model"] === null || row["model"] === undefined ? null : String(row["model"]),
-      startedAt: row["started_at"] === null || row["started_at"] === undefined ? null : (row["started_at"] as Date),
-      endedAt: row["ended_at"] === null || row["ended_at"] === undefined ? null : (row["ended_at"] as Date),
-    }),
-  );
+      startedAt: ts.started_at,
+      endedAt: ts.ended_at,
+    });
+  });
 }
 
 // --- Spec summary (with milestone + behaviors) -----------------------------
@@ -143,6 +149,8 @@ function applyEventRedaction(
   rawView: boolean,
 ): RunEventRow[] {
   return rows.map((row) => {
+    // Decode the cursor-key id + event timestamp at the boundary into a real Date.
+    const decoded = RawEventRowSchema.parse(row);
     const eventType = String(row.event_type);
     let payload: unknown = row.payload;
     let redactedPaths: string[] = [];
@@ -157,8 +165,8 @@ function applyEventRedaction(
       redactedPaths = out.redactedPaths;
     }
     return RunEventRow.parse({
-      id: row.id as number | string,
-      ts: row.ts as Date,
+      id: decoded.id,
+      ts: decoded.ts,
       runId: row.run_id === null || row.run_id === undefined ? null : String(row.run_id),
       taskId: row.task_id === null || row.task_id === undefined ? null : String(row.task_id),
       specId: row.spec_id === null || row.spec_id === undefined ? null : String(row.spec_id),
@@ -210,13 +218,10 @@ export async function fetchEventsPage(
   );
   const rows = fetched.slice(0, limit);
   const items = applyEventRedaction(rows, args.actor, args.rawView);
-  const nextCursor =
-    fetched.length > limit
-      ? encodeCursor({
-          ts: rows.at(-1)?.ts as Date,
-          id: rows.at(-1)?.id as number,
-        })
-      : null;
+  // Cursor from the last DECODED item (ts already a real Date, id narrowed) —
+  // not the raw row, so no `as Date` launder.
+  const last = items.at(-1);
+  const nextCursor = fetched.length > limit && last !== undefined ? encodeCursor({ ts: last.ts, id: last.id }) : null;
   return CursorPage(RunEventRow).parse({ items, nextCursor });
 }
 
@@ -247,13 +252,9 @@ export async function fetchFeedPage(
   const redacted = applyEventRedaction(rows, args.actor, args.rawView);
   // ProjectFeedItem narrows runId to non-null; we already filter at SQL.
   const items = redacted.map((row) => ProjectFeedItem.parse({ ...row, runId: row.runId ?? "" }));
-  const nextCursor =
-    fetched.length > limit
-      ? encodeCursor({
-          ts: rows.at(-1)?.ts as Date,
-          id: rows.at(-1)?.id as number,
-        })
-      : null;
+  // Cursor from the last DECODED item (ts already a real Date, id narrowed).
+  const last = items.at(-1);
+  const nextCursor = fetched.length > limit && last !== undefined ? encodeCursor({ ts: last.ts, id: last.id }) : null;
   return { items, nextCursor };
 }
 
@@ -264,8 +265,11 @@ export async function fetchFeedPage(
 type CostQueryRow = Record<string, unknown>;
 
 function decodeCostRow(raw: CostQueryRow): RunCostRecord {
+  // Decode the cursor-key id + recorded_at timestamp at the boundary into a real
+  // Date (a malformed/missing timestamp throws here, never a laundered cast).
+  const decoded = RawCostRowSchema.parse(raw);
   return RunCostRecord.parse({
-    id: raw["id"] as number | string,
+    id: decoded.id,
     runId: String(raw["run_id"]),
     taskId: String(raw["task_id"]),
     projectId: String(raw["project_id"]),
@@ -281,7 +285,7 @@ function decodeCostRow(raw: CostQueryRow): RunCostRecord {
     costUsd: raw["cost_usd"] === null || raw["cost_usd"] === undefined ? null : String(raw["cost_usd"]),
     billingMode: raw["billing_mode"] as RunCostRecord["billingMode"],
     costBasis: raw["cost_basis"] as RunCostRecord["costBasis"],
-    recordedAt: raw["recorded_at"] as Date,
+    recordedAt: decoded.recorded_at,
   });
 }
 
@@ -317,13 +321,10 @@ export async function fetchCostsPage(
   );
   const rows = fetched.slice(0, limit);
   const items = rows.map((row) => decodeCostRow(row));
+  // Cursor from the last DECODED record (recordedAt already a real Date, id narrowed).
+  const last = items.at(-1);
   const nextCursor =
-    fetched.length > limit
-      ? encodeCursor({
-          ts: rows.at(-1)?.["recorded_at"] as Date,
-          id: rows.at(-1)?.["id"] as number,
-        })
-      : null;
+    fetched.length > limit && last !== undefined ? encodeCursor({ ts: last.recordedAt, id: last.id }) : null;
   return CursorPage(RunCostRecord).parse({ items, nextCursor });
 }
 

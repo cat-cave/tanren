@@ -134,6 +134,13 @@
       "when": 1781024323769,
       "tag": "0018_naive_ikaris",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1781028880789,
+      "tag": "0019_vengeful_lilandra",
+      "breakpoints": true
     }
   ]
 }

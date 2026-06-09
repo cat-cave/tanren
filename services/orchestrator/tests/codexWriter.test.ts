@@ -247,12 +247,15 @@ describe("Codex writer adapter", () => {
     expect(JSON.stringify(result)).not.toContain("secret-refresh-token");
   });
 
-  it("treats refreshed auth write-back as best effort", async () => {
+  // no_silent_fallbacks: the rotated-auth write-back is NOT best-effort — the new
+  // bundle is PERSISTED (a store failure propagates; see codexAuthRotationPersist.test.ts).
+  it("PERSISTS the refreshed auth bundle the codex run rotated (not a silent skip)", async () => {
+    const rotatedAuthJson = refreshedAuthJson();
     const ssh = new ScriptedSsh([
       ok(""),
       ok("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n"),
       ok("{}\n"),
-      ok("not-json"),
+      ok(rotatedAuthJson),
       ok(""),
       ok("diff --git a/CODEX.md b/CODEX.md\n+codex\n"),
       ok(`${commitSha("e")}\tcodex writer\n`),
@@ -274,7 +277,8 @@ describe("Codex writer adapter", () => {
     });
 
     expect(result.exitReason).toBe("completed");
-    await expect(secrets.get("credential/codex/dev")).resolves.toMatchObject({ value: authJson });
+    // The rotated bundle replaced the prior value — the write-back actually happened.
+    await expect(secrets.get("credential/codex/dev")).resolves.toMatchObject({ value: rotatedAuthJson });
   });
 
   it("parses raw Codex JSONL count and optional token usage; COUNTS a malformed non-empty line (loud, not silent)", () => {

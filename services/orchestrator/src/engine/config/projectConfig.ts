@@ -282,6 +282,23 @@ export function defaultProjectConfigV1(): ProjectConfigV1 {
   return ProjectConfigV1.parse({ version: 1 });
 }
 
+/**
+ * Distinguish an ABSENT project config (null / `{}` / any blob with no `version`
+ * key — the DB column's `'{}'::jsonb` default a fresh project carries) from a
+ * PRESENT-but-CORRUPT one (a `version` that is wrong/unsupported/NaN, or a
+ * `version: 1` body that fails the V1 schema).
+ *
+ * The no-silent-fallback boundary uses this to decide propagate-vs-fall-through:
+ * an absent config is NOT corruption — there simply is no project-level value, so
+ * a caller may legitimately fall through to the org default. A present-but-corrupt
+ * config IS corruption — it must NEVER be masked by a silent default (e.g. signing
+ * as a different github identity, or capping a batch at the wrong size). `raw` here
+ * is the parse INPUT (`projects.config`), never a thrown error.
+ */
+export function isAbsentProjectConfig(raw: unknown): boolean {
+  return readObservedVersion(raw) === undefined;
+}
+
 export function projectConfigJsonSchema(): Record<string, unknown> {
   return z.toJSONSchema(ProjectConfigV1) as Record<string, unknown>;
 }

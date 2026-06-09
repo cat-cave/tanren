@@ -141,6 +141,17 @@ export const TemplateStore = {
   },
 
   /**
+   * Every org that owns a registered template — the system-scoped fan-out the
+   * cross-org MAINTENANCE loop reads before listing each org's templates (mirrors
+   * `AuditsStore.listDistinctAuditJobOrgIds`). DISTINCT, no predicate. Under
+   * system scope it spans all orgs; the loop then org-scopes each org's list.
+   */
+  async listDistinctOrgIds(client: QueryClient): Promise<string[]> {
+    const result = await client.query<{ org_id: string }>("SELECT DISTINCT org_id FROM templates");
+    return result.rows.map((r) => r.org_id);
+  },
+
+  /**
    * Query templates by CAPABILITY (templating-system.md §3): selection filters on
    * the manifest's runtime/pkg-mgr/framework/deploy-target + channel + status —
    * NOT on a stack string, so a never-seen stack is matched on what it can DO.

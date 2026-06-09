@@ -17,6 +17,7 @@
     "check:event-drift": "node scripts/generate-event-type-check.mjs --check",
     "check:knip": "knip",
     "check:mutation": "stryker run",
+    "check:no-pg-as-date": "node scripts/lint/no-pg-as-date.mjs",
     "check:spelling": "cspell --no-progress \"**/*.{ts,tsx,js,mjs,md,yml,yaml}\"",
     "check:types-lint": "oxlint --type-aware -c oxlintrc.typeaware.json services/orchestrator/src services/allocator/src services/dashboard/src db/src cli/src",
     "codegen:answerer-schemas": "node scripts/answerer-schema-export.mjs",

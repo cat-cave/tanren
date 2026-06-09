@@ -45,6 +45,7 @@ export const eventTypeNames = [
   "dag.budget.milestone",
   "dag.budget.paused",
   "dag.concurrency.saturated",
+  "dag.config.corrupt",
   "dag.drained",
   "dag.spec.attention_resolved",
   "dag.spec.enqueued",
