@@ -187,6 +187,53 @@ describeDb("allocator service PgRunnerStore — runner row written under RLS, sw
     );
     expect(after.rows[0]?.status).toBe("released");
   });
+
+  it("(d) markReleased is an atomic CLAIM: a second markReleased returns undefined (teardown runs once)", async () => {
+    const store = new PgRunnerStore(systemPool, appPool);
+    await store.insert(recordFor(ORG_A, "runner_claim"));
+
+    const first = await store.markReleased("runner_claim", "completed");
+    const second = await store.markReleased("runner_claim", "completed");
+    // The first wins the claim (returns the record); the second matches zero rows
+    // because `released_at IS NULL` no longer holds → undefined. The lifecycle
+    // gates Docker teardown on this, so the container+volumes are torn down once.
+    expect(first?.runnerId).toBe("runner_claim");
+    expect(second).toBeUndefined();
+  });
+
+  it("(e) insert never overwrites a LIVE container_id: a retried insert on a live row fails LOUD", async () => {
+    const store = new PgRunnerStore(systemPool, appPool);
+    await store.insert({ ...recordFor(ORG_A, "runner_live"), containerId: "host-original" });
+
+    // A retried allocate for the same runner_id while the row is still LIVE
+    // (released_at IS NULL) must NOT overwrite the original container_id.
+    await expect(store.insert({ ...recordFor(ORG_A, "runner_live"), containerId: "host-RETRY" })).rejects.toThrow(
+      /already has a LIVE row/u,
+    );
+
+    const row = await ownerPool.query<{ container_id: string }>(
+      "SELECT container_id FROM runners WHERE runner_id = 'runner_live'",
+    );
+    // The original container_id is preserved — never clobbered.
+    expect(row.rows[0]?.container_id).toBe("host-original");
+  });
+
+  it("(e2) insert DOES re-adopt an already-RELEASED runner_id (re-allocate is allowed)", async () => {
+    const store = new PgRunnerStore(systemPool, appPool);
+    await store.insert({ ...recordFor(ORG_A, "runner_reuse"), containerId: "host-1" });
+    await store.markReleased("runner_reuse", "completed");
+
+    // The row is released → a fresh allocate re-adopts the runner_id with the new
+    // container_id and clears released_at (the ON CONFLICT WHERE released branch).
+    await store.insert({ ...recordFor(ORG_A, "runner_reuse"), containerId: "host-2" });
+
+    const row = await ownerPool.query<{ container_id: string; released_at: Date | null; status: string }>(
+      "SELECT container_id, released_at, status FROM runners WHERE runner_id = 'runner_reuse'",
+    );
+    expect(row.rows[0]?.container_id).toBe("host-2");
+    expect(row.rows[0]?.released_at).toBeNull();
+    expect(row.rows[0]?.status).toBe("claimed");
+  });
 });
 
 async function seedTenant(owner: Pool, orgId: string, projectId: string, specId: string, runId: string): Promise<void> {
