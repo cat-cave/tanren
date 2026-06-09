@@ -64,7 +64,10 @@ export const CaptureInterface = z
   .strict();
 export type CaptureInterface = z.infer<typeof CaptureInterface>;
 
-// One architecture line ("web · next.js · turborepo"). Free-form by design.
+// One architecture line ("web · next.js · turborepo"). Free-form by design —
+// the HUMAN-READABLE summary of the architecture step. The LOAD-BEARING output
+// of that step is `CaptureLifecycle` below (the concrete stack commands the
+// scaffold authors the justfile from).
 export const CaptureArchitectureLine = z
   .object({
     layer: z.string().min(1).max(40),
@@ -72,6 +75,35 @@ export const CaptureArchitectureLine = z
   })
   .strict();
 export type CaptureArchitectureLine = z.infer<typeof CaptureArchitectureLine>;
+
+// The project's CONCRETE LIFECYCLE for the chosen stack — the load-bearing output
+// of the architecture step (stack-flexible contract,
+// docs/roadmap/stack-flexible-contract.md). Tanren knows NO stack: the project
+// DECLARES what each conventional justfile target IS for its stack, and the
+// scaffold AUTHORS the justfile from this (no hardcoded pnpm example). The six
+// conventional targets map 1:1 to the contract's `bootstrap`/`tier-1`/`tier-2`/
+// `tier-3`/`build`/`deploy`; each holds the ACTUAL stack command(s) — general
+// enough that a Rust project fills `tier1` with "cargo clippy" + `build` with
+// "cargo build", a Python project "uv run ruff" + "uv build", a novel
+// translation "aspell" + "pandoc … epub", just as naturally as a TS project
+// fills "pnpm lint" + "pnpm build". A target may hold a multi-line command
+// (newline-joined). `stack` is the human-readable stack/runtime label
+// ("ts/pnpm", "rust/cargo", "python/uv", "novel/pandoc") — descriptive only;
+// Tanren never branches on it.
+export const CaptureLifecycle = z
+  .object({
+    // The chosen stack/runtime label (descriptive — NOT a switch Tanren reads).
+    stack: z.string().min(1).max(120),
+    // The conventional targets → the stack commands that fill them.
+    bootstrap: z.string().min(1).max(400),
+    tier1: z.string().min(1).max(400),
+    tier2: z.string().min(1).max(400),
+    tier3: z.string().min(1).max(400),
+    build: z.string().min(1).max(400),
+    deploy: z.string().min(1).max(400),
+  })
+  .strict();
+export type CaptureLifecycle = z.infer<typeof CaptureLifecycle>;
 
 // The full accumulated capture. Every list grows monotonically across rounds;
 // the engine de-dupes by a natural key when merging a round's delta.
@@ -83,6 +115,10 @@ export const InterviewCapture = z
     interfaces: z.array(CaptureInterface).default([]),
     designDna: z.string().max(80).default(""),
     architecture: z.array(CaptureArchitectureLine).default([]),
+    // The load-bearing lifecycle declaration (the architecture step's structured
+    // output). `null` until the architecture step captures it; the scaffold
+    // FAILS LOUD if it is still null at derive (never a silent Node default).
+    lifecycle: CaptureLifecycle.nullable().default(null),
     rulesets: z.array(z.string().min(1)).default([]),
   })
   .strict();
@@ -96,6 +132,7 @@ export function emptyCapture(): InterviewCapture {
     interfaces: [],
     designDna: "",
     architecture: [],
+    lifecycle: null,
     rulesets: [],
   };
 }
@@ -127,6 +164,7 @@ export const InterviewCaptureDelta = z
     interfaces: z.array(CaptureInterface).nullish(),
     designDna: z.string().max(80).nullish(),
     architecture: z.array(CaptureArchitectureLine).nullish(),
+    lifecycle: CaptureLifecycle.nullish(),
     rulesets: z.array(z.string().min(1)).nullish(),
   })
   .strict();

@@ -40,8 +40,12 @@ import {
   type GreenfieldDeployDependency,
   type PrepareDeployCallback,
 } from "./deployDependency.js";
-import { SCAFFOLD_CI_CONFIG_EXAMPLE } from "./scaffoldCiConfig.js";
-import { InterviewCapture, type CaptureBehavior, type CaptureInterface } from "./types.js";
+import {
+  buildScaffoldAcceptanceCriteria,
+  buildScaffoldDescription,
+  MissingLifecycleError,
+} from "./scaffoldAuthoring.js";
+import { InterviewCapture, type CaptureBehavior, type CaptureInterface, type CaptureLifecycle } from "./types.js";
 
 export interface DeriveInput {
   orgId: string;
@@ -116,36 +120,28 @@ export interface DeriveResult {
   milestoneIds: string[];
 }
 
-// FINDING #3: the foundation scaffold specs. These used to carry EMPTY `dependsOn`,
-// so the DagWalker ran all three IN PARALLEL off an empty `main` — each invented the
-// repo from scratch with incompatible package-manager choices (e.g. one emitting
-// `npm workspaces`, which the default pnpm gate rejects with exit 254) and they never
-// converged (no authoritative toolchain on `main`, can't see each other's branches).
+// The foundation scaffold specs are AUTHORED FROM THE CAPTURED LIFECYCLE
+// (stack-flexible contract, docs/roadmap/stack-flexible-contract.md) — Tanren
+// bakes in NO stack. The architecture step captures the project's concrete
+// lifecycle (the stack commands behind the conventional justfile targets); the
+// scaffold spec instructs the writer to start from Wave A's bare skeleton and
+// FILL the justfile with those commands, keeping the stable `.tanren/ci.yml` as
+// the lifecycle→`just <target>` map. The hardcoded-pnpm `scaffoldCiConfig.ts`
+// example + the pnpm/turbo/`gh actions` specs are GONE — they were the apex
+// v25/v26 bug (the interview captured the architecture but the scaffold ignored
+// it and baked in Node).
 //
-// Fixes encoded here (DOMAIN knowledge — not a walker-wide rule):
-//   1. `dependsOnPrev` SERIALIZES the foundation into a chain (`monorepo scaffold` is
-//      the sole root; `build · turbo` then `ci · gh actions` chain off it), so one
-//      branch establishes the authoritative toolchain before the next builds on it.
-//   2. The `monorepo scaffold` description + criteria PIN the toolchain the gate
-//      (`pnpm lint`/`typecheck`/`build`) accepts — a pnpm workspace, a root
-//      `package.json` whose scripts call DIRECT tools (eslint/tsc/vitest), and a
-//      committed lockfile — gate-compatible without turbo (a later spec adds turbo).
-//   3. The scaffold ALSO authors the 3-tier native gate `.tanren/ci.yml` (the
-//      spec-loop-redesign 3-tier CI requirement): `fast` (per_iteration —
-//      lint+typecheck, NO tests), `slow` (pre_audit — build + JUnit-emitting tests),
-//      `merge` (pre_merge — full gate). The writer COPIES a concrete correct-shape
-//      example (SCAFFOLD_CI_CONFIG_EXAMPLE) — v25 emitted the WRONG shape (tier-as-
-//      object with an inline `when`, no top-level `when`) which fails CiConfigV1
-//      validation; scaffoldCiConfig.ts pins the shape + the round-trip parse test.
-//      The SCAFFOLD BAR is structure + lint/typecheck/build — a green test SUITE is
-//      NOT required at scaffold (tests arrive with the feature specs), so a freshly-
-//      scaffolded repo with a trivial test never gets a blocking finding.
-//
-// SCOPE (#273 convergence): the FIRST scaffold spec is deliberately MINIMAL — a pnpm
-// workspace (root + ONE trivial package), no shared-types package or tsconfig
-// project-references (an over-prescribed earlier version timed out / emitted
-// `workspace:*` STUBS). Those defer to a FOLLOW-ON spec; an EXPLICIT criterion forbids
-// stub/`workspace:*`/fake toolchain packages — the toolchain must be real devDeps.
+// Fixes preserved here (DOMAIN knowledge — not a walker-wide rule):
+//   1. `dependsOnPrev` SERIALIZES the foundation into a chain (`scaffold` is the
+//      sole root; `build` then `deploy` chain off it), so one branch establishes
+//      the authoritative justfile/toolchain on `main` before the next builds on it
+//      (no incompatible-stack races off an empty repo).
+//   2. The `scaffold` spec authors the justfile + the stable ci.yml FROM the
+//      captured lifecycle (no hardcoded stack); the `build`/`deploy` specs route
+//      through the conventional `just build` / `just deploy` targets — never a
+//      hardcoded build/deploy command.
+//   3. The SCAFFOLD BAR is structure + bootstrap/tier-1/build passing — a thorough
+//      test SUITE is NOT required at scaffold (tests arrive with the feature specs).
 interface ScaffoldSpecDef {
   title: string;
   description: string;
@@ -153,69 +149,46 @@ interface ScaffoldSpecDef {
   // "pipeline is green" criterion is synthesized in the create loop.
   acceptanceCriteria?: string[];
   // When true, this spec `dependsOn` the PREVIOUS scaffold spec in the list — the
-  // wiring that serializes the foundation into a chain instead of 3 parallel roots.
+  // wiring that serializes the foundation into a chain instead of parallel roots.
   dependsOnPrev?: boolean;
 }
 
-const SCAFFOLD_SPECS: ScaffoldSpecDef[] = [
-  {
-    title: "monorepo scaffold",
-    description:
-      "Stand up a MINIMAL pnpm workspace on the DEFAULT TANREN TOOLCHAIN so the CI gate passes — " +
-      "keep it small enough to finish in ONE pass. Author: a `pnpm-workspace.yaml` declaring the " +
-      "package globs (a workspace with just the root, OR the root plus ONE trivial package); a root " +
-      "`package.json` whose `lint`, `typecheck`, `test`, and `build` scripts call DIRECT tools — " +
-      '`"lint": "eslint ."`, `"typecheck": "tsc --noEmit"`, `"test": "vitest run"`, `"build": "tsc -b"` ' +
-      "— with `eslint`, `typescript`, and `vitest` as REAL published devDependencies; a real " +
-      "`eslint.config.js` flat config that exists and passes; a `tsconfig.json`; one trivial " +
-      "`src/index.ts`; a COMMITTED `.gitignore` that ignores `node_modules`, `dist`, and `reports` " +
-      "(so build/install/junit artifacts are never committed); and a COMMITTED `pnpm-lock.yaml`. " +
-      "ALSO author the 3-tier native gate `.tanren/ci.yml` (a CiConfigV1, NOT a GitHub Actions " +
-      "workflow). COPY the example below VERBATIM — its shape is strict and parser-validated: `tiers` " +
-      "is a map of tierName → an ARRAY of `{ name, run }` steps (NOT a tier object with an inline " +
-      "`when`), and `when` is a SEPARATE top-level map of tierName → array of lifecycle points. Use " +
-      "block YAML (dash-prefixed list items, indented `name:`/`run:`); do NOT use flow style like " +
-      "`[per_iteration]` or `{ name: …, run: … }` — Tanren's gate parser only accepts block YAML. The " +
-      "3 tiers are `fast` (per_iteration — lint+typecheck, NO tests in the fast tier, tests arrive " +
-      "with features), " +
-      "`slow` (pre_audit — build + JUnit-emitting test), `merge` (pre_merge — full lint+typecheck+" +
-      "build+test). The test step emits JUnit to `reports/junit.xml` (the per-test ingest path):\n" +
-      "```yaml\n" +
-      SCAFFOLD_CI_CONFIG_EXAMPLE +
-      "```\nUse the REAL published `typescript`/`eslint`/`vitest` packages — NEVER create local " +
-      "workspace stub packages, `workspace:*` placeholders, or fake toolchain binaries. Do NOT add " +
-      "a shared-types package or tsconfig project references (a later spec adds those if needed), do " +
-      "NOT use turbo (a later spec introduces it once the toolchain is stable), and do NOT use " +
-      "npm/yarn workspaces — the gate runs `pnpm install` then `pnpm lint` / `pnpm typecheck` / " +
-      "`pnpm build` and rejects a non-pnpm workspace. " +
-      "The scaffold bar is STRUCTURE + lint/typecheck/build — a thorough test SUITE is NOT expected " +
-      "yet (tests land with the feature specs); a trivial placeholder test is fine but is not graded.",
-    acceptanceCriteria: [
-      "given an empty repo, when the scaffold lands, then a `pnpm-workspace.yaml` and a committed `pnpm-lock.yaml` exist (a minimal pnpm workspace — root only, or root + one trivial package — not npm/yarn)",
-      "given the root `package.json`, when inspected, then its `lint`, `typecheck`, `test`, and `build` scripts call direct tools (eslint/tsc/vitest), NOT turbo, with eslint/typescript/vitest as devDependencies",
-      "given the toolchain packages, when inspected, then `typescript`, `eslint`, and `vitest` are REAL published devDependencies — NOT local stub packages, `workspace:*` placeholders, or fake binaries",
-      "given the lint setup, when inspected, then a real `eslint.config.js` flat config exists (so `eslint .` runs cleanly), a `tsconfig.json` exists, and a trivial `src/index.ts` exists",
-      "given the repo root, when inspected, then a committed `.gitignore` ignores `node_modules`, `dist`, and `reports` (so install/build/junit artifacts are never committed)",
-      "given the native gate `.tanren/ci.yml`, when inspected, then it is a valid CiConfigV1 with exactly three tiers — `fast` mapped to `per_iteration` (lint+typecheck, NO tests), `slow` mapped to `pre_audit` (build+test), and `merge` mapped to `pre_merge` (full lint+typecheck+build+test) — and the test step emits JUnit XML to `reports/junit.xml` via `--reporter=junit --outputFile=reports/junit.xml`",
-      "given the scaffold, when `pnpm install` then `pnpm lint`, `pnpm typecheck`, and `pnpm build` run, then each exits 0 (structure + the fast/build tiers are green — a thorough test SUITE is NOT required at scaffold; tests arrive with the feature specs)",
-    ],
-  },
-  {
-    title: "build · turbo",
-    description:
-      "Introduce turbo on top of the scaffold's pnpm-workspace toolchain so every package builds + " +
-      "caches. Build on the EXISTING pnpm-workspace + direct-tool scripts on `main` (the scaffold " +
-      "uses `tsc -b`, not turbo); do not re-invent the package manager.",
-    dependsOnPrev: true,
-  },
-  {
-    title: "ci · gh actions",
-    description:
-      "CI on GitHub Actions: install with pnpm, then lint, typecheck, test, build on every PR, " +
-      "matching the root scripts the scaffold defined.",
-    dependsOnPrev: true,
-  },
-];
+// Build the foundation scaffold specs from the captured lifecycle. The `scaffold`
+// spec is authored from the lifecycle (justfile + stable ci.yml); `build` and
+// `deploy` route through the conventional `just build` / `just deploy` targets the
+// scaffold just established — so the deploy/build paths invoke the PROJECT's
+// declared command, never a hardcoded assumption.
+function scaffoldSpecsFor(lifecycle: CaptureLifecycle): ScaffoldSpecDef[] {
+  return [
+    {
+      title: "scaffold",
+      description: buildScaffoldDescription(lifecycle),
+      acceptanceCriteria: buildScaffoldAcceptanceCriteria(lifecycle),
+    },
+    {
+      title: "build",
+      description:
+        `Wire the project's build so the deployable artifact is produced via the conventional ` +
+        `\`just build\` target the scaffold established (for ${lifecycle.stack}: \`${lifecycle.build.trim()}\`). ` +
+        "Build on the EXISTING justfile/toolchain on `main` — do NOT re-invent the stack or bypass `just build`.",
+      acceptanceCriteria: [
+        "given the scaffolded repo, when `just build` runs, then it produces the deployable artifact and exits 0",
+      ],
+      dependsOnPrev: true,
+    },
+    {
+      title: "deploy",
+      description:
+        `Wire the project's deploy so it ships via the conventional \`just deploy\` target the scaffold ` +
+        `established (for ${lifecycle.stack}: \`${lifecycle.deploy.trim()}\`). Route deploy ONLY through ` +
+        "`just deploy` — never a hardcoded deploy command or a Node/platform assumption.",
+      acceptanceCriteria: [
+        "given a built artifact, when `just deploy` runs, then it ships to the deploy target via the conventional `just deploy` (no hardcoded deploy command)",
+      ],
+      dependsOnPrev: true,
+    },
+  ];
+}
 
 // A behavior belongs to an interface when its persona's surface matches the
 // interface name (best-effort, lowercase substring). Unmatched behaviors fall
@@ -249,6 +222,12 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
   // engine also validates) so a malformed capture never reaches the create path.
   const capture = InterviewCapture.parse(input.capture);
   const slug = capture.identity?.slug ?? "greenfield-project";
+
+  // The architecture step's lifecycle is LOAD-BEARING + REQUIRED — the scaffold
+  // authors the justfile + ci.yml from it. FAIL LOUD if it is missing (the
+  // stack-flexible contract's core invariant: never silently default to Node).
+  if (capture.lifecycle === null) throw new MissingLifecycleError();
+  const scaffoldSpecs = scaffoldSpecsFor(capture.lifecycle);
 
   // FINDING #1: opt-in autonomous config. `auto`/`simulated` ⇒ create the project
   // already autonomous (`native_queue` + matching review policy) so the DagWalker
@@ -357,13 +336,13 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
 
   const specIds: string[] = [];
   const scaffoldSpecIds: string[] = [];
-  // FINDING #3: serialize the foundation into a CHAIN, not 3 parallel roots. Each
-  // spec with `dependsOnPrev` depends on the spec created immediately before it, so
-  // `monorepo scaffold` is the sole root, `build · turbo` depends on it, and
-  // `ci · gh actions` depends on build — one authoritative toolchain lands on `main`
-  // before the next builds on it (no incompatible package-manager races).
+  // Serialize the foundation into a CHAIN, not parallel roots. Each spec with
+  // `dependsOnPrev` depends on the spec created immediately before it, so
+  // `scaffold` is the sole root, `build` depends on it, and `deploy` depends on
+  // build — one authoritative justfile/toolchain lands on `main` before the next
+  // builds on it (no incompatible-stack races off an empty repo).
   let previousScaffoldSpecId: string | undefined;
-  for (const def of SCAFFOLD_SPECS) {
+  for (const def of scaffoldSpecs) {
     const dependsOn =
       def.dependsOnPrev === true && previousScaffoldSpecId !== undefined ? [previousScaffoldSpecId] : [];
     const spec = await createSpec(

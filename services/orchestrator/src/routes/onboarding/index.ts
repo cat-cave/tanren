@@ -34,6 +34,7 @@ import {
   DeployProvisioningUnavailableError,
   deriveFromCapture,
   InterviewCapture,
+  MissingLifecycleError,
   runRound,
   type DeployPreflightCallback,
   type InterviewAnswerer,
@@ -189,6 +190,12 @@ export function createOnboardingRoutes(options: OnboardingRoutesOptions) {
       }
       if (error instanceof SpecNotFoundError) {
         return c.json({ error: "spec_dependency_not_found", message: error.message }, 404);
+      }
+      // The architecture step never captured a project lifecycle — the scaffold
+      // can't author a justfile without it. A bad/incomplete capture (400), NOT a
+      // silent Node default (stack-flexible contract).
+      if (error instanceof MissingLifecycleError) {
+        return c.json({ error: "lifecycle_missing", message: error.message }, 400);
       }
       if (error instanceof DeployProviderMissingError) {
         return c.json(

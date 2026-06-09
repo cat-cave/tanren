@@ -58,6 +58,9 @@ export function mergeCapture(current: InterviewCapture, delta: InterviewCaptureD
       delta.architecture !== null && delta.architecture !== undefined && delta.architecture.length > 0
         ? delta.architecture
         : current.architecture,
+    // The lifecycle is last-write-wins (the architecture step captures it; a
+    // later round can refine the stack commands). `null` = nothing to add.
+    lifecycle: delta.lifecycle !== null && delta.lifecycle !== undefined ? delta.lifecycle : current.lifecycle,
     rulesets,
   };
 }

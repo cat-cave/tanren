@@ -34,6 +34,11 @@ export {
 export { wrapProviderInterviewAnswerer, type WrapProviderInterviewAnswererOptions } from "./providerAnswerer.js";
 export { buildInterviewPrompt } from "./prompt.js";
 export { mergeCapture } from "./capture.js";
+export {
+  buildScaffoldDescription,
+  buildScaffoldAcceptanceCriteria,
+  MissingLifecycleError,
+} from "./scaffoldAuthoring.js";
 
 export {
   InterviewCapture,
@@ -44,6 +49,7 @@ export {
   CaptureBehavior,
   CaptureInterface,
   CaptureArchitectureLine,
+  CaptureLifecycle,
   type InterviewAnswerer,
   type InterviewAnswererContext,
 } from "./types.js";
