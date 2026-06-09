@@ -36,9 +36,19 @@ export const projects = pgTable(
     defaultBranch: text("default_branch").notNull().default("main"),
     runnerImage: text("runner_image").notNull().default("ghcr.io/cat-cave/tanren-runner:v0"),
     allocator: text("allocator").notNull().default("local-docker"),
+    // The project's versioned `ProjectConfigV1` blob. The column default is the
+    // MINIMAL VALID versioned config (`{"version":1}`), NOT a bare `{}`: every
+    // config READ parses through `migrateProjectConfig`, which fail-HARD rejects an
+    // unversioned row (no silent upgrade-to-defaults shim). A bare `{}` default
+    // would therefore poison a direct/admin/migration insert that omits the column
+    // into a latent runtime 500 on the next config read. `{"version":1}` parses to
+    // the fully-defaulted V1 shape (identical to `defaultProjectConfigV1()`), so a
+    // read is ALWAYS parseable. Application inserts (`createProject`) still supply a
+    // full `defaultProjectConfigV1()` explicitly; this default only backstops a
+    // column-omitting insert with a valid-and-versioned value rather than poison.
     config: jsonb("config")
       .notNull()
-      .default(sql`'{}'::jsonb`),
+      .default(sql`'{"version":1}'::jsonb`),
     // Operator lifecycle: 'active' (the default — the autonomous walker drives it)
     // or 'archived' (the walker + strand reconciler skip it; in-flight runs/specs
     // are cancelled on archive). Flipped only through the dedicated archive surface.
@@ -98,9 +108,18 @@ export const organizations = pgTable(
     externalId: text("external_id").notNull(),
     login: text("login").notNull(),
     displayName: text("display_name").notNull(),
+    // The org's versioned `OrgConfigV1` blob. As with `projects.config`, the column
+    // default is the MINIMAL VALID versioned config (`{"version":1}`), NOT a bare
+    // `{}`: `migrateOrgConfig` fail-HARD rejects an unversioned row, so a bare `{}`
+    // default would poison a column-omitting insert into a latent 500 on the next
+    // org-config read (the App-installation / provider-mode / default-credentials
+    // reads in `resolveCredentials.ts`). `{"version":1}` parses to the fully-defaulted
+    // V1 shape (identical to `defaultOrgConfigV1()`). The bootstrap insert
+    // (`identityStore.upsertOrg`) still supplies a full `defaultOrgConfigV1()`
+    // explicitly; this default only backstops a column-omitting insert.
     config: jsonb("config")
       .notNull()
-      .default(sql`'{}'::jsonb`),
+      .default(sql`'{"version":1}'::jsonb`),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },

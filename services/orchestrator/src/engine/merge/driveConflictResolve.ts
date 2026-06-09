@@ -38,7 +38,7 @@ import type { GovernancePosture, RoutingChainEntry, RoutingTable } from "../conf
 import { migrateProjectConfig } from "../config/projectConfig.js";
 import { installationFromOrgConfig, type OrgGithubAppInstallation } from "../config/orgConfig.js";
 import { buildEffectiveRouting } from "../worker/runExecutionContext.js";
-import { resolveCredentialsForRun } from "../credentials/resolveCredentials.js";
+import { orgScopeFromRunOrgId, resolveCredentialsForRun } from "../credentials/resolveCredentials.js";
 import {
   advisoryStepNamesForPosture,
   type GateOutcome,
@@ -352,7 +352,7 @@ async function loadDriveRunContext(deps: DriveConflictResolveDeps): Promise<Driv
   // Credential resolution reads `organizations.config` (a tenant read) — run it
   // org-scoped so RLS admits the row (the same hop resolveRunFacts uses).
   const resolved = await runWithOrgScope(deps.pool, deps.facts.orgId, (client) =>
-    resolveCredentialsForRun(client, { projectConfig, orgId: deps.facts.orgId }),
+    resolveCredentialsForRun(client, { projectConfig, orgScope: orgScopeFromRunOrgId(deps.facts.orgId) }),
   );
   const installation = installationFromOrgConfig(row.org_config);
   return {
