@@ -7,32 +7,43 @@
 // coordinators: release the claim, back off, and after a ceiling emit a loud
 // infra-blocked alert with longer backoff so the queue neither hot-loops nor
 // removes a retriable candidate permanently.
+//
+// Audit RC-7: the per-entry attempt counter is now PERSISTED (a HoldCeilingStore)
+// instead of a process-local Map, so a rolling deploy / crash-loop no longer re-grants
+// a flapping candidate its full attempt budget. The `next`/`reset` API shape is
+// unchanged (callers `await` it); the store is injected (an in-memory store keeps the
+// in-process fakes Pg-free). The retry schedule + alert delay come from the single
+// `retrySchedule.ts` source.
 
 import type { MergeDriveOutcome, MergeQueueEntry, MergeQueueModel } from "../contracts/mergeCoordinator.js";
 import type { MergeQueueEventEmitter } from "./coordinator.js";
+import { type HoldCeilingStore, InMemoryHoldCeilingStore } from "./holdCeilingStore.js";
+import { alertRetryAfterMs, recoverableRetryDelayMs } from "./retrySchedule.js";
 
-const RECOVERABLE_RETRY_DELAYS_MS = [3_000, 10_000, 30_000, 60_000];
-const RECOVERABLE_ALERT_RETRY_AFTER_MS = 60_000;
 const MAX_RECOVERABLE_DRIVE_ATTEMPTS = 5;
 
 export class RecoverableDriveHoldCeiling {
-  private readonly attempts = new Map<string, number>();
+  private readonly store: HoldCeilingStore;
 
-  next(queueId: string): { attempts: number; retryAfterMs?: number } {
-    const attempts = (this.attempts.get(queueId) ?? 0) + 1;
-    if (attempts >= MAX_RECOVERABLE_DRIVE_ATTEMPTS) {
-      this.attempts.delete(queueId);
-      return { attempts };
-    }
-    this.attempts.set(queueId, attempts);
-    return {
-      attempts,
-      retryAfterMs: RECOVERABLE_RETRY_DELAYS_MS[Math.min(attempts - 1, RECOVERABLE_RETRY_DELAYS_MS.length - 1)],
-    };
+  /**
+   * The persisted counter survives a restart (audit RC-7). Inject the {@link PgHoldCeilingStore}
+   * in production; the default in-memory store keeps the in-process fakes/unit tests Pg-free.
+   */
+  constructor(store?: HoldCeilingStore) {
+    this.store = store ?? new InMemoryHoldCeilingStore();
   }
 
-  reset(queueId: string): void {
-    this.attempts.delete(queueId);
+  async next(queueId: string): Promise<{ attempts: number; retryAfterMs?: number }> {
+    const attempts = await this.store.increment("recoverable_drive", queueId);
+    if (attempts >= MAX_RECOVERABLE_DRIVE_ATTEMPTS) {
+      await this.store.clear("recoverable_drive", queueId);
+      return { attempts };
+    }
+    return { attempts, retryAfterMs: recoverableRetryDelayMs(attempts) };
+  }
+
+  async reset(queueId: string): Promise<void> {
+    await this.store.clear("recoverable_drive", queueId);
   }
 }
 
@@ -46,7 +57,7 @@ export async function holdOrHaltRecoverableDrive(input: {
   entry: MergeQueueEntry;
   outcome: Extract<MergeDriveOutcome, { kind: "blocked" }>;
 }): Promise<RecoverableDriveHoldResult> {
-  const next = input.ceiling.next(input.entry.queueId);
+  const next = await input.ceiling.next(input.entry.queueId);
   if (next.retryAfterMs === undefined) {
     await input.events.emitInfraBlocked({
       projectId: input.projectId,
@@ -57,9 +68,9 @@ export async function holdOrHaltRecoverableDrive(input: {
     });
     await input.queue.releaseClaim(input.entry.queueId);
     console.error(
-      `[merge-coordinator] project ${input.projectId}: merge drive for spec ${input.entry.specId} returned ${input.outcome.kind} for ${next.attempts} retries; alerting and continuing autonomous re-drive after ${RECOVERABLE_ALERT_RETRY_AFTER_MS}ms`,
+      `[merge-coordinator] project ${input.projectId}: merge drive for spec ${input.entry.specId} returned ${input.outcome.kind} for ${next.attempts} retries; alerting and continuing autonomous re-drive after ${alertRetryAfterMs}ms`,
     );
-    return { kind: "held", retryAfterMs: RECOVERABLE_ALERT_RETRY_AFTER_MS };
+    return { kind: "held", retryAfterMs: alertRetryAfterMs };
   }
 
   await input.queue.releaseClaim(input.entry.queueId);

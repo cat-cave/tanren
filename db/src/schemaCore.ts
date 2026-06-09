@@ -286,6 +286,42 @@ export const mergeQueue = pgTable(
   ],
 );
 
+// Merge hold ceilings (audit RC-7: in-memory hold-ceiling durability gap). The
+// two runaway-guard counters that bound a flapping merge candidate — the per-entry
+// recoverable-drive retry count and the per-project consecutive-infra-hold count —
+// used to live in process-local `Map`s. A rolling deploy / crash-loop LOST them, so
+// a flapping candidate re-earned its full attempt budget every restart and the loud
+// `needs_attention` escalation never fired (dangerous given the prior ssh2 crash-loop
+// history). This table PERSISTS them so the ceiling survives a restart.
+//
+// Keyed by (org_id, scope_id, kind): `kind = 'recoverable_drive'` keys `scope_id` on
+// the merge_queue queue_id (the per-entry retry count); `kind = 'batch_infra'` keys
+// `scope_id` on the project_id (the per-project consecutive infra-hold count). A held
+// candidate is OFF the hot path, so the extra org-scoped round-trip to read/write the
+// counter is cheap. org_id is the tenant root (RLS deny-by-default).
+export const mergeQueueHolds = pgTable(
+  "merge_queue_holds",
+  {
+    /** The scope this counter belongs to: a queue_id (recoverable_drive) or a project_id (batch_infra). */
+    scopeId: text("scope_id").notNull(),
+    /** Which ceiling: 'recoverable_drive' (per-entry) | 'batch_infra' (per-project). */
+    kind: text("kind").notNull(),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organizations.id),
+    /** The persisted consecutive-hold/attempt count — the runaway-guard counter. */
+    attempts: text("attempts").notNull().default("0"),
+    /** When the counter was last incremented (observability + a future lease/expiry). */
+    lastAttemptAt: timestamp("last_attempt_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    enumCheck("merge_queue_holds_kind_check", table.kind, ["recoverable_drive", "batch_infra"]),
+    // The (org, scope, kind) identity — the upsert conflict target (one counter per scope+kind).
+    uniqueIndex("merge_queue_holds_identity").on(table.orgId, table.scopeId, table.kind),
+    index("merge_queue_holds_org_id").on(table.orgId),
+  ],
+);
+
 // Post-merge auto-issue claim (tempering.md dim A). The CROSS-PROCESS atomic
 // "file once per merge" guard for the post-merge-failure watcher: the run_id
 // PRIMARY KEY makes the claim INSERT (`ON CONFLICT (run_id) DO NOTHING RETURNING`)
