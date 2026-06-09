@@ -6,19 +6,24 @@ import { PgRunnerStore } from "./pgRunnerStore.js";
 import { RunnerLifecycle } from "./runnerLifecycle.js";
 import { AbandonedRunSweeper } from "./sweeper.js";
 import { requireEnv } from "./requireEnv.js";
-import { requirePositiveHours } from "./requirePositiveHours.js";
+import { parsedEnv } from "./envSchema.js";
 
-const port = Number(process.env["ALLOCATOR_PORT"] ?? 3200);
+// Boot-validated env (Zod, fail-loud at load — see envSchema.ts). These replace
+// the prior per-site `Number(process.env[...] ?? n)` reads. TANREN_MAX_RUN_HOURS
+// is resolved through the reaper-safe `requirePositiveHours` helper inside the
+// schema (fall back loud, never crash on a bad reaper threshold).
+const port = parsedEnv.ALLOCATOR_PORT;
 // The bearer token gating `/allocate` + `/release` is REQUIRED — no `"dev"`
 // fallback (the surviving sibling of the removed `dev-root-token`). The compose
 // stacks set it (dev: `dev`; prod: required via `:?`); a blank/unset value fails
-// hard rather than silently accepting `Bearer dev`.
+// hard rather than silently accepting `Bearer dev`. Required-missing → loud, so
+// it stays on the `requireEnv` guard rather than the schema's optional fields.
 const authToken = requireEnv("TANREN_ALLOCATOR_TOKEN");
-const maxRunHours = requirePositiveHours(process.env["TANREN_MAX_RUN_HOURS"], 6, "TANREN_MAX_RUN_HOURS");
-const networkName = process.env["TANREN_ALLOCATOR_NETWORK"] ?? "tanren_default";
-const hostSshPortEnv = process.env["TANREN_ALLOCATOR_HOST_SSH_PORT"];
-const sshHostnameTemplate = process.env["TANREN_ALLOCATOR_SSH_HOSTNAME_TEMPLATE"] ?? "{container}";
-const sweeperIntervalMs = Number(process.env["TANREN_ALLOCATOR_SWEEPER_INTERVAL_MS"] ?? 60_000);
+const maxRunHours = parsedEnv.TANREN_MAX_RUN_HOURS;
+const networkName = parsedEnv.TANREN_ALLOCATOR_NETWORK;
+const hostSshPort = parsedEnv.TANREN_ALLOCATOR_HOST_SSH_PORT;
+const sshHostnameTemplate = parsedEnv.TANREN_ALLOCATOR_SSH_HOSTNAME_TEMPLATE;
+const sweeperIntervalMs = parsedEnv.TANREN_ALLOCATOR_SWEEPER_INTERVAL_MS;
 
 async function main(): Promise<void> {
   const docker = new HttpDockerEngineClient();
@@ -47,12 +52,10 @@ async function main(): Promise<void> {
     docker,
     store,
     networkName,
-    hostSshPort: hostSshPortEnv === undefined || hostSshPortEnv === "" ? undefined : Number(hostSshPortEnv),
+    hostSshPort,
     sshHostnameForOrchestrator: (container) => sshHostnameTemplate.replace("{container}", container),
-    capAdd: (process.env["TANREN_RUNNER_CAP_ADD"] ?? "SYS_ADMIN").split(",").filter((part) => part !== ""),
-    securityOpt: (process.env["TANREN_RUNNER_SECURITY_OPT"] ?? "apparmor=unconfined,seccomp=unconfined")
-      .split(",")
-      .filter((part) => part !== ""),
+    capAdd: parsedEnv.TANREN_RUNNER_CAP_ADD.split(",").filter((part) => part !== ""),
+    securityOpt: parsedEnv.TANREN_RUNNER_SECURITY_OPT.split(",").filter((part) => part !== ""),
   });
 
   const sweeper = new AbandonedRunSweeper({

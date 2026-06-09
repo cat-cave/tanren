@@ -21,14 +21,16 @@ import type pg from "pg";
 import { type MtlsCertPaths, NodeMtlsPeerVerifier, nodeMtlsServerOptions } from "./engine/contracts/mtlsChannelNode.js";
 import { createInternalClaimRoutes } from "./routes/internal/claimJob.js";
 import { createInternalRunStateWriteRoutes } from "./routes/internal/runStateWrites.js";
+import { parsedEnv } from "./envSchema.js";
 
-export const DEFAULT_INTERNAL_MTLS_PORT = 3110;
+// The internal mTLS listener port (default 3110) is owned by envSchema.ts
+// (parsedEnv.TANREN_INTERNAL_MTLS_PORT) — validated as a port once at boot.
 
-/** Resolve the internal listener's cert paths from env, or `undefined` when unset. */
+/** Resolve the internal listener's cert paths from the validated env, or `undefined` when unset. */
 export function internalMtlsCertPathsFromEnv(): MtlsCertPaths | undefined {
-  const certPath = process.env["TANREN_INTERNAL_TLS_CERT"];
-  const keyPath = process.env["TANREN_INTERNAL_TLS_KEY"];
-  const caPath = process.env["TANREN_INTERNAL_TLS_CA"];
+  const certPath = parsedEnv.TANREN_INTERNAL_TLS_CERT;
+  const keyPath = parsedEnv.TANREN_INTERNAL_TLS_KEY;
+  const caPath = parsedEnv.TANREN_INTERNAL_TLS_CA;
   if (!certPath || !keyPath || !caPath) {
     return undefined;
   }
@@ -61,7 +63,7 @@ export function startInternalMtlsServer(deps: { pool: pg.Pool }): boolean {
   if (certPaths === undefined) {
     return false;
   }
-  const port = Number(process.env["TANREN_INTERNAL_MTLS_PORT"] ?? DEFAULT_INTERNAL_MTLS_PORT);
+  const port = parsedEnv.TANREN_INTERNAL_MTLS_PORT;
   const app = buildInternalApp({ pool: deps.pool });
   const tlsOptions = nodeMtlsServerOptions(certPaths);
   serve({

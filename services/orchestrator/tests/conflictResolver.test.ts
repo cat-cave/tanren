@@ -159,6 +159,42 @@ describe("intentPreservingConflictResolver", () => {
     expect(resolving?.payload).toMatchObject({ conflictingSpecId: "spec_base", dagEdge: true });
   });
 
+  it("§4: short-circuits an EMPTY gather BEFORE the model call (no wasted resolve, recoverable)", async () => {
+    const events = new FakeEventStore();
+    const log: string[] = [];
+    // gather() surfaces NO conflicted files.
+    const applier = fakeApplier([], log);
+    const captured: { input?: Parameters<ConflictAnswererInvoker["resolve"]>[0] } = {};
+    const replan = recordingReplan();
+
+    const resolver = buildIntentPreservingConflictResolver({
+      projectId: "proj_1",
+      mergingSpecIntent: MERGING,
+      eventStore: events,
+      provenance: fakeProvenance({ conflictingSpecId: BASE.specId, conflictingSpecIntent: BASE, dagEdge: true }),
+      applier,
+      answerer: fakeAnswerer(
+        { decision: "resolve", reasoning: "should NEVER run", resolvedFiles: [], replanSpec: null },
+        captured,
+      ),
+      reGate: fakeReGate({ passed: true, reason: "unused" }),
+      replan,
+    });
+
+    const result = await resolver(CONTEXT);
+
+    // Recoverable conflict (intent stays alive) — but NO model call was made.
+    expect(result.resolved).toBe(false);
+    expect(captured.input).toBeUndefined();
+    // Only gather ran — no apply/publish/abort, no replan, no resolving/resolved events.
+    expect(log).toEqual(["gather"]);
+    expect(replan.calls).toHaveLength(0);
+    const names = events.events.map((e) => e.eventType);
+    expect(names).not.toContain("merge.conflict.resolving");
+    expect(names).not.toContain("merge.conflict.resolved");
+    expect(names).not.toContain("merge.conflict.irreconcilable");
+  });
+
   it("routes a spec back to the planner on an irreconcilable verdict (not dropped, not merged)", async () => {
     const events = new FakeEventStore();
     const log: string[] = [];

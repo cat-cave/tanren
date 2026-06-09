@@ -37,6 +37,7 @@ import {
   deriveFromCapture,
   InterviewCapture,
   MissingLifecycleError,
+  MissingProjectSlugError,
   runRound,
   type DeployPreflightCallback,
   type InterviewAnswerer,
@@ -85,6 +86,10 @@ export interface OnboardingRoutesOptions {
     orgId: string;
     actor: ActorContext;
     templateRegistryQuery: TemplateRegistryQuery;
+    // The REAL GitHub repo owner the new template repo lands under — threaded from the
+    // derive request's `owner` so `maybeCreateTemplateForNoMatch` can actually create
+    // (without it the create path had no owner and silently no-op'd; audit §3.11/2).
+    repoOwner: string;
   }) => (lifecycle: CaptureLifecycle) => Promise<SelectedTemplate | undefined>;
 }
 
@@ -200,6 +205,9 @@ export function createOnboardingRoutes(options: OnboardingRoutesOptions) {
                   orgId,
                   actor: { ...actor, orgId },
                   templateRegistryQuery,
+                  // Thread the REAL repo owner from the derive request so the no-match
+                  // CREATE path lands the template repo under it (audit §3.11/2).
+                  repoOwner: parsed.data.owner,
                 }),
               }),
         },
@@ -231,6 +239,12 @@ export function createOnboardingRoutes(options: OnboardingRoutesOptions) {
       // silent Node default (stack-flexible contract).
       if (error instanceof MissingLifecycleError) {
         return c.json({ error: "lifecycle_missing", message: error.message }, 400);
+      }
+      // The capture surfaced no hostname-safe project slug (no identity + no usable
+      // pitch/design-DNA/stack fallback). A bad/incomplete capture (400), NOT a silent
+      // shared default repo name.
+      if (error instanceof MissingProjectSlugError) {
+        return c.json({ error: "project_slug_missing", message: error.message }, 400);
       }
       if (error instanceof DeployProviderMissingError) {
         return c.json(

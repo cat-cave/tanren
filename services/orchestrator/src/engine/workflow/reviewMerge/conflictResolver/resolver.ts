@@ -92,6 +92,21 @@ export function buildIntentPreservingConflictResolver(deps: IntentPreservingReso
       return { resolved: false };
     }
     const conflictedPaths = gathered.files.map((f) => f.path);
+
+    // §4 empty-gather short-circuit: the applier surfaced NO conflicted files. There
+    // is nothing for the model to resolve, so invoking the conflict Answerer with an
+    // empty `conflictedFiles` would burn a model call (and the bounded re-plan budget)
+    // on a question with no right answer. Short-circuit BEFORE the model call: keep the
+    // merging spec's intent alive (`resolved:false` → the dispatcher emits the
+    // recoverable conflict + re-drives) and surface the empty gather loudly.
+    if (gathered.files.length === 0) {
+      console.error(
+        `[conflict-resolver] gather() surfaced NO conflicted files for spec ${deps.mergingSpecIntent.specId}; ` +
+          `short-circuiting before the model call (no files to resolve), returning a recoverable conflict.`,
+      );
+      return { resolved: false };
+    }
+
     const provenance = await deps.provenance.read({
       projectId: deps.projectId,
       mergingSpecId: deps.mergingSpecIntent.specId,

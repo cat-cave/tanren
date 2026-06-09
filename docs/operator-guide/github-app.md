@@ -62,9 +62,11 @@ private key is never returned.
 The install route (`/auth/github-app/*`) only mounts when both
 `TANREN_GITHUB_APP_CREDENTIAL_REF` and `TANREN_GITHUB_APP_INSTALL_URL` are set.
 
-For the dashboard onboarding affordance, set `TANREN_ORCHESTRATOR_PUBLIC_URL` so
-the org-setup wizard renders the **install github app** button pointing at the
-orchestrator install flow.
+For the dashboard onboarding affordance, set `TANREN_PUBLIC_BASE_URL` (the
+canonical orchestrator public base URL) so the org-setup wizard renders the
+**install github app** button pointing at the orchestrator install flow. The
+dashboard reads the App install URL itself from the orchestrator's
+`/auth/providers` (sourced from `TANREN_GITHUB_APP_INSTALL_URL`).
 
 ## 4. Install the App on an org
 

@@ -256,60 +256,43 @@ describe("FlyDeployProvisioner", () => {
     // prove "the live product reflects this merge" — it MUST refuse unless the operator
     // explicitly accepts the static-image semantics (so apex never proves deploy on Fly).
     const transport = scriptedDeployTransport("fly");
-    const prov = new FlyDeployProvisioner({ transport, secrets: secrets() });
+    // Static-deploy opt-in OFF (the default) → the Fly arm must refuse.
+    const prov = new FlyDeployProvisioner({ transport, secrets: secrets(), allowFlyStaticDeploy: false });
     const grantWithImage: OrgGrant = {
       ...flyGrant,
       metadata: { ...flyGrant.metadata, image: "registry.fly.io/acme-web:deployment-1" },
     };
     await prov.provision(grantWithImage, ctx("acme-web"));
-    const prior = process.env["TANREN_ALLOW_FLY_STATIC_DEPLOY"];
-    delete process.env["TANREN_ALLOW_FLY_STATIC_DEPLOY"];
-    try {
-      await expect(prov.deploy(grantWithImage, "fly_app_1", { repo: "acme/acme-web", ref: "main" })).rejects.toThrow(
-        /NOT merge-reflecting/u,
-      );
-    } finally {
-      if (prior !== undefined) process.env["TANREN_ALLOW_FLY_STATIC_DEPLOY"] = prior;
-    }
+    await expect(prov.deploy(grantWithImage, "fly_app_1", { repo: "acme/acme-web", ref: "main" })).rejects.toThrow(
+      /NOT merge-reflecting/u,
+    );
   });
 
   it("deploy TRIGGERS a Machines release of the app's image + returns the app URL (static-deploy opt-in)", async () => {
     const transport = scriptedDeployTransport("fly");
-    const prov = new FlyDeployProvisioner({ transport, secrets: secrets() });
+    // Static-deploy opt-in ON → the Fly arm releases the image.
+    const prov = new FlyDeployProvisioner({ transport, secrets: secrets(), allowFlyStaticDeploy: true });
     const grantWithImage: OrgGrant = {
       ...flyGrant,
       metadata: { ...flyGrant.metadata, image: "registry.fly.io/acme-web:deployment-1" },
     };
     await prov.provision(grantWithImage, ctx("acme-web"));
 
-    const prior = process.env["TANREN_ALLOW_FLY_STATIC_DEPLOY"];
-    process.env["TANREN_ALLOW_FLY_STATIC_DEPLOY"] = "1";
-    try {
-      const result = await prov.deploy(grantWithImage, "fly_app_1", { repo: "acme/acme-web", ref: "main" });
-      const triggered = transport.deploysTriggered();
-      expect(triggered).toHaveLength(1);
-      expect(triggered[0]!.appId).toBe("acme-web");
-      expect(triggered[0]!.body["config"]).toEqual({ image: "registry.fly.io/acme-web:deployment-1" });
-      expect(result.url).toBe("https://acme-web.fly.dev");
-      expect(result.deploymentId).toMatch(/^fly_deploy_/u);
-    } finally {
-      if (prior === undefined) delete process.env["TANREN_ALLOW_FLY_STATIC_DEPLOY"];
-      else process.env["TANREN_ALLOW_FLY_STATIC_DEPLOY"] = prior;
-    }
+    const result = await prov.deploy(grantWithImage, "fly_app_1", { repo: "acme/acme-web", ref: "main" });
+    const triggered = transport.deploysTriggered();
+    expect(triggered).toHaveLength(1);
+    expect(triggered[0]!.appId).toBe("acme-web");
+    expect(triggered[0]!.body["config"]).toEqual({ image: "registry.fly.io/acme-web:deployment-1" });
+    expect(result.url).toBe("https://acme-web.fly.dev");
+    expect(result.deploymentId).toMatch(/^fly_deploy_/u);
   });
 
   it("deploy fails loud when no release image is configured", async () => {
     const transport = scriptedDeployTransport("fly");
-    const prov = new FlyDeployProvisioner({ transport, secrets: secrets() });
+    // Static-deploy opt-in ON so the failure under test is the missing image, not the gate.
+    const prov = new FlyDeployProvisioner({ transport, secrets: secrets(), allowFlyStaticDeploy: true });
     await prov.provision(flyGrant, ctx("acme-web"));
-    const prior = process.env["TANREN_ALLOW_FLY_STATIC_DEPLOY"];
-    process.env["TANREN_ALLOW_FLY_STATIC_DEPLOY"] = "1";
-    try {
-      // flyGrant carries no `image`, so the release has nothing to deploy.
-      await expect(prov.deploy(flyGrant, "fly_app_1", { repo: "a/b", ref: "main" })).rejects.toThrow(/image/u);
-    } finally {
-      if (prior === undefined) delete process.env["TANREN_ALLOW_FLY_STATIC_DEPLOY"];
-      else process.env["TANREN_ALLOW_FLY_STATIC_DEPLOY"] = prior;
-    }
+    // flyGrant carries no `image`, so the release has nothing to deploy.
+    await expect(prov.deploy(flyGrant, "fly_app_1", { repo: "a/b", ref: "main" })).rejects.toThrow(/image/u);
   });
 });

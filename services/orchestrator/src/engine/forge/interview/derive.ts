@@ -26,11 +26,14 @@
 import type pg from "pg";
 import type { ActorContext } from "../../../auth/schemas.js";
 import type { CreatedRepository, CreateRepositoryInput } from "../../contracts/vcsProvider.js";
-import { BehaviorCreateInput, BehaviorStore } from "../../entities/behaviors.js";
+import { RepositoryAlreadyExistsError } from "../../contracts/vcsProvider.js";
+import { githubHttpsRemote } from "../../providers/github.js";
+import { ProjectStore } from "../../repositories/projects.js";
 import { MilestoneCreateInput, MilestoneStore } from "../../entities/milestones.js";
 import { PersonaCreateInput, PersonaStore } from "../../entities/personas.js";
 import { provisionedGreenfieldProjectConfigProof } from "../../workflow/projectConfigWriteGuards.js";
-import { createProject, createSpec, type SpecContract } from "../../workflow/projectSpec.js";
+import { createProject, createSpec } from "../../workflow/projectSpec.js";
+import { deriveBehaviorSpec, resumeDerivedProject } from "./deriveBehaviorSpec.js";
 import {
   DeployNotLinkedError,
   isDeployNotLinked,
@@ -40,15 +43,20 @@ import {
   type GreenfieldDeployDependency,
   type PrepareDeployCallback,
 } from "./deployDependency.js";
-import { scaffoldSpecsFor } from "./deriveScaffoldSpecs.js";
-import { MissingLifecycleError } from "./scaffoldAuthoring.js";
+import { MissingLifecycleError, scaffoldSpecsFor } from "./deriveScaffoldSpecs.js";
 import {
   selectTemplate,
   type SelectedTemplate,
   type TemplateRegistryQuery,
   type TemplateSelectionDecision,
 } from "./templateSelection.js";
-import { InterviewCapture, type CaptureBehavior, type CaptureInterface, type CaptureLifecycle } from "./types.js";
+import {
+  InterviewCapture,
+  safeProjectSlug,
+  type CaptureBehavior,
+  type CaptureInterface,
+  type CaptureLifecycle,
+} from "./types.js";
 
 export interface DeriveInput {
   orgId: string;
@@ -183,25 +191,24 @@ function interfaceForBehavior(
   return interfaces[0];
 }
 
-// Build the BDD acceptance criteria for a behavior spec from its given/when/then.
-function acceptanceFor(behavior: CaptureBehavior): string[] {
-  const given = behavior.given === "" ? "the persona in context" : behavior.given;
-  const when = behavior.when === "" ? `they ${behavior.title}` : behavior.when;
-  const then = behavior.then === "" ? "the behavior is demonstrated" : behavior.then;
-  return [`given ${given}, when ${when}, then ${then}`];
-}
-
 export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Promise<DeriveResult> {
   // Validate the capture at the derive boundary (defence in depth; the round
   // engine also validates) so a malformed capture never reaches the create path.
   const capture = InterviewCapture.parse(input.capture);
-  const slug = capture.identity?.slug ?? "greenfield-project";
 
   // The architecture step's lifecycle is LOAD-BEARING + REQUIRED — it is persisted
   // onto the project config and the run MATERIALIZES the justfile + ci.yml from it.
   // FAIL LOUD if it is missing (the stack-flexible contract's core invariant: never
-  // silently default to Node).
+  // silently default to Node). Checked FIRST (before slug resolution, which may use
+  // the lifecycle's stack as a fallback signal) so a no-lifecycle capture surfaces the
+  // lifecycle error, not a slug error.
   if (capture.lifecycle === null) throw new MissingLifecycleError();
+
+  // Resolve a HOSTNAME-SAFE slug (the repo + deploy-app name). A captured identity
+  // slug is used verbatim; an absent identity falls back to a REAL normalized signal
+  // (pitch/design-DNA/stack), never a silent shared "greenfield-project" constant —
+  // `safeProjectSlug` throws `MissingProjectSlugError` when nothing safe survives.
+  const slug = safeProjectSlug(capture);
 
   // TEMPLATING WAVE 3 — SELECT a validated template to SEED from, BEFORE deriving the
   // scaffold spec (templating-system.md §3). Runs only when a registry query is
@@ -243,13 +250,57 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
   const baseConfig = autonomousOptIn
     ? autonomousConfig(input.autonomy as "auto" | "simulated")
     : { version: 1, greenfield: true };
-  // PERSIST THE PRODUCT VISION (no migration). The interview capture is otherwise
-  // transient — personas/behaviors/specs become rows, but the product's IDENTITY
-  // (`pitch`) + DESIGN-DNA were previously dropped. Persist them onto the existing
-  // `projects.config` blob so the conflict resolver can frame a resolution against
-  // the product vision. Only the fields the interview actually captured are
-  // written (omit empties) — a real empty state, not a stub.
   if (deploy === undefined || input.prepareDeploy === undefined) throw missingDeployProvisionerError();
+
+  // IDEMPOTENT + ATOMIC ORDER (audit §3.10). The order is REPO-FIRST, THEN deploy — so
+  // a repo-create failure never strands a deploy app, and a stranded retry resumes off
+  // the durable `projects` row keyed by the deterministic repo URL instead of
+  // double-provisioning a SECOND deploy app + 409-ing on the already-created repo.
+  // (Engine-test paths pass an explicit `repoUrl` + no `createRepository` — they skip
+  // the repo step entirely and are not subject to the idempotency probe.)
+  let repository: CreatedRepository | undefined;
+  let repoUrl = input.repoUrl;
+  if (repoUrl === undefined) {
+    if (input.owner === undefined || input.createRepository === undefined) {
+      throw new Error("greenfield repository owner and creator are required");
+    }
+    const owner = input.owner;
+    const createRepository = input.createRepository;
+    // The deterministic repo URL is the idempotency key — a project already bound to it
+    // is a completed prior derive: return it (no repo-create, no deploy-provision).
+    const deterministicRepoUrl = githubHttpsRemote({ owner, name: slug });
+    const existingProject = await ProjectStore.findByRepoUrl(pool, deterministicRepoUrl, { kind: "operator" });
+    if (existingProject !== undefined) {
+      return resumeDerivedProject(existingProject);
+    }
+    try {
+      repository = await createRepository({
+        owner,
+        name: slug,
+        private: input.private ?? true,
+        autoInit: true,
+        ...(input.description === undefined ? {} : { description: input.description }),
+      });
+    } catch (error) {
+      // RE-ATTACH on a repo created by a prior stranded attempt (no project bound — the
+      // probe above proved that): continue with the deterministic URL + default branch.
+      if (error instanceof RepositoryAlreadyExistsError) {
+        repository = {
+          fullName: `${owner}/${slug}`,
+          repoUrl: deterministicRepoUrl,
+          // The auto-init default branch GitHub seeds (the repo already exists).
+          defaultBranch: "main",
+        };
+      } else {
+        throw error;
+      }
+    }
+    repoUrl = repository.repoUrl;
+  }
+
+  // Provision deploy ONLY after the repo exists (the reorder above), so it is the LAST
+  // external resource before the durable project row. PERSIST THE PRODUCT VISION too
+  // (no migration) — the captured IDENTITY (`pitch`) + DESIGN-DNA onto `projects.config`.
   const preparedDeploy = await input.prepareDeploy({
     orgId: input.orgId,
     capability: "deploy",
@@ -263,21 +314,6 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
   });
   if (isDeployNotLinked(preparedDeploy)) {
     throw new DeployNotLinkedError(preparedDeploy);
-  }
-  let repository: CreatedRepository | undefined;
-  let repoUrl = input.repoUrl;
-  if (repoUrl === undefined) {
-    if (input.owner === undefined || input.createRepository === undefined) {
-      throw new Error("greenfield repository owner and creator are required");
-    }
-    repository = await input.createRepository({
-      owner: input.owner,
-      name: slug,
-      private: input.private ?? true,
-      autoInit: true,
-      ...(input.description === undefined ? {} : { description: input.description }),
-    });
-    repoUrl = repository.repoUrl;
   }
   const config = {
     ...baseConfig,
@@ -436,55 +472,4 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
     milestoneIds,
     ...(templateSelection === undefined ? {} : { templateSelection }),
   };
-}
-
-interface DeriveBehaviorSpecInput {
-  projectId: string;
-  orgId: string;
-  behavior: CaptureBehavior;
-  milestoneId: string;
-  dependsOn: string[];
-  personaIdByName: Map<string, string>;
-  actor: ActorContext;
-}
-
-// Create the spec for one behavior, persist the behavior under its persona, and
-// link the two (spec ⇄ behavior) so the DAG shows the b-tag tie.
-async function deriveBehaviorSpec(
-  pool: pg.Pool,
-  input: DeriveBehaviorSpecInput,
-): Promise<SpecContract & { behaviorId?: string }> {
-  const spec = await createSpec(
-    pool,
-    {
-      projectId: input.projectId,
-      title: input.behavior.title,
-      description: `${input.behavior.persona}: ${input.behavior.title}.`,
-      acceptanceCriteria: acceptanceFor(input.behavior),
-      dependsOn: input.dependsOn,
-    },
-    input.actor,
-  );
-  await MilestoneStore.setSpecMilestone(pool, { specId: spec.specId, milestoneId: input.milestoneId }, input.actor);
-
-  const personaId = input.personaIdByName.get(input.behavior.persona.toLowerCase());
-  if (personaId === undefined) {
-    return spec;
-  }
-  /* eslint-disable unicorn/no-thenable */
-  // `then` is the BDD Given/When/Then field name carried into the behavior row.
-  const behaviorRow = await BehaviorStore.create(
-    pool,
-    BehaviorCreateInput.parse({
-      personaId,
-      title: input.behavior.title,
-      given: input.behavior.given,
-      when: input.behavior.when,
-      then: input.behavior.then,
-    }),
-    input.actor,
-  );
-  /* eslint-enable unicorn/no-thenable */
-  await BehaviorStore.linkToSpec(pool, { specId: spec.specId, behaviorId: behaviorRow.id }, input.actor);
-  return { ...spec, behaviorId: behaviorRow.id };
 }

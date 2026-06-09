@@ -101,18 +101,45 @@ export function collectRunCredentialRefPaths(context: PlannerRunContext): string
 }
 
 /**
+ * The default run-hours ceiling — the SAME value the allocator's abandoned-runner
+ * sweeper uses (`TANREN_MAX_RUN_HOURS`, default 6h, in `services/allocator`). Kept
+ * in sync structurally: the scoped-token TTL below DERIVES from this ceiling so the
+ * token can never expire before the runner it scopes is reaped.
+ */
+const DEFAULT_MAX_RUN_HOURS = 6;
+
+/**
  * How long a run may hold its scoped credential token. The token must outlive the
  * ENTIRE run: credentials are NOT read once up front — the codex/claude writer AND
  * every Answerer (checker/auditor) re-materialize the per-role auth bundle on each
  * call, so a multi-iteration run (planner reruns × writer iterations × roles) reads
  * its credentials many times over many minutes. The token is non-renewable, so this
- * TTL is the hard ceiling on the whole run's credential lifetime — sized generously
- * to cover a long multi-iteration spec run (the run's real bounds are the budget gate
- * + the iteration escape-hatches, not this token). The de-privilege still holds: the
- * token's ACL policy is scoped to ONLY this run's credential paths, and it dies when
- * the run window closes.
+ * TTL is the hard ceiling on the whole run's credential lifetime.
+ *
+ * It is DERIVED FROM THE RUN-HOURS CEILING (`TANREN_MAX_RUN_HOURS`, the same env the
+ * allocator's abandoned-runner sweeper uses) so the two CANNOT DRIFT: a token TTL
+ * shorter than the runner ceiling means a run crossing the TTL loses every credential
+ * materialization (the §3.14 finding — a 2h TTL vs a 6h runner). The TTL is the FULL
+ * ceiling (not a fraction) so the token outlives any run the sweeper would still let
+ * live. A non-positive / non-finite override falls back LOUDLY to the 6h default (a
+ * zero/garbage ceiling must never collapse the TTL to nothing). The de-privilege still
+ * holds: the token's ACL is scoped to ONLY this run's credential paths.
  */
-export const SCOPED_RUN_TOKEN_TTL_SECONDS = 7_200;
+export function resolveScopedRunTokenTtlSeconds(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env["TANREN_MAX_RUN_HOURS"];
+  if (raw !== undefined && raw !== "") {
+    const parsed = Number(raw);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return Math.ceil(parsed * 3_600);
+    }
+    console.error(
+      `[orchestrator] TANREN_MAX_RUN_HOURS=${JSON.stringify(raw)} is not a positive number; ` +
+        `falling back to ${DEFAULT_MAX_RUN_HOURS}h for the scoped-credential token TTL. ` +
+        `The token TTL must cover the runner ceiling or a long run loses its credentials mid-run.`,
+    );
+  }
+  return DEFAULT_MAX_RUN_HOURS * 3_600;
+}
 /**
  * Per-credential-ref read budget. Each writer iteration + each Answerer call
  * re-materializes the credential (1-2 Vault reads), so a run with the max escape-hatch
@@ -172,7 +199,7 @@ export async function resolveScopedRunCredentials(
       runId: input.context.runId,
       orgId: input.context.orgId ?? null,
       credentialRefPaths: refPaths,
-      ttlSeconds: SCOPED_RUN_TOKEN_TTL_SECONDS,
+      ttlSeconds: resolveScopedRunTokenTtlSeconds(),
       numUses: refPaths.length * SCOPED_RUN_TOKEN_USES_PER_REF,
     },
   });

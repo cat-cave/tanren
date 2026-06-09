@@ -36,6 +36,14 @@ export interface DeployProvisionerDeps {
    * `credentialRef` is resolved from here; the per-app alias points back at it.
    */
   secrets: SecretStore;
+  /**
+   * Fly-only: opt into the NON-merge-reflecting static-image deploy. The boot-time
+   * value is the orchestrator env knob TANREN_ALLOW_FLY_STATIC_DEPLOY (parsed once
+   * by envSchema.ts); it flows in here as injected config so the use-site never
+   * re-reads a mutable global. Defaults to the parsed env when omitted. Ignored by
+   * the merge-reflecting Vercel arm.
+   */
+  allowFlyStaticDeploy?: boolean;
 }
 
 /**

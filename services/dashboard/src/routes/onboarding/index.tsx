@@ -23,19 +23,36 @@ import { mountOnboardingActions } from "./actions.js";
 // it — the org/credentials/notifications handlers below are untouched.
 import { mountExistingBrownfield } from "./existing/index.js";
 
-/** The public GitHub App install URL (configurable; sensible default). */
-const GITHUB_APP_URL = process.env["TANREN_GITHUB_APP_URL"] ?? "https://github.com/apps/tanren/installations/new";
+/**
+ * The CANONICAL GitHub App install URL env name shared with the orchestrator
+ * (`TANREN_GITHUB_APP_INSTALL_URL`; the old dashboard-only `TANREN_GITHUB_APP_URL`
+ * name is deleted). This is only the LOCAL FALLBACK default — the dashboard
+ * prefers the value the orchestrator publishes on `/auth/providers` (one source of
+ * truth); see `resolveGithubAppUrl`.
+ */
+const GITHUB_APP_URL_FALLBACK =
+  process.env["TANREN_GITHUB_APP_INSTALL_URL"] ?? "https://github.com/apps/tanren/installations/new";
 
-// when set, the org-setup wizard offers the orchestrator-driven App
-// install flow (`/auth/github-app/install?orgId=…`) which provisions an
-// auto-rotating installation token. Points at the orchestrator's public URL.
-const ORCHESTRATOR_PUBLIC_URL = process.env["TANREN_ORCHESTRATOR_PUBLIC_URL"];
+// CANONICAL orchestrator public base URL (`TANREN_PUBLIC_BASE_URL`; collapsed from
+// the old dashboard-only `TANREN_ORCHESTRATOR_PUBLIC_URL` name). When set, the
+// org-setup wizard offers the orchestrator-driven App install flow
+// (`/auth/github-app/install?orgId=…`) which provisions an auto-rotating token.
+const ORCHESTRATOR_PUBLIC_URL = process.env["TANREN_PUBLIC_BASE_URL"];
 
 function appInstallHrefFor(orgId: string | undefined): string | undefined {
   if (ORCHESTRATOR_PUBLIC_URL === undefined || ORCHESTRATOR_PUBLIC_URL === "" || orgId === undefined) {
     return undefined;
   }
   return `${ORCHESTRATOR_PUBLIC_URL.replace(/\/$/u, "")}/auth/github-app/install?orgId=${encodeURIComponent(orgId)}`;
+}
+
+/**
+ * Resolve the GitHub App install URL, preferring the value the orchestrator
+ * publishes on `/auth/providers` over the dashboard's local fallback env. Keeps
+ * the name single-sourced in the orchestrator's validated env.
+ */
+async function resolveGithubAppUrl(client: OrchestratorClient): Promise<string> {
+  return (await client.authGithubAppInstallUrl()) ?? GITHUB_APP_URL_FALLBACK;
 }
 
 function clientFor(c: Context, deps: ShellDeps): OrchestratorClient {
@@ -69,6 +86,7 @@ export function mountOnboardingScreens(app: Hono, deps: ShellDeps): void {
     let orgCredentials: CredentialRecord[] = [];
     let myCredentials: CredentialRecord[] = [];
     let matrix: NotificationMatrix = { targets: [], routes: [], events: [] };
+    const githubAppUrl = await resolveGithubAppUrl(client);
     if (step === 1) doctor = await client.doctor();
     if (step === 2 && orgId !== undefined) {
       [orgCredentials, myCredentials] = await Promise.all([
@@ -87,7 +105,7 @@ export function mountOnboardingScreens(app: Hono, deps: ShellDeps): void {
         <OrgWizardBody
           step={step}
           orgLogin={ctx.org?.login ?? "your org"}
-          githubAppUrl={GITHUB_APP_URL}
+          githubAppUrl={githubAppUrl}
           appInstallHref={appInstallHrefFor(orgId)}
           doctor={doctor}
           orgCredentials={orgCredentials}

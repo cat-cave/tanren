@@ -31,6 +31,64 @@ export interface CreditState {
   atStart: number | null;
 }
 
+// The run's resolved credential identity — the writer adapter's authRef. Prepaid-credit
+// balances are GLOBAL to a credential, so this is the per-run dedup key that lets the
+// run-end reconcile attribute only THIS run's share of a shared-credential drawdown.
+function runAuthRef(input: SubtaskLoopInput): string {
+  return input.adapters.writer.authRef;
+}
+
+// Stamp `runs.auth_ref` for this run (idempotent — the same value every time), so a
+// CONCURRENT run on the SAME credential can be COUNTED at drawdown-measurement time.
+// Best-effort + LOUD-but-non-fatal: a stamp failure must never fail the run (the
+// reconcile then falls back to attributing the full delta — the prior behavior), but
+// it is surfaced so the over-attribution risk is not silent. Runs org-scoped via
+// `input.pool` (the worker's job-org-scoped loop client).
+async function stampRunAuthRef(input: SubtaskLoopInput): Promise<void> {
+  try {
+    await input.pool.query(`UPDATE runs SET auth_ref = $2 WHERE run_id = $1 AND auth_ref IS DISTINCT FROM $2`, [
+      input.context.runId,
+      runAuthRef(input),
+    ]);
+  } catch (error) {
+    console.error(
+      `[subtask-accounting] failed to stamp runs.auth_ref for run ${input.context.runId}; ` +
+        `concurrent-credential drawdown attribution falls back to the full delta (may over-count):`,
+      error,
+    );
+  }
+}
+
+// Count the runs CONCURRENTLY ACTIVE on the SAME credential (auth_ref) right now —
+// THIS run plus any other non-terminal run that has stamped the same auth_ref. The
+// credential's GLOBAL drawdown is shared across exactly these runs, so dividing the
+// observed delta by this count attributes only this run's share (the sum across the
+// concurrent runs equals the real drawdown — no double-count). Floors at 1 (this run
+// always counts). A query failure is LOUD and falls back to 1 (full delta — the prior
+// behavior), never a silent miscount.
+async function countConcurrentRunsOnCredential(input: SubtaskLoopInput): Promise<number> {
+  try {
+    const result = await input.pool.query<{ n: string }>(
+      // THIS run always counts (run_id = $1), even if its status already flipped to a
+      // terminal value before run-end accounting runs; plus any other still-active run
+      // sharing the credential.
+      `SELECT count(*)::text AS n FROM runs
+        WHERE auth_ref = $2
+          AND (run_id = $1 OR status NOT IN ('completed', 'failed', 'cancelled'))`,
+      [input.context.runId, runAuthRef(input)],
+    );
+    const n = Number(result.rows[0]?.n ?? "1");
+    return Number.isFinite(n) && n >= 1 ? n : 1;
+  } catch (error) {
+    console.error(
+      `[subtask-accounting] failed to count concurrent runs on credential for run ${input.context.runId}; ` +
+        `attributing the FULL drawdown delta (may over-count a shared credential):`,
+      error,
+    );
+    return 1;
+  }
+}
+
 // checkWindowPreflight reads the live subscription-window state (codexbar) for
 // the run's credential and escalates PROJECT_BRIEF §4.3 window pressure. It
 // emits usage.window.observed for the live state and, when a window is at/over
@@ -64,14 +122,14 @@ export async function checkWindowPreflight(
   // Capture the credit balance at the first observation that reports one; the
   // run-end drawdown against this baseline is the run's marginal dollar cost.
   //
-  // KNOWN HAZARD (audit §3.7f, NOT yet fixed): `creditsRemaining` is the credential's
-  // GLOBAL balance. When two runs share one credential and overlap, EACH captures the
-  // same baseline and EACH attributes the WHOLE concurrent drawdown — the spend is
-  // double-counted. A correct per-run attribution needs an `auth_ref` column on `runs`
-  // + a concurrency query (a migration + a new event), out of scope of this budget
-  // wave; tracked as a follow-up. Documented here so the over-attribution is not silent.
+  // §3.7f double-count fix: `creditsRemaining` is the credential's GLOBAL balance, so
+  // two runs sharing one credential each see the same baseline + the same combined
+  // drawdown. On the FIRST baseline capture we STAMP `runs.auth_ref` (the per-run dedup
+  // key) so the run-end reconcile can COUNT the concurrent runs on the credential and
+  // attribute only this run's share — the spend is no longer N×-counted.
   if (creditState.atStart === null && usage !== null && usage.creditsRemaining !== null) {
     creditState.atStart = usage.creditsRemaining;
+    await stampRunAuthRef(input);
   }
   if (usage !== null) {
     await appendEvent(
@@ -156,8 +214,15 @@ export async function observeRunAccounting(
     );
   }
 
-  const creditsConsumed = await readEndingCreditDrawdown(input, appendEvent, plannerTaskId, creditState);
-  if (creditsConsumed !== null && creditsConsumed > 0) {
+  const observedDrawdown = await readEndingCreditDrawdown(input, appendEvent, plannerTaskId, creditState);
+  if (observedDrawdown !== null && observedDrawdown > 0) {
+    // §3.7f: the observed delta is the credential's GLOBAL drawdown, shared across
+    // every run concurrently active on that credential. Divide by the concurrent-run
+    // count so THIS run is attributed only its share (the sum across the concurrent
+    // runs == the real drawdown — no double-count). With one run, the divisor is 1
+    // and this is byte-identical to before.
+    const concurrentRuns = await countConcurrentRunsOnCredential(input);
+    const creditsConsumed = observedDrawdown / concurrentRuns;
     // A REAL credit drawdown — the subscription-overage marginal spend. Price it
     // at the CONFIGURED per-credential rate, else record NULL-and-loud (never the
     // old magic constant).

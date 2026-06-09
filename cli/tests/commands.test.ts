@@ -13,7 +13,7 @@ import { startStubServer, type StubServer } from "./helpers/stubServer.js";
 // call-count assertions: see docs/contracts/architecture-checks.md
 // (Behavior-based tests).
 
-// `httpClient.ts` reads TANREN_ORCHESTRATOR_URL at module load, so the env must
+// `httpClient.ts` reads TANREN_PUBLIC_BASE_URL at module load, so the env must
 // be set before the command module is imported. Each test imports the handlers
 // fresh after the stub URL is known via `loadMain()`.
 type MainModule = typeof MainModuleNs;
@@ -38,13 +38,13 @@ beforeEach(async () => {
 afterEach(async () => {
   await server?.close();
   await rm(authDir, { recursive: true, force: true });
-  delete process.env.TANREN_ORCHESTRATOR_URL;
+  delete process.env.TANREN_PUBLIC_BASE_URL;
   delete process.env.TANREN_AUTH_FILE;
 });
 
 async function withStub(responseBody: unknown): Promise<MainModule> {
   server = await startStubServer(responseBody);
-  process.env.TANREN_ORCHESTRATOR_URL = server.url;
+  process.env.TANREN_PUBLIC_BASE_URL = server.url;
   return loadMain();
 }
 

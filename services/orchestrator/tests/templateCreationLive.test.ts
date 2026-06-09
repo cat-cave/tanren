@@ -137,6 +137,7 @@ class RecordingSsh implements CommandSubstrate {
   }
 }
 
+const releasedRunners: string[] = [];
 const fakeAllocator = {
   async allocate() {
     return {
@@ -145,7 +146,9 @@ const fakeAllocator = {
       target: { backend: "ssh" } as RunnerHandle,
     };
   },
-  async release() {},
+  async release(runnerId: string) {
+    releasedRunners.push(runnerId);
+  },
 };
 
 const convergedFacts: ConvergedProjectFacts = {
@@ -206,6 +209,13 @@ describe("LIVE build-driver — wiring shape", () => {
     // the clone fetched the EXACT converged sha (not a branch tip).
     const cloned = ssh.commands.find((c) => c.command.includes("git fetch"));
     expect(cloned?.command).toContain("a".repeat(40));
+
+    // the handle carries a `release` that tears down the ALLOCATED validation runner
+    // (audit §3.11/4: the validation runner must not leak). Not yet released — the
+    // creation flow calls it in its `finally`; calling it here releases runner_1.
+    releasedRunners.length = 0;
+    await built.release();
+    expect(releasedRunners).toEqual(["runner_1"]);
   });
 
   it("a stranded spec (terminal_blocked) fails LOUD — never validates a partial template", async () => {
@@ -292,8 +302,105 @@ describe("createTemplateFlow assembly — the live, mountable capability", () =>
       orgId: "org_acme",
       actor: { userId: "u", orgId: "org_acme", projectId: null, scopes: ["org:admin"], source: "session" },
       templateRegistryQuery: async () => [],
+      repoOwner: "cat-cave",
     });
     expect(typeof seam).toBe("function");
+  });
+});
+
+// The no-match seam is ASYNC (audit §3.11/3): it must NOT run the 60-min creation
+// inline in the derive request. It (1) checks the registry for an existing validated
+// match synchronously (seed it if present), else (2) fires creation in the BACKGROUND
+// and returns `undefined` immediately so the derive proceeds from-scratch THIS run.
+// A pool whose template-capability query returns the scripted rows; records calls.
+function poolReturning(rows: ReadonlyArray<unknown>) {
+  const queries: string[] = [];
+  return {
+    queries,
+    pool: {
+      async query(sql: string) {
+        queries.push(sql.replaceAll(/\s+/gu, " ").trim());
+        return { rows };
+      },
+    } as never,
+  };
+}
+
+describe("buildCreateForNoMatch — async, owner-threaded (audit §3.11/2,3)", () => {
+  // Local flow deps (the assembly does no I/O until the flow runs; all sub-infra stubbed).
+  const deps = {
+    pool: {} as never,
+    secrets: {} as never,
+    allocator: fakeAllocator as never,
+    ssh: new RecordingSsh() as never,
+    identitySecretRef: "id/ref",
+    vcsProvider: {} as never,
+    githubAppMinter: {} as never,
+    forgeInfra: { pool: {}, secrets: {}, allocator: fakeAllocator, ssh: {}, identitySecretRef: "id/ref" } as never,
+    auditPassRunner: {
+      async run() {
+        return { findings: [] };
+      },
+    } as never,
+    repoOwner: "cat-cave",
+  } as unknown as CreateTemplateFlowDeps;
+
+  const ctx = {
+    orgId: "org_acme",
+    actor: { userId: "u", orgId: "org_acme", projectId: null, scopes: ["org:admin"], source: "session" as const },
+    templateRegistryQuery: async () => [],
+    repoOwner: "cat-cave",
+  };
+
+  it("an EXISTING validated match seeds THIS derive synchronously (no creation)", async () => {
+    const { pool } = poolReturning([
+      {
+        id: "template_existing",
+        org_id: "org_acme",
+        repo_ref: "cat-cave/tanren-template-ts-next",
+        status: "validated",
+        channel: "lts",
+        manifest: {
+          version: 1,
+          stack: "ts-pnpm",
+          channel: "lts",
+          templateVersion: "1.0.0",
+          provenance: { researchSources: ["https://nextjs.org"] },
+          capabilities: {
+            runtime: "node",
+            packageManager: "pnpm",
+            gates: ["tier-1"],
+            bdd: true,
+            mutation: false,
+            junit: true,
+          },
+          validationProof: {
+            positiveControlsPassed: true,
+            negativeControls: { typecheck: "proven", lint: "proven", test: "proven", mutation: "n/a" },
+            auditorClean: true,
+            validatedAt: "2026-06-01T00:00:00.000Z",
+            validatedSha: "abc1234",
+          },
+        },
+      },
+    ]);
+    const seam = buildCreateForNoMatch({ ...deps, pool }, ctx);
+    const selected = await seam(lifecycle);
+    expect(selected?.templateRef).toBe("template_existing");
+    expect(selected?.repoRef).toBe("cat-cave/tanren-template-ts-next");
+  });
+
+  it("NO existing match → returns undefined IMMEDIATELY (background creation, never blocks the derive)", async () => {
+    const { pool } = poolReturning([]);
+    // The buildDriver would block ~60min if creation ran inline; a synchronous-resolving
+    // seam proves the derive is NOT awaiting the build. The background creation fires
+    // detached (its own pool query); we only assert the seam returned promptly + undefined.
+    const seam = buildCreateForNoMatch({ ...deps, pool }, ctx);
+    const before = Date.now();
+    const selected = await seam(lifecycle);
+    expect(selected).toBeUndefined();
+    // The seam returned without awaiting any multi-second build step.
+    expect(Date.now() - before).toBeLessThan(2000);
   });
 });
 

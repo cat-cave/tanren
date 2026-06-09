@@ -20,6 +20,7 @@ import {
   buildRunCredentialScoping,
   collectRunCredentialRefPaths,
   resolveScopedRunCredentials,
+  resolveScopedRunTokenTtlSeconds,
 } from "../src/engine/workflow/plannerRunScopedCreds.js";
 import { vaultTokenFetch } from "./conformance/fakes/vaultTokenFetch.js";
 import {
@@ -250,5 +251,36 @@ describe("runPlannerLoopWorkflow — per-run credential de-privilege wiring", ()
     expect(vault.authorizedReads).toContain(GH_REF);
     // The BROAD store's transport was NEVER used for a KV read.
     expect(broad.authorizedReads).toHaveLength(0);
+  });
+});
+
+// The runner ceiling (TANREN_MAX_RUN_HOURS) in seconds — the floor the scoped
+// credential token TTL must meet or exceed, or a long run loses its creds mid-run.
+const ceilingSeconds = (hours: number) => hours * 3_600;
+
+describe("resolveScopedRunTokenTtlSeconds — TTL covers the runner ceiling (§3.14)", () => {
+  it("defaults the TTL to the 6h run ceiling (was 2h — the §3.14 drift)", () => {
+    const ttl = resolveScopedRunTokenTtlSeconds({});
+    expect(ttl).toBe(ceilingSeconds(6));
+    expect(ttl).toBeGreaterThanOrEqual(ceilingSeconds(6));
+    // The OLD hardcoded 2h would have lost every cred materialization past 2h.
+    expect(ttl).toBeGreaterThan(7_200);
+  });
+
+  it("derives the TTL from TANREN_MAX_RUN_HOURS so it can't drift below the ceiling", () => {
+    for (const hours of [1, 4, 6, 8, 12]) {
+      const ttl = resolveScopedRunTokenTtlSeconds({ TANREN_MAX_RUN_HOURS: String(hours) });
+      // The token must outlive the runner: TTL >= the configured ceiling, exactly.
+      expect(ttl).toBe(ceilingSeconds(hours));
+      expect(ttl).toBeGreaterThanOrEqual(ceilingSeconds(hours));
+    }
+  });
+
+  it("falls back LOUDLY to the 6h ceiling on a non-positive / garbage override", () => {
+    for (const bad of ["0", "-3", "abc", "  "]) {
+      const ttl = resolveScopedRunTokenTtlSeconds({ TANREN_MAX_RUN_HOURS: bad });
+      // A zero/garbage ceiling must NOT collapse the TTL — it covers the full default.
+      expect(ttl).toBe(ceilingSeconds(6));
+    }
   });
 });
