@@ -128,6 +128,14 @@ export class DirectApiDeployAdapter implements DeployAdapter {
    * Smoke-check the resolved URL is HTTP-reachable (2xx/3xx). A non-success status —
    * a deployment reported READY but whose URL does not actually serve — throws LOUD;
    * an empty URL (the provider returned no host) is a hard error too.
+   *
+   * DEPLOYMENT-PROTECTION EXCEPTION: a `401`/`403` is NOT an unhealthy deploy — Vercel
+   * Deployment Protection (and Fly equivalents) front a HEALTHY, RUNNING deployment with
+   * an auth gate, so the server answering 401/403 PROVES it is up and serving. We treat
+   * those as reachable (the provider returned the deployment is live; the gate is in
+   * front). To smoke-check the BEHAVIOR behind the gate, disable deployment protection
+   * on the deploy target (see the apex operator guide). Any OTHER non-2xx/3xx is a hard
+   * fail (a READY deployment whose URL does not actually serve).
    */
   private async smokeCheck(
     ref: DeployRef,
@@ -142,7 +150,8 @@ export class DirectApiDeployAdapter implements DeployAdapter {
       );
     }
     const smokeStatus = await this.deps.urlProbe.probe(url);
-    if (smokeStatus < 200 || smokeStatus >= 400) {
+    const reachable = (smokeStatus >= 200 && smokeStatus < 400) || smokeStatus === 401 || smokeStatus === 403;
+    if (!reachable) {
       throw new Error(
         `deploy verify: deployment '${deploymentId}' URL '${url}' is not reachable (smoke check returned HTTP ${String(smokeStatus)})`,
       );

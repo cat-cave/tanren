@@ -88,14 +88,31 @@ function toConversation(channel: SlackChannelObject): SlackConversation {
  * it is sent only as the `Authorization: Bearer` header and is never returned to
  * the provisioner or embedded in any artifact.
  */
+// How many times a 429 (Slack rate-limit) is retried before surfacing the error.
+// Slack returns a `Retry-After` (seconds) header on a 429; we honor it (bounded) so a
+// burst of channel calls rides out a transient rate-limit rather than failing the
+// provision. Bounded so a persistent 429 still fails LOUD rather than retrying forever.
+const SLACK_MAX_RATE_LIMIT_RETRIES = 3;
+// A defensive cap on the honored `Retry-After` so a hostile/huge header cannot wedge a
+// run; Slack's real values are single-digit seconds.
+const SLACK_MAX_RETRY_AFTER_MS = 60_000;
+
 export class FetchSlackApiTransport implements SlackApiTransport {
   private readonly fetchImpl: typeof fetch;
+  private readonly sleep: (ms: number) => Promise<void>;
 
   constructor(
     private readonly botToken: string,
     fetchImpl?: typeof fetch,
+    sleep?: (ms: number) => Promise<void>,
   ) {
     this.fetchImpl = fetchImpl ?? fetch;
+    this.sleep =
+      sleep ??
+      ((ms: number): Promise<void> =>
+        new Promise<void>((resolve) => {
+          setTimeout(resolve, ms);
+        }));
   }
 
   async authTest(): Promise<{ botUserId: string }> {
@@ -139,23 +156,42 @@ export class FetchSlackApiTransport implements SlackApiTransport {
 
   // Every Slack Web API call returns 200 with an `{ ok, error }` envelope; a
   // non-ok envelope is a real failure we surface as a thrown Error (the provider
-  // never silently swallows a Slack error).
+  // never silently swallows a Slack error). A 429 (rate-limit) is the one retryable
+  // status: Slack supplies a `Retry-After` (seconds) header we honor (bounded) before
+  // retrying, up to {@link SLACK_MAX_RATE_LIMIT_RETRIES}; a persistent 429 then fails LOUD.
   private async call<T extends SlackApiEnvelope>(method: string, params: Record<string, string>): Promise<T> {
-    const response = await this.fetchImpl(`${SLACK_API_BASE}/${method}`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        Authorization: `Bearer ${this.botToken}`,
-      },
-      body: new URLSearchParams(params).toString(),
-    });
-    if (!response.ok) {
-      throw new Error(`slack ${method} HTTP ${response.status} ${response.statusText}`);
+    for (let attempt = 0; ; attempt++) {
+      const response = await this.fetchImpl(`${SLACK_API_BASE}/${method}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          Authorization: `Bearer ${this.botToken}`,
+        },
+        body: new URLSearchParams(params).toString(),
+      });
+      if (response.status === 429 && attempt < SLACK_MAX_RATE_LIMIT_RETRIES) {
+        await this.sleep(retryAfterMs(response.headers.get("retry-after")));
+        continue;
+      }
+      if (!response.ok) {
+        throw new Error(`slack ${method} HTTP ${response.status} ${response.statusText}`);
+      }
+      const body = (await response.json()) as T;
+      if (!body.ok) {
+        throw new Error(`slack ${method} failed: ${body.error ?? "unknown_error"}`);
+      }
+      return body;
     }
-    const body = (await response.json()) as T;
-    if (!body.ok) {
-      throw new Error(`slack ${method} failed: ${body.error ?? "unknown_error"}`);
-    }
-    return body;
   }
+}
+
+/**
+ * Parse a Slack `Retry-After` header (seconds) into a bounded millisecond wait. A
+ * missing/unparseable header falls back to 1s; the value is capped at
+ * {@link SLACK_MAX_RETRY_AFTER_MS} so a hostile/huge header cannot wedge a run.
+ */
+function retryAfterMs(header: string | null): number {
+  const seconds = header === null ? Number.NaN : Number.parseInt(header, 10);
+  const ms = Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 1000;
+  return Math.min(ms, SLACK_MAX_RETRY_AFTER_MS);
 }
