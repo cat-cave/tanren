@@ -21,7 +21,7 @@ import {
 } from "../contracts/mergeCoordinator.js";
 import { isRetriableInfraError } from "../providers/githubRefReset.js";
 import { setTimeout as sleepFor } from "node:timers/promises";
-import { markDequeuedAfterEvent, type MergeQueueEventEmitter } from "./coordinator.js";
+import { markDequeuedAfterEvent, type MergeQueueEventEmitter, type MergeSettleTransaction } from "./coordinator.js";
 import type { SpecEscalator } from "./coordinatorEscalate.js";
 import {
   driveBaseConflict,
@@ -103,6 +103,8 @@ export interface BatchMergeCoordinatorDeps {
    * both paths use, so they can never diverge.
    */
   escalator: SpecEscalator;
+  /** ATOMICITY (audit RC-4 #3): when wired, the dequeue settle runs its event append + queue UPDATE in ONE transaction (both-or-neither). */
+  tx?: MergeSettleTransaction;
   recoverableDriveHolds?: RecoverableDriveHoldCeiling;
   /**
    * Resolve the per-project max batch size (the config knob). Defaults to a constant
@@ -283,6 +285,7 @@ export class BatchMergeCoordinator implements MergeCoordinator {
         entry: bisect.culprit,
         reason: "conflict",
         message: dequeueMessage,
+        tx: this.deps.tx,
       });
       excludedSpecIds.add(bisect.culprit.specId);
 

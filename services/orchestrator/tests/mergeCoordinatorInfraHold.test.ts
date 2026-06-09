@@ -15,8 +15,8 @@
 //     the claim with bounded merge_retry backoff instead of stranding the candidate.
 
 import { describe, expect, it, vi } from "vitest";
-import type { MergeDriveOutcome, MergeRunner } from "../src/engine/contracts/mergeCoordinator.js";
-import { EventEmittingMergeCoordinator } from "../src/engine/merge/coordinator.js";
+import type { MergeDriveOutcome, MergeQueueEntry, MergeRunner } from "../src/engine/contracts/mergeCoordinator.js";
+import { EventEmittingMergeCoordinator, markDequeuedAfterEvent } from "../src/engine/merge/coordinator.js";
 import {
   MissingGithubCredentialRefError,
   NoGithubCredentialConfiguredError,
@@ -24,6 +24,7 @@ import {
 import { RefResetPermanentError, RefResetTransientError } from "../src/engine/providers/githubRefReset.js";
 import { MergeAmbiguousError, MergeTransientError } from "../src/engine/providers/mergeOutcomeErrors.js";
 import {
+  FakeMergeSettleTransaction,
   InMemoryMergeQueueModel,
   RecordingMergeQueueEventEmitter,
   RecordingSpecEscalator,
@@ -335,5 +336,71 @@ describe("EventEmittingMergeCoordinator — transient merge-drive throw → infr
     expect(blocked).toHaveLength(1);
     expect(blocked[0]?.kind).toBe("ceiling");
     expect(events.events.some((e) => e.type === "merge.dequeued")).toBe(false);
+  });
+});
+
+describe("markDequeuedAfterEvent atomicity (audit RC-4 #3): both-commit-or-both-roll-back, never a split brain", () => {
+  // Load the seeded entry off the snapshot so it carries real queueId/runId/specId facts.
+  async function seededEntry(queue: InMemoryMergeQueueModel, runId: string, specId: string): Promise<MergeQueueEntry> {
+    queue.seed({ runId, specId, dependsOn: [], priority: "tbd" });
+    const snapshot = await queue.loadSnapshot(PROJECT);
+    const entry = snapshot.entries.find((e) => e.runId === runId);
+    if (entry === undefined) throw new Error("seeded entry not found");
+    return entry;
+  }
+
+  it("when the queue UPDATE throws inside the settle transaction, the event is NOT durably applied (both-or-neither)", async () => {
+    const queue = new InMemoryMergeQueueModel();
+    const events = new RecordingMergeQueueEventEmitter();
+    const entry = await seededEntry(queue, "run_split_tx", "spec_split_tx");
+    // Claim it so the row is `merging` (the state the settle would flip to `dequeued`).
+    expect(await queue.claim(entry.queueId)).toBe(true);
+    expect(queue.statusOf("run_split_tx")).toBe("merging");
+
+    // The transaction's staged queue UPDATE THROWS — modeling the row write failing
+    // mid-transaction. Both-or-neither: the staged event must NOT be flushed.
+    const tx = new FakeMergeSettleTransaction(events, queue, new Error("queue update failed mid-transaction"));
+
+    await expect(
+      markDequeuedAfterEvent({
+        queue,
+        events,
+        projectId: PROJECT,
+        entry,
+        reason: "failed",
+        message: "terminal merge failure",
+        tx,
+      }),
+    ).rejects.toThrow("queue update failed mid-transaction");
+
+    // NEITHER write landed: the event was rolled back (not durably applied)...
+    expect(events.events.filter((e) => e.type === "merge.dequeued")).toEqual([]);
+    // ...AND the row was NOT dequeued — it remains `merging` (recoverable by lease).
+    expect(queue.statusOf("run_split_tx")).toBe("merging");
+  });
+
+  it("on a clean settle transaction, BOTH the event AND the row dequeue commit together", async () => {
+    const queue = new InMemoryMergeQueueModel();
+    const events = new RecordingMergeQueueEventEmitter();
+    const entry = await seededEntry(queue, "run_ok_tx", "spec_ok_tx");
+    expect(await queue.claim(entry.queueId)).toBe(true);
+
+    const tx = new FakeMergeSettleTransaction(events, queue);
+    await markDequeuedAfterEvent({
+      queue,
+      events,
+      projectId: PROJECT,
+      entry,
+      reason: "failed",
+      message: "terminal merge failure",
+      tx,
+    });
+
+    // Both landed — the durable event AND the dequeued row.
+    const dequeued = events.events.filter((e) => e.type === "merge.dequeued");
+    expect(dequeued).toHaveLength(1);
+    expect(dequeued[0]?.specId).toBe("spec_ok_tx");
+    expect(queue.statusOf("run_ok_tx")).toBe("dequeued");
+    expect(queue.dequeueReasonOf("run_ok_tx")).toBe("failed");
   });
 });

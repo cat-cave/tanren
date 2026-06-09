@@ -24,7 +24,7 @@ import type {
 import type { SpecEscalator } from "./coordinatorEscalate.js";
 import { isRetriableInfraError } from "../providers/githubRefReset.js";
 import { isAmbiguousMergeError } from "../providers/mergeOutcomeErrors.js";
-import { markDequeuedAfterEvent, type MergeQueueEventEmitter } from "./coordinator.js";
+import { markDequeuedAfterEvent, type MergeQueueEventEmitter, type MergeSettleTransaction } from "./coordinator.js";
 import { serializedRetryAfterMs } from "./mergeSerializedRetry.js";
 import {
   holdOrHaltRecoverableDrive,
@@ -44,6 +44,8 @@ export interface BatchSettleDeps {
   queue: MergeQueueModel;
   events: MergeQueueEventEmitter;
   escalator: SpecEscalator;
+  /** ATOMICITY (audit RC-4 #3): when wired, the dequeue settle runs event + UPDATE in one transaction. */
+  tx?: MergeSettleTransaction;
   recoverableDriveHolds?: RecoverableDriveHoldCeiling;
 }
 
@@ -106,6 +108,7 @@ export async function settleDriveOutcome(
       entry,
       reason: "needs_attention",
       message: outcome.message,
+      tx: deps.tx,
     });
     deps.recoverableDriveHolds?.reset(entry.queueId);
     return "dequeued";
@@ -127,6 +130,7 @@ export async function settleDriveOutcome(
     entry,
     reason,
     message: outcome.message,
+    tx: deps.tx,
   });
   return "dequeued";
 }
