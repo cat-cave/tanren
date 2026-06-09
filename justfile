@@ -51,6 +51,14 @@ contract-schema-drift:
 dashboard-types-drift:
   corepack pnpm run check:dashboard-types-drift
 
+# Trust-at-boundary lint (audit RC-6): rejects re-introduced `as Date` (and
+# `.parse(...) as <ClosedEnum>`) casts in the run-detail read seam
+# (services/orchestrator/src/routes/runs/**), so a reverted Zod-decode fix fails
+# the build. Widen the scope to the rest of routes/** + the forge decode sites in
+# a follow-up (see scripts/lint/no-pg-as-date.mjs header).
+no-pg-as-date:
+  corepack pnpm run check:no-pg-as-date
+
 knip:
   corepack pnpm run check:knip
 
@@ -79,7 +87,7 @@ spelling:
 typecheck:
   corepack pnpm run typecheck
 
-fast-check: format-check lint types-lint architecture schema-drift state-drift event-drift answerer-schema-drift contract-schema-drift dashboard-types-drift knip spelling typecheck test compose-config
+fast-check: format-check lint types-lint architecture no-pg-as-date schema-drift state-drift event-drift answerer-schema-drift contract-schema-drift dashboard-types-drift knip spelling typecheck test compose-config
 
 test:
   corepack pnpm run test
