@@ -108,10 +108,11 @@ export function buildRunLoopBuildDriver(deps: RunLoopBuildDriverDeps): TemplateB
       }
 
       // 3. Allocate a runner + clone the conforming tree AT the converged sha +
-      //    bootstrap it + resolve its .tanren/ci.yml — the live validation handle.
-      //    The runner is NOT released here: the validation harness runs over it and
-      //    the creation flow owns its teardown after validation. (The harness's
-      //    scratch copies live under the workspace, reaper-protected.)
+      //    bootstrap it + resolve its .tanren/ci.yml — the live validation handle. The
+      //    handle carries a `release()` closure (the allocator teardown for this
+      //    runner); the creation flow calls it in a `finally` after validation, so the
+      //    validation runner is never leaked. (The harness's scratch copies live under
+      //    the workspace, reaper-protected, and go down with the runner.)
       return assembleBuiltTemplate(deps, input, facts);
     },
   };
@@ -222,6 +223,21 @@ async function assembleBuiltTemplate(
     scratchRoot,
     config,
     auditor: deps.auditorFor(input),
+    // RELEASE the validation runner the allocator gave us (the creation flow calls
+    // this in a `finally` after validation). Best-effort: a release failure is logged,
+    // never thrown — it must not mask the validation outcome, and the allocator's
+    // release is idempotent (a double-release / already-released runner is a no-op).
+    release: async () => {
+      try {
+        await deps.allocator.release(allocation.runnerId, "completed");
+      } catch (error) {
+        console.warn(
+          `[template-build] failed to release validation runner ${allocation.runnerId} ` +
+            `(project ${input.projectId}) — leak risk:`,
+          error,
+        );
+      }
+    },
   };
 }
 

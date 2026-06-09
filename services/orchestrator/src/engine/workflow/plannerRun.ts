@@ -121,6 +121,8 @@ export interface PlannerRunContext {
   creditUsdRate?: number;
   // DETERMINISTIC CONTRACT FILES (v27 fix): the `.tanren/ci.yml` + `justfile` workspace-prep materializes VERBATIM (write-iff-absent) from the captured lifecycle BEFORE the writer runs — so they are NEVER LLM-authored (the writer mangled the ci.yml shape on v27). Absent ⇒ no lifecycle (brownfield ships its own) ⇒ no-op.
   contractFiles?: ReadonlyArray<ContractFile>;
+  // TEMPLATING WAVE 3 (templating-system.md §3): the SELECTED template's repo ref to SEED from (from `projectConfig.templateRef`). When set, the run clones the template's conforming files into the workspace BEFORE the writer — so the scaffold writer's "seed already committed" assertion holds and it specializes the seed instead of authoring from scratch. Absent ⇒ no match ⇒ the from-scratch contract-file path runs.
+  templateSeed?: { repoRef: string };
 }
 
 export interface PlannerRunAdapterContext {
@@ -490,10 +492,7 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
     await finalizeWorkflowError(error, { finalizeRunState, appendEvent, workspacePath, input, context });
     throw error;
   } finally {
-    // SECURITY-BASELINE CLEANUP-PROOF: remove the run's `/workspace/runs/<runId>`
-    // sandbox (layer 1 of the ≈204 GB disk-leak fix), then release through the RELEASE
-    // FINALIZER seam + emit `release.finalized`. The helper never throws (a throw here
-    // would mask the run's error); `releaseReason` reflects the run's outcome.
+    // SECURITY-BASELINE CLEANUP-PROOF: remove the run's `/workspace/runs/<runId>` sandbox (layer 1 of the ≈204 GB disk-leak fix), then release through the RELEASE FINALIZER seam + emit `release.finalized`. The helper never throws (a throw here would mask the run's error); `releaseReason` reflects the run's outcome.
     const runWorkspace = { ssh: input.ssh, target: allocation.target, runId: context.runId };
     await releaseRunnerWithCleanupProof(input.allocator, allocation.runnerId, appendEvent, runWorkspace, releaseReason);
   }

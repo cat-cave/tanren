@@ -140,8 +140,14 @@ function builtWith(ssh: ScriptedSsh): BuiltTemplate {
     scratchRoot: "/ws/tmpl/.git/tanren-tmp/nc",
     config: DEFAULT_CI_CONFIG,
     auditor: cleanAuditor,
+    release: releaseSpy,
   };
 }
+// Records whether the creation flow released the validation runner (audit §3.11/4).
+let releaseCount = 0;
+const releaseSpy = async (): Promise<void> => {
+  releaseCount += 1;
+};
 function buildDriverFor(ssh: ScriptedSsh): TemplateBuildDriver {
   return {
     async build() {
@@ -188,8 +194,12 @@ describe("createTemplate — VALID template publishes (the happy path)", () => {
     const ssh = new ScriptedSsh({ typecheck: "real", lint: "real", test: "real" });
     const pool = new TemplatesPool();
     const events = new RecordingEvents();
+    releaseCount = 0;
 
     const result = await createTemplate(deps(ssh, pool, events), request);
+
+    // The validation runner was RELEASED (audit §3.11/4 — no leak on the happy path).
+    expect(releaseCount).toBe(1);
 
     // Published: the registry has exactly one row, status validated.
     expect(pool.rows).toHaveLength(1);
@@ -234,10 +244,15 @@ describe("createTemplate — INVALID template does NOT publish (the fail-closed 
     const ssh = new ScriptedSsh({ typecheck: "noop", lint: "real", test: "real" });
     const pool = new TemplatesPool();
     const events = new RecordingEvents();
+    releaseCount = 0;
 
     await expect(createTemplate(deps(ssh, pool, events), request)).rejects.toBeInstanceOf(
       TemplateValidationFailedError,
     );
+
+    // The validation runner was RELEASED even on the FAIL path (the `finally` —
+    // audit §3.11/4: no leak whether validation passes or fails).
+    expect(releaseCount).toBe(1);
 
     // NOT published: the registry is empty, no template.registered event.
     expect(pool.rows).toHaveLength(0);

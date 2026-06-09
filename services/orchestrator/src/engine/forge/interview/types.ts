@@ -19,10 +19,57 @@ import { z } from "zod";
 
 // ── Capture sub-shapes (the "what forge captured" panel) ────────────────────
 
-// The product identity: slug + one-line pitch (+ optional repo hint).
+// HOSTNAME-SAFE slug pattern. The slug becomes the GitHub repo NAME and the deploy
+// APP name (derive.ts / greenfield create), both of which flow into hostnames
+// (`<app>.fly.dev`, a Vercel project subdomain) and URLs — so an LLM-authored slug
+// with spaces/uppercase/`/`/leading-trailing dashes would create an invalid or
+// surprising host. We constrain to a DNS-label-safe shape: lowercase
+// alphanumerics + single internal dashes, no leading/trailing dash, ≤63 chars (the
+// DNS label ceiling). `normalizeSlug` below coerces a near-miss into this shape; the
+// schema REJECTS what cannot be made safe (empty after normalization).
+const HOSTNAME_SAFE_SLUG = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/u;
+
+// Coerce a free-form (possibly LLM-authored) slug into a hostname-safe DNS label:
+// lowercase, non-alphanumeric runs → single dashes, trimmed dashes, ≤63 chars.
+// Returns "" when nothing safe survives (the caller rejects/falls back to a default).
+export function normalizeSlug(raw: string): string {
+  return raw
+    .toLowerCase()
+    .replaceAll(/[^a-z0-9]+/gu, "-")
+    .replaceAll(/^-+|-+$/gu, "")
+    .slice(0, 63)
+    .replaceAll(/-+$/gu, "");
+}
+
+// Forward decl: the full capture type is defined below; `safeProjectSlug` is
+// declared after `InterviewCapture` (it reads `identity`/`designDna`).
+
+// The product identity: slug + one-line pitch (+ optional repo hint). The slug is
+// HOSTNAME-SAFE (DNS-label shape) because it names the repo + deploy app — an unsafe
+// LLM-authored slug is rejected at the capture boundary (the derive normalizes/
+// defaults a missing identity; see `safeProjectSlug`).
 export const CaptureIdentity = z
   .object({
-    slug: z.string().min(1).max(80),
+    // NORMALIZE-THEN-VALIDATE: a raw (LLM-authored) slug is first coerced to a
+    // hostname-safe DNS label (`normalizeSlug`) so a near-miss like "My App!" becomes
+    // "my-app" rather than breaking the interview round; the coerced result must then
+    // satisfy `HOSTNAME_SAFE_SLUG` — a slug with NO safe content left (empty after
+    // normalization) is REJECTED loudly (never silently shipped into a repo/host name).
+    slug: z
+      .string()
+      .min(1)
+      .max(160)
+      .transform(normalizeSlug)
+      .pipe(
+        z
+          .string()
+          .min(1, "slug has no hostname-safe content")
+          .max(63)
+          .regex(
+            HOSTNAME_SAFE_SLUG,
+            "slug must be a hostname-safe DNS label (lowercase alphanumerics + single dashes)",
+          ),
+      ),
     pitch: z.string().min(1).max(400),
     repoHint: z.string().max(200).default(""),
   })
@@ -135,6 +182,37 @@ export const InterviewCapture = z
   })
   .strict();
 export type InterviewCapture = z.infer<typeof InterviewCapture>;
+
+// Thrown when a derive cannot resolve ANY hostname-safe project slug — neither a
+// captured identity slug NOR a usable fallback from the pitch/design-DNA/stack. A
+// LOUD failure: the slug names the repo + deploy app, so a no-slug derive must not
+// silently invent a collision-prone constant (the old `"greenfield-project"`).
+export class MissingProjectSlugError extends Error {
+  constructor() {
+    super(
+      "greenfield derive could not resolve a hostname-safe project slug — the interview captured no " +
+        "identity slug and no usable fallback (pitch/design-DNA/stack). Capture a product identity first.",
+    );
+    this.name = "MissingProjectSlugError";
+  }
+}
+
+// Resolve the project SLUG for a derive — the repo + deploy-app name. When the
+// interview captured an `identity.slug` it is used verbatim (already hostname-safe
+// via the schema). When identity is null (the LLM never surfaced one), derive a REAL
+// fallback from the captured signal (pitch → design-DNA → stack label), normalized to
+// a hostname-safe label — NOT a silent shared `"greenfield-project"` constant that
+// would collide across products. Throws `MissingProjectSlugError` when nothing
+// hostname-safe survives (fail-loud, never a silent default).
+export function safeProjectSlug(capture: InterviewCapture): string {
+  const identitySlug = capture.identity?.slug;
+  if (identitySlug !== undefined && identitySlug !== "") return identitySlug;
+  for (const candidate of [capture.identity?.pitch ?? "", capture.designDna, capture.lifecycle?.stack ?? ""]) {
+    const normalized = normalizeSlug(candidate);
+    if (normalized !== "") return normalized;
+  }
+  throw new MissingProjectSlugError();
+}
 
 export function emptyCapture(): InterviewCapture {
   return {

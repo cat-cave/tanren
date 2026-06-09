@@ -22,12 +22,15 @@ import { createAuthRoutes } from "./routes/auth/index.js";
 import { SecretStoreCredentialRegistry, type CredentialRegistry } from "./routes/credentials/index.js";
 import { mountFeatureRoutes } from "./mountFeatureRoutes.js";
 import { mountRootApiRoutes } from "./mountRootApiRoutes.js";
+import { parsedEnv } from "./envSchema.js";
 
 export { buildAuthFromEnv, type BuildAppAuthOptions } from "./mainAuth.js";
 
-const port = Number(process.env["ORCHESTRATOR_PORT"] ?? 3100);
-const vaultAddr = process.env["VAULT_ADDR"] ?? "http://localhost:8200";
-const runnerIdentitySecretRef = process.env["TANREN_RUNNER_IDENTITY_SECRET_REF"] ?? "runner/local-docker/identity";
+// Boot-validated env (Zod, fail-loud at load — see envSchema.ts). These replace
+// the prior per-site `Number(process.env[...] ?? n)` / `?? default` reads.
+const port = parsedEnv.ORCHESTRATOR_PORT;
+const vaultAddr = parsedEnv.VAULT_ADDR;
+const runnerIdentitySecretRef = parsedEnv.TANREN_RUNNER_IDENTITY_SECRET_REF;
 
 /**
  * Require a non-blank env var; throw a clear error when unset/blank (NO fallback).
@@ -118,6 +121,11 @@ export function buildApp(input: {
         store: input.auth.store,
         publicBaseUrl: input.auth.publicBaseUrl,
         cookieSecure: input.auth.cookieSecure,
+        // Surface the canonical GitHub App install URL on /auth/providers so the
+        // dashboard reads it from the orchestrator, not its own env copy.
+        ...(input.auth.githubAppInstallUrl !== undefined && {
+          githubAppInstallUrl: input.auth.githubAppInstallUrl,
+        }),
       }),
     );
     app.use(

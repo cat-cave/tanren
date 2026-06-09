@@ -77,6 +77,32 @@ export const ProjectStore = {
   },
 
   /**
+   * A single project by its REPO URL — the natural idempotency key for a greenfield
+   * create (one project per greenfield repo). The org-scoping client bounds the row
+   * to the caller's org under RLS, so a retry only ever re-attaches to a project the
+   * SAME org already created. `undefined` when no row exists. Used by the idempotent
+   * greenfield create to resume a stranded provisioning instead of double-provisioning
+   * + 409-ing on the already-created repo (audit §3.10).
+   */
+  async findByRepoUrl(client: QueryClient, repoUrl: string, _actor: ActorRef): Promise<ProjectRow | undefined> {
+    // Match on the CANONICAL repo URL ignoring a trailing `.git` on either side: the
+    // forge `html_url` the project row stores has no `.git`, while the deterministic
+    // clone remote (`githubHttpsRemote`) does. A retry must re-attach regardless of
+    // which form the caller passes — so both stored and queried URLs are `.git`-trimmed.
+    const canonical = repoUrl.replace(/\.git$/u, "");
+    const result = await client.query(
+      `SELECT ${SELECT_PROJECT_COLUMNS}, org_id, lifecycle
+         FROM projects
+        WHERE regexp_replace(repo_url, '\\.git$', '') = $1
+        LIMIT 1`,
+      [canonical],
+    );
+    const row = result.rows[0];
+    if (row === undefined) return undefined;
+    return decodeProjectRow(row as RawProjectRow);
+  },
+
+  /**
    * A single project by id, selecting `org_id` too so the caller can compare it
    * against the path org (the project-read tenant check). No org filter; the
    * caller decides access. `undefined` when no row exists.

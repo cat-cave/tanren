@@ -16,6 +16,7 @@ import {
   bootstrapWorkspace,
   commitBootstrapState,
   materializeContractFilesInWorkspace,
+  materializeTemplateSeedInWorkspace,
   runWorkspaceSshCommand,
   seedWorkspaceLocalIgnore,
 } from "../workspace/index.js";
@@ -107,6 +108,16 @@ export async function prepareRunWorkspace(
   const bootstrapSha = await commitBootstrap({ ssh: input.ssh, target, workspacePath, timeoutMs: input.timeoutMs });
   const bootstrapBase = bootstrapSha === "" ? cloneHeadSha : bootstrapSha;
 
+  // TEMPLATE SEED (templating-system.md §3): when a validated template was SELECTED at
+  // derive, clone its conforming files into the workspace + commit them ON TOP of the
+  // bootstrap base — so the scaffold writer's "the seed is ALREADY COMMITTED"
+  // assertion is TRUE (it specializes the seed instead of authoring from scratch). The
+  // seed brings the template's validated `.tanren/ci.yml` + `justfile`, so the
+  // deterministic contract-files step below is a write-iff-absent no-op for them (the
+  // PROVEN template contract wins). Absent templateSeed ⇒ "" (the from-scratch path).
+  const seedSha = await materializeTemplateSeedCommit(input, target, workspacePath, resolved.token);
+  const seedBase = seedSha === "" ? bootstrapBase : seedSha;
+
   // DETERMINISTIC CONTRACT FILES (v27 fix): materialize the `.tanren/ci.yml` +
   // `justfile` from the project's captured lifecycle and commit them as a REAL
   // commit ON TOP of the bootstrap base — so they ride into the writer's PR diff
@@ -117,16 +128,60 @@ export async function prepareRunWorkspace(
   // contract files, materialization is a no-op and NO commit is made (sha "").
   const contractSha = await materializeContractFilesCommit(input, target, workspacePath);
 
-  // ANSWERER REVIEW BASE: anchor the writer's reviewed diff ABOVE the contract-files
-  // commit when one was made (apex v28 fix), so the Tanren-owned `.tanren/ci.yml` +
-  // `justfile` are NOT in the writer's reviewed diff and the checker/auditor/convergence
-  // never misread them as writer-authored. When no contract commit was made (no
-  // lifecycle, brownfield re-clone, or fake SSH) the base is the bootstrap base. The
-  // contract files still RIDE INTO THE PR — the push drops only `bootstrapSha` (below
-  // both the contract commit and the writer commits), so the contract commit is replayed.
-  const baseSha = contractSha === "" ? bootstrapBase : contractSha;
+  // ANSWERER REVIEW BASE: anchor the writer's reviewed diff ABOVE the Tanren-owned
+  // commits — the contract-files commit when one was made (apex v28 fix), ELSE the
+  // template-SEED commit, ELSE the bootstrap base — so the template seed + the
+  // Tanren-owned `.tanren/ci.yml` + `justfile` are NOT in the writer's reviewed diff
+  // and the checker/auditor/convergence never misread them as writer-authored (the
+  // writer only SPECIALIZES the seed). All these commits still RIDE INTO THE PR — the
+  // push drops only `bootstrapSha` (below them), so each is replayed onto the PR branch.
+  const baseSha = contractSha === "" ? seedBase : contractSha;
 
   return { cloneHeadSha, bootstrapSha, baseSha };
+}
+
+// Materialize the SELECTED template's conforming files into the workspace + commit
+// them as a dedicated commit above the bootstrap base (templating-system.md §3), so
+// the scaffold writer's "the seed is ALREADY COMMITTED" assertion holds and it
+// specializes the seed instead of authoring from scratch. Returns the new seed-commit
+// sha, or "" when no commit was made: the run selected no template (`templateSeed`
+// absent — the from-scratch path), a fake SSH yields no sha, OR the seed produced no
+// new files (write-iff-absent left nothing). The clone authenticates with the run's
+// resolved token so a PRIVATE template repo is reachable.
+async function materializeTemplateSeedCommit(
+  input: RunPlannerLoopInput,
+  target: RunnerHandle,
+  workspacePath: string,
+  token: string | undefined,
+): Promise<string> {
+  const seed = input.context.templateSeed;
+  if (seed === undefined) return "";
+  const result = await materializeTemplateSeedInWorkspace({
+    ssh: input.ssh,
+    target,
+    workspacePath,
+    repoRef: seed.repoRef,
+    token,
+    timeoutMs: input.timeoutMs,
+  });
+  // Nothing newly seeded (fake SSH / empty tree / fully shadowed) ⇒ no commit.
+  if (!result.seeded) return "";
+  const committed = await runWorkspaceSshCommand(input.ssh, target, {
+    label: "commit template seed",
+    cwd: workspacePath,
+    timeoutMs: input.timeoutMs,
+    command: [
+      "set -eu",
+      // Stage everything the seed copied (-A) — the bootstrap commit already absorbed
+      // install artifacts below the base, and `.git/info/exclude` keeps node_modules out.
+      "git add -A",
+      "GIT_AUTHOR_DATE='2026-01-01T00:00:00Z' GIT_COMMITTER_DATE='2026-01-01T00:00:00Z' " +
+        `git commit -q -m ${quoteSshShellArg(`tanren: seed from template ${seed.repoRef}`)}`,
+      // Echo the seed-commit sha LAST (the command's stdout). Fake SSH yields "".
+      "git rev-parse HEAD",
+    ].join(" && "),
+  });
+  return committed.stdout.trim();
 }
 
 // Materialize the deterministic contract files into the workspace + commit them as a

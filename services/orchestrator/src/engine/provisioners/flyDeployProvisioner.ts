@@ -33,6 +33,7 @@
 // acknowledges the static-image semantics. Making Fly merge-reflecting (build-from-source +
 // port mapping + image-per-commit) is deferred — it is a build-pipeline change, not a patch.
 
+import { parsedEnv } from "../../envSchema.js";
 import type { OrgGrant, ProjectContext } from "../contracts/integrationProvisioner.js";
 import {
   DeployProvisioner,
@@ -90,7 +91,10 @@ function previewUrlPattern(appName: string): string {
 class FlyDeployApi implements DeployProviderApi {
   readonly providerKind = FLY_PROVIDER_KIND;
 
-  constructor(private readonly transport: DeployProvisionerDeps["transport"]) {}
+  constructor(
+    private readonly transport: DeployProvisionerDeps["transport"],
+    private readonly allowStaticDeploy: boolean,
+  ) {}
 
   async listApps(grant: OrgGrant, token: string): Promise<DeployApp[]> {
     const org = orgSlug(grant);
@@ -160,7 +164,7 @@ class FlyDeployApi implements DeployProviderApi {
     // `_source`, so it cannot prove "the live product reflects this merge". Fail LOUD
     // unless the operator explicitly opts into the static-image semantics — so apex
     // never accidentally "proves" deploy on Fly (it must use `deploy.vercel`). See header.
-    if (process.env["TANREN_ALLOW_FLY_STATIC_DEPLOY"] !== "1") {
+    if (!this.allowStaticDeploy) {
       throw new Error(
         "fly deploy is NOT merge-reflecting (it releases a static image, ignores the merged source) — " +
           "it cannot prove 'the live product reflects this merge'. Use `deploy.vercel` for that, or set " +
@@ -219,7 +223,11 @@ class FlyDeployApi implements DeployProviderApi {
 
 /** The Fly.io deploy provisioner (`deploy.flyio`). */
 export class FlyDeployProvisioner extends DeployProvisioner {
+  // The static-image opt-in is a boot-time env knob (TANREN_ALLOW_FLY_STATIC_DEPLOY,
+  // parsed once by envSchema.ts). It flows in via the injected deps — defaulting to
+  // the parsed env when the deps omit it (callers/tests may set it explicitly).
   constructor(deps: DeployProvisionerDeps) {
-    super(new FlyDeployApi(deps.transport), deps);
+    const allowStaticDeploy = deps.allowFlyStaticDeploy ?? parsedEnv.TANREN_ALLOW_FLY_STATIC_DEPLOY === "1";
+    super(new FlyDeployApi(deps.transport, allowStaticDeploy), deps);
   }
 }

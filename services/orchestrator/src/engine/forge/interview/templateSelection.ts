@@ -83,6 +83,43 @@ function stackTokens(stack: string): string[] {
     .filter((t) => t !== "");
 }
 
+// LANGUAGE → EXECUTION-RUNTIME equivalence. A captured stack labels its LANGUAGE
+// ("ts", "js", "python") but a template manifest declares the EXECUTION RUNTIME the
+// repo targets ("node", "bun", "python") — so a `ts/pnpm` project's first token
+// ("ts") would never equality-match a `node`-runtime template, wrongly excluding it
+// (the bug the §3 "never wrongly excludes" contract forbids). This is the SAME
+// general-knowledge class as the conventional justfile target NAMES: a small,
+// stack-AGNOSTIC alias map (a language and the runtime that executes it are the same
+// capability), NOT a per-stack switch Tanren branches on. A token with no alias maps
+// to ITSELF, so a never-seen / non-code stack ("novel", "rust") is unchanged. The
+// map is intentionally minimal — it expresses runtime identity, not a stack policy.
+const RUNTIME_EQUIVALENCE: ReadonlyMap<string, ReadonlyArray<string>> = new Map([
+  ["ts", ["ts", "typescript", "node", "js", "javascript"]],
+  ["typescript", ["typescript", "ts", "node", "js", "javascript"]],
+  ["js", ["js", "javascript", "node", "ts", "typescript"]],
+  ["javascript", ["javascript", "js", "node", "ts", "typescript"]],
+  ["node", ["node", "ts", "typescript", "js", "javascript"]],
+  ["nodejs", ["node", "nodejs", "ts", "typescript", "js", "javascript"]],
+]);
+
+// The set of runtimes EQUIVALENT to a captured runtime token — the token itself plus
+// any language↔runtime aliases. A `ts` token yields {ts, typescript, node, js,
+// javascript} so the SQL filter + the scorer both treat a `node`-runtime template as
+// a runtime match for a `ts/pnpm` project. An unaliased token yields just itself.
+export function runtimeEquivalents(token: string): string[] {
+  const lower = token.toLowerCase();
+  return [...(RUNTIME_EQUIVALENCE.get(lower) ?? [lower])];
+}
+
+// Does a template's declared runtime MATCH any of the captured stack's tokens, under
+// language↔runtime equivalence? `node` matches a stack that declared `ts`/`js`/etc.
+// Used by the scorer so the runtime weight is awarded across the equivalence — the
+// scorer counterpart to the query's `runtimeAny` expansion (kept in lock-step so the
+// SQL filter and the score agree on what "matches the runtime").
+function runtimeMatches(declaredRuntime: string, stackTokenSet: ReadonlySet<string>): boolean {
+  return runtimeEquivalents(declaredRuntime).some((r) => stackTokenSet.has(r));
+}
+
 // Derive the registry capability query from the captured lifecycle. Restricts to
 // the SEEDABLE statuses (only proven templates) and leaves channel UNbound (the
 // scorer expresses the channel PREFERENCE — a query that bound `channel` would
@@ -98,7 +135,11 @@ export function deriveCapabilityQuery(lifecycle: CaptureLifecycle): DeriveCapabi
   const query: TemplateCapabilityQuery = {
     statuses: SEEDABLE_STATUSES,
   };
-  if (tokens[0] !== undefined) query.runtime = tokens[0];
+  // Bind the runtime as the EQUIVALENCE-EXPANDED set (the language token + its
+  // runtime aliases), NOT the raw first token — so a `ts/pnpm` project's filter
+  // matches a `node`-runtime template instead of hard-excluding it (the §3 "never
+  // wrongly excludes" contract; the prior bare `runtime = tokens[0]` violated it).
+  if (tokens[0] !== undefined) query.runtimeAny = runtimeEquivalents(tokens[0]);
   return { query };
 }
 
@@ -166,7 +207,10 @@ export function scoreTemplate(
   let score = 0;
   const reasons: string[] = [];
 
-  if (stackSet.has(caps.runtime.toLowerCase())) {
+  // Award the runtime weight under language↔runtime EQUIVALENCE (a `node` template
+  // matches a `ts`/`js` stack) — in lock-step with the query's `runtimeAny` expansion
+  // so the filter and the score agree on a runtime match (templating-system.md §3).
+  if (runtimeMatches(caps.runtime, stackSet)) {
     score += WEIGHT_RUNTIME;
     reasons.push(`runtime:${caps.runtime}`);
   }

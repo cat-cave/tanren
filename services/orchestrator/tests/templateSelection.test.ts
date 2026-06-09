@@ -99,15 +99,20 @@ const registry =
     rows;
 
 describe("deriveCapabilityQuery · capability filter from the lifecycle", () => {
-  it("derives runtime from the first stack token + restricts to seedable statuses", () => {
+  it("derives the EQUIVALENCE-EXPANDED runtime set from the first stack token + restricts to seedable statuses", () => {
     const { query } = deriveCapabilityQuery(TS_LIFECYCLE);
-    expect(query.runtime).toBe("ts");
+    // The runtime filter is the language→runtime EQUIVALENCE set, not the bare token
+    // — so a `ts` project matches a `node`-runtime template (never wrongly excludes).
+    expect(query.runtimeAny).toContain("ts");
+    expect(query.runtimeAny).toContain("node");
+    // The bare `runtime` is NOT bound (the equivalence-expanded `runtimeAny` supersedes it).
+    expect(query.runtime).toBeUndefined();
     expect(query.statuses).toEqual(["validated", "official"]);
     // channel is NOT bound (it is a scorer PREFERENCE, not a filter).
     expect(query.channel).toBeUndefined();
   });
 
-  it("works for a never-seen / non-code stack (no hardcode)", () => {
+  it("works for a never-seen / non-code stack (no hardcode — unaliased token maps to itself)", () => {
     const novel: CaptureLifecycle = {
       stack: "novel/pandoc",
       bootstrap: "pip install -r requirements.txt",
@@ -117,7 +122,8 @@ describe("deriveCapabilityQuery · capability filter from the lifecycle", () => 
       build: "pandoc book.md -o book.epub",
       deploy: "publish-epub",
     };
-    expect(deriveCapabilityQuery(novel).query.runtime).toBe("novel");
+    // An unaliased token expands to JUST itself — no spurious runtimes leak in.
+    expect(deriveCapabilityQuery(novel).query.runtimeAny).toEqual(["novel"]);
   });
 });
 
@@ -153,6 +159,18 @@ describe("rankTemplates · scorer", () => {
     expect(ranked[0]?.score).toBeGreaterThan(ranked[1]?.score ?? 0);
   });
 
+  it("a ts/pnpm project MATCHES a node-runtime template (language↔runtime equivalence)", () => {
+    // The real created template declares its EXECUTION runtime ("node"), not the
+    // language ("ts"). A `ts/pnpm` project must still match it — the §3 "never wrongly
+    // excludes" contract. Before the equivalence fix this scored 0 on runtime → partial.
+    const nodeTemplate = template({ id: "node_tmpl", runtime: "node", packageManager: "pnpm" });
+    const ranked = rankTemplates([nodeTemplate], TS_LIFECYCLE, "lts", NOW);
+    expect(ranked[0]?.template.id).toBe("node_tmpl");
+    // runtime + packageManager both matched ⇒ at/above the STRONG threshold.
+    expect(ranked[0]?.reasons).toContain("runtime:node");
+    expect(ranked[0]?.reasons).toContain("packageManager:pnpm");
+  });
+
   it("drops ineligible (degraded/unvalidated/stale) candidates entirely", () => {
     const good = template({ id: "good" });
     const degraded = template({ id: "degraded", status: "degraded" });
@@ -175,6 +193,17 @@ describe("selectTemplate · the decision (templating-system.md §3)", () => {
     expect(decision.selected?.templateRef).toBe("ts");
     expect(decision.selected?.repoRef).toBe("cat-cave/tanren-template-ts-next");
     expect(decision.selected?.validationProof.validatedSha).toBe("abc1234");
+  });
+
+  it("a node-runtime template → STRONG match for a ts/pnpm project (equivalence, not exclusion)", async () => {
+    const decision = await selectTemplate({
+      lifecycle: TS_LIFECYCLE,
+      registryQuery: registry([template({ id: "node_next", runtime: "node", packageManager: "pnpm" })]),
+      actor: { kind: "operator" },
+      now: NOW,
+    });
+    expect(decision.kind).toBe("strong");
+    expect(decision.selected?.templateRef).toBe("node_next");
   });
 
   it("a runtime-only overlap (no pkg-mgr match) → partial match", async () => {
