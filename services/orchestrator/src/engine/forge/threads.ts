@@ -5,9 +5,10 @@
 
 import { randomUUID } from "node:crypto";
 import type pg from "pg";
+import { z } from "zod";
 import type { ActorContext } from "../../auth/schemas.js";
 import { resolveWritableClient } from "../data/orgScopedDb.js";
-import { ForgeThreadCreateInput, type ForgeThreadRow, type ForgeThreadScope } from "./schemas.js";
+import { ForgeThreadCreateInput, ForgeThreadRow, ForgeThreadScope } from "./schemas.js";
 
 type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
@@ -35,18 +36,38 @@ const SELECT_THREAD_COLUMNS = `
   closed_at
 `;
 
+// audit RC-6 trust-at-boundary: decode the raw `forge_threads` row through Zod
+// instead of `String(...) as ForgeThreadScope` / `... as Date` casts. A bad scope
+// enum or a non-coercible timestamp THROWS at `.parse`; the camelCase result is
+// then piped through `ForgeThreadRow` so the scope-consistency superRefine (the
+// CHECK-constraint mirror) gates the read too — an untrusted row never launders in.
+const ForgeThreadRowDecode = z
+  .object({
+    id: z.coerce.string().min(1),
+    org_id: z.coerce.string().min(1),
+    project_id: z.coerce.string().min(1).nullish(),
+    run_id: z.coerce.string().min(1).nullish(),
+    scope: ForgeThreadScope,
+    title: z.coerce.string().nullish(),
+    created_at: z.coerce.date(),
+    updated_at: z.coerce.date(),
+    closed_at: z.coerce.date().nullish(),
+  })
+  .transform((row) => ({
+    id: row.id,
+    orgId: row.org_id,
+    projectId: row.project_id ?? null,
+    runId: row.run_id ?? null,
+    scope: row.scope,
+    title: row.title ?? null,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    closedAt: row.closed_at ?? null,
+  }))
+  .pipe(ForgeThreadRow);
+
 function decodeThreadRow(raw: RawThreadRow): ForgeThreadRow {
-  return {
-    id: String(raw.id),
-    orgId: String(raw.org_id),
-    projectId: raw.project_id === null || raw.project_id === undefined ? null : String(raw.project_id),
-    runId: raw.run_id === null || raw.run_id === undefined ? null : String(raw.run_id),
-    scope: String(raw.scope) as ForgeThreadScope,
-    title: raw.title === null || raw.title === undefined ? null : String(raw.title),
-    createdAt: raw.created_at as Date,
-    updatedAt: raw.updated_at as Date,
-    closedAt: raw.closed_at === null || raw.closed_at === undefined ? null : (raw.closed_at as Date),
-  };
+  return ForgeThreadRowDecode.parse(raw);
 }
 
 export class ForgeThreadAccessDeniedError extends Error {

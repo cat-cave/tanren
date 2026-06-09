@@ -46,6 +46,12 @@ export interface ScriptedDeployTransport extends DeployHttpTransport {
   scriptDeploymentStates(deploymentId: string, states: string[]): void;
   /** How many `getDeployment` status polls the transport served for a deployment id. */
   statusPolls(deploymentId: string): number;
+  /**
+   * The ORDERED kind of each mutating request the transport served (`set_env` |
+   * `deploy_trigger` | `create`), so a test can assert ORDERING — e.g. that the runtime
+   * env was attached (`set_env`) BEFORE the deploy was triggered (`deploy_trigger`).
+   */
+  requestLog(): Array<"set_env" | "deploy_trigger" | "create">;
 }
 
 /**
@@ -79,6 +85,8 @@ export function scriptedDeployTransport(flavor: DeployFlavor, seedNames: string[
   // last entry repeats once exhausted). `pollsByDeployment` counts polls served.
   const stateScripts = new Map<string, string[]>();
   const pollsByDeployment = new Map<string, number>();
+  // Ordered kinds of the mutating requests served, so a test can assert env-before-trigger.
+  const reqLog: Array<"set_env" | "deploy_trigger" | "create"> = [];
 
   const listBody = (): unknown =>
     flavor === "vercel"
@@ -90,6 +98,7 @@ export function scriptedDeployTransport(flavor: DeployFlavor, seedNames: string[
     bearersSeen,
     envByApp: () => structuredClone(envByApp),
     deploysTriggered: () => structuredClone(triggered),
+    requestLog: () => [...reqLog],
     scriptDeploymentStates: (deploymentId, states) => {
       stateScripts.set(deploymentId, [...states]);
     },
@@ -119,6 +128,7 @@ export function scriptedDeployTransport(flavor: DeployFlavor, seedNames: string[
       const deploy = parseDeploy(flavor, req);
       if (deploy !== undefined) {
         deployCounter += 1;
+        reqLog.push("deploy_trigger");
         triggered.push({ appId: deploy.appId, body: deploy.body });
         const id = `${flavor}_deploy_${deployCounter}`;
         return flavor === "vercel"
@@ -130,6 +140,7 @@ export function scriptedDeployTransport(flavor: DeployFlavor, seedNames: string[
       // right KEYS + VALUES reached the transport (and nowhere else).
       const setEnv = parseSetEnv(flavor, req);
       if (setEnv !== undefined) {
+        reqLog.push("set_env");
         const bucket = (envByApp[setEnv.appId] ??= {});
         Object.assign(bucket, setEnv.vars);
         return okResponse({}, flavor === "vercel" ? 201 : 200);
@@ -143,6 +154,7 @@ export function scriptedDeployTransport(flavor: DeployFlavor, seedNames: string[
         if (apps.has(name)) {
           return { status: 409, ok: false, json: undefined, text: `app name '${name}' already exists` };
         }
+        reqLog.push("create");
         const app = add(name);
         // Vercel returns 200 on create; Fly returns 201 — both carry id + name.
         const status = flavor === "vercel" ? 200 : 201;
@@ -249,6 +261,35 @@ function parseStatusRead(
   };
 }
 
+/**
+ * Validate a Vercel v13 `gitSource` the way the live API does: the github variant
+ * requires `type:"github"`, an `org` (the repo OWNER), a BARE `repo` name (NOT a
+ * `owner/name` slug), a `ref`, and the commit `sha`. A malformed gitSource (e.g. the
+ * old `{ type:"github", repo:"owner/name", ref:<sha> }`) is REJECTED — this is what
+ * makes the fake encode the REAL contract instead of rubber-stamping any shape.
+ */
+function assertVercelGitSource(gitSource: unknown): void {
+  if (typeof gitSource !== "object" || gitSource === null) {
+    throw new TypeError("scripted deploy transport: vercel deployment request missing `gitSource`");
+  }
+  const gs = gitSource as Record<string, unknown>;
+  if (gs["type"] !== "github") {
+    throw new TypeError(
+      `scripted deploy transport: vercel gitSource.type must be 'github', got '${String(gs["type"])}'`,
+    );
+  }
+  for (const field of ["org", "repo", "ref", "sha"] as const) {
+    if (typeof gs[field] !== "string" || gs[field] === "") {
+      throw new TypeError(`scripted deploy transport: vercel gitSource.${field} must be a non-empty string`);
+    }
+  }
+  if ((gs["repo"] as string).includes("/")) {
+    throw new TypeError(
+      `scripted deploy transport: vercel gitSource.repo must be a BARE repo name, not a 'owner/name' slug (got '${String(gs["repo"])}')`,
+    );
+  }
+}
+
 function parseDeploy(
   flavor: DeployFlavor,
   req: DeployHttpRequest,
@@ -266,6 +307,13 @@ function parseDeploy(
     if (typeof appId !== "string" || appId === "") {
       throw new TypeError("scripted deploy transport: vercel deployment request missing `project`");
     }
+    // Faithful to the live v13 API: REJECT a malformed gitSource the way Vercel does
+    // (a 400). The github variant is `{ type:"github", org, repo, ref, sha }` — `org`
+    // (owner) + a BARE `repo` name are SEPARATE required fields; the old `repo:
+    // "owner/name"` (no `org`) shape was silently accepted by this fake, making the
+    // suite falsely green. Now a wrong shape surfaces as a hard error here, so the
+    // contract test actually guards the body shape.
+    assertVercelGitSource(body["gitSource"]);
     return { appId, body };
   }
   const match = /\/v1\/apps\/([^/]+)\/machines$/u.exec(path);

@@ -55,6 +55,13 @@ export const integrationProvisioningSensitivityRules: SensitivityRule[] = [
   { eventName: "deploy.failed", path: "reason", tag: "public" },
   ...auditEnvelopeRulesFor("deploy.failed"),
 
+  // deploy.skipped: a PRE-resolution skip — the project id + a fixed reason code + a
+  // bounded non-secret detail string. No token/env values, no provider/appId (the skip
+  // is BEFORE a target resolves).
+  { eventName: "deploy.skipped", path: "projectId", tag: "public" },
+  { eventName: "deploy.skipped", path: "reason", tag: "public" },
+  { eventName: "deploy.skipped", path: "detail", tag: "public" },
+
   // demos-as-evidence: the per-behavior demo verdict + the summary. Every field is
   // non-secret — a behavior id/title, a surface kind, an outcome, and the OBSERVABLE
   // SHAPE of the reach ("GET /links → HTTP 200"); never a token or a response body.

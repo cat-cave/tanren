@@ -127,18 +127,57 @@ describe("VercelDeployProvisioner", () => {
     const artifact = await prov.provision(vercelGrant, ctx("acme-web"));
     const appId = artifact.deployRef!.appId;
 
-    const result = await prov.deploy(vercelGrant, appId, { repo: "acme/acme-web", ref: "main" });
+    const result = await prov.deploy(vercelGrant, appId, { repo: "acme/acme-web", ref: "deadbeefcafe" });
 
-    // The deployment endpoint was hit with the merged repo + ref (a real deploy).
+    // The deployment endpoint was hit with the merged commit in the REAL v13 github
+    // gitSource shape: `org` (owner) + a BARE `repo` name + `sha` (the merged commit).
     const triggered = transport.deploysTriggered();
     expect(triggered).toHaveLength(1);
     expect(triggered[0]!.appId).toBe(appId);
-    expect(triggered[0]!.body["gitSource"]).toEqual({ type: "github", repo: "acme/acme-web", ref: "main" });
+    expect(triggered[0]!.body["gitSource"]).toEqual({
+      type: "github",
+      org: "acme",
+      repo: "acme-web",
+      ref: "deadbeefcafe",
+      sha: "deadbeefcafe",
+    });
     // A resolved, concrete URL (no placeholder) + a deployment id + state.
     expect(result.url).toMatch(/^https:\/\//u);
     expect(result.url).not.toContain("{branch}");
     expect(result.deploymentId).toMatch(/^vercel_deploy_/u);
     expect(result.state).toBe("QUEUED");
+  });
+
+  it("the gitSource body shape matches the live v13 github variant (org + bare repo + sha)", async () => {
+    // CONTRACT GUARD: the fake REJECTS a malformed gitSource the way Vercel does, so a
+    // regression to the old `{ type:"github", repo:"owner/name", ref }` shape fails
+    // here instead of passing falsely. This test pins each gitSource field explicitly.
+    const transport = scriptedDeployTransport("vercel");
+    const prov = new VercelDeployProvisioner({ transport, secrets: secrets() });
+    const artifact = await prov.provision(vercelGrant, ctx("acme-web"));
+    const appId = artifact.deployRef!.appId;
+
+    await prov.deploy(vercelGrant, appId, { repo: "acme/acme-web", ref: "deadbeefcafe" });
+
+    const gitSource = transport.deploysTriggered()[0]!.body["gitSource"] as Record<string, unknown>;
+    expect(gitSource["type"]).toBe("github");
+    // `org` is the OWNER and `repo` is the BARE name — NOT a combined `owner/name` slug.
+    expect(gitSource["org"]).toBe("acme");
+    expect(gitSource["repo"]).toBe("acme-web");
+    expect(gitSource["repo"]).not.toContain("/");
+    // The merged commit pins the build: it is in `sha` (and `ref` accepts the SHA too).
+    expect(gitSource["sha"]).toBe("deadbeefcafe");
+    expect(gitSource["ref"]).toBe("deadbeefcafe");
+  });
+
+  it("deploy fails loud when the repo slug is not a valid 'owner/name'", async () => {
+    const transport = scriptedDeployTransport("vercel");
+    const prov = new VercelDeployProvisioner({ transport, secrets: secrets() });
+    const artifact = await prov.provision(vercelGrant, ctx("acme-web"));
+    const appId = artifact.deployRef!.appId;
+    await expect(prov.deploy(vercelGrant, appId, { repo: "no-owner", ref: "abc123" })).rejects.toThrow(
+      /not a valid 'owner\/name'/u,
+    );
   });
 
   it("deploy fails loud for an unknown app id (never a silent no-op)", async () => {
@@ -212,7 +251,29 @@ describe("FlyDeployProvisioner", () => {
     );
   });
 
-  it("deploy TRIGGERS a Machines release of the app's image + returns the app URL", async () => {
+  it("deploy is NOT merge-reflecting: fails loud without the explicit static-deploy opt-in", async () => {
+    // The Fly arm releases a static image + ignores the merged source, so it cannot
+    // prove "the live product reflects this merge" — it MUST refuse unless the operator
+    // explicitly accepts the static-image semantics (so apex never proves deploy on Fly).
+    const transport = scriptedDeployTransport("fly");
+    const prov = new FlyDeployProvisioner({ transport, secrets: secrets() });
+    const grantWithImage: OrgGrant = {
+      ...flyGrant,
+      metadata: { ...flyGrant.metadata, image: "registry.fly.io/acme-web:deployment-1" },
+    };
+    await prov.provision(grantWithImage, ctx("acme-web"));
+    const prior = process.env["TANREN_ALLOW_FLY_STATIC_DEPLOY"];
+    delete process.env["TANREN_ALLOW_FLY_STATIC_DEPLOY"];
+    try {
+      await expect(prov.deploy(grantWithImage, "fly_app_1", { repo: "acme/acme-web", ref: "main" })).rejects.toThrow(
+        /NOT merge-reflecting/u,
+      );
+    } finally {
+      if (prior !== undefined) process.env["TANREN_ALLOW_FLY_STATIC_DEPLOY"] = prior;
+    }
+  });
+
+  it("deploy TRIGGERS a Machines release of the app's image + returns the app URL (static-deploy opt-in)", async () => {
     const transport = scriptedDeployTransport("fly");
     const prov = new FlyDeployProvisioner({ transport, secrets: secrets() });
     const grantWithImage: OrgGrant = {
@@ -221,21 +282,34 @@ describe("FlyDeployProvisioner", () => {
     };
     await prov.provision(grantWithImage, ctx("acme-web"));
 
-    const result = await prov.deploy(grantWithImage, "fly_app_1", { repo: "acme/acme-web", ref: "main" });
-
-    const triggered = transport.deploysTriggered();
-    expect(triggered).toHaveLength(1);
-    expect(triggered[0]!.appId).toBe("acme-web");
-    expect(triggered[0]!.body["config"]).toEqual({ image: "registry.fly.io/acme-web:deployment-1" });
-    expect(result.url).toBe("https://acme-web.fly.dev");
-    expect(result.deploymentId).toMatch(/^fly_deploy_/u);
+    const prior = process.env["TANREN_ALLOW_FLY_STATIC_DEPLOY"];
+    process.env["TANREN_ALLOW_FLY_STATIC_DEPLOY"] = "1";
+    try {
+      const result = await prov.deploy(grantWithImage, "fly_app_1", { repo: "acme/acme-web", ref: "main" });
+      const triggered = transport.deploysTriggered();
+      expect(triggered).toHaveLength(1);
+      expect(triggered[0]!.appId).toBe("acme-web");
+      expect(triggered[0]!.body["config"]).toEqual({ image: "registry.fly.io/acme-web:deployment-1" });
+      expect(result.url).toBe("https://acme-web.fly.dev");
+      expect(result.deploymentId).toMatch(/^fly_deploy_/u);
+    } finally {
+      if (prior === undefined) delete process.env["TANREN_ALLOW_FLY_STATIC_DEPLOY"];
+      else process.env["TANREN_ALLOW_FLY_STATIC_DEPLOY"] = prior;
+    }
   });
 
   it("deploy fails loud when no release image is configured", async () => {
     const transport = scriptedDeployTransport("fly");
     const prov = new FlyDeployProvisioner({ transport, secrets: secrets() });
     await prov.provision(flyGrant, ctx("acme-web"));
-    // flyGrant carries no `image`, so the release has nothing to deploy.
-    await expect(prov.deploy(flyGrant, "fly_app_1", { repo: "a/b", ref: "main" })).rejects.toThrow(/image/u);
+    const prior = process.env["TANREN_ALLOW_FLY_STATIC_DEPLOY"];
+    process.env["TANREN_ALLOW_FLY_STATIC_DEPLOY"] = "1";
+    try {
+      // flyGrant carries no `image`, so the release has nothing to deploy.
+      await expect(prov.deploy(flyGrant, "fly_app_1", { repo: "a/b", ref: "main" })).rejects.toThrow(/image/u);
+    } finally {
+      if (prior === undefined) delete process.env["TANREN_ALLOW_FLY_STATIC_DEPLOY"];
+      else process.env["TANREN_ALLOW_FLY_STATIC_DEPLOY"] = prior;
+    }
   });
 });

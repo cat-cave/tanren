@@ -199,8 +199,8 @@ export interface RunPlannerLoopInput {
   buildUsageProbe?: (ctx: PlannerRunAdapterContext) => UsageProbe | undefined;
   // WS1↔WS2 seam. Omitted → spec-quality validator from project routing; tests inject.
   buildSpecValidator?: (ctx: PlannerRunAdapterContext) => SpecQualityAnswerer;
-  // BUDGET-SAFETY (M6): the budget-gate seam the run-setup ceiling preflight resolves the
-  // configured ceiling through. Defaults to PgBudgetGate over `pool`; tests inject a fake.
+  // BUDGET-SAFETY (M6) + §3.7a: the budget-gate seam the ceiling preflight + the loop's
+  // per-iteration in-flight gate share. Defaults to PgBudgetGate over `pool`; tests inject.
   budgetGate?: BudgetGate;
   // reviewPolicy: "simulated" seam. Omitted in production → the reviewer
   // Answerer is resolved from the project routing (audit chain head; Codex by
@@ -318,7 +318,7 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
     // Build adapters + usage probe + the spec-quality validator AND run the
     // BUDGET-SAFETY (M6) ceiling preflight (fail closed on an unreachable ceiling).
     const adapterResult = await resolveRunAdaptersWithBudgetPreflight(input, adapterCtx, appendEvent);
-    const { adapters, usageProbe, specValidator } = adapterResult;
+    const { adapters, usageProbe, specValidator, budgetGate: iterationBudgetGate } = adapterResult;
     // MANAGED real-`usage.cost` capturer; BYOK has no platform metering ref → EXPLICIT narrated skip (apex v30). See helper.
     const captureRealProviderCost = await resolveManagedCapturer(input, appendEvent);
     // the deterministic gate runs on the just-bootstrapped workspace.
@@ -362,10 +362,10 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
         escapeHatches: input.escapeHatches,
         timeoutMs: input.timeoutMs,
         usageProbe,
+        budgetGate: iterationBudgetGate,
         runGate,
         seedRejections: [...seedRejections],
         ...(captureRealProviderCost !== undefined && { captureRealProviderCost }),
-        // triage/convergence knobs + the WS1↔WS2 spec-quality validator (loopConfigSeam).
         ...loopConfigSeam(context, specValidator),
       });
 

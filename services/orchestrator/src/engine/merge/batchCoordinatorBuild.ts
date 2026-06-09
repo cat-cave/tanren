@@ -24,6 +24,7 @@ import { PgSpecEscalator } from "./coordinatorEscalate.js";
 import { type BuildMergeCoordinatorDeps, buildDriveMerge } from "./coordinatorBuild.js";
 import { PgMergeQueueEventEmitter } from "./coordinatorEvents.js";
 import { PgMergeQueueModel, PgMergeRunner, PgMergeSettleTransaction } from "./coordinatorPg.js";
+import { PgHoldCeilingStore } from "./holdCeilingStore.js";
 
 /** The timeout (ms) the native batch gate's clone/install/gate ops run under (mirrors the drive resolver). */
 const BATCH_GATE_TIMEOUT_MS = 600_000;
@@ -86,6 +87,10 @@ export function buildBatchMergeCoordinator(deps: BuildMergeCoordinatorDeps): Mer
     // The §2c non-bricking conflict escalator (parks an irreconcilable spec at
     // needs_attention) — REUSED verbatim from the native queue, plane-split-safe via the writer.
     escalator: new PgSpecEscalator(deps.pool, deps.runStateWriter),
+    // Audit RC-7: the DURABLE backing store for both runaway-guard ceilings (per-project
+    // consecutive-infra-hold streak + per-entry recoverable-drive attempts), so the counters
+    // survive a rolling deploy / crash-loop instead of resetting in a process-local Map.
+    holdCeilingStore: new PgHoldCeilingStore(deps.pool),
     resolveMaxBatchSize: (projectId) => resolveMaxBatchSize(deps.pool, projectId),
   });
 }

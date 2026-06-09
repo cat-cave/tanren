@@ -133,3 +133,25 @@ export const DeployFailedPayload = z
   .extend(AuditEnvelope.shape)
   .strict();
 export type DeployFailedPayload = z.infer<typeof DeployFailedPayload>;
+
+// Deploy SKIPPED ("an expected deploy could not even be RESOLVED"): a PRE-resolution
+// failure on merge that occurs BEFORE a deploy target is known — so it cannot be a
+// `deploy.failed` (which requires a resolved provider + appId). Two reasons reach here,
+// both DURABLE so the operator + the run timeline SEE the skip instead of a console-only
+// log line that leaves the merge looking "done" with no deploy:
+//   • `config_incomplete` — the org links a deploy integration (a deploy is EXPECTED) but
+//     the project config has no complete deploy target (no provider/appId to deploy onto).
+//   • `merge_sha_missing` — the `merge.completed` carried no mergeSha, so there is no
+//     merged commit to deploy (a merge-wiring bug).
+// SECURITY: non-secret (a project id + a fixed reason code + a bounded detail string).
+export const DeploySkippedPayload = z
+  .object({
+    /** The project whose merge could not resolve a deploy. */
+    projectId: z.string().min(1),
+    /** Why the deploy could not be resolved (fixed reason code, drives operator triage). */
+    reason: z.enum(["config_incomplete", "merge_sha_missing"]),
+    /** A bounded, non-secret detail string (the resolution reason / wiring detail). */
+    detail: z.string(),
+  })
+  .strict();
+export type DeploySkippedPayload = z.infer<typeof DeploySkippedPayload>;

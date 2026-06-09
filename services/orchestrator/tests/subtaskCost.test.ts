@@ -178,6 +178,67 @@ describe("recordAnswererCost", () => {
     });
     expect(failures).toEqual([]);
   });
+
+  it("captures the REAL provider cost for a MANAGED answerer call carrying an OpenRouter generation id (audit §3.7b)", async () => {
+    // The fix: a managed answerer call (planner/checker/auditor/triage/convergence/demoRun)
+    // must capture its REAL per-call usage.cost EXACTLY like the writer — otherwise it
+    // records a NULL-cost per_token row and the budget gate's fail-closed unpriced_spend
+    // pause fires mid-run (potentially permanently). lastTokenUsage carries the generation
+    // id; a wired capturer resolves the metered FACT → realProviderCostUsd on the row.
+    const { recorder, calls } = recordingRecorder();
+    const captured: string[] = [];
+    const capturer = async (generationId: string): Promise<ProviderCostCapture> => {
+      captured.push(generationId);
+      return { cost: 0.0199 };
+    };
+    await recordAnswererCost({
+      ctx: { ...ctx(recorder), captureRealProviderCost: capturer },
+      adapter: answererWithTelemetry({
+        ...emptyTokenUsage,
+        inputTokens: 1,
+        totalTokens: 1,
+        openRouterGenerationId: "gen-ans-1",
+      }),
+      role: "planner",
+      taskId: "task_planner",
+      model: "tanren-planner",
+      runtimeSeconds: 2,
+      rawUsage: {},
+    });
+    expect(captured).toEqual(["gen-ans-1"]);
+    // The captured real cost is on the recorded row → cost_basis 'provider_response'
+    // downstream (NOT a NULL-cost per_token row that trips the unpriced_spend pause).
+    expect(calls[0]!.context).toMatchObject({ realProviderCostUsd: 0.0199 });
+  });
+
+  it("a managed answerer capture FAILURE emits cost.provider_capture_failed + records null cost (audit §3.7b)", async () => {
+    const { recorder, calls } = recordingRecorder();
+    const captureFailures: { generationId: string; detail: string; taskId: string }[] = [];
+    await recordAnswererCost({
+      ctx: {
+        ...ctx(recorder),
+        captureRealProviderCost: async (generationId): Promise<ProviderCostCapture> => ({
+          failed: { generationId, detail: "503 upstream" },
+        }),
+        emitProviderCaptureFailed: async (input) => {
+          captureFailures.push(input);
+        },
+      },
+      adapter: answererWithTelemetry({
+        ...emptyTokenUsage,
+        inputTokens: 1,
+        totalTokens: 1,
+        openRouterGenerationId: "gen-ans-fail",
+      }),
+      role: "auditor",
+      taskId: "task_audit",
+      model: "tanren-auditor",
+      runtimeSeconds: 1,
+      rawUsage: {},
+    });
+    expect(captureFailures).toEqual([{ generationId: "gen-ans-fail", detail: "503 upstream", taskId: "task_audit" }]);
+    expect(calls[0]!.context).toMatchObject({ realProviderCostUsd: null });
+  });
 });
 
 describe("recordWriterCost", () => {

@@ -403,14 +403,13 @@ describe("buildDefaultGate — gate.verdict commit-binding (headShaOverride)", (
   });
 });
 
-// NO-SILENT-FALLBACK: the native JUnit ingest must DISCRIMINATE "no junit-writing
-// step ran" (quiet) from "a junit-writing step ran but produced no report" (LOUD).
-// STACK-AGNOSTIC: `expectReport` is derived from whether an EXECUTED step's `run`
-// references the convention path reports/junit.xml — the COMMAND is the project's
-// (e.g. a `just tier-2` written to emit junit), Tanren just keys on the path. So the
-// LOUD case is driven by a repo `.tanren/ci.yml` whose slow tier writes the report;
-// the stack-agnostic default (`just tier-2`, no path) is the quiet case. The loud
-// mechanism is a structured `console.error` (non-merge-gating — visibility).
+// NO-SILENT-FALLBACK: the native JUnit ingest must DISCRIMINATE "no junit-writing step
+// ran" (quiet) from "a junit-writing step ran but produced no report" (LOUD). STACK-
+// AGNOSTIC: `expectReport` is derived from whether an EXECUTED step's `run` references the
+// convention path reports/junit.xml — the COMMAND is the project's, Tanren keys on the
+// path. The LOUD case is a repo `.tanren/ci.yml` whose slow tier writes the report; the
+// default (`just tier-2`, no path) is quiet. The loud mechanism is a structured
+// `console.error` (non-merge-gating — visibility).
 describe("buildDefaultGate — native JUnit ingest (expected-but-missing is LOUD)", () => {
   // A repo config whose SLOW tier's step `run` references the junit path — so the
   // executed pre_audit tier is "junit-writing" ⇒ expectReport=true.
@@ -429,6 +428,7 @@ when:
     - per_iteration
   slow:
     - pre_audit
+    - pre_merge
 `;
 
   // A fuller input than gateInput: a fake pool + an org so the best-effort ingest runs.

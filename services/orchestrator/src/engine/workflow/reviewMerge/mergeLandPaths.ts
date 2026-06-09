@@ -83,14 +83,30 @@ export interface LandOps {
  * The GUARANTEED land (§5): read the dispatcher-owned mergeability, run the authority
  * truth table + host CAS land, then map the disposition onto the merge stage's
  * outcomes — `merged` finalizes the task (the LandFinalizer already recorded
- * `merge.completed` + the spec flip transactionally); `needs_attention`/`blocked` hold
- * recoverably (the recovery surface re-drives / escalates); a benign CAS race re-drives;
- * `merge_state_unknown` holds LOUDLY for reconciliation (never a silent inconsistency).
+ * `merge.completed` + the spec flip transactionally); `needs_attention` PARKS the spec
+ * via the escalator (a genuine human decision); `blocked` holds RECOVERABLY (a transient
+ * authority refusal the recovery surface re-drives — NEVER a terminal dequeue, §3.2); a
+ * benign CAS race is REBASED-then-retried natively (§3.3); `merge_state_unknown` holds
+ * LOUDLY for reconciliation (never a silent inconsistency).
  */
 export async function landViaAuthority(
   deps: DispatcherDeps,
   ops: LandOps,
   bundle: MergeAuthorityBundle,
+): Promise<MergeForRunResult> {
+  return landViaAuthorityAttempt(deps, ops, bundle, 0);
+}
+
+/**
+ * One authority-land attempt. `casRetries` bounds the native rebase-on-CAS re-drive
+ * (§3.3) so a persistently-racing main can never loop forever: after the bound it holds
+ * recoverably rather than re-rebasing without end.
+ */
+async function landViaAuthorityAttempt(
+  deps: DispatcherDeps,
+  ops: LandOps,
+  bundle: MergeAuthorityBundle,
+  casRetries: number,
 ): Promise<MergeForRunResult> {
   const { context, pr } = deps;
   const mergeability = await deps.probe.readMergeability();
@@ -123,19 +139,34 @@ export async function landViaAuthority(
       return ops.result("merged", { mergeSha: disposition.mainSha });
     }
     case "needs_attention": {
-      // A genuine human decision (HITL pending / changes_requested at merge time).
-      // Surface `blocked` — the planner/coordinator route it to spec `needs_attention`.
+      // A GENUINE human decision (HITL pending / changes_requested at land time). PARK the
+      // spec via the SpecEscalator (the `needs_attention` outcome maps to the coordinator's
+      // park-then-dequeue) so it frees its slot rather than hot-holding the queue head
+      // forever. NOT recoverable `blocked` — a human must make the call.
       await emitAuthorityBlocked(deps, ops, disposition.reasons);
       await ops.finalize("blocked", { taskOutcome: "pending", taskStatus: "running" });
-      return ops.result("blocked", { message: disposition.reasons.join("; ") });
+      return ops.result("needs_attention", { message: disposition.reasons.join("; ") });
     }
     case "blocked": {
+      // §3.2: a TRANSIENT authority refusal (a not-yet-converged signal: gate pending,
+      // budget momentarily unresolved, a mergeability re-read race). RECOVERABLE — emit
+      // `merge.blocked` + hold the task running so the recovery surface re-drives. The old
+      // `emitConflict` here finalized a TERMINAL `merge.dequeued(reason:"conflict")` that
+      // `recoverDequeuedCandidates` never recovers — permanently stranding the spec + every
+      // dependent. Recoverable `blocked` is the SAME finalize the needs_attention arm uses,
+      // mapped by the coordinator to a bounded recoverable hold (NOT a terminal dequeue).
       await emitAuthorityBlocked(deps, ops, disposition.reasons);
-      return ops.emitConflict(`land blocked by authority: ${disposition.reasons.join("; ")}`);
+      await ops.finalize("blocked", { taskOutcome: "pending", taskStatus: "running" });
+      return ops.result("blocked", { message: `land blocked by authority: ${disposition.reasons.join("; ")}` });
     }
     case "cas_rejected":
-      // Main raced ahead — a benign retryable race (no land happened).
-      return ops.emitConflict(`land CAS rejected (main advanced): ${disposition.reason}`);
+      // §3.3: main advanced underneath (a batch sibling landed first). This is a
+      // NATIVE-ANCESTRY decision — rebase the head onto the now-advanced base, re-gate the
+      // rebased tree, and re-attempt the land — NOT a GitHub-`behind`-state-dependent path
+      // (an unprotected repo never reports `behind`, so the old `emitConflict` terminally
+      // dequeued the 2nd batch member). Bounded by `casRetries`; the fallback is a
+      // recoverable hold, never a terminal dequeue.
+      return rebaseOnCasAndRetry(deps, ops, bundle, mergeability, disposition.reason, casRetries);
     case "merge_state_unknown": {
       // The host advanced `main` but the durable record FAILED — NEVER a silent
       // inconsistency: hold loudly for reconciliation.
@@ -152,6 +183,99 @@ export async function landViaAuthority(
       return ops.result("conflict", { message: disposition.reason });
     }
   }
+}
+
+/** The max native rebase-on-CAS re-drives before a benign race falls back to a recoverable hold. */
+const MAX_CAS_REBASE_RETRIES = 2;
+
+/**
+ * §3.3 NATIVE REBASE-ON-CAS: a CAS rejection means a batch sibling landed onto main first,
+ * so this head's authorized commit is no longer a fast-forward. Rebase the head onto the
+ * advanced base through the unified `baseShiftRebase` hook (the SAME never-discard rebase
+ * the `behind` path uses), re-gate the rebased tree (anchored on the pushed rebased head —
+ * NEVER-MERGE-UNVERIFIED), and re-attempt the land. This replaces the GitHub-`behind`-only
+ * rebase trigger that never fired on an unprotected repo. Bounded by `MAX_CAS_REBASE_RETRIES`;
+ * an absent base-shift hook / a held rebase / a failed re-gate / the bound all hold
+ * RECOVERABLY (the recovery surface re-drives) — never a terminal `merge.conflict` dequeue.
+ */
+async function rebaseOnCasAndRetry(
+  deps: DispatcherDeps,
+  ops: LandOps,
+  bundle: MergeAuthorityBundle,
+  mergeability: PullRequestMergeability,
+  casReason: string,
+  casRetries: number,
+): Promise<MergeForRunResult> {
+  const recoverableHold = async (message: string): Promise<MergeForRunResult> => {
+    await ops.finalize("blocked", { taskOutcome: "pending", taskStatus: "running" });
+    return ops.result("blocked", { message });
+  };
+  if (casRetries >= MAX_CAS_REBASE_RETRIES) {
+    return recoverableHold(
+      `land CAS rejected ${casRetries}x (main keeps advancing); holding for re-drive: ${casReason}`,
+    );
+  }
+  if (deps.input.baseShiftRebase === undefined) {
+    // No unified base-shift hook wired — cannot rebase natively. HOLD recoverably (the
+    // recovery surface re-drives once main settles); never a terminal dequeue.
+    return recoverableHold(`land CAS rejected (main advanced); no base-shift hook to rebase — holding: ${casReason}`);
+  }
+  await deps.eventStore.append({
+    ...ops.base(),
+    eventType: "merge.behind",
+    payload: {
+      ...ops.prFields(),
+      integration: ops.mergeLabel(),
+      baseBranch: mergeability.baseBranch || deps.context.baseBranch,
+      headBranch: mergeability.headBranch || undefined,
+      mergeableState: "cas_rejected",
+    },
+  });
+  // Rebase the head onto the now-advanced base (never-discard). A real conflict / a held
+  // rebase / an up-to-date race all hold recoverably here — the resolver path owns a
+  // genuine conflict; this CAS retry never escalates on its own.
+  const updated = await rebaseBehindBranch(deps, mergeability);
+  if (updated.outcome === "conflict") {
+    return recoverableHold(`CAS rebase surfaced a conflict (routing to recovery): ${updated.message ?? casReason}`);
+  }
+  if (updated.outcome === "held" || updated.outcome === "up_to_date") {
+    return recoverableHold(
+      `CAS rebase did not advance the head (${updated.outcome}); holding for re-drive: ${casReason}`,
+    );
+  }
+  // The head advanced onto base — its prior gate is stale. Re-gate the PUSHED rebased head
+  // (NEVER-MERGE-UNVERIFIED: bind the verdict to the actually-pushed tree), then re-attempt
+  // the land. An absent / failing / non-converged re-gate holds recoverably.
+  const reGate = deps.input.reGateCi;
+  if (reGate === undefined) {
+    return recoverableHold(
+      "CAS rebase advanced the head but no re-gate hook is wired — holding (cannot verify rebased tree)",
+    );
+  }
+  const ci = await reGate(updated.rebasedHeadSha === undefined ? {} : { rebasedHeadSha: updated.rebasedHeadSha });
+  if (ci.status !== "passed") {
+    return recoverableHold(`CAS rebase re-gate ${ci.status} on the rebased tree; holding for re-drive`);
+  }
+  await deps.eventStore.append({
+    ...ops.base(),
+    eventType: "merge.rebased",
+    payload: {
+      ...ops.prFields(),
+      integration: ops.mergeLabel(),
+      baseBranch: mergeability.baseBranch || deps.context.baseBranch,
+      headBranch: mergeability.headBranch || undefined,
+      reGatedCi: true,
+    },
+  });
+  // REBUILD the authority bundle before the re-attempt: the rebase advanced the head, so
+  // the bundle's captured `gatedHeadSha` is now STALE and the authority's commit-binding
+  // (gatedHeadSha === landing head) would BLOCK. The re-gate above emitted a FRESH
+  // `pre_merge` gate.verdict for the pushed rebased head; rebuilding re-reads it via
+  // `resolveLandTimeSignals` so the verdict binds to the actual landing commit
+  // (NEVER-MERGE-UNVERIFIED). Absent a rebuild thunk (a pre-supplied bundle / test seam) we
+  // reuse the bundle — those callers re-gate against the same head, so it is not stale.
+  const rebuilt = deps.input.buildMergeAuthority === undefined ? bundle : await deps.input.buildMergeAuthority();
+  return landViaAuthorityAttempt(deps, ops, rebuilt, casRetries + 1);
 }
 
 /**

@@ -18,11 +18,13 @@ import type { SpecEscalator } from "./coordinatorEscalate.js";
 import { holdOrHaltRecoverableDrive, RecoverableDriveHoldCeiling } from "./recoverableDriveHold.js";
 import { serializedRetryAfterMs } from "./mergeSerializedRetry.js";
 import { isMissingRequiredCredentialError, missingRequiredCredentialMessage } from "./missingRequiredCredential.js";
+import type { HoldCeilingStore } from "./holdCeilingStore.js";
+import { alertRetryAfterMs } from "./retrySchedule.js";
 
 /** How long after a transient merge-drive infra-hold the subscriber re-drives the project. */
 const TRANSIENT_DRIVE_HOLD_RETRY_AFTER_MS = 3000;
-/** Longer re-drive delay after a ceiling alert so persistent outages do not hot-loop. */
-const TRANSIENT_DRIVE_HOLD_ALERT_RETRY_AFTER_MS = 60_000;
+/** Longer re-drive delay after a ceiling alert so persistent outages do not hot-loop (single source: retrySchedule). */
+const TRANSIENT_DRIVE_HOLD_ALERT_RETRY_AFTER_MS = alertRetryAfterMs;
 
 /**
  * GAP #2c: the hold-attempt CEILING — how many CONSECUTIVE transient infra re-drives one
@@ -87,6 +89,13 @@ export interface MergeCoordinatorDeps {
    * back to the sequential event-first path (unchanged ordering + split-brain guard).
    */
   tx?: MergeSettleTransaction;
+  /**
+   * Audit RC-7: the DURABLE backing store for the per-entry recoverable-drive hold
+   * ceiling. When wired (the production assembly injects the {@link PgHoldCeilingStore}),
+   * the attempt counter survives a rolling deploy / crash-loop instead of resetting in a
+   * process-local Map. Absent → an in-memory store (the in-process fakes / unit tests).
+   */
+  holdCeilingStore?: HoldCeilingStore;
 }
 
 /**
@@ -197,9 +206,13 @@ export class EventEmittingMergeCoordinator implements MergeCoordinator {
    * settle (merged / dequeued / ceiling-alert) so a recovered entry starts fresh.
    */
   private readonly infraHoldAttempts = new Map<string, number>();
-  private readonly recoverableDriveHolds = new RecoverableDriveHoldCeiling();
+  private readonly recoverableDriveHolds: RecoverableDriveHoldCeiling;
 
-  constructor(private readonly deps: MergeCoordinatorDeps) {}
+  constructor(private readonly deps: MergeCoordinatorDeps) {
+    // Audit RC-7: back the per-entry recoverable-drive ceiling with the injected durable
+    // store so the attempt counter survives a restart (the in-memory default keeps fakes Pg-free).
+    this.recoverableDriveHolds = new RecoverableDriveHoldCeiling(deps.holdCeilingStore);
+  }
 
   async coordinate(projectId: string): Promise<CoordinateResult> {
     // Crash recovery FIRST: a coordinator that died mid-merge left a `merging`
@@ -290,7 +303,7 @@ export class EventEmittingMergeCoordinator implements MergeCoordinator {
             attempts,
           );
         }
-        this.recoverableDriveHolds.reset(entry.queueId);
+        await this.recoverableDriveHolds.reset(entry.queueId);
         this.infraHoldAttempts.set(entry.queueId, attempts);
         // Release the claim so the entry stays queued, then HOLD loudly + arm a re-drive.
         await this.deps.queue.releaseClaim(entry.queueId);
@@ -318,7 +331,7 @@ export class EventEmittingMergeCoordinator implements MergeCoordinator {
     this.infraHoldAttempts.delete(entry.queueId);
 
     if (outcome.kind === "merged") {
-      this.recoverableDriveHolds.reset(entry.queueId);
+      await this.recoverableDriveHolds.reset(entry.queueId);
       await this.deps.queue.markMerged(entry.queueId);
       // The merge stage itself emits merge.completed (it owns the real merge); the
       // coordinator does not double-emit it. The next pass (re-triggered by that
@@ -327,7 +340,7 @@ export class EventEmittingMergeCoordinator implements MergeCoordinator {
     }
 
     if (outcome.kind === "needs_attention") {
-      this.recoverableDriveHolds.reset(entry.queueId);
+      await this.recoverableDriveHolds.reset(entry.queueId);
       // The LOUD TERMINAL ESCALATION (§2c — non-bricking): the resolver judged this spec
       // GENUINELY irreconcilable. PARK it at `needs_attention` (frees its slot — the rest
       // of the DAG keeps moving) FIRST, then dequeue `needs_attention` (the entry leaves
@@ -361,7 +374,7 @@ export class EventEmittingMergeCoordinator implements MergeCoordinator {
 
     // A returned `conflict` usually means the resolver already routed an
     // autonomous re-plan; a terminal merge-stage failure also leaves the queue.
-    this.recoverableDriveHolds.reset(entry.queueId);
+    await this.recoverableDriveHolds.reset(entry.queueId);
     const reason = outcome.kind;
     await markDequeuedAfterEvent({
       queue: this.deps.queue,
@@ -390,7 +403,7 @@ export class EventEmittingMergeCoordinator implements MergeCoordinator {
     attempts = this.infraHoldAttempts.get(entry.queueId) ?? 0,
   ): Promise<{ dequeuedSpecId: string }> {
     this.infraHoldAttempts.delete(entry.queueId);
-    this.recoverableDriveHolds.reset(entry.queueId);
+    await this.recoverableDriveHolds.reset(entry.queueId);
     await markInfraBlockedAfterEvent({
       queue: this.deps.queue,
       events: this.deps.events,
@@ -421,7 +434,7 @@ export class EventEmittingMergeCoordinator implements MergeCoordinator {
     attempts: number,
   ): Promise<{ holdReason: "infra_error"; retryAfterMs: number }> {
     this.infraHoldAttempts.delete(entry.queueId);
-    this.recoverableDriveHolds.reset(entry.queueId);
+    await this.recoverableDriveHolds.reset(entry.queueId);
     await this.deps.events.emitInfraBlocked({
       projectId,
       entry,

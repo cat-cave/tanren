@@ -211,6 +211,9 @@ export function mountFeatureRoutes(app: Hono<ActorContextEnv>, deps: FeatureRout
   // answerer, and inserts an auto-routable issue into the DAG (else inbox). Like
   // the CI receiver it resolves its tenant server-side, so it keeps the bare pool;
   // the auto-route DAG insert runs under the resolved org's RLS scope internally.
+  // §3.6: the receiver now persists-then-202s and a background processor (kicked
+  // best-effort here, GUARANTEED by the poller's sweeper) triages/routes. The
+  // processor's autonomous DAG-insert deps default to the system actor internally.
   app.route("/", createIssueWebhookRoutes({ pool, secrets, answererFactory: forgeAnswerers.triage }));
   // The JUnit-upload webhook (`/webhooks/ci/junit`) is GONE: the native gate ingests the
   // runner's JUnit report IN-PROCESS after it runs (no Actions upload step, no HMAC).

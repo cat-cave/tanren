@@ -70,4 +70,39 @@ describe("FetchSlackApiTransport", () => {
     const transport = new FetchSlackApiTransport("xoxb-token", failing);
     await expect(transport.joinConversation("C1")).rejects.toThrow(/HTTP 500/u);
   });
+
+  it("retries a 429 after the Retry-After delay, then succeeds", async () => {
+    let calls = 0;
+    const waited: number[] = [];
+    const fetchImpl = (async () => {
+      calls += 1;
+      if (calls === 1) {
+        return new Response("", { status: 429, headers: { "Retry-After": "2" } });
+      }
+      return new Response(JSON.stringify({ ok: true, user_id: "U_BOT" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+    // Inject a no-op sleep that records the honored wait (no real timers in the test).
+    const transport = new FetchSlackApiTransport("xoxb-token", fetchImpl, async (ms) => {
+      waited.push(ms);
+    });
+    expect(await transport.authTest()).toEqual({ botUserId: "U_BOT" });
+    expect(calls).toBe(2);
+    // The Retry-After header (2s) was honored before the retry.
+    expect(waited).toEqual([2000]);
+  });
+
+  it("fails LOUD when a 429 persists past the bounded retry budget", async () => {
+    let calls = 0;
+    const fetchImpl = (async () => {
+      calls += 1;
+      return new Response("", { status: 429, statusText: "Too Many Requests", headers: { "Retry-After": "1" } });
+    }) as unknown as typeof fetch;
+    const transport = new FetchSlackApiTransport("xoxb-token", fetchImpl, async () => {});
+    await expect(transport.joinConversation("C1")).rejects.toThrow(/HTTP 429/u);
+    // The initial attempt + 3 bounded retries = 4 calls, then it fails loud.
+    expect(calls).toBe(4);
+  });
 });

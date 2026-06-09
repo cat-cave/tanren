@@ -151,6 +151,39 @@ describe("project budget routes", () => {
     expect(get.body.paused).toBe(true);
   });
 
+  it("RAISING the ceiling on a PAUSED project fires a re-walk wake so it resumes (audit §3.7e)", async () => {
+    // This is the resume test that FAILS without the fix: raising the ceiling persisted
+    // the new budget but emitted NO NOTIFY, so the budget-paused DagWalker (driven purely
+    // by the bus) stayed paused until a worker reboot. The fix fires a `tanren_dag`
+    // re-walk when the write un-pauses the project.
+    const { app, pool } = buildHarness();
+    // 55 spend ≥ the 50 ceiling ⇒ the project is PAUSED.
+    pool.seedCostRecord("proj_1", 55);
+    await putJson(app, "/orgs/org_acme/projects/proj_1/budget", { ceilingUsd: 50, period: "total" });
+    const paused = await getJson(app, "/orgs/org_acme/projects/proj_1/budget");
+    expect(paused.body.paused).toBe(true);
+    // Ignore any wakes from the initial set.
+    pool.notifies.length = 0;
+
+    // RAISE the ceiling above the spend ⇒ the project is no longer paused.
+    const raised = await putJson(app, "/orgs/org_acme/projects/proj_1/budget", { ceilingUsd: 100, period: "total" });
+    expect(raised.body.paused).toBe(false);
+
+    // The un-pause fired a `tanren_dag` re-walk for THIS project (the resume mechanism).
+    expect(pool.notifies).toEqual([{ channel: "tanren_dag", payload: "proj_1" }]);
+  });
+
+  it("LOWERING the ceiling on a non-paused project fires NO re-walk wake (only an un-pause does)", async () => {
+    const { app, pool } = buildHarness();
+    pool.seedCostRecord("proj_1", 10);
+    await putJson(app, "/orgs/org_acme/projects/proj_1/budget", { ceilingUsd: 100, period: "total" });
+    pool.notifies.length = 0;
+    // Lower to 50 — still above the $10 spend, so it was never paused → no wake.
+    const lowered = await putJson(app, "/orgs/org_acme/projects/proj_1/budget", { ceilingUsd: 50, period: "total" });
+    expect(lowered.body.paused).toBe(false);
+    expect(pool.notifies).toEqual([]);
+  });
+
   it("clearing the ceiling (null) returns to unlimited", async () => {
     const { app } = buildHarness();
     await putJson(app, "/orgs/org_acme/projects/proj_1/budget", { ceilingUsd: 50 });

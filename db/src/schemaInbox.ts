@@ -25,7 +25,7 @@
 // the LLM/Forge call is mockable and nothing here couples to a provider.
 
 import { sql } from "drizzle-orm";
-import { check, index, jsonb, pgTable, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
+import { check, index, integer, jsonb, pgTable, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
 import { organizations, projects, specs } from "./schemaCore.js";
 
 export const inboxSources = pgTable(
@@ -106,5 +106,52 @@ export const candidates = pgTable(
     index("candidates_org_id").on(table.orgId),
     index("candidates_project_id").on(table.projectId),
     index("candidates_status").on(table.status),
+  ],
+);
+
+// §3.6 issue-loop hardening: the DURABLE raw-webhook landing table. The webhook
+// receiver PERSISTS the verified delivery here and returns 202 FAST (inside
+// GitHub's 10s window); a background processor then does the allocation/triage/
+// routing OUT of band. This makes intake never-silently-lost: a processing
+// failure leaves the row `failed` (with the captured error + an attempt count),
+// and the stuck-candidate sweeper RE-DRIVES `received`/`failed` rows on its
+// interval — idempotently, since the downstream `intakeItem` is keyed on
+// (source, externalId). A row that exhausts its attempt budget is parked
+// `dead_lettered` (a loud, human-visible terminal — never an infinite re-drive).
+export const webhookEvents = pgTable(
+  "webhook_events",
+  {
+    id: text("id").primaryKey(),
+    sourceId: text("source_id")
+      .notNull()
+      .references(() => inboxSources.id),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organizations.id),
+    // The provider event name (`issues`) — so the processor dispatches the right
+    // mapper, and a sweeper can scope to a kind.
+    eventType: text("event_type").notNull(),
+    // GitHub's `x-github-delivery` id when present — diagnostics + dedupe aid.
+    deliveryId: text("delivery_id"),
+    // The RAW (verified) request body, stored as jsonb. The signature was already
+    // checked at receive time, so the persisted payload is authentic.
+    payload: jsonb("payload")
+      .notNull()
+      .default(sql`'{}'::jsonb`),
+    // Processing lifecycle: `received` (awaiting the processor) → `processed`
+    // (terminal success) | `failed` (recoverable — the sweeper re-drives) |
+    // `dead_lettered` (attempt budget exhausted — loud terminal, human attention).
+    status: text("status").notNull().default("received"),
+    attempts: integer("attempts").notNull().default(0),
+    lastError: text("last_error"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    check("webhook_events_status_check", sql`${table.status} IN ('received','processed','failed','dead_lettered')`),
+    index("webhook_events_org_id").on(table.orgId),
+    index("webhook_events_source_id").on(table.sourceId),
+    // The sweeper's hot read: pull undriven (`received`/`failed`) rows oldest-first.
+    index("webhook_events_status").on(table.status),
   ],
 );

@@ -208,7 +208,10 @@ export async function finalizeMergeOutcome(
     await finalizeNonPass(finalizeRunState, context.runId, "halted");
     return;
   }
-  if (outcome === "blocked" || outcome === "handed_off") {
+  if (outcome === "blocked" || outcome === "needs_attention" || outcome === "handed_off") {
+    // `blocked` (a recoverable authority hold) / `needs_attention` (a genuine human
+    // decision) / `handed_off` all halt the run with the spec parked for the recovery /
+    // operator surface — the run is NOT failed (the work survives, never discarded).
     await setSpecStatus(input, context, "needs_attention");
     await finalizeNonPass(finalizeRunState, context.runId, "halted");
     return;
