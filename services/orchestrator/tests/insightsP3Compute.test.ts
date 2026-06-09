@@ -193,4 +193,43 @@ describe("computeReviewStall", () => {
     // 96h >= 2 × 48h threshold.
     expect(result[0]!.severity).toBe("warn");
   });
+
+  it("BOUNDS the review-event scan: the SQL carries a time window AND a LIMIT (audit §4.3)", async () => {
+    // Capture the exact SQL + params the compute issues for the review-event scan.
+    const captured: Array<{ sql: string; params: ReadonlyArray<unknown> }> = [];
+    const recordingPool = {
+      query(sql: string, params: ReadonlyArray<unknown> = []) {
+        captured.push({ sql, params });
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      },
+    } as unknown as pg.Pool;
+
+    await computeReviewStall(recordingPool, { projectId: "project_a", now: NOW });
+
+    const review = captured.find((c) => c.sql.includes("FROM events e") && c.sql.includes("INNER JOIN specs s"));
+    expect(review).toBeDefined();
+    // BOTH bounds present: a time predicate on the event ts AND a row LIMIT.
+    expect(review!.sql).toMatch(/e\.ts\s*>=\s*\$3/u);
+    expect(review!.sql).toMatch(/LIMIT\s+10000/u);
+    // The `$3` window param is a Date strictly before `now`.
+    const since = review!.params[2] as Date;
+    expect(since).toBeInstanceOf(Date);
+    expect(since.getTime()).toBeLessThan(NOW.getTime());
+  });
+
+  it("EXCLUDES a review event older than the lookback window (time bound applied)", async () => {
+    const client = new InsightsMemoryClient();
+    client.specs.push({ spec_id: "spec_old", title: "Stale PR", project_id: "project_a" });
+    // 60 days ago — older than the 30-day default window, so it must NOT surface
+    // even though it would otherwise be a long-stalled review.requested.
+    client.events.push({
+      spec_id: "spec_old",
+      task_id: null,
+      event_type: "review.requested",
+      payload: { prNumber: 99, prUrl: "https://github.com/x/y/pull/99" },
+      ts: hoursAgo(60 * 24),
+    });
+    const result = await computeReviewStall(pool(client), { projectId: "project_a", now: NOW });
+    expect(result).toHaveLength(0);
+  });
 });

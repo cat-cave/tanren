@@ -11,6 +11,10 @@ import { runNoPgAsDateLint, scanLineForViolations } from "./no-pg-as-date.mjs";
 
 const SCOPED = "services/orchestrator/src/routes/runs/list.ts";
 const OUT_OF_SCOPE = "services/orchestrator/src/routes/specs/list.ts";
+// A forge decode site is now scoped as an EXACT file.
+const FORGE_TURNS = "services/orchestrator/src/engine/forge/turns.ts";
+// A sibling in the same dir is NOT scoped (only the three decode files are).
+const FORGE_SIBLING = "services/orchestrator/src/engine/forge/schemas.ts";
 
 async function createFixture(files: Record<string, string>): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "tanren-no-pg-as-date-"));
@@ -47,6 +51,37 @@ describe("no-pg-as-date lint", () => {
     const diagnostics = await runNoPgAsDateLint({ root });
     expect(diagnostics).toHaveLength(1);
     expect(diagnostics[0]?.message).toMatch(/parse/u);
+  });
+
+  it("REJECTS a planted `as Date` cast in the scoped engine/forge/turns.ts decode site", async () => {
+    const root = await createFixture({
+      [FORGE_TURNS]: "return { createdAt: raw.created_at as Date };\n",
+    });
+    const diagnostics = await runNoPgAsDateLint({ root });
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]?.file).toBe(FORGE_TURNS);
+    expect(diagnostics[0]?.message).toMatch(/as Date/u);
+  });
+
+  it("REJECTS a planted `JSON.parse(...) as <Type>` cast in engine/forge/turns.ts", async () => {
+    const root = await createFixture({
+      [FORGE_TURNS]: "const source = JSON.parse(raw.source) as ForgeTurnSource;\n",
+    });
+    const diagnostics = await runNoPgAsDateLint({ root });
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]?.file).toBe(FORGE_TURNS);
+    expect(diagnostics[0]?.message).toMatch(/parse/u);
+  });
+
+  it("ignores a cast in a NON-scoped sibling of the forge decode files", async () => {
+    const root = await createFixture({
+      [FORGE_SIBLING]: "return { createdAt: raw.created_at as Date };\n",
+    });
+    await expect(runNoPgAsDateLint({ root })).resolves.toEqual([]);
+  });
+
+  it("allows `as unknown` (not a domain-shape cast) after a parse", () => {
+    expect(scanLineForViolations("const v = JSON.parse(s) as unknown;")).toEqual([]);
   });
 
   it("ignores an `as Date` cast outside the scoped dir", async () => {

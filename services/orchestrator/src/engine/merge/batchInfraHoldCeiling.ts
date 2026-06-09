@@ -7,12 +7,12 @@
 // `merge.batch.infra_blocked` event but keeps the entries active and backs off; a
 // retriable infra outage must never turn into a permanent dequeued queue state.
 //
-// It is an in-memory per-project counter by design — the coordinator+subscriber are a
-// single long-lived per-worker singleton, so the count survives across `coordinate`
-// passes (each delayed re-drive is a fresh pass). A crash resets it, which is correct:
-// `recoverStaleClaims` re-queues + a re-driven idempotent merge is safe, and a still-
-// broken infra re-accrues holds to the ceiling again. Reset on ANY non-infra-hold
-// settle (a pass that merged / dequeued / pended) so a recovered batch starts fresh.
+// Audit RC-7: the per-project counter is now PERSISTED (a HoldCeilingStore) rather than
+// a process-local Map. The count survives across `coordinate` passes (each delayed
+// re-drive is a fresh pass) AND across a rolling deploy / crash-loop — so a persistent
+// outage cannot re-earn its full hold budget every restart and the terminal alert
+// always fires. Reset on ANY non-infra-hold settle (a pass that merged / dequeued /
+// pended) so a recovered batch starts fresh.
 
 /**
  * How many CONSECUTIVE cross-pass infra holds one project's batch may take before the
@@ -24,13 +24,15 @@ export const MAX_BATCH_INFRA_HOLDS = 5;
 
 import type { CoordinateResult, MergeQueueEntry, MergeQueueModel } from "../contracts/mergeCoordinator.js";
 import type { BatchMergeEventEmitter } from "./batchCoordinator.js";
+import { type HoldCeilingStore, InMemoryHoldCeilingStore } from "./holdCeilingStore.js";
+import { alertRetryAfterMs } from "./retrySchedule.js";
 
 /** The in-pass retry budget already burned before a hold (for the emitted attempt count). */
 const HELD_AFTER_ATTEMPTS = 3;
 /** How long after a RECOVERABLE infra hold the subscriber re-drives the project. */
 const INFRA_HOLD_RETRY_AFTER_MS = 3000;
 /** Longer re-drive delay after a terminal alert so persistent outages do not hot-loop. */
-export const INFRA_HOLD_ALERT_RETRY_AFTER_MS = 60_000;
+export const INFRA_HOLD_ALERT_RETRY_AFTER_MS = alertRetryAfterMs;
 
 /**
  * GAP #1 (runaway guard): hold the batch on an infra error that could not recover
@@ -55,7 +57,7 @@ export async function holdOnInfra(args: {
   kind?: "missing_required_credential";
 }): Promise<CoordinateResult> {
   const { ceiling, events, projectId, batch, message, queueDepth } = args;
-  const recorded = ceiling.record(projectId);
+  const recorded = await ceiling.record(projectId);
   if (recorded.reached) {
     await events.emitInfraBlocked({
       projectId,
@@ -119,11 +121,21 @@ async function markBatchInfraBlockedAfterEvent(input: {
   }
 }
 
-/** The bounded per-project consecutive-infra-hold counter (a runaway guard). */
+/**
+ * The bounded per-project consecutive-infra-hold counter (a runaway guard). Audit RC-7:
+ * the streak is PERSISTED (a HoldCeilingStore) so it survives a restart; inject the
+ * {@link PgHoldCeilingStore} in production, the default in-memory store keeps the
+ * in-process fakes/unit tests Pg-free. The `record`/`reset` API shape is unchanged
+ * (callers `await` it).
+ */
 export class BatchInfraHoldCeiling {
-  private readonly holds = new Map<string, number>();
+  private readonly cap: number;
+  private readonly store: HoldCeilingStore;
 
-  constructor(private readonly cap: number = MAX_BATCH_INFRA_HOLDS) {}
+  constructor(cap: number = MAX_BATCH_INFRA_HOLDS, store?: HoldCeilingStore) {
+    this.cap = cap;
+    this.store = store ?? new InMemoryHoldCeilingStore();
+  }
 
   /**
    * Record one infra hold for a project and report whether the CEILING is now reached.
@@ -131,19 +143,18 @@ export class BatchInfraHoldCeiling {
    * TERMINAL escalation — the caller emits the loud halt + arms NO further timer);
    * otherwise the caller arms the bounded re-drive as before.
    */
-  record(projectId: string): { reached: boolean; holds: number } {
-    const next = (this.holds.get(projectId) ?? 0) + 1;
-    this.holds.set(projectId, next);
+  async record(projectId: string): Promise<{ reached: boolean; holds: number }> {
+    const next = await this.store.increment("batch_infra", projectId);
     if (next >= this.cap) {
       // The ceiling fired: clear the streak so a later recovered batch starts fresh.
-      this.holds.delete(projectId);
+      await this.store.clear("batch_infra", projectId);
       return { reached: true, holds: next };
     }
     return { reached: false, holds: next };
   }
 
   /** Reset a project's streak — called on ANY settled (non-infra-hold) pass. */
-  reset(projectId: string): void {
-    this.holds.delete(projectId);
+  async reset(projectId: string): Promise<void> {
+    await this.store.clear("batch_infra", projectId);
   }
 }

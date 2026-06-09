@@ -24,7 +24,7 @@ import type {
 import type { SpecEscalator } from "./coordinatorEscalate.js";
 import { isRetriableInfraError } from "../providers/githubRefReset.js";
 import { isAmbiguousMergeError } from "../providers/mergeOutcomeErrors.js";
-import { markDequeuedAfterEvent, type MergeQueueEventEmitter } from "./coordinator.js";
+import { markDequeuedAfterEvent, type MergeQueueEventEmitter, type MergeSettleTransaction } from "./coordinator.js";
 import { serializedRetryAfterMs } from "./mergeSerializedRetry.js";
 import {
   holdOrHaltRecoverableDrive,
@@ -44,6 +44,8 @@ export interface BatchSettleDeps {
   queue: MergeQueueModel;
   events: MergeQueueEventEmitter;
   escalator: SpecEscalator;
+  /** ATOMICITY (audit RC-4 #3): when wired, the dequeue settle runs event + UPDATE in one transaction. */
+  tx?: MergeSettleTransaction;
   recoverableDriveHolds?: RecoverableDriveHoldCeiling;
 }
 
@@ -59,7 +61,7 @@ export async function holdOnRetriableDriveThrow(
   error: unknown,
 ): Promise<BatchDriveInfraHold | undefined> {
   if (isAmbiguousMergeError(error)) {
-    deps.recoverableDriveHolds?.reset(entry.queueId);
+    await deps.recoverableDriveHolds?.reset(entry.queueId);
     return {
       kind: "infra_terminal",
       message: `merge drive state ambiguous; auto-retry could double-merge: ${String(error)}`,
@@ -68,7 +70,7 @@ export async function holdOnRetriableDriveThrow(
     };
   }
   if (!isRetriableInfraError(error)) return undefined;
-  deps.recoverableDriveHolds?.reset(entry.queueId);
+  await deps.recoverableDriveHolds?.reset(entry.queueId);
   await deps.queue.releaseClaim(entry.queueId);
   console.warn(
     `[batch-coordinator] project ${projectId}: merge drive for spec ${entry.specId} threw a transient infra error; holding + re-driving (entry stays queued):`,
@@ -106,8 +108,9 @@ export async function settleDriveOutcome(
       entry,
       reason: "needs_attention",
       message: outcome.message,
+      tx: deps.tx,
     });
-    deps.recoverableDriveHolds?.reset(entry.queueId);
+    await deps.recoverableDriveHolds?.reset(entry.queueId);
     return "dequeued";
   }
 
@@ -119,7 +122,7 @@ export async function settleDriveOutcome(
   }
 
   const reason = outcome.kind;
-  deps.recoverableDriveHolds?.reset(entry.queueId);
+  await deps.recoverableDriveHolds?.reset(entry.queueId);
   await markDequeuedAfterEvent({
     queue: deps.queue,
     events: deps.events,
@@ -127,6 +130,7 @@ export async function settleDriveOutcome(
     entry,
     reason,
     message: outcome.message,
+    tx: deps.tx,
   });
   return "dequeued";
 }

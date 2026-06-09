@@ -22,8 +22,9 @@ import { BatchMergeCoordinator } from "./batchCoordinator.js";
 import { PgBatchMergeEventEmitter } from "./batchCoordinatorPg.js";
 import { PgSpecEscalator } from "./coordinatorEscalate.js";
 import { type BuildMergeCoordinatorDeps, buildDriveMerge } from "./coordinatorBuild.js";
-import { PgMergeQueueEventEmitter } from "./coordinator.js";
-import { PgMergeQueueModel, PgMergeRunner } from "./coordinatorPg.js";
+import { PgMergeQueueEventEmitter } from "./coordinatorEvents.js";
+import { PgMergeQueueModel, PgMergeRunner, PgMergeSettleTransaction } from "./coordinatorPg.js";
+import { PgHoldCeilingStore } from "./holdCeilingStore.js";
 
 /** The timeout (ms) the native batch gate's clone/install/gate ops run under (mirrors the drive resolver). */
 const BATCH_GATE_TIMEOUT_MS = 600_000;
@@ -54,8 +55,16 @@ export async function resolveMaxBatchSize(pool: pg.Pool, projectId: string): Pro
 
 /** Assemble the production BatchMergeCoordinator (the native-queue driver). */
 export function buildBatchMergeCoordinator(deps: BuildMergeCoordinatorDeps): MergeCoordinator {
+  const queueModel = new PgMergeQueueModel(deps.pool);
   return new BatchMergeCoordinator({
-    queue: new PgMergeQueueModel(deps.pool),
+    queue: queueModel,
+    // ATOMICITY (audit RC-4 #3): the both-or-neither dequeue settle transaction — the
+    // event append + the queue UPDATE share ONE org-scoped transaction so a crash
+    // between them can never split the bus from the row. Only in the IN-PROCESS path:
+    // a plane-split data plane (runStateWriter wired) routes events through the control
+    // plane and cannot co-transact them with the local UPDATE, so it falls back to the
+    // sequential event-first settle (the long-standing split-brain guard still holds).
+    ...(deps.runStateWriter === undefined && { tx: new PgMergeSettleTransaction(deps.pool, queueModel) }),
     // `buildDriveMerge(deps)` already threads `deps.runStateWriter` into the merge
     // stage + the spec-status finalize + the conflict re-execution.
     runner: new PgMergeRunner(buildDriveMerge(deps)),
@@ -78,6 +87,10 @@ export function buildBatchMergeCoordinator(deps: BuildMergeCoordinatorDeps): Mer
     // The §2c non-bricking conflict escalator (parks an irreconcilable spec at
     // needs_attention) — REUSED verbatim from the native queue, plane-split-safe via the writer.
     escalator: new PgSpecEscalator(deps.pool, deps.runStateWriter),
+    // Audit RC-7: the DURABLE backing store for both runaway-guard ceilings (per-project
+    // consecutive-infra-hold streak + per-entry recoverable-drive attempts), so the counters
+    // survive a rolling deploy / crash-loop instead of resetting in a process-local Map.
+    holdCeilingStore: new PgHoldCeilingStore(deps.pool),
     resolveMaxBatchSize: (projectId) => resolveMaxBatchSize(deps.pool, projectId),
   });
 }

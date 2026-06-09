@@ -22,6 +22,14 @@ import { DEFAULT_THRESHOLDS, type InsightThresholds } from "./thresholds.js";
 import { type ComputeContext } from "./retryHotspot.js";
 import { type Insight, type ModelMismatchPayload } from "./types.js";
 
+// Hard row cap on the GROUPED result. The query is server-side aggregated
+// (GROUP BY spec_class × cli × model, so the row count is the number of distinct
+// model routings in the window — already naturally small), but the cap bounds a
+// pathological project with a runaway model-routing cardinality. Aggregation is
+// the preferred bounding here (a COUNT/SUM query, not raw rows); the LIMIT is the
+// belt-and-suspenders ceiling and would only ever trip on absurd cardinality.
+const CLASS_MODEL_STAT_LIMIT = 10_000;
+
 interface ClassModelStatRow {
   spec_class: string;
   cli: string;
@@ -74,7 +82,8 @@ export async function computeModelMismatch(pool: Pick<pg.Pool, "query">, context
             MAX(recorded_at) AS last_used_at
        FROM joined
        GROUP BY spec_class, cli, model
-       HAVING COUNT(DISTINCT spec_id) >= $3`,
+       HAVING COUNT(DISTINCT spec_id) >= $3
+       LIMIT ${CLASS_MODEL_STAT_LIMIT}`,
     [context.projectId, since, t.modelMismatchMinMergedPerModel],
   );
 

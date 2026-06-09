@@ -2,10 +2,6 @@
 // the existing per-run merge path. It orders ready runs in DAG order, serializes one
 // merge at a time, and relies on `coordinatorPg.ts` for pg queue/event wirings.
 
-import { runWithJobOrgId, runWithOrgScope, runWithSystemScope } from "@tanren/db";
-import type pg from "pg";
-import type { RunStateWriter } from "../contracts/runStateWriter.js";
-import { type EventStore, PgEventStore } from "../eventStore.js";
 import {
   type CoordinateResult,
   type DequeueReason,
@@ -22,11 +18,13 @@ import type { SpecEscalator } from "./coordinatorEscalate.js";
 import { holdOrHaltRecoverableDrive, RecoverableDriveHoldCeiling } from "./recoverableDriveHold.js";
 import { serializedRetryAfterMs } from "./mergeSerializedRetry.js";
 import { isMissingRequiredCredentialError, missingRequiredCredentialMessage } from "./missingRequiredCredential.js";
+import type { HoldCeilingStore } from "./holdCeilingStore.js";
+import { alertRetryAfterMs } from "./retrySchedule.js";
 
 /** How long after a transient merge-drive infra-hold the subscriber re-drives the project. */
 const TRANSIENT_DRIVE_HOLD_RETRY_AFTER_MS = 3000;
-/** Longer re-drive delay after a ceiling alert so persistent outages do not hot-loop. */
-const TRANSIENT_DRIVE_HOLD_ALERT_RETRY_AFTER_MS = 60_000;
+/** Longer re-drive delay after a ceiling alert so persistent outages do not hot-loop (single source: retrySchedule). */
+const TRANSIENT_DRIVE_HOLD_ALERT_RETRY_AFTER_MS = alertRetryAfterMs;
 
 /**
  * GAP #2c: the hold-attempt CEILING — how many CONSECUTIVE transient infra re-drives one
@@ -84,13 +82,57 @@ export interface MergeCoordinatorDeps {
    * coordinator so the two paths can never diverge.
    */
   escalator: SpecEscalator;
+  /**
+   * ATOMICITY SEAM (audit RC-4 #3): when wired, the dequeue/infra-blocked settle runs
+   * its event append + queue UPDATE in ONE transaction (both-commit-or-both-roll-back),
+   * closing the crash-between-writes split brain. Optional: absent, the settle falls
+   * back to the sequential event-first path (unchanged ordering + split-brain guard).
+   */
+  tx?: MergeSettleTransaction;
+  /**
+   * Audit RC-7: the DURABLE backing store for the per-entry recoverable-drive hold
+   * ceiling. When wired (the production assembly injects the {@link PgHoldCeilingStore}),
+   * the attempt counter survives a rolling deploy / crash-loop instead of resetting in a
+   * process-local Map. Absent → an in-memory store (the in-process fakes / unit tests).
+   */
+  holdCeilingStore?: HoldCeilingStore;
 }
 
 /**
- * Queue/event split-brain guard: terminal dequeue is never made durable before its
- * durable event. If the event append fails, the entry remains active (`merging` or
- * `queued`) and the failure is visible to the coordinator instead of producing an
- * invisible dequeued row that startup/recovery cannot reason about.
+ * ATOMICITY SEAM (audit RC-4 #3): the both-or-neither settle transaction. The
+ * `markDequeuedAfterEvent` / `markInfraBlockedAfterEvent` paths emit a durable queue
+ * event AND flip the `merge_queue` row to `dequeued`. Without a shared transaction a
+ * crash BETWEEN the two committed writes leaves a split brain: the event bus says the
+ * entry dequeued while the row is still `merging` (or vice versa). This seam runs both
+ * writes on ONE org-scoped transaction so they COMMIT together or ROLL BACK together.
+ *
+ * The event-first ORDERING is preserved INSIDE the transaction (the event append is
+ * issued before the row UPDATE) so the long-standing split-brain guard still holds: a
+ * failing event append rolls back the whole unit, leaving the entry active and the
+ * failure visible to the coordinator. When no runner is wired (the in-memory fakes do
+ * inject one; a caller that does not falls back to the sequential path), the prior
+ * emit-then-update ordering runs unchanged.
+ */
+export interface MergeSettleTransaction {
+  /**
+   * Run `work` inside ONE org-scoped transaction for `projectId`. The `events` +
+   * `queue` handed to `work` write through the SAME client, so the event append and
+   * the queue settle either both commit or both roll back. `work` must issue the
+   * event append BEFORE the queue update to preserve the event-first ordering.
+   */
+  run(
+    projectId: string,
+    work: (ctx: { events: MergeQueueEventEmitter; queue: MergeQueueModel }) => Promise<void>,
+  ): Promise<void>;
+}
+
+/**
+ * Queue/event split-brain guard + ATOMICITY (audit RC-4 #3): terminal dequeue is
+ * never made durable before its durable event, AND — when a {@link MergeSettleTransaction}
+ * is wired — the event append and the row UPDATE run in ONE transaction (both-commit-or-
+ * both-roll-back), so a crash between them can never leave the bus saying "dequeued"
+ * while the row is still `merging`. Without a runner the sequential emit-then-update
+ * path runs (the event-first guard still holds: a failed append leaves the entry active).
  */
 export async function markDequeuedAfterEvent(input: {
   queue: MergeQueueModel;
@@ -99,14 +141,24 @@ export async function markDequeuedAfterEvent(input: {
   entry: MergeQueueEntry;
   reason: DequeueReason;
   message: string;
+  tx?: MergeSettleTransaction;
 }): Promise<void> {
-  await input.events.emitDequeued({
-    projectId: input.projectId,
-    entry: input.entry,
-    reason: input.reason,
-    message: input.message,
-  });
-  await input.queue.markDequeued(input.entry.queueId, input.reason);
+  const settle = async (events: MergeQueueEventEmitter, queue: MergeQueueModel): Promise<void> => {
+    // EVENT-FIRST inside the transaction: the durable event precedes the row UPDATE, so
+    // a failing append rolls back the whole unit and the entry stays active/visible.
+    await events.emitDequeued({
+      projectId: input.projectId,
+      entry: input.entry,
+      reason: input.reason,
+      message: input.message,
+    });
+    await queue.markDequeued(input.entry.queueId, input.reason);
+  };
+  if (input.tx !== undefined) {
+    await input.tx.run(input.projectId, (ctx) => settle(ctx.events, ctx.queue));
+    return;
+  }
+  await settle(input.events, input.queue);
 }
 
 export async function markInfraBlockedAfterEvent(input: {
@@ -117,15 +169,23 @@ export async function markInfraBlockedAfterEvent(input: {
   kind: "ceiling" | "ambiguous" | "missing_required_credential";
   attempts: number;
   message: string;
+  tx?: MergeSettleTransaction;
 }): Promise<void> {
-  await input.events.emitInfraBlocked({
-    projectId: input.projectId,
-    entry: input.entry,
-    kind: input.kind,
-    attempts: input.attempts,
-    message: input.message,
-  });
-  await input.queue.markDequeued(input.entry.queueId, "blocked");
+  const settle = async (events: MergeQueueEventEmitter, queue: MergeQueueModel): Promise<void> => {
+    await events.emitInfraBlocked({
+      projectId: input.projectId,
+      entry: input.entry,
+      kind: input.kind,
+      attempts: input.attempts,
+      message: input.message,
+    });
+    await queue.markDequeued(input.entry.queueId, "blocked");
+  };
+  if (input.tx !== undefined) {
+    await input.tx.run(input.projectId, (ctx) => settle(ctx.events, ctx.queue));
+    return;
+  }
+  await settle(input.events, input.queue);
 }
 
 /**
@@ -146,9 +206,13 @@ export class EventEmittingMergeCoordinator implements MergeCoordinator {
    * settle (merged / dequeued / ceiling-alert) so a recovered entry starts fresh.
    */
   private readonly infraHoldAttempts = new Map<string, number>();
-  private readonly recoverableDriveHolds = new RecoverableDriveHoldCeiling();
+  private readonly recoverableDriveHolds: RecoverableDriveHoldCeiling;
 
-  constructor(private readonly deps: MergeCoordinatorDeps) {}
+  constructor(private readonly deps: MergeCoordinatorDeps) {
+    // Audit RC-7: back the per-entry recoverable-drive ceiling with the injected durable
+    // store so the attempt counter survives a restart (the in-memory default keeps fakes Pg-free).
+    this.recoverableDriveHolds = new RecoverableDriveHoldCeiling(deps.holdCeilingStore);
+  }
 
   async coordinate(projectId: string): Promise<CoordinateResult> {
     // Crash recovery FIRST: a coordinator that died mid-merge left a `merging`
@@ -239,7 +303,7 @@ export class EventEmittingMergeCoordinator implements MergeCoordinator {
             attempts,
           );
         }
-        this.recoverableDriveHolds.reset(entry.queueId);
+        await this.recoverableDriveHolds.reset(entry.queueId);
         this.infraHoldAttempts.set(entry.queueId, attempts);
         // Release the claim so the entry stays queued, then HOLD loudly + arm a re-drive.
         await this.deps.queue.releaseClaim(entry.queueId);
@@ -267,7 +331,7 @@ export class EventEmittingMergeCoordinator implements MergeCoordinator {
     this.infraHoldAttempts.delete(entry.queueId);
 
     if (outcome.kind === "merged") {
-      this.recoverableDriveHolds.reset(entry.queueId);
+      await this.recoverableDriveHolds.reset(entry.queueId);
       await this.deps.queue.markMerged(entry.queueId);
       // The merge stage itself emits merge.completed (it owns the real merge); the
       // coordinator does not double-emit it. The next pass (re-triggered by that
@@ -276,7 +340,7 @@ export class EventEmittingMergeCoordinator implements MergeCoordinator {
     }
 
     if (outcome.kind === "needs_attention") {
-      this.recoverableDriveHolds.reset(entry.queueId);
+      await this.recoverableDriveHolds.reset(entry.queueId);
       // The LOUD TERMINAL ESCALATION (§2c — non-bricking): the resolver judged this spec
       // GENUINELY irreconcilable. PARK it at `needs_attention` (frees its slot — the rest
       // of the DAG keeps moving) FIRST, then dequeue `needs_attention` (the entry leaves
@@ -291,6 +355,7 @@ export class EventEmittingMergeCoordinator implements MergeCoordinator {
         entry,
         reason: "needs_attention",
         message: outcome.message,
+        tx: this.deps.tx,
       });
       return { dequeuedSpecId: entry.specId };
     }
@@ -309,7 +374,7 @@ export class EventEmittingMergeCoordinator implements MergeCoordinator {
 
     // A returned `conflict` usually means the resolver already routed an
     // autonomous re-plan; a terminal merge-stage failure also leaves the queue.
-    this.recoverableDriveHolds.reset(entry.queueId);
+    await this.recoverableDriveHolds.reset(entry.queueId);
     const reason = outcome.kind;
     await markDequeuedAfterEvent({
       queue: this.deps.queue,
@@ -318,6 +383,7 @@ export class EventEmittingMergeCoordinator implements MergeCoordinator {
       entry,
       reason,
       message: outcome.message,
+      tx: this.deps.tx,
     });
     return { dequeuedSpecId: entry.specId };
   }
@@ -337,7 +403,7 @@ export class EventEmittingMergeCoordinator implements MergeCoordinator {
     attempts = this.infraHoldAttempts.get(entry.queueId) ?? 0,
   ): Promise<{ dequeuedSpecId: string }> {
     this.infraHoldAttempts.delete(entry.queueId);
-    this.recoverableDriveHolds.reset(entry.queueId);
+    await this.recoverableDriveHolds.reset(entry.queueId);
     await markInfraBlockedAfterEvent({
       queue: this.deps.queue,
       events: this.deps.events,
@@ -346,6 +412,7 @@ export class EventEmittingMergeCoordinator implements MergeCoordinator {
       kind,
       attempts,
       message,
+      tx: this.deps.tx,
     });
     console.error(
       `[merge-coordinator] project ${projectId}: merge drive for spec ${entry.specId} HALTED (${kind}) after ${attempts} infra re-drive(s); operator attention required: ${message}`,
@@ -367,7 +434,7 @@ export class EventEmittingMergeCoordinator implements MergeCoordinator {
     attempts: number,
   ): Promise<{ holdReason: "infra_error"; retryAfterMs: number }> {
     this.infraHoldAttempts.delete(entry.queueId);
-    this.recoverableDriveHolds.reset(entry.queueId);
+    await this.recoverableDriveHolds.reset(entry.queueId);
     await this.deps.events.emitInfraBlocked({
       projectId,
       entry,
@@ -380,111 +447,5 @@ export class EventEmittingMergeCoordinator implements MergeCoordinator {
       `[merge-coordinator] project ${projectId}: merge drive for spec ${entry.specId} ALERTED after ${attempts} infra re-drive(s); continuing autonomous re-drive after backoff: ${message}`,
     );
     return { holdReason: "infra_error", retryAfterMs: TRANSIENT_DRIVE_HOLD_ALERT_RETRY_AFTER_MS };
-  }
-}
-
-/**
- * The pg-backed queue-event emitter. Resolves the project's org, then writes each
- * event through the org-scoped PgEventStore (the single event-writer seam). The
- * events carry the entry's run/spec so the timeline links the queue decision to
- * the run, and the queue depth for queue/stack statistics (§2d).
- */
-export class PgMergeQueueEventEmitter implements MergeQueueEventEmitter {
-  /**
-   * @param runStateWriter Plane-split (autonomy loops): when present, queue events
-   *   append through the control-plane writer (the de-privileged data plane can no
-   *   longer write `events` directly); absent, in-process via `PgEventStore`.
-   */
-  constructor(
-    private readonly pool: pg.Pool,
-    private readonly runStateWriter?: RunStateWriter,
-  ) {}
-
-  private async withScopedStore(projectId: string, work: (store: EventStore) => Promise<void>): Promise<void> {
-    const orgId = await runWithSystemScope(this.pool, async (client) => {
-      const result = await client.query<{ org_id: string | null }>(
-        "SELECT org_id FROM projects WHERE project_id = $1",
-        [projectId],
-      );
-      return result.rows[0]?.org_id ?? null;
-    });
-    if (orgId === null) return;
-    // Plane-split: route the event append through the control plane when wired (the
-    // writer resolves the run's org from the ambient per-job org-id, so set it for
-    // the append); else append in-process under a short org scope — byte-identical.
-    if (this.runStateWriter !== undefined) {
-      const writer = this.runStateWriter;
-      await runWithJobOrgId(orgId, () => work(writer));
-      return;
-    }
-    await runWithOrgScope(this.pool, orgId, (client) => work(new PgEventStore(client)));
-  }
-
-  async emitAdvanced(input: { projectId: string; entry: MergeQueueEntry; queueDepth: number }): Promise<void> {
-    await this.withScopedStore(input.projectId, (store) =>
-      store.append({
-        runId: input.entry.runId,
-        specId: input.entry.specId,
-        projectId: input.projectId,
-        eventType: "merge.queue.advanced",
-        payload: {
-          prUrl: input.entry.prUrl,
-          prNumber: input.entry.prNumber,
-          integration: "native_queue",
-          specId: input.entry.specId,
-          queueDepth: input.queueDepth,
-        },
-      }),
-    );
-  }
-
-  async emitDequeued(input: {
-    projectId: string;
-    entry: MergeQueueEntry;
-    reason: DequeueReason;
-    message: string;
-  }): Promise<void> {
-    await this.withScopedStore(input.projectId, (store) =>
-      store.append({
-        runId: input.entry.runId,
-        specId: input.entry.specId,
-        projectId: input.projectId,
-        eventType: "merge.dequeued",
-        payload: {
-          prUrl: input.entry.prUrl,
-          prNumber: input.entry.prNumber,
-          integration: "native_queue",
-          specId: input.entry.specId,
-          reason: input.reason,
-          message: input.message,
-        },
-      }),
-    );
-  }
-
-  async emitInfraBlocked(input: {
-    projectId: string;
-    entry: MergeQueueEntry;
-    kind: "ceiling" | "ambiguous" | "missing_required_credential";
-    attempts: number;
-    message: string;
-  }): Promise<void> {
-    await this.withScopedStore(input.projectId, (store) =>
-      store.append({
-        runId: input.entry.runId,
-        specId: input.entry.specId,
-        projectId: input.projectId,
-        eventType: "merge.queue.infra_blocked",
-        payload: {
-          prUrl: input.entry.prUrl,
-          prNumber: input.entry.prNumber,
-          integration: "native_queue",
-          specId: input.entry.specId,
-          kind: input.kind,
-          attempts: input.attempts,
-          message: input.message,
-        },
-      }),
-    );
   }
 }

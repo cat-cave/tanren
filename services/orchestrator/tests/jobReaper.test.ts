@@ -14,12 +14,19 @@ import { JobReaper, reapExpiredJobs } from "../src/engine/worker/jobReaper.js";
 // `missingRun` is set the lineage SELECT returns no row, so the reaper skips the
 // event (the run is gone).
 class ReaperPool {
+  // DEAD-LETTER FINALIZER (audit §3.13c): captures the spec-park UPDATE so a test can
+  // assert the dead-lettered job's spec is failed to `needs_attention` (freeing its slot).
+  readonly specParks: Array<{ sql: string; params: unknown[] }> = [];
   constructor(private readonly opts: { orgId?: string | null; missingRun?: boolean } = {}) {}
 
   async query(sql: string, params: unknown[]): Promise<{ rows: unknown[]; rowCount: number }> {
     const trimmed = sql.trim();
-    if (["BEGIN", "COMMIT", "ROLLBACK"].includes(trimmed)) {
+    if (["BEGIN", "COMMIT", "ROLLBACK"].includes(trimmed) || trimmed.startsWith("SET LOCAL")) {
       return { rows: [], rowCount: 0 };
+    }
+    if (trimmed.startsWith("UPDATE specs SET status = 'needs_attention'")) {
+      this.specParks.push({ sql: trimmed, params });
+      return { rows: [], rowCount: 1 };
     }
     if (trimmed.startsWith("SELECT spec_id, project_id, org_id FROM runs")) {
       if (this.opts.missingRun === true) {
@@ -176,6 +183,51 @@ describe("reapExpiredJobs — lineage + event scoping", () => {
 
     expect(result).toMatchObject({ deadLettered: 1 });
     expect(events.events[0]).toMatchObject({ runId: "run_org", eventType: "job.dead_lettered" });
+  });
+
+  it("FINALIZES the dead-lettered job's spec to needs_attention, freeing its slot (audit §3.13c)", async () => {
+    // Without the finalizer the spec stays `in_flight` forever, occupying its DAG slot
+    // and blocking every dependent. The fix parks it at `needs_attention` (the same
+    // terminal escalation a merge conflict uses) so the slot frees + the walker advances.
+    const jobQueue = new FakeJobQueue();
+    await jobQueue.enqueue({ runId: "run_dl", taskKind: "plan", payload: {}, maxAttempts: 1 });
+    await jobQueue.claim("plan", { leaseMs: 10 });
+    const events = new FakeEventStore();
+    const pool = new ReaperPool({ orgId: "org_77" });
+
+    const result = await reapExpiredJobs({
+      pool: pool.asPgPool(),
+      jobQueue,
+      eventStore: events,
+      now: new Date(Date.now() + 1_000),
+    });
+
+    expect(result).toMatchObject({ deadLettered: 1 });
+    // The spec was parked at needs_attention (the dead-letter finalizer), ATOMIC-guarded
+    // so an already-terminal spec is never moved.
+    expect(pool.specParks).toHaveLength(1);
+    expect(pool.specParks[0]!.sql).toContain("needs_attention");
+    expect(pool.specParks[0]!.sql).toContain("status NOT IN");
+    expect(pool.specParks[0]!.params).toEqual(["spec_for_run_dl"]);
+  });
+
+  it("does NOT park the spec when the reaped run has no org (cannot scope the flip)", async () => {
+    const jobQueue = new FakeJobQueue();
+    await jobQueue.enqueue({ runId: "run_no_org", taskKind: "plan", payload: {}, maxAttempts: 1 });
+    await jobQueue.claim("plan", { leaseMs: 10 });
+    const events = new FakeEventStore();
+    const pool = new ReaperPool({ orgId: null });
+
+    await reapExpiredJobs({
+      pool: pool.asPgPool(),
+      jobQueue,
+      eventStore: events,
+      now: new Date(Date.now() + 1_000),
+    });
+
+    // No org ⇒ no org-scoped park (the event still emits on the pool path).
+    expect(pool.specParks).toEqual([]);
+    expect(events.events[0]).toMatchObject({ eventType: "job.dead_lettered" });
   });
 
   it("does not emit an event for a dead-lettered job with no run id", async () => {

@@ -248,6 +248,24 @@ export const InboxStore = {
     return row === undefined ? undefined : mapCandidate(row);
   },
 
+  // §3.6 stuck-candidate sweep: candidates left `auto_routed` with NO resolved
+  // spec — the triage verdict said auto-route but the DAG commit never landed (an
+  // LLM timeout / DB blip after the upsert but before `autoRouteCandidate`
+  // resolved). These are re-drivable: the sweeper re-runs the auto-route, which is
+  // idempotent on (source, externalId). Org-scoped under RLS by the caller's client.
+  async listStuckAutoRouted(client: QueryClient, limit: number): Promise<Candidate[]> {
+    const result = await client.query<CandidateRow>(
+      `SELECT c.id, c.source_id, c.org_id, c.project_id, c.external_id, c.title, c.body,
+              c.severity, c.status, c.triage, c.resolved_spec_id,
+              s.name AS source_name, s.kind AS source_kind
+       FROM candidates c JOIN inbox_sources s ON s.id = c.source_id
+       WHERE c.status = 'auto_routed' AND c.resolved_spec_id IS NULL
+       ORDER BY c.updated_at ASC LIMIT $1`,
+      [limit],
+    );
+    return result.rows.map(mapCandidate);
+  },
+
   // Every org that owns an enabled inbox source — the system-scoped fan-out the
   // cross-org poller reads before listing each org's due sources. The DISTINCT +
   // `enabled = 'true'` predicate are byte-identical to the inline poller read.

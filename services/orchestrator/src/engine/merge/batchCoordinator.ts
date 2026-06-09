@@ -21,7 +21,7 @@ import {
 } from "../contracts/mergeCoordinator.js";
 import { isRetriableInfraError } from "../providers/githubRefReset.js";
 import { setTimeout as sleepFor } from "node:timers/promises";
-import { markDequeuedAfterEvent, type MergeQueueEventEmitter } from "./coordinator.js";
+import { markDequeuedAfterEvent, type MergeQueueEventEmitter, type MergeSettleTransaction } from "./coordinator.js";
 import type { SpecEscalator } from "./coordinatorEscalate.js";
 import {
   driveBaseConflict,
@@ -30,6 +30,7 @@ import {
   settleDriveOutcome,
 } from "./batchCoordinatorSettle.js";
 import { BatchInfraHoldCeiling, holdOnInfra, terminalInfraBlock } from "./batchInfraHoldCeiling.js";
+import type { HoldCeilingStore } from "./holdCeilingStore.js";
 import { RecoverableDriveHoldCeiling } from "./recoverableDriveHold.js";
 import { serializedRetryAfterMs } from "./mergeSerializedRetry.js";
 
@@ -103,7 +104,11 @@ export interface BatchMergeCoordinatorDeps {
    * both paths use, so they can never diverge.
    */
   escalator: SpecEscalator;
+  /** ATOMICITY (audit RC-4 #3): when wired, the dequeue settle runs its event append + queue UPDATE in ONE transaction (both-or-neither). */
+  tx?: MergeSettleTransaction;
   recoverableDriveHolds?: RecoverableDriveHoldCeiling;
+  /** Audit RC-7: the DURABLE backing store for BOTH runaway-guard ceilings, so the counters survive a restart (absent → in-memory, for fakes). */
+  holdCeilingStore?: HoldCeilingStore;
   /**
    * Resolve the per-project max batch size (the config knob). Defaults to a constant
    * `DEFAULT_MAX_BATCH_SIZE` resolver when omitted (tests inject a fixed value). The
@@ -128,18 +133,15 @@ export interface BatchMergeCoordinatorDeps {
 export class BatchMergeCoordinator implements MergeCoordinator {
   private readonly resolveMaxBatchSize: (projectId: string) => Promise<number>;
   private readonly sleep: (ms: number) => Promise<void>;
-  /**
-   * GAP #1 (runaway guard): the per-project CROSS-PASS consecutive-infra-hold ceiling.
-   * Each delayed re-drive is a fresh `coordinate` pass; without a cross-pass counter a
-   * persistent outage re-drove the 3s timer forever. This bounds it to a loud alert with
-   * slower autonomous re-drive.
-   */
-  private readonly infraHolds = new BatchInfraHoldCeiling();
+  /** GAP #1 (runaway guard): the per-project CROSS-PASS consecutive-infra-hold ceiling — bounds a persistent outage to a loud alert (each re-drive is a fresh pass). */
+  private readonly infraHolds: BatchInfraHoldCeiling;
 
   constructor(private readonly deps: BatchMergeCoordinatorDeps) {
     this.resolveMaxBatchSize = deps.resolveMaxBatchSize ?? (() => Promise.resolve(DEFAULT_MAX_BATCH_SIZE));
     this.sleep = deps.sleep ?? ((ms) => sleepFor(ms));
-    this.deps.recoverableDriveHolds ??= new RecoverableDriveHoldCeiling();
+    // Audit RC-7: back both runaway-guard ceilings with the injected durable store (survives a restart).
+    this.infraHolds = new BatchInfraHoldCeiling(undefined, deps.holdCeilingStore);
+    this.deps.recoverableDriveHolds ??= new RecoverableDriveHoldCeiling(deps.holdCeilingStore);
   }
 
   async coordinate(projectId: string): Promise<CoordinateResult> {
@@ -161,7 +163,7 @@ export class BatchMergeCoordinator implements MergeCoordinator {
           ? "empty"
           : "all_blocked";
       // A non-infra hold (serialized/empty/all_blocked) ends any infra-hold streak.
-      this.infraHolds.reset(projectId);
+      await this.infraHolds.reset(projectId);
       const retryAfterMs = holdReason === "serialized" ? serializedRetryAfterMs(snapshot) : undefined;
       return { projectId, holdReason, queueDepth, ...(retryAfterMs !== undefined && { retryAfterMs }) };
     }
@@ -200,7 +202,7 @@ export class BatchMergeCoordinator implements MergeCoordinator {
         // Everything eligible was bisected out (all-culprits) — nothing to merge; the
         // dequeued culprits re-enter via re-execution later. Progress, not an infra
         // error — clear the streak.
-        this.infraHolds.reset(projectId);
+        await this.infraHolds.reset(projectId);
         return { projectId, holdReason: "all_blocked", queueDepth };
       }
 
@@ -225,13 +227,13 @@ export class BatchMergeCoordinator implements MergeCoordinator {
         await this.deps.batchEvents.emitPassed({ projectId, batch: current.batch, integrationBranch });
         const result = await this.mergeBatch(projectId, current.batch, queueDepth);
         if (result.holdReason !== "infra_error" && result.holdReason !== "infra_blocked") {
-          this.infraHolds.reset(projectId);
+          await this.infraHolds.reset(projectId);
         }
         return result;
       }
 
       if (verdict.result === "pending") {
-        this.infraHolds.reset(projectId);
+        await this.infraHolds.reset(projectId);
         const retryAfterMs = verdict.settleAfterMs ?? PENDING_RECHECK_MS;
         return { projectId, holdReason: "all_blocked", retryAfterMs, queueDepth };
       }
@@ -245,11 +247,11 @@ export class BatchMergeCoordinator implements MergeCoordinator {
           }
           return this.infraHold(projectId, current.batch, result.message, queueDepth);
         }
-        this.infraHolds.reset(projectId);
+        await this.infraHolds.reset(projectId);
         return result;
       }
 
-      this.infraHolds.reset(projectId);
+      await this.infraHolds.reset(projectId);
 
       const failMessage = verdict.result === "conflict" ? `integration conflict: ${verdict.message}` : verdict.message;
       await this.deps.batchEvents.emitBisecting({ projectId, batch: current.batch, message: failMessage });
@@ -283,6 +285,7 @@ export class BatchMergeCoordinator implements MergeCoordinator {
         entry: bisect.culprit,
         reason: "conflict",
         message: dequeueMessage,
+        tx: this.deps.tx,
       });
       excludedSpecIds.add(bisect.culprit.specId);
 
@@ -296,7 +299,7 @@ export class BatchMergeCoordinator implements MergeCoordinator {
 
     // The loop bound was hit (a logic guard — unreachable since each fail removes one
     // entry). Hold rather than risk an unverified merge. Not an infra error.
-    this.infraHolds.reset(projectId);
+    await this.infraHolds.reset(projectId);
     return { projectId, holdReason: "all_blocked", queueDepth };
   }
 
@@ -440,7 +443,7 @@ export class BatchMergeCoordinator implements MergeCoordinator {
         return this.terminalInfraBlock(projectId, [outcome.entry], outcome.message, queueDepth, outcome.terminalKind);
       }
       if (outcome.kind === "merged") {
-        this.deps.recoverableDriveHolds?.reset(entry.queueId);
+        await this.deps.recoverableDriveHolds?.reset(entry.queueId);
         await this.deps.queue.markMerged(entry.queueId);
         mergedSpecId = entry.specId;
         continue;
@@ -478,7 +481,7 @@ export class BatchMergeCoordinator implements MergeCoordinator {
     queueDepth: number,
     kind?: "missing_required_credential" | "ambiguous_merge_state",
   ): Promise<CoordinateResult> {
-    this.infraHolds.reset(projectId);
+    await this.infraHolds.reset(projectId);
     const input = {
       queue: this.deps.queue,
       events: this.deps.batchEvents,

@@ -300,6 +300,10 @@ export class NotificationDispatcher {
       userId: null,
       channelKind: route.channelKind,
       destination: route.destination,
+      // The default route carries no per-target base URL: an ntfy default with a
+      // bare-topic destination resolves against the deploy default injected at
+      // boot (null ⇒ use the deploy default).
+      baseUrl: null,
       label: "default route",
       enabled: true,
       // The default route never weekend-mutes: a fail-severity escalation must

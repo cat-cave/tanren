@@ -6,6 +6,7 @@ import { materializeCodexAuthBundle } from "../credentials/codexMaterializer.js"
 import { quoteSshShellArg } from "../ssh/command.js";
 import type { AnswererAdapter, TokenUsage, UsageLimitSignal, WriterAdapter, WriterResult } from "./types.js";
 import { findOpenRouterGenerationId, foldGenerationId } from "./openRouterGenerationId.js";
+import { findTokenUsageBounded } from "./findTokenUsage.js";
 import { captureBaselineSha, captureGitStateAfterCodex } from "./codexGit.js";
 import { buildCodexAnswererExecCommand, buildCodexExecCommand } from "./codexExecCommand.js";
 
@@ -414,22 +415,12 @@ function parseJsonObject(line: string): Record<string, unknown> | undefined {
   }
 }
 
+// Walks one parsed Codex JSONL event for its usage record. BOUNDED on depth +
+// node count (a hostile/buggy deeply-nested event must not blow the stack); on
+// hitting a bound it emits a LOUD `usage-parse-bounded` signal rather than
+// silently dropping usage. The Codex de-overlap shape is `tokenUsageFromRecord`.
 function findTokenUsage(value: unknown): TokenUsage | undefined {
-  if (typeof value !== "object" || value === null) {
-    return undefined;
-  }
-  const record = value as Record<string, unknown>;
-  const usage = tokenUsageFromRecord(record);
-  if (usage !== undefined) {
-    return usage;
-  }
-  for (const child of Object.values(record)) {
-    const nested = findTokenUsage(child);
-    if (nested !== undefined) {
-      return nested;
-    }
-  }
-  return undefined;
+  return findTokenUsageBounded("codex", value, tokenUsageFromRecord);
 }
 
 // Transforms Codex's INCLUSIVE token shape into the disjoint TokenUsage buckets. In

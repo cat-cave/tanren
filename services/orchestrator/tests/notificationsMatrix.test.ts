@@ -19,6 +19,7 @@ function target(overrides: Partial<NotificationTargetRow>): NotificationTargetRo
     userId: overrides.userId ?? null,
     channelKind: overrides.channelKind ?? "ntfy",
     destination: overrides.destination ?? "tanren-runs",
+    baseUrl: overrides.baseUrl ?? null,
     label: overrides.label ?? "ntfy default",
     enabled: overrides.enabled ?? true,
     weekendMute: overrides.weekendMute ?? false,

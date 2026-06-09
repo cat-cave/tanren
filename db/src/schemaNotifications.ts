@@ -38,6 +38,13 @@ export const notificationTargets = pgTable(
     userId: text("user_id").references(() => users.id),
     channelKind: text("channel_kind").notNull(),
     destination: text("destination").notNull(),
+    // Per-target base URL — authoritative per-org host override for channels
+    // (ntfy) that resolve a bare-topic destination against a base. NULL means
+    // "use the deploy default injected at boot"; a process-wide env base URL
+    // must NEVER shadow this (audit C4 / RC-1: a SaaS-host env would otherwise
+    // route every tenant's ntfy traffic through one shared host). Only stored
+    // when set, and constrained to an http(s) URL shape.
+    baseUrl: text("base_url"),
     label: text("label").notNull(),
     enabled: integer("enabled").notNull().default(1),
     weekendMute: integer("weekend_mute").notNull().default(0),
@@ -53,6 +60,9 @@ export const notificationTargets = pgTable(
     ),
     check("notification_targets_enabled_check", sql`${table.enabled} IN (0,1)`),
     check("notification_targets_weekend_mute_check", sql`${table.weekendMute} IN (0,1)`),
+    // base_url, when set, must be an http(s) URL — never a bare host or a
+    // non-URL string (fail-loud at write rather than route to a wrong host).
+    check("notification_targets_base_url_check", sql`${table.baseUrl} IS NULL OR ${table.baseUrl} ~ '^https?://'`),
     index("notification_targets_org_id").on(table.orgId),
     index("notification_targets_user_id").on(table.userId),
     index("notification_targets_channel_kind").on(table.channelKind),

@@ -36,6 +36,7 @@ import {
   DEFAULT_AUDIT_POSTURE,
   DEFAULT_CONVERGENCE_POLICY,
 } from "../config/shared.js";
+import type { BudgetGate } from "../contracts/dagWalker.js";
 import { type Finding, type FindingSeverity, severityRank } from "../contracts/findings.js";
 import type { CostRecorder } from "../costs/index.js";
 import type { EventName, EventPayload } from "../events/index.js";
@@ -46,6 +47,7 @@ import type { UsageProbe } from "../usage/index.js";
 import type { GateOutcome } from "./gate/index.js";
 import type { PlannerRejectionFeedback, PlannerSpecContext } from "./planner/planner.js";
 import { checkWindowPreflight, type CreditState, observeRunAccounting } from "./subtaskAccounting.js";
+import { budgetPausedOutcome, checkIterationBudget, emitBudgetPause } from "./subtaskBudget.js";
 import { buildSubtaskCostContext, type SubtaskCostContext } from "./subtaskCost.js";
 import type { RealProviderCostCapturer } from "../costs/generationCostCapture.js";
 import { insertPlannerTask, markTaskDone } from "./subtaskTasks.js";
@@ -132,6 +134,13 @@ export interface SubtaskLoopInput {
   costHooks?: SubtaskLoopCostHooks;
   usageProbe?: UsageProbe;
   creditUsdRate?: number;
+  // PER-ITERATION BUDGET GATE (audit §3.7a): resolves the project's configured dollar
+  // ceiling + cumulative spend at the TOP of each loop iteration, so an in-flight run
+  // halts the instant its project crosses the ceiling — not just at enqueue time. The
+  // SAME org-scoped seam the DagWalker uses (PgBudgetGate). Absent ⇒ no per-iteration
+  // budget enforcement (unit paths / a run with no budget concern), byte-identical to
+  // before this gate.
+  budgetGate?: BudgetGate;
   // the deterministic, exit-code-driven gate-check seam. `per_iteration` is the
   // tier-1 FAST gate (per task, BEFORE the checker); `pre_audit` is the tier-2 SPEC
   // gate (a CI fail becomes a P0 finding). Omitted → the gate is skipped (unit paths).
@@ -179,6 +188,17 @@ export type SubtaskLoopOutcome =
     }
   | { kind: "halted"; loopCount: number; reason: string }
   | {
+      // BUDGET PAUSE (audit §3.7a): the project crossed the configured ceiling (or the
+      // gate must fail closed) DURING this in-flight run — the per-iteration check stops an
+      // ALREADY-RUNNING cohort spending past the ceiling. Halts + parks the spec
+      // (requeueable); raising the ceiling + requeue resumes it (escapable, never bricked).
+      kind: "budget_paused";
+      loopCount: number;
+      ceilingUsd: number | undefined;
+      spentUsd: number;
+      reason: string;
+    }
+  | {
       kind: "window_exhausted";
       loopCount: number;
       provider: string;
@@ -222,8 +242,24 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
   // finalize runs run-level accounting + reconciles cost, then returns the terminal
   // outcome. Routed through EVERY return so cost is captured regardless of how the run
   // ended.
+  //
+  // GUARDED (audit §3.7d): the run-end ccusage/credit reconcile is BEST-EFFORT — it
+  // reaches the control plane / usage probe, any of which can blip. The run OUTCOME
+  // (passed / convergence_stalled / halted / window_exhausted) is the durable result
+  // of the whole loop and MUST persist regardless: a transient reconcile throw must
+  // NOT discard a finished run's outcome AND its spend back-fill in one go. So the
+  // reconcile is caught LOUD-but-non-fatal — the committed cost_records rows are
+  // already the row-is-truth budget source; only the run-end apportion estimate is
+  // missing — and the outcome always returns.
   const finalize = async (outcome: SubtaskLoopOutcome): Promise<SubtaskLoopOutcome> => {
-    await observeRunAccounting(input, appendEvent, plannerTaskId, creditState);
+    try {
+      await observeRunAccounting(input, appendEvent, plannerTaskId, creditState);
+    } catch (error) {
+      console.error(
+        `[subtask-loop] run-end cost reconcile failed for run ${input.context.runId}; the run outcome (${outcome.kind}) is preserved — only the best-effort spend back-fill is missing:`,
+        error,
+      );
+    }
     return outcome;
   };
 
@@ -240,6 +276,18 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
   let loopCount = 0;
 
   while (true) {
+    // PER-ITERATION BUDGET GATE (audit §3.7a): the enqueue-time gate only stops NEW
+    // work — an ALREADY in-flight cohort would otherwise keep iterating and spending
+    // PAST the ceiling (overspend ≈ cohort × per-run cost). Re-resolve the project's
+    // budget at the top of EVERY iteration so a run halts the instant its project
+    // crosses the ceiling (or the gate must fail closed — unpriced/unparseable spend).
+    // The halt PARKS the spec (requeueable) and stops this run's spend; raising the
+    // ceiling + requeue resumes it (escapable, never a permanent brick).
+    const budgetPause = await checkIterationBudget(input);
+    if (budgetPause !== null) {
+      await emitBudgetPause(input, appendEvent, plannerTaskId, budgetPause);
+      return await finalize(budgetPausedOutcome(budgetPause, loopCount));
+    }
     const windowOutcome = await checkWindowPreflight(input, appendEvent, plannerTaskId, loopCount, creditState);
     if (windowOutcome !== null) {
       await markTaskDone(input.pool, plannerTaskId, "window_exhausted", input.runStateWriter);

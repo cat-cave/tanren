@@ -1,30 +1,38 @@
 // P1d autonomous intake — the GitHub issues WEBHOOK RECEIVER (autonomy-engine.md
 // §1d). GitHub posts an `issues` event here; we resolve the configured inbox
 // SOURCE (by id in the path), VERIFY the signature against that source's secret
-// (mandatory — no unauthenticated intake), map the payload to an ingest item, and
-// run the SHARED intake pipeline: real-LLM triage → an `auto_routable` issue is
-// INSERTED INTO THE DAG with deps + priority; everything else lands in the
-// candidate inbox for operator review.
+// (mandatory — no unauthenticated intake), then PERSIST the verified raw delivery
+// durably and return 202 FAST.
+//
+// §3.6 (persist-then-202 + async): the OLD receiver ran runner allocation + a
+// 120s-budget triage call INLINE — inside GitHub's ~10s delivery window — and
+// 202-swallowed any failure. GitHub, seeing a 2xx, never re-delivers, so a
+// transient blip PERMANENTLY LOST the intake (and every delivery showed red in
+// GitHub's UI from the timeout). Now the receiver does the ONE durable thing —
+// persist the event — and a background processor (kicked best-effort here, and
+// GUARANTEED by the poller's sweeper) does the allocation/triage/routing out of
+// band. A processing failure is recoverable: the sweeper re-drives the persisted
+// row idempotently. The intake is never silently lost.
 //
 // The receiver is NOT org-keyed in the path (GitHub does not send a tenant id),
-// so it resolves the source + its org server-side, system-scoped, and runs the
-// DAG insert under that org's RLS scope via the intake system actor. This route
-// mounts at root alongside the CI webhook receiver.
+// so it resolves the source + its org server-side, system-scoped, and persists +
+// processes under that org's RLS scope. This route mounts at root alongside the CI
+// webhook receiver.
 
 import { Hono } from "hono";
 import type pg from "pg";
-import { runWithJobOrgId, runWithSystemScope } from "@tanren/db";
-import { orgScopingPool } from "../../engine/data/orgScopedDb.js";
+import { runWithOrgScope, runWithSystemScope } from "@tanren/db";
 import type { SecretStore } from "../../engine/contracts/secretStore.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import {
-  intakeItem,
-  mapGithubIssueWebhook,
+  intakeAutoRouteDeps,
+  processWebhookEvent,
   verifyGithubSignature,
-  type IntakeOutcome,
+  WebhookEventStore,
+  type WebhookProcessorDeps,
 } from "../../engine/forge/intake/index.js";
-import { intakeAutoRouteDeps } from "../../engine/forge/intake/index.js";
 import { InboxStore, type InboxSource, type TriageAnswerer } from "../../engine/forge/inbox/index.js";
+import type { AutoRouteDeps } from "../../engine/forge/inbox/index.js";
 import type { ForgeAnswererTarget } from "../../engine/forge/providerFactory.js";
 import { z } from "zod";
 
@@ -35,8 +43,12 @@ const WebhookSourceConfig = z.object({ webhookSecretRef: z.string().min(1).optio
 export interface IssueWebhookRouteDeps {
   pool: pg.Pool;
   secrets: SecretStore;
-  // The per-source triage answerer factory (real provider answerer in prod).
+  // The per-source triage answerer factory (real provider answerer in prod). Used
+  // by the background processor — NOT on the receiver hot path.
   answererFactory: (target: ForgeAnswererTarget) => TriageAnswerer;
+  // The autonomous DAG-insert deps (system actor). Used by the background processor.
+  // Defaults to the plain platform-admin system actor when the caller omits it.
+  autoRoute?: AutoRouteDeps;
 }
 
 /** Resolve a source system-scoped (the receiver has no tenant context in the path). */
@@ -46,6 +58,11 @@ async function resolveSource(pool: pg.Pool, sourceId: string): Promise<InboxSour
 
 export function createIssueWebhookRoutes(deps: IssueWebhookRouteDeps) {
   const app = new Hono<ActorContextEnv>();
+  const processorDeps: WebhookProcessorDeps = {
+    pool: deps.pool,
+    answererFactory: deps.answererFactory,
+    autoRoute: deps.autoRoute ?? intakeAutoRouteDeps(),
+  };
 
   app.post("/github/webhooks/issues/:sourceId", async (c) => {
     const event = c.req.header("x-github-event") ?? "";
@@ -76,29 +93,37 @@ export function createIssueWebhookRoutes(deps: IssueWebhookRouteDeps) {
       return c.json({ error: "invalid_webhook", message: "body was not JSON" }, 400);
     }
 
-    const mapped = mapGithubIssueWebhook(payload, source.projectId);
-    if (mapped.kind === "skip") return c.json({ event, outcome: "skipped", reason: mapped.reason }, 202);
-
-    // L1 (intake hardening): a triage/auto-route failure must NOT surface as a 500.
-    // GitHub treats a 5xx as a delivery failure and RE-DELIVERS on a backoff — a
-    // persistent error (a still-bad payload, a transient DB blip) becomes a retry
-    // STORM hammering this endpoint. The signature is already verified, so the
-    // request is authentic; we ACCEPT it (202) and report the error in the body so
-    // the failure is visible without inviting GitHub to retry. The §1d auto-route
-    // already recovers a hallucinated `dependsOn` internally; this is the backstop
-    // for everything else.
-    let outcome: IntakeOutcome;
+    // §3.6 persist-then-202: the ONLY synchronous work is the durable write — one
+    // INSERT, well inside GitHub's 10s window. The verified delivery is now
+    // recoverable; the actual triage/alloc/routing happens in the background. A
+    // persist failure IS a real 500 (GitHub should re-deliver — we lost nothing yet).
+    let eventId: string;
     try {
-      outcome = await runIntake(deps, source, mapped.item);
+      const persisted = await runWithOrgScope(deps.pool, source.orgId, (client) =>
+        WebhookEventStore.persist(client, {
+          sourceId: source.id,
+          orgId: source.orgId,
+          eventType: event,
+          deliveryId: c.req.header("x-github-delivery") ?? null,
+          payload,
+        }),
+      );
+      eventId = persisted.id;
+      // Best-effort immediate processing so the happy path lands quickly — but it
+      // runs DETACHED (not awaited) so a slow triage never holds the 202, and any
+      // failure is left to the sweeper. The persisted row is the durable guarantee.
+      void processWebhookEvent(processorDeps, persisted).catch((error: unknown) => {
+        console.error(
+          `[issue-webhook] background processing of ${persisted.id} failed (sweeper will re-drive):`,
+          error,
+        );
+      });
     } catch (error) {
-      return c.json({ event, outcome: "intake_failed", message: messageOf(error) }, 202);
+      // Persistence failed — nothing durable landed. Return 500 so GitHub re-delivers.
+      return c.json({ event, outcome: "persist_failed", message: messageOf(error) }, 500);
     }
-    return c.json(
-      outcome.kind === "auto_routed"
-        ? { event, outcome: "auto_routed", candidateId: outcome.candidate.id, specId: outcome.specId }
-        : { event, outcome: "inboxed", candidateId: outcome.candidate.id },
-      200,
-    );
+
+    return c.json({ event, outcome: "accepted", eventId }, 202);
   });
 
   return app;
@@ -106,36 +131,4 @@ export function createIssueWebhookRoutes(deps: IssueWebhookRouteDeps) {
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-async function runIntake(
-  deps: IssueWebhookRouteDeps,
-  source: InboxSource,
-  item: Parameters<typeof intakeItem>[2],
-): Promise<IntakeOutcome> {
-  // ORG-SCOPE the intake exactly like the POLLER path (intake/poller.ts). The
-  // receiver wakes on a GitHub push with NO ambient tenant scope, but `intakeItem`
-  // does tenant reads + writes (existing-spec read, candidate upsert, and — on
-  // auto-route — the discovery accept + DAG insert) directly on its pool. On the
-  // BARE pool under `tanren_app` those run with an empty `app.current_org_id` GUC
-  // and RLS denies them — so a webhook-ingested issue would dead-end (never enter
-  // the DAG) while the route reports a 202, a SILENT no-op. The source carries a
-  // concrete `orgId`, so we ingest under the source's per-job org id AND hand the
-  // pipeline the org-scoping proxy: each direct `.query` opens a short
-  // `runWithOrgScope` carrying the source's org GUC, so the auto-route reaches the
-  // DAG under that tenant — identical to the poller, no manual click required.
-  return runWithJobOrgId(source.orgId, () =>
-    intakeItem(
-      {
-        pool: orgScopingPool(deps.pool),
-        answerer: deps.answererFactory({
-          orgId: source.orgId,
-          ...(source.projectId === null ? {} : { projectId: source.projectId }),
-        }),
-        autoRoute: intakeAutoRouteDeps(),
-      },
-      source,
-      item,
-    ),
-  );
 }

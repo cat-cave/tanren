@@ -16,6 +16,7 @@ function target(overrides: Partial<NotificationTargetRow> = {}): NotificationTar
     destination: overrides.destination ?? "+15557654321",
     label: "twilio oncall",
     enabled: true,
+    baseUrl: null,
     weekendMute: false,
     createdAt: new Date(),
     updatedAt: new Date(),

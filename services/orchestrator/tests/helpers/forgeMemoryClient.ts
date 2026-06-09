@@ -52,6 +52,13 @@ export class ForgeMemoryClient {
   readonly proposals: ProposalRow[] = [];
   readonly queries: Array<{ sql: string; params: ReadonlyArray<unknown> }> = [];
   now: Date = new Date("2026-01-01T00:00:00Z");
+  /**
+   * When true, a forge_turns INSERT yields (a microtask) AFTER deriving the next
+   * turn_index but BEFORE writing — opening the snapshot window two concurrent appends
+   * race, so one hits the (thread_id, turn_index) 23505 the production retry recovers
+   * from. Off by default so the non-concurrency tests stay deterministic. (audit RC-4 #2)
+   */
+  yieldDuringTurnInsert = false;
 
   async query(sql: string, params: ReadonlyArray<unknown> = []): Promise<QueryResult> {
     this.queries.push({ sql, params });
@@ -99,22 +106,37 @@ export class ForgeMemoryClient {
       }
       return { rows: [], rowCount: 0 };
     }
-    if (trimmed.startsWith("SELECT COALESCE(MAX(turn_index)")) {
-      const threadId = String(params[0]);
-      const max = this.turns
-        .filter((t) => t.thread_id === threadId)
-        .reduce<number>((m, t) => Math.max(m, t.turn_index), -1);
-      return { rows: [{ next_index: max + 1 }], rowCount: 1 };
-    }
     if (trimmed.startsWith("INSERT INTO forge_turns")) {
+      // ATOMICITY (audit RC-4 #2): the turn_index is now derived IN-STATEMENT (a
+      // sub-SELECT of MAX+1), so params are id=$1, thread_id=$2, source=$3, audience=$4,
+      // author_kind=$5, render=$6 (NO separate index param). The fake derives the index
+      // the same way and models the (thread_id, turn_index) unique constraint —
+      // including, when concurrency is enabled, a real race: two appends that compute
+      // the SAME index yield, and the loser hits a 23505 the production retry recovers.
+      const threadId = String(params[1]);
+      const nextIndex =
+        this.turns.filter((t) => t.thread_id === threadId).reduce<number>((m, t) => Math.max(m, t.turn_index), -1) + 1;
+      if (this.yieldDuringTurnInsert) {
+        // Simulate the snapshot window: yield AFTER deriving the index but BEFORE the
+        // write, so a concurrent insert can derive the same index and one will collide.
+        await Promise.resolve();
+      }
+      if (this.turns.some((t) => t.thread_id === threadId && t.turn_index === nextIndex)) {
+        // The (thread_id, turn_index) unique violation — Postgres error code 23505.
+        const err = new Error(
+          `duplicate key value violates unique constraint "forge_turns_thread_id_turn_index_key"`,
+        ) as Error & { code: string };
+        err.code = "23505";
+        throw err;
+      }
       const row: TurnRow = {
         id: String(params[0]),
-        thread_id: String(params[1]),
-        turn_index: Number(params[2]),
-        source: JSON.parse(String(params[3])),
-        audience: String(params[4]),
-        author_kind: String(params[5]),
-        render: JSON.parse(String(params[6])),
+        thread_id: threadId,
+        turn_index: nextIndex,
+        source: JSON.parse(String(params[2])),
+        audience: String(params[3]),
+        author_kind: String(params[4]),
+        render: JSON.parse(String(params[5])),
         created_at: this.now,
       };
       this.turns.push(row);

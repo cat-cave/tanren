@@ -156,6 +156,7 @@ function toTargetContract(row: {
   userId: string | null;
   channelKind: string;
   destination: string;
+  baseUrl: string | null;
   label: string;
   enabled: boolean;
   weekendMute: boolean;
@@ -167,6 +168,9 @@ function toTargetContract(row: {
     userId: row.userId,
     channelKind: row.channelKind,
     destination: row.destination,
+    // The per-org base URL (null ⇒ use the deploy default). Echoed so the
+    // operator sees exactly what was persisted (API mirrors UX).
+    baseUrl: row.baseUrl,
     label: row.label,
     enabled: row.enabled,
     weekendMute: row.weekendMute,

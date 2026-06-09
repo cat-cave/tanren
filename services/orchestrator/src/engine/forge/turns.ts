@@ -11,11 +11,18 @@
 
 import { randomUUID } from "node:crypto";
 import type pg from "pg";
+import { z } from "zod";
 import type { ActorContext } from "../../auth/schemas.js";
 import { resolveWritableClient } from "../data/orgScopedDb.js";
 import { ForgeAnswer } from "../answerers/schemas/forge.js";
 import { ForgeThreadStore } from "./threads.js";
-import { ForgeTurnAppendInput, type ForgeTurnAudience, type ForgeTurnRow, type ForgeTurnSource } from "./schemas.js";
+import {
+  ForgeAuthorKind,
+  ForgeTurnAppendInput,
+  ForgeTurnAudience,
+  type ForgeTurnRow,
+  ForgeTurnSource,
+} from "./schemas.js";
 
 type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
@@ -41,19 +48,46 @@ const SELECT_TURN_COLUMNS = `
   created_at
 `;
 
+// A jsonb column round-trips as either a JSON string (some drivers/paths) or an
+// already-parsed value. Parse the string form, then hand the value to the real
+// payload schema — so an UNPARSEABLE source string THROWS at the boundary rather
+// than laundering a bad shape into a typed union.
+function parseJsonbCell(value: unknown): unknown {
+  return typeof value === "string" ? JSON.parse(value) : value;
+}
+const jsonbCell = z.preprocess(parseJsonbCell, z.unknown());
+
+// audit RC-6 trust-at-boundary: decode the raw `forge_turns` row through a Zod
+// schema instead of `JSON.parse(...) as ForgeTurnSource` / `String(...) as Enum`
+// / `... as Date` casts. Each cell is VALIDATED — a bad enum, an unparseable
+// source/render, or a non-coercible timestamp THROWS at `.parse` (the point of
+// the audit) rather than type-laundering an untrusted DB row into `ForgeTurnRow`.
+const ForgeTurnRowDecode = z
+  .object({
+    id: z.coerce.string().min(1),
+    thread_id: z.coerce.string().min(1),
+    turn_index: z.coerce.number().int().nonnegative(),
+    source: jsonbCell.pipe(ForgeTurnSource),
+    audience: ForgeTurnAudience,
+    author_kind: ForgeAuthorKind,
+    render: jsonbCell.pipe(ForgeAnswer),
+    created_at: z.coerce.date(),
+  })
+  .transform(
+    (row): ForgeTurnRow => ({
+      id: row.id,
+      threadId: row.thread_id,
+      index: row.turn_index,
+      source: row.source,
+      audience: row.audience,
+      authorKind: row.author_kind,
+      render: row.render,
+      createdAt: row.created_at,
+    }),
+  );
+
 function decodeTurnRow(raw: RawTurnRow): ForgeTurnRow {
-  const source = (typeof raw.source === "string" ? JSON.parse(raw.source) : raw.source) as ForgeTurnSource;
-  const render = typeof raw.render === "string" ? JSON.parse(raw.render) : raw.render;
-  return {
-    id: String(raw.id),
-    threadId: String(raw.thread_id),
-    index: Number(raw.turn_index),
-    source,
-    audience: String(raw.audience) as ForgeTurnAudience,
-    authorKind: String(raw.author_kind) as ForgeTurnRow["authorKind"],
-    render,
-    createdAt: raw.created_at as Date,
-  };
+  return ForgeTurnRowDecode.parse(raw);
 }
 
 // The four audience tiers are ordered from least to most privileged. An
@@ -80,6 +114,57 @@ export function actorCanViewAudience(actor: ActorContext, audience: ForgeTurnAud
   return actorAudienceTier(actor) >= AUDIENCE_ORDER[audience];
 }
 
+/** Postgres unique_violation. The (thread_id, turn_index) constraint raises this when two concurrent appends race the same index. */
+function isUniqueViolation(error: unknown): boolean {
+  return typeof error === "object" && error !== null && (error as { code?: unknown }).code === "23505";
+}
+
+/** Bounded re-derive-and-retry attempts for a (thread_id, turn_index) collision. */
+const TURN_INDEX_RETRY_ATTEMPTS = 5;
+
+interface TurnInsertParams {
+  id: string;
+  threadId: string;
+  source: string;
+  audience: string;
+  authorKind: string;
+  render: string;
+}
+
+// ATOMICITY SEAM (audit RC-4 #2): single-statement INSERT whose turn_index is derived
+// in-statement from the thread's current MAX, with a BOUNDED retry on the unique
+// violation that genuinely-concurrent appends can still raise (both sub-SELECTs see the
+// same MAX before either commits). On 23505 the next attempt re-derives a fresh MAX+1
+// from its own snapshot, so the loser cleanly takes the next index instead of 500-ing.
+// A non-unique error (or exhausting the bound) re-throws unchanged.
+async function insertTurnWithUniqueRetry(
+  db: QueryClient,
+  params: TurnInsertParams,
+): Promise<{ rows: ReadonlyArray<unknown> }> {
+  for (let attempt = 0; attempt < TURN_INDEX_RETRY_ATTEMPTS; attempt++) {
+    try {
+      return await db.query(
+        `INSERT INTO forge_turns
+           (id, thread_id, turn_index, source, audience, author_kind, render)
+         VALUES (
+           $1, $2,
+           (SELECT COALESCE(MAX(turn_index), -1) + 1 FROM forge_turns WHERE thread_id = $2),
+           $3::jsonb, $4, $5, $6::jsonb
+         )
+         RETURNING ${SELECT_TURN_COLUMNS}`,
+        [params.id, params.threadId, params.source, params.audience, params.authorKind, params.render],
+      );
+    } catch (error) {
+      // Re-throw a non-unique error immediately, AND re-throw a unique violation on the
+      // FINAL attempt (the retry bound is exhausted) — so the caught Error propagates
+      // unchanged, never a buffered non-Error literal.
+      if (!isUniqueViolation(error) || attempt === TURN_INDEX_RETRY_ATTEMPTS - 1) throw error;
+    }
+  }
+  // Unreachable: the loop either returns the row or throws on its final attempt.
+  throw new Error("forge turn insert retry loop exited without a result");
+}
+
 // RLS R2 cohort-4 (forge): turn reads/writes route through
 // `resolveWritableClient`, same seam as `ForgeThreadStore`. The thread-store
 // calls below are handed the ORIGINAL client — they resolve the seam
@@ -101,31 +186,26 @@ export const ForgeTurnStore = {
     // by typing render as `unknown`.
     const validatedRender = ForgeAnswer.parse(parsed.render);
 
-    // Compute the next index atomically. Postgres unique constraint on
-    // (thread_id, turn_index) is the backstop; if two writers race the
-    // second one's INSERT will fail and the caller can retry.
-    const nextIndexResult = await db.query<{ next_index: number | string | null }>(
-      `SELECT COALESCE(MAX(turn_index), -1) + 1 AS next_index
-       FROM forge_turns WHERE thread_id = $1`,
-      [parsed.threadId],
-    );
-    const nextIndex = Number(nextIndexResult.rows[0]?.next_index ?? 0);
-
-    const result = await db.query(
-      `INSERT INTO forge_turns
-         (id, thread_id, turn_index, source, audience, author_kind, render)
-       VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7::jsonb)
-       RETURNING ${SELECT_TURN_COLUMNS}`,
-      [
-        id,
-        parsed.threadId,
-        nextIndex,
-        JSON.stringify(parsed.source),
-        parsed.audience,
-        parsed.authorKind,
-        JSON.stringify(validatedRender),
-      ],
-    );
+    // ATOMICITY SEAM (audit RC-4 #2): compute the next turn_index INSIDE the INSERT
+    // as ONE statement — a sub-SELECT of `COALESCE(MAX(turn_index), -1) + 1` for this
+    // thread — rather than a separate `SELECT MAX(...)` round-trip followed by an
+    // INSERT. The old two-step had a TOCTOU window: two concurrent appends on one
+    // thread could read the same MAX, both compute the same index, and the second
+    // INSERT would hit the (thread_id, turn_index) unique constraint and 500 the
+    // caller with an unhandled 23505. Folding the index derivation into the INSERT's
+    // own snapshot collapses the window to a single statement; the unique constraint
+    // is the hard backstop. Two appends whose sub-SELECTs land on the SAME snapshot
+    // can still collide (one wins the index, the other 23505s), so a BOUNDED retry
+    // re-derives a fresh index on a unique violation — the loser cleanly re-inserts
+    // at MAX+1 instead of 500-ing. One round-trip in the (overwhelming) common case.
+    const result = await insertTurnWithUniqueRetry(db, {
+      id,
+      threadId: parsed.threadId,
+      source: JSON.stringify(parsed.source),
+      audience: parsed.audience,
+      authorKind: parsed.authorKind,
+      render: JSON.stringify(validatedRender),
+    });
     await ForgeThreadStore.touch(client, parsed.threadId);
     return decodeTurnRow(result.rows[0] as RawTurnRow);
   },

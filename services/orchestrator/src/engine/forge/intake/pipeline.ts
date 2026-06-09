@@ -71,10 +71,16 @@ export async function intakeItem(
   const status = triage.verdict === "auto_routable" ? "auto_routed" : "triaged";
   const candidate = await InboxStore.upsertCandidate(deps.pool, source, item, triage, status);
 
-  // Autonomous DAG insert: an auto-routable candidate with a routable spec is
-  // committed now (no operator). A candidate the source could not place (no
-  // project) cannot be auto-routed, so it falls through to the inbox.
-  if (status === "auto_routed" && triage.routableSpec !== null && candidate.projectId !== null) {
+  // §3.6 status-guard (dup-spec race): GUARD on the upsert's RETURNED status, not
+  // the local triage verdict. `upsertCandidate` is idempotent on (source,
+  // externalId) and its `ON CONFLICT` keeps an already-terminal status (only a
+  // `new`/`triaged`/`auto_routed` row is re-stamped). Under a concurrent
+  // `opened`+`labeled` (two deliveries of the same issue), the SECOND upsert finds
+  // the candidate already `accepted` (the first one auto-routed it) and the CASE
+  // keeps it `accepted` — so `candidate.status` is NOT `auto_routed` and we do NOT
+  // route again. Guarding on the local `status` here would route both → two specs +
+  // two PRs. Mirrors `audits/scheduler.ts` (the one that does it right).
+  if (candidate.status === "auto_routed" && triage.routableSpec !== null && candidate.projectId !== null) {
     const { candidate: routed, specId } = await autoRouteCandidate(
       { pool: deps.pool },
       candidate,

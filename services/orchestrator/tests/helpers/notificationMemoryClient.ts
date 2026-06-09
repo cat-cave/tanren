@@ -82,9 +82,10 @@ export class NotificationMemoryClient {
       user_id: params[3],
       channel_kind: params[4],
       destination: params[5],
-      label: params[6],
-      enabled: params[7],
-      weekend_mute: params[8],
+      base_url: params[6],
+      label: params[7],
+      enabled: params[8],
+      weekend_mute: params[9],
       created_at: this.now,
       updated_at: this.now,
     };
