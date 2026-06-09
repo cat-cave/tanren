@@ -312,6 +312,20 @@ describe("createTemplateFlow assembly — the live, mountable capability", () =>
 // inline in the derive request. It (1) checks the registry for an existing validated
 // match synchronously (seed it if present), else (2) fires creation in the BACKGROUND
 // and returns `undefined` immediately so the derive proceeds from-scratch THIS run.
+// A pool whose template-capability query returns the scripted rows; records calls.
+function poolReturning(rows: ReadonlyArray<unknown>) {
+  const queries: string[] = [];
+  return {
+    queries,
+    pool: {
+      async query(sql: string) {
+        queries.push(sql.replaceAll(/\s+/gu, " ").trim());
+        return { rows };
+      },
+    } as never,
+  };
+}
+
 describe("buildCreateForNoMatch — async, owner-threaded (audit §3.11/2,3)", () => {
   // Local flow deps (the assembly does no I/O until the flow runs; all sub-infra stubbed).
   const deps = {
@@ -331,19 +345,6 @@ describe("buildCreateForNoMatch — async, owner-threaded (audit §3.11/2,3)", (
     repoOwner: "cat-cave",
   } as unknown as CreateTemplateFlowDeps;
 
-  // A pool whose template-capability query returns the scripted rows; records calls.
-  function poolReturning(rows: ReadonlyArray<unknown>) {
-    const queries: string[] = [];
-    return {
-      queries,
-      pool: {
-        async query(sql: string) {
-          queries.push(sql.replaceAll(/\s+/gu, " ").trim());
-          return { rows };
-        },
-      } as never,
-    };
-  }
   const ctx = {
     orgId: "org_acme",
     actor: { userId: "u", orgId: "org_acme", projectId: null, scopes: ["org:admin"], source: "session" as const },

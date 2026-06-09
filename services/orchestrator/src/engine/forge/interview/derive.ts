@@ -43,8 +43,7 @@ import {
   type GreenfieldDeployDependency,
   type PrepareDeployCallback,
 } from "./deployDependency.js";
-import { scaffoldSpecsFor } from "./deriveScaffoldSpecs.js";
-import { MissingLifecycleError } from "./scaffoldAuthoring.js";
+import { MissingLifecycleError, scaffoldSpecsFor } from "./deriveScaffoldSpecs.js";
 import {
   selectTemplate,
   type SelectedTemplate,

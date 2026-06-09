@@ -228,8 +228,8 @@ export function buildCreateForNoMatch(
     // 2. NO match → fire creation in the BACKGROUND (never blocks the derive). A
     //    failure (ungrounded research / non-convergence / failed validation) is logged
     //    LOUD but never strands onboarding — this derive already fell to from-scratch.
+    //    No existing template to seed THIS derive from → the arrow resolves `undefined`.
     void createTemplateInBackground(createDeps, request);
-    return;
   };
 }
 
