@@ -150,9 +150,15 @@ export class FetchGitHubHttpClient implements GitHubHttpClient {
     // Separate counters so a 5x burst and a rate-limit burst each have their OWN
     // ceiling — and so a request that hits BOTH a 503 then a 429 is handled within
     // the loop (each path retries up to its own bound). The 401 re-mint is one-shot.
+    // §4 fix: the rate-limit path MUST key off its OWN counter, NOT the shared loop
+    // index — else transient 503 retries consume the loop index first and a later 429
+    // finds `attempt >= maxRateLimitRetries`, so its `Retry-After` is NEVER honored
+    // (we'd hammer GitHub past the limit). `rateLimitRetries` is incremented only on
+    // the 429/secondary-limit path, exactly mirroring `transientRetries`.
     let transientRetries = 0;
+    let rateLimitRetries = 0;
     const retryTransient = input.retryTransient !== false;
-    for (let attempt = 0; ; attempt += 1) {
+    for (;;) {
       let response: GitHubHttpResponse;
       try {
         response = await this.send(input.path, input.method, token, input.body);
@@ -175,10 +181,12 @@ export class FetchGitHubHttpClient implements GitHubHttpClient {
         token = await input.refreshToken();
         continue;
       }
-      // rate-limited — honor Retry-After / X-RateLimit-Reset, back off,
-      // and retry up to the configured ceiling rather than hammering GitHub.
-      if (response.retryAfterMs !== undefined && attempt < this.maxRateLimitRetries) {
+      // rate-limited — honor Retry-After / X-RateLimit-Reset, back off, and retry up
+      // to the rate-limit ceiling (its OWN counter, independent of any prior transient
+      // 503 retries) rather than hammering GitHub.
+      if (response.retryAfterMs !== undefined && rateLimitRetries < this.maxRateLimitRetries) {
         await this.sleep(response.retryAfterMs);
+        rateLimitRetries += 1;
         continue;
       }
       // GitHub-5xx resilience: a transient gateway failure (502/503/504/408) self-heals

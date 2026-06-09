@@ -15,7 +15,7 @@ import type { SecretStore } from "../contracts/secretStore.js";
 import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import type { VcsProvider } from "../contracts/vcsProvider.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
-import type { GovernancePosture } from "../config/shared.js";
+import { CANONICAL_RUNNER_IMAGE, type GovernancePosture } from "../config/shared.js";
 import { installationFromOrgConfig, type OrgGithubAppInstallation } from "../config/orgConfig.js";
 import { migrateProjectConfig } from "../config/projectConfig.js";
 import { PgEventStore, type EventStore } from "../eventStore.js";
@@ -24,7 +24,7 @@ import { runFreshRunnerMergeGate } from "./freshRunnerGate.js";
 import type { ReGateCiHook } from "../workflow/reviewMerge/index.js";
 
 /** The terminal runner image a fresh-runner re-gate allocates against when the project sets none. */
-const DEFAULT_RE_GATE_RUNNER_IMAGE = "ghcr.io/tanren/runner:latest";
+const DEFAULT_RE_GATE_RUNNER_IMAGE = CANONICAL_RUNNER_IMAGE;
 
 export interface BuildReGateCiForQueuedRunDeps {
   pool: pg.Pool;

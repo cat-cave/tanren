@@ -44,6 +44,10 @@ export class FakePool {
   readonly costRows: Array<{ id: string; totalTokens: number; billingMode: string }> = [];
   readonly costUpdates: Array<{ id: string; costUsd: string; basis: string | null }> = [];
   readonly notionalUpdates: Array<{ id: string; notionalCostUsd: string; basis: string | null }> = [];
+  // §3.7f: the auth_ref values stamped on runs, and the count the concurrency query
+  // reports back (default 1 — a lone run, byte-identical to the pre-fix behavior).
+  readonly runsAuthRefStamps: Array<{ runId: string; authRef: string }> = [];
+  concurrentRunsOnCredential = 1;
   private nextCostId = 1;
 
   async query(
@@ -51,6 +55,13 @@ export class FakePool {
     params: ReadonlyArray<unknown> = [],
   ): Promise<{ rows: ReadonlyArray<Record<string, unknown>>; rowCount: number }> {
     const trimmed = sql.trim();
+    if (trimmed.startsWith("UPDATE runs SET auth_ref")) {
+      this.runsAuthRefStamps.push({ runId: String(params[0]), authRef: String(params[1]) });
+      return { rows: [], rowCount: 1 };
+    }
+    if (trimmed.startsWith("SELECT count(*)::text AS n FROM runs")) {
+      return { rows: [{ n: String(this.concurrentRunsOnCredential) }], rowCount: 1 };
+    }
     if (trimmed.startsWith("SELECT id, total_tokens, billing_mode FROM cost_records")) {
       return {
         rows: this.costRows.map((row) => ({

@@ -32,6 +32,7 @@ import type { SecretStore } from "../contracts/secretStore.js";
 import type { VcsProvider } from "../contracts/vcsProvider.js";
 import type { WorkspaceVcsCore } from "../contracts/workspaceVcsCore.js";
 import type { OrgGithubAppInstallation } from "../config/orgConfig.js";
+import { CANONICAL_RUNNER_IMAGE } from "../config/shared.js";
 import { workspaceRepoPathForRun } from "../workspace/paths.js";
 import {
   autoSnapshotWorkingEdit,
@@ -45,7 +46,7 @@ import { githubHttpsRemote, parseGitHubRepository } from "./github.js";
 import type { GithubAppTokenMinter } from "./githubAppTokenMinter.js";
 
 /** The terminal runner image a live jj workspace allocates against when none is given. */
-const DEFAULT_LIVE_JJ_RUNNER_IMAGE = "ghcr.io/tanren/runner:latest";
+const DEFAULT_LIVE_JJ_RUNNER_IMAGE = CANONICAL_RUNNER_IMAGE;
 
 /** The default per-jj-command timeout (ms) the live workspace runs SSH ops under. */
 const DEFAULT_LIVE_JJ_TIMEOUT_MS = 600_000;

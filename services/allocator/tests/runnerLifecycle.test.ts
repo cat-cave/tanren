@@ -1,6 +1,21 @@
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { ContainerInspectResult, CreateContainerSpec, DockerEngineClient } from "../src/dockerEngine.js";
 import { RunnerLifecycle, type RunnerRecord, type RunnerStore } from "../src/runnerLifecycle.js";
+
+// allocate() now resolves the runner's PUBLIC authorized_keys line via the
+// fail-closed requireRunnerAuthorizedKey() (no silent `?? ""`). Every allocate
+// test needs the env present; the dedicated "fails loud" test clears it locally.
+const ORIGINAL_AUTHORIZED_KEY = process.env["TANREN_RUNNER_AUTHORIZED_KEY"];
+beforeAll(() => {
+  process.env["TANREN_RUNNER_AUTHORIZED_KEY"] = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOrchestratorPub orchestrator";
+});
+afterAll(() => {
+  if (ORIGINAL_AUTHORIZED_KEY === undefined) {
+    delete process.env["TANREN_RUNNER_AUTHORIZED_KEY"];
+  } else {
+    process.env["TANREN_RUNNER_AUTHORIZED_KEY"] = ORIGINAL_AUTHORIZED_KEY;
+  }
+});
 
 class FakeDocker implements DockerEngineClient {
   readonly volumeCreates: string[] = [];
@@ -200,6 +215,8 @@ describe("RunnerLifecycle.allocate", () => {
     const env = docker.containers[0]?.spec.env ?? {};
     expect(Object.keys(env).sort()).toEqual(["TANREN_RUNNER_AUTHORIZED_KEY", "TANREN_RUNNER_EPHEMERAL"]);
     expect("TANREN_CODEX_HOME_BUNDLE" in env).toBe(false);
+    // The resolved (non-empty) authorized key flows into the runner env — never `""`.
+    expect(env.TANREN_RUNNER_AUTHORIZED_KEY).toBe("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOrchestratorPub orchestrator");
   });
 
   it("retries host-key reads while sshd is still generating keys", async () => {

@@ -54,6 +54,8 @@ const ENV_READ_WHITELIST = new Set([
   "services/allocator/src/main.ts",
   // The per-run runner container's authorized-key env passthrough.
   "services/allocator/src/runnerLifecycle.ts",
+  // requireRunnerAuthorizedKey.ts: fail-closed authorized-key reader (extracted from runnerLifecycle).
+  "services/allocator/src/requireRunnerAuthorizedKey.ts",
   // ── dashboard config ───────────────────────────────────────────────────────
   // Dev-login flag + require-auth gate; onboarding's canonical-named URL
   // fallbacks (preferred source is the orchestrator's /auth/providers).

@@ -15,12 +15,17 @@ import { runWithOrgScope, runWithSystemScope } from "@tanren/db";
 import type pg from "pg";
 import { installationFromOrgConfig, type OrgGithubAppInstallation } from "../config/orgConfig.js";
 import { migrateProjectConfig } from "../config/projectConfig.js";
-import type { GovernancePosture, RoutingChainEntry, RoutingTable } from "../config/shared.js";
+import {
+  CANONICAL_RUNNER_IMAGE,
+  type GovernancePosture,
+  type RoutingChainEntry,
+  type RoutingTable,
+} from "../config/shared.js";
 import { orgScopeFromRunOrgId, resolveCredentialsForRun } from "../credentials/resolveCredentials.js";
 import { buildEffectiveRouting } from "../worker/runExecutionContext.js";
 
 /** The terminal runner image a live base-shift rebase allocates against when none is set. */
-const DEFAULT_BASE_SHIFT_RUNNER_IMAGE = "ghcr.io/tanren/runner:latest";
+const DEFAULT_BASE_SHIFT_RUNNER_IMAGE = CANONICAL_RUNNER_IMAGE;
 
 /** The resolved facts a base shift on the dependent's EXISTING run clones + re-gates over. */
 export interface BaseShiftRunContext {

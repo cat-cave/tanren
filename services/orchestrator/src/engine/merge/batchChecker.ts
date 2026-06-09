@@ -27,7 +27,7 @@ import { type BatchCheckVerdict, type BatchChecker } from "../contracts/batchMer
 import type { MergeQueueEntry } from "../contracts/mergeCoordinator.js";
 import { installationFromOrgConfig, migrateOrgConfig, type OrgGithubAppInstallation } from "../config/orgConfig.js";
 import { isAbsentProjectConfig, migrateProjectConfig } from "../config/projectConfig.js";
-import type { GovernancePosture } from "../config/shared.js";
+import { CANONICAL_RUNNER_IMAGE, type GovernancePosture } from "../config/shared.js";
 import type { Allocator } from "../contracts/allocator.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
@@ -43,7 +43,7 @@ import { batchNodeGate, batchNodeResolveConfig } from "./batchNodeGate.js";
 import { runFreshRunnerMergeGate } from "./freshRunnerGate.js";
 
 /** The terminal runner image a batch re-gate allocates against when the project sets none. */
-const DEFAULT_BATCH_RUNNER_IMAGE = "ghcr.io/tanren/runner:latest";
+const DEFAULT_BATCH_RUNNER_IMAGE = CANONICAL_RUNNER_IMAGE;
 
 /** The ephemeral batch-integration ref the prospective merged state is built on. */
 export function batchIntegrationBranchName(tailSpecId: string): string {
