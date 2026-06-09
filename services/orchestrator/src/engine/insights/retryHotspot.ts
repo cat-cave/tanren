@@ -21,6 +21,11 @@ export interface ComputeContext {
   thresholds?: Partial<InsightThresholds>;
 }
 
+// Generous hard row cap on the (already time-bounded) rejection-reason scan. The
+// consumer keeps only the first 5 reasons per spec, so this only ever truncates
+// a pathological flood — never a surfaced signal.
+const REJECTION_SCAN_LIMIT = 10_000;
+
 interface WriterAttemptRow {
   spec_id: string;
   spec_title: string;
@@ -66,13 +71,18 @@ export async function computeRetryHotspot(pool: Pick<pg.Pool, "query">, context:
 
   const specIds = [...new Set(attemptsResult.rows.map((r) => r.spec_id))];
 
+  // Time-bounded by `since` already; add a hard row LIMIT so a spec that was
+  // re-requested pathologically often inside the window can't return an unbounded
+  // rejection set. Ordered DESC (newest first) and the consumer keeps only the
+  // first 5 reasons per spec, so the cap never drops a surfaced reason.
   const rejectionsResult = await pool.query<RejectionRow>(
     `SELECT e.spec_id, e.payload->>'rejectionReason' AS reason
        FROM events e
        WHERE e.event_type = 'planner.rerequested'
          AND e.spec_id = ANY($1::text[])
          AND e.ts >= $2
-       ORDER BY e.ts DESC`,
+       ORDER BY e.ts DESC
+       LIMIT ${REJECTION_SCAN_LIMIT}`,
     [specIds, since],
   );
 

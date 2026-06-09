@@ -6,6 +6,7 @@ import { materializeOpencodeAuthBundle } from "../credentials/opencodeMaterializ
 import { quoteSshShellArg } from "../ssh/command.js";
 import type { TokenUsage, UsageLimitSignal, WriterAdapter, WriterResult } from "./types.js";
 import { findOpenRouterGenerationId, foldGenerationId } from "./openRouterGenerationId.js";
+import { findTokenUsageBounded } from "./findTokenUsage.js";
 import { captureBaselineSha, captureGitStateAfterWriter } from "./writerGit.js";
 
 // opencode CLI Writer adapter. opencode is a Writer-only provider in
@@ -206,22 +207,12 @@ function detectUsageLimit(event: Record<string, unknown>): UsageLimitSignal | un
   return undefined;
 }
 
+// Walks one parsed opencode JSONL event for its usage record. BOUNDED on depth +
+// node count (a hostile/buggy deeply-nested event must not blow the stack); on
+// hitting a bound it emits a LOUD `usage-parse-bounded` signal rather than
+// silently dropping usage. The opencode disjoint shape is `tokenUsageFromRecord`.
 function findTokenUsage(value: unknown): TokenUsage | undefined {
-  if (typeof value !== "object" || value === null) {
-    return undefined;
-  }
-  const record = value as Record<string, unknown>;
-  const usage = tokenUsageFromRecord(record);
-  if (usage !== undefined) {
-    return usage;
-  }
-  for (const child of Object.values(record)) {
-    const nested = findTokenUsage(child);
-    if (nested !== undefined) {
-      return nested;
-    }
-  }
-  return undefined;
+  return findTokenUsageBounded("opencode", value, tokenUsageFromRecord);
 }
 
 // opencode reports already-DISJOINT token buckets (input excludes cache reads;

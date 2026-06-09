@@ -19,6 +19,11 @@ export interface InsightThresholds {
   // review_stall. `stuck` needs no threshold — it is a pure
   // graph-reachability check over current spec statuses.
   reviewStallHours: number;
+  // The lookback window (days) that BOUNDS the review-event SELECT. A stall is
+  // only meaningful within recent history; this caps an otherwise lifetime-wide
+  // scan of every review/merge event for the project. Generous relative to
+  // `reviewStallHours` (48h) so no real stall is missed.
+  reviewStallWindowDays: number;
   // ci_flaky. `flakyMinToggledShas` is the SAFETY bar: a check must show
   // a pass+fail toggle on at least this many distinct head SHAs to be
   // quarantined (default 1 — a single proven non-determinism). Raising it
@@ -49,6 +54,7 @@ export const DEFAULT_THRESHOLDS: InsightThresholds = {
   paceAnomalyWindowDays: 30,
   paceAnomalyMinSamples: 3,
   reviewStallHours: 48,
+  reviewStallWindowDays: 30,
   flakyMinToggledShas: 1,
   flakyWindowDays: 14,
   // A durable fix-spec is generated only for a repeatedly-flaky test (proven on >= 2

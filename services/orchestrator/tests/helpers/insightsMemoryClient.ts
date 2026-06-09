@@ -356,13 +356,15 @@ export class InsightsMemoryClient {
       return { rows, rowCount: rows.length };
     }
     if (t.startsWith("SELECT e.spec_id,") && t.includes("FROM events e") && t.includes("INNER JOIN specs s")) {
-      // review_stall review/merge-event query
+      // review_stall review/merge-event query (time-bounded by `since` + LIMIT)
       const projectId = String(params[0]);
       const types = params[1] as string[];
+      const since = params[2] as Date;
       const rows = this.events
         .filter((event) => {
           if (event.spec_id === null) return false;
           if (!types.includes(event.event_type)) return false;
+          if (event.ts.getTime() < since.getTime()) return false;
           const spec = this.specs.find((s) => s.spec_id === event.spec_id);
           return spec !== undefined && spec.project_id === projectId;
         })
