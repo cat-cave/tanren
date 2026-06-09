@@ -111,6 +111,12 @@ function stubPool(opts: { existingSpecIds?: string[] } = {}): {
       const [id, sourceId, orgId, projectId, externalId, title, body, severity, status, triage] = params as string[];
       const key = `${sourceId}::${externalId}`;
       const cid = byExternal.get(key) ?? id;
+      const existingCand = candidates.get(cid);
+      // Mirror the real upsert's ON CONFLICT CASE: a row already in a TERMINAL
+      // status (accepted/folded/…) KEEPS that status; only new/triaged/auto_routed
+      // are re-stamped. This is what the §3.6 status-guard depends on.
+      const keepStatus =
+        existingCand !== undefined && !["new", "triaged", "auto_routed"].includes(existingCand.status as string);
       candidates.set(cid, {
         id: cid,
         source_id: sourceId,
@@ -120,9 +126,9 @@ function stubPool(opts: { existingSpecIds?: string[] } = {}): {
         title,
         body,
         severity,
-        status,
+        status: keepStatus ? existingCand!.status : status,
         triage: JSON.parse(triage),
-        resolved_spec_id: null,
+        resolved_spec_id: existingCand?.resolved_spec_id ?? null,
       });
       byExternal.set(key, cid);
       return { rows: [candidateRow(cid)], rowCount: 1 };
@@ -197,6 +203,89 @@ describe("webhook intake — auto_routable → spec in the DAG", () => {
     expect(specInserts[0]!.priority).toBe("P1");
     expect(specInserts[0]!.dependsOn).toEqual(["spec_dep1"]);
     expect(specInserts[0]!.title).toBe("add per-link analytics");
+  });
+
+  it("§3.6 status-guard: a concurrent opened+labeled yields EXACTLY ONE spec (dup-spec race)", async () => {
+    // Two deliveries of the SAME issue (an `opened` and a `labeled`) arrive and both
+    // triage auto_routable. The store's upsert is idempotent on (source, externalId)
+    // and its ON CONFLICT keeps a terminal status: the SECOND upsert finds the
+    // candidate already `accepted` (the first auto-routed it). The fix GUARDS on the
+    // RETURNED status, so the second intake does NOT route again → one spec, not two.
+    const { pool, specInserts } = stubPool();
+    const routableSpec: TriageRoutableSpec = {
+      title: "dark mode",
+      description: "add a dark theme toggle",
+      acceptanceCriteria: ["toggle persists"],
+      dependsOn: [],
+      priority: "P2",
+    };
+    const deps = { pool, answerer: fixedTriage("auto_routable", routableSpec), autoRoute: intakeAutoRouteDeps() };
+    const opened = mapGithubIssueWebhook(issuePayload(42, "dark mode"), issuesSource.projectId);
+    const labeled = mapGithubIssueWebhook(issuePayload(42, "dark mode", ["enhancement"]), issuesSource.projectId);
+    if (opened.kind !== "ingest" || labeled.kind !== "ingest") throw new Error("unreachable");
+
+    const first = await intakeItem(deps, issuesSource, opened.item);
+    const second = await intakeItem(deps, issuesSource, labeled.item);
+
+    expect(first.kind).toBe("auto_routed");
+    // The second delivery saw the already-accepted candidate and did NOT re-route.
+    expect(second.kind).toBe("inboxed");
+    expect(specInserts).toHaveLength(1);
+  });
+
+  it("§3.6 fix 6: a persistently-invalid spec is ESCALATED to the inbox (bounded, no cost loop)", async () => {
+    // The poll path wires a spec-quality VALIDATOR but no reviseSpec → the gate is
+    // strict: a failing spec throws PersistentlyInvalidSpecError. WITHOUT the fix that
+    // error propagates out of `ingestSource` to the poller's catch, which re-polls
+    // every interval FOREVER (re-triage + re-validate = an infinite LLM-cost loop).
+    // The fix catches it and resolves the candidate to `triaged` (the loud inbox
+    // surface), so the next poll's idempotent upsert keeps it `triaged` (not
+    // re-routed). We prove: no throw, no spec, candidate ends `triaged`.
+    const { pool, specInserts, candidates } = stubPool();
+    const alwaysFailValidator = {
+      async validate() {
+        return {
+          accomplishable: { pass: false as const, reason: "too big" },
+          demoable: { pass: true as const, reason: "" },
+          nonTrivial: { pass: true as const, reason: "" },
+          legible: { pass: true as const, reason: "" },
+          overall: "revise" as const,
+          revisionGuidance: "split it up",
+        };
+      },
+    };
+    const routableSpec: TriageRoutableSpec = {
+      title: "build everything",
+      description: "the whole product",
+      acceptanceCriteria: ["works"],
+      dependsOn: [],
+      priority: "P1",
+    };
+    const mapped = mapGithubIssueWebhook(issuePayload(99, "build everything"), issuesSource.projectId);
+    if (mapped.kind !== "ingest") throw new Error("unreachable");
+    const { ingestSource } = await import("../src/engine/forge/inbox/index.js");
+    const connectors = new Map<string, SourceConnector>([
+      [
+        "issues",
+        {
+          kind: "issues",
+          async fetch() {
+            return [mapped.item];
+          },
+        },
+      ],
+    ]);
+    const autoRoute = intakeAutoRouteDeps({ resolveSpecValidator: () => alwaysFailValidator });
+    // Must NOT throw — the persistently-invalid spec is escalated, not propagated.
+    const { candidates: out } = await ingestSource(
+      { pool, connectors, answerer: fixedTriage("auto_routable", routableSpec) },
+      issuesSource,
+      autoRoute,
+    );
+    expect(specInserts).toHaveLength(0);
+    expect(out[0]!.status).toBe("triaged");
+    // Persisted as triaged so a re-poll's idempotent upsert keeps it there (no loop).
+    expect([...candidates.values()][0]!.status).toBe("triaged");
   });
 });
 
