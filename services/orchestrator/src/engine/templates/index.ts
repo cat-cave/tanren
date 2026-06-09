@@ -68,3 +68,29 @@ export {
   createTemplate,
   maybeCreateTemplateForNoMatch,
 } from "./creation/index.js";
+// WAVE 5 — the MAINTENANCE flow (templating-system.md §4): the re-validation loop,
+// the lts/nightly channel policy, the nightly→lts graduation gate (the canary), and
+// the freshness/degraded-marking. Re-exported from the maintenance barrel.
+export {
+  CHANNEL_CADENCE_MS,
+  channelAcceptsVersion,
+  channelCadence,
+  DEFAULT_FRESHNESS_HORIZON_MS,
+  DEFAULT_GRADUATION_AGING_MS,
+  eligibleToGraduate,
+  graduationDecision,
+  isPrerelease,
+  isTemplateMaintenanceDue,
+  proofExpired,
+  regressionFinding,
+  runMaintenancePass,
+  shouldDegrade,
+  TemplateMaintenanceLoop,
+  type GraduationDecision,
+  type GraduationIneligibility,
+  type MaintainableTemplate,
+  type MaintenancePassOutcome,
+  type TemplateMaintenanceLoopDeps,
+  type TemplateMaintenanceResult,
+  type TemplateRevalidator,
+} from "./maintenance/index.js";
