@@ -29,6 +29,7 @@ export const eventTypeNames = [
   "cost.ceiling_unreachable",
   "cost.credit_rate_unknown",
   "cost.failed",
+  "cost.managed_metering_skipped",
   "cost.notional_unpriced",
   "cost.overage_unobservable",
   "cost.provider_capture_failed",

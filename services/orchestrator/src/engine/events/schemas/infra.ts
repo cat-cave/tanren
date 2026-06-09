@@ -279,6 +279,25 @@ export const CostOverageUnobservablePayload = z
   })
   .strict();
 
+// cost.managed_metering_skipped (BYOK posture): a run executed in BYOK mode, so
+// there is NO PLATFORM METERING credential to query the per-call real
+// `usage.cost` with — that capture is a MANAGED-ONLY step (the platform IS the
+// biller and owns the OpenRouter key). This is the EXPLICIT, intentional "no
+// BYOK analog" branch (honoring no_silent_fallbacks): real spend stays a metered
+// FACT-or-NULL from the BYOK credential's own ledger (ccusage / credit drawdown),
+// never an empty managed ref shoved through the validator (the apex v30 class of
+// crash) and never a silent $0. A MANAGED run never emits this — it builds the
+// capturer and meters every call.
+export const CostManagedMeteringSkippedPayload = z
+  .object({
+    // The run's provider mode for this run — always "byok" where this fires
+    // (managed builds the capturer). Recorded so the skip is self-describing.
+    providerMode: z.literal("byok"),
+    // A fixed, secret-free diagnosis string.
+    reason: z.string(),
+  })
+  .strict();
+
 // Usage monitoring: codexbar (live subscription windows)
 // and ccusage (token-consumption accounting), captured in the runner over SSH.
 

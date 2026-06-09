@@ -31,6 +31,7 @@ import {
   CostCeilingUnreachablePayload,
   CostCreditRateUnknownPayload,
   CostFailedPayload,
+  CostManagedMeteringSkippedPayload,
   CostNotionalUnpricedPayload,
   CostOverageUnobservablePayload,
   CostProviderCaptureFailedPayload,
@@ -173,8 +174,7 @@ export const EventRegistry = {
   "task.completed": TaskCompletedPayload,
   "task.failed": TaskFailedPayload,
 
-  // queue hardening: a job whose retry budget is exhausted is
-  // dead-lettered (terminal) rather than retried forever.
+  // queue hardening: a job whose retry budget is exhausted is dead-lettered (terminal).
   "job.dead_lettered": JobDeadLetteredPayload,
 
   // Planner role (single-pass + subtask emission)
@@ -208,8 +208,7 @@ export const EventRegistry = {
   // S3: the posture-gate's residual P2/P3 disposition (route-to-dag / fix-if-idle).
   "auditor.findings_routed": AuditorFindingsRoutedPayload,
 
-  // SPEC-LOOP REDESIGN stages (demo-run/triage/convergence) — split into
-  // registry.loop.ts to keep this file under the 500-line cap.
+  // SPEC-LOOP REDESIGN stages (demo-run/triage/convergence) — split into registry.loop.ts (500-line cap).
   ...loopEventRegistry,
 
   // Runner allocation
@@ -246,6 +245,7 @@ export const EventRegistry = {
   // cost PR-C: credit-rate-unknown + overage-unobservable (NULL real spend, loud).
   "cost.credit_rate_unknown": CostCreditRateUnknownPayload,
   "cost.overage_unobservable": CostOverageUnobservablePayload,
+  "cost.managed_metering_skipped": CostManagedMeteringSkippedPayload,
   // silent-fallback hardening (loud discriminated cost failures).
   "cost.provider_capture_failed": CostProviderCaptureFailedPayload,
   "cost.notional_unpriced": CostNotionalUnpricedPayload,
