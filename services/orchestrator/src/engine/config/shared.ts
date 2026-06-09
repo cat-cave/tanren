@@ -112,6 +112,18 @@ export const AllocatorConfig = z
 export type AllocatorConfig = z.infer<typeof AllocatorConfig>;
 
 /**
+ * The single canonical runner image — the ONE source of truth every runner
+ * allocation site (the in-loop run, the merge-coordinator fresh-runner re-gate,
+ * the batch checker, the drive-path conflict resolver, the live-jj workspace,
+ * the base-shift live context, the greenfield Forge surface) falls back to when a
+ * project sets none. Derived from the `AllocatorConfig.runnerImage` schema default
+ * so it can NEVER drift from the project-config / DB-column default. A wrong image
+ * makes the runner alloc pull a non-existent image → an infra-hold, so this is
+ * deliberately NOT a per-file literal: there is exactly one place to change it.
+ */
+export const CANONICAL_RUNNER_IMAGE: string = AllocatorConfig.parse({}).runnerImage;
+
+/**
  * The worker's max in-flight run-slot ceiling, resolved from the config surface
  * (`AllocatorConfig.concurrency`) — NOT from an env var (autonomy-engine.md
  * §1.4: "concurrency is a governed config knob, never an env var").

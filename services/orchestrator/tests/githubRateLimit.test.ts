@@ -65,6 +65,40 @@ describe("github rate-limit backoff (P3-0028)", () => {
     expect(response).toMatchObject({ status: 200, body: { ok: true } });
   });
 
+  it("§4: honors a 429 Retry-After even AFTER transient 503s consumed retries", async () => {
+    // The bug: the rate-limit retry once keyed off the SHARED loop index, so prior
+    // transient 503 retries exhausted it and a later 429's Retry-After was NEVER
+    // honored (we'd return the 429 raw). With independent counters the sequence
+    // 503,503,503 → 429 → 200 fully self-heals: each 503 retries on the transient
+    // budget, and the 429 STILL gets its own Retry-After wait.
+    const slept: number[] = [];
+    let call = 0;
+    const fetchImpl = (async () => {
+      call += 1;
+      if (call <= 3) {
+        return new Response("", { status: 503 });
+      }
+      if (call === 4) {
+        return new Response("", { status: 429, headers: headers({ "retry-after": "7" }) });
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const client = new FetchGitHubHttpClient({
+      fetchImpl,
+      sleep: async (ms) => void slept.push(ms),
+      // The default transient ceiling (3) is fully consumed by the 503s; the rate-limit
+      // ceiling must remain independently available for the later 429.
+    });
+    const response = await client.request({ method: "GET", path: "/rate", token: "t" });
+
+    // The 429's 7s Retry-After WAS honored (the last sleep), proving the rate-limit
+    // budget was not pre-consumed by the three transient 503 retry waits before it.
+    expect(slept).toContain(7_000);
+    expect(call).toBe(5);
+    expect(response).toMatchObject({ status: 200, body: { ok: true } });
+  });
+
   it("gives up after the retry ceiling instead of looping forever", async () => {
     const slept: number[] = [];
     const fetchImpl = (async () =>

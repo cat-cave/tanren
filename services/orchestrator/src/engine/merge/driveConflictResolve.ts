@@ -34,7 +34,12 @@ import type { VcsProvider } from "../contracts/vcsProvider.js";
 import type { CiWhen } from "../ci/index.js";
 import type { EventStore } from "../eventStore.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
-import type { GovernancePosture, RoutingChainEntry, RoutingTable } from "../config/shared.js";
+import {
+  CANONICAL_RUNNER_IMAGE,
+  type GovernancePosture,
+  type RoutingChainEntry,
+  type RoutingTable,
+} from "../config/shared.js";
 import { migrateProjectConfig } from "../config/projectConfig.js";
 import { installationFromOrgConfig, type OrgGithubAppInstallation } from "../config/orgConfig.js";
 import { buildEffectiveRouting } from "../worker/runExecutionContext.js";
@@ -65,7 +70,7 @@ import type { ConflictResolverHook } from "../workflow/reviewMerge/index.js";
 export const MAX_CONFLICT_REPLANS = 3;
 
 /** The terminal runner image a runless drive-path resolver allocates against. */
-const DEFAULT_RESOLVER_RUNNER_IMAGE_FALLBACK = "ghcr.io/tanren/runner:latest";
+const DEFAULT_RESOLVER_RUNNER_IMAGE_FALLBACK = CANONICAL_RUNNER_IMAGE;
 
 /**
  * The drive's read of the resolver's autonomous disposition (see the file header for

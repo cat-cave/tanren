@@ -313,6 +313,46 @@ describe("subtask loop — usage probe wiring", () => {
     expect(events.events.map((event) => event.eventType)).not.toContain("cost.credit_rate_unknown");
   });
 
+  it("§3.7f: two concurrent runs on ONE credential do NOT double-count the drawdown", async () => {
+    // The credential's GLOBAL balance drew down 10 credits, but TWO runs share that
+    // credential concurrently. Each run observes the SAME 10-credit global delta; the
+    // fix divides by the concurrent-run count so each attributes HALF — the sum across
+    // both runs equals the real 10-credit (not 20-credit) drawdown.
+    const { input, pool } = defaultLoopInput({
+      usageProbe: drawdownProbe(),
+      adapters: adaptersWithAuthRef("credential/codex/org/o1/default"),
+      creditUsdRate: 0.07,
+    });
+    pool.concurrentRunsOnCredential = 2;
+
+    const outcome = await runSubtaskLoop(input);
+    expect(outcome.kind).toBe("passed");
+
+    // The run STAMPED its credential identity (the per-run dedup key) on `runs`.
+    expect(pool.runsAuthRefStamps).toContainEqual(
+      expect.objectContaining({ authRef: "credential/codex/org/o1/default" }),
+    );
+    // Attributed share = (10 credits / 2 concurrent runs) × $0.07 = $0.35, NOT $0.70.
+    expect(pool.costUpdates.every((update) => update.basis === "credits")).toBe(true);
+    const summed = pool.costUpdates.reduce((sum, update) => sum + Number(update.costUsd), 0);
+    expect(summed).toBeCloseTo(0.35, 5);
+  });
+
+  it("§3.7f: a LONE run on a credential attributes the FULL drawdown (divisor 1, unchanged)", async () => {
+    const { input, pool } = defaultLoopInput({
+      usageProbe: drawdownProbe(),
+      adapters: adaptersWithAuthRef("credential/codex/org/o1/default"),
+      creditUsdRate: 0.07,
+    });
+    pool.concurrentRunsOnCredential = 1;
+
+    const outcome = await runSubtaskLoop(input);
+    expect(outcome.kind).toBe("passed");
+    // 10 credits × $0.07 = $0.70 — the full delta, byte-identical to the pre-fix path.
+    const summed = pool.costUpdates.reduce((sum, update) => sum + Number(update.costUsd), 0);
+    expect(summed).toBeCloseTo(0.7, 5);
+  });
+
   it("cost PR-C: a Claude subscription's overage is recorded NULL-and-loud (honest gap, never approximated)", async () => {
     // The Claude CLI subscription bundle reports no credit-balance delta locally, so
     // observeWindow yields a null creditsRemaining (no drawdown). The overage real

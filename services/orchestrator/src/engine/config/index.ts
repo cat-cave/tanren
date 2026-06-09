@@ -2,6 +2,7 @@
 export {
   AllocatorConfig,
   AllocatorKind,
+  CANONICAL_RUNNER_IMAGE,
   AuditPostureConfig,
   DEFAULT_AUDIT_POSTURE,
   FindingSeverityConfig,

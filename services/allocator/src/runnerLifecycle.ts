@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { DockerEngineClient } from "./dockerEngine.js";
+import { requireRunnerAuthorizedKey } from "./requireRunnerAuthorizedKey.js";
 
 export interface RunnerRecord {
   runnerId: string;
@@ -121,6 +122,10 @@ export class RunnerLifecycle {
   }
 
   async allocate(input: AllocateInput): Promise<AllocateResult> {
+    // Resolve the PUBLIC authorized_keys line FIRST — fail closed (loud throw) on a
+    // blank/unset key BEFORE any side effect, so a misconfigured allocator never
+    // spends a volume/container on a runner the orchestrator could never SSH into.
+    const runnerAuthorizedKey = requireRunnerAuthorizedKey();
     const runnerId = `runner_${input.runId}`;
     const slug = `tanren-runner-${input.runId}`.replaceAll(/[^A-Za-z0-9_.-]/gu, "-");
     const containerName = slug;
@@ -165,7 +170,7 @@ export class RunnerLifecycle {
         // (orchestrator codexMaterializer / opencodeMaterializer), so `docker
         // inspect` on a runner can carry no secret.
         env: {
-          TANREN_RUNNER_AUTHORIZED_KEY: process.env["TANREN_RUNNER_AUTHORIZED_KEY"] ?? "",
+          TANREN_RUNNER_AUTHORIZED_KEY: runnerAuthorizedKey,
           TANREN_RUNNER_EPHEMERAL: "1",
         },
         labels: allocatorLabels(input.runId),

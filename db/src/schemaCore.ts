@@ -195,6 +195,16 @@ export const runs = pgTable(
     // walk: a pending marker means "already re-executing this signal — wait." It is
     // cleared (and `verified_ancestor_shas` advanced) when the re-execution settles.
     percolationPending: jsonb("percolation_pending"),
+    // §3.7f credit double-count fix: the run's resolved credential identity (the
+    // writer adapter's `authRef`). Prepaid-credit balances are GLOBAL to a
+    // credential, so when two runs share one credential and overlap, each would
+    // capture the SAME drawdown baseline and attribute the WHOLE concurrent
+    // drawdown — double-counting the spend. This per-run dedup key lets the run-end
+    // reconcile COUNT the runs concurrently active on the same credential and
+    // attribute only this run's share, so the sum across concurrent runs equals the
+    // real drawdown (idempotent). NULL until the worker resolves the run's writer
+    // credential (and for runs with no credential-priced drawdown).
+    authRef: text("auth_ref"),
   },
   (table) => [
     enumCheck("runs_status_check", table.status, stateEnumLists.runs_status),
@@ -207,6 +217,9 @@ export const runs = pgTable(
     index("runs_org_id").on(table.orgId),
     index("runs_org_run").on(table.orgId, table.runId),
     index("runs_org_project").on(table.orgId, table.projectId),
+    // The §3.7f concurrency query: count the ACTIVE runs sharing one credential
+    // (auth_ref) during a drawdown measurement → org-scoped, by auth_ref + status.
+    index("runs_org_auth_ref").on(table.orgId, table.authRef),
   ],
 );
 

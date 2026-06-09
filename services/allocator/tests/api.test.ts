@@ -1,7 +1,20 @@
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createAllocatorApi } from "../src/api.js";
 import type { ContainerInspectResult, CreateContainerSpec, DockerEngineClient } from "../src/dockerEngine.js";
 import { RunnerLifecycle, type RunnerRecord, type RunnerStore } from "../src/runnerLifecycle.js";
+
+// allocate() fail-closes on a blank TANREN_RUNNER_AUTHORIZED_KEY; provide one.
+const ORIGINAL_AUTHORIZED_KEY = process.env["TANREN_RUNNER_AUTHORIZED_KEY"];
+beforeAll(() => {
+  process.env["TANREN_RUNNER_AUTHORIZED_KEY"] = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOrchestratorPub orchestrator";
+});
+afterAll(() => {
+  if (ORIGINAL_AUTHORIZED_KEY === undefined) {
+    delete process.env["TANREN_RUNNER_AUTHORIZED_KEY"];
+  } else {
+    process.env["TANREN_RUNNER_AUTHORIZED_KEY"] = ORIGINAL_AUTHORIZED_KEY;
+  }
+});
 
 class FakeDocker implements DockerEngineClient {
   readonly volumeCreates: string[] = [];
