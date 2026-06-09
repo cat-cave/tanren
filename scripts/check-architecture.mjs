@@ -21,11 +21,11 @@ const patterns = [
 const ignoredDirs = new Set(["node_modules", "dist", "coverage", ".git"]);
 // Long-running narrative docs (gain sections as the plan evolves; 500-line cap doesn't fit).
 const roadmapDocs = ["PROJECT_BRIEF.md", "ROADMAP.md", "docs/architecture/autonomy-engine.md"];
-// The vendored LiteLLM model-price snapshot is DATA (refreshed by
-// scripts/refresh-model-prices.mjs), exempt from the 500-line source cap.
+// The vendored LiteLLM model-price snapshot (refreshed by scripts/refresh-model-prices.mjs) is DATA, exempt from the 500-line source cap.
 // cspell.json is appended: a DATA word-list (grows with the codebase), exempt like the vendored data.
 const vendoredData = ["services/orchestrator/src/engine/costs/pricing/model_prices.json", "cspell.json"];
-const lineMaxExclusions = new Set([...roadmapDocs, ...vendoredData, "pnpm-lock.yaml"]);
+// `justfile` is also exempt: the command CATALOG grows monotonically, not a source module (like the migration DDL tail).
+const lineMaxExclusions = new Set([...roadmapDocs, ...vendoredData, "pnpm-lock.yaml", "justfile"]);
 const invariantDocExclusions = new Set(["PROJECT_BRIEF.md", "docs/contracts/architecture-checks.md"]);
 const rawEventWriteProofs = [
   [

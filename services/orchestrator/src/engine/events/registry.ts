@@ -21,6 +21,7 @@ import {
   WriterStartedPayload,
   WriterSubtaskCompletedPayload,
   loopEventRegistry,
+  templateEventRegistry,
   WriterSubtaskFailedPayload,
   WriterSubtaskStartedPayload,
 } from "./schemas/answerer.js";
@@ -207,9 +208,9 @@ export const EventRegistry = {
   "auditor.rejected": AuditorRejectedPayload,
   // S3: the posture-gate's residual P2/P3 disposition (route-to-dag / fix-if-idle).
   "auditor.findings_routed": AuditorFindingsRoutedPayload,
-
-  // SPEC-LOOP REDESIGN stages (demo-run/triage/convergence) — split into registry.loop.ts (500-line cap).
+  // Sub-registries split into their schema modules for the 500-line cap: spec-loop stages (schemas/answerer.ts) + templating registry lifecycle (schemas/templates.ts).
   ...loopEventRegistry,
+  ...templateEventRegistry,
 
   // Runner allocation
   "runner.allocated": RunnerAllocatedPayload,
@@ -242,7 +243,7 @@ export const EventRegistry = {
   "cost.failed": CostFailedPayload,
   "cost.unattributed": CostUnattributedPayload,
   "cost.ceiling_unreachable": CostCeilingUnreachablePayload,
-  // cost PR-C: credit-rate-unknown + overage-unobservable (NULL real spend, loud).
+  // cost PR-C: credit-rate-unknown + overage-unobservable + BYOK managed-metering-skipped (NULL real spend, loud).
   "cost.credit_rate_unknown": CostCreditRateUnknownPayload,
   "cost.overage_unobservable": CostOverageUnobservablePayload,
   "cost.managed_metering_skipped": CostManagedMeteringSkippedPayload,
@@ -255,8 +256,7 @@ export const EventRegistry = {
   "usage.window.observed": UsageWindowObservedPayload,
   "usage.window.pressure": UsageWindowPressurePayload,
   "usage.accounting.observed": UsageAccountingObservedPayload,
-  // silent-fallback hardening: a usage READ failed (loud, never empty), and a real
-  // CLI call recorded its cost with no token telemetry (mandatory accounting, loud).
+  // silent-fallback hardening: a usage READ failed (loud, never empty), and a real CLI call recorded its cost with no token telemetry (mandatory accounting, loud).
   "usage.read_failed": UsageReadFailedPayload,
   "usage.token_accounting_failed": UsageTokenAccountingFailedPayload,
 

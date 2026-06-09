@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "from": {
+      "enum": [
+        "draft",
+        "validated",
+        "degraded",
+        "official"
+      ],
+      "type": "string"
+    },
+    "orgId": {
+      "type": "string"
+    },
+    "reason": {
+      "type": "string"
+    },
+    "templateId": {
+      "type": "string"
+    },
+    "to": {
+      "enum": [
+        "draft",
+        "validated",
+        "degraded",
+        "official"
+      ],
+      "type": "string"
+    }
+  },
+  "required": [
+    "templateId",
+    "orgId",
+    "from",
+    "to",
+    "reason"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.template.status_changed"
+}
