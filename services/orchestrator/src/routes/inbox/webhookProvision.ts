@@ -100,12 +100,18 @@ export async function handleProvisionWebhook(
     return c.json({ error: "github_credential_unreadable", message: messageOf(error) }, 502);
   }
 
-  // 3. Mint + store the HMAC secret.
+  // §3.6 (hook-create BEFORE secret rotate): mint a candidate secret value but do
+  // NOT store it yet. On a provision RETRY, rotating the STORED secret first and
+  // THEN hitting a GitHub 422 (e.g. the hook already exists) would brick the source —
+  // the live GitHub hook still signs with the OLD secret while the store now holds a
+  // NEW one, so every delivery's signature fails. So we create/validate the hook on
+  // GitHub FIRST and only persist the rotated secret AFTER GitHub confirms — a 422
+  // leaves the previous working secret untouched.
   const secretRef = `webhook/issues/${source.id}`;
   const secretValue = randomBytes(32).toString("hex");
-  await deps.secrets.put({ ref: secretRef, value: secretValue });
 
-  // 4. Create the GitHub `issues` webhook pointing at this source's receiver.
+  // 3. Create the GitHub `issues` webhook pointing at this source's receiver, with
+  // the candidate secret. The store is NOT yet rotated.
   const base = (parsed.data.callbackBaseUrl ?? deps.publicBaseUrl).replace(/\/+$/u, "");
   const callbackUrl = `${base}/github/webhooks/issues/${source.id}`;
   const hookResponse = await deps.githubHttp.request({
@@ -121,9 +127,15 @@ export async function handleProvisionWebhook(
     },
   });
   if (hookResponse.status !== 201 && hookResponse.status !== 200) {
+    // The hook was NOT created — leave the stored secret + the source config exactly
+    // as they were (no rotation), so a previously-working source keeps working.
     return c.json({ error: "webhook_create_failed", message: `GitHub returned HTTP ${hookResponse.status}` }, 502);
   }
   const hookId = (hookResponse.body as { id?: unknown } | undefined)?.id ?? null;
+
+  // 4. GitHub confirmed the hook with the new secret — NOW it is safe to rotate the
+  // stored secret to match. The live hook + the store agree on the new value.
+  await deps.secrets.put({ ref: secretRef, value: secretValue });
 
   // 5. Persist the secret ref onto the source config (jsonb — no migration). This
   // flips the source webhook-driven (the poller now skips it; push is authoritative).
