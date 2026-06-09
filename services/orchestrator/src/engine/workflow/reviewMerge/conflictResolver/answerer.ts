@@ -40,6 +40,13 @@ export class AnswererBackedConflictInvoker implements ConflictAnswererInvoker {
     upstreamChange?: UpstreamChangeContext;
     productVision?: ProductVision;
   }): Promise<ConflictAnswer> {
+    // Empty-gather short-circuit (apex pre-run §7.2): NO conflicted files means there
+    // is nothing for the model to resolve — return a no-op `resolve` answer WITHOUT a
+    // (whole-files-in / whole-files-out) model call. Idempotent + cheap; the resolver
+    // guards the empty-files apply path so this never reaches an apply.
+    if (input.conflictedFiles.length === 0) {
+      return { decision: "resolve", reasoning: "No conflicted files to resolve.", resolvedFiles: [], replanSpec: null };
+    }
     const outputSchema = answererOutputSchemaFor("conflict", ConflictAnswer);
     const prompt = buildConflictResolverPrompt(input);
     const answerOpts: Parameters<typeof this.deps.adapter.runAnswerer>[0] = {
@@ -94,11 +101,97 @@ export function buildConflictResolverPrompt(input: {
     ...baseSpecLines(input.conflictingSpecIntent),
     "",
     "=== Conflicted files (markers intact) ===",
-    ...input.conflictedFiles.flatMap((file) => [`--- ${file.path} ---`, file.conflictedContent]),
+    "A small file is shown in FULL. A LARGE file is HUNK-SCOPED — only its conflict",
+    "regions (with surrounding context) are shown inline; read the non-conflict",
+    "regions from the file in your read-only workspace and reproduce them VERBATIM so",
+    "`resolvedFiles[].content` is still the complete file.",
+    ...input.conflictedFiles.flatMap((file) => [`--- ${file.path} ---`, renderConflictedFileForPrompt(file)]),
     "",
     "Return only the structured JSON required by the provided schema.",
   ];
   return lines.join("\n");
+}
+
+// Above this line count a conflicted file is HUNK-SCOPED in the prompt: only its
+// conflict regions (+ a small context window) go inline, not the whole file. This
+// bounds the input a large mostly-non-conflict file costs (apex pre-run §7.2); the
+// output contract is unchanged (the model reads non-conflict regions from its
+// read-only workspace + reproduces them, returning the full resolved file).
+const CONFLICT_FULL_FILE_LINE_CAP = 200;
+// Lines of context kept around each conflict region when a file is hunk-scoped.
+const CONFLICT_HUNK_CONTEXT_LINES = 8;
+
+export function renderConflictedFileForPrompt(file: ConflictedFile): string {
+  const lines = file.conflictedContent.split("\n");
+  if (lines.length <= CONFLICT_FULL_FILE_LINE_CAP) {
+    return file.conflictedContent;
+  }
+  const ranges = conflictHunkRanges(lines);
+  if (ranges.length === 0) {
+    // No marker found in a large file (shouldn't happen for a real conflict) — fall
+    // back to full content rather than silently dropping it (no swallowed empty).
+    return file.conflictedContent;
+  }
+  const windows = mergeWindows(
+    ranges.map(([start, end]) => [
+      Math.max(0, start - CONFLICT_HUNK_CONTEXT_LINES),
+      Math.min(lines.length - 1, end + CONFLICT_HUNK_CONTEXT_LINES),
+    ]),
+  );
+  const parts: string[] = [
+    `(LARGE FILE — ${lines.length} lines — HUNK-SCOPED. Omitted regions are unchanged;`,
+    ` read them from this file in your workspace and reproduce them verbatim.)`,
+  ];
+  let cursor = 0;
+  for (const [start, end] of windows) {
+    if (start > cursor) {
+      parts.push(`… [lines ${cursor + 1}-${start} unchanged — read from workspace] …`);
+    }
+    parts.push(lines.slice(start, end + 1).join("\n"));
+    cursor = end + 1;
+  }
+  if (cursor < lines.length) {
+    parts.push(`… [lines ${cursor + 1}-${lines.length} unchanged — read from workspace] …`);
+  }
+  return parts.join("\n");
+}
+
+// The [start,end] line index ranges (0-based, inclusive) of each conflict region,
+// from a `<<<<<<<` opener to its `>>>>>>>` closer.
+function conflictHunkRanges(lines: string[]): Array<[number, number]> {
+  const ranges: Array<[number, number]> = [];
+  let openAt: number | undefined;
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i] ?? "";
+    if (line.startsWith("<<<<<<<")) {
+      openAt = i;
+    } else if (line.startsWith(">>>>>>>") && openAt !== undefined) {
+      ranges.push([openAt, i]);
+      openAt = undefined;
+    }
+  }
+  // An unterminated opener still gets a region to the end of file (markers are intact
+  // per the contract, but be defensive rather than drop the tail of a real conflict).
+  if (openAt !== undefined) {
+    ranges.push([openAt, lines.length - 1]);
+  }
+  return ranges;
+}
+
+// Merge overlapping/adjacent [start,end] windows so context windows around nearby
+// hunks don't double-print lines.
+function mergeWindows(windows: Array<[number, number]>): Array<[number, number]> {
+  const sorted = [...windows].sort((a, b) => a[0] - b[0]);
+  const merged: Array<[number, number]> = [];
+  for (const [start, end] of sorted) {
+    const last = merged.at(-1);
+    if (last !== undefined && start <= last[1] + 1) {
+      last[1] = Math.max(last[1], end);
+    } else {
+      merged.push([start, end]);
+    }
+  }
+  return merged;
 }
 
 /** The default (symmetric merge-conflict) framing header. */

@@ -169,6 +169,16 @@ describe("buildForgePrompt (conversation prompt builder)", () => {
     expect(prompt).not.toContain("Read-tool results gathered this exchange:");
   });
 
+  it("the TERMINAL pass tells the model it MUST finalize NOW and stops offering tools (§7.10)", () => {
+    const prompt = buildForgePrompt(ctx({ finalize: true }));
+    expect(prompt).toContain("FINAL STEP");
+    expect(prompt).toContain("MUST return");
+    expect(prompt).toContain('{"kind":"final"');
+    // The normal "request more tools" decide line is suppressed on the terminal pass.
+    expect(prompt).not.toContain("Decide: request more read tools, or finalize");
+    expect(prompt).not.toContain("finalize directly if no data is needed");
+  });
+
   it("truncates an over-long tool payload with a truncation marker", () => {
     const big = "x".repeat(5000);
     const prompt = buildForgePrompt(

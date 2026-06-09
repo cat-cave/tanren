@@ -145,21 +145,39 @@ export interface DemoRunPromptInput {
   baselineSha: string;
 }
 
-// The DEMO-RUN prompt: exercise the real user-flow the spec promised and emit
-// findings (explicit P0–P3) for whatever did not work. Distinct from the checker
+// The DEMO-RUN prompt: probe the user-flow the spec promised and emit findings
+// (explicit P0–P3) for whatever genuinely did not work. Distinct from the checker
 // (per-task completeness) and the auditor (quality). Findings-only, no verdict.
+//
+// HONESTY (apex pre-run §7.6): the demo answerer runs in a READ-ONLY sandbox — it
+// CANNOT start a server, run the app, or perform live I/O. So the prompt no longer
+// mandates the impossible "exercise the app". It asks for STATIC read-only probing
+// (read the diff + sources + tests + entrypoints and reason about whether the flow
+// would work) and, when the promise CANNOT be verified by static probing alone,
+// the honest-skip: emit a single `demo-not-exercisable` info finding rather than
+// fabricate a failure for something it could not actually run.
 export function buildDemoRunPrompt(input: DemoRunPromptInput): string {
   return [
-    "You are the Tanren Demo-Run Answerer. Your job: actually EXERCISE the user-flow /",
-    "end-to-end behavior the spec was written for, and report what did NOT work as",
-    "`findings` (each with an explicit severity P0–P3). This is distinct from the checker",
-    "(per-task completeness) and the auditor (quality) — you verify the thing a human",
-    "wanted actually works.",
+    "You are the Tanren Demo-Run Answerer. Your job: verify the user-flow / end-to-end",
+    "behavior the spec promised actually works, and report what did NOT as `findings`",
+    "(each with an explicit severity P0–P3). This is distinct from the checker (per-task",
+    "completeness) and the auditor (quality) — you verify the thing a human wanted works.",
     "",
-    "Emit an EMPTY `findings` list when the promised behavior works end-to-end. In",
-    "`summary`, describe the steps you exercised. Render NO pass/fail verdict — the loop",
-    "routes your findings through triage. Do NOT edit source files (you may run/observe",
-    "the app read-only). Return only the structured JSON.",
+    "IMPORTANT — you run in a READ-ONLY sandbox: you CANNOT start a server, run the app,",
+    "or perform live network/process I/O. Probe STATICALLY: read the change, the source,",
+    "the tests, and the entrypoints, and reason about whether the promised flow holds.",
+    "",
+    "Emit findings ONLY for failures you can SUBSTANTIATE from the code you read (e.g. a",
+    "missing route, an unhandled case, a contradicted acceptance criterion). NEVER",
+    "fabricate a failure for behavior you could not actually exercise.",
+    "- If static probing confirms the promised behavior holds end-to-end: emit an EMPTY",
+    "  `findings` list and describe what you inspected in `summary`.",
+    "- If the promise genuinely CANNOT be judged by static read-only probing (it needs a",
+    "  live run you cannot perform): emit a SINGLE info-severity finding with id",
+    "  `demo-not-exercisable` saying so — do NOT invent failures.",
+    "",
+    "Render NO pass/fail verdict — the loop routes your findings through triage. Do NOT",
+    "edit source files. Return only the structured JSON.",
     "",
     `The change is committed on the current branch; inspect it via git diff ${input.baselineSha}.`,
     "",

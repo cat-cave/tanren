@@ -5,6 +5,7 @@ import { storeClaudeAuthBundle } from "../credentials/claudeAuth.js";
 import { materializeClaudeAuthBundle } from "../credentials/claudeMaterializer.js";
 import { quoteSshShellArg } from "../ssh/command.js";
 import { AnswererSchemaValidationError } from "./codex.js";
+import { parseWithOneSchemaRepair } from "./answererRepair.js";
 import type { AnswererAdapter, TokenUsage, UsageLimitSignal, WriterAdapter, WriterResult } from "./types.js";
 import { findOpenRouterGenerationId, foldGenerationId } from "./openRouterGenerationId.js";
 import { findTokenUsageBounded } from "./findTokenUsage.js";
@@ -149,32 +150,49 @@ export function createClaudeAnswerer<TOutput>(dependencies: ClaudeAnswererDepend
         timeoutMs: Math.min(opts.timeoutMs, 30_000),
       });
       assertAnswererWorkspaceStep(made, `mkdir -p ${workspace}`);
-      const result = await dependencies.ssh.run(dependencies.target, {
-        command: buildClaudeAnswererCommand({
-          configDir: auth.CLAUDE_CONFIG_DIR,
-          workspace,
-          model: dependencies.model,
-          managed: auth.managed,
-          anthropicBaseUrl: auth.anthropicBaseUrl,
-        }),
-        stdin: buildAnswererPrompt(opts.prompt, opts.outputSchema.name, opts.outputSchema.jsonSchema),
-        timeoutMs: opts.timeoutMs,
+      // Run one claude answerer call for `prompt` and return its final text — closed
+      // over so the schema-repair pass can re-run it once with a repair prompt. Each
+      // invocation refreshes lastTokenUsage. The base answerer-prompt scaffold (the
+      // schema-name + JSON-Schema framing) is applied INSIDE so the repair re-sends
+      // exactly the structured form the first call used.
+      const runOnce = async (prompt: string): Promise<string> => {
+        const result = await dependencies.ssh.run(dependencies.target, {
+          command: buildClaudeAnswererCommand({
+            configDir: auth.CLAUDE_CONFIG_DIR,
+            workspace,
+            model: dependencies.model,
+            managed: auth.managed,
+            anthropicBaseUrl: auth.anthropicBaseUrl,
+          }),
+          stdin: buildAnswererPrompt(prompt, opts.outputSchema.name, opts.outputSchema.jsonSchema),
+          timeoutMs: opts.timeoutMs,
+        });
+        const telemetry = parseClaudeStreamTelemetry(result.stdout);
+        lastTokenUsage = telemetry.tokenUsage;
+        if (result.timedOut) {
+          throw new Error(`Claude Answerer timed out for schema ${opts.outputSchema.name}`);
+        }
+        if (telemetry.usageLimit !== undefined) {
+          throw new ClaudeUsageLimitError(opts.outputSchema.name, telemetry.usageLimit.message);
+        }
+        if (result.failure !== undefined || result.exitCode !== 0) {
+          throw new Error(
+            `Claude Answerer failed for schema ${opts.outputSchema.name}: exit ${result.exitCode ?? "unknown"}`,
+          );
+        }
+        return extractClaudeFinalText(result.stdout);
+      };
+      const firstText = await runOnce(opts.prompt);
+      // ONE bounded schema-repair pass (apex pre-run §7.1): a malformed-then-valid
+      // answer repairs in a single cheap re-call instead of throwing the stage. A
+      // second miss throws LOUD. Behavior is unchanged for a well-formed answer.
+      return parseWithOneSchemaRepair({
+        schema: opts.outputSchema,
+        parse: (text) => parseClaudeAnswererOutput(text, opts.outputSchema),
+        firstRawText: firstText,
+        originalPrompt: opts.prompt,
+        rerun: runOnce,
       });
-      const telemetry = parseClaudeStreamTelemetry(result.stdout);
-      lastTokenUsage = telemetry.tokenUsage;
-      if (result.timedOut) {
-        throw new Error(`Claude Answerer timed out for schema ${opts.outputSchema.name}`);
-      }
-      if (telemetry.usageLimit !== undefined) {
-        throw new ClaudeUsageLimitError(opts.outputSchema.name, telemetry.usageLimit.message);
-      }
-      if (result.failure !== undefined || result.exitCode !== 0) {
-        throw new Error(
-          `Claude Answerer failed for schema ${opts.outputSchema.name}: exit ${result.exitCode ?? "unknown"}`,
-        );
-      }
-      const text = extractClaudeFinalText(result.stdout);
-      return parseClaudeAnswererOutput(text, opts.outputSchema);
     },
   };
 }
@@ -248,14 +266,20 @@ function modelFlag(model?: string): string[] {
   return model === undefined || model === "" ? [] : ["--model", quoteSshShellArg(model)];
 }
 
+// Schema-first ordering (apex pre-run §7.9): the structured-output contract (schema
+// name + instructions + the JSON Schema) is STATIC across every call of a given
+// answerer, while `prompt` is the variable part. Emitting the static contract FIRST
+// keeps the prompt prefix cache-stable so a repeated answerer call reuses the cached
+// prefix instead of re-billing it. Output-parsing strips markdown fences defensively
+// (parseClaudeAnswererOutput) even though we ask for none.
 export function buildAnswererPrompt(prompt: string, schemaName: string, jsonSchema: Record<string, unknown>): string {
   return [
-    prompt,
-    "",
     `Respond with ONLY a single JSON object that validates against the "${schemaName}" JSON Schema below.`,
     "Do not wrap it in markdown fences or add any prose before or after the JSON.",
     "JSON Schema:",
     JSON.stringify(jsonSchema),
+    "",
+    prompt,
   ].join("\n");
 }
 

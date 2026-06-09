@@ -114,6 +114,11 @@ export type AuditPassReport = z.infer<typeof AuditPassReport>;
 export interface AuditAnswererContext {
   job: AuditJob;
   index: ReconIndex;
+  // §7.7 audit dedup: the stable externalIds the PRIOR pass of this job emitted, fed
+  // forward so the model REUSES the same id for the same underlying issue (the inbox
+  // upserts on (source_id, external_id), so a reused id is idempotent) instead of
+  // re-minting via byte-identical free-text regeneration. Omitted on a first pass.
+  priorExternalIds?: ReadonlyArray<string>;
 }
 
 export interface AuditAnswerer {

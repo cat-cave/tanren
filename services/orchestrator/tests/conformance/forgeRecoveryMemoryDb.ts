@@ -80,10 +80,23 @@ export class ForgeRecoveryScopedClient {
       if (row !== undefined) row.metadata = JSON.parse(params[1] as string);
       return { rows: row ? [{ spec_id: row.spec_id }] : [], rowCount: row ? 1 : 0 };
     }
-    if (sql === "SELECT spec_id, title, status FROM specs WHERE project_id = $1 ORDER BY title") {
+    if (
+      sql ===
+      "SELECT spec_id, title, status FROM specs WHERE project_id = $1 ORDER BY (status IN ('open','in_flight','review','needs_attention')) DESC, created_at DESC LIMIT $2"
+    ) {
+      // Mirror the bounded grounding query (§7.5): active (non-terminal) specs first,
+      // then by recency, capped at the LIMIT param. The fixture's array index is the
+      // recency proxy when a row carries no explicit created_at.
+      const active = new Set(["open", "in_flight", "review", "needs_attention"]);
+      const limit = params[1] as number;
+      const recency = (s: SpecRec): number => s.created_at ?? this.db.specs.indexOf(s);
       const rows = this.visibleSpecs
         .filter((s) => s.project_id === params[0])
-        .sort((a, b) => a.title.localeCompare(b.title))
+        .sort((a, b) => {
+          const activeDelta = Number(active.has(b.status)) - Number(active.has(a.status));
+          return activeDelta === 0 ? recency(b) - recency(a) : activeDelta;
+        })
+        .slice(0, limit)
         .map((s) => ({ spec_id: s.spec_id, title: s.title, status: s.status }));
       return { rows, rowCount: rows.length };
     }
