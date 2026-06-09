@@ -35,6 +35,19 @@ export interface CaptureArchitectureLine {
   choice: string;
 }
 
+// The project's concrete lifecycle — the load-bearing output of the architecture
+// step (the stack commands behind the six conventional justfile targets the
+// scaffold authors from). `null` until the architecture step captures it.
+export interface CaptureLifecycle {
+  stack: string;
+  bootstrap: string;
+  tier1: string;
+  tier2: string;
+  tier3: string;
+  build: string;
+  deploy: string;
+}
+
 export interface InterviewCapture {
   identity: CaptureIdentity | null;
   personas: CapturePersona[];
@@ -42,6 +55,7 @@ export interface InterviewCapture {
   interfaces: CaptureInterface[];
   designDna: string;
   architecture: CaptureArchitectureLine[];
+  lifecycle: CaptureLifecycle | null;
   rulesets: string[];
 }
 
@@ -76,6 +90,7 @@ export function emptyCapture(): InterviewCapture {
     interfaces: [],
     designDna: "",
     architecture: [],
+    lifecycle: null,
     rulesets: [],
   };
 }

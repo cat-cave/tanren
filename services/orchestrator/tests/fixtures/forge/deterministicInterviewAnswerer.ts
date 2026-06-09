@@ -176,6 +176,19 @@ const SCRIPT: InterviewRoundOutput[] = [
         { layer: "data", choice: "postgres · drizzle" },
         { layer: "deploy", choice: "fly.io · 2 regions" },
       ],
+      // The load-bearing lifecycle: the concrete stack commands behind the
+      // conventional justfile targets, for the chosen TS/pnpm stack. The scaffold
+      // authors the justfile from THIS (no hardcoded stack).
+      lifecycle: {
+        stack: "ts/pnpm",
+        bootstrap: "pnpm install --frozen-lockfile",
+        tier1: "pnpm lint && pnpm typecheck",
+        tier2: "pnpm build && pnpm test -- --reporter=junit --outputFile=reports/junit.xml",
+        tier3:
+          "pnpm lint && pnpm typecheck && pnpm build && pnpm test -- --reporter=junit --outputFile=reports/junit.xml",
+        build: "pnpm build",
+        deploy: "flyctl deploy",
+      },
     },
     suggestions: [],
     complete: false,

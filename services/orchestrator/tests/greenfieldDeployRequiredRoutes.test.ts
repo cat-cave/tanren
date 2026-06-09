@@ -88,6 +88,22 @@ function preparedDeploy(providerKind: "deploy.vercel" | "deploy.flyio" = "deploy
   };
 }
 
+// The TS/pnpm lifecycle the architecture step captures (apex v27 default) — NOT a
+// Tanren hardcode; required at derive (the scaffold can't author a justfile without it).
+const TS_LIFECYCLE = {
+  stack: "ts/pnpm",
+  bootstrap: "pnpm install --frozen-lockfile",
+  tier1: "pnpm lint && pnpm typecheck",
+  tier2: "pnpm build && pnpm test -- --reporter=junit --outputFile=reports/junit.xml",
+  tier3: "pnpm lint && pnpm typecheck && pnpm build && pnpm test",
+  build: "pnpm build",
+  deploy: "flyctl deploy",
+};
+
+// A capture WITH a lifecycle but no deploy — isolates the deploy-guard rejection so
+// it does not trip the (earlier) missing-lifecycle guard.
+const captureWithLifecycle = () => ({ ...emptyCapture(), lifecycle: TS_LIFECYCLE });
+
 function apexCapture() {
   return {
     ...emptyCapture(),
@@ -96,6 +112,7 @@ function apexCapture() {
       pitch: "A short link service for an operations team.",
       repoHint: "",
     },
+    lifecycle: TS_LIFECYCLE,
   };
 }
 
@@ -170,7 +187,7 @@ describe("greenfield/apex deploy dependency routes", () => {
     const res = await app.request("/orgs/org_acme/onboarding/interview/derive", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ capture: emptyCapture(), owner: "cat-cave", autonomy: "auto" }),
+      body: JSON.stringify({ capture: captureWithLifecycle(), owner: "cat-cave", autonomy: "auto" }),
     });
 
     expect(res.status).toBe(400);
@@ -189,12 +206,32 @@ describe("greenfield/apex deploy dependency routes", () => {
     const res = await app.request("/orgs/org_acme/onboarding/interview/derive", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ capture: emptyCapture(), owner: "cat-cave" }),
+      body: JSON.stringify({ capture: captureWithLifecycle(), owner: "cat-cave" }),
     });
 
     expect(res.status).toBe(400);
     const body = (await res.json()) as { error: string };
     expect(body.error).toBe("deploy_provider_missing");
+    expect(pool.projects.size).toBe(0);
+  });
+
+  it("rejects onboarding derive when the architecture step captured NO lifecycle (400, no Node default)", async () => {
+    const pool = new RoutesPool();
+    pool.seedOrg({ id: "org_acme" });
+    pool.seedMembership("org_acme", "user_alice", "admin");
+    const { app } = appWithRoutes(pool);
+
+    // A deploy provider IS supplied, so the rejection is specifically the missing
+    // lifecycle (not the deploy guard).
+    const res = await app.request("/orgs/org_acme/onboarding/interview/derive", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ capture: emptyCapture(), owner: "cat-cave", deploy: { providerKind: "deploy.vercel" } }),
+    });
+
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toBe("lifecycle_missing");
     expect(pool.projects.size).toBe(0);
   });
 
@@ -208,7 +245,7 @@ describe("greenfield/apex deploy dependency routes", () => {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        capture: emptyCapture(),
+        capture: captureWithLifecycle(),
         owner: "cat-cave",
         autonomy: "auto",
         deploy: { providerKind: "deploy.vercel" },
@@ -243,7 +280,7 @@ describe("greenfield/apex deploy dependency routes", () => {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        capture: emptyCapture(),
+        capture: captureWithLifecycle(),
         owner: "cat-cave",
         deploy: { providerKind: "deploy.vercel" },
       }),
