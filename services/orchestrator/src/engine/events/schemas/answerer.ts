@@ -459,3 +459,9 @@ export const loopEventRegistry = {
   "convergence.assessed": ConvergenceAssessedPayload,
   "convergence.stalled": ConvergenceStalledPayload,
 } as const;
+
+// Re-export the Tanren-native templating registry-lifecycle sub-registry through
+// this module so the EventRegistry spreads it in WITHOUT adding a separate import
+// (keeping registry.ts under its max-dependencies cap), exactly like the loop
+// sub-registry above. Source of truth is schemas/templates.ts.
+export { templateEventRegistry } from "./templates.js";

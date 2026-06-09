@@ -132,3 +132,9 @@ function guard(c: { var: { actor?: ActorContext } }, orgId: string): boolean {
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
+
+// Re-export the sibling template-REGISTRY route factory through this module so
+// mountFeatureRoutes spreads both org-scoped library surfaces in from ONE import
+// (keeping mountFeatureRoutes under its max-dependencies cap), the same grouping
+// pattern forge/mount.js uses. Source of truth is routes/templates/index.ts.
+export { createTemplateRoutes } from "../templates/index.js";

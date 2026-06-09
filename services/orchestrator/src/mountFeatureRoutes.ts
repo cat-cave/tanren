@@ -23,7 +23,7 @@ import { createDoctorRoutes } from "./routes/doctor/index.js";
 import { mountReportRoutes, type MountReportRoutesDeps } from "./routes/experiments/mount.js";
 import { createForgeAskRoutes, createForgeProposalRoutes, createForgeRoutes } from "./routes/forge/mount.js";
 import { createInboxRoutes } from "./routes/inbox/index.js";
-import { createAuditRoutes } from "./routes/audits/index.js";
+import { createAuditRoutes, createTemplateRoutes } from "./routes/audits/index.js";
 import { createIssueWebhookRoutes } from "./routes/githubWebhooks/index.js";
 import { createInsightRoutes } from "./routes/insights/index.js";
 import { createIntegrationRoutes } from "./routes/integrations/index.js";
@@ -236,6 +236,10 @@ export function mountFeatureRoutes(app: Hono<ActorContextEnv>, deps: FeatureRout
       answererFactory: forgeAnswerers.triage,
     }),
   );
+  // Tanren-native templating (wave 1): the template REGISTRY — register/list/get
+  // templates + transition lifecycle status, org-scoped on the scoped pool (RLS
+  // bounds each query to the org's own templates plus the cross-org official tier).
+  app.route("/orgs", createTemplateRoutes({ pool: scopedPool }));
   // DORA delivery metrics + the benchmark experiment/cell report+CRUD surface.
   // The benchmark scheduler runs on the scoped pool; its live accept/await seams
   // carry their own infra (allocator/ssh/identity/notify) when the boot wired it.
