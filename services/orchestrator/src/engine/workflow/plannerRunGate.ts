@@ -14,10 +14,13 @@ import {
   advisoryStepNamesForPosture,
   type GateOutcome,
   ingestGateJunit,
+  invalidCiConfigGateOutcome,
+  isInvalidCiConfigError,
   resolveBootstrapCommand,
   resolveGateConfig,
   runGateForWhen,
 } from "./gate/index.js";
+import type { CiConfigV1, CiConfigValidationError, CiYamlParseError } from "../ci/index.js";
 import {
   DEFAULT_BOOTSTRAP_COMMAND,
   ensureWorkspaceDepsInstalled,
@@ -27,9 +30,11 @@ import type { RunPlannerLoopInput } from "./plannerRun.js";
 
 // Builds the production gate callback. The CI config is resolved lazily on the
 // first gate call (the workspace is bootstrapped by then) and cached for the
-// rest of the run, so a malformed .tanren/ci.yml surfaces at the first gate
-// rather than crashing the workflow before the loop starts. Each call runs the
-// tiers mapped to `when` over SSH and emits gate.* through the run's store.
+// rest of the run. A malformed `.tanren/ci.yml` (built-repo data) is a fail-closed,
+// RUN-SCOPED gate FAILURE — surfaced at the first gate as a `{ passed: false }`
+// outcome (→ `gateFindings` P0: "the repo's `.tanren/ci.yml` is invalid") rather
+// than an unhandled throw that crashes the worker (the v25-apex crash class). Each
+// call runs the tiers mapped to `when` over SSH and emits gate.* through the run's store.
 //
 // GREENFIELD DEPS-ENSURE: before EVERY gate the callback runs a guarded
 // `ensureWorkspaceDepsInstalled` (install whenever a manifest exists).
@@ -111,8 +116,18 @@ export function buildDefaultGate(
   eventStore: EventStore,
 ): (gate: { when: CiWhen; taskId?: string; headShaOverride?: string }) => Promise<GateOutcome> {
   const context = input.context;
-  let configPromise: ReturnType<typeof resolveGateConfig> | undefined;
-  // The lazily-resolved EXPLICIT install command, cached alongside configPromise.
+  // The lazily-resolved gate config, memoized as a DISCRIMINATED result so an
+  // INVALID `.tanren/ci.yml` (built-repo data) is a RUN-SCOPED gate failure — never
+  // a throw that escapes to the worker (the v25-apex crash class). The first gate
+  // call resolves + classifies it; `{ ok }` carries the parsed config, `{ invalid }`
+  // carries the validation/parse error the gate surfaces as a failed outcome (→ P0
+  // finding). A substrate READ failure is NOT classified here — it keeps its loud-
+  // throw semantics (a transient hiccup must never be recast as a fixable config
+  // finding). Memoized: the result is observed once and reused for the rest of the run.
+  let configResult:
+    | Promise<{ ok: CiConfigV1 } | { invalid: CiConfigValidationError | CiYamlParseError } | undefined>
+    | undefined;
+  // The lazily-resolved EXPLICIT install command, cached alongside the config.
   // An explicit input.bootstrapCommand wins; otherwise the writer-authored
   // .tanren/ci.yml `bootstrap.run` is picked up. Undefined here ⇒ no explicit
   // command, and the per-gate DEFAULT is chosen by `context.greenfield`
@@ -134,13 +149,32 @@ export function buildDefaultGate(
     });
   };
   return async ({ when, taskId, headShaOverride }) => {
-    if (configPromise === undefined) {
-      configPromise = resolveGateConfig({
+    // Resolve + CLASSIFY the gate config FIRST, observing the promise immediately in a
+    // try/catch so an invalid `.tanren/ci.yml` can never become an unobserved rejection
+    // that crashes the worker. An INVALID config short-circuits to a fail-closed gate
+    // failure (→ P0 finding) before we bother installing deps for a gate we cannot run.
+    // A substrate READ failure is re-thrown (its loud run-fail semantics are preserved).
+    if (configResult === undefined) {
+      configResult = resolveGateConfig({
         ssh: input.ssh,
         target,
         workspacePath,
         timeoutMs: input.timeoutMs,
-      });
+      })
+        .then((ok) => ({ ok }) as { ok: CiConfigV1 })
+        .catch((error: unknown) => {
+          if (isInvalidCiConfigError(error)) {
+            return { invalid: error };
+          }
+          throw error;
+        });
+    }
+    const resolved = await configResult;
+    if (resolved !== undefined && "invalid" in resolved) {
+      // Built-repo `.tanren/ci.yml` is broken: a LOUD, run-scoped gate FAILURE
+      // carrying the validation issues (→ `gateFindings` P0: "the repo's
+      // `.tanren/ci.yml` is invalid"), fail-closed (never a pass). The worker survives.
+      return invalidCiConfigGateOutcome(resolved.invalid, when, appendEvent, taskId);
     }
     if (installCommandPromise === undefined) {
       // Resolve the EXPLICIT install command, if any: an `input.bootstrapCommand`
@@ -179,7 +213,10 @@ export function buildDefaultGate(
       ...(input.appEnv === undefined ? {} : { appEnv: input.appEnv }),
       timeoutMs: input.timeoutMs,
     });
-    const config = await configPromise;
+    // `resolved` is the `{ ok }` branch here (the `{ invalid }` branch returned above;
+    // an `undefined` is impossible since resolveGateConfig always yields a config or
+    // throws). Narrow to the parsed config for the tier run.
+    const config = (resolved as { ok: CiConfigV1 }).ok;
     // Anchor the native verdict on the commit the gate is about to verify. COMMIT-BINDING
     // (§5): the `pre_merge` gate passes a `headShaOverride` — the PUSHED PR head (the
     // cleaned ref, bootstrap commit dropped) — because the workspace HEAD is left at the

@@ -1,6 +1,8 @@
 // The run-worker lifecycle helpers — `startRunWorker`
 // (build + start the worker and its co-located reaper, install graceful-drain
-// signal handlers) and the `runWorkerEnabled()` flag gate.
+// signal handlers + the process-level resilience net that keeps the worker alive
+// on a stray per-run unhandledRejection/uncaughtException) and the
+// `runWorkerEnabled()` flag gate.
 //
 // Split out of the worker barrel (`index.ts`) so `boot.ts` can import
 // `startRunWorker` WITHOUT importing the barrel that re-exports `boot.ts` — that
@@ -125,10 +127,49 @@ export function startRunWorker(input: StartRunWorkerInput): StartedRunWorker {
   });
   reaper.start();
   installSignalHandlers(worker, reaper);
+  installResilienceHandlers();
   return { worker, reaper };
 }
 
 let signalHandlersInstalled = false;
+let resilienceHandlersInstalled = false;
+
+/**
+ * Last-line resilience net: keep the worker process ALIVE on an
+ * `unhandledRejection` / `uncaughtException`. The worker serves EVERY run, so a
+ * single per-run data error (the v25-apex case: an invalid built-repo
+ * `.tanren/ci.yml` whose validation rejection escaped as an unobserved promise →
+ * the process exited status 1, crash-looping the shared worker; same class as the
+ * v21 ssh2-'error' crash #342) must NEVER take down the process. The structured
+ * per-run boundaries (the gate-config fail-closed path, `executeNextPlanJob`'s
+ * catch, `runSlot`'s catch) are the PRIMARY defense — this net only catches a
+ * STRAY throw they missed and surfaces it LOUDLY (no silent swallow) so it is
+ * fixed, while the worker keeps claiming + executing other jobs. Installed once.
+ *
+ * Deliberately does NOT exit: Node's default since v15 terminates on an unhandled
+ * rejection, which is exactly the crash we are hardening against. A genuinely
+ * unrecoverable fault still surfaces (loud log + the affected run's own
+ * finalize/heartbeat-lapse recovery); a transient per-run fault no longer wedges
+ * the queue for every other tenant.
+ */
+function installResilienceHandlers(): void {
+  if (resilienceHandlersInstalled) {
+    return;
+  }
+  resilienceHandlersInstalled = true;
+  process.on("unhandledRejection", (reason: unknown) => {
+    console.error(
+      "[run-worker] UNHANDLED REJECTION (worker SURVIVES — a stray per-run error escaped its boundary; the affected run recovers via finalize/lease-lapse):",
+      reason,
+    );
+  });
+  process.on("uncaughtException", (error: unknown) => {
+    console.error(
+      "[run-worker] UNCAUGHT EXCEPTION (worker SURVIVES — a stray per-run error escaped its boundary; the affected run recovers via finalize/lease-lapse):",
+      error,
+    );
+  });
+}
 
 /** Wire SIGTERM/SIGINT to drain the worker + reaper, then exit. Installed once. */
 function installSignalHandlers(worker: RunWorker, reaper: JobReaper): void {

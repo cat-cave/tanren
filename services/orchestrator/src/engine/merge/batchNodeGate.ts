@@ -3,12 +3,14 @@
 // merged state is a LOCAL jj bookmark (no `tanren/batch` host ref), so the native gate
 // must run on THAT workspace — NOT a separate fresh runner that clones a host ref. These
 // closures reuse the SAME gate primitives the fresh-runner gate uses verbatim:
-// `resolveGateConfig` (the gateConfigHash source + the proof-reuse key input),
+// `resolveGateConfig` (the gateConfigHash source + the proof-reuse key input — resolved
+// FIRST so an invalid `.tanren/ci.yml` is a fail-closed FAIL verdict, never a throw-to-
+// infra-hold, and the bootstrap command is derived from the parsed config),
 // `seedWorkspaceLocalIgnore` + `ensureWorkspaceDepsInstalled` (the install the brownfield
 // re-gate needs), and `runGateForWhen` over the `pre_merge` tiers (the verdict).
 
 import type { BatchCheckVerdict } from "../contracts/batchMergeCoordinator.js";
-import type { CiConfigV1 } from "../ci/index.js";
+import { bootstrapCommand, type CiConfigV1 } from "../ci/index.js";
 import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import type { GovernancePosture } from "../config/shared.js";
 import type { EventStore } from "../eventStore.js";
@@ -21,7 +23,7 @@ import {
 } from "../workspace/index.js";
 import {
   advisoryStepNamesForPosture,
-  resolveBootstrapCommand,
+  isInvalidCiConfigError,
   resolveGateConfig,
   runGateForWhen,
 } from "../workflow/gate/index.js";
@@ -66,13 +68,36 @@ export function batchNodeResolveConfig(deps: BatchNodeGateClosureDeps): ResolveB
  */
 export function batchNodeGate(deps: BatchNodeGateClosureDeps): GateBatchWorkspace {
   return async (live: LiveJjWorkspace): Promise<{ verdict: BatchCheckVerdict; passed: boolean }> => {
+    // Resolve + CLASSIFY the repo gate config FIRST, before any seed/install work. An
+    // INVALID `.tanren/ci.yml` (built-repo data) is a fail-closed gate FAIL verdict —
+    // NOT a throw-to-infra-hold (which would hot-loop the retry timer on a permanent
+    // config error) and NEVER a pass. The merge cannot proceed until the repo's config
+    // is fixed; the bisect/triage surfaces the issue. A substrate READ failure still
+    // propagates (its loud infra-error hold semantics are preserved — a transient
+    // hiccup is genuinely retryable, distinct from a broken config). Resolving the
+    // config up front (and deriving the bootstrap command from it) means a bad config
+    // can never escape from the LATER `resolveBootstrapCommand` read either.
+    let config: CiConfigV1;
+    try {
+      config = await resolveGateConfig({
+        ssh: deps.ssh,
+        target: live.target,
+        workspacePath: live.workspacePath,
+        timeoutMs: deps.timeoutMs,
+      });
+    } catch (error) {
+      if (isInvalidCiConfigError(error)) {
+        return {
+          verdict: {
+            result: "fail",
+            message: `batch gate cannot run on ${deps.integrationRef}: the repo's \`.tanren/ci.yml\` is invalid: ${error.message}`,
+          },
+          passed: false,
+        };
+      }
+      throw error;
+    }
     await seedWorkspaceLocalIgnore({
-      ssh: deps.ssh,
-      target: live.target,
-      workspacePath: live.workspacePath,
-      timeoutMs: deps.timeoutMs,
-    });
-    const bootstrap = await resolveBootstrapCommand({
       ssh: deps.ssh,
       target: live.target,
       workspacePath: live.workspacePath,
@@ -82,13 +107,9 @@ export function batchNodeGate(deps: BatchNodeGateClosureDeps): GateBatchWorkspac
       ssh: deps.ssh,
       target: live.target,
       workspacePath: live.workspacePath,
-      command: bootstrap ?? DEFAULT_BOOTSTRAP_COMMAND,
-      timeoutMs: deps.timeoutMs,
-    });
-    const config = await resolveGateConfig({
-      ssh: deps.ssh,
-      target: live.target,
-      workspacePath: live.workspacePath,
+      // The bootstrap command from the already-parsed config (no second file read that
+      // could re-throw the same validation error), or the frozen brownfield default.
+      command: bootstrapCommand(config) ?? DEFAULT_BOOTSTRAP_COMMAND,
       timeoutMs: deps.timeoutMs,
     });
     const outcome = await runGateForWhen({

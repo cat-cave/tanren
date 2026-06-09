@@ -16,6 +16,12 @@ export {
   resolveGateConfig,
   type ResolveGateConfigInput,
 } from "./resolveGateConfig.js";
+export {
+  CI_CONFIG_GATE_STEP,
+  CI_CONFIG_GATE_TIER,
+  invalidCiConfigGateOutcome,
+  isInvalidCiConfigError,
+} from "./gateConfigFailure.js";
 export { advisoryStepNamesForPosture } from "./advisoryGate.js";
 export { runNativeMergeGate } from "./runMergeGate.js";
 export { publishGateVerdict, NATIVE_GATE_CHECK_NAME, type PublishGateVerdictInput } from "./publishGateVerdict.js";
