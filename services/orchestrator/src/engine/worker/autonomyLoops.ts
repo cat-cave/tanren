@@ -22,6 +22,11 @@ import { startMergeCoordinatorSubscriber } from "../merge/subscriber.js";
 import { startPostMergeSubscriber } from "../postMerge/subscriber.js";
 import { buildDeployOnMergeWatcher, buildDemoOnDeployWatcher } from "../postMerge/deployOnMerge.js";
 import { startIntake } from "../forge/intake/bootIntake.js";
+import {
+  startTemplateMaintenance,
+  type BootedTemplateMaintenance,
+  type TemplateWorkspaceProvisioner,
+} from "../templates/maintenance/index.js";
 import { buildCiInsightsLoop } from "./buildCiInsightsLoop.js";
 import { buildNotificationDispatcher } from "../notifications/build.js";
 import { startNotificationSubscriber } from "../notifications/subscriber.js";
@@ -54,6 +59,18 @@ export interface AutonomyLoopsDeps {
    * `deps.pool` — byte-identical to today. Mirrors the run executor's seam.
    */
   runStateWriter?: RunStateWriter;
+  /**
+   * The template-maintenance provisioner (templating-system.md §4): the seam that
+   * checks out + bootstraps a registered template's repo onto a runner so the
+   * maintenance loop can re-run the FULL validation harness over it. PRESENT ⇒ the
+   * template-maintenance loop starts (re-validate due templates · refresh the proof
+   * green / mark degraded + file a regression finding red · the nightly→lts
+   * graduation gate). ABSENT ⇒ the loop is honestly NOT started (no stub provisioner)
+   * — the live allocate/clone/bootstrap plumbing is supplied by the worker boot when
+   * available. The harness per-step timeout rides alongside it.
+   */
+  templateProvisioner?: TemplateWorkspaceProvisioner;
+  templateMaintenanceTimeoutMs?: number;
 }
 
 export interface AutonomyLoops {
@@ -76,6 +93,11 @@ export interface AutonomyLoops {
    * gate's quarantine read has fresh quarantines without an operator opening a page.
    */
   ciInsights: CiInsightsLoop;
+  /**
+   * The template-maintenance loop (templating-system.md §4) — present only when a
+   * `templateProvisioner` was wired; `undefined` otherwise (the loop is not started).
+   */
+  templateMaintenance?: BootedTemplateMaintenance;
   /** Drain every autonomy loop (the SIGTERM path); idempotent. */
   stop: () => Promise<void>;
 }
@@ -246,6 +268,27 @@ export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<Auton
   console.log(
     "[run-worker] CI-insights detect+quarantine + generative root-cause loop started (CI-intelligence PR2+PR3)",
   );
+  // Template maintenance (templating-system.md §4): re-validate registered templates
+  // on their channel cadence, refresh the proof (green) or degrade + file a regression
+  // finding (red), and run the nightly→lts graduation gate. Started ONLY when a live
+  // provisioner is wired (the allocate/clone/bootstrap-a-template-repo seam); absent,
+  // it is honestly not started rather than running against a stub.
+  const templateMaintenance =
+    deps.templateProvisioner === undefined
+      ? undefined
+      : startTemplateMaintenance({
+          pool: deps.pool,
+          secrets: deps.secrets,
+          allocator: deps.allocator,
+          ssh: deps.ssh,
+          identitySecretRef: deps.identitySecretRef,
+          provisioner: deps.templateProvisioner,
+          timeoutMs: deps.templateMaintenanceTimeoutMs ?? 10 * 60_000,
+          ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
+        });
+  if (templateMaintenance !== undefined) {
+    console.log("[run-worker] template-maintenance loop started (templating-system.md §4)");
+  }
   const stop = async (): Promise<void> => {
     dagWalker.stop();
     mergeCoordinator.stop();
@@ -253,10 +296,20 @@ export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<Auton
     notifications.stop();
     intake.stop();
     ciInsights.stop();
+    templateMaintenance?.stop();
     await dagNotifyListener.close();
     await mergeNotifyListener.close();
     await postMergeNotifyListener.close();
     await notificationNotifyListener.close();
   };
-  return { dagWalker, mergeCoordinator, postMerge, notifications, intake, ciInsights, stop };
+  return {
+    dagWalker,
+    mergeCoordinator,
+    postMerge,
+    notifications,
+    intake,
+    ciInsights,
+    ...(templateMaintenance !== undefined && { templateMaintenance }),
+    stop,
+  };
 }
