@@ -24,12 +24,13 @@ import { mergeCapture } from "./capture.js";
 import type { CreatedRepository, CreateRepositoryInput } from "../../contracts/vcsProvider.js";
 import { deriveProductGraph, type DeriveResult } from "./derive.js";
 import type { DeployPreflightCallback, GreenfieldDeployDependency, PrepareDeployCallback } from "./deployDependency.js";
-import type { TemplateRegistryQuery } from "./templateSelection.js";
+import type { SelectedTemplate, TemplateRegistryQuery } from "./templateSelection.js";
 import {
   DEFAULT_TOTAL_ROUNDS,
   InterviewCapture,
   InterviewRoundOutput,
   emptyCapture,
+  type CaptureLifecycle,
   type InterviewAnswerer,
   type InterviewRoundOutput as InterviewRoundOutputType,
   type InterviewSuggestion,
@@ -110,6 +111,11 @@ export interface DeriveFromCaptureInput {
   // authoring the scaffold; absent ⇒ the from-scratch path (the current live default).
   templateRegistryQuery?: TemplateRegistryQuery;
   templateChannelPreference?: "lts" | "nightly";
+  // TEMPLATING WAVE 4 — the no-match → CREATION seam (templating-system.md §3).
+  // When present, selection CREATES a template on no match + seeds from it; absent ⇒
+  // from-scratch. Threaded into `deriveProductGraph` (only consulted with a registry
+  // query). Supplied by the wiring layer — no creation dependency in this engine.
+  createTemplateForNoMatch?: (lifecycle: CaptureLifecycle) => Promise<SelectedTemplate | undefined>;
 }
 
 export async function deriveFromCapture(
@@ -130,6 +136,9 @@ export async function deriveFromCapture(
     ...(input.autonomy === undefined ? {} : { autonomy: input.autonomy }),
     ...(input.deploy === undefined ? {} : { deploy: input.deploy }),
     ...(input.templateRegistryQuery === undefined ? {} : { templateRegistryQuery: input.templateRegistryQuery }),
+    ...(input.createTemplateForNoMatch === undefined
+      ? {}
+      : { createTemplateForNoMatch: input.createTemplateForNoMatch }),
     ...(input.templateChannelPreference === undefined
       ? {}
       : { templateChannelPreference: input.templateChannelPreference }),

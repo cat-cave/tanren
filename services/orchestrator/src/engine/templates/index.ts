@@ -67,4 +67,12 @@ export {
   capabilitiesFor,
   createTemplate,
   maybeCreateTemplateForNoMatch,
+  // Wave-4 LIVE seam impls (research + build-driver) — the real, mountable capability.
+  buildTemplateResearcher,
+  wrapProviderResearcher,
+  buildRunLoopBuildDriver,
+  resolveConvergedProjectFacts,
+  buildTemplateAuditor,
+  type ConvergedProjectFacts,
+  type RunLoopBuildDriverDeps,
 } from "./creation/index.js";
