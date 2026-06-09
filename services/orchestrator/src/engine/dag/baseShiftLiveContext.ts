@@ -16,7 +16,7 @@ import type pg from "pg";
 import { installationFromOrgConfig, type OrgGithubAppInstallation } from "../config/orgConfig.js";
 import { migrateProjectConfig } from "../config/projectConfig.js";
 import type { GovernancePosture, RoutingChainEntry, RoutingTable } from "../config/shared.js";
-import { resolveCredentialsForRun } from "../credentials/resolveCredentials.js";
+import { orgScopeFromRunOrgId, resolveCredentialsForRun } from "../credentials/resolveCredentials.js";
 import { buildEffectiveRouting } from "../worker/runExecutionContext.js";
 
 /** The terminal runner image a live base-shift rebase allocates against when none is set. */
@@ -88,7 +88,7 @@ export async function loadBaseShiftRunContext(pool: pg.Pool, runId: string): Pro
   // The credential resolution reads `organizations.config` (a tenant read) — run it
   // org-scoped so RLS admits the row (the same hop the drive resolver uses).
   const resolved = await runWithOrgScope(pool, orgId, (client) =>
-    resolveCredentialsForRun(client, { projectConfig, orgId }),
+    resolveCredentialsForRun(client, { projectConfig, orgScope: orgScopeFromRunOrgId(orgId) }),
   );
   const installation = installationFromOrgConfig(row.org_config);
   return {

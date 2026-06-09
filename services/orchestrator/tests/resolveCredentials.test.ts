@@ -3,9 +3,17 @@ import { describe, expect, it } from "vitest";
 import { migrateProjectConfig } from "../src/engine/config/index.js";
 import {
   MissingCredentialError,
+  type OrgScope,
   OrgProviderModeUnresolved,
+  UnscopedOrgError,
+  orgScopeFromRunOrgId,
   resolveCredentialsForRun,
 } from "../src/engine/credentials/resolveCredentials.js";
+
+/** A real tenant scope built from a non-empty org id (the run-path shape). */
+function orgScope(orgId: string): OrgScope {
+  return { kind: "org", orgId };
+}
 
 /**
  * Minimal pg.Pool stub for the single org-config read the resolver performs.
@@ -44,9 +52,10 @@ describe("resolveCredentialsForRun", () => {
       version: 1,
       credentials: { defaultLlm: codexEntry(codexProjectRef), githubCredentialRef: githubProjectRef },
     });
-    const resolved = await resolveCredentialsForRun(pool, { projectConfig, orgId: "org_1" });
+    const resolved = await resolveCredentialsForRun(pool, { projectConfig, orgScope: orgScope("org_1") });
     expect(resolved).toEqual({
       defaultLlm: codexEntry(codexProjectRef),
+      github: { kind: "static", ref: githubProjectRef },
       githubCredentialRef: githubProjectRef,
       providerMode: "byok",
     });
@@ -64,9 +73,10 @@ describe("resolveCredentialsForRun", () => {
       version: 1,
       credentials: { githubCredentialRef: githubProjectRef },
     });
-    const resolved = await resolveCredentialsForRun(pool, { projectConfig, orgId: "org_1" });
+    const resolved = await resolveCredentialsForRun(pool, { projectConfig, orgScope: orgScope("org_1") });
     expect(resolved).toEqual({
       defaultLlm: codexEntry(codexOrgRef),
+      github: { kind: "static", ref: githubProjectRef },
       githubCredentialRef: githubProjectRef,
       providerMode: "byok",
     });
@@ -85,11 +95,12 @@ describe("resolveCredentialsForRun", () => {
     });
     const resolved = await resolveCredentialsForRun(pool, {
       projectConfig,
-      orgId: "org_1",
+      orgScope: orgScope("org_1"),
       override: { githubCredentialRef: "credential/github/me/pin" },
     });
     expect(resolved).toEqual({
       defaultLlm: codexEntry(codexProjectRef),
+      github: { kind: "static", ref: "credential/github/me/pin" },
       githubCredentialRef: "credential/github/me/pin",
       providerMode: "byok",
     });
@@ -104,9 +115,10 @@ describe("resolveCredentialsForRun", () => {
     });
     // A project with no bound credentials key (bare version:1 config).
     const projectConfig = migrateProjectConfig({ version: 1 });
-    const resolved = await resolveCredentialsForRun(pool, { projectConfig, orgId: "org_1" });
+    const resolved = await resolveCredentialsForRun(pool, { projectConfig, orgScope: orgScope("org_1") });
     expect(resolved).toEqual({
       defaultLlm: codexEntry(codexOrgRef),
+      github: { kind: "static", ref: githubOrgRef },
       githubCredentialRef: githubOrgRef,
       providerMode: "byok",
     });
@@ -117,7 +129,7 @@ describe("resolveCredentialsForRun", () => {
       org_1: { version: 1, defaultCredentials: { defaultLlm: codexEntry(codexOrgRef) } },
     });
     const projectConfig = migrateProjectConfig({ version: 1 });
-    await expect(resolveCredentialsForRun(pool, { projectConfig, orgId: "org_1" })).rejects.toMatchObject({
+    await expect(resolveCredentialsForRun(pool, { projectConfig, orgScope: orgScope("org_1") })).rejects.toMatchObject({
       name: "MissingCredentialError",
       kind: "github_token",
     });
@@ -125,8 +137,9 @@ describe("resolveCredentialsForRun", () => {
 
   // App-first run resolution (apex v22 finding #2): an org that installed the
   // GitHub App but bound NO static `github_token` can both create the repo
-  // (greenfield) AND RUN — the run resolves to the empty-string App sentinel, so
-  // downstream git ops mint the installation token from `context.installation`.
+  // (greenfield) AND RUN — the run resolves the EXPLICIT `{ kind: "app" }` decision
+  // (wire form: the empty App sentinel), so downstream git ops mint the installation
+  // token from `context.installation`.
   const githubAppBlock = {
     installationId: "12345678",
     appId: "987654",
@@ -134,7 +147,7 @@ describe("resolveCredentialsForRun", () => {
     installedAt: "2026-06-08T00:00:00.000Z",
   };
 
-  it("App-only org (App installed, NO static github_token) resolves the empty App sentinel, NOT MissingCredentialError", async () => {
+  it("App-only org (App installed, NO static github_token) resolves the EXPLICIT { kind: 'app' } decision, NOT MissingCredentialError", async () => {
     const pool = fakePool({
       org_1: {
         version: 1,
@@ -145,8 +158,12 @@ describe("resolveCredentialsForRun", () => {
       },
     });
     const projectConfig = migrateProjectConfig({ version: 1 });
-    const resolved = await resolveCredentialsForRun(pool, { projectConfig, orgId: "org_1" });
-    // The empty sentinel — downstream reads "" as "no static ref ⇒ mint the App token".
+    const resolved = await resolveCredentialsForRun(pool, { projectConfig, orgScope: orgScope("org_1") });
+    // The "App, no static ref" state is the EXPLICIT discriminated variant — NOT a
+    // bare validated empty string.
+    expect(resolved.github).toEqual({ kind: "app" });
+    // Its WIRE form is the documented empty App sentinel: downstream reads "" as
+    // "no static ref ⇒ mint the App token from context.installation".
     expect(resolved.githubCredentialRef).toBe("");
     expect(resolved.providerMode).toBe("byok");
     expect(resolved.defaultLlm).toEqual(codexEntry(codexOrgRef));
@@ -161,7 +178,8 @@ describe("resolveCredentialsForRun", () => {
       },
     });
     const projectConfig = migrateProjectConfig({ version: 1 });
-    const resolved = await resolveCredentialsForRun(pool, { projectConfig, orgId: "org_1" });
+    const resolved = await resolveCredentialsForRun(pool, { projectConfig, orgScope: orgScope("org_1") });
+    expect(resolved.github).toEqual({ kind: "static", ref: githubOrgRef });
     expect(resolved.githubCredentialRef).toBe(githubOrgRef);
   });
 
@@ -171,7 +189,7 @@ describe("resolveCredentialsForRun", () => {
       org_1: { version: 1, defaultCredentials: { defaultLlm: codexEntry(codexOrgRef) } },
     });
     const projectConfig = migrateProjectConfig({ version: 1 });
-    await expect(resolveCredentialsForRun(pool, { projectConfig, orgId: "org_1" })).rejects.toMatchObject({
+    await expect(resolveCredentialsForRun(pool, { projectConfig, orgScope: orgScope("org_1") })).rejects.toMatchObject({
       name: "MissingCredentialError",
       kind: "github_token",
     });
@@ -182,7 +200,7 @@ describe("resolveCredentialsForRun", () => {
     const projectConfig = migrateProjectConfig({ version: 1 });
     let caught: unknown;
     try {
-      await resolveCredentialsForRun(pool, { projectConfig, orgId: "org_1" });
+      await resolveCredentialsForRun(pool, { projectConfig, orgScope: orgScope("org_1") });
     } catch (error) {
       caught = error;
     }
@@ -198,7 +216,7 @@ describe("resolveCredentialsForRun", () => {
     });
     let caught: unknown;
     try {
-      await resolveCredentialsForRun(pool, { projectConfig, orgId: "ghost" });
+      await resolveCredentialsForRun(pool, { projectConfig, orgScope: orgScope("ghost") });
     } catch (error) {
       caught = error;
     }
@@ -206,15 +224,34 @@ describe("resolveCredentialsForRun", () => {
     expect((caught as OrgProviderModeUnresolved).orgId).toBe("ghost");
   });
 
-  it("treats an EMPTY org id ('') with no row as no defaults — the project-config-only path", async () => {
+  it("FAILS LOUD (UnscopedOrgError) when a run path resolves credentials with an EMPTY org id — never a silent BYOK degrade", () => {
+    // The run/forge callers build their scope via `orgScopeFromRunOrgId(row.org_id)`;
+    // an empty/blank/absent org id at a run path is a scoping bug and must throw, not
+    // quietly fall back to project-config-only BYOK (the no_silent_fallbacks doctrine).
+    // An ABSENT (undefined) org id — modeled as a typed variable so the missing-scope
+    // case is covered without a useless literal `undefined` at the call site.
+    const absentOrgId: string | undefined = ((): string | undefined => undefined)();
+    expect(() => orgScopeFromRunOrgId("")).toThrow(UnscopedOrgError);
+    expect(() => orgScopeFromRunOrgId("   ")).toThrow(UnscopedOrgError);
+    expect(() => orgScopeFromRunOrgId(null)).toThrow(UnscopedOrgError);
+    expect(() => orgScopeFromRunOrgId(absentOrgId)).toThrow(UnscopedOrgError);
+  });
+
+  it("the EXPLICIT { kind: 'unscopedPlatform' } scope resolves project-config-only with no org read (the one legitimate org-less path)", async () => {
+    // The org-less mode is reached only by NAMING it — never by coercing an absent
+    // org to "". No org row exists; resolution uses project config + the byok default.
     const pool = fakePool({});
     const projectConfig = migrateProjectConfig({
       version: 1,
       credentials: { defaultLlm: codexEntry(codexProjectRef), githubCredentialRef: githubProjectRef },
     });
-    const resolved = await resolveCredentialsForRun(pool, { projectConfig, orgId: "" });
+    const resolved = await resolveCredentialsForRun(pool, {
+      projectConfig,
+      orgScope: { kind: "unscopedPlatform" },
+    });
     expect(resolved).toEqual({
       defaultLlm: codexEntry(codexProjectRef),
+      github: { kind: "static", ref: githubProjectRef },
       githubCredentialRef: githubProjectRef,
       providerMode: "byok",
     });
@@ -239,7 +276,7 @@ describe("resolveCredentialsForRun", () => {
     const projectConfig = migrateProjectConfig({ version: 1 });
     const resolved = await resolveCredentialsForRun(pool, {
       projectConfig,
-      orgId: "org_1",
+      orgScope: orgScope("org_1"),
       override: { githubCredentialRef: "   " },
     });
     expect(resolved.githubCredentialRef).toBe(githubOrgRef);
@@ -259,7 +296,7 @@ describe("resolveCredentialsForRun", () => {
         },
       });
       const projectConfig = migrateProjectConfig({ version: 1 });
-      const resolved = await resolveCredentialsForRun(pool, { projectConfig, orgId: "org_1" });
+      const resolved = await resolveCredentialsForRun(pool, { projectConfig, orgScope: orgScope("org_1") });
       expect(resolved.providerMode).toBe("managed");
       // The tenant's own default LLM is NOT used — the platform ref is.
       expect(resolved.defaultLlm).toEqual(codexEntry(platformRef));
@@ -275,7 +312,7 @@ describe("resolveCredentialsForRun", () => {
         org_1: { version: 1, providerMode: "byok", defaultCredentials: { github_token: githubOrgRef } },
       });
       const projectConfig = migrateProjectConfig({ version: 1, providerMode: "managed" });
-      const resolved = await resolveCredentialsForRun(pool, { projectConfig, orgId: "org_1" });
+      const resolved = await resolveCredentialsForRun(pool, { projectConfig, orgScope: orgScope("org_1") });
       expect(resolved.providerMode).toBe("managed");
       expect(resolved.defaultLlm.authRef).toBe(platformRef);
     });
@@ -289,7 +326,7 @@ describe("resolveCredentialsForRun", () => {
         },
       });
       const projectConfig = migrateProjectConfig({ version: 1, providerMode: "byok" });
-      const resolved = await resolveCredentialsForRun(pool, { projectConfig, orgId: "org_1" });
+      const resolved = await resolveCredentialsForRun(pool, { projectConfig, orgScope: orgScope("org_1") });
       expect(resolved.providerMode).toBe("byok");
       expect(resolved.defaultLlm).toEqual(codexEntry(codexOrgRef));
       expect(resolved.endpointOverride).toBeUndefined();
@@ -302,7 +339,7 @@ describe("resolveCredentialsForRun", () => {
       });
       const resolved = await resolveCredentialsForRun(pool, {
         projectConfig: migrateProjectConfig({ version: 1 }),
-        orgId: "org_1",
+        orgScope: orgScope("org_1"),
       });
       expect(resolved.defaultLlm.authRef).toBe(platformRef);
     });

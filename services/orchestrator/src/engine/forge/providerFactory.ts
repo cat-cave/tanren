@@ -28,7 +28,7 @@ import type { ProjectConfigV1 } from "../config/index.js";
 import type { Allocator } from "../contracts/allocator.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
-import { resolveCredentialsForRun } from "../credentials/resolveCredentials.js";
+import { type OrgScope, orgScopeFromRunOrgId, resolveCredentialsForRun } from "../credentials/resolveCredentials.js";
 import { ForgeToolsStore } from "../repositories/forgeTools.js";
 import { systemActor } from "../state/actor.js";
 import { buildAnswererAdapter } from "../providers/adapterSelector.js";
@@ -101,18 +101,23 @@ async function loadProjectRunnerContext(pool: QueryClient, projectId: string): P
     throw new ForgeProjectNotFoundError(projectId);
   }
   const projectConfig = migrateProjectConfig(row.config);
-  return resolveForgeRunnerContext(pool, projectConfig, row.orgId ?? "", row.runnerImage);
+  // `projects.org_id` is NOT-NULL; thread it through `orgScopeFromRunOrgId`, which
+  // FAILS LOUD on an empty/absent org rather than coercing `?? ""` into a silent
+  // BYOK/no-defaults degrade (the no_silent_fallbacks doctrine).
+  return resolveForgeRunnerContext(pool, projectConfig, orgScopeFromRunOrgId(row.orgId), row.runnerImage);
 }
 
 /**
  * The greenfield (project-less) resolution: an empty project config laid over
  * the org defaults, against the default runner image. The org's
  * `defaultCredentials` supply the LLM credential, so the interview reasons with a
- * model before any project row exists.
+ * model before any project row exists. The greenfield interview is ALWAYS org-scoped
+ * (`ForgeAnswererTarget.orgId` is mandatory), so the org scope fails loud on an empty
+ * org id like every other run path.
  */
 async function loadOrgRunnerContext(pool: QueryClient, orgId: string): Promise<ForgeRunnerContext> {
   const emptyProjectConfig = migrateProjectConfig({ version: 1 });
-  return resolveForgeRunnerContext(pool, emptyProjectConfig, orgId, DEFAULT_FORGE_RUNNER_IMAGE);
+  return resolveForgeRunnerContext(pool, emptyProjectConfig, orgScopeFromRunOrgId(orgId), DEFAULT_FORGE_RUNNER_IMAGE);
 }
 
 // A Forge answerer never publishes a PR or polls CI, so it needs no GitHub
@@ -126,12 +131,12 @@ const FORGE_UNUSED_GITHUB_REF = "forge/unused-github-credential";
 async function resolveForgeRunnerContext(
   pool: QueryClient,
   projectConfig: ProjectConfigV1,
-  orgId: string,
+  orgScope: OrgScope,
   runnerImage: string,
 ): Promise<ForgeRunnerContext> {
   const resolved = await resolveCredentialsForRun(pool, {
     projectConfig,
-    orgId,
+    orgScope,
     override: { githubCredentialRef: FORGE_UNUSED_GITHUB_REF },
   });
   // The `forge` routing chain head, when pinned (e.g. a cheaper model for
@@ -143,7 +148,10 @@ async function resolveForgeRunnerContext(
     routingForge,
     defaultLlm: resolved.defaultLlm,
     ...(resolved.endpointOverride ? { endpointBaseUrl: resolved.endpointOverride.baseUrl } : {}),
-    orgId,
+    // Both forge paths reach here only through `orgScopeFromRunOrgId` ⇒ a real
+    // `{ kind: "org", orgId }`, so the carried org id is always non-empty (the
+    // allocation org-scoping below no longer needs an empty-org guard).
+    orgId: orgScope.kind === "org" ? orgScope.orgId : "",
   };
 }
 
