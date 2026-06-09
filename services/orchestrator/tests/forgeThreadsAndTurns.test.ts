@@ -212,6 +212,44 @@ describe("ForgeTurnStore", () => {
   });
 });
 
+describe("ForgeTurnStore.append atomicity (audit RC-4 #2): concurrent appends on ONE thread get distinct indices, no 500", () => {
+  it("two concurrent appends on the same thread both succeed with distinct turn_index (one clean 23505 retry)", async () => {
+    const client = new ForgeMemoryClient();
+    // Open the snapshot window so the two appends genuinely race the same MAX+1: the
+    // loser hits the (thread_id, turn_index) unique violation, which the single-statement
+    // INSERT's bounded retry recovers from (re-derives MAX+1 on its own snapshot).
+    client.yieldDuringTurnInsert = true;
+    const thread = await ForgeThreadStore.create(
+      pool(client),
+      { orgId: "org_a", scope: "org", projectId: null, runId: null, title: null },
+      orgAdmin,
+    );
+
+    const appendOne = (): Promise<{ index: number }> =>
+      ForgeTurnStore.append(
+        pool(client),
+        {
+          threadId: thread.id,
+          source: { kind: "operator", userId: orgAdmin.userId },
+          audience: "org:admin",
+          authorKind: "forge_template",
+          render: validRender,
+        },
+        orgAdmin,
+      );
+
+    // Both run concurrently — neither 500s (no unhandled 23505 surfaces to the caller).
+    const [a, b] = await Promise.all([appendOne(), appendOne()]);
+
+    // Both committed, with DISTINCT indices (0 and 1) — the unique constraint held and
+    // the retry assigned the loser the next free index instead of throwing.
+    const indices = [a.index, b.index].sort((x, y) => x - y);
+    expect(indices).toEqual([0, 1]);
+    expect(client.turns).toHaveLength(2);
+    expect(new Set(client.turns.map((t) => t.turn_index)).size).toBe(2);
+  });
+});
+
 describe("actorCanViewAudience", () => {
   it("ranks audiences from project:member up to platform:admin", () => {
     const member: ActorContext = {

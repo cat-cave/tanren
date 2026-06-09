@@ -22,6 +22,13 @@
 
 import { priorityRank, type SpecPriority } from "../state/spec.js";
 
+/**
+ * The minimal query surface a caller-supplied, already-scoped transaction client must
+ * expose for {@link MergeQueueModel.markDequeuedOnClient}. Kept structural so this
+ * pure (DB-free) contract module never imports `pg`.
+ */
+export type SettleQueryClient = { query(sql: string, params?: ReadonlyArray<unknown>): Promise<unknown> };
+
 // ---- Queue snapshot (the ordering input) ----------------------------------
 
 /** The outcome of driving one entry's merge through the per-run merge path. */
@@ -269,6 +276,15 @@ export interface MergeQueueModel {
    * it usually hands off to autonomous re-plan/re-execution.
    */
   markDequeued(queueId: string, reason: DequeueReason): Promise<void>;
+
+  /**
+   * ATOMICITY (audit RC-4 #3): the same dequeue UPDATE as {@link markDequeued} but run
+   * on a CALLER-SUPPLIED client (an already-open org-scoped transaction) instead of
+   * opening its own. The dequeue/infra-blocked settle threads ONE transaction through
+   * the event append AND this update so they both-commit-or-both-roll-back. The client
+   * must already be scoped to the entry's org (the settle transaction opens it).
+   */
+  markDequeuedOnClient(client: SettleQueryClient, queueId: string, reason: DequeueReason): Promise<void>;
 
   /**
    * Native-queue liveness repair: revive old recoverable `dequeued`

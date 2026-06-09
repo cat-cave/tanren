@@ -11,6 +11,7 @@
 import type pg from "pg";
 import type { TokenUsage } from "../providers/types.js";
 import type { EventStore } from "../eventStore.js";
+import type { EventName, EventPayload } from "../events/index.js";
 import { isPool, resolveWritableClient, withJobOrgScope, type QueryClient } from "../data/orgScopedDb.js";
 import {
   type AttributionInput,
@@ -201,11 +202,18 @@ export class CostRecorder {
         context.userId ?? null,
       ],
     );
-    await this.eventStore.append({
-      runId: context.runId,
-      taskId: context.taskId,
-      specId: context.specId,
-      projectId: context.projectId,
+    // ATOMICITY SEAM (audit RC-4 #1): the spend row above is ALREADY committed and is
+    // the AUTHORITATIVE source of truth — the budget gate's `sumSpend` reads
+    // `cost_records.cost_usd` DIRECTLY (row-is-truth), never the event. The
+    // `cost.resolved` event is a derived timeline projection. So a post-row event
+    // append failure must NOT throw (that would surface a "record failed" to the
+    // caller for a spend row that DID commit, and a retry would double-charge);
+    // instead it is surfaced LOUDLY via a console.error so the committed-row /
+    // missing-event divergence is operator-visible and never silent. A second event
+    // append cannot be the loud signal — the same store just failed — so the log IS
+    // the signal. The invariant: a committed spend row is never lost; a missing event
+    // is loud, never silent.
+    await this.appendCostEventNonFatal(context, {
       eventType: "cost.resolved",
       payload: {
         taskId: context.taskId,
@@ -223,11 +231,10 @@ export class CostRecorder {
     // secret-free `cost.unattributed` event naming the ref KIND only, so an
     // operator sees the misconfig and the budget gate fails closed on the row.
     if (source.unattributedRefKind !== null) {
-      await this.eventStore.append({
-        runId: context.runId,
-        taskId: context.taskId,
-        specId: context.specId,
-        projectId: context.projectId,
+      // Post-committed-row append, same atomicity rule as cost.resolved above: loud,
+      // never fatal — the spend row already carries the cost_usd=NULL / 'unattributed'
+      // basis the budget gate fails closed on, so a missing event must not throw.
+      await this.appendCostEventNonFatal(context, {
         eventType: "cost.unattributed",
         payload: {
           taskId: context.taskId,
@@ -249,11 +256,8 @@ export class CostRecorder {
       context.model !== "" &&
       source.billingMode !== "unattributed"
     ) {
-      await this.eventStore.append({
-        runId: context.runId,
-        taskId: context.taskId,
-        specId: context.specId,
-        projectId: context.projectId,
+      // Same atomicity rule: post-committed-row, loud-but-non-fatal.
+      await this.appendCostEventNonFatal(context, {
         eventType: "cost.notional_unpriced",
         payload: {
           provider: source.provider,
@@ -273,6 +277,37 @@ export class CostRecorder {
       tokens,
       provider: source.provider,
     };
+  }
+
+  // ATOMICITY SEAM (audit RC-4 #1): append a derived cost-timeline event AFTER the
+  // authoritative `cost_records` row has committed, never throwing for an append
+  // failure. The committed row is the row-is-truth budget-gate source; a lost event
+  // is a timeline-projection gap, not a spend-accounting one. A failure is surfaced
+  // LOUDLY (console.error) — a retry/second append is impossible (the same store just
+  // failed and the row would double-charge on a `record` retry), so the log IS the
+  // loud signal. Returns nothing; the caller's `record` always resolves with the
+  // committed-row result.
+  private async appendCostEventNonFatal<N extends EventName>(
+    context: CostRecordContext,
+    event: { eventType: N; payload: EventPayload<N> },
+  ): Promise<void> {
+    try {
+      await this.eventStore.append({
+        runId: context.runId,
+        taskId: context.taskId,
+        specId: context.specId,
+        projectId: context.projectId,
+        eventType: event.eventType,
+        payload: event.payload,
+      });
+    } catch (error) {
+      // LOUD-but-non-fatal: the spend row is committed and authoritative; only the
+      // derived event is missing. Surface the divergence so an operator sees it.
+      console.error(
+        `[cost-recorder] cost.event_append_failed: the cost_records row for run ${context.runId} / task ${context.taskId} COMMITTED but its '${event.eventType}' timeline event could NOT be appended; budget accounting (row-is-truth) is UNAFFECTED, but the run timeline is missing this event:`,
+        error,
+      );
+    }
   }
 
   // reconcileRunCostFromCcusage back-fills the REAL ccusage dollar figure for a

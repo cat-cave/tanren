@@ -13,9 +13,16 @@ import {
   type MergeQueueModel,
   type MergeQueueSnapshot,
   type MergeRunner,
+  type SettleQueryClient,
   type SupersededEntry,
 } from "../contracts/mergeCoordinator.js";
-import type { DriveMergeForQueuedRun } from "./coordinator.js";
+import { PgEventStore } from "../eventStore.js";
+import { ClientBoundMergeQueueEventEmitter } from "./coordinatorEvents.js";
+import {
+  type DriveMergeForQueuedRun,
+  type MergeQueueEventEmitter,
+  type MergeSettleTransaction,
+} from "./coordinator.js";
 import { MERGE_CLAIM_LEASE_MS } from "./mergeClaimLease.js";
 import { parseSerializedRetryAfterMs } from "./mergeSerializedRetry.js";
 
@@ -302,6 +309,17 @@ export class PgMergeQueueModel implements MergeQueueModel {
     );
   }
 
+  // ATOMICITY (audit RC-4 #3): the same dequeue UPDATE as markDequeued but on a
+  // CALLER-SUPPLIED already-scoped client, so it joins the settle transaction that
+  // also appended the durable event — both commit or both roll back. The client must
+  // already carry the entry's org scope (PgMergeSettleTransaction opens it).
+  async markDequeuedOnClient(client: SettleQueryClient, queueId: string, reason: DequeueReason): Promise<void> {
+    await client.query(
+      "UPDATE merge_queue SET status = 'dequeued', dequeue_reason = $2, settled_at = now() WHERE queue_id = $1",
+      [queueId, reason],
+    );
+  }
+
   async supersedePriorRunEntry(runId: string): Promise<SupersededEntry | undefined> {
     const orgId = await this.resolveRunOrg(runId);
     if (orgId === null) return undefined;
@@ -401,4 +419,64 @@ export class PgMergeRunner implements MergeRunner {
   async driveMerge(input: { runId: string; projectId: string }): Promise<MergeDriveOutcome> {
     return this.drive(input);
   }
+}
+
+/**
+ * ATOMICITY SEAM (audit RC-4 #3): the pg-backed both-or-neither settle transaction.
+ * Resolves the project's org, opens ONE `runWithOrgScope` transaction, and threads its
+ * single client through BOTH the durable event append (a `ClientBoundMergeQueueEventEmitter`
+ * over `PgEventStore(client)`) AND the `merge_queue` dequeue UPDATE
+ * (`markDequeuedOnClient` on the SAME client). They therefore COMMIT together or ROLL
+ * BACK together — closing the crash-between-writes split brain where the event bus said
+ * "dequeued" while the row stayed `merging`. The event-first ordering inside `work` is
+ * preserved by the caller (`markDequeuedAfterEvent`).
+ *
+ * Only wired in the in-process (non-plane-split) merge path: a plane-split data plane
+ * cannot write `events` directly, so it cannot co-transact the append with the local
+ * queue UPDATE; there the sequential event-first path runs (no `tx` provided).
+ */
+export class PgMergeSettleTransaction implements MergeSettleTransaction {
+  constructor(
+    private readonly pool: pg.Pool,
+    private readonly model: PgMergeQueueModel,
+  ) {}
+
+  async run(
+    projectId: string,
+    work: (ctx: { events: MergeQueueEventEmitter; queue: MergeQueueModel }) => Promise<void>,
+  ): Promise<void> {
+    const orgId = await resolveProjectOrg(this.pool, projectId);
+    if (orgId === null) {
+      throw new Error(`cannot settle merge queue for project ${projectId}: no resolvable org`);
+    }
+    await runWithOrgScope(this.pool, orgId, async (client) => {
+      const events = new ClientBoundMergeQueueEventEmitter(new PgEventStore(client));
+      // A queue facade that delegates to the model but routes the ONE settle write
+      // (`markDequeued`) onto THIS transaction's client. Every other method delegates
+      // verbatim — none is invoked inside the settle unit, but delegating keeps the
+      // facade a faithful MergeQueueModel.
+      const queue = makeClientScopedSettleQueue(this.model, client);
+      await work({ events, queue });
+    });
+  }
+}
+
+/**
+ * Build a {@link MergeQueueModel} facade for the settle transaction: its `markDequeued`
+ * writes on the supplied (already-scoped) `client` via `markDequeuedOnClient`, so it
+ * shares the settle transaction; every other method delegates to `model` unchanged.
+ */
+function makeClientScopedSettleQueue(model: PgMergeQueueModel, client: SettleQueryClient): MergeQueueModel {
+  return {
+    enqueue: (input) => model.enqueue(input),
+    loadSnapshot: (projectId) => model.loadSnapshot(projectId),
+    claim: (queueId) => model.claim(queueId),
+    markMerged: (queueId) => model.markMerged(queueId),
+    releaseClaim: (queueId) => model.releaseClaim(queueId),
+    markDequeued: (queueId, reason) => model.markDequeuedOnClient(client, queueId, reason),
+    markDequeuedOnClient: (c, queueId, reason) => model.markDequeuedOnClient(c, queueId, reason),
+    recoverDequeuedCandidates: (projectId) => model.recoverDequeuedCandidates(projectId),
+    supersedePriorRunEntry: (runId) => model.supersedePriorRunEntry(runId),
+    recoverStaleClaims: (projectId) => model.recoverStaleClaims(projectId),
+  };
 }
