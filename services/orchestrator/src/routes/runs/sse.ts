@@ -37,6 +37,7 @@ import {
   type TaskTimelineEntry,
 } from "./contract.js";
 import { CostStore, EventStore } from "../../engine/repositories/index.js";
+import { RawCostRowSchema, RawEventRowSchema } from "./rowSchemas.js";
 import { systemActor } from "../../engine/state/actor.js";
 import { fetchRunCostsForSnapshot, fetchRunEventsForSnapshot, fetchRunSummary, fetchRunTasks } from "./list.js";
 
@@ -283,6 +284,9 @@ export class SseDriver {
     const { isEventName } = await import("../../engine/events/index.js");
     const out: RunEventRow[] = [];
     for (const row of rows) {
+      // Decode the cursor-key id + event timestamp at the boundary into a real
+      // Date (a malformed row throws here, never a laundered `as Date`).
+      const decoded = RawEventRowSchema.parse(row);
       const eventType = String(row["event_type"]);
       let payload: unknown = row["payload"];
       let redactedPaths: string[] = [];
@@ -297,8 +301,8 @@ export class SseDriver {
         redactedPaths = r.redactedPaths;
       }
       out.push({
-        id: row["id"] as number | string,
-        ts: row["ts"] as Date,
+        id: decoded.id,
+        ts: decoded.ts,
         runId: row["run_id"] === null || row["run_id"] === undefined ? null : String(row["run_id"]),
         taskId: row["task_id"] === null || row["task_id"] === undefined ? null : String(row["task_id"]),
         specId: row["spec_id"] === null || row["spec_id"] === undefined ? null : String(row["spec_id"]),
@@ -319,25 +323,29 @@ export class SseDriver {
       { runId: this.args.runId, orgId: this.args.orgId, sinceId: this.lastCostId },
       systemActor,
     );
-    return rows.map((row) => ({
-      id: row["id"] as number | string,
-      runId: String(row["run_id"]),
-      taskId: String(row["task_id"]),
-      projectId: String(row["project_id"]),
-      cli: String(row["cli"]),
-      provider: String(row["provider"]),
-      model: String(row["model"]),
-      inputTokens: Number(row["input_tokens"] ?? 0),
-      cachedInputTokens: Number(row["cached_input_tokens"] ?? 0),
-      cacheCreationTokens: Number(row["cache_creation_tokens"] ?? 0),
-      outputTokens: Number(row["output_tokens"] ?? 0),
-      reasoningOutputTokens: Number(row["reasoning_output_tokens"] ?? 0),
-      totalTokens: Number(row["total_tokens"] ?? 0),
-      costUsd: row["cost_usd"] === null || row["cost_usd"] === undefined ? null : String(row["cost_usd"]),
-      billingMode: row["billing_mode"] as RunCostRecord["billingMode"],
-      costBasis: row["cost_basis"] as RunCostRecord["costBasis"],
-      recordedAt: row["recorded_at"] as Date,
-    }));
+    return rows.map((row) => {
+      // Decode the cursor-key id + recorded_at timestamp at the boundary.
+      const decoded = RawCostRowSchema.parse(row);
+      return {
+        id: decoded.id,
+        runId: String(row["run_id"]),
+        taskId: String(row["task_id"]),
+        projectId: String(row["project_id"]),
+        cli: String(row["cli"]),
+        provider: String(row["provider"]),
+        model: String(row["model"]),
+        inputTokens: Number(row["input_tokens"] ?? 0),
+        cachedInputTokens: Number(row["cached_input_tokens"] ?? 0),
+        cacheCreationTokens: Number(row["cache_creation_tokens"] ?? 0),
+        outputTokens: Number(row["output_tokens"] ?? 0),
+        reasoningOutputTokens: Number(row["reasoning_output_tokens"] ?? 0),
+        totalTokens: Number(row["total_tokens"] ?? 0),
+        costUsd: row["cost_usd"] === null || row["cost_usd"] === undefined ? null : String(row["cost_usd"]),
+        billingMode: row["billing_mode"] as RunCostRecord["billingMode"],
+        costBasis: row["cost_basis"] as RunCostRecord["costBasis"],
+        recordedAt: decoded.recorded_at,
+      };
+    });
   }
 
   private async emit(name: SseEventName, data: unknown): Promise<void> {
