@@ -11,7 +11,8 @@ import type pg from "pg";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { ActorContext } from "../src/auth/schemas.js";
 import { createAuthMiddleware, type ActorContextEnv } from "../src/middleware/auth.js";
-import { createTemplateRoutes } from "../src/routes/templates/index.js";
+import { createTemplateRoutes, type CreateTemplateFlow } from "../src/routes/templates/index.js";
+import { type CreateTemplateResult, TemplateValidationFailedError } from "../src/engine/templates/index.js";
 
 const ORG = "org_acme";
 const OTHER_ORG = "org_other";
@@ -191,5 +192,86 @@ describe("template registry routes — org scope + fail-loud parse", () => {
     const anon = harness();
     const res = await req(anon.app, "GET", `/orgs/${ORG}/templates`);
     expect([401, 403]).toContain(res.status);
+  });
+});
+
+// The CREATION META-DAG trigger endpoint (wave 4): POST .../templates/create.
+// Mounted only when a `createTemplateFlow` is injected; here we inject a stub so
+// the route wiring + the fail-closed 422 surface are proven (the live flow is
+// exercised end-to-end in templateCreation.test.ts).
+function createHarness(flow: CreateTemplateFlow, who: ActorContext = admin) {
+  const pool = new TemplatesPool();
+  const app = new Hono<ActorContextEnv>();
+  app.use(
+    "*",
+    createAuthMiddleware({
+      store: {
+        async findApiTokenByRaw() {},
+        async loadSession() {},
+        async resolveActorContext() {
+          return who;
+        },
+      } as never,
+      localDevActor: who,
+    }),
+  );
+  app.route("/orgs", createTemplateRoutes({ pool: pool.asPgPool(), createTemplateFlow: flow }));
+  return { app, pool };
+}
+
+const CREATE_REQUEST = { stack: "ts-pnpm", runtime: "node", packageManager: "pnpm" };
+
+// A flow that must never be reached (authz/validation rejects before it runs).
+const unreachableFlow: CreateTemplateFlow = async () => {
+  throw new Error("should not be called");
+};
+
+// A flow that publishes a validated template.
+const publishingFlow: CreateTemplateFlow = async () =>
+  ({
+    template: { id: "template_x", orgId: ORG, repoRef: "cat-cave/ts", status: "validated", channel: "lts" },
+    projectId: "project_x",
+    researchSources: ["https://example.test/a"],
+  }) as unknown as CreateTemplateResult;
+
+// A flow whose template FAILED validation (the fail-closed gate fires).
+const failingFlow: CreateTemplateFlow = async () => {
+  throw new TemplateValidationFailedError("ts-pnpm", "project_x", {
+    positiveControlsPassed: true,
+    negativeControls: { typecheck: "unproven", lint: "proven", test: "proven", mutation: "n/a" },
+    auditorClean: true,
+    validatedAt: "2026-06-09T12:00:00.000Z",
+    validatedSha: "f".repeat(40),
+  });
+};
+
+describe("template creation trigger route — POST .../templates/create", () => {
+  it("triggers the flow + returns 201 with the published template", async () => {
+    const ch = createHarness(publishingFlow);
+    const res = await req(ch.app, "POST", `/orgs/${ORG}/templates/create`, CREATE_REQUEST);
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { template: { status: string }; projectId: string };
+    expect(body.template.status).toBe("validated");
+    expect(body.projectId).toBe("project_x");
+  });
+
+  it("surfaces a failed validation as a LOUD 422 (the fail-closed gate — never a publish)", async () => {
+    const ch = createHarness(failingFlow);
+    const res = await req(ch.app, "POST", `/orgs/${ORG}/templates/create`, CREATE_REQUEST);
+    expect(res.status).toBe(422);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toBe("template_validation_failed");
+  });
+
+  it("denies a non-admin member (403)", async () => {
+    const ch = createHarness(unreachableFlow, member);
+    const res = await req(ch.app, "POST", `/orgs/${ORG}/templates/create`, CREATE_REQUEST);
+    expect(res.status).toBe(403);
+  });
+
+  it("rejects a malformed create request (400)", async () => {
+    const ch = createHarness(unreachableFlow);
+    const res = await req(ch.app, "POST", `/orgs/${ORG}/templates/create`, { stack: "ts-pnpm" });
+    expect(res.status).toBe(400);
   });
 });
