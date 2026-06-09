@@ -1,9 +1,9 @@
-// The VALIDATION PROOF — the "meaningful, not green-by-accident" verdict a template
-// must carry before it can publish. A template is a conforming repo (a `justfile`
-// with `bootstrap`/`tier-1..3`/`build`/`deploy` + a `.tanren/ci.yml`, see
-// docs/roadmap/stack-flexible-contract.md). This module defines the SHAPE of the
-// proof the validation harness (`./validationHarness.ts`) produces and the single
-// pass/fail predicate (`templateValidates`) callers read.
+// The VALIDATION PROOF VERDICT — the single "meaningful, not green-by-accident"
+// pass/fail predicate (`templateValidates`) callers read over a produced proof. A
+// template is a conforming repo (a `justfile` with `bootstrap`/`tier-1..3`/`build`/
+// `deploy` + a `.tanren/ci.yml`, see docs/roadmap/stack-flexible-contract.md); the
+// validation harness (`./validationHarness.ts`) produces the proof, this module
+// decides whether it passes.
 //
 // WHY this exists (the v29 lesson): apex v29's fixture shipped a `tsc --noEmit` on a
 // solution tsconfig with an EMPTY `files` array — it PASSED while checking ZERO
@@ -12,55 +12,26 @@
 // gate that PASSES despite a planted defect is `unproven`, and a template with any
 // declared-but-`unproven` control FAILS validation.
 //
-// SEAM (wave-1 unification): docs/roadmap/templating-system.md §1 places the
-// validation proof on a `TemplateManifestV1.validationProof`. Wave 1 (the registry +
-// `.tanren/template.yml` metadata schema) is NOT merged yet, so this module defines a
-// LOCAL `ValidationProof` matching the doc's shape. When the manifest type lands,
-// re-export `ValidationProof` from there (or assert structural equality) and delete
-// this local definition — the harness keeps producing the same shape either way.
+// THE PROOF SHAPE IS CANONICAL (wave-1 unification): the proof type is
+// `TemplateValidationProof` from `./manifest.js` (the `validationProof` field of
+// `TemplateManifestV1`) and each per-gate verdict is `NegativeControlResult`
+// (`proven`/`unproven`/`"n/a"`). This module imports those — there is NO local proof
+// type — so the harness output is assignable to `TemplateManifestV1.validationProof`
+// directly (the whole point of the unification).
 
+import type { TemplateValidationProof } from "./manifest.js";
 import type { NegativeControlCapability } from "./negativeControls.js";
 
-// The verdict of one negative control:
+// The per-capability negative-control verdict is the canonical `NegativeControlResult`
+// from the manifest schema (re-exported from this barrel via manifest.ts):
 //   - "proven":   the gate CAUGHT the planted defect (it failed as it must).
 //   - "unproven": the gate PASSED despite the planted defect — a no-op gate (the v29
 //                 failure mode). A DECLARED control that lands here FAILS validation.
 //   - "n/a":      the capability is not declared by this template (nothing to prove).
-// There is no "skipped"/"unknown": a control that cannot run is a LOUD "unproven"
-// (with the reason recorded), never a quiet pass.
-export type NegativeControlVerdict = "proven" | "unproven" | "n/a";
+// There is no "skipped"/"unknown": a control that cannot run is a LOUD "unproven",
+// never a quiet pass.
 
-// The per-capability negative-control results. Every declared-gate capability the
-// doc names has a slot; an undeclared one is "n/a". `mutation` is "n/a" unless the
-// template declares it (see docs/roadmap/templating-system.md §1: mutation is an
-// OPTIONAL capability).
-export interface NegativeControls {
-  typecheck: NegativeControlVerdict;
-  lint: NegativeControlVerdict;
-  test: NegativeControlVerdict;
-  mutation: NegativeControlVerdict;
-}
-
-// The full validation proof for a template, matching docs/roadmap/templating-system.md
-// §1's shape. `validatedAt` is an ISO-8601 timestamp from a PASSED-IN clock (Date.now
-// is unavailable in some execution contexts — the harness takes `now` as a param) and
-// `validatedSha` is the template commit the proof was produced against, so a stale
-// proof (the template moved on) is detectable downstream (the §4 maintenance/freshness
-// logic re-runs the harness on every bump).
-export interface ValidationProof {
-  // POSITIVE controls: `just bootstrap` then each declared tier + `build` all passed.
-  positiveControlsPassed: boolean;
-  // NEGATIVE controls: the planted-defect results (the core proof).
-  negativeControls: NegativeControls;
-  // The spec-loop auditor found no open P0/P1 over the template.
-  auditorClean: boolean;
-  // ISO-8601, from the passed-in clock.
-  validatedAt: string;
-  // The template commit SHA this proof was produced against.
-  validatedSha: string;
-}
-
-// The capability keys carried on `NegativeControls`. A 1:1 mirror of the
+// The capability keys carried on the proof's `negativeControls`. A 1:1 mirror of the
 // `NegativeControlCapability` union so adding a capability is a single-point change
 // the type checker enforces across the harness, the injectors, and the predicate.
 export const NEGATIVE_CONTROL_CAPABILITIES: ReadonlyArray<NegativeControlCapability> = Object.freeze([
@@ -77,7 +48,7 @@ export const NEGATIVE_CONTROL_CAPABILITIES: ReadonlyArray<NegativeControlCapabil
 //      (undeclared) control does NOT block, AND
 //   3. the auditor is clean (no open P0/P1).
 // PURE: callers test the verdict deterministically without re-running the harness.
-export function templateValidates(proof: ValidationProof): boolean {
+export function templateValidates(proof: TemplateValidationProof): boolean {
   if (!proof.positiveControlsPassed || !proof.auditorClean) {
     return false;
   }

@@ -1,7 +1,9 @@
 // The TEMPLATE VALIDATION HARNESS — the "meaningful, not green-by-accident" proof
 // (docs/roadmap/templating-system.md §2.4 / §4). It runs OVER a conforming template
 // repo (a `justfile` + `.tanren/ci.yml`, see stack-flexible-contract.md) on an
-// allocated runner and produces a `ValidationProof`. It REUSES the existing native
+// allocated runner and produces a `TemplateValidationProof` (the canonical
+// manifest proof shape, assignable straight to `TemplateManifestV1.validationProof`).
+// It REUSES the existing native
 // gate runner (`../workflow/gate`) + the resolved CI config — it does NOT reinvent
 // gate execution.
 //
@@ -16,7 +18,7 @@
 //   3. AUDITOR — run the spec-loop auditor over the template (injected seam) and
 //      assert no open P0/P1 → `auditorClean`.
 //
-// `templateValidates(proof)` (../templates/validationProof.ts) is the final verdict:
+// `templateValidates(proof)` (./validationProof.ts) is the final verdict:
 // positive pass + every declared negative control proven + auditor clean.
 
 import { bootstrapCommand, type CiConfigV1, tiersFor } from "../ci/index.js";
@@ -24,9 +26,9 @@ import type { RunnerHandle } from "../contracts/allocator.js";
 import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import { runGateForWhen } from "../workflow/gate/runGateForWhen.js";
 import type { GateAppendEvent } from "../workflow/gate/runGateTier.js";
+import { type NegativeControlResult, type TemplateValidationProof } from "./manifest.js";
 import { type GateInvocation, type NegativeControl } from "./negativeControls.js";
 import { createScratchCopy, removeScratchCopy, type ScratchCopyDeps, writeDefectFiles } from "./scratchCopy.js";
-import { type NegativeControls, type NegativeControlVerdict, type ValidationProof } from "./validationProof.js";
 
 // The auditor seam: returns the number of OPEN P0/P1 findings over the template (0 ⇒
 // clean). Injected so the harness is testable without a live LLM and so it reuses the
@@ -76,7 +78,7 @@ const DEFAULT_BUILD_STEP = { name: "build", run: "just build" } as const;
 // that cannot run is a LOUD failure (positive controls / scratch-copy errors throw;
 // the auditor throwing surfaces as auditorClean=false with the error rethrown), never
 // a quiet pass.
-export async function runValidationHarness(input: ValidationHarnessInput): Promise<ValidationProof> {
+export async function runValidationHarness(input: ValidationHarnessInput): Promise<TemplateValidationProof> {
   // Stage 1: POSITIVE controls.
   const positiveControlsPassed = await runPositiveControls(input, input.appendEvent);
 
@@ -153,8 +155,15 @@ async function runPositiveControls(input: ValidationHarnessInput, appendEvent: G
 
 // Stage 2: run every declared negative control over its own scratch copy, returning the
 // per-capability verdict map (undeclared capabilities → "n/a").
-async function runNegativeControls(input: ValidationHarnessInput): Promise<NegativeControls> {
-  const verdicts: NegativeControls = { typecheck: "n/a", lint: "n/a", test: "n/a", mutation: "n/a" };
+async function runNegativeControls(
+  input: ValidationHarnessInput,
+): Promise<TemplateValidationProof["negativeControls"]> {
+  const verdicts: TemplateValidationProof["negativeControls"] = {
+    typecheck: "n/a",
+    lint: "n/a",
+    test: "n/a",
+    mutation: "n/a",
+  };
   const scratchDeps: ScratchCopyDeps = { ssh: input.ssh, target: input.target, timeoutMs: input.timeoutMs };
   let index = 0;
   for (const control of input.negativeControls) {
@@ -173,7 +182,7 @@ async function runOneNegativeControl(
   scratchDeps: ScratchCopyDeps,
   control: NegativeControl,
   index: number,
-): Promise<NegativeControlVerdict> {
+): Promise<NegativeControlResult> {
   const scratchPath = `${input.scratchRoot.replace(/\/+$/u, "")}/nc-${String(index)}-${control.capability}`;
   await createScratchCopy(scratchDeps, input.workspacePath, scratchPath);
   try {

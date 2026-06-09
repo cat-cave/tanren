@@ -3,12 +3,14 @@ import type { RunnerHandle } from "../src/engine/contracts/allocator.js";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
 import type { RunnerCommand, CommandResult, CommandSubstrate } from "../src/engine/contracts/commandSubstrate.js";
 import {
+  isValidCredentialRefFormat,
   storeCodexAuthBundle,
   validateCodexAuthBundle,
   validateCodexCredentialRef,
   validateCredentialRef,
 } from "../src/engine/credentials/codexAuth.js";
 import { codexHomeForRun, materializeCodexAuthBundle } from "../src/engine/credentials/codexMaterializer.js";
+import { deriveAiProviderRef } from "../src/engine/credentials/aiProvider.js";
 
 const target: RunnerHandle = {
   backend: "ssh",
@@ -41,7 +43,7 @@ describe("Codex credential contracts", () => {
   it("rejects invalid auth JSON and implicit-looking refs", () => {
     expect(() => validateCodexAuthBundle("{}")).toThrow("must not be empty");
     expect(() => validateCodexAuthBundle("not-json")).toThrow("valid JSON");
-    expect(() => validateCredentialRef("../.codex/auth.json")).toThrow("explicit managed ref");
+    expect(() => validateCredentialRef("../.codex/auth.json")).toThrow("invalid format");
     expect(() => validateCredentialRef("credential/../codex")).toThrow("relative path segments");
   });
 
@@ -318,18 +320,28 @@ describe("Codex credential contracts", () => {
     );
   });
 
-  it("enforces the managed-ref grammar precisely", () => {
+  it("enforces the credential-ref grammar precisely with a FORMAT error that names the ref", () => {
     // A leading punctuation char is not allowed (first char must be alnum).
-    expect(() => validateCredentialRef("/credential/codex/dev")).toThrow("explicit managed ref");
-    expect(() => validateCredentialRef("-credential/codex/dev")).toThrow("explicit managed ref");
-    // Doubled slashes are rejected even though each char is otherwise legal.
-    expect(() => validateCredentialRef("credential//codex/dev")).toThrow("explicit managed ref");
+    expect(() => validateCredentialRef("/credential/codex/dev")).toThrow("invalid format");
+    expect(() => validateCredentialRef("-credential/codex/dev")).toThrow("invalid format");
+    // Doubled slashes are rejected even though each char is otherwise legal — this
+    // is one of the two shapes that produced the apex v29 BYOK-Codex halt.
+    expect(() => validateCredentialRef("credential//codex/dev")).toThrow("invalid format");
     // Spaces and other punctuation are rejected.
-    expect(() => validateCredentialRef("credential/codex/de v")).toThrow("explicit managed ref");
+    expect(() => validateCredentialRef("credential/codex/de v")).toThrow("invalid format");
+    // The OTHER v29 shape: an EMPTY ref (resolves through the bundle path because
+    // its slug is unrecognized) — now a clear FORMAT error, not "explicit managed ref".
+    expect(() => validateCredentialRef("")).toThrow("invalid format");
+    // The message is the FORMAT message and NAMES the offending ref (so a future
+    // diagnosis is not mis-pointed at a managed-vs-byok mismatch, as v29 was).
+    expect(() => validateCredentialRef("credential//codex/dev")).toThrow(
+      'credential ref has an invalid format: "credential//codex/dev"',
+    );
+    expect(() => validateCredentialRef("credential//codex/dev")).not.toThrow("explicit managed ref");
     // A valid ref is returned verbatim.
     expect(validateCredentialRef("credential/codex/org/o1/default")).toBe("credential/codex/org/o1/default");
     // Over the 200-char cap is rejected.
-    expect(() => validateCredentialRef("c" + "a".repeat(200))).toThrow("explicit managed ref");
+    expect(() => validateCredentialRef("c" + "a".repeat(200))).toThrow("invalid format");
     // Exactly 200 chars is accepted (1 lead + 199 tail).
     expect(validateCredentialRef("c" + "a".repeat(199))).toHaveLength(200);
   });
@@ -337,6 +349,68 @@ describe("Codex credential contracts", () => {
   it("rejects refs whose own segments are relative even when characters are legal", () => {
     expect(() => validateCredentialRef("credential/codex/..")).toThrow("relative path segments");
     expect(() => validateCredentialRef("a/./b")).toThrow("relative path segments");
+  });
+
+  it("isValidCredentialRefFormat mirrors the validator without throwing", () => {
+    expect(isValidCredentialRefFormat("credential/codex/org/o1/default")).toBe(true);
+    expect(isValidCredentialRefFormat("credential/openrouter/platform/default")).toBe(true);
+    // The two apex v29 BYOK-Codex halt shapes are rejected as format-invalid.
+    expect(isValidCredentialRefFormat("")).toBe(false);
+    expect(isValidCredentialRefFormat("credential/codex/org//default")).toBe(false);
+    // Relative segments are format-invalid too.
+    expect(isValidCredentialRefFormat("credential/codex/..")).toBe(false);
+  });
+
+  it("BYOK-Codex e2e: the real deriveAiProviderRef shape stores, validates, and materializes a bundle", async () => {
+    // The EXACT ref the BYOK-Codex connect path produces (deriveAiProviderRef for
+    // the codex provider) — the shape apex v29 was halting on.
+    const ref = deriveAiProviderRef({ provider: "codex", scope: "org", ownerId: "org_6bd6d6cc", name: "default" });
+    expect(ref).toBe("credential/codex/org/org_6bd6d6cc/default");
+
+    // The store side (storeCodexAuthBundle → validateCodexCredentialRef) accepts it.
+    const secrets = new FakeSecretStore();
+    const authJson = JSON.stringify({ auth_mode: "chatgpt", tokens: { access_token: "byok-tok" } });
+    const stored = await storeCodexAuthBundle(secrets, { ref, authJson });
+    expect(stored.ref).toBe(ref);
+
+    // The validate side agrees on the same ref shape — no prefix mismatch.
+    expect(validateCodexCredentialRef(ref)).toBe(ref);
+
+    // The RUN's codex materializer (BYOK, no managed flag) resolves + writes the
+    // bundle without throwing the format error.
+    const ssh = new CapturingSshSubstrate();
+    const result = await materializeCodexAuthBundle({ secrets, ssh, target, ref, runId: "run_byok_codex" });
+    expect(result).toEqual({
+      CODEX_HOME: "/home/tanren/.tanren/runs/run_byok_codex/codex-home",
+      ref,
+      managed: false,
+      bundleAuth: true,
+      redacted: true,
+    });
+    expect(ssh.command).toContain("auth.json");
+    expect(ssh.stdin).toBe(authJson);
+    expect(JSON.stringify(result)).not.toContain("byok-tok");
+  });
+
+  it("MANAGED path still resolves (the grammar applies to managed refs too, unchanged)", async () => {
+    // The managed platform ref satisfies the same grammar and materializes the
+    // OpenRouter config — proving the message/grammar reconciliation did not break
+    // the managed path.
+    const ref = "credential/openrouter/platform/default";
+    expect(validateCredentialRef(ref)).toBe(ref);
+    const secrets = new FakeSecretStore();
+    await secrets.put({ ref, value: "sk-or-managed" });
+    const result = await materializeCodexAuthBundle({
+      secrets,
+      ssh: new CapturingSshSubstrate(),
+      target,
+      ref,
+      runId: "run_managed_e2e",
+      managed: true,
+      endpointBaseUrl: "https://openrouter.ai/api/v1",
+    });
+    expect(result.ref).toBe(ref);
+    expect(result.managed).toBe(true);
   });
 
   it("stores under the validated ref and never mutates the secret value", async () => {

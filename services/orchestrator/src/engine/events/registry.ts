@@ -21,6 +21,7 @@ import {
   WriterStartedPayload,
   WriterSubtaskCompletedPayload,
   loopEventRegistry,
+  templateEventRegistry,
   WriterSubtaskFailedPayload,
   WriterSubtaskStartedPayload,
 } from "./schemas/answerer.js";
@@ -207,10 +208,9 @@ export const EventRegistry = {
   "auditor.rejected": AuditorRejectedPayload,
   // S3: the posture-gate's residual P2/P3 disposition (route-to-dag / fix-if-idle).
   "auditor.findings_routed": AuditorFindingsRoutedPayload,
-
-  // SPEC-LOOP REDESIGN stages (demo-run/triage/convergence) — split into
-  // registry.loop.ts to keep this file under the 500-line cap.
+  // Sub-registries split into their schema modules for the 500-line cap: spec-loop stages (schemas/answerer.ts) + templating registry lifecycle (schemas/templates.ts).
   ...loopEventRegistry,
+  ...templateEventRegistry,
 
   // Runner allocation
   "runner.allocated": RunnerAllocatedPayload,

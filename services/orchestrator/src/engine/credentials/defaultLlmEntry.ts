@@ -1,5 +1,6 @@
 import type { z } from "zod";
 import { RoutingChainEntry } from "../config/shared.js";
+import { isValidCredentialRefFormat } from "./codexAuth.js";
 import { credentialTypeForRef, providerSlugForRef } from "./credentialType.js";
 import {
   harnessAcceptsApiKeyProvider,
@@ -34,6 +35,25 @@ export const DefaultLlmEntry = RoutingChainEntry.superRefine((entry, ctx) => {
       code: "custom",
       message: `default LLM cli ${JSON.stringify(entry.cli)} is not a full-role harness (a default must serve every role)`,
       path: ["cli"],
+    });
+    return;
+  }
+  // Gate the authRef against the SAME grammar the materializer enforces
+  // (`validateCredentialRef`). The base `RoutingChainEntry` only requires a
+  // non-empty string, and the slug/credential-type checks below only inspect the
+  // PREFIX — so without this, a `credential/codex/…` ref that is well-prefixed but
+  // malformed (a doubled-slash, an empty trailing segment, an illegal char) would
+  // store fine and then crash the RUN deep in the codex materializer with the
+  // format error. That is exactly the apex v29 BYOK-Codex halt: the ref-grammar
+  // authority lived only at materialization, not at this config-write chokepoint.
+  // Failing LOUD here (where the value is set) instead of mid-run keeps every
+  // stored default a ref the materializer will accept; it applies to managed refs
+  // too (they satisfy the grammar), so managed mode is unaffected.
+  if (!isValidCredentialRefFormat(entry.authRef)) {
+    ctx.addIssue({
+      code: "custom",
+      message: `default LLM authRef ${JSON.stringify(entry.authRef)} has an invalid credential ref format (must be credential/<slug>/<scope>/<owner>/<name>: single-slash-joined alnum/._- segments, no empty segment)`,
+      path: ["authRef"],
     });
     return;
   }
