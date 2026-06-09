@@ -7,20 +7,33 @@
 // It decides PROGRESS vs STALL from the finding-DELTA across loops + the diff. It is
 // the SOLE loop bound — there is NO retry cap / per-spec rerun limit / timeout halt.
 //
-// The agent's `assessment` is its read; the deterministic loop applies the
+// v24 LIVE BUG (the cause-not-symptom fix): the stall read MUST track the BLOCKING
+// root cause, not "did ANYTHING change". On v24 the loop churned 4+ times on the
+// identical blocking `pnpm test fails` P1 while the stall counter kept RESETTING —
+// because a peripheral, non-blocking finding (an unrelated pnpm-lock fix) changed
+// each round. "Anything changed" is the wrong signal: a blocking root cause that
+// never resolves can churn FOREVER as long as peripheral findings keep moving. The
+// fix: the answerer assesses progress SPECIFICALLY on the worst-severity /
+// merge-gating finding (`blockingRootCauseProgress`), keyed to a STABLE root-cause
+// identity (`blockingRootCauseId`) so "the same vitest failure" is recognized across
+// loops by id/root-cause — NOT surface text. The deterministic policy then drives the
+// consecutive-stall counter off the BLOCKING signal: increment on
+// `unchanged`/`regressed`, reset ONLY on `retired`/`reduced`.
+//
+// The agent's `assessment` is its overall read; the deterministic loop applies the
 // CONFIGURABLE convergence policy (read from `auditPosture`/project config):
-//   (a) total P-score decreasing,
-//   (b) root-causes not recurring,
+//   (a) the BLOCKING root cause is being retired/reduced (the primary stall signal),
+//   (b) total P-score decreasing,
 //   (c) velocity middle-ground (mild leftovers after several rounds → defer as specs,
 //       allow → PASS).
 // PROGRESS → continue the loop. STALL → increment a CONSECUTIVE-stall counter; after N
-// consecutive stalls the run HALTS `convergence_stalled` (a human action: rework the
-// spec / stronger model / fix the environment).
+// consecutive blocking-unchanged stalls the run HALTS `convergence_stalled` (a human
+// action: rework the spec / stronger model / fix the environment).
 import { z } from "zod";
 
 export const CONVERGENCE_ANSWER_SCHEMA_ID = "tanren.convergence_answer.v1" as const;
 
-// The agent's read of the loop's trajectory:
+// The agent's overall read of the loop's trajectory:
 //   - `progress`        — the finding-delta is shrinking / root causes are being
 //                         retired; keep iterating.
 //   - `stalled`         — the same root causes recur with no forward progress; a
@@ -31,9 +44,39 @@ export const CONVERGENCE_ANSWER_SCHEMA_ID = "tanren.convergence_answer.v1" as co
 export const ConvergenceAssessment = z.enum(["progress", "stalled", "velocity_defer"]);
 export type ConvergenceAssessment = z.infer<typeof ConvergenceAssessment>;
 
+// The progress of the BLOCKING root cause — the worst-severity / merge-gating finding
+// that prevents the spec from passing — across this loop vs the prior. This is the
+// PRIMARY stall signal (the v24 cause-not-symptom fix); peripheral, non-blocking
+// findings changing does NOT count as progress on it:
+//   - `retired`   — the blocking root cause is GONE this loop (resolved).
+//   - `reduced`   — materially smaller / lower-severity than the prior loop (forward
+//                   motion on the blocker itself).
+//   - `unchanged` — the SAME blocking root cause recurs MATERIALLY unchanged (a stall
+//                   vote — even if peripheral non-blocking findings changed).
+//   - `regressed` — the blocking root cause is WORSE / a new blocker of equal-or-worse
+//                   severity replaced it (a stall vote).
+//   - `none`      — there is NO blocking finding this loop (no merge-gating finding
+//                   kept in-spec); the blocking-stall signal is vacuous.
+export const BlockingRootCauseProgress = z.enum(["retired", "reduced", "unchanged", "regressed", "none"]);
+export type BlockingRootCauseProgress = z.infer<typeof BlockingRootCauseProgress>;
+
 export const ConvergenceAnswer = z
   .object({
     assessment: ConvergenceAssessment,
+    // The STABLE identity of the worst-severity / merge-gating finding the
+    // blocking-progress read is keyed to — the finding id or a durable root-cause
+    // label (e.g. `pnpm-test-fails`), NOT the surface text. The same blocking root
+    // cause MUST carry the same id across loops so "the same vitest failure" is
+    // recognized as recurring. Empty string ⇒ no blocking finding this loop (pair
+    // with `blockingRootCauseProgress: "none"`).
+    blockingRootCauseId: z
+      .string()
+      .describe(
+        "Stable id/root-cause label of the worst-severity merge-gating finding (NOT surface text), so the same blocker is recognized across loops. Empty when there is no blocking finding.",
+      ),
+    // Progress on the BLOCKING root cause specifically (NOT 'did anything change') —
+    // the primary signal the deterministic stall counter keys off.
+    blockingRootCauseProgress: BlockingRootCauseProgress,
     // The agent's evidence: cite the finding-delta (which root causes were retired,
     // which recurred) and the change since the prior loop. REQUIRED + non-empty so a
     // stall/defer decision is always justified in the timeline.
@@ -41,7 +84,7 @@ export const ConvergenceAnswer = z
       .string()
       .min(1)
       .describe(
-        "Cite the finding-delta across loops: which root causes were retired, which recurred, and whether the total P-score is decreasing.",
+        "Cite the BLOCKING root cause + the finding-delta across loops: which root causes were retired, which recurred, and whether the total P-score is decreasing.",
       ),
   })
   .strict();

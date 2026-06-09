@@ -332,12 +332,21 @@ export const triageAllSpecs: TriageAnswer = {
 
 export const convergenceProgress: ConvergenceAnswer = {
   assessment: "progress",
-  reasoning: "fewer findings than last loop",
+  blockingRootCauseId: "blocker-a",
+  blockingRootCauseProgress: "retired",
+  reasoning: "fewer findings than last loop; the blocking root cause was retired",
 };
-export const convergenceStalled: ConvergenceAnswer = { assessment: "stalled", reasoning: "same root cause recurs" };
+export const convergenceStalled: ConvergenceAnswer = {
+  assessment: "stalled",
+  blockingRootCauseId: "blocker-a",
+  blockingRootCauseProgress: "unchanged",
+  reasoning: "same blocking root cause recurs unchanged",
+};
 export const convergenceVelocity: ConvergenceAnswer = {
   assessment: "velocity_defer",
-  reasoning: "only P3 left after several rounds",
+  blockingRootCauseId: "",
+  blockingRootCauseProgress: "none",
+  reasoning: "only P3 left after several rounds; no blocking finding remains",
 };
 
 // ---- DEMO-RUN fixtures ----------------------------------------------------

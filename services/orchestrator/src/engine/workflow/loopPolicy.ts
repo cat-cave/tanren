@@ -5,7 +5,7 @@
 
 import { type AuditPostureConfig } from "../config/shared.js";
 import { type Finding, type FindingSeverity, severityRank } from "../contracts/findings.js";
-import type { ConvergenceAssessment, TriageWorkItem } from "../answerers/schemas/index.js";
+import type { BlockingRootCauseProgress, ConvergenceAssessment, TriageWorkItem } from "../answerers/schemas/index.js";
 
 // A triaged item's resolved ROUTE — the deterministic decision the loop makes over
 // the agent's `kind` HINT + the item severity + the project posture:
@@ -80,8 +80,12 @@ export function summarizeTriageRouting(routed: ReadonlyArray<RoutedWorkItem>): T
 export type ConvergenceDecision = "continue" | "pass" | "halt";
 
 export interface ConvergenceState {
-  // The number of CONSECUTIVE stalls observed so far (NOT a retry counter). A
-  // `progress`/`velocity_defer` assessment RESETS it to 0; a `stalled` increments it.
+  // The number of CONSECUTIVE BLOCKING-unchanged stalls observed so far (NOT a retry
+  // counter). The v24 cause-not-symptom fix: this tracks the BLOCKING root cause, not
+  // "did anything change". A blocking `retired`/`reduced` (the blocker made forward
+  // motion) RESETS it to 0; a blocking `unchanged`/`regressed` increments it — EVEN IF
+  // peripheral non-blocking findings changed this loop. When there is NO blocking
+  // finding (`none`), the answerer's overall `assessment` drives the reset/increment.
   consecutiveStalls: number;
 }
 
@@ -105,16 +109,38 @@ export interface VelocityDeferPolicy {
   afterStalls: number;
 }
 
+// True iff the blocking root cause is STUCK this loop — the same merge-gating finding
+// recurs materially `unchanged`, or `regressed` to worse. This is the v24 stall signal:
+// it is driven by the BLOCKING root cause, NOT by whether peripheral findings moved.
+function blockingIsStuck(progress: BlockingRootCauseProgress): boolean {
+  return progress === "unchanged" || progress === "regressed";
+}
+
 /**
- * Apply the convergence policy. PURE. Returns the next state + the loop decision:
+ * Apply the convergence policy. PURE. Returns the next state + the loop decision.
+ *
+ * The v24 CAUSE-NOT-SYMPTOM fix: the consecutive-stall counter tracks the BLOCKING
+ * root cause (`blockingProgress`), NOT the overall "did anything change" assessment.
+ * When a blocking (merge-gating) finding exists this loop, its progress is the SOLE
+ * driver of the stall counter — peripheral non-blocking churn can no longer mask a
+ * stuck blocker:
+ *   - blocking `unchanged`/`regressed` → increment the stall counter (a stall vote),
+ *     `halt` once it reaches `maxConsecutiveStalls`, else `continue`. This holds EVEN
+ *     IF the answerer's overall `assessment` was `progress`/`velocity_defer` because
+ *     unrelated findings moved (the exact v24 churn).
+ *   - blocking `retired`/`reduced` → genuine forward motion on the blocker → RESET the
+ *     stall counter; then honor the answerer's overall assessment for the decision
+ *     (`velocity_defer` may `pass`, otherwise `continue`).
+ *
+ * When there is NO blocking finding this loop (`blockingProgress === "none"`), the
+ * answerer's overall `assessment` drives the counter (the original behavior, used for
+ * loopbacks with only non-blocking leftovers):
  *   - `progress`       → reset the stall counter, `continue`.
- *   - `velocity_defer` → reset the stall counter; `pass` if the velocity policy
- *                        HONORS it (enabled · leftovers ≤ maxSeverity · stalls ≥
- *                        afterStalls), else `continue` (the defer is refused — keep
- *                        iterating, fail-closed).
- *   - `stalled`        → increment the stall counter; `halt` once it reaches
- *                        `maxConsecutiveStalls`, else `continue` (give it another
- *                        round — a single stalled read is not yet a human-action halt).
+ *   - `velocity_defer` → reset the stall counter; `pass` if the velocity policy HONORS
+ *                        it (enabled · leftovers ≤ maxSeverity · stalls ≥ afterStalls),
+ *                        else `continue` (the defer is refused — keep iterating).
+ *   - `stalled`        → increment the stall counter; `halt` at `maxConsecutiveStalls`.
+ *
  * `maxConsecutiveStalls` is the SOLE halt bound — there is NO retry cap / timeout.
  *
  * `worstLeftoverSeverity` is the worst severity among the findings KEPT in-spec on
@@ -123,23 +149,41 @@ export interface VelocityDeferPolicy {
  */
 export function applyConvergencePolicy(
   assessment: ConvergenceAssessment,
+  blockingProgress: BlockingRootCauseProgress,
   state: ConvergenceState,
   maxConsecutiveStalls: number,
   velocityPolicy: VelocityDeferPolicy,
   worstLeftoverSeverity?: FindingSeverity,
 ): { state: ConvergenceState; decision: ConvergenceDecision } {
-  if (assessment === "progress") {
+  // PRIMARY signal: a stuck blocking root cause is a stall regardless of the overall
+  // assessment — peripheral progress NEVER resets the counter (the v24 fix).
+  if (blockingIsStuck(blockingProgress)) {
+    const consecutiveStalls = state.consecutiveStalls + 1;
+    const decision: ConvergenceDecision = consecutiveStalls >= maxConsecutiveStalls ? "halt" : "continue";
+    return { state: { consecutiveStalls }, decision };
+  }
+  // The blocking root cause was retired/reduced (forward motion on the blocker), OR
+  // there is no blocking finding. Reset on blocker progress, then honor the overall
+  // assessment. (`retired`/`reduced` ⇒ never a `stalled` vote: the blocker advanced.)
+  const blockerAdvanced = blockingProgress === "retired" || blockingProgress === "reduced";
+  if (blockerAdvanced || assessment === "progress") {
+    if (assessment === "velocity_defer") {
+      const decision: ConvergenceDecision = honorsVelocityDefer(velocityPolicy, state, worstLeftoverSeverity)
+        ? "pass"
+        : "continue";
+      return { state: { consecutiveStalls: 0 }, decision };
+    }
     return { state: { consecutiveStalls: 0 }, decision: "continue" };
   }
+  // No blocking finding (`none`) + the overall assessment is the driver.
   if (assessment === "velocity_defer") {
-    // A defer RESETS the stall counter (it is not a stall — forward motion was made,
-    // the remainder is just deferred). The policy decides whether to honor it.
+    // A defer RESETS the stall counter (it is not a stall — the remainder is deferred).
     const decision: ConvergenceDecision = honorsVelocityDefer(velocityPolicy, state, worstLeftoverSeverity)
       ? "pass"
       : "continue";
     return { state: { consecutiveStalls: 0 }, decision };
   }
-  // stalled
+  // stalled (no blocking finding, overall read is a stall)
   const consecutiveStalls = state.consecutiveStalls + 1;
   const decision: ConvergenceDecision = consecutiveStalls >= maxConsecutiveStalls ? "halt" : "continue";
   return { state: { consecutiveStalls }, decision };
