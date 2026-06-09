@@ -8,6 +8,11 @@ export default defineConfig({
   },
   test: {
     reporters: ["default"],
+    // Reset the process-wide system-pool memo after every test. Unit tests inject
+    // their in-memory pool as the system pool explicitly (runWithSystemScope now
+    // fails loud without one); this clears that injection so it never leaks across
+    // files. See test/setup/systemPool.ts + db/src/orgScope.ts.
+    setupFiles: ["./test/setup/systemPool.ts"],
     // P3-0029 observability: per-glob coverage thresholds for WORKFLOW-CRITICAL
     // modules — the planner-feedback loop stages, the answerer reasoning paths
     // (planner/checker/auditor), the cost-recording path, and the

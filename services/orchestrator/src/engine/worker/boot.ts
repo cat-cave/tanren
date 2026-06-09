@@ -103,7 +103,7 @@ export async function bootRunWorker(): Promise<BootedRunWorker> {
   // Hoisted so the run worker AND the P1d intake poller share the same allocator /
   // SSH / GitHub plumbing (the poller's triage answerer allocates a runner per
   // model call exactly as the Forge route factories do).
-  const allocator = buildAllocatorFromEnv(pool, secrets);
+  const allocator = await buildAllocatorFromEnv(pool, secrets);
   const ssh = new TimedCommandSubstrate(new SshCommandSubstrate(secrets));
   const githubHttp = new TimedGitHubHttpClient(new FetchGitHubHttpClient());
   // The run/merge lifecycle routes its VCS/CI ops through the VcsProvider
@@ -181,18 +181,14 @@ export async function bootRunWorker(): Promise<BootedRunWorker> {
 }
 
 /**
- * Seed the runner SSH identity into the secret store (the same Vault the API
- * uses), from the inline private key or a key file. A no-op when neither env is
- * set (the API may have already seeded it; they share the store). Mirrors
- * `main.ts`'s `seedRunnerIdentitySecret` so the standalone worker is
- * self-contained.
+ * Seed the runner SSH PRIVATE identity into the secret store (the same Vault the
+ * API uses) from a MOUNTED SECRET FILE (`TANREN_RUNNER_IDENTITY_KEY_PATH`) — never
+ * a plaintext env VALUE, so the key material never lands in `docker inspect` /
+ * container env. A no-op when the path is unset (the API may have already seeded
+ * the shared store, or the secret is Vault-seeded out of band). Mirrors `main.ts`'s
+ * `seedRunnerIdentitySecret` so the standalone worker is self-contained.
  */
 async function seedRunnerIdentitySecret(secrets: SecretStore, ref: string): Promise<void> {
-  const inlinePrivateKey = process.env["TANREN_RUNNER_IDENTITY_PRIVATE_KEY"];
-  if (inlinePrivateKey !== undefined && inlinePrivateKey !== "") {
-    await secrets.put({ ref, value: inlinePrivateKey });
-    return;
-  }
   const keyPath = process.env["TANREN_RUNNER_IDENTITY_KEY_PATH"];
   if (keyPath !== undefined && keyPath !== "") {
     await secrets.put({ ref, value: await readFile(keyPath, "utf8") });

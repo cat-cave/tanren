@@ -4,9 +4,33 @@ import { runWithSystemJobScope } from "@tanren/db";
 import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
 import type { Allocator, AllocationRequest, RunnerAllocation } from "../src/engine/contracts/allocator.js";
 
-// The secret manager the cloud allocators store the ephemeral SSH private key
-// in. A fresh in-memory store per call keeps the e2e cases isolated.
-export const memSecrets = (): InMemorySecretStore => new InMemorySecretStore();
+// Canonical Vault refs the cloud-credential tokens are seeded under for the e2e
+// cases. The provider-token env vars carry these REF NAMES; `buildAllocatorFromEnv`
+// resolves the VALUE through the SecretStore. (Real `<provider>` tokens are never
+// plaintext env values — they are Vault refs.)
+export const CLOUD_SECRET_REFS = {
+  hetznerToken: "cloud/hetzner/api-token",
+  doToken: "cloud/do/api-token",
+  gcpToken: "cloud/gcp/access-token",
+  awsAccessKeyId: "cloud/aws/access-key-id",
+  awsSecretAccessKey: "cloud/aws/secret-access-key",
+  k8sToken: "cloud/k8s/token",
+} as const;
+
+// The secret manager the cloud allocators store the ephemeral SSH private key in,
+// PRE-SEEDED with the cloud-credential tokens at their canonical refs (above) so
+// the ref-resolving builders materialize a real token value. A fresh store per
+// call keeps the e2e cases isolated.
+export function memSecrets(): InMemorySecretStore {
+  const store = new InMemorySecretStore();
+  void store.put({ ref: CLOUD_SECRET_REFS.hetznerToken, value: "tok" });
+  void store.put({ ref: CLOUD_SECRET_REFS.doToken, value: "tok" });
+  void store.put({ ref: CLOUD_SECRET_REFS.gcpToken, value: "tok" });
+  void store.put({ ref: CLOUD_SECRET_REFS.awsAccessKeyId, value: "AKIA" });
+  void store.put({ ref: CLOUD_SECRET_REFS.awsSecretAccessKey, value: "secret" });
+  void store.put({ ref: CLOUD_SECRET_REFS.k8sToken, value: "k8s-token" });
+  return store;
+}
 
 // Shared harness for the buildAllocatorFromEnv end-to-end tests. These cases
 // build the allocator straight from env and drive allocate() against a stubbed
@@ -33,9 +57,11 @@ export function allocateScoped(allocator: Allocator, request: AllocationRequest)
   return runWithSystemJobScope(() => allocator.allocate(request));
 }
 
-// Hetzner now manages SSH + host key itself: only the project token is required.
+// Hetzner now manages SSH + host key itself: only the project token is required,
+// and it is a Vault REF (resolved to its value through the SecretStore), never a
+// plaintext env token.
 export const HETZNER_ENV = {
-  TANREN_HETZNER_API_TOKEN: "tok",
+  TANREN_HETZNER_API_TOKEN_REF: CLOUD_SECRET_REFS.hetznerToken,
 };
 
 // A stub `/ssh_keys` create response so the e2e fetch handler can answer the
@@ -59,20 +85,20 @@ const ALLOC_ENV_KEYS = [
   "TANREN_ALLOCATOR_URL",
   "TANREN_ALLOCATOR_TOKEN",
   "TANREN_MANUAL_SSH_HOSTS",
-  "TANREN_HETZNER_API_TOKEN",
+  "TANREN_HETZNER_API_TOKEN_REF",
   "TANREN_HETZNER_SERVER_TYPE",
   "TANREN_HETZNER_IMAGE",
   "TANREN_HETZNER_LOCATION",
   "TANREN_HETZNER_EXTRA_CLOUD_INIT_WRITE_FILES",
   "TANREN_HETZNER_SSH_USER",
-  "TANREN_DO_API_TOKEN",
+  "TANREN_DO_API_TOKEN_REF",
   "TANREN_DO_HOST_FINGERPRINT",
   "TANREN_DO_REGION",
   "TANREN_DO_SIZE",
   "TANREN_DO_IMAGE",
   "TANREN_DO_SSH_KEYS",
   "TANREN_DO_SSH_USER",
-  "TANREN_GCP_ACCESS_TOKEN",
+  "TANREN_GCP_ACCESS_TOKEN_REF",
   "TANREN_GCP_PROJECT",
   "TANREN_GCP_ZONE",
   "TANREN_GCP_SSH_PUBLIC_KEY",
@@ -80,8 +106,8 @@ const ALLOC_ENV_KEYS = [
   "TANREN_GCP_MACHINE_TYPE",
   "TANREN_GCP_IMAGE",
   "TANREN_GCP_SSH_USER",
-  "TANREN_AWS_ACCESS_KEY_ID",
-  "TANREN_AWS_SECRET_ACCESS_KEY",
+  "TANREN_AWS_ACCESS_KEY_ID_REF",
+  "TANREN_AWS_SECRET_ACCESS_KEY_REF",
   "TANREN_AWS_REGION",
   "TANREN_AWS_IMAGE_ID",
   "TANREN_AWS_HOST_FINGERPRINT",
@@ -89,7 +115,7 @@ const ALLOC_ENV_KEYS = [
   "TANREN_AWS_KEY_NAME",
   "TANREN_AWS_SUBNET_ID",
   "TANREN_AWS_SECURITY_GROUP_IDS",
-  "TANREN_AWS_SESSION_TOKEN",
+  "TANREN_AWS_SESSION_TOKEN_REF",
   "TANREN_AWS_USER_DATA",
   "TANREN_AWS_SSH_USER",
   "TANREN_K8S_API_SERVER",
