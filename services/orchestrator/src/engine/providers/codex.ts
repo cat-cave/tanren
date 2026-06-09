@@ -121,7 +121,7 @@ export function createCodexWriter(dependencies: CodexWriterDependencies): Writer
       // is not a codex bundle, so there is nothing to write back — skip it
       // (storeCodexAuthBundle would reject the non-codex ref anyway).
       if (auth.bundleAuth) {
-        await persistRefreshedCodexAuthBestEffort({
+        await persistRefreshedCodexAuth({
           secrets: dependencies.secrets,
           ssh: dependencies.ssh,
           target: dependencies.target,
@@ -215,7 +215,7 @@ export function createCodexAnswerer<TOutput>(dependencies: CodexAnswererDependen
       // Only the BYOK bundle path has a rotating token — managed / BYOK api_key
       // auth is a static key, so skip the write-back (mirrors the writer path).
       if (auth.bundleAuth) {
-        await persistRefreshedCodexAuthBestEffort({
+        await persistRefreshedCodexAuth({
           secrets: dependencies.secrets,
           ssh: dependencies.ssh,
           target: dependencies.target,
@@ -249,7 +249,7 @@ export function createCodexAnswerer<TOutput>(dependencies: CodexAnswererDependen
   };
 }
 
-async function persistRefreshedCodexAuthBestEffort(input: {
+export async function persistRefreshedCodexAuth(input: {
   secrets: SecretStore;
   ssh: CommandSubstrate;
   target: RunnerHandle;
@@ -264,10 +264,19 @@ async function persistRefreshedCodexAuthBestEffort(input: {
   if (result.exitCode !== 0 || result.timedOut || result.failure !== undefined) {
     return;
   }
+  // no_silent_fallbacks: a failed auth-bundle store is NOT benign. Codex rotated its
+  // access/refresh tokens during the run; if we cannot persist the new bundle the
+  // NEXT run authenticates with the stale (possibly already-revoked) refresh token —
+  // a real credential corruption. Log LOUD and PROPAGATE so the rotation failure is
+  // visible, never silently swallowed into a future auth break.
   try {
     await storeCodexAuthBundle(input.secrets, { ref: input.ref, authJson: result.stdout });
-  } catch {
-    // best-effort: a failed auth-bundle store is non-fatal to the run
+  } catch (error) {
+    console.error(
+      `[codex] failed to persist rotated auth bundle for ${input.ref}; the next run would reuse the stale token:`,
+      error instanceof Error ? error.message : String(error),
+    );
+    throw error;
   }
 }
 

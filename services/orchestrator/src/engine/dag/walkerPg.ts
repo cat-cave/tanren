@@ -7,10 +7,10 @@
 //   - SpecRunDagEnqueuer: createQueuedRunFromSpec under a platform-admin actor carrying
 //     the project's org (the atomic pending→active claim is the idempotency boundary). A
 //     speculative start threads the dynamic base + skips the done-only dependency gate.
-//   - PgDagEventEmitter: writes dag.spec.enqueued / dag.spec.speculative /
-//     dag.spec.speculation_held / dag.drained / dag.budget.paused / dag.budget.milestone
-//     (the budget-fraction heads-up) / dag.concurrency.saturated through the single
-//     org-scoped event-writer seam.
+//   - PgDagEventEmitter: writes the dag.* events (enqueued / speculative /
+//     speculation_held / drained / budget.paused / budget.milestone /
+//     concurrency.saturated / config.corrupt) through the single org-scoped
+//     event-writer seam.
 
 import { runWithJobOrgId, runWithOrgScope, runWithSystemScope } from "@tanren/db";
 import type pg from "pg";
@@ -25,6 +25,7 @@ import type {
   DagSpecPhase,
   DagTickPlan,
 } from "../contracts/dagWalker.js";
+import type { DagConfigCorruptPayload } from "../events/schemas/dag.js";
 import { type EventStore, PgEventStore } from "../eventStore.js";
 import { SpecPriority } from "../state/spec.js";
 import { createQueuedRunFromSpec } from "../workflow/projectSpec.js";
@@ -205,6 +206,9 @@ export class SpecRunDagEnqueuer implements DagEnqueuer {
   }
 }
 
+/** The `dag.config.corrupt` emit input: the project + the event payload. */
+export type ConfigCorruptInput = { projectId: string } & DagConfigCorruptPayload;
+
 /** What the walker needs to emit a dag.* event (org-scoped, through eventStore). */
 interface DagEventEmitter {
   emitSpecEnqueued(input: {
@@ -258,6 +262,10 @@ interface DagEventEmitter {
   }): Promise<boolean>;
   /** The concurrency-saturation hold: ready specs held back because no slot is free. */
   emitConcurrencySaturated(input: { projectId: string; plan: DagTickPlan }): Promise<void>;
+  /** no_silent_fallbacks (LOUD-DEFAULT): a corrupt persisted project config the walker
+   * read while resolving a NON-merge eagerness knob; it proceeds at the SAFE default but
+   * surfaces the corruption here (and logs) rather than swallowing it. */
+  emitConfigCorrupt(input: ConfigCorruptInput): Promise<void>;
 }
 
 /**
@@ -372,15 +380,12 @@ export class PgDagEventEmitter implements DagEventEmitter {
   }
 
   async emitDrained(input: { projectId: string; plan: DagTickPlan }): Promise<void> {
+    const { doneCount, inFlightCount, blockedCount } = input.plan;
     await this.withScopedStore(input.projectId, (store) =>
       store.append({
         projectId: input.projectId,
         eventType: "dag.drained",
-        payload: {
-          doneCount: input.plan.doneCount,
-          inFlightCount: input.plan.inFlightCount,
-          blockedCount: input.plan.blockedCount,
-        },
+        payload: { doneCount, inFlightCount, blockedCount },
       }),
     );
   }
@@ -393,17 +398,12 @@ export class PgDagEventEmitter implements DagEventEmitter {
     readyHeldBack: number;
     reason?: "unpriced_spend" | "unparseable_config";
   }): Promise<void> {
-    await this.withScopedStore(input.projectId, (store) =>
+    const { projectId, ceilingUsd, spentUsd, period, readyHeldBack, reason } = input;
+    await this.withScopedStore(projectId, (store) =>
       store.append({
-        projectId: input.projectId,
+        projectId,
         eventType: "dag.budget.paused",
-        payload: {
-          ceilingUsd: input.ceilingUsd,
-          spentUsd: input.spentUsd,
-          period: input.period,
-          readyHeldBack: input.readyHeldBack,
-          ...(input.reason !== undefined && { reason: input.reason }),
-        },
+        payload: { ceilingUsd, spentUsd, period, readyHeldBack, ...(reason !== undefined && { reason }) },
       }),
     );
   }
@@ -463,38 +463,35 @@ export class PgDagEventEmitter implements DagEventEmitter {
   }
 
   async emitConcurrencySaturated(input: { projectId: string; plan: DagTickPlan }): Promise<void> {
+    const { readyHeldBack, inFlightCount, concurrencyCeiling } = input.plan;
     await this.withScopedStore(input.projectId, (store) =>
       store.append({
         projectId: input.projectId,
         eventType: "dag.concurrency.saturated",
-        payload: {
-          readyHeldBack: input.plan.readyHeldBack,
-          inFlightCount: input.plan.inFlightCount,
-          concurrencyCeiling: input.plan.concurrencyCeiling,
-        },
+        payload: { readyHeldBack, inFlightCount, concurrencyCeiling },
       }),
+    );
+  }
+
+  async emitConfigCorrupt({ projectId, ...payload }: ConfigCorruptInput): Promise<void> {
+    await this.withScopedStore(projectId, (store) =>
+      store.append({ projectId, eventType: "dag.config.corrupt", payload }),
     );
   }
 }
 
-/**
- * The `ts` window clause for a budget milestone dedup — mirrors the budget-sum window in
- * `budgetGate.ts` so a milestone re-arms at the SAME calendar boundary the spend window
- * resets at. `total` is the lifetime cap (no clause); the rest are calendar-anchored via
- * `date_trunc`. The period is a frozen `BudgetPeriod` enum member (never user input), so
- * the trunc unit is constant and the query stays parameter-free for project + band.
- */
+// The `ts` window clause for a budget milestone dedup — mirrors the budget-sum window in
+// `budgetGate.ts` so a milestone re-arms at the SAME calendar boundary the spend window
+// resets at. The period is a frozen `BudgetPeriod` enum member (never user input), so the
+// trunc unit is constant and the query stays parameter-free for project + band.
 function budgetMilestoneWindowClause(period: BudgetPeriod): string {
-  switch (period) {
-    case "monthly":
-      return " AND ts >= date_trunc('month', now())";
-    case "quarterly":
-      return " AND ts >= date_trunc('quarter', now())";
-    case "annual":
-      return " AND ts >= date_trunc('year', now())";
-    case "total":
-      return "";
-  }
+  // `total` is the lifetime cap (no clause); the rest are calendar-anchored.
+  const trunc: Record<Exclude<BudgetPeriod, "total">, string> = {
+    monthly: "month",
+    quarterly: "quarter",
+    annual: "year",
+  };
+  return period === "total" ? "" : ` AND ts >= date_trunc('${trunc[period]}', now())`;
 }
 
 export type { DagEventEmitter };

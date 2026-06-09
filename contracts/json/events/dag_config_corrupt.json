@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "appliedDefault": {
+      "additionalProperties": false,
+      "properties": {
+        "depthCap": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "threshold": {
+          "enum": [
+            "conservative",
+            "moderate",
+            "aggressive"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "threshold",
+        "depthCap"
+      ],
+      "type": "object"
+    },
+    "knob": {
+      "const": "speculation_config",
+      "type": "string"
+    },
+    "reason": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "knob",
+    "appliedDefault",
+    "reason"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.dag.config.corrupt"
+}
