@@ -109,13 +109,20 @@ export async function withJjLocalIntegration<T>(
  * spec-vs-spec `conflict` the coordinator routes to the resolver. A clean stack ⇒ export
  * the clean ref + read headSha/treeHash.
  */
-async function integrateOverWorkspace(
+export async function integrateOverWorkspace(
   live: LiveJjWorkspace,
   ssh: CommandSubstrate,
   input: JjLocalIntegrationInput,
 ): Promise<JjLocalIntegrationResult> {
   const { core, workspacePath, target } = live;
   const ws = await core.openWorkspace({ repoUrl: input.repoUrl, baseBranch: input.baseBranch, path: workspacePath });
+  // §3.5 PREP (SAME as the jj applier's gather() / the base-shift rebase): `jj git clone`
+  // imports each member's NON-default branch only as a REMOTE-tracking bookmark
+  // (`<branch>@origin`), which jj treats as IMMUTABLE — rebasing it refuses with "would
+  // rewrite immutable commits". So track each member's remote bookmark as a LOCAL `<branch>`
+  // bookmark (the mutable name we rebase + read back), and empty the immutable set for THIS
+  // short-lived workspace. Without this every member rebase refuses → the whole batch wedges.
+  await prepareMemberBookmarks(ssh, target, workspacePath, input.members, input.timeoutMs);
   // Create the local integration bookmark at the base head (NEVER a host ref). After this,
   // the accumulated integration head is tracked purely from each rebase result — no
   // intermediate host writes, no re-reads.
@@ -125,7 +132,9 @@ async function integrateOverWorkspace(
   const memberHeadShas: Record<string, string> = {};
   const merged: string[] = [];
   for (const member of input.members) {
-    // The member's remote bookmark head AT integration time (the divergence key).
+    // The member's remote bookmark head AT integration time (the divergence key) — read
+    // from the REMOTE-tracking ref, which a LOCAL rebase below never advances (it stays the
+    // pristine pre-integration head).
     memberHeadShas[member.specId] = await readBookmarkSha(
       ssh,
       target,
@@ -133,9 +142,12 @@ async function integrateOverWorkspace(
       `${member.branch}@origin`,
       input.timeoutMs,
     );
-    // Rebase the member's segment onto the accumulated integration head. jj first-class
-    // conflicts: a conflicting rebase SUCCEEDS + records the conflict IN the commit.
-    const rebase = await core.rebaseOnto(ws, `${member.branch}@origin`, accumulatedHead);
+    // Rebase the member's segment (the tracked LOCAL bookmark, NOT the immutable remote one)
+    // onto the accumulated integration head. jj first-class conflicts: a conflicting rebase
+    // SUCCEEDS + records the conflict IN the commit. `rebaseOnto` reads the post-rebase head
+    // from the LOCAL `<branch>` bookmark — which the local rewrite DID advance (the
+    // remote-tracking `<branch>@origin` would NOT, yielding the un-rebased head, §3.5).
+    const rebase = await core.rebaseOnto(ws, member.branch, accumulatedHead);
     accumulatedHead = rebase.headSha;
     // Fast-forward the integration bookmark to the rebased member head (the new top).
     await setBookmark(ssh, target, workspacePath, input.localRef, accumulatedHead, input.timeoutMs);
@@ -154,10 +166,39 @@ async function integrateOverWorkspace(
   }
 
   // Export the CLEAN local ref (REFUSES a still-conflicted ref — the §2 boundary) +
-  // materialize the node's head + tree.
+  // materialize the node's head + tree. The export wrote the git ref into the colocated
+  // .git, so the tree is read from git off the exported head sha.
   const exported = await core.exportCleanGitRef(ws, input.localRef);
-  const treeHash = await readTreeHash(ssh, target, workspacePath, input.localRef, input.timeoutMs);
+  const treeHash = await readTreeHash(ssh, target, workspacePath, exported.headSha, input.timeoutMs);
   return { outcome: "integrated", localRef: input.localRef, headSha: exported.headSha, treeHash, memberHeadShas };
+}
+
+/**
+ * §3.5 prep: track each member's REMOTE bookmark as a LOCAL bookmark (the mutable name the
+ * member rebase names + reads back), and empty the immutable set so a published head can be
+ * rewritten in THIS short-lived workspace. Mirrors `jjWorkspaceApplier.gather()` +
+ * `baseShiftLiveRebase` verbatim. FAIL-CLOSED: a track/config failure throws (no `|| true`).
+ */
+async function prepareMemberBookmarks(
+  ssh: CommandSubstrate,
+  target: RunnerHandle,
+  workspacePath: string,
+  members: ReadonlyArray<JjIntegrationMember>,
+  timeoutMs: number,
+): Promise<void> {
+  // jj 0.42 `bookmark track` takes the bare bookmark NAME (not `<name>@origin`) plus
+  // `--remote`; it imports `<name>@origin` as the LOCAL `<name>` bookmark.
+  const trackCommands = members.map((m) => `jj bookmark track ${quoteSshShellArg(m.branch)} --remote origin`);
+  await runWorkspaceSshCommand(ssh, target, {
+    label: "jj-local integration: track member bookmarks + allow rewriting them",
+    cwd: workspacePath,
+    timeoutMs,
+    command: [
+      "set -eu",
+      ...trackCommands,
+      `jj config set --repo ${quoteSshShellArg('revset-aliases."immutable_heads()"')} ${quoteSshShellArg("none()")}`,
+    ].join(" && "),
+  });
 }
 
 /** Read a bookmark's commit sha via jj's `commit_id` template (the value `jj git export` writes). */
@@ -201,23 +242,28 @@ async function setBookmark(
   });
 }
 
-/** Read the integrated head's tree hash (the materialized node's `treeHash`). */
+/**
+ * Read the integrated head's git tree hash (the materialized node's `treeHash`) off the
+ * exported head sha. jj 0.42 has NO `tree_id` template keyword on a Commit, and the
+ * workspace is `--colocate`d (the export wrote a real git ref), so `git rev-parse
+ * <sha>^{tree}` is the stable read. The tree hash is the content identity proof reuse keys on.
+ */
 async function readTreeHash(
   ssh: CommandSubstrate,
   target: RunnerHandle,
   workspacePath: string,
-  bookmark: string,
+  headSha: string,
   timeoutMs: number,
 ): Promise<string> {
   const out = await runWorkspaceSshCommand(ssh, target, {
-    label: "jj read tree hash",
+    label: "jj-local integration: read tree hash",
     cwd: workspacePath,
     timeoutMs,
-    command: `jj log -r ${quoteSshShellArg(bookmark)} --no-graph -T 'commit_id ++ "\\t" ++ tree_id'`,
+    command: `git rev-parse ${quoteSshShellArg(`${headSha}^{tree}`)}`,
   });
-  const treeId = out.stdout.trim().split("\t")[1]?.trim() ?? "";
-  if (treeId === "") {
-    throw new Error(`jj-local integration: ${bookmark} did not resolve a tree hash`);
+  const treeId = out.stdout.trim();
+  if (!/^[0-9a-f]{40}$/u.test(treeId)) {
+    throw new Error(`jj-local integration: ${headSha} did not resolve a git tree hash`);
   }
   return treeId;
 }

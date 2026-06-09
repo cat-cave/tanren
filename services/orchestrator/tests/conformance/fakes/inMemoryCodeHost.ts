@@ -14,6 +14,7 @@ import type {
   LandAuthorizedRefInput,
   LandResult,
 } from "../../../src/engine/contracts/codeHost.js";
+import { LandCasRejectedError } from "../../../src/engine/providers/githubCodeHost.js";
 
 interface RepoState {
   defaultBranch: string;
@@ -82,9 +83,11 @@ export class InMemoryCodeHost implements CodeHost {
   async landAuthorizedRef(input: LandAuthorizedRefInput): Promise<LandResult> {
     const st = this.require(input.repo);
     const current = st.branches.get(input.intoMain);
-    // Compare-and-swap: REJECT if main moved underneath (never blind-overwrite).
+    // Compare-and-swap: REJECT if main moved underneath (never blind-overwrite). Throws
+    // the SAME typed {@link LandCasRejectedError} the GitHub impl does, so the merge
+    // authority's TYPED CAS classification (`instanceof`, §3.2) is exercised here too.
     if (current !== input.expectedMainSha) {
-      throw new Error(`land rejected: ${input.intoMain} is ${current ?? "absent"}, expected ${input.expectedMainSha}`);
+      throw new LandCasRejectedError(input.intoMain, input.expectedMainSha, current);
     }
     st.branches.set(input.intoMain, input.authorizedSha);
     return { mainSha: input.authorizedSha };

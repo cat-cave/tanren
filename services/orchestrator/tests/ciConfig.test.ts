@@ -215,6 +215,28 @@ when:
   it("rejects unknown top-level keys (strict)", () => {
     expect(() => resolveCiConfig(`${VALID}extra: nope\n`)).toThrow(CiConfigValidationError);
   });
+
+  // §3.12: every tier is mapped, but NONE to pre_merge. `runGateForWhen("pre_merge")` would
+  // return a passing EMPTY verdict (a vacuous pass = the merge authority lands anything), so
+  // the config MUST fail closed rather than authorize an un-gated merge.
+  it("rejects a config that leaves pre_merge UNCOVERED (vacuous-pass merge authority)", () => {
+    const noPreMerge = `version: 1
+tiers:
+  fast:
+    - name: lint
+      run: pnpm lint
+  slow:
+    - name: build
+      run: pnpm build
+when:
+  fast:
+    - per_iteration
+  slow:
+    - pre_audit
+`;
+    const err = expectValidationError(noPreMerge);
+    expect(err.message).toContain("pre_merge");
+  });
 });
 
 describe("YAML parser", () => {
@@ -231,6 +253,25 @@ describe("YAML parser", () => {
 
   it("rejects tab indentation", () => {
     expect(() => parseYaml("tiers:\n\tfast: x")).toThrow(CiYamlParseError);
+  });
+
+  // §3.12: a tab in the leading INDENTATION is forbidden even when the line is deeper —
+  // the reject is on the indentation region, not "any line that contains a tab".
+  it("rejects a tab in the indentation of an indented line", () => {
+    expect(() => parseYaml("tiers:\n  fast:\n  \tnested: x")).toThrow(CiYamlParseError);
+  });
+
+  // §3.12: a tab INSIDE a quoted value (content, not indentation) is VALID — the old check
+  // false-rejected any indented line containing a tab anywhere.
+  it("allows a literal tab inside a quoted value on an indented line", () => {
+    const parsed = parseYaml('outer:\n  run: "a\tb"\n') as Record<string, Record<string, unknown>>;
+    expect(parsed.outer.run).toBe("a\tb");
+  });
+
+  // §3.12: a duplicate mapping key must FAIL LOUDLY (the old last-wins silently shadowed the
+  // earlier value — a writer-editable ci.yml could redefine pre_merge coverage unnoticed).
+  it("rejects a duplicate mapping key (no silent last-wins)", () => {
+    expect(() => parseYaml("a: 1\nb: 2\na: 3\n")).toThrow(/duplicate mapping key/u);
   });
 
   it("rejects documents that do not start at column 0", () => {

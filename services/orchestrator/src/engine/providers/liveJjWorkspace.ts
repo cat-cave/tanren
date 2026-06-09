@@ -36,10 +36,12 @@ import { workspaceRepoPathForRun } from "../workspace/paths.js";
 import {
   autoSnapshotWorkingEdit,
   identityJjRefResolver,
+  type JjCloneCredential,
   type JjCommitIdentity,
   JjWorkspaceVcsCore,
 } from "./jjWorkspaceVcsCore.js";
 import { resolveBotPushIdentity } from "./botPushIdentity.js";
+import { githubHttpsRemote, parseGitHubRepository } from "./github.js";
 import type { GithubAppTokenMinter } from "./githubAppTokenMinter.js";
 
 /** The terminal runner image a live jj workspace allocates against when none is given. */
@@ -182,6 +184,28 @@ export async function buildLiveJjWorkspace(deps: LiveJjWorkspaceDeps): Promise<L
     });
     const tokenSource = cloneTokenSource(facts.installation, staticRef);
 
+    // §3.4 AUTHENTICATED CLONE: resolve the App-first/static CLONE token off the SAME
+    // credential the bot identity came from, and thread it into the jj core as the
+    // `cloneCredential` so `jj git clone` authenticates the FETCH (not just the commit
+    // author). Without this a PRIVATE-repo clone fails at the first fetch — killing all
+    // three flag-on jj paths. Anonymous only when neither installation nor static ref is
+    // configured (a genuinely public clone). The token travels only through the core's
+    // stdin-fed askpass helper, never the command line.
+    const cloneCredential: JjCloneCredential | undefined =
+      tokenSource === "anonymous"
+        ? undefined
+        : {
+            token: (
+              await deps.vcsProvider.resolveToken({
+                secrets: deps.secrets,
+                ...(facts.installation !== undefined && { installation: facts.installation }),
+                ...(staticRef !== "" && { staticRef }),
+                ...(deps.githubAppMinter !== undefined && { minter: deps.githubAppMinter }),
+              })
+            ).token,
+            httpsRemote: githubHttpsRemote(parseGitHubRepository(facts.repoUrl)),
+          };
+
     // Construct the jj core over the LIVE substrate + allocated runner with the
     // PRODUCTION defaults — identity ref resolver (real URL/sha) + auto-snapshot edit.
     // The conformance suite has already pinned every jj-CLI behavior; this is just the
@@ -196,6 +220,7 @@ export async function buildLiveJjWorkspace(deps: LiveJjWorkspaceDeps): Promise<L
       refResolver: identityJjRefResolver,
       workingEdit: autoSnapshotWorkingEdit,
       ...(commitIdentity !== undefined && { commitIdentity }),
+      ...(cloneCredential !== undefined && { cloneCredential }),
     });
 
     return {

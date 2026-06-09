@@ -95,6 +95,21 @@ export const CiConfigV1 = z
         });
       }
     }
+    // §3.12 FAIL-CLOSED PRE_MERGE COVERAGE: at least one tier MUST map to `pre_merge`. The
+    // `pre_merge` gate is the MERGE AUTHORITY — `runGateForWhen` returns a PASSING empty
+    // verdict when no tier maps to it (an empty tier set is a vacuous pass), so a config that
+    // leaves `pre_merge` uncovered makes `tanren/gate: success` a VACUOUS pass that lands
+    // anything. A repo-sourced (writer-editable) ci.yml that drops pre_merge coverage must
+    // FAIL the config (loud), never silently authorize an un-gated merge.
+    const coversPreMerge = Object.values(cfg.when).some((points) => points.includes("pre_merge"));
+    if (!coversPreMerge) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["when"],
+        message:
+          "no tier maps to `pre_merge` — the pre_merge gate is the merge authority; an uncovered pre_merge is a vacuous pass (fail-closed)",
+      });
+    }
   });
 export type CiConfigV1 = z.infer<typeof CiConfigV1>;
 

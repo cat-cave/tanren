@@ -23,12 +23,19 @@ interface Line {
 }
 
 // Strip comments (a `#` not inside quotes) and trailing whitespace, drop blank
-// lines, and reject tab indentation (YAML forbids tabs for indentation).
+// lines, and reject tab INDENTATION (YAML forbids tabs for indentation).
 function tokenize(text: string): Line[] {
   const lines: Line[] = [];
   text.split("\n").forEach((raw, index) => {
     const number = index + 1;
-    if (raw.includes("\t") && raw.trimStart().length !== raw.length) {
+    // §3.12: reject a tab only in the INDENTATION REGION (the leading whitespace), NOT
+    // anywhere in the line. The old check (`raw.includes("\t") && line is indented`) flagged
+    // a tab INSIDE a quoted string on any indented line as "tab indentation" — a false
+    // reject of valid content (e.g. a `run:` value that contains a literal tab). A tab in
+    // the leading run of whitespace IS forbidden indentation; a tab after the first
+    // non-whitespace char is content.
+    const leadingWhitespace = raw.slice(0, raw.length - raw.trimStart().length);
+    if (leadingWhitespace.includes("\t")) {
       throw new CiYamlParseError("tab indentation is not allowed", number);
     }
     const stripped = stripComment(raw);
@@ -154,6 +161,13 @@ function mapping(lines: Line[], start: number, indent: number): { value: YamlVal
     }
     const colon = findKeyColon(line.content, line.number);
     const key = parseKey(line.content.slice(0, colon), line.number);
+    // §3.12 DUPLICATE-KEY: a YAML mapping must not declare the same key twice. The old
+    // last-wins (`obj[key] = ...` overwrite) silently dropped the earlier value — a
+    // writer-editable ci.yml could shadow an earlier `when`/`tiers` entry, e.g. quietly
+    // redefining the `pre_merge` mapping. Fail LOUDLY so an ambiguous config never parses.
+    if (Object.prototype.hasOwnProperty.call(obj, key)) {
+      throw new CiYamlParseError(`duplicate mapping key "${key}"`, line.number);
+    }
     const valueText = line.content.slice(colon + 1).trim();
     if (valueText.length > 0) {
       obj[key] = parseScalar(valueText, line.number);

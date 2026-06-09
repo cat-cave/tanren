@@ -376,6 +376,9 @@ describe("resolveGateConfig", () => {
       "    - per_iteration",
       "  slow:",
       "    - pre_audit",
+      // §3.12: a valid config MUST cover pre_merge (the merge authority) — else it is a
+      // vacuous-pass config the schema now rejects fail-closed.
+      "    - pre_merge",
     ].join("\n");
     const ssh = new RecordingSsh(() => ({ exitCode: 0, stdout: yaml }));
     const config = await resolveGateConfig({ ssh, target, workspacePath: "/ws", timeoutMs: 1000 });
