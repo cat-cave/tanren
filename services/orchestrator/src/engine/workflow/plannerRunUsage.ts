@@ -6,21 +6,35 @@
 
 import { SshCcusageAccountant, SshCodexbarUsageMonitor, SshUsageProbe, type UsageProbe } from "../usage/index.js";
 import { buildManagedGenerationCostCapturer, type RealProviderCostCapturer } from "../costs/generationCostCapture.js";
+import type { AppendEvent } from "./subtaskLoop.js";
 import type { PlannerRunAdapterContext, RunPlannerLoopInput } from "./plannerRun.js";
 
-// Builds the MANAGED-run real-cost capturer (resolves the platform OpenRouter key
-// once and returns a per-call `usage.cost` query). A managed run is identified by
-// the resolved `endpointBaseUrl` (the OpenAI-compatible managed endpoint) + the
-// platform credential ref (`defaultLlm.authRef`, which under managed mode IS the
-// platform OpenRouter ref). A BYOK / non-managed run sets no `endpointBaseUrl`, so
-// this returns undefined and cost_usd is left a metered FACT-or-NULL (no estimate).
-export async function buildManagedCapturerForRun(
-  input: RunPlannerLoopInput,
-): Promise<RealProviderCostCapturer | undefined> {
+// The DISCRIMINATED outcome of the managed real-cost capturer resolution. A
+// MANAGED run builds the `capturer` (it queries the per-call `usage.cost`); a
+// BYOK run has NO platform metering credential — that capture is a managed-only
+// step with no BYOK analog, so it is EXPLICITLY skipped (`skipped`), NOT a silent
+// undefined and NEVER an empty platform ref pushed through the validator. The
+// caller narrates the skip loudly (`cost.managed_metering_skipped`).
+export type ManagedCapturerResolution =
+  | { capturer: RealProviderCostCapturer }
+  | { capturer: undefined; skipped: "byok_no_platform_metering_ref" };
+
+// Resolves the MANAGED-run real-cost capturer (or the explicit BYOK skip). A
+// managed run is identified by the resolved `endpointBaseUrl` (the OpenAI-
+// compatible managed endpoint) + the platform credential ref (`defaultLlm.authRef`,
+// which under managed mode IS the platform OpenRouter ref). A BYOK / non-managed
+// run sets no `endpointBaseUrl`, so there is no platform metering key — the
+// per-call real-cost query is a MANAGED-ONLY step: we return the EXPLICIT
+// `skipped` discriminant (cost stays a metered FACT-or-NULL from the BYOK
+// credential's own ledger), rather than touching a platform ref that does not
+// exist in BYOK (the apex v30 empty-ref class of crash).
+export async function buildManagedCapturerForRun(input: RunPlannerLoopInput): Promise<ManagedCapturerResolution> {
   const endpointBaseUrl = input.context.endpointBaseUrl;
-  // No managed endpoint ⇒ BYOK run, no managed capturer (cost stays metered FACT-or-NULL).
+  // No managed endpoint ⇒ BYOK run. There is NO platform metering credential to
+  // query — the per-call real-cost capture has no BYOK analog. Skip it EXPLICITLY
+  // (the caller narrates it); cost stays metered FACT-or-NULL, no empty ref.
   if (endpointBaseUrl === undefined) {
-    return undefined;
+    return { capturer: undefined, skipped: "byok_no_platform_metering_ref" };
   }
   // A managed run (endpoint set) MUST carry a resolved default LLM authRef (the
   // platform credential ref). Missing it is a wiring bug — fail loud, never
@@ -29,11 +43,32 @@ export async function buildManagedCapturerForRun(
   if (managedCredentialRef === undefined || managedCredentialRef.trim() === "") {
     throw new Error("managed run has an endpoint override but no resolved defaultLlm authRef — a wiring bug");
   }
-  return buildManagedGenerationCostCapturer({
-    secrets: input.secrets,
-    managedCredentialRef,
-    endpointBaseUrl,
-  });
+  return {
+    capturer: await buildManagedGenerationCostCapturer({
+      secrets: input.secrets,
+      managedCredentialRef,
+      endpointBaseUrl,
+    }),
+  };
+}
+
+// Resolve the run's per-call real-cost capturer AND narrate the BYOK skip. A
+// MANAGED run returns the capturer; a BYOK run returns undefined AND emits the
+// LOUD, intentional `cost.managed_metering_skipped` (no platform metering ref in
+// BYOK — explicit "no analog" branch, never an empty ref through the validator).
+export async function resolveManagedCapturer(
+  input: RunPlannerLoopInput,
+  appendEvent: AppendEvent,
+): Promise<RealProviderCostCapturer | undefined> {
+  const resolution = await buildManagedCapturerForRun(input);
+  if (resolution.capturer === undefined) {
+    await appendEvent("cost.managed_metering_skipped", {
+      providerMode: "byok",
+      reason:
+        "BYOK run has no platform metering credential, so the managed-only per-call real-cost query is skipped; real spend stays a metered FACT-or-NULL from the BYOK credential's own ledger (ccusage / credit drawdown)",
+    });
+  }
+  return resolution.capturer;
 }
 
 // The default CODEX usage probe: the ccusage accountant + (BYOK only) codexbar

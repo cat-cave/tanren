@@ -39,10 +39,10 @@ import type { GateOutcome } from "./gate/index.js";
 import {
   appTokenSeam,
   buildDefaultGate,
-  buildManagedCapturerForRun,
   loopConfigSeam,
   nativeQueueSeam,
   resolveConflictResolverHook,
+  resolveManagedCapturer,
   resolveRunAdaptersWithBudgetPreflight,
   simulatedReviewSeam,
   writerSeam,
@@ -312,8 +312,8 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
     // BUDGET-SAFETY (M6) ceiling preflight (fail closed on an unreachable ceiling).
     const adapterResult = await resolveRunAdaptersWithBudgetPreflight(input, adapterCtx, appendEvent);
     const { adapters, usageProbe, specValidator } = adapterResult;
-    // MANAGED run: the per-call real-`usage.cost` capturer (undefined on BYOK). See its builder.
-    const captureRealProviderCost = await buildManagedCapturerForRun(input);
+    // MANAGED real-`usage.cost` capturer; BYOK has no platform metering ref → EXPLICIT narrated skip (apex v30). See helper.
+    const captureRealProviderCost = await resolveManagedCapturer(input, appendEvent);
     // the deterministic gate runs on the just-bootstrapped workspace.
     // Resolve the CI config once (tanren-ci.yml, else the default) and run the tiers
     // mapped to each lifecycle point over SSH — exit codes only, no Answerer.
