@@ -28,6 +28,7 @@ import {
   type TriageAnswerer,
 } from "../inbox/index.js";
 import { buildIntakeConnectorMapForOrg, isCredentialResolutionError } from "./issueSourceSeam.js";
+import { sweepStuckCandidates, sweepWebhookEvents, type WebhookProcessorDeps } from "./webhookProcessor.js";
 
 // The poll knobs a source carries on its `config` (alongside the connector's own
 // config). `pollIntervalMs` is the per-source cadence; absence ⇒ the org default.
@@ -241,10 +242,36 @@ export class IntakePoller {
           this.lastPolledAt.set(source.id, this.now());
         }
       }
+      // §3.6 stuck-candidate sweeper: webhook-driven sources are SKIPPED by the
+      // poll loop above (push is authoritative), so nothing re-drove a webhook
+      // intake whose inline processing transiently failed — one LLM timeout / DB
+      // blip and the issue was lost. The sweeper closes that hole every tick: it
+      // re-drives every persisted-but-undriven webhook delivery AND every candidate
+      // stranded `auto_routed`-without-a-spec, idempotently. A swept failure never
+      // stalls the next tick (it logs + leaves the row recoverable / dead-lettered).
+      try {
+        await sweepWebhookEvents(this.processorDeps());
+      } catch (error) {
+        console.error("[intake-poller] webhook-event sweep failed (will retry next tick):", error);
+      }
+      try {
+        await sweepStuckCandidates(this.processorDeps());
+      } catch (error) {
+        console.error("[intake-poller] stuck-candidate sweep failed (will retry next tick):", error);
+      }
       return results;
     } finally {
       this.ticking = false;
     }
+  }
+
+  /** The processor deps for the sweeper — exactly the poll deps (pool/answerer/autoRoute). */
+  private processorDeps(): WebhookProcessorDeps {
+    return {
+      pool: this.deps.pool,
+      answererFactory: this.deps.answererFactory,
+      autoRoute: this.deps.autoRoute,
+    };
   }
 
   /** List every org's pollable, due-now source (cross-org, system-scoped). */

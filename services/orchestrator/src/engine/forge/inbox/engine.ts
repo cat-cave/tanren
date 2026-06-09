@@ -27,6 +27,7 @@ import { SpecNotFoundError } from "../../workflow/projectSpec.js";
 import { acceptProposals, type DiscoveryInsight, type PlacementKind, type ProposedSpec } from "../discovery/index.js";
 import {
   validateEmittedSpecs,
+  PersistentlyInvalidSpecError,
   type CandidateSpec,
   type ReviseSpec,
   type SpecQualityAnswerer,
@@ -109,10 +110,30 @@ export async function ingestSource(
     // System sources whose triage is auto-routable promote straight through.
     const status = triage.verdict === "auto_routable" ? "auto_routed" : "triaged";
     let candidate = await InboxStore.upsertCandidate(deps.pool, source, item, triage, status);
-    // Autonomous DAG insert: when intake is autonomous and the model produced a
-    // routable spec, commit it now (no operator) and resolve the candidate.
-    if (autoRouteDeps !== undefined && status === "auto_routed" && triage.routableSpec !== null) {
-      candidate = (await autoRouteCandidate(deps, candidate, triage.routableSpec, autoRouteDeps)).candidate;
+    // §3.6 status-guard (dup-spec race): GUARD on the upsert's RETURNED status, not
+    // the local triage verdict. The upsert is idempotent on (source, externalId) and
+    // keeps an already-terminal status — so a concurrent re-ingest of the same item
+    // (push+poll, or two webhook deliveries) finds it already `accepted` and we do
+    // NOT auto-route a second time → exactly one spec. Mirrors `audits/scheduler.ts`.
+    if (autoRouteDeps !== undefined && candidate.status === "auto_routed" && triage.routableSpec !== null) {
+      try {
+        candidate = (await autoRouteCandidate(deps, candidate, triage.routableSpec, autoRouteDeps)).candidate;
+      } catch (error) {
+        // §3.6 fix 6 (bounded retry, no infinite cost loop): the spec-quality gate
+        // could not make this spec valid within its bounded revision budget — it is a
+        // genuine "a human must look at this" signal, NOT a transient. Re-throwing
+        // here would make the poll path re-triage + re-validate this same item every
+        // poll interval FOREVER (a 5-minute LLM-cost loop). Instead, ESCALATE: resolve
+        // the candidate OUT of `auto_routed` to `triaged` (the loud inbox surface for
+        // operator review) so the next poll's idempotent upsert keeps it `triaged`
+        // and never re-routes it. Any other failure propagates (transient — retry).
+        if (!(error instanceof PersistentlyInvalidSpecError)) throw error;
+        console.error(
+          `[intake] candidate ${candidate.id} spec persistently invalid — escalating to inbox (needs attention):`,
+          error.message,
+        );
+        candidate = (await InboxStore.resolveCandidate(deps.pool, candidate.id, "triaged", null)) ?? candidate;
+      }
     }
     out.push(candidate);
   }
