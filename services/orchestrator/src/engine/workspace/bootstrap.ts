@@ -37,15 +37,19 @@ const JUSTFILE_PATH = "justfile";
 // (`--frozen-lockfile` vs a writer-added devDep) lives INSIDE the project's `just
 // bootstrap`, not in Tanren.
 //
-// LOUD on a missing contract: a repo with neither a `.tanren/ci.yml` `bootstrap.run`
-// NOR a `justfile` cannot declare how to prepare its workspace, so the bootstrap
-// step `exit 1`s with a clear message (which surfaces as a typed
-// WorkspaceBootstrapError tail) rather than guessing a stack. The message names the
-// contract so the operator knows exactly what to add.
+// NO-OP (not loud) on a missing justfile: the cold bootstrap runs over a FRESHLY
+// CLONED workspace — for a greenfield scaffold that is an EMPTY repo, BEFORE the
+// writer has authored the justfile that declares the lifecycle. There is genuinely
+// nothing to bootstrap yet, so this skips with a note (a legitimate-empty case, not
+// a silent stack assumption — there is NO Node/pnpm/npm probe). Contract ENFORCEMENT
+// lives at the GATE, not here: once the writer authors the justfile, the gate runs
+// `just tier-1`/etc.; a repo that never declares a justfile fails the gate loudly,
+// which surfaces as a P0 finding (worker-resilient, see gateConfigFailure / #443) the
+// loop fixes — rather than bricking an empty repo before it can be scaffolded.
+// Double-quoted message (no embedded single-quotes/parens) so the shell parses clean.
 export const DEFAULT_BOOTSTRAP_COMMAND =
   `if [ -f ${JUSTFILE_PATH} ]; then just bootstrap; ` +
-  `else echo 'tanren: no .tanren/ci.yml bootstrap.run and no justfile — declare this project'\\''s lifecycle ` +
-  `(a justfile with a \\'bootstrap\\' target, or a .tanren/ci.yml bootstrap.run); Tanren assumes no tech stack' >&2; exit 1; fi`;
+  `else echo "tanren: no justfile yet - skipping bootstrap (the writer authors the lifecycle justfile; the gate enforces the contract)"; fi`;
 
 export interface BootstrapWorkspaceInput {
   ssh: CommandSubstrate;

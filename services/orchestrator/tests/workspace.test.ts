@@ -166,13 +166,17 @@ describe("workspace bootstrap (P3-0006)", () => {
     expect(DEFAULT_BOOTSTRAP_COMMAND).not.toMatch(/pnpm|npm|corepack|node/u);
   });
 
-  it("the fallback FAILS LOUDLY (exit 1, no silent Node assumption) when no justfile is present", () => {
-    // A repo with neither a `.tanren/ci.yml` bootstrap.run NOR a justfile cannot
-    // declare how to prepare its workspace — the fallback `exit 1`s with a message
-    // naming the contract, never a guessed stack.
-    expect(DEFAULT_BOOTSTRAP_COMMAND).toContain("exit 1");
+  it("the fallback NO-OPs (exit 0) when no justfile is present — an empty greenfield repo, contract enforced at the gate", () => {
+    // The cold bootstrap runs over a freshly-cloned workspace; a greenfield scaffold
+    // is an EMPTY repo BEFORE the writer authors the justfile, so there is nothing to
+    // bootstrap yet — it skips with a note (a legitimate-empty case, NOT a guessed
+    // stack: no pnpm/npm/node probe). Contract enforcement lives at the GATE
+    // (`just tier-1` fails → a P0 finding the loop fixes), never bricking an empty repo.
+    expect(DEFAULT_BOOTSTRAP_COMMAND).not.toContain("exit 1");
     expect(DEFAULT_BOOTSTRAP_COMMAND).toMatch(/justfile/u);
-    expect(DEFAULT_BOOTSTRAP_COMMAND).not.toContain("skipping dependency bootstrap");
+    expect(DEFAULT_BOOTSTRAP_COMMAND).toMatch(/skipping bootstrap/u);
+    // Shell-parse safety: no embedded single-quote (the v27 syntax-error regression).
+    expect(DEFAULT_BOOTSTRAP_COMMAND).not.toContain("\\'");
   });
 
   it("throws a typed WorkspaceBootstrapError with exit code + output tail on failure", async () => {
