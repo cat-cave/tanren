@@ -38,6 +38,23 @@ export function buildInterviewPrompt(context: InterviewAnswererContext): string 
     "(the test-report convention). The lifecycle is REQUIRED before the interview can",
     "complete — never leave it null and never assume Node/pnpm.",
     "",
+    // LIFECYCLE/STACK DRIFT GUARD (apex v28–v31): the captured lifecycle is the
+    // operator's CONFIRMED intent. Once it is non-null in the capture below it is
+    // PINNED — the engine preserves it verbatim and will REJECT any re-emission
+    // that drifts the stack label or tier commands. So once `lifecycle` is set:
+    // do NOT re-emit it just to re-state it (omit `captureDelta.lifecycle`; the
+    // engine keeps the confirmed one), and do NOT silently rewrite the stack
+    // label, swap a tier's reporter/flags, or drop commands. The ONLY time to
+    // re-emit `lifecycle` is when the OPERATOR explicitly asks to CHANGE it — and
+    // then you MUST also set `captureDelta.lifecycleChange: true` so the change is
+    // operator-visible (a silent re-emission is rejected and flagged as drift).
+    "LIFECYCLE IS PINNED ONCE CAPTURED: if `lifecycle` is already non-null in the",
+    "capture below, it is the operator's CONFIRMED stack — do NOT re-emit it to",
+    "re-state it, and NEVER drift the stack label / swap tier commands / drop flags.",
+    "Omit `captureDelta.lifecycle` to keep it. Re-emit a DIFFERENT lifecycle ONLY",
+    "when the operator explicitly asks to change it, and then ALSO set",
+    "`captureDelta.lifecycleChange: true` (a silent re-emission is rejected as drift).",
+    "",
     "The operator's latest answer:",
     context.answer === "" ? "(none — this is the opening round)" : context.answer,
     "",

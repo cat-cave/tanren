@@ -45,7 +45,10 @@ function fullRow(overrides: Record<string, unknown> = {}): Record<string, unknow
         githubCredentialRef: "cred/gh",
       },
     },
-    org_id: null,
+    // A run is ALWAYS tenant-scoped (`runs.org_id` / `projects.org_id` are NOT-NULL).
+    // The fixture carries a REAL org id so the loader resolves credentials org-scoped;
+    // a null/empty org_id is exercised separately as a LOUD failure (UnscopedOrgError).
+    org_id: "org_42",
     title: "Add a marker",
     description: "Create the marker file.",
     acceptance_criteria: ["marker exists", "ci green"],
@@ -77,7 +80,19 @@ describe("loadRunExecutionContext", () => {
       defaultLlm: { cli: "codex", model: "default", authRef: "credential/codex/dev" },
     });
     expect(projectConfig.version).toBe(1);
-    expect(orgId).toBeNull();
+    expect(orgId).toBe("org_42");
+  });
+
+  it("FAILS LOUD (UnscopedOrgError) when the run row carries a null/empty org id — never a silent BYOK degrade", async () => {
+    // `runs.org_id` is NOT-NULL, so a null/empty org id at a run path is a scoping
+    // bug. The loader threads it through `orgScopeFromRunOrgId`, which throws rather
+    // than coercing `?? ""` into project-config-only BYOK (no_silent_fallbacks).
+    await expect(
+      loadRunExecutionContext(rowPool(fullRow({ org_id: null })), { runId: "run_1", identitySecretRef: "id" }),
+    ).rejects.toMatchObject({ name: "UnscopedOrgError" });
+    await expect(
+      loadRunExecutionContext(rowPool(fullRow({ org_id: "" })), { runId: "run_1", identitySecretRef: "id" }),
+    ).rejects.toMatchObject({ name: "UnscopedOrgError" });
   });
 
   it("distinguishes the run branch from the project default branch", async () => {

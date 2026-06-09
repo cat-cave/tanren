@@ -20,7 +20,7 @@
 
 import type pg from "pg";
 import type { ActorContext } from "../../../auth/schemas.js";
-import { mergeCapture } from "./capture.js";
+import { mergeCapture, resolveLifecycle } from "./capture.js";
 import type { CreatedRepository, CreateRepositoryInput } from "../../contracts/vcsProvider.js";
 import { deriveProductGraph, type DeriveResult } from "./derive.js";
 import type { DeployPreflightCallback, GreenfieldDeployDependency, PrepareDeployCallback } from "./deployDependency.js";
@@ -56,6 +56,21 @@ export interface RunRoundInput {
   capture: InterviewCapture;
 }
 
+// LIFECYCLE/STACK DRIFT GUARD: when a round's answerer tried to OVERWRITE the
+// operator-confirmed lifecycle with a DIFFERENT one but did NOT flag it as an
+// explicit change, the merge REJECTS the drift (preserves the confirmed lifecycle)
+// and reports it here so it is OPERATOR-VISIBLE (surfaced on the round result +
+// logged loudly), never silently swallowed. `kind` distinguishes a rejected silent
+// drift from an accepted explicit change (both are surfaced; only `drift` is a
+// rejection). Absent on rounds that touched no lifecycle / the initial capture.
+export interface LifecycleDriftNotice {
+  kind: "drift" | "changed";
+  // The lifecycle now in effect (the confirmed one on `drift`; the new one on `changed`).
+  effective: CaptureLifecycle;
+  // What the answerer tried to set (the rejected drift, or the accepted change).
+  attempted: CaptureLifecycle;
+}
+
 export interface RunRoundResult {
   round: number;
   totalRounds: number;
@@ -65,6 +80,10 @@ export interface RunRoundResult {
   // The capture AFTER merging this round's delta.
   capture: InterviewCapture;
   complete: boolean;
+  // Present only when this round attempted to mutate the confirmed lifecycle (a
+  // rejected silent drift, or an accepted explicit change) — surfaced so the
+  // operator sees it. Omitted otherwise.
+  lifecycleDrift?: LifecycleDriftNotice;
 }
 
 export async function runRound(deps: InterviewEngineDeps, input: RunRoundInput): Promise<RunRoundResult> {
@@ -81,7 +100,28 @@ export async function runRound(deps: InterviewEngineDeps, input: RunRoundInput):
   // provider that drifts from the schema is normalized/rejected here).
   const output: InterviewRoundOutputType = InterviewRoundOutput.parse(rawOutput);
 
+  // LIFECYCLE/STACK DRIFT GUARD: resolve the lifecycle BEFORE the merge so a
+  // rejected silent drift (or an accepted explicit change) is surfaced + logged
+  // loudly — never swallowed. The merge itself preserves the confirmed lifecycle.
+  const lifecycle = resolveLifecycle(priorCapture, output.captureDelta);
   const nextCapture = mergeCapture(priorCapture, output.captureDelta);
+  let lifecycleDrift: LifecycleDriftNotice | undefined;
+  if (lifecycle.outcome === "drift") {
+    // LOUD: an answerer tried to drift the operator's confirmed stack. The
+    // confirmed lifecycle is preserved verbatim; the attempt is reported.
+    console.warn(
+      `[interview] round ${input.round}: REJECTED lifecycle drift — the answerer tried to ` +
+        `overwrite the operator-confirmed stack ("${lifecycle.lifecycle.stack}") with ` +
+        `"${lifecycle.attempted.stack}" without an explicit change. Preserving the confirmed lifecycle.`,
+    );
+    lifecycleDrift = { kind: "drift", effective: lifecycle.lifecycle, attempted: lifecycle.attempted };
+  } else if (lifecycle.outcome === "changed") {
+    console.warn(
+      `[interview] round ${input.round}: EXPLICIT lifecycle change — the operator-confirmed stack ` +
+        `is now "${lifecycle.lifecycle.stack}" (was confirmed; changed via explicit signal).`,
+    );
+    lifecycleDrift = { kind: "changed", effective: lifecycle.lifecycle, attempted: lifecycle.lifecycle };
+  }
   return {
     round: input.round,
     totalRounds,
@@ -89,6 +129,7 @@ export async function runRound(deps: InterviewEngineDeps, input: RunRoundInput):
     suggestions: output.suggestions,
     capture: nextCapture,
     complete: output.complete,
+    ...(lifecycleDrift === undefined ? {} : { lifecycleDrift }),
   };
 }
 

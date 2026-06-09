@@ -14,6 +14,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { assertGitDirUnder, fixtureGitEnv } from "./fixtureGitEnv.js";
 
 export interface GitFixture {
   /** The bare repo path the impl `jj git clone`s. */
@@ -22,18 +23,19 @@ export interface GitFixture {
   scratchRoot: string;
 }
 
+// The git env every fixture child runs under: the deterministic Fixture author PLUS the
+// git repo-selecting vars (GIT_DIR/GIT_WORK_TREE/…) SCRUBBED, so a leaked one can never redirect
+// a `cwd`-scoped git op onto the host worktree (the live branch-corruption vector). Read
+// from `process.env` at CALL time (not module load) so a leak present whenever the fixture
+// runs is scrubbed — not just one captured at import.
+function gitEnv(): NodeJS.ProcessEnv {
+  return fixtureGitEnv(process.env);
+}
+
 function git(cwd: string, args: string[]): void {
   execFileSync("git", args, {
     cwd,
-    env: {
-      ...process.env,
-      GIT_AUTHOR_NAME: "Fixture",
-      GIT_AUTHOR_EMAIL: "fixture@local",
-      GIT_COMMITTER_NAME: "Fixture",
-      GIT_COMMITTER_EMAIL: "fixture@local",
-      GIT_AUTHOR_DATE: "2026-01-01T00:00:00Z",
-      GIT_COMMITTER_DATE: "2026-01-01T00:00:00Z",
-    },
+    env: gitEnv(),
     stdio: ["ignore", "ignore", "inherit"],
   });
 }
@@ -46,6 +48,9 @@ export function makeGitFixture(): GitFixture {
   mkdirSync(work, { recursive: true });
 
   git(work, ["init", "--quiet", "--initial-branch=main"]);
+  // DEFENSIVE GUARD: prove `git init` selected the temp seed dir — not a leaked GIT_DIR /
+  // the host worktree's real `.git` — BEFORE any commit can land on the worktree's branch.
+  assertGitDirUnder(work, root, gitEnv());
   mkdirSync(join(work, "src"), { recursive: true });
   writeFileSync(join(work, "src", "conflicted.ts"), "base\n");
   writeFileSync(join(work, "README.md"), "readme\n");
