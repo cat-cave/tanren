@@ -199,8 +199,10 @@ describe("runGateTier advisory steps (lenient posture)", () => {
 });
 
 describe("advisoryStepNamesForPosture", () => {
-  it("lenient → {lint, typecheck} advisory; every other posture → empty", () => {
-    expect([...advisoryStepNamesForPosture("lenient")].sort()).toEqual(["lint", "typecheck"]);
+  it("lenient → {tier-1, lint, typecheck} advisory; every other posture → empty", () => {
+    // Stack-agnostic: the cheap per-iteration `tier-1` step is advisory; a repo that
+    // names its own steps `lint`/`typecheck` keeps those advisory too.
+    expect([...advisoryStepNamesForPosture("lenient")].sort()).toEqual(["lint", "tier-1", "typecheck"]);
     expect(advisoryStepNamesForPosture("strict").size).toBe(0);
     expect(advisoryStepNamesForPosture("open").size).toBe(0);
     expect(advisoryStepNamesForPosture("audit_only").size).toBe(0);
@@ -230,7 +232,8 @@ describe("runGateForWhen", () => {
   });
 
   it("stops at the first failing tier and surfaces its failure", async () => {
-    const ssh = new RecordingSsh((c) => (c === "pnpm build" ? { exitCode: 1 } : {}));
+    // The stack-agnostic default slow tier is the single step `tier-2` (run `just tier-2`).
+    const ssh = new RecordingSsh((c) => (c === "just tier-2" ? { exitCode: 1 } : {}));
     const { appendEvent } = recordingEvents();
     const outcome = await runGateForWhen({
       ssh,
@@ -244,7 +247,7 @@ describe("runGateForWhen", () => {
     expect(outcome.passed).toBe(false);
     if (outcome.passed) return;
     expect(outcome.failure.tier).toBe("slow");
-    expect(outcome.failure.failedStep).toBe("build");
+    expect(outcome.failure.failedStep).toBe("tier-2");
   });
 
   it("emits a gate.verdict roll-up carrying the headSha + flattened steps when a head is given", async () => {
@@ -274,9 +277,9 @@ describe("runGateForWhen", () => {
     };
     expect(payload.headSha).toBe("a".repeat(40));
     expect(payload.passed).toBe(true);
-    // The fast tier's two cheap steps are flattened onto the verdict (NO tests in the
-    // per-iteration tier — the 3-tier default keeps tests to tier-2+).
-    expect(payload.steps.map((s) => s.name)).toEqual(["lint", "typecheck"]);
+    // The fast tier's single cheap step is flattened onto the verdict (the stack-
+    // agnostic default's per-iteration tier is `tier-1`, deferring to `just tier-1`).
+    expect(payload.steps.map((s) => s.name)).toEqual(["tier-1"]);
     // AUDIT-EVIDENCE BASELINE: the verdict carries the governance policy version + the
     // initiating SERVICE actor (the gate runs autonomously — no approver, a machine
     // judgment). The merge authority's verdict is now an audit-grade governing event.
@@ -309,7 +312,7 @@ describe("runGateForWhen", () => {
   });
 
   it("emits a failing gate.verdict naming the blocking tier+step", async () => {
-    const ssh = new RecordingSsh((c) => (c === "pnpm build" ? { exitCode: 1 } : {}));
+    const ssh = new RecordingSsh((c) => (c === "just tier-2" ? { exitCode: 1 } : {}));
     const { events, appendEvent } = recordingEvents();
     const outcome = await runGateForWhen({
       ssh,
@@ -326,7 +329,7 @@ describe("runGateForWhen", () => {
     const payload = verdict.payload as { passed: boolean; failedTier?: string; failedStep?: string };
     expect(payload.passed).toBe(false);
     expect(payload.failedTier).toBe("slow");
-    expect(payload.failedStep).toBe("build");
+    expect(payload.failedStep).toBe("tier-2");
   });
 
   it("is a vacuous pass when no tier maps to the lifecycle point", async () => {

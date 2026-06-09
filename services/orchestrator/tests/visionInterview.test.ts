@@ -10,7 +10,6 @@
 /* eslint-disable unicorn/no-thenable */
 // `then` is BDD Given/When/Then vocabulary in the capture/behavior fixtures.
 
-import type pg from "pg";
 import { describe, expect, it } from "vitest";
 import type { ActorContext } from "../src/auth/schemas.js";
 import {
@@ -18,12 +17,30 @@ import {
   deriveFromCapture,
   emptyCapture,
   mergeCapture,
+  MissingLifecycleError,
   runRound,
+  type CaptureLifecycle,
   type InterviewAnswerer,
   type InterviewCapture,
 } from "../src/engine/forge/interview/index.js";
-import { SCAFFOLD_CI_CONFIG_EXAMPLE } from "../src/engine/forge/interview/scaffoldCiConfig.js";
 import { createDeterministicInterviewAnswerer } from "./fixtures/forge/deterministicInterviewAnswerer.js";
+import { preparedDeploy, stubPool, type StubState } from "./fixtures/forge/interviewDeriveStub.js";
+
+// A TS/pnpm lifecycle capture (apex v27 default) — NOT a Tanren hardcode: the
+// project DECLARES it; the scaffold authors the justfile from it.
+const TS_LIFECYCLE: CaptureLifecycle = {
+  stack: "ts/pnpm",
+  bootstrap: "pnpm install --frozen-lockfile",
+  tier1: "pnpm lint && pnpm typecheck",
+  tier2: "pnpm build && pnpm test -- --reporter=junit --outputFile=reports/junit.xml",
+  tier3: "pnpm lint && pnpm typecheck && pnpm build && pnpm test",
+  build: "pnpm build",
+  deploy: "flyctl deploy",
+};
+
+// A capture WITH the lifecycle (so a deploy-guard test isolates the deploy guard,
+// not the earlier missing-lifecycle guard).
+const captureWithLifecycle = (): InterviewCapture => ({ ...emptyCapture(), lifecycle: TS_LIFECYCLE });
 
 const actor: ActorContext = {
   userId: "user_a",
@@ -34,26 +51,6 @@ const actor: ActorContext = {
 };
 
 const TEST_REPO_URL = "https://github.com/cat-cave/supply-chain-os";
-
-function preparedDeploy(providerKind: "deploy.vercel" | "deploy.flyio" = "deploy.vercel") {
-  return {
-    outcome: {
-      status: "provisioned" as const,
-      capability: "deploy",
-      providerKind,
-      action: "provision" as const,
-      mode: "greenfield" as const,
-      secretRefNames: [`secret://deploy/${providerKind}/app_1/token`],
-      surfaces: { projectConfigKeys: ["deployProvider", "deployAppId"], deployRef: `${providerKind}:app_1` },
-    },
-    projectConfig: {
-      deployProvider: providerKind,
-      deployAppId: "app_1",
-      deployAppName: "supply-chain-os",
-      previewUrlPattern: "https://supply-chain-os.example.test",
-    },
-  };
-}
 
 // Drive the full deterministic interview to completion, then derive the product
 // graph — the boilerplate every derive test shares. Returns the derive result + the
@@ -82,177 +79,6 @@ async function runInterviewAndDerive(overrides: Partial<Parameters<typeof derive
     { orgId: "org_a", capture, actor, repoUrl: TEST_REPO_URL, deploy: { providerKind: "deploy.vercel" }, ...overrides },
   );
   return { derived, state, configs };
-}
-
-// In-memory pool tracking inserts so the derive path's create calls are
-// observable. Keyed by SQL substring like the discovery test stub.
-interface StubState {
-  projects: Set<string>;
-  specs: Map<string, { dependsOn: string[]; title: string; description: string; acceptanceCriteria: string[] }>;
-  personas: number;
-  // The metadata jsonb persisted per persona INSERT (where the derive persists
-  // the persona `surface`, there being no `surface` column).
-  personaMetadata: Array<Record<string, unknown>>;
-  behaviors: number;
-  milestones: number;
-  specMilestones: number;
-  specBehaviors: number;
-}
-
-function stubPool(): {
-  pool: pg.Pool;
-  state: StubState;
-  // FINDING #1: the persisted project config blob, captured per projectId from the
-  // `INSERT INTO projects` call (config is the 7th column → params[6], JSON text).
-  configs: Map<string, Record<string, unknown>>;
-} {
-  const state: StubState = {
-    projects: new Set(),
-    specs: new Map(),
-    personas: 0,
-    personaMetadata: [],
-    behaviors: 0,
-    milestones: 0,
-    specMilestones: 0,
-    specBehaviors: 0,
-  };
-  const configs = new Map<string, Record<string, unknown>>();
-  const personaIds = new Set<string>();
-  const query = async (text: string, params: unknown[] = []): Promise<{ rows: unknown[]; rowCount: number }> => {
-    const sql = text.replaceAll(/\s+/gu, " ").trim();
-    if (sql.startsWith("INSERT INTO projects")) {
-      state.projects.add(String(params[0]));
-      const rawConfig = params[6];
-      if (typeof rawConfig === "string") {
-        configs.set(String(params[0]), JSON.parse(rawConfig) as Record<string, unknown>);
-      }
-      return { rows: [], rowCount: 1 };
-    }
-    if (sql.startsWith("INSERT INTO project_members")) return { rows: [], rowCount: 1 };
-    if (sql.startsWith("SELECT project_id FROM projects")) {
-      return state.projects.has(String(params[0]))
-        ? { rows: [{ project_id: params[0] }], rowCount: 1 }
-        : { rows: [], rowCount: 0 };
-    }
-    // ensureProjectAccess membership lookup → always allow (platform admin).
-    if (sql.includes("FROM project_members")) return { rows: [{ role: "admin" }], rowCount: 1 };
-    if (sql.startsWith("SELECT spec_id FROM specs WHERE project_id")) {
-      // dependency existence check: params[1] is the id array.
-      const ids = (params[1] as string[]) ?? [];
-      const present = ids.filter((id) => state.specs.has(id)).map((id) => ({ spec_id: id }));
-      return { rows: present, rowCount: present.length };
-    }
-    if (sql.startsWith("INSERT INTO specs")) {
-      const specId = String(params[0]);
-      // Column order: specId, projectId, title, description, acceptance_criteria(json),
-      // depends_on, status, priority (see projectSpec.ts createSpec).
-      const title = String(params[2]);
-      const description = String(params[3]);
-      const acceptanceCriteria = typeof params[4] === "string" ? (JSON.parse(params[4]) as string[]) : [];
-      const dependsOn = (params[5] as string[]) ?? [];
-      state.specs.set(specId, { dependsOn, title, description, acceptanceCriteria });
-      return { rows: [], rowCount: 1 };
-    }
-    if (sql.startsWith("INSERT INTO personas")) {
-      state.personas += 1;
-      personaIds.add(String(params[0]));
-      // The metadata jsonb is the 7th column (params[6], JSON text) — capture it so
-      // a test can assert the persona `surface` is persisted there (no `surface` column).
-      const rawMeta = params[6];
-      const metadata = typeof rawMeta === "string" ? (JSON.parse(rawMeta) as Record<string, unknown>) : {};
-      state.personaMetadata.push(metadata);
-      return {
-        rows: [
-          {
-            id: params[0],
-            scope: params[1],
-            org_id: params[2],
-            project_id: params[3],
-            name: params[4],
-            description: params[5],
-            metadata,
-            created_at: new Date(),
-            updated_at: new Date(),
-          },
-        ],
-        rowCount: 1,
-      };
-    }
-    // PersonaStore.get (authz for behavior create) → return the persona row.
-    if (sql.startsWith("SELECT id, scope, org_id, project_id, name, description")) {
-      return {
-        rows: [
-          {
-            id: params[0],
-            scope: "project",
-            org_id: "org_a",
-            project_id: "p",
-            name: "n",
-            description: "d",
-            metadata: {},
-            created_at: new Date(),
-            updated_at: new Date(),
-          },
-        ],
-        rowCount: 1,
-      };
-    }
-    if (sql.startsWith("INSERT INTO behaviors")) {
-      state.behaviors += 1;
-      return {
-        rows: [
-          {
-            id: params[0],
-            persona_id: params[1],
-            title: params[2],
-            given: params[3],
-            when: params[4],
-            then: params[5],
-            description: params[6],
-            metadata: {},
-            created_at: new Date(),
-            updated_at: new Date(),
-          },
-        ],
-        rowCount: 1,
-      };
-    }
-    if (sql.startsWith("INSERT INTO milestones")) {
-      state.milestones += 1;
-      return {
-        rows: [
-          {
-            id: params[0],
-            project_id: params[1],
-            label: params[2],
-            name: params[3],
-            description: params[4],
-            order_index: params[5],
-            eta: params[6],
-            status: params[7],
-            created_at: new Date(),
-            updated_at: new Date(),
-          },
-        ],
-        rowCount: 1,
-      };
-    }
-    if (sql.startsWith("DELETE FROM spec_milestones")) return { rows: [], rowCount: 0 };
-    if (sql.startsWith("INSERT INTO spec_milestones")) {
-      state.specMilestones += 1;
-      return { rows: [], rowCount: 1 };
-    }
-    if (sql.startsWith("INSERT INTO spec_behaviors")) {
-      state.specBehaviors += 1;
-      return { rows: [], rowCount: 1 };
-    }
-    return { rows: [], rowCount: 0 };
-  };
-  return {
-    pool: { query, connect: async () => ({ query, release() {} }) } as unknown as pg.Pool,
-    state,
-    configs,
-  };
 }
 
 describe("runRound · interview round loop", () => {
@@ -337,65 +163,68 @@ describe("deriveFromCapture · creates the product graph (no migration)", () => 
     // Every behavior spec is linked to a milestone + tied to its behavior.
     expect(state.specMilestones).toBe(derived.specIds.length);
     expect(state.specBehaviors).toBe(derived.behaviorIds.length);
-    // FINDING #3: the foundation is a serialized CHAIN, not 3 parallel roots. Only
-    // the first scaffold spec (monorepo) is a root with no deps; `build` depends on
-    // it and `ci` depends on `build`, so 2 of the 3 scaffold specs now carry a dep.
-    // Every later (interface/behavior) spec depends on the scaffold too.
-    const rootlessScaffolds = 1;
+    // The foundation is a serialized CHAIN, not parallel roots: only `scaffold` is a
+    // root; every later spec carries a dep.
     const hasDeps = [...state.specs.values()].filter((s) => s.dependsOn.length > 0).length;
-    expect(hasDeps).toBe(derived.specIds.length - rootlessScaffolds);
+    expect(hasDeps).toBe(derived.specIds.length - 1);
   });
 
-  it("FINDING #3: derives a serialized scaffold CHAIN (build→scaffold, ci→build), not 3 roots", async () => {
+  it("derives a serialized scaffold CHAIN (build→scaffold, deploy→build), not parallel roots", async () => {
     const { derived, state } = await runInterviewAndDerive();
-
-    // The scaffold specs are created first, in order: monorepo, build, ci.
-    const [scaffoldId, buildId, ciId] = derived.specIds;
-    const scaffold = state.specs.get(scaffoldId);
-    const build = state.specs.get(buildId);
-    const ci = state.specs.get(ciId);
-    // monorepo scaffold is the SOLE root (no deps); build depends ONLY on scaffold;
-    // ci depends ONLY on build — a chain, not 3 empty-dep roots.
+    // The scaffold specs are created first, in order: scaffold, build, deploy.
+    const [scaffoldId, buildId, deployId] = derived.specIds;
+    const [scaffold, build, deploy] = [scaffoldId, buildId, deployId].map((id) => state.specs.get(id));
+    expect([scaffold?.title, build?.title, deploy?.title]).toEqual(["scaffold", "build", "deploy"]);
+    // scaffold is the SOLE root; build depends on scaffold; deploy on build.
     expect(scaffold?.dependsOn).toEqual([]);
     expect(build?.dependsOn).toEqual([scaffoldId]);
-    expect(ci?.dependsOn).toEqual([buildId]);
-    // Exactly ONE foundation spec is a root (would have been 3 before the fix).
-    const scaffoldRoots = [scaffold, build, ci].filter((s) => (s?.dependsOn.length ?? 0) === 0).length;
-    expect(scaffoldRoots).toBe(1);
+    expect(deploy?.dependsOn).toEqual([buildId]);
   });
 
-  it("3-tier CI: the monorepo scaffold spec authors a 3-tier .tanren/ci.yml with JUnit + a structure/build acceptance bar (no green-test tier)", async () => {
+  it("authors scaffold/build/deploy FROM the captured lifecycle (justfile + `just build`/`just deploy`, no hardcode)", async () => {
+    // The deterministic answerer captures a TS/pnpm lifecycle in the architecture
+    // step; the foundation specs author the justfile + route build/deploy through
+    // the conventional targets FROM it — never a hardcode. (Multi-stack authoring
+    // is unit-tested in scaffoldAuthoring.test.ts.)
     const { derived, state } = await runInterviewAndDerive();
+    const [scaffold, build, deploy] = derived.specIds.map((id) => state.specs.get(id));
 
-    const scaffold = state.specs.get(derived.specIds[0]!);
-    expect(scaffold?.title).toBe("monorepo scaffold");
-
-    // The description hands the writer the v25 correct-shape example VERBATIM, with the
-    // 3 lifecycle points + JUnit evidence (scaffoldCiConfig.test.ts proves it parses).
     const desc = scaffold?.description ?? "";
+    expect(desc).toMatch(/bare .*skeleton/iu);
+    expect(desc).toContain("justfile");
+    // The captured TS/pnpm commands flowed through; the ci.yml is the lifecycle→
+    // `just <target>` map, NOT a hardcoded body.
+    expect(desc).toContain("pnpm install --frozen-lockfile");
     expect(desc).toContain(".tanren/ci.yml");
-    expect(desc).toContain(SCAFFOLD_CI_CONFIG_EXAMPLE);
-    for (const point of ["per_iteration", "pre_audit", "pre_merge"]) expect(desc).toContain(point);
-    expect(desc).toContain("--reporter=junit");
-    expect(desc).toContain("--outputFile=reports/junit.xml");
-    // NO tests in the fast tier — tests arrive with features.
-    expect(desc).toMatch(/no tests in the fast tier/iu);
-
-    // The acceptance bar is STRUCTURE + lint/typecheck/build — NOT a green test tier.
+    expect(desc).not.toContain("version: 1\nbootstrap:");
+    // The green bar is bootstrap/tier-1/build — NOT the test tier.
     const criteria = scaffold?.acceptanceCriteria ?? [];
-    const ciTierCriterion = criteria.find((c) => c.includes(".tanren/ci.yml"));
-    expect(ciTierCriterion).toBeDefined();
-    expect(ciTierCriterion).toContain("three tiers");
-    // The "gate is green" criterion runs lint/typecheck/build only — `pnpm test` must
-    // NOT be a required-green tier at scaffold (the v23 regression that blocked the loop).
-    const greenCriterion = criteria.find((c) => /each exits 0|are green/u.test(c));
-    expect(greenCriterion).toBeDefined();
-    expect(greenCriterion).toContain("pnpm lint");
-    expect(greenCriterion).toContain("pnpm typecheck");
-    expect(greenCriterion).toContain("pnpm build");
-    expect(greenCriterion).not.toContain("pnpm test");
-    // And NO acceptance criterion requires `pnpm test` to pass.
-    expect(criteria.some((c) => /pnpm test\b.*exits 0|`pnpm test`.*green/u.test(c))).toBe(false);
+    expect(criteria.find((c) => /each exits 0|are green/u.test(c))).toContain("just bootstrap");
+    expect(criteria.some((c) => /(just tier-2|just tier-3).*exits 0/u.test(c))).toBe(false);
+
+    // build + deploy route through the conventional `just build` / `just deploy`.
+    expect(build?.description).toContain("just build");
+    expect(deploy?.description).toContain("just deploy");
+    expect(deploy?.acceptanceCriteria.join("\n")).toContain("just deploy");
+  });
+
+  it("FAILS LOUD when the architecture step captured no lifecycle (never silently defaults to Node)", async () => {
+    const { pool, state } = stubPool();
+    // A deploy provider IS supplied — so the rejection is specifically the missing
+    // lifecycle (the scaffold can't author a justfile without it), not the deploy guard.
+    await expect(
+      deriveFromCapture(
+        { pool },
+        {
+          orgId: "org_a",
+          capture: emptyCapture(),
+          actor,
+          repoUrl: TEST_REPO_URL,
+          deploy: { providerKind: "deploy.vercel" },
+        },
+      ),
+    ).rejects.toBeInstanceOf(MissingLifecycleError);
+    expect(state.projects.size).toBe(0);
   });
 
   it('FINDING #1: autonomy:"auto" creates an autonomous project config (no follow-up PATCH)', async () => {
@@ -456,7 +285,7 @@ describe("deriveFromCapture · creates the product graph (no migration)", () => 
   it("FINDING deploy: autonomous greenfield rejects missing deploy before project creation", async () => {
     const { pool, state } = stubPool();
     await expect(
-      deriveFromCapture({ pool }, { orgId: "org_a", capture: emptyCapture(), actor, autonomy: "auto" }),
+      deriveFromCapture({ pool }, { orgId: "org_a", capture: captureWithLifecycle(), actor, autonomy: "auto" }),
     ).rejects.toBeInstanceOf(DeployProviderMissingError);
     expect(state.projects.size).toBe(0);
   });
@@ -477,7 +306,7 @@ describe("deriveFromCapture · creates the product graph (no migration)", () => 
   it("FINDING deploy: omitting autonomy does not bypass required deploy", async () => {
     const { pool, state } = stubPool();
     await expect(
-      deriveFromCapture({ pool }, { orgId: "org_a", capture: emptyCapture(), actor }),
+      deriveFromCapture({ pool }, { orgId: "org_a", capture: captureWithLifecycle(), actor }),
     ).rejects.toBeInstanceOf(DeployProviderMissingError);
     expect(state.projects.size).toBe(0);
   });

@@ -22,60 +22,30 @@ export const BOOTSTRAP_COMMIT_MESSAGE = "tanren: bootstrap";
 // recovery surface carry a useful, bounded diagnostic.
 const OUTPUT_TAIL_LIMIT = 4_000;
 
-// Default install command. The branch is chosen runner-side by which manifest
-// the repo actually ships: a pnpm lockfile uses pnpm, an npm lockfile uses
-// `npm ci`, a bare `package.json` (no lockfile) uses `npm install`, and a repo
-// with NO package manifest skips dependency bootstrap entirely (exit 0). The
-// old default ran `pnpm install` unconditionally, which failed `exit 127`
-// (`pnpm: command not found`) on manifest-less repos — a class the easy fixture
-// falls into. npm is always present in the base runner image; pnpm is too.
-//
-// This is the fallback used only when the repo declares no install command: the
-// run path resolves the repo's .tanren/ci.yml `bootstrap.run` (the
-// bootstrapCommand resolver, via resolveBootstrapCommand) and passes it as
-// `command`; when the repo ships no .tanren/ci.yml the resolver yields undefined
-// and this heuristic default applies.
-// `--config.confirmModulesPurge=false`: the runner is NON-INTERACTIVE (no TTY).
-// When pnpm decides it must PURGE an existing `node_modules` (e.g. one the writer
-// created with a different layout/store), it interactively confirms the removal by
-// default and ABORTS with `ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY` (exit 1)
-// when there is no TTY. We must NOT use the alternative (`CI=true`), because that
-// also flips pnpm's default to `--frozen-lockfile` — which would defeat the
-// non-frozen greenfield deps-ensure below. So we disable the purge prompt directly.
-export const DEFAULT_BOOTSTRAP_COMMAND =
-  "if [ -f pnpm-lock.yaml ]; then pnpm install --frozen-lockfile --config.confirmModulesPurge=false; " +
-  "elif [ -f package-lock.json ]; then npm ci; " +
-  "elif [ -f package.json ]; then npm install; " +
-  "else echo 'tanren: no package manifest found; skipping dependency bootstrap'; fi";
+// The path of the conventional lifecycle file (engine/forge/scaffold/skeleton.ts):
+// a project declares its stack's bootstrap in `just bootstrap`. This LOUD-fallback
+// probes for it before refusing to assume a stack.
+const JUSTFILE_PATH = "justfile";
 
-// The deps-ensure default install command — the NON-FROZEN sibling of
-// DEFAULT_BOOTSTRAP_COMMAND. It is the default ONLY for the per-gate GREENFIELD
-// deps-ensure (the gate callback passes it — by leaving `command` undefined — only
-// when `context.greenfield` is true and no explicit `bootstrap.run` is set). A
-// BROWNFIELD run's gate passes the FROZEN DEFAULT_BOOTSTRAP_COMMAND instead, so an
-// existing committed lockfile is never silently mutated; see buildDefaultGate.
+// The bootstrap command used ONLY when the repo declares NO install command — i.e.
+// the run path resolved no `.tanren/ci.yml` `bootstrap.run` AND no
+// `input.bootstrapCommand` override (the resolver yielded `undefined`). Tanren
+// assumes NO tech stack: there is NO Node/pnpm/npm probe here. The project owns its
+// stack via a `justfile` (the CONTRACT), so this fallback simply runs `just
+// bootstrap` WHEN a justfile is present, and otherwise FAILS LOUDLY — never a silent
+// Node assumption, never a silent skip. The greenfield-vs-frozen install concern
+// (`--frozen-lockfile` vs a writer-added devDep) lives INSIDE the project's `just
+// bootstrap`, not in Tanren.
 //
-// Why non-frozen for greenfield (vs the cold-bootstrap default's
-// `--frozen-lockfile`): the deps-ensure path runs AFTER a writer iteration that
-// just authored/extended the manifest. A writer that adds a devDep (e.g. `vitest`)
-// without perfectly regenerating `pnpm-lock.yaml` produces a manifest⇆lockfile
-// mismatch — a `--frozen-lockfile` install would then HARD-FAIL ("lockfile out of
-// date") instead of installing the new binary, and the gate would die on
-// `vitest: not found`. A non-frozen install reconciles the lockfile and installs
-// the binary, so the writer's devDeps are actually present at the gate. pnpm
-// itself is the idempotency authority: when the manifest/lockfile already agree
-// this is a cheap no-op. An explicit `.tanren/ci.yml` `bootstrap.run` (or an
-// `input.bootstrapCommand` override) still wins over this default. pnpm/npm are
-// chosen by the SAME manifest probe the cold bootstrap uses (a pnpm
-// lockfile/workspace ⇒ pnpm, else npm install).
-// `--config.confirmModulesPurge=false`: same non-interactive-runner reason as
-// DEFAULT_BOOTSTRAP_COMMAND. This path runs the MOST often (every gate, after each
-// writer iteration), so a writer that rewrites the manifest such that pnpm wants to
-// purge `node_modules` would otherwise abort with the no-TTY error and fail the run.
-export const DEPS_ENSURE_DEFAULT_COMMAND =
-  "if [ -f pnpm-lock.yaml ] || [ -f pnpm-workspace.yaml ]; then pnpm install --config.confirmModulesPurge=false; " +
-  "elif [ -f package.json ]; then npm install; " +
-  "else echo 'tanren: no package manifest found; skipping dependency bootstrap'; fi";
+// LOUD on a missing contract: a repo with neither a `.tanren/ci.yml` `bootstrap.run`
+// NOR a `justfile` cannot declare how to prepare its workspace, so the bootstrap
+// step `exit 1`s with a clear message (which surfaces as a typed
+// WorkspaceBootstrapError tail) rather than guessing a stack. The message names the
+// contract so the operator knows exactly what to add.
+export const DEFAULT_BOOTSTRAP_COMMAND =
+  `if [ -f ${JUSTFILE_PATH} ]; then just bootstrap; ` +
+  `else echo 'tanren: no .tanren/ci.yml bootstrap.run and no justfile — declare this project'\\''s lifecycle ` +
+  `(a justfile with a \\'bootstrap\\' target, or a .tanren/ci.yml bootstrap.run); Tanren assumes no tech stack' >&2; exit 1; fi`;
 
 export interface BootstrapWorkspaceInput {
   ssh: CommandSubstrate;
@@ -157,15 +127,14 @@ export interface EnsureWorkspaceDepsInput {
   ssh: CommandSubstrate;
   target: RunnerHandle;
   workspacePath: string;
-  // The install command run in the workspace dir over SSH whenever a manifest
-  // exists. Defaults to DEPS_ENSURE_DEFAULT_COMMAND — the NON-FROZEN
-  // pnpm/npm-detecting install — so a writer that added a devDep without a
-  // perfectly-regenerated lockfile still gets its binary installed before the gate.
-  // The caller (buildDefaultGate) PASSES an explicit `command` for the cases where
-  // the non-frozen default is wrong: a BROWNFIELD run gets the FROZEN
-  // DEFAULT_BOOTSTRAP_COMMAND (so a committed lockfile is never mutated), and an
-  // explicit `.tanren/ci.yml` `bootstrap.run` / `input.bootstrapCommand` is passed
-  // verbatim. So this default applies ONLY to the genuine greenfield case.
+  // The install/bootstrap command run in the workspace dir over SSH whenever the
+  // project CONTRACT is present (a `justfile` or `.tanren/ci.yml`). Defaults to
+  // DEFAULT_BOOTSTRAP_COMMAND — the stack-agnostic `just bootstrap` LOUD-fallback —
+  // when omitted. The caller (buildDefaultGate) PASSES the resolved command: the
+  // repo's `.tanren/ci.yml` `bootstrap.run` (conventionally `just bootstrap`) or an
+  // `input.bootstrapCommand` override, verbatim. The greenfield-vs-frozen install
+  // concern lives inside the project's `just bootstrap`, NOT here — Tanren names no
+  // stack.
   command?: string;
   // Plane B: same substrate-boundary handling as bootstrapWorkspace
   // — the `export K='v'; …` prelude is prepended to the EXECUTED command ONLY, never
@@ -176,14 +145,15 @@ export interface EnsureWorkspaceDepsInput {
 }
 
 // The outcome of an ensure call: whether the guarded install actually RAN the
-// install command (a manifest was present) or was a no-op (no manifest yet). The
-// install runs whenever a manifest exists — pnpm/npm is the idempotency authority,
-// so re-running on an already-installed tree is a cheap no-op — which is what lets
-// a writer-added devDep (authored AFTER an earlier partial install created
-// node_modules) actually get installed before the gate. `installed` therefore
-// reports "the install command ran", NOT "node_modules now exists for the first
-// time"; the greenfield caller re-runs ensure each gate (the manifest mutates
-// between iterations) rather than latching on this flag.
+// bootstrap command (the project CONTRACT was present) or was a no-op (a
+// contract-less clone HEAD). The command runs whenever a `justfile` or
+// `.tanren/ci.yml` exists — the project's `just bootstrap` is the idempotency
+// authority, so re-running on an already-prepared tree is a cheap no-op — which is
+// what lets a writer-added dependency (authored AFTER an earlier iteration's
+// install) actually get installed before the gate. `installed` therefore reports
+// "the bootstrap command ran", NOT "the tree was prepared for the first time"; the
+// greenfield caller re-runs ensure each gate (the contract/deps mutate between
+// iterations) rather than latching on this flag.
 export interface EnsureWorkspaceDepsResult {
   installed: boolean;
 }
@@ -206,28 +176,23 @@ export class WorkspaceDepsInstallError extends Error {
   }
 }
 
-// Idempotently ensures the workspace's dependencies are installed before a gate
-// runs. This closes the greenfield gap: prepareRunWorkspace bootstraps ONCE, right
-// after clone — but a greenfield clone HEAD ships no manifest, so the cold
-// bootstrap skips install; the writer THEN authors `package.json`, and a
-// per-iteration gate would run `pnpm lint` against a workspace whose deps were
-// never installed (`turbo: not found` / `vitest: not found`).
+// Idempotently ensures the workspace is bootstrapped (deps installed / tree
+// prepared) before a gate runs. This closes the greenfield gap: prepareRunWorkspace
+// bootstraps ONCE, right after clone — but a greenfield clone HEAD ships no project
+// CONTRACT yet, so that cold bootstrap is a no-op; the writer THEN authors the
+// `justfile` + dependency manifest, and a per-iteration gate would otherwise run
+// `just tier-1` against an unprepared tree.
 //
-// INSTALL-TRIGGER (the P0 fix): the guarded install runs the resolved install
-// command whenever a manifest EXISTS (`package.json` / `pnpm-workspace.yaml`) —
-// it does NOT also require `node_modules` to be absent. The old `[ ! -d
-// node_modules ]` guard meant that once ANY partial install created
-// node_modules, a LATER writer-added devDep (e.g. `vitest`) was never installed,
-// so the gate died on `vitest: not found`. Letting the install run on every gate
-// (with pnpm/npm as the idempotency authority — a no-op install is cheap) means
-// the writer's freshly-added devDeps are always present at the gate. When no
-// manifest exists yet (greenfield clone HEAD, pre-writer) it is still a pure
-// no-op (exit 0). The default command (DEPS_ENSURE_DEFAULT_COMMAND) is NON-FROZEN
-// so a greenfield manifest⇆lockfile mismatch installs rather than hard-failing; the
-// caller passes an explicit `command` where that is wrong — the FROZEN
-// DEFAULT_BOOTSTRAP_COMMAND for a brownfield run (a committed lockfile is never
-// mutated) and any `.tanren/ci.yml` `bootstrap.run` verbatim. Safe to call before
-// every gate.
+// INSTALL-TRIGGER (the P0 fix): the guarded bootstrap runs the resolved command
+// whenever the project CONTRACT EXISTS (`justfile` / `.tanren/ci.yml`) — it does NOT
+// gate on whether deps were already installed. Running it on every gate (with the
+// project's `just bootstrap` as the idempotency authority — a no-op bootstrap is
+// cheap) means a writer-added dependency authored AFTER an earlier iteration's
+// install is always present at the gate. When NO contract exists yet (greenfield
+// clone HEAD, pre-writer) it is a pure no-op (exit 0). Tanren names no stack: the
+// resolved command is the project's `just bootstrap` (from `.tanren/ci.yml`
+// `bootstrap.run`), and the greenfield-vs-frozen concern lives inside that recipe.
+// Safe to call before every gate.
 //
 // On a nonzero exit / timeout / substrate failure it throws WorkspaceDepsInstallError
 // (mirroring bootstrapWorkspace) so the failure halts the run loudly with a typed,
@@ -235,17 +200,17 @@ export class WorkspaceDepsInstallError extends Error {
 export async function ensureWorkspaceDepsInstalled(
   input: EnsureWorkspaceDepsInput,
 ): Promise<EnsureWorkspaceDepsResult> {
-  const command = input.command ?? DEPS_ENSURE_DEFAULT_COMMAND;
-  // The guard runs entirely runner-side in ONE round-trip: if a manifest exists,
-  // print the install sentinel then run the install; otherwise print the no-op
-  // sentinel and exit 0. The install runs whenever a manifest is present (no
-  // node_modules gate) so a writer-added devDep installs even when an earlier
-  // partial install already created node_modules — pnpm/npm is the idempotency
-  // authority, so a redundant install is a cheap no-op. `set -e` is intentionally
-  // NOT used at the top — the `if`/`else` already controls flow and the install
-  // command itself surfaces its own nonzero exit as the command's exit code.
+  const command = input.command ?? DEFAULT_BOOTSTRAP_COMMAND;
+  // The guard runs entirely runner-side in ONE round-trip: if the project CONTRACT
+  // (`justfile` / `.tanren/ci.yml`) is present, print the install sentinel then run
+  // the bootstrap; otherwise print the no-op sentinel and exit 0. It runs whenever
+  // the contract is present (no deps-present gate) so a writer-added dependency
+  // installs even when an earlier iteration already prepared the tree — the
+  // project's `just bootstrap` is the idempotency authority, so a redundant run is a
+  // cheap no-op. `set -e` is intentionally NOT used at the top — the `if`/`else`
+  // already controls flow and the bootstrap command surfaces its own nonzero exit.
   const guarded =
-    `if [ -f package.json ] || [ -f pnpm-workspace.yaml ]; then ` +
+    `if [ -f ${JUSTFILE_PATH} ] || [ -f .tanren/ci.yml ]; then ` +
     `echo ${quoteSshShellArg(DEPS_INSTALL_SENTINEL)}; ${command}; ` +
     `else echo ${quoteSshShellArg(DEPS_NOOP_SENTINEL)}; fi`;
   // SUBSTRATE BOUNDARY: the app-env prelude is prepended to the EXECUTED guard

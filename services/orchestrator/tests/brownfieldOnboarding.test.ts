@@ -3,9 +3,10 @@
 // Exercises the four engine pieces with MOCKED seams (no provider, no network):
 //   - recon: a fake `RepoReader` + a mocked `ReconAnswerer` pre-fill chapters,
 //     plus the deterministic answerer derives chapters from the repo index.
-//   - config-injection: `proposeConfigFiles` builds the 6 files + honors
-//     per-file exclude; `openConfigInjectionPr` opens a PR through a fake
-//     `ConfigInjectionGitHub` that records the committed files.
+//   - config-injection: `proposeConfigFiles` builds the integration files (incl. the
+//     stack-agnostic justfile skeleton when the repo ships none) + honors per-file
+//     exclude; `openConfigInjectionPr` opens a PR through a fake `ConfigInjectionGitHub`
+//     that records the committed files.
 //   - seed-dag: recon gaps + GitHub issues become specs (created through the
 //     existing `createSpec` path on an in-memory pool), de-duped.
 //   - governance posture: the posture is a enum value persisted via the
@@ -112,7 +113,7 @@ describe("runRecon · read-only recon pre-fills chapters", () => {
   });
 });
 
-describe("config-injection · 5 files + per-file exclude + open PR", () => {
+describe("config-injection · 6 files + per-file exclude + open PR", () => {
   const proposeInput = {
     repoSlug: "tanren-fixture-easy",
     orgLogin: "cat-cave",
@@ -122,15 +123,18 @@ describe("config-injection · 5 files + per-file exclude + open PR", () => {
     generatedAt: "2026-05-28T00:00:00.000Z",
   };
 
-  it("proposes the 5 integration files including the PROJECT.md snapshot", () => {
+  it("proposes the 6 integration files (incl. the stack-agnostic justfile) when the repo ships none", () => {
     const files = proposeConfigFiles(proposeInput);
-    expect(files).toHaveLength(5);
+    expect(files).toHaveLength(6);
     expect(files[0]?.path).toBe(".tanren/PROJECT.md");
     expect(files[0]?.snapshot).toBe(true);
     // NATIVE delivery: the gate definition is `.tanren/ci.yml` (a CiConfigV1), NOT a
     // GitHub Actions workflow.
     expect(files.map((f) => f.path)).toContain(".tanren/ci.yml");
     expect(files.map((f) => f.path)).not.toContain(".github/workflows/tanren-ci.yml");
+    // STACK-AGNOSTIC: the justfile (the project's lifecycle contract) is seeded so the
+    // injected ci.yml's `just <target>` steps have something to defer to.
+    expect(files.map((f) => f.path)).toContain("justfile");
     expect(files.map((f) => f.path)).toContain("CODEOWNERS");
     // The native merge queue drives merges — no `.mergify.yml` is injected.
     expect(files.map((f) => f.path)).not.toContain(".mergify.yml");
@@ -139,7 +143,32 @@ describe("config-injection · 5 files + per-file exclude + open PR", () => {
     expect(files[0]?.content).toContain("smoke fixture");
   });
 
-  it("the injected .tanren/ci.yml is a native CiConfigV1 gate definition (no Actions job)", () => {
+  it("omits the justfile when the repo already ships one (never clobbers the lifecycle)", () => {
+    const files = proposeConfigFiles({ ...proposeInput, repoHasJustfile: true });
+    expect(files).toHaveLength(5);
+    expect(files.map((f) => f.path)).not.toContain("justfile");
+    // The ci.yml is still injected (Tanren's gate definition).
+    expect(files.map((f) => f.path)).toContain(".tanren/ci.yml");
+  });
+
+  it("the injected justfile is a STACK-AGNOSTIC skeleton whose targets fail LOUDLY until filled", () => {
+    const just = proposeConfigFiles(proposeInput).find((f) => f.path === "justfile");
+    expect(just).toBeDefined();
+    const body = just?.content ?? "";
+    // The conventional lifecycle targets are present as stubs.
+    for (const target of ["bootstrap:", "tier-1:", "tier-2:", "tier-3:", "build:", "deploy:"]) {
+      expect(body).toContain(target);
+    }
+    // Every stub is LOUD (exit 1) — an unfilled target can never silently pass a gate.
+    expect(body).toContain("exit 1");
+    // The recipe BODIES name NO tech stack — the project fills in pnpm/cargo/… itself
+    // (a leading comment may list example stacks as guidance — not an executed command).
+    for (const recipe of body.split("\n").filter((l) => l.startsWith("\t"))) {
+      expect(recipe).not.toMatch(/\bpnpm\b|\bnpm\b|\bcargo\b|\buv\b/u);
+    }
+  });
+
+  it("the injected .tanren/ci.yml is a STACK-AGNOSTIC native CiConfigV1 gate (no Actions, no stack)", () => {
     const files = proposeConfigFiles(proposeInput);
     const ci = files.find((f) => f.path === ".tanren/ci.yml");
     expect(ci).toBeDefined();
@@ -154,30 +183,37 @@ describe("config-injection · 5 files + per-file exclude + open PR", () => {
     expect(yaml).toContain("merge:");
     // The `when` policy maps merge → pre_merge (the native gate is the merge authority).
     expect(yaml).toContain("pre_merge");
+    // STACK-AGNOSTIC: every executable line defers to `just <target>` — NO pnpm/npm/corepack
+    // in a `run:` (a leading comment may list example stacks as guidance).
+    expect(yaml).toContain("just bootstrap");
+    for (const run of yaml
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => l.startsWith("run:"))) {
+      expect(run).toMatch(/run: just /u);
+      expect(run).not.toMatch(/pnpm|npm|corepack/u);
+    }
     // It is NOT a GitHub Actions workflow and carries NO forge-CI / JUnit-upload plumbing.
     expect(yaml).not.toContain("runs-on:");
     expect(yaml).not.toContain("actions/checkout");
     expect(yaml).not.toContain("/webhooks/ci/junit");
     expect(yaml).not.toContain("x-hub-signature-256");
-    // CRUCIAL: it resolves as a valid CiConfigV1 (the native runner consumes it via
-    // resolveGateConfig) — the three tiers map 1:1 to the three lifecycle points, and
-    // the test tier emits JUnit to the path the per-test ingest reads.
+    // CRUCIAL: it resolves as a valid CiConfigV1 — the three tiers map 1:1 to the
+    // three lifecycle points, and each tier defers to `just tier-N`.
     const config = resolveCiConfig(yaml);
     expect(config.version).toBe(1);
     expect(config.when.fast).toEqual(["per_iteration"]);
     expect(config.when.slow).toEqual(["pre_audit"]);
     expect(config.when.merge).toEqual(["pre_merge"]);
-    // tier-1 (fast) runs NO tests — tests arrive with features.
-    expect((config.tiers.fast ?? []).some((s) => /test/u.test(s.run))).toBe(false);
-    // The test step emits JUnit to reports/junit.xml (the per-test ingest path).
-    const slowTest = (config.tiers.slow ?? []).find((s) => s.name === "test");
-    expect(slowTest?.run).toContain("--reporter=junit");
-    expect(slowTest?.run).toContain("--outputFile=reports/junit.xml");
+    expect((config.tiers.fast ?? []).map((s) => s.run)).toEqual(["just tier-1"]);
+    expect((config.tiers.slow ?? []).map((s) => s.run)).toEqual(["just tier-2"]);
+    expect((config.tiers.merge ?? []).map((s) => s.run)).toEqual(["just tier-3"]);
   });
 
   it("honors per-file exclude", () => {
     const files = proposeConfigFiles(proposeInput, [".tanren/ci.yml", "CODEOWNERS"]);
-    expect(files).toHaveLength(3);
+    // 6 proposed (incl. justfile) minus the 2 excluded = 4.
+    expect(files).toHaveLength(4);
     expect(files.map((f) => f.path)).not.toContain(".tanren/ci.yml");
     expect(files.map((f) => f.path)).not.toContain("CODEOWNERS");
   });
@@ -205,7 +241,7 @@ describe("config-injection · 5 files + per-file exclude + open PR", () => {
     });
     expect(pr.number).toBe(48);
     expect(pr.branch).toBe("tanren/integrate");
-    expect(committed).toHaveLength(4);
+    expect(committed).toHaveLength(5);
     expect(committed).not.toContain(".gitignore");
   });
 

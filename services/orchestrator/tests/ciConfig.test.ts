@@ -44,30 +44,29 @@ function expectValidationError(yamlText: string): CiConfigValidationError {
 }
 
 describe("resolveCiConfig — missing", () => {
-  it("returns the frozen 3-tier default when no file is present", () => {
+  it("returns the frozen, STACK-AGNOSTIC 3-tier default when no file is present", () => {
     const cfg = resolveCiConfig();
     expect(cfg).toBe(DEFAULT_CI_CONFIG);
     // Three tiers, mapped 1:1 to the three lifecycle points (3-tier CI requirement).
     expect(Object.keys(cfg.tiers).toSorted()).toEqual(["fast", "merge", "slow"]);
-    // tier-1 (fast) is cheap: lint + typecheck ONLY — NO tests in the per-iteration tier.
-    expect(cfg.tiers.fast.map((s) => s.name)).toEqual(["lint", "typecheck"]);
-    expect(cfg.tiers.fast.some((s) => s.name === "unit" || /test/u.test(s.run))).toBe(false);
-    // tier-2 (slow) is build + tests at spec completion.
-    expect(cfg.tiers.slow.map((s) => s.name)).toEqual(["build", "test"]);
-    // tier-3 (merge) is the heaviest thorough gate.
-    expect(cfg.tiers.merge?.map((s) => s.name)).toEqual(["lint", "typecheck", "build", "test"]);
+    // Every step defers to `just <target>` — Tanren names NO stack (no pnpm/npm/node).
+    const allRuns = Object.values(cfg.tiers).flatMap((steps) => steps.map((s) => s.run));
+    for (const run of [...allRuns, bootstrapCommand(cfg) ?? ""]) {
+      expect(run).toMatch(/^just /u);
+      expect(run).not.toMatch(/pnpm|npm|corepack|node/u);
+    }
+    // tier-1 (fast) → `just tier-1`; tier-2 (slow) → `just tier-2`; tier-3 (merge) → `just tier-3`.
+    expect(cfg.tiers.fast.map((s) => s.run)).toEqual(["just tier-1"]);
+    expect(cfg.tiers.slow.map((s) => s.run)).toEqual(["just tier-2"]);
+    expect(cfg.tiers.merge?.map((s) => s.run)).toEqual(["just tier-3"]);
+    // bootstrap defers to `just bootstrap` (the project owns its stack's install).
+    expect(bootstrapCommand(cfg)).toBe("just bootstrap");
   });
 
-  it("emits JUnit evidence from the test tiers to the path the per-test ingest reads", () => {
-    const cfg = DEFAULT_CI_CONFIG;
-    // The JUnit ingest (`ingestGateJunit`) reads back exactly `reports/junit.xml`.
+  it("keeps the JUnit report-path convention fixed for the per-test ingest", () => {
+    // The COMMAND that writes the report is the project's (`just tier-2`), but the
+    // OUTPUT path the ingest (`ingestGateJunit`) reads back stays fixed.
     expect(JUNIT_REPORT_PATH).toBe("reports/junit.xml");
-    for (const tier of ["slow", "merge"] as const) {
-      const testStep = (cfg.tiers[tier] ?? []).find((s) => s.name === "test");
-      expect(testStep).toBeDefined();
-      expect(testStep?.run).toContain("--reporter=junit");
-      expect(testStep?.run).toContain(`--outputFile=${JUNIT_REPORT_PATH}`);
-    }
   });
 
   it("maps fast→per_iteration, slow→pre_audit, merge→pre_merge (3 distinct tiers)", () => {

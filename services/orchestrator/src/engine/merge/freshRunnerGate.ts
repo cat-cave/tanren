@@ -202,10 +202,12 @@ function buildCloneRefCommand(repoUrl: string, ref: string, token: string | unde
 }
 
 /**
- * Install deps on the freshly-cloned workspace before the gate runs — a brownfield
- * re-gate needs a built tree for `build`/`test`. The install command is the repo's
- * `tanren-ci.yml` bootstrap.run when present, else the FROZEN brownfield default (a
- * re-gate never mutates a committed lockfile). A failure throws (no silent skip).
+ * Install deps on the freshly-cloned workspace before the gate runs — a re-gate
+ * needs a built tree for the build/test tiers. The bootstrap command is the repo's
+ * `.tanren/ci.yml` `bootstrap.run` (conventionally `just bootstrap`) when present,
+ * else the stack-agnostic DEFAULT_BOOTSTRAP_COMMAND LOUD-fallback. Tanren names no
+ * stack; the greenfield-vs-frozen concern lives in the project's `just bootstrap`. A
+ * failure throws (no silent skip).
  */
 async function installDepsForGate(
   deps: FreshRunnerGateDeps,

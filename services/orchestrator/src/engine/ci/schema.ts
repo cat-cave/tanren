@@ -31,7 +31,8 @@ export type CiStep = z.infer<typeof CiStep>;
 // ---- Bootstrap -------------------------------------------------------------
 
 // Optional install/bootstrap command run before any tier. workspace
-// bootstrap reads this to provision dependencies (e.g. `pnpm install`).
+// bootstrap reads this to provision dependencies (conventionally `just bootstrap`,
+// deferring to the project's stack — Tanren names no tech stack itself).
 export const CiBootstrap = z
   .object({
     run: z.string().min(1),

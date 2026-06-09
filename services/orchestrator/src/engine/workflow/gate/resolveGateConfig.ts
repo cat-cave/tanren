@@ -70,16 +70,16 @@ export async function resolveGateConfig(input: ResolveGateConfigInput): Promise<
   return resolveCiConfig(await readCiConfigText(input));
 }
 
-// Resolves the install command for the workspace-bootstrap step from the repo's
-// `.tanren/ci.yml` `bootstrap.run`. Returns `undefined` when the repo declares no
-// config file, so the caller's DEFAULT install command applies (the cold bootstrap
-// uses its pnpm/npm-detecting DEFAULT_BOOTSTRAP_COMMAND heuristic; the in-loop
-// deps-ensure picks greenfield-non-frozen vs brownfield-frozen) — we only override
-// that default when the repo actually ships a `.tanren/ci.yml` WITH a `bootstrap.run`.
-// A present-but-invalid config still throws from resolveCiConfig, surfacing a
-// misconfigured repo loudly. NOTE: `bootstrap.run` is OPTIONAL with no schema
-// default, so a config that omits `bootstrap` (or `bootstrap.run`) yields
-// `undefined` here too — the caller's default applies, NOT a baked-in command.
+// Resolves the bootstrap command for the workspace-bootstrap step from the repo's
+// `.tanren/ci.yml` `bootstrap.run` (conventionally `just bootstrap`). Returns
+// `undefined` when the repo declares no config file, so the caller's stack-agnostic
+// DEFAULT_BOOTSTRAP_COMMAND LOUD-fallback applies (`just bootstrap` if a justfile is
+// present, else a loud failure) — we only override that default when the repo
+// actually ships a `.tanren/ci.yml` WITH a `bootstrap.run`. A present-but-invalid
+// config still throws from resolveCiConfig, surfacing a misconfigured repo loudly.
+// NOTE: `bootstrap.run` is OPTIONAL with no schema default, so a config that omits
+// `bootstrap` (or `bootstrap.run`) yields `undefined` here too — the caller's
+// fallback applies, NOT a baked-in command.
 export async function resolveBootstrapCommand(input: ResolveGateConfigInput): Promise<string | undefined> {
   const text = await readCiConfigText(input);
   if (text === undefined) {

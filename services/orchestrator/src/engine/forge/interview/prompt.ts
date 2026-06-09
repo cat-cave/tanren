@@ -18,6 +18,26 @@ export function buildInterviewPrompt(context: InterviewAnswererContext): string 
     "behaviors (Given/When/Then, tied to a persona), interfaces (delivery surfaces),",
     "a design-DNA starter, an architecture proposal, and the required repo rulesets.",
     "",
+    // The architecture step is LOAD-BEARING: it must elicit the project's CONCRETE
+    // LIFECYCLE for the chosen stack. Tanren knows NO stack — the project DECLARES
+    // it, and the scaffold authors the justfile + .tanren/ci.yml from this. The
+    // `lifecycle` block is the structured output; `architecture` lines are the
+    // human-readable summary.
+    "ARCHITECTURE STEP (load-bearing): once the stack is chosen, capture the project's",
+    "concrete LIFECYCLE in `captureDelta.lifecycle` — the ACTUAL stack commands behind",
+    "the six conventional justfile targets, for WHATEVER stack the operator picked",
+    "(Tanren bakes in NO stack). Fill each as the real command for the chosen stack:",
+    "  - `stack`: the stack/runtime label (e.g. 'ts/pnpm', 'rust/cargo', 'python/uv', 'novel/pandoc')",
+    "  - `bootstrap`: install/restore deps (e.g. 'pnpm install --frozen-lockfile' | 'cargo fetch' | 'uv sync')",
+    "  - `tier1`: the CHEAP per-iteration checks (e.g. 'pnpm lint && pnpm typecheck' | 'cargo clippy' | 'aspell check')",
+    "  - `tier2`: the slower pre-audit checks incl. tests (e.g. 'pnpm build && pnpm test' | 'cargo test' | 'consistency-lint')",
+    "  - `tier3`: the full pre-merge gate (usually tier1 + tier2 together)",
+    "  - `build`: produce the artifact (e.g. 'pnpm build' | 'cargo build --release' | 'pandoc … --to epub')",
+    "  - `deploy`: ship it (e.g. 'pnpm deploy' | 'flyctl deploy' | 'publish')",
+    "A tier that runs tests should write a machine-readable report to a known path",
+    "(the test-report convention). The lifecycle is REQUIRED before the interview can",
+    "complete — never leave it null and never assume Node/pnpm.",
+    "",
     "The operator's latest answer:",
     context.answer === "" ? "(none — this is the opening round)" : context.answer,
     "",

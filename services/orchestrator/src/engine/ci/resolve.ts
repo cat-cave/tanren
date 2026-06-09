@@ -24,49 +24,37 @@ export class CiConfigValidationError extends Error {
 
 export { CiYamlParseError };
 
-// The conventional workspace path the test tier writes its JUnit report to. The
+// The conventional workspace path a test tier writes its JUnit report to. The
 // native gate's per-test ingest (`ingestGateJunit`) reads back EXACTLY this path
-// over SSH to feed CI-intelligence (flaky detection + quarantine). The generated
-// `.tanren/ci.yml` test step MUST emit to this path or there is no per-test grain;
+// over SSH to feed CI-intelligence (flaky detection + quarantine). A project whose
+// `just tier-2` runs tests MUST emit to this path or there is no per-test grain;
 // keep this the single source of truth so the writer side and the read side agree.
+// The COMMAND that writes it is the project's (inside `just tier-2`) — Tanren names
+// no test runner; only the OUTPUT path convention is fixed.
 export const JUNIT_REPORT_PATH = "reports/junit.xml";
 
-// The vitest JUnit reporter invocation the generated test tiers use, writing to
-// JUNIT_REPORT_PATH so the native per-test ingest can read it back. Domain-default
-// (vitest is the scaffold toolchain); a repo with another runner overrides its own
-// `.tanren/ci.yml`, but the OUTPUT path convention is fixed.
-export const JUNIT_TEST_RUN = `pnpm test --reporter=junit --outputFile=${JUNIT_REPORT_PATH}`;
-
-// The built-in 3-tier default used when a repo ships no `.tanren/ci.yml`. The three
-// tiers map 1:1 to the spec-loop's lifecycle points (the spec-loop-redesign 3-tier
-// CI requirement):
-//   - fast   (per_iteration) — tier-1: lint + typecheck. CHEAP, runs after every
-//     writer iteration. NO tests here — tests arrive with features, so a scaffold
+// The built-in 3-tier default used when a repo ships no `.tanren/ci.yml`. STACK-
+// AGNOSTIC: every step defers to `just <target>`, so Tanren names NO tech stack —
+// the stack commands live in the project's `justfile` (the project CONTRACT; see
+// engine/forge/scaffold/skeleton.ts). The three tiers map 1:1 to the spec-loop's
+// lifecycle points:
+//   - fast   (per_iteration) — `just tier-1`: the cheap per-iteration gate (e.g.
+//     lint + typecheck). NO tests here — tests arrive with features, so a scaffold
 //     pass is never blocked by a test tier.
-//   - slow   (pre_audit)     — tier-2: build + tests, emitting JUnit evidence (the
-//     CI-intelligence per-test grain). Runs once at spec completion before the audit.
-//   - merge  (pre_merge)     — tier-3: the heaviest, thorough gate — a clean full
-//     lint + typecheck + build + tests run, the merge-queue authority.
-// `unit`-as-a-cheap-test in the fast tier is GONE: tests are tier-2+ only.
+//   - slow   (pre_audit)     — `just tier-2`: build + tests, the tier that emits
+//     JUnit evidence (to JUNIT_REPORT_PATH) for the CI-intelligence per-test grain.
+//   - merge  (pre_merge)     — `just tier-3`: the heaviest thorough gate, the
+//     merge-queue authority.
+// `bootstrap.run` is `just bootstrap`. This default mirrors the skeleton's ci.yml
+// (engine/forge/scaffold/skeleton.ts) — both are the same lifecycle map.
 export const DEFAULT_CI_CONFIG: CiConfigV1 = Object.freeze(
   CiConfigV1.parse({
     version: 1,
-    bootstrap: { run: "pnpm install --frozen-lockfile" },
+    bootstrap: { run: "just bootstrap" },
     tiers: {
-      fast: [
-        { name: "lint", run: "pnpm lint" },
-        { name: "typecheck", run: "pnpm typecheck" },
-      ],
-      slow: [
-        { name: "build", run: "pnpm build" },
-        { name: "test", run: JUNIT_TEST_RUN },
-      ],
-      merge: [
-        { name: "lint", run: "pnpm lint" },
-        { name: "typecheck", run: "pnpm typecheck" },
-        { name: "build", run: "pnpm build" },
-        { name: "test", run: JUNIT_TEST_RUN },
-      ],
+      fast: [{ name: "tier-1", run: "just tier-1" }],
+      slow: [{ name: "tier-2", run: "just tier-2" }],
+      merge: [{ name: "tier-3", run: "just tier-3" }],
     },
     when: {
       fast: ["per_iteration"],
