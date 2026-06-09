@@ -45,10 +45,27 @@ export class RecordingPool {
   }
 }
 
-export class RecordingRunPool extends RecordingPool {
+/** Overridable bits of the loaded run-context row (spec title/description). */
+export interface RunPoolSpecOverrides {
   // a speculative run's dynamic base; null ⇒ a normal run (default_branch).
-  constructor(readonly speculativeBase: string | null = null) {
+  speculativeBase?: string | null;
+  specTitle?: string;
+  specDescription?: string;
+}
+
+export class RecordingRunPool extends RecordingPool {
+  private readonly speculativeBase: string | null;
+  private readonly specTitle: string;
+  private readonly specDescription: string;
+
+  // Back-compat-free positional form (speculativeBase only) OR an overrides
+  // object — the title/description tests inject blank spec fields via the latter.
+  constructor(overrides?: string | null | RunPoolSpecOverrides) {
     super();
+    const o = typeof overrides === "object" && overrides !== null ? overrides : { speculativeBase: overrides ?? null };
+    this.speculativeBase = o.speculativeBase ?? null;
+    this.specTitle = o.specTitle ?? "Add fixture";
+    this.specDescription = o.specDescription ?? "Create fixture file";
   }
 
   async query(sql: string, params: unknown[]): Promise<{ rows: unknown[]; rowCount: number }> {
@@ -68,8 +85,8 @@ export class RecordingRunPool extends RecordingPool {
             repo_url: "https://github.com/cat-cave/repo.git",
             default_branch: "main",
             config: { githubCredentialRef: "credential/github/dev" },
-            spec_title: "Add fixture",
-            spec_description: "Create fixture file",
+            spec_title: this.specTitle,
+            spec_description: this.specDescription,
             ssh_host: "runner",
             ssh_port: 22,
             host_key_fingerprint: "SHA256:runner-host",

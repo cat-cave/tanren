@@ -319,6 +319,40 @@ describe("GitHub draft PR contract", () => {
     expect(http.requests[2]?.path).toBe("/repos/cat-cave/repo/pulls?state=open&head=cat-cave%3Atanren%2Frun_123");
   });
 
+  it("non-already-exists 422 (no open PR after re-find) → throws WITH the GitHub response body surfaced (apex v31)", async () => {
+    // The apex v31 case: a 422 that is NOT "already exists" (here an empty-title
+    // `missing_field`). The re-find by head still sees no PR → we must throw, and the
+    // thrown message must include GitHub's body detail (not just `HTTP 422`), or the
+    // real cause is invisible (the swallowed-body diagnosis that derailed v31).
+    const http = new ScriptedGitHubHttp([
+      { status: 200, body: [] },
+      {
+        status: 422,
+        body: {
+          message: "Validation Failed",
+          errors: [{ resource: "PullRequest", field: "title", code: "missing_field" }],
+        },
+      },
+      { status: 200, body: [] },
+    ]);
+    const service = new GitHubPullRequestService(http);
+
+    const promise = service.ensureDraftPullRequest({
+      repo: { owner: "cat-cave", name: "repo" },
+      token: "ghp_secretToken",
+      headBranch: "tanren/run_123",
+      baseBranch: "main",
+      title: "",
+    });
+
+    await expect(promise).rejects.toThrow("HTTP 422");
+    // The body detail — the missing_field / errors content — is surfaced, not swallowed.
+    await expect(promise).rejects.toThrow(/missing_field/u);
+    await expect(promise).rejects.toThrow(/title/u);
+    // find-by-head → POST (422) → re-find-by-head (still none) → throw.
+    expect(http.requests.map((request) => request.method)).toEqual(["GET", "POST", "GET"]);
+  });
+
   it("creates a draft PR, persists its URL, and appends redacted events", async () => {
     const secrets = new FakeSecretStore();
     await secrets.put({ ref: "credential/github/dev", value: "ghp_secretToken" });
