@@ -98,26 +98,53 @@ const SELECT_COLUMNS = `
   error
 `;
 
-function parseJsonb(value: unknown): unknown {
+// A jsonb cell round-trips as either a JSON string or an already-parsed value;
+// parse the string form so an unparseable cell THROWS at the boundary.
+function parseJsonbCell(value: unknown): unknown {
   return typeof value === "string" ? JSON.parse(value) : value;
 }
+const jsonbCell = z.preprocess(parseJsonbCell, z.unknown());
+
+// audit RC-6 trust-at-boundary: decode the raw `forge_action_proposals` row
+// through Zod instead of `... as Date` / `parseJsonb(...) as Record` casts. A bad
+// status enum, a non-coercible timestamp, or a non-object args cell THROWS at
+// `.parse` rather than laundering an untrusted DB row into the typed shape.
+const ForgeActionProposalRowDecode = z
+  .object({
+    id: z.coerce.string().min(1),
+    org_id: z.coerce.string().min(1),
+    thread_id: z.coerce.string().min(1),
+    proposing_turn_id: z.coerce.string().min(1),
+    tool_name: z.coerce.string().min(1),
+    args: jsonbCell.pipe(z.record(z.string(), z.unknown())),
+    rationale: z.coerce.string().min(1),
+    status: ForgeProposalStatus,
+    proposed_at: z.coerce.date(),
+    decided_by: z.coerce.string().min(1).nullish(),
+    decided_at: z.coerce.date().nullish(),
+    result: jsonbCell.nullish(),
+    error: z.coerce.string().nullish(),
+  })
+  .transform(
+    (row): ForgeActionProposalRow => ({
+      id: row.id,
+      orgId: row.org_id,
+      threadId: row.thread_id,
+      proposingTurnId: row.proposing_turn_id,
+      toolName: row.tool_name,
+      args: row.args,
+      rationale: row.rationale,
+      status: row.status,
+      proposedAt: row.proposed_at,
+      decidedBy: row.decided_by ?? null,
+      decidedAt: row.decided_at ?? null,
+      result: row.result ?? null,
+      error: row.error ?? null,
+    }),
+  );
 
 function decodeRow(raw: RawProposalRow): ForgeActionProposalRow {
-  return ForgeActionProposalRow.parse({
-    id: String(raw.id),
-    orgId: String(raw.org_id),
-    threadId: String(raw.thread_id),
-    proposingTurnId: String(raw.proposing_turn_id),
-    toolName: String(raw.tool_name),
-    args: parseJsonb(raw.args) as Record<string, unknown>,
-    rationale: String(raw.rationale),
-    status: String(raw.status),
-    proposedAt: raw.proposed_at as Date,
-    decidedBy: raw.decided_by === null || raw.decided_by === undefined ? null : String(raw.decided_by),
-    decidedAt: raw.decided_at === null || raw.decided_at === undefined ? null : (raw.decided_at as Date),
-    result: raw.result === null || raw.result === undefined ? null : parseJsonb(raw.result),
-    error: raw.error === null || raw.error === undefined ? null : String(raw.error),
-  });
+  return ForgeActionProposalRowDecode.parse(raw);
 }
 
 // Reconstructs the typed ForgeWriteToolCall from a persisted row so the
