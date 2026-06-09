@@ -219,6 +219,14 @@ export async function loadRunExecutionContext(
     ...(projectConfig.lifecycle !== undefined && {
       contractFiles: materializeContractFiles(projectConfig.lifecycle),
     }),
+    // TEMPLATING WAVE 3 (templating-system.md §3): when a validated template was
+    // SELECTED at derive, its repo ref is persisted on the project config — thread it
+    // so the workspace-prep SEEDS the template's conforming files into the repo BEFORE
+    // the writer runs (the writer's "seed already committed" assertion then holds, and
+    // it specializes instead of authoring from scratch). Absent ⇒ from-scratch path.
+    ...(projectConfig.templateRef !== undefined && {
+      templateSeed: { repoRef: projectConfig.templateRef.repoRef },
+    }),
   };
 
   return { context, projectConfig, orgId: decoded.org_id };

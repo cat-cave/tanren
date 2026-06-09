@@ -119,6 +119,7 @@ function builtTemplate(): BuiltTemplate {
     scratchRoot: "/ws/.git/tanren-tmp/nc",
     config: DEFAULT_CI_CONFIG,
     auditor,
+    release: async () => {},
   };
 }
 const buildDriver: TemplateBuildDriver = {

@@ -193,6 +193,58 @@ class ShaRoutingSsh implements CommandSubstrate {
   }
 }
 
+// TEMPLATE SEED (templating-system.md §3): when the run carries a `templateSeed`, the
+// workspace-prep clones the template repo's files into the workspace + commits them
+// BEFORE the writer runs, so the scaffold writer's "the seed is ALREADY COMMITTED"
+// assertion holds. This SSH reports the seed materialized (the seeded marker) so a
+// seed commit is made, and routes the seed-commit sha so baseSha is distinguishable.
+const SEED_SHA = "d".repeat(40);
+class SeedingSsh implements CommandSubstrate {
+  readonly commands: Array<{ command: RunnerCommand }> = [];
+  async run(_t: RunnerHandle, command: RunnerCommand): Promise<CommandResult> {
+    this.commands.push({ command });
+    const label = (command as { label?: string }).label ?? "";
+    if (label === "materialize template seed") {
+      return { exitCode: 0, stdout: "tanren: template seed materialized", stderr: "", timedOut: false };
+    }
+    const stdout = label === "commit template seed" ? SEED_SHA : CLONE_HEAD;
+    return { exitCode: 0, stdout, stderr: "", timedOut: false };
+  }
+}
+
+describe("prepareRunWorkspace · template SEED materialization (templating-system.md §3)", () => {
+  it("clones + commits the template seed when the run carries a templateSeed (writer's seed assertion holds)", async () => {
+    const ssh = new SeedingSsh();
+    const context = makeContext({ templateSeed: { repoRef: "cat-cave/tanren-template-ts-next" } });
+    const prepared = await prepareRunWorkspace(makeInput(ssh, context), target, "/workspace/runs/run_mat/repo");
+    const labels = ssh.commands.map(({ command }) => (command as { label?: string }).label ?? "");
+    // The seed was materialized (cloned into the workspace) + committed — so the
+    // template files are ALREADY COMMITTED when the writer runs (it specializes them).
+    expect(labels).toContain("materialize template seed");
+    expect(labels).toContain("commit template seed");
+    // The seed-materialize command references the template repo (the seed source).
+    const seedCmd = ssh.commands.find(
+      ({ command }) => (command as { label?: string }).label === "materialize template seed",
+    );
+    expect((seedCmd?.command as { command: string } | undefined)?.command ?? "").toContain(
+      "tanren-template-ts-next",
+    );
+    // No template ci.yml/justfile manifest in this context, so the deterministic
+    // contract-files commit is NOT made — the seed brought the (validated) contract.
+    // The answerer base sits ABOVE the seed commit (the seed is Tanren-owned, kept out
+    // of the writer's reviewed diff).
+    expect(prepared.baseSha).toBe(SEED_SHA);
+  });
+
+  it("is a clean no-op when the run carries NO templateSeed (the from-scratch path)", async () => {
+    const ssh = new RecordingSsh();
+    await prepareRunWorkspace(makeInput(ssh, makeContext()), target, "/workspace/runs/run_mat/repo");
+    const labels = ssh.commands.map(({ command }) => (command as { label?: string }).label ?? "");
+    expect(labels).not.toContain("materialize template seed");
+    expect(labels).not.toContain("commit template seed");
+  });
+});
+
 describe("prepareRunWorkspace · the answerer review base sits ABOVE the contract-files commit (apex v28)", () => {
   it("returns the contract-commit sha as baseSha on a greenfield run (writer diff excludes the contract files)", async () => {
     const ssh = new ShaRoutingSsh();

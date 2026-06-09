@@ -121,6 +121,13 @@ export interface PlannerRunContext {
   creditUsdRate?: number;
   // DETERMINISTIC CONTRACT FILES (v27 fix): the `.tanren/ci.yml` + `justfile` workspace-prep materializes VERBATIM (write-iff-absent) from the captured lifecycle BEFORE the writer runs — so they are NEVER LLM-authored (the writer mangled the ci.yml shape on v27). Absent ⇒ no lifecycle (brownfield ships its own) ⇒ no-op.
   contractFiles?: ReadonlyArray<ContractFile>;
+  // TEMPLATING WAVE 3 (templating-system.md §3): the SELECTED template's repo ref to
+  // SEED from. When a validated template was selected at derive, the run path clones
+  // the template repo's conforming files into the workspace BEFORE the writer runs —
+  // so the scaffold writer's "seed already committed" assertion is TRUE and it
+  // specializes the seed instead of authoring from scratch. Absent ⇒ no template
+  // matched (the from-scratch contract-file path runs). Resolved from `projectConfig.templateRef`.
+  templateSeed?: { repoRef: string };
 }
 
 export interface PlannerRunAdapterContext {

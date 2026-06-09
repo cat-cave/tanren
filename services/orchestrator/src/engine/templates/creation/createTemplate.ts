@@ -139,11 +139,22 @@ export async function createTemplate(
   // anyway".
   const built = await deps.buildDriver.build({ orgId, projectId: derived.projectId });
   if (built.repoRef === "" || built.builtSha === "") {
+    // The build driver allocated nothing usable, but still hand its `release` a chance
+    // (idempotent no-op when nothing was allocated) before failing.
+    await built.release();
     throw new TemplateBuildFailedError(derived.projectId, "the build driver returned no repo ref / commit");
   }
 
-  // STEP 4 — VALIDATE: run the existing harness (positive + negative + auditor).
-  const proof = await validateBuilt(deps, request, research, built);
+  // STEP 4 — VALIDATE over the allocated validation runner. RELEASE it in a `finally`
+  // (pass OR fail) so the validation runner is never LEAKED (audit §3.11/4 — the
+  // creation flow owns the teardown). The release is best-effort (never throws), so it
+  // cannot mask a validation result.
+  let proof: TemplateValidationProof;
+  try {
+    proof = await validateBuilt(deps, request, research, built);
+  } finally {
+    await built.release();
+  }
 
   // THE FAIL-CLOSED GATE: only a template whose proof validates may publish.
   if (!templateValidates(proof)) {

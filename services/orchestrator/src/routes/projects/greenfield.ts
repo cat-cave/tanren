@@ -45,6 +45,8 @@ import {
   type PreparedGreenfieldDeploy,
 } from "../../engine/forge/interview/index.js";
 import type { GithubAppTokenMinter } from "../../engine/providers/githubAppTokenMinter.js";
+import { githubHttpsRemote } from "../../engine/providers/github.js";
+import { ProjectStore } from "../../engine/repositories/projects.js";
 import { ensureIssuesInboxSource } from "../../engine/forge/inbox/index.js";
 import { provisionedGreenfieldProjectConfigProof } from "../../engine/workflow/projectConfigWriteGuards.js";
 import { createProject } from "../../engine/workflow/projectSpec.js";
@@ -186,6 +188,65 @@ export async function handleGreenfieldCreate(
   if (notLinked !== undefined) {
     return c.json({ error: "deploy_not_linked", ...notLinked }, 409);
   }
+
+  // IDEMPOTENT GREENFIELD CREATE (audit §3.10). The deterministic repo URL
+  // (`https://github.com/<owner>/<name>.git`) is the idempotency KEY — there is one
+  // greenfield project per repo. The order is REPO-FIRST so a stranded retry RESUMES
+  // off the durable `projects` row instead of double-provisioning + 409-ing:
+  //
+  //   1. Create the repo. If it ALREADY EXISTS (a prior attempt created it), don't
+  //      409 — look up the project bound to that repo and RESUME from there.
+  //   2. The project row is the COMPLETION ANCHOR. A retry that finds it returns it
+  //      idempotently; a retry that finds the repo but NO project re-attaches to the
+  //      repo (the strand-after-repo-create window) and continues.
+  //   3. Deploy is provisioned ONLY when the (existing-or-new) project has no deploy
+  //      target yet — so a resume never provisions a SECOND deploy app.
+  const repoUrl = githubHttpsRemote({ owner: input.owner, name: input.name });
+  const scopedActor: ActorContext = { ...actor, orgId };
+
+  // A pre-existing project for this repo ⇒ a full REPLAY of a completed create. Return
+  // it idempotently (no repo-create, no deploy-provision, no 409). The store takes an
+  // `ActorRef`; the org-scoping pool already bounds the row to the request's org (RLS).
+  const existingByRepo = await ProjectStore.findByRepoUrl(pool, repoUrl, { kind: "operator" });
+  if (existingByRepo !== undefined) {
+    return greenfieldCreateReplayResponse(c, deps, existingByRepo);
+  }
+
+  // Create the repo (auto-init). On `RepositoryAlreadyExistsError` the repo was made
+  // by a prior stranded attempt; re-attach to it (the project lookup above already
+  // proved no project is bound) rather than failing — the create completes this time.
+  let created: { fullName: string; repoUrl: string; defaultBranch: string } | undefined;
+  try {
+    created = await createGreenfieldRepository({
+      pool,
+      secrets,
+      vcsProvider,
+      orgId,
+      ...(deps.githubAppMinter === undefined ? {} : { githubAppMinter: deps.githubAppMinter }),
+      input: {
+        owner: input.owner,
+        name: input.name,
+        private: input.private ?? true,
+        autoInit: true,
+        ...(input.description === undefined ? {} : { description: input.description }),
+      },
+    });
+  } catch (error) {
+    if (error instanceof RepositoryAlreadyExistsError) {
+      // RE-ATTACH: the repo exists from a prior attempt + no project is bound (checked
+      // above). Continue with the deterministic repoUrl + the repo's default branch.
+      created = { fullName: `${input.owner}/${input.name}`, repoUrl, defaultBranch: input.defaultBranch ?? "main" };
+    } else {
+      const response = greenfieldRepositoryErrorResponse(c, error);
+      if (response !== undefined) return response;
+      throw error;
+    }
+  }
+
+  // Provision deploy ONLY now (after the repo exists) so the deploy app is the LAST
+  // external resource before the durable project row — minimizing the window where a
+  // crash could strand a deploy app without an anchor. (A resume past this point is
+  // handled by the project-replay branch above.)
   let preparedDeploy: PreparedGreenfieldDeploy;
   try {
     const prepared = await prepareGreenfieldDeploy({
@@ -205,31 +266,8 @@ export async function handleGreenfieldCreate(
     return c.json({ error: "deploy_provision_failed", message: messageOf(error) }, 502);
   }
 
-  let created;
-  try {
-    created = await createGreenfieldRepository({
-      pool,
-      secrets,
-      vcsProvider,
-      orgId,
-      ...(deps.githubAppMinter === undefined ? {} : { githubAppMinter: deps.githubAppMinter }),
-      input: {
-        owner: input.owner,
-        name: input.name,
-        private: input.private ?? true,
-        autoInit: true,
-        ...(input.description === undefined ? {} : { description: input.description }),
-      },
-    });
-  } catch (error) {
-    const response = greenfieldRepositoryErrorResponse(c, error);
-    if (response !== undefined) return response;
-    throw error;
-  }
-
   // Bind a new project to the REAL new repoUrl. createProject persists under the
   // org actor's RLS scope (it self-scopes on the actor's orgId).
-  const scopedActor: ActorContext = { ...actor, orgId };
   const project = await createProject(
     pool,
     {
@@ -265,6 +303,39 @@ export async function handleGreenfieldCreate(
       deploy: preparedDeploy.outcome,
     },
     201,
+  );
+}
+
+// IDEMPOTENT REPLAY (audit §3.10): a greenfield create whose project ALREADY exists
+// for this repo is a retry of a completed (or near-completed) provision. Re-ensure the
+// idempotent inbox source + return the existing project with a 200 — never a 409 + a
+// second deploy app. The deploy is NOT re-provisioned (the project already carries its
+// deploy config from the first attempt).
+async function greenfieldCreateReplayResponse(
+  c: Context<ActorContextEnv>,
+  deps: GreenfieldCreateDeps,
+  existing: { projectId: string; name: string; defaultBranch: string; repoUrl: string },
+): Promise<Response> {
+  // Use the project's STORED repo URL (the forge `html_url` form) so the response
+  // matches the original create exactly.
+  const repoUrl = existing.repoUrl;
+  const inbox = await ensureIssuesInboxSource({
+    pool: deps.pool,
+    orgId: deps.orgId,
+    projectId: existing.projectId,
+    repoUrl,
+  });
+  return c.json(
+    {
+      projectId: existing.projectId,
+      name: existing.name,
+      repoUrl,
+      defaultBranch: existing.defaultBranch,
+      repository: { fullName: `${deps.input.owner}/${deps.input.name}`, repoUrl },
+      inboxSource: { id: inbox.source.id, created: inbox.created },
+      idempotentReplay: true,
+    },
+    200,
   );
 }
 

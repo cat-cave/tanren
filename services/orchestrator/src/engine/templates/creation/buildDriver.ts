@@ -47,6 +47,13 @@ export interface BuiltTemplate {
   // The auditor seam over the built template (the spec-loop auditor at the real
   // call site; a stub in tests).
   auditor: TemplateAuditor;
+  // RELEASE the validation runner — the allocator teardown for the runner this handle
+  // was allocated on. The creation flow MUST call this in a `finally` after validation
+  // (pass OR fail) so the validation runner is never LEAKED (the audit §3.11/4 finding:
+  // `engine/templates/**` had zero `allocator.release`). Idempotent + best-effort: a
+  // release failure is logged, never thrown (it must not mask a validation result). A
+  // test stub that allocated nothing supplies a no-op.
+  release: () => Promise<void>;
 }
 
 // The BUILD SEAM. Given the derived template-build project id (+ its org), drive

@@ -72,6 +72,9 @@ export {
   CaptureInterface,
   CaptureArchitectureLine,
   CaptureLifecycle,
+  MissingProjectSlugError,
+  normalizeSlug,
+  safeProjectSlug,
   type InterviewAnswerer,
   type InterviewAnswererContext,
 } from "./types.js";

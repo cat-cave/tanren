@@ -1,147 +1,16 @@
-import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
-import type { ActorContext } from "../src/auth/schemas.js";
 import { RepositoryCreationForbiddenError } from "../src/engine/contracts/vcsProvider.js";
-import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
-import {
-  emptyCapture,
-  type InterviewAnswerer,
-  type PreparedGreenfieldDeploy,
-} from "../src/engine/forge/interview/index.js";
-import { createAuthMiddleware, type ActorContextEnv } from "../src/middleware/auth.js";
-import { createOnboardingRoutes, type OnboardingRoutesOptions } from "../src/routes/onboarding/index.js";
-import { createProjectRoutes } from "../src/routes/projects/index.js";
+import { emptyCapture } from "../src/engine/forge/interview/index.js";
 import { InMemoryVcsProvider } from "./conformance/fakes/inMemoryVcsProvider.js";
 import { RoutesPool } from "./helpers/routesPool.js";
-
-const actor: ActorContext = {
-  userId: "user_alice",
-  orgId: "org_acme",
-  projectId: null,
-  scopes: ["org:member", "org:admin"],
-  source: "session",
-};
-
-const answerer: InterviewAnswerer = {
-  async ask() {
-    return { say: "done", captureDelta: {}, suggestions: [], complete: true };
-  },
-};
-
-function appWithRoutes(
-  pool: RoutesPool,
-  vcsProvider = new InMemoryVcsProvider(),
-  onboardingOverrides: Partial<Pick<OnboardingRoutesOptions, "preflightDeploy" | "prepareDeploy">> = {},
-) {
-  const app = new Hono<ActorContextEnv>();
-  const secrets = new InMemorySecretStore();
-  app.use(
-    "*",
-    createAuthMiddleware({
-      store: {
-        async findApiTokenByRaw() {},
-        async loadSession() {},
-        async resolveActorContext() {
-          return actor;
-        },
-      } as never,
-      localDevActor: actor,
-    }),
-  );
-  app.route(
-    "/orgs",
-    createOnboardingRoutes({
-      pool: pool.asPgPool(),
-      secrets,
-      answererFactory: () => answerer,
-      vcsProvider,
-      ...onboardingOverrides,
-    }),
-  );
-  app.route(
-    "/orgs",
-    createProjectRoutes({
-      pool: pool.asPgPool(),
-      secrets,
-      vcsProvider,
-    }),
-  );
-  return { app, vcsProvider };
-}
-
-function preparedDeploy(providerKind: "deploy.vercel" | "deploy.flyio" = "deploy.vercel"): PreparedGreenfieldDeploy {
-  return {
-    outcome: {
-      status: "provisioned",
-      capability: "deploy",
-      providerKind,
-      action: "provision",
-      mode: "greenfield",
-      secretRefNames: [`secret://deploy/${providerKind}/app_1/token`],
-      surfaces: { projectConfigKeys: ["deployProvider", "deployAppId"], deployRef: `${providerKind}:app_1` },
-    },
-    projectConfig: {
-      deployProvider: providerKind,
-      deployAppId: "app_1",
-      deployAppName: "apex-url-shortener-v22",
-    },
-  };
-}
-
-// The TS/pnpm lifecycle the architecture step captures (apex v27 default) — NOT a
-// Tanren hardcode; required at derive (the scaffold can't author a justfile without it).
-const TS_LIFECYCLE = {
-  stack: "ts/pnpm",
-  bootstrap: "pnpm install --frozen-lockfile",
-  tier1: "pnpm lint && pnpm typecheck",
-  tier2: "pnpm build && pnpm test -- --reporter=junit --outputFile=reports/junit.xml",
-  tier3: "pnpm lint && pnpm typecheck && pnpm build && pnpm test",
-  build: "pnpm build",
-  deploy: "flyctl deploy",
-};
-
-// A capture WITH a lifecycle but no deploy — isolates the deploy-guard rejection so
-// it does not trip the (earlier) missing-lifecycle guard.
-const captureWithLifecycle = () => ({ ...emptyCapture(), lifecycle: TS_LIFECYCLE });
-
-function apexCapture() {
-  return {
-    ...emptyCapture(),
-    identity: {
-      slug: "apex-url-shortener-v22",
-      pitch: "A short link service for an operations team.",
-      repoHint: "",
-    },
-    lifecycle: TS_LIFECYCLE,
-  };
-}
-
-function seedGithubAppOrg(pool: RoutesPool): void {
-  pool.seedOrg({
-    id: "org_acme",
-    config: {
-      version: 1,
-      github_app: {
-        installationId: "137492334",
-        appId: "123456",
-        credentialRef: "credential/github_app/org/org_acme/default",
-        installedAt: "2026-06-06T00:00:00.000Z",
-      },
-    },
-  });
-}
-
-// An org that connected a static PAT (no GitHub App) — the documented fallback path
-// for repo creation when the App is not installed / lacks administration:write.
-function seedStaticTokenOrg(pool: RoutesPool): void {
-  pool.seedOrg({
-    id: "org_acme",
-    config: {
-      version: 1,
-      defaultCredentials: { github_token: "credential/github/org/org_acme/default" },
-    },
-  });
-}
+import {
+  apexCapture,
+  appWithGreenfieldRoutes as appWithRoutes,
+  captureWithLifecycle,
+  preparedDeploy,
+  seedGithubAppOrg,
+  seedStaticTokenOrg,
+} from "./helpers/greenfieldRoutes.js";
 
 class ForbiddenCreateVcsProvider extends InMemoryVcsProvider {
   override async createRepository(input: Parameters<InMemoryVcsProvider["createRepository"]>[0]) {
@@ -265,11 +134,16 @@ describe("greenfield/apex deploy dependency routes", () => {
     expect(pool.projects.size).toBe(0);
   });
 
-  it("rejects onboarding derive when deploy preparation fails after linked preflight", async () => {
+  it("rejects onboarding derive when deploy preparation fails after repo-create (no project/graph)", async () => {
+    // IDEMPOTENT + ATOMIC ORDER (audit §3.10): the order is REPO-FIRST then deploy, so
+    // a deploy-provision failure leaves a re-attachable repo but NO project/graph. The
+    // response is still 502 (deploy_provision_failed); a retry re-attaches to the repo
+    // (no 409) and re-runs deploy — never double-provisioning a deploy app.
     const pool = new RoutesPool();
-    pool.seedOrg({ id: "org_acme" });
+    seedGithubAppOrg(pool);
     pool.seedMembership("org_acme", "user_alice", "admin");
-    const { app } = appWithRoutes(pool, new InMemoryVcsProvider(), {
+    const vcs = new InMemoryVcsProvider();
+    const { app } = appWithRoutes(pool, vcs, {
       async preflightDeploy() {},
       async prepareDeploy() {
         throw new Error("deploy provision failed: provider token expired");
@@ -290,9 +164,12 @@ describe("greenfield/apex deploy dependency routes", () => {
     const body = (await res.json()) as { error: string; message: string };
     expect(body.error).toBe("deploy_provision_failed");
     expect(body.message).toContain("provider token expired");
+    // No project/graph was committed (deploy failed before the project row).
     expect(pool.projects.size).toBe(0);
     expect(pool.specs.size).toBe(0);
     expect(pool.inboxSources).toEqual([]);
+    // The repo WAS created (repo-first) — a retry re-attaches to it instead of 409-ing.
+    expect(vcs.createdRepositories.length).toBe(1);
   });
 
   it("creates a real repo and issues inbox source when onboarding derive succeeds", async () => {
@@ -474,9 +351,12 @@ describe("greenfield/apex deploy dependency routes", () => {
     expect(vcsProvider.createdRepositories).toEqual([]);
   });
 
-  it("rejects direct greenfield project creation when linked deploy provider fails before creating a repo", async () => {
+  it("rejects direct greenfield project creation when linked deploy provider fails after repo-create", async () => {
+    // IDEMPOTENT + ATOMIC ORDER (audit §3.10): repo-first then deploy. A deploy failure
+    // leaves a re-attachable repo but NO project; the response is still 502. A retry
+    // re-attaches to the repo (no 409) and re-runs deploy (no second deploy app).
     const pool = new LinkedDeployRoutesPool();
-    pool.seedOrg({ id: "org_acme" });
+    seedGithubAppOrg(pool);
     pool.seedMembership("org_acme", "user_alice", "admin");
     const { app, vcsProvider } = appWithRoutes(pool);
 
@@ -494,7 +374,9 @@ describe("greenfield/apex deploy dependency routes", () => {
     expect(res.status).toBe(502);
     const body = (await res.json()) as { error: string };
     expect(body.error).toBe("deploy_provision_failed");
+    // No project committed (deploy failed before the project row)…
     expect(pool.projects.size).toBe(0);
-    expect(vcsProvider.createdRepositories).toEqual([]);
+    // …but the repo WAS created (repo-first) — a retry re-attaches to it, no 409.
+    expect(vcsProvider.createdRepositories.length).toBe(1);
   });
 });

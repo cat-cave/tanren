@@ -179,6 +179,13 @@ export class RoutesPool {
         const row = this.projects.get(String(params[0]));
         return single(row);
       }
+      // ProjectStore.findByRepoUrl (the idempotent greenfield-create probe). Matches on
+      // the canonical repo URL ignoring a trailing `.git` on either side.
+      if (sql.includes("regexp_replace(repo_url")) {
+        const canonical = String(params[0]).replace(/\.git$/u, "");
+        const row = [...this.projects.values()].find((p) => p.repo_url.replace(/\.git$/u, "") === canonical);
+        return single(row);
+      }
     }
     if (trimmed.startsWith("SELECT org_id FROM projects WHERE project_id = $1")) {
       const project = this.projects.get(String(params[0]));
