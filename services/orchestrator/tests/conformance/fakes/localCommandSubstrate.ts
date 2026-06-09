@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { RunnerHandle } from "../../../src/engine/contracts/allocator.js";
 import type { CommandResult, CommandSubstrate, RunnerCommand } from "../../../src/engine/contracts/commandSubstrate.js";
+import { stripGitRepoSelectingEnv } from "./fixtureGitEnv.js";
 
 /** A throwaway local handle — the local substrate ignores the runner address. */
 export const LOCAL_HANDLE: RunnerHandle = { backend: "ssh" };
@@ -27,10 +28,18 @@ export class LocalCommandSubstrate implements CommandSubstrate {
   private readonly safeCwd = mkdtempSync(join(tmpdir(), "tanren-localcmd-"));
 
   async run(_handle: RunnerHandle, command: RunnerCommand): Promise<CommandResult> {
+    // The child env: the git REPO-SELECTING vars (GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE/…) are
+    // SCRUBBED so a leaked one can't override the per-command `cwd` and redirect a jj/git op
+    // (the `jj git clone --colocate` bootstrap + its colocated git backend) onto the HOST
+    // worktree. cwd is then the SOLE repo selector — the same isolation discipline the
+    // direct-`execFileSync` fixtures use (fixtureGitEnv.ts). Read from `process.env` per run
+    // (not once) so a leak present whenever a command runs is scrubbed. This complements the
+    // safeCwd fallback above (which guards the cwd-less bootstrap command).
+    const childEnv = stripGitRepoSelectingEnv({ ...process.env, GIT_TERMINAL_PROMPT: "0" });
     return new Promise<CommandResult>((resolve) => {
       const child = spawn("/bin/sh", ["-c", command.command], {
         cwd: command.cwd === undefined || command.cwd === "" ? this.safeCwd : command.cwd,
-        env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+        env: childEnv,
       });
       let stdout = "";
       let stderr = "";
