@@ -37,8 +37,29 @@ export { mergeCapture } from "./capture.js";
 export {
   buildScaffoldDescription,
   buildScaffoldAcceptanceCriteria,
+  buildSeedScaffoldDescription,
+  buildSeedScaffoldAcceptanceCriteria,
   MissingLifecycleError,
 } from "./scaffoldAuthoring.js";
+
+// TEMPLATING WAVE 3 — the Forge SELECTION integration (templating-system.md §3): the
+// capability-query derivation + scorer + the seed/from-scratch decision.
+export {
+  deriveCapabilityQuery,
+  isProofFresh,
+  isTemplateEligible,
+  rankTemplates,
+  scoreTemplate,
+  selectTemplate,
+  PROOF_FRESHNESS_MS,
+  SEEDABLE_STATUSES,
+  type ChannelPreference,
+  type ScoredTemplate,
+  type SelectedTemplate,
+  type SelectionKind,
+  type TemplateRegistryQuery,
+  type TemplateSelectionDecision,
+} from "./templateSelection.js";
 
 export {
   InterviewCapture,

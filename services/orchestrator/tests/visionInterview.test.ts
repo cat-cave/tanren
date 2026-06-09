@@ -10,8 +10,9 @@
 /* eslint-disable unicorn/no-thenable */
 // `then` is BDD Given/When/Then vocabulary in the capture/behavior fixtures.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ActorContext } from "../src/auth/schemas.js";
+import type { Template as TemplateForTest } from "../src/engine/repositories/templates.js";
 import {
   DeployProviderMissingError,
   deriveFromCapture,
@@ -41,6 +42,41 @@ const TS_LIFECYCLE: CaptureLifecycle = {
 // A capture WITH the lifecycle (so a deploy-guard test isolates the deploy guard,
 // not the earlier missing-lifecycle guard).
 const captureWithLifecycle = (): InterviewCapture => ({ ...emptyCapture(), lifecycle: TS_LIFECYCLE });
+
+// TEMPLATING WAVE 3 — a fixed clock + a fixture VALIDATED template (a matching
+// TS/pnpm/next seed). At module scope so it is not recreated per test (lint).
+const WAVE3_NOW = Date.parse("2026-06-09T00:00:00.000Z");
+const validatedTsTemplate = (): TemplateForTest => ({
+  id: "template_ts_next",
+  orgId: "org_a",
+  repoRef: "cat-cave/tanren-template-ts-next",
+  status: "validated",
+  channel: "lts",
+  manifest: {
+    version: 1,
+    stack: "ts-pnpm-next",
+    channel: "lts",
+    templateVersion: "1.0.0",
+    provenance: { researchSources: ["https://nextjs.org"] },
+    capabilities: {
+      runtime: "ts",
+      packageManager: "pnpm",
+      framework: "next",
+      deployTarget: "flyctl",
+      gates: ["tier-1", "tier-2", "tier-3"],
+      bdd: true,
+      mutation: true,
+      junit: true,
+    },
+    validationProof: {
+      positiveControlsPassed: true,
+      negativeControls: { typecheck: "proven", lint: "proven", test: "proven", mutation: "proven" },
+      auditorClean: true,
+      validatedAt: "2026-06-01T00:00:00.000Z",
+      validatedSha: "abc1234",
+    },
+  },
+});
 
 const actor: ActorContext = {
   userId: "user_a",
@@ -213,6 +249,71 @@ describe("deriveFromCapture · creates the product graph (no migration)", () => 
     expect(build?.description).toContain("just build");
     expect(deploy?.description).toContain("just deploy");
     expect(deploy?.acceptanceCriteria.join("\n")).toContain("just deploy");
+  });
+
+  // TEMPLATING WAVE 3 — the Forge SELECTION integration (templating-system.md §3),
+  // proven END-TO-END through the derive: a matching validated template → seed path
+  // taken (scaffold spec shrinks + the templateRef persisted on the project config);
+  // no match → the from-scratch path is byte-for-byte unchanged (the apex default).
+  describe("template selection (wave 3)", () => {
+    it("a matching validated template → SEED path: scaffold spec shrinks + templateRef persisted", async () => {
+      const { derived, state, configs } = await runInterviewAndDerive({
+        selectionNow: WAVE3_NOW,
+        templateRegistryQuery: async () => [validatedTsTemplate()],
+      } as Partial<Parameters<typeof deriveFromCapture>[1]>);
+
+      // The selection is recorded on the result + persisted on the project config.
+      expect(derived.templateSelection?.kind).toBe("strong");
+      expect(derived.templateSelection?.selected?.templateRef).toBe("template_ts_next");
+      const config = configs.get(derived.projectId) as { templateRef?: { templateRef?: string; repoRef?: string } };
+      expect(config?.templateRef?.templateRef).toBe("template_ts_next");
+      expect(config?.templateRef?.repoRef).toBe("cat-cave/tanren-template-ts-next");
+
+      // The scaffold spec SHRANK to template instantiation — NOT author-from-scratch.
+      const scaffold = state.specs.get(derived.specIds[0] ?? "");
+      expect(scaffold?.title).toBe("scaffold");
+      expect(scaffold?.description).toContain("SEED FROM TEMPLATE");
+      expect(scaffold?.description).toContain("cat-cave/tanren-template-ts-next");
+      expect(scaffold?.description).not.toContain("Scaffold the actual PROJECT CODE");
+    });
+
+    it("a degraded template is NOT selected → from-scratch path UNCHANGED", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const degraded = { ...validatedTsTemplate(), status: "degraded" as const };
+      const { derived, state, configs } = await runInterviewAndDerive({
+        selectionNow: WAVE3_NOW,
+        templateRegistryQuery: async () => [degraded],
+      } as Partial<Parameters<typeof deriveFromCapture>[1]>);
+
+      expect(derived.templateSelection?.kind).toBe("none");
+      // No templateRef persisted — the from-scratch path ran.
+      const config = configs.get(derived.projectId) as { templateRef?: unknown };
+      expect(config?.templateRef).toBeUndefined();
+      // The scaffold spec is the unchanged from-scratch authoring.
+      const scaffold = state.specs.get(derived.specIds[0] ?? "");
+      expect(scaffold?.description).toContain("Scaffold the actual PROJECT CODE");
+      expect(scaffold?.description).not.toContain("SEED FROM TEMPLATE");
+      warn.mockRestore();
+    });
+
+    it("an EMPTY registry → from-scratch (the expected live default — the apex path)", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const { derived, state, configs } = await runInterviewAndDerive({
+        templateRegistryQuery: async () => [],
+      } as Partial<Parameters<typeof deriveFromCapture>[1]>);
+      expect(derived.templateSelection?.kind).toBe("none");
+      expect((configs.get(derived.projectId) as { templateRef?: unknown })?.templateRef).toBeUndefined();
+      expect(state.specs.get(derived.specIds[0] ?? "")?.description).toContain("Scaffold the actual PROJECT CODE");
+      warn.mockRestore();
+    });
+
+    it("NO registry query injected → selection skipped, from-scratch unchanged", async () => {
+      // The current live default: the route may not inject a query → the from-scratch
+      // path runs untouched, and the result carries no selection.
+      const { derived, state } = await runInterviewAndDerive();
+      expect(derived.templateSelection).toBeUndefined();
+      expect(state.specs.get(derived.specIds[0] ?? "")?.description).toContain("Scaffold the actual PROJECT CODE");
+    });
   });
 
   it("FAILS LOUD when the architecture step captured no lifecycle (never silently defaults to Node)", async () => {

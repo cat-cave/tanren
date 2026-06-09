@@ -40,12 +40,10 @@ import {
   type GreenfieldDeployDependency,
   type PrepareDeployCallback,
 } from "./deployDependency.js";
-import {
-  buildScaffoldAcceptanceCriteria,
-  buildScaffoldDescription,
-  MissingLifecycleError,
-} from "./scaffoldAuthoring.js";
-import { InterviewCapture, type CaptureBehavior, type CaptureInterface, type CaptureLifecycle } from "./types.js";
+import { scaffoldSpecsFor } from "./deriveScaffoldSpecs.js";
+import { MissingLifecycleError } from "./scaffoldAuthoring.js";
+import { selectTemplate, type TemplateRegistryQuery, type TemplateSelectionDecision } from "./templateSelection.js";
+import { InterviewCapture, type CaptureBehavior, type CaptureInterface } from "./types.js";
 
 export interface DeriveInput {
   orgId: string;
@@ -69,6 +67,17 @@ export interface DeriveInput {
   deploy?: GreenfieldDeployDependency;
   preflightDeploy?: DeployPreflightCallback;
   prepareDeploy?: PrepareDeployCallback;
+  // TEMPLATING WAVE 3 (templating-system.md §3): the ORG-SCOPED template-registry
+  // query, injected so the derive can SELECT a validated template to SEED from
+  // BEFORE authoring the scaffold spec. Org-scoped in prod (RLS bounds candidates
+  // to the org's own + the cross-org `official` catalogue); a fixture in tests.
+  // Absent ⇒ selection is skipped entirely and the from-scratch path runs (the
+  // current live default — the registry is empty until the creation wave lands).
+  templateRegistryQuery?: TemplateRegistryQuery;
+  // Optional seed channel preference (defaults to "lts" — conservative greenfield).
+  templateChannelPreference?: "lts" | "nightly";
+  // Injectable clock for deterministic selection-freshness tests.
+  selectionNow?: number;
 }
 
 // FINDING #1: the autonomous greenfield config. When the operator opts into
@@ -118,76 +127,29 @@ export interface DeriveResult {
   personaIds: string[];
   behaviorIds: string[];
   milestoneIds: string[];
+  // TEMPLATING WAVE 3 — the selection OUTCOME (templating-system.md §3), surfaced so
+  // the decision is observable on the derive result (strong/partial = seeded;
+  // none/blocked = from-scratch). Absent when selection was skipped (no registry
+  // query injected — the current live default).
+  templateSelection?: TemplateSelectionDecision;
 }
 
-// The foundation scaffold specs are derived FROM THE CAPTURED LIFECYCLE
-// (stack-flexible contract, docs/roadmap/stack-flexible-contract.md) — Tanren
-// bakes in NO stack. The architecture step captures the project's concrete
-// lifecycle; the lifecycle is PERSISTED onto the project config (above) so the RUN
-// path MATERIALIZES the contract files (`justfile` + `.tanren/ci.yml`)
-// DETERMINISTICALLY from it (engine/forge/scaffold/contractFiles.ts) — they are
-// NEVER LLM-authored. That is the v27 fix: the LLM writer reliably mangled the
-// ci.yml YAML shape. The hardcoded-pnpm `scaffoldCiConfig.ts` example is GONE (the
-// apex v25/v26 bug — the scaffold ignored the captured architecture and baked in Node).
-//
-// Fixes preserved here (DOMAIN knowledge — not a walker-wide rule):
-//   1. `dependsOnPrev` SERIALIZES the foundation into a chain (`scaffold` is the
-//      sole root; `build` then `deploy` chain off it), so one branch establishes
-//      the authoritative justfile/toolchain on `main` before the next builds on it
-//      (no incompatible-stack races off an empty repo).
-//   2. The `scaffold` spec's WRITER authors the project CODE (the contract files
-//      are materialized deterministically — it never touches them); the
-//      `build`/`deploy` specs route through the conventional `just build` /
-//      `just deploy` targets — never a hardcoded build/deploy command.
-//   3. The SCAFFOLD BAR is structure + bootstrap/tier-1/build passing — a thorough
-//      test SUITE is NOT required at scaffold (tests arrive with the feature specs).
-interface ScaffoldSpecDef {
-  title: string;
-  description: string;
-  // The acceptance criteria the writer must satisfy. When absent, a generic
-  // "pipeline is green" criterion is synthesized in the create loop.
-  acceptanceCriteria?: string[];
-  // When true, this spec `dependsOn` the PREVIOUS scaffold spec in the list — the
-  // wiring that serializes the foundation into a chain instead of parallel roots.
-  dependsOnPrev?: boolean;
-}
-
-// Build the foundation scaffold specs from the captured lifecycle. The `scaffold`
-// spec's writer authors the project CODE (the contract files are MATERIALIZED
-// deterministically by the run, not by the writer); `build` and `deploy` route
-// through the conventional `just build` / `just deploy` targets the materialized
-// contract established — so the deploy/build paths invoke the PROJECT's declared
-// command, never a hardcoded assumption.
-function scaffoldSpecsFor(lifecycle: CaptureLifecycle): ScaffoldSpecDef[] {
-  return [
-    {
-      title: "scaffold",
-      description: buildScaffoldDescription(lifecycle),
-      acceptanceCriteria: buildScaffoldAcceptanceCriteria(lifecycle),
+// The seed reference persisted onto the project config when a template was selected
+// (strong/partial). `null` when none/blocked/skipped — the from-scratch path.
+function templateRefConfig(decision: TemplateSelectionDecision | undefined): {
+  templateRef?: Record<string, string>;
+} {
+  if (decision?.selected === undefined) return {};
+  if (decision.kind !== "strong" && decision.kind !== "partial") return {};
+  const sel = decision.selected;
+  return {
+    templateRef: {
+      templateRef: sel.templateRef,
+      repoRef: sel.repoRef,
+      validatedAt: sel.validationProof.validatedAt,
+      validatedSha: sel.validationProof.validatedSha,
     },
-    {
-      title: "build",
-      description:
-        `Wire the project's build so the deployable artifact is produced via the conventional ` +
-        `\`just build\` target the scaffold established (for ${lifecycle.stack}: \`${lifecycle.build.trim()}\`). ` +
-        "Build on the EXISTING justfile/toolchain on `main` — do NOT re-invent the stack or bypass `just build`.",
-      acceptanceCriteria: [
-        "given the scaffolded repo, when `just build` runs, then it produces the deployable artifact and exits 0",
-      ],
-      dependsOnPrev: true,
-    },
-    {
-      title: "deploy",
-      description:
-        `Wire the project's deploy so it ships via the conventional \`just deploy\` target the scaffold ` +
-        `established (for ${lifecycle.stack}: \`${lifecycle.deploy.trim()}\`). Route deploy ONLY through ` +
-        "`just deploy` — never a hardcoded deploy command or a Node/platform assumption.",
-      acceptanceCriteria: [
-        "given a built artifact, when `just deploy` runs, then it ships to the deploy target via the conventional `just deploy` (no hardcoded deploy command)",
-      ],
-      dependsOnPrev: true,
-    },
-  ];
+  };
 }
 
 // A behavior belongs to an interface when its persona's surface matches the
@@ -228,7 +190,28 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
   // FAIL LOUD if it is missing (the stack-flexible contract's core invariant: never
   // silently default to Node).
   if (capture.lifecycle === null) throw new MissingLifecycleError();
-  const scaffoldSpecs = scaffoldSpecsFor(capture.lifecycle);
+
+  // TEMPLATING WAVE 3 — SELECT a validated template to SEED from, BEFORE deriving the
+  // scaffold spec (templating-system.md §3). Runs only when a registry query is
+  // injected (org-scoped in prod); otherwise selection is skipped and the
+  // from-scratch path runs. The decision is fail-closed: any registry/freshness
+  // problem downgrades to a from-scratch outcome with a LOUD log (inside
+  // `selectTemplate`), so onboarding is NEVER stranded by the registry.
+  const templateSelection =
+    input.templateRegistryQuery === undefined
+      ? undefined
+      : await selectTemplate({
+          lifecycle: capture.lifecycle,
+          registryQuery: input.templateRegistryQuery,
+          actor: { kind: "operator" },
+          ...(input.templateChannelPreference === undefined
+            ? {}
+            : { channelPreference: input.templateChannelPreference }),
+          ...(input.selectionNow === undefined ? {} : { now: input.selectionNow }),
+        });
+  // The scaffold spec SHRINKS to template-instantiation on a strong/partial match;
+  // otherwise it is the unchanged from-scratch authoring (the guaranteed fallback).
+  const scaffoldSpecs = scaffoldSpecsFor(capture.lifecycle, templateSelection);
 
   // FINDING #1: opt-in autonomous config. `auto`/`simulated` ⇒ create the project
   // already autonomous (`native_queue` + matching review policy) so the DagWalker
@@ -291,6 +274,10 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
     // + `justfile`) from it — they are NEVER LLM-authored. `CaptureLifecycle` maps 1:1
     // to `ProjectLifecycle` (same fields). Non-null here (validated above).
     lifecycle: capture.lifecycle,
+    // TEMPLATING WAVE 3 — persist the seed reference when a template was selected
+    // (strong/partial); absent on the from-scratch path. Recorded so the decision is
+    // OBSERVABLE on the project config + the run can seed from the template repo.
+    ...templateRefConfig(templateSelection),
     ...preparedDeploy.projectConfig,
   };
   const project = await createProject(
@@ -434,6 +421,7 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
     personaIds: [...personaIdByName.values()],
     behaviorIds,
     milestoneIds,
+    ...(templateSelection === undefined ? {} : { templateSelection }),
   };
 }
 
