@@ -28,10 +28,18 @@ export interface PreparedRunWorkspace {
   // the PR is pushed, so the PR carries only the writer's source changes.
   cloneHeadSha: string;
   // The synthetic post-bootstrap commit (or "" on a fake SSH). The PR-branch
-  // cleanup drops this commit.
+  // cleanup drops this commit (`bootstrapSha..HEAD` rebased onto the clone HEAD),
+  // so EVERYTHING above it — the deterministic contract-files commit + the writer
+  // commits — replays into the PR. This is the PUSH drop boundary, NOT the answerer base.
   bootstrapSha: string;
-  // The writer's diff base: the bootstrap commit, or the clone HEAD when the
-  // bootstrap step yielded no sha (fake SSH unit paths).
+  // The ANSWERER review base: the writer's reviewed diff is `baseSha..HEAD`. It sits
+  // ABOVE the Tanren-materialized contract-files commit (the contract-commit sha) when
+  // one was made, ELSE the bootstrap commit, ELSE the clone HEAD (fake-SSH unit paths).
+  // Anchoring it above the contract commit keeps the Tanren-owned `.tanren/ci.yml` +
+  // `justfile` OUT of the writer's reviewed diff — so the checker/auditor/convergence
+  // see ONLY the writer's code and never misread the contract files as writer-authored
+  // (apex v28: the auditor flagged `contract-files-authored`). The files still ride into
+  // the PR — only the answerer REVIEW base excludes them; the human/merge still sees them.
   baseSha: string;
 }
 
@@ -97,7 +105,7 @@ export async function prepareRunWorkspace(
   const commitBootstrap =
     input.commitBootstrap ?? ((stepInput: CommitBootstrapStepInput) => commitBootstrapState(stepInput));
   const bootstrapSha = await commitBootstrap({ ssh: input.ssh, target, workspacePath, timeoutMs: input.timeoutMs });
-  const baseSha = bootstrapSha === "" ? cloneHeadSha : bootstrapSha;
+  const bootstrapBase = bootstrapSha === "" ? cloneHeadSha : bootstrapSha;
 
   // DETERMINISTIC CONTRACT FILES (v27 fix): materialize the `.tanren/ci.yml` +
   // `justfile` from the project's captured lifecycle and commit them as a REAL
@@ -106,25 +114,36 @@ export async function prepareRunWorkspace(
   // it is replayed onto the PR branch). This takes contract-file authoring out of
   // the LLM writer's hands (it mangled the ci.yml YAML shape on apex v27). Write-iff-
   // absent (never-clobber): on a later run that re-clones a repo already carrying the
-  // contract files, materialization is a no-op and the commit is `--allow-empty`.
-  await materializeContractFilesCommit(input, target, workspacePath);
+  // contract files, materialization is a no-op and NO commit is made (sha "").
+  const contractSha = await materializeContractFilesCommit(input, target, workspacePath);
+
+  // ANSWERER REVIEW BASE: anchor the writer's reviewed diff ABOVE the contract-files
+  // commit when one was made (apex v28 fix), so the Tanren-owned `.tanren/ci.yml` +
+  // `justfile` are NOT in the writer's reviewed diff and the checker/auditor/convergence
+  // never misread them as writer-authored. When no contract commit was made (no
+  // lifecycle, brownfield re-clone, or fake SSH) the base is the bootstrap base. The
+  // contract files still RIDE INTO THE PR — the push drops only `bootstrapSha` (below
+  // both the contract commit and the writer commits), so the contract commit is replayed.
+  const baseSha = contractSha === "" ? bootstrapBase : contractSha;
 
   return { cloneHeadSha, bootstrapSha, baseSha };
 }
 
 // Materialize the deterministic contract files into the workspace + commit them as a
 // dedicated commit above the bootstrap base, so they become part of the writer's PR
-// diff. No-op when the run carries no contract manifest (the project captured no
-// lifecycle) or on a fake SSH (no bootstrap sha). The files are written iff absent,
-// so a re-clone that already ships them keeps the (possibly writer-enriched) versions
-// and this commit is empty.
+// diff. Returns the new contract-commit sha (the answerer review base anchors ABOVE it,
+// so the Tanren-owned files are kept out of the writer's reviewed diff — apex v28 fix),
+// or "" when no commit was made: the run carries no contract manifest (the project
+// captured no lifecycle), a fake SSH yields no sha, OR the files were already present
+// (a brownfield re-clone — write-iff-absent left nothing newly written). On a "" the
+// caller keeps the bootstrap base, so the answerers diff from the same place as before.
 async function materializeContractFilesCommit(
   input: RunPlannerLoopInput,
   target: RunnerHandle,
   workspacePath: string,
-): Promise<void> {
+): Promise<string> {
   const files = input.context.contractFiles;
-  if (files === undefined || files.length === 0) return;
+  if (files === undefined || files.length === 0) return "";
   const result = await materializeContractFilesInWorkspace({
     ssh: input.ssh,
     target,
@@ -132,9 +151,9 @@ async function materializeContractFilesCommit(
     workspacePath,
     timeoutMs: input.timeoutMs,
   });
-  // Nothing newly written (every file already present) ⇒ no commit needed.
-  if (result.written.length === 0) return;
-  await runWorkspaceSshCommand(input.ssh, target, {
+  // Nothing newly written (every file already present) ⇒ no commit, no base shift.
+  if (result.written.length === 0) return "";
+  const committed = await runWorkspaceSshCommand(input.ssh, target, {
     label: "commit deterministic contract files",
     cwd: workspacePath,
     timeoutMs: input.timeoutMs,
@@ -145,8 +164,12 @@ async function materializeContractFilesCommit(
       `git add ${result.written.map((p) => quoteSshShellArg(p)).join(" ")}`,
       "GIT_AUTHOR_DATE='2026-01-01T00:00:00Z' GIT_COMMITTER_DATE='2026-01-01T00:00:00Z' " +
         `git commit -q -m ${quoteSshShellArg("tanren: project contract files (.tanren/ci.yml + justfile)")}`,
+      // Echo the contract-commit sha LAST so it is the command's stdout — it becomes
+      // the answerer review base. A fake SSH yields ""; the real runner a 40-hex sha.
+      "git rev-parse HEAD",
     ].join(" && "),
   });
+  return committed.stdout.trim();
 }
 
 // Clones the target branch and returns the clone HEAD. `git rev-parse HEAD` runs
