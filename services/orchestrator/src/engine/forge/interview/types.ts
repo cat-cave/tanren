@@ -121,6 +121,16 @@ export const InterviewCapture = z
     // output). `null` until the architecture step captures it; the scaffold
     // FAILS LOUD if it is still null at derive (never a silent Node default).
     lifecycle: CaptureLifecycle.nullable().default(null),
+    // LIFECYCLE/STACK DRIFT GUARD (apex v28–v31): once the architecture round
+    // captures a lifecycle it is OPERATOR-CONFIRMED + PINNED — a later round's LLM
+    // answerer must NOT silently re-write the stack label / swap tier commands /
+    // drop flags. This flag latches `true` the first round a lifecycle is captured;
+    // while it is set, `mergeCapture` PRESERVES the confirmed lifecycle verbatim and
+    // a re-emitted-but-different lifecycle is treated as DRIFT (surfaced, not taken)
+    // — an actual change requires an EXPLICIT, operator-visible `lifecycleChange`
+    // signal on the delta. Carried on the capture (re-submitted each round) so the
+    // pin survives the round trip with no interview-session table.
+    lifecycleConfirmed: z.boolean().default(false),
     rulesets: z.array(z.string().min(1)).default([]),
   })
   .strict();
@@ -135,6 +145,7 @@ export function emptyCapture(): InterviewCapture {
     designDna: "",
     architecture: [],
     lifecycle: null,
+    lifecycleConfirmed: false,
     rulesets: [],
   };
 }
@@ -167,6 +178,13 @@ export const InterviewCaptureDelta = z
     designDna: z.string().max(80).nullish(),
     architecture: z.array(CaptureArchitectureLine).nullish(),
     lifecycle: CaptureLifecycle.nullish(),
+    // LIFECYCLE/STACK DRIFT GUARD: the EXPLICIT operator-visible signal that a
+    // re-emitted `lifecycle` is an INTENTIONAL change to an already-confirmed
+    // lifecycle (not silent drift). Only when `true` does `mergeCapture` accept a
+    // different lifecycle over a confirmed one; otherwise a differing lifecycle is
+    // DRIFT and the confirmed one is preserved. Has no effect on the first (initial)
+    // lifecycle capture — that always lands. `null`/absent = no change requested.
+    lifecycleChange: z.boolean().nullish(),
     rulesets: z.array(z.string().min(1)).nullish(),
   })
   .strict();
