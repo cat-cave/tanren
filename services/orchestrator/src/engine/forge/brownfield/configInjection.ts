@@ -14,8 +14,13 @@
 // files + returns a synthetic PR. No new entity, no migration — the files land
 // in the target repo via a PR, not in our database.
 
-import { JUNIT_REPORT_PATH } from "../../ci/index.js";
 import type { GovernancePosture } from "../../config/shared.js";
+import {
+  SKELETON_CI_CONFIG,
+  SKELETON_CI_CONFIG_PATH,
+  SKELETON_JUSTFILE,
+  SKELETON_JUSTFILE_PATH,
+} from "../scaffold/index.js";
 import type { ReconReport } from "./types.js";
 
 // The six files the config-injection PR proposes. `path` is the repo path;
@@ -37,6 +42,15 @@ export interface ProposeFilesInput {
   generatedAt: string;
   /** The owner team for CODEOWNERS scaffolding (defaults from the org login). */
   operatorsTeam?: string;
+  /**
+   * Whether the brownfield repo ALREADY ships a `justfile` (the project's lifecycle
+   * contract). When it does (recon observed one), we do NOT inject the stub justfile
+   * — the repo owns its lifecycle and we must not clobber it. When it does NOT, we
+   * seed the stack-agnostic skeleton justfile so the injected `.tanren/ci.yml`'s
+   * `just <target>` steps have something to defer to (the operator fills in the
+   * stubs for their stack). Defaults to `false` (seed the skeleton).
+   */
+  repoHasJustfile?: boolean;
 }
 
 function postureLine(posture: GovernancePosture): string {
@@ -84,57 +98,14 @@ ${architecture}
 
 // The native gate DEFINITION (`.tanren/ci.yml` — a CiConfigV1, NOT a GitHub Actions
 // workflow). This is the SAME file Tanren's in-loop native gate consumes via
-// `resolveGateConfig`: it declares the tiered shell steps + the `when` policy that
-// maps each tier to a lifecycle point. There is NO Actions job, no JUnit upload step,
-// no HMAC secret — Tanren runs these steps itself over SSH on the runner and reads
-// the verdict from exit codes (the no-Actions delivery model).
-//
-// THREE tiers mapped 1:1 to the spec-loop lifecycle points (the spec-loop-redesign
-// 3-tier CI requirement): `fast` (per_iteration — cheap lint+typecheck, NO tests),
-// `slow` (pre_audit — build + tests with JUnit evidence), and `merge` (pre_merge —
-// the heaviest thorough gate, the merge authority). The test tier emits JUnit XML
-// to ${JUNIT_REPORT_PATH} so Tanren's per-test ingest feeds CI-intelligence (flaky
-// detection). A repo can edit this file to change what the gate runs.
-const TANREN_CI_CONFIG = `# .tanren/ci.yml — added by tanren config-injection.
-# The native gate definition (CiConfigV1) Tanren runs over SSH on the runner. NOT a
-# GitHub Actions workflow: there is no forge CI here — Tanren's gate is the authority.
-version: 1
-bootstrap:
-  run: corepack pnpm install --frozen-lockfile
-tiers:
-  # tier-1 (per_iteration) — the cheap gate after every writer iteration. NO tests:
-  # tests arrive with features, so a scaffold pass is never blocked by a test tier.
-  fast:
-    - name: lint
-      run: corepack pnpm run lint
-    - name: typecheck
-      run: corepack pnpm run typecheck
-  # tier-2 (pre_audit) — build + tests at spec completion, emitting JUnit evidence
-  # to ${JUNIT_REPORT_PATH} (the path Tanren's per-test ingest reads).
-  slow:
-    - name: build
-      run: corepack pnpm run build
-    - name: test
-      run: corepack pnpm run test -- --reporter=junit --outputFile=${JUNIT_REPORT_PATH}
-  # tier-3 (pre_merge) — the heaviest thorough gate (the merge authority): a clean
-  # full lint + typecheck + build + tests run.
-  merge:
-    - name: lint
-      run: corepack pnpm run lint
-    - name: typecheck
-      run: corepack pnpm run typecheck
-    - name: build
-      run: corepack pnpm run build
-    - name: test
-      run: corepack pnpm run test -- --reporter=junit --outputFile=${JUNIT_REPORT_PATH}
-when:
-  fast:
-    - per_iteration
-  slow:
-    - pre_audit
-  merge:
-    - pre_merge
-`;
+// `resolveGateConfig`. It is STACK-AGNOSTIC: the injected config is the canonical
+// skeleton (engine/forge/scaffold/skeleton.ts), which maps the three lifecycle tiers
+// to `just <target>`. Tanren names NO tech stack — the stack lives in the project's
+// `justfile`, which config-injection ALSO seeds (below) when the brownfield repo
+// ships none. There is NO Actions job, no HMAC secret — Tanren runs these steps
+// itself over SSH (the no-Actions delivery model). A repo can edit either file to
+// change what the gate runs.
+const TANREN_CI_CONFIG = SKELETON_CI_CONFIG;
 
 function codeowners(team: string): string {
   return `# CODEOWNERS — scaffolded by tanren config-injection
@@ -152,6 +123,12 @@ function countLines(content: string): number {
  * Build the proposed integration files from the recon report + posture. The
  * order matches the hi-fi file column. `excludePaths` removes any the operator
  * unchecked before the PR is opened.
+ *
+ * STACK-AGNOSTIC: the injected `.tanren/ci.yml` defers to `just <target>`, so we
+ * ALSO seed the skeleton `justfile` (the project's lifecycle contract) when the repo
+ * ships none — otherwise the injected gate's `just bootstrap`/`just tier-1` steps
+ * have nothing to defer to. When `input.repoHasJustfile` is true (recon observed
+ * one) the justfile is omitted: the repo owns its lifecycle and we never clobber it.
  */
 export function proposeConfigFiles(input: ProposeFilesInput, excludePaths: ReadonlyArray<string> = []): ProposedFile[] {
   const team = input.operatorsTeam ?? `${input.orgLogin}/tanren-operators`;
@@ -164,10 +141,22 @@ export function proposeConfigFiles(input: ProposeFilesInput, excludePaths: Reado
       snapshot: true,
     },
     {
-      path: ".tanren/ci.yml",
+      path: SKELETON_CI_CONFIG_PATH,
       content: TANREN_CI_CONFIG,
       addedLines: countLines(TANREN_CI_CONFIG),
     },
+    // The stack-agnostic justfile skeleton — only when the repo ships none. It
+    // gives the injected ci.yml's `just <target>` steps something to defer to; the
+    // operator fills in the stubs for their stack (or excludes it pre-PR).
+    ...(input.repoHasJustfile === true
+      ? []
+      : [
+          {
+            path: SKELETON_JUSTFILE_PATH,
+            content: SKELETON_JUSTFILE,
+            addedLines: countLines(SKELETON_JUSTFILE),
+          },
+        ]),
     { path: "CODEOWNERS", content: codeowners(team), addedLines: countLines(codeowners(team)) },
     {
       path: ".gitignore",

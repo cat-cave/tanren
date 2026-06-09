@@ -179,16 +179,14 @@ export const ProjectConfigV1 = z
     // Defaults to an EMPTY map (no rates configured).
     creditRates: CreditRates.default({}),
     // GREENFIELD MARKER: whether this project was created greenfield — Tanren
-    // authors the repo's toolchain LIVE across writer iterations (no pre-existing
-    // committed lockfile / installed deps). It drives the in-loop deps-ensure
-    // install MODE: a greenfield run uses a NON-FROZEN install (so a writer-added
-    // devDep without a perfectly-regenerated lockfile still installs before the
-    // gate), while a brownfield run keeps the FROZEN, lockfile-safe default
-    // (`pnpm install --frozen-lockfile` / `npm ci`) so an existing committed
-    // lockfile is never silently mutated / upgraded. Set by the greenfield
-    // creation paths (`/projects/greenfield` + the interview `deriveProductGraph`);
-    // absent ⇒ `false` = brownfield (the safe default). An explicit `tanren-ci.yml`
-    // `bootstrap.run` still wins over this default in BOTH cases.
+    // authors the repo's stack + toolchain LIVE across writer iterations (no
+    // pre-existing committed deps). STACK-AGNOSTIC: this no longer drives a
+    // frozen-vs-non-frozen install mode in Tanren — the bootstrap command is the
+    // project's `.tanren/ci.yml` `bootstrap.run` (conventionally `just bootstrap`),
+    // and the greenfield-vs-frozen concern lives INSIDE that recipe, not here. The
+    // flag is retained as a provenance marker (set by the greenfield creation paths:
+    // `/projects/greenfield` + the interview `deriveProductGraph`); absent ⇒ `false`
+    // = brownfield.
     greenfield: z.boolean().default(false),
     // The captured product identity + design-DNA from the greenfield vision
     // interview (see `ProjectProductVision`). Persisted here (not a new table) so

@@ -108,7 +108,8 @@ export function batchNodeGate(deps: BatchNodeGateClosureDeps): GateBatchWorkspac
       target: live.target,
       workspacePath: live.workspacePath,
       // The bootstrap command from the already-parsed config (no second file read that
-      // could re-throw the same validation error), or the frozen brownfield default.
+      // could re-throw the same validation error), or — when the config omits
+      // `bootstrap.run` — the stack-agnostic DEFAULT_BOOTSTRAP_COMMAND LOUD-fallback.
       command: bootstrapCommand(config) ?? DEFAULT_BOOTSTRAP_COMMAND,
       timeoutMs: deps.timeoutMs,
     });

@@ -7,7 +7,6 @@ import { parseGitLogCommit, prepareGitWorkspace } from "./fixtures/workspaceGit.
 import {
   bootstrapWorkspace,
   DEFAULT_BOOTSTRAP_COMMAND,
-  DEPS_ENSURE_DEFAULT_COMMAND,
   ensureWorkspaceDepsInstalled,
   runWorkspaceSshCommand,
   WorkspaceBootstrapError,
@@ -157,22 +156,23 @@ describe("workspace bootstrap (P3-0006)", () => {
     expect(ssh.commands[0]?.command.cwd).toBe(workspacePath);
   });
 
-  it("falls back to the default pnpm/npm-detecting command when none is given", async () => {
+  it("falls back to the stack-agnostic `just bootstrap` LOUD-fallback when none is given", async () => {
     const ssh = new ScriptedSsh([{ exitCode: 0, stdout: "", stderr: "", timedOut: false }]);
     await bootstrapWorkspace({ ssh, target, workspacePath, timeoutMs: 100 });
 
     expect(ssh.commands[0]?.command.command).toBe(DEFAULT_BOOTSTRAP_COMMAND);
-    expect(DEFAULT_BOOTSTRAP_COMMAND).toContain("pnpm install");
+    // `just bootstrap` when a justfile is present — and NO baked-in stack command.
+    expect(DEFAULT_BOOTSTRAP_COMMAND).toContain("just bootstrap");
+    expect(DEFAULT_BOOTSTRAP_COMMAND).not.toMatch(/pnpm|npm|corepack|node/u);
   });
 
-  it("disables pnpm's interactive modules-purge confirmation (no-TTY runner) on both defaults", () => {
-    // The runner has no TTY; without this flag pnpm aborts a node_modules purge with
-    // ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY (exit 1). Must NOT be solved via
-    // CI=true (that would force --frozen-lockfile and break the greenfield deps-ensure).
-    expect(DEFAULT_BOOTSTRAP_COMMAND).toContain("pnpm install --frozen-lockfile --config.confirmModulesPurge=false");
-    expect(DEPS_ENSURE_DEFAULT_COMMAND).toContain("pnpm install --config.confirmModulesPurge=false");
-    expect(DEFAULT_BOOTSTRAP_COMMAND).not.toContain("CI=true");
-    expect(DEPS_ENSURE_DEFAULT_COMMAND).not.toContain("CI=true");
+  it("the fallback FAILS LOUDLY (exit 1, no silent Node assumption) when no justfile is present", () => {
+    // A repo with neither a `.tanren/ci.yml` bootstrap.run NOR a justfile cannot
+    // declare how to prepare its workspace — the fallback `exit 1`s with a message
+    // naming the contract, never a guessed stack.
+    expect(DEFAULT_BOOTSTRAP_COMMAND).toContain("exit 1");
+    expect(DEFAULT_BOOTSTRAP_COMMAND).toMatch(/justfile/u);
+    expect(DEFAULT_BOOTSTRAP_COMMAND).not.toContain("skipping dependency bootstrap");
   });
 
   it("throws a typed WorkspaceBootstrapError with exit code + output tail on failure", async () => {
@@ -238,26 +238,26 @@ describe("workspace bootstrap (P3-0006)", () => {
 describe("ensureWorkspaceDepsInstalled (greenfield deps-ensure)", () => {
   const workspacePath = workspaceRepoPathForRun("run_ensure");
 
-  // Interprets the guarded install command against a virtual workspace: is a
-  // manifest (package.json / pnpm-workspace.yaml) present? The P0 fix makes the
-  // guard run the install WHENEVER a manifest exists — it no longer also requires
-  // node_modules to be absent (pnpm/npm is the idempotency authority). So
-  // `nodeModules` is tracked only to PROVE the install still runs when it is
-  // present (the core regression). The install branch echoes the install sentinel;
-  // the no-manifest branch echoes the no-op sentinel — matching the runner guard.
+  // Interprets the guarded bootstrap command against a virtual workspace: is the
+  // project CONTRACT (a `justfile` / `.tanren/ci.yml`) present? The guard runs the
+  // bootstrap WHENEVER the contract exists — the project's `just bootstrap` is the
+  // idempotency authority, so a redundant run is a cheap no-op. So `prepared` is
+  // tracked only to PROVE the bootstrap still runs when the tree was already
+  // prepared (the core regression). The bootstrap branch echoes the install
+  // sentinel; the no-contract branch echoes the no-op sentinel — matching the guard.
   class FsAwareSsh implements CommandSubstrate {
     readonly commands: RunnerCommand[] = [];
     installRan = false;
     constructor(
-      private readonly fs: { manifest: boolean; nodeModules: boolean },
-      // When the install runs, the exit code it returns (0 = success, else fail).
+      private readonly fs: { contract: boolean; prepared: boolean },
+      // When the bootstrap runs, the exit code it returns (0 = success, else fail).
       private readonly installExit: number = 0,
     ) {}
     async run(_target: RunnerHandle, command: RunnerCommand): Promise<CommandResult> {
       this.commands.push(command);
-      // The new guard: install whenever a manifest exists (node_modules state is
-      // irrelevant — a redundant install is a cheap no-op the real pnpm/npm owns).
-      const shouldInstall = this.fs.manifest;
+      // The guard: bootstrap whenever the contract exists (prepared state is
+      // irrelevant — a redundant bootstrap is a cheap no-op the project's recipe owns).
+      const shouldInstall = this.fs.contract;
       if (shouldInstall) {
         this.installRan = true;
         const failed = this.installExit !== 0;
@@ -272,77 +272,74 @@ describe("ensureWorkspaceDepsInstalled (greenfield deps-ensure)", () => {
     }
   }
 
-  it("runs the install when a manifest is present", async () => {
-    const ssh = new FsAwareSsh({ manifest: true, nodeModules: false });
+  it("runs the bootstrap when the project contract is present", async () => {
+    const ssh = new FsAwareSsh({ contract: true, prepared: false });
     const result = await ensureWorkspaceDepsInstalled({
       ssh,
       target,
       workspacePath,
-      command: "pnpm install --frozen-lockfile",
+      command: "just bootstrap",
       timeoutMs: 100,
     });
     expect(result.installed).toBe(true);
     expect(ssh.installRan).toBe(true);
-    // The guard runs in the workspace dir and embeds the resolved install command.
-    expect(ssh.commands[0]?.command).toContain("pnpm install --frozen-lockfile");
+    // The guard runs in the workspace dir and embeds the resolved bootstrap command.
+    expect(ssh.commands[0]?.command).toContain("just bootstrap");
     expect(ssh.commands[0]?.cwd).toBe(workspacePath);
   });
 
-  // P0 CORE REGRESSION: the old guard (`[ ! -d node_modules ]`) meant that once
-  // ANY partial install created node_modules, a LATER writer-added devDep was
-  // never installed → the gate died on `vitest: not found`. The fix re-installs
-  // whenever a manifest exists, EVEN when node_modules is already present, so the
-  // writer's freshly-added devDep is actually installed before the gate.
-  it("re-installs when a manifest exists even though node_modules is already present", async () => {
-    const ssh = new FsAwareSsh({ manifest: true, nodeModules: true });
+  // P0 CORE REGRESSION: the bootstrap re-runs whenever the contract exists, EVEN when
+  // the tree was already prepared, so a writer-added dependency authored after an
+  // earlier iteration's install is actually present at the gate.
+  it("re-runs when the contract exists even though the tree was already prepared", async () => {
+    const ssh = new FsAwareSsh({ contract: true, prepared: true });
     const result = await ensureWorkspaceDepsInstalled({ ssh, target, workspacePath, timeoutMs: 100 });
     expect(result.installed).toBe(true);
     expect(ssh.installRan).toBe(true);
-    // The guard does NOT condition on node_modules anymore — it only probes for a
-    // manifest before running the install.
-    expect(ssh.commands[0]?.command).not.toContain("node_modules");
-    expect(ssh.commands[0]?.command).toContain("package.json");
+    // The guard probes for the project CONTRACT (justfile / .tanren/ci.yml), NO stack
+    // manifest (package.json / node_modules).
+    expect(ssh.commands[0]?.command).toMatch(/justfile|\.tanren\/ci\.yml/u);
+    expect(ssh.commands[0]?.command).not.toMatch(/package\.json|node_modules/u);
   });
 
-  it("no-ops when no manifest exists yet (greenfield clone HEAD, pre-writer)", async () => {
-    const ssh = new FsAwareSsh({ manifest: false, nodeModules: false });
+  it("no-ops when no contract exists yet (greenfield clone HEAD, pre-writer)", async () => {
+    const ssh = new FsAwareSsh({ contract: false, prepared: false });
     const result = await ensureWorkspaceDepsInstalled({ ssh, target, workspacePath, timeoutMs: 100 });
     expect(result.installed).toBe(false);
     expect(ssh.installRan).toBe(false);
   });
 
-  it("defaults to the NON-FROZEN pnpm/npm-detecting deps-ensure command", async () => {
-    const ssh = new FsAwareSsh({ manifest: true, nodeModules: false });
+  it("defaults to the stack-agnostic `just bootstrap` LOUD-fallback", async () => {
+    const ssh = new FsAwareSsh({ contract: true, prepared: false });
     await ensureWorkspaceDepsInstalled({ ssh, target, workspacePath, timeoutMs: 100 });
-    expect(ssh.commands[0]?.command).toContain(DEPS_ENSURE_DEFAULT_COMMAND);
-    // The deps-ensure default must NOT carry --frozen-lockfile (a writer-added
-    // devDep without a regenerated lockfile must still install, not hard-fail).
-    expect(ssh.commands[0]?.command).not.toContain("--frozen-lockfile");
+    expect(ssh.commands[0]?.command).toContain(DEFAULT_BOOTSTRAP_COMMAND);
+    // No baked-in stack command — the project's `just bootstrap` owns the install.
+    expect(ssh.commands[0]?.command).not.toMatch(/pnpm|npm|corepack/u);
   });
 
   it("keeps the app-env prelude OFF the command field — no secret in the typed error", async () => {
-    // A failing install with an app env present: the prelude is applied to the
-    // EXECUTED guard, but the thrown error must surface the ORIGINAL install
+    // A failing bootstrap with an app env present: the prelude is applied to the
+    // EXECUTED guard, but the thrown error must surface the ORIGINAL bootstrap
     // command only (no secret value).
-    const ssh = new FsAwareSsh({ manifest: true, nodeModules: false }, 1);
+    const ssh = new FsAwareSsh({ contract: true, prepared: false }, 1);
     const error = await ensureWorkspaceDepsInstalled({
       ssh,
       target,
       workspacePath,
-      command: "pnpm install --frozen-lockfile",
+      command: "just bootstrap",
       appEnv: { API_TOKEN: "super-secret-value" },
       timeoutMs: 100,
     }).catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(WorkspaceDepsInstallError);
     const typed = error as WorkspaceDepsInstallError;
     expect(typed.exitCode).toBe(1);
-    expect(typed.command).toBe("pnpm install --frozen-lockfile");
+    expect(typed.command).toBe("just bootstrap");
     // The secret VALUE must not appear in the error message / command.
     expect(typed.message).not.toContain("super-secret-value");
     expect(typed.command).not.toContain("super-secret-value");
     expect(typed.outputTail).toContain("vitest: not found");
     // The EXECUTED guard carried the prelude (the substrate boundary), so the env
-    // is materialized for the install but never leaks into the error.
+    // is materialized for the bootstrap but never leaks into the error.
     expect(ssh.commands[0]?.command).toContain("super-secret-value");
   });
 

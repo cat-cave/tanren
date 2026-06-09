@@ -175,7 +175,7 @@ describe("runPlannerLoopWorkflow", () => {
       timeoutMs: 100,
       maxCiPolls: 1,
       sleep: async () => {},
-      bootstrapCommand: "pnpm install --frozen-lockfile",
+      bootstrapCommand: "just bootstrap",
       runBootstrap: async (input) => {
         bootstrapCalls.push(input.command ?? "<default>");
       },
@@ -185,7 +185,7 @@ describe("runPlannerLoopWorkflow", () => {
       mergeProbe: noopMerge(),
     });
 
-    expect(bootstrapCalls).toEqual(["pnpm install --frozen-lockfile"]);
+    expect(bootstrapCalls).toEqual(["just bootstrap"]);
     const names = events.events.map((event) => event.eventType);
     expect(names.indexOf("workspace.prepared")).toBeLessThan(names.indexOf("writer.subtask.started"));
   });
@@ -400,7 +400,7 @@ describe("runPlannerLoopWorkflow", () => {
         },
         timeoutMs: 100,
         runBootstrap: async (input) => {
-          throw new WorkspaceBootstrapError(input.workspacePath, "pnpm install", 1, "vitest: not found", false);
+          throw new WorkspaceBootstrapError(input.workspacePath, "just bootstrap", 1, "tier-1 tool: not found", false);
         },
         buildAdapters: () => twoSubtaskAdapters([completeCheck, completeCheck]),
         buildUsageProbe: () => fakeProbe(healthyWindow(), accounting(null)),
@@ -410,7 +410,7 @@ describe("runPlannerLoopWorkflow", () => {
     expect(pool.runStatus).toEqual({ status: "halted", outcome: "halted" });
     const failure = events.events.find((event) => event.eventType === "workspace.failed");
     expect(failure?.payload).toMatchObject({
-      message: expect.stringContaining("vitest: not found"),
+      message: expect.stringContaining("tier-1 tool: not found"),
     });
     expect(allocator.releases).toEqual(["runner_planner"]);
   });

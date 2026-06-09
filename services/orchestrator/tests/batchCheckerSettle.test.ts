@@ -196,8 +196,9 @@ class FakeAllocator implements Allocator {
  * A fake SSH that drives the native gate. Every INFRA step (clone, the local-ignore
  * seed, the deps-ensure guard, the config `cat`) succeeds; the clone's `git rev-parse
  * HEAD` returns a 40-hex sha; the config `cat` returns no `.tanren/ci.yml` so the
- * DEFAULT tiers run (the `pre_merge` tier is `pnpm build` then `pnpm test`). Only the
- * actual GATE STEP commands carry `gateExit` (0 ⇒ pass, nonzero ⇒ fail at the step).
+ * stack-agnostic DEFAULT tiers run (the `pre_merge` tier is the single step `just
+ * tier-3`). Only the actual GATE STEP command carries `gateExit` (0 ⇒ pass, nonzero
+ * ⇒ fail at the step).
  */
 class GateDrivingSsh implements CommandSubstrate {
   constructor(private readonly gateExit: number) {}
@@ -206,8 +207,8 @@ class GateDrivingSsh implements CommandSubstrate {
     if (cmd.includes("git rev-parse HEAD") || cmd.includes("git clone")) {
       return { exitCode: 0, stdout: "a".repeat(40), stderr: "", timedOut: false };
     }
-    // The gate STEP commands (default pre_merge tier: `pnpm build` / `pnpm test`).
-    if (cmd === "pnpm build" || cmd === "pnpm test") {
+    // The gate STEP command (stack-agnostic default pre_merge tier: `just tier-3`).
+    if (cmd === "just tier-3") {
       return { exitCode: this.gateExit, stdout: "", stderr: "", timedOut: false };
     }
     // Every infra step (config cat, local-ignore seed, deps-ensure guard) succeeds.

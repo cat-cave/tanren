@@ -1,10 +1,11 @@
-// buildDefaultGate: the production gate callback's greenfield deps-ensure +
-// lenient-posture wiring. Drives buildDefaultGate against an interpreting SSH
-// fake (a virtual workspace whose manifest/node_modules/tool availability change
-// over the run) so we exercise the REAL ensure-before-tier ordering, the
-// idempotent re-install EVERY gate (the P0 fix — no install latch), and the
-// lenient advisory semantics end-to-end — without a live runner. No DB: a
-// FakeEventStore captures the emitted gate.* / gate.advisory_failed events.
+// buildDefaultGate: the production gate callback's greenfield bootstrap-ensure +
+// lenient-posture wiring. Drives buildDefaultGate against an interpreting SSH fake (a
+// virtual workspace whose project-CONTRACT presence + prepared/tool availability
+// change over the run) so we exercise the REAL ensure-before-tier ordering, the
+// idempotent re-bootstrap EVERY gate (the P0 fix — no install latch), and the lenient
+// advisory semantics end-to-end — without a live runner. STACK-AGNOSTIC: the gate
+// steps defer to `just tier-N`; Tanren names no stack. No DB: a FakeEventStore
+// captures the emitted gate.* / gate.advisory_failed events.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RunnerHandle } from "../src/engine/contracts/allocator.js";
 import type { RunnerCommand, CommandResult, CommandSubstrate } from "../src/engine/contracts/commandSubstrate.js";
@@ -43,18 +44,19 @@ function context(opts?: { governancePosture?: GovernancePosture; greenfield?: bo
   };
 }
 
-// A virtual workspace the SSH fake interprets. `manifest`/`nodeModules` model the
-// greenfield timeline; `toolsAvailable` is false until deps are installed (so a
-// `pnpm lint` against an uninstalled tree fails like the real `turbo: not found`).
+// A virtual workspace the SSH fake interprets. STACK-AGNOSTIC: `contract` models
+// whether the project's `justfile`/`.tanren/ci.yml` is present (the bootstrap-guard
+// trigger); `prepared` is false until `just bootstrap` runs (so a `just tier-1`
+// against an unprepared tree fails like the real `tool: not found`).
 interface WorkspaceState {
-  manifest: boolean;
-  nodeModules: boolean;
-  // When the deps install runs (manifest present), the gate's lint step would
-  // otherwise fail until node_modules exists; once installed, the lint outcome is
-  // governed by `lintExit`.
-  lintExit: number;
-  // How many times the deps-ensure install actually ran (manifest present). The
-  // P0 fix re-runs the install every gate, so this counts each gate's ensure.
+  contract: boolean;
+  prepared: boolean;
+  // When the bootstrap runs (contract present), the gate's tier-1 step would
+  // otherwise fail until the tree is prepared; once prepared, the tier-1 outcome is
+  // governed by `tier1Exit`.
+  tier1Exit: number;
+  // How many times the bootstrap actually ran (contract present). The P0 fix
+  // re-runs the bootstrap every gate, so this counts each gate's ensure.
   installRuns: number;
   // The workspace HEAD sha `git rev-parse HEAD` returns — the verdict anchor the
   // gate uses ABSENT a headShaOverride. Absent ⇒ "" ⇒ no verdict event (the existing
@@ -63,49 +65,57 @@ interface WorkspaceState {
 }
 
 // Interprets the small command vocabulary buildDefaultGate issues over SSH:
-//   - the `cat tanren-ci.yml` config read (no file ⇒ default config)
-//   - the deps-ensure guard (install WHENEVER a manifest exists — no node_modules gate)
-//   - the gate steps `pnpm lint` / `pnpm typecheck` / `pnpm build` / `pnpm test ...`
+//   - the `.tanren/ci.yml` config read (no file ⇒ stack-agnostic default config)
+//   - the bootstrap guard (run WHENEVER the project contract exists)
+//   - the gate steps `just tier-1` / `just tier-2` / `just tier-3`
 class InterpretingSsh implements CommandSubstrate {
   readonly commands: RunnerCommand[] = [];
-  constructor(private readonly state: WorkspaceState) {}
+  // When set, the `.tanren/ci.yml` read returns this YAML (a repo-authored config);
+  // when unset, the read is empty ⇒ the resolver yields the stack-agnostic default.
+  constructor(
+    private readonly state: WorkspaceState,
+    private readonly ciConfigYaml?: string,
+  ) {}
   async run(_target: RunnerHandle, command: RunnerCommand): Promise<CommandResult> {
     this.commands.push(command);
     const cmd = command.command;
     const ok = { exitCode: 0, stdout: "", stderr: "", timedOut: false };
-    // tanren-ci.yml read (`if [ -f .../tanren-ci.yml ]; then cat ...; fi`): no file.
-    if (cmd.includes("tanren-ci.yml")) return ok;
+    // .tanren/ci.yml read (`if [ -f .../.tanren/ci.yml ]; then cat ...; fi`): return the
+    // injected repo config, else empty ⇒ the resolver yields the stack-agnostic default.
+    if (cmd.includes(".tanren/ci.yml") && cmd.includes("cat ")) {
+      return this.ciConfigYaml === undefined ? ok : { ...ok, stdout: this.ciConfigYaml };
+    }
     // The native JUnit ingest read (`if [ -f .../reports/junit.xml ]; then cat ...; else
-    // echo __TANREN_JUNIT_ABSENT__; fi`). The virtual workspace writes no report, so the
-    // file is ABSENT — model the shell's else-branch marker. A tier with a junit-writing
-    // test step (slow/merge) ⇒ the gate surfaces this as the LOUD `missing_expected`.
-    if (cmd.includes("reports/junit.xml")) return { ...ok, stdout: "__TANREN_JUNIT_ABSENT__\n" };
+    // echo __TANREN_JUNIT_ABSENT__; fi`) — keyed on the absent-marker so a gate STEP
+    // whose `run` references reports/junit.xml is NOT mistaken for the read. The virtual
+    // workspace writes no report ⇒ ABSENT ⇒ a tier whose step `run` references the path
+    // surfaces the LOUD `missing_expected`.
+    if (cmd.includes("__TANREN_JUNIT_ABSENT__")) return { ...ok, stdout: "__TANREN_JUNIT_ABSENT__\n" };
     // The verdict-anchor read: the workspace HEAD the gate binds gate.verdict to
     // when no headShaOverride is given. A configured `workspaceHead` lets the
     // commit-binding test prove the override is preferred over THIS sha.
     if (cmd === "git rev-parse HEAD") return { ...ok, stdout: `${this.state.workspaceHead ?? ""}\n` };
-    // The deps-ensure guard, recognized by its sentinel marker. The P0 guard runs
-    // the install WHENEVER a manifest exists (it no longer probes node_modules), so
-    // it installs even when node_modules is already present — re-running every gate.
+    // The bootstrap guard, recognized by its sentinel marker. The guard runs the
+    // bootstrap WHENEVER the project contract exists (it no longer probes a manifest /
+    // prepared state), so it runs even when the tree is already prepared — every gate.
     if (cmd.includes("deps-ensure")) {
-      if (this.state.manifest) {
+      if (this.state.contract) {
         this.state.installRuns += 1;
-        // The install (re-)populates node_modules; counted so a later gate's
-        // re-install is observable.
-        this.state.nodeModules = true;
+        // The bootstrap (re-)prepares the tree; counted so a later gate's re-run is observable.
+        this.state.prepared = true;
         return { ...ok, stdout: "tanren: deps-ensure installing\nPackages: +120" };
       }
       return { ...ok, stdout: "tanren: deps-ensure no-op" };
     }
-    // Gate steps. Without node_modules, lint/typecheck/test/build all "tool not
-    // found" (exit 127). With node_modules, lint's outcome is governed by lintExit;
-    // typecheck/test/build pass.
-    if (cmd.startsWith("pnpm ")) {
-      if (!this.state.nodeModules) {
-        return { exitCode: 127, stdout: "", stderr: "sh: 1: turbo: not found", timedOut: false };
+    // Gate steps. Without a prepared tree, every `just tier-*` "tool not found"
+    // (exit 127). With a prepared tree, tier-1's outcome is governed by tier1Exit;
+    // tier-2/tier-3 pass.
+    if (cmd.startsWith("just tier-")) {
+      if (!this.state.prepared) {
+        return { exitCode: 127, stdout: "", stderr: "sh: 1: tool: not found", timedOut: false };
       }
-      if (cmd === "pnpm lint") {
-        return this.state.lintExit === 0 ? ok : { ...ok, exitCode: this.state.lintExit, stderr: "lint error" };
+      if (cmd === "just tier-1") {
+        return this.state.tier1Exit === 0 ? ok : { ...ok, exitCode: this.state.tier1Exit, stderr: "tier-1 error" };
       }
       return ok;
     }
@@ -119,8 +129,8 @@ function gateInput(ssh: CommandSubstrate, ctx: PlannerRunContext): RunPlannerLoo
   return { ssh, context: ctx, timeoutMs: 100 } as unknown as RunPlannerLoopInput;
 }
 
-// The verbatim deps-ensure guard command the gate issued (it embeds the resolved
-// install command), so install-mode tests can assert on `--frozen-lockfile`.
+// The verbatim bootstrap guard command the gate issued (it embeds the resolved
+// bootstrap command), so bootstrap-mode tests can assert on its contents.
 function depsEnsureCommand(ssh: InterpretingSsh): string {
   const cmd = ssh.commands.find((c) => c.command.includes("deps-ensure"));
   expect(cmd).toBeDefined();
@@ -128,10 +138,10 @@ function depsEnsureCommand(ssh: InterpretingSsh): string {
 }
 
 describe("buildDefaultGate — greenfield deps-ensure", () => {
-  it("installs deps before the tier so the first post-writer gate passes (not turbo-not-found)", async () => {
-    // Greenfield: the writer has authored a manifest, but deps were never installed
-    // (the cold bootstrap skipped install on the manifest-less clone HEAD).
-    const state: WorkspaceState = { manifest: true, nodeModules: false, lintExit: 0, installRuns: 0 };
+  it("bootstraps before the tier so the first post-writer gate passes (not tool-not-found)", async () => {
+    // Greenfield: the writer has authored the project contract, but the tree was never
+    // prepared (the cold bootstrap was a no-op on the contract-less clone HEAD).
+    const state: WorkspaceState = { contract: true, prepared: false, tier1Exit: 0, installRuns: 0 };
     const ssh = new InterpretingSsh(state);
     const events = new FakeEventStore();
     const gate = buildDefaultGate(gateInput(ssh, context({ greenfield: true })), target, workspacePath, events);
@@ -139,12 +149,12 @@ describe("buildDefaultGate — greenfield deps-ensure", () => {
     const outcome = await gate({ when: "per_iteration", taskId: "task_w" });
 
     expect(outcome.passed).toBe(true);
-    // The ensure guard ran BEFORE the first `pnpm lint` (ordering is load-bearing).
+    // The bootstrap guard ran BEFORE the first `just tier-1` (ordering is load-bearing).
     const ensureIdx = ssh.commands.findIndex((c) => c.command.includes("deps-ensure"));
-    const lintIdx = ssh.commands.findIndex((c) => c.command === "pnpm lint");
+    const tier1Idx = ssh.commands.findIndex((c) => c.command === "just tier-1");
     expect(ensureIdx).toBeGreaterThanOrEqual(0);
-    expect(lintIdx).toBeGreaterThan(ensureIdx);
-    // No gate.failed: deps installed, so lint/typecheck/test all exit 0.
+    expect(tier1Idx).toBeGreaterThan(ensureIdx);
+    // No gate.failed: the tree is prepared, so tier-1 exits 0.
     expect(events.events.some((e) => e.eventType === "gate.failed")).toBe(false);
     expect(events.events.some((e) => e.eventType === "gate.passed")).toBe(true);
   });
@@ -154,7 +164,7 @@ describe("buildDefaultGate — greenfield deps-ensure", () => {
   // old "cache the installed flag" behavior would have skipped the second gate's
   // install (and the run would die on `vitest: not found`).
   it("re-runs the deps install before a later gate (pre_audit), not just the first", async () => {
-    const state: WorkspaceState = { manifest: true, nodeModules: false, lintExit: 0, installRuns: 0 };
+    const state: WorkspaceState = { contract: true, prepared: false, tier1Exit: 0, installRuns: 0 };
     const ssh = new InterpretingSsh(state);
     const gate = buildDefaultGate(
       gateInput(ssh, context({ greenfield: true })),
@@ -176,71 +186,57 @@ describe("buildDefaultGate — greenfield deps-ensure", () => {
   });
 });
 
-// The greenfield-vs-brownfield INSTALL MODE: with no explicit install command,
-// buildDefaultGate must pass the FROZEN DEFAULT_BOOTSTRAP_COMMAND for a brownfield
-// run (so a committed lockfile is never mutated) and the NON-FROZEN deps-ensure
-// default for a greenfield run (so a writer-added devDep installs without a
-// regenerated lockfile). The deps-ensure guard embeds the chosen install command
-// verbatim, so we assert on its presence/absence of `--frozen-lockfile`.
-describe("buildDefaultGate — deps-ensure install mode (greenfield vs brownfield)", () => {
-  it("a BROWNFIELD run (no greenfield flag, no explicit command) uses the FROZEN default — committed lockfile is never mutated", async () => {
-    const state: WorkspaceState = { manifest: true, nodeModules: false, lintExit: 0, installRuns: 0 };
-    const ssh = new InterpretingSsh(state);
-    // context() with no greenfield flag ⇒ brownfield (the safe default = main's behavior).
-    const gate = buildDefaultGate(gateInput(ssh, context()), target, workspacePath, new FakeEventStore());
+// STACK-AGNOSTIC BOOTSTRAP MODE: with no explicit bootstrap command and no
+// `.tanren/ci.yml` `bootstrap.run`, buildDefaultGate passes the stack-agnostic
+// DEFAULT_BOOTSTRAP_COMMAND LOUD-fallback (`just bootstrap` if a justfile is present,
+// else a loud failure) — NO greenfield-vs-frozen branch, NO baked-in stack command.
+// The greenfield-vs-frozen concern lives inside the project's `just bootstrap`. The
+// bootstrap guard embeds the chosen command verbatim, so we assert on its contents.
+describe("buildDefaultGate — stack-agnostic bootstrap mode", () => {
+  for (const greenfield of [true, false]) {
+    it(`uses the stack-agnostic \`just bootstrap\` fallback (no explicit command, greenfield=${greenfield})`, async () => {
+      const state: WorkspaceState = { contract: true, prepared: false, tier1Exit: 0, installRuns: 0 };
+      const ssh = new InterpretingSsh(state);
+      const gate = buildDefaultGate(
+        gateInput(ssh, context({ greenfield })),
+        target,
+        workspacePath,
+        new FakeEventStore(),
+      );
 
-    await gate({ when: "per_iteration" });
+      await gate({ when: "per_iteration" });
 
-    const cmd = depsEnsureCommand(ssh);
-    // The FROZEN brownfield default: `pnpm install --frozen-lockfile` / `npm ci`.
-    expect(cmd).toContain("--frozen-lockfile");
-    expect(cmd).toContain("npm ci");
-  });
-
-  it("a GREENFIELD run (greenfield flag, no explicit command) uses the NON-FROZEN default — writer-added devDeps install", async () => {
-    const state: WorkspaceState = { manifest: true, nodeModules: false, lintExit: 0, installRuns: 0 };
-    const ssh = new InterpretingSsh(state);
-    const gate = buildDefaultGate(
-      gateInput(ssh, context({ greenfield: true })),
-      target,
-      workspacePath,
-      new FakeEventStore(),
-    );
-
-    await gate({ when: "per_iteration" });
-
-    const cmd = depsEnsureCommand(ssh);
-    // The NON-FROZEN greenfield default: a plain `pnpm install` / `npm install`,
-    // never `--frozen-lockfile` / `npm ci`.
-    expect(cmd).not.toContain("--frozen-lockfile");
-    expect(cmd).not.toContain("npm ci");
-    expect(cmd).toContain("pnpm install");
-  });
+      const cmd = depsEnsureCommand(ssh);
+      // The default fallback defers to `just bootstrap`; Tanren names NO stack.
+      expect(cmd).toContain("just bootstrap");
+      expect(cmd).not.toMatch(/pnpm|npm|corepack|--frozen-lockfile/u);
+    });
+  }
 
   it("an explicit input.bootstrapCommand wins verbatim in BOTH greenfield and brownfield", async () => {
     for (const greenfield of [true, false]) {
-      const state: WorkspaceState = { manifest: true, nodeModules: false, lintExit: 0, installRuns: 0 };
+      const state: WorkspaceState = { contract: true, prepared: false, tier1Exit: 0, installRuns: 0 };
       const ssh = new InterpretingSsh(state);
       const input = {
         ssh,
         context: context({ greenfield }),
         timeoutMs: 100,
-        bootstrapCommand: "corepack pnpm install --frozen-lockfile",
+        bootstrapCommand: "just bootstrap --offline",
       } as unknown as RunPlannerLoopInput;
       const gate = buildDefaultGate(input, target, workspacePath, new FakeEventStore());
 
       await gate({ when: "per_iteration" });
 
       const cmd = depsEnsureCommand(ssh);
-      expect(cmd).toContain("corepack pnpm install --frozen-lockfile");
+      expect(cmd).toContain("just bootstrap --offline");
     }
   });
 });
 
 describe("buildDefaultGate — lenient posture", () => {
-  it("a failing lint (advisory) → the gate PASSES with a gate.advisory_failed warning", async () => {
-    // Deps install, but lint genuinely fails. Under lenient, lint is advisory.
-    const state: WorkspaceState = { manifest: true, nodeModules: false, lintExit: 2, installRuns: 0 };
+  it("a failing tier-1 (advisory) → the gate PASSES with a gate.advisory_failed warning", async () => {
+    // The tree is prepared, but tier-1 genuinely fails. Under lenient, tier-1 is advisory.
+    const state: WorkspaceState = { contract: true, prepared: false, tier1Exit: 2, installRuns: 0 };
     const ssh = new InterpretingSsh(state);
     const events = new FakeEventStore();
     const gate = buildDefaultGate(
@@ -255,16 +251,15 @@ describe("buildDefaultGate — lenient posture", () => {
     expect(outcome.passed).toBe(true);
     const advisory = events.events.find((e) => e.eventType === "gate.advisory_failed");
     expect(advisory).toBeDefined();
-    expect((advisory!.payload as { advisoryStep: string }).advisoryStep).toBe("lint");
+    // The cheap per-iteration `tier-1` step is advisory under lenient.
+    expect((advisory!.payload as { advisoryStep: string }).advisoryStep).toBe("tier-1");
     expect(events.events.some((e) => e.eventType === "gate.failed")).toBe(false);
-    // The tier still ran the later steps (advisory lint did not short-circuit). The
-    // per_iteration fast tier is lint+typecheck (NO tests — the 3-tier default keeps
-    // tests to tier-2+), so the proof the later step ran is `pnpm typecheck`.
-    expect(ssh.commands.some((c) => c.command === "pnpm typecheck")).toBe(true);
+    // The fast tier's tier-1 step ran (the advisory did not crash the gate).
+    expect(ssh.commands.some((c) => c.command === "just tier-1")).toBe(true);
   });
 
-  it("under the strict default the same failing lint FAILS the gate", async () => {
-    const state: WorkspaceState = { manifest: true, nodeModules: false, lintExit: 2, installRuns: 0 };
+  it("under the strict default the same failing tier-1 FAILS the gate", async () => {
+    const state: WorkspaceState = { contract: true, prepared: false, tier1Exit: 2, installRuns: 0 };
     const ssh = new InterpretingSsh(state);
     const events = new FakeEventStore();
     // No governancePosture ⇒ strict default ⇒ every step blocks.
@@ -294,9 +289,9 @@ describe("buildDefaultGate — gate.verdict commit-binding (headShaOverride)", (
 
   it("anchors the pre_merge gate.verdict on the PUSHED PR head when a headShaOverride is given (not the workspace HEAD)", async () => {
     const state: WorkspaceState = {
-      manifest: true,
-      nodeModules: false,
-      lintExit: 0,
+      contract: true,
+      prepared: false,
+      tier1Exit: 0,
       installRuns: 0,
       workspaceHead: WORKSPACE_HEAD,
     };
@@ -317,9 +312,9 @@ describe("buildDefaultGate — gate.verdict commit-binding (headShaOverride)", (
 
   it("falls back to the workspace HEAD as the verdict anchor when no override is given (per_iteration / pre_audit)", async () => {
     const state: WorkspaceState = {
-      manifest: true,
-      nodeModules: false,
-      lintExit: 0,
+      contract: true,
+      prepared: false,
+      tier1Exit: 0,
       installRuns: 0,
       workspaceHead: WORKSPACE_HEAD,
     };
@@ -343,9 +338,9 @@ describe("buildDefaultGate — gate.verdict commit-binding (headShaOverride)", (
   // silent fallback.
   it("THROWS on a pre_merge gate with an EMPTY override (no silent workspace-HEAD fallback)", async () => {
     const state: WorkspaceState = {
-      manifest: true,
-      nodeModules: false,
-      lintExit: 0,
+      contract: true,
+      prepared: false,
+      tier1Exit: 0,
       installRuns: 0,
       workspaceHead: WORKSPACE_HEAD,
     };
@@ -361,9 +356,9 @@ describe("buildDefaultGate — gate.verdict commit-binding (headShaOverride)", (
 
   it("THROWS on a pre_merge gate with NO override at all (absent ⇒ same fail-closed as empty)", async () => {
     const state: WorkspaceState = {
-      manifest: true,
-      nodeModules: false,
-      lintExit: 0,
+      contract: true,
+      prepared: false,
+      tier1Exit: 0,
       installRuns: 0,
       workspaceHead: WORKSPACE_HEAD,
     };
@@ -377,9 +372,9 @@ describe("buildDefaultGate — gate.verdict commit-binding (headShaOverride)", (
 
   it("THROWS on a NON-40-hex override (corrupt read) at ANY when — never anchors on a bogus commit", async () => {
     const state: WorkspaceState = {
-      manifest: true,
-      nodeModules: false,
-      lintExit: 0,
+      contract: true,
+      prepared: false,
+      tier1Exit: 0,
       installRuns: 0,
       workspaceHead: WORKSPACE_HEAD,
     };
@@ -396,7 +391,7 @@ describe("buildDefaultGate — gate.verdict commit-binding (headShaOverride)", (
     // workspaceHead omitted ⇒ `git rev-parse HEAD` yields "" (the fake-SSH unit path).
     // pre_merge + empty override + empty workspace HEAD is the ONLY tolerated no-override
     // case: there is no real commit to bind, so the gate emits no verdict (not a throw).
-    const state: WorkspaceState = { manifest: true, nodeModules: false, lintExit: 0, installRuns: 0 };
+    const state: WorkspaceState = { contract: true, prepared: false, tier1Exit: 0, installRuns: 0 };
     const ssh = new InterpretingSsh(state);
     const events = new FakeEventStore();
     const gate = buildDefaultGate(gateInput(ssh, context({ greenfield: true })), target, workspacePath, events);
@@ -408,13 +403,34 @@ describe("buildDefaultGate — gate.verdict commit-binding (headShaOverride)", (
   });
 });
 
-// NO-SILENT-FALLBACK: the native JUnit ingest must DISCRIMINATE "no test step ran"
-// (quiet) from "a junit-writing test step ran but produced no report" (LOUD). The
-// virtual workspace writes no report, so a tier with a junit test step (slow/merge,
-// `pnpm test --reporter=junit --outputFile=reports/junit.xml`) is the expected-but-
-// missing case; the fast tier (lint+typecheck) is the quiet case. The loud mechanism
-// is a structured `console.error` (non-merge-gating — visibility, not a blocker).
+// NO-SILENT-FALLBACK: the native JUnit ingest must DISCRIMINATE "no junit-writing
+// step ran" (quiet) from "a junit-writing step ran but produced no report" (LOUD).
+// STACK-AGNOSTIC: `expectReport` is derived from whether an EXECUTED step's `run`
+// references the convention path reports/junit.xml — the COMMAND is the project's
+// (e.g. a `just tier-2` written to emit junit), Tanren just keys on the path. So the
+// LOUD case is driven by a repo `.tanren/ci.yml` whose slow tier writes the report;
+// the stack-agnostic default (`just tier-2`, no path) is the quiet case. The loud
+// mechanism is a structured `console.error` (non-merge-gating — visibility).
 describe("buildDefaultGate — native JUnit ingest (expected-but-missing is LOUD)", () => {
+  // A repo config whose SLOW tier's step `run` references the junit path — so the
+  // executed pre_audit tier is "junit-writing" ⇒ expectReport=true.
+  const JUNIT_WRITING_CONFIG = `version: 1
+bootstrap:
+  run: just bootstrap
+tiers:
+  fast:
+    - name: tier-1
+      run: just tier-1
+  slow:
+    - name: tier-2
+      run: just tier-2 --report reports/junit.xml
+when:
+  fast:
+    - per_iteration
+  slow:
+    - pre_audit
+`;
+
   // A fuller input than gateInput: a fake pool + an org so the best-effort ingest runs.
   function ingestInput(ssh: CommandSubstrate): RunPlannerLoopInput {
     const fakePool = { query: async () => ({ rows: [], rowCount: 0 }) };
@@ -428,18 +444,24 @@ describe("buildDefaultGate — native JUnit ingest (expected-but-missing is LOUD
 
   afterEach(() => vi.restoreAllMocks());
 
-  it("pre_audit (junit-writing test step ran) + absent report → a LOUD console.error", async () => {
-    // node_modules present so the gate steps pass; the report is absent (the fake echoes
-    // the absent marker), and pre_audit runs the slow tier's junit-writing test step.
+  it("pre_audit (a junit-writing step ran) + absent report → a LOUD console.error", async () => {
+    // The tree is prepared so the gate steps pass; the report is absent (the fake echoes
+    // the absent marker), and pre_audit runs the slow tier's junit-writing step (the
+    // injected repo config's `just tier-2 --report reports/junit.xml`).
     const state: WorkspaceState = {
-      manifest: true,
-      nodeModules: true,
-      lintExit: 0,
+      contract: true,
+      prepared: true,
+      tier1Exit: 0,
       installRuns: 0,
       workspaceHead: "c".repeat(40),
     };
     const errs = vi.spyOn(console, "error").mockImplementation(() => {});
-    const gate = buildDefaultGate(ingestInput(new InterpretingSsh(state)), target, workspacePath, new FakeEventStore());
+    const gate = buildDefaultGate(
+      ingestInput(new InterpretingSsh(state, JUNIT_WRITING_CONFIG)),
+      target,
+      workspacePath,
+      new FakeEventStore(),
+    );
 
     const outcome = await gate({ when: "pre_audit" });
 
@@ -451,16 +473,21 @@ describe("buildDefaultGate — native JUnit ingest (expected-but-missing is LOUD
     expect(loud).toContain("tier=slow");
   });
 
-  it("per_iteration (no junit-writing test step) + absent report → QUIET (no loud signal)", async () => {
+  it("per_iteration (no junit-writing step) + absent report → QUIET (no loud signal)", async () => {
     const state: WorkspaceState = {
-      manifest: true,
-      nodeModules: true,
-      lintExit: 0,
+      contract: true,
+      prepared: true,
+      tier1Exit: 0,
       installRuns: 0,
       workspaceHead: "c".repeat(40),
     };
     const errs = vi.spyOn(console, "error").mockImplementation(() => {});
-    const gate = buildDefaultGate(ingestInput(new InterpretingSsh(state)), target, workspacePath, new FakeEventStore());
+    const gate = buildDefaultGate(
+      ingestInput(new InterpretingSsh(state, JUNIT_WRITING_CONFIG)),
+      target,
+      workspacePath,
+      new FakeEventStore(),
+    );
 
     const outcome = await gate({ when: "per_iteration" });
 

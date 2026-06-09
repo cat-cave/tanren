@@ -21,11 +21,7 @@ import {
   runGateForWhen,
 } from "./gate/index.js";
 import type { CiConfigV1, CiConfigValidationError, CiYamlParseError } from "../ci/index.js";
-import {
-  DEFAULT_BOOTSTRAP_COMMAND,
-  ensureWorkspaceDepsInstalled,
-  resolveWorkspaceHeadSha,
-} from "../workspace/index.js";
+import { ensureWorkspaceDepsInstalled, resolveWorkspaceHeadSha } from "../workspace/index.js";
 import type { RunPlannerLoopInput } from "./plannerRun.js";
 
 // Builds the production gate callback. The CI config is resolved lazily on the
@@ -37,34 +33,30 @@ import type { RunPlannerLoopInput } from "./plannerRun.js";
 // call runs the tiers mapped to `when` over SSH and emits gate.* through the run's store.
 //
 // GREENFIELD DEPS-ENSURE: before EVERY gate the callback runs a guarded
-// `ensureWorkspaceDepsInstalled` (install whenever a manifest exists).
-// prepareRunWorkspace bootstraps ONCE right after clone, before the writer — but a
-// greenfield clone HEAD ships no manifest, so that cold bootstrap skips install;
-// the writer THEN authors `package.json`, and without this the first
-// per-iteration gate would run `pnpm lint` against an uninstalled tree
-// (`turbo: not found` / `vitest: not found`). The install command is resolved
-// LAZILY (cached alongside the config) so a writer-authored `.tanren/ci.yml`
-// `bootstrap.run` is honored.
+// `ensureWorkspaceDepsInstalled` (bootstrap whenever the project CONTRACT —
+// `justfile` / `.tanren/ci.yml` — exists). prepareRunWorkspace bootstraps ONCE right
+// after clone, before the writer — but a greenfield clone HEAD ships no contract, so
+// that cold bootstrap is a no-op; the writer THEN authors the `justfile` + manifest,
+// and without this the first per-iteration gate would run `just tier-1` against an
+// unprepared tree. The bootstrap command is resolved LAZILY (cached alongside the
+// config) so a writer-authored `.tanren/ci.yml` `bootstrap.run` is honored.
 //
-// INSTALL MODE (greenfield vs brownfield): when NO explicit install command is set
-// (no `input.bootstrapCommand`, no `.tanren/ci.yml` `bootstrap.run`), the DEFAULT
-// is chosen by `context.greenfield`. A greenfield run (Tanren authored the repo
-// live) uses the NON-FROZEN deps-ensure default so a writer-added devDep installs
-// even without a perfectly-regenerated lockfile. A brownfield run keeps the
-// FROZEN, lockfile-safe `DEFAULT_BOOTSTRAP_COMMAND` (`pnpm install
-// --frozen-lockfile` / `npm ci`) so an existing committed lockfile is NEVER
-// silently mutated / upgraded — main's safe default, restored.
+// STACK-AGNOSTIC: Tanren names NO tech stack. When NO explicit command is set (no
+// `input.bootstrapCommand`, no `.tanren/ci.yml` `bootstrap.run`), the default is the
+// stack-agnostic DEFAULT_BOOTSTRAP_COMMAND LOUD-fallback (`just bootstrap` if a
+// justfile is present, else a loud failure). The greenfield-vs-frozen install
+// concern (`--frozen-lockfile` vs a writer-added dependency) lives INSIDE the
+// project's `just bootstrap` recipe, NOT in Tanren — so there is no
+// `context.greenfield` branch here.
 //
 // NO `installed` LATCH (the P0 fix): the ensure is re-run before EVERY gate and
-// its result is NOT cached. The greenfield manifest MUTATES between writer
-// iterations — a writer can add a devDep (e.g. `vitest`) AFTER an earlier
-// iteration's partial install already created node_modules, and a one-shot
-// "installed once → skip forever" latch would then never install that new devDep,
-// so the gate would die on `vitest: not found`. ensureWorkspaceDepsInstalled now
-// installs whenever a manifest exists (pnpm/npm is the idempotency authority — a
-// redundant install is a cheap no-op), so re-running it each gate is correct and
-// safe. Brownfield → each re-install is the FROZEN command, a cheap, lockfile-safe
-// no-op when deps already agree, behavior-equivalent to main.
+// its result is NOT cached. The greenfield project MUTATES between writer
+// iterations — a writer can add a dependency AFTER an earlier iteration's install,
+// and a one-shot "installed once → skip forever" latch would then never install it,
+// so the gate would die on a missing binary. ensureWorkspaceDepsInstalled re-runs
+// the bootstrap whenever the contract exists (the project's `just bootstrap` is the
+// idempotency authority — a redundant run is a cheap no-op), so re-running it each
+// gate is correct and safe.
 
 // A full 40-hex git object id (the only shape the verdict anchor may bind to).
 const FULL_SHA = /^[0-9a-f]{40}$/u;
@@ -127,12 +119,12 @@ export function buildDefaultGate(
   let configResult:
     | Promise<{ ok: CiConfigV1 } | { invalid: CiConfigValidationError | CiYamlParseError } | undefined>
     | undefined;
-  // The lazily-resolved EXPLICIT install command, cached alongside the config.
+  // The lazily-resolved EXPLICIT bootstrap command, cached alongside the config.
   // An explicit input.bootstrapCommand wins; otherwise the writer-authored
-  // .tanren/ci.yml `bootstrap.run` is picked up. Undefined here ⇒ no explicit
-  // command, and the per-gate DEFAULT is chosen by `context.greenfield`
-  // (greenfield ⇒ non-frozen DEPS_ENSURE_DEFAULT_COMMAND; brownfield ⇒ frozen
-  // DEFAULT_BOOTSTRAP_COMMAND) — see the install-mode block below.
+  // .tanren/ci.yml `bootstrap.run` (conventionally `just bootstrap`) is picked up.
+  // Undefined here ⇒ no explicit command, and the per-gate default is the
+  // stack-agnostic DEFAULT_BOOTSTRAP_COMMAND LOUD-fallback — see the bootstrap block
+  // below.
   let installCommandPromise: Promise<string | undefined> | undefined;
   // The advisory (warn-but-don't-block) step names for the run's governance
   // posture: `lenient` ⇒ {lint, typecheck} are advisory; every other posture ⇒
@@ -187,29 +179,25 @@ export function buildDefaultGate(
           ? resolveBootstrapCommand({ ssh: input.ssh, target, workspacePath, timeoutMs: input.timeoutMs })
           : Promise.resolve(input.bootstrapCommand);
     }
-    // Install deps before the gate runs, EVERY gate (no latch). The install is
-    // idempotent (pnpm/npm reconciles an already-installed tree as a cheap no-op),
-    // and re-running it each gate is what catches a writer-added devDep authored
-    // AFTER an earlier iteration's install — a one-shot latch would skip it and the
-    // gate would die on `vitest: not found`. A real install failure throws
+    // Bootstrap before the gate runs, EVERY gate (no latch). The project's `just
+    // bootstrap` is idempotent (it reconciles an already-prepared tree as a cheap
+    // no-op), and re-running it each gate is what catches a writer-added dependency
+    // authored AFTER an earlier iteration's install — a one-shot latch would skip it
+    // and the gate would die on a missing binary. A real failure throws
     // WorkspaceDepsInstallError and halts the run loudly (no silent skip).
     //
-    // INSTALL MODE (no explicit command): a GREENFIELD run leaves `command`
-    // undefined → ensureWorkspaceDepsInstalled uses its NON-FROZEN
-    // DEPS_ENSURE_DEFAULT_COMMAND (a writer-added devDep installs even without a
-    // perfectly-regenerated lockfile). A BROWNFIELD run uses the FROZEN,
-    // lockfile-safe DEFAULT_BOOTSTRAP_COMMAND (`pnpm install --frozen-lockfile` /
-    // `npm ci`) so an existing committed lockfile is NEVER silently mutated /
-    // upgraded — restoring main's safe brownfield default. An explicit command
-    // (resolved above) overrides this in either case.
+    // The command is the resolved one (an `input.bootstrapCommand` override or the
+    // repo's `.tanren/ci.yml` `bootstrap.run`, conventionally `just bootstrap`), or —
+    // when neither is declared — the stack-agnostic DEFAULT_BOOTSTRAP_COMMAND
+    // LOUD-fallback (`just bootstrap` if a justfile is present, else a loud failure).
+    // Tanren names NO stack and makes NO greenfield-vs-frozen choice: that concern
+    // lives inside the project's `just bootstrap` recipe.
     const resolvedInstallCommand = await installCommandPromise;
-    const installCommand =
-      resolvedInstallCommand ?? (input.context.greenfield === true ? undefined : DEFAULT_BOOTSTRAP_COMMAND);
     await ensureWorkspaceDepsInstalled({
       ssh: input.ssh,
       target,
       workspacePath,
-      ...(installCommand === undefined ? {} : { command: installCommand }),
+      ...(resolvedInstallCommand === undefined ? {} : { command: resolvedInstallCommand }),
       ...(input.appEnv === undefined ? {} : { appEnv: input.appEnv }),
       timeoutMs: input.timeoutMs,
     });
