@@ -11,11 +11,18 @@
 
 import { randomUUID } from "node:crypto";
 import type pg from "pg";
+import { z } from "zod";
 import type { ActorContext } from "../../auth/schemas.js";
 import { resolveWritableClient } from "../data/orgScopedDb.js";
 import { ForgeAnswer } from "../answerers/schemas/forge.js";
 import { ForgeThreadStore } from "./threads.js";
-import { ForgeTurnAppendInput, type ForgeTurnAudience, type ForgeTurnRow, type ForgeTurnSource } from "./schemas.js";
+import {
+  ForgeAuthorKind,
+  ForgeTurnAppendInput,
+  ForgeTurnAudience,
+  type ForgeTurnRow,
+  ForgeTurnSource,
+} from "./schemas.js";
 
 type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
@@ -41,19 +48,46 @@ const SELECT_TURN_COLUMNS = `
   created_at
 `;
 
+// A jsonb column round-trips as either a JSON string (some drivers/paths) or an
+// already-parsed value. Parse the string form, then hand the value to the real
+// payload schema — so an UNPARSEABLE source string THROWS at the boundary rather
+// than laundering a bad shape into a typed union.
+function parseJsonbCell(value: unknown): unknown {
+  return typeof value === "string" ? JSON.parse(value) : value;
+}
+const jsonbCell = z.preprocess(parseJsonbCell, z.unknown());
+
+// audit RC-6 trust-at-boundary: decode the raw `forge_turns` row through a Zod
+// schema instead of `JSON.parse(...) as ForgeTurnSource` / `String(...) as Enum`
+// / `... as Date` casts. Each cell is VALIDATED — a bad enum, an unparseable
+// source/render, or a non-coercible timestamp THROWS at `.parse` (the point of
+// the audit) rather than type-laundering an untrusted DB row into `ForgeTurnRow`.
+const ForgeTurnRowDecode = z
+  .object({
+    id: z.coerce.string().min(1),
+    thread_id: z.coerce.string().min(1),
+    turn_index: z.coerce.number().int().nonnegative(),
+    source: jsonbCell.pipe(ForgeTurnSource),
+    audience: ForgeTurnAudience,
+    author_kind: ForgeAuthorKind,
+    render: jsonbCell.pipe(ForgeAnswer),
+    created_at: z.coerce.date(),
+  })
+  .transform(
+    (row): ForgeTurnRow => ({
+      id: row.id,
+      threadId: row.thread_id,
+      index: row.turn_index,
+      source: row.source,
+      audience: row.audience,
+      authorKind: row.author_kind,
+      render: row.render,
+      createdAt: row.created_at,
+    }),
+  );
+
 function decodeTurnRow(raw: RawTurnRow): ForgeTurnRow {
-  const source = (typeof raw.source === "string" ? JSON.parse(raw.source) : raw.source) as ForgeTurnSource;
-  const render = typeof raw.render === "string" ? JSON.parse(raw.render) : raw.render;
-  return {
-    id: String(raw.id),
-    threadId: String(raw.thread_id),
-    index: Number(raw.turn_index),
-    source,
-    audience: String(raw.audience) as ForgeTurnAudience,
-    authorKind: String(raw.author_kind) as ForgeTurnRow["authorKind"],
-    render,
-    createdAt: raw.created_at as Date,
-  };
+  return ForgeTurnRowDecode.parse(raw);
 }
 
 // The four audience tiers are ordered from least to most privileged. An

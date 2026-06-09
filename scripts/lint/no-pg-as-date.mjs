@@ -6,12 +6,14 @@
 // type. The fix is to decode raw rows through a Zod row schema (z.coerce.date())
 // at the boundary; this lint makes a reverted fix fail the build.
 //
-// SCOPE (deliberately narrow): only `services/orchestrator/src/routes/runs/**`,
-// the files cleaned by the RC-6 hardening. It should be WIDENED in a follow-up
-// to the rest of `services/orchestrator/src/routes/**` plus the
-// `engine/forge/turns.ts` / `engine/forge/proposals.ts` decode sites — those are
-// owned by other in-flight waves right now, so the scope stays here for now to
-// avoid clashing with their edits.
+// SCOPE (deliberately narrow): the `services/orchestrator/src/routes/runs/**`
+// read seam cleaned by the first RC-6 wave, PLUS the three forge decode sites
+// cleaned by the forge-decode wave — `engine/forge/turns.ts` (`decodeTurnRow`),
+// `proposals.ts` (`decodeRow`), and `threads.ts` (`decodeThreadRow`), each now
+// decoding raw rows through a Zod row schema (z.coerce.date() + enum cells). The
+// forge files are listed as EXACT paths (not the whole `engine/forge/` dir) so
+// the lint guards the decode sites without clashing with the INSERT/index logic
+// or the sibling files in that dir. Widen further in a follow-up.
 //
 // FORBIDDEN forms inside the scoped dirs:
 //   - `... as Date`                       (the laundering cast this audit removed)
@@ -20,12 +22,20 @@
 // `as const` is allowed (not a row-shape cast). Comment/JSDoc lines are ignored
 // so the prose that documents the removed cast doesn't trip the lint.
 
-import { glob, readFile } from "node:fs/promises";
+import { glob, readFile, stat } from "node:fs/promises";
 import { relative, resolve } from "node:path";
 import { exit } from "node:process";
 
-// The single scoped directory. Widen this list in the follow-up (see header).
+// Scoped directories (prefix match) — every `.ts(x)` beneath is linted.
 const SCOPED_DIRS = ["services/orchestrator/src/routes/runs/"];
+
+// Scoped EXACT files — guarded individually so the lint covers a specific decode
+// site without pulling its sibling files in the same dir into scope.
+const SCOPED_FILES = [
+  "services/orchestrator/src/engine/forge/turns.ts",
+  "services/orchestrator/src/engine/forge/proposals.ts",
+  "services/orchestrator/src/engine/forge/threads.ts",
+];
 
 // The lint never reads its own source (the forbidden strings live in its prose).
 const SELF = "scripts/lint/no-pg-as-date.mjs";
@@ -35,7 +45,7 @@ function normalizePath(path) {
 }
 
 function inScope(file) {
-  return SCOPED_DIRS.some((dir) => file.startsWith(dir));
+  return SCOPED_DIRS.some((dir) => file.startsWith(dir)) || SCOPED_FILES.includes(file);
 }
 
 // Strip a `//` line comment / `*`-prefixed block-comment body so a `as Date`
@@ -53,9 +63,10 @@ function stripCommentary(line) {
 // it; any `as Date` in this seam must instead come from a Zod decode.)
 const AS_DATE = /\bas\s+Date\b/u;
 // `.parse(...) as Foo` / `JSON.parse(...) as Foo` — casting away a parsed value's
-// type. Excludes `as const`. Matches a closed-enum/type identifier or an indexed
-// access (`as RunCostRecord["billingMode"]`).
-const PARSE_THEN_CAST = /\.parse\s*\([^;]*\)\s*as\s+(?!const\b)[A-Za-z_$]/u;
+// type. Excludes `as const` and `as unknown` (neither launders to a typed
+// domain shape). Matches a closed-enum/type identifier or an indexed access
+// (`as RunCostRecord["billingMode"]`).
+const PARSE_THEN_CAST = /\.parse\s*\([^;]*\)\s*as\s+(?!const\b|unknown\b)[A-Za-z_$]/u;
 
 export function scanLineForViolations(line) {
   const code = stripCommentary(line);
@@ -87,6 +98,16 @@ async function collectScopedFiles(root) {
       const file = normalizePath(entry);
       if (file !== SELF) files.add(file);
     }
+  }
+  for (const file of SCOPED_FILES) {
+    if (file === SELF) continue;
+    // An exact-scoped file is only linted if it exists under this root (test
+    // fixtures stand up a partial tree; the repo root always has all three).
+    const exists = await stat(resolve(root, file)).then(
+      () => true,
+      () => false,
+    );
+    if (exists) files.add(normalizePath(file));
   }
   return [...files].toSorted();
 }
