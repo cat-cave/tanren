@@ -31,6 +31,7 @@ import type { VcsProvider } from "../contracts/vcsProvider.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
 import type { AnswererAdapter } from "../providers/types.js";
 import type { UsageProbe } from "../usage/index.js";
+import type { ContractFile } from "../forge/scaffold/index.js";
 import { workspaceRepoPathForRun } from "../workspace/index.js";
 import { prepareCleanPrBranch } from "../workspace/githubPush.js";
 import { buildReGateCi, type MergeGateRunContext, runMergeGateForRun } from "./plannerRunCi.js";
@@ -108,9 +109,8 @@ export interface PlannerRunContext {
   // Governance posture (run worker): drives the gate's advisory policy (`lenient` ⇒ lint/typecheck advisory; absent ⇒ strict).
   governancePosture?: GovernancePosture;
   // SPEC-LOOP REDESIGN (docs/roadmap/spec-loop-redesign.md): the per-project audit
-  // posture (triage routing of P1–P3 → tasks-here vs new specs) + the convergence
-  // policy (the SOLE loop bound: maxConsecutiveStalls; demoRunEnabled). Absent on unit
-  // paths ⇒ the loop's balanced defaults (DEFAULT_AUDIT_POSTURE / DEFAULT_CONVERGENCE_POLICY).
+  // posture (triage P1–P3 → tasks-here vs new specs) + the convergence policy (the SOLE
+  // loop bound). Absent on unit paths ⇒ DEFAULT_AUDIT_POSTURE / DEFAULT_CONVERGENCE_POLICY.
   auditPosture?: AuditPostureConfig;
   convergencePolicy?: ConvergencePolicyConfig;
   // AUDIT-EVIDENCE BASELINE: governance policy version (project config version), stamped onto the `gate.verdict` roll-up. Absent on unit paths with no config.
@@ -119,6 +119,8 @@ export interface PlannerRunContext {
   greenfield?: boolean;
   // cost PR-C: CONFIGURED per-credential credit→USD rate (from project/org `creditRates`). Absent ⇒ a real drawdown is NULL-and-loud.
   creditUsdRate?: number;
+  // DETERMINISTIC CONTRACT FILES (v27 fix): the `.tanren/ci.yml` + `justfile` workspace-prep materializes VERBATIM (write-iff-absent) from the captured lifecycle BEFORE the writer runs — so they are NEVER LLM-authored (the writer mangled the ci.yml shape on v27). Absent ⇒ no lifecycle (brownfield ships its own) ⇒ no-op.
+  contractFiles?: ReadonlyArray<ContractFile>;
 }
 
 export interface PlannerRunAdapterContext {

@@ -62,6 +62,33 @@ export const ProjectProductVision = z
   .strict();
 export type ProjectProductVision = z.infer<typeof ProjectProductVision>;
 
+// The project's CONCRETE LIFECYCLE — the captured stack commands behind the six
+// conventional justfile targets (stack-flexible contract,
+// docs/roadmap/stack-flexible-contract.md). Persisted here so the RUN path can
+// MATERIALIZE the contract files (`justfile` + `.tanren/ci.yml`) DETERMINISTICALLY
+// — no LLM authors them, which is the v27 fix: the LLM writer reliably mangled the
+// ci.yml YAML shape ("bootstrap expected object received string; tiers.* expected
+// array received object; when expected record received undefined"). This mirrors
+// the interview's `CaptureLifecycle` (the derive path projects that transient
+// capture onto this persisted config field) so a later run — not just the interview
+// request — can re-materialize the contract from the project's own declaration.
+// Each command holds the ACTUAL stack command(s) for the project's stack
+// (newline-joined for multi-line); `stack` is a descriptive label Tanren never
+// branches on. STRICT: either the full lifecycle is present or it is absent (a
+// project that never captured one) — never a partial placeholder.
+export const ProjectLifecycle = z
+  .object({
+    stack: z.string().min(1).max(120),
+    bootstrap: z.string().min(1).max(400),
+    tier1: z.string().min(1).max(400),
+    tier2: z.string().min(1).max(400),
+    tier3: z.string().min(1).max(400),
+    build: z.string().min(1).max(400),
+    deploy: z.string().min(1).max(400),
+  })
+  .strict();
+export type ProjectLifecycle = z.infer<typeof ProjectLifecycle>;
+
 export const ProjectConfigV1 = z
   .object({
     version: z.literal(1),
@@ -193,6 +220,13 @@ export const ProjectConfigV1 = z
     // the conflict resolver can frame a resolution against the product vision.
     // Optional: absent ⇒ no captured vision (a real empty state).
     productVision: ProjectProductVision.optional(),
+    // The captured project LIFECYCLE (see `ProjectLifecycle`). Persisted here (not
+    // a new table) so the RUN path materializes the contract files (`justfile` +
+    // `.tanren/ci.yml`) DETERMINISTICALLY from the project's own declaration — the
+    // v27 fix that takes contract-file authoring OUT of the LLM writer's hands.
+    // Optional: absent ⇒ no captured lifecycle (a brownfield/HTTP project that
+    // already ships its own contract files — no materialization).
+    lifecycle: ProjectLifecycle.optional(),
   })
   .strict();
 export type ProjectConfigV1 = z.infer<typeof ProjectConfigV1>;

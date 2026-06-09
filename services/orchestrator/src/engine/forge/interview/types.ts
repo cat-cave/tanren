@@ -79,8 +79,10 @@ export type CaptureArchitectureLine = z.infer<typeof CaptureArchitectureLine>;
 // The project's CONCRETE LIFECYCLE for the chosen stack — the load-bearing output
 // of the architecture step (stack-flexible contract,
 // docs/roadmap/stack-flexible-contract.md). Tanren knows NO stack: the project
-// DECLARES what each conventional justfile target IS for its stack, and the
-// scaffold AUTHORS the justfile from this (no hardcoded pnpm example). The six
+// DECLARES what each conventional justfile target IS for its stack, and the run
+// MATERIALIZES the justfile + `.tanren/ci.yml` from this DETERMINISTICALLY (no LLM,
+// no hardcoded pnpm example — the v27 fix; the ci.yml is the skeleton verbatim, the
+// justfile the six targets filled from these commands). The six
 // conventional targets map 1:1 to the contract's `bootstrap`/`tier-1`/`tier-2`/
 // `tier-3`/`build`/`deploy`; each holds the ACTUAL stack command(s) — general
 // enough that a Rust project fills `tier1` with "cargo clippy" + `build` with

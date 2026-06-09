@@ -181,21 +181,28 @@ describe("deriveFromCapture · creates the product graph (no migration)", () => 
     expect(deploy?.dependsOn).toEqual([buildId]);
   });
 
-  it("authors scaffold/build/deploy FROM the captured lifecycle (justfile + `just build`/`just deploy`, no hardcode)", async () => {
-    // The deterministic answerer captures a TS/pnpm lifecycle in the architecture
-    // step; the foundation specs author the justfile + route build/deploy through
-    // the conventional targets FROM it — never a hardcode. (Multi-stack authoring
-    // is unit-tested in scaffoldAuthoring.test.ts.)
-    const { derived, state } = await runInterviewAndDerive();
+  it("derives scaffold/build/deploy FROM the captured lifecycle + PERSISTS the lifecycle for deterministic contract materialization", async () => {
+    // v27 fix: the deterministic answerer captures a TS/pnpm lifecycle; the lifecycle
+    // is PERSISTED on the project config so the RUN materializes the contract files
+    // deterministically (no LLM authoring), and the scaffold spec's WRITER authors the
+    // project CODE. build/deploy route through the conventional targets FROM the
+    // captured lifecycle. (Multi-stack authoring is unit-tested in
+    // scaffoldAuthoring.test.ts; the contract projection in contractFiles.test.ts.)
+    const { derived, state, configs } = await runInterviewAndDerive();
     const [scaffold, build, deploy] = derived.specIds.map((id) => state.specs.get(id));
 
+    // The lifecycle is persisted onto the project config (the run materializes from it).
+    const config = configs.get(derived.projectId) as { lifecycle?: { stack?: string; bootstrap?: string } } | undefined;
+    expect(config?.lifecycle?.stack).toBe("ts/pnpm");
+    expect(config?.lifecycle?.bootstrap).toBe("pnpm install --frozen-lockfile");
+
     const desc = scaffold?.description ?? "";
-    expect(desc).toMatch(/bare .*skeleton/iu);
+    // The writer is told the contract files are pre-committed (materialized).
+    expect(desc.toLowerCase()).toMatch(/already committed|pre-committed|materialized/u);
     expect(desc).toContain("justfile");
-    // The captured TS/pnpm commands flowed through; the ci.yml is the lifecycle→
-    // `just <target>` map, NOT a hardcoded body.
-    expect(desc).toContain("pnpm install --frozen-lockfile");
     expect(desc).toContain(".tanren/ci.yml");
+    // The captured TS/pnpm commands surface as CONTEXT; the ci.yml body is NEVER inlined.
+    expect(desc).toContain("pnpm install --frozen-lockfile");
     expect(desc).not.toContain("version: 1\nbootstrap:");
     // The green bar is bootstrap/tier-1/build — NOT the test tier.
     const criteria = scaffold?.acceptanceCriteria ?? [];

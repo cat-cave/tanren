@@ -70,6 +70,37 @@ when:
     - pre_merge
 `;
 
+// The six conventional justfile targets, in lifecycle order, each with its header
+// comment. This is the SINGLE SOURCE of the justfile SHAPE: both the stub skeleton
+// below and the lifecycle-FILLED justfile (contractFiles.ts) render from it, so the
+// target set, ordering, and recipe-body TAB discipline are defined exactly once.
+const SKELETON_JUSTFILE_TARGETS: ReadonlyArray<{ readonly target: string; readonly comment: string }> = Object.freeze([
+  { target: "bootstrap", comment: "install deps / prepare the workspace so the gate tiers can run." },
+  { target: "tier-1", comment: "tier-1 — the cheap per-iteration gate (e.g. lint + typecheck). NO tests here." },
+  {
+    target: "tier-2",
+    comment: `tier-2 — the pre-audit gate (e.g. build + tests). A test tier writes a JUnit\n# report to ${JUNIT_REPORT_PATH} so Tanren's per-test ingest can read it.`,
+  },
+  { target: "tier-3", comment: "tier-3 — the heaviest pre-merge gate (the merge authority)." },
+  { target: "build", comment: "build the deployable artifact." },
+  { target: "deploy", comment: "deploy the built artifact to the target." },
+]);
+
+// Render a justfile from a per-target recipe-body function. `body` returns the
+// recipe's TAB-indented line(s) for a target (just requires a leading tab, not
+// spaces — the caller MUST emit it). This is the one place the justfile header +
+// target structure lives; the stub skeleton and the lifecycle-filled justfile both
+// project through it so they can never drift in shape.
+export function renderJustfile(body: (target: string) => string): string {
+  const header =
+    "# justfile — this project's lifecycle, the SINGLE place the tech stack lives.\n" +
+    "# Tanren reads `.tanren/ci.yml`, which defers to these `just` targets; Tanren itself\n" +
+    "# assumes NO stack. Each conventional target holds your stack's real command (pnpm /\n" +
+    "# cargo / uv / swift / make / …).";
+  const blocks = SKELETON_JUSTFILE_TARGETS.map(({ target, comment }) => `# ${comment}\n${target}:\n${body(target)}`);
+  return `${header}\n\n${blocks.join("\n\n")}\n`;
+}
+
 // The stack-AGNOSTIC justfile skeleton. Every conventional target is a LOUD STUB:
 // an unfilled target prints a clear "define this target for your stack" message and
 // `exit 1` so it can NEVER silently pass a gate. The project FILLS these in with its
@@ -79,36 +110,7 @@ when:
 const STUB = (target: string): string =>
   `\t@echo "tanren: define '${target}' for this project's stack (edit the justfile)" && exit 1`;
 
-export const SKELETON_JUSTFILE = `# justfile — this project's lifecycle, the SINGLE place the tech stack lives.
-# Tanren reads \`.tanren/ci.yml\`, which defers to these \`just\` targets; Tanren itself
-# assumes NO stack. Fill each STUB target with your stack's real command (pnpm / cargo
-# / uv / swift / make / …). An unfilled target fails LOUDLY (never a silent pass).
-
-# install deps / prepare the workspace so the gate tiers can run.
-bootstrap:
-${STUB("bootstrap")}
-
-# tier-1 — the cheap per-iteration gate (e.g. lint + typecheck). NO tests here.
-tier-1:
-${STUB("tier-1")}
-
-# tier-2 — the pre-audit gate (e.g. build + tests). A test tier writes a JUnit
-# report to ${JUNIT_REPORT_PATH} so Tanren's per-test ingest can read it.
-tier-2:
-${STUB("tier-2")}
-
-# tier-3 — the heaviest pre-merge gate (the merge authority).
-tier-3:
-${STUB("tier-3")}
-
-# build the deployable artifact.
-build:
-${STUB("build")}
-
-# deploy the built artifact to the target.
-deploy:
-${STUB("deploy")}
-`;
+export const SKELETON_JUSTFILE = renderJustfile(STUB);
 
 // A short README explaining the contract, written alongside the skeleton so a human
 // (or the writer agent) opening the from-scratch repo understands what to fill in.

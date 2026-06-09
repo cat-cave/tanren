@@ -15,6 +15,7 @@ import type { RoutingChainEntry, RoutingTable } from "../config/shared.js";
 import { resolveCreditUsdRate } from "../costs/index.js";
 import type { ResolvedRunCredentials } from "../credentials/resolveCredentials.js";
 import { resolveCredentialsForRun } from "../credentials/resolveCredentials.js";
+import { materializeContractFiles } from "../forge/scaffold/index.js";
 import type { PlannerRunContext } from "../workflow/plannerRun.js";
 
 type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
@@ -207,6 +208,14 @@ export async function loadRunExecutionContext(
     // cost PR-C: the CONFIGURED per-credential credit→USD rate (absent ⇒ no rate
     // configured for this credential's kind; a real drawdown then lands NULL-and-loud).
     ...(creditRate.usdPerCredit !== null && { creditUsdRate: creditRate.usdPerCredit }),
+    // DETERMINISTIC CONTRACT FILES (v27 fix): when the project captured a lifecycle,
+    // project it onto the contract-file manifest (`.tanren/ci.yml` verbatim + the
+    // lifecycle-filled `justfile`) the workspace-prep materializes before the writer
+    // runs — so the contract files are NEVER LLM-authored. Absent lifecycle ⇒ no
+    // manifest ⇒ no materialization (a brownfield project ships its own contract).
+    ...(projectConfig.lifecycle !== undefined && {
+      contractFiles: materializeContractFiles(projectConfig.lifecycle),
+    }),
   };
 
   return { context, projectConfig, orgId: decoded.org_id };
