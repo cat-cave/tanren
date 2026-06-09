@@ -5,9 +5,18 @@ import type { NotificationChannel } from "./types.js";
 //
 // Target shape:
 //   - `destination` is either a full ntfy topic URL (`https://ntfy.example/foo`)
-//     or a bare topic name. When bare, we resolve the base URL from
-//     `TANREN_NTFY_BASE_URL` (defaulting to `http://ntfy:80` for the compose
-//     stack the dev profile ships).
+//     or a bare topic name. When bare, the base URL is resolved per-org first:
+//     the target's own `base_url` (authoritative) wins; otherwise the DEPLOY
+//     default injected at boot via `deps.baseUrl`. The channel reads NO env —
+//     a process-wide env base URL must never shadow a per-org target (audit
+//     C4 / RC-1: a SaaS-host env would otherwise route EVERY tenant's ntfy
+//     traffic through one shared host).
+//
+// Base-URL resolution order for a bare topic:
+//   1. `target.baseUrl` (the per-org authoritative host) — if set.
+//   2. `deps.baseUrl` (the deploy default the boot wiring injects) — if set.
+//   3. otherwise a LOUD throw at publish (never a silent wrong host), per
+//      no_silent_fallbacks.
 //
 // Delivery model: POST a JSON body to the topic URL with the standard
 // `Title` / `Tags` / `Priority` headers ntfy recognizes. Failures are
@@ -18,9 +27,10 @@ export interface NtfyChannelDeps {
   // fetch is injected so tests can drive it without a real network. The
   // default is the global fetch in Node 20+.
   fetch?: typeof fetch;
-  // Default base URL when the target destination is a bare topic. Compose
-  // dev ships ntfy on port 80 inside the stack. Operators in production
-  // set the env var to their public ntfy URL.
+  // The DEPLOY default base URL, injected by the boot wiring (which reads the
+  // deploy value). Used only for a bare-topic target with no per-org
+  // `base_url`. The channel reads NO env directly; when neither a per-org base
+  // nor this deploy default is set, a bare topic fails LOUD at publish.
   baseUrl?: string;
 }
 
@@ -35,15 +45,17 @@ export class NtfyChannel implements NotificationChannel {
   readonly kind = "ntfy" as const;
   readonly wired = true;
   private readonly fetchImpl: typeof fetch;
-  private readonly baseUrl: string;
+  // The DEPLOY default only. May be undefined — a bare-topic target with no
+  // per-org base then fails LOUD. NO env read here (audit C4 / RC-1).
+  private readonly deployBaseUrl: string | undefined;
 
   constructor(deps: NtfyChannelDeps = {}) {
     this.fetchImpl = deps.fetch ?? fetch;
-    this.baseUrl = deps.baseUrl ?? process.env["TANREN_NTFY_BASE_URL"] ?? "http://ntfy:80";
+    this.deployBaseUrl = deps.baseUrl;
   }
 
   async publish(target: NotificationTargetRow, payload: NotificationPayload): Promise<void> {
-    const url = this.resolveUrl(target.destination);
+    const url = this.resolveUrl(target);
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
       Title: payload.title,
@@ -68,11 +80,22 @@ export class NtfyChannel implements NotificationChannel {
     }
   }
 
-  private resolveUrl(destination: string): string {
+  private resolveUrl(target: NotificationTargetRow): string {
+    const destination = target.destination;
     if (destination.startsWith("http://") || destination.startsWith("https://")) {
       return destination;
     }
-    const base = this.baseUrl.endsWith("/") ? this.baseUrl.slice(0, -1) : this.baseUrl;
+    // Bare topic — resolve the base per-org first, deploy default second.
+    // No env read; a missing base is a LOUD failure (never a silent wrong host).
+    const resolvedBase = target.baseUrl ?? this.deployBaseUrl;
+    if (resolvedBase === undefined || resolvedBase === null || resolvedBase.length === 0) {
+      throw new Error(
+        `ntfy target ${target.id} (org ${target.orgId}) has a bare-topic destination ` +
+          `"${destination}" but no base URL resolvable: set the target's base_url ` +
+          `or configure the deploy default. Refusing to route to a wrong host.`,
+      );
+    }
+    const base = resolvedBase.endsWith("/") ? resolvedBase.slice(0, -1) : resolvedBase;
     const topic = destination.startsWith("/") ? destination.slice(1) : destination;
     return `${base}/${topic}`;
   }

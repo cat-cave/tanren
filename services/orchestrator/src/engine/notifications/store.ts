@@ -27,6 +27,7 @@ interface RawTargetRow {
   user_id: unknown;
   channel_kind: unknown;
   destination: unknown;
+  base_url: unknown;
   label: unknown;
   enabled: unknown;
   weekend_mute: unknown;
@@ -63,7 +64,7 @@ interface RawDeliveryRow {
 }
 
 const TARGET_COLUMNS = `
-  id, org_id, scope, user_id, channel_kind, destination, label,
+  id, org_id, scope, user_id, channel_kind, destination, base_url, label,
   enabled, weekend_mute, created_at, updated_at
 `;
 
@@ -79,6 +80,7 @@ function decodeTargetRow(raw: RawTargetRow): NotificationTargetRow {
     userId: raw.user_id,
     channelKind: raw.channel_kind,
     destination: raw.destination,
+    baseUrl: nullableString(raw.base_url),
     label: raw.label,
     enabled: raw.enabled === 1 || raw.enabled === true,
     weekendMute: raw.weekend_mute === 1 || raw.weekend_mute === true,
@@ -132,8 +134,8 @@ export const NotificationTargetStore = {
     const id = parsed.id ?? `notif_target_${randomUUID()}`;
     const result = await client.query(
       `INSERT INTO notification_targets
-         (id, org_id, scope, user_id, channel_kind, destination, label, enabled, weekend_mute)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         (id, org_id, scope, user_id, channel_kind, destination, base_url, label, enabled, weekend_mute)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
        RETURNING ${TARGET_COLUMNS}`,
       [
         id,
@@ -142,6 +144,7 @@ export const NotificationTargetStore = {
         parsed.userId,
         parsed.channelKind,
         parsed.destination,
+        parsed.baseUrl,
         parsed.label,
         parsed.enabled ? 1 : 0,
         parsed.weekendMute ? 1 : 0,
@@ -291,5 +294,12 @@ export const NotificationDispatchLog = {
 } as const;
 
 function stringOrNull(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+// base_url is a nullable text column: a stored NULL (or a legacy empty string)
+// means "use the deploy default" and must decode to `null` so the Zod
+// `.url().nullable()` accepts it; any non-empty value is a real http(s) URL.
+function nullableString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }

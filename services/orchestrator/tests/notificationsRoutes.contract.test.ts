@@ -78,6 +78,40 @@ describe("notifications routes (P2B-0002 over P2A-0017)", () => {
     expect((matrix as { targets: unknown[] }).targets).toHaveLength(1);
   });
 
+  it("echoes a per-org base_url on a created ntfy target (API mirrors UX)", async () => {
+    const { app } = harness();
+    const create = await app.request("/orgs/org_acme/notifications/targets", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        channelKind: "ntfy",
+        destination: "cat-cave",
+        baseUrl: "https://ntfy.acme.example",
+        label: "alerts",
+      }),
+    });
+    expect(create.status).toBe(201);
+    const target = (await create.json()) as { baseUrl: string | null };
+    expect(target.baseUrl).toBe("https://ntfy.acme.example");
+  });
+
+  it("rejects a non-URL base_url with 400 (no wrong-host route can be persisted)", async () => {
+    const { app } = harness();
+    const create = await app.request("/orgs/org_acme/notifications/targets", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        channelKind: "ntfy",
+        destination: "cat-cave",
+        baseUrl: "ntfy.acme.example",
+        label: "alerts",
+      }),
+    });
+    expect(create.status).toBe(400);
+    const body = (await create.json()) as { error: string };
+    expect(body.error).toBe("invalid_target");
+  });
+
   it("creates a route opt-in bound to a target", async () => {
     const { app } = harness();
     const target = (await (

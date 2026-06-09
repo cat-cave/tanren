@@ -20,6 +20,7 @@ function target(overrides: Partial<NotificationTargetRow> = {}): NotificationTar
     destination: overrides.destination ?? ROUTING_KEY_REF,
     label: "pagerduty oncall",
     enabled: true,
+    baseUrl: null,
     weekendMute: false,
     createdAt: new Date(),
     updatedAt: new Date(),

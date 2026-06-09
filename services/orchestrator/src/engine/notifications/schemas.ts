@@ -55,6 +55,11 @@ export const NotificationTargetRow = z
     userId: z.string().min(1).nullable(),
     channelKind: ChannelKind,
     destination: z.string().min(1),
+    // Per-target base URL — the authoritative per-org host for channels (ntfy)
+    // that resolve a bare-topic destination against a base. `null` ⇒ use the
+    // deploy default injected at boot. A process-wide env base URL must never
+    // shadow this (audit C4 / RC-1). When set, must be an http(s) URL.
+    baseUrl: z.string().url().nullable(),
     label: z.string().min(1),
     enabled: z.boolean(),
     weekendMute: z.boolean(),
@@ -87,6 +92,10 @@ export const NotificationTargetCreateInput = z
     userId: z.string().min(1).nullable().default(null),
     channelKind: ChannelKind,
     destination: z.string().min(1),
+    // Optional per-target base URL (see NotificationTargetRow.baseUrl). Omitted
+    // ⇒ stored NULL ⇒ the deploy default applies. Must be an http(s) URL when
+    // provided.
+    baseUrl: z.string().url().nullable().default(null),
     label: z.string().min(1),
     enabled: z.boolean().default(true),
     weekendMute: z.boolean().default(false),
