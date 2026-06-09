@@ -40,6 +40,7 @@ import {
   type GreenfieldDeployDependency,
   type PrepareDeployCallback,
 } from "./deployDependency.js";
+import { SCAFFOLD_CI_CONFIG_EXAMPLE } from "./scaffoldCiConfig.js";
 import { InterviewCapture, type CaptureBehavior, type CaptureInterface } from "./types.js";
 
 export interface DeriveInput {
@@ -132,11 +133,13 @@ export interface DeriveResult {
 //   3. The scaffold ALSO authors the 3-tier native gate `.tanren/ci.yml` (the
 //      spec-loop-redesign 3-tier CI requirement): `fast` (per_iteration —
 //      lint+typecheck, NO tests), `slow` (pre_audit — build + JUnit-emitting tests),
-//      `merge` (pre_merge — the full thorough gate). The v23 scaffold shipped a flat
-//      config that ran the test step per-iteration and blocked the loop before any
-//      tests existed. The SCAFFOLD BAR is structure + lint/typecheck/build — a green
-//      test SUITE is NOT required at scaffold (tests arrive with the feature specs),
-//      so a freshly-scaffolded repo with a trivial test never gets a blocking finding.
+//      `merge` (pre_merge — full gate). The writer COPIES a concrete correct-shape
+//      example (SCAFFOLD_CI_CONFIG_EXAMPLE) — v25 emitted the WRONG shape (tier-as-
+//      object with an inline `when`, no top-level `when`) which fails CiConfigV1
+//      validation; scaffoldCiConfig.ts pins the shape + the round-trip parse test.
+//      The SCAFFOLD BAR is structure + lint/typecheck/build — a green test SUITE is
+//      NOT required at scaffold (tests arrive with the feature specs), so a freshly-
+//      scaffolded repo with a trivial test never gets a blocking finding.
 //
 // SCOPE (#273 convergence): the FIRST scaffold spec is deliberately MINIMAL — a pnpm
 // workspace (root + ONE trivial package), no shared-types package or tsconfig
@@ -168,14 +171,18 @@ const SCAFFOLD_SPECS: ScaffoldSpecDef[] = [
       "`src/index.ts`; a COMMITTED `.gitignore` that ignores `node_modules`, `dist`, and `reports` " +
       "(so build/install/junit artifacts are never committed); and a COMMITTED `pnpm-lock.yaml`. " +
       "ALSO author the 3-tier native gate `.tanren/ci.yml` (a CiConfigV1, NOT a GitHub Actions " +
-      "workflow). It MUST have exactly three tiers mapped to the three lifecycle points: `fast` " +
-      "(`when: [per_iteration]`) running `pnpm lint` + `pnpm typecheck` ONLY (no tests in the fast " +
-      "tier — tests arrive with features); `slow` (`when: [pre_audit]`) running `pnpm build` then " +
-      "the test step `pnpm test -- --reporter=junit --outputFile=reports/junit.xml` (the JUnit path " +
-      "Tanren's per-test ingest reads); and `merge` (`when: [pre_merge]`) running the full " +
-      "lint+typecheck+build+test (the same JUnit-emitting test step). Add a top-level " +
-      "`bootstrap: { run: pnpm install --frozen-lockfile }`. " +
-      "Use the REAL published `typescript`/`eslint`/`vitest` packages — NEVER create local " +
+      "workflow). COPY the example below VERBATIM — its shape is strict and parser-validated: `tiers` " +
+      "is a map of tierName → an ARRAY of `{ name, run }` steps (NOT a tier object with an inline " +
+      "`when`), and `when` is a SEPARATE top-level map of tierName → array of lifecycle points. Use " +
+      "block YAML (dash-prefixed list items, indented `name:`/`run:`); do NOT use flow style like " +
+      "`[per_iteration]` or `{ name: …, run: … }` — Tanren's gate parser only accepts block YAML. The " +
+      "3 tiers are `fast` (per_iteration — lint+typecheck, NO tests in the fast tier, tests arrive " +
+      "with features), " +
+      "`slow` (pre_audit — build + JUnit-emitting test), `merge` (pre_merge — full lint+typecheck+" +
+      "build+test). The test step emits JUnit to `reports/junit.xml` (the per-test ingest path):\n" +
+      "```yaml\n" +
+      SCAFFOLD_CI_CONFIG_EXAMPLE +
+      "```\nUse the REAL published `typescript`/`eslint`/`vitest` packages — NEVER create local " +
       "workspace stub packages, `workspace:*` placeholders, or fake toolchain binaries. Do NOT add " +
       "a shared-types package or tsconfig project references (a later spec adds those if needed), do " +
       "NOT use turbo (a later spec introduces it once the toolchain is stable), and do NOT use " +

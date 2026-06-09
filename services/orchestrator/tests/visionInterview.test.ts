@@ -22,6 +22,7 @@ import {
   type InterviewAnswerer,
   type InterviewCapture,
 } from "../src/engine/forge/interview/index.js";
+import { SCAFFOLD_CI_CONFIG_EXAMPLE } from "../src/engine/forge/interview/scaffoldCiConfig.js";
 import { createDeterministicInterviewAnswerer } from "./fixtures/forge/deterministicInterviewAnswerer.js";
 
 const actor: ActorContext = {
@@ -369,10 +370,11 @@ describe("deriveFromCapture · creates the product graph (no migration)", () => 
     const scaffold = state.specs.get(derived.specIds[0]!);
     expect(scaffold?.title).toBe("monorepo scaffold");
 
-    // The description instructs the writer to author the 3-tier native gate with the
-    // three lifecycle points + JUnit evidence to the path the per-test ingest reads.
+    // The description hands the writer the v25 correct-shape example VERBATIM, with the
+    // 3 lifecycle points + JUnit evidence (scaffoldCiConfig.test.ts proves it parses).
     const desc = scaffold?.description ?? "";
     expect(desc).toContain(".tanren/ci.yml");
+    expect(desc).toContain(SCAFFOLD_CI_CONFIG_EXAMPLE);
     for (const point of ["per_iteration", "pre_audit", "pre_merge"]) expect(desc).toContain(point);
     expect(desc).toContain("--reporter=junit");
     expect(desc).toContain("--outputFile=reports/junit.xml");
