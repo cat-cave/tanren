@@ -26,7 +26,7 @@ import type pg from "pg";
 import { type BatchCheckVerdict, type BatchChecker } from "../contracts/batchMergeCoordinator.js";
 import type { MergeQueueEntry } from "../contracts/mergeCoordinator.js";
 import { installationFromOrgConfig, migrateOrgConfig, type OrgGithubAppInstallation } from "../config/orgConfig.js";
-import { migrateProjectConfig } from "../config/projectConfig.js";
+import { isAbsentProjectConfig, migrateProjectConfig } from "../config/projectConfig.js";
 import type { GovernancePosture } from "../config/shared.js";
 import type { Allocator } from "../contracts/allocator.js";
 import type { SecretStore } from "../contracts/secretStore.js";
@@ -393,11 +393,22 @@ export class PgBatchChecker implements BatchChecker {
   }
 }
 
-/** Resolve the project's governance posture from `projects.config` (default `strict`). */
-function resolveGovernancePosture(projectConfig: unknown): GovernancePosture {
+/**
+ * Resolve the project's governance posture from `projects.config` (default `strict`).
+ *
+ * `strict` is the FAIL-CLOSED correct default — a config we cannot read must gate at
+ * the most-conservative posture, never silently relax to a laxer one. But the catch is
+ * NOT silent (no_silent_fallbacks): a config-parse failure is logged LOUD so a corrupt
+ * persisted config is visible, then we proceed at the safe `strict` default.
+ */
+export function resolveGovernancePosture(projectConfig: unknown): GovernancePosture {
   try {
     return migrateProjectConfig(projectConfig).governancePosture;
-  } catch {
+  } catch (error) {
+    console.warn(
+      "[merge] governance posture config unreadable; gating fail-closed at `strict`:",
+      error instanceof Error ? error.message : String(error),
+    );
     return "strict";
   }
 }
@@ -416,13 +427,23 @@ function resolvePolicyVersion(projectConfig: unknown): string | undefined {
   }
 }
 
-/** Resolve the static GitHub credential ref: project credentials → org default. */
-function resolveGithubStaticRef(projectConfig: unknown, orgConfig: unknown): string | undefined {
-  try {
+/**
+ * Resolve the static GitHub credential ref: project credentials → org default.
+ *
+ * FAIL-CLOSED on a CORRUPT project config (no_silent_fallbacks; twin of the
+ * speculativeIntegrator resolver): a present-but-unparseable `projects.config` is a
+ * corruption that must PROPAGATE — never silently swallowed into the org-default
+ * token (a wrong-IDENTITY fallback). Only an ABSENT project config (the `'{}'::jsonb`
+ * default a fresh project carries; `isAbsentProjectConfig`) legitimately falls
+ * through to the org default — there genuinely is no project-level ref to use.
+ */
+export function resolveGithubStaticRef(projectConfig: unknown, orgConfig: unknown): string | undefined {
+  if (!isAbsentProjectConfig(projectConfig)) {
+    // Present config: a throw here is genuine corruption — let it propagate (loud,
+    // fail-closed). NEVER fall through to a different identity.
     const projectRef = migrateProjectConfig(projectConfig).credentials?.githubCredentialRef;
     if (projectRef !== undefined) return projectRef;
-  } catch {
-    // fall through to the org default
+    // Parsed clean but no project-level githubCredentialRef bound → org default.
   }
   if (orgConfig === null || orgConfig === undefined) return undefined;
   try {

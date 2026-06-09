@@ -15,7 +15,7 @@
 import { runWithOrgScope, runWithSystemScope } from "@tanren/db";
 import type pg from "pg";
 import { installationFromOrgConfig, migrateOrgConfig } from "../config/orgConfig.js";
-import { migrateProjectConfig } from "../config/projectConfig.js";
+import { isAbsentProjectConfig, migrateProjectConfig } from "../config/projectConfig.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type {
   BuildSpeculativeIntegrationInput,
@@ -155,13 +155,24 @@ export class PgSpeculativeIntegrator implements SpeculativeIntegrator {
   }
 }
 
-/** Resolve the static GitHub credential ref: project credentials → org default. */
-function resolveGithubStaticRef(projectConfig: unknown, orgConfig: unknown): string | undefined {
-  try {
+/**
+ * Resolve the static GitHub credential ref: project credentials → org default.
+ *
+ * FAIL-CLOSED on a CORRUPT project config (no_silent_fallbacks): a present-but-
+ * unparseable `projects.config` is a corruption that must PROPAGATE, never be
+ * silently swallowed into the org-default token — signing the integration push as
+ * a DIFFERENT github identity than the project's bound credentials is a
+ * wrong-identity fallback. Only an ABSENT project config (the `'{}'::jsonb` default
+ * a fresh project carries; `isAbsentProjectConfig`) legitimately falls through to
+ * the org default — there genuinely is no project-level credential ref to use.
+ */
+export function resolveGithubStaticRef(projectConfig: unknown, orgConfig: unknown): string | undefined {
+  if (!isAbsentProjectConfig(projectConfig)) {
+    // Present config: parse it. A throw here is genuine corruption — let it
+    // propagate (loud, fail-closed). NEVER fall through to a different identity.
     const projectRef = migrateProjectConfig(projectConfig).credentials?.githubCredentialRef;
     if (projectRef !== undefined) return projectRef;
-  } catch {
-    // fall through to the org default
+    // Parsed clean but no project-level githubCredentialRef bound → org default.
   }
   if (orgConfig === null || orgConfig === undefined) return undefined;
   try {

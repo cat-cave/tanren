@@ -143,6 +143,7 @@ import {
   DagBudgetMilestonePayload,
   DagBudgetPausedPayload,
   DagConcurrencySaturatedPayload,
+  DagConfigCorruptPayload,
   DagDrainedPayload,
   DagSpecAttentionResolvedPayload,
   DagSpecEnqueuedPayload,
@@ -407,8 +408,7 @@ export const EventRegistry = {
   "benchmark.accept.failed": BenchmarkAcceptFailedPayload,
 
   // DagWalker (autonomy-engine.md §1a): the per-project background scheduler's
-  // autonomous decisions — a spec auto-enqueued, the DAG drained, a pause for lack of
-  // headroom, or a budget-fraction milestone crossing.
+  // autonomous decisions — auto-enqueue, drain, budget pause/milestone, saturation.
   "dag.spec.enqueued": DagSpecEnqueuedPayload,
   "dag.drained": DagDrainedPayload,
   // The GENUINE dollar-budget pause (spend reached the ceiling) — distinct from the
@@ -417,30 +417,30 @@ export const EventRegistry = {
   // The 50% / 80% budget-fraction "approaching your ceiling" heads-up (routes by default).
   "dag.budget.milestone": DagBudgetMilestonePayload,
   "dag.concurrency.saturated": DagConcurrencySaturatedPayload,
+  // no_silent_fallbacks (LOUD-DEFAULT): a corrupt project config surfaced — not swallowed.
+  "dag.config.corrupt": DagConfigCorruptPayload,
   // §2c: speculative execution — a dependent started early on a speculative
   // integration branch, or was held over the depth cap.
   "dag.spec.speculative": DagSpecSpeculativePayload,
   "dag.spec.speculation_held": DagSpecSpeculationHeldPayload,
-  // §2c CHANGE-PERCOLATION: an ancestor changed after a dependent started
-  // speculatively — the delta percolates down the chain (NOT discarded). Started,
-  // absorbed, deferred (lazy P2/P3), or routed-back-to-planner (irreconcilable).
+  // §2c CHANGE-PERCOLATION: an ancestor changed after a dependent started speculatively
+  // — the delta percolates down the chain (NOT discarded): started/absorbed/deferred/replan.
   "dag.spec.percolating": DagSpecPercolatingPayload,
   "dag.spec.percolated": DagSpecPercolatedPayload,
   "dag.spec.percolation_deferred": DagSpecPercolationDeferredPayload,
   "dag.spec.percolation_replan": DagSpecPercolationReplanPayload,
   // §3/§7 NEVER-DISCARD REBASE: the BaseShiftCoordinator handled a base shift by
   // rebasing the dependent's EXISTING branch in place (same run row) instead of the
-  // old supersede+regenerate. The `rebase_vs_rebuild` instrumentation Wave 3 reads.
+  // old supersede+regenerate — the `rebase_vs_rebuild` instrumentation Wave 3 reads.
   "integration.rebase": IntegrationRebasePayload,
   // §3 PROOF REUSE: the gate/CI verdict site found a recorded PASSING proof whose
   // six-component `proofReuseKey` matched the live inputs EXACTLY, so it SKIPPED the
-  // re-gate and reused the verdict — the least-repeated-work primitive. Emitted ONLY on
-  // an exact match against a passing proof (any drift / non-pass / unknown key recomputes).
+  // re-gate and reused the verdict — emitted ONLY on an exact match against a passing
+  // proof (any drift / non-pass / unknown key recomputes).
   "integration.proof.reused": IntegrationProofReusedPayload,
   // A spec parked at the terminal needs_attention status (the DAG frees its slot +
   // blocks only its dependents, asking a human loudly). Reached by the native merge
-  // queue's conflict resolver when two intents are genuinely irreconcilable
-  // (source: merge_conflict; the never-strand strand source is gone per §7 rebase).
+  // queue's conflict resolver when two intents are genuinely irreconcilable.
   "dag.spec.needs_attention": DagSpecNeedsAttentionPayload,
   // The human-in-the-loop resolution of a needs_attention escalation: the operator
   // addressed the blocker and re-queued the spec (needs_attention → open), resetting

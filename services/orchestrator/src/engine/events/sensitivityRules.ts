@@ -366,6 +366,14 @@ export const sensitivityRules: SensitivityRule[] = [
     ["inFlightCount", "public"],
     ["concurrencyCeiling", "public"],
   ]),
+  // (no_silent_fallbacks) the corrupt-config surface — the knob label, the applied
+  // safe default, and the parse-error reason. None carry secrets/credentials/diffs.
+  ...rulesFor("dag.config.corrupt", [
+    ["knob", "public"],
+    ["appliedDefault.threshold", "public"],
+    ["appliedDefault.depthCap", "public"],
+    ["reason", "public"],
+  ]),
   // (§2c) speculative-execution events — spec/run ids, ancestor ids, the
   // threshold label, the integration branch ref, and non-sensitive counts.
   ...rulesFor("dag.spec.speculative", [

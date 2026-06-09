@@ -160,11 +160,22 @@ function extractFromWorkflow(file: ReconIndexedFile): WorkflowIntent[] {
 // package.json "scripts": each script value is a candidate intent.
 function extractFromPackageJson(file: ReconIndexedFile): WorkflowIntent[] {
   const out: WorkflowIntent[] = [];
+  // An EMPTY preview is the benign "nothing indexed" state (the `preview` default) —
+  // there is no package.json content to read, so no intents. NOT a corruption.
+  if (file.preview === "") return out;
   let parsed: unknown;
   try {
     parsed = JSON.parse(file.preview);
-  } catch {
-    return out;
+  } catch (error) {
+    // no_silent_fallbacks: a present-but-unparseable package.json is NOT a benign
+    // skip. Silently returning `[]` would DROP the repo's package-script automation
+    // intent from the migration-risk report — exactly the "nothing is silently
+    // dropped" guarantee this classifier exists to uphold. Log LOUD and PROPAGATE so
+    // the unreadable package.json surfaces (the fix is a larger preview, never a
+    // silent drop).
+    const reason = error instanceof Error ? error.message : String(error);
+    console.error(`[brownfield] unparseable package.json at ${file.path}; cannot classify its scripts: ${reason}`);
+    throw new Error(`unparseable package.json at ${file.path}: ${reason}`, { cause: error });
   }
   if (typeof parsed !== "object" || parsed === null) return out;
   const scripts = (parsed as Record<string, unknown>)["scripts"];
