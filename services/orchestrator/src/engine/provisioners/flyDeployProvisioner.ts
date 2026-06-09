@@ -22,6 +22,16 @@
 // Deploy trigger: `triggerDeploy` POSTs `/v1/apps/{app}/machines` to create + run a
 // machine from the app's image — the Machines-API release equivalent of `fly deploy`
 // — and returns the machine id + the app's stable URL + its reported state.
+//
+// ⚠ NOT MERGE-REFLECTING (apex guard): this arm releases a STATIC image from the grant
+// metadata (`image`) — it IGNORES the merged source (`DeploySource`), spins a NEW machine
+// per trigger, and wires NO port mapping. So a Fly release does NOT prove "the live
+// product reflects THIS merge" — the image is whatever the build last published, not the
+// merged commit. apex's live-reflects-merge proof MUST run on `deploy.vercel` (gitSource =
+// the merged commit). To prevent a Fly release from being mistaken for a merge-reflecting
+// deploy, `triggerDeploy` FAILS LOUD unless `TANREN_ALLOW_FLY_STATIC_DEPLOY=1` explicitly
+// acknowledges the static-image semantics. Making Fly merge-reflecting (build-from-source +
+// port mapping + image-per-commit) is deferred — it is a build-pipeline change, not a patch.
 
 import type { OrgGrant, ProjectContext } from "../contracts/integrationProvisioner.js";
 import {
@@ -146,6 +156,17 @@ class FlyDeployApi implements DeployProviderApi {
   }
 
   async triggerDeploy(grant: OrgGrant, token: string, app: DeployApp, _source: DeploySource): Promise<DeployResult> {
+    // NOT MERGE-REFLECTING GUARD: this releases a STATIC `image` and ignores the merged
+    // `_source`, so it cannot prove "the live product reflects this merge". Fail LOUD
+    // unless the operator explicitly opts into the static-image semantics — so apex
+    // never accidentally "proves" deploy on Fly (it must use `deploy.vercel`). See header.
+    if (process.env["TANREN_ALLOW_FLY_STATIC_DEPLOY"] !== "1") {
+      throw new Error(
+        "fly deploy is NOT merge-reflecting (it releases a static image, ignores the merged source) — " +
+          "it cannot prove 'the live product reflects this merge'. Use `deploy.vercel` for that, or set " +
+          "TANREN_ALLOW_FLY_STATIC_DEPLOY=1 to explicitly accept the static-image semantics.",
+      );
+    }
     // POST /v1/apps/{app}/machines creates + runs a machine from the built image —
     // the Machines-API release equivalent of `fly deploy`. Fly keys an app by its
     // globally-unique NAME in the path (`app.name`). The app URL is its stable

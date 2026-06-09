@@ -40,10 +40,9 @@ import type {
 import type { OrgGithubAppInstallation } from "../../../config/orgConfig.js";
 import type { GithubAppTokenMinter } from "../../../providers/githubAppTokenMinter.js";
 import type { LiveJjWorkspace } from "../../../providers/liveJjWorkspace.js";
-import { githubHttpsRemote, parseGitHubRepository } from "../../../providers/github.js";
-import { gitAuthedCommand, gitTokenAuthPrelude } from "../../../workspace/githubPush.js";
 import { quoteSshShellArg } from "../../../ssh/command.js";
 import { runWorkspaceSshCommand } from "../../../workspace/ssh.js";
+import { pushJjHead } from "./jjAuthedPush.js";
 
 /** The repo + branch facts the jj applier rebases the PR head onto the merge-time base. */
 export interface JjConflictApplierFacts {
@@ -136,6 +135,7 @@ export class JjWorkspaceConflictApplier implements WorkspaceConflictApplier {
       timeoutMs: this.deps.timeoutMs,
       command: [
         "set -eu",
+        // jj 0.42 `bookmark track` takes the bare NAME (not `<name>@origin`) + `--remote`.
         `jj bookmark track ${quoteSshShellArg(facts.headBranch)} --remote origin`,
         `jj config set --repo ${quoteSshShellArg('revset-aliases."immutable_heads()"')} ${quoteSshShellArg("none()")}`,
       ].join(" && "),
@@ -224,40 +224,21 @@ export class JjWorkspaceConflictApplier implements WorkspaceConflictApplier {
   /** Push the jj-exported resolved head onto the PR branch (App-first/static authed). */
   private async pushResolvedHead(): Promise<void> {
     const { facts } = this.deps;
-    const staticRef = facts.githubCredentialRef.trim();
-    const token =
-      facts.installation === undefined && staticRef === ""
-        ? undefined
-        : (
-            await this.deps.vcsProvider.resolveToken({
-              secrets: this.deps.secrets,
-              ...(facts.installation !== undefined && { installation: facts.installation }),
-              ...(staticRef !== "" && { staticRef }),
-              ...(this.deps.githubAppMinter !== undefined && { minter: this.deps.githubAppMinter }),
-            })
-          ).token;
-    // FORCE push: the rebase REWROTE the head's history (the resolution is a new commit
-    // chain on the shifted base), so the push is non-fast-forward by construction —
-    // exactly like `buildGitHubPushCommand`'s `--force`. The resolution IS the new head.
-    const refspec = quoteSshShellArg(`refs/heads/${facts.headBranch}:refs/heads/${facts.headBranch}`);
-    if (token === undefined) {
-      await runWorkspaceSshCommand(this.deps.ssh, this.deps.target, {
-        label: "jj conflict publish: push resolved head",
-        cwd: this.deps.workspacePath,
-        timeoutMs: this.deps.timeoutMs,
-        command: ["set -eu", `git push --force origin ${refspec}`].join(" && "),
-      });
-      return;
-    }
-    const remote = quoteSshShellArg(githubHttpsRemote(parseGitHubRepository(facts.repoUrl)));
-    await runWorkspaceSshCommand(this.deps.ssh, this.deps.target, {
-      label: "jj conflict publish: push resolved head (authed)",
-      cwd: this.deps.workspacePath,
+    // FORCE push (inside `pushJjHead`): the rebase REWROTE the head's history (the
+    // resolution is a new commit chain on the shifted base), so the push is non-fast-forward
+    // by construction. The SAME shared push machinery the §3.1 base-shift clean rebase uses.
+    await pushJjHead({
+      ssh: this.deps.ssh,
+      target: this.deps.target,
+      workspacePath: this.deps.workspacePath,
+      secrets: this.deps.secrets,
+      vcsProvider: this.deps.vcsProvider,
+      ...(this.deps.githubAppMinter !== undefined && { githubAppMinter: this.deps.githubAppMinter }),
+      repoUrl: facts.repoUrl,
+      headBranch: facts.headBranch,
+      ...(facts.installation !== undefined && { installation: facts.installation }),
+      githubCredentialRef: facts.githubCredentialRef,
       timeoutMs: this.deps.timeoutMs,
-      command: ["set -eu", ...gitTokenAuthPrelude(), gitAuthedCommand(["push", "--force", remote, refspec])].join(
-        " && ",
-      ),
-      stdin: token,
     });
   }
 

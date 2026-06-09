@@ -50,11 +50,14 @@ export function buildBaseShiftRebaseHook(deps: {
         // The merge-time base is the PR's plain base branch (not a speculative integration
         // ref) — a non-speculative rebase straight onto it.
         nonSpeculative: true,
-        // The behind path is a base-branch advance, not an ancestor percolation; the
-        // ancestor key is the base branch itself (the shift's `from`/`to` the coordinator
-        // records on the marker/replan context).
+        // The behind path is a base-branch advance, not an ancestor percolation: there is
+        // NO ancestor spec + NO ancestor merged-sha. `ancestorSpecId` keys the marker on the
+        // base BRANCH (the shift's `from`); `toSha` is left EMPTY (§3.1 event-pollution
+        // side-fix — the old `input.baseBranch` recorded a BRANCH NAME on the
+        // `integration.rebase` event's `toSha` as if it were a sha; the honest value for a
+        // non-percolation base advance is empty, not a fabricated sha).
         ancestorSpecId: input.baseBranch,
-        toSha: input.baseBranch,
+        toSha: "",
       });
       // `rebased_clean` / `rebased_resolved` ⇒ the branch advanced onto base (the dispatcher
       // re-gates then merges); `replanned` ⇒ the work was routed back (hold the merge).

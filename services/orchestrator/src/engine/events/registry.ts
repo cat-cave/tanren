@@ -63,6 +63,7 @@ import {
   DeployTriggeredPayload,
   DeployVerifiedPayload,
   DeployFailedPayload,
+  DeploySkippedPayload,
   GithubBranchPushedPayload,
   GithubFailedPayload,
   GithubPrCreatedPayload,
@@ -360,27 +361,26 @@ export const EventRegistry = {
   // or bound from the org grant (refs only, never secret values).
   "integration.provisioned": IntegrationProvisionedPayload,
 
-  // Deploy-on-merge ("a deploy happened"): a run's merge triggered a real build +
-  // release onto the project's deploy app (Vercel/Fly). The deploy target + the
-  // resolved live URL + the deployment id — all non-secret.
+  // Deploy-on-merge ("a deploy happened"): a run's merge triggered a real build + release
+  // onto the deploy app (Vercel/Fly). The deploy target + resolved URL + deployment id (non-secret).
   "deploy.triggered": DeployTriggeredPayload,
 
-  // Deploy VERIFIED ("the deploy is PROVEN live"): the DeployAdapter polled the
-  // provider to a READY terminal + smoke-checked the resolved URL. The proof a
-  // triggered deploy actually became reachable — non-secret (provider + url + state).
+  // Deploy VERIFIED ("the deploy is PROVEN live"): the DeployAdapter polled the provider to
+  // a READY terminal + smoke-checked the URL — proof a triggered deploy became reachable.
   "deploy.verified": DeployVerifiedPayload,
 
-  // Deploy FAILED ("could NOT be proven live"): verification failed on every attempt
-  // of the bounded retry — the LOUD terminal so the operator knows (vs a silent
-  // triggered-but-unverified stall). Non-secret (provider + ids + attempts + reason).
+  // Deploy FAILED ("could NOT be proven live"): verification failed on every attempt of the
+  // bounded retry — the LOUD terminal (vs a silent triggered-but-unverified stall).
   "deploy.failed": DeployFailedPayload,
 
+  // Deploy SKIPPED: a PRE-resolution failure on merge (incomplete deploy config / a missing
+  // mergeSha) recorded DURABLY (vs a console-only log) so the operator + timeline see it.
+  "deploy.skipped": DeploySkippedPayload,
+
   // Demos-as-evidence (design doc § "Native Deployment And Demos"): after a deploy is
-  // VERIFIED, the demo engine exercises each of the spec's BEHAVIORS against the
-  // deployed SURFACE and records evidence PER behavior (demo.evidence.recorded) plus a
-  // summary tally (demo.completed). Demo evidence is tied to the spec's behaviors, NOT
-  // the provider — every field is non-secret (behavior id · surface kind · outcome ·
-  // an observable detail; never a token / response body).
+  // VERIFIED, the demo engine exercises each spec BEHAVIOR against the deployed surface and
+  // records evidence PER behavior (demo.evidence.recorded) + a summary tally (demo.completed).
+  // Tied to the spec's behaviors, NOT the provider — every field non-secret (no token/body).
   "demo.evidence.recorded": DemoEvidenceRecordedPayload,
   "demo.completed": DemoCompletedPayload,
 

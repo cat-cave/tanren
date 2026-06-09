@@ -35,6 +35,9 @@ import type {
 } from "../contracts/workspaceVcsCore.js";
 import { quoteSshShellArg } from "../ssh/command.js";
 import { runWorkspaceSshCommand } from "../workspace/ssh.js";
+import { buildJjCloneCommand, type JjCloneCredential } from "./jjCloneAuth.js";
+
+export type { JjCloneCredential } from "./jjCloneAuth.js";
 
 /**
  * Resolves the contract's caller-facing identifiers onto the concrete clone source
@@ -101,6 +104,12 @@ export interface JjWorkspaceVcsCoreDeps {
    * the public/unauthenticated path, which never pushes a commit onto a real PR).
    */
   commitIdentity?: JjCommitIdentity;
+  /**
+   * The clone credential `jj git clone` fetches with (see {@link JjCloneCredential}).
+   * Absent ⇒ an anonymous clone (public repo / local fixture). Present ⇒ a PRIVATE-repo
+   * clone authenticated via the askpass credential helper (token off the command line).
+   */
+  cloneCredential?: JjCloneCredential;
 }
 
 /** The non-attributable jj author the conformance + public/unauthenticated paths use. */
@@ -159,6 +168,7 @@ export class JjWorkspaceVcsCore implements WorkspaceVcsCore {
   private readonly refResolver: JjRefResolver;
   private readonly workingEdit: JjWorkingEdit;
   private readonly commitIdentity: JjCommitIdentity;
+  private readonly cloneCredential: JjCloneCredential | undefined;
   private readonly workspaces = new Map<string, JjWorkspaceState>();
   private seq = 0;
 
@@ -169,20 +179,16 @@ export class JjWorkspaceVcsCore implements WorkspaceVcsCore {
     this.refResolver = deps.refResolver ?? identityJjRefResolver;
     this.workingEdit = deps.workingEdit ?? autoSnapshotWorkingEdit;
     this.commitIdentity = deps.commitIdentity ?? DEFAULT_JJ_COMMIT_IDENTITY;
+    this.cloneCredential = deps.cloneCredential;
   }
 
   async openWorkspace(input: OpenWorkspaceInput): Promise<WorkspaceHandle> {
     const workspaceId = `jjws_${++this.seq}`;
     const source = this.refResolver.cloneSource(input.repoUrl);
-    // openWorkspace OWNS the destination dir: create it first (the dir need not exist
-    // — a fresh runner workspace won't), then `jj git clone --colocate` into it. The
-    // clone runs WITHOUT cwd=dest (the dir is the clone's arg, and cwd=dest would fail
-    // before the dir exists). `--colocate` keeps a real .git backend so the host stays
-    // a plain git remote; the clone checks out the default branch.
-    await this.runJjNoCwd([
-      `mkdir -p ${quoteSshShellArg(input.path)}`,
-      `jj git clone --colocate ${quoteSshShellArg(source)} ${quoteSshShellArg(input.path)}`,
-    ]);
+    // openWorkspace OWNS the destination dir (created inside cloneWorkspace, cwd-less). The
+    // clone is anonymous, or askpass-authenticated when a clone credential is present (§3.4
+    // — the private-repo path; the command builder lives in jjCloneAuth.ts).
+    await this.cloneWorkspace(input.path, source);
     // Configure the repo-local jj identity: jj 0.42 commits with the EMPTY identity
     // (and warns they can't be pushed) until user.name/email are set. Set them once
     // per workspace so every commit/export carries a real author.
@@ -443,13 +449,16 @@ export class JjWorkspaceVcsCore implements WorkspaceVcsCore {
     });
   }
 
-  // Like {@link runJj} but with NO cwd — for the clone bootstrap, where the workspace
-  // dir does not exist yet (so cwd=dest would fail before the dir is created).
-  private async runJjNoCwd(jjCommands: string[]): Promise<void> {
+  // Create the destination dir + `jj git clone --colocate` into it. The command (anonymous
+  // vs askpass-authenticated, §3.4) is built by {@link buildJjCloneCommand}; runs cwd-less
+  // (the dir is the clone arg, so cwd=dest would fail before the dir exists).
+  private async cloneWorkspace(path: string, source: string): Promise<void> {
+    const clone = buildJjCloneCommand(path, source, this.cloneCredential);
     await runWorkspaceSshCommand(this.substrate, this.target, {
-      label: `jj ${jjCommands[0] ?? ""}`,
+      label: "jj git clone",
       timeoutMs: this.timeoutMs,
-      command: ["set -eu", ...jjCommands].join(" && "),
+      command: clone.command,
+      ...(clone.stdin !== undefined && { stdin: clone.stdin }),
     });
   }
 

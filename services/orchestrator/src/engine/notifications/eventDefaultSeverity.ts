@@ -157,6 +157,11 @@ const SEVERITY_OVERRIDES: Partial<Record<EventName, Severity>> = {
   // reaches the operator rather than a silent triggered-but-unverified stall.
   "deploy.failed": "warn",
 
+  // A deploy that was EXPECTED could not even be RESOLVED on merge (incomplete deploy
+  // config / a missing mergeSha) — a PRE-resolution skip that previously was console-only.
+  // Operator-actionable (the merge produced no deploy) → `warn` so it reaches the operator.
+  "deploy.skipped": "warn",
+
   // deploy.verified ("a live working URL is up"): the single highest-signal SUCCESS
   // milestone of an autonomous run — the product is provably reachable. This is the
   // milestone a human most wants pushed DURING a run, so it routes BY DEFAULT (`warn`,

@@ -84,6 +84,44 @@ async function publishMergeVerdict(
   outcome: GateOutcome,
   prHeadSha?: string,
 ): Promise<void> {
+  // §3.8 INTERNALLY NON-THROWING: this publish is documented BEST-EFFORT — it only
+  // mirrors an ALREADY-DECIDED verdict onto the PR. The PREP (head-sha resolve + token
+  // mint) can throw on a transient Vault/mint failure; without this guard that throw
+  // propagates out of `runMergeGateForRun` and FAILS a run whose gate PASSED (a terminal
+  // `merge.failed` on the resolved-tree path). The `publishGateVerdictBestEffort` body
+  // already swallows publish-time failures; this catch extends that to the prep so the
+  // WHOLE publish is non-fatal. The run always merges on the internal verdict.
+  try {
+    await doPublishMergeVerdict(input, ctx, outcome, prHeadSha);
+  } catch (error) {
+    const context = input.context;
+    const reason = error instanceof Error ? error.message : String(error);
+    console.warn(
+      `[gate] forge verdict publish PREP failed for run ${context.runId} (non-fatal; merging on internal verdict): ${reason}`,
+    );
+    await ctx.eventStore
+      .append({
+        runId: context.runId,
+        specId: context.specId,
+        projectId: context.projectId,
+        eventType: "gate.publish_failed",
+        payload: { when: "pre_merge", headSha: prHeadSha ?? "", passed: outcome.passed, reason },
+      })
+      // Even the audit append is best-effort here — a publish-prep failure must NEVER fail
+      // a passed run, so a failure to record the warning is logged + swallowed.
+      .catch((appendError: unknown) => {
+        console.warn(`[gate] failed to record gate.publish_failed for run ${context.runId}:`, appendError);
+      });
+  }
+}
+
+/** The head-sha resolve + token mint + best-effort publish; wrapped non-throwing by {@link publishMergeVerdict}. */
+async function doPublishMergeVerdict(
+  input: RunPlannerLoopInput,
+  ctx: MergeGateRunContext,
+  outcome: GateOutcome,
+  prHeadSha?: string,
+): Promise<void> {
   const context = input.context;
   const staticRef = context.githubCredentialRef;
   // A genuinely unauthenticated public-repo run has no token to publish with → skip.

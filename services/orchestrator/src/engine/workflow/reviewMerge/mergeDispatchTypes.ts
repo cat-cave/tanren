@@ -75,10 +75,21 @@ export interface MergeAuthorityBundle {
 
 /**
  * The outcome of the merge stage. `conflict` is the recoverable branch;
- * `blocked` is the governance-posture outcome — a strict-posture
- * external change held for operator approval, or an audit_only observed change.
+ * `blocked` is the recoverable hold — a strict-posture external change held for operator
+ * approval, an audit_only observed change, OR (§3.2) a TRANSIENT authority refusal /
+ * benign CAS race the recovery surface re-drives (NEVER a terminal dequeue);
+ * `needs_attention` is the merge authority's GENUINE-human-decision verdict (a HITL hold /
+ * changes_requested at land time) — it PARKS the spec via the SpecEscalator (frees its
+ * slot, the rest of the DAG keeps moving) rather than hot-holding forever.
  */
-export type MergeOutcomeKind = "merged" | "queued" | "handed_off" | "conflict" | "failed" | "blocked";
+export type MergeOutcomeKind =
+  | "merged"
+  | "queued"
+  | "handed_off"
+  | "conflict"
+  | "failed"
+  | "blocked"
+  | "needs_attention";
 
 export interface MergeForRunResult {
   runId: string;
