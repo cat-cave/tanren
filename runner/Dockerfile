@@ -77,6 +77,30 @@ RUN set -eu; \
   rm -rf "/tmp/${ASSET}" /tmp/jj; \
   jj --version
 
+# just — the stack-agnostic lifecycle command runner. Tanren assumes NO tech stack:
+# a project declares its lifecycle in a `justfile` (bootstrap / tier-1..3 / build /
+# deploy), and the native gate's `.tanren/ci.yml` steps defer to `just <target>`. The
+# runner shells `just` over SSH exactly like `git`/`jj`, so it MUST be on the image.
+# Pinned + arch-mapped against the published release; bumping is a one-line --build-arg
+# change. Source verified against upstream on 2026-06-08:
+#   https://github.com/casey/just/releases/tag/1.52.0
+ARG JUST_VERSION=1.52.0
+RUN set -eu; \
+  case "$(dpkg --print-architecture)" in \
+    amd64) JUST_ARCH="x86_64" ;; \
+    arm64) JUST_ARCH="aarch64" ;; \
+    *) echo "unsupported arch for just: $(dpkg --print-architecture)" >&2; exit 1 ;; \
+  esac; \
+  ASSET="just-${JUST_VERSION}-${JUST_ARCH}-unknown-linux-musl.tar.gz"; \
+  BASE="https://github.com/casey/just/releases/download/${JUST_VERSION}"; \
+  cd /tmp; \
+  curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 --connect-timeout 30 -o "${ASSET}" "${BASE}/${ASSET}"; \
+  mkdir -p /tmp/just; \
+  tar xzf "${ASSET}" -C /tmp/just; \
+  install -m 0755 /tmp/just/just /usr/local/bin/just; \
+  rm -rf /tmp/just "/tmp/${ASSET}"; \
+  just --version
+
 RUN useradd --create-home --shell /bin/bash --uid 1000 tanren \
   && mkdir -p /run/sshd /workspace /home/tanren/.ssh /tanren-runtime /tanren-runtime/codex-home \
   && chown -R tanren:tanren /workspace /home/tanren/.ssh /tanren-runtime \
