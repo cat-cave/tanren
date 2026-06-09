@@ -9,7 +9,7 @@ import {
   type ValidateEmittedSpecsInput,
 } from "../forge/specQuality/index.js";
 import type { RoutedWorkItem } from "./loopPolicy.js";
-import type { GateOutcome } from "./gate/index.js";
+import { CI_CONFIG_GATE_TIER, type GateOutcome } from "./gate/index.js";
 
 /**
  * Turn a failed SPEC GATE (tier-2: tests + full checks) into a P0 FINDING. A CI failure
@@ -20,6 +20,21 @@ import type { GateOutcome } from "./gate/index.js";
  */
 export function gateFindings(gate: Extract<GateOutcome, { passed: false }>): Finding {
   const { failure } = gate;
+  // An INVALID `.tanren/ci.yml` failure (the fail-closed gate-config boundary) is a
+  // DIFFERENT P0 than a broken tree: the repo's gate CONFIG is malformed, so the loop
+  // must fix the CONFIG (not the code). Name it precisely + carry the validation
+  // issues (captured in the synthetic step's outputTail) so the convergence answerer
+  // fixes the config in-place rather than chasing a phantom build failure. The stable
+  // id (`gate-tanren-ci-config-validate`) dedupes a recurring invalid config across loops.
+  if (failure.tier === CI_CONFIG_GATE_TIER) {
+    const issues = failure.steps[0]?.outputTail ?? failure.failedStep;
+    return {
+      id: `gate-${failure.tier}-${failure.failedStep}`,
+      severity: "P0",
+      title: "The repo's `.tanren/ci.yml` is invalid",
+      body: `The native gate config (\`.tanren/ci.yml\`) failed to validate, so the ${failure.when} gate cannot run (fail-closed — an invalid gate config is NOT a pass). Fix the config in this spec: ${issues}`,
+    };
+  }
   const exit = failure.exitCode === null ? "no exit code (timed out or substrate failure)" : `exit ${failure.exitCode}`;
   return {
     id: `gate-${failure.tier}-${failure.failedStep}`,

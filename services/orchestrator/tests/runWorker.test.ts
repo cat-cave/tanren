@@ -15,7 +15,7 @@
 import type { PgNotifyListener } from "@tanren/db";
 import { describe, expect, it } from "vitest";
 import { FakeJobQueue } from "../src/engine/contracts/jobQueue.js";
-import { executeNextPlanJob, RunWorker } from "../src/engine/worker/index.js";
+import { executeNextPlanJob, type ExecuteJobResult, RunWorker } from "../src/engine/worker/index.js";
 import { deps, enqueuePlanJob, passingGitHub, setupSeededRun } from "./helpers/workerExec.js";
 
 // A fake LISTEN/NOTIFY listener that captures the subscribed handler so a test
@@ -141,6 +141,52 @@ describe("run worker (dequeue→execute seam)", () => {
     expect(worker.isDraining).toBe(true);
     expect(results).toContain("completed");
     expect(pool.runStatus.status).toBe("completed");
+  });
+
+  // RESILIENCE (the v25-apex crash class): a single POISONED job — a per-run workflow
+  // throw (e.g. the invalid `.tanren/ci.yml` whose validation error reached the run) —
+  // must FAIL THAT JOB + the run, and the WORKER must SURVIVE and keep claiming. One
+  // run's data error can never crash the worker (which serves every run) or wedge the
+  // queue. The slot loop's catch + the executor's per-run catch are what guarantee this.
+  it("survives a per-run workflow throw (poisoned job): fails the run, keeps claiming, drains clean", async () => {
+    const { pool, secrets, run } = await setupSeededRun();
+    const jobQueue = new FakeJobQueue();
+    await enqueuePlanJob(jobQueue, run);
+
+    const results: ExecuteJobResult[] = [];
+    const worker = new RunWorker(
+      {
+        ...deps(pool, secrets, jobQueue, passingGitHub()),
+        // The per-run throw the worker must contain (NOT propagate to a crash).
+        runWorkflow: async () => {
+          throw new Error("poison: invalid .tanren/ci.yml reached the run");
+        },
+      },
+      {
+        concurrency: 1,
+        pollIntervalMs: 30,
+        onResult: (r) => results.push(r),
+      },
+    );
+    worker.start();
+    // Let the slot claim+execute the poisoned job, then poll (queue now empty).
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 40);
+    });
+
+    // The worker is STILL alive and looping (it reached an idle poll after the throw).
+    expect(worker.isDraining).toBe(false);
+    const failed = results.find((r) => r.kind === "failed");
+    expect(failed).toBeDefined();
+    expect((failed as { runId?: string }).runId).toBe(run.runId);
+    // The run was finalized into a recoverable state — not left running/stuck.
+    expect(pool.runStatus.status).toBe("halted");
+    // The poisoned job did not wedge the queue: it reached a terminal queue state and
+    // the worker is free to claim the next job.
+    expect(results.some((r) => r.kind === "idle")).toBe(true);
+
+    await worker.stop();
+    expect(worker.isDraining).toBe(true);
   });
 
   it("wakes an idle slot on a job-enqueued NOTIFY instead of waiting out the backstop", async () => {
