@@ -164,6 +164,7 @@
     "esbuild",
     "exfiltrates",
     "fanout",
+    "fastapi",
     "favicon",
     "fieldless",
     "filelist",

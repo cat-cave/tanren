@@ -16,13 +16,17 @@
 // yields pnpm; a novel-translation capture yields pandoc — all from the
 // declaration, never from Tanren's TypeScript.
 //
-// SEAM (Wave A): the bare-skeleton CONTENT (the stub justfile + the stable
-// ci.yml + the README) is owned by Wave A's stack-agnostic skeleton export. Until
-// that export wires in at reconciliation, this module references the skeleton's
-// SHAPE from the contract doc (the conventional target names + the ci.yml
-// lifecycle→`just <target>` map) and instructs the writer to author it. When the
-// export lands, `BARE_SKELETON_REF` below is replaced by the imported skeleton.
+// SEAM (Wave A ↔ Wave B, WIRED): the bare-skeleton CONTENT (the stub justfile +
+// the stable ci.yml + the README) is owned by Wave A's stack-agnostic skeleton
+// export (engine/forge/scaffold/skeleton.ts). This module imports it directly:
+// the writer instruction is anchored to the REAL skeleton file set + paths, and
+// the justfile's conventional STUB targets are FILLED from the captured lifecycle.
+// The `.tanren/ci.yml` is carried through from the skeleton VERBATIM (the stable
+// lifecycle→`just <target>` map) — the writer never re-defines it; Wave A owns its
+// shape. There is no placeholder: the skeleton is the single source of the
+// contract files, this module supplies the stack-specific fill.
 
+import { SKELETON_CI_CONFIG_PATH, SKELETON_JUSTFILE_PATH } from "../scaffold/index.js";
 import type { CaptureLifecycle } from "./types.js";
 
 // The conventional justfile targets, in lifecycle order, paired with the
@@ -63,12 +67,13 @@ function renderLifecycleTable(lifecycle: CaptureLifecycle): string {
   }).join("\n");
 }
 
-// A clearly-marked reference to Wave A's not-yet-wired bare-skeleton export. Until
-// the export lands, the writer authors the skeleton's shape from the contract.
+// A reference to the bare skeleton, BUILT FROM the real imported skeleton paths
+// (not a hand-written string) — so the writer instruction names the actual files
+// it must start from. NO stack literal: only the contract paths + target names.
 const BARE_SKELETON_REF =
-  "the bare stack-agnostic skeleton (Wave A's skeleton export — a `justfile` with the " +
-  "six conventional STUB targets, a stable `.tanren/ci.yml` mapping each tier to `just " +
-  "<target>`, and a README explaining the contract)";
+  `the bare stack-agnostic skeleton (Wave A's skeleton export): a \`${SKELETON_JUSTFILE_PATH}\` with the ` +
+  `six conventional STUB targets (bootstrap/tier-1/tier-2/tier-3/build/deploy), the stable ` +
+  `\`${SKELETON_CI_CONFIG_PATH}\` mapping each tier to \`just <target>\`, and a README explaining the contract`;
 
 // Build the `monorepo scaffold` spec description from the captured lifecycle. The
 // writer is instructed to: (1) start from the bare skeleton; (2) FILL the
@@ -85,11 +90,11 @@ export function buildScaffoldDescription(lifecycle: CaptureLifecycle): string {
     "Author the `justfile` so each conventional target runs the project's real command(s):",
     renderLifecycleTable(lifecycle),
     "",
-    "Keep the stable `.tanren/ci.yml` from the skeleton EXACTLY as the lifecycle→`just <target>` map " +
-      "(`bootstrap: just bootstrap`; the `fast` tier runs `just tier-1` at `per_iteration`, `slow` runs " +
-      "`just tier-2` at `pre_audit`, `merge` runs `just tier-3` at `pre_merge`). Do NOT inline stack " +
-      "commands into the ci.yml — all stack specifics live in the justfile; the ci.yml stays tiny + " +
-      "stack-agnostic (a CiConfigV1, NOT a GitHub Actions workflow).",
+    `Commit the skeleton's \`${SKELETON_CI_CONFIG_PATH}\` EXACTLY as shipped (it is the stable ` +
+      "lifecycle→`just <target>` map: `bootstrap: just bootstrap`; the `fast` tier runs `just tier-1` at " +
+      "`per_iteration`, `slow` runs `just tier-2` at `pre_audit`, `merge` runs `just tier-3` at `pre_merge`). " +
+      "Do NOT re-define it or inline stack commands into it — all stack specifics live in the justfile; the " +
+      "ci.yml stays tiny + stack-agnostic (a CiConfigV1, NOT a GitHub Actions workflow).",
     "",
     "The justfile targets must be human-runnable locally (`just tier-1`). A tier that runs tests must write a " +
       "machine-readable test report to a known path (the test-report convention) so flaky-intelligence ingests it. " +
