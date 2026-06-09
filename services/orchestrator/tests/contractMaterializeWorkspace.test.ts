@@ -169,3 +169,62 @@ describe("prepareRunWorkspace · materializes + commits the contract files when 
     expect(labels).not.toContain("commit deterministic contract files");
   });
 });
+
+// apex v28 fix: the ANSWERER review base (`baseSha`) is what the checker/auditor/
+// convergence diff the writer's change against. It must sit ABOVE the Tanren-
+// materialized contract-files commit so those Tanren-owned files (`.tanren/ci.yml` +
+// `justfile`) are NOT in the writer's reviewed diff — otherwise the answerers misread
+// them as writer-authored and flag `contract-files-authored` (the live v28 false
+// finding). The contract files still ride into the PR; only the REVIEW base excludes them.
+const BOOTSTRAP_SHA = "b".repeat(40);
+const CONTRACT_SHA = "c".repeat(40);
+
+// Returns the CONTRACT-commit sha for the contract-files commit's `git rev-parse HEAD`
+// (so the answerer base is distinguishable from the clone/bootstrap shas), and the
+// clone HEAD for every other command. Greenfield: each `[ -f ]` guard echoes nothing,
+// so the contract files are treated ABSENT (written) and a real commit is made.
+class ShaRoutingSsh implements CommandSubstrate {
+  readonly commands: Array<{ command: RunnerCommand }> = [];
+  async run(_t: RunnerHandle, command: RunnerCommand): Promise<CommandResult> {
+    this.commands.push({ command });
+    const label = (command as { label?: string }).label ?? "";
+    const stdout = label === "commit deterministic contract files" ? CONTRACT_SHA : CLONE_HEAD;
+    return { exitCode: 0, stdout, stderr: "", timedOut: false };
+  }
+}
+
+describe("prepareRunWorkspace · the answerer review base sits ABOVE the contract-files commit (apex v28)", () => {
+  it("returns the contract-commit sha as baseSha on a greenfield run (writer diff excludes the contract files)", async () => {
+    const ssh = new ShaRoutingSsh();
+    const context = makeContext({ contractFiles: materializeContractFiles(TS_LIFECYCLE) });
+    const prepared = await prepareRunWorkspace(makeInput(ssh, context), target, "/workspace/runs/run_mat/repo");
+    // The answerer base is the contract commit — NOT the bootstrap commit — so the
+    // contract files are below the review base and never appear as writer changes.
+    expect(prepared.baseSha).toBe(CONTRACT_SHA);
+    expect(prepared.baseSha).not.toBe(BOOTSTRAP_SHA);
+    // But the PUSH drop boundary is still the bootstrap commit, so the contract commit
+    // (above it) replays into the PR — the human/merge still sees the contract files.
+    expect(prepared.bootstrapSha).toBe(BOOTSTRAP_SHA);
+    // The contract-files commit was actually made (the files were absent → written).
+    const labels = ssh.commands.map(({ command }) => (command as { label?: string }).label ?? "");
+    expect(labels).toContain("commit deterministic contract files");
+  });
+
+  it("falls back to the bootstrap base when the contract files are already present (brownfield re-clone)", async () => {
+    // PresentSsh reports the contract files present (skip marker) so nothing is written
+    // and NO contract commit is made — baseSha stays the bootstrap commit.
+    const ssh = new PresentSsh();
+    const context = makeContext({ contractFiles: materializeContractFiles(TS_LIFECYCLE) });
+    const prepared = await prepareRunWorkspace(makeInput(ssh, context), target, "/workspace/runs/run_mat/repo");
+    expect(prepared.baseSha).toBe(BOOTSTRAP_SHA);
+    const labels = ssh.commands.map(({ command }) => (command as { label?: string }).label ?? "");
+    expect(labels).not.toContain("commit deterministic contract files");
+  });
+
+  it("falls back to the bootstrap base when the run carries NO contract manifest", async () => {
+    const ssh = new RecordingSsh();
+    const prepared = await prepareRunWorkspace(makeInput(ssh, makeContext()), target, "/workspace/runs/run_mat/repo");
+    // No manifest → no contract commit → the answerer base is the bootstrap commit.
+    expect(prepared.baseSha).toBe(BOOTSTRAP_SHA);
+  });
+});

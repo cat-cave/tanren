@@ -289,12 +289,13 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
   // `abandoned` and is promoted to completed/failed as the run resolves.
   let releaseReason: ReleaseReason = "abandoned";
   try {
-    // Clone + bootstrap-install + commit-the-bootstrap-state in one stage. The
-    // bootstrap commit's sha is the writer's diff base (checker/auditor + captured
-    // diff see only the writer's changes); the clone HEAD is kept so the PR-branch
-    // cleanup drops the bootstrap commit before push.: deps install before
-    // the writer loop so gating sees a built tree; baseSha is threaded so replanned
-    // done work isn't false-rejected. Clone auth uses the run's GitHub token (PRIVATE repos).
+    // Clone + bootstrap-install + commit-the-bootstrap-state + materialize the
+    // deterministic contract files. The answerer review base (`baseSha`) is the
+    // CONTRACT-FILES commit when one was made (apex v28: above the Tanren-owned
+    // `.tanren/ci.yml` + `justfile`, so the checker/auditor + captured diff see ONLY the
+    // writer's code — never the contract files as writer-authored), else the bootstrap
+    // commit. The clone HEAD is kept so the PR-branch cleanup drops ONLY the bootstrap
+    // commit before push (the contract commit + writer commits replay into the PR).
     const { cloneHeadSha, bootstrapSha, baseSha } = await prepareRunWorkspace(input, allocation.target, workspacePath);
     await appendEvent("workspace.prepared", {
       workspacePath,
