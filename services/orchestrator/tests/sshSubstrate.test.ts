@@ -11,6 +11,7 @@ import {
   normalizeHostKeyFingerprint,
   sshSha256Fingerprint,
   SshCommandSubstrate,
+  WORKSPACE_TMPDIR_REL_PATH,
 } from "../src/engine/ssh/index.js";
 
 const target: RunnerHandle = {
@@ -39,15 +40,50 @@ describe("SSH substrate contract", () => {
   });
 
   it("wraps commands with safely quoted cwd", () => {
+    // A cwd-LESS command runs verbatim (no cwd to anchor a TMPDIR to).
     expect(buildSshExecCommand({ command: "pwd", timeoutMs: 100 })).toBe("pwd");
+    // A cwd-scoped command cd's into the safely-quoted workspace, then exports a
+    // workspace-local TMPDIR (the scaffold-vitest ENOENT root-cause fix) before the
+    // command. The TMPDIR is `$PWD/<rel-path>` so it resolves to the workspace tree.
     expect(
       buildSshExecCommand({
         command: "pwd",
         cwd: "/work/path with spaces/it's fine",
         timeoutMs: 100,
       }),
-    ).toBe("cd '/work/path with spaces/it'\\''s fine' && pwd");
+    ).toBe(
+      `cd '/work/path with spaces/it'\\''s fine' && ` +
+        `export TMPDIR="$PWD/${WORKSPACE_TMPDIR_REL_PATH}" && mkdir -p "$TMPDIR" && pwd`,
+    );
     expect(() => buildSshExecCommand({ command: "pwd", cwd: "bad\0path", timeoutMs: 100 })).toThrow("null byte");
+  });
+
+  it("chains cd+TMPDIR+mkdir+command with && so a failed cd aborts (never wrong-cwd)", () => {
+    // Shell-safety: the prefix hangs off `cd <cwd> &&`, and is itself &&-chained, so a
+    // failed `cd` (or `mkdir`) short-circuits the ENTIRE line — the real command must
+    // never run in the original cwd or with an unwritable TMPDIR. A stray `;` would
+    // break that (the command would run after a failed cd), so assert there is none.
+    const wrapped = buildSshExecCommand({ command: "pnpm test", cwd: "/workspace/runs/run_x/repo", timeoutMs: 100 });
+    expect(wrapped).not.toContain(";");
+    expect(wrapped).toBe(
+      `cd '/workspace/runs/run_x/repo' && export TMPDIR="$PWD/${WORKSPACE_TMPDIR_REL_PATH}" && mkdir -p "$TMPDIR" && pnpm test`,
+    );
+  });
+
+  it("points the workspace TMPDIR at a per-run, git-ignored, non-/tmp scratch dir", () => {
+    // The fix that unblocks feature-spec tests on the runner: vitest derives its SSR
+    // transform dir from os.tmpdir() (uncontrollable via vitest.config), so a shared,
+    // churning /tmp ENOENTs the trivial test ("temp ssr directory" failure v23 + v24
+    // hit). TMPDIR is the only lever — it must point INSIDE the workspace, never /tmp,
+    // and under .git/ so a `git add -A` never stages the scratch tree.
+    const wrapped = buildSshExecCommand({ command: "pnpm test", cwd: "/workspace/runs/run_x/repo", timeoutMs: 100 });
+    expect(wrapped).toContain(`export TMPDIR="$PWD/${WORKSPACE_TMPDIR_REL_PATH}"`);
+    expect(wrapped).toContain('mkdir -p "$TMPDIR"');
+    // Workspace-anchored ($PWD), NOT the shared /tmp; and under .git/ (inherently untracked).
+    expect(WORKSPACE_TMPDIR_REL_PATH.startsWith(".git/")).toBe(true);
+    expect(WORKSPACE_TMPDIR_REL_PATH.startsWith("/tmp")).toBe(false);
+    // The mkdir runs BEFORE the command, so the dir exists when the tooling reads os.tmpdir().
+    expect(wrapped.indexOf('mkdir -p "$TMPDIR"')).toBeLessThan(wrapped.indexOf("pnpm test"));
   });
 
   it("normalizes OpenSSH and hex SHA-256 host key fingerprints", () => {

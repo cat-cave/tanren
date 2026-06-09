@@ -42,6 +42,7 @@
     "transactionally",
     "unforgeable",
     "unvalidatable",
+    "unwritable",
     "BYPASSRLS",
     "Backgrounded",
     "BerriAI",
