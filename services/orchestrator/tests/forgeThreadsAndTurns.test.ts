@@ -250,6 +250,88 @@ describe("ForgeTurnStore.append atomicity (audit RC-4 #2): concurrent appends on
   });
 });
 
+describe("ForgeTurnStore decode-at-the-boundary (audit RC-6)", () => {
+  // Seed a thread the actor can reach, then plant a RAW turn row directly so the
+  // read path's Zod decode (not the append validation) is what's under test.
+  async function seedThread(client: ForgeMemoryClient): Promise<string> {
+    const thread = await ForgeThreadStore.create(
+      pool(client),
+      { orgId: "org_a", scope: "project", projectId: "project_a", runId: null, title: null },
+      orgAdmin,
+    );
+    return thread.id;
+  }
+
+  function plantTurn(client: ForgeMemoryClient, overrides: Record<string, unknown>): string {
+    const id = `forge_turn_${client.turns.length}`;
+    // Cast through the raw map — the point is to exercise decode on an arbitrary
+    // row shape (a real pg row is an untrusted `unknown`).
+    client.turns.push({
+      id,
+      thread_id: "thread_x",
+      turn_index: 0,
+      source: { kind: "operator", userId: "u" },
+      audience: "project:member",
+      author_kind: "forge_template",
+      render: validRender,
+      created_at: new Date("2026-02-02T00:00:00Z"),
+      ...overrides,
+    } as never);
+    return id;
+  }
+
+  it("decodes a well-formed turn row to the typed shape (real Date, valid enums, parsed source)", async () => {
+    const client = new ForgeMemoryClient();
+    const threadId = await seedThread(client);
+    // Plant a raw row whose source/render arrive as JSON STRINGS (the wire form a
+    // jsonb column can take) to prove the decode parses them, not just passes objects.
+    const id = plantTurn(client, {
+      thread_id: threadId,
+      source: JSON.stringify({ kind: "operator", userId: "u_42" }),
+      render: JSON.stringify(validRender),
+      audience: "org:admin",
+      author_kind: "forge_llm",
+      created_at: new Date("2026-03-03T04:05:06Z"),
+    });
+    const turn = await ForgeTurnStore.get(pool(client), id, orgAdmin);
+    if (turn === undefined) throw new Error("expected a decoded turn");
+    expect(turn.createdAt).toBeInstanceOf(Date);
+    expect(turn.createdAt.toISOString()).toBe("2026-03-03T04:05:06.000Z");
+    expect(turn.audience).toBe("org:admin");
+    expect(turn.authorKind).toBe("forge_llm");
+    expect(turn.source).toEqual({ kind: "operator", userId: "u_42" });
+    expect((turn.render as { body: string }).body).toBe(validRender.body);
+  });
+
+  it("THROWS on a row with a bad `audience` enum value", async () => {
+    const client = new ForgeMemoryClient();
+    const threadId = await seedThread(client);
+    const id = plantTurn(client, { thread_id: threadId, audience: "everyone" });
+    await expect(ForgeTurnStore.get(pool(client), id, orgAdmin)).rejects.toThrow(/audience|Invalid/u);
+  });
+
+  it("THROWS on a row with an unparseable `source` JSON string", async () => {
+    const client = new ForgeMemoryClient();
+    const threadId = await seedThread(client);
+    const id = plantTurn(client, { thread_id: threadId, source: "{not json" });
+    await expect(ForgeTurnStore.get(pool(client), id, orgAdmin)).rejects.toThrow(/JSON|Unexpected|token/u);
+  });
+
+  it("THROWS on a row whose `source` JSON parses but is not a ForgeTurnSource", async () => {
+    const client = new ForgeMemoryClient();
+    const threadId = await seedThread(client);
+    const id = plantTurn(client, { thread_id: threadId, source: JSON.stringify({ kind: "nope" }) });
+    await expect(ForgeTurnStore.get(pool(client), id, orgAdmin)).rejects.toThrow(/kind|Invalid/u);
+  });
+
+  it("THROWS on a row with a non-coercible `created_at`", async () => {
+    const client = new ForgeMemoryClient();
+    const threadId = await seedThread(client);
+    const id = plantTurn(client, { thread_id: threadId, created_at: "not-a-timestamp" });
+    await expect(ForgeTurnStore.get(pool(client), id, orgAdmin)).rejects.toThrow(/date|Invalid/u);
+  });
+});
+
 describe("actorCanViewAudience", () => {
   it("ranks audiences from project:member up to platform:admin", () => {
     const member: ActorContext = {
