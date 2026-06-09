@@ -67,6 +67,14 @@ export {
   capabilitiesFor,
   createTemplate,
   maybeCreateTemplateForNoMatch,
+  // Wave-4 LIVE seam impls (research + build-driver) — the real, mountable capability.
+  buildTemplateResearcher,
+  wrapProviderResearcher,
+  buildRunLoopBuildDriver,
+  resolveConvergedProjectFacts,
+  buildTemplateAuditor,
+  type ConvergedProjectFacts,
+  type RunLoopBuildDriverDeps,
 } from "./creation/index.js";
 // WAVE 5 — the MAINTENANCE flow (templating-system.md §4): the re-validation loop,
 // the lts/nightly channel policy, the nightly→lts graduation gate (the canary), and

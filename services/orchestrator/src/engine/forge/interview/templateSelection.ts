@@ -270,6 +270,16 @@ export interface SelectTemplateInput {
   channelPreference?: ChannelPreference;
   // Injectable clock (ms epoch) for deterministic freshness tests. Defaults to now.
   now?: number;
+  // The DECOUPLED no-match → CREATION seam (templating-system.md §3, "no match →
+  // trigger creation"). When injected and NO validated template matches, selection
+  // calls this to CREATE one (the creation meta-flow, §2) and SEEDS from it. The
+  // selection layer itself has NO creation dependency — the seam is supplied by the
+  // wiring layer (`buildCreateForNoMatch`), so there is no circular import. Returns
+  // a `SelectedTemplate` to seed from (a strong match), or `undefined`/throws when
+  // creation did not produce a usable template (selection then logs + falls back to
+  // from-scratch, fail-closed). ABSENT ⇒ the legacy "would-create" log-only behavior
+  // (`kind: "none"` → from-scratch), the default when no flow is wired.
+  createForNoMatch?: (lifecycle: CaptureLifecycle) => Promise<SelectedTemplate | undefined>;
 }
 
 // LOUD diagnostic prefix for the selection path (the only logging convention in
@@ -300,15 +310,12 @@ export async function selectTemplate(input: SelectTemplateInput): Promise<Templa
   const ranked = rankTemplates(candidates, input.lifecycle, channelPreference, now);
   const top = ranked[0];
   if (top === undefined) {
-    // NO eligible candidate → trigger CREATION (the meta-DAG is a later wave). For
-    // now, leave the clear seam: log a "would-create" and fall through to
-    // from-scratch. This is the EXPECTED live outcome (the registry is empty).
-    console.warn(
-      `${LOG} no eligible template for stack="${input.lifecycle.stack}" ` +
-        `(query=${JSON.stringify(query)}) — would-create a template (creation meta-DAG: later wave); ` +
-        "falling through to from-scratch scaffold.",
-    );
-    return { kind: "none", query, reasons: ["no-eligible-template", "would-create"] };
+    // NO eligible candidate → trigger CREATION (templating-system.md §3 / §2). When
+    // the `createForNoMatch` seam is wired, RUN the creation meta-flow and SEED from
+    // the freshly-created template; otherwise leave the legacy log-only "would-create"
+    // and fall through to from-scratch (the default when no creation flow is wired —
+    // and the path the registry-empty live default still hits without the seam).
+    return createForNoMatchOrFallThrough(input, query);
   }
 
   // FINAL FAIL-CLOSED RE-CHECK at the decision boundary. The ranker already filtered
@@ -331,4 +338,46 @@ export async function selectTemplate(input: SelectTemplateInput): Promise<Templa
   };
   const kind: SelectionKind = top.score >= STRONG_MATCH_THRESHOLD ? "strong" : "partial";
   return { kind, selected, query, topScore: top.score, reasons: top.reasons };
+}
+
+// The "no eligible template" branch (templating-system.md §3). When a
+// `createForNoMatch` seam is wired, RUN the creation meta-flow and, on success,
+// return a STRONG seed from the freshly-created template (reasons mark it
+// `created`). When the seam is absent OR creation did not yield a usable template,
+// fall through to the from-scratch scaffold with a LOUD log — fail-closed: a failed
+// creation never strands onboarding, it degrades to the guaranteed from-scratch path.
+async function createForNoMatchOrFallThrough(
+  input: SelectTemplateInput,
+  query: TemplateCapabilityQuery,
+): Promise<TemplateSelectionDecision> {
+  if (input.createForNoMatch === undefined) {
+    console.warn(
+      `${LOG} no eligible template for stack="${input.lifecycle.stack}" ` +
+        `(query=${JSON.stringify(query)}) — no creation flow wired; ` +
+        "falling through to from-scratch scaffold.",
+    );
+    return { kind: "none", query, reasons: ["no-eligible-template", "would-create"] };
+  }
+  let created: SelectedTemplate | undefined;
+  try {
+    created = await input.createForNoMatch(input.lifecycle);
+  } catch (error) {
+    // A creation that FAILED (ungrounded research / failed validation / build
+    // non-convergence) must never strand onboarding — log LOUD + fall back.
+    console.warn(
+      `${LOG} no eligible template for stack="${input.lifecycle.stack}" — creation FAILED; ` +
+        "falling back to from-scratch scaffold:",
+      error,
+    );
+    return { kind: "none", query, reasons: ["no-eligible-template", "creation-failed", "from-scratch-fallback"] };
+  }
+  if (created === undefined) {
+    console.warn(
+      `${LOG} no eligible template for stack="${input.lifecycle.stack}" — creation produced no usable template; ` +
+        "falling through to from-scratch scaffold.",
+    );
+    return { kind: "none", query, reasons: ["no-eligible-template", "creation-no-result", "from-scratch-fallback"] };
+  }
+  // CREATED + SEED: a freshly-validated template seeds the scaffold (a strong match).
+  return { kind: "strong", selected: created, query, reasons: ["created", "no-prior-template"] };
 }

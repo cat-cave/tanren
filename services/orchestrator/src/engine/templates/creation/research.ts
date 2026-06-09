@@ -51,6 +51,12 @@ export interface TemplateCreationRequest {
   // A free-form note from the operator (extra constraints / context the
   // researcher should honor). Optional.
   note?: string;
+  // The GitHub owner (org/user login) the conforming template repo is created
+  // under — the template is authored off an EMPTY repo, exactly like a greenfield
+  // product, so the build needs a real owner to create that repo under. Supplied by
+  // the operator (the create route body) or the onboarding owner (the no-match
+  // path). The researcher ignores it; only the build's repo-creation plumbing reads it.
+  owner?: string;
 }
 
 // The concrete lifecycle commands the research decided for the stack — the six

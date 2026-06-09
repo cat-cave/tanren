@@ -127,72 +127,120 @@ export class RunnerLifecycle {
     const workspaceVolume = volumeNamesFor(input.runId).workspace;
     const codexHomeVolume = volumeNamesFor(input.runId).codexHome;
 
+    // Idempotent allocate (fix #3): the runner id is the deterministic
+    // `runner_<handle>`, so a RETRIED /allocate for the same handle would, with a
+    // bare `ON CONFLICT DO UPDATE`, overwrite a still-LIVE container_id —
+    // orphaning the prior container (unreferenced → unsweepable, the 204GB-leak
+    // class). Pre-check for a live row and return its SSH target unchanged.
+    // Never create a second container for an already-allocated runner.
+    const existing = await this.store.findActive(runnerId);
+    if (existing !== undefined) {
+      return {
+        runnerId: existing.runnerId,
+        sshHost: existing.sshHost,
+        sshPort: existing.sshPort,
+        hostKeyFingerprint: existing.hostKeyFingerprint,
+        imageSha: existing.imageSha,
+      };
+    }
+
+    // Side-effect chain (fix #1): every step below is a Docker/DB side effect
+    // that can throw — createContainer, startContainer, inspectContainer,
+    // readHostKeyFingerprint (throws on retry-exhaustion), store.insert (throws
+    // on a DB outage). A throw after the first createVolume would orphan the two
+    // volumes + the container, INVISIBLE to release/sweepAbandoned (which key off
+    // the DB row that was never written). Wrap the whole chain and tear the
+    // partial state down best-effort by deterministic name before re-throwing.
     await this.docker.createVolume(workspaceVolume, allocatorLabels(input.runId));
     await this.docker.createVolume(codexHomeVolume, allocatorLabels(input.runId));
 
-    const containerId = await this.docker.createContainer({
-      name: containerName,
-      image: input.runnerImage,
-      // No secret VALUE is ever delivered to a runner via Docker env. The only
-      // env here is the PUBLIC authorized_keys line (safe) + the ephemeral
-      // marker. Run-scoped runner credentials (the tenant's model/codex auth) are
-      // written into CODEX_HOME over the SSH FILE substrate AFTER allocation
-      // (orchestrator codexMaterializer / opencodeMaterializer), so `docker
-      // inspect` on a runner can carry no secret.
-      env: {
-        TANREN_RUNNER_AUTHORIZED_KEY: process.env["TANREN_RUNNER_AUTHORIZED_KEY"] ?? "",
-        TANREN_RUNNER_EPHEMERAL: "1",
-      },
-      labels: allocatorLabels(input.runId),
-      volumes: [
-        { volumeName: workspaceVolume, containerPath: "/workspace" },
-        { volumeName: codexHomeVolume, containerPath: "/tanren-runtime/codex-home" },
-      ],
-      networkName: this.networkName,
-      hostSshPort: this.hostSshPort,
-      capAdd: this.capAdd,
-      securityOpt: this.securityOpt,
-    });
-    await this.docker.startContainer(containerId);
-    const inspected = await this.docker.inspectContainer(containerId);
-    const hostKeyFingerprint = await this.readHostKeyFingerprint(containerId);
+    try {
+      const containerId = await this.docker.createContainer({
+        name: containerName,
+        image: input.runnerImage,
+        // No secret VALUE is ever delivered to a runner via Docker env. The only
+        // env here is the PUBLIC authorized_keys line (safe) + the ephemeral
+        // marker. Run-scoped runner credentials (the tenant's model/codex auth) are
+        // written into CODEX_HOME over the SSH FILE substrate AFTER allocation
+        // (orchestrator codexMaterializer / opencodeMaterializer), so `docker
+        // inspect` on a runner can carry no secret.
+        env: {
+          TANREN_RUNNER_AUTHORIZED_KEY: process.env["TANREN_RUNNER_AUTHORIZED_KEY"] ?? "",
+          TANREN_RUNNER_EPHEMERAL: "1",
+        },
+        labels: allocatorLabels(input.runId),
+        volumes: [
+          { volumeName: workspaceVolume, containerPath: "/workspace" },
+          { volumeName: codexHomeVolume, containerPath: "/tanren-runtime/codex-home" },
+        ],
+        networkName: this.networkName,
+        hostSshPort: this.hostSshPort,
+        capAdd: this.capAdd,
+        securityOpt: this.securityOpt,
+      });
 
-    const sshHost = this.hostnameForOrchestrator(containerName);
-    const sshPort = this.hostSshPort ?? 22;
+      try {
+        await this.docker.startContainer(containerId);
+        const inspected = await this.docker.inspectContainer(containerId);
+        const hostKeyFingerprint = await this.readHostKeyFingerprint(containerId);
 
-    const record: RunnerRecord = {
-      runnerId,
-      // Runless Forge ideation: run_id is NULL (no `runs` row); project_id is the
-      // caller's `persistedProjectId` (the real project, or null when project-less)
-      // — never the synthetic handle. The handle is kept in `handle` for
-      // naming/recovery only.
-      runId: input.runless === true ? null : input.runId,
-      projectId: input.runless === true ? (input.persistedProjectId ?? null) : input.projectId,
-      handle: input.runId,
-      orgId: input.orgId,
-      containerId,
-      workspaceVolume,
-      codexHomeVolume,
-      sshHost,
-      sshPort,
-      hostKeyFingerprint,
-      imageSha: inspected.imageSha,
-      createdAt: this.clock(),
-      released: false,
-    };
-    await this.store.insert(record);
+        const sshHost = this.hostnameForOrchestrator(containerName);
+        const sshPort = this.hostSshPort ?? 22;
 
-    return {
-      runnerId,
-      sshHost,
-      sshPort,
-      hostKeyFingerprint,
-      imageSha: inspected.imageSha,
-    };
+        const record: RunnerRecord = {
+          runnerId,
+          // Runless Forge ideation: run_id is NULL (no `runs` row); project_id is the
+          // caller's `persistedProjectId` (the real project, or null when project-less)
+          // — never the synthetic handle. The handle is kept in `handle` for
+          // naming/recovery only.
+          runId: input.runless === true ? null : input.runId,
+          projectId: input.runless === true ? (input.persistedProjectId ?? null) : input.projectId,
+          handle: input.runId,
+          orgId: input.orgId,
+          containerId,
+          workspaceVolume,
+          codexHomeVolume,
+          sshHost,
+          sshPort,
+          hostKeyFingerprint,
+          imageSha: inspected.imageSha,
+          createdAt: this.clock(),
+          released: false,
+        };
+        await this.store.insert(record);
+
+        return {
+          runnerId,
+          sshHost,
+          sshPort,
+          hostKeyFingerprint,
+          imageSha: inspected.imageSha,
+        };
+      } catch (error) {
+        // The container exists but a later step failed: remove it before falling
+        // through to the volume teardown below.
+        await this.docker.removeContainer(containerId, true).catch(() => {});
+        throw error;
+      }
+    } catch (error) {
+      // Best-effort teardown of the orphaned volumes (the container, if any, was
+      // already removed in the inner catch). Each teardown swallows its own
+      // failure so it can never MASK the original error — the original is always
+      // re-thrown (fail-closed + loud at the caller).
+      await this.docker.removeVolume(workspaceVolume).catch(() => {});
+      await this.docker.removeVolume(codexHomeVolume).catch(() => {});
+      throw error;
+    }
   }
 
   async release(runnerId: string, reason: string): Promise<{ released: boolean }> {
-    const record = await this.store.findActive(runnerId);
+    // markReleased is the SINGLE atomic CLAIM gate (fix #2). It flips the row to
+    // released only when it was still active (`AND released_at IS NULL` in the
+    // UPDATE), returning the claimed record on rowCount===1 and `undefined` when
+    // some other caller already released it. We gate ALL Docker teardown on
+    // winning the claim, so two concurrent release() calls tear the same
+    // container+volumes down EXACTLY once. The loser is a clean no-op.
+    const record = await this.store.markReleased(runnerId, reason);
     if (record === undefined) {
       return { released: false };
     }
@@ -203,7 +251,6 @@ export class RunnerLifecycle {
     // from the previous run survives.
     await this.docker.removeVolume(record.workspaceVolume);
     await this.docker.removeVolume(record.codexHomeVolume);
-    await this.store.markReleased(runnerId, reason);
     return { released: true };
   }
 

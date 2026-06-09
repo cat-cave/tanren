@@ -45,9 +45,17 @@ export const templates = pgTable(
     // The parsed `TemplateManifestV1` (manifest.ts), persisted verbatim. The
     // single source of truth for the template's capabilities + validation proof;
     // the columns below are denormalized projections for indexable querying.
-    manifest: jsonb("manifest")
-      .notNull()
-      .default(sql`'{}'::jsonb`),
+    //
+    // NO column default: a `TemplateManifestV1` has NO empty-but-valid shape (every
+    // field — `version`/`stack`/`capabilities`/`channel`/`templateVersion`/
+    // `provenance`/`validationProof` — is required), so a bare `{}` default is NOT a
+    // valid manifest. `TemplateStore` parses every row back through the schema on
+    // READ (`mapRow`), so a `{}`-defaulted direct/admin/migration insert would poison
+    // listing with a loud parse throw. The column is therefore NOT-NULL with no
+    // default — a write MUST supply a valid manifest (the store always does via
+    // `manifestToJson`), so a "no valid manifest" insert is rejected at write rather
+    // than poisoning a later read.
+    manifest: jsonb("manifest").notNull(),
     // Registry lifecycle tier (templating-system.md §1):
     //   draft     — registered, not yet validated (manifest.validationProof null).
     //   validated — the validation harness proved it meaningful (private/org tier).

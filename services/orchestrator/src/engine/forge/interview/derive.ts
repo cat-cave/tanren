@@ -42,8 +42,13 @@ import {
 } from "./deployDependency.js";
 import { scaffoldSpecsFor } from "./deriveScaffoldSpecs.js";
 import { MissingLifecycleError } from "./scaffoldAuthoring.js";
-import { selectTemplate, type TemplateRegistryQuery, type TemplateSelectionDecision } from "./templateSelection.js";
-import { InterviewCapture, type CaptureBehavior, type CaptureInterface } from "./types.js";
+import {
+  selectTemplate,
+  type SelectedTemplate,
+  type TemplateRegistryQuery,
+  type TemplateSelectionDecision,
+} from "./templateSelection.js";
+import { InterviewCapture, type CaptureBehavior, type CaptureInterface, type CaptureLifecycle } from "./types.js";
 
 export interface DeriveInput {
   orgId: string;
@@ -78,6 +83,13 @@ export interface DeriveInput {
   templateChannelPreference?: "lts" | "nightly";
   // Injectable clock for deterministic selection-freshness tests.
   selectionNow?: number;
+  // TEMPLATING WAVE 4 (templating-system.md §3): the DECOUPLED no-match → CREATION
+  // seam. When wired and selection finds NO validated template, it CREATES one (the
+  // creation meta-flow) + SEEDS from it instead of falling to from-scratch. Supplied
+  // by the wiring layer (`buildCreateForNoMatch`) so the derive/selection layers keep
+  // NO creation dependency. Absent ⇒ the from-scratch path (the default + the test
+  // path). Only consulted when `templateRegistryQuery` is also injected.
+  createTemplateForNoMatch?: (lifecycle: CaptureLifecycle) => Promise<SelectedTemplate | undefined>;
 }
 
 // FINDING #1: the autonomous greenfield config. When the operator opts into
@@ -208,6 +220,7 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
             ? {}
             : { channelPreference: input.templateChannelPreference }),
           ...(input.selectionNow === undefined ? {} : { now: input.selectionNow }),
+          ...(input.createTemplateForNoMatch === undefined ? {} : { createForNoMatch: input.createTemplateForNoMatch }),
         });
   // The scaffold spec SHRINKS to template-instantiation on a strong/partial match;
   // otherwise it is the unchanged from-scratch authoring (the guaranteed fallback).

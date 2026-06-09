@@ -6,6 +6,7 @@ import { PgRunnerStore } from "./pgRunnerStore.js";
 import { RunnerLifecycle } from "./runnerLifecycle.js";
 import { AbandonedRunSweeper } from "./sweeper.js";
 import { requireEnv } from "./requireEnv.js";
+import { requirePositiveHours } from "./requirePositiveHours.js";
 
 const port = Number(process.env["ALLOCATOR_PORT"] ?? 3200);
 // The bearer token gating `/allocate` + `/release` is REQUIRED — no `"dev"`
@@ -13,7 +14,7 @@ const port = Number(process.env["ALLOCATOR_PORT"] ?? 3200);
 // stacks set it (dev: `dev`; prod: required via `:?`); a blank/unset value fails
 // hard rather than silently accepting `Bearer dev`.
 const authToken = requireEnv("TANREN_ALLOCATOR_TOKEN");
-const maxRunHours = Number(process.env["TANREN_MAX_RUN_HOURS"] ?? 6);
+const maxRunHours = requirePositiveHours(process.env["TANREN_MAX_RUN_HOURS"], 6, "TANREN_MAX_RUN_HOURS");
 const networkName = process.env["TANREN_ALLOCATOR_NETWORK"] ?? "tanren_default";
 const hostSshPortEnv = process.env["TANREN_ALLOCATOR_HOST_SSH_PORT"];
 const sshHostnameTemplate = process.env["TANREN_ALLOCATOR_SSH_HOSTNAME_TEMPLATE"] ?? "{container}";

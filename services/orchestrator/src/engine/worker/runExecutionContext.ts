@@ -14,7 +14,7 @@ import { creditRatesFromOrgConfig, installationFromOrgConfig } from "../config/o
 import type { RoutingChainEntry, RoutingTable } from "../config/shared.js";
 import { resolveCreditUsdRate } from "../costs/index.js";
 import type { ResolvedRunCredentials } from "../credentials/resolveCredentials.js";
-import { resolveCredentialsForRun } from "../credentials/resolveCredentials.js";
+import { orgScopeFromRunOrgId, resolveCredentialsForRun } from "../credentials/resolveCredentials.js";
 import { materializeContractFiles } from "../forge/scaffold/index.js";
 import type { PlannerRunContext } from "../workflow/plannerRun.js";
 
@@ -140,13 +140,16 @@ export async function loadRunExecutionContext(
   // unknown version (no silent default), mirroring the route read-path parser.
   const projectConfig = migrateProjectConfig(decoded.config);
 
-  // resolveCredentialsForRun reads organizations.config for the org-default
-  // layer. A legacy/unscoped project (org_id NULL) has no org row to fall back
-  // to, so we resolve from project config only by passing an empty org id; the
-  // resolver throws MissingCredentialError when neither layer supplies a ref.
+  // resolveCredentialsForRun reads organizations.config for the org-default layer.
+  // A run is ALWAYS tenant-scoped: `projects.org_id` (joined as `p.org_id`) is
+  // NOT-NULL, so a real run row carries a real org id. We thread it through
+  // `orgScopeFromRunOrgId`, which FAILS LOUD (`UnscopedOrgError`) on an empty/absent
+  // org id — a missing tenant scope at a run path is a scoping/RLS-denial BUG, never
+  // a license to coerce `?? ""` and silently degrade to project-config-only BYOK
+  // (the no_silent_fallbacks doctrine).
   const resolved = await resolveCredentialsForRun(pool, {
     projectConfig,
-    orgId: decoded.org_id ?? "",
+    orgScope: orgScopeFromRunOrgId(decoded.org_id),
   });
 
   // cost PR-C: resolve the run's CONFIGURED per-credential credit→USD rate, keyed on

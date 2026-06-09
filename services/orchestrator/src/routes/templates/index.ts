@@ -107,6 +107,10 @@ const CreateRequestBody = z
     mutation: z.boolean().optional(),
     channel: z.enum(["lts", "nightly"]).optional(),
     note: z.string().max(2000).optional(),
+    // The GitHub owner (org/user login) the conforming template repo is created
+    // under — the build authors it off an empty repo, exactly like a greenfield
+    // product. Optional: the flow falls back to the org's configured owner.
+    owner: z.string().min(1).max(100).optional(),
   })
   .strict();
 
