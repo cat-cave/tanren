@@ -17,6 +17,9 @@ export interface SpecRec {
   status: string;
   metadata: unknown;
   org_id: string;
+  // Insertion order proxy for the bounded grounding list's recency sort (§7.5).
+  // Defaults to a monotonic insertion index when a fixture omits it.
+  created_at?: number;
 }
 export interface RunRec {
   run_id: string;

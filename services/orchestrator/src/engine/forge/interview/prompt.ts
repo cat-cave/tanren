@@ -10,10 +10,15 @@
 import type { InterviewAnswererContext } from "./types.js";
 
 export function buildInterviewPrompt(context: InterviewAnswererContext): string {
-  const captureJson = JSON.stringify(context.capture, null, 2);
+  // Compact (not pretty-printed) capture JSON: the pretty form ~doubles the token
+  // cost of the growing capture for zero model benefit (apex pre-run §7.8).
+  const captureJson = JSON.stringify(context.capture);
   return [
+    // STATIC-FIRST (apex pre-run §7.8): the goal + architecture + lifecycle-pinning
+    // instructions are INVARIANT across rounds, so they form the prompt prefix and
+    // stay cache-stable. The variable tail (round number, operator answer, capture)
+    // comes LAST so a per-round change never invalidates the cached static prefix.
     "You are Forge, running a product vision interview for a brand-new (greenfield) project.",
-    `This is round ${context.round} of ~${context.totalRounds}.`,
     "Across the interview you must capture: identity (slug + pitch), personas,",
     "behaviors (Given/When/Then, tied to a persona), interfaces (delivery surfaces),",
     "a design-DNA starter, an architecture proposal, and the required repo rulesets.",
@@ -55,15 +60,18 @@ export function buildInterviewPrompt(context: InterviewAnswererContext): string 
     "when the operator explicitly asks to change it, and then ALSO set",
     "`captureDelta.lifecycleChange: true` (a silent re-emission is rejected as drift).",
     "",
-    "The operator's latest answer:",
-    context.answer === "" ? "(none — this is the opening round)" : context.answer,
-    "",
-    "Capture accumulated so far (JSON):",
-    captureJson,
-    "",
     "Return exactly one InterviewRoundOutput: `say` is your next question (or a closing",
     "summary when the interview is complete), `captureDelta` is ONLY the new capture this",
     "round adds (the engine merges it), `suggestions` are optional inline answers, and",
     "`complete` is true once every capture area is filled. Ask one focused question at a time.",
+    "",
+    // VARIABLE TAIL (changes every round) — LAST so it never invalidates the static
+    // prefix above.
+    `This is round ${context.round} of ~${context.totalRounds}.`,
+    "The operator's latest answer:",
+    context.answer === "" ? "(none — this is the opening round)" : context.answer,
+    "",
+    "Capture accumulated so far (compact JSON):",
+    captureJson,
   ].join("\n");
 }

@@ -66,6 +66,19 @@ export function buildForgePrompt(context: ForgeConversationContext): string {
       const payload = entry.error === undefined ? JSON.stringify(entry.result) : `ERROR: ${entry.error}`;
       sections.push(`- ${entry.call.tool}(${JSON.stringify(entry.call.args)}) => ${truncate(payload)}`);
     }
+  }
+
+  // TERMINAL pass (apex pre-run §7.10): the tool-round budget is spent. Tell the
+  // model it MUST finalize now — NO further tool requests will run — so it commits to
+  // a ForgeAnswer from what it already has instead of burning the last call on tools.
+  if (context.finalize === true) {
+    sections.push(
+      "",
+      'FINAL STEP — the tool-round budget is spent. You MUST return {"kind":"final",...}',
+      "NOW with your best ForgeAnswer from the data already gathered. Do NOT request any",
+      "tools; a tool request here is ignored and you get no further turn.",
+    );
+  } else if (context.toolResults.length > 0) {
     sections.push("", "Decide: request more read tools, or finalize with a ForgeAnswer.");
   } else {
     sections.push("", "Decide: request read tools to ground your answer, or finalize directly if no data is needed.");

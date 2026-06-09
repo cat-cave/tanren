@@ -160,7 +160,14 @@ async function runOneSubtask(args: {
 function gateReason(gate: Extract<GateOutcome, { passed: false }>): string {
   const { failure } = gate;
   const exit = failure.exitCode === null ? "no exit code" : `exit ${failure.exitCode}`;
-  return `gate tier "${failure.tier}" (${failure.when}) failed at step "${failure.failedStep}" with ${exit}`;
+  const header = `gate tier "${failure.tier}" (${failure.when}) failed at step "${failure.failedStep}" with ${exit}`;
+  // Append the failed step's captured output (apex pre-run §7.4): the gate already
+  // captured up to 4KB of the step's stderr/stdout in `outputTail`. Feeding it to the
+  // writer-rework prompt shows the ACTUAL error (the failing type/lint/test message)
+  // so the writer fixes it directly instead of re-running the gate to rediscover it.
+  const failedStep = failure.steps.find((step) => step.name === failure.failedStep) ?? failure.steps.at(-1);
+  const outputTail = failedStep?.outputTail.trim() ?? "";
+  return outputTail === "" ? header : `${header}\nGate output (last lines):\n${outputTail}`;
 }
 
 // A standing toolchain instruction prepended to every writer prompt.

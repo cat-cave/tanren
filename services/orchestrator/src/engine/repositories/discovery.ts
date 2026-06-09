@@ -7,9 +7,10 @@
 //      schema + merge/parse helpers stay in `engine/forge/discovery/provenance.ts`
 //      (pure transforms, no DB); this repository owns only the metadata read +
 //      the metadata write the discovery path issues.
-//   2. The grounding spec LIST — `(spec_id, title, status)` for a project,
-//      ordered by title, that the discovery/intake answerers read to ground a
-//      classification against the project's existing DAG.
+//   2. The grounding spec LIST — `(spec_id, title, status)` for a project, that
+//      the discovery/intake answerers read to ground a classification against the
+//      project's existing DAG. BOUNDED (apex pre-run §7.5): active specs first,
+//      then the most-recent terminal ones, capped — never the unbounded full list.
 //
 // Both read/write the same client the caller hands in (the org-scope carrier),
 // so under RLS an org-scoped client sees only that org's specs and an off-scope
@@ -59,14 +60,31 @@ export const DiscoveryStore = {
   },
 
   /**
-   * The project's existing specs (id/title/status), ordered by title — the
-   * grounding list the discovery/intake answerers read.
+   * The project's existing specs (id/title/status) — the grounding list the
+   * discovery/intake/triage answerers read for dedupe + placement.
+   *
+   * BOUNDED (apex pre-run §7.5): a long-lived project accumulates hundreds of merged
+   * specs; rendering EVERY one (title-ordered, no LIMIT) bloats every grounding prompt
+   * unboundedly. So we surface the specs that matter for dedupe/placement — the
+   * ACTIVE (non-terminal) specs FIRST, then the most-recent terminal ones — capped at
+   * `GROUNDING_SPEC_LIMIT`, recency-ordered. Active specs are never dropped (their
+   * count is bounded by in-flight work); only the long tail of old merged/cancelled
+   * specs is truncated.
    */
   async listExistingSpecs(client: QueryClient, projectId: string, _actor: ActorRef): Promise<ExistingSpecSummary[]> {
     const result = await client.query<{ spec_id: string; title: string; status: string }>(
-      "SELECT spec_id, title, status FROM specs WHERE project_id = $1 ORDER BY title",
-      [projectId],
+      `SELECT spec_id, title, status
+         FROM specs
+        WHERE project_id = $1
+        ORDER BY (status IN ('open','in_flight','review','needs_attention')) DESC, created_at DESC
+        LIMIT $2`,
+      [projectId, GROUNDING_SPEC_LIMIT],
     );
     return result.rows.map((row) => ({ specId: row.spec_id, title: row.title, status: row.status }));
   },
 } as const;
+
+// The cap on specs fed into a grounding prompt (active-first, then recent terminal).
+// Generous enough that a healthy project's active set + recent history all fit, while
+// bounding the token spend a long-lived project's merged tail would otherwise add.
+const GROUNDING_SPEC_LIMIT = 100;
