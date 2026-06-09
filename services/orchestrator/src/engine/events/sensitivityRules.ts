@@ -6,6 +6,7 @@ import { ciIntelSensitivityRules } from "./sensitivityRules.ciIntel.js";
 import { gateSensitivityRules } from "./sensitivityRules.gate.js";
 import { auditorFindingsRoutedSensitivityRules } from "./sensitivityRules.audit.js";
 import { specLoopStageSensitivityRules } from "./sensitivityRules.loop.js";
+import { templatesSensitivityRules } from "./sensitivityRules.templates.js";
 
 // Sensitivity rule table. Every payload field reachable from an event must have a
 // registered tag (the eventRegistryFieldCoverage test enforces this as a hard CI
@@ -466,6 +467,9 @@ export const sensitivityRules: SensitivityRule[] = [
   ...strandSensitivityRules,
   ...ciIntelSensitivityRules,
   ...gateSensitivityRules,
+  // Tanren-native templating (wave 1): the registry lifecycle events — all
+  // non-secret descriptors (public).
+  ...templatesSensitivityRules,
 ];
 
 function rulesFor(eventName: string, entries: ReadonlyArray<[string, SensitivityRule["tag"]]>): SensitivityRule[] {

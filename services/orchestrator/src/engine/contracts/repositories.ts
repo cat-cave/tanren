@@ -42,6 +42,7 @@ import {
   AuditsStore,
   OrgIntegrationsStore,
   AppEnvironmentStore,
+  TemplateStore,
 } from "../repositories/index.js";
 
 /** A pool or a checked-out (org-scoped) client — anything that can run a query. */
@@ -94,6 +95,8 @@ export interface Repositories {
   readonly orgIntegrations: typeof OrgIntegrationsStore;
   /** Plane B: the built product's `project_app_env` store (upsert/list/get/delete). */
   readonly appEnvironment: typeof AppEnvironmentStore;
+  /** Tanren-native templating (wave 1): the `templates` registry (CRUD + capability query + status). */
+  readonly templates: typeof TemplateStore;
 }
 
 /**
@@ -126,6 +129,7 @@ export const pgRepositories: Repositories = {
   forgeTools: ForgeToolsStore,
   orgIntegrations: OrgIntegrationsStore,
   appEnvironment: AppEnvironmentStore,
+  templates: TemplateStore,
 } as const;
 
 export type { ActorRef };

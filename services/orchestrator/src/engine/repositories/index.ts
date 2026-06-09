@@ -12,6 +12,16 @@ export { ProjectSpecStore, type ProjectSpecRow, type SpecPatch } from "./project
 // (Plane B).
 export { OrgIntegrationsStore, type OrgIntegration, type OrgIntegrationStatus } from "./orgIntegrations.js";
 export { AppEnvironmentStore, type AppEnvEntry, type AppEnvScope, type AppEnvSource } from "./appEnvironment.js";
+// Tanren-native templating (wave 1): the template REGISTRY store — CRUD +
+// capability query + status transitions, org-scoped with the cross-org official
+// tier (migration 0015).
+export {
+  TemplateStore,
+  type Template,
+  type TemplateStatus,
+  type RegisterTemplateInput,
+  type TemplateCapabilityQuery,
+} from "./templates.js";
 // Forge + recovery data-access stores. The thread/turn/proposal stores live
 // under engine/forge (their routes import them by name); the seam aggregates
 // them here so callers depend on the `Repositories` contract. The discovery /
