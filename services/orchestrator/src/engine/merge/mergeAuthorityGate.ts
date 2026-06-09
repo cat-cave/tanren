@@ -16,6 +16,7 @@
 import { memberKey as computeMemberKey } from "../contracts/integrationNodes.js";
 import { MergeAuthorityImpl, type LandFinalizer } from "./mergeAuthorityImpl.js";
 import { buildAuthorizeLandInput, type MergeAuthoritySignals } from "./mergeAuthorityInputs.js";
+import { LandCasRejectedError } from "../providers/githubCodeHost.js";
 import type { CodeHost, CodeHostRepoRef } from "../contracts/codeHost.js";
 import type { Finding } from "../contracts/findings.js";
 import type { AuditPosture } from "../contracts/auditPosture.js";
@@ -239,12 +240,15 @@ export async function authorizeAndLand(input: MergeAuthorityGateInput): Promise<
 
   // authorized: execute the transactional land. A CAS rejection (main raced ahead)
   // throws from the host land; surface it as a benign retryable race, distinct from
-  // the dangerous post-land finalize failure (merge_state_unknown).
+  // the dangerous post-land finalize failure (merge_state_unknown). The classification
+  // is TYPED (`instanceof LandCasRejectedError`), NOT a message regex: the old
+  // `/...|CAS|.../iu` matched any "case"/"cascade"/"showcase" substring in an unrelated
+  // failure message and mis-mapped a genuine fault into a benign retry.
   let outcome;
   try {
     outcome = await authority.land(auth);
   } catch (error) {
-    if (error instanceof Error && /stale compare-and-swap|CAS|fast forward/iu.test(error.message)) {
+    if (error instanceof LandCasRejectedError) {
       return { kind: "cas_rejected", reason: error.message };
     }
     throw error;

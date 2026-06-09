@@ -291,7 +291,16 @@ export function buildDriveMerge(deps: BuildMergeCoordinatorDeps): DriveMergeForQ
         }
         return { kind: "conflict", message: merge.message ?? "merge conflict" };
       case "blocked":
+        // §3.2: a TRANSIENT authority refusal / benign CAS hold the merge stage surfaced
+        // as recoverable `blocked`. Map to the coordinator's recoverable `blocked` — a
+        // bounded re-drive hold, NEVER a terminal dequeue.
         return { kind: "blocked", message: merge.message ?? "merge blocked" };
+      case "needs_attention":
+        // §3.2: the merge AUTHORITY's genuine-human-decision verdict (HITL pending /
+        // changes_requested at land time). PARK the spec via the escalator (frees its
+        // slot) — NOT a recoverable hold (no re-drive resolves a human decision) and NOT a
+        // terminal conflict dequeue.
+        return { kind: "needs_attention", message: merge.message ?? "merge needs human attention" };
       default:
         return { kind: "failed", message: merge.message ?? `merge ${merge.outcome}` };
     }

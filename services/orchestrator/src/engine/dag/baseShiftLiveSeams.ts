@@ -40,6 +40,7 @@ import { loadBaseShiftRunContext, type BaseShiftRunContext } from "./baseShiftLi
 import { openLiveBaseShiftWorkspace, type LiveBaseShiftWorkspaceCore } from "./baseShiftLiveRebase.js";
 import { resolveBaseShiftConflict } from "./baseShiftLiveResolve.js";
 import { runFreshRunnerMergeGate } from "../merge/freshRunnerGate.js";
+import { pushJjHead } from "../workflow/reviewMerge/conflictResolver/jjAuthedPush.js";
 
 /** The per-base-shift timeout (ms) the live seams run their SSH ops + the re-gate under. */
 const BASE_SHIFT_TIMEOUT_MS = 600_000;
@@ -98,9 +99,10 @@ export class LiveBaseShiftWorkspaceProvider implements BaseShiftWorkspaceOpener 
       workspaceId: live.handle.workspaceId,
       path: live.handle.path,
       branch: ctx.headBranch,
-      // jj rebases ONTO a revision; the freshly-cloned base is the remote-tracking
-      // bookmark `<baseRef>@origin` (identityJjRefResolver passes it through verbatim).
-      newBaseSha: `${baseRef}@origin`,
+      // §3.1: a RESOLVED commit sha (not the `<baseRef>@origin` jj revision token). jj
+      // rebases onto a revision, and `jj rebase -d <sha>` accepts a sha, so this same value
+      // is the rebase target AND a clean `integration.rebase` event field (no token pollution).
+      newBaseSha: live.newBaseSha,
     };
   }
 
@@ -122,12 +124,47 @@ export class LiveBaseShiftWorkspaceProvider implements BaseShiftWorkspaceOpener 
     }
     this.openWorkspaces.delete(workspace.workspaceId);
     try {
-      return await live.core.rebaseOnto(live.handle, branch, baseSha);
+      const rebase = await live.core.rebaseOnto(live.handle, branch, baseSha);
+      // §3.1 PUSH-THEN-REGATE: a CLEAN rebase advanced the head LOCALLY only — the forge
+      // `headBranch` still points at the UN-rebased tree. PUBLISH the rebased head now
+      // (export the clean ref + authed force-push) so the coordinator's re-gate verifies the
+      // ACTUAL landing tree, not the stale forge head (NEVER-MERGE-UNVERIFIED), and the
+      // returned `headSha` exists on the forge. A CONFLICTED rebase is NOT pushed here — the
+      // resolver re-provisions its own workspace + force-pushes the RESOLVED head; pushing a
+      // conflicted tree would violate the §2 fail-closed export boundary.
+      if (rebase.outcome === "clean") {
+        await this.publishCleanRebase(live, branch);
+      }
+      return rebase;
     } finally {
-      // The detection workspace's purpose is done after the rebase (clean vs conflicted);
-      // release it (LOUD on leak). The resolver re-provisions its OWN live workspace.
+      // The detection workspace's purpose is done after the rebase + push (clean) / the
+      // resolver re-provisions (conflicted); release it (LOUD on leak).
       await live.release();
     }
+  }
+
+  /**
+   * §3.1: export the cleanly-rebased head (REFUSES a still-conflicted ref — the §2 boundary)
+   * and authed-force-push it onto the forge head branch, on the STILL-OPEN runner, before
+   * release. FAIL-CLOSED: an export/push failure throws — the coordinator maps it to a hold
+   * (the work survives), never a clean rebase left un-pushed that the re-gate then verifies
+   * against the stale forge tree.
+   */
+  private async publishCleanRebase(live: LiveBaseShiftWorkspaceCore, branch: string): Promise<void> {
+    await live.core.exportCleanGitRef(live.handle, branch);
+    await pushJjHead({
+      ssh: this.deps.ssh,
+      target: live.pushFacts.target,
+      workspacePath: live.pushFacts.workspacePath,
+      secrets: this.deps.secrets,
+      vcsProvider: this.deps.vcsProvider,
+      ...(this.deps.githubAppMinter !== undefined && { githubAppMinter: this.deps.githubAppMinter }),
+      repoUrl: live.pushFacts.repoUrl,
+      headBranch: live.pushFacts.headBranch,
+      ...(live.pushFacts.installation !== undefined && { installation: live.pushFacts.installation }),
+      githubCredentialRef: live.pushFacts.githubCredentialRef,
+      timeoutMs: this.timeoutMs(),
+    });
   }
 
   // ---- WorkspaceVcsCore methods the coordinator NEVER calls (it only rebaseOnto's). ----
@@ -169,9 +206,13 @@ export class LiveBaseShiftWorkspaceProvider implements BaseShiftWorkspaceOpener 
 
 /**
  * The LIVE re-gate: the fresh-runner native gate over the rebased head (the SAME
- * `runFreshRunnerMergeGate` the queued-run / drive re-gates use). Maps the gate outcome to
- * the coordinator's verdict: `passed`→`passed` (the work FITS — no replan), `failed`→
- * `failed` (route back to the planner WITH the shift), and a THROW propagates so the
+ * `runFreshRunnerMergeGate` the queued-run / drive re-gates use). §3.1: the clean rebase
+ * already PUSHED `rebasedHeadSha` onto `ctx.headBranch`, so the re-gate clones that branch
+ * and the gated head is the pushed rebased tree. NEVER-MERGE-UNVERIFIED: we assert the gate
+ * actually verified `rebasedHeadSha` (a race that re-advanced the branch between push and
+ * re-gate makes them differ → HOLD, never a verdict for the wrong commit). Maps the gate
+ * outcome to the coordinator's verdict: `passed`→`passed` (the work FITS — no replan),
+ * `failed`→`failed` (route back to the planner WITH the shift); a THROW propagates so the
  * coordinator's `reGateOrHold` HOLDS (never merge on an unverified rebase).
  */
 export class LiveBaseShiftReGate implements BaseShiftReGate {
@@ -196,7 +237,9 @@ export class LiveBaseShiftReGate implements BaseShiftReGate {
       },
       {
         repoUrl: ctx.repoUrl,
-        // Re-gate the dependent's OWN head branch — the rebase advanced it in place.
+        // §3.1: re-gate the dependent's OWN head branch — the clean rebase PUSHED the rebased
+        // head here (so the forge branch IS the rebased tree), and the gate.verdict anchors
+        // on the cloned head (the pushed `rebasedHeadSha`), not the un-rebased tree.
         ref: ctx.headBranch,
         runnerImage: ctx.runnerImage,
         governancePosture: ctx.governancePosture,
@@ -208,6 +251,16 @@ export class LiveBaseShiftReGate implements BaseShiftReGate {
         specId: ctx.specId,
       },
     );
+    // NEVER-MERGE-UNVERIFIED: the gate must have verified the EXACT pushed rebased head. A
+    // mismatch means the forge branch moved off `rebasedHeadSha` between the push and this
+    // clone (a concurrent push / a failed push) — HOLD (fail-closed) rather than pass a
+    // verdict for a commit that is not the one we rebased.
+    if (input.rebasedHeadSha !== "" && result.headSha !== input.rebasedHeadSha) {
+      throw new Error(
+        `base-shift re-gate verified ${result.headSha} but the rebased head was ${input.rebasedHeadSha} — ` +
+          `the forge head moved between push and re-gate; holding (NEVER-MERGE-UNVERIFIED)`,
+      );
+    }
     // The fresh-runner gate is synchronous over SSH: it either passed every tier or a tier
     // failed — there is no async "pending". An inconclusive state would surface as a throw
     // (mapped to HOLD by the coordinator), so a completed gate is `passed`/`failed`.

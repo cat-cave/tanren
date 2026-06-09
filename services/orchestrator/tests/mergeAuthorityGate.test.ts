@@ -7,6 +7,7 @@
 import { describe, expect, it } from "vitest";
 import { InMemoryCodeHost } from "./conformance/fakes/inMemoryCodeHost.js";
 import { authorizeAndLand } from "../src/engine/merge/mergeAuthorityGate.js";
+import { LandCasRejectedError } from "../src/engine/providers/githubCodeHost.js";
 import {
   budgetScopeFrom,
   demoFrom,
@@ -105,11 +106,28 @@ describe("authorizeAndLand — clean land via CodeHost.landAuthorizedRef CAS", (
       ...new InMemoryCodeHost(),
       fetchRef: async (input: { remoteBranch: string }) => (input.remoteBranch === "main" ? "sha-main" : "sha-feat"),
       landAuthorizedRef: async () => {
-        throw new Error("land rejected (stale compare-and-swap): main is sha-main-moved, expected sha-main");
+        // The TYPED rejection the GitHub impl throws — the gate classifies it by
+        // `instanceof LandCasRejectedError` (§3.2), not a brittle message regex.
+        throw new LandCasRejectedError("main", "sha-main", "sha-main-moved");
       },
     } as unknown as InMemoryCodeHost;
     const disposition = await authorizeAndLand(gateInput(racingHost));
     expect(disposition.kind).toBe("cas_rejected");
+  });
+
+  it("§3.2 TYPED CAS: a non-CAS land error whose message contains 'cascade'/'case' is NOT mis-classified as cas_rejected", async () => {
+    // The old classification was a message regex `/...|CAS|.../iu` that matched ANY
+    // "case"/"cascade"/"showcase" substring — mis-mapping a genuine fault into a benign
+    // retry. The typed `instanceof LandCasRejectedError` check makes the message irrelevant.
+    const failingHost = {
+      ...new InMemoryCodeHost(),
+      fetchRef: async (input: { remoteBranch: string }) => (input.remoteBranch === "main" ? "sha-main" : "sha-feat"),
+      landAuthorizedRef: async () => {
+        throw new Error("transient gateway failure in the deploy cascade (showcase env)");
+      },
+    } as unknown as InMemoryCodeHost;
+    // A real fault must PROPAGATE (it is not a benign CAS race), not become `cas_rejected`.
+    await expect(authorizeAndLand(gateInput(failingHost))).rejects.toThrow(/cascade|showcase/u);
   });
 
   it("an uncertain input (gate unknown) → blocked, no land target, main untouched", async () => {
