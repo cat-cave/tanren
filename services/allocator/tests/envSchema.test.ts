@@ -36,6 +36,27 @@ describe("allocator envSchema (fail-closed at boot)", () => {
     expect(env.TANREN_ALLOCATOR_HOST_SSH_PORT).toBeUndefined();
   });
 
+  // REGRESSION: compose's `${VAR:-}` materializes an unset host var as "" inside
+  // the container. An empty value is UNSET — default applies / optional stays
+  // undefined — never a boot crash.
+  it("treats an EMPTY string as UNSET for optional/default fields (compose ${VAR:-})", () => {
+    const env = parseAllocatorEnv({
+      ALLOCATOR_PORT: "",
+      TANREN_ALLOCATOR_NETWORK: "",
+      TANREN_ALLOCATOR_HOST_SSH_PORT: "",
+      TANREN_ALLOCATOR_SSH_HOSTNAME_TEMPLATE: "",
+      TANREN_ALLOCATOR_SWEEPER_INTERVAL_MS: "",
+      TANREN_RUNNER_CAP_ADD: "",
+      TANREN_RUNNER_SECURITY_OPT: "",
+    });
+    expect(env.ALLOCATOR_PORT).toBe(3200);
+    expect(env.TANREN_ALLOCATOR_NETWORK).toBe("tanren_default");
+    expect(env.TANREN_ALLOCATOR_HOST_SSH_PORT).toBeUndefined();
+    expect(env.TANREN_ALLOCATOR_SSH_HOSTNAME_TEMPLATE).toBe("{container}");
+    expect(env.TANREN_ALLOCATOR_SWEEPER_INTERVAL_MS).toBe(60_000);
+    expect(env.TANREN_RUNNER_CAP_ADD).toBe("SYS_ADMIN");
+  });
+
   it("FAILS LOUD on a non-numeric ALLOCATOR_PORT", () => {
     expect(() => parseAllocatorEnv({ ...GOOD_ENV, ALLOCATOR_PORT: "abc" })).toThrow(/Invalid allocator environment/u);
   });

@@ -24,15 +24,28 @@
 import { z } from "zod";
 import { requirePositiveHours } from "./requirePositiveHours.js";
 
+/**
+ * Treat an EMPTY env string as UNSET (`undefined`) before validation — see the
+ * orchestrator schema for the rationale: Tanren's compose passes optional host
+ * env via `${VAR:-}`, which materializes an unset var as `""` (not an absent
+ * key) inside the container. Coercing `""` → `undefined` lets defaults/optional
+ * apply for an unset-in-dev var while a genuinely-malformed present value still
+ * fails loud.
+ */
+const emptyToUndefined = <T extends z.ZodTypeAny>(schema: T) => z.preprocess((v) => (v === "" ? undefined : v), schema);
+
 /** A TCP port: coerced from the env string, finite integer, 1–65535. */
 const portSchema = z.coerce.number().int().finite().min(1).max(65_535);
 
 /** A positive millisecond interval. */
 const positiveIntervalMsSchema = z.coerce.number().int().finite().positive();
 
+// Every field wraps `emptyToUndefined` AS THE OUTERMOST modifier — the `""`→unset
+// coercion runs before the `.optional()`/`.default()` decision (so an `""` from
+// compose's `${VAR:-}` applies the default / stays optional, never crashes boot).
 const envObjectSchema = z.object({
   // Allocator API HTTP port. Default 3200.
-  ALLOCATOR_PORT: portSchema.default(3200),
+  ALLOCATOR_PORT: emptyToUndefined(portSchema.default(3200)),
   // Max wall-clock hours before the abandoned-run sweeper reclaims a runner.
   // Resolved through `requirePositiveHours` (reaper-safety: fall back loud, never
   // crash, never accept <= 0). Carried through the schema as the raw string and
@@ -42,18 +55,18 @@ const envObjectSchema = z.object({
     .optional()
     .transform((raw) => requirePositiveHours(raw, 6, "TANREN_MAX_RUN_HOURS")),
   // Docker network the per-run runner containers join.
-  TANREN_ALLOCATOR_NETWORK: z.string().min(1).default("tanren_default"),
+  TANREN_ALLOCATOR_NETWORK: emptyToUndefined(z.string().min(1).default("tanren_default")),
   // Optional host SSH port to publish a runner on (dev/local). When unset the
   // runner is reachable only on the internal docker network. A port when present.
-  TANREN_ALLOCATOR_HOST_SSH_PORT: portSchema.optional(),
+  TANREN_ALLOCATOR_HOST_SSH_PORT: emptyToUndefined(portSchema.optional()),
   // Template the orchestrator-facing SSH hostname is built from ({container}).
-  TANREN_ALLOCATOR_SSH_HOSTNAME_TEMPLATE: z.string().min(1).default("{container}"),
+  TANREN_ALLOCATOR_SSH_HOSTNAME_TEMPLATE: emptyToUndefined(z.string().min(1).default("{container}")),
   // Abandoned-run sweep interval. Default 60_000ms.
-  TANREN_ALLOCATOR_SWEEPER_INTERVAL_MS: positiveIntervalMsSchema.default(60_000),
+  TANREN_ALLOCATOR_SWEEPER_INTERVAL_MS: emptyToUndefined(positiveIntervalMsSchema.default(60_000)),
   // Linux capabilities / security-opt the per-run runner container is launched
   // with (comma-separated). Empty parts are filtered downstream.
-  TANREN_RUNNER_CAP_ADD: z.string().default("SYS_ADMIN"),
-  TANREN_RUNNER_SECURITY_OPT: z.string().default("apparmor=unconfined,seccomp=unconfined"),
+  TANREN_RUNNER_CAP_ADD: emptyToUndefined(z.string().default("SYS_ADMIN")),
+  TANREN_RUNNER_SECURITY_OPT: emptyToUndefined(z.string().default("apparmor=unconfined,seccomp=unconfined")),
 });
 
 export type AllocatorEnv = z.infer<typeof envObjectSchema>;
