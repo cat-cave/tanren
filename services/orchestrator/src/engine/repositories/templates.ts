@@ -55,6 +55,14 @@ export interface RegisterTemplateInput {
 export interface TemplateCapabilityQuery {
   // Match templates whose manifest declares this runtime (e.g. "node", "cargo").
   runtime?: string;
+  // Match templates whose manifest declares ANY of these runtimes — the
+  // EQUIVALENCE-EXPANDED form selection uses so a LANGUAGE token (e.g. "ts") never
+  // wrongly excludes its execution RUNTIME (e.g. "node"). When set it SUPERSEDES the
+  // single `runtime` (the SQL ORs over the set); a node-runtime template therefore
+  // matches a `ts/pnpm` project. Empty/absent ⇒ no runtime filter (the `runtime`
+  // field, if any, applies instead). Never wrongly excludes — the contract at
+  // `deriveCapabilityQuery`.
+  runtimeAny?: ReadonlyArray<string>;
   // Match templates whose manifest declares this package manager.
   packageManager?: string;
   // Match templates whose manifest declares this framework.
@@ -165,7 +173,14 @@ export const TemplateStore = {
       params.push(value);
       clauses.push(clause.replace("$?", `$${params.length}`));
     };
-    if (query.runtime !== undefined) add("manifest -> 'capabilities' ->> 'runtime' = $?", query.runtime);
+    // Runtime filter: the EQUIVALENCE-EXPANDED `runtimeAny` (the language→runtime
+    // alias set) wins so a `ts` project matches a `node` template (never wrongly
+    // excludes — templating-system.md §3); a bare `runtime` is the exact-match form.
+    if (query.runtimeAny !== undefined && query.runtimeAny.length > 0) {
+      add("manifest -> 'capabilities' ->> 'runtime' = ANY($?)", [...query.runtimeAny]);
+    } else if (query.runtime !== undefined) {
+      add("manifest -> 'capabilities' ->> 'runtime' = $?", query.runtime);
+    }
     if (query.packageManager !== undefined) {
       add("manifest -> 'capabilities' ->> 'packageManager' = $?", query.packageManager);
     }

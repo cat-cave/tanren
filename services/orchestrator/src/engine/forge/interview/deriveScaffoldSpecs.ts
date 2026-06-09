@@ -31,7 +31,11 @@ import {
   buildScaffoldDescription,
   buildSeedScaffoldAcceptanceCriteria,
   buildSeedScaffoldDescription,
+  MissingLifecycleError,
 } from "./scaffoldAuthoring.js";
+// Re-exported so `derive.ts` sources the scaffold-derivation surface from one
+// module (the lifecycle guard travels with the scaffold authoring it gates).
+export { MissingLifecycleError };
 import type { TemplateSelectionDecision } from "./templateSelection.js";
 import type { CaptureLifecycle } from "./types.js";
 
