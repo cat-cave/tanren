@@ -120,26 +120,25 @@ export interface DeriveResult {
   milestoneIds: string[];
 }
 
-// The foundation scaffold specs are AUTHORED FROM THE CAPTURED LIFECYCLE
+// The foundation scaffold specs are derived FROM THE CAPTURED LIFECYCLE
 // (stack-flexible contract, docs/roadmap/stack-flexible-contract.md) — Tanren
 // bakes in NO stack. The architecture step captures the project's concrete
-// lifecycle (the stack commands behind the conventional justfile targets); the
-// scaffold spec instructs the writer to start from Wave A's bare skeleton and
-// FILL the justfile with those commands, keeping the stable `.tanren/ci.yml` as
-// the lifecycle→`just <target>` map. The hardcoded-pnpm `scaffoldCiConfig.ts`
-// example + the pnpm/turbo/`gh actions` specs are GONE — they were the apex
-// v25/v26 bug (the interview captured the architecture but the scaffold ignored
-// it and baked in Node).
+// lifecycle; the lifecycle is PERSISTED onto the project config (above) so the RUN
+// path MATERIALIZES the contract files (`justfile` + `.tanren/ci.yml`)
+// DETERMINISTICALLY from it (engine/forge/scaffold/contractFiles.ts) — they are
+// NEVER LLM-authored. That is the v27 fix: the LLM writer reliably mangled the
+// ci.yml YAML shape. The hardcoded-pnpm `scaffoldCiConfig.ts` example is GONE (the
+// apex v25/v26 bug — the scaffold ignored the captured architecture and baked in Node).
 //
 // Fixes preserved here (DOMAIN knowledge — not a walker-wide rule):
 //   1. `dependsOnPrev` SERIALIZES the foundation into a chain (`scaffold` is the
 //      sole root; `build` then `deploy` chain off it), so one branch establishes
 //      the authoritative justfile/toolchain on `main` before the next builds on it
 //      (no incompatible-stack races off an empty repo).
-//   2. The `scaffold` spec authors the justfile + the stable ci.yml FROM the
-//      captured lifecycle (no hardcoded stack); the `build`/`deploy` specs route
-//      through the conventional `just build` / `just deploy` targets — never a
-//      hardcoded build/deploy command.
+//   2. The `scaffold` spec's WRITER authors the project CODE (the contract files
+//      are materialized deterministically — it never touches them); the
+//      `build`/`deploy` specs route through the conventional `just build` /
+//      `just deploy` targets — never a hardcoded build/deploy command.
 //   3. The SCAFFOLD BAR is structure + bootstrap/tier-1/build passing — a thorough
 //      test SUITE is NOT required at scaffold (tests arrive with the feature specs).
 interface ScaffoldSpecDef {
@@ -154,10 +153,11 @@ interface ScaffoldSpecDef {
 }
 
 // Build the foundation scaffold specs from the captured lifecycle. The `scaffold`
-// spec is authored from the lifecycle (justfile + stable ci.yml); `build` and
-// `deploy` route through the conventional `just build` / `just deploy` targets the
-// scaffold just established — so the deploy/build paths invoke the PROJECT's
-// declared command, never a hardcoded assumption.
+// spec's writer authors the project CODE (the contract files are MATERIALIZED
+// deterministically by the run, not by the writer); `build` and `deploy` route
+// through the conventional `just build` / `just deploy` targets the materialized
+// contract established — so the deploy/build paths invoke the PROJECT's declared
+// command, never a hardcoded assumption.
 function scaffoldSpecsFor(lifecycle: CaptureLifecycle): ScaffoldSpecDef[] {
   return [
     {
@@ -223,9 +223,10 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
   const capture = InterviewCapture.parse(input.capture);
   const slug = capture.identity?.slug ?? "greenfield-project";
 
-  // The architecture step's lifecycle is LOAD-BEARING + REQUIRED — the scaffold
-  // authors the justfile + ci.yml from it. FAIL LOUD if it is missing (the
-  // stack-flexible contract's core invariant: never silently default to Node).
+  // The architecture step's lifecycle is LOAD-BEARING + REQUIRED — it is persisted
+  // onto the project config and the run MATERIALIZES the justfile + ci.yml from it.
+  // FAIL LOUD if it is missing (the stack-flexible contract's core invariant: never
+  // silently default to Node).
   if (capture.lifecycle === null) throw new MissingLifecycleError();
   const scaffoldSpecs = scaffoldSpecsFor(capture.lifecycle);
 
@@ -282,7 +283,16 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
     });
     repoUrl = repository.repoUrl;
   }
-  const config = { ...baseConfig, ...productVisionConfig(capture), ...preparedDeploy.projectConfig };
+  const config = {
+    ...baseConfig,
+    ...productVisionConfig(capture),
+    // DETERMINISTIC CONTRACT FILES (v27 fix): PERSIST the captured lifecycle onto the
+    // project config so the RUN path materializes the contract files (`.tanren/ci.yml`
+    // + `justfile`) from it — they are NEVER LLM-authored. `CaptureLifecycle` maps 1:1
+    // to `ProjectLifecycle` (same fields). Non-null here (validated above).
+    lifecycle: capture.lifecycle,
+    ...preparedDeploy.projectConfig,
+  };
   const project = await createProject(
     pool,
     {

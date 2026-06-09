@@ -78,6 +78,7 @@ export {
   ProjectConfigV1,
   ProjectConfigVersioned,
   ProjectCredentialRefs,
+  ProjectLifecycle,
   SUPPORTED_PROJECT_CONFIG_VERSIONS,
   defaultProjectConfigV1,
   migrateProjectConfig,

@@ -20,9 +20,9 @@ export function buildInterviewPrompt(context: InterviewAnswererContext): string 
     "",
     // The architecture step is LOAD-BEARING: it must elicit the project's CONCRETE
     // LIFECYCLE for the chosen stack. Tanren knows NO stack — the project DECLARES
-    // it, and the scaffold authors the justfile + .tanren/ci.yml from this. The
-    // `lifecycle` block is the structured output; `architecture` lines are the
-    // human-readable summary.
+    // it, and the run MATERIALIZES the justfile + .tanren/ci.yml from this
+    // deterministically (no LLM authoring of the contract files). The `lifecycle`
+    // block is the structured output; `architecture` lines are the human-readable summary.
     "ARCHITECTURE STEP (load-bearing): once the stack is chosen, capture the project's",
     "concrete LIFECYCLE in `captureDelta.lifecycle` — the ACTUAL stack commands behind",
     "the six conventional justfile targets, for WHATEVER stack the operator picked",

@@ -15,6 +15,7 @@ import { quoteSshShellArg } from "../ssh/command.js";
 import {
   bootstrapWorkspace,
   commitBootstrapState,
+  materializeContractFilesInWorkspace,
   runWorkspaceSshCommand,
   seedWorkspaceLocalIgnore,
 } from "../workspace/index.js";
@@ -98,7 +99,54 @@ export async function prepareRunWorkspace(
   const bootstrapSha = await commitBootstrap({ ssh: input.ssh, target, workspacePath, timeoutMs: input.timeoutMs });
   const baseSha = bootstrapSha === "" ? cloneHeadSha : bootstrapSha;
 
+  // DETERMINISTIC CONTRACT FILES (v27 fix): materialize the `.tanren/ci.yml` +
+  // `justfile` from the project's captured lifecycle and commit them as a REAL
+  // commit ON TOP of the bootstrap base — so they ride into the writer's PR diff
+  // (the bootstrap commit below the base is DROPPED on push; a contract commit ABOVE
+  // it is replayed onto the PR branch). This takes contract-file authoring out of
+  // the LLM writer's hands (it mangled the ci.yml YAML shape on apex v27). Write-iff-
+  // absent (never-clobber): on a later run that re-clones a repo already carrying the
+  // contract files, materialization is a no-op and the commit is `--allow-empty`.
+  await materializeContractFilesCommit(input, target, workspacePath);
+
   return { cloneHeadSha, bootstrapSha, baseSha };
+}
+
+// Materialize the deterministic contract files into the workspace + commit them as a
+// dedicated commit above the bootstrap base, so they become part of the writer's PR
+// diff. No-op when the run carries no contract manifest (the project captured no
+// lifecycle) or on a fake SSH (no bootstrap sha). The files are written iff absent,
+// so a re-clone that already ships them keeps the (possibly writer-enriched) versions
+// and this commit is empty.
+async function materializeContractFilesCommit(
+  input: RunPlannerLoopInput,
+  target: RunnerHandle,
+  workspacePath: string,
+): Promise<void> {
+  const files = input.context.contractFiles;
+  if (files === undefined || files.length === 0) return;
+  const result = await materializeContractFilesInWorkspace({
+    ssh: input.ssh,
+    target,
+    files,
+    workspacePath,
+    timeoutMs: input.timeoutMs,
+  });
+  // Nothing newly written (every file already present) ⇒ no commit needed.
+  if (result.written.length === 0) return;
+  await runWorkspaceSshCommand(input.ssh, target, {
+    label: "commit deterministic contract files",
+    cwd: workspacePath,
+    timeoutMs: input.timeoutMs,
+    command: [
+      "set -eu",
+      // Stage ONLY the contract files (not -A) so this commit carries the contract
+      // and nothing else — the bootstrap commit already absorbed install artifacts.
+      `git add ${result.written.map((p) => quoteSshShellArg(p)).join(" ")}`,
+      "GIT_AUTHOR_DATE='2026-01-01T00:00:00Z' GIT_COMMITTER_DATE='2026-01-01T00:00:00Z' " +
+        `git commit -q -m ${quoteSshShellArg("tanren: project contract files (.tanren/ci.yml + justfile)")}`,
+    ].join(" && "),
+  });
 }
 
 // Clones the target branch and returns the clone HEAD. `git rev-parse HEAD` runs

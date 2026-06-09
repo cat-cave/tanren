@@ -12,3 +12,8 @@ export {
   SKELETON_README,
 } from "./skeleton.js";
 export type { SkeletonFile } from "./skeleton.js";
+// The DETERMINISTIC contract-file projection (v27 fix): the `.tanren/ci.yml` +
+// `justfile` the RUN path materializes verbatim from the captured lifecycle — no
+// LLM authoring of the contract files.
+export { materializeContractFiles, renderLifecycleJustfile } from "./contractFiles.js";
+export type { ContractFile } from "./contractFiles.js";

@@ -50,30 +50,31 @@ const NOVEL_LIFECYCLE: CaptureLifecycle = {
   deploy: "python scripts/publish.py",
 };
 
-describe("buildScaffoldDescription · authors the justfile FROM the captured lifecycle (no hardcoded stack)", () => {
-  it("starts from the bare skeleton and fills the six conventional justfile targets", () => {
+describe("buildScaffoldDescription · narrows the writer to project CODE (contract files materialized)", () => {
+  it("tells the writer the contract files are pre-committed + to leave them alone", () => {
     const desc = buildScaffoldDescription(TS_LIFECYCLE);
-    expect(desc).toMatch(/bare .*skeleton/iu);
+    // v27 fix: the contract files are materialized deterministically, not authored.
+    expect(desc.toLowerCase()).toMatch(/already committed|pre-committed|materialized/u);
     expect(desc).toContain("justfile");
+    expect(desc).toContain(".tanren/ci.yml");
+    // The writer is told NOT to author/re-define the contract files.
+    expect(desc.toLowerCase()).toMatch(/do not author|do not .*re-?define|leave them|intact/u);
+    // The writer's job is the actual project code.
+    expect(desc.toLowerCase()).toContain("project");
+  });
+
+  it("surfaces the lifecycle commands as CONTEXT (so code matches the stack) — no hardcoded stack", () => {
+    const desc = buildScaffoldDescription(TS_LIFECYCLE);
+    // The six conventional targets appear (context for the project code).
     for (const target of ["just bootstrap", "just tier-1", "just tier-2", "just tier-3", "just build", "just deploy"]) {
       expect(desc).toContain(target);
     }
-  });
-
-  it("keeps the .tanren/ci.yml as the stable lifecycle→`just <target>` map, NOT a hardcoded ci.yml body", () => {
-    const desc = buildScaffoldDescription(TS_LIFECYCLE);
-    expect(desc).toContain(".tanren/ci.yml");
-    expect(desc.toLowerCase()).toContain("per_iteration");
-    expect(desc.toLowerCase()).toContain("pre_audit");
-    expect(desc.toLowerCase()).toContain("pre_merge");
-    // The deleted hardcode embedded a full `version: 1\nbootstrap: …` pnpm ci.yml
-    // verbatim. The lifecycle authoring NEVER inlines a ci.yml body or stack into it.
+    // It NEVER inlines a ci.yml body (the deleted hardcode embedded one).
     expect(desc).not.toContain("version: 1\nbootstrap:");
-    // References the test-report convention rather than a baked-in JUnit path.
     expect(desc.toLowerCase()).toContain("test report");
   });
 
-  it("a TS capture yields pnpm commands and ZERO Rust", () => {
+  it("a TS capture surfaces pnpm commands and ZERO Rust", () => {
     const desc = buildScaffoldDescription(TS_LIFECYCLE);
     expect(desc).toContain("ts/pnpm");
     expect(desc).toContain("pnpm install --frozen-lockfile");
@@ -81,7 +82,7 @@ describe("buildScaffoldDescription · authors the justfile FROM the captured lif
     expect(desc).not.toContain("cargo");
   });
 
-  it("a Rust capture yields cargo commands and ZERO pnpm/vitest (no hardcoded stack)", () => {
+  it("a Rust capture surfaces cargo commands and ZERO pnpm/vitest (no hardcoded stack)", () => {
     const desc = buildScaffoldDescription(RUST_LIFECYCLE);
     expect(desc).toContain("rust/cargo");
     expect(desc).toContain("cargo fetch");
@@ -91,7 +92,7 @@ describe("buildScaffoldDescription · authors the justfile FROM the captured lif
     expect(desc).not.toContain("vitest");
   });
 
-  it("a non-code (novel translation) capture yields pandoc/aspell — the contract is fully general", () => {
+  it("a non-code (novel translation) capture surfaces pandoc/aspell — the contract is fully general", () => {
     const desc = buildScaffoldDescription(NOVEL_LIFECYCLE);
     expect(desc).toContain("novel/pandoc");
     expect(desc).toContain("aspell check chapters/*.md");
@@ -101,16 +102,15 @@ describe("buildScaffoldDescription · authors the justfile FROM the captured lif
   });
 });
 
-describe("buildScaffoldAcceptanceCriteria · asserts the contract shape, not a toolchain", () => {
-  it("requires a filled justfile + a stable ci.yml map, with the green bar on bootstrap/tier-1/build", () => {
+describe("buildScaffoldAcceptanceCriteria · asserts the writer's narrowed job, not a toolchain", () => {
+  it("requires real project code + the contract files left intact, with the green bar on bootstrap/tier-1/build", () => {
     const criteria = buildScaffoldAcceptanceCriteria(RUST_LIFECYCLE);
     const joined = criteria.join("\n");
-    // The justfile fills the conventional targets (no STUB remains).
-    expect(joined).toContain("bootstrap/tier-1/tier-2/tier-3/build/deploy");
+    // The writer's job is real project code for the declared stack.
     expect(joined).toContain("rust/cargo");
-    // The ci.yml is the lifecycle→`just <target>` map.
+    // The contract files are materialized — the writer leaves them intact.
     expect(joined).toContain(".tanren/ci.yml");
-    expect(joined).toContain("just tier-1");
+    expect(joined.toLowerCase()).toMatch(/materialized|intact|never the contract/u);
     // The green bar is bootstrap/tier-1/build — NOT the test tier.
     const greenCriterion = criteria.find((c) => /each exits 0|are green/u.test(c));
     expect(greenCriterion).toBeDefined();
