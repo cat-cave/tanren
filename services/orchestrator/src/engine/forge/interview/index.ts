@@ -13,6 +13,7 @@ export {
   type InterviewEngineDeps,
   type RunRoundInput,
   type RunRoundResult,
+  type LifecycleDriftNotice,
   type DeriveFromCaptureInput,
   type DeriveResult,
 } from "./engine.js";
@@ -33,7 +34,7 @@ export {
 
 export { wrapProviderInterviewAnswerer, type WrapProviderInterviewAnswererOptions } from "./providerAnswerer.js";
 export { buildInterviewPrompt } from "./prompt.js";
-export { mergeCapture } from "./capture.js";
+export { mergeCapture, resolveLifecycle, type LifecycleResolution } from "./capture.js";
 export {
   buildScaffoldDescription,
   buildScaffoldAcceptanceCriteria,
