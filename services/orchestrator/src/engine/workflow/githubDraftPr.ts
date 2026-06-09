@@ -210,7 +210,13 @@ export async function publishDraftPullRequestForRun(
     // the autonomous loop does (not always `default_branch`).
     targetBranch: context.speculativeBase ?? context.defaultBranch,
     runBranch: context.branch,
-    title: input.title ?? `Tanren: ${context.specTitle}`,
+    // GitHub rejects an EMPTY PR title with 422 (`missing_field: title`) — proven live
+    // on apex v31. `??` does NOT catch an empty string, so an empty `input.title` (a
+    // deploy spec resolved one) flowed straight through. Coalesce on BLANK (trim), and
+    // end on a spec-id fallback that is structurally never empty.
+    title:
+      (input.title?.trim() ? input.title.trim() : undefined) ??
+      (context.specTitle?.trim() ? `Tanren: ${context.specTitle.trim()}` : `Tanren change ${context.specId}`),
     body: input.body ?? context.specDescription,
     githubCredentialRef: input.githubCredentialRef,
     projectConfig: context.projectConfig,

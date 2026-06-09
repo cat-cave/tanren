@@ -57,7 +57,11 @@ export class GitHubPullRequestService {
         return await this.reuseExistingPullRequest(input, afterRace);
       }
     }
-    throw new Error(`GitHub draft PR creation failed: HTTP ${created.status}`);
+    // Surface GitHub's response body (errors/message), never just the status: a 422 that
+    // is NOT "already exists" (e.g. apex v31's empty-title `missing_field`) is otherwise
+    // invisible — the swallowed body sent the v31 diagnosis down a wrong path.
+    const detail = created.body === undefined ? "(no body)" : JSON.stringify(created.body).slice(0, 400);
+    throw new Error(`GitHub draft PR creation failed: HTTP ${created.status} — ${detail}`);
   }
 
   /**
