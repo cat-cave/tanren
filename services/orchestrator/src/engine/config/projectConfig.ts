@@ -62,6 +62,29 @@ export const ProjectProductVision = z
   .strict();
 export type ProjectProductVision = z.infer<typeof ProjectProductVision>;
 
+// Tanren-native templating (wave 3) — the SEED REFERENCE recorded on a project
+// whose greenfield scaffold SEEDED from a validated template (templating-system.md
+// §3). Persisted here (not a new table), so the decision is OBSERVABLE on the
+// project config and the run path can clone the template repo's conforming files as
+// the scaffold base. Present ONLY when a template was selected (strong/partial
+// match); ABSENT on the from-scratch path (no match / blocked — the apex default).
+// `validatedAt`/`validatedSha` capture the proof the template was selected on
+// (durable evidence the seed came from a PROVEN template, not a hand-waved one).
+export const ProjectTemplateRef = z
+  .object({
+    // The selected template's registry id (the `templates.id`).
+    templateRef: z.string().min(1),
+    // The template repo the seed cloned its conforming files from.
+    repoRef: z.string().min(1),
+    // When the template's validationProof was last produced (ISO-8601) — the proof
+    // the seed was selected on.
+    validatedAt: z.string().min(1),
+    // The exact template-repo commit the proof was produced against.
+    validatedSha: z.string().min(1),
+  })
+  .strict();
+export type ProjectTemplateRef = z.infer<typeof ProjectTemplateRef>;
+
 // The project's CONCRETE LIFECYCLE — the captured stack commands behind the six
 // conventional justfile targets (stack-flexible contract,
 // docs/roadmap/stack-flexible-contract.md). Persisted here so the RUN path can
@@ -227,6 +250,12 @@ export const ProjectConfigV1 = z
     // Optional: absent ⇒ no captured lifecycle (a brownfield/HTTP project that
     // already ships its own contract files — no materialization).
     lifecycle: ProjectLifecycle.optional(),
+    // TEMPLATING WAVE 3: the seed reference when the greenfield scaffold SEEDED from
+    // a validated template (see `ProjectTemplateRef`, templating-system.md §3).
+    // Persisted so the decision is observable + the run path can clone the
+    // template's conforming files as the scaffold base. Optional: absent ⇒ the
+    // from-scratch path (no template matched — the apex default).
+    templateRef: ProjectTemplateRef.optional(),
   })
   .strict();
 export type ProjectConfigV1 = z.infer<typeof ProjectConfigV1>;

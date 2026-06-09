@@ -43,3 +43,28 @@ export {
   DEFAULT_TS_MUTATION_SEED_PATH,
 } from "./negativeControls.js";
 export { ScratchCopyError } from "./scratchCopy.js";
+// WAVE 4 — the CREATION META-DAG: `createTemplate(request)` runs research → author
+// → build → validate → publish, REUSING the loop (deriveProductGraph + the
+// DagWalker, via the build-driver seam) + the wave-2 harness + the wave-1 registry,
+// and publishes ONLY a template whose `templateValidates(proof)` is true (the
+// fail-closed gate). Plus the no-match auto-trigger hook selection calls.
+export {
+  type BuiltTemplate,
+  type CreateTemplateDeps,
+  type CreateTemplateResult,
+  type NoMatchDecision,
+  type ResearchedLifecycle,
+  type ResearchedTooling,
+  type TemplateBuildDriver,
+  TemplateBuildFailedError,
+  type TemplateCreationRequest,
+  type TemplateResearch,
+  type TemplateResearcher,
+  TemplateValidationFailedError,
+  UngroundedResearchError,
+  assertGroundedResearch,
+  authorTemplateBuildCapture,
+  capabilitiesFor,
+  createTemplate,
+  maybeCreateTemplateForNoMatch,
+} from "./creation/index.js";

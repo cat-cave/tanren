@@ -5,6 +5,9 @@
 //   GET  /:orgId/templates/:templateId     → one template (own or official)
 //   POST /:orgId/templates                  register a template (parse manifest →
 //                                            persist; draft unless validated)
+//   POST /:orgId/templates/create           trigger the creation meta-DAG (wave 4)
+//                                            research→build→validate→publish; mounted
+//                                            only when the live flow is injected
 //   PATCH /:orgId/templates/:templateId/status  transition the lifecycle tier
 //
 // Enough for an operator to inspect/register templates + for later waves (the
@@ -40,12 +43,37 @@ import {
   parseTemplateManifest,
 } from "../../engine/templates/manifest.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
+import {
+  type CreateTemplateResult,
+  type TemplateCreationRequest,
+  TemplateValidationFailedError,
+  UngroundedResearchError,
+} from "../../engine/templates/index.js";
 import { actorCanAccessOrg, actorIsOrgAdmin } from "../orgs/access.js";
+
+// The CREATION META-FLOW trigger seam (wave 4). The route accepts a capability
+// request + invokes this to run research → author → build → validate → publish.
+// It is injected (not built inline) because the live flow needs the run-path
+// infra (the research seam, the build driver over the DagWalker, the derive
+// repo/deploy plumbing) `buildApp` assembles — the same pattern as the Forge
+// answerer factories. When omitted, the create endpoint is not mounted (a 501
+// would be a half-truth; the operator API simply does not advertise it without
+// the live infra wired). A throw from the flow surfaces as a LOUD response — a
+// failed validation is a 422, never a silent publish.
+export type CreateTemplateFlow = (input: {
+  orgId: string;
+  actor: ActorContext;
+  request: TemplateCreationRequest;
+}) => Promise<CreateTemplateResult>;
 
 export interface TemplateRoutesOptions {
   // The request-org-scoping pool (mountFeatureRoutes' `scopedPool`): each `.query`
   // runs inside the request's org scope, so RLS bounds every read/write.
   pool: pg.Pool;
+  // The creation meta-flow trigger (wave 4). Omitted ⇒ the POST .../create
+  // endpoint is not mounted (the registry CRUD still works); supplied ⇒ an
+  // operator can trigger research→build→validate→publish.
+  createTemplateFlow?: CreateTemplateFlow;
 }
 
 const TemplateStatusBody = z.enum(["draft", "validated", "degraded", "official"]);
@@ -62,6 +90,25 @@ const RegisterBody = z
   .strict();
 
 const StatusBody = z.object({ status: TemplateStatusBody }).strict();
+
+// The creation request body (wave 4) — the capability-shaped ask the meta-flow
+// researches + builds + validates + publishes a template for. The SAME capability
+// vocabulary the registry/selection query by, so a no-match query maps straight
+// onto a creation request. STACK-AGNOSTIC: `stack`/`runtime`/`packageManager` are
+// opaque labels Tanren never branches on.
+const CreateRequestBody = z
+  .object({
+    stack: z.string().min(1).max(120),
+    runtime: z.string().min(1).max(80),
+    packageManager: z.string().min(1).max(80),
+    framework: z.string().min(1).max(80).optional(),
+    deployTarget: z.string().min(1).max(80).optional(),
+    bdd: z.boolean().optional(),
+    mutation: z.boolean().optional(),
+    channel: z.enum(["lts", "nightly"]).optional(),
+    note: z.string().max(2000).optional(),
+  })
+  .strict();
 
 // The capability query string params selection filters on (templating-system.md
 // §3) — runtime/pkg-mgr/framework/deploy-target + channel + status.
@@ -132,6 +179,41 @@ export function createTemplateRoutes(options: TemplateRoutesOptions) {
     );
     return c.json({ template }, 201);
   });
+
+  // CREATION META-DAG trigger (wave 4): research → author → build → validate →
+  // publish. Mounted ONLY when the live flow is injected. The flow PUBLISHES only a
+  // template whose validation proof passes (the fail-closed gate inside
+  // `createTemplate`); a failed validation throws → surfaced here as a LOUD 422
+  // (the proof attached), NEVER a publish. Admin-only (it spends real credits +
+  // registers an org template).
+  if (options.createTemplateFlow !== undefined) {
+    const createFlow = options.createTemplateFlow;
+    app.post("/:orgId/templates/create", async (c) => {
+      const orgId = c.req.param("orgId");
+      if (!writeGuard(c, orgId)) return c.json({ error: "org_access_denied" }, 403);
+      const actor = c.var.actor;
+      if (actor === undefined) return c.json({ error: "org_access_denied" }, 403);
+      const parsed = CreateRequestBody.safeParse(await c.req.json().catch(() => {}));
+      if (!parsed.success) return c.json({ error: "invalid_create_request", issues: parsed.error.issues }, 400);
+      const request: TemplateCreationRequest = { ...parsed.data };
+      try {
+        const result = await createFlow({ orgId, actor, request });
+        return c.json(
+          { template: result.template, projectId: result.projectId, researchSources: result.researchSources },
+          201,
+        );
+      } catch (error) {
+        // The fail-closed gate: a template that did not validate is NEVER published.
+        if (error instanceof TemplateValidationFailedError) {
+          return c.json({ error: "template_validation_failed", message: error.message, proof: error.proof }, 422);
+        }
+        if (error instanceof UngroundedResearchError) {
+          return c.json({ error: "template_research_ungrounded", message: error.message }, 422);
+        }
+        throw error;
+      }
+    });
+  }
 
   app.patch("/:orgId/templates/:templateId/status", async (c) => {
     const orgId = c.req.param("orgId");

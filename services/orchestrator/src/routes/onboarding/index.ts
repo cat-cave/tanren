@@ -23,7 +23,9 @@
 import { Hono } from "hono";
 import type pg from "pg";
 import { z } from "zod";
+import { runWithOrgScope } from "@tanren/db";
 import type { ActorContext } from "../../auth/schemas.js";
+import { TemplateStore } from "../../engine/repositories/index.js";
 import type { SecretStore } from "../../engine/contracts/secretStore.js";
 import type { VcsProvider } from "../../engine/contracts/vcsProvider.js";
 import { ensureIssuesInboxSource } from "../../engine/forge/inbox/index.js";
@@ -167,6 +169,16 @@ export function createOnboardingRoutes(options: OnboardingRoutesOptions) {
             }),
           ...(parsed.data.autonomy === undefined ? {} : { autonomy: parsed.data.autonomy }),
           ...(parsed.data.deploy === undefined ? {} : { deploy: parsed.data.deploy }),
+          // TEMPLATING WAVE 3 (templating-system.md §3): the ORG-SCOPED template
+          // registry query. Each call opens a short `runWithOrgScope` so RLS bounds
+          // the candidates to THIS org's own templates PLUS the cross-org `official`
+          // catalogue — an off-scope template is never even a candidate. Today the
+          // registry is empty (the creation wave is later), so selection resolves to
+          // "no match → from-scratch" — the EXPECTED live default.
+          templateRegistryQuery: (query, queryActor) =>
+            runWithOrgScope(options.pool, orgId, (client) =>
+              TemplateStore.listByCapabilities(client, query, queryActor),
+            ),
         },
       );
       if (result.repository === undefined) {

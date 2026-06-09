@@ -24,6 +24,7 @@ import { mergeCapture } from "./capture.js";
 import type { CreatedRepository, CreateRepositoryInput } from "../../contracts/vcsProvider.js";
 import { deriveProductGraph, type DeriveResult } from "./derive.js";
 import type { DeployPreflightCallback, GreenfieldDeployDependency, PrepareDeployCallback } from "./deployDependency.js";
+import type { TemplateRegistryQuery } from "./templateSelection.js";
 import {
   DEFAULT_TOTAL_ROUNDS,
   InterviewCapture,
@@ -104,6 +105,11 @@ export interface DeriveFromCaptureInput {
   // `human` keeps the schema's safe defaults. Threaded into `deriveProductGraph`.
   autonomy?: "auto" | "simulated" | "human";
   deploy?: GreenfieldDeployDependency;
+  // TEMPLATING WAVE 3 — the org-scoped template-registry query (templating-system.md
+  // §3). When present, the derive SELECTS a validated template to seed from before
+  // authoring the scaffold; absent ⇒ the from-scratch path (the current live default).
+  templateRegistryQuery?: TemplateRegistryQuery;
+  templateChannelPreference?: "lts" | "nightly";
 }
 
 export async function deriveFromCapture(
@@ -123,6 +129,10 @@ export async function deriveFromCapture(
     ...(input.createRepository === undefined ? {} : { createRepository: input.createRepository }),
     ...(input.autonomy === undefined ? {} : { autonomy: input.autonomy }),
     ...(input.deploy === undefined ? {} : { deploy: input.deploy }),
+    ...(input.templateRegistryQuery === undefined ? {} : { templateRegistryQuery: input.templateRegistryQuery }),
+    ...(input.templateChannelPreference === undefined
+      ? {}
+      : { templateChannelPreference: input.templateChannelPreference }),
     ...(deps.preflightDeploy === undefined ? {} : { preflightDeploy: deps.preflightDeploy }),
     ...(deps.prepareDeploy === undefined ? {} : { prepareDeploy: deps.prepareDeploy }),
   });
