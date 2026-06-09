@@ -133,4 +133,40 @@ describe("gate routing in the subtask loop", () => {
     expect(outcome.kind).toBe("passed");
     expect(events.events.some((e) => e.eventType.startsWith("gate."))).toBe(false);
   });
+
+  it("appends the failed step's outputTail to the writer-rework feedback (§7.4)", async () => {
+    // A per_iteration fail whose failed step carries the gate's real error output:
+    // the NEXT writer prompt (the rework) must surface that output so the writer
+    // fixes the actual error instead of re-running the gate to rediscover it.
+    const outputTail = "src/x.ts(3,1): error TS2304: Cannot find name 'foo'.";
+    const failWithOutput: GateOutcome = {
+      passed: false,
+      results: [],
+      failure: {
+        passed: false,
+        tier: "fast",
+        when: "per_iteration",
+        failedStep: "typecheck",
+        exitCode: 2,
+        steps: [{ name: "typecheck", run: "just typecheck", exitCode: 2, passed: false, timedOut: false, outputTail }],
+      },
+    };
+    const { runGate } = scriptedGate([failWithOutput, passGate, passGate]);
+    const writer = makeWriter(["one\n", "two\n"]);
+    const { input } = defaultLoopInput({
+      runGate,
+      adapters: {
+        ...defaultLoopInput().input.adapters,
+        writer,
+        checker: makeChecker([completeCheck]),
+        auditor: makeAuditor([cleanAudit]),
+      },
+    });
+    const outcome = await runSubtaskLoop(input);
+    expect(outcome.kind).toBe("passed");
+    // The SECOND writer call (the rework) carries the failed step's output.
+    expect(writer.calls).toHaveLength(2);
+    expect(writer.calls[1]!.prompt).toContain(outputTail);
+    expect(writer.calls[1]!.prompt).toContain("Gate output");
+  });
 });

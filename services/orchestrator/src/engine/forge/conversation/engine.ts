@@ -181,13 +181,16 @@ async function runAnswererLoop(deps: ForgeConversationDeps, input: AnswererLoopI
     }
   }
 
-  // Round budget spent without a final: ask once more; the answerer must commit.
+  // Round budget spent without a final: ask once more with the TERMINAL `finalize`
+  // hint (§7.10) so the prompt tells the model it MUST commit now + stops offering
+  // tools — no more burning the last call on a tool request it can't run.
   const finalStep = await deps.answerer.respond({
     question: input.question,
     history: input.history,
     projectId: input.projectId,
     runId: input.runId,
     toolResults,
+    finalize: true,
   });
   if (finalStep.kind === "final") {
     return { answer: finalStep.answer, toolResults };

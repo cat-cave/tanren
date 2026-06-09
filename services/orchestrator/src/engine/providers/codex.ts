@@ -9,6 +9,8 @@ import { findOpenRouterGenerationId, foldGenerationId } from "./openRouterGenera
 import { findTokenUsageBounded } from "./findTokenUsage.js";
 import { captureBaselineSha, captureGitStateAfterCodex } from "./codexGit.js";
 import { buildCodexAnswererExecCommand, buildCodexExecCommand } from "./codexExecCommand.js";
+import { parseWithOneSchemaRepair } from "./answererRepair.js";
+import { AnswererSchemaValidationError } from "./answererSchemaError.js";
 
 // Re-exported from codexExecCommand.ts (split out to keep this adapter under the
 // 500-line cap) so existing importers (and the command-builder tests) are stable.
@@ -63,12 +65,9 @@ export interface CodexAnswererTelemetry extends CodexEventTelemetry {
   schemaName: string;
 }
 
-export class AnswererSchemaValidationError extends Error {
-  constructor(schemaName: string, message: string) {
-    super(`Answerer response failed ${schemaName} validation: ${message}`);
-    this.name = "AnswererSchemaValidationError";
-  }
-}
+// Re-exported from answererSchemaError.ts (split out to break the import cycle with
+// answererRepair.ts) so existing `from "./codex.js"` importers stay stable.
+export { AnswererSchemaValidationError };
 
 export function createCodexWriter(dependencies: CodexWriterDependencies): WriterAdapter {
   return {
@@ -198,54 +197,71 @@ export function createCodexAnswerer<TOutput>(dependencies: CodexAnswererDependen
         opts.outputSchema.jsonSchema,
         opts.timeoutMs,
       );
-      const result = await dependencies.ssh.run(dependencies.target, {
-        command: buildCodexAnswererExecCommand({
-          codexHome: auth.CODEX_HOME,
-          workspace,
-          schemaPath,
-          outputPath,
-          managed: auth.managed,
-          nativeApiKeyEnvFile: auth.nativeApiKeyEnvFile,
-        }),
-        stdin: opts.prompt,
-        timeoutMs: opts.timeoutMs,
-      });
-      const telemetry = parseCodexJsonlTelemetry(result.stdout);
-      // Surface this call's per-call token usage for the cost path (lastTokenUsage).
-      lastTokenUsage = telemetry.tokenUsage;
-      // Only the BYOK bundle path has a rotating token — managed / BYOK api_key
-      // auth is a static key, so skip the write-back (mirrors the writer path).
-      if (auth.bundleAuth) {
-        await persistRefreshedCodexAuth({
-          secrets: dependencies.secrets,
-          ssh: dependencies.ssh,
-          target: dependencies.target,
-          ref: dependencies.credentialRef,
-          codexHome: auth.CODEX_HOME,
+      // Run one codex answerer exec for `prompt` and return the captured response
+      // file text — closed over so the schema-repair pass can re-run it once with a
+      // repair prompt. Each invocation refreshes lastTokenUsage + auth write-back.
+      const runOnce = async (prompt: string): Promise<string> => {
+        const result = await dependencies.ssh.run(dependencies.target, {
+          command: buildCodexAnswererExecCommand({
+            codexHome: auth.CODEX_HOME,
+            workspace,
+            schemaPath,
+            outputPath,
+            managed: auth.managed,
+            nativeApiKeyEnvFile: auth.nativeApiKeyEnvFile,
+          }),
+          stdin: prompt,
+          timeoutMs: opts.timeoutMs,
+        });
+        const telemetry = parseCodexJsonlTelemetry(result.stdout);
+        // Surface this call's per-call token usage for the cost path (lastTokenUsage).
+        lastTokenUsage = telemetry.tokenUsage;
+        // Only the BYOK bundle path has a rotating token — managed / BYOK api_key
+        // auth is a static key, so skip the write-back (mirrors the writer path).
+        if (auth.bundleAuth) {
+          await persistRefreshedCodexAuth({
+            secrets: dependencies.secrets,
+            ssh: dependencies.ssh,
+            target: dependencies.target,
+            ref: dependencies.credentialRef,
+            codexHome: auth.CODEX_HOME,
+            timeoutMs: Math.min(opts.timeoutMs, 30_000),
+          });
+        }
+        if (result.timedOut) {
+          throw new Error(`Codex Answerer timed out for schema ${opts.outputSchema.name}`);
+        }
+        if (telemetry.usageLimit !== undefined) {
+          throw new CodexUsageLimitError(opts.outputSchema.name, telemetry.usageLimit.message);
+        }
+        if (result.failure !== undefined || result.exitCode !== 0) {
+          throw new Error(
+            `Codex Answerer failed for schema ${opts.outputSchema.name}: exit ${result.exitCode ?? "unknown"}` +
+              `${result.failure === undefined ? "" : ` failure=${result.failure}`}` +
+              ` | stderr: ${harnessOutputTail(result.stderr)} | stdout: ${harnessOutputTail(result.stdout)}`,
+          );
+        }
+        const response = await dependencies.ssh.run(dependencies.target, {
+          command: `cat ${quoteSshShellArg(outputPath)}`,
           timeoutMs: Math.min(opts.timeoutMs, 30_000),
         });
-      }
-      if (result.timedOut) {
-        throw new Error(`Codex Answerer timed out for schema ${opts.outputSchema.name}`);
-      }
-      if (telemetry.usageLimit !== undefined) {
-        throw new CodexUsageLimitError(opts.outputSchema.name, telemetry.usageLimit.message);
-      }
-      if (result.failure !== undefined || result.exitCode !== 0) {
-        throw new Error(
-          `Codex Answerer failed for schema ${opts.outputSchema.name}: exit ${result.exitCode ?? "unknown"}` +
-            `${result.failure === undefined ? "" : ` failure=${result.failure}`}` +
-            ` | stderr: ${harnessOutputTail(result.stderr)} | stdout: ${harnessOutputTail(result.stdout)}`,
-        );
-      }
-      const response = await dependencies.ssh.run(dependencies.target, {
-        command: `cat ${quoteSshShellArg(outputPath)}`,
-        timeoutMs: Math.min(opts.timeoutMs, 30_000),
+        if (response.exitCode !== 0 || response.failure !== undefined || response.timedOut) {
+          throw new Error(`Codex Answerer response capture failed for schema ${opts.outputSchema.name}`);
+        }
+        return response.stdout;
+      };
+      const firstRawText = await runOnce(opts.prompt);
+      // ONE bounded schema-repair pass (apex pre-run §7.1): a malformed-then-valid
+      // answer repairs in a single cheap re-call instead of throwing the stage (or,
+      // for the auditor, becoming a synthetic P0 that drives a FULL loop iteration).
+      // A second miss throws LOUD. Behavior is unchanged for a well-formed answer.
+      return parseWithOneSchemaRepair({
+        schema: opts.outputSchema,
+        parse: (rawText) => parseStructuredAnswererOutput(rawText, opts.outputSchema),
+        firstRawText,
+        originalPrompt: opts.prompt,
+        rerun: runOnce,
       });
-      if (response.exitCode !== 0 || response.failure !== undefined || response.timedOut) {
-        throw new Error(`Codex Answerer response capture failed for schema ${opts.outputSchema.name}`);
-      }
-      return parseStructuredAnswererOutput(response.stdout, opts.outputSchema, telemetry);
     },
   };
 }

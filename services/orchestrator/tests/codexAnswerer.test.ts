@@ -150,6 +150,47 @@ describe("Codex Answerer adapter", () => {
     ).rejects.toBeInstanceOf(CodexUsageLimitError);
   });
 
+  it("repairs a malformed-then-valid answer in ONE bounded re-call (no stage throw, no synthetic P0)", async () => {
+    // First exec → invalid JSON in the response file; the schema-repair pass re-asks
+    // ONCE and the second response file is a valid CheckAnswer — runAnswerer resolves.
+    const valid = JSON.stringify({ done: true, reason: "ok", suggested_fixes: null });
+    // Command sequence: materialize (mkdir + write) + schema write, then per runOnce
+    // the exec stdout, the auth.json write-back read, and the response-file cat. The
+    // FIRST response is invalid JSON → ONE repair re-call → the SECOND is valid.
+    const ssh = new ScriptedSsh([
+      ok(""),
+      ok(""),
+      ok(""),
+      ok('{"type":"done"}\n'),
+      ok(authJson),
+      ok("not valid json {"),
+      ok('{"type":"done"}\n'),
+      ok(authJson),
+      ok(valid),
+    ]);
+    const secrets = new InMemorySecretStore();
+    await secrets.put({ ref: "credential/codex/dev", value: authJson });
+
+    const answerer = createCodexAnswerer<CheckAnswer>({
+      secrets,
+      ssh,
+      target,
+      credentialRef: "credential/codex/dev",
+      runId: "run_codex_repair",
+    });
+    const result = await answerer.runAnswerer({
+      prompt: "judge this diff",
+      timeoutMs: 1000,
+      outputSchema: checkAnswerSchema,
+    });
+    expect(result.done).toBe(true);
+    // The repair exec re-sends the original prompt + the schema error + a re-emit ask.
+    const execInputs = ssh.commands.map((c) => c.command.stdin).filter((s): s is string => typeof s === "string");
+    const repairStdin = execInputs.at(-1) ?? "";
+    expect(repairStdin).toContain("FAILED SCHEMA VALIDATION");
+    expect(repairStdin).toContain("judge this diff");
+  });
+
   it("turns invalid JSON and nonconforming output into hard schema failures", () => {
     expect(() => parseStructuredAnswererOutput("{", checkAnswerSchema)).toThrow(AnswererSchemaValidationError);
     expect(() =>

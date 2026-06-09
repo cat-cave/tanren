@@ -63,14 +63,19 @@ describe("Repositories conformance: forge/recovery (in-memory pg)", () => {
       expect(await repos.discovery.setSpecMetadata(clientA(d), "spec_missing", "{}", systemActor)).toBe(false);
     });
 
-    it("lists existing specs ordered by title", async () => {
+    it("lists existing specs bounded: active (non-terminal) first, then by recency (§7.5)", async () => {
       const d = db();
-      seedSpec(d, { spec_id: "s2", title: "Beta", status: "draft" });
-      seedSpec(d, { spec_id: "s1", title: "Alpha", status: "active" });
+      // Insertion order: an old merged, a newer merged, then an active in_flight.
+      seedSpec(d, { spec_id: "s_old", title: "Zeta", status: "merged" });
+      seedSpec(d, { spec_id: "s_new", title: "Beta", status: "merged" });
+      seedSpec(d, { spec_id: "s_active", title: "Alpha", status: "in_flight" });
       const rows = await repos.discovery.listExistingSpecs(clientA(d), "project_a", systemActor);
+      // Active first; then terminal specs most-recent (insertion order) first — NOT
+      // title-ordered (Alpha leads because it is active, not because of its title).
       expect(rows).toEqual([
-        { specId: "s1", title: "Alpha", status: "active" },
-        { specId: "s2", title: "Beta", status: "draft" },
+        { specId: "s_active", title: "Alpha", status: "in_flight" },
+        { specId: "s_new", title: "Beta", status: "merged" },
+        { specId: "s_old", title: "Zeta", status: "merged" },
       ]);
     });
 

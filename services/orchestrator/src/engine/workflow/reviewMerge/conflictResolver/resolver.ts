@@ -84,6 +84,13 @@ export interface IntentPreservingResolverDeps {
 export function buildIntentPreservingConflictResolver(deps: IntentPreservingResolverDeps): ConflictResolverHook {
   return async (context: ConflictContext): Promise<{ resolved: boolean }> => {
     const gathered = await deps.applier.gather();
+    // Empty-gather short-circuit (apex pre-run §7.2): a CLEAN rebase records no
+    // conflicted files — there is genuinely nothing to resolve. Don't invoke the
+    // model or the decide core (an empty `resolve` would fail the cross-field
+    // invariant); the merge dispatcher retries through the now-clean up-to-date path.
+    if (gathered.files.length === 0) {
+      return { resolved: false };
+    }
     const conflictedPaths = gathered.files.map((f) => f.path);
     const provenance = await deps.provenance.read({
       projectId: deps.projectId,
