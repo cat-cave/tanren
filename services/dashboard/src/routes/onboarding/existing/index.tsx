@@ -26,7 +26,14 @@ import { loadShellContext, renderShell, type ShellDeps } from "../../../app/moun
 import type { ShellContext } from "../../../app/shell.js";
 import { ExistingFullBody } from "../../../components/onboarding/existing/ExistingFullBody.js";
 
-const GITHUB_APP_URL = process.env["TANREN_GITHUB_APP_URL"] ?? "https://github.com/apps/tanren/installations/new";
+/**
+ * The CANONICAL GitHub App install URL env name (`TANREN_GITHUB_APP_INSTALL_URL`,
+ * shared with the orchestrator; the old `TANREN_GITHUB_APP_URL` name is deleted).
+ * LOCAL FALLBACK only — the dashboard prefers the value the orchestrator publishes
+ * on `/auth/providers` (one source of truth); see `resolveGithubAppUrl`.
+ */
+const GITHUB_APP_URL_FALLBACK =
+  process.env["TANREN_GITHUB_APP_INSTALL_URL"] ?? "https://github.com/apps/tanren/installations/new";
 
 function brownfieldClient(c: Context, deps: ShellDeps): ExistingBrownfieldClient {
   return new ExistingBrownfieldClient({
@@ -40,6 +47,11 @@ function orchestratorClient(c: Context, deps: ShellDeps): OrchestratorClient {
     orchestratorUrl: deps.orchestratorUrl,
     cookieHeader: c.req.header("cookie"),
   });
+}
+
+/** Prefer the orchestrator-published App install URL over the local env fallback. */
+async function resolveGithubAppUrl(c: Context, deps: ShellDeps): Promise<string> {
+  return (await orchestratorClient(c, deps).authGithubAppInstallUrl()) ?? GITHUB_APP_URL_FALLBACK;
 }
 
 function parseReport(raw: unknown): ReconReport | undefined {
@@ -59,10 +71,11 @@ export function mountExistingBrownfield(app: Hono, deps: ShellDeps): void {
   // Step 1 entry (GET): the minimal link form (reused) inside the full shell.
   app.get("/onboarding/existing", async (c) => {
     const ctx = await loadShellContext(c, deps, { activeNavId: "onb-exist" });
+    const githubAppUrl = await resolveGithubAppUrl(c, deps);
     return render(
       c,
       ctx,
-      <ExistingFullBody step={1} orgLogin={ctx.org?.login ?? "your org"} githubAppUrl={GITHUB_APP_URL} />,
+      <ExistingFullBody step={1} orgLogin={ctx.org?.login ?? "your org"} githubAppUrl={githubAppUrl} />,
     );
   });
 
@@ -85,10 +98,11 @@ export function mountExistingBrownfield(app: Hono, deps: ShellDeps): void {
     if (phase === "open-pr") return handleOpenPr(c, ctx, deps, form);
     if (phase === "seed") return handleSeed(c, ctx, deps, form);
     if (phase === "governance") return handleGovernance(c, ctx, deps, form);
+    const githubAppUrl = await resolveGithubAppUrl(c, deps);
     return render(
       c,
       ctx,
-      <ExistingFullBody step={1} orgLogin={ctx.org?.login ?? "your org"} githubAppUrl={GITHUB_APP_URL} />,
+      <ExistingFullBody step={1} orgLogin={ctx.org?.login ?? "your org"} githubAppUrl={githubAppUrl} />,
     );
   });
 }
@@ -97,13 +111,14 @@ export function mountExistingBrownfield(app: Hono, deps: ShellDeps): void {
 async function handleLink(c: Context, ctx: ShellContext, deps: ShellDeps, form: Record<string, unknown>) {
   const orgLogin = ctx.org?.login ?? "your org";
   const orgId = ctx.org?.id;
+  const githubAppUrl = await resolveGithubAppUrl(c, deps);
   const repoUrl = String(form["repoUrl"] ?? "").trim();
   const name = String(form["name"] ?? "").trim() || repoUrl.split("/").pop() || "linked-project";
   const linkError = (error: string, linked?: { repoUrl: string; files: BrownfieldDetectedFile[]; projectId: string }) =>
     render(
       c,
       ctx,
-      <ExistingFullBody step={1} orgLogin={orgLogin} githubAppUrl={GITHUB_APP_URL} link={{ error, linked }} />,
+      <ExistingFullBody step={1} orgLogin={orgLogin} githubAppUrl={githubAppUrl} link={{ error, linked }} />,
     );
 
   if (orgId === undefined || repoUrl === "") return linkError("pick a repo first");
@@ -136,7 +151,7 @@ async function handleLink(c: Context, ctx: ShellContext, deps: ShellDeps, form: 
     <ExistingFullBody
       step={2}
       orgLogin={orgLogin}
-      githubAppUrl={GITHUB_APP_URL}
+      githubAppUrl={githubAppUrl}
       projectId={project.projectId}
       repoUrl={repoUrl}
       recon={recon.result}
@@ -148,6 +163,7 @@ async function handleLink(c: Context, ctx: ShellContext, deps: ShellDeps, form: 
 // Generic step advance (2→3, 3→4, 4→5): re-render the next step with the report.
 async function handleAdvance(c: Context, ctx: ShellContext, deps: ShellDeps, form: Record<string, unknown>) {
   const orgLogin = ctx.org?.login ?? "your org";
+  const githubAppUrl = await resolveGithubAppUrl(c, deps);
   const step = Number.parseInt(String(form["step"] ?? "2"), 10) || 2;
   const repoUrl = String(form["repoUrl"] ?? "");
   const report = parseReport(form["report"]);
@@ -159,7 +175,7 @@ async function handleAdvance(c: Context, ctx: ShellContext, deps: ShellDeps, for
     <ExistingFullBody
       step={next}
       orgLogin={orgLogin}
-      githubAppUrl={GITHUB_APP_URL}
+      githubAppUrl={githubAppUrl}
       projectId={projectId}
       repoUrl={repoUrl}
       report={report}
@@ -171,6 +187,7 @@ async function handleAdvance(c: Context, ctx: ShellContext, deps: ShellDeps, for
 async function handleOpenPr(c: Context, ctx: ShellContext, deps: ShellDeps, form: Record<string, unknown>) {
   const orgLogin = ctx.org?.login ?? "your org";
   const orgId = ctx.org?.id;
+  const githubAppUrl = await resolveGithubAppUrl(c, deps);
   const repoUrl = String(form["repoUrl"] ?? "");
   const report = parseReport(form["report"]);
   const posture = postureFromForm(form);
@@ -183,7 +200,7 @@ async function handleOpenPr(c: Context, ctx: ShellContext, deps: ShellDeps, form
       <ExistingFullBody
         step={3}
         orgLogin={orgLogin}
-        githubAppUrl={GITHUB_APP_URL}
+        githubAppUrl={githubAppUrl}
         projectId={projectId}
         repoUrl={repoUrl}
         report={report}
@@ -215,6 +232,7 @@ async function handleOpenPr(c: Context, ctx: ShellContext, deps: ShellDeps, form
 async function handleSeed(c: Context, ctx: ShellContext, deps: ShellDeps, form: Record<string, unknown>) {
   const orgLogin = ctx.org?.login ?? "your org";
   const orgId = ctx.org?.id;
+  const githubAppUrl = await resolveGithubAppUrl(c, deps);
   const repoUrl = String(form["repoUrl"] ?? "");
   const report = parseReport(form["report"]);
   const projectId = projectIdFromForm(form, ctx);
@@ -225,7 +243,7 @@ async function handleSeed(c: Context, ctx: ShellContext, deps: ShellDeps, form: 
       <ExistingFullBody
         step={1}
         orgLogin={orgLogin}
-        githubAppUrl={GITHUB_APP_URL}
+        githubAppUrl={githubAppUrl}
         link={{ error: "lost the recon report — restart." }}
       />,
     );
@@ -241,7 +259,7 @@ async function handleSeed(c: Context, ctx: ShellContext, deps: ShellDeps, form: 
     <ExistingFullBody
       step={4}
       orgLogin={orgLogin}
-      githubAppUrl={GITHUB_APP_URL}
+      githubAppUrl={githubAppUrl}
       projectId={projectId}
       repoUrl={repoUrl}
       report={report}
@@ -254,6 +272,7 @@ async function handleSeed(c: Context, ctx: ShellContext, deps: ShellDeps, form: 
 async function handleGovernance(c: Context, ctx: ShellContext, deps: ShellDeps, form: Record<string, unknown>) {
   const orgLogin = ctx.org?.login ?? "your org";
   const orgId = ctx.org?.id;
+  const githubAppUrl = await resolveGithubAppUrl(c, deps);
   const repoUrl = String(form["repoUrl"] ?? "");
   const posture = postureFromForm(form);
   const projectId = projectIdFromForm(form, ctx);
@@ -267,7 +286,7 @@ async function handleGovernance(c: Context, ctx: ShellContext, deps: ShellDeps, 
     <ExistingFullBody
       step={5}
       orgLogin={orgLogin}
-      githubAppUrl={GITHUB_APP_URL}
+      githubAppUrl={githubAppUrl}
       projectId={projectId}
       repoUrl={repoUrl}
       posture={posture}

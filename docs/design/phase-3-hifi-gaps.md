@@ -145,8 +145,8 @@ follow each.
 - **Implementation**: `routes/auth/githubAppInstall.ts` +
   `engine/credentials/orgGithubApp.ts` / `githubAppTokenMinter.ts` provide an
   orchestrator-driven install that provisions an **auto-rotating installation
-  token**; the dashboard wires `appInstallHref` when
-  `TANREN_ORCHESTRATOR_PUBLIC_URL` is set
+  token**; the dashboard wires `appInstallHref` when the canonical
+  `TANREN_PUBLIC_BASE_URL` is set
   (`routes/onboarding/index.tsx`).
 - **Why diverged**: purposeful — the App is the long-term connectivity model
   (memory: "GitHub App preferred connectivity").

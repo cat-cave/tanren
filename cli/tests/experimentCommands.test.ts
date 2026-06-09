@@ -17,7 +17,7 @@ let serverStarted = false;
 async function withStub(responseBody: unknown): Promise<typeof ExperimentsNs> {
   server = await startStubServer(responseBody);
   serverStarted = true;
-  process.env.TANREN_ORCHESTRATOR_URL = server.url;
+  process.env.TANREN_PUBLIC_BASE_URL = server.url;
   process.env.TANREN_AUTH_FILE = "/nonexistent/tanren-experiments-cli-auth.json";
   vi.resetModules();
   return import("../src/commands/experiments/index.js");
@@ -26,7 +26,7 @@ async function withStub(responseBody: unknown): Promise<typeof ExperimentsNs> {
 afterEach(async () => {
   if (serverStarted) await server.close();
   serverStarted = false;
-  delete process.env.TANREN_ORCHESTRATOR_URL;
+  delete process.env.TANREN_PUBLIC_BASE_URL;
   delete process.env.TANREN_AUTH_FILE;
 });
 

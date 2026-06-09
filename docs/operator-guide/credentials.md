@@ -46,7 +46,7 @@ separate future enterprise/programmatic mode, not the base Tanren path.
 When the compose stack is running with dev Vault, import a disposable auth fixture and verify the response is redacted:
 
 ```sh
-TANREN_ORCHESTRATOR_URL=http://127.0.0.1:3100 \
+TANREN_PUBLIC_BASE_URL=http://127.0.0.1:3100 \
   corepack pnpm --filter @tanren/cli tanren credentials create \
   --org-id <orgId> --kind codex_chatgpt_auth \
   --ref codex-default --value "$(cat /path/to/auth.json)"

@@ -5,7 +5,11 @@
 // import cycle.
 import { authHeaders } from "./auth/index.js";
 
-export const orchestratorUrl = process.env["TANREN_ORCHESTRATOR_URL"] ?? "http://localhost:3100";
+// CANONICAL orchestrator public base URL (`TANREN_PUBLIC_BASE_URL`) — the single
+// name for the orchestrator's reachable address, shared with the orchestrator's
+// OAuth redirect base and the dashboard's App-install href. The old CLI-only
+// `TANREN_ORCHESTRATOR_URL` name is deleted.
+export const orchestratorUrl = process.env["TANREN_PUBLIC_BASE_URL"] ?? "http://localhost:3100";
 
 function mergeAuthHeaders(init: RequestInit | undefined, auth: Record<string, string>): RequestInit | undefined {
   if (Object.keys(auth).length === 0) {

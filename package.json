@@ -15,6 +15,7 @@
     "check:schema-drift": "bash scripts/check-schema-drift.sh",
     "check:state-drift": "node scripts/generate-state-checks.mjs --check",
     "check:event-drift": "node scripts/generate-event-type-check.mjs --check",
+    "check:env-reads": "node scripts/lint/env-read-whitelist.mjs",
     "check:knip": "knip",
     "check:mutation": "stryker run",
     "check:spelling": "cspell --no-progress \"**/*.{ts,tsx,js,mjs,md,yml,yaml}\"",
@@ -28,7 +29,7 @@
     "db:generate": "drizzle-kit generate --config drizzle.config.ts",
     "format": "oxfmt --write \"**/*.{ts,tsx,js,mjs,json,md,yml,yaml}\"",
     "format:check": "node scripts/format-check.mjs",
-    "lint": "oxlint -c oxlintrc.json .",
+    "lint": "oxlint -c oxlintrc.json . && node scripts/lint/env-read-whitelist.mjs",
     "test": "vitest run --coverage",
     "test:no-coverage": "vitest run",
     "typecheck": "turbo run typecheck"
