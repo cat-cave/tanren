@@ -21,6 +21,7 @@ function baseTarget(overrides: Record<string, unknown> = {}) {
     userId: null,
     channelKind: "ntfy",
     destination: "topic",
+    baseUrl: null,
     label: "lbl",
     enabled: true,
     weekendMute: false,
@@ -58,6 +59,23 @@ describe("NotificationTargetRow refinement", () => {
     expect(NotificationTargetRow.safeParse(baseTarget({ orgId: "" })).success).toBe(false);
     expect(NotificationTargetRow.safeParse(baseTarget({ destination: "" })).success).toBe(false);
     expect(NotificationTargetRow.safeParse(baseTarget({ label: "" })).success).toBe(false);
+  });
+
+  // audit C4 / RC-1: a per-target base_url is an http(s) URL or null; a bare
+  // host (a non-URL) is rejected so a wrong-host route can never be persisted.
+  it("accepts a null base_url (use the deploy default)", () => {
+    const result = NotificationTargetRow.safeParse(baseTarget({ baseUrl: null }));
+    expect(result.success).toBe(true);
+    expect(result.success && result.data.baseUrl).toBeNull();
+  });
+
+  it("accepts an http(s) URL base_url", () => {
+    expect(NotificationTargetRow.safeParse(baseTarget({ baseUrl: "https://tenant.ntfy.example" })).success).toBe(true);
+  });
+
+  it("rejects a non-URL base_url (a bare host or empty string)", () => {
+    expect(NotificationTargetRow.safeParse(baseTarget({ baseUrl: "ntfy.example" })).success).toBe(false);
+    expect(NotificationTargetRow.safeParse(baseTarget({ baseUrl: "" })).success).toBe(false);
   });
 });
 

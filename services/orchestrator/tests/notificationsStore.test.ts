@@ -76,6 +76,46 @@ describe("NotificationTargetStore decode", () => {
     const client = new NotificationMemoryClient();
     expect(await NotificationTargetStore.get(client, "nope")).toBeUndefined();
   });
+
+  // audit C4 / RC-1: a per-org base_url round-trips through the store and is
+  // stored in the dedicated base_url column (not shadowed by a process-wide
+  // env/default).
+  it("persists and reads back a per-target base_url", async () => {
+    const client = new NotificationMemoryClient();
+    const created = await NotificationTargetStore.create(client, {
+      id: "t_base",
+      orgId: "org_1",
+      scope: "org",
+      userId: null,
+      channelKind: "ntfy",
+      destination: "topic",
+      baseUrl: "https://tenant.ntfy.example",
+      label: "lbl",
+      enabled: true,
+      weekendMute: false,
+    });
+    expect(created.baseUrl).toBe("https://tenant.ntfy.example");
+    expect(client.targets.get("t_base")!.base_url).toBe("https://tenant.ntfy.example");
+    const got = await NotificationTargetStore.get(client, "t_base");
+    expect(got?.baseUrl).toBe("https://tenant.ntfy.example");
+  });
+
+  it("defaults base_url to null when omitted (use the deploy default)", async () => {
+    const client = new NotificationMemoryClient();
+    const created = await NotificationTargetStore.create(client, {
+      id: "t_no_base",
+      orgId: "org_1",
+      scope: "org",
+      userId: null,
+      channelKind: "ntfy",
+      destination: "topic",
+      label: "lbl",
+      enabled: true,
+      weekendMute: false,
+    });
+    expect(created.baseUrl).toBeNull();
+    expect(client.targets.get("t_no_base")!.base_url).toBeNull();
+  });
 });
 
 describe("NotificationRouteStore", () => {

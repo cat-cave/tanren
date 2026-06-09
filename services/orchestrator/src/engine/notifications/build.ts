@@ -6,9 +6,12 @@
 // Channel deps: every credential-resolving channel is handed the worker's
 // `secrets` store so Slack / webhook / teams / discord / twilio / pagerduty /
 // email resolve their write-only credential refs, and github_checks reuses the
-// shared App-token minter. ntfy needs nothing (its base URL is env-defaulted).
-// Supplying `secrets` keeps each kind WIRED (a real adapter), so a configured
-// route actually delivers rather than recording a `stubbed` audit row.
+// shared App-token minter. ntfy is handed the DEPLOY-default base URL read HERE
+// (the boot wiring), never inside the channel — a per-org target's own
+// `base_url` is authoritative and the deploy default applies only when a
+// target leaves it unset (audit C4 / RC-1). Supplying `secrets` keeps each
+// kind WIRED (a real adapter), so a configured route actually delivers rather
+// than recording a `stubbed` audit row.
 //
 // Default route: resolved from the environment as the code-level fallback so a
 // fail-severity escalation (`dag.spec.needs_attention`) reaches a human even on
@@ -22,6 +25,7 @@ import { orgScopingPool } from "../data/orgScopedDb.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
 import { NotificationDispatcher, type DefaultRoute } from "./dispatcher.js";
+import type { NtfyChannelDeps } from "./channels/ntfy.js";
 import { buildChannelRegistry } from "./registry.js";
 import { ChannelKind } from "./schemas.js";
 
@@ -54,7 +58,7 @@ export function buildNotificationDispatcher(deps: BuildNotificationDispatcherDep
     );
   }
   const channels = buildChannelRegistry({
-    ntfy: {},
+    ntfy: resolveNtfyDeployDefault(),
     slack: { secrets: deps.secrets },
     webhook: { secrets: deps.secrets },
     teams: { secrets: deps.secrets },
@@ -79,6 +83,21 @@ export function buildNotificationDispatcher(deps: BuildNotificationDispatcherDep
     channels,
     ...(defaultRoute !== undefined && { defaultRoute }),
   });
+}
+
+/**
+ * Resolve the ntfy DEPLOY-default base URL from the environment — read HERE in
+ * the boot wiring (never inside the channel, per audit C4 / RC-1) and injected
+ * via `deps.baseUrl`. This default applies ONLY to a bare-topic target that
+ * left its own `base_url` unset; a per-org `base_url` is always authoritative.
+ * Compose dev ships ntfy on port 80 inside the stack, so that is the hard
+ * floor when the env is unset. An empty env value falls back to the floor too.
+ */
+function resolveNtfyDeployDefault(): NtfyChannelDeps {
+  const deployBaseUrl = process.env["TANREN_NTFY_BASE_URL"];
+  return {
+    baseUrl: deployBaseUrl !== undefined && deployBaseUrl !== "" ? deployBaseUrl : "http://ntfy:80",
+  };
 }
 
 /**

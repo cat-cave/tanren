@@ -8,6 +8,12 @@ import type { NotificationTargetRow } from "../src/engine/notifications/index.js
 
 const failingFetch: typeof fetch = async () => new Response("nope", { status: 503, statusText: "Service Unavailable" });
 
+// A fetch that must never be invoked: used by the fail-loud / no-env-read
+// tests, where resolving a base URL must throw BEFORE any network call.
+const neverCalledFetch: typeof fetch = async () => {
+  throw new Error("fetch must not be called: no base URL should have been resolvable");
+};
+
 function target(overrides: Partial<NotificationTargetRow> = {}): NotificationTargetRow {
   return {
     id: "t",
@@ -16,6 +22,7 @@ function target(overrides: Partial<NotificationTargetRow> = {}): NotificationTar
     userId: null,
     channelKind: "ntfy",
     destination: overrides.destination ?? "tanren-runs",
+    baseUrl: null,
     label: "ntfy default",
     enabled: true,
     weekendMute: false,
@@ -198,25 +205,96 @@ describe("NtfyChannel", () => {
     expect(capturedUrl).toBe("http://ntfy.local/topic");
   });
 
-  it("falls back to the env/default base URL when none is injected", async () => {
+  // ── audit C4 / RC-1: per-org base_url is authoritative; the channel reads
+  // NO env; a bare topic with no resolvable base fails LOUD (no silent
+  // wrong-host route). ───────────────────────────────────────────────────────
+
+  it("publishes to the target's OWN base_url, not the injected deploy default", async () => {
     let capturedUrl: string | null = null;
     const fakeFetch: typeof fetch = async (url) => {
       capturedUrl = String(url);
       return new Response("ok", { status: 200 });
     };
-    const prev = process.env["TANREN_NTFY_BASE_URL"];
-    delete process.env["TANREN_NTFY_BASE_URL"];
-    try {
-      const channel = new NtfyChannel({ fetch: fakeFetch });
-      await channel.publish(target({ destination: "topic" }), {
+    // Deploy default points at the shared host; the per-org target overrides it.
+    const channel = new NtfyChannel({ fetch: fakeFetch, baseUrl: "http://shared-default" });
+    await channel.publish(target({ destination: "tenant-topic", baseUrl: "https://tenant-a.ntfy.example" }), {
+      title: "t",
+      body: "b",
+      severity: "info",
+      eventName: "run.started",
+    });
+    expect(capturedUrl).toBe("https://tenant-a.ntfy.example/tenant-topic");
+  });
+
+  it("uses the injected deploy default when the target has no base_url", async () => {
+    let capturedUrl: string | null = null;
+    const fakeFetch: typeof fetch = async (url) => {
+      capturedUrl = String(url);
+      return new Response("ok", { status: 200 });
+    };
+    const channel = new NtfyChannel({ fetch: fakeFetch, baseUrl: "http://deploy-default" });
+    await channel.publish(target({ destination: "topic", baseUrl: null }), {
+      title: "t",
+      body: "b",
+      severity: "info",
+      eventName: "run.started",
+    });
+    expect(capturedUrl).toBe("http://deploy-default/topic");
+  });
+
+  it("does NOT cross-route: two orgs' targets with distinct base_urls hit their OWN hosts", async () => {
+    const capturedUrls: string[] = [];
+    const fakeFetch: typeof fetch = async (url) => {
+      capturedUrls.push(String(url));
+      return new Response("ok", { status: 200 });
+    };
+    // A single shared channel instance with one deploy default; each target's
+    // own base_url must win, so the two orgs never collapse onto one host.
+    const channel = new NtfyChannel({ fetch: fakeFetch, baseUrl: "http://shared-default" });
+    const payload = { title: "t", body: "b", severity: "info", eventName: "run.started" } as const;
+    await channel.publish(
+      target({ id: "ta", orgId: "org_a", destination: "alerts", baseUrl: "https://a.ntfy.example" }),
+      payload,
+    );
+    await channel.publish(
+      target({ id: "tb", orgId: "org_b", destination: "alerts", baseUrl: "https://b.ntfy.example" }),
+      payload,
+    );
+    expect(capturedUrls).toEqual(["https://a.ntfy.example/alerts", "https://b.ntfy.example/alerts"]);
+  });
+
+  it("fails LOUD on a bare topic with neither a per-org base_url nor a deploy default", async () => {
+    // No deps.baseUrl, no target.baseUrl: must throw rather than route to a
+    // wrong host (no_silent_fallbacks).
+    const channel = new NtfyChannel({ fetch: neverCalledFetch });
+    await expect(
+      channel.publish(target({ destination: "topic", baseUrl: null }), {
         title: "t",
         body: "b",
         severity: "info",
         eventName: "run.started",
-      });
-      expect(capturedUrl).toBe("http://ntfy:80/topic");
+      }),
+    ).rejects.toThrow(/no base URL resolvable/u);
+  });
+
+  it("ignores TANREN_NTFY_BASE_URL entirely — the channel reads NO env", async () => {
+    const prev = process.env["TANREN_NTFY_BASE_URL"];
+    process.env["TANREN_NTFY_BASE_URL"] = "http://leaked-shared-host";
+    try {
+      // Despite the env being set, a bare topic with no injected/per-org base
+      // must still fail LOUD — proving the channel does not read the env.
+      const channel = new NtfyChannel({ fetch: neverCalledFetch });
+      await expect(
+        channel.publish(target({ destination: "topic", baseUrl: null }), {
+          title: "t",
+          body: "b",
+          severity: "info",
+          eventName: "run.started",
+        }),
+      ).rejects.toThrow(/no base URL resolvable/u);
     } finally {
-      if (prev !== undefined) process.env["TANREN_NTFY_BASE_URL"] = prev;
+      if (prev === undefined) delete process.env["TANREN_NTFY_BASE_URL"];
+      else process.env["TANREN_NTFY_BASE_URL"] = prev;
     }
   });
 });

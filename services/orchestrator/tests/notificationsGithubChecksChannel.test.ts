@@ -22,6 +22,7 @@ function target(overrides: Partial<NotificationTargetRow> = {}): NotificationTar
     destination: overrides.destination ?? "https://github.com/cat-cave/tanren/pull/42",
     label: "github checks",
     enabled: true,
+    baseUrl: null,
     weekendMute: false,
     createdAt: new Date(),
     updatedAt: new Date(),

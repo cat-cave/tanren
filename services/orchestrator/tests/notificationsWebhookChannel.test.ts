@@ -21,6 +21,7 @@ function target(overrides: Partial<NotificationTargetRow> = {}): NotificationTar
     destination: overrides.destination ?? DEST_REF,
     label: "webhook alerts",
     enabled: true,
+    baseUrl: null,
     weekendMute: false,
     createdAt: new Date(),
     updatedAt: new Date(),
