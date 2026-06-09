@@ -132,6 +132,11 @@ const SEVERITY_OVERRIDES: Partial<Record<EventName, Severity>> = {
   // actually reaches a person rather than silently parking.
   "dag.spec.needs_attention": "fail",
 
+  // A corrupt persisted project config the walker read while resolving a NON-merge
+  // eagerness knob (it proceeded at the safe default, but the corruption is real and
+  // operator-fixable) → `warn`: surfaced rather than silently parked at `info`.
+  "dag.config.corrupt": "warn",
+
   // The GENUINE dollar-budget pause: cumulative spend reached the configured
   // ceiling and the DagWalker stopped enqueuing. This is operator-ACTIONABLE — the
   // run halted and the operator must decide (raise the ceiling, or accept the

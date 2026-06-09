@@ -169,6 +169,33 @@ export const DagConcurrencySaturatedPayload = z
   .strict();
 export type DagConcurrencySaturatedPayload = z.infer<typeof DagConcurrencySaturatedPayload>;
 
+// dag.config.corrupt (no_silent_fallbacks): the walker read a project's persisted
+// `projects.config` to resolve a NON-merge eagerness knob (the speculation
+// threshold / depth cap — §2c, which gates WORK not MERGE) and the blob would not
+// parse. For these eagerness knobs the SAFE schema default is genuinely correct
+// (the same default a fresh project carries), so the walker proceeds — but the
+// corruption must NOT be silent: it is surfaced as this observability event (and
+// logged) so a corrupt persisted config is visible to an operator, not masked.
+// This is the LOUD-DEFAULT side of the doctrine (vs the PROPAGATE side used where a
+// corrupt config would yield wrong identity / wrong cap).
+export const DagConfigCorruptPayload = z
+  .object({
+    // Which config-derived knob the walker was resolving when the parse failed.
+    knob: z.literal("speculation_config"),
+    // The default the walker fell back to (so the event records the actual posture
+    // the run proceeded under, not just that a failure happened).
+    appliedDefault: z
+      .object({
+        threshold: z.enum(["conservative", "moderate", "aggressive"]),
+        depthCap: z.number().int().positive(),
+      })
+      .strict(),
+    // The parse error's message — enough to diagnose WHY the config did not parse.
+    reason: z.string(),
+  })
+  .strict();
+export type DagConfigCorruptPayload = z.infer<typeof DagConfigCorruptPayload>;
+
 // Change-percolation events (autonomy-engine.md §2c "Change-percolation — NOT
 // discard"). When an ANCESTOR changes after a dependent started speculatively (a
 // reviewer pushes new commits, a P0/P1 finding lands, changes-requested), the

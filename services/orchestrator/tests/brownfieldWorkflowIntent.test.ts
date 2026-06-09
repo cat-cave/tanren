@@ -152,6 +152,21 @@ describe("classifyWorkflowIntents · package scripts + codeowners + branch prote
     expect(byCategory(intents, "prod_deploy")?.replacement).toBe("deploy_plan");
   });
 
+  // no_silent_fallbacks: a present-but-unparseable package.json must PROPAGATE
+  // (loud) — silently returning [] would DROP the repo's package-script automation
+  // intent from the migration-risk report (the "nothing silently dropped" guarantee).
+  it("PROPAGATES on a present-but-unparseable package.json (never a silent drop)", () => {
+    expect(() =>
+      classifyWorkflowIntents({ index: indexOf([{ path: "package.json", preview: "{ not: valid json," }]) }),
+    ).toThrow(/unparseable package\.json/u);
+  });
+
+  // An EMPTY preview is the benign "nothing indexed" state — no scripts, no throw.
+  it("an empty package.json preview yields no intents (benign, not corruption)", () => {
+    const intents = classifyWorkflowIntents({ index: indexOf([{ path: "package.json", preview: "" }]) });
+    expect(intents.filter((i) => i.source === "package_script")).toHaveLength(0);
+  });
+
   it("CODEOWNERS with owners → manual_approval (compliance)", () => {
     const intents = classifyWorkflowIntents({
       index: indexOf([{ path: "CODEOWNERS", preview: "# owners\n* @acme/platform\n" }]),
