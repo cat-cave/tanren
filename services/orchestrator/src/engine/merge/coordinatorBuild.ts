@@ -28,7 +28,7 @@ import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import type { VcsProvider } from "../contracts/vcsProvider.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
 import { migrateProjectConfig } from "../config/projectConfig.js";
-import { resolveCredentialsForRun } from "../credentials/resolveCredentials.js";
+import { orgScopeFromRunOrgId, resolveCredentialsForRun } from "../credentials/resolveCredentials.js";
 import { PgEventStore } from "../eventStore.js";
 import { buildReGateCiForQueuedRun } from "./driveCi.js";
 import {
@@ -111,7 +111,7 @@ async function resolveRunFacts(pool: pg.Pool, runId: string): Promise<RunFacts> 
   // admits the row.
   const orgId = base.org_id;
   const credentials = await runWithOrgScope(pool, orgId, (client) =>
-    resolveCredentialsForRun(client, { projectConfig, orgId }),
+    resolveCredentialsForRun(client, { projectConfig, orgScope: orgScopeFromRunOrgId(orgId) }),
   );
   return {
     orgId,

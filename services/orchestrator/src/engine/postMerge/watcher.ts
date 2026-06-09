@@ -22,7 +22,7 @@
 import { runWithJobOrgId, runWithOrgScope, runWithSystemScope } from "@tanren/db";
 import type pg from "pg";
 import { migrateProjectConfig } from "../config/projectConfig.js";
-import { resolveCredentialsForRun } from "../credentials/resolveCredentials.js";
+import { orgScopeFromRunOrgId, resolveCredentialsForRun } from "../credentials/resolveCredentials.js";
 import type { EventStore } from "../eventStore.js";
 import { PgEventStore } from "../eventStore.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
@@ -194,7 +194,7 @@ export class PostMergeWatcher {
     const orgId = base.org_id;
     const projectConfig = migrateProjectConfig(base.config);
     const credentials = await runWithOrgScope(this.deps.pool, orgId, (client) =>
-      resolveCredentialsForRun(client, { projectConfig, orgId }),
+      resolveCredentialsForRun(client, { projectConfig, orgScope: orgScopeFromRunOrgId(orgId) }),
     );
     return credentials.githubCredentialRef;
   }

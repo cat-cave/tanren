@@ -8,15 +8,19 @@
 //
 // Priority, per kind: explicit override → project config → org default →
 // `MissingCredentialError`. The GitHub kind is APP-FIRST: when no static ref
-// resolves but the org installed the GitHub App, it resolves to the empty-string
-// App sentinel (the run mints an installation token downstream from the threaded
-// `context.installation` — the SAME `resolveGithubToken` path greenfield
-// repo-creation, webhook intake, and the merge stage take); only NEITHER a static
-// ref NOR the App throws `MissingCredentialError`. The resolver is PURE w.r.t. the
-// orchestrator workflow — it only reads `organizations.config` for the org
-// defaults + the App-installation block; it does NOT mutate state and does NOT
-// itself touch the workflow. The run executor's context loader (runExecutionContext)
-// calls this and threads the result into `PlannerRunContext`.
+// resolves but the org installed the GitHub App, it resolves to the EXPLICIT
+// `{ kind: "app" }` decision (the run mints an installation token downstream from
+// the threaded `context.installation` — the SAME `resolveGithubToken` path
+// greenfield repo-creation, webhook intake, and the merge stage take); only NEITHER
+// a static ref NOR the App throws `MissingCredentialError`. The org scope is an
+// EXPLICIT discriminated value (`OrgScope`) — a REAL `{ kind: "org", orgId }` (an
+// empty/blank org id is a scoping bug that throws `UnscopedOrgError`, never a quiet
+// BYOK degrade) or the NAMED `{ kind: "unscopedPlatform" }` org-less mode. The
+// resolver is PURE w.r.t. the orchestrator workflow — it only reads
+// `organizations.config` for the org defaults + the App-installation block; it does
+// NOT mutate state and does NOT itself touch the workflow. The run executor's context
+// loader (runExecutionContext) calls this and threads the result into
+// `PlannerRunContext`.
 
 import type pg from "pg";
 import {
@@ -35,13 +39,48 @@ type OrgConfigClient = Pick<pg.Pool | pg.PoolClient, "query">;
 export type RunCredentialKind = "llm_default" | "github_token";
 
 /**
+ * The resolver's EXPLICIT, discriminated GitHub-credential decision — NOT a bare
+ * string where `""` secretly means "App-minted". The two legitimate states are
+ * NAMED:
+ *   - `{ kind: "static", ref }` — a STATIC `github_token` ref resolved (override →
+ *     project → org default); `ref` is a non-empty, grammar-validated credential
+ *     ref.
+ *   - `{ kind: "app" }` — NO static ref resolved, but the org installed the GitHub
+ *     App, so the run mints an INSTALLATION token downstream from the threaded
+ *     `context.installation` (the SAME `resolveGithubToken` path greenfield
+ *     repo-creation / webhook intake / merge take). There is no ref to carry.
+ * The third state — NEITHER a static ref NOR the App — is NOT representable here:
+ * it throws `MissingCredentialError("github_token")` (fail-closed). This is the
+ * v30-class fix made structural: an "App, no static ref" state can no longer be
+ * mistaken for a validated empty string, because it is a distinct VARIANT, not a
+ * bare `""` that flows into a credential-ref validator.
+ */
+export type ResolvedGithubCredential = { kind: "static"; ref: string } | { kind: "app" };
+
+/**
+ * Collapse the discriminated {@link ResolvedGithubCredential} to the WIRE string
+ * the run context + every downstream git op already consume: a `static` decision
+ * carries its `ref`; an `app` decision is the documented EMPTY-STRING App sentinel
+ * (every downstream git op reads `ref.trim() === ""` ⇒ "mint the App token from
+ * `context.installation`", via `normalizeStaticGithubRef`). This is the ONE place
+ * the explicit variant becomes the sentinel — the empty string is produced HERE,
+ * NAMED, never conjured by a `?? ""` somewhere mid-pipeline.
+ */
+export function githubCredentialRefForWire(credential: ResolvedGithubCredential): string {
+  return credential.kind === "static" ? credential.ref : "";
+}
+
+/**
  * The resolved credentials a run needs. `defaultLlm` is the provider-agnostic
  * routing entry {cli, model, authRef} that heads every loop-role chain a project
- * leaves empty — NOT a Codex-specific ref. `githubCredentialRef` is the STATIC
- * `github_token` ref when one resolved; it is the EMPTY STRING when no static ref
- * resolved but the org installed the App (the App-token sentinel — downstream git
- * ops mint the installation token from the threaded `context.installation`). It is
- * never empty-AND-no-App: that case throws `MissingCredentialError`.
+ * leaves empty — NOT a Codex-specific ref.
+ *
+ * `github` is the EXPLICIT discriminated GitHub decision (static-ref vs App-minted —
+ * see {@link ResolvedGithubCredential}); `githubCredentialRef` is its WIRE form (the
+ * static ref, or the empty-string App sentinel) for the downstream `PlannerRunContext`
+ * + git ops that consume a bare string. Both describe the SAME decision — `github` is
+ * the type-safe view, `githubCredentialRef` the legacy wire view — so a caller that
+ * wants to branch on "static vs App" reads `github.kind` instead of testing `=== ""`.
  *
  * SaaS Tier-B #5: `providerMode` records WHICH source the default LLM came from.
  * Under `managed`, `defaultLlm.authRef` is the platform-owned ref (e.g.
@@ -53,6 +92,7 @@ export type RunCredentialKind = "llm_default" | "github_token";
  */
 export interface ResolvedRunCredentials {
   defaultLlm: RoutingChainEntry;
+  github: ResolvedGithubCredential;
   githubCredentialRef: string;
   providerMode: ProviderMode;
   endpointOverride?: HarnessEndpointOverride;
@@ -66,10 +106,61 @@ export interface RunCredentialOverride {
 export interface ResolveCredentialsInput {
   /** The project's typed config (already migrated to V1). */
   projectConfig: Pick<ProjectConfigV1, "credentials" | "providerMode">;
-  /** Org id whose `config.defaultCredentials` provides the fallback layer. */
-  orgId: string;
+  /**
+   * The org scope whose `config.defaultCredentials` provides the fallback layer.
+   * This is a DISCRIMINATED scope, NOT a bare string that can quietly be `""`: a
+   * missing tenant scope is a BUG, not a license to fall back to BYOK.
+   *
+   *   - `{ kind: "org", orgId }` — a REAL run/forge path scoped to a tenant. `orgId`
+   *     MUST be non-empty; an empty one is a scoping bug and throws
+   *     {@link UnscopedOrgError} (never a silent degrade to project-config-only BYOK).
+   *   - `{ kind: "unscopedPlatform" }` — the EXPLICIT, opt-in "resolve from project
+   *     config only" mode (no org row, no org defaults, `byok` provider mode). This
+   *     is the ONE legitimate no-org-defaults case and a caller must NAME it; it is
+   *     never reached by coercing an absent org to `""`.
+   */
+  orgScope: OrgScope;
   /** Highest-priority refs; wins over project config + org default. */
   override?: RunCredentialOverride;
+}
+
+/**
+ * The credential resolver's org scope — the EXPLICIT replacement for a bare `orgId`
+ * string that callers used to coerce with `?? ""`. See {@link ResolveCredentialsInput}.
+ */
+export type OrgScope = { kind: "org"; orgId: string } | { kind: "unscopedPlatform" };
+
+/**
+ * Build an `{ kind: "org" }` scope from a real org id, failing LOUD on an empty/blank
+ * one. The run + forge paths thread their row's `org_id` through THIS instead of
+ * `?? ""`: `projects.org_id` / `runs.org_id` are NOT-NULL, so an empty org id at a
+ * run path is a scoping/RLS-denial bug — it must be a loud error, not a quiet BYOK
+ * degrade. The `unscopedPlatform` mode is reached only by NAMING it directly, never
+ * by an empty string flowing through here.
+ */
+export function orgScopeFromRunOrgId(orgId: string | null | undefined): OrgScope {
+  if (typeof orgId !== "string" || orgId.trim() === "") {
+    throw new UnscopedOrgError();
+  }
+  return { kind: "org", orgId };
+}
+
+/**
+ * Thrown when a run/forge credential resolve carries an EMPTY/absent org id where a
+ * real tenant scope is required. A real run row always has a NOT-NULL `org_id`, so an
+ * empty one is a scoping bug — failing loud here surfaces it instead of silently
+ * choosing BYOK / no-App behavior for an unscoped org (the no_silent_fallbacks
+ * doctrine). A genuinely org-less path must opt into `{ kind: "unscopedPlatform" }`.
+ */
+export class UnscopedOrgError extends Error {
+  constructor() {
+    super(
+      "credential resolve received an empty org id where a real tenant scope is required " +
+        "(a missing org scope is a bug, not a license to fall back to BYOK; opt into " +
+        "{ kind: 'unscopedPlatform' } for the genuinely org-less platform path)",
+    );
+    this.name = "UnscopedOrgError";
+  }
 }
 
 /**
@@ -106,14 +197,13 @@ export class MissingCredentialError extends Error {
 }
 
 /**
- * Thrown when a run/forge call carries a REAL (non-empty) org id but the org row
- * reads back ABSENT. A real run always has a real org row, so an empty read is a
- * scoping/RLS-denial bug (the read ran off-scope and the deny-by-default policy
- * returned zero rows) — NOT a legitimate "org has no config" signal. Failing
- * loudly here surfaces the scoping bug instead of silently degrading a managed
- * org to BYOK. (The empty-org resolve mode — `orgId === ""`, where callers
- * explicitly pass an empty org to resolve from project config only — legitimately
- * defaults to BYOK.)
+ * Thrown when an `{ kind: "org" }` scope's org row reads back ABSENT. A real run
+ * always has a real org row, so an empty read is a scoping/RLS-denial bug (the read
+ * ran off-scope and the deny-by-default policy returned zero rows) — NOT a
+ * legitimate "org has no config" signal. Failing loudly here surfaces the scoping
+ * bug instead of silently degrading a managed org to BYOK. (The genuinely org-less
+ * path is the EXPLICIT `{ kind: "unscopedPlatform" }` scope, which never reaches
+ * this read.)
  */
 export class OrgProviderModeUnresolved extends Error {
   readonly orgId: string;
@@ -137,7 +227,7 @@ export async function resolveCredentialsForRun(
   pool: OrgConfigClient,
   input: ResolveCredentialsInput,
 ): Promise<ResolvedRunCredentials> {
-  const orgConfig = await loadOrgProviderModeConfig(pool, input.orgId);
+  const orgConfig = await loadOrgProviderModeConfig(pool, input.orgScope);
   const projectCredentials = input.projectConfig.credentials ?? {};
 
   // Effective provider mode: project override (when set) wins over the org's
@@ -174,44 +264,51 @@ export async function resolveCredentialsForRun(
   // when present. When NONE resolves but the org installed the GitHub App, the run
   // resolves an App INSTALLATION token downstream (the SAME `resolveGithubToken`
   // path greenfield repo-creation, the webhook intake, and the merge stage take) —
-  // signalled by an EMPTY `githubCredentialRef`, which every downstream git op
-  // already reads as "no static ref ⇒ mint the App token from `context.installation`"
-  // (the installation block is threaded onto the run context independently). So an
-  // org that installed the App but set no PAT can both CREATE the repo AND RUN.
+  // the EXPLICIT `{ kind: "app" }` decision (NOT a bare `""`); the wire form below
+  // collapses it to the documented empty-string App sentinel every downstream git op
+  // already reads as "no static ref ⇒ mint the App token from `context.installation`".
   //
-  // FAIL-CLOSED: when NEITHER a static ref NOR the App resolves, this still throws
-  // `MissingCredentialError("github_token")` — loud, never a silent default or PAT
-  // workaround.
-  const githubCredentialRef = resolveGithubCredentialRef(
+  // FAIL-CLOSED: when NEITHER a static ref NOR the App resolves, `resolveGithubCredential`
+  // throws `MissingCredentialError("github_token")` — loud, never a silent default or
+  // PAT workaround, and never a representable empty-and-no-App state.
+  const github = resolveGithubCredential(
     input.override?.githubCredentialRef,
     projectCredentials.githubCredentialRef,
     orgConfig.defaults?.github_token,
     orgConfig.hasGithubApp,
   );
 
-  return { defaultLlm, githubCredentialRef, providerMode, ...(endpointOverride && { endpointOverride }) };
+  return {
+    defaultLlm,
+    github,
+    githubCredentialRef: githubCredentialRefForWire(github),
+    providerMode,
+    ...(endpointOverride && { endpointOverride }),
+  };
 }
 
 /**
- * Resolve the run's GitHub credential ref under the App-first policy. A non-empty
- * STATIC ref (override → project → org default) wins. When none resolves but the
- * org installed the App (`hasGithubApp`), return the empty-string App sentinel:
- * downstream git ops mint the installation token from `context.installation`. When
- * NEITHER resolves, throw `MissingCredentialError("github_token")` (fail-closed).
+ * Resolve the run's GitHub credential under the App-first policy, as the EXPLICIT
+ * discriminated {@link ResolvedGithubCredential} — never a bare `""` sentinel. A
+ * non-empty STATIC ref (override → project → org default) ⇒ `{ kind: "static", ref }`.
+ * When none resolves but the org installed the App (`hasGithubApp`) ⇒ `{ kind: "app" }`
+ * (the run mints the installation token from `context.installation` downstream). When
+ * NEITHER resolves, throw `MissingCredentialError("github_token")` (fail-closed) — the
+ * empty-and-no-App state is NOT representable.
  */
-function resolveGithubCredentialRef(
+function resolveGithubCredential(
   override: string | undefined,
   projectRef: string | undefined,
   orgDefaultRef: string | undefined,
   hasGithubApp: boolean,
-): string {
+): ResolvedGithubCredential {
   for (const layer of [override, projectRef, orgDefaultRef]) {
     if (typeof layer === "string" && layer.trim() !== "") {
-      return layer;
+      return { kind: "static", ref: layer };
     }
   }
   if (hasGithubApp) {
-    return "";
+    return { kind: "app" };
   }
   throw new MissingCredentialError("github_token");
 }
@@ -232,31 +329,31 @@ function pickEntry(kind: RunCredentialKind, ...layers: Array<RoutingChainEntry |
  * fail-hard rejects a row missing an explicit `version` (no silent `byok`
  * default for unversioned rows).
  *
- * No-fallback directive: an ABSENT org row is interpreted by the org id —
- *   - the empty-org resolve mode — `orgId === ""`, the explicit "resolve from
- *     project config only" mode callers pass at `runExecutionContext.ts` /
- *     `providerFactory.ts` → no defaults + the `byok` default, the one
- *     legitimate empty-read case;
- *   - a NON-EMPTY org id → THROW {@link OrgProviderModeUnresolved}: a real run
- *     always has a real org row, so an empty read is a scoping/RLS-denial bug,
- *     NOT "no config", and must not silently degrade managed → byok.
+ * Scope-driven, no-fallback:
+ *   - `{ kind: "unscopedPlatform" }` — the EXPLICIT org-less mode: no org read at
+ *     all, no defaults, the `byok` default mode. This is the ONE legitimate
+ *     no-org-defaults case, and a caller reaches it only by NAMING the scope (never
+ *     by coercing an absent org to `""`).
+ *   - `{ kind: "org", orgId }` with an ABSENT row → THROW {@link OrgProviderModeUnresolved}:
+ *     a real run always has a real org row, so an empty read is a scoping/RLS-denial
+ *     bug, NOT "no config", and must not silently degrade managed → byok.
  */
-async function loadOrgProviderModeConfig(pool: OrgConfigClient, orgId: string): Promise<OrgProviderModeConfig> {
-  const result = await pool.query<{ config: unknown }>("SELECT config FROM organizations WHERE id = $1", [orgId]);
+async function loadOrgProviderModeConfig(pool: OrgConfigClient, scope: OrgScope): Promise<OrgProviderModeConfig> {
+  if (scope.kind === "unscopedPlatform") {
+    return { providerMode: "byok", hasGithubApp: false };
+  }
+  const result = await pool.query<{ config: unknown }>("SELECT config FROM organizations WHERE id = $1", [scope.orgId]);
   const row = result.rows[0];
   if (row === undefined) {
-    if (orgId === "") {
-      return { providerMode: "byok", hasGithubApp: false };
-    }
-    throw new OrgProviderModeUnresolved(orgId);
+    throw new OrgProviderModeUnresolved(scope.orgId);
   }
   const config: OrgConfigV1 = migrateOrgConfig(row.config);
   return {
     defaults: config.defaultCredentials,
     providerMode: config.providerMode,
     // App-first run resolution: an installed App lets the run mint an installation
-    // token even with no static `github_token` ref (the empty-org / legacy null-org
-    // path has no row, so no App — it stays static-ref-or-throw).
+    // token even with no static `github_token` ref (the `unscopedPlatform` mode reads
+    // no row, so no App — it stays static-ref-or-throw).
     hasGithubApp: config.github_app !== undefined,
   };
 }

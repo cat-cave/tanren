@@ -15,6 +15,17 @@ export {
 } from "./research.js";
 export { authorTemplateBuildCapture, capabilitiesFor } from "./specAuthoring.js";
 export { type BuiltTemplate, type TemplateBuildDriver, TemplateBuildFailedError } from "./buildDriver.js";
+// Wave-4 LIVE seam impls (the real, mountable capability):
+export {
+  buildResearchPrompt,
+  buildTemplateResearcher,
+  wrapProviderResearcher,
+  type WrapProviderResearcherOptions,
+} from "./liveResearch.js";
+export { ResearchOutput } from "./researchSchema.js";
+export { buildRunLoopBuildDriver, type ConvergedProjectFacts, type RunLoopBuildDriverDeps } from "./liveBuildDriver.js";
+export { resolveConvergedProjectFacts } from "./convergedFacts.js";
+export { buildTemplateAuditor } from "./liveAuditor.js";
 export {
   createTemplate,
   type CreateTemplateDeps,

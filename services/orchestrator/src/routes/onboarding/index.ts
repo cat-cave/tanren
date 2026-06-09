@@ -43,6 +43,8 @@ import {
   type PrepareDeployCallback,
 } from "../../engine/forge/interview/index.js";
 import type { ForgeAnswererTarget } from "../../engine/forge/providerFactory.js";
+import type { SelectedTemplate, TemplateRegistryQuery } from "../../engine/forge/interview/templateSelection.js";
+import type { CaptureLifecycle } from "../../engine/forge/interview/types.js";
 import {
   ProjectAccessDeniedError,
   ProjectNotFoundError,
@@ -72,6 +74,18 @@ export interface OnboardingRoutesOptions {
   githubAppMinter?: GithubAppTokenMinter;
   preflightDeploy?: DeployPreflightCallback;
   prepareDeploy?: PrepareDeployCallback;
+  // TEMPLATING WAVE 4 (templating-system.md §3): the SELECTION no-match → CREATION
+  // wiring. When supplied, onboarding's template selection CREATES a template (the
+  // creation meta-flow) when no validated one matches + SEEDS from it, instead of
+  // falling to from-scratch. A per-request BUILDER (given the org/actor/registry
+  // query) of the decoupled `createForNoMatch` seam — so the onboarding route keeps
+  // NO direct creation dependency (the builder is wired at the mount layer via
+  // `buildCreateForNoMatch`). Absent ⇒ the from-scratch path (today's default).
+  createTemplateForNoMatch?: (ctx: {
+    orgId: string;
+    actor: ActorContext;
+    templateRegistryQuery: TemplateRegistryQuery;
+  }) => (lifecycle: CaptureLifecycle) => Promise<SelectedTemplate | undefined>;
 }
 
 const RoundBody = z
@@ -149,6 +163,8 @@ export function createOnboardingRoutes(options: OnboardingRoutesOptions) {
       if (options.vcsProvider === undefined) {
         return c.json({ error: "vcs_provider_missing" }, 500);
       }
+      const templateRegistryQuery: TemplateRegistryQuery = (query, queryActor) =>
+        runWithOrgScope(options.pool, orgId, (client) => TemplateStore.listByCapabilities(client, query, queryActor));
       const result = await deriveFromCapture(
         { pool: options.pool, preflightDeploy, prepareDeploy },
         {
@@ -172,13 +188,20 @@ export function createOnboardingRoutes(options: OnboardingRoutesOptions) {
           // TEMPLATING WAVE 3 (templating-system.md §3): the ORG-SCOPED template
           // registry query. Each call opens a short `runWithOrgScope` so RLS bounds
           // the candidates to THIS org's own templates PLUS the cross-org `official`
-          // catalogue — an off-scope template is never even a candidate. Today the
-          // registry is empty (the creation wave is later), so selection resolves to
-          // "no match → from-scratch" — the EXPECTED live default.
-          templateRegistryQuery: (query, queryActor) =>
-            runWithOrgScope(options.pool, orgId, (client) =>
-              TemplateStore.listByCapabilities(client, query, queryActor),
-            ),
+          // catalogue — an off-scope template is never even a candidate.
+          templateRegistryQuery,
+          // TEMPLATING WAVE 4 (templating-system.md §3): the no-match → CREATION
+          // seam. When the mount wired a builder, selection CREATES + SEEDS on no
+          // match (via the SAME org-scoped registry query); absent ⇒ from-scratch.
+          ...(options.createTemplateForNoMatch === undefined
+            ? {}
+            : {
+                createTemplateForNoMatch: options.createTemplateForNoMatch({
+                  orgId,
+                  actor: { ...actor, orgId },
+                  templateRegistryQuery,
+                }),
+              }),
         },
       );
       if (result.repository === undefined) {

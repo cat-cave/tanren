@@ -329,6 +329,132 @@ describe("RunnerLifecycle.sweepAbandoned", () => {
   });
 });
 
+describe("RunnerLifecycle.allocate partial-failure teardown (no-orphan guard)", () => {
+  it("(a) throws after createContainer → BOTH volumes + the container are removed", async () => {
+    const docker = new FakeDocker();
+    // Make the step AFTER createContainer (startContainer) throw, so the
+    // container exists when we unwind.
+    docker.startContainer = async (id: string) => {
+      const entry = docker.containers.find((c) => c.id === id);
+      if (entry !== undefined) {
+        entry.started = true;
+      }
+      throw new Error("docker start exploded");
+    };
+    const store = new InMemoryRunnerStore();
+    const lifecycle = baseLifecycle(docker, store);
+
+    await expect(
+      lifecycle.allocate({
+        runId: "run_partial",
+        projectId: "proj_a",
+        orgId: "org_test",
+        runnerImage: "img",
+      }),
+    ).rejects.toThrow(/docker start exploded/u);
+
+    // No DB row was written, so release/sweep could never reach this state —
+    // the teardown is the ONLY thing that prevents the orphan.
+    expect(store.records).toHaveLength(0);
+    // The container created before the throw is removed.
+    expect(docker.containers[0]?.removed).toBe(true);
+    // BOTH volumes are removed by deterministic name.
+    expect(docker.volumeRemoves).toEqual(
+      expect.arrayContaining(["tanren-runner-run_partial-workspace", "tanren-runner-run_partial-codex-home"]),
+    );
+  });
+
+  it("(b) readHostKeyFingerprint exhaustion → container + both volumes are gone", async () => {
+    const docker = new FakeDocker();
+    // Every host-key read fails; with hostKeyReadAttempts=4 this exhausts and throws.
+    docker.failingHostKeyReads = 1_000;
+    const store = new InMemoryRunnerStore();
+    const lifecycle = baseLifecycle(docker, store);
+
+    await expect(
+      lifecycle.allocate({
+        runId: "run_no_host_key",
+        projectId: "proj_a",
+        orgId: "org_test",
+        runnerImage: "img",
+      }),
+    ).rejects.toThrow(/did not expose an SSH host key/u);
+
+    expect(store.records).toHaveLength(0);
+    expect(docker.containers[0]?.removed).toBe(true);
+    expect(docker.volumeRemoves).toEqual(
+      expect.arrayContaining(["tanren-runner-run_no_host_key-workspace", "tanren-runner-run_no_host_key-codex-home"]),
+    );
+  });
+
+  it("teardown is best-effort: a removeVolume failure does NOT mask the original error", async () => {
+    const docker = new FakeDocker();
+    docker.failingHostKeyReads = 1_000;
+    // Teardown itself fails — the ORIGINAL error must still surface.
+    docker.removeVolume = async () => {
+      throw new Error("removeVolume also exploded");
+    };
+    const store = new InMemoryRunnerStore();
+    const lifecycle = baseLifecycle(docker, store);
+
+    await expect(
+      lifecycle.allocate({ runId: "run_mask", projectId: "proj_a", orgId: "org_test", runnerImage: "img" }),
+    ).rejects.toThrow(/did not expose an SSH host key/u);
+  });
+
+  it("(d-lifecycle) a retried allocate on a LIVE runner returns the existing target, no second container", async () => {
+    const docker = new FakeDocker();
+    const store = new InMemoryRunnerStore();
+    const lifecycle = baseLifecycle(docker, store);
+
+    const first = await lifecycle.allocate({
+      runId: "run_retry",
+      projectId: "proj_a",
+      orgId: "org_test",
+      runnerImage: "img",
+    });
+    const second = await lifecycle.allocate({
+      runId: "run_retry",
+      projectId: "proj_a",
+      orgId: "org_test",
+      runnerImage: "img",
+    });
+
+    // Same SSH target, the SAME single container — never overwritten/duplicated.
+    expect(second).toEqual(first);
+    expect(docker.containers).toHaveLength(1);
+    expect(store.records).toHaveLength(1);
+  });
+});
+
+describe("RunnerLifecycle.release concurrent double-teardown (claim gate)", () => {
+  it("(c) two concurrent release() → exactly ONE Docker teardown; one claimed, one not", async () => {
+    const docker = new FakeDocker();
+    const store = new InMemoryRunnerStore();
+    const lifecycle = baseLifecycle(docker, store);
+
+    const allocated = await lifecycle.allocate({
+      runId: "run_race",
+      projectId: "proj_a",
+      orgId: "org_test",
+      runnerImage: "img",
+    });
+
+    const [a, b] = await Promise.all([
+      lifecycle.release(allocated.runnerId, "completed"),
+      lifecycle.release(allocated.runnerId, "completed"),
+    ]);
+
+    // Exactly one winner.
+    expect([a.released, b.released].filter(Boolean)).toHaveLength(1);
+    expect([a.released, b.released].filter((r) => !r)).toHaveLength(1);
+    // The container is removed exactly once; the two volumes wiped exactly once each.
+    expect(docker.containers.filter((c) => c.removed)).toHaveLength(1);
+    expect(docker.volumeRemoves.filter((v) => v === "tanren-runner-run_race-workspace")).toHaveLength(1);
+    expect(docker.volumeRemoves.filter((v) => v === "tanren-runner-run_race-codex-home")).toHaveLength(1);
+  });
+});
+
 describe("RunnerLifecycle finalizer under simulated crash", () => {
   it("still wipes volumes when the container has already exited before release", async () => {
     const docker = new FakeDocker();

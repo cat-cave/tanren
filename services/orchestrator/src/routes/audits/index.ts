@@ -138,3 +138,8 @@ function messageOf(error: unknown): string {
 // (keeping mountFeatureRoutes under its max-dependencies cap), the same grouping
 // pattern forge/mount.js uses. Source of truth is routes/templates/index.ts.
 export { createTemplateRoutes } from "../templates/index.js";
+// Wave-4 templating: the LIVE creation-flow assembly + the selection no-match →
+// creation seam builder, re-exported through this barrel for the SAME reason —
+// mountFeatureRoutes spreads them in without a new top-level import (the
+// max-dependencies cap). Source of truth is routes/templates/createFlow.ts.
+export { buildCreateForNoMatch, buildCreateTemplateFlow } from "../templates/createFlow.js";
