@@ -46,14 +46,37 @@ export function redactedCodexAuthResult(ref: string): CodexAuthImportResult {
   return { credentialKind: codexAuthKind, ref, redacted: true };
 }
 
+// The grammar EVERY stored credential ref must satisfy, shared by the managed AND
+// the BYOK paths (it is NOT a managed-vs-byok discriminator — both modes store
+// refs in this single shape): `credential/<slug>/<scope>/<owner>/<name>`, made of
+// alnum-plus-`._-` segments joined by single `/`, no empty segment (`//`), ≤200
+// chars, no leading punctuation. A BYOK Codex ref (`credential/codex/org/<org>/…`)
+// satisfies it exactly; a malformed ref (empty, doubled-slash, illegal char) is a
+// FORMAT error — historically misreported as "must be an explicit managed ref",
+// which mis-pointed the apex v29 BYOK-Codex diagnosis at a managed-mode mismatch.
 export function validateCredentialRef(ref: string): string {
   if (!/^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/u.test(ref) || ref.includes("//")) {
-    throw new Error("credential ref must be an explicit managed ref");
+    throw new Error(`credential ref has an invalid format: ${JSON.stringify(ref)}`);
   }
   if (ref.split("/").some((segment) => segment === "." || segment === "..")) {
     throw new Error("credential ref must not contain relative path segments");
   }
   return ref;
+}
+
+/**
+ * Non-throwing form of {@link validateCredentialRef}: `true` iff `ref` satisfies
+ * the credential-ref grammar (so the materializer would accept its format). Lets a
+ * WRITE-time chokepoint (the default-LLM config schema) reject a malformed ref
+ * where it is SET, instead of letting it crash a run deep in the materializer.
+ */
+export function isValidCredentialRefFormat(ref: string): boolean {
+  try {
+    validateCredentialRef(ref);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function validateCodexCredentialRef(ref: string): string {

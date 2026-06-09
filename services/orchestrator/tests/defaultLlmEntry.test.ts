@@ -66,6 +66,19 @@ describe("DefaultLlmEntry validation", () => {
       DefaultLlmEntry.parse({ cli: "codex", model: "default", authRef: "credential/github/org/o1/default" }),
     ).toThrow(/not a recognized LLM credential/u);
   });
+
+  it("rejects a well-prefixed but MALFORMED ref at write (the apex v29 BYOK-Codex gap)", () => {
+    // A `credential/codex/…` ref with a doubled-slash (empty trailing segment)
+    // would pass the slug/credential-type checks (slug is `codex`) but crash the
+    // RUN deep in the materializer with the format error. The schema chokepoint
+    // now rejects it where it is SET — LOUD, not mid-run.
+    expect(() =>
+      DefaultLlmEntry.parse({ cli: "codex", model: "default", authRef: "credential/codex/org/o1//default" }),
+    ).toThrow(/invalid credential ref format/u);
+    // A valid BYOK-Codex ref still parses.
+    const ok = DefaultLlmEntry.parse({ cli: "codex", model: "default", authRef: "credential/codex/org/o1/default" });
+    expect(ok.authRef).toBe("credential/codex/org/o1/default");
+  });
 });
 
 describe("config schemas reject an invalid default LLM via PATCH (the bypass BLOCKING fix)", () => {
