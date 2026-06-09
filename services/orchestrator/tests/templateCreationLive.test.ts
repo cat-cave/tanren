@@ -323,7 +323,11 @@ describe("buildCreateForNoMatch — async, owner-threaded (audit §3.11/2,3)", (
     vcsProvider: {} as never,
     githubAppMinter: {} as never,
     forgeInfra: { pool: {}, secrets: {}, allocator: fakeAllocator, ssh: {}, identitySecretRef: "id/ref" } as never,
-    auditPassRunner: { async run() { return { findings: [] }; } } as never,
+    auditPassRunner: {
+      async run() {
+        return { findings: [] };
+      },
+    } as never,
     repoOwner: "cat-cave",
   } as unknown as CreateTemplateFlowDeps;
 

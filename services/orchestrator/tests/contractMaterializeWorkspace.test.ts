@@ -226,9 +226,7 @@ describe("prepareRunWorkspace · template SEED materialization (templating-syste
     const seedCmd = ssh.commands.find(
       ({ command }) => (command as { label?: string }).label === "materialize template seed",
     );
-    expect((seedCmd?.command as { command: string } | undefined)?.command ?? "").toContain(
-      "tanren-template-ts-next",
-    );
+    expect((seedCmd?.command as { command: string } | undefined)?.command ?? "").toContain("tanren-template-ts-next");
     // No template ci.yml/justfile manifest in this context, so the deterministic
     // contract-files commit is NOT made — the seed brought the (validated) contract.
     // The answerer base sits ABOVE the seed commit (the seed is Tanren-owned, kept out

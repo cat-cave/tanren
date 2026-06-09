@@ -474,4 +474,3 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
     ...(templateSelection === undefined ? {} : { templateSelection }),
   };
 }
-

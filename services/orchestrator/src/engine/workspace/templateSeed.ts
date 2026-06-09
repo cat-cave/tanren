@@ -85,7 +85,7 @@ export async function materializeTemplateSeedInWorkspace(
     // Walk the template tree (relative paths), copying each file iff its destination
     // is absent. `find -type f` over the seed dir; strip the seed-dir prefix; mkdir
     // the dest parent; copy iff absent.
-    'wrote=0',
+    "wrote=0",
     'cd "$seed_dir"',
     // Use a NUL-delimited find so paths with spaces are safe.
     'while IFS= read -r -d "" rel; do',
@@ -94,8 +94,8 @@ export async function materializeTemplateSeedInWorkspace(
     '  if [ ! -e "$destpath" ]; then',
     '    mkdir -p "$(dirname "$destpath")"',
     '    cp -p "$seed_dir/$rel" "$destpath"',
-    '    wrote=1',
-    '  fi',
+    "    wrote=1",
+    "  fi",
     'done < <(find . -type f -not -path "./.git/*" -print0)',
     `if [ "$wrote" = "1" ]; then echo ${quoteSshShellArg(seededMarker)}; else echo ${quoteSshShellArg(emptyMarker)}; fi`,
   ];
@@ -108,9 +108,7 @@ export async function materializeTemplateSeedInWorkspace(
   // When a token is present, gitTokenAuthPrelude already created `$tmpdir`; otherwise
   // we make one here. Build the command so `$tmpdir` exists either way.
   const setupTmp =
-    input.token === undefined
-      ? ['tmpdir=$(mktemp -d)', 'cleanup() { rm -rf "$tmpdir"; }', 'trap cleanup EXIT']
-      : [];
+    input.token === undefined ? ["tmpdir=$(mktemp -d)", 'cleanup() { rm -rf "$tmpdir"; }', "trap cleanup EXIT"] : [];
 
   const command = [
     "set -eu",

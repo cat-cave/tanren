@@ -265,7 +265,10 @@ async function findExistingValidatedTemplate(
 // failure is logged LOUD (the template simply is not created this time — the next
 // run retries the no-match path); it NEVER throws into the caller's request. Kept a
 // named function (not an inline IIFE) so the detached lifecycle is explicit + greppable.
-async function createTemplateInBackground(createDeps: CreateTemplateDeps, request: TemplateCreationRequest): Promise<void> {
+async function createTemplateInBackground(
+  createDeps: CreateTemplateDeps,
+  request: TemplateCreationRequest,
+): Promise<void> {
   try {
     await maybeCreateTemplateForNoMatch(createDeps, request);
   } catch (error) {

@@ -81,7 +81,10 @@ describe("greenfield create — atomicity + idempotency (audit §3.10)", () => {
       method: "POST",
       headers: JSON_HEADERS,
       body: JSON.stringify({
-        capture: { ...apexCapture(), identity: { slug: "My Cool App!!!", pitch: "A short link service.", repoHint: "" } },
+        capture: {
+          ...apexCapture(),
+          identity: { slug: "My Cool App!!!", pitch: "A short link service.", repoHint: "" },
+        },
         owner: "cat-cave",
         deploy: { providerKind: "deploy.vercel" },
       }),

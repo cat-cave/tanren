@@ -65,7 +65,10 @@ export const CaptureIdentity = z
           .string()
           .min(1, "slug has no hostname-safe content")
           .max(63)
-          .regex(HOSTNAME_SAFE_SLUG, "slug must be a hostname-safe DNS label (lowercase alphanumerics + single dashes)"),
+          .regex(
+            HOSTNAME_SAFE_SLUG,
+            "slug must be a hostname-safe DNS label (lowercase alphanumerics + single dashes)",
+          ),
       ),
     pitch: z.string().min(1).max(400),
     repoHint: z.string().max(200).default(""),
