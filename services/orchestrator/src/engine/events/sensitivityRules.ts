@@ -4,7 +4,10 @@ import { appEnvSensitivityRules } from "./sensitivityRules.appEnv.js";
 import { strandSensitivityRules } from "./sensitivityRules.strand.js";
 import { ciIntelSensitivityRules } from "./sensitivityRules.ciIntel.js";
 import { gateSensitivityRules } from "./sensitivityRules.gate.js";
-import { auditorFindingsRoutedSensitivityRules } from "./sensitivityRules.audit.js";
+import {
+  auditPostureStrandsFindingsSensitivityRules,
+  auditorFindingsRoutedSensitivityRules,
+} from "./sensitivityRules.audit.js";
 import { specLoopStageSensitivityRules } from "./sensitivityRules.loop.js";
 import { templatesSensitivityRules } from "./sensitivityRules.templates.js";
 
@@ -222,8 +225,7 @@ export const sensitivityRules: SensitivityRule[] = [
     ["kind", "public"],
     ["message", "public"],
   ]),
-  // checker.verdict (completeness-findings) + auditor.verdict (findings-only) live in
-  // the spec-loop split (./sensitivityRules.loop.ts) under the 500-line cap.
+  // checker.verdict + auditor.verdict (findings-only) live in the spec-loop split.
   // rejection event emitted by the checker rejection-loop branch
   ...rulesFor("checker.rejected", [
     ["runId", "public"],
@@ -261,16 +263,15 @@ export const sensitivityRules: SensitivityRule[] = [
     ["outstandingBehaviorIds[]", "public"],
     ["recommendedAction", "public"],
   ]),
-  // S3: the posture-gate's residual P2/P3 disposition (route-to-dag / fix-if-idle) —
-  // all public; spread from ./sensitivityRules.audit.ts under the 500-line cap.
+  // S3 posture-gate residual disposition + Loop 3 strand-findings record — all public; spread
+  // from ./sensitivityRules.audit.ts under the 500-line cap.
   ...auditorFindingsRoutedSensitivityRules,
+  ...auditPostureStrandsFindingsSensitivityRules,
 
-  // SPEC-LOOP REDESIGN stages (demo-run / triage / convergence) — all public; spread
-  // from ./sensitivityRules.loop.ts under the 500-line cap.
+  // SPEC-LOOP REDESIGN stages (demo-run / triage / convergence) — all public; spread from loop split.
   ...specLoopStageSensitivityRules,
 
-  // The native in-loop gate rules (gate.started/passed/failed/advisory_failed/verdict)
-  // are split into ./sensitivityRules.gate.js under the 500-line cap; spread below.
+  // The native in-loop gate rules are split into ./sensitivityRules.gate.js; spread below.
 
   // recovery lineage — operator-authored prose + identifiers, public.
   ...rulesFor("recovery.revise_routed", [
@@ -302,10 +303,9 @@ export const sensitivityRules: SensitivityRule[] = [
     ["threadId", "public"],
   ]),
 
-  // Tanren-method benchmark accept tier (§2.1). Cell/trial/tier identifiers +
-  // the content-addressed accept-tier hash + exit codes are public; the captured
-  // command output tails carry stdout/stderr, which the taxonomy treats as
-  // secret (may surface env values or paths), exactly as the gate.* steps do.
+  // Tanren-method benchmark accept tier (§2.1). Cell/trial/tier ids + the content-addressed
+  // accept-tier hash + exit codes are public; the captured command output tails are secret
+  // (may surface env values or paths), exactly as the gate.* steps do.
   ...rulesFor("benchmark.accept.passed", [
     ["cellId", "public"],
     ["trialIndex", "public"],

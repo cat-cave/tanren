@@ -45,9 +45,12 @@ describe("ProjectConfigV1 parser", () => {
   it("defaults auditPosture to balanced (P0/P1 block, fix-if-idle) and accepts a velocity override", () => {
     // WAVE-2 / SLICE P-A: the DORA knob. A bare project resolves to the balanced
     // posture; a velocity shop overrides to block only P0/P1 + route the residual.
+    // Loop 3: the balanced default also carries `autonomousRemediation: false` (a
+    // blocking finding parks for a human unless an autonomous run opts in).
     expect(migrateProjectConfig({ version: 1 }).auditPosture).toEqual({
       blockReviewAt: "P1",
       p2p3Handling: "fix-if-idle",
+      autonomousRemediation: false,
     });
     const velocity = migrateProjectConfig({
       version: 1,

@@ -22,6 +22,7 @@ import {
 } from "./gate/index.js";
 import type { CiConfigV1, CiConfigValidationError, CiYamlParseError } from "../ci/index.js";
 import { ensureWorkspaceDepsInstalled, resolveWorkspaceHeadSha } from "../workspace/index.js";
+import { type ActiveQuarantine, loadActiveQuarantine, quarantineEnv } from "./ciQuarantine.js";
 import type { RunPlannerLoopInput } from "./plannerRun.js";
 import { createLogger } from "../observability/logger.js";
 
@@ -129,6 +130,19 @@ export function buildDefaultGate(
   // stack-agnostic DEFAULT_BOOTSTRAP_COMMAND LOUD-fallback — see the bootstrap block
   // below.
   let installCommandPromise: Promise<string | undefined> | undefined;
+  // The lazily-resolved ACTIVE flaky-quarantine, memoized for the run. Loaded
+  // org-scoped off the run's `input.pool` (RLS denies by default — a read off the
+  // wrong scope sees ZERO rows). The CI-intelligence ACTUATION (closes the
+  // flaky→quarantine→ship loop): the quarantined STEP names are excluded from the
+  // verdict (a proven-flaky step's failure no longer red-gates the merge), and the
+  // quarantined TEST ids are exported via the stack-agnostic `TANREN_QUARANTINE`
+  // env so a justfile/test-runner that honors the documented filter SKIPS them.
+  // Re-loaded once per run (the detector clears a row when the flake is fixed — a
+  // fresh run picks that up). A load failure is swallowed to an EMPTY quarantine:
+  // the gate is the merge authority and must never be bricked by an enrichment read
+  // (no-silent-fallback applies to MASKING a failure as a pass, not to failing OPEN
+  // on a non-blocking enrichment — an empty quarantine only makes the gate STRICTER).
+  let quarantinePromise: Promise<ActiveQuarantine> | undefined;
   // The advisory (warn-but-don't-block) step names for the run's governance
   // posture: `lenient` ⇒ {lint, typecheck} are advisory; every other posture ⇒
   // empty set (strict default — every step blocks, behavior unchanged).
@@ -218,6 +232,12 @@ export function buildDefaultGate(
     const headSha = await resolveVerdictAnchorSha(when, headShaOverride, () =>
       resolveWorkspaceHeadSha({ ssh: input.ssh, target, workspacePath, timeoutMs: input.timeoutMs }),
     );
+    // CI-INTELLIGENCE ACTUATION: resolve the project's ACTIVE quarantine (memoized) +
+    // fold it into the gate's app-env (the stack-agnostic `TANREN_QUARANTINE` test
+    // filter) + the excluded step names — what CLOSES the flaky→quarantine→ship loop.
+    quarantinePromise ??= loadGateQuarantine(input.pool, context.projectId, context.runId);
+    const quarantine = await quarantinePromise;
+    const gateAppEnv = mergeQuarantineEnv(input.appEnv, quarantine);
     const outcome = await runGateForWhen({
       ssh: input.ssh,
       target,
@@ -228,13 +248,15 @@ export function buildDefaultGate(
       appendEvent,
       taskId,
       advisoryStepNames,
+      // FLAKY-QUARANTINE: a proven-flaky step's failure is excluded from the verdict.
+      ...(quarantine.checkNames.size === 0 ? {} : { quarantinedStepNames: quarantine.checkNames }),
       // AUDIT-EVIDENCE BASELINE: the governance policy version, threaded so the
       // gate.verdict roll-up records which policy revision the gate was judged under.
       ...(input.context.policyVersion === undefined ? {} : { policyVersion: input.context.policyVersion }),
       ...(headSha === "" ? {} : { headSha }),
-      // Plane B: the project's dev+test app env, so the building agent's gate
-      // commands run with it. Never logged/emitted. Distinct from Tanren creds.
-      ...(input.appEnv === undefined ? {} : { appEnv: input.appEnv }),
+      // Plane B: the project's dev+test app env (+ the `TANREN_QUARANTINE` filter), so
+      // the building agent's gate commands run with it. Never logged/emitted.
+      ...(gateAppEnv === undefined ? {} : { appEnv: gateAppEnv }),
     });
     // NATIVE PER-TEST INGEST: read the runner's JUnit report (if a tier DECLARED a
     // junitReport path) + persist the per-test rows IN-PROCESS — the CI-intelligence
@@ -244,6 +266,42 @@ export function buildDefaultGate(
     await ingestGateJunitBestEffort(input, target, workspacePath, headSha, outcome, config, when, appendEvent, taskId);
     return outcome;
   };
+}
+
+/**
+ * Load the project's ACTIVE flaky-quarantine for the gate (the CI-intelligence read).
+ * Org-scoped off the run's `pool` (RLS denies by default — a read off the wrong scope
+ * sees ZERO rows). FAILS OPEN to an EMPTY quarantine on a load error: the gate is the
+ * merge authority and must never be bricked by an enrichment read, and an empty
+ * quarantine only makes the gate STRICTER (no-silent-fallback applies to MASKING a
+ * failure as a pass, not to failing OPEN on a non-blocking enrichment).
+ */
+async function loadGateQuarantine(
+  pool: RunPlannerLoopInput["pool"],
+  projectId: string,
+  runId: string,
+): Promise<ActiveQuarantine> {
+  try {
+    return await loadActiveQuarantine(pool, projectId);
+  } catch (error) {
+    console.error(`[gate] active-quarantine load failed for run ${runId} (gate stays strict):`, error);
+    return { checkNames: new Set<string>(), testIds: [] };
+  }
+}
+
+/**
+ * Fold the active quarantine's `TANREN_QUARANTINE` test filter into the gate's app-env.
+ * Returns `undefined` (no env) when there is neither a project app-env nor a quarantine
+ * filter, so the common case leaves the gate command unchanged. The quarantine entry
+ * wins on a key clash (a project would never name a var `TANREN_QUARANTINE`).
+ */
+function mergeQuarantineEnv(
+  appEnv: Record<string, string> | undefined,
+  quarantine: ActiveQuarantine,
+): Record<string, string> | undefined {
+  const quarantineAppEnv = quarantineEnv(quarantine);
+  if (appEnv === undefined && Object.keys(quarantineAppEnv).length === 0) return undefined;
+  return { ...appEnv, ...quarantineAppEnv };
 }
 
 /**

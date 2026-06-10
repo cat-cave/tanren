@@ -57,3 +57,13 @@ export const auditorFindingsRoutedSensitivityRules: SensitivityRule[] = (() => {
   }
   return base;
 })();
+
+// Loop 3: the audit-posture preflight's strand-findings record. The posture knobs +
+// the non-secret reason are all public (a config severity/handling label + a fixed
+// human-readable reason — no command output, no credential).
+export const auditPostureStrandsFindingsSensitivityRules: SensitivityRule[] = [
+  { eventName: "audit.posture_strands_findings", path: "blockReviewAt", tag: "public" },
+  { eventName: "audit.posture_strands_findings", path: "p2p3Handling", tag: "public" },
+  { eventName: "audit.posture_strands_findings", path: "autonomousRemediation", tag: "public" },
+  { eventName: "audit.posture_strands_findings", path: "reason", tag: "public" },
+];

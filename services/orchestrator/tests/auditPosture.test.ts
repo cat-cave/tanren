@@ -5,12 +5,17 @@
 // and route under velocity (`blockReviewAt:'P1', route-to-dag`).
 
 import { describe, expect, it } from "vitest";
-import { decideFromFindings, type AuditPosture } from "../src/engine/contracts/auditPosture.js";
+import {
+  decideFromFindings,
+  postureReentersFindings,
+  type AuditPosture,
+} from "../src/engine/contracts/auditPosture.js";
 import { maxSeverity, severityRank, type Finding } from "../src/engine/contracts/findings.js";
 
 const STRICT: AuditPosture = { blockReviewAt: "P3", p2p3Handling: "fix-if-idle" };
 const VELOCITY: AuditPosture = { blockReviewAt: "P1", p2p3Handling: "route-to-dag" };
 const MODERATE_FIX: AuditPosture = { blockReviewAt: "P1", p2p3Handling: "fix-if-idle" };
+const AUTONOMOUS: AuditPosture = { blockReviewAt: "P1", p2p3Handling: "route-to-dag", autonomousRemediation: true };
 
 function finding(severity: Finding["severity"], id = `f-${severity}`): Finding {
   return { id, severity, title: `t-${severity}`, body: `b-${severity}` };
@@ -68,6 +73,40 @@ describe("decideFromFindings — routes/fixes P2/P3 per p2p3Handling", () => {
     const d = decideFromFindings([finding("P0"), finding("P3")], VELOCITY);
     expect(d.block).toBe(true);
     expect(d.route.map((f) => f.severity)).toEqual(["P3"]);
+  });
+});
+
+describe("decideFromFindings — autonomousRemediation routes blocking findings as remediation specs", () => {
+  it("under autonomousRemediation, a BLOCKING P0/P1 becomes a remediation spec (still blocks) AND P2/P3 route", () => {
+    const d = decideFromFindings([finding("P0"), finding("P2"), finding("P3")], AUTONOMOUS);
+    // The current spec still fails closed.
+    expect(d.block).toBe(true);
+    // The blocking P0 ALSO becomes fix-it work (re-enters the DAG), not just parked.
+    expect(d.remediate.map((f) => f.severity)).toEqual(["P0"]);
+    // The residual P2/P3 route as before.
+    expect(d.route.map((f) => f.severity).sort()).toEqual(["P2", "P3"]);
+  });
+
+  it("WITHOUT autonomousRemediation a blocking finding parks (remediate is empty) — the human-stop default", () => {
+    const d = decideFromFindings([finding("P0")], VELOCITY);
+    expect(d.block).toBe(true);
+    expect(d.remediate).toEqual([]);
+  });
+});
+
+describe("postureReentersFindings — the preflight predicate", () => {
+  it("an autonomous run REQUIRES remediation: a parking posture strands, the autonomous posture re-enters", () => {
+    // requireRemediation=true (autonomous): the balanced default strands a blocking finding.
+    expect(postureReentersFindings(MODERATE_FIX, true)).toBe(false);
+    // VELOCITY routes the residual but still PARKS a blocking finding ⇒ strands under autonomy.
+    expect(postureReentersFindings(VELOCITY, true)).toBe(false);
+    expect(postureReentersFindings(AUTONOMOUS, true)).toBe(true);
+  });
+
+  it("a non-autonomous run does NOT require remediation: any residual-handling posture re-enters", () => {
+    expect(postureReentersFindings(MODERATE_FIX, false)).toBe(true);
+    expect(postureReentersFindings(VELOCITY, false)).toBe(true);
+    expect(postureReentersFindings(STRICT, false)).toBe(true);
   });
 });
 

@@ -4,6 +4,7 @@ export {
   AllocatorKind,
   CANONICAL_RUNNER_IMAGE,
   AuditPostureConfig,
+  AUTONOMOUS_AUDIT_POSTURE,
   DEFAULT_AUDIT_POSTURE,
   FindingSeverityConfig,
   P2P3HandlingConfig,

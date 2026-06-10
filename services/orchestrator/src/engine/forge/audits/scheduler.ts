@@ -21,6 +21,7 @@ import { DiscoveryStore, type ExistingSpecSummary } from "../../repositories/dis
 import { ProjectStore } from "../../repositories/projects.js";
 import { systemActor } from "../../state/actor.js";
 import { type AuditPosture, decideFromFindings } from "../../contracts/auditPosture.js";
+import { findingToRoutableSpec } from "./postureGate.js";
 import { DEFAULT_AUDIT_POSTURE, isAbsentProjectConfig, migrateProjectConfig } from "../../config/index.js";
 import type { Finding } from "../../contracts/findings.js";
 import { PersistentlyInvalidSpecError } from "../specQuality/index.js";
@@ -158,9 +159,14 @@ export async function runAuditJob(deps: AuditSchedulerDeps, job: AuditJob): Prom
     const existingSpecs = await loadExistingSpecs(deps.pool, job.projectId);
     // Resolve the project's auditPosture (the same DORA knob inline audits use) and
     // run the P0–P3 findings through `decideFromFindings` — the SAME severity path: a
-    // finding at-or-above `blockReviewAt` is a BLOCKING finding that must be ESCALATED to
-    // needs_attention (a human decision), NOT auto-routed; the residual is routed.
+    // finding at-or-above `blockReviewAt` is a BLOCKING finding. By default it is
+    // ESCALATED to needs_attention (a human decision), NOT auto-routed. BUT under an
+    // AUTONOMOUS posture (`autonomousRemediation: true`, the apex doctrine) a blocking
+    // finding ALSO becomes a REMEDIATION DAG spec — so a scheduled-audit finding always
+    // re-enters the DAG as fix-it work and the audit→finding→fix→merge loop CLOSES with
+    // no operator. The residual P2/P3 is routed under `route-to-dag` as before.
     const posture = await resolveAuditPosture(deps.pool, job.projectId);
+    const remediateAutonomously = posture.autonomousRemediation === true;
     const blocking = new Set(blockingFindingIds(findings, posture));
     for (const finding of findings) {
       const triage = await answerer.triage({
@@ -176,12 +182,16 @@ export async function runAuditJob(deps: AuditSchedulerDeps, job: AuditJob): Prom
         source,
         existingSpecs,
       });
+      const isBlocking = blocking.has(finding.externalId);
       // A BLOCKING finding (≥ the posture's blockReviewAt) is ESCALATED to
-      // needs_attention: it rests `triaged` (the loud inbox surface) and is NEVER
-      // auto-routed, exactly the merge-path posture `block`. Otherwise a system-source
-      // auto_routable finding rests `auto_routed`.
-      const status =
-        !blocking.has(finding.externalId) && triage.verdict === "auto_routable" ? "auto_routed" : "triaged";
+      // needs_attention: by DEFAULT it rests `triaged` (the loud inbox surface) and is
+      // NEVER auto-routed, exactly the merge-path posture `block`. BUT under an
+      // AUTONOMOUS posture (`autonomousRemediation`) the blocking finding becomes a
+      // REMEDIATION DAG spec — so it rests `auto_routed` and is committed below, closing
+      // the audit→finding→fix→merge loop with no operator. A non-blocking auto_routable
+      // finding rests `auto_routed` as before.
+      const routable = isBlocking ? remediateAutonomously : triage.verdict === "auto_routable";
+      const status = routable ? "auto_routed" : "triaged";
       let candidate = await InboxStore.upsertCandidate(
         deps.pool,
         source,
@@ -195,10 +205,15 @@ export async function runAuditJob(deps: AuditSchedulerDeps, job: AuditJob): Prom
         triage,
         status,
       );
-      // Autonomous DAG insert (NON-blocking, auto_routable, with a routable spec): commit
+      // The spec to commit: the triage's authored spec when present; for a blocking
+      // remediation with no triage spec, a finding-derived remediation spec (so a P0/P1
+      // ALWAYS becomes fix-it work under an autonomous posture, never a silent no-op).
+      const specToRoute =
+        triage.routableSpec ?? (isBlocking && remediateAutonomously ? findingToRoutableSpec(toFinding(finding)) : null);
+      // Autonomous DAG insert (auto_routable, with a routable/remediation spec): commit
       // it now (no operator), with the dead-letter guard. Extracted to keep nesting shallow.
-      if (deps.autoRoute !== undefined && candidate.status === "auto_routed" && triage.routableSpec !== null) {
-        candidate = await autoRouteOrDeadLetter(deps, candidate, triage.routableSpec, deps.autoRoute);
+      if (deps.autoRoute !== undefined && candidate.status === "auto_routed" && specToRoute !== null) {
+        candidate = await autoRouteOrDeadLetter(deps, candidate, specToRoute, deps.autoRoute);
       }
       candidates.push(candidate);
     }
@@ -240,15 +255,18 @@ async function autoRouteOrDeadLetter(
   }
 }
 
+// Map an `AuditFinding` (surface shape) to the shared `Finding` the posture policy +
+// the remediation-spec builder operate on. The audit surface carries no `fixHint`, so
+// the routed remediation spec falls back to the generic "resolve the finding" criterion.
+function toFinding(f: AuditFinding): Finding {
+  return { id: f.externalId, severity: f.severity, title: f.title, body: f.body };
+}
+
 // The externalIds of the findings that BLOCK reaching review under the project's
 // posture (`decideFromFindings.block` is a boolean over the worst severity; this maps
-// each finding to a `Finding` and keeps the at-or-above-`blockReviewAt` ones). These are
-// escalated to needs_attention rather than auto-routed.
+// each finding to a `Finding` and keeps the at-or-above-`blockReviewAt` ones). By
+// default these are escalated to needs_attention; under `autonomousRemediation` they
+// ALSO become remediation specs (the caller routes them).
 function blockingFindingIds(findings: ReadonlyArray<AuditFinding>, posture: AuditPosture): string[] {
-  return findings
-    .filter((f) => {
-      const finding: Finding = { id: f.externalId, severity: f.severity, title: f.title, body: f.body };
-      return decideFromFindings([finding], posture).block;
-    })
-    .map((f) => f.externalId);
+  return findings.filter((f) => decideFromFindings([toFinding(f)], posture).block).map((f) => f.externalId);
 }

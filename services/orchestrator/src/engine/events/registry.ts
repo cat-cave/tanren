@@ -1,5 +1,6 @@
 import type { z } from "zod";
 import {
+  AuditPostureStrandsFindingsPayload,
   AuditorCompletedPayload,
   AuditorFailedPayload,
   AuditorFindingsRoutedPayload,
@@ -123,6 +124,7 @@ import {
   GateFailedPayload,
   GatePassedPayload,
   GatePublishFailedPayload,
+  GateQuarantineExcludedPayload,
   GateStartedPayload,
   GateVerdictPayload,
 } from "./schemas/gate.js";
@@ -216,8 +218,9 @@ export const EventRegistry = {
   "auditor.failed": AuditorFailedPayload,
   "auditor.verdict": AuditorVerdictPayload,
   "auditor.rejected": AuditorRejectedPayload,
-  // S3: the posture-gate's residual P2/P3 disposition (route-to-dag / fix-if-idle).
+  // S3: posture-gate residual disposition; Loop 3: autonomous-run strand-findings preflight.
   "auditor.findings_routed": AuditorFindingsRoutedPayload,
+  "audit.posture_strands_findings": AuditPostureStrandsFindingsPayload,
   // Sub-registries split into their schema modules for the 500-line cap: spec-loop stages (schemas/answerer.ts) + templating registry lifecycle (schemas/templates.ts).
   ...loopEventRegistry,
   ...templateEventRegistry,
@@ -273,25 +276,22 @@ export const EventRegistry = {
   "github.pr.merged": GithubPrMergedPayload,
   "github.failed": GithubFailedPayload,
 
-  // Flaky-test detection + auto-quarantine. The detector reduces the native gate's per-step
-  // verdicts and flags a STEP that toggled outcome on UNCHANGED code (ci.flaky.detected); that
-  // step is then recorded on the quarantine surface (ci.test.quarantined). A consistently-
-  // failing step is never flagged — quarantine ≠ ignore-failures.
+  // Flaky-test detection + auto-quarantine: the detector flags a STEP that toggled outcome on
+  // UNCHANGED code (ci.flaky.detected) + records it on the quarantine surface (ci.test.quarantined).
+  // A consistently-failing step is never flagged — quarantine ≠ ignore-failures.
   "ci.flaky.detected": CiFlakyDetectedPayload,
   "ci.test.quarantined": CiTestQuarantinedPayload,
-  // CI-intelligence per-test grain: the native gate ingested the runner's JUnit report
-  // IN-PROCESS into per-test rows (ci_test_results). Summary counts only — never secrets.
+  // CI-intelligence per-test grain: the native gate ingested the runner's JUnit report IN-PROCESS
+  // into per-test rows (ci_test_results). Summary counts only — never secrets.
   "ci.tests.reported": CiTestsReportedPayload,
-  // A gate tier DECLARED a `junitReport` but produced none — the per-test grain went blind.
-  // DURABLE + advisory (never merge-gating): the no-silent-skip signal.
+  // A gate tier DECLARED a `junitReport` but produced none — DURABLE + advisory no-silent-skip signal.
   "ci.junit_missing": CiJunitMissingPayload,
-  // The in-loop deterministic native gate (exit-code driven; no agent). `gate.verdict`
-  // is the headSha-carrying terminal roll-up CI-intelligence reduces — the native
-  // delivery model's verdict, replacing the retired forge-CI observation events.
+  // The in-loop deterministic native gate (exit-code driven); `gate.verdict` is the terminal roll-up.
   "gate.started": GateStartedPayload,
   "gate.passed": GatePassedPayload,
   "gate.failed": GateFailedPayload,
   "gate.advisory_failed": GateAdvisoryFailedPayload,
+  "gate.quarantine_excluded": GateQuarantineExcludedPayload,
   "gate.publish_failed": GatePublishFailedPayload,
   "gate.verdict": GateVerdictPayload,
 

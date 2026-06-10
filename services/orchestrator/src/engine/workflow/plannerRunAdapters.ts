@@ -25,6 +25,8 @@ export { resolveManagedCapturer } from "./plannerRunUsage.js";
 import type { BudgetGate } from "../contracts/dagWalker.js";
 import { PgBudgetGate } from "../dag/budgetGate.js";
 import { runBudgetCeilingPreflight } from "./budgetPreflight.js";
+import { assertAuditPostureReentersFindings } from "./auditPosturePreflight.js";
+import { DEFAULT_AUDIT_POSTURE } from "../config/index.js";
 import type { GateOutcome } from "./gate/index.js";
 import { buildDefaultGate } from "./plannerRunGate.js";
 // Re-exported so plannerRun.ts keeps a single import surface for the run's
@@ -425,6 +427,20 @@ export async function resolveRunAdaptersWithBudgetPreflight(
     input.context.projectId,
     adapters.writer.authRef,
     writerObservable,
+    appendEvent,
+  );
+  // LOOP 3 — AUDIT-POSTURE PREFLIGHT. For an AUTONOMOUS run (the `lenient` apex tier —
+  // functional-but-weak autonomous build, no operator in the loop), assert the
+  // resolved `auditPosture` RE-ENTERS scheduled-audit findings into the DAG (residual
+  // routes/fixes AND blocking findings become remediation specs). A posture that would
+  // strand findings silently no-ops the audit→fix→merge proof, so the run FAILS CLOSED
+  // at setup (a loud `audit.posture_strands_findings` event + a thrown error). A
+  // non-autonomous run is a no-op (a parked blocking finding is its intended human-stop).
+  await assertAuditPostureReentersFindings(
+    {
+      autonomous: input.context.governancePosture === "lenient",
+      posture: input.context.auditPosture ?? DEFAULT_AUDIT_POSTURE,
+    },
     appendEvent,
   );
   return { adapters, usageProbe, specValidator, budgetGate };

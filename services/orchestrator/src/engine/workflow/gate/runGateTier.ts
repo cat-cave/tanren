@@ -63,6 +63,16 @@ export interface RunGateTierInput {
   // event), but it does NOT short-circuit the tier or fail the gate. Empty (the
   // default, every non-lenient posture) ⇒ every step blocks, behavior unchanged.
   advisoryStepNames?: ReadonlySet<string>;
+  // FLAKY-QUARANTINE ACTUATION (CI-intelligence): step NAMES on the project's
+  // ACTIVE quarantine surface (`quarantined_tests`). A step in this set that fails
+  // is EXCLUDED from the verdict (a `gate.quarantine_excluded` warning is emitted,
+  // the tier keeps running, the gate stays passing for it) — this is what CLOSES
+  // the flaky→quarantine→ship loop. SAFETY: a name lands here ONLY because the
+  // detector PROVED the step toggled (passed AND failed) on UNCHANGED code; a
+  // consistently-failing step is never quarantined, so a real regression is never
+  // masked. Distinct from `advisoryStepNames` (posture-driven, lint/typecheck only)
+  // — this is surface-driven and applies under EVERY posture. Empty ⇒ no exclusion.
+  quarantinedStepNames?: ReadonlySet<string>;
   // Plane B: the PROJECT's dev+test app env, materialized into the
   // EXECUTED command's environment (the building agent's test/dev commands need
   // it). Prepended ONLY to the command handed to the substrate — the emitted
@@ -84,6 +94,7 @@ export async function runGateTier(input: RunGateTierInput): Promise<GateTierResu
   );
 
   const advisoryStepNames = input.advisoryStepNames ?? EMPTY_ADVISORY_SET;
+  const quarantinedStepNames = input.quarantinedStepNames ?? EMPTY_ADVISORY_SET;
   const outcomes: GateStepOutcome[] = [];
   for (const step of input.steps) {
     const result = await input.ssh.run(input.target, {
@@ -115,6 +126,26 @@ export async function runGateTier(input: RunGateTierInput): Promise<GateTierResu
           tier: input.tier,
           when: input.when,
           advisoryStep: step.name,
+          exitCode: result.exitCode,
+          outputTail: outcome.outputTail,
+        },
+        input.taskId,
+      );
+      continue;
+    }
+    // FLAKY-QUARANTINE: a proven-flaky step's failure is RECORDED but does NOT
+    // block. We emit `gate.quarantine_excluded` (the timeline shows the excluded
+    // flake) and keep running the tier — the gate stays passing for this step, so
+    // the merge can go green while a root-cause spec is in flight. This CLOSES the
+    // flaky→quarantine→ship loop. A consistently-failing step is never quarantined
+    // (the detector only records a proven toggle), so a real regression still blocks.
+    if (!passed && quarantinedStepNames.has(step.name)) {
+      await input.appendEvent(
+        "gate.quarantine_excluded",
+        {
+          tier: input.tier,
+          when: input.when,
+          quarantinedStep: step.name,
           exitCode: result.exitCode,
           outputTail: outcome.outputTail,
         },

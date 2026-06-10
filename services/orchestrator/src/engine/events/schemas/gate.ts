@@ -79,6 +79,26 @@ export const GateAdvisoryFailedPayload = z
   })
   .strict();
 
+// gate.quarantine_excluded: a gate STEP whose name is on the project's ACTIVE
+// flaky-quarantine surface (`quarantined_tests`) exited nonzero. Its failure is
+// RECORDED here but does NOT block — the tier keeps running and the gate stays
+// passing for this step. This is what CLOSES the flaky→quarantine→ship loop: a
+// proven-flaky step (recorded ONLY after it both passed AND failed on UNCHANGED
+// code) no longer red-gates the merge while a root-cause spec is in flight. A
+// CONSISTENTLY-failing step is never quarantined, so a real regression is never
+// excluded. Distinct from `gate.advisory_failed` (posture-driven lint/typecheck
+// leniency) — this is surface-driven and on for every posture.
+export const GateQuarantineExcludedPayload = z
+  .object({
+    tier: z.string(),
+    when: GateWhen,
+    quarantinedStep: z.string(),
+    exitCode: z.number().int().nullable(),
+    outputTail: z.string(),
+  })
+  .strict();
+export type GateQuarantineExcludedPayload = z.infer<typeof GateQuarantineExcludedPayload>;
+
 // gate.publish_failed: publishing the (already-decided) gate verdict to the forge
 // failed. The native gate is the merge authority — this PUBLISH only mirrors that
 // verdict onto the PR for visibility/branch-protection, so a publish failure is a
