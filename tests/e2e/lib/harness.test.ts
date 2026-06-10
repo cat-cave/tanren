@@ -51,8 +51,23 @@ describe("e2e manifest", () => {
         "walker-drives-multi-spec-dag",
         "intent-preserving-conflict",
         "issue-ingest-to-merged-spec",
-        "apex",
       ]),
+    );
+    // apex is no longer planned: it is a HERMETIC regression-pin (audit §6.8), driven
+    // in-process by services/orchestrator/tests/apexE2eDriver.ts.
+    expect(planned.map((item) => item.id)).not.toContain("apex");
+  });
+
+  it("registers apex as a HERMETIC case (no longer planned; not a live tier proof)", () => {
+    const apex = caseById("apex");
+    expect(apex?.status).toBe("hermetic");
+    // A hermetic case carries no acceptance tier (it is in-process, not fixture-driven)
+    // and is NOT one of the live active cases the credentialed gate runs.
+    expect(apex?.tier).toBeUndefined();
+    expect(activeCases().map((item) => item.id)).not.toContain("apex");
+    // It still declares a real proof surface (merged PRs + DORA + cost rows).
+    expect(apex?.artifacts.map((a) => a.kind)).toEqual(
+      expect.arrayContaining(["merged_pr", "dora_projection", "cost_records"]),
     );
   });
 
