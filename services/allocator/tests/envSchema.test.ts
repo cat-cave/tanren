@@ -1,6 +1,6 @@
 // Boot-time env schema (the fail-closed env contract). The schema is fed an
 // explicit source object so these assertions never mutate the real process.env.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { parseAllocatorEnv } from "../src/envSchema.js";
 
 const GOOD_ENV = {
@@ -15,10 +15,6 @@ const GOOD_ENV = {
 } satisfies NodeJS.ProcessEnv;
 
 describe("allocator envSchema (fail-closed at boot)", () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
   it("accepts a fully-populated good env and coerces numbers", () => {
     const env = parseAllocatorEnv(GOOD_ENV);
     expect(env.ALLOCATOR_PORT).toBe(3200);
@@ -77,21 +73,25 @@ describe("allocator envSchema (fail-closed at boot)", () => {
     );
   });
 
-  // REAPER-SAFETY: TANREN_MAX_RUN_HOURS is integrated via `requirePositiveHours`,
-  // which falls back LOUD (never crashes — a <= now reaper threshold would reap
-  // every active runner). So a malformed value resolves to the default, with a
-  // console.error, rather than throwing.
-  it("falls back loud (NOT crash) on a non-positive TANREN_MAX_RUN_HOURS", () => {
-    const error = vi.spyOn(console, "error").mockImplementation(() => {});
-    const env = parseAllocatorEnv({ ...GOOD_ENV, TANREN_MAX_RUN_HOURS: "0" });
-    expect(env.TANREN_MAX_RUN_HOURS).toBe(6);
-    expect(error).toHaveBeenCalledOnce();
+  // REAPER-SAFETY + no-silent-fallback (Codex r4 §1): TANREN_MAX_RUN_HOURS is
+  // integrated via `requirePositiveHours`. UNSET → the 6h default; a PRESENT
+  // non-positive / malformed value THROWS at boot — it must NOT silently degrade to
+  // the default (a typo'd reaper-threshold / token-TTL ceiling must fail loud, not
+  // masquerade as a working 6h). The same contract governs the scoped-token TTL.
+  it("FAILS LOUD on a present non-positive TANREN_MAX_RUN_HOURS (no silent default)", () => {
+    expect(() => parseAllocatorEnv({ ...GOOD_ENV, TANREN_MAX_RUN_HOURS: "0" })).toThrow(/is not a positive number/u);
   });
 
-  it("falls back loud (NOT crash) on a non-numeric TANREN_MAX_RUN_HOURS", () => {
-    const error = vi.spyOn(console, "error").mockImplementation(() => {});
-    const env = parseAllocatorEnv({ ...GOOD_ENV, TANREN_MAX_RUN_HOURS: "abc" });
-    expect(env.TANREN_MAX_RUN_HOURS).toBe(6);
-    expect(error).toHaveBeenCalledOnce();
+  it("FAILS LOUD on a present non-numeric TANREN_MAX_RUN_HOURS (no silent default)", () => {
+    expect(() => parseAllocatorEnv({ ...GOOD_ENV, TANREN_MAX_RUN_HOURS: "abc" })).toThrow(/is not a positive number/u);
+  });
+
+  it("the 6h default applies ONLY when TANREN_MAX_RUN_HOURS is genuinely UNSET/blank", () => {
+    expect(parseAllocatorEnv({ ...GOOD_ENV, TANREN_MAX_RUN_HOURS: undefined }).TANREN_MAX_RUN_HOURS).toBe(6);
+    expect(parseAllocatorEnv({ ...GOOD_ENV, TANREN_MAX_RUN_HOURS: "" }).TANREN_MAX_RUN_HOURS).toBe(6);
+  });
+
+  it("uses a PRESENT VALID TANREN_MAX_RUN_HOURS", () => {
+    expect(parseAllocatorEnv({ ...GOOD_ENV, TANREN_MAX_RUN_HOURS: "8" }).TANREN_MAX_RUN_HOURS).toBe(8);
   });
 });

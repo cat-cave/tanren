@@ -47,21 +47,39 @@ function optional(env: SecretStoreEnv, name: string): string | undefined {
  * `VAULT_TOKEN` env value the prod profile no longer sets.
  */
 export function requireVaultToken(env: SecretStoreEnv = process.env): string {
-  const file = optional(env, "VAULT_TOKEN_FILE");
+  return requireSecretFromFileOrEnv(env, "VAULT_TOKEN", "Vault token");
+}
+
+/**
+ * Resolve a ROOT credential, preferring a MOUNTED SECRET FILE over a plaintext env
+ * value — the same file-preferred precedence as {@link requireVaultToken}, applied
+ * to the ALTERNATE secret-store backends (Codex r4 §3). For an env var `NAME`:
+ *
+ *   1. `${NAME}_FILE` (preferred, prod): read the credential from the mounted file
+ *      at boot, in-memory, so a production root credential need NOT live as a
+ *      plaintext env value in `/proc/<pid>/environ` (and is not inherited by child
+ *      processes). A configured-but-unreadable / empty file is itself a hard failure.
+ *   2. `NAME` (dev convenience): a plaintext env value, file WINS when both are set.
+ *
+ * Fail-loud when a configured store has NEITHER — never a silent blank credential on
+ * this security boundary. `what` names the credential in the error.
+ */
+function requireSecretFromFileOrEnv(env: SecretStoreEnv, name: string, what: string): string {
+  const file = optional(env, `${name}_FILE`);
   if (file !== undefined) {
     let contents: string;
     try {
       contents = readFileSync(file, "utf8");
     } catch (cause) {
-      throw new Error(`VAULT_TOKEN_FILE=${file} could not be read`, { cause });
+      throw new Error(`${name}_FILE=${file} could not be read`, { cause });
     }
-    const token = contents.trim();
-    if (token === "") {
-      throw new Error(`VAULT_TOKEN_FILE=${file} is empty (no Vault token in the mounted secret file)`);
+    const value = contents.trim();
+    if (value === "") {
+      throw new Error(`${name}_FILE=${file} is empty (no ${what} in the mounted secret file)`);
     }
-    return token;
+    return value;
   }
-  return required(env, "VAULT_TOKEN");
+  return required(env, name);
 }
 
 /**
@@ -87,7 +105,9 @@ export function buildSecretStore(env: SecretStoreEnv = process.env): SecretStore
     case "gcp_sm":
       return new GcpSecretManagerStore({
         project: required(env, "TANREN_GCP_SM_PROJECT"),
-        accessToken: required(env, "TANREN_GCP_SM_ACCESS_TOKEN"),
+        // File-preferred (Codex r4 §3): a mounted `TANREN_GCP_SM_ACCESS_TOKEN_FILE`
+        // wins over the plaintext env, so a prod root credential need not be env.
+        accessToken: requireSecretFromFileOrEnv(env, "TANREN_GCP_SM_ACCESS_TOKEN", "GCP SM access token"),
         ...(optional(env, "TANREN_GCP_SM_API_BASE") === undefined
           ? {}
           : { apiBase: required(env, "TANREN_GCP_SM_API_BASE") }),
@@ -95,7 +115,8 @@ export function buildSecretStore(env: SecretStoreEnv = process.env): SecretStore
     case "aws_sm":
       return new AwsSecretsManagerStore({
         accessKeyId: required(env, "TANREN_AWS_SM_ACCESS_KEY_ID"),
-        secretAccessKey: required(env, "TANREN_AWS_SM_SECRET_ACCESS_KEY"),
+        // File-preferred (Codex r4 §3): `TANREN_AWS_SM_SECRET_ACCESS_KEY_FILE` wins.
+        secretAccessKey: requireSecretFromFileOrEnv(env, "TANREN_AWS_SM_SECRET_ACCESS_KEY", "AWS SM secret access key"),
         region: required(env, "TANREN_AWS_SM_REGION"),
         ...(optional(env, "TANREN_AWS_SM_SESSION_TOKEN") === undefined
           ? {}
@@ -110,7 +131,8 @@ export function buildSecretStore(env: SecretStoreEnv = process.env): SecretStore
     case "onepassword":
       return new OnePasswordStore({
         connectUrl: required(env, "TANREN_OP_CONNECT_URL"),
-        token: required(env, "TANREN_OP_CONNECT_TOKEN"),
+        // File-preferred (Codex r4 §3): `TANREN_OP_CONNECT_TOKEN_FILE` wins.
+        token: requireSecretFromFileOrEnv(env, "TANREN_OP_CONNECT_TOKEN", "1Password Connect token"),
         vaultId: required(env, "TANREN_OP_VAULT_ID"),
         ...(optional(env, "TANREN_OP_FIELD_LABEL") === undefined
           ? {}

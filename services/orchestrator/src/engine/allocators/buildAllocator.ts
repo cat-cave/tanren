@@ -7,7 +7,7 @@ import { DigitalOceanAllocator } from "./digitalOceanAllocator.js";
 import { GcpAllocator } from "./gcpAllocator.js";
 import { HetznerAllocator } from "./hetznerAllocator.js";
 import { KubernetesAllocator } from "./kubernetesAllocator.js";
-import { ManualSshAllocator, type ManualSshHost } from "./manualSshAllocator.js";
+import { ManualSshAllocator, parseManualSshHosts } from "./manualSshAllocator.js";
 import { AllocatorKind, AllocatorRoutingConfig } from "./poolPolicy.js";
 import { PgRunnerStore, type RunnerStore } from "./runnerStore.js";
 import { UnconfiguredAllocator } from "./scaffoldedAllocators.js";
@@ -105,8 +105,9 @@ function buildManualSsh(runners: RunnerStore): ManualSshAllocator {
   if (raw === undefined) {
     throw new Error("manual_ssh allocator requires TANREN_MANUAL_SSH_HOSTS (JSON array of hosts)");
   }
-  const hosts = JSON.parse(raw) as ManualSshHost[];
-  return new ManualSshAllocator({ hosts, runners });
+  // Strict decode (Codex r4 §2): a bad host shape / blank field / out-of-range port
+  // fails LOUD here at construction, never a cryptic later allocation/SSH failure.
+  return new ManualSshAllocator({ hosts: parseManualSshHosts(raw), runners });
 }
 
 async function buildHetzner(runners: RunnerStore, secrets: SecretStore): Promise<HetznerAllocator> {

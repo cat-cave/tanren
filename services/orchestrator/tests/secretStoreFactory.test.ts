@@ -212,6 +212,94 @@ describe("VAULT_TOKEN_FILE — the broad token from a MOUNTED SECRET FILE (never
   });
 });
 
+describe("alternate-store root credentials from a MOUNTED SECRET FILE (Codex r4 §3)", () => {
+  // Each alternate backend's root credential must resolve from a `*_FILE` mounted
+  // path (file-preferred precedence, same as VAULT_TOKEN_FILE) so a production root
+  // credential need NOT be a plaintext env value. The store CONSTRUCTS (no boot
+  // throw) when only the file is set — proof the credential resolved from the file.
+
+  it("gcp_sm resolves its access token from TANREN_GCP_SM_ACCESS_TOKEN_FILE (no env value)", () => {
+    const file = writeTokenFile("gcp-file-token\n");
+    const store = buildSecretStore({
+      TANREN_SECRET_STORE: "gcp_sm",
+      TANREN_GCP_SM_PROJECT: "p",
+      TANREN_GCP_SM_ACCESS_TOKEN_FILE: file,
+    });
+    expect(store).toBeInstanceOf(GcpSecretManagerStore);
+    rmSync(file, { force: true });
+  });
+
+  it("aws_sm resolves its secret access key from TANREN_AWS_SM_SECRET_ACCESS_KEY_FILE (no env value)", () => {
+    const file = writeTokenFile("aws-file-secret");
+    const store = buildSecretStore({
+      TANREN_SECRET_STORE: "aws_sm",
+      TANREN_AWS_SM_ACCESS_KEY_ID: "AKIA",
+      TANREN_AWS_SM_SECRET_ACCESS_KEY_FILE: file,
+      TANREN_AWS_SM_REGION: "us-east-1",
+    });
+    expect(store).toBeInstanceOf(AwsSecretsManagerStore);
+    rmSync(file, { force: true });
+  });
+
+  it("onepassword resolves its connect token from TANREN_OP_CONNECT_TOKEN_FILE (no env value)", () => {
+    const file = writeTokenFile("op-file-token");
+    const store = buildSecretStore({
+      TANREN_SECRET_STORE: "onepassword",
+      TANREN_OP_CONNECT_URL: "https://connect.example.com",
+      TANREN_OP_CONNECT_TOKEN_FILE: file,
+      TANREN_OP_VAULT_ID: "v1",
+    });
+    expect(store).toBeInstanceOf(OnePasswordStore);
+    rmSync(file, { force: true });
+  });
+
+  it("the file path WINS over the plaintext env value (prod precedence)", () => {
+    const file = writeTokenFile("gcp-file-token");
+    const { calls } = stubFetch();
+    const store = buildSecretStore({
+      TANREN_SECRET_STORE: "gcp_sm",
+      TANREN_GCP_SM_PROJECT: "my-proj",
+      TANREN_GCP_SM_ACCESS_TOKEN: "env-token",
+      TANREN_GCP_SM_ACCESS_TOKEN_FILE: file,
+    });
+    return store.get("credential/token").then(() => {
+      // The bearer that reaches the GCP SM API is the file token, not the env one.
+      expect(calls[0]!.headers.get("authorization")).toBe("Bearer gcp-file-token");
+      rmSync(file, { force: true });
+    });
+  });
+
+  it("fails LOUD when a configured store has NEITHER the file nor the env credential", () => {
+    expect(() => buildSecretStore({ TANREN_SECRET_STORE: "gcp_sm", TANREN_GCP_SM_PROJECT: "p" })).toThrow(
+      /TANREN_GCP_SM_ACCESS_TOKEN/u,
+    );
+  });
+
+  it("fails LOUD when the *_FILE points at a missing file", () => {
+    expect(() =>
+      buildSecretStore({
+        TANREN_SECRET_STORE: "onepassword",
+        TANREN_OP_CONNECT_URL: "https://connect.example.com",
+        TANREN_OP_CONNECT_TOKEN_FILE: "/no/such/op-token",
+        TANREN_OP_VAULT_ID: "v1",
+      }),
+    ).toThrow(/TANREN_OP_CONNECT_TOKEN_FILE=.*could not be read/u);
+  });
+
+  it("fails LOUD when the *_FILE is present but empty (never a silent blank credential)", () => {
+    const file = writeTokenFile("   \n");
+    expect(() =>
+      buildSecretStore({
+        TANREN_SECRET_STORE: "aws_sm",
+        TANREN_AWS_SM_ACCESS_KEY_ID: "AKIA",
+        TANREN_AWS_SM_SECRET_ACCESS_KEY_FILE: file,
+        TANREN_AWS_SM_REGION: "us-east-1",
+      }),
+    ).toThrow(/TANREN_AWS_SM_SECRET_ACCESS_KEY_FILE=.*is empty/u);
+    rmSync(file, { force: true });
+  });
+});
+
 describe("ref -> backend key mapping", () => {
   it("GCP sanitizes the ref into a valid Secret Manager id", () => {
     expect(gcpSecretIdFromRef(agnosticRef)).toBe("credential_github_token_org_acme_default");

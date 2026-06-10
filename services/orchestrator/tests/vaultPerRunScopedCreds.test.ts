@@ -276,11 +276,22 @@ describe("resolveScopedRunTokenTtlSeconds — TTL covers the runner ceiling (§3
     }
   });
 
-  it("falls back LOUDLY to the 6h ceiling on a non-positive / garbage override", () => {
-    for (const bad of ["0", "-3", "abc", "  "]) {
-      const ttl = resolveScopedRunTokenTtlSeconds({ TANREN_MAX_RUN_HOURS: bad });
-      // A zero/garbage ceiling must NOT collapse the TTL — it covers the full default.
-      expect(ttl).toBe(ceilingSeconds(6));
+  it("the 6h default applies ONLY when TANREN_MAX_RUN_HOURS is genuinely UNSET/blank", () => {
+    // Codex r4 §1: unset (absent key) and an empty string (compose's `${VAR:-}`)
+    // both resolve to the documented 6h ceiling — never a throw.
+    expect(resolveScopedRunTokenTtlSeconds({})).toBe(ceilingSeconds(6));
+    expect(resolveScopedRunTokenTtlSeconds({ TANREN_MAX_RUN_HOURS: "" })).toBe(ceilingSeconds(6));
+  });
+
+  it("THROWS LOUD on a PRESENT non-positive / malformed override (no silent collapse to the default)", () => {
+    // Codex r4 §1: a present-but-malformed deploy-config value is a PARSE failure,
+    // not a recoverable runtime event — it must fail loud, never silently degrade to
+    // 6h (the old `log.error + return default` bug this test previously encoded).
+    // `"  "` → Number("  ") === 0 → non-positive → throws (a present, not unset, value).
+    for (const bad of ["0", "-3", "abc", "  ", "Infinity"]) {
+      expect(() => resolveScopedRunTokenTtlSeconds({ TANREN_MAX_RUN_HOURS: bad })).toThrow(
+        /TANREN_MAX_RUN_HOURS=.*is not a positive number/u,
+      );
     }
   });
 });
