@@ -10,6 +10,7 @@
 // writer commits onto it (dropping the bootstrap commit) before the push.
 import type { RunnerHandle } from "../contracts/allocator.js";
 import type { ActorIdentity } from "../contracts/vcsProvider.js";
+import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import { githubHttpsRemote, parseGitHubRepository } from "../providers/github.js";
 import { quoteSshShellArg } from "../ssh/command.js";
 import {
@@ -22,7 +23,32 @@ import {
 } from "../workspace/index.js";
 import { gitAuthedCommand, gitTokenAuthPrelude } from "../workspace/githubPush.js";
 import { resolveBootstrapCommand } from "./gate/index.js";
-import type { BootstrapStepInput, CommitBootstrapStepInput, RunPlannerLoopInput } from "./plannerRun.js";
+import type { RunPlannerLoopInput } from "./plannerRun.js";
+import { resolveAncestorStack } from "../dag/ancestorStack.js";
+import { walkerJjLocalBase } from "../dag/walkerJjLocalBaseFlag.js";
+import { bootstrapDependentWorkspace, type ClonedWorkspace } from "./plannerRunJjLocalBootstrap.js";
+
+// The workspace-prep step inputs (the run's bootstrap-install + commit-bootstrap-state
+// seams). Co-located here with the workspace-prep stage that consumes them; `plannerRun.ts`
+// re-imports them for the `RunPlannerLoopInput` test seams (a type-only import — no cycle).
+export interface BootstrapStepInput {
+  ssh: CommandSubstrate;
+  target: RunnerHandle;
+  workspacePath: string;
+  command?: string;
+  // Plane B: the project's dev+test app env, injected at the SSH substrate boundary
+  // (never folded into `command`, so a bootstrap failure can't leak it into the
+  // error message / events). See bootstrap.ts. Undefined ⇒ no app env.
+  appEnv?: Record<string, string>;
+  timeoutMs: number;
+}
+
+export interface CommitBootstrapStepInput {
+  ssh: CommandSubstrate;
+  target: RunnerHandle;
+  workspacePath: string;
+  timeoutMs: number;
+}
 
 export interface PreparedRunWorkspace {
   // The clone HEAD (base-branch tip). The writer commits replay onto this before
@@ -42,6 +68,14 @@ export interface PreparedRunWorkspace {
   // (apex v28: the auditor flagged `contract-files-authored`). The files still ride into
   // the PR — only the answerer REVIEW base excludes them; the human/merge still sees them.
   baseSha: string;
+  // WS-A PR-4 (walker-jj-local-integration-design.md §4): the merge-time rebase base when
+  // the run's base was jj-ASSEMBLED locally from the ancestor stack (`WALKER_JJ_LOCAL_BASE`
+  // on + a non-empty stack) — the LOCAL assembly bookmark name the bootstrap materialized.
+  // It REPLACES `${targetBranch}@origin` as the conflict-resolver's `baseRevision` (the PR
+  // head rebases onto the re-assembled stack head, not a synthesized host ref). Absent on
+  // the legacy single-ref clone path (flag off / empty stack) ⇒ the conflict resolver keeps
+  // `${targetBranch}@origin` exactly as today.
+  bootstrappedBaseRevision?: string;
 }
 
 // Clones the target branch + installs deps + commits the bootstrap state, and
@@ -56,7 +90,8 @@ export async function prepareRunWorkspace(
   // rather than committing as an unattributable author). The SAME resolved value
   // authenticates the clone AND sets the workspace git author below.
   const resolved = await resolveCloneCredential(input);
-  const cloneHeadSha = await cloneWorkspace(input, target, workspacePath, resolved);
+  const cloned = await cloneWorkspace(input, target, workspacePath, resolved);
+  const cloneHeadSha = cloned.cloneHeadSha;
 
   // MERGE-SAFETY (self-identity): set the workspace git author IMMEDIATELY after the
   // clone and BEFORE any commit (the bootstrap commit and every writer/rebase commit
@@ -137,7 +172,17 @@ export async function prepareRunWorkspace(
   // push drops only `bootstrapSha` (below them), so each is replayed onto the PR branch.
   const baseSha = contractSha === "" ? seedBase : contractSha;
 
-  return { cloneHeadSha, bootstrapSha, baseSha };
+  return {
+    cloneHeadSha,
+    bootstrapSha,
+    baseSha,
+    // WS-A PR-4: surface the locally-assembled base revision ONLY when the bootstrap path
+    // ran (flag on + non-empty stack); absent ⇒ the conflict resolver keeps the legacy
+    // `${targetBranch}@origin` base.
+    ...(cloned.bootstrappedBaseRevision !== undefined && {
+      bootstrappedBaseRevision: cloned.bootstrappedBaseRevision,
+    }),
+  };
 }
 
 // Materialize the SELECTED template's conforming files into the workspace + commit
@@ -240,19 +285,34 @@ async function materializeContractFilesCommit(
 // the clone runs unauthenticated against the repo URL as-is (public-repo path),
 // unchanged. The git AUTHOR is configured by a separate step (configureWorkspace
 // GitIdentity) right after this clone, BEFORE the first commit.
+//
+// WS-A PR-4: when this is a DEPENDENT speculative run (a non-empty ancestor stack) AND
+// `WALKER_JJ_LOCAL_BASE` is on, it instead routes to the jj-LOCAL base bootstrap
+// (`bootstrapDependentWorkspace`, plannerRunJjLocalBootstrap.ts); default-OFF / a
+// non-speculative run takes the single-ref clone below — byte-identical to main.
 async function cloneWorkspace(
   input: RunPlannerLoopInput,
   target: RunnerHandle,
   workspacePath: string,
   resolved: ResolvedCloneCredential,
-): Promise<string> {
+): Promise<ClonedWorkspace> {
+  // WS-A PR-4 (walker-jj-local-integration-design.md §2.1): when this is a DEPENDENT
+  // speculative run (a non-empty ancestor stack) AND `WALKER_JJ_LOCAL_BASE` is on, the
+  // run's base is jj-ASSEMBLED LOCALLY from the real ancestor PR-head refs on the run's
+  // OWN runner (`bootstrapDependentBase`) — REPLACING the legacy single-ref clone of a
+  // synthesized `tanren/integ/<dep>` host ref. Default-OFF (flag unset) / a non-speculative
+  // run takes the EXACT single-ref clone below — byte-identical to main.
+  const stack = resolveAncestorStack({ ancestorStack: input.context.ancestorStack });
+  if (walkerJjLocalBase() && stack.length > 0) {
+    return bootstrapDependentWorkspace(input, target, workspacePath, resolved, stack);
+  }
   const result = await runWorkspaceSshCommand(input.ssh, target, {
     label: "prepare planner-loop workspace",
     timeoutMs: input.timeoutMs,
     command: buildCloneCommand(input.context.repoUrl, input.context.targetBranch, resolved, workspacePath),
     ...(resolved.token === undefined ? {} : { stdin: resolved.token }),
   });
-  return result.stdout.trim();
+  return { cloneHeadSha: result.stdout.trim() };
 }
 
 // MERGE-SAFETY (self-identity): configure the workspace's repo-local git author so
@@ -290,7 +350,7 @@ export async function configureWorkspaceGitIdentity(
  * Tanren-identity set (mergeDispatch) attribute to the SAME login. A genuinely
  * unauthenticated public-repo clone has neither (it never pushes as Tanren).
  */
-interface ResolvedCloneCredential {
+export interface ResolvedCloneCredential {
   token: string | undefined;
   identity: ActorIdentity | undefined;
 }

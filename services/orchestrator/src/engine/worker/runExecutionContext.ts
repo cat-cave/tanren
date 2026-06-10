@@ -16,6 +16,7 @@ import { resolveCreditUsdRate } from "../costs/index.js";
 import type { ResolvedRunCredentials } from "../credentials/resolveCredentials.js";
 import { orgScopeFromRunOrgId, resolveCredentialsForRun } from "../credentials/resolveCredentials.js";
 import { materializeContractFiles } from "../forge/scaffold/index.js";
+import { resolveAncestorStack } from "../dag/ancestorStack.js";
 import type { PlannerRunContext } from "../workflow/plannerRun.js";
 
 type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
@@ -75,6 +76,12 @@ const RunSpecProjectRowSchema = z.object({
   // the speculative integration branch this run's PR bases on (the dynamic
   // base), or NULL for a normal run that bases on `default_branch`.
   speculative_base: z.string().nullable(),
+  // WS-A PR-4: the ordered ancestor stack (`runs.ancestor_stack` jsonb) + the legacy
+  // per-ancestor head-sha map — both read so `resolveAncestorStack` DUAL-READS (new
+  // column when present, else reconstructs from the legacy map). A non-empty stack is
+  // what `WALKER_JJ_LOCAL_BASE` keys the jj-local bootstrap on. Both nullable/unknown.
+  ancestor_stack: z.unknown().optional(),
+  integrated_ancestor_shas: z.unknown().optional(),
   runner_image: z.string(),
   config: z.unknown(),
   org_id: z.string().nullable(),
@@ -117,6 +124,8 @@ export async function loadRunExecutionContext(
        p.repo_url,
        p.default_branch,
        r.speculative_base,
+       r.ancestor_stack,
+       r.integrated_ancestor_shas,
        p.runner_image,
        p.config,
        p.org_id,
@@ -136,6 +145,14 @@ export async function loadRunExecutionContext(
     throw new RunExecutionContextNotFoundError(input.runId);
   }
   const decoded = RunSpecProjectRowSchema.parse(row);
+  // WS-A PR-4: resolve the dependent run's ordered ancestor stack (DUAL-READ — the new
+  // `ancestor_stack` column when present, else reconstructed from the legacy per-ancestor
+  // sha map). Empty for a non-speculative run. The bootstrap reads it via the context.
+  const ancestorStack = resolveAncestorStack({
+    ancestorStack: decoded.ancestor_stack,
+    speculativeBase: decoded.speculative_base,
+    integratedAncestorShas: decoded.integrated_ancestor_shas,
+  });
   // migrateProjectConfig parses the stored V1 row and raises on a missing or
   // unknown version (no silent default), mirroring the route read-path parser.
   const projectConfig = migrateProjectConfig(decoded.config);
@@ -227,6 +244,13 @@ export async function loadRunExecutionContext(
     ...(projectConfig.templateRef !== undefined && {
       templateSeed: { repoRef: projectConfig.templateRef.repoRef },
     }),
+    // WS-A PR-4 (walker-jj-local-integration-design.md §2.1): re-hydrate the ordered
+    // ancestor stack (DUAL-READ: the new `runs.ancestor_stack` column when present, else
+    // reconstructed from the legacy `integrated_ancestor_shas` map). A non-empty stack
+    // means this is a DEPENDENT speculative run; with `WALKER_JJ_LOCAL_BASE` on, the
+    // workspace bootstrap jj-assembles its base from these ancestor refs LOCALLY instead
+    // of the legacy single-ref clone. Spread so a non-speculative run leaves it absent.
+    ...(ancestorStack.length > 0 && { ancestorStack }),
   };
 
   return { context, projectConfig, orgId: decoded.org_id };
