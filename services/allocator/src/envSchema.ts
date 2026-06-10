@@ -13,13 +13,14 @@
  * `MIGRATION_DATABASE_URL` — keep their `requireEnv` guards (resolved at use, so a
  * unit test can import the schema without the production secret env).
  *
- * REAPER-SAFETY EXCEPTION (`TANREN_MAX_RUN_HOURS`): this knob is integrated via
- * the merged `requirePositiveHours` helper, NOT a crash-on-bad Zod field. A
- * non-positive / malformed run-hour cap must NOT crash the allocator — it falls
- * back to the default with a LOUD `console.error` — because a `<= now` reaper
- * threshold would reap EVERY active runner (incl. a live apex run). So the helper
- * is reused here, unchanged, to resolve this one field while the rest of the
- * schema validates strictly.
+ * REAPER-SAFETY (`TANREN_MAX_RUN_HOURS`): this knob is integrated via the
+ * `requirePositiveHours` helper. UNSET → the documented 6h default; a PRESENT
+ * non-positive / malformed run-hour cap THROWS loud at boot (no-silent-fallback
+ * doctrine, Codex r4 §1) — because a `<= now` reaper threshold would reap EVERY
+ * active runner (incl. a live apex run), so a typo'd operator value must fail the
+ * boot rather than masquerade as a working default. The helper is reused here so
+ * the same UNSET-defaults / PRESENT-malformed-throws contract governs both the
+ * allocator schema AND the scoped-token TTL resolver (plannerRunScopedCreds).
  */
 import { z } from "zod";
 import { requirePositiveHours } from "./requirePositiveHours.js";

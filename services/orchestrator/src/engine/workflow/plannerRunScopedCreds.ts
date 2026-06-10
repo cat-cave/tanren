@@ -19,9 +19,6 @@ import {
 } from "../contracts/secretStoreFactory.js";
 import type { EventName, EventPayload } from "../events/index.js";
 import type { PlannerRunContext, RunPlannerLoopInput } from "./plannerRun.js";
-import { createLogger } from "../observability/logger.js";
-
-const log = createLogger("orchestrator");
 
 /**
  * The per-run credential-scoping seam, threaded as ONE optional field through the
@@ -124,24 +121,30 @@ const DEFAULT_MAX_RUN_HOURS = 6;
  * shorter than the runner ceiling means a run crossing the TTL loses every credential
  * materialization (the §3.14 finding — a 2h TTL vs a 6h runner). The TTL is the FULL
  * ceiling (not a fraction) so the token outlives any run the sweeper would still let
- * live. A non-positive / non-finite override falls back LOUDLY to the 6h default (a
- * zero/garbage ceiling must never collapse the TTL to nothing). The de-privilege still
- * holds: the token's ACL is scoped to ONLY this run's credential paths.
+ * live.
+ *
+ * No-silent-fallback (Codex r4 §1), CONSISTENT WITH THE ALLOCATOR SCHEMA: the 6h
+ * default applies ONLY when the var is genuinely UNSET/blank. A PRESENT non-positive
+ * / non-finite value is a deploy-config PARSE failure and THROWS loud — it must NOT
+ * quietly degrade to the default (which the old `log.error + return default` did,
+ * letting a typo'd ceiling silently mint a 6h token while the operator believed they
+ * set something else). The de-privilege still holds: the token's ACL is scoped to
+ * ONLY this run's credential paths.
  */
 export function resolveScopedRunTokenTtlSeconds(env: NodeJS.ProcessEnv = process.env): number {
   const raw = env["TANREN_MAX_RUN_HOURS"];
-  if (raw !== undefined && raw !== "") {
-    const parsed = Number(raw);
-    if (Number.isFinite(parsed) && parsed > 0) {
-      return Math.ceil(parsed * 3_600);
-    }
-    log.error(
-      "TANREN_MAX_RUN_HOURS is not a positive number; falling back to the default for the scoped-credential " +
-        "token TTL. The token TTL must cover the runner ceiling or a long run loses its credentials mid-run.",
-      { raw: JSON.stringify(raw), fallbackHours: DEFAULT_MAX_RUN_HOURS },
+  if (raw === undefined || raw === "") {
+    return DEFAULT_MAX_RUN_HOURS * 3_600;
+  }
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new Error(
+      `TANREN_MAX_RUN_HOURS='${raw}' is not a positive number of hours. The scoped-credential token TTL derives ` +
+        "from this ceiling (it must cover the runner lifetime or a long run loses its credentials mid-run); a " +
+        "present-but-malformed value must NOT silently collapse to the default. Unset it to use the 6h default.",
     );
   }
-  return DEFAULT_MAX_RUN_HOURS * 3_600;
+  return Math.ceil(parsed * 3_600);
 }
 /**
  * Per-credential-ref read budget. Each writer iteration + each Answerer call

@@ -1,3 +1,4 @@
+import { z } from "zod";
 import {
   persistedRunnerKeys,
   sshRunnerHandle,
@@ -9,6 +10,47 @@ import {
 import type { RunnerStore } from "./runnerStore.js";
 
 const allocatorName = "manual-ssh";
+
+// Strict decode of the manual-hosts JSON (Codex r4 §2). The old `JSON.parse(raw) as
+// ManualSshHost[]` in buildAllocator was a TRUSTED CAST: a bad host shape / blank
+// id-host-or-fingerprint / out-of-range port passed construction and only blew up
+// LATER during allocation/SSH (a cryptic mid-run failure on a misconfigured operator
+// value). This schema fails LOUD at construction — non-empty array; non-empty
+// `id`/`host`/`hostKeyFingerprint`; a TCP port in range when present; optional refs
+// non-empty when present. `.strict()` rejects stray keys so a typo'd field surfaces.
+const manualSshHostSchema: z.ZodType<ManualSshHost> = z
+  .object({
+    id: z.string().trim().min(1, "manual-ssh host id must be non-empty"),
+    host: z.string().trim().min(1, "manual-ssh host must be non-empty"),
+    port: z.number().int().min(1).max(65_535).optional(),
+    username: z.string().trim().min(1).optional(),
+    hostKeyFingerprint: z.string().trim().min(1, "manual-ssh hostKeyFingerprint must be non-empty"),
+    identitySecretRef: z.string().trim().min(1).optional(),
+  })
+  .strict();
+const manualSshHostsSchema = z.array(manualSshHostSchema).min(1, "manual_ssh allocator requires at least one host");
+
+/**
+ * Parse + strictly validate the `TANREN_MANUAL_SSH_HOSTS` JSON. Throws LOUD on
+ * non-JSON or any malformed/blank-field/bad-port host (Codex r4 §2) so a
+ * misconfigured manual pool fails at construction, not mid-allocation.
+ */
+export function parseManualSshHosts(raw: string): ManualSshHost[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (cause) {
+    throw new Error("TANREN_MANUAL_SSH_HOSTS is not valid JSON (expected a JSON array of hosts)", { cause });
+  }
+  const result = manualSshHostsSchema.safeParse(parsed);
+  if (!result.success) {
+    const issues = result.error.issues
+      .map((issue) => `  ${issue.path.join(".") || "(root)"}: ${issue.message}`)
+      .join("\n");
+    throw new Error(`TANREN_MANUAL_SSH_HOSTS is malformed (fail-loud at construction):\n${issues}`);
+  }
+  return result.data;
+}
 
 /**
  * A single pre-provisioned SSH host in the manual pool. Hosts are long-lived,

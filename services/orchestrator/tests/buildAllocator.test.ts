@@ -190,6 +190,67 @@ describe("buildAllocatorFromEnv — single-kind selection", () => {
     expect(await buildAllocatorFromEnv(fakePool, secrets)).toBeInstanceOf(ManualSshAllocator);
   });
 
+  // Finding #2 (Codex r4): the manual-hosts JSON is decoded with a STRICT Zod
+  // schema, not a trusted `JSON.parse(raw) as ManualSshHost[]` cast. A bad shape /
+  // blank field / out-of-range port fails LOUD at construction, not cryptically
+  // later during allocation/SSH.
+  it("manual_ssh: a valid full host (with optional port/user/ref) parses", async () => {
+    process.env.TANREN_ALLOCATOR_KIND = "manual_ssh";
+    process.env.TANREN_MANUAL_SSH_HOSTS = JSON.stringify([
+      {
+        id: "h1",
+        host: "10.0.0.1",
+        port: 2222,
+        username: "tanren",
+        hostKeyFingerprint: "SHA256:x",
+        identitySecretRef: "credential/ssh/h1",
+      },
+    ]);
+    expect(await buildAllocatorFromEnv(fakePool, secrets)).toBeInstanceOf(ManualSshAllocator);
+  });
+
+  it("manual_ssh: throws on non-JSON hosts", async () => {
+    process.env.TANREN_ALLOCATOR_KIND = "manual_ssh";
+    process.env.TANREN_MANUAL_SSH_HOSTS = "{not json";
+    await expect(buildAllocatorFromEnv(fakePool, secrets)).rejects.toThrow(/is not valid JSON/u);
+  });
+
+  it("manual_ssh: throws on an EMPTY hosts array (non-empty array required)", async () => {
+    process.env.TANREN_ALLOCATOR_KIND = "manual_ssh";
+    process.env.TANREN_MANUAL_SSH_HOSTS = "[]";
+    await expect(buildAllocatorFromEnv(fakePool, secrets)).rejects.toThrow(/at least one host/u);
+  });
+
+  it("manual_ssh: throws on a BLANK required field (id / host / hostKeyFingerprint)", async () => {
+    process.env.TANREN_ALLOCATOR_KIND = "manual_ssh";
+    for (const bad of [
+      { id: "", host: "10.0.0.1", hostKeyFingerprint: "SHA256:x" },
+      { id: "h1", host: "  ", hostKeyFingerprint: "SHA256:x" },
+      { id: "h1", host: "10.0.0.1", hostKeyFingerprint: "" },
+    ]) {
+      process.env.TANREN_MANUAL_SSH_HOSTS = JSON.stringify([bad]);
+      await expect(buildAllocatorFromEnv(fakePool, secrets)).rejects.toThrow(/is malformed/u);
+    }
+  });
+
+  it("manual_ssh: throws on an out-of-range / non-integer port", async () => {
+    process.env.TANREN_ALLOCATOR_KIND = "manual_ssh";
+    for (const port of [0, 70_000, 22.5]) {
+      process.env.TANREN_MANUAL_SSH_HOSTS = JSON.stringify([
+        { id: "h1", host: "10.0.0.1", port, hostKeyFingerprint: "SHA256:x" },
+      ]);
+      await expect(buildAllocatorFromEnv(fakePool, secrets)).rejects.toThrow(/is malformed/u);
+    }
+  });
+
+  it("manual_ssh: throws on a stray unknown field (strict — surfaces a typo'd key)", async () => {
+    process.env.TANREN_ALLOCATOR_KIND = "manual_ssh";
+    process.env.TANREN_MANUAL_SSH_HOSTS = JSON.stringify([
+      { id: "h1", host: "10.0.0.1", hostKeyFingerprint: "SHA256:x", hostKeyFingerprintTYPO: "y" },
+    ]);
+    await expect(buildAllocatorFromEnv(fakePool, secrets)).rejects.toThrow(/is malformed/u);
+  });
+
   it("builds the hetzner allocator when its credential ref resolves", async () => {
     process.env.TANREN_ALLOCATOR_KIND = "hetzner";
     Object.assign(process.env, HETZNER_ENV);
