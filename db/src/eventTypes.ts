@@ -136,6 +136,7 @@ export const eventTypeNames = [
   "runner.allocated",
   "runner.failed",
   "runner.released",
+  "runner.swept",
   "spec.cancelled",
   "task.completed",
   "task.failed",

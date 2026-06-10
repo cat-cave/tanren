@@ -23,6 +23,7 @@ class AuditStore implements RunnerStore {
   async recordAllocated(audit: AllocationAudit): Promise<void> {
     this.audits.push({ ...audit });
   }
+  async recordSwept(): Promise<void> {}
   async markReleased(): Promise<RunnerRecord | undefined> {
     return undefined;
   }
@@ -30,6 +31,9 @@ class AuditStore implements RunnerStore {
     return undefined;
   }
   async listActiveOlderThan(): Promise<RunnerRecord[]> {
+    return [];
+  }
+  async listStuck(): Promise<never[]> {
     return [];
   }
 }

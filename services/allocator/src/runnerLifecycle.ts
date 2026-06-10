@@ -32,6 +32,44 @@ export interface RunnerRecord {
   released: boolean;
 }
 
+/**
+ * Why the periodic sweeper reclaimed a STUCK runner the normal release path
+ * missed — the discriminated stuck-state. Carried on the reclaimed record and
+ * stamped onto the durable `runner.swept` audit event.
+ *
+ *  - `terminal_run`: the owning run is terminal (completed/failed/halted/cancelled)
+ *    yet the runner was never released (the run crashed before its release `finally`).
+ *  - `ttl_exceeded`: the runner outlived the run-hours TTL ceiling
+ *    (`TANREN_MAX_RUN_HOURS`) — the apex-relevant leak guard.
+ *  - `unclaimed_grace`: a wedged allocation never tied to a live `runs` row
+ *    (run_id IS NULL), older than the grace window.
+ */
+export type RunnerReclaimReason = "terminal_run" | "ttl_exceeded" | "unclaimed_grace";
+
+/** A reclaimable runner: its full record plus the stuck-state the sweeper found it in. */
+export interface StuckRunner {
+  record: RunnerRecord;
+  reason: RunnerReclaimReason;
+}
+
+/** The two age thresholds the stuck-state query needs (absolute instants). */
+export interface StuckThresholds {
+  /** A runner created before this (now − maxRunHours) is past its TTL ceiling. */
+  ttlThreshold: Date;
+  /** A run-less runner created before this (now − graceMs) is a wedged allocation. */
+  graceThreshold: Date;
+}
+
+/** A durable audit record of a sweeper reclaim, written org-scoped on success. */
+export interface SweptAudit {
+  runnerId: string;
+  /** The owning run id, or `null` for a wedged (unclaimed-grace) allocation. */
+  runId: string | null;
+  projectId: string | null;
+  orgId: string;
+  reason: RunnerReclaimReason;
+}
+
 /** A durable audit record of a runner allocation, written org-scoped on success. */
 export interface AllocationAudit {
   runnerId: string;
@@ -49,11 +87,25 @@ export interface RunnerStore {
   findActive(runnerId: string): Promise<RunnerRecord | undefined>;
   listActiveOlderThan(threshold: Date): Promise<RunnerRecord[]>;
   /**
+   * List every active (un-released) runner in a STUCK state the normal release
+   * path missed, each tagged with WHY. A genuine reconciler — a healthy in-flight
+   * runner (its owning run still non-terminal, within TTL, claimed) is NEVER
+   * returned. Cross-org SYSTEM read (the sweeper reaps across all tenants), so
+   * the live impl runs on the BYPASSRLS system pool. See {@link StuckRunner}.
+   */
+  listStuck(thresholds: StuckThresholds): Promise<StuckRunner[]>;
+  /**
    * Append a durable, org-scoped `allocator.allocated` audit event for a
    * successful allocation. Mirrors the audit trail every other MUTATING surface
    * leaves — `/allocate` is a mutating route that previously left none.
    */
   recordAllocated(audit: AllocationAudit): Promise<void>;
+  /**
+   * Append the durable, org-scoped `runner.swept` audit event proving a sweeper
+   * reclaim fired (reason + the non-secret runner/run handles). A leak the
+   * per-run `finally` missed is never reclaimed silently.
+   */
+  recordSwept(audit: SweptAudit): Promise<void>;
 }
 
 export interface AllocateInput {
@@ -301,6 +353,42 @@ export class RunnerLifecycle {
     return reclaimed;
   }
 
+  /**
+   * Reconcile STUCK/LEAKED runners the normal release path missed: a runner whose
+   * owning run is terminal but unreleased, a runner past the run-hours TTL ceiling,
+   * or a wedged allocation never tied to a live run. Each stuck candidate is
+   * released through the SINGLE atomic claim (`release` → `markReleased`), so a
+   * healthy in-flight runner is never touched (the query already excludes it) and a
+   * concurrent /release race tears down exactly once. The release reason carries the
+   * stuck-state. On a winning claim the reclaimed record is returned WITH its reason
+   * so the caller can emit the durable `runner.swept` audit. A release that THROWS is
+   * re-thrown to the caller (the sweeper logs + counts it loud — never swallowed).
+   *
+   * Idempotent: a second sweep over the same DB state reclaims nothing new (the
+   * first sweep already flipped released_at; the still-active healthy runners stay
+   * excluded by the stuck query).
+   */
+  async sweepStuck(maxRunHours: number, unclaimedGraceMs: number): Promise<StuckRunner[]> {
+    const nowMs = this.clock().getTime();
+    const thresholds: StuckThresholds = {
+      ttlThreshold: new Date(nowMs - maxRunHours * 3_600_000),
+      graceThreshold: new Date(nowMs - unclaimedGraceMs),
+    };
+    const candidates = await this.store.listStuck(thresholds);
+    const reclaimed: StuckRunner[] = [];
+    for (const candidate of candidates) {
+      // The release reason mirrors the stuck-state so the existing release-status
+      // vocabulary stays meaningful (`abandoned` for ttl/wedged, terminal otherwise).
+      const result = await this.release(candidate.record.runnerId, releaseReasonFor(candidate.reason));
+      // A LIVE→released claim we won; the loser (already released by a concurrent
+      // path) returns released:false and is skipped — never double-counted.
+      if (result.released) {
+        reclaimed.push(candidate);
+      }
+    }
+    return reclaimed;
+  }
+
   private async readHostKeyFingerprint(containerId: string): Promise<string> {
     let lastError: unknown;
     for (let attempt = 0; attempt < this.hostKeyReadAttempts; attempt += 1) {
@@ -319,6 +407,16 @@ export class RunnerLifecycle {
       `runner container ${containerId} did not expose an SSH host key in time${lastError instanceof Error ? `: ${lastError.message}` : ""}`,
     );
   }
+}
+
+/**
+ * Map a sweeper stuck-reason to the `release()` reason string. All three reclaim
+ * paths resolve to the `abandoned` release STATUS (see pgRunnerStore.releaseStatusFor)
+ * — a swept runner is an abandoned one regardless of WHY — but the reason string
+ * carries the discriminated cause into the release path for observability.
+ */
+export function releaseReasonFor(reason: RunnerReclaimReason): string {
+  return reason === "terminal_run" ? "abandoned-terminal-run" : "abandoned";
 }
 
 export function volumeNamesFor(runId: string): { workspace: string; codexHome: string } {
