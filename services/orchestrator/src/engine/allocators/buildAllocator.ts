@@ -8,7 +8,7 @@ import { GcpAllocator } from "./gcpAllocator.js";
 import { HetznerAllocator } from "./hetznerAllocator.js";
 import { KubernetesAllocator } from "./kubernetesAllocator.js";
 import { ManualSshAllocator, type ManualSshHost } from "./manualSshAllocator.js";
-import { AllocatorRoutingConfig, type AllocatorKind } from "./poolPolicy.js";
+import { AllocatorKind, AllocatorRoutingConfig } from "./poolPolicy.js";
 import { PgRunnerStore, type RunnerStore } from "./runnerStore.js";
 import { UnconfiguredAllocator } from "./scaffoldedAllocators.js";
 import { SidecarHttpAllocator } from "./sidecarHttpAllocator.js";
@@ -249,8 +249,14 @@ async function buildKubernetes(runners: RunnerStore, secrets: SecretStore): Prom
  * Builds the single allocator kind named by `kind`. This is the non-router path
  * used by the existing `static` / `sidecar` deployments. Async because the cloud
  * builders resolve their credential SECRETS through the SecretStore (Vault refs).
+ *
+ * `kind` MUST already be a parsed {@link AllocatorKind} (a closed enum value).
+ * Parsing — and the loud throw on an unknown/typo'd value — happens at the entry
+ * point ({@link buildAllocatorFromEnv}); the switch here is therefore exhaustive
+ * over the enum with NO `default` fallthrough, so an unknown kind can NEVER
+ * silently degrade to the sidecar allocator.
  */
-async function buildSingle(kind: string, runners: RunnerStore, secrets: SecretStore): Promise<Allocator> {
+async function buildSingle(kind: AllocatorKind, runners: RunnerStore, secrets: SecretStore): Promise<Allocator> {
   switch (kind) {
     case "static":
       return buildStatic(runners);
@@ -267,8 +273,6 @@ async function buildSingle(kind: string, runners: RunnerStore, secrets: SecretSt
     case "kubernetes":
       return buildKubernetes(runners, secrets);
     case "sidecar":
-      return buildSidecar(runners);
-    default:
       return buildSidecar(runners);
   }
 }
@@ -336,8 +340,11 @@ async function buildRegistry(
  * - `TANREN_ALLOCATOR_KIND=router` builds an {@link AllocatorRouter} over every
  *   kind, driven by `TANREN_ALLOCATOR_ROUTING` (a JSON {@link AllocatorRoutingConfig}).
  *   Label routing + pool policy live here.
- * - Any other kind (`static`, `sidecar`, `manual_ssh`, `hetzner`) builds that
- *   single allocator directly (backward compatible; default is `sidecar`).
+ * - Any other kind (`static`, `sidecar`, `manual_ssh`, `hetzner`, …) builds that
+ *   single allocator directly. The kind is parsed against the closed
+ *   {@link AllocatorKind} enum: UNSET resolves to the documented default
+ *   (`sidecar`), but a SET-yet-unknown/typo'd value is a LOUD config error — it
+ *   NEVER silently degrades to the sidecar allocator.
  *
  * `secrets` is the SAME secret manager the SSH substrate reads from AND the seam
  * cloud-provider credentials are resolved through: a Hetzner/DO/GCP/AWS/K8s token
@@ -347,7 +354,16 @@ async function buildRegistry(
  */
 export async function buildAllocatorFromEnv(pool: pg.Pool, secrets: SecretStore): Promise<Allocator> {
   const runners = new PgRunnerStore(pool);
-  const kind = (env("TANREN_ALLOCATOR_KIND") ?? "sidecar").toLowerCase();
+  const rawKind = env("TANREN_ALLOCATOR_KIND");
+
+  // UNSET → the documented default (`sidecar`), explicitly. A SET value is parsed
+  // against the closed enum below — there is NO "unset = sidecar AND unknown =
+  // sidecar" conflation: a typo'd kind must fail loud, not run the wrong allocator.
+  if (rawKind === undefined) {
+    return buildSidecar(runners);
+  }
+
+  const kind = rawKind.toLowerCase();
 
   if (kind === "router") {
     const raw = env("TANREN_ALLOCATOR_ROUTING");
@@ -358,5 +374,16 @@ export async function buildAllocatorFromEnv(pool: pg.Pool, secrets: SecretStore)
     return new AllocatorRouter(await buildRegistry(runners, secrets, config), config);
   }
 
-  return buildSingle(kind, runners, secrets);
+  // Parse the kind against the closed enum. An unknown/typo'd value is a LOUD
+  // config error here (never a silent fall-through to the sidecar allocator).
+  const parsed = AllocatorKind.safeParse(kind);
+  if (!parsed.success) {
+    const allowed = [...AllocatorKind.options, "router"].join(", ");
+    throw new Error(
+      `TANREN_ALLOCATOR_KIND='${rawKind}' is not a known allocator kind (expected one of: ${allowed}). ` +
+        "Unset it to use the documented default (sidecar); a typo must NOT silently run the wrong allocator.",
+    );
+  }
+
+  return buildSingle(parsed.data, runners, secrets);
 }

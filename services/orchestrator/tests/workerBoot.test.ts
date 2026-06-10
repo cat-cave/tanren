@@ -31,6 +31,8 @@ describe("plane-split P1 — standalone worker boot", () => {
     "TANREN_RUN_WORKER",
     "TANREN_RUN_WORKER_CONCURRENCY",
     "TANREN_RUNNER_IDENTITY_KEY_PATH",
+    // Saved/restored so the custom-ref / blank-ref cases can set it without leaking.
+    "TANREN_RUNNER_IDENTITY_SECRET_REF",
     // Saved/restored so the "inline env is IGNORED" case can set it without leaking.
     "TANREN_RUNNER_IDENTITY_PRIVATE_KEY",
     "TANREN_ALLOCATOR_KIND",
@@ -46,6 +48,7 @@ describe("plane-split P1 — standalone worker boot", () => {
     process.env["TANREN_ALLOCATOR_KIND"] = "static";
     // No identity to seed → bootRunWorker's seed step is a no-op (memory store).
     delete process.env["TANREN_RUNNER_IDENTITY_KEY_PATH"];
+    delete process.env["TANREN_RUNNER_IDENTITY_SECRET_REF"];
     delete process.env["TANREN_RUNNER_IDENTITY_PRIVATE_KEY"];
     resetSystemPool();
   });
@@ -137,6 +140,29 @@ describe("plane-split P1 — standalone worker boot", () => {
     }
     rmSync(keyFile, { force: true });
     delete process.env["TANREN_RUNNER_IDENTITY_SECRET_REF"];
+  });
+
+  it('a BLANK TANREN_RUNNER_IDENTITY_SECRET_REF fails-closed to the validated default (never a silent "")', async () => {
+    // SECURITY BOUNDARY: a blank ref must NOT become the live secret ref. The old
+    // `process.env[...] ?? "..."` let `""` through (`??` only catches null/undefined),
+    // so a blank value seeded the identity under the empty ref. Routing through the
+    // shared parsed env contract (`emptyToUndefined` + `.min(1)` + default) makes a
+    // blank ref resolve to the validated default — observable here: the identity is
+    // seeded under the default ref, and NOTHING is written under the empty ref "".
+    process.env["TANREN_RUN_WORKER_CONCURRENCY"] = "1";
+    process.env["TANREN_RUNNER_IDENTITY_SECRET_REF"] = "";
+    const keyFile = join(mkdtempSync(join(tmpdir(), "tanren-runner-key-")), "id_ed25519");
+    writeFileSync(keyFile, "BLANK-REF-KEY");
+    process.env["TANREN_RUNNER_IDENTITY_KEY_PATH"] = keyFile;
+    const booted = await bootRunWorker();
+    try {
+      expect((await booted.secrets.get("runner/local-docker/identity"))?.value).toBe("BLANK-REF-KEY");
+      // The blank ref is never honored — no secret lands under the empty ref.
+      expect(await booted.secrets.get("")).toBeUndefined();
+    } finally {
+      await booted.stop();
+    }
+    rmSync(keyFile, { force: true });
   });
 
   it("IGNORES a plaintext TANREN_RUNNER_IDENTITY_PRIVATE_KEY env (the inline path is deleted)", async () => {

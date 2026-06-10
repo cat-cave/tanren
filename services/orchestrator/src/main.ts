@@ -4,7 +4,12 @@ import { createDbPool, migrate, PgNotifyListener } from "@tanren/db";
 import { Hono } from "hono";
 import type pg from "pg";
 import { buildAuthFromEnv, type BuildAppAuthOptions } from "./mainAuth.js";
-import { buildSecretStore, type SecretStore, type CommandSubstrate } from "./engine/contracts/index.js";
+import {
+  buildSecretStore,
+  requireVaultToken,
+  type SecretStore,
+  type CommandSubstrate,
+} from "./engine/contracts/index.js";
 import { FetchGitHubHttpClient, type GitHubHttpClient } from "./engine/providers/github.js";
 import { buildVcsProvider } from "./engine/providers/buildVcsProvider.js";
 import { GithubAppTokenMinter } from "./engine/providers/githubAppTokenMinter.js";
@@ -49,12 +54,14 @@ export function requireEnv(name: string): string {
 let productionPool: pg.Pool | undefined;
 
 async function vaultHealth() {
-  // The broad Vault token is REQUIRED — there is NO `dev-root-token` fallback (the
-  // dev stack sets a real VAULT_TOKEN in env). This token is the orchestrator's
-  // broad credential; it is used ONLY to read Vault health and to MINT per-run
-  // scoped child tokens — it is never handed to a runner.
+  // The broad Vault token is REQUIRED — there is NO `dev-root-token` fallback. It is
+  // resolved through `requireVaultToken` (the SAME file-preferred precedence the
+  // SecretStore factory uses): the MOUNTED `VAULT_TOKEN_FILE` in prod (the broad
+  // token is never force-exported into the process env), else the `VAULT_TOKEN` env
+  // in dev. This token is the orchestrator's broad credential; it is used ONLY to
+  // read Vault health and to MINT per-run scoped child tokens — never handed to a runner.
   const response = await fetch(`${vaultAddr}/v1/sys/health`, {
-    headers: { "X-Vault-Token": requireEnv("VAULT_TOKEN") },
+    headers: { "X-Vault-Token": requireVaultToken() },
   });
   return {
     ok: response.ok || response.status === 429 || response.status === 472,

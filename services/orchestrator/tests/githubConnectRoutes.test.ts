@@ -12,6 +12,7 @@ import { generateKeyPairSync } from "node:crypto";
 import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
 import type { ActorContext } from "../src/auth/schemas.js";
+import { DEFAULT_MANAGED_CREDENTIAL_REF } from "../src/engine/config/managedProvider.js";
 import { migrateOrgConfig } from "../src/engine/config/orgConfig.js";
 import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
 import { storeGithubAppCredential } from "../src/engine/credentials/githubApp.js";
@@ -94,12 +95,22 @@ function buildFetch(opts: CapabilityFetchOptions = {}): typeof fetch {
   }) as unknown as typeof fetch;
 }
 
-async function buildHarness(opts: CapabilityFetchOptions = {}, actor: ActorContext = admin) {
+async function buildHarness(
+  opts: CapabilityFetchOptions = {},
+  actor: ActorContext = admin,
+  harnessOpts: { seedManagedCredential?: boolean } = {},
+) {
   const pool = new RoutesPool();
   pool.seedOrg({ id: "org_acme", login: "acme", config: { version: 1 } });
   pool.seedProject({ project_id: "project_acme", org_id: "org_acme" });
   const secrets = new InMemorySecretStore();
   await storeGithubAppCredential(secrets, { ref: APP_CREDENTIAL_REF, appId: "123456", privateKeyPem: pem() });
+  // The platform-managed provider credential the hosting layer provisions. Seeded
+  // by default so managed-mode onboarding reports ready; the missing-cred test
+  // opts OUT to prove the loud platform-config error.
+  if (harnessOpts.seedManagedCredential !== false) {
+    await secrets.put({ ref: DEFAULT_MANAGED_CREDENTIAL_REF, value: "sk-managed-platform-key" });
+  }
   const fetchImpl = buildFetch(opts);
   const minter = new GithubAppTokenMinter({ secrets, fetchImpl });
   const events = new RecordingEventStore();
@@ -240,6 +251,30 @@ describe("GET github — not connected", () => {
       missingPermissions: [],
     });
   });
+
+  // Finding #2: a persisted github_token ref pointing at NO secret is credential
+  // CORRUPTION, not "no GitHub connected" — it must fail LOUD, never report a
+  // quiet connected:false that hides the broken tenant state.
+  it("a configured-ref-but-missing-secret is a loud 409, not a silent connected:false", async () => {
+    const { app, pool } = await buildHarness();
+    // The org config persists a default github_token ref, but the secret store
+    // holds no value under it (corruption: e.g. the secret was deleted out-of-band).
+    pool.orgs.get("org_acme")!.config = {
+      version: 1,
+      defaultCredentials: { github_token: "credential/github/org/org_acme/default" },
+    };
+    const get = await reqJson(app, "GET", "/orgs/org_acme/github");
+    expect(get.status).toBe(409);
+    expect(get.body.error).toBe("github_credential_ref_missing");
+    expect(get.body.ref).toBe("credential/github/org/org_acme/default");
+  });
+
+  it("a genuinely-unconfigured org returns connected:false (not the corruption error)", async () => {
+    const { app } = await buildHarness();
+    const get = await reqJson(app, "GET", "/orgs/org_acme/github");
+    expect(get.status).toBe(200);
+    expect(get.body.connected).toBe(false);
+  });
 });
 
 describe("onboarding-status", () => {
@@ -273,11 +308,24 @@ describe("onboarding-status", () => {
     expect(ready.body.nextSteps).toEqual([]);
   });
 
-  it("classifies a managed provider as connected without a codex credential", async () => {
+  it("classifies a managed provider as connected once the platform credential resolves", async () => {
     const { app, pool } = await buildHarness();
     pool.orgs.get("org_acme")!.config = { version: 1, providerMode: "managed" };
     const status = await reqJson(app, "GET", "/orgs/org_acme/onboarding-status");
+    expect(status.status).toBe(200);
     expect(status.body.aiProvider).toEqual({ connected: true, classifiedAs: "managed" });
+  });
+
+  // Finding #3: managed mode must NOT be a pure config echo. With the platform
+  // managed credential ABSENT, onboarding fails loud (409) instead of reporting a
+  // false connected:true.
+  it("managed mode with an absent platform credential is a loud 409, not a false ready", async () => {
+    const { app, pool } = await buildHarness({}, admin, { seedManagedCredential: false });
+    pool.orgs.get("org_acme")!.config = { version: 1, providerMode: "managed" };
+    const status = await reqJson(app, "GET", "/orgs/org_acme/onboarding-status");
+    expect(status.status).toBe(409);
+    expect(status.body.error).toBe("managed_provider_credential_missing");
+    expect(status.body.ref).toBe(DEFAULT_MANAGED_CREDENTIAL_REF);
   });
 
   it("surfaces the repo-creation gap as a next step when GitHub lacks it", async () => {

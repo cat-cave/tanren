@@ -6,7 +6,6 @@
 // standalone deployable; this is the single construction site so the two paths
 // can never drift. See ROADMAP.md.
 
-import { readFile } from "node:fs/promises";
 import { createDbPool } from "@tanren/db";
 import type pg from "pg";
 import { buildAllocatorFromEnv } from "../allocators/index.js";
@@ -17,6 +16,7 @@ import { TimedGitHubHttpClient, TimedCommandSubstrate } from "../observability/i
 import { buildVcsProvider, FetchGitHubHttpClient, GithubAppTokenMinter } from "../providers/buildVcsProvider.js";
 import { SshCommandSubstrate } from "../ssh/index.js";
 import { buildClaimClientFromEnv } from "./claimClientFromEnv.js";
+import { resolveRunnerIdentitySecretRef, seedRunnerIdentitySecret } from "./runnerIdentityFromEnv.js";
 import { buildRunStateWriterFromEnv } from "./runStateWriterFromEnv.js";
 import type { JobReaper } from "./jobReaper.js";
 import type { RunWorker } from "./runWorker.js";
@@ -70,7 +70,13 @@ export interface BootedRunWorker {
  * migrated in `createApp` before this runs.
  */
 export async function bootRunWorker(): Promise<BootedRunWorker> {
-  const identitySecretRef = process.env["TANREN_RUNNER_IDENTITY_SECRET_REF"] ?? "runner/local-docker/identity";
+  // Resolve the runner-identity SECRET REF through the SHARED parsed env contract
+  // (`resolveRunnerIdentitySecretRef` → `parseOrchestratorEnv`), NOT a raw
+  // `process.env[...] ?? default` — that bypassed `envSchema.ts` and let a BLANK
+  // `""` become the live secret ref on this security boundary (`??` only catches
+  // null/undefined, not `""`). The validated read fails-closed to the schema
+  // default on blank/unset and crashes boot on a malformed ref.
+  const identitySecretRef = resolveRunnerIdentitySecretRef();
   const pool = createDbPool();
   const secrets = buildSecretStore();
   await seedRunnerIdentitySecret(secrets, identitySecretRef);
@@ -178,19 +184,4 @@ export async function bootRunWorker(): Promise<BootedRunWorker> {
     await Promise.all([worker.stop(), reaper.stop()]);
   };
   return { worker, reaper, pool, secrets, autonomy, runWorkspaceReaper, stop };
-}
-
-/**
- * Seed the runner SSH PRIVATE identity into the secret store (the same Vault the
- * API uses) from a MOUNTED SECRET FILE (`TANREN_RUNNER_IDENTITY_KEY_PATH`) — never
- * a plaintext env VALUE, so the key material never lands in `docker inspect` /
- * container env. A no-op when the path is unset (the API may have already seeded
- * the shared store, or the secret is Vault-seeded out of band). Mirrors `main.ts`'s
- * `seedRunnerIdentitySecret` so the standalone worker is self-contained.
- */
-async function seedRunnerIdentitySecret(secrets: SecretStore, ref: string): Promise<void> {
-  const keyPath = process.env["TANREN_RUNNER_IDENTITY_KEY_PATH"];
-  if (keyPath !== undefined && keyPath !== "") {
-    await secrets.put({ ref, value: await readFile(keyPath, "utf8") });
-  }
 }
