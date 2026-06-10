@@ -117,8 +117,16 @@ describe("buildAllocatorFromEnv — single-kind selection", () => {
     expect(allocator).toBeInstanceOf(SidecarHttpAllocator);
   });
 
-  it("treats an unknown kind as sidecar (the documented fallback)", async () => {
+  // Finding #1: an unknown/typo'd kind must FAIL LOUD — it must NOT silently
+  // degrade to the sidecar allocator (which would run the wrong substrate under a
+  // misconfiguration). Only an UNSET kind resolves to the documented default.
+  it("throws on an unknown/typo'd kind (never a silent sidecar)", async () => {
     process.env.TANREN_ALLOCATOR_KIND = "not-a-real-kind";
+    await expect(buildAllocatorFromEnv(fakePool, secrets)).rejects.toThrow(/not a known allocator kind/u);
+  });
+
+  it("an UNSET kind resolves to the documented default (sidecar)", async () => {
+    delete process.env.TANREN_ALLOCATOR_KIND;
     expect(await buildAllocatorFromEnv(fakePool, secrets)).toBeInstanceOf(SidecarHttpAllocator);
   });
 
