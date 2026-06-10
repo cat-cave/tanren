@@ -84,10 +84,6 @@ export interface RunDetail {
     endedAt: string | null;
     outcome:
       | "ok"
-      | "hello_complete"
-      | "phase1_fixture_complete"
-      | "phase2_easy_complete"
-      | "phase2_medium_complete"
       | "halted"
       | "escape_hatch_hit"
       | "retry_budget_exhausted"
@@ -172,10 +168,6 @@ export interface RunListItem {
   needsReview: boolean;
   outcome:
     | "ok"
-    | "hello_complete"
-    | "phase1_fixture_complete"
-    | "phase2_easy_complete"
-    | "phase2_medium_complete"
     | "halted"
     | "escape_hatch_hit"
     | "retry_budget_exhausted"
@@ -209,10 +201,6 @@ export interface RunSummary {
   endedAt: string | null;
   outcome:
     | "ok"
-    | "hello_complete"
-    | "phase1_fixture_complete"
-    | "phase2_easy_complete"
-    | "phase2_medium_complete"
     | "halted"
     | "escape_hatch_hit"
     | "retry_budget_exhausted"
@@ -277,10 +265,6 @@ export interface SseHeartbeatFrame {
 export interface SseStatusFrame {
   outcome:
     | "ok"
-    | "hello_complete"
-    | "phase1_fixture_complete"
-    | "phase2_easy_complete"
-    | "phase2_medium_complete"
     | "halted"
     | "escape_hatch_hit"
     | "retry_budget_exhausted"

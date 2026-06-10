@@ -15,6 +15,7 @@ import {
   type IdentityProvider,
 } from "./auth/index.js";
 import { parseOrchestratorEnv } from "./envSchema.js";
+import { optionalSecretFromFileOrEnv } from "./engine/contracts/secretStoreFactory.js";
 import { createLogger } from "./engine/observability/logger.js";
 
 const log = createLogger("auth");
@@ -43,7 +44,16 @@ export function buildAuthFromEnv(pool: pg.Pool, port?: number): BuildAppAuthOpti
   const env = parseOrchestratorEnv();
   const resolvedPort = port ?? env.ORCHESTRATOR_PORT;
   const clientId = env.TANREN_GITHUB_OAUTH_CLIENT_ID;
-  const clientSecret = env.TANREN_GITHUB_OAUTH_CLIENT_SECRET;
+  // The OAuth client SECRET is file-preferred (Codex r5): the prod compose mounts it
+  // as `/run/secrets/tanren_github_oauth_client_secret` and sets
+  // TANREN_GITHUB_OAUTH_CLIENT_SECRET_FILE, so the secret VALUE never lands in Docker
+  // env / `docker inspect` / `/proc/<pid>/environ`. The plaintext
+  // TANREN_GITHUB_OAUTH_CLIENT_SECRET env stays a dev convenience (file WINS).
+  const clientSecret = optionalSecretFromFileOrEnv(
+    process.env,
+    "TANREN_GITHUB_OAUTH_CLIENT_SECRET",
+    "GitHub OAuth client secret",
+  );
   const publicBaseUrl = env.TANREN_PUBLIC_BASE_URL ?? `http://localhost:${resolvedPort}`;
   const providers = new Map<IdentityProviderId, IdentityProvider>();
   if (clientId !== undefined && clientId !== "" && clientSecret !== undefined && clientSecret !== "") {

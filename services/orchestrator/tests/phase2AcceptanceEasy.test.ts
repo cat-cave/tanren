@@ -21,7 +21,7 @@ function easySnapshot(overrides: Partial<PersistedRunSnapshot> = {}): PersistedR
   return {
     runId: "run_phase2_easy_synthetic",
     status: "done",
-    outcome: "phase2_easy_complete",
+    outcome: "ok",
     prUrl: "https://github.com/cat-cave/tanren-fixture-easy/pull/123",
     taskKinds: ["plan", "write", "check", "audit", "ci"],
     taskCounts: { plan: 1, write: 1, check: 1, audit: 1, ci: 1 },
@@ -53,18 +53,18 @@ describe("phase2 acceptance — easy tier dry-run smoke", () => {
     expect(() =>
       assertAcceptanceCriteria({
         tier: "easy",
-        expectedOutcome: "phase2_easy_complete",
+        expectedOutcome: "ok",
         snapshot: easySnapshot(),
       }),
     ).not.toThrow();
   });
 
-  it("fails when run.outcome is not phase2_easy_complete", () => {
+  it("fails when run.outcome is not the canonical ok success outcome", () => {
     expect(() =>
       assertAcceptanceCriteria({
         tier: "easy",
-        expectedOutcome: "phase2_easy_complete",
-        snapshot: easySnapshot({ outcome: "phase1_fixture_complete" }),
+        expectedOutcome: "ok",
+        snapshot: easySnapshot({ outcome: "halted" }),
       }),
     ).toThrow(AcceptanceAssertionError);
   });
@@ -73,7 +73,7 @@ describe("phase2 acceptance — easy tier dry-run smoke", () => {
     expect(() =>
       assertAcceptanceCriteria({
         tier: "easy",
-        expectedOutcome: "phase2_easy_complete",
+        expectedOutcome: "ok",
         snapshot: easySnapshot({ prUrl: null }),
       }),
     ).toThrow(/pr_url/u);
@@ -81,7 +81,7 @@ describe("phase2 acceptance — easy tier dry-run smoke", () => {
     expect(() =>
       assertAcceptanceCriteria({
         tier: "easy",
-        expectedOutcome: "phase2_easy_complete",
+        expectedOutcome: "ok",
         snapshot: easySnapshot({ prUrl: "not-a-url" }),
       }),
     ).toThrow(/pr_url/u);
@@ -91,7 +91,7 @@ describe("phase2 acceptance — easy tier dry-run smoke", () => {
     expect(() =>
       assertAcceptanceCriteria({
         tier: "easy",
-        expectedOutcome: "phase2_easy_complete",
+        expectedOutcome: "ok",
         snapshot: easySnapshot({ ciStatus: "failed" }),
       }),
     ).toThrow(/ci\.passed/u);
@@ -101,7 +101,7 @@ describe("phase2 acceptance — easy tier dry-run smoke", () => {
     expect(() =>
       assertAcceptanceCriteria({
         tier: "easy",
-        expectedOutcome: "phase2_easy_complete",
+        expectedOutcome: "ok",
         snapshot: easySnapshot({
           costBases: [{ taskKind: "write", basis: "unknown", billingMode: "subscription" }],
         }),
@@ -113,7 +113,7 @@ describe("phase2 acceptance — easy tier dry-run smoke", () => {
     expect(() =>
       assertAcceptanceCriteria({
         tier: "easy",
-        expectedOutcome: "phase2_easy_complete",
+        expectedOutcome: "ok",
         snapshot: easySnapshot({
           costBases: [
             { taskKind: "write", basis: "provider_response", billingMode: "per_token" },
@@ -129,7 +129,7 @@ describe("phase2 acceptance — easy tier dry-run smoke", () => {
     expect(() =>
       assertAcceptanceCriteria({
         tier: "easy",
-        expectedOutcome: "phase2_easy_complete",
+        expectedOutcome: "ok",
         snapshot: easySnapshot({
           costBases: [
             { taskKind: "write", basis: "unknown", billingMode: "subscription" },

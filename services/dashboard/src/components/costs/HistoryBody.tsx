@@ -37,7 +37,9 @@ function outcomeBadge(run: RunListItem): { cls: string; label: string } {
   if (o === "halted" || o === "escape_hatch_hit" || o === "retry_budget_exhausted") {
     return { cls: "halted", label: o.replaceAll("_", " ") };
   }
-  if (o.endsWith("_complete")) return { cls: "ok", label: "merged-ready" };
+  // `ok` is the canonical merge-ready success outcome (the synthetic
+  // `phase*_complete` residue was pruned — no-backcompat).
+  if (o === "ok") return { cls: "ok", label: "merged-ready" };
   return { cls: "", label: o.replaceAll("_", " ") };
 }
 

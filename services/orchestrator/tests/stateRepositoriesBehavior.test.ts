@@ -340,22 +340,20 @@ describe("RunStore SQL", () => {
   });
 
   it("includes outcome and ended_at fragments in the run UPDATE when requested", async () => {
-    const client = new StubClient([
-      { rowCount: 1, rows: [runRow({ status: "completed", outcome: "phase2_easy_complete" })] },
-    ]);
+    const client = new StubClient([{ rowCount: 1, rows: [runRow({ status: "completed", outcome: "ok" })] }]);
     const run = await RunStore.updateStatus(
       client,
       "run_1",
-      { from: "running", to: "completed", outcome: "phase2_easy_complete", setEndedAt: true },
+      { from: "running", to: "completed", outcome: "ok", setEndedAt: true },
       systemActor,
     );
-    expect(run.outcome).toBe("phase2_easy_complete");
+    expect(run.outcome).toBe("ok");
     const sql = client.queries[0].sql;
     expect(sql).toContain("UPDATE runs SET status = $2");
     expect(sql).toContain("outcome = $3");
     expect(sql).toContain("ended_at = now()");
     expect(sql).toContain("WHERE run_id = $1 RETURNING");
-    expect(client.queries[0].params).toEqual(["run_1", "completed", "phase2_easy_complete"]);
+    expect(client.queries[0].params).toEqual(["run_1", "completed", "ok"]);
   });
 
   it("throws when updating a run that no longer exists", async () => {

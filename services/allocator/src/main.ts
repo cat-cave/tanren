@@ -5,7 +5,7 @@ import { HttpDockerEngineClient, isHttpStatusError } from "./dockerEngine.js";
 import { PgRunnerStore } from "./pgRunnerStore.js";
 import { RunnerLifecycle } from "./runnerLifecycle.js";
 import { AbandonedRunSweeper } from "./sweeper.js";
-import { requireEnv } from "./requireEnv.js";
+import { requireEnv, requireSecretEnv } from "./requireEnv.js";
 import { createLogger } from "./logger.js";
 
 const log = createLogger("allocator");
@@ -19,9 +19,12 @@ const port = parsedEnv.ALLOCATOR_PORT;
 // The bearer token gating `/allocate` + `/release` is REQUIRED — no `"dev"`
 // fallback (the surviving sibling of the removed `dev-root-token`). The compose
 // stacks set it (dev: `dev`; prod: required via `:?`); a blank/unset value fails
-// hard rather than silently accepting `Bearer dev`. Required-missing → loud, so
-// it stays on the `requireEnv` guard rather than the schema's optional fields.
-const authToken = requireEnv("TANREN_ALLOCATOR_TOKEN");
+// hard rather than silently accepting `Bearer dev`. It is file-preferred (Codex
+// r5): prod mounts it as `/run/secrets/tanren_allocator_token` and sets
+// TANREN_ALLOCATOR_TOKEN_FILE so the token VALUE never lands in Docker env /
+// `docker inspect`; dev sets the plaintext env (`dev`). An empty mounted file
+// fails hard too. Required-missing → loud.
+const authToken = requireSecretEnv("TANREN_ALLOCATOR_TOKEN");
 const maxRunHours = parsedEnv.TANREN_MAX_RUN_HOURS;
 const networkName = parsedEnv.TANREN_ALLOCATOR_NETWORK;
 const hostSshPort = parsedEnv.TANREN_ALLOCATOR_HOST_SSH_PORT;

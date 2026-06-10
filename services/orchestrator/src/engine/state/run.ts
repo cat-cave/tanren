@@ -11,15 +11,13 @@ export const RunStatus = z.enum(["queued", "running", "halted", "completed", "fa
 export type RunStatus = z.infer<typeof RunStatus>;
 
 // The run-outcome vocabulary. `ok` is the generic success outcome a completed run
-// carries; the `phase*_complete` / escape-hatch / exhaustion values name WHY a run
-// ended. (The dead Phase-0/1 `hello_world_complete` + `pending` outcomes were
-// pruned in v21 — nothing wrote them.)
+// carries; the escape-hatch / exhaustion values name WHY a run ended. (The dead
+// Phase-0/1/2 acceptance-fixture residue — `hello_complete`,
+// `phase1_fixture_complete`, `phase2_easy_complete`, `phase2_medium_complete`, plus
+// the older `hello_world_complete` + `pending` — were pruned: nothing on the live
+// run path ever wrote them; only the old hello/phase validation fixtures did.)
 export const RunOutcome = z.enum([
   "ok",
-  "hello_complete",
-  "phase1_fixture_complete",
-  "phase2_easy_complete",
-  "phase2_medium_complete",
   "halted",
   "escape_hatch_hit",
   "retry_budget_exhausted",

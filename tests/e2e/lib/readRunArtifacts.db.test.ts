@@ -69,7 +69,7 @@ describeDb("readRunArtifacts against a real Postgres", () => {
     const artifacts = await readRunArtifacts(ownerPool, RUN_ID);
     expect(artifacts.runId).toBe(RUN_ID);
     expect(artifacts.status).toBe("completed");
-    expect(artifacts.outcome).toBe("phase2_easy_complete");
+    expect(artifacts.outcome).toBe("ok");
     expect(artifacts.prUrl).toBe(PR_URL);
     expect(artifacts.costRecords).toEqual([
       { taskKind: "write", basis: "provider_response", billingMode: "per_token" },
@@ -106,7 +106,7 @@ async function seedMergedRun(owner: DbPool): Promise<void> {
   );
   await owner.query(
     `INSERT INTO runs (run_id, spec_id, project_id, org_id, trigger, branch, status, outcome, pr_url)
-     VALUES ($1, $2, $3, $4, 'api', 'main', 'completed', 'phase2_easy_complete', $5)`,
+     VALUES ($1, $2, $3, $4, 'api', 'main', 'completed', 'ok', $5)`,
     [RUN_ID, SPEC_ID, PROJECT_ID, ORG_ID, PR_URL],
   );
   await owner.query(

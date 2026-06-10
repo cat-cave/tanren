@@ -63,8 +63,13 @@ export function requireVaultToken(env: SecretStoreEnv = process.env): string {
  *
  * Fail-loud when a configured store has NEITHER — never a silent blank credential on
  * this security boundary. `what` names the credential in the error.
+ *
+ * Exported so other prod secret reads (the GitHub OAuth client secret in mainAuth,
+ * the allocator bearer token) resolve through the SAME file-preferred precedence —
+ * the prod compose mounts those as `/run/secrets/*` files (never plaintext env), so
+ * they must not assume a plaintext env value.
  */
-function requireSecretFromFileOrEnv(env: SecretStoreEnv, name: string, what: string): string {
+export function requireSecretFromFileOrEnv(env: SecretStoreEnv, name: string, what: string): string {
   const file = optional(env, `${name}_FILE`);
   if (file !== undefined) {
     let contents: string;
@@ -80,6 +85,22 @@ function requireSecretFromFileOrEnv(env: SecretStoreEnv, name: string, what: str
     return value;
   }
   return required(env, name);
+}
+
+/**
+ * The OPTIONAL counterpart of {@link requireSecretFromFileOrEnv}: resolve a secret
+ * preferring the mounted `${name}_FILE` over the plaintext `name` env, but return
+ * `undefined` when NEITHER is configured (the credential is genuinely optional — the
+ * GitHub OAuth provider only registers when its id+secret are present). A
+ * configured-but-empty/unreadable file is STILL a hard failure (a present-but-blank
+ * secret on a security boundary is a misconfiguration, never a silent "absent").
+ */
+export function optionalSecretFromFileOrEnv(env: SecretStoreEnv, name: string, what: string): string | undefined {
+  const file = optional(env, `${name}_FILE`);
+  if (file === undefined && optional(env, name) === undefined) {
+    return undefined;
+  }
+  return requireSecretFromFileOrEnv(env, name, what);
 }
 
 /**

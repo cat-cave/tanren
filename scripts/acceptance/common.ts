@@ -216,7 +216,10 @@ export class AcceptanceAssertionError extends Error {
 
 export interface AcceptanceCriteriaInput {
   tier: "easy" | "medium";
-  expectedOutcome: "phase2_easy_complete" | "phase2_medium_complete";
+  // A merged run finalizes on the canonical `ok` success outcome for both tiers
+  // (the synthetic per-tier `phase2_*_complete` residue was pruned with the old
+  // hello/phase validation fixtures).
+  expectedOutcome: "ok";
   snapshot: PersistedRunSnapshot;
 }
 

@@ -241,12 +241,7 @@ describe("projectBurn", () => {
 
 describe("observeMetrics", () => {
   it("derives merged count, halt-rate, and avg cost per merged from outcomes", () => {
-    const runs = [
-      { outcome: "phase2_easy_complete" },
-      { outcome: "phase2_medium_complete" },
-      { outcome: "halted" },
-      { outcome: null },
-    ];
+    const runs = [{ outcome: "ok" }, { outcome: "ok" }, { outcome: "halted" }, { outcome: null }];
     const metrics = observeMetrics(runs, 20);
     expect(metrics.specsMerged).toBe(2);
     expect(metrics.haltRate).toBeCloseTo(0.25);

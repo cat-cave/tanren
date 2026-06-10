@@ -31,7 +31,7 @@ const RUN_ID = "run_medium_001";
 const FAKE_SSE_BODY = [
   `event: snapshot\ndata: ${JSON.stringify({ run: { runId: RUN_ID, status: "running", outcome: null }, tasks: [], recentEvents: [], costs: [{ billingMode: "per_token", model: "gpt-5", inputTokens: 100, outputTokens: 50, cachedInputTokens: 0, totalTokens: 150, costUsd: "0.0100" }] })}\n\n`,
   `event: costs\ndata: ${JSON.stringify({ costs: [{ billingMode: "subscription", model: "claude", inputTokens: 200, outputTokens: 80, cachedInputTokens: 0, totalTokens: 280, costUsd: null }] })}\n\n`,
-  `event: status\ndata: ${JSON.stringify({ runId: RUN_ID, status: "completed", outcome: "phase2_medium_complete" })}\n\n`,
+  `event: status\ndata: ${JSON.stringify({ runId: RUN_ID, status: "completed", outcome: "ok" })}\n\n`,
 ].join("");
 
 function stubPool(): pg.Pool {
@@ -98,7 +98,7 @@ describe("P2B-0004 SSE proxy (fake stream)", () => {
     expect(body).toContain("event: snapshot");
     expect(body).toContain("event: costs");
     expect(body).toContain("event: status");
-    expect(body).toContain("phase2_medium_complete");
+    expect(body).toContain("ok");
   });
 
   it("returns 404 for a run the operator cannot see", async () => {

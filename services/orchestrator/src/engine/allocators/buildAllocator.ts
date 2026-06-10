@@ -11,7 +11,7 @@ import { ManualSshAllocator, parseManualSshHosts } from "./manualSshAllocator.js
 import { AllocatorKind, AllocatorRoutingConfig } from "./poolPolicy.js";
 import { PgRunnerStore, type RunnerStore } from "./runnerStore.js";
 import { UnconfiguredAllocator } from "./scaffoldedAllocators.js";
-import { SidecarHttpAllocator } from "./sidecarHttpAllocator.js";
+import { resolveSidecarAuthToken, SidecarHttpAllocator } from "./sidecarHttpAllocator.js";
 import { StaticRunnerAllocator } from "./staticRunnerAllocator.js";
 
 function env(name: string): string | undefined {
@@ -42,18 +42,6 @@ async function resolveSecretRef(
     );
   }
   return resolved.value;
-}
-
-// Require a non-blank env var; throw a clear error when unset/blank (NO default).
-// Mirrors the allocator-side `requireEnv` so both ends of the sidecar bearer-token
-// pair fail loud rather than silently falling back to a `"dev"` token. Both
-// compose profiles set TANREN_ALLOCATOR_TOKEN.
-function requireEnv(name: string): string {
-  const value = env(name);
-  if (value === undefined) {
-    throw new Error(`${name} is required (set it in the environment; there is no default)`);
-  }
-  return value;
 }
 
 // Parse a runner SSH port from env. The host/port is DEPLOY INFRA (layer-1 env,
@@ -95,7 +83,11 @@ function buildStatic(runners: RunnerStore): StaticRunnerAllocator {
 function buildSidecar(runners: RunnerStore): SidecarHttpAllocator {
   return new SidecarHttpAllocator({
     baseUrl: env("TANREN_ALLOCATOR_URL") ?? "http://allocator:3200",
-    authToken: requireEnv("TANREN_ALLOCATOR_TOKEN"),
+    // File-preferred (Codex r5): prod mounts the sidecar bearer token as
+    // `/run/secrets/tanren_allocator_token` (TANREN_ALLOCATOR_TOKEN_FILE), so the
+    // token VALUE never lands in Docker env / `docker inspect`; dev sets the
+    // plaintext env. File WINS; an empty mounted file fails loud.
+    authToken: resolveSidecarAuthToken(),
     runners,
   });
 }

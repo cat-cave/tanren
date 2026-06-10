@@ -23,7 +23,7 @@ function mediumSnapshot(overrides: Partial<PersistedRunSnapshot> = {}): Persiste
   return {
     runId: "run_phase2_medium_synthetic",
     status: "done",
-    outcome: "phase2_medium_complete",
+    outcome: "ok",
     prUrl: "https://github.com/cat-cave/tanren-fixture-medium/pull/7",
     taskKinds: ["plan", "write", "check", "write", "check", "audit", "ci"],
     taskCounts: { plan: 1, write: 2, check: 2, audit: 1, ci: 1 },
@@ -60,7 +60,7 @@ describe("phase2 acceptance — medium tier dry-run smoke", () => {
     expect(() =>
       assertAcceptanceCriteria({
         tier: "medium",
-        expectedOutcome: "phase2_medium_complete",
+        expectedOutcome: "ok",
         snapshot: mediumSnapshot(),
       }),
     ).not.toThrow();
@@ -70,7 +70,7 @@ describe("phase2 acceptance — medium tier dry-run smoke", () => {
     expect(() =>
       assertAcceptanceCriteria({
         tier: "medium",
-        expectedOutcome: "phase2_medium_complete",
+        expectedOutcome: "ok",
         snapshot: mediumSnapshot({
           taskKinds: ["plan", "write", "check", "audit", "ci"],
           taskCounts: { plan: 1, write: 1, check: 1, audit: 1, ci: 1 },
@@ -87,7 +87,7 @@ describe("phase2 acceptance — medium tier dry-run smoke", () => {
     expect(() =>
       assertAcceptanceCriteria({
         tier: "medium",
-        expectedOutcome: "phase2_medium_complete",
+        expectedOutcome: "ok",
         snapshot: mediumSnapshot({
           plannerRerequestedCount: 0,
           events: mediumSnapshot().events.filter((name) => name !== "planner.rerequested"),
@@ -100,7 +100,7 @@ describe("phase2 acceptance — medium tier dry-run smoke", () => {
     expect(() =>
       assertAcceptanceCriteria({
         tier: "medium",
-        expectedOutcome: "phase2_medium_complete",
+        expectedOutcome: "ok",
         snapshot: mediumSnapshot({
           costBases: [
             { taskKind: "write", basis: "unknown", billingMode: "subscription" },
@@ -112,11 +112,11 @@ describe("phase2 acceptance — medium tier dry-run smoke", () => {
     ).toThrow(/missing cost_records.*plan/u);
   });
 
-  it("fails when run.outcome is not phase2_medium_complete", () => {
+  it("fails when run.outcome is not the canonical ok success outcome", () => {
     expect(() =>
       assertAcceptanceCriteria({
         tier: "medium",
-        expectedOutcome: "phase2_medium_complete",
+        expectedOutcome: "ok",
         snapshot: mediumSnapshot({ outcome: "retry_budget_exhausted" }),
       }),
     ).toThrow(AcceptanceAssertionError);

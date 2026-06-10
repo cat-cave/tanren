@@ -87,7 +87,7 @@ describe("P2A-0014 SSE driver", () => {
     // instead, drive run() with terminal status already set so it bails.
     const { pool } = setup();
     pool.runs[0].status = "completed";
-    pool.runs[0].outcome = "phase1_fixture_complete";
+    pool.runs[0].outcome = "ok";
     const localFrames: Array<{ event: string; data: unknown }> = [];
     const localDriver = new SseDriver(
       {
@@ -147,7 +147,7 @@ describe("P2A-0014 SSE driver", () => {
     // Easiest: call tick() directly after pre-seeding snapshot.
     (driver as unknown as { lastStatusFingerprint: string }).lastStatusFingerprint = "running:";
     pool.runs[0].status = "completed";
-    pool.runs[0].outcome = "phase2_easy_complete";
+    pool.runs[0].outcome = "ok";
     await driver.tick();
     expect(captured.find((f) => f.event === "status")).toBeDefined();
     const status = captured.find((f) => f.event === "status")!.data as {
@@ -155,7 +155,7 @@ describe("P2A-0014 SSE driver", () => {
       outcome: string | null;
     };
     expect(status.status).toBe("completed");
-    expect(status.outcome).toBe("phase2_easy_complete");
+    expect(status.outcome).toBe("ok");
   });
 
   it("emits a heartbeat after the configured interval passes without other frames", async () => {
@@ -229,7 +229,7 @@ describe("P2A-0014 SSE driver", () => {
     // ticks, emits the status delta, and (terminal grace) ends — all without the
     // 60s backstop elapsing.
     pool.runs[0].status = "completed";
-    pool.runs[0].outcome = "phase2_easy_complete";
+    pool.runs[0].outcome = "ok";
     fire("run_n");
 
     await done;
@@ -271,7 +271,7 @@ describe("P2A-0014 SSE driver", () => {
     // fire the wrong run's id — the loop should still be parked (no status delta)
     // until we fire the right one.
     pool.runs[0].status = "completed";
-    pool.runs[0].outcome = "phase2_easy_complete";
+    pool.runs[0].outcome = "ok";
     fire("run_other");
     await new Promise<void>((resolve) => {
       setTimeout(resolve, 20);
