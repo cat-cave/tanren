@@ -10,7 +10,7 @@ const doneOrMerged = (status: string): boolean => status === "merged";
 describe("project/spec workflow contract", () => {
   it("creates a project, creates a spec, and queues a run from persisted rows", async () => {
     const pool = new ContractPool();
-    const app = buildApp({
+    const app = await buildApp({
       pool: pool.asPgPool(),
       ssh,
       secrets: new InMemorySecretStore(),
@@ -137,7 +137,7 @@ describe("project/spec workflow contract", () => {
   });
 
   it("returns not found when creating a spec for a missing project", async () => {
-    const app = buildApp({
+    const app = await buildApp({
       pool: new ContractPool().asPgPool(),
       ssh,
       secrets: new InMemorySecretStore(),
@@ -161,7 +161,7 @@ describe("project/spec workflow contract", () => {
 
   it("rejects empty acceptance criteria and invalid run triggers", async () => {
     const pool = new ContractPool();
-    const app = buildApp({
+    const app = await buildApp({
       pool: pool.asPgPool(),
       ssh,
       secrets: new InMemorySecretStore(),
@@ -192,7 +192,7 @@ describe("project/spec workflow contract", () => {
 
   it("blocks runs until same-project dependencies are done", async () => {
     const pool = new ContractPool();
-    const app = buildApp({
+    const app = await buildApp({
       pool: pool.asPgPool(),
       ssh,
       secrets: new InMemorySecretStore(),

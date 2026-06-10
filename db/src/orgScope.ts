@@ -143,38 +143,92 @@ export async function runWithOrgScope<T>(
 // worker's job bootstrap, cross-org dev seeding) cannot run on the app role.
 // `runWithSystemScope` therefore connects via a SEPARATE pool as the narrow
 // `tanren_system` BYPASSRLS role (migration 0030), whose URL is
-// TANREN_SYSTEM_DATABASE_URL. When that env is unset (single-role dev, CI inert
-// paths, tests) the passed pool is used verbatim — behavior-identical to before
-// the flip, since without policies the app role's own connection already reads
-// every row.
+// TANREN_SYSTEM_DATABASE_URL. Both compose profiles (dev + prod) ALWAYS set that
+// env, so a genuine deployment always resolves a real BYPASSRLS pool. There is NO
+// silent collapse to the tenant runtime pool: if the env is unset AND no pool was
+// explicitly injected (the test/wiring opt-in below), {@link runWithSystemScope}
+// throws LOUD — a cross-org system read on the NOBYPASSRLS app role would silently
+// see ZERO rows under enforced policies, the exact system-vs-tenant split this
+// guards. Tests that legitimately run on a single pool inject it explicitly via
+// {@link setSystemPool}; they never rely on an env-missing fallback.
 let systemPool: Pool | undefined;
 let systemPoolResolved = false;
+// True once the system pool has been EXPLICITLY configured — either resolved from
+// a non-blank TANREN_SYSTEM_DATABASE_URL, or injected via setSystemPool (even with
+// `undefined`, the "use the passed runtime pool" test/single-role opt-in). When
+// this is false, runWithSystemScope refuses to run rather than silently collapsing
+// onto the tenant pool.
+let systemPoolExplicitlyConfigured = false;
+// TEST-ONLY escape hatch: many unit tests drive a system-scoped path against an
+// in-memory fake pool that ignores RLS entirely, so the BYPASSRLS-vs-app
+// distinction is moot there. Rather than inject every per-file fake as the system
+// pool, the test harness opts in ONCE (test/setup) so runWithSystemScope uses the
+// PASSED pool. This NEVER fires in production: nothing in the app wiring calls it,
+// and prod/dev resolve a real TANREN_SYSTEM_DATABASE_URL pool. An explicit
+// setSystemPool injection (a real BYPASSRLS pool in an RLS integration test) still
+// takes precedence over this opt-in.
+let runtimePoolAsSystemForTests = false;
 
 /**
  * Lazily resolve the BYPASSRLS system pool from TANREN_SYSTEM_DATABASE_URL. A
- * single process-wide pool (created once) — or `undefined` when the env is unset
- * (then {@link runWithSystemScope} uses the caller's pool). Exposed so wiring /
- * tests can override; {@link resetSystemPool} clears the memo.
+ * single process-wide pool (created once) — or `undefined` when the env is unset.
+ * A non-blank env resolution marks the pool EXPLICITLY configured; an unset env
+ * does NOT (so {@link runWithSystemScope} fails loud unless a pool was injected via
+ * {@link setSystemPool}). Exposed so wiring / tests can override; {@link resetSystemPool}
+ * clears the memo.
  */
 export function getSystemPool(): Pool | undefined {
   if (!systemPoolResolved) {
     systemPoolResolved = true;
     const url = process.env["TANREN_SYSTEM_DATABASE_URL"];
-    systemPool = url === undefined || url === "" ? undefined : new Pool({ connectionString: url });
+    if (url === undefined || url === "") {
+      systemPool = undefined;
+    } else {
+      systemPool = new Pool({ connectionString: url });
+      systemPoolExplicitlyConfigured = true;
+    }
   }
   return systemPool;
 }
 
-/** Inject a system pool explicitly (tests / wiring). Pass `undefined` to clear. */
+/**
+ * Inject a system pool explicitly (tests / wiring). Pass `undefined` to declare
+ * "no separate system pool — use the passed runtime pool" (single-role dev / a
+ * test on one pool). Either form marks the pool EXPLICITLY configured, so the
+ * env-missing fail-loud in {@link runWithSystemScope} is suppressed.
+ */
 export function setSystemPool(pool: Pool | undefined): void {
   systemPool = pool;
   systemPoolResolved = true;
+  systemPoolExplicitlyConfigured = true;
 }
 
 /** Reset the memoized system pool so the next {@link getSystemPool} re-reads env. */
 export function resetSystemPool(): void {
   systemPool = undefined;
   systemPoolResolved = false;
+  systemPoolExplicitlyConfigured = false;
+}
+
+/**
+ * TEST-ONLY: opt every subsequent {@link runWithSystemScope} into using the PASSED
+ * pool when no system pool is otherwise configured — for unit tests that drive a
+ * system-scoped path against an in-memory fake pool (no real RLS). Pass `false` to
+ * clear. NEVER called by production wiring; an explicit {@link setSystemPool}
+ * injection still wins. See test/setup/systemPool.ts.
+ */
+export function allowRuntimePoolAsSystemForTests(allow = true): void {
+  runtimePoolAsSystemForTests = allow;
+}
+
+/**
+ * Whether {@link runWithSystemScope} may run: a system pool is explicitly
+ * configured (env-resolved or injected), OR the test opt-in is active. Forces the
+ * lazy env resolution first so a set env is honored.
+ */
+function isSystemScopeRunnable(): boolean {
+  getSystemPool();
+  return systemPoolExplicitlyConfigured || runtimePoolAsSystemForTests;
 }
 
 /**
@@ -186,8 +240,23 @@ export function resetSystemPool(): void {
  * policies; otherwise it uses the passed `pool` (inert/dev fallback). Leaving
  * the GUC unset is the explicit "no per-tenant row filter" signal; any tenant
  * work must establish an org via `runWithOrgScope` first.
+ *
+ * Fails LOUD when no system pool is configured (env unset, no `setSystemPool`
+ * injection, and not under the test opt-in): a cross-org read on the NOBYPASSRLS
+ * app role would silently return ZERO rows under enforced policies — the
+ * system-vs-tenant split must never collapse silently onto the tenant pool. Both
+ * compose profiles set TANREN_SYSTEM_DATABASE_URL, so a real deployment always
+ * passes this; only a misconfiguration trips it.
  */
 export async function runWithSystemScope<T>(pool: Pool, work: (client: PoolClient) => Promise<T>): Promise<T> {
+  if (!isSystemScopeRunnable()) {
+    throw new Error(
+      "TANREN_SYSTEM_DATABASE_URL is required for system-scoped (cross-org) work: the system pool is the narrow " +
+        "BYPASSRLS `tanren_system` role; without it a cross-org read on the NOBYPASSRLS app role silently sees ZERO " +
+        "rows under enforced RLS. Set TANREN_SYSTEM_DATABASE_URL (both compose profiles do), or inject a pool via " +
+        "setSystemPool() in tests — there is no silent fallback to the tenant runtime pool.",
+    );
+  }
   const effectivePool = getSystemPool() ?? pool;
   const client = await effectivePool.connect();
   try {

@@ -40,3 +40,34 @@ describe("allocator requireEnv (no dev-root-token fallback)", () => {
     expect(resolved).not.toBe("dev-root-token");
   });
 });
+
+// The allocator's SYSTEM pool MUST be the BYPASSRLS `tanren_system` role
+// (TANREN_SYSTEM_DATABASE_URL), never a silent collapse onto the tenant runtime
+// DATABASE_URL — a cross-org sweep/reap on the NOBYPASSRLS app role would see ZERO
+// `runners` rows under enforced RLS. main.ts resolves it through `requireEnv`, so
+// an unset/blank value fails LOUD (the prior `|| DATABASE_URL` fallback is gone).
+describe("allocator system DB URL is required (no silent tenant-pool collapse)", () => {
+  const original = process.env["TANREN_SYSTEM_DATABASE_URL"];
+  afterEach(() => {
+    if (original === undefined) {
+      delete process.env["TANREN_SYSTEM_DATABASE_URL"];
+    } else {
+      process.env["TANREN_SYSTEM_DATABASE_URL"] = original;
+    }
+  });
+
+  it("throws naming the var when TANREN_SYSTEM_DATABASE_URL is unset", () => {
+    delete process.env["TANREN_SYSTEM_DATABASE_URL"];
+    expect(() => requireEnv("TANREN_SYSTEM_DATABASE_URL")).toThrow(/TANREN_SYSTEM_DATABASE_URL is required/u);
+  });
+
+  it("throws when TANREN_SYSTEM_DATABASE_URL is blank", () => {
+    process.env["TANREN_SYSTEM_DATABASE_URL"] = "";
+    expect(() => requireEnv("TANREN_SYSTEM_DATABASE_URL")).toThrow(/TANREN_SYSTEM_DATABASE_URL is required/u);
+  });
+
+  it("returns the BYPASSRLS system URL when set (never the tenant DATABASE_URL)", () => {
+    process.env["TANREN_SYSTEM_DATABASE_URL"] = "postgres://tanren_system:pw@db:5432/tanren";
+    expect(requireEnv("TANREN_SYSTEM_DATABASE_URL")).toBe("postgres://tanren_system:pw@db:5432/tanren");
+  });
+});

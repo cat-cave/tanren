@@ -2,6 +2,7 @@ export { createDbPool } from "./client.js";
 export type { DbPool } from "./client.js";
 export { migrate } from "./migrate.js";
 export {
+  allowRuntimePoolAsSystemForTests,
   getJobOrgId,
   getOrgScope,
   getOrgScopedClient,

@@ -94,8 +94,8 @@ const ssh = { run: async () => ({}) } as unknown as CommandSubstrate;
 // `orgScopingPool`. Using `buildApp` (not a hand-mounted subset) tests the exact
 // wiring shipped. An empty providers map keeps the auth ROUTES inert; the test
 // drives cookie/CSRF auth straight through the real store.
-function buildFlowApp(appPool: Pool, store: IdentityStore): Hono<ActorContextEnv> {
-  return buildApp({
+async function buildFlowApp(appPool: Pool, store: IdentityStore): Promise<Hono<ActorContextEnv>> {
+  return (await buildApp({
     pool: appPool,
     secrets: new InMemorySecretStore(),
     vaultHealthCheck: async () => ({ ok: true, status: 200 }),
@@ -105,7 +105,7 @@ function buildFlowApp(appPool: Pool, store: IdentityStore): Hono<ActorContextEnv
       publicBaseUrl: "http://localhost",
     },
     ssh,
-  }) as Hono<ActorContextEnv>;
+  })) as Hono<ActorContextEnv>;
 }
 
 describeDb("RLS HTTP-route scoping — the full operator→run flow across all route shapes", () => {
@@ -140,7 +140,7 @@ describeDb("RLS HTTP-route scoping — the full operator→run flow across all r
 
     setSystemPool(systemPool);
     store = new IdentityStore(appPool);
-    app = buildFlowApp(appPool, store);
+    app = await buildFlowApp(appPool, store);
   }, 60_000);
 
   afterAll(async () => {

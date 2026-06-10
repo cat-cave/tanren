@@ -70,7 +70,7 @@ export async function createApp() {
   // engine/contracts/secretStoreFactory.ts.
   const runnerSecrets = buildSecretStore();
   await seedRunnerIdentitySecret(runnerSecrets);
-  return buildApp({
+  return await buildApp({
     pool,
     secrets: runnerSecrets,
     auth: buildAuthFromEnv(pool, port),
@@ -81,7 +81,7 @@ export async function createApp() {
   });
 }
 
-export function buildApp(input: {
+export async function buildApp(input: {
   pool: pg.Pool;
   ssh: CommandSubstrate;
   secrets?: SecretStore;
@@ -176,7 +176,7 @@ export function buildApp(input: {
   // drives the LISTEN/NOTIFY terminal await.
   // One allocator shared by the benchmark scheduler AND the Forge answerer
   // factories (each allocates a short-lived runner per model call).
-  const allocator = buildAllocatorFromEnv(input.pool, secrets);
+  const allocator = await buildAllocatorFromEnv(input.pool, secrets);
   const benchmark = {
     allocator,
     ssh: input.ssh,
@@ -270,13 +270,16 @@ async function runMigrationsAsOwner(): Promise<void> {
   }
 }
 
+/**
+ * Seed the runner SSH PRIVATE identity into the secret store from a MOUNTED SECRET
+ * FILE (`TANREN_RUNNER_IDENTITY_KEY_PATH`) — never a plaintext env VALUE, so the
+ * key material never lands in `docker inspect` / container env. Both compose
+ * profiles mount the key as a `tanren_runner_identity_key` secret file and point
+ * this env at the in-container path. A no-op when the path is unset (the secret
+ * may already be Vault-seeded out of band, or the API + worker share the store and
+ * the other process seeded it).
+ */
 async function seedRunnerIdentitySecret(secrets: SecretStore): Promise<void> {
-  const inlinePrivateKey = process.env["TANREN_RUNNER_IDENTITY_PRIVATE_KEY"];
-  if (inlinePrivateKey !== undefined && inlinePrivateKey !== "") {
-    await secrets.put({ ref: runnerIdentitySecretRef, value: inlinePrivateKey });
-    return;
-  }
-
   const keyPath = process.env["TANREN_RUNNER_IDENTITY_KEY_PATH"];
   if (keyPath !== undefined && keyPath !== "") {
     await secrets.put({ ref: runnerIdentitySecretRef, value: await readFile(keyPath, "utf8") });

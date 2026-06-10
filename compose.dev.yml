@@ -55,7 +55,13 @@ services:
       VAULT_ADDR: http://vault:8200
       VAULT_TOKEN: dev-root-token
       ORCHESTRATOR_PORT: "3100"
-      TANREN_RUNNER_IDENTITY_PRIVATE_KEY: ${TANREN_RUNNER_IDENTITY_PRIVATE_KEY:-}
+      # SYSTEM credential split: the orchestrator's SSH PRIVATE key is delivered as
+      # a MOUNTED SECRET FILE (the `tanren_runner_identity_key` compose secret,
+      # wired below) — never a plaintext env VALUE, so it never lands in `docker
+      # inspect` / container env. Mirrors compose.prod.yml. The boot seeder reads
+      # the file at this in-container path and stores it in the secret store. The
+      # `runner-key` justfile recipe generates the dev key at /tmp/tanren_runner_key.
+      TANREN_RUNNER_IDENTITY_KEY_PATH: /run/secrets/tanren_runner_identity_key
       TANREN_GITHUB_OAUTH_CLIENT_ID: ${TANREN_GITHUB_OAUTH_CLIENT_ID:-}
       TANREN_GITHUB_OAUTH_CLIENT_SECRET: ${TANREN_GITHUB_OAUTH_CLIENT_SECRET:-}
       TANREN_PUBLIC_BASE_URL: ${TANREN_PUBLIC_BASE_URL:-http://localhost:3100}
@@ -95,6 +101,8 @@ services:
       TANREN_INTERNAL_TLS_CA: /etc/tanren/mtls/ca.crt
     volumes:
       - /tmp/tanren-mtls:/etc/tanren/mtls:ro
+    secrets:
+      - tanren_runner_identity_key
     ports:
       - "3100:3100"
       # Plane-split P2: publish the internal mTLS claim listener so the
@@ -161,7 +169,10 @@ services:
       TANREN_SECRET_STORE: vault
       VAULT_ADDR: http://vault:8200
       VAULT_TOKEN: dev-root-token
-      TANREN_RUNNER_IDENTITY_PRIVATE_KEY: ${TANREN_RUNNER_IDENTITY_PRIVATE_KEY:-}
+      # SSH PRIVATE key via the mounted secret FILE (the `tanren_runner_identity_key`
+      # compose secret, wired below), never a plaintext env value — same as the
+      # orchestrator above; the worker seeds the same runner identity.
+      TANREN_RUNNER_IDENTITY_KEY_PATH: /run/secrets/tanren_runner_identity_key
       # Bounds in-flight runs (same knob the in-process worker honored).
       TANREN_RUN_WORKER_CONCURRENCY: ${TANREN_RUN_WORKER_CONCURRENCY:-2}
       # Same allocator + static-runner reach the orchestrator's worker path had.
@@ -195,6 +206,8 @@ services:
       TANREN_DATA_PLANE_REMOTE_WRITES: ${TANREN_DATA_PLANE_REMOTE_WRITES:-1}
     volumes:
       - /tmp/tanren-mtls:/etc/tanren/mtls:ro
+    secrets:
+      - tanren_runner_identity_key
     depends_on:
       postgres:
         condition: service_healthy
@@ -309,3 +322,13 @@ services:
 
 volumes:
   pgdata:
+
+secrets:
+  # The orchestrator's SSH PRIVATE key, delivered to the orchestrator + worker as a
+  # MOUNTED FILE under /run/secrets (never a plaintext env value — so it never lands
+  # in `docker inspect`). Mirrors compose.prod.yml's pattern; the boot seeder reads
+  # the file and stores it in the secret store. The dev key is generated at
+  # /tmp/tanren_runner_key by the `runner-key` justfile recipe (`up-dev` depends on
+  # it); override via TANREN_RUNNER_IDENTITY_KEY_FILE.
+  tanren_runner_identity_key:
+    file: ${TANREN_RUNNER_IDENTITY_KEY_FILE:-/tmp/tanren_runner_key}

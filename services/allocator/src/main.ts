@@ -36,10 +36,13 @@ async function main(): Promise<void> {
   //  - a RESTRICTED app-role pool (DATABASE_URL) used ONLY through
   //    `runWithOrgScope` for the per-run `runners` INSERT, so that TENANT row is
   //    written WITHIN RLS (de-priv), not off-RLS via the system role.
-  // In single-role dev both env vars resolve to the same URL; behavior is
-  // identical because, without enforced policies, every connection reads all rows.
+  // TANREN_SYSTEM_DATABASE_URL is REQUIRED (both compose profiles set it): the
+  // system pool MUST be the BYPASSRLS `tanren_system` role, never a silent
+  // collapse onto the tenant runtime DATABASE_URL — a cross-org sweep/reap on the
+  // NOBYPASSRLS app role would see ZERO `runners` rows under enforced policies. We
+  // fail loud here rather than `|| DATABASE_URL`.
   await runAllocatorMigrations();
-  const systemPool = createDbPool(process.env["TANREN_SYSTEM_DATABASE_URL"] || process.env["DATABASE_URL"]);
+  const systemPool = createDbPool(requireEnv("TANREN_SYSTEM_DATABASE_URL"));
   const appPool = createDbPool(process.env["DATABASE_URL"]);
   const store = new PgRunnerStore(systemPool, appPool);
 

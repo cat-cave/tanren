@@ -52,6 +52,11 @@ export class WorkerPool {
   // DB. The single-event-writer architecture check ignores this router (the
   // INSERT is matched via regex, not a literal).
   readonly eventTypes: string[] = [];
+  // The full (eventType, payload) of every event the finalize path writes through
+  // the pool, so a test can assert the PUBLIC payload that lands in the event row
+  // — e.g. that `run.failed.message` carries a safe code/summary, never a raw
+  // arbitrary error string. The payload is the JSON-stringified `$6` bind param.
+  readonly events: Array<{ eventType: string; payload: Record<string, unknown> }> = [];
   private readonly projects = new Map<string, ProjectRow>();
   private readonly specs = new Map<string, SpecRow>();
   private readonly runs = new Map<string, RunRow>();
@@ -181,7 +186,18 @@ export class WorkerPool {
     // event_type ($5 → params[4]) is recorded so finalize-path emission is
     // observable without a real DB.
     if (/^INSERT\s+INTO\s+events/u.test(trimmed)) {
-      this.eventTypes.push(String(params[4] ?? ""));
+      const eventType = String(params[4] ?? "");
+      this.eventTypes.push(eventType);
+      // params[5] ($6) is the payload bind — a JSON string (PgEventStore stringifies
+      // before the `$6::jsonb` cast). Parse it so a test can assert the public payload.
+      let payload: Record<string, unknown> = {};
+      try {
+        const raw = params[5];
+        payload = typeof raw === "string" ? (JSON.parse(raw) as Record<string, unknown>) : {};
+      } catch {
+        payload = {};
+      }
+      this.events.push({ eventType, payload });
       return { rows: [{ id: "1" }], rowCount: 1 };
     }
     // spec status transitions (claim 'in_flight', finalize 'merged')

@@ -37,9 +37,21 @@ export const RunCompletedPayload = z
   })
   .strict();
 
+// run.failed is PUBLIC (any project member). The worker-level catch wraps a WHOLE
+// run, so its caught error can carry URLs / repo refs / command fragments / provider
+// responses / secret-adjacent text — that raw string must NEVER land here. So this
+// payload carries only safe, closed-vocabulary signal: a stable `failureCode` + the
+// `stage` it failed in + a FIXED safe `message` summary (none of which echo the raw
+// error). The raw detail lives in the INTERNAL `job_queue.failure_message` column +
+// a redacted log, off the public event. See worker/runFailureClassifier.ts.
 export const RunFailedPayload = z
   .object({
     status: z.string(),
+    // Stable failure code from the closed run-failure enum (worker/runFailureClassifier).
+    failureCode: z.string(),
+    // The run stage the failure is attributed to (bootstrap/credentials/workspace/agent/merge/deploy/run).
+    stage: z.string(),
+    // A FIXED safe summary of the failure — never the raw caught-error string.
     message: z.string(),
   })
   .strict();

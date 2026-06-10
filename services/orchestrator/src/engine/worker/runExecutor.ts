@@ -33,6 +33,7 @@ import type { VcsProvider } from "../contracts/vcsProvider.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
 import { buildNativeQueueEnqueuer } from "../merge/coordinatorBuild.js";
 import { finalizeRunRecoverable } from "./runFinalize.js";
+import { classifyRunFailure } from "./runFailureClassifier.js";
 import { startHeartbeat, type HeartbeatMiss } from "./runHeartbeat.js";
 import { systemActor } from "../state/actor.js";
 import { resolveAppEnvForScope } from "../workflow/resolveAppEnv.js";
@@ -303,9 +304,23 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
     await deps.jobQueue.complete(job.id);
     return { kind: "completed", jobId: job.id, runId, outcome: result.outcome.kind };
   } catch (error) {
+    // PUBLIC-ERROR-LEAK hardening: this catch wraps the WHOLE run, so `error` can
+    // carry URLs / repo refs / command fragments / provider responses / secret-adjacent
+    // text. So we split internal-vs-public:
+    //   • the raw message → `job_queue.failure_message` (INTERNAL, outside RLS) + a
+    //     redacted log — the operator's full-detail triage source.
+    //   • a CLASSIFIED `{ code, stage, summary }` (closed vocabulary, never the raw
+    //     string) → the PUBLIC `run.failed` / `dag.spec.needs_attention` events.
+    // The raw string NEVER reaches a public event payload.
+    const classified = classifyRunFailure(error);
     const failure = { kind: failureKind(error), message: messageOf(error) };
     await deps.jobQueue.fail(job.id, failure);
-    await finalizeRunRecoverable(deps.pool, deps.runStateWriter, runId, failure.message, resolvedOrgId);
+    // Internal-only redacted log: the raw detail surfaces for operator triage off the
+    // public timeline, run through the same event redactor that strips URLs/tokens/paths.
+    console.error(
+      `[run-executor] run ${runId} failed [${classified.code}/${classified.stage}]: ${redactErrorDetail(failure.message)}`,
+    );
+    await finalizeRunRecoverable(deps.pool, deps.runStateWriter, runId, classified, resolvedOrgId);
     return { kind: "failed", jobId: job.id, runId, failure };
   } finally {
     await stopHeartbeat();
@@ -416,4 +431,15 @@ function failureKind(error: unknown): string {
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+// Best-effort redaction for the INTERNAL (console-only, never RLS-public) failure
+// log: strip the obvious secret-adjacent shapes (URLs — which may embed creds/refs,
+// `key=value` token assignments, and bearer/authorization tokens) before the raw
+// detail is logged. This is defense-in-depth on an already-internal log line; the
+// public events never carry this string at all (the classified summary does).
+function redactErrorDetail(detail: string): string {
+  return detail
+    .replaceAll(/\bhttps?:\/\/\S+/giu, "[url]")
+    .replaceAll(/\b(bearer|authorization|token|password|secret|api[_-]?key)(\s*[:=]\s*)\S+/giu, "$1$2[redacted]");
 }

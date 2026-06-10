@@ -4,6 +4,7 @@ import {
   allocateScoped,
   allocReq,
   type CapturedCall,
+  CLOUD_SECRET_REFS,
   HETZNER_ENV,
   hetznerSshKeyResponse,
   installAllocatorE2eLifecycle,
@@ -35,7 +36,7 @@ describe("buildAllocatorFromEnv — env defaults flow through allocate() (stubbe
       return json({ server: { id: 100, status: "running", public_net: { ipv4: { ip: "203.0.113.1" } } } }, 201);
     });
     const secrets = memSecrets();
-    const allocator = buildAllocatorFromEnv(queryPool, secrets);
+    const allocator = await buildAllocatorFromEnv(queryPool, secrets);
     const allocation = await allocateScoped(allocator, allocReq);
 
     const create = calls.find((c) => c.url.endsWith("/servers") && c.method === "POST");
@@ -72,7 +73,7 @@ describe("buildAllocatorFromEnv — env defaults flow through allocate() (stubbe
         ? hetznerSshKeyResponse(8888)
         : json({ server: { id: 101, status: "running", public_net: { ipv4: { ip: "203.0.113.2" } } } }, 201),
     );
-    const allocation = await allocateScoped(buildAllocatorFromEnv(queryPool, memSecrets()), allocReq);
+    const allocation = await allocateScoped(await buildAllocatorFromEnv(queryPool, memSecrets()), allocReq);
     const create = calls.find((c) => c.url.endsWith("/servers") && c.method === "POST");
     expect(create?.body?.server_type).toBe("cx42");
     expect(create?.body?.image).toBe("ubuntu-24.04");
@@ -93,19 +94,19 @@ describe("buildAllocatorFromEnv — env defaults flow through allocate() (stubbe
         ? hetznerSshKeyResponse()
         : json({ server: { id: 102, status: "running", public_net: { ipv4: { ip: "203.0.113.8" } } } }, 201),
     );
-    const allocation = await allocateScoped(buildAllocatorFromEnv(queryPool, memSecrets()), allocReq);
+    const allocation = await allocateScoped(await buildAllocatorFromEnv(queryPool, memSecrets()), allocReq);
     expect(allocation.target.username).toBe("root");
   });
 
   it("digitalocean: default region / size / image / root user from env flow into the create call + target", async () => {
     process.env.TANREN_ALLOCATOR_KIND = "digitalocean";
-    process.env.TANREN_DO_API_TOKEN = "tok";
+    process.env.TANREN_DO_API_TOKEN_REF = CLOUD_SECRET_REFS.doToken;
     process.env.TANREN_DO_HOST_FINGERPRINT = "SHA256:do";
     const droplet = {
       droplet: { id: 200, status: "active", networks: { v4: [{ ip_address: "203.0.113.3", type: "public" }] } },
     };
     const calls = stubFetch(() => json(droplet, 202));
-    const allocation = await allocateScoped(buildAllocatorFromEnv(queryPool, memSecrets()), allocReq);
+    const allocation = await allocateScoped(await buildAllocatorFromEnv(queryPool, memSecrets()), allocReq);
 
     const create = calls.find((c) => c.url.endsWith("/droplets") && c.method === "POST");
     // Defaults from buildDigitalOcean: region nyc3, size s-1vcpu-1gb, image docker-20-04.
@@ -118,7 +119,7 @@ describe("buildAllocatorFromEnv — env defaults flow through allocate() (stubbe
 
   it("digitalocean: env overrides for region / size / image / ssh keys / user beat the defaults", async () => {
     process.env.TANREN_ALLOCATOR_KIND = "digitalocean";
-    process.env.TANREN_DO_API_TOKEN = "tok";
+    process.env.TANREN_DO_API_TOKEN_REF = CLOUD_SECRET_REFS.doToken;
     process.env.TANREN_DO_HOST_FINGERPRINT = "SHA256:do";
     process.env.TANREN_DO_REGION = "sgp1";
     process.env.TANREN_DO_SIZE = "s-4vcpu-8gb";
@@ -129,7 +130,7 @@ describe("buildAllocatorFromEnv — env defaults flow through allocate() (stubbe
       droplet: { id: 201, status: "active", networks: { v4: [{ ip_address: "203.0.113.31", type: "public" }] } },
     };
     const calls = stubFetch(() => json(droplet, 202));
-    const allocation = await allocateScoped(buildAllocatorFromEnv(queryPool, memSecrets()), allocReq);
+    const allocation = await allocateScoped(await buildAllocatorFromEnv(queryPool, memSecrets()), allocReq);
     const create = calls.find((c) => c.method === "POST");
     expect(create?.body?.region).toBe("sgp1");
     expect(create?.body?.size).toBe("s-4vcpu-8gb");
@@ -140,7 +141,7 @@ describe("buildAllocatorFromEnv — env defaults flow through allocate() (stubbe
 
   it("gcp: default machine type / image / tanren user from env flow into the insert call + target", async () => {
     process.env.TANREN_ALLOCATOR_KIND = "gcp";
-    process.env.TANREN_GCP_ACCESS_TOKEN = "tok";
+    process.env.TANREN_GCP_ACCESS_TOKEN_REF = CLOUD_SECRET_REFS.gcpToken;
     process.env.TANREN_GCP_PROJECT = "proj-x";
     process.env.TANREN_GCP_ZONE = "us-central1-a";
     process.env.TANREN_GCP_SSH_PUBLIC_KEY = "ssh-ed25519 AAAA";
@@ -160,7 +161,7 @@ describe("buildAllocatorFromEnv — env defaults flow through allocate() (stubbe
         networkInterfaces: [{ accessConfigs: [{ type: "ONE_TO_ONE_NAT", natIP: "203.0.113.4" }] }],
       });
     });
-    const allocation = await allocateScoped(buildAllocatorFromEnv(queryPool, memSecrets()), allocReq);
+    const allocation = await allocateScoped(await buildAllocatorFromEnv(queryPool, memSecrets()), allocReq);
 
     const insert = calls.find((c) => c.method === "POST");
     // Default machineType e2-small rendered as a zone-qualified path.
@@ -175,7 +176,7 @@ describe("buildAllocatorFromEnv — env defaults flow through allocate() (stubbe
 
   it("gcp: env overrides for machine type / source image / ssh user beat the defaults", async () => {
     process.env.TANREN_ALLOCATOR_KIND = "gcp";
-    process.env.TANREN_GCP_ACCESS_TOKEN = "tok";
+    process.env.TANREN_GCP_ACCESS_TOKEN_REF = CLOUD_SECRET_REFS.gcpToken;
     process.env.TANREN_GCP_PROJECT = "proj-x";
     process.env.TANREN_GCP_ZONE = "us-central1-a";
     process.env.TANREN_GCP_SSH_PUBLIC_KEY = "ssh-ed25519 AAAA";
@@ -196,7 +197,7 @@ describe("buildAllocatorFromEnv — env defaults flow through allocate() (stubbe
         networkInterfaces: [{ accessConfigs: [{ type: "ONE_TO_ONE_NAT", natIP: "203.0.113.41" }] }],
       });
     });
-    const allocation = await allocateScoped(buildAllocatorFromEnv(queryPool, memSecrets()), allocReq);
+    const allocation = await allocateScoped(await buildAllocatorFromEnv(queryPool, memSecrets()), allocReq);
     const insert = calls.find((c) => c.method === "POST");
     expect(insert?.body?.machineType).toBe("zones/us-central1-a/machineTypes/n2-standard-4");
     const disks = insert?.body?.disks as Array<{ initializeParams: { sourceImage: string } }>;
@@ -207,7 +208,7 @@ describe("buildAllocatorFromEnv — env defaults flow through allocate() (stubbe
   it("kubernetes: default tanren user from env flows into the target; secret+pod are created", async () => {
     process.env.TANREN_ALLOCATOR_KIND = "kubernetes";
     process.env.TANREN_K8S_API_SERVER = "https://k8s:6443";
-    process.env.TANREN_K8S_TOKEN_REF = "tok";
+    process.env.TANREN_K8S_TOKEN_REF = CLOUD_SECRET_REFS.k8sToken;
     process.env.TANREN_K8S_NAMESPACE = "tanren-ns";
     process.env.TANREN_K8S_RUNNER_IMAGE = "ghcr.io/x/runner:v0";
     process.env.TANREN_K8S_SSH_PUBLIC_KEY = "ssh-ed25519 AAAA";
@@ -222,7 +223,7 @@ describe("buildAllocatorFromEnv — env defaults flow through allocate() (stubbe
       // getPod: running with a pod IP.
       return json({ metadata: { name: "tanren-run-e2e" }, status: { phase: "Running", podIP: "10.2.3.4" } });
     });
-    const allocation = await allocateScoped(buildAllocatorFromEnv(queryPool, memSecrets()), allocReq);
+    const allocation = await allocateScoped(await buildAllocatorFromEnv(queryPool, memSecrets()), allocReq);
 
     expect(calls.some((c) => c.url.endsWith("/secrets") && c.method === "POST")).toBe(true);
     expect(calls.some((c) => c.url.endsWith("/pods") && c.method === "POST")).toBe(true);
@@ -234,8 +235,8 @@ describe("buildAllocatorFromEnv — env defaults flow through allocate() (stubbe
 
   it("aws_ec2: default ec2-user + region endpoint from env flow into the request + target", async () => {
     process.env.TANREN_ALLOCATOR_KIND = "aws_ec2";
-    process.env.TANREN_AWS_ACCESS_KEY_ID = "AKIA";
-    process.env.TANREN_AWS_SECRET_ACCESS_KEY = "secret";
+    process.env.TANREN_AWS_ACCESS_KEY_ID_REF = CLOUD_SECRET_REFS.awsAccessKeyId;
+    process.env.TANREN_AWS_SECRET_ACCESS_KEY_REF = CLOUD_SECRET_REFS.awsSecretAccessKey;
     process.env.TANREN_AWS_REGION = "eu-central-1";
     process.env.TANREN_AWS_IMAGE_ID = "ami-123";
     process.env.TANREN_AWS_HOST_FINGERPRINT = "SHA256:aws";
@@ -254,7 +255,7 @@ describe("buildAllocatorFromEnv — env defaults flow through allocate() (stubbe
       return new Response(xml, { status: 200, headers: { "Content-Type": "text/xml" } });
     }) as typeof fetch;
 
-    const allocation = await allocateScoped(buildAllocatorFromEnv(queryPool, memSecrets()), allocReq);
+    const allocation = await allocateScoped(await buildAllocatorFromEnv(queryPool, memSecrets()), allocReq);
     // The region-derived endpoint host comes from the env region.
     expect(calls[0]?.url).toMatch(/^https:\/\/ec2\.eu-central-1\.amazonaws\.com\//u);
     expect(allocation.target.host).toBe("203.0.113.5");
@@ -264,8 +265,8 @@ describe("buildAllocatorFromEnv — env defaults flow through allocate() (stubbe
 
   it("aws_ec2: env overrides for instance type / key / subnet / sec groups / user-data / token flow into the request", async () => {
     process.env.TANREN_ALLOCATOR_KIND = "aws_ec2";
-    process.env.TANREN_AWS_ACCESS_KEY_ID = "AKIA";
-    process.env.TANREN_AWS_SECRET_ACCESS_KEY = "secret";
+    process.env.TANREN_AWS_ACCESS_KEY_ID_REF = CLOUD_SECRET_REFS.awsAccessKeyId;
+    process.env.TANREN_AWS_SECRET_ACCESS_KEY_REF = CLOUD_SECRET_REFS.awsSecretAccessKey;
     process.env.TANREN_AWS_REGION = "us-east-1";
     process.env.TANREN_AWS_IMAGE_ID = "ami-999";
     process.env.TANREN_AWS_HOST_FINGERPRINT = "SHA256:aws";
@@ -274,7 +275,9 @@ describe("buildAllocatorFromEnv — env defaults flow through allocate() (stubbe
     process.env.TANREN_AWS_SUBNET_ID = "subnet-abc";
     process.env.TANREN_AWS_SECURITY_GROUP_IDS = "sg-1, sg-2";
     process.env.TANREN_AWS_USER_DATA = "Y2xvdWQtaW5pdA==";
-    process.env.TANREN_AWS_SESSION_TOKEN = "sess-tok";
+    // The session token is a Vault REF too; seed its value and point the env at it.
+    const awsSessionTokenRef = "cloud/aws/session-token";
+    process.env.TANREN_AWS_SESSION_TOKEN_REF = awsSessionTokenRef;
     process.env.TANREN_AWS_SSH_USER = "ubuntu";
     const runInUrls: string[] = [];
     let sawSecurityHeader = false;
@@ -299,7 +302,9 @@ describe("buildAllocatorFromEnv — env defaults flow through allocate() (stubbe
       );
     }) as typeof fetch;
 
-    const allocation = await allocateScoped(buildAllocatorFromEnv(queryPool, memSecrets()), allocReq);
+    const sessionSecrets = memSecrets();
+    await sessionSecrets.put({ ref: awsSessionTokenRef, value: "sess-tok" });
+    const allocation = await allocateScoped(await buildAllocatorFromEnv(queryPool, sessionSecrets), allocReq);
     const runUrl = runInUrls[0] ?? "";
     expect(runUrl).toMatch(/InstanceType=m6i.large/u);
     expect(runUrl).toMatch(/KeyName=tanren-kp/u);
@@ -331,7 +336,7 @@ describe("buildAllocatorFromEnv — env defaults flow through allocate() (stubbe
         imageSha: "sha256:z",
       });
     }) as typeof fetch;
-    await allocateScoped(buildAllocatorFromEnv(queryPool, memSecrets()), allocReq);
+    await allocateScoped(await buildAllocatorFromEnv(queryPool, memSecrets()), allocReq);
     // Default base url http://allocator:3200; the token comes from the env.
     expect(captured.url).toBe("http://allocator:3200/allocate");
     expect(captured.auth).toBe("Bearer dev");
@@ -355,7 +360,7 @@ describe("buildAllocatorFromEnv — env defaults flow through allocate() (stubbe
         imageSha: "sha256:z",
       });
     }) as typeof fetch;
-    await allocateScoped(buildAllocatorFromEnv(queryPool, memSecrets()), allocReq);
+    await allocateScoped(await buildAllocatorFromEnv(queryPool, memSecrets()), allocReq);
     expect(captured.url).toBe("http://sidecar.internal:9000/allocate");
     expect(captured.auth).toBe("Bearer prod-token");
   });
@@ -364,7 +369,7 @@ describe("buildAllocatorFromEnv — env defaults flow through allocate() (stubbe
     // static uses a pre-known fingerprint (no TOFU) so no SSH handshake runs.
     process.env.TANREN_ALLOCATOR_KIND = "static";
     process.env.TANREN_RUNNER_SSH_HOST_FINGERPRINT = "SHA256:static-pin";
-    const allocation = await allocateScoped(buildAllocatorFromEnv(queryPool, memSecrets()), allocReq);
+    const allocation = await allocateScoped(await buildAllocatorFromEnv(queryPool, memSecrets()), allocReq);
     // Defaults from buildStatic: host "runner", port 22, user "tanren".
     expect(allocation.target.host).toBe("runner");
     expect(allocation.target.port).toBe(22);
@@ -378,7 +383,7 @@ describe("buildAllocatorFromEnv — env defaults flow through allocate() (stubbe
     process.env.TANREN_RUNNER_SSH_PORT = "2200";
     process.env.TANREN_RUNNER_SSH_USER = "runner-user";
     process.env.TANREN_RUNNER_SSH_HOST_FINGERPRINT = "SHA256:static-pin";
-    const allocation = await allocateScoped(buildAllocatorFromEnv(queryPool, memSecrets()), allocReq);
+    const allocation = await allocateScoped(await buildAllocatorFromEnv(queryPool, memSecrets()), allocReq);
     expect(allocation.target.host).toBe("10.20.30.40");
     expect(allocation.target.port).toBe(2200);
     expect(allocation.target.username).toBe("runner-user");
@@ -389,7 +394,7 @@ describe("buildAllocatorFromEnv — env defaults flow through allocate() (stubbe
     process.env.TANREN_MANUAL_SSH_HOSTS = JSON.stringify([
       { id: "h1", host: "10.9.8.7", port: 2022, username: "ops", hostKeyFingerprint: "SHA256:m" },
     ]);
-    const allocation = await allocateScoped(buildAllocatorFromEnv(queryPool, memSecrets()), allocReq);
+    const allocation = await allocateScoped(await buildAllocatorFromEnv(queryPool, memSecrets()), allocReq);
     expect(allocation.target.host).toBe("10.9.8.7");
     expect(allocation.target.port).toBe(2022);
     expect(allocation.target.username).toBe("ops");
