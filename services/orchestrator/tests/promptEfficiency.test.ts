@@ -48,4 +48,24 @@ describe("buildInterviewPrompt — cache-friendly static-first (§7.8)", () => {
     expect(prompt).toContain(JSON.stringify(capture));
     expect(prompt).not.toContain('{\n  "');
   });
+
+  // apex v32: the prompt MUST NOT steer the writer to bake `--frozen-lockfile`
+  // into `just bootstrap` — on a from-scratch greenfield repo that fails the cold
+  // bootstrap (ERR_PNPM_NO_LOCKFILE) before any lockfile exists. The bootstrap
+  // guidance must instead be a fresh-repo-safe plain install that generates the
+  // lockfile.
+  it("does NOT suggest a frozen/locked install for `bootstrap` (would brick the cold greenfield bootstrap)", () => {
+    const capture = emptyCapture();
+    const prompt = buildInterviewPrompt({ round: 2, totalRounds: 6, answer: "use ts/pnpm", capture });
+    // No frozen/locked install is RECOMMENDED as the bootstrap example. (`--frozen-lockfile`
+    // appears only inside the explicit "do NOT use" warning — assert via a positive-example check.)
+    expect(prompt).toContain("`bootstrap`: install/restore deps from a CLEAN checkout");
+    expect(prompt).toMatch(/pnpm install['"]? \| ['"]?cargo fetch/u);
+    expect(prompt).not.toMatch(/'pnpm install --frozen-lockfile'/u);
+    // It steers a FRESH-REPO-SAFE bootstrap that writes the lockfile, and forbids
+    // a frozen/locked install on the first scaffold.
+    expect(prompt.toLowerCase()).toMatch(/fresh repo|clean checkout|cold checkout/u);
+    expect(prompt.toLowerCase()).toMatch(/writes the lockfile|generate the lockfile|generates the lockfile/u);
+    expect(prompt.toLowerCase()).toContain("do not use a frozen");
+  });
 });

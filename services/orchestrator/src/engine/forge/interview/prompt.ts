@@ -33,7 +33,18 @@ export function buildInterviewPrompt(context: InterviewAnswererContext): string 
     "the six conventional justfile targets, for WHATEVER stack the operator picked",
     "(Tanren bakes in NO stack). Fill each as the real command for the chosen stack:",
     "  - `stack`: the stack/runtime label (e.g. 'ts/pnpm', 'rust/cargo', 'python/uv', 'novel/pandoc')",
-    "  - `bootstrap`: install/restore deps (e.g. 'pnpm install --frozen-lockfile' | 'cargo fetch' | 'uv sync')",
+    // FRESH-REPO-SAFE BOOTSTRAP (apex v32): `bootstrap` runs on a COLD CHECKOUT —
+    // for this from-scratch greenfield repo there is NO lockfile yet, so the FIRST
+    // bootstrap must be a plain restore that GENERATES the lockfile (e.g.
+    // `pnpm install`), never a frozen/locked install that PRESUMES a committed
+    // lockfile. A `--frozen-lockfile` (or `npm ci` / `cargo build --locked`) here
+    // would fail the cold bootstrap before any lockfile exists. The generated
+    // lockfile is committed in the scaffold so later/CI installs are reproducible.
+    "  - `bootstrap`: install/restore deps from a CLEAN checkout — a plain install that",
+    "      WRITES the lockfile on a fresh repo (e.g. 'pnpm install' | 'cargo fetch' | 'uv sync').",
+    "      Do NOT use a frozen/locked install ('--frozen-lockfile' / 'npm ci' / '--locked'):",
+    "      this is a from-scratch scaffold with NO committed lockfile yet, so the first",
+    "      bootstrap must GENERATE the lockfile (which the scaffold then commits).",
     "  - `tier1`: the CHEAP per-iteration checks (e.g. 'pnpm lint && pnpm typecheck' | 'cargo clippy' | 'aspell check')",
     "  - `tier2`: the slower pre-audit checks incl. tests (e.g. 'pnpm build && pnpm test' | 'cargo test' | 'consistency-lint')",
     "  - `tier3`: the full pre-merge gate (usually tier1 + tier2 together)",

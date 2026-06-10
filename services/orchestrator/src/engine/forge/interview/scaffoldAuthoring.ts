@@ -92,6 +92,19 @@ export function buildScaffoldDescription(lifecycle: CaptureLifecycle): string {
       "runs tests writes a machine-readable test report to a known path (the test-report convention) so " +
       "flaky-intelligence ingests it; ensure your code/config honours that. Do NOT invent a stack: the stack and " +
       "every command above come from the architecture step's lifecycle declaration.",
+    "",
+    // FRESH-REPO BOOTSTRAP + COMMITTED LOCKFILE (apex v32): this is a from-scratch
+    // repo, so `just bootstrap` runs once over a COLD checkout with NO lockfile yet.
+    // Author the dependency manifest AND run the lifecycle's `bootstrap` so the
+    // package manager GENERATES its lockfile, then COMMIT that lockfile in this
+    // scaffold — so the deployable artifact + the gate are reproducible and any
+    // later (frozen/CI) install has the committed lockfile to lock against. Do NOT
+    // leave the lockfile out of the scaffold and do NOT gitignore it.
+    "BOOTSTRAP MUST WORK ON THIS FRESH REPO + COMMIT THE LOCKFILE: this is a from-scratch repo with no " +
+      "lockfile yet, so the pre-committed `just bootstrap` runs over a clean checkout. Author the dependency " +
+      "manifest and GENERATE the lockfile (the bootstrap command above is a plain install for exactly this " +
+      "reason), then COMMIT the generated lockfile in this scaffold (do NOT gitignore or omit it) so later/CI " +
+      "installs are reproducible against it.",
   ].join("\n");
 }
 
@@ -105,6 +118,9 @@ export function buildScaffoldAcceptanceCriteria(lifecycle: CaptureLifecycle): st
   return [
     `given an empty repo, when the scaffold lands, then real ${lifecycle.stack} project code exists ` +
       "(dependency manifests/lockfiles, a minimal source entrypoint, config) — NOT stubs or placeholders",
+    "given a from-scratch repo with no lockfile, when `just bootstrap` runs, then it installs from a clean " +
+      "checkout and generates the lockfile, and the generated lockfile is COMMITTED in the scaffold (not " +
+      "gitignored) so later/CI installs are reproducible",
     `given the pre-committed contract files, when the scaffold lands, then the writer left \`${SKELETON_JUSTFILE_PATH}\` ` +
       `and \`${SKELETON_CI_CONFIG_PATH}\` intact (they are materialized deterministically — the writer authors ` +
       "project code, never the contract files)",

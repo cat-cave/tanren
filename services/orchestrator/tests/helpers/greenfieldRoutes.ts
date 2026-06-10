@@ -86,7 +86,9 @@ export function preparedDeploy(
 // Tanren hardcode; required at derive (the scaffold can't author a justfile without it).
 export const GREENFIELD_TS_LIFECYCLE = {
   stack: "ts/pnpm",
-  bootstrap: "pnpm install --frozen-lockfile",
+  // Fresh-repo-safe (apex v32): greenfield bootstrap is a non-frozen install that
+  // generates the lockfile on a cold checkout (a frozen install bricks it).
+  bootstrap: "pnpm install",
   tier1: "pnpm lint && pnpm typecheck",
   tier2: "pnpm build && pnpm test -- --reporter=junit --outputFile=reports/junit.xml",
   tier3: "pnpm lint && pnpm typecheck && pnpm build && pnpm test",
