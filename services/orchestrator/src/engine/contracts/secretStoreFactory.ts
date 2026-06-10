@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { InMemorySecretStore, type SecretStore, VaultSecretStore } from "./secretStore.js";
 import { GcpSecretManagerStore } from "./gcpSecretManager.js";
 import { AwsSecretsManagerStore } from "./awsSecretsManager.js";
@@ -27,6 +28,43 @@ function optional(env: SecretStoreEnv, name: string): string | undefined {
 }
 
 /**
+ * Resolve the BROAD Vault token, preferring a MOUNTED SECRET FILE over a plaintext
+ * env value. Precedence — a file path WINS:
+ *
+ *   1. `VAULT_TOKEN_FILE` (preferred, prod): read the token from the file at boot,
+ *      in-memory, and never force the broad token into the process env (so it stays
+ *      out of `/proc/<pid>/environ` and is not inherited by child processes — incl.
+ *      the runner SSH subprocess). Mirrors the SSH runner-identity key's
+ *      mounted-secret-file delivery (`TANREN_RUNNER_IDENTITY_KEY_PATH`).
+ *   2. `VAULT_TOKEN` (dev convenience): a plaintext env value, for the single-process
+ *      dev/smoke path only.
+ *
+ * Fail-loud when neither resolves to a non-blank token (a configured-but-empty file
+ * is itself a hard failure — never a silent blank token on this security boundary).
+ *
+ * Exported so the orchestrator's Vault HEALTH probe (main.ts) resolves the broad
+ * token through the SAME file-preferred precedence — it must not assume a plaintext
+ * `VAULT_TOKEN` env value the prod profile no longer sets.
+ */
+export function requireVaultToken(env: SecretStoreEnv = process.env): string {
+  const file = optional(env, "VAULT_TOKEN_FILE");
+  if (file !== undefined) {
+    let contents: string;
+    try {
+      contents = readFileSync(file, "utf8");
+    } catch (cause) {
+      throw new Error(`VAULT_TOKEN_FILE=${file} could not be read`, { cause });
+    }
+    const token = contents.trim();
+    if (token === "") {
+      throw new Error(`VAULT_TOKEN_FILE=${file} is empty (no Vault token in the mounted secret file)`);
+    }
+    return token;
+  }
+  return required(env, "VAULT_TOKEN");
+}
+
+/**
  * Selects and constructs the SecretStore backend named REQUIRED by
  * `TANREN_SECRET_STORE` (no default — an unset/blank value throws). Each backend
  * reads its own resolved credentials from the environment, all REQUIRED (no
@@ -43,7 +81,7 @@ export function buildSecretStore(env: SecretStoreEnv = process.env): SecretStore
     case "vault":
       return new VaultSecretStore({
         addr: required(env, "VAULT_ADDR"),
-        token: required(env, "VAULT_TOKEN"),
+        token: requireVaultToken(env),
         ...(optional(env, "VAULT_KV_MOUNT") === undefined ? {} : { mount: required(env, "VAULT_KV_MOUNT") }),
       });
     case "gcp_sm":
@@ -107,9 +145,10 @@ export interface VaultMountConfig {
  * backends do NOT have a Vault broad token to de-privilege, so the run path keeps
  * using their (already-tenant-namespaced) store directly. This is not a stub: a
  * non-Vault backend genuinely has no Vault child-token to mint. The minter is
- * constructed from the BROAD `VAULT_TOKEN` (the same REQUIRED token the SecretStore
- * uses) and is used ONLY to mint short-lived per-run children; the broad token is
- * never handed to a runner.
+ * constructed from the BROAD Vault token (resolved by {@link requireVaultToken} —
+ * the mounted `VAULT_TOKEN_FILE` in prod, the `VAULT_TOKEN` env in dev — the same
+ * token the SecretStore uses) and is used ONLY to mint short-lived per-run children;
+ * the broad token is never handed to a runner.
  */
 export function buildVaultTokenMinter(env: SecretStoreEnv = process.env): VaultTokenMinter | undefined {
   const kind = required(env, "TANREN_SECRET_STORE").toLowerCase() as SecretStoreKind;
@@ -119,7 +158,7 @@ export function buildVaultTokenMinter(env: SecretStoreEnv = process.env): VaultT
   const { addr, mount } = resolveVaultMountConfig(env);
   return new VaultRunTokenMinter({
     addr,
-    token: required(env, "VAULT_TOKEN"),
+    token: requireVaultToken(env),
     ...(mount === undefined ? {} : { mount }),
   });
 }
