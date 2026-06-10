@@ -18,6 +18,18 @@
 // VERIFIED BEHAVIOR PRESERVED: no diff is injected; the agent self-inspects via
 // `git diff <baselineSha> -- . ':(exclude)node_modules'`; the read-only /
 // structured-output boundaries are intact.
+//
+// ENTITY-RISK ORACLE (docs/roadmap/entity-analysis-layer.md §3.1): the checker
+// prompt MAY carry a deterministic entity-change risk STEER (engine/oracle) — a
+// native, pre-LLM signal Tanren derives from the entity-change map that tells the
+// agent WHERE to concentrate scrutiny (skip cosmetic, maximal on a public-API
+// signature change). It is a STEER, not injected raw context: the agent still
+// inspects the diff itself. When no risk signal is supplied — or it is the
+// `unknown` class (sem absent / can't-parse) — NO steer is added and the prompt
+// is byte-for-byte the same as the no-oracle path (the graceful fallback).
+
+import { renderRiskPostureLines } from "../oracle/index.js";
+import type { EntityRiskSignal } from "../oracle/index.js";
 
 export interface CheckerPromptInput {
   specTitle: string;
@@ -35,6 +47,10 @@ export interface CheckerPromptInput {
   // The schema-specific closing instruction (one element per line). Each caller
   // passes the lines that name its own output schema's fields.
   outputInstructions: ReadonlyArray<string>;
+  // OPTIONAL native entity-change risk signal (engine/oracle). When present and
+  // NOT the `unknown` class, its posture STEER is appended after the
+  // self-inspection block. Absent / `unknown` ⇒ no steer (graceful fallback).
+  riskSignal?: EntityRiskSignal;
 }
 
 export interface AuditorPromptInput {
@@ -92,6 +108,18 @@ function selfInspectionBlock(baselineSha: string): string[] {
   ];
 }
 
+// Render the optional entity-risk posture STEER as a leading-blank-line block, or
+// EMPTY when no signal is supplied or the signal is the `unknown` class (sem
+// absent / can't-parse). Empty ⇒ the prompt is byte-identical to the no-oracle
+// path, so the graceful fallback is verifiable.
+function riskSteerBlock(riskSignal: EntityRiskSignal | undefined): string[] {
+  if (riskSignal === undefined) {
+    return [];
+  }
+  const lines = renderRiskPostureLines(riskSignal);
+  return lines.length === 0 ? [] : ["", ...lines];
+}
+
 export function buildCheckerPrompt(input: CheckerPromptInput): string {
   return [
     "You are the Tanren Checker Answerer. Your ONLY job is to judge COMPLETENESS for",
@@ -100,6 +128,7 @@ export function buildCheckerPrompt(input: CheckerPromptInput): string {
     "change and the spec — nothing else. Emit a completeness finding per incompleteness.",
     "",
     ...selfInspectionBlock(input.baselineSha),
+    ...riskSteerBlock(input.riskSignal),
     "",
     "Hard boundaries (a separate deterministic gate, not you, owns correctness):",
     "- Do NOT run, simulate, invoke, or shell out to tests, builds, type checks,",

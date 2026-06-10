@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "counts": {
+      "additionalProperties": false,
+      "properties": {
+        "cosmetic": {
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer"
+        },
+        "deletedOrRenamed": {
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer"
+        },
+        "publicSignature": {
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer"
+        },
+        "structural": {
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer"
+        },
+        "total": {
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "total",
+        "cosmetic",
+        "structural",
+        "publicSignature",
+        "deletedOrRenamed"
+      ],
+      "type": "object"
+    },
+    "provenance": {
+      "enum": [
+        "classified",
+        "no-producer",
+        "producer-unsupported",
+        "producer-errored"
+      ],
+      "type": "string"
+    },
+    "rationale": {
+      "type": "string"
+    },
+    "riskClass": {
+      "enum": [
+        "unknown",
+        "cosmetic",
+        "internal-logic",
+        "public-api-signature",
+        "structural"
+      ],
+      "type": "string"
+    },
+    "runId": {
+      "type": "string"
+    },
+    "scrutiny": {
+      "enum": [
+        "skip",
+        "standard",
+        "heightened",
+        "maximal"
+      ],
+      "type": "string"
+    },
+    "subtaskIndex": {
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+    },
+    "taskId": {
+      "type": "string"
+    },
+    "unexpectedFailure": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "runId",
+    "taskId",
+    "subtaskIndex",
+    "riskClass",
+    "provenance",
+    "unexpectedFailure",
+    "scrutiny",
+    "rationale",
+    "counts"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.checker.entity_risk"
+}

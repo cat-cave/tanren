@@ -28,6 +28,24 @@ export const specLoopStageSensitivityRules: SensitivityRule[] = [
     ["findings[].body", "public"],
     ["findings[].behaviorId", "public"],
   ]),
+  // §3.1: the deterministic entity-change risk signal — all structural metadata
+  // (class / provenance / counts / rationale), product-quality narration, no secret.
+  ...rulesFor("checker.entity_risk", [
+    ["runId", "public"],
+    ["taskId", "public"],
+    ["subtaskIndex", "public"],
+    ["riskClass", "public"],
+    ["provenance", "public"],
+    ["unexpectedFailure", "public"],
+    ["scrutiny", "public"],
+    ["rationale", "public"],
+    ["counts", "public"],
+    ["counts.total", "public"],
+    ["counts.cosmetic", "public"],
+    ["counts.structural", "public"],
+    ["counts.publicSignature", "public"],
+    ["counts.deletedOrRenamed", "public"],
+  ]),
   ...rulesFor("auditor.verdict", [
     ["runId", "public"],
     ["findings", "public"],

@@ -8,6 +8,15 @@ import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { CheckAnswer, PlanAnswer, PlanSubtask } from "../answerers/schemas/index.js";
 import type { EventName, EventPayload } from "../events/index.js";
 import { emitStageTiming } from "../observability/index.js";
+import { createLogger } from "../observability/logger.js";
+import {
+  checkerPostureFor,
+  classifyEntityRisk,
+  isUnexpectedRiskFailure,
+  type EntityChangeMap,
+  type EntityRiskSignal,
+  type UnavailableReason,
+} from "../oracle/index.js";
 import type { AnswererAdapter, WriterAdapter, WriterResult } from "../providers/types.js";
 import {
   decideCheckerOutcome,
@@ -275,6 +284,28 @@ export interface CheckerStageInput {
     subtaskIndex: number;
     verdict: CheckAnswer;
   }) => Record<string, unknown>;
+  // §3.1 entity-risk oracle (engine/oracle): the OPTIONAL neutral entity-change
+  // map (normalized from `sem diff` by a producer). When supplied, Tanren
+  // classifies it into a deterministic risk class and steers the checker posture
+  // BEFORE the LLM judgement. When ABSENT — the production default, since Tanren
+  // does not run sem host-side — the classifier returns the `unknown` class and
+  // the checker proceeds on the raw diff exactly as today (graceful fallback).
+  // `entityMapUnavailable` lets a producer distinguish a LEGITIMATE absence
+  // (`no-producer` / `producer-unsupported`, quiet) from an UNEXPECTED failure
+  // (`producer-errored`, logged loudly) per the no-silent-fallback doctrine.
+  entityChangeMap?: EntityChangeMap;
+  entityMapUnavailable?: UnavailableReason;
+}
+
+const checkerOracleLogger = createLogger("checker-entity-risk");
+
+// Derive the deterministic entity-risk signal for a checker stage. PURE w.r.t.
+// the inputs — wraps `classifyEntityRisk` so the production default (no map) is
+// the graceful `unknown`/`no-producer` signal. The wiring layer emits this as an
+// observable event AND, per the no-silent-fallback doctrine, logs the UNEXPECTED
+// `producer-errored` case loudly (the legitimate absent paths stay quiet).
+function deriveCheckerRiskSignal(args: CheckerStageInput): EntityRiskSignal {
+  return classifyEntityRisk(args.entityChangeMap, args.entityMapUnavailable);
 }
 
 // The base sha the checker tells the Answerer to diff against. The production
@@ -307,12 +338,45 @@ export async function runCheckerStage(args: CheckerStageInput): Promise<CheckerD
   );
   await args.appendEvent("task.started", { taskKind: "check" }, args.checkerTaskId);
   await args.appendEvent("checker.started", { taskKind: "check" }, args.checkerTaskId);
+
+  // §3.1: derive the deterministic entity-risk signal BEFORE the LLM judgement,
+  // emit it as the observable pre-LLM classification, and use it to steer the
+  // checker posture. The `unknown` class (no map / sem absent) is the graceful
+  // fallback: no posture steer, and the prompt is byte-identical to the no-oracle
+  // path. An UNEXPECTED producer failure is logged loudly (no-silent-fallback).
+  const riskSignal = deriveCheckerRiskSignal(args);
+  const riskPosture = checkerPostureFor(riskSignal);
+  if (isUnexpectedRiskFailure(riskSignal.provenance)) {
+    checkerOracleLogger.warn(
+      "entity-risk producer errored; checker proceeding on raw diff (risk unclassified)",
+      { runId: args.runId, taskId: args.checkerTaskId },
+      { subtaskIndex: args.subtask.index, provenance: riskSignal.provenance, rationale: riskSignal.rationale },
+    );
+  }
+  await args.appendEvent(
+    "checker.entity_risk",
+    {
+      runId: args.runId,
+      taskId: args.checkerTaskId,
+      subtaskIndex: args.subtask.index,
+      riskClass: riskSignal.riskClass,
+      provenance: riskSignal.provenance,
+      unexpectedFailure: isUnexpectedRiskFailure(riskSignal.provenance),
+      scrutiny: riskPosture.scrutiny,
+      rationale: riskSignal.rationale,
+      counts: riskSignal.counts,
+    },
+    args.checkerTaskId,
+  );
+
   const checkerContext: CheckerSubtaskContext = {
     specTitle: args.specTitle,
     specDescription: args.specDescription,
     acceptanceCriteria: args.acceptanceCriteria,
     subtask: args.subtask,
     baselineSha: checkerBaselineSha(args),
+    // §3.1: steer ONLY when the signal is a real class; `unknown` adds no steer.
+    riskSignal: riskSignal.riskClass === "unknown" ? undefined : riskSignal,
   };
   const startedAt = Date.now();
   const result = await invokeChecker(args.adapter, {

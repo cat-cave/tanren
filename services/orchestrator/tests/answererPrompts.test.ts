@@ -8,6 +8,7 @@
 // answererTasks.test.ts.
 import { describe, expect, it } from "vitest";
 import { buildAuditorPrompt, buildCheckerPrompt } from "../src/engine/workflow/answererPrompts.js";
+import { classifyEntityRisk } from "../src/engine/oracle/index.js";
 
 const baselineSha = "a".repeat(40);
 
@@ -53,6 +54,39 @@ describe("buildCheckerPrompt — shared body", () => {
     expect(prompt).toContain("if `sem` is missing, errors, or reports it cannot parse the");
     expect(prompt).toContain("fall back to the raw `git diff`");
     expect(prompt).toContain("Never block or change your verdict because `sem` is unavailable.");
+  });
+
+  it("appends the entity-risk posture STEER for a real risk class (§3.1), without injecting the entity list", () => {
+    const riskSignal = classifyEntityRisk({
+      entities: [{ kind: "modified", nature: "structural", visibility: "public", signatureChanged: true }],
+    });
+    const prompt = buildCheckerPrompt({
+      specTitle: "S",
+      specDescription: "D",
+      acceptanceCriteria: ["AC1"],
+      baselineSha,
+      outputInstructions: ["X"],
+      riskSignal,
+    });
+    expect(prompt).toContain("ENTITY-RISK SIGNAL (deterministic, pre-judgement)");
+    expect(prompt).toContain("PUBLIC-API SIGNATURE");
+    // The steer carries headline counts, not the raw entity list.
+    expect(prompt).toContain("entity-change map:");
+  });
+
+  it("adds NO steer when the risk signal is the unknown class (graceful fallback — byte-identical to no-oracle)", () => {
+    const base = {
+      specTitle: "S",
+      specDescription: "D",
+      acceptanceCriteria: ["AC1"],
+      baselineSha,
+      outputInstructions: ["X"],
+    } as const;
+    const withoutSignal = buildCheckerPrompt(base);
+    const withUnknown = buildCheckerPrompt({ ...base, riskSignal: classifyEntityRisk(null) });
+    // unknown ⇒ empty steer ⇒ the prompt is exactly the no-oracle prompt.
+    expect(withUnknown).toBe(withoutSignal);
+    expect(withUnknown).not.toContain("ENTITY-RISK SIGNAL");
   });
 
   it("includes the subtask block only when a subtask is supplied (production), omits it otherwise (structured)", () => {
