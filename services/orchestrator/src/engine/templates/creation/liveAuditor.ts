@@ -7,16 +7,16 @@
 //
 // REUSE: the audit is the SAME read-only audit pass the scheduled-audits surface
 // runs — an `AuditPassRunner` indexes the project's repo READ-ONLY and the audit
-// answerer surfaces findings with `info | warn | fail` severity. A `fail`-severity
-// finding is the P0/P1 equivalent (a must-fix); we count those as blocking. We do
-// NOT reinvent the audit pass — we adapt the existing runner into the auditor seam.
+// answerer surfaces findings on the SHARED P0–P3 ladder (`contracts/findings.ts`). A
+// P0/P1 finding is a must-fix (block-worthy); we count those as blocking. We do NOT
+// reinvent the audit pass — we adapt the existing runner into the auditor seam.
 
 import type { AuditJob, AuditPassRunner } from "../../forge/audits/index.js";
 import type { TemplateAuditor } from "../validationHarness.js";
 
 // Build a `TemplateAuditor` over the existing scheduled-audit pass runner. Each
 // `openBlockingFindings` runs ONE read-only audit pass over the built template's
-// repo and counts the `fail`-severity (blocking) findings. A pass that throws
+// repo and counts the P0/P1 (block-worthy) findings. A pass that throws
 // propagates LOUD — `auditorClean` cannot be asserted over an audit that did not
 // run (never a silent "clean").
 //
@@ -48,7 +48,8 @@ export function buildTemplateAuditor(input: {
   return {
     async openBlockingFindings(): Promise<number> {
       const result = await input.passRunner.run(job);
-      return result.findings.filter((finding) => finding.severity === "fail").length;
+      // Block-worthy = the most-severe P0/P1 tier on the shared findings ladder.
+      return result.findings.filter((finding) => finding.severity === "P0" || finding.severity === "P1").length;
     },
   };
 }

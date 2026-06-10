@@ -23,6 +23,26 @@ export const strandSensitivityRules: SensitivityRule[] = [
     ["prUrl", "public"],
     ["prNumber", "public"],
     ["message", "public"],
+    // cancelled_ancestor source: the operator-cancelled ancestor the dependent assumed
+    // (a spec id — run lineage, no secret).
+    ["cancelledAncestorSpecId", "public"],
+  ]),
+  // spec.cancelled / run.cancelled: the operator cancel-spec/cancel-run action. All
+  // fields are public — spec/run ids are run lineage, `fromStatus` is an enum label,
+  // `cancelledBy` is the operator's user id (an actor handle), and the dependent ids /
+  // runner id carry no secret (no diff content, credentials, or command output).
+  ...rulesFor("spec.cancelled", [
+    ["specId", "public"],
+    ["fromStatus", "public"],
+    ["cancelledBy", "public"],
+    ["dependentsParked[]", "public"],
+  ]),
+  ...rulesFor("run.cancelled", [
+    ["runId", "public"],
+    ["fromStatus", "public"],
+    ["cancelledBy", "public"],
+    ["runnerId", "public"],
+    ["runnerReleased", "public"],
   ]),
   // dag.spec.attention_resolved: an operator resolved a needs_attention escalation
   // and re-queued the spec. All fields are public — the spec id is run lineage, the

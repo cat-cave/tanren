@@ -42,6 +42,9 @@ const ENV_READ_WHITELIST = new Set([
   // Worker boot + data-plane config (claim endpoint, mTLS certs, remote-writes
   // flag, run-worker flag, allocator kind, identity-key seeder).
   "services/orchestrator/src/engine/worker/boot.ts",
+  // Runner SSH identity FromEnv: the secret REF (validated via the schema) + the
+  // mounted-key-FILE seeder (TANREN_RUNNER_IDENTITY_KEY_PATH).
+  "services/orchestrator/src/engine/worker/runnerIdentityFromEnv.ts",
   "services/orchestrator/src/engine/worker/lifecycle.ts",
   "services/orchestrator/src/engine/worker/claimClientFromEnv.ts",
   "services/orchestrator/src/engine/worker/runStateWriterFromEnv.ts",

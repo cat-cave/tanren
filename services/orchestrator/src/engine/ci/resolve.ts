@@ -41,8 +41,9 @@ export const JUNIT_REPORT_PATH = "reports/junit.xml";
 //   - fast   (per_iteration) — `just tier-1`: the cheap per-iteration gate (e.g.
 //     lint + typecheck). NO tests here — tests arrive with features, so a scaffold
 //     pass is never blocked by a test tier.
-//   - slow   (pre_audit)     — `just tier-2`: build + tests, the tier that emits
-//     JUnit evidence (to JUNIT_REPORT_PATH) for the CI-intelligence per-test grain.
+//   - slow   (pre_audit)     — `just tier-2`: build + tests, the tier that DECLARES its
+//     JUnit report (`junitReport: JUNIT_REPORT_PATH`) for the CI-intelligence per-test
+//     grain — the EXPLICIT contract field, so Tanren reads back exactly that path.
 //   - merge  (pre_merge)     — `just tier-3`: the heaviest thorough gate, the
 //     merge-queue authority.
 // `bootstrap.run` is `just bootstrap`. This default mirrors the skeleton's ci.yml
@@ -53,7 +54,7 @@ export const DEFAULT_CI_CONFIG: CiConfigV1 = Object.freeze(
     bootstrap: { run: "just bootstrap" },
     tiers: {
       fast: [{ name: "tier-1", run: "just tier-1" }],
-      slow: [{ name: "tier-2", run: "just tier-2" }],
+      slow: [{ name: "tier-2", run: "just tier-2", junitReport: JUNIT_REPORT_PATH }],
       merge: [{ name: "tier-3", run: "just tier-3" }],
     },
     when: {
@@ -107,6 +108,25 @@ export function stepsFor(config: CiConfigV1, when: CiWhen): CiStep[] {
 // The bootstrap/install command, or undefined when the repo declares none.
 export function bootstrapCommand(config: CiConfigV1): string | undefined {
   return config.bootstrap?.run;
+}
+
+// The DECLARED JUnit report among the tiers mapped to a lifecycle point — the
+// EXPLICIT CI-config contract that replaces the old command-string sniff. A step is
+// junit-producing iff it sets `junitReport`; the first such step (in tier then step
+// order) names the tier + the workspace-relative path the native gate reads back to
+// ingest the per-test grain. `undefined` ⇒ no tier at this point declares a report,
+// so the ingest is a clean QUIET skip (not an error). When a step DOES declare one but
+// the runner produces no report, that is a LOUD `ci.junit_missing` (the gate caller).
+// STACK-AGNOSTIC: the path is the project's own declaration; Tanren names no runner.
+export function junitReportFor(config: CiConfigV1, when: CiWhen): { tier: string; path: string } | undefined {
+  for (const tierName of tiersFor(config, when)) {
+    for (const step of config.tiers[tierName] ?? []) {
+      if (step.junitReport !== undefined) {
+        return { tier: tierName, path: step.junitReport };
+      }
+    }
+  }
+  return undefined;
 }
 
 function orderedTierNames(config: CiConfigV1): string[] {

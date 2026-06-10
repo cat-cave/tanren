@@ -9,6 +9,7 @@ export {
   AuditJob,
   AuditPassReport,
   AuditReportFinding,
+  findingToInboxSeverity,
   type AuditFinding,
   type AuditPassResult,
   type AuditPassRunner,

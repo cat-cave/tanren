@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   AwsSecretsManagerStore,
   awsSecretNameFromRef,
@@ -15,6 +18,13 @@ import {
 import { VaultRunTokenMinter } from "../src/engine/contracts/vaultTokenMinterImpl.js";
 
 const agnosticRef = "credential/github_token/org/acme/default";
+
+/** Write `contents` to a fresh temp file and return its path (a mounted-secret stand-in). */
+function writeTokenFile(contents: string): string {
+  const file = join(mkdtempSync(join(tmpdir(), "tanren-vault-token-")), "token");
+  writeFileSync(file, contents);
+  return file;
+}
 
 // The factory does not inject a transport, so the stores it builds fall back to
 // the global `fetch`. Stubbing it lets the tests observe the resolved config
@@ -121,6 +131,84 @@ describe("buildVaultTokenMinter (per-run scoped credentials, dimension D)", () =
       mount: "kv",
     });
     expect(() => resolveVaultMountConfig({})).toThrow(/VAULT_ADDR/u);
+  });
+});
+
+describe("VAULT_TOKEN_FILE — the broad token from a MOUNTED SECRET FILE (never plaintext env)", () => {
+  it("resolves the Vault token from VAULT_TOKEN_FILE with NO VAULT_TOKEN env value present", async () => {
+    const { calls } = stubFetch();
+    const file = writeTokenFile("file-broad-token\n");
+    const store = buildSecretStore({
+      TANREN_SECRET_STORE: "vault",
+      VAULT_ADDR: "http://vault.internal:8200",
+      VAULT_TOKEN_FILE: file,
+    });
+    await store.get("credential/token");
+    // The token read from the mounted file is what reaches Vault (trimmed) — a
+    // real observable outcome, with no VAULT_TOKEN env value force-exported.
+    expect(calls[0]!.headers.get("X-Vault-Token")).toBe("file-broad-token");
+    rmSync(file, { force: true });
+  });
+
+  it("VAULT_TOKEN_FILE WINS over a VAULT_TOKEN env value (file path is preferred in prod)", async () => {
+    const { calls } = stubFetch();
+    const file = writeTokenFile("file-wins-token");
+    const store = buildSecretStore({
+      TANREN_SECRET_STORE: "vault",
+      VAULT_ADDR: "http://vault.internal:8200",
+      VAULT_TOKEN: "env-dev-token",
+      VAULT_TOKEN_FILE: file,
+    });
+    await store.get("credential/token");
+    expect(calls[0]!.headers.get("X-Vault-Token")).toBe("file-wins-token");
+    rmSync(file, { force: true });
+  });
+
+  it("falls back to the VAULT_TOKEN env value when no file path is set (dev convenience)", async () => {
+    const { calls } = stubFetch();
+    const store = buildSecretStore({
+      TANREN_SECRET_STORE: "vault",
+      VAULT_ADDR: "http://vault.internal:8200",
+      VAULT_TOKEN: "env-dev-token",
+    });
+    await store.get("credential/token");
+    expect(calls[0]!.headers.get("X-Vault-Token")).toBe("env-dev-token");
+  });
+
+  it("fails LOUD when NEITHER VAULT_TOKEN_FILE nor VAULT_TOKEN is present", () => {
+    expect(() => buildSecretStore({ TANREN_SECRET_STORE: "vault", VAULT_ADDR: "http://v:8200" })).toThrow(
+      /VAULT_TOKEN/u,
+    );
+  });
+
+  it("fails LOUD when VAULT_TOKEN_FILE points at a missing file", () => {
+    expect(() =>
+      buildSecretStore({
+        TANREN_SECRET_STORE: "vault",
+        VAULT_ADDR: "http://v:8200",
+        VAULT_TOKEN_FILE: "/no/such/tanren-vault-token",
+      }),
+    ).toThrow(/VAULT_TOKEN_FILE=.*could not be read/u);
+  });
+
+  it("fails LOUD when VAULT_TOKEN_FILE is present but empty (never a silent blank token)", () => {
+    const file = writeTokenFile("   \n");
+    expect(() =>
+      buildSecretStore({ TANREN_SECRET_STORE: "vault", VAULT_ADDR: "http://v:8200", VAULT_TOKEN_FILE: file }),
+    ).toThrow(/VAULT_TOKEN_FILE=.*is empty/u);
+    rmSync(file, { force: true });
+  });
+
+  it("the minter also resolves the broad token from VAULT_TOKEN_FILE", () => {
+    const file = writeTokenFile("file-broad-token");
+    expect(
+      buildVaultTokenMinter({
+        TANREN_SECRET_STORE: "vault",
+        VAULT_ADDR: "http://vault.internal:8200",
+        VAULT_TOKEN_FILE: file,
+      }),
+    ).toBeInstanceOf(VaultRunTokenMinter);
+    rmSync(file, { force: true });
   });
 });
 

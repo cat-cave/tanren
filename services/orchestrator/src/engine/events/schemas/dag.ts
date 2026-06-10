@@ -398,6 +398,13 @@ const StrandTerminalRun = z.object({ runId: z.string(), status: z.string() }).st
 //     executing it would just re-conflict forever), so the coordinator parked it
 //     instead of blindly re-executing (autonomy-engine.md §2c — the non-bricking
 //     conflict escalation). Carries the PR + the resolver's message.
+//   - `cancelled_ancestor`: an operator CANCELLED an ancestor of this spec (the
+//     operator cancel-spec action, workflow/cancelSpec). A dependent of a cancelled
+//     spec is NOT silently dropped (the human-escalation discipline): cancelling the
+//     ancestor removed the work the dependent assumed, so the dependent parks at
+//     `needs_attention` for a human to DECIDE (re-scope the dependent, re-queue the
+//     ancestor, or cancel the dependent too) — never an autonomous cascade-cancel.
+//     Carries the cancelled ancestor's spec id.
 // One event type (no new event / no events-CHECK migration) so the DAG/UI consume the
 // parked state uniformly regardless of which subsystem escalated it.
 export const DagSpecNeedsAttentionPayload = z.discriminatedUnion("source", [
@@ -425,6 +432,18 @@ export const DagSpecNeedsAttentionPayload = z.discriminatedUnion("source", [
       prUrl: z.string(),
       prNumber: z.number().int(),
       // The resolver's human-readable reason the conflict could not be reconciled.
+      message: z.string(),
+    })
+    .strict(),
+  z
+    .object({
+      source: z.literal("cancelled_ancestor"),
+      specId: z.string(),
+      // The ancestor an operator cancelled — the dependency this spec assumed that
+      // no longer exists, forcing the human decision.
+      cancelledAncestorSpecId: z.string(),
+      // The human-readable DECISION ask (the escalation discipline): framed as "an
+      // ancestor was cancelled — decide how to proceed", not "an error occurred".
       message: z.string(),
     })
     .strict(),

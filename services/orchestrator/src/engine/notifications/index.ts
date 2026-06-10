@@ -65,4 +65,12 @@ export { buildChannelRegistry, type ChannelRegistryDeps } from "./registry.js";
 
 export { buildNotificationDispatcher, type BuildNotificationDispatcherDeps } from "./build.js";
 
+export {
+  ensureDefaultNotificationRoute,
+  DEFAULT_ROUTE_EVENTS,
+  DEFAULT_ROUTE_TARGET_LABEL,
+  type EnsureDefaultRouteInput,
+  type EnsureDefaultRouteResult,
+} from "./seedDefaultRoute.js";
+
 export { NotificationSubscriber, startNotificationSubscriber, type NotificationSubscriberDeps } from "./subscriber.js";

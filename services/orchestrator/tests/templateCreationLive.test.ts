@@ -244,14 +244,14 @@ describe("LIVE build-driver — wiring shape", () => {
 
 // ── LIVE auditor — counts blocking findings ─────────────────────────────────
 describe("LIVE auditor — buildTemplateAuditor", () => {
-  it("counts ONLY fail-severity findings as blocking (info/warn are not)", async () => {
+  it("counts ONLY block-worthy P0/P1 findings as blocking (P2/P3 are not)", async () => {
     const passRunner: AuditPassRunner = {
       async run() {
         return {
           findings: [
-            { externalId: "a", title: "x", body: "y", severity: "info" },
-            { externalId: "b", title: "x", body: "y", severity: "warn" },
-            { externalId: "c", title: "x", body: "y", severity: "fail" },
+            { externalId: "a", title: "x", body: "y", severity: "P3" },
+            { externalId: "b", title: "x", body: "y", severity: "P2" },
+            { externalId: "c", title: "x", body: "y", severity: "P0" },
           ],
         };
       },
@@ -260,10 +260,10 @@ describe("LIVE auditor — buildTemplateAuditor", () => {
     expect(await auditor.openBlockingFindings({ workspacePath: "/ws", baselineSha: "a".repeat(40) })).toBe(1);
   });
 
-  it("a clean pass (no fail findings) → 0 blocking → auditorClean", async () => {
+  it("a clean pass (no P0/P1 findings) → 0 blocking → auditorClean", async () => {
     const passRunner: AuditPassRunner = {
       async run() {
-        return { findings: [{ externalId: "a", title: "x", body: "y", severity: "warn" }] };
+        return { findings: [{ externalId: "a", title: "x", body: "y", severity: "P2" }] };
       },
     };
     const auditor = buildTemplateAuditor({ passRunner, orgId: "org_acme", projectId: "project_tmpl" });

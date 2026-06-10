@@ -33,6 +33,7 @@ import {
   type SpecQualityAnswerer,
 } from "../specQuality/index.js";
 import { InboxStore } from "./store.js";
+import { resolveProjectPlacement } from "./placement.js";
 import type {
   Candidate,
   CandidateTriage,
@@ -119,6 +120,23 @@ export async function ingestSource(
     // (push+poll, or two webhook deliveries) finds it already `accepted` and we do
     // NOT auto-route a second time → exactly one spec. Mirrors `audits/scheduler.ts`.
     if (autoRouteDeps !== undefined && candidate.status === "auto_routed" && triage.routableSpec !== null) {
+      // Loop 6 (never silent-stall): a routable candidate with NO project (an
+      // org-scoped/default source) would otherwise drop in the inbox. Place it in
+      // the org's single project; an ambiguous org (0 or >1) escalates LOUD to the
+      // `triaged` needs-attention surface rather than vanishing.
+      if (candidate.projectId === null) {
+        const placement = await resolveProjectPlacement(deps.pool, candidate.orgId);
+        if (placement.kind === "needs_attention") {
+          console.error(
+            `[intake] routable candidate ${candidate.id} cannot be auto-placed ` +
+              `(${placement.reason}: org has ${placement.projectCount} project(s)) — escalating to needs_attention`,
+          );
+          candidate = (await InboxStore.resolveCandidate(deps.pool, candidate.id, "triaged", null)) ?? candidate;
+          out.push(candidate);
+          continue;
+        }
+        candidate = (await InboxStore.placeCandidateProject(deps.pool, candidate.id, placement.projectId)) ?? candidate;
+      }
       try {
         candidate = (await autoRouteCandidate(deps, candidate, triage.routableSpec, autoRouteDeps)).candidate;
       } catch (error) {

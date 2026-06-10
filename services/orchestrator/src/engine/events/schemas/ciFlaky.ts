@@ -86,3 +86,23 @@ export const CiTestsReportedPayload = z
     testExitCode: z.number().int().nullable(),
   })
   .strict();
+
+// CI-intelligence per-test grain WENT BLIND: a gate tier DECLARED a `junitReport` path
+// (the explicit CI-config contract) and its test step ran, but the runner produced no
+// usable report at that path (absent / unreadable / empty). The native ingest yields
+// NO per-test rows for this gate, so flaky→quarantine→root-cause has no grain for it —
+// a reporter misconfig or a runner crash AFTER the test step. DURABLE + LOUD (the
+// no-silent-skip doctrine): advisory, NEVER merge-gating (the gate verdict already
+// stands), but recorded so an operator can see WHICH tier/path went blind and why.
+export const CiJunitMissingPayload = z
+  .object({
+    /** The commit the gate verified (the missing report would have been about this sha). */
+    headSha: z.string(),
+    /** The tier whose declared `junitReport` produced nothing (e.g. "slow" / "merge"). */
+    tier: z.string().min(1),
+    /** The declared workspace-relative report path the gate read back (and found empty). */
+    reportPath: z.string().min(1),
+    /** Why no usable report was found: the file was absent, the SSH read failed, or it was empty. */
+    reason: z.enum(["absent", "read_failed", "empty"]),
+  })
+  .strict();

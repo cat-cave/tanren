@@ -18,7 +18,12 @@
 
 import type pg from "pg";
 import { DiscoveryStore, type ExistingSpecSummary } from "../../repositories/discovery.js";
+import { ProjectStore } from "../../repositories/projects.js";
 import { systemActor } from "../../state/actor.js";
+import { type AuditPosture, decideFromFindings } from "../../contracts/auditPosture.js";
+import { DEFAULT_AUDIT_POSTURE, isAbsentProjectConfig, migrateProjectConfig } from "../../config/index.js";
+import type { Finding } from "../../contracts/findings.js";
+import { PersistentlyInvalidSpecError } from "../specQuality/index.js";
 import { InboxStore } from "../inbox/store.js";
 import { autoRouteCandidate, type AutoRouteDeps } from "../inbox/engine.js";
 import type { Candidate, InboxSource, TriageAnswerer } from "../inbox/types.js";
@@ -29,6 +34,7 @@ import {
   type AuditFindingsSummary as Summary,
   type AuditJob,
   type AuditPassRunner,
+  findingToInboxSeverity,
 } from "./types.js";
 
 type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
@@ -97,8 +103,12 @@ async function findOrCreateAuditSource(client: QueryClient, orgId: string): Prom
   });
 }
 
-// Roll the raw findings up into the job's summary (count + worst severity).
-const SEVERITY_RANK: Record<string, number> = { info: 1, warn: 2, fail: 3 };
+// Roll the raw findings up into the job's surface summary (count + worst severity).
+// The finding scale is now the SHARED P0–P3 ladder; the job-row summary keeps the
+// surface's `ok|info|warn|fail` display vocabulary (the dashboard tone), so the worst
+// P0–P3 is projected onto it via `findingToInboxSeverity` (P0/P1 ⇒ fail, P2 ⇒ warn,
+// P3 ⇒ info). P0 is most-severe ⇒ the LOWEST rank.
+const SEVERITY_RANK: Record<string, number> = { P0: 0, P1: 1, P2: 2, P3: 3 };
 
 export function summarizeFindings(findings: ReadonlyArray<AuditFinding>): Summary {
   if (findings.length === 0) {
@@ -108,12 +118,25 @@ export function summarizeFindings(findings: ReadonlyArray<AuditFinding>): Summar
       note: "clean · no new findings",
     });
   }
-  let worst: AuditFinding["severity"] = "info";
+  let worst: AuditFinding["severity"] = "P3";
   for (const finding of findings) {
-    if ((SEVERITY_RANK[finding.severity] ?? 0) > (SEVERITY_RANK[worst] ?? 0)) worst = finding.severity;
+    if ((SEVERITY_RANK[finding.severity] ?? 3) < (SEVERITY_RANK[worst] ?? 3)) worst = finding.severity;
   }
   const note = `${findings.length} found · routed to the candidate inbox`;
-  return AuditFindingsSummary.parse({ count: findings.length, severity: worst, note });
+  return AuditFindingsSummary.parse({ count: findings.length, severity: findingToInboxSeverity(worst), note });
+}
+
+// Resolve the project's `auditPosture` for the scheduled audit — the SAME DORA knob
+// inline audits use (`migrateProjectConfig(config).auditPosture`). A project-less job or
+// an ABSENT project config (a fresh project's `'{}'::jsonb`) falls through to the system
+// default posture (which still blocks on P0/P1 — never a silent "block on nothing"). A
+// PRESENT-but-CORRUPT config is NOT masked — `migrateProjectConfig` throws loudly
+// (no-silent-fallback). System-scoped read: the loop already runs under the job's org scope.
+async function resolveAuditPosture(client: QueryClient, projectId: string | null): Promise<AuditPosture> {
+  if (projectId === null) return DEFAULT_AUDIT_POSTURE;
+  const raw = await ProjectStore.getConfig(client, projectId, systemActor);
+  if (isAbsentProjectConfig(raw)) return DEFAULT_AUDIT_POSTURE;
+  return migrateProjectConfig(raw).auditPosture;
 }
 
 export async function runAuditJob(deps: AuditSchedulerDeps, job: AuditJob): Promise<RunAuditJobResult> {
@@ -133,20 +156,32 @@ export async function runAuditJob(deps: AuditSchedulerDeps, job: AuditJob): Prom
     const answerer = deps.answerer;
     const source = await findOrCreateAuditSource(deps.pool, job.orgId);
     const existingSpecs = await loadExistingSpecs(deps.pool, job.projectId);
+    // Resolve the project's auditPosture (the same DORA knob inline audits use) and
+    // run the P0–P3 findings through `decideFromFindings` — the SAME severity path: a
+    // finding at-or-above `blockReviewAt` is a BLOCKING finding that must be ESCALATED to
+    // needs_attention (a human decision), NOT auto-routed; the residual is routed.
+    const posture = await resolveAuditPosture(deps.pool, job.projectId);
+    const blocking = new Set(blockingFindingIds(findings, posture));
     for (const finding of findings) {
       const triage = await answerer.triage({
         candidate: {
           title: finding.title,
           body: finding.body,
-          severity: finding.severity,
+          // The candidate store/surface uses the `info|warn|fail` display scale; the
+          // ROUTING decision is made on the P0–P3 severity (above). Project for display.
+          severity: findingToInboxSeverity(finding.severity),
           sourceKind: source.kind,
           projectId: job.projectId,
         },
         source,
         existingSpecs,
       });
-      // System source ⇒ auto_routable ⇒ candidate rests `auto_routed`.
-      const status = triage.verdict === "auto_routable" ? "auto_routed" : "triaged";
+      // A BLOCKING finding (≥ the posture's blockReviewAt) is ESCALATED to
+      // needs_attention: it rests `triaged` (the loud inbox surface) and is NEVER
+      // auto-routed, exactly the merge-path posture `block`. Otherwise a system-source
+      // auto_routable finding rests `auto_routed`.
+      const status =
+        !blocking.has(finding.externalId) && triage.verdict === "auto_routable" ? "auto_routed" : "triaged";
       let candidate = await InboxStore.upsertCandidate(
         deps.pool,
         source,
@@ -154,19 +189,16 @@ export async function runAuditJob(deps: AuditSchedulerDeps, job: AuditJob): Prom
           externalId: `${job.id}:${finding.externalId}`,
           title: finding.title,
           body: finding.body,
-          severity: finding.severity,
+          severity: findingToInboxSeverity(finding.severity),
           projectId: job.projectId,
         },
         triage,
         status,
       );
-      // Autonomous DAG insert: when the loop is autonomous and the triage produced
-      // a routable spec, COMMIT it now (no operator) so the audit finding becomes a
-      // real spec the DagWalker executes — idempotent on (source_id, external_id),
-      // so re-running the audit re-resolves the same candidate without a new spec.
-      // Mirrors `ingestSource` (inbox/engine.ts) exactly.
+      // Autonomous DAG insert (NON-blocking, auto_routable, with a routable spec): commit
+      // it now (no operator), with the dead-letter guard. Extracted to keep nesting shallow.
       if (deps.autoRoute !== undefined && candidate.status === "auto_routed" && triage.routableSpec !== null) {
-        candidate = (await autoRouteCandidate(deps, candidate, triage.routableSpec, deps.autoRoute)).candidate;
+        candidate = await autoRouteOrDeadLetter(deps, candidate, triage.routableSpec, deps.autoRoute);
       }
       candidates.push(candidate);
     }
@@ -179,4 +211,44 @@ export async function runAuditJob(deps: AuditSchedulerDeps, job: AuditJob): Prom
     candidates,
     findings,
   };
+}
+
+// Commit an auto-routable finding's spec into the DAG, with the DEAD-LETTER guard
+// (mirrors intake's §3.6 fix 6). If `autoRouteCandidate` throws
+// `PersistentlyInvalidSpecError` (the spec-quality gate could not make the spec valid
+// within its bounded budget — a genuine "a human must look" signal), DO NOT re-throw:
+// re-throwing would skip the caller's `recordAuditRun`, leaving `lastRun` un-stamped so
+// the NEXT tick re-runs this same job and re-spends on the same broken spec FOREVER.
+// Instead ESCALATE: resolve the candidate to `triaged` (needs_attention) so the
+// idempotent upsert keeps it there and never re-routes; the caller then records the run.
+// Any OTHER error propagates (transient — retry).
+async function autoRouteOrDeadLetter(
+  deps: AuditSchedulerDeps,
+  candidate: Candidate,
+  routableSpec: NonNullable<Parameters<typeof autoRouteCandidate>[2]>,
+  autoRoute: AutoRouteDeps,
+): Promise<Candidate> {
+  try {
+    return (await autoRouteCandidate(deps, candidate, routableSpec, autoRoute)).candidate;
+  } catch (error) {
+    if (!(error instanceof PersistentlyInvalidSpecError)) throw error;
+    console.error(
+      `[audit] candidate ${candidate.id} spec persistently invalid — dead-lettering to inbox (needs attention):`,
+      error.message,
+    );
+    return (await InboxStore.resolveCandidate(deps.pool, candidate.id, "triaged", null)) ?? candidate;
+  }
+}
+
+// The externalIds of the findings that BLOCK reaching review under the project's
+// posture (`decideFromFindings.block` is a boolean over the worst severity; this maps
+// each finding to a `Finding` and keeps the at-or-above-`blockReviewAt` ones). These are
+// escalated to needs_attention rather than auto-routed.
+function blockingFindingIds(findings: ReadonlyArray<AuditFinding>, posture: AuditPosture): string[] {
+  return findings
+    .filter((f) => {
+      const finding: Finding = { id: f.externalId, severity: f.severity, title: f.title, body: f.body };
+      return decideFromFindings([finding], posture).block;
+    })
+    .map((f) => f.externalId);
 }

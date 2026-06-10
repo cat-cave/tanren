@@ -6,7 +6,7 @@
 // per-test JUnit grain in-process. `buildDefaultGate` is re-exported from
 // plannerRunAdapters so plannerRun.ts keeps its single import surface.
 
-import { type CiWhen, JUNIT_REPORT_PATH } from "../ci/index.js";
+import { type CiWhen, junitReportFor } from "../ci/index.js";
 import type { RunnerHandle } from "../contracts/allocator.js";
 import type { EventName, EventPayload } from "../events/index.js";
 import type { EventStore } from "../eventStore.js";
@@ -236,10 +236,12 @@ export function buildDefaultGate(
       // commands run with it. Never logged/emitted. Distinct from Tanren creds.
       ...(input.appEnv === undefined ? {} : { appEnv: input.appEnv }),
     });
-    // NATIVE PER-TEST INGEST: read the runner's JUnit report (if the gate's test step
-    // emitted one) + persist the per-test rows IN-PROCESS — the CI-intelligence grain,
-    // straight from the runner, no webhook. Best-effort: it never affects the verdict.
-    await ingestGateJunitBestEffort(input, target, workspacePath, headSha, outcome);
+    // NATIVE PER-TEST INGEST: read the runner's JUnit report (if a tier DECLARED a
+    // junitReport path) + persist the per-test rows IN-PROCESS — the CI-intelligence
+    // grain, straight from the runner, no webhook. Best-effort: it never affects the
+    // verdict. "JUnit expected" is decided from the DECLARED contract field, not a
+    // command sniff; a declared-but-absent report emits a durable `ci.junit_missing`.
+    await ingestGateJunitBestEffort(input, target, workspacePath, headSha, outcome, config, when, appendEvent, taskId);
     return outcome;
   };
 }
@@ -251,13 +253,15 @@ export function buildDefaultGate(
  * scope, so `input.pool` self-scopes the INSERT. A read/parse error is logged + swallowed
  * (the per-test grain is an enrichment, never a gate-blocker), so it can NEVER fail the run.
  *
- * NO-SILENT-FALLBACK: the ingest result is DISCRIMINATED. `expectReport` is derived from
- * the EXECUTED tiers — true iff a test step that writes `JUNIT_REPORT_PATH` actually ran.
- * When a junit-writing test step ran but the report is absent/unreadable/empty, the
- * `missing_expected` result is surfaced LOUDLY (a structured `console.error` — the
- * lightest genuinely-visible mechanism, the WS3 `logFinalizeSwallow` precedent): the
- * per-test grain is gone though a test step ran, so flaky-intelligence is blind. This is
- * non-merge-gating — VISIBILITY of a reporter misconfig / runner crash, not a blocker.
+ * NO-SILENT-FALLBACK: the ingest result is DISCRIMINATED. "JUnit expected" is decided
+ * from the EXPLICIT CI-config contract — a tier mapped to this lifecycle point DECLARED a
+ * `junitReport` path (`junitReportFor`), NOT a command-string sniff (a writer's
+ * `just tier-2` never mentions the path). No declaration ⇒ a clean QUIET skip. When a
+ * tier DID declare a report but the runner produced none (absent/unreadable/empty), the
+ * `missing_expected` result is surfaced LOUDLY AND DURABLY: a persisted `ci.junit_missing`
+ * event (the durable signal) PLUS a structured `log.error` breadcrumb. The per-test grain is gone though a test
+ * tier ran, so flaky-intelligence is blind — a reporter misconfig / a runner crash after
+ * the step. Non-merge-gating (the verdict already stands) — VISIBILITY, not a blocker.
  */
 async function ingestGateJunitBestEffort(
   input: RunPlannerLoopInput,
@@ -265,16 +269,21 @@ async function ingestGateJunitBestEffort(
   workspacePath: string,
   headSha: string,
   outcome: GateOutcome,
+  config: CiConfigV1,
+  when: CiWhen,
+  appendEvent: <N extends EventName>(eventType: N, payload: EventPayload<N>, taskId?: string) => Promise<void>,
+  taskId: string | undefined,
 ): Promise<void> {
   const orgId = input.context.orgId;
   if (headSha === "" || orgId === undefined || orgId === null) {
     return;
   }
-  // Derive expectReport + the reporting tier from the EXECUTED steps: a step whose
-  // `run` references JUNIT_REPORT_PATH is a junit-writing test step that actually ran.
-  // The scaffold `fast` tier (lint+typecheck) has none ⇒ expectReport=false ⇒ quiet.
-  const reportingTier = outcome.results.find((tier) => tier.steps.some((step) => step.run.includes(JUNIT_REPORT_PATH)));
-  const expectReport = reportingTier !== undefined;
+  // Decide "JUnit expected" from the DECLARED contract field, not a command sniff: the
+  // first tier mapped to `when` that DECLARES a `junitReport` path names the tier + the
+  // path to read back. The scaffold `fast` tier (lint+typecheck) declares none ⇒
+  // expectReport=false ⇒ a clean QUIET skip.
+  const declared = junitReportFor(config, when);
+  const expectReport = declared !== undefined;
   try {
     const result = await ingestGateJunit({
       ssh: input.ssh,
@@ -288,20 +297,33 @@ async function ingestGateJunitBestEffort(
       timeoutMs: input.timeoutMs,
       gatePassed: outcome.passed,
       expectReport,
-      ...(reportingTier === undefined ? {} : { tier: reportingTier.tier }),
+      ...(declared === undefined ? {} : { tier: declared.tier, reportPath: declared.path }),
     });
     if (result.kind === "missing_expected") {
-      // LOUD: a junit-writing test step ran but produced no usable report — the per-test
-      // grain (flaky detection) just went blind. Name the reason + tier + headSha so an
-      // operator can tell a reporter misconfig (absent/empty) from a runner/transport
-      // hiccup (read_failed). Non-blocking — the gate verdict already stands.
+      // LOUD + DURABLE: a tier DECLARED a junit report but the runner produced none — the
+      // per-test grain (flaky detection) just went blind. Persist `ci.junit_missing`
+      // (reason + tier + path + headSha) so the blindness is on the durable LEDGER (the
+      // event is the durable signal), and ALSO a structured `log.error` so it surfaces as
+      // an operator BREADCRUMB in the run output. The event is advisory — non-blocking,
+      // the gate verdict already stands.
+      await appendEvent(
+        "ci.junit_missing",
+        {
+          headSha,
+          tier: declared?.tier ?? "unknown",
+          reportPath: declared?.path ?? "unknown",
+          reason: result.reason,
+        },
+        taskId,
+      );
       log.error(
         "native JUnit report EXPECTED but missing — flaky-intelligence has NO per-test grain for this gate " +
           "(a reporter misconfig or a runner crash after the test step). Non-blocking.",
         {
           runId: input.context.runId,
           reason: result.reason,
-          tier: reportingTier?.tier ?? "unknown",
+          tier: declared?.tier ?? "unknown",
+          reportPath: declared?.path ?? "unknown",
           headSha,
         },
       );
