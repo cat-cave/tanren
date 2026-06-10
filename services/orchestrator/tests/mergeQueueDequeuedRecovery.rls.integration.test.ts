@@ -111,6 +111,13 @@ describeDb("merge queue dequeued recovery under data-plane RLS (real PG)", () =>
     });
   }, 60_000);
 
+  // The `beforeAll` `setSystemPool` injection above survives every test in this
+  // file: the global test setup (test/setup/systemPool.ts) resets the pool only
+  // per-FILE (`afterAll`), not per-test. Without that, tests 2..n would fall back
+  // to the data-plane pool for the cross-org `resolveProjectOrg` system read,
+  // which RLS denies (zero rows) — so recovery/snapshot reads would see no org and
+  // return nothing.
+
   afterAll(async () => {
     resetSystemPool();
     await dataPlanePool?.end();

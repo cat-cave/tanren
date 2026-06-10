@@ -19,6 +19,31 @@ function env(name: string): string | undefined {
   return value === undefined || value === "" ? undefined : value;
 }
 
+// Resolve a cloud-provider SECRET (API token / access key) through the SecretStore
+// from a non-secret REF NAME carried in env (`<KIND>_..._REF`). The token VALUE is
+// NEVER a plaintext env value — env names a Vault ref; the value is materialized
+// here, at build time, from the same Vault seam the rest of Tanren uses. A ref
+// that is unset OR resolves to nothing is a LOUD failure (no silent empty token):
+// `whatRef` names the env var carrying the ref, `whatSecret` the credential.
+async function resolveSecretRef(
+  secrets: SecretStore,
+  refEnvName: string,
+  whatSecret: string,
+): Promise<string | undefined> {
+  const ref = env(refEnvName);
+  if (ref === undefined) {
+    return undefined;
+  }
+  const resolved = await secrets.get(ref);
+  if (resolved === undefined || resolved.value === "") {
+    throw new Error(
+      `${refEnvName}=${ref} did not resolve to a ${whatSecret} in the secret store: the credential must be a ` +
+        `Vault ref that resolves to a non-empty value (env carries the ref NAME, never the token VALUE).`,
+    );
+  }
+  return resolved.value;
+}
+
 // Require a non-blank env var; throw a clear error when unset/blank (NO default).
 // Mirrors the allocator-side `requireEnv` so both ends of the sidecar bearer-token
 // pair fail loud rather than silently falling back to a `"dev"` token. Both
@@ -61,16 +86,16 @@ function buildManualSsh(runners: RunnerStore): ManualSshAllocator {
   return new ManualSshAllocator({ hosts, runners });
 }
 
-function buildHetzner(runners: RunnerStore, secrets: SecretStore): HetznerAllocator {
-  // The token is a resolved secret here. In production it is sourced from a
-  // Vault ref by the operator's secret tooling, never hardcoded. SSH is fully
-  // Tanren-managed: the allocator generates an ephemeral per-run keypair (stored
-  // in `secrets`, uploaded to Hetzner) and a known host key it pins itself — so
-  // there is NO manual TANREN_HETZNER_SSH_KEYS and NO manual
+async function buildHetzner(runners: RunnerStore, secrets: SecretStore): Promise<HetznerAllocator> {
+  // The API token is a SECRET, resolved through the SecretStore from a Vault ref
+  // named by TANREN_HETZNER_API_TOKEN_REF — never a plaintext env value. SSH is
+  // fully Tanren-managed: the allocator generates an ephemeral per-run keypair
+  // (stored in `secrets`, uploaded to Hetzner) and a known host key it pins itself
+  // — so there is NO manual TANREN_HETZNER_SSH_KEYS and NO manual
   // TANREN_HETZNER_HOST_FINGERPRINT.
-  const apiToken = env("TANREN_HETZNER_API_TOKEN");
+  const apiToken = await resolveSecretRef(secrets, "TANREN_HETZNER_API_TOKEN_REF", "Hetzner API token");
   if (apiToken === undefined) {
-    throw new Error("hetzner allocator requires TANREN_HETZNER_API_TOKEN");
+    throw new Error("hetzner allocator requires TANREN_HETZNER_API_TOKEN_REF (a Vault ref to the API token)");
   }
   return new HetznerAllocator({
     apiToken,
@@ -84,13 +109,14 @@ function buildHetzner(runners: RunnerStore, secrets: SecretStore): HetznerAlloca
   });
 }
 
-function buildDigitalOcean(runners: RunnerStore): DigitalOceanAllocator {
-  // The token is a resolved secret here. In production it is sourced from a
-  // Vault ref by the operator's secret tooling, never hardcoded.
-  const apiToken = env("TANREN_DO_API_TOKEN");
+async function buildDigitalOcean(runners: RunnerStore, secrets: SecretStore): Promise<DigitalOceanAllocator> {
+  // The API token is a SECRET, resolved through the SecretStore from a Vault ref
+  // named by TANREN_DO_API_TOKEN_REF — never a plaintext env value. The host-key
+  // fingerprint is non-secret config and stays a plain env value.
+  const apiToken = await resolveSecretRef(secrets, "TANREN_DO_API_TOKEN_REF", "DigitalOcean API token");
   const hostKeyFingerprint = env("TANREN_DO_HOST_FINGERPRINT");
   if (apiToken === undefined || hostKeyFingerprint === undefined) {
-    throw new Error("digitalocean allocator requires TANREN_DO_API_TOKEN and TANREN_DO_HOST_FINGERPRINT");
+    throw new Error("digitalocean allocator requires TANREN_DO_API_TOKEN_REF and TANREN_DO_HOST_FINGERPRINT");
   }
   return new DigitalOceanAllocator({
     apiToken,
@@ -106,11 +132,11 @@ function buildDigitalOcean(runners: RunnerStore): DigitalOceanAllocator {
   });
 }
 
-function buildGcp(runners: RunnerStore): GcpAllocator {
-  // The access token is a resolved secret here. In production it is minted from
-  // a service-account JSON / token ref by the operator's secret tooling and
-  // sourced from a Vault ref, never hardcoded.
-  const accessToken = env("TANREN_GCP_ACCESS_TOKEN");
+async function buildGcp(runners: RunnerStore, secrets: SecretStore): Promise<GcpAllocator> {
+  // The access token is a SECRET, resolved through the SecretStore from a Vault
+  // ref named by TANREN_GCP_ACCESS_TOKEN_REF — never a plaintext env value. The
+  // project/zone/ssh-public-key/host-fingerprint are non-secret config.
+  const accessToken = await resolveSecretRef(secrets, "TANREN_GCP_ACCESS_TOKEN_REF", "GCP access token");
   const project = env("TANREN_GCP_PROJECT");
   const zone = env("TANREN_GCP_ZONE");
   const sshPublicKey = env("TANREN_GCP_SSH_PUBLIC_KEY");
@@ -123,7 +149,7 @@ function buildGcp(runners: RunnerStore): GcpAllocator {
     hostKeyFingerprint === undefined
   ) {
     throw new Error(
-      "gcp allocator requires TANREN_GCP_ACCESS_TOKEN, TANREN_GCP_PROJECT, TANREN_GCP_ZONE, " +
+      "gcp allocator requires TANREN_GCP_ACCESS_TOKEN_REF, TANREN_GCP_PROJECT, TANREN_GCP_ZONE, " +
         "TANREN_GCP_SSH_PUBLIC_KEY, and TANREN_GCP_HOST_FINGERPRINT",
     );
   }
@@ -140,11 +166,13 @@ function buildGcp(runners: RunnerStore): GcpAllocator {
   });
 }
 
-function buildAwsEc2(runners: RunnerStore): AwsEc2Allocator {
-  // The credentials are resolved secrets here. In production they are sourced
-  // from a Vault ref by the operator's secret tooling, never hardcoded.
-  const accessKeyId = env("TANREN_AWS_ACCESS_KEY_ID");
-  const secretAccessKey = env("TANREN_AWS_SECRET_ACCESS_KEY");
+async function buildAwsEc2(runners: RunnerStore, secrets: SecretStore): Promise<AwsEc2Allocator> {
+  // The access-key id + secret-access-key (and optional session token) are SECRETS,
+  // each resolved through the SecretStore from a Vault ref (`*_REF`) — never
+  // plaintext env values. The region/image/host-fingerprint are non-secret config.
+  const accessKeyId = await resolveSecretRef(secrets, "TANREN_AWS_ACCESS_KEY_ID_REF", "AWS access key id");
+  const secretAccessKey = await resolveSecretRef(secrets, "TANREN_AWS_SECRET_ACCESS_KEY_REF", "AWS secret access key");
+  const sessionToken = await resolveSecretRef(secrets, "TANREN_AWS_SESSION_TOKEN_REF", "AWS session token");
   const region = env("TANREN_AWS_REGION");
   const imageId = env("TANREN_AWS_IMAGE_ID");
   const hostKeyFingerprint = env("TANREN_AWS_HOST_FINGERPRINT");
@@ -156,14 +184,14 @@ function buildAwsEc2(runners: RunnerStore): AwsEc2Allocator {
     hostKeyFingerprint === undefined
   ) {
     throw new Error(
-      "aws_ec2 allocator requires TANREN_AWS_ACCESS_KEY_ID, TANREN_AWS_SECRET_ACCESS_KEY, " +
+      "aws_ec2 allocator requires TANREN_AWS_ACCESS_KEY_ID_REF, TANREN_AWS_SECRET_ACCESS_KEY_REF, " +
         "TANREN_AWS_REGION, TANREN_AWS_IMAGE_ID, and TANREN_AWS_HOST_FINGERPRINT",
     );
   }
   return new AwsEc2Allocator({
     accessKeyId,
     secretAccessKey,
-    sessionToken: env("TANREN_AWS_SESSION_TOKEN"),
+    sessionToken,
     region,
     imageId,
     hostKeyFingerprint,
@@ -179,12 +207,13 @@ function buildAwsEc2(runners: RunnerStore): AwsEc2Allocator {
   });
 }
 
-function buildKubernetes(runners: RunnerStore): KubernetesAllocator {
-  // The token is a resolved secret here. In production it is sourced from a
-  // Vault ref (TANREN_K8S_TOKEN_REF names that ref) by the operator's secret
-  // tooling, never hardcoded.
+async function buildKubernetes(runners: RunnerStore, secrets: SecretStore): Promise<KubernetesAllocator> {
+  // The service-account token is a SECRET. TANREN_K8S_TOKEN_REF names a Vault ref;
+  // the token VALUE is resolved through the SecretStore here — previously the env
+  // was (mis)passed straight through as the token VALUE despite the `_REF` name.
+  // The api-server/namespace/image/ssh-public-key/host-fingerprint are non-secret.
   const apiServer = env("TANREN_K8S_API_SERVER");
-  const token = env("TANREN_K8S_TOKEN_REF");
+  const token = await resolveSecretRef(secrets, "TANREN_K8S_TOKEN_REF", "Kubernetes service-account token");
   const namespace = env("TANREN_K8S_NAMESPACE");
   const runnerImage = env("TANREN_K8S_RUNNER_IMAGE");
   const sshPublicKey = env("TANREN_K8S_SSH_PUBLIC_KEY");
@@ -218,9 +247,10 @@ function buildKubernetes(runners: RunnerStore): KubernetesAllocator {
 
 /**
  * Builds the single allocator kind named by `kind`. This is the non-router path
- * used by the existing `static` / `sidecar` deployments.
+ * used by the existing `static` / `sidecar` deployments. Async because the cloud
+ * builders resolve their credential SECRETS through the SecretStore (Vault refs).
  */
-function buildSingle(kind: string, runners: RunnerStore, secrets: SecretStore): Allocator {
+async function buildSingle(kind: string, runners: RunnerStore, secrets: SecretStore): Promise<Allocator> {
   switch (kind) {
     case "static":
       return buildStatic(runners);
@@ -229,13 +259,13 @@ function buildSingle(kind: string, runners: RunnerStore, secrets: SecretStore): 
     case "hetzner":
       return buildHetzner(runners, secrets);
     case "digitalocean":
-      return buildDigitalOcean(runners);
+      return buildDigitalOcean(runners, secrets);
     case "gcp":
-      return buildGcp(runners);
+      return buildGcp(runners, secrets);
     case "aws_ec2":
-      return buildAwsEc2(runners);
+      return buildAwsEc2(runners, secrets);
     case "kubernetes":
-      return buildKubernetes(runners);
+      return buildKubernetes(runners, secrets);
     case "sidecar":
       return buildSidecar(runners);
     default:
@@ -251,14 +281,18 @@ function buildSingle(kind: string, runners: RunnerStore, secrets: SecretStore): 
  * Kinds the routing config never selects resolve to throwing UnconfiguredAllocator
  * stubs (their credentials are never loaded).
  */
-function buildRegistry(runners: RunnerStore, secrets: SecretStore, config: AllocatorRoutingConfig): AllocatorRegistry {
+async function buildRegistry(
+  runners: RunnerStore,
+  secrets: SecretStore,
+  config: AllocatorRoutingConfig,
+): Promise<AllocatorRegistry> {
   // Determine which kinds the routing config can actually select.
   const usedKinds = new Set<AllocatorKind>([config.defaultAllocator]);
   for (const rule of config.rules) {
     usedKinds.add(rule.allocator);
   }
 
-  const build = (kind: AllocatorKind): Allocator => {
+  const build = async (kind: AllocatorKind): Promise<Allocator> => {
     switch (kind) {
       case "static":
         return buildStatic(runners);
@@ -269,26 +303,31 @@ function buildRegistry(runners: RunnerStore, secrets: SecretStore, config: Alloc
       case "hetzner":
         return usedKinds.has("hetzner") ? buildHetzner(runners, secrets) : new UnconfiguredAllocator("hetzner");
       case "digitalocean":
-        return usedKinds.has("digitalocean") ? buildDigitalOcean(runners) : new UnconfiguredAllocator("digitalocean");
+        return usedKinds.has("digitalocean")
+          ? buildDigitalOcean(runners, secrets)
+          : new UnconfiguredAllocator("digitalocean");
       case "gcp":
-        return usedKinds.has("gcp") ? buildGcp(runners) : new UnconfiguredAllocator("gcp");
+        return usedKinds.has("gcp") ? buildGcp(runners, secrets) : new UnconfiguredAllocator("gcp");
       case "aws_ec2":
-        return usedKinds.has("aws_ec2") ? buildAwsEc2(runners) : new UnconfiguredAllocator("aws_ec2");
+        return usedKinds.has("aws_ec2") ? buildAwsEc2(runners, secrets) : new UnconfiguredAllocator("aws_ec2");
       case "kubernetes":
-        return usedKinds.has("kubernetes") ? buildKubernetes(runners) : new UnconfiguredAllocator("kubernetes");
+        return usedKinds.has("kubernetes")
+          ? buildKubernetes(runners, secrets)
+          : new UnconfiguredAllocator("kubernetes");
     }
   };
 
-  return {
-    static: build("static"),
-    sidecar: build("sidecar"),
-    manual_ssh: build("manual_ssh"),
-    hetzner: build("hetzner"),
-    digitalocean: build("digitalocean"),
-    gcp: build("gcp"),
-    aws_ec2: build("aws_ec2"),
-    kubernetes: build("kubernetes"),
-  };
+  const [staticA, sidecar, manual_ssh, hetzner, digitalocean, gcp, aws_ec2, kubernetes] = await Promise.all([
+    build("static"),
+    build("sidecar"),
+    build("manual_ssh"),
+    build("hetzner"),
+    build("digitalocean"),
+    build("gcp"),
+    build("aws_ec2"),
+    build("kubernetes"),
+  ]);
+  return { static: staticA, sidecar, manual_ssh, hetzner, digitalocean, gcp, aws_ec2, kubernetes };
 }
 
 /**
@@ -300,11 +339,13 @@ function buildRegistry(runners: RunnerStore, secrets: SecretStore, config: Alloc
  * - Any other kind (`static`, `sidecar`, `manual_ssh`, `hetzner`) builds that
  *   single allocator directly (backward compatible; default is `sidecar`).
  *
- * `secrets` is the SAME secret manager the SSH substrate reads from: cloud
- * allocators (Hetzner) store the ephemeral per-run SSH private key there and the
- * substrate materializes the runner identity from it.
+ * `secrets` is the SAME secret manager the SSH substrate reads from AND the seam
+ * cloud-provider credentials are resolved through: a Hetzner/DO/GCP/AWS/K8s token
+ * is a Vault REF in env, materialized to its VALUE here (never a plaintext env
+ * value). Async for that resolution. Cloud allocators (Hetzner) also store the
+ * ephemeral per-run SSH private key in `secrets`.
  */
-export function buildAllocatorFromEnv(pool: pg.Pool, secrets: SecretStore): Allocator {
+export async function buildAllocatorFromEnv(pool: pg.Pool, secrets: SecretStore): Promise<Allocator> {
   const runners = new PgRunnerStore(pool);
   const kind = (env("TANREN_ALLOCATOR_KIND") ?? "sidecar").toLowerCase();
 
@@ -314,7 +355,7 @@ export function buildAllocatorFromEnv(pool: pg.Pool, secrets: SecretStore): Allo
       throw new Error("router allocator requires TANREN_ALLOCATOR_ROUTING (JSON routing config)");
     }
     const config = AllocatorRoutingConfig.parse(JSON.parse(raw));
-    return new AllocatorRouter(buildRegistry(runners, secrets, config), config);
+    return new AllocatorRouter(await buildRegistry(runners, secrets, config), config);
   }
 
   return buildSingle(kind, runners, secrets);

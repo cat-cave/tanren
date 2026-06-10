@@ -140,6 +140,15 @@ describeDb("RLS operator flow — the control-plane CRUD walk under the tanren_a
     app = buildOperatorApp(appPool, store);
   }, 60_000);
 
+  // The `beforeAll` `setSystemPool` injection above survives every test in this
+  // file: the global test setup (test/setup/systemPool.ts) resets the pool only
+  // per-FILE (`afterAll`), not per-test. Without that, steps 2..n would fall back
+  // to the `tanren_app` runtime pool for the bootstrap-class system reads
+  // (list-my-orgs + the actor's `org_members` resolution), which the NOBYPASSRLS
+  // app role with an empty org GUC sees as ZERO rows — so the actor would resolve
+  // with no org scope and every `/orgs/:orgId/*` route's `actorCanAccessOrg` gate
+  // would 403 (steps 5/6/7).
+
   afterAll(async () => {
     setSystemPool(undefined);
     await appPool?.end();

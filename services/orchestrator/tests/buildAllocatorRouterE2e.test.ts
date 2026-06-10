@@ -3,6 +3,7 @@ import { buildAllocatorFromEnv } from "../src/engine/allocators/buildAllocator.j
 import {
   allocateScoped,
   allocReq,
+  CLOUD_SECRET_REFS,
   HETZNER_ENV,
   hetznerSshKeyResponse,
   installAllocatorE2eLifecycle,
@@ -36,7 +37,7 @@ describe("buildAllocatorFromEnv — router registry wires each kind (stubbed fet
         ? hetznerSshKeyResponse()
         : json({ server: { id: 300, status: "running", public_net: { ipv4: { ip: "203.0.113.9" } } } }, 201),
     );
-    const allocation = await allocateScoped(buildAllocatorFromEnv(queryPool, memSecrets()), allocReq);
+    const allocation = await allocateScoped(await buildAllocatorFromEnv(queryPool, memSecrets()), allocReq);
     // hetzner imageSha suffix proves the hetzner backing allocator served it.
     expect(allocation.imageSha).toMatch(/@sha256:hetzner$/u);
     expect(allocation.target.host).toBe("203.0.113.9");
@@ -54,7 +55,7 @@ describe("buildAllocatorFromEnv — router registry wires each kind (stubbed fet
         imageSha: "sha256:sc",
       }),
     );
-    const allocation = await allocateScoped(buildAllocatorFromEnv(queryPool, memSecrets()), allocReq);
+    const allocation = await allocateScoped(await buildAllocatorFromEnv(queryPool, memSecrets()), allocReq);
     expect(allocation.runnerId).toBe("runner_router_sidecar");
     expect(allocation.target.host).toBe("sidecar-host");
   });
@@ -63,7 +64,7 @@ describe("buildAllocatorFromEnv — router registry wires each kind (stubbed fet
     process.env.TANREN_ALLOCATOR_KIND = "router";
     process.env.TANREN_RUNNER_SSH_HOST_FINGERPRINT = "SHA256:static-pin";
     process.env.TANREN_ALLOCATOR_ROUTING = JSON.stringify({ defaultAllocator: "static" });
-    const allocation = await allocateScoped(buildAllocatorFromEnv(queryPool, memSecrets()), allocReq);
+    const allocation = await allocateScoped(await buildAllocatorFromEnv(queryPool, memSecrets()), allocReq);
     // static imageSha suffix proves the static backing allocator served it.
     expect(allocation.imageSha).toMatch(/@sha256:static$/u);
     expect(allocation.target.hostKeyFingerprint).toBe("SHA256:static-pin");
@@ -75,14 +76,14 @@ describe("buildAllocatorFromEnv — router registry wires each kind (stubbed fet
       { id: "h1", host: "10.1.1.1", hostKeyFingerprint: "SHA256:m" },
     ]);
     process.env.TANREN_ALLOCATOR_ROUTING = JSON.stringify({ defaultAllocator: "manual_ssh" });
-    const allocation = await allocateScoped(buildAllocatorFromEnv(queryPool, memSecrets()), allocReq);
+    const allocation = await allocateScoped(await buildAllocatorFromEnv(queryPool, memSecrets()), allocReq);
     expect(allocation.imageSha).toMatch(/@sha256:manual-ssh$/u);
     expect(allocation.target.host).toBe("10.1.1.1");
   });
 
   it("router: a default-routed digitalocean kind builds + uses the real DO backing allocator", async () => {
     process.env.TANREN_ALLOCATOR_KIND = "router";
-    process.env.TANREN_DO_API_TOKEN = "tok";
+    process.env.TANREN_DO_API_TOKEN_REF = CLOUD_SECRET_REFS.doToken;
     process.env.TANREN_DO_HOST_FINGERPRINT = "SHA256:do";
     process.env.TANREN_ALLOCATOR_ROUTING = JSON.stringify({ defaultAllocator: "digitalocean" });
     stubFetch(() =>
@@ -91,14 +92,14 @@ describe("buildAllocatorFromEnv — router registry wires each kind (stubbed fet
         202,
       ),
     );
-    const allocation = await allocateScoped(buildAllocatorFromEnv(queryPool, memSecrets()), allocReq);
+    const allocation = await allocateScoped(await buildAllocatorFromEnv(queryPool, memSecrets()), allocReq);
     expect(allocation.imageSha).toMatch(/@sha256:digitalocean$/u);
     expect(allocation.target.host).toBe("203.0.113.40");
   });
 
   it("router: a default-routed gcp kind builds + uses the real gcp backing allocator", async () => {
     process.env.TANREN_ALLOCATOR_KIND = "router";
-    process.env.TANREN_GCP_ACCESS_TOKEN = "tok";
+    process.env.TANREN_GCP_ACCESS_TOKEN_REF = CLOUD_SECRET_REFS.gcpToken;
     process.env.TANREN_GCP_PROJECT = "proj-x";
     process.env.TANREN_GCP_ZONE = "us-central1-a";
     process.env.TANREN_GCP_SSH_PUBLIC_KEY = "ssh-ed25519 AAAA";
@@ -114,15 +115,15 @@ describe("buildAllocatorFromEnv — router registry wires each kind (stubbed fet
         networkInterfaces: [{ accessConfigs: [{ type: "ONE_TO_ONE_NAT", natIP: "203.0.113.42" }] }],
       });
     });
-    const allocation = await allocateScoped(buildAllocatorFromEnv(queryPool, memSecrets()), allocReq);
+    const allocation = await allocateScoped(await buildAllocatorFromEnv(queryPool, memSecrets()), allocReq);
     expect(allocation.imageSha).toMatch(/@sha256:gcp$/u);
     expect(allocation.target.host).toBe("203.0.113.42");
   });
 
   it("router: a default-routed aws_ec2 kind builds + uses the real aws backing allocator", async () => {
     process.env.TANREN_ALLOCATOR_KIND = "router";
-    process.env.TANREN_AWS_ACCESS_KEY_ID = "AKIA";
-    process.env.TANREN_AWS_SECRET_ACCESS_KEY = "secret";
+    process.env.TANREN_AWS_ACCESS_KEY_ID_REF = CLOUD_SECRET_REFS.awsAccessKeyId;
+    process.env.TANREN_AWS_SECRET_ACCESS_KEY_REF = CLOUD_SECRET_REFS.awsSecretAccessKey;
     process.env.TANREN_AWS_REGION = "us-east-1";
     process.env.TANREN_AWS_IMAGE_ID = "ami-123";
     process.env.TANREN_AWS_HOST_FINGERPRINT = "SHA256:aws";
@@ -137,7 +138,7 @@ describe("buildAllocatorFromEnv — router registry wires each kind (stubbed fet
           `<ipAddress>203.0.113.43</ipAddress></item></instancesSet></item></reservationSet></DescribeInstancesResponse>`;
       return new Response(xml, { status: 200, headers: { "Content-Type": "text/xml" } });
     }) as typeof fetch;
-    const allocation = await allocateScoped(buildAllocatorFromEnv(queryPool, memSecrets()), allocReq);
+    const allocation = await allocateScoped(await buildAllocatorFromEnv(queryPool, memSecrets()), allocReq);
     expect(allocation.imageSha).toMatch(/@sha256:aws-ec2$/u);
     expect(allocation.target.host).toBe("203.0.113.43");
   });
@@ -145,7 +146,7 @@ describe("buildAllocatorFromEnv — router registry wires each kind (stubbed fet
   it("router: a default-routed kubernetes kind builds + uses the real k8s backing allocator", async () => {
     process.env.TANREN_ALLOCATOR_KIND = "router";
     process.env.TANREN_K8S_API_SERVER = "https://k8s:6443";
-    process.env.TANREN_K8S_TOKEN_REF = "tok";
+    process.env.TANREN_K8S_TOKEN_REF = CLOUD_SECRET_REFS.k8sToken;
     process.env.TANREN_K8S_NAMESPACE = "tanren-ns";
     process.env.TANREN_K8S_RUNNER_IMAGE = "ghcr.io/x/runner:v0";
     process.env.TANREN_K8S_SSH_PUBLIC_KEY = "ssh-ed25519 AAAA";
@@ -160,7 +161,7 @@ describe("buildAllocatorFromEnv — router registry wires each kind (stubbed fet
       }
       return json({ metadata: { name: "tanren-run-e2e" }, status: { phase: "Running", podIP: "10.5.6.7" } });
     });
-    const allocation = await allocateScoped(buildAllocatorFromEnv(queryPool, memSecrets()), allocReq);
+    const allocation = await allocateScoped(await buildAllocatorFromEnv(queryPool, memSecrets()), allocReq);
     expect(allocation.imageSha).toMatch(/@sha256:kubernetes$/u);
     expect(allocation.target.host).toBe("10.5.6.7");
   });

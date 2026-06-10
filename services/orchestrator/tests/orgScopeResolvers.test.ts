@@ -76,11 +76,8 @@ function fakePool(): FakePool {
   return Object.assign(fp, { pool, client }) as unknown as FakePool;
 }
 
-afterEach(() => {
-  // Defensive: tests that touch the system-pool memo restore it themselves, but
-  // clear here too so a thrown assertion can never leak the memo to a later test.
-  resetSystemPool();
-});
+// The global test setup (test/setup/systemPool.ts) resets the system-pool memo
+// after every test, so a memo touched here never leaks to a later test.
 
 describe("resolveQueryClient — ambient-scope vs loud throw", () => {
   it("THROWS MissingOrgScopeError when no scope is open (no silent bare-pool fallback)", () => {
@@ -112,6 +109,8 @@ describe("hasOrgScope — scope presence", () => {
     await runWithOrgScope(pool, "org_acme", async () => {
       inOrg = hasOrgScope();
     });
+    // The global test opt-in (test/setup/systemPool.ts) lets system scope run on
+    // the passed in-memory pool.
     await runWithSystemScope(pool, async () => {
       inSystem = hasOrgScope();
     });
