@@ -218,6 +218,13 @@
       "when": 1781113813538,
       "tag": "0030_nostalgic_micromacro",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1781128528631,
+      "tag": "0031_unknown_silver_fox",
+      "breakpoints": true
     }
   ]
 }
