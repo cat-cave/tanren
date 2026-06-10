@@ -32,8 +32,17 @@ export { ForgeToolsStore } from "./forgeTools.js";
 export { ForgeThreadStore } from "../forge/threads.js";
 export { ForgeTurnStore } from "../forge/turns.js";
 export { ForgeProposalStore } from "../forge/proposals.js";
-export { InboxStore } from "../forge/inbox/store.js";
-export { AuditsStore } from "../forge/audits/store.js";
+// The candidate-inbox / scheduled-audits / durable-webhook stores live here
+// (relocated onto the seam alongside discovery/recovery); their forge barrels
+// re-export them so the forge-internal callers keep their by-name imports.
+export { InboxStore, type CreateSourceInput } from "./inbox.js";
+export { AuditsStore, type CreateAuditJobInput } from "./audits.js";
+export {
+  WebhookEventStore,
+  type WebhookEvent,
+  type WebhookEventStatus,
+  type PersistWebhookEventInput,
+} from "./webhookEvents.js";
 // The product-entity stores live under engine/entities (their CRUD routes import
 // them by name); the data-access seam aggregates them from here so callers can
 // depend on the `Repositories` contract rather than the concrete entity module.

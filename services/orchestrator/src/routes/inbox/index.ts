@@ -30,7 +30,6 @@ import {
   closeDuplicateCandidate,
   dismissCandidate,
   foldCandidate,
-  InboxStore,
   ingestSource,
   SourceKind,
   type InboxEngineDeps,
@@ -41,6 +40,7 @@ import {
   type TriageAnswerer,
 } from "../../engine/forge/inbox/index.js";
 import { intakeAutoRouteDeps, intakeItem } from "../../engine/forge/intake/index.js";
+import { pgRepositories } from "../../engine/contracts/repositories.js";
 import type { GithubAppTokenMinter } from "../../engine/providers/githubAppTokenMinter.js";
 import type { ForgeAnswererTarget } from "../../engine/forge/providerFactory.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
@@ -150,8 +150,8 @@ export function createInboxRoutes(options: InboxRoutesOptions) {
     const orgId = c.req.param("orgId");
     if (!guard(c, orgId)) return c.json({ error: "org_access_denied" }, 403);
     const [sources, candidates] = await Promise.all([
-      InboxStore.listSources(options.pool, orgId),
-      InboxStore.listCandidates(options.pool, orgId),
+      pgRepositories.inbox.listSources(options.pool, orgId),
+      pgRepositories.inbox.listCandidates(options.pool, orgId),
     ]);
     return c.json({ sources, candidates }, 200);
   });
@@ -161,14 +161,14 @@ export function createInboxRoutes(options: InboxRoutesOptions) {
     if (!guard(c, orgId)) return c.json({ error: "org_access_denied" }, 403);
     const parsed = CreateSourceBody.safeParse(await c.req.json().catch(() => {}));
     if (!parsed.success) return c.json({ error: "invalid_source", issues: parsed.error.issues }, 400);
-    const source = await InboxStore.createSource(options.pool, { orgId, ...parsed.data });
+    const source = await pgRepositories.inbox.createSource(options.pool, { orgId, ...parsed.data });
     return c.json({ source }, 201);
   });
 
   app.post("/:orgId/inbox/sources/:sourceId/ingest", async (c) => {
     const orgId = c.req.param("orgId");
     if (!guard(c, orgId)) return c.json({ error: "org_access_denied" }, 403);
-    const source = await InboxStore.getSource(options.pool, c.req.param("sourceId"));
+    const source = await pgRepositories.inbox.getSource(options.pool, c.req.param("sourceId"));
     if (source === undefined || source.orgId !== orgId) {
       return c.json({ error: "source_not_found" }, 404);
     }
@@ -202,7 +202,7 @@ export function createInboxRoutes(options: InboxRoutesOptions) {
   app.post("/:orgId/inbox/sources/:sourceId/items", async (c) => {
     const orgId = c.req.param("orgId");
     if (!guard(c, orgId)) return c.json({ error: "org_access_denied" }, 403);
-    const source = await InboxStore.getSource(options.pool, c.req.param("sourceId"));
+    const source = await pgRepositories.inbox.getSource(options.pool, c.req.param("sourceId"));
     if (source === undefined || source.orgId !== orgId) {
       return c.json({ error: "source_not_found" }, 404);
     }

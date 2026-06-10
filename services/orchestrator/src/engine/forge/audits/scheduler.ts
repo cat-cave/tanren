@@ -25,10 +25,9 @@ import { findingToRoutableSpec } from "./postureGate.js";
 import { resolveDefaultAuditPosture, isAbsentProjectConfig, migrateProjectConfig } from "../../config/index.js";
 import type { Finding } from "../../contracts/findings.js";
 import { PersistentlyInvalidSpecError } from "../specQuality/index.js";
-import { InboxStore } from "../inbox/store.js";
 import { autoRouteCandidate, type AutoRouteDeps } from "../inbox/engine.js";
 import type { Candidate, InboxSource, TriageAnswerer } from "../inbox/types.js";
-import { AuditsStore } from "./store.js";
+import { AuditsStore, InboxStore } from "../../repositories/index.js";
 import {
   AuditFindingsSummary,
   type AuditFinding,

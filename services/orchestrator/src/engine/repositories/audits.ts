@@ -1,6 +1,7 @@
-// scheduled-audits store: the `audit_jobs` (migration 0025) member of
+// scheduled-audits store: the `audit_jobs` (collapsed baseline 0000) member of
 // the `Repositories` seam. Pure SQL + row mapping; no Answerer or inbox here.
-// The scheduler (scheduler.ts) composes this with the pass runner + the inbox.
+// The scheduler (forge/audits/scheduler.ts) composes this with the pass runner +
+// the inbox.
 //
 // This is a seam member like the other migrated forge stores (discovery /
 // recovery / forge-tools): the SQL lives behind the `AuditsStore` value object,
@@ -18,7 +19,7 @@ import {
   type AuditCadence,
   type AuditFindingsSummary as Summary,
   type AuditKind,
-} from "./types.js";
+} from "../forge/audits/types.js";
 
 type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 

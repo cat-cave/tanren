@@ -20,7 +20,7 @@
 
 import type pg from "pg";
 import { orgScopingPool } from "../data/orgScopedDb.js";
-import { InboxStore } from "../forge/inbox/store.js";
+import { InboxStore } from "../repositories/inbox.js";
 import { autoRouteCandidate, type AutoRouteDeps } from "../forge/inbox/engine.js";
 import {
   CI_INSIGHTS_CONFIG_MARKER,

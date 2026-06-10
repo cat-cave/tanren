@@ -12,7 +12,7 @@
 import type pg from "pg";
 import { runWithJobOrgId, runWithSystemScope } from "@tanren/db";
 import { orgScopingPool } from "../../data/orgScopedDb.js";
-import { AuditsStore } from "./store.js";
+import { AuditsStore } from "../../repositories/audits.js";
 import { runAuditJob } from "./scheduler.js";
 import type { AuditCadence, AuditJob, AuditPassRunner } from "./types.js";
 import type { AutoRouteDeps, TriageAnswerer } from "../inbox/index.js";

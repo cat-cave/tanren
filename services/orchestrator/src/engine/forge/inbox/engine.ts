@@ -32,7 +32,7 @@ import {
   type ReviseSpec,
   type SpecQualityAnswerer,
 } from "../specQuality/index.js";
-import { InboxStore } from "./store.js";
+import { InboxStore } from "../../repositories/inbox.js";
 import { resolveProjectPlacement } from "./placement.js";
 import type {
   Candidate,

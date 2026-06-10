@@ -1,12 +1,12 @@
-// §3.6 issue-loop hardening — the DURABLE raw-webhook landing store (migration
-// 0022 `webhook_events`).
+// §3.6 issue-loop hardening — the DURABLE raw-webhook landing store: the
+// `webhook_events` (collapsed baseline 0000) member of the `Repositories` seam.
 //
 // The §1d webhook receiver runs inside GitHub's ~10s delivery window. The OLD
 // receiver did runner allocation + a 120s-budget triage call INLINE and
 // 202-swallowed any failure, so a transient blip PERMANENTLY lost the intake
 // (GitHub, seeing a 2xx, never re-delivers). This store is the persist-then-202
 // seam: the receiver writes the VERIFIED raw delivery here and returns 202 FAST;
-// a background processor (see `webhookProcessor.ts`) drains `received`/`failed`
+// a background processor (see `forge/intake/webhookProcessor.ts`) drains `received`/`failed`
 // rows OUT of band — re-driven idempotently by the poller's sweeper. A row that
 // exhausts its attempt budget is parked `dead_lettered` (a loud, human-visible
 // terminal), never re-driven forever.

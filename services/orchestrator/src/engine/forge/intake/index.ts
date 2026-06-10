@@ -19,12 +19,15 @@ export {
   IntakeGithubCredentialMissingError,
   type BuildIntakeConnectorMapDeps,
 } from "./issueSourceSeam.js";
+// The durable `webhook_events` store lives on the `Repositories` seam
+// (engine/repositories/webhookEvents.ts); re-exported here so the intake-internal
+// callers keep their by-name import.
 export {
   WebhookEventStore,
   type WebhookEvent,
   type WebhookEventStatus,
   type PersistWebhookEventInput,
-} from "./webhookEventStore.js";
+} from "../../repositories/webhookEvents.js";
 export {
   processWebhookEvent,
   sweepWebhookEvents,
