@@ -9,16 +9,22 @@
 // real split inject a real BYPASSRLS pool via `setSystemPool` (which takes
 // precedence), and the fail-loud unit test toggles the opt-in off around itself.
 //
-// `resetSystemPool` after each test clears any per-test `setSystemPool` injection
-// (and the env memo) so it never leaks across files.
+// `resetSystemPool` runs per FILE (`afterAll`), not per test: the common RLS
+// integration pattern injects a real BYPASSRLS pool ONCE in the file's `beforeAll`,
+// and that injection must survive every test in the file (a per-test wipe would
+// drop later tests back onto the RLS-denied tenant pool → 403 / zero-row failures).
+// The reset still fires at file boundary so a per-file `setSystemPool` injection (or
+// the env memo) never leaks across files. A test that deliberately needs a clean
+// no-pool state mid-file (e.g. runWithSystemScopeFailClosed.test.ts) drives its own
+// `resetSystemPool()` / `allowRuntimePoolAsSystemForTests(false)` explicitly.
 
-import { afterEach, beforeAll } from "vitest";
+import { afterAll, beforeAll } from "vitest";
 import { allowRuntimePoolAsSystemForTests, resetSystemPool } from "@tanren/db";
 
 beforeAll(() => {
   allowRuntimePoolAsSystemForTests(true);
 });
 
-afterEach(() => {
+afterAll(() => {
   resetSystemPool();
 });

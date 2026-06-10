@@ -39,7 +39,7 @@
 
 import { Hono } from "hono";
 import { Pool } from "pg";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { migrate, setSystemPool } from "@tanren/db";
 import { IdentityStore } from "../src/auth/identityStore.js";
 import type { IdentityClaims } from "../src/auth/schemas.js";
@@ -140,17 +140,14 @@ describeDb("RLS operator flow — the control-plane CRUD walk under the tanren_a
     app = buildOperatorApp(appPool, store);
   }, 60_000);
 
-  // Re-establish the injected BYPASSRLS system pool before EACH test. The global
-  // test setup (test/setup/systemPool.ts) runs `resetSystemPool()` in an
-  // `afterEach`, which clears this file's `beforeAll` `setSystemPool` injection
-  // after the first test. Without this, steps 2..n fall back to the `tanren_app`
-  // runtime pool for the bootstrap-class system reads (list-my-orgs + the actor's
-  // `org_members` resolution), which the NOBYPASSRLS app role with an empty
-  // org GUC sees as ZERO rows — so the actor resolves with no org scope and every
-  // `/orgs/:orgId/*` route's `actorCanAccessOrg` gate 403s (steps 5/6/7).
-  beforeEach(() => {
-    setSystemPool(systemPool);
-  });
+  // The `beforeAll` `setSystemPool` injection above survives every test in this
+  // file: the global test setup (test/setup/systemPool.ts) resets the pool only
+  // per-FILE (`afterAll`), not per-test. Without that, steps 2..n would fall back
+  // to the `tanren_app` runtime pool for the bootstrap-class system reads
+  // (list-my-orgs + the actor's `org_members` resolution), which the NOBYPASSRLS
+  // app role with an empty org GUC sees as ZERO rows — so the actor would resolve
+  // with no org scope and every `/orgs/:orgId/*` route's `actorCanAccessOrg` gate
+  // would 403 (steps 5/6/7).
 
   afterAll(async () => {
     setSystemPool(undefined);
