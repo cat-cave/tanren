@@ -25,6 +25,7 @@
 
 import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import type { RunnerHandle } from "../contracts/allocator.js";
+import type { WorkspaceHandle } from "../contracts/workspaceVcsCore.js";
 import { quoteSshShellArg } from "../ssh/command.js";
 import { runWorkspaceSshCommand } from "../workspace/ssh.js";
 import { buildLiveJjWorkspace, type LiveJjWorkspaceDeps, type LiveJjWorkspace } from "../providers/liveJjWorkspace.js";
@@ -60,6 +61,15 @@ export type JjLocalIntegrationResult =
       headSha: string;
       treeHash: string;
       memberHeadShas: Record<string, string>;
+      /**
+       * The OPEN workspace handle the integration assembled `localRef` in (present
+       * when `integrateOverWorkspace` ran the real assembly). The BOOTSTRAP consumer
+       * (`bootstrapDependentBase`) reads it to create the dependent's run branch AT
+       * the integrated head on the SAME open workspace; the batch consumer (which
+       * gates on `LiveJjWorkspace`, not the handle) ignores it. Optional so a fake
+       * integration result (the batch unit tests) need not synthesize a handle.
+       */
+      workspace?: WorkspaceHandle;
     }
   | {
       outcome: "conflict";
@@ -170,7 +180,16 @@ export async function integrateOverWorkspace(
   // .git, so the tree is read from git off the exported head sha.
   const exported = await core.exportCleanGitRef(ws, input.localRef);
   const treeHash = await readTreeHash(ssh, target, workspacePath, exported.headSha, input.timeoutMs);
-  return { outcome: "integrated", localRef: input.localRef, headSha: exported.headSha, treeHash, memberHeadShas };
+  // Surface the open `ws` handle so the bootstrap consumer can create the dependent's
+  // run branch at the integrated head ON THIS workspace (the batch consumer ignores it).
+  return {
+    outcome: "integrated",
+    localRef: input.localRef,
+    headSha: exported.headSha,
+    treeHash,
+    memberHeadShas,
+    workspace: ws,
+  };
 }
 
 /**
