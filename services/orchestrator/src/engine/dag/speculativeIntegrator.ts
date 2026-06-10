@@ -24,7 +24,7 @@ import type {
 } from "../contracts/speculativeIntegrator.js";
 import type { IntegrationAncestor, VcsProvider } from "../contracts/vcsProvider.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
-import type { AncestorStack } from "./ancestorStack.js";
+import { type AncestorStack, resolveDependentAncestorStack } from "./ancestorStack.js";
 
 /** The ephemeral integration branch ref a dependent's PR bases on. */
 export function integrationBranchName(dependentSpecId: string): string {
@@ -40,12 +40,6 @@ interface IntegrationProjectRow {
   project_config: unknown;
   org_config: unknown;
   org_id: string | null;
-}
-
-interface AncestorBranchRow {
-  spec_id: string;
-  run_id: string;
-  branch: string;
 }
 
 export interface PgSpeculativeIntegratorDeps {
@@ -65,24 +59,19 @@ export class PgSpeculativeIntegrator implements SpeculativeIntegrator {
       throw new Error(`cannot build integration for ${input.dependentSpecId}: project ${input.projectId} has no org`);
     }
 
-    const { project, ancestors } = await runWithOrgScope(this.deps.pool, orgId, async (client) => {
+    // Resolve the project context + the ordered ancestor stack under ONE org scope
+    // (RLS). The DAG-ordered, org-scoped stack resolution lives in the standalone
+    // `resolveDependentAncestorStack` helper (walker-jj-local-integration-design.md
+    // §7 PR-2) — this integrator delegates to it; the WS-A PR-3 bootstrap assembler
+    // reuses the SAME helper.
+    const { project, resolvedStack } = await runWithOrgScope(this.deps.pool, orgId, async (client) => {
       const projectRow = await this.loadProject(client, input.projectId);
-      const ancestorRows = await this.loadAncestorBranches(client, input.unmergedAncestorSpecIds);
-      return { project: projectRow, ancestors: ancestorRows };
+      const stack = await resolveDependentAncestorStack(client, input.unmergedAncestorSpecIds);
+      return { project: projectRow, resolvedStack: stack };
     });
 
-    // Order the ancestor branches in the caller's DAG order (the unmerged list is
-    // already DAG-ordered); resolve each spec's branch, dropping none silently —
-    // a missing ancestor branch is a hard error (we never integrate a phantom).
-    const branchBySpec = new Map(ancestors.map((a) => [a.spec_id, a.branch] as const));
-    const runIdBySpec = new Map(ancestors.map((a) => [a.spec_id, a.run_id] as const));
-    const ordered: IntegrationAncestor[] = input.unmergedAncestorSpecIds.map((specId) => {
-      const branch = branchBySpec.get(specId);
-      if (branch === undefined) {
-        throw new Error(`unmerged ancestor ${specId} has no run branch to integrate`);
-      }
-      return { specId, branch };
-    });
+    const runIdBySpec = new Map(resolvedStack.map((a) => [a.specId, a.runId] as const));
+    const ordered: IntegrationAncestor[] = resolvedStack.map(({ specId, branch }) => ({ specId, branch }));
 
     const installation = installationFromOrgConfig(project.org_config);
     // The integration push needs only the GitHub credential (App-first, static
@@ -143,22 +132,6 @@ export class PgSpeculativeIntegrator implements SpeculativeIntegrator {
       throw new Error(`project ${projectId} not found for speculative integration`);
     }
     return row;
-  }
-
-  private async loadAncestorBranches(
-    client: pg.PoolClient,
-    specIds: ReadonlyArray<string>,
-  ): Promise<AncestorBranchRow[]> {
-    if (specIds.length === 0) return [];
-    // The ancestor's latest run branch is its PR head branch. One row per spec.
-    const result = await client.query<AncestorBranchRow>(
-      `SELECT DISTINCT ON (r.spec_id) r.spec_id, r.run_id, r.branch
-         FROM runs r
-        WHERE r.spec_id = ANY($1::text[])
-        ORDER BY r.spec_id, r.started_at DESC`,
-      [[...specIds]],
-    );
-    return result.rows;
   }
 
   private async resolveProjectOrg(projectId: string): Promise<string | null> {
