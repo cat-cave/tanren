@@ -43,13 +43,19 @@ Every event in the P2A-0007 registry has a default severity in
 | -------- | ----------------------------------------------------------------------------------------------------- |
 | `ok`     | Happy-path completions: `run.completed`, `ci.passed`, `github.pr.merged`.                             |
 | `info`   | Normal-flight progress: `*.started`, `*.queued`, `writer.subtask.completed`, audit reads.             |
-| `warn`   | Recoverable degradation: `ci.failed`, `*.failed`, checker/auditor rejection verdicts.                 |
+| `warn`   | Recoverable degradation: `ci.failed`, `*.failed`, an answerer verdict that found work to do.          |
 | `fail`   | Run-halting / budget-defeating misconfig: `run.failed`, `cost.unattributed`, `phase1.fixture.failed`. |
 
 A few payload shapes promote at fire time:
 
-- `checker.verdict` / `auditor.verdict` with `passed=false` promote one
-  tier (e.g. base `info` → `warn`).
+- **Answerer verdicts are a findings model, not a pass/fail flag.** The auditor is
+  **findings-only**: its `auditor.verdict` payload carries an explicit **P0–P3
+  `findings` list** (no `passed` field) — the findings list _is_ the verdict, and
+  the loop's triage + the project posture decide what each severity means for the
+  merge. The checker emits a completeness `findings` list (treated as P0) and may
+  carry an optional `passed` enrichment. A verdict that surfaces findings (work
+  remaining) promotes one tier (e.g. base `info` → `warn`); a clean verdict stays
+  at `ok`.
 - `run.completed` with an outcome containing `fail` promotes one tier.
 
 The dispatcher computes the **effective severity** and compares it to

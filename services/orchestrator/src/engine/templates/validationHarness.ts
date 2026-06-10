@@ -1,6 +1,6 @@
 // The TEMPLATE VALIDATION HARNESS — the "meaningful, not green-by-accident" proof
 // (docs/roadmap/templating-system.md §2.4 / §4). It runs OVER a conforming template
-// repo (a `justfile` + `.tanren/ci.yml`, see stack-flexible-contract.md) on an
+// repo (a `justfile` + `.tanren/ci.yml`, see docs/operator-guide/ci-config.md) on an
 // allocated runner and produces a `TemplateValidationProof` (the canonical
 // manifest proof shape, assignable straight to `TemplateManifestV1.validationProof`).
 // It REUSES the existing native

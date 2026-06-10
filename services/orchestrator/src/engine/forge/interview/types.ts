@@ -125,7 +125,7 @@ export type CaptureArchitectureLine = z.infer<typeof CaptureArchitectureLine>;
 
 // The project's CONCRETE LIFECYCLE for the chosen stack — the load-bearing output
 // of the architecture step (stack-flexible contract,
-// docs/roadmap/stack-flexible-contract.md). Tanren knows NO stack: the project
+// docs/operator-guide/ci-config.md). Tanren knows NO stack: the project
 // DECLARES what each conventional justfile target IS for its stack, and the run
 // MATERIALIZES the justfile + `.tanren/ci.yml` from this DETERMINISTICALLY (no LLM,
 // no hardcoded pnpm example — the v27 fix; the ci.yml is the skeleton verbatim, the

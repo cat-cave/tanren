@@ -28,42 +28,53 @@ admits the merge.
 
 ## Schema
 
+Tanren names **no tech stack**. Every step defers to a `just <target>` recipe, so
+the actual commands (pnpm / cargo / make / a fan-translation linter — anything)
+live in the project's `justfile` (the project contract), not in Tanren. The schema
+below is the **stack-agnostic 3-tier shape** the built-in default ships, mapping
+each tier 1:1 to a spec-loop lifecycle point:
+
 ```yaml
 version: 1 # required; literal 1
 
-bootstrap: # optional
-  run: "pnpm install --frozen-lockfile"
+bootstrap: # optional — provision the workspace before the gate runs
+  run: "just bootstrap"
 
-tiers: # required; `fast` and `slow` are mandatory
-  fast: # a tier is a non-empty list of named steps
-    - name: lint # step name (free text, non-empty)
-      run: "pnpm lint" # shell command Tanren runs verbatim over SSH
-    - name: typecheck
-      run: "pnpm typecheck"
-  slow:
-    - name: build
-      run: "pnpm build"
+tiers: # required; `fast` and `slow` are mandatory, plus a tier mapped to pre_merge
+  fast: # cheap per-iteration gate (e.g. lint + typecheck). NO tests here —
+    - name: tier-1 #   tests arrive with features, so a scaffold pass is never
+      run: "just tier-1" #   blocked by a test tier.
+  slow: # build + tests; DECLARES its JUnit report for per-test CI-intelligence
+    - name: tier-2
+      run: "just tier-2"
+      junitReport: "reports/junit.xml" # explicit declared path (see below)
+  merge: # the heaviest thorough gate — the merge-queue authority
+    - name: tier-3
+      run: "just tier-3"
   # extra named tiers are allowed, e.g.:
   # integration:
   #   - name: e2e
-  #     run: "pnpm test:e2e"
+  #     run: "just integration"
 
-when: # required; every declared tier MUST appear here
-  fast:
+when: # required; every declared tier MUST appear here, and at least one tier
+  fast: #   MUST map to pre_merge (fail-closed — see Validation rules)
     - per_iteration # valid points: per_iteration | pre_audit | pre_merge
   slow:
     - pre_audit
+  merge:
     - pre_merge
 ```
 
 ### Fields
 
-| Field           | Required | Description                                                                                       |
-| --------------- | -------- | ------------------------------------------------------------------------------------------------- |
-| `version`       | yes      | Schema version. Must be the literal `1`.                                                          |
-| `bootstrap.run` | no       | Install/provision command Tanren runs over SSH before the gate.                                   |
-| `tiers`         | yes      | Map of tier name to a non-empty list of `{ name, run }` steps. `fast` and `slow` are required.    |
-| `when`          | yes      | Map of tier name to a non-empty list of lifecycle points. Every declared tier must have an entry. |
+| Field              | Required | Description                                                                                                                                                                                                                                    |
+| ------------------ | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `version`          | yes      | Schema version. Must be the literal `1`.                                                                                                                                                                                                       |
+| `bootstrap.run`    | no       | Provision command Tanren runs over SSH before the gate (default `just bootstrap`).                                                                                                                                                             |
+| `tiers`            | yes      | Map of tier name to a non-empty list of `{ name, run, junitReport? }` steps. `fast` and `slow` are required.                                                                                                                                   |
+| `step.run`         | yes      | Shell command Tanren runs verbatim over SSH (conventionally `just <target>`).                                                                                                                                                                  |
+| `step.junitReport` | no       | Declared path the step writes a JUnit report to (e.g. `reports/junit.xml`). Tanren reads exactly this path back over SSH for per-test CI-intelligence (flaky-detection + quarantine). A step with no `junitReport` produces no per-test grain. |
+| `when`             | yes      | Map of tier name to a non-empty list of lifecycle points. Every declared tier must have an entry, and at least one tier must map to `pre_merge`.                                                                                               |
 
 ### Lifecycle points
 
@@ -71,14 +82,18 @@ when: # required; every declared tier MUST appear here
 - `pre_audit` — before handing the work to an auditor.
 - `pre_merge` — before merging the PR. **This is the merge authority.**
 
-## Per-test grain (optional)
+## Per-test grain (declared via `junitReport`)
 
-When a `test` step emits a JUnit report to `reports/junit.xml` (e.g.
-`vitest --reporter=junit --outputFile=reports/junit.xml`), Tanren reads it back
-over SSH after the gate and ingests the per-test rows **in-process** — feeding
-flaky-detection + auto-quarantine. There is no upload step, no webhook, no signing
-secret: the gate produced the report on the runner, and Tanren ingests it
-directly. A repo that emits no JUnit simply has no per-test grain (a clean no-op).
+A step opts into per-test CI-intelligence by **declaring** a `junitReport` path —
+the explicit config field, not a sniff. When a step sets
+`junitReport: "reports/junit.xml"` and its `just <target>` recipe writes a JUnit
+report to exactly that path, Tanren reads it back over SSH after the gate and
+ingests the per-test rows **in-process** — feeding flaky-detection +
+auto-quarantine. The path is the contract: Tanren reads back precisely the declared
+path (the convention is `reports/junit.xml`), and the **command** that writes it is
+the project's, inside the `just` recipe — Tanren names no test runner. There is no
+upload step, no webhook, no signing secret. A step that declares no `junitReport`
+simply has no per-test grain (a clean no-op).
 
 ## Validation rules (fails loudly)
 
@@ -89,7 +104,11 @@ gate. The validator rejects:
 - a missing `fast` or `slow` tier, or any tier with an empty step list;
 - a `when` value outside `per_iteration | pre_audit | pre_merge`;
 - a `when` entry that references a tier not declared under `tiers`;
-- a declared tier that has no `when` entry (it would otherwise never run).
+- a declared tier that has no `when` entry (it would otherwise never run);
+- **a config where no tier maps to `pre_merge`** — the `pre_merge` gate is the
+  merge authority, and an uncovered `pre_merge` would make `tanren/gate: success` a
+  vacuous pass that lands anything. This is rejected **fail-closed** (a
+  writer-editable `.tanren/ci.yml` cannot silently drop merge coverage).
 
 YAML syntax errors raise `CiYamlParseError`; schema violations raise
 `CiConfigValidationError`. (The parser supports the constrained subset this
@@ -98,15 +117,19 @@ values — not arbitrary YAML.)
 
 ## Default when the file is absent
 
-If a repo ships no `.tanren/ci.yml`, `resolveCiConfig(undefined)` returns a
-built-in default that mirrors this monorepo's own conventions:
+If a repo ships no `.tanren/ci.yml`, `resolveCiConfig(undefined)` returns the
+built-in **stack-agnostic 3-tier `just`-based default** (`DEFAULT_CI_CONFIG` in
+`engine/ci/resolve.ts`), which mirrors the scaffold skeleton's `ci.yml`:
 
-| Tier   | Steps                       | Runs at                  |
-| ------ | --------------------------- | ------------------------ |
-| `fast` | `lint`, `typecheck`, `unit` | `per_iteration`          |
-| `slow` | `build`, `test`             | `pre_audit`, `pre_merge` |
+| Tier    | Step (`run`)  | `junitReport`       | Runs at         |
+| ------- | ------------- | ------------------- | --------------- |
+| `fast`  | `just tier-1` | —                   | `per_iteration` |
+| `slow`  | `just tier-2` | `reports/junit.xml` | `pre_audit`     |
+| `merge` | `just tier-3` | —                   | `pre_merge`     |
 
-The default `bootstrap.run` is `pnpm install --frozen-lockfile`.
+The default `bootstrap.run` is `just bootstrap`. Because every command is a `just`
+target, the default works for **any** stack: the project's `justfile` decides what
+`tier-1`/`tier-2`/`tier-3`/`bootstrap` actually run.
 
 ## Consumer API
 

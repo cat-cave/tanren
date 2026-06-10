@@ -13,8 +13,8 @@ the in-code `§`-anchored comments cite. The section anchors below (§1.x, §1a,
 §1b, §1d, §2b, §2c, §2d, §3 proof 6, §8a, §8b) are stable: ~a dozen source
 comments reference them, so the anchored sections survive at this path.
 
-> **The tanren-owns-the-engine cutover (merged, flag-on, apex-validation
-> pending).** The merge coordination described in §2 was originally built on a
+> **The tanren-owns-the-engine cutover (merged, flag-on, merge paths still
+> apex-unproven).** The merge coordination described in §2 was originally built on a
 > `VcsProvider`-shaped, speculative-integration-plus-change-percolation model.
 > That model has since been **superseded and the cutover merged**: a jj (jujutsu)
 > `WorkspaceVcsCore` is the VCS core, a guaranteed fail-closed **`MergeAuthority`**
@@ -24,8 +24,9 @@ comments reference them, so the anchored sections survive at this path.
 > **P0–P3 findings** gated by an **`auditPosture`** DORA knob. These live paths are
 > **default-on behind kill-switch env vars** (`MERGE_AUTHORITY_LIVE`,
 > `CONFLICT_RESOLVER_JJ_LIVE`, `BASE_SHIFT_LIVE`, `INTEGRATION_NODES_DRIVE`) and
-> are **apex-validation pending** — the live jj-against-a-runner path is first
-> exercised by the next apex run; the flags are the kill-switches. §2b/§2c below
+> are **still apex-unproven for the merge path** — apex v32 ran live but halted at
+> scaffold-bootstrap before reaching a merge, so the jj-against-a-runner merge path
+> has not yet been exercised end-to-end; the flags are the kill-switches. §2b/§2c below
 > are rewritten to the never-discard reality; the full rationale, the unified
 > `integration_nodes` run model, and the deferred post-apex deletions are in
 > `docs/architecture/tanren-owns-the-engine.md`.
@@ -252,7 +253,7 @@ changes after dependents started (a P3 patch, a reviewer edit, a new finding), i
 propagating the resolution down the stack via jj's automatic descendant rebase —
 rather than cancel-and-regenerate. It is a chain re-integration, not a rollback.
 Because work is never discarded, deeper eager chains are just more rebases, all
-useful; the `integration.*` metrics (read-side **apex-validation pending**, see
+useful; the `integration.*` metrics (read-side **deferred until a run reaches a merge**, see
 §7 of `tanren-owns-the-engine.md`) instrument `rebase_vs_rebuild` to _prove_
 resolution costs less than rebuild rather than assume it.
 

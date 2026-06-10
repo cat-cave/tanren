@@ -12,14 +12,14 @@ The `InsightPayload` discriminated union (`engine/insights/types.ts`) is the
 single source of truth; the cache `kind` CHECK in `db/src/schemaInsights.ts`
 widens with it:
 
-| kind             | source                                                 | severity rule                                         |
-| ---------------- | ------------------------------------------------------ | ----------------------------------------------------- |
-| `retry_hotspot`  | tasks (writer) joined with planner.rerequested         | `warn` when ≥ `min+1` attempts; otherwise `info`      |
-| `model_mismatch` | cost_records joined with merged runs + spec_milestones | `warn` whenever the ratio is exceeded                 |
-| `pace_anomaly`   | in-flight writer tasks vs class average                | `warn` at ≥ 1.5× the multiplier; otherwise `info`     |
-| `stuck`          | spec-dependency-chain analysis (`stuck.ts`)            | a spec blocked behind unmet dependencies              |
-| `review_stall`   | `review.*` events (`reviewStall.ts`)                   | a review parked past the stall threshold              |
-| `ci_flaky`       | a CI check proven non-deterministic + auto-quarantined | surfaced so the quarantine is visible (`ci_flaky.ts`) |
+| kind             | source                                                 | severity rule                                        |
+| ---------------- | ------------------------------------------------------ | ---------------------------------------------------- |
+| `retry_hotspot`  | tasks (writer) joined with planner.rerequested         | `warn` when ≥ `min+1` attempts; otherwise `info`     |
+| `model_mismatch` | cost_records joined with merged runs + spec_milestones | `warn` whenever the ratio is exceeded                |
+| `pace_anomaly`   | in-flight writer tasks vs class average                | `warn` at ≥ 1.5× the multiplier; otherwise `info`    |
+| `stuck`          | spec-dependency-chain analysis (`stuck.ts`)            | a spec blocked behind unmet dependencies             |
+| `review_stall`   | `review.*` events (`reviewStall.ts`)                   | a review parked past the stall threshold             |
+| `ci_flaky`       | a CI check proven non-deterministic + auto-quarantined | surfaced so the quarantine is visible (`ciFlaky.ts`) |
 
 `stuck`, `review_stall`, and `ci_flaky` ship today — the earlier "defer to a
 later phase" framing is obsolete. Both `stuck` and `review_stall` derive from

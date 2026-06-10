@@ -1,7 +1,17 @@
 # Harness adapter specs — agy / pi / reasonix
 
-This doc captures **researched CLI invocation specs** for three coding-agent
-harnesses we want to slot behind the harness protocol
+> **Status (update):** **pi and reasonix are BUILT + WIRED** — both ship as
+> writer-only provider adapters on `main`
+> (`services/orchestrator/src/engine/providers/{pi,reasonix}.ts`) with
+> `HARNESS_CAPABILITIES` entries. The research below is what drove those adapters;
+> for the live wiring read the adapters + `harnessCapability.ts` directly. **agy
+> remains NOT built** — it is still blocked on the headless-stdout bug recorded
+> below. Treat the "Ready to build?" framing in this doc as the **historical
+> research snapshot** that the pi/reasonix adapters resolved; agy's entry is the
+> only one still open.
+
+This doc captures the **researched CLI invocation specs** for three coding-agent
+harnesses slotted (or to be slotted) behind the harness protocol
 ([`harness-protocol.md`](./harness-protocol.md)): **agy** (Google Antigravity
 CLI), **pi** (the minimal coding-agent harness), and **reasonix** (the
 DeepSeek-native coding agent). Each would become one entry in the
@@ -27,15 +37,15 @@ to build against.
 
 ## Summary table
 
-| Tool         | Install                                                               | Non-interactive invocation                                               | Auth                                                                         | Structured JSON output                                                                    | Capability class                 | Confidence | Ready to build?                           |
-| ------------ | --------------------------------------------------------------------- | ------------------------------------------------------------------------ | ---------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- | -------------------------------- | ---------- | ----------------------------------------- |
-| **agy**      | `curl …/cli/install.sh \| bash` (Google)                              | `agy -p "<prompt>"` (print mode)                                         | Google OAuth sign-in (default) **or** `ANTIGRAVITY_API_KEY`                  | **No** working JSON channel; `-p` stdout broken in non-TTY                                | writer-only (today)              | medium     | **No** — blocked by headless stdout bug   |
-| **pi**       | `npm i -g @earendil-works/pi-coding-agent` / `curl pi.dev/install.sh` | `pi -p "<prompt>"`, stdin pipe, `--mode json`                            | Per-provider env keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, …) or `/login` | **No** schema-constrained answer (declined upstream); has JSON **event** stream           | writer-only                      | high       | **Yes** (writer-only)                     |
-| **reasonix** | `npm i -g reasonix` (alias `dsnix`)                                   | `reasonix run "<task>"` (headless, CI-friendly); `reasonix acp` (NDJSON) | First-run wizard → `~/.reasonix/config.json`, **or** `DEEPSEEK_API_KEY` env  | **Partial** — NDJSON ACP protocol + JSONL transcripts; no doc'd schema-constrained answer | writer-only (answer unconfirmed) | medium     | **Yes** (writer-only); answer needs spike |
+| Tool         | Install                                                               | Non-interactive invocation                                               | Auth                                                                         | Structured JSON output                                                                    | Capability class                 | Confidence | Ready to build?                         |
+| ------------ | --------------------------------------------------------------------- | ------------------------------------------------------------------------ | ---------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- | -------------------------------- | ---------- | --------------------------------------- |
+| **agy**      | `curl …/cli/install.sh \| bash` (Google)                              | `agy -p "<prompt>"` (print mode)                                         | Google OAuth sign-in (default) **or** `ANTIGRAVITY_API_KEY`                  | **No** working JSON channel; `-p` stdout broken in non-TTY                                | writer-only (today)              | medium     | **No** — blocked by headless stdout bug |
+| **pi**       | `npm i -g @earendil-works/pi-coding-agent` / `curl pi.dev/install.sh` | `pi -p "<prompt>"`, stdin pipe, `--mode json`                            | Per-provider env keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, …) or `/login` | **No** schema-constrained answer (declined upstream); has JSON **event** stream           | writer-only                      | high       | **BUILT + WIRED** (writer-only)         |
+| **reasonix** | `npm i -g reasonix` (alias `dsnix`)                                   | `reasonix run "<task>"` (headless, CI-friendly); `reasonix acp` (NDJSON) | First-run wizard → `~/.reasonix/config.json`, **or** `DEEPSEEK_API_KEY` env  | **Partial** — NDJSON ACP protocol + JSONL transcripts; no doc'd schema-constrained answer | writer-only (answer unconfirmed) | medium     | **BUILT + WIRED** (writer-only)         |
 
 Net: **none of the three is confidently Answerer-eligible today.** All three are
-plausible **writer-only** harnesses; pi is the cleanest to wire, reasonix is
-close behind, and agy is blocked on a real headless bug.
+**writer-only** harnesses; pi and reasonix are now **built + wired** as writer-only
+adapters, and agy stays blocked on a real headless bug.
 
 ---
 
@@ -176,7 +186,7 @@ Sits alongside opencode/aider in the writer-only class. The `--mode json` event
 stream is exactly the kind of per-line JSON our existing writer adapters parse for
 `telemetry` (token usage / usage-limit signals) per protocol §4.4.
 
-### Ready to build? **YES — as a writer-only harness.**
+### Ready to build? **BUILT + WIRED — writer-only adapter (`providers/pi.ts`).**
 
 Concrete, well-documented invocation (`pi -p`), clean env-var auth, and a JSON
 event stream we can parse for telemetry. The only loose end before coding is
@@ -262,7 +272,7 @@ Start writer-only. If a spike shows ACP `session/prompt` can return
 schema-constrained JSON (or a `run --json --schema`-style flag lands upstream),
 **promote** to `roles: ["write","answer"], structuredOutput: true`.
 
-### Ready to build? **YES for writer-only; answer-role needs a spike.**
+### Ready to build? **BUILT + WIRED — writer-only adapter (`providers/reasonix.ts`); answer-role still needs a spike.**
 
 `reasonix run "<task>"` + `DEEPSEEK_API_KEY` + `--transcript` JSONL (for token
 usage) is enough to wire a **writer-only** adapter with good telemetry. Two loose

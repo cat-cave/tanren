@@ -43,7 +43,8 @@ change.
 1. **Optional accelerator, graceful fallback.** `sem` is a tool the AGENT runs in
    its sandbox, never a hard dependency. It covers many languages but not every
    stack; Tanren bakes in **no language assumption** (the stack-flexible contract,
-   `docs/roadmap/stack-flexible-contract.md`). When `sem` is absent, errors, or
+   now embodied in the `justfile` + `.tanren/ci.yml` contract — see
+   `docs/operator-guide/ci-config.md`). When `sem` is absent, errors, or
    cannot parse the stack, the agent falls back to the raw `git diff` / `git log`,
    which **remains authoritative**. An agent must never block or change its verdict
    because `sem` is unavailable.

@@ -87,7 +87,7 @@ export type ProjectTemplateRef = z.infer<typeof ProjectTemplateRef>;
 
 // The project's CONCRETE LIFECYCLE — the captured stack commands behind the six
 // conventional justfile targets (stack-flexible contract,
-// docs/roadmap/stack-flexible-contract.md). Persisted here so the RUN path can
+// docs/operator-guide/ci-config.md). Persisted here so the RUN path can
 // MATERIALIZE the contract files (`justfile` + `.tanren/ci.yml`) DETERMINISTICALLY
 // — no LLM authors them, which is the v27 fix: the LLM writer reliably mangled the
 // ci.yml YAML shape ("bootstrap expected object received string; tiers.* expected

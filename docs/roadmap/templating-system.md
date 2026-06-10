@@ -6,12 +6,15 @@ This is the doctrine-of-record for Tanren's project templating, and it is
 seed/from-scratch relocation). The doctrine is **owner-stated and enforced in
 code** — it is not aspirational.
 
-> **Status (merged on `main`, #498).** The from-scratch-into-a-project bypass is
-> **deleted**. The template gate, just-in-time creation, the `assertSeeded`
-> invariant, the `TemplateRequiredError` → `409` halt, and the durable
-> `template.selection.*` / `template.creation.*` events are live. The system is
-> first exercised end-to-end by the next apex run — DO NOT pre-create a template;
-> apex MUST flush the creation-from-scratch path (see below).
+> **Status (merged on `main`, #462 + #498).** The from-scratch-into-a-project
+> bypass is **deleted**. The template gate, just-in-time creation, the
+> `assertSeeded` invariant, the `TemplateRequiredError` → `409` halt, and the
+> durable `template.selection.*` / `template.creation.*` events are live (#498).
+> **Wave 5 — the maintenance dimension (#462) — is also merged**: the
+> template-maintenance scheduler, `lts`/`nightly` channels, nightly→lts
+> graduation, and freshness/revalidation (`engine/templates/maintenance/**`; see
+> §4). The system is first exercised end-to-end by the next apex run — DO NOT
+> pre-create a template; apex MUST flush the creation-from-scratch path (see below).
 
 ---
 
@@ -82,9 +85,10 @@ not a usable match) BEFORE deriving the scaffold specs
 
 The `build` and `deploy` scaffold specs are identical either way — they always
 route through the conventional `just build` / `just deploy` targets the materialized
-**stack-flexible contract** established (`docs/roadmap/stack-flexible-contract.md`):
-Tanren bakes in no stack; the contract files (`justfile` + `.tanren/ci.yml`) are
-materialized deterministically from the captured lifecycle, never LLM-authored.
+**stack-flexible contract** established (now embodied in code — the `justfile` +
+`.tanren/ci.yml` contract; see `docs/operator-guide/ci-config.md`):
+Tanren bakes in no stack; the contract files are materialized deterministically
+from the captured lifecycle, never LLM-authored.
 
 ### Durable events
 
@@ -95,6 +99,50 @@ The whole path is observable through durable events (schemas in
 - `template.creation.started` / `template.creation.published` /
   `template.creation.failed` — the just-in-time meta-flow lifecycle.
 - `template.registered` / `template.status_changed` — registry lifecycle.
+
+---
+
+## §4 — the maintenance dimension (a template is a first-class Tanren project)
+
+Creating a validated template is not the end of its life. A template tracks an
+upstream stack that **moves**, and its "meaningful, not green-by-accident" proof
+goes **stale**. Wave 5 (merged, #462; code at `engine/templates/maintenance/**`)
+makes every registered template a **first-class project Tanren maintains on a
+schedule**, reusing the scheduled-audit machinery rather than reinventing it.
+
+- **The maintenance scheduler (`maintenance/loop.ts`, booted by `boot.ts`).**
+  A long-lived per-process loop (the same `start`/`stop`/`tick` shape + cross-org
+  system-scoped fan-out as `AuditSchedulerLoop`). Each tick re-validates due
+  templates by re-running the **same** validation harness the creation flow proved
+  them with (`maintenancePass.ts` → `revalidator.ts` → `runValidationHarness`) —
+  it does not reinvent validation; it provisions the registered repo onto a runner
+  and re-proves it.
+
+- **`lts` / `nightly` channels (`channelPolicy.ts`).** A template's channel decides
+  **which** upstream versions it accepts and **how often** it bumps, stack-agnostic
+  by construction (stable-vs-pre-release is a generic marker, never an ecosystem's
+  semver rules):
+  - **`lts`** — conservative: accepts only a stable release, rejects pre-releases,
+    slow (monthly) cadence — the proven floor real projects seed from.
+  - **`nightly`** — aggressive: accepts the latest including pre-releases, fast
+    (daily) cadence. It is the **canary** — a breaking upstream release fails the
+    nightly validation **first**, before it can reach an LTS template or a real
+    project.
+
+- **nightly→lts graduation (`graduation.ts`).** Because nightly re-validates the
+  full harness on every aggressive bump, the maintenance loop (a) keeps `lts`
+  pinned safe (never auto-takes the cutting-edge bump), (b) files any breakage as a
+  finding/spec, and (c) graduates a version nightly→lts **only** once its nightly
+  validation has stayed **green continuously for an aging window** — a pure,
+  clock-injected predicate.
+
+- **Freshness + revalidation (`freshness.ts` + `revalidator.ts`).** A template's
+  registry status drops to **`degraded`** (so selection, which already filters
+  degraded, stops choosing it) on two triggers: its `validationProof` is older than
+  the freshness horizon, or a maintenance pass surfaced an unresolved **P0/P1**
+  finding. **Fail-closed:** a proof that cannot be dated reads as expired, never as
+  fresh, so an unparseable/stale proof degrades rather than silently seeding
+  projects.
 
 ---
 
@@ -113,8 +161,9 @@ apex rhythm (`docs/operator-guide/apex.md`). The drive steps are in
 
 ## Relationship to the stack-flexible contract
 
-The templating system sits **above** the stack-flexible contract
-(`docs/roadmap/stack-flexible-contract.md`):
+The templating system sits **above** the stack-flexible contract (now embodied in
+code — the `justfile` + `.tanren/ci.yml` contract; see
+`docs/operator-guide/ci-config.md`):
 
 - The **contract** is the generality mechanism — Tanren knows no stack; a project
   declares its lifecycle in a `justfile` + `.tanren/ci.yml` and Tanren runs it
