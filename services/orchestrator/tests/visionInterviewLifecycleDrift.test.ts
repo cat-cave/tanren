@@ -124,7 +124,7 @@ describe("mergeCapture · lifecycle pin (no silent drift)", () => {
 
 describe("runRound · lifecycle drift is surfaced (operator-visible)", () => {
   it("a drifting round PRESERVES the confirmed lifecycle + surfaces a drift notice", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const warn = vi.spyOn(console, "error").mockImplementation(() => {});
     const { pool } = stubPool();
     const result = await runRound(
       { pool, answerer: driftingAnswerer(DRIFTED) },
@@ -141,7 +141,7 @@ describe("runRound · lifecycle drift is surfaced (operator-visible)", () => {
   });
 
   it("an EXPLICIT change round takes the new lifecycle + surfaces a visible 'changed' notice", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const warn = vi.spyOn(console, "error").mockImplementation(() => {});
     const { pool } = stubPool();
     const result = await runRound(
       { pool, answerer: driftingAnswerer(DRIFTED, true) },

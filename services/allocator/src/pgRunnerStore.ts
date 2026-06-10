@@ -1,6 +1,7 @@
 import type pg from "pg";
 import { runWithOrgScope } from "@tanren/db";
-import { volumeNamesFor, type RunnerRecord, type RunnerStore } from "./runnerLifecycle.js";
+import { volumeNamesFor, type AllocationAudit, type RunnerRecord, type RunnerStore } from "./runnerLifecycle.js";
+import { recordAllocatedEvent } from "./pgAllocatorEvents.js";
 
 const allocatorName = "sidecar-docker";
 
@@ -106,6 +107,13 @@ export class PgRunnerStore implements RunnerStore {
         );
       }
     });
+  }
+
+  async recordAllocated(audit: AllocationAudit): Promise<void> {
+    // The durable audit event goes through the allocator's SOLE events writer
+    // (pgAllocatorEvents — the per-service single-writer seam), org-scoped on the
+    // restricted app-role pool (same RLS scope as the `runners` row).
+    await recordAllocatedEvent(this.appPool, audit);
   }
 
   async markReleased(runnerId: string, reason: string): Promise<RunnerRecord | undefined> {

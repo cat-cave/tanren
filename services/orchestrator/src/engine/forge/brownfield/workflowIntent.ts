@@ -27,6 +27,9 @@ import {
   severityFor,
   type WorkflowIntentSource,
 } from "./workflowIntentTaxonomy.js";
+import { createLogger } from "../../observability/logger.js";
+
+const log = createLogger("brownfield");
 
 export {
   WorkflowIntent,
@@ -174,7 +177,7 @@ function extractFromPackageJson(file: ReconIndexedFile): WorkflowIntent[] {
     // the unreadable package.json surfaces (the fix is a larger preview, never a
     // silent drop).
     const reason = error instanceof Error ? error.message : String(error);
-    console.error(`[brownfield] unparseable package.json at ${file.path}; cannot classify its scripts: ${reason}`);
+    log.error("unparseable package.json; cannot classify its scripts", { path: file.path, reason });
     throw new Error(`unparseable package.json at ${file.path}: ${reason}`, { cause: error });
   }
   if (typeof parsed !== "object" || parsed === null) return out;

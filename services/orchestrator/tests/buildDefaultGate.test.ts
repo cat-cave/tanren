@@ -468,9 +468,9 @@ when:
     expect(outcome.passed).toBe(true);
     const loud = errs.mock.calls.map((c) => String(c[0])).find((m) => m.includes("native JUnit report EXPECTED"));
     expect(loud).toBeDefined();
-    // The signal names the reason (absent) + the tier — never a silent degrade.
+    // The structured signal names the reason (absent) + the tier — never a silent degrade.
     expect(loud).toContain("absent");
-    expect(loud).toContain("tier=slow");
+    expect(loud).toContain('"tier":"slow"');
   });
 
   it("per_iteration (no junit-writing step) + absent report → QUIET (no loud signal)", async () => {

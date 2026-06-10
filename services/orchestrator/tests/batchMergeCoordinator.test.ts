@@ -176,7 +176,7 @@ describe("BatchMergeCoordinator — speculative batch-check + bisect", () => {
   });
 
   it("respects the batch cap and logs it (no silent truncation)", async () => {
-    const logSpy = vi.spyOn(console, "info").mockImplementation(() => {});
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
     const h = makeHarness(2);
     seed(h, "spec_a");
     seed(h, "spec_b");

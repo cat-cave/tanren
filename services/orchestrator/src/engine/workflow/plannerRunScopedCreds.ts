@@ -19,6 +19,9 @@ import {
 } from "../contracts/secretStoreFactory.js";
 import type { EventName, EventPayload } from "../events/index.js";
 import type { PlannerRunContext, RunPlannerLoopInput } from "./plannerRun.js";
+import { createLogger } from "../observability/logger.js";
+
+const log = createLogger("orchestrator");
 
 /**
  * The per-run credential-scoping seam, threaded as ONE optional field through the
@@ -132,10 +135,10 @@ export function resolveScopedRunTokenTtlSeconds(env: NodeJS.ProcessEnv = process
     if (Number.isFinite(parsed) && parsed > 0) {
       return Math.ceil(parsed * 3_600);
     }
-    console.error(
-      `[orchestrator] TANREN_MAX_RUN_HOURS=${JSON.stringify(raw)} is not a positive number; ` +
-        `falling back to ${DEFAULT_MAX_RUN_HOURS}h for the scoped-credential token TTL. ` +
-        `The token TTL must cover the runner ceiling or a long run loses its credentials mid-run.`,
+    log.error(
+      "TANREN_MAX_RUN_HOURS is not a positive number; falling back to the default for the scoped-credential " +
+        "token TTL. The token TTL must cover the runner ceiling or a long run loses its credentials mid-run.",
+      { raw: JSON.stringify(raw), fallbackHours: DEFAULT_MAX_RUN_HOURS },
     );
   }
   return DEFAULT_MAX_RUN_HOURS * 3_600;

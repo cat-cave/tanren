@@ -41,6 +41,9 @@ import type {
   TriageAnswerer,
   TriageRoutableSpec,
 } from "./types.js";
+import { createLogger } from "../../observability/logger.js";
+
+const log = createLogger("intake");
 
 type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
@@ -128,9 +131,12 @@ export async function ingestSource(
         // operator review) so the next poll's idempotent upsert keeps it `triaged`
         // and never re-routes it. Any other failure propagates (transient — retry).
         if (!(error instanceof PersistentlyInvalidSpecError)) throw error;
-        console.error(
-          `[intake] candidate ${candidate.id} spec persistently invalid — escalating to inbox (needs attention):`,
-          error.message,
+        log.error(
+          "candidate spec persistently invalid — escalating to inbox (needs attention)",
+          {
+            candidateId: candidate.id,
+          },
+          error,
         );
         candidate = (await InboxStore.resolveCandidate(deps.pool, candidate.id, "triaged", null)) ?? candidate;
       }

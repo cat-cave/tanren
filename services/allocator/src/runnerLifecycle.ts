@@ -32,11 +32,28 @@ export interface RunnerRecord {
   released: boolean;
 }
 
+/** A durable audit record of a runner allocation, written org-scoped on success. */
+export interface AllocationAudit {
+  runnerId: string;
+  /** The real run id, or `null` for a runless Forge allocation. */
+  runId: string | null;
+  projectId: string | null;
+  orgId: string;
+  imageSha: string;
+  runless: boolean;
+}
+
 export interface RunnerStore {
   insert(record: RunnerRecord): Promise<void>;
   markReleased(runnerId: string, reason: string): Promise<RunnerRecord | undefined>;
   findActive(runnerId: string): Promise<RunnerRecord | undefined>;
   listActiveOlderThan(threshold: Date): Promise<RunnerRecord[]>;
+  /**
+   * Append a durable, org-scoped `allocator.allocated` audit event for a
+   * successful allocation. Mirrors the audit trail every other MUTATING surface
+   * leaves — `/allocate` is a mutating route that previously left none.
+   */
+  recordAllocated(audit: AllocationAudit): Promise<void>;
 }
 
 export interface AllocateInput {
@@ -213,6 +230,18 @@ export class RunnerLifecycle {
           released: false,
         };
         await this.store.insert(record);
+        // Durable audit trail: every other mutating surface leaves one; `/allocate`
+        // previously left none. Written org-scoped (same RLS scope as the `runners`
+        // row) AFTER the row is committed, so the audit reflects only a real
+        // allocation.
+        await this.store.recordAllocated({
+          runnerId,
+          runId: record.runId,
+          projectId: record.projectId,
+          orgId: input.orgId,
+          imageSha: inspected.imageSha,
+          runless: input.runless === true,
+        });
 
         return {
           runnerId,

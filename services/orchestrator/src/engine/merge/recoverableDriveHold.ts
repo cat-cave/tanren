@@ -19,6 +19,9 @@ import type { MergeDriveOutcome, MergeQueueEntry, MergeQueueModel } from "../con
 import type { MergeQueueEventEmitter } from "./coordinator.js";
 import { type HoldCeilingStore, InMemoryHoldCeilingStore } from "./holdCeilingStore.js";
 import { alertRetryAfterMs, recoverableRetryDelayMs } from "./retrySchedule.js";
+import { createLogger } from "../observability/logger.js";
+
+const log = createLogger("merge-coordinator");
 
 const MAX_RECOVERABLE_DRIVE_ATTEMPTS = 5;
 
@@ -67,15 +70,24 @@ export async function holdOrHaltRecoverableDrive(input: {
       message: `${input.outcome.kind} merge drive outcome did not clear after ${next.attempts} retries: ${input.outcome.message}`,
     });
     await input.queue.releaseClaim(input.entry.queueId);
-    console.error(
-      `[merge-coordinator] project ${input.projectId}: merge drive for spec ${input.entry.specId} returned ${input.outcome.kind} for ${next.attempts} retries; alerting and continuing autonomous re-drive after ${alertRetryAfterMs}ms`,
-    );
+    log.error("merge drive outcome did not clear after retries; alerting and continuing autonomous re-drive", {
+      projectId: input.projectId,
+      specId: input.entry.specId,
+      outcomeKind: input.outcome.kind,
+      attempts: next.attempts,
+      retryAfterMs: alertRetryAfterMs,
+    });
     return { kind: "held", retryAfterMs: alertRetryAfterMs };
   }
 
   await input.queue.releaseClaim(input.entry.queueId);
-  console.warn(
-    `[merge-coordinator] project ${input.projectId}: merge drive for spec ${input.entry.specId} returned ${input.outcome.kind}; retrying same native-queue candidate after ${next.retryAfterMs}ms (attempt ${next.attempts}/${MAX_RECOVERABLE_DRIVE_ATTEMPTS})`,
-  );
+  log.warn("merge drive returned a recoverable outcome; retrying same native-queue candidate", {
+    projectId: input.projectId,
+    specId: input.entry.specId,
+    outcomeKind: input.outcome.kind,
+    retryAfterMs: next.retryAfterMs,
+    attempt: next.attempts,
+    maxAttempts: MAX_RECOVERABLE_DRIVE_ATTEMPTS,
+  });
   return { kind: "held", retryAfterMs: next.retryAfterMs };
 }

@@ -302,19 +302,21 @@ describe("run worker — claim seam + default option fallbacks (runExecutor)", (
   });
 });
 
-// Run `fn` with console.log/warn captured into string arrays (restored after).
+// Run `fn` with console output captured into string arrays (restored after). The
+// structured logger routes info → console.log and warn/error → console.error, so
+// `logs` captures console.log and `warns` captures console.error (the warn sink).
 function captureConsole<T>(fn: () => T): { logs: string[]; warns: string[]; value: T } {
   const logs: string[] = [];
   const warns: string[] = [];
   const origLog = console.log;
-  const origWarn = console.warn;
+  const origError = console.error;
   console.log = (...a: unknown[]) => logs.push(a.join(" "));
-  console.warn = (...a: unknown[]) => warns.push(a.join(" "));
+  console.error = (...a: unknown[]) => warns.push(a.join(" "));
   try {
     return { logs, warns, value: fn() };
   } finally {
     console.log = origLog;
-    console.warn = origWarn;
+    console.error = origError;
   }
 }
 

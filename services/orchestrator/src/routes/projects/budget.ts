@@ -34,6 +34,9 @@ import { type ProjectBudgetState, shouldPauseOnBudget } from "../../engine/contr
 import { PgBudgetGate } from "../../engine/dag/budgetGate.js";
 import { ProjectStore } from "../../engine/repositories/index.js";
 import { systemActor } from "../../engine/state/actor.js";
+import { createLogger } from "../../engine/observability/logger.js";
+
+const log = createLogger("budget");
 
 // `ceilingUsd: null` clears the project's own budget; a number (with optional
 // period + gated-figure) sets it. `period` defaults to the same default the config
@@ -148,7 +151,7 @@ export async function handleBudgetPut(
     try {
       await notifyDagChanged(pool, projectId);
     } catch (error) {
-      console.error(`[budget] failed to emit re-walk wake after un-pausing project ${projectId}:`, error);
+      log.error("failed to emit re-walk wake after un-pausing project", { projectId }, error);
     }
   }
 

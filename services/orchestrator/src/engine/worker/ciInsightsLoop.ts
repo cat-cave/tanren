@@ -22,6 +22,9 @@ import { emitCiInsightCandidates } from "../insights/ciInsightsCandidates.js";
 import type { InsightThresholds } from "../insights/thresholds.js";
 import type { AutoRouteDeps, TriageAnswerer } from "../forge/inbox/index.js";
 import type { ForgeAnswererTarget } from "../forge/providerFactory.js";
+import { createLogger } from "../observability/logger.js";
+
+const log = createLogger("ci-insights");
 
 export interface CiInsightsLoopDeps {
   pool: pg.Pool;
@@ -97,7 +100,7 @@ export class CiInsightsLoop {
       try {
         projects = await this.listProjects();
       } catch (error) {
-        console.error("[ci-insights] failed to list projects (will retry next tick):", error);
+        log.error("failed to list projects (will retry next tick)", {}, error);
         return [];
       }
       const processed: string[] = [];
@@ -107,7 +110,7 @@ export class CiInsightsLoop {
           await this.detectForProject(project);
           processed.push(project.project_id);
         } catch (error) {
-          console.error(`[ci-insights] detection failed for project ${project.project_id}:`, error);
+          log.error("detection failed for project", { projectId: project.project_id }, error);
         }
       }
       return processed;

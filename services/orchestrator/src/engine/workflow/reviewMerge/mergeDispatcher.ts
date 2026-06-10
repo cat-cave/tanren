@@ -28,6 +28,8 @@ import {
   reGateResolvedTree,
   type LandOps,
 } from "./mergeLandPaths.js";
+import { createLogger } from "../../observability/logger.js";
+const log = createLogger("merge");
 
 export interface DispatcherDeps {
   input: MergeForRunInput;
@@ -232,10 +234,7 @@ export class MergeDispatcher implements LandOps {
         payload: { ...this.prFields(), integration, integrationBranch: speculativeCleanup },
       });
     } catch (error) {
-      console.warn(
-        `[merge] integration-ref cleanup of ${speculativeCleanup} failed (merge already landed, ignoring):`,
-        error,
-      );
+      log.warn("integration-ref cleanup failed (already landed)", { branch: speculativeCleanup }, error);
     }
   }
 

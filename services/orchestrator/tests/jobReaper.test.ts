@@ -334,7 +334,7 @@ describe("JobReaper loop lifecycle", () => {
       }
       return original(opts);
     };
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const warn = vi.spyOn(console, "error").mockImplementation(() => {});
 
     let passes = 0;
     const gate = gatedSleep();
@@ -382,6 +382,6 @@ describe("JobReaper loop lifecycle", () => {
     await stopped;
 
     // The default logged the dead-letter count (observable effect of the pass).
-    expect(log.mock.calls.flat().join(" ")).toContain("dead_lettered=1");
+    expect(log.mock.calls.flat().join(" ")).toContain('"deadLettered":1');
   });
 });

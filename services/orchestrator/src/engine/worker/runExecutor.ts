@@ -32,7 +32,7 @@ import { CostRecorder } from "../costs/recorder.js";
 import type { VcsProvider } from "../contracts/vcsProvider.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
 import { buildNativeQueueEnqueuer } from "../merge/coordinatorBuild.js";
-import { finalizeRunRecoverable } from "./runFinalize.js";
+import { createLogger, finalizeRunRecoverable } from "./runFinalize.js";
 import { classifyRunFailure } from "./runFailureClassifier.js";
 import { startHeartbeat, type HeartbeatMiss } from "./runHeartbeat.js";
 import { systemActor } from "../state/actor.js";
@@ -40,6 +40,8 @@ import { resolveAppEnvForScope } from "../workflow/resolveAppEnv.js";
 import type { AppEnvScope } from "../repositories/appEnvironment.js";
 import { loadRunExecutionContext, type RunExecutionContext } from "./runExecutionContext.js";
 import { runPlannerLoopWorkflow, type PlannerRunResult, type RunPlannerLoopInput } from "../workflow/plannerRun.js";
+
+const log = createLogger("run-executor");
 
 /** Escape-hatch + CI-poll defaults the run worker applies to a dequeued plan job. */
 export const DEFAULT_ESCAPE_HATCHES: Pick<EscapeHatches, "maxWriterIterPerSubtask" | "maxRetriesPerTransientFailure"> =
@@ -317,9 +319,12 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
     await deps.jobQueue.fail(job.id, failure);
     // Internal-only redacted log: the raw detail surfaces for operator triage off the
     // public timeline, run through the same event redactor that strips URLs/tokens/paths.
-    console.error(
-      `[run-executor] run ${runId} failed [${classified.code}/${classified.stage}]: ${redactErrorDetail(failure.message)}`,
-    );
+    log.error("run failed", {
+      runId,
+      code: classified.code,
+      stage: classified.stage,
+      detail: redactErrorDetail(failure.message),
+    });
     await finalizeRunRecoverable(deps.pool, deps.runStateWriter, runId, classified, resolvedOrgId);
     return { kind: "failed", jobId: job.id, runId, failure };
   } finally {

@@ -14,6 +14,9 @@ import type pg from "pg";
 import { orgScopingPool } from "../data/orgScopedDb.js";
 import type { JobQueue, ReapedJob } from "../contracts/jobQueue.js";
 import { type EventStore, PgEventStore } from "../eventStore.js";
+import { createLogger } from "../observability/logger.js";
+
+const log = createLogger("job-reaper");
 
 export interface ReapJobsDeps {
   pool: pg.Pool;
@@ -196,7 +199,7 @@ export class JobReaper {
       try {
         this.onPass(await reapExpiredJobs(this.deps));
       } catch (error) {
-        console.warn(`[job-reaper] pass failed: ${error instanceof Error ? error.message : String(error)}`);
+        log.warn("pass failed", {}, error);
       }
       if (this.draining) {
         return;
@@ -208,6 +211,6 @@ export class JobReaper {
 
 function defaultOnPass(result: ReapJobsResult): void {
   if (result.requeued > 0 || result.deadLettered > 0) {
-    console.log(`[job-reaper] requeued=${result.requeued} dead_lettered=${result.deadLettered}`);
+    log.info("reaper pass", { requeued: result.requeued, deadLettered: result.deadLettered });
   }
 }

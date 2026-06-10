@@ -219,7 +219,7 @@ describe("selectTemplate · the decision (templating-system.md §3)", () => {
   });
 
   it("a degraded / unvalidated template is NOT selected → none (would-create)", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const warn = vi.spyOn(console, "error").mockImplementation(() => {});
     const decision = await selectTemplate({
       lifecycle: TS_LIFECYCLE,
       registryQuery: registry([
@@ -237,7 +237,7 @@ describe("selectTemplate · the decision (templating-system.md §3)", () => {
   });
 
   it("an EMPTY registry → none → from-scratch (the expected live default)", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const warn = vi.spyOn(console, "error").mockImplementation(() => {});
     const decision = await selectTemplate({
       lifecycle: TS_LIFECYCLE,
       registryQuery: registry([]),
@@ -249,7 +249,7 @@ describe("selectTemplate · the decision (templating-system.md §3)", () => {
   });
 
   it("a registry-query failure fails CLOSED to a blocked/from-scratch outcome", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const warn = vi.spyOn(console, "error").mockImplementation(() => {});
     const decision = await selectTemplate({
       lifecycle: TS_LIFECYCLE,
       registryQuery: async () => {

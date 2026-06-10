@@ -31,6 +31,9 @@ import {
   type RecoverableDriveHoldCeiling,
   type RecoverableDriveHoldResult,
 } from "./recoverableDriveHold.js";
+import { createLogger } from "../observability/logger.js";
+
+const log = createLogger("batch-coordinator");
 
 /** How long after a transient batch drive throw the subscriber re-drives the project. */
 export const BATCH_DRIVE_INFRA_RETRY_AFTER_MS = 3000;
@@ -72,8 +75,12 @@ export async function holdOnRetriableDriveThrow(
   if (!isRetriableInfraError(error)) return undefined;
   await deps.recoverableDriveHolds?.reset(entry.queueId);
   await deps.queue.releaseClaim(entry.queueId);
-  console.warn(
-    `[batch-coordinator] project ${projectId}: merge drive for spec ${entry.specId} threw a transient infra error; holding + re-driving (entry stays queued):`,
+  log.warn(
+    "merge drive threw a transient infra error; holding + re-driving (entry stays queued)",
+    {
+      projectId,
+      specId: entry.specId,
+    },
     error,
   );
   return {
@@ -163,9 +170,11 @@ export async function driveBaseConflict(
     // The verdict named a base conflict but no batch entry matches the culprit spec — a
     // logic mismatch we must NOT paper over by bisecting (which would blame a PR). HOLD
     // loudly (the entries stay queued; the next pass re-forms from fresh state).
-    console.warn(
-      `[batch-coordinator] project ${projectId}: base-conflict verdict named spec ${String(culpritSpecId)} which is not in the formed batch — holding (no dequeue): ${verdict.message}`,
-    );
+    log.warn("base-conflict verdict named a spec not in the formed batch — holding (no dequeue)", {
+      projectId,
+      culpritSpecId: String(culpritSpecId),
+      message: verdict.message,
+    });
     return { projectId, holdReason: "all_blocked", queueDepth };
   }
 

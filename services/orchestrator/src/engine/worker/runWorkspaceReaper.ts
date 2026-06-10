@@ -28,6 +28,9 @@ import type { RunnerHandle } from "../contracts/allocator.js";
 import type { CommandResult, CommandSubstrate } from "../contracts/commandSubstrate.js";
 import { quoteSshShellArg } from "../ssh/command.js";
 import { removeRunWorkspaceDir, safeRunIdPattern, WORKSPACE_RUNS_ROOT } from "../workspace/index.js";
+import { createLogger } from "../observability/logger.js";
+
+const log = createLogger("run-workspace-reaper");
 
 /** Time budget for the directory listing command (a cheap `find`). */
 const LIST_TIMEOUT_MS = 30_000;
@@ -74,6 +77,10 @@ export class RunWorkspaceReaper {
   private timer: NodeJS.Timeout | undefined;
   private stopped = false;
   private ticking = false;
+  // The in-flight tick's promise, tracked so `stop()` can AWAIT it (otherwise a
+  // sweep mid-flight when stop() fires races teardown — e.g. an SSH op outliving
+  // the pool close). Cleared when the tick settles.
+  private inFlightTick: Promise<unknown> | undefined;
   private readonly now: () => number;
   // The resolved long-lived runner handle, cached after the first successful
   // resolution (the static target is fixed for the process lifetime).
@@ -98,80 +105,97 @@ export class RunWorkspaceReaper {
     this.timer.unref?.();
   }
 
-  stop(): void {
+  /**
+   * Stop the loop and AWAIT any in-flight tick so teardown never races a live
+   * sweep (an SSH op outliving the pool close). Clears the timer first so no new
+   * tick starts, then drains the current one. Idempotent.
+   */
+  async stop(): Promise<void> {
     this.stopped = true;
     if (this.timer !== undefined) {
       clearInterval(this.timer);
       this.timer = undefined;
     }
+    // Await the in-flight tick (if any). Its own try/finally never rejects out, but
+    // guard anyway so a stray rejection cannot escape stop().
+    await this.inFlightTick?.catch(() => {});
   }
 
   /** Run one sweep. Returns the run-ids removed this pass (tests assert on it). */
   async tick(): Promise<string[]> {
     if (this.ticking || this.stopped) return [];
     this.ticking = true;
+    const settled = this.runTick();
+    this.inFlightTick = settled;
     try {
-      // Resolve the long-lived runner handle (TOFU host-key discovery for the static
-      // runner). A failure (runner down at boot) is a tolerated skipped tick — never a
-      // throw that stalls the loop, and never a boot-time block. Cached after success.
-      let target: RunnerHandle;
-      try {
-        target = await this.resolveTargetCached();
-      } catch (error) {
-        console.error("[run-workspace-reaper] failed to resolve runner target (will retry next tick):", error);
-        return [];
-      }
-      // A failure to LIST (the runner unreachable, the dir absent at boot) is logged,
-      // never thrown — the next tick retries. Same shape as the audit scheduler's
-      // list-failure tolerance.
-      let entries: RunWorkspaceDirEntry[];
-      try {
-        entries = await this.listRunDirs(target);
-      } catch (error) {
-        console.error("[run-workspace-reaper] failed to list run dirs (will retry next tick):", error);
-        return [];
-      }
-      // The active-set read failing is a HARD skip for this tick (not a degrade to
-      // "delete everything"): without it we cannot prove a dir is inactive, and the
-      // active-run protection is absolute. Log + bail; the next tick retries.
-      let active: Set<string>;
-      try {
-        active = await this.deps.activeRunIds();
-      } catch (error) {
-        console.error("[run-workspace-reaper] failed to read active run set (skipping sweep this tick):", error);
-        return [];
-      }
-      const cutoff = this.now() - this.deps.retentionMs;
-      const removed: string[] = [];
-      for (const entry of entries) {
-        if (this.stopped) break;
-        // SAFETY: refuse to touch any entry that is not a safe `run_*` dir.
-        if (!safeRunIdPattern.test(entry.runId)) {
-          console.warn(`[run-workspace-reaper] skipping non-run entry (never deleted): ${entry.runId}`);
-          continue;
-        }
-        // SAFETY: an active run's dir is its live working tree — protected absolutely.
-        if (active.has(entry.runId)) continue;
-        // Retention grace: a recently-ended run's dir is left for the next sweep.
-        if (entry.mtimeMs > cutoff) continue;
-        // Per-dir tolerance: a failed `rm` on ONE dir is logged and the sweep
-        // continues — never stalls the rest. (removeRunWorkspaceDir never throws.)
-        const result = await removeRunWorkspaceDir(this.deps.ssh, target, entry.runId);
-        if (result.removed) {
-          removed.push(entry.runId);
-        } else {
-          console.warn(
-            `[run-workspace-reaper] failed to remove stale dir ${entry.runId} (will retry next tick): ${result.reason ?? "unknown"}`,
-          );
-        }
-      }
-      if (removed.length > 0) {
-        console.log(`[run-workspace-reaper] removed ${removed.length} stale run dir(s)`);
-      }
-      return removed;
+      return await settled;
     } finally {
       this.ticking = false;
+      if (this.inFlightTick === settled) this.inFlightTick = undefined;
     }
+  }
+
+  /** The actual sweep body, separated so `tick()` can track its in-flight promise. */
+  private async runTick(): Promise<string[]> {
+    // Resolve the long-lived runner handle (TOFU host-key discovery for the static
+    // runner). A failure (runner down at boot) is a tolerated skipped tick — never a
+    // throw that stalls the loop, and never a boot-time block. Cached after success.
+    let target: RunnerHandle;
+    try {
+      target = await this.resolveTargetCached();
+    } catch (error) {
+      log.error("failed to resolve runner target (will retry next tick)", {}, error);
+      return [];
+    }
+    // A failure to LIST (the runner unreachable, the dir absent at boot) is logged,
+    // never thrown — the next tick retries. Same shape as the audit scheduler's
+    // list-failure tolerance.
+    let entries: RunWorkspaceDirEntry[];
+    try {
+      entries = await this.listRunDirs(target);
+    } catch (error) {
+      log.error("failed to list run dirs (will retry next tick)", {}, error);
+      return [];
+    }
+    // The active-set read failing is a HARD skip for this tick (not a degrade to
+    // "delete everything"): without it we cannot prove a dir is inactive, and the
+    // active-run protection is absolute. Log + bail; the next tick retries.
+    let active: Set<string>;
+    try {
+      active = await this.deps.activeRunIds();
+    } catch (error) {
+      log.error("failed to read active run set (skipping sweep this tick)", {}, error);
+      return [];
+    }
+    const cutoff = this.now() - this.deps.retentionMs;
+    const removed: string[] = [];
+    for (const entry of entries) {
+      if (this.stopped) break;
+      // SAFETY: refuse to touch any entry that is not a safe `run_*` dir.
+      if (!safeRunIdPattern.test(entry.runId)) {
+        log.warn("skipping non-run entry (never deleted)", { runId: entry.runId });
+        continue;
+      }
+      // SAFETY: an active run's dir is its live working tree — protected absolutely.
+      if (active.has(entry.runId)) continue;
+      // Retention grace: a recently-ended run's dir is left for the next sweep.
+      if (entry.mtimeMs > cutoff) continue;
+      // Per-dir tolerance: a failed `rm` on ONE dir is logged and the sweep
+      // continues — never stalls the rest. (removeRunWorkspaceDir never throws.)
+      const result = await removeRunWorkspaceDir(this.deps.ssh, target, entry.runId);
+      if (result.removed) {
+        removed.push(entry.runId);
+      } else {
+        log.warn("failed to remove stale dir (will retry next tick)", {
+          runId: entry.runId,
+          reason: result.reason ?? "unknown",
+        });
+      }
+    }
+    if (removed.length > 0) {
+      log.info("removed stale run dir(s)", { count: removed.length });
+    }
+    return removed;
   }
 
   /** Resolve the runner handle once, caching the first success. */

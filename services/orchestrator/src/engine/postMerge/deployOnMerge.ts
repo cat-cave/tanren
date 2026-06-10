@@ -50,6 +50,8 @@ import { OrgIntegrationsStore } from "../repositories/orgIntegrations.js";
 import { attachRuntimeAppEnv } from "../workflow/attachRuntimeAppEnv.js";
 import { deployProvisionerFor } from "../workflow/deployProvisionerFor.js";
 import type { UrlReachabilityProbe, VerifyPollPolicy } from "../contracts/deployAdapter.js";
+import { createLogger } from "../observability/logger.js";
+const log = createLogger("deploy-on-merge");
 
 // How many times verification is (re-)run before escalating to `deploy.failed`. Each
 // attempt re-polls the deployment (the verify poll budget provides the per-attempt
@@ -155,10 +157,7 @@ export class DeployOnMergeWatcher {
     if (resolved.kind === "none") {
       // No deploy EXPECTED (no config, no linked deploy integration) — a legitimate no-op
       // even when the merge recorded no sha (there is nothing to deploy).
-      console.info(
-        `[deploy-on-merge] run ${runId} (project ${projectId}) merged with no deploy configured and ` +
-          `no deploy integration linked — skipping deploy (legitimate no-op).`,
-      );
+      log.info("merged with no deploy configured/linked — skipping deploy (legitimate no-op)", { runId, projectId });
       return;
     }
 

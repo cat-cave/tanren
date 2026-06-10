@@ -20,6 +20,9 @@
 
 import { JOB_QUEUE_CHANNEL, type PgNotifyListener } from "@tanren/db";
 import { executeNextPlanJob, type ExecuteJobResult, type RunExecutorDeps } from "./runExecutor.js";
+import { createLogger } from "../observability/logger.js";
+
+const log = createLogger("run-worker");
 
 export interface RunWorkerOptions {
   concurrency?: number;
@@ -188,8 +191,8 @@ function unset(): void {}
 
 function defaultOnResult(result: ExecuteJobResult): void {
   if (result.kind === "completed") {
-    console.log(`[run-worker] job ${result.jobId} completed run ${result.runId} (outcome=${result.outcome})`);
+    log.info("job completed run", { jobId: result.jobId, runId: result.runId, outcome: result.outcome });
   } else if (result.kind === "failed") {
-    console.warn(`[run-worker] job ${result.jobId} failed (${result.failure.kind}): ${result.failure.message}`);
+    log.warn("job failed", { jobId: result.jobId, failureKind: result.failure.kind, message: result.failure.message });
   }
 }

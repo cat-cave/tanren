@@ -80,14 +80,14 @@ describe("resolveGithubStaticRef — PROPAGATE on a corrupt project config (wron
 
 describe("resolveGovernancePosture — LOUD default `strict` on a corrupt config", () => {
   it("returns the fail-closed `strict` default AND logs (never a silent catch)", () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const warn = vi.spyOn(console, "error").mockImplementation(() => {});
     expect(resolveGovernancePosture(CORRUPT_PROJECT_CONFIG)).toBe("strict");
     expect(warn).toHaveBeenCalledOnce();
     expect(warn.mock.calls[0]?.join(" ")).toMatch(/governance posture/iu);
   });
 
   it("reads the real posture from a clean config (no warn)", () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const warn = vi.spyOn(console, "error").mockImplementation(() => {});
     expect(resolveGovernancePosture({ version: 1, governancePosture: "lenient" })).toBe("lenient");
     expect(warn).not.toHaveBeenCalled();
   });

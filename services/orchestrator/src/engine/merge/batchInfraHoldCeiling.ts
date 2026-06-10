@@ -26,6 +26,9 @@ import type { CoordinateResult, MergeQueueEntry, MergeQueueModel } from "../cont
 import type { BatchMergeEventEmitter } from "./batchCoordinator.js";
 import { type HoldCeilingStore, InMemoryHoldCeilingStore } from "./holdCeilingStore.js";
 import { alertRetryAfterMs } from "./retrySchedule.js";
+import { createLogger } from "../observability/logger.js";
+
+const log = createLogger("batch-coordinator");
 
 /** The in-pass retry budget already burned before a hold (for the emitted attempt count). */
 const HELD_AFTER_ATTEMPTS = 3;
@@ -67,9 +70,11 @@ export async function holdOnInfra(args: {
       terminal: true,
       consecutiveHolds: recorded.holds,
     });
-    console.error(
-      `[batch-coordinator] project ${projectId}: batch check ALERT after ${recorded.holds} consecutive infra holds; continuing autonomous re-drive after backoff: ${message}`,
-    );
+    log.error("batch check ALERT after consecutive infra holds; continuing autonomous re-drive after backoff", {
+      projectId,
+      consecutiveHolds: recorded.holds,
+      message,
+    });
     return { projectId, holdReason: "infra_error", retryAfterMs: INFRA_HOLD_ALERT_RETRY_AFTER_MS, queueDepth };
   }
   await events.emitInfraBlocked({ projectId, batch, message, attempts: HELD_AFTER_ATTEMPTS });
@@ -86,9 +91,7 @@ export async function terminalInfraBlock(args: {
   kind?: "missing_required_credential" | "ambiguous_merge_state";
 }): Promise<CoordinateResult> {
   await markBatchInfraBlockedAfterEvent({ ...args, attempts: 1, terminal: true, consecutiveHolds: 1 });
-  console.error(
-    `[batch-coordinator] project ${args.projectId}: batch drive HALTED; operator attention required: ${args.message}`,
-  );
+  log.error("batch drive HALTED; operator attention required", { projectId: args.projectId, message: args.message });
   return { projectId: args.projectId, holdReason: "infra_blocked", queueDepth: args.queueDepth };
 }
 

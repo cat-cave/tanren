@@ -121,6 +121,7 @@ describe("findTokenUsageBounded", () => {
     expect(out?.tokenUsage).toBeUndefined();
     expect(errorSpy).toHaveBeenCalled();
     expect(String(errorSpy.mock.calls[0]?.[0])).toContain("usage-parse-bounded");
-    expect(String(errorSpy.mock.calls[0]?.[0])).toContain("[codex]");
+    // The structured logger carries the provider in the `provider` field.
+    expect(String(errorSpy.mock.calls[0]?.[0])).toContain('"provider":"codex"');
   });
 });

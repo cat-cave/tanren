@@ -53,6 +53,10 @@ class MemoryStore implements RunnerStore {
   async insert(record: RunnerRecord): Promise<void> {
     this.records.push({ ...record });
   }
+  async recordAllocated(): Promise<void> {
+    // The API tests assert HTTP behavior, not the audit row (covered in the
+    // lifecycle unit tests); a no-op stub satisfies the RunnerStore contract.
+  }
   async markReleased(runnerId: string): Promise<RunnerRecord | undefined> {
     const record = this.records.find((r) => r.runnerId === runnerId && !r.released);
     if (record === undefined) return undefined;

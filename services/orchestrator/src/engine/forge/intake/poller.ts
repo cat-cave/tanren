@@ -29,6 +29,9 @@ import {
 } from "../inbox/index.js";
 import { buildIntakeConnectorMapForOrg, isCredentialResolutionError } from "./issueSourceSeam.js";
 import { sweepStuckCandidates, sweepWebhookEvents, type WebhookProcessorDeps } from "./webhookProcessor.js";
+import { createLogger } from "../../observability/logger.js";
+
+const log = createLogger("intake-poller");
 
 // The poll knobs a source carries on its `config` (alongside the connector's own
 // config). `pollIntervalMs` is the per-source cadence; absence ⇒ the org default.
@@ -218,7 +221,7 @@ export class IntakePoller {
       try {
         sources = await this.listDuePollableSources();
       } catch (error) {
-        console.error("[intake-poller] failed to list pollable sources (will retry next tick):", error);
+        log.error("failed to list pollable sources (will retry next tick)", {}, error);
         return [];
       }
       const results: PollSourceResult[] = [];
@@ -238,7 +241,7 @@ export class IntakePoller {
           if (isCredentialResolutionError(error)) throw error;
           // Any OTHER source failure (rate limit, transient connector error) never
           // stalls the others; it retries on the next due tick.
-          console.error(`[intake-poller] poll of source ${source.id} failed:`, error);
+          log.error("poll of source failed", { sourceId: source.id }, error);
           this.lastPolledAt.set(source.id, this.now());
         }
       }
@@ -252,12 +255,12 @@ export class IntakePoller {
       try {
         await sweepWebhookEvents(this.processorDeps());
       } catch (error) {
-        console.error("[intake-poller] webhook-event sweep failed (will retry next tick):", error);
+        log.error("webhook-event sweep failed (will retry next tick)", {}, error);
       }
       try {
         await sweepStuckCandidates(this.processorDeps());
       } catch (error) {
-        console.error("[intake-poller] stuck-candidate sweep failed (will retry next tick):", error);
+        log.error("stuck-candidate sweep failed (will retry next tick)", {}, error);
       }
       return results;
     } finally {

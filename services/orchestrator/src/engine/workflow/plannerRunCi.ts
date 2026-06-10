@@ -27,6 +27,9 @@ import { type GateOutcome, publishGateVerdictBestEffort, runNativeMergeGate } fr
 import type { EventStore } from "../eventStore.js";
 import type { ReGateCiHook } from "./reviewMerge/index.js";
 import type { RunPlannerLoopInput } from "./plannerRun.js";
+import { createLogger } from "../observability/logger.js";
+
+const log = createLogger("gate");
 
 /** The live-runner context the in-loop merge gate runs + publishes against. */
 export interface MergeGateRunContext {
@@ -96,9 +99,10 @@ async function publishMergeVerdict(
   } catch (error) {
     const context = input.context;
     const reason = error instanceof Error ? error.message : String(error);
-    console.warn(
-      `[gate] forge verdict publish PREP failed for run ${context.runId} (non-fatal; merging on internal verdict): ${reason}`,
-    );
+    log.warn("forge verdict publish PREP failed (non-fatal; merging on internal verdict)", {
+      runId: context.runId,
+      reason,
+    });
     await ctx.eventStore
       .append({
         runId: context.runId,
@@ -110,7 +114,7 @@ async function publishMergeVerdict(
       // Even the audit append is best-effort here — a publish-prep failure must NEVER fail
       // a passed run, so a failure to record the warning is logged + swallowed.
       .catch((appendError: unknown) => {
-        console.warn(`[gate] failed to record gate.publish_failed for run ${context.runId}:`, appendError);
+        log.warn("failed to record gate.publish_failed", { runId: context.runId }, appendError);
       });
   }
 }
@@ -161,9 +165,10 @@ async function doPublishMergeVerdict(
     "pre_merge",
     outcome.passed,
     async ({ when, headSha: sha, passed, reason }) => {
-      console.warn(
-        `[gate] forge verdict publish failed for run ${context.runId} (non-fatal; merging on internal verdict): ${reason}`,
-      );
+      log.warn("forge verdict publish failed (non-fatal; merging on internal verdict)", {
+        runId: context.runId,
+        reason,
+      });
       await ctx.eventStore.append({
         runId: context.runId,
         specId: context.specId,

@@ -22,6 +22,9 @@ import { PgEventStore, type EventStore } from "../eventStore.js";
 import { publishGateVerdictBestEffort } from "../workflow/gate/index.js";
 import { runFreshRunnerMergeGate } from "./freshRunnerGate.js";
 import type { ReGateCiHook } from "../workflow/reviewMerge/index.js";
+import { createLogger } from "../observability/logger.js";
+
+const log = createLogger("merge");
 
 /** The terminal runner image a fresh-runner re-gate allocates against when the project sets none. */
 const DEFAULT_RE_GATE_RUNNER_IMAGE = CANONICAL_RUNNER_IMAGE;
@@ -97,7 +100,7 @@ export function buildReGateCiForQueuedRun(deps: BuildReGateCiForQueuedRunDeps): 
     } catch (error) {
       // An infra error during the re-gate (allocate/clone/bootstrap) is NOT a verdict —
       // hold the merge (recoverable) rather than merging an unverified ref or failing it.
-      console.error(`[merge] native re-gate of run ${deps.runId} errored; holding the merge:`, error);
+      log.error("native re-gate errored; holding the merge", { runId: deps.runId }, error);
       return { status: "pending" };
     }
   };
@@ -138,9 +141,10 @@ async function publishReGateVerdict(
     "pre_merge",
     passed,
     async ({ when, headSha: sha, passed: verdictPassed, reason }) => {
-      console.warn(
-        `[merge] forge re-gate verdict publish failed for run ${deps.runId} (non-fatal; merge stands on internal verdict): ${reason}`,
-      );
+      log.warn("forge re-gate verdict publish failed (non-fatal; merge stands on internal verdict)", {
+        runId: deps.runId,
+        reason,
+      });
       await eventStore.append({
         runId: deps.runId,
         specId: deps.specId,

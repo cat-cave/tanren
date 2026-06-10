@@ -17,6 +17,9 @@
 // real, well-formed case is shallow and finds it long before any cap).
 
 import type { TokenUsage } from "./types.js";
+import { createLogger } from "../observability/logger.js";
+
+const log = createLogger("provider-usage");
 
 // Generous caps: every real provider usage record sits within the first few
 // levels of a single event object and a handful of nodes. These bounds only ever
@@ -37,10 +40,10 @@ export function findTokenUsageBounded(
     // LOUD, never silent: the usage-parse hit a bound. Surfacing this keeps the
     // token-accounting invariant honest — a bounded parse that found nothing is a
     // VISIBLE signal, not a quiet zero.
-    console.error(
-      `[${provider}] usage-parse-bounded: token-usage walk hit the ${budget.reason} bound ` +
-        `(maxDepth=${MAX_USAGE_PARSE_DEPTH}, maxNodes=${MAX_USAGE_PARSE_NODES}); ` +
-        `usage may be UNDER-counted for this event. This indicates a hostile/buggy provider JSONL event.`,
+    log.error(
+      "usage-parse-bounded: token-usage walk hit a parse bound; usage may be UNDER-counted for this event. " +
+        "This indicates a hostile/buggy provider JSONL event.",
+      { provider, reason: budget.reason, maxDepth: MAX_USAGE_PARSE_DEPTH, maxNodes: MAX_USAGE_PARSE_NODES },
     );
   }
   return found;

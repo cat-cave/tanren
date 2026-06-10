@@ -187,6 +187,29 @@ describe("SSH substrate contract", () => {
     expect(state.destroyCount).toBe(1);
   });
 
+  it("rejects an 'error' emitted SYNCHRONOUSLY during connect (listener attached before connect)", async () => {
+    // The error-listener-before-connect race: if the substrate attached its "error"
+    // listener AFTER calling client.connect(), an error ssh2 emits synchronously
+    // inside connect() (a fail-fast DNS/socket error) would find no listener and
+    // Node's EventEmitter would THROW it as an unhandled "error" — escaping the
+    // in-flight op as a crash rather than rejecting it. The fake below emits "error"
+    // SYNCHRONOUSLY from connect(); the run must settle to a clean ssh_failed result
+    // (and the test must not crash with an unhandled "error").
+    const secrets = new FakeSecretStore();
+    await secrets.put({ ref: target.identitySecretRef, value: "private-key" });
+    const { client, state } = createSyncErrorOnConnectClient();
+    const substrate = new SshCommandSubstrate(secrets, { clientFactory: () => client });
+
+    const result = await substrate.run(target, { command: "echo ok", timeoutMs: 100 });
+
+    expect(result.exitCode).toBeNull();
+    expect(result.timedOut).toBe(false);
+    expect(result.failure?.kind).toBe("ssh_failed");
+    expect(result.failure?.message).toBe("connect ECONNREFUSED 10.0.0.1:22");
+    // The synchronous error drove exactly one settle() → one destroy().
+    expect(state.destroyCount).toBe(1);
+  });
+
   it("returns ssh_failed with captured output when stdin end triggers a channel error", async () => {
     const secrets = new FakeSecretStore();
     await secrets.put({ ref: target.identitySecretRef, value: "private-key" });
@@ -280,6 +303,32 @@ function createChannelErrorClient(): {
 }
 
 function noExecError(): Error | undefined {}
+
+/**
+ * A fake ssh2 Client whose `connect()` emits "error" SYNCHRONOUSLY (inline, before
+ * returning) — reproducing a fail-fast socket/DNS error. We attach NO listener of
+ * our own, so if the substrate wired its "error" handler AFTER connect() the inline
+ * emit would throw an unhandled "error" and crash this test. `destroyCount` is
+ * tracked via the method override.
+ */
+function createSyncErrorOnConnectClient(): { client: Client & EventEmitter; state: { destroyCount: number } } {
+  const emitter = new EventEmitter();
+  const state = { destroyCount: 0 };
+  const client = Object.assign(emitter, {
+    connect: () => {
+      // Emit inline (synchronous), the instant connect() runs — BEFORE it returns.
+      emitter.emit("error", new Error("connect ECONNREFUSED 10.0.0.1:22"));
+      return client;
+    },
+    destroy: () => {
+      state.destroyCount += 1;
+      return client;
+    },
+    end: () => client,
+    exec: () => client,
+  });
+  return { client: client as unknown as Client & EventEmitter, state };
+}
 
 /**
  * A fake ssh2 Client whose `destroy()` re-emits "error" — reproducing ssh2's

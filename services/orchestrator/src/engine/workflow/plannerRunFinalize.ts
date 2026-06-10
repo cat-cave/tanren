@@ -20,6 +20,9 @@ import { removeRunWorkspaceDir, WorkspaceBootstrapError } from "../workspace/ind
 import type { MergeForRunResult } from "./reviewMerge/index.js";
 import type { PlannerRunContext, RunPlannerLoopInput } from "./plannerRun.js";
 import type { SubtaskLoopOutcome } from "./subtaskLoop.js";
+import { createLogger } from "../observability/logger.js";
+
+const log = createLogger("run-workspace");
 
 // Dimension D per-run credential-scoping seam: re-exported here (alongside the
 // other lifecycle-write helpers) so `plannerRun.ts` imports it from a module it
@@ -354,9 +357,10 @@ export async function releaseRunnerWithCleanupProof(
   // re-thrown, so it cannot mask the run's real failure in the caller's `finally`.
   const teardown = await removeRunWorkspaceDir(runWorkspace.ssh, runWorkspace.target, runWorkspace.runId);
   if (!teardown.removed) {
-    console.warn(
-      `[run-workspace] failed to remove ${runWorkspace.runId} sandbox at end of run (reaper will reclaim): ${teardown.reason ?? "unknown"}`,
-    );
+    log.warn("failed to remove sandbox at end of run (reaper will reclaim)", {
+      runId: runWorkspace.runId,
+      reason: teardown.reason ?? "unknown",
+    });
   }
   await appendEvent("runner.released", { runnerId });
   // Release through the RELEASE FINALIZER seam: it owns the release + returns a

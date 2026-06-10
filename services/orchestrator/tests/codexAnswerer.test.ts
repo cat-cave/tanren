@@ -55,10 +55,14 @@ describe("Codex Answerer adapter", () => {
     expect(ssh.commands[0]?.command.command).toContain("/run_answerer_1/codex-home");
     expect(ssh.commands[2]?.command.command).toContain("cat >");
     expect(ssh.commands[2]?.command.stdin).toBe(JSON.stringify(checkAnswerSchema.jsonSchema));
-    expect(ssh.commands[3]?.command.command).toBe(
-      "CODEX_HOME='/home/tanren/.tanren/runs/run_answerer_1/codex-home' codex exec --sandbox read-only --json --ignore-user-config --ignore-rules --skip-git-repo-check --cd '/home/tanren/.tanren/runs/run_answerer_1/tanren.check_answer.v1' --output-schema '/home/tanren/.tanren/runs/run_answerer_1/codex-home/tanren.check_answer.v1.schema.json' --output-last-message '/home/tanren/.tanren/runs/run_answerer_1/codex-home/tanren.check_answer.v1.response.json' -",
+    // The schema/workspace/output names carry a per-call UNIQUENESS suffix (H10
+    // collision fix) — `<schemaName>-<hex>` — so two concurrent answerers sharing a
+    // CODEX_HOME never clobber each other. Assert the command shape allowing the suffix.
+    const execCommand = ssh.commands[3]?.command.command ?? "";
+    expect(execCommand).toMatch(
+      /^CODEX_HOME='\/home\/tanren\/\.tanren\/runs\/run_answerer_1\/codex-home' codex exec --sandbox read-only --json --ignore-user-config --ignore-rules --skip-git-repo-check --cd '\/home\/tanren\/\.tanren\/runs\/run_answerer_1\/tanren\.check_answer\.v1-[0-9a-f]+' --output-schema '\/home\/tanren\/\.tanren\/runs\/run_answerer_1\/codex-home\/tanren\.check_answer\.v1-[0-9a-f]+\.schema\.json' --output-last-message '\/home\/tanren\/\.tanren\/runs\/run_answerer_1\/codex-home\/tanren\.check_answer\.v1-[0-9a-f]+\.response\.json' -$/u,
     );
-    expect(ssh.commands[3]?.command.command).not.toContain("workspace-write");
+    expect(execCommand).not.toContain("workspace-write");
     expect(ssh.commands[3]?.command.stdin).toBe("judge this diff");
     expect(result.done).toBe(true);
   });

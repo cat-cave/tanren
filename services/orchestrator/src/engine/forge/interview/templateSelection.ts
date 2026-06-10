@@ -25,6 +25,9 @@ import type { ActorRef } from "../../state/actor.js";
 import type { Template, TemplateCapabilityQuery, TemplateStatus } from "../../repositories/templates.js";
 import type { TemplateValidationProof } from "../../templates/manifest.js";
 import type { CaptureLifecycle } from "./types.js";
+import { createLogger } from "../../observability/logger.js";
+
+const log = createLogger("template-selection");
 
 // ── Eligibility + freshness ─────────────────────────────────────────────────
 
@@ -326,10 +329,6 @@ export interface SelectTemplateInput {
   createForNoMatch?: (lifecycle: CaptureLifecycle) => Promise<SelectedTemplate | undefined>;
 }
 
-// LOUD diagnostic prefix for the selection path (the only logging convention in
-// this layer; matches the `[auditor]`/gate `console.warn` style).
-const LOG = "[template-selection]";
-
 // Run the SELECTION + DECISION (templating-system.md §3). Derives the capability
 // query from the captured lifecycle, queries the registry (org-scoped), ranks the
 // eligible candidates, and DECIDES strong/partial/none. The chosen candidate is
@@ -347,7 +346,7 @@ export async function selectTemplate(input: SelectTemplateInput): Promise<Templa
   } catch (error) {
     // The registry query itself FAILED (a DB error). Fail-closed to from-scratch
     // with a LOUD log — a broken registry must never strand onboarding.
-    console.warn(`${LOG} registry query failed — falling back to from-scratch scaffold:`, error);
+    log.warn("registry query failed — falling back to from-scratch scaffold", {}, error);
     return { kind: "blocked", query, reasons: ["registry-query-failed"] };
   }
 
@@ -368,9 +367,9 @@ export async function selectTemplate(input: SelectTemplateInput): Promise<Templa
   // between query + decide would otherwise leak a stale seed).
   const proof = top.template.manifest.validationProof;
   if (!isTemplateEligible(top.template, now) || proof === null) {
-    console.warn(
-      `${LOG} top candidate ${top.template.id} failed the final freshness re-check ` +
-        "(proof stale/missing) — REJECTING the seed and falling back to from-scratch.",
+    log.warn(
+      "top candidate failed the final freshness re-check (proof stale/missing) — REJECTING the seed and falling back to from-scratch",
+      { templateId: top.template.id },
     );
     return { kind: "blocked", query, topScore: top.score, reasons: ["top-candidate-stale", "fail-closed-fallback"] };
   }
@@ -395,11 +394,10 @@ async function createForNoMatchOrFallThrough(
   query: TemplateCapabilityQuery,
 ): Promise<TemplateSelectionDecision> {
   if (input.createForNoMatch === undefined) {
-    console.warn(
-      `${LOG} no eligible template for stack="${input.lifecycle.stack}" ` +
-        `(query=${JSON.stringify(query)}) — no creation flow wired; ` +
-        "falling through to from-scratch scaffold.",
-    );
+    log.warn("no eligible template — no creation flow wired; falling through to from-scratch scaffold", {
+      stack: input.lifecycle.stack,
+      query: JSON.stringify(query),
+    });
     return { kind: "none", query, reasons: ["no-eligible-template", "would-create"] };
   }
   let created: SelectedTemplate | undefined;
@@ -408,18 +406,19 @@ async function createForNoMatchOrFallThrough(
   } catch (error) {
     // A creation that FAILED (ungrounded research / failed validation / build
     // non-convergence) must never strand onboarding — log LOUD + fall back.
-    console.warn(
-      `${LOG} no eligible template for stack="${input.lifecycle.stack}" — creation FAILED; ` +
-        "falling back to from-scratch scaffold:",
+    log.warn(
+      "no eligible template — creation FAILED; falling back to from-scratch scaffold",
+      {
+        stack: input.lifecycle.stack,
+      },
       error,
     );
     return { kind: "none", query, reasons: ["no-eligible-template", "creation-failed", "from-scratch-fallback"] };
   }
   if (created === undefined) {
-    console.warn(
-      `${LOG} no eligible template for stack="${input.lifecycle.stack}" — creation produced no usable template; ` +
-        "falling through to from-scratch scaffold.",
-    );
+    log.warn("no eligible template — creation produced no usable template; falling through to from-scratch scaffold", {
+      stack: input.lifecycle.stack,
+    });
     return { kind: "none", query, reasons: ["no-eligible-template", "creation-no-result", "from-scratch-fallback"] };
   }
   // CREATED + SEED: a freshly-validated template seeds the scaffold (a strong match).

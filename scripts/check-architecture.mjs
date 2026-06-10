@@ -19,12 +19,10 @@ const patterns = [
   "justfile",
 ];
 const ignoredDirs = new Set(["node_modules", "dist", "coverage", ".git"]);
-// Long-running narrative docs (gain sections as the plan evolves; 500-line cap doesn't fit).
+// Long-running narrative docs (gain sections as the plan evolves) — the 500-line source cap doesn't fit.
 const roadmapDocs = ["PROJECT_BRIEF.md", "ROADMAP.md", "docs/architecture/autonomy-engine.md"];
-// The vendored LiteLLM model-price snapshot (refreshed by scripts/refresh-model-prices.mjs) is DATA, exempt from the 500-line source cap.
-// cspell.json is appended: a DATA word-list (grows with the codebase), exempt like the vendored data.
+// DATA, exempt from the 500-line source cap: the vendored LiteLLM model-price snapshot + cspell.json word-list (both grow with the codebase).
 const vendoredData = ["services/orchestrator/src/engine/costs/pricing/model_prices.json", "cspell.json"];
-// `justfile` is also exempt: the command CATALOG grows monotonically, not a source module (like the migration DDL tail).
 const lineMaxExclusions = new Set([...roadmapDocs, ...vendoredData, "pnpm-lock.yaml", "justfile"]);
 const invariantDocExclusions = new Set(["PROJECT_BRIEF.md", "docs/contracts/architecture-checks.md"]);
 const rawEventWriteProofs = [
@@ -126,6 +124,8 @@ function checkSingleEventWriter(projectFiles) {
     if (
       invariantDocExclusions.has(file) ||
       file === "services/orchestrator/src/engine/eventStore.ts" ||
+      // pgAllocatorEvents.ts is the allocator's SOLE events writer (separate de-priv service).
+      file === "services/allocator/src/pgAllocatorEvents.ts" ||
       file.startsWith("db/migrations/")
     ) {
       continue;

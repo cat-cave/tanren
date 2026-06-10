@@ -23,6 +23,9 @@ import { SecretStoreCredentialRegistry, type CredentialRegistry } from "./routes
 import { mountFeatureRoutes } from "./mountFeatureRoutes.js";
 import { mountRootApiRoutes } from "./mountRootApiRoutes.js";
 import { parsedEnv } from "./envSchema.js";
+import { createLogger } from "./engine/observability/logger.js";
+
+const log = createLogger("orchestrator");
 
 export { buildAuthFromEnv, type BuildAppAuthOptions } from "./mainAuth.js";
 
@@ -289,7 +292,7 @@ async function seedRunnerIdentitySecret(secrets: SecretStore): Promise<void> {
 if (import.meta.url === `file://${process.argv[1]}`) {
   const app = await createApp();
   serve({ fetch: app.fetch, port });
-  console.log(`orchestrator listening on :${port}`);
+  log.info("orchestrator listening", { port });
   // The control-plane INTERNAL mTLS listener (separate HTTPS
   // server) serving `/internal/claim-job` — the same atomic CAS, transport
   // behind mTLS. Starts only when TANREN_INTERNAL_TLS_* are set (see internalServer.ts).
@@ -300,6 +303,6 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   // sharing the same `bootRunWorker` construction as the standalone entrypoint.
   if (runWorkerEnabled()) {
     await bootRunWorker();
-    console.log("run worker started (in-process)");
+    log.info("run worker started (in-process)");
   }
 }

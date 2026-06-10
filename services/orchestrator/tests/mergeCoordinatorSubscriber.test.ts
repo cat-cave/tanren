@@ -368,6 +368,52 @@ describe("MergeCoordinatorSubscriber — pending-hold NOTIFY debounce (Bug B)", 
     }
   });
 
+  it("does not DROP a trigger that arrives mid-pass — it coalesces into exactly one re-pass", async () => {
+    // Capture-and-clear race (Bug B follow-up): a NOTIFY arriving DURING the
+    // coordinate await must be honored as a re-pass, never silently dropped. The
+    // first pass is held open on a deferred; a NOTIFY fires while it is in flight;
+    // when the first pass resolves CLEAN (no hold), the loop must re-run exactly
+    // once for the captured trigger — and no more (no double-fire).
+    const pool = fakePool(PROJECT);
+    const listener = new FakeNotifyListener();
+    const firstResult = deferred<CoordinateResult>();
+    const passes: string[] = [];
+    const coordinator: MergeCoordinator = {
+      async coordinate(projectId: string): Promise<CoordinateResult> {
+        passes.push(projectId);
+        if (passes.length === 1) return firstResult.promise;
+        return { projectId, mergedSpecId: "spec_clean", queueDepth: 1 };
+      },
+    };
+    const sub = new MergeCoordinatorSubscriber({
+      pool,
+      notifyListener: listener as never,
+      coordinator,
+    });
+    try {
+      await sub.start();
+      await flushMicrotasks();
+
+      // First NOTIFY starts pass #1, which parks on the deferred.
+      listener.fire(RUN_ACTIVITY_CHANNEL, "run_0");
+      await flushMicrotasks();
+      expect(passes).toEqual([PROJECT]);
+
+      // A second NOTIFY arrives WHILE pass #1 is still in flight — sets rePending.
+      listener.fire(RUN_ACTIVITY_CHANNEL, "run_1");
+      await flushMicrotasks();
+      expect(passes).toEqual([PROJECT]);
+
+      // Pass #1 resolves CLEAN (no hold). The captured mid-pass trigger must drive
+      // EXACTLY one re-pass — not zero (dropped), not two (double-fired).
+      firstResult.resolve({ projectId: PROJECT, mergedSpecId: "spec_first", queueDepth: 1 });
+      await flushMicrotasks();
+      expect(passes).toEqual([PROJECT, PROJECT]);
+    } finally {
+      sub.stop();
+    }
+  });
+
   it("re-drives a serialized startup hold after its retry timer", async () => {
     vi.useFakeTimers();
     let sub: MergeCoordinatorSubscriber | undefined;

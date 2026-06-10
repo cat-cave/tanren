@@ -21,6 +21,8 @@ import {
   resolveCostSource,
 } from "./sources.js";
 import { defaultModelPriceSource, type ModelPriceSource } from "./pricing/modelPriceSource.js";
+import { createLogger } from "../observability/logger.js";
+const log = createLogger("cost-recorder");
 
 type RecorderClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
@@ -208,7 +210,7 @@ export class CostRecorder {
     // `cost.resolved` event is a derived timeline projection. So a post-row event
     // append failure must NOT throw (that would surface a "record failed" to the
     // caller for a spend row that DID commit, and a retry would double-charge);
-    // instead it is surfaced LOUDLY via a console.error so the committed-row /
+    // instead it is surfaced LOUDLY via a structured error log so the committed-row /
     // missing-event divergence is operator-visible and never silent. A second event
     // append cannot be the loud signal — the same store just failed — so the log IS
     // the signal. The invariant: a committed spend row is never lost; a missing event
@@ -283,7 +285,7 @@ export class CostRecorder {
   // authoritative `cost_records` row has committed, never throwing for an append
   // failure. The committed row is the row-is-truth budget-gate source; a lost event
   // is a timeline-projection gap, not a spend-accounting one. A failure is surfaced
-  // LOUDLY (console.error) — a retry/second append is impossible (the same store just
+  // LOUDLY (structured error log) — a retry/second append is impossible (the same store just
   // failed and the row would double-charge on a `record` retry), so the log IS the
   // loud signal. Returns nothing; the caller's `record` always resolves with the
   // committed-row result.
@@ -302,11 +304,9 @@ export class CostRecorder {
       });
     } catch (error) {
       // LOUD-but-non-fatal: the spend row is committed and authoritative; only the
-      // derived event is missing. Surface the divergence so an operator sees it.
-      console.error(
-        `[cost-recorder] cost.event_append_failed: the cost_records row for run ${context.runId} / task ${context.taskId} COMMITTED but its '${event.eventType}' timeline event could NOT be appended; budget accounting (row-is-truth) is UNAFFECTED, but the run timeline is missing this event:`,
-        error,
-      );
+      // derived timeline event is missing (budget accounting row-is-truth is UNAFFECTED).
+      const ctx = { runId: context.runId, taskId: context.taskId, eventType: event.eventType };
+      log.error("cost.event_append_failed: row committed, timeline event not appended", ctx, error);
     }
   }
 

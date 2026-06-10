@@ -41,6 +41,9 @@ import { integrationNodesDrive } from "../dag/integrationNodesDriveFlag.js";
 import { driveBatchThroughNode } from "./batchIntegrationNodeDrive.js";
 import { batchNodeGate, batchNodeResolveConfig } from "./batchNodeGate.js";
 import { runFreshRunnerMergeGate } from "./freshRunnerGate.js";
+import { createLogger } from "../observability/logger.js";
+
+const log = createLogger("merge");
 
 /** The terminal runner image a batch re-gate allocates against when the project sets none. */
 const DEFAULT_BATCH_RUNNER_IMAGE = CANONICAL_RUNNER_IMAGE;
@@ -255,10 +258,7 @@ export class PgBatchChecker implements BatchChecker {
       // an already-gone ref). Best-effort — a teardown hiccup must never overwrite the
       // verdict (resetRef force-updates a leftover anyway), so it is caught + logged.
       await this.deps.vcsProvider.deleteBranch(repo, integrationBranch, token).catch((error: unknown) => {
-        console.warn(
-          `[merge] batch ref teardown of ${integrationBranch} failed (non-fatal; next build force-resets it):`,
-          error instanceof Error ? error.message : String(error),
-        );
+        log.warn("batch ref teardown failed (non-fatal; next build force-resets it)", { integrationBranch }, error);
       });
     }
   }
@@ -405,10 +405,7 @@ export function resolveGovernancePosture(projectConfig: unknown): GovernancePost
   try {
     return migrateProjectConfig(projectConfig).governancePosture;
   } catch (error) {
-    console.warn(
-      "[merge] governance posture config unreadable; gating fail-closed at `strict`:",
-      error instanceof Error ? error.message : String(error),
-    );
+    log.warn("governance posture config unreadable; gating fail-closed at `strict`", {}, error);
     return "strict";
   }
 }

@@ -23,6 +23,9 @@ import {
 import type { CiConfigV1, CiConfigValidationError, CiYamlParseError } from "../ci/index.js";
 import { ensureWorkspaceDepsInstalled, resolveWorkspaceHeadSha } from "../workspace/index.js";
 import type { RunPlannerLoopInput } from "./plannerRun.js";
+import { createLogger } from "../observability/logger.js";
+
+const log = createLogger("gate");
 
 // Builds the production gate callback. The CI config is resolved lazily on the
 // first gate call (the workspace is bootstrapped by then) and cached for the
@@ -292,13 +295,18 @@ async function ingestGateJunitBestEffort(
       // grain (flaky detection) just went blind. Name the reason + tier + headSha so an
       // operator can tell a reporter misconfig (absent/empty) from a runner/transport
       // hiccup (read_failed). Non-blocking — the gate verdict already stands.
-      console.error(
-        `[gate] native JUnit report EXPECTED but ${result.reason} for run ${input.context.runId} ` +
-          `(tier=${reportingTier?.tier ?? "unknown"}, headSha=${headSha}) — flaky-intelligence has NO per-test ` +
-          `grain for this gate (a reporter misconfig or a runner crash after the test step). Non-blocking.`,
+      log.error(
+        "native JUnit report EXPECTED but missing — flaky-intelligence has NO per-test grain for this gate " +
+          "(a reporter misconfig or a runner crash after the test step). Non-blocking.",
+        {
+          runId: input.context.runId,
+          reason: result.reason,
+          tier: reportingTier?.tier ?? "unknown",
+          headSha,
+        },
       );
     }
   } catch (error) {
-    console.error(`[gate] native JUnit ingest failed for run ${input.context.runId} (non-blocking):`, error);
+    log.error("native JUnit ingest failed (non-blocking)", { runId: input.context.runId }, error);
   }
 }

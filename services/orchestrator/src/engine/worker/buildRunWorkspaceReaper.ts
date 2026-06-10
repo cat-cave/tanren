@@ -26,6 +26,9 @@ import type { SecretStore } from "../contracts/secretStore.js";
 import { StaticRunnerAllocator } from "../allocators/staticRunnerAllocator.js";
 import { PgRunnerStore } from "../allocators/runnerStore.js";
 import { RunWorkspaceReaper, type ActiveRunIdSource } from "./runWorkspaceReaper.js";
+import { createLogger } from "../observability/logger.js";
+
+const log = createLogger("run-workspace-reaper");
 // Re-exported (as a type) so the worker boot imports the reaper TYPE and its starter
 // from a SINGLE module — keeping boot.ts under its dependency-count cap.
 export type { RunWorkspaceReaper } from "./runWorkspaceReaper.js";
@@ -81,10 +84,10 @@ export function buildPgActiveRunIdSource(pool: pg.Pool): ActiveRunIdSource {
 export function startRunWorkspaceReaper(deps: BuildRunWorkspaceReaperDeps): RunWorkspaceReaper | undefined {
   const allocatorKind = bootedAllocatorKind();
   if (allocatorKind !== "static") {
-    console.log(
-      `[run-workspace-reaper] OFF for allocator kind '${allocatorKind}' — ` +
-        "an ephemeral runner's sandbox is destroyed with its container on release (no leak), " +
-        "and manual_ssh multi-host pools are a follow-up. The per-run teardown still runs for every kind.",
+    log.info(
+      "OFF for this allocator kind — an ephemeral runner's sandbox is destroyed with its container on release " +
+        "(no leak), and manual_ssh multi-host pools are a follow-up. The per-run teardown still runs for every kind.",
+      { allocatorKind },
     );
     return undefined;
   }
@@ -115,9 +118,9 @@ export function startRunWorkspaceReaper(deps: BuildRunWorkspaceReaperDeps): RunW
     reapIntervalMs,
   );
   reaper.start();
-  console.log(
-    `[run-workspace-reaper] ON (static runner) — retention=${Math.round(retentionMs / 60_000)}min, ` +
-      `interval=${Math.round(reapIntervalMs / 60_000)}min (config: allocator.runWorkspace*)`,
-  );
+  log.info("ON (static runner) (config: allocator.runWorkspace*)", {
+    retentionMin: Math.round(retentionMs / 60_000),
+    intervalMin: Math.round(reapIntervalMs / 60_000),
+  });
   return reaper;
 }

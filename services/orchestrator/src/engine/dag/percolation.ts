@@ -39,6 +39,9 @@ import {
 } from "../contracts/changePercolation.js";
 import { SpecNotRunnableError } from "../workflow/projectSpecErrors.js";
 import { BaseShiftHeldError } from "./baseShiftCoordinator.js";
+import { createLogger } from "../observability/logger.js";
+
+const log = createLogger("change-percolation");
 
 /** What one full percolation pass over a project produced (for the subscriber + tests). */
 export interface PercolationPassResult {
@@ -142,14 +145,18 @@ export class PercolatingCoordinator implements ChangePercolationCoordinator {
         // it as `held` (a distinct recoverable outcome), so "the live engine HOLDS the
         // work" is observable + visibly recoverable, never mislabeled a real failure.
         if (error instanceof BaseShiftHeldError) {
-          console.warn(
-            `[change-percolation] dependent ${dependent.specId} HELD (fail-closed; work survives, retried next notification): ${error.message}`,
-          );
+          log.warn("dependent HELD (fail-closed; work survives, retried next notification)", {
+            specId: dependent.specId,
+            message: error.message,
+          });
           result.held.push(dependent.specId);
           continue;
         }
-        console.error(
-          `[change-percolation] dependent ${dependent.specId} threw while percolating (recorded + continuing; other dependents still process):`,
+        log.error(
+          "dependent threw while percolating (recorded + continuing; other dependents still process)",
+          {
+            specId: dependent.specId,
+          },
           error,
         );
         result.failed.push(dependent.specId);
@@ -271,8 +278,12 @@ export class PercolatingCoordinator implements ChangePercolationCoordinator {
         // processing the OTHER dependents. Every OTHER error still propagates (no
         // silent fallback). Mirrors the walker's enqueueOrTolerate spirit (#278).
         if (error instanceof SpecNotRunnableError) {
-          console.debug(
-            `[change-percolation] skipped ${dependent.specId}: became ${error.status} between load and re-exec (terminal — not a percolation dependent) — benign`,
+          log.debug(
+            "skipped dependent: became terminal between load and re-exec (not a percolation dependent) — benign",
+            {
+              specId: dependent.specId,
+              status: error.status,
+            },
           );
           result.skipped.push(dependent.specId);
           return;

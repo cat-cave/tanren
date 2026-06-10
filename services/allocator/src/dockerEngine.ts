@@ -190,6 +190,16 @@ function isNotFoundError(error: unknown): boolean {
   return error instanceof Error && (error as { statusCode?: number }).statusCode === 404;
 }
 
+/**
+ * True when `error` carries a numeric HTTP `statusCode` — i.e. the Docker daemon
+ * ANSWERED (any status, even a 404 for a non-existent container). A transport-level
+ * failure (daemon down / socket gone) rejects WITHOUT one. Used by the `/healthz`
+ * self-check to decide liveness from the STATUS CODE, not a body-string regex.
+ */
+export function isHttpStatusError(error: unknown): boolean {
+  return error instanceof Error && typeof (error as { statusCode?: unknown }).statusCode === "number";
+}
+
 function isStateConflictError(error: unknown): boolean {
   return error instanceof Error && (error as { statusCode?: number }).statusCode === 304;
 }

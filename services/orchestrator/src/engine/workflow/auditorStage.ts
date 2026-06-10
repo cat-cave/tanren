@@ -23,6 +23,9 @@ import { auditorFindings, invokeAuditor, type AuditorSpecContext } from "./audit
 import { recordAnswererCost, secondsSince, type SubtaskCostContext } from "./subtaskCost.js";
 import { insertChildTask, markTaskDone, markTaskFailed } from "./subtaskTasks.js";
 import type { StageAppendEvent } from "./subtaskStages.js";
+import { createLogger } from "../observability/logger.js";
+
+const log = createLogger("auditor");
 
 type LoopQueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
@@ -144,7 +147,7 @@ async function failClosedForSchemaMiss(
   auditorTaskId: string,
   error: AnswererSchemaValidationError,
 ): Promise<AuditorStageResult> {
-  console.warn(`[auditor] schema-parse miss for run ${args.runId} — synthesizing a P0 finding to re-audit:`, error);
+  log.warn("schema-parse miss — synthesizing a P0 finding to re-audit", { runId: args.runId }, error);
   await markTaskFailed(args.pool, auditorTaskId, "auditor_schema_invalid", args.writer);
   await args.appendEvent("task.completed", { taskKind: "audit" }, auditorTaskId);
   return { findings: [AUDITOR_SCHEMA_MISS_FINDING], auditorTaskId };
