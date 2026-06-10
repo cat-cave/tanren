@@ -58,6 +58,16 @@ export interface AuditorPromptInput {
 // The canonical self-inspection block: the writer's change is committed on the
 // current branch of the read-only workspace; the agent diffs it itself (so a huge
 // diff is never injected into the prompt, the failure that motivated this).
+//
+// ENTITY-LEVEL ACCELERATOR (docs/roadmap/entity-analysis-layer.md, increment 1):
+// `sem` (an entity-level diff tool on PATH in the runner image) lets the agent
+// reason over WHICH functions/classes/types changed (structural vs cosmetic) and a
+// change's blast radius, so the audit focuses on the structurally-impactful edits
+// and can cheaply skip cosmetic-only ones. It is an OPTIONAL accelerator the agent
+// RUNS ITSELF in its sandbox — never Tanren injecting context — and is NOT required:
+// when `sem` is absent or cannot parse the stack (it covers many but not all
+// languages), the agent falls back to the raw `git diff` below, which remains the
+// authoritative inspection. This keeps the lane stack-flexible (no hard sem dep).
 function selfInspectionBlock(baselineSha: string): string[] {
   return [
     "The writer's change is committed on the current branch of your read-only",
@@ -65,6 +75,20 @@ function selfInspectionBlock(baselineSha: string): string[] {
     `  git diff ${baselineSha} -- . ':(exclude)node_modules'`,
     "to see the change, then read the changed source files. Do NOT expect the diff",
     "to be provided inline — read it from the workspace.",
+    "",
+    "ACCELERATOR (optional): an entity-level diff tool, `sem`, may be on PATH. When",
+    "available, prefer it to focus on what STRUCTURALLY changed before reading files:",
+    `  sem diff --from ${baselineSha} --to HEAD --format json`,
+    "gives the entity-level change map — which functions/classes/types/methods were",
+    "added/modified/deleted/renamed, and which changes are cosmetic-only (formatting/",
+    "comments/whitespace). Use it to skip cosmetic-only changes cheaply and to anchor",
+    "your judgement on the structurally-impactful entities. For a changed entity, run",
+    "  sem impact <entity> --json",
+    "to see its blast radius (dependents + affected tests). `sem` is an ACCELERATOR,",
+    "NOT a replacement: if `sem` is missing, errors, or reports it cannot parse the",
+    "stack (it does not cover every language), fall back to the raw `git diff` above",
+    "and the source files — that raw inspection is always authoritative.",
+    "Never block or change your verdict because `sem` is unavailable.",
   ];
 }
 

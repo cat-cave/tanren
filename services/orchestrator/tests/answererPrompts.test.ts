@@ -36,6 +36,25 @@ describe("buildCheckerPrompt — shared body", () => {
     expect(prompt.trimEnd().endsWith("CLOSING-CHECK")).toBe(true);
   });
 
+  it("instructs the optional sem entity-level accelerator with a raw-diff fallback (entity-analysis-layer §2.2)", () => {
+    const prompt = buildCheckerPrompt({
+      specTitle: "S",
+      specDescription: "D",
+      acceptanceCriteria: ["AC1"],
+      baselineSha,
+      outputInstructions: ["X"],
+    });
+    // The entity-level accelerator: sem diff (structural map) + sem impact (blast radius).
+    expect(prompt).toContain(`sem diff --from ${baselineSha} --to HEAD --format json`);
+    expect(prompt).toContain("sem impact <entity> --json");
+    expect(prompt).toContain("cosmetic-only");
+    // It is OPTIONAL: the raw git diff is the authoritative fallback, never a hard block.
+    expect(prompt).toContain("ACCELERATOR (optional)");
+    expect(prompt).toContain("if `sem` is missing, errors, or reports it cannot parse the");
+    expect(prompt).toContain("fall back to the raw `git diff`");
+    expect(prompt).toContain("Never block or change your verdict because `sem` is unavailable.");
+  });
+
   it("includes the subtask block only when a subtask is supplied (production), omits it otherwise (structured)", () => {
     const withSubtask = buildCheckerPrompt({
       specTitle: "S",
@@ -92,6 +111,20 @@ describe("buildAuditorPrompt — shared body", () => {
     expect(prompt).toContain("Spec title: Spec Y");
     expect(prompt).toContain("- AC1: all helpers exist");
     expect(prompt.trimEnd().endsWith("CLOSING-AUDIT")).toBe(true);
+  });
+
+  it("instructs the optional sem entity-level accelerator with a raw-diff fallback (entity-analysis-layer §2.2)", () => {
+    const prompt = buildAuditorPrompt({
+      specTitle: "S",
+      acceptanceCriteria: ["AC1"],
+      baselineSha,
+      outputInstructions: ["X"],
+    });
+    expect(prompt).toContain(`sem diff --from ${baselineSha} --to HEAD --format json`);
+    expect(prompt).toContain("sem impact <entity> --json");
+    expect(prompt).toContain("ACCELERATOR (optional)");
+    expect(prompt).toContain("fall back to the raw `git diff`");
+    expect(prompt).toContain("Never block or change your verdict because `sem` is unavailable.");
   });
 
   it("includes the executed-subtasks block (production) and the checker-answer block (structured) only when supplied", () => {
