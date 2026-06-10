@@ -55,6 +55,7 @@ function dependent(): SpeculativeDependent {
 
 afterEach(() => {
   delete process.env["BASE_SHIFT_LIVE"];
+  delete process.env["WALKER_JJ_LOCAL_BASE"];
   vi.restoreAllMocks();
 });
 
@@ -240,6 +241,34 @@ describe("baseShiftLive() flag — the Wave-3/Slice-2 cutover (default ON + kill
     await expect(driveRebase(coord)).rejects.toBeInstanceOf(BaseShiftHeldError);
     // The held stub threw BEFORE any DB read — the kill-switch reverted to the stubs.
     expect(counter.reads).toBe(0);
+  });
+
+  it("WS-A PR-6: WALKER_JJ_LOCAL_BASE ON + a speculative dependent ⇒ the LIVE opener still runs (the local-assembly path is reachable)", async () => {
+    // With the jj-local flag ON and a NON-empty re-resolved stack, the live opener takes the
+    // LOCAL stack-assembly arm (`assembleBaseShiftStackWorkspace`) instead of the single-ref
+    // clone — but it STILL loads the run context first (the DB read), proving the live seam (not
+    // the held stub) drives. The assembly itself is realjj-pinned (baseShiftStackAssembly.realjj).
+    process.env["WALKER_JJ_LOCAL_BASE"] = "1";
+    const counter = { reads: 0 };
+    const coord = buildBaseShiftCoordinator({
+      pool: countingPool(counter),
+      vcsProvider: {} as never,
+      secrets: {} as never,
+      ...runnerDeps(),
+    });
+    // A speculative drive (non-empty stack onto the integration ref) — the jj-local opener arm.
+    await expect(
+      coord.rebaseOnto({
+        projectId: PROJECT,
+        dependent: dependent(),
+        newBaseRef: "tanren/integ/spec_b",
+        nonSpeculative: false,
+        ancestorStack: [{ specId: "spec_a", runId: "run_a", branch: "tanren/run_a", headSha: "sha-a-new" }],
+        ancestorSpecId: "spec_a",
+        toSha: "sha-a-new",
+      }),
+    ).rejects.toBeInstanceOf(BaseShiftHeldError);
+    expect(counter.reads).toBeGreaterThanOrEqual(1);
   });
 
   it("flag ON but runner deps ABSENT ⇒ construction THROWS LOUD (a misconfigured live flag, never a silent degrade)", () => {

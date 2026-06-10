@@ -9,9 +9,10 @@
 //       (so the shifted base actually reaches the resolution seam) — a recording resolver
 //       captures exactly what the coordinator handed it.
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import type { SpeculativeDependent } from "../src/engine/contracts/changePercolation.js";
 import type { IntegrationNode } from "../src/engine/contracts/integrationNodes.js";
+import type { AncestorStack } from "../src/engine/dag/ancestorStack.js";
 import type { RebaseResult, RecordedConflict, WorkspaceVcsCore } from "../src/engine/contracts/workspaceVcsCore.js";
 import {
   BaseShiftCoordinator,
@@ -158,6 +159,18 @@ const SPEC_OPENER: BaseShiftWorkspaceOpener = {
   },
 };
 
+/** A recording opener that captures the re-resolved ancestor stack (WS-A PR-6 §2.2). */
+function stackRecordingOpener(): BaseShiftWorkspaceOpener & { seen: Array<AncestorStack | undefined> } {
+  const seen: Array<AncestorStack | undefined> = [];
+  return {
+    seen,
+    async open(input) {
+      seen.push(input.ancestorStack);
+      return { workspaceId: "ws_1", path: "/scratch/ws_1", branch: "tanren/run_b", newBaseSha: "sha-assembled-head" };
+    },
+  };
+}
+
 describe("BaseShiftCoordinator — threads the SHIFTED base (newBaseRef + nonSpeculative) to the resolver", () => {
   it("a speculative shift hands the resolver newBaseRef (the integration ref), NOT defaultBranch", async () => {
     const resolver = recordingResolver();
@@ -203,5 +216,67 @@ describe("BaseShiftCoordinator — threads the SHIFTED base (newBaseRef + nonSpe
       toSha: "sha-new",
     });
     expect(resolver.seen).toEqual([{ newBaseRef: DEFAULT_BRANCH, nonSpeculative: true }]);
+  });
+});
+
+// ---- WS-A PR-6 (§2.2): the coordinator THREADS the re-resolved stack to the opener ----
+
+/** A clean-rebase jj core (so the coordinator reaches keepRun, not the resolver). */
+class CleanCore implements WorkspaceVcsCore {
+  async openWorkspace(): Promise<{ workspaceId: string; path: string }> {
+    return { workspaceId: "ws_1", path: "/scratch/ws_1" };
+  }
+  async branch(): Promise<void> {}
+  async checkout(): Promise<void> {}
+  async commit(): Promise<{ headSha: string }> {
+    return { headSha: "sha" };
+  }
+  async rebaseOnto(): Promise<RebaseResult> {
+    return { outcome: "clean", headSha: "sha-rebased-clean" };
+  }
+  async resolveConflict(): Promise<{ headSha: string }> {
+    return { headSha: "sha-resolved" };
+  }
+  async restackDescendants(): Promise<{ restacked: never[]; stillConflicted: never[] }> {
+    return { restacked: [], stillConflicted: [] };
+  }
+  async exportCleanGitRef(): Promise<{ ref: string; headSha: string }> {
+    return { ref: "r", headSha: "sha" };
+  }
+  async opUndo(): Promise<void> {}
+}
+
+const RESOLVED_STACK: AncestorStack = [
+  { specId: "spec_a", runId: "run_a", branch: "tanren/run_a", headSha: "sha-a-new" },
+];
+
+describe("BaseShiftCoordinator — threads the re-resolved ancestor stack to the opener (WS-A PR-6)", () => {
+  afterEach(() => {
+    delete process.env["WALKER_JJ_LOCAL_BASE"];
+  });
+
+  it("the opener RECEIVES the re-resolved stack ⇒ the live opener assembles it locally (not the synthesized ref)", async () => {
+    const opener = stackRecordingOpener();
+    const coord = new BaseShiftCoordinator({
+      workspace: new CleanCore(),
+      opener,
+      reGate: passingReGate,
+      resolver: recordingResolver(),
+      persistence: noopPersistence,
+      nodes: noNodes,
+      events: noopEvents,
+    });
+    await coord.rebaseOnto({
+      projectId: "project_1",
+      dependent: dependent(),
+      newBaseRef: SHIFTED_BASE,
+      nonSpeculative: false,
+      ancestorStack: RESOLVED_STACK,
+      ancestorSpecId: "spec_a",
+      toSha: "sha-new",
+    });
+    // The opener was handed the re-resolved stack — so the live opener assembles `main +
+    // ordered ancestors` LOCALLY instead of cloning `${newBaseRef}@origin`.
+    expect(opener.seen).toEqual([RESOLVED_STACK]);
   });
 });
