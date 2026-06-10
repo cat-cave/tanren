@@ -4,9 +4,9 @@
 // findings auto-routes each finding INTO THE DAG as a spec — not parking it in
 // the inbox — and that this is idempotent (a re-run resolves the same candidate
 // without a duplicate spec), and that a genuinely-empty audit is a clean pass
-// (no spurious spec). Also exercises the real `createAnswererPassRunner`: it
-// composes the read-only repo index + the audit answerer, and LOUD-fails for a
-// repo-less job (§8a — never a silent empty pass).
+// (no spurious spec). The real `createAnswererPassRunner` (repo-index +
+// default-branch threading + §8a loud-fail) is exercised in its own
+// `answererPassRunner.test.ts`.
 //
 // The pool is a SQL-substring stub (mirrors intakeAutonomous.test.ts) capturing
 // the candidates + the spec INSERTs so the finding → spec hand-off is observable.
@@ -14,20 +14,11 @@
 import type pg from "pg";
 import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
-import {
-  AuditsStore,
-  createAnswererPassRunner,
-  runAuditJob,
-  AuditJobNotProjectScopedError,
-  type AuditAnswerer,
-  type AuditJob,
-  type AuditPassRunner,
-} from "../src/engine/forge/audits/index.js";
+import { AuditsStore, runAuditJob, type AuditPassRunner } from "../src/engine/forge/audits/index.js";
 import { createAuditRoutes } from "../src/routes/audits/index.js";
 import type { ActorContext } from "../src/auth/schemas.js";
 import type { ActorContextEnv } from "../src/middleware/auth.js";
 import { intakeAutoRouteDeps } from "../src/engine/forge/intake/index.js";
-import type { RepoReader } from "../src/engine/forge/brownfield/index.js";
 import type { TriageAnswerer } from "../src/engine/forge/inbox/types.js";
 import type { SpecQualityAnswerer } from "../src/engine/forge/specQuality/index.js";
 import { createDeterministicTriageAnswerer } from "./fixtures/forge/deterministicTriageAnswerer.js";
@@ -364,90 +355,6 @@ describe("runAuditJob → DAG auto-route", () => {
     // CRUCIAL: the run was STILL recorded — last_run stamped — so the next tick won't
     // re-run this same job and re-spend on the same broken spec.
     expect(result.job.lastRun).toBe("2026-06-03T03:00:00.000Z");
-  });
-});
-
-// ── The real Answerer-backed pass runner ────────────────────────────────────
-
-const fakeRepoReader: RepoReader = {
-  index: async (repoUrl) => ({
-    repoUrl,
-    filesIndexed: 1,
-    files: [{ path: "src/users.ts", size: 100, preview: "for (const u of users) { await db.find(u) }" }],
-  }),
-};
-
-const fakeAuditAnswerer: AuditAnswerer = {
-  audit: async () => ({
-    findings: [{ externalId: "n-plus-1", title: "N+1 query", body: "batch it", severity: "P2" }],
-  }),
-};
-
-// A secret store returning a fake token for the org's default github credential
-// ref, so `resolveGithubToken` (static path) resolves without a real provider.
-const fakeSecrets = {
-  get: async (ref: string) => (ref === "gh/org" ? { value: "ghs_fake" } : undefined),
-} as never;
-
-const repoStubQuery = async (text: string): Promise<{ rows: unknown[]; rowCount: number }> => {
-  const sql = text.replaceAll(/\s+/gu, " ").trim();
-  if (sql.includes("SELECT repo_url, config FROM projects")) {
-    return { rows: [{ repo_url: "https://github.com/cat-cave/app", config: {} }], rowCount: 1 };
-  }
-  if (sql.includes("SELECT config FROM organizations")) {
-    // No App installation, an org-default static github credential ref.
-    return { rows: [{ config: { version: 1, defaultCredentials: { github_token: "gh/org" } } }], rowCount: 1 };
-  }
-  return { rows: [], rowCount: 0 };
-};
-
-function repoStubPool(): pg.Pool {
-  return {
-    query: repoStubQuery,
-    connect: async () => ({ query: repoStubQuery, release() {} }),
-  } as unknown as pg.Pool;
-}
-
-function passRunnerJob(projectId: string | null): AuditJob {
-  return {
-    id: "audit_1",
-    orgId: "org_a",
-    projectId,
-    kind: "perf",
-    name: "perf",
-    cadence: "nightly",
-    targetWindow: "",
-    answererCli: "",
-    enabled: true,
-    lastRun: null,
-    findings: { count: 0, severity: "ok", note: "" },
-  };
-}
-
-describe("createAnswererPassRunner", () => {
-  it("indexes the repo read-only and returns the answerer's findings", async () => {
-    const runner = createAnswererPassRunner({
-      pool: repoStubPool(),
-      secrets: fakeSecrets,
-      githubHttp: {} as never,
-      answererFactory: () => fakeAuditAnswerer,
-      repoReaderFor: () => fakeRepoReader,
-    });
-    const result = await runner.run(passRunnerJob("project_a"));
-    expect(result.findings).toHaveLength(1);
-    expect(result.findings[0]!.externalId).toBe("n-plus-1");
-    expect(result.findings[0]!.severity).toBe("P2");
-  });
-
-  it("LOUD-fails for a repo-less (project-less) job — never a silent empty pass", async () => {
-    const runner = createAnswererPassRunner({
-      pool: repoStubPool(),
-      secrets: fakeSecrets,
-      githubHttp: {} as never,
-      answererFactory: () => fakeAuditAnswerer,
-      repoReaderFor: () => fakeRepoReader,
-    });
-    await expect(runner.run(passRunnerJob(null))).rejects.toBeInstanceOf(AuditJobNotProjectScopedError);
   });
 });
 

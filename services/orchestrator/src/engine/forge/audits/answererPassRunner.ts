@@ -11,8 +11,14 @@
 // model and there is NO deterministic fallback (§8a):
 //   - a project-less job CANNOT be audited (no repo) → LOUD failure.
 //   - a project with no resolvable repo URL → LOUD failure.
+//   - a project with no resolvable default branch → LOUD failure.
 //   - a project with no resolvable GitHub credential → the token resolver throws.
 // Each is a hard failure, never a silent empty pass.
+//
+// The repo is indexed at the PROJECT'S OWN `default_branch` (read per-job from the
+// `projects` row) — NOT a hardcoded `main`. A repo whose default branch is
+// `develop`/`master`/etc. is audited at its real branch; greenfield projects keep
+// `main` because that is their stored default, not a literal baked in here.
 
 import type pg from "pg";
 import { runWithSystemScope } from "@tanren/db";
@@ -44,6 +50,20 @@ export class AuditProjectRepoUnresolvableError extends Error {
   }
 }
 
+/**
+ * Thrown when the audited project row carries no usable default branch. The
+ * `projects.default_branch` column is `NOT NULL DEFAULT 'main'`, so this only
+ * fires on a corrupt/empty value — a LOUD failure, never a silent fall back to a
+ * hardcoded `main` (which would mis-index a repo whose real default is
+ * `develop`/`master`/etc. and loop the audit forever producing no finding/spec).
+ */
+export class AuditProjectDefaultBranchUnresolvableError extends Error {
+  constructor(readonly projectId: string) {
+    super(`scheduled audit cannot resolve a default branch for project ${projectId}`);
+    this.name = "AuditProjectDefaultBranchUnresolvableError";
+  }
+}
+
 export interface AnswererPassRunnerDeps {
   pool: pg.Pool;
   secrets: SecretStore;
@@ -54,29 +74,29 @@ export interface AnswererPassRunnerDeps {
   // from the same Forge infra the triage answerer uses.
   answererFactory: (target: { orgId: string; projectId: string }) => AuditAnswerer;
   // Test seam: override the repo reader (production builds a `GithubRepoReader`).
+  // `defaultBranch` is the PROJECT'S resolved default branch (per-job, not a
+  // build-time constant) so the override sees the real ref it will index at.
   repoReaderFor?: (repoUrl: string, defaultBranch: string, resolved: ResolvedGithubToken) => RepoReader;
-  // The branch the audit reads the repo tree at. Defaults to "main".
-  defaultBranch?: string;
 }
 
 /**
  * Build the production audit pass runner. Each `run(job)`:
- *   1. resolves the project's repo URL (a repo-less/unresolvable job is a LOUD
- *      failure — never a silent empty pass),
+ *   1. resolves the project's repo URL + its own `default_branch` (a repo-less /
+ *      unresolvable-repo / unresolvable-branch job is a LOUD failure — never a
+ *      silent empty pass, never a hardcoded `main`),
  *   2. resolves a GitHub token (App installation or org-default static ref, the
  *      same path recon uses),
- *   3. indexes the repo READ-ONLY,
+ *   3. indexes the repo READ-ONLY at the project's default branch,
  *   4. has the audit answerer surface findings over the indexed evidence.
  */
 export function createAnswererPassRunner(deps: AnswererPassRunnerDeps): AuditPassRunner {
-  const defaultBranch = deps.defaultBranch ?? "main";
   return {
     async run(job: AuditJob): Promise<AuditPassResult> {
       if (job.projectId === null) {
         throw new AuditJobNotProjectScopedError(job.id);
       }
       const projectId = job.projectId;
-      const repoUrl = await resolveRepoUrl(deps.pool, projectId);
+      const { repoUrl, defaultBranch } = await resolveRepoTarget(deps.pool, projectId);
       const resolved = await resolveTokenFor(deps, job.orgId);
       const reader =
         deps.repoReaderFor?.(repoUrl, defaultBranch, resolved) ??
@@ -96,16 +116,26 @@ export function createAnswererPassRunner(deps: AnswererPassRunnerDeps): AuditPas
   };
 }
 
-// Resolve the audited project's repo URL. RLS: the audit loop runs system-scoped
-// (the worker has no actor), so the read goes through `runWithSystemScope`.
-async function resolveRepoUrl(pool: pg.Pool, projectId: string): Promise<string> {
+// Resolve the audited project's repo URL + its own default branch (the ref the
+// audit indexes the tree at). RLS: the audit loop runs system-scoped (the worker
+// has no actor), so the read goes through `runWithSystemScope`. An empty repo URL
+// or an empty/whitespace default branch is a LOUD failure — never a fall back to a
+// hardcoded `main`, which would mis-index a `develop`/`master` repo.
+async function resolveRepoTarget(
+  pool: pg.Pool,
+  projectId: string,
+): Promise<{ repoUrl: string; defaultBranch: string }> {
   const row = await runWithSystemScope(pool, (client) =>
     ForgeToolsStore.getProjectRepoAndConfig(client, projectId, systemActor),
   );
   if (row === undefined || row.repoUrl === "") {
     throw new AuditProjectRepoUnresolvableError(projectId);
   }
-  return row.repoUrl;
+  const defaultBranch = row.defaultBranch.trim();
+  if (defaultBranch === "") {
+    throw new AuditProjectDefaultBranchUnresolvableError(projectId);
+  }
+  return { repoUrl: row.repoUrl, defaultBranch };
 }
 
 // Resolve a GitHub token for the org — App installation when present, else the
