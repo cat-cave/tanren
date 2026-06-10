@@ -99,6 +99,44 @@ describe("fixture git isolation (leaked GIT_DIR/GIT_WORK_TREE cannot corrupt the
     expect(victim.snapshot()).toEqual(before);
   });
 
+  it("a realjj-shaped init+commit (scrubbed env + guard) lands in its temp dir, NOT a leaked victim", () => {
+    // This reproduces the EXACT shape the standalone *.realjj.test.ts fixtures use
+    // (jjLocalIntegration / baseShiftCleanPush): `git init` a temp seed dir, run the
+    // assertGitDirUnder guard, then `git add`/`git commit -m base`. Those fixtures used to
+    // pass an UN-scrubbed `process.env`, so a leaked GIT_DIR redirected their `commit base`
+    // onto the host worktree's branch (the live corruption). With the realjj helpers now
+    // routed through fixtureGitEnv + the guard, the same init+commit under a hostile leak
+    // must stay confined. A future un-scrubbed realjj fixture re-breaks THIS test.
+    const victim = makeVictimRepo();
+    tempDirs.push(victim.dir);
+    const before = victim.snapshot();
+
+    const root = mkdtempSync(join(tmpdir(), "tanren-realjj-shape-"));
+    tempDirs.push(root);
+    const work = join(root, "seed");
+    mkdirSync(work, { recursive: true });
+
+    // The realjj fixture's own helper shape: scrub the repo-selecting vars per call, init,
+    // GUARD, then commit a seed tree. Driven under the GIT_DIR-only leak that corrupts.
+    const git = (args: string[]): void => {
+      execFileSync("git", args, { cwd: work, env: fixtureGitEnv(process.env), stdio: "ignore" });
+    };
+    const restoreLeak = leakGitDir(victim.gitDir);
+    try {
+      git(["init", "--quiet", "--initial-branch=main"]);
+      assertGitDirUnder(work, root, fixtureGitEnv(process.env));
+      writeFileSync(join(work, "base.txt"), "base\n");
+      git(["add", "-A"]);
+      git(["commit", "--quiet", "-m", "base"]);
+    } finally {
+      restoreLeak();
+    }
+
+    // The `commit base` landed in the fixture's temp dir — the victim (host-worktree stand-in)
+    // is untouched: same HEAD, same branch, no `base.txt` added, PRECIOUS.txt still present.
+    expect(victim.snapshot()).toEqual(before);
+  });
+
   it("assertGitDirUnder THROWS when git resolves outside the temp root (the guard bites)", () => {
     const victim = makeVictimRepo();
     tempDirs.push(victim.dir);
