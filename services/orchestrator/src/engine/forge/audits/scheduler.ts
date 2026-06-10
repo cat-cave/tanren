@@ -22,7 +22,7 @@ import { ProjectStore } from "../../repositories/projects.js";
 import { systemActor } from "../../state/actor.js";
 import { type AuditPosture, decideFromFindings } from "../../contracts/auditPosture.js";
 import { findingToRoutableSpec } from "./postureGate.js";
-import { DEFAULT_AUDIT_POSTURE, isAbsentProjectConfig, migrateProjectConfig } from "../../config/index.js";
+import { resolveDefaultAuditPosture, isAbsentProjectConfig, migrateProjectConfig } from "../../config/index.js";
 import type { Finding } from "../../contracts/findings.js";
 import { PersistentlyInvalidSpecError } from "../specQuality/index.js";
 import { InboxStore } from "../inbox/store.js";
@@ -134,9 +134,14 @@ export function summarizeFindings(findings: ReadonlyArray<AuditFinding>): Summar
 // PRESENT-but-CORRUPT config is NOT masked — `migrateProjectConfig` throws loudly
 // (no-silent-fallback). System-scoped read: the loop already runs under the job's org scope.
 async function resolveAuditPosture(client: QueryClient, projectId: string | null): Promise<AuditPosture> {
-  if (projectId === null) return DEFAULT_AUDIT_POSTURE;
+  // The absent-config default is APEX-MODE-AWARE: under an apex / autonomous run a
+  // project that never set its own posture resolves to the AUTONOMOUS posture (residual
+  // findings route to the DAG + a blocking finding becomes a remediation spec) so the
+  // scheduled-audit loop CLOSES with no operator; a non-autonomous run keeps the
+  // conservative BALANCED default (block on P0/P1, park for a human).
+  if (projectId === null) return resolveDefaultAuditPosture();
   const raw = await ProjectStore.getConfig(client, projectId, systemActor);
-  if (isAbsentProjectConfig(raw)) return DEFAULT_AUDIT_POSTURE;
+  if (isAbsentProjectConfig(raw)) return resolveDefaultAuditPosture();
   return migrateProjectConfig(raw).auditPosture;
 }
 

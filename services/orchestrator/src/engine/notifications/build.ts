@@ -22,6 +22,7 @@
 
 import type pg from "pg";
 import { orgScopingPool } from "../data/orgScopedDb.js";
+import { isApexMode } from "../config/apexMode.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
 import { NotificationDispatcher, type DefaultRoute } from "./dispatcher.js";
@@ -98,17 +99,6 @@ export function buildNotificationDispatcher(deps: BuildNotificationDispatcherDep
     channels,
     ...(defaultRoute !== undefined && { defaultRoute }),
   });
-}
-
-/**
- * Apex mode: the live max-difficulty validation run. When on, a deliverable-but-
- * unrouted `warn`+ event is a LOUD readiness failure (see the build guard), not a
- * silent log-and-return. Off by default (every other dev/test/prod path keeps the
- * env default optional).
- */
-function isApexMode(): boolean {
-  const value = process.env["TANREN_APEX_MODE"];
-  return value === "1" || value === "true";
 }
 
 /**
