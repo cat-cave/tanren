@@ -154,8 +154,8 @@ intelligent merge queue** (DAG-order serialized merge + batch-check + bisect),
 **Mergify removed entirely**. The durable design rationale is
 **`docs/architecture/autonomy-engine.md`**.
 
-**The tanren-owns-the-engine cutover is merged and flag-on (apex-validation
-pending).** The GitHub-shaped `VcsProvider` is decomposed by purpose into four
+**The tanren-owns-the-engine cutover is merged and flag-on (merge paths still
+apex-unproven).** The GitHub-shaped `VcsProvider` is decomposed by purpose into four
 seams — a **jj (jujutsu) `WorkspaceVcsCore`** (jj-only, no git fallback;
 `engine/providers/jjWorkspaceVcsCore.ts`), a minimal **`CodeHost`**
 (push/fetch/land-to-`main`; `githubCodeHost.ts`), the guaranteed fail-closed
@@ -168,19 +168,26 @@ preserved); and the auditor emits **P0–P3 findings** gated by an **`auditPostu
 DORA knob. The live paths — jj as the conflict resolver, live base-shift, and
 `integration_nodes` proof-reuse + jj-local integration — are **default-on behind
 kill-switch env vars** (`MERGE_AUTHORITY_LIVE`, `CONFLICT_RESOLVER_JJ_LIVE`,
-`BASE_SHIFT_LIVE`, `INTEGRATION_NODES_DRIVE`) and are **first exercised by the next
-apex run**. The post-apex deletions (the now-dead `speculativeIntegrator`, the
-git-merge-abort applier dance, the 25-method `VcsProvider`) are deferred until apex
-proves the flag-on paths. Full rationale:
+`BASE_SHIFT_LIVE`, `INTEGRATION_NODES_DRIVE`). apex v32 exercised the early live
+paths but **halted at scaffold-bootstrap before any merge**, so the flag-on
+**merge** paths are still **not apex-proven**; the deletions (the now-dead
+`speculativeIntegrator`, the git-merge-abort applier dance, the 25-method
+`VcsProvider`) are deferred until a run reaches a merge. Full rationale:
 **`docs/architecture/tanren-owns-the-engine.md`**.
 
 **The only remaining major effort is Phase 3 — `apex`**: a max-difficulty fixture
 that takes a one-paragraph brief to a deployed product (URL shortener + Slack bot +
 web UI) **autonomously**, over real surfaces. It is the **active live-validation
-vehicle** — the operator contract (`docs/operator-guide/apex.md`) and the live-run
-setup exist, the Tier-1 credentials (GitHub App + Slack + a deploy target — see
-`docs/operator-guide/validation-credentials.md`) are provisioned, and it spends
-real credits under the $50 budget ceiling.
+vehicle** — the operator role + run rhythm is `docs/operator-guide/apex.md`, the
+**concrete drive-from-zero playbook** is `docs/operator-guide/apex-run-playbook.md`,
+and the **templating doctrine** (every project DAG seeds from a validated template;
+no from-scratch-into-a-project) is `docs/roadmap/templating-system.md`. The Tier-1
+credentials (GitHub App + Slack + a deploy target — see
+`docs/operator-guide/validation-credentials.md`) are provisioned, and it spends real
+credits under the $50 budget ceiling (BYOK Codex runs at $0). **apex v32 ran live
+and halted at scaffold-bootstrap** — flushing three real bugs now fixed on `main`
+(bootstrap frozen-lockfile #496, runner-sweeper #497, templating re-architecture
+#498); **v33 drives the refined platform and should reach the loops past scaffold.**
 
 Smaller near-term items: the **benchmark seed corpus** and the **remaining DAL
 clusters** (`forge/audits/store.ts` + `forge/inbox/store.ts` still raw SQL),

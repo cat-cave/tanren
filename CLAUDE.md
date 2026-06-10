@@ -15,19 +15,20 @@ baseline; the status vocabulary is unified; Vault per-run scoped credentials are
 done. (Tanren's own monorepo CI runs on GitHub Actions like any repo; the
 no-Actions doctrine governs the delivery path for the apps Tanren _builds_.)
 
-**The tanren-owns-the-engine cutover is merged + flag-on (apex-validation
-pending).** Delivery now runs on the **jj (jujutsu) `WorkspaceVcsCore`** (jj-only,
-no git fallback), the guaranteed fail-closed **`MergeAuthority`** (the sole merge
-decision, replacing the scattered gate/governance/review/mergeability checks), the
-unified **`integration_nodes`** run model, the **never-discard
+**The tanren-owns-the-engine cutover is merged + flag-on (merge paths still
+apex-unproven).** Delivery now runs on the **jj (jujutsu) `WorkspaceVcsCore`**
+(jj-only, no git fallback), the guaranteed fail-closed **`MergeAuthority`** (the
+sole merge decision, replacing the scattered gate/governance/review/mergeability
+checks), the unified **`integration_nodes`** run model, the **never-discard
 `BaseShiftCoordinator`** (jj-rebase dependent work in place — the old percolation
 that _superseded + regenerated_, discarding work, is replaced), and
 **audit-as-P0–P3-findings** gated by an **`auditPosture`** DORA knob. These live
 paths are **default-on behind kill-switch env vars** (`MERGE_AUTHORITY_LIVE`,
-`CONFLICT_RESOLVER_JJ_LIVE`, `BASE_SHIFT_LIVE`, `INTEGRATION_NODES_DRIVE`) and are
-**first exercised by the next apex run**. The §7 deletions (the dead
-`speculativeIntegrator`, the git-merge-abort applier dance, the 25-method
-`VcsProvider`) are **deferred to post-apex**. Rationale:
+`CONFLICT_RESOLVER_JJ_LIVE`, `BASE_SHIFT_LIVE`, `INTEGRATION_NODES_DRIVE`). **apex
+v32 ran live but halted at scaffold-bootstrap — it never reached a merge**, so the
+flag-on jj/merge live paths are still **not apex-proven**; the §7 deletions (the
+dead `speculativeIntegrator`, the git-merge-abort applier dance, the 25-method
+`VcsProvider`) STAY deferred until a run actually reaches a merge. Rationale:
 `docs/architecture/tanren-owns-the-engine.md`.
 
 ## Read order for a fresh session
@@ -61,16 +62,40 @@ fixture (rough operator notes → a deployed product autonomously). It is the
 (`docs/operator-guide/apex.md`) and the live-run setup exist, the Tier-1
 credentials (GitHub App + Slack + a deploy target;
 `docs/operator-guide/validation-credentials.md`) are provisioned, and it spends
-real credits under the $50 ceiling. The next apex run is also the
-**apex-validation** the cutover is pending on — the first exercise of the flag-on
-live jj-against-a-runner paths. The rest of the forward to-do (`ROADMAP.md` §4):
+real credits under the $50 ceiling.
 
-- **tanren-owns-the-engine — finish the cutover (post-apex).** After apex proves
-  the flag-on live paths: the §7 deletions (the dead `speculativeIntegrator`, the
-  git-merge-abort applier dance, `resolveSpeculativeState`, the 25-method
-  `VcsProvider` → ~5-method `CodeHost`), the walker/percolation → jj-local cutover,
-  and the `integration.*` metrics read-side (prove rebase < rebuild). See
+**To drive the next apex run (v33), a fresh agent reads, in order:**
+
+1. **`docs/operator-guide/apex.md`** — the operator role (non-technical end user;
+   never hand-fix the generated repo), the **run rhythm** (drive → halt →
+   fix-on-`main` → drain backlog → rebuild → fresh `v(N+1)`), and the proof
+   portfolio.
+2. **`docs/operator-guide/apex-run-playbook.md`** — the **concrete drive-from-zero
+   steps**: rebuild the stack from a FRESH `origin/main` checkout
+   (`TANREN_APEX_MODE=1`/`TANREN_DEV_LOGIN=1`/`TANREN_REQUIRE_AUTH=1`), headless
+   dev-login, BYOK Codex, import Tier-1 creds, kick off from rough notes, monitor
+   for the next halt.
+3. **`docs/roadmap/templating-system.md`** — the **templating doctrine**: every
+   project DAG seeds from a VALIDATED template; a no-match triggers
+   template-creation just-in-time or halts loud — there is **no from-scratch into a
+   project**. DO NOT pre-create a template; apex must exercise creation-from-scratch.
+
+**v33 = drive the refined platform; expect the next halt PAST scaffold** (v32
+halted at scaffold-bootstrap and flushed #496/#497/#498). The rest of the forward
+to-do (`ROADMAP.md` §4):
+
+- **tanren-owns-the-engine — finish the cutover (post-merge-proof).** v32 never
+  reached a merge, so the flag-on live merge paths are still unproven; these stay
+  deferred until a run reaches a merge, then land: the §7 deletions (the dead
+  `speculativeIntegrator`, the git-merge-abort applier dance,
+  `resolveSpeculativeState`, the 25-method `VcsProvider` → ~5-method `CodeHost`),
+  the walker/percolation → jj-local cutover, and the `integration.*` metrics
+  read-side (prove rebase < rebuild). See
   `docs/architecture/tanren-owns-the-engine.md` §7–§8.
+- **Thread `TANREN_APEX_MODE` to the orchestrator compose service** (v33-prep).
+  Today it is wired only on the `worker` service, but the orchestrator reads it too
+  (`engine/config/apexMode.ts`) — until threaded, export it on the host. One-line
+  compose fix.
 - **Benchmark seed corpus.** The tanren-method toolkit is code-complete; what
   remains is the **content** — tiered seed repos + hidden accept tiers + running
   the experiments. See `docs/roadmap/tanren-method-benchmark.md`.

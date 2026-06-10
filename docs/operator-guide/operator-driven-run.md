@@ -170,3 +170,10 @@ covered in [acceptance.md](./acceptance.md).
 - Halt → recover: [failure-recovery.md](./failure-recovery.md)
 - History + 4-source costs: [costs.md](./costs.md)
 - Review hand-off + acceptance gate: [acceptance.md](./acceptance.md)
+
+> **Driving the live apex validation run?** This dashboard runbook is the general
+> operator flow. The **apex** trial is driven over the HTTP API only (as a
+> non-technical end user) on the strict drive → halt → fix-on-`main` → rebuild
+> rhythm — its concrete drive-from-zero steps are
+> [apex-run-playbook.md](./apex-run-playbook.md) and the role/contract is
+> [apex.md](./apex.md).

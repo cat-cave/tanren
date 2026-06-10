@@ -71,13 +71,20 @@ ci.yml lifecycle-map) FROM that — agent-authored against the contract, no hard
   ask, NOT a silent Node assumption).
 - The runner image must have **`just`** (the orchestration convention). Verify/install it.
 
-## Template repos (convenience, NOT the mechanism — longer-term)
+## Template repos (the project SEED — see the templating doctrine)
 
 `cat-cave/tanren-template-ts-vite`, `-rust-axum`, `-python-fastapi`, … : curated, up-to-date,
 pre-filled skeletons (real hello-world conforming repos) that skip the bulk of scaffolding
-with ZERO token spend. Added as REPOS (never TS). The architecture step may seed from one if
-it matches; otherwise the agent authors from-scratch against the contract. Apex (v27) authors
-from-scratch (TS/pnpm — because the architecture SAYS so, not because Tanren assumes it).
+with ZERO token spend. Added as REPOS (never TS).
+
+> **Doctrine update (#498) — there is NO from-scratch-into-a-project fallback.** The
+> architecture step queries the registry for a VALIDATED template; on a no-match it
+> CREATES one just-in-time (research → author-from-scratch → build → validate-with-
+> negative-controls → publish) and the scaffold SEEDS from it, or HALTS LOUD
+> (`TemplateRequiredError` → 409). The from-scratch authoring survives ONLY as the
+> BUILD step of template-creation — never as a project path. See the full doctrine in
+> [templating-system.md](./templating-system.md). (The earlier "the agent authors
+> from-scratch against the contract" fallback no longer exists for a project DAG.)
 
 ## Non-code projects
 

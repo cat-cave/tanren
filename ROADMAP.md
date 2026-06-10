@@ -20,6 +20,19 @@ native intelligent merge queue coordinates merges. The only remaining major
 effort is **Phase 3 — `apex`** (§4), the live-validation vehicle that takes rough
 operator notes to a deployed product autonomously.
 
+**apex v32 ran live** (BYOK Codex, $0, driven over the operator API as a
+non-technical end user): it proved DAG-build from a real Forge interview (rough
+notes → a 15-spec DAG), walker auto-execution, the writer authoring a scaffold,
+cost-discipline, and `needs_attention` escalation + clean runner release. It
+**halted at scaffold-bootstrap** — flushing three real bugs (all now fixed on
+`main`): the bootstrap frozen-lockfile (#496), a periodic runner-sweeper (#497),
+and the **templating re-architecture** (#498 — every project DAG now seeds from a
+validated template; the from-scratch-into-a-project bypass is deleted). **v32 did
+NOT reach a merge.** The drive playbook is
+`docs/operator-guide/apex-run-playbook.md`; the operator role + run rhythm is
+`docs/operator-guide/apex.md`; the templating doctrine is
+`docs/roadmap/templating-system.md`.
+
 ### v21 native delivery (the current doctrine)
 
 Delivery is **Action-less**. The native shell-tier gate — `.tanren/ci.yml`, a
@@ -47,14 +60,16 @@ The shape of the platform today:
   an orphan child token with a per-ref ACL; the `dev-root-token` fallbacks are
   removed from `main.ts` + `allocator/main.ts` (broad token REQUIRED, fail-hard).
 
-### tanren-owns-the-engine cutover (merged, flag-on, apex-validation pending)
+### tanren-owns-the-engine cutover (merged, flag-on, merge paths apex-unproven)
 
 The merge/integration subsystem has been cut over from the GitHub-shaped
 `VcsProvider` + speculative-integration + change-percolation model to the
 **tanren-owns-the-engine** model (`docs/architecture/tanren-owns-the-engine.md`).
-**Merged on `main`, default-on behind kill-switch env vars, apex-validation
-pending** (the live jj-against-a-runner path is first exercised by the next apex
-run):
+**Merged on `main`, default-on behind kill-switch env vars.** apex v32 exercised
+the early live paths (DAG-build → walker → scaffold) but **halted at
+scaffold-bootstrap before any merge**, so the flag-on jj/`MergeAuthority`/
+`integration_nodes` **merge** paths are still **not apex-proven** — they await a
+run that reaches a merge:
 
 - **Four purpose-decomposed seams** (Wave 1): a jj (jujutsu) `WorkspaceVcsCore`
   (jj-only, **no git fallback**), a minimal `CodeHost` (push/fetch/land-to-`main`),
@@ -79,8 +94,9 @@ run):
   BYPASSRLS fallback removed (fail-closed).
 
 The §7 deletions, the walker/percolation → jj-local cutover, and the
-`integration.*` metrics read-side are **deferred to post-apex** (§4) — they stay
-until apex proves the flag-on live paths.
+`integration.*` metrics read-side are **deferred until a run reaches a merge** (§4)
+— they stay until apex proves the flag-on live **merge** paths (v32 halted before
+any merge).
 
 ---
 
@@ -256,28 +272,36 @@ cite); the merge-engine cutover rationale is
 
 ## 4. What is next (the live to-do)
 
-- **Phase 3 — `apex`** (the only remaining major effort). The max-difficulty
-  live-e2e fixture: a single paragraph of rough operator notes → a deployed product
-  (URL shortener + per-link analytics + a Slack bot + a web UI), built
-  autonomously over real surfaces, every change a merged PR with full provenance.
-  apex tests **Tanren**, not the fixture: the driver acts as a non-technical end
-  user over the HTTP API + dashboard only, files real issues into Tanren for every
-  defect, and never hand-fixes the generated repo. The operator contract is
-  `docs/operator-guide/apex.md` and the live-run setup exists; it spends real
-  credits under the $50 ceiling on already-provisioned Tier-1 creds. It is the
-  **active live-validation vehicle**, not a not-yet-started milestone. The next
-  apex run is also the **apex-validation** the tanren-owns-the-engine cutover (§1)
-  is pending on — it is the first exercise of the flag-on live jj/MergeAuthority/
-  integration_nodes paths against a real runner.
-- **tanren-owns-the-engine — finish the cutover (post-apex).** The cutover is
-  merged + flag-on (§1); these forward items stay until apex proves the live paths,
-  then land (`docs/architecture/tanren-owns-the-engine.md` §7–§8):
+- **Phase 3 — `apex` (drive v33; expect the next halt past scaffold).** The
+  max-difficulty live-e2e fixture: a single paragraph of rough operator notes → a
+  deployed product (URL shortener + per-link analytics + a Slack bot + a web UI),
+  built autonomously over real surfaces, every change a merged PR with full
+  provenance. apex tests **Tanren**, not the fixture: the driver acts as a
+  non-technical end user over the HTTP API only, files real issues into Tanren for
+  every defect, and never hand-fixes the generated repo. **v32 ran live and halted
+  at scaffold-bootstrap** (flushing #496/#497/#498 — §1); **v33** drives the refined
+  platform and should reach the loops **past scaffold** (deploy → issue-loop →
+  audits → CI-intelligence → notifications). To drive it: the operator role + run
+  rhythm + proof portfolio is `docs/operator-guide/apex.md`; the **concrete
+  drive-from-zero playbook** is `docs/operator-guide/apex-run-playbook.md`; the
+  **templating doctrine** (no from-scratch-into-a-project; do NOT pre-create a
+  template) is `docs/roadmap/templating-system.md`. It spends real credits under the
+  $50 ceiling on already-provisioned Tier-1 creds (BYOK Codex runs at $0).
+- **v33-prep — thread `TANREN_APEX_MODE` to the orchestrator compose service.**
+  Today the compose file wires `TANREN_APEX_MODE` only onto the `worker` service,
+  but the orchestrator reads it too (`engine/config/apexMode.ts` — audit-posture /
+  self-config). Until threaded, export it on the host before `just up-dev`. One-line
+  compose fix to land.
+- **tanren-owns-the-engine — finish the cutover (after a run reaches a MERGE).**
+  The cutover is merged + flag-on (§1); v32 halted before any merge, so the flag-on
+  live **merge** paths are still unproven. These forward items stay until a run
+  reaches a merge, then land (`docs/architecture/tanren-owns-the-engine.md` §7–§8):
   - **The §7 deletions** — remove the now-dead old code the cutover replaced:
     `speculativeIntegrator` (contract + dag impl), the git-merge-abort
     `workspaceApplier` `merge --abort` / `--diff-filter=U` dance,
     `resolveSpeculativeState`, and the 25-method GitHub-PR-shaped `VcsProvider` →
-    the ~5-method `CodeHost`. (They remain on disk as the flag-off fallback until
-    apex validates flag-on.)
+    the ~5-method `CodeHost`. (They remain on disk as the flag-off fallback until a
+    run validates the flag-on merge path.)
   - **The walker/percolation → jj-local cutover** — route the DagWalker +
     percolation eager-integration through jj-local `integration_nodes` rather than
     the old server-side speculative merge refs.
@@ -309,6 +333,14 @@ cite); the merge-engine cutover rationale is
   those categories on (`no-base-to-string`, `unbound-method`,
   `restrict-template-expressions`, …), triage the surfaced warnings, and ratchet
   them to error — a strictness wave for broader type-aware coverage.
+- **Entity-analysis layer — native follow-ons.** Increment 1 (vendor `sem` +
+  answerer wiring) has landed. The remaining native follow-ons: inspect's
+  risk-triage + a ConGra verdict for the checker; weave's entity-merge as a native
+  first-pass in the jj `BaseShiftCoordinator` conflict path (a native pre-pass, NOT
+  a git merge driver — a git driver clashes with jj); and entity-anchored issue
+  Claims.
+- **§6 apex-e2e test gaps.** The hermetic apex e2e driver exists (§6); close the
+  remaining gaps in its coverage of the post-scaffold loops as v33 exercises them.
 
 ---
 
