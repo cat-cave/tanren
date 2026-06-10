@@ -20,6 +20,7 @@ import { type Context, Hono } from "hono";
 import type pg from "pg";
 import { z } from "zod";
 import type { ActorContext } from "../../auth/schemas.js";
+import { defaultManagedProviderConfig } from "../../engine/config/managedProvider.js";
 import { migrateOrgConfig, type OrgGithubAppInstallation } from "../../engine/config/orgConfig.js";
 import type { SecretStore } from "../../engine/contracts/secretStore.js";
 import { loadGithubAppCredential } from "../../engine/credentials/githubApp.js";
@@ -110,6 +111,9 @@ export function createGithubConnectRoutes(options: GithubConnectRoutesOptions) {
     try {
       status = await resolveGithubConnection(options, minter, orgId);
     } catch (error) {
+      if (error instanceof GithubCredentialRefMissingError) {
+        return c.json({ error: "github_credential_ref_missing", message: error.message, ref: error.ref }, 409);
+      }
       return c.json({ error: "github_capability_check_failed", message: messageOf(error) }, 502);
     }
     return c.json(status);
@@ -135,9 +139,22 @@ export function createGithubConnectRoutes(options: GithubConnectRoutesOptions) {
     try {
       github = await resolveGithubConnection(options, minter, orgId);
     } catch (error) {
+      if (error instanceof GithubCredentialRefMissingError) {
+        return c.json({ error: "github_credential_ref_missing", message: error.message, ref: error.ref }, 409);
+      }
       return c.json({ error: "github_capability_check_failed", message: messageOf(error) }, 502);
     }
-    return c.json(composeOnboardingStatus(config, github));
+
+    let aiProvider: AiProviderStatus;
+    try {
+      aiProvider = await resolveAiProviderStatus(config, options.secrets);
+    } catch (error) {
+      if (error instanceof ManagedProviderCredentialMissingError) {
+        return c.json({ error: "managed_provider_credential_missing", message: error.message, ref: error.ref }, 409);
+      }
+      return c.json({ error: "ai_provider_check_failed", message: messageOf(error) }, 502);
+    }
+    return c.json(composeOnboardingStatus(config, github, aiProvider));
   });
 
   return app;
@@ -175,8 +192,13 @@ async function resolveGithubConnection(
   if (staticRef !== undefined) {
     const secret = await options.secrets.get(staticRef);
     if (secret === undefined) {
-      // The ref points at nothing — a configuration error, not a live identity.
-      return { connected: false, mode: null, login: null, canCreateRepos: false, missingPermissions: [] };
+      // A PERSISTED `github_token` ref that points at NO secret is configuration
+      // CORRUPTION (a broken tenant credential), NOT "no GitHub connected". Fail
+      // LOUD so onboarding/status surfaces the broken state rather than quietly
+      // reporting `connected:false` — which would hide it and let a run resolve a
+      // dangling ref downstream. (Distinct from the genuinely-unconfigured case
+      // below, which is a legitimate `connected:false`.)
+      throw new GithubCredentialRefMissingError(staticRef);
     }
     const capability = await probeGithubTokenCapability({
       token: secret.value,
@@ -184,7 +206,25 @@ async function resolveGithubConnection(
     });
     return { connected: true, mode: "token", ...capability };
   }
+  // No App installation AND no static ref configured: legitimately not connected.
   return { connected: false, mode: null, login: null, canCreateRepos: false, missingPermissions: [] };
+}
+
+/**
+ * Raised when a persisted GitHub credential ref resolves to NO secret in the
+ * store. This is configuration corruption (a dangling tenant credential), NOT a
+ * legitimately-unconfigured org — the routes surface it as a loud
+ * `github_credential_ref_missing` (409), never a quiet `connected:false`. The
+ * ref name is safe to carry (it is a non-secret store KEY, never the secret).
+ */
+export class GithubCredentialRefMissingError extends Error {
+  constructor(public readonly ref: string) {
+    super(
+      `GitHub credential ref '${ref}' is persisted for this org but resolves to no secret in the store: ` +
+        "this is broken tenant credential state (configuration corruption), not 'no GitHub connected'.",
+    );
+    this.name = "GithubCredentialRefMissingError";
+  }
 }
 
 /**
@@ -329,8 +369,8 @@ interface OnboardingStatus {
 function composeOnboardingStatus(
   config: ReturnType<typeof migrateOrgConfig>,
   github: GithubConnectionStatus,
+  aiProvider: AiProviderStatus,
 ): OnboardingStatus {
-  const aiProvider = resolveAiProviderStatus(config);
   const ceilingUsd = config.defaultBudget?.ceilingUsd ?? null;
 
   const nextSteps: string[] = [];
@@ -361,13 +401,26 @@ function composeOnboardingStatus(
 }
 
 /**
- * The AI-provider connectivity signal from org config: a managed provider is
- * connected by the platform; otherwise a connected BYOK provider is one whose
- * default LLM routing entry is set. `classifiedAs` names the harness (e.g.
- * "managed", "codex", "claude").
+ * The AI-provider connectivity signal from org config. NOT a pure config echo:
+ * managed mode is reported connected ONLY after the platform-owned managed
+ * credential ref RESOLVES in the SecretStore — a managed org whose platform
+ * credential is absent/unresolvable is a LOUD platform-config error
+ * ({@link ManagedProviderCredentialMissingError}), never a false `connected:true`.
+ * A connected BYOK provider is one whose default LLM routing entry is set.
+ * `classifiedAs` names the harness (e.g. "managed", "codex", "claude").
  */
-function resolveAiProviderStatus(config: ReturnType<typeof migrateOrgConfig>): AiProviderStatus {
+async function resolveAiProviderStatus(
+  config: ReturnType<typeof migrateOrgConfig>,
+  secrets: SecretStore,
+): Promise<AiProviderStatus> {
   if (config.providerMode === "managed") {
+    // The platform credential ref/endpoint are DEPLOY config (no per-org override);
+    // resolve the default managed ref and VERIFY it before reporting connected.
+    const ref = defaultManagedProviderConfig().credentialRef;
+    const secret = await secrets.get(ref);
+    if (secret === undefined || secret.value === "") {
+      throw new ManagedProviderCredentialMissingError(ref);
+    }
     return { connected: true, classifiedAs: "managed" };
   }
   const defaultLlm = config.defaultCredentials?.defaultLlm;
@@ -375,6 +428,22 @@ function resolveAiProviderStatus(config: ReturnType<typeof migrateOrgConfig>): A
     return { connected: true, classifiedAs: defaultLlm.cli };
   }
   return { connected: false };
+}
+
+/**
+ * Raised when an org is in `managed` provider mode but the platform-owned managed
+ * credential ref resolves to no secret. This is a PLATFORM-config error (the
+ * hosting layer failed to provision the managed key), surfaced loud as a
+ * `managed_provider_credential_missing` (409) — never a false `connected:true`.
+ */
+export class ManagedProviderCredentialMissingError extends Error {
+  constructor(public readonly ref: string) {
+    super(
+      `Managed provider credential ref '${ref}' resolves to no secret in the store: ` +
+        "the platform managed credential is absent/unresolvable, so managed mode is NOT ready.",
+    );
+    this.name = "ManagedProviderCredentialMissingError";
+  }
 }
 
 function requireActor(c: { var: { actor?: ActorContext } }): ActorContext {
