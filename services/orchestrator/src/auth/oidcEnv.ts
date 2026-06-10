@@ -36,11 +36,30 @@ function parseOidcPreset(raw: string | undefined): OidcPreset | undefined {
 }
 
 /**
+ * The mandatory OIDC fields. ALL THREE must be set for the provider to register.
+ * A PARTIAL config (any one set, another missing) is a LOUD boot error — never a
+ * silent disable that would boot with a DIFFERENT auth posture than the operator
+ * intended (the no-silent-fallback boundary: a half-configured provider fails
+ * loud naming the missing field, it does not degrade to "OIDC off").
+ */
+const OIDC_MANDATORY_FIELDS = [
+  ["TANREN_OIDC_ISSUER", "issuer"],
+  ["TANREN_OIDC_CLIENT_ID", "client id"],
+  ["TANREN_OIDC_CLIENT_SECRET", "client secret"],
+] as const;
+
+/**
  * Build the OIDC provider from operator env, or `undefined` when it is not
- * configured. All three of issuer + client id + client secret must be set for
- * the provider to register; optional claim/scope overrides let an operator
+ * configured AT ALL. All three of issuer + client id + client secret must be set
+ * for the provider to register; optional claim/scope overrides let an operator
  * adapt to a non-default IdP without code changes. Kept out of main.ts so the
  * orchestrator entrypoint stays under the 500-line cap.
+ *
+ * Fail-loud on a PARTIAL config: if ANY OIDC env var is present, ALL THREE
+ * mandatory fields are required and a missing one THROWS a boot error naming it
+ * — a half-configured provider must NOT silently boot with OIDC disabled (a
+ * different auth posture than the operator intended). Only a FULLY-ABSENT OIDC
+ * config → `undefined` (the legitimate "no OIDC" deployment).
  *
  * `TANREN_OIDC_PRESET=authentik` selects the turnkey Authentik preset: it fills
  * Authentik's standard claim shape (`preferred_username` -> login, `name` ->
@@ -51,19 +70,29 @@ function parseOidcPreset(raw: string | undefined): OidcPreset | undefined {
  * the generic provider defaults are used (behavior unchanged).
  */
 export function buildOidcProviderFromEnv(): OidcProvider | undefined {
-  const issuer = process.env["TANREN_OIDC_ISSUER"];
-  const clientId = process.env["TANREN_OIDC_CLIENT_ID"];
-  const clientSecret = process.env["TANREN_OIDC_CLIENT_SECRET"];
-  if (
-    issuer === undefined ||
-    issuer === "" ||
-    clientId === undefined ||
-    clientId === "" ||
-    clientSecret === undefined ||
-    clientSecret === ""
-  ) {
+  const issuer = emptyToUndefined(process.env["TANREN_OIDC_ISSUER"]);
+  const clientId = emptyToUndefined(process.env["TANREN_OIDC_CLIENT_ID"]);
+  const clientSecret = emptyToUndefined(process.env["TANREN_OIDC_CLIENT_SECRET"]);
+
+  // FULLY-ABSENT → the legitimate "no OIDC" case (provider disabled). PARTIAL →
+  // a loud boot error below; a present-but-blank value counts as absent here, so
+  // an operator who sets two and blanks the third still gets the loud error.
+  if (issuer === undefined && clientId === undefined && clientSecret === undefined) {
     return undefined;
   }
+  if (issuer === undefined || clientId === undefined || clientSecret === undefined) {
+    const missing = OIDC_MANDATORY_FIELDS.filter(
+      ([envName]) => emptyToUndefined(process.env[envName]) === undefined,
+    ).map(([envName, label]) => `${envName} (${label})`);
+    throw new Error(
+      `OIDC is PARTIALLY configured: missing ${missing.join(", ")}. ` +
+        "When ANY TANREN_OIDC_* var is set, all three of issuer + client id + client secret are required — " +
+        "a half-configured provider must NOT silently boot with OIDC disabled (a different auth posture). " +
+        "Set every mandatory field, or unset them all to run without OIDC.",
+    );
+  }
+
+  // All three present (the partial-config branch threw above; TS narrows here).
   const preset = presetDefaults(parseOidcPreset(process.env["TANREN_OIDC_PRESET"]));
   const scopesEnv = emptyToUndefined(process.env["TANREN_OIDC_SCOPES"]);
   return new OidcProvider({
