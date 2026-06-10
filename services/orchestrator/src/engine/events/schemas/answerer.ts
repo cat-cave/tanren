@@ -308,6 +308,20 @@ export const AuditorFindingsRoutedPayload = z
   })
   .strict();
 
+// AUDIT-POSTURE PREFLIGHT (Loop 3): an AUTONOMOUS run was set up with an `auditPosture`
+// that would STRAND scheduled-audit findings (residual not routed/fixed, or blocking
+// findings parked with no `autonomousRemediation`). The run FAILS CLOSED at setup; this
+// is the loud durable record of WHY (the non-secret posture fields + a reason). The
+// scheduled-audit proof (audit → finding → fix → merge) cannot silently no-op.
+export const AuditPostureStrandsFindingsPayload = z
+  .object({
+    blockReviewAt: z.enum(["P0", "P1", "P2", "P3"]),
+    p2p3Handling: z.enum(["fix-if-idle", "route-to-dag"]),
+    autonomousRemediation: z.boolean(),
+    reason: z.string(),
+  })
+  .strict();
+
 // rejection events. The planner-feedback-loop emits one of these on
 // every rejection, carrying a structured `producer` (which Answerer rejected),
 // the rejection `reason`, and the running `plannerRerunCount` (a count for the

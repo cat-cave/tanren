@@ -29,6 +29,7 @@ import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { VcsProvider } from "../contracts/vcsProvider.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
+import { type ActiveQuarantine, loadActiveQuarantine } from "../workflow/ciQuarantine.js";
 import { evaluateCiObservation, type CiObservation } from "../workflow/ciObservation.js";
 import { loadReviewMergeRunContext, type ReviewMergeRunContext } from "../workflow/reviewMerge/context.js";
 import { PgPostMergeIssueClaimStore, type PostMergeIssueClaimStore } from "./issueClaimStore.js";
@@ -112,15 +113,21 @@ export class PostMergeWatcher {
       branch: context.baseBranch,
       token: resolved,
     });
-    const observation = evaluateCiObservation(checks);
+    // Resolve the org FIRST so the CI-intelligence quarantine read is org-scoped: a
+    // proven-flaky base-branch check on the project's ACTIVE quarantine surface is
+    // EXCLUDED from the failure verdict, so a known-flaky post-merge check no longer
+    // auto-opens a spurious regression issue. orgId-absent ⇒ no scoped read ⇒ no
+    // exclusion (the strict default), and the issue-claim below needs it regardless.
+    const orgId = await this.resolveOrg(context.projectId);
+    if (orgId === undefined) return;
+    const quarantine = await this.loadQuarantine(orgId, context.projectId);
+    const observation = evaluateCiObservation(checks, { quarantinedCheckNames: quarantine.checkNames });
     // ONLY a genuine FAILURE files an issue. Pending → leave for the next wake;
     // passed → nothing to track. Never an issue on a non-failure. The claim is taken
     // ONLY here (after a confirmed failure), so a pass/pending never consumes it.
     if (observation.status !== "failed") return;
 
     // The CROSS-PROCESS atomic lock: exactly one waking worker wins; the rest skip.
-    const orgId = await this.resolveOrg(context.projectId);
-    if (orgId === undefined) return;
     const won = await this.claimStore.claim({
       runId,
       specId: context.specId,
@@ -162,6 +169,25 @@ export class PostMergeWatcher {
       );
       return result.rows[0]?.org_id ?? undefined;
     });
+  }
+
+  /**
+   * Load the project's ACTIVE flaky-quarantine, ORG-SCOPED (`quarantined_tests` is
+   * a tenant table — RLS denies by default, so the read MUST carry the org GUC).
+   * Used to EXCLUDE a proven-flaky base-branch check from the post-merge failure
+   * verdict. A load failure fails OPEN (empty quarantine ⇒ the verdict stays strict),
+   * never bricking the watcher on an enrichment read.
+   */
+  private async loadQuarantine(orgId: string, projectId: string): Promise<ActiveQuarantine> {
+    try {
+      return await runWithOrgScope(this.deps.pool, orgId, (client) => loadActiveQuarantine(client, projectId));
+    } catch (error) {
+      console.error(
+        `[post-merge] active-quarantine load failed for project ${projectId} (verdict stays strict):`,
+        error,
+      );
+      return { checkNames: new Set<string>(), testIds: [] };
+    }
   }
 
   /** Load the review/merge run context (prUrl, baseBranch=default_branch, credentials), system-scoped. */

@@ -26,6 +26,12 @@ export interface RunGateForWhenInput {
   // LENIENT POSTURE: advisory (warn-but-don't-block) step names, threaded to each
   // tier. Empty/absent ⇒ every step blocks (strict default, behavior unchanged).
   advisoryStepNames?: ReadonlySet<string>;
+  // FLAKY-QUARANTINE: the project's ACTIVE-quarantine step names, threaded to each
+  // tier. A step in this set that fails is EXCLUDED from the verdict (the gate stays
+  // passing for it) — closing the flaky→quarantine→ship loop. Surface-driven (loaded
+  // from `quarantined_tests`), distinct from the posture-driven advisory set, and on
+  // under EVERY posture. Empty/absent ⇒ no exclusion (behavior unchanged).
+  quarantinedStepNames?: ReadonlySet<string>;
   // The commit the gate is verifying (the workspace HEAD). When present, the gate
   // emits a `gate.verdict` roll-up anchored on it — the headSha-carrying native
   // verdict CI-intelligence reduces. Absent (unit paths with no real workspace) ⇒
@@ -69,6 +75,7 @@ export async function runGateForWhen(input: RunGateForWhenInput): Promise<GateOu
       taskId: input.taskId,
       ...(input.appEnv === undefined ? {} : { appEnv: input.appEnv }),
       ...(input.advisoryStepNames === undefined ? {} : { advisoryStepNames: input.advisoryStepNames }),
+      ...(input.quarantinedStepNames === undefined ? {} : { quarantinedStepNames: input.quarantinedStepNames }),
     });
     results.push(result);
     if (!result.passed) {

@@ -46,6 +46,16 @@ export const gateSensitivityRules: SensitivityRule[] = [
     ["exitCode", "public"],
     ["outputTail", "secret"],
   ]),
+  // A flaky-quarantine step exclusion: a proven-flaky step failed but was excluded
+  // from the verdict (surface-driven, every posture). Names + exit code are public
+  // identifiers; the captured output tail is secret (may surface env/paths).
+  ...rulesFor("gate.quarantine_excluded", [
+    ["tier", "public"],
+    ["when", "public"],
+    ["quarantinedStep", "public"],
+    ["exitCode", "public"],
+    ["outputTail", "secret"],
+  ]),
   // A forge-publish failure of an already-decided verdict (non-fatal): the lifecycle
   // point, commit, decided verdict, and the non-secret reason (HTTP status / error
   // class — the token is never in it) are all public diagnostics.
