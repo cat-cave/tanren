@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { oracleEventRegistry } from "./oracle.js";
 
 // Semantic-rich planner/writer/checker/auditor event payloads. These fields
 // are what the Forge narration substrate renders directly. The
@@ -472,6 +473,8 @@ export const loopEventRegistry = {
   "convergence.started": ConvergenceStartedPayload,
   "convergence.assessed": ConvergenceAssessedPayload,
   "convergence.stalled": ConvergenceStalledPayload,
+  // §3.1 entity-risk oracle: the deterministic pre-LLM risk signal (schemas/oracle.ts).
+  ...oracleEventRegistry,
 } as const;
 
 // Re-export the Tanren-native templating registry-lifecycle sub-registry through

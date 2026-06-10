@@ -222,7 +222,7 @@ export const EventRegistry = {
   // S3: posture-gate residual disposition; Loop 3: autonomous-run strand-findings preflight.
   "auditor.findings_routed": AuditorFindingsRoutedPayload,
   "audit.posture_strands_findings": AuditPostureStrandsFindingsPayload,
-  // Sub-registries split into their schema modules for the 500-line cap: spec-loop stages (schemas/answerer.ts) + templating registry lifecycle (schemas/templates.ts).
+  // Sub-registries split into their schema modules for the 500-line cap: spec-loop stages + entity-risk oracle (schemas/answerer.ts) + templating registry lifecycle (schemas/templates.ts).
   ...loopEventRegistry,
   ...templateEventRegistry,
 

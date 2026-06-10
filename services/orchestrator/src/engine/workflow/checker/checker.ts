@@ -10,6 +10,7 @@
 // checker answers strictly "is THIS task complete for what downstream tasks need".
 import { answererOutputSchemaFor, CheckAnswer } from "../../answerers/schemas/index.js";
 import type { CheckFinding, PlanSubtask } from "../../answerers/schemas/index.js";
+import type { EntityRiskSignal } from "../../oracle/index.js";
 import type { AnswererAdapter } from "../../providers/types.js";
 import { buildCheckerPrompt as buildCheckerPromptText } from "../answererPrompts.js";
 
@@ -38,6 +39,10 @@ export interface CheckerSubtaskContext {
   // the writer's read-only workspace and inspects the change itself (rather than
   // having a potentially huge diff injected into the prompt).
   baselineSha: string;
+  // OPTIONAL native entity-change risk signal (engine/oracle, §3.1). When present
+  // and not the `unknown` class, its posture steers where the checker concentrates
+  // scrutiny. Absent / `unknown` ⇒ the checker proceeds on the raw diff as today.
+  riskSignal?: EntityRiskSignal;
 }
 
 export interface CheckerInvokeInput {
@@ -82,6 +87,7 @@ export function buildCheckerPrompt(context: CheckerSubtaskContext): string {
       behaviorIds: context.subtask.behaviorIds,
     },
     outputInstructions: CHECKER_V3_OUTPUT_INSTRUCTIONS,
+    riskSignal: context.riskSignal,
   });
 }
 
