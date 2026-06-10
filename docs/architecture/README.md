@@ -10,8 +10,9 @@ on `main`, not a plan. For the phase history and the forward roadmap, see
 ## The substrate (always true)
 
 - Postgres schema is defined in `db/src/schema.ts`; the committed Drizzle
-  migrations are collapsed to a single baseline (`db/migrations/0000_collapsed_baseline.sql`
-  plus a small number of additive event-type migrations) and are drift-checked.
+  migrations are a **single collapsed baseline**
+  (`db/migrations/0000_collapsed_baseline.sql`) **plus additive migrations** layered
+  on top of it, and are drift-checked.
 - Tenant isolation is **Postgres-RLS-enforced** (denies by default) keyed on a
   session-set org via `db/src/orgScope.ts`; a query off the org-scoped client
   sees zero cross-tenant rows.
@@ -36,11 +37,44 @@ only** (`services/orchestrator/tests/fixtures/`), never in runtime source.
 ## Adapter seams (slottable behind contracts + conformance suites)
 
 Every backend is a new implementation + registry entry behind a stable contract,
-proven by a shared conformance suite — not a refactor. The seams: `Allocator`,
-`SecretStore`, `JobQueue`, `EventStore`, `SourceConnector`, `IdentityProvider`,
-`WriterAdapter`/`AnswererAdapter`, `CostResolver`, and the `VcsProvider`
-(`engine/contracts/vcsProvider.ts` + `engine/providers/{buildVcsProvider,githubVcsProvider}.ts`)
-that abstracts PR/merge VCS operations.
+proven by a shared conformance suite — not a refactor. The general-purpose seams:
+`Allocator`, `SecretStore`, `JobQueue`, `EventStore`, `SourceConnector`,
+`IdentityProvider`, `WriterAdapter`/`AnswererAdapter`, `CostResolver`, and the
+`Repositories` data-access seam. (~21 conformance suites live under
+`services/orchestrator/tests/conformance/`.)
+
+### The four VCS/merge seams (purpose-decomposed)
+
+The old monolithic `VcsProvider` — one ~26-method GitHub-shaped interface that
+embedded forge semantics (`mergeable_state`, `update-branch`, the GitHub PR-merge
+endpoint) into engine control flow — is decomposed into four
+purpose-shaped contracts, so the merge **decision** is Tanren's and the **host**
+is swappable (the host just lands what Tanren authorized). See
+[`tanren-owns-the-engine.md`](./tanren-owns-the-engine.md) for the full rationale:
+
+- **`WorkspaceVcsCore`** (`engine/contracts/workspaceVcsCore.ts`) — the local,
+  jj-backed VCS core that owns the runner's working copy: clone/import, branch,
+  commit, **rebase-onto-a-shifting-base**, first-class conflict recording +
+  resolution + descendant restack, and the clean-ref export. jj-only, no git
+  fallback.
+- **`CodeHost`** (`engine/contracts/codeHost.ts`) — the **minimal** (8-method)
+  hosting half: create repo, read default branch, push/fetch a ref, read a
+  commit/diff/file, and land an already-authorized ref. GitHub becomes a code
+  source / OAuth surface / issue source — **not** the engine.
+- **`MergeAuthority`** (`engine/contracts/mergeAuthority.ts`) — the owned,
+  host-independent, **fail-closed** decision: what makes merging into `main`
+  okay. It unifies the formerly scattered gate + `governancePosture` + review +
+  audit + mergeability into one authority.
+- **`VisibilityProjection`** (`engine/contracts/visibilityProjection.ts`) — the
+  **best-effort** mirror of the change as a PR / check / comment on a forge UI for
+  humans. Every method is optional and best-effort by type.
+
+The unified **`integration_nodes`** run model (`engine/contracts/integrationNodes.ts`)
+is the one shape for an eager dependent build, a merge-queue batch, and a stacked
+PR — work on a base that may shift (`main` + an ordered set of not-yet-landed
+ancestor branches). The **never-discard `BaseShiftCoordinator`**
+(`engine/dag/baseShiftCoordinator.ts`) jj-rebases dependent work **in place** when
+an ancestor lands, rather than superseding-and-regenerating it.
 
 ## Documents in this directory
 
@@ -63,5 +97,8 @@ that abstracts PR/merge VCS operations.
   10 → 1M scale map and the highest-leverage structural moves (data-access seam,
   plane split) that remain.
 - `autonomy-engine.md` — the autonomy core + native merge coordination design
-  rationale (DagWalker, real-LLM Forge, speculation + percolation, the stub-ban
-  and real-e2e guardrails).
+  rationale (DagWalker, real-LLM Forge, the never-discard rebase +
+  `MergeAuthority` engine, the stub-ban and real-e2e guardrails).
+- [`tanren-owns-the-engine.md`](./tanren-owns-the-engine.md) — the merge-engine
+  cutover: the four VCS/merge seams above, the jj `WorkspaceVcsCore`,
+  `integration_nodes`, and the never-discard `BaseShiftCoordinator`.

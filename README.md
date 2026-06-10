@@ -171,7 +171,7 @@ kill-switch env vars** (`MERGE_AUTHORITY_LIVE`, `CONFLICT_RESOLVER_JJ_LIVE`,
 `BASE_SHIFT_LIVE`, `INTEGRATION_NODES_DRIVE`). apex v32 exercised the early live
 paths but **halted at scaffold-bootstrap before any merge**, so the flag-on
 **merge** paths are still **not apex-proven**; the deletions (the now-dead
-`speculativeIntegrator`, the git-merge-abort applier dance, the 25-method
+`speculativeIntegrator`, the git-merge-abort applier dance, the 26-method
 `VcsProvider`) are deferred until a run reaches a merge. Full rationale:
 **`docs/architecture/tanren-owns-the-engine.md`**.
 

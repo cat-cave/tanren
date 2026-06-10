@@ -1,6 +1,6 @@
 // Author the greenfield monorepo-scaffold spec FROM the captured lifecycle.
 //
-// The stack-flexible contract (docs/roadmap/stack-flexible-contract.md): Tanren
+// The stack-flexible contract (docs/operator-guide/ci-config.md): Tanren
 // knows NO stack. A project DECLARES its lifecycle in a `justfile` (the
 // conventional targets `bootstrap`/`tier-1`/`tier-2`/`tier-3`/`build`/`deploy`
 // hold the ACTUAL stack commands) + a stable, stack-agnostic `.tanren/ci.yml`

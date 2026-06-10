@@ -3,10 +3,13 @@
 **Status: analysis / scoping. No build is authorized by this doc.** A Rust rewrite is **HELD**.
 (Update: the RLS + control/data-plane split this doc once called "plan-only" has shipped — RLS
 fully enforced + live-validated, the plane split complete through Vault per-run scoped credentials,
-and `LISTEN/NOTIFY` replaced the 1s polling. The remaining prepwork below — the data-access seam,
-the DB-row JSON-Schema export, conformance for the un-seamed surfaces — is the live to-do.) This is
-the _map_ of the binding constraints in the **real current architecture** and the highest-leverage
-moves that make the eventual refactor feasible. Decisions are deferred.
+`LISTEN/NOTIFY` replaced the 1s polling, and **the data-access `Repositories` seam has shipped**
+(contract + pg impl + conformance suite `repositoriesConformance.ts`); the remaining data-access
+work is **adoption** — moving the still-raw read paths onto it — not standing the seam up. The
+remaining prepwork below — the DB-row JSON-Schema export, conformance for the last un-seamed
+surfaces — is the live to-do.) This is the _map_ of the binding constraints in the **real current
+architecture** and the highest-leverage moves that make the eventual refactor feasible. Decisions
+are deferred.
 
 It builds on, and does **not** duplicate:
 
@@ -15,7 +18,7 @@ It builds on, and does **not** duplicate:
   mutation testing, harness protocol, the OSS↔hosting billing seam). Read it first.
 - [`ROADMAP.md`](../../ROADMAP.md) — the SaaS hardening history (RLS denies-by-default,
   control/data-plane split, Vault per-run scoped credentials, `42501`-proven). This doc tells you
-  _what scale forces_ the plane split to become; the roadmap records that work as done.
+  _what scale forces_ the plane split to become; the roadmap records it as done.
 - [`PROJECT_BRIEF.md`](../../PROJECT_BRIEF.md) — the durable vision and the eight
   architectural invariants (§1.2), which constrain every option below.
 
@@ -34,61 +37,62 @@ Read before trusting any claim below. The shape, as actually built on `main`:
   constructed once in `main.ts`). Every repository, route loader, SSE stream, and
   the worker share it.
 - **The worker is in-process and event-driven.** `engine/worker/runWorker.ts` runs
-  _inside_ the HTTP server, gated behind `TANREN_RUN_WORKER=1` (default OFF). Slots
-  loop claim→execute→idle. There is no separate worker fleet, no external queue.
+  _inside_ the HTTP server, gated behind `TANREN_RUN_WORKER=1` (default OFF); slots
+  loop claim→execute→idle. No separate worker fleet, no external queue.
 - **The queue is Postgres-native and already correct in shape.**
   `engine/contracts/jobQueue.ts` `claim()` is the textbook
   `… FOR UPDATE SKIP LOCKED LIMIT 1` CTE + CAS to `running` with a lease
   (`leased_until`, `heartbeat_at`), reaped by `engine/worker/jobReaper.ts`.
   **`LISTEN/NOTIFY` is wired** (`db/src/notify.ts`, channel `tanren_run`): every
   run-state write fires a `NOTIFY` at commit, and the worker + SSE stream wake on it
-  rather than polling. A long backstop interval bounds latency only if a NOTIFY is missed — the 1s hot poll is gone.
-- **Data access is raw SQL, hand-typed, scattered.** The orchestrator does **not**
-  use Drizzle as its query layer — Drizzle lives in `db/` for the schema +
-  migrations only. Routes and the engine issue **~207 raw `pool.query(...)` call
-  sites across ~53 files**, plus ~63 files carrying inline `SELECT/INSERT/UPDATE`
-  SQL string literals (~269 query-bearing sites total). Each result row is
-  re-typed by hand (a `RawRunRow` interface + a Zod `RunRow` validator per table,
-  e.g. `engine/repositories/runs.ts`). The `engine/repositories/**` directory
-  (actors/jobs/runs/specs/tasks, ~567 lines) is a _partial_ data-access layer: the
-  canonical write paths go through it, but most **read** paths (route loaders, SSE,
-  DORA, costs, insights) issue their own SQL directly against the shared pool.
+  rather than polling — the 1s hot poll is gone.
+- **The `Repositories` data-access seam has shipped; raw-SQL adoption is partial.**
+  The orchestrator does **not** use Drizzle as its query layer — Drizzle lives in
+  `db/` for the schema + migrations only. The `Repositories` contract
+  (`engine/contracts/repositories.ts`) now aggregates the per-entity stores under
+  `engine/repositories/**` (actors/jobs/runs/specs/tasks/projects/costs/events/…)
+  into one slottable seam — a contract + pg impl + conformance suite
+  (`tests/conformance/repositoriesConformance.ts`), the shape `JobQueue`/`EventStore`
+  already have. Each store method takes an explicit `QueryClient` + `ActorRef`, and
+  each row is Zod-validated (e.g. `engine/repositories/runs.ts`). **What remains is
+  adoption:** ~**85 files still issue raw `.query(...)`** (≈71 on `routes/**` +
+  `engine/**` read paths — route loaders, SSE, DORA, costs, insights), plus the two
+  forge stores (`forge/audits/store.ts` + `forge/inbox/store.ts`). The seam exists;
+  collapsing the remaining read sites behind it is the live work.
 - **Tenant isolation is Postgres-RLS-enforced.** `org_id` is `NOT NULL` on the core
   tables and **RLS policies deny by default** keyed on a session-set org (see
   `db/src/orgScope.ts`): a query off the org-scoped client sees zero cross-tenant
   rows even if a hand-written `WHERE org_id = $n` is forgotten. Loaders still carry
-  the predicate as defense-in-depth, but the database — not the application — is now
-  the isolation backstop. (The collapsed baseline `0000_collapsed_baseline.sql`
-  carries the `NOT NULL` constraints and the RLS policies; the old per-migration
-  numbers are gone.)
+  the predicate as defense-in-depth, but the database is now the isolation backstop.
+  (The collapsed baseline `0000_collapsed_baseline.sql` carries the `NOT NULL`
+  constraints + RLS policies; the old per-migration numbers are gone.)
 - **The dashboard is a BFF that re-derives types over HTTP.**
-  `services/dashboard` (Hono SSR + esbuild-built client "islands" under
-  `src/client/**`) does **not** read Postgres for product data; it `fetch()`es the
-  orchestrator (`ORCHESTRATOR_URL`, default `http://localhost:3100`) through typed
-  clients in `src/api/*Client.ts`. The response shapes are **hand-mirrored** in
-  `src/api/*Types.ts` ("the dashboard-side mirror of the orchestrator's …
-  contracts"), not generated and not drift-checked against the orchestrator's
-  Zod/JSON-Schema source — the single largest type-sharing gap in the system.
-  `api/types.ts` sits **exactly at the 500-line cap**.
+  `services/dashboard` (Hono SSR + esbuild-built client "islands") does **not** read
+  Postgres for product data; it `fetch()`es the orchestrator (`ORCHESTRATOR_URL`)
+  through typed clients in `src/api/*Client.ts`. The response shapes are
+  **hand-mirrored** in `src/api/*Types.ts`, not generated and not drift-checked
+  against the orchestrator's Zod/JSON-Schema source — the single largest type-sharing
+  gap in the system. `api/types.ts` sits **exactly at the 500-line cap**.
 - **Contracts already exist as a neutral artifact.** Zod is the authoring tool;
   `contracts/json/**` is the exported JSON-Schema (events/state/answerers/http/
   insights), regenerated by `scripts/contract-schema-export.mjs` and pinned by the
-  `check:contract-schema-drift` gate. DB row shapes are **not** in that export
-  (they live as Drizzle tables, neutral via SQL migrations + the schema-drift
-  gate).
-- **Four seams have conformance suites.**
-  `services/orchestrator/tests/conformance/**` covers `Allocator`, `JobQueue`,
-  `EventStore`, `SecretStore` — each a shared suite any impl (fake / real / future
-  Rust) must pass. Stryker mutation testing is wired (`just mutation`, ~40% scope
-  floor). Adapter seams beyond those four (`SshSubstrate`, `CostResolver`,
-  `NotificationOutbox`, provider/harness adapters, `GitHubHttpClient`) have
-  contracts but **no conformance suite yet**.
+  `check:contract-schema-drift` gate. DB row shapes are **not** in that export (they
+  live as Drizzle tables, neutral via SQL migrations + the schema-drift gate).
+- **~21 seams have conformance suites.**
+  `services/orchestrator/tests/conformance/**` now carries ~21 shared suites —
+  `Allocator`, `JobQueue`, `EventStore`, `SecretStore`, `CostResolver`,
+  `Repositories`, the four VCS/merge seams (`WorkspaceVcsCore`, `CodeHost`,
+  `MergeAuthority`, `VisibilityProjection`), `DagWalker`, `MergeCoordinator`,
+  `CommandSubstrate`, the integration provisioner, … — each a suite any impl
+  (fake / real / future Rust) must pass. Stryker is wired (`just mutation`, **break
+  floor 42%** per `stryker.config.mjs`). A few surfaces (`NotificationOutbox`, the
+  provider/harness adapters, `GitHubHttpClient`) still lack one.
 - **The 500-line cap is real and biting.** `scripts/check-architecture.mjs` fails
-  any source file over 500 lines (`file-line-max-500`). Multiple files now sit
-  _at_ 500 (`routes/runs/list.ts`, `dashboard/src/api/types.ts`) or within a
-  handful (`reviewMerge/mergeDispatch.ts` 498, `providers/github.ts` 497,
-  `routes/forge/index.ts` 496). The cap is doing its job — surfacing modules that
-  have outgrown their boundary — but several are now structurally stuck.
+  any source file over 500 lines (`file-line-max-500`). Multiple files now sit _at_
+  500 (`routes/runs/list.ts`, `dashboard/src/api/types.ts`) or within a handful
+  (`reviewMerge/mergeDispatch.ts`, `providers/github.ts`, `routes/forge/index.ts`).
+  The cap surfaces modules that have outgrown their boundary — several are now
+  structurally stuck.
 
 ---
 
@@ -96,27 +100,27 @@ Read before trusting any claim below. The shape, as actually built on `main`:
 
 ### Where the current structure strains
 
-1. **No real data-access layer (the biggest structural debt).** ~269 query-bearing
-   sites, raw SQL, per-call hand-typed rows, the `org_id` predicate copy-pasted
-   into every read. `engine/repositories/**` is the right idea applied to ~5
-   tables on the write path only. The strain: **correctness** — isolation is a
-   hand-written `WHERE` per site, one omission is a cross-org leak (RLS is the fix,
-   §3/§5); **refactor cliff** — a schema change ripples to N call sites not one
-   method, and a Rust port re-derives 269 SQL strings instead of a bounded set of
-   repository contracts; **test surface** — there is no single seam a Rust
-   repository impl could slot behind and run against a conformance suite (unlike
-   `JobQueue`/`EventStore`, which _do_ have that).
+1. **Partial data-access-seam adoption (the largest remaining structural debt).**
+   The `Repositories` seam now **exists** — a contract + pg impl + conformance
+   suite (`tests/conformance/repositoriesConformance.ts`), the shape
+   `JobQueue`/`EventStore` have, covering the canonical entity stores under
+   `engine/repositories/**`. The debt is **incomplete adoption**: ~85 files still
+   issue raw `.query(...)`, most on **read** paths (route loaders, SSE, DORA, costs,
+   insights), plus the two forge stores. The remaining strain: **correctness** —
+   every un-migrated read still leans on a hand-written `WHERE org_id` (RLS is the
+   backstop, §3/§5); **refactor cliff** — a schema change ripples to each un-migrated
+   site, and a Rust port re-derives those SQL strings; **test surface** — only the
+   migrated paths run against the conformance suite. The fix is finishing adoption,
+   not building the seam.
 2. **500-line-cap pressure points** are the structural smell, not the problem.
    Files pinned at 500 (`routes/runs/list.ts`, `dashboard/api/types.ts`,
-   `mergeDispatch.ts`, `providers/github.ts`, `routes/forge/index.ts`) are modules
-   doing two jobs: e.g. `list.ts` is _both_ the read-API query layer _and_ the
-   row-mapping layer; `api/types.ts` is the dashboard's entire re-derived contract
-   surface in one file. The cap is a forcing function pointing exactly at the
+   `mergeDispatch.ts`, …) are modules doing two jobs (e.g. `list.ts` is _both_ the
+   read-API query layer _and_ the row-mapper) — the cap points exactly at the
    consolidation work.
-3. **Provider adapters duplicate endpoint/credential/cost wiring.** `providers/
-{claude,codex,opencode,aider}.ts` (~419–497 lines each) repeat base-URL
-   override, credential materialization, and token-usage parsing. The harness
-   protocol (longevity doc §4) is the consolidation target.
+3. **Provider adapters duplicate endpoint/credential/cost wiring.**
+   `providers/{claude,codex,opencode,aider}.ts` repeat base-URL override, credential
+   materialization, and token-usage parsing. The harness protocol (longevity doc §4)
+   is the consolidation target.
 
 ### The ideal shape (a target, not a sprint)
 
@@ -124,29 +128,28 @@ Keep the **multi-service / multi-seam** boundary that already exists
 (orchestrator / dashboard / db over HTTP+SQL+SSH+events) — it is the asset. Refine
 _within_ it:
 
-- **A single data-access layer (`engine/data/**`), one method per query intent,
-one row-mapper per table.** Collapse the ~269 raw sites behind it. Every method
-takes an `ActorContext`(or an org-scoped handle) so the`org*id` predicate is
-  applied \_structurally*, never by the caller. This is the seam a Rust repositories
-  crate slots behind, and the seam RLS makes belt-and-suspenders rather than
-  load-bearing. **The highest-leverage early move** (see §7).
-- **Promote it to a conformance-covered seam** like `JobQueue`/`EventStore` already
-  are: a `Repositories` contract + a shared conformance suite + an in-memory fake.
-  Today only the write-path repositories approximate this, none with a suite.
+- **Finish the data-access layer behind the shipped `Repositories` seam, one
+  method per query intent, one row-mapper per table.** The seam, the pg impl, and
+  the conformance suite (`repositoriesConformance.ts`) already **exist**; collapse
+  the ~85 still-raw sites behind it. Every method takes a `QueryClient` + acting
+  `ActorRef`, so org scope is carried structurally (RLS as backstop). This is the
+  seam a Rust crate slots behind, and **the highest-leverage remaining adoption
+  move** (see §7).
 - **One neutral contract package the dashboard consumes** (kill the hand-mirrored
   `api/*Types.ts`): generate the dashboard's client types from the same JSON-Schema
-  export the orchestrator emits (§2). The 500-line `api/types.ts` stops being a
+  export the orchestrator emits (§2), so the 500-line `api/types.ts` stops being a
   hand-maintained liability.
 - **Crate-shaped module boundaries now, in TS.** Structure the engine as if each
-  major seam were already a separate publishable unit (`contracts`, `data`,
-  `queue`, `substrate`, `providers`, `workflow`, `costs`). The TS module
-  graph is the dry-run of the eventual Rust workspace crate graph — a clean
-  boundary today is a `Cargo.toml` member later; a leaky one is a rewrite.
+  major seam were already a separate publishable unit (`contracts`, `data`, `queue`,
+  `substrate`, `providers`, `workflow`, `costs`). The TS module graph is the dry-run
+  of the eventual Rust crate graph — a clean boundary today is a `Cargo.toml` member
+  later; a leaky one is a rewrite.
 
 The test: **could you replace one engine module with a Rust binary, behind its
 contract, and prove it green against the same conformance + behavior tests?** True
-today for `JobQueue`/`EventStore`/`Allocator`/`SecretStore`; making it true for
-**data access** and **the substrate** is the structuring north star.
+today for ~21 seams (`JobQueue`/`EventStore`/`Repositories`/`CostResolver`/the four
+VCS-merge seams/…); the structuring north star is finishing **data-access adoption**
+and closing the last un-seamed surfaces.
 
 ---
 
@@ -191,26 +194,23 @@ Concretely, the pipeline extends the **already-shipped** export machinery
 `--check` drift gate), so this is _extension, not invention_:
 
 1. **Add DB row contracts to the export.** Today `events/state/answerers/http/
-insights` are exported; DB rows are not. Promote the per-table Zod row
-   validators (the `RunRow`-style schemas in `engine/repositories/**`) into the
-   catalog so row shapes become first-class neutral contracts — also a prerequisite
-   for the data-access seam in §1.
+insights` are exported; DB rows are not. Promote the per-table Zod row validators
+   (the `RunRow`-style schemas in `engine/repositories/**`) into the catalog so row
+   shapes become first-class neutral contracts — a prerequisite for §1.
 2. **Generate the dashboard's client types** from `contracts/json/http/**` instead
    of hand-mirroring them, + a drift gate (`api/*Types.ts` → regenerated
    `api/*.gen.ts`; the gate fails if the committed file diverges). Kills the
    largest type-sharing gap and unsticks the 500-line `api/types.ts`.
 3. **Pin the Rust serde generation in CI _before_ a Rust line is written** (§6):
    run `typify` over `contracts/json/**` in a check job that fails if generation
-   errors. This proves the neutral schema is _continuously Rust-portable_, so when
-   the rewrite starts the types are already known-good — not a discovery during the
-   port.
+   errors — proving the neutral schema is _continuously Rust-portable_, so the
+   rewrite starts on known-good types rather than discovering drift during the port.
 
-End state: a Rust backend (serde) and the TS frontend (and any future frontend)
-**share one neutral schema source**; drift is a CI failure in every direction;
-nobody hand-maintains a type mirror. **Known carve-out** (from the longevity doc):
-the harness-protocol I/O shapes (`WriterResult`, `TokenUsage`,
-`AnswererRunOptions`) are TS `interface`s, not Zod — prose-documented, not
-auto-exported; promoting them to Zod closes the last hand-typed contract boundary.
+End state: a Rust backend (serde) and the TS frontend **share one neutral schema
+source**; drift is a CI failure in every direction; nobody hand-maintains a type
+mirror. **Known carve-out** (longevity doc): the harness-protocol I/O shapes
+(`WriterResult`, `TokenUsage`, `AnswererRunOptions`) are TS `interface`s, not Zod —
+promoting them to Zod closes the last hand-typed contract boundary.
 
 ---
 
@@ -288,20 +288,19 @@ named against the **current** design, with the concrete change.
   wake, thousands of LISTEN connections on one primary want a dedicated event-bus
   fan-out tier. Single-primary write throughput is the wall.
 - **Change:**
-  - **Read replicas** for the dashboard/DORA/cost/SSE read paths (read-mostly per
-    PROJECT_BRIEF §6.5) — offload the primary. The data-access layer (§1) is what
-    makes "route reads to a replica" a one-place change instead of 269.
+  - **Read replicas** for the dashboard/DORA/cost/SSE read paths — offload the
+    primary. The data-access layer (§1) is what makes "route reads to a replica" a
+    one-place change instead of ~85.
   - **Partition the hot append tables** (`events`, `cost_records`) by time and/or
     `org_id`; partition or sleeve the `job_queue` by `task_kind` / shard so
     claimers contend on disjoint row sets.
   - **An event bus / fan-out tier** for SSE (the edge plane, §3): the worker
-    publishes run deltas once; an edge tier fans out to N subscribers, instead of
+    publishes run deltas once and an edge tier fans out to N subscribers, instead of
     N subscribers each polling Postgres.
   - **Backpressure via the walker's admission point.** The DagWalker already gates
     new work on the budget ceiling (`engine/dag/budgetGate.ts`) before spawning
-    runs; that scheduling chokepoint is where a load-shedding valve (a concurrency
-    or spend cap that defers rather than spawns) belongs at this scale. There is no
-    separate quota-admission seam — budget is the only gate today.
+    runs; that chokepoint is where a load-shedding valve (a concurrency or spend cap
+    that defers rather than spawns) belongs — budget is the only gate today.
 
 ### 1,000,000 concurrent — single-Postgres is the wall; shard or split planes
 
@@ -344,7 +343,7 @@ The end-state posture, framed as an extension of the RLS + plane-split direction
 shared tenant data without it):
 
 - **Database least-privilege + RLS (the foundation).** Tenant isolation moves from
-  ~269 hand-written `org_id` predicates into **Postgres RLS policies** keyed on a
+  the remaining hand-written `org_id` predicates into **Postgres RLS policies** keyed on a
   session-set `org_id`, with **least-privilege roles per plane** (control: read +
   enqueue; data: claim + write run/event/cost; edge: read-only on the published
   stream). RLS is the structural fix for the single-omitted-`WHERE` leak (§0/§1)
@@ -371,9 +370,9 @@ shared tenant data without it):
   pinned-key SSH session. A compromised runner exfiltrates at most its own run's
   short-lived leased creds.
 - **Secret isolation by plane + tenant.** No plane holds more secret scope than its
-  job needs (the data plane never sees control-plane signing keys); one tenant's
-  secret material is unreachable from another's run even on a shared cluster
-  (RLS + per-tenant namespacing in the `SecretStore`).
+  job needs (the data plane never sees control-plane signing keys); a tenant's
+  secret material is unreachable from another's run even on a shared cluster (RLS +
+  per-tenant `SecretStore` namespacing).
 
 The posture is a strict superset of where the RLS + plane-split plan is heading —
 zero-trust is "the plane split, but every boundary mutually authenticated and every
@@ -392,44 +391,42 @@ the new impl is _provably_ equivalent, not hopefully-equivalent.
 
 - Behavior tests through public contracts (`app.request` HTTP, DB state, event
   stream) — refactor-safe by construction.
-- Conformance suites for **4 seams** (`Allocator`, `JobQueue`, `EventStore`,
-  `SecretStore`) — any impl, incl. a future Rust one, must pass the _same_ suite
-  (the strangler-fig enabler).
+- Conformance suites for **~21 seams** (`Allocator`, `JobQueue`, `EventStore`,
+  `SecretStore`, `CostResolver`, `Repositories`, the four VCS/merge seams,
+  `DagWalker`, `MergeCoordinator`, `CommandSubstrate`, …) — any impl, incl. a
+  future Rust one, must pass the _same_ suite (the strangler-fig enabler).
 - The JSON-Schema export + drift gate (`check:contract-schema-drift`) — the neutral
   spec a serde port generates from. Stryker mutation testing (`just mutation`,
-  ~40% scope floor) — test _strength_ as a number, with a regression ratchet.
+  **break floor 42%**) — test _strength_ as a number, with a regression ratchet.
 
 **What must exist BEFORE the rewrite (the gaps to close first):**
 
-1. **Conformance suites for the remaining load-bearing seams.** Today only 4 of the
-   seams are conformance-covered. Before porting, the **data-access layer**
-   (§1, doesn't exist as a seam yet), the **`SshSubstrate`**, the **provider/
-   harness adapters**, and **`CostResolver`** each need a shared conformance suite.
-   _You cannot prove a Rust impl equivalent to a seam that has no equivalence
-   suite._
+1. **Conformance suites for the last un-covered load-bearing seams.** The seam set
+   is now broad (~21 suites, incl. the **`Repositories`** + **`CostResolver`** seams
+   that used to be listed as gaps here). The remaining holes — the **provider/harness
+   adapters**, **`NotificationOutbox`**, **`GitHubHttpClient`** — each still need a
+   suite before a Rust port (you cannot prove a Rust impl equivalent to a seam with
+   no equivalence suite).
 2. **Golden behavior fixtures for the full workflow loop.** Recorded request/
-   response pairs, golden event sequences, and run-state snapshots for the
-   canonical plan→write→check→audit→PR→CI→merge loop (PROJECT*BRIEF §2). These are
-   the executable spec a Rust port must reproduce **byte-for-byte** on the
-   contract surface. Some exist (fixture workflows under `tests/`); the gap is
-   \_completeness across every terminal outcome* (merged / failed / quota_exceeded /
-   recovered).
+   response pairs, golden event sequences, and run-state snapshots for the canonical
+   plan→write→check→audit→PR→CI→merge loop (PROJECT*BRIEF §2) — the executable spec
+   a Rust port must reproduce **byte-for-byte** on the contract surface. Some exist
+   (fixture workflows under `tests/`); the gap is \_completeness across every terminal
+   outcome* (merged / failed / quota_exceeded / recovered).
 3. **DB row contracts in the JSON-Schema export** (§2) — so a Rust repository impl
-   generates its row types from the same neutral source the TS one validates
-   against, and the data-access conformance suite checks both against it.
+   generates row types from the same neutral source the TS one validates against.
 4. **A continuous serde-generation CI check** (§2.3): run `typify` over
    `contracts/json/**` on every PR. The day it fails is the day the schema drifted
    out of Rust-portability — caught years before the rewrite, not during it.
 5. **Raise the mutation-score floor on the seams a Rust impl will replace first.**
    The longevity doc flags `engine/credentials/**` (~33%) and several allocators
-   (0% under Stryker) as the weakest. A seam you intend to re-implement in Rust
-   must have a _strong_ conformance + mutation bar first, or "green in Rust" proves
-   nothing.
+   (0% under Stryker) as weakest; a seam you intend to re-implement in Rust needs a
+   _strong_ conformance + mutation bar first, or "green in Rust" proves nothing.
 
 **The rule:** a seam is rewrite-ready only when **(conformance suite) +
 (golden behavior fixtures) + (neutral schema) + (mutation floor)** are all green
-for it. Port seams in that-order-of-readiness, one at a time, strangler-fig style —
-each one shipped only after it passes the _identical_ suite the TS impl passes.
+for it. Port seams in that order of readiness, one at a time, strangler-fig style —
+each shipped only after it passes the _identical_ suite the TS impl passes.
 
 ---
 
@@ -441,13 +438,14 @@ immediately in the current system.**
 
 ### Highest-leverage early moves (do these now)
 
-1. **Build the data-access layer (`engine/data/**`) and collapse the ~269 raw SQL
-sites behind it, org-scoped by construction.** The single highest-leverage move:
-(a) removes the cross-tenant-leak risk of hand-written `org*id` predicates,
-   (b) becomes the seam RLS hardens and a Rust repositories crate slots behind,
+1. **Finish data-access-seam adoption — collapse the ~85 still-raw SQL sites behind
+   the shipped `Repositories` seam, org-scoped by construction.** The seam (contract +
+   pg impl + conformance suite) is **DONE**; migrating the still-raw read paths onto it
+   (a) removes the cross-tenant-leak risk of hand-written `org_id` predicates,
+   (b) lands every read on the seam RLS hardens and a Rust crate slots behind,
    (c) makes "route reads to a replica" / "shard by org" a one-place change at
    1k/1M scale, (d) unsticks the 500-line files mixing querying with mapping.
-   \_Nothing else here is feasible at scale without it.*
+   _Nothing else here is feasible at scale without it._
 2. **Generate the dashboard's client types from the JSON-Schema export + add a
    drift gate.** Eliminate the hand-mirrored `api/*Types.ts` (the largest type-
    sharing gap), prove end-to-end type sharing today, and make the BFF↔orchestrator
@@ -455,18 +453,20 @@ sites behind it, org-scoped by construction.** The single highest-leverage move:
 3. **Add DB row contracts to `contracts/json/**`and a continuous`typify`
    generation check.\*\* Makes the neutral schema cover the whole contract surface
    and proves continuous Rust-portability — for free, in CI, before any rewrite.
-4. **Backfill conformance suites for `SshSubstrate`, the provider/harness adapters,
-   `CostResolver`, and the new data-access seam.** Extends the proven-equivalence
-   base from 4 seams toward "every load-bearing seam," which is the precondition
-   for §6.
+4. **DONE: `CostResolver` + the data-access (`Repositories`) seam are now
+   conformance-covered** (`costResolverConformance.ts`, `repositoriesConformance.ts`),
+   alongside `CommandSubstrate`. What remains to backfill is the provider/harness
+   adapters, `NotificationOutbox`, and `GitHubHttpClient` — extending the
+   proven-equivalence base toward "every load-bearing seam," the precondition for §6.
 
 ### Biggest risks
 
-- **Tenant isolation by hand-written predicate.** The current 269-site `org_id`
-  filtering is one omission from a cross-org leak, and it gets _worse_ the moment a
-  worker fleet + control plane run in parallel against shared data. **RLS + the
-  data-access seam are not optional before any plane split.** This is the top
-  risk.
+- **Tenant isolation by hand-written predicate on the un-migrated reads.** The
+  ~85 still-raw `.query(...)` sites each lean on a hand-written `org_id` filter, one
+  omission from a cross-org leak, and it gets _worse_ the moment a worker fleet +
+  control plane run in parallel against shared data. RLS (shipped) is the backstop;
+  finishing `Repositories`-seam adoption removes the hand-written predicate
+  entirely. This is the top remaining adoption risk.
 - **Rewriting before the equivalence harness exists.** Porting a seam that lacks a
   conformance suite + golden fixtures + mutation floor means "green in Rust" proves
   nothing. The risk is a confident-but-wrong port. §6's checklist is the mitigation;
@@ -488,13 +488,13 @@ sites behind it, org-scoped by construction.** The single highest-leverage move:
 
 ## Appendix: the map in one line per layer
 
-| Layer            | Today (real)                                              | Forces a change at | Fix                                       |
-| ---------------- | --------------------------------------------------------- | ------------------ | ----------------------------------------- |
-| Data access      | ~269 raw SQL sites, hand-typed rows, hand `org_id` filter | 100 → 1k → 1M      | data-access layer (§1) + RLS (§3/§5)      |
-| Worker           | in-process, event-driven (`NOTIFY`), flagged off          | 100                | split to fleet (queue supports it)        |
-| Queue            | PG `FOR UPDATE SKIP LOCKED` + `LISTEN/NOTIFY` wired       | 1k → 1M            | partition; impl-swap seam                 |
-| DB               | one primary, one shared pool                              | 100 → 1k → 1M      | pooler → replicas → partition → shard     |
-| SSE / fan-out    | `NOTIFY`-wake per stream (1s poll gone)                   | 1k                 | event-bus edge plane at high stream count |
-| Type sharing     | Zod→JSON-Schema gated; dashboard re-derives by hand       | now (correctness)  | gen FE types from JSON-Schema (§2)        |
-| Tenant isolation | Postgres RLS (denies by default) + org-scoped client      | done               | RLS enforced; sharding follows at 1M      |
-| Proof of port    | 4 conformance seams + Stryker + JSON-Schema export        | before rewrite     | conformance for all seams + fixtures      |
+| Layer            | Today (real)                                                     | Forces a change at | Fix                                                |
+| ---------------- | ---------------------------------------------------------------- | ------------------ | -------------------------------------------------- |
+| Data access      | `Repositories` seam shipped; ~85 raw `.query` sites unmigrated   | 100 → 1k → 1M      | finish seam adoption (§1) + RLS (§3/§5)            |
+| Worker           | in-process, event-driven (`NOTIFY`), flagged off                 | 100                | split to fleet (queue supports it)                 |
+| Queue            | PG `FOR UPDATE SKIP LOCKED` + `LISTEN/NOTIFY` wired              | 1k → 1M            | partition; impl-swap seam                          |
+| DB               | one primary, one shared pool                                     | 100 → 1k → 1M      | pooler → replicas → partition → shard              |
+| SSE / fan-out    | `NOTIFY`-wake per stream (1s poll gone)                          | 1k                 | event-bus edge plane at high stream count          |
+| Type sharing     | Zod→JSON-Schema gated; dashboard re-derives by hand              | now (correctness)  | gen FE types from JSON-Schema (§2)                 |
+| Tenant isolation | Postgres RLS (denies by default) + org-scoped client             | done               | RLS enforced; sharding follows at 1M               |
+| Proof of port    | ~21 conformance seams + Stryker (floor 42%) + JSON-Schema export | before rewrite     | conformance for last un-seamed surfaces + fixtures |

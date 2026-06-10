@@ -7,9 +7,13 @@ CLI or DB access.
 ## What routes here
 
 A run lands on the recovery surface when its `outcome ∈ {halted,
-escape_hatch_hit, retry_budget_exhausted, window_exhausted}` (or its status is
-`halted`). The sidenav **halted runs** row (`/runs/halted`) lists them; each
-links to its per-run recovery surface at `/runs/:runId/recover`.
+escape_hatch_hit, retry_budget_exhausted, convergence_stalled, window_exhausted}`
+(`RECOVERABLE_OUTCOMES` in `engine/recovery/index.ts`; or its status is `halted`).
+The spec-loop redesign replaced the per-spec retry-cap halt with a
+**`convergence_stalled`** halt — the convergence answerer judges the loop is no
+longer making progress — which is the halt a long-running spec now hits. The
+sidenav **halted runs** row (`/runs/halted`) lists them; each links to its per-run
+recovery surface at `/runs/:runId/recover`.
 
 ## The recovery surface
 
@@ -34,7 +38,7 @@ fresh planner run that the P2A-0012 loop picks up.
 | **revise the spec**          | Records the intent + opens the P2B-0003 spec-edit form. On submit you replan with the revised spec. | —                                                                                              |
 | **replan with instructions** | Appends your steering note to the spec and re-invokes the planner.                                  | Empty note is rejected.                                                                        |
 | **rollback the code**        | Resets the workspace to a named known-good commit and re-queues from there.                         | Disabled when no prior commit exists; requires an explicit confirm checkbox before it submits. |
-| **resolve via conversation** | Opens a run-scoped Forge inspection thread with read access to the disagreement history.            | Read-only — changes no state.                                                                  |
+| **resolve via conversation** | Opens a run-scoped Forge inspection thread with read access to the findings + loop history.         | Read-only — changes no state.                                                                  |
 
 ## Lineage
 
@@ -44,14 +48,17 @@ Recovery actions persist into the `events` table as `recovery.revise_routed`,
 separate lineage table — the events row IS the lineage record, so a recovered
 run's history reads halt → revise → replan in the run-detail event list.
 
-## Recovering an auditor-disagreement halt (the canonical path)
+## Recovering a convergence-stall halt (the canonical path)
 
-1. A fixture-medium run halts with `retry_budget_exhausted` after the auditor
-   and writer disagree three times on a behavior.
-2. Open it from **halted runs**. The context strip shows "auditor disagrees
-   with writer".
+1. A fixture-medium run halts with `convergence_stalled`: the writer keeps
+   iterating but the convergence answerer judges the loop is no longer closing
+   the auditor's P0–P3 findings on a behavior — progress has stalled (there is **no**
+   per-spec retry-cap / rerun-limit halt anymore; the convergence answerer owns the
+   loop bound).
+2. Open it from **halted runs**. The context strip shows the unresolved findings
+   the loop kept re-surfacing.
 3. Pick **revise the spec**, split the ambiguous behavior into verifiable
-   criteria, and submit.
+   criteria (so the findings become checkable), and submit.
 4. Pick **replan with instructions** with a steering note. A fresh planner run
    is queued and runs to completion on the happy path.
 5. The run-detail history shows the halt → revise → replan chain.

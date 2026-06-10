@@ -27,7 +27,7 @@ paths are **default-on behind kill-switch env vars** (`MERGE_AUTHORITY_LIVE`,
 `CONFLICT_RESOLVER_JJ_LIVE`, `BASE_SHIFT_LIVE`, `INTEGRATION_NODES_DRIVE`). **apex
 v32 ran live but halted at scaffold-bootstrap — it never reached a merge**, so the
 flag-on jj/merge live paths are still **not apex-proven**; the §7 deletions (the
-dead `speculativeIntegrator`, the git-merge-abort applier dance, the 25-method
+dead `speculativeIntegrator`, the git-merge-abort applier dance, the 26-method
 `VcsProvider`) STAY deferred until a run actually reaches a merge. Rationale:
 `docs/architecture/tanren-owns-the-engine.md`.
 
@@ -88,7 +88,7 @@ to-do (`ROADMAP.md` §4):
   reached a merge, so the flag-on live merge paths are still unproven; these stay
   deferred until a run reaches a merge, then land: the §7 deletions (the dead
   `speculativeIntegrator`, the git-merge-abort applier dance,
-  `resolveSpeculativeState`, the 25-method `VcsProvider` → ~5-method `CodeHost`),
+  `resolveSpeculativeState`, the 26-method `VcsProvider` → 8-method minimal `CodeHost`),
   the walker/percolation → jj-local cutover, and the `integration.*` metrics
   read-side (prove rebase < rebuild). See
   `docs/architecture/tanren-owns-the-engine.md` §7–§8.

@@ -5,36 +5,46 @@
 # over SSH, on the runner — there is NO GitHub Actions. The `pre_merge` tier is the
 # merge authority: a passing pre_merge gate admits the merge.
 #
+# Tanren names NO tech stack: every step defers to a `just <target>` recipe, so the
+# real commands live in the project's `justfile` (the project contract). This works
+# for ANY stack — the justfile decides what tier-1/tier-2/tier-3/bootstrap run.
+#
 # See docs/operator-guide/ci-config.md for the full schema reference.
 
 version: 1
 
-# Optional. Run once before the gate to provision dependencies (Tanren runs it
-# over SSH on the runner workspace).
+# Optional. Run once before the gate to provision the workspace (Tanren runs it
+# over SSH on the runner).
 bootstrap:
-  run: "pnpm install --frozen-lockfile"
+  run: "just bootstrap"
 
-# Tiers are named lists of shell steps. `fast` and `slow` are required; you
-# may add extra named tiers (e.g. `integration`) and map them under `when`.
+# Tiers are named lists of shell steps. `fast` and `slow` are required, plus a tier
+# mapped to pre_merge (here `merge`); you may add extra named tiers (e.g.
+# `integration`) and map them under `when`.
 tiers:
+  # Cheap per-iteration gate (e.g. lint + typecheck). NO tests here — tests arrive
+  # with features, so a scaffold pass is never blocked by a test tier.
   fast:
-    - name: lint
-      run: "pnpm lint"
-    - name: typecheck
-      run: "pnpm typecheck"
-    - name: unit
-      run: "pnpm test"
+    - name: tier-1
+      run: "just tier-1"
+  # Build + tests. Declares its JUnit report path so Tanren reads it back over SSH
+  # for per-test CI-intelligence (flaky-detection + auto-quarantine).
   slow:
-    - name: build
-      run: "pnpm build"
-    - name: integration-test
-      run: "pnpm test:integration"
+    - name: tier-2
+      run: "just tier-2"
+      junitReport: "reports/junit.xml"
+  # The heaviest thorough gate — the merge-queue authority.
+  merge:
+    - name: tier-3
+      run: "just tier-3"
 
-# Declarative tier -> lifecycle-point mapping. Every tier MUST appear here;
-# valid points are per_iteration, pre_audit, and pre_merge.
+# Declarative tier -> lifecycle-point mapping. Every tier MUST appear here, and at
+# least one tier MUST map to pre_merge (fail-closed). Valid points are
+# per_iteration, pre_audit, and pre_merge.
 when:
   fast:
     - per_iteration
   slow:
     - pre_audit
+  merge:
     - pre_merge

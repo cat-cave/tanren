@@ -1,7 +1,7 @@
 // The VALIDATION PROOF VERDICT — the single "meaningful, not green-by-accident"
 // pass/fail predicate (`templateValidates`) callers read over a produced proof. A
 // template is a conforming repo (a `justfile` with `bootstrap`/`tier-1..3`/`build`/
-// `deploy` + a `.tanren/ci.yml`, see docs/roadmap/stack-flexible-contract.md); the
+// `deploy` + a `.tanren/ci.yml`, see docs/operator-guide/ci-config.md); the
 // validation harness (`./validationHarness.ts`) produces the proof, this module
 // decides whether it passes.
 //

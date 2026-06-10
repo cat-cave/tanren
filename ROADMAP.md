@@ -299,8 +299,8 @@ cite); the merge-engine cutover rationale is
   - **The §7 deletions** — remove the now-dead old code the cutover replaced:
     `speculativeIntegrator` (contract + dag impl), the git-merge-abort
     `workspaceApplier` `merge --abort` / `--diff-filter=U` dance,
-    `resolveSpeculativeState`, and the 25-method GitHub-PR-shaped `VcsProvider` →
-    the ~5-method `CodeHost`. (They remain on disk as the flag-off fallback until a
+    `resolveSpeculativeState`, and the 26-method GitHub-PR-shaped `VcsProvider` →
+    the 8-method minimal `CodeHost`. (They remain on disk as the flag-off fallback until a
     run validates the flag-on merge path.)
   - **The walker/percolation → jj-local cutover** — route the DagWalker +
     percolation eager-integration through jj-local `integration_nodes` rather than

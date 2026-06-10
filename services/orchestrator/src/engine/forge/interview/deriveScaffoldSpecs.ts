@@ -2,7 +2,7 @@
 //
 // Split out of `derive.ts` (file-size discipline): the foundation specs the derive
 // creates first, derived FROM THE CAPTURED LIFECYCLE (the stack-flexible contract,
-// docs/roadmap/stack-flexible-contract.md) — Tanren bakes in NO stack. The
+// docs/operator-guide/ci-config.md) — Tanren bakes in NO stack. The
 // architecture step captures the project's concrete lifecycle; the lifecycle is
 // PERSISTED onto the project config (in `derive.ts`) so the RUN path MATERIALIZES
 // the contract files (`justfile` + `.tanren/ci.yml`) DETERMINISTICALLY from it

@@ -1,6 +1,6 @@
 # Tanren owns the engine — jj workspace, minimal GitHub, unified runs, guaranteed merge authority
 
-> Status: **implemented, flag-on, apex-validation pending** (Waves 0–3 merged).
+> Status: **implemented, flag-on, merge paths still apex-unproven** (Waves 0–3 merged).
 > Supersedes the "speculative execution / percolation" framing in
 > `autonomy-engine.md §2c` — that doc's §2b/§2c are rewritten to this model.
 > Origin: the live apex run stalled on a merge-queue conflict the resolver never
@@ -17,14 +17,15 @@
 > `CONFLICT_RESOLVER_JJ_LIVE`, `BASE_SHIFT_LIVE`, `INTEGRATION_NODES_DRIVE`).
 > Migrations `0007`–`0011` carry the `integration_nodes` table + the new events.
 >
-> **What is PENDING:** the live jj-against-a-runner path is **apex-validation
-> pending** — first exercised by the next apex run; the flags are the
-> kill-switches. The §7 deletions (the now-dead `speculativeIntegrator`, the
-> git-merge-abort `workspaceApplier` dance, `resolveSpeculativeState`, the
-> 25-method `VcsProvider` → ~5-method `CodeHost`), the walker/percolation
-> `speculativeIntegrator` → jj-local cutover, and the `integration.*` metrics
-> read-side are **deferred to post-apex** — they stay until apex proves the
-> flag-on live paths.
+> **What is PENDING:** the live jj-against-a-runner merge path is **still
+> apex-unproven**. **apex v32 ran live but halted at scaffold-bootstrap — it never
+> reached a merge**, so the flag-on jj/merge live paths have not yet been exercised
+> end-to-end; the flags remain the kill-switches. The §7 deletions (the now-dead
+> `speculativeIntegrator`, the git-merge-abort `workspaceApplier` dance,
+> `resolveSpeculativeState`, the 26-method `VcsProvider` → 8-method minimal
+> `CodeHost`), the walker/percolation `speculativeIntegrator` → jj-local cutover,
+> and the `integration.*` metrics read-side **stay deferred until a run actually
+> reaches a merge** and proves the flag-on live paths.
 
 ## 0. The governing principle — guaranteed-internal vs best-effort-external
 
@@ -46,7 +47,7 @@ The line is bright:
 If an external publish fails, the merge still proceeds or holds **exactly** as the
 internal decision dictated — the publish is a mirror, not a gate.
 
-## 1. Purpose-based decomposition (replacing the 25-method GitHub-shaped `VcsProvider`)
+## 1. Purpose-based decomposition (replacing the 26-method GitHub-shaped `VcsProvider`)
 
 We stop modeling "the forge" and model the **purpose**. Four seams:
 
@@ -203,7 +204,7 @@ detached-rebase gymnastics, the server-side integration-branch build + 409 handl
 the percolation supersede+regenerate path **and the strand reconciler it spawned** (a
 bug-class _born_ of cancel+recreate — deleted, not fixed), inferred severity, the two
 divergent base-shift handlers (→ one), and most of the GitHub-PR-shaped `VcsProvider`
-(→ a ~5-method `CodeHost`). **If the refactor doesn't net-delete code, it's wrong.**
+(→ an 8-method minimal `CodeHost`). **If the refactor doesn't net-delete code, it's wrong.**
 
 Guardrails (audit 8): use **jj-lib as the state authority, not CLI text-parsing**;
 `CodeHost` may host but must **never decide** freshness/conflict/gate; one
@@ -214,8 +215,9 @@ events through an explicit compatibility read-model, not silent abandonment.
 ## 8. Action plan — parallel waves, audits, validation, back to apex
 
 The waves below are **merged**; the per-wave status is inline. The flag-on live
-paths are **apex-validation pending** and the §7 deletions are **deferred to
-post-apex** (see the status header).
+merge paths are **still apex-unproven** — apex v32 ran but halted at
+scaffold-bootstrap before reaching a merge — and the §7 deletions stay **deferred
+until a run actually reaches a merge** (see the status header).
 
 **Wave 0 — lock the design (this doc). DONE.** The four seam contracts +
 `integration_nodes` schema + `auditPosture` policy shape + the guaranteed/best-effort
@@ -260,7 +262,9 @@ modes the audits found are gone.
 model), and `CLAUDE.md`. Code must embody the doctrine (the former doc/reality mismatch —
 "NOT discard" while the old code discarded — is itself a bug now deleted).
 
-**Back to apex (next):** rebuild the stack on the refactored `main` → re-provision
-(codex/github/vercel over the API) → fresh derive (v+1) → drive the autonomy loops. The
-first post-refactor apex run is the proof the flag-on live paths work — it is the
-**apex-validation** the cutover is pending on.
+**Back to apex (in progress):** rebuild the stack on the refactored `main` →
+re-provision (codex/github/vercel over the API) → fresh derive (v+1) → drive the
+autonomy loops. **apex v32 ran on this refactored `main` but halted at
+scaffold-bootstrap and never reached a merge**, so it did not yet exercise the
+flag-on jj/merge live paths — that proof is what the cutover is still pending on,
+and the §7 deletions wait for a run that reaches a merge.
