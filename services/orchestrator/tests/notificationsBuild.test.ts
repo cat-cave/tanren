@@ -16,6 +16,7 @@ const DEFAULT_ENV_KEYS = [
   "TANREN_NOTIFICATION_DEFAULT_CHANNEL",
   "TANREN_NOTIFICATION_DEFAULT_DESTINATION",
   "TANREN_NOTIFICATION_DEFAULT_MIN_SEVERITY",
+  "TANREN_APEX_MODE",
 ] as const;
 
 function clearDefaultEnv(): void {
@@ -50,5 +51,21 @@ describe("buildNotificationDispatcher", () => {
     expect(() => buildNotificationDispatcher({ pool: fakePool, secrets: fakeSecrets })).toThrow(
       /not a known channel kind/u,
     );
+  });
+
+  it("apex mode LOUD-throws when no default route is configured (a warn+ milestone would silent-log)", () => {
+    // Loop 5 readiness: in apex mode a deliverable-but-unrouted warn+ event must be
+    // a startup FAILURE, not a silent log-and-return inside the dispatcher.
+    process.env["TANREN_APEX_MODE"] = "1";
+    expect(() => buildNotificationDispatcher({ pool: fakePool, secrets: fakeSecrets })).toThrow(
+      /apex mode requires a code-level default notification route/u,
+    );
+  });
+
+  it("apex mode builds normally once a default route is configured", () => {
+    process.env["TANREN_APEX_MODE"] = "1";
+    process.env["TANREN_NOTIFICATION_DEFAULT_CHANNEL"] = "ntfy";
+    process.env["TANREN_NOTIFICATION_DEFAULT_DESTINATION"] = "tanren-default-alerts";
+    expect(() => buildNotificationDispatcher({ pool: fakePool, secrets: fakeSecrets })).not.toThrow();
   });
 });

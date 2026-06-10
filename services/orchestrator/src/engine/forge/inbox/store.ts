@@ -229,6 +229,28 @@ export const InboxStore = {
     return row === undefined ? undefined : mapCandidate(row);
   },
 
+  // Place a project-less candidate into a resolved project. The intake
+  // project-placement resolver calls this when a routable feature request arrived
+  // with no `project_id` (org-scoped source) and the org has exactly ONE project —
+  // so the candidate becomes auto-routable instead of stalling in the inbox. The
+  // join + RLS bound the row to the caller's org; a no-op returns undefined.
+  async placeCandidateProject(
+    client: QueryClient,
+    candidateId: string,
+    projectId: string,
+  ): Promise<Candidate | undefined> {
+    const result = await client.query<CandidateRow>(
+      `UPDATE candidates c SET project_id = $2, updated_at = now()
+       FROM inbox_sources s WHERE c.id = $1 AND s.id = c.source_id
+       RETURNING c.id, c.source_id, c.org_id, c.project_id, c.external_id, c.title, c.body,
+                 c.severity, c.status, c.triage, c.resolved_spec_id,
+                 s.name AS source_name, s.kind AS source_kind`,
+      [candidateId, projectId],
+    );
+    const row = result.rows[0];
+    return row === undefined ? undefined : mapCandidate(row);
+  },
+
   // Resolve a candidate to a terminal status; `resolvedSpecId` is set on accept.
   async resolveCandidate(
     client: QueryClient,
