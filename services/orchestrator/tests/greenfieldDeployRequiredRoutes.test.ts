@@ -306,6 +306,42 @@ describe("greenfield/apex deploy dependency routes", () => {
     expect(pool.inboxSources).toEqual([]);
   });
 
+  it("HALTS LOUD (template_required 409) on a no-match when no just-in-time creation is possible — never a from-scratch project scaffold", async () => {
+    // The deleted bypass would have scaffolded the project from-scratch on an empty
+    // template registry. The doctrine instead HALTS: with the creation seam disabled
+    // and an empty fixture registry, the no-match is a fail-closed needs_attention.
+    const pool = new RoutesPool();
+    seedGithubAppOrg(pool);
+    pool.seedMembership("org_acme", "user_alice", "admin");
+    const { app, vcsProvider } = appWithRoutes(pool, new InMemoryVcsProvider(), {
+      async preflightDeploy() {},
+      async prepareDeploy() {
+        return preparedDeploy();
+      },
+      // Disable the just-in-time creation seam → a no-match cannot create a template.
+      createTemplateForNoMatch: undefined,
+    });
+
+    const res = await app.request("/orgs/org_acme/onboarding/interview/derive", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        capture: apexCapture(),
+        owner: "cat-cave",
+        deploy: { providerKind: "deploy.vercel" },
+      }),
+    });
+
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { error: string; stack: string };
+    expect(body.error).toBe("template_required");
+    expect(body.stack).toBe("ts/pnpm");
+    // No project / repo leaked through the fail-closed halt (it preceded creation).
+    expect(pool.projects.size).toBe(0);
+    expect(pool.specs.size).toBe(0);
+    expect(vcsProvider.createdRepositories).toEqual([]);
+  });
+
   it("rejects direct greenfield project creation without deploy config before creating a repo", async () => {
     const pool = new RoutesPool();
     pool.seedOrg({ id: "org_acme" });

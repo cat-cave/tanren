@@ -150,14 +150,22 @@ export interface DeriveFromCaptureInput {
   // `human` keeps the schema's safe defaults. Threaded into `deriveProductGraph`.
   autonomy?: "auto" | "simulated" | "human";
   deploy?: GreenfieldDeployDependency;
-  // TEMPLATING WAVE 3 — the org-scoped template-registry query (templating-system.md
-  // §3). When present, the derive SELECTS a validated template to seed from before
-  // authoring the scaffold; absent ⇒ the from-scratch path (the current live default).
+  // The scaffold ORIGIN (templating-system.md §3). "project" (default) ALWAYS runs
+  // template selection (a registry query is required); "template_build" is the
+  // creation BUILD step that authors the template from scratch. Threaded into
+  // `deriveProductGraph` so the doctrine invariant (no project DAG scaffolds against a
+  // non-template base) is enforced there.
+  scaffoldOrigin?: "project" | "template_build";
+  // The org-scoped template-registry query (templating-system.md §3). REQUIRED on the
+  // "project" origin (a project ALWAYS selects a validated template to seed from);
+  // absent only on the "template_build" origin (which authors the template itself).
   templateRegistryQuery?: TemplateRegistryQuery;
   templateChannelPreference?: "lts" | "nightly";
-  // TEMPLATING WAVE 4 — the no-match → CREATION seam (templating-system.md §3).
-  // When present, selection CREATES a template on no match + seeds from it; absent ⇒
-  // from-scratch. Threaded into `deriveProductGraph` (only consulted with a registry
+  // Injectable clock for deterministic selection-freshness (threaded to selection).
+  selectionNow?: number;
+  // The no-match → JUST-IN-TIME CREATION seam (templating-system.md §3). On a no-match
+  // selection CREATES a validated template + seeds from it; an un-creatable no-match
+  // HALTS LOUD. Threaded into `deriveProductGraph` (consulted only with a registry
   // query). Supplied by the wiring layer — no creation dependency in this engine.
   createTemplateForNoMatch?: (lifecycle: CaptureLifecycle) => Promise<SelectedTemplate | undefined>;
 }
@@ -179,6 +187,8 @@ export async function deriveFromCapture(
     ...(input.createRepository === undefined ? {} : { createRepository: input.createRepository }),
     ...(input.autonomy === undefined ? {} : { autonomy: input.autonomy }),
     ...(input.deploy === undefined ? {} : { deploy: input.deploy }),
+    ...(input.scaffoldOrigin === undefined ? {} : { scaffoldOrigin: input.scaffoldOrigin }),
+    ...(input.selectionNow === undefined ? {} : { selectionNow: input.selectionNow }),
     ...(input.templateRegistryQuery === undefined ? {} : { templateRegistryQuery: input.templateRegistryQuery }),
     ...(input.createTemplateForNoMatch === undefined
       ? {}

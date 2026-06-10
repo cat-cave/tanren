@@ -44,12 +44,8 @@ import {
   type PrepareDeployCallback,
 } from "./deployDependency.js";
 import { MissingLifecycleError, scaffoldSpecsFor } from "./deriveScaffoldSpecs.js";
-import {
-  selectTemplate,
-  type SelectedTemplate,
-  type TemplateRegistryQuery,
-  type TemplateSelectionDecision,
-} from "./templateSelection.js";
+import { assertSeeded, selectSeedTemplate, type ScaffoldOrigin } from "./interviewTemplateGate.js";
+import type { SelectedTemplate, TemplateRegistryQuery, TemplateSelectionDecision } from "./templateSelection.js";
 import {
   InterviewCapture,
   safeProjectSlug,
@@ -80,25 +76,43 @@ export interface DeriveInput {
   deploy?: GreenfieldDeployDependency;
   preflightDeploy?: DeployPreflightCallback;
   prepareDeploy?: PrepareDeployCallback;
+  // The SCAFFOLD ORIGIN — the DOCTRINE discriminator (templating-system.md §3). It
+  // is the single invariant that enforces "every PROJECT DAG executes against a
+  // validated template, never a from-scratch scaffold":
+  //   - "project" (DEFAULT — greenfield onboarding + greenfield create): template
+  //     selection ALWAYS runs (`templateRegistryQuery` is REQUIRED). A match SEEDS;
+  //     a no-match CREATES a validated template JUST-IN-TIME and seeds from it; an
+  //     un-creatable no-match HALTS LOUD (`TemplateRequiredError`). The from-scratch
+  //     authoring is UNREACHABLE on this path (the invariant guard asserts it).
+  //   - "template_build": this derive IS the BUILD step of template-creation — it
+  //     authors the TEMPLATE itself FROM SCRATCH (the only place the from-scratch
+  //     authoring lives). No selection runs; the from-scratch authoring is the job.
+  //     The result is VALIDATED (negative controls) before any project seeds from it.
+  scaffoldOrigin?: "project" | "template_build";
   // TEMPLATING WAVE 3 (templating-system.md §3): the ORG-SCOPED template-registry
-  // query, injected so the derive can SELECT a validated template to SEED from
-  // BEFORE authoring the scaffold spec. Org-scoped in prod (RLS bounds candidates
-  // to the org's own + the cross-org `official` catalogue); a fixture in tests.
-  // Absent ⇒ selection is skipped entirely and the from-scratch path runs (the
-  // current live default — the registry is empty until the creation wave lands).
+  // query, injected so the derive SELECTS a validated template to SEED from BEFORE
+  // authoring the scaffold spec. Org-scoped in prod (RLS bounds candidates to the
+  // org's own + the cross-org `official` catalogue); a fixture in tests. REQUIRED on
+  // the "project" origin (a project ALWAYS runs selection); MUST be absent on
+  // "template_build" (the template authors itself from scratch — there is nothing to
+  // select). The `scaffoldOrigin` invariant guard enforces this pairing.
   templateRegistryQuery?: TemplateRegistryQuery;
   // Optional seed channel preference (defaults to "lts" — conservative greenfield).
   templateChannelPreference?: "lts" | "nightly";
   // Injectable clock for deterministic selection-freshness tests.
   selectionNow?: number;
-  // TEMPLATING WAVE 4 (templating-system.md §3): the DECOUPLED no-match → CREATION
-  // seam. When wired and selection finds NO validated template, it CREATES one (the
-  // creation meta-flow) + SEEDS from it instead of falling to from-scratch. Supplied
-  // by the wiring layer (`buildCreateForNoMatch`) so the derive/selection layers keep
-  // NO creation dependency. Absent ⇒ the from-scratch path (the default + the test
-  // path). Only consulted when `templateRegistryQuery` is also injected.
+  // The no-match → JUST-IN-TIME CREATION seam (templating-system.md §3). On a no-match,
+  // selection runs this to CREATE a template (research → author → build → validate →
+  // publish) + SEEDS from the published result — the project scaffold GATES on it. Wired
+  // by `buildCreateForNoMatch` (so the derive/selection layers keep NO creation
+  // dependency). Absent on a no-match ⇒ a LOUD `TemplateRequiredError` halt — never a
+  // project-direct from-scratch scaffold (the deleted bypass).
   createTemplateForNoMatch?: (lifecycle: CaptureLifecycle) => Promise<SelectedTemplate | undefined>;
 }
+
+// Re-exported from the gate module so callers can keep importing it from `derive.js`
+// (the public derive surface) without reaching into the gate internals.
+export { TemplateRegistryQueryRequiredError } from "./interviewTemplateGate.js";
 
 // FINDING #1: the autonomous greenfield config. When the operator opts into
 // `auto`/`simulated`, the project is created with the matching review policy + the
@@ -191,6 +205,42 @@ function interfaceForBehavior(
   return interfaces[0];
 }
 
+// The repo-resolution step (extracted for file-size discipline). REPO-FIRST + IDEMPOTENT
+// (audit §3.10): an explicit `repoUrl` skips it; else the deterministic URL is the
+// idempotency key (a bound project ⇒ resume; a `RepositoryAlreadyExistsError` re-attaches).
+type RepoResolution =
+  | { kind: "resume"; result: DeriveResult }
+  | { kind: "created"; repository?: CreatedRepository; repoUrl: string };
+async function resolveOrCreateGreenfieldRepo(pool: pg.Pool, input: DeriveInput, slug: string): Promise<RepoResolution> {
+  if (input.repoUrl !== undefined) return { kind: "created", repoUrl: input.repoUrl };
+  if (input.owner === undefined || input.createRepository === undefined) {
+    throw new Error("greenfield repository owner and creator are required");
+  }
+  const owner = input.owner;
+  const deterministicRepoUrl = githubHttpsRemote({ owner, name: slug });
+  const existingProject = await ProjectStore.findByRepoUrl(pool, deterministicRepoUrl, { kind: "operator" });
+  if (existingProject !== undefined) return { kind: "resume", result: resumeDerivedProject(existingProject) };
+  let repository: CreatedRepository;
+  try {
+    repository = await input.createRepository({
+      owner,
+      name: slug,
+      private: input.private ?? true,
+      autoInit: true,
+      ...(input.description === undefined ? {} : { description: input.description }),
+    });
+  } catch (error) {
+    // RE-ATTACH on a repo created by a prior stranded attempt (no project bound — the
+    // probe above proved that): continue with the deterministic URL + default branch.
+    if (error instanceof RepositoryAlreadyExistsError) {
+      repository = { fullName: `${owner}/${slug}`, repoUrl: deterministicRepoUrl, defaultBranch: "main" };
+    } else {
+      throw error;
+    }
+  }
+  return { kind: "created", repository, repoUrl: repository.repoUrl };
+}
+
 export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Promise<DeriveResult> {
   // Validate the capture at the derive boundary (defence in depth; the round
   // engine also validates) so a malformed capture never reaches the create path.
@@ -210,28 +260,47 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
   // `safeProjectSlug` throws `MissingProjectSlugError` when nothing safe survives.
   const slug = safeProjectSlug(capture);
 
-  // TEMPLATING WAVE 3 — SELECT a validated template to SEED from, BEFORE deriving the
-  // scaffold spec (templating-system.md §3). Runs only when a registry query is
-  // injected (org-scoped in prod); otherwise selection is skipped and the
-  // from-scratch path runs. The decision is fail-closed: any registry/freshness
-  // problem downgrades to a from-scratch outcome with a LOUD log (inside
-  // `selectTemplate`), so onboarding is NEVER stranded by the registry.
-  const templateSelection =
-    input.templateRegistryQuery === undefined
-      ? undefined
-      : await selectTemplate({
-          lifecycle: capture.lifecycle,
-          registryQuery: input.templateRegistryQuery,
-          actor: { kind: "operator" },
-          ...(input.templateChannelPreference === undefined
-            ? {}
-            : { channelPreference: input.templateChannelPreference }),
-          ...(input.selectionNow === undefined ? {} : { now: input.selectionNow }),
-          ...(input.createTemplateForNoMatch === undefined ? {} : { createForNoMatch: input.createTemplateForNoMatch }),
-        });
-  // The scaffold spec SHRINKS to template-instantiation on a strong/partial match;
-  // otherwise it is the unchanged from-scratch authoring (the guaranteed fallback).
+  // THE DOCTRINE INVARIANT (templating-system.md §3): every PROJECT DAG executes
+  // against a VALIDATED TEMPLATE — never a from-scratch scaffold. `scaffoldOrigin` is
+  // the single enforcement point (the gate machinery lives in interviewTemplateGate.ts).
+  const scaffoldOrigin: ScaffoldOrigin = input.scaffoldOrigin ?? "project";
+
+  // DEPLOY-REQUIRED guard, hoisted BEFORE template selection. The deploy dependency is
+  // mandatory (the greenfield/apex contract); resolving it is a CHEAP presence check
+  // that throws `DeployProviderMissingError` when absent. Doing it before selection
+  // means a project missing its deploy config fails FAST — we never trigger an
+  // expensive just-in-time template build for a project that cannot deploy anyway. The
+  // preflight (a not-linked probe) likewise gates before creation.
+  const deploy = resolveGreenfieldDeployDependency(input.deploy, { required: true });
+  if (deploy !== undefined && input.preflightDeploy !== undefined) {
+    const notLinked = await input.preflightDeploy({ orgId: input.orgId, providerKind: deploy.providerKind });
+    if (notLinked !== undefined) throw new DeployNotLinkedError(notLinked);
+  }
+
+  // SELECT a validated template to SEED from, BEFORE deriving the scaffold spec. On the
+  // "project" origin selection ALWAYS runs: a match SEEDS; a no-match CREATES a
+  // validated template just-in-time + seeds from it; an un-creatable no-match THROWS
+  // `TemplateRequiredError` (a LOUD fail-closed halt — no project-direct from-scratch).
+  // On "template_build" selection is skipped — that derive IS the from-scratch authoring.
+  const templateSelection = await selectSeedTemplate({
+    scaffoldOrigin,
+    lifecycle: capture.lifecycle,
+    ...(input.templateRegistryQuery === undefined ? {} : { templateRegistryQuery: input.templateRegistryQuery }),
+    ...(input.templateChannelPreference === undefined
+      ? {}
+      : { templateChannelPreference: input.templateChannelPreference }),
+    ...(input.selectionNow === undefined ? {} : { selectionNow: input.selectionNow }),
+    ...(input.createTemplateForNoMatch === undefined
+      ? {}
+      : { createTemplateForNoMatch: input.createTemplateForNoMatch }),
+  });
+
+  // The scaffold spec SHRINKS to template-instantiation on a strong/partial match. The
+  // from-scratch authoring (`scaffoldSpecsFor` with no decision) is reachable ONLY on
+  // the "template_build" origin — a "project" origin ALWAYS has a seed by here (else
+  // selection threw), enforced by the invariant guard.
   const scaffoldSpecs = scaffoldSpecsFor(capture.lifecycle, templateSelection);
+  assertSeeded(scaffoldOrigin, templateSelection);
 
   // FINDING #1: opt-in autonomous config. `auto`/`simulated` ⇒ create the project
   // already autonomous (`native_queue` + matching review policy) so the DagWalker
@@ -242,61 +311,17 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
   // (no migration shim); `createProject` threads `config` through
   // `migrateProjectConfig` — no new plumbing.
   const autonomousOptIn = input.autonomy === "auto" || input.autonomy === "simulated";
-  const deploy = resolveGreenfieldDeployDependency(input.deploy, { required: true });
-  if (deploy !== undefined && input.preflightDeploy !== undefined) {
-    const notLinked = await input.preflightDeploy({ orgId: input.orgId, providerKind: deploy.providerKind });
-    if (notLinked !== undefined) throw new DeployNotLinkedError(notLinked);
-  }
   const baseConfig = autonomousOptIn
     ? autonomousConfig(input.autonomy as "auto" | "simulated")
     : { version: 1, greenfield: true };
   if (deploy === undefined || input.prepareDeploy === undefined) throw missingDeployProvisionerError();
 
-  // IDEMPOTENT + ATOMIC ORDER (audit §3.10). The order is REPO-FIRST, THEN deploy — so
-  // a repo-create failure never strands a deploy app, and a stranded retry resumes off
-  // the durable `projects` row keyed by the deterministic repo URL instead of
-  // double-provisioning a SECOND deploy app + 409-ing on the already-created repo.
-  // (Engine-test paths pass an explicit `repoUrl` + no `createRepository` — they skip
-  // the repo step entirely and are not subject to the idempotency probe.)
-  let repository: CreatedRepository | undefined;
-  let repoUrl = input.repoUrl;
-  if (repoUrl === undefined) {
-    if (input.owner === undefined || input.createRepository === undefined) {
-      throw new Error("greenfield repository owner and creator are required");
-    }
-    const owner = input.owner;
-    const createRepository = input.createRepository;
-    // The deterministic repo URL is the idempotency key — a project already bound to it
-    // is a completed prior derive: return it (no repo-create, no deploy-provision).
-    const deterministicRepoUrl = githubHttpsRemote({ owner, name: slug });
-    const existingProject = await ProjectStore.findByRepoUrl(pool, deterministicRepoUrl, { kind: "operator" });
-    if (existingProject !== undefined) {
-      return resumeDerivedProject(existingProject);
-    }
-    try {
-      repository = await createRepository({
-        owner,
-        name: slug,
-        private: input.private ?? true,
-        autoInit: true,
-        ...(input.description === undefined ? {} : { description: input.description }),
-      });
-    } catch (error) {
-      // RE-ATTACH on a repo created by a prior stranded attempt (no project bound — the
-      // probe above proved that): continue with the deterministic URL + default branch.
-      if (error instanceof RepositoryAlreadyExistsError) {
-        repository = {
-          fullName: `${owner}/${slug}`,
-          repoUrl: deterministicRepoUrl,
-          // The auto-init default branch GitHub seeds (the repo already exists).
-          defaultBranch: "main",
-        };
-      } else {
-        throw error;
-      }
-    }
-    repoUrl = repository.repoUrl;
-  }
+  // IDEMPOTENT + ATOMIC ORDER (audit §3.10): repo-first, then deploy (extracted to
+  // `resolveOrCreateGreenfieldRepo`). A pre-existing project bound to the deterministic
+  // URL is a completed prior derive → resume it (no repo-create, no deploy-provision).
+  const repoResolution = await resolveOrCreateGreenfieldRepo(pool, input, slug);
+  if (repoResolution.kind === "resume") return repoResolution.result;
+  const { repository, repoUrl } = repoResolution;
 
   // Provision deploy ONLY after the repo exists (the reorder above), so it is the LAST
   // external resource before the durable project row. PERSIST THE PRODUCT VISION too

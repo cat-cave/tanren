@@ -10,6 +10,7 @@ import {
   emptyCapture,
   type InterviewAnswerer,
   type PreparedGreenfieldDeploy,
+  type SelectedTemplate,
 } from "../../src/engine/forge/interview/index.js";
 import { createAuthMiddleware, type ActorContextEnv } from "../../src/middleware/auth.js";
 import { createOnboardingRoutes, type OnboardingRoutesOptions } from "../../src/routes/onboarding/index.js";
@@ -31,10 +32,30 @@ const completingAnswerer: InterviewAnswerer = {
   },
 };
 
+// A fixture validated template the no-match path "creates" + seeds from. DOCTRINE:
+// a PROJECT DAG always seeds from a validated template (templating-system.md §3) — so
+// the route helper wires a `createTemplateForNoMatch` that stands in for the live
+// just-in-time creation, returning a published-template seed (the unit tests for the
+// real creation meta-flow live in templateCreation*.test.ts). A test that wants to
+// observe the NO-creation-seam HALT overrides this with `createTemplateForNoMatch: undefined`.
+const seededTemplate: SelectedTemplate = {
+  templateRef: "template_fixture",
+  repoRef: "cat-cave/tanren-template-ts-next",
+  validationProof: {
+    positiveControlsPassed: true,
+    negativeControls: { typecheck: "proven", lint: "proven", test: "proven", mutation: "n/a" },
+    auditorClean: true,
+    validatedAt: "2026-06-09T00:00:00.000Z",
+    validatedSha: "abc1234",
+  },
+};
+
 export function appWithGreenfieldRoutes(
   pool: RoutesPool,
   vcsProvider = new InMemoryVcsProvider(),
-  onboardingOverrides: Partial<Pick<OnboardingRoutesOptions, "preflightDeploy" | "prepareDeploy">> = {},
+  onboardingOverrides: Partial<
+    Pick<OnboardingRoutesOptions, "preflightDeploy" | "prepareDeploy" | "createTemplateForNoMatch">
+  > = {},
 ) {
   const app = new Hono<ActorContextEnv>();
   const secrets = new InMemorySecretStore();
@@ -58,6 +79,10 @@ export function appWithGreenfieldRoutes(
       secrets,
       answererFactory: () => completingAnswerer,
       vcsProvider,
+      // The empty fixture registry never matches, so the no-match → just-in-time
+      // creation seam seeds from a fixture published template (the doctrine: never a
+      // project-direct from-scratch scaffold). Overridable per test.
+      createTemplateForNoMatch: () => async () => seededTemplate,
       ...onboardingOverrides,
     }),
   );

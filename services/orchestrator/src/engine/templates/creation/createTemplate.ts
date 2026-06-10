@@ -44,6 +44,9 @@ import {
   type TemplateResearcher,
 } from "./research.js";
 import { authorTemplateBuildCapture, capabilitiesFor } from "./specAuthoring.js";
+import { createLogger } from "../../observability/logger.js";
+
+const log = createLogger("template-creation");
 
 // The injected collaborators the meta-flow drives. Everything live is a SEAM so
 // the orchestration is exercised end-to-end against stubs (a stubbed research +
@@ -118,21 +121,77 @@ export async function createTemplate(
 ): Promise<CreateTemplateResult> {
   const orgId = requireOrg(deps.actor);
 
-  // STEP 1 — RESEARCH (+ ground it: an ungrounded result fails LOUD here).
-  const research = await deps.researcher.research(request);
-  assertGroundedResearch(research, request.stack);
+  // STEP 1 — RESEARCH (+ ground it: an ungrounded result fails LOUD here). Wrap the
+  // whole flow so a failure at ANY step emits a DURABLE `template.creation.failed`
+  // (LOUD — paired with the caller's fail-closed halt), then re-throws. The build
+  // project does not exist until step 2, so a pre-derive failure is recorded against
+  // a project-less event with the requesting org/stack as the durable record.
+  let research: TemplateResearch;
+  try {
+    research = await deps.researcher.research(request);
+    assertGroundedResearch(research, request.stack);
+  } catch (error) {
+    await emitCreationFailed(deps, orgId, request.stack, undefined, error);
+    throw error;
+  }
 
   // STEP 2 — AUTHOR the spec set, then materialize the project graph via the
-  // EXISTING greenfield derive (the template build IS a Tanren project).
+  // EXISTING greenfield derive (the template build IS a Tanren project). The derive
+  // runs with `scaffoldOrigin: "template_build"` — this IS the ONE legitimate
+  // from-scratch authoring (it authors the TEMPLATE itself, validated below before
+  // any project seeds from it). No `templateRegistryQuery` (nothing to select).
   const capture = authorTemplateBuildCapture(request, research);
   const derive = deps.derive ?? deriveProductGraph;
-  const derived: DeriveResult = await derive(deps.pool, {
-    orgId,
-    capture,
-    actor: deps.actor,
-    ...deps.deriveOptions,
+  let derived: DeriveResult;
+  try {
+    derived = await derive(deps.pool, {
+      orgId,
+      capture,
+      actor: deps.actor,
+      scaffoldOrigin: "template_build",
+      ...deps.deriveOptions,
+    });
+  } catch (error) {
+    await emitCreationFailed(deps, orgId, request.stack, undefined, error);
+    throw error;
+  }
+
+  // DURABLE: the no-match → creation record (templating-system.md §3). The build
+  // project now exists, so these carry it. `no_match` records that this stack had no
+  // validated template (creation was triggered); `started` opens the meta-flow. Both
+  // are project-scoped events on the template-BUILD project — never a vanishing log.
+  await deps.events.append({
+    projectId: derived.projectId,
+    eventType: "template.selection.no_match",
+    payload: { orgId, stack: request.stack, query: JSON.stringify(capabilitiesFor(request, research)) },
+  });
+  await deps.events.append({
+    projectId: derived.projectId,
+    eventType: "template.creation.started",
+    payload: { orgId, stack: request.stack },
   });
 
+  // From here a failure carries the build project id on `template.creation.failed`.
+  try {
+    return await buildValidatePublish(deps, request, research, derived, orgId);
+  } catch (error) {
+    await emitCreationFailed(deps, orgId, request.stack, derived.projectId, error);
+    throw error;
+  }
+}
+
+// Steps 3–5 (build · validate · publish) — split out so `createTemplate` stays the
+// orchestration + the durable-event envelope. Throws LOUD on a failed build / failed
+// validation (the fail-closed publish gate); the caller's wrapper emits the durable
+// `template.creation.failed`. On success emits `template.creation.published` +
+// `template.registered` and returns the registered template.
+async function buildValidatePublish(
+  deps: CreateTemplateDeps,
+  request: TemplateCreationRequest,
+  research: TemplateResearch,
+  derived: DeriveResult,
+  orgId: string,
+): Promise<CreateTemplateResult> {
   // STEP 3 — BUILD: drive the derived project's DAG through the existing loop. A
   // driver that returns no conforming repo / commit did not converge — a LOUD
   // failure (the harness cannot validate a non-repo), never a silent "validate it
@@ -180,8 +239,53 @@ export async function createTemplate(
       status: template.status as "draft" | "validated" | "degraded" | "official",
     },
   });
+  // DURABLE: the just-in-time creation PUBLISHED a validated template — the gated
+  // project scaffold now seeds from it (templating-system.md §3). Paired with the
+  // no_match/started events for the full no-match→published trail.
+  await deps.events.append({
+    projectId: derived.projectId,
+    eventType: "template.creation.published",
+    payload: { orgId, stack: request.stack, templateId: template.id, repoRef: template.repoRef },
+  });
 
   return { template, projectId: derived.projectId, proof, researchSources: research.researchSources };
+}
+
+// Emit the DURABLE `template.creation.failed` (templating-system.md §3) — the LOUD
+// record that a just-in-time creation could not produce a validated template (so the
+// caller halts fail-closed; the project NEVER proceeds from-scratch). Best-effort: an
+// event-store failure must not mask the original creation error, so it is swallowed
+// after a log. The events table scopes every row to a real project (the org_id is
+// derived from `projects`), so a PRE-DERIVE failure (research ungrounded — no build
+// project yet) is recorded as a LOUD log only; the durable+loud record at that stage
+// is the caller's `TemplateRequiredError` halt surfaced by the onboarding route. A
+// POST-DERIVE failure (build / validation — the common case) emits the durable event
+// against the template-build project.
+async function emitCreationFailed(
+  deps: CreateTemplateDeps,
+  orgId: string,
+  stack: string,
+  projectId: string | undefined,
+  error: unknown,
+): Promise<void> {
+  const reason = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+  if (projectId === undefined) {
+    log.warn(
+      "template creation FAILED before the build project existed — no durable event row (the caller's " +
+        "TemplateRequiredError halt is the loud record); never a silent from-scratch",
+      { orgId, stack, reason },
+    );
+    return;
+  }
+  try {
+    await deps.events.append({
+      projectId,
+      eventType: "template.creation.failed",
+      payload: { orgId, stack, reason },
+    });
+  } catch (appendError) {
+    log.warn("failed to emit template.creation.failed (the original creation error stands)", { stack }, appendError);
+  }
 }
 
 // STEP 4 helper: run the validation harness over the built template. The negative

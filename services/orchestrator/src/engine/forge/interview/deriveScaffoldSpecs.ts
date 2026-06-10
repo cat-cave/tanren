@@ -10,9 +10,15 @@
 // fix: the LLM writer reliably mangled the ci.yml YAML shape; the hardcoded-pnpm
 // `scaffoldCiConfig.ts` example is GONE — the apex v25/v26 bug).
 //
-// TEMPLATING WAVE 3 — when a template was SELECTED (templating-system.md §3), the
-// `scaffold` spec SHRINKS to template instantiation; otherwise it is the unchanged
-// from-scratch authoring (the guaranteed fallback). See `scaffoldSpecsFor`.
+// TEMPLATING DOCTRINE (templating-system.md §3) — when a template was SELECTED, the
+// `scaffold` spec SHRINKS to template instantiation. The from-scratch authoring (no
+// decision) is RELOCATED: it is reachable ONLY as the BUILD step of template-creation
+// (the "template_build" scaffoldOrigin, where this derive authors the TEMPLATE itself
+// from scratch — validated with negative controls before any project seeds from it).
+// A PROJECT DAG never reaches the from-scratch branch — a project no-match creates a
+// validated template just-in-time or HALTS loud (`TemplateRequiredError`); the derive
+// invariant guard (`assertNoFromScratchProjectScaffold`) asserts it. See
+// `scaffoldSpecsFor`.
 //
 // Fixes preserved here (DOMAIN knowledge — not a walker-wide rule):
 //   1. `dependsOnPrev` SERIALIZES the foundation into a chain (`scaffold` is the
@@ -69,13 +75,14 @@ function partialMatchAdaptations(lifecycle: CaptureLifecycle): string[] {
 // contract established — so the deploy/build paths invoke the PROJECT's declared
 // command, never a hardcoded assumption.
 //
-// TEMPLATING WAVE 3 — when a template was SELECTED (`decision.kind` strong/partial),
-// the `scaffold` spec SHRINKS: the writer INSTANTIATES the template seed (adapt
-// product names/deploy/env, plus the partial-match adaptations) instead of authoring
-// from scratch (templating-system.md §3). When no template matched (none/blocked, or
-// selection skipped), the `scaffold` spec is the UNCHANGED from-scratch authoring —
-// the guaranteed fallback. The `build`/`deploy` specs are identical either way (they
-// always route through the conventional `just build`/`just deploy` targets).
+// When a template was SELECTED (`decision.kind` strong/partial), the `scaffold` spec
+// SHRINKS: the writer INSTANTIATES the template seed (adapt product names/deploy/env,
+// plus the partial-match adaptations) instead of authoring from scratch
+// (templating-system.md §3). When NO decision is passed, the `scaffold` spec is the
+// from-scratch authoring — RELOCATED to be reachable ONLY on the "template_build"
+// scaffoldOrigin (it authors the TEMPLATE itself; a project path always passes a
+// strong/partial decision or has already halted). The `build`/`deploy` specs are
+// identical either way (they always route through `just build`/`just deploy`).
 export function scaffoldSpecsFor(lifecycle: CaptureLifecycle, decision?: TemplateSelectionDecision): ScaffoldSpecDef[] {
   const seeded = decision?.selected !== undefined && (decision.kind === "strong" || decision.kind === "partial");
   // The partial-match adaptation work: the lifecycle capabilities the template's
