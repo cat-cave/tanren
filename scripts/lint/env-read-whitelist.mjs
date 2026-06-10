@@ -73,6 +73,8 @@ const NON_TANREN_ENV_ALLOWLIST = new Map([
   ["CONFLICT_RESOLVER_JJ_LIVE", "documented post-apex §7 kill-switch deletion"],
   ["BASE_SHIFT_LIVE", "documented post-apex §7 kill-switch deletion"],
   ["INTEGRATION_NODES_DRIVE", "documented post-apex §7 kill-switch deletion"],
+  // WS-A PR-4 build-forward flag (default-OFF; flipped ON in PR-7, removed in PR-9).
+  ["WALKER_JJ_LOCAL_BASE", "walker→jj-local base bootstrap flag (default-off; removed in WS-A PR-9)"],
 ]);
 
 // Files allowed to read `TANREN_*` directly. The envSchema files are the intended

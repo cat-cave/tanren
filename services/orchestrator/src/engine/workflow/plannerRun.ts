@@ -18,6 +18,7 @@ import type {
 import type { OrgGithubAppInstallation } from "../config/orgConfig.js";
 import type { Allocator, ReleaseReason, RunnerHandle } from "../contracts/allocator.js";
 import type { BudgetGate } from "../contracts/dagWalker.js";
+import type { AncestorStack } from "../dag/ancestorStack.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
@@ -47,7 +48,7 @@ import {
   simulatedReviewSeam,
   writerSeam,
 } from "./plannerRunAdapters.js";
-import { prepareRunWorkspace } from "./plannerRunWorkspace.js";
+import { prepareRunWorkspace, type BootstrapStepInput, type CommitBootstrapStepInput } from "./plannerRunWorkspace.js";
 import {
   applyScopedRunCredentials,
   buildFinalizeRunState,
@@ -123,6 +124,10 @@ export interface PlannerRunContext {
   contractFiles?: ReadonlyArray<ContractFile>;
   // TEMPLATING WAVE 3 (templating-system.md §3): the SELECTED template's repo ref to SEED from (from `projectConfig.templateRef`). When set, the run clones the template's conforming files into the workspace BEFORE the writer — so the scaffold writer's "seed already committed" assertion holds and it specializes the seed instead of authoring from scratch. Absent ⇒ no match ⇒ the from-scratch contract-file path runs.
   templateSeed?: { repoRef: string };
+  // WS-A PR-4: the ordered ancestor stack this dependent speculative run is stacked on (from
+  // `runs.ancestor_stack`). With `WALKER_JJ_LOCAL_BASE` on + non-empty, the workspace
+  // bootstrap jj-assembles the base from these ancestor refs vs the legacy single-ref clone.
+  ancestorStack?: AncestorStack;
 }
 
 export interface PlannerRunAdapterContext {
@@ -219,25 +224,6 @@ export interface RunPlannerLoopInput {
   appEnv?: Record<string, string>;
 }
 
-export interface BootstrapStepInput {
-  ssh: CommandSubstrate;
-  target: RunnerHandle;
-  workspacePath: string;
-  command?: string;
-  // Plane B: the project's dev+test app env, injected at the SSH substrate boundary
-  // (never folded into `command`, so a bootstrap failure can't leak it into the
-  // error message / events). See bootstrap.ts. Undefined ⇒ no app env.
-  appEnv?: Record<string, string>;
-  timeoutMs: number;
-}
-
-export interface CommitBootstrapStepInput {
-  ssh: CommandSubstrate;
-  target: RunnerHandle;
-  workspacePath: string;
-  timeoutMs: number;
-}
-
 export interface PlannerRunResult {
   runId: string;
   workspacePath: string;
@@ -291,14 +277,16 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
   // `abandoned` and is promoted to completed/failed as the run resolves.
   let releaseReason: ReleaseReason = "abandoned";
   try {
-    // Clone + bootstrap-install + commit-the-bootstrap-state + materialize the
-    // deterministic contract files. The answerer review base (`baseSha`) is the
-    // CONTRACT-FILES commit when one was made (apex v28: above the Tanren-owned
-    // `.tanren/ci.yml` + `justfile`, so the checker/auditor + captured diff see ONLY the
-    // writer's code — never the contract files as writer-authored), else the bootstrap
-    // commit. The clone HEAD is kept so the PR-branch cleanup drops ONLY the bootstrap
-    // commit before push (the contract commit + writer commits replay into the PR).
-    const { cloneHeadSha, bootstrapSha, baseSha } = await prepareRunWorkspace(input, allocation.target, workspacePath);
+    // Clone (legacy single-ref OR — WS-A PR-4, flag-gated — the jj-local ancestor-stack
+    // bootstrap) + bootstrap-install + commit + materialize contract files. `baseSha` is the
+    // answerer review base (the contract-files commit when one was made, else the bootstrap
+    // commit); `cloneHeadSha` is the writer's replay base; `bootstrappedBaseRevision` is set
+    // ONLY on the jj-local path (the conflict resolver's merge-time base). See the module.
+    const { cloneHeadSha, bootstrapSha, baseSha, bootstrappedBaseRevision } = await prepareRunWorkspace(
+      input,
+      allocation.target,
+      workspacePath,
+    );
     await appendEvent("workspace.prepared", {
       workspacePath,
       repoUrl: context.repoUrl,
@@ -470,6 +458,8 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
         runGate,
         checker: adapters.checker,
         auditor: adapters.auditor,
+        // WS-A PR-4: the jj-local-assembled base → the resolver's merge-time base (absent ⇒ unchanged).
+        ...(bootstrappedBaseRevision !== undefined && { bootstrappedBaseRevision }),
       }),
       // After an auto-rebase the prior verdict is stale, so re-run the native
       // `pre_merge` gate + re-publish before merging — the merge authority, no forge poll.

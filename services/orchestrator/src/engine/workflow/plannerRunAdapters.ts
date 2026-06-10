@@ -195,6 +195,11 @@ interface ConflictResolverDeps {
   runGate: (gate: { when: CiWhen; taskId?: string }) => Promise<GateOutcome>;
   checker: SubtaskLoopAdapters["checker"];
   auditor: SubtaskLoopAdapters["auditor"];
+  // WS-A PR-4 (walker-jj-local-integration-design.md §4): the merge-time rebase base when
+  // the run's base was jj-ASSEMBLED locally from the ancestor stack (`WALKER_JJ_LOCAL_BASE`
+  // on) — the LOCAL assembly bookmark, used INSTEAD of `${targetBranch}@origin`. Absent on
+  // the legacy single-ref clone path ⇒ the conflict resolver keeps `${targetBranch}@origin`.
+  bootstrappedBaseRevision?: string;
 }
 
 function defaultConflictResolver(input: RunPlannerLoopInput, deps: ConflictResolverDeps): ConflictResolverHook {
@@ -263,9 +268,13 @@ async function resolveOverLiveJj(
     facts: {
       repoUrl: context.repoUrl,
       baseBranch: context.targetBranch,
-      // The freshly-cloned base bookmark jj imports — the merge-time base the PR head
-      // rebases onto (never-discard, conflict recorded).
-      baseRevision: `${context.targetBranch}@origin`,
+      // The merge-time base the PR head rebases onto (never-discard, conflict recorded).
+      // WS-A PR-4: when the run's base was jj-assembled locally (flag on + non-empty stack)
+      // the base is the LOCAL assembly bookmark `bootstrappedBaseRevision`, NOT the
+      // freshly-cloned `${targetBranch}@origin` — the PR head rebases onto the re-assembled
+      // stack head. (PR-6 makes the merge-time opener re-assemble that stack; PR-4 threads
+      // the base name.) Absent ⇒ the legacy single-ref clone base, unchanged.
+      baseRevision: deps.bootstrappedBaseRevision ?? `${context.targetBranch}@origin`,
       headBranch: context.runBranch,
       ...(context.installation !== undefined && { installation: context.installation }),
       githubCredentialRef: context.githubCredentialRef,
