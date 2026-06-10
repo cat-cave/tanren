@@ -85,7 +85,21 @@ const CreateSourceBody = z
     enabled: z.boolean().default(true),
     autoRoute: z.boolean().default(false),
   })
-  .strict();
+  .strict()
+  // Loop 6 (fail-loud, not silent-stall): an AUTO-ROUTING source MUST name a
+  // project. Its candidates skip manual triage and commit straight into the DAG —
+  // but the DAG insert is project-scoped, so a project-less auto-route source would
+  // produce routable candidates that can never become specs (they stall in the
+  // inbox). Reject the misconfiguration at creation rather than discover it per item.
+  .superRefine((input, ctx) => {
+    if (input.autoRoute && input.projectId === null) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["projectId"],
+        message: "an auto-routing source must name a projectId (its candidates commit directly into a project's DAG)",
+      });
+    }
+  });
 
 const AcceptBody = z
   .object({
@@ -215,6 +229,11 @@ export function createInboxRoutes(options: InboxRoutesOptions) {
         source,
         item,
       );
+      // Loop 6: a routable report with no unambiguous project surfaces LOUD as
+      // needs_attention (a human must pick the project) — never a silent inbox-stall.
+      if (outcome.kind === "needs_attention") {
+        return c.json({ outcome: "needs_attention", candidate: outcome.candidate, reason: outcome.reason }, 200);
+      }
       return c.json(
         outcome.kind === "auto_routed"
           ? { outcome: "auto_routed", candidate: outcome.candidate, specId: outcome.specId }

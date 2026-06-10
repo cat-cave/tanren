@@ -204,6 +204,19 @@ services:
       # keeps direct writes (single process, no isolation gain — see boot.ts). See
       # ROADMAP.md.
       TANREN_DATA_PLANE_REMOTE_WRITES: ${TANREN_DATA_PLANE_REMOTE_WRITES:-1}
+      # Notifications (the worker builds the dispatcher): give the dev/apex stack a
+      # REAL default route by default so a warn+ milestone (budget / deploy.verified
+      # / needs_attention) on an org that configured no per-org route still reaches
+      # the running ntfy topic — never a silent log-and-return. The ntfy service
+      # serves on :80 inside the compose network; the bare-topic destination resolves
+      # against that base. The onboarding seed adds the per-tenant org route on top;
+      # this env default is the process-wide safety net (and what apex mode REQUIRES).
+      TANREN_NTFY_BASE_URL: ${TANREN_NTFY_BASE_URL:-http://ntfy:80}
+      TANREN_NOTIFICATION_DEFAULT_CHANNEL: ${TANREN_NOTIFICATION_DEFAULT_CHANNEL:-ntfy}
+      TANREN_NOTIFICATION_DEFAULT_DESTINATION: ${TANREN_NOTIFICATION_DEFAULT_DESTINATION:-tanren-default-alerts}
+      # Apex mode (off by default): when 1, a missing default route is a LOUD startup
+      # readiness FAILURE, not a buried log. Set on the live apex stack.
+      TANREN_APEX_MODE: ${TANREN_APEX_MODE:-}
     volumes:
       - /tmp/tanren-mtls:/etc/tanren/mtls:ro
     secrets:

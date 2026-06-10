@@ -65,6 +65,8 @@ export { InboxStore, type CreateSourceInput } from "./store.js";
 
 export { ensureIssuesInboxSource, type EnsureIssuesSourceInput, type EnsureIssuesSourceResult } from "./repoLink.js";
 
+export { resolveProjectPlacement, type PlacementResolution, type PlacementAmbiguityReason } from "./placement.js";
+
 export {
   ingestSource,
   autoRouteCandidate,

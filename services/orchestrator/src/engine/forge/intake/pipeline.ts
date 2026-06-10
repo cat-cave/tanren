@@ -21,6 +21,7 @@ import {
   type TriageAnswerer,
 } from "../inbox/index.js";
 import { TriageAnswererUnconfiguredError } from "../inbox/index.js";
+import { resolveProjectPlacement, type PlacementAmbiguityReason } from "../inbox/index.js";
 
 type QueryClient = { query: InboxEngineDeps["pool"]["query"] };
 
@@ -41,7 +42,12 @@ export interface IntakePipelineDeps {
 
 export type IntakeOutcome =
   | { kind: "auto_routed"; candidate: Candidate; specId: string }
-  | { kind: "inboxed"; candidate: Candidate };
+  | { kind: "inboxed"; candidate: Candidate }
+  // A routable feature request that arrived with no project AND could not be
+  // unambiguously placed (the org has 0 or >1 projects). LOUD: a human must pick
+  // the project — never a silent inbox-stall (autonomy-loop Loop 6). The candidate
+  // rests at `triaged` (the inbox needs-attention surface) carrying the reason.
+  | { kind: "needs_attention"; candidate: Candidate; reason: PlacementAmbiguityReason };
 
 /**
  * Triage one ingested item against the source's live DAG and route it: an
@@ -80,10 +86,29 @@ export async function intakeItem(
   // keeps it `accepted` — so `candidate.status` is NOT `auto_routed` and we do NOT
   // route again. Guarding on the local `status` here would route both → two specs +
   // two PRs. Mirrors `audits/scheduler.ts` (the one that does it right).
-  if (candidate.status === "auto_routed" && triage.routableSpec !== null && candidate.projectId !== null) {
+  if (candidate.status === "auto_routed" && triage.routableSpec !== null) {
+    // Loop 6 (never silent-stall): the candidate is routable. If it has no project
+    // (an org-scoped/default source left `projectId: null`), the auto-route guard
+    // would silently drop it in the inbox. Resolve a placement FIRST: the org's
+    // single project gets it; an ambiguous org (0 or >1) escalates LOUD.
+    let routable = candidate;
+    if (routable.projectId === null) {
+      const placement = await resolveProjectPlacement(deps.pool, routable.orgId);
+      if (placement.kind === "needs_attention") {
+        // LOUD: park at `triaged` (the inbox needs-attention surface) + log, so the
+        // next idempotent re-ingest keeps it triaged and never silently re-loops.
+        const parked = (await InboxStore.resolveCandidate(deps.pool, routable.id, "triaged", null)) ?? routable;
+        console.error(
+          `[intake] routable candidate ${routable.id} cannot be auto-placed ` +
+            `(${placement.reason}: org has ${placement.projectCount} project(s)) — escalating to needs_attention`,
+        );
+        return { kind: "needs_attention", candidate: parked, reason: placement.reason };
+      }
+      routable = (await InboxStore.placeCandidateProject(deps.pool, routable.id, placement.projectId)) ?? routable;
+    }
     const { candidate: routed, specId } = await autoRouteCandidate(
       { pool: deps.pool },
-      candidate,
+      routable,
       triage.routableSpec,
       deps.autoRoute,
     );
