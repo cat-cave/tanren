@@ -24,6 +24,7 @@ import type { VcsProvider } from "../src/engine/contracts/vcsProvider.js";
 import { execFileSync } from "node:child_process";
 import { LOCAL_HANDLE, LocalCommandSubstrate } from "./conformance/fakes/localCommandSubstrate.js";
 import { makeJjApplierFixture } from "./conformance/fakes/jjConflictApplierFixtureRepo.js";
+import { fixtureGitEnv } from "./conformance/fakes/fixtureGitEnv.js";
 
 // The anonymous push path (no installation + empty credentialRef) NEVER calls
 // resolveToken — a stub that throws proves it. Cast: the applier only ever touches
@@ -107,7 +108,10 @@ describe("JjWorkspaceConflictApplier (real jj)", () => {
     await applier.publishResolved();
 
     // The resolution landed on the bare origin's feature branch.
+    // Scrub the git repo-selecting vars (GIT_DIR/GIT_WORK_TREE/…) so a leaked ambient one can
+    // never override the explicit `--git-dir` and redirect this read onto the host worktree.
     const onOrigin = execFileSync("git", ["--git-dir", originPath, "show", "feature:src/conflicted.ts"], {
+      env: fixtureGitEnv(process.env),
       encoding: "utf8",
     });
     expect(onOrigin).toBe("resolved\n");

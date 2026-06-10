@@ -18,19 +18,21 @@ import type { LiveJjWorkspace } from "../src/engine/providers/liveJjWorkspace.js
 import { JjWorkspaceVcsCore } from "../src/engine/providers/jjWorkspaceVcsCore.js";
 import { integrateOverWorkspace } from "../src/engine/dag/jjLocalIntegration.js";
 import { LOCAL_HANDLE, LocalCommandSubstrate } from "./conformance/fakes/localCommandSubstrate.js";
+import { assertGitDirUnder, fixtureGitEnv } from "./conformance/fakes/fixtureGitEnv.js";
+
+// The git env every fixture child runs under: the deterministic Fixture author PLUS the git
+// repo-selecting vars (GIT_DIR/GIT_WORK_TREE/…) SCRUBBED, so a leaked one can never redirect a
+// `cwd`-scoped git op onto the host worktree (the live branch-corruption vector). Read from
+// `process.env` at CALL time (not module load) so a leak present whenever the fixture runs is
+// scrubbed — not just one captured at import. (jj children are scrubbed by LocalCommandSubstrate.)
+function gitEnv(): NodeJS.ProcessEnv {
+  return fixtureGitEnv(process.env);
+}
 
 function git(cwd: string, args: string[]): void {
   execFileSync("git", args, {
     cwd,
-    env: {
-      ...process.env,
-      GIT_AUTHOR_NAME: "Fixture",
-      GIT_AUTHOR_EMAIL: "fixture@local",
-      GIT_COMMITTER_NAME: "Fixture",
-      GIT_COMMITTER_EMAIL: "fixture@local",
-      GIT_AUTHOR_DATE: "2026-01-01T00:00:00Z",
-      GIT_COMMITTER_DATE: "2026-01-01T00:00:00Z",
-    },
+    env: gitEnv(),
     stdio: ["ignore", "ignore", "inherit"],
   });
 }
@@ -48,6 +50,9 @@ function makeBatchFixture(): { originPath: string } {
   mkdirSync(work, { recursive: true });
 
   git(work, ["init", "--quiet", "--initial-branch=main"]);
+  // DEFENSIVE GUARD: prove `git init` selected the temp seed dir — not a leaked GIT_DIR /
+  // the host worktree's real `.git` — BEFORE any commit can land on the worktree's branch.
+  assertGitDirUnder(work, root, gitEnv());
   writeFileSync(join(work, "base.txt"), "base\n");
   git(work, ["add", "-A"]);
   git(work, ["commit", "--quiet", "-m", "base"]);
