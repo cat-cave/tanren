@@ -19,6 +19,7 @@ import {
   type SpeculativeDependent,
 } from "../src/engine/contracts/changePercolation.js";
 import type { IntegrationNode } from "../src/engine/contracts/integrationNodes.js";
+import type { AncestorStack } from "../src/engine/dag/ancestorStack.js";
 import type { RebaseResult, RecordedConflict, WorkspaceVcsCore } from "../src/engine/contracts/workspaceVcsCore.js";
 import { IntegrationRebasePayload } from "../src/engine/events/schemas/dag.js";
 import {
@@ -159,10 +160,18 @@ function recordingNodeReader(): RecordingNodeReader {
 /** Records EXACTLY which keep-run-row / replan writes ran — the never-discard assertions. */
 class RecordingPersistence implements BaseShiftPersistence {
   readonly repointCalls: Array<{ runId: string; speculativeBase: string | null }> = [];
+  // WS-A PR-1: the ancestor stack DUAL-WRITTEN alongside the legacy base, recorded
+  // separately so the never-discard `repointCalls` assertions stay byte-stable.
+  readonly repointStacks: Array<{ runId: string; ancestorStack: AncestorStack | undefined }> = [];
   readonly markedInFlight: Array<{ runId: string; ancestorSpecId: string; toSha: string }> = [];
   readonly replanned: Array<{ runId: string; specId: string; reason: string }> = [];
-  async repointBase(input: { runId: string; speculativeBase: string | null }): Promise<void> {
+  async repointBase(input: {
+    runId: string;
+    speculativeBase: string | null;
+    ancestorStack?: AncestorStack;
+  }): Promise<void> {
     this.repointCalls.push({ runId: input.runId, speculativeBase: input.speculativeBase });
+    this.repointStacks.push({ runId: input.runId, ancestorStack: input.ancestorStack });
   }
   async markInFlight(input: { runId: string; pending: { ancestorSpecId: string; toSha: string } }): Promise<void> {
     this.markedInFlight.push({
@@ -259,6 +268,11 @@ describe("BaseShiftCoordinator — never-discard rebase (NOT supersede+regenerat
     expect(h.workspace.rebaseCalls).toEqual([{ branch: DEP_BRANCH, baseSha: "sha-new-base" }]);
     // (1) the run row was KEPT: re-pointed + marked in-flight pointing at the SAME run.
     expect(h.persistence.repointCalls).toEqual([{ runId: DEP_RUN, speculativeBase: "tanren/integ/spec_b" }]);
+    // WS-A PR-1: the ancestor stack is DUAL-WRITTEN alongside the legacy base — the
+    // re-resolved stack reconstructed from the dependent's per-ancestor SHA map.
+    expect(h.persistence.repointStacks).toEqual([
+      { runId: DEP_RUN, ancestorStack: [{ specId: "spec_a", runId: "", branch: "", headSha: "sha-old" }] },
+    ]);
     expect(h.persistence.markedInFlight).toEqual([{ runId: DEP_RUN, ancestorSpecId: "spec_a", toSha: "sha-new" }]);
     // (1) re-plan was NOT invoked on a clean rebase + passing re-gate (tokens REUSED).
     expect(h.persistence.replanned).toEqual([]);
@@ -337,6 +351,8 @@ describe("BaseShiftCoordinator — never-discard rebase (NOT supersede+regenerat
     const result = await reexec(h, { nonSpeculative: true });
     expect(result.reexecRunId).toBe(DEP_RUN);
     expect(h.persistence.repointCalls).toEqual([{ runId: DEP_RUN, speculativeBase: null }]);
+    // WS-A PR-1: non-speculative (every ancestor merged) ⇒ the dual-written stack is EMPTY.
+    expect(h.persistence.repointStacks).toEqual([{ runId: DEP_RUN, ancestorStack: [] }]);
   });
 });
 

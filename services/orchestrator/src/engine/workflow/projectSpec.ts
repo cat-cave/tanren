@@ -15,6 +15,7 @@ import {
 } from "./projectSpecErrors.js";
 import { SpecProjectRowSchema } from "./projectSpecRowSchema.js";
 import { observeRunAsIntegrationNode } from "../dag/integrationNodesPg.js";
+import type { AncestorStack } from "../dag/ancestorStack.js";
 
 /** The pool or a checked-out client — anything that can run a query. */
 type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
@@ -30,9 +31,8 @@ export interface CreateProjectInput {
   defaultBranch?: string;
   runnerImage?: string;
   allocator?: string;
-  // Optional jsonb blob, parsed via `migrateProjectConfig` (fail-hard on
-  // missing/unknown `version`). Omitted ⇒ a defaulted V1; supplied ⇒ MUST be an
-  // explicit `version: 1` blob (no silent upgrade).
+  // Optional jsonb blob, parsed via `migrateProjectConfig` (fail-hard on missing/unknown
+  // `version`). Omitted ⇒ a defaulted V1; supplied ⇒ MUST be an explicit `version: 1` blob.
   config?: unknown;
 }
 
@@ -77,15 +77,16 @@ export interface CreateSpecRunInput {
   branch?: string;
   // (§2c) SPECULATIVE start: `integratedAncestorShas` = build base,
   // `verifiedAncestorShas` = absorbed carry-forward, `percolationPending` = marker.
-  // `speculativeBase: null` is the §2c "ancestor-merged → non-speculative re-base":
-  // a percolation re-exec where EVERY ancestor has merged re-bases onto plain
-  // `default_branch` (a real run against main) — but it still carries the percolation
-  // marker and SKIPS the done-only dependency gate (the percolation walker owns order).
+  // `speculativeBase: null` is the §2c "ancestor-merged → non-speculative re-base": a
+  // percolation re-exec where EVERY ancestor merged re-bases onto plain `default_branch`
+  // (a real run against main) — but still carries the marker and SKIPS the done-only gate.
   speculative?: {
     speculativeBase: string | null;
     integratedAncestorShas?: Record<string, string>;
     verifiedAncestorShas?: Record<string, string>;
     percolationPending?: unknown;
+    // WS-A PR-1: the ordered ancestor stack, dual-written to `runs.ancestor_stack` (unread).
+    ancestorStack?: AncestorStack;
   };
 }
 
@@ -102,8 +103,8 @@ export interface SpecRunContract {
   spec: SpecContract;
 }
 
-// Domain errors live in `./projectSpecErrors.js` (max-classes-per-file). Import
-// them for local `throw` sites and re-export so existing callers are unchanged.
+// Domain errors live in `./projectSpecErrors.js` (max-classes-per-file): imported for
+// local `throw` sites + re-exported so existing callers are unchanged.
 export {
   ProjectAccessDeniedError,
   ProjectNotFoundError,
@@ -330,8 +331,8 @@ async function createQueuedRunFromSpecOnClient(
   await client.query(
     // org_id derived in-statement from the parent project (tanren tenancy).
     `INSERT INTO runs (run_id, spec_id, project_id, org_id, trigger, branch, status, speculative_base,
-                       integrated_ancestor_shas, verified_ancestor_shas, percolation_pending)
-     VALUES ($1, $2, $3, (SELECT org_id FROM projects WHERE project_id = $3), $4, $5, 'queued', $6, $7, $8, $9)`,
+                       integrated_ancestor_shas, verified_ancestor_shas, percolation_pending, ancestor_stack)
+     VALUES ($1, $2, $3, (SELECT org_id FROM projects WHERE project_id = $3), $4, $5, 'queued', $6, $7, $8, $9, $10)`,
     [
       run.runId,
       run.specId,
@@ -342,6 +343,7 @@ async function createQueuedRunFromSpecOnClient(
       jsonbOrNull(spec?.integratedAncestorShas),
       jsonbOrNull(spec?.verifiedAncestorShas),
       jsonbOrNull(spec?.percolationPending),
+      jsonbOrNull(spec?.ancestorStack),
     ],
   );
   // OBSERVE-ONLY: UPSERT the `integration_nodes` row mirroring this run (see the hook header). NEVER fails a run.
@@ -412,11 +414,9 @@ async function ensureSpecDependenciesDone(client: pg.PoolClient, spec: SpecContr
   if (spec.dependsOn.length === 0) {
     return;
   }
-  // A dependency is SATISFIED when its spec reached the terminal-complete `merged`
-  // status (a merged PR ends the spec at `merged`). This maps to the walker's `done`
-  // phase (classifySpecStatus) and the lifecycle projection's `merged` state, so the
-  // planner sees a fully-MERGED dep chain as ready; this gate MUST agree, or a
-  // dependent whose deps are all `merged` is rejected with
+  // A dependency is SATISFIED when its spec reached the terminal-complete `merged` status
+  // (the walker's `done` phase + the lifecycle `merged` state). This gate MUST agree with
+  // the planner, or a dependent whose deps are all `merged` is rejected with
   // SpecDependenciesBlockedError (which the walker tolerates as benign-transient).
   const result = await client.query(
     "SELECT spec_id FROM specs WHERE project_id = $1 AND status = 'merged' AND spec_id = ANY($2::text[])",

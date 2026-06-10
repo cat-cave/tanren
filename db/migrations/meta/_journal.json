@@ -225,6 +225,13 @@
       "when": 1781128528631,
       "tag": "0031_unknown_silver_fox",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1781129392560,
+      "tag": "0032_broken_slayback",
+      "breakpoints": true
     }
   ]
 }

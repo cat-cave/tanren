@@ -34,6 +34,7 @@ import {
   applyUpdateTask,
 } from "../../engine/worker/runStateLifecycleSql.js";
 import { verifyInternalPeer, type RunStateWriteRouteDeps } from "./internalWriteShared.js";
+import { ancestorStackSchema } from "../../engine/dag/ancestorStack.js";
 
 const setRunStatusSchema = z.object({
   runId: z.string().min(1),
@@ -67,6 +68,8 @@ const setRunSpeculativeBaseSchema = z.object({
   // Nullable: the §2c "ancestor-merged → non-speculative re-base" clears the base to
   // NULL (every ancestor merged ⇒ the dependent re-bases onto plain default_branch).
   speculativeBase: z.string().min(1).nullable(),
+  // WS-A PR-1: the re-resolved ancestor stack (dual-written to `runs.ancestor_stack`).
+  ancestorStack: ancestorStackSchema.optional(),
 });
 
 const setRunPercolationReexecIdSchema = z.object({

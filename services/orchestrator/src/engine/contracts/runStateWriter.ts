@@ -25,6 +25,7 @@ import type { CostRecordContext, RecordedCost } from "../costs/recorder.js";
 import type { TokenUsage } from "../providers/types.js";
 import type { ActorContext } from "../../auth/schemas.js";
 import type { CreateSpecInput, CreateSpecRunInput, SpecContract, SpecRunContract } from "../workflow/projectSpec.js";
+import type { AncestorStack } from "../dag/ancestorStack.js";
 
 /** A run-finalize transition the worker drives at run end / failure. */
 export interface FinalizeRunInput {
@@ -104,6 +105,12 @@ export interface SetRunSpeculativeBaseInput {
   runId: string;
   orgId: string;
   speculativeBase: string | null;
+  /**
+   * WS-A PR-1 (walker-jj-local-integration-design.md §2.3): the re-resolved ordered
+   * ancestor stack, DUAL-WRITTEN to `runs.ancestor_stack` alongside the base. Absent
+   * ⇒ the column is left untouched. ADDITIVE (written, not yet read by the run path).
+   */
+  ancestorStack?: AncestorStack;
 }
 
 /** Stamp the percolation re-execution run id onto the dependent run's in-flight marker. */

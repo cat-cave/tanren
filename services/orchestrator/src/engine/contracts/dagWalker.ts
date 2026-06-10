@@ -28,6 +28,7 @@
 
 import type { BudgetGatedFigure, BudgetPeriod, SpeculationThreshold } from "../config/shared.js";
 import type { DagLifecycleSnapshot } from "./dagLifecycle.js";
+import type { AncestorStack } from "../dag/ancestorStack.js";
 import { computeReadiness, type SpecReadiness } from "../dag/speculation.js";
 import { priorityRank, type SpecPriority } from "../state/spec.js";
 
@@ -330,6 +331,14 @@ export interface DagEnqueuer {
      * live head against this. Present iff `speculativeBase` is.
      */
     integratedAncestorShas?: Record<string, string>;
+    /**
+     * walker-jj-local-integration-design.md §2.3 / WS-A PR-1: the ordered ancestor
+     * stack the run is stacked on — `[{ specId, runId, branch, headSha }]` (DAG
+     * order). DUAL-WRITTEN to `runs.ancestor_stack` alongside the two legacy columns
+     * above; ADDITIVE (written, not yet read by the run path). Present iff
+     * `speculativeBase` is.
+     */
+    ancestorStack?: AncestorStack;
   }): Promise<{ runId: string }>;
 }
 

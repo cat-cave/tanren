@@ -252,7 +252,13 @@ describeDb("plane-split P3 — control-plane autonomy-loop create/intake writes 
     const app = createInternalRunStateWriteRoutes({ pool: runtimePool(), verifier: new AllowAllPeerVerifier() });
     const writer = new HttpRunStateWriter("https://control.internal:3110", fetchInto(app));
 
-    await writer.setRunSpeculativeBase({ runId, orgId: ORG, speculativeBase: "tanren/integ/x" });
+    // WS-A PR-1: the re-point DUAL-WRITES `ancestor_stack` alongside `speculative_base`.
+    await writer.setRunSpeculativeBase({
+      runId,
+      orgId: ORG,
+      speculativeBase: "tanren/integ/x",
+      ancestorStack: [{ specId: "spec_anc", runId: "run_anc", branch: "tanren/spec_anc", headSha: "sha_anc" }],
+    });
     await writer.setRunPercolationReexecId({ runId, orgId: ORG, reexecRunId: "run_reexec" });
     await writer.mergeRunVerifiedAncestorSha({
       runId,
@@ -263,10 +269,18 @@ describeDb("plane-split P3 — control-plane autonomy-loop create/intake writes 
 
     const row = await ownerPool().query<{
       speculative_base: string;
+      ancestor_stack: Array<{ specId: string; runId: string; branch: string; headSha: string }> | null;
       percolation_pending: { reexecRunId?: string };
       verified_ancestor_shas: Record<string, { sha?: string; reviewVerdict?: string }>;
-    }>("SELECT speculative_base, percolation_pending, verified_ancestor_shas FROM runs WHERE run_id = $1", [runId]);
+    }>(
+      "SELECT speculative_base, ancestor_stack, percolation_pending, verified_ancestor_shas FROM runs WHERE run_id = $1",
+      [runId],
+    );
     expect(row.rows[0]?.speculative_base).toBe("tanren/integ/x");
+    // The ordered ancestor stack landed in the new column (additive dual-write).
+    expect(row.rows[0]?.ancestor_stack).toEqual([
+      { specId: "spec_anc", runId: "run_anc", branch: "tanren/spec_anc", headSha: "sha_anc" },
+    ]);
     expect(row.rows[0]?.percolation_pending?.reexecRunId).toBe("run_reexec");
     expect(row.rows[0]?.verified_ancestor_shas?.spec_anc).toMatchObject({ sha: "deadbeef", reviewVerdict: "approved" });
 

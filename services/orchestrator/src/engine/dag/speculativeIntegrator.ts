@@ -24,6 +24,7 @@ import type {
 } from "../contracts/speculativeIntegrator.js";
 import type { IntegrationAncestor, VcsProvider } from "../contracts/vcsProvider.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
+import type { AncestorStack } from "./ancestorStack.js";
 
 /** The ephemeral integration branch ref a dependent's PR bases on. */
 export function integrationBranchName(dependentSpecId: string): string {
@@ -43,6 +44,7 @@ interface IntegrationProjectRow {
 
 interface AncestorBranchRow {
   spec_id: string;
+  run_id: string;
   branch: string;
 }
 
@@ -73,6 +75,7 @@ export class PgSpeculativeIntegrator implements SpeculativeIntegrator {
     // already DAG-ordered); resolve each spec's branch, dropping none silently —
     // a missing ancestor branch is a hard error (we never integrate a phantom).
     const branchBySpec = new Map(ancestors.map((a) => [a.spec_id, a.branch] as const));
+    const runIdBySpec = new Map(ancestors.map((a) => [a.spec_id, a.run_id] as const));
     const ordered: IntegrationAncestor[] = input.unmergedAncestorSpecIds.map((specId) => {
       const branch = branchBySpec.get(specId);
       if (branch === undefined) {
@@ -104,10 +107,24 @@ export class PgSpeculativeIntegrator implements SpeculativeIntegrator {
       ancestors: ordered,
     });
 
+    // WS-A PR-1: assemble the ORDERED ancestor stack (the dual-write source) — the
+    // ordered ancestors zipped with their resolved run id + the build's per-ancestor
+    // head sha. Empty on `conflict` (no integrated base was built).
+    const ancestorStack: AncestorStack =
+      result.outcome === "conflict"
+        ? []
+        : ordered.map(({ specId, branch }) => ({
+            specId,
+            runId: runIdBySpec.get(specId) ?? "",
+            branch,
+            headSha: result.ancestorHeadShas?.[specId] ?? "",
+          }));
+
     return {
       outcome: result.outcome,
       integrationBranch: result.integrationBranch,
       ancestorHeadShas: result.ancestorHeadShas,
+      ancestorStack,
       ...(result.conflictBetween !== undefined && { conflictBetween: result.conflictBetween }),
       message: result.message,
     };
@@ -135,7 +152,7 @@ export class PgSpeculativeIntegrator implements SpeculativeIntegrator {
     if (specIds.length === 0) return [];
     // The ancestor's latest run branch is its PR head branch. One row per spec.
     const result = await client.query<AncestorBranchRow>(
-      `SELECT DISTINCT ON (r.spec_id) r.spec_id, r.branch
+      `SELECT DISTINCT ON (r.spec_id) r.spec_id, r.run_id, r.branch
          FROM runs r
         WHERE r.spec_id = ANY($1::text[])
         ORDER BY r.spec_id, r.started_at DESC`,
