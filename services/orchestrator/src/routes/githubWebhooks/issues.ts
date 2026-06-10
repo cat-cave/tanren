@@ -28,10 +28,10 @@ import {
   intakeAutoRouteDeps,
   processWebhookEvent,
   verifyGithubSignature,
-  WebhookEventStore,
   type WebhookProcessorDeps,
 } from "../../engine/forge/intake/index.js";
-import { InboxStore, type InboxSource, type TriageAnswerer } from "../../engine/forge/inbox/index.js";
+import { pgRepositories } from "../../engine/contracts/repositories.js";
+import { type InboxSource, type TriageAnswerer } from "../../engine/forge/inbox/index.js";
 import type { AutoRouteDeps } from "../../engine/forge/inbox/index.js";
 import type { ForgeAnswererTarget } from "../../engine/forge/providerFactory.js";
 import { z } from "zod";
@@ -56,7 +56,7 @@ export interface IssueWebhookRouteDeps {
 
 /** Resolve a source system-scoped (the receiver has no tenant context in the path). */
 async function resolveSource(pool: pg.Pool, sourceId: string): Promise<InboxSource | undefined> {
-  return runWithSystemScope(pool, (client) => InboxStore.getSource(client, sourceId));
+  return runWithSystemScope(pool, (client) => pgRepositories.inbox.getSource(client, sourceId));
 }
 
 export function createIssueWebhookRoutes(deps: IssueWebhookRouteDeps) {
@@ -103,7 +103,7 @@ export function createIssueWebhookRoutes(deps: IssueWebhookRouteDeps) {
     let eventId: string;
     try {
       const persisted = await runWithOrgScope(deps.pool, source.orgId, (client) =>
-        WebhookEventStore.persist(client, {
+        pgRepositories.webhookEvents.persist(client, {
           sourceId: source.id,
           orgId: source.orgId,
           eventType: event,

@@ -30,6 +30,10 @@ function clientB(d: ForgeRecoveryDb): QueryClient {
   return forgeRecoveryClientForOrg(d, ORG_B);
 }
 
+// An `IngestedItem` shape for the candidate upsert conformance cases.
+const item = (externalId: string, projectId: string | null) =>
+  ({ externalId, title: "T", body: "B", severity: "info", projectId }) as const;
+
 function seedSpec(d: ForgeRecoveryDb, over: Partial<ForgeRecoveryDb["specs"][number]> = {}): void {
   d.specs.push({
     spec_id: "spec_a",
@@ -286,6 +290,9 @@ describe("Repositories conformance: forge/recovery (in-memory pg)", () => {
   });
 
   describe("inbox", () => {
+    const seedSource = (d: ForgeRecoveryDb, projectId: string | null) =>
+      repos.inbox.createSource(clientA(d), { orgId: ORG_A, projectId, kind: "manual", name: "S" });
+
     it("creates + reads sources on the caller's client; cross-org fan-out is system-scoped", async () => {
       const d = db();
       const created = await repos.inbox.createSource(clientA(d), {
@@ -312,6 +319,120 @@ describe("Repositories conformance: forge/recovery (in-memory pg)", () => {
       expect(await repos.inbox.listSources(clientB(d), ORG_A)).toHaveLength(0);
       expect(await repos.inbox.getSource(clientB(d), created.id)).toBeUndefined();
       expect(await repos.inbox.listDistinctEnabledSourceOrgIds(clientB(d))).toHaveLength(0);
+    });
+
+    it("upserts candidates idempotently (refresh, not duplicate) + reads them on the caller's client", async () => {
+      const d = db();
+      const source = await seedSource(d, "project_a");
+      const first = await repos.inbox.upsertCandidate(clientA(d), source, item("ext-1", "project_a"), null, "new");
+      expect(first.sourceName).toBe("S");
+      expect(first.sourceKind).toBe("manual");
+      // Re-upserting the SAME (source, externalId) refreshes content, never duplicates.
+      const refreshed = await repos.inbox.upsertCandidate(
+        clientA(d),
+        source,
+        { ...item("ext-1", "project_a"), title: "T2" },
+        null,
+        "triaged",
+      );
+      expect(refreshed.id).toBe(first.id);
+      expect(refreshed.title).toBe("T2");
+      expect(refreshed.status).toBe("triaged");
+      expect(await repos.inbox.listCandidates(clientA(d), ORG_A)).toHaveLength(1);
+      expect((await repos.inbox.getCandidate(clientA(d), first.id))?.id).toBe(first.id);
+    });
+
+    it("places a project + resolves a candidate to a terminal status on the caller's client", async () => {
+      const d = db();
+      const source = await seedSource(d, null);
+      const cand = await repos.inbox.upsertCandidate(clientA(d), source, item("ext-1", null), null, "new");
+      const placed = await repos.inbox.placeCandidateProject(clientA(d), cand.id, "project_a");
+      expect(placed?.projectId).toBe("project_a");
+      const resolved = await repos.inbox.resolveCandidate(clientA(d), cand.id, "accepted", "spec_x");
+      expect(resolved?.status).toBe("accepted");
+      expect(resolved?.resolvedSpecId).toBe("spec_x");
+    });
+
+    it("lists stuck auto-routed candidates (auto_routed + no resolved spec), oldest-update first", async () => {
+      const d = db();
+      const source = await seedSource(d, "project_a");
+      // One stuck (auto_routed, unresolved), one resolved (auto_routed → accepted).
+      await repos.inbox.upsertCandidate(clientA(d), source, item("stuck", "project_a"), null, "auto_routed");
+      const done = await repos.inbox.upsertCandidate(
+        clientA(d),
+        source,
+        item("done", "project_a"),
+        null,
+        "auto_routed",
+      );
+      await repos.inbox.resolveCandidate(clientA(d), done.id, "accepted", "spec_done");
+      const stuck = await repos.inbox.listStuckAutoRouted(clientA(d), 10);
+      expect(stuck.map((c) => c.externalId)).toEqual(["stuck"]);
+    });
+
+    it("scopes candidate reads/writes to the org (off-scope sees zero)", async () => {
+      const d = db();
+      const source = await seedSource(d, "project_a");
+      const cand = await repos.inbox.upsertCandidate(
+        clientA(d),
+        source,
+        item("ext-1", "project_a"),
+        null,
+        "auto_routed",
+      );
+      // Org B sees ZERO of org A's candidates — the RLS row-visibility gate.
+      expect(await repos.inbox.listCandidates(clientB(d), ORG_A)).toHaveLength(0);
+      expect(await repos.inbox.getCandidate(clientB(d), cand.id)).toBeUndefined();
+      expect(await repos.inbox.placeCandidateProject(clientB(d), cand.id, "project_b")).toBeUndefined();
+      expect(await repos.inbox.resolveCandidate(clientB(d), cand.id, "accepted", "spec_x")).toBeUndefined();
+      expect(await repos.inbox.listStuckAutoRouted(clientB(d), 10)).toHaveLength(0);
+    });
+  });
+
+  describe("webhookEvents", () => {
+    async function persist(client: QueryClient, deliveryId: string) {
+      return repos.webhookEvents.persist(client, {
+        sourceId: "src_a",
+        orgId: ORG_A,
+        eventType: "issues",
+        deliveryId,
+        payload: { action: "opened" },
+      });
+    }
+
+    it("persists a received row, sweeps undriven rows, and marks one processed", async () => {
+      const d = db();
+      const ev = await persist(clientA(d), "d1");
+      expect(ev.status).toBe("received");
+      expect(ev.attempts).toBe(0);
+      const undriven = await repos.webhookEvents.listUndriven(clientA(d), 10);
+      expect(undriven.map((e) => e.id)).toEqual([ev.id]);
+      await repos.webhookEvents.markProcessed(clientA(d), ev.id);
+      // A processed row is no longer undriven (sweeper skips it).
+      expect(await repos.webhookEvents.listUndriven(clientA(d), 10)).toHaveLength(0);
+    });
+
+    it("records failures with attempt budget: stays failed, then dead-letters at the cap", async () => {
+      const d = db();
+      const ev = await persist(clientA(d), "d1");
+      // First failure (attempts 1 < cap 2) → stays `failed` (sweeper re-drives it).
+      expect(await repos.webhookEvents.recordFailure(clientA(d), ev.id, "boom", 2)).toBe("failed");
+      expect(await repos.webhookEvents.listUndriven(clientA(d), 10)).toHaveLength(1);
+      // Second failure (attempts 2 >= cap 2) → parked `dead_lettered` (no re-drive).
+      expect(await repos.webhookEvents.recordFailure(clientA(d), ev.id, "boom again", 2)).toBe("dead_lettered");
+      expect(await repos.webhookEvents.listUndriven(clientA(d), 10)).toHaveLength(0);
+    });
+
+    it("scopes the sweep + the mutations to the org (off-scope sees zero)", async () => {
+      const d = db();
+      const ev = await persist(clientA(d), "d1");
+      // Org B sees ZERO of org A's webhook events — the RLS row-visibility gate.
+      expect(await repos.webhookEvents.listUndriven(clientB(d), 10)).toHaveLength(0);
+      // An off-scope mark/record matches no visible row → no mutation.
+      await repos.webhookEvents.markProcessed(clientB(d), ev.id);
+      expect((await repos.webhookEvents.listUndriven(clientA(d), 10))[0]?.status).toBe("received");
+      expect(await repos.webhookEvents.recordFailure(clientB(d), ev.id, "x", 2)).toBe("failed");
+      expect((await repos.webhookEvents.listUndriven(clientA(d), 10))[0]?.attempts).toBe(0);
     });
   });
 

@@ -61,7 +61,10 @@ export { createIssuesConnector, type IssuesConnectorDeps } from "./issuesConnect
 
 export { buildInboxConnectorMap, type BuildConnectorMapDeps } from "./connectorMap.js";
 
-export { InboxStore, type CreateSourceInput } from "./store.js";
+// The `inbox_sources` + `candidates` store lives on the `Repositories` seam
+// (engine/repositories/inbox.ts); re-exported here so the forge-internal callers
+// keep their by-name import.
+export { InboxStore, type CreateSourceInput } from "../../repositories/inbox.js";
 
 export { ensureIssuesInboxSource, type EnsureIssuesSourceInput, type EnsureIssuesSourceResult } from "./repoLink.js";
 

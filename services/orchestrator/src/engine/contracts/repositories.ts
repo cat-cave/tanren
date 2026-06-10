@@ -40,6 +40,7 @@ import {
   ForgeProposalStore,
   InboxStore,
   AuditsStore,
+  WebhookEventStore,
   OrgIntegrationsStore,
   AppEnvironmentStore,
   TemplateStore,
@@ -85,6 +86,8 @@ export interface Repositories {
   readonly inbox: typeof InboxStore;
   /** Scheduled-audits (`audit_jobs`) data access. */
   readonly audits: typeof AuditsStore;
+  /** Durable raw-webhook landing (`webhook_events`) persist-then-202 data access. */
+  readonly webhookEvents: typeof WebhookEventStore;
   /** Forge discovery: `specs.metadata` provenance + the grounding spec list. */
   readonly discovery: typeof DiscoveryStore;
   /** Failure-recovery: the run read, captured-commit reads, spec reopen writes. */
@@ -124,6 +127,7 @@ export const pgRepositories: Repositories = {
   forgeProposals: ForgeProposalStore,
   inbox: InboxStore,
   audits: AuditsStore,
+  webhookEvents: WebhookEventStore,
   discovery: DiscoveryStore,
   recovery: RecoveryStore,
   forgeTools: ForgeToolsStore,

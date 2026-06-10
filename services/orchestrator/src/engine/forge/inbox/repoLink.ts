@@ -12,7 +12,7 @@ import type pg from "pg";
 import { runWithOrgScope } from "@tanren/db";
 import { parseGitHubRepository } from "../../providers/github.js";
 import { GitHubIssuesConfig } from "./githubConnector.js";
-import { InboxStore } from "./store.js";
+import { InboxStore } from "../../repositories/inbox.js";
 import type { InboxSource } from "./types.js";
 
 export interface EnsureIssuesSourceInput {

@@ -1,7 +1,7 @@
-// candidate-inbox store: the `inbox_sources` + `candidates` (migration
-// 0024) member of the `Repositories` seam. Pure SQL + row mapping; no Forge or
-// GitHub here. The engine (engine.ts) composes this with the connectors + the
-// triage answerer.
+// candidate-inbox store: the `inbox_sources` + `candidates` (collapsed baseline
+// 0000) member of the `Repositories` seam. Pure SQL + row mapping; no Forge or
+// GitHub here. The engine (forge/inbox/engine.ts) composes this with the
+// connectors + the triage answerer.
 //
 // This is a seam member like the other migrated forge stores (discovery /
 // recovery / forge-tools): the SQL lives behind the `InboxStore` value object,
@@ -20,7 +20,7 @@ import {
   type CandidateStatus,
   type IngestedItem,
   type SourceKind,
-} from "./types.js";
+} from "../forge/inbox/types.js";
 
 type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 

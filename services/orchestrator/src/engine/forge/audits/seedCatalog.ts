@@ -11,7 +11,7 @@
 // PROJECT_BRIEF §2.2. Org-scoped under RLS via the caller's client.
 
 import type pg from "pg";
-import { AuditsStore } from "./store.js";
+import { AuditsStore } from "../../repositories/audits.js";
 import type { AuditCadence, AuditJob, AuditKind } from "./types.js";
 
 type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;

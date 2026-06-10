@@ -32,7 +32,8 @@ import {
   loadOrgDefaultGithubCredentialRef,
   loadOrgGithubAppInstallation,
 } from "../../engine/credentials/orgGithubApp.js";
-import { ensureIssuesInboxSource, InboxStore } from "../../engine/forge/inbox/index.js";
+import { ensureIssuesInboxSource } from "../../engine/forge/inbox/index.js";
+import { pgRepositories } from "../../engine/contracts/repositories.js";
 import { parseGitHubRepository, type GitHubHttpClient } from "../../engine/providers/github.js";
 import type { GithubAppTokenMinter } from "../../engine/providers/githubAppTokenMinter.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
@@ -160,9 +161,9 @@ async function persistWebhookSecretRef(
   webhookSecretRef: string,
 ): Promise<void> {
   await runWithOrgScope(pool, orgId, async (client) => {
-    const source = await InboxStore.getSource(client, sourceId);
+    const source = await pgRepositories.inbox.getSource(client, sourceId);
     if (source === undefined) return;
-    await InboxStore.updateSourceConfig(client, sourceId, { ...source.config, webhookSecretRef });
+    await pgRepositories.inbox.updateSourceConfig(client, sourceId, { ...source.config, webhookSecretRef });
   });
 }
 

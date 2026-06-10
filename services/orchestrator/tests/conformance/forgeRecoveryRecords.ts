@@ -91,6 +91,36 @@ export interface InboxSourceRec {
   auto_route: string;
   created_at: Date;
 }
+export interface CandidateRec {
+  id: string;
+  source_id: string;
+  org_id: string;
+  project_id: string | null;
+  external_id: string;
+  title: string;
+  body: string;
+  severity: string;
+  status: string;
+  triage: unknown;
+  resolved_spec_id: string | null;
+  // Insertion-order proxy for the `ORDER BY created_at DESC` / `updated_at ASC`
+  // candidate reads (a monotonic counter the fixture stamps on insert).
+  seq: number;
+  updated_seq: number;
+}
+export interface WebhookEventRec {
+  id: string;
+  source_id: string;
+  org_id: string;
+  event_type: string;
+  delivery_id: string | null;
+  payload: unknown;
+  status: string;
+  attempts: number;
+  last_error: string | null;
+  // Insertion-order proxy for the sweeper's `ORDER BY created_at ASC` read.
+  seq: number;
+}
 export interface AuditJobRec {
   id: string;
   org_id: string;
@@ -117,7 +147,48 @@ export class ForgeRecoveryDb {
   personas: PersonaRec[] = [];
   behaviors: BehaviorRec[] = [];
   inboxSources: InboxSourceRec[] = [];
+  candidates: CandidateRec[] = [];
+  webhookEvents: WebhookEventRec[] = [];
   auditJobs: AuditJobRec[] = [];
+  // Monotonic insert/update counter for the candidate + webhook-event recency sorts.
+  seq = 0;
+}
+
+// The candidates RETURNING/SELECT projection — the candidate columns plus the
+// joined `source_name`/`source_kind` the store maps (the `candidates JOIN
+// inbox_sources` shape). The source is looked up from the shared store.
+export function candidateCols(c: CandidateRec, sources: InboxSourceRec[]): Record<string, unknown> {
+  const src = sources.find((s) => s.id === c.source_id);
+  return {
+    id: c.id,
+    source_id: c.source_id,
+    org_id: c.org_id,
+    project_id: c.project_id,
+    external_id: c.external_id,
+    title: c.title,
+    body: c.body,
+    severity: c.severity,
+    status: c.status,
+    triage: c.triage,
+    resolved_spec_id: c.resolved_spec_id,
+    source_name: src?.name ?? "",
+    source_kind: src?.kind ?? "manual",
+  };
+}
+
+// The webhook_events RETURNING/SELECT projection — the real columns the store maps.
+export function webhookEventCols(e: WebhookEventRec): Record<string, unknown> {
+  return {
+    id: e.id,
+    source_id: e.source_id,
+    org_id: e.org_id,
+    event_type: e.event_type,
+    delivery_id: e.delivery_id,
+    payload: e.payload,
+    status: e.status,
+    attempts: e.attempts,
+    last_error: e.last_error,
+  };
 }
 
 // The audit_jobs RETURNING/SELECT projection — the real columns the store maps.

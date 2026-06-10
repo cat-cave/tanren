@@ -32,7 +32,7 @@ import {
 import { PersistentlyInvalidSpecError } from "../specQuality/index.js";
 import { intakeItem } from "./pipeline.js";
 import { mapGithubIssueWebhook } from "./webhookMapping.js";
-import { WebhookEventStore, type WebhookEvent } from "./webhookEventStore.js";
+import { WebhookEventStore, type WebhookEvent } from "../../repositories/webhookEvents.js";
 
 // The attempt budget before a webhook event is dead-lettered (a loud terminal a
 // human must look at). Generous — a genuinely transient failure (LLM timeout, DB

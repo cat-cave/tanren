@@ -17,7 +17,10 @@ export {
   type AuditAnswererContext,
 } from "./types.js";
 
-export { AuditsStore, type CreateAuditJobInput } from "./store.js";
+// The `audit_jobs` store lives on the `Repositories` seam
+// (engine/repositories/audits.ts); re-exported here so the forge-internal
+// callers keep their by-name import.
+export { AuditsStore, type CreateAuditJobInput } from "../../repositories/audits.js";
 
 export {
   runAuditJob,
