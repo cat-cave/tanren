@@ -44,11 +44,20 @@ export interface PersistedArtifactAssertion {
   readonly describe: string;
 }
 
-// A case is either an ACTIVE proof the gate runs today, or a PLANNED placeholder
-// that lands with a specific autonomy-engine capability. Planned cases are
-// declared (so the suite's shape is reviewable) but skipped by the harness until
-// their capability ships.
-export type CaseStatus = "active" | "planned";
+// A case is one of:
+//   - ACTIVE   — a live, credentialed proof the gate runs today against a real
+//                stack (the three tier proofs).
+//   - HERMETIC — a proof driven IN-PROCESS against fakes + the engine's real pure
+//                decision functions (no creds / no network / no real Postgres), so
+//                it is REGRESSION-PINNED in `just fast-check`. The apex proof surface
+//                is hermetic: its driver lives in the orchestrator test suite
+//                (services/orchestrator/tests/apexE2eDriver.ts — fakes are legal
+//                there; the e2e-no-mock check forbids them under tests/e2e/**), and
+//                THIS manifest entry is the single typed declaration of what that
+//                hermetic driver proves.
+//   - PLANNED  — a placeholder that lands with a specific autonomy-engine capability
+//                (declared so the suite's shape is reviewable; skipped until wired).
+export type CaseStatus = "active" | "hermetic" | "planned";
 
 export interface E2eCase {
   // Stable id, used as the vitest case name and the proof-evidence key.
@@ -160,27 +169,39 @@ const capabilityPlaceholderCases: readonly E2eCase[] = [
       { kind: "merged_pr", describe: "the ingested spec executes and reaches a merged PR" },
     ],
   },
-  {
-    id: "apex",
-    capability: "apex — clean repo → deployed product over real surfaces (autonomy-engine §3/§4)",
-    status: "planned",
-    surfaces: ["http_api", "dashboard"],
-    artifacts: [
-      { kind: "dag_spec", describe: "Tanren authors the brief/personas/behaviors/DAG from rough notes" },
-      {
-        kind: "merged_pr",
-        describe: "every change is a merged PR with full provenance, no human in the per-spec loop",
-      },
-      {
-        kind: "implemented_file",
-        describe: "the near-empty repo becomes a working, tested, deployed URL shortener + web UI + Slack bot",
-      },
-      { kind: "dora_projection", describe: "DORA accumulates across the full apex run" },
-    ],
-  },
 ];
 
-export const e2eManifest: readonly E2eCase[] = [...tierProofCases, ...capabilityPlaceholderCases];
+// The apex proof — HERMETIC (audit §6.8). No longer `planned`: the apex run is
+// regression-pinned by an in-process driver
+// (services/orchestrator/tests/apexE2eDriver.ts) that drives the FULL autonomy-loop
+// proof surface against fakes + the engine's real pure decision functions, in
+// `just fast-check`. This entry is its typed declaration; the live, credentialed
+// apex (real surfaces, real deploy) remains the apex-validation the cutover is
+// pending on, but the proof surface is no longer only anecdotal in a live run.
+const apexHermeticCase: E2eCase = {
+  id: "apex",
+  capability: "apex — clean repo → deployed product (hermetic regression-pin; autonomy-engine §3/§4)",
+  status: "hermetic",
+  surfaces: ["http_api"],
+  artifacts: [
+    {
+      kind: "dag_spec",
+      describe: "Tanren authors the brief/personas/behaviors/DAG from rough notes (a template seed)",
+    },
+    {
+      kind: "merged_pr",
+      describe: "every derived + ingested spec is a merged PR (CAS land advances main), no per-spec human",
+    },
+    {
+      kind: "implemented_file",
+      describe: "the near-empty repo gains the URL-shortener API + web UI + Slack bot target files on base",
+    },
+    { kind: "cost_records", describe: "each role call carries the right cost_basis + billing_mode (subscription run)" },
+    { kind: "dora_projection", describe: "DORA accumulates a deployment per merged run across the apex run" },
+  ],
+};
+
+export const e2eManifest: readonly E2eCase[] = [...tierProofCases, apexHermeticCase, ...capabilityPlaceholderCases];
 
 // validateManifest enforces the manifest's own invariants so a malformed case
 // (duplicate id, an "active" case asserting on nothing real, a tier proof
@@ -204,7 +225,14 @@ export function validateManifest(cases: readonly E2eCase[]): string[] {
       problems.push(`${item.id}: a tier proof must be active (it wires against a real fixture)`);
     }
     if (item.status === "active" && item.tier === undefined) {
-      problems.push(`${item.id}: only the tier proofs may be active today; capability cases stay planned until wired`);
+      problems.push(
+        `${item.id}: only the tier proofs may be active today; capability cases stay planned/hermetic until wired`,
+      );
+    }
+    // A hermetic case is driven in-process (not against a tier fixture), so it must
+    // NOT carry a tier — its driver lives in the orchestrator suite, not here.
+    if (item.status === "hermetic" && item.tier !== undefined) {
+      problems.push(`${item.id}: a hermetic case is in-process; it must not carry an acceptance tier`);
     }
   }
   return problems;
