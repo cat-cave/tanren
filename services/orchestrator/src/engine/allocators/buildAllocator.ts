@@ -56,13 +56,36 @@ function requireEnv(name: string): string {
   return value;
 }
 
+// Parse a runner SSH port from env. The host/port is DEPLOY INFRA (layer-1 env,
+// correctly so — the runner topology is an operator-deployment concern, NOT
+// per-org tenant config). But a malformed value must FAIL LOUD, not silently
+// become NaN/0 (which the old `Number(env(...) ?? 22)` did — `Number("oops")` is
+// NaN, passed straight to the SSH client). UNSET → the documented default; a SET
+// value must parse to a valid TCP port (1..65535).
+function parseSshPort(name: string, fallback: number): number {
+  const raw = env(name);
+  if (raw === undefined) {
+    return fallback;
+  }
+  const port = Number(raw);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error(
+      `${name}='${raw}' is not a valid TCP port (expected an integer 1..65535). ` +
+        "Unset it to use the default; a malformed port must NOT silently become NaN/0.",
+    );
+  }
+  return port;
+}
+
 function buildStatic(runners: RunnerStore): StaticRunnerAllocator {
   // Dev-only: route to the long-lived dev compose static runner. Preserves the
   // security boundary (no docker socket on orchestrator) while keeping
-  // `just smoke` working. See docs/operator-guide/runners.md.
+  // `just smoke` working. See docs/operator-guide/runners.md. The host/port are
+  // deploy-infra env (layer 1) — the port goes through a validated parse so a
+  // malformed value fails loud (never a silent NaN).
   return new StaticRunnerAllocator({
     host: env("TANREN_RUNNER_SSH_HOST") ?? "runner",
-    port: Number(env("TANREN_RUNNER_SSH_PORT") ?? 22),
+    port: parseSshPort("TANREN_RUNNER_SSH_PORT", 22),
     username: env("TANREN_RUNNER_SSH_USER") ?? "tanren",
     hostKeyFingerprint: env("TANREN_RUNNER_SSH_HOST_FINGERPRINT"),
     runners,

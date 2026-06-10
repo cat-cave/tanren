@@ -236,6 +236,37 @@ describe("buildOidcProviderFromEnv with TANREN_OIDC_PRESET=authentik", () => {
     ]);
   });
 
+  it("FAILS LOUD on an unknown preset (a typo must not silently run generic OIDC)", () => {
+    // Code-integrity r3 (finding #3): a present-but-unknown TANREN_OIDC_PRESET is a typo —
+    // it must throw, naming the value + the allowed set, NOT fall through to the generic
+    // provider's (different) claim mapping. Creds are set so the throw is the preset, not creds.
+    // "authentic" is a misspelling of the known "authentik" preset.
+    process.env.TANREN_OIDC_PRESET = "authentic";
+    process.env.TANREN_OIDC_ISSUER = ISSUER;
+    process.env.TANREN_OIDC_CLIENT_ID = "cid";
+    process.env.TANREN_OIDC_CLIENT_SECRET = "secret";
+    expect(() => buildOidcProviderFromEnv()).toThrow(/TANREN_OIDC_PRESET='authentic' is not a known OIDC preset/u);
+  });
+
+  it("UNSET preset → the generic-OIDC default (no preset, the documented behavior)", () => {
+    // No TANREN_OIDC_PRESET. The provider still registers (creds present) and uses the
+    // generic provider defaults — unset is NOT an error, only a present-yet-unknown value is.
+    process.env.TANREN_OIDC_ISSUER = ISSUER;
+    process.env.TANREN_OIDC_CLIENT_ID = "cid";
+    process.env.TANREN_OIDC_CLIENT_SECRET = "secret";
+    expect(buildOidcProviderFromEnv()).toBeInstanceOf(OidcProvider);
+  });
+
+  it("a KNOWN preset → its claim mapping (authentik scopes incl. groups)", () => {
+    process.env.TANREN_OIDC_PRESET = "authentik";
+    process.env.TANREN_OIDC_ISSUER = ISSUER;
+    process.env.TANREN_OIDC_CLIENT_ID = "cid";
+    process.env.TANREN_OIDC_CLIENT_SECRET = "secret";
+    const provider = buildOidcProviderFromEnv();
+    const url = provider?.buildAuthorizeUrl("s", `${ISSUER}/auth/callback?provider=oidc`);
+    expect(url).toContain("scope=openid+profile+email+groups");
+  });
+
   it("buildAuthFromEnv registers oidc via the preset, alongside github_oauth", () => {
     const githubKeys = ["TANREN_GITHUB_OAUTH_CLIENT_ID", "TANREN_GITHUB_OAUTH_CLIENT_SECRET"] as const;
     const savedGithub = githubKeys.map((k) => [k, process.env[k]] as const);

@@ -448,12 +448,13 @@ describe("buildOidcProviderFromEnv env-gating guards", () => {
     expect(claims.orgs.map((o) => o.externalId)).toEqual([`${OIDC_ISSUER}#engineering`]);
   });
 
-  it("falls back to the generic provider defaults for an unknown preset", () => {
-    // presetDefaults: unknown name -> {} so the generic defaults apply.
+  it("FAILS LOUD on an unknown preset (no silent fall-through to generic OIDC)", () => {
+    // Code-integrity r3 (finding #3): a present-but-unknown TANREN_OIDC_PRESET is a
+    // typo. It must THROW (naming the value + allowed set), NOT silently run the
+    // generic provider's different claim mapping. The no-silent-fallback boundary.
     setCreds();
     process.env.TANREN_OIDC_PRESET = "okta";
-    const url = buildOidcProviderFromEnv()?.buildAuthorizeUrl("st", "https://cb") ?? "";
-    expect(url).toContain("scope=openid+profile+email+groups");
+    expect(() => buildOidcProviderFromEnv()).toThrow(/TANREN_OIDC_PRESET='okta' is not a known OIDC preset/u);
   });
 
   it("treats an empty-string preset as no preset (generic defaults)", () => {

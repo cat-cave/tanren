@@ -122,12 +122,25 @@ export class HttpDockerEngineClient implements DockerEngineClient {
     }
   }
 
+  // Parse a JSON response from a Docker endpoint that is CONTRACTUALLY expected to return a
+  // JSON object (e.g. `/containers/create` → `{ Id }`, `/containers/.../json` → the inspect
+  // shape). An empty body from such an endpoint is a PROTOCOL VIOLATION — it is NOT a typed
+  // value. Returning `undefined as unknown as T` here would fabricate a fake typed object
+  // that only blows up later at an unrelated `.Id` access with no endpoint context. Instead
+  // we THROW immediately, naming the endpoint, and assert the parsed body is a non-null
+  // object so the caller's `.Id`/`.State` reads land on a real shape (no silent fabrication).
   private async requestJson<T>(method: string, path: string, body?: unknown): Promise<T> {
     const buffer = await this.requestBuffer(method, path, body);
     if (buffer.length === 0) {
-      return undefined as unknown as T;
+      throw new Error(`Docker API ${method} ${path} returned an empty body where a JSON object was expected`);
     }
-    return JSON.parse(buffer.toString("utf8")) as T;
+    const parsed: unknown = JSON.parse(buffer.toString("utf8"));
+    if (parsed === null || typeof parsed !== "object") {
+      throw new TypeError(
+        `Docker API ${method} ${path} returned a non-object JSON body where an object was expected: ${buffer.toString("utf8")}`,
+      );
+    }
+    return parsed as T;
   }
 
   private async requestBuffer(method: string, path: string, body?: unknown): Promise<Buffer> {

@@ -1,5 +1,39 @@
+import { z } from "zod";
 import { authentikPresetDefaults } from "./authentikEnv.js";
 import { OidcProvider, type OidcProviderConfig } from "./oidcProvider.js";
+
+/**
+ * The closed set of known `TANREN_OIDC_PRESET` values. UNSET is the documented
+ * generic-OIDC default (no preset). A SET-yet-unknown value (a typo) is a LOUD
+ * boot error — never a silent fall-through to generic OIDC, which would run a
+ * DIFFERENT claim mapping than the operator intended (the no-silent-fallback
+ * boundary: an unknown config value fails loud, it does not degrade to a default).
+ */
+export const OidcPreset = z.enum(["authentik"]);
+export type OidcPreset = z.infer<typeof OidcPreset>;
+
+/**
+ * Validate `TANREN_OIDC_PRESET` against the known {@link OidcPreset} enum. UNSET
+ * (or blank) → `undefined` (generic OIDC, the documented default). A present but
+ * unknown value THROWS, naming the value and the allowed set — a typo must not
+ * silently run generic OIDC instead of the intended preset's claim mapping.
+ */
+function parseOidcPreset(raw: string | undefined): OidcPreset | undefined {
+  const value = emptyToUndefined(raw);
+  if (value === undefined) {
+    return undefined;
+  }
+  const parsed = OidcPreset.safeParse(value.toLowerCase());
+  if (!parsed.success) {
+    const allowed = OidcPreset.options.join(", ");
+    throw new Error(
+      `TANREN_OIDC_PRESET='${value}' is not a known OIDC preset (expected one of: ${allowed}). ` +
+        "Unset it to use the generic-OIDC default; a typo must NOT silently run generic OIDC " +
+        "instead of the intended preset's claim mapping.",
+    );
+  }
+  return parsed.data;
+}
 
 /**
  * Build the OIDC provider from operator env, or `undefined` when it is not
@@ -30,7 +64,7 @@ export function buildOidcProviderFromEnv(): OidcProvider | undefined {
   ) {
     return undefined;
   }
-  const preset = presetDefaults(emptyToUndefined(process.env["TANREN_OIDC_PRESET"]));
+  const preset = presetDefaults(parseOidcPreset(process.env["TANREN_OIDC_PRESET"]));
   const scopesEnv = emptyToUndefined(process.env["TANREN_OIDC_SCOPES"]);
   return new OidcProvider({
     issuer,
@@ -49,15 +83,18 @@ export function buildOidcProviderFromEnv(): OidcProvider | undefined {
 type PresetDefaults = Pick<OidcProviderConfig, "scopes" | "subjectClaim" | "loginClaim" | "nameClaim" | "groupsClaim">;
 
 /**
- * Resolve the named preset to a partial config. Unknown/empty presets resolve
- * to an empty object, leaving the generic provider's built-in defaults intact
- * (so existing generic-OIDC deployments are byte-for-byte unchanged).
+ * Resolve a VALIDATED preset (already checked against the {@link OidcPreset} enum
+ * by {@link parseOidcPreset}, so an unknown value never reaches here) to its
+ * partial config. `undefined` (no preset) → an empty object, leaving the generic
+ * provider's built-in defaults intact (existing generic-OIDC deployments unchanged).
  */
-function presetDefaults(name: string | undefined): PresetDefaults {
-  if (name !== undefined && name.toLowerCase() === "authentik") {
-    return authentikPresetDefaults();
+function presetDefaults(name: OidcPreset | undefined): PresetDefaults {
+  switch (name) {
+    case "authentik":
+      return authentikPresetDefaults();
+    case undefined:
+      return {};
   }
-  return {};
 }
 
 function emptyToUndefined(value: string | undefined): string | undefined {

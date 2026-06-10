@@ -6,8 +6,8 @@
 //   - flag DEFAULT ON: `buildBaseShiftCoordinator` with the runner deps wired selects the
 //     LIVE seams (the opener allocates a runner) — NOT the held stub;
 //   - flag OFF (`BASE_SHIFT_LIVE=0`): the held stubs HOLD loudly (kill-switch);
-//   - flag ON but the runner deps ABSENT: the held stubs HOLD (fail-closed, never a silent
-//     degrade);
+//   - flag ON but the runner deps ABSENT: construction THROWS LOUD (a misconfigured live
+//     flag is a bug, never a silent degrade to a held stub);
 //   - the merge-path `behind` hook maps the coordinator's never-discard outcomes:
 //       * a CONFLICT rebased + resolved IN PLACE (same run_id, ending `rebased_resolved`)
 //         ⇒ the hook returns `rebased` — NOT `held` (the never-discard proof);
@@ -242,7 +242,21 @@ describe("baseShiftLive() flag — the Wave-3/Slice-2 cutover (default ON + kill
     expect(counter.reads).toBe(0);
   });
 
-  it("flag ON but runner deps ABSENT ⇒ the HELD stub holds (fail-closed, never a silent degrade)", async () => {
+  it("flag ON but runner deps ABSENT ⇒ construction THROWS LOUD (a misconfigured live flag, never a silent degrade)", () => {
+    // A `BASE_SHIFT_LIVE`-on build site with no allocator/ssh/identity is wired wrong: the
+    // live flag is on but the runner deps it needs are absent. That is a CONSTRUCTION BUG,
+    // not a degrade to honor with a quiet held stub — `buildBaseShiftCoordinator` throws.
+    expect(() =>
+      buildBaseShiftCoordinator({
+        pool: { query: () => Promise.resolve({ rows: [], rowCount: 0 }) } as unknown as pg.Pool,
+        vcsProvider: {} as never,
+        secrets: {} as never,
+      }),
+    ).toThrow(/BASE_SHIFT_LIVE is on but the live base-shift deps are not wired/u);
+  });
+
+  it("KILL-SWITCH (flag OFF) + runner deps ABSENT ⇒ the HELD stub holds (the documented flag-off behavior, unchanged)", async () => {
+    process.env["BASE_SHIFT_LIVE"] = "0";
     const coord = buildBaseShiftCoordinator({
       pool: { query: () => Promise.resolve({ rows: [], rowCount: 0 }) } as unknown as pg.Pool,
       vcsProvider: {} as never,

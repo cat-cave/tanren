@@ -180,8 +180,9 @@ export class PgPercolationSettler implements PercolationSettler {
  * (default ON — the Wave-3/Slice-2 cutover): the LIVE seams (allocate a runner, rebase in
  * place over jj, re-gate, resolve a recorded conflict) when the flag is on AND the runner
  * deps are wired; the fail-closed `Held*` stubs (the kill-switch — they HOLD the work
- * loudly, never-discard/never-merge) when the flag is OFF or the deps are absent. No
- * half-state: either the live seams own the whole flow or the held stubs hold.
+ * loudly, never-discard/never-merge) when the flag is OFF. Flag ON but deps absent THROWS
+ * (a misconfigured live flag, not a silent degrade). No half-state: either the live seams
+ * own the whole flow or the held stubs hold (flag off) or construction fails loud.
  */
 export function buildBaseShiftCoordinator(
   deps: BuildPercolationCoordinatorDeps,
@@ -249,20 +250,31 @@ interface BaseShiftSeams {
 /**
  * Select the base-shift seams by the `baseShiftLive()` flag (default ON). Flag ON with the
  * runner deps wired ⇒ the LIVE seams; flag OFF ⇒ the fail-closed `Held*` stubs (the
- * kill-switch). When the flag is ON but the runner deps are NOT wired (a build site that
- * cannot drive a live runner), fall back to the `Held*` stubs — which HOLD the work loudly
- * (never-discard/never-merge), so an un-wired live path is a loud hold, never a silent
- * degrade (the §0 fail-closed boundary).
+ * kill-switch, the documented flag-OFF behavior).
+ *
+ * Flag ON but the runner deps NOT wired is a MISCONFIGURED LIVE FLAG — a construction bug,
+ * NOT a degrade to honor. It throws LOUDLY here (no silent fallback to the held stubs): a
+ * `BASE_SHIFT_LIVE`-on build site that cannot drive a live runner is wired wrong, and a
+ * quiet hold would mask it. (The genuine flag-OFF kill-switch keeps its held-stub behavior;
+ * the never-discard/never-merge hold semantics belong to the flag-OFF path, not to an
+ * un-wired live path. The no-silent-fallback boundary: required-missing fails loud.)
  */
 function selectBaseShiftSeams(deps: BuildPercolationCoordinatorDeps): BaseShiftSeams {
-  const liveDeps = liveBaseShiftDeps(deps);
-  if (!baseShiftLive() || liveDeps === undefined) {
+  if (!baseShiftLive()) {
     return {
       workspace: new HeldWorkspaceVcsCore(),
       opener: new HeldBaseShiftWorkspaceOpener(),
       reGate: new HeldBaseShiftReGate(),
       resolver: new HeldBaseShiftConflictResolver(),
     };
+  }
+  const liveDeps = liveBaseShiftDeps(deps);
+  if (liveDeps === undefined) {
+    throw new Error(
+      "BASE_SHIFT_LIVE is on but the live base-shift deps are not wired " +
+        "(allocator / ssh / identitySecretRef absent) — a misconfigured live flag is a construction " +
+        "bug, not a silent degrade. Wire the runner deps, or set BASE_SHIFT_LIVE=0 for the held kill-switch.",
+    );
   }
   // The opener IS the workspace core (it holds the per-shift live jj cores the coordinator's
   // `rebaseOnto` delegates to — the coordinator only ever calls `workspace.rebaseOnto`).
