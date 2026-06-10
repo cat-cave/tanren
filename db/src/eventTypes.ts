@@ -21,6 +21,7 @@ export const eventTypeNames = [
   "checker.started",
   "checker.verdict",
   "ci.flaky.detected",
+  "ci.junit_missing",
   "ci.test.quarantined",
   "ci.tests.reported",
   "convergence.assessed",

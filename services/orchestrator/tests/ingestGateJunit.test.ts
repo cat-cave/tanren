@@ -104,6 +104,9 @@ function deps(ssh: CommandSubstrate, client: RecordingClient, expectReport: bool
     gatePassed: false,
     expectReport,
     tier,
+    // The DECLARED report path is read back ONLY when a report is expected; absent ⇒
+    // the ingest skips the read entirely (the clean no-op). Mirror that here.
+    ...(expectReport ? { reportPath: "reports/junit.xml" } : {}),
   };
 }
 

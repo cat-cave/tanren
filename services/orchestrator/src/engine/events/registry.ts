@@ -106,7 +106,12 @@ import {
   MergeQueueAdvancedPayload,
   MergeQueueInfraBlockedPayload,
 } from "./schemas/mergeQueue.js";
-import { CiFlakyDetectedPayload, CiTestQuarantinedPayload, CiTestsReportedPayload } from "./schemas/ciFlaky.js";
+import {
+  CiFlakyDetectedPayload,
+  CiJunitMissingPayload,
+  CiTestQuarantinedPayload,
+  CiTestsReportedPayload,
+} from "./schemas/ciFlaky.js";
 import {
   DemoCompletedPayload,
   DemoEvidenceRecordedPayload,
@@ -161,11 +166,10 @@ import {
   IntegrationRebasePayload,
 } from "./schemas/dag.js";
 
-// The EventRegistry is the single source of truth mapping event names to their typed
-// Zod payload schemas. Adding a new event name requires: (1) a Zod schema under
-// events/schemas/, (2) wiring it into this registry, (3) Sensitivity tags for every
-// payload field in sensitivityRules.ts, and (4) regenerating the events.event_type
-// CHECK migration via scripts/generate-event-type-check.mjs.
+// The EventRegistry is the single source of truth mapping event names to their typed Zod
+// payload schemas. Adding a new event name requires: (1) a Zod schema under events/schemas/,
+// (2) wiring it here, (3) Sensitivity tags for every payload field in sensitivityRules.ts,
+// and (4) regenerating the events.event_type CHECK migration via codegen:events + db:generate.
 export const EventRegistry = {
   // Run lifecycle
   "run.queued": RunQueuedPayload,
@@ -237,8 +241,8 @@ export const EventRegistry = {
   "credential.failed": CredentialFailedPayload,
   "credential.configured": CredentialConfiguredPayload,
   "credential.github.configured": CredentialGithubConfiguredPayload,
-  // Managed-hosting dimension D: a per-run scoped Vault child token was minted
-  // (ref paths + TTL/uses; never the token value).
+  // Managed-hosting dimension D: a per-run scoped Vault child token was minted (ref paths +
+  // TTL/uses; never the token value).
   "credential.scoped_token_minted": CredentialScopedTokenMintedPayload,
   // Cost resolution
   "cost.resolved": CostResolvedPayload,
@@ -269,19 +273,18 @@ export const EventRegistry = {
   "github.pr.merged": GithubPrMergedPayload,
   "github.failed": GithubFailedPayload,
 
-  // Flaky-test detection + auto-quarantine. The detector reduces the native gate's
-  // per-step verdicts and flags a STEP that toggled outcome on UNCHANGED code
-  // (ci.flaky.detected); that step is then recorded on the quarantine surface
-  // (ci.test.quarantined). A consistently-failing step is never flagged — quarantine
-  // ≠ ignore-failures.
+  // Flaky-test detection + auto-quarantine. The detector reduces the native gate's per-step
+  // verdicts and flags a STEP that toggled outcome on UNCHANGED code (ci.flaky.detected); that
+  // step is then recorded on the quarantine surface (ci.test.quarantined). A consistently-
+  // failing step is never flagged — quarantine ≠ ignore-failures.
   "ci.flaky.detected": CiFlakyDetectedPayload,
   "ci.test.quarantined": CiTestQuarantinedPayload,
-
   // CI-intelligence per-test grain: the native gate ingested the runner's JUnit report
-  // IN-PROCESS into per-test rows (ci_test_results). Summary counts + head SHA + attempt
-  // only — names/files are public, never secret values.
+  // IN-PROCESS into per-test rows (ci_test_results). Summary counts only — never secrets.
   "ci.tests.reported": CiTestsReportedPayload,
-
+  // A gate tier DECLARED a `junitReport` but produced none — the per-test grain went blind.
+  // DURABLE + advisory (never merge-gating): the no-silent-skip signal.
+  "ci.junit_missing": CiJunitMissingPayload,
   // The in-loop deterministic native gate (exit-code driven; no agent). `gate.verdict`
   // is the headSha-carrying terminal roll-up CI-intelligence reduces — the native
   // delivery model's verdict, replacing the retired forge-CI observation events.
@@ -306,36 +309,33 @@ export const EventRegistry = {
   // up-to-date enforcement: branch behind base → auto-rebase + re-gate CI.
   "merge.behind": MergeBehindPayload,
   "merge.rebased": MergeRebasedPayload,
-  // intent-preserving conflict resolution: resolver invoked → resolved
-  // (re-gated) or irreconcilable (one spec re-planned, intent kept alive).
+  // intent-preserving conflict resolution: resolver invoked → resolved (re-gated) or
+  // irreconcilable (one spec re-planned, intent kept alive).
   "merge.conflict.resolving": MergeConflictResolvingPayload,
   "merge.conflict.resolved": MergeConflictResolvedPayload,
   "merge.conflict.irreconcilable": MergeConflictIrreconcilablePayload,
   "merge.conflict.replan_routed": MergeConflictReplanRoutedPayload,
   // external-push governance posture block (strict / audit_only)
   "merge.blocked": MergeBlockedPayload,
-  // §2c: a speculative dependent's MERGE held until its ancestors merge,
-  // then re-targeted from the integration ref to default_branch + the ref cleaned.
+  // §2c: a speculative dependent's MERGE held until its ancestors merge, then re-targeted
+  // from the integration ref to default_branch + the ref cleaned.
   "merge.speculative_held": MergeSpeculativeHeldPayload,
   "merge.retargeted": MergeRetargetedPayload,
   "merge.integration_cleaned": MergeIntegrationCleanedPayload,
-  // §2d: the native intelligent merge queue. A ready run ENTERS the queue
-  // (merge.queued w/ native_queue), the coordinator selects the DAG-ordered head
-  // (merge.queue.advanced), and an entry that left without merging (conflict /
-  // blocked / failed) records merge.dequeued. Serialized: one merge at a time.
+  // §2d: the native intelligent merge queue. A ready run ENTERS the queue (merge.queued w/
+  // native_queue), the coordinator selects the DAG-ordered head (merge.queue.advanced), and an
+  // entry that left without merging records merge.dequeued. Serialized: one merge at a time.
   "merge.queue.advanced": MergeQueueAdvancedPayload,
   "merge.dequeued": MergeDequeuedPayload,
-  // GitHub-5xx resilience (GAP #2d): a transient infra error blocked the per-PR merge
-  // DRIVE and the hold can no longer recover on its own — the entry exhausted its
-  // re-drive ceiling, or the merge state is unconfirmable (auto-retry could double-
-  // merge). A LOUD operator-visible halt (does NOT silently re-drive forever).
+  // GitHub-5xx resilience (GAP #2d): a transient infra error blocked the per-PR merge DRIVE
+  // and the hold can no longer recover — the entry exhausted its re-drive ceiling, or the
+  // merge state is unconfirmable. A LOUD operator-visible halt (no silent re-drive forever).
   "merge.queue.infra_blocked": MergeQueueInfraBlockedPayload,
-  // §2d: speculative batch-check + bisect. The coordinator speculatively
-  // integrates `default_branch + batch PRs` + CI-checks that prospective merged state
-  // (merge.batch.checking); a green check merges the batch in DAG order
-  // (merge.batch.passed); a failed check is BISECTED (merge.batch.bisecting) to isolate
-  // the single offending PR (merge.batch.culprit), which is dequeued to a recoverable
-  // re-execution while the innocent remainder merges. No failed batch ever reaches main.
+  // §2d: speculative batch-check + bisect. The coordinator speculatively integrates
+  // `default_branch + batch PRs` + CI-checks that state (merge.batch.checking); a green check
+  // merges the batch in DAG order (merge.batch.passed); a failed check is BISECTED
+  // (merge.batch.bisecting) to isolate the offending PR (merge.batch.culprit), dequeued to a
+  // recoverable re-execution while the innocent remainder merges. No failed batch reaches main.
   "merge.batch.checking": MergeBatchCheckingPayload,
   "merge.batch.passed": MergeBatchPassedPayload,
   "merge.batch.bisecting": MergeBatchBisectingPayload,

@@ -154,7 +154,7 @@ const fakeRunner = (
     externalId: string;
     title: string;
     body: string;
-    severity: "info" | "warn" | "fail";
+    severity: "P0" | "P1" | "P2" | "P3";
   }[],
 ): AuditPassRunner => ({
   run: async () => ({ findings }),
@@ -197,7 +197,9 @@ describe("runAuditJob → candidate inbox auto-route", () => {
         externalId: "a11y-1",
         title: "contrast failure on nav",
         body: "3.1:1 below WCAG AA",
-        severity: "warn",
+        // P2 (moderate) — below the default posture's P1 threshold ⇒ NON-blocking ⇒
+        // routes (auto_routed), the velocity/route path the rest of this test asserts.
+        severity: "P2",
       },
     ]);
 
@@ -237,7 +239,7 @@ describe("runAuditJob → candidate inbox auto-route", () => {
       name: "deps",
       cadence: "nightly",
     });
-    const runner = fakeRunner([{ externalId: "dep-1", title: "lodash outdated", body: "v1", severity: "info" }]);
+    const runner = fakeRunner([{ externalId: "dep-1", title: "lodash outdated", body: "v1", severity: "P3" }]);
     const deps = { pool, passRunner: runner, answerer: createDeterministicTriageAnswerer() };
     await runAuditJob(deps, job);
     await runAuditJob(deps, job);
@@ -254,7 +256,7 @@ describe("runAuditJob → candidate inbox auto-route", () => {
       cadence: "monthly",
     });
     const paused: AuditJob = { ...job, enabled: false };
-    const runner = fakeRunner([{ externalId: "p-1", title: "regression", body: "", severity: "warn" }]);
+    const runner = fakeRunner([{ externalId: "p-1", title: "regression", body: "", severity: "P2" }]);
     const result = await runAuditJob({ pool, passRunner: runner }, paused);
     expect(result.candidates).toHaveLength(0);
     expect(candidates.size).toBe(0);
@@ -278,10 +280,11 @@ describe("runAuditJob → candidate inbox auto-route", () => {
 });
 
 describe("summarizeFindings", () => {
-  it("rolls up to the worst severity", () => {
+  it("rolls up to the worst (most-severe) P0–P3, projected to the surface display scale", () => {
+    // Worst of {P3, P1} is P1 ⇒ the surface tone is `fail` (P0/P1 ⇒ fail).
     const s = summarizeFindings([
-      { externalId: "1", title: "a", body: "", severity: "info" },
-      { externalId: "2", title: "b", body: "", severity: "fail" },
+      { externalId: "1", title: "a", body: "", severity: "P3" },
+      { externalId: "2", title: "b", body: "", severity: "P1" },
     ]);
     expect(s.count).toBe(2);
     expect(s.severity).toBe("fail");

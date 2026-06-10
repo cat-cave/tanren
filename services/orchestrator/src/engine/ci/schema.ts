@@ -20,10 +20,22 @@ export type CiWhen = z.infer<typeof CiWhen>;
 // A single named shell command within a tier. `run` is an opaque shell string
 // executed verbatim by the consumer; this module does not parse or validate
 // shell syntax.
+//
+// `junitReport` is the EXPLICIT CI-config contract for the CI-intelligence per-test
+// grain: a step that runs tests DECLARES the workspace-relative path it writes its
+// JUnit report to (e.g. `reports/junit.xml`). Tanren's native gate reads back EXACTLY
+// that declared path after the step runs and ingests the per-test rows
+// (flaky→quarantine→root-cause). This is a DECLARED field, never a command-string
+// sniff: a step is "junit-producing" iff it sets `junitReport`, so the writer's
+// actual test command (`just tier-2`, which does NOT mention the path) is recognized.
+// STACK-AGNOSTIC: the path is the project's declaration — Tanren names no test runner,
+// only honors the path the project says it emits. Absent ⇒ the step produces no grain
+// (the clean no-op skip); present-but-absent-after-run ⇒ a LOUD `ci.junit_missing`.
 export const CiStep = z
   .object({
     name: z.string().min(1),
     run: z.string().min(1),
+    junitReport: z.string().min(1).optional(),
   })
   .strict();
 export type CiStep = z.infer<typeof CiStep>;

@@ -1,36 +1,34 @@
 // NATIVE PER-TEST INGEST (the no-Actions delivery model). The native gate runs the
-// repo's test step over SSH; when that step emits a JUnit report to the conventional
-// workspace path, this reads it back over SSH, parses it, and persists the per-test
-// rows IN-PROCESS — directly from the runner, with NO webhook, NO HMAC, NO Actions
-// upload step. This is how the CI-intelligence per-test grain (flaky detection +
-// quarantine over `ci_test_results`) survives the cutover: the gate produces the
-// report, Tanren ingests it itself.
+// repo's test step over SSH; when that step DECLARES a JUnit report path (the
+// `junitReport` field on the `.tanren/ci.yml` step), this reads it back over SSH at
+// that declared path, parses it, and persists the per-test rows IN-PROCESS — directly
+// from the runner, with NO webhook, NO HMAC, NO Actions upload step. This is how the
+// CI-intelligence per-test grain (flaky detection + quarantine over `ci_test_results`)
+// survives the cutover: the gate produces the report, Tanren ingests it itself.
 //
-// The report path is the documented convention `reports/junit.xml` (a repo's
-// `.tanren/ci.yml` test step writes it, e.g. `vitest --reporter=junit
-// --outputFile=reports/junit.xml`). The "absent report" case is DISCRIMINATED, not
-// collapsed to a silent no-op (the no-silent-fallback doctrine):
-//   - `expectReport=false` (the executed tier ran NO junit-writing test step — e.g.
-//     the scaffold `fast` tier is lint+typecheck) ⇒ a clean, QUIET no-op: there is
-//     genuinely no per-test grain to ingest.
-//   - `expectReport=true` (a test step that writes JUNIT_REPORT_PATH actually ran)
-//     but the report is ABSENT / unreadable / empty ⇒ a LOUD signal carrying the
-//     reason (absent vs ssh-read-failure vs empty) + tier + headSha. That state means
-//     flaky-intelligence just went blind (a reporter misconfig / a runner crash after
-//     the step) and MUST be visible — never a silent degrade to "no grain".
+// The report path is a DECLARED CI-config contract field (`junitReport: <path>`), not a
+// command-string sniff: a project's test command (`just tier-2`) does not mention the
+// path, so "is JUnit expected" is decided from the declared field, never a substring.
+// STACK-AGNOSTIC: the path is the project's own declaration (`reports/junit.xml` by
+// convention, but any path the project says it writes). The "absent report" case is
+// DISCRIMINATED, not collapsed to a silent no-op (the no-silent-fallback doctrine):
+//   - `expectReport=false` (no executed tier DECLARED a junitReport — e.g. the scaffold
+//     `fast` tier is lint+typecheck) ⇒ a clean, QUIET no-op: genuinely no grain to ingest.
+//   - `expectReport=true` (a tier DECLARED a junitReport path and its step ran) but the
+//     report is ABSENT / unreadable / empty ⇒ a LOUD, DURABLE signal carrying the reason
+//     (absent vs ssh-read-failure vs empty) + tier + headSha (the caller emits a
+//     `ci.junit_missing` event + a console.error). That state means flaky-intelligence
+//     just went blind (a reporter misconfig / a runner crash after the step) and MUST be
+//     visible — never a silent degrade to "no grain".
 // A genuinely-malformed report is a LOUD throw from `parseJunitReport`. The INSERT +
 // its event ride on the run's ambient org scope (the gate already runs under
 // `runWithJobOrgId` / `runWithOrgScope`), so RLS admits them.
 import type pg from "pg";
-import { JUNIT_REPORT_PATH } from "../../ci/index.js";
 import { parseJunitReport } from "../../ci/junit.js";
 import { ingestJunitResults } from "../../ci/junitIngest.js";
 import type { RunnerHandle } from "../../contracts/allocator.js";
 import type { CommandSubstrate } from "../../contracts/commandSubstrate.js";
 import { quoteSshShellArg } from "../../ssh/command.js";
-
-// The conventional workspace path a repo's test step writes its JUnit report to is
-// owned by the ci module (single source of truth shared with the generated config).
 
 export interface IngestGateJunitInput {
   ssh: CommandSubstrate;
@@ -53,12 +51,19 @@ export interface IngestGateJunitInput {
    */
   tier?: string;
   /**
-   * Did the executed gate tier contain a test step that writes JUNIT_REPORT_PATH?
-   * Derived at the call site from the tier's steps. When TRUE, an absent/unreadable/
-   * empty report is a LOUD signal (flaky-intelligence is blind). When FALSE, an absent
-   * report is the expected quiet no-op (the tier ran no junit-writing test step).
+   * Did an executed gate tier DECLARE a `junitReport` path? Derived at the call site
+   * from the resolved CI config (the EXPLICIT contract field, not a command sniff).
+   * When TRUE, an absent/unreadable/empty report is a LOUD, durable signal
+   * (flaky-intelligence is blind). When FALSE, an absent report is the expected quiet
+   * no-op (no tier declared a report at this lifecycle point).
    */
   expectReport: boolean;
+  /**
+   * The workspace-relative path the declared junit-producing step writes its report to
+   * (the `junitReport` field). Read back over SSH after the gate runs. Absent ⇒ no tier
+   * declared a report (`expectReport=false`) and the read is skipped entirely.
+   */
+  reportPath?: string;
 }
 
 // Why the runner produced no usable JUnit report. Discriminated so the loud signal
@@ -90,10 +95,14 @@ export type IngestGateJunitResult =
  * this best-effort after the gate — it never gates the merge (visibility, not blocking).
  */
 export async function ingestGateJunit(input: IngestGateJunitInput): Promise<IngestGateJunitResult> {
-  const read = await readJunitReport(input);
+  // No tier declared a junitReport path ⇒ nothing to read; clean QUIET no-op.
+  if (!input.expectReport || input.reportPath === undefined) {
+    return { kind: "skipped_no_test_step" };
+  }
+  const read = await readJunitReport(input, input.reportPath);
   if (!read.present) {
-    // No usable report. Discriminate: expected (loud) vs not-expected (quiet no-op).
-    return input.expectReport ? { kind: "missing_expected", reason: read.reason } : { kind: "skipped_no_test_step" };
+    // A report WAS declared but is missing/unreadable/empty — the LOUD durable case.
+    return { kind: "missing_expected", reason: read.reason };
   }
   const report = parseJunitReport(read.xml);
   const result = await ingestJunitResults({
@@ -118,8 +127,8 @@ export async function ingestGateJunit(input: IngestGateJunitInput): Promise<Inge
  *   - `absent`      — the read succeeded but the file does not exist (no `<...>` body).
  *   - `empty`       — the file exists but is whitespace-only (a degenerate report).
  */
-async function readJunitReport(input: IngestGateJunitInput): Promise<ReadResult> {
-  const path = `${input.workspacePath.replace(/\/+$/u, "")}/${JUNIT_REPORT_PATH}`;
+async function readJunitReport(input: IngestGateJunitInput, reportPath: string): Promise<ReadResult> {
+  const path = `${input.workspacePath.replace(/\/+$/u, "")}/${reportPath.replace(/^\/+/u, "")}`;
   // The marker lets us distinguish "file absent" (marker, no body) from "file present
   // but empty" (body is whitespace) — both off a single successful SSH read.
   const result = await input.ssh.run(input.target, {

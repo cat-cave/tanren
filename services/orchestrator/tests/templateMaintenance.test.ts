@@ -231,7 +231,8 @@ describe("runMaintenancePass — green refresh vs planted regression", () => {
     expect(outcome.validated).toBe(false);
     expect(outcome.findings).toHaveLength(1);
     const finding = outcome.findings[0]!;
-    expect(finding.severity).toBe("fail");
+    // A regressed template is a BLOCKING defect on the shared P0–P3 ladder ⇒ P0.
+    expect(finding.severity).toBe("P0");
     // Stable key so re-running maintenance upserts the SAME candidate (idempotent).
     expect(finding.externalId).toBe(`template-maintenance:${maintainable.id}`);
     expect(finding.body).toContain("typecheck");

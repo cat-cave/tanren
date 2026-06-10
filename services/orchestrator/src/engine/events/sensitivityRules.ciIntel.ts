@@ -44,6 +44,15 @@ export const ciIntelSensitivityRules: SensitivityRule[] = [
     ["sampleShas[]", "public"],
     ["quarantineId", "public"],
   ]),
+  // + ci.junit_missing — a declared junit report went blind for a gate. Tier/path/
+  // reason + the head SHA are all `public` CI identifiers (operator visibility is the
+  // whole point); nothing secret rides here.
+  ...rulesFor("ci.junit_missing", [
+    ["headSha", "public"],
+    ["tier", "public"],
+    ["reportPath", "public"],
+    ["reason", "public"],
+  ]),
 ];
 
 function rulesFor(eventName: string, entries: ReadonlyArray<[string, SensitivityRule["tag"]]>): SensitivityRule[] {

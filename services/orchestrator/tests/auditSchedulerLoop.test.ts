@@ -147,7 +147,7 @@ function stubPool(jobRowOverrides: Record<string, unknown>): {
 
 const oneFindingRunner: AuditPassRunner = {
   run: async () => ({
-    findings: [{ externalId: "f1", title: "missing index", body: "add an index", severity: "warn" }],
+    findings: [{ externalId: "f1", title: "missing index", body: "add an index", severity: "P2" }],
   }),
 };
 
