@@ -81,7 +81,7 @@ function seedRunFixture(
     spec_id: specId,
     project_id: projectId,
     status: overrides.status ?? "completed",
-    outcome: "phase1_fixture_complete",
+    outcome: "ok",
     pr_url: "https://github.com/cat-cave/tanren-fixture-easy/pull/42",
     branch: "tanren/phase1-fixture",
   });

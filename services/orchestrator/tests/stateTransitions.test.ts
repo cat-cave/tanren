@@ -134,8 +134,17 @@ describe("enum membership", () => {
     expect(RunStatus.options).toContain("completed");
     // The legacy run-status `done` was unified into `completed` (v21).
     expect(RunStatus.options).not.toContain("done");
-    expect(RunOutcome.options).toContain("hello_complete");
+    // `ok` is the canonical success outcome. The synthetic hello/phase
+    // acceptance-fixture residue (`hello_complete`, `phase1_fixture_complete`,
+    // `phase2_easy_complete`, `phase2_medium_complete`) + the older
+    // `hello_world_complete` were pruned (no-backcompat): nothing on the live run
+    // path ever wrote them.
+    expect(RunOutcome.options).toContain("ok");
+    expect(RunOutcome.options).not.toContain("hello_complete");
     expect(RunOutcome.options).not.toContain("hello_world_complete");
+    expect(RunOutcome.options).not.toContain("phase1_fixture_complete");
+    expect(RunOutcome.options).not.toContain("phase2_easy_complete");
+    expect(RunOutcome.options).not.toContain("phase2_medium_complete");
     expect(SpecStatus.options).toContain("in_flight");
     // The legacy spec-status vocabulary (pending/active/done) was unified (v21).
     expect(SpecStatus.options).not.toContain("pending");

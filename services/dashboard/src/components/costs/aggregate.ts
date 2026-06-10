@@ -418,7 +418,7 @@ export interface ObservedMetrics {
   totalRuns: number;
 }
 
-const MERGED_OUTCOMES = new Set(["phase1_fixture_complete", "phase2_easy_complete", "phase2_medium_complete"]);
+const MERGED_OUTCOMES = new Set(["ok"]);
 const HALTED_OUTCOMES = new Set(["halted", "escape_hatch_hit", "retry_budget_exhausted"]);
 
 /**

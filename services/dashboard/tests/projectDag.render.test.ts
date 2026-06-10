@@ -86,7 +86,7 @@ const RUNS = [
     branch: "main",
     trigger: "dashboard",
     status: "completed",
-    outcome: "phase2_easy_complete",
+    outcome: "ok",
     startedAt: "2026-05-28T09:00:00.000Z",
     endedAt: "2026-05-28T09:30:00.000Z",
     prUrl: "https://github.com/cat-cave/tanren-fixture-easy/pull/142",

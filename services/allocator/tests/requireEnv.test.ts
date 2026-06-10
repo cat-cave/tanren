@@ -2,7 +2,17 @@
 // removed (managed-hosting dimension D). `requireEnv` fails hard on an unset/blank
 // value, mirroring `required(env, ...)` in secretStoreFactory.ts.
 import { afterEach, describe, expect, it } from "vitest";
-import { requireEnv } from "../src/requireEnv.js";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { requireEnv, requireSecretEnv } from "../src/requireEnv.js";
+
+/** Write `contents` to a fresh temp file and return its path (a mounted-secret stand-in). */
+function writeSecretFile(contents: string): string {
+  const file = join(mkdtempSync(join(tmpdir(), "tanren-alloc-token-")), "token");
+  writeFileSync(file, contents);
+  return file;
+}
 
 describe("allocator requireEnv (no dev-root-token fallback)", () => {
   const original = process.env["VAULT_TOKEN"];
@@ -69,5 +79,61 @@ describe("allocator system DB URL is required (no silent tenant-pool collapse)",
   it("returns the BYPASSRLS system URL when set (never the tenant DATABASE_URL)", () => {
     process.env["TANREN_SYSTEM_DATABASE_URL"] = "postgres://tanren_system:pw@db:5432/tanren";
     expect(requireEnv("TANREN_SYSTEM_DATABASE_URL")).toBe("postgres://tanren_system:pw@db:5432/tanren");
+  });
+});
+
+// Codex r5: the allocator bearer token is FILE-PREFERRED in prod — the compose
+// mounts it as /run/secrets/tanren_allocator_token and sets TANREN_ALLOCATOR_TOKEN_FILE
+// so the token VALUE never lands in Docker env / `docker inspect`. requireSecretEnv
+// reads the mounted FILE in preference to the plaintext env (file WINS), and fails
+// LOUD on a missing/empty file — never a silent blank token.
+describe("allocator requireSecretEnv (file-preferred bearer token)", () => {
+  const original = process.env["TANREN_ALLOCATOR_TOKEN"];
+  const originalFile = process.env["TANREN_ALLOCATOR_TOKEN_FILE"];
+  afterEach(() => {
+    for (const [name, value] of [
+      ["TANREN_ALLOCATOR_TOKEN", original],
+      ["TANREN_ALLOCATOR_TOKEN_FILE", originalFile],
+    ] as const) {
+      if (value === undefined) {
+        delete process.env[name];
+      } else {
+        process.env[name] = value;
+      }
+    }
+  });
+
+  it("reads the mounted file in preference to the plaintext env (file WINS)", () => {
+    const file = writeSecretFile("file-token\n");
+    process.env["TANREN_ALLOCATOR_TOKEN"] = "env-token";
+    process.env["TANREN_ALLOCATOR_TOKEN_FILE"] = file;
+    expect(requireSecretEnv("TANREN_ALLOCATOR_TOKEN")).toBe("file-token");
+    rmSync(file, { force: true });
+  });
+
+  it("falls back to the plaintext env when no file is set (dev convenience)", () => {
+    delete process.env["TANREN_ALLOCATOR_TOKEN_FILE"];
+    process.env["TANREN_ALLOCATOR_TOKEN"] = "dev";
+    expect(requireSecretEnv("TANREN_ALLOCATOR_TOKEN")).toBe("dev");
+  });
+
+  it("fails LOUD when the file path is unreadable", () => {
+    process.env["TANREN_ALLOCATOR_TOKEN_FILE"] = "/no/such/alloc-token";
+    expect(() => requireSecretEnv("TANREN_ALLOCATOR_TOKEN")).toThrow(
+      /TANREN_ALLOCATOR_TOKEN_FILE=.*could not be read/u,
+    );
+  });
+
+  it("fails LOUD when the mounted file is present but empty (never a silent blank token)", () => {
+    const file = writeSecretFile("   \n");
+    process.env["TANREN_ALLOCATOR_TOKEN_FILE"] = file;
+    expect(() => requireSecretEnv("TANREN_ALLOCATOR_TOKEN")).toThrow(/TANREN_ALLOCATOR_TOKEN_FILE=.*is empty/u);
+    rmSync(file, { force: true });
+  });
+
+  it("fails LOUD when NEITHER the file nor the env is set", () => {
+    delete process.env["TANREN_ALLOCATOR_TOKEN_FILE"];
+    delete process.env["TANREN_ALLOCATOR_TOKEN"];
+    expect(() => requireSecretEnv("TANREN_ALLOCATOR_TOKEN")).toThrow(/TANREN_ALLOCATOR_TOKEN is required/u);
   });
 });

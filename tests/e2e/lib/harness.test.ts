@@ -15,7 +15,7 @@ function realRunEvidence(): ArtifactEvidence {
     run: {
       runId: "run_e2e_real",
       status: "done",
-      outcome: "phase2_easy_complete",
+      outcome: "ok",
       prUrl: "https://github.com/cat-cave/tanren-fixture-easy/pull/7",
       costRecords: [
         { taskKind: "write", basis: "provider_response", billingMode: "per_token" },

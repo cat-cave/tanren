@@ -385,16 +385,12 @@ export async function fetchRunListItems(pool: QueryClient, args: RunListArgs): P
 
 function needsReviewFromOutcome(outcome: RunListItem["outcome"]): boolean {
   // A run "needs review" when it has an open PR (truthy prUrl) and the outcome
-  // indicates the operator must look at it. The canonical outcomes use
-  // `phase2_*_complete` for merge-ready; a null outcome also counts as needing
-  // review when a PR is present.
+  // indicates the operator must look at it: `ok` is the merge-ready success the
+  // operator reviews/merges; the halt/escape-hatch/exhaustion outcomes name a
+  // run that stopped short. A null outcome also counts as needing review when a
+  // PR is present.
   if (outcome === null) return true;
   return (
-    outcome === "halted" ||
-    outcome === "escape_hatch_hit" ||
-    outcome === "retry_budget_exhausted" ||
-    outcome === "phase1_fixture_complete" ||
-    outcome === "phase2_easy_complete" ||
-    outcome === "phase2_medium_complete"
+    outcome === "ok" || outcome === "halted" || outcome === "escape_hatch_hit" || outcome === "retry_budget_exhausted"
   );
 }

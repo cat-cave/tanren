@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import {
   persistedRunnerKeys,
   sshRunnerHandle,
@@ -7,6 +8,39 @@ import {
   type RunnerAllocation,
 } from "../contracts/allocator.js";
 import type { RunnerStore } from "./runnerStore.js";
+
+/**
+ * Resolve the sidecar bearer token, FILE-PREFERRED (Codex r5): prod mounts it as
+ * `/run/secrets/tanren_allocator_token` and sets `TANREN_ALLOCATOR_TOKEN_FILE`, so the
+ * token VALUE never lands in Docker env / `docker inspect`; dev sets the plaintext
+ * `TANREN_ALLOCATOR_TOKEN`. The file WINS; a configured-but-empty/unreadable file is a
+ * HARD failure (never a silent blank token), as is a missing token altogether. Lives
+ * here (not buildAllocator) so the orchestrator-side allocator factory does not take a
+ * new fs dependency. Reads `process.env` (injectable for tests).
+ */
+export function resolveSidecarAuthToken(env: Record<string, string | undefined> = process.env): string {
+  const filePath = env["TANREN_ALLOCATOR_TOKEN_FILE"];
+  if (filePath !== undefined && filePath !== "") {
+    let contents: string;
+    try {
+      contents = readFileSync(filePath, "utf8");
+    } catch (cause) {
+      throw new Error(`TANREN_ALLOCATOR_TOKEN_FILE=${filePath} could not be read`, { cause });
+    }
+    const value = contents.trim();
+    if (value === "") {
+      throw new Error(
+        `TANREN_ALLOCATOR_TOKEN_FILE=${filePath} is empty (no allocator bearer token in the mounted file)`,
+      );
+    }
+    return value;
+  }
+  const envValue = env["TANREN_ALLOCATOR_TOKEN"];
+  if (envValue === undefined || envValue === "") {
+    throw new Error("TANREN_ALLOCATOR_TOKEN is required (set it in the environment; there is no default)");
+  }
+  return envValue;
+}
 
 export interface SidecarHttpAllocatorOptions {
   /** Base URL of the allocator sidecar, e.g. `http://allocator:3200`. */

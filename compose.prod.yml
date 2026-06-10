@@ -4,17 +4,28 @@
 ## fallbacks. Missing any required variable causes `docker compose config` /
 ## `docker compose up` to fail with a clear error.
 ##
-## Required env:
-##   VAULT_ROOT_TOKEN                    Vault root token (the Vault server's own root-token-id). Rotate after init.
-##   TANREN_VAULT_TOKEN_FILE             HOST path to a file containing the broad Vault token (same value as
-##                                       VAULT_ROOT_TOKEN). Wired below as the `tanren_vault_token` compose secret
-##                                       mounted at /run/secrets/tanren_vault_token; the orchestrator + worker read
-##                                       the token from that file at boot (VAULT_TOKEN_FILE), so it is delivered as a
-##                                       mounted SECRET FILE, never an env VALUE — it never transits Docker env /
-##                                       `docker inspect` / `/proc/<pid>/environ` (the broad token is never exported).
+## Required env (note: every prod SECRET is a HOST PATH to a mounted file — `*_FILE`
+## / `*_KEY_FILE` — never a plaintext secret VALUE, so no secret transits Docker env /
+## `docker inspect` / `/proc/<pid>/environ`):
+##   TANREN_VAULT_TOKEN_FILE             HOST path to a file containing the broad Vault token. Wired below as the
+##                                       `tanren_vault_token` compose secret mounted at /run/secrets/tanren_vault_token.
+##                                       It is the SINGLE source for BOTH the Vault server's dev-mode ROOT token (the
+##                                       `vault` entrypoint reads the file to seed `-dev-root-token-id` as an argv, NOT
+##                                       a declared env) AND the broad CLIENT token the orchestrator + worker read
+##                                       (VAULT_TOKEN_FILE). The old plaintext `VAULT_ROOT_TOKEN` env is GONE.
 ##   POSTGRES_PASSWORD                   Postgres password for the tanren user.
-##   TANREN_GITHUB_OAUTH_CLIENT_ID       GitHub OAuth app client id.
-##   TANREN_GITHUB_OAUTH_CLIENT_SECRET   GitHub OAuth app client secret.
+##   TANREN_APP_DB_PASSWORD              Password for the restricted `tanren_app` (NOBYPASSRLS) runtime role.
+##   TANREN_SYSTEM_DB_PASSWORD           Password for the BYPASSRLS `tanren_system` role.
+##   TANREN_DATAPLANE_DB_PASSWORD        Password for the de-privileged `tanren_dataplane` worker role.
+##   TANREN_GITHUB_OAUTH_CLIENT_ID       GitHub OAuth app client id (NOT secret; safe in env).
+##   TANREN_GITHUB_OAUTH_CLIENT_SECRET_FILE  HOST path to a file containing the GitHub OAuth app client SECRET. Wired
+##                                       below as the `tanren_github_oauth_client_secret` compose secret mounted at
+##                                       /run/secrets/tanren_github_oauth_client_secret; mainAuth reads it file-preferred
+##                                       (TANREN_GITHUB_OAUTH_CLIENT_SECRET_FILE), never as an env VALUE.
+##   TANREN_ALLOCATOR_TOKEN_FILE         HOST path to a file containing the allocator sidecar bearer token. Wired below
+##                                       as the `tanren_allocator_token` compose secret mounted at
+##                                       /run/secrets/tanren_allocator_token; the orchestrator + worker + allocator all
+##                                       read it file-preferred (TANREN_ALLOCATOR_TOKEN_FILE), never as an env VALUE.
 ##   TANREN_RUNNER_AUTHORIZED_KEY        SSH authorized_keys entry the orchestrator uses (PUBLIC key line; safe in env).
 ##   TANREN_RUNNER_IDENTITY_KEY_FILE     HOST path to the PRIVATE key file the orchestrator uses to SSH into runners.
 ##                                       Wired below as a compose `secret` mounted into the orchestrator + worker at
@@ -23,7 +34,6 @@
 ##                                       mounted SECRET FILE, never as an env VALUE — it never transits Docker env /
 ##                                       `docker inspect`. Self-contained: just point this at the key file on the host.
 ##   TANREN_PUBLIC_BASE_URL              Absolute URL the orchestrator is reachable at (used for OAuth redirect URI).
-##   TANREN_ALLOCATOR_TOKEN              Bearer token the orchestrator uses to talk to the allocator sidecar.
 ##   TANREN_INTERNAL_TLS_CERT            Control-plane internal mTLS server cert path mounted in the orchestrator.
 ##   TANREN_INTERNAL_TLS_KEY             Control-plane internal mTLS server key path mounted in the orchestrator.
 ##   TANREN_INTERNAL_TLS_CA              CA path mounted in the orchestrator; signs trusted data-plane client certs.
@@ -77,19 +87,37 @@ services:
       - IPC_LOCK
     environment:
       VAULT_ADDR: http://127.0.0.1:8200
-      ## Vault server is started in dev mode with the operator-supplied root
-      ## token. The operator is expected to rotate to a sealed production
-      ## Vault before exposing the stack publicly; the dev-mode container is a
-      ## phase-2 placeholder, matching the dev profile but with no static
-      ## token fallback. See docs/operator-guide/deploy.md.
-      VAULT_DEV_ROOT_TOKEN_ID: ${VAULT_ROOT_TOKEN:?VAULT_ROOT_TOKEN must be set for the prod profile}
       VAULT_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
-    command: ["server", "-dev"]
+    ## Vault server runs in dev mode with the operator-supplied root token. The
+    ## token is delivered as a MOUNTED SECRET FILE (the `tanren_vault_token` compose
+    ## secret), NOT a `${VAULT_ROOT_TOKEN}` env value — so it never lands in the
+    ## compose-rendered `environment:` block / `docker compose config` /
+    ## `docker inspect`. The entrypoint reads it from /run/secrets at boot and execs
+    ## the dev server with `-dev-root-token-id` (passed as an argv, not a declared
+    ## env). The operator is expected to rotate to a SEALED production Vault (proper
+    ## init/unseal) before exposing the stack publicly; the dev-mode container is a
+    ## phase-2 placeholder. See docs/operator-guide/deploy.md.
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        set -eu
+        VAULT_DEV_ROOT_TOKEN_ID="$(cat /run/secrets/tanren_vault_token)"
+        if [ -z "$$VAULT_DEV_ROOT_TOKEN_ID" ]; then
+          echo "tanren_vault_token secret file is empty (no Vault root token)" >&2
+          exit 1
+        fi
+        exec vault server -dev -dev-root-token-id="$$VAULT_DEV_ROOT_TOKEN_ID"
     healthcheck:
       test: ["CMD", "vault", "status"]
       interval: 5s
       timeout: 5s
       retries: 20
+    ## The Vault root token, mounted as a file (never an env VALUE). Same secret the
+    ## orchestrator + worker read as the broad VAULT_TOKEN_FILE — they must hold the
+    ## same value.
+    secrets:
+      - tanren_vault_token
 
   orchestrator:
     build:
@@ -130,10 +158,17 @@ services:
       # in-container path and stores it in the secret store.
       TANREN_RUNNER_IDENTITY_KEY_PATH: /run/secrets/tanren_runner_identity_key
       TANREN_GITHUB_OAUTH_CLIENT_ID: ${TANREN_GITHUB_OAUTH_CLIENT_ID:?TANREN_GITHUB_OAUTH_CLIENT_ID must be set for the prod profile}
-      TANREN_GITHUB_OAUTH_CLIENT_SECRET: ${TANREN_GITHUB_OAUTH_CLIENT_SECRET:?TANREN_GITHUB_OAUTH_CLIENT_SECRET must be set for the prod profile}
+      # The OAuth client SECRET is delivered as a MOUNTED SECRET FILE (the
+      # `tanren_github_oauth_client_secret` compose secret, wired below), never an env
+      # VALUE — so it never lands in `docker inspect` / `/proc/<pid>/environ`. mainAuth
+      # reads it file-preferred (optionalSecretFromFileOrEnv) from this path.
+      TANREN_GITHUB_OAUTH_CLIENT_SECRET_FILE: /run/secrets/tanren_github_oauth_client_secret
       TANREN_PUBLIC_BASE_URL: ${TANREN_PUBLIC_BASE_URL:?TANREN_PUBLIC_BASE_URL must be set for the prod profile}
       TANREN_ALLOCATOR_URL: http://allocator:3200
-      TANREN_ALLOCATOR_TOKEN: ${TANREN_ALLOCATOR_TOKEN:?TANREN_ALLOCATOR_TOKEN must be set for the prod profile}
+      # The allocator sidecar bearer token is delivered as a MOUNTED SECRET FILE (the
+      # `tanren_allocator_token` compose secret, wired below), never an env VALUE.
+      # buildAllocator reads it file-preferred (requireSecretFromFileOrEnv).
+      TANREN_ALLOCATOR_TOKEN_FILE: /run/secrets/tanren_allocator_token
       TANREN_COOKIE_SECURE: "1"
       ## P3-0030: Authentik/OIDC as a second identity provider. Additive and
       ## opt-in — the orchestrator registers the `oidc` provider only when all of
@@ -143,6 +178,13 @@ services:
       TANREN_OIDC_PRESET: ${TANREN_OIDC_PRESET:-}
       TANREN_OIDC_ISSUER: ${TANREN_OIDC_ISSUER:-}
       TANREN_OIDC_CLIENT_ID: ${TANREN_OIDC_CLIENT_ID:-}
+      # RESIDUAL (Codex r5): the OIDC client SECRET is still a soft-default env
+      # passthrough — empty by default, so the base prod config renders no secret
+      # VALUE. Moving it to a `*_FILE` mount requires the OIDC env reader
+      # (services/orchestrator/src/auth/oidcEnv.ts) to support file-preferred
+      # resolution; that reader is owned by a separate in-flight change, so the
+      # `_FILE` wiring lands there. When OIDC is enabled, supply this via env / a
+      # secret manager and never commit it.
       TANREN_OIDC_CLIENT_SECRET: ${TANREN_OIDC_CLIENT_SECRET:-}
       TANREN_OIDC_SCOPES: ${TANREN_OIDC_SCOPES:-}
       TANREN_OIDC_SUBJECT_CLAIM: ${TANREN_OIDC_SUBJECT_CLAIM:-}
@@ -185,11 +227,14 @@ services:
         condition: service_healthy
       allocator:
         condition: service_started
-    # Mount the SSH PRIVATE key + the broad Vault token as files under
-    # /run/secrets, not as env values.
+    # Mount the SSH PRIVATE key, the broad Vault token, the GitHub OAuth client
+    # secret, and the allocator bearer token as files under /run/secrets, not as env
+    # values.
     secrets:
       - tanren_runner_identity_key
       - tanren_vault_token
+      - tanren_github_oauth_client_secret
+      - tanren_allocator_token
 
   worker:
     # Plane-split P1: the run-executor worker as a STANDALONE deployable (the
@@ -234,7 +279,9 @@ services:
       TANREN_RUN_WORKER_CONCURRENCY: ${TANREN_RUN_WORKER_CONCURRENCY:-2}
       # Same sidecar allocator the orchestrator uses (ephemeral runners on demand).
       TANREN_ALLOCATOR_URL: http://allocator:3200
-      TANREN_ALLOCATOR_TOKEN: ${TANREN_ALLOCATOR_TOKEN:?TANREN_ALLOCATOR_TOKEN must be set for the prod profile}
+      # Allocator bearer token via the mounted secret FILE (not an env value) — same
+      # file-preferred read as the orchestrator above.
+      TANREN_ALLOCATOR_TOKEN_FILE: /run/secrets/tanren_allocator_token
       # Plane-split P2/P3b: claim over the control-plane mTLS endpoint. The
       # endpoint URL + data-plane client cert paths are required in prod because
       # the worker is de-privileged and remote-writes is enabled by default.
@@ -262,10 +309,12 @@ services:
       # The orchestrator owns the migrate step; wait for it before claiming jobs.
       orchestrator:
         condition: service_healthy
-    # Same SSH PRIVATE key + Vault token file mounts as the orchestrator.
+    # Same SSH PRIVATE key + Vault token + allocator-token file mounts as the
+    # orchestrator.
     secrets:
       - tanren_runner_identity_key
       - tanren_vault_token
+      - tanren_allocator_token
 
   allocator:
     build:
@@ -288,7 +337,11 @@ services:
       # runner creds are delivered over the SSH FILE substrate by the orchestrator
       # after allocation, so the allocator only touches Docker + the runners table.
       ALLOCATOR_PORT: "3200"
-      TANREN_ALLOCATOR_TOKEN: ${TANREN_ALLOCATOR_TOKEN:?TANREN_ALLOCATOR_TOKEN must be set for the prod profile}
+      # The bearer token gating `/allocate` + `/release` is delivered as a MOUNTED
+      # SECRET FILE (the `tanren_allocator_token` compose secret, wired below), never
+      # an env VALUE. main.ts reads it file-preferred (requireSecretEnv) — both ends
+      # of the sidecar bearer-token pair read from the same mounted file.
+      TANREN_ALLOCATOR_TOKEN_FILE: /run/secrets/tanren_allocator_token
       TANREN_ALLOCATOR_NETWORK: ${COMPOSE_PROJECT_NAME:-tanren}_default
       TANREN_ALLOCATOR_SSH_HOSTNAME_TEMPLATE: "{container}"
       TANREN_MAX_RUN_HOURS: ${TANREN_MAX_RUN_HOURS:-6}
@@ -303,6 +356,10 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    # The allocator bearer token, mounted as a file (never an env value) — the same
+    # secret the orchestrator + worker read.
+    secrets:
+      - tanren_allocator_token
 
   dashboard:
     build:
@@ -358,12 +415,28 @@ secrets:
   # read-only. Self-contained — no out-of-band mount step required.
   tanren_runner_identity_key:
     file: ${TANREN_RUNNER_IDENTITY_KEY_FILE:?TANREN_RUNNER_IDENTITY_KEY_FILE must be set for the prod profile (host path to the SSH private key file)}
-  # The broad Vault token, delivered to the orchestrator + worker as a mounted
-  # file under /run/secrets (never an env VALUE — so it never lands in
-  # `docker inspect`). The SecretStore factory reads the token from this file at
-  # boot (VAULT_TOKEN_FILE) and holds it in-memory; it is never force-exported into
-  # the process env. Point TANREN_VAULT_TOKEN_FILE at a host file containing ONLY
-  # the token (mirrors the SSH-key pattern). It must hold the same token as the
-  # Vault server's VAULT_ROOT_TOKEN.
+  # The broad Vault token — the SINGLE source for both the Vault server's dev-mode
+  # ROOT token (the `vault` service's entrypoint reads this file to seed
+  # `-dev-root-token-id`) AND the broad CLIENT token the orchestrator + worker read
+  # (VAULT_TOKEN_FILE). Delivered as a mounted file under /run/secrets (never an env
+  # VALUE — so it never lands in `docker inspect`). The SecretStore factory reads the
+  # token from this file at boot and holds it in-memory; it is never force-exported
+  # into the process env. Point TANREN_VAULT_TOKEN_FILE at a host file containing ONLY
+  # the token (mirrors the SSH-key pattern). The old `VAULT_ROOT_TOKEN` env (the
+  # plaintext Vault dev-mode root-token-id) is GONE — this file is the only place the
+  # root/broad token lives.
   tanren_vault_token:
     file: ${TANREN_VAULT_TOKEN_FILE:?TANREN_VAULT_TOKEN_FILE must be set for the prod profile (host path to a file containing the Vault token)}
+  # The GitHub OAuth client SECRET, delivered to the orchestrator as a mounted file
+  # under /run/secrets (never an env VALUE — so it never lands in `docker inspect`).
+  # mainAuth reads it file-preferred from TANREN_GITHUB_OAUTH_CLIENT_SECRET_FILE.
+  # Point TANREN_GITHUB_OAUTH_CLIENT_SECRET_FILE at a host file containing ONLY the
+  # secret.
+  tanren_github_oauth_client_secret:
+    file: ${TANREN_GITHUB_OAUTH_CLIENT_SECRET_FILE:?TANREN_GITHUB_OAUTH_CLIENT_SECRET_FILE must be set for the prod profile (host path to a file containing the GitHub OAuth client secret)}
+  # The allocator sidecar bearer token, delivered to the orchestrator + worker +
+  # allocator as a mounted file under /run/secrets (never an env VALUE). Both ends of
+  # the bearer-token pair read it file-preferred from TANREN_ALLOCATOR_TOKEN_FILE.
+  # Point TANREN_ALLOCATOR_TOKEN_FILE at a host file containing ONLY the token.
+  tanren_allocator_token:
+    file: ${TANREN_ALLOCATOR_TOKEN_FILE:?TANREN_ALLOCATOR_TOKEN_FILE must be set for the prod profile (host path to a file containing the allocator bearer token)}

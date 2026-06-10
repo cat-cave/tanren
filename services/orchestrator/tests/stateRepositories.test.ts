@@ -39,7 +39,7 @@ describe("RunStore", () => {
             trigger: "cli",
             branch: "main",
             status: "completed",
-            outcome: "phase1_fixture_complete",
+            outcome: "ok",
             pr_url: null,
             started_at: new Date("2026-01-01T00:00:00Z"),
             ended_at: new Date("2026-01-01T00:01:00Z"),
@@ -51,7 +51,7 @@ describe("RunStore", () => {
     ]);
     const run = await RunStore.get(client, "run_1", systemActor);
     expect(run?.status).toBe("completed");
-    expect(run?.outcome).toBe("phase1_fixture_complete");
+    expect(run?.outcome).toBe("ok");
   });
 
   it("rejects an unknown status at decode time", async () => {

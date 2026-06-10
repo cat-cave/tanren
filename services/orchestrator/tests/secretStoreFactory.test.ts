@@ -10,8 +10,8 @@ import {
   GcpSecretManagerStore,
   gcpSecretIdFromRef,
   InMemorySecretStore,
-  OnePasswordStore,
   onePasswordTitleFromRef,
+  OnePasswordStore,
   resolveVaultMountConfig,
   VaultSecretStore,
 } from "../src/engine/contracts/index.js";

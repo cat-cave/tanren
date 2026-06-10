@@ -15,10 +15,6 @@ export const stateEnumLists = {
   ],
   runs_outcome: [
     "ok",
-    "hello_complete",
-    "phase1_fixture_complete",
-    "phase2_easy_complete",
-    "phase2_medium_complete",
     "halted",
     "escape_hatch_hit",
     "retry_budget_exhausted",
