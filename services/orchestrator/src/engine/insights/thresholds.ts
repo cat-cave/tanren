@@ -4,6 +4,8 @@
 // receive the resolved bag so no compute-function signature changes. See
 // docs/architecture/insights.md.
 
+import { isApexMode } from "../config/apexMode.js";
+
 export interface InsightThresholds {
   // retry_hotspot
   retryHotspotMinAttempts: number;
@@ -64,3 +66,25 @@ export const DEFAULT_THRESHOLDS: InsightThresholds = {
   ciInsightSlowMinSuiteTests: 2,
   cacheFreshnessMs: 60 * 60 * 1000,
 };
+
+// The APEX-MODE recurrence bar for the CI-intelligence root-cause loop (Loop 4). An
+// apex / autonomous run has NO operator to notice a quarantine that sits awaiting a
+// SECOND-SHA recurrence that may never come within the run, so a single-run flake would
+// be quarantined-but-never-specced — the flaky→root-cause→ship loop would silently fail
+// to close. Lowering `ciInsightFlakyMinShas` to 1 makes intra-run flaky evidence
+// SPEC-ELIGIBLE (a single proven non-determinism earns a durable fix-spec), so the loop
+// closes on a live apex run. This is the ONLY field apex mode overrides; everything else
+// stays the conservative default.
+export const APEX_THRESHOLDS: InsightThresholds = {
+  ...DEFAULT_THRESHOLDS,
+  ciInsightFlakyMinShas: 1,
+};
+
+// Resolve the BASE insight thresholds for this run — APEX-MODE-AWARE (Loop 4
+// self-config). Under apex mode the base is `APEX_THRESHOLDS` (a single-run flake is
+// spec-eligible — `ciInsightFlakyMinShas: 1`); otherwise the conservative
+// `DEFAULT_THRESHOLDS` (the 2-SHA recurrence bar). Per-org/project overrides still
+// layer ON TOP of this base — apex only moves the DEFAULT, never the explicit override.
+export function resolveInsightThresholds(): InsightThresholds {
+  return isApexMode() ? APEX_THRESHOLDS : DEFAULT_THRESHOLDS;
+}

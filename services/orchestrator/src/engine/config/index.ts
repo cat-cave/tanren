@@ -25,6 +25,7 @@ export {
   PartialEscapeHatches,
   PartialForgePersona,
   ProjectBudget,
+  resolveDefaultAuditPosture,
   ReviewPolicy,
   RoleId,
   RoutingChain,
@@ -37,6 +38,8 @@ export {
   resolveWorkerConcurrency,
 } from "./shared.js";
 export type { RunWorkspaceReaperConfig } from "./shared.js";
+
+export { isApexMode } from "./apexMode.js";
 
 export {
   DEFAULT_MANAGED_CREDENTIAL_REF,

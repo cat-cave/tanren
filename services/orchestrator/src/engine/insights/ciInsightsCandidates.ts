@@ -29,7 +29,7 @@ import {
   slowExternalId,
 } from "../forge/inbox/ciInsightsSource.js";
 import type { Candidate, InboxSource, TriageAnswerer } from "../forge/inbox/types.js";
-import { DEFAULT_THRESHOLDS, type InsightThresholds } from "./thresholds.js";
+import { resolveInsightThresholds, type InsightThresholds } from "./thresholds.js";
 import { loadCiTestObservations } from "./ciFlaky.js";
 import { deriveFlakyTestsPerTest, deriveTestDurationProfiles, type FlakyTestVerdict } from "./ciFlakyTests.js";
 
@@ -74,7 +74,10 @@ export interface EmitCiInsightCandidatesResult {
 export async function emitCiInsightCandidates(
   deps: EmitCiInsightCandidatesDeps,
 ): Promise<EmitCiInsightCandidatesResult> {
-  const t: InsightThresholds = { ...DEFAULT_THRESHOLDS, ...deps.thresholds };
+  // APEX-MODE-AWARE base: under apex mode `resolveInsightThresholds()` lowers the
+  // recurrence bar so a single-run flake is spec-eligible (`ciInsightFlakyMinShas: 1`);
+  // a non-apex run keeps the conservative 2-SHA default. Per-project overrides still win.
+  const t: InsightThresholds = { ...resolveInsightThresholds(), ...deps.thresholds };
   const now = deps.now ?? new Date();
   const since = new Date(now.getTime() - t.flakyWindowDays * 24 * 60 * 60 * 1000);
   // Every tenant read/write self-routes under the loop's per-job org scope.

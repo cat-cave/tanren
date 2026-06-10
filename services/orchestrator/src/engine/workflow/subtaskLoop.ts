@@ -33,8 +33,8 @@ import type { CiWhen } from "../ci/index.js";
 import {
   type AuditPostureConfig,
   type ConvergencePolicyConfig,
-  DEFAULT_AUDIT_POSTURE,
   DEFAULT_CONVERGENCE_POLICY,
+  resolveDefaultAuditPosture,
 } from "../config/shared.js";
 import type { BudgetGate } from "../contracts/dagWalker.js";
 import { type Finding, type FindingSeverity, severityRank } from "../contracts/findings.js";
@@ -238,7 +238,8 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
 
   const plannerTaskId = `task_${randomUUID()}`;
   const creditState: CreditState = { atStart: null };
-  const posture = input.auditPosture ?? DEFAULT_AUDIT_POSTURE;
+  // APEX-MODE-AWARE absent default: apex routes residual P2/P3 to the DAG; else BALANCED.
+  const posture = input.auditPosture ?? resolveDefaultAuditPosture();
   const convergencePolicy = input.convergencePolicy ?? DEFAULT_CONVERGENCE_POLICY;
 
   // finalize runs run-level accounting + reconciles cost, then returns the terminal

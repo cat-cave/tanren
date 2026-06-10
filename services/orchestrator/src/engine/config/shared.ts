@@ -382,6 +382,7 @@ export {
   AuditPostureConfig,
   DEFAULT_AUDIT_POSTURE,
   P2P3HandlingConfig,
+  resolveDefaultAuditPosture,
 } from "./auditPostureConfig.js";
 export { FindingSeverityConfig };
 

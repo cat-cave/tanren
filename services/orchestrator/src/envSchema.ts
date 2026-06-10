@@ -78,6 +78,12 @@ const envObjectSchema = z.object({
   // it cannot prove "the live product reflects this merge"; the flyDeployProvisioner
   // fails LOUD unless this is "1" (apex must use `deploy.vercel`).
   TANREN_ALLOW_FLY_STATIC_DEPLOY: emptyToUndefined(boolFlagSchema.default("0")),
+  // APEX / AUTONOMOUS mode ("0"/"1", default "0" = off). When on, apex mode
+  // self-configures the autonomy-loop policy DEFAULTS the live run needs (the
+  // autonomous audit posture + the lowered CI-flaky recurrence bar) and arms the
+  // notification-readiness guard. Read live (not the frozen `parsedEnv`) via
+  // `engine/config/apexMode.ts` so a per-process toggle takes effect without a reparse.
+  TANREN_APEX_MODE: emptyToUndefined(boolFlagSchema.default("0")),
 });
 
 export type OrchestratorEnv = z.infer<typeof envObjectSchema>;
