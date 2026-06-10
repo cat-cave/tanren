@@ -29,6 +29,13 @@ export {
 
 export { recommendCoverage, type AuditRecommendation } from "./recommended.js";
 
+export {
+  seedAuditCatalog,
+  AUDIT_BOOTSTRAP_CATALOG,
+  type SeedAuditCatalogInput,
+  type SeedAuditCatalogResult,
+} from "./seedCatalog.js";
+
 export { wrapProviderAuditAnswerer, type WrapProviderAuditAnswererOptions } from "./auditAnswerer.js";
 export { buildAuditPrompt } from "./prompt.js";
 export {

@@ -47,7 +47,7 @@ import {
 import type { GithubAppTokenMinter } from "../../engine/providers/githubAppTokenMinter.js";
 import { githubHttpsRemote } from "../../engine/providers/github.js";
 import { ProjectStore } from "../../engine/repositories/projects.js";
-import { ensureIssuesInboxSource } from "../../engine/forge/inbox/index.js";
+import { provisionAutonomousProject } from "../../engine/workflow/provisionAutonomousProject.js";
 import { provisionedGreenfieldProjectConfigProof } from "../../engine/workflow/projectConfigWriteGuards.js";
 import { createProject } from "../../engine/workflow/projectSpec.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
@@ -286,10 +286,15 @@ export async function handleGreenfieldCreate(
     { configWriteProof: provisionedGreenfieldProjectConfigProof },
   );
 
-  // L2 (post-merge re-intake): provision the matching `issues` inbox source for the
-  // new repo so post-merge auto-issues + user-filed reports are ingested by default.
-  // Idempotent.
-  const inbox = await ensureIssuesInboxSource({
+  // SHARED bootstrap (Codex round-4): seed the COMPLETE autonomous-project set —
+  // the issues inbox (post-merge re-intake + user reports), the per-org default
+  // notification route (apex-critical milestone delivery), AND the scheduled-audit
+  // catalog (so the audit loop has work). Idempotent + org-scoped + failure-isolated.
+  // The project + repo + deploy are already COMMITTED here, so a seed failure must NOT
+  // 500-after-side-effects: the seam isolates each seed + records failures in
+  // `bootstrap.errors` (LOUD, never silent) — the env-default route + the operator
+  // surfaces still cover delivery, and a re-create re-runs the seeds.
+  const bootstrap = await provisionAutonomousProject({
     pool,
     orgId,
     projectId: project.projectId,
@@ -299,7 +304,8 @@ export async function handleGreenfieldCreate(
     {
       ...project,
       repository: { fullName: created.fullName, repoUrl: created.repoUrl },
-      inboxSource: { id: inbox.source.id, created: inbox.created },
+      inboxSource: bootstrap.inboxSource,
+      bootstrap,
       deploy: preparedDeploy.outcome,
     },
     201,
@@ -307,10 +313,11 @@ export async function handleGreenfieldCreate(
 }
 
 // IDEMPOTENT REPLAY (audit §3.10): a greenfield create whose project ALREADY exists
-// for this repo is a retry of a completed (or near-completed) provision. Re-ensure the
-// idempotent inbox source + return the existing project with a 200 — never a 409 + a
-// second deploy app. The deploy is NOT re-provisioned (the project already carries its
-// deploy config from the first attempt).
+// for this repo is a retry of a completed (or near-completed) provision. Re-run the
+// shared bootstrap (idempotent — it COMPLETES any provisioning the first attempt
+// stranded: the inbox, the default notification route, the audit catalog) + return the
+// existing project with a 200 — never a 409 + a second deploy app. The deploy is NOT
+// re-provisioned (the project already carries its deploy config from the first attempt).
 async function greenfieldCreateReplayResponse(
   c: Context<ActorContextEnv>,
   deps: GreenfieldCreateDeps,
@@ -319,7 +326,7 @@ async function greenfieldCreateReplayResponse(
   // Use the project's STORED repo URL (the forge `html_url` form) so the response
   // matches the original create exactly.
   const repoUrl = existing.repoUrl;
-  const inbox = await ensureIssuesInboxSource({
+  const bootstrap = await provisionAutonomousProject({
     pool: deps.pool,
     orgId: deps.orgId,
     projectId: existing.projectId,
@@ -332,7 +339,8 @@ async function greenfieldCreateReplayResponse(
       repoUrl,
       defaultBranch: existing.defaultBranch,
       repository: { fullName: `${deps.input.owner}/${deps.input.name}`, repoUrl },
-      inboxSource: { id: inbox.source.id, created: inbox.created },
+      inboxSource: bootstrap.inboxSource,
+      bootstrap,
       idempotentReplay: true,
     },
     200,
