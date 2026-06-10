@@ -161,6 +161,12 @@ function unknownSignal(provenance: EntityRiskProvenance, rationale: string): Ent
   };
 }
 
+// Pluralize "entity" for the human-readable rationale strings. Module-scoped (it
+// captures nothing from the classifier) so it is hoisted, not re-created per call.
+function entitiesWord(n: number): string {
+  return n === 1 ? "entity" : "entities";
+}
+
 // Classify a neutral entity-change map into a risk class. PURE + DETERMINISTIC:
 // same input ⇒ same output, no IO, no clock, no environment read. This is the
 // oracle's core — every consumer (checker posture, finding weighting, tests)
@@ -236,7 +242,6 @@ export function classifyEntityRisk(
   }
 
   const counts = { total, cosmetic, structural, publicSignature, deletedOrRenamed };
-  const entitiesWord = (n: number): string => (n === 1 ? "entity" : "entities");
 
   // ── Deterministic class decision (highest applicable class wins) ───────────
 
