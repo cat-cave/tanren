@@ -20,9 +20,11 @@ import { SpecStatusReplanRouter } from "../workflow/reviewMerge/conflictResolver
 
 /**
  * Append `integration.rebase` (tanren-owns-the-engine.md §3/§7 — the never-discard
- * `rebase_vs_rebuild` instrumentation Wave 3 reads). Org-scoped; routes through the
- * control plane when a writer is wired (same plane-split as the percolation events).
- * `sameRunId` is ALWAYS true on this path — the run row survives every base shift.
+ * `rebase_vs_rebuild` signal). Records the categorical `decision` + kept `runId`
+ * ONLY — no token/wall-clock figure; the read-side (engine/insights/integration)
+ * joins that cost at read time. Org-scoped; routes through the control plane when a
+ * writer is wired (same plane-split as the percolation events). `sameRunId` is
+ * ALWAYS true on this path — the run row survives every base shift.
  */
 export async function appendIntegrationRebaseEvent(
   pool: pg.Pool,

@@ -429,9 +429,9 @@ export const EventRegistry = {
   "dag.spec.percolated": DagSpecPercolatedPayload,
   "dag.spec.percolation_deferred": DagSpecPercolationDeferredPayload,
   "dag.spec.percolation_replan": DagSpecPercolationReplanPayload,
-  // §3/§7 NEVER-DISCARD REBASE: the BaseShiftCoordinator handled a base shift by
-  // rebasing the dependent's EXISTING branch in place (same run row) instead of the
-  // old supersede+regenerate — the `rebase_vs_rebuild` instrumentation Wave 3 reads.
+  // §3/§7 NEVER-DISCARD REBASE: the BaseShiftCoordinator rebased the dependent's
+  // EXISTING branch in place (same run row). Records the categorical `decision` +
+  // kept `runId`; the `rebase_vs_rebuild` read-side joins cost at read time.
   "integration.rebase": IntegrationRebasePayload,
   // §3 PROOF REUSE: the gate/CI verdict site found a recorded PASSING proof whose
   // six-component `proofReuseKey` matched the live inputs EXACTLY, so it SKIPPED the

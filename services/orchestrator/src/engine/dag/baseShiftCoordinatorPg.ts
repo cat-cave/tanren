@@ -94,9 +94,11 @@ export class PgBaseShiftNodeReader implements BaseShiftNodeReader {
 }
 
 /**
- * Emits `integration.rebase` (the `rebase_vs_rebuild` instrumentation, §3 — Wave 3
- * reads it to PROVE rebase < rebuild). Reuses the org-scoped percolation event writer
- * (same plane-split as the dag.spec.percolation events).
+ * Emits `integration.rebase` (the `rebase_vs_rebuild` signal, §3): the categorical
+ * `decision` + kept `runId`. The read-side (engine/insights/integration) joins
+ * token/wall-clock cost at read time to PROVE rebase < rebuild. Reuses the
+ * org-scoped percolation event writer (same plane-split as the dag.spec.percolation
+ * events).
  */
 export class PgBaseShiftEventEmitter implements BaseShiftEventEmitter {
   constructor(

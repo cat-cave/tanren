@@ -297,7 +297,10 @@ export type DagSpecPercolationReplanPayload = z.infer<typeof DagSpecPercolationR
 // the planner from scratch). The `decision` field records what the rebase cost:
 //   - `rebased_clean`    — the rebase applied with no conflict + the re-gate passed; the
 //                          planner/writer/code tokens were REUSED (NO re-plan). This is
-//                          the win the `rebase_vs_rebuild` instrumentation proves.
+//                          the win the `rebase_vs_rebuild` read-side proves: the
+//                          insight (engine/insights/integration) JOINS this kept run's
+//                          token/wall-clock cost AT READ TIME to compare it against the
+//                          `replanned` (rebuild) cost.
 //   - `rebased_resolved` — the rebase conflicted (recorded IN the commit, work survived),
 //                          the resolver reconciled it (intent-preserving), and the re-gate
 //                          passed — still NO re-plan (the existing work fit after resolve).
@@ -314,8 +317,12 @@ export type DagSpecPercolationReplanPayload = z.infer<typeof DagSpecPercolationR
 //   - `held`             — a fail-closed hold (the rebase/resolver/gate could not settle);
 //                          the work survives and is retried on the next notification.
 // `sameRunId` is ALWAYS true on this path — it is the never-discard assertion made
-// durable (the dependent's run row is the SAME across the shift). Wave 3 reads this
-// event's token/wall-clock fields to PROVE rebase < rebuild.
+// durable (the dependent's run row is the SAME across the shift). The recorded signal
+// is the categorical `decision` (below) PLUS the kept `runId` — there is NO token or
+// wall-clock field on this payload. The `rebase_vs_rebuild` read-side
+// (engine/insights/integration + routes/integrationMetrics) JOINS that cost AT READ
+// TIME — `cost_records` summed by `run_id` for tokens, `runs.ended_at - started_at`
+// for wall-clock — to PROVE rebase < rebuild without widening this event.
 export const IntegrationRebasePayload = z
   .object({
     // The dependent whose branch was rebased onto the shifted base.
