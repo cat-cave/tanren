@@ -21,7 +21,7 @@
 
 import { runWithOrgScope } from "@tanren/db";
 import { Hono, type Context } from "hono";
-import { z } from "zod";
+import { z, ZodError } from "zod";
 import { CostRecorder } from "../../engine/costs/recorder.js";
 import { PgEventStore } from "../../engine/eventStore.js";
 import { verifyInternalPeer, type RunStateWriteRouteDeps } from "./internalWriteShared.js";
@@ -107,22 +107,35 @@ export function createInternalRunStateWriteRoutes(deps: RunStateWriteRouteDeps):
       return c.json({ error: "invalid_append_event", issues: parsed.error.issues }, 400);
     }
     const { orgId, runId, taskId, specId, ...event } = parsed.data;
-    await runWithOrgScope(deps.pool, orgId, async (client) => {
-      // The SAME PgEventStore.append the worker ran — only the client (and thus
-      // the DB access) is the control plane's, scoped to the run's org. run/spec
-      // are passed only when present: a project-scoped event (dag.drained etc.)
-      // omits both, so the store inserts NULL run_id/spec_id — byte-identical to
-      // the direct path.
-      await new PgEventStore(client).append({
-        ...(runId === undefined ? {} : { runId }),
-        ...(taskId === undefined ? {} : { taskId }),
-        ...(specId === undefined ? {} : { specId }),
-        projectId: event.projectId,
-        // The event name + payload are validated by the store's own registry parser.
-        eventType: event.eventType as never,
-        payload: event.payload as never,
+    try {
+      await runWithOrgScope(deps.pool, orgId, async (client) => {
+        // The SAME PgEventStore.append the worker ran — only the client (and thus
+        // the DB access) is the control plane's, scoped to the run's org. run/spec
+        // are passed only when present: a project-scoped event (dag.drained etc.)
+        // omits both, so the store inserts NULL run_id/spec_id — byte-identical to
+        // the direct path.
+        await new PgEventStore(client).append({
+          ...(runId === undefined ? {} : { runId }),
+          ...(taskId === undefined ? {} : { taskId }),
+          ...(specId === undefined ? {} : { specId }),
+          projectId: event.projectId,
+          // The event name + payload are validated by the store's own registry parser.
+          eventType: event.eventType as never,
+          payload: event.payload as never,
+        });
       });
-    });
+    } catch (error) {
+      // The route schema admits `payload: unknown`; the store's registry parser is
+      // the authoritative per-event-type check (e.g. run.failed now requires a
+      // redacted failureCode/stage). A payload that fails THAT parse is a malformed
+      // CALLER request, not a control-plane fault — return a controlled 422 with the
+      // issues, never a bare 500 (which once masked a stale-payload-shape caller as
+      // an opaque "Internal Server Error"). A genuine infra fault still propagates.
+      if (error instanceof ZodError) {
+        return c.json({ error: "invalid_event_payload", issues: error.issues }, 422);
+      }
+      throw error;
+    }
     return c.body(null, 204);
   });
 
