@@ -11,8 +11,17 @@ import type { OrgGrant, ProjectContext } from "../../src/engine/contracts/integr
 import type { DeployRef } from "../../src/engine/contracts/deployAdapter.js";
 import { buildDeployAdapter } from "../../src/engine/deploy/buildDeployAdapter.js";
 import { DirectApiDeployAdapter, DIRECT_API_ADAPTER_KIND } from "../../src/engine/deploy/directApiDeployAdapter.js";
+import { PULUMI_ADAPTER_KIND } from "../../src/engine/deploy/pulumiDeployAdapter.js";
+import { PACKAGE_RELEASE_ADAPTER_KIND } from "../../src/engine/deploy/packageReleaseDeployAdapter.js";
+import { MOBILE_RELEASE_ADAPTER_KIND } from "../../src/engine/deploy/mobileReleaseDeployAdapter.js";
+import { MANUAL_EXTERNAL_ADAPTER_KIND } from "../../src/engine/deploy/manualExternalDeployAdapter.js";
 import { scriptedDeployTransport, type ScriptedDeployTransport } from "./fakes/scriptedDeployTransport.js";
 import { scriptedUrlProbe, instantVerifyPollPolicy } from "./fakes/scriptedUrlProbe.js";
+import {
+  scriptedPulumiRunner,
+  scriptedPackageRegistry,
+  scriptedMobileDistribution,
+} from "./fakes/scriptedDeployDrivers.js";
 
 const TOKEN_REF = "secret://org/deploy-token";
 const TOKEN_VALUE = "fly_or_vercel_super_secret_token";
@@ -254,11 +263,55 @@ describe("buildDeployAdapter (registry/factory)", () => {
     expect(built.kind).toBe("direct_api");
   });
 
-  it("fails LOUD for a deferred / unknown adapter class (never a silent default)", () => {
+  it("fails LOUD for an unknown adapter class (never a silent default)", () => {
     expect(() =>
-      buildDeployAdapter("pulumi", {
+      buildDeployAdapter("does_not_exist", {
         provisioner: { transport: scriptedDeployTransport("vercel"), secrets: secrets() },
       }),
-    ).toThrow(/adapter class 'pulumi' is not implemented yet/u);
+    ).toThrow(/adapter class 'does_not_exist' is not a registered deploy adapter/u);
+  });
+
+  it("builds the pulumi / package_release / mobile_release / manual_external classes when wired", () => {
+    const base = { transport: scriptedDeployTransport("vercel"), secrets: secrets() };
+    const probe = scriptedUrlProbe();
+    const poll = instantVerifyPollPolicy();
+    expect(
+      buildDeployAdapter(PULUMI_ADAPTER_KIND, {
+        provisioner: base,
+        pulumiRunner: scriptedPulumiRunner(),
+        urlProbe: probe,
+        poll,
+      }).kind,
+    ).toBe(PULUMI_ADAPTER_KIND);
+    expect(
+      buildDeployAdapter(PACKAGE_RELEASE_ADAPTER_KIND, {
+        provisioner: base,
+        packageRegistry: scriptedPackageRegistry(),
+        poll,
+      }).kind,
+    ).toBe(PACKAGE_RELEASE_ADAPTER_KIND);
+    expect(
+      buildDeployAdapter(MOBILE_RELEASE_ADAPTER_KIND, {
+        provisioner: base,
+        mobileDistribution: scriptedMobileDistribution(),
+        poll,
+      }).kind,
+    ).toBe(MOBILE_RELEASE_ADAPTER_KIND);
+    expect(buildDeployAdapter(MANUAL_EXTERNAL_ADAPTER_KIND, { provisioner: base, urlProbe: probe, poll }).kind).toBe(
+      MANUAL_EXTERNAL_ADAPTER_KIND,
+    );
+  });
+
+  it("fails LOUD when a non-direct_api class is selected without its external driver wired", () => {
+    const base = { transport: scriptedDeployTransport("vercel"), secrets: secrets() };
+    expect(() => buildDeployAdapter(PULUMI_ADAPTER_KIND, { provisioner: base })).toThrow(
+      /required config 'pulumiRunner' is not set/u,
+    );
+    expect(() => buildDeployAdapter(PACKAGE_RELEASE_ADAPTER_KIND, { provisioner: base })).toThrow(
+      /required config 'packageRegistry' is not set/u,
+    );
+    expect(() => buildDeployAdapter(MOBILE_RELEASE_ADAPTER_KIND, { provisioner: base })).toThrow(
+      /required config 'mobileDistribution' is not set/u,
+    );
   });
 });

@@ -117,11 +117,24 @@ export class DemoEngine {
     switch (surface.kind) {
       case "web_url":
         return exerciseWebBehavior(this.deps.webProbe, surface.url, behavior);
-      // FUTURE: package / app_channel / download arms slot in here (a new exercise
-      // per surface kind) — never a refactor of this dispatch.
+      // The non-web surface kinds (package / app_channel / download) are RESOLVED by
+      // their owning DeployAdapter classes (package_release / mobile_release /
+      // manual_external), but a per-behavior EXERCISE for them (install-and-run a
+      // package, drive an app-channel build, fetch-and-verify a download) is a separate
+      // piece of demo-engine work. Until it lands, exercising one of these surfaces is a
+      // LOUD throw — never a silent skip that would let a demo report "no evidence"
+      // against a surface it cannot yet exercise. Each slots in here as a real exercise
+      // arm — not a refactor.
+      case "package":
+      case "app_channel":
+      case "download":
+        throw new Error(
+          `demoEngine: surface kind '${surface.kind}' is resolved by its deploy adapter but has no behavior exercise yet — ` +
+            `the per-behavior exercise for non-web surfaces is not implemented`,
+        );
       default: {
-        const exhaustive: never = surface.kind;
-        throw new Error(`demoEngine: no exercise for surface kind '${String(exhaustive)}'`);
+        const exhaustive: never = surface;
+        throw new Error(`demoEngine: no exercise for surface kind '${String((exhaustive as { kind: string }).kind)}'`);
       }
     }
   }

@@ -1,14 +1,44 @@
 // The DeployAdapter registry + `buildDeployAdapter` factory — the single append
 // point a new adapter CLASS registers at (mirrors `buildIntegrationProvisioner` /
 // `buildAllocator` / `buildVcsProvider`). An adapter class lands as a NEW `case`
-// arm (+ its impl + a conformance entry), not a refactor. Today only `direct_api`
-// (the Vercel/Fly providers) is registered; `pulumi` / `mobile_release` /
-// `package_release` / `manual_external` are DEFERRED (this is the foundational
-// slice) — an unregistered kind fails LOUD, never a silent default.
+// arm (+ its impl + a conformance entry), not a refactor. The registered classes:
+// `direct_api` (the Vercel/Fly providers, web_url), `pulumi` (an IaC stack up/refresh,
+// web_url), `package_release` (publish to a registry, package), `mobile_release`
+// (submit to an app channel, app_channel), and `manual_external` (operator-attested
+// out-of-band delivery, web_url/download). An UNREGISTERED kind fails LOUD, never a
+// silent default.
+//
+// EXTERNAL-DRIVER DEPS: the non-`direct_api` classes each run over an injectable
+// external driver (a Pulumi stack runner, a package registry client, a mobile
+// distribution client, a manual-attestation store). The factory requires the relevant
+// driver to be WIRED for the kind being built; an absent driver fails LOUD with a typed
+// {@link DeployAdapterConfigError} (the correct "unconfigured" behavior, NOT a stub
+// default). The single exception is the manual-attestation store, which defaults to the
+// real in-process {@link InMemoryManualAttestationStore} (a genuine store — manual_external
+// attestations are non-secret and process-local within a check), never a stand-in.
 
 import type { DeployAdapter, UrlReachabilityProbe, VerifyPollPolicy } from "../contracts/deployAdapter.js";
 import type { DeployProvisionerDeps } from "../provisioners/deployProvisioner.js";
+import type { SecretStore } from "../contracts/secretStore.js";
 import { DirectApiDeployAdapter, DIRECT_API_ADAPTER_KIND } from "./directApiDeployAdapter.js";
+import { PulumiDeployAdapter, PULUMI_ADAPTER_KIND, type PulumiStackRunner } from "./pulumiDeployAdapter.js";
+import {
+  PackageReleaseDeployAdapter,
+  PACKAGE_RELEASE_ADAPTER_KIND,
+  type PackageRegistryClient,
+} from "./packageReleaseDeployAdapter.js";
+import {
+  MobileReleaseDeployAdapter,
+  MOBILE_RELEASE_ADAPTER_KIND,
+  type MobileDistributionClient,
+} from "./mobileReleaseDeployAdapter.js";
+import {
+  InMemoryManualAttestationStore,
+  ManualExternalDeployAdapter,
+  MANUAL_EXTERNAL_ADAPTER_KIND,
+  type ManualAttestationStore,
+} from "./manualExternalDeployAdapter.js";
+import { DeployAdapterConfigError } from "./deployAdapterErrors.js";
 
 /** The deps a built DeployAdapter draws (the provisioner wiring + the verify seams). */
 export interface BuildDeployAdapterDeps {
@@ -18,26 +48,75 @@ export interface BuildDeployAdapterDeps {
   urlProbe?: UrlReachabilityProbe;
   /** The verify poll cadence + bound (defaults to the production cadence). */
   poll?: VerifyPollPolicy;
+  /**
+   * The SecretStore the non-`direct_api` classes resolve their provider token from.
+   * Defaults to the provisioner deps' secrets when omitted (they share one store).
+   */
+  secrets?: SecretStore;
+  /** The Pulumi stack driver (required to build the `pulumi` class). */
+  pulumiRunner?: PulumiStackRunner;
+  /** The package registry client (required to build the `package_release` class). */
+  packageRegistry?: PackageRegistryClient;
+  /** The mobile distribution client (required to build the `mobile_release` class). */
+  mobileDistribution?: MobileDistributionClient;
+  /** The manual-attestation store (defaults to the in-process store for `manual_external`). */
+  manualAttestations?: ManualAttestationStore;
 }
 
 /**
- * Select + construct the DeployAdapter for an adapter-class `kind`. `direct_api`
- * wraps the Vercel/Fly provisioners; any other kind is DEFERRED and throws LOUD
- * (the foundational slice ships only `direct_api`). A new class slots in as a new
- * case here.
+ * Select + construct the DeployAdapter for an adapter-class `kind`. Each registered
+ * class wraps its provider surface; an UNREGISTERED kind fails LOUD (never a silent
+ * default). The non-`direct_api` classes require their external driver to be wired —
+ * an absent driver throws a typed {@link DeployAdapterConfigError}.
  */
 export function buildDeployAdapter(kind: string, deps: BuildDeployAdapterDeps): DeployAdapter {
+  const urlProbe = deps.urlProbe ?? fetchUrlReachabilityProbe();
+  const poll = deps.poll ?? defaultVerifyPollPolicy();
+  const secrets = deps.secrets ?? deps.provisioner.secrets;
   switch (kind) {
     case DIRECT_API_ADAPTER_KIND:
-      return new DirectApiDeployAdapter({
-        provisioner: deps.provisioner,
-        urlProbe: deps.urlProbe ?? fetchUrlReachabilityProbe(),
-        poll: deps.poll ?? defaultVerifyPollPolicy(),
+      return new DirectApiDeployAdapter({ provisioner: deps.provisioner, urlProbe, poll });
+    case PULUMI_ADAPTER_KIND: {
+      if (deps.pulumiRunner === undefined) {
+        throw new DeployAdapterConfigError(
+          PULUMI_ADAPTER_KIND,
+          "pulumiRunner",
+          "wire a PulumiStackRunner (a Pulumi Automation-API / CLI driver over the substrate) into buildDeployAdapter deps",
+        );
+      }
+      return new PulumiDeployAdapter({ runner: deps.pulumiRunner, secrets, urlProbe, poll });
+    }
+    case PACKAGE_RELEASE_ADAPTER_KIND: {
+      if (deps.packageRegistry === undefined) {
+        throw new DeployAdapterConfigError(
+          PACKAGE_RELEASE_ADAPTER_KIND,
+          "packageRegistry",
+          "wire a PackageRegistryClient (a registry publish/read driver) into buildDeployAdapter deps",
+        );
+      }
+      return new PackageReleaseDeployAdapter({ registry: deps.packageRegistry, secrets, poll });
+    }
+    case MOBILE_RELEASE_ADAPTER_KIND: {
+      if (deps.mobileDistribution === undefined) {
+        throw new DeployAdapterConfigError(
+          MOBILE_RELEASE_ADAPTER_KIND,
+          "mobileDistribution",
+          "wire a MobileDistributionClient (an App Store Connect / Play / Firebase driver) into buildDeployAdapter deps",
+        );
+      }
+      return new MobileReleaseDeployAdapter({ distribution: deps.mobileDistribution, secrets, poll });
+    }
+    case MANUAL_EXTERNAL_ADAPTER_KIND:
+      return new ManualExternalDeployAdapter({
+        attestations: deps.manualAttestations ?? new InMemoryManualAttestationStore(),
+        urlProbe,
+        poll,
       });
     default:
       throw new Error(
-        `buildDeployAdapter: adapter class '${kind}' is not implemented yet ` +
-          `(the foundational slice ships only '${DIRECT_API_ADAPTER_KIND}'; pulumi / mobile_release / package_release / manual_external are deferred)`,
+        `buildDeployAdapter: adapter class '${kind}' is not a registered deploy adapter ` +
+          `(registered: '${DIRECT_API_ADAPTER_KIND}', '${PULUMI_ADAPTER_KIND}', '${PACKAGE_RELEASE_ADAPTER_KIND}', ` +
+          `'${MOBILE_RELEASE_ADAPTER_KIND}', '${MANUAL_EXTERNAL_ADAPTER_KIND}')`,
       );
   }
 }
