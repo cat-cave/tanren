@@ -6,7 +6,7 @@
 // advisory semantics end-to-end — without a live runner. STACK-AGNOSTIC: the gate
 // steps defer to `just tier-N`; Tanren names no stack. No DB: a FakeEventStore
 // captures the emitted gate.* / gate.advisory_failed events.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { RunnerHandle } from "../src/engine/contracts/allocator.js";
 import type { RunnerCommand, CommandResult, CommandSubstrate } from "../src/engine/contracts/commandSubstrate.js";
 import type { GovernancePosture } from "../src/engine/config/shared.js";
@@ -400,101 +400,5 @@ describe("buildDefaultGate — gate.verdict commit-binding (headShaOverride)", (
 
     expect(outcome.passed).toBe(true);
     expect(events.events.some((e) => e.eventType === "gate.verdict")).toBe(false);
-  });
-});
-
-// NO-SILENT-FALLBACK: the native JUnit ingest must DISCRIMINATE "no junit-writing step
-// ran" (quiet) from "a junit-writing step ran but produced no report" (LOUD). STACK-
-// AGNOSTIC: `expectReport` is derived from whether an EXECUTED step's `run` references the
-// convention path reports/junit.xml — the COMMAND is the project's, Tanren keys on the
-// path. The LOUD case is a repo `.tanren/ci.yml` whose slow tier writes the report; the
-// default (`just tier-2`, no path) is quiet. The loud mechanism is a structured
-// `console.error` (non-merge-gating — visibility).
-describe("buildDefaultGate — native JUnit ingest (expected-but-missing is LOUD)", () => {
-  // A repo config whose SLOW tier's step `run` references the junit path — so the
-  // executed pre_audit tier is "junit-writing" ⇒ expectReport=true.
-  const JUNIT_WRITING_CONFIG = `version: 1
-bootstrap:
-  run: just bootstrap
-tiers:
-  fast:
-    - name: tier-1
-      run: just tier-1
-  slow:
-    - name: tier-2
-      run: just tier-2 --report reports/junit.xml
-when:
-  fast:
-    - per_iteration
-  slow:
-    - pre_audit
-    - pre_merge
-`;
-
-  // A fuller input than gateInput: a fake pool + an org so the best-effort ingest runs.
-  function ingestInput(ssh: CommandSubstrate): RunPlannerLoopInput {
-    const fakePool = { query: async () => ({ rows: [], rowCount: 0 }) };
-    return {
-      ssh,
-      context: { ...context({ greenfield: true }), orgId: "org_1" },
-      timeoutMs: 100,
-      pool: fakePool,
-    } as unknown as RunPlannerLoopInput;
-  }
-
-  afterEach(() => vi.restoreAllMocks());
-
-  it("pre_audit (a junit-writing step ran) + absent report → a LOUD console.error", async () => {
-    // The tree is prepared so the gate steps pass; the report is absent (the fake echoes
-    // the absent marker), and pre_audit runs the slow tier's junit-writing step (the
-    // injected repo config's `just tier-2 --report reports/junit.xml`).
-    const state: WorkspaceState = {
-      contract: true,
-      prepared: true,
-      tier1Exit: 0,
-      installRuns: 0,
-      workspaceHead: "c".repeat(40),
-    };
-    const errs = vi.spyOn(console, "error").mockImplementation(() => {});
-    const gate = buildDefaultGate(
-      ingestInput(new InterpretingSsh(state, JUNIT_WRITING_CONFIG)),
-      target,
-      workspacePath,
-      new FakeEventStore(),
-    );
-
-    const outcome = await gate({ when: "pre_audit" });
-
-    expect(outcome.passed).toBe(true);
-    const loud = errs.mock.calls.map((c) => String(c[0])).find((m) => m.includes("native JUnit report EXPECTED"));
-    expect(loud).toBeDefined();
-    // The signal names the reason (absent) + the tier — never a silent degrade.
-    expect(loud).toContain("absent");
-    expect(loud).toContain("tier=slow");
-  });
-
-  it("per_iteration (no junit-writing step) + absent report → QUIET (no loud signal)", async () => {
-    const state: WorkspaceState = {
-      contract: true,
-      prepared: true,
-      tier1Exit: 0,
-      installRuns: 0,
-      workspaceHead: "c".repeat(40),
-    };
-    const errs = vi.spyOn(console, "error").mockImplementation(() => {});
-    const gate = buildDefaultGate(
-      ingestInput(new InterpretingSsh(state, JUNIT_WRITING_CONFIG)),
-      target,
-      workspacePath,
-      new FakeEventStore(),
-    );
-
-    const outcome = await gate({ when: "per_iteration" });
-
-    expect(outcome.passed).toBe(true);
-    // The fast tier ran no junit-writing test step ⇒ no loud "expected but missing" log.
-    expect(errs.mock.calls.map((c) => String(c[0])).some((m) => m.includes("native JUnit report EXPECTED"))).toBe(
-      false,
-    );
   });
 });

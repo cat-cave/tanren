@@ -18,6 +18,7 @@ export {
   DEFAULT_CI_CONFIG,
   JUNIT_REPORT_PATH,
   bootstrapCommand,
+  junitReportFor,
   resolveCiConfig,
   stepsFor,
   tiersFor,

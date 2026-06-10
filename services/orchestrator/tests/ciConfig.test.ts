@@ -5,6 +5,7 @@ import {
   DEFAULT_CI_CONFIG,
   JUNIT_REPORT_PATH,
   bootstrapCommand,
+  junitReportFor,
   parseYaml,
   resolveCiConfig,
   stepsFor,
@@ -65,8 +66,18 @@ describe("resolveCiConfig — missing", () => {
 
   it("keeps the JUnit report-path convention fixed for the per-test ingest", () => {
     // The COMMAND that writes the report is the project's (`just tier-2`), but the
-    // OUTPUT path the ingest (`ingestGateJunit`) reads back stays fixed.
+    // conventional default path stays fixed.
     expect(JUNIT_REPORT_PATH).toBe("reports/junit.xml");
+  });
+
+  it("the default `slow`/tier-2 DECLARES its junitReport so the apex grain is produced", () => {
+    // The default config's pre_audit (slow) tier declares the report via the EXPLICIT
+    // contract field (not a command sniff) — so a brownfield repo with no ci.yml still
+    // produces the per-test grain.
+    const declared = junitReportFor(DEFAULT_CI_CONFIG, "pre_audit");
+    expect(declared).toEqual({ tier: "slow", path: JUNIT_REPORT_PATH });
+    // No declaration on the cheap per-iteration tier ⇒ a clean skip there.
+    expect(junitReportFor(DEFAULT_CI_CONFIG, "per_iteration")).toBeUndefined();
   });
 
   it("maps fast→per_iteration, slow→pre_audit, merge→pre_merge (3 distinct tiers)", () => {
@@ -126,6 +137,34 @@ when:
     const cfg = resolveCiConfig(withExtra);
     expect(Object.keys(cfg.tiers).toSorted()).toEqual(["alpha", "fast", "slow", "zeta"]);
     expect(tiersFor(cfg, "pre_audit")).toEqual(["alpha", "zeta"]);
+  });
+
+  it("junitReportFor: a step DECLARING a junitReport names its tier + path; an undeclared point is undefined", () => {
+    const cfg = `version: 1
+tiers:
+  fast:
+    - name: lint
+      run: pnpm lint
+  slow:
+    - name: build
+      run: pnpm build
+    - name: test
+      run: pnpm test
+      junitReport: out/results.xml
+when:
+  fast:
+    - per_iteration
+  slow:
+    - pre_audit
+    - pre_merge
+`;
+    const config = resolveCiConfig(cfg);
+    // The declared path is the project's own (out/results.xml) — STACK-AGNOSTIC, never
+    // hardcoded; picked up from the EXPLICIT field, not the run string.
+    expect(junitReportFor(config, "pre_audit")).toEqual({ tier: "slow", path: "out/results.xml" });
+    expect(junitReportFor(config, "pre_merge")).toEqual({ tier: "slow", path: "out/results.xml" });
+    // The fast tier declares nothing ⇒ no expected report at per_iteration.
+    expect(junitReportFor(config, "per_iteration")).toBeUndefined();
   });
 
   it("treats bootstrap as optional", () => {

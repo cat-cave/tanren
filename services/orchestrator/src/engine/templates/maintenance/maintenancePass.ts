@@ -78,7 +78,9 @@ export function regressionFinding(template: MaintainableTemplate, proof: Templat
     externalId: `template-maintenance:${template.id}`,
     title: `Template ${template.manifest.stack} regressed re-validation`,
     body: lines.join("\n"),
-    severity: "fail",
+    // A regressed template (gates no longer green) is a BLOCKING defect on the shared
+    // P0–P3 ladder — the most severe (it would publish a broken template), so P0.
+    severity: "P0",
   };
 }
 

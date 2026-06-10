@@ -29,7 +29,23 @@ import type { ActorContextEnv } from "../src/middleware/auth.js";
 import { intakeAutoRouteDeps } from "../src/engine/forge/intake/index.js";
 import type { RepoReader } from "../src/engine/forge/brownfield/index.js";
 import type { TriageAnswerer } from "../src/engine/forge/inbox/types.js";
+import type { SpecQualityAnswerer } from "../src/engine/forge/specQuality/index.js";
 import { createDeterministicTriageAnswerer } from "./fixtures/forge/deterministicTriageAnswerer.js";
+
+// A spec-quality validator that PERSISTENTLY rejects every spec (overall `revise`,
+// every check failing). With no `reviseRoutableSpec` wired, the auto-route's gate
+// exhausts its (zero) revision budget and raises `PersistentlyInvalidSpecError` — the
+// loud needs_attention signal the dead-letter path catches.
+const alwaysRejectsValidator: SpecQualityAnswerer = {
+  validate: async () => ({
+    accomplishable: { pass: false, reason: "too broad" },
+    demoable: { pass: false, reason: "no observable behavior" },
+    nonTrivial: { pass: false, reason: "trivial" },
+    legible: { pass: false, reason: "opaque" },
+    overall: "revise",
+    revisionGuidance: "split + ground it",
+  }),
+};
 
 // A stub pool tracking audit_jobs + inbox_sources + candidates + spec INSERTs so
 // the full audit → auto-route → spec hand-off is observable.
@@ -157,7 +173,7 @@ function stubPool(existingSpecs: Array<{ spec_id: string; title: string; status:
 }
 
 const findingRunner = (
-  findings: { externalId: string; title: string; body: string; severity: "info" | "warn" | "fail" }[],
+  findings: { externalId: string; title: string; body: string; severity: "P0" | "P1" | "P2" | "P3" }[],
 ): AuditPassRunner => ({ run: async () => ({ findings }) });
 
 describe("runAuditJob → DAG auto-route", () => {
@@ -174,7 +190,7 @@ describe("runAuditJob → DAG auto-route", () => {
       {
         pool,
         passRunner: findingRunner([
-          { externalId: "n-plus-1-listUsers", title: "N+1 in listUsers", body: "batch the query", severity: "warn" },
+          { externalId: "n-plus-1-listUsers", title: "N+1 in listUsers", body: "batch the query", severity: "P2" },
         ]),
         answerer: createDeterministicTriageAnswerer(),
         autoRoute: intakeAutoRouteDeps(),
@@ -205,7 +221,9 @@ describe("runAuditJob → DAG auto-route", () => {
     const deps = {
       pool,
       passRunner: findingRunner([
-        { externalId: "injection-login", title: "Injection in login", body: "param it", severity: "fail" },
+        // P2 (moderate) — below the default posture's P1 block threshold ⇒ NON-blocking
+        // ⇒ routes into the DAG (the idempotency this test asserts is about the routed spec).
+        { externalId: "injection-login", title: "Injection in login", body: "param it", severity: "P2" },
       ]),
       answerer: createDeterministicTriageAnswerer(),
       autoRoute: intakeAutoRouteDeps(),
@@ -240,7 +258,7 @@ describe("runAuditJob → DAG auto-route", () => {
       {
         pool,
         passRunner: findingRunner([
-          { externalId: "existing-audit-fix", title: "Existing audit fix", body: "already fixed", severity: "warn" },
+          { externalId: "existing-audit-fix", title: "Existing audit fix", body: "already fixed", severity: "P2" },
         ]),
         answerer,
       },
@@ -273,6 +291,80 @@ describe("runAuditJob → DAG auto-route", () => {
     expect(result.job.findings.severity).toBe("ok");
     expect(result.job.lastRun).not.toBeNull();
   });
+
+  // LOOP 3 (a): a BLOCKING finding (≥ the posture `blockReviewAt`) routes through the SAME
+  // P0–P3/auditPosture path as inline audits — ESCALATED to needs_attention (`triaged`), NOT
+  // auto-routed. The default posture (`blockReviewAt: P1`) blocks on a P0 ⇒ never a spec.
+  it("a P0 finding routes via auditPosture → ESCALATED to needs_attention (triaged), not auto-routed", async () => {
+    const { pool, candidates, specInserts } = stubPool();
+    const job = await AuditsStore.createAuditJob(pool, {
+      orgId: "org_a",
+      projectId: "project_a",
+      kind: "security",
+      name: "sec",
+      cadence: "nightly",
+    });
+    const result = await runAuditJob(
+      {
+        pool,
+        passRunner: findingRunner([
+          { externalId: "rce-uploader", title: "RCE in the uploader", body: "arbitrary code exec", severity: "P0" },
+        ]),
+        answerer: createDeterministicTriageAnswerer(),
+        autoRoute: intakeAutoRouteDeps(),
+        now: () => new Date("2026-06-02T03:00:00Z"),
+      },
+      job,
+    );
+
+    // A P0 (≥ blockReviewAt) BLOCKS: the candidate rests `triaged` (needs_attention),
+    // and NO spec was committed to the DAG.
+    const cand = result.candidates[0]!;
+    expect(cand.status).toBe("triaged");
+    expect(specInserts).toHaveLength(0);
+    expect(candidates.size).toBe(1);
+    // The tick still completes + records the run (last_run stamped, findings rolled up).
+    expect(result.job.lastRun).toBe("2026-06-02T03:00:00.000Z");
+    // P0 ⇒ surface tone `fail`.
+    expect(result.job.findings.severity).toBe("fail");
+  });
+
+  // LOOP 3 (b): a throwing auto-route (`PersistentlyInvalidSpecError`) DEAD-LETTERS the
+  // candidate to needs_attention AND still records the run — so the next tick does NOT
+  // re-run + re-spend on the same persistently-broken spec FOREVER.
+  it("a throwing auto-route DEAD-LETTERS the candidate + records the run (no infinite re-spend)", async () => {
+    const { pool, specInserts } = stubPool();
+    const job = await AuditsStore.createAuditJob(pool, {
+      orgId: "org_a",
+      projectId: "project_a",
+      kind: "perf",
+      name: "perf",
+      cadence: "nightly",
+    });
+    const result = await runAuditJob(
+      {
+        pool,
+        // A NON-blocking P2 finding so it reaches the auto-route path; the validator then
+        // rejects its spec persistently.
+        passRunner: findingRunner([{ externalId: "n-plus-1", title: "N+1 query", body: "batch it", severity: "P2" }]),
+        answerer: createDeterministicTriageAnswerer(),
+        // Wire the persistently-rejecting validator so autoRouteCandidate throws
+        // PersistentlyInvalidSpecError (no reviseRoutableSpec ⇒ zero revision budget).
+        autoRoute: intakeAutoRouteDeps({ resolveSpecValidator: () => alwaysRejectsValidator }),
+        now: () => new Date("2026-06-03T03:00:00Z"),
+      },
+      job,
+    );
+
+    // The candidate was DEAD-LETTERED to `triaged` (needs_attention), NOT left dangling
+    // at `auto_routed`, and NO spec was committed.
+    const cand = result.candidates[0]!;
+    expect(cand.status).toBe("triaged");
+    expect(specInserts).toHaveLength(0);
+    // CRUCIAL: the run was STILL recorded — last_run stamped — so the next tick won't
+    // re-run this same job and re-spend on the same broken spec.
+    expect(result.job.lastRun).toBe("2026-06-03T03:00:00.000Z");
+  });
 });
 
 // ── The real Answerer-backed pass runner ────────────────────────────────────
@@ -287,7 +379,7 @@ const fakeRepoReader: RepoReader = {
 
 const fakeAuditAnswerer: AuditAnswerer = {
   audit: async () => ({
-    findings: [{ externalId: "n-plus-1", title: "N+1 query", body: "batch it", severity: "warn" }],
+    findings: [{ externalId: "n-plus-1", title: "N+1 query", body: "batch it", severity: "P2" }],
   }),
 };
 
@@ -344,7 +436,7 @@ describe("createAnswererPassRunner", () => {
     const result = await runner.run(passRunnerJob("project_a"));
     expect(result.findings).toHaveLength(1);
     expect(result.findings[0]!.externalId).toBe("n-plus-1");
-    expect(result.findings[0]!.severity).toBe("warn");
+    expect(result.findings[0]!.severity).toBe("P2");
   });
 
   it("LOUD-fails for a repo-less (project-less) job — never a silent empty pass", async () => {
@@ -390,7 +482,7 @@ describe("POST /:orgId/audits/:jobId/run", () => {
       createAuditRoutes({
         pool,
         passRunner: findingRunner([
-          { externalId: "slow-render", title: "slow render path", body: "memoize it", severity: "warn" },
+          { externalId: "slow-render", title: "slow render path", body: "memoize it", severity: "P2" },
         ]),
         answererFactory: () => createDeterministicTriageAnswerer(),
       }),

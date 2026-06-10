@@ -43,8 +43,10 @@ export const SKELETON_CI_CONFIG_PATH = ".tanren/ci.yml";
 export const SKELETON_CI_CONFIG = `# .tanren/ci.yml — Tanren's native gate definition (CiConfigV1). Tanren runs these
 # steps itself over SSH on the runner (Action-less delivery). The COMMANDS defer to
 # \`just <target>\` — the stack (pnpm/cargo/python/swift/…) lives in the justfile, so
-# Tanren assumes NO tech stack. A tier that runs tests writes a JUnit report to
-# ${JUNIT_REPORT_PATH} so Tanren's per-test ingest reads it.
+# Tanren assumes NO tech stack. A test tier DECLARES the JUnit report it writes via
+# \`junitReport:\` so Tanren's per-test ingest reads EXACTLY that path (the per-test
+# flaky→quarantine grain). The path is the project's declaration — Tanren names no
+# test runner; \`${JUNIT_REPORT_PATH}\` is just the conventional default.
 version: 1
 bootstrap:
   run: just bootstrap
@@ -53,10 +55,12 @@ tiers:
   fast:
     - name: tier-1
       run: just tier-1
-  # tier-2 (pre_audit) — build + tests at spec completion (writes JUnit evidence).
+  # tier-2 (pre_audit) — build + tests at spec completion. It DECLARES its JUnit report
+  # (junitReport) so Tanren ingests the per-test grain; have \`just tier-2\` write that path.
   slow:
     - name: tier-2
       run: just tier-2
+      junitReport: ${JUNIT_REPORT_PATH}
   # tier-3 (pre_merge) — the heaviest thorough gate (the merge authority).
   merge:
     - name: tier-3

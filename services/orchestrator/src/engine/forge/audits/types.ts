@@ -14,6 +14,7 @@
 
 import { z } from "zod";
 import type { ReconIndex } from "../brownfield/types.js";
+import type { FindingSeverity } from "../../contracts/findings.js";
 
 // The audit kinds — mirror the hi-fi `AUDIT_KIND_GLYPH` keys plus the deferred
 // stale-specs sweep called out in PROJECT_BRIEF §2.2.
@@ -59,15 +60,35 @@ export type AuditJob = z.infer<typeof AuditJob>;
 
 // One finding a pass produces — the unit that becomes a candidate. `externalId`
 // is the pass's own stable key so re-running a job is idempotent in the inbox
-// (it upserts on (source_id, external_id), never duplicates). `routableSpec`
-// carries the model's proposed unit of work (a spec the audit finding becomes
-// when it auto-routes into the DAG) — present when the finding is actionable, so
-// the candidate's triage commits it with no operator click.
+// (it upserts on (source_id, external_id), never duplicates). `severity` is the
+// SHARED P0–P3 `FindingSeverity` ladder (`contracts/findings.ts`) — the SAME scale
+// inline audits emit — so a scheduled audit's findings route through the SAME
+// `auditPosture` severity path (`decideFromFindings`): a finding at-or-above the
+// project's `blockReviewAt` is escalated to needs_attention, the residual is routed
+// into the DAG. The inbox candidate's display severity is derived from this via
+// `findingToInboxSeverity`.
 export interface AuditFinding {
   externalId: string;
   title: string;
   body: string;
-  severity: "info" | "warn" | "fail";
+  severity: FindingSeverity;
+}
+
+// Map a P0–P3 finding severity to the inbox candidate's `info|warn|fail` display
+// scale (the candidate store / surface vocabulary, which the parallel inbox wave
+// owns — unchanged here). DELIBERATELY total: P0/P1 (the block-worthy tier) ⇒ `fail`,
+// P2 ⇒ `warn`, P3 ⇒ `info`. The ROUTING decision is made on the P0–P3 severity via
+// `auditPosture`; this projection is only the candidate row's display tone.
+export function findingToInboxSeverity(severity: FindingSeverity): "info" | "warn" | "fail" {
+  switch (severity) {
+    case "P0":
+    case "P1":
+      return "fail";
+    case "P2":
+      return "warn";
+    case "P3":
+      return "info";
+  }
 }
 
 // The result of running a job's read-only pass.
@@ -96,7 +117,10 @@ export const AuditReportFinding = z
     // Enough context to become a routableSpec: what the issue is, where it
     // lives, why it matters, and what fixing it would entail.
     body: z.string().min(1).max(6000),
-    severity: z.enum(["info", "warn", "fail"]).default("warn"),
+    // The SHARED P0–P3 severity ladder (`contracts/findings.ts:FindingSeverity`) — the
+    // SAME scale inline audits emit, so the scheduler's auditPosture routing applies
+    // identically. Default P2 (mid: the residual/route tier under the default posture).
+    severity: z.enum(["P0", "P1", "P2", "P3"]).default("P2"),
   })
   .strict();
 export type AuditReportFinding = z.infer<typeof AuditReportFinding>;
