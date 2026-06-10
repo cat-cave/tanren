@@ -5,7 +5,7 @@
 // `permission denied for table events`.
 
 import { Pool } from "pg";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { migrate, resetSystemPool, runWithOrgScope, setSystemPool } from "@tanren/db";
 import { PgEventStore } from "../src/engine/eventStore.js";
 import { selectNextMerge } from "../src/engine/contracts/mergeCoordinator.js";
@@ -110,6 +110,16 @@ describeDb("merge queue dequeued recovery under data-plane RLS (real PG)", () =>
       });
     });
   }, 60_000);
+
+  // Re-establish the injected BYPASSRLS system pool before EACH test. The global
+  // test setup (test/setup/systemPool.ts) runs `resetSystemPool()` in an
+  // `afterEach`, which clears this file's `beforeAll` `setSystemPool` injection
+  // after the first test. Without this, tests 2..n fall back to the data-plane
+  // pool for the cross-org `resolveProjectOrg` system read, which RLS denies
+  // (zero rows) — so recovery/snapshot reads see no org and return nothing.
+  beforeEach(() => {
+    setSystemPool(systemPool);
+  });
 
   afterAll(async () => {
     resetSystemPool();
