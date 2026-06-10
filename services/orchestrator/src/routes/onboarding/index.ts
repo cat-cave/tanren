@@ -28,8 +28,7 @@ import type { ActorContext } from "../../auth/schemas.js";
 import { TemplateStore } from "../../engine/repositories/index.js";
 import type { SecretStore } from "../../engine/contracts/secretStore.js";
 import type { VcsProvider } from "../../engine/contracts/vcsProvider.js";
-import { ensureIssuesInboxSource } from "../../engine/forge/inbox/index.js";
-import { ensureDefaultNotificationRoute } from "../../engine/notifications/index.js";
+import { provisionAutonomousProject } from "../../engine/workflow/provisionAutonomousProject.js";
 import {
   DeployNotLinkedError,
   DeployProviderInvalidError,
@@ -216,50 +215,26 @@ export function createOnboardingRoutes(options: OnboardingRoutesOptions) {
       if (result.repository === undefined) {
         throw new Error("greenfield repository missing after derive");
       }
-      const inbox = await ensureIssuesInboxSource({
+      // SHARED bootstrap (Codex round-4): seed the COMPLETE autonomous-project set
+      // via the single `provisionAutonomousProject` seam — the issues inbox, the
+      // per-org DEFAULT ntfy notification route (apex-critical milestone events:
+      // budget / deploy.verified / needs_attention reach a human BY DEFAULT, the
+      // operator-drivable path a real user would otherwise hand-configure), AND the
+      // scheduled-audit catalog. Idempotent + org-scoped + failure-isolated.
+      //
+      // The repo + project are already COMMITTED at this point, so a seed failure must
+      // NOT 500-after-side-effects (the create would otherwise be irreversibly
+      // half-done). The seam isolates each seed + records failures in `bootstrap.errors`
+      // (LOUD, never silent): the env-default route still guarantees milestone delivery
+      // and the operator can add the per-org route from the dashboard. Returned so the
+      // caller surface sees exactly which seeds landed.
+      const bootstrap = await provisionAutonomousProject({
         pool: options.pool,
         orgId,
         projectId: result.projectId,
         repoUrl: result.repository.repoUrl,
       });
-      // api-mirrors-ux + no-silent: seed the per-org DEFAULT ntfy notification
-      // route so the apex-critical milestone events (budget / deploy.verified /
-      // needs_attention) reach a human on the dashboard-visible matrix BY DEFAULT
-      // — the operator-drivable path a real user would otherwise hand-configure.
-      // The topic is the per-tenant `tanren-org-<orgId>` bus on the deploy-default
-      // ntfy host (the per-target base URL stays null ⇒ the boot default applies).
-      //
-      // The repo + project are already COMMITTED at this point, so a seed failure
-      // must NOT 500-after-side-effects (the create would otherwise be irreversibly
-      // half-done). It is LOUD (console.error, never silent) but non-fatal: the
-      // code-level env default route still guarantees milestone delivery, and the
-      // operator can add the per-org route from the dashboard.
-      let notificationRoute: { seeded: false } | { seeded: true; targetId: string; created: boolean; events: number } =
-        {
-          seeded: false,
-        };
-      try {
-        const notify = await ensureDefaultNotificationRoute({
-          pool: options.pool,
-          orgId,
-          ntfyTopic: `tanren-org-${orgId}`,
-        });
-        notificationRoute = {
-          seeded: true,
-          targetId: notify.target.id,
-          created: notify.created,
-          events: notify.routes.length,
-        };
-      } catch (seedError) {
-        console.error(
-          `[onboarding] default notification route seed failed for org ${orgId} (delivery still covered by the env default):`,
-          seedError instanceof Error ? seedError.message : seedError,
-        );
-      }
-      return c.json(
-        { ...result, inboxSource: { id: inbox.source.id, created: inbox.created }, notificationRoute },
-        201,
-      );
+      return c.json({ ...result, inboxSource: bootstrap.inboxSource, bootstrap }, 201);
     } catch (error) {
       const repoError = greenfieldRepositoryErrorResponse(c, error);
       if (repoError !== undefined) return repoError;

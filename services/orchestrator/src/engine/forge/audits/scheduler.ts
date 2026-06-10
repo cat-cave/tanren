@@ -157,17 +157,27 @@ export async function runAuditJob(deps: AuditSchedulerDeps, job: AuditJob): Prom
     const answerer = deps.answerer;
     const source = await findOrCreateAuditSource(deps.pool, job.orgId);
     const existingSpecs = await loadExistingSpecs(deps.pool, job.projectId);
-    // Resolve the project's auditPosture (the same DORA knob inline audits use) and
-    // run the P0–P3 findings through `decideFromFindings` — the SAME severity path: a
-    // finding at-or-above `blockReviewAt` is a BLOCKING finding. By default it is
-    // ESCALATED to needs_attention (a human decision), NOT auto-routed. BUT under an
-    // AUTONOMOUS posture (`autonomousRemediation: true`, the apex doctrine) a blocking
-    // finding ALSO becomes a REMEDIATION DAG spec — so a scheduled-audit finding always
-    // re-enters the DAG as fix-it work and the audit→finding→fix→merge loop CLOSES with
-    // no operator. The residual P2/P3 is routed under `route-to-dag` as before.
+    // Resolve the project's auditPosture (the same DORA knob inline audits use) and run
+    // the P0–P3 findings through `decideFromFindings` — the posture is the AUTHORITY for
+    // autonomous routing, not the triage verdict:
+    //   - a BLOCKING finding (≥ `blockReviewAt`) by default ESCALATES to needs_attention
+    //     (a human decision); under `autonomousRemediation` it ALSO becomes a REMEDIATION
+    //     DAG spec so the audit→finding→fix→merge loop CLOSES with no operator.
+    //   - a RESIDUAL (below-threshold) finding under `p2p3Handling: "route-to-dag"` is
+    //     routed into the DAG by the POSTURE DECISION DIRECTLY — even when triage did NOT
+    //     independently mark it `auto_routable` (the posture is the authority; a P2/P3 must
+    //     never silently strand under route-to-dag). Under the default `fix-if-idle`
+    //     posture a residual still parks unless triage independently auto-routes it.
     const posture = await resolveAuditPosture(deps.pool, job.projectId);
     const remediateAutonomously = posture.autonomousRemediation === true;
-    const blocking = new Set(blockingFindingIds(findings, posture));
+    const decision = decideFromFindings(
+      findings.map((f) => toFinding(f)),
+      posture,
+    );
+    const blocking = new Set(decision.block ? blockingFindingIds(findings, posture) : []);
+    // The residual externalIds the posture routes to the DAG (non-empty only under
+    // `route-to-dag`). These route regardless of triage's `auto_routable` flag.
+    const postureRoutes = new Set(decision.route.map((f) => f.id));
     for (const finding of findings) {
       const triage = await answerer.triage({
         candidate: {
@@ -183,14 +193,16 @@ export async function runAuditJob(deps: AuditSchedulerDeps, job: AuditJob): Prom
         existingSpecs,
       });
       const isBlocking = blocking.has(finding.externalId);
-      // A BLOCKING finding (≥ the posture's blockReviewAt) is ESCALATED to
-      // needs_attention: by DEFAULT it rests `triaged` (the loud inbox surface) and is
-      // NEVER auto-routed, exactly the merge-path posture `block`. BUT under an
-      // AUTONOMOUS posture (`autonomousRemediation`) the blocking finding becomes a
-      // REMEDIATION DAG spec — so it rests `auto_routed` and is committed below, closing
-      // the audit→finding→fix→merge loop with no operator. A non-blocking auto_routable
-      // finding rests `auto_routed` as before.
-      const routable = isBlocking ? remediateAutonomously : triage.verdict === "auto_routable";
+      // The posture is the AUTHORITY for whether this finding re-enters the DAG:
+      //   - BLOCKING: by DEFAULT it rests `triaged` (escalated to needs_attention) and is
+      //     NEVER auto-routed (the merge-path posture `block`); under `autonomousRemediation`
+      //     it rests `auto_routed` and becomes a remediation spec below.
+      //   - RESIDUAL under `route-to-dag` (`postureRoutes`): rests `auto_routed` REGARDLESS
+      //     of triage's verdict — the posture decision routes it (no silent strand).
+      //   - Otherwise: the triage verdict decides (`fix-if-idle` default — a residual parks
+      //     unless triage independently marks it `auto_routable`).
+      const postureRouted = postureRoutes.has(finding.externalId);
+      const routable = isBlocking ? remediateAutonomously : postureRouted || triage.verdict === "auto_routable";
       const status = routable ? "auto_routed" : "triaged";
       let candidate = await InboxStore.upsertCandidate(
         deps.pool,
@@ -205,11 +217,14 @@ export async function runAuditJob(deps: AuditSchedulerDeps, job: AuditJob): Prom
         triage,
         status,
       );
-      // The spec to commit: the triage's authored spec when present; for a blocking
-      // remediation with no triage spec, a finding-derived remediation spec (so a P0/P1
-      // ALWAYS becomes fix-it work under an autonomous posture, never a silent no-op).
-      const specToRoute =
-        triage.routableSpec ?? (isBlocking && remediateAutonomously ? findingToRoutableSpec(toFinding(finding)) : null);
+      // The spec to commit: the triage's authored spec when present; else a finding-derived
+      // spec whenever the POSTURE routes this finding into the DAG (a blocking remediation
+      // under `autonomousRemediation`, OR a residual under `route-to-dag`) — so a posture-
+      // routed finding ALWAYS becomes real DAG work, never `auto_routed` yet uncommitted
+      // (no silent strand). When the posture did NOT force routing (triage independently
+      // auto-routed), the triage spec is required and no synthesis applies.
+      const postureWantsSpec = (isBlocking && remediateAutonomously) || postureRouted;
+      const specToRoute = triage.routableSpec ?? (postureWantsSpec ? findingToRoutableSpec(toFinding(finding)) : null);
       // Autonomous DAG insert (auto_routable, with a routable/remediation spec): commit
       // it now (no operator), with the dead-letter guard. Extracted to keep nesting shallow.
       if (deps.autoRoute !== undefined && candidate.status === "auto_routed" && specToRoute !== null) {
