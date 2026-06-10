@@ -234,9 +234,9 @@ export const jobQueue = pgTable(
     // table that stays OUTSIDE RLS (the claim is intentionally cross-org), so
     // this column is the worker's tenant BOOTSTRAP source: the claimed row's
     // `org_id` tells the worker which org owns the job WITHOUT an RLS-protected
-    // `runs` read. Nullable: a legacy/unscoped job (or a system fixture job) has
-    // no org. Not FK-constrained on purpose — the queue must never block a claim
-    // on a tenant-table lookup.
+    // `runs` read. Nullable: a system / null-org job (a CLI caller / fixture with
+    // no org) has no org. Not FK-constrained on purpose — the queue must never
+    // block a claim on a tenant-table lookup.
     orgId: text("org_id"),
     taskKind: text("task_kind").notNull(),
     payload: jsonb("payload")

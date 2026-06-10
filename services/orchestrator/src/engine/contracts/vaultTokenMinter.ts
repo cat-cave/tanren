@@ -34,7 +34,7 @@ export interface MintScopedRunTokenInput {
    * The run's org. Threaded ONLY for the audit record + tenant-isolation
    * assertions; the policy is scoped by REF PATHS (which already embed the org),
    * so a run can only ever name its own org's `credential/.../<orgId>/...` paths.
-   * `null`/undefined for a legacy/unscoped run (no org segment in its refs).
+   * `null`/undefined for a system / null-org job (no org segment in its refs).
    */
   orgId?: string | null;
   /**

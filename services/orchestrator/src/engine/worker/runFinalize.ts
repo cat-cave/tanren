@@ -107,7 +107,7 @@ export async function finalizeRunRecoverable(
   // (resolved from its execution context), run the finalize UPDATE + the
   // run.failed event in ONE org-scoped transaction so both writes carry org
   // context (`SET LOCAL app.current_org_id = <orgId>`). The catch path previously
-  // ran with NO ambient scope; this establishes one. A legacy/unscoped run
+  // ran with NO ambient scope; this establishes one. A system / null-org job
   // (org_id NULL) — or a context load that itself failed — falls back to the pool,
   // the pre-cohort-3 behavior. Inert in R1; RLS-correct in R3.
   await withRunFinalizeScope(pool, orgId, async (client) => {
@@ -258,7 +258,7 @@ async function parkStrandedSpecInProcess(
  * org scope when the org is known, else under the EXPLICIT cross-org SYSTEM scope
  * (BYPASSRLS). Centralizes the org-scoping the two worker failure-path finalizers
  * share: a known org opens a `SET LOCAL app.current_org_id = <org>` transaction;
- * a null-org (legacy/unscoped, or a context load that itself failed before the
+ * a null-org (a system / null-org job, or a context load that itself failed before the
  * org was resolved) opens a `runWithSystemScope` transaction so the finalize +
  * its `PgEventStore(client)` write still land — never the implicit bare-pool
  * fallback (which under the `tanren_app` RLS role would silently deny the write).

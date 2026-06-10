@@ -129,17 +129,18 @@ export async function createGreenfieldRepository(deps: GreenfieldRepositoryCreat
   if (installation === undefined && staticRef === undefined) {
     throw new GithubCredentialMissingError();
   }
-  let token;
-  try {
-    token = await vcsProvider.resolveToken({
-      secrets,
-      ...(installation !== undefined && { installation }),
-      ...(staticRef !== undefined && { staticRef }),
-      ...(deps.githubAppMinter === undefined ? {} : { minter: deps.githubAppMinter }),
-    });
-  } catch {
-    throw new GithubCredentialMissingError();
-  }
+  // The genuine missing-credential case is already surfaced LOUD above (the
+  // explicit installation/staticRef gap). A failure HERE is therefore NOT
+  // "you didn't bind a credential" — it is infra/corruption (Vault outage, App
+  // mint failure, an unparseable stored config). Let it PROPAGATE (a 500), never
+  // mislabel it as `github_credential_missing` (no_silent_fallbacks: a wrong,
+  // misleading user-facing verdict is itself a silent degrade).
+  const token = await vcsProvider.resolveToken({
+    secrets,
+    ...(installation !== undefined && { installation }),
+    ...(staticRef !== undefined && { staticRef }),
+    ...(deps.githubAppMinter === undefined ? {} : { minter: deps.githubAppMinter }),
+  });
 
   return vcsProvider.createRepository(input, token);
 }

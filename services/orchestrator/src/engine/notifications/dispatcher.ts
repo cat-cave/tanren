@@ -25,9 +25,9 @@ import { createLogger } from "../observability/logger.js";
 // dispatcher.
 //
 // Flow per event:
-//   1. Resolve the event's effective severity (default-map + verdict
-//      promotion: a checker/auditor.verdict with passed=false promotes
-//      one tier so the matrix's `warn` floor catches it).
+//   1. Resolve the event's effective severity (default-map + a few
+//      per-payload promotions, e.g. a run.completed whose outcome contains
+//      "fail" promotes one tier so the matrix's `warn` floor catches it).
 //   2. Load applicable matrix context (targets + routes for this event,
 //      scoped to the org). The dispatcher is given an `orgId` per event —
 //      `null` events skip notifications entirely.
@@ -397,18 +397,12 @@ export class NotificationDispatcher {
 
 // effectiveSeverityFor: the registry's default-severity map is the base
 // rate; a few payload shapes carry per-instance severity hints we honor:
-//   - checker.verdict / auditor.verdict: passed=false promotes one tier.
 //   - run.completed with outcome containing "fail" promotes to warn.
 // This keeps the matrix actionable without proliferating event names.
+// (checker.verdict / auditor.verdict are FINDINGS-ONLY now — no `passed`
+// flag — so they carry no per-instance promotion; they take the base rate.)
 export function effectiveSeverityFor(event: TypedEvent): Severity {
   const base = defaultSeverityFor(event.eventType as EventName);
-  if (event.eventType === "checker.verdict" || event.eventType === "auditor.verdict") {
-    const payload = event.payload as { passed?: boolean };
-    if (payload.passed === false) {
-      return promote(base);
-    }
-    return "ok";
-  }
   if (event.eventType === "run.completed") {
     const payload = event.payload as { outcome?: string };
     if (typeof payload.outcome === "string" && payload.outcome.includes("fail")) {

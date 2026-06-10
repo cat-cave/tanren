@@ -10,7 +10,7 @@
 // Drives `buildReGateCi` against a spy gate closure (records the override it receives) +
 // a no-publish input (no installation, empty static ref ⇒ publishMergeVerdict returns
 // early), so the assertion is purely on the override threading — no live runner / forge.
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RunnerHandle } from "../src/engine/contracts/allocator.js";
 import type { CiWhen } from "../src/engine/ci/index.js";
 import type { GateOutcome } from "../src/engine/workflow/gate/index.js";
@@ -68,6 +68,12 @@ function gateCtx(runGate: MergeGateRunContext["runGate"]): MergeGateRunContext {
   return { runGate, target, workspacePath: "/workspace/runs/run_behind/repo", eventStore: new FakeEventStore() };
 }
 
+// A gate closure that throws (e.g. the runner SSH connection died mid re-gate). The
+// re-gate must FAIL-CLOSED on this and log the error LOUD before returning `failed`.
+const throwingGate: MergeGateRunContext["runGate"] = async () => {
+  throw new Error("ssh: runner connection reset mid re-gate");
+};
+
 // buildReGateCi reads only context / ssh / vcsProvider / secrets / timeoutMs off the
 // input — and with no installation + empty static ref the publish path returns before
 // touching vcsProvider/secrets, so a minimal cast is sufficient.
@@ -111,5 +117,27 @@ describe("buildReGateCi — behind re-gate commit-binding (§5)", () => {
 
     expect(result.status).toBe("passed");
     expect(gate.calls[0]?.headShaOverride).toBeUndefined();
+  });
+});
+
+describe("buildReGateCi — a re-gate throw is FAIL-CLOSED and logged LOUD (no_silent_fallbacks)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("returns status: failed AND logs the swallowed error (never a silent discard)", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const reGate = buildReGateCi(reGateInput(), gateCtx(throwingGate));
+
+    const result = await reGate({ rebasedHeadSha: REBASED_PR_HEAD });
+
+    // FAIL-CLOSED: the merge is blocked on the unverified rebase.
+    expect(result.status).toBe("failed");
+    // The swallowed error is logged LOUD (at error level → console.error) BEFORE the
+    // failed verdict — never a bare silent catch that discards it.
+    expect(logged).toHaveBeenCalled();
+    const line = logged.mock.calls.map((c) => c.join(" ")).join("\n");
+    expect(line).toMatch(/re-gate failed/iu);
+    expect(line).toMatch(/connection reset mid re-gate/u);
   });
 });

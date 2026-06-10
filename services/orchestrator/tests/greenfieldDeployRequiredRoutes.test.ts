@@ -18,6 +18,17 @@ class ForbiddenCreateVcsProvider extends InMemoryVcsProvider {
   }
 }
 
+// A provider whose token resolution FAILS for an infra reason (Vault outage / App
+// mint failure / corrupt stored config) — NOT a missing credential. The org HAS a
+// static token bound, so the genuine missing-credential gap is already cleared;
+// this exercises the no_silent_fallbacks fix that a resolveToken failure must NOT
+// be mislabeled `github_credential_missing` (400) but PROPAGATE as a 500.
+class ResolveTokenInfraFailureVcsProvider extends InMemoryVcsProvider {
+  override async resolveToken(): Promise<never> {
+    throw new Error("vault unreachable: dial tcp 127.0.0.1:8200: connection refused");
+  }
+}
+
 class LinkedDeployRoutesPool extends RoutesPool {
   override async query(sql: string, params: unknown[] = []) {
     const text = sql.replaceAll(/\s+/gu, " ").trim();
@@ -304,6 +315,38 @@ describe("greenfield/apex deploy dependency routes", () => {
     expect(pool.projects.size).toBe(0);
     expect(pool.specs.size).toBe(0);
     expect(pool.inboxSources).toEqual([]);
+  });
+
+  it("PROPAGATES a resolveToken INFRA failure as a 500 — never mislabeled github_credential_missing", async () => {
+    const pool = new RoutesPool();
+    seedStaticTokenOrg(pool);
+    pool.seedMembership("org_acme", "user_alice", "admin");
+    const { app, vcsProvider } = appWithRoutes(pool, new ResolveTokenInfraFailureVcsProvider(), {
+      async preflightDeploy() {},
+      async prepareDeploy() {
+        return preparedDeploy();
+      },
+    });
+
+    const res = await app.request("/orgs/org_acme/onboarding/interview/derive", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        capture: apexCapture(),
+        owner: "cat-cave",
+        autonomy: "auto",
+        deploy: { providerKind: "deploy.vercel" },
+      }),
+    });
+
+    // A static token IS bound (the missing-credential gap is cleared), so the
+    // resolveToken throw is genuine infra — a 500, NOT a 400 "you didn't bind a
+    // credential". The repo is never created.
+    expect(res.status).toBe(500);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).not.toBe("github_credential_missing");
+    expect(body.error).toBe("interview_derive_failed");
+    expect(vcsProvider.createdRepositories).toEqual([]);
   });
 
   it("HALTS LOUD (template_required 409) on a no-match when no just-in-time creation is possible — never a from-scratch project scaffold", async () => {

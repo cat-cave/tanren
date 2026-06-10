@@ -193,7 +193,7 @@ export async function withJobOrgScope<T>(pool: pg.Pool, op: (client: QueryClient
  * Handing this to the run worker's workflow as `input.pool` org-scopes every
  * tenant-table op — direct `input.pool.query` AND store writes — for the
  * duration of one DB op only, never across the run's external I/O. With no
- * job-org-id set (a legacy/unscoped run) the proxy is behavior-identical to the
+ * job-org-id set (a system / null-org job) the proxy is behavior-identical to the
  * bare pool.
  */
 export function orgScopingPool(pool: pg.Pool): pg.Pool {

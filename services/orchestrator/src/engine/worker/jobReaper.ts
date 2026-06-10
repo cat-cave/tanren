@@ -53,7 +53,7 @@ export async function reapExpiredJobs(deps: ReapJobsDeps): Promise<ReapJobsResul
   // RLS R3a-worker: the default event store is constructed over an
   // `orgScopingPool`, so when the dead-letter append runs under a reaped run's
   // per-job org-id (set below), its `events` INSERT opens a short org-scoped txn;
-  // with no org-id (legacy/unscoped run) it falls back to the pool (inert). An
+  // with no org-id (system / null-org job) it falls back to the pool (inert). An
   // injected event store (tests) is used verbatim.
   const eventStore = deps.eventStore ?? new PgEventStore(orgScopingPool(deps.pool));
   let requeued = 0;
@@ -133,7 +133,7 @@ async function emitDeadLetterEvent(pool: pg.Pool, eventStore: EventStore, job: R
     });
   // RLS R3a-worker: scope the dead-letter event to the reaped run's org via the
   // per-job org-id (the default PgEventStore then opens a short org-scoped txn
-  // for the INSERT). A legacy/unscoped run (org_id NULL) appends on the pool —
+  // for the INSERT). A system / null-org job (org_id NULL) appends on the pool —
   // inert, identical to before this cohort. A failed append is LOUD (logged +
   // counted, r6 §1): losing this event silently hides the dead-letter from the
   // operator, the exact condition the reaper exists to surface.
