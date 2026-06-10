@@ -31,7 +31,10 @@ import { preparedDeploy, stubPool, type StubState } from "./fixtures/forge/inter
 // project DECLARES it; the scaffold authors the justfile from it.
 const TS_LIFECYCLE: CaptureLifecycle = {
   stack: "ts/pnpm",
-  bootstrap: "pnpm install --frozen-lockfile",
+  // FRESH-REPO-SAFE BOOTSTRAP (apex v32): a from-scratch greenfield repo has no
+  // lockfile, so the captured bootstrap is a plain non-frozen install (it generates
+  // the lockfile the scaffold commits) — never `--frozen-lockfile`.
+  bootstrap: "pnpm install",
   tier1: "pnpm lint && pnpm typecheck",
   tier2: "pnpm build && pnpm test -- --reporter=junit --outputFile=reports/junit.xml",
   tier3: "pnpm lint && pnpm typecheck && pnpm build && pnpm test",
@@ -230,7 +233,7 @@ describe("deriveFromCapture · creates the product graph (no migration)", () => 
     // The lifecycle is persisted onto the project config (the run materializes from it).
     const config = configs.get(derived.projectId) as { lifecycle?: { stack?: string; bootstrap?: string } } | undefined;
     expect(config?.lifecycle?.stack).toBe("ts/pnpm");
-    expect(config?.lifecycle?.bootstrap).toBe("pnpm install --frozen-lockfile");
+    expect(config?.lifecycle?.bootstrap).toBe("pnpm install");
 
     const desc = scaffold?.description ?? "";
     // The writer is told the contract files are pre-committed (materialized).
@@ -238,7 +241,9 @@ describe("deriveFromCapture · creates the product graph (no migration)", () => 
     expect(desc).toContain("justfile");
     expect(desc).toContain(".tanren/ci.yml");
     // The captured TS/pnpm commands surface as CONTEXT; the ci.yml body is NEVER inlined.
-    expect(desc).toContain("pnpm install --frozen-lockfile");
+    // The greenfield bootstrap is a fresh-repo-safe non-frozen install (apex v32).
+    expect(desc).toContain("pnpm install");
+    expect(desc).not.toContain("--frozen-lockfile");
     expect(desc).not.toContain("version: 1\nbootstrap:");
     // The green bar is bootstrap/tier-1/build — NOT the test tier.
     const criteria = scaffold?.acceptanceCriteria ?? [];
