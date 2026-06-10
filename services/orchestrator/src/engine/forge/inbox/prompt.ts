@@ -11,6 +11,34 @@ import { SPEC_QUALITY_CONTRACT_PROMPT } from "../../answerers/schemas/specQualit
 import { isCiInsightSource } from "./ciInsightsSource.js";
 import type { TriageAnswererContext } from "./types.js";
 
+// ENTITY-IDENTITY staleness check (docs/roadmap/entity-analysis-layer.md, increment 1).
+// An issue names a target entity (a function/class/type), but that entity may have
+// been REFACTORED since the issue was filed — renamed, moved, or rewritten — which a
+// line-based search loses. `sem` tracks entities by a STRUCTURAL-HASH IDENTITY that
+// survives the refactor, so the triage agent can decide whether the issue's target
+// still exists / was modified / renamed / removed and correctly resolve a stale issue.
+// This is an OPTIONAL ACCELERATOR the agent RUNS ITSELF in its sandbox (never injected
+// context): when `sem` is absent or cannot parse the stack, the agent falls back to a
+// raw `git log`/grep search of the named symbol — that fallback is always authoritative.
+const ENTITY_IDENTITY_TRIAGE_LINES: string[] = [
+  "ENTITY-IDENTITY check (optional accelerator): if this candidate targets a specific",
+  "code entity (a named function/class/method/type), determine whether that entity STILL",
+  "EXISTS, was MODIFIED, RENAMED, or REMOVED since the issue was filed — a stale issue",
+  "about a since-refactored entity should be resolved (dedupe_close / needs_call), not",
+  "re-routed as live work. An entity-level tool, `sem`, may be on PATH in your sandbox;",
+  "when available, prefer it because its identity survives a refactor that line-tracking",
+  "loses:",
+  "  sem blame <file>            — who last modified each entity in the file",
+  "  sem log <entity>            — that entity's evolution through history (rename/move)",
+  "  sem diff --from <sha> --to HEAD --format json  — entity adds/mods/deletes/renames",
+  "Use these to LOCATE the issue's target entity by identity and judge whether it is",
+  "still present. `sem` is an ACCELERATOR, not a requirement: if it is missing, errors,",
+  "or cannot parse the stack (it does not cover every language), fall back to a raw",
+  "`git log`/grep search of the named symbol — that raw search is always authoritative.",
+  "Never block or change your verdict merely because `sem` is unavailable.",
+  "",
+];
+
 // The root-cause triage branch for a CI-insight candidate (PR3 generative loop).
 // A CI insight is not a feature request — it is EVIDENCE of a recurring CI problem
 // (a flaky test's toggled-SHA / passes-on-retry record, or a slow suite's p95
@@ -64,6 +92,7 @@ export function buildTriagePrompt(context: TriageAnswererContext): string {
     "----- END UNTRUSTED CANDIDATE -----",
     "",
     ...(isCiInsightSource(context.source) ? CI_INSIGHT_TRIAGE_LINES : []),
+    ...ENTITY_IDENTITY_TRIAGE_LINES,
     "Existing specs in this project's DAG (id · title · status):",
     existing === "" ? "(none)" : existing,
     "",

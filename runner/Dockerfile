@@ -101,6 +101,41 @@ RUN set -eu; \
   rm -rf /tmp/just "/tmp/${ASSET}"; \
   just --version
 
+# sem — the entity-level diff tool (tree-sitter entity extraction: every
+# function/class/method/type as a graph node with structural-hash identity, 26+
+# languages). An OPTIONAL ACCELERATOR for Tanren's answerer lanes: the read-only
+# Checker/Auditor + issue-triage agents shell `sem` over SSH in their sandbox to
+# reason at the ENTITY level (which functions/types changed, cosmetic-vs-structural,
+# blast radius) instead of raw lines — see docs/roadmap/entity-analysis-layer.md.
+# It is NOT hard-required: an agent gracefully falls back to the raw `git diff` when
+# sem cannot parse a stack (stack-flexible — Tanren bakes in no language assumption).
+# `cargo install` FAILS here on an OpenSSL native-dep, so we download the prebuilt
+# release binary and verify it against the release's combined `checksums.txt` (one
+# `<sha>  <asset>` line per asset). Pinned + arch-mapped; bumping is a one-line
+# --build-arg change. Source verified against upstream on 2026-06-10:
+#   https://github.com/Ataraxy-Labs/sem/releases/tag/v0.9.0
+ARG SEM_VERSION=0.9.0
+RUN set -eu; \
+  case "$(dpkg --print-architecture)" in \
+    amd64) SEM_ARCH="linux-x86_64" ;; \
+    arm64) SEM_ARCH="linux-arm64" ;; \
+    *) echo "unsupported arch for sem: $(dpkg --print-architecture)" >&2; exit 1 ;; \
+  esac; \
+  ASSET="sem-${SEM_ARCH}.tar.gz"; \
+  BASE="https://github.com/Ataraxy-Labs/sem/releases/download/v${SEM_VERSION}"; \
+  cd /tmp; \
+  curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 --connect-timeout 30 -o "${ASSET}" "${BASE}/${ASSET}"; \
+  curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 --connect-timeout 30 -o checksums.txt "${BASE}/checksums.txt"; \
+  EXPECTED="$(awk -v a="${ASSET}" '$2 == a {print $1}' checksums.txt)"; \
+  [ -n "${EXPECTED}" ] || { echo "sem: no checksum for ${ASSET} in checksums.txt" >&2; exit 1; }; \
+  ACTUAL="$(sha256sum "${ASSET}" | awk '{print $1}')"; \
+  [ "${EXPECTED}" = "${ACTUAL}" ] || { echo "sem sha256 mismatch: expected ${EXPECTED} got ${ACTUAL}" >&2; exit 1; }; \
+  mkdir -p /tmp/sem; \
+  tar xzf "${ASSET}" -C /tmp/sem; \
+  install -m 0755 /tmp/sem/sem /usr/local/bin/sem; \
+  rm -rf /tmp/sem "/tmp/${ASSET}" /tmp/checksums.txt; \
+  sem --version
+
 RUN useradd --create-home --shell /bin/bash --uid 1000 tanren \
   && mkdir -p /run/sshd /workspace /home/tanren/.ssh /tanren-runtime /tanren-runtime/codex-home \
   && chown -R tanren:tanren /workspace /home/tanren/.ssh /tanren-runtime \
