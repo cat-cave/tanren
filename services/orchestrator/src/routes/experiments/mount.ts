@@ -11,6 +11,7 @@ import { buildLiveBenchmarkScheduler, type LiveBenchmarkInfra } from "../../engi
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { createDoraRoutes } from "../dora/index.js";
 import { createCiInsightRoutes } from "../ciInsights/index.js";
+import { createIntegrationMetricsRoutes } from "../integrationMetrics/index.js";
 import { createExperimentRoutes } from "./index.js";
 
 export interface MountReportRoutesDeps {
@@ -29,6 +30,11 @@ export function mountReportRoutes(app: Hono<ActorContextEnv>, deps: MountReportR
   // Native CI-intelligence read-models: per-project CI analytics + native-queue
   // statistics, both pure reads over the existing event/run data plane.
   app.route("/orgs", createCiInsightRoutes({ pool: deps.pool }));
+  // Integration `rebase_vs_rebuild` read-model (tanren-owns-the-engine.md §3/§7/§8):
+  // per-`decision` rebase buckets with token/wall-clock cost joined at read time
+  // (the `integration.rebase` event carries only the categorical decision) — proves
+  // rebase < rebuild. A pure read over the existing event/cost/run data plane.
+  app.route("/orgs", createIntegrationMetricsRoutes({ pool: deps.pool }));
   // Benchmark report/CRUD surface (tanren-method-benchmark §4.2.4): author
   // experiments + cells, trigger the scheduler, read cell scorecards + compare.
   // With live infra wired, the scheduler runs real trials (real accept + await);

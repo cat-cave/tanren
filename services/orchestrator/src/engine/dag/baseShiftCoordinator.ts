@@ -127,7 +127,11 @@ export interface BaseShiftNodeReader {
   nodesForDependent(input: { projectId: string; dependent: SpeculativeDependent }): Promise<IntegrationNode[]>;
 }
 
-/** Emits the `integration.rebase` (`rebase_vs_rebuild`) instrumentation (Wave 3 reads it). */
+/**
+ * Emits the `integration.rebase` event — the categorical `decision` + kept `runId`
+ * the `rebase_vs_rebuild` read-side (engine/insights/integration) consumes, joining
+ * token/wall-clock cost at read time.
+ */
 export interface BaseShiftEventEmitter {
   emitRebase(input: {
     projectId: string;
@@ -440,7 +444,11 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
     });
   }
 
-  /** Emit the `integration.rebase` (`rebase_vs_rebuild`) instrumentation. */
+  /**
+   * Emit the `integration.rebase` event: the categorical `decision` + kept `runId`.
+   * It carries NO token/wall-clock figure — the `rebase_vs_rebuild` read-side joins
+   * that cost at read time (engine/insights/integration).
+   */
   private async emit(
     input: {
       projectId: string;
