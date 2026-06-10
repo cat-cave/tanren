@@ -27,6 +27,9 @@
     ".env.example"
   ],
   "words": [
+    "pypi",
+    "testflight",
+    "appstore",
     "Abramowitz",
     "undriven",
     "terminalizing",

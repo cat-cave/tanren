@@ -7,16 +7,19 @@
 // fails LOUD) and then SMOKE-CHECKS the resolved URL is HTTP-reachable. This makes
 // "a deploy happened" PROVEN, not merely triggered.
 //
-// SCOPE: this port covers the apex-relevant `direct_api` adapter class (the
-// Vercel/Fly providers). It carries the verify capability (poll-to-ready + URL
-// smoke) AND — the demos-as-evidence addition — `demoSurface`, which resolves the
-// EXERCISE SURFACE (a `DemoSurface`) the demo engine runs the spec's behavior checks
-// against, so demo evidence is tied to the spec's BEHAVIORS and not to the provider.
-// The rest of the lifecycle the direction doc proposes — buildArtifact / plan /
-// applyPreview / promote / rollback / teardownPreview / costEstimate, and the other
-// adapter classes (pulumi / mobile_release / package_release / manual_external) — is
-// DEFERRED. Each slots in as new methods on this port + new registry arms, exactly
-// like the IntegrationProvisioner / Allocator seams grow.
+// SCOPE: this port covers the full set of deploy adapter CLASSES — the apex-relevant
+// `direct_api` (Vercel/Fly), plus `pulumi` (IaC stack up/refresh), `package_release`
+// (publish to a package registry), `mobile_release` (submit to an app-distribution
+// channel), and `manual_external` (operator-attested out-of-band delivery). It carries
+// the verify capability (poll-to-ready + reachability smoke) AND — the demos-as-evidence
+// addition — `demoSurface`, which resolves the EXERCISE SURFACE (a `DemoSurface`) the
+// demo engine runs the spec's behavior checks against, so demo evidence is tied to the
+// spec's BEHAVIORS and not to the provider: a `direct_api`/`pulumi`/`manual_external`
+// (URL) deploy resolves to a `web_url`/`download`, a `package_release` to a `package`,
+// a `mobile_release` to an `app_channel`. The rest of the lifecycle the direction doc
+// proposes — buildArtifact / plan / applyPreview / promote / rollback / teardownPreview
+// / costEstimate — is DEFERRED; each slots in as new methods on this port + new registry
+// arms, exactly like the IntegrationProvisioner / Allocator seams grow.
 //
 // SECRET DISCIPLINE: this port never holds or returns a secret VALUE. The deploy
 // token is resolved INSIDE the wrapped `DeployProvisioner` (from the org grant's
@@ -93,17 +96,37 @@ export interface DeployRef {
  * NON-SECRET: a surface only ever carries a public reach handle (a URL, a package
  * coordinate) — never a token, never a credential ref.
  */
-export type DemoSurface = {
-  /** A live web endpoint the demo exercises over HTTP (the `direct_api` deploy URL). */
-  kind: "web_url";
-  /** The resolved live URL the deployed app serves at (concrete, no placeholder). */
-  url: string;
-};
-// FUTURE surface arms (deferred, NOT a refactor when they land — a new union member +
-// a new `demoSurface` arm on the owning adapter class):
-//   | { kind: "package"; registry: string; coordinate: string }
-//   | { kind: "app_channel"; platform: string; track: string }
-//   | { kind: "download"; artifactUrl: string }
+export type DemoSurface =
+  | {
+      /** A live web endpoint the demo exercises over HTTP (the `direct_api` / `pulumi` / `manual_external` URL). */
+      kind: "web_url";
+      /** The resolved live URL the deployed app serves at (concrete, no placeholder). */
+      url: string;
+    }
+  | {
+      /** A published package the demo installs to exercise (the `package_release` artifact). */
+      kind: "package";
+      /** The registry the package was published to (e.g. "npm" | "pypi" | "crates.io"). */
+      registry: string;
+      /** The installable coordinate within that registry (e.g. "@acme/web@1.2.3"). */
+      coordinate: string;
+    }
+  | {
+      /** An app-distribution channel the demo exercises (the `mobile_release` artifact). */
+      kind: "app_channel";
+      /** The mobile platform the build targets (e.g. "ios" | "android"). */
+      platform: string;
+      /** The distribution track the build was submitted to (e.g. "internal" | "testflight"). */
+      track: string;
+      /** The provider-side reference of the submitted build (e.g. the App Store Connect / Play build id). */
+      buildRef: string;
+    }
+  | {
+      /** A downloadable artifact the demo fetches (the `manual_external` out-of-band deliverable). */
+      kind: "download";
+      /** The resolved URL the artifact is downloadable at (concrete, no placeholder). */
+      artifactUrl: string;
+    };
 
 /**
  * The HTTP-reachability probe `verify`'s smoke step runs against the resolved URL —
