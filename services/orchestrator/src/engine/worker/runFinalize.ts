@@ -14,6 +14,7 @@ import { runWithJobOrgId, runWithOrgScope, runWithSystemScope } from "@tanren/db
 import type pg from "pg";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import { PgEventStore } from "../eventStore.js";
+import type { ClassifiedRunFailure } from "./runFailureClassifier.js";
 
 // A finalize-path best-effort write (event append / spec park / occupancy read)
 // is allowed to FAIL without masking the original run-failure path it runs
@@ -38,7 +39,11 @@ export async function finalizeRunRecoverable(
   pool: pg.Pool,
   writer: RunStateWriter | undefined,
   runId: string,
-  message: string,
+  // The PUBLIC-SAFE classified failure (code + stage + a FIXED safe summary). The
+  // worker classifies the raw caught error BEFORE calling here so the public
+  // `run.failed` + `dag.spec.needs_attention` events never carry the raw string;
+  // the raw detail lives off the public path (job_queue.failure_message + a log).
+  failure: ClassifiedRunFailure,
   orgId: string | null,
 ): Promise<void> {
   // When a remote writer is wired AND the run has an org, route
@@ -64,7 +69,7 @@ export async function finalizeRunRecoverable(
             specId: result.specId ?? "",
             projectId: result.projectId ?? "",
             eventType: "run.failed",
-            payload: { status: "halted", message },
+            payload: { status: "halted", failureCode: failure.code, stage: failure.stage, message: failure.summary },
           })
           .catch((error: unknown) => logFinalizeSwallow("run.failed append (remote)", { runId }, error)),
       );
@@ -75,9 +80,16 @@ export async function finalizeRunRecoverable(
       // requeue it. Best-effort — but a park FAILURE is LOGGED LOUDLY (a stranded
       // spec must never vanish silently), not swallowed.
       if (result.specId !== undefined && result.specId !== "") {
-        await parkStrandedSpecRemote(pool, writer, orgId, result.specId, result.projectId ?? "", runId, message).catch(
-          (error: unknown) =>
-            logFinalizeSwallow("stranded-spec park (remote)", { runId, specId: result.specId }, error),
+        await parkStrandedSpecRemote(
+          pool,
+          writer,
+          orgId,
+          result.specId,
+          result.projectId ?? "",
+          runId,
+          failure.summary,
+        ).catch((error: unknown) =>
+          logFinalizeSwallow("stranded-spec park (remote)", { runId, specId: result.specId }, error),
         );
       }
     }
@@ -109,7 +121,7 @@ export async function finalizeRunRecoverable(
           specId,
           projectId,
           eventType: "run.failed",
-          payload: { status: "halted", message },
+          payload: { status: "halted", failureCode: failure.code, stage: failure.stage, message: failure.summary },
         })
         .catch((error: unknown) => logFinalizeSwallow("run.failed append (in-process)", { runId }, error));
       // NEVER-STRAND (finding #3): park the spec at `needs_attention` (guarded so a
@@ -118,7 +130,7 @@ export async function finalizeRunRecoverable(
       // never left `in_flight` with a dead run. A park FAILURE is LOGGED LOUDLY (a
       // stranded spec must never vanish silently), not swallowed.
       if (specId !== "") {
-        await parkStrandedSpecInProcess(client, specId, projectId, runId, message).catch((error: unknown) =>
+        await parkStrandedSpecInProcess(client, specId, projectId, runId, failure.summary).catch((error: unknown) =>
           logFinalizeSwallow("stranded-spec park (in-process)", { runId, specId }, error),
         );
       }
@@ -126,9 +138,11 @@ export async function finalizeRunRecoverable(
   });
 }
 
-/** The reason a worker-level force-halt parks the spec (one parked-state message). */
-function strandMessage(runId: string, message: string): string {
-  return `run ${runId} force-halted by the worker (${message}); the spec cannot self-heal — requeue after addressing the cause`;
+// The reason a worker-level force-halt parks the spec (one parked-state message).
+// `summary` is the PUBLIC-SAFE classified failure summary (never the raw caught-error
+// string) — this is a public `dag.spec.needs_attention.message`, so it must not leak.
+function strandMessage(runId: string, summary: string): string {
+  return `run ${runId} force-halted by the worker (${summary}); the spec cannot self-heal — requeue after addressing the cause`;
 }
 
 /** The `dag.spec.needs_attention` payload a worker-level strand emits (source `strand`). */

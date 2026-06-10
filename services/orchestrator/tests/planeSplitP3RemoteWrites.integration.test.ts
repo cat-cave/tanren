@@ -147,6 +147,66 @@ describeDb("plane-split P3 — control-plane run-state write endpoints (real PG,
     });
   });
 
+  it("(2c) append-event accepts the REDACTED run.failed shape and rejects a stale shape with 422 (never 500)", async () => {
+    // The error-redaction hardening made run.failed PUBLIC-safe: RunFailedPayload is
+    // strict and requires failureCode + stage + a safe summary (engine/worker/
+    // runFailureClassifier.ts). The route schema admits `payload: unknown`, so the
+    // store's registry parser is the authoritative per-type check. This proves BOTH
+    // directions server-side:
+    //   • the real redacted shape lands (204), and
+    //   • a STALE old `{ status, message }` shape (the regression that 500'd the P3
+    //     smoke) is a controlled 422 with issues — never an opaque 500.
+    const runId = "run_p3_run_failed_redacted";
+    await seedRun(ownerPool(), runId);
+    const app = createInternalRunStateWriteRoutes({ pool: runtimePool(), verifier: new AllowAllPeerVerifier() });
+
+    const ok = await app.request(
+      "/internal/append-event",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          runId,
+          specId: SPEC,
+          projectId: PROJECT,
+          orgId: ORG,
+          eventType: "run.failed",
+          payload: { status: "halted", failureCode: "credential", stage: "credentials", message: "redacted summary" },
+        }),
+      },
+      { incoming: { socket: {} } },
+    );
+    expect(ok.status).toBe(204);
+
+    const stale = await app.request(
+      "/internal/append-event",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          runId,
+          specId: SPEC,
+          projectId: PROJECT,
+          orgId: ORG,
+          eventType: "run.failed",
+          // The legacy shape — missing the required failureCode/stage.
+          payload: { status: "halted", message: "raw error string" },
+        }),
+      },
+      { incoming: { socket: {} } },
+    );
+    expect(stale.status).toBe(422);
+    expect((await stale.json()) as { error: string }).toMatchObject({ error: "invalid_event_payload" });
+
+    // Exactly one redacted run.failed row landed; the stale request wrote nothing.
+    const rows = await ownerPool().query<{ payload: { failureCode?: string; message?: string } }>(
+      "SELECT payload FROM events WHERE run_id = $1 AND event_type = 'run.failed'",
+      [runId],
+    );
+    expect(rows.rowCount).toBe(1);
+    expect(rows.rows[0]?.payload).toMatchObject({ failureCode: "credential", stage: "credentials" });
+  });
+
   it("(3) record-cost persists the same cost_records row + cost.resolved event", async () => {
     const runId = "run_p3_cost";
     await seedRun(ownerPool(), runId);

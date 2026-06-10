@@ -364,7 +364,17 @@ async function proveMtlsWriteEndpoints(): Promise<void> {
       projectId,
       orgId,
       eventType: "run.failed",
-      payload: { status: "halted", message: "plane-split P3 write-endpoint proof" },
+      // run.failed is PUBLIC + redacted: its payload carries ONLY a closed-vocabulary
+      // failureCode + stage + a FIXED safe summary (never a raw error string) — see
+      // engine/worker/runFailureClassifier.ts. The server-side append re-parses against
+      // RunFailedPayload (strict, all four fields required), so the proof must send the
+      // real redacted shape, not the legacy `{ status, message }`.
+      payload: {
+        status: "halted",
+        failureCode: "internal",
+        stage: "run",
+        message: "plane-split P3 write-endpoint proof",
+      },
     },
     true,
   );

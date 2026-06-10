@@ -2,7 +2,13 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
+    "failureCode": {
+      "type": "string"
+    },
     "message": {
+      "type": "string"
+    },
+    "stage": {
       "type": "string"
     },
     "status": {
@@ -11,6 +17,8 @@
   },
   "required": [
     "status",
+    "failureCode",
+    "stage",
     "message"
   ],
   "type": "object",

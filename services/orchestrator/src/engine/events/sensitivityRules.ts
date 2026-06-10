@@ -38,13 +38,15 @@ export const sensitivityRules: SensitivityRule[] = [
     ["status", "public"],
     ["outcome", "public"],
   ]),
-  // `message` stays "public": for a bootstrap failure it is `messageOf(error)` ===
-  // `WorkspaceBootstrapError.message`, which (post) carries the ORIGINAL
-  // prelude-free command — the Plane-B app-env prelude is injected only at the SSH
-  // substrate boundary, never into the command string the error message embeds. So
-  // an app-secret VALUE cannot reach this payload. "public" remains correct.
+  // run.failed is PUBLIC, and the worker-level catch wraps a WHOLE run, so the raw
+  // caught error (URLs / refs / command fragments / secret-adjacent text) is NEVER
+  // put here: the worker classifies it into a closed-vocab `failureCode` + `stage` +
+  // a FIXED safe `message` summary (worker/runFailureClassifier); the raw detail goes
+  // to the INTERNAL job_queue.failure_message + a redacted log. All three are safe.
   ...rulesFor("run.failed", [
     ["status", "public"],
+    ["failureCode", "public"],
+    ["stage", "public"],
     ["message", "public"],
   ]),
 
@@ -475,8 +477,7 @@ export const sensitivityRules: SensitivityRule[] = [
   ...strandSensitivityRules,
   ...ciIntelSensitivityRules,
   ...gateSensitivityRules,
-  // Tanren-native templating (wave 1): the registry lifecycle events — all
-  // non-secret descriptors (public).
+  // Tanren-native templating (wave 1): registry lifecycle events — non-secret (public).
   ...templatesSensitivityRules,
 ];
 
