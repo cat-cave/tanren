@@ -4,7 +4,7 @@ import { createAllocatorApi } from "./api.js";
 import { HttpDockerEngineClient, isHttpStatusError } from "./dockerEngine.js";
 import { PgRunnerStore } from "./pgRunnerStore.js";
 import { RunnerLifecycle } from "./runnerLifecycle.js";
-import { AbandonedRunSweeper } from "./sweeper.js";
+import { RunnerSweeper } from "./sweeper.js";
 import { requireEnv, requireSecretEnv } from "./requireEnv.js";
 import { createLogger } from "./logger.js";
 
@@ -30,6 +30,7 @@ const networkName = parsedEnv.TANREN_ALLOCATOR_NETWORK;
 const hostSshPort = parsedEnv.TANREN_ALLOCATOR_HOST_SSH_PORT;
 const sshHostnameTemplate = parsedEnv.TANREN_ALLOCATOR_SSH_HOSTNAME_TEMPLATE;
 const sweeperIntervalMs = parsedEnv.TANREN_ALLOCATOR_SWEEPER_INTERVAL_MS;
+const unclaimedGraceMs = parsedEnv.TANREN_ALLOCATOR_UNCLAIMED_GRACE_MS;
 
 async function main(): Promise<void> {
   const docker = new HttpDockerEngineClient();
@@ -67,9 +68,16 @@ async function main(): Promise<void> {
     securityOpt: parsedEnv.TANREN_RUNNER_SECURITY_OPT.split(",").filter((part) => part !== ""),
   });
 
-  const sweeper = new AbandonedRunSweeper({
+  // The periodic runner SWEEPER (the §4 reconciler): reclaims STUCK/LEAKED runners
+  // the normal release path missed — a runner whose owning run went terminal without
+  // a release, a runner past the run-hours TTL ceiling (the apex leak guard), or a
+  // wedged run-less allocation past the grace window. Each reclaim emits a durable,
+  // org-scoped `runner.swept` audit (store.recordSwept) + a structured log + a count.
+  const sweeper = new RunnerSweeper({
     lifecycle,
+    recordSwept: (audit) => store.recordSwept(audit),
     maxRunHours,
+    unclaimedGraceMs,
     intervalMs: sweeperIntervalMs,
   });
   sweeper.start();
@@ -93,8 +101,32 @@ async function main(): Promise<void> {
     },
   });
 
-  serve({ fetch: app.fetch, port });
+  const server = serve({ fetch: app.fetch, port });
   log.info("allocator listening", { port });
+
+  // Graceful shutdown (H10): on a termination signal, stop accepting requests and
+  // AWAIT the sweeper's in-flight tick before exit, so worker teardown never races a
+  // live sweep (a release / DB op outliving the pool close). Registered once per
+  // signal; idempotent on the sweeper side.
+  let shuttingDown = false;
+  const shutdown = (signal: string): void => {
+    if (shuttingDown) {
+      return;
+    }
+    shuttingDown = true;
+    log.info("allocator shutting down", { signal });
+    server.close();
+    sweeper
+      .stop()
+      .catch((error: unknown) => {
+        log.error("sweeper stop failed during shutdown", {}, error);
+      })
+      .finally(() => {
+        process.exit(0);
+      });
+  };
+  process.once("SIGTERM", () => shutdown("SIGTERM"));
+  process.once("SIGINT", () => shutdown("SIGINT"));
 }
 
 /**

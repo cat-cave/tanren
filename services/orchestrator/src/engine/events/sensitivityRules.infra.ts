@@ -32,6 +32,13 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["target.hostKeyFingerprint", "redacted"],
   ]),
   ...rulesFor("runner.released", [["runnerId", "public"]]),
+  // Sweeper reclaim proof: runner id + (nullable) run id + reason are all NON-SECRET
+  // resource handles / a fixed enum — never a credential value.
+  ...rulesFor("runner.swept", [
+    ["runnerId", "public"],
+    ["runId", "public"],
+    ["reason", "public"],
+  ]),
   // Security-baseline cleanup-proof + deploy.triggered artifact ref (the
   // audit-baseline rules), all public — see ./sensitivityRules.audit.ts.
   ...auditBaselineSensitivityRules,

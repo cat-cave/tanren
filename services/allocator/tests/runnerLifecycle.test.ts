@@ -2,9 +2,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { ContainerInspectResult, CreateContainerSpec, DockerEngineClient } from "../src/dockerEngine.js";
 import { RunnerLifecycle, type RunnerRecord, type RunnerStore } from "../src/runnerLifecycle.js";
 
-// allocate() now resolves the runner's PUBLIC authorized_keys line via the
-// fail-closed requireRunnerAuthorizedKey() (no silent `?? ""`). Every allocate
-// test needs the env present; the dedicated "fails loud" test clears it locally.
+// allocate() resolves the runner's PUBLIC authorized_keys via the fail-closed
+// requireRunnerAuthorizedKey() (no silent `?? ""`); every allocate test needs it set.
 const ORIGINAL_AUTHORIZED_KEY = process.env["TANREN_RUNNER_AUTHORIZED_KEY"];
 beforeAll(() => {
   process.env["TANREN_RUNNER_AUTHORIZED_KEY"] = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOrchestratorPub orchestrator";
@@ -86,11 +85,11 @@ class FakeDocker implements DockerEngineClient {
 
 class InMemoryRunnerStore implements RunnerStore {
   readonly records: RunnerRecord[] = [];
-
   async insert(record: RunnerRecord): Promise<void> {
     this.records.push({ ...record });
   }
   async recordAllocated(): Promise<void> {}
+  async recordSwept(): Promise<void> {}
   async markReleased(runnerId: string): Promise<RunnerRecord | undefined> {
     const record = this.records.find((r) => r.runnerId === runnerId && !r.released);
     if (record === undefined) {
@@ -99,13 +98,16 @@ class InMemoryRunnerStore implements RunnerStore {
     record.released = true;
     return record;
   }
-
   async findActive(runnerId: string): Promise<RunnerRecord | undefined> {
     return this.records.find((r) => r.runnerId === runnerId && !r.released);
   }
-
   async listActiveOlderThan(threshold: Date): Promise<RunnerRecord[]> {
     return this.records.filter((r) => !r.released && r.createdAt < threshold);
+  }
+
+  // The stuck-sweep is exercised in sweeper.test.ts; this store stubs it out.
+  async listStuck(): Promise<never[]> {
+    return [];
   }
 }
 
@@ -154,8 +156,7 @@ describe("RunnerLifecycle.allocate", () => {
     const store = new InMemoryRunnerStore();
     const lifecycle = baseLifecycle(docker, store);
 
-    // The greenfield-interview shape: a synthetic handle, runless, no persisted
-    // project. Naming (volumes/container/runnerId/sshHost) still uses the handle.
+    // The greenfield-interview shape: synthetic handle, runless, no persisted project (naming still uses the handle).
     const result = await lifecycle.allocate({
       runId: "forge_org_test_abcd1234",
       projectId: "org:org_test",
@@ -170,8 +171,7 @@ describe("RunnerLifecycle.allocate", () => {
       "tanren-runner-forge_org_test_abcd1234-workspace",
       "tanren-runner-forge_org_test_abcd1234-codex-home",
     ]);
-    // The persisted runners row has NULL run_id/project_id (no FK target); org_id
-    // is the real org; the synthetic handle is kept for naming/recovery only.
+    // The persisted runners row has NULL run_id/project_id (no FK target); org_id is real; the handle is kept for naming/recovery.
     expect(store.records[0]?.runId).toBeNull();
     expect(store.records[0]?.projectId).toBeNull();
     expect(store.records[0]?.orgId).toBe("org_test");

@@ -7,7 +7,7 @@
 
 import type pg from "pg";
 import { runWithOrgScope } from "@tanren/db";
-import type { AllocationAudit } from "./runnerLifecycle.js";
+import type { AllocationAudit, SweptAudit } from "./runnerLifecycle.js";
 
 const allocatorName = "sidecar-docker";
 
@@ -31,6 +31,33 @@ export async function recordAllocatedEvent(appPool: pg.Pool, audit: AllocationAu
           allocator: allocatorName,
           imageSha: audit.imageSha,
           runless: audit.runless,
+        }),
+      ],
+    );
+  });
+}
+
+/**
+ * Append the durable `runner.swept` audit event for a sweeper reclaim, org-scoped
+ * (same RLS scope as the `runners` row). The payload carries the discriminated
+ * stuck-state `reason` plus the NON-SECRET runner/run handles — the proof a leaked
+ * runner the normal release path missed was reconciled LOUDLY, never silently.
+ * `run_id` is NULL for a wedged (unclaimed-grace) allocation never tied to a `runs`
+ * row. The event type is in the `events_event_type_check` vocabulary (migration 0029).
+ */
+export async function recordSweptEvent(appPool: pg.Pool, audit: SweptAudit): Promise<void> {
+  await runWithOrgScope(appPool, audit.orgId, async (client) => {
+    await client.query(
+      `INSERT INTO events (run_id, project_id, org_id, event_type, payload)
+       VALUES ($1, $2, $3, 'runner.swept', $4::jsonb)`,
+      [
+        audit.runId,
+        audit.projectId,
+        audit.orgId,
+        JSON.stringify({
+          runnerId: audit.runnerId,
+          runId: audit.runId,
+          reason: audit.reason,
         }),
       ],
     );

@@ -181,7 +181,9 @@ const SCRIPT: InterviewRoundOutput[] = [
       // authors the justfile from THIS (no hardcoded stack).
       lifecycle: {
         stack: "ts/pnpm",
-        bootstrap: "pnpm install --frozen-lockfile",
+        // Fresh-repo-safe (apex v32): the greenfield bootstrap is a non-frozen
+        // install that generates the lockfile on a cold checkout.
+        bootstrap: "pnpm install",
         tier1: "pnpm lint && pnpm typecheck",
         tier2: "pnpm build && pnpm test -- --reporter=junit --outputFile=reports/junit.xml",
         tier3:

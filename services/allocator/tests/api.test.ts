@@ -57,6 +57,7 @@ class MemoryStore implements RunnerStore {
     // The API tests assert HTTP behavior, not the audit row (covered in the
     // lifecycle unit tests); a no-op stub satisfies the RunnerStore contract.
   }
+  async recordSwept(): Promise<void> {}
   async markReleased(runnerId: string): Promise<RunnerRecord | undefined> {
     const record = this.records.find((r) => r.runnerId === runnerId && !r.released);
     if (record === undefined) return undefined;
@@ -67,6 +68,9 @@ class MemoryStore implements RunnerStore {
     return this.records.find((r) => r.runnerId === runnerId && !r.released);
   }
   async listActiveOlderThan(): Promise<RunnerRecord[]> {
+    return [];
+  }
+  async listStuck(): Promise<never[]> {
     return [];
   }
 }

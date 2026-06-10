@@ -20,7 +20,11 @@ import {
 
 const TS_LIFECYCLE: CaptureLifecycle = {
   stack: "ts/pnpm",
-  bootstrap: "pnpm install --frozen-lockfile",
+  // FRESH-REPO-SAFE BOOTSTRAP (apex v32): a from-scratch greenfield repo has no
+  // lockfile yet, so the first bootstrap is a plain (non-frozen) install that
+  // GENERATES the lockfile — never `--frozen-lockfile`, which would fail the cold
+  // bootstrap (ERR_PNPM_NO_LOCKFILE) before any lockfile exists.
+  bootstrap: "pnpm install",
   tier1: "pnpm lint && pnpm typecheck",
   tier2: "pnpm build && pnpm test -- --reporter=junit --outputFile=reports/junit.xml",
   tier3: "pnpm lint && pnpm typecheck && pnpm build && pnpm test",
@@ -77,9 +81,23 @@ describe("buildScaffoldDescription · narrows the writer to project CODE (contra
   it("a TS capture surfaces pnpm commands and ZERO Rust", () => {
     const desc = buildScaffoldDescription(TS_LIFECYCLE);
     expect(desc).toContain("ts/pnpm");
-    expect(desc).toContain("pnpm install --frozen-lockfile");
+    // The bootstrap command is surfaced VERBATIM as captured — and the captured
+    // greenfield bootstrap is a fresh-repo-safe non-frozen install.
+    expect(desc).toContain("pnpm install");
     expect(desc).toContain("pnpm lint && pnpm typecheck");
     expect(desc).not.toContain("cargo");
+  });
+
+  it("steers the writer to a fresh-repo bootstrap that commits the generated lockfile (apex v32)", () => {
+    const desc = buildScaffoldDescription(TS_LIFECYCLE);
+    // The greenfield scaffold's captured bootstrap is NON-frozen (the prompt no
+    // longer suggests --frozen-lockfile), so the cold `just bootstrap` works.
+    expect(desc).not.toContain("--frozen-lockfile");
+    // The writer is explicitly told the bootstrap runs on a fresh repo and the
+    // generated lockfile must be committed (not gitignored/omitted).
+    expect(desc.toLowerCase()).toMatch(/fresh repo|clean checkout/u);
+    expect(desc.toLowerCase()).toMatch(/commit the (generated )?lockfile|lockfile.*commit/u);
+    expect(desc.toLowerCase()).toMatch(/not gitignore|do not gitignore|not.*omit/u);
   });
 
   it("a Rust capture surfaces cargo commands and ZERO pnpm/vitest (no hardcoded stack)", () => {
@@ -120,5 +138,15 @@ describe("buildScaffoldAcceptanceCriteria · asserts the writer's narrowed job, 
     expect(criteria.some((c) => /(just tier-2|just tier-3).*exits 0/u.test(c))).toBe(false);
     // No stack literal hardcoded into the criteria beyond the declared stack label.
     expect(joined).not.toContain("pnpm");
+  });
+
+  it("requires the from-scratch bootstrap to generate + COMMIT the lockfile (apex v32)", () => {
+    const criteria = buildScaffoldAcceptanceCriteria(TS_LIFECYCLE);
+    const lockfileCriterion = criteria.find((c) => /lockfile/u.test(c) && /commit/iu.test(c));
+    expect(lockfileCriterion).toBeDefined();
+    expect(lockfileCriterion?.toLowerCase()).toMatch(/no lockfile|clean checkout|fresh/u);
+    expect(lockfileCriterion?.toLowerCase()).toMatch(/generates the lockfile|reproducible/u);
+    // Stack-agnostic: no frozen-install literal baked into the criteria.
+    expect(criteria.join("\n")).not.toContain("--frozen-lockfile");
   });
 });
