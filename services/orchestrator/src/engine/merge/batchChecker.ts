@@ -442,10 +442,11 @@ export function resolveGithubStaticRef(projectConfig: unknown, orgConfig: unknow
     if (projectRef !== undefined) return projectRef;
     // Parsed clean but no project-level githubCredentialRef bound → org default.
   }
+  // Org default. Mirrors `installationFromOrgConfig`'s no-silent-fallback
+  // contract: an ABSENT config legitimately resolves to undefined ("no org
+  // default ref"), but a PRESENT-yet-UNPARSEABLE config is corruption —
+  // `migrateOrgConfig` throws and that throw PROPAGATES (loud, fail-closed),
+  // never swallowed to a silent undefined that quietly disables GitHub creds.
   if (orgConfig === null || orgConfig === undefined) return undefined;
-  try {
-    return migrateOrgConfig(orgConfig).defaultCredentials?.github_token;
-  } catch {
-    return undefined;
-  }
+  return migrateOrgConfig(orgConfig).defaultCredentials?.github_token;
 }

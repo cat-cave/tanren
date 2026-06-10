@@ -25,7 +25,7 @@ export interface ClaimRunnerInput {
    * was previously derived in-statement from `(SELECT org_id FROM runs WHERE
    * run_id = $runId)`, which returns NULL for that runless handle and made the
    * org-scoped INSERT violate the `runners` WITH CHECK policy (the apex onboarding
-   * interview 500'd here). `null` is the EXPLICIT legacy/unscoped-run case (the
+   * interview 500'd here). `null` is the EXPLICIT system / null-org job case (the
    * worker's system scope / BYPASSRLS), NOT a missing value.
    */
   orgId: string | null;
@@ -55,7 +55,7 @@ export class PgRunnerStore implements RunnerStore {
     // for table "runners"`). Routing through `withJobOrgScope` opens a SHORT
     // `runWithOrgScope` from the per-job org-id for THIS statement, so the
     // INSERT carries `app.current_org_id` and the policy admits the run's own
-    // runner row. A legacy/unscoped run (org_id NULL) runs under the worker's
+    // runner row. A system / null-org job (org_id NULL) runs under the worker's
     // per-job SYSTEM scope, so this routes through a short `runWithSystemScope`
     // (BYPASSRLS) instead — never an implicit unscoped bare-pool write.
     await withJobOrgScope(this.pool, (client) =>
@@ -66,7 +66,7 @@ export class PgRunnerStore implements RunnerStore {
         // matching `runs` row, so that subquery returned NULL and the org-scoped
         // INSERT violated the runners WITH CHECK policy. The runner's org is the
         // org the allocate request belongs to, full stop. `null` is the explicit
-        // legacy/unscoped-run case, written under the worker's BYPASSRLS scope.
+        // system / null-org job case, written under the worker's BYPASSRLS scope.
         //
         // run_id ($2) and project_id ($3) are likewise the EXPLICIT values, and
         // are NULL for a runless / project-less Forge ideation allocation — both

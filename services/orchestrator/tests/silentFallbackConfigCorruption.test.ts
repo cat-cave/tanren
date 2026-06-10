@@ -29,6 +29,12 @@ const CORRUPT_V1_BODY = { version: 1, governancePosture: "not-a-posture" } as co
 // An ABSENT config: the DB column default a fresh project carries.
 const ABSENT_PROJECT_CONFIG = {} as const;
 
+// A present-but-CORRUPT ORG config: an unsupported version. The project config is
+// ABSENT here so resolution legitimately reaches the org-default branch — which
+// must PROPAGATE the corruption, never swallow it to a silent undefined that
+// quietly disables GitHub creds.
+const CORRUPT_ORG_CONFIG = { version: 99 } as const;
+
 const ORG_CONFIG_WITH_DEFAULT = {
   version: 1,
   defaultCredentials: { github_token: "credential/github/org-default" },
@@ -74,6 +80,21 @@ describe("resolveGithubStaticRef — PROPAGATE on a corrupt project config (wron
     it(`${name}: a clean project config with a bound ref returns that ref`, () => {
       const projectConfig = { version: 1, credentials: { githubCredentialRef: "credential/github/project" } };
       expect(resolve(projectConfig, ORG_CONFIG_WITH_DEFAULT)).toBe("credential/github/project");
+    });
+
+    it(`${name}: PROPAGATES on a corrupt ORG config (never silently disables creds)`, () => {
+      // Project config ABSENT → resolution falls through to the org default,
+      // where a present-but-unparseable org config must THROW (loud, fail-closed),
+      // not be swallowed to undefined.
+      expect(() => resolve(ABSENT_PROJECT_CONFIG, CORRUPT_ORG_CONFIG)).toThrow(/unknown config version/iu);
+    });
+
+    it(`${name}: an ABSENT org config resolves to undefined (legitimate "no org default")`, () => {
+      // A missing `organizations.config` reads back as `undefined`; bind it through a
+      // typed value so the lint stays clean while still exercising the undefined case.
+      const missingOrgConfig: unknown = undefined as unknown;
+      expect(resolve(ABSENT_PROJECT_CONFIG, null)).toBeUndefined();
+      expect(resolve(ABSENT_PROJECT_CONFIG, missingOrgConfig)).toBeUndefined();
     });
   }
 });

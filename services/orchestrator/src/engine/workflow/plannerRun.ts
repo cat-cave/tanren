@@ -282,7 +282,7 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
     identitySecretRef: context.identitySecretRef,
     // The run's org. Threaded into the allocate request so a backend that
     // persists a `runners` row (the sidecar allocator service) writes it under
-    // the org's RLS scope. Undefined for legacy/unscoped runs (org_id NULL).
+    // the org's RLS scope. Undefined for system / null-org jobs (org_id NULL).
     orgId: context.orgId ?? undefined,
   });
   await appendEvent("runner.allocated", runnerPayload(allocation));

@@ -56,7 +56,7 @@ export interface ActorContextEnv {
   Variables: {
     actor?: ActorContext;
     // RLS wave R1: the request's org session-context root, derived from the
-    // resolved ActorContext. `null` for a legacy/unscoped actor (no org). The
+    // resolved ActorContext. `null` for a system / null-org actor (no org). The
     // org-scoped DB path (`runWithOrgScope`) keys off this so the per-request
     // `SET LOCAL app.current_org_id` always matches the authenticated actor.
     requestOrgId?: string | null;
@@ -207,7 +207,7 @@ function runScoped(c: Context<ActorContextEnv>, next: Next): Promise<void> {
 
 /**
  * The authenticated request's org (the session-context root), or `null` when
- * the actor has no org (legacy/unscoped). Handlers adopting the org-scoped DB
+ * the actor has no org (a system / null-org actor). Handlers adopting the org-scoped DB
  * path read this rather than re-deriving the org from a route param.
  */
 export function getRequestOrgId(c: Context<ActorContextEnv>): string | null {

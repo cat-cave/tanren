@@ -306,7 +306,7 @@ function mergeQuarantineEnv(
 
 /**
  * Ingest the gate's JUnit report in-process, best-effort. Skipped when there is no
- * head-sha anchor (fake-SSH unit path) or no org (a legacy/unscoped run — the
+ * head-sha anchor (fake-SSH unit path) or no org (a system / null-org job — the
  * `ci_test_results` row is org-stamped). The run already runs under the org's ambient
  * scope, so `input.pool` self-scopes the INSERT. A read/parse error is logged + swallowed
  * (the per-test grain is an enrichment, never a gate-blocker), so it can NEVER fail the run.

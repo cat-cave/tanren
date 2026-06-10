@@ -40,7 +40,7 @@ const jobOrgStorage = new AsyncLocalStorage<string>();
 
 // The SYSTEM counterpart of `jobOrgStorage`: a lightweight per-job marker (holds
 // NO connection) that flags the ambient work as a genuinely cross-org / null-org
-// SYSTEM job — the legacy/unscoped (`org_id NULL`) run whose tenant ops have no
+// SYSTEM job — the system / null-org (`org_id NULL`) job whose tenant ops have no
 // org GUC to carry. Like `jobOrgStorage` it is safe to keep open across the
 // job's minutes of external I/O; each tenant op then opens its OWN short
 // `runWithSystemScope` (the BYPASSRLS system pool) from it. This makes the
@@ -77,7 +77,7 @@ export function getJobOrgId(): string | undefined {
  * whose tenant ops must run on the BYPASSRLS system pool. Holds NO connection
  * (safe across the job's external I/O); each tenant op opens a SHORT
  * `runWithSystemScope` from this marker. The EXPLICIT system entry-point for a
- * legacy/unscoped run, replacing the old implicit bare-pool handoff.
+ * system / null-org job, replacing the old implicit bare-pool handoff.
  */
 export function runWithSystemJobScope<T>(work: () => Promise<T>): Promise<T> {
   return jobSystemStorage.run(true, work);

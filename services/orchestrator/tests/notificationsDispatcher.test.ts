@@ -354,20 +354,14 @@ describe("NotificationDispatcher", () => {
 });
 
 describe("effectiveSeverityFor", () => {
-  it("promotes checker.verdict to warn when passed=false", () => {
+  it("renders checker.verdict at its base severity (findings-only — no passed-based promotion)", () => {
+    // The verdict payloads are FINDINGS-ONLY now (no `passed` flag), so there is no
+    // per-instance promotion — the event takes its registry default (`info`).
     const sev = effectiveSeverityFor({
       eventType: "checker.verdict",
-      payload: { runId: "r", taskId: "t", subtaskIndex: 0, passed: false, reasoning: "no" },
+      payload: { runId: "r", taskId: "t", subtaskIndex: 0, complete: false, reasoning: "no", findings: [] },
     });
-    expect(sev).toBe("warn");
-  });
-
-  it("renders checker.verdict as ok when passed=true", () => {
-    const sev = effectiveSeverityFor({
-      eventType: "checker.verdict",
-      payload: { runId: "r", taskId: "t", subtaskIndex: 0, passed: true, reasoning: "yes" },
-    });
-    expect(sev).toBe("ok");
+    expect(sev).toBe("info");
   });
 
   it("uses the registry default for non-verdict events", () => {
@@ -380,19 +374,13 @@ describe("effectiveSeverityFor", () => {
     ).toBe("fail");
   });
 
-  it("promotes auditor.verdict to warn when passed=false and ok when passed=true", () => {
+  it("renders auditor.verdict at its base severity (findings-only — no passed-based promotion)", () => {
     expect(
       effectiveSeverityFor({
         eventType: "auditor.verdict",
-        payload: { runId: "r", taskId: "t", subtaskIndex: 0, passed: false, reasoning: "no" },
+        payload: { runId: "r", findings: [] },
       }),
-    ).toBe("warn");
-    expect(
-      effectiveSeverityFor({
-        eventType: "auditor.verdict",
-        payload: { runId: "r", taskId: "t", subtaskIndex: 0, passed: true, reasoning: "ok" },
-      }),
-    ).toBe("ok");
+    ).toBe("info");
   });
 
   it("does not promote run.completed when the outcome lacks 'fail'", () => {

@@ -105,11 +105,11 @@ describe("PgRunnerStore.claim", () => {
     ]);
   });
 
-  it("passes a null orgId through verbatim (the explicit legacy/unscoped-run case)", async () => {
+  it("passes a null orgId through verbatim (the explicit system / null-org job case)", async () => {
     const pool = new RecordingPool();
     await runWithSystemJobScope(() => new PgRunnerStore(poolAs(pool)).claim({ ...claimInput, orgId: null }));
 
-    // null is the explicit "legacy/unscoped run" marker — bound as $4 unchanged,
+    // null is the explicit "system / null-org job" marker — bound as $4 unchanged,
     // written under the worker's BYPASSRLS system scope. Not coerced to a value.
     expect(pool.queries[0]!.params[3]).toBeNull();
   });

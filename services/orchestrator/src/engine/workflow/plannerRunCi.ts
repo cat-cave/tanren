@@ -205,7 +205,18 @@ export function buildReGateCi(input: RunPlannerLoopInput, ctx: MergeGateRunConte
       });
       await publishMergeVerdict(input, ctx, outcome, rebasedHeadSha);
       return { status: outcome.passed ? "passed" : "failed" };
-    } catch {
+    } catch (error) {
+      // FAIL-CLOSED: a re-gate throw blocks the merge (the rebased head is
+      // unverified). Keep the failed verdict, but log the swallowed error LOUD
+      // first — never discard it silently (no_silent_fallbacks).
+      log.error(
+        "merge re-gate failed (fail-closed; merge blocked on unverified rebase)",
+        {
+          runId: input.context.runId,
+          ...(rebasedHeadSha !== undefined && { rebasedHeadSha }),
+        },
+        error,
+      );
       return { status: "failed" };
     }
   };

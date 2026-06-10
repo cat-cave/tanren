@@ -14,7 +14,7 @@ export interface JobEnvelope<TPayload = unknown> {
   // queue stays OUTSIDE RLS, so this is the worker's tenant BOOTSTRAP source —
   // the claim reads it to scope `loadRunExecutionContext` to the job's org
   // instead of doing an RLS-protected `runs` read. Undefined for a
-  // legacy/unscoped job (e.g. the hello fixture, a CLI caller with no org).
+  // system / null-org job (e.g. the hello fixture, a CLI caller with no org).
   orgId?: string;
 }
 
