@@ -47,13 +47,21 @@ export const SpecStatus = z.enum([
 export type SpecStatus = z.infer<typeof SpecStatus>;
 
 const allowedSpecTransitions: Record<SpecStatus, ReadonlyArray<SpecStatus>> = {
-  // A fresh spec is `open`; claiming a slot moves it `in_flight`.
-  open: ["in_flight"],
+  // A fresh spec is `open`; claiming a slot moves it `in_flight`. The operator
+  // cancel-spec action (workflow/cancelSpec) can cancel a not-yet-started `open`
+  // spec directly (`open → cancelled`) — the operator decided it should not run.
+  // A still-`open` dependent of a CANCELLED ancestor is escalated to
+  // `needs_attention` for a human decision (the escalation discipline — never a
+  // silent cascade-cancel), so `open → needs_attention` is also legal.
+  open: ["in_flight", "cancelled", "needs_attention"],
   // The strand-reconciler flips `in_flight → open` (re-enqueue) and, on bounded
   // escalation, `in_flight → needs_attention` (give up loudly). A merge can also
   // land an in-flight spec directly at `merged` (the native-queue drive path).
   in_flight: ["review", "merged", "halted", "cancelled", "open", "needs_attention"],
-  review: ["merged", "halted"],
+  // A spec whose PR is open + awaiting merge can still be operator-cancelled
+  // (`review → cancelled`) — the operator abandons the in-review work — or parked
+  // for a human decision when its ancestor was cancelled (`review → needs_attention`).
+  review: ["merged", "halted", "cancelled", "needs_attention"],
   halted: ["in_flight", "cancelled"],
   merged: [],
   cancelled: [],

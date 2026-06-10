@@ -34,8 +34,11 @@ export const RunOutcome = z.enum([
 export type RunOutcome = z.infer<typeof RunOutcome>;
 
 // Legal status transitions per the spec. A successful run lands at `completed`.
+// The operator cancel-spec/cancel-run action (workflow/cancelSpec) can cancel a run
+// from ANY non-terminal status — including a still-`queued` run that never started —
+// so `queued → cancelled` is legal (the operator decided the work should not proceed).
 const allowedRunTransitions: Record<RunStatus, ReadonlyArray<RunStatus>> = {
-  queued: ["running"],
+  queued: ["running", "cancelled"],
   running: ["halted", "completed", "failed", "cancelled"],
   halted: ["running", "cancelled"],
   completed: [],

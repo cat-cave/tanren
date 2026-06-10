@@ -132,6 +132,14 @@ const SEVERITY_OVERRIDES: Partial<Record<EventName, Severity>> = {
   // actually reaches a person rather than silently parking.
   "dag.spec.needs_attention": "fail",
 
+  // Operator cancel-spec/cancel-run: a DELIBERATE human action (the operator chose to
+  // cancel), not a failure — `info` so the matrix rows default off but the records stay
+  // auditable. Mirrors the operator-initiated recovery lineage above. (The dependents a
+  // cancel parks each emit their OWN `dag.spec.needs_attention` at `fail`, so the human
+  // decision the cascade-block raises still reaches the operator.)
+  "spec.cancelled": "info",
+  "run.cancelled": "info",
+
   // A corrupt persisted project config the walker read while resolving a NON-merge
   // eagerness knob (it proceeded at the safe default, but the corruption is real and
   // operator-fixable) → `warn`: surfaced rather than silently parked at `info`.

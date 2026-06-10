@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "cancelledBy": {
+      "type": "string"
+    },
+    "dependentsParked": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "fromStatus": {
+      "type": "string"
+    },
+    "specId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "specId",
+    "fromStatus",
+    "cancelledBy",
+    "dependentsParked"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.spec.cancelled"
+}
