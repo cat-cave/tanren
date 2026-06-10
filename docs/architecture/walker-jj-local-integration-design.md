@@ -147,7 +147,7 @@ NULL` predicate in `resolveSpeculativeState`, `mergeDispatch.ts:257`, and
 
 The stack is **DAG-ordered** (ancestors before dependents; the walker already passes
 `unmergedAncestors` in DAG order, `walker.ts:290`). For a diamond `A → {B,C} → D`, `D`'s
-`ancestor_stack` is the topo-ordered `[A, B, C]` (A first; B,C in any stable order the DAG
+`ancestor_stack` is the topologically-ordered `[A, B, C]` (A first; B,C in any stable order the DAG
 sort fixes — order is load-bearing for the assembly + the `memberKey`,
 `contracts/integrationNodes.ts:88`). jj `rebaseOnto` stacks them transitively; a B-vs-C
 conflict surfaces as the §2.1 conflict outcome and `D` is held until the pair reconciles
@@ -186,7 +186,7 @@ ancestors land (no unreviewed ancestor code reaches `main` early), unchanged.
 The PR base is always the **single immediate ancestor** (the last stack entry); the deeper
 ancestors are visible transitively through that ancestor's own stacked PR. On each ancestor
 merge, retarget walks ONE step down the stack. For a diamond, `D`'s base retargets `C → B →
-A → main` (or whatever topo order the stack fixed) as each lands — each step is a single
+A → main` (or whatever topological order the stack fixed) as each lands — each step is a single
 `retargetPullRequestBase` call. No "merge ref" is ever created or cleaned up, so the
 `cleanupIntegrationBranch` dance (`mergeDispatcher.ts:222`, `mergeLandPaths.ts:116,235`)
 disappears (§4, §5).
