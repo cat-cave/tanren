@@ -178,6 +178,18 @@ describe("buildRunCredentialScoping (env → seam)", () => {
   it("returns undefined for a non-Vault backend (nothing to de-privilege)", () => {
     expect(buildRunCredentialScoping({ TANREN_SECRET_STORE: "memory" })).toBeUndefined();
   });
+
+  it("pins the scoped-token TTL from the INJECTED env (r6 §2 — not the global process.env)", () => {
+    const scoping = buildRunCredentialScoping({
+      TANREN_SECRET_STORE: "vault",
+      VAULT_ADDR: "http://vault.internal:8200",
+      VAULT_TOKEN: "broad-live-token",
+      TANREN_MAX_RUN_HOURS: "9",
+    });
+    // The seam carries the TTL derived from the INJECTED ceiling (9h), so the mint
+    // can use it verbatim without re-reading the global env.
+    expect(scoping?.ttlSeconds).toBe(9 * 3_600);
+  });
 });
 
 describe("resolveScopedRunCredentials / applyScopedRunCredentials", () => {
@@ -221,7 +233,15 @@ describe("runPlannerLoopWorkflow — per-run credential de-privilege wiring", ()
       allocator,
       ssh,
       secrets: broadSecrets,
-      credentialScoping: { minter, addr: "http://vault:8200", fetchImpl: vault.fetch },
+      // r6 §2: the scoped-token TTL is pinned on the seam from the INJECTED boot env
+      // (here `TANREN_MAX_RUN_HOURS=8`), NOT re-read from the global `process.env` at
+      // mint time — the minted event must carry exactly this value (asserted below).
+      credentialScoping: {
+        minter,
+        addr: "http://vault:8200",
+        fetchImpl: vault.fetch,
+        ttlSeconds: resolveScopedRunTokenTtlSeconds({ TANREN_MAX_RUN_HOURS: "8" }),
+      },
       vcsProvider: vcsProviderOver(passingGitHub()),
       context: ctx,
       escapeHatches: { maxWriterIterPerSubtask: 5, maxRetriesPerTransientFailure: 3 },
@@ -241,7 +261,10 @@ describe("runPlannerLoopWorkflow — per-run credential de-privilege wiring", ()
     expect(minted).toHaveLength(1);
     const payload = minted[0]!.payload as { refPaths: string[]; ttlSeconds: number; numUses: number };
     expect(payload.refPaths).toContain(GH_REF);
-    expect(payload.ttlSeconds).toBeGreaterThan(0);
+    // r6 §2: the minted TTL EQUALS the injected-env ceiling (8h), proving the token
+    // lifetime derives from the seam's pinned env value — not a re-read of the global
+    // process.env (which here has no TANREN_MAX_RUN_HOURS, so a re-read would give 6h).
+    expect(payload.ttlSeconds).toBe(8 * 3_600);
     expect(payload.numUses).toBeGreaterThan(0);
     // No token value anywhere in the event stream.
     expect(JSON.stringify(events.events)).not.toContain("child::");

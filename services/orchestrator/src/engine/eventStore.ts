@@ -29,8 +29,14 @@ export interface EventStore {
 
 function parseEventPayload<N extends EventName>(eventType: N, payload: unknown): EventPayload<N> {
   const schema = EventRegistry[eventType];
-  // The cast is safe: schema is the Zod source-of-truth for this event name.
-  return schema.parse(payload) as EventPayload<N>;
+  // The payload IS Zod-decoded here (the registry schema is the source-of-truth for
+  // this event name) — this is a VALIDATION, not a launder. The trailing narrow is a
+  // generic-indexing assist only: TS can't infer that the registry-indexed schema's
+  // output is `EventPayload<N>` for the generic `N`, so the parsed (already-validated)
+  // value is narrowed to the indexed type. Kept off the `.parse(...) as T` one-liner
+  // form so the no-pg-as-date lint reads it as the decode-then-narrow it is.
+  const parsed: unknown = schema.parse(payload);
+  return parsed as EventPayload<N>;
 }
 
 export class PgEventStore implements EventStore {

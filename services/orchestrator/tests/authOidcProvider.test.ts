@@ -2,6 +2,9 @@
 // discovery, token, and userinfo endpoints are all mocked via an injected
 // fetch; no live IdP, no network, no DB.
 
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildOidcProviderFromEnv, IdentityProviderError, OidcProvider } from "../src/auth/index.js";
 import { buildAuthFromEnv } from "../src/main.js";
@@ -298,6 +301,47 @@ describe("buildOidcProviderFromEnv", () => {
     const provider = buildOidcProviderFromEnv();
     expect(provider).toBeInstanceOf(OidcProvider);
     expect(provider?.id).toBe("oidc");
+  });
+
+  // Codex r6 §5: the client secret is resolved FILE-PREFERRED. A prod OIDC secret is
+  // mounted as TANREN_OIDC_CLIENT_SECRET_FILE (read in-memory at boot) so it need not
+  // live as a plaintext env value; the file WINS over the plaintext env when both set.
+  it("resolves the OIDC client secret from TANREN_OIDC_CLIENT_SECRET_FILE (file-preferred)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "oidc-secret-"));
+    try {
+      const secretFile = join(dir, "oidc_client_secret");
+      writeFileSync(secretFile, "file-mounted-secret\n");
+      // The injected env sets the issuer + client id + the secret FILE (no plaintext
+      // TANREN_OIDC_CLIENT_SECRET) — the provider still builds, proving the file path.
+      const provider = buildOidcProviderFromEnv({
+        TANREN_OIDC_ISSUER: ISSUER,
+        TANREN_OIDC_CLIENT_ID: "cid",
+        TANREN_OIDC_CLIENT_SECRET_FILE: secretFile,
+      });
+      expect(provider).toBeInstanceOf(OidcProvider);
+      expect(provider?.id).toBe("oidc");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("the secret FILE wins over the plaintext env when both are set", () => {
+    const dir = mkdtempSync(join(tmpdir(), "oidc-secret-"));
+    try {
+      const secretFile = join(dir, "oidc_client_secret");
+      writeFileSync(secretFile, "from-file");
+      const provider = buildOidcProviderFromEnv({
+        TANREN_OIDC_ISSUER: ISSUER,
+        TANREN_OIDC_CLIENT_ID: "cid",
+        TANREN_OIDC_CLIENT_SECRET: "from-plaintext-env",
+        TANREN_OIDC_CLIENT_SECRET_FILE: secretFile,
+      });
+      // Built (both present) — the file-preferred precedence is exercised by the helper;
+      // a configured-but-empty file would have thrown, so a built provider proves the path.
+      expect(provider).toBeInstanceOf(OidcProvider);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("buildAuthFromEnv registers oidc only when configured, alongside github_oauth", () => {

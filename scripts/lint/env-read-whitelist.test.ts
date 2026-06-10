@@ -77,6 +77,58 @@ describe("env-read-whitelist lint", () => {
     await expect(runEnvReadWhitelistCheck({ root })).resolves.toEqual([]);
   });
 
+  // ── VARIABLE-AWARE secret gate (Codex r6 §3) ──────────────────────────────
+  // A whitelisted FILE is not a license to read a secret VALUE directly: a
+  // `*_SECRET` / `*_TOKEN` / `*_PRIVATE_KEY` read is forbidden even there unless it
+  // goes through a file-preferred helper (which names the var as an ARGUMENT, so the
+  // scan never sees a `process.env` literal) or is explicitly classified non-secret.
+  const WHITELISTED = "services/orchestrator/src/auth/oidcEnv.ts";
+
+  it("FLAGS a direct `process.env[*_SECRET]` read EVEN IN a whitelisted file (r6 §3)", async () => {
+    const root = await createFixture({
+      [WHITELISTED]: 'const s = process.env["TANREN_X_SECRET"];\n',
+    });
+    const violations = await runEnvReadWhitelistCheck({ root });
+    expect(violations).toHaveLength(1);
+    expect(violations[0]?.file).toBe(WHITELISTED);
+    expect(violations[0]?.reason).toBe("secret-direct-read");
+  });
+
+  it("PASSES the SAME secret value resolved via the file-preferred helper (argument, not a process.env read)", async () => {
+    const root = await createFixture({
+      // The helper names the var as an argument — no `process.env[...]` / `env(...)`
+      // literal for the scan to flag; the file-mount path wins, plaintext is dev-only.
+      [WHITELISTED]: 'const s = optionalSecretFromFileOrEnv(env, "TANREN_X_SECRET", "x secret");\n',
+    });
+    await expect(runEnvReadWhitelistCheck({ root })).resolves.toEqual([]);
+  });
+
+  it("FLAGS a direct `*_TOKEN` read but NOT its `*_TOKEN_FILE` / `*_TOKEN_REF` indirections", async () => {
+    const flagged = await createFixture({
+      [WHITELISTED]: 'const t = process.env["TANREN_X_TOKEN"];\n',
+    });
+    const v = await runEnvReadWhitelistCheck({ root: flagged });
+    expect(v).toHaveLength(1);
+    expect(v[0]?.reason).toBe("secret-direct-read");
+
+    // `_FILE` (a mount path) and `_REF` (a store handle) are NOT secret values; a
+    // direct read of those is governed by the ordinary file/var rules, not forbidden.
+    // (Read in a WHITELISTED file → the TANREN_*-file rule passes them.)
+    const indirections = await createFixture({
+      [WHITELISTED]: 'const f = process.env["TANREN_X_TOKEN_FILE"];\nconst r = process.env["TANREN_X_TOKEN_REF"];\n',
+    });
+    await expect(runEnvReadWhitelistCheck({ root: indirections })).resolves.toEqual([]);
+  });
+
+  it("PASSES a secret-SHAPED but explicitly-classified public key (TANREN_RUNNER_AUTHORIZED_KEY)", async () => {
+    const root = await createFixture({
+      // requireRunnerAuthorizedKey.ts is whitelisted; the var is classified `public`.
+      ["services/allocator/src/requireRunnerAuthorizedKey.ts"]:
+        'const k = process.env["TANREN_RUNNER_AUTHORIZED_KEY"];\n',
+    });
+    await expect(runEnvReadWhitelistCheck({ root })).resolves.toEqual([]);
+  });
+
   it("PASSES the real repo tree (the widened scan governs every existing read)", async () => {
     // Run against the actual repo root: every shipped env read — bare AND helper —
     // is already accounted for, so the widened lint must stay green.

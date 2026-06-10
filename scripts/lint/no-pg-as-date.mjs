@@ -6,14 +6,15 @@
 // type. The fix is to decode raw rows through a Zod row schema (z.coerce.date())
 // at the boundary; this lint makes a reverted fix fail the build.
 //
-// SCOPE (deliberately narrow): the `services/orchestrator/src/routes/runs/**`
-// read seam cleaned by the first RC-6 wave, PLUS the three forge decode sites
-// cleaned by the forge-decode wave — `engine/forge/turns.ts` (`decodeTurnRow`),
-// `proposals.ts` (`decodeRow`), and `threads.ts` (`decodeThreadRow`), each now
-// decoding raw rows through a Zod row schema (z.coerce.date() + enum cells). The
-// forge files are listed as EXACT paths (not the whole `engine/forge/` dir) so
-// the lint guards the decode sites without clashing with the INSERT/index logic
-// or the sibling files in that dir. Widen further in a follow-up.
+// SCOPE (r6 §4 — widened to ALL shipped DB / repository read seams): every
+// `.ts(x)` under `services/orchestrator/src/routes/**` (the HTTP read seams) and
+// under `db/**` (the schema/decode layer), PLUS the store/repository decode files
+// matched by `engine/**/*store*.ts` (every `*store*`/`*Store*` module — runner /
+// event / notification / inbox / audit / hold-ceiling / issue-claim stores), PLUS
+// the forge-tools event read seam (`engine/forge/tools/read.ts`). These are the
+// files that decode raw pg rows; a re-introduced `as Date` / `.parse(...) as Enum`
+// launder in ANY of them now fails the build. (The earlier narrow scope —
+// `routes/runs/**` + three exact forge files — is subsumed by these globs.)
 //
 // FORBIDDEN forms inside the scoped dirs:
 //   - `... as Date`                       (the laundering cast this audit removed)
@@ -26,11 +27,21 @@ import { glob, readFile, stat } from "node:fs/promises";
 import { relative, resolve } from "node:path";
 import { exit } from "node:process";
 
-// Scoped directories (prefix match) — every `.ts(x)` beneath is linted.
-const SCOPED_DIRS = ["services/orchestrator/src/routes/runs/"];
+// Scoped directories (prefix match) — every `.ts(x)` beneath is linted. Widened
+// (r6 §4) from `routes/runs/` to the WHOLE HTTP read seam (`routes/`) and the DB
+// schema/decode layer (`db/`).
+const SCOPED_DIRS = ["services/orchestrator/src/routes/", "db/"];
 
-// Scoped EXACT files — guarded individually so the lint covers a specific decode
-// site without pulling its sibling files in the same dir into scope.
+// Scoped GLOBS — store/repository decode modules anywhere under `engine/`. Matches
+// `*store*`/`*Store*` (runner/event/notification/inbox/audit/hold-ceiling/issue-claim
+// stores). A new store decode site is in scope automatically (no per-file listing).
+const SCOPED_GLOBS = [
+  "services/orchestrator/src/engine/**/*store*.ts",
+  "services/orchestrator/src/engine/**/*Store*.ts",
+];
+
+// Scoped EXACT files — specific decode sites outside the dirs/globs above (forge
+// row-decoders that are neither `routes/`/`db/` nor `*store*`-named).
 const SCOPED_FILES = [
   "services/orchestrator/src/engine/forge/turns.ts",
   "services/orchestrator/src/engine/forge/proposals.ts",
@@ -49,8 +60,26 @@ function normalizePath(path) {
   return path.split("\\").join("/");
 }
 
+// `engine/**/*store*.ts` as a predicate: any `.ts` whose basename contains
+// `store`/`Store`, anywhere under the orchestrator engine tree.
+function matchesStoreGlob(file) {
+  if (!file.startsWith("services/orchestrator/src/engine/") || !file.endsWith(".ts")) {
+    return false;
+  }
+  const base = file.slice(file.lastIndexOf("/") + 1);
+  return /store/iu.test(base);
+}
+
+// Tests / specs are fixtures, not shipped decode seams — never linted.
+function isTestFile(file) {
+  return /\.(?:test|spec)\.(?:ts|tsx)$/u.test(file);
+}
+
 function inScope(file) {
-  return SCOPED_DIRS.some((dir) => file.startsWith(dir)) || SCOPED_FILES.includes(file);
+  if (isTestFile(file)) {
+    return false;
+  }
+  return SCOPED_DIRS.some((dir) => file.startsWith(dir)) || SCOPED_FILES.includes(file) || matchesStoreGlob(file);
 }
 
 // Strip a `//` line comment / `*`-prefixed block-comment body so a `as Date`
@@ -100,6 +129,12 @@ async function collectScopedFiles(root) {
   const files = new Set();
   for (const dir of SCOPED_DIRS) {
     for await (const entry of glob(`${dir}**/*.{ts,tsx}`, { cwd: root })) {
+      const file = normalizePath(entry);
+      if (file !== SELF) files.add(file);
+    }
+  }
+  for (const pattern of SCOPED_GLOBS) {
+    for await (const entry of glob(pattern, { cwd: root })) {
       const file = normalizePath(entry);
       if (file !== SELF) files.add(file);
     }
