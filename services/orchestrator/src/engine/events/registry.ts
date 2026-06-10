@@ -123,10 +123,12 @@ import {
 } from "./schemas/gate.js";
 import {
   JobDeadLetteredPayload,
+  RunCancelledPayload,
   RunCompletedPayload,
   RunFailedPayload,
   RunQueuedPayload,
   RunStartedPayload,
+  SpecCancelledPayload,
   TaskCompletedPayload,
   TaskFailedPayload,
   TaskQueuedPayload,
@@ -179,7 +181,9 @@ export const EventRegistry = {
 
   // queue hardening: a job whose retry budget is exhausted is dead-lettered (terminal).
   "job.dead_lettered": JobDeadLetteredPayload,
-
+  // Operator cancel-spec/cancel-run audit (terminal cancel + runner release; schemas/lifecycle.ts).
+  "spec.cancelled": SpecCancelledPayload,
+  "run.cancelled": RunCancelledPayload,
   // Planner role (single-pass + subtask emission)
   "planner.started": PlannerStartedPayload,
   "planner.completed": PlannerCompletedPayload,
@@ -217,19 +221,16 @@ export const EventRegistry = {
   // Runner allocation
   "runner.allocated": RunnerAllocatedPayload,
   "runner.released": RunnerReleasedPayload,
-  // Security-baseline cleanup-proof: the audit event of the run-end release —
-  // whether the runner was actually torn down + any residual resources to reconcile.
+  // Security-baseline cleanup-proof: the run-end release audit (torn down + residuals).
   "release.finalized": ReleaseFinalizedPayload,
   "runner.failed": RunnerFailedPayload,
   "allocator.requested": AllocatorRequestedPayload,
   "allocator.allocated": AllocatorAllocatedPayload,
   "allocator.failed": AllocatorFailedPayload,
-
   // Workspace
   "workspace.prepared": WorkspacePreparedPayload,
   "workspace.git_captured": WorkspaceGitCapturedPayload,
   "workspace.failed": WorkspaceFailedPayload,
-
   // Credentials
   "credential.requested": CredentialRequestedPayload,
   "credential.loaded": CredentialLoadedPayload,
@@ -239,7 +240,6 @@ export const EventRegistry = {
   // Managed-hosting dimension D: a per-run scoped Vault child token was minted
   // (ref paths + TTL/uses; never the token value).
   "credential.scoped_token_minted": CredentialScopedTokenMintedPayload,
-
   // Cost resolution
   "cost.resolved": CostResolvedPayload,
   "cost.failed": CostFailedPayload,

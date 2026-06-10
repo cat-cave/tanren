@@ -21,6 +21,7 @@ import {
   SpecNotRunnableError,
   SpecNotFoundError,
 } from "../../engine/workflow/projectSpec.js";
+import { cancelSpec } from "../../engine/workflow/cancelSpec.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { actorCanAccessOrg, actorIsOrgAdmin } from "../orgs/access.js";
 
@@ -218,6 +219,37 @@ export function createSpecRoutes(options: SpecRoutesOptions) {
       }
       if (error instanceof SpecNotInAttentionError) {
         return c.json({ error: "spec_not_in_attention", message: error.message }, 409);
+      }
+      if (error instanceof ProjectAccessDeniedError) {
+        return c.json({ error: "project_access_denied", message: error.message }, 403);
+      }
+      throw error;
+    }
+  });
+
+  // The operator cancel-spec/cancel-run control (the §4 fix-soon leftover the apex
+  // pre-run audit surfaced — a human-drivable control the operator API lacked). An
+  // operator who decides a spec should NOT proceed (a mis-scoped spec, a dead-end run
+  // burning credits) cancels it cleanly: the spec (and its active run) transitions to
+  // the TERMINAL `cancelled` state, the DAG slot frees (the walker never re-enqueues a
+  // cancelled spec), and the run's claimed runner is RELEASED (no leaked sandbox). A
+  // dependent of a cancelled spec is NOT silently dropped — it parks at
+  // `needs_attention` for a human DECISION (the escalation discipline). A MUTATION, so
+  // it is org-ADMIN scoped (mirrors the requeue write). IDEMPOTENT: cancelling an
+  // already-terminal spec is a 200 no-op (`cancelled: false`), never an error.
+  app.post("/:orgId/projects/:projectId/specs/:specId/cancel", async (c) => {
+    const actor = requireActor(c);
+    const orgId = c.req.param("orgId");
+    const specId = c.req.param("specId");
+    if (!actorIsOrgAdmin(actor, orgId)) {
+      return c.json({ error: "org_admin_required" }, 403);
+    }
+    try {
+      const result = await cancelSpec(options.pool, { specId }, { ...actor, orgId });
+      return c.json(result, 200);
+    } catch (error) {
+      if (error instanceof SpecNotFoundError) {
+        return c.json({ error: "spec_not_found", message: error.message }, 404);
       }
       if (error instanceof ProjectAccessDeniedError) {
         return c.json({ error: "project_access_denied", message: error.message }, 403);

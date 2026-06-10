@@ -99,3 +99,41 @@ export const JobDeadLetteredPayload = z
     message: z.string(),
   })
   .strict();
+
+// Operator cancel events (spec.cancelled / run.cancelled). The operator
+// cancel-spec/cancel-run action (workflow/cancelSpec) is a human-drivable control: it
+// transitions a spec (and its active run) to the TERMINAL `cancelled` state, frees the
+// DAG slot (the walker treats `cancelled` as terminal, like `merged`), and RELEASES any
+// allocated runner (no leaked sandbox). These two events make that operator decision
+// DURABLE + actor-stamped. Every field is non-secret: spec/run ids are run lineage, the
+// prior status is an enum label, `cancelledBy` is the operator's user id, and the
+// dependent ids / runner id carry no diff content, credentials, or command output.
+
+// spec.cancelled: the operator cancelled the spec — it goes terminal `cancelled`,
+// freeing its DAG slot (the walker never re-enqueues a cancelled spec). `fromStatus` is
+// the status it was cancelled from; `dependentsParked` names the direct dependents
+// escalated to `needs_attention` as a result (the human-escalation discipline — a
+// dependent is NEVER silently dropped).
+export const SpecCancelledPayload = z
+  .object({
+    specId: z.string(),
+    fromStatus: z.string(),
+    cancelledBy: z.string(),
+    dependentsParked: z.array(z.string()),
+  })
+  .strict();
+
+// run.cancelled: the spec's active run was cancelled as part of the spec cancel — it
+// goes terminal `cancelled` and its claimed runner is RELEASED (the runner-row release
+// seam; the workspace reaper then reclaims the sandbox now the run is terminal).
+// `runnerReleased` records whether a runner was actually found + released (false when
+// the run had no claimed runner — e.g. a still-`queued` run), so a leak is never silent.
+export const RunCancelledPayload = z
+  .object({
+    runId: z.string(),
+    fromStatus: z.string(),
+    cancelledBy: z.string(),
+    runnerId: z.string().optional(),
+    runnerReleased: z.boolean(),
+  })
+  .strict();

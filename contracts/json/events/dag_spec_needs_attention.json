@@ -87,6 +87,31 @@
         "message"
       ],
       "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "cancelledAncestorSpecId": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "source": {
+          "const": "cancelled_ancestor",
+          "type": "string"
+        },
+        "specId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "specId",
+        "cancelledAncestorSpecId",
+        "message"
+      ],
+      "type": "object"
     }
   ],
   "x-tanren-schema-id": "tanren.event.dag.spec.needs_attention"

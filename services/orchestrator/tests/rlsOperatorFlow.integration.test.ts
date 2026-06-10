@@ -317,4 +317,101 @@ describeDb("RLS operator flow — the control-plane CRUD walk under the tanren_a
     ]);
     expect(specRow.rows[0]?.status).toBe("open");
   });
+
+  // STEP 8 — OPERATOR CANCEL (the §4 fix-soon leftover the apex pre-run audit surfaced).
+  // POST …/specs/:id/cancel transitions the spec (+ its active run) to the terminal
+  // `cancelled` state, frees the DAG slot, and parks a live dependent at
+  // `needs_attention` (never a silent cascade-cancel) — all under enforced `tanren_app`.
+  it("8a. cancels a spec + its in-flight run, releasing the runner + parking a dependent", async () => {
+    // An ancestor spec with an in-flight run + a claimed runner, and a dependent that
+    // depends on it (owner = RLS-exempt seeding, mirroring the strand-park above).
+    const ancestor = await app.request(`/orgs/${orgId}/projects/${projectId}/specs`, {
+      method: "POST",
+      headers: authHeaders({ "content-type": "application/json" }),
+      body: JSON.stringify({ title: "Cancel me", description: "dead-end", acceptanceCriteria: ["x"] }),
+    });
+    expect(ancestor.status).toBe(201);
+    const ancestorId = ((await ancestor.json()) as { specId: string }).specId;
+
+    const dependent = await app.request(`/orgs/${orgId}/projects/${projectId}/specs`, {
+      method: "POST",
+      headers: authHeaders({ "content-type": "application/json" }),
+      body: JSON.stringify({
+        title: "Depends on cancelled",
+        description: "downstream",
+        acceptanceCriteria: ["y"],
+        dependsOn: [ancestorId],
+      }),
+    });
+    expect(dependent.status).toBe(201);
+    const dependentId = ((await dependent.json()) as { specId: string }).specId;
+
+    // Put the ancestor in-flight with a running run + a claimed runner.
+    const runId = `run_cancel_${Date.now()}`;
+    const runnerId = `runner_cancel_${Date.now()}`;
+    await ownerPool.query("UPDATE specs SET status = 'in_flight' WHERE spec_id = $1", [ancestorId]);
+    await ownerPool.query(
+      `INSERT INTO runs (run_id, spec_id, project_id, org_id, trigger, branch, status)
+       VALUES ($1, $2, $3, $4, 'api', 'tanren/cancel', 'running')`,
+      [runId, ancestorId, projectId, orgId],
+    );
+    await ownerPool.query(
+      `INSERT INTO runners (runner_id, run_id, project_id, org_id, allocator, status, ssh_host, ssh_port,
+                            host_key_fingerprint, image_sha)
+       VALUES ($1, $2, $3, $4, 'local-docker', 'claimed', 'localhost', 22, 'fp', 'sha')`,
+      [runnerId, runId, projectId, orgId],
+    );
+
+    const res = await app.request(`/orgs/${orgId}/projects/${projectId}/specs/${ancestorId}/cancel`, {
+      method: "POST",
+      headers: authHeaders({ "content-type": "application/json" }),
+    });
+    expect(res.status).toBe(200);
+    const cancelBody = (await res.json()) as {
+      cancelled: boolean;
+      status: string;
+      run?: { runId: string; runnerReleased: boolean };
+      dependentsParked: string[];
+    };
+    expect(cancelBody).toMatchObject({ cancelled: true, status: "cancelled" });
+    expect(cancelBody.run).toMatchObject({ runId, runnerReleased: true });
+    expect(cancelBody.dependentsParked).toContain(dependentId);
+
+    // Ground truth (owner): the spec + its run are terminal-cancelled, the runner is
+    // released (no leak), and the dependent is parked at needs_attention (not dropped).
+    const specRow = await ownerPool.query<{ status: string }>("SELECT status FROM specs WHERE spec_id = $1", [
+      ancestorId,
+    ]);
+    expect(specRow.rows[0]?.status).toBe("cancelled");
+    const runRow = await ownerPool.query<{ status: string }>("SELECT status FROM runs WHERE run_id = $1", [runId]);
+    expect(runRow.rows[0]?.status).toBe("cancelled");
+    const runnerRow = await ownerPool.query<{ status: string }>("SELECT status FROM runners WHERE runner_id = $1", [
+      runnerId,
+    ]);
+    expect(runnerRow.rows[0]?.status).toBe("released");
+    const depRow = await ownerPool.query<{ status: string }>("SELECT status FROM specs WHERE spec_id = $1", [
+      dependentId,
+    ]);
+    expect(depRow.rows[0]?.status).toBe("needs_attention");
+    // The loud cancelled-ancestor escalation event fired for the dependent.
+    const escalation = await ownerPool.query<{ payload: { source: string } }>(
+      "SELECT payload FROM events WHERE spec_id = $1 AND event_type = 'dag.spec.needs_attention'",
+      [dependentId],
+    );
+    expect(escalation.rows[0]?.payload.source).toBe("cancelled_ancestor");
+  });
+
+  it("8b. cancel on an already-cancelled spec is an idempotent 200 no-op (not an error)", async () => {
+    // Re-cancel the spec from 8a (now terminal). A clean no-op, never a 409/500.
+    const cancelledId = (
+      await ownerPool.query<{ spec_id: string }>("SELECT spec_id FROM specs WHERE status = 'cancelled' LIMIT 1")
+    ).rows[0]?.spec_id;
+    const res = await app.request(`/orgs/${orgId}/projects/${projectId}/specs/${cancelledId}/cancel`, {
+      method: "POST",
+      headers: authHeaders({ "content-type": "application/json" }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { cancelled: boolean; status: string };
+    expect(body).toMatchObject({ cancelled: false, status: "cancelled" });
+  });
 });
