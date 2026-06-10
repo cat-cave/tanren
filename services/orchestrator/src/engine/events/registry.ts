@@ -50,6 +50,7 @@ import {
   RunnerAllocatedPayload,
   RunnerFailedPayload,
   RunnerReleasedPayload,
+  RunnerSweptPayload,
   UsageAccountingObservedPayload,
   UsageReadFailedPayload,
   UsageTokenAccountingFailedPayload,
@@ -225,9 +226,10 @@ export const EventRegistry = {
   ...loopEventRegistry,
   ...templateEventRegistry,
 
-  // Runner allocation
+  // Runner allocation (+ periodic-sweeper reclaim of a STUCK/LEAKED runner)
   "runner.allocated": RunnerAllocatedPayload,
   "runner.released": RunnerReleasedPayload,
+  "runner.swept": RunnerSweptPayload,
   // Security-baseline cleanup-proof: the run-end release audit (torn down + residuals).
   "release.finalized": ReleaseFinalizedPayload,
   "runner.failed": RunnerFailedPayload,
@@ -244,8 +246,7 @@ export const EventRegistry = {
   "credential.failed": CredentialFailedPayload,
   "credential.configured": CredentialConfiguredPayload,
   "credential.github.configured": CredentialGithubConfiguredPayload,
-  // Managed-hosting dimension D: a per-run scoped Vault child token was minted (ref paths +
-  // TTL/uses; never the token value).
+  // Managed-hosting dimension D: a per-run scoped Vault child token was minted (ref paths + TTL/uses; never the token value).
   "credential.scoped_token_minted": CredentialScopedTokenMintedPayload,
   // Cost resolution
   "cost.resolved": CostResolvedPayload,
@@ -309,8 +310,7 @@ export const EventRegistry = {
   // up-to-date enforcement: branch behind base → auto-rebase + re-gate CI.
   "merge.behind": MergeBehindPayload,
   "merge.rebased": MergeRebasedPayload,
-  // intent-preserving conflict resolution: resolver invoked → resolved (re-gated) or
-  // irreconcilable (one spec re-planned, intent kept alive).
+  // intent-preserving conflict resolution: resolver invoked → resolved (re-gated) or irreconcilable (one spec re-planned, intent kept alive).
   "merge.conflict.resolving": MergeConflictResolvingPayload,
   "merge.conflict.resolved": MergeConflictResolvedPayload,
   "merge.conflict.irreconcilable": MergeConflictIrreconcilablePayload,

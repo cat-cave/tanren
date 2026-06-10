@@ -37,6 +37,7 @@ class InMemoryRunnerStore implements RunnerStore {
     this.records.push({ ...record });
   }
   async recordAllocated(): Promise<void> {}
+  async recordSwept(): Promise<void> {}
   async markReleased(): Promise<RunnerRecord | undefined> {
     return undefined;
   }
@@ -44,6 +45,9 @@ class InMemoryRunnerStore implements RunnerStore {
     return undefined;
   }
   async listActiveOlderThan(): Promise<RunnerRecord[]> {
+    return [];
+  }
+  async listStuck(): Promise<never[]> {
     return [];
   }
 }

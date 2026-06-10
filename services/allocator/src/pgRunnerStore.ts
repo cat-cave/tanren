@@ -1,7 +1,16 @@
 import type pg from "pg";
 import { runWithOrgScope } from "@tanren/db";
-import { volumeNamesFor, type AllocationAudit, type RunnerRecord, type RunnerStore } from "./runnerLifecycle.js";
-import { recordAllocatedEvent } from "./pgAllocatorEvents.js";
+import {
+  volumeNamesFor,
+  type AllocationAudit,
+  type RunnerReclaimReason,
+  type RunnerRecord,
+  type RunnerStore,
+  type StuckRunner,
+  type StuckThresholds,
+  type SweptAudit,
+} from "./runnerLifecycle.js";
+import { recordAllocatedEvent, recordSweptEvent } from "./pgAllocatorEvents.js";
 
 const allocatorName = "sidecar-docker";
 
@@ -181,6 +190,50 @@ export class PgRunnerStore implements RunnerStore {
     );
     return result.rows.map(materialize);
   }
+
+  async listStuck(thresholds: StuckThresholds): Promise<StuckRunner[]> {
+    // Cross-org SYSTEM read (the sweeper reconciles across ALL tenants), so this
+    // runs on the BYPASSRLS system pool — same scope rationale as the abandoned
+    // sweep / runner_id-keyed release.
+    //
+    // The query returns ONLY runners in a genuine STUCK state, each tagged with the
+    // discriminated reason; a HEALTHY in-flight runner (owning run still
+    // non-terminal AND within TTL AND not a wedged run-less allocation) matches none
+    // of the predicates and is NEVER returned. The LEFT JOIN keeps a runner whose
+    // run row is absent (the run-less / wedged path).
+    //
+    // Reason precedence (the CASE picks the FIRST matching, mirroring the WHERE):
+    //   1. terminal_run   — run_id set AND the joined run is in a TERMINAL status.
+    //   2. ttl_exceeded   — created before the TTL ceiling (the apex leak guard).
+    //   3. unclaimed_grace — run_id IS NULL (never tied to a live run) AND older
+    //                        than the grace window (a wedged allocation).
+    const result = await this.systemPool.query<RunnerRow & { reason: RunnerReclaimReason }>(
+      `SELECT r.runner_id, r.run_id, r.project_id, r.org_id, r.container_id, r.ssh_host, r.ssh_port,
+              r.host_key_fingerprint, r.image_sha, r.created_at,
+              CASE
+                WHEN run.status IN ('completed','failed','halted','cancelled') THEN 'terminal_run'
+                WHEN r.created_at < $1 THEN 'ttl_exceeded'
+                ELSE 'unclaimed_grace'
+              END AS reason
+       FROM runners r
+       LEFT JOIN runs run ON run.run_id = r.run_id
+       WHERE r.released_at IS NULL
+         AND (
+           run.status IN ('completed','failed','halted','cancelled')
+           OR r.created_at < $1
+           OR (r.run_id IS NULL AND r.created_at < $2)
+         )`,
+      [thresholds.ttlThreshold, thresholds.graceThreshold],
+    );
+    return result.rows.map((row) => ({ record: materialize(row), reason: row.reason }));
+  }
+
+  async recordSwept(audit: SweptAudit): Promise<void> {
+    // The durable reclaim audit goes through the allocator's SOLE events writer,
+    // org-scoped on the restricted app-role pool (same RLS scope as the `runners`
+    // row), so a leak the per-run `finally` missed is never reclaimed silently.
+    await recordSweptEvent(this.appPool, audit);
+  }
 }
 
 function materialize(row: RunnerRow): RunnerRecord {
@@ -207,7 +260,10 @@ function materialize(row: RunnerRow): RunnerRecord {
 }
 
 function releaseStatusFor(reason: string): string {
-  if (reason === "abandoned") {
+  // Every sweeper reclaim path (ttl/wedged/terminal-run) lands the `abandoned`
+  // status — a swept runner is an abandoned one regardless of the discriminated
+  // cause carried in the reason string.
+  if (reason.startsWith("abandoned")) {
     return "abandoned";
   }
   if (reason === "failed") {

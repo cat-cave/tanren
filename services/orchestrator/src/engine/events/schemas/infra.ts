@@ -44,6 +44,33 @@ export const RunnerReleasedPayload = z
   })
   .strict();
 
+// RUNNER-SWEEPER RECLAIM PROOF. The periodic allocator sweeper reconciles STUCK /
+// LEAKED runners the normal release path missed — a runner whose owning run went
+// terminal without a release, a runner past the run-hours TTL ceiling, or a wedged
+// allocation never tied to a live run. Reclaiming one emits this durable, org-scoped
+// audit event so a leak that the per-run `finally` missed is NEVER silent: `reason`
+// is the discriminated stuck-state, the runner id + (nullable) run id are the
+// NON-SECRET resource handles, and the event proves the reclaim actually fired.
+export const RunnerSweptPayload = z
+  .object({
+    /** The reclaimed runner's id (the resource the sweep targeted). */
+    runnerId: z.string(),
+    /**
+     * The owning run id, or `null` for a wedged allocation never tied to a real
+     * `runs` row (the unclaimed-grace case). A NON-SECRET resource handle.
+     */
+    runId: z.string().nullable(),
+    /**
+     * Why the runner was stuck — the discriminated state the sweeper reclaimed it
+     * from. `terminal_run`: its owning run is terminal but the runner was never
+     * released. `ttl_exceeded`: it outlived the run-hours TTL ceiling (the
+     * apex-relevant leak guard). `unclaimed_grace`: a wedged allocation never tied
+     * to a live run, past the grace window.
+     */
+    reason: z.enum(["terminal_run", "ttl_exceeded", "unclaimed_grace"]),
+  })
+  .strict();
+
 // SECURITY-BASELINE CLEANUP-PROOF (tanren-direction.md § "Security Baseline":
 // "Release events prove cleanup and list residual resources, if any."). A runner is
 // an untrusted-code execution surface; when a run ends, the allocator's release MUST

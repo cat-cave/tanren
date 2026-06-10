@@ -66,6 +66,9 @@ const SEVERITY_OVERRIDES: Partial<Record<EventName, Severity>> = {
   // Runner / allocator
   "runner.allocated": "info",
   "runner.released": "info",
+  // A swept runner is a LEAK the normal release path missed (a crashed run, a
+  // past-TTL runner, a wedged allocation) — operator-actionable, so warn.
+  "runner.swept": "warn",
   // Security-baseline cleanup-proof: a release normally cleans up (info). The
   // dispatcher promotes to warn when `cleanedUp=false` (residual resources to
   // reconcile) — a leaked runner is operator-actionable.

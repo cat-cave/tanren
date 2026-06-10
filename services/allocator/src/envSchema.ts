@@ -62,8 +62,13 @@ const envObjectSchema = z.object({
   TANREN_ALLOCATOR_HOST_SSH_PORT: emptyToUndefined(portSchema.optional()),
   // Template the orchestrator-facing SSH hostname is built from ({container}).
   TANREN_ALLOCATOR_SSH_HOSTNAME_TEMPLATE: emptyToUndefined(z.string().min(1).default("{container}")),
-  // Abandoned-run sweep interval. Default 60_000ms.
+  // Runner-sweep interval. Default 60_000ms.
   TANREN_ALLOCATOR_SWEEPER_INTERVAL_MS: emptyToUndefined(positiveIntervalMsSchema.default(60_000)),
+  // Grace window before a run-LESS (never-claimed) allocation is reclaimed by the
+  // sweeper as a WEDGED allocation. A short grace (default 15min) absorbs the normal
+  // allocate→claim handoff so a freshly-allocated run-less runner is never reaped
+  // mid-handshake; past it, an allocation never tied to a live run is genuinely stuck.
+  TANREN_ALLOCATOR_UNCLAIMED_GRACE_MS: emptyToUndefined(positiveIntervalMsSchema.default(900_000)),
   // Linux capabilities / security-opt the per-run runner container is launched
   // with (comma-separated). Empty parts are filtered downstream.
   TANREN_RUNNER_CAP_ADD: emptyToUndefined(z.string().default("SYS_ADMIN")),
