@@ -17,9 +17,13 @@
 // var, add it to `NON_TANREN_ENV_ALLOWLIST` with a rationale.
 //
 // Scope: shipped `*.ts`/`*.tsx` under services/ · db/ · cli/. Tests, scripts, and
-// e2e are tooling (not the boot path) and are excluded wholesale. Only LITERAL-named
-// reads are matched — a dynamic `process.env[name]` (name passed as a variable, e.g.
-// the secretStoreFactory `env[name]` indirection) carries no static name to govern.
+// e2e are tooling (not the boot path) and are excluded wholesale. Matched reads:
+// LITERAL-named `process.env.X` AND the project's `env("X")` indirection helper
+// (Codex r5 §4 — the helper was a hole; the reaper's reads bypassed the bare-
+// `process.env` scan through it). A fully-dynamic `env(name)` / `process.env[name]`
+// (name a variable) carries no static name, so a `env(name)` helper call is required
+// to live in an already-whitelisted FILE; a dynamic `process.env[name]` is left
+// ungoverned (no helper home to anchor it).
 
 import { glob, readFile } from "node:fs/promises";
 import { relative, resolve } from "node:path";
@@ -28,6 +32,24 @@ import { exit } from "node:process";
 // Any literal-named read: `process.env["FOO"]` / `process.env['FOO']` /
 // `process.env.FOO`. Capture group 1 (bracket form) or 2 (dot form) is the var name.
 const ENV_READ = /process\.env\s*(?:\[\s*["'`]([A-Za-z_][A-Za-z0-9_]*)["'`]\s*\]|\.\s*([A-Za-z_][A-Za-z0-9_]*))/gu;
+
+// The project's `env("LITERAL")` indirection HELPER — a local `function env(name)`
+// wrapping `process.env[name]` (used in buildAllocator + the reaper). A literal-arg
+// call (`env("TANREN_FOO")` / `env('TANREN_FOO')`) is a real env read that MUST be
+// governed identically to a bare `process.env.X`, else the helper is a hole in the
+// gate (Codex r5 §4: the reaper's reads bypassed the scan through exactly this
+// indirection). `env` must be a STANDALONE call — preceded by a non-identifier,
+// non-`.` char (so `process.env(` / `someObj.env(` / `parseEnv(` never match) and
+// the arg a single string LITERAL. A fully-dynamic `env(variableName)` carries no
+// static name; it is handled separately (see DYNAMIC_ENV_HELPER below).
+const ENV_HELPER_READ = /(?<![.\w])env\(\s*["'`]([A-Za-z_][A-Za-z0-9_]*)["'`]\s*\)/gu;
+
+// A DYNAMIC `env(name)` helper call — the arg is NOT a string literal (a variable /
+// expression), so no static var name can be resolved. Such a call must live in an
+// already-whitelisted file (the helper's home is a governed boot module); a NEW one
+// in an un-whitelisted file is flagged for review. Matches `env(` followed by
+// something other than a string literal (a `)` immediate-close `env()` is not a read).
+const DYNAMIC_ENV_HELPER = /(?<![.\w])env\(\s*(?!["'`]|\))/gu;
 
 // Non-`TANREN_` env vars the SHIPPED boot path is allowed to read directly, each
 // with a one-line rationale. A NEW unlisted non-`TANREN_` read fails the build.
@@ -68,6 +90,11 @@ const ENV_READ_FILE_WHITELIST = new Set([
   "services/orchestrator/src/main.ts",
   // OIDC IdP env (issuer/client/claims/scopes) — additive, opt-in provider config.
   "services/orchestrator/src/auth/oidcEnv.ts",
+  // Allocator boot: the allocator-kind + cloud-provider host/port/region/image
+  // knobs + the loud `parseSshPort` / `resolveBootedAllocatorKind` parsers — all
+  // read through the local `env("TANREN_*")` helper (now governed by the widened
+  // ENV_HELPER_READ scan, so this file is whitelisted like any other boot module).
+  "services/orchestrator/src/engine/allocators/buildAllocator.ts",
   // GitHub App install route: install URL + credential ref gate the mount.
   "services/orchestrator/src/routes/auth/githubAppInstall.ts",
   "services/orchestrator/src/mountFeatureRoutes.ts",
@@ -202,16 +229,33 @@ export async function runEnvReadWhitelistCheck({ root = process.cwd() } = {}) {
   const violations = [];
   for (const file of files) {
     const text = stripComments(await readFile(resolve(resolvedRoot, file), "utf8"));
-    for (const match of text.matchAll(ENV_READ)) {
-      const name = match[1] ?? match[2];
-      if (name.startsWith("TANREN_")) {
-        // A `TANREN_*` read must live in a whitelisted boot/config FILE.
-        if (!ENV_READ_FILE_WHITELIST.has(file)) {
-          violations.push({ file, line: lineFor(text, match.index), snippet: match[0], reason: "tanren-file" });
+    // A literal-named read is governed the SAME way whether it is a bare
+    // `process.env.X` OR a `env("X")` helper call: a `TANREN_*` name must live in a
+    // whitelisted FILE; a non-`TANREN_` name must be an allowlisted VAR.
+    for (const re of [ENV_READ, ENV_HELPER_READ]) {
+      for (const match of text.matchAll(re)) {
+        const name = match[1] ?? match[2];
+        if (name.startsWith("TANREN_")) {
+          // A `TANREN_*` read must live in a whitelisted boot/config FILE.
+          if (!ENV_READ_FILE_WHITELIST.has(file)) {
+            violations.push({ file, line: lineFor(text, match.index), snippet: match[0], reason: "tanren-file" });
+          }
+        } else if (!NON_TANREN_ENV_ALLOWLIST.has(name)) {
+          // A non-`TANREN_` read must name an allowlisted var (per-var rationale).
+          violations.push({ file, line: lineFor(text, match.index), snippet: match[0], reason: "non-tanren-var" });
         }
-      } else if (!NON_TANREN_ENV_ALLOWLIST.has(name)) {
-        // A non-`TANREN_` read must name an allowlisted var (per-var rationale).
-        violations.push({ file, line: lineFor(text, match.index), snippet: match[0], reason: "non-tanren-var" });
+      }
+    }
+    // A DYNAMIC `env(name)` helper call (no static name) can't be name-governed, so
+    // it must at least live in a whitelisted boot/config FILE — the helper's home.
+    if (!ENV_READ_FILE_WHITELIST.has(file)) {
+      for (const match of text.matchAll(DYNAMIC_ENV_HELPER)) {
+        violations.push({
+          file,
+          line: lineFor(text, match.index),
+          snippet: `${match[0]}…)`,
+          reason: "dynamic-env-file",
+        });
       }
     }
   }

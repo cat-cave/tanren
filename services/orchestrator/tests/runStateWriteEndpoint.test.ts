@@ -70,6 +70,68 @@ describe("plane-split P3 — write endpoint authn + validation (no DB)", () => {
     expect(response.status).toBe(400);
   });
 
+  // Codex r5 §3: the de-privileged mTLS data plane can POST any string for
+  // status/outcome; a NON-ENUM value must be a controlled 422 `invalid_run_state`
+  // AT THE ROUTE — never relayed to the DB to explode against the CHECK constraint
+  // as an opaque 500. The THROWING_POOL proves the reject happens pre-DB.
+  it("rejects a non-enum finalize-run status with 422 invalid_run_state, pre-DB", async () => {
+    const app = createInternalRunStateWriteRoutes({ pool: THROWING_POOL, verifier: new AllowAllPeerVerifier() });
+    const response = await post(app, "/internal/finalize-run", {
+      runId: "run_1",
+      orgId: "org_1",
+      status: "totally-bogus",
+      outcome: "ok",
+      fromStatuses: ["running"],
+    });
+    expect(response.status).toBe(422);
+    expect(await response.json()).toEqual({ error: "invalid_run_state", field: "status", value: "totally-bogus" });
+  });
+
+  it("rejects a non-enum finalize-run outcome with 422 invalid_run_state, pre-DB", async () => {
+    const app = createInternalRunStateWriteRoutes({ pool: THROWING_POOL, verifier: new AllowAllPeerVerifier() });
+    const response = await post(app, "/internal/finalize-run", {
+      runId: "run_1",
+      orgId: "org_1",
+      status: "completed",
+      outcome: "made-up-outcome",
+      fromStatuses: ["running"],
+    });
+    expect(response.status).toBe(422);
+    expect(await response.json()).toEqual({ error: "invalid_run_state", field: "outcome", value: "made-up-outcome" });
+  });
+
+  it("rejects a non-enum fromStatuses entry with 422 invalid_run_state, pre-DB", async () => {
+    const app = createInternalRunStateWriteRoutes({ pool: THROWING_POOL, verifier: new AllowAllPeerVerifier() });
+    const response = await post(app, "/internal/finalize-run", {
+      runId: "run_1",
+      orgId: "org_1",
+      status: "completed",
+      outcome: "ok",
+      fromStatuses: ["running", "bogus-from"],
+    });
+    expect(response.status).toBe(422);
+    expect(await response.json()).toEqual({ error: "invalid_run_state", field: "fromStatuses", value: "bogus-from" });
+  });
+
+  it("admits a fully-valid finalize-run vocabulary (passes the gate, reaches the DB)", async () => {
+    // A valid status/outcome passes the route vocabulary gate, so the handler
+    // proceeds PAST the 422/400 checks into `runWithOrgScope` (which then trips the
+    // THROWING_POOL → a 500). The point: a VALID value is NOT 422/400-rejected at the
+    // route — the gate admits the canonical vocabulary.
+    const app = createInternalRunStateWriteRoutes({ pool: THROWING_POOL, verifier: new AllowAllPeerVerifier() });
+    const response = await post(app, "/internal/finalize-run", {
+      runId: "run_1",
+      orgId: "org_1",
+      status: "completed",
+      outcome: "ok",
+      fromStatuses: ["running", "queued"],
+    });
+    expect(response.status).not.toBe(400);
+    expect(response.status).not.toBe(422);
+    // It got past the gate and tripped the throwing pool (control-plane DB fault).
+    expect(response.status).toBe(500);
+  });
+
   it("rejects a malformed P3c lifecycle request with 400 before any DB work", async () => {
     const app = createInternalRunStateWriteRoutes({ pool: THROWING_POOL, verifier: new AllowAllPeerVerifier() });
     // Missing status/setStartedAt etc. → schema rejects pre-DB (THROWING_POOL untouched).

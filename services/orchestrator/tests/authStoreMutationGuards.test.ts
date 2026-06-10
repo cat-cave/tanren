@@ -360,38 +360,40 @@ describe("buildOidcProviderFromEnv env-gating guards", () => {
     }
   });
 
-  it("returns undefined when any one credential is empty-string", () => {
-    // emptyToUndefined + the `=== ""` guards. An empty value must not register.
+  it("THROWS (not silent-disable) when a mandatory credential is empty-string", () => {
+    // Fail-loud on a PARTIAL config (Codex r5 §1): a blank value counts as absent,
+    // so with issuer + client id set and the secret BLANK, OIDC is partially
+    // configured — a LOUD boot error naming the field, NOT a silent disable.
     setCreds();
     process.env.TANREN_OIDC_CLIENT_SECRET = "";
-    expect(buildOidcProviderFromEnv()).toBeUndefined();
+    expect(() => buildOidcProviderFromEnv()).toThrow(/PARTIALLY configured.*TANREN_OIDC_CLIENT_SECRET/su);
   });
 
-  it("gates registration on each credential independently", () => {
-    // Each disjunct of the `issuer/clientId/clientSecret unset` guard matters:
-    // with all three set the provider builds; dropping any ONE -> undefined.
+  it("fail-loud-gates registration on each credential independently", () => {
+    // With all three set the provider builds; dropping/blanking any ONE while the
+    // others remain set is a PARTIAL config → a LOUD throw (never a silent disable).
     setCreds();
     expect(buildOidcProviderFromEnv()).toBeInstanceOf(OidcProvider);
 
     setCreds();
     delete process.env.TANREN_OIDC_ISSUER;
-    expect(buildOidcProviderFromEnv()).toBeUndefined();
+    expect(() => buildOidcProviderFromEnv()).toThrow(/PARTIALLY configured.*TANREN_OIDC_ISSUER/su);
 
     setCreds();
     delete process.env.TANREN_OIDC_CLIENT_ID;
-    expect(buildOidcProviderFromEnv()).toBeUndefined();
+    expect(() => buildOidcProviderFromEnv()).toThrow(/PARTIALLY configured.*TANREN_OIDC_CLIENT_ID/su);
 
     setCreds();
     delete process.env.TANREN_OIDC_CLIENT_SECRET;
-    expect(buildOidcProviderFromEnv()).toBeUndefined();
+    expect(() => buildOidcProviderFromEnv()).toThrow(/PARTIALLY configured.*TANREN_OIDC_CLIENT_SECRET/su);
 
     setCreds();
     process.env.TANREN_OIDC_ISSUER = "";
-    expect(buildOidcProviderFromEnv()).toBeUndefined();
+    expect(() => buildOidcProviderFromEnv()).toThrow(/PARTIALLY configured.*TANREN_OIDC_ISSUER/su);
 
     setCreds();
     process.env.TANREN_OIDC_CLIENT_ID = "";
-    expect(buildOidcProviderFromEnv()).toBeUndefined();
+    expect(() => buildOidcProviderFromEnv()).toThrow(/PARTIALLY configured.*TANREN_OIDC_CLIENT_ID/su);
   });
 
   it("applies an explicit subject-claim override end-to-end over the default", async () => {

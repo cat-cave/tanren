@@ -158,12 +158,17 @@ describe("buildOidcProviderFromEnv with TANREN_OIDC_PRESET=authentik", () => {
     }
   });
 
-  it("does not register the provider when the preset is set but creds are missing", () => {
+  it("disabled when only the preset is set; THROWS once a mandatory cred is partial", () => {
+    // The preset is an OPTIONAL override; with NO mandatory creds (issuer/client
+    // id/secret) OIDC is fully-absent → disabled (no throw), the legitimate
+    // "preset declared but unused" case.
     process.env.TANREN_OIDC_PRESET = "authentik";
     expect(buildOidcProviderFromEnv()).toBeUndefined();
 
+    // Adding ONLY the issuer makes it PARTIALLY configured (missing client
+    // id/secret) → a LOUD boot error (Codex r5 §1), never a silent disable.
     process.env.TANREN_OIDC_ISSUER = ISSUER;
-    expect(buildOidcProviderFromEnv()).toBeUndefined();
+    expect(() => buildOidcProviderFromEnv()).toThrow(/PARTIALLY configured/su);
   });
 
   it("builds an OidcProvider when the preset + issuer + client id/secret are set", () => {
