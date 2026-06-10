@@ -24,6 +24,7 @@ import { resolveRunWorkspaceReaperConfig } from "../config/index.js";
 import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import { StaticRunnerAllocator } from "../allocators/staticRunnerAllocator.js";
+import { parseSshPort, resolveBootedAllocatorKind } from "../allocators/buildAllocator.js";
 import { PgRunnerStore } from "../allocators/runnerStore.js";
 import { RunWorkspaceReaper, type ActiveRunIdSource } from "./runWorkspaceReaper.js";
 import { createLogger } from "../observability/logger.js";
@@ -43,15 +44,6 @@ export interface BuildRunWorkspaceReaperDeps {
 function env(name: string): string | undefined {
   const value = process.env[name];
   return value === undefined || value === "" ? undefined : value;
-}
-
-/**
- * The allocator kind the worker booted with — read the SAME way the allocator builder
- * reads it (`TANREN_ALLOCATOR_KIND`, default `sidecar`, normalized). Only `static` is a
- * single long-lived runner the reaper can sweep; see the module header for the others.
- */
-function bootedAllocatorKind(): string {
-  return (process.env["TANREN_ALLOCATOR_KIND"] ?? "sidecar").toLowerCase();
 }
 
 /**
@@ -82,7 +74,12 @@ export function buildPgActiveRunIdSource(pool: pg.Pool): ActiveRunIdSource {
  * the worker's drain.
  */
 export function startRunWorkspaceReaper(deps: BuildRunWorkspaceReaperDeps): RunWorkspaceReaper | undefined {
-  const allocatorKind = bootedAllocatorKind();
+  // Read the allocator kind through the SAME loud parser the allocator builder
+  // uses (`resolveBootedAllocatorKind`): UNSET → `sidecar`, a typo'd kind FAILS
+  // LOUD here rather than silently failing the `!== "static"` compare and quietly
+  // disabling the reaper (the leak this whole module exists to fix). Only `static`
+  // is a single long-lived runner the reaper can sweep; see the module header.
+  const allocatorKind = resolveBootedAllocatorKind();
   if (allocatorKind !== "static") {
     log.info(
       "OFF for this allocator kind — an ephemeral runner's sandbox is destroyed with its container on release " +
@@ -99,7 +96,10 @@ export function startRunWorkspaceReaper(deps: BuildRunWorkspaceReaperDeps): RunW
   // whole worker from coming up. The reaper invokes it on its first tick and caches it.
   const allocator = new StaticRunnerAllocator({
     host: env("TANREN_RUNNER_SSH_HOST") ?? "runner",
-    port: Number(env("TANREN_RUNNER_SSH_PORT") ?? 22),
+    // The SAME loud `parseSshPort` the static allocator builder uses — a malformed
+    // value FAILS LOUD (never the old `Number("not-a-port")` → NaN handed straight
+    // to the SSH client). UNSET → the documented default 22.
+    port: parseSshPort("TANREN_RUNNER_SSH_PORT", 22),
     username: env("TANREN_RUNNER_SSH_USER") ?? "tanren",
     ...(env("TANREN_RUNNER_SSH_HOST_FINGERPRINT") !== undefined && {
       hostKeyFingerprint: env("TANREN_RUNNER_SSH_HOST_FINGERPRINT")!,

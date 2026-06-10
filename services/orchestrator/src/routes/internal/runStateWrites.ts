@@ -24,6 +24,7 @@ import { Hono, type Context } from "hono";
 import { z, ZodError } from "zod";
 import { CostRecorder } from "../../engine/costs/recorder.js";
 import { PgEventStore } from "../../engine/eventStore.js";
+import { RunOutcome, RunStatus } from "../../engine/state/run.js";
 import { verifyInternalPeer, type RunStateWriteRouteDeps } from "./internalWriteShared.js";
 import { registerRunStateLifecycleRoutes } from "./runStateLifecycleWrites.js";
 import { registerRunStateCreateRoutes } from "./runStateCreateWrites.js";
@@ -79,6 +80,12 @@ const reconcileCostSchema = z.object({
   basis: z.enum(["ccusage", "credits"]),
 });
 
+// Structural shape: required + non-empty (a MISSING field is a 400 caller error,
+// pre-DB). The status/outcome VOCABULARY is then validated against the canonical
+// `RunStatus`/`RunOutcome` enums at the route (below) so a present-yet-non-enum
+// value the de-privileged data plane sends is a CONTROLLED 422 `invalid_run_state`
+// — never relayed to the DB to explode there as an opaque 500 from a CHECK
+// constraint (the no-deferred-500 boundary: validate at the trust boundary).
 const finalizeRunSchema = z.object({
   runId: z.string().min(1),
   orgId: z.string().min(1),
@@ -86,6 +93,27 @@ const finalizeRunSchema = z.object({
   outcome: z.string().min(1),
   fromStatuses: z.array(z.string().min(1)).min(1),
 });
+
+/**
+ * Validate the finalize-run state vocabulary against the canonical
+ * `RunStatus`/`RunOutcome` enums. Returns the offending field + value when any of
+ * `status` / `outcome` / a `fromStatuses` entry is not a known enum member, so the
+ * route can return a controlled 422 `invalid_run_state` rather than handing an
+ * arbitrary string to the DB to explode against the CHECK constraint as a 500.
+ */
+function invalidRunState(parsed: z.infer<typeof finalizeRunSchema>): { field: string; value: string } | undefined {
+  if (!RunStatus.safeParse(parsed.status).success) {
+    return { field: "status", value: parsed.status };
+  }
+  if (!RunOutcome.safeParse(parsed.outcome).success) {
+    return { field: "outcome", value: parsed.outcome };
+  }
+  const badFrom = parsed.fromStatuses.find((s) => !RunStatus.safeParse(s).success);
+  if (badFrom !== undefined) {
+    return { field: "fromStatuses", value: badFrom };
+  }
+  return undefined;
+}
 
 /**
  * Build the internal run-state-write routes. Mounted on the mTLS-only internal
@@ -183,6 +211,13 @@ export function createInternalRunStateWriteRoutes(deps: RunStateWriteRouteDeps):
     const parsed = finalizeRunSchema.safeParse(await c.req.json().catch(() => {}));
     if (!parsed.success) {
       return c.json({ error: "invalid_finalize_run", issues: parsed.error.issues }, 400);
+    }
+    // VOCABULARY gate (mTLS data plane is de-privileged but still a caller): a
+    // present-yet-non-enum status/outcome is a controlled 422 at the route, NOT a
+    // string relayed to the DB to explode against the CHECK constraint as a 500.
+    const invalid = invalidRunState(parsed.data);
+    if (invalid !== undefined) {
+      return c.json({ error: "invalid_run_state", field: invalid.field, value: invalid.value }, 422);
     }
     const { runId, orgId, status, outcome, fromStatuses } = parsed.data;
     const result = await runWithOrgScope(deps.pool, orgId, async (client) => {

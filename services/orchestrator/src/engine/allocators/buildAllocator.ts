@@ -50,7 +50,7 @@ async function resolveSecretRef(
 // become NaN/0 (which the old `Number(env(...) ?? 22)` did — `Number("oops")` is
 // NaN, passed straight to the SSH client). UNSET → the documented default; a SET
 // value must parse to a valid TCP port (1..65535).
-function parseSshPort(name: string, fallback: number): number {
+export function parseSshPort(name: string, fallback: number): number {
   const raw = env(name);
   if (raw === undefined) {
     return fallback;
@@ -368,28 +368,37 @@ async function buildRegistry(
  * value). Async for that resolution. Cloud allocators (Hetzner) also store the
  * ephemeral per-run SSH private key in `secrets`.
  */
-export async function buildAllocatorFromEnv(pool: pg.Pool, secrets: SecretStore): Promise<Allocator> {
-  const runners = new PgRunnerStore(pool);
-  const rawKind = env("TANREN_ALLOCATOR_KIND");
+/**
+ * The closed `TANREN_ALLOCATOR_KIND` boot value: the parsed {@link AllocatorKind}
+ * enum, or the sentinel `"router"`. UNSET → the documented default (`sidecar`);
+ * a SET-yet-unknown/typo'd value is a LOUD config error — NEVER a silent
+ * fall-through to the wrong allocator. This is the SINGLE parse both the
+ * allocator builder AND the run-workspace reaper read through, so a typo can
+ * never silently run the wrong allocator in one place and silently disable the
+ * reaper in the other.
+ */
+export type BootedAllocatorKind = AllocatorKind | "router";
 
+/**
+ * Parse `TANREN_ALLOCATOR_KIND` into a {@link BootedAllocatorKind}, fail-loud on
+ * an unknown/typo'd value (never a silent default). Used by both
+ * {@link buildAllocatorFromEnv} (to pick the allocator) and the run-workspace
+ * reaper (to decide whether the runner is a single long-lived `static` target it
+ * can sweep). A typo must not silently run the wrong allocator NOR silently
+ * disable the reaper.
+ */
+export function resolveBootedAllocatorKind(): BootedAllocatorKind {
+  const rawKind = env("TANREN_ALLOCATOR_KIND");
   // UNSET → the documented default (`sidecar`), explicitly. A SET value is parsed
   // against the closed enum below — there is NO "unset = sidecar AND unknown =
   // sidecar" conflation: a typo'd kind must fail loud, not run the wrong allocator.
   if (rawKind === undefined) {
-    return buildSidecar(runners);
+    return "sidecar";
   }
-
   const kind = rawKind.toLowerCase();
-
   if (kind === "router") {
-    const raw = env("TANREN_ALLOCATOR_ROUTING");
-    if (raw === undefined) {
-      throw new Error("router allocator requires TANREN_ALLOCATOR_ROUTING (JSON routing config)");
-    }
-    const config = AllocatorRoutingConfig.parse(JSON.parse(raw));
-    return new AllocatorRouter(await buildRegistry(runners, secrets, config), config);
+    return "router";
   }
-
   // Parse the kind against the closed enum. An unknown/typo'd value is a LOUD
   // config error here (never a silent fall-through to the sidecar allocator).
   const parsed = AllocatorKind.safeParse(kind);
@@ -400,6 +409,21 @@ export async function buildAllocatorFromEnv(pool: pg.Pool, secrets: SecretStore)
         "Unset it to use the documented default (sidecar); a typo must NOT silently run the wrong allocator.",
     );
   }
+  return parsed.data;
+}
 
-  return buildSingle(parsed.data, runners, secrets);
+export async function buildAllocatorFromEnv(pool: pg.Pool, secrets: SecretStore): Promise<Allocator> {
+  const runners = new PgRunnerStore(pool);
+  const kind = resolveBootedAllocatorKind();
+
+  if (kind === "router") {
+    const raw = env("TANREN_ALLOCATOR_ROUTING");
+    if (raw === undefined) {
+      throw new Error("router allocator requires TANREN_ALLOCATOR_ROUTING (JSON routing config)");
+    }
+    const config = AllocatorRoutingConfig.parse(JSON.parse(raw));
+    return new AllocatorRouter(await buildRegistry(runners, secrets, config), config);
+  }
+
+  return buildSingle(kind, runners, secrets);
 }

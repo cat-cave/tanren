@@ -264,8 +264,30 @@ describe("buildOidcProviderFromEnv", () => {
     expect(buildOidcProviderFromEnv()).toBeUndefined();
   });
 
-  it("returns undefined when issuer is set but client id/secret are missing", () => {
+  // Fail-loud on a PARTIAL config (Codex r5 §1): if ANY OIDC env var is present,
+  // all three mandatory fields are required and a missing one THROWS a boot error
+  // naming it — a half-configured provider must NOT silently boot with OIDC
+  // disabled (a different auth posture than the operator intended).
+  it("THROWS naming the missing secret when issuer + client id are set but secret is missing", () => {
     process.env.TANREN_OIDC_ISSUER = ISSUER;
+    process.env.TANREN_OIDC_CLIENT_ID = "cid";
+    expect(() => buildOidcProviderFromEnv()).toThrow(/PARTIALLY configured.*TANREN_OIDC_CLIENT_SECRET/su);
+  });
+
+  it("THROWS naming the missing issuer + secret when only client id is set", () => {
+    process.env.TANREN_OIDC_CLIENT_ID = "cid";
+    expect(() => buildOidcProviderFromEnv()).toThrow(/TANREN_OIDC_ISSUER.*TANREN_OIDC_CLIENT_SECRET/su);
+  });
+
+  it("THROWS on a blank mandatory field even when the other two are set (blank counts as absent)", () => {
+    process.env.TANREN_OIDC_ISSUER = ISSUER;
+    process.env.TANREN_OIDC_CLIENT_ID = "cid";
+    process.env.TANREN_OIDC_CLIENT_SECRET = "";
+    expect(() => buildOidcProviderFromEnv()).toThrow(/PARTIALLY configured/su);
+  });
+
+  it("returns undefined when OIDC is FULLY absent (the legitimate no-OIDC case)", () => {
+    // No TANREN_OIDC_* set at all → disabled, no throw (beforeEach cleared them).
     expect(buildOidcProviderFromEnv()).toBeUndefined();
   });
 
