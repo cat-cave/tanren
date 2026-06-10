@@ -13,14 +13,18 @@
 // The model/runner/DB are all SEAMS — a fake adapter, fake sub-seams, and an
 // in-memory registry — so the wiring is proven without a live model or runner.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_CI_CONFIG } from "../src/engine/ci/index.js";
 import type { RunnerHandle } from "../src/engine/contracts/allocator.js";
 import type { CommandResult, CommandSubstrate, RunnerCommand } from "../src/engine/contracts/commandSubstrate.js";
 import type { DagSnapshot, DagWalker, WalkResult } from "../src/engine/contracts/dagWalker.js";
 import type { AnswererAdapter } from "../src/engine/providers/types.js";
 import type { AuditPassRunner } from "../src/engine/forge/audits/index.js";
-import { selectTemplate, type SelectedTemplate } from "../src/engine/forge/interview/templateSelection.js";
+import {
+  selectTemplate,
+  TemplateRequiredError,
+  type SelectedTemplate,
+} from "../src/engine/forge/interview/templateSelection.js";
 import type { CaptureLifecycle } from "../src/engine/forge/interview/types.js";
 import {
   assertGroundedResearch,
@@ -326,7 +330,7 @@ function poolReturning(rows: ReadonlyArray<unknown>) {
   };
 }
 
-describe("buildCreateForNoMatch — async, owner-threaded (audit §3.11/2,3)", () => {
+describe("buildCreateForNoMatch — synchronous create-then-seed, owner-threaded", () => {
   // Local flow deps (the assembly does no I/O until the flow runs; all sub-infra stubbed).
   const deps = {
     pool: {} as never,
@@ -390,17 +394,19 @@ describe("buildCreateForNoMatch — async, owner-threaded (audit §3.11/2,3)", (
     expect(selected?.repoRef).toBe("cat-cave/tanren-template-ts-next");
   });
 
-  it("NO existing match → returns undefined IMMEDIATELY (background creation, never blocks the derive)", async () => {
+  it("NO existing match → runs creation SYNCHRONOUSLY (gates the scaffold; never fire-and-forget)", async () => {
     const { pool } = poolReturning([]);
-    // The buildDriver would block ~60min if creation ran inline; a synchronous-resolving
-    // seam proves the derive is NOT awaiting the build. The background creation fires
-    // detached (its own pool query); we only assert the seam returned promptly + undefined.
+    // The doctrine cutover: on no match the seam runs the creation meta-flow inline and
+    // SEEDS from the published template — the project scaffold GATES on it (it does NOT
+    // return undefined-then-proceed-from-scratch). With these loosely-mocked deps the
+    // creation drives into the (un-mockable) research/build infra and THROWS — proving
+    // the seam awaits creation synchronously and PROPAGATES the failure (so selection
+    // halts loud), rather than detaching and resolving undefined.
     const seam = buildCreateForNoMatch({ ...deps, pool }, ctx);
-    const before = Date.now();
-    const selected = await seam(lifecycle);
-    expect(selected).toBeUndefined();
-    // The seam returned without awaiting any multi-second build step.
-    expect(Date.now() - before).toBeLessThan(2000);
+    // The loosely-mocked research/build infra throws as soon as creation drives into it
+    // (here: the stub pool has no real `query`) — proving the seam awaited creation
+    // synchronously and propagated, rather than detaching + resolving undefined.
+    await expect(seam(lifecycle)).rejects.toThrow(/is not a function|query|research/u);
   });
 });
 
@@ -445,26 +451,30 @@ describe("SELECTION no-match → CREATION (createForNoMatch seam)", () => {
     expect(calledWith).toEqual(lifecycle);
   });
 
-  it("without the seam → legacy would-create log-only → none/from-scratch", async () => {
-    const decision = await selectTemplate({
-      lifecycle,
-      actor: { kind: "operator" },
-      registryQuery: async () => [],
-    });
-    expect(decision.kind).toBe("none");
-    expect(decision.reasons).toContain("would-create");
+  it("without the seam → HALTS LOUD (no project-direct from-scratch)", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await expect(
+      selectTemplate({
+        lifecycle,
+        actor: { kind: "operator" },
+        registryQuery: async () => [],
+      }),
+    ).rejects.toThrow(TemplateRequiredError);
+    warn.mockRestore();
   });
 
-  it("a FAILED creation never strands onboarding — falls back to from-scratch (none)", async () => {
-    const decision = await selectTemplate({
-      lifecycle,
-      actor: { kind: "operator" },
-      registryQuery: async () => [],
-      createForNoMatch: async () => {
-        throw new Error("validation failed");
-      },
-    });
-    expect(decision.kind).toBe("none");
-    expect(decision.reasons).toContain("creation-failed");
+  it("a FAILED creation HALTS LOUD (fail-closed) — never a silent from-scratch", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await expect(
+      selectTemplate({
+        lifecycle,
+        actor: { kind: "operator" },
+        registryQuery: async () => [],
+        createForNoMatch: async () => {
+          throw new Error("validation failed");
+        },
+      }),
+    ).rejects.toThrow(TemplateRequiredError);
+    warn.mockRestore();
   });
 });

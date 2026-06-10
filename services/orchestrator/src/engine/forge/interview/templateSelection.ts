@@ -17,9 +17,12 @@
 //
 // FAIL-CLOSED. Only `validated`/`official` templates with a FRESH, non-degraded
 // validationProof are eligible; a selected template that fails a FINAL freshness
-// re-check at the decision boundary is REJECTED with a LOUD log and the flow falls
-// back to from-scratch — never a silent broken seed. The from-scratch path is the
-// guaranteed fallback and is byte-for-byte unchanged when nothing matches.
+// re-check at the decision boundary is REJECTED with a LOUD log. There is NO
+// project-direct from-scratch fallback: a no-match must CREATE a validated template
+// JUST-IN-TIME (the creation meta-flow seeds from the published result) or HALT LOUD
+// (`TemplateRequiredError`) — never silently scaffold a project from an empty repo.
+// The from-scratch authoring is reachable ONLY as the BUILD step of template-creation
+// (it authors the TEMPLATE, validated before anything seeds from it; see derive.ts).
 
 import type { ActorRef } from "../../state/actor.js";
 import type { Template, TemplateCapabilityQuery, TemplateStatus } from "../../repositories/templates.js";
@@ -276,14 +279,15 @@ export interface SelectedTemplate {
 }
 
 // The selection OUTCOME (templating-system.md §3 decision tree). Recorded on the
-// derive so the decision is OBSERVABLE:
+// derive so the decision is OBSERVABLE. EVERY successful project-init selection now
+// resolves to a SEED (a pre-existing match, or a just-in-time-CREATED template) —
+// there is NO from-scratch project outcome. A no-match that cannot create a
+// validated template is NOT a kind here: it is a LOUD HALT (`TemplateRequiredError`).
 //   - "strong"  → SEED + the scaffold spec SHRINKS to "instantiate + adapt names".
+//                 Also the just-in-time-CREATED case (a freshly-published template
+//                 is a strong match by construction).
 //   - "partial" → SEED + emit adaptation specs (the scaffold spec adapts more).
-//   - "none"    → trigger CREATION (a logged "would-create" hook today) then fall
-//                 through to from-scratch.
-//   - "blocked" → today's from-scratch no-stack scaffold (no eligible candidate /
-//                 a chosen candidate failed the final freshness re-check).
-export type SelectionKind = "strong" | "partial" | "none" | "blocked";
+export type SelectionKind = "strong" | "partial";
 
 export interface TemplateSelectionDecision {
   kind: SelectionKind;
@@ -317,16 +321,43 @@ export interface SelectTemplateInput {
   channelPreference?: ChannelPreference;
   // Injectable clock (ms epoch) for deterministic freshness tests. Defaults to now.
   now?: number;
-  // The DECOUPLED no-match → CREATION seam (templating-system.md §3, "no match →
-  // trigger creation"). When injected and NO validated template matches, selection
-  // calls this to CREATE one (the creation meta-flow, §2) and SEEDS from it. The
-  // selection layer itself has NO creation dependency — the seam is supplied by the
-  // wiring layer (`buildCreateForNoMatch`), so there is no circular import. Returns
-  // a `SelectedTemplate` to seed from (a strong match), or `undefined`/throws when
-  // creation did not produce a usable template (selection then logs + falls back to
-  // from-scratch, fail-closed). ABSENT ⇒ the legacy "would-create" log-only behavior
-  // (`kind: "none"` → from-scratch), the default when no flow is wired.
+  // The no-match → JUST-IN-TIME CREATION seam (templating-system.md §3, "no match →
+  // trigger creation"). When NO validated template matches, selection calls this to
+  // CREATE one SYNCHRONOUSLY (the creation meta-flow, §2: research → author → build →
+  // validate-with-NEGATIVE-controls → publish) and SEEDS from the published result.
+  // The creation GATES the project scaffold — selection does not return until a
+  // validated template exists (or the creation FAILS). The selection layer itself has
+  // NO creation dependency — the seam is supplied by the wiring layer
+  // (`buildCreateForNoMatch`), so there is no circular import. Returns a
+  // `SelectedTemplate` to seed from (the freshly-published template). A `undefined`
+  // return or a THROW means creation did not yield a usable template → selection
+  // re-throws as `TemplateRequiredError` (a LOUD, fail-closed halt — never a silent
+  // from-scratch project scaffold). REQUIRED on the project-init path; absent only on
+  // the template-BUILD path (which is itself the from-scratch authoring of a template).
   createForNoMatch?: (lifecycle: CaptureLifecycle) => Promise<SelectedTemplate | undefined>;
+}
+
+// Thrown when project-init selection found NO validated template AND could not
+// create one just-in-time (no creation seam wired, or the creation FAILED / produced
+// no usable template). This is the FAIL-CLOSED halt that replaces the deleted
+// project-direct from-scratch bypass: a no-match must create-or-halt, never silently
+// degrade to scaffolding the project off an empty repo. The caller (the onboarding
+// route) surfaces this as a LOUD needs_attention/fail-closed response. The from-
+// scratch authoring still exists — but ONLY as the template-creation BUILD step.
+export class TemplateRequiredError extends Error {
+  // Named distinctly so it does not shadow `Error.stack`.
+  readonly requestedStack: string;
+  constructor(stack: string, cause?: unknown) {
+    super(
+      `no validated template matched the project lifecycle (stack "${stack}") and just-in-time ` +
+        `template creation did not produce one — HALTING fail-closed. A project DAG never scaffolds ` +
+        `against a non-template (from-scratch) base: the project seeds ONLY from a validated template. ` +
+        `Resolve the template-creation failure (or wire the creation seam) and retry.`,
+    );
+    this.name = "TemplateRequiredError";
+    this.requestedStack = stack;
+    if (cause !== undefined) this.cause = cause;
+  }
 }
 
 // Run the SELECTION + DECISION (templating-system.md §3). Derives the capability
@@ -344,21 +375,23 @@ export async function selectTemplate(input: SelectTemplateInput): Promise<Templa
   try {
     candidates = await input.registryQuery(query, input.actor);
   } catch (error) {
-    // The registry query itself FAILED (a DB error). Fail-closed to from-scratch
-    // with a LOUD log — a broken registry must never strand onboarding.
-    log.warn("registry query failed — falling back to from-scratch scaffold", {}, error);
-    return { kind: "blocked", query, reasons: ["registry-query-failed"] };
+    // The registry query itself FAILED (a DB error). This is NOT a no-match — we
+    // could not even DECIDE. Fail-closed LOUD: a broken registry HALTS onboarding (a
+    // needs_attention the operator resolves), it never silently scaffolds the project
+    // from an empty repo.
+    log.warn("registry query failed — HALTING fail-closed (no project-direct from-scratch)", {}, error);
+    throw new TemplateRequiredError(input.lifecycle.stack, error);
   }
 
   const ranked = rankTemplates(candidates, input.lifecycle, channelPreference, now);
   const top = ranked[0];
   if (top === undefined) {
-    // NO eligible candidate → trigger CREATION (templating-system.md §3 / §2). When
-    // the `createForNoMatch` seam is wired, RUN the creation meta-flow and SEED from
-    // the freshly-created template; otherwise leave the legacy log-only "would-create"
-    // and fall through to from-scratch (the default when no creation flow is wired —
-    // and the path the registry-empty live default still hits without the seam).
-    return createForNoMatchOrFallThrough(input, query);
+    // NO eligible candidate → trigger JUST-IN-TIME CREATION (templating-system.md
+    // §3 / §2). The `createForNoMatch` seam runs the creation meta-flow SYNCHRONOUSLY
+    // and SEEDS from the freshly-published template (the scaffold GATES on it). An
+    // absent seam or a failed creation is a LOUD HALT (`TemplateRequiredError`) —
+    // there is NO project-direct from-scratch fallback.
+    return createForNoMatchOrHalt(input, query);
   }
 
   // FINAL FAIL-CLOSED RE-CHECK at the decision boundary. The ranker already filtered
@@ -368,10 +401,13 @@ export async function selectTemplate(input: SelectTemplateInput): Promise<Templa
   const proof = top.template.manifest.validationProof;
   if (!isTemplateEligible(top.template, now) || proof === null) {
     log.warn(
-      "top candidate failed the final freshness re-check (proof stale/missing) — REJECTING the seed and falling back to from-scratch",
+      "top candidate failed the final freshness re-check (proof stale/missing) — REJECTING the seed; " +
+        "treating as a no-match → just-in-time creation (no project-direct from-scratch)",
       { templateId: top.template.id },
     );
-    return { kind: "blocked", query, topScore: top.score, reasons: ["top-candidate-stale", "fail-closed-fallback"] };
+    // A stale/unusable top candidate is effectively a no-match: trigger creation (or
+    // HALT loud). Never a project-direct from-scratch seed off a stale template.
+    return createForNoMatchOrHalt(input, query);
   }
 
   const selected: SelectedTemplate = {
@@ -383,43 +419,47 @@ export async function selectTemplate(input: SelectTemplateInput): Promise<Templa
   return { kind, selected, query, topScore: top.score, reasons: top.reasons };
 }
 
-// The "no eligible template" branch (templating-system.md §3). When a
-// `createForNoMatch` seam is wired, RUN the creation meta-flow and, on success,
-// return a STRONG seed from the freshly-created template (reasons mark it
-// `created`). When the seam is absent OR creation did not yield a usable template,
-// fall through to the from-scratch scaffold with a LOUD log — fail-closed: a failed
-// creation never strands onboarding, it degrades to the guaranteed from-scratch path.
-async function createForNoMatchOrFallThrough(
+// The "no eligible template" branch (templating-system.md §3). The `createForNoMatch`
+// seam runs the creation meta-flow SYNCHRONOUSLY and, on success, returns a STRONG
+// seed from the freshly-published template (the project scaffold GATES on it). The
+// seam being ABSENT, or creation FAILING / producing no usable template, is a LOUD
+// FAIL-CLOSED HALT (`TemplateRequiredError`) — NOT a project-direct from-scratch
+// scaffold. The from-scratch authoring lives ONLY inside the creation flow (it
+// authors the TEMPLATE, validated before this seed is returned).
+async function createForNoMatchOrHalt(
   input: SelectTemplateInput,
   query: TemplateCapabilityQuery,
 ): Promise<TemplateSelectionDecision> {
   if (input.createForNoMatch === undefined) {
-    log.warn("no eligible template — no creation flow wired; falling through to from-scratch scaffold", {
-      stack: input.lifecycle.stack,
-      query: JSON.stringify(query),
-    });
-    return { kind: "none", query, reasons: ["no-eligible-template", "would-create"] };
+    // No creation seam wired on a project-init path — we cannot create a validated
+    // template, and we will NOT scaffold the project from-scratch. Halt LOUD.
+    log.warn(
+      "no eligible template AND no creation flow wired — HALTING fail-closed (no from-scratch project scaffold)",
+      {
+        stack: input.lifecycle.stack,
+        query: JSON.stringify(query),
+      },
+    );
+    throw new TemplateRequiredError(input.lifecycle.stack);
   }
   let created: SelectedTemplate | undefined;
   try {
     created = await input.createForNoMatch(input.lifecycle);
   } catch (error) {
     // A creation that FAILED (ungrounded research / failed validation / build
-    // non-convergence) must never strand onboarding — log LOUD + fall back.
+    // non-convergence) is a LOUD HALT — never a silent degrade to from-scratch.
     log.warn(
-      "no eligible template — creation FAILED; falling back to from-scratch scaffold",
-      {
-        stack: input.lifecycle.stack,
-      },
+      "no eligible template — just-in-time creation FAILED; HALTING fail-closed",
+      { stack: input.lifecycle.stack },
       error,
     );
-    return { kind: "none", query, reasons: ["no-eligible-template", "creation-failed", "from-scratch-fallback"] };
+    throw new TemplateRequiredError(input.lifecycle.stack, error);
   }
   if (created === undefined) {
-    log.warn("no eligible template — creation produced no usable template; falling through to from-scratch scaffold", {
+    log.warn("no eligible template — just-in-time creation produced no usable template; HALTING fail-closed", {
       stack: input.lifecycle.stack,
     });
-    return { kind: "none", query, reasons: ["no-eligible-template", "creation-no-result", "from-scratch-fallback"] };
+    throw new TemplateRequiredError(input.lifecycle.stack);
   }
   // CREATED + SEED: a freshly-validated template seeds the scaffold (a strong match).
   return { kind: "strong", selected: created, query, reasons: ["created", "no-prior-template"] };

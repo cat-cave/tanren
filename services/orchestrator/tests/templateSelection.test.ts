@@ -1,11 +1,14 @@
 // Tanren-native templating (wave 3) — the Forge SELECTION unit tests.
 //
-// Proves the capability-query derivation + the scorer + the seed/from-scratch
+// Proves the capability-query derivation + the scorer + the seed/create/HALT
 // DECISION (templating-system.md §3), all as PURE functions over a FIXTURE
 // validated template (no DB — the registry query is injected). Asserts:
 //   (a) a matching validated template → selected (strong) + a seed reference;
 //   (b) a degraded / unvalidated / stale-proof template → NEVER selected;
-//   (c) no eligible candidate → "none" (would-create hook) — from-scratch;
+//   (c) no eligible candidate + NO creation seam → HALTS LOUD (TemplateRequiredError),
+//       never a from-scratch project scaffold (the deleted bypass);
+//   (c') no eligible candidate + a creation seam → just-in-time CREATES + seeds;
+//   (c'') a creation seam that FAILS / returns nothing → HALTS LOUD;
 //   (d) the scorer ranks capability overlap above channel/freshness tie-breakers;
 //   (e) a fail-closed final freshness re-check rejects a stale top candidate;
 //   (f) the seed scaffold authoring SHRINKS (instantiate, not author-from-scratch).
@@ -23,6 +26,7 @@ import {
   isTemplateEligible,
   rankTemplates,
   selectTemplate,
+  TemplateRequiredError,
   type SelectedTemplate,
   type TemplateRegistryQuery,
 } from "../src/engine/forge/interview/index.js";
@@ -218,48 +222,103 @@ describe("selectTemplate · the decision (templating-system.md §3)", () => {
     expect(decision.selected?.templateRef).toBe("ts_npm");
   });
 
-  it("a degraded / unvalidated template is NOT selected → none (would-create)", async () => {
+  it("a degraded / unvalidated template (no creation seam) HALTS LOUD — never from-scratch", async () => {
     const warn = vi.spyOn(console, "error").mockImplementation(() => {});
-    const decision = await selectTemplate({
-      lifecycle: TS_LIFECYCLE,
-      registryQuery: registry([
-        template({ id: "degraded", status: "degraded" }),
-        template({ id: "draft", proof: null }),
-      ]),
-      actor: { kind: "operator" },
-      now: NOW,
-    });
-    expect(decision.kind).toBe("none");
-    expect(decision.selected).toBeUndefined();
-    expect(decision.reasons).toContain("would-create");
+    // No `createForNoMatch` seam wired and no eligible template ⇒ a no-match that
+    // cannot create is a fail-closed HALT, NOT a from-scratch project scaffold.
+    await expect(
+      selectTemplate({
+        lifecycle: TS_LIFECYCLE,
+        registryQuery: registry([
+          template({ id: "degraded", status: "degraded" }),
+          template({ id: "draft", proof: null }),
+        ]),
+        actor: { kind: "operator" },
+        now: NOW,
+      }),
+    ).rejects.toThrow(TemplateRequiredError);
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
   });
 
-  it("an EMPTY registry → none → from-scratch (the expected live default)", async () => {
+  it("an EMPTY registry (no creation seam) HALTS LOUD — no from-scratch project scaffold", async () => {
     const warn = vi.spyOn(console, "error").mockImplementation(() => {});
+    await expect(
+      selectTemplate({
+        lifecycle: TS_LIFECYCLE,
+        registryQuery: registry([]),
+        actor: { kind: "operator" },
+        now: NOW,
+      }),
+    ).rejects.toThrow(TemplateRequiredError);
+    warn.mockRestore();
+  });
+
+  it("a no-match WITH a creation seam → just-in-time CREATES + seeds (strong, created)", async () => {
+    const created: SelectedTemplate = {
+      templateRef: "tmpl_created",
+      repoRef: "cat-cave/tanren-template-ts-next",
+      validationProof: freshProof(),
+    };
     const decision = await selectTemplate({
       lifecycle: TS_LIFECYCLE,
       registryQuery: registry([]),
       actor: { kind: "operator" },
       now: NOW,
+      createForNoMatch: async () => created,
     });
-    expect(decision.kind).toBe("none");
+    expect(decision.kind).toBe("strong");
+    expect(decision.selected?.templateRef).toBe("tmpl_created");
+    expect(decision.reasons).toContain("created");
+  });
+
+  it("a creation seam that FAILS → HALTS LOUD (TemplateRequiredError), never from-scratch", async () => {
+    const warn = vi.spyOn(console, "error").mockImplementation(() => {});
+    await expect(
+      selectTemplate({
+        lifecycle: TS_LIFECYCLE,
+        registryQuery: registry([]),
+        actor: { kind: "operator" },
+        now: NOW,
+        createForNoMatch: async () => {
+          throw new Error("creation failed: build did not converge");
+        },
+      }),
+    ).rejects.toThrow(TemplateRequiredError);
     warn.mockRestore();
   });
 
-  it("a registry-query failure fails CLOSED to a blocked/from-scratch outcome", async () => {
+  it("a creation seam that returns no template → HALTS LOUD, never from-scratch", async () => {
     const warn = vi.spyOn(console, "error").mockImplementation(() => {});
-    const decision = await selectTemplate({
-      lifecycle: TS_LIFECYCLE,
-      registryQuery: async () => {
-        throw new Error("db down");
-      },
-      actor: { kind: "operator" },
-      now: NOW,
-    });
-    expect(decision.kind).toBe("blocked");
-    expect(decision.selected).toBeUndefined();
+    await expect(
+      selectTemplate({
+        lifecycle: TS_LIFECYCLE,
+        registryQuery: registry([]),
+        actor: { kind: "operator" },
+        now: NOW,
+        createForNoMatch: async () => {
+          // Creation produced nothing usable (returns undefined) — selection halts loud.
+        },
+      }),
+    ).rejects.toThrow(TemplateRequiredError);
+    warn.mockRestore();
+  });
+
+  it("a registry-query failure HALTS LOUD (fail-closed) — never a from-scratch outcome", async () => {
+    const warn = vi.spyOn(console, "error").mockImplementation(() => {});
+    await expect(
+      selectTemplate({
+        lifecycle: TS_LIFECYCLE,
+        registryQuery: async () => {
+          throw new Error("db down");
+        },
+        actor: { kind: "operator" },
+        now: NOW,
+        createForNoMatch: async () => {
+          // Creation produced nothing usable (returns undefined) — selection halts loud.
+        },
+      }),
+    ).rejects.toThrow(TemplateRequiredError);
     warn.mockRestore();
   });
 

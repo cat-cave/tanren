@@ -24,6 +24,30 @@ export const templatesSensitivityRules: SensitivityRule[] = [
     ["to", "public"],
     ["reason", "public"],
   ]),
+  // template.selection.no_match: the no-match decision (requested stack + query).
+  ...rulesFor("template.selection.no_match", [
+    ["orgId", "public"],
+    ["stack", "public"],
+    ["query", "public"],
+  ]),
+  // template.creation.started: the just-in-time creation began.
+  ...rulesFor("template.creation.started", [
+    ["orgId", "public"],
+    ["stack", "public"],
+  ]),
+  // template.creation.published: the validated template that gated the scaffold.
+  ...rulesFor("template.creation.published", [
+    ["orgId", "public"],
+    ["stack", "public"],
+    ["templateId", "public"],
+    ["repoRef", "public"],
+  ]),
+  // template.creation.failed: the loud failure cause (no secret surface).
+  ...rulesFor("template.creation.failed", [
+    ["orgId", "public"],
+    ["stack", "public"],
+    ["reason", "public"],
+  ]),
 ];
 
 function rulesFor(eventName: string, entries: ReadonlyArray<[string, SensitivityRule["tag"]]>): SensitivityRule[] {

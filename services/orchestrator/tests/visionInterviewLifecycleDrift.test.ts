@@ -185,7 +185,17 @@ describe("deriveProductGraph · emits EXACTLY the captured lifecycle (no re-deri
           return preparedDeploy(request.providerKind as "deploy.vercel" | "deploy.flyio");
         },
       },
-      { orgId: "org_a", capture: captured, actor, repoUrl: TEST_REPO_URL, deploy: { providerKind: "deploy.vercel" } },
+      {
+        orgId: "org_a",
+        capture: captured,
+        actor,
+        repoUrl: TEST_REPO_URL,
+        deploy: { providerKind: "deploy.vercel" },
+        // This test asserts lifecycle persistence (identical seed-or-scratch). Run it as
+        // the template-BUILD origin (the legitimate from-scratch authoring) so it does
+        // not require a template registry query to exercise the verbatim projection.
+        scaffoldOrigin: "template_build",
+      },
     );
     const config = configs.get(derived.projectId) as { lifecycle?: CaptureLifecycle } | undefined;
     // Byte-for-byte the captured lifecycle — derive does NOT re-LLM-derive it.

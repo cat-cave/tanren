@@ -44,7 +44,11 @@ import {
   type PrepareDeployCallback,
 } from "../../engine/forge/interview/index.js";
 import type { ForgeAnswererTarget } from "../../engine/forge/providerFactory.js";
-import type { SelectedTemplate, TemplateRegistryQuery } from "../../engine/forge/interview/templateSelection.js";
+import {
+  TemplateRequiredError,
+  type SelectedTemplate,
+  type TemplateRegistryQuery,
+} from "../../engine/forge/interview/templateSelection.js";
 import type { CaptureLifecycle } from "../../engine/forge/interview/types.js";
 import {
   ProjectAccessDeniedError,
@@ -75,13 +79,15 @@ export interface OnboardingRoutesOptions {
   githubAppMinter?: GithubAppTokenMinter;
   preflightDeploy?: DeployPreflightCallback;
   prepareDeploy?: PrepareDeployCallback;
-  // TEMPLATING WAVE 4 (templating-system.md §3): the SELECTION no-match → CREATION
-  // wiring. When supplied, onboarding's template selection CREATES a template (the
-  // creation meta-flow) when no validated one matches + SEEDS from it, instead of
-  // falling to from-scratch. A per-request BUILDER (given the org/actor/registry
-  // query) of the decoupled `createForNoMatch` seam — so the onboarding route keeps
-  // NO direct creation dependency (the builder is wired at the mount layer via
-  // `buildCreateForNoMatch`). Absent ⇒ the from-scratch path (today's default).
+  // The SELECTION no-match → JUST-IN-TIME CREATION wiring (templating-system.md §3).
+  // Onboarding's template selection ALWAYS runs; on a no-match it CREATES a validated
+  // template (research → author → build → validate → publish) and SEEDS from it — the
+  // project scaffold GATES on the published template. A per-request BUILDER (given the
+  // org/actor/registry query) of the `createForNoMatch` seam — so the onboarding route
+  // keeps NO direct creation dependency (wired at the mount layer via
+  // `buildCreateForNoMatch`). REQUIRED in production: the mount ALWAYS wires it. Absent
+  // would mean a no-match HALTS LOUD (`TemplateRequiredError`) — never a from-scratch
+  // project scaffold (the deleted bypass).
   createTemplateForNoMatch?: (ctx: {
     orgId: string;
     actor: ActorContext;
@@ -195,9 +201,10 @@ export function createOnboardingRoutes(options: OnboardingRoutesOptions) {
           // the candidates to THIS org's own templates PLUS the cross-org `official`
           // catalogue — an off-scope template is never even a candidate.
           templateRegistryQuery,
-          // TEMPLATING WAVE 4 (templating-system.md §3): the no-match → CREATION
-          // seam. When the mount wired a builder, selection CREATES + SEEDS on no
-          // match (via the SAME org-scoped registry query); absent ⇒ from-scratch.
+          // The no-match → JUST-IN-TIME CREATION seam (templating-system.md §3). The
+          // mount ALWAYS wires the builder; selection CREATES + SEEDS on no match (via
+          // the SAME org-scoped registry query). An absent builder would HALT loud
+          // (`TemplateRequiredError`) — never a from-scratch project scaffold.
           ...(options.createTemplateForNoMatch === undefined
             ? {}
             : {
@@ -286,6 +293,17 @@ export function createOnboardingRoutes(options: OnboardingRoutesOptions) {
       }
       if (error instanceof DeployProvisioningUnavailableError) {
         return c.json({ error: "deploy_provisioning_unavailable", message: error.message }, 500);
+      }
+      // No validated template matched AND just-in-time creation could not produce one
+      // (creation failed / no creation seam). A LOUD fail-closed HALT — the project DAG
+      // NEVER scaffolds against a non-template base. Surfaced as a 409 needs_attention
+      // (an operator resolves the template-creation failure + retries), NOT a silent
+      // degrade to a from-scratch project scaffold (the deleted bypass).
+      if (error instanceof TemplateRequiredError) {
+        return c.json(
+          { error: "template_required", capability: "template", stack: error.requestedStack, message: error.message },
+          409,
+        );
       }
       if (error instanceof Error && error.message.startsWith("deploy provision failed:")) {
         return c.json({ error: "deploy_provision_failed", message: error.message }, 502);

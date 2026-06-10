@@ -52,6 +52,7 @@ export {
   rankTemplates,
   scoreTemplate,
   selectTemplate,
+  TemplateRequiredError,
   PROOF_FRESHNESS_MS,
   SEEDABLE_STATUSES,
   type ChannelPreference,
