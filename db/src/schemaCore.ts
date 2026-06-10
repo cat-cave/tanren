@@ -196,15 +196,16 @@ export const runs = pgTable(
     // cleared (and `verified_ancestor_shas` advanced) when the re-execution settles.
     percolationPending: jsonb("percolation_pending"),
     // §3.7f credit double-count fix: the run's resolved credential identity (the
-    // writer adapter's `authRef`). Prepaid-credit balances are GLOBAL to a
-    // credential, so when two runs share one credential and overlap, each would
-    // capture the SAME drawdown baseline and attribute the WHOLE concurrent
-    // drawdown — double-counting the spend. This per-run dedup key lets the run-end
-    // reconcile COUNT the runs concurrently active on the same credential and
-    // attribute only this run's share, so the sum across concurrent runs equals the
-    // real drawdown (idempotent). NULL until the worker resolves the run's writer
-    // credential (and for runs with no credential-priced drawdown).
+    // writer adapter's `authRef`). Prepaid-credit balances are GLOBAL to a credential,
+    // so two overlapping runs sharing one credential would each capture the SAME
+    // drawdown baseline and attribute the WHOLE concurrent drawdown — double-counting.
+    // This per-run dedup key lets the run-end reconcile COUNT the runs concurrently
+    // active on the same credential and attribute only this run's share (idempotent).
+    // NULL until the worker resolves the writer credential (or no credential-priced spend).
     authRef: text("auth_ref"),
+    // WS-A PR-1 (walker-jj-local-integration-design.md §2.3): the ORDERED ancestor stack
+    // `[{ specId, runId, branch, headSha }]`. ADDITIVE — dual-written but UNREAD for now.
+    ancestorStack: jsonb("ancestor_stack"),
   },
   (table) => [
     enumCheck("runs_status_check", table.status, stateEnumLists.runs_status),

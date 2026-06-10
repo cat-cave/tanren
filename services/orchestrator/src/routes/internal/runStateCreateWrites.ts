@@ -21,6 +21,7 @@
 import type { Context, Hono } from "hono";
 import { z } from "zod";
 import { ActorContextSchema } from "../../auth/schemas.js";
+import { ancestorStackSchema } from "../../engine/dag/ancestorStack.js";
 import { SpecPriority } from "../../engine/state/spec.js";
 import { createQueuedRunFromSpec, createSpec } from "../../engine/workflow/projectSpec.js";
 import { SpecDependenciesBlockedError, SpecNotRunnableError } from "../../engine/workflow/projectSpecErrors.js";
@@ -42,6 +43,8 @@ const createSpecRunInputSchema = z.object({
       integratedAncestorShas: z.record(z.string(), z.string()).optional(),
       verifiedAncestorShas: z.record(z.string(), z.string()).optional(),
       percolationPending: z.unknown().optional(),
+      // WS-A PR-1: the ordered ancestor stack (dual-written to `runs.ancestor_stack`).
+      ancestorStack: ancestorStackSchema.optional(),
     })
     .optional(),
 });

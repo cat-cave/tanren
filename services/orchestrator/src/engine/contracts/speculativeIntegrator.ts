@@ -14,6 +14,8 @@
 // OUT of scope here — that is change-percolation. This seam only builds the branch a dependent
 // STARTS on; re-gating against reality at real merge time reuses the up-to-date path.
 
+import type { AncestorStack } from "../dag/ancestorStack.js";
+
 /**
  * The result of building a dependent's speculative integration branch. On
  * `integrated`, `integrationBranch` is the dynamic base the dependent's run is
@@ -32,6 +34,14 @@ export interface IntegrationOutcome {
    * recorded SHA is what the change-percolation detect keys off.
    */
   ancestorHeadShas: Record<string, string>;
+  /**
+   * walker-jj-local-integration-design.md §2.3 / WS-A PR-1: the ORDERED ancestor
+   * stack this integration assembled — `[{ specId, runId, branch, headSha }]` in DAG
+   * order (the same content as `ancestorHeadShas`, but as the load-bearing ordered
+   * structure the dependent run dual-writes to `runs.ancestor_stack`). Empty on
+   * `conflict`. ADDITIVE: written but not yet read by the run path.
+   */
+  ancestorStack: AncestorStack;
   /** On `conflict`: the two ancestor specs that conflict with each other. */
   conflictBetween?: { specId: string; otherSpecId: string };
   message: string;

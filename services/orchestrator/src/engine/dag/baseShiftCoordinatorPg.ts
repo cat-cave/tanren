@@ -11,6 +11,7 @@
 
 import type pg from "pg";
 import type { SpeculativeDependent } from "../contracts/changePercolation.js";
+import type { AncestorStack } from "./ancestorStack.js";
 import type { IntegrationNode } from "../contracts/integrationNodes.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type {
@@ -40,7 +41,12 @@ export class PgBaseShiftPersistence implements BaseShiftPersistence {
     private readonly runStateWriter?: RunStateWriter,
   ) {}
 
-  async repointBase(input: { projectId: string; runId: string; speculativeBase: string | null }): Promise<void> {
+  async repointBase(input: {
+    projectId: string;
+    runId: string;
+    speculativeBase: string | null;
+    ancestorStack?: AncestorStack;
+  }): Promise<void> {
     await repointRunSpeculativeBase(this.pool, input, this.runStateWriter);
   }
 

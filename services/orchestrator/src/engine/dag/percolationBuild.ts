@@ -52,6 +52,7 @@ import {
 } from "./baseShiftLiveSeams.js";
 import { baseShiftLive } from "./baseShiftLiveFlag.js";
 import { PgSpeculativeIntegrator } from "./speculativeIntegrator.js";
+import type { AncestorStack } from "./ancestorStack.js";
 import { type ChangePercolationCoordinator, PercolatingCoordinator } from "./percolation.js";
 import { PercolatingKickOff } from "./percolationOperation.js";
 import { PgPercolationEventEmitter, PgPercolationReadModel } from "./percolationPg.js";
@@ -218,7 +219,12 @@ export function buildBaseShiftCoordinator(
  */
 export class MarkerSuppressedBaseShiftPersistence implements BaseShiftPersistence {
   constructor(private readonly inner: BaseShiftPersistence) {}
-  async repointBase(input: { projectId: string; runId: string; speculativeBase: string | null }): Promise<void> {
+  async repointBase(input: {
+    projectId: string;
+    runId: string;
+    speculativeBase: string | null;
+    ancestorStack?: AncestorStack;
+  }): Promise<void> {
     await this.inner.repointBase(input);
   }
   async markInFlight(): Promise<void> {

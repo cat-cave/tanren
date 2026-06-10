@@ -40,6 +40,7 @@ import type { DagLifecycleReadModel } from "../contracts/dagLifecycle.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { SpeculativeIntegrator } from "../contracts/speculativeIntegrator.js";
 import { SpecDependenciesBlockedError, SpecNotRunnableError } from "../workflow/projectSpecErrors.js";
+import type { AncestorStack } from "./ancestorStack.js";
 import type { SpecReadiness } from "./speculation.js";
 import { PgBudgetGate } from "./budgetGate.js";
 import { PgDagLifecycleReadModel } from "./lifecycle.js";
@@ -302,12 +303,11 @@ export class EventEmittingDagWalker implements DagWalker {
     if (integration.outcome === "conflict") {
       // The conflict is BETWEEN two ancestors — surfaced early on the integration
       // branch (§2c). The dependent is HELD this tick (it cannot base on a broken
-      // integration); this branch ONLY holds + logs — it does NOT itself resolve the
-      // conflict. The real resolution happens later when the conflicting ancestor is
-      // driven through the merge queue (the coordinator routes a base-dirty PR through
-      // the per-run intent-preserving resolver). The walker re-walks once the pair
-      // reconciles/merges (the next merge.completed notification). Logged (not silently
-      // dropped) per the §2c "no silent caps / no silent drops" rule.
+      // integration); this branch ONLY holds + logs, it does NOT resolve the conflict.
+      // The real resolution happens later when the conflicting ancestor is driven
+      // through the merge queue (the coordinator routes a base-dirty PR through the
+      // per-run intent-preserving resolver); the walker re-walks once the pair
+      // reconciles/merges. Logged (not silently dropped) per the §2c no-silent-drops rule.
       log.warn(
         "held speculative spec: ancestors dirty/conflict on the integration branch; awaiting merge-queue resolve",
         {
@@ -328,6 +328,7 @@ export class EventEmittingDagWalker implements DagWalker {
       // record the per-ancestor head SHA the run integrated against (the
       // change-percolation divergence key); a later ancestor advance is detectable.
       integratedAncestorShas: integration.ancestorHeadShas,
+      ancestorStack: integration.ancestorStack,
     });
     if (enqueued === undefined) return undefined;
     await this.deps.events.emitSpecSpeculative({
@@ -344,12 +345,10 @@ export class EventEmittingDagWalker implements DagWalker {
   /**
    * Enqueue a spec run, TOLERATING the two benign, EXPECTED per-spec enqueue
    * conditions. Either is a benign skip (return `undefined` — the caller emits no
-   * enqueued event, logged at most at debug); the tick continues enqueuing the
-   * OTHER ready specs and never aborts. EVERY OTHER error propagates unchanged — a
-   * genuine failure (a 500 / unexpected fault) still surfaces loudly (no silent
-   * fallback). Behavior is IDENTICAL whether the enqueuer ran in-process (it throws
-   * the typed error directly) or through the control plane (the client reconstructs
-   * the SAME typed error from the endpoint's typed 409).
+   * enqueued event); the tick continues enqueuing the OTHER ready specs and never
+   * aborts. EVERY OTHER error propagates unchanged — a genuine failure still surfaces
+   * loudly (no silent fallback), identically whether the enqueuer ran in-process or
+   * through the control plane (the client reconstructs the typed error from the 409).
    *
    *   1. SpecNotRunnableError — a concurrent walker tick already claimed this spec
    *      (its open→in_flight claim, the idempotency boundary, won). The spec is
@@ -366,6 +365,7 @@ export class EventEmittingDagWalker implements DagWalker {
     specId: string;
     speculativeBase?: string;
     integratedAncestorShas?: Record<string, string>;
+    ancestorStack?: AncestorStack;
   }): Promise<{ runId: string } | undefined> {
     try {
       return await this.deps.enqueuer.enqueueSpecRun(input);

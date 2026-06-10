@@ -29,6 +29,7 @@ import type { DagConfigCorruptPayload } from "../events/schemas/dag.js";
 import { type EventStore, PgEventStore } from "../eventStore.js";
 import { SpecPriority } from "../state/spec.js";
 import { createQueuedRunFromSpec } from "../workflow/projectSpec.js";
+import type { AncestorStack } from "./ancestorStack.js";
 
 /**
  * Map a persisted spec status (the SINGLE canonical `open/in_flight/review/merged/
@@ -162,6 +163,7 @@ export class SpecRunDagEnqueuer implements DagEnqueuer {
     specId: string;
     speculativeBase?: string;
     integratedAncestorShas?: Record<string, string>;
+    ancestorStack?: AncestorStack;
   }): Promise<{ runId: string }> {
     const orgId = await runWithSystemScope(this.pool, async (client) => {
       const result = await client.query<{ org_id: string | null }>(
@@ -184,14 +186,15 @@ export class SpecRunDagEnqueuer implements DagEnqueuer {
       specId: input.specId,
       trigger: "dag_walker",
       // A speculative start skips the done-only dependency gate and records the
-      // integration branch as the run's dynamic base + the per-ancestor head SHA
-      // map (the change-percolation divergence key).
+      // integration branch as the run's dynamic base + the per-ancestor head SHA map.
       ...(input.speculativeBase !== undefined && {
         speculative: {
           speculativeBase: input.speculativeBase,
           ...(input.integratedAncestorShas !== undefined && {
             integratedAncestorShas: input.integratedAncestorShas,
           }),
+          // WS-A PR-1: dual-write the ordered ancestor stack (additive, unread for now).
+          ...(input.ancestorStack !== undefined && { ancestorStack: input.ancestorStack }),
         },
       }),
     };

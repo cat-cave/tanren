@@ -26,6 +26,7 @@
 
 import type { PercolationDecision, SpeculativeDependent } from "../contracts/changePercolation.js";
 import type { IntegrationNode } from "../contracts/integrationNodes.js";
+import { ancestorStackFromShaMap, type AncestorStack } from "./ancestorStack.js";
 import type { RebaseResult, WorkspaceVcsCore } from "../contracts/workspaceVcsCore.js";
 import type { PercolationReexecutor } from "./percolationOperation.js";
 import { createLogger } from "../observability/logger.js";
@@ -104,7 +105,17 @@ export interface BaseShiftConflictResolver {
  */
 export interface BaseShiftPersistence {
   /** Re-point the EXISTING run's dynamic base (NULL when non-speculative). Keeps the row. */
-  repointBase(input: { projectId: string; runId: string; speculativeBase: string | null }): Promise<void>;
+  repointBase(input: {
+    projectId: string;
+    runId: string;
+    speculativeBase: string | null;
+    /**
+     * WS-A PR-1 (walker-jj-local-integration-design.md §2.3): the re-resolved ordered
+     * ancestor stack, DUAL-WRITTEN to `runs.ancestor_stack` alongside the legacy base.
+     * Empty when non-speculative. ADDITIVE (written, not yet read).
+     */
+    ancestorStack?: AncestorStack;
+  }): Promise<void>;
   /** Stamp the in-flight percolation marker on the EXISTING run (the settle handle). */
   markInFlight(input: {
     projectId: string;
@@ -413,10 +424,18 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
     // Non-speculative (every ancestor merged) re-points the base to NULL (a real run
     // against main); else the rebuilt integration branch.
     const speculativeBase = input.nonSpeculative ? null : input.newBaseRef;
+    // WS-A PR-1 dual-write: re-point `runs.ancestor_stack` alongside the legacy base.
+    // Non-speculative ⇒ empty stack; else the re-resolved stack reconstructed from the
+    // dependent's current per-ancestor SHA map (the same content the legacy
+    // `integrated_ancestor_shas` carries). ADDITIVE — written, not yet read.
+    const ancestorStack: AncestorStack = input.nonSpeculative
+      ? []
+      : ancestorStackFromShaMap(input.dependent.integratedAncestorShas);
     await this.deps.persistence.repointBase({
       projectId: input.projectId,
       runId: input.dependent.runId,
       speculativeBase,
+      ancestorStack,
     });
     await this.deps.persistence.markInFlight({
       projectId: input.projectId,

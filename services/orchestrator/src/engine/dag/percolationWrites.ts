@@ -15,6 +15,7 @@ import type pg from "pg";
 import type { PercolationPending } from "../contracts/changePercolation.js";
 import type { ReviewVerdict } from "../contracts/dagLifecycle.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
+import type { AncestorStack } from "./ancestorStack.js";
 import { PgEventStore } from "../eventStore.js";
 import { SpecStatusReplanRouter } from "../workflow/reviewMerge/conflictResolver/replanRouter.js";
 
@@ -226,7 +227,7 @@ export async function recordPercolationPending(
 /** Re-point an EXISTING run's dynamic base onto the shifted base (NULL ⇒ non-speculative). */
 export async function repointRunSpeculativeBase(
   pool: pg.Pool,
-  input: { projectId: string; runId: string; speculativeBase: string | null },
+  input: { projectId: string; runId: string; speculativeBase: string | null; ancestorStack?: AncestorStack },
   runStateWriter?: RunStateWriter,
 ): Promise<void> {
   if (runStateWriter !== undefined) {
@@ -236,11 +237,19 @@ export async function repointRunSpeculativeBase(
       runId: input.runId,
       orgId,
       speculativeBase: input.speculativeBase,
+      // WS-A PR-1: dual-write the re-resolved ancestor stack alongside the base.
+      ...(input.ancestorStack !== undefined && { ancestorStack: input.ancestorStack }),
     });
     return;
   }
   await orgScopedWrite(pool, input.projectId, async (client) => {
-    await client.query("UPDATE runs SET speculative_base = $2 WHERE run_id = $1", [input.runId, input.speculativeBase]);
+    // WS-A PR-1 dual-write: re-point `ancestor_stack` alongside the legacy
+    // `speculative_base` (additive — written, not yet read by the run path).
+    await client.query("UPDATE runs SET speculative_base = $2, ancestor_stack = $3::jsonb WHERE run_id = $1", [
+      input.runId,
+      input.speculativeBase,
+      input.ancestorStack === undefined ? null : JSON.stringify(input.ancestorStack),
+    ]);
   });
 }
 

@@ -33,6 +33,7 @@ import type {
   SpeculativeIntegrator,
 } from "../src/engine/contracts/speculativeIntegrator.js";
 import type { SpeculationThreshold } from "../src/engine/config/index.js";
+import type { AncestorStack } from "../src/engine/dag/ancestorStack.js";
 
 const PROJECT = "project_spec";
 
@@ -67,6 +68,7 @@ class FixedLifecycle implements DagLifecycleReadModel {
 interface RecordedEnqueue {
   specId: string;
   speculativeBase?: string;
+  ancestorStack?: AncestorStack;
 }
 
 class RecordingEnqueuer implements DagEnqueuer {
@@ -76,11 +78,13 @@ class RecordingEnqueuer implements DagEnqueuer {
     projectId: string;
     specId: string;
     speculativeBase?: string;
+    ancestorStack?: AncestorStack;
   }): Promise<{ runId: string }> {
     this.seq += 1;
     this.records.push({
       specId: input.specId,
       ...(input.speculativeBase !== undefined && { speculativeBase: input.speculativeBase }),
+      ...(input.ancestorStack !== undefined && { ancestorStack: input.ancestorStack }),
     });
     return { runId: `run_${this.seq}` };
   }
@@ -139,6 +143,9 @@ class FakeIntegrator implements SpeculativeIntegrator {
       return {
         outcome: "conflict",
         integrationBranch,
+        ancestorHeadShas: {},
+        // WS-A PR-1: no integrated base on a conflict ⇒ empty stack.
+        ancestorStack: [],
         conflictBetween: {
           specId: input.unmergedAncestorSpecIds[1] ?? "",
           otherSpecId: input.unmergedAncestorSpecIds[0] ?? "",
@@ -146,7 +153,18 @@ class FakeIntegrator implements SpeculativeIntegrator {
         message: "ancestor conflict",
       };
     }
-    return { outcome: "integrated", integrationBranch, message: "ok" };
+    // WS-A PR-1: the ordered ancestor stack the dependent dual-writes to
+    // `runs.ancestor_stack` — one member per unmerged ancestor (DAG order).
+    const ancestorHeadShas = Object.fromEntries(
+      input.unmergedAncestorSpecIds.map((specId) => [specId, `sha_${specId}`] as const),
+    );
+    const ancestorStack: AncestorStack = input.unmergedAncestorSpecIds.map((specId) => ({
+      specId,
+      runId: `run_${specId}`,
+      branch: `tanren/${specId}`,
+      headSha: `sha_${specId}`,
+    }));
+    return { outcome: "integrated", integrationBranch, ancestorHeadShas, ancestorStack, message: "ok" };
   }
 }
 
@@ -190,8 +208,15 @@ describe("DagWalker speculative execution (§2c)", () => {
     const result = await walker.walk(PROJECT);
 
     expect(result.enqueuedSpecIds).toEqual(["spec_b"]);
-    // The run was created against the integration branch (the dynamic base).
-    expect(enqueuer.records).toEqual([{ specId: "spec_b", speculativeBase: "tanren/integ/spec_b" }]);
+    // The run was created against the integration branch (the dynamic base). WS-A PR-1:
+    // the ordered ancestor stack is DUAL-WRITTEN alongside the legacy speculative base.
+    expect(enqueuer.records).toEqual([
+      {
+        specId: "spec_b",
+        speculativeBase: "tanren/integ/spec_b",
+        ancestorStack: [{ specId: "spec_a", runId: "run_spec_a", branch: "tanren/spec_a", headSha: "sha_spec_a" }],
+      },
+    ]);
     // The integration branch was built for spec_b over its unmerged ancestor spec_a.
     expect((integrator as FakeIntegrator).calls).toEqual([
       { projectId: PROJECT, dependentSpecId: "spec_b", unmergedAncestorSpecIds: ["spec_a"] },
@@ -286,7 +311,11 @@ describe("DagWalker speculative execution (§2c)", () => {
       threshold: "moderate",
     });
     await spec.walker.walk(PROJECT);
-    expect(spec.enqueuer.records[0]).toEqual({ specId: "spec_b", speculativeBase: "tanren/integ/spec_b" });
+    expect(spec.enqueuer.records[0]).toEqual({
+      specId: "spec_b",
+      speculativeBase: "tanren/integ/spec_b",
+      ancestorStack: [{ specId: "spec_a", runId: "run_spec_a", branch: "tanren/spec_a", headSha: "sha_spec_a" }],
+    });
 
     // Tick 2 (after A REALLY merges): a fresh dependent C on the now-merged A bases
     // on default_branch (re-gate against reality). No speculative base.

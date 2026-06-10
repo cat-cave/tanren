@@ -64,6 +64,18 @@ export async function applySetRunSpeculativeBase(
   client: QueryClient,
   input: SetRunSpeculativeBaseInput,
 ): Promise<void> {
+  // WS-A PR-1 dual-write: when the caller supplies the re-resolved ancestor stack,
+  // re-point `ancestor_stack` alongside the legacy `speculative_base` (additive —
+  // written, not yet read). Absent ⇒ leave the column untouched (byte-identical to
+  // the prior single-column UPDATE).
+  if (input.ancestorStack !== undefined) {
+    await client.query("UPDATE runs SET speculative_base = $2, ancestor_stack = $3::jsonb WHERE run_id = $1", [
+      input.runId,
+      input.speculativeBase,
+      JSON.stringify(input.ancestorStack),
+    ]);
+    return;
+  }
   await client.query("UPDATE runs SET speculative_base = $2 WHERE run_id = $1", [input.runId, input.speculativeBase]);
 }
 
