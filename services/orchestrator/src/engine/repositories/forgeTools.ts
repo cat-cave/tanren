@@ -182,18 +182,25 @@ export const ForgeToolsStore = {
 
   // --- project load (repo.ts) ---
 
-  /** The repo url + config blob for a project (repo tools' credential load). */
+  /**
+   * The repo url + default branch + config blob for a project (repo tools'
+   * credential load + the scheduled-audit repo-indexing ref). `default_branch`
+   * is `NOT NULL DEFAULT 'main'`, so a present row always carries a real branch.
+   */
   async getProjectRepoAndConfig(
     client: QueryClient,
     projectId: string,
     _actor: ActorRef,
-  ): Promise<{ repoUrl: string; config: Record<string, unknown> | null } | undefined> {
-    const result = await client.query<{ repo_url: string; config: Record<string, unknown> | null }>(
-      "SELECT repo_url, config FROM projects WHERE project_id = $1",
-      [projectId],
-    );
+  ): Promise<{ repoUrl: string; defaultBranch: string; config: Record<string, unknown> | null } | undefined> {
+    const result = await client.query<{
+      repo_url: string;
+      default_branch: string;
+      config: Record<string, unknown> | null;
+    }>("SELECT repo_url, default_branch, config FROM projects WHERE project_id = $1", [projectId]);
     const row = result.rows[0];
-    return row === undefined ? undefined : { repoUrl: row.repo_url, config: row.config };
+    return row === undefined
+      ? undefined
+      : { repoUrl: row.repo_url, defaultBranch: row.default_branch, config: row.config };
   },
 
   // --- runner context load (providerFactory.ts) ---

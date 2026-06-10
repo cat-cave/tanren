@@ -191,11 +191,14 @@ export class ForgeRecoveryScopedClient {
       const run = task === undefined ? undefined : this.visibleRuns.find((r) => r.run_id === task.run_id);
       return run === undefined ? { rows: [], rowCount: 0 } : { rows: [{ spec_id: run.spec_id }], rowCount: 1 };
     }
-    if (sql === "SELECT repo_url, config FROM projects WHERE project_id = $1") {
+    if (sql === "SELECT repo_url, default_branch, config FROM projects WHERE project_id = $1") {
       const p = this.visibleProjects.find((x) => x.project_id === params[0]);
       return p === undefined
         ? { rows: [], rowCount: 0 }
-        : { rows: [{ repo_url: p.repo_url, config: p.config }], rowCount: 1 };
+        : {
+            rows: [{ repo_url: p.repo_url, default_branch: p.default_branch ?? "main", config: p.config }],
+            rowCount: 1,
+          };
     }
     if (sql === "SELECT runner_image, config, org_id FROM projects WHERE project_id = $1") {
       const p = this.visibleProjects.find((x) => x.project_id === params[0]);

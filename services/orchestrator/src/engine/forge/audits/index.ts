@@ -42,6 +42,7 @@ export {
   createAnswererPassRunner,
   AuditJobNotProjectScopedError,
   AuditProjectRepoUnresolvableError,
+  AuditProjectDefaultBranchUnresolvableError,
   type AnswererPassRunnerDeps,
 } from "./answererPassRunner.js";
 

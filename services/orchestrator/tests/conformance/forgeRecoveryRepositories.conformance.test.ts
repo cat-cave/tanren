@@ -221,6 +221,7 @@ describe("Repositories conformance: forge/recovery (in-memory pg)", () => {
       seedProject(d);
       expect(await repos.forgeTools.getProjectRepoAndConfig(clientA(d), "project_a", systemActor)).toEqual({
         repoUrl: "https://example.com/a.git",
+        defaultBranch: "main",
         config: { githubCredentialRef: "ref" },
       });
       expect(await repos.forgeTools.getProjectRunnerContext(clientA(d), "project_a", systemActor)).toEqual({

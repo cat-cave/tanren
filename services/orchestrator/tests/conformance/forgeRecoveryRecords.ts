@@ -54,6 +54,9 @@ export interface CostRec {
 export interface ProjectRec {
   project_id: string;
   repo_url: string;
+  // `projects.default_branch` is `NOT NULL DEFAULT 'main'`; optional here so
+  // existing seeds keep the column's default, set it to exercise a non-`main` repo.
+  default_branch?: string;
   runner_image: string;
   config: unknown;
   org_id: string | null;
