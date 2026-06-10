@@ -34,13 +34,19 @@ interface CredentialRoutesOptions {
   registry?: CredentialRegistry;
 }
 
-export interface CredentialRecord {
-  ref: string;
-  kind: "codex_chatgpt_auth" | "claude_cli_auth" | "opencode_cli_auth" | "github_token" | "github_app" | "opaque";
-  scope: "org" | "me";
-  ownerId: string;
-  createdAt: string;
-}
+// The persisted registry record. DECODED through this Zod schema on read (r6 §4 —
+// the widened no-pg-as-date scope): a persisted JSON value is re-validated at the
+// boundary, never cast (`JSON.parse(...) as CredentialRecord`), so a corrupt /
+// schema-drifted record fails LOUD at the read site instead of silently handing a
+// malformed shape (a bad `kind`/`scope` enum, a missing field) to a consumer.
+export const CredentialRecordSchema = z.object({
+  ref: z.string(),
+  kind: z.enum(["codex_chatgpt_auth", "claude_cli_auth", "opencode_cli_auth", "github_token", "github_app", "opaque"]),
+  scope: z.enum(["org", "me"]),
+  ownerId: z.string(),
+  createdAt: z.string(),
+});
+export type CredentialRecord = z.infer<typeof CredentialRecordSchema>;
 
 // The credential LIST surface (`GET /orgs/:orgId/credentials`, `GET
 // /credentials/me`) reads this registry, NOT the secret value — credential
@@ -107,7 +113,9 @@ export class SecretStoreCredentialRegistry implements CredentialRegistry {
 
   private async readRecord(storeRef: string): Promise<CredentialRecord | undefined> {
     const stored = await this.secrets.get(storeRef);
-    return stored === undefined ? undefined : (JSON.parse(stored.value) as CredentialRecord);
+    // DECODE (not cast) the persisted JSON through the Zod schema — a corrupt or
+    // schema-drifted record fails loud here rather than laundering a bad shape.
+    return stored === undefined ? undefined : CredentialRecordSchema.parse(JSON.parse(stored.value));
   }
 }
 

@@ -142,6 +142,67 @@ const ENV_READ_FILE_WHITELIST = new Set([
   "db/src/orgScope.ts",
 ]);
 
+// ── VARIABLE-AWARE secret gate (Codex r6 §3) ────────────────────────────────
+// A file-level whitelist is NOT enough for a secret VALUE: once a boot file is
+// whitelisted, the prior gate let it read ANY `TANREN_*` — including the secret
+// VALUE `TANREN_OIDC_CLIENT_SECRET`. The gate is now VARIABLE-AWARE: a direct read
+// of a SECRET-SHAPED var (a `*_SECRET` / `*_TOKEN` — but NOT a `*_TOKEN_FILE` /
+// `*_TOKEN_REF` indirection — / `*_PRIVATE_KEY`) is FORBIDDEN even in a whitelisted
+// file. A secret value must instead be resolved through a FILE-PREFERRED helper
+// (`requireSecretFromFileOrEnv` / `optionalSecretFromFileOrEnv` / `requireVaultToken`),
+// which reads the var by name as a helper ARGUMENT (not a `process.env` literal),
+// so the scan never sees it — the file-mount path wins, the plaintext env is only a
+// dev convenience. The ONLY exceptions are vars EXPLICITLY classified below as
+// non-secret (a public key, a ref handle, or a path).
+
+// A var name shaped like a SECRET VALUE: `*_SECRET` / `*_TOKEN` / a `*_KEY`
+// (private-key material). The INDIRECTIONS are excluded — `*_TOKEN_FILE` /
+// `*_TOKEN_REF` (a mount path / store handle) and the `*_KEY_PATH` / `*_KEY_FILE` /
+// `*_KEY_REF` / `*_KEY_NAME` config forms (a path / handle / identifier, not the key
+// bytes). A secret-shaped name that is NOT one of those indirections is forbidden as
+// a direct read UNLESS explicitly classified below.
+function isSecretShapedVar(name) {
+  if (/(?:_TOKEN_FILE|_TOKEN_REF|_KEY_PATH|_KEY_FILE|_KEY_REF|_KEY_NAME)$/u.test(name)) {
+    return false;
+  }
+  return /(?:_SECRET|_TOKEN|_KEY)$/u.test(name);
+}
+
+// EXPLICIT non-secret classification for a secret-SHAPED name that is provably NOT
+// a secret value: `public` (public key material), `ref` (an opaque store handle —
+// the value lives in the secret store, not here), or `path` (a filesystem path to a
+// mounted secret, not the secret itself). A classified var may be read directly even
+// though its name matches the secret shape. EVERYTHING ELSE secret-shaped is FORBIDDEN
+// as a direct read and must go through a file-preferred helper.
+const SECRET_VAR_CLASSIFICATION = new Map([
+  // The runner's AUTHORIZED public key (the `authorized_keys` line) — public key
+  // material, not a private secret; safe to read directly.
+  ["TANREN_RUNNER_AUTHORIZED_KEY", "public"],
+  // Cloud SSH PUBLIC keys handed to the provider so the runner accepts our identity —
+  // public key material (the matching PRIVATE key is the runner SSH identity, read
+  // off a different seam at connect time, never here).
+  ["TANREN_GCP_SSH_PUBLIC_KEY", "public"],
+  ["TANREN_K8S_SSH_PUBLIC_KEY", "public"],
+  // The cloud key-pair NAME (an identifier the provider resolves to a stored key) —
+  // a handle, not key bytes. (`*_KEY_NAME` is also excluded by shape; classified for
+  // explicitness.)
+  ["TANREN_AWS_KEY_NAME", "ref"],
+  // The data-plane mTLS private-key FILESYSTEM PATH (not the key bytes); the bytes
+  // are read from the mounted file, never carried in env.
+  ["TANREN_DATA_PLANE_TLS_KEY", "path"],
+]);
+
+// The file-preferred secret helpers. A secret VALUE must be resolved through one of
+// these (which name the var as an ARGUMENT, so it never appears as a `process.env`
+// literal the scan can see). Listed for documentation + to anchor the doctrine; the
+// scan enforces the inverse (a DIRECT secret-shaped read is the violation).
+const FILE_PREFERRED_SECRET_HELPERS = new Set([
+  "requireSecretFromFileOrEnv",
+  "optionalSecretFromFileOrEnv",
+  "requireVaultToken",
+]);
+void FILE_PREFERRED_SECRET_HELPERS;
+
 const SCAN_GLOBS = ["services/**/*.{ts,tsx}", "db/**/*.{ts,tsx}", "cli/**/*.{ts,tsx}"];
 const IGNORED_SEGMENTS = new Set(["node_modules", "dist", "coverage", ".turbo", ".claude"]);
 
@@ -235,6 +296,14 @@ export async function runEnvReadWhitelistCheck({ root = process.cwd() } = {}) {
     for (const re of [ENV_READ, ENV_HELPER_READ]) {
       for (const match of text.matchAll(re)) {
         const name = match[1] ?? match[2];
+        // VARIABLE-AWARE secret gate (r6 §3): a DIRECT read of a secret-VALUE-shaped
+        // var is forbidden EVEN IN A WHITELISTED FILE unless it is explicitly
+        // classified non-secret (public/ref/path). The fix is to route it through a
+        // file-preferred helper (which reads the name as an argument, invisible here).
+        if (isSecretShapedVar(name) && !SECRET_VAR_CLASSIFICATION.has(name)) {
+          violations.push({ file, line: lineFor(text, match.index), snippet: match[0], reason: "secret-direct-read" });
+          continue;
+        }
         if (name.startsWith("TANREN_")) {
           // A `TANREN_*` read must live in a whitelisted boot/config FILE.
           if (!ENV_READ_FILE_WHITELIST.has(file)) {
@@ -268,7 +337,10 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     console.error("env-read-whitelist: a process.env read is not governed.");
     console.error(
       "Fold a TANREN_* read into the service's envSchema.ts (or whitelist its file in ENV_READ_FILE_WHITELIST); " +
-        "add a non-TANREN_ var to NON_TANREN_ENV_ALLOWLIST with a one-line rationale.\n",
+        "add a non-TANREN_ var to NON_TANREN_ENV_ALLOWLIST with a one-line rationale. A `secret-direct-read` " +
+        "(a *_SECRET / *_TOKEN / *_PRIVATE_KEY value) must instead go through a file-preferred helper " +
+        "(requireSecretFromFileOrEnv / optionalSecretFromFileOrEnv / requireVaultToken), or be classified " +
+        "non-secret in SECRET_VAR_CLASSIFICATION (public/ref/path).\n",
     );
     for (const violation of violations) {
       console.error(`${relative(process.cwd(), resolve(violation.file))}:${violation.line}: ${violation.snippet}`);

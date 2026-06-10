@@ -10,12 +10,20 @@ import { describe, expect, it } from "vitest";
 import { runNoPgAsDateLint, scanLineForViolations } from "./no-pg-as-date.mjs";
 
 const SCOPED = "services/orchestrator/src/routes/runs/list.ts";
-const OUT_OF_SCOPE = "services/orchestrator/src/routes/specs/list.ts";
-// A forge decode site is now scoped as an EXACT file.
+// r6 §4: the scope WIDENED to the whole `routes/` + `db/` + `engine/**/*store*.ts`.
+// An out-of-scope file is now an engine module that is NOT a store / forge decode.
+const OUT_OF_SCOPE = "services/orchestrator/src/engine/workflow/plannerRun.ts";
+// A newly-scoped HTTP read seam outside `routes/runs/` (the whole `routes/` is now in).
+const SCOPED_ROUTES_OTHER = "services/orchestrator/src/routes/specs/list.ts";
+// A newly-scoped DB-layer decode file (`db/**`).
+const SCOPED_DB = "db/src/schemaForge.ts";
+// A newly-scoped store/repository decode module (`engine/**/*store*.ts`).
+const SCOPED_STORE = "services/orchestrator/src/engine/notifications/store.ts";
+// A forge decode site is scoped as an EXACT file.
 const FORGE_TURNS = "services/orchestrator/src/engine/forge/turns.ts";
-// A sibling in the same dir is NOT scoped (only the three decode files are).
+// A sibling in the same dir is NOT scoped (only the listed decode files + globs are).
 const FORGE_SIBLING = "services/orchestrator/src/engine/forge/schemas.ts";
-// The forge-tools event read seam — newly scoped (code-integrity r3 finding #4).
+// The forge-tools event read seam — scoped (code-integrity r3 finding #4).
 const FORGE_TOOLS_READ = "services/orchestrator/src/engine/forge/tools/read.ts";
 
 async function createFixture(files: Record<string, string>): Promise<string> {
@@ -82,6 +90,36 @@ describe("no-pg-as-date lint", () => {
     const diagnostics = await runNoPgAsDateLint({ root });
     expect(diagnostics).toHaveLength(1);
     expect(diagnostics[0]?.file).toBe(FORGE_TOOLS_READ);
+    expect(diagnostics[0]?.message).toMatch(/as Date/u);
+  });
+
+  it("REJECTS a planted `as Date` cast in a newly-scoped routes/ seam (widened r6 §4)", async () => {
+    const root = await createFixture({
+      [SCOPED_ROUTES_OTHER]: "return { startedAt: raw.started_at as Date };\n",
+    });
+    const diagnostics = await runNoPgAsDateLint({ root });
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]?.file).toBe(SCOPED_ROUTES_OTHER);
+    expect(diagnostics[0]?.message).toMatch(/as Date/u);
+  });
+
+  it("REJECTS a planted `as Date` cast in a newly-scoped db/ decode file (widened r6 §4)", async () => {
+    const root = await createFixture({
+      [SCOPED_DB]: "return { createdAt: row.created_at as Date };\n",
+    });
+    const diagnostics = await runNoPgAsDateLint({ root });
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]?.file).toBe(SCOPED_DB);
+    expect(diagnostics[0]?.message).toMatch(/as Date/u);
+  });
+
+  it("REJECTS a planted `as Date` cast in a newly-scoped engine store module (widened r6 §4)", async () => {
+    const root = await createFixture({
+      [SCOPED_STORE]: "return { sentAt: row.sent_at as Date };\n",
+    });
+    const diagnostics = await runNoPgAsDateLint({ root });
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]?.file).toBe(SCOPED_STORE);
     expect(diagnostics[0]?.message).toMatch(/as Date/u);
   });
 

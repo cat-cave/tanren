@@ -28,13 +28,25 @@ export interface ReapJobsDeps {
 export interface ReapJobsResult {
   requeued: number;
   deadLettered: number;
+  // LOUD-over-swallowed (r6 §1): the dead-letter recovery side-effects — the
+  // operator-visible `job.dead_lettered` event and the spec park that frees the
+  // DAG slot — are best-effort, but a FAILURE of either is the exact condition the
+  // reaper exists to surface, so it is logged (structured) AND counted here. A
+  // non-zero count on a pass means a dead-letter was recovered but its operator
+  // signal (event) or DAG-slot release (park) did not land.
+  eventWriteFailed: number;
+  parkFailed: number;
   jobs: ReapedJob[];
 }
 
 /**
  * Run one reaper pass: requeue or dead-letter every `running` job whose lease
  * has lapsed. Emits a `job.dead_lettered` event for each dead-lettered job that
- * is bound to a run (best-effort — never lets an event write mask the recovery).
+ * is bound to a run and parks its spec at `needs_attention` (freeing the DAG
+ * slot). Both side-effects are best-effort but LOUD: a failure of either is
+ * logged (structured) and counted on the result (`eventWriteFailed`/`parkFailed`)
+ * — never silently swallowed, since the failure is precisely what the reaper
+ * exists to surface.
  */
 export async function reapExpiredJobs(deps: ReapJobsDeps): Promise<ReapJobsResult> {
   const reaped = await deps.jobQueue.reapExpiredLeases(deps.now === undefined ? undefined : { now: deps.now });
@@ -46,24 +58,34 @@ export async function reapExpiredJobs(deps: ReapJobsDeps): Promise<ReapJobsResul
   const eventStore = deps.eventStore ?? new PgEventStore(orgScopingPool(deps.pool));
   let requeued = 0;
   let deadLettered = 0;
+  let eventWriteFailed = 0;
+  let parkFailed = 0;
   for (const job of reaped) {
     if (job.outcome === "requeued") {
       requeued += 1;
       continue;
     }
     deadLettered += 1;
-    await emitDeadLetterEvent(deps.pool, eventStore, job).catch(() => {});
+    const failures = await emitDeadLetterEvent(deps.pool, eventStore, job);
+    eventWriteFailed += failures.eventWriteFailed ? 1 : 0;
+    parkFailed += failures.parkFailed ? 1 : 0;
   }
-  return { requeued, deadLettered, jobs: reaped };
+  return { requeued, deadLettered, eventWriteFailed, parkFailed, jobs: reaped };
 }
 
-async function emitDeadLetterEvent(pool: pg.Pool, eventStore: EventStore, job: ReapedJob): Promise<void> {
+interface DeadLetterFailures {
+  eventWriteFailed: boolean;
+  parkFailed: boolean;
+}
+
+async function emitDeadLetterEvent(pool: pg.Pool, eventStore: EventStore, job: ReapedJob): Promise<DeadLetterFailures> {
+  const failures: DeadLetterFailures = { eventWriteFailed: false, parkFailed: false };
   if (job.runId === undefined) {
-    return;
+    return failures;
   }
   const context = await loadRunLineage(pool, job.runId);
   if (context === undefined) {
-    return;
+    return failures;
   }
   // DEAD-LETTER FINALIZER (audit §3.13c): a dead-lettered job is TERMINAL — its run is
   // never re-claimed. Without finalizing the spec it stays `in_flight` FOREVER,
@@ -73,9 +95,26 @@ async function emitDeadLetterEvent(pool: pg.Pool, eventStore: EventStore, job: R
   // the slot (the rest of the DAG advances), blocks ONLY its dependents, and is
   // operator-visible. The `job.dead_lettered` event below names the cause. Best-effort,
   // org-scoped, ATOMIC-guarded (an already-terminal spec is left untouched) — a park
-  // failure must never mask the dead-letter event.
+  // failure must never mask the dead-letter event, but it is LOUD (logged + counted, r6 §1).
   if (context.specId !== "" && context.orgId !== null) {
-    await parkDeadLetteredSpec(pool, context.orgId, context.specId).catch(() => {});
+    try {
+      await parkDeadLetteredSpec(pool, context.orgId, context.specId);
+    } catch (error) {
+      failures.parkFailed = true;
+      // The spec stays in_flight (DAG slot stuck) — surface it loud so an operator can
+      // park it by hand; never a silent loss of the slot-freeing the reaper exists for.
+      log.error(
+        "dead-letter spec park failed (DAG slot not freed)",
+        {
+          jobId: job.id,
+          runId: job.runId,
+          specId: context.specId,
+          orgId: context.orgId,
+          reason: "park_failed",
+        },
+        error,
+      );
+    }
   }
   const append = (): Promise<void> =>
     eventStore.append({
@@ -95,8 +134,27 @@ async function emitDeadLetterEvent(pool: pg.Pool, eventStore: EventStore, job: R
   // RLS R3a-worker: scope the dead-letter event to the reaped run's org via the
   // per-job org-id (the default PgEventStore then opens a short org-scoped txn
   // for the INSERT). A legacy/unscoped run (org_id NULL) appends on the pool —
-  // inert, identical to before this cohort.
-  await (context.orgId === null ? append() : runWithJobOrgId(context.orgId, append));
+  // inert, identical to before this cohort. A failed append is LOUD (logged +
+  // counted, r6 §1): losing this event silently hides the dead-letter from the
+  // operator, the exact condition the reaper exists to surface.
+  try {
+    await (context.orgId === null ? append() : runWithJobOrgId(context.orgId, append));
+  } catch (error) {
+    failures.eventWriteFailed = true;
+    log.error(
+      "dead-letter event write failed (operator signal lost)",
+      {
+        jobId: job.id,
+        runId: job.runId,
+        specId: context.specId,
+        projectId: context.projectId,
+        orgId: context.orgId ?? undefined,
+        reason: "event_write_failed",
+      },
+      error,
+    );
+  }
+  return failures;
 }
 
 /**
@@ -211,6 +269,11 @@ export class JobReaper {
 
 function defaultOnPass(result: ReapJobsResult): void {
   if (result.requeued > 0 || result.deadLettered > 0) {
-    log.info("reaper pass", { requeued: result.requeued, deadLettered: result.deadLettered });
+    log.info("reaper pass", {
+      requeued: result.requeued,
+      deadLettered: result.deadLettered,
+      eventWriteFailed: result.eventWriteFailed,
+      parkFailed: result.parkFailed,
+    });
   }
 }

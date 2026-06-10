@@ -248,6 +248,72 @@ describe("reapExpiredJobs — lineage + event scoping", () => {
   });
 });
 
+describe("reapExpiredJobs — LOUD dead-letter recovery failures (r6 §1)", () => {
+  // An event store whose append always throws — the dead-letter event write fails.
+  class ThrowingEventStore extends FakeEventStore {
+    override async append(): Promise<void> {
+      throw new Error("events insert blew up");
+    }
+  }
+
+  // A pool whose spec-park UPDATE throws — the DAG-slot-freeing park fails. The
+  // lineage SELECT still resolves (org-scoped, so the park is attempted).
+  class ParkFailingPool extends ReaperPool {
+    override async query(sql: string, params: unknown[]): Promise<{ rows: unknown[]; rowCount: number }> {
+      if (sql.trim().startsWith("UPDATE specs SET status = 'needs_attention'")) {
+        throw new Error("specs update blew up");
+      }
+      return super.query(sql, params);
+    }
+  }
+
+  it("counts + logs (never swallows) a failed dead-letter EVENT write", async () => {
+    const jobQueue = new FakeJobQueue();
+    await jobQueue.enqueue({ runId: "run_ev", taskKind: "plan", payload: {}, maxAttempts: 1 });
+    await jobQueue.claim("plan", { leaseMs: 10 });
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const result = await reapExpiredJobs({
+      pool: new ReaperPool({ orgId: "org_77" }).asPgPool(),
+      jobQueue,
+      eventStore: new ThrowingEventStore(),
+      now: new Date(Date.now() + 1_000),
+    });
+
+    // Recovery still happened (job is dead-lettered), but the lost event is LOUD:
+    // counted on the result AND structured-logged — never silently dropped.
+    expect(result).toMatchObject({ deadLettered: 1, eventWriteFailed: 1, parkFailed: 0 });
+    const logged = errorLog.mock.calls.flat().join(" ");
+    expect(logged).toContain("dead-letter event write failed");
+    expect(logged).toContain("event_write_failed");
+    expect(logged).toContain("run_ev");
+  });
+
+  it("counts + logs (never swallows) a failed spec PARK", async () => {
+    const jobQueue = new FakeJobQueue();
+    await jobQueue.enqueue({ runId: "run_pk", taskKind: "plan", payload: {}, maxAttempts: 1 });
+    await jobQueue.claim("plan", { leaseMs: 10 });
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    const events = new FakeEventStore();
+
+    const result = await reapExpiredJobs({
+      pool: new ParkFailingPool({ orgId: "org_77" }).asPgPool(),
+      jobQueue,
+      eventStore: events,
+      now: new Date(Date.now() + 1_000),
+    });
+
+    // The park failed (DAG slot not freed) — counted + structured-logged. The
+    // event write is NOT masked by the park failure: it still emitted.
+    expect(result).toMatchObject({ deadLettered: 1, parkFailed: 1, eventWriteFailed: 0 });
+    const logged = errorLog.mock.calls.flat().join(" ");
+    expect(logged).toContain("dead-letter spec park failed");
+    expect(logged).toContain("park_failed");
+    expect(logged).toContain("spec_for_run_pk");
+    expect(events.events[0]).toMatchObject({ eventType: "job.dead_lettered", runId: "run_pk" });
+  });
+});
+
 // A sleep the test resolves explicitly: the reaper loop parks here between
 // passes, so the test controls exactly how many passes run (no busy-spin, no
 // real timer — deterministic + fast). `release()` lets the loop take its next

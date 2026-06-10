@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { authentikPresetDefaults } from "./authentikEnv.js";
 import { OidcProvider, type OidcProviderConfig } from "./oidcProvider.js";
+import { optionalSecretFromFileOrEnv, type SecretStoreEnv } from "../engine/contracts/secretStoreFactory.js";
 
 /**
  * The closed set of known `TANREN_OIDC_PRESET` values. UNSET is the documented
@@ -68,11 +69,20 @@ const OIDC_MANDATORY_FIELDS = [
  * Every preset value stays overridable — an explicit `TANREN_OIDC_*` env always
  * wins; the preset only fills the gaps the operator left unset. With no preset,
  * the generic provider defaults are used (behavior unchanged).
+ *
+ * The CLIENT SECRET is resolved FILE-PREFERRED (Codex r6 §5): a prod OIDC secret
+ * is mounted as `TANREN_OIDC_CLIENT_SECRET_FILE` (read in-memory at boot, never a
+ * plaintext value in `/proc/<pid>/environ`); the plaintext `TANREN_OIDC_CLIENT_SECRET`
+ * env stays a dev convenience and the file WINS when both are set. A
+ * configured-but-empty file is itself a hard failure (a blank secret on this
+ * security boundary is a misconfiguration, never a silent "absent").
  */
-export function buildOidcProviderFromEnv(): OidcProvider | undefined {
-  const issuer = emptyToUndefined(process.env["TANREN_OIDC_ISSUER"]);
-  const clientId = emptyToUndefined(process.env["TANREN_OIDC_CLIENT_ID"]);
-  const clientSecret = emptyToUndefined(process.env["TANREN_OIDC_CLIENT_SECRET"]);
+export function buildOidcProviderFromEnv(env: SecretStoreEnv = process.env): OidcProvider | undefined {
+  const issuer = emptyToUndefined(env["TANREN_OIDC_ISSUER"]);
+  const clientId = emptyToUndefined(env["TANREN_OIDC_CLIENT_ID"]);
+  // File-preferred: `${NAME}_FILE` (prod mount) wins over the plaintext env (dev).
+  // Returns undefined only when NEITHER is set; a configured-but-empty file throws.
+  const clientSecret = optionalSecretFromFileOrEnv(env, "TANREN_OIDC_CLIENT_SECRET", "OIDC client secret");
 
   // FULLY-ABSENT → the legitimate "no OIDC" case (provider disabled). PARTIAL →
   // a loud boot error below; a present-but-blank value counts as absent here, so
@@ -81,9 +91,15 @@ export function buildOidcProviderFromEnv(): OidcProvider | undefined {
     return undefined;
   }
   if (issuer === undefined || clientId === undefined || clientSecret === undefined) {
-    const missing = OIDC_MANDATORY_FIELDS.filter(
-      ([envName]) => emptyToUndefined(process.env[envName]) === undefined,
-    ).map(([envName, label]) => `${envName} (${label})`);
+    const present = {
+      TANREN_OIDC_ISSUER: issuer !== undefined,
+      TANREN_OIDC_CLIENT_ID: clientId !== undefined,
+      // The secret is present via EITHER the plaintext env OR the mounted `_FILE`.
+      TANREN_OIDC_CLIENT_SECRET: clientSecret !== undefined,
+    } satisfies Record<(typeof OIDC_MANDATORY_FIELDS)[number][0], boolean>;
+    const missing = OIDC_MANDATORY_FIELDS.filter(([envName]) => !present[envName]).map(
+      ([envName, label]) => `${envName} (${label})`,
+    );
     throw new Error(
       `OIDC is PARTIALLY configured: missing ${missing.join(", ")}. ` +
         "When ANY TANREN_OIDC_* var is set, all three of issuer + client id + client secret are required — " +
@@ -93,8 +109,8 @@ export function buildOidcProviderFromEnv(): OidcProvider | undefined {
   }
 
   // All three present (the partial-config branch threw above; TS narrows here).
-  const preset = presetDefaults(parseOidcPreset(process.env["TANREN_OIDC_PRESET"]));
-  const scopesEnv = emptyToUndefined(process.env["TANREN_OIDC_SCOPES"]);
+  const preset = presetDefaults(parseOidcPreset(env["TANREN_OIDC_PRESET"]));
+  const scopesEnv = emptyToUndefined(env["TANREN_OIDC_SCOPES"]);
   return new OidcProvider({
     issuer,
     clientId,
@@ -102,10 +118,10 @@ export function buildOidcProviderFromEnv(): OidcProvider | undefined {
     // Explicit env overrides win over preset defaults (which in turn fill in for
     // the generic provider's own built-in defaults when no preset is selected).
     scopes: scopesEnv === undefined ? preset.scopes : scopesEnv.split(/\s+/u).filter(Boolean),
-    subjectClaim: emptyToUndefined(process.env["TANREN_OIDC_SUBJECT_CLAIM"]) ?? preset.subjectClaim,
-    loginClaim: emptyToUndefined(process.env["TANREN_OIDC_LOGIN_CLAIM"]) ?? preset.loginClaim,
-    nameClaim: emptyToUndefined(process.env["TANREN_OIDC_NAME_CLAIM"]) ?? preset.nameClaim,
-    groupsClaim: emptyToUndefined(process.env["TANREN_OIDC_GROUPS_CLAIM"]) ?? preset.groupsClaim,
+    subjectClaim: emptyToUndefined(env["TANREN_OIDC_SUBJECT_CLAIM"]) ?? preset.subjectClaim,
+    loginClaim: emptyToUndefined(env["TANREN_OIDC_LOGIN_CLAIM"]) ?? preset.loginClaim,
+    nameClaim: emptyToUndefined(env["TANREN_OIDC_NAME_CLAIM"]) ?? preset.nameClaim,
+    groupsClaim: emptyToUndefined(env["TANREN_OIDC_GROUPS_CLAIM"]) ?? preset.groupsClaim,
   });
 }
 

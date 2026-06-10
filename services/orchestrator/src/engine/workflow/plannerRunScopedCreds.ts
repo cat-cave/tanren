@@ -32,6 +32,12 @@ export interface RunCredentialScoping {
   addr: string;
   mount?: string;
   fetchImpl?: typeof fetch;
+  // The scoped-token TTL (seconds), RESOLVED FROM THE INJECTED BOOT ENV at build
+  // time (r6 §2) — NOT re-read from the global `process.env` at mint time. Pinning
+  // it here means the minted token's lifetime derives from the exact env the worker
+  // booted with (`TANREN_MAX_RUN_HOURS`), so a per-boot override can never be lost
+  // to a later global-env divergence.
+  ttlSeconds: number;
 }
 
 /**
@@ -49,7 +55,11 @@ export function buildRunCredentialScoping(env: SecretStoreEnv = process.env): Ru
     return undefined;
   }
   const { addr, mount } = resolveVaultMountConfig(env);
-  return { minter, addr, ...(mount === undefined ? {} : { mount }) };
+  // r6 §2: resolve the scoped-token TTL FROM THE INJECTED env here (build time),
+  // not from the global `process.env` at mint time, so the minted token's lifetime
+  // derives from the exact boot env (and a malformed ceiling throws loud at boot).
+  const ttlSeconds = resolveScopedRunTokenTtlSeconds(env);
+  return { minter, addr, ttlSeconds, ...(mount === undefined ? {} : { mount }) };
 }
 
 /**
@@ -131,7 +141,7 @@ const DEFAULT_MAX_RUN_HOURS = 6;
  * set something else). The de-privilege still holds: the token's ACL is scoped to
  * ONLY this run's credential paths.
  */
-export function resolveScopedRunTokenTtlSeconds(env: NodeJS.ProcessEnv = process.env): number {
+export function resolveScopedRunTokenTtlSeconds(env: SecretStoreEnv = process.env): number {
   const raw = env["TANREN_MAX_RUN_HOURS"];
   if (raw === undefined || raw === "") {
     return DEFAULT_MAX_RUN_HOURS * 3_600;
@@ -205,7 +215,10 @@ export async function resolveScopedRunCredentials(
       runId: input.context.runId,
       orgId: input.context.orgId ?? null,
       credentialRefPaths: refPaths,
-      ttlSeconds: resolveScopedRunTokenTtlSeconds(),
+      // r6 §2: the TTL pinned at boot from the INJECTED env (on `scoping`), NOT
+      // re-read from the global `process.env` here — so the minted token's lifetime
+      // is the one the worker booted with.
+      ttlSeconds: scoping.ttlSeconds,
       numUses: refPaths.length * SCOPED_RUN_TOKEN_USES_PER_REF,
     },
   });
