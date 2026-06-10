@@ -79,7 +79,7 @@ ancestor stack:
    which moves into a pure stack-resolver helper).
 2. **Assemble locally.** Open a live jj workspace on the dependent's runner (the SAME
    `buildLiveJjWorkspace` thread; the runner is already allocated for the run), `jj git
-   clone --colocate` so jj fetches `main@origin` + each `ancestorBranch@origin`, then stack
+clone --colocate` so jj fetches `main@origin` + each `ancestorBranch@origin`, then stack
    them in DAG order via `core.rebaseOnto` — i.e. **reuse the exact loop in
    `integrateOverWorkspace`** (`jjLocalIntegration.ts:112-161`). The result: a local
    integration bookmark whose head is `main + ordered ancestors`, materialized
@@ -131,7 +131,7 @@ Replace its semantics:
   columns into one ordered structure).
 - **`speculative_base` is dropped** once the stack column is the source of truth. A run is
   "speculative" iff `ancestor_stack` is non-empty (replaces the `speculative_base IS NOT
-  NULL` predicate in `resolveSpeculativeState`, `mergeDispatch.ts:257`, and
+NULL` predicate in `resolveSpeculativeState`, `mergeDispatch.ts:257`, and
   `runExecutionContext.ts:173`).
 - **`integration_nodes` reference the ancestor refs, not a synthesized ref.** The
   `integration_nodes.ref text` column (`0007_integration_nodes.sql`, "the ephemeral git ref
@@ -191,29 +191,29 @@ A → main` (or whatever topo order the stack fixed) as each lands — each step
 `cleanupIntegrationBranch` dance (`mergeDispatcher.ts:222`, `mergeLandPaths.ts:116,235`)
 disappears (§4, §5).
 
-> **FORK F1 (flagged, §6):** PR-base = *immediate ancestor* (true incremental stacked PR,
-> minimal diff) vs PR-base = *the local assembled head pushed as the dependent's own branch
-> base*. Recommendation: immediate-ancestor (§3.1) — it is the human-stacked-PR model, needs
+> **FORK F1 (flagged, §6):** PR-base = _immediate ancestor_ (true incremental stacked PR,
+> minimal diff) vs PR-base = _the local assembled head pushed as the dependent's own branch
+> base_. Recommendation: immediate-ancestor (§3.1) — it is the human-stacked-PR model, needs
 > no synthesized ref, and is what `retargetPullRequestBase` already expresses.
 
 ## 4. Call-site impact
 
-| File:line | Today | Becomes |
-| --- | --- | --- |
-| `engine/dag/walker.ts:287` | `integrator.buildIntegration(...)` → synthesized ref | resolve the ordered ancestor stack (pure helper); NO host build. Conflict pre-check (§4a) still possible via a dry assembly or deferred to bootstrap. |
-| `engine/dag/walker.ts:310` | `speculativeBase: integration.integrationBranch` | `ancestorStack: [...]` persisted on the run; no `speculative_base`. |
-| `engine/dag/percolationOperation.ts:96` | `integrator.buildIntegration(...)` to rebuild the ref | re-resolve the unmerged ancestor stack (drop merged) → hand to `BaseShiftCoordinator` as `newBaseStack`. |
-| `engine/worker/runExecutionContext.ts:173` | `targetBranch = speculative_base ?? default_branch` | `targetBranch = default_branch`; the ancestor stack is threaded separately to the bootstrap assembler. |
-| `engine/workflow/plannerRunWorkspace.ts:197,291` | `git clone --branch <targetBranch>` | jj multi-ref assembly (`buildLiveJjWorkspace` + the `integrateOverWorkspace` stack loop) when `ancestor_stack` non-empty; plain `default_branch` clone otherwise. |
-| `engine/workflow/plannerRunAdapters.ts:262-265` | `baseRevision = ${targetBranch}@origin` (single ref) | the merge-time rebase base = the locally re-assembled stack head (or `default_branch@origin` once ancestors merged). |
-| `engine/workflow/githubDraftPr.ts:141,211` | `baseBranch = speculative_base ?? default_branch` | `baseBranch = immediate-ancestor PR-head branch` (last stack entry) ?? `default_branch`. |
-| `engine/dag/baseShiftLiveSeams.ts:89,103` | `newBaseSha = ${newBaseRef}@origin` | local multi-ref assembly of the re-resolved stack → rebase onto the assembled head. |
-| `engine/dag/baseShiftCoordinator.ts:408` (`keepRun`) | `speculativeBase = newBaseRef` | `ancestorStack = re-resolved stack` (or empty when all merged). |
-| `engine/workflow/reviewMerge/mergeDispatch.ts:248` (`resolveSpeculativeState`) | reads `speculative_base` single ref | reads `ancestor_stack`; "speculative" iff non-empty; retarget walks one step. |
+| File:line                                                                      | Today                                                 | Becomes                                                                                                                                                           |
+| ------------------------------------------------------------------------------ | ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `engine/dag/walker.ts:287`                                                     | `integrator.buildIntegration(...)` → synthesized ref  | resolve the ordered ancestor stack (pure helper); NO host build. Conflict pre-check (§4a) still possible via a dry assembly or deferred to bootstrap.             |
+| `engine/dag/walker.ts:310`                                                     | `speculativeBase: integration.integrationBranch`      | `ancestorStack: [...]` persisted on the run; no `speculative_base`.                                                                                               |
+| `engine/dag/percolationOperation.ts:96`                                        | `integrator.buildIntegration(...)` to rebuild the ref | re-resolve the unmerged ancestor stack (drop merged) → hand to `BaseShiftCoordinator` as `newBaseStack`.                                                          |
+| `engine/worker/runExecutionContext.ts:173`                                     | `targetBranch = speculative_base ?? default_branch`   | `targetBranch = default_branch`; the ancestor stack is threaded separately to the bootstrap assembler.                                                            |
+| `engine/workflow/plannerRunWorkspace.ts:197,291`                               | `git clone --branch <targetBranch>`                   | jj multi-ref assembly (`buildLiveJjWorkspace` + the `integrateOverWorkspace` stack loop) when `ancestor_stack` non-empty; plain `default_branch` clone otherwise. |
+| `engine/workflow/plannerRunAdapters.ts:262-265`                                | `baseRevision = ${targetBranch}@origin` (single ref)  | the merge-time rebase base = the locally re-assembled stack head (or `default_branch@origin` once ancestors merged).                                              |
+| `engine/workflow/githubDraftPr.ts:141,211`                                     | `baseBranch = speculative_base ?? default_branch`     | `baseBranch = immediate-ancestor PR-head branch` (last stack entry) ?? `default_branch`.                                                                          |
+| `engine/dag/baseShiftLiveSeams.ts:89,103`                                      | `newBaseSha = ${newBaseRef}@origin`                   | local multi-ref assembly of the re-resolved stack → rebase onto the assembled head.                                                                               |
+| `engine/dag/baseShiftCoordinator.ts:408` (`keepRun`)                           | `speculativeBase = newBaseRef`                        | `ancestorStack = re-resolved stack` (or empty when all merged).                                                                                                   |
+| `engine/workflow/reviewMerge/mergeDispatch.ts:248` (`resolveSpeculativeState`) | reads `speculative_base` single ref                   | reads `ancestor_stack`; "speculative" iff non-empty; retarget walks one step.                                                                                     |
 
 **§4a — the speculative ancestor-vs-ancestor pre-check.** Today the conflict is detected at
 walker time (the server build returns `conflict`, `walker.ts:292`). Under the new model the
-assembly happens at the dependent's *bootstrap*, not at walk time. Two options
+assembly happens at the dependent's _bootstrap_, not at walk time. Two options
 (**FORK F2, §6**): (i) the walker enqueues optimistically and a bootstrap-time assembly
 conflict marks the run held + routes the pair (slightly later detection, one fewer host
 round-trip); (ii) the walker runs a cheap dry assembly to pre-check before enqueue
@@ -226,17 +226,17 @@ synchronous host build from the walk tick.
 Mapped to the PR that removes it (all in **WS-B**, AFTER the WS-A assembly path is live and
 proven):
 
-| Deleted | Files | PR |
-| --- | --- | --- |
-| `SpeculativeIntegrator` contract | `engine/contracts/speculativeIntegrator.ts` | WS-B/PR-9 |
-| `PgSpeculativeIntegrator` + `integrationBranchName` (`tanren/integ/*`) | `engine/dag/speculativeIntegrator.ts` | WS-B/PR-9 |
-| Walker/percolation `integrator` deps + wiring | `engine/dag/walker.ts`, `percolationOperation.ts`, `percolationBuild.ts:304-310`, `subscriber.ts:47-51,121`, `worker/autonomyLoops.ts:91` | WS-B/PR-9 |
-| `VcsProvider.buildIntegrationBranch` + the `/merges` ref dance | `engine/contracts/vcsProvider.ts:139`, `providers/githubVcsProvider.ts:342`, `providers/buildVcsProvider.ts:162` | WS-B/PR-10 |
-| The batch path's server-side `buildIntegrationBranch` fallback | `engine/merge/batchChecker.ts:155,174-188` | WS-B/PR-10 (after `INTEGRATION_NODES_DRIVE` is unconditional) |
-| `cleanupIntegrationBranch` (no ephemeral ref to clean) | `engine/workflow/reviewMerge/mergeDispatcher.ts:222`, `mergeLandPaths.ts:78,116,235` | WS-B/PR-11 |
-| `resolveSpeculativeState` single-ref semantics + `speculative_base` column + `integrated_ancestor_shas` column | `mergeDispatch.ts:248`, schema `runs` (`0000_collapsed_baseline.sql:469-470`) | WS-B/PR-12 (migration LAST) |
-| `tanren/integ` event-payload fields | `engine/events/schemas/integrations.ts:166,173`, `sensitivityRules.infra.ts:336-338` | WS-B/PR-11 |
-| Conformance: `speculativeIntegrator.conformance.test.ts`, `dagSpeculativeIntegratorPg.test.ts` | `tests/conformance/speculativeIntegrator.conformance.test.ts`, `tests/dagSpeculativeIntegratorPg.test.ts` | WS-B/PR-9 (replaced by an ancestor-stack-assembly conformance suite added in WS-A/PR-3) |
+| Deleted                                                                                                        | Files                                                                                                                                     | PR                                                                                      |
+| -------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `SpeculativeIntegrator` contract                                                                               | `engine/contracts/speculativeIntegrator.ts`                                                                                               | WS-B/PR-9                                                                               |
+| `PgSpeculativeIntegrator` + `integrationBranchName` (`tanren/integ/*`)                                         | `engine/dag/speculativeIntegrator.ts`                                                                                                     | WS-B/PR-9                                                                               |
+| Walker/percolation `integrator` deps + wiring                                                                  | `engine/dag/walker.ts`, `percolationOperation.ts`, `percolationBuild.ts:304-310`, `subscriber.ts:47-51,121`, `worker/autonomyLoops.ts:91` | WS-B/PR-9                                                                               |
+| `VcsProvider.buildIntegrationBranch` + the `/merges` ref dance                                                 | `engine/contracts/vcsProvider.ts:139`, `providers/githubVcsProvider.ts:342`, `providers/buildVcsProvider.ts:162`                          | WS-B/PR-10                                                                              |
+| The batch path's server-side `buildIntegrationBranch` fallback                                                 | `engine/merge/batchChecker.ts:155,174-188`                                                                                                | WS-B/PR-10 (after `INTEGRATION_NODES_DRIVE` is unconditional)                           |
+| `cleanupIntegrationBranch` (no ephemeral ref to clean)                                                         | `engine/workflow/reviewMerge/mergeDispatcher.ts:222`, `mergeLandPaths.ts:78,116,235`                                                      | WS-B/PR-11                                                                              |
+| `resolveSpeculativeState` single-ref semantics + `speculative_base` column + `integrated_ancestor_shas` column | `mergeDispatch.ts:248`, schema `runs` (`0000_collapsed_baseline.sql:469-470`)                                                             | WS-B/PR-12 (migration LAST)                                                             |
+| `tanren/integ` event-payload fields                                                                            | `engine/events/schemas/integrations.ts:166,173`, `sensitivityRules.infra.ts:336-338`                                                      | WS-B/PR-11                                                                              |
+| Conformance: `speculativeIntegrator.conformance.test.ts`, `dagSpeculativeIntegratorPg.test.ts`                 | `tests/conformance/speculativeIntegrator.conformance.test.ts`, `tests/dagSpeculativeIntegratorPg.test.ts`                                 | WS-B/PR-9 (replaced by an ancestor-stack-assembly conformance suite added in WS-A/PR-3) |
 
 Per §7's "If the refactor doesn't net-delete code, it's wrong" — this nets a deletion (the
 whole `SpeculativeIntegrator` seam + a `VcsProvider` method + a 409-handling dance + two
@@ -271,50 +271,50 @@ the whole time).**
   `runs.ancestor_stack jsonb` (nullable; new migration, serialize vs other migration PRs).
   Dual-write: keep writing `speculative_base`/`integrated_ancestor_shas` AND the new column
   from the walker/percolation. Add a typed `AncestorStack` + a pure resolver that reads
-  either. *Stays working:* everything (column is unread). *Files:* new migration,
+  either. _Stays working:_ everything (column is unread). _Files:_ new migration,
   `contracts/integrationNodes.ts` (reuse `IntegrationNodeMember`), a new
-  `engine/dag/ancestorStack.ts`. *Dep:* none.
+  `engine/dag/ancestorStack.ts`. _Dep:_ none.
 - **PR-2 — pure ancestor-stack resolver.** Extract `loadAncestorBranches`
   (`speculativeIntegrator.ts:131`) into a standalone DAG-ordered stack resolver (org-scoped,
   RLS-safe) with its own unit tests; `PgSpeculativeIntegrator` delegates to it (no behavior
-  change). *Dep:* PR-1.
+  change). _Dep:_ PR-1.
 - **PR-3 — the bootstrap-assembly seam + conformance.** Add a `withJjLocalIntegration`
   bootstrap variant (continuation = "create run branch at integrated head + keep workspace
   open for the writer") and a `bootstrapDependentBase(stack, runnerWorkspace)` over it,
   with a **new conformance suite** (`ancestorStackAssembly.conformance.test.ts`) mirroring
   the batch conformance: ordered stack, conflict surfaces, never-discard, clean head
-  materialized. Not wired into the run path yet. *Dep:* PR-2.
+  materialized. Not wired into the run path yet. _Dep:_ PR-2.
 - **PR-4 — wire the run bootstrap behind a flag.** `plannerRunWorkspace.ts` /
   `plannerRunAdapters.ts`: when `ancestor_stack` non-empty AND
   `WALKER_JJ_LOCAL_BASE` (new flag, default OFF in this PR), bootstrap via PR-3's assembler;
-  else the current single-ref clone. *Stays working:* flag-off = today's behavior exactly.
-  *Dep:* PR-3.
+  else the current single-ref clone. _Stays working:_ flag-off = today's behavior exactly.
+  _Dep:_ PR-3.
 - **PR-5 — stacked-PR base + retarget walk.** `githubDraftPr.ts` bases the PR on the
   immediate-ancestor branch (flag-gated); `mergeDispatch.ts` retarget walks one step down
-  the stack on ancestor merge. *Dep:* PR-4.
+  the stack on ancestor merge. _Dep:_ PR-4.
 - **PR-6 — base-shift over the stack.** `baseShiftLiveSeams.ts` / `baseShiftCoordinator.ts`:
   the opener assembles the re-resolved stack locally instead of cloning `${newBaseRef}@origin`;
-  `keepRun` re-points `ancestor_stack` (flag-gated). *Dep:* PR-4.
+  `keepRun` re-points `ancestor_stack` (flag-gated). _Dep:_ PR-4.
 - **PR-7 — flip the flag default ON + apex/real-jj validation.** `WALKER_JJ_LOCAL_BASE`
   default ON; run the realjj + walker/percolation/base-shift suites green; one apex-tier
   live exercise. The old synthesized-ref path is now dead but still PRESENT (kill-switch).
-  *Dep:* PR-5, PR-6.
+  _Dep:_ PR-5, PR-6.
 - **PR-8 — `integration_nodes` UPSERT from the dependent bootstrap (`eager_base`).** The
-  bootstrap assembly UPSERTs the eager node (proof-reuse substrate); observe-only. *Dep:* PR-7.
+  bootstrap assembly UPSERTs the eager node (proof-reuse substrate); observe-only. _Dep:_ PR-7.
 
 **WS-B — the §7 deletions (LAST; only after WS-A is flag-on and proven).** These fold into
 the tanren-owns-the-engine §7 deletion workstream.
 
 - **PR-9 — delete `SpeculativeIntegrator` + `PgSpeculativeIntegrator` + walker/percolation
   integrator wiring + their conformance** (replaced by PR-3's suite). Remove the
-  `WALKER_JJ_LOCAL_BASE` flag (path is now the only path). *Dep:* PR-7/PR-8.
+  `WALKER_JJ_LOCAL_BASE` flag (path is now the only path). _Dep:_ PR-7/PR-8.
 - **PR-10 — delete `VcsProvider.buildIntegrationBranch`** + the batch `buildIntegrationBranch`
-  fallback (after `INTEGRATION_NODES_DRIVE` is made unconditional). *Dep:* PR-9.
+  fallback (after `INTEGRATION_NODES_DRIVE` is made unconditional). _Dep:_ PR-9.
 - **PR-11 — delete `cleanupIntegrationBranch` + the `tanren/integ` event-payload fields.**
-  *Dep:* PR-10.
+  _Dep:_ PR-10.
 - **PR-12 — migration: drop `runs.speculative_base` + `runs.integrated_ancestor_shas`** and
   remove `resolveSpeculativeState`'s single-ref semantics (the stack column is sole source
-  of truth). Migration LAST so no green PR ever straddles a column drop. *Dep:* PR-11.
+  of truth). Migration LAST so no green PR ever straddles a column drop. _Dep:_ PR-11.
 
 **Discipline:** WS-A PRs are additive + flag-gated, so each is independently shippable on
 green CI with the live path unchanged until PR-7. The deletions (WS-B) only land after the
