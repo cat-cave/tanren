@@ -10,7 +10,7 @@
 /* eslint-disable unicorn/no-thenable */
 // `then` is BDD Given/When/Then vocabulary in the capture/behavior fixtures.
 
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { ActorContext } from "../src/auth/schemas.js";
 import type { Template as TemplateForTest } from "../src/engine/repositories/templates.js";
 import {
@@ -91,6 +91,11 @@ const TEST_REPO_URL = "https://github.com/cat-cave/supply-chain-os";
 // Drive the full deterministic interview to completion, then derive the product
 // graph — the boilerplate every derive test shares. Returns the derive result + the
 // in-memory state so callers can assert on the created specs/configs.
+// DOCTRINE (templating-system.md §3): a PROJECT DAG ALWAYS seeds from a validated
+// template — never a from-scratch scaffold. So the shared derive helper defaults to
+// the SEED path (a matching validated template injected via the registry query). A
+// test that needs the from-scratch AUTHORING (the legitimate one — the template-build
+// step) passes `scaffoldOrigin: "template_build"` + omits the registry query.
 async function runInterviewAndDerive(overrides: Partial<Parameters<typeof deriveFromCapture>[1]> = {}): Promise<{
   derived: Awaited<ReturnType<typeof deriveFromCapture>>;
   state: StubState;
@@ -105,6 +110,15 @@ async function runInterviewAndDerive(overrides: Partial<Parameters<typeof derive
     capture = result.capture;
     complete = result.complete;
   }
+  // Default project-path seed inputs (a matching template + a fixed clock) unless the
+  // caller overrides them (e.g. a template_build run, or a no-match-creates run).
+  const defaults: Partial<Parameters<typeof deriveFromCapture>[1]> =
+    overrides.scaffoldOrigin === "template_build"
+      ? {}
+      : {
+          selectionNow: WAVE3_NOW,
+          templateRegistryQuery: async () => [validatedTsTemplate()],
+        };
   const derived = await deriveFromCapture(
     {
       pool,
@@ -112,7 +126,15 @@ async function runInterviewAndDerive(overrides: Partial<Parameters<typeof derive
         return preparedDeploy(request.providerKind as "deploy.vercel" | "deploy.flyio");
       },
     },
-    { orgId: "org_a", capture, actor, repoUrl: TEST_REPO_URL, deploy: { providerKind: "deploy.vercel" }, ...overrides },
+    {
+      orgId: "org_a",
+      capture,
+      actor,
+      repoUrl: TEST_REPO_URL,
+      deploy: { providerKind: "deploy.vercel" },
+      ...defaults,
+      ...overrides,
+    },
   );
   return { derived, state, configs };
 }
@@ -224,7 +246,12 @@ describe("deriveFromCapture · creates the product graph (no migration)", () => 
     // project CODE. build/deploy route through the conventional targets FROM the
     // captured lifecycle. (Multi-stack authoring is unit-tested in
     // scaffoldAuthoring.test.ts; the contract projection in contractFiles.test.ts.)
-    const { derived, state, configs } = await runInterviewAndDerive();
+    //
+    // The from-scratch AUTHORING is the template-BUILD step (the ONE legitimate
+    // from-scratch path) — so this runs `scaffoldOrigin: "template_build"`.
+    const { derived, state, configs } = await runInterviewAndDerive({
+      scaffoldOrigin: "template_build",
+    } as Partial<Parameters<typeof deriveFromCapture>[1]>);
     const [scaffold, build, deploy] = derived.specIds.map((id) => state.specs.get(id));
 
     // The lifecycle is persisted onto the project config (the run materializes from it).
@@ -249,71 +276,6 @@ describe("deriveFromCapture · creates the product graph (no migration)", () => 
     expect(build?.description).toContain("just build");
     expect(deploy?.description).toContain("just deploy");
     expect(deploy?.acceptanceCriteria.join("\n")).toContain("just deploy");
-  });
-
-  // TEMPLATING WAVE 3 — the Forge SELECTION integration (templating-system.md §3),
-  // proven END-TO-END through the derive: a matching validated template → seed path
-  // taken (scaffold spec shrinks + the templateRef persisted on the project config);
-  // no match → the from-scratch path is byte-for-byte unchanged (the apex default).
-  describe("template selection (wave 3)", () => {
-    it("a matching validated template → SEED path: scaffold spec shrinks + templateRef persisted", async () => {
-      const { derived, state, configs } = await runInterviewAndDerive({
-        selectionNow: WAVE3_NOW,
-        templateRegistryQuery: async () => [validatedTsTemplate()],
-      } as Partial<Parameters<typeof deriveFromCapture>[1]>);
-
-      // The selection is recorded on the result + persisted on the project config.
-      expect(derived.templateSelection?.kind).toBe("strong");
-      expect(derived.templateSelection?.selected?.templateRef).toBe("template_ts_next");
-      const config = configs.get(derived.projectId) as { templateRef?: { templateRef?: string; repoRef?: string } };
-      expect(config?.templateRef?.templateRef).toBe("template_ts_next");
-      expect(config?.templateRef?.repoRef).toBe("cat-cave/tanren-template-ts-next");
-
-      // The scaffold spec SHRANK to template instantiation — NOT author-from-scratch.
-      const scaffold = state.specs.get(derived.specIds[0] ?? "");
-      expect(scaffold?.title).toBe("scaffold");
-      expect(scaffold?.description).toContain("SEED FROM TEMPLATE");
-      expect(scaffold?.description).toContain("cat-cave/tanren-template-ts-next");
-      expect(scaffold?.description).not.toContain("Scaffold the actual PROJECT CODE");
-    });
-
-    it("a degraded template is NOT selected → from-scratch path UNCHANGED", async () => {
-      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-      const degraded = { ...validatedTsTemplate(), status: "degraded" as const };
-      const { derived, state, configs } = await runInterviewAndDerive({
-        selectionNow: WAVE3_NOW,
-        templateRegistryQuery: async () => [degraded],
-      } as Partial<Parameters<typeof deriveFromCapture>[1]>);
-
-      expect(derived.templateSelection?.kind).toBe("none");
-      // No templateRef persisted — the from-scratch path ran.
-      const config = configs.get(derived.projectId) as { templateRef?: unknown };
-      expect(config?.templateRef).toBeUndefined();
-      // The scaffold spec is the unchanged from-scratch authoring.
-      const scaffold = state.specs.get(derived.specIds[0] ?? "");
-      expect(scaffold?.description).toContain("Scaffold the actual PROJECT CODE");
-      expect(scaffold?.description).not.toContain("SEED FROM TEMPLATE");
-      warn.mockRestore();
-    });
-
-    it("an EMPTY registry → from-scratch (the expected live default — the apex path)", async () => {
-      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-      const { derived, state, configs } = await runInterviewAndDerive({
-        templateRegistryQuery: async () => [],
-      } as Partial<Parameters<typeof deriveFromCapture>[1]>);
-      expect(derived.templateSelection?.kind).toBe("none");
-      expect((configs.get(derived.projectId) as { templateRef?: unknown })?.templateRef).toBeUndefined();
-      expect(state.specs.get(derived.specIds[0] ?? "")?.description).toContain("Scaffold the actual PROJECT CODE");
-      warn.mockRestore();
-    });
-
-    it("NO registry query injected → selection skipped, from-scratch unchanged", async () => {
-      // The current live default: the route may not inject a query → the from-scratch
-      // path runs untouched, and the result carries no selection.
-      const { derived, state } = await runInterviewAndDerive();
-      expect(derived.templateSelection).toBeUndefined();
-      expect(state.specs.get(derived.specIds[0] ?? "")?.description).toContain("Scaffold the actual PROJECT CODE");
-    });
   });
 
   it("FAILS LOUD when the architecture step captured no lifecycle (never silently defaults to Node)", async () => {
@@ -361,6 +323,8 @@ describe("deriveFromCapture · creates the product graph (no migration)", () => 
         repoUrl: TEST_REPO_URL,
         autonomy: "auto",
         deploy: { providerKind: "deploy.vercel" },
+        selectionNow: WAVE3_NOW,
+        templateRegistryQuery: async () => [validatedTsTemplate()],
       },
     );
 
@@ -392,8 +356,20 @@ describe("deriveFromCapture · creates the product graph (no migration)", () => 
 
   it("FINDING deploy: autonomous greenfield rejects missing deploy before project creation", async () => {
     const { pool, state } = stubPool();
+    // A registry query is provided (a match) so the deploy guard — not the template
+    // selection guard — is the rejection under test.
     await expect(
-      deriveFromCapture({ pool }, { orgId: "org_a", capture: captureWithLifecycle(), actor, autonomy: "auto" }),
+      deriveFromCapture(
+        { pool },
+        {
+          orgId: "org_a",
+          capture: captureWithLifecycle(),
+          actor,
+          autonomy: "auto",
+          selectionNow: WAVE3_NOW,
+          templateRegistryQuery: async () => [validatedTsTemplate()],
+        },
+      ),
     ).rejects.toBeInstanceOf(DeployProviderMissingError);
     expect(state.projects.size).toBe(0);
   });
@@ -414,7 +390,16 @@ describe("deriveFromCapture · creates the product graph (no migration)", () => 
   it("FINDING deploy: omitting autonomy does not bypass required deploy", async () => {
     const { pool, state } = stubPool();
     await expect(
-      deriveFromCapture({ pool }, { orgId: "org_a", capture: captureWithLifecycle(), actor }),
+      deriveFromCapture(
+        { pool },
+        {
+          orgId: "org_a",
+          capture: captureWithLifecycle(),
+          actor,
+          selectionNow: WAVE3_NOW,
+          templateRegistryQuery: async () => [validatedTsTemplate()],
+        },
+      ),
     ).rejects.toBeInstanceOf(DeployProviderMissingError);
     expect(state.projects.size).toBe(0);
   });

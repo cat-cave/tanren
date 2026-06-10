@@ -188,24 +188,35 @@ export function buildCreateTemplateFlow(deps: CreateTemplateFlowDeps): CreateTem
   }): Promise<CreateTemplateResult> => createTemplate(buildCreateTemplateDeps(deps, input), input.request);
 }
 
-// The SELECTION → CREATION wiring (templating-system.md §3, the "no match → trigger
-// creation" branch). The selection layer (`selectTemplate`) is pure (no creation
-// dependency); this builds the DECOUPLED `createForNoMatch` seam it invokes when no
+// The SELECTION → JUST-IN-TIME CREATION wiring (templating-system.md §3, the "no
+// match → trigger creation" branch). The selection layer (`selectTemplate`) is pure
+// (no creation dependency); this builds the `createForNoMatch` seam it invokes when no
 // validated template matches.
 //
-// ASYNC CREATION (audit §3.11/3): template creation drives a real build to
-// convergence under a 60-MINUTE budget — it MUST NOT run inline in the derive HTTP
-// request (a multi-minute-to-hour request). So the seam:
-//   1. SYNCHRONOUSLY checks the registry for an EXISTING validated match (a fast
-//      query) — if one exists, returns it so THIS derive SEEDS from it immediately.
-//   2. On NO match, fires the creation meta-flow in the BACKGROUND (detached, loud on
-//      failure) and returns `undefined` — so THIS derive proceeds on the guaranteed
-//      from-scratch path NOW, while the template is built for the NEXT run. The
-//      templated path is THE path for every subsequent project of that stack.
+// SYNCHRONOUS CREATE-THEN-SEED (the doctrine cutover — replaces the deleted
+// async-fire-and-forget bypass): template creation drives a real build to convergence
+// under a 60-MINUTE budget — and the project scaffold GATES on it. The seam runs to
+// completion and returns a SEED:
+//   1. FAST existing-match check (a query) — a pre-existing validated/official match
+//      seeds THIS derive immediately (the steady-state path, no build).
+//   2. On NO match, run the creation meta-flow SYNCHRONOUSLY
+//      (`maybeCreateTemplateForNoMatch`: research → author → build → validate-with-
+//      NEGATIVE-controls → publish) and return the freshly-published template as the
+//      SEED — THIS derive seeds from it (the project never proceeds from-scratch). A
+//      creation FAILURE PROPAGATES (the meta-flow throws): `selectTemplate` re-throws
+//      it as a LOUD `TemplateRequiredError` halt — never a silent from-scratch.
+//
+// The earlier "fire detached, return undefined, derive proceeds from-scratch this
+// run, template built for the NEXT run" design IS the bypass this deletes: it let a
+// project DAG scaffold against a non-template base. The cost (the derive HTTP request
+// now blocks on a multi-minute-to-hour build) is the correct trade — the alternative
+// is the very non-template scaffold the doctrine forbids. The onboarding route runs
+// the derive on its own request lifecycle; a future async-job carrier can move the
+// wait off the HTTP request without re-introducing the from-scratch proceed.
 //
 // `repoOwner` is the REAL repo owner threaded from the derive request — without it
-// the create path had no owner and silently no-op'd (audit §3.11/2). It is folded
-// onto the creation request so `buildCreateTemplateDeps` resolves a real owner.
+// the create path had no owner and silently no-op'd. It is folded onto the creation
+// request so `buildCreateTemplateDeps` resolves a real owner.
 //
 // `templateRegistryQuery` is the SAME org-scoped query the derive path runs, so the
 // no-match check and the selection share one scoping. No circular import: this
@@ -228,18 +239,36 @@ export function buildCreateForNoMatch(
     const existing = await findExistingValidatedTemplate(deps, ctx, request);
     if (existing !== undefined) return existing;
 
-    // 2. NO match → fire creation in the BACKGROUND (never blocks the derive). A
-    //    failure (ungrounded research / non-convergence / failed validation) is logged
-    //    LOUD but never strands onboarding — this derive already fell to from-scratch.
-    //    No existing template to seed THIS derive from → the arrow resolves `undefined`.
-    void createTemplateInBackground(createDeps, request);
+    // 2. NO match → run creation SYNCHRONOUSLY and SEED from the published template.
+    //    The build GATES the project scaffold. A failure PROPAGATES so selection halts
+    //    LOUD (`TemplateRequiredError`) — the project never proceeds from-scratch. The
+    //    `maybeCreateTemplateForNoMatch` hook re-checks the registry (it may have been
+    //    populated by a concurrent create) then runs the fail-closed creation gate.
+    const decision = await maybeCreateTemplateForNoMatch(createDeps, request);
+    if (decision.created === false) {
+      const proof = decision.template.manifest.validationProof;
+      if (proof === null) {
+        // A matched template with no proof is not seedable — return nothing so
+        // selection halts loud (`TemplateRequiredError`), never a from-scratch seed.
+        log.warn("no-match hook returned an unproven template (no validationProof)", { stack: request.stack });
+        return;
+      }
+      return { templateRef: decision.template.id, repoRef: decision.template.repoRef, validationProof: proof };
+    }
+    // CREATED + PUBLISHED: seed THIS derive from the freshly-validated template.
+    const created = decision.result;
+    return {
+      templateRef: created.template.id,
+      repoRef: created.template.repoRef,
+      validationProof: created.proof,
+    };
   };
 }
 
 // The SYNCHRONOUS existing-match check the no-match seam runs before creation — the
 // SAME capability query the no-match hook uses internally, lifted out so a registry
 // HIT seeds THIS derive without ever triggering a build. Returns the `SelectedTemplate`
-// to seed from, or `undefined` (no existing validated match → background creation).
+// to seed from, or `undefined` (no existing validated match → just-in-time creation).
 // Org-scoped by `deps.pool` (the request-scoped pool), so RLS bounds the candidates.
 async function findExistingValidatedTemplate(
   deps: CreateTemplateFlowDeps,
@@ -262,25 +291,6 @@ async function findExistingValidatedTemplate(
   const proof = template.manifest.validationProof;
   if (proof === null) return undefined;
   return { templateRef: template.id, repoRef: template.repoRef, validationProof: proof };
-}
-
-// Fire the creation meta-flow DETACHED from the derive request (audit §3.11/3). A
-// failure is logged LOUD (the template simply is not created this time — the next
-// run retries the no-match path); it NEVER throws into the caller's request. Kept a
-// named function (not an inline IIFE) so the detached lifecycle is explicit + greppable.
-async function createTemplateInBackground(
-  createDeps: CreateTemplateDeps,
-  request: TemplateCreationRequest,
-): Promise<void> {
-  try {
-    await maybeCreateTemplateForNoMatch(createDeps, request);
-  } catch (error) {
-    log.warn(
-      "background template creation FAILED (the derive already proceeded from-scratch; the next run retries the no-match path)",
-      { stack: request.stack },
-      error,
-    );
-  }
 }
 
 // Map a project's captured LIFECYCLE onto a `TemplateCreationRequest` (the no-match

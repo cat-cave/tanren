@@ -235,6 +235,46 @@ describe("createTemplate — VALID template publishes (the happy path)", () => {
       projectId: "project_tmpl",
       payload: { status: "validated", stack: "ts-pnpm", channel: "lts" },
     });
+
+    // DURABLE no-match → creation trail: selection.no_match → creation.started →
+    // creation.published, all against the template-build project (never a vanishing log).
+    const noMatch = events.appended.find((e) => e.eventType === "template.selection.no_match");
+    expect(noMatch).toMatchObject({ projectId: "project_tmpl", payload: { stack: "ts-pnpm", orgId: "org_acme" } });
+    const started = events.appended.find((e) => e.eventType === "template.creation.started");
+    expect(started).toMatchObject({ projectId: "project_tmpl", payload: { stack: "ts-pnpm" } });
+    const published = events.appended.find((e) => e.eventType === "template.creation.published");
+    expect(published).toMatchObject({
+      projectId: "project_tmpl",
+      payload: { stack: "ts-pnpm", repoRef: "cat-cave/tmpl-ts-pnpm" },
+    });
+    // Ordering: started precedes published.
+    const order = events.appended.map((e) => e.eventType);
+    expect(order.indexOf("template.creation.started")).toBeLessThan(order.indexOf("template.creation.published"));
+  });
+
+  it("forces the template-build derive to scaffold from scratch (scaffoldOrigin=template_build, no registry query)", async () => {
+    // The creation flow's derive IS the ONE legitimate from-scratch authoring. Assert
+    // it passes `scaffoldOrigin: "template_build"` and NO `templateRegistryQuery` — so
+    // a project-direct from-scratch path can never be reached this way.
+    const ssh = new ScriptedSsh({ typecheck: "real", lint: "real", test: "real" });
+    const pool = new TemplatesPool();
+    const events = new RecordingEvents();
+    let seen: DeriveInput | undefined;
+    const d = deps(ssh, pool, events);
+    d.derive = async (_pool: pg.Pool, input: DeriveInput): Promise<DeriveResult> => {
+      seen = input;
+      return {
+        projectId: "project_tmpl",
+        projectName: "tmpl",
+        specIds: ["s1"],
+        personaIds: ["p1"],
+        behaviorIds: ["b1"],
+        milestoneIds: ["m1"],
+      };
+    };
+    await createTemplate(d, request);
+    expect(seen?.scaffoldOrigin).toBe("template_build");
+    expect(seen?.templateRegistryQuery).toBeUndefined();
   });
 });
 
@@ -254,9 +294,16 @@ describe("createTemplate — INVALID template does NOT publish (the fail-closed 
     // audit §3.11/4: no leak whether validation passes or fails).
     expect(releaseCount).toBe(1);
 
-    // NOT published: the registry is empty, no template.registered event.
+    // NOT published: the registry is empty, no template.registered/published event.
     expect(pool.rows).toHaveLength(0);
     expect(events.appended.find((e) => e.eventType === "template.registered")).toBeUndefined();
+    expect(events.appended.find((e) => e.eventType === "template.creation.published")).toBeUndefined();
+
+    // DURABLE failure record: creation.started fired, then creation.failed (LOUD,
+    // never a silent from-scratch), against the template-build project.
+    expect(events.appended.find((e) => e.eventType === "template.creation.started")).toBeDefined();
+    const failed = events.appended.find((e) => e.eventType === "template.creation.failed");
+    expect(failed).toMatchObject({ projectId: "project_tmpl", payload: { stack: "ts-pnpm", orgId: "org_acme" } });
   });
 
   it("the thrown error carries the failing proof (typecheck unproven) for a LOUD finding", async () => {
