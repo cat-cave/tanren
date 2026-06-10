@@ -197,12 +197,13 @@ services:
       # through the control-plane `/internal/*` endpoints over the SAME mTLS
       # channel, so the data plane writes `events`/`cost_records` ONLY via the
       # control plane (matching the de-privileged role above). The write endpoint
-      # shares the claim host (TANREN_CLAIM_ENDPOINT_URL). A host override
-      # (TANREN_DATA_PLANE_REMOTE_WRITES=0) can fall back to direct writes — but
-      # then the worker MUST also use a write-capable role, so the default flip
-      # pairs the role + the flag. The in-process TANREN_RUN_WORKER=1 dev path
-      # keeps direct writes (single process, no isolation gain — see boot.ts). See
-      # ROADMAP.md.
+      # shares the claim host (TANREN_CLAIM_ENDPOINT_URL). The STANDALONE worker
+      # (`worker-main.ts`, mode "standalone") now REQUIRES remote-writes + the mTLS
+      # claim endpoint: booting with TANREN_DATA_PLANE_REMOTE_WRITES=0 (or no claim
+      # endpoint) is a LOUD boot failure, never a silent revert to direct writes on
+      # the de-privileged role (code-integrity r3 finding #5 — no silent fallback).
+      # The in-process TANREN_RUN_WORKER=1 dev path keeps direct writes (single
+      # process, shares the API pool, no isolation gain — see boot.ts). See ROADMAP.md.
       TANREN_DATA_PLANE_REMOTE_WRITES: ${TANREN_DATA_PLANE_REMOTE_WRITES:-1}
       # Notifications (the worker builds the dispatcher): give the dev/apex stack a
       # REAL default route by default so a warn+ milestone (budget / deploy.verified

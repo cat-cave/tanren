@@ -15,6 +15,8 @@ const OUT_OF_SCOPE = "services/orchestrator/src/routes/specs/list.ts";
 const FORGE_TURNS = "services/orchestrator/src/engine/forge/turns.ts";
 // A sibling in the same dir is NOT scoped (only the three decode files are).
 const FORGE_SIBLING = "services/orchestrator/src/engine/forge/schemas.ts";
+// The forge-tools event read seam — newly scoped (code-integrity r3 finding #4).
+const FORGE_TOOLS_READ = "services/orchestrator/src/engine/forge/tools/read.ts";
 
 async function createFixture(files: Record<string, string>): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "tanren-no-pg-as-date-"));
@@ -71,6 +73,16 @@ describe("no-pg-as-date lint", () => {
     expect(diagnostics).toHaveLength(1);
     expect(diagnostics[0]?.file).toBe(FORGE_TURNS);
     expect(diagnostics[0]?.message).toMatch(/parse/u);
+  });
+
+  it('REJECTS a planted `row["ts"] as Date` cast in the forge-tools read seam (read.ts)', async () => {
+    const root = await createFixture({
+      [FORGE_TOOLS_READ]: 'return { ts: row["ts"] as Date };\n',
+    });
+    const diagnostics = await runNoPgAsDateLint({ root });
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]?.file).toBe(FORGE_TOOLS_READ);
+    expect(diagnostics[0]?.message).toMatch(/as Date/u);
   });
 
   it("ignores a cast in a NON-scoped sibling of the forge decode files", async () => {

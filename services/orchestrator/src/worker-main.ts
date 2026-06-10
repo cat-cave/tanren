@@ -22,6 +22,9 @@ import { createLogger } from "./engine/observability/logger.js";
 const log = createLogger("run-worker");
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  await bootRunWorker();
+  // `"standalone"` mode: the de-privileged data plane MUST claim + write over the
+  // mTLS control plane. bootRunWorker fails loud if the mTLS claim endpoint /
+  // remote-writes config is absent — never a silent revert to the direct DB path.
+  await bootRunWorker("standalone");
   log.info("run-executor worker started (standalone data plane)");
 }

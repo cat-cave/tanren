@@ -8,6 +8,7 @@
 // is the elevated-view entry point that emits audit events when an admin
 // opts into rawView. The `repo.*` family lives in `repo.ts`.
 
+import { z } from "zod";
 import type pg from "pg";
 import type { ActorContext } from "../../../auth/schemas.js";
 import { resolveQueryClient } from "../../data/orgScopedDb.js";
@@ -107,7 +108,7 @@ export interface TanrenReadEventsArgs {
 
 export interface RedactedEventRow {
   id: number | string;
-  ts: Date | string;
+  ts: Date;
   runId: string | null;
   taskId: string | null;
   specId: string | null;
@@ -115,6 +116,18 @@ export interface RedactedEventRow {
   eventType: string;
   payload: unknown;
   redactedPaths: string[];
+}
+
+// Decode the raw pg `ts` cell at the boundary instead of laundering it with a
+// `row["ts"] as Date` cast (the no-pg-as-date enforcement). `z.coerce.date()`
+// accepts a `Date` (the pg driver's `timestamptz`) or a string and yields a real
+// `Date` — and THROWS on a NULL / garbage cell rather than handing a fake `Date`
+// to the consumer. The cast told the type system "this IS a Date" while nothing
+// checked it; this checks it.
+const EventTimestamp = z.coerce.date();
+
+function decodeEventTs(value: unknown): Date {
+  return EventTimestamp.parse(value);
 }
 
 export async function tanrenReadEvents(
@@ -160,7 +173,7 @@ export async function tanrenReadEvents(
     if (!isEventName(eventType)) {
       return {
         id: row["id"] as number | string,
-        ts: row["ts"] as Date,
+        ts: decodeEventTs(row["ts"]),
         runId: row["run_id"] === null || row["run_id"] === undefined ? null : String(row["run_id"]),
         taskId: row["task_id"] === null || row["task_id"] === undefined ? null : String(row["task_id"]),
         specId: row["spec_id"] === null || row["spec_id"] === undefined ? null : String(row["spec_id"]),
@@ -178,7 +191,7 @@ export async function tanrenReadEvents(
     });
     return {
       id: row["id"] as number | string,
-      ts: row["ts"] as Date,
+      ts: decodeEventTs(row["ts"]),
       runId: row["run_id"] === null || row["run_id"] === undefined ? null : String(row["run_id"]),
       taskId: row["task_id"] === null || row["task_id"] === undefined ? null : String(row["task_id"]),
       specId: row["spec_id"] === null || row["spec_id"] === undefined ? null : String(row["spec_id"]),
