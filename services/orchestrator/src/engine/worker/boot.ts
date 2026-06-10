@@ -15,9 +15,9 @@ import { startAutonomyLoops, type AutonomyLoops } from "./autonomyLoops.js";
 import { TimedGitHubHttpClient, TimedCommandSubstrate, createLogger } from "../observability/index.js";
 import { buildVcsProvider, FetchGitHubHttpClient, GithubAppTokenMinter } from "../providers/buildVcsProvider.js";
 import { SshCommandSubstrate } from "../ssh/index.js";
-import { buildClaimClientFromEnv } from "./claimClientFromEnv.js";
+import { assertStandaloneClaimMtlsConfigured, buildClaimClientFromEnv } from "./claimClientFromEnv.js";
 import { resolveRunnerIdentitySecretRef, seedRunnerIdentitySecret } from "./runnerIdentityFromEnv.js";
-import { buildRunStateWriterFromEnv } from "./runStateWriterFromEnv.js";
+import { assertStandaloneRemoteWritesConfigured, buildRunStateWriterFromEnv } from "./runStateWriterFromEnv.js";
 import type { JobReaper } from "./jobReaper.js";
 import type { RunWorker } from "./runWorker.js";
 import {
@@ -28,6 +28,19 @@ import {
 } from "./lifecycle.js";
 
 const log = createLogger("run-worker");
+
+/**
+ * Which entrypoint is booting the worker — the EXPLICIT mode that gates the
+ * de-privilege loud-fail (no silent env-absent inference):
+ *   - `"standalone"`: the data-plane container (`worker-main.ts`). The mTLS claim
+ *     endpoint + remote run-state writes are REQUIRED; booting without them throws
+ *     LOUDLY rather than silently reverting to the direct `job_queue` DB-CAS /
+ *     direct tenant-table writes (the privilege the plane split removes).
+ *   - `"in-process"`: the single-process dev convenience (`main.ts`,
+ *     TANREN_RUN_WORKER=1) and the smoke/test harness. It SHARES the API's pool,
+ *     so the direct-DB claim + writes are intended — the mTLS config stays optional.
+ */
+export type WorkerBootMode = "standalone" | "in-process";
 
 /** What {@link bootRunWorker} returns so callers (and tests) can drain + assert. */
 export interface BootedRunWorker {
@@ -71,7 +84,16 @@ export interface BootedRunWorker {
  * worker container `depends_on` it), and the in-process flag path already
  * migrated in `createApp` before this runs.
  */
-export async function bootRunWorker(): Promise<BootedRunWorker> {
+export async function bootRunWorker(mode: WorkerBootMode = "in-process"): Promise<BootedRunWorker> {
+  // De-privilege guard (no silent env-absent fallback): a STANDALONE data-plane
+  // worker MUST claim + write over the mTLS control plane. Asserting BEFORE any
+  // pool/secret construction makes a misconfigured standalone container fail boot
+  // loudly instead of quietly running on the direct DB path. The in-process dev
+  // mode skips this — it shares the API's pool by design (TANREN_RUN_WORKER=1).
+  if (mode === "standalone") {
+    assertStandaloneClaimMtlsConfigured();
+    assertStandaloneRemoteWritesConfigured();
+  }
   // Resolve the runner-identity SECRET REF through the SHARED parsed env contract
   // (`resolveRunnerIdentitySecretRef` → `parseOrchestratorEnv`), NOT a raw
   // `process.env[...] ?? default` — that bypassed `envSchema.ts` and let a BLANK

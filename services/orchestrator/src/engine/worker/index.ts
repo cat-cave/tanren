@@ -20,7 +20,7 @@ export { RunWorker, type RunWorkerOptions } from "./runWorker.js";
 // the barrel↔boot cycle) + the shared standalone boot the `worker-main.ts`
 // entrypoint and the in-process flag path (main.ts) both call.
 export { runWorkerEnabled, startRunWorker, type StartRunWorkerInput, type StartedRunWorker } from "./lifecycle.js";
-export { bootRunWorker, type BootedRunWorker } from "./boot.js";
+export { bootRunWorker, type BootedRunWorker, type WorkerBootMode } from "./boot.js";
 // The run-state WRITER impls + env resolver (the DEFAULT direct
 // in-process writer vs the remote control-plane writer over mTLS).
 export { DirectRunStateWriter } from "./directRunStateWriter.js";

@@ -36,6 +36,13 @@ describe("plane-split P1 — standalone worker boot", () => {
     // Saved/restored so the "inline env is IGNORED" case can set it without leaking.
     "TANREN_RUNNER_IDENTITY_PRIVATE_KEY",
     "TANREN_ALLOCATOR_KIND",
+    // The mTLS de-privilege env the standalone-mode boot guard reads (finding #5).
+    "TANREN_CLAIM_ENDPOINT_URL",
+    "TANREN_DATA_PLANE_TLS_CERT",
+    "TANREN_DATA_PLANE_TLS_KEY",
+    "TANREN_DATA_PLANE_TLS_CA",
+    "TANREN_DATA_PLANE_REMOTE_WRITES",
+    "TANREN_WRITE_ENDPOINT_URL",
   ];
 
   beforeEach(() => {
@@ -50,6 +57,14 @@ describe("plane-split P1 — standalone worker boot", () => {
     delete process.env["TANREN_RUNNER_IDENTITY_KEY_PATH"];
     delete process.env["TANREN_RUNNER_IDENTITY_SECRET_REF"];
     delete process.env["TANREN_RUNNER_IDENTITY_PRIVATE_KEY"];
+    // The in-process (default) cases run with NO mTLS env — the silent direct-DB
+    // dev fallback. The standalone-guard cases set it explicitly below.
+    delete process.env["TANREN_CLAIM_ENDPOINT_URL"];
+    delete process.env["TANREN_DATA_PLANE_TLS_CERT"];
+    delete process.env["TANREN_DATA_PLANE_TLS_KEY"];
+    delete process.env["TANREN_DATA_PLANE_TLS_CA"];
+    delete process.env["TANREN_DATA_PLANE_REMOTE_WRITES"];
+    delete process.env["TANREN_WRITE_ENDPOINT_URL"];
     resetSystemPool();
   });
 
@@ -200,6 +215,50 @@ describe("plane-split P1 — standalone worker boot", () => {
     const booted = await bootRunWorker();
     try {
       expect(await booted.secrets.get("runner/local-docker/identity")).toBeUndefined();
+    } finally {
+      await booted.stop();
+    }
+  });
+
+  // ---- finding #5: the standalone de-privilege boot guard (no silent fallback) ----
+
+  it("STANDALONE mode WITHOUT the mTLS claim endpoint FAILS BOOT (never silently uses direct DB-CAS)", async () => {
+    // The de-privileged data plane must claim over mTLS. With no endpoint the boot
+    // would silently revert to the direct `job_queue` DB-CAS — re-acquiring the very
+    // privilege the split removes. Mode "standalone" makes that a LOUD boot failure.
+    process.env["TANREN_RUN_WORKER_CONCURRENCY"] = "1";
+    await expect(bootRunWorker("standalone")).rejects.toThrow(/standalone data-plane worker requires the mTLS claim/u);
+  });
+
+  it("STANDALONE mode with the claim endpoint but remote-writes OFF FAILS BOOT (never silent direct writes)", async () => {
+    // Claim endpoint + certs present, but remote-writes off → the worker would write
+    // tenant tables directly on the de-privileged role. The guard rejects this too.
+    process.env["TANREN_RUN_WORKER_CONCURRENCY"] = "1";
+    process.env["TANREN_CLAIM_ENDPOINT_URL"] = "https://orchestrator:3110";
+    process.env["TANREN_DATA_PLANE_TLS_CERT"] = "/etc/tanren/mtls/worker.crt";
+    process.env["TANREN_DATA_PLANE_TLS_KEY"] = "/etc/tanren/mtls/worker.key";
+    process.env["TANREN_DATA_PLANE_TLS_CA"] = "/etc/tanren/mtls/ca.crt";
+    // TANREN_DATA_PLANE_REMOTE_WRITES intentionally unset (off).
+    await expect(bootRunWorker("standalone")).rejects.toThrow(
+      /standalone data-plane worker requires remote run-state/u,
+    );
+  });
+
+  it("STANDALONE mode with the claim endpoint set but certs MISSING FAILS BOOT (no unauthenticated channel)", async () => {
+    process.env["TANREN_RUN_WORKER_CONCURRENCY"] = "1";
+    process.env["TANREN_CLAIM_ENDPOINT_URL"] = "https://orchestrator:3110";
+    // No TANREN_DATA_PLANE_TLS_* certs — the partial-config guard fires.
+    await expect(bootRunWorker("standalone")).rejects.toThrow(/mTLS cert env.*is incomplete/u);
+  });
+
+  it("IN-PROCESS dev mode boots WITHOUT any mTLS env (the documented single-process direct-DB path)", async () => {
+    // The default mode is "in-process": it shares the API pool, so the direct-DB
+    // claim + writes are intended. No mTLS env set, yet boot succeeds — the guard
+    // is gated on standalone mode only, so the dev/smoke path is unaffected.
+    process.env["TANREN_RUN_WORKER_CONCURRENCY"] = "1";
+    const booted = await bootRunWorker("in-process");
+    try {
+      expect(booted.worker).toBeInstanceOf(RunWorker);
     } finally {
       await booted.stop();
     }

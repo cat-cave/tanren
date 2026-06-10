@@ -79,6 +79,10 @@ const ALLOC_ENV_KEYS = [
   "TANREN_K8S_RUNNER_IMAGE",
   "TANREN_K8S_SSH_PUBLIC_KEY",
   "TANREN_K8S_HOST_FINGERPRINT",
+  // The static-runner SSH topology env (deploy infra). The port goes through a
+  // validated parse — a malformed value fails loud (finding #6 tighten).
+  "TANREN_RUNNER_SSH_HOST",
+  "TANREN_RUNNER_SSH_PORT",
 ] as const;
 
 let savedEnv: Record<string, string | undefined> = {};
@@ -132,6 +136,33 @@ describe("buildAllocatorFromEnv — single-kind selection", () => {
 
   it("selects the static allocator for kind=static", async () => {
     process.env.TANREN_ALLOCATOR_KIND = "static";
+    expect(await buildAllocatorFromEnv(fakePool, secrets)).toBeInstanceOf(StaticRunnerAllocator);
+  });
+
+  // Finding #6 (tighten): the runner SSH port is deploy-infra env (correct — NOT
+  // per-org config), but a malformed value must FAIL LOUD, not silently become
+  // NaN/0 via the old `Number(env(...) ?? 22)`.
+  it("throws on a non-numeric TANREN_RUNNER_SSH_PORT (never a silent NaN)", async () => {
+    process.env.TANREN_ALLOCATOR_KIND = "static";
+    process.env.TANREN_RUNNER_SSH_PORT = "not-a-port";
+    await expect(buildAllocatorFromEnv(fakePool, secrets)).rejects.toThrow(/is not a valid TCP port/u);
+  });
+
+  it("throws on an out-of-range TANREN_RUNNER_SSH_PORT (0 / >65535)", async () => {
+    process.env.TANREN_ALLOCATOR_KIND = "static";
+    process.env.TANREN_RUNNER_SSH_PORT = "70000";
+    await expect(buildAllocatorFromEnv(fakePool, secrets)).rejects.toThrow(/is not a valid TCP port/u);
+  });
+
+  it("UNSET TANREN_RUNNER_SSH_PORT uses the documented default (static builds cleanly)", async () => {
+    process.env.TANREN_ALLOCATOR_KIND = "static";
+    delete process.env.TANREN_RUNNER_SSH_PORT;
+    expect(await buildAllocatorFromEnv(fakePool, secrets)).toBeInstanceOf(StaticRunnerAllocator);
+  });
+
+  it("a valid TANREN_RUNNER_SSH_PORT is accepted", async () => {
+    process.env.TANREN_ALLOCATOR_KIND = "static";
+    process.env.TANREN_RUNNER_SSH_PORT = "2222";
     expect(await buildAllocatorFromEnv(fakePool, secrets)).toBeInstanceOf(StaticRunnerAllocator);
   });
 

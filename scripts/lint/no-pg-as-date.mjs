@@ -35,6 +35,11 @@ const SCOPED_FILES = [
   "services/orchestrator/src/engine/forge/turns.ts",
   "services/orchestrator/src/engine/forge/proposals.ts",
   "services/orchestrator/src/engine/forge/threads.ts",
+  // The forge-tools event read seam (`read_events`): it maps raw pg rows into
+  // `RedactedEventRow`. Its `ts` cell is Zod-decoded (z.coerce.date()) at the
+  // boundary — this scope keeps a re-introduced `row["ts"] as Date` laundering
+  // cast (code-integrity r3 finding #4) out of the build.
+  "services/orchestrator/src/engine/forge/tools/read.ts",
 ];
 
 // The lint never reads its own source (the forbidden strings live in its prose).
