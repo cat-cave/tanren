@@ -16,6 +16,9 @@ import { AuditsStore } from "./store.js";
 import { runAuditJob } from "./scheduler.js";
 import type { AuditCadence, AuditJob, AuditPassRunner } from "./types.js";
 import type { AutoRouteDeps, TriageAnswerer } from "../inbox/index.js";
+import { createLogger } from "../../observability/logger.js";
+
+const log = createLogger("audit-scheduler");
 
 // The cadence → minimum elapsed window before a job is due again. A job with no
 // `lastRun` is always due (its first pass).
@@ -95,7 +98,7 @@ export class AuditSchedulerLoop {
       try {
         jobs = await this.listDueJobs();
       } catch (error) {
-        console.error("[audit-scheduler] failed to list audit jobs (will retry next tick):", error);
+        log.error("failed to list audit jobs (will retry next tick)", {}, error);
         return [];
       }
       const ran: AuditJob[] = [];
@@ -117,7 +120,7 @@ export class AuditSchedulerLoop {
           );
           ran.push(result.job);
         } catch (error) {
-          console.error(`[audit-scheduler] job ${job.id} failed:`, error);
+          log.error("audit job failed", { jobId: job.id }, error);
         }
       }
       return ran;

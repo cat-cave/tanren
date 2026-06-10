@@ -33,6 +33,9 @@ import {
   type ProofReuseKeyInput,
   proofReuseKey,
 } from "../contracts/integrationNodes.js";
+import { createLogger } from "../observability/logger.js";
+
+const log = createLogger("integration-nodes");
 
 /** Anything that can run a query — a pool or an already-checked-out scoped client. */
 export type QueryRunner = Pick<pg.PoolClient, "query">;
@@ -381,11 +384,7 @@ export async function observeRunAsIntegrationNode(
     // load-bearing fix; the log is for visibility.
     await client.query("ROLLBACK TO SAVEPOINT obs_node").catch(() => {});
     await client.query("RELEASE SAVEPOINT obs_node").catch(() => {});
-    console.warn(
-      `[integration-nodes] observe-only node UPSERT failed for run ${run.runId} (non-fatal): ${
-        error instanceof Error ? error.message : String(error)
-      }`,
-    );
+    log.warn("observe-only node UPSERT failed (non-fatal)", { runId: run.runId }, error);
   }
 }
 

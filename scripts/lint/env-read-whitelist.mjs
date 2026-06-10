@@ -70,6 +70,14 @@ const ENV_READ_WHITELIST = new Set([
   "cli/src/httpClient.ts",
   "cli/src/main.ts",
   "cli/src/auth/store.ts",
+  // ── structured logger seams ────────────────────────────────────────────────
+  // TANREN_LOG_LEVEL: the per-call level FILTER for the structured logger (a
+  // loud-at-use, default-`info` runtime knob, NOT boot config — it is read lazily
+  // per log call so the level can change without a redeploy). Each service has its
+  // own dependency-free logger module (the allocator/dashboard are separate pkgs).
+  "services/orchestrator/src/engine/observability/logger.ts",
+  "services/allocator/src/logger.ts",
+  "services/dashboard/src/serverLogger.ts",
   // ── db ─────────────────────────────────────────────────────────────────────
   // The system (BYPASSRLS) DB URL the org-scope seam reads.
   "db/src/orgScope.ts",

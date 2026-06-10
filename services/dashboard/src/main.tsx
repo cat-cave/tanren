@@ -8,6 +8,9 @@ import { OrchestratorClient } from "./api/orchestrator.js";
 import { mountShell, type ShellDeps } from "./app/mountShell.js";
 import { mountScreens } from "./app/screens.js";
 import { devLoginEnabled, devLoginHandshake, loginUrl, useSession } from "./auth/index.js";
+import { createLogger } from "./serverLogger.js";
+
+const log = createLogger("dashboard");
 
 /** Public, unauthenticated paths (never gated by the auth middleware). */
 const PUBLIC_PATHS = new Set(["/healthz", "/auth/login", "/signin"]);
@@ -241,5 +244,5 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const port = Number(process.env["DASHBOARD_PORT"] ?? 3000);
   const app = await createApp();
   serve({ fetch: app.fetch, port });
-  console.log(`dashboard listening on :${port}`);
+  log.info("dashboard listening", { port });
 }

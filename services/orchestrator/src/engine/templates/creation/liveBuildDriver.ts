@@ -33,6 +33,9 @@ import { bootstrapWorkspace, runWorkspaceSshCommand, workspaceRepoPathForRun } f
 import { quoteSshShellArg } from "../../ssh/command.js";
 import type { TemplateAuditor } from "../validationHarness.js";
 import { type BuiltTemplate, TemplateBuildFailedError, type TemplateBuildDriver } from "./buildDriver.js";
+import { createLogger } from "../../observability/logger.js";
+
+const log = createLogger("template-build");
 
 // The converged project's repo + commit + runner image — the facts the build
 // driver resolves once the DAG drains, so it can allocate + clone the conforming
@@ -231,9 +234,12 @@ async function assembleBuiltTemplate(
       try {
         await deps.allocator.release(allocation.runnerId, "completed");
       } catch (error) {
-        console.warn(
-          `[template-build] failed to release validation runner ${allocation.runnerId} ` +
-            `(project ${input.projectId}) — leak risk:`,
+        log.warn(
+          "failed to release validation runner — leak risk",
+          {
+            runnerId: allocation.runnerId,
+            projectId: input.projectId,
+          },
           error,
         );
       }

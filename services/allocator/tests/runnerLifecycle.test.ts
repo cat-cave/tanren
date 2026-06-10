@@ -90,7 +90,7 @@ class InMemoryRunnerStore implements RunnerStore {
   async insert(record: RunnerRecord): Promise<void> {
     this.records.push({ ...record });
   }
-
+  async recordAllocated(): Promise<void> {}
   async markReleased(runnerId: string): Promise<RunnerRecord | undefined> {
     const record = this.records.find((r) => r.runnerId === runnerId && !r.released);
     if (record === undefined) {

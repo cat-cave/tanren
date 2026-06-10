@@ -20,6 +20,7 @@ import {
   type Severity,
   severityMeetsFloor,
 } from "./schemas.js";
+import { createLogger } from "../observability/logger.js";
 
 // dispatcher.
 //
@@ -471,21 +472,11 @@ function errorMessage(error: unknown): string {
   return String(error);
 }
 
+const dispatcherLogger = createLogger("notifications");
+
 function defaultLog(level: "info" | "warn" | "error", message: string, meta?: Record<string, unknown>): void {
-  // Lightweight console emission; the orchestrator's structured logger is
-  // not in scope for this spec. The dispatcher's invariant is
-  // "notifications never block workflow progress" — log shape can evolve
-  // later without breaking that contract.
-  const payload = meta ? `${message} ${JSON.stringify(meta)}` : message;
-  switch (level) {
-    case "info":
-      console.log(`[notifications] ${payload}`);
-      break;
-    case "warn":
-      console.warn(`[notifications] ${payload}`);
-      break;
-    case "error":
-      console.error(`[notifications] ${payload}`);
-      break;
-  }
+  // Route through the shared structured logger: one redacted JSON line per call,
+  // the `meta` carried as the structured detail payload. The dispatcher's invariant
+  // ("notifications never block workflow progress") is unchanged — logging never throws.
+  dispatcherLogger[level](message, {}, meta);
 }

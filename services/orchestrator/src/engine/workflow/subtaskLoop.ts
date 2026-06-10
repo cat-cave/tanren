@@ -56,6 +56,8 @@ import { runSubtaskSequence } from "./subtaskInnerLoop.js";
 import { runConvergenceStage, runDemoRunStage, runTriageStage } from "./loopStages.js";
 import { type ConvergenceState, type RoutedWorkItem } from "./loopPolicy.js";
 import { gateFindings, type TriageSpecValidator } from "./loopFindings.js";
+import { createLogger } from "../observability/logger.js";
+const log = createLogger("subtask-loop");
 
 type LoopQueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
@@ -255,10 +257,8 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
     try {
       await observeRunAccounting(input, appendEvent, plannerTaskId, creditState);
     } catch (error) {
-      console.error(
-        `[subtask-loop] run-end cost reconcile failed for run ${input.context.runId}; the run outcome (${outcome.kind}) is preserved — only the best-effort spend back-fill is missing:`,
-        error,
-      );
+      const ctx = { runId: input.context.runId, outcomeKind: outcome.kind };
+      log.error("run-end cost reconcile failed; outcome preserved, only spend back-fill missing", ctx, error);
     }
     return outcome;
   };

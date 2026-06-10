@@ -13,6 +13,9 @@ import type {
   UsageReadFailure,
   WindowRead,
 } from "./contracts.js";
+import { createLogger } from "../observability/logger.js";
+
+const log = createLogger("usage-monitor");
 
 // A best-effort log sink for read-failure notes. A timeout / SSH transport
 // failure / non-zero exit / malformed output is a LOUD `{ failed }` read result
@@ -21,7 +24,7 @@ import type {
 export type UsageNote = (message: string) => void;
 
 const defaultNote: UsageNote = (message) => {
-  console.warn(`[usage-monitor] ${message}`);
+  log.warn(message);
 };
 
 // SshCodexbarUsageMonitor runs codexbar in the runner over the SSH substrate

@@ -15,6 +15,9 @@ import {
   type IdentityProvider,
 } from "./auth/index.js";
 import { parseOrchestratorEnv } from "./envSchema.js";
+import { createLogger } from "./engine/observability/logger.js";
+
+const log = createLogger("auth");
 
 export interface BuildAppAuthOptions {
   store: IdentityStore;
@@ -62,8 +65,8 @@ export function buildAuthFromEnv(pool: pg.Pool, port?: number): BuildAppAuthOpti
   // prod-like cookie-secure context as a defense-in-depth guard.
   if (env.TANREN_DEV_LOGIN === "1") {
     if (env.TANREN_COOKIE_SECURE === "1") {
-      console.warn(
-        "[auth] TANREN_DEV_LOGIN=1 ignored: refusing dev-login escape hatch under TANREN_COOKIE_SECURE=1 (prod-like context)",
+      log.warn(
+        "TANREN_DEV_LOGIN=1 ignored: refusing dev-login escape hatch under TANREN_COOKIE_SECURE=1 (prod-like context)",
       );
     } else {
       providers.set("local_dev", createDevLoginProvider());

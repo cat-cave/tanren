@@ -28,6 +28,9 @@ import type { PercolationDecision, SpeculativeDependent } from "../contracts/cha
 import type { IntegrationNode } from "../contracts/integrationNodes.js";
 import type { RebaseResult, WorkspaceVcsCore } from "../contracts/workspaceVcsCore.js";
 import type { PercolationReexecutor } from "./percolationOperation.js";
+import { createLogger } from "../observability/logger.js";
+
+const log = createLogger("base-shift");
 
 /** The instrumentation an `integration.rebase` event records (`rebase_vs_rebuild`, §3). */
 export type RebaseDecision = "rebased_clean" | "rebased_resolved" | "replanned" | "held";
@@ -232,7 +235,7 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
     //     branch control flow; it makes the shift's node context inspectable + is the
     //     substrate Wave 3 keys proof reuse on. A read failure is non-fatal (logged).
     await this.deps.nodes.nodesForDependent({ projectId, dependent }).catch((error: unknown) => {
-      console.warn(`[base-shift] integration-node read failed for ${dependent.specId} (non-fatal):`, error);
+      log.warn("integration-node read failed (non-fatal)", { specId: dependent.specId }, error);
       return [];
     });
 

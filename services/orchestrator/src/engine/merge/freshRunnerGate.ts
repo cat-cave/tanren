@@ -43,6 +43,9 @@ import {
   resolveGateConfig,
   runGateForWhen,
 } from "../workflow/gate/index.js";
+import { createLogger } from "../observability/logger.js";
+
+const log = createLogger("merge");
 
 /** The resolved repo + ref + run context a fresh-runner gate clones and reasons over. */
 export interface FreshRunnerGateContext {
@@ -133,8 +136,12 @@ export async function runFreshRunnerMergeGate(
   } finally {
     // LOUD on release error: a leaked runner is a real fault (cost + capacity).
     await deps.allocator.release(allocation.runnerId, "completed").catch((error: unknown) => {
-      console.error(
-        `[merge] FAILED to release fresh-runner re-gate runner ${allocation.runnerId} for ${ctx.runId} — leaked runner:`,
+      log.error(
+        "FAILED to release fresh-runner re-gate runner — leaked runner",
+        {
+          runnerId: allocation.runnerId,
+          runId: ctx.runId,
+        },
         error,
       );
       throw error;

@@ -32,6 +32,9 @@ import {
 import type pg from "pg";
 import { decodeEvent, type TypedEvent } from "../events/index.js";
 import type { NotificationDispatcher, EventContext } from "./dispatcher.js";
+import { createLogger } from "../observability/logger.js";
+
+const log = createLogger("notifications");
 
 /** The event row the subscriber re-reads by id to rebuild a typed event + its context. */
 interface NotificationEventRow {
@@ -75,7 +78,7 @@ export class NotificationSubscriber {
         // Fire-and-forget: a dispatch failure is logged, never thrown into the
         // notify pump (and the dispatcher itself never throws on a channel error).
         void this.onEventAppended(payload).catch((error: unknown) => {
-          console.error(`[notifications] dispatch failed for event ${payload}:`, error);
+          log.error("dispatch failed", { eventId: payload }, error);
         });
       });
       if (this.stopped) {
@@ -84,7 +87,7 @@ export class NotificationSubscriber {
       }
       this.unsubscribe = unsubscribe;
     } catch (error) {
-      console.error("[notifications] failed to subscribe to the notify bus (will not deliver):", error);
+      log.error("failed to subscribe to the notify bus (will not deliver)", {}, error);
     }
   }
 
@@ -107,7 +110,7 @@ export class NotificationSubscriber {
       // An unknown/unparseable event type is a defensive guard only — every
       // producer writes through the validated PgEventStore — but never let it
       // block delivery of the rest. Log and move on.
-      console.error(`[notifications] could not decode appended event ${eventId} (${row.event_type}):`, error);
+      log.error("could not decode appended event", { eventId, eventType: row.event_type }, error);
       return;
     }
     const context: EventContext = {

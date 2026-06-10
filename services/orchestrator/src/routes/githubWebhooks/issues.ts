@@ -35,6 +35,9 @@ import { InboxStore, type InboxSource, type TriageAnswerer } from "../../engine/
 import type { AutoRouteDeps } from "../../engine/forge/inbox/index.js";
 import type { ForgeAnswererTarget } from "../../engine/forge/providerFactory.js";
 import { z } from "zod";
+import { createLogger } from "../../engine/observability/logger.js";
+
+const log = createLogger("issue-webhook");
 
 // The webhook secret ref the source carries on its `config`. A source with no
 // `webhookSecretRef` cannot receive a webhook (the receiver rejects it 401).
@@ -113,8 +116,11 @@ export function createIssueWebhookRoutes(deps: IssueWebhookRouteDeps) {
       // runs DETACHED (not awaited) so a slow triage never holds the 202, and any
       // failure is left to the sweeper. The persisted row is the durable guarantee.
       void processWebhookEvent(processorDeps, persisted).catch((error: unknown) => {
-        console.error(
-          `[issue-webhook] background processing of ${persisted.id} failed (sweeper will re-drive):`,
+        log.error(
+          "background processing of webhook event failed (sweeper will re-drive)",
+          {
+            eventId: persisted.id,
+          },
           error,
         );
       });

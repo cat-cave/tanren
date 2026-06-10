@@ -12,6 +12,10 @@
 // LOUDLY (the default sink logs an error; the `onMiss` seam lets a caller react)
 // rather than letting a persistent renewal failure silently risk a double-execute.
 
+import { createLogger } from "../observability/logger.js";
+
+const log = createLogger("run-executor");
+
 // A single heartbeat miss, surfaced to the observability sink.
 export interface HeartbeatMiss {
   jobId: string;
@@ -94,13 +98,15 @@ export function startHeartbeat(config: HeartbeatConfig): () => Promise<void> {
 // The default heartbeat-miss sink: log EVERY miss; escalate to an error log once
 // the miss-streak has consumed the lease window (reaper-double-execute risk).
 function defaultHeartbeatMissSink(miss: HeartbeatMiss): void {
-  const line = `[run-executor] heartbeat miss #${miss.consecutiveMisses} for job ${miss.jobId}: ${miss.detail}`;
+  const context = { jobId: miss.jobId, consecutiveMisses: miss.consecutiveMisses, detail: miss.detail };
   if (miss.atRisk) {
-    console.error(
-      `${line} — consecutive misses have consumed the lease window; the reaper may requeue this still-running job (duplicate execution risk)`,
+    log.error(
+      "heartbeat miss — consecutive misses have consumed the lease window; the reaper may requeue this " +
+        "still-running job (duplicate execution risk)",
+      context,
     );
   } else {
-    console.warn(line);
+    log.warn("heartbeat miss", context);
   }
 }
 

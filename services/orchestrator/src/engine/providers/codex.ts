@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import type { RunnerHandle } from "../contracts/allocator.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { CommandResult, CommandSubstrate } from "../contracts/commandSubstrate.js";
@@ -9,8 +10,15 @@ import { findOpenRouterGenerationId, foldGenerationId } from "./openRouterGenera
 import { findTokenUsageBounded } from "./findTokenUsage.js";
 import { captureBaselineSha, captureGitStateAfterCodex } from "./codexGit.js";
 import { buildCodexAnswererExecCommand, buildCodexExecCommand } from "./codexExecCommand.js";
+import { createLogger } from "../observability/logger.js";
 import { parseWithOneSchemaRepair } from "./answererRepair.js";
 import { AnswererSchemaValidationError } from "./answererSchemaError.js";
+import { answererWorkspacePath, safeSchemaFileName } from "./codexAnswererPaths.js";
+
+const log = createLogger("codex");
+
+// Re-exported so existing `from "./codex.js"` importers (the uniqueness test) stay stable.
+export { safeSchemaFileName };
 
 // Re-exported from codexExecCommand.ts (split out to keep this adapter under the
 // 500-line cap) so existing importers (and the command-builder tests) are stable.
@@ -187,9 +195,16 @@ export function createCodexAnswerer<TOutput>(dependencies: CodexAnswererDependen
         managed,
         endpointBaseUrl: dependencies.endpointBaseUrl,
       });
-      const workspace = opts.workspace ?? answererWorkspacePath(dependencies, opts.outputSchema.name);
-      const schemaPath = `${auth.CODEX_HOME}/${safeSchemaFileName(opts.outputSchema.name)}.schema.json`;
-      const outputPath = `${auth.CODEX_HOME}/${safeSchemaFileName(opts.outputSchema.name)}.response.json`;
+      // Per-call uniqueness suffix: the schema/output file names derive from the
+      // schema NAME, shared across answerers (Checker + Auditor answer the same
+      // verdict schema). Two answerers sharing a CODEX_HOME / workspace base would
+      // otherwise write the SAME `<name>.schema.json` / `.response.json` and clobber
+      // each other; a random per-call token keeps each answerer's files distinct.
+      const fileBase = safeSchemaFileName(opts.outputSchema.name, randomBytes(6).toString("hex"));
+      const workspace =
+        opts.workspace ?? answererWorkspacePath(dependencies.runId, fileBase, dependencies.answererWorkspaceBaseDir);
+      const schemaPath = `${auth.CODEX_HOME}/${fileBase}.schema.json`;
+      const outputPath = `${auth.CODEX_HOME}/${fileBase}.response.json`;
       await prepareCodexAnswererWorkspace(
         dependencies,
         workspace,
@@ -289,9 +304,10 @@ export async function persistRefreshedCodexAuth(input: {
   try {
     await storeCodexAuthBundle(input.secrets, { ref: input.ref, authJson: result.stdout });
   } catch (error) {
-    console.error(
-      `[codex] failed to persist rotated auth bundle for ${input.ref}; the next run would reuse the stale token:`,
-      error instanceof Error ? error.message : String(error),
+    log.error(
+      "failed to persist rotated auth bundle; the next run would reuse the stale token",
+      { ref: input.ref },
+      error,
     );
     throw error;
   }
@@ -402,18 +418,6 @@ function assertAnswererWorkspaceStep(result: CommandResult, step: string): void 
         `${result.timedOut ? " (timed out)" : ""} | stderr: ${harnessOutputTail(result.stderr)}`,
     );
   }
-}
-
-function answererWorkspacePath(dependencies: CodexAnswererDependencies, schemaName: string): string {
-  // Must be writable by the runner's `tanren` user — /tmp is uid-owned and denies
-  // mkdir, so the per-run answerer scratch lives under tanren's home (same base as
-  // opencodeDataHomeForRun), NOT /tmp.
-  const baseDir = dependencies.answererWorkspaceBaseDir ?? "/home/tanren/.tanren/runs";
-  return `${baseDir}/${dependencies.runId}/${safeSchemaFileName(schemaName)}`;
-}
-
-function safeSchemaFileName(schemaName: string): string {
-  return schemaName.replaceAll(/[^a-zA-Z0-9._-]/gu, "_");
 }
 
 function messageFromUnknown(error: unknown): string {

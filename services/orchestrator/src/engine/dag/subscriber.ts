@@ -38,6 +38,12 @@ import type { SpeculativeIntegrator } from "../contracts/speculativeIntegrator.j
 import { isTerminalStatus } from "../benchmark/runnerDb.js";
 import type { ChangePercolationCoordinator } from "./percolation.js";
 import { buildDagWalker, listWalkableProjectIds } from "./walker.js";
+import { createLogger } from "../observability/logger.js";
+// Re-exported so autonomyLoops (which already imports startDagWalkerSubscriber here)
+// gets the logger factory WITHOUT a separate import (its dependency cap is at 12).
+export { createLogger };
+
+const log = createLogger("dag-walker");
 
 /**
  * The default periodic re-walk backstop cadence (audit §3.13a): slow on purpose —
@@ -203,7 +209,7 @@ export class DagWalkerSubscriber {
         // Fire-and-forget: the wake handler must not block the LISTEN connection.
         // A resolve/walk failure is logged, never thrown into the notify pump.
         void this.onRunActivity(payload).catch((error: unknown) => {
-          console.error(`[dag-walker] run-activity handler failed for run ${payload}:`, error);
+          log.error("run-activity handler failed", { runId: payload }, error);
         });
       });
       this.track(runUnsub);
@@ -213,12 +219,12 @@ export class DagWalkerSubscriber {
         // project id). Coalesced through the same per-project in-flight guard, so
         // a burst of inserts during derive collapses to one follow-up walk.
         void this.onDagChange(payload).catch((error: unknown) => {
-          console.error(`[dag-walker] dag-change handler failed for project ${payload}:`, error);
+          log.error("dag-change handler failed", { projectId: payload }, error);
         });
       });
       this.track(dagUnsub);
     } catch (error) {
-      console.error("[dag-walker] failed to subscribe to the LISTEN/NOTIFY bus (will not auto-drive):", error);
+      log.error("failed to subscribe to the LISTEN/NOTIFY bus (will not auto-drive)", {}, error);
     }
   }
 
@@ -237,7 +243,7 @@ export class DagWalkerSubscriber {
       const projectIds = await listWalkableProjectIds(this.deps.pool);
       await Promise.all(projectIds.map((projectId) => this.scheduleWalk(projectId)));
     } catch (error) {
-      console.error("[dag-walker] initial project drive failed (will drive on the next notification):", error);
+      log.error("initial project drive failed (will drive on the next notification)", {}, error);
     }
   }
 
@@ -313,9 +319,9 @@ export class DagWalkerSubscriber {
         // honored. Skip it on a budget pause; the periodic backstop (§3.13a) re-walks
         // and resumes percolation once the ceiling is raised / the window rolls.
         if (result.status === "budget_paused") {
-          console.warn(
-            `[dag-walker] project ${projectId} paused on budget — skipping change-percolation (no runner spend past the ceiling)`,
-          );
+          log.warn("project paused on budget — skipping change-percolation (no runner spend past the ceiling)", {
+            projectId,
+          });
           continue;
         }
         // walk → baseShift (tanren-owns-the-engine.md §3/§7): after the walk (so any
@@ -327,13 +333,13 @@ export class DagWalkerSubscriber {
         // is logged, never fatal to the walk loop — the next notification re-detects.
         if (this.deps.percolation !== undefined) {
           await this.deps.percolation.percolate(projectId).catch((error: unknown) => {
-            console.error(`[dag-walker] change-percolation pass failed for project ${projectId}:`, error);
+            log.error("change-percolation pass failed", { projectId }, error);
           });
         }
       } catch (error) {
         // A walk/percolate throw must not abandon a queued re-walk: log it and let the
         // `do/while` re-check `reWalkPending` so a mid-walk trigger still drains.
-        console.error(`[dag-walker] walk chain iteration failed for project ${projectId}:`, error);
+        log.error("walk chain iteration failed", { projectId }, error);
       }
     } while (this.reWalkPending.has(projectId));
   }

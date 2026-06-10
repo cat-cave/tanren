@@ -29,6 +29,9 @@ import type { CiWhen } from "../../ci/index.js";
 import { harden } from "../../contracts/visibilityProjection.js";
 import { VcsProviderVisibilityProjection } from "../../providers/vcsProviderVisibilityProjection.js";
 import type { PublishGateVerdictInput } from "./publishGateVerdict.js";
+import { createLogger } from "../../observability/logger.js";
+
+const log = createLogger("gate");
 
 /** The forge-neutral `owner/name` the projection seam carries (parsed back by the impl). */
 function repoFullName(repo: PublishGateVerdictInput["repo"]): string {
@@ -92,9 +95,7 @@ export async function publishGateVerdictBestEffort(
   } catch (error) {
     // Last-resort severance: NOTHING in the best-effort publish path may reject to the
     // caller (the merge gate awaits this). Swallow + log; the gate stands on its verdict.
-    console.warn(
-      `[gate] verdict publish (best-effort) threw and was swallowed (merge stands on internal verdict): ${error instanceof Error ? error.message : String(error)}`,
-    );
+    log.warn("verdict publish (best-effort) threw and was swallowed (merge stands on internal verdict)", {}, error);
   }
 }
 
@@ -110,8 +111,6 @@ async function emitFailureNote(
   try {
     await emit(input);
   } catch (error) {
-    console.warn(
-      `[gate] gate.publish_failed note write threw and was swallowed (merge stands on internal verdict): ${error instanceof Error ? error.message : String(error)}`,
-    );
+    log.warn("gate.publish_failed note write threw and was swallowed (merge stands on internal verdict)", {}, error);
   }
 }

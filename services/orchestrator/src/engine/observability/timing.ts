@@ -12,6 +12,8 @@
 // + role). Tokens, stdin, request bodies, and credential refs are never
 // included, so this layer needs no redaction pass of its own.
 
+import { createLogger } from "./logger.js";
+
 export type TimingBoundary = "provider" | "ssh" | "github" | "workflow-stage";
 
 export type TimingOutcome = "ok" | "error";
@@ -36,14 +38,15 @@ export interface TimingRecord {
 // capturing sink. Never throws — a failing sink must not break the workflow.
 export type TimingSink = (record: TimingRecord) => void;
 
-// Default sink: one structured `console` line per record. INFO for ok,
-// WARN for error, so a tail/grep surfaces failing boundaries.
+// Default sink: one structured log line per record via the shared logger. INFO for
+// ok, WARN for error, so a tail/grep surfaces failing boundaries. The record rides
+// as the structured detail payload (redacted by the logger).
+const timingLogger = createLogger("timing");
 export const consoleTimingSink: TimingSink = (record) => {
-  const line = `[timing] ${JSON.stringify(record)}`;
   if (record.outcome === "error") {
-    console.warn(line);
+    timingLogger.warn("boundary timing", {}, record);
   } else {
-    console.log(line);
+    timingLogger.info("boundary timing", {}, record);
   }
 };
 

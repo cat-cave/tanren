@@ -205,6 +205,53 @@ describe("RunWorkspaceReaper.tick — safety invariants", () => {
   });
 });
 
+/** A resolvable gate (hand-rolled `Promise.withResolvers`) to park a tick mid-flight. */
+function makeGate(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
+describe("RunWorkspaceReaper.stop — awaits the in-flight tick", () => {
+  it("does not resolve stop() until the in-flight tick completes", async () => {
+    // A deferred `activeRunIds` holds the tick mid-flight; stop() must AWAIT it.
+    const { promise: gate, resolve: releaseTick } = makeGate();
+    let tickFinished = false;
+    const r = new RunWorkspaceReaper(
+      {
+        ssh: new FakeReaperSubstrate([]),
+        resolveTarget: async () => TARGET,
+        activeRunIds: async () => {
+          await gate;
+          return new Set<string>();
+        },
+        retentionMs: RETENTION_MS,
+        now: () => NOW,
+      },
+      INTERVAL_MS,
+    );
+    const tick = r.tick().then(() => {
+      tickFinished = true;
+    });
+    // Yield so the tick is parked on the gate before we stop.
+    await Promise.resolve();
+    let stopResolved = false;
+    const stopped = r.stop().then(() => {
+      stopResolved = true;
+    });
+    await Promise.resolve();
+    // stop() must NOT have resolved while the tick is still parked.
+    expect(stopResolved).toBe(false);
+    expect(tickFinished).toBe(false);
+    releaseTick();
+    await Promise.all([tick, stopped]);
+    expect(tickFinished).toBe(true);
+    expect(stopResolved).toBe(true);
+  });
+});
+
 describe("parseRunDirListing", () => {
   it("parses `<basename>\\t<epoch-seconds>` lines into ms entries, dropping malformed lines", () => {
     const TAB = "\t";

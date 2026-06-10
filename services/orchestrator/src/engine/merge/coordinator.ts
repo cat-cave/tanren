@@ -20,6 +20,9 @@ import { serializedRetryAfterMs } from "./mergeSerializedRetry.js";
 import { isMissingRequiredCredentialError, missingRequiredCredentialMessage } from "./missingRequiredCredential.js";
 import type { HoldCeilingStore } from "./holdCeilingStore.js";
 import { alertRetryAfterMs } from "./retrySchedule.js";
+import { createLogger } from "../observability/logger.js";
+
+const log = createLogger("merge-coordinator");
 
 /** How long after a transient merge-drive infra-hold the subscriber re-drives the project. */
 const TRANSIENT_DRIVE_HOLD_RETRY_AFTER_MS = 3000;
@@ -307,8 +310,14 @@ export class EventEmittingMergeCoordinator implements MergeCoordinator {
         this.infraHoldAttempts.set(entry.queueId, attempts);
         // Release the claim so the entry stays queued, then HOLD loudly + arm a re-drive.
         await this.deps.queue.releaseClaim(entry.queueId);
-        console.warn(
-          `[merge-coordinator] project ${projectId}: merge drive for spec ${entry.specId} threw a transient infra error (attempt ${attempts}/${MAX_INFRA_HOLD_ATTEMPTS}); holding + re-driving (entry stays queued):`,
+        log.warn(
+          "merge drive threw a transient infra error; holding + re-driving (entry stays queued)",
+          {
+            projectId,
+            specId: entry.specId,
+            attempt: attempts,
+            maxAttempts: MAX_INFRA_HOLD_ATTEMPTS,
+          },
           error,
         );
         return { holdReason: "infra_error", retryAfterMs: TRANSIENT_DRIVE_HOLD_RETRY_AFTER_MS };
@@ -414,9 +423,13 @@ export class EventEmittingMergeCoordinator implements MergeCoordinator {
       message,
       tx: this.deps.tx,
     });
-    console.error(
-      `[merge-coordinator] project ${projectId}: merge drive for spec ${entry.specId} HALTED (${kind}) after ${attempts} infra re-drive(s); operator attention required: ${message}`,
-    );
+    log.error("merge drive HALTED after infra re-drives; operator attention required", {
+      projectId,
+      specId: entry.specId,
+      kind,
+      attempts,
+      message,
+    });
     return { dequeuedSpecId: entry.specId };
   }
 
@@ -443,9 +456,12 @@ export class EventEmittingMergeCoordinator implements MergeCoordinator {
       message,
     });
     await this.deps.queue.releaseClaim(entry.queueId);
-    console.error(
-      `[merge-coordinator] project ${projectId}: merge drive for spec ${entry.specId} ALERTED after ${attempts} infra re-drive(s); continuing autonomous re-drive after backoff: ${message}`,
-    );
+    log.error("merge drive ALERTED after infra re-drives; continuing autonomous re-drive after backoff", {
+      projectId,
+      specId: entry.specId,
+      attempts,
+      message,
+    });
     return { holdReason: "infra_error", retryAfterMs: TRANSIENT_DRIVE_HOLD_ALERT_RETRY_AFTER_MS };
   }
 }

@@ -23,6 +23,9 @@ import {
 import type { CiConfigV1, CiConfigValidationError, CiYamlParseError } from "../ci/index.js";
 import { ensureWorkspaceDepsInstalled, resolveWorkspaceHeadSha } from "../workspace/index.js";
 import type { RunPlannerLoopInput } from "./plannerRun.js";
+import { createLogger } from "../observability/logger.js";
+
+const log = createLogger("gate");
 
 // Builds the production gate callback. The CI config is resolved lazily on the
 // first gate call (the workspace is bootstrapped by then) and cached for the
@@ -255,8 +258,8 @@ export function buildDefaultGate(
  * `junitReport` path (`junitReportFor`), NOT a command-string sniff (a writer's
  * `just tier-2` never mentions the path). No declaration ⇒ a clean QUIET skip. When a
  * tier DID declare a report but the runner produced none (absent/unreadable/empty), the
- * `missing_expected` result is surfaced LOUDLY AND DURABLY: a structured `console.error`
- * PLUS a persisted `ci.junit_missing` event. The per-test grain is gone though a test
+ * `missing_expected` result is surfaced LOUDLY AND DURABLY: a persisted `ci.junit_missing`
+ * event (the durable signal) PLUS a structured `log.error` breadcrumb. The per-test grain is gone though a test
  * tier ran, so flaky-intelligence is blind — a reporter misconfig / a runner crash after
  * the step. Non-merge-gating (the verdict already stands) — VISIBILITY, not a blocker.
  */
@@ -299,9 +302,10 @@ async function ingestGateJunitBestEffort(
     if (result.kind === "missing_expected") {
       // LOUD + DURABLE: a tier DECLARED a junit report but the runner produced none — the
       // per-test grain (flaky detection) just went blind. Persist `ci.junit_missing`
-      // (reason + tier + path + headSha) so the blindness is on the durable ledger, not
-      // only a log line, and also console.error so it surfaces in the run output. The
-      // event is advisory — non-blocking, the gate verdict already stands.
+      // (reason + tier + path + headSha) so the blindness is on the durable LEDGER (the
+      // event is the durable signal), and ALSO a structured `log.error` so it surfaces as
+      // an operator BREADCRUMB in the run output. The event is advisory — non-blocking,
+      // the gate verdict already stands.
       await appendEvent(
         "ci.junit_missing",
         {
@@ -312,14 +316,19 @@ async function ingestGateJunitBestEffort(
         },
         taskId,
       );
-      console.error(
-        `[gate] native JUnit report EXPECTED but ${result.reason} for run ${input.context.runId} ` +
-          `(tier=${declared?.tier ?? "unknown"}, path=${declared?.path ?? "unknown"}, headSha=${headSha}) — ` +
-          `flaky-intelligence has NO per-test grain for this gate (a reporter misconfig or a runner crash ` +
-          `after the test step). Non-blocking.`,
+      log.error(
+        "native JUnit report EXPECTED but missing — flaky-intelligence has NO per-test grain for this gate " +
+          "(a reporter misconfig or a runner crash after the test step). Non-blocking.",
+        {
+          runId: input.context.runId,
+          reason: result.reason,
+          tier: declared?.tier ?? "unknown",
+          reportPath: declared?.path ?? "unknown",
+          headSha,
+        },
       );
     }
   } catch (error) {
-    console.error(`[gate] native JUnit ingest failed for run ${input.context.runId} (non-blocking):`, error);
+    log.error("native JUnit ingest failed (non-blocking)", { runId: input.context.runId }, error);
   }
 }

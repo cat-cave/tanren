@@ -1,11 +1,14 @@
 import { serve } from "@hono/node-server";
 import { createDbPool, migrate } from "@tanren/db";
 import { createAllocatorApi } from "./api.js";
-import { HttpDockerEngineClient } from "./dockerEngine.js";
+import { HttpDockerEngineClient, isHttpStatusError } from "./dockerEngine.js";
 import { PgRunnerStore } from "./pgRunnerStore.js";
 import { RunnerLifecycle } from "./runnerLifecycle.js";
 import { AbandonedRunSweeper } from "./sweeper.js";
 import { requireEnv } from "./requireEnv.js";
+import { createLogger } from "./logger.js";
+
+const log = createLogger("allocator");
 import { parsedEnv } from "./envSchema.js";
 
 // Boot-validated env (Zod, fail-loud at load — see envSchema.ts). These replace
@@ -76,14 +79,19 @@ async function main(): Promise<void> {
         await docker.inspectContainer("00000000-allocator-self-check");
         return true;
       } catch (error) {
-        // Any HTTP response — even 404 — proves the daemon is reachable.
-        return error instanceof Error && /status (?:404|400|500)/u.test(error.message);
+        // Liveness is decided by the HTTP STATUS CODE, not a body-string regex: ANY
+        // HTTP response (even a 404 for the synthetic self-check container) proves the
+        // daemon answered → reachable. A transport-level failure (socket down, daemon
+        // gone) rejects WITHOUT a numeric `statusCode`, so the absence of one is the
+        // unreachable signal. The HTTP client stamps `error.statusCode` on every
+        // non-2xx response (dockerEngine.requestBuffer).
+        return isHttpStatusError(error);
       }
     },
   });
 
   serve({ fetch: app.fetch, port });
-  console.log(`allocator listening on :${port}`);
+  log.info("allocator listening", { port });
 }
 
 /**

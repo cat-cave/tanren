@@ -37,6 +37,9 @@ import {
   decodeVerified,
   resolveProjectOrg,
 } from "./percolationWrites.js";
+import { createLogger } from "../observability/logger.js";
+
+const log = createLogger("change-percolation");
 
 interface SpeculativeRunRow {
   run_id: string;
@@ -152,8 +155,12 @@ export class PgPercolationReadModel implements PercolationReadModel {
     // (non-terminal) dependents are returned for the coordinator to settle/detect.
     const terminalWithMarker = dependents.filter((d) => d.lifecycleState === "merged" && d.pending !== undefined);
     for (const terminal of terminalWithMarker) {
-      console.debug(
-        `[change-percolation] clearing stale percolation_pending on merged/done spec ${terminal.specId} (run ${terminal.runId}) — a terminal spec is never a percolation dependent`,
+      log.debug(
+        "clearing stale percolation_pending on merged/done spec — a terminal spec is never a percolation dependent",
+        {
+          specId: terminal.specId,
+          runId: terminal.runId,
+        },
       );
       await clearPercolationPending(this.deps.pool, { projectId, runId: terminal.runId }, this.deps.runStateWriter);
     }

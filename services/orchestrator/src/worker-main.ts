@@ -17,8 +17,11 @@
 // `startRunWorker` (inside `bootRunWorker`).
 
 import { bootRunWorker } from "./engine/worker/index.js";
+import { createLogger } from "./engine/observability/logger.js";
+
+const log = createLogger("run-worker");
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   await bootRunWorker();
-  console.log("run-executor worker started (standalone data plane)");
+  log.info("run-executor worker started (standalone data plane)");
 }

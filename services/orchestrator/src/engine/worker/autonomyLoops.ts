@@ -17,7 +17,7 @@ import type { GitHubHttpClient } from "../providers/github.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
 import { buildPercolationCoordinator } from "../dag/percolationBuild.js";
 import { PgSpeculativeIntegrator } from "../dag/speculativeIntegrator.js";
-import { startDagWalkerSubscriber } from "../dag/subscriber.js";
+import { createLogger, startDagWalkerSubscriber } from "../dag/subscriber.js";
 import { startMergeCoordinatorSubscriber } from "../merge/subscriber.js";
 import { startPostMergeSubscriber } from "../postMerge/subscriber.js";
 import { buildDeployOnMergeWatcher, buildDemoOnDeployWatcher } from "../postMerge/deployOnMerge.js";
@@ -36,6 +36,8 @@ import type { PostMergeSubscriber } from "../postMerge/subscriber.js";
 import type { BootedIntake } from "../forge/intake/bootIntake.js";
 import type { CiInsightsLoop } from "./ciInsightsLoop.js";
 import type { NotificationSubscriber } from "../notifications/subscriber.js";
+
+const log = createLogger("run-worker");
 
 export interface AutonomyLoopsDeps {
   pool: pg.Pool;
@@ -153,9 +155,7 @@ export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<Auton
     // control plane when wired (else direct on deps.pool, byte-identical).
     ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
   });
-  console.log(
-    "[run-worker] DagWalker + change-percolation subscriber started (autonomous DAG execution + §2c percolation)",
-  );
+  log.info("DagWalker + change-percolation subscriber started (autonomous DAG execution + §2c percolation)");
   // the native intelligent merge queue. It reacts on the SAME run-activity bus
   // — a ready `native_queue` run entering the queue, and a merge completing — and
   // merges ONE entry at a time in DAG order (ancestor before dependent), driving the
@@ -179,7 +179,7 @@ export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<Auton
     // through the control plane when wired (else direct on deps.pool, byte-identical).
     ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
   });
-  console.log("[run-worker] native merge-queue coordinator subscriber started (autonomy-engine §2d)");
+  log.info("native merge-queue coordinator subscriber started (autonomy-engine §2d)");
   // tempering.md dim A: the post-merge watcher reacts on the SAME run-activity bus —
   // once a run's PR merges onto default_branch it reads the post-merge CI on the base
   // branch and auto-opens ONE tracking issue on a genuine failure. Its own LISTEN
@@ -214,7 +214,7 @@ export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<Auton
     // when wired (else direct on deps.pool, byte-identical).
     ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
   });
-  console.log("[run-worker] post-merge auto-issue + deploy-on-merge watcher subscriber started (tempering.md dim A)");
+  log.info("post-merge auto-issue + deploy-on-merge watcher subscriber started (tempering.md dim A)");
   // Notifications: build the dispatcher ONCE (channel registry with the real
   // channel deps — `secrets` resolves Slack/webhook/etc. write-only credential
   // refs; the shared App minter authenticates github_checks) + the code-level default
@@ -235,7 +235,7 @@ export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<Auton
     notifyListener: notificationNotifyListener,
     dispatcher,
   });
-  console.log("[run-worker] notification dispatcher subscriber started (events now reach humans)");
+  log.info("notification dispatcher subscriber started (events now reach humans)");
   const intake = startIntake({
     pool: deps.pool,
     secrets: deps.secrets,
@@ -250,7 +250,7 @@ export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<Auton
     // control plane when wired (else direct on deps.pool, byte-identical).
     ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
   });
-  console.log("[run-worker] intake poller + audit scheduler loops started (autonomy-engine §1d)");
+  log.info("intake poller + audit scheduler loops started (autonomy-engine §1d)");
   // CI-intelligence PR2+PR3: the flaky+duration detector on a cadence (replaces the
   // dashboard-GET-on-read trigger). Each tick quarantines proven-flaky checks/tests
   // so the merge gate's quarantine read excludes them (PR2), THEN turns each genuine
@@ -265,9 +265,7 @@ export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<Auton
     identitySecretRef: deps.identitySecretRef,
     ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
   });
-  console.log(
-    "[run-worker] CI-insights detect+quarantine + generative root-cause loop started (CI-intelligence PR2+PR3)",
-  );
+  log.info("CI-insights detect+quarantine + generative root-cause loop started (CI-intelligence PR2+PR3)");
   // Template maintenance (templating-system.md §4): re-validate registered templates
   // on their channel cadence, refresh the proof (green) or degrade + file a regression
   // finding (red), and run the nightly→lts graduation gate. Started ONLY when a live
@@ -287,7 +285,7 @@ export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<Auton
           ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
         });
   if (templateMaintenance !== undefined) {
-    console.log("[run-worker] template-maintenance loop started (templating-system.md §4)");
+    log.info("template-maintenance loop started (templating-system.md §4)");
   }
   const stop = async (): Promise<void> => {
     dagWalker.stop();

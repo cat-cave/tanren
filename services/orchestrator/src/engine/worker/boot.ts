@@ -12,7 +12,7 @@ import { buildAllocatorFromEnv } from "../allocators/index.js";
 import { resolveWorkerConcurrency } from "../config/index.js";
 import { buildSecretStore, type SecretStore } from "../contracts/index.js";
 import { startAutonomyLoops, type AutonomyLoops } from "./autonomyLoops.js";
-import { TimedGitHubHttpClient, TimedCommandSubstrate } from "../observability/index.js";
+import { TimedGitHubHttpClient, TimedCommandSubstrate, createLogger } from "../observability/index.js";
 import { buildVcsProvider, FetchGitHubHttpClient, GithubAppTokenMinter } from "../providers/buildVcsProvider.js";
 import { SshCommandSubstrate } from "../ssh/index.js";
 import { buildClaimClientFromEnv } from "./claimClientFromEnv.js";
@@ -26,6 +26,8 @@ import {
   startRunWorkspaceReaper,
   type RunWorkspaceReaper,
 } from "./lifecycle.js";
+
+const log = createLogger("run-worker");
 
 /** What {@link bootRunWorker} returns so callers (and tests) can drain + assert. */
 export interface BootedRunWorker {
@@ -86,26 +88,26 @@ export async function bootRunWorker(): Promise<BootedRunWorker> {
   // standalone `worker` container sets the endpoint env; the single-process dev
   // path leaves it unset and claims directly.
   const claimClient = buildClaimClientFromEnv();
-  console.log(
+  log.info(
     claimClient === undefined
-      ? "[run-worker] claiming via direct DB-CAS (no control-plane endpoint configured)"
-      : "[run-worker] claiming via the mTLS control-plane endpoint",
+      ? "claiming via direct DB-CAS (no control-plane endpoint configured)"
+      : "claiming via the mTLS control-plane endpoint",
   );
   // When TANREN_DATA_PLANE_REMOTE_WRITES=1 (+ endpoint + certs),
   // route the worker's run-state WRITES through the control plane over mTLS; else
   // the worker writes the tenant tables directly (the default, reversible).
   const runStateWriter = buildRunStateWriterFromEnv();
-  console.log(
+  log.info(
     runStateWriter === undefined
-      ? "[run-worker] writing run state via direct in-process DB writes (remote-writes off)"
-      : "[run-worker] writing run state via the mTLS control-plane endpoints",
+      ? "writing run state via direct in-process DB writes (remote-writes off)"
+      : "writing run state via the mTLS control-plane endpoints",
   );
   // Concurrency is a GOVERNED CONFIG KNOB, not an env var (autonomy-engine.md
   // §1.4): resolve the worker's slot ceiling from the config surface's
   // `AllocatorConfig.concurrency`. The future DagWalker reads the same
   // per-project/org ceiling and throttles below it on live signals.
   const concurrency = resolveWorkerConcurrency();
-  console.log(`[run-worker] concurrency ceiling = ${concurrency} (config: allocator.concurrency)`);
+  log.info("concurrency ceiling resolved (config: allocator.concurrency)", { concurrency });
   // Hoisted so the run worker AND the P1d intake poller share the same allocator /
   // SSH / GitHub plumbing (the poller's triage answerer allocates a runner per
   // model call exactly as the Forge route factories do).
@@ -124,10 +126,10 @@ export async function bootRunWorker(): Promise<BootedRunWorker> {
   // child tokens; the broad token is never handed to a runner. Undefined for a
   // non-Vault backend — that backend has no broad Vault token to de-privilege.
   const credentialScoping = buildRunCredentialScoping();
-  console.log(
+  log.info(
     credentialScoping === undefined
-      ? "[run-worker] per-run credential scoping OFF (non-Vault secret store; reads use the backend store directly)"
-      : "[run-worker] per-run credential scoping ON (each run reads via a short-lived Vault child token; dimension D)",
+      ? "per-run credential scoping OFF (non-Vault secret store; reads use the backend store directly)"
+      : "per-run credential scoping ON (each run reads via a short-lived Vault child token; dimension D)",
   );
   const { worker, reaper } = startRunWorker({
     pool,
@@ -180,7 +182,9 @@ export async function bootRunWorker(): Promise<BootedRunWorker> {
   const runWorkspaceReaper = startRunWorkspaceReaper({ pool, secrets, ssh, identitySecretRef });
   const stop = async (): Promise<void> => {
     await autonomy.stop();
-    runWorkspaceReaper?.stop();
+    // Await the reaper's in-flight tick (stop() now drains it) before tearing down
+    // the worker + pool, so no sweep outlives the resources it reads.
+    await runWorkspaceReaper?.stop();
     await Promise.all([worker.stop(), reaper.stop()]);
   };
   return { worker, reaper, pool, secrets, autonomy, runWorkspaceReaper, stop };

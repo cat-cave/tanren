@@ -28,8 +28,11 @@ export type { RunWorkspaceReaper } from "./runWorkspaceReaper.js";
 import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import type { VcsProvider } from "../contracts/vcsProvider.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
+import { createLogger } from "../observability/logger.js";
 import { JobReaper } from "./jobReaper.js";
 import { RunWorker, type RunWorkerOptions } from "./runWorker.js";
+
+const log = createLogger("run-worker");
 
 /** True when the in-process run worker is enabled (TANREN_RUN_WORKER=1). */
 export function runWorkerEnabled(): boolean {
@@ -158,17 +161,42 @@ function installResilienceHandlers(): void {
   }
   resilienceHandlersInstalled = true;
   process.on("unhandledRejection", (reason: unknown) => {
-    console.error(
-      "[run-worker] UNHANDLED REJECTION (worker SURVIVES — a stray per-run error escaped its boundary; the affected run recovers via finalize/lease-lapse):",
+    log.error(
+      "UNHANDLED REJECTION (worker SURVIVES — a stray per-run error escaped its boundary; the affected run recovers via finalize/lease-lapse)",
+      {},
       reason,
     );
   });
   process.on("uncaughtException", (error: unknown) => {
-    console.error(
-      "[run-worker] UNCAUGHT EXCEPTION (worker SURVIVES — a stray per-run error escaped its boundary; the affected run recovers via finalize/lease-lapse):",
+    log.error(
+      "UNCAUGHT EXCEPTION (worker SURVIVES — a stray per-run error escaped its boundary; the affected run recovers via finalize/lease-lapse)",
+      {},
       error,
     );
   });
+}
+
+/**
+ * Drain the worker + reaper on a shutdown signal, then exit with a FAIL-CLOSED
+ * code: a CLEAN drain exits 0; a drain that REJECTED (a `stop()` threw mid-
+ * teardown) exits NON-ZERO so the supervisor treats the shutdown as failed and
+ * RESTARTS the worker — never a silent `exit(0)` that masks a wedged drain.
+ *
+ * Exported (with an injectable `exit` for the test) so the exit-code decision can
+ * be asserted directly without installing a real signal handler.
+ */
+export async function drainWorkerAndExit(
+  worker: Pick<RunWorker, "stop">,
+  reaper: Pick<JobReaper, "stop">,
+  exit: (code: number) => void = (code) => process.exit(code),
+): Promise<void> {
+  try {
+    await Promise.all([worker.stop(), reaper.stop()]);
+    exit(0);
+  } catch (error: unknown) {
+    log.error("drain failed — exiting non-zero so the supervisor restarts", {}, error);
+    exit(1);
+  }
 }
 
 /** Wire SIGTERM/SIGINT to drain the worker + reaper, then exit. Installed once. */
@@ -178,10 +206,8 @@ function installSignalHandlers(worker: RunWorker, reaper: JobReaper): void {
   }
   signalHandlersInstalled = true;
   const drain = (signal: NodeJS.Signals) => {
-    console.log(`[run-worker] ${signal} received — draining in-flight jobs`);
-    Promise.all([worker.stop(), reaper.stop()])
-      .catch((error) => console.error(`[run-worker] drain error: ${String(error)}`))
-      .finally(() => process.exit(0));
+    log.info(`${signal} received — draining in-flight jobs`, { signal });
+    void drainWorkerAndExit(worker, reaper);
   };
   process.once("SIGTERM", () => drain("SIGTERM"));
   process.once("SIGINT", () => drain("SIGINT"));

@@ -15,6 +15,12 @@ import type pg from "pg";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import { PgEventStore } from "../eventStore.js";
 import type { ClassifiedRunFailure } from "./runFailureClassifier.js";
+import { createLogger } from "../observability/logger.js";
+// Re-exported so runExecutor (which already imports finalizeRunRecoverable here)
+// gets the logger factory WITHOUT a separate import (its dependency cap is at 12).
+export { createLogger };
+
+const log = createLogger("run-finalize");
 
 // A finalize-path best-effort write (event append / spec park / occupancy read)
 // is allowed to FAIL without masking the original run-failure path it runs
@@ -23,9 +29,11 @@ import type { ClassifiedRunFailure } from "./runFailureClassifier.js";
 // invisible to the operator. Each swallow now logs LOUDLY (run/spec id + cause)
 // so a stranded spec is at least surfaced rather than vanishing without trace.
 function logFinalizeSwallow(op: string, ids: { runId: string; specId?: string }, error: unknown): void {
-  const detail = error instanceof Error ? error.message : String(error);
-  const spec = ids.specId !== undefined && ids.specId !== "" ? ` spec ${ids.specId}` : "";
-  console.error(`[run-finalize] ${op} failed for run ${ids.runId}${spec} (best-effort, surfaced): ${detail}`);
+  log.error(
+    "finalize step failed (best-effort, surfaced)",
+    { op, runId: ids.runId, ...(ids.specId !== undefined && ids.specId !== "" && { specId: ids.specId }) },
+    error,
+  );
 }
 
 /**

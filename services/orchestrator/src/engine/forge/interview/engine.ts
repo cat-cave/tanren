@@ -35,6 +35,9 @@ import {
   type InterviewRoundOutput as InterviewRoundOutputType,
   type InterviewSuggestion,
 } from "./types.js";
+import { createLogger } from "../../observability/logger.js";
+
+const log = createLogger("interview");
 
 export interface InterviewEngineDeps {
   pool: pg.Pool;
@@ -109,17 +112,17 @@ export async function runRound(deps: InterviewEngineDeps, input: RunRoundInput):
   if (lifecycle.outcome === "drift") {
     // LOUD: an answerer tried to drift the operator's confirmed stack. The
     // confirmed lifecycle is preserved verbatim; the attempt is reported.
-    console.warn(
-      `[interview] round ${input.round}: REJECTED lifecycle drift — the answerer tried to ` +
-        `overwrite the operator-confirmed stack ("${lifecycle.lifecycle.stack}") with ` +
-        `"${lifecycle.attempted.stack}" without an explicit change. Preserving the confirmed lifecycle.`,
+    log.warn(
+      "REJECTED lifecycle drift — the answerer tried to overwrite the operator-confirmed stack without an " +
+        "explicit change. Preserving the confirmed lifecycle.",
+      { round: input.round, confirmedStack: lifecycle.lifecycle.stack, attemptedStack: lifecycle.attempted.stack },
     );
     lifecycleDrift = { kind: "drift", effective: lifecycle.lifecycle, attempted: lifecycle.attempted };
   } else if (lifecycle.outcome === "changed") {
-    console.warn(
-      `[interview] round ${input.round}: EXPLICIT lifecycle change — the operator-confirmed stack ` +
-        `is now "${lifecycle.lifecycle.stack}" (was confirmed; changed via explicit signal).`,
-    );
+    log.warn("EXPLICIT lifecycle change — the operator-confirmed stack changed via explicit signal", {
+      round: input.round,
+      stack: lifecycle.lifecycle.stack,
+    });
     lifecycleDrift = { kind: "changed", effective: lifecycle.lifecycle, attempted: lifecycle.lifecycle };
   }
   return {

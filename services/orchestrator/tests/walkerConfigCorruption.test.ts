@@ -52,7 +52,8 @@ afterEach(() => {
 
 describe("buildSpeculationConfigResolver — corrupt config is LOUD, not silent", () => {
   it("a CORRUPT present config: logs + emits dag.config.corrupt, then applies the safe default", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    // The structured logger routes warn → console.error as a JSON line.
+    const warn = vi.spyOn(console, "error").mockImplementation(() => {});
     const { emitter, calls } = recordingEmitter();
     // version 99 is unsupported → migrateProjectConfig throws (corruption).
     const resolve = buildSpeculationConfigResolver(fakePoolReturningConfig({ version: 99 }), emitter);
@@ -75,7 +76,7 @@ describe("buildSpeculationConfigResolver — corrupt config is LOUD, not silent"
   });
 
   it("an ABSENT config ({}) uses the default WITHOUT logging or emitting (not corruption)", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const warn = vi.spyOn(console, "error").mockImplementation(() => {});
     const { emitter, calls } = recordingEmitter();
     const resolve = buildSpeculationConfigResolver(fakePoolReturningConfig({}), emitter);
 

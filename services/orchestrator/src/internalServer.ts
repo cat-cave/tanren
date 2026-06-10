@@ -22,6 +22,9 @@ import { type MtlsCertPaths, NodeMtlsPeerVerifier, nodeMtlsServerOptions } from 
 import { createInternalClaimRoutes } from "./routes/internal/claimJob.js";
 import { createInternalRunStateWriteRoutes } from "./routes/internal/runStateWrites.js";
 import { parsedEnv } from "./envSchema.js";
+import { createLogger } from "./engine/observability/logger.js";
+
+const log = createLogger("internal-mtls");
 
 // The internal mTLS listener port (default 3110) is owned by envSchema.ts
 // (parsedEnv.TANREN_INTERNAL_MTLS_PORT) — validated as a port once at boot.
@@ -72,6 +75,6 @@ export function startInternalMtlsServer(deps: { pool: pg.Pool }): boolean {
     createServer,
     serverOptions: tlsOptions,
   });
-  console.log(`internal mTLS control-plane listening on :${port} (claim + run-state-write endpoints)`);
+  log.info("internal mTLS control-plane listening (claim + run-state-write endpoints)", { port });
   return true;
 }

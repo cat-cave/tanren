@@ -33,6 +33,8 @@ import { BatchInfraHoldCeiling, holdOnInfra, terminalInfraBlock } from "./batchI
 import type { HoldCeilingStore } from "./holdCeilingStore.js";
 import { RecoverableDriveHoldCeiling } from "./recoverableDriveHold.js";
 import { serializedRetryAfterMs } from "./mergeSerializedRetry.js";
+import { createLogger } from "../observability/logger.js";
+const log = createLogger("batch-coordinator");
 
 const MAX_INFRA_RETRIES = 2;
 const INFRA_RETRY_BACKOFF_MS = [250, 500];
@@ -207,11 +209,9 @@ export class BatchMergeCoordinator implements MergeCoordinator {
       }
 
       if (current.capped) {
-        // The cap LOG (operator visibility — never a SILENT truncation): more eligible
-        // entries than the batch size; the remainder keeps its position for next pass.
-        console.info(
-          `[batch-coordinator] project ${projectId}: batch CAPPED to ${current.batch.length} of ${current.eligibleCount} eligible (maxBatchSize=${maxBatchSize}); the remainder is re-considered next pass`,
-        );
+        // The cap LOG (operator visibility — never a SILENT truncation): the remainder keeps its position for next pass.
+        const cap = { projectId, batchSize: current.batch.length, eligible: current.eligibleCount, maxBatchSize };
+        log.info("batch CAPPED; remainder re-considered next pass", cap);
       }
       const checked = await this.checkBatchWithInfraRetry(projectId, current, maxBatchSize);
       if (checked.kind === "infra-terminal") {

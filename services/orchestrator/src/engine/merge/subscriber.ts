@@ -14,6 +14,9 @@ import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js"
 import { buildBatchMergeCoordinator } from "./batchCoordinatorBuild.js";
 import { boundedRetryDelayMs, serializedRetryAfterMs } from "./mergeSerializedRetry.js";
 import { LIST_PROJECTS_WITH_QUEUE_SQL } from "./subscriberQueueDiscoverySql.js";
+import { createLogger } from "../observability/logger.js";
+
+const log = createLogger("merge-coordinator");
 
 export interface MergeCoordinatorSubscriberDeps {
   pool: pg.Pool;
@@ -198,12 +201,12 @@ export class MergeCoordinatorSubscriber {
     try {
       const unsubscribe = await this.deps.notifyListener.subscribe(RUN_ACTIVITY_CHANNEL, (payload) => {
         void this.onRunActivity(payload).catch((error: unknown) => {
-          console.error(`[merge-coordinator] run-activity handler failed for run ${payload}:`, error);
+          log.error("run-activity handler failed", { runId: payload }, error);
         });
       });
       const eventUnsubscribe = await this.deps.notifyListener.subscribe(NOTIFICATION_CHANNEL, (payload) => {
         void this.onEventActivity(payload).catch((error: unknown) => {
-          console.error(`[merge-coordinator] event handler failed for event ${payload}:`, error);
+          log.error("event handler failed", { eventId: payload }, error);
         });
       });
       if (this.stopped) {
@@ -214,7 +217,7 @@ export class MergeCoordinatorSubscriber {
       this.unsubscribe = unsubscribe;
       this.eventUnsubscribe = eventUnsubscribe;
     } catch (error) {
-      console.error("[merge-coordinator] failed to subscribe to the run-activity bus (will not auto-advance):", error);
+      log.error("failed to subscribe to the run-activity bus (will not auto-advance)", {}, error);
     }
   }
 
@@ -223,7 +226,7 @@ export class MergeCoordinatorSubscriber {
       const projectIds = await listProjectsWithQueue(this.deps.pool);
       await Promise.all(projectIds.map((projectId) => this.schedule(projectId)));
     } catch (error) {
-      console.error("[merge-coordinator] initial queue drive failed (will drive on the next notification):", error);
+      log.error("initial queue drive failed (will drive on the next notification)", {}, error);
     }
   }
 
@@ -298,24 +301,33 @@ export class MergeCoordinatorSubscriber {
 
   /** Coordinate, then re-coordinate while a trigger arrived mid-pass. */
   private async runChain(projectId: string): Promise<void> {
-    do {
+    let rerun = true;
+    while (rerun) {
+      // Capture-and-clear the re-pending flag ATOMICALLY at the top of the pass:
+      // clear it BEFORE the await so a trigger that arrives DURING `coordinate()` is
+      // recorded for the NEXT pass and cannot be lost. The post-await decisions below
+      // read this single `coalesced` snapshot — never the live `rePending` set, which
+      // mutates across the await tick — so the coalesce can neither drop a genuine
+      // mid-pass trigger nor double-count one. The loop re-runs iff a trigger landed
+      // while the pass was in flight (consumed at the top of the next iteration).
       this.rePending.delete(projectId);
       try {
         const result = await this.coordinator.coordinate(projectId);
+        // A NOTIFY that arrived DURING this pass (mid-await) re-set `rePending` —
+        // snapshot it ONCE so every branch sees a consistent value.
+        const triggeredMidPass = this.rePending.has(projectId);
         // A timed hold returns no merge AND no `tanren_run` NOTIFY is guaranteed
         // to re-trigger this project on its own (a fresh serialized claim, a clean
         // single-PR queue, or a no-checks settle can expire on wall time). Arm a bounded, idempotent
         // one-shot re-drive so the held batch is re-checked once it clears.
-        if (
-          result.retryAfterMs !== undefined &&
-          (!this.rePending.has(projectId) || result.holdReason === "merge_retry")
-        ) {
+        if (result.retryAfterMs !== undefined && (!triggeredMidPass || result.holdReason === "merge_retry")) {
           // Bug B: a PENDING hold and a merge_retry backoff open a NOTIFY-suppression
           // window so unrelated run activity does not hot-loop the integration or burn
-          // retry attempts early. Infra-error holds still allow prompt clearing signals.
+          // retry attempts early. The window (consulted in `onRunActivity`) is the
+          // throttle — NOT a mid-flight mutation of `rePending`, which would drop a
+          // real mid-pass trigger. Infra-error holds still allow prompt clearing signals.
           if (result.holdReason === "merge_retry") {
             this.pendingHoldUntil.set(projectId, this.now() + Math.max(PENDING_DEBOUNCE_MS, result.retryAfterMs));
-            this.rePending.delete(projectId);
           } else if (result.holdReason === "all_blocked") {
             this.pendingHoldUntil.set(projectId, this.now() + PENDING_DEBOUNCE_MS);
           }
@@ -326,13 +338,19 @@ export class MergeCoordinatorSubscriber {
           // NOTIFY re-checks immediately — the debounce only ever spans a live hold.
           this.pendingHoldUntil.delete(projectId);
         }
+        // A merge_retry hold relies on its armed timer (not an immediate re-loop) to
+        // re-check after the backoff, so a mid-pass trigger does NOT spin the loop
+        // and burn the backoff early; every other outcome re-loops on a real trigger.
+        rerun = triggeredMidPass && result.holdReason !== "merge_retry";
       } catch (error) {
-        console.error(`[merge-coordinator] coordinate pass failed for project ${projectId}:`, error);
-        if (!this.rePending.has(projectId)) {
+        log.error("coordinate pass failed", { projectId }, error);
+        const triggeredMidPass = this.rePending.has(projectId);
+        if (!triggeredMidPass) {
           this.armDelayedReDrive(projectId, serializedRetryAfterMs({}));
         }
+        rerun = triggeredMidPass;
       }
-    } while (this.rePending.has(projectId));
+    }
   }
 }
 

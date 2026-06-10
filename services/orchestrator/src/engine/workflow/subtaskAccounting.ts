@@ -13,6 +13,9 @@ import { classifyOverageReachability, credentialSlugOf } from "../costs/index.js
 import { usageReadFailedPayload } from "../usage/index.js";
 import type { UsageReadFailure } from "../usage/index.js";
 import type { AppendEvent, SubtaskLoopInput, SubtaskLoopOutcome } from "./subtaskLoop.js";
+import { createLogger } from "../observability/logger.js";
+
+const log = createLogger("subtask-accounting");
 
 // Emit the LOUD `usage.read_failed` event for a discriminated usage-probe read
 // failure (timeout / SSH / nonzero-exit / malformed). This is the seam that keeps
@@ -51,9 +54,9 @@ async function stampRunAuthRef(input: SubtaskLoopInput): Promise<void> {
       runAuthRef(input),
     ]);
   } catch (error) {
-    console.error(
-      `[subtask-accounting] failed to stamp runs.auth_ref for run ${input.context.runId}; ` +
-        `concurrent-credential drawdown attribution falls back to the full delta (may over-count):`,
+    log.error(
+      "failed to stamp runs.auth_ref; concurrent-credential drawdown attribution falls back to the full delta (may over-count)",
+      { runId: input.context.runId },
       error,
     );
   }
@@ -80,9 +83,9 @@ async function countConcurrentRunsOnCredential(input: SubtaskLoopInput): Promise
     const n = Number(result.rows[0]?.n ?? "1");
     return Number.isFinite(n) && n >= 1 ? n : 1;
   } catch (error) {
-    console.error(
-      `[subtask-accounting] failed to count concurrent runs on credential for run ${input.context.runId}; ` +
-        `attributing the FULL drawdown delta (may over-count a shared credential):`,
+    log.error(
+      "failed to count concurrent runs on credential; attributing the FULL drawdown delta (may over-count a shared credential)",
+      { runId: input.context.runId },
       error,
     );
     return 1;

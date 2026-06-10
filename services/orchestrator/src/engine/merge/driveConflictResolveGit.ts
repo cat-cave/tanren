@@ -18,6 +18,9 @@ import { botGitIdentityConfig, resolveBotPushIdentity } from "../providers/botPu
 import { gitAuthedCommand, gitTokenAuthPrelude } from "../workspace/githubPush.js";
 import { quoteSshShellArg } from "../ssh/command.js";
 import { runWorkspaceSshCommand, workspaceRepoPathForRun } from "../workspace/index.js";
+import { createLogger } from "../observability/logger.js";
+
+const log = createLogger("merge-coordinator");
 
 /** The repo/branch + tenancy facts the git drive resolve clones + allocates against. */
 export interface DriveGitResolveFacts {
@@ -85,8 +88,12 @@ export async function driveResolveOverGit(
     // LOUD on release error: a leaked runner is a real fault (cost + capacity), so
     // surface it rather than swallow it (no silent leak).
     await deps.allocator.release(allocation.runnerId, "completed").catch((error: unknown) => {
-      console.error(
-        `[merge-coordinator] FAILED to release drive-path resolver runner ${allocation.runnerId} for run ${facts.runId} — leaked runner:`,
+      log.error(
+        "FAILED to release drive-path resolver runner — leaked runner",
+        {
+          runnerId: allocation.runnerId,
+          runId: facts.runId,
+        },
         error,
       );
       throw error;

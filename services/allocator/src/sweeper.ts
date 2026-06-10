@@ -1,4 +1,7 @@
 import type { RunnerLifecycle, RunnerRecord } from "./runnerLifecycle.js";
+import { createLogger } from "./logger.js";
+
+const log = createLogger("allocator-sweeper");
 
 export interface SweeperOptions {
   lifecycle: RunnerLifecycle;
@@ -6,7 +9,7 @@ export interface SweeperOptions {
   maxRunHours: number;
   /** How often the sweeper polls. */
   intervalMs?: number;
-  /** Hook for surfacing reclaim events; defaults to console.log. */
+  /** Hook for surfacing reclaim events; defaults to a structured log line. */
   onReclaim?: (record: RunnerRecord) => void | Promise<void>;
 }
 
@@ -24,7 +27,7 @@ export class AbandonedRunSweeper {
     this.onReclaim =
       options.onReclaim ??
       ((record) => {
-        console.log(`[allocator] reclaimed abandoned runner ${record.runnerId} for run ${record.runId}`);
+        log.info("reclaimed abandoned runner", { runnerId: record.runnerId, runId: record.runId ?? undefined });
       });
   }
 
@@ -33,8 +36,8 @@ export class AbandonedRunSweeper {
       return;
     }
     this.timer = setInterval(() => {
-      this.sweep().catch((error) => {
-        console.error(`[allocator] sweeper error: ${error instanceof Error ? error.message : String(error)}`);
+      this.sweep().catch((error: unknown) => {
+        log.error("sweeper error", {}, error);
       });
     }, this.intervalMs);
     if (typeof this.timer.unref === "function") {

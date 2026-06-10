@@ -19,6 +19,9 @@
 
 import { RUN_ACTIVITY_CHANNEL, type PgNotifyListener } from "@tanren/db";
 import { PostMergeWatcher, type PostMergeWatcherDeps } from "./watcher.js";
+import { createLogger } from "../observability/logger.js";
+
+const log = createLogger("post-merge");
 
 /** The minimal per-run watcher shape the subscriber drives on each bus wake. */
 export interface RunMergeWatcher {
@@ -80,7 +83,7 @@ export class PostMergeSubscriber {
     try {
       const unsubscribe = await this.deps.notifyListener.subscribe(RUN_ACTIVITY_CHANNEL, (payload) => {
         void this.onRunActivity(payload).catch((error: unknown) => {
-          console.error(`[post-merge] run-activity handler failed for run ${payload}:`, error);
+          log.error("run-activity handler failed", { runId: payload }, error);
         });
       });
       if (this.stopped) {
@@ -89,7 +92,7 @@ export class PostMergeSubscriber {
       }
       this.unsubscribe = unsubscribe;
     } catch (error) {
-      console.error("[post-merge] failed to subscribe to the run-activity bus (will not auto-track):", error);
+      log.error("failed to subscribe to the run-activity bus (will not auto-track)", {}, error);
     }
   }
 
@@ -124,13 +127,13 @@ export class PostMergeSubscriber {
     do {
       this.rePending.delete(runId);
       await this.watcher.check(runId).catch((error: unknown) => {
-        console.error(`[post-merge] check failed for run ${runId}:`, error);
+        log.error("check failed", { runId }, error);
       });
       // The deploy-on-merge watcher runs on the SAME wake but is ISOLATED: a deploy
       // failure is logged and never suppresses the issue watcher (and vice versa).
       if (this.deployWatcher !== undefined) {
         await this.deployWatcher.check(runId).catch((error: unknown) => {
-          console.error(`[post-merge] deploy-on-merge failed for run ${runId}:`, error);
+          log.error("deploy-on-merge failed", { runId }, error);
         });
       }
       // The demo-on-deploy watcher runs AFTER the deploy watcher (so `deploy.verified`
@@ -138,7 +141,7 @@ export class PostMergeSubscriber {
       // suppresses the issue/deploy watchers. A run with no verified deploy is a no-op.
       if (this.demoWatcher !== undefined) {
         await this.demoWatcher.check(runId).catch((error: unknown) => {
-          console.error(`[post-merge] demo-on-deploy failed for run ${runId}:`, error);
+          log.error("demo-on-deploy failed", { runId }, error);
         });
       }
     } while (this.rePending.has(runId));

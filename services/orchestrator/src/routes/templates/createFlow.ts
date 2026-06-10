@@ -47,6 +47,9 @@ import {
 import type { SelectedTemplate, TemplateRegistryQuery } from "../../engine/forge/interview/templateSelection.js";
 import type { CaptureLifecycle } from "../../engine/forge/interview/types.js";
 import type { CreateTemplateFlow } from "./index.js";
+import { createLogger } from "../../engine/observability/logger.js";
+
+const log = createLogger("template-creation");
 
 // The deploy provider a template-build project provisions. A template REPO does not
 // ship a deployed product, but the greenfield derive REQUIRES a deploy dependency
@@ -272,9 +275,9 @@ async function createTemplateInBackground(
   try {
     await maybeCreateTemplateForNoMatch(createDeps, request);
   } catch (error) {
-    console.warn(
-      `[template-creation] background creation for stack="${request.stack}" FAILED ` +
-        "(the derive already proceeded from-scratch; the next run retries the no-match path):",
+    log.warn(
+      "background template creation FAILED (the derive already proceeded from-scratch; the next run retries the no-match path)",
+      { stack: request.stack },
       error,
     );
   }

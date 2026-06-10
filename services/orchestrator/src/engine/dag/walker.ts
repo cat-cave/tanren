@@ -44,6 +44,8 @@ import type { SpecReadiness } from "./speculation.js";
 import { PgBudgetGate } from "./budgetGate.js";
 import { PgDagLifecycleReadModel } from "./lifecycle.js";
 import { type DagEventEmitter, PgDagEventEmitter, PgDagReadModel, SpecRunDagEnqueuer } from "./walkerPg.js";
+import { createLogger } from "../observability/logger.js";
+const log = createLogger("dag-walker");
 
 /** Resolve the governed concurrency ceiling — the config knob, never an env var. */
 export type ConcurrencyResolver = () => number;
@@ -168,8 +170,9 @@ export class EventEmittingDagWalker implements DagWalker {
         try {
           enqueued = await this.enqueueOne(projectId, enqueue, config.threshold, inFlightBefore, ceiling, depsBySpec);
         } catch (error) {
-          console.error(
-            `[dag-walker] enqueue of ready spec ${enqueue.specId} threw — skipping it this tick so the other ready specs are not starved; the next walk re-attempts it:`,
+          log.error(
+            "enqueue of ready spec threw — skipping it this tick so the other ready specs are not starved; the next walk re-attempts it",
+            { specId: enqueue.specId, projectId },
             error,
           );
           continue;
@@ -257,9 +260,7 @@ export class EventEmittingDagWalker implements DagWalker {
         period: budget.period,
       });
       if (!emitted) {
-        console.debug(
-          `[dag-walker] budget milestone ${band}% for ${projectId} already recorded this window — deduped, no re-ping`,
-        );
+        log.debug("budget milestone already recorded this window — deduped, no re-ping", { projectId, band });
       }
     }
   }
@@ -307,8 +308,15 @@ export class EventEmittingDagWalker implements DagWalker {
       // the per-run intent-preserving resolver). The walker re-walks once the pair
       // reconciles/merges (the next merge.completed notification). Logged (not silently
       // dropped) per the §2c "no silent caps / no silent drops" rule.
-      console.warn(
-        `[dag-walker] held speculative ${enqueue.specId}: ancestors ${integration.conflictBetween?.specId} and ${integration.conflictBetween?.otherSpecId} are dirty/conflict on ${integration.integrationBranch}; awaiting merge-queue resolve: ${integration.message}`,
+      log.warn(
+        "held speculative spec: ancestors dirty/conflict on the integration branch; awaiting merge-queue resolve",
+        {
+          specId: enqueue.specId,
+          ancestorSpecId: integration.conflictBetween?.specId,
+          otherAncestorSpecId: integration.conflictBetween?.otherSpecId,
+          integrationBranch: integration.integrationBranch,
+          message: integration.message,
+        },
       );
       return undefined;
     }
@@ -363,15 +371,17 @@ export class EventEmittingDagWalker implements DagWalker {
       return await this.deps.enqueuer.enqueueSpecRun(input);
     } catch (error) {
       if (error instanceof SpecNotRunnableError) {
-        console.debug(
-          `[dag-walker] skipped ${input.specId}: already claimed by a concurrent tick (status ${error.status}) — benign`,
-        );
+        log.debug("skipped spec: already claimed by a concurrent tick — benign", {
+          specId: input.specId,
+          status: error.status,
+        });
         return undefined;
       }
       if (error instanceof SpecDependenciesBlockedError) {
-        console.debug(
-          `[dag-walker] skipped ${input.specId}: dependencies not yet done (${error.blockedSpecIds.join(", ")}) — benign, a later tick will enqueue it`,
-        );
+        log.debug("skipped spec: deps not yet done — benign, a later tick enqueues it", {
+          specId: input.specId,
+          blockedSpecIds: error.blockedSpecIds,
+        });
         return undefined;
       }
       throw error;
@@ -425,10 +435,11 @@ export function buildSpeculationConfigResolver(pool: pg.Pool, events?: DagEventE
         depthCap: DEFAULT_SPECULATIVE_INTEGRATION_DEPTH,
       };
       const reason = error instanceof Error ? error.message : String(error);
-      console.warn(
-        `[dag-walker] corrupt project config for ${projectId} resolving speculation knobs; ` +
-          `applying safe default (${appliedDefault.threshold}/depth ${appliedDefault.depthCap}): ${reason}`,
-      );
+      log.warn("corrupt project config resolving speculation knobs; applying safe default", {
+        projectId,
+        default: appliedDefault,
+        reason,
+      });
       await events?.emitConfigCorrupt({ projectId, knob: "speculation_config", appliedDefault, reason });
       return appliedDefault;
     }

@@ -44,6 +44,9 @@ import {
 import { resolveBotPushIdentity } from "./botPushIdentity.js";
 import { githubHttpsRemote, parseGitHubRepository } from "./github.js";
 import type { GithubAppTokenMinter } from "./githubAppTokenMinter.js";
+import { createLogger } from "../observability/logger.js";
+
+const log = createLogger("live-jj-workspace");
 
 /** The terminal runner image a live jj workspace allocates against when none is given. */
 const DEFAULT_LIVE_JJ_RUNNER_IMAGE = CANONICAL_RUNNER_IMAGE;
@@ -157,10 +160,7 @@ export async function buildLiveJjWorkspace(deps: LiveJjWorkspaceDeps): Promise<L
     }
     released = true;
     await deps.allocator.release(allocation.runnerId, "completed").catch((error: unknown) => {
-      console.error(
-        `[live-jj-workspace] FAILED to release runner ${allocation.runnerId} for ${handle} — leaked runner:`,
-        error,
-      );
+      log.error("FAILED to release runner — leaked runner", { runnerId: allocation.runnerId, handle }, error);
       throw error;
     });
   };

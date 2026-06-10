@@ -5,8 +5,10 @@
 // none" (LOUD + DURABLE). STACK-AGNOSTIC: "JUnit expected" is decided from the EXPLICIT
 // `junitReport:` contract field on a step — the COMMAND (`just tier-2`) never mentions the
 // path, so a substring sniff would miss it; the DECLARED field is the sole signal. The LOUD
-// case persists a durable `ci.junit_missing` event PLUS a structured `console.error`
-// (non-merge-gating — visibility). Extracted from buildDefaultGate.test.ts (the 500-line cap).
+// case persists a durable `ci.junit_missing` event (the durable signal) PLUS a structured
+// `log.error` breadcrumb on the H10 structured-log sink — one JSON line carrying the
+// reason/tier/reportPath/headSha fields (non-merge-gating — visibility). Extracted from
+// buildDefaultGate.test.ts (the 500-line cap).
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RunnerHandle } from "../src/engine/contracts/allocator.js";
 import type { RunnerCommand, CommandResult, CommandSubstrate } from "../src/engine/contracts/commandSubstrate.js";
@@ -98,7 +100,9 @@ when:
 describe("buildDefaultGate — native JUnit ingest (declared-but-missing is LOUD + DURABLE)", () => {
   afterEach(() => vi.restoreAllMocks());
 
-  it("pre_audit (a tier DECLARED a junitReport) + absent report → a LOUD console.error + durable ci.junit_missing", async () => {
+  it("pre_audit (a tier DECLARED a junitReport) + absent report → a LOUD structured log.error + durable ci.junit_missing", async () => {
+    // The H10 structured logger emits one JSON line via console.error for an error level —
+    // so the loud breadcrumb is the structured sink, named by its message + fields.
     const errs = vi.spyOn(console, "error").mockImplementation(() => {});
     const events = new FakeEventStore();
     const gate = buildDefaultGate(
@@ -113,10 +117,11 @@ describe("buildDefaultGate — native JUnit ingest (declared-but-missing is LOUD
     expect(outcome.passed).toBe(true);
     const loud = errs.mock.calls.map((c) => String(c[0])).find((m) => m.includes("native JUnit report EXPECTED"));
     expect(loud).toBeDefined();
-    // The signal names the reason (absent) + the tier + the declared path — no silent degrade.
-    expect(loud).toContain("absent");
-    expect(loud).toContain("tier=slow");
-    expect(loud).toContain("path=reports/junit.xml");
+    // The structured signal names the reason (absent) + the tier + the declared path as
+    // discrete JSON fields — no silent degrade.
+    expect(loud).toContain('"reason":"absent"');
+    expect(loud).toContain('"tier":"slow"');
+    expect(loud).toContain('"reportPath":"reports/junit.xml"');
     // DURABLE: a `ci.junit_missing` event is persisted carrying the tier/path/reason.
     const missing = events.events.find((e) => e.eventType === "ci.junit_missing");
     expect(missing).toBeDefined();

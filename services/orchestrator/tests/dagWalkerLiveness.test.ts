@@ -136,7 +136,7 @@ describe("DagWalkerSubscriber liveness", () => {
       },
     };
     const percolation = new RecordingPercolation();
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const listener = new FakeNotifyListener();
     const sub = new DagWalkerSubscriber({
       pool: fakePool({ projectsWithDag: [], runs: { run_done: { projectId: "project_x", status: "completed" } } }),

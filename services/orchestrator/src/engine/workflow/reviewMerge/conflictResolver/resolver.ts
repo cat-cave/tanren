@@ -39,6 +39,9 @@ import {
   type WorkspaceConflictApplier,
 } from "../../../contracts/conflictResolution.js";
 import type { ConflictContext, ConflictResolverHook } from "../mergeDispatchTypes.js";
+import { createLogger } from "../../../observability/logger.js";
+
+const log = createLogger("conflict-resolver");
 
 export interface IntentPreservingResolverDeps {
   /** The run's project + the merging spec + its intent (captured per-run). */
@@ -100,9 +103,9 @@ export function buildIntentPreservingConflictResolver(deps: IntentPreservingReso
     // merging spec's intent alive (`resolved:false` → the dispatcher emits the
     // recoverable conflict + re-drives) and surface the empty gather loudly.
     if (gathered.files.length === 0) {
-      console.error(
-        `[conflict-resolver] gather() surfaced NO conflicted files for spec ${deps.mergingSpecIntent.specId}; ` +
-          `short-circuiting before the model call (no files to resolve), returning a recoverable conflict.`,
+      log.error(
+        "gather() surfaced NO conflicted files; short-circuiting before the model call (no files to resolve), returning a recoverable conflict",
+        { specId: deps.mergingSpecIntent.specId },
       );
       return { resolved: false };
     }

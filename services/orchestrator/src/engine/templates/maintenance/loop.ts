@@ -39,6 +39,9 @@ import { CHANNEL_CADENCE_MS, channelCadence } from "./channelPolicy.js";
 import { proofExpired, shouldDegrade } from "./freshness.js";
 import { graduationDecision, type GraduationDecision } from "./graduation.js";
 import { runMaintenancePass, type MaintainableTemplate, type TemplateRevalidator } from "./maintenancePass.js";
+import { createLogger } from "../../observability/logger.js";
+
+const log = createLogger("template-maintenance");
 
 export interface TemplateMaintenanceLoopDeps {
   pool: pg.Pool;
@@ -137,7 +140,7 @@ export class TemplateMaintenanceLoop {
       try {
         due = await this.listDueTemplates();
       } catch (error) {
-        console.error("[template-maintenance] failed to list templates (will retry next tick):", error);
+        log.error("failed to list templates (will retry next tick)", {}, error);
         return [];
       }
       const results: TemplateMaintenanceResult[] = [];
@@ -146,7 +149,7 @@ export class TemplateMaintenanceLoop {
           const result = await runWithJobOrgId(template.orgId, () => this.maintainOne(template));
           results.push(result);
         } catch (error) {
-          console.error(`[template-maintenance] template ${template.id} failed:`, error);
+          log.error("template maintenance failed", { templateId: template.id }, error);
         }
       }
       return results;
