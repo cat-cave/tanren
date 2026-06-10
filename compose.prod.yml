@@ -8,9 +8,10 @@
 ##   VAULT_ROOT_TOKEN                    Vault root token (the Vault server's own root-token-id). Rotate after init.
 ##   TANREN_VAULT_TOKEN_FILE             HOST path to a file containing the broad Vault token (same value as
 ##                                       VAULT_ROOT_TOKEN). Wired below as the `tanren_vault_token` compose secret
-##                                       mounted at /run/secrets/tanren_vault_token; the orchestrator + worker source
-##                                       it into VAULT_TOKEN at start, so the token is delivered as a mounted SECRET
-##                                       FILE, never an env VALUE — it never transits Docker env / `docker inspect`.
+##                                       mounted at /run/secrets/tanren_vault_token; the orchestrator + worker read
+##                                       the token from that file at boot (VAULT_TOKEN_FILE), so it is delivered as a
+##                                       mounted SECRET FILE, never an env VALUE — it never transits Docker env /
+##                                       `docker inspect` / `/proc/<pid>/environ` (the broad token is never exported).
 ##   POSTGRES_PASSWORD                   Postgres password for the tanren user.
 ##   TANREN_GITHUB_OAUTH_CLIENT_ID       GitHub OAuth app client id.
 ##   TANREN_GITHUB_OAUTH_CLIENT_SECRET   GitHub OAuth app client secret.
@@ -94,15 +95,14 @@ services:
     build:
       context: .
       dockerfile: services/orchestrator/Dockerfile
-    # The broad VAULT_TOKEN is delivered as a MOUNTED SECRET FILE (the
-    # `tanren_vault_token` compose secret, wired below), never as a Docker env
-    # VALUE — so it never lands in `docker inspect` / container env. We source it
-    # from /run/secrets into VAULT_TOKEN at start, then exec the normal CMD. This
-    # mirrors the SSH-key secret-file pattern; only the value-vs-file delivery
-    # changes (the orchestrator still reads VAULT_TOKEN from its env at runtime).
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - 'export VAULT_TOKEN="$(cat /run/secrets/tanren_vault_token)"; exec pnpm --filter @tanren/orchestrator start'
+    # The broad Vault token is delivered as a MOUNTED SECRET FILE (the
+    # `tanren_vault_token` compose secret, wired below). The SecretStore factory
+    # reads the token FROM THE FILE at boot (VAULT_TOKEN_FILE, below) and holds it
+    # in-memory — it is NEVER force-exported into VAULT_TOKEN in the process env, so
+    # the broad token never lands in `/proc/<pid>/environ`, `docker inspect`, or any
+    # inherited child (incl. the runner SSH subprocess). Mirrors the SSH runner-key
+    # secret-file pattern (TANREN_RUNNER_IDENTITY_KEY_PATH below).
+    command: ["pnpm", "--filter", "@tanren/orchestrator", "start"]
     environment:
       # RLS R3b (enforcement flip). The RUNTIME connects as the restricted
       # `tanren_app` role (NOBYPASSRLS) so the policies enabled in migration 0030
@@ -117,8 +117,11 @@ services:
       # The secret-store backend is now REQUIRED (no implicit `vault` default).
       TANREN_SECRET_STORE: vault
       VAULT_ADDR: http://vault:8200
-      # VAULT_TOKEN is NOT an env value here — it is sourced from the mounted
-      # `tanren_vault_token` secret file by the command above.
+      # The broad Vault token is delivered as a MOUNTED SECRET FILE, never an env
+      # VALUE: point the SecretStore factory at the mounted secret path so it reads
+      # the token from the file at boot (in-memory). VAULT_TOKEN is intentionally
+      # NOT set — the broad token is never force-exported into the process env.
+      VAULT_TOKEN_FILE: /run/secrets/tanren_vault_token
       ORCHESTRATOR_PORT: "3100"
       # SYSTEM credential split: the orchestrator's SSH PRIVATE key is delivered as
       # a MOUNTED SECRET FILE (the `tanren_runner_identity_key` compose secret,
@@ -203,12 +206,11 @@ services:
     build:
       context: .
       dockerfile: services/orchestrator/Dockerfile
-    # The broad VAULT_TOKEN is sourced from the mounted `tanren_vault_token`
-    # secret file (never an env value) before exec'ing the worker loop — same
-    # file-delivery pattern as the orchestrator + the SSH key.
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - 'export VAULT_TOKEN="$(cat /run/secrets/tanren_vault_token)"; exec pnpm --filter @tanren/orchestrator start:worker'
+    # The broad Vault token is delivered as a MOUNTED SECRET FILE (VAULT_TOKEN_FILE,
+    # below), never force-exported into the process env — same file-delivery pattern
+    # as the orchestrator + the SSH key. The SecretStore factory reads the token from
+    # the mounted file at boot.
+    command: ["pnpm", "--filter", "@tanren/orchestrator", "start:worker"]
     environment:
       # Plane-split P3b (the de-privilege CUTOVER): the data plane connects as the
       # DE-PRIVILEGED `tanren_dataplane` role (migration 0031) — NO write grant on
@@ -222,7 +224,9 @@ services:
       # The secret-store backend is now REQUIRED (no implicit `vault` default).
       TANREN_SECRET_STORE: vault
       VAULT_ADDR: http://vault:8200
-      # VAULT_TOKEN is sourced from the mounted secret file by the command above.
+      # The broad Vault token is read from the mounted secret FILE at boot (never an
+      # env VALUE, never force-exported) — same as the orchestrator above.
+      VAULT_TOKEN_FILE: /run/secrets/tanren_vault_token
       # SSH PRIVATE key via the mounted secret FILE (the `tanren_runner_identity_key`
       # compose secret), not an env value — same as the orchestrator above; the
       # worker seeds the same runner identity.
@@ -356,9 +360,10 @@ secrets:
     file: ${TANREN_RUNNER_IDENTITY_KEY_FILE:?TANREN_RUNNER_IDENTITY_KEY_FILE must be set for the prod profile (host path to the SSH private key file)}
   # The broad Vault token, delivered to the orchestrator + worker as a mounted
   # file under /run/secrets (never an env VALUE — so it never lands in
-  # `docker inspect`). The services source it into VAULT_TOKEN at start. Point
-  # TANREN_VAULT_TOKEN_FILE at a host file containing ONLY the token (mirrors the
-  # SSH-key pattern). It must hold the same token as the Vault server's
-  # VAULT_ROOT_TOKEN.
+  # `docker inspect`). The SecretStore factory reads the token from this file at
+  # boot (VAULT_TOKEN_FILE) and holds it in-memory; it is never force-exported into
+  # the process env. Point TANREN_VAULT_TOKEN_FILE at a host file containing ONLY
+  # the token (mirrors the SSH-key pattern). It must hold the same token as the
+  # Vault server's VAULT_ROOT_TOKEN.
   tanren_vault_token:
     file: ${TANREN_VAULT_TOKEN_FILE:?TANREN_VAULT_TOKEN_FILE must be set for the prod profile (host path to a file containing the Vault token)}
