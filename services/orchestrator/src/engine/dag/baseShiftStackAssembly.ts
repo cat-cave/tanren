@@ -18,8 +18,8 @@
 //
 // FAIL-CLOSED (§0): every jj op throws LOUDLY on infra/auth/clone failure; a failure (or a
 // spec-vs-spec assembly conflict) releases the runner LOUDLY before re-throwing — never a
-// half-built workspace, never a leaked runner. (The flag gate + the empty/single-ancestor
-// fallback live in `baseShiftLiveSeams.ts`; this module is the assembly itself.)
+// half-built workspace, never a leaked runner. (The empty/single-ancestor fallback lives
+// in `baseShiftLiveSeams.ts`; this module is the assembly itself.)
 
 import { quoteSshShellArg } from "../ssh/command.js";
 import { runWorkspaceSshCommand } from "../workspace/ssh.js";
