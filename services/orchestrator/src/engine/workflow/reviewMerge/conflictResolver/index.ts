@@ -27,7 +27,7 @@ import { PgConflictProvenanceReader } from "./provenance.js";
 import { PgProductVisionReader } from "./productVision.js";
 import { RunPathResolvedTreeReGate } from "./reGate.js";
 import { SpecStatusReplanRouter } from "./replanRouter.js";
-import { buildIntentPreservingConflictResolver } from "./resolver.js";
+import { buildIntentPreservingConflictResolver, type EntityMergeFirstPassHook } from "./resolver.js";
 
 /** A pool or a checked-out (org-scoped) client — the run's already-scoped client. */
 type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
@@ -68,6 +68,13 @@ export interface DefaultConflictResolverDeps {
    * classify-then-escalate / re-gate / replan logic above it is mechanism-agnostic.
    */
   applier: WorkspaceConflictApplier;
+  /**
+   * §3.2 the deterministic entity-merge FIRST-PASS (optional). The base-shift conflict
+   * path (`baseShiftLiveResolve.ts`) builds it over the SAME live jj workspace — it reads
+   * the three conflict terms marker-free and runs `sem` for the entity-level diff. Absent
+   * ⇒ the resolver runs the agent on every conflict, exactly as before §3.2.
+   */
+  entityFirstPass?: EntityMergeFirstPassHook;
 }
 
 export function buildDefaultConflictResolver(deps: DefaultConflictResolverDeps): ConflictResolverHook {
@@ -105,6 +112,8 @@ export function buildDefaultConflictResolver(deps: DefaultConflictResolverDeps):
     }),
     // The workspace mechanism: the jj applier the live wiring sites build.
     applier: deps.applier,
+    // §3.2 the deterministic entity-merge first-pass (optional; the base-shift path builds it).
+    ...(deps.entityFirstPass !== undefined && { entityFirstPass: deps.entityFirstPass }),
     answerer: new AnswererBackedConflictInvoker({
       adapter: conflictAdapter,
       timeoutMs: deps.timeoutMs,
