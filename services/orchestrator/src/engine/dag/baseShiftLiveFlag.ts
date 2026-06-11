@@ -1,6 +1,7 @@
 // The `BASE_SHIFT_LIVE` kill-switch (tanren-owns-the-engine.md §3 never-discard, §5) — the
-// Wave-3 / Slice-2 DIRECT CUTOVER flag, mirroring `conflictResolverJjLive` /
-// `mergeAuthorityLive`. The base-shift handler's workspace/re-gate/resolver seams are now
+// Wave-3 / Slice-2 DIRECT CUTOVER flag, mirroring `conflictResolverJjLive` (the merge
+// authority's own flag was already collapsed — its land is now unconditional). The
+// base-shift handler's workspace/re-gate/resolver seams are now
 // LIVE: a base shift (an ancestor lands under an in-flight dependent, OR the merge-path
 // `behind` mergeability) actually REBASES the dependent's existing branch onto the shifted
 // base over a live allocated runner (A1's `buildLiveJjWorkspace`), re-gates it with the

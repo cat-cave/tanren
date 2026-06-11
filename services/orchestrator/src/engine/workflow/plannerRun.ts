@@ -71,6 +71,7 @@ import {
   pollReviewForRun,
   reviewerRejection,
   type ConflictResolverHook,
+  type MergeAuthorityBundle,
   type MergeForRunResult,
   type MergeProbe,
   type NativeQueueEnqueuer,
@@ -211,14 +212,15 @@ export interface RunPlannerLoopInput {
   // so unit runs never hit GitHub.
   reviewProbe?: ReviewProbe;
   mergeProbe?: MergeProbe;
+  // TEST SEAM: a pre-built bundle (a no-DB unit run injects it; production builds it).
+  mergeAuthority?: MergeAuthorityBundle;
   resolveConflict?: ConflictResolverHook;
   // native_queue: enters a ready run into the native merge queue (→ mergeForRun).
   nativeQueueEnqueuer?: NativeQueueEnqueuer;
-  // WS-A PR-8 (walker-jj-local-integration-design.md §2.3, fork F4): OBSERVE-ONLY — the
-  // port the jj-local dependent bootstrap UPSERTs its `eager_base` integration node
-  // through (the proof-reuse substrate the batch path's `merge_batch` node shares). It
-  // NEVER gates the run; a failure is loud-logged + swallowed. Built by the worker from
-  // its real pool (`buildEagerBaseNodeUpsert`); absent on unit paths ⇒ no node write.
+  // WS-A PR-8 (walker-jj-local-integration-design.md §2.3, fork F4): OBSERVE-ONLY — the port
+  // the jj-local dependent bootstrap UPSERTs its `eager_base` integration node through (the
+  // proof-reuse substrate the batch `merge_batch` node shares). NEVER gates the run; a
+  // failure is loud-logged + swallowed. Built by the worker (`buildEagerBaseNodeUpsert`).
   eagerBaseNodeUpsert?: EagerBaseNodeUpsert;
   /** WS-A PR-8c (§2.3): bootstrap → `runs.ancestor_stack[].headSha` write-back (percolation's divergence key); see plannerRunJjLocalBootstrap. */
   bootstrapStackHeadShaWriteBack?: BootstrapStackHeadShaWriteBack;
@@ -433,16 +435,14 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
         break;
       }
       if (review.verdict === "changes_requested" && reworks < maxReworks) {
-        // Re-enter the writer loop with the reviewer feedback as planner
-        // steering. The spec returns to in_flight; the next pass re-plans
-        // against the changes-requested feedback.
+        // Re-enter the writer loop with the reviewer feedback as planner steering. The
+        // spec returns to in_flight; the next pass re-plans against the feedback.
         seedRejections.push(reviewerRejection(review, pullRequest.branch));
         await setSpecStatus(input, context, "in_flight");
         continue;
       }
-      // Pending after the budget, or changes-requested with the rework budget
-      // exhausted: halt for operator action + park the spec (finding #3: requeueable,
-      // surfaces on the review/recovery surface). No merge.
+      // Pending after the budget, or changes-requested with the rework budget exhausted:
+      // halt for operator action + park the spec (finding #3: requeueable). No merge.
       await finalizeNonPassAndPark(input, finalizeRunState, context, appendEvent, "halted");
       releaseReason = "failed";
       return { runId: context.runId, workspacePath, outcome, pullRequest, mergeGate, review };
@@ -458,6 +458,7 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
       // Same source as PR-creation + CI-poll (project record → org default).
       resolvedGithubCredentialRef: context.githubCredentialRef,
       mergeProbe: input.mergeProbe,
+      ...(input.mergeAuthority !== undefined && { mergeAuthority: input.mergeAuthority }),
       // the intent-preserving conflict resolver is the PRODUCTION DEFAULT for the
       // resolveConflict hook. Tests inject input.resolveConflict to skip the live
       // runner/model; production omits it → the real resolver, from the merge context.
@@ -472,12 +473,11 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
         // WS-A PR-4: the jj-local-assembled base → the resolver's merge-time base (absent ⇒ unchanged).
         ...(bootstrappedBaseRevision !== undefined && { bootstrappedBaseRevision }),
       }),
-      // After an auto-rebase the prior verdict is stale, so re-run the native
-      // `pre_merge` gate + re-publish before merging — the merge authority, no forge poll.
+      // After an auto-rebase the prior verdict is stale → re-run the native `pre_merge`
+      // gate + re-publish before merging (the merge authority, no forge poll).
       reGateCi: buildReGateCi(input, mergeGateCtx),
-      // §5 cutover: the authority RE-READS the gate + review verdicts FRESH at land
-      // time (post-resolution) from the durable record — the in-loop path no longer
-      // threads pre-conflict captures (that risked authorizing against stale state).
+      // §5: the authority RE-READS the gate + review verdicts FRESH at land time
+      // (post-resolution) from the durable record — never pre-conflict captures.
       ...nativeQueueSeam(input),
     });
 

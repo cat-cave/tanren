@@ -236,33 +236,33 @@ function cleanFreshness() {
   };
 }
 
-// Direct-merge probe whose merge() reports a GitHub-detected conflict (405/409).
+// A mergeability/branch-state probe whose freshness surfaces a `dirty` conflict BEFORE
+// the land (the resolver then declines → recoverable `conflict`). The land itself is the
+// unconditional `MergeAuthority`; there is no host `merge()`.
 export function conflictMerge() {
   return {
-    merge: async () => ({ merged: false, conflict: true, status: 409, message: "merge conflict" }),
     ...cleanFreshness(),
+    readMergeability: async () => ({
+      state: "dirty" as const,
+      behind: false,
+      baseBranch: "main",
+      headBranch: "tanren/run_1",
+    }),
   };
 }
 
-// Direct-merge probe whose merge() neither merges nor conflicts → failed.
-export function failedMerge() {
-  return {
-    merge: async () => ({ merged: false, conflict: false, status: 500, message: "merge api error" }),
-    ...cleanFreshness(),
-  };
-}
-
-// Direct-merge probe whose merge() succeeds.
+// A clean mergeability/branch-state probe — the freshness read for a land that proceeds
+// to the `MergeAuthority` (no host `merge()`). Used both for the `direct_merge` land
+// tests (paired with a `mergeAuthority` bundle) and the `not_configured` hand-off tests
+// (where the merge stage hands off and never reads mergeability).
 export function mergedMerge() {
-  return {
-    merge: async () => ({ merged: true, mergeSha: "merge-sha", conflict: false, status: 200, message: "merged" }),
-    ...cleanFreshness(),
-  };
+  return { ...cleanFreshness() };
 }
 
-// inject an approving review probe + a no-op merge probe so the post-CI
-// review→merge tail completes without hitting GitHub. The default test-pool config
-// resolves mergeIntegration=not_configured → the merge stage hands off (no merge call).
+// inject an approving review probe so the post-CI review→merge tail completes without
+// hitting GitHub. The default test-pool config resolves mergeIntegration=not_configured →
+// the merge stage hands off (no land); the `direct_merge` configs pair this with a
+// `mergeAuthority` bundle so the land flows through the authority.
 export function approvingReview() {
   return {
     markReady: async () => {},
@@ -273,18 +273,23 @@ export function approvingReview() {
   };
 }
 
+// Alias of `mergedMerge` (a clean freshness probe). Kept as a named fixture for the
+// hand-off / non-land tests that just need a contract-complete probe.
 export function noopMerge() {
-  return {
-    merge: async () => ({
-      merged: true,
-      mergeSha: "merge-sha",
-      conflict: false,
-      status: 200,
-      message: "merged",
-    }),
-    ...cleanFreshness(),
-  };
+  return { ...cleanFreshness() };
 }
+
+// The authority-land oracle (`plannerAuthorityHost` / `plannerAuthorityBundle`) lives in
+// plannerRunAuthority.fixtures.ts; re-exported so existing import sites keep pulling it here.
+export {
+  PLANNER_AUTHORITY_HEAD_SHA,
+  PLANNER_AUTHORITY_REPO,
+  plannerAuthorityBundle,
+  plannerAuthorityHost,
+} from "./plannerRunAuthority.fixtures.js";
+// The RLS-lifecycle land bundle (real writer-backed finalizer) — re-exported so the
+// lifecycle integration test pulls it through this one fixtures barrel (dep-cap friendly).
+export { lifecycleAuthorityBundle } from "./rlsRunLifecycleAuthority.fixtures.js";
 
 // The forge calls of a passing native run: PR-list + create, then the `tanren/gate`
 // verdict-PUBLISH (a COMMIT STATUS, `POST /statuses/{sha}` → 201, NOT a check-run —

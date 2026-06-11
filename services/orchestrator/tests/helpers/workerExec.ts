@@ -28,6 +28,8 @@ import type {
 } from "../../src/engine/usage/index.js";
 import { createProject, createQueuedRunFromSpec, createSpec } from "../../src/engine/workflow/projectSpec.js";
 import { runPlannerLoopWorkflow } from "../../src/engine/workflow/plannerRun.js";
+import { InMemoryCodeHost } from "../conformance/fakes/inMemoryCodeHost.js";
+import type { MergeAuthorityBundle } from "../../src/engine/workflow/reviewMerge/mergeDispatchTypes.js";
 import {
   buildPlan,
   cleanAudit,
@@ -159,13 +161,6 @@ export function fakeWorkflowRunner(github: GitHubHttpClient) {
         }),
       },
       mergeProbe: {
-        merge: async () => ({
-          merged: true,
-          mergeSha: "merge-sha",
-          conflict: false,
-          status: 200,
-          message: "merged",
-        }),
         // branch reports clean → up-to-date enforcement is a no-op.
         readMergeability: async () => ({
           state: "clean" as const,
@@ -177,7 +172,41 @@ export function fakeWorkflowRunner(github: GitHubHttpClient) {
         retargetBase: async () => {},
         deleteIntegrationBranch: async () => {},
       },
+      // The land is the unconditional `MergeAuthority` + CodeHost ff-only CAS (no host
+      // PR-merge). Seed the in-memory host for the worker run's repo/PR head so the
+      // dequeue→execute seam lands end-to-end without real GitHub.
+      mergeAuthority: workerAuthorityBundle(),
     });
+}
+
+const WORKER_AUTHORITY_REPO = { owner: "cat-cave", name: "tanren-fixture-easy" };
+const WORKER_AUTHORITY_HEAD_SHA = "sha-head";
+
+/** The clean-clearing authority bundle for the worker run's land (repo + PR head seeded). */
+function workerAuthorityBundle(): MergeAuthorityBundle {
+  const host = new InMemoryCodeHost();
+  host.seed(WORKER_AUTHORITY_REPO, "main", "sha-main");
+  void host.pushRef({
+    repo: WORKER_AUTHORITY_REPO,
+    localRef: "feat",
+    remoteBranch: "tanren/run",
+    sha: WORKER_AUTHORITY_HEAD_SHA,
+  });
+  return {
+    codeHost: host,
+    orgId: "org_worker",
+    finalizerFor: () => ({ finalizeLanded: async () => ({ auditId: "audit_1" }) }),
+    gateConfigHash: "gc",
+    policyVersion: "pv",
+    gateOutcome: { passed: true, results: [] },
+    gatedHeadSha: WORKER_AUTHORITY_HEAD_SHA,
+    findings: [],
+    auditPosture: { blockReviewAt: "P1", p2p3Handling: "route-to-dag" },
+    reviewVerdict: "approved",
+    budget: { ceilingUsd: undefined, spentUsd: 0 },
+    demo: "not_required",
+    hitlSignoff: "not_required",
+  };
 }
 
 export async function setupSeededRun() {

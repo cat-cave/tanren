@@ -45,11 +45,9 @@ import {
 } from "./fixtures/mergeDispatcherConflictFixtures.js";
 
 /** A probe that is ALWAYS `clean` (no conflict / never `behind`) — the unprotected-repo land. */
-function cleanProbe(): MergeProbe & { mergeCalls: number } {
+function cleanProbe(): MergeProbe {
   return {
-    mergeCalls: 0,
     readMergeability: async () => mergeability("clean"),
-    merge: async () => ({ merged: true, mergeSha: "host", conflict: false, status: 200, message: "ok" }),
     updateBranch: async () => ({ outcome: "up_to_date" as const, message: "" }),
     retargetBase: async () => {},
     deleteIntegrationBranch: async () => {},

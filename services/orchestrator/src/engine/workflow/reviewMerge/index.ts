@@ -38,6 +38,7 @@ export {
 export {
   mergeForRun,
   dispatchedIntegrationFor,
+  type MergeAuthorityBundle,
   type MergeForRunInput,
   type MergeForRunResult,
   type MergeOutcomeKind,

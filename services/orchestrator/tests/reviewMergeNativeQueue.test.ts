@@ -10,7 +10,14 @@ import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
 import { FakeEventStore } from "./helpers/fakeEventStore.js";
 import { mergeForRun, type NativeQueueEnqueuer } from "../src/engine/workflow/reviewMerge/index.js";
 import { noopConflictResolver } from "./fixtures/noopConflictResolver.js";
-import { recordingMergeProbe, ReviewMergePool, unusedHttp } from "./reviewMerge.fixtures.js";
+import {
+  AUTHORITY_HEAD_SHA,
+  authorityBundle,
+  authorityHost,
+  recordingMergeProbe,
+  ReviewMergePool,
+  unusedHttp,
+} from "./reviewMerge.fixtures.js";
 
 /** A recording native-queue enqueuer fake (tests/ only). */
 function recordingEnqueuer(created = true): NativeQueueEnqueuer & {
@@ -29,7 +36,9 @@ describe("P2d native_queue merge stage", () => {
   it("ENTERS a ready run into the queue (merge.queued) and does NOT merge immediately", async () => {
     const pool = new ReviewMergePool("native_queue");
     const events = new FakeEventStore();
-    const probe = recordingMergeProbe({ merged: true, mergeSha: "x", conflict: false, status: 200, message: "merged" });
+    const probe = recordingMergeProbe();
+    const host = authorityHost();
+    const landed: string[] = [];
     const enqueue = recordingEnqueuer(true);
 
     const result = await mergeForRun({
@@ -40,12 +49,13 @@ describe("P2d native_queue merge stage", () => {
       vcsProvider: vcsProviderOver(unusedHttp()),
       runId: "run_1",
       mergeProbe: probe,
+      mergeAuthority: authorityBundle(host, landed, { events }),
       enqueueNativeQueue: enqueue,
     });
 
-    // The run entered the queue — it did NOT merge.
+    // The run entered the queue — it did NOT land.
     expect(result.outcome).toBe("queued");
-    expect(probe.mergeCalls).toBe(0);
+    expect(landed).toEqual([]);
     expect(enqueue.calls).toEqual([{ runId: "run_1", specId: "spec_1", prNumber: 7 }]);
     const queued = events.events.find((e) => e.eventType === "merge.queued");
     expect(queued?.payload).toMatchObject({ integration: "native_queue" });
@@ -55,7 +65,9 @@ describe("P2d native_queue merge stage", () => {
   it("is idempotent — a re-queue (created:false) emits NO second merge.queued", async () => {
     const pool = new ReviewMergePool("native_queue");
     const events = new FakeEventStore();
-    const probe = recordingMergeProbe({ merged: true, mergeSha: "x", conflict: false, status: 200, message: "merged" });
+    const probe = recordingMergeProbe();
+    const host = authorityHost();
+    const landed: string[] = [];
     // The run is already queued (created:false).
     const enqueue = recordingEnqueuer(false);
 
@@ -67,24 +79,21 @@ describe("P2d native_queue merge stage", () => {
       vcsProvider: vcsProviderOver(unusedHttp()),
       runId: "run_1",
       mergeProbe: probe,
+      mergeAuthority: authorityBundle(host, landed, { events }),
       enqueueNativeQueue: enqueue,
     });
 
     expect(result.outcome).toBe("queued");
-    expect(probe.mergeCalls).toBe(0);
+    expect(landed).toEqual([]);
     expect(events.events.some((e) => e.eventType === "merge.queued")).toBe(false);
   });
 
-  it("DRIVE pass (queueDrive) runs the real merge, labelled native_queue", async () => {
+  it("DRIVE pass (queueDrive) runs the real authority land, labelled native_queue", async () => {
     const pool = new ReviewMergePool("native_queue");
     const events = new FakeEventStore();
-    const probe = recordingMergeProbe({
-      merged: true,
-      mergeSha: "merge-sha",
-      conflict: false,
-      status: 200,
-      message: "merged",
-    });
+    const probe = recordingMergeProbe();
+    const host = authorityHost();
+    const landed: string[] = [];
 
     const result = await mergeForRun({
       pool: pool.asPgPool(),
@@ -94,15 +103,16 @@ describe("P2d native_queue merge stage", () => {
       vcsProvider: vcsProviderOver(unusedHttp()),
       runId: "run_1",
       mergeProbe: probe,
+      mergeAuthority: authorityBundle(host, landed, { events }),
       queueDrive: true,
     });
 
-    // The drive pass MERGES — the same directMerge path — and labels native_queue.
+    // The drive pass LANDS — the same directMerge → authority path — and labels native_queue.
     expect(result.outcome).toBe("merged");
-    expect(result.mergeSha).toBe("merge-sha");
-    expect(probe.mergeCalls).toBe(1);
+    expect(result.mergeSha).toBe(AUTHORITY_HEAD_SHA);
+    expect(landed).toEqual([AUTHORITY_HEAD_SHA]);
     const completed = events.events.find((e) => e.eventType === "merge.completed");
-    expect(completed?.payload).toMatchObject({ integration: "native_queue", mergeSha: "merge-sha" });
+    expect(completed?.payload).toMatchObject({ integration: "native_queue", mergeSha: AUTHORITY_HEAD_SHA });
     // AUDIT-EVIDENCE BASELINE: the terminal merge carries the governance policy
     // version + the initiating SERVICE actor. The fixture's reviewPolicy is `human`,
     // so a human APPROVER gated it — recorded as a generic human approving actor.
@@ -118,7 +128,9 @@ describe("P2d native_queue merge stage", () => {
     // (no approving actor), distinct from the human tier above which records one.
     const pool = new ReviewMergePool("direct_merge", "open", "auto");
     const events = new FakeEventStore();
-    const probe = recordingMergeProbe({ merged: true, mergeSha: "s", conflict: false, status: 200, message: "m" });
+    const probe = recordingMergeProbe();
+    const host = authorityHost();
+    const landed: string[] = [];
 
     const result = await mergeForRun({
       pool: pool.asPgPool(),
@@ -128,6 +140,7 @@ describe("P2d native_queue merge stage", () => {
       vcsProvider: vcsProviderOver(unusedHttp()),
       runId: "run_1",
       mergeProbe: probe,
+      mergeAuthority: authorityBundle(host, landed, { events }),
     });
 
     expect(result.outcome).toBe("merged");
@@ -141,16 +154,12 @@ describe("P2d native_queue merge stage", () => {
     expect(completedPayload["approvingActor"]).toBeUndefined();
   });
 
-  it("direct_merge is UNCHANGED — it merges immediately (no queue)", async () => {
+  it("direct_merge is UNCHANGED — it lands immediately (no queue)", async () => {
     const pool = new ReviewMergePool("direct_merge");
     const events = new FakeEventStore();
-    const probe = recordingMergeProbe({
-      merged: true,
-      mergeSha: "direct-sha",
-      conflict: false,
-      status: 200,
-      message: "merged",
-    });
+    const probe = recordingMergeProbe();
+    const host = authorityHost();
+    const landed: string[] = [];
     const enqueue = recordingEnqueuer(true);
 
     const result = await mergeForRun({
@@ -161,12 +170,13 @@ describe("P2d native_queue merge stage", () => {
       vcsProvider: vcsProviderOver(unusedHttp()),
       runId: "run_1",
       mergeProbe: probe,
-      // Even with an enqueuer present, direct_merge ignores it and merges now.
+      mergeAuthority: authorityBundle(host, landed, { events }),
+      // Even with an enqueuer present, direct_merge ignores it and lands now.
       enqueueNativeQueue: enqueue,
     });
 
     expect(result.outcome).toBe("merged");
-    expect(probe.mergeCalls).toBe(1);
+    expect(landed).toEqual([AUTHORITY_HEAD_SHA]);
     // Never queued under direct_merge.
     expect(enqueue.calls).toEqual([]);
     const completed = events.events.find((e) => e.eventType === "merge.completed");

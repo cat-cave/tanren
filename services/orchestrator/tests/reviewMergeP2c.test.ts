@@ -15,7 +15,14 @@ import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
 import { FakeEventStore } from "./helpers/fakeEventStore.js";
 import { mergeForRun } from "../src/engine/workflow/reviewMerge/index.js";
 import { noopConflictResolver } from "./fixtures/noopConflictResolver.js";
-import { recordingMergeProbe, ReviewMergePool, unusedHttp } from "./reviewMerge.fixtures.js";
+import {
+  AUTHORITY_HEAD_SHA,
+  authorityBundle,
+  authorityHost,
+  recordingMergeProbe,
+  ReviewMergePool,
+  unusedHttp,
+} from "./reviewMerge.fixtures.js";
 
 // A non-empty ancestor stack on spec_a (its PR-head branch `tanren/spec_a`) — the jj-local
 // base source that marks a run speculative.
@@ -27,14 +34,16 @@ const STACK_ON_AB = [
 ];
 
 describe("P2c-1 speculative-merge-hold (merge stage)", () => {
-  it("HOLDS a speculative dependent's merge while an ancestor is unmerged (no merge API call)", async () => {
+  it("HOLDS a speculative dependent's merge while an ancestor is unmerged (no land)", async () => {
     const pool = new ReviewMergePool("direct_merge");
     // The run is speculative (a non-empty ancestor stack) on spec_a + spec_b; only spec_a merged.
     pool.ancestorStack = STACK_ON_A;
     pool.specDependsOn = ["spec_a", "spec_b"];
     pool.mergedAncestors = ["spec_a"];
     const events = new FakeEventStore();
-    const probe = recordingMergeProbe({ merged: true, mergeSha: "x", conflict: false, status: 200, message: "merged" });
+    const probe = recordingMergeProbe();
+    const host = authorityHost();
+    const landed: string[] = [];
 
     const result = await mergeForRun({
       pool: pool.asPgPool(),
@@ -44,11 +53,12 @@ describe("P2c-1 speculative-merge-hold (merge stage)", () => {
       vcsProvider: vcsProviderOver(unusedHttp()),
       runId: "run_1",
       mergeProbe: probe,
+      mergeAuthority: authorityBundle(host, landed, { events }),
     });
 
-    // The merge is HELD — never merged while an ancestor is unmerged.
+    // The merge is HELD — never landed while an ancestor is unmerged.
     expect(result.outcome).toBe("blocked");
-    expect(probe.mergeCalls).toBe(0);
+    expect(landed).toEqual([]);
     const held = events.events.find((e) => e.eventType === "merge.speculative_held");
     // jj-local: the held event names the immediate-ancestor PR-head branch (the stacked base).
     expect(held?.payload).toMatchObject({
@@ -69,10 +79,11 @@ describe("P2c-1 speculative-merge-hold (merge stage)", () => {
     pool.specDependsOn = ["spec_a", "spec_b"];
     pool.mergedAncestors = ["spec_a"];
     const events = new FakeEventStore();
-    const probe = recordingMergeProbe(
-      { merged: true, mergeSha: "x", conflict: false, status: 200, message: "merged" },
-      { mergeability: { state: "clean", behind: false, baseBranch: "tanren/spec_b", headBranch: "tanren/run_1" } },
-    );
+    const probe = recordingMergeProbe({
+      mergeability: { state: "clean", behind: false, baseBranch: "tanren/spec_b", headBranch: "tanren/run_1" },
+    });
+    const host = authorityHost();
+    const landed: string[] = [];
     const enqueued: Array<{ runId: string; specId: string; prNumber: number }> = [];
 
     const result = await mergeForRun({
@@ -83,6 +94,7 @@ describe("P2c-1 speculative-merge-hold (merge stage)", () => {
       vcsProvider: vcsProviderOver(unusedHttp()),
       runId: "run_1",
       mergeProbe: probe,
+      mergeAuthority: authorityBundle(host, landed, { events }),
       enqueueNativeQueue: async (entry) => {
         enqueued.push({ runId: entry.runId, specId: entry.specId, prNumber: entry.prNumber });
         return { created: true };
@@ -91,7 +103,7 @@ describe("P2c-1 speculative-merge-hold (merge stage)", () => {
 
     expect(result.outcome).toBe("queued");
     expect(enqueued).toEqual([{ runId: "run_1", specId: "spec_1", prNumber: 7 }]);
-    expect(probe.mergeCalls).toBe(0);
+    expect(landed).toEqual([]);
     // The stack walk read mergeability (to decide the base) but the base already matched the
     // immediate ancestor → no retarget call.
     expect(probe.retargetedBases).toEqual([]);
@@ -113,10 +125,11 @@ describe("P2c-1 speculative-merge-hold (merge stage)", () => {
     const events = new FakeEventStore();
     // The immediate ancestor's branch already IS the live base → the stack walk reads
     // mergeability but issues no retarget (only the held event fires).
-    const probe = recordingMergeProbe(
-      { merged: true, mergeSha: "x", conflict: false, status: 200, message: "merged" },
-      { mergeability: { state: "clean", behind: false, baseBranch: "tanren/spec_a", headBranch: "tanren/run_1" } },
-    );
+    const probe = recordingMergeProbe({
+      mergeability: { state: "clean", behind: false, baseBranch: "tanren/spec_a", headBranch: "tanren/run_1" },
+    });
+    const host = authorityHost();
+    const landed: string[] = [];
 
     const result = await mergeForRun({
       pool: pool.asPgPool(),
@@ -126,11 +139,12 @@ describe("P2c-1 speculative-merge-hold (merge stage)", () => {
       vcsProvider: vcsProviderOver(unusedHttp()),
       runId: "run_1",
       mergeProbe: probe,
+      mergeAuthority: authorityBundle(host, landed, { events }),
       queueDrive: true,
     });
 
     expect(result.outcome).toBe("blocked");
-    expect(probe.mergeCalls).toBe(0);
+    expect(landed).toEqual([]);
     expect(events.events.map((e) => e.eventType)).toEqual(["task.started", "merge.speculative_held", "task.completed"]);
     expect(pool.tasks).toEqual([expect.objectContaining({ kind: "merge", status: "done", outcome: "ok" })]);
   });
@@ -142,7 +156,9 @@ describe("P2c-1 speculative-merge-hold (merge stage)", () => {
     pool.mergedAncestors = ["spec_a"];
     pool.unresolvedSpeculativeHolds = ["spec_a"];
     const events = new FakeEventStore();
-    const probe = recordingMergeProbe({ merged: true, mergeSha: "x", conflict: false, status: 200, message: "merged" });
+    const probe = recordingMergeProbe();
+    const host = authorityHost();
+    const landed: string[] = [];
 
     const result = await mergeForRun({
       pool: pool.asPgPool(),
@@ -152,10 +168,11 @@ describe("P2c-1 speculative-merge-hold (merge stage)", () => {
       vcsProvider: vcsProviderOver(unusedHttp()),
       runId: "run_1",
       mergeProbe: probe,
+      mergeAuthority: authorityBundle(host, landed, { events }),
     });
 
     expect(result.outcome).toBe("blocked");
-    expect(probe.mergeCalls).toBe(0);
+    expect(landed).toEqual([]);
     expect(events.events.find((e) => e.eventType === "merge.speculative_held")?.payload).toMatchObject({
       unmergedAncestors: ["spec_a"],
     });
@@ -168,14 +185,18 @@ describe("P2c-1 speculative-merge-hold (merge stage)", () => {
     // unified `BaseShiftCoordinator.rebaseOnto`, NOT the separate server-side update-branch.
     const pool = new ReviewMergePool("direct_merge");
     const events = new FakeEventStore();
-    const probe = recordingMergeProbe(
-      { merged: true, mergeSha: "rebased-sha", conflict: false, status: 200, message: "merged" },
-      {
-        mergeabilityReads: [{ state: "behind", behind: true, baseBranch: "main", headBranch: "tanren/run_1" }],
-        // Wire updateBranch too — to PROVE the unified hook is used INSTEAD (it stays 0).
-        updateBranch: { outcome: "updated", message: "server-side update (must NOT be used)" },
-      },
-    );
+    const probe = recordingMergeProbe({
+      // behind on the freshness read; clean once the unified rebase advanced it (the read
+      // the authority then re-judges — the land only clears on `clean`).
+      mergeabilityReads: [
+        { state: "behind", behind: true, baseBranch: "main", headBranch: "tanren/run_1" },
+        { state: "clean", behind: false, baseBranch: "main", headBranch: "tanren/run_1" },
+      ],
+      // Wire updateBranch too — to PROVE the unified hook is used INSTEAD (it stays 0).
+      updateBranch: { outcome: "updated", message: "server-side update (must NOT be used)" },
+    });
+    const host = authorityHost();
+    const landed: string[] = [];
     const baseShiftCalls: Array<{ runId: string; baseBranch: string }> = [];
     // RESIDUAL #4 (§5 commit-binding): capture the head sha the dispatcher threads into
     // the re-gate so we can assert it is the rebased PR head, not the workspace HEAD.
@@ -190,6 +211,7 @@ describe("P2c-1 speculative-merge-hold (merge stage)", () => {
       vcsProvider: vcsProviderOver(unusedHttp()),
       runId: "run_1",
       mergeProbe: probe,
+      mergeAuthority: authorityBundle(host, landed, { events }),
       // THE ONE BASE-SHIFT HANDLER: the behind rebase routes here, not to updateBranch.
       // It surfaces the EXACT rebased PR head sha for the re-gate to bind to.
       baseShiftRebase: async (input) => {
@@ -203,6 +225,7 @@ describe("P2c-1 speculative-merge-hold (merge stage)", () => {
     });
 
     expect(result.outcome).toBe("merged");
+    expect(landed).toEqual([AUTHORITY_HEAD_SHA]);
     // The UNIFIED hook drove the rebase…
     expect(baseShiftCalls).toEqual([{ runId: "run_1", baseBranch: "main" }]);
     // …and the separate server-side update-branch was NEVER called (one path).
@@ -219,10 +242,11 @@ describe("P2c-1 speculative-merge-hold (merge stage)", () => {
   it("§7 ONE HANDLER: a `held` outcome from the unified baseShiftRebase is a fail-closed recoverable conflict (no merge)", async () => {
     const pool = new ReviewMergePool("direct_merge");
     const events = new FakeEventStore();
-    const probe = recordingMergeProbe(
-      { merged: true, mergeSha: "x", conflict: false, status: 200, message: "merged" },
-      { mergeabilityReads: [{ state: "behind", behind: true, baseBranch: "main", headBranch: "tanren/run_1" }] },
-    );
+    const probe = recordingMergeProbe({
+      mergeabilityReads: [{ state: "behind", behind: true, baseBranch: "main", headBranch: "tanren/run_1" }],
+    });
+    const host = authorityHost();
+    const landed: string[] = [];
 
     const result = await mergeForRun({
       pool: pool.asPgPool(),
@@ -232,28 +256,28 @@ describe("P2c-1 speculative-merge-hold (merge stage)", () => {
       vcsProvider: vcsProviderOver(unusedHttp()),
       runId: "run_1",
       mergeProbe: probe,
+      mergeAuthority: authorityBundle(host, landed, { events }),
       baseShiftRebase: async () => ({ outcome: "held", message: "base-shift rebase held (fail-closed)" }),
       reGateCi: async () => ({ status: "passed" }),
     });
 
-    // Fail-closed: a held rebase is a recoverable conflict, NEVER a merge.
+    // Fail-closed: a held rebase is a recoverable conflict, NEVER a land.
     expect(result.outcome).toBe("conflict");
-    expect(probe.mergeCalls).toBe(0);
+    expect(landed).toEqual([]);
     expect(events.events.map((e) => e.eventType)).toContain("merge.conflict");
   });
 
-  it("skips retarget when the live PR base is already default_branch and merges normally", async () => {
+  it("skips retarget when the live PR base is already default_branch and lands normally", async () => {
     const pool = new ReviewMergePool("direct_merge");
     pool.ancestorStack = STACK_ON_A;
     pool.specDependsOn = ["spec_a"];
     pool.mergedAncestors = ["spec_a"];
     const events = new FakeEventStore();
-    const probe = recordingMergeProbe(
-      { merged: true, mergeSha: "merge-sha", conflict: false, status: 200, message: "merged" },
-      {
-        mergeability: { state: "clean", behind: false, baseBranch: "main", headBranch: "tanren/run_1" },
-      },
-    );
+    const probe = recordingMergeProbe({
+      mergeability: { state: "clean", behind: false, baseBranch: "main", headBranch: "tanren/run_1" },
+    });
+    const host = authorityHost();
+    const landed: string[] = [];
 
     const result = await mergeForRun({
       pool: pool.asPgPool(),
@@ -262,12 +286,13 @@ describe("P2c-1 speculative-merge-hold (merge stage)", () => {
       vcsProvider: vcsProviderOver(unusedHttp()),
       runId: "run_1",
       mergeProbe: probe,
+      mergeAuthority: authorityBundle(host, landed, { events }),
       resolveConflict: noopConflictResolver,
     });
 
     expect(result.outcome).toBe("merged");
     expect(probe.retargetedBases).toEqual([]);
-    expect(probe.mergeCalls).toBe(1);
+    expect(landed).toEqual([AUTHORITY_HEAD_SHA]);
     const types = events.events.map((e) => e.eventType);
     expect(types).toContain("merge.completed");
     expect(types).not.toContain("merge.retargeted");
@@ -279,12 +304,11 @@ describe("P2c-1 speculative-merge-hold (merge stage)", () => {
     pool.specDependsOn = ["spec_a"];
     pool.mergedAncestors = ["spec_a"];
     const events = new FakeEventStore();
-    const probe = recordingMergeProbe(
-      { merged: true, mergeSha: "merge-sha", conflict: false, status: 200, message: "merged" },
-      {
-        mergeability: { state: "dirty", behind: false, baseBranch: "main", headBranch: "tanren/run_1" },
-      },
-    );
+    const probe = recordingMergeProbe({
+      mergeability: { state: "dirty", behind: false, baseBranch: "main", headBranch: "tanren/run_1" },
+    });
+    const host = authorityHost();
+    const landed: string[] = [];
     let conflictResolverCalls = 0;
 
     const result = await mergeForRun({
@@ -294,6 +318,7 @@ describe("P2c-1 speculative-merge-hold (merge stage)", () => {
       vcsProvider: vcsProviderOver(unusedHttp()),
       runId: "run_1",
       mergeProbe: probe,
+      mergeAuthority: authorityBundle(host, landed, { events }),
       resolveConflict: async () => {
         conflictResolverCalls += 1;
         return { resolved: false };
@@ -302,24 +327,20 @@ describe("P2c-1 speculative-merge-hold (merge stage)", () => {
 
     expect(result.outcome).toBe("conflict");
     expect(probe.retargetedBases).toEqual([]);
-    expect(probe.mergeCalls).toBe(0);
+    expect(landed).toEqual([]);
     expect(conflictResolverCalls).toBe(1);
     const types = events.events.map((e) => e.eventType);
     expect(types).toContain("merge.conflict");
     expect(types).not.toContain("merge.retargeted");
   });
 
-  it("a NON-speculative run merges normally (the hold is a no-op)", async () => {
+  it("a NON-speculative run lands normally (the hold is a no-op)", async () => {
     const pool = new ReviewMergePool("direct_merge");
     // ancestorStack stays null (the default) ⇒ not speculative.
     const events = new FakeEventStore();
-    const probe = recordingMergeProbe({
-      merged: true,
-      mergeSha: "merge-sha",
-      conflict: false,
-      status: 200,
-      message: "merged",
-    });
+    const probe = recordingMergeProbe();
+    const host = authorityHost();
+    const landed: string[] = [];
 
     const result = await mergeForRun({
       pool: pool.asPgPool(),
@@ -329,10 +350,11 @@ describe("P2c-1 speculative-merge-hold (merge stage)", () => {
       vcsProvider: vcsProviderOver(unusedHttp()),
       runId: "run_1",
       mergeProbe: probe,
+      mergeAuthority: authorityBundle(host, landed, { events }),
     });
 
     expect(result.outcome).toBe("merged");
-    expect(probe.mergeCalls).toBe(1);
+    expect(landed).toEqual([AUTHORITY_HEAD_SHA]);
     // A normal run never re-targets.
     expect(probe.retargetedBases).toEqual([]);
     expect(events.events.some((e) => e.eventType === "merge.speculative_held")).toBe(false);

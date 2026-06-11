@@ -23,7 +23,6 @@ import {
   convergenceStalled,
   directMergeConfig,
   FailingReleaseAllocator,
-  failedMerge,
   fakeProbe,
   healthyWindow,
   loopStageAdapters,
@@ -37,6 +36,8 @@ import {
   makeWriter,
   mergedMerge,
   noopMerge,
+  plannerAuthorityBundle,
+  plannerAuthorityHost,
   cleanAudit,
   completeCheck,
   pendingReview,
@@ -107,11 +108,12 @@ describe("runPlannerLoopWorkflow — review-rework re-entry", () => {
         buildAdapters: () => adapters,
         reviewProbe: changesThenApproveReview(),
         mergeProbe: noopMerge(),
+        mergeAuthority: plannerAuthorityBundle(plannerAuthorityHost()),
         maxReviewReworks: 1,
       }) as Parameters<typeof runPlannerLoopScoped>[0],
     );
 
-    // Approved on the second pass, then explicitly direct-merged → completed/ok.
+    // Approved on the second pass, then explicitly authority-landed → completed/ok.
     expect(result.outcome.kind).toBe("passed");
     expect(pool.runStatus).toEqual({ status: "completed", outcome: "ok" });
     // The re-entry put the spec back in_flight before the final merged.
@@ -199,12 +201,13 @@ describe("runPlannerLoopWorkflow — merge-outcome mapping (direct_merge)", () =
         buildAdapters: () => twoSubtaskAdapters([completeCheck, completeCheck]),
         reviewProbe: approvingReview(),
         mergeProbe: mergedMerge(),
+        mergeAuthority: plannerAuthorityBundle(plannerAuthorityHost()),
       }) as Parameters<typeof runPlannerLoopScoped>[0],
     );
 
     expect(result.merge?.outcome).toBe("merged");
     expect(pool.runStatus).toEqual({ status: "completed", outcome: "ok" });
-    // A direct merge marks the spec merged (not the handed-off "done").
+    // A direct (authority) land marks the spec merged (not the handed-off "done").
     expect(pool.specStatuses).toEqual(["merged"]);
   });
 
@@ -224,6 +227,7 @@ describe("runPlannerLoopWorkflow — merge-outcome mapping (direct_merge)", () =
         buildAdapters: () => twoSubtaskAdapters([completeCheck, completeCheck]),
         reviewProbe: approvingReview(),
         mergeProbe: conflictMerge(),
+        mergeAuthority: plannerAuthorityBundle(plannerAuthorityHost()),
         // Isolate the merge-outcome mapping (conflict → halted) from the
         // resolver's own behavior (covered by conflictResolver.test.ts): inject
         // the test-fixture no-op resolver so the conflict stays unresolved.
@@ -237,30 +241,12 @@ describe("runPlannerLoopWorkflow — merge-outcome mapping (direct_merge)", () =
     expect(pool.specStatuses).toEqual([]);
   });
 
-  it("fails the run (not halted) when the merge fails outright", async () => {
-    const { ctx, pool, events, secrets, allocator, ssh } = await setup(directMergeConfig());
-    const github = new ScriptedGitHubHttp([...ghRound()]);
-
-    const result = await runPlannerLoopScoped(
-      baseInput({
-        pool: pool.asPgPool(),
-        eventStore: events,
-        allocator,
-        ssh,
-        secrets,
-        vcsProvider: vcsProviderOver(github),
-        context: ctx,
-        buildAdapters: () => twoSubtaskAdapters([completeCheck, completeCheck]),
-        reviewProbe: approvingReview(),
-        mergeProbe: failedMerge(),
-      }) as Parameters<typeof runPlannerLoopScoped>[0],
-    );
-
-    expect(result.merge?.outcome).toBe("failed");
-    // A hard merge failure is a failed run (distinct from the recoverable halt).
-    expect(pool.runStatus).toEqual({ status: "failed", outcome: "failed" });
-    expect(pool.specStatuses).toEqual([]);
-  });
+  // (DELETED with the host-merge land path) "fails the run when the merge fails outright":
+  // the plain "merge API error → failed" disposition was UNIQUE to the deleted
+  // `landViaHostMerge` (the host PR-merge returning neither merged nor conflict). The
+  // unconditional `MergeAuthority` land has no such outcome — a land that cannot proceed is
+  // `blocked` / `conflict` / `needs_attention` / `merge_state_unknown`, each covered by the
+  // authority suites — so the behavior no longer exists to test.
 });
 
 describe("runPlannerLoopWorkflow — non-pass loop outcome mapping", () => {
@@ -326,6 +312,7 @@ describe("runPlannerLoopWorkflow — release cleanup-proof", () => {
         buildAdapters: () => twoSubtaskAdapters([completeCheck, completeCheck]),
         reviewProbe: approvingReview(),
         mergeProbe: mergedMerge(),
+        mergeAuthority: plannerAuthorityBundle(plannerAuthorityHost()),
       }) as Parameters<typeof runPlannerLoopScoped>[0],
     );
 
@@ -357,6 +344,7 @@ describe("runPlannerLoopWorkflow — release cleanup-proof", () => {
         buildAdapters: () => twoSubtaskAdapters([completeCheck, completeCheck]),
         reviewProbe: approvingReview(),
         mergeProbe: mergedMerge(),
+        mergeAuthority: plannerAuthorityBundle(plannerAuthorityHost()),
       }) as Parameters<typeof runPlannerLoopScoped>[0],
     );
 

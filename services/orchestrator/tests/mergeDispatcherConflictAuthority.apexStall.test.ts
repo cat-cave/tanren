@@ -43,9 +43,8 @@ describe("apex-stall #1: a merge-time conflict engages the resolver ONCE, never 
     // The resolver was engaged EXACTLY ONCE (not 90×, not 0) — the structural fix for the
     // apex stall (the conflict is resolved, not retried blindly against a 409).
     expect(resolver.calls()).toBe(1);
-    // The land went through the authority CAS (main advanced to the authorized head) — the
-    // host PR-merge endpoint (the 409-loop's target) was NEVER polled.
-    expect(probe.mergeCalls).toBe(0);
+    // The land went through the authority CAS (main advanced to the authorized head) — there
+    // is no host PR-merge endpoint (the 409-loop's former target) left to poll.
     expect(result.outcome).toBe("merged");
     expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-feat");
     expect(landed).toEqual(["sha-feat"]);
@@ -72,10 +71,9 @@ describe("apex-stall #1: a merge-time conflict engages the resolver ONCE, never 
     }).directMerge();
 
     // Even when the conflict CANNOT be resolved, the resolver is engaged exactly ONCE and
-    // the dispatcher emits the recoverable `merge.conflict` outcome — it does NOT loop the
+    // the dispatcher emits the recoverable `merge.conflict` outcome — it does NOT loop a
     // host PR-merge endpoint hoping the 409 clears (the apex-stall failure mode).
     expect(resolver.calls()).toBe(1);
-    expect(probe.mergeCalls).toBe(0);
     expect(result.outcome).toBe("conflict");
     expect(landed).toEqual([]);
     expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-main");

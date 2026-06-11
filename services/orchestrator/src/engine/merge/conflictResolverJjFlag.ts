@@ -1,5 +1,6 @@
 // The `CONFLICT_RESOLVER_JJ_LIVE` kill-switch (tanren-owns-the-engine.md §2, §5) — the
-// Wave-3 / S1 DIRECT CUTOVER flag mirroring `mergeAuthorityLive`. The live conflict
+// Wave-3 / S1 DIRECT CUTOVER flag (the merge authority's own flag was already collapsed —
+// its land is now unconditional). The live conflict
 // resolver's workspace mechanism is now jj's FIRST-CLASS conflicts (the
 // `JjWorkspaceConflictApplier` over A1's `buildLiveJjWorkspace`): `rebaseOnto` RECORDS
 // the conflict (no `git merge --abort` dance, no `|| true` fail-open), `resolveConflict`

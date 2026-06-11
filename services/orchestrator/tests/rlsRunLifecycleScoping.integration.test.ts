@@ -45,6 +45,7 @@ import { PgRunnerStore } from "../src/engine/allocators/runnerStore.js";
 import { runPlannerLoopWorkflow } from "../src/engine/workflow/plannerRun.js";
 import { executeNextPlanJob } from "../src/engine/worker/runExecutor.js";
 import {
+  lifecycleAuthorityBundle,
   accounting,
   approvingReview,
   fakeProbe,
@@ -106,6 +107,8 @@ class NoopSsh implements CommandSubstrate {
     return { exitCode: 0, stdout, stderr: "", timedOut: false };
   }
 }
+
+const LIFECYCLE_REPO = { owner: "cat-cave", name: "tanren-fixture-medium" };
 
 describeDb("RLS run lifecycle — a real org-scoped run writes every lifecycle table under enforced RLS", () => {
   const database = dbName();
@@ -199,6 +202,17 @@ describeDb("RLS run lifecycle — a real org-scoped run writes every lifecycle t
           // replaces the retired CI-poll `ci` task.
           reviewProbe: approvingReview(),
           mergeProbe: noopMerge(),
+          // The land is the unconditional MergeAuthority. The CAS lands on an in-memory
+          // host; the REAL writer-backed finalizer (`buildLandFinalizer` over the enforced
+          // app pool) records `merge.completed` + flips the spec to `merged` in ONE
+          // org-scoped transaction — the lifecycle tenant writes this test locks under RLS.
+          mergeAuthority: lifecycleAuthorityBundle({
+            pool: appPool,
+            orgId: ORG,
+            repo: LIFECYCLE_REPO,
+            headBranch: "tanren/run_1",
+            headSha: FAKE_HEAD_SHA,
+          }),
           sleep: async () => {},
         }),
     });

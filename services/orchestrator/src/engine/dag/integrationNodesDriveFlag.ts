@@ -1,6 +1,7 @@
 // The `INTEGRATION_NODES_DRIVE` kill-switch (tanren-owns-the-engine.md §3 — proof reuse
 // + the one unified run model) — the Wave-3 / Slice-3 DIRECT CUTOVER flag, mirroring
-// `baseShiftLive` / `conflictResolverJjLive` / `mergeAuthorityLive`. With the flag ON
+// `baseShiftLive` / `conflictResolverJjLive` (the merge authority's own flag was already
+// collapsed — its land is now unconditional). With the flag ON
 // (default), `integration_nodes` DRIVE control flow on the gate/CI verdict path:
 //
 //   (3a) PROOF REUSE — before running the gate, the verdict site computes the

@@ -49,6 +49,7 @@ import {
   failingGate,
   fakeProbe,
   fullAdapters,
+  hardTierAuthorityBundle,
   hardTierGitHub,
   hardTierWorkflowRunner,
   identitySecretRef,
@@ -99,8 +100,9 @@ describe("acceptance hard tier (dequeue→execute, all hard paths)", () => {
     // twice (reject once, then pass), proving the rework re-entered the loop.
     expect(trace.gateCalls.filter((c) => c.when === "pre_audit").length).toBeGreaterThanOrEqual(2);
 
-    // Hard path 3 — conflict resolution: the merge was attempted twice (conflict
-    // then success) and the resolver hook fired exactly once between them.
+    // Hard path 3 — conflict resolution: the land path evaluated mergeability twice
+    // (the `dirty` freshness read surfacing the conflict, then the `clean` read the
+    // authority landed on) and the resolver hook fired exactly once between them.
     expect(trace.conflictResolved).toBe(1);
     expect(trace.mergeAttempts).toBe(2);
 
@@ -162,13 +164,6 @@ describe("acceptance hard tier (dequeue→execute, all hard paths)", () => {
             }),
           },
           mergeProbe: {
-            merge: async () => ({
-              merged: true,
-              mergeSha: "merge-sha",
-              conflict: false,
-              status: 200,
-              message: "merged",
-            }),
             // branch reports clean → up-to-date enforcement is a no-op.
             readMergeability: async () => ({
               state: "clean" as const,
@@ -178,6 +173,8 @@ describe("acceptance hard tier (dequeue→execute, all hard paths)", () => {
             }),
             updateBranch: async () => ({ outcome: "up_to_date" as const, message: "up to date" }),
           },
+          // The land is the unconditional `MergeAuthority` + CodeHost CAS (no host PR-merge).
+          mergeAuthority: hardTierAuthorityBundle(),
         }),
     });
 
