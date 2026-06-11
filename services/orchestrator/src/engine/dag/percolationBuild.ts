@@ -39,18 +39,11 @@ import {
 } from "./baseShiftCoordinator.js";
 import { PgBaseShiftEventEmitter, PgBaseShiftNodeReader, PgBaseShiftPersistence } from "./baseShiftCoordinatorPg.js";
 import {
-  HeldBaseShiftConflictResolver,
-  HeldBaseShiftReGate,
-  HeldBaseShiftWorkspaceOpener,
-  HeldWorkspaceVcsCore,
-} from "./baseShiftHeldSeams.js";
-import {
   LiveBaseShiftConflictResolver,
   LiveBaseShiftReGate,
   LiveBaseShiftWorkspaceProvider,
   type LiveBaseShiftDeps,
 } from "./baseShiftLiveSeams.js";
-import { baseShiftLive } from "./baseShiftLiveFlag.js";
 import type { AncestorStack } from "./ancestorStack.js";
 import { PgDagAncestorStackResolver } from "./walkerPg.js";
 import { type ChangePercolationCoordinator, PercolatingCoordinator } from "./percolation.js";
@@ -72,12 +65,12 @@ export interface BuildPercolationCoordinatorDeps {
    */
   runStateWriter?: RunStateWriter;
   /**
-   * Wave-3/Slice-2 LIVE base-shift seams. When present (the autonomy loops wire them),
-   * the base-shift handler's workspace/re-gate/resolver are the LIVE seams (allocate a
-   * runner, rebase the dependent's branch in place over jj, re-gate it, resolve a recorded
-   * conflict) under the `baseShiftLive()` flag (default ON). Absent — or with the flag OFF
-   * — the fail-closed `Held*` stubs hold the work loudly (never-discard, never-merge). The
-   * runner allocator + SSH substrate + identity ref are the SAME the merge coordinator uses.
+   * The LIVE base-shift seams. The autonomy loops wire them: the base-shift handler's
+   * workspace/re-gate/resolver allocate a runner, rebase the dependent's branch in place
+   * over jj, re-gate it, and resolve a recorded conflict. They are REQUIRED — absent, the
+   * base-shift handler cannot drive a live runner and construction throws LOUDLY (a wiring
+   * bug, never a silent degrade). The runner allocator + SSH substrate + identity ref are
+   * the SAME the merge coordinator uses.
    */
   allocator?: Allocator;
   ssh?: CommandSubstrate;
@@ -177,13 +170,11 @@ export class PgPercolationSettler implements PercolationSettler {
  * Assemble the production `BaseShiftCoordinator` — the ONE base-shift handler that the
  * percolation kick-off (and the merge-path `behind` mergeability) route through. The
  * keep-run-row persistence + the S0 node read + the `integration.rebase` emitter are
- * production-LIVE. The workspace/re-gate/resolver seams are selected by `baseShiftLive()`
- * (default ON — the Wave-3/Slice-2 cutover): the LIVE seams (allocate a runner, rebase in
- * place over jj, re-gate, resolve a recorded conflict) when the flag is on AND the runner
- * deps are wired; the fail-closed `Held*` stubs (the kill-switch — they HOLD the work
- * loudly, never-discard/never-merge) when the flag is OFF. Flag ON but deps absent THROWS
- * (a misconfigured live flag, not a silent degrade). No half-state: either the live seams
- * own the whole flow or the held stubs hold (flag off) or construction fails loud.
+ * production-LIVE. The workspace/re-gate/resolver are the LIVE seams (allocate a runner,
+ * rebase in place over jj, re-gate, resolve a recorded conflict) — the ONE unconditional
+ * base-shift mechanism. The runner deps are REQUIRED: absent, construction THROWS (a wiring
+ * bug, not a silent degrade). No half-state — either the live seams own the whole flow or
+ * construction fails loud.
  */
 export function buildBaseShiftCoordinator(
   deps: BuildPercolationCoordinatorDeps,
@@ -240,7 +231,7 @@ export class MarkerSuppressedBaseShiftPersistence implements BaseShiftPersistenc
   }
 }
 
-/** The workspace/re-gate/resolver seam set the base shift drives — LIVE (flag ON + deps) or HELD. */
+/** The workspace/re-gate/resolver seam set the base shift drives — the LIVE jj seams. */
 interface BaseShiftSeams {
   workspace: WorkspaceVcsCore;
   opener: BaseShiftWorkspaceOpener;
@@ -249,32 +240,22 @@ interface BaseShiftSeams {
 }
 
 /**
- * Select the base-shift seams by the `baseShiftLive()` flag (default ON). Flag ON with the
- * runner deps wired ⇒ the LIVE seams; flag OFF ⇒ the fail-closed `Held*` stubs (the
- * kill-switch, the documented flag-OFF behavior).
+ * Select the LIVE base-shift seams (allocate a runner, rebase the dependent's branch in
+ * place over jj, re-gate, resolve a recorded conflict). The live jj base-shift is the ONE
+ * unconditional mechanism — there is no held-stub alternative.
  *
- * Flag ON but the runner deps NOT wired is a MISCONFIGURED LIVE FLAG — a construction bug,
- * NOT a degrade to honor. It throws LOUDLY here (no silent fallback to the held stubs): a
- * `BASE_SHIFT_LIVE`-on build site that cannot drive a live runner is wired wrong, and a
- * quiet hold would mask it. (The genuine flag-OFF kill-switch keeps its held-stub behavior;
- * the never-discard/never-merge hold semantics belong to the flag-OFF path, not to an
- * un-wired live path. The no-silent-fallback boundary: required-missing fails loud.)
+ * The runner deps NOT being wired is a CONSTRUCTION BUG, NOT a degrade to honor. It throws
+ * LOUDLY here (no silent fallback): a base-shift build site that cannot drive a live runner
+ * is wired wrong, and a quiet hold would mask it. The no-silent-fallback boundary:
+ * required-missing fails loud.
  */
 function selectBaseShiftSeams(deps: BuildPercolationCoordinatorDeps): BaseShiftSeams {
-  if (!baseShiftLive()) {
-    return {
-      workspace: new HeldWorkspaceVcsCore(),
-      opener: new HeldBaseShiftWorkspaceOpener(),
-      reGate: new HeldBaseShiftReGate(),
-      resolver: new HeldBaseShiftConflictResolver(),
-    };
-  }
   const liveDeps = liveBaseShiftDeps(deps);
   if (liveDeps === undefined) {
     throw new Error(
-      "BASE_SHIFT_LIVE is on but the live base-shift deps are not wired " +
-        "(allocator / ssh / identitySecretRef absent) — a misconfigured live flag is a construction " +
-        "bug, not a silent degrade. Wire the runner deps, or set BASE_SHIFT_LIVE=0 for the held kill-switch.",
+      "The live base-shift deps are not wired " +
+        "(allocator / ssh / identitySecretRef absent) — the base-shift handler cannot drive a live " +
+        "runner. This is a construction bug, not a silent degrade. Wire the runner deps.",
     );
   }
   // The opener IS the workspace core (it holds the per-shift live jj cores the coordinator's
@@ -290,7 +271,8 @@ function selectBaseShiftSeams(deps: BuildPercolationCoordinatorDeps): BaseShiftS
 
 /**
  * Assemble the {@link LiveBaseShiftDeps} from the build deps, or `undefined` when the
- * runner allocator / SSH substrate / identity ref are not wired (the held fallback). The
+ * runner allocator / SSH substrate / identity ref are not wired (a wiring bug — the caller
+ * throws loud, never degrades). The
  * org-scoping pool + the event store mirror the merge coordinator's construction
  * (`orgScopingPool` + `PgEventStore`, routed through the control plane when a writer is set).
  */

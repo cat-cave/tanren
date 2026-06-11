@@ -1,25 +1,24 @@
 // The pg + native-gate-backed BatchChecker (autonomy-engine.md §2d — speculative
-// batch-check; the no-Actions delivery model). It assembles the PROSPECTIVE MERGED
-// STATE for a batch of queued entries — `default_branch + each entry's PR branch`
-// speculatively merged in DAG order onto an EPHEMERAL batch-integration ref (reuse
-// the `VcsProvider.buildIntegrationBranch`) — then runs the NATIVE GATE against
-// that ref: a fresh short-lived runner clones the integration ref, installs deps, and
-// runs the repo's `pre_merge` gate tiers over SSH (exit codes only). There is NO forge
-// check-run poll — the verdict is Tanren's own gate. It NEVER touches `default_branch`;
-// only the ephemeral `tanren/batch/<dependent>` ref is written + gated.
+// batch-check; the no-Actions delivery model; tanren-owns-the-engine.md §3 — the one
+// unified `integration_nodes` run model). It assembles the PROSPECTIVE MERGED STATE
+// for a batch of queued entries — `default_branch + each entry's PR branch` integrated
+// in DAG order — LOCALLY over jj (no server-side host ref), UPSERTs the integration
+// node, then PROOF-REUSES or runs the NATIVE GATE against the assembled state: a fresh
+// short-lived runner installs deps and runs the repo's `pre_merge` gate tiers over SSH
+// (exit codes only). There is NO forge check-run poll — the verdict is Tanren's own
+// gate. It NEVER touches `default_branch`.
 //
-// Resolution mirrors PgSpeculativeIntegrator: repo + default_branch from the project,
-// the App installation from the org, the static github credential ref from
-// project/org config, each entry's branch = its queued run branch (the PR head
-// branch). The batch ref is named for the LAST (deepest) member's spec so it is a
-// stable, safe ref per batch tail.
+// Resolution: repo + default_branch from the project, the App installation from the
+// org, the static github credential ref from project/org config, each entry's branch =
+// its queued run branch (the PR head branch). The integration ref name is keyed on the
+// LAST (deepest) member's spec so it is a stable, safe ref per batch tail.
 //
 // Because the native gate is SYNCHRONOUS (it runs to a pass/fail verdict on the
 // runner — there is no async forge CI to wait on), there is NO "pending" / no-checks
-// settle: the gate either passes (merge the batch) or fails (a bad interaction). The
-// integration ref's own build-conflict (two entries conflict with each other) is
-// surfaced as `conflict`; a runner/clone/bootstrap fault is `infra-error` (a retriable
-// HOLD — never a PR's fault, never a bisect).
+// settle: the gate either passes (merge the batch) or fails (a bad interaction). A
+// build-conflict (two entries conflict with each other) is surfaced as `conflict`; a
+// runner/clone/bootstrap fault is `infra-error` (a retriable HOLD — never a PR's
+// fault, never a bisect).
 
 import { runWithJobOrgId, runWithOrgScope, runWithSystemScope } from "@tanren/db";
 import type pg from "pg";
@@ -37,10 +36,8 @@ import { orgScopingPool } from "../data/orgScopedDb.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
 import { PgEventStore } from "../eventStore.js";
 import { PgIntegrationNodeModel } from "../dag/integrationNodesPg.js";
-import { integrationNodesDrive } from "../dag/integrationNodesDriveFlag.js";
 import { driveBatchThroughNode } from "./batchIntegrationNodeDrive.js";
 import { batchNodeGate, batchNodeResolveConfig } from "./batchNodeGate.js";
-import { runFreshRunnerMergeGate } from "./freshRunnerGate.js";
 import { createLogger } from "../observability/logger.js";
 
 const log = createLogger("merge");
@@ -48,8 +45,8 @@ const log = createLogger("merge");
 /** The terminal runner image a batch re-gate allocates against when the project sets none. */
 const DEFAULT_BATCH_RUNNER_IMAGE = CANONICAL_RUNNER_IMAGE;
 
-/** The ephemeral batch-integration ref the prospective merged state is built on. */
-export function batchIntegrationBranchName(tailSpecId: string): string {
+/** The integration ref name the assembled prospective merged state is keyed on. */
+function batchIntegrationBranchName(tailSpecId: string): string {
   if (!/^spec_[A-Za-z0-9._-]+$/u.test(tailSpecId)) {
     throw new Error(`unsafe spec id for batch integration branch: ${tailSpecId}`);
   }
@@ -151,116 +148,22 @@ export class PgBatchChecker implements BatchChecker {
       }
     }
 
-    // §3 INTEGRATION-NODE DRIVE (flag ON, default): assemble the prospective merged state
-    // LOCALLY over jj (no `tanren/batch` host ref), UPSERT the node, and PROOF-REUSE the
-    // gate verdict (skip the re-gate on a recorded passing proof). Fail-closed: a stale
-    // reuse can NEVER merge unproven code (the six-component key guard). Flag OFF reverts
-    // to the server-side `buildIntegrationBranch` + always-recompute path below.
-    if (integrationNodesDrive()) {
-      return await this.driveThroughIntegrationNode({
-        orgId,
-        projectId: input.projectId,
-        project,
-        ordered,
-        installation,
-        staticRef,
-        repo,
-        token,
-        tailSpecId,
-        integrationRef: integrationBranch,
-      });
-    }
-
-    // The ephemeral `tanren/batch/<tail>` ref is EPHEMERAL per check: build it,
-    // gate it, then ALWAYS tear it down (pass / fail / conflict / infra-error) so a
-    // retry or the next batch starts from a clean ref instead of a stale leftover.
-    // `buildIntegrationBranch`'s `resetRef` IS idempotent (create→force-PATCH), so a
-    // leftover ref no longer 422-bricks — but leaving it around accumulates dead refs
-    // and re-points the next build off a stale tail; the teardown keeps it clean.
-    try {
-      // 1. Build the prospective merged state on the ephemeral batch ref (NEVER main).
-      const integration = await this.deps.vcsProvider.buildIntegrationBranch({
-        repo,
-        token,
-        baseBranch: project.default_branch,
-        integrationBranch,
-        ancestors: ordered,
-      });
-      if (integration.outcome === "conflict") {
-        // Distinguish a SPEC-vs-SPEC conflict (two queued entries clash) from a single PR
-        // dirty against the BASE. `buildIntegrationBranch` sets `otherSpecId = merged.at(-1)
-        // ?? baseBranch`, so a first-merge-onto-base conflict yields `otherSpecId ===
-        // default_branch` — that is a base conflict, which the coordinator drives through
-        // the real per-run resolver rather than bisecting/dequeuing it. (Preserved from #322.)
-        const conflictsWithBase = integration.conflictBetween?.otherSpecId === project.default_branch;
-        return {
-          result: "conflict",
-          message: integration.message,
-          conflictsWithBase,
-          ...(integration.conflictBetween !== undefined && { conflictBetween: integration.conflictBetween }),
-        };
-      }
-
-      // 2. Run the NATIVE gate against the prospective merged tree (the integration ref):
-      // a fresh runner clones the ref, installs deps, runs the `pre_merge` gate. The gate
-      // is synchronous → a definitive pass/fail (no async forge CI, no no-checks settle).
-      // A runner/clone/bootstrap fault is an INFRA error (a retriable hold, never a bisect).
-      try {
-        // The gate's `gate.*` event INSERTs are tenant writes, so run the whole gate
-        // under the project's ambient org scope (each event opens its own short
-        // org-scoped txn — runWithJobOrgId, NOT a held txn across the SSH ops).
-        const { outcome } = await runWithJobOrgId(orgId, () =>
-          runFreshRunnerMergeGate(
-            {
-              allocator: this.deps.allocator,
-              ssh: this.deps.ssh,
-              secrets: this.deps.secrets,
-              vcsProvider: this.deps.vcsProvider,
-              ...(this.deps.githubAppMinter !== undefined && { githubAppMinter: this.deps.githubAppMinter }),
-              eventStore: this.deps.runStateWriter ?? new PgEventStore(orgScopingPool(this.deps.pool)),
-              identitySecretRef: this.deps.identitySecretRef,
-              timeoutMs: this.deps.timeoutMs,
-            },
-            {
-              repoUrl: project.repo_url,
-              ref: integrationBranch,
-              runnerImage: project.runner_image ?? DEFAULT_BATCH_RUNNER_IMAGE,
-              governancePosture: resolveGovernancePosture(project.project_config),
-              ...(installation !== undefined && { installation }),
-              githubCredentialRef: staticRef ?? "",
-              orgId,
-              projectId: input.projectId,
-              // A synthetic `run_`-prefixed handle for runner/workspace naming + event
-              // correlation (the batch has no single run). Sanitized to the safe charset.
-              runId: `run_batch_${tailSpecId.replaceAll(/[^A-Za-z0-9_-]/gu, "_")}`,
-              specId: tailSpecId,
-            },
-          ),
-        );
-        if (outcome.passed) {
-          return { result: "pass", integrationBranch };
-        }
-        return {
-          result: "fail",
-          message: `batch gate failed on ${integrationBranch}: tier ${outcome.failure.tier} step ${outcome.failure.failedStep}`,
-        };
-      } catch (error) {
-        // The gate could not be RUN (allocate/clone/bootstrap fault) — NOT a verdict. The
-        // coordinator must never blame/bisect a PR for this: hold + bounded-retry the batch.
-        return {
-          result: "infra-error",
-          message: `batch gate could not run on ${integrationBranch}: ${error instanceof Error ? error.message : String(error)}`,
-          retriable: true,
-        };
-      }
-    } finally {
-      // Tear down the ephemeral batch ref (idempotent: deleteBranch swallows 404/422 of
-      // an already-gone ref). Best-effort — a teardown hiccup must never overwrite the
-      // verdict (resetRef force-updates a leftover anyway), so it is caught + logged.
-      await this.deps.vcsProvider.deleteBranch(repo, integrationBranch, token).catch((error: unknown) => {
-        log.warn("batch ref teardown failed (non-fatal; next build force-resets it)", { integrationBranch }, error);
-      });
-    }
+    // §3 INTEGRATION-NODE DRIVE: assemble the prospective merged state LOCALLY over jj (no
+    // host ref), UPSERT the node, and PROOF-REUSE the gate verdict (skip the re-gate on a
+    // recorded passing proof). Fail-closed: a stale reuse can NEVER merge unproven code
+    // (the six-component key guard).
+    return await this.driveThroughIntegrationNode({
+      orgId,
+      projectId: input.projectId,
+      project,
+      ordered,
+      installation,
+      staticRef,
+      repo,
+      token,
+      tailSpecId,
+      integrationRef: integrationBranch,
+    });
   }
 
   /**

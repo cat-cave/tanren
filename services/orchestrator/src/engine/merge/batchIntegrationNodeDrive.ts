@@ -1,10 +1,8 @@
 // BATCH INTEGRATION-NODE DRIVE (tanren-owns-the-engine.md §3), Wave-3 / Slice-3. The
-// flag-gated (`integrationNodesDrive()`, default ON) path that makes `integration_nodes`
-// DRIVE the batch gate/CI verdict:
+// unconditional path that makes `integration_nodes` DRIVE the batch gate/CI verdict:
 //
 //   (3b) JJ-LOCAL INTEGRATION — assemble the prospective merged state LOCALLY over A1's
-//        jj workspace (no `tanren/batch` host ref), materializing the node's
-//        headSha/treeHash, instead of the server-side `buildIntegrationBranch`. The gate
+//        jj workspace (no host ref), materializing the node's headSha/treeHash. The gate
 //        runs on THIS workspace (the integrated head is a local jj bookmark).
 //
 //   (3a) PROOF REUSE — UPSERT the integration node for the prospective merged state (its
