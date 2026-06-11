@@ -31,7 +31,11 @@ import type { EscapeHatches } from "../config/index.js";
 import { CostRecorder } from "../costs/recorder.js";
 import type { VcsProvider } from "../contracts/vcsProvider.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
-import { buildEagerBaseNodeUpsert, buildNativeQueueEnqueuer } from "./runWorkflowPorts.js";
+import {
+  buildBootstrapStackHeadShaWriteBack,
+  buildEagerBaseNodeUpsert,
+  buildNativeQueueEnqueuer,
+} from "./runWorkflowPorts.js";
 import { createLogger, finalizeRunRecoverable } from "./runFinalize.js";
 import { classifyRunFailure } from "./runFailureClassifier.js";
 import { startHeartbeat, type HeartbeatMiss } from "./runHeartbeat.js";
@@ -305,6 +309,11 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
         // `eager_base` integration node (the proof-reuse substrate) through this
         // org-scoped UPSERT over the worker's real pool. It never gates the run.
         eagerBaseNodeUpsert: buildEagerBaseNodeUpsert(deps.pool),
+        // WS-A PR-8c: the jj-local dependent bootstrap folds the assembly-captured
+        // per-ancestor head shas BACK into `runs.ancestor_stack[].headSha` through this
+        // org-scoped UPDATE over the worker's real pool, so percolation's divergence key
+        // reads the shas from `ancestor_stack`. It never gates the run.
+        bootstrapStackHeadShaWriteBack: buildBootstrapStackHeadShaWriteBack(deps.pool),
       }),
     );
     await deps.jobQueue.complete(job.id);

@@ -49,7 +49,7 @@ import {
   writerSeam,
 } from "./plannerRunAdapters.js";
 import { prepareRunWorkspace, type BootstrapStepInput, type CommitBootstrapStepInput } from "./plannerRunWorkspace.js";
-import type { EagerBaseNodeUpsert } from "./plannerRunJjLocalBootstrap.js";
+import type { BootstrapStackHeadShaWriteBack, EagerBaseNodeUpsert } from "./plannerRunJjLocalBootstrap.js";
 import {
   applyScopedRunCredentials,
   buildFinalizeRunState,
@@ -126,8 +126,7 @@ export interface PlannerRunContext {
   // TEMPLATING WAVE 3 (templating-system.md §3): the SELECTED template's repo ref to SEED from (from `projectConfig.templateRef`). When set, the run clones the template's conforming files into the workspace BEFORE the writer — so the scaffold writer's "seed already committed" assertion holds and it specializes the seed instead of authoring from scratch. Absent ⇒ no match ⇒ the from-scratch contract-file path runs.
   templateSeed?: { repoRef: string };
   // WS-A PR-4: the ordered ancestor stack this dependent speculative run is stacked on (from
-  // `runs.ancestor_stack`). With `WALKER_JJ_LOCAL_BASE` on + non-empty, the workspace
-  // bootstrap jj-assembles the base from these ancestor refs vs the legacy single-ref clone.
+  // `runs.ancestor_stack`). With `WALKER_JJ_LOCAL_BASE` on + non-empty, the workspace bootstrap jj-assembles the base from these ancestor refs vs the legacy single-ref clone.
   ancestorStack?: AncestorStack;
 }
 
@@ -221,6 +220,8 @@ export interface RunPlannerLoopInput {
   // NEVER gates the run; a failure is loud-logged + swallowed. Built by the worker from
   // its real pool (`buildEagerBaseNodeUpsert`); absent on unit paths ⇒ no node write.
   eagerBaseNodeUpsert?: EagerBaseNodeUpsert;
+  /** WS-A PR-8c (§2.3): bootstrap → `runs.ancestor_stack[].headSha` write-back (percolation's divergence key); see plannerRunJjLocalBootstrap. */
+  bootstrapStackHeadShaWriteBack?: BootstrapStackHeadShaWriteBack;
   // Max review→rework re-entries before the run halts pending operator action.
   maxReviewReworks?: number;
   // Plane B: the PROJECT's dev+test app env — env vars + secrets the

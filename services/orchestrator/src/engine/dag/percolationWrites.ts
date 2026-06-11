@@ -15,7 +15,7 @@ import type pg from "pg";
 import type { PercolationPending } from "../contracts/changePercolation.js";
 import type { ReviewVerdict } from "../contracts/dagLifecycle.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
-import type { AncestorStack } from "./ancestorStack.js";
+import { type AncestorStack, resolveAncestorStack } from "./ancestorStack.js";
 import { PgEventStore } from "../eventStore.js";
 import { SpecStatusReplanRouter } from "../workflow/reviewMerge/conflictResolver/replanRouter.js";
 
@@ -119,6 +119,38 @@ export function decodeVerified(value: unknown): DecodedVerified {
     }
   }
   return { shas, verdicts };
+}
+
+/**
+ * WS-A PR-8c: derive the percolation build-base / divergence SHA map (`ancestorSpecId →
+ * headSha`) from the jj-native `runs.ancestor_stack[].headSha`. MOVES the read off the
+ * legacy `integrated_ancestor_shas` column — the stack carries the SAME branches + head
+ * shas (the walker dual-writes both, the bootstrap fills `headSha`), so the detect keys off
+ * the SAME divergence. `resolveAncestorStack` DUAL-READS (the stack column when present +
+ * head-sha-filled, else reconstructs from the legacy map). TRANSITION SAFETY: a run enqueued
+ * before its bootstrap carries the stack with EMPTY-placeholder head shas (derived map
+ * empty) while the legacy column holds the real shas — fall back to the legacy map so the
+ * detect stays behavior-equivalent across the transition (the fallback dies with the legacy
+ * column in PR-9/PR-12).
+ */
+export function buildBaseFromAncestorStack(run: {
+  ancestorStack: unknown;
+  speculativeBase: string | null;
+  integratedAncestorShas: unknown;
+}): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const member of resolveAncestorStack(run)) {
+    if (member.headSha !== "") out[member.specId] = member.headSha;
+  }
+  if (Object.keys(out).length === 0) {
+    const legacy = run.integratedAncestorShas;
+    if (legacy !== null && legacy !== undefined && typeof legacy === "object" && !Array.isArray(legacy)) {
+      for (const [specId, sha] of Object.entries(legacy as Record<string, unknown>)) {
+        if (typeof sha === "string" && sha !== "") out[specId] = sha;
+      }
+    }
+  }
+  return out;
 }
 
 /** Decode the `percolation_pending` jsonb into the in-flight marker (or undefined). */
