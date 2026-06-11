@@ -15,20 +15,26 @@ baseline; the status vocabulary is unified; Vault per-run scoped credentials are
 done. (Tanren's own monorepo CI runs on GitHub Actions like any repo; the
 no-Actions doctrine governs the delivery path for the apps Tanren _builds_.)
 
-**The tanren-owns-the-engine cutover is merged + flag-on (merge paths still
-apex-unproven).** Delivery now runs on the **jj (jujutsu) `WorkspaceVcsCore`**
-(jj-only, no git fallback), the guaranteed fail-closed **`MergeAuthority`** (the
-sole merge decision, replacing the scattered gate/governance/review/mergeability
-checks), the unified **`integration_nodes`** run model, the **never-discard
-`BaseShiftCoordinator`** (jj-rebase dependent work in place — the old percolation
-that _superseded + regenerated_, discarding work, is replaced), and
-**audit-as-P0–P3-findings** gated by an **`auditPosture`** DORA knob. These live
-paths are **default-on behind kill-switch env vars** (`MERGE_AUTHORITY_LIVE`,
-`CONFLICT_RESOLVER_JJ_LIVE`, `BASE_SHIFT_LIVE`, `INTEGRATION_NODES_DRIVE`). **apex
-v32 ran live but halted at scaffold-bootstrap — it never reached a merge**, so the
-flag-on jj/merge live paths are still **not apex-proven**; the §7 deletions (the
-dead `speculativeIntegrator`, the git-merge-abort applier dance, the 26-method
-`VcsProvider`) STAY deferred until a run actually reaches a merge. Rationale:
+**The tanren-owns-the-engine cutover is COMPLETE — it is the single live path.**
+Delivery runs on the **jj (jujutsu) `WorkspaceVcsCore`** (jj-only, no git
+fallback), the guaranteed fail-closed **`MergeAuthority`** (the sole merge decision,
+replacing the scattered gate/governance/review/mergeability checks), the unified
+**`integration_nodes`** run model, the **never-discard `BaseShiftCoordinator`**
+(jj-rebase dependent work in place — the old percolation that _superseded +
+regenerated_, discarding work, is gone), and **audit-as-P0–P3-findings** gated by an
+**`auditPosture`** DORA knob. The cutover is **no longer flag-gated**: the WS-A/WS-B
+series deleted the kill-switch env vars (`MERGE_AUTHORITY_LIVE`,
+`CONFLICT_RESOLVER_JJ_LIVE`, `BASE_SHIFT_LIVE`, `INTEGRATION_NODES_DRIVE`,
+`WALKER_JJ_LOCAL_BASE`) — each live path is unconditional. The jj-native
+`ancestor_stack` is the **sole base model**: a dependent run jj-assembles its base
+from the **real ancestor PR-head refs** (true stacked PRs) — there is **no
+synthesized `tanren/integ` host ref**, and the legacy `speculative_base` +
+`integrated_ancestor_shas` columns are dropped. The never-discard base-shift rebase
+and the `MergeAuthority` + `CodeHost` CAS land are the only paths. The
+`integration.*` metrics read-side (`rebase_vs_rebuild`) is **built**. apex remains
+the live-validation vehicle (a real merge through the jj/`MergeAuthority` path is the
+open validation item — apex v32 halted at scaffold-bootstrap before reaching a
+merge), but the engine is the single path regardless. Rationale:
 `docs/architecture/tanren-owns-the-engine.md`.
 
 ## Read order for a fresh session
@@ -51,8 +57,9 @@ The core promise — a real user gets merged PRs from specs, on public **and
 private** repos, across easy/medium/hard governance tiers — is **done and
 live-proven**. The **autonomy engine** (autonomy Phases 1 and 2) is **merged on
 `main`**: the DAG drives itself via the **DagWalker**, the **native intelligent
-merge queue** coordinates merges, and the delivery path now runs on the flag-on
-**jj / `MergeAuthority` / `integration_nodes`** engine (the cutover above; full
+merge queue** coordinates merges, and the delivery path now runs unconditionally on
+the **jj / `MergeAuthority` / `integration_nodes`** engine (the completed cutover
+above; full
 design rationale: `docs/architecture/autonomy-engine.md` +
 `docs/architecture/tanren-owns-the-engine.md`; phase history: `ROADMAP.md` §2).
 
@@ -84,13 +91,16 @@ real credits under the $50 ceiling.
 halted at scaffold-bootstrap and flushed #496/#497/#498). The rest of the forward
 to-do (`ROADMAP.md` §4):
 
-- **tanren-owns-the-engine — finish the cutover (post-merge-proof).** v32 never
-  reached a merge, so the flag-on live merge paths are still unproven; these stay
-  deferred until a run reaches a merge, then land: the §7 deletions (the dead
-  `speculativeIntegrator`, the git-merge-abort applier dance,
-  `resolveSpeculativeState`, the 26-method `VcsProvider` → 8-method minimal `CodeHost`),
-  the walker/percolation → jj-local cutover, and the `integration.*` metrics
-  read-side (prove rebase < rebuild). See
+- **tanren-owns-the-engine — cutover COMPLETE; residual §7 cleanups remain.** The
+  walker/percolation → jj-local cutover landed, the kill-switch flags are deleted
+  (each live path unconditional), the legacy `speculative_base` +
+  `integrated_ancestor_shas` columns are dropped, and the `integration.*` metrics
+  read-side (`rebase_vs_rebuild`) is built. What remains is _separate_ net-delete
+  cleanup, not a gate on the live path: the `VcsProvider` interface still on disk
+  (the 26-method → minimal `CodeHost` reduction) and `resolveSpeculativeState` / the
+  stacked-PR retarget still in the merge dispatcher. A real merge through the live
+  jj/`MergeAuthority` path is the open live-validation item (apex v32 halted at
+  scaffold-bootstrap before reaching one). See
   `docs/architecture/tanren-owns-the-engine.md` §7–§8.
 - **Thread `TANREN_APEX_MODE` to the orchestrator compose service** (v33-prep).
   Today it is wired only on the `worker` service, but the orchestrator reads it too
@@ -103,10 +113,12 @@ to-do (`ROADMAP.md` §4):
   (`forge/audits/store.ts` + `forge/inbox/store.ts`) — move them onto the
   `Repositories` seam; plus `typify→serde` codegen and the first whole-repo
   mutation baseline.
-- **Residual hardening.** A few surviving Tier-2 backcompat items on a zero-users,
-  single-baseline codebase: `schemaCore.ts` `.default('{}'::jsonb)` (latent-500)
-  and the `resolveCredentials.ts` `orgId === ''` BYOK branch (a live path
-  mislabeled "legacy").
+- **Residual hardening.** The `schemaCore.ts` `.default('{}'::jsonb)` defaults
+  (a latent-500 source) survive on this zero-users, single-baseline codebase. The
+  old `resolveCredentials.ts` `orgId === ''` silent-BYOK branch is already FIXED —
+  it is now an explicit `OrgScope` discriminated mode (`{ kind: "org" }` vs
+  `{ kind: "unscopedPlatform" }`) that fails loud (`UnscopedOrgError`) on a missing
+  tenant scope rather than degrading to BYOK.
 - **Held / long-horizon:** a second `CodeHost` backend (GitLab — the seam already
   shipped, decomposed from `VcsProvider` by the cutover; the Mergify/Actions
   coupling that once justified deferring it is gone); the agy harness (broken

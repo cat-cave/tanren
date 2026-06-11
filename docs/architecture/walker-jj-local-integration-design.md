@@ -1,10 +1,13 @@
 # Walker / percolation → jj-local integration (retire the synthesized `tanren/integ` ref)
 
-> Status: **DESIGN — gates a multi-PR build (WS-A build + WS-B deletions).** No code yet.
-> Companion to `docs/architecture/tanren-owns-the-engine.md` (§3 unified run +
-> `integration_nodes`, §6 minimal `CodeHost`, §7 deletions). This doc is the concrete
-> plan for the §8 deferred item "the walker/percolation `speculativeIntegrator` → jj-local
-> cutover".
+> Status: **IMPLEMENTED — the WS-A build + WS-B deletions landed.** The dependent run
+> jj-assembles its base from the real ancestor PR-head refs (`runs.ancestor_stack`);
+> there is no orchestrator-synthesized `tanren/integ` ref, `PgSpeculativeIntegrator`
+> is deleted, and the `WALKER_JJ_LOCAL_BASE` flag is removed (the path is
+> unconditional). Companion to `docs/architecture/tanren-owns-the-engine.md` (§3
+> unified run + `integration_nodes`, §6 minimal `CodeHost`, §7 deletions). This doc
+> was the concrete plan for the §8 item "the walker/percolation
+> `speculativeIntegrator` → jj-local cutover" — now complete.
 
 ## 0. The decision this design implements
 
@@ -263,6 +266,11 @@ columns).
   `contracts/integrationNodes.ts:54`).
 
 ## 7. PR-by-PR decomposition (ordered; each independently green + CI-gated)
+
+> **LANDED.** This decomposition is the historical record of how the cutover was
+> built — every PR below merged (the WS-A build #511–#520, then the WS-B deletions
+> #521–#527). The flag-gated/old-path-stays-live language is the as-built sequencing;
+> the end state is the single unconditional jj-native path.
 
 **WS-A — build the jj-native assembly path (additive; nothing deleted; old path stays live
 the whole time).**
