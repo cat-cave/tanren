@@ -132,7 +132,7 @@ export async function acknowledgeInsight(
 
 function decodeRow(row: CacheRow): Insight {
   const envelope = (row.payload ?? {}) as Partial<PayloadEnvelope>;
-  const data = (envelope.data ?? { kind: row.kind }) as Record<string, unknown>;
+  const data = envelope.data ?? { kind: row.kind };
   const title = typeof envelope.title === "string" ? envelope.title : row.kind;
   const body = typeof envelope.body === "string" ? envelope.body : "";
   const actions = Array.isArray(envelope.actions) ? envelope.actions : [];

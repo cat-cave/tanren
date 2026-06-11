@@ -22,18 +22,18 @@ export async function resolveConvergedProjectFacts(
   pool: pg.Pool,
   input: { orgId: string; projectId: string },
 ): Promise<ConvergedProjectFacts | undefined> {
-  return runWithOrgScope(pool, input.orgId, async (client) => {
+  return runWithOrgScope(pool, input.orgId, async (client): Promise<ConvergedProjectFacts | undefined> => {
     const projectRow = await client.query<{ repo_url: string; runner_image: string }>(
       "SELECT repo_url, runner_image FROM projects WHERE project_id = $1",
       [input.projectId],
     );
     const project = projectRow.rows[0];
     if (project === undefined || project.repo_url === "") {
-      return;
+      return undefined;
     }
     const sha = await latestMergeSha(client, input.projectId);
     if (sha === undefined) {
-      return;
+      return undefined;
     }
     return { repoRef: project.repo_url, builtSha: sha, runnerImage: project.runner_image };
   });

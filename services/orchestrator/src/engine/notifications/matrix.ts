@@ -61,7 +61,7 @@ export function evaluateMatrix(input: MatrixEvaluationInput): MatrixMatch[] {
       // does not fire alongside the user row, even if the user route was
       // muted/disabled — the user has explicitly taken control of this
       // (orgId, channelKind) pair for this event.
-      userOverrideChannels.add(`${target.channelKind}`);
+      userOverrideChannels.add(target.channelKind);
     }
   }
 

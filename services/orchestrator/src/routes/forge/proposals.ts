@@ -114,6 +114,10 @@ export function buildWriteToolDispatcher(options: ForgeProposalRoutesOptions): F
         return tanrenRerunTask({ pool }, call.args, actor);
       case "tanren.acknowledge_insight":
         return tanrenAcknowledgeInsight({ pool }, call.args, actor);
+      default: {
+        const exhaustive: never = call;
+        throw new Error(`forge write tool dispatch: unhandled tool ${String(exhaustive)}`);
+      }
     }
   };
 }

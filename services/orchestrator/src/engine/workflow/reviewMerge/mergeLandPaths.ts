@@ -179,6 +179,10 @@ async function landViaAuthorityAttempt(
       await ops.finalize("conflict", { taskOutcome: "pending", taskStatus: "running" });
       return ops.result("conflict", { message: disposition.reason });
     }
+    default: {
+      const exhaustive: never = disposition;
+      throw new Error(`landViaAuthorityAttempt: unhandled disposition ${String(exhaustive)}`);
+    }
   }
 }
 

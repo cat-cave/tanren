@@ -184,10 +184,10 @@ export function mountRootApiRoutes(app: Hono<ActorContextEnv>, deps: RootApiDeps
       return c.json({ error: "run_not_found" }, 404);
     }
 
-    const payload = await runWithOrgScope(pool, orgId, async (client) => {
+    const payload = await runWithOrgScope(pool, orgId, async (client): Promise<Record<string, unknown> | undefined> => {
       const run = await client.query("SELECT * FROM runs WHERE run_id = $1", [runId]);
       if (run.rowCount === 0) {
-        return;
+        return undefined;
       }
       const tasks = await client.query(
         `SELECT * FROM tasks

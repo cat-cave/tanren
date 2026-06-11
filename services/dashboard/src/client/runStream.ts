@@ -188,10 +188,10 @@ export function initRunStream(): void {
 
   source.addEventListener("snapshot", (event) => {
     try {
-      const data = JSON.parse((event as MessageEvent).data) as {
+      const data: {
         costs?: CostRecordFrame[];
         run?: { status: string; outcome: string | null };
-      };
+      } = JSON.parse(event.data);
       totals.perTokenUsd = 0;
       totals.inputTokens = 0;
       totals.outputTokens = 0;
@@ -208,7 +208,7 @@ export function initRunStream(): void {
 
   source.addEventListener("costs", (event) => {
     try {
-      const data = JSON.parse((event as MessageEvent).data) as { costs?: CostRecordFrame[] };
+      const data: { costs?: CostRecordFrame[] } = JSON.parse(event.data);
       for (const cost of data.costs ?? []) applyCost(totals, cost);
       renderCostBar(root, totals);
     } catch {
@@ -218,10 +218,10 @@ export function initRunStream(): void {
 
   source.addEventListener("status", (event) => {
     try {
-      const data = JSON.parse((event as MessageEvent).data) as {
+      const data: {
         status: string;
         outcome: string | null;
-      };
+      } = JSON.parse(event.data);
       applyStatus(root, data.status, data.outcome);
       if (["completed", "failed", "halted", "cancelled", "done"].includes(data.status)) {
         source.close();
@@ -233,7 +233,8 @@ export function initRunStream(): void {
 
   source.addEventListener("task", (event) => {
     try {
-      applyTask(root, JSON.parse((event as MessageEvent).data) as TaskFrame);
+      const frame: TaskFrame = JSON.parse(event.data);
+      applyTask(root, frame);
     } catch {
       /* ignore */
     }

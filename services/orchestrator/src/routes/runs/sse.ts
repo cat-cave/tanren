@@ -33,6 +33,7 @@ import {
   RECENT_EVENT_CAP,
   type RunCostRecord,
   type RunEventRow,
+  type RunSummary,
   type SseEventName,
   type TaskTimelineEntry,
 } from "./contract.js";
@@ -117,20 +118,28 @@ export class SseDriver {
     // own short org-scoped transaction (`SET LOCAL app.current_org_id`), never a
     // long-lived one held across the poll loop's sleeps. Inert in R1 — same rows
     // as the pool path — and RLS-correct in R3.
-    const snapshot = await runWithOrgScope(this.args.pool, this.args.orgId, async (client) => {
-      const run = await fetchRunSummary(client, this.args.runId, this.args.orgId);
-      if (run === undefined) return;
-      const tasks = await fetchRunTasks(client, this.args.runId, this.args.orgId);
-      const recentEvents = await fetchRunEventsForSnapshot(client, {
-        runId: this.args.runId,
-        orgId: this.args.orgId,
-        limit: RECENT_EVENT_CAP,
-        actor: this.args.actor,
-        rawView: this.args.rawView,
-      });
-      const costs = await fetchRunCostsForSnapshot(client, this.args.runId, this.args.orgId);
-      return { run, tasks, recentEvents, costs };
-    });
+    const snapshot = await runWithOrgScope(
+      this.args.pool,
+      this.args.orgId,
+      async (
+        client,
+      ): Promise<
+        { run: RunSummary; tasks: TaskTimelineEntry[]; recentEvents: RunEventRow[]; costs: RunCostRecord[] } | undefined
+      > => {
+        const run = await fetchRunSummary(client, this.args.runId, this.args.orgId);
+        if (run === undefined) return undefined;
+        const tasks = await fetchRunTasks(client, this.args.runId, this.args.orgId);
+        const recentEvents = await fetchRunEventsForSnapshot(client, {
+          runId: this.args.runId,
+          orgId: this.args.orgId,
+          limit: RECENT_EVENT_CAP,
+          actor: this.args.actor,
+          rawView: this.args.rawView,
+        });
+        const costs = await fetchRunCostsForSnapshot(client, this.args.runId, this.args.orgId);
+        return { run, tasks, recentEvents, costs };
+      },
+    );
     if (snapshot === undefined) {
       await this.emit("status", { runId: this.args.runId, status: "failed", outcome: null });
       return;
@@ -216,14 +225,22 @@ export class SseDriver {
     // RLS R2 cohort-1: each poll batches its reads (runs + tasks + events deltas,
     // plus the still-pool-cohort cost deltas) into one short org-scoped
     // transaction. Inert in R1; same rows as the pool path.
-    const polled = await runWithOrgScope(this.args.pool, this.args.orgId, async (client) => {
-      const run = await fetchRunSummary(client, this.args.runId, this.args.orgId);
-      if (run === undefined) return;
-      const tasks = await fetchRunTasks(client, this.args.runId, this.args.orgId);
-      const newEvents = await this.pollNewEvents(client);
-      const newCosts = await this.pollNewCosts(client);
-      return { run, tasks, newEvents, newCosts };
-    });
+    const polled = await runWithOrgScope(
+      this.args.pool,
+      this.args.orgId,
+      async (
+        client,
+      ): Promise<
+        { run: RunSummary; tasks: TaskTimelineEntry[]; newEvents: RunEventRow[]; newCosts: RunCostRecord[] } | undefined
+      > => {
+        const run = await fetchRunSummary(client, this.args.runId, this.args.orgId);
+        if (run === undefined) return undefined;
+        const tasks = await fetchRunTasks(client, this.args.runId, this.args.orgId);
+        const newEvents = await this.pollNewEvents(client);
+        const newCosts = await this.pollNewCosts(client);
+        return { run, tasks, newEvents, newCosts };
+      },
+    );
     if (polled === undefined) return true;
     const { run, tasks, newEvents, newCosts } = polled;
     const fp = `${run.status}:${run.outcome ?? ""}`;

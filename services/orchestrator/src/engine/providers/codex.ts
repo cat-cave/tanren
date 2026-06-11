@@ -252,7 +252,7 @@ export function createCodexAnswerer<TOutput>(dependencies: CodexAnswererDependen
         if (result.failure !== undefined || result.exitCode !== 0) {
           throw new Error(
             `Codex Answerer failed for schema ${opts.outputSchema.name}: exit ${result.exitCode ?? "unknown"}` +
-              `${result.failure === undefined ? "" : ` failure=${JSON.stringify(result.failure)}`}` +
+              (result.failure === undefined ? "" : ` failure=${JSON.stringify(result.failure)}`) +
               ` | stderr: ${harnessOutputTail(result.stderr)} | stdout: ${harnessOutputTail(result.stdout)}`,
           );
         }

@@ -19,7 +19,7 @@ export interface DerivedDagStepProps {
 
 export function DerivedDagStep(props: DerivedDagStepProps) {
   const { dag } = props;
-  const ready = dag.nodes.filter((n) => n.onCriticalPath === false && n.status === "queued").length;
+  const ready = dag.nodes.filter((n) => !n.onCriticalPath && n.status === "queued").length;
   return (
     <>
       <DagStyles />

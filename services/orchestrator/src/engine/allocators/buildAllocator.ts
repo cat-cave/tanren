@@ -290,6 +290,10 @@ async function buildSingle(kind: AllocatorKind, runners: RunnerStore, secrets: S
       return buildKubernetes(runners, secrets);
     case "sidecar":
       return buildSidecar(runners);
+    default: {
+      const exhaustive: never = kind;
+      throw new Error(`buildSingle: unhandled allocator kind ${String(exhaustive)}`);
+    }
   }
 }
 
@@ -334,6 +338,10 @@ async function buildRegistry(
         return usedKinds.has("kubernetes")
           ? buildKubernetes(runners, secrets)
           : new UnconfiguredAllocator("kubernetes");
+      default: {
+        const exhaustive: never = kind;
+        throw new Error(`build: unhandled allocator kind ${String(exhaustive)}`);
+      }
     }
   };
 

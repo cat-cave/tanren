@@ -1,6 +1,6 @@
 import type pg from "pg";
 import type { ActorContext } from "../../auth/schemas.js";
-import type { EventName, TypedEvent } from "../events/index.js";
+import type { TypedEvent } from "../events/index.js";
 import { redactEventPayload } from "../redaction/index.js";
 import type { NotificationChannel } from "./channels/types.js";
 import { defaultSeverityFor } from "./eventDefaultSeverity.js";
@@ -364,7 +364,7 @@ export class NotificationDispatcher {
 
   private buildPayload(event: TypedEvent, context: EventContext, severity: Severity): NotificationPayload {
     const redacted = redactEventPayload({
-      eventName: event.eventType as EventName,
+      eventName: event.eventType,
       payload: event.payload,
       actor: SYSTEM_ACTOR,
     });
@@ -402,7 +402,7 @@ export class NotificationDispatcher {
 // (checker.verdict / auditor.verdict are FINDINGS-ONLY now — no `passed`
 // flag — so they carry no per-instance promotion; they take the base rate.)
 export function effectiveSeverityFor(event: TypedEvent): Severity {
-  const base = defaultSeverityFor(event.eventType as EventName);
+  const base = defaultSeverityFor(event.eventType);
   if (event.eventType === "run.completed") {
     const payload = event.payload as { outcome?: string };
     if (typeof payload.outcome === "string" && payload.outcome.includes("fail")) {
@@ -431,6 +431,10 @@ function promote(severity: Severity): Severity {
       return "fail";
     case "fail":
       return "fail";
+    default: {
+      const exhaustive: never = severity;
+      throw new Error(`promote: unhandled severity ${String(exhaustive)}`);
+    }
   }
 }
 

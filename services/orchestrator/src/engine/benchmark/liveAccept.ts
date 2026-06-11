@@ -199,7 +199,7 @@ async function loadRunAcceptFacts(
  * undefined when none does.
  */
 async function resolveMergedSha(pool: pg.Pool, orgId: string, runId: string): Promise<string | undefined> {
-  return runWithOrgScope(pool, orgId, async (client) => {
+  return runWithOrgScope(pool, orgId, async (client): Promise<string | undefined> => {
     const result = await client.query<{ payload: unknown }>(
       `SELECT payload
          FROM events
@@ -212,6 +212,7 @@ async function resolveMergedSha(pool: pg.Pool, orgId: string, runId: string): Pr
       const sha = mergeShaOf(row.payload);
       if (sha !== undefined) return sha;
     }
+    return undefined;
   });
 }
 

@@ -142,10 +142,10 @@ async function gateRun(pool: pg.Pool, c: Context<ActorContextEnv>): Promise<RunG
   // check + the run/events context load) inside one org-scoped txn so they carry
   // org context. `orgId` is the path org, validated above. Inert in R1.
   try {
-    const ctx = await runWithOrgScope(pool, orgId, async (client) => {
+    const ctx = await runWithOrgScope(pool, orgId, async (client): Promise<HaltedRunContext | undefined> => {
       const access = await assertRunAccess(client, runId, actor);
       if (access.projectId !== projectId) {
-        return;
+        return undefined;
       }
       return loadHaltedRunContext(client, runId);
     });

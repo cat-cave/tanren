@@ -134,7 +134,7 @@ export class DemoEngine {
         );
       default: {
         const exhaustive: never = surface;
-        throw new Error(`demoEngine: no exercise for surface kind '${String((exhaustive as { kind: string }).kind)}'`);
+        throw new Error(`demoEngine: no exercise for surface kind '${(exhaustive as { kind: string }).kind}'`);
       }
     }
   }

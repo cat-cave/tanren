@@ -59,7 +59,7 @@ export interface PgProductVisionReaderDeps {
  * created via another path carries no `surface` key (a real empty surface).
  */
 function surfaceFromMetadata(metadata: PersonaRow["metadata"]): string | undefined {
-  const raw = (metadata as Record<string, unknown>)["surface"];
+  const raw = metadata["surface"];
   return typeof raw === "string" && raw.trim() !== "" ? raw : undefined;
 }
 

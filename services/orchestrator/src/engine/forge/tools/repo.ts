@@ -35,10 +35,8 @@ async function loadProjectRepo(
   }
   const repo = parseGitHubRepository(row.repoUrl);
   const credentialRef =
-    typeof row.config === "object" &&
-    row.config !== null &&
-    typeof (row.config as Record<string, unknown>)["githubCredentialRef"] === "string"
-      ? String((row.config as Record<string, unknown>)["githubCredentialRef"])
+    typeof row.config === "object" && row.config !== null && typeof row.config["githubCredentialRef"] === "string"
+      ? row.config["githubCredentialRef"]
       : undefined;
   if (credentialRef === undefined || credentialRef === "") {
     throw new ToolAccessDeniedError(`project ${projectId} has no GitHub credential ref`);
@@ -171,7 +169,7 @@ export async function repoReadIssue(
     | { number?: number; title?: unknown; state?: unknown; body?: unknown; html_url?: unknown }
     | undefined;
   return {
-    number: Number(body?.number ?? args.number),
+    number: body?.number ?? args.number,
     title: typeof body?.title === "string" ? body.title : "",
     state: typeof body?.state === "string" ? body.state : "unknown",
     body: typeof body?.body === "string" ? body.body : null,

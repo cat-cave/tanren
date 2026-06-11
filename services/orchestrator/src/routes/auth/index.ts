@@ -4,7 +4,7 @@ import { z } from "zod";
 import type { IdentityProvider } from "../../auth/identityProvider.js";
 import { IdentityProviderError } from "../../auth/identityProvider.js";
 import type { IdentityStore } from "../../auth/identityStore.js";
-import type { IdentityProviderId, TokenScope } from "../../auth/schemas.js";
+import type { IdentityProviderId } from "../../auth/schemas.js";
 import {
   clearSessionCookie,
   readCookie,
@@ -191,7 +191,7 @@ export function createAuthRoutes(options: AuthRoutesOptions) {
     const token = await options.store.createApiToken({
       userId: session.userId,
       name: parsed.data.name,
-      scopes: parsed.data.scopes as TokenScope[],
+      scopes: parsed.data.scopes,
     });
     c.header("Set-Cookie", clearStateCookie(CLI_STATE_COOKIE));
     return c.json({ id: token.id, token: token.rawToken, name: parsed.data.name, scopes: parsed.data.scopes }, 201);

@@ -173,7 +173,7 @@ export class PostMergeWatcher {
 
   /** Read the run's `merge.completed` event (the authoritative merge signal), system-scoped. */
   private async loadMergeRecord(runId: string): Promise<MergeRecord | undefined> {
-    return runWithSystemScope(this.deps.pool, async (client) => {
+    return runWithSystemScope(this.deps.pool, async (client): Promise<MergeRecord | undefined> => {
       const result = await client.query<{ payload: unknown }>(
         `SELECT payload FROM events
            WHERE run_id = $1 AND event_type = 'merge.completed'
@@ -182,9 +182,9 @@ export class PostMergeWatcher {
         [runId],
       );
       const payload = result.rows[0]?.payload;
-      if (payload === null || typeof payload !== "object") return;
+      if (payload === null || typeof payload !== "object") return undefined;
       const record = payload as { prNumber?: unknown; mergeSha?: unknown };
-      if (typeof record.prNumber !== "number") return;
+      if (typeof record.prNumber !== "number") return undefined;
       return {
         prNumber: record.prNumber,
         ...(typeof record.mergeSha === "string" && { mergeSha: record.mergeSha }),

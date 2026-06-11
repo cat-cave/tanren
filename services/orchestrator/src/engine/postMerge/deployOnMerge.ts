@@ -454,14 +454,14 @@ export class DeployOnMergeWatcher {
    * RESUME path (re-verify the same live deployment rather than re-trigger a build).
    */
   private async priorTriggeredDeploymentId(runId: string): Promise<string | undefined> {
-    return runWithSystemScope(this.deps.pool, async (client) => {
+    return runWithSystemScope(this.deps.pool, async (client): Promise<string | undefined> => {
       const result = await client.query<{ payload: unknown }>(
         `SELECT payload FROM events WHERE run_id = $1 AND event_type = 'deploy.triggered'
            ORDER BY ts DESC, id DESC LIMIT 1`,
         [runId],
       );
       const payload = result.rows[0]?.payload;
-      if (typeof payload !== "object" || payload === null) return;
+      if (typeof payload !== "object" || payload === null) return undefined;
       const deploymentId = (payload as Record<string, unknown>)["deploymentId"];
       return typeof deploymentId === "string" && deploymentId.trim() !== "" ? deploymentId : undefined;
     });

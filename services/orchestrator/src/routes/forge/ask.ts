@@ -158,6 +158,10 @@ export function buildReadToolDispatcher(options: ForgeAskRoutesOptions): ForgeRe
         return repoGrep({ pool, secrets, githubHttp }, call.args, actor);
       case "repo.read_issue":
         return repoReadIssue({ pool, secrets, githubHttp }, call.args, actor);
+      default: {
+        const exhaustive: never = call;
+        throw new Error(`forge read tool dispatch: unhandled tool ${String(exhaustive)}`);
+      }
     }
   };
 }

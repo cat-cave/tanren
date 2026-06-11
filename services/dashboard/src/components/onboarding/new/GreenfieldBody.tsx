@@ -113,6 +113,6 @@ export function GreenfieldBody(props: GreenfieldBodyProps) {
 // downstream dependents pending it — approximated here as queued nodes not on
 // the critical path (mirrors the hi-fi "1 ready" arrival count).
 function readyLeafCount(dag: ProjectDag): number {
-  const ready = dag.nodes.filter((n) => n.status === "queued" && n.onCriticalPath === false).length;
+  const ready = dag.nodes.filter((n) => n.status === "queued" && !n.onCriticalPath).length;
   return Math.max(1, ready);
 }

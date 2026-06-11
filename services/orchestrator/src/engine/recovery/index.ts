@@ -227,7 +227,7 @@ export async function rollbackToCommit(
   actor: ActorContext,
 ): Promise<RollbackResult> {
   assertRecoverable(ctx);
-  if (args.confirmed !== true) {
+  if (!args.confirmed) {
     throw new RollbackNotConfirmedError();
   }
   if (ctx.lastGoodCommit === null) {

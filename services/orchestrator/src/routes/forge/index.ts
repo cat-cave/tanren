@@ -109,12 +109,16 @@ export function createForgeRoutes(options: ForgeRoutesOptions) {
     }
     try {
       // RLS R2 cohort-4 (forge): thread + turns reads in one org-scoped txn.
-      const bundle = await runWithOrgScope(options.pool, orgId, async (client) => {
-        const thread = await ForgeThreadStore.get(client, c.req.param("threadId"), actor);
-        if (thread === undefined) return;
-        const turns = await ForgeTurnStore.list(client, { threadId: thread.id, limit: 50 }, actor);
-        return { thread, turns };
-      });
+      const bundle = await runWithOrgScope(
+        options.pool,
+        orgId,
+        async (client): Promise<Record<string, unknown> | undefined> => {
+          const thread = await ForgeThreadStore.get(client, c.req.param("threadId"), actor);
+          if (thread === undefined) return undefined;
+          const turns = await ForgeTurnStore.list(client, { threadId: thread.id, limit: 50 }, actor);
+          return { thread, turns };
+        },
+      );
       if (bundle === undefined) {
         return c.json({ error: "forge_thread_not_found" }, 404);
       }
@@ -304,6 +308,10 @@ async function dispatchTool(input: DispatchInput): Promise<unknown> {
       return tanrenRerunTask({ pool }, call.args, actor);
     case "tanren.acknowledge_insight":
       return tanrenAcknowledgeInsight({ pool }, call.args, actor);
+    default: {
+      const exhaustive: never = call;
+      throw new Error(`dispatchTool: unhandled tool ${String(exhaustive)}`);
+    }
   }
 }
 

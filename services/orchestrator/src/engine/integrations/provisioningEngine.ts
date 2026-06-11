@@ -91,7 +91,7 @@ export function capabilitiesForProviderKind(providerKind: string): string[] {
   }
   throw new Error(
     `unknown provider kind '${providerKind}' — expected one of: ` +
-      `${[...DEPLOY_PROVIDER_KINDS, ...Object.values(CAPABILITY_DEFAULT_PROVIDER)].join(", ")}`,
+      [...DEPLOY_PROVIDER_KINDS, ...Object.values(CAPABILITY_DEFAULT_PROVIDER)].join(", "),
   );
 }
 

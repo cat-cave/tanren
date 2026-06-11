@@ -11,13 +11,7 @@
  * render its "configured but not yet wired" hint.
  */
 
-import type {
-  ChannelKind,
-  NotificationMatrix,
-  NotificationRoute,
-  NotificationTarget,
-  Severity,
-} from "../../api/types.js";
+import type { ChannelKind, NotificationMatrix, NotificationRoute, NotificationTarget } from "../../api/types.js";
 import { PhaseBadge, SevBadge, Toggle } from "./primitives.js";
 
 /** Channel catalog: glyph + phase badge + whether dispatch is wired in v0. */
@@ -183,7 +177,7 @@ function MatrixGrid(props: { matrix: NotificationMatrix }) {
               </div>
             )}
             <span class="matrix-cell">
-              <SevBadge severity={event.defaultSeverity as Severity} />
+              <SevBadge severity={event.defaultSeverity} />
             </span>
           </div>
         ))}

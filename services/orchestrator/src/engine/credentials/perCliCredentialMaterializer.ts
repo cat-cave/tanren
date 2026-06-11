@@ -44,6 +44,10 @@ export class PerCliCredentialMaterializer implements CredentialMaterializer {
         }
         return { cli: "opencode", env, ref: auth.ref, managed: auth.managed, redacted: true };
       }
+      default: {
+        const exhaustive: never = input.cli;
+        throw new Error(`materialize: unhandled cli ${String(exhaustive)}`);
+      }
     }
   }
 }

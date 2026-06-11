@@ -25,6 +25,10 @@ export function costSourceVar(mode: RunCostRecord["billingMode"]): string {
     // distinctly so the operator notices it, reusing the failure token.
     case "unattributed":
       return "var(--cost-unattributed, var(--status-fail))";
+    default: {
+      const exhaustive: never = mode;
+      throw new Error(`costSourceVar: unhandled billing mode ${String(exhaustive)}`);
+    }
   }
 }
 
@@ -39,6 +43,10 @@ export function costSourceLabel(mode: RunCostRecord["billingMode"]): string {
       return "self-hosted";
     case "unattributed":
       return "unattributed";
+    default: {
+      const exhaustive: never = mode;
+      throw new Error(`costSourceLabel: unhandled billing mode ${String(exhaustive)}`);
+    }
   }
 }
 

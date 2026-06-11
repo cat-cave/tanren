@@ -166,7 +166,7 @@ export function repoSlugFromPrUrl(prUrl: string): string | undefined {
 
 /** The merged commit SHA from a `merge.completed` payload (optional field). */
 export function mergeShaFromPayload(payload: unknown): string | undefined {
-  if (typeof payload !== "object" || payload === null) return;
+  if (typeof payload !== "object" || payload === null) return undefined;
   const sha = (payload as Record<string, unknown>)["mergeSha"];
   return typeof sha === "string" && sha.trim() !== "" ? sha : undefined;
 }

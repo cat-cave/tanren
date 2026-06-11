@@ -109,6 +109,10 @@ function carriedStatus(replacement: NativeReplacementKind): DispositionStatus {
       return "requires_policy_decision";
     case "unsupported_automation":
       return "blocked_by_missing_tanren_primitive";
+    default: {
+      const exhaustive: never = replacement;
+      throw new Error(`carriedStatus: unhandled replacement ${String(exhaustive)}`);
+    }
   }
 }
 
@@ -128,6 +132,10 @@ function reasonFor(status: DispositionStatus, intent: WorkflowIntent): string {
       return `${intent.category} runs in an external system; wire the ${intent.replacement} integration`;
     case "requires_policy_decision":
       return `${intent.category} is a ${intent.severity} control; a human must decide how to migrate it`;
+    default: {
+      const exhaustive: never = status;
+      throw new Error(`reasonFor: unhandled status ${String(exhaustive)}`);
+    }
   }
 }
 

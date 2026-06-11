@@ -263,10 +263,10 @@ function Reasoning(props: RunDetailBodyProps & { selectedTaskId: string | null }
 
         {insightForTask !== undefined && typeof insightForTask["kind"] === "string" ? (
           <div class="subopt">
-            <span class="tag">workflow insight · {String(insightForTask["kind"])}</span>
+            <span class="tag">workflow insight · {insightForTask["kind"]}</span>
             <span class="t">
               {typeof insightForTask["specTitle"] === "string"
-                ? String(insightForTask["specTitle"])
+                ? insightForTask["specTitle"]
                 : "a suboptimal pattern was detected on this run"}
             </span>
           </div>

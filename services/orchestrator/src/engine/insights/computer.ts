@@ -48,6 +48,10 @@ export async function computeInsight(
       return computeStuck(pool, context);
     case "review_stall":
       return computeReviewStall(pool, context);
+    default: {
+      const exhaustive: never = kind;
+      throw new Error(`computeInsight: unhandled insight kind ${String(exhaustive)}`);
+    }
   }
 }
 

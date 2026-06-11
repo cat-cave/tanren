@@ -183,6 +183,10 @@ export function validateClaimAgainstEntity(probe: EntityProbeOutcome): ClaimSelf
         unexpectedUnavailable: probe.unavailableReason === "producer-errored",
         rationale: unavailableRationale(probe),
       };
+    default: {
+      const exhaustive: never = probe.status;
+      throw new Error(`validateClaimAgainstEntity: unhandled probe status ${String(exhaustive)}`);
+    }
   }
 }
 
