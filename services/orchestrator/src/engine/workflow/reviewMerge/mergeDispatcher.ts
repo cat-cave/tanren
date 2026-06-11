@@ -9,7 +9,6 @@
 import { routeTaskUpdate } from "../taskWriteRouting.js";
 import { serviceAuditActor, type AuditEnvelope } from "../../events/schemas/audit.js";
 import type { EventStore } from "../../eventStore.js";
-import type { MergePullRequestResult } from "../../providers/githubReviewMerge.js";
 import type { PullRequestMergeability, RepoRef } from "../../contracts/vcsProvider.js";
 import type { ReviewMergeRunContext } from "./context.js";
 import type { PostureDecision } from "./governancePosture.js";
@@ -20,14 +19,7 @@ import {
   type MergeOutcomeKind,
   type MergeProbe,
 } from "./mergeDispatchTypes.js";
-import { mergeAuthorityLive } from "../../merge/mergeAuthorityFlag.js";
-import {
-  landViaAuthority,
-  landViaHostMerge,
-  rebaseBehindBranch,
-  reGateResolvedTree,
-  type LandOps,
-} from "./mergeLandPaths.js";
+import { landViaAuthority, rebaseBehindBranch, reGateResolvedTree, type LandOps } from "./mergeLandPaths.js";
 import { createLogger } from "../../observability/logger.js";
 const log = createLogger("merge");
 
@@ -186,29 +178,22 @@ export class MergeDispatcher implements LandOps {
 
   /**
    * The §5 LAND DECISION — the SINGLE point every land flows through (initial pass AND
-   * post-conflict-resolution retry). The host-merge break-glass (`landViaHostMerge`) is
-   * reachable ONLY via two EXPLICIT opt-ins, NEVER a silent fall-through:
-   * `MERGE_AUTHORITY_LIVE=0` (the kill-switch), OR an injected `mergeProbe` (a TEST seam
-   * production NEVER sets). In PRODUCTION (flag default-ON, no probe) the land is ALWAYS
-   * authorized via `MergeAuthority`, and a MISSING bundle is a FAIL-CLOSED BLOCK (loud)
-   * — never a fall-through to the non-authority host merge (the Round-3 fail-open).
+   * post-conflict-resolution retry). The land is ALWAYS authorized via `MergeAuthority`
+   * (the sole, unconditional merge authority): there is NO host-merge path. A MISSING
+   * bundle is a FAIL-CLOSED BLOCK (loud, recoverable) — the land is never silently
+   * fulfilled by anything other than the guaranteed truth table.
    */
   private async driveLand(): Promise<MergeForRunResult> {
     const { input } = this.deps;
-    // EXPLICIT legacy opt-ins only: the kill-switch flag, or a test-injected probe
-    // (production never injects one). Otherwise the authority is mandatory.
-    if (!mergeAuthorityLive() || input.mergeProbe !== undefined) {
-      return landViaHostMerge(this.deps, this);
-    }
-    // The bundle is pre-supplied (a test/out-of-band caller) OR built lazily HERE —
-    // only now that the branch is settled, so a conflict-out path never paid for it.
+    // The bundle is pre-supplied (a test/out-of-band caller) OR built HERE — only now
+    // that the branch is settled, so a conflict-out path never paid for it.
     const bundle = input.mergeAuthority ?? (await input.buildMergeAuthority?.());
     if (bundle === undefined) {
-      // FAIL-CLOSED: the authority is live but no bundle is available — the land CANNOT
-      // be authorized. Hold loudly (recoverable); NEVER fall to the legacy host-merge
-      // (that would be a fail-open bypass of the guaranteed truth table).
+      // FAIL-CLOSED: no authority bundle is available — the land CANNOT be authorized.
+      // Hold loudly (recoverable); there is NO fall-through that lands without the
+      // guaranteed truth table.
       return this.emitConflict(
-        "merge authority live but no authority bundle available — land blocked (no silent host-merge fallback)",
+        "no merge-authority bundle available — land blocked (the authority is the sole, unconditional land path)",
       );
     }
     return landViaAuthority(this.deps, this, bundle);
@@ -350,8 +335,8 @@ export class MergeDispatcher implements LandOps {
    * a behind/dirty branch surfaced a real conflict. Route it through the conflict
    * resolver; on resolution, run a FRESH `pre_merge` gate on the resolved tree then
    * re-enter the §5 land decision (`driveLand` → `MergeAuthority`), so the land judges
-   * the RESOLVED tree on FRESH gate/mergeability/review/budget/demo state, fail-closed —
-   * never a raw `probe.merge()`. An unresolved conflict emits the recoverable outcome.
+   * the RESOLVED tree on FRESH gate/mergeability/review/budget/demo state, fail-closed.
+   * An unresolved conflict emits the recoverable outcome.
    */
   private async handleBranchConflict(
     mergeability: PullRequestMergeability,
@@ -363,16 +348,12 @@ export class MergeDispatcher implements LandOps {
       // `pre_audit`, but the land reads `pre_merge` (else the stale pre-conflict
       // pre_merge PASS of the OLD tree wins). So run a FRESH `pre_merge` gate on the
       // resolved tree, fail-closed (a failed/pending/absent re-gate HOLDS the land).
-      // Skipped on the EXPLICIT legacy opt-ins (flag off, or a test-injected probe),
-      // where `driveLand` → the host-merge path runs its own retry.
-      if (mergeAuthorityLive() && this.deps.input.mergeProbe === undefined) {
-        const gated = await reGateResolvedTree(this.deps, this);
-        if (gated.kind !== "proceed") {
-          return gated.result;
-        }
+      const gated = await reGateResolvedTree(this.deps, this);
+      if (gated.kind !== "proceed") {
+        return gated.result;
       }
-      // Re-enter the authority-gated, transactional land — never `probe.merge()` + a
-      // hand-rolled `merge.completed` (the §5 finalizer records it transactionally).
+      // Re-enter the authority-gated, transactional land — the §5 finalizer records the
+      // `merge.completed` + spec flip transactionally.
       return this.driveLand();
     }
     return this.emitConflict(message, mergeability.headBranch || undefined);
@@ -395,22 +376,6 @@ export class MergeDispatcher implements LandOps {
       baseBranch: context.baseBranch,
       message,
     });
-  }
-
-  /**
-   * The LEGACY conflict retry: a merge-time conflict on the host-merge path. NOT a
-   * live-default land path — `tryResolveConflict` is called ONLY by `landViaHostMerge`,
-   * which `driveLand` reaches ONLY via the EXPLICIT legacy opt-ins
-   * (`MERGE_AUTHORITY_LIVE=0`, or a test-injected `mergeProbe` production never sets).
-   * In production (flag default-ON, no probe) the land flows through `landViaAuthority`
-   * and this `probe.merge()` is UNREACHABLE — it is the break-glass retry, not a second
-   * merge authority. (The default-path conflict-resolved land is authority-gated +
-   * transactional via `handleBranchConflict` → resolved-tree re-gate → `driveLand`.)
-   */
-  async tryResolveConflict(merge: MergePullRequestResult): Promise<MergePullRequestResult | undefined> {
-    const { probe } = this.deps;
-    const outcome = await this.runConflictResolver(merge.message);
-    return outcome.resolved ? await probe.merge() : undefined;
   }
 
   /** Emit the recoverable conflict outcome (the resolver-scaffolding hook). */

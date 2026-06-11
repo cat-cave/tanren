@@ -91,10 +91,9 @@ describe("conflict-resolved land re-enters the MergeAuthority (no parallel merge
 
     // The authority BLOCKED the land (mergeability unknown only clears on `clean`).
     expect(result.outcome).not.toBe("merged");
-    // nothing landed; main was NEVER advanced, and the host PR-merge API was never called.
+    // nothing landed; main was NEVER advanced.
     expect(landed).toEqual([]);
     expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-main");
-    expect(probe.mergeCalls).toBe(0);
     // A hand-rolled `merge.completed` was NOT appended on the resolved path.
     expect(events.events).not.toContain("merge.completed");
   });
@@ -131,10 +130,9 @@ describe("conflict-resolved land re-enters the MergeAuthority (no parallel merge
 
     expect(result.outcome).toBe("merged");
     // The land went through the ff-only CAS (main advanced to the authorized head),
-    // and the §5 finalizer recorded the land — NOT probe.merge().
+    // and the §5 finalizer recorded the land.
     expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-feat");
     expect(landed).toEqual(["sha-feat"]);
-    expect(probe.mergeCalls).toBe(0);
   });
 
   it("a post-land durable-write failure on the conflict-resolved path → merge_state_unknown (never silent)", async () => {
@@ -199,16 +197,15 @@ describe("conflict-resolved land re-enters the MergeAuthority (no parallel merge
     expect(events.events).not.toContain("merge.completed");
   });
 
-  it("REGRESSION LOCK (a): flag ON + NO bundle → BLOCKED, NEVER probe.merge (no silent host-merge fallback)", async () => {
+  it("REGRESSION LOCK (a): NO bundle → fail-closed BLOCK, NEVER a land (no silent host-merge fallback)", async () => {
     const host = new InMemoryCodeHost();
     host.seed(REPO, "main", "sha-main");
     await host.pushRef({ repo: REPO, localRef: "feat", remoteBranch: "feat", sha: "sha-feat" });
-    // A CLEAN branch (no conflict) so directMerge goes straight to driveLand — with the
-    // authority live but NEITHER a pre-built bundle NOR a builder → fail-closed BLOCK,
-    // never a fall-through to landViaHostMerge (probe.merge).
+    // A CLEAN branch (no conflict) so directMerge goes straight to driveLand — with
+    // NEITHER a pre-built bundle NOR a builder → fail-closed BLOCK (the now-unconditional
+    // safety): the land is the SOLE authority path, never a fall-through that lands.
     const probe = scriptedProbe("clean");
-    // Override mergeability to always `clean` (no conflict) so directMerge → driveLand
-    // directly. The `merge` closure still mutates the original `probe.mergeCalls`.
+    // Override mergeability to always `clean` (no conflict) so directMerge → driveLand.
     const cleanProbe = { ...probe, readMergeability: async () => mergeability("clean") } as MergeProbe;
     const events = recordingEventStore();
     const input = {
@@ -231,8 +228,7 @@ describe("conflict-resolved land re-enters the MergeAuthority (no parallel merge
     const result = await new MergeDispatcher(deps).directMerge();
 
     expect(result.outcome).not.toBe("merged");
-    // NEVER the legacy host-merge: probe.merge was not called, main untouched.
-    expect(probe.mergeCalls).toBe(0);
+    // NEVER a host-merge fallthrough: main untouched, no completion recorded.
     expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-main");
     expect(events.events).not.toContain("merge.completed");
   });
@@ -252,7 +248,6 @@ describe("conflict-resolved land re-enters the MergeAuthority (no parallel merge
     expect(result.outcome).not.toBe("merged");
     expect(landed).toEqual([]);
     expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-main");
-    expect(probe.mergeCalls).toBe(0);
     expect(events.events).not.toContain("merge.completed");
   });
 
@@ -270,7 +265,6 @@ describe("conflict-resolved land re-enters the MergeAuthority (no parallel merge
     expect(result.outcome).toBe("merged");
     expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-feat");
     expect(landed).toEqual(["sha-feat"]);
-    expect(probe.mergeCalls).toBe(0);
   });
 
   it("TOCTOU LOCK: fresh pre_merge gate PASSED for sha A, head advanced to sha B before land → BLOCKED (gate is commit-bound)", async () => {
@@ -294,7 +288,6 @@ describe("conflict-resolved land re-enters the MergeAuthority (no parallel merge
     expect(landed).toEqual([]);
     // sha-B (un-gated) was NEVER landed; main untouched.
     expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-main");
-    expect(probe.mergeCalls).toBe(0);
     expect(events.events).not.toContain("merge.completed");
   });
 

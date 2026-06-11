@@ -1,12 +1,11 @@
-// The two LAND paths the merge stage's `directMerge` dispatches to (§5 cutover),
-// extracted from `MergeDispatcher` to keep each file under the 500-line cap:
-//   - `landViaAuthority` — the GUARANTEED land: run the fail-closed `MergeAuthority`
-//     truth table, land the authorized commit via `CodeHost.landAuthorizedRef` (the
-//     ff-only CAS), and map the disposition onto the merge stage's event vocabulary.
-//   - `landViaHostMerge` — the retained KILL-SWITCH (`MERGE_AUTHORITY_LIVE=0`) host
-//     merge break-glass: NOT the merge authority, kept only to revert the cutover.
+// The LAND path the merge stage's `directMerge` dispatches to (§5 cutover), extracted
+// from `MergeDispatcher` to keep each file under the 500-line cap:
+//   - `landViaAuthority` — the GUARANTEED + ONLY land: run the fail-closed
+//     `MergeAuthority` truth table, land the authorized commit via
+//     `CodeHost.landAuthorizedRef` (the ff-only CAS), and map the disposition onto the
+//     merge stage's event vocabulary.
 //
-// Both operate on the dispatcher's `DispatcherDeps` + a small {@link LandOps} surface
+// It operates on the dispatcher's `DispatcherDeps` + a small {@link LandOps} surface
 // (the shared event/finalize/result helpers the dispatcher owns), so the land logic
 // is one cohesive module without duplicating those helpers.
 
@@ -14,7 +13,6 @@ import { runAuthorityLand } from "../../merge/mergeAuthorityGate.js";
 import { evaluatePostureGate } from "../../forge/audits/postureGate.js";
 import type { AuditEnvelope } from "../../events/schemas/audit.js";
 import type { PullRequestMergeability } from "../../contracts/vcsProvider.js";
-import type { MergePullRequestResult } from "../../providers/githubReviewMerge.js";
 import type { MergeAuthorityBundle, MergeForRunResult, MergeOutcomeKind } from "./mergeDispatchTypes.js";
 import type { DispatcherDeps } from "./mergeDispatcher.js";
 
@@ -54,11 +52,10 @@ export async function rebaseBehindBranch(
 }
 
 /**
- * The shared dispatcher operations the land paths reuse (the event base, the PR
+ * The shared dispatcher operations the land path reuses (the event base, the PR
  * fields, the audit envelope, the integration label, the task finalize, the result
- * shape, the recoverable-conflict emit, the ephemeral-ref cleanup, and the host-merge
- * conflict retry). Implemented by `MergeDispatcher`; passed to the extracted paths so
- * they do not re-derive any of it.
+ * shape, the recoverable-conflict emit, and the ephemeral-ref cleanup). Implemented by
+ * `MergeDispatcher`; passed to the extracted path so it does not re-derive any of it.
  */
 export interface LandOps {
   base(): { runId: string; specId: string; projectId: string; taskId: string };
@@ -76,7 +73,6 @@ export interface LandOps {
   result(outcome: MergeOutcomeKind, extra?: { mergeSha?: string; message?: string }): MergeForRunResult;
   emitConflict(message: string, headBranch?: string): Promise<MergeForRunResult>;
   cleanupIntegrationBranch(): Promise<void>;
-  tryResolveConflict(merge: MergePullRequestResult): Promise<MergePullRequestResult | undefined>;
 }
 
 /**
@@ -334,42 +330,6 @@ async function emitAuthorityBlocked(deps: DispatcherDeps, ops: LandOps, reasons:
       reason: reasons.join("; "),
     },
   });
-}
-
-/**
- * KILL-SWITCH (`MERGE_AUTHORITY_LIVE=0`): the retained host-merge break-glass. NOT
- * the merge authority — none of the §5 guarantees — kept solely to revert the cutover.
- * A single conflict-resolver retry, as before the cutover.
- */
-export async function landViaHostMerge(deps: DispatcherDeps, ops: LandOps): Promise<MergeForRunResult> {
-  const { eventStore, probe } = deps;
-  let merge = await probe.merge();
-  if (!merge.merged && merge.conflict) {
-    const retried = await ops.tryResolveConflict(merge);
-    if (retried !== undefined) {
-      merge = retried;
-    }
-  }
-  if (merge.merged) {
-    await eventStore.append({
-      ...ops.base(),
-      eventType: "merge.completed",
-      payload: { ...ops.prFields(), integration: ops.mergeLabel(), mergeSha: merge.mergeSha, ...ops.auditEnvelope() },
-    });
-    await ops.cleanupIntegrationBranch();
-    await ops.finalize("merged", { taskOutcome: "ok", taskStatus: "done" });
-    return ops.result("merged", { mergeSha: merge.mergeSha });
-  }
-  if (merge.conflict) {
-    return ops.emitConflict(merge.message);
-  }
-  await eventStore.append({
-    ...ops.base(),
-    eventType: "merge.failed",
-    payload: { ...ops.prFields(), integration: ops.mergeLabel(), message: merge.message },
-  });
-  await ops.finalize("failed", { taskOutcome: "failed", taskStatus: "failed", failureKind: "merge_failed" });
-  return ops.result("failed", { message: merge.message });
 }
 
 /**

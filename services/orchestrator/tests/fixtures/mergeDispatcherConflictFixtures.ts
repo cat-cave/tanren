@@ -25,24 +25,18 @@ export function mergeability(state: PullRequestMergeability["state"]): PullReque
 }
 
 /** A probe whose mergeability is `dirty` first (to trigger the conflict), then scripted. */
-export function scriptedProbe(postResolution: PullRequestMergeability["state"]): MergeProbe & { mergeCalls: number } {
+export function scriptedProbe(postResolution: PullRequestMergeability["state"]): MergeProbe {
   let read = 0;
-  const probe = {
-    mergeCalls: 0,
+  return {
     // first read (ensureUpToDate) → dirty → conflict; subsequent (driveLand) → scripted.
     readMergeability: async (): Promise<PullRequestMergeability> => {
       read += 1;
       return mergeability(read === 1 ? "dirty" : postResolution);
     },
-    merge: async () => {
-      probe.mergeCalls += 1;
-      return { merged: true, mergeSha: "host-merge-sha", conflict: false, status: 200, message: "ok" };
-    },
     updateBranch: async () => ({ outcome: "up_to_date" as const, message: "" }),
     retargetBase: async () => {},
     deleteIntegrationBranch: async () => {},
   };
-  return probe;
 }
 
 /** A recording event store (captures appended event types). */

@@ -5,10 +5,12 @@
  */
 import type { GovernancePosture, MergeIntegration, ReviewPolicy } from "../src/engine/config/shared.js";
 import type { MergeProbe, ReviewProbe } from "../src/engine/workflow/reviewMerge/index.js";
+import type { MergeAuthorityBundle } from "../src/engine/workflow/reviewMerge/mergeDispatchTypes.js";
 import type { PullRequestMergeability, UpdateBranchResult } from "../src/engine/contracts/vcsProvider.js";
 import type { GitHubHttpClient, GitHubHttpRequest, GitHubHttpResponse } from "../src/engine/providers/github.js";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
 import { storeGithubToken } from "../src/engine/credentials/githubToken.js";
+import { InMemoryCodeHost } from "./conformance/fakes/inMemoryCodeHost.js";
 
 /**
  * MERGE-SAFETY (self-identity): a secret store seeded with a static GitHub token at
@@ -66,16 +68,17 @@ export function approvingReviewProbe(): ReviewProbe & { markedReady: boolean } {
   return probe;
 }
 
+/**
+ * The mergeability/branch-state probe the merge-stage integration tests inject. NO
+ * `merge()`: the land is the unconditional `MergeAuthority` (a test that expects a land
+ * supplies an `authorityBundle` + `authorityHost` and asserts the landed ref — see
+ * below). This probe only scripts the mergeability reads + the server-side branch ops
+ * (update / retarget / delete) the dispatcher still drives, and records their calls so
+ * the freshness / speculative-retarget behaviors stay fully asserted.
+ */
 export function recordingMergeProbe(
-  result: {
-    merged: boolean;
-    mergeSha?: string;
-    conflict: boolean;
-    status: number;
-    message: string;
-  },
   // by default the probe reports the branch CLEAN + up to date, so existing
-  // merge tests exercise the unchanged "merge once" path. The freshness tests
+  // merge tests exercise the unchanged "land once" path. The freshness tests
   // override these to drive the behind / dirty branches.
   freshness: {
     mergeability?: PullRequestMergeability;
@@ -92,17 +95,12 @@ export function recordingMergeProbe(
   const mergeabilityReads = freshness.mergeabilityReads ?? [defaultMergeability];
   const update: UpdateBranchResult = freshness.updateBranch ?? { outcome: "up_to_date", message: "up to date" };
   return {
-    mergeCalls: 0,
     mergeabilityCalls: 0,
     updateBranchCalls: 0,
     // record the retarget + cleanup so the speculative-land-on-main tests
     // can assert the PR base was re-pointed to default_branch + the integ ref cleaned.
     retargetedBases: [] as string[],
     deletedIntegrationBranches: [] as string[],
-    async merge() {
-      this.mergeCalls += 1;
-      return result;
-    },
     async readMergeability() {
       const mergeability = mergeabilityReads[Math.min(this.mergeabilityCalls, mergeabilityReads.length - 1)];
       this.mergeabilityCalls += 1;
@@ -119,11 +117,108 @@ export function recordingMergeProbe(
       this.deletedIntegrationBranches.push(branch);
     },
   } satisfies MergeProbe & {
-    mergeCalls: number;
     mergeabilityCalls: number;
     updateBranchCalls: number;
     retargetedBases: string[];
     deletedIntegrationBranches: string[];
+  };
+}
+
+/**
+ * The AUTHORITY-LAND oracle for the merge-stage integration tests (replacing the
+ * deleted host-merge `probe.merge()` oracle). The land is the unconditional
+ * `MergeAuthority` + `CodeHost` ff-only CAS: a test that expects a land seeds this host
+ * (repo `cat-cave/fix` — the `ReviewMergePool` PR — with `main` + the PR head branch),
+ * passes the matching `authorityBundle` as `mergeAuthority`, then asserts the land via
+ * `host.fetchRef({ remoteBranch: "main" })` advancing to the head sha (and `landed`).
+ */
+export const AUTHORITY_REPO = { owner: "cat-cave", name: "fix" };
+export const AUTHORITY_MAIN_SHA = "sha-main";
+export const AUTHORITY_HEAD_SHA = "sha-head";
+
+/**
+ * One-call land harness: a seeded `authorityHost` plus the `landed` recorder the bundle
+ * appends each authorized main sha to. A land-oracle test reads `host` (the advanced ref)
+ * + `landed` (the CAS land record) without re-deriving both each time.
+ */
+export function authorityLand(): { host: InMemoryCodeHost; landed: string[] } {
+  return { host: authorityHost(), landed: [] };
+}
+
+export function authorityHost(
+  opts: { headBranch?: string; mainSha?: string; headSha?: string } = {},
+): InMemoryCodeHost {
+  const host = new InMemoryCodeHost();
+  host.seed(AUTHORITY_REPO, "main", opts.mainSha ?? AUTHORITY_MAIN_SHA);
+  // The PR head branch the authority resolves the authorized commit from (the probe's
+  // mergeability `headBranch`, `tanren/run_1` by default).
+  void host.pushRef({
+    repo: AUTHORITY_REPO,
+    localRef: "feat",
+    remoteBranch: opts.headBranch ?? "tanren/run_1",
+    sha: opts.headSha ?? AUTHORITY_HEAD_SHA,
+  });
+  return host;
+}
+
+/**
+ * A minimal event sink the test event stores satisfy (`FakeEventStore` records
+ * `{ eventType, payload }`), so the authority bundle's fake finalizer can record the
+ * `merge.completed` durable event the REAL `buildLandFinalizer` writes transactionally.
+ */
+export interface LandEventSink {
+  append(input: { eventType: string; payload?: unknown }): Promise<void> | void;
+}
+
+/**
+ * Build the `MergeAuthorityBundle` the land authorizes against. Defaults clear every
+ * fail-closed input (approved review, passing gate, no findings, no budget ceiling, demo
+ * + HITL not required) and bind the gate verdict to the landed head, so a test that does
+ * NOT override anything lands cleanly. `landed` captures each authorized main sha.
+ *
+ * The fake `finalizerFor` mirrors production's `buildLandFinalizer`: on a land it records
+ * `merge.completed` (with the run's integration + landed sha) onto the supplied `events`
+ * sink, so the suites' `merge.completed` / `mergeSha` durable-record assertions hold on
+ * the authority land exactly as they did on the deleted host-merge path.
+ */
+export function authorityBundle(
+  host: InMemoryCodeHost,
+  landed: string[],
+  options: { events?: LandEventSink; overrides?: Partial<MergeAuthorityBundle> } = {},
+): MergeAuthorityBundle {
+  return {
+    codeHost: host,
+    orgId: "org_1",
+    finalizerFor: (context) => ({
+      finalizeLanded: async (input: { mainSha: string }) => {
+        landed.push(input.mainSha);
+        await options.events?.append({
+          eventType: "merge.completed",
+          payload: {
+            prUrl: context.prUrl,
+            prNumber: context.prNumber,
+            integration: context.integration,
+            mergeSha: input.mainSha,
+            // The §5 audit envelope the real finalizer stamps (policy version +
+            // initiating/approving actors) — so the AUDIT-EVIDENCE assertions hold.
+            ...context.auditEnvelope,
+          },
+        });
+        return { auditId: "audit_1" };
+      },
+    }),
+    gateConfigHash: "gc",
+    policyVersion: "pv",
+    gateOutcome: { passed: true, results: [] },
+    // The gate verdict was for the landed head (the host's PR-head-branch sha).
+    gatedHeadSha: AUTHORITY_HEAD_SHA,
+    findings: [],
+    auditPosture: { blockReviewAt: "P1", p2p3Handling: "route-to-dag" },
+    reviewVerdict: "approved",
+    budget: { ceilingUsd: undefined, spentUsd: 0 },
+    demo: "not_required",
+    hitlSignoff: "not_required",
+    ...options.overrides,
   };
 }
 

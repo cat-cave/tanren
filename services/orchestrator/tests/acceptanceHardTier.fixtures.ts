@@ -23,6 +23,8 @@ import { provisionedGreenfieldProjectConfigProof } from "../src/engine/workflow/
 import { createProject, createQueuedRunFromSpec, createSpec } from "../src/engine/workflow/projectSpec.js";
 import { runPlannerLoopWorkflow } from "../src/engine/workflow/plannerRun.js";
 import type { ConflictContext } from "../src/engine/workflow/reviewMerge/index.js";
+import type { MergeAuthorityBundle } from "../src/engine/workflow/reviewMerge/mergeDispatchTypes.js";
+import { InMemoryCodeHost } from "./conformance/fakes/inMemoryCodeHost.js";
 import {
   buildPlan,
   cleanAudit,
@@ -168,6 +170,8 @@ export const passingGate: Extract<GateOutcome, { passed: true }> = { passed: tru
 // loops fired (not just that the run ended green).
 export interface HardTierTrace {
   gateCalls: Array<{ when: string }>;
+  // The land-path mergeability evaluations on the conflict scenario: the `dirty` freshness
+  // read that surfaces the merge-time conflict, then the `clean` read the authority lands on.
   mergeAttempts: number;
   conflictResolved: number;
 }
@@ -224,40 +228,25 @@ export function hardTierWorkflowRunner(github: GitHubHttpClient, trace: HardTier
         }),
       },
       mergeProbe: {
-        merge: async () => {
+        // The branch is `dirty` on the freshness read (surfacing the merge-time conflict
+        // BEFORE the land), then `clean` once the resolver reconciles it — the authority
+        // then lands the resolved tree. This exercises the SAME merge-time conflict +
+        // resolver path the deleted host-merge 409-retry did, now on the authority land.
+        // `mergeAttempts` counts the land-path mergeability evaluations (conflict → success).
+        readMergeability: async () => {
           mergeCall += 1;
           trace.mergeAttempts = mergeCall;
-          // First merge attempt conflicts; after the resolver runs the retry
-          // (second call) succeeds.
           return mergeCall === 1
-            ? {
-                merged: false,
-                mergeSha: undefined,
-                conflict: true,
-                status: 409,
-                message: "merge conflict",
-              }
-            : {
-                merged: true,
-                mergeSha: "merge-sha",
-                conflict: false,
-                status: 200,
-                message: "merged",
-              };
+            ? { state: "dirty" as const, behind: false, baseBranch: "main", headBranch: "tanren/run_hard" }
+            : { state: "clean" as const, behind: false, baseBranch: "main", headBranch: "tanren/run_hard" };
         },
-        // the branch reports CLEAN, so the up-to-date enforcement is a no-op
-        // and this fixture still exercises the merge-TIME conflict + resolver
-        // retry path (the GitHub merge API returns the 409 on the first attempt).
-        readMergeability: async () => ({
-          state: "clean" as const,
-          behind: false,
-          baseBranch: "main",
-          headBranch: "tanren/run_hard",
-        }),
         updateBranch: async () => ({ outcome: "up_to_date" as const, message: "up to date" }),
         retargetBase: async () => {},
         deleteIntegrationBranch: async () => {},
       },
+      // The land is the unconditional `MergeAuthority` + CodeHost CAS; the resolved-tree
+      // re-gate runs through the same `runGate` (passes), then the authority lands.
+      mergeAuthority: hardTierAuthorityBundle(),
       resolveConflict: async (_context: ConflictContext) => {
         trace.conflictResolved += 1;
         return { resolved: true };
@@ -380,4 +369,37 @@ export class ScriptedGitHubHttp implements GitHubHttpClient {
     }
     return response;
   }
+}
+
+// The clean-clearing authority-land bundle for the hard-tier run (repo
+// `cat-cave/tanren-fixture-hard`, PR head `tanren/run_hard`). The land is the
+// unconditional `MergeAuthority` + CodeHost ff-only CAS (no host PR-merge); a test that
+// drives the land to completion injects this as `mergeAuthority`.
+const HARD_AUTHORITY_REPO = { owner: "cat-cave", name: "tanren-fixture-hard" };
+export const HARD_AUTHORITY_HEAD_SHA = "sha-head";
+
+export function hardTierAuthorityBundle(): MergeAuthorityBundle {
+  const host = new InMemoryCodeHost();
+  host.seed(HARD_AUTHORITY_REPO, "main", "sha-main");
+  void host.pushRef({
+    repo: HARD_AUTHORITY_REPO,
+    localRef: "feat",
+    remoteBranch: "tanren/run_hard",
+    sha: HARD_AUTHORITY_HEAD_SHA,
+  });
+  return {
+    codeHost: host,
+    orgId: "org_hard",
+    finalizerFor: () => ({ finalizeLanded: async () => ({ auditId: "audit_1" }) }),
+    gateConfigHash: "gc",
+    policyVersion: "pv",
+    gateOutcome: { passed: true, results: [] },
+    gatedHeadSha: HARD_AUTHORITY_HEAD_SHA,
+    findings: [],
+    auditPosture: { blockReviewAt: "P1", p2p3Handling: "route-to-dag" },
+    reviewVerdict: "approved",
+    budget: { ceilingUsd: undefined, spentUsd: 0 },
+    demo: "not_required",
+    hitlSignoff: "not_required",
+  };
 }

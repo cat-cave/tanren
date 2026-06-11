@@ -8,7 +8,6 @@ import type { RunStateWriter } from "../../contracts/runStateWriter.js";
 import type { SecretStore } from "../../contracts/secretStore.js";
 import type { EventStore } from "../../eventStore.js";
 import type { GithubAppTokenMinter } from "../../providers/githubAppTokenMinter.js";
-import type { MergePullRequestResult } from "../../providers/githubReviewMerge.js";
 import type { PullRequestMergeability, UpdateBranchResult, VcsProvider } from "../../contracts/vcsProvider.js";
 import type { RunStateClient } from "./context.js";
 import type { ContributorProbe } from "./governancePosture.js";
@@ -25,15 +24,15 @@ import type { LandFinalizeContext } from "../../merge/mergeAuthorityLandFinalize
 export type DispatchedIntegration = "native_queue" | "direct_merge" | "external_reviewer";
 
 /**
- * The LIVE `MergeAuthority` bundle (tanren-owns-the-engine.md §5) — the inputs the
- * `direct_merge` / `native_queue` DRIVE land path hands to the guaranteed core when
- * `MERGE_AUTHORITY_LIVE` is on (the default). The dispatcher resolves mergeability +
- * conflict state itself (it owns the probe); the rest of the fail-closed signals are
- * gathered upstream (the run loop / coordinator) and passed RAW here, so an absent
- * signal maps to its blocking enum — never a synthesized passing value.
+ * The `MergeAuthority` bundle (tanren-owns-the-engine.md §5) — the inputs the
+ * `direct_merge` / `native_queue` DRIVE land path hands to the guaranteed core (the
+ * sole, unconditional land authority). The dispatcher resolves mergeability + conflict
+ * state itself (it owns the probe); the rest of the fail-closed signals are gathered
+ * upstream (the run loop / coordinator) and passed RAW here, so an absent signal maps to
+ * its blocking enum — never a synthesized passing value.
  *
- * Required for the live land path; when omitted (e.g. the kill-switch is off, or a
- * legacy out-of-band caller), the dispatcher falls back to the retained host merge.
+ * REQUIRED for any land: an absent bundle is a fail-closed BLOCK (the dispatcher holds
+ * loudly), never a fall-through that lands without the guaranteed truth table.
  */
 export interface MergeAuthorityBundle {
   /** The minimal host the authorized commit lands through (the ff-only CAS push). */
@@ -114,12 +113,12 @@ export interface MergeForRunInput {
   githubAppMinter?: GithubAppTokenMinter;
   /** Run-resolved GitHub credential ref; see PollReviewForRunInput. */
   resolvedGithubCredentialRef?: string;
-  /** GitHub merge method for direct_merge; defaults to `squash`. */
-  mergeMethod?: "merge" | "squash" | "rebase";
   /**
    * Test seam. When provided, the stage uses this instead of GitHub for the
-   * label/merge operations. Production omits it → the real
-   * GitHubReviewMergeService drives both through the resolved token.
+   * mergeability/branch-state probe operations (readMergeability / updateBranch /
+   * retargetBase / deleteIntegrationBranch). Production omits it → the dispatcher builds
+   * the real probe through the resolved token. NOT a land path: the land is the
+   * unconditional `MergeAuthority`, regardless of this seam.
    */
   mergeProbe?: MergeProbe;
   /**
@@ -183,19 +182,19 @@ export interface MergeForRunInput {
    */
   queueDrive?: boolean;
   /**
-   * The pre-built LIVE `MergeAuthority` bundle (§5) — present when an out-of-band
-   * caller constructs it directly OR a test injects a fake, bypassing the lazy build.
+   * The pre-built `MergeAuthority` bundle (§5) — present when an out-of-band caller
+   * constructs it directly OR a test injects a fake, bypassing the lazy build.
    * Production normally leaves it absent: `mergeForRun` provides a LAZY
    * `buildMergeAuthority` thunk instead (so the bundle's DB reads + CodeHost build
    * happen ONLY when a land is actually authorized, never on a conflict-out path).
    */
   mergeAuthority?: MergeAuthorityBundle;
   /**
-   * LAZY builder for the `MergeAuthority` bundle (§5). `mergeForRun` provides this on
-   * the live land path (direct_merge / native_queue DRIVE) when the authority is on;
-   * the dispatcher invokes it ONLY inside `landViaAuthority`, AFTER `ensureUpToDate`
-   * proceeds — so a branch that conflicts/holds first never pays the bundle build.
-   * Absent ⇒ no live authority for this pass (the retained kill-switch host merge).
+   * LAZY builder for the `MergeAuthority` bundle (§5). `mergeForRun` provides this on the
+   * land-driving pass (direct_merge / native_queue DRIVE); the dispatcher invokes it ONLY
+   * inside `landViaAuthority`, AFTER `ensureUpToDate` proceeds — so a branch that
+   * conflicts/holds first never pays the bundle build. Absent + no pre-built
+   * `mergeAuthority` ⇒ the dispatcher FAIL-CLOSED-blocks the land (no host-merge fallback).
    */
   buildMergeAuthority?: () => Promise<MergeAuthorityBundle>;
 }
@@ -213,9 +212,13 @@ export type NativeQueueEnqueuer = (input: {
   prNumber: number;
 }) => Promise<{ created: boolean }>;
 
-/** Injectable merge-operation probe (real GitHub by default; mocked in tests). */
+/**
+ * Injectable mergeability/branch-state probe (real GitHub by default; mocked in tests).
+ * NOT a land path — the land is the unconditional `MergeAuthority` + `CodeHost` CAS; this
+ * probe only reads mergeability + drives the legacy server-side branch ops (update /
+ * retarget / delete) the dispatcher still needs.
+ */
 export interface MergeProbe {
-  merge(): Promise<MergePullRequestResult>;
   /** read the PR branch's up-to-date / mergeability state before merging. */
   readMergeability(): Promise<PullRequestMergeability>;
   /** bring the PR branch up to date with its base (server-side update). */

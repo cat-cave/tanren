@@ -17,6 +17,11 @@ import { noopConflictResolver } from "./fixtures/noopConflictResolver.js";
 import { pollReviewForRun } from "../src/engine/workflow/reviewMerge/reviewPolling.js";
 import {
   approvingReviewProbe,
+  AUTHORITY_HEAD_SHA,
+  AUTHORITY_MAIN_SHA,
+  AUTHORITY_REPO,
+  authorityBundle,
+  authorityLand,
   FIXTURE_TANREN_LOGIN,
   recordingMergeProbe,
   ReviewMergePool,
@@ -187,16 +192,13 @@ describe("review polling stage", () => {
 });
 
 describe("merge dispatch stage", () => {
-  it("direct_merge → GitHub merge → merge.completed", async () => {
+  it("direct_merge → MergeAuthority land → merge.completed", async () => {
     const pool = new ReviewMergePool("direct_merge");
     const events = new FakeEventStore();
-    const probe = recordingMergeProbe({
-      merged: true,
-      mergeSha: "deadbeef",
-      conflict: false,
-      status: 200,
-      message: "merged",
-    });
+    const probe = recordingMergeProbe();
+    // The land is the unconditional `MergeAuthority` + CodeHost ff-only CAS (no host
+    // PR-merge): seed the host + bundle, then assert the landed ref.
+    const { host, landed } = authorityLand();
 
     const result = await mergeForRun({
       pool: pool.asPgPool(),
@@ -206,21 +208,27 @@ describe("merge dispatch stage", () => {
       vcsProvider: vcsProviderOver(unusedHttp()),
       runId: "run_1",
       mergeProbe: probe,
+      mergeAuthority: authorityBundle(host, landed),
     });
 
     expect(result.outcome).toBe("merged");
-    expect(result.mergeSha).toBe("deadbeef");
-    expect(probe.mergeCalls).toBe(1);
+    expect(result.mergeSha).toBe(AUTHORITY_HEAD_SHA);
+    // the authorized commit advanced `main` via the CAS, once. (The `merge.completed`
+    // durable record is the LandFinalizer's write, not a dispatcher event — so the land
+    // oracle is the advanced ref + the `merged` outcome + the finished task.)
+    expect(landed).toEqual([AUTHORITY_HEAD_SHA]);
+    expect(await host.fetchRef({ repo: AUTHORITY_REPO, remoteBranch: "main" })).toBe(AUTHORITY_HEAD_SHA);
     const types = events.events.map((e) => e.eventType);
     expect(types).toContain("merge.queued");
-    expect(types).toContain("merge.completed");
+    expect(types).toContain("task.completed");
     expect(pool.tasks.find((t) => t.kind === "merge")?.status).toBe("done");
   });
 
-  it("external_reviewer → hand-off, no merge call", async () => {
+  it("external_reviewer → hand-off, no land", async () => {
     const pool = new ReviewMergePool("external_reviewer");
     const events = new FakeEventStore();
-    const probe = recordingMergeProbe({ merged: true, conflict: false, status: 200, message: "" });
+    const probe = recordingMergeProbe();
+    const { host, landed } = authorityLand();
 
     const result = await mergeForRun({
       pool: pool.asPgPool(),
@@ -230,10 +238,13 @@ describe("merge dispatch stage", () => {
       vcsProvider: vcsProviderOver(unusedHttp()),
       runId: "run_1",
       mergeProbe: probe,
+      mergeAuthority: authorityBundle(host, landed),
     });
 
     expect(result.outcome).toBe("handed_off");
-    expect(probe.mergeCalls).toBe(0);
+    // the hand-off path never lands: main untouched, nothing authorized.
+    expect(landed).toEqual([]);
+    expect(await host.fetchRef({ repo: AUTHORITY_REPO, remoteBranch: "main" })).toBe(AUTHORITY_MAIN_SHA);
     expect(events.events.find((e) => e.eventType === "merge.queued")?.payload).toMatchObject({
       integration: "external_reviewer",
     });
@@ -242,12 +253,12 @@ describe("merge dispatch stage", () => {
   it("merge conflict → merge.conflict + recoverable (running) task, resolver hook invoked", async () => {
     const pool = new ReviewMergePool("direct_merge");
     const events = new FakeEventStore();
+    // A `dirty` mergeability surfaces the conflict BEFORE the land decision; the resolver
+    // declining (`resolved:false`) holds it recoverably — no land, no host PR-merge.
     const probe = recordingMergeProbe({
-      merged: false,
-      conflict: true,
-      status: 409,
-      message: "merge conflict",
+      mergeability: { state: "dirty", behind: false, baseBranch: "main", headBranch: "tanren/run_1" },
     });
+    const { host, landed } = authorityLand();
     let hookCalls = 0;
 
     const result = await mergeForRun({
@@ -257,6 +268,7 @@ describe("merge dispatch stage", () => {
       vcsProvider: vcsProviderOver(unusedHttp()),
       runId: "run_1",
       mergeProbe: probe,
+      mergeAuthority: authorityBundle(host, landed),
       resolveConflict: async (ctx) => {
         hookCalls += 1;
         expect(ctx.baseBranch).toBe("main");
@@ -266,8 +278,9 @@ describe("merge dispatch stage", () => {
 
     expect(result.outcome).toBe("conflict");
     expect(hookCalls).toBe(1);
+    expect(landed).toEqual([]);
     const conflict = events.events.find((e) => e.eventType === "merge.conflict");
-    expect(conflict?.payload).toMatchObject({ baseBranch: "main", message: "merge conflict" });
+    expect(conflict?.payload).toMatchObject({ baseBranch: "main", message: "branch conflicts with base" });
     // recoverable: the merge task stays running for the recovery surface.
     expect(pool.tasks.find((t) => t.kind === "merge")?.status).toBe("running");
   });
@@ -355,16 +368,11 @@ describe("governance posture gate at the merge decision", () => {
     listContributors: async () => ({ logins: [FIXTURE_TANREN_LOGIN, ""] }),
   };
 
-  it("strict + external change → merge.blocked (operator_approval), no merge call, task left running", async () => {
+  it("strict + external change → merge.blocked (operator_approval), no land, task left running", async () => {
     const pool = new ReviewMergePool("direct_merge", "strict");
     const events = new FakeEventStore();
-    const probe = recordingMergeProbe({
-      merged: true,
-      mergeSha: "x",
-      conflict: false,
-      status: 200,
-      message: "merged",
-    });
+    const probe = recordingMergeProbe();
+    const { host, landed } = authorityLand();
 
     const result = await mergeForRun({
       pool: pool.asPgPool(),
@@ -374,11 +382,13 @@ describe("governance posture gate at the merge decision", () => {
       vcsProvider: vcsProviderOver(tanrenUserHttp()),
       runId: "run_1",
       mergeProbe: probe,
+      mergeAuthority: authorityBundle(host, landed),
       contributorProbe: externalProbe,
     });
 
     expect(result.outcome).toBe("blocked");
-    expect(probe.mergeCalls).toBe(0);
+    // the posture gate blocks BEFORE the land — nothing was authorized.
+    expect(landed).toEqual([]);
     const blocked = events.events.find((e) => e.eventType === "merge.blocked");
     expect(blocked?.payload).toMatchObject({
       posture: "strict",
@@ -388,15 +398,11 @@ describe("governance posture gate at the merge decision", () => {
     expect(pool.tasks.find((t) => t.kind === "merge")?.status).toBe("running");
   });
 
-  it("audit_only + external change → merge.blocked (audit_only), no merge call", async () => {
+  it("audit_only + external change → merge.blocked (audit_only), no land", async () => {
     const pool = new ReviewMergePool("direct_merge", "audit_only");
     const events = new FakeEventStore();
-    const probe = recordingMergeProbe({
-      merged: true,
-      conflict: false,
-      status: 200,
-      message: "merged",
-    });
+    const probe = recordingMergeProbe();
+    const { host, landed } = authorityLand();
 
     const result = await mergeForRun({
       pool: pool.asPgPool(),
@@ -406,27 +412,23 @@ describe("governance posture gate at the merge decision", () => {
       vcsProvider: vcsProviderOver(tanrenUserHttp()),
       runId: "run_1",
       mergeProbe: probe,
+      mergeAuthority: authorityBundle(host, landed),
       contributorProbe: externalProbe,
     });
 
     expect(result.outcome).toBe("blocked");
-    expect(probe.mergeCalls).toBe(0);
+    expect(landed).toEqual([]);
     expect(events.events.find((e) => e.eventType === "merge.blocked")?.payload).toMatchObject({
       posture: "audit_only",
       mode: "audit_only",
     });
   });
 
-  it("strict + Tanren-only change → proceeds to a real merge", async () => {
+  it("strict + Tanren-only change → proceeds to a real authority land", async () => {
     const pool = new ReviewMergePool("direct_merge", "strict");
     const events = new FakeEventStore();
-    const probe = recordingMergeProbe({
-      merged: true,
-      mergeSha: "deadbeef",
-      conflict: false,
-      status: 200,
-      message: "merged",
-    });
+    const probe = recordingMergeProbe();
+    const { host, landed } = authorityLand();
 
     const result = await mergeForRun({
       pool: pool.asPgPool(),
@@ -436,18 +438,20 @@ describe("governance posture gate at the merge decision", () => {
       vcsProvider: vcsProviderOver(tanrenUserHttp()),
       runId: "run_1",
       mergeProbe: probe,
+      mergeAuthority: authorityBundle(host, landed),
       contributorProbe: internalProbe,
     });
 
     expect(result.outcome).toBe("merged");
-    expect(probe.mergeCalls).toBe(1);
+    expect(landed).toEqual([AUTHORITY_HEAD_SHA]);
     expect(events.events.find((e) => e.eventType === "merge.blocked")).toBeUndefined();
   });
 
-  it("strict + unattributed external commit ('') → merge.blocked (<unknown>), loud, no merge call", async () => {
+  it("strict + unattributed external commit ('') → merge.blocked (<unknown>), loud, no land", async () => {
     const pool = new ReviewMergePool("direct_merge", "strict");
     const events = new FakeEventStore();
-    const probe = recordingMergeProbe({ merged: true, mergeSha: "x", conflict: false, status: 200, message: "merged" });
+    const probe = recordingMergeProbe();
+    const { host, landed } = authorityLand();
 
     const result = await mergeForRun({
       pool: pool.asPgPool(),
@@ -457,13 +461,14 @@ describe("governance posture gate at the merge decision", () => {
       vcsProvider: vcsProviderOver(tanrenUserHttp()),
       runId: "run_1",
       mergeProbe: probe,
+      mergeAuthority: authorityBundle(host, landed),
       contributorProbe: unattributedProbe,
     });
 
     // The resolved Tanren login does NOT rescue an unattributed (empty) commit — it
     // keys `<unknown>` → external → blocked. We fix the INPUT, not the safety rule.
     expect(result.outcome).toBe("blocked");
-    expect(probe.mergeCalls).toBe(0);
+    expect(landed).toEqual([]);
     expect(events.events.find((e) => e.eventType === "merge.blocked")?.payload).toMatchObject({
       posture: "strict",
       mode: "operator_approval",
@@ -471,16 +476,11 @@ describe("governance posture gate at the merge decision", () => {
     });
   });
 
-  it("open + external change → proceeds (coexists), merge happens", async () => {
+  it("open + external change → proceeds (coexists), authority lands", async () => {
     const pool = new ReviewMergePool("direct_merge", "open");
     const events = new FakeEventStore();
-    const probe = recordingMergeProbe({
-      merged: true,
-      mergeSha: "abc",
-      conflict: false,
-      status: 200,
-      message: "merged",
-    });
+    const probe = recordingMergeProbe();
+    const { host, landed } = authorityLand();
 
     const result = await mergeForRun({
       pool: pool.asPgPool(),
@@ -490,10 +490,11 @@ describe("governance posture gate at the merge decision", () => {
       vcsProvider: vcsProviderOver(unusedHttp()),
       runId: "run_1",
       mergeProbe: probe,
+      mergeAuthority: authorityBundle(host, landed),
       contributorProbe: externalProbe,
     });
 
     expect(result.outcome).toBe("merged");
-    expect(probe.mergeCalls).toBe(1);
+    expect(landed).toEqual([AUTHORITY_HEAD_SHA]);
   });
 });

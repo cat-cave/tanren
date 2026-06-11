@@ -25,6 +25,8 @@ import {
   makePlanner,
   makeWriter,
   noopMerge,
+  plannerAuthorityBundle,
+  plannerAuthorityHost,
   cleanAudit,
   completeCheck,
   passingGitHub,
@@ -58,6 +60,8 @@ describe("runPlannerLoopWorkflow", () => {
       buildUsageProbe: () => fakeProbe(healthyWindow(), accounting(0.5)),
       reviewProbe: approvingReview(),
       mergeProbe: noopMerge(),
+      // direct_merge lands via the unconditional MergeAuthority (seed the in-memory host).
+      mergeAuthority: plannerAuthorityBundle(plannerAuthorityHost()),
     });
 
     expect(result.outcome.kind).toBe("passed");
@@ -116,6 +120,8 @@ describe("runPlannerLoopWorkflow", () => {
       buildUsageProbe: () => fakeProbe(healthyWindow(), accounting(null)),
       reviewProbe: approvingReview(),
       mergeProbe: noopMerge(),
+      // direct_merge lands via the unconditional MergeAuthority (seed the in-memory host).
+      mergeAuthority: plannerAuthorityBundle(plannerAuthorityHost()),
     });
 
     expect(result.outcome.kind).toBe("passed");

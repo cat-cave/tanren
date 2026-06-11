@@ -19,6 +19,8 @@ import {
 } from "../src/engine/workflow/reviewMerge/index.js";
 import { noopConflictResolver } from "./fixtures/noopConflictResolver.js";
 import {
+  authorityBundle,
+  authorityHost,
   FIXTURE_TANREN_LOGIN,
   recordingMergeProbe,
   ReviewMergePool,
@@ -73,7 +75,9 @@ describe("mergeForRun governance — autonomous-tier known-bot auto-approve (GAP
     const pool = new ReviewMergePool("native_queue", "strict", "auto");
     pool.governancePlatformLogins = ["co-author-bot"];
     const events = new FakeEventStore();
-    const probe = recordingMergeProbe({ merged: true, mergeSha: "x", conflict: false, status: 200, message: "merged" });
+    const probe = recordingMergeProbe();
+    const host = authorityHost();
+    const landed: string[] = [];
 
     const result = await mergeForRun({
       pool: pool.asPgPool(),
@@ -83,6 +87,7 @@ describe("mergeForRun governance — autonomous-tier known-bot auto-approve (GAP
       vcsProvider: vcsProviderOver(tanrenUserHttp()),
       runId: "run_1",
       mergeProbe: probe,
+      mergeAuthority: authorityBundle(host, landed, { events }),
       contributorProbe: botProbe,
       enqueueNativeQueue: async () => ({ queueId: "mq_1", created: true }),
     });
@@ -91,8 +96,8 @@ describe("mergeForRun governance — autonomous-tier known-bot auto-approve (GAP
     expect(result.outcome).toBe("queued");
     expect(events.events.find((e) => e.eventType === "merge.blocked")).toBeUndefined();
     expect(events.events.some((e) => e.eventType === "merge.queued")).toBe(true);
-    // No direct merge attempted (the native_queue enqueue pass, not the drive pass).
-    expect(probe.mergeCalls).toBe(0);
+    // No land attempted (the native_queue enqueue pass, not the drive pass).
+    expect(landed).toEqual([]);
   });
 
   // The same known-bot committer on the HUMAN tier STILL blocks — the auto-approve is
@@ -101,7 +106,9 @@ describe("mergeForRun governance — autonomous-tier known-bot auto-approve (GAP
     const pool = new ReviewMergePool("native_queue", "strict", "human");
     pool.governancePlatformLogins = ["co-author-bot"];
     const events = new FakeEventStore();
-    const probe = recordingMergeProbe({ merged: true, mergeSha: "x", conflict: false, status: 200, message: "merged" });
+    const probe = recordingMergeProbe();
+    const host = authorityHost();
+    const landed: string[] = [];
 
     const result = await mergeForRun({
       pool: pool.asPgPool(),
@@ -111,6 +118,7 @@ describe("mergeForRun governance — autonomous-tier known-bot auto-approve (GAP
       vcsProvider: vcsProviderOver(tanrenUserHttp()),
       runId: "run_1",
       mergeProbe: probe,
+      mergeAuthority: authorityBundle(host, landed, { events }),
       contributorProbe: botProbe,
       enqueueNativeQueue: async () => ({ queueId: "mq_1", created: true }),
     });

@@ -13,7 +13,14 @@ import { mergeForRun } from "../src/engine/workflow/reviewMerge/index.js";
 import { resolveStackRetarget } from "../src/engine/workflow/reviewMerge/speculativeStackRetarget.js";
 import type { AncestorStack } from "../src/engine/dag/ancestorStack.js";
 import { noopConflictResolver } from "./fixtures/noopConflictResolver.js";
-import { recordingMergeProbe, ReviewMergePool, unusedHttp } from "./reviewMerge.fixtures.js";
+import {
+  AUTHORITY_HEAD_SHA,
+  authorityBundle,
+  authorityHost,
+  recordingMergeProbe,
+  ReviewMergePool,
+  unusedHttp,
+} from "./reviewMerge.fixtures.js";
 
 const member = (specId: string, branch: string): AncestorStack[number] => ({
   specId,
@@ -53,10 +60,11 @@ describe("stacked-PR retarget walk (merge stage)", () => {
     pool.mergedAncestors = ["spec_a"];
     pool.ancestorStack = [member("spec_a", "tanren/run_a"), member("spec_b", "tanren/run_b")];
     const events = new FakeEventStore();
-    const probe = recordingMergeProbe(
-      { merged: true, mergeSha: "x", conflict: false, status: 200, message: "merged" },
-      { mergeability: { state: "clean", behind: false, baseBranch: "tanren/run_a", headBranch: "tanren/run_1" } },
-    );
+    const probe = recordingMergeProbe({
+      mergeability: { state: "clean", behind: false, baseBranch: "tanren/run_a", headBranch: "tanren/run_1" },
+    });
+    const host = authorityHost();
+    const landed: string[] = [];
 
     const result = await mergeForRun({
       pool: pool.asPgPool(),
@@ -66,11 +74,12 @@ describe("stacked-PR retarget walk (merge stage)", () => {
       vcsProvider: vcsProviderOver(unusedHttp()),
       runId: "run_1",
       mergeProbe: probe,
+      mergeAuthority: authorityBundle(host, landed, { events }),
     });
 
-    // The merge is still HELD (spec_b unmerged) — never merged.
+    // The merge is still HELD (spec_b unmerged) — never landed.
     expect(result.outcome).toBe("blocked");
-    expect(probe.mergeCalls).toBe(0);
+    expect(landed).toEqual([]);
     // The base walked ONE step: live base tanren/run_a → next still-unmerged tanren/run_b.
     expect(probe.retargetedBases).toEqual(["tanren/run_b"]);
     // The merged head (spec_a) was dropped from runs.ancestor_stack.
@@ -92,17 +101,17 @@ describe("stacked-PR retarget walk (merge stage)", () => {
       member("spec_c", "tanren/run_c"),
     ];
     const events = new FakeEventStore();
-    const probe = recordingMergeProbe(
-      { merged: true, mergeSha: "merge-sha", conflict: false, status: 200, message: "merged" },
-      {
-        mergeabilityReads: [
-          // walk read: live base is the last-still-unmerged from a PRIOR pass (tanren/run_c).
-          { state: "clean", behind: false, baseBranch: "tanren/run_c", headBranch: "tanren/run_1" },
-          // directMerge's own up-to-date read after the retarget to main.
-          { state: "clean", behind: false, baseBranch: "main", headBranch: "tanren/run_1" },
-        ],
-      },
-    );
+    const probe = recordingMergeProbe({
+      mergeabilityReads: [
+        // walk read: live base is the last-still-unmerged from a PRIOR pass (tanren/run_c).
+        { state: "clean", behind: false, baseBranch: "tanren/run_c", headBranch: "tanren/run_1" },
+        // directMerge's own up-to-date read after the retarget to main, then the authority
+        // land's re-read (both clean — the sticky last entry).
+        { state: "clean", behind: false, baseBranch: "main", headBranch: "tanren/run_1" },
+      ],
+    });
+    const host = authorityHost();
+    const landed: string[] = [];
 
     const result = await mergeForRun({
       pool: pool.asPgPool(),
@@ -112,12 +121,13 @@ describe("stacked-PR retarget walk (merge stage)", () => {
       vcsProvider: vcsProviderOver(unusedHttp()),
       runId: "run_1",
       mergeProbe: probe,
+      mergeAuthority: authorityBundle(host, landed, { events }),
     });
 
     expect(result.outcome).toBe("merged");
-    // Stack emptied → retarget to default_branch (main) before the merge.
+    // Stack emptied → retarget to default_branch (main) before the land.
     expect(probe.retargetedBases).toEqual(["main"]);
-    expect(probe.mergeCalls).toBe(1);
+    expect(landed).toEqual([AUTHORITY_HEAD_SHA]);
     // The whole stack was dropped.
     expect(pool.ancestorStackWrites).toEqual([{ runId: "run_1", stack: [] }]);
     const retargeted = events.events.find((e) => e.eventType === "merge.retargeted");
@@ -134,10 +144,11 @@ describe("stacked-PR retarget walk (merge stage)", () => {
     pool.ancestorStack = [member("spec_a", "tanren/run_a"), member("spec_b", "tanren/run_b")];
     const events = new FakeEventStore();
     // Live base already equals the immediate ancestor (tanren/run_b) — no walk needed.
-    const probe = recordingMergeProbe(
-      { merged: true, mergeSha: "x", conflict: false, status: 200, message: "merged" },
-      { mergeability: { state: "clean", behind: false, baseBranch: "tanren/run_b", headBranch: "tanren/run_1" } },
-    );
+    const probe = recordingMergeProbe({
+      mergeability: { state: "clean", behind: false, baseBranch: "tanren/run_b", headBranch: "tanren/run_1" },
+    });
+    const host = authorityHost();
+    const landed: string[] = [];
 
     const result = await mergeForRun({
       pool: pool.asPgPool(),
@@ -147,6 +158,7 @@ describe("stacked-PR retarget walk (merge stage)", () => {
       vcsProvider: vcsProviderOver(unusedHttp()),
       runId: "run_1",
       mergeProbe: probe,
+      mergeAuthority: authorityBundle(host, landed, { events }),
     });
 
     // still held (nothing merged); base already correct; stack unchanged → no write.
