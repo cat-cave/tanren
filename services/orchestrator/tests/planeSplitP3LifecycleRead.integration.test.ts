@@ -128,7 +128,6 @@ describeDb("plane-split P3 — the DagWalker lifecycle read uses the system pool
           targetBranch: "main",
           prUrl: "https://example.com/r/pull/1",
           prNumber: 1,
-          reused: false,
         },
       });
       await events.append({

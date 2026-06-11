@@ -16,8 +16,7 @@ import { type EventStore, PgEventStore } from "../../eventStore.js";
 import type { AnswererAdapter } from "../../providers/types.js";
 import type { GithubAppTokenMinter } from "../../providers/githubAppTokenMinter.js";
 import type { PullRequestRef, RepoRef, VcsProvider } from "../../contracts/vcsProvider.js";
-import { harden } from "../../contracts/visibilityProjection.js";
-import { VcsProviderVisibilityProjection } from "../../providers/vcsProviderVisibilityProjection.js";
+import { projectHostSeamsOver, readChangeRequestShas } from "../../providers/projectHostSeamsOver.js";
 import {
   type ReviewVerdict,
   type ReviewVerdictResult,
@@ -360,22 +359,39 @@ async function buildGitHubProbe(
     minter: input.githubAppMinter,
   });
   const pr: PullRequestRef = { repo, number: pullNumber };
-  // The simulated-review COMMENT is a BEST-EFFORT audit mirror, not the decision
-  // source (the approve/request_changes verdict is derived internally from the
-  // Answerer). Route it through the `SafeVisibilityProjection` seam so a failed forge
-  // publish is captured as a `ProjectionOutcome` and can NEVER block the review
-  // verdict — the probe's `submitReview` resolves regardless (§0, §6).
-  const reviewProjection = harden(new VcsProviderVisibilityProjection(provider, async () => resolved));
+  const repoFullName = `${repo.owner}/${repo.name}`;
+  // Build the REAL host seams over the provider's existing client (decomposition PR-5).
+  // `codeHost` serves the sha-addressed diff read; `visibility` is the hardened
+  // `SafeVisibilityProjection` — every forge-UI write yields a `ProjectionOutcome` and
+  // can NEVER throw, so a failed mirror can never block the (internally-derived) review
+  // verdict (§0, §6).
+  const { codeHost, visibility } = projectHostSeamsOver(provider, async () => resolved);
   return {
-    markReady: () => provider.markReadyForReview(pr, resolved),
+    // §5d: un-drafting the PR is a best-effort, NON-gating forge-UI nicety — route it
+    // through the hardened projection (a host that never drafts simply yields `skipped`).
+    markReady: async () => {
+      await visibility.markChangeRequestReady({ repoFullName, changeRequestNumber: pullNumber });
+    },
+    // §5f (step-2, DEFERRED): the host review verdict is the EXTERNAL approval read. The
+    // doctrine downgrades it to an advisory best-effort projection read while Tanren's
+    // internal review record becomes the gate — but the live control flow above still
+    // READS this verdict, so flipping it is a behavior change that must NOT couple with
+    // this migration. It needs a new `readExternalApproval?` projection method (a PR-1-
+    // class contract change). Until then the external-approval read stays on the provider
+    // (no behavior change), as §5f's two-step guidance requires.
     fetchVerdict: () => provider.readReviewVerdict(pr, resolved),
-    fetchDiff: () => provider.readPullRequestDiff(pr, resolved),
+    // §1 #16: the reviewer's diff moves onto the host-neutral, sha-addressed
+    // `CodeHost.readDiff` (compares the PR's exact base/head shas — same render shape).
+    fetchDiff: async () => {
+      const { baseSha, headSha } = await readChangeRequestShas(provider, pr, resolved);
+      return codeHost.readDiff(repo, baseSha, headSha);
+    },
+    // The simulated-review COMMENT is a BEST-EFFORT audit mirror, not the decision source
+    // (the approve/request_changes verdict is derived internally from the Answerer). The
+    // hardened projection captures any publish failure as a `ProjectionOutcome` so the
+    // probe's `submitReview` resolves regardless (§0, §6).
     submitReview: async (_event, body) => {
-      await reviewProjection.publishReview({
-        repoFullName: `${repo.owner}/${repo.name}`,
-        changeRequestNumber: pullNumber,
-        body,
-      });
+      await visibility.publishReview({ repoFullName, changeRequestNumber: pullNumber, body });
     },
   };
 }

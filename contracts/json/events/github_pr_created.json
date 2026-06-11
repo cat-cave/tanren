@@ -16,9 +16,6 @@
     "repoUrl": {
       "type": "string"
     },
-    "reused": {
-      "type": "boolean"
-    },
     "targetBranch": {
       "type": "string"
     }
@@ -28,8 +25,7 @@
     "branch",
     "targetBranch",
     "prUrl",
-    "prNumber",
-    "reused"
+    "prNumber"
   ],
   "type": "object",
   "x-tanren-schema-id": "tanren.event.github.pr.created"

@@ -398,7 +398,6 @@ describe("redaction round-trip against Phase 1-shaped events", () => {
         targetBranch: "main",
         prUrl: "https://github.com/cat-cave/tanren-fixture-easy/pull/12",
         prNumber: 12,
-        reused: false,
       },
       actor: member,
     });
