@@ -1,0 +1,219 @@
+// WS-A PR-5 (walker-jj-local-integration-design.md §3.2/§3.3): the STACKED-PR RETARGET
+// WALK at the merge stage, behind `WALKER_JJ_LOCAL_BASE` (default-OFF). When a dependent
+// is stacked on an ordered ancestor stack, each ancestor merge walks the PR base ONE step
+// down the stack — to the next still-unmerged ancestor's PR-head branch, then to
+// `default_branch` once the stack empties — and drops the merged head from
+// `runs.ancestor_stack`. The merge HOLD is UNCHANGED: the MERGE still waits for ALL
+// ancestors. Flag-OFF is byte-identical to the legacy integ→default single-step retarget
+// (covered in `reviewMergeP2c.test.ts`).
+
+import { afterEach, describe, expect, it } from "vitest";
+import { vcsProviderOver } from "./helpers/vcsProvider.js";
+import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
+import { FakeEventStore } from "./helpers/fakeEventStore.js";
+import { mergeForRun } from "../src/engine/workflow/reviewMerge/index.js";
+import { resolveStackRetarget } from "../src/engine/workflow/reviewMerge/speculativeStackRetarget.js";
+import type { AncestorStack } from "../src/engine/dag/ancestorStack.js";
+import { noopConflictResolver } from "./fixtures/noopConflictResolver.js";
+import { recordingMergeProbe, ReviewMergePool, unusedHttp } from "./reviewMerge.fixtures.js";
+
+const member = (specId: string, branch: string): AncestorStack[number] => ({
+  specId,
+  runId: `run_${specId}`,
+  branch,
+  headSha: "a".repeat(40),
+});
+
+describe("WS-A PR-5 resolveStackRetarget (pure walk target)", () => {
+  it("drops merged heads and targets the IMMEDIATE still-unmerged ancestor branch", () => {
+    const stack: AncestorStack = [member("spec_a", "br_a"), member("spec_b", "br_b"), member("spec_c", "br_c")];
+    // spec_a merged → the immediate (last) remaining is spec_c.
+    const r = resolveStackRetarget(stack, new Set(["spec_a"]), "main");
+    expect(r.toBase).toBe("br_c");
+    expect(r.remainingStack.map((m) => m.specId)).toEqual(["spec_b", "spec_c"]);
+  });
+
+  it("walks to default_branch once the stack empties (all merged)", () => {
+    const stack: AncestorStack = [member("spec_a", "br_a"), member("spec_b", "br_b")];
+    const r = resolveStackRetarget(stack, new Set(["spec_a", "spec_b"]), "main");
+    expect(r.toBase).toBe("main");
+    expect(r.remainingStack).toEqual([]);
+  });
+
+  it("a blank-branch (legacy sha-map) immediate ancestor falls back to default_branch", () => {
+    const stack: AncestorStack = [{ specId: "spec_a", runId: "", branch: "", headSha: "a".repeat(40) }];
+    const r = resolveStackRetarget(stack, new Set(), "main");
+    expect(r.toBase).toBe("main");
+  });
+});
+
+describe("WS-A PR-5 stacked-PR retarget walk (merge stage, flag ON)", () => {
+  afterEach(() => {
+    delete process.env["WALKER_JJ_LOCAL_BASE"];
+  });
+
+  it("walks the base ONE step to the next ancestor while the merge stays HELD; drops the merged head", async () => {
+    process.env["WALKER_JJ_LOCAL_BASE"] = "1";
+    const pool = new ReviewMergePool("direct_merge");
+    pool.speculativeBase = "tanren/integ/spec_1";
+    pool.specDependsOn = ["spec_a", "spec_b"];
+    // immediate-below ancestor a merged; b still unmerged.
+    pool.mergedAncestors = ["spec_a"];
+    pool.ancestorStack = [member("spec_a", "tanren/run_a"), member("spec_b", "tanren/run_b")];
+    const events = new FakeEventStore();
+    const probe = recordingMergeProbe(
+      { merged: true, mergeSha: "x", conflict: false, status: 200, message: "merged" },
+      { mergeability: { state: "clean", behind: false, baseBranch: "tanren/run_a", headBranch: "tanren/run_1" } },
+    );
+
+    const result = await mergeForRun({
+      pool: pool.asPgPool(),
+      eventStore: events,
+      secrets: new FakeSecretStore(),
+      resolveConflict: noopConflictResolver,
+      vcsProvider: vcsProviderOver(unusedHttp()),
+      runId: "run_1",
+      mergeProbe: probe,
+    });
+
+    // The merge is still HELD (spec_b unmerged) — never merged.
+    expect(result.outcome).toBe("blocked");
+    expect(probe.mergeCalls).toBe(0);
+    // The base walked ONE step: live base tanren/run_a → next still-unmerged tanren/run_b.
+    expect(probe.retargetedBases).toEqual(["tanren/run_b"]);
+    // The merged head (spec_a) was dropped from runs.ancestor_stack.
+    expect(pool.ancestorStackWrites).toEqual([{ runId: "run_1", stack: [member("spec_b", "tanren/run_b")] }]);
+    const retargeted = events.events.find((e) => e.eventType === "merge.retargeted");
+    expect(retargeted?.payload).toMatchObject({ fromBase: "tanren/run_a", toBase: "tanren/run_b" });
+    // The hold event still fires (merge waits for ALL ancestors).
+    expect(events.events.some((e) => e.eventType === "merge.speculative_held")).toBe(true);
+  });
+
+  it("DIAMOND/3-ancestor: walks to default_branch + merges once the stack empties", async () => {
+    process.env["WALKER_JJ_LOCAL_BASE"] = "1";
+    const pool = new ReviewMergePool("direct_merge");
+    pool.speculativeBase = "tanren/integ/spec_1";
+    pool.specDependsOn = ["spec_a", "spec_b", "spec_c"];
+    // all landed → hold clears.
+    pool.mergedAncestors = ["spec_a", "spec_b", "spec_c"];
+    pool.ancestorStack = [
+      member("spec_a", "tanren/run_a"),
+      member("spec_b", "tanren/run_b"),
+      member("spec_c", "tanren/run_c"),
+    ];
+    const events = new FakeEventStore();
+    const probe = recordingMergeProbe(
+      { merged: true, mergeSha: "merge-sha", conflict: false, status: 200, message: "merged" },
+      {
+        mergeabilityReads: [
+          // walk read: live base is the last-still-unmerged from a PRIOR pass (tanren/run_c).
+          { state: "clean", behind: false, baseBranch: "tanren/run_c", headBranch: "tanren/run_1" },
+          // directMerge's own up-to-date read after the retarget to main.
+          { state: "clean", behind: false, baseBranch: "main", headBranch: "tanren/run_1" },
+        ],
+      },
+    );
+
+    const result = await mergeForRun({
+      pool: pool.asPgPool(),
+      eventStore: events,
+      secrets: new FakeSecretStore(),
+      resolveConflict: noopConflictResolver,
+      vcsProvider: vcsProviderOver(unusedHttp()),
+      runId: "run_1",
+      mergeProbe: probe,
+    });
+
+    expect(result.outcome).toBe("merged");
+    // Stack emptied → retarget to default_branch (main) before the merge.
+    expect(probe.retargetedBases).toEqual(["main"]);
+    expect(probe.mergeCalls).toBe(1);
+    // The whole stack was dropped.
+    expect(pool.ancestorStackWrites).toEqual([{ runId: "run_1", stack: [] }]);
+    const retargeted = events.events.find((e) => e.eventType === "merge.retargeted");
+    expect(retargeted?.payload).toMatchObject({ fromBase: "tanren/run_c", toBase: "main" });
+    expect(events.events.some((e) => e.eventType === "merge.completed")).toBe(true);
+    expect(events.events.some((e) => e.eventType === "merge.speculative_held")).toBe(false);
+  });
+
+  it("steady state (live base already the walk target, no drop): no retarget, no write", async () => {
+    process.env["WALKER_JJ_LOCAL_BASE"] = "1";
+    const pool = new ReviewMergePool("direct_merge");
+    pool.speculativeBase = "tanren/integ/spec_1";
+    pool.specDependsOn = ["spec_a", "spec_b"];
+    // nothing merged yet.
+    pool.mergedAncestors = [];
+    pool.ancestorStack = [member("spec_a", "tanren/run_a"), member("spec_b", "tanren/run_b")];
+    const events = new FakeEventStore();
+    // Live base already equals the immediate ancestor (tanren/run_b) — no walk needed.
+    const probe = recordingMergeProbe(
+      { merged: true, mergeSha: "x", conflict: false, status: 200, message: "merged" },
+      { mergeability: { state: "clean", behind: false, baseBranch: "tanren/run_b", headBranch: "tanren/run_1" } },
+    );
+
+    const result = await mergeForRun({
+      pool: pool.asPgPool(),
+      eventStore: events,
+      secrets: new FakeSecretStore(),
+      resolveConflict: noopConflictResolver,
+      vcsProvider: vcsProviderOver(unusedHttp()),
+      runId: "run_1",
+      mergeProbe: probe,
+    });
+
+    // still held (nothing merged); base already correct; stack unchanged → no write.
+    expect(result.outcome).toBe("blocked");
+    expect(probe.retargetedBases).toEqual([]);
+    expect(pool.ancestorStackWrites).toEqual([]);
+    expect(events.events.some((e) => e.eventType === "merge.retargeted")).toBe(false);
+  });
+});
+
+describe("WS-A PR-5 flag OFF: identical to the legacy integ→default retarget", () => {
+  afterEach(() => {
+    delete process.env["WALKER_JJ_LOCAL_BASE"];
+  });
+
+  it("retargets integ→default_branch (NOT a stack walk) even when a stack is present", async () => {
+    // flag OFF.
+    delete process.env["WALKER_JJ_LOCAL_BASE"];
+    const pool = new ReviewMergePool("direct_merge");
+    pool.speculativeBase = "tanren/integ/spec_1";
+    pool.specDependsOn = ["spec_a", "spec_b"];
+    // all merged → hold clears.
+    pool.mergedAncestors = ["spec_a", "spec_b"];
+    // A stack is present, but flag-off MUST ignore it (legacy single-step path).
+    pool.ancestorStack = [member("spec_a", "tanren/run_a"), member("spec_b", "tanren/run_b")];
+    const events = new FakeEventStore();
+    const probe = recordingMergeProbe(
+      { merged: true, mergeSha: "merge-sha", conflict: false, status: 200, message: "merged" },
+      {
+        mergeabilityReads: [
+          { state: "clean", behind: false, baseBranch: "tanren/integ/spec_1", headBranch: "tanren/run_1" },
+          { state: "clean", behind: false, baseBranch: "main", headBranch: "tanren/run_1" },
+        ],
+      },
+    );
+
+    const result = await mergeForRun({
+      pool: pool.asPgPool(),
+      eventStore: events,
+      secrets: new FakeSecretStore(),
+      resolveConflict: noopConflictResolver,
+      vcsProvider: vcsProviderOver(unusedHttp()),
+      runId: "run_1",
+      mergeProbe: probe,
+    });
+
+    expect(result.outcome).toBe("merged");
+    // Legacy single-step: integ → default_branch (main), NOT a stack walk.
+    expect(probe.retargetedBases).toEqual(["main"]);
+    expect(probe.mergeCalls).toBe(1);
+    // Flag-off NEVER writes ancestor_stack (the walk is the only writer).
+    expect(pool.ancestorStackWrites).toEqual([]);
+    expect(events.events.find((e) => e.eventType === "merge.retargeted")?.payload).toMatchObject({
+      fromBase: "tanren/integ/spec_1",
+      toBase: "main",
+    });
+  });
+});

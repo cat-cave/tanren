@@ -124,7 +124,7 @@ function fakeDrivePool(): DrivePoolHandle {
         : denied;
     }
     // resolveSpeculativeState: not speculative (null base, no deps).
-    if (/SELECT speculative_base, spec_id, project_id FROM runs/u.test(sql)) {
+    if (/SELECT speculative_base, ancestor_stack, integrated_ancestor_shas, spec_id, project_id FROM runs/u.test(sql)) {
       return admitted
         ? { rows: [{ speculative_base: null, spec_id: SPEC_ID, project_id: PROJECT_ID }], rowCount: 1 }
         : denied;
