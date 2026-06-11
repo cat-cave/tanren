@@ -28,7 +28,7 @@ import type { EventName, EventPayload } from "../events/index.js";
 import { type EventStore, PgEventStore } from "../eventStore.js";
 import type { ReviewAnswer } from "../answerers/schemas/index.js";
 import type { SpecQualityAnswerer } from "../forge/specQuality/index.js";
-import type { VcsProvider } from "../contracts/vcsProvider.js";
+import type { GitHubHttpClient } from "../providers/github.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
 import type { AnswererAdapter } from "../providers/types.js";
 import type { UsageProbe } from "../usage/index.js";
@@ -166,10 +166,10 @@ export interface RunPlannerLoopInput {
   secrets: SecretStore;
   // Dimension D — the per-run credential-scoping seam ({@link applyScopedRunCredentials}).
   credentialScoping?: RunCredentialScoping;
-  vcsProvider: VcsProvider;
-  // Part 2: the shared GitHub App installation-token minter (cache lives here),
-  // threaded into App-first clone-token resolution so a private clone reuses the run's
-  // minted/cached token. Omitted → the provider mints a per-call minter when installed.
+  /** The shared (timed) GitHub HTTP client the run/merge host seams build over. */
+  githubHttp: GitHubHttpClient;
+  // Part 2: the shared GitHub App installation-token minter (cache lives here), threaded into
+  // App-first clone-token resolution so a private clone reuses the run's minted/cached token.
   githubAppMinter?: GithubAppTokenMinter;
   context: PlannerRunContext;
   escapeHatches: Pick<EscapeHatches, "maxWriterIterPerSubtask" | "maxRetriesPerTransientFailure">;
@@ -390,7 +390,7 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
         ...writerSeam(input),
         orgId: context.orgId,
         secrets: input.secrets,
-        vcsProvider: input.vcsProvider,
+        githubHttp: input.githubHttp,
         ssh: input.ssh,
         target: allocation.target,
         sourceRef: pushSource.ref,
@@ -421,7 +421,7 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
         eventStore,
         ...writerSeam(input),
         secrets: input.secrets,
-        vcsProvider: input.vcsProvider,
+        githubHttp: input.githubHttp,
         runId: context.runId,
         // Same token ref as PR-creation + CI-poll (project record → org default).
         resolvedGithubCredentialRef: context.githubCredentialRef,
@@ -455,7 +455,7 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
       eventStore,
       ...writerSeam(input),
       secrets: input.secrets,
-      vcsProvider: input.vcsProvider,
+      githubHttp: input.githubHttp,
       runId: context.runId,
       // Same source as PR-creation + CI-poll (project record → org default).
       resolvedGithubCredentialRef: context.githubCredentialRef,

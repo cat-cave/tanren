@@ -26,7 +26,7 @@ export { buildRunCredentialScoping } from "../workflow/plannerRunScopedCreds.js"
 export { startRunWorkspaceReaper } from "./buildRunWorkspaceReaper.js";
 export type { RunWorkspaceReaper } from "./runWorkspaceReaper.js";
 import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
-import type { VcsProvider } from "../contracts/vcsProvider.js";
+import type { GitHubHttpClient } from "../providers/github.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
 import { createLogger } from "../observability/logger.js";
 import { JobReaper } from "./jobReaper.js";
@@ -48,10 +48,11 @@ export interface StartRunWorkerInput {
   // only). Threaded to the executor so the workflow de-privileges the run's
   // credential reads behind a per-run child token.
   credentialScoping?: RunCredentialScoping;
-  vcsProvider: VcsProvider;
+  /** The shared (timed) GitHub HTTP client every run/merge host seam is built over. */
+  githubHttp: GitHubHttpClient;
   // Part 2: shared App installation-token minter (cache lives here),
   // threaded to the workflow so the App-first clone reuses it. Optional — the
-  // provider mints a per-call minter when absent.
+  // standalone resolver mints a per-call minter when absent.
   githubAppMinter?: GithubAppTokenMinter;
   identitySecretRef: string;
   // Concurrency is a GOVERNED CONFIG KNOB, never an env var (autonomy-engine.md
@@ -107,7 +108,7 @@ export function startRunWorker(input: StartRunWorkerInput): StartedRunWorker {
       ssh: input.ssh,
       secrets: input.secrets,
       ...(input.credentialScoping === undefined ? {} : { credentialScoping: input.credentialScoping }),
-      vcsProvider: input.vcsProvider,
+      githubHttp: input.githubHttp,
       ...(input.githubAppMinter === undefined ? {} : { githubAppMinter: input.githubAppMinter }),
       identitySecretRef: input.identitySecretRef,
       ...(input.claimClient === undefined ? {} : { claimClient: input.claimClient }),

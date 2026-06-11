@@ -8,11 +8,11 @@
 // payloads carry only non-secret, operator/code-controlled fields.
 
 import type { GitHubHttpClient } from "./github.js";
-import type { PublishStatusInput } from "../contracts/vcsProvider.js";
+import type { PublishStatusInput } from "../contracts/codeHostTypes.js";
 
 // Re-export the publish payload type so the projection imports the publish FUNCTION
 // and its TYPE from this single module (one fewer cross-module dependency there).
-export type { PublishStatusInput } from "../contracts/vcsProvider.js";
+export type { PublishStatusInput } from "../contracts/codeHostTypes.js";
 
 function repoPath(owner: string, name: string, suffix: string): string {
   return `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}${suffix}`;

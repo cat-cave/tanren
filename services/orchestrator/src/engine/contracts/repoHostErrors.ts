@@ -1,9 +1,9 @@
 /**
- * Typed errors for the {@link import("./vcsProvider.js").VcsProvider} contract.
- * Extracted from `vcsProvider.ts` so that module stays the contract surface (and
- * under the per-file line cap) rather than carrying a cluster of error
- * subclasses (max-classes-per-file). Re-exported from `vcsProvider.ts` so callers
- * import them from the contract module unchanged.
+ * The repo-host self-identity type + the greenfield repo-create errors + the
+ * `/contents` base64 decoder. Re-exported from `codeHostTypes.ts` so callers import
+ * them from one contract module unchanged. (A sibling of the neutral run/merge shapes
+ * so that module stays under the per-file line cap and free of a max-classes-per-file
+ * cluster.)
  *
  * Every error carries provider-neutral REFS ONLY (owner/name) — never a token or
  * any secret value — so they are safe to surface in a route response or a log.
@@ -18,7 +18,7 @@ import { Buffer } from "node:buffer";
  * the canonical `<id>+<login>@users.noreply.github.com` — set as the runner's git
  * `user.email` so GitHub maps each commit back to `login` (PR-commits author
  * populated), keeping the external-change gate from keying Tanren's work `<unknown>`.
- * Re-exported from `vcsProvider.ts` so the contract surface stays under the line cap.
+ * Re-exported from `codeHostTypes.ts` so callers import it from one contract module.
  */
 export interface ActorIdentity {
   login: string;
@@ -30,7 +30,7 @@ export interface ActorIdentity {
  * Decode a forge `/contents` response body's base64 content to a UTF-8 string.
  * Shared by the GitHub impl (and any future provider whose contents read is
  * base64-encoded). Lives in this contract-sibling module (re-exported from
- * `vcsProvider.ts`) so the decode policy lives with the seam, under the line cap.
+ * `codeHostTypes.ts`) so the decode policy lives with the seam, under the line cap.
  */
 export function decodeBase64Content(content: string): string {
   return Buffer.from(content.replaceAll("\n", ""), "base64").toString("utf8");

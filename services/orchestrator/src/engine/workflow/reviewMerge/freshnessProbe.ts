@@ -18,7 +18,7 @@
 
 import type { CodeHost, CodeHostRepoRef } from "../../contracts/codeHost.js";
 import type { SafeVisibilityProjection } from "../../contracts/visibilityProjection.js";
-import type { PullRequestMergeability } from "../../contracts/vcsProvider.js";
+import type { PullRequestMergeability } from "../../contracts/codeHostTypes.js";
 import type { MergeProbe } from "./mergeDispatchTypes.js";
 
 /** What the freshness probe needs to derive the `clean`/`behind` signal over the host. */

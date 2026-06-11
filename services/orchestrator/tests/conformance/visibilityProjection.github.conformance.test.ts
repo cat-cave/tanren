@@ -14,7 +14,7 @@
 // PR-open (and any) call rejects — and the hardened surface must still never reject.
 
 import { describe, expect, it } from "vitest";
-import type { ResolvedVcsToken } from "../../src/engine/contracts/vcsProvider.js";
+import type { ResolvedVcsToken } from "../../src/engine/contracts/codeHostTypes.js";
 import { harden, type VisibilityProjection } from "../../src/engine/contracts/visibilityProjection.js";
 import type { GitHubHttpClient, GitHubHttpRequest, GitHubHttpResponse } from "../../src/engine/providers/github.js";
 import { GitHubVisibilityProjection } from "../../src/engine/providers/githubVisibilityProjection.js";

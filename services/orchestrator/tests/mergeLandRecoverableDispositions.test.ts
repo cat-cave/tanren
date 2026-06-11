@@ -67,7 +67,7 @@ function landDispatcher(args: {
   const input = {
     pool: fakePool,
     secrets: {},
-    vcsProvider: {},
+    githubHttp: {},
     runId: "run_1",
     resolveConflict: async () => ({ resolved: true }),
     reGateCi: reGate(args.reGateStatus ?? "passed"),

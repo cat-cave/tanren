@@ -11,7 +11,6 @@ import {
   type CommandSubstrate,
 } from "./engine/contracts/index.js";
 import { FetchGitHubHttpClient, type GitHubHttpClient } from "./engine/providers/github.js";
-import { buildVcsProvider } from "./engine/providers/buildVcsProvider.js";
 import { GithubAppTokenMinter } from "./engine/providers/githubAppTokenMinter.js";
 import { FetchConfigGateGitHub } from "./engine/config/configGateGithub.js";
 import { loadOrgDefaultGithubCredentialRef, loadOrgGithubAppInstallation } from "./engine/credentials/orgGithubApp.js";
@@ -112,12 +111,11 @@ export async function buildApp(input: {
   const secrets = input.secrets;
   // wrap the GitHub HTTP client so every API round trip emits a
   // boundary timing record (with method, path template, status, 429 flag).
+  // The run/merge lifecycle's VCS/CI operations route through the `CodeHost` +
+  // `VisibilityProjection` host seams (`hostFactory`) + the standalone credential
+  // resolver, all built over this one shared (timed) GitHub HTTP client. The
+  // forge-recon / config-gate / notifications GitHub code uses it directly too.
   const githubHttp = new TimedGitHubHttpClient(input.githubHttp ?? new FetchGitHubHttpClient());
-  // The run/merge lifecycle's VCS/CI operations route through the
-  // VcsProvider seam (the registry default is the real GitHub impl, composing
-  // `githubHttp`). The forge-recon / config-gate / notifications GitHub code
-  // keeps using `githubHttp` directly — only the run+merge path uses the seam.
-  const vcsProvider = buildVcsProvider(githubHttp);
   const identitySecretRef = input.runnerIdentitySecretRef ?? runnerIdentitySecretRef;
   const vaultHealthCheck = input.vaultHealthCheck ?? vaultHealth;
   // one shared minter so installation-token caching spans routes.
@@ -200,7 +198,6 @@ export async function buildApp(input: {
     pool: input.pool,
     secrets,
     githubHttp,
-    vcsProvider,
     githubAppMinter,
     credentialRegistry,
     configGateGithub,
@@ -237,7 +234,7 @@ export async function buildApp(input: {
   mountRootApiRoutes(app, {
     pool: input.pool,
     secrets,
-    vcsProvider,
+    githubHttp,
     githubAppMinter,
     identitySecretRef,
     ssh: input.ssh,

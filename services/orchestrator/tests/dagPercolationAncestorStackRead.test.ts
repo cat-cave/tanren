@@ -11,29 +11,18 @@ import type pg from "pg";
 import { describe, expect, it } from "vitest";
 import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
 import { PgPercolationReadModel } from "../src/engine/dag/percolationPg.js";
-import type {
-  RepoRef,
-  ResolvedVcsToken,
-  VcsCredentialContext,
-  VcsProvider,
-} from "../src/engine/contracts/vcsProvider.js";
+import type { GitHubHttpClient } from "../src/engine/providers/github.js";
 
 const ORG = "org_1";
 const PROJECT = "project_1";
 
-/** A fake VcsProvider — the read-side tests never act on the head shas (no divergence is
- *  asserted here), so every branch head reads a stable sha. */
-class FakeVcs implements Partial<VcsProvider> {
-  async resolveToken(_creds: VcsCredentialContext): Promise<ResolvedVcsToken> {
-    return { token: "t", source: "static", refresh: async () => "t" };
-  }
-  parseRepository(_repoUrl: string): RepoRef {
-    return { owner: "cat-cave", name: "apex" };
-  }
-  async readBranchHeadSha(): Promise<string | undefined> {
-    return "sha-head";
-  }
-}
+/** These read-side tests assert the dependents SELECT predicate only — they never reach the
+ *  per-ancestor head-sha read, so the GitHub transport is never invoked. */
+const inertGitHubHttp: GitHubHttpClient = {
+  async request() {
+    throw new Error("the dependents read predicate test must not reach the GitHub transport");
+  },
+};
 
 /**
  * A fake pool for `loadSpeculativeDependents` that returns ONE run row whose contents the
@@ -110,7 +99,7 @@ class StackRowFakeClient {
 function makeStackRowReadModel(pool: StackRowFakePool): PgPercolationReadModel {
   return new PgPercolationReadModel({
     pool: pool as unknown as pg.Pool,
-    vcsProvider: new FakeVcs() as unknown as VcsProvider,
+    githubHttp: inertGitHubHttp,
     secrets: new InMemorySecretStore(),
   });
 }

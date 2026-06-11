@@ -4,7 +4,6 @@
 // fake-adapter workflow body (./helpers/workerExec.ts).
 
 import { describe, expect, it } from "vitest";
-import { vcsProviderOver } from "./helpers/vcsProvider.js";
 import { FakeJobQueue } from "../src/engine/contracts/jobQueue.js";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
 import { executeNextPlanJob, type ExecuteJobResult, RunWorker } from "../src/engine/worker/index.js";
@@ -328,7 +327,7 @@ function workerWithDefaultOnResult(): RunWorker {
     allocator: new RecordingAllocator(),
     ssh: new RecordingSsh(),
     secrets: new FakeSecretStore(),
-    vcsProvider: vcsProviderOver(passingGitHub()),
+    githubHttp: passingGitHub(),
     identitySecretRef: "runner/test/identity",
   });
 }

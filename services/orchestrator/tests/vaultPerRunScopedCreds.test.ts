@@ -12,7 +12,6 @@
 //     one;
 //   - a non-Vault backend (no minter) leaves `secrets` unchanged.
 import { describe, expect, it } from "vitest";
-import { vcsProviderOver } from "./helpers/vcsProvider.js";
 import { VaultRunTokenMinter, buildScopedCredentialAccess } from "../src/engine/contracts/vaultTokenMinterImpl.js";
 import { VaultSecretStore } from "../src/engine/contracts/secretStore.js";
 import {
@@ -242,7 +241,7 @@ describe("runPlannerLoopWorkflow — per-run credential de-privilege wiring", ()
         fetchImpl: vault.fetch,
         ttlSeconds: resolveScopedRunTokenTtlSeconds({ TANREN_MAX_RUN_HOURS: "8" }),
       },
-      vcsProvider: vcsProviderOver(passingGitHub()),
+      githubHttp: passingGitHub(),
       context: ctx,
       escapeHatches: { maxWriterIterPerSubtask: 5, maxRetriesPerTransientFailure: 3 },
       timeoutMs: 100,

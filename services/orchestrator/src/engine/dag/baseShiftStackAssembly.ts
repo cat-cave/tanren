@@ -138,7 +138,7 @@ export async function assembleBaseShiftStackLive(input: {
     allocator: deps.allocator,
     ssh: deps.ssh,
     secrets: deps.secrets,
-    vcsProvider: deps.vcsProvider,
+    githubHttp: deps.githubHttp,
     ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
     timeoutMs,
   });

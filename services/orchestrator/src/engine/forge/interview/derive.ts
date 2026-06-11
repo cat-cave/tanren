@@ -25,8 +25,8 @@
 
 import type pg from "pg";
 import type { ActorContext } from "../../../auth/schemas.js";
-import type { CreatedRepository, CreateRepositoryInput } from "../../contracts/vcsProvider.js";
-import { RepositoryAlreadyExistsError } from "../../contracts/vcsProvider.js";
+import type { CreatedRepository, CreateRepositoryInput } from "../../contracts/codeHostTypes.js";
+import { RepositoryAlreadyExistsError } from "../../contracts/codeHostTypes.js";
 import { githubHttpsRemote } from "../../providers/github.js";
 import { ProjectStore } from "../../repositories/projects.js";
 import { MilestoneCreateInput, MilestoneStore } from "../../entities/milestones.js";

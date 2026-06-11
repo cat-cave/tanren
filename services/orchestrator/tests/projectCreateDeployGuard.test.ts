@@ -7,7 +7,7 @@ import { createProject } from "../src/engine/workflow/projectSpec.js";
 import { mountRootApiRoutes } from "../src/mountRootApiRoutes.js";
 import { createAuthMiddleware, type ActorContextEnv } from "../src/middleware/auth.js";
 import { createProjectRoutes } from "../src/routes/projects/index.js";
-import { InMemoryVcsProvider } from "./conformance/fakes/inMemoryVcsProvider.js";
+import { inertGitHubHttp } from "./helpers/githubHttp.js";
 import { RoutesPool } from "./helpers/routesPool.js";
 
 const actor: ActorContext = {
@@ -363,7 +363,7 @@ function rootProjectHarness() {
   mountRootApiRoutes(app, {
     pool: pool.asPgPool(),
     secrets: new InMemorySecretStore(),
-    vcsProvider: new InMemoryVcsProvider(),
+    githubHttp: inertGitHubHttp(),
     githubAppMinter: {} as GithubAppTokenMinter,
     identitySecretRef: "secret/identity",
     ssh: {} as CommandSubstrate,

@@ -24,8 +24,9 @@ import type { RunnerHandle } from "../contracts/allocator.js";
 import { resolveWorkspaceHeadSha } from "../workspace/index.js";
 import { type CiWhen } from "../ci/index.js";
 import { type GateOutcome, publishGateVerdictBestEffort, runNativeMergeGate } from "./gate/index.js";
-import { vcsCredentialHttp } from "../credentials/vcsCredentialHttp.js";
 import { buildProjectHostSeams } from "../providers/hostFactory.js";
+import { parseGitHubRepository } from "../providers/github.js";
+import { resolveVcsToken } from "../credentials/vcsCredentials.js";
 import type { EventStore } from "../eventStore.js";
 import type { ReGateCiHook } from "./reviewMerge/index.js";
 import type { RunPlannerLoopInput } from "./plannerRun.js";
@@ -150,14 +151,14 @@ async function doPublishMergeVerdict(
   if (headSha === "") {
     return;
   }
-  const token = await input.vcsProvider.resolveToken({
+  const token = await resolveVcsToken(input.githubHttp, {
     secrets: input.secrets,
     ...(context.installation !== undefined && { installation: context.installation }),
     ...(staticRef.trim() !== "" && { staticRef }),
     ...(input.githubAppMinter !== undefined && { minter: input.githubAppMinter }),
   });
-  const repo = input.vcsProvider.parseRepository(context.repoUrl);
-  const { visibility } = buildProjectHostSeams(vcsCredentialHttp(input.vcsProvider), async () => token);
+  const repo = parseGitHubRepository(context.repoUrl);
+  const { visibility } = buildProjectHostSeams(input.githubHttp, async () => token);
   await publishGateVerdictBestEffort(
     {
       visibility,

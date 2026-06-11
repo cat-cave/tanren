@@ -9,7 +9,7 @@
 // preserved: the token resolves against THIS org's App-installation/credentials.
 
 import type pg from "pg";
-import { type CreatedRepository, type CreateRepositoryInput } from "../../engine/contracts/vcsProvider.js";
+import { type CreatedRepository, type CreateRepositoryInput } from "../../engine/contracts/codeHostTypes.js";
 import type { SecretStore } from "../../engine/contracts/secretStore.js";
 import { resolveVcsToken } from "../../engine/credentials/vcsCredentials.js";
 import {
@@ -56,7 +56,7 @@ export async function createGreenfieldRepository(deps: GreenfieldRepositoryCreat
   // `resolveVcsToken` credential supplier (decomposition §5a/PR-2). The token supplier
   // closes over the SAME credential context the system resolves from (installation-or-
   // static, with the 401 re-mint), so behavior is identical to the prior
-  // `VcsProvider.resolveToken` + `.createRepository` path — only the seam shape changed.
+  // credential-resolve + repo-create path — only the seam shape changed.
   // A credential-resolution failure HERE is therefore NOT "you didn't bind a credential"
   // (surfaced LOUD above) — it is infra/corruption (Vault outage, App mint failure, an
   // unparseable stored config); let it PROPAGATE (a 500), never mislabel it as

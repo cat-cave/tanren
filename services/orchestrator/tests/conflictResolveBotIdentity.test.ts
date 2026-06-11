@@ -17,12 +17,11 @@ import type { CommandResult, RunnerCommand } from "../src/engine/contracts/comma
 import { assessExternalChange, tanrenIdentity } from "../src/engine/workflow/reviewMerge/governancePosture.js";
 import { buildLiveJjWorkspace, type LiveJjWorkspaceDeps } from "../src/engine/providers/liveJjWorkspace.js";
 import type { GitHubHttpClient, GitHubHttpRequest, GitHubHttpResponse } from "../src/engine/providers/github.js";
-import { vcsProviderOver } from "./helpers/vcsProvider.js";
 import {
   CONFORMANCE_ACTOR_ID,
   CONFORMANCE_ACTOR_LOGIN,
   CONFORMANCE_ACTOR_NOREPLY_EMAIL,
-} from "./conformance/vcsProviderConformance.js";
+} from "./helpers/conformanceActor.js";
 
 // §5a: the bot-push-identity resolution now runs through the standalone credential helpers
 // off a REAL `GitHubVcsProvider`'s GitHub client. The transport serves the static-credential
@@ -65,7 +64,7 @@ describe("conflict-resolve bot identity (finding #7)", () => {
       allocator: new FakeAllocator(),
       ssh,
       secrets,
-      vcsProvider: vcsProviderOver(new ConformanceUserGitHubHttp()),
+      githubHttp: new ConformanceUserGitHubHttp(),
       timeoutMs: 1000,
     };
     const live = await buildLiveJjWorkspace(deps);

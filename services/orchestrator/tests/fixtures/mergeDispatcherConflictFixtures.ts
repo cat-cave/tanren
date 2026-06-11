@@ -13,7 +13,7 @@ import type {
   MergeProbe,
 } from "../../src/engine/workflow/reviewMerge/index.js";
 import type { ReviewMergeRunContext } from "../../src/engine/workflow/reviewMerge/context.js";
-import type { PullRequestMergeability } from "../../src/engine/contracts/vcsProvider.js";
+import type { PullRequestMergeability } from "../../src/engine/contracts/codeHostTypes.js";
 import type { LandFinalizer } from "../../src/engine/merge/mergeAuthorityImpl.js";
 import type { AuditPosture } from "../../src/engine/contracts/auditPosture.js";
 
@@ -150,7 +150,7 @@ export function buildDispatcher(args: {
   const input = {
     pool: fakePool,
     secrets: {},
-    vcsProvider: {},
+    githubHttp: {},
     runId: "run_1",
     resolveConflict: args.resolveConflict ?? (async () => ({ resolved: true })),
     // The resolved-tree pre_merge re-gate (§5): defaults to passing so the authority

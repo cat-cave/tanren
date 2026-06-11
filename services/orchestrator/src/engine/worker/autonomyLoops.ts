@@ -12,7 +12,6 @@ import type { Allocator } from "../contracts/allocator.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
-import type { VcsProvider } from "../contracts/vcsProvider.js";
 import type { GitHubHttpClient } from "../providers/github.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
 import { buildPercolationCoordinator } from "../dag/percolationBuild.js";
@@ -43,10 +42,9 @@ export interface AutonomyLoopsDeps {
   secrets: SecretStore;
   allocator: Allocator;
   ssh: CommandSubstrate;
+  /** the shared GitHub HTTP client the merge coordinator + base-shift live seams build over. */
   githubHttp: GitHubHttpClient;
   identitySecretRef: string;
-  /** the VcsProvider the merge coordinator + base-shift live seams drive. */
-  vcsProvider: VcsProvider;
   /** the shared App-token minter the base-shift live seams reuse for authed pushes/fetches. */
   githubAppMinter?: GithubAppTokenMinter;
   /**
@@ -117,7 +115,7 @@ export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<Auton
   // than discarding the dependent's work.
   const percolation = buildPercolationCoordinator({
     pool: deps.pool,
-    vcsProvider: deps.vcsProvider,
+    githubHttp: deps.githubHttp,
     secrets: deps.secrets,
     ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
     // Plane-split: route the change-percolation coordinator's run-column writes +
@@ -158,7 +156,7 @@ export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<Auton
     pool: deps.pool,
     notifyListener: mergeNotifyListener,
     secrets: deps.secrets,
-    vcsProvider: deps.vcsProvider,
+    githubHttp: deps.githubHttp,
     // The drive-path conflict resolver provisions a short-lived runner + workspace to
     // run the REAL intent-preserving resolver (the blind-re-exec stub is gone). The
     // allocator/ssh/identity are the SAME the intake + run executor use.
@@ -198,7 +196,7 @@ export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<Auton
     pool: deps.pool,
     notifyListener: postMergeNotifyListener,
     secrets: deps.secrets,
-    vcsProvider: deps.vcsProvider,
+    githubHttp: deps.githubHttp,
     deployWatcher,
     demoWatcher,
     ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),

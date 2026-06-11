@@ -108,7 +108,7 @@ describe("§3.1 clean base-shift rebase is PUSHED (real jj)", () => {
       target: LOCAL_HANDLE,
       workspacePath: wsPath,
       secrets: {} as never,
-      vcsProvider: {} as never,
+      githubHttp: {} as never,
       repoUrl: originPath,
       headBranch: "feat",
       githubCredentialRef: "",

@@ -30,7 +30,7 @@ import type { Allocator, RunnerHandle } from "../contracts/allocator.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
-import type { VcsProvider } from "../contracts/vcsProvider.js";
+import type { GitHubHttpClient } from "../providers/github.js";
 import type { CiWhen } from "../ci/index.js";
 import type { EventStore } from "../eventStore.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
@@ -113,7 +113,8 @@ export interface DriveConflictResolveDeps {
   allocator: Allocator;
   ssh: CommandSubstrate;
   secrets: SecretStore;
-  vcsProvider: VcsProvider;
+  /** The shared (timed) GitHub HTTP client the run/merge host seams build over. */
+  githubHttp: GitHubHttpClient;
   githubAppMinter?: GithubAppTokenMinter;
   runStateWriter?: RunStateWriter;
   /** The merge-stage event store (control plane when wired, else org-scoped pg). */
@@ -234,7 +235,7 @@ async function driveResolveViaJj(
       allocator: deps.allocator,
       ssh: deps.ssh,
       secrets: deps.secrets,
-      vcsProvider: deps.vcsProvider,
+      githubHttp: deps.githubHttp,
       ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
       timeoutMs: deps.timeoutMs,
       buildResolver: ({ target, workspacePath, baseSha, applier }) =>

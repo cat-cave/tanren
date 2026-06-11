@@ -23,12 +23,12 @@ import type { PostMergeIssueClaimInput, PostMergeIssueClaimStore } from "../src/
 import type { EventStore, AppendEventInput } from "../src/engine/eventStore.js";
 import type { EventName } from "../src/engine/events/index.js";
 import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
-import { InMemoryVcsProvider } from "./conformance/fakes/inMemoryVcsProvider.js";
+import { inertGitHubHttp } from "./helpers/githubHttp.js";
 import type { GitHubPullRequestChecks } from "../src/engine/providers/github.js";
-import type { RepoRef, ResolvedVcsToken, VcsCredentialContext } from "../src/engine/contracts/vcsProvider.js";
+import type { CodeHost } from "../src/engine/contracts/codeHost.js";
+import type { ProjectHostSeams } from "../src/engine/providers/hostFactory.js";
 import {
   harden,
-  type SafeVisibilityProjection,
   type TrackingIssueInput,
   type VisibilityProjection,
 } from "../src/engine/contracts/visibilityProjection.js";
@@ -195,28 +195,21 @@ class InMemoryClaimStore implements PostMergeIssueClaimStore {
 }
 
 /**
- * The in-memory VcsProvider fake, with `readBranchChecks` overridden to return the
- * scripted post-merge CI state for the base branch (failure / pass / pending). The
- * tracking-issue recording lives HERE (the watcher files via the `VisibilityProjection`
- * seam — `VcsProvider.createIssue` was removed by the decomposition) so the existing
- * `vcs.createdIssues` assertions still hold. `failCreate` makes the issue file throw
- * (to prove the claim is released).
+ * A scripted `ProjectHostSeams` (the watcher's §5e/§6 seam, injected via `buildHostSeams`).
+ * `codeHost.readBranchChecks` returns the scripted post-merge CI state for the base branch
+ * (failure / pass / pending); `visibility.openTrackingIssue` records the filed issues (so the
+ * `seams.createdIssues` assertions hold — the watcher files through the best-effort projection,
+ * never a removed `VcsProvider` method). `failCreate` makes the issue publish throw (proving the
+ * claim is released). The visibility is `harden`-ed (the watcher only ever holds the safe surface).
  */
-class ScriptedVcsProvider extends InMemoryVcsProvider {
-  /** Recorded tracking issues the `recordingVisibility` projection filed via this fake. */
+class ScriptedHostSeams {
   readonly createdIssues: Array<{ title: string; body: string; labels: ReadonlyArray<string> }> = [];
   constructor(
     private readonly outcome: "fail" | "pass" | "pending",
     private readonly failCreate = false,
-  ) {
-    super();
-  }
-  // eslint-disable-next-line @typescript-eslint/require-await
-  override async readBranchChecks(_input: {
-    repo: RepoRef;
-    branch: string;
-    token: ResolvedVcsToken;
-  }): Promise<GitHubPullRequestChecks> {
+  ) {}
+
+  private async readBranchChecks(): Promise<GitHubPullRequestChecks> {
     if (this.outcome === "fail") {
       return {
         head: { sha: "post-merge-sha" },
@@ -233,47 +226,32 @@ class ScriptedVcsProvider extends InMemoryVcsProvider {
       statuses: [],
     };
   }
-  // eslint-disable-next-line @typescript-eslint/require-await
-  async recordIssue(input: { title: string; body: string; labels?: ReadonlyArray<string> }): Promise<{
-    number: number;
-    url: string;
-  }> {
+
+  private async openTrackingIssue(input: TrackingIssueInput): Promise<{ number: number; url: string }> {
     if (this.failCreate) throw new Error("GitHub issue create failed: HTTP 503");
     this.createdIssues.push({ title: input.title, body: input.body, labels: input.labels ?? [] });
     const number = this.createdIssues.length;
     return { number, url: `https://github.com/cat-cave/fix/issues/${number}` };
   }
+
+  /** Build the `{ codeHost, visibility }` pair the watcher consumes — only the two methods it uses. */
+  seams(): ProjectHostSeams {
+    const codeHost = { readBranchChecks: () => this.readBranchChecks() } as unknown as CodeHost;
+    const raw: VisibilityProjection = { openTrackingIssue: (input) => this.openTrackingIssue(input) };
+    return { codeHost, visibility: harden(raw) };
+  }
 }
 
 /**
- * A RAW `VisibilityProjection` whose `openTrackingIssue` delegates to the fake
- * provider's issue recorder (so the existing `vcs.createdIssues` assertions hold) —
- * the post-merge watcher now files the tracking issue through this best-effort seam
- * (PR-4) rather than calling a `VcsProvider` method directly. `harden`-ed into the
- * never-rejecting `SafeVisibilityProjection` the watcher's `buildVisibility` returns.
+ * A recording `SecretStore` that captures the credential ref the watcher's token resolution
+ * reads (the static `github_token` ref) — so a test can PROVE the run-resolved org-default ref
+ * is threaded into post-merge token resolution. Returns a stub token value for the expected ref.
  */
-function recordingVisibility(vcs: ScriptedVcsProvider): SafeVisibilityProjection {
-  const raw: VisibilityProjection = {
-    async openTrackingIssue(input: TrackingIssueInput) {
-      const issue = await vcs.recordIssue({
-        title: input.title,
-        body: input.body,
-        ...(input.labels !== undefined && { labels: [...input.labels] }),
-      });
-      return { url: issue.url, number: issue.number };
-    },
-  };
-  return harden(raw);
-}
-
-class StaticRefRequiredVcsProvider extends ScriptedVcsProvider {
-  readonly staticRefs: Array<string | undefined> = [];
-  override async resolveToken(creds: VcsCredentialContext): Promise<ResolvedVcsToken> {
-    this.staticRefs.push(creds.staticRef);
-    if (creds.staticRef !== GITHUB_ORG_REF) {
-      throw new Error(`expected post-merge staticRef ${GITHUB_ORG_REF}, got ${String(creds.staticRef)}`);
-    }
-    return super.resolveToken(creds);
+class RecordingSecretStore extends InMemorySecretStore {
+  readonly reads: Array<string> = [];
+  override async get(ref: string): Promise<{ ref: string; value: string } | undefined> {
+    this.reads.push(ref);
+    return { ref, value: "stub-token" };
   }
 }
 
@@ -282,18 +260,21 @@ function makeWatcher(args: {
   outcome: "fail" | "pass" | "pending";
   claims?: InMemoryClaimStore;
   failCreate?: boolean;
-  vcs?: ScriptedVcsProvider;
-}): { watcher: PostMergeWatcher; vcs: ScriptedVcsProvider; events: RecordingEventStore; claims: InMemoryClaimStore } {
-  const vcs = args.vcs ?? new ScriptedVcsProvider(args.outcome, args.failCreate ?? false);
+  secrets?: RecordingSecretStore;
+}): { watcher: PostMergeWatcher; vcs: ScriptedHostSeams; events: RecordingEventStore; claims: InMemoryClaimStore } {
+  const vcs = new ScriptedHostSeams(args.outcome, args.failCreate ?? false);
   const events = new RecordingEventStore();
   const claims = args.claims ?? new InMemoryClaimStore();
   const watcher = new PostMergeWatcher({
     pool: fakePool(args.state),
-    secrets: new InMemorySecretStore(),
-    vcsProvider: vcs,
+    // The watcher's token resolution runs the REAL static-credential resolver, which reads
+    // the `github_token` secret at the run-resolved ref — the recording store returns a stub
+    // token for any ref so resolution succeeds without a live secret store.
+    secrets: args.secrets ?? new RecordingSecretStore(),
+    githubHttp: inertGitHubHttp(),
     eventStore: events,
     claimStore: claims,
-    buildVisibility: () => recordingVisibility(vcs),
+    buildHostSeams: () => vcs.seams(),
   });
   return { watcher, vcs, events, claims };
 }
@@ -347,20 +328,21 @@ describe("PostMergeWatcher", () => {
     // pass them into loadReviewMergeRunContext, but post-merge used to call the
     // loader without that option. With no project JSONB credential, a real provider
     // then saw no staticRef and threw NoGithubCredentialConfiguredError.
-    const vcs = new StaticRefRequiredVcsProvider("fail");
-    const { watcher } = makeWatcher({
+    const secrets = new RecordingSecretStore();
+    const { watcher, vcs } = makeWatcher({
       state: {
         merged: { mergeSha: "abc123" },
         projectConfig: { version: 1 },
         orgConfig: defaultOrgConfig(),
       },
       outcome: "fail",
-      vcs,
+      secrets,
     });
 
     await watcher.check(RUN_ID);
 
-    expect(vcs.staticRefs).toEqual([GITHUB_ORG_REF]);
+    // The watcher's token resolution read the run-resolved org-default `github_token` ref.
+    expect(secrets.reads).toContain(GITHUB_ORG_REF);
     expect(vcs.createdIssues).toHaveLength(1);
   });
 

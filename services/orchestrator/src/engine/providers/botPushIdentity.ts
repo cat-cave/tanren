@@ -1,6 +1,6 @@
 // MERGE-SAFETY (self-identity): resolve the GitHub identity Tanren PUSHES as for
 // an on-runner authored-commit path, App-first / static-fallback, off the SAME
-// `VcsProvider` seam the run-loop clone (`resolveCloneCredential` in
+// standalone credential resolver the run-loop clone (`resolveCloneCredential` in
 // plannerRunWorkspace.ts) and the merge stage's Tanren-identity set
 // (`resolveTanrenLogins` in reviewMerge/mergeDispatch.ts) use.
 //
@@ -22,16 +22,17 @@
 // non-attributable placeholder git still needs to commit at all).
 
 import type { SecretStore } from "../contracts/secretStore.js";
-import type { ActorIdentity, VcsProvider } from "../contracts/vcsProvider.js";
+import type { ActorIdentity } from "../contracts/codeHostTypes.js";
+import type { GitHubHttpClient } from "./github.js";
 import type { OrgGithubAppInstallation } from "../config/orgConfig.js";
 import type { GithubAppTokenMinter } from "./githubAppTokenMinter.js";
 import { resolveVcsActorIdentity, resolveVcsToken } from "../credentials/vcsCredentials.js";
-import { vcsCredentialHttp } from "../credentials/vcsCredentialHttp.js";
 
 /** The App-first / static credential context a bot-identity resolution reads from. */
 export interface BotPushIdentityContext {
   secrets: SecretStore;
-  vcsProvider: VcsProvider;
+  /** The shared (timed) GitHub HTTP client the token + identity reads go through. */
+  githubHttp: GitHubHttpClient;
   installation?: OrgGithubAppInstallation;
   /** The static fallback credential ref (a project/org GitHub credential). */
   githubCredentialRef: string;
@@ -54,9 +55,8 @@ export async function resolveBotPushIdentity(ctx: BotPushIdentityContext): Promi
     return undefined;
   }
   // §5a: token + identity resolution is credential PLUMBING — resolve via the standalone
-  // helpers (off the provider's GitHub client), not forge ops on the `VcsProvider` seam.
-  const http = vcsCredentialHttp(ctx.vcsProvider);
-  const resolved = await resolveVcsToken(http, {
+  // helpers over the shared GitHub client, never a forge op on a host seam.
+  const resolved = await resolveVcsToken(ctx.githubHttp, {
     secrets: ctx.secrets,
     ...(ctx.installation !== undefined && { installation: ctx.installation }),
     ...(staticRef !== "" && { staticRef }),

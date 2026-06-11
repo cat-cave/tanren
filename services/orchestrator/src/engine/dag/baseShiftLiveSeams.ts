@@ -27,7 +27,7 @@ import type { EventStore } from "../eventStore.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { SpeculativeDependent } from "../contracts/changePercolation.js";
-import type { VcsProvider } from "../contracts/vcsProvider.js";
+import type { GitHubHttpClient } from "../providers/github.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
 import {
   type BaseShiftConflictResolver,
@@ -54,7 +54,8 @@ export interface LiveBaseShiftDeps {
   allocator: Allocator;
   ssh: CommandSubstrate;
   secrets: SecretStore;
-  vcsProvider: VcsProvider;
+  /** The shared (timed) GitHub HTTP client the run/merge host seams build over. */
+  githubHttp: GitHubHttpClient;
   githubAppMinter?: GithubAppTokenMinter;
   runStateWriter?: RunStateWriter;
   /** The event store the re-gate + the resolver's re-gate emit `gate.*` through. */
@@ -183,7 +184,7 @@ export class LiveBaseShiftWorkspaceProvider implements BaseShiftWorkspaceOpener 
       target: live.pushFacts.target,
       workspacePath: live.pushFacts.workspacePath,
       secrets: this.deps.secrets,
-      vcsProvider: this.deps.vcsProvider,
+      githubHttp: this.deps.githubHttp,
       ...(this.deps.githubAppMinter !== undefined && { githubAppMinter: this.deps.githubAppMinter }),
       repoUrl: live.pushFacts.repoUrl,
       headBranch: live.pushFacts.headBranch,
@@ -255,7 +256,7 @@ export class LiveBaseShiftReGate implements BaseShiftReGate {
         allocator: this.deps.allocator,
         ssh: this.deps.ssh,
         secrets: this.deps.secrets,
-        vcsProvider: this.deps.vcsProvider,
+        githubHttp: this.deps.githubHttp,
         ...(this.deps.githubAppMinter !== undefined && { githubAppMinter: this.deps.githubAppMinter }),
         eventStore: this.deps.eventStore,
         identitySecretRef: this.deps.identitySecretRef,

@@ -2,7 +2,11 @@ import { setTimeout as sleepFor } from "node:timers/promises";
 import { parseCheckRuns, parseCommitStatuses, parseRefObjectSha, parseRequiredContexts } from "./githubChecksParse.js";
 // Re-export the `/contents` base64 decoder (it lives in the contract module) so the
 // GitHub provider sources every GitHub value-helper from `github.js` — one fewer dep there.
-export { decodeBase64Content } from "../contracts/vcsProvider.js";
+export { decodeBase64Content } from "../contracts/repoHostErrors.js";
+// Re-export the shared App installation-token minter so the worker boot pulls the GitHub
+// HTTP client + the minter from one provider module (the dependency-cap-friendly seam the
+// retired `buildVcsProvider.js` convenience re-export used to provide).
+export { GithubAppTokenMinter } from "./githubAppTokenMinter.js";
 import {
   DEFAULT_RATE_LIMIT_RETRIES,
   DEFAULT_TRANSIENT_RETRIES,
@@ -270,7 +274,7 @@ export class GitHubStatusService {
    * merged state on the ephemeral speculative-integration branch. Resolves the
    * branch's HEAD SHA, then reads the SAME check-runs + commit-status endpoints
    * `fetchPullRequestChecks` does, gated by the branch's own protection required
-   * contexts. Provider-neutral via `VcsProvider.readBranchChecks`.
+   * contexts. Surfaced host-neutrally via `CodeHost.readBranchChecks` (decomposition §5e).
    */
   async fetchBranchChecks(input: {
     repo: GitHubRepository;

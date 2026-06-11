@@ -1,6 +1,6 @@
 // Build the LIVE `MergeAuthorityBundle` (tanren-owns-the-engine.md §5) the merge
 // stage authorizes a land against. This is the gather-and-map site: it composes the
-// `CodeHost` (the ff-only CAS land) from the run's `VcsProvider` + token, resolves the
+// `CodeHost` (the ff-only CAS land) from the run's shared GitHub HTTP client + token, resolves the
 // project's `auditPosture` + budget scope, and packages the gate/review/findings/demo/
 // HITL signals the run loop already holds. Anything the live path could not resolve is
 // passed in its ABSENT (blocking) form — the fail-closed boundary in
@@ -18,14 +18,15 @@ import { buildLandFinalizer } from "./mergeAuthorityLandFinalizer.js";
 import { resolveLandTimeSignals, resolveLandTimeFindings } from "./landSignals.js";
 import { PgBudgetGate } from "../dag/budgetGate.js";
 import { GitHubCodeHost } from "../providers/githubCodeHost.js";
-import { GitHubVcsProvider } from "../providers/githubVcsProvider.js";
+import { resolveVcsToken } from "../credentials/vcsCredentials.js";
+import type { GitHubHttpClient } from "../providers/github.js";
 import type { CodeHost } from "../contracts/codeHost.js";
 import type { AuditPosture } from "../contracts/auditPosture.js";
 import type { Finding } from "../contracts/findings.js";
 import type { GateOutcome } from "../workflow/gate/index.js";
 import type { ReviewVerdict } from "../contracts/dagLifecycle.js";
 import type { ProjectBudgetState } from "../contracts/dagWalker.js";
-import type { ResolvedVcsToken, VcsProvider } from "../contracts/vcsProvider.js";
+import type { ResolvedVcsToken } from "../contracts/codeHostTypes.js";
 import type { RawBudgetScope, RawDemoVerification, RawHitlSignoff } from "./mergeAuthorityInputs.js";
 import type { MergeAuthorityBundle, MergeForRunInput } from "../workflow/reviewMerge/mergeDispatchTypes.js";
 import type { ReviewMergeRunContext } from "../workflow/reviewMerge/context.js";
@@ -34,7 +35,8 @@ import type { ReviewMergeRunContext } from "../workflow/reviewMerge/context.js";
 export interface BuildMergeAuthorityBundleInput {
   /** The real pool the durable finalize opens its org-scoped transaction on. */
   pool: pg.Pool;
-  vcsProvider: VcsProvider;
+  /** The shared (timed) GitHub HTTP client the land `CodeHost` is built over. */
+  githubHttp: GitHubHttpClient;
   /** Resolve the active GitHub token (the SAME closure the merge probe resolves with). */
   resolveToken: () => Promise<ResolvedVcsToken>;
   orgId: string;
@@ -99,17 +101,11 @@ function rawBudgetFrom(state: ProjectBudgetState): RawBudgetScope {
 
 /**
  * Build the minimal `CodeHost` the `MergeAuthority` lands through, over the SAME
- * GitHub HTTP client the run's `VcsProvider` already holds (no second http client
- * threaded into the merge path). A non-GitHub provider has no host land yet — a LOUD
- * throw, never a silent stand-in (a future backend constructs its own host here).
+ * GitHub HTTP client the run already holds (no second http client threaded into the
+ * merge path). A future backend constructs its own host here.
  */
-function codeHostFor(vcsProvider: VcsProvider, resolveToken: () => Promise<ResolvedVcsToken>): CodeHost {
-  if (!(vcsProvider instanceof GitHubVcsProvider)) {
-    throw new Error(
-      `merge authority land requires a GitHub CodeHost; the configured VcsProvider (${vcsProvider.constructor.name}) cannot host the land`,
-    );
-  }
-  return new GitHubCodeHost(vcsProvider.http, async () => {
+function codeHostFor(githubHttp: GitHubHttpClient, resolveToken: () => Promise<ResolvedVcsToken>): CodeHost {
+  return new GitHubCodeHost(githubHttp, async () => {
     const r = await resolveToken();
     return { token: r.token, ...(r.refresh !== undefined && { refresh: r.refresh }) };
   });
@@ -117,7 +113,7 @@ function codeHostFor(vcsProvider: VcsProvider, resolveToken: () => Promise<Resol
 
 export function buildMergeAuthorityBundle(input: BuildMergeAuthorityBundleInput): MergeAuthorityBundle {
   return {
-    codeHost: codeHostFor(input.vcsProvider, input.resolveToken),
+    codeHost: codeHostFor(input.githubHttp, input.resolveToken),
     orgId: input.orgId,
     finalizerFor: (context) => buildLandFinalizer(input.pool, context),
     gateConfigHash: "",
@@ -184,9 +180,9 @@ export async function buildBundleForMergeStage(
   const findings = await resolveLandTimeFindings(pool, row.org_id, context.runId);
   return buildMergeAuthorityBundle({
     pool,
-    vcsProvider: input.vcsProvider,
+    githubHttp: input.githubHttp,
     resolveToken: () =>
-      input.vcsProvider.resolveToken({
+      resolveVcsToken(input.githubHttp, {
         secrets: input.secrets,
         installation: context.installation,
         staticRef: context.staticCredentialRef,

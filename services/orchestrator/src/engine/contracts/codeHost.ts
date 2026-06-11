@@ -14,6 +14,8 @@
 // the host swappable: GitHub/GitLab/Bitbucket/self-host differ only in CodeHost
 // mechanics. A Wave-1 GitHub impl is validated against `codeHostConformance`.
 
+import type { GitHubPullRequestChecks } from "../providers/github.js";
+
 /** A repository on the host, provider-neutral (`owner` + `name`). */
 export interface CodeHostRepoRef {
   owner: string;
@@ -134,6 +136,18 @@ export interface CodeHost {
 
   /** Read a file's UTF-8 content on `ref`, or `undefined` if it does not exist there. */
   readFile(input: { repo: CodeHostRepoRef; ref: string; path: string }): Promise<string | undefined>;
+
+  /**
+   * Read the CI/check status of an arbitrary BRANCH ref (not a PR) — the post-merge
+   * watcher reads the host's `default_branch` CI (which, for the built app's repo, may
+   * legitimately be GitHub Actions) to decide whether to file a tracking issue
+   * (decomposition §5e). Keyed on the branch's HEAD SHA + its own protection required
+   * contexts, feeding the SAME `evaluateCiObservation` evaluator the run/queue CI poll
+   * uses. This is a genuine HOST read of an EXTERNAL CI signal (a regression the built
+   * app's own CI catches) — NOT Tanren's gate, which the `MergeAuthority` owns. A future
+   * backend maps it from its own pipeline-for-ref read.
+   */
+  readBranchChecks(input: { repo: CodeHostRepoRef; branch: string }): Promise<GitHubPullRequestChecks>;
 
   /**
    * LAND an authorized ref into `main`: a compare-and-swap PUSH of the authorized

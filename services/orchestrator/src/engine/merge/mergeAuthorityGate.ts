@@ -22,7 +22,7 @@ import type { Finding } from "../contracts/findings.js";
 import type { AuditPosture } from "../contracts/auditPosture.js";
 import type { GateOutcome } from "../workflow/gate/index.js";
 import type { ReviewVerdict } from "../contracts/dagLifecycle.js";
-import type { PullRequestMergeability } from "../contracts/vcsProvider.js";
+import type { PullRequestMergeability } from "../contracts/codeHostTypes.js";
 import type { IntegrationNode } from "../contracts/integrationNodes.js";
 import type { RawBudgetScope, RawDemoVerification, RawHitlSignoff } from "./mergeAuthorityInputs.js";
 import type { AuditEnvelope } from "../events/schemas/audit.js";

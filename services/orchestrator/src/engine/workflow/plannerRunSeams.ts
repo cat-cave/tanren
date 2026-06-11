@@ -68,7 +68,7 @@ export function baseShiftRebaseSeam(
     input.baseShiftRebase ??
     buildInLoopBaseShiftRebaseHook({
       pool: input.pool,
-      vcsProvider: input.vcsProvider,
+      githubHttp: input.githubHttp,
       secrets: input.secrets,
       allocator: input.allocator,
       ssh: input.ssh,

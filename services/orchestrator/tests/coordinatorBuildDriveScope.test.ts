@@ -31,7 +31,7 @@ import { buildDriveMerge } from "../src/engine/merge/coordinatorBuild.js";
 import { FakeAllocator } from "../src/engine/contracts/allocator.js";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
 import { FakeCommandSubstrate } from "../src/engine/contracts/commandSubstrate.js";
-import { InMemoryVcsProvider } from "./conformance/fakes/inMemoryVcsProvider.js";
+import { inertGitHubHttp } from "./helpers/githubHttp.js";
 
 const RUN_ID = "run_drive";
 const SPEC_ID = "spec_drive";
@@ -182,7 +182,7 @@ function driveDeps(pool: pg.Pool) {
   return {
     pool,
     secrets: new FakeSecretStore(),
-    vcsProvider: new InMemoryVcsProvider(),
+    githubHttp: inertGitHubHttp(),
     // The drive-path conflict resolver's deps. This test exercises the
     // external_reviewer HAND-OFF (no conflict), so the resolver hook is never
     // invoked — fakes satisfy the now-required deps without being driven.

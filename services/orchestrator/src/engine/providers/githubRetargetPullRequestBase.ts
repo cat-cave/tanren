@@ -1,4 +1,4 @@
-import type { PullRequestRef, RepoRef, ResolvedVcsToken } from "../contracts/vcsProvider.js";
+import type { PullRequestRef, RepoRef, ResolvedVcsToken } from "../contracts/codeHostTypes.js";
 import type { GitHubHttpClient, GitHubHttpResponse } from "./github.js";
 
 function repoApiPath(repo: RepoRef, suffix: string): string {

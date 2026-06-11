@@ -8,7 +8,6 @@
 // the OBSERVABLE outcomes: the persisted run + spec status, the planner.rerequested
 // producer, and the events — never adapter internals.
 import { describe, expect, it } from "vitest";
-import { vcsProviderOver } from "./helpers/vcsProvider.js";
 import type { AuditAnswer, CheckAnswer, PlanAnswer } from "../src/engine/answerers/schemas/index.js";
 import type { AnswererAdapter } from "../src/engine/providers/types.js";
 import type { GitHubHttpResponse } from "../src/engine/providers/github.js";
@@ -103,7 +102,7 @@ describe("runPlannerLoopWorkflow — review-rework re-entry", () => {
         allocator,
         ssh,
         secrets,
-        vcsProvider: vcsProviderOver(github),
+        githubHttp: github,
         context: ctx,
         buildAdapters: () => adapters,
         reviewProbe: changesThenApproveReview(),
@@ -140,7 +139,7 @@ describe("runPlannerLoopWorkflow — review-rework re-entry", () => {
         allocator,
         ssh,
         secrets,
-        vcsProvider: vcsProviderOver(github),
+        githubHttp: github,
         context: ctx,
         buildAdapters: () => twoSubtaskAdapters([completeCheck, completeCheck]),
         reviewProbe: alwaysChangesReview(),
@@ -169,7 +168,7 @@ describe("runPlannerLoopWorkflow — review-rework re-entry", () => {
         allocator,
         ssh,
         secrets,
-        vcsProvider: vcsProviderOver(github),
+        githubHttp: github,
         context: ctx,
         buildAdapters: () => twoSubtaskAdapters([completeCheck, completeCheck]),
         reviewProbe: pendingReview(),
@@ -196,7 +195,7 @@ describe("runPlannerLoopWorkflow — merge-outcome mapping (direct_merge)", () =
         allocator,
         ssh,
         secrets,
-        vcsProvider: vcsProviderOver(github),
+        githubHttp: github,
         context: ctx,
         buildAdapters: () => twoSubtaskAdapters([completeCheck, completeCheck]),
         reviewProbe: approvingReview(),
@@ -222,7 +221,7 @@ describe("runPlannerLoopWorkflow — merge-outcome mapping (direct_merge)", () =
         allocator,
         ssh,
         secrets,
-        vcsProvider: vcsProviderOver(github),
+        githubHttp: github,
         context: ctx,
         buildAdapters: () => twoSubtaskAdapters([completeCheck, completeCheck]),
         reviewProbe: approvingReview(),
@@ -280,7 +279,7 @@ describe("runPlannerLoopWorkflow — non-pass loop outcome mapping", () => {
         allocator,
         ssh,
         secrets,
-        vcsProvider: vcsProviderOver(new ScriptedGitHubHttp([])),
+        githubHttp: new ScriptedGitHubHttp([]),
         context: { ...ctx, convergencePolicy: { maxConsecutiveStalls: 2, demoRunEnabled: false } },
         buildAdapters: () => adapters,
       }) as Parameters<typeof runPlannerLoopScoped>[0],
@@ -311,7 +310,7 @@ describe("runPlannerLoopWorkflow — release cleanup-proof", () => {
         allocator,
         ssh,
         secrets,
-        vcsProvider: vcsProviderOver(github),
+        githubHttp: github,
         context: ctx,
         buildAdapters: () => twoSubtaskAdapters([completeCheck, completeCheck]),
         reviewProbe: approvingReview(),
@@ -343,7 +342,7 @@ describe("runPlannerLoopWorkflow — release cleanup-proof", () => {
         allocator,
         ssh,
         secrets,
-        vcsProvider: vcsProviderOver(github),
+        githubHttp: github,
         context: ctx,
         buildAdapters: () => twoSubtaskAdapters([completeCheck, completeCheck]),
         reviewProbe: approvingReview(),

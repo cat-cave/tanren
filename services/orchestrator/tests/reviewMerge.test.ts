@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { vcsProviderOver } from "./helpers/vcsProvider.js";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
 import { FakeEventStore } from "./helpers/fakeEventStore.js";
 import { reduceReviewVerdict } from "../src/engine/providers/githubReviewMerge.js";
@@ -75,7 +74,7 @@ describe("review polling stage", () => {
       pool: pool.asPgPool(),
       eventStore: events,
       secrets: new FakeSecretStore(),
-      vcsProvider: vcsProviderOver(unusedHttp()),
+      githubHttp: unusedHttp(),
       runId: "run_1",
       reviewProbe: probe,
     });
@@ -109,7 +108,7 @@ describe("review polling stage", () => {
       pool: pool.asPgPool(),
       eventStore: events,
       secrets: new FakeSecretStore(),
-      vcsProvider: vcsProviderOver(unusedHttp()),
+      githubHttp: unusedHttp(),
       runId: "run_1",
       reviewProbe: probe,
     });
@@ -145,7 +144,7 @@ describe("review polling stage", () => {
       pool: pool.asPgPool(),
       eventStore: events,
       secrets: new FakeSecretStore(),
-      vcsProvider: vcsProviderOver(unusedHttp()),
+      githubHttp: unusedHttp(),
       runId: "run_1",
       reviewProbe: probe,
     });
@@ -173,7 +172,7 @@ describe("review polling stage", () => {
       pool: pool.asPgPool(),
       eventStore: events,
       secrets: new FakeSecretStore(),
-      vcsProvider: vcsProviderOver(unusedHttp()),
+      githubHttp: unusedHttp(),
       runId: "run_1",
       reviewProbe: probe,
     });
@@ -205,7 +204,7 @@ describe("merge dispatch stage", () => {
       eventStore: events,
       secrets: new FakeSecretStore(),
       resolveConflict: noopConflictResolver,
-      vcsProvider: vcsProviderOver(unusedHttp()),
+      githubHttp: unusedHttp(),
       runId: "run_1",
       mergeProbe: probe,
       mergeAuthority: authorityBundle(host, landed),
@@ -235,7 +234,7 @@ describe("merge dispatch stage", () => {
       eventStore: events,
       secrets: new FakeSecretStore(),
       resolveConflict: noopConflictResolver,
-      vcsProvider: vcsProviderOver(unusedHttp()),
+      githubHttp: unusedHttp(),
       runId: "run_1",
       mergeProbe: probe,
       mergeAuthority: authorityBundle(host, landed),
@@ -264,7 +263,7 @@ describe("merge dispatch stage", () => {
       pool: pool.asPgPool(),
       eventStore: events,
       secrets: new FakeSecretStore(),
-      vcsProvider: vcsProviderOver(unusedHttp()),
+      githubHttp: unusedHttp(),
       runId: "run_1",
       mergeProbe: probe,
       mergeAuthority: authorityBundle(host, landed),
@@ -379,7 +378,7 @@ describe("governance posture gate at the merge decision", () => {
       eventStore: events,
       secrets: await tanrenSecrets(),
       resolveConflict: noopConflictResolver,
-      vcsProvider: vcsProviderOver(tanrenUserHttp()),
+      githubHttp: tanrenUserHttp(),
       runId: "run_1",
       mergeProbe: probe,
       mergeAuthority: authorityBundle(host, landed),
@@ -409,7 +408,7 @@ describe("governance posture gate at the merge decision", () => {
       eventStore: events,
       secrets: await tanrenSecrets(),
       resolveConflict: noopConflictResolver,
-      vcsProvider: vcsProviderOver(tanrenUserHttp()),
+      githubHttp: tanrenUserHttp(),
       runId: "run_1",
       mergeProbe: probe,
       mergeAuthority: authorityBundle(host, landed),
@@ -435,7 +434,7 @@ describe("governance posture gate at the merge decision", () => {
       eventStore: events,
       secrets: await tanrenSecrets(),
       resolveConflict: noopConflictResolver,
-      vcsProvider: vcsProviderOver(tanrenUserHttp()),
+      githubHttp: tanrenUserHttp(),
       runId: "run_1",
       mergeProbe: probe,
       mergeAuthority: authorityBundle(host, landed),
@@ -458,7 +457,7 @@ describe("governance posture gate at the merge decision", () => {
       eventStore: events,
       secrets: await tanrenSecrets(),
       resolveConflict: noopConflictResolver,
-      vcsProvider: vcsProviderOver(tanrenUserHttp()),
+      githubHttp: tanrenUserHttp(),
       runId: "run_1",
       mergeProbe: probe,
       mergeAuthority: authorityBundle(host, landed),
@@ -487,7 +486,7 @@ describe("governance posture gate at the merge decision", () => {
       eventStore: events,
       secrets: new FakeSecretStore(),
       resolveConflict: noopConflictResolver,
-      vcsProvider: vcsProviderOver(unusedHttp()),
+      githubHttp: unusedHttp(),
       runId: "run_1",
       mergeProbe: probe,
       mergeAuthority: authorityBundle(host, landed),

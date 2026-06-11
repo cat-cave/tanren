@@ -58,7 +58,7 @@ function makeSubscriber(watcher: RecordingWatcher, listener: FakeNotifyListener)
   return new PostMergeSubscriber({
     pool: {} as never,
     secrets: {} as never,
-    vcsProvider: {} as never,
+    githubHttp: {} as never,
     notifyListener: listener as never,
     watcher: watcher as unknown as PostMergeWatcher,
   });

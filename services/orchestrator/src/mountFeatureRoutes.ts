@@ -12,7 +12,6 @@ import { orgScopingPool } from "./engine/data/orgScopedDb.js";
 import type { Allocator, SecretStore, CommandSubstrate } from "./engine/contracts/index.js";
 import { buildForgeRouteAnswererFactories } from "./engine/forge/routeFactories.js";
 import type { GitHubHttpClient } from "./engine/providers/github.js";
-import type { VcsProvider } from "./engine/contracts/vcsProvider.js";
 import type { GithubAppTokenMinter } from "./engine/providers/githubAppTokenMinter.js";
 import { mountGithubAppInstallFromEnv } from "./routes/auth/githubAppInstall.js";
 import { createBehaviorRoutes } from "./routes/behaviors/index.js";
@@ -54,11 +53,8 @@ export type BenchmarkRouteInfra = NonNullable<MountReportRoutesDeps["benchmark"]
 export interface FeatureRouteDeps {
   pool: pg.Pool;
   secrets: SecretStore;
+  /** The shared (timed) GitHub HTTP client every run/merge-lifecycle route host seam builds over. */
   githubHttp: GitHubHttpClient;
-  // The VcsProvider seam, used by the run/merge-lifecycle routes (the CI
-  // webhook fallback). The forge-recon / inbox / config-gate routes keep using
-  // `githubHttp` directly — only the run+merge path goes through the provider.
-  vcsProvider: VcsProvider;
   githubAppMinter: GithubAppTokenMinter;
   credentialRegistry: CredentialRegistry;
   configGateGithub: ConfigGateGithubFactory;

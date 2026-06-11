@@ -19,9 +19,12 @@
 // does) and travels ONLY in the request auth header — never in a body, a log, or
 // a thrown message.
 
-import { decodeBase64Content } from "../contracts/vcsProviderErrors.js";
+import { decodeBase64Content } from "../contracts/repoHostErrors.js";
 import { createGitHubRepository } from "./githubRepoCreate.js";
-import { repoPath, type GitHubHttpClient } from "./github.js";
+import { GitHubStatusService, repoPath, type GitHubHttpClient, type GitHubPullRequestChecks } from "./github.js";
+// Re-export the pure repo-URL parser so a stage that already imports `GitHubCodeHost`
+// (the merge/percolation reads) sources `RepoRef` parsing here too — one fewer dep there.
+export { parseGitHubRepository } from "./github.js";
 import type {
   CodeHost,
   CodeHostRepoRef,
@@ -106,10 +109,14 @@ function refObjectSha(body: unknown): string | undefined {
  * fresh so a long-lived host instance never holds a stale credential.
  */
 export class GitHubCodeHost implements CodeHost {
+  private readonly status: GitHubStatusService;
+
   constructor(
     private readonly http: GitHubHttpClient,
     private readonly resolveToken: CodeHostTokenSupplier,
-  ) {}
+  ) {
+    this.status = new GitHubStatusService(http);
+  }
 
   async createRepo(input: CreateHostRepoInput): Promise<CreatedHostRepo> {
     const token = await this.resolveToken();
@@ -354,6 +361,23 @@ export class GitHubCodeHost implements CodeHost {
       return undefined;
     }
     return body.encoding === "base64" ? decodeBase64Content(body.content) : body.content;
+  }
+
+  /**
+   * Read the CI/check status of a BRANCH ref (decomposition §5e) — the post-merge
+   * watcher's host CI read on the default branch. Delegates to the SAME
+   * `GitHubStatusService.fetchBranchChecks` the run/queue CI poll uses (the branch's
+   * HEAD SHA + its protection required contexts), so `evaluateCiObservation` reads an
+   * identical shape. The host HOSTS — this is an external CI read, not Tanren's gate.
+   */
+  async readBranchChecks(input: { repo: CodeHostRepoRef; branch: string }): Promise<GitHubPullRequestChecks> {
+    const token = await this.resolveToken();
+    return this.status.fetchBranchChecks({
+      repo: input.repo,
+      branch: input.branch,
+      token: token.token,
+      ...(token.refresh !== undefined && { refreshToken: token.refresh }),
+    });
   }
 
   /**

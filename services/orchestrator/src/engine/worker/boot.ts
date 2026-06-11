@@ -13,7 +13,10 @@ import { resolveWorkerConcurrency } from "../config/index.js";
 import { buildSecretStore, type SecretStore } from "../contracts/index.js";
 import { startAutonomyLoops, type AutonomyLoops } from "./autonomyLoops.js";
 import { TimedGitHubHttpClient, TimedCommandSubstrate, createLogger } from "../observability/index.js";
-import { buildVcsProvider, FetchGitHubHttpClient, GithubAppTokenMinter } from "../providers/buildVcsProvider.js";
+// `FetchGitHubHttpClient` is the raw transport (wrapped by `TimedGitHubHttpClient` below);
+// `GithubAppTokenMinter` (re-exported from `github.js`) caches the App installation token
+// the clone/CI/merge stages reuse.
+import { FetchGitHubHttpClient, GithubAppTokenMinter } from "../providers/github.js";
 import { SshCommandSubstrate } from "../ssh/index.js";
 import { assertStandaloneClaimMtlsConfigured, buildClaimClientFromEnv } from "./claimClientFromEnv.js";
 import { resolveRunnerIdentitySecretRef, seedRunnerIdentitySecret } from "./runnerIdentityFromEnv.js";
@@ -135,10 +138,10 @@ export async function bootRunWorker(mode: WorkerBootMode = "in-process"): Promis
   // model call exactly as the Forge route factories do).
   const allocator = await buildAllocatorFromEnv(pool, secrets);
   const ssh = new TimedCommandSubstrate(new SshCommandSubstrate(secrets));
+  // The run/merge lifecycle routes its VCS/CI ops through the `CodeHost` +
+  // `VisibilityProjection` host seams (`hostFactory`) + the standalone credential
+  // resolver, all built over this one shared (timed) GitHub HTTP client.
   const githubHttp = new TimedGitHubHttpClient(new FetchGitHubHttpClient());
-  // The run/merge lifecycle routes its VCS/CI ops through the VcsProvider
-  // seam (registry default = the real GitHub impl composing `githubHttp`).
-  const vcsProvider = buildVcsProvider(githubHttp);
   // Part 2: the shared App installation-token minter (cache lives here),
   // threaded into the workflow so the App-first CLONE token reuses the same
   // minted/cached installation token as the CI-poll / merge stages.
@@ -162,7 +165,7 @@ export async function bootRunWorker(mode: WorkerBootMode = "in-process"): Promis
     ssh,
     secrets,
     ...(credentialScoping === undefined ? {} : { credentialScoping }),
-    vcsProvider,
+    githubHttp,
     githubAppMinter,
     identitySecretRef,
     ...(claimClient === undefined ? {} : { claimClient }),
@@ -181,10 +184,9 @@ export async function bootRunWorker(mode: WorkerBootMode = "in-process"): Promis
     ssh,
     githubHttp,
     identitySecretRef,
-    // the DagWalker's speculative integrator builds a dependent's
-    // dynamic-base integration branch through the SAME VcsProvider + App minter
-    // the run/merge lifecycle uses.
-    vcsProvider,
+    // the DagWalker's base-shift coordinator builds a dependent's dynamic-base
+    // integration state through the SAME GitHub HTTP client + App minter the
+    // run/merge lifecycle uses.
     githubAppMinter,
     // Plane-split (autonomy loops): when remote-writes is on, route EVERY tenant
     // write the autonomy loops drive — the DagWalker's run-creation + dag.* events,

@@ -7,7 +7,6 @@
 // (tests-only) resolves nothing.
 
 import { describe, expect, it } from "vitest";
-import { vcsProviderOver } from "./helpers/vcsProvider.js";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
 import { FakeEventStore } from "./helpers/fakeEventStore.js";
 import { mergeForRun } from "../src/engine/workflow/reviewMerge/index.js";
@@ -42,7 +41,7 @@ describe("P2b merge-stage conflict resolution", () => {
       pool: pool.asPgPool(),
       eventStore: events,
       secrets: new FakeSecretStore(),
-      vcsProvider: vcsProviderOver(unusedHttp()),
+      githubHttp: unusedHttp(),
       runId: "run_1",
       mergeProbe: probe,
       mergeAuthority: authorityBundle(host, landed, { events }),

@@ -34,7 +34,7 @@ import {
 } from "../src/engine/merge/driveConflictResolve.js";
 import type { ConflictContext, ConflictResolverHook } from "../src/engine/workflow/reviewMerge/index.js";
 import { FakeEventStore } from "./helpers/fakeEventStore.js";
-import { InMemoryVcsProvider } from "./conformance/fakes/inMemoryVcsProvider.js";
+import { inertGitHubHttp } from "./helpers/githubHttp.js";
 
 const ORG_ID = "org_x";
 const FACTS = {
@@ -142,7 +142,7 @@ function makeDeps(
     allocator,
     ssh,
     secrets: new FakeSecretStore(),
-    vcsProvider: new InMemoryVcsProvider(),
+    githubHttp: inertGitHubHttp(),
     eventStore: new FakeEventStore(),
     identitySecretRef: "secret/runner/identity",
     timeoutMs: 1000,

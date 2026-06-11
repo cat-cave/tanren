@@ -5,13 +5,13 @@
  * posts). The native check-run publish path it once also carried was removed by the
  * VcsProvider→CodeHost decomposition (the live verdict reaches the forge as STATUS).
  *
- * Extracted from `vcsProvider.ts` so that module stays the contract surface (and
- * under the per-file line cap). Re-exported from `vcsProvider.ts` so callers
- * import them from the contract module unchanged. These payloads carry only
- * non-secret, operator/code-controlled values — never a token.
+ * A sibling of `codeHostTypes.ts` (the neutral run/merge shapes) so that module stays
+ * under the per-file line cap. Re-exported from `codeHostTypes.ts` so callers import
+ * them from one contract module unchanged. These payloads carry only non-secret,
+ * operator/code-controlled values — never a token.
  */
 
-import type { RepoRef, ResolvedVcsToken } from "./vcsProvider.js";
+import type { RepoRef, ResolvedVcsToken } from "./codeHostTypes.js";
 
 /**
  * The state of a published COMMIT STATUS, in provider-neutral terms. Maps onto the

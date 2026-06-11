@@ -30,7 +30,7 @@
 import type { RunnerHandle } from "../../../contracts/allocator.js";
 import type { CommandSubstrate } from "../../../contracts/commandSubstrate.js";
 import type { SecretStore } from "../../../contracts/secretStore.js";
-import type { VcsProvider } from "../../../contracts/vcsProvider.js";
+import type { GitHubHttpClient } from "../../../providers/github.js";
 import type { RecordedConflict, WorkspaceHandle, WorkspaceVcsCore } from "../../../contracts/workspaceVcsCore.js";
 import type {
   ConflictedFile,
@@ -77,7 +77,8 @@ export interface JjConflictApplierDeps {
   /** The secret store the push-token resolution reads from. */
   secrets: SecretStore;
   /** The provider that owns the App-first / static push-token resolution policy. */
-  vcsProvider: VcsProvider;
+  /** The shared (timed) GitHub HTTP client the run/merge host seams build over. */
+  githubHttp: GitHubHttpClient;
   /** The shared installation-token minter (its cache lives here). */
   githubAppMinter?: GithubAppTokenMinter;
   facts: JjConflictApplierFacts;
@@ -249,7 +250,7 @@ export class JjWorkspaceConflictApplier implements WorkspaceConflictApplier {
       target: this.deps.target,
       workspacePath: this.deps.workspacePath,
       secrets: this.deps.secrets,
-      vcsProvider: this.deps.vcsProvider,
+      githubHttp: this.deps.githubHttp,
       ...(this.deps.githubAppMinter !== undefined && { githubAppMinter: this.deps.githubAppMinter }),
       repoUrl: facts.repoUrl,
       headBranch: facts.headBranch,
@@ -284,7 +285,8 @@ export interface BuildJjConflictApplierDeps {
   live: LiveJjWorkspace;
   ssh: CommandSubstrate;
   secrets: SecretStore;
-  vcsProvider: VcsProvider;
+  /** The shared (timed) GitHub HTTP client the run/merge host seams build over. */
+  githubHttp: GitHubHttpClient;
   githubAppMinter?: GithubAppTokenMinter;
   facts: JjConflictApplierFacts;
   timeoutMs: number;
@@ -313,7 +315,7 @@ export function buildJjConflictApplier(deps: BuildJjConflictApplierDeps): JjWork
     workspacePath: deps.live.workspacePath,
     ssh: deps.ssh,
     secrets: deps.secrets,
-    vcsProvider: deps.vcsProvider,
+    githubHttp: deps.githubHttp,
     ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
     facts: deps.facts,
     timeoutMs: deps.timeoutMs,

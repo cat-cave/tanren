@@ -15,7 +15,10 @@ import { ensureSystemTask, routeTaskUpdate } from "../taskWriteRouting.js";
 import { type EventStore, PgEventStore } from "../../eventStore.js";
 import type { AnswererAdapter } from "../../providers/types.js";
 import type { GithubAppTokenMinter } from "../../providers/githubAppTokenMinter.js";
-import type { PullRequestRef, RepoRef, VcsProvider } from "../../contracts/vcsProvider.js";
+import type { PullRequestRef, RepoRef } from "../../contracts/codeHostTypes.js";
+import type { GitHubHttpClient } from "../../providers/github.js";
+import { parsePullRequestRef } from "../../providers/githubRepoRef.js";
+import { resolveVcsToken } from "../../credentials/vcsCredentials.js";
 import { projectHostSeamsOver, readChangeRequestShas } from "../../providers/projectHostSeamsOver.js";
 import {
   type ReviewVerdict,
@@ -42,7 +45,8 @@ export interface PollReviewForRunInput {
   // when wired (remote-writes on); absent, the in-process org-scoped write runs.
   runStateWriter?: RunStateWriter;
   secrets: SecretStore;
-  vcsProvider: VcsProvider;
+  /** The shared (timed) GitHub HTTP client the review stage's host seams build over. */
+  githubHttp: GitHubHttpClient;
   runId: string;
   githubAppMinter?: GithubAppTokenMinter;
   /**
@@ -109,7 +113,7 @@ export interface PollReviewForRunResult {
 export async function pollReviewForRun(input: PollReviewForRunInput): Promise<PollReviewForRunResult> {
   const context = await loadReviewMergeRunContext(input.pool, input.runId, contextOptionsFor(input));
   const eventStore = input.eventStore ?? new PgEventStore(input.pool);
-  const prRef = input.vcsProvider.parsePullRequest(context.prUrl);
+  const prRef = parsePullRequestRef(context.prUrl);
   const pr = { repo: prRef.repo, pullNumber: prRef.number };
   const taskId = await ensureReviewTask(input.pool, context, input.runStateWriter);
   await eventStore.append({
@@ -351,8 +355,7 @@ async function buildGitHubProbe(
   repo: RepoRef,
   pullNumber: number,
 ): Promise<ReviewProbe> {
-  const provider = input.vcsProvider;
-  const resolved = await provider.resolveToken({
+  const resolved = await resolveVcsToken(input.githubHttp, {
     secrets: input.secrets,
     installation: context.installation,
     staticRef: context.staticCredentialRef,
@@ -360,30 +363,33 @@ async function buildGitHubProbe(
   });
   const pr: PullRequestRef = { repo, number: pullNumber };
   const repoFullName = `${repo.owner}/${repo.name}`;
-  // Build the REAL host seams over the provider's existing client (decomposition PR-5).
+  // Build the REAL host seams over the run's shared GitHub client (decomposition PR-5).
   // `codeHost` serves the sha-addressed diff read; `visibility` is the hardened
-  // `SafeVisibilityProjection` — every forge-UI write yields a `ProjectionOutcome` and
-  // can NEVER throw, so a failed mirror can never block the (internally-derived) review
-  // verdict (§0, §6).
-  const { codeHost, visibility } = projectHostSeamsOver(provider, async () => resolved);
+  // `SafeVisibilityProjection` — every forge-UI write/read yields a `ProjectionOutcome`
+  // and can NEVER throw, so a failed mirror can never block the (internally-derived)
+  // review verdict (§0, §6).
+  const { codeHost, visibility } = projectHostSeamsOver(input.githubHttp, async () => resolved);
   return {
     // §5d: un-drafting the PR is a best-effort, NON-gating forge-UI nicety — route it
     // through the hardened projection (a host that never drafts simply yields `skipped`).
     markReady: async () => {
       await visibility.markChangeRequestReady({ repoFullName, changeRequestNumber: pullNumber });
     },
-    // §5f (step-2, DEFERRED): the host review verdict is the EXTERNAL approval read. The
-    // doctrine downgrades it to an advisory best-effort projection read while Tanren's
-    // internal review record becomes the gate — but the live control flow above still
-    // READS this verdict, so flipping it is a behavior change that must NOT couple with
-    // this migration. It needs a new `readExternalApproval?` projection method (a PR-1-
-    // class contract change). Until then the external-approval read stays on the provider
-    // (no behavior change), as §5f's two-step guidance requires.
-    fetchVerdict: () => provider.readReviewVerdict(pr, resolved),
+    // §5f (step-1): the host review verdict is the EXTERNAL approval read — now routed
+    // through the best-effort `VisibilityProjection.readExternalApproval?` seam (the host
+    // review is an "optional external approval"; Tanren's internal review record is the
+    // authoritative gate, §6). A `projected` outcome yields the host verdict; a `skipped`
+    // (no host review surface) / `failed` (transient forge error) resolves to `pending`,
+    // so the poll keeps polling rather than treating the absence as a verdict. The
+    // best-effort severance means a transient host hiccup can never brick the poll.
+    fetchVerdict: async () => {
+      const outcome = await visibility.readExternalApproval({ repoFullName, changeRequestNumber: pullNumber });
+      return outcome.kind === "projected" ? outcome.value : { verdict: "pending" };
+    },
     // §1 #16: the reviewer's diff moves onto the host-neutral, sha-addressed
     // `CodeHost.readDiff` (compares the PR's exact base/head shas — same render shape).
     fetchDiff: async () => {
-      const { baseSha, headSha } = await readChangeRequestShas(provider, pr, resolved);
+      const { baseSha, headSha } = await readChangeRequestShas(input.githubHttp, pr, resolved);
       return codeHost.readDiff(repo, baseSha, headSha);
     },
     // The simulated-review COMMENT is a BEST-EFFORT audit mirror, not the decision source

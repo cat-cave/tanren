@@ -25,7 +25,7 @@ import type { Allocator } from "../contracts/allocator.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
-import type { VcsProvider } from "../contracts/vcsProvider.js";
+import type { GitHubHttpClient } from "../providers/github.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
 import { migrateProjectConfig } from "../config/projectConfig.js";
 import { orgScopeFromRunOrgId, resolveCredentialsForRun } from "../credentials/resolveCredentials.js";
@@ -50,7 +50,8 @@ const DRIVE_RESOLVER_TIMEOUT_MS = 600_000;
 export interface BuildMergeCoordinatorDeps {
   pool: pg.Pool;
   secrets: SecretStore;
-  vcsProvider: VcsProvider;
+  /** The shared (timed) GitHub HTTP client the run/merge host seams build over. */
+  githubHttp: GitHubHttpClient;
   githubAppMinter?: GithubAppTokenMinter;
   /**
    * The runner allocator the drive-path conflict resolver provisions a short-lived
@@ -149,7 +150,7 @@ export function buildDriveMerge(deps: BuildMergeCoordinatorDeps): DriveMergeForQ
   const baseShiftCoordinator = buildBaseShiftCoordinator(
     {
       pool: deps.pool,
-      vcsProvider: deps.vcsProvider,
+      githubHttp: deps.githubHttp,
       secrets: deps.secrets,
       ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
       ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
@@ -213,7 +214,7 @@ export function buildDriveMerge(deps: BuildMergeCoordinatorDeps): DriveMergeForQ
           // writes run — byte-identical to today).
           ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
           secrets: deps.secrets,
-          vcsProvider: deps.vcsProvider,
+          githubHttp: deps.githubHttp,
           runId,
           resolvedGithubCredentialRef: facts.githubCredentialRef,
           // TEST SEAM: an injected freshness/retarget probe (a no-DB unit run); production
@@ -238,7 +239,7 @@ export function buildDriveMerge(deps: BuildMergeCoordinatorDeps): DriveMergeForQ
             allocator: deps.allocator,
             ssh: deps.ssh,
             secrets: deps.secrets,
-            vcsProvider: deps.vcsProvider,
+            githubHttp: deps.githubHttp,
             ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
             ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
             eventStore,
@@ -256,7 +257,7 @@ export function buildDriveMerge(deps: BuildMergeCoordinatorDeps): DriveMergeForQ
             scopedPool,
             eventStore,
             secrets: deps.secrets,
-            vcsProvider: deps.vcsProvider,
+            githubHttp: deps.githubHttp,
             allocator: deps.allocator,
             ssh: deps.ssh,
             identitySecretRef: deps.identitySecretRef,

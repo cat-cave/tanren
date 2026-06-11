@@ -21,7 +21,10 @@ import {
   type ProvisionedArtifact,
 } from "../../engine/contracts/integrationProvisioner.js";
 import type { SecretStore } from "../../engine/contracts/secretStore.js";
-import { RepositoryAlreadyExistsError, RepositoryCreationForbiddenError } from "../../engine/contracts/vcsProvider.js";
+import {
+  RepositoryAlreadyExistsError,
+  RepositoryCreationForbiddenError,
+} from "../../engine/contracts/codeHostTypes.js";
 import {
   createGreenfieldRepository,
   GithubCredentialMissingError,

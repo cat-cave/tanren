@@ -20,7 +20,7 @@ import { JjWorkspaceVcsCore } from "../src/engine/providers/jjWorkspaceVcsCore.j
 import { JjWorkspaceConflictApplier } from "../src/engine/workflow/reviewMerge/conflictResolver/jjWorkspaceApplier.js";
 import type { JjConflictApplierDeps } from "../src/engine/workflow/reviewMerge/conflictResolver/jjWorkspaceApplier.js";
 import type { SecretStore } from "../src/engine/contracts/secretStore.js";
-import type { VcsProvider } from "../src/engine/contracts/vcsProvider.js";
+import type { GitHubHttpClient } from "../src/engine/providers/github.js";
 import { execFileSync } from "node:child_process";
 import { LOCAL_HANDLE, LocalCommandSubstrate } from "./conformance/fakes/localCommandSubstrate.js";
 import { makeJjApplierFixture } from "./conformance/fakes/jjConflictApplierFixtureRepo.js";
@@ -29,11 +29,13 @@ import { fixtureGitEnv } from "./conformance/fakes/fixtureGitEnv.js";
 // The anonymous push path (no installation + empty credentialRef) NEVER calls
 // resolveToken — a stub that throws proves it. Cast: the applier only ever touches
 // resolveToken on the authed path, exercised by the live apex run, not here.
-const noTokenVcsProvider = {
-  resolveToken: () => {
-    throw new Error("resolveToken must NOT be called on the anonymous push path");
+// The anonymous push path (no installation + empty credentialRef) NEVER hits the GitHub
+// transport — an inert client whose request throws proves it.
+const noTokenGitHubHttp: GitHubHttpClient = {
+  async request() {
+    throw new Error("the GitHub transport must NOT be reached on the anonymous push path");
   },
-} as unknown as VcsProvider;
+};
 
 const emptySecrets: SecretStore = {
   async get() {},
@@ -70,7 +72,7 @@ function applierOver(repoUrl: string, workspacePath: string, releaseLog: string[
     workspacePath,
     ssh: new LocalCommandSubstrate(),
     secrets: emptySecrets,
-    vcsProvider: noTokenVcsProvider,
+    githubHttp: noTokenGitHubHttp,
     facts: {
       repoUrl,
       baseBranch: "main",

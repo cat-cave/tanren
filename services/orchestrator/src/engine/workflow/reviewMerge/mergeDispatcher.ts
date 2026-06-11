@@ -9,7 +9,7 @@
 import { routeTaskUpdate } from "../taskWriteRouting.js";
 import { serviceAuditActor, type AuditEnvelope } from "../../events/schemas/audit.js";
 import type { EventStore } from "../../eventStore.js";
-import type { PullRequestMergeability, RepoRef } from "../../contracts/vcsProvider.js";
+import type { PullRequestMergeability, RepoRef } from "../../contracts/codeHostTypes.js";
 import type { ReviewMergeRunContext } from "./context.js";
 import type { PostureDecision } from "./governancePosture.js";
 import {

@@ -22,14 +22,14 @@ import {
   type SpeculativeDependent,
 } from "../contracts/changePercolation.js";
 import { projectSpecLifecycle, type ReviewVerdict, type SpecLifecycle } from "../contracts/dagLifecycle.js";
-import type { VcsProvider } from "../contracts/vcsProvider.js";
+import type { RepoRef } from "../contracts/codeHostTypes.js";
 import type { CodeHost } from "../contracts/codeHost.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import { installationFromOrgConfig, migrateOrgConfig } from "../config/orgConfig.js";
 import { migrateProjectConfig } from "../config/projectConfig.js";
-import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
 import { GitHubCodeHost } from "../providers/githubCodeHost.js";
-import { vcsCredentialHttp } from "../credentials/vcsCredentialHttp.js";
+import { parseGitHubRepository, type GitHubHttpClient, type GithubAppTokenMinter } from "../providers/github.js";
+import { resolveVcsToken } from "../credentials/vcsCredentials.js";
 import { PgDagLifecycleReadModel } from "./lifecycle.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import { type EventStore, PgEventStore } from "../eventStore.js";
@@ -55,7 +55,7 @@ interface SpeculativeRunRow {
 
 export interface PgPercolationReadModelDeps {
   pool: pg.Pool;
-  vcsProvider: VcsProvider;
+  githubHttp: GitHubHttpClient;
   secrets: SecretStore;
   githubAppMinter?: GithubAppTokenMinter;
   /**
@@ -247,7 +247,7 @@ export class PgPercolationReadModel implements PercolationReadModel {
     projectId: string,
     ancestorSpecIds: string[],
   ): Promise<{
-    repo: ReturnType<VcsProvider["parseRepository"]>;
+    repo: RepoRef;
     codeHost: CodeHost;
     branchBySpec: Map<string, string>;
     defaultBranch: string;
@@ -287,19 +287,19 @@ export class PgPercolationReadModel implements PercolationReadModel {
     );
     const installation = orgGithubApp(orgConfig);
     const staticRef = githubStaticRef(projectConfig, orgConfig);
-    const token = await this.deps.vcsProvider.resolveToken({
+    const token = await resolveVcsToken(this.deps.githubHttp, {
       secrets: this.deps.secrets,
       ...(installation !== undefined && { installation }),
       ...(staticRef !== undefined && { staticRef }),
       ...(this.deps.githubAppMinter !== undefined && { minter: this.deps.githubAppMinter }),
     });
-    const http = vcsCredentialHttp(this.deps.vcsProvider);
+    const http = this.deps.githubHttp;
     const codeHost = new GitHubCodeHost(http, async () => ({
       token: token.token,
       ...(token.refresh !== undefined && { refresh: token.refresh }),
     }));
     return {
-      repo: this.deps.vcsProvider.parseRepository(repoUrl),
+      repo: parseGitHubRepository(repoUrl),
       codeHost,
       branchBySpec: new Map(branches.map((b) => [b.spec_id, b.branch] as const)),
       defaultBranch,
@@ -312,12 +312,7 @@ export class PgPercolationReadModel implements PercolationReadModel {
    * is treated as UNCHANGED (never falsely percolated) — the detect only acts on a
    * real, observed divergence.
    */
-  private async headSha(
-    codeHost: CodeHost,
-    repo: ReturnType<VcsProvider["parseRepository"]>,
-    branch: string,
-    fallback: string,
-  ): Promise<string> {
+  private async headSha(codeHost: CodeHost, repo: RepoRef, branch: string, fallback: string): Promise<string> {
     // Route the ancestor head-sha read through the host-neutral `CodeHost` seam
     // (tanren-owns-the-engine.md §6, PR-6) — the engine reasons over the contract,
     // not forge read semantics. Pure substitution (`fetchRef` ≡ the old `readBranchHeadSha`).

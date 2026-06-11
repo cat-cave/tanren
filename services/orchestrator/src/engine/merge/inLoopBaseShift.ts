@@ -21,14 +21,15 @@ import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js"
 import type { RunStateClient } from "../workflow/reviewMerge/context.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { SecretStore } from "../contracts/secretStore.js";
-import type { VcsProvider } from "../contracts/vcsProvider.js";
+import type { GitHubHttpClient } from "../providers/github.js";
 import type { BaseShiftRebaseHook } from "../workflow/reviewMerge/mergeDispatchTypes.js";
 
 /** The runner + credential deps the in-loop base-shift hook drives a live jj rebase from. */
 export interface InLoopBaseShiftDeps {
   /** The worker pool (the merge stage threads it as a `RunStateClient`; narrowed here). */
   pool: RunStateClient;
-  vcsProvider: VcsProvider;
+  /** The shared (timed) GitHub HTTP client the run/merge host seams build over. */
+  githubHttp: GitHubHttpClient;
   secrets: SecretStore;
   allocator: Allocator;
   ssh: CommandSubstrate;
@@ -51,7 +52,7 @@ export function buildInLoopBaseShiftRebaseHook(deps: InLoopBaseShiftDeps): BaseS
   const coordinator = buildBaseShiftCoordinator(
     {
       pool,
-      vcsProvider: deps.vcsProvider,
+      githubHttp: deps.githubHttp,
       secrets: deps.secrets,
       allocator: deps.allocator,
       ssh: deps.ssh,

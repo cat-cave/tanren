@@ -250,7 +250,7 @@ async function resolveOverLiveJj(
     allocator: input.allocator,
     ssh: input.ssh,
     secrets: input.secrets,
-    vcsProvider: input.vcsProvider,
+    githubHttp: input.githubHttp,
     ...(input.githubAppMinter !== undefined && { githubAppMinter: input.githubAppMinter }),
     timeoutMs: input.timeoutMs,
   });
@@ -258,7 +258,7 @@ async function resolveOverLiveJj(
     live,
     ssh: input.ssh,
     secrets: input.secrets,
-    vcsProvider: input.vcsProvider,
+    githubHttp: input.githubHttp,
     ...(input.githubAppMinter !== undefined && { githubAppMinter: input.githubAppMinter }),
     facts: {
       repoUrl: context.repoUrl,

@@ -5,7 +5,6 @@
 // `native_queue`. `direct_merge` is proven UNCHANGED (it still merges immediately).
 
 import { describe, expect, it } from "vitest";
-import { vcsProviderOver } from "./helpers/vcsProvider.js";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
 import { FakeEventStore } from "./helpers/fakeEventStore.js";
 import { mergeForRun, type NativeQueueEnqueuer } from "../src/engine/workflow/reviewMerge/index.js";
@@ -46,7 +45,7 @@ describe("P2d native_queue merge stage", () => {
       eventStore: events,
       secrets: new FakeSecretStore(),
       resolveConflict: noopConflictResolver,
-      vcsProvider: vcsProviderOver(unusedHttp()),
+      githubHttp: unusedHttp(),
       runId: "run_1",
       mergeProbe: probe,
       mergeAuthority: authorityBundle(host, landed, { events }),
@@ -76,7 +75,7 @@ describe("P2d native_queue merge stage", () => {
       eventStore: events,
       secrets: new FakeSecretStore(),
       resolveConflict: noopConflictResolver,
-      vcsProvider: vcsProviderOver(unusedHttp()),
+      githubHttp: unusedHttp(),
       runId: "run_1",
       mergeProbe: probe,
       mergeAuthority: authorityBundle(host, landed, { events }),
@@ -100,7 +99,7 @@ describe("P2d native_queue merge stage", () => {
       eventStore: events,
       secrets: new FakeSecretStore(),
       resolveConflict: noopConflictResolver,
-      vcsProvider: vcsProviderOver(unusedHttp()),
+      githubHttp: unusedHttp(),
       runId: "run_1",
       mergeProbe: probe,
       mergeAuthority: authorityBundle(host, landed, { events }),
@@ -137,7 +136,7 @@ describe("P2d native_queue merge stage", () => {
       eventStore: events,
       secrets: new FakeSecretStore(),
       resolveConflict: noopConflictResolver,
-      vcsProvider: vcsProviderOver(unusedHttp()),
+      githubHttp: unusedHttp(),
       runId: "run_1",
       mergeProbe: probe,
       mergeAuthority: authorityBundle(host, landed, { events }),
@@ -167,7 +166,7 @@ describe("P2d native_queue merge stage", () => {
       eventStore: events,
       secrets: new FakeSecretStore(),
       resolveConflict: noopConflictResolver,
-      vcsProvider: vcsProviderOver(unusedHttp()),
+      githubHttp: unusedHttp(),
       runId: "run_1",
       mergeProbe: probe,
       mergeAuthority: authorityBundle(host, landed, { events }),

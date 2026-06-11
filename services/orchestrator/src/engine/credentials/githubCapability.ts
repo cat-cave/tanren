@@ -2,7 +2,7 @@
 // org's REAL resolved GitHub credential, the one question an operator needs
 // BEFORE a greenfield run: "can this identity CREATE repos?" — so the
 // `administration:write` (App) / `repo`-scope (PAT) gap is learned up front
-// instead of as a late 403 from `VcsProvider.createRepository`.
+// instead of as a late 403 from the `CodeHost.createRepo` call.
 //
 // This is a REAL check against the credential, never a guess:
 //   - App installation → sign the App JWT (the SAME signer the minter uses) and
@@ -104,7 +104,7 @@ export async function probeGithubAppCapability(input: GithubAppCapabilityInput):
  * only in the Authorization header. A non-2xx is a LOUD failure.
  *
  * (MERGE-SAFETY's `resolveActorIdentity` reads the SAME `GET /user` login + id,
- * but through the provider's HTTP client — see `githubVcsProvider.ts` — so the
+ * but through the shared GitHub HTTP client (`githubCodeHost.ts`) — so the
  * observability wrapper + 401-refresh apply; it does not reuse this `fetch` path.)
  */
 export async function probeGithubTokenCapability(input: GithubTokenCapabilityInput): Promise<GithubCapability> {

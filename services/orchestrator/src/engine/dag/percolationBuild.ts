@@ -25,7 +25,7 @@ import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import type { PercolationPending, PercolationSettler, SpeculativeDependent } from "../contracts/changePercolation.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { SecretStore } from "../contracts/secretStore.js";
-import type { VcsProvider } from "../contracts/vcsProvider.js";
+import type { GitHubHttpClient } from "../providers/github.js";
 import type { WorkspaceVcsCore } from "../contracts/workspaceVcsCore.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
 import { orgScopingPool } from "../data/orgScopedDb.js";
@@ -53,7 +53,8 @@ import { clearPercolationPending, recordReplanContext, recordVerifiedAncestorSha
 
 export interface BuildPercolationCoordinatorDeps {
   pool: pg.Pool;
-  vcsProvider: VcsProvider;
+  /** The shared (timed) GitHub HTTP client the run/merge host seams build over. */
+  githubHttp: GitHubHttpClient;
   secrets: SecretStore;
   githubAppMinter?: GithubAppTokenMinter;
   /**
@@ -287,7 +288,7 @@ function liveBaseShiftDeps(deps: BuildPercolationCoordinatorDeps): LiveBaseShift
     allocator: deps.allocator,
     ssh: deps.ssh,
     secrets: deps.secrets,
-    vcsProvider: deps.vcsProvider,
+    githubHttp: deps.githubHttp,
     ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
     ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
     eventStore: deps.runStateWriter ?? new PgEventStore(scopedPool),
@@ -301,7 +302,7 @@ export function buildPercolationCoordinator(deps: BuildPercolationCoordinatorDep
   return new PercolatingCoordinator({
     readModel: new PgPercolationReadModel({
       pool: deps.pool,
-      vcsProvider: deps.vcsProvider,
+      githubHttp: deps.githubHttp,
       secrets: deps.secrets,
       ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
       // Plane-split: route the stale-marker housekeeping clear (a `percolation_pending`

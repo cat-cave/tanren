@@ -9,7 +9,7 @@ import type { MergeCoordinator } from "../contracts/mergeCoordinator.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
-import type { VcsProvider } from "../contracts/vcsProvider.js";
+import type { GitHubHttpClient } from "../providers/github.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
 import { buildBatchMergeCoordinator } from "./batchCoordinatorBuild.js";
 import { boundedRetryDelayMs, serializedRetryAfterMs } from "./mergeSerializedRetry.js";
@@ -24,7 +24,8 @@ export interface MergeCoordinatorSubscriberDeps {
   notifyListener: PgNotifyListener;
   /** Required when `coordinator` is not injected (the production path). */
   secrets?: SecretStore;
-  vcsProvider?: VcsProvider;
+  /** The shared (timed) GitHub HTTP client the run/merge host seams build over. */
+  githubHttp?: GitHubHttpClient;
   githubAppMinter?: GithubAppTokenMinter;
   /**
    * The runner allocator + SSH substrate + identity ref the drive-path conflict
@@ -160,9 +161,9 @@ export class MergeCoordinatorSubscriber {
   }
 
   private buildProductionCoordinator(): MergeCoordinator {
-    const { secrets, vcsProvider, allocator, ssh, identitySecretRef } = this.deps;
-    if (secrets === undefined || vcsProvider === undefined) {
-      throw new Error("MergeCoordinatorSubscriber requires secrets + vcsProvider when no coordinator is injected");
+    const { secrets, githubHttp, allocator, ssh, identitySecretRef } = this.deps;
+    if (secrets === undefined || githubHttp === undefined) {
+      throw new Error("MergeCoordinatorSubscriber requires secrets + githubHttp when no coordinator is injected");
     }
     // The drive-path conflict resolver provisions a short-lived runner + workspace to
     // run the REAL intent-preserving resolver (the blind-re-exec stub is gone). Its
@@ -180,7 +181,7 @@ export class MergeCoordinatorSubscriber {
     return buildBatchMergeCoordinator({
       pool: this.deps.pool,
       secrets,
-      vcsProvider,
+      githubHttp,
       allocator,
       ssh,
       identitySecretRef,

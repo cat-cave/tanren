@@ -23,7 +23,6 @@
 // loop stays inside the configured retry budgets.
 
 import { describe, expect, it } from "vitest";
-import { vcsProviderOver } from "./helpers/vcsProvider.js";
 import type { AuditAnswer, CheckAnswer, PlanAnswer } from "../src/engine/answerers/schemas/index.js";
 import { FakeJobQueue } from "../src/engine/contracts/jobQueue.js";
 import type { AnswererAdapter } from "../src/engine/usage/index.js";
@@ -79,7 +78,7 @@ describe("acceptance hard tier (dequeue→execute, all hard paths)", () => {
       allocator: new RecordingAllocator(),
       ssh: new RecordingSsh(),
       secrets,
-      vcsProvider: vcsProviderOver(github),
+      githubHttp: github,
       identitySecretRef,
       // Budgets generous enough that the scripted loops stay well within them.
       escapeHatches: {
@@ -140,12 +139,12 @@ describe("acceptance hard tier (dequeue→execute, all hard paths)", () => {
       allocator: new RecordingAllocator(),
       ssh: new RecordingSsh(),
       secrets,
-      vcsProvider: vcsProviderOver(github),
+      githubHttp: github,
       identitySecretRef,
       runWorkflow: (input) =>
         runPlannerLoopWorkflow({
           ...input,
-          vcsProvider: vcsProviderOver(github),
+          githubHttp: github,
           maxCiPolls: 1,
           ciPollDelayMs: 0,
           sleep: async () => {},
@@ -212,12 +211,12 @@ describe("acceptance hard tier (dequeue→execute, all hard paths)", () => {
       allocator: new RecordingAllocator(),
       ssh: new RecordingSsh(),
       secrets,
-      vcsProvider: vcsProviderOver(hardTierGitHub()),
+      githubHttp: hardTierGitHub(),
       identitySecretRef,
       runWorkflow: (input) =>
         runPlannerLoopWorkflow({
           ...input,
-          vcsProvider: vcsProviderOver(hardTierGitHub()),
+          githubHttp: hardTierGitHub(),
           maxCiPolls: 1,
           ciPollDelayMs: 0,
           sleep: async () => {},

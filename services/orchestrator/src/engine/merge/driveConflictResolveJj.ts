@@ -33,7 +33,7 @@ export interface DriveJjResolveDeps {
   allocator: Parameters<typeof buildLiveJjWorkspace>[0]["allocator"];
   ssh: Parameters<typeof buildLiveJjWorkspace>[0]["ssh"];
   secrets: Parameters<typeof buildLiveJjWorkspace>[0]["secrets"];
-  vcsProvider: Parameters<typeof buildLiveJjWorkspace>[0]["vcsProvider"];
+  githubHttp: Parameters<typeof buildLiveJjWorkspace>[0]["githubHttp"];
   githubAppMinter?: Parameters<typeof buildLiveJjWorkspace>[0]["githubAppMinter"];
   timeoutMs: number;
   /**
@@ -78,7 +78,7 @@ export async function driveResolveOverJj(
     allocator: deps.allocator,
     ssh: deps.ssh,
     secrets: deps.secrets,
-    vcsProvider: deps.vcsProvider,
+    githubHttp: deps.githubHttp,
     ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
     timeoutMs: deps.timeoutMs,
   });
@@ -86,7 +86,7 @@ export async function driveResolveOverJj(
     live,
     ssh: deps.ssh,
     secrets: deps.secrets,
-    vcsProvider: deps.vcsProvider,
+    githubHttp: deps.githubHttp,
     ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
     facts: jjApplierFacts(facts),
     timeoutMs: deps.timeoutMs,

@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { vcsProviderOver } from "./helpers/vcsProvider.js";
 import { RecordingPool, RecordingRunPool, RecordingSsh, ScriptedGitHubHttp } from "./helpers/githubDraftPrFakes.js";
 import type { RunnerHandle } from "../src/engine/contracts/allocator.js";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
@@ -376,7 +375,7 @@ describe("GitHub draft PR contract", () => {
       pool: pool.asPgPool(),
       eventStore: events,
       secrets,
-      vcsProvider: vcsProviderOver(http),
+      githubHttp: http,
       ssh,
       target,
       runId: "run_123",
@@ -431,7 +430,7 @@ describe("GitHub draft PR contract", () => {
       pool: pool.asPgPool(),
       eventStore: events,
       secrets,
-      vcsProvider: vcsProviderOver(http),
+      githubHttp: http,
       ssh,
       runId: "run_123",
       identitySecretRef: "runner/local/identity",
@@ -476,7 +475,7 @@ describe("GitHub draft PR contract", () => {
       pool: pool.asPgPool(),
       eventStore: events,
       secrets,
-      vcsProvider: vcsProviderOver(http),
+      githubHttp: http,
       ssh,
       runId: "run_123",
       identitySecretRef: "runner/local/identity",
