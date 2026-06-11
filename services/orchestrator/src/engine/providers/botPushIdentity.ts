@@ -61,25 +61,3 @@ export async function resolveBotPushIdentity(ctx: BotPushIdentityContext): Promi
   // here, never a degrade to an unattributable `*@tanren.invalid` author.
   return ctx.vcsProvider.resolveActorIdentity(resolved);
 }
-
-/**
- * The `git config user.name/user.email` lines that attribute the workspace's
- * commits to the bot identity. AUTHENTICATED runs set the resolved login + its
- * canonical noreply email so GitHub maps each commit back to the login and the
- * external-change gate sees Tanren's login (not `<unknown>`). The genuinely
- * UNAUTHENTICATED public path (no identity) sets a non-attributable placeholder —
- * git refuses to commit without SOME author, but it never pushes as Tanren.
- *
- * `quote` is the caller's shell-arg quoter (so this module stays substrate-neutral).
- */
-export function botGitIdentityConfig(
-  identity: ActorIdentity | undefined,
-  placeholderName: string,
-  placeholderEmail: string,
-  quote: (value: string) => string,
-): string[] {
-  if (identity === undefined) {
-    return [`git config user.name ${quote(placeholderName)}`, `git config user.email ${quote(placeholderEmail)}`];
-  }
-  return [`git config user.name ${quote(identity.login)}`, `git config user.email ${quote(identity.noreplyEmail)}`];
-}

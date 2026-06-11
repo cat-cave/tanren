@@ -1,9 +1,9 @@
-// The jj-backed drive-path conflict resolve (tanren-owns-the-engine.md §2/§5,
-// Wave-3/S1 cutover). Extracted from driveConflictResolve.ts to keep BOTH files under
-// the 500-line + 12-dependency architecture caps: this owns the jj branch (allocate a
-// live jj workspace, build the jj applier, run the resolver over jj's FIRST-CLASS
-// conflicts), while driveConflictResolve.ts keeps the classify/cap/yield wrapper + the
-// git kill-switch path. The flag (`conflictResolverJjLive`) selects between them.
+// The jj-backed drive-path conflict resolve (tanren-owns-the-engine.md §2/§5). Extracted
+// from driveConflictResolve.ts to keep BOTH files under the 500-line + 12-dependency
+// architecture caps: this owns the jj workspace mechanism (allocate a live jj workspace,
+// build the jj applier, run the resolver over jj's FIRST-CLASS conflicts), while
+// driveConflictResolve.ts keeps the classify/cap/yield wrapper. The jj applier is the
+// sole conflict workspace mechanism (the git-merge-abort path is gone).
 
 import type { RunnerHandle } from "../contracts/allocator.js";
 import type { OrgGithubAppInstallation } from "../config/orgConfig.js";
@@ -52,13 +52,13 @@ export interface DriveJjResolveDeps {
 }
 
 /**
- * The jj-backed drive resolve (the Wave-3/S1 cutover default): allocate a live jj
- * workspace, build the jj applier over it, assemble the resolver over the SAME runner +
- * path (so the re-gate judges the jj-resolved tree), and run it. The jj applier owns
- * releasing the live workspace on its terminal step, so the workspace is released
- * exactly once — here we only release on a build/run failure BEFORE the applier took
- * ownership (its `gather()` had not yet run). FAIL-CLOSED throughout: `buildLiveJjWorkspace`
- * never returns a half-built workspace, and a failure releases the runner loudly.
+ * The jj-backed drive resolve: allocate a live jj workspace, build the jj applier over
+ * it, assemble the resolver over the SAME runner + path (so the re-gate judges the
+ * jj-resolved tree), and run it. The jj applier owns releasing the live workspace on its
+ * terminal step (publish/abort); the `finally` release is the idempotent backstop — a
+ * no-op once the applier released, and the safety net if the resolver returns WITHOUT the
+ * applier taking ownership (its `gather()` never ran). FAIL-CLOSED throughout:
+ * `buildLiveJjWorkspace` never returns a half-built workspace, and release is LOUD on a leak.
  */
 export async function driveResolveOverJj(
   deps: DriveJjResolveDeps,
@@ -102,12 +102,13 @@ export async function driveResolveOverJj(
       applier,
     });
     return await resolver(conflictContext);
-  } catch (error) {
-    // FAIL-CLOSED: a failure BEFORE the applier's gather() took workspace ownership
-    // would leak the runner — release it loudly. (Once gather() runs, the applier's
-    // terminal publish/abort owns release; releasing twice is a no-op there.)
+  } finally {
+    // IDEMPOTENT BACKSTOP: the applier's terminal publish/abort already released the
+    // workspace (releasing twice is a no-op via the `released` guard). This catches the
+    // two leak cases — a throw BEFORE the applier's gather() took ownership, and a
+    // resolver that returns WITHOUT the applier ever running — so the runner is released
+    // exactly once, never leaked. release() stays LOUD on a real release failure.
     await live.release();
-    throw error;
   }
 }
 

@@ -1,13 +1,12 @@
-// Wave-3/Slice-2: the LIVE base-shift seams + the `baseShiftLive()` flag (default ON +
-// kill-switch) + the merge-path `behind`-handler wiring (tanren-owns-the-engine.md §3
-// never-discard, §7 one base-shift handler). These prove the WIRING + the never-discard
-// coordinator outcomes through a FAITHFUL FAKE of the live seams (the full jj-against-a-
-// runner path is apex-validated; here we fake at the live-seam boundary). Proves:
-//   - flag DEFAULT ON: `buildBaseShiftCoordinator` with the runner deps wired selects the
-//     LIVE seams (the opener allocates a runner) — NOT the held stub;
-//   - flag OFF (`BASE_SHIFT_LIVE=0`): the held stubs HOLD loudly (kill-switch);
-//   - flag ON but the runner deps ABSENT: construction THROWS LOUD (a misconfigured live
-//     flag is a bug, never a silent degrade to a held stub);
+// The LIVE base-shift seams + the merge-path `behind`-handler wiring
+// (tanren-owns-the-engine.md §3 never-discard, §7 one base-shift handler). These prove the
+// WIRING + the never-discard coordinator outcomes through a FAITHFUL FAKE of the live seams
+// (the full jj-against-a-runner path is apex-validated; here we fake at the live-seam
+// boundary). Proves:
+//   - the LIVE seams are unconditional: `buildBaseShiftCoordinator` with the runner deps
+//     wired selects the LIVE seams (the opener allocates a runner);
+//   - the runner deps ABSENT: construction THROWS LOUD (a wiring bug, never a silent
+//     degrade);
 //   - the merge-path `behind` hook maps the coordinator's never-discard outcomes:
 //       * a CONFLICT rebased + resolved IN PLACE (same run_id, ending `rebased_resolved`)
 //         ⇒ the hook returns `rebased` — NOT `held` (the never-discard proof);
@@ -54,7 +53,6 @@ function dependent(): SpeculativeDependent {
 }
 
 afterEach(() => {
-  delete process.env["BASE_SHIFT_LIVE"];
   delete process.env["WALKER_JJ_LOCAL_BASE"];
   vi.restoreAllMocks();
 });
@@ -185,11 +183,10 @@ function fakeRunsPool(): pg.Pool {
   } as unknown as pg.Pool;
 }
 
-// ---- (1) The flag selection (default ON + kill-switch + fail-closed fallback) ----
+// ---- (1) The live-seam selection (unconditional + loud-throw on absent deps) ----
 
-// The held stub throws BEFORE any DB read; the live opener's FIRST act is
-// `loadBaseShiftRunContext` (a `runWithSystemScope` `FROM runs` query). So whether a `FROM
-// runs` read RAN distinguishes the LIVE seam from the HELD stub.
+// The live opener's FIRST act is `loadBaseShiftRunContext` (a `runWithSystemScope` `FROM
+// runs` query). So whether a `FROM runs` read RAN proves the LIVE seam drove.
 function countingPool(counter: { reads: number }): pg.Pool {
   const run = (sql: string) => {
     if (/FROM runs/u.test(sql)) counter.reads += 1;
@@ -214,8 +211,8 @@ const runnerDeps = () => ({
   identitySecretRef: "secret/runner/identity",
 });
 
-describe("baseShiftLive() flag — the Wave-3/Slice-2 cutover (default ON + kill-switch)", () => {
-  it("DEFAULT ON + runner deps wired ⇒ the LIVE opener runs (reaches the DB context load), NOT the held stub", async () => {
+describe("the LIVE base-shift seams — unconditional + loud-throw on absent deps", () => {
+  it("runner deps wired ⇒ the LIVE opener runs (reaches the DB context load)", async () => {
     const counter = { reads: 0 };
     const coord = buildBaseShiftCoordinator({
       pool: countingPool(counter),
@@ -227,20 +224,6 @@ describe("baseShiftLive() flag — the Wave-3/Slice-2 cutover (default ON + kill
     // here so it surfaces a fail-closed hold — but the KEY proof is the DB read RAN (live).
     await expect(driveRebase(coord)).rejects.toBeInstanceOf(BaseShiftHeldError);
     expect(counter.reads).toBeGreaterThanOrEqual(1);
-  });
-
-  it("KILL-SWITCH (BASE_SHIFT_LIVE=0) ⇒ the HELD stub holds loudly (never reaches the DB)", async () => {
-    process.env["BASE_SHIFT_LIVE"] = "0";
-    const counter = { reads: 0 };
-    const coord = buildBaseShiftCoordinator({
-      pool: countingPool(counter),
-      vcsProvider: {} as never,
-      secrets: {} as never,
-      ...runnerDeps(),
-    });
-    await expect(driveRebase(coord)).rejects.toBeInstanceOf(BaseShiftHeldError);
-    // The held stub threw BEFORE any DB read — the kill-switch reverted to the stubs.
-    expect(counter.reads).toBe(0);
   });
 
   it("WS-A PR-6: WALKER_JJ_LOCAL_BASE ON + a speculative dependent ⇒ the LIVE opener still runs (the local-assembly path is reachable)", async () => {
@@ -271,27 +254,18 @@ describe("baseShiftLive() flag — the Wave-3/Slice-2 cutover (default ON + kill
     expect(counter.reads).toBeGreaterThanOrEqual(1);
   });
 
-  it("flag ON but runner deps ABSENT ⇒ construction THROWS LOUD (a misconfigured live flag, never a silent degrade)", () => {
-    // A `BASE_SHIFT_LIVE`-on build site with no allocator/ssh/identity is wired wrong: the
-    // live flag is on but the runner deps it needs are absent. That is a CONSTRUCTION BUG,
-    // not a degrade to honor with a quiet held stub — `buildBaseShiftCoordinator` throws.
+  it("runner deps ABSENT ⇒ construction THROWS LOUD (a wiring bug, never a silent degrade)", () => {
+    // A build site with no allocator/ssh/identity is wired wrong: the base-shift handler
+    // needs the runner deps to drive a live runner and they are absent. That is a
+    // CONSTRUCTION BUG, not a degrade to honor with a quiet hold — `buildBaseShiftCoordinator`
+    // throws.
     expect(() =>
       buildBaseShiftCoordinator({
         pool: { query: () => Promise.resolve({ rows: [], rowCount: 0 }) } as unknown as pg.Pool,
         vcsProvider: {} as never,
         secrets: {} as never,
       }),
-    ).toThrow(/BASE_SHIFT_LIVE is on but the live base-shift deps are not wired/u);
-  });
-
-  it("KILL-SWITCH (flag OFF) + runner deps ABSENT ⇒ the HELD stub holds (the documented flag-off behavior, unchanged)", async () => {
-    process.env["BASE_SHIFT_LIVE"] = "0";
-    const coord = buildBaseShiftCoordinator({
-      pool: { query: () => Promise.resolve({ rows: [], rowCount: 0 }) } as unknown as pg.Pool,
-      vcsProvider: {} as never,
-      secrets: {} as never,
-    });
-    await expect(driveRebase(coord)).rejects.toBeInstanceOf(BaseShiftHeldError);
+    ).toThrow(/The live base-shift deps are not wired/u);
   });
 });
 

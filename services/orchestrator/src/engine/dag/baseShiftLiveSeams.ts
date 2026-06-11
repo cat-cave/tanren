@@ -1,5 +1,5 @@
 // The LIVE base-shift seams (tanren-owns-the-engine.md §3 never-discard, §0 fail-closed) —
-// the Wave-3/Slice-2 cutover that replaces the `Held*` stubs. A base shift now ACTUALLY
+// the ONE unconditional base-shift mechanism. A base shift ACTUALLY
 // rebases the dependent's existing branch onto the shifted base over a live allocated
 // runner, re-gates it, and resolves a recorded conflict in place — never-discard, never a
 // silent merge. Three seams, each fail-closed (any infra/alloc/clone/gate/resolver failure

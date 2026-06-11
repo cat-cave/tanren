@@ -242,10 +242,6 @@ async function runResolverOverWorkspace(input: {
     specTitle: ctx.specTitle,
     specDescription: ctx.specDescription,
     acceptanceCriteria: ctx.acceptanceCriteria,
-    // `baseBranch` only feeds the git-merge-abort fallback applier (which we never use — the
-    // jj applier is always injected), so it is the applier's diagnostic base branch value.
-    baseBranch: applierFacts.baseBranch,
-    headBranch: ctx.headBranch,
     ...(ctx.endpointBaseUrl !== undefined && { endpointBaseUrl: ctx.endpointBaseUrl }),
     routing: ctx.routing,
     checker: adapters.checker,
