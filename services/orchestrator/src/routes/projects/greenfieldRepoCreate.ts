@@ -9,10 +9,7 @@
 // preserved: the token resolves against THIS org's App-installation/credentials.
 
 import type pg from "pg";
-import {
-  type CreatedRepository,
-  type CreateRepositoryInput,
-} from "../../engine/contracts/vcsProvider.js";
+import { type CreatedRepository, type CreateRepositoryInput } from "../../engine/contracts/vcsProvider.js";
 import type { SecretStore } from "../../engine/contracts/secretStore.js";
 import { resolveVcsToken } from "../../engine/credentials/vcsCredentials.js";
 import {
