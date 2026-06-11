@@ -26,6 +26,10 @@ import {
 import { buildDefaultConflictResolver } from "../workflow/reviewMerge/conflictResolver/index.js";
 import { buildSemEntityMergeFirstPass } from "../workflow/reviewMerge/conflictResolver/semEntityMerge.js";
 import { buildLiveJjWorkspace, type LiveJjWorkspace } from "../providers/liveJjWorkspace.js";
+import { GitHubCodeHost } from "../providers/githubCodeHost.js";
+import { parseGitHubRepository } from "../providers/github.js";
+import { vcsCredentialHttp } from "../credentials/vcsCredentialHttp.js";
+import { resolveVcsToken } from "../credentials/vcsCredentials.js";
 import type { AncestorStack } from "./ancestorStack.js";
 import { assembleBaseShiftStackLive } from "./baseShiftStackAssembly.js";
 import type { BaseShiftRunContext } from "./baseShiftLiveContext.js";
@@ -311,15 +315,25 @@ function buildBaseShiftReGate(
   };
 }
 
-/** Read the dependent's head branch sha back from the forge (the resolver force-pushed it). */
+/**
+ * Read the dependent's head branch sha back from the forge (the resolver force-pushed it),
+ * through the host-neutral `CodeHost.fetchRef` seam (decomposition PR-6) rather than a
+ * GitHub-shaped `VcsProvider` read. The `CodeHost` is built over the SAME GitHub HTTP client
+ * the run's provider holds (`vcsCredentialHttp`) + a per-call token supplier (the standalone
+ * `resolveVcsToken`, §5a); `parseGitHubRepository` is the pure URL parse. Behavior-identical
+ * (`fetchRef` ≡ the old `readBranchHeadSha`).
+ */
 async function readResolvedHeadSha(deps: LiveBaseShiftDeps, ctx: BaseShiftRunContext): Promise<string | undefined> {
   const staticRef = ctx.githubCredentialRef.trim();
-  const token = await deps.vcsProvider.resolveToken({
-    secrets: deps.secrets,
-    ...(ctx.installation !== undefined && { installation: ctx.installation }),
-    ...(staticRef !== "" && { staticRef }),
-    ...(deps.githubAppMinter !== undefined && { minter: deps.githubAppMinter }),
+  const http = vcsCredentialHttp(deps.vcsProvider);
+  const codeHost = new GitHubCodeHost(http, async () => {
+    const resolved = await resolveVcsToken(http, {
+      secrets: deps.secrets,
+      ...(ctx.installation !== undefined && { installation: ctx.installation }),
+      ...(staticRef !== "" && { staticRef }),
+      ...(deps.githubAppMinter !== undefined && { minter: deps.githubAppMinter }),
+    });
+    return { token: resolved.token, ...(resolved.refresh !== undefined && { refresh: resolved.refresh }) };
   });
-  const repo = deps.vcsProvider.parseRepository(ctx.repoUrl);
-  return deps.vcsProvider.readBranchHeadSha({ repo, branch: ctx.headBranch, token });
+  return codeHost.fetchRef({ repo: parseGitHubRepository(ctx.repoUrl), remoteBranch: ctx.headBranch });
 }

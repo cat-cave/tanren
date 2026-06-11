@@ -10,18 +10,16 @@
 //       (it never throws) is identical, and the only difference is a best-effort
 //       `gate.publish_failed` NOTE on failure — never a changed decision.
 //   (b) CodeHost READ substitution returns the SAME data the old provider path did —
-//       proven on the `VcsProviderCodeHost` read adapter (the live percolation head-sha
-//       site) AND on the real `GitHubCodeHost` over the existing github fake transport.
+//       proven on the real `GitHubCodeHost` over the existing github fake transport (the
+//       seam the live percolation / base-shift / batch head-sha sites now construct, after
+//       the transitional `VcsProviderCodeHost` adapter was deleted in decomposition PR-6).
 //
 // Fixtures (the in-memory VcsProvider + a scripted github transport) are TEST FIXTURES
 // — they live HERE under tests/, never in src/.
 
 import { describe, expect, it } from "vitest";
-import { InMemoryVcsProvider } from "./fakes/inMemoryVcsProvider.js";
-import { CONFORMANCE_PRESENT_FILE } from "./vcsProviderConformance.js";
 import { GitHubCodeHost } from "../../src/engine/providers/githubCodeHost.js";
 import { buildProjectHostSeams } from "../../src/engine/providers/hostFactory.js";
-import { VcsProviderCodeHost } from "../../src/engine/providers/vcsProviderCodeHost.js";
 import { publishGateVerdictBestEffort } from "../../src/engine/workflow/gate/publishGateVerdictBestEffort.js";
 import type { GateOutcome } from "../../src/engine/workflow/gate/runGateForWhen.js";
 import {
@@ -189,27 +187,6 @@ class FetchRefGitHubHttp implements GitHubHttpClient {
 }
 
 describe("(b) CodeHost read substitution returns the same data as the old provider path", () => {
-  it("VcsProviderCodeHost.fetchRef matches the provider's readBranchHeadSha (live percolation read)", async () => {
-    const provider = new InMemoryVcsProvider();
-    const token = fakeToken();
-    const branch = "feature/x";
-    const viaProvider = await provider.readBranchHeadSha({ repo: { ...REPO }, branch, token });
-    const codeHost = new VcsProviderCodeHost(provider, async () => token);
-    const viaSeam = await codeHost.fetchRef({ repo: { ...REPO }, remoteBranch: branch });
-    expect(viaSeam).toBe(viaProvider);
-    expect(viaSeam).toBe("sha-feature/x");
-  });
-
-  it("VcsProviderCodeHost.readFile matches the provider's readFileOnBranch", async () => {
-    const provider = new InMemoryVcsProvider();
-    const token = fakeToken();
-    const input = { repo: { ...REPO }, ref: "main", path: CONFORMANCE_PRESENT_FILE };
-    const viaProvider = await provider.readFileOnBranch({ ...input, token });
-    const codeHost = new VcsProviderCodeHost(provider, async () => token);
-    const viaSeam = await codeHost.readFile(input);
-    expect(viaSeam).toBe(viaProvider);
-  });
-
   it("GitHubCodeHost.fetchRef reads the same ref the github transport serves", async () => {
     const http = new FetchRefGitHubHttp({ "feature/y": "cafe1234cafe1234cafe1234cafe1234cafe1234" });
     const codeHost = new GitHubCodeHost(http, async () => ({ token: "ghs_x" }));
