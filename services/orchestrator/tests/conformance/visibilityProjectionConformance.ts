@@ -68,5 +68,24 @@ export function describeVisibilityProjectionConformance(
       });
       expect(outcome.kind).toBe("skipped");
     });
+
+    it("openTrackingIssue + markChangeRequestReady resolve to skipped on a host that omits them", async () => {
+      // Both new optional best-effort methods MUST sever like the others: a host
+      // with no issue / no draft-mirror support never throws into the engine.
+      const safe = harden(harness.makeEmpty());
+
+      const issue = await safe.openTrackingIssue({
+        repoFullName: "owner/repo",
+        title: "post-merge regression",
+        body: "the post-merge gate on the default branch failed",
+      });
+      expect(issue.kind).toBe("skipped");
+
+      const ready = await safe.markChangeRequestReady({
+        repoFullName: "owner/repo",
+        changeRequestNumber: 7,
+      });
+      expect(ready.kind).toBe("skipped");
+    });
   });
 }

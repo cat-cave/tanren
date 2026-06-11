@@ -17,10 +17,13 @@
 
 import type {
   ChangeRequestInput,
+  MarkChangeRequestReadyInput,
   ProjectedChangeRequest,
+  ProjectedTrackingIssue,
   PublishGateInput,
   PublishReviewInput,
   RetargetChangeRequestInput,
+  TrackingIssueInput,
   VisibilityProjection,
 } from "../contracts/visibilityProjection.js";
 import type { RepoRef, ResolvedVcsToken, StatusState } from "../contracts/vcsProvider.js";
@@ -142,6 +145,49 @@ export class GitHubVisibilityProjection implements VisibilityProjection {
       pr: { repo, number: input.changeRequestNumber },
       newBase: input.newBaseBranch,
       token,
+    });
+  }
+
+  // openTrackingIssue = file ONE best-effort tracking issue on the repo (the SAME
+  // `POST /issues` the provider's `createIssue` used, now on the projection seam —
+  // the home for the post-merge-failure regression note). Best-effort: any GitHub
+  // failure rejects here and is severed by `harden()` into a `failed` outcome, so
+  // the post-merge watcher can tolerate a projection that does not support issues.
+  async openTrackingIssue(input: TrackingIssueInput): Promise<ProjectedTrackingIssue> {
+    const repo = parseRepoFullName(input.repoFullName);
+    const token = await this.resolveToken();
+    const response = await this.http.request({
+      method: "POST",
+      path: `/repos/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}/issues`,
+      token: token.token,
+      refreshToken: token.refresh,
+      body: {
+        title: input.title,
+        body: input.body,
+        ...(input.labels !== undefined && input.labels.length > 0 && { labels: [...input.labels] }),
+      },
+    });
+    if (response.status !== 201 || typeof response.body !== "object" || response.body === null) {
+      throw new Error(`GitHub issue create failed: HTTP ${response.status}`);
+    }
+    const body = response.body as { number?: unknown; html_url?: unknown };
+    if (typeof body.number !== "number" || typeof body.html_url !== "string") {
+      throw new TypeError("GitHub issue create returned no number/url");
+    }
+    return { number: body.number, url: body.html_url };
+  }
+
+  // markChangeRequestReady = genuinely un-draft the PR mirror (the provider's
+  // `markReadyForReview` — the GraphQL `markPullRequestReadyForReview` flip the
+  // reuse service wraps; idempotent). Best-effort: severed by `harden()`.
+  async markChangeRequestReady(input: MarkChangeRequestReadyInput): Promise<void> {
+    const repo = parseRepoFullName(input.repoFullName);
+    const token = await this.resolveToken();
+    await this.reviewMerge.markReadyForReview({
+      repo,
+      pullNumber: input.changeRequestNumber,
+      token: token.token,
+      refreshToken: token.refresh,
     });
   }
 }
