@@ -12,7 +12,7 @@
 //   (3) `integration.rebase` / `rebase_vs_rebuild` instrumentation is emitted;
 //   (4) fail-closed: an unresolvable re-gate HOLDS (never merges, never discards).
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   decideSettle,
   type PercolationDecision,
@@ -104,16 +104,25 @@ class RecordingWorkspaceCore implements WorkspaceVcsCore {
 }
 
 class RecordingOpener implements BaseShiftWorkspaceOpener {
-  readonly calls: Array<{ runId: string; newBaseRef: string; nonSpeculative: boolean }> = [];
+  readonly calls: Array<{
+    runId: string;
+    newBaseRef: string;
+    nonSpeculative: boolean;
+    // WS-A PR-6: the re-resolved ancestor stack the coordinator threads to the opener (the
+    // value the live-jj-local opener assembles `main + ordered ancestors` from).
+    ancestorStack: AncestorStack | undefined;
+  }> = [];
   async open(input: {
     dependent: SpeculativeDependent;
     newBaseRef: string;
     nonSpeculative: boolean;
+    ancestorStack?: AncestorStack;
   }): Promise<{ workspaceId: string; path: string; branch: string; newBaseSha: string }> {
     this.calls.push({
       runId: input.dependent.runId,
       newBaseRef: input.newBaseRef,
       nonSpeculative: input.nonSpeculative,
+      ancestorStack: input.ancestorStack,
     });
     return { workspaceId: "ws_1", path: "/scratch/ws_1", branch: DEP_BRANCH, newBaseSha: "sha-new-base" };
   }
@@ -370,5 +379,78 @@ describe("§5-P0 settle fix (tanren-owns-the-engine.md §5) — a changes_reques
 
   it("no verdict (no-review tier) does NOT block absorption on its own", () => {
     expect(decideSettle("audited", "none")).toBe("absorbed");
+  });
+});
+
+// WS-A PR-6 (walker-jj-local-integration-design.md §2.2) — the never-discard base shift over
+// the LOCAL ancestor stack (flag-gated `WALKER_JJ_LOCAL_BASE`, default-OFF). Two coupling
+// points change vs the synthesized-ref path: (1) the coordinator THREADS the re-resolved
+// ancestor stack to the opener (which assembles it locally); (2) `keepRun` re-points
+// `runs.ancestor_stack` to the re-resolved stack (and NULLs `speculative_base` — a run is
+// "speculative" iff the stack is non-empty). Flag-OFF is byte-identical to today.
+describe("WS-A PR-6 — flag-gated base-shift over the re-resolved ancestor stack", () => {
+  afterEach(() => {
+    delete process.env["WALKER_JJ_LOCAL_BASE"];
+  });
+
+  it("flag-ON: the re-resolved stack is THREADED to the opener (assembled locally, not the synthesized ref)", async () => {
+    process.env["WALKER_JJ_LOCAL_BASE"] = "1";
+    const h = harness({ conflictOnRebase: false, reGate: "passed" });
+    // The kick-off passes the unmerged ancestors' NEW head shas — the re-resolved stack the
+    // opener assembles `main + ordered ancestors` from.
+    await reexec(h, { ancestorHeadShas: { spec_a: "sha-a-new" } });
+    expect(h.opener.calls).toEqual([
+      {
+        runId: DEP_RUN,
+        newBaseRef: "tanren/integ/spec_b",
+        nonSpeculative: false,
+        // The opener got the re-resolved stack (NOT undefined) — so the live opener assembles
+        // it locally instead of cloning `${newBaseRef}@origin`.
+        ancestorStack: [{ specId: "spec_a", runId: "", branch: "", headSha: "sha-a-new" }],
+      },
+    ]);
+    // The dependent's branch was rebased onto the opener's assembled head (never-discard:
+    // the SAME branch, rebased in place — not regenerated).
+    expect(h.workspace.rebaseCalls).toEqual([{ branch: DEP_BRANCH, baseSha: "sha-new-base" }]);
+  });
+
+  it("flag-ON keepRun: re-points runs.ancestor_stack to the re-resolved stack + NULLs speculative_base", async () => {
+    process.env["WALKER_JJ_LOCAL_BASE"] = "1";
+    const h = harness({ conflictOnRebase: false, reGate: "passed" });
+    await reexec(h, { ancestorHeadShas: { spec_a: "sha-a-new" } });
+    // The stack column is the source of truth (the re-resolved stack); speculative_base is
+    // NULL on the jj-local path (no synthesized integration ref to re-point).
+    expect(h.persistence.repointCalls).toEqual([{ runId: DEP_RUN, speculativeBase: null }]);
+    expect(h.persistence.repointStacks).toEqual([
+      { runId: DEP_RUN, ancestorStack: [{ specId: "spec_a", runId: "", branch: "", headSha: "sha-a-new" }] },
+    ]);
+  });
+
+  it("flag-ON, every ancestor merged ⇒ the re-resolved stack is EMPTY (a real run against main)", async () => {
+    process.env["WALKER_JJ_LOCAL_BASE"] = "1";
+    const h = harness({ conflictOnRebase: false, reGate: "passed" });
+    await reexec(h, { nonSpeculative: true, ancestorHeadShas: {} });
+    // Non-speculative: the opener gets an empty stack (so it takes the plain default_branch
+    // clone, not a local assembly) and keepRun NULLs both fields.
+    expect(h.opener.calls).toEqual([
+      { runId: DEP_RUN, newBaseRef: "tanren/integ/spec_b", nonSpeculative: true, ancestorStack: [] },
+    ]);
+    expect(h.persistence.repointCalls).toEqual([{ runId: DEP_RUN, speculativeBase: null }]);
+    expect(h.persistence.repointStacks).toEqual([{ runId: DEP_RUN, ancestorStack: [] }]);
+  });
+
+  it("flag-OFF (default): IDENTICAL to today — speculative_base re-pointed + the SHA-map dual-write", async () => {
+    // No flag set. keepRun re-points the synthesized integration ref + dual-writes the stack
+    // reconstructed from the dependent's per-ancestor SHA map (the PR-1 additive write). The
+    // opener still RECEIVES the stack (it is threaded unconditionally) but the LIVE opener's
+    // assembly branch is flag-gated, so flag-off it clones `${newBaseRef}@origin` as today.
+    const h = harness({ conflictOnRebase: false, reGate: "passed" });
+    await reexec(h, { ancestorHeadShas: { spec_a: "sha-a-new" } });
+    expect(h.persistence.repointCalls).toEqual([{ runId: DEP_RUN, speculativeBase: "tanren/integ/spec_b" }]);
+    // The dual-write reconstructs from `integratedAncestorShas` (sha-old), NOT the threaded
+    // re-resolved stack — the flag-off path is unchanged from PR-1.
+    expect(h.persistence.repointStacks).toEqual([
+      { runId: DEP_RUN, ancestorStack: [{ specId: "spec_a", runId: "", branch: "", headSha: "sha-old" }] },
+    ]);
   });
 });

@@ -25,16 +25,24 @@
 // WITH the shift as context, alive.
 
 import type { PercolationDecision, SpeculativeDependent } from "../contracts/changePercolation.js";
-import type { IntegrationNode } from "../contracts/integrationNodes.js";
 import { ancestorStackFromShaMap, type AncestorStack } from "./ancestorStack.js";
 import type { RebaseResult, WorkspaceVcsCore } from "../contracts/workspaceVcsCore.js";
 import type { PercolationReexecutor } from "./percolationOperation.js";
+import { walkerJjLocalBase } from "./walkerJjLocalBaseFlag.js";
+import {
+  type BaseShiftEventEmitter,
+  type BaseShiftNodeReader,
+  type BaseShiftPersistence,
+  type RebaseDecision,
+} from "./baseShiftPorts.js";
 import { createLogger } from "../observability/logger.js";
 
 const log = createLogger("base-shift");
 
-/** The instrumentation an `integration.rebase` event records (`rebase_vs_rebuild`, §3). */
-export type RebaseDecision = "rebased_clean" | "rebased_resolved" | "replanned" | "held";
+// Re-export the persistence/node/event ports + the `RebaseDecision` instrumentation type
+// (split into `baseShiftPorts.ts` for the line cap) so existing import sites keep importing
+// them from `./baseShiftCoordinator.js` unchanged.
+export type { BaseShiftEventEmitter, BaseShiftNodeReader, BaseShiftPersistence, RebaseDecision };
 
 /**
  * Opens the dependent's runner-local workspace for a base-shift rebase. The production
@@ -50,6 +58,16 @@ export interface BaseShiftWorkspaceOpener {
     newBaseRef: string;
     /** True when EVERY ancestor merged (the rebase is onto plain `default_branch`). */
     nonSpeculative: boolean;
+    /**
+     * WS-A PR-6 (walker-jj-local-integration-design.md §2.2): the RE-RESOLVED ordered
+     * ancestor stack (ancestors that merged are dropped; the rest at their new heads).
+     * With `WALKER_JJ_LOCAL_BASE` ON + a non-empty stack, the live opener ASSEMBLES this
+     * stack LOCALLY (`main + ordered ancestors`) and the coordinator `rebaseOnto`s the
+     * dependent's branch onto the assembled head — instead of cloning the single
+     * `${newBaseRef}@origin` synthesized integration ref. Empty / flag-off ⇒ the EXACT
+     * current single-ref clone (prod unchanged).
+     */
+    ancestorStack?: AncestorStack;
   }): Promise<{ workspaceId: string; path: string; branch: string; newBaseSha: string }>;
 }
 
@@ -94,66 +112,6 @@ export interface BaseShiftConflictResolver {
     newBaseRef: string;
     nonSpeculative: boolean;
   }): Promise<ConflictResolution>;
-}
-
-/**
- * The KEEP-RUN-ROW persistence (never-discard). A base shift NEVER creates a run: it
- * re-points the EXISTING run's dynamic base, stamps the in-flight marker pointing at
- * THAT SAME run (so the existing settle pass advances `verified_ancestor_shas` once the
- * re-gate passes), and — only on an irreconcilable shift — records the replan context.
- * The dependent's run row + git branch survive every path.
- */
-export interface BaseShiftPersistence {
-  /** Re-point the EXISTING run's dynamic base (NULL when non-speculative). Keeps the row. */
-  repointBase(input: {
-    projectId: string;
-    runId: string;
-    speculativeBase: string | null;
-    /**
-     * WS-A PR-1 (walker-jj-local-integration-design.md §2.3): the re-resolved ordered
-     * ancestor stack, DUAL-WRITTEN to `runs.ancestor_stack` alongside the legacy base.
-     * Empty when non-speculative. ADDITIVE (written, not yet read).
-     */
-    ancestorStack?: AncestorStack;
-  }): Promise<void>;
-  /** Stamp the in-flight percolation marker on the EXISTING run (the settle handle). */
-  markInFlight(input: {
-    projectId: string;
-    runId: string;
-    pending: { ancestorSpecId: string; toSha: string; reviewVerdict?: "changes_requested" };
-  }): Promise<void>;
-  /** Record the replan context (intent stays ALIVE) when the old work no longer fits. */
-  recordReplan(input: {
-    projectId: string;
-    specId: string;
-    runId: string;
-    ancestorSpecId: string;
-    ancestorSha: string;
-    reason: string;
-  }): Promise<void>;
-}
-
-/** Reads the affected `integration_nodes` for a base shift (S0 observe model). */
-export interface BaseShiftNodeReader {
-  nodesForDependent(input: { projectId: string; dependent: SpeculativeDependent }): Promise<IntegrationNode[]>;
-}
-
-/**
- * Emits the `integration.rebase` event — the categorical `decision` + kept `runId`
- * the `rebase_vs_rebuild` read-side (engine/insights/integration) consumes, joining
- * token/wall-clock cost at read time.
- */
-export interface BaseShiftEventEmitter {
-  emitRebase(input: {
-    projectId: string;
-    specId: string;
-    runId: string;
-    branch: string;
-    newBaseSha: string;
-    headSha: string;
-    rebaseConflicted: boolean;
-    decision: RebaseDecision;
-  }): Promise<void>;
 }
 
 export interface BaseShiftCoordinatorDeps {
@@ -206,11 +164,19 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
     ancestorHeadShas: Record<string, string>;
     nonSpeculative: boolean;
   }): Promise<{ reexecRunId: string }> {
+    // WS-A PR-6 (§2.2): the RE-RESOLVED ancestor stack is the kick-off's `ancestorHeadShas`
+    // — the per-ancestor head-sha map of the STILL-UNMERGED ancestors (merged ones already
+    // dropped by `PercolatingKickOff`). It is the SAME ordered content the keep-run dual-write
+    // persists; threaded to the opener so the live-jj-local path assembles `main + ordered
+    // ancestors` LOCALLY (flag-ON) instead of cloning the synthesized integration ref. Empty
+    // when non-speculative (every ancestor merged ⇒ a real run against plain `default_branch`).
+    const ancestorStack: AncestorStack = input.nonSpeculative ? [] : ancestorStackFromShaMap(input.ancestorHeadShas);
     await this.rebaseOnto({
       projectId: input.projectId,
       dependent: input.dependent,
       newBaseRef: input.integrationBranch,
       nonSpeculative: input.nonSpeculative,
+      ancestorStack,
       ancestorSpecId: input.decision.ancestorSpecId,
       toSha: input.decision.toSha,
       ...(input.decision.immediateSeverity === "changes_requested" && {
@@ -241,6 +207,12 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
     dependent: SpeculativeDependent;
     newBaseRef: string;
     nonSpeculative: boolean;
+    /**
+     * WS-A PR-6 (§2.2): the re-resolved ancestor stack the live-jj-local opener assembles
+     * + the keep-run persists (flag-ON). Absent on the merge-`behind` path (a non-speculative
+     * base-branch advance — empty stack); the kick-off path passes the unmerged set.
+     */
+    ancestorStack?: AncestorStack;
     ancestorSpecId: string;
     toSha: string;
     reviewVerdict?: "changes_requested";
@@ -289,6 +261,7 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
     dependent: SpeculativeDependent;
     newBaseRef: string;
     nonSpeculative: boolean;
+    ancestorStack?: AncestorStack;
   }): Promise<{ workspaceId: string; path: string; branch: string; newBaseSha: string }> {
     try {
       return await this.deps.opener.open({
@@ -296,6 +269,9 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
         dependent: input.dependent,
         newBaseRef: input.newBaseRef,
         nonSpeculative: input.nonSpeculative,
+        // WS-A PR-6 (§2.2): the live opener assembles this stack LOCALLY (flag-ON + non-empty)
+        // instead of cloning `${newBaseRef}@origin`; absent/empty/flag-off = single-ref clone.
+        ...(input.ancestorStack !== undefined && { ancestorStack: input.ancestorStack }),
       });
     } catch (error) {
       throw new BaseShiftHeldError("rebase", error instanceof Error ? error.message : String(error));
@@ -310,6 +286,7 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
     newBaseSha: string;
     nonSpeculative: boolean;
     newBaseRef: string;
+    ancestorStack?: AncestorStack;
     ancestorSpecId: string;
     toSha: string;
     reviewVerdict?: "changes_requested";
@@ -340,6 +317,7 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
     newBaseSha: string;
     nonSpeculative: boolean;
     newBaseRef: string;
+    ancestorStack?: AncestorStack;
     ancestorSpecId: string;
     toSha: string;
     reviewVerdict?: "changes_requested";
@@ -417,20 +395,28 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
     dependent: SpeculativeDependent;
     nonSpeculative: boolean;
     newBaseRef: string;
+    ancestorStack?: AncestorStack;
     ancestorSpecId: string;
     toSha: string;
     reviewVerdict?: "changes_requested";
   }): Promise<void> {
-    // Non-speculative (every ancestor merged) re-points the base to NULL (a real run
-    // against main); else the rebuilt integration branch.
-    const speculativeBase = input.nonSpeculative ? null : input.newBaseRef;
-    // WS-A PR-1 dual-write: re-point `runs.ancestor_stack` alongside the legacy base.
-    // Non-speculative ⇒ empty stack; else the re-resolved stack reconstructed from the
-    // dependent's current per-ancestor SHA map (the same content the legacy
-    // `integrated_ancestor_shas` carries). ADDITIVE — written, not yet read.
-    const ancestorStack: AncestorStack = input.nonSpeculative
-      ? []
-      : ancestorStackFromShaMap(input.dependent.integratedAncestorShas);
+    // WS-A PR-6 (§2.2): the "shifted base" the keep-run re-points the EXISTING run onto.
+    //   • flag-ON (`WALKER_JJ_LOCAL_BASE`): the source of truth is the RE-RESOLVED ancestor
+    //     stack (the one the live opener just assembled `main + ordered ancestors` from) —
+    //     empty when every ancestor merged. There is NO synthesized integration ref, so
+    //     `speculative_base` is NULL on this path (a run is "speculative" iff the stack is
+    //     non-empty, §2.3). The stack threaded in from `rebaseOnto` IS what was assembled.
+    //   • flag-OFF (production today): re-point `speculative_base` to the rebuilt integration
+    //     branch (NULL when non-speculative) and DUAL-WRITE the stack reconstructed from the
+    //     dependent's per-ancestor SHA map (PR-1, additive — written, not yet read). BYTE-
+    //     IDENTICAL to before this PR.
+    const jjLocal = walkerJjLocalBase();
+    const speculativeBase = jjLocal || input.nonSpeculative ? null : input.newBaseRef;
+    const ancestorStack: AncestorStack = jjLocal
+      ? (input.ancestorStack ?? [])
+      : input.nonSpeculative
+        ? []
+        : ancestorStackFromShaMap(input.dependent.integratedAncestorShas);
     await this.deps.persistence.repointBase({
       projectId: input.projectId,
       runId: input.dependent.runId,
