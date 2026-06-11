@@ -174,19 +174,6 @@ export const MergeRetargetedPayload = z
   })
   .strict();
 
-// §2c cleanup: the ephemeral integration ref (`tanren/integ/<dep>`) was
-// deleted after the dependent merged onto real `main`. Best-effort + idempotent —
-// a missing ref is still success; this records that the cleanup ran.
-export const MergeIntegrationCleanedPayload = z
-  .object({
-    prUrl: z.string(),
-    prNumber: z.number().int(),
-    integration: MergeIntegrationMode,
-    /** The ephemeral integration branch that was deleted. */
-    integrationBranch: z.string(),
-  })
-  .strict();
-
 // up-to-date enforcement. Before merging, the stage checks the PR branch's
 // freshness: `merge.behind` records that the branch was out of date with its
 // base (so a rebase is being driven); `merge.rebased` records that the

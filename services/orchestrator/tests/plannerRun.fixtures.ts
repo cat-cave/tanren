@@ -229,10 +229,9 @@ function cleanFreshness() {
       headBranch: "tanren/run_1",
     }),
     updateBranch: async () => ({ outcome: "up_to_date" as const, message: "up to date" }),
-    // non-speculative fixtures never re-target/clean (no speculative_base),
+    // non-speculative fixtures never re-target (no speculative_base),
     // but the probe must satisfy the full MergeProbe contract.
     retargetBase: async () => {},
-    deleteIntegrationBranch: async () => {},
   };
 }
 

@@ -54,7 +54,7 @@ export async function rebaseBehindBranch(
 /**
  * The shared dispatcher operations the land path reuses (the event base, the PR
  * fields, the audit envelope, the integration label, the task finalize, the result
- * shape, the recoverable-conflict emit, and the ephemeral-ref cleanup). Implemented by
+ * shape, and the recoverable-conflict emit). Implemented by
  * `MergeDispatcher`; passed to the extracted path so it does not re-derive any of it.
  */
 export interface LandOps {
@@ -72,7 +72,6 @@ export interface LandOps {
   ): Promise<void>;
   result(outcome: MergeOutcomeKind, extra?: { mergeSha?: string; message?: string }): MergeForRunResult;
   emitConflict(message: string, headBranch?: string): Promise<MergeForRunResult>;
-  cleanupIntegrationBranch(): Promise<void>;
 }
 
 /**
@@ -125,7 +124,6 @@ async function landViaAuthorityAttempt(
 
   switch (disposition.kind) {
     case "merged": {
-      await ops.cleanupIntegrationBranch();
       await ops.finalize("merged", { taskOutcome: "ok", taskStatus: "done" });
       // The merge was NOT blocked — so any residual (below-`blockReviewAt`) P2/P3
       // findings are handled per the project posture (§4): route-to-dag emits

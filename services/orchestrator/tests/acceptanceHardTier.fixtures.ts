@@ -242,7 +242,6 @@ export function hardTierWorkflowRunner(github: GitHubHttpClient, trace: HardTier
         },
         updateBranch: async () => ({ outcome: "up_to_date" as const, message: "up to date" }),
         retargetBase: async () => {},
-        deleteIntegrationBranch: async () => {},
       },
       // The land is the unconditional `MergeAuthority` + CodeHost CAS; the resolved-tree
       // re-gate runs through the same `runGate` (passes), then the authority lands.
