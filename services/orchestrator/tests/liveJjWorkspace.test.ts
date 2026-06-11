@@ -17,7 +17,33 @@ import {
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
 import { FakeCommandSubstrate } from "../src/engine/contracts/commandSubstrate.js";
 import type { VcsProvider } from "../src/engine/contracts/vcsProvider.js";
+import type { GitHubHttpClient, GitHubHttpRequest, GitHubHttpResponse } from "../src/engine/providers/github.js";
+import { vcsProviderOver } from "./helpers/vcsProvider.js";
 import { buildLiveJjWorkspace, type LiveJjWorkspaceDeps } from "../src/engine/providers/liveJjWorkspace.js";
+
+// §5a: credential resolution now runs through the standalone `resolveVcsToken`/
+// `resolveVcsActorIdentity` helpers off a REAL `GitHubVcsProvider`'s GitHub client — so
+// these tests build a real provider over a scripted transport (the `vcsProviderOver`
+// helper) rather than proxy-stubbing the (now-delegating) interface methods. The clone
+// token comes from the secret store via `resolveGithubToken`; the bot identity from the
+// transport's `GET /user`.
+
+/** A scripted GitHub transport serving the `GET /user` identity read the static path issues. */
+class StaticUserGitHubHttp implements GitHubHttpClient {
+  async request(input: GitHubHttpRequest): Promise<GitHubHttpResponse> {
+    if (input.method === "GET" && input.path === "/user") {
+      return { status: 200, body: { login: "tanren-bot", id: 999 } };
+    }
+    throw new Error(`unexpected GitHub request: ${input.method} ${input.path}`);
+  }
+}
+
+/** A transport that rejects every request — never reached on the missing-secret failure path. */
+class UnusedGitHubHttp implements GitHubHttpClient {
+  async request(input: GitHubHttpRequest): Promise<GitHubHttpResponse> {
+    throw new Error(`unexpected GitHub request: ${input.method} ${input.path}`);
+  }
+}
 
 const TARGET = sshRunnerHandle({
   host: "runner",
@@ -42,18 +68,13 @@ class ScriptedAllocator implements Allocator {
   }
 }
 
-const TOKEN_FAILURE = "resolveToken boom";
+// The missing-secret error `resolveGithubToken` raises when the static ref points at
+// nothing — the credential-resolution failure that makes the build fail AFTER allocation.
+const TOKEN_FAILURE = "missing GitHub credential ref: github/static/token";
 
-/** A VcsProvider whose `resolveToken` rejects — makes the build fail AFTER allocation. */
+/** A real GitHubVcsProvider whose credential resolution FAILS (the secret is absent). */
 function tokenFailingVcsProvider(): VcsProvider {
-  return new Proxy({} as VcsProvider, {
-    get: (_t, prop) =>
-      prop === "resolveToken"
-        ? () => Promise.reject(new Error(TOKEN_FAILURE))
-        : () => {
-            throw new Error(`unexpected VcsProvider.${String(prop)}`);
-          },
-  });
+  return vcsProviderOver(new UnusedGitHubHttp());
 }
 
 function deps(allocator: Allocator): LiveJjWorkspaceDeps {
@@ -62,12 +83,14 @@ function deps(allocator: Allocator): LiveJjWorkspaceDeps {
       orgId: "org_test",
       projectId: "proj_test",
       repoUrl: "https://github.com/o/r.git",
-      // Non-empty static ref ⇒ the token IS resolved (so the failing resolveToken runs).
+      // Non-empty static ref ⇒ the token IS resolved (so the failing resolution runs);
+      // the secret store below has NO secret at this ref ⇒ resolution throws after alloc.
       githubCredentialRef: "github/static/token",
       identitySecretRef: "runner/identity",
     },
     allocator,
     ssh: new FakeCommandSubstrate(),
+    // No secret at `github/static/token` ⇒ credential resolution fails AFTER allocation.
     secrets: new FakeSecretStore(),
     vcsProvider: tokenFailingVcsProvider(),
   };
@@ -142,28 +165,11 @@ describe("buildLiveJjWorkspace — fail-closed / no-leak error path", () => {
 });
 
 /**
- * A VcsProvider whose `resolveToken` resolves a static token (build SUCCEEDS) AND whose
- * `resolveActorIdentity` resolves the bot identity — the build now resolves the bot
- * pushing identity (finding #7) off the SAME credential so the jj commit author is
- * bot-attributed, so the success path needs both.
+ * A real GitHubVcsProvider over a transport that serves the static-credential identity
+ * read (`GET /user`) — so the build SUCCEEDS: `resolveVcsToken` reads the static token
+ * from the secret store and `resolveVcsActorIdentity` resolves the bot pushing identity
+ * (finding #7) off the SAME credential, attributing the jj commit author.
  */
 function staticTokenVcsProvider(): VcsProvider {
-  return new Proxy({} as VcsProvider, {
-    get: (_t, prop) => {
-      if (prop === "resolveToken") {
-        return () => Promise.resolve({ token: "ghp_fake", source: "static" as const });
-      }
-      if (prop === "resolveActorIdentity") {
-        return () =>
-          Promise.resolve({
-            login: "tanren-bot[bot]",
-            id: "999",
-            noreplyEmail: "999+tanren-bot[bot]@users.noreply.github.com",
-          });
-      }
-      return () => {
-        throw new Error(`unexpected VcsProvider.${String(prop)}`);
-      };
-    },
-  });
+  return vcsProviderOver(new StaticUserGitHubHttp());
 }

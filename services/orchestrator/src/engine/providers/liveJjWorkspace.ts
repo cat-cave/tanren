@@ -42,6 +42,8 @@ import {
   JjWorkspaceVcsCore,
 } from "./jjWorkspaceVcsCore.js";
 import { resolveBotPushIdentity } from "./botPushIdentity.js";
+import { resolveVcsToken } from "../credentials/vcsCredentials.js";
+import { vcsCredentialHttp } from "../credentials/vcsCredentialHttp.js";
 import { githubHttpsRemote, parseGitHubRepository } from "./github.js";
 import type { GithubAppTokenMinter } from "./githubAppTokenMinter.js";
 import { createLogger } from "../observability/logger.js";
@@ -196,8 +198,10 @@ export async function buildLiveJjWorkspace(deps: LiveJjWorkspaceDeps): Promise<L
       tokenSource === "anonymous"
         ? undefined
         : {
+            // §5a: the clone token is credential PLUMBING — resolve via the standalone
+            // helper (off the provider's GitHub client), not a forge op on the seam.
             token: (
-              await deps.vcsProvider.resolveToken({
+              await resolveVcsToken(vcsCredentialHttp(deps.vcsProvider), {
                 secrets: deps.secrets,
                 ...(facts.installation !== undefined && { installation: facts.installation }),
                 ...(staticRef !== "" && { staticRef }),

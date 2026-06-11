@@ -5,8 +5,9 @@
 //
 // CREDENTIAL REUSE (the §6 guardrail "do NOT invent new credential plumbing"): both
 // seams resolve their access token through the SAME credential resolution the live
-// GitHub path already uses — the caller passes the `resolveVcsToken` closure it
-// already builds from `VcsProvider.resolveToken(creds)` (one resolve per stage,
+// GitHub path already uses — the caller passes the `resolveVcsToken` closure it builds
+// from the standalone `credentials/vcsCredentials.ts:resolveVcsToken(http, creds)` (the
+// credential plumbing lifted OFF the `VcsProvider` interface, §5a; one resolve per stage,
 // installation-or-static, with the 401-refresh re-mint). This factory NEVER reads a
 // secret itself; the seams stay token-free (a host swap can't leak GitHub credential
 // shape into the engine) — the plaintext token travels only in each call's auth
@@ -22,8 +23,9 @@ import type { GitHubHttpClient } from "./github.js";
 
 /**
  * The credential supplier the host seams share: resolve the active access token for
- * a host call. This is EXACTLY `() => VcsProvider.resolveToken(creds)` — the live
- * resolver — so the factory reuses the existing plumbing rather than re-deriving it.
+ * a host call. This is EXACTLY `() => resolveVcsToken(http, creds)` — the standalone
+ * live resolver (§5a) — so the factory reuses the existing plumbing rather than
+ * re-deriving it.
  */
 export type HostVcsTokenSupplier = () => Promise<ResolvedVcsToken>;
 

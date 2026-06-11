@@ -25,6 +25,8 @@ import type { SecretStore } from "../contracts/secretStore.js";
 import type { ActorIdentity, VcsProvider } from "../contracts/vcsProvider.js";
 import type { OrgGithubAppInstallation } from "../config/orgConfig.js";
 import type { GithubAppTokenMinter } from "./githubAppTokenMinter.js";
+import { resolveVcsActorIdentity, resolveVcsToken } from "../credentials/vcsCredentials.js";
+import { vcsCredentialHttp } from "../credentials/vcsCredentialHttp.js";
 
 /** The App-first / static credential context a bot-identity resolution reads from. */
 export interface BotPushIdentityContext {
@@ -51,7 +53,10 @@ export async function resolveBotPushIdentity(ctx: BotPushIdentityContext): Promi
   if (ctx.installation === undefined && staticRef === "") {
     return undefined;
   }
-  const resolved = await ctx.vcsProvider.resolveToken({
+  // §5a: token + identity resolution is credential PLUMBING — resolve via the standalone
+  // helpers (off the provider's GitHub client), not forge ops on the `VcsProvider` seam.
+  const http = vcsCredentialHttp(ctx.vcsProvider);
+  const resolved = await resolveVcsToken(http, {
     secrets: ctx.secrets,
     ...(ctx.installation !== undefined && { installation: ctx.installation }),
     ...(staticRef !== "" && { staticRef }),
@@ -59,5 +64,5 @@ export async function resolveBotPushIdentity(ctx: BotPushIdentityContext): Promi
   });
   // LOUD FAILURE: an authenticated path MUST attribute to a real login — a throw
   // here, never a degrade to an unattributable `*@tanren.invalid` author.
-  return ctx.vcsProvider.resolveActorIdentity(resolved);
+  return resolveVcsActorIdentity(resolved);
 }

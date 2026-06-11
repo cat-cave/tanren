@@ -22,6 +22,8 @@ import {
   seedWorkspaceLocalIgnore,
 } from "../workspace/index.js";
 import { gitAuthedCommand, gitTokenAuthPrelude } from "../workspace/githubPush.js";
+import { resolveVcsActorIdentity, resolveVcsToken } from "../credentials/vcsCredentials.js";
+import { vcsCredentialHttp } from "../credentials/vcsCredentialHttp.js";
 import { resolveBootstrapCommand } from "./gate/index.js";
 import type { RunPlannerLoopInput } from "./plannerRun.js";
 import { resolveAncestorStack } from "../dag/ancestorStack.js";
@@ -388,7 +390,10 @@ async function resolveCloneCredential(input: RunPlannerLoopInput): Promise<Resol
   if (input.context.installation === undefined && staticRef.trim() === "") {
     return { token: undefined, identity: undefined };
   }
-  const resolved = await input.vcsProvider.resolveToken({
+  // §5a: token + identity resolution is credential PLUMBING — resolve via the standalone
+  // helpers (off the provider's GitHub client), not forge ops on the `VcsProvider` seam.
+  const http = vcsCredentialHttp(input.vcsProvider);
+  const resolved = await resolveVcsToken(http, {
     secrets: input.secrets,
     ...(input.context.installation !== undefined && { installation: input.context.installation }),
     ...(staticRef.trim() !== "" && { staticRef }),
@@ -396,7 +401,7 @@ async function resolveCloneCredential(input: RunPlannerLoopInput): Promise<Resol
   });
   // LOUD FAILURE: an authenticated run MUST resolve a real pushing identity so its
   // commits are attributable — a throw here, never a degrade to `planner@tanren.invalid`.
-  const identity = await input.vcsProvider.resolveActorIdentity(resolved);
+  const identity = await resolveVcsActorIdentity(resolved);
   return { token: resolved.token, identity };
 }
 
