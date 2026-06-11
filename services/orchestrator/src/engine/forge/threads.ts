@@ -8,6 +8,7 @@ import type pg from "pg";
 import { z } from "zod";
 import type { ActorContext } from "../../auth/schemas.js";
 import { resolveWritableClient } from "../data/orgScopedDb.js";
+import { requireRow } from "../data/pgRows.js";
 import { ForgeThreadCreateInput, ForgeThreadRow, ForgeThreadScope } from "./schemas.js";
 
 type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
@@ -100,21 +101,23 @@ export const ForgeThreadStore = {
     assertActorReachesScope(actor, parsed.orgId, parsed.projectId);
     const id = parsed.id ?? `forge_thread_${randomUUID()}`;
     const db = resolveWritableClient(client);
-    const result = await db.query(
+    const result = await db.query<RawThreadRow>(
       `INSERT INTO forge_threads (id, org_id, project_id, run_id, scope, title)
        VALUES ($1, $2, $3, $4, $5, $6)
        RETURNING ${SELECT_THREAD_COLUMNS}`,
       [id, parsed.orgId, parsed.projectId, parsed.runId, parsed.scope, parsed.title],
     );
-    return decodeThreadRow(result.rows[0] as RawThreadRow);
+    return decodeThreadRow(requireRow(result.rows[0], "forge thread insert"));
   },
 
   async get(client: QueryClient, threadId: string, actor: ActorContext): Promise<ForgeThreadRow | undefined> {
     const db = resolveWritableClient(client);
-    const result = await db.query(`SELECT ${SELECT_THREAD_COLUMNS} FROM forge_threads WHERE id = $1`, [threadId]);
+    const result = await db.query<RawThreadRow>(`SELECT ${SELECT_THREAD_COLUMNS} FROM forge_threads WHERE id = $1`, [
+      threadId,
+    ]);
     const row = result.rows[0];
     if (row === undefined) return undefined;
-    const thread = decodeThreadRow(row as RawThreadRow);
+    const thread = decodeThreadRow(row);
     try {
       assertActorReachesScope(actor, thread.orgId, thread.projectId);
     } catch {
@@ -130,13 +133,13 @@ export const ForgeThreadStore = {
   ): Promise<ForgeThreadRow[]> {
     assertActorReachesScope(actor, args.orgId, args.projectId);
     const db = resolveWritableClient(client);
-    const result = await db.query(
+    const result = await db.query<RawThreadRow>(
       `SELECT ${SELECT_THREAD_COLUMNS} FROM forge_threads
        WHERE org_id = $1 AND project_id = $2
        ORDER BY updated_at DESC`,
       [args.orgId, args.projectId],
     );
-    return result.rows.map((row) => decodeThreadRow(row as RawThreadRow));
+    return result.rows.map((row) => decodeThreadRow(row));
   },
 
   async listForRun(
@@ -146,13 +149,13 @@ export const ForgeThreadStore = {
   ): Promise<ForgeThreadRow[]> {
     assertActorReachesScope(actor, args.orgId, args.projectId);
     const db = resolveWritableClient(client);
-    const result = await db.query(
+    const result = await db.query<RawThreadRow>(
       `SELECT ${SELECT_THREAD_COLUMNS} FROM forge_threads
        WHERE org_id = $1 AND project_id = $2 AND run_id = $3
        ORDER BY updated_at DESC`,
       [args.orgId, args.projectId, args.runId],
     );
-    return result.rows.map((row) => decodeThreadRow(row as RawThreadRow));
+    return result.rows.map((row) => decodeThreadRow(row));
   },
 
   async touch(client: QueryClient, threadId: string): Promise<void> {
@@ -166,12 +169,12 @@ export const ForgeThreadStore = {
       throw new Error(`forge thread not found: ${threadId}`);
     }
     const db = resolveWritableClient(client);
-    const result = await db.query(
+    const result = await db.query<RawThreadRow>(
       `UPDATE forge_threads SET closed_at = NOW(), updated_at = NOW()
        WHERE id = $1
        RETURNING ${SELECT_THREAD_COLUMNS}`,
       [threadId],
     );
-    return decodeThreadRow(result.rows[0] as RawThreadRow);
+    return decodeThreadRow(requireRow(result.rows[0], "forge thread close"));
   },
 } as const;

@@ -236,7 +236,7 @@ async function buildValidatePublish(
       repoRef: template.repoRef,
       stack: manifest.stack,
       channel: manifest.channel,
-      status: template.status as "draft" | "validated" | "degraded" | "official",
+      status: template.status,
     },
   });
   // DURABLE: the just-in-time creation PUBLISHED a validated template — the gated

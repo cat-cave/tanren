@@ -62,12 +62,12 @@ function decodeJobRow(raw: RawJobRow): JobRow {
 
 export const JobStore = {
   async get(client: QueryClient, id: string, _actor: ActorRef): Promise<JobRow | undefined> {
-    const result = await client.query(`SELECT ${SELECT_JOB_COLUMNS} FROM job_queue WHERE id = $1`, [id]);
+    const result = await client.query<RawJobRow>(`SELECT ${SELECT_JOB_COLUMNS} FROM job_queue WHERE id = $1`, [id]);
     const row = result.rows[0];
     if (row === undefined) {
       return undefined;
     }
-    return decodeJobRow(row as RawJobRow);
+    return decodeJobRow(row);
   },
 
   async list(
@@ -90,11 +90,11 @@ export const JobStore = {
       clauses.push(`status = $${params.length}`);
     }
     const where = clauses.length === 0 ? "" : ` WHERE ${clauses.join(" AND ")}`;
-    const result = await client.query(
+    const result = await client.query<RawJobRow>(
       `SELECT ${SELECT_JOB_COLUMNS} FROM job_queue${where} ORDER BY enqueued_at`,
       params,
     );
-    return result.rows.map((row) => decodeJobRow(row as RawJobRow));
+    return result.rows.map((row) => decodeJobRow(row));
   },
 
   async updateStatus(
@@ -123,13 +123,14 @@ export const JobStore = {
     if (next.setEndedAt === true) {
       sets.push("ended_at = now()");
     }
-    const result = await client.query(
+    const result = await client.query<RawJobRow>(
       `UPDATE job_queue SET ${sets.join(", ")} WHERE id = $1 RETURNING ${SELECT_JOB_COLUMNS}`,
       params,
     );
-    if (result.rows.length === 0) {
+    const row = result.rows[0];
+    if (row === undefined) {
       throw new Error(`job not found: ${id}`);
     }
-    return decodeJobRow(result.rows[0] as RawJobRow);
+    return decodeJobRow(row);
   },
 } as const;

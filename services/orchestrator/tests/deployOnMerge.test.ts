@@ -28,7 +28,7 @@ interface PoolState {
   /** The project config (carries the deploy target when present). */
   config: Record<string, unknown>;
   /** The org grant row (org_integrations) for the deploy provider, when linked. */
-  grant?: { provider_kind: string; credential_ref: string; metadata: Record<string, unknown> };
+  grant?: { provider_kind: string; credential_ref: string; metadata: Record<string, unknown>; status?: string };
   /**
    * The org's `org_integrations` grant LIST the deploy-intent probe reads
    * (loadDeployTarget → OrgIntegrationsStore.list). Used to distinguish a legitimate
@@ -79,8 +79,7 @@ function fakePool(state: PoolState): pg.Pool {
       return state.grant === undefined ? { rows: [], rowCount: 0 } : { rows: [{ ...state.grant }], rowCount: 1 };
     }
     if (/FROM org_integrations WHERE org_id = \$1 ORDER BY provider_kind/u.test(sql)) {
-      // The deploy-intent probe (OrgIntegrationsStore.list). Map domain rows into the
-      // store's row shape (id/credential_ref/metadata/capabilities/status).
+      // The deploy-intent probe (OrgIntegrationsStore.list): map domain rows to row shape.
       const rows = (state.linkedGrants ?? []).map((g, i) => ({
         id: `int_${i}`,
         org_id: ORG_ID,
@@ -119,14 +118,15 @@ function secrets(): InMemorySecretStore {
 // The scripted transport assigns the created app the id `vercel_app_1` — the
 // provider-side handle the provisioner would have stored as `deployAppId`.
 const VERCEL_APP_ID = "vercel_app_1";
-// `version: 1` mirrors a real persisted project config — the deploy watcher parses
-// it through the strict migrator to resolve the governance policy version for the
-// deploy audit record (a missing version is a LOUD error in production, never a default).
+// `version: 1` mirrors a real persisted project config — the deploy watcher parses it
+// through the strict migrator for the governance policy version (a missing version is a LOUD prod error).
 const VERCEL_TARGET = { version: 1, deployProvider: "deploy.vercel", deployAppId: VERCEL_APP_ID };
 const VERCEL_GRANT = {
   provider_kind: "deploy.vercel",
   credential_ref: "secret://org/deploy-token",
   metadata: { teamId: "team_abc", slug: "acme" },
+  // `status` (+ app_env `source`) are NOT NULL on the real rows — the fakes carry them so the seam decode passes.
+  status: "linked",
 };
 
 // The REAL v13 github gitSource shape: org (owner) + bare repo + the commit in `sha`
@@ -179,11 +179,11 @@ describe("DeployOnMergeWatcher (a deploy happened)", () => {
         grant: VERCEL_GRANT,
         appEnv: [
           {
-            project_id: PROJECT_ID,
             key: "RESEND_API_KEY",
             value_ref: "secret://proj/resend",
             plain_value: null,
             scopes: ["runtime"],
+            source: "byo",
           },
         ],
       },

@@ -87,7 +87,8 @@ export type ClaimSelfValidationTransition = "open" | "self_resolved";
 //   unchecked    — only used as the anchor-time default in the store; the oracle
 //                  never RETURNS `unchecked` (it always ran a check). Re-exported
 //                  here so the store + oracle share one vocabulary.
-export type ClaimDecidability = "decidable" | "needs_agent" | "unchecked";
+export const CLAIM_DECIDABILITIES = ["decidable", "needs_agent", "unchecked"] as const;
+export type ClaimDecidability = (typeof CLAIM_DECIDABILITIES)[number];
 
 export interface ClaimSelfValidationVerdict {
   // The status transition to persist (`open` = no transition).

@@ -21,6 +21,7 @@ import type pg from "pg";
 import { z } from "zod";
 import type { ActorContext } from "../../auth/schemas.js";
 import { resolveWritableClient } from "../data/orgScopedDb.js";
+import { requireRow } from "../data/pgRows.js";
 import { ForgeProposedAction, type ForgeWriteToolCall } from "../answerers/schemas/forge.js";
 import { ForgeThreadStore } from "./threads.js";
 
@@ -172,7 +173,7 @@ export const ForgeProposalStore = {
   async create(client: QueryClient, input: CreateProposalInput): Promise<ForgeActionProposalRow> {
     const id = `forge_proposal_${randomUUID()}`;
     const db = resolveWritableClient(client);
-    const result = await db.query(
+    const result = await db.query<RawProposalRow>(
       `INSERT INTO forge_action_proposals
          (id, org_id, thread_id, proposing_turn_id, tool_name, args, rationale, status)
        VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, 'pending')
@@ -187,17 +188,20 @@ export const ForgeProposalStore = {
         input.rationale,
       ],
     );
-    return decodeRow(result.rows[0] as RawProposalRow);
+    return decodeRow(requireRow(result.rows[0], "forge proposal insert"));
   },
 
   // Fetch a proposal, gating on the parent thread's authz (throws when the
   // actor cannot reach the thread). Returns undefined for an unknown id.
   async get(client: QueryClient, proposalId: string, actor: ActorContext): Promise<ForgeActionProposalRow | undefined> {
     const db = resolveWritableClient(client);
-    const result = await db.query(`SELECT ${SELECT_COLUMNS} FROM forge_action_proposals WHERE id = $1`, [proposalId]);
+    const result = await db.query<RawProposalRow>(
+      `SELECT ${SELECT_COLUMNS} FROM forge_action_proposals WHERE id = $1`,
+      [proposalId],
+    );
     const raw = result.rows[0];
     if (raw === undefined) return undefined;
-    const row = decodeRow(raw as RawProposalRow);
+    const row = decodeRow(raw);
     // Authz: loading the parent thread throws if the actor cannot reach it.
     await ForgeThreadStore.get(client, row.threadId, actor);
     return row;
@@ -207,13 +211,13 @@ export const ForgeProposalStore = {
   async listForThread(client: QueryClient, threadId: string, actor: ActorContext): Promise<ForgeActionProposalRow[]> {
     await ForgeThreadStore.get(client, threadId, actor);
     const db = resolveWritableClient(client);
-    const result = await db.query(
+    const result = await db.query<RawProposalRow>(
       `SELECT ${SELECT_COLUMNS} FROM forge_action_proposals
        WHERE thread_id = $1
        ORDER BY proposed_at DESC`,
       [threadId],
     );
-    return result.rows.map((raw) => decodeRow(raw as RawProposalRow));
+    return result.rows.map((raw) => decodeRow(raw));
   },
 
   // Idempotently claim a pending proposal for a decision. Uses a conditional
@@ -236,7 +240,7 @@ export const ForgeProposalStore = {
       throw new ProposalAlreadyDecidedError(proposalId, existing.status);
     }
     const db = resolveWritableClient(client);
-    const result = await db.query(
+    const result = await db.query<RawProposalRow>(
       `UPDATE forge_action_proposals
          SET status = $2, decided_by = $3, decided_at = NOW()
        WHERE id = $1 AND status = 'pending'
@@ -249,7 +253,7 @@ export const ForgeProposalStore = {
       const current = await this.get(client, proposalId, actor);
       throw new ProposalAlreadyDecidedError(proposalId, current?.status ?? "approved");
     }
-    return decodeRow(raw as RawProposalRow);
+    return decodeRow(raw);
   },
 
   // Record the outcome of an approved proposal's write. `executed` on success
@@ -261,7 +265,7 @@ export const ForgeProposalStore = {
     outcome: { status: "executed"; result: unknown } | { status: "failed"; error: string },
   ): Promise<ForgeActionProposalRow> {
     const db = resolveWritableClient(client);
-    const result = await db.query(
+    const result = await db.query<RawProposalRow>(
       `UPDATE forge_action_proposals
          SET status = $2, result = $3::jsonb, error = $4
        WHERE id = $1
@@ -273,6 +277,6 @@ export const ForgeProposalStore = {
         outcome.status === "failed" ? outcome.error : null,
       ],
     );
-    return decodeRow(result.rows[0] as RawProposalRow);
+    return decodeRow(requireRow(result.rows[0], "forge proposal recordOutcome"));
   },
 } as const;

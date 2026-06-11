@@ -94,12 +94,14 @@ const SELECT_TASK_TIMELINE_COLUMNS = `task_id, run_id, kind, title, parent_task_
 
 export const TaskStore = {
   async get(client: QueryClient, taskId: string, _actor: ActorRef): Promise<TaskRow | undefined> {
-    const result = await client.query(`SELECT ${SELECT_TASK_COLUMNS} FROM tasks WHERE task_id = $1`, [taskId]);
+    const result = await client.query<RawTaskRow>(`SELECT ${SELECT_TASK_COLUMNS} FROM tasks WHERE task_id = $1`, [
+      taskId,
+    ]);
     const row = result.rows[0];
     if (row === undefined) {
       return undefined;
     }
-    return decodeTaskRow(row as RawTaskRow);
+    return decodeTaskRow(row);
   },
 
   async list(
@@ -122,8 +124,11 @@ export const TaskStore = {
       clauses.push(`status = $${params.length}`);
     }
     const where = clauses.length === 0 ? "" : ` WHERE ${clauses.join(" AND ")}`;
-    const result = await client.query(`SELECT ${SELECT_TASK_COLUMNS} FROM tasks${where} ORDER BY task_id`, params);
-    return result.rows.map((row) => decodeTaskRow(row as RawTaskRow));
+    const result = await client.query<RawTaskRow>(
+      `SELECT ${SELECT_TASK_COLUMNS} FROM tasks${where} ORDER BY task_id`,
+      params,
+    );
+    return result.rows.map((row) => decodeTaskRow(row));
   },
 
   /**
@@ -137,7 +142,7 @@ export const TaskStore = {
     orgId: string,
     _actor: ActorRef,
   ): Promise<ReadonlyArray<Record<string, unknown>>> {
-    const result = await client.query(
+    const result = await client.query<Record<string, unknown>>(
       `SELECT ${SELECT_TASK_TIMELINE_COLUMNS}
        FROM tasks
       WHERE run_id = $1 AND org_id = $2
@@ -149,7 +154,7 @@ export const TaskStore = {
                task_id ASC`,
       [runId, orgId],
     );
-    return result.rows as Array<Record<string, unknown>>;
+    return result.rows;
   },
 
   async updateStatus(
@@ -182,13 +187,14 @@ export const TaskStore = {
     if (next.setEndedAt === true) {
       sets.push("ended_at = now()");
     }
-    const result = await client.query(
+    const result = await client.query<RawTaskRow>(
       `UPDATE tasks SET ${sets.join(", ")} WHERE task_id = $1 RETURNING ${SELECT_TASK_COLUMNS}`,
       params,
     );
-    if (result.rows.length === 0) {
+    const row = result.rows[0];
+    if (row === undefined) {
       throw new Error(`task not found: ${taskId}`);
     }
-    return decodeTaskRow(result.rows[0] as RawTaskRow);
+    return decodeTaskRow(row);
   },
 } as const;

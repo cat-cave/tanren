@@ -33,19 +33,22 @@ function decodeTaskActorRow(raw: RawTaskActorRow): TaskActorRow {
 
 export const ActorStore = {
   async getForTask(client: QueryClient, taskId: string, _actor: ActorRef): Promise<TaskActorRow | undefined> {
-    const result = await client.query("SELECT task_id, agent_kind, cli, model FROM tasks WHERE task_id = $1", [taskId]);
+    const result = await client.query<RawTaskActorRow>(
+      "SELECT task_id, agent_kind, cli, model FROM tasks WHERE task_id = $1",
+      [taskId],
+    );
     const row = result.rows[0];
     if (row === undefined) {
       return undefined;
     }
-    return decodeTaskActorRow(row as RawTaskActorRow);
+    return decodeTaskActorRow(row);
   },
 
   async listForRun(client: QueryClient, runId: string, _actor: ActorRef): Promise<TaskActorRow[]> {
-    const result = await client.query(
+    const result = await client.query<RawTaskActorRow>(
       "SELECT task_id, agent_kind, cli, model FROM tasks WHERE run_id = $1 ORDER BY task_id",
       [runId],
     );
-    return result.rows.map((row) => decodeTaskActorRow(row as RawTaskActorRow));
+    return result.rows.map((row) => decodeTaskActorRow(row));
   },
 } as const;

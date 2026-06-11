@@ -16,9 +16,11 @@
 
 import type pg from "pg";
 import { randomUUID } from "node:crypto";
+import { oneOf } from "../data/pgRows.js";
 import type { ActorRef } from "../state/actor.js";
 import {
   type TemplateChannel,
+  TemplateChannel as TemplateChannelSchema,
   TemplateManifestV1,
   type TemplateManifestV1 as TemplateManifest,
   manifestToJson,
@@ -27,7 +29,8 @@ import {
 type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
 /** The registry lifecycle tier of a template row (templates_status_check). */
-export type TemplateStatus = "draft" | "validated" | "degraded" | "official";
+export const TEMPLATE_STATUSES = ["draft", "validated", "degraded", "official"] as const;
+export type TemplateStatus = (typeof TEMPLATE_STATUSES)[number];
 
 /** A `templates` row, in domain shape (manifest parsed back through the schema). */
 export interface Template {
@@ -95,8 +98,8 @@ function mapRow(row: TemplateRow): Template {
     orgId: row.org_id,
     repoRef: row.repo_ref,
     manifest,
-    status: row.status as TemplateStatus,
-    channel: row.channel as TemplateChannel,
+    status: oneOf(row.status, TEMPLATE_STATUSES, "templates.status"),
+    channel: TemplateChannelSchema.parse(row.channel),
   };
 }
 

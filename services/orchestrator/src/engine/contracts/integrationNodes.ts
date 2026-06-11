@@ -30,7 +30,9 @@ const MEMBER_SEPARATOR = "\n";
  *   - `bisect_prefix`— a prefix node a bisection reads a reusable prefix proof from.
  * All four are the SAME object; the purpose only labels intent, never branches the path.
  */
-export type IntegrationNodePurpose = "eager_base" | "merge_batch" | "stack_head" | "bisect_prefix";
+/** The purpose vocabulary as a tuple (the read seam validates a raw column against it). */
+export const INTEGRATION_NODE_PURPOSES = ["eager_base", "merge_batch", "stack_head", "bisect_prefix"] as const;
+export type IntegrationNodePurpose = (typeof INTEGRATION_NODE_PURPOSES)[number];
 
 /**
  * One ordered member of an integration node: the (spec, run) whose `branch` (at
@@ -78,7 +80,8 @@ export interface IntegrationNode {
 }
 
 /** The lifecycle status of an integration node. */
-export type IntegrationNodeStatus = "building" | "ready" | "landed" | "stale";
+export const INTEGRATION_NODE_STATUSES = ["building", "ready", "landed", "stale"] as const;
+export type IntegrationNodeStatus = (typeof INTEGRATION_NODE_STATUSES)[number];
 
 /**
  * PURE: the MEMBER KEY — `hash(baseSha + ordered member shas)`. This is the

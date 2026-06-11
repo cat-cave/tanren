@@ -17,9 +17,9 @@ import {
   Candidate,
   CandidateTriage,
   InboxSource,
+  SourceKind,
   type CandidateStatus,
   type IngestedItem,
-  type SourceKind,
 } from "../forge/inbox/types.js";
 
 type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
@@ -82,7 +82,7 @@ function mapCandidate(row: CandidateRow): Candidate {
     triage: hasTriage ? CandidateTriage.parse(triageRaw) : null,
     resolvedSpecId: row.resolved_spec_id,
     sourceName: row.source_name ?? "",
-    sourceKind: (row.source_kind ?? "manual") as SourceKind,
+    sourceKind: SourceKind.parse(row.source_kind ?? "manual"),
   });
 }
 

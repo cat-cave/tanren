@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type pg from "pg";
+import { requireRow } from "../data/pgRows.js";
 import {
   type NotificationDeliveryRow,
   type NotificationRouteCreateInput,
@@ -132,7 +133,7 @@ export const NotificationTargetStore = {
   async create(client: QueryClient, input: NotificationTargetCreateInput): Promise<NotificationTargetRow> {
     const parsed = NotificationTargetCreateInputSchema.parse(input);
     const id = parsed.id ?? `notif_target_${randomUUID()}`;
-    const result = await client.query(
+    const result = await client.query<RawTargetRow>(
       `INSERT INTO notification_targets
          (id, org_id, scope, user_id, channel_kind, destination, base_url, label, enabled, weekend_mute)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
@@ -150,22 +151,25 @@ export const NotificationTargetStore = {
         parsed.weekendMute ? 1 : 0,
       ],
     );
-    return decodeTargetRow(result.rows[0] as RawTargetRow);
+    return decodeTargetRow(requireRow(result.rows[0], "notification target insert"));
   },
 
   async get(client: QueryClient, id: string): Promise<NotificationTargetRow | undefined> {
-    const result = await client.query(`SELECT ${TARGET_COLUMNS} FROM notification_targets WHERE id = $1`, [id]);
+    const result = await client.query<RawTargetRow>(
+      `SELECT ${TARGET_COLUMNS} FROM notification_targets WHERE id = $1`,
+      [id],
+    );
     const row = result.rows[0];
     if (row === undefined) return undefined;
-    return decodeTargetRow(row as RawTargetRow);
+    return decodeTargetRow(row);
   },
 
   async listForOrg(client: QueryClient, orgId: string): Promise<NotificationTargetRow[]> {
-    const result = await client.query(
+    const result = await client.query<RawTargetRow>(
       `SELECT ${TARGET_COLUMNS} FROM notification_targets WHERE org_id = $1 ORDER BY scope, channel_kind, label`,
       [orgId],
     );
-    return result.rows.map((row) => decodeTargetRow(row as RawTargetRow));
+    return result.rows.map((row) => decodeTargetRow(row));
   },
 } as const;
 
@@ -173,14 +177,14 @@ export const NotificationRouteStore = {
   async create(client: QueryClient, input: NotificationRouteCreateInput): Promise<NotificationRouteRow> {
     const parsed = NotificationRouteCreateInputSchema.parse(input);
     const id = parsed.id ?? `notif_route_${randomUUID()}`;
-    const result = await client.query(
+    const result = await client.query<RawRouteRow>(
       `INSERT INTO notification_routes
          (id, target_id, event_name, enabled, min_severity)
        VALUES ($1, $2, $3, $4, $5)
        RETURNING ${ROUTE_COLUMNS}`,
       [id, parsed.targetId, parsed.eventName, parsed.enabled ? 1 : 0, parsed.minSeverity],
     );
-    return decodeRouteRow(result.rows[0] as RawRouteRow);
+    return decodeRouteRow(requireRow(result.rows[0], "notification route insert"));
   },
 
   // Returns every route across all targets in the org, for a single event.
@@ -190,22 +194,22 @@ export const NotificationRouteStore = {
     client: QueryClient,
     args: { orgId: string; eventName: string },
   ): Promise<NotificationRouteRow[]> {
-    const result = await client.query(
+    const result = await client.query<RawRouteRow>(
       `SELECT ${qualifiedRouteColumns()}
          FROM notification_routes r
          JOIN notification_targets t ON r.target_id = t.id
         WHERE t.org_id = $1 AND r.event_name = $2`,
       [args.orgId, args.eventName],
     );
-    return result.rows.map((row) => decodeRouteRow(row as RawRouteRow));
+    return result.rows.map((row) => decodeRouteRow(row));
   },
 
   async listForTarget(client: QueryClient, targetId: string): Promise<NotificationRouteRow[]> {
-    const result = await client.query(
+    const result = await client.query<RawRouteRow>(
       `SELECT ${ROUTE_COLUMNS} FROM notification_routes WHERE target_id = $1 ORDER BY event_name`,
       [targetId],
     );
-    return result.rows.map((row) => decodeRouteRow(row as RawRouteRow));
+    return result.rows.map((row) => decodeRouteRow(row));
   },
 } as const;
 
@@ -263,7 +267,7 @@ export const NotificationDispatchLog = {
     }
 
     params.push(filters.limit);
-    const result = await client.query(
+    const result = await client.query<RawDeliveryRow>(
       `SELECT
           n.id,
           COALESCE(n.tenant_id, t.org_id) AS org_id,
@@ -289,7 +293,7 @@ export const NotificationDispatchLog = {
         LIMIT $${params.length}`,
       params,
     );
-    return result.rows.map((row) => decodeDeliveryRow(row as RawDeliveryRow));
+    return result.rows.map((row) => decodeDeliveryRow(row));
   },
 } as const;
 

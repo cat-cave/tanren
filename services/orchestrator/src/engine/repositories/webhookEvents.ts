@@ -17,10 +17,15 @@
 
 import type pg from "pg";
 import { randomUUID } from "node:crypto";
+import { z } from "zod";
 
 type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
-export type WebhookEventStatus = "received" | "processed" | "failed" | "dead_lettered";
+// The status vocabulary as a zod enum so a raw `string` column is VALIDATED
+// (fail-loud on an unknown value) at the read seam rather than `as`-asserted past
+// it — the trust-at-boundary doctrine the repositories apply to their rows.
+const WebhookEventStatus = z.enum(["received", "processed", "failed", "dead_lettered"]);
+export type WebhookEventStatus = z.infer<typeof WebhookEventStatus>;
 
 export interface WebhookEvent {
   id: string;
@@ -54,7 +59,7 @@ function mapRow(row: WebhookEventRow): WebhookEvent {
     eventType: row.event_type,
     deliveryId: row.delivery_id,
     payload: row.payload,
-    status: row.status as WebhookEventStatus,
+    status: WebhookEventStatus.parse(row.status),
     attempts: typeof row.attempts === "string" ? Number.parseInt(row.attempts, 10) : row.attempts,
     lastError: row.last_error,
   };
@@ -125,6 +130,6 @@ export const WebhookEventStore = {
        RETURNING status`,
       [id, error.slice(0, 4000), maxAttempts],
     );
-    return (result.rows[0]?.status ?? "failed") as WebhookEventStatus;
+    return WebhookEventStatus.parse(result.rows[0]?.status ?? "failed");
   },
 } as const;
