@@ -45,11 +45,8 @@ const log = createLogger("change-percolation");
 interface SpeculativeRunRow {
   run_id: string;
   spec_id: string;
-  speculative_base: string | null;
-  /** WS-A PR-8c: the jj-native ancestor stack — SOURCE of the build-base + divergence key. */
+  /** The jj-native ancestor stack — SOURCE of the build-base + divergence key (PR-8c). */
   ancestor_stack: unknown;
-  /** Legacy per-ancestor SHA map — kept ONLY as the dual-read fallback (PR-9 stops writing). */
-  integrated_ancestor_shas: unknown;
   verified_ancestor_shas: unknown;
   percolation_pending: unknown;
 }
@@ -93,15 +90,13 @@ export class PgPercolationReadModel implements PercolationReadModel {
       // key — never strand a re-based-onto-main re-exec). Still in-flight (not
       // merged/halted), plus the absorbed-key + marker.
       //
-      // WS-A PR-8c: a run is "speculative" iff its jj-native `ancestor_stack` is a
-      // non-empty array (the §2.3 predicate), REPLACING the legacy `speculative_base IS
-      // NOT NULL` selection. `jsonb_typeof = 'array'` guards `jsonb_array_length` against
-      // a NULL/non-array value (NULL ⇒ NULL ⇒ filtered). The stack carries the same
-      // ancestors the legacy column did (the walker dual-writes), so the SAME dependents.
+      // §2.3: a run is "speculative" iff its jj-native `ancestor_stack` is a non-empty array.
+      // `jsonb_typeof = 'array'` guards `jsonb_array_length` against a NULL/non-array value
+      // (NULL ⇒ NULL ⇒ filtered).
       const result = await client.query<SpeculativeRunRow>(
         `SELECT DISTINCT ON (r.spec_id)
-                r.run_id, r.spec_id, r.speculative_base, r.ancestor_stack,
-                r.integrated_ancestor_shas, r.verified_ancestor_shas, r.percolation_pending
+                r.run_id, r.spec_id, r.ancestor_stack,
+                r.verified_ancestor_shas, r.percolation_pending
            FROM runs r
           WHERE r.project_id = $1
             AND ((jsonb_typeof(r.ancestor_stack) = 'array' AND jsonb_array_length(r.ancestor_stack) > 0)
@@ -115,13 +110,8 @@ export class PgPercolationReadModel implements PercolationReadModel {
     const dependents = rows
       .map((row): SpeculativeDependent => {
         const life = lifecycleSnapshot.bySpecId.get(row.spec_id);
-        // WS-A PR-8c: the build-base / divergence map derives from the jj-native
-        // `ancestor_stack[].headSha` (dual-read fallback to the legacy map) — same shas.
-        const buildBase = buildBaseFromAncestorStack({
-          ancestorStack: row.ancestor_stack,
-          speculativeBase: row.speculative_base,
-          integratedAncestorShas: row.integrated_ancestor_shas,
-        });
+        // The build-base / divergence map derives from the jj-native `ancestor_stack[].headSha`.
+        const buildBase = buildBaseFromAncestorStack({ ancestorStack: row.ancestor_stack });
         // The verified (absorbed) map defaults to the build base before the first
         // percolation: a fresh speculative start was audited against its build
         // base, so that IS its verified SHA until an ancestor changes.
@@ -131,7 +121,9 @@ export class PgPercolationReadModel implements PercolationReadModel {
         return {
           specId: row.spec_id,
           runId: row.run_id,
-          speculativeBase: row.speculative_base,
+          // jj-local: there is no synthesized host base ref; a run is speculative iff its
+          // `ancestor_stack` is non-empty. The legacy `speculative_base` is always NULL now.
+          speculativeBase: null,
           integratedAncestorShas: buildBase,
           verifiedAncestorShas: verifiedShas,
           absorbedReviewVerdicts: verified.verdicts,

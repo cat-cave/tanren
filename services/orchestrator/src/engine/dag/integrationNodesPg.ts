@@ -33,6 +33,7 @@ import {
   type ProofReuseKeyInput,
   proofReuseKey,
 } from "../contracts/integrationNodes.js";
+import { type AncestorStack, resolveAncestorStack } from "./ancestorStack.js";
 import { createLogger } from "../observability/logger.js";
 
 const log = createLogger("integration-nodes");
@@ -247,40 +248,28 @@ export class PgIntegrationNodeModel {
   }
 
   /**
-   * The COMPATIBILITY READ-MODEL (§8 guardrail). Project a project's in-flight
-   * SPECULATIVE / percolation run rows (the OLD `speculative_base` +
-   * `integrated_ancestor_shas` model) into the FROZEN `IntegrationNode` shape —
-   * WITHOUT a backfill, so a reader sees the old run model AS the new one. This is
-   * the explicit-read-model migration path, never silent abandonment. READ-ONLY:
-   * it derives nodes, it does NOT persist them.
+   * The COMPATIBILITY READ-MODEL (§8 guardrail). Project a project's in-flight SPECULATIVE /
+   * percolation run rows (the jj-native `runs.ancestor_stack` model) into the FROZEN
+   * `IntegrationNode` shape — so the S0 base-shift node read sees the run model AS the node
+   * model. READ-ONLY: it derives nodes, it does NOT persist them. A run is speculative iff
+   * its `ancestor_stack` is non-empty.
    *
    * A speculative run row maps to a node:
-   *   - `baseBranch`/`ref` = the run's `speculative_base` (the dynamic base).
-   *   - `baseSha`          = the base identity. The old run row never persisted the
-   *                          `main` SHA, so the base ref string is the best available
-   *                          base identity (the Wave-3 materialization records the
-   *                          real SHA). Honest about what the old model carried.
-   *   - `members`          = `integrated_ancestor_shas` (ancestorSpecId → headSha),
-   *                          ORDERED by ancestor spec id (the old map is unordered;
-   *                          a stable sort gives a deterministic key).
+   *   - `members`          = the ordered `ancestor_stack` (each `{specId, runId, branch, headSha}`).
+   *   - `baseBranch`/`ref` = the immediate-ancestor PR-head branch (the stacked base), or the
+   *                          dependent's own run branch when the stack carries no branch.
    *   - `purpose`          = `eager_base` (a speculative dependent's dynamic base).
    * Org-scoped under RLS; missing-org is a LOUD throw.
    */
   async projectSpeculativeRunsAsNodes(projectId: string): Promise<IntegrationNode[]> {
     const orgId = await this.resolveOrgOrThrow(projectId);
     const rows = await runWithOrgScope(this.pool, orgId, async (client) => {
-      const result = await client.query<{
-        run_id: string;
-        spec_id: string;
-        branch: string;
-        speculative_base: string | null;
-        integrated_ancestor_shas: unknown;
-      }>(
+      const result = await client.query<{ run_id: string; spec_id: string; branch: string; ancestor_stack: unknown }>(
         `SELECT DISTINCT ON (r.spec_id)
-                r.run_id, r.spec_id, r.branch, r.speculative_base, r.integrated_ancestor_shas
+                r.run_id, r.spec_id, r.branch, r.ancestor_stack
            FROM runs r
           WHERE r.project_id = $1
-            AND r.speculative_base IS NOT NULL
+            AND jsonb_typeof(r.ancestor_stack) = 'array' AND jsonb_array_length(r.ancestor_stack) > 0
             AND r.status NOT IN ('halted','cancelled','failed','merged')
           ORDER BY r.spec_id, r.started_at DESC`,
         [projectId],
@@ -290,10 +279,8 @@ export class PgIntegrationNodeModel {
     return rows.map((row) =>
       speculativeRunToNode({
         runId: row.run_id,
-        specId: row.spec_id,
         branch: row.branch,
-        speculativeBase: row.speculative_base ?? "",
-        integratedAncestorShas: asShaMap(row.integrated_ancestor_shas),
+        ancestorStack: resolveAncestorStack({ ancestorStack: row.ancestor_stack }),
       }),
     );
   }
@@ -339,8 +326,10 @@ export async function observeRunAsIntegrationNode(
   // The structural shape of the run being inserted (a SpecRunContract — kept
   // structural to avoid coupling this dag module to the workflow types).
   run: { runId: string; specId: string; branch: string; projectId: string; project: { defaultBranch: string } },
-  // The speculative block (`undefined` ⇒ a non-speculative run against `main`).
-  spec: { speculativeBase: string | null; integratedAncestorShas?: Record<string, string> } | undefined,
+  // The speculative block (`undefined` ⇒ a non-speculative run against `main`). Under
+  // the jj-local model the eager dependent's base is `main + ordered ancestor_stack`
+  // (no synthesized host ref), so the node is derived from the ordered `ancestorStack`.
+  spec: { ancestorStack?: AncestorStack } | undefined,
 ): Promise<void> {
   // The SAVEPOINT is the un-poison boundary: any error inside the observe write
   // rolls the tx back to HERE, so the outer run-create tx stays committable.
@@ -353,20 +342,26 @@ export async function observeRunAsIntegrationNode(
     // A null-org (CLI) run has no tenant key to scope a write to — skip it (but still
     // RELEASE the savepoint below so the tx has no dangling savepoint).
     if (orgId !== null) {
-      const speculativeBase = spec?.speculativeBase ?? null;
       const baseBranch = run.project.defaultBranch;
-      // baseSha: the old run row never persists the `main` SHA, so the base identity
-      // is the speculative base ref when speculative, else the default branch name (a
-      // non-speculative run against `main`). Honest about what the run model carries;
-      // the Wave-3 materialization records the real SHA.
-      const baseSha = speculativeBase ?? baseBranch;
-      const members = buildMembersFromAncestorShas(run.runId, spec?.integratedAncestorShas ?? {});
+      // jj-local: the dependent assembles `main + ordered ancestors` LOCALLY; the run
+      // row never persists the assembled `main` SHA, so the base identity is the default
+      // branch name. The bootstrap's `eager_base` UPSERT (PR-8) records the materialized
+      // head + the full member shas; this observe-at-create node is the placeholder.
+      const baseSha = baseBranch;
+      const members = (spec?.ancestorStack ?? []).map((member) => ({
+        specId: member.specId,
+        runId: member.runId === "" ? run.runId : member.runId,
+        branch: member.branch === "" ? member.specId : member.branch,
+        headSha: member.headSha,
+      }));
       await upsertIntegrationNodeOnClient(client, {
         projectId: run.projectId,
         orgId,
         baseBranch,
         baseSha,
-        ref: speculativeBase ?? run.branch,
+        // The dependent's own run branch is the local assembly ref placeholder (the
+        // bootstrap `eager_base` UPSERT records the real LOCAL assembly bookmark).
+        ref: run.branch,
         // eager dependent's dynamic base when speculative; else a (zero-member) node
         // against `main`. The purpose only LABELS intent — it never branches control.
         purpose: "eager_base",
@@ -389,65 +384,37 @@ export async function observeRunAsIntegrationNode(
 }
 
 /**
- * Build the ordered members from the run's `integrated_ancestor_shas` (ancestor
- * spec id → head SHA). ORDERED by ancestor spec id (the map is unordered) so the
- * `memberKey` is deterministic. The dependent's own run id labels the integration;
- * the ancestor branch is unknown on the run row (Wave-3 resolves it) so the ancestor
- * spec id is the stable branch placeholder (a total, never-partial member).
- */
-function buildMembersFromAncestorShas(runId: string, shas: Record<string, string>): IntegrationNodeMember[] {
-  return Object.entries(shas)
-    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-    .map(([ancestorSpecId, headSha]) => ({ specId: ancestorSpecId, runId, branch: ancestorSpecId, headSha }));
-}
-
-/** Coerce a persisted jsonb blob into the per-ancestor SHA map (string→string only). */
-export function asShaMap(value: unknown): Record<string, string> {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) return {};
-  const out: Record<string, string> = {};
-  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-    if (typeof v === "string") out[k] = v;
-  }
-  return out;
-}
-
-/**
- * PURE: project ONE old speculative run row into the FROZEN `IntegrationNode`
- * shape (the §8 compatibility read-model, factored out so it is unit-testable
- * WITHOUT a DB). The ancestor SHA map is ORDERED by ancestor spec id (the old map
- * is unordered) → a stable, deterministic `memberKey`.
+ * PURE: project ONE speculative run row into the FROZEN `IntegrationNode` shape (the §8
+ * compatibility read-model, factored out so it is unit-testable WITHOUT a DB). The members
+ * are the ordered `ancestor_stack` (already DAG-ordered → a stable, deterministic `memberKey`).
+ * jj-local: there is no synthesized base ref; the base identity is the immediate-ancestor
+ * PR-head branch (the stacked base), or the dependent's own run branch as the fallback.
  */
 export function speculativeRunToNode(input: {
   runId: string;
-  specId: string;
   branch: string;
-  speculativeBase: string;
-  integratedAncestorShas: Record<string, string>;
+  ancestorStack: AncestorStack;
 }): IntegrationNode {
-  const orderedAncestors = Object.entries(input.integratedAncestorShas).sort(([a], [b]) =>
-    a < b ? -1 : a > b ? 1 : 0,
-  );
-  const members: IntegrationNodeMember[] = orderedAncestors.map(([ancestorSpecId, headSha]) => ({
-    specId: ancestorSpecId,
-    // The old run row carries only the ancestor's spec id + head SHA on the
-    // dependent; its run id/branch are not on this row. The dependent's own run id
-    // labels the integration; the ancestor branch is unknown here (Wave-3
-    // materialization resolves it). Use the ancestor spec id as a stable branch
-    // placeholder so the projection is total (never a partial/empty member).
-    runId: input.runId,
-    branch: ancestorSpecId,
-    headSha,
+  const members: IntegrationNodeMember[] = input.ancestorStack.map((m) => ({
+    specId: m.specId,
+    // A stack member's run id/branch may be empty (a placeholder) before the bootstrap
+    // write-back; fall back to the dependent's own labels so the projection is total.
+    runId: m.runId === "" ? input.runId : m.runId,
+    branch: m.branch === "" ? m.specId : m.branch,
+    headSha: m.headSha,
   }));
-  const baseSha = input.speculativeBase;
+  const immediateAncestorBranch = input.ancestorStack.at(-1)?.branch;
+  const base =
+    immediateAncestorBranch !== undefined && immediateAncestorBranch !== "" ? immediateAncestorBranch : input.branch;
   return {
     nodeId: `inode_compat_${input.runId}`,
-    baseBranch: input.speculativeBase,
-    baseSha,
-    ref: input.speculativeBase,
+    baseBranch: base,
+    baseSha: base,
+    ref: base,
     purpose: "eager_base",
     members,
     memberKey: memberKey(
-      baseSha,
+      base,
       members.map((m) => m.headSha),
     ),
     gateConfigHash: "",

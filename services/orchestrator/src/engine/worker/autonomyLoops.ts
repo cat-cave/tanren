@@ -16,7 +16,6 @@ import type { VcsProvider } from "../contracts/vcsProvider.js";
 import type { GitHubHttpClient } from "../providers/github.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
 import { buildPercolationCoordinator } from "../dag/percolationBuild.js";
-import { PgSpeculativeIntegrator } from "../dag/speculativeIntegrator.js";
 import { createLogger, startDagWalkerSubscriber } from "../dag/subscriber.js";
 import { startMergeCoordinatorSubscriber } from "../merge/subscriber.js";
 import { startPostMergeSubscriber } from "../postMerge/subscriber.js";
@@ -46,9 +45,9 @@ export interface AutonomyLoopsDeps {
   ssh: CommandSubstrate;
   githubHttp: GitHubHttpClient;
   identitySecretRef: string;
-  /** the VcsProvider the speculative integrator drives to build integration branches. */
+  /** the VcsProvider the merge coordinator + base-shift live seams drive. */
   vcsProvider: VcsProvider;
-  /** the shared App-token minter the integrator reuses for the integration push. */
+  /** the shared App-token minter the base-shift live seams reuse for authed pushes/fetches. */
   githubAppMinter?: GithubAppTokenMinter;
   /**
    * Plane-split (autonomy loops): the control-plane run-state writer. When present
@@ -112,12 +111,6 @@ export interface AutonomyLoops {
  */
 export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<AutonomyLoops> {
   const dagNotifyListener = new PgNotifyListener(deps.pool);
-  const integrator = new PgSpeculativeIntegrator({
-    pool: deps.pool,
-    vcsProvider: deps.vcsProvider,
-    secrets: deps.secrets,
-    ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
-  });
   // the change-percolation coordinator runs on the SAME notifications as
   // the walker — when an ancestor changes under an in-flight speculative dependent,
   // it percolates the delta down the chain (rebuild → re-base → re-gate) rather
@@ -149,7 +142,6 @@ export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<Auton
   const dagWalker = await startDagWalkerSubscriber({
     pool: deps.pool,
     notifyListener: dagNotifyListener,
-    integrator,
     percolation,
     // Plane-split: the walker's run-creation + dag.* events route through the
     // control plane when wired (else direct on deps.pool, byte-identical).

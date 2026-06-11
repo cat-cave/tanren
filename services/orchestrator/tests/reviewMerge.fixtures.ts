@@ -149,18 +149,18 @@ export class ReviewMergePool {
 
   /**
    * the speculative-merge-hold lookups. By default a run is NOT speculative
-   * (speculative_base null) and has no deps, so the hold is a no-op and existing
-   * tests proceed to merge unchanged. A test can set `speculativeBase` +
-   * `specDependsOn` + `mergedAncestors` to drive the hold path.
+   * (an EMPTY `ancestor_stack`) and has no deps, so the hold is a no-op and existing
+   * tests proceed to merge unchanged. A test can set `ancestorStack` (the jj-local base
+   * source — a run is speculative iff it is non-empty) + `specDependsOn` +
+   * `mergedAncestors` to drive the hold path.
    */
-  speculativeBase: string | null = null;
   specDependsOn: string[] = [];
   mergedAncestors: string[] = [];
   unresolvedSpeculativeHolds: string[] = [];
   /**
-   * WS-A PR-5: the ordered `runs.ancestor_stack` the stacked-PR retarget walk reads
-   * (flag-on). Default empty ⇒ the legacy single-ref path. A test sets it to drive the
-   * walk; `ancestorStackWrites` records each persisted drop (`UPDATE runs SET ancestor_stack`).
+   * §2.3: the ordered `runs.ancestor_stack` (the SOLE base source — a run is speculative
+   * iff non-empty). Default empty ⇒ non-speculative. A test sets it to drive the hold +
+   * stack walk; `ancestorStackWrites` records each persisted drop (`UPDATE runs SET ancestor_stack`).
    */
   ancestorStack: unknown = null;
   readonly ancestorStackWrites: Array<{ runId: string; stack: unknown }> = [];
@@ -171,20 +171,12 @@ export class ReviewMergePool {
   governancePlatformLogins: string[] | undefined = undefined;
 
   async query(sql: string, params: unknown[]): Promise<{ rows: unknown[]; rowCount: number }> {
-    if (sql.startsWith("SELECT speculative_base, ancestor_stack, integrated_ancestor_shas, spec_id, project_id")) {
+    if (sql.startsWith("SELECT ancestor_stack, spec_id, project_id")) {
       const run = this.runs.find((r) => r.run_id === params[0]);
       return run === undefined
         ? { rows: [], rowCount: 0 }
         : {
-            rows: [
-              {
-                speculative_base: this.speculativeBase,
-                ancestor_stack: this.ancestorStack,
-                integrated_ancestor_shas: null,
-                spec_id: run.spec_id,
-                project_id: run.project_id,
-              },
-            ],
+            rows: [{ ancestor_stack: this.ancestorStack, spec_id: run.spec_id, project_id: run.project_id }],
             rowCount: 1,
           };
     }

@@ -96,19 +96,18 @@ export interface SetRunPrUrlInput {
 // org-scoped server-side. WHAT GETS WRITTEN is byte-identical to the in-process SQL.
 
 /**
- * Re-point a speculative run's dynamic base onto the rebuilt integration branch, OR
- * clear it to NULL (the §2c "ancestor-merged → non-speculative re-base": when every
- * ancestor has merged the dependent re-bases onto plain `default_branch`, so the
- * run's `speculative_base` becomes NULL — a real run against main).
+ * Re-point a speculative run's dynamic base to the re-resolved ANCESTOR STACK (the
+ * never-discard base-shift re-point), OR an empty stack (the §2c "ancestor-merged →
+ * non-speculative re-base": when every ancestor has merged the dependent re-bases onto
+ * plain `default_branch` — a real run against main). jj-local (WS-B PR-9): only
+ * `runs.ancestor_stack` is written; the legacy `speculative_base` column is NULLed.
  */
 export interface SetRunSpeculativeBaseInput {
   runId: string;
   orgId: string;
-  speculativeBase: string | null;
   /**
-   * WS-A PR-1 (walker-jj-local-integration-design.md §2.3): the re-resolved ordered
-   * ancestor stack, DUAL-WRITTEN to `runs.ancestor_stack` alongside the base. Absent
-   * ⇒ the column is left untouched. ADDITIVE (written, not yet read by the run path).
+   * The re-resolved ordered ancestor stack written to `runs.ancestor_stack` (the jj-local
+   * base source; a run is "speculative" iff non-empty). Empty when non-speculative.
    */
   ancestorStack?: AncestorStack;
 }

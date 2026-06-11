@@ -9,15 +9,11 @@
 // + `runs.integrated_ancestor_shas` (the per-ancestor head-sha map). A run is
 // "speculative" iff its stack is non-empty.
 //
-// PR-1 is ADDITIVE: this type + resolver ship now and the `runs.ancestor_stack`
-// column is WRITTEN (dual-write alongside the two legacy columns) but UNREAD; the
-// read paths (`runExecutionContext`, `plannerRunWorkspace`, `githubDraftPr`,
-// `resolveSpeculativeState`) cut over to `resolveAncestorStack` in later WS-A PRs.
-// `resolveAncestorStack` DUAL-READS so a future reader is correct across the
-// transition: it reads the new column when present, else reconstructs the stack from
-// the legacy columns (best-effort — the legacy columns carry only the per-ancestor
-// SHA, so a reconstructed member's `runId`/`branch` are empty until a dual-write
-// populated the full shape).
+// `runs.ancestor_stack` is the SOLE base source (WS-B PR-9): the walker/base-shift write
+// ONLY this column, and every read path (`runExecutionContext`, `plannerRunWorkspace`,
+// `githubDraftPr`, `resolveSpeculativeState`, `percolationPg`) resolves the stack from it
+// via `resolveAncestorStack`. The legacy `speculative_base` + `integrated_ancestor_shas`
+// columns are no longer written or read (they are dropped in PR-12's migration).
 
 import { z } from "zod";
 import type { IntegrationNodeMember } from "../contracts/integrationNodes.js";
@@ -43,56 +39,20 @@ export const ancestorStackMemberSchema = z.object({
 /** Zod schema for the ordered ancestor stack as persisted in `runs.ancestor_stack`. */
 export const ancestorStackSchema = z.array(ancestorStackMemberSchema);
 
-/**
- * The subset of a run row this resolver reads. The new `ancestorStack` column is the
- * source of truth when present; the two legacy columns are the dual-read fallback.
- */
+/** The subset of a run row this resolver reads — the `runs.ancestor_stack` column. */
 export interface AncestorStackRunRow {
-  /** The new `runs.ancestor_stack` column (jsonb) — `unknown` until validated. */
+  /** The `runs.ancestor_stack` column (jsonb) — `unknown` until validated. */
   ancestorStack?: unknown;
-  /** Legacy `runs.speculative_base` — the single synthesized integration ref, or NULL. */
-  speculativeBase?: string | null;
-  /** Legacy `runs.integrated_ancestor_shas` — the per-ancestor head-sha map, or NULL. */
-  integratedAncestorShas?: unknown;
 }
 
 /**
- * PURE: build an ancestor stack from the legacy per-ancestor SHA map
- * (`integrated_ancestor_shas`: `{ "<ancestorSpecId>": "<sha>" }`). The legacy column
- * carries ONLY the spec id + head sha, so the reconstructed member's `runId`/`branch`
- * are empty — the dual-write populates the full shape going forward; this is the
- * best-effort reconstruction a reader gets for a run written before the dual-write.
- * Order is the map's insertion order (the walker built the map in DAG order).
- */
-export function ancestorStackFromShaMap(shaMap: Record<string, string>): AncestorStack {
-  return Object.entries(shaMap).map(([specId, headSha]) => ({
-    specId,
-    runId: "",
-    branch: "",
-    headSha,
-  }));
-}
-
-/**
- * Resolve the ordered {@link AncestorStack} for a run (DUAL-READ). Reads the new
- * `ancestor_stack` column when it is a present, well-formed list (the source of
- * truth); else reconstructs the stack from the legacy `speculative_base` +
- * `integrated_ancestor_shas` columns. Returns an EMPTY stack for a non-speculative
- * run (no new column, no legacy SHA map).
+ * Resolve the ordered {@link AncestorStack} for a run from its `runs.ancestor_stack`
+ * column (the SOLE base source). Returns an EMPTY stack for a non-speculative run (no
+ * column / not a well-formed non-empty list).
  */
 export function resolveAncestorStack(run: AncestorStackRunRow): AncestorStack {
   const fromColumn = ancestorStackSchema.safeParse(run.ancestorStack);
-  if (fromColumn.success && fromColumn.data.length > 0) {
-    return fromColumn.data;
-  }
-  const shaMap = run.integratedAncestorShas;
-  if (shaMap !== null && shaMap !== undefined && typeof shaMap === "object") {
-    const parsed = z.record(z.string(), z.string()).safeParse(shaMap);
-    if (parsed.success && Object.keys(parsed.data).length > 0) {
-      return ancestorStackFromShaMap(parsed.data);
-    }
-  }
-  return [];
+  return fromColumn.success ? fromColumn.data : [];
 }
 
 // ---------------------------------------------------------------------------

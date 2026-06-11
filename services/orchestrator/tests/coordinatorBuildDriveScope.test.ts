@@ -123,10 +123,10 @@ function fakeDrivePool(): DrivePoolHandle {
           }
         : denied;
     }
-    // resolveSpeculativeState: not speculative (null base, no deps).
-    if (/SELECT speculative_base, ancestor_stack, integrated_ancestor_shas, spec_id, project_id FROM runs/u.test(sql)) {
+    // resolveSpeculativeState: not speculative (empty ancestor_stack).
+    if (/SELECT ancestor_stack, spec_id, project_id FROM runs/u.test(sql)) {
       return admitted
-        ? { rows: [{ speculative_base: null, spec_id: SPEC_ID, project_id: PROJECT_ID }], rowCount: 1 }
+        ? { rows: [{ ancestor_stack: null, spec_id: SPEC_ID, project_id: PROJECT_ID }], rowCount: 1 }
         : denied;
     }
     if (/SELECT depends_on FROM specs/u.test(sql))

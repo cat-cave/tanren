@@ -156,22 +156,20 @@ describe("PgPercolationReadModel.loadSpeculativeDependents (WS-A PR-8c: reads an
     expect(dependents[0]?.verifiedAncestorShas).toEqual({ spec_a: "sha-a", spec_b: "sha-b" });
   });
 
-  it("falls back to the legacy SHA map when ancestor_stack heads are still empty placeholders", async () => {
+  it("a stack with EMPTY-placeholder heads (not yet bootstrapped) yields NO dependent to detect against", async () => {
     // A run enqueued but not yet bootstrapped: the stack entries carry the EMPTY placeholder
-    // headSha. The dual-read reconstructs the divergence map from the legacy column, so the
-    // detect stays behavior-equivalent across the transition.
+    // headSha (the bootstrap write-back fills them, PR-8c). The build-base map derives empty,
+    // and with no in-flight marker the run is not yet a detect target — it becomes one once
+    // its bootstrap fills the per-ancestor shas. The legacy SHA-map fallback is GONE (PR-9).
     const pool = new StackRowFakePool({
       run_id: "run_dep",
       spec_id: "spec_dep",
-      speculative_base: "tanren/integ/spec_dep",
       ancestor_stack: [{ specId: "spec_a", runId: "run_a", branch: "tanren/spec_a", headSha: "" }],
-      integrated_ancestor_shas: { spec_a: "sha-a" },
       verified_ancestor_shas: null,
       percolation_pending: null,
     });
     const dependents = await makeStackRowReadModel(pool).loadSpeculativeDependents(PROJECT);
-    expect(dependents).toHaveLength(1);
-    expect(dependents[0]?.integratedAncestorShas).toEqual({ spec_a: "sha-a" });
+    expect(dependents).toEqual([]);
   });
 
   it("an EMPTY ancestor_stack with no marker yields NO dependent (nothing to detect against)", async () => {

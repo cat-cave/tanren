@@ -33,17 +33,14 @@ const createSpecRunInputSchema = z.object({
   branch: z.string().optional(),
   speculative: z
     .object({
-      // §2c: `null` is the "ancestor-merged → non-speculative re-base" — a percolation
-      // re-exec whose every ancestor has merged, so the run targets plain default_branch
-      // (speculative_base IS NULL) yet still carries the percolation marker + SKIPS the
-      // done-only dependency gate (the `speculative` object's PRESENCE, null base or not,
-      // is what distinguishes a speculative create). Byte-matches the in-process
-      // `CreateSpecRunInput.speculative.speculativeBase: string | null`.
-      speculativeBase: z.string().min(1).nullable(),
-      integratedAncestorShas: z.record(z.string(), z.string()).optional(),
+      // jj-local (§2.3): the `speculative` object's PRESENCE (an empty stack OR a non-empty
+      // one) is what distinguishes a speculative create — it SKIPS the done-only dependency
+      // gate. A present block with an empty `ancestorStack` is the "ancestor-merged →
+      // non-speculative re-base" (a percolation re-exec carrying only the marker). Byte-matches
+      // the in-process `CreateSpecRunInput.speculative`.
       verifiedAncestorShas: z.record(z.string(), z.string()).optional(),
       percolationPending: z.unknown().optional(),
-      // WS-A PR-1: the ordered ancestor stack (dual-written to `runs.ancestor_stack`).
+      // The ordered ancestor stack written to `runs.ancestor_stack` (the jj-local base source).
       ancestorStack: ancestorStackSchema.optional(),
     })
     .optional(),

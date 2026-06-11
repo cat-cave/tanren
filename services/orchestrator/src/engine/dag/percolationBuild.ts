@@ -51,8 +51,8 @@ import {
   type LiveBaseShiftDeps,
 } from "./baseShiftLiveSeams.js";
 import { baseShiftLive } from "./baseShiftLiveFlag.js";
-import { PgSpeculativeIntegrator } from "./speculativeIntegrator.js";
 import type { AncestorStack } from "./ancestorStack.js";
+import { PgDagAncestorStackResolver } from "./walkerPg.js";
 import { type ChangePercolationCoordinator, PercolatingCoordinator } from "./percolation.js";
 import { PercolatingKickOff } from "./percolationOperation.js";
 import { PgPercolationEventEmitter, PgPercolationReadModel } from "./percolationPg.js";
@@ -219,12 +219,7 @@ export function buildBaseShiftCoordinator(
  */
 export class MarkerSuppressedBaseShiftPersistence implements BaseShiftPersistence {
   constructor(private readonly inner: BaseShiftPersistence) {}
-  async repointBase(input: {
-    projectId: string;
-    runId: string;
-    speculativeBase: string | null;
-    ancestorStack?: AncestorStack;
-  }): Promise<void> {
+  async repointBase(input: { projectId: string; runId: string; ancestorStack: AncestorStack }): Promise<void> {
     await this.inner.repointBase(input);
   }
   async markInFlight(): Promise<void> {
@@ -320,12 +315,7 @@ function liveBaseShiftDeps(deps: BuildPercolationCoordinatorDeps): LiveBaseShift
 
 /** Assemble the production change-percolation coordinator. */
 export function buildPercolationCoordinator(deps: BuildPercolationCoordinatorDeps): ChangePercolationCoordinator {
-  const integrator = new PgSpeculativeIntegrator({
-    pool: deps.pool,
-    vcsProvider: deps.vcsProvider,
-    secrets: deps.secrets,
-    ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
-  });
+  const stackResolver = new PgDagAncestorStackResolver(deps.pool);
   return new PercolatingCoordinator({
     readModel: new PgPercolationReadModel({
       pool: deps.pool,
@@ -337,7 +327,10 @@ export function buildPercolationCoordinator(deps: BuildPercolationCoordinatorDep
       ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
     }),
     kickOff: new PercolatingKickOff({
-      integrator,
+      // jj-local (WS-B PR-9): the kick-off RE-RESOLVES the ordered unmerged-ancestor stack
+      // (org-scoped/RLS) — there is NO host integration build. The base-shift re-executor
+      // assembles `main + ordered ancestors` LOCALLY from those refs.
+      stackResolver,
       // NEVER-DISCARD: the kick-off's re-executor is the BaseShiftCoordinator — it
       // REBASES the dependent's existing branch in place (keeping the run row) instead
       // of the deleted supersede+regenerate. It returns the dependent's OWN run id as

@@ -122,33 +122,16 @@ export function decodeVerified(value: unknown): DecodedVerified {
 }
 
 /**
- * WS-A PR-8c: derive the percolation build-base / divergence SHA map (`ancestorSpecId →
- * headSha`) from the jj-native `runs.ancestor_stack[].headSha`. MOVES the read off the
- * legacy `integrated_ancestor_shas` column — the stack carries the SAME branches + head
- * shas (the walker dual-writes both, the bootstrap fills `headSha`), so the detect keys off
- * the SAME divergence. `resolveAncestorStack` DUAL-READS (the stack column when present +
- * head-sha-filled, else reconstructs from the legacy map). TRANSITION SAFETY: a run enqueued
- * before its bootstrap carries the stack with EMPTY-placeholder head shas (derived map
- * empty) while the legacy column holds the real shas — fall back to the legacy map so the
- * detect stays behavior-equivalent across the transition (the fallback dies with the legacy
- * column in PR-9/PR-12).
+ * Derive the percolation build-base / divergence SHA map (`ancestorSpecId → headSha`) from
+ * the jj-native `runs.ancestor_stack[].headSha` (the bootstrap fills `headSha` at assembly
+ * time, PR-8c). A percolation dependent has already bootstrapped (it is in-flight/review),
+ * so its stack carries the real per-ancestor shas. The legacy `integrated_ancestor_shas`
+ * column is no longer written (WS-B PR-9), so it is not read here.
  */
-export function buildBaseFromAncestorStack(run: {
-  ancestorStack: unknown;
-  speculativeBase: string | null;
-  integratedAncestorShas: unknown;
-}): Record<string, string> {
+export function buildBaseFromAncestorStack(run: { ancestorStack: unknown }): Record<string, string> {
   const out: Record<string, string> = {};
   for (const member of resolveAncestorStack(run)) {
     if (member.headSha !== "") out[member.specId] = member.headSha;
-  }
-  if (Object.keys(out).length === 0) {
-    const legacy = run.integratedAncestorShas;
-    if (legacy !== null && legacy !== undefined && typeof legacy === "object" && !Array.isArray(legacy)) {
-      for (const [specId, sha] of Object.entries(legacy as Record<string, unknown>)) {
-        if (typeof sha === "string" && sha !== "") out[specId] = sha;
-      }
-    }
   }
   return out;
 }
@@ -256,10 +239,15 @@ export async function recordPercolationPending(
   });
 }
 
-/** Re-point an EXISTING run's dynamic base onto the shifted base (NULL ⇒ non-speculative). */
-export async function repointRunSpeculativeBase(
+/**
+ * Re-point an EXISTING run's dynamic base onto the re-resolved ANCESTOR STACK (the
+ * never-discard base-shift re-point; empty ⇒ non-speculative). jj-local (WS-B PR-9): writes
+ * ONLY `runs.ancestor_stack`; the legacy `speculative_base` column STAYS (dropped in PR-12)
+ * but is NULLed (jj-local has no synthesized host ref).
+ */
+export async function repointRunAncestorStack(
   pool: pg.Pool,
-  input: { projectId: string; runId: string; speculativeBase: string | null; ancestorStack?: AncestorStack },
+  input: { projectId: string; runId: string; ancestorStack: AncestorStack },
   runStateWriter?: RunStateWriter,
 ): Promise<void> {
   if (runStateWriter !== undefined) {
@@ -268,19 +256,14 @@ export async function repointRunSpeculativeBase(
     await runStateWriter.setRunSpeculativeBase({
       runId: input.runId,
       orgId,
-      speculativeBase: input.speculativeBase,
-      // WS-A PR-1: dual-write the re-resolved ancestor stack alongside the base.
-      ...(input.ancestorStack !== undefined && { ancestorStack: input.ancestorStack }),
+      ancestorStack: input.ancestorStack,
     });
     return;
   }
   await orgScopedWrite(pool, input.projectId, async (client) => {
-    // WS-A PR-1 dual-write: re-point `ancestor_stack` alongside the legacy
-    // `speculative_base` (additive — written, not yet read by the run path).
-    await client.query("UPDATE runs SET speculative_base = $2, ancestor_stack = $3::jsonb WHERE run_id = $1", [
+    await client.query("UPDATE runs SET speculative_base = NULL, ancestor_stack = $2::jsonb WHERE run_id = $1", [
       input.runId,
-      input.speculativeBase,
-      input.ancestorStack === undefined ? null : JSON.stringify(input.ancestorStack),
+      JSON.stringify(input.ancestorStack),
     ]);
   });
 }

@@ -1,17 +1,15 @@
-// (autonomy-engine.md §2c): the EventEmittingDagWalker's SPECULATIVE
-// behavior, driven through in-memory seams (test fixtures — they live here, never
-// in src/). Proves: a speculative dependent gets a DYNAMIC BASE = its integration
-// branch + emits dag.spec.speculative; an A-vs-B integration conflict surfaces and
-// HOLDS the dependent (it is not enqueued against a broken base); the depth cap
-// emits dag.spec.speculation_held; and a speculative dependent's run is created
-// against the integration branch (its MERGE — handled downstream — still waits for
-// the real ancestor merge, which we prove by showing the dependent never enqueues
-// when its ancestor is not yet threshold-crossed, only once it is, and on a real
-// merge it would re-enqueue against default_branch — see the merge-waits test).
+// (autonomy-engine.md §2c; walker-jj-local-integration-design.md §4): the
+// EventEmittingDagWalker's SPECULATIVE behavior, driven through in-memory seams (test
+// fixtures — they live here, never in src/). Proves: a speculative dependent RESOLVES its
+// ordered unmerged-ancestor stack (the real PR-head branches) + persists it as
+// `ancestor_stack` + emits dag.spec.speculative — NO synthesized host integration ref; the
+// depth cap emits dag.spec.speculation_held; a non-speculative start (all deps merged)
+// enqueues against default_branch (no stack). The ancestor-vs-ancestor conflict is NO LONGER
+// detected at walk time (§4a) — it surfaces during the dependent's own bootstrap assembly.
 
 import { describe, expect, it } from "vitest";
 import { EventEmittingDagWalker } from "../src/engine/dag/walker.js";
-import type { DagEventEmitter } from "../src/engine/dag/walkerPg.js";
+import type { DagAncestorStackResolver, DagEventEmitter } from "../src/engine/dag/walkerPg.js";
 import type {
   BudgetGate,
   DagEnqueuer,
@@ -27,11 +25,7 @@ import type {
   SpecLifecycle,
   SpecLifecycleState,
 } from "../src/engine/contracts/dagLifecycle.js";
-import type {
-  BuildSpeculativeIntegrationInput,
-  IntegrationOutcome,
-  SpeculativeIntegrator,
-} from "../src/engine/contracts/speculativeIntegrator.js";
+import type { ResolvedAncestorBranch } from "../src/engine/dag/ancestorStack.js";
 import type { SpeculationThreshold } from "../src/engine/config/index.js";
 import type { AncestorStack } from "../src/engine/dag/ancestorStack.js";
 
@@ -67,7 +61,6 @@ class FixedLifecycle implements DagLifecycleReadModel {
 
 interface RecordedEnqueue {
   specId: string;
-  speculativeBase?: string;
   ancestorStack?: AncestorStack;
 }
 
@@ -77,13 +70,11 @@ class RecordingEnqueuer implements DagEnqueuer {
   async enqueueSpecRun(input: {
     projectId: string;
     specId: string;
-    speculativeBase?: string;
     ancestorStack?: AncestorStack;
   }): Promise<{ runId: string }> {
     this.seq += 1;
     this.records.push({
       specId: input.specId,
-      ...(input.speculativeBase !== undefined && { speculativeBase: input.speculativeBase }),
       ...(input.ancestorStack !== undefined && { ancestorStack: input.ancestorStack }),
     });
     return { runId: `run_${this.seq}` };
@@ -93,7 +84,6 @@ class RecordingEnqueuer implements DagEnqueuer {
 interface RecordedSpeculative {
   specId: string;
   unmergedAncestors: string[];
-  integrationBranch: string;
   threshold: SpeculationThreshold;
 }
 interface RecordedHeld {
@@ -133,38 +123,19 @@ const unlimitedBudgetGate: BudgetGate = {
   },
 };
 
-class FakeIntegrator implements SpeculativeIntegrator {
-  readonly calls: BuildSpeculativeIntegrationInput[] = [];
-  constructor(private readonly mode: "ok" | "conflict" = "ok") {}
-  async buildIntegration(input: BuildSpeculativeIntegrationInput): Promise<IntegrationOutcome> {
+/** Resolve each unmerged ancestor to its real PR-head branch + run id (DAG order preserved). */
+class FakeStackResolver implements DagAncestorStackResolver {
+  readonly calls: Array<{ projectId: string; unmergedAncestorSpecIds: ReadonlyArray<string> }> = [];
+  async resolveStack(input: {
+    projectId: string;
+    unmergedAncestorSpecIds: ReadonlyArray<string>;
+  }): Promise<ReadonlyArray<ResolvedAncestorBranch>> {
     this.calls.push(input);
-    const integrationBranch = `tanren/integ/${input.dependentSpecId}`;
-    if (this.mode === "conflict") {
-      return {
-        outcome: "conflict",
-        integrationBranch,
-        ancestorHeadShas: {},
-        // WS-A PR-1: no integrated base on a conflict ⇒ empty stack.
-        ancestorStack: [],
-        conflictBetween: {
-          specId: input.unmergedAncestorSpecIds[1] ?? "",
-          otherSpecId: input.unmergedAncestorSpecIds[0] ?? "",
-        },
-        message: "ancestor conflict",
-      };
-    }
-    // WS-A PR-1: the ordered ancestor stack the dependent dual-writes to
-    // `runs.ancestor_stack` — one member per unmerged ancestor (DAG order).
-    const ancestorHeadShas = Object.fromEntries(
-      input.unmergedAncestorSpecIds.map((specId) => [specId, `sha_${specId}`] as const),
-    );
-    const ancestorStack: AncestorStack = input.unmergedAncestorSpecIds.map((specId) => ({
+    return input.unmergedAncestorSpecIds.map((specId) => ({
       specId,
       runId: `run_${specId}`,
       branch: `tanren/${specId}`,
-      headSha: `sha_${specId}`,
     }));
-    return { outcome: "integrated", integrationBranch, ancestorHeadShas, ancestorStack, message: "ok" };
   }
 }
 
@@ -174,33 +145,32 @@ function makeWalker(opts: {
   threshold: SpeculationThreshold;
   depthCap?: number;
   ceiling?: number;
-  integrator?: SpeculativeIntegrator;
   archived?: boolean;
 }): {
   walker: EventEmittingDagWalker;
   enqueuer: RecordingEnqueuer;
   emitter: RecordingEmitter;
-  integrator: SpeculativeIntegrator;
+  stackResolver: FakeStackResolver;
 } {
   const enqueuer = new RecordingEnqueuer();
   const emitter = new RecordingEmitter();
-  const integrator = opts.integrator ?? new FakeIntegrator("ok");
+  const stackResolver = new FakeStackResolver();
   const walker = new EventEmittingDagWalker({
     readModel: new FixedReadModel(opts.nodes, opts.archived ?? false),
     lifecycleReadModel: new FixedLifecycle(opts.lifecycle),
     enqueuer,
     events: emitter,
-    integrator,
+    ancestorStackResolver: stackResolver,
     speculationConfig: async () => ({ threshold: opts.threshold, depthCap: opts.depthCap ?? 2 }),
     budgetGate: unlimitedBudgetGate,
     concurrency: () => opts.ceiling ?? 5,
   });
-  return { walker, enqueuer, emitter, integrator };
+  return { walker, enqueuer, emitter, stackResolver };
 }
 
 describe("DagWalker speculative execution (§2c)", () => {
-  it("a speculative dependent gets a DYNAMIC BASE = its integration branch + emits dag.spec.speculative", async () => {
-    const { walker, enqueuer, emitter, integrator } = makeWalker({
+  it("a speculative dependent persists its ANCESTOR STACK (the jj-local base) + emits dag.spec.speculative", async () => {
+    const { walker, enqueuer, emitter, stackResolver } = makeWalker({
       nodes: [node("spec_a", "in_flight", [], 0), node("spec_b", "pending", ["spec_a"], 1)],
       lifecycle: { spec_a: { specId: "spec_a", state: "audited", openFindingMaxSeverity: "P2" }, spec_b: "pending" },
       threshold: "moderate",
@@ -208,19 +178,16 @@ describe("DagWalker speculative execution (§2c)", () => {
     const result = await walker.walk(PROJECT);
 
     expect(result.enqueuedSpecIds).toEqual(["spec_b"]);
-    // The run was created against the integration branch (the dynamic base). WS-A PR-1:
-    // the ordered ancestor stack is DUAL-WRITTEN alongside the legacy speculative base.
+    // The run carries the ordered ancestor stack (the jj-local base source) — NO host ref.
+    // The per-ancestor headSha is an empty placeholder (the bootstrap assembly fills it).
     expect(enqueuer.records).toEqual([
       {
         specId: "spec_b",
-        speculativeBase: "tanren/integ/spec_b",
-        ancestorStack: [{ specId: "spec_a", runId: "run_spec_a", branch: "tanren/spec_a", headSha: "sha_spec_a" }],
+        ancestorStack: [{ specId: "spec_a", runId: "run_spec_a", branch: "tanren/spec_a", headSha: "" }],
       },
     ]);
-    // The integration branch was built for spec_b over its unmerged ancestor spec_a.
-    expect((integrator as FakeIntegrator).calls).toEqual([
-      { projectId: PROJECT, dependentSpecId: "spec_b", unmergedAncestorSpecIds: ["spec_a"] },
-    ]);
+    // The stack was resolved for spec_b over its unmerged ancestor spec_a.
+    expect(stackResolver.calls).toEqual([{ projectId: PROJECT, unmergedAncestorSpecIds: ["spec_a"] }]);
     expect(emitter.speculative).toEqual([
       {
         projectId: PROJECT,
@@ -228,34 +195,8 @@ describe("DagWalker speculative execution (§2c)", () => {
         runId: "run_1",
         unmergedAncestors: ["spec_a"],
         threshold: "moderate",
-        integrationBranch: "tanren/integ/spec_b",
       },
     ]);
-  });
-
-  it("an A-vs-B integration conflict HOLDS the dependent (it is not enqueued against a broken base)", async () => {
-    // C depends on A and B (both unmerged + audited); the integrator reports they
-    // conflict WITH EACH OTHER on the integration branch.
-    const { walker, enqueuer, emitter } = makeWalker({
-      nodes: [
-        node("spec_a", "in_flight", [], 0),
-        node("spec_b", "in_flight", [], 1),
-        node("spec_c", "pending", ["spec_a", "spec_b"], 2),
-      ],
-      lifecycle: {
-        spec_a: { specId: "spec_a", state: "audited", openFindingMaxSeverity: "none" },
-        spec_b: { specId: "spec_b", state: "audited", openFindingMaxSeverity: "none" },
-        spec_c: "pending",
-      },
-      threshold: "moderate",
-      integrator: new FakeIntegrator("conflict"),
-    });
-    const result = await walker.walk(PROJECT);
-
-    // C is HELD — never enqueued against the broken integration.
-    expect(result.enqueuedSpecIds).toEqual([]);
-    expect(enqueuer.records).toEqual([]);
-    expect(emitter.speculative).toEqual([]);
   });
 
   it("the depth cap emits dag.spec.speculation_held (not a silent truncation)", async () => {
@@ -283,8 +224,8 @@ describe("DagWalker speculative execution (§2c)", () => {
     ]);
   });
 
-  it("a NON-speculative start (ancestor merged) enqueues against default_branch (no speculative base) + emits dag.spec.enqueued", async () => {
-    const { walker, enqueuer, emitter, integrator } = makeWalker({
+  it("a NON-speculative start (ancestor merged) enqueues against default_branch (no ancestor stack) + emits dag.spec.enqueued", async () => {
+    const { walker, enqueuer, emitter, stackResolver } = makeWalker({
       nodes: [node("spec_a", "done", [], 0), node("spec_b", "pending", ["spec_a"], 1)],
       lifecycle: { spec_a: "merged", spec_b: "pending" },
       threshold: "moderate",
@@ -292,19 +233,17 @@ describe("DagWalker speculative execution (§2c)", () => {
     const result = await walker.walk(PROJECT);
 
     expect(result.enqueuedSpecIds).toEqual(["spec_b"]);
-    // No speculative base — the merge stage uses default_branch.
+    // No ancestor stack — the merge stage uses default_branch.
     expect(enqueuer.records).toEqual([{ specId: "spec_b" }]);
-    expect((integrator as FakeIntegrator).calls).toEqual([]);
+    expect(stackResolver.calls).toEqual([]);
     expect(emitter.enqueued).toEqual(["spec_b"]);
     expect(emitter.speculative).toEqual([]);
   });
 
-  it("a speculative dependent's WORK proceeds but its MERGE waits: it starts on the integration branch while its ancestor is unmerged, then on real merge re-walk it re-enqueues a child against default_branch", async () => {
-    // Tick 1: A audited-but-unmerged → B starts speculatively on the integration
-    // branch (A's code is NOT yet on main). B's PR base is the integration branch,
-    // so B's MERGE cannot land before A is genuinely merged (it targets the integ
-    // ref, not main). We assert B's base is the integration branch (proof the
-    // dependent does not merge against the real base while the ancestor is unmerged).
+  it("a speculative dependent's WORK proceeds but its MERGE waits: it starts on its ancestor stack while the ancestor is unmerged, then on real merge re-walk it re-enqueues a child against default_branch", async () => {
+    // Tick 1: A audited-but-unmerged → B starts speculatively stacked on A (A's code is NOT
+    // yet on main). B's base is the jj-assembled stack, so B's MERGE cannot land before A
+    // genuinely merges (the merge stage HOLDS). We assert B's persisted ancestor stack.
     const spec = makeWalker({
       nodes: [node("spec_a", "in_flight", [], 0), node("spec_b", "pending", ["spec_a"], 1)],
       lifecycle: { spec_a: { specId: "spec_a", state: "audited", openFindingMaxSeverity: "none" }, spec_b: "pending" },
@@ -313,12 +252,11 @@ describe("DagWalker speculative execution (§2c)", () => {
     await spec.walker.walk(PROJECT);
     expect(spec.enqueuer.records[0]).toEqual({
       specId: "spec_b",
-      speculativeBase: "tanren/integ/spec_b",
-      ancestorStack: [{ specId: "spec_a", runId: "run_spec_a", branch: "tanren/spec_a", headSha: "sha_spec_a" }],
+      ancestorStack: [{ specId: "spec_a", runId: "run_spec_a", branch: "tanren/spec_a", headSha: "" }],
     });
 
-    // Tick 2 (after A REALLY merges): a fresh dependent C on the now-merged A bases
-    // on default_branch (re-gate against reality). No speculative base.
+    // Tick 2 (after A REALLY merges): a fresh dependent C on the now-merged A bases on
+    // default_branch (re-gate against reality). No ancestor stack.
     const real = makeWalker({
       nodes: [node("spec_a", "done", [], 0), node("spec_c", "pending", ["spec_a"], 1)],
       lifecycle: { spec_a: "merged", spec_c: "pending" },
@@ -330,15 +268,10 @@ describe("DagWalker speculative execution (§2c)", () => {
 
   // THE READY-NOT-ENQUEUED REGRESSION (apex v18): a `pending` schema spec whose
   // dependency chain is ALL `merged` (the scaffold→build→ci chain) must be classified
-  // READY and enqueued NON-speculatively (no integration branch — its deps are all on
-  // main), under the DEFAULT conservative threshold. The DAG was stalling at 3/14: the
-  // planner saw the merged chain as crossed (so the spec was uncategorized in the
-  // drained event — neither done/blocked/in-flight, it was READY) but the non-speculative
-  // enqueue gate rejected it because the deps were `merged`, not `done`. The walker
-  // classification half is pinned here (the gate half is the (6a) plane-split DB test);
-  // together they prove the all-merged chain advances past 3/14.
+  // READY and enqueued NON-speculatively (no ancestor stack — its deps are all on main),
+  // under the DEFAULT conservative threshold.
   it("a pending spec whose dependency chain is ALL merged is READY + enqueued non-speculatively (NOT drained)", async () => {
-    const { walker, enqueuer, emitter, integrator } = makeWalker({
+    const { walker, enqueuer, emitter, stackResolver } = makeWalker({
       // scaffold → build → ci all done/merged; the schema spec depends on all three.
       nodes: [
         node("scaffold", "done", [], 0),
@@ -354,10 +287,10 @@ describe("DagWalker speculative execution (§2c)", () => {
     // The schema spec was classified READY and ENQUEUED — not stranded in a drained tick.
     expect(result.status).toBe("enqueued");
     expect(result.enqueuedSpecIds).toEqual(["schema"]);
-    // NON-speculative: every dependency is merged (on main), so there is NO integration
-    // branch (no speculativeBase) and the integrator is never consulted.
+    // NON-speculative: every dependency is merged (on main), so there is NO ancestor stack
+    // and the resolver is never consulted.
     expect(enqueuer.records).toEqual([{ specId: "schema" }]);
-    expect((integrator as FakeIntegrator).calls).toEqual([]);
+    expect(stackResolver.calls).toEqual([]);
     // It emitted dag.spec.enqueued (the ready-spec outcome), never dag.drained.
     expect(emitter.enqueued).toEqual(["schema"]);
     expect(emitter.drained).toEqual([]);

@@ -1,67 +1,55 @@
-// (autonomy-engine.md §2c): the PercolatingKickOff operation — rebuild the
-// integration + re-base + RE-EXECUTE the dependent through a real run. Driven
-// through in-memory seams (TEST FIXTURES — they live here, never src/). Proves:
-//   - it REBUILDS the integration via the SpeculativeIntegrator (reused, not duped);
-//   - on a clean rebuild it RE-EXECUTES (re-base + re-enqueue), returning the
-//     re-execution run id — it does NOT absorb / record a SHA here (that is settle);
-//   - on an ancestor-vs-ancestor conflict on the rebuild it HOLDS (routed to),
-//     with NO re-execution kicked off.
+// (autonomy-engine.md §2c; walker-jj-local-integration-design.md §4): the
+// PercolatingKickOff operation — RE-RESOLVE the unmerged-ancestor stack + hand it to the
+// never-discard base-shift re-executor (rebase IN PLACE + re-gate). Driven through
+// in-memory seams (TEST FIXTURES — they live here, never src/). Proves:
+//   - it RE-RESOLVES the ordered unmerged-ancestor stack (the real PR-head branches) and
+//     zips in the dependent's recorded per-ancestor head shas;
+//   - on a clean kick-off it RE-EXECUTES (rebase + re-gate), returning the re-execution
+//     run id — it does NOT absorb / record a SHA here (that is settle);
+//   - the merged ancestors are DROPPED (only the unmerged are stacked); when EVERY ancestor
+//     merged the re-exec is genuinely NON-speculative (empty stack).
 
 import { describe, expect, it } from "vitest";
 import type { PercolationDecision, SpeculativeDependent } from "../src/engine/contracts/changePercolation.js";
-import type {
-  BuildSpeculativeIntegrationInput,
-  IntegrationOutcome,
-  SpeculativeIntegrator,
-} from "../src/engine/contracts/speculativeIntegrator.js";
-import { PercolatingKickOff, type PercolationReexecutor } from "../src/engine/dag/percolationOperation.js";
+import type { AncestorStack } from "../src/engine/dag/ancestorStack.js";
+import {
+  PercolatingKickOff,
+  type PercolationReexecutor,
+  type PercolationStackResolver,
+} from "../src/engine/dag/percolationOperation.js";
 
 const PROJECT = "project_percolation";
 
-class FakeIntegrator implements SpeculativeIntegrator {
-  readonly calls: BuildSpeculativeIntegrationInput[] = [];
-  constructor(private readonly mode: "ok" | "conflict") {}
-  async buildIntegration(input: BuildSpeculativeIntegrationInput): Promise<IntegrationOutcome> {
+class FakeStackResolver implements PercolationStackResolver {
+  readonly calls: Array<{ projectId: string; unmergedAncestorSpecIds: ReadonlyArray<string> }> = [];
+  async resolveStack(input: {
+    projectId: string;
+    unmergedAncestorSpecIds: ReadonlyArray<string>;
+  }): Promise<ReadonlyArray<{ specId: string; runId: string; branch: string }>> {
     this.calls.push(input);
-    const integrationBranch = `tanren/integ/${input.dependentSpecId}`;
-    if (this.mode === "conflict") {
-      return {
-        outcome: "conflict",
-        integrationBranch,
-        ancestorHeadShas: {},
-        conflictBetween: {
-          specId: input.unmergedAncestorSpecIds[1] ?? "",
-          otherSpecId: input.unmergedAncestorSpecIds[0] ?? "",
-        },
-        message: "ancestors conflict",
-      };
-    }
-    return {
-      outcome: "integrated",
-      integrationBranch,
-      ancestorHeadShas: Object.fromEntries(input.unmergedAncestorSpecIds.map((id) => [id, `sha-${id}`])),
-      message: "ok",
-    };
+    // Resolve each unmerged ancestor to its real PR-head branch + run id (DAG order preserved).
+    return input.unmergedAncestorSpecIds.map((specId) => ({
+      specId,
+      runId: `run_${specId}`,
+      branch: `tanren/run/${specId}`,
+    }));
   }
 }
 
 class RecordingReexecutor implements PercolationReexecutor {
   readonly calls: Array<{
     specId: string;
-    integrationBranch: string;
-    ancestorHeadShas: Record<string, string>;
+    ancestorStack: AncestorStack;
     nonSpeculative: boolean;
   }> = [];
   async reexecute(input: {
     dependent: SpeculativeDependent;
-    integrationBranch: string;
-    ancestorHeadShas: Record<string, string>;
+    ancestorStack: AncestorStack;
     nonSpeculative: boolean;
   }): Promise<{ reexecRunId: string }> {
     this.calls.push({
       specId: input.dependent.specId,
-      integrationBranch: input.integrationBranch,
-      ancestorHeadShas: input.ancestorHeadShas,
+      ancestorStack: input.ancestorStack,
       nonSpeculative: input.nonSpeculative,
     });
     return { reexecRunId: `reexec_${input.dependent.specId}` };
@@ -72,7 +60,7 @@ function dependent(specId: string, shas: Record<string, string>): SpeculativeDep
   return {
     specId,
     runId: `run_${specId}`,
-    speculativeBase: `tanren/integ/${specId}`,
+    speculativeBase: null,
     integratedAncestorShas: shas,
     verifiedAncestorShas: shas,
     lifecycleState: "building",
@@ -84,11 +72,11 @@ function decision(ancestorSpecId: string, toSha: string): PercolationDecision {
   return { ancestorSpecId, promptness: "immediate", fromSha: "sha-old", toSha, immediateSeverity: "P0" };
 }
 
-describe("PercolatingKickOff (§2c rebuild + re-base + re-execute)", () => {
-  it("a clean rebuild RE-EXECUTES the dependent (returns the re-exec run id) — no absorb here", async () => {
-    const integrator = new FakeIntegrator("ok");
+describe("PercolatingKickOff (§4 re-resolve stack + re-base + re-execute)", () => {
+  it("a clean kick-off RE-EXECUTES the dependent (returns the re-exec run id) — no absorb here", async () => {
+    const stackResolver = new FakeStackResolver();
     const reexecutor = new RecordingReexecutor();
-    const op = new PercolatingKickOff({ integrator, reexecutor });
+    const op = new PercolatingKickOff({ stackResolver, reexecutor });
 
     const outcome = await op.kickOff({
       projectId: PROJECT,
@@ -99,41 +87,23 @@ describe("PercolatingKickOff (§2c rebuild + re-base + re-execute)", () => {
 
     expect(outcome.result).toBe("reexecuting");
     expect(outcome.reexecRunId).toBe("reexec_spec_b");
-    // The integration was REBUILT (reused integrator) before the re-execution.
-    expect(integrator.calls).toHaveLength(1);
-    // No merged ancestors ⇒ the unmerged stack is the full ancestor set; speculative.
-    expect(integrator.calls[0]?.unmergedAncestorSpecIds).toEqual(["spec_a"]);
-    // The re-execution was driven against the rebuilt integration branch + new SHAs.
+    // The stack was RE-RESOLVED before the re-execution; no merged ancestors ⇒ the full set.
+    expect(stackResolver.calls).toHaveLength(1);
+    expect(stackResolver.calls[0]?.unmergedAncestorSpecIds).toEqual(["spec_a"]);
+    // The re-execution was driven against the re-resolved ordered stack (branches + head shas).
     expect(reexecutor.calls).toEqual([
       {
         specId: "spec_b",
-        integrationBranch: "tanren/integ/spec_b",
-        ancestorHeadShas: { spec_a: "sha-spec_a" },
+        ancestorStack: [{ specId: "spec_a", runId: "run_spec_a", branch: "tanren/run/spec_a", headSha: "sha-old" }],
         nonSpeculative: false,
       },
     ]);
   });
 
-  it("an ancestor-vs-ancestor conflict on the rebuild HOLDS (no re-execution)", async () => {
+  it("the ONLY ancestor merged ⇒ DROPS it (empty stack) + re-exec is NON-speculative", async () => {
+    const stackResolver = new FakeStackResolver();
     const reexecutor = new RecordingReexecutor();
-    const op = new PercolatingKickOff({ integrator: new FakeIntegrator("conflict"), reexecutor });
-
-    const outcome = await op.kickOff({
-      projectId: PROJECT,
-      dependent: dependent("spec_c", { spec_a: "sha-old", spec_b: "sha-old" }),
-      decision: decision("spec_a", "sha-new"),
-      mergedAncestorSpecIds: [],
-    });
-
-    expect(outcome.result).toBe("held");
-    // Never re-executed on a held rebuild.
-    expect(reexecutor.calls).toEqual([]);
-  });
-
-  it("the ONLY ancestor merged ⇒ DROPS it (empty unmerged stack) + re-exec is NON-speculative", async () => {
-    const integrator = new FakeIntegrator("ok");
-    const reexecutor = new RecordingReexecutor();
-    const op = new PercolatingKickOff({ integrator, reexecutor });
+    const op = new PercolatingKickOff({ stackResolver, reexecutor });
 
     const outcome = await op.kickOff({
       projectId: PROJECT,
@@ -143,19 +113,18 @@ describe("PercolatingKickOff (§2c rebuild + re-base + re-execute)", () => {
     });
 
     expect(outcome.result).toBe("reexecuting");
-    // The merged ancestor is DROPPED — the integration is built with an EMPTY unmerged
-    // stack (the integrator resets the ephemeral ref to plain default_branch).
-    expect(integrator.calls).toHaveLength(1);
-    expect(integrator.calls[0]?.unmergedAncestorSpecIds).toEqual([]);
-    // The re-execution is genuinely NON-speculative (re-based onto plain main).
+    // The merged ancestor is DROPPED — the stack is not even resolved (empty unmerged set).
+    expect(stackResolver.calls).toHaveLength(0);
+    // The re-execution is genuinely NON-speculative (re-based onto plain main; empty stack).
     expect(reexecutor.calls).toHaveLength(1);
     expect(reexecutor.calls[0]?.nonSpeculative).toBe(true);
+    expect(reexecutor.calls[0]?.ancestorStack).toEqual([]);
   });
 
-  it("mixed merged+unmerged ⇒ the integration stacks ONLY the unmerged; re-exec stays speculative", async () => {
-    const integrator = new FakeIntegrator("ok");
+  it("mixed merged+unmerged ⇒ the stack carries ONLY the unmerged; re-exec stays speculative", async () => {
+    const stackResolver = new FakeStackResolver();
     const reexecutor = new RecordingReexecutor();
-    const op = new PercolatingKickOff({ integrator, reexecutor });
+    const op = new PercolatingKickOff({ stackResolver, reexecutor });
 
     const outcome = await op.kickOff({
       projectId: PROJECT,
@@ -166,9 +135,11 @@ describe("PercolatingKickOff (§2c rebuild + re-base + re-execute)", () => {
 
     expect(outcome.result).toBe("reexecuting");
     // ONLY the unmerged spec_b is stacked; the merged spec_a is dropped (arrives via main).
-    expect(integrator.calls[0]?.unmergedAncestorSpecIds).toEqual(["spec_b"]);
-    // A non-empty unmerged stack ⇒ still speculative (based on the integration branch).
+    expect(stackResolver.calls[0]?.unmergedAncestorSpecIds).toEqual(["spec_b"]);
+    // A non-empty unmerged stack ⇒ still speculative.
     expect(reexecutor.calls[0]?.nonSpeculative).toBe(false);
-    expect(reexecutor.calls[0]?.ancestorHeadShas).toEqual({ spec_b: "sha-spec_b" });
+    expect(reexecutor.calls[0]?.ancestorStack).toEqual([
+      { specId: "spec_b", runId: "run_spec_b", branch: "tanren/run/spec_b", headSha: "sha-old" },
+    ]);
   });
 });

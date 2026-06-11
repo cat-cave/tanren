@@ -47,23 +47,29 @@ export class RecordingPool {
 
 /** Overridable bits of the loaded run-context row (spec title/description). */
 export interface RunPoolSpecOverrides {
-  // a speculative run's dynamic base; null ⇒ a normal run (default_branch).
-  speculativeBase?: string | null;
+  // a speculative run's ordered ancestor stack (the jj-local base source); absent/empty ⇒
+  // a normal run (default_branch base).
+  ancestorStack?: unknown;
   specTitle?: string;
   specDescription?: string;
 }
 
 export class RecordingRunPool extends RecordingPool {
-  private readonly speculativeBase: string | null;
+  private readonly ancestorStack: unknown;
   private readonly specTitle: string;
   private readonly specDescription: string;
 
-  // Back-compat-free positional form (speculativeBase only) OR an overrides
-  // object — the title/description tests inject blank spec fields via the latter.
-  constructor(overrides?: string | null | RunPoolSpecOverrides) {
+  // A positional ancestor-stack (or null) OR an overrides object — the title/description
+  // tests inject blank spec fields via the latter.
+  constructor(overrides?: unknown | RunPoolSpecOverrides) {
     super();
-    const o = typeof overrides === "object" && overrides !== null ? overrides : { speculativeBase: overrides ?? null };
-    this.speculativeBase = o.speculativeBase ?? null;
+    const isOverridesObj =
+      typeof overrides === "object" &&
+      overrides !== null &&
+      !Array.isArray(overrides) &&
+      ("ancestorStack" in overrides || "specTitle" in overrides || "specDescription" in overrides);
+    const o = isOverridesObj ? (overrides as RunPoolSpecOverrides) : { ancestorStack: overrides ?? null };
+    this.ancestorStack = o.ancestorStack ?? null;
     this.specTitle = o.specTitle ?? "Add fixture";
     this.specDescription = o.specDescription ?? "Create fixture file";
   }
@@ -81,7 +87,7 @@ export class RecordingRunPool extends RecordingPool {
             spec_id: "spec_123",
             project_id: "project_123",
             branch: "tanren/run_123",
-            speculative_base: this.speculativeBase,
+            ancestor_stack: this.ancestorStack,
             repo_url: "https://github.com/cat-cave/repo.git",
             default_branch: "main",
             config: { githubCredentialRef: "credential/github/dev" },

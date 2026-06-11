@@ -25,7 +25,6 @@ import { gitAuthedCommand, gitTokenAuthPrelude } from "../workspace/githubPush.j
 import { resolveBootstrapCommand } from "./gate/index.js";
 import type { RunPlannerLoopInput } from "./plannerRun.js";
 import { resolveAncestorStack } from "../dag/ancestorStack.js";
-import { walkerJjLocalBase } from "../dag/walkerJjLocalBaseFlag.js";
 import { bootstrapDependentWorkspace, type ClonedWorkspace } from "./plannerRunJjLocalBootstrap.js";
 
 // The workspace-prep step inputs (the run's bootstrap-install + commit-bootstrap-state
@@ -286,24 +285,22 @@ async function materializeContractFilesCommit(
 // unchanged. The git AUTHOR is configured by a separate step (configureWorkspace
 // GitIdentity) right after this clone, BEFORE the first commit.
 //
-// WS-A PR-4: when this is a DEPENDENT speculative run (a non-empty ancestor stack) AND
-// `WALKER_JJ_LOCAL_BASE` is on, it instead routes to the jj-LOCAL base bootstrap
-// (`bootstrapDependentWorkspace`, plannerRunJjLocalBootstrap.ts); default-OFF / a
-// non-speculative run takes the single-ref clone below — byte-identical to main.
+// When this is a DEPENDENT speculative run (a non-empty ancestor stack), it routes to the
+// jj-LOCAL base bootstrap (`bootstrapDependentWorkspace`, plannerRunJjLocalBootstrap.ts); a
+// non-speculative run (empty stack) takes the plain `default_branch` single-ref clone below.
 async function cloneWorkspace(
   input: RunPlannerLoopInput,
   target: RunnerHandle,
   workspacePath: string,
   resolved: ResolvedCloneCredential,
 ): Promise<ClonedWorkspace> {
-  // WS-A PR-4 (walker-jj-local-integration-design.md §2.1): when this is a DEPENDENT
-  // speculative run (a non-empty ancestor stack) AND `WALKER_JJ_LOCAL_BASE` is on, the
-  // run's base is jj-ASSEMBLED LOCALLY from the real ancestor PR-head refs on the run's
-  // OWN runner (`bootstrapDependentBase`) — REPLACING the legacy single-ref clone of a
-  // synthesized `tanren/integ/<dep>` host ref. Default-OFF (flag unset) / a non-speculative
-  // run takes the EXACT single-ref clone below — byte-identical to main.
+  // walker-jj-local-integration-design.md §2.1: a DEPENDENT speculative run (a non-empty
+  // ancestor stack) jj-ASSEMBLES its base LOCALLY from the real ancestor PR-head refs on the
+  // run's OWN runner (`bootstrapDependentBase`) — there is NO orchestrator-synthesized
+  // `tanren/integ/<dep>` host ref. A non-speculative run (empty stack) takes the plain
+  // `default_branch` single-ref clone below.
   const stack = resolveAncestorStack({ ancestorStack: input.context.ancestorStack });
-  if (walkerJjLocalBase() && stack.length > 0) {
+  if (stack.length > 0) {
     return bootstrapDependentWorkspace(input, target, workspacePath, resolved, stack);
   }
   const result = await runWorkspaceSshCommand(input.ssh, target, {

@@ -153,18 +153,14 @@ describeDb("plane-split P3 — control-plane autonomy-loop create/intake writes 
     expect(specRow.rows[0]?.status).toBe("in_flight");
   });
 
-  // (6b) §2c "ancestor-merged → non-speculative re-base": a percolation re-exec
-  // whose every ancestor has merged onto plain default_branch CREATEs through
-  // `/internal/create-queued-run` with the `speculative` object PRESENT but its
-  // `speculativeBase` NULL. Two things are proven over the plane-split wire:
-  //   1. the route schema ACCEPTS the null base (the in-process contract's
-  //      `speculativeBase: string | null`) — the bug was `z.string().min(1)`
-  //      rejecting null with a 400 the worker could never get past;
-  //   2. null SURVIVES the HttpRunStateWriter JSON.stringify round-trip and the
-  //      run lands with `speculative_base = NULL` — yet the `speculative` object's
-  //      PRESENCE still skips the done-only dependency gate (the spec is claimed
-  //      pending→active even though no real dependency-done check ran).
-  it("(6b) create-queued-run accepts a PRESENT-but-null speculative base and creates a run with speculative_base = NULL", async () => {
+  // (6b) §2c "ancestor-merged → non-speculative re-base": a percolation re-exec whose every
+  // ancestor has merged onto plain default_branch CREATEs through
+  // `/internal/create-queued-run` with the `speculative` object PRESENT but carrying NO
+  // ancestor stack (only the marker). Proven over the plane-split wire: the `speculative`
+  // object's PRESENCE skips the done-only dependency gate (the spec is claimed pending→active
+  // even though no real dependency-done check ran), and the run lands with
+  // `speculative_base = NULL` (jj-local no longer writes that legacy column).
+  it("(6b) create-queued-run accepts a marker-only speculative object and creates a run with speculative_base = NULL", async () => {
     const specId = `${SPEC}_walk_null_base`;
     await ownerPool().query(
       `INSERT INTO organizations (id, kind, external_id, login, display_name, config)
@@ -192,8 +188,8 @@ describeDb("plane-split P3 — control-plane autonomy-loop create/intake writes 
       input: {
         specId,
         trigger: "percolation_reexec",
-        // The §2c marker: speculative is PRESENT (skip the dep gate) with a NULL base.
-        speculative: { speculativeBase: null, percolationPending: { reexecOf: "spec_anc_not_done" } },
+        // The §2c marker: speculative is PRESENT (skip the dep gate) with NO ancestor stack.
+        speculative: { percolationPending: { reexecOf: "spec_anc_not_done" } },
       },
       actor: { userId: "dag-walker", orgId: ORG, projectId: PROJECT, scopes: ["platform:admin"], source: "local_dev" },
     });
@@ -252,11 +248,10 @@ describeDb("plane-split P3 — control-plane autonomy-loop create/intake writes 
     const app = createInternalRunStateWriteRoutes({ pool: runtimePool(), verifier: new AllowAllPeerVerifier() });
     const writer = new HttpRunStateWriter("https://control.internal:3110", fetchInto(app));
 
-    // WS-A PR-1: the re-point DUAL-WRITES `ancestor_stack` alongside `speculative_base`.
+    // jj-local: the re-point writes ONLY `ancestor_stack` (the legacy `speculative_base` is NULLed).
     await writer.setRunSpeculativeBase({
       runId,
       orgId: ORG,
-      speculativeBase: "tanren/integ/x",
       ancestorStack: [{ specId: "spec_anc", runId: "run_anc", branch: "tanren/spec_anc", headSha: "sha_anc" }],
     });
     await writer.setRunPercolationReexecId({ runId, orgId: ORG, reexecRunId: "run_reexec" });
@@ -268,7 +263,7 @@ describeDb("plane-split P3 — control-plane autonomy-loop create/intake writes 
     });
 
     const row = await ownerPool().query<{
-      speculative_base: string;
+      speculative_base: string | null;
       ancestor_stack: Array<{ specId: string; runId: string; branch: string; headSha: string }> | null;
       percolation_pending: { reexecRunId?: string };
       verified_ancestor_shas: Record<string, { sha?: string; reviewVerdict?: string }>;
@@ -276,8 +271,9 @@ describeDb("plane-split P3 — control-plane autonomy-loop create/intake writes 
       "SELECT speculative_base, ancestor_stack, percolation_pending, verified_ancestor_shas FROM runs WHERE run_id = $1",
       [runId],
     );
-    expect(row.rows[0]?.speculative_base).toBe("tanren/integ/x");
-    // The ordered ancestor stack landed in the new column (additive dual-write).
+    // jj-local: the legacy `speculative_base` column is NULLed; the ordered ancestor stack
+    // is the SOLE base written, landing in `runs.ancestor_stack`.
+    expect(row.rows[0]?.speculative_base).toBeNull();
     expect(row.rows[0]?.ancestor_stack).toEqual([
       { specId: "spec_anc", runId: "run_anc", branch: "tanren/spec_anc", headSha: "sha_anc" },
     ]);

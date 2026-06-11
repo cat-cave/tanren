@@ -65,10 +65,9 @@ const setSpecMetadataSchema = z.object({
 const setRunSpeculativeBaseSchema = z.object({
   runId: z.string().min(1),
   orgId: z.string().min(1),
-  // Nullable: the §2c "ancestor-merged → non-speculative re-base" clears the base to
-  // NULL (every ancestor merged ⇒ the dependent re-bases onto plain default_branch).
-  speculativeBase: z.string().min(1).nullable(),
-  // WS-A PR-1: the re-resolved ancestor stack (dual-written to `runs.ancestor_stack`).
+  // jj-local (WS-B PR-9): the re-resolved ancestor stack is the ONLY base written (to
+  // `runs.ancestor_stack`); the legacy `speculative_base` column is NULLed. Empty when
+  // non-speculative (every ancestor merged ⇒ the dependent re-bases onto default_branch).
   ancestorStack: ancestorStackSchema.optional(),
 });
 

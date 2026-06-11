@@ -317,26 +317,13 @@ export interface DagEnqueuer {
     projectId: string;
     specId: string;
     /**
-     * the SPECULATIVE integration branch the run's PR bases on (the dynamic
-     * base), present iff the walker started this spec speculatively. When set, the
-     * enqueuer skips the `done`-only dependency gate (the walker already enforced
-     * the threshold gate) and persists `speculative_base` on the run. Absent ⇒ a
-     * normal start (full dependency-done gate + `default_branch` base).
-     */
-    speculativeBase?: string;
-    /**
-     * change-percolation: the head SHA each unmerged ancestor was
-     * integrated AT, keyed by ancestor spec id. Persisted on the run as the
-     * DIVERGENCE KEY — the change-percolation detect later compares each ancestor's
-     * live head against this. Present iff `speculativeBase` is.
-     */
-    integratedAncestorShas?: Record<string, string>;
-    /**
-     * walker-jj-local-integration-design.md §2.3 / WS-A PR-1: the ordered ancestor
-     * stack the run is stacked on — `[{ specId, runId, branch, headSha }]` (DAG
-     * order). DUAL-WRITTEN to `runs.ancestor_stack` alongside the two legacy columns
-     * above; ADDITIVE (written, not yet read by the run path). Present iff
-     * `speculativeBase` is.
+     * walker-jj-local-integration-design.md §2.3: the ordered unmerged-ancestor stack
+     * the run is stacked on — `[{ specId, runId, branch, headSha }]` (DAG order). Present
+     * iff the walker started this spec SPECULATIVELY; persisted on the run as
+     * `runs.ancestor_stack` (the jj-local base source the dependent assembles from at
+     * bootstrap). When set, the enqueuer skips the `done`-only dependency gate (the walker
+     * already enforced the threshold gate). Absent ⇒ a normal start (full dependency-done
+     * gate + `default_branch` base). NO synthesized host integration ref is written.
      */
     ancestorStack?: AncestorStack;
   }): Promise<{ runId: string }>;

@@ -132,19 +132,20 @@ describe("plane-split (autonomy loops) — the DagWalker routes its writes throu
     expect(createdRuns[0]?.actor.scopes).toContain("platform:admin");
   });
 
-  it("a speculative enqueue threads the dynamic base through the writer's createQueuedRun", async () => {
+  it("a speculative enqueue threads the ANCESTOR STACK (the jj-local base) through the writer's createQueuedRun", async () => {
     const { writer, createdRuns } = recordingWriter();
     const enqueuer = new SpecRunDagEnqueuer(guardedReadOnlyPool(), writer);
+    const stack = [{ specId: "spec_a", runId: "run_a", branch: "tanren/spec_a", headSha: "sha_a" }];
 
     await enqueuer.enqueueSpecRun({
       projectId: PROJECT,
       specId: "spec_b",
-      speculativeBase: "tanren/integ/spec_b",
-      integratedAncestorShas: { spec_a: "sha_a" },
+      ancestorStack: stack,
     });
 
-    expect(createdRuns[0]?.input.speculative?.speculativeBase).toBe("tanren/integ/spec_b");
-    expect(createdRuns[0]?.input.speculative?.integratedAncestorShas).toEqual({ spec_a: "sha_a" });
+    // The presence of the `speculative` block (carrying the ancestor stack) is the
+    // speculative-start signal; there is NO synthesized integration ref.
+    expect(createdRuns[0]?.input.speculative?.ancestorStack).toEqual(stack);
   });
 
   it("the dag.* event emitter appends through the writer, never a direct INSERT INTO events", async () => {

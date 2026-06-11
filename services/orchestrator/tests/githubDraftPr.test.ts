@@ -450,7 +450,7 @@ describe("GitHub draft PR contract", () => {
     expect(pool.updates).toEqual([{ runId: "run_123", prUrl: "https://github.com/cat-cave/repo/pull/10" }]);
   });
 
-  it("P2c-1: the operator publish route honors speculative_base — opens the PR against the integration branch", async () => {
+  it("§3.1: the operator publish route stacks the PR on the IMMEDIATE ancestor's PR-head branch (a true stacked PR)", async () => {
     const secrets = new FakeSecretStore();
     await secrets.put({ ref: "credential/github/dev", value: "ghp_secretToken" });
     const ssh = new RecordingSsh();
@@ -462,14 +462,16 @@ describe("GitHub draft PR contract", () => {
           number: 10,
           html_url: "https://github.com/cat-cave/repo/pull/10",
           draft: true,
-          base: { ref: "tanren/integ/spec_123" },
+          base: { ref: "tanren/run_anc" },
         },
       },
     ]);
     const events = new FakeEventStore();
-    // A speculative run: the operator route must base the PR on the integration
-    // branch (the dynamic base), NOT default_branch.
-    const pool = new RecordingRunPool("tanren/integ/spec_123");
+    // A DEPENDENT speculative run: the operator route must stack the PR on the immediate
+    // ancestor's PR-head branch (the LAST stack entry), NOT default_branch.
+    const pool = new RecordingRunPool({
+      ancestorStack: [{ specId: "spec_anc", runId: "run_anc", branch: "tanren/run_anc", headSha: "a".repeat(40) }],
+    });
 
     await publishDraftPullRequestForRun({
       pool: pool.asPgPool(),
@@ -482,12 +484,12 @@ describe("GitHub draft PR contract", () => {
       timeoutMs: 500,
     });
 
-    // The create-PR request body's `base` is the integration branch.
+    // The create-PR request body's `base` is the immediate ancestor's PR-head branch.
     const createReq = http.requests.find((r) => r.method === "POST" && r.path.endsWith("/pulls"));
-    expect((createReq?.body as { base?: string } | undefined)?.base).toBe("tanren/integ/spec_123");
-    // The github.pr.created event records the integration branch as the targetBranch.
+    expect((createReq?.body as { base?: string } | undefined)?.base).toBe("tanren/run_anc");
+    // The github.pr.created event records the stacked base as the targetBranch.
     expect(events.events.find((e) => e.eventType === "github.pr.created")?.payload).toMatchObject({
-      targetBranch: "tanren/integ/spec_123",
+      targetBranch: "tanren/run_anc",
     });
   });
 });

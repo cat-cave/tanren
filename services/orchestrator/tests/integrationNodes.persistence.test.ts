@@ -34,20 +34,18 @@ describe("integration-nodes persistence (pure logic)", () => {
   //     === memberKey(baseSha, [ancestorHeadSha]). The compat projection IS the
   //     same derivation the observe-only hook + the DB UPSERT compute, so projecting
   //     a one-ancestor speculative run and re-deriving the key must agree.
-  it("(a) an eager dependent's node member_key === memberKey(baseSha, [ancestorHeadSha])", () => {
-    // The speculative base ref is the base identity in the old model.
-    const baseSha = "spec/integration-ancestorX";
+  it("(a) an eager dependent's node member_key === memberKey(immediateAncestorBranch, [ancestorHeadSha])", () => {
+    // jj-local: the immediate-ancestor PR-head branch is the base identity (the stacked base).
+    const ancestorBranch = "tanren/spec_ancestor";
     const ancestorHeadSha = "f".repeat(40);
     const node = speculativeRunToNode({
       runId: "run_dep",
-      specId: "spec_dep",
       branch: "tanren/dep",
-      speculativeBase: baseSha,
-      integratedAncestorShas: { spec_ancestor: ancestorHeadSha },
+      ancestorStack: [{ specId: "spec_ancestor", runId: "run_anc", branch: ancestorBranch, headSha: ancestorHeadSha }],
     });
     expect(node.members).toHaveLength(1);
     expect(node.members[0]?.headSha).toBe(ancestorHeadSha);
-    expect(node.memberKey).toBe(memberKey(baseSha, [ancestorHeadSha]));
+    expect(node.memberKey).toBe(memberKey(ancestorBranch, [ancestorHeadSha]));
     expect(node.purpose).toBe("eager_base");
   });
 
@@ -80,20 +78,23 @@ describe("integration-nodes persistence (pure logic)", () => {
   // (c) the §8 compatibility read-model projects an old speculative run row into the
   //     right IntegrationNode shape (ordered, total, deterministic key).
   it("(c) compat read-model projects a speculative run into the right IntegrationNode", () => {
+    // The ordered ancestor_stack is the member source (DAG order is load-bearing); the
+    // immediate-ancestor (LAST) branch is the node base.
     const node = speculativeRunToNode({
       runId: "run_dep2",
-      specId: "spec_dep2",
       branch: "tanren/dep2",
-      speculativeBase: "tanren/integration-dep2",
-      // unordered map; the projection must ORDER by ancestor spec id deterministically.
-      integratedAncestorShas: { spec_b: "2".repeat(40), spec_a: "1".repeat(40) },
+      ancestorStack: [
+        { specId: "spec_a", runId: "run_a", branch: "tanren/run_a", headSha: "1".repeat(40) },
+        { specId: "spec_b", runId: "run_b", branch: "tanren/run_b", headSha: "2".repeat(40) },
+      ],
     });
     expect(node.members.map((m) => m.specId)).toEqual(["spec_a", "spec_b"]);
     expect(node.members.map((m) => m.headSha)).toEqual(["1".repeat(40), "2".repeat(40)]);
-    expect(node.baseBranch).toBe("tanren/integration-dep2");
-    expect(node.memberKey).toBe(memberKey("tanren/integration-dep2", ["1".repeat(40), "2".repeat(40)]));
+    // The base is the immediate (last) ancestor's PR-head branch.
+    expect(node.baseBranch).toBe("tanren/run_b");
+    expect(node.memberKey).toBe(memberKey("tanren/run_b", ["1".repeat(40), "2".repeat(40)]));
     // A reordering of the SAME members is a DIFFERENT key (order is load-bearing).
-    expect(node.memberKey).not.toBe(memberKey("tanren/integration-dep2", ["2".repeat(40), "1".repeat(40)]));
+    expect(node.memberKey).not.toBe(memberKey("tanren/run_b", ["2".repeat(40), "1".repeat(40)]));
   });
 });
 
@@ -191,10 +192,15 @@ describeDb("integration-nodes persistence (real DB + fail-closed RLS)", () => {
       );
     }
     await ownerPool.query(
-      `INSERT INTO runs (run_id, spec_id, project_id, org_id, trigger, branch, status,
-                         speculative_base, integrated_ancestor_shas)
-       VALUES ($1, $2, $3, $4, 'cli', 'tanren/dep', 'running', $5, $6::jsonb)`,
-      [RUN_DEP, SPEC_DEP, PROJECT, ORG, "tanren/integration-dep", JSON.stringify({ [SPEC_ANCESTOR]: ANCESTOR_HEAD })],
+      `INSERT INTO runs (run_id, spec_id, project_id, org_id, trigger, branch, status, ancestor_stack)
+       VALUES ($1, $2, $3, $4, 'cli', 'tanren/dep', 'running', $5::jsonb)`,
+      [
+        RUN_DEP,
+        SPEC_DEP,
+        PROJECT,
+        ORG,
+        JSON.stringify([{ specId: SPEC_ANCESTOR, runId: "run_anc", branch: "tanren/run_anc", headSha: ANCESTOR_HEAD }]),
+      ],
     );
   }, 60_000);
 
@@ -301,9 +307,10 @@ describeDb("integration-nodes persistence (real DB + fail-closed RLS)", () => {
     const nodes = await model.projectSpeculativeRunsAsNodes(PROJECT);
     const dep = nodes.find((n) => n.members.some((m) => m.specId === SPEC_ANCESTOR));
     expect(dep).toBeDefined();
-    expect(dep?.baseBranch).toBe("tanren/integration-dep");
+    // jj-local: the base is the immediate-ancestor PR-head branch from the ancestor_stack.
+    expect(dep?.baseBranch).toBe("tanren/run_anc");
     expect(dep?.members.map((m) => m.headSha)).toEqual(["f".repeat(40)]);
-    expect(dep?.memberKey).toBe(memberKey("tanren/integration-dep", ["f".repeat(40)]));
+    expect(dep?.memberKey).toBe(memberKey("tanren/run_anc", ["f".repeat(40)]));
   });
 
   it("the observe-only hook UPSERTs a node ALONGSIDE a run insert and never throws", async () => {
@@ -319,11 +326,16 @@ describeDb("integration-nodes persistence (real DB + fail-closed RLS)", () => {
             projectId: PROJECT,
             project: { defaultBranch: "main" },
           },
-          { speculativeBase: "tanren/integration-dep", integratedAncestorShas: { [SPEC_ANCESTOR]: "f".repeat(40) } },
+          {
+            ancestorStack: [
+              { specId: SPEC_ANCESTOR, runId: "run_anc", branch: "tanren/run_anc", headSha: "f".repeat(40) },
+            ],
+          },
         );
       });
     });
-    const key = memberKey("tanren/integration-dep", ["f".repeat(40)]);
+    // The observe-at-create node bases on `default_branch` (the assembly's real history root).
+    const key = memberKey("main", ["f".repeat(40)]);
     const found = await model.findByMemberKey(ORG, key);
     expect(found).toBeDefined();
     expect(found?.purpose).toBe("eager_base");
@@ -357,7 +369,11 @@ describeDb("integration-nodes persistence (real DB + fail-closed RLS)", () => {
             projectId: PROJECT,
             project: { defaultBranch: "main" },
           },
-          { speculativeBase: "tanren/integration-dep", integratedAncestorShas: { [SPEC_ANCESTOR]: "a".repeat(40) } },
+          {
+            ancestorStack: [
+              { specId: SPEC_ANCESTOR, runId: "run_anc", branch: "tanren/run_anc", headSha: "a".repeat(40) },
+            ],
+          },
         );
         // AFTER: another real tenant write. WITHOUT the savepoint fix this throws
         // "current transaction is aborted"; WITH it, it succeeds and the tx commits.

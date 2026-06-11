@@ -59,24 +59,20 @@ export async function applySetSpecMetadata(client: QueryClient, input: SetSpecMe
 
 // --- Change-percolation (§2c) run-column writes — byte-identical to the inline SQL. ---
 
-/** Re-point a speculative run's dynamic base (the percolation kick-off re-point). */
+/**
+ * Re-point a speculative run's dynamic base to the re-resolved ANCESTOR STACK (the
+ * never-discard base-shift re-point). jj-local (WS-B PR-9): the base shift writes ONLY
+ * `runs.ancestor_stack`; the legacy `speculative_base` column STAYS (dropped in PR-12) but
+ * is NO LONGER WRITTEN — it is NULLed (jj-local has no synthesized host ref).
+ */
 export async function applySetRunSpeculativeBase(
   client: QueryClient,
   input: SetRunSpeculativeBaseInput,
 ): Promise<void> {
-  // WS-A PR-1 dual-write: when the caller supplies the re-resolved ancestor stack,
-  // re-point `ancestor_stack` alongside the legacy `speculative_base` (additive —
-  // written, not yet read). Absent ⇒ leave the column untouched (byte-identical to
-  // the prior single-column UPDATE).
-  if (input.ancestorStack !== undefined) {
-    await client.query("UPDATE runs SET speculative_base = $2, ancestor_stack = $3::jsonb WHERE run_id = $1", [
-      input.runId,
-      input.speculativeBase,
-      JSON.stringify(input.ancestorStack),
-    ]);
-    return;
-  }
-  await client.query("UPDATE runs SET speculative_base = $2 WHERE run_id = $1", [input.runId, input.speculativeBase]);
+  await client.query("UPDATE runs SET speculative_base = NULL, ancestor_stack = $2::jsonb WHERE run_id = $1", [
+    input.runId,
+    input.ancestorStack === undefined ? null : JSON.stringify(input.ancestorStack),
+  ]);
 }
 
 /** Stamp the percolation re-execution run id onto the dependent's in-flight marker. */

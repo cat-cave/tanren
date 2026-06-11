@@ -27,7 +27,6 @@ import { buildDefaultConflictResolver } from "../workflow/reviewMerge/conflictRe
 import { buildLiveJjWorkspace, type LiveJjWorkspace } from "../providers/liveJjWorkspace.js";
 import type { AncestorStack } from "./ancestorStack.js";
 import { assembleBaseShiftStackLive } from "./baseShiftStackAssembly.js";
-import { walkerJjLocalBase } from "./walkerJjLocalBaseFlag.js";
 import type { BaseShiftRunContext } from "./baseShiftLiveContext.js";
 import type { ConflictResolution } from "./baseShiftCoordinator.js";
 import type { LiveBaseShiftDeps } from "./baseShiftLiveSeams.js";
@@ -37,13 +36,12 @@ import type { LiveBaseShiftDeps } from "./baseShiftLiveSeams.js";
  * a fit. The conflict is gathered + re-gated against the SHIFTED base the initial `rebaseOnto`
  * used (NEVER the project default — a P0 fail-open). HOW that shifted base is materialized:
  *
- *   • WS-A PR-6b jj-local path (`WALKER_JJ_LOCAL_BASE` ON + a NON-EMPTY re-resolved stack):
- *     ASSEMBLE the stack LOCALLY (`main + ordered ancestors`) on the dependent's own short-lived
- *     runner (the SAME `assembleBaseShiftStackLive` the opener uses) and gather + re-gate the
- *     recorded conflict against the LOCALLY-ASSEMBLED stack HEAD — NO `tanren/integ` clone.
- *   • Legacy path (flag-off / empty stack): the EXACT current single-ref clone of
- *     `${shiftedBase}@origin` (the rebuilt integration ref, or plain `default_branch` when
- *     non-speculative) — byte-identical to before this PR.
+ *   • a NON-EMPTY re-resolved stack (a still-speculative shift): ASSEMBLE the stack LOCALLY
+ *     (`main + ordered ancestors`) on the dependent's own short-lived runner (the SAME
+ *     `assembleBaseShiftStackLive` the opener uses) and gather + re-gate the recorded conflict
+ *     against the LOCALLY-ASSEMBLED stack HEAD — NO synthesized host ref.
+ *   • an empty stack (a NON-speculative shift): the single-ref clone of `${shiftedBase}@origin`
+ *     (plain `default_branch` — a REAL ref, never a synthesized one).
  *
  * Returns `{resolved, headSha}` (the resolved head read back from the forge) or
  * `{resolved:false, reason}` (the coordinator replans — the work stays alive). All tenant
@@ -126,10 +124,10 @@ async function prepareResolveWorkspace(input: {
   timeoutMs: number;
 }): Promise<PreparedResolveWorkspace> {
   const { deps, ctx, shiftedBase, ancestorStack, timeoutMs } = input;
-  if (walkerJjLocalBase() && ancestorStack !== undefined && ancestorStack.length > 0) {
+  if (ancestorStack !== undefined && ancestorStack.length > 0) {
     // ASSEMBLE the re-resolved stack LOCALLY on the dependent's own runner (the SAME assembly
     // the opener runs). The applier then gathers over THIS open workspace and rebases the
-    // dependent's head onto the assembled head SHA — never the synthesized `${shiftedBase}@origin`.
+    // dependent's head onto the assembled head SHA — never a synthesized host ref.
     const assembled = await assembleBaseShiftStackLive({ deps, ctx, stack: ancestorStack, timeoutMs });
     return {
       live: assembled.live,
@@ -147,7 +145,8 @@ async function prepareResolveWorkspace(input: {
       preOpenedWorkspace: assembled.workspace,
     };
   }
-  // LEGACY single-ref path: a fresh workspace the applier clones `${shiftedBase}@origin` into.
+  // NON-speculative shift: a fresh workspace the applier clones `${shiftedBase}@origin`
+  // (plain `default_branch` — a REAL ref) into.
   const live = await buildLiveJjWorkspace({
     facts: {
       orgId: ctx.orgId,

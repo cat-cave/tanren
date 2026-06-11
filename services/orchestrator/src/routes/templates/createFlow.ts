@@ -23,7 +23,6 @@ import type { ActorContext } from "../../auth/schemas.js";
 import type { Allocator, CommandSubstrate, SecretStore } from "../../engine/contracts/index.js";
 import type { VcsProvider } from "../../engine/contracts/vcsProvider.js";
 import { buildDagWalker, PgDagReadModel } from "../../engine/dag/walker.js";
-import { PgSpeculativeIntegrator } from "../../engine/dag/speculativeIntegrator.js";
 import { PgEventStore } from "../../engine/eventStore.js";
 import type { AuditPassRunner } from "../../engine/forge/audits/index.js";
 import {
@@ -109,14 +108,10 @@ export function buildCreateTemplateDeps(
   // credentials resolve from the org defaults — like the greenfield interview).
   const researcher = buildTemplateResearcher(deps.forgeInfra, { orgId });
 
-  // STEP 3 seam — the LIVE build driver over the real walker + run worker.
-  const integrator = new PgSpeculativeIntegrator({
-    pool: deps.pool,
-    vcsProvider: deps.vcsProvider,
-    secrets: deps.secrets,
-    githubAppMinter: deps.githubAppMinter,
-  });
-  const walker = buildDagWalker(deps.pool, { integrator });
+  // STEP 3 seam — the LIVE build driver over the real walker + run worker. The walker
+  // self-wires its org-scoped ancestor-stack resolver from the pool (no host integration
+  // builder — the jj-local cutover removed the synthesized integration ref).
+  const walker = buildDagWalker(deps.pool, {});
   const readModel = new PgDagReadModel(deps.pool);
   const buildDriver = buildRunLoopBuildDriver({
     pool: deps.pool,

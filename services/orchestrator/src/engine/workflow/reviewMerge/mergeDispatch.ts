@@ -98,20 +98,20 @@ export async function mergeForRun(input: MergeForRunInput): Promise<MergeForRunR
     payload: { taskKind: "merge" },
   });
 
-  // §2c: resolve the run's speculative state. A NORMAL run is undefined
-  // and proceeds unchanged. A SPECULATIVE run's PR is based on its integration ref
-  // (`speculative_base`); its merge must NEVER land into that ref — it must land on
-  // real `default_branch`.
+  // §2c/§2.3: resolve the run's speculative state. A NORMAL run (empty `ancestor_stack`) is
+  // undefined and proceeds unchanged. A SPECULATIVE run's PR is stacked on its immediate
+  // unmerged ancestor's PR-head branch; its merge HOLDS until every ancestor lands, then the
+  // stack walk retargets it onto real `default_branch`.
   const speculative = await resolveSpeculativeState(input.pool, context.runId);
 
   const probe = input.mergeProbe ?? (await buildGitHubProbe(input, context, pr.repo, pr.pullNumber));
 
   const speculativeHold = speculative !== undefined && speculative.unmergedAncestors.length > 0;
   if (speculative !== undefined) {
-    // §2c + WS-A PR-5: re-target the PR base — the stacked-PR WALK (flag-on; base tracks
-    // the immediate still-unmerged ancestor + drops merged heads from `ancestor_stack`) OR
-    // the legacy integ→default_branch single step (flag-off; only once the hold clears).
-    // The MERGE HOLD is UNCHANGED and handled below; this only walks the BASE.
+    // §3.2/§3.3: re-target the PR base — the stacked-PR WALK (the base tracks the immediate
+    // still-unmerged ancestor + drops merged heads from `ancestor_stack`, landing on
+    // `default_branch` once the stack empties). The MERGE HOLD is UNCHANGED and handled
+    // below; this only walks the BASE.
     await applySpeculativeRetarget({
       pool: input.pool,
       eventStore,
@@ -121,7 +121,6 @@ export async function mergeForRun(input: MergeForRunInput): Promise<MergeForRunR
       prNumber: pr.pullNumber,
       probe,
       speculative,
-      speculativeHold,
     });
     // (a) HOLD while any ancestor is still unmerged — no unreviewed ancestor code
     // reaches `main` early. The DagWalker re-walks on the ancestor merge.completed,
@@ -137,7 +136,9 @@ export async function mergeForRun(input: MergeForRunInput): Promise<MergeForRunR
           prUrl: context.prUrl,
           prNumber: pr.pullNumber,
           integration,
-          speculativeBase: speculative.speculativeBase,
+          // jj-local: the held PR stacks on its immediate unmerged ancestor's PR-head branch
+          // (the LAST stack entry), or `default_branch` once the stack empties. No host ref.
+          speculativeBase: speculative.ancestorStack.at(-1)?.branch || context.baseBranch,
           unmergedAncestors: speculative.unmergedAncestors,
         },
       });
@@ -184,9 +185,9 @@ export async function mergeForRun(input: MergeForRunInput): Promise<MergeForRunR
     integration,
     pr,
     probe,
-    // (c) After a successful merge onto `default_branch`, delete the ephemeral
-    // integration ref (§2c cleanup). Best-effort + idempotent.
-    ...(speculative !== undefined && { speculativeCleanup: speculative.speculativeBase }),
+    // jj-local: there is NO synthesized integration ref to clean after merge (the dependent
+    // assembled its base LOCALLY + stacked on real PR-head branches), so `speculativeCleanup`
+    // is never set. `cleanupIntegrationBranch` (kept for PR-11) is a no-op without it.
   });
 
   // governance posture gate. Only Tanren-initiated auto-merges
