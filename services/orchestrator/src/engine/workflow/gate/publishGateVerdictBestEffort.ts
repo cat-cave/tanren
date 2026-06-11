@@ -7,12 +7,12 @@
 //
 // HOW it is non-fatal (tanren-owns-the-engine.md §0, §6): the verdict is published
 // through the `SafeVisibilityProjection` seam — the gate status is the canonical
-// best-effort UI mirror. `safe.publishGate` returns a `ProjectionOutcome` and CAN
-// NEVER REJECT (a forge throw is captured as `failed`), so a publish hiccup is
-// STRUCTURALLY incapable of propagating to the merge path. A `failed`/`skipped`
-// outcome is reported via `emit`; a `projected` one is silent. The merge decision is
-// made elsewhere from `outcome.passed` and is byte-identical whether this projection
-// succeeds or fails.
+// best-effort UI mirror. `publishGateVerdict` calls `safe.publishGate`, which returns
+// a `ProjectionOutcome` and CAN NEVER REJECT (a forge throw is captured as `failed`,
+// a host with no `publishGate` is `skipped`), so a publish hiccup is STRUCTURALLY
+// incapable of propagating to the merge path. A `failed`/`skipped` outcome is reported
+// via `emit`; a `projected` one is silent. The merge decision is made elsewhere from
+// `outcome.passed` and is byte-identical whether this projection succeeds or fails.
 //
 // STRUCTURALLY NON-THROWING (the real never-blocks guarantee): the projection is only
 // HALF the surface — the `gate.publish_failed` NOTE the failure path `emit`s is itself
@@ -23,30 +23,14 @@
 // IMPOSSIBLE for a passing gate to be halted by the best-effort failure-reporting path.
 //
 // IMPORTANT: this only ever notes a failed PUBLISH of a verdict. A FAILED gate is
-// never laundered here. SECURITY: the token never appears in the emitted reason (it
-// carries only the projection's captured error message — an HTTP status / error class).
+// never laundered here. SECURITY: the token never appears in the emitted reason (the
+// projection seam holds its own token supplier and never returns it; the reason carries
+// only the projection's captured error message — an HTTP status / error class).
 import type { CiWhen } from "../../ci/index.js";
-import { harden } from "../../contracts/visibilityProjection.js";
-import { VcsProviderVisibilityProjection } from "../../providers/vcsProviderVisibilityProjection.js";
-import type { PublishGateVerdictInput } from "./publishGateVerdict.js";
+import { type PublishGateVerdictInput, publishGateVerdict } from "./publishGateVerdict.js";
 import { createLogger } from "../../observability/logger.js";
 
 const log = createLogger("gate");
-
-/** The forge-neutral `owner/name` the projection seam carries (parsed back by the impl). */
-function repoFullName(repo: PublishGateVerdictInput["repo"]): string {
-  return `${repo.owner}/${repo.name}`;
-}
-
-/** The human-readable, length-bounded summary the gate status carries (no secrets). */
-function gateSummary(outcome: PublishGateVerdictInput["outcome"]): string {
-  if (outcome.passed) {
-    const tiers = outcome.results.map((result) => result.tier).join(", ");
-    return tiers === "" ? "Native pre-merge gate passed." : `Native pre-merge gate passed: ${tiers}.`;
-  }
-  const failure = outcome.failure;
-  return `Native pre-merge gate failed at tier ${failure.tier}, step ${failure.failedStep} (exit ${failure.exitCode ?? "n/a"}).`;
-}
 
 /** How a `gate.publish_failed` warning is recorded — a thin seam over the call site's event store. */
 export type EmitPublishFailed = (input: {
@@ -76,13 +60,7 @@ export async function publishGateVerdictBestEffort(
   emit: EmitPublishFailed,
 ): Promise<void> {
   try {
-    const safe = harden(new VcsProviderVisibilityProjection(publishInput.vcsProvider, async () => publishInput.token));
-    const outcome = await safe.publishGate({
-      repoFullName: repoFullName(publishInput.repo),
-      headSha: publishInput.headSha,
-      verdict: publishInput.outcome.passed ? "passed" : "failed",
-      summary: gateSummary(publishInput.outcome),
-    });
+    const outcome = await publishGateVerdict(publishInput);
     if (outcome.kind === "projected") {
       return;
     }
