@@ -5,9 +5,7 @@
 // provider-neutral seam — it wraps GitHub logic, never re-implements it, so
 // behavior is preserved exactly. The HTTP client is injected at construction.
 
-import { setTimeout as sleepFor } from "node:timers/promises";
 import { resolveGithubToken } from "../credentials/githubTokenResolver.js";
-import { RefResetPermanentError, refReadStatusError, resetRef } from "./githubRefReset.js";
 import { invokeTokenIdentity, resolveGithubActorIdentity } from "./githubActorIdentity.js";
 import {
   publishGitHubCheck,
@@ -22,8 +20,6 @@ import { parseCommitLogins } from "../workflow/reviewMerge/commitLogins.js";
 import type { PullRequestContributors } from "../workflow/reviewMerge/governancePosture.js";
 import type {
   ActorIdentity,
-  BuildIntegrationBranchInput,
-  BuildIntegrationBranchResult,
   CreatedIssue,
   CreatedRepository,
   CreateIssueInput,
@@ -100,18 +96,13 @@ export class GitHubVcsProvider implements VcsProvider {
   private readonly status: GitHubStatusService;
   private readonly reviewMerge: GitHubReviewMergeService;
 
-  /** Test seam: sleep used between the internal ref-reset retries (real timer in prod). */
-  private readonly sleep: (ms: number) => Promise<void>;
-
   constructor(
     // §5: public-READABLE so the merge stage builds its `CodeHost` over the SAME client.
     readonly http: GitHubHttpClient,
-    opts?: { sleep?: (ms: number) => Promise<void> },
   ) {
     this.pulls = new GitHubPullRequestService(http);
     this.status = new GitHubStatusService(http);
     this.reviewMerge = new GitHubReviewMergeService(http);
-    this.sleep = opts?.sleep ?? ((ms) => sleepFor(ms));
   }
 
   async resolveToken(creds: VcsCredentialContext): Promise<ResolvedVcsToken> {
@@ -339,66 +330,6 @@ export class GitHubVcsProvider implements VcsProvider {
     return { outcome: result.outcome, message: result.message };
   }
 
-  async buildIntegrationBranch(input: BuildIntegrationBranchInput): Promise<BuildIntegrationBranchResult> {
-    const { repo, token, baseBranch, integrationBranch, ancestors } = input;
-    // 1. (Re)set the ephemeral integration ref to the real base SHA so a rebuild is
-    //    never additive over a stale integration. NEVER touches `default_branch`.
-    const baseSha = await this.refSha(repo, token, baseBranch);
-    await this.resetRef(repo, token, integrationBranch, baseSha);
-
-    // 2. Merge each ancestor onto the integration ref in DAG order. A 409 is a real
-    //    conflict BETWEEN this ancestor and an earlier integrated one — surfaced early.
-    const merged: string[] = [];
-    const ancestorHeadShas: Record<string, string> = {};
-    for (const ancestor of ancestors) {
-      // Capture the ancestor's head SHA AT integration time (the divergence key).
-      ancestorHeadShas[ancestor.specId] = await this.refSha(repo, token, ancestor.branch);
-      const result = await this.mergeBranchInto(repo, token, integrationBranch, ancestor.branch);
-      if (result === "conflict") {
-        // The other side is the prior integrated ancestor (or the base); the conflicting
-        // ancestor did not merge, so drop its captured head SHA.
-        const otherSpecId = merged.at(-1) ?? baseBranch;
-        delete ancestorHeadShas[ancestor.specId];
-        return {
-          outcome: "conflict",
-          integrationBranch,
-          mergedAncestors: merged,
-          ancestorHeadShas,
-          conflictBetween: { specId: ancestor.specId, otherSpecId },
-          message: `ancestor ${ancestor.specId} (${ancestor.branch}) conflicts with the integration of ${otherSpecId} on ${integrationBranch}`,
-        };
-      }
-      merged.push(ancestor.specId);
-    }
-    return {
-      outcome: "integrated",
-      integrationBranch,
-      mergedAncestors: merged,
-      ancestorHeadShas,
-      message: `integrated ${merged.length} ancestor branch(es) onto ${integrationBranch}`,
-    };
-  }
-
-  private async refSha(repo: RepoRef, token: ResolvedVcsToken, branch: string): Promise<string> {
-    const response = await this.http.request({
-      method: "GET",
-      path: repoApiPath(repo, `/git/ref/heads/${encodeURIComponent(branch)}`),
-      token: token.token,
-      refreshToken: token.refresh,
-    });
-    if (response.status !== 200 || typeof response.body !== "object" || response.body === null) {
-      // TYPED (see refReadStatusError): a 404/403 (deleted/renamed branch) is PERMANENT —
-      // an untyped Error defaulted retriable → re-drove the 3s infra loop forever; 5xx stays retriable.
-      throw refReadStatusError("ref read", branch, response.status);
-    }
-    const object = (response.body as { object?: { sha?: unknown } }).object;
-    if (object === undefined || typeof object.sha !== "string") {
-      // A 200 with no sha is a malformed/permanent response, not a transient blip.
-      throw new RefResetPermanentError(`GitHub ref read for ${branch} returned no sha`);
-    }
-    return object.sha;
-  }
-
   async readBranchHeadSha(input: {
     repo: RepoRef;
     branch: string;
@@ -417,42 +348,6 @@ export class GitHubVcsProvider implements VcsProvider {
     }
     const object = (response.body as { object?: { sha?: unknown } }).object;
     return object !== undefined && typeof object.sha === "string" ? object.sha : undefined;
-  }
-
-  /**
-   * (Re)set the ephemeral integration ref to `sha` (create, or force-update if it
-   * exists). Delegates to the race-safe {@link resetRef} (body-message classification +
-   * bounded internal retry on a transient 422), passing the injected sleep.
-   */
-  private async resetRef(repo: RepoRef, token: ResolvedVcsToken, branch: string, sha: string): Promise<void> {
-    await resetRef({ http: this.http, sleep: this.sleep, repo, token, branch, sha });
-  }
-
-  /** Merge `headBranch` into `base` (the integration ref). 409 ⇒ conflict. */
-  private async mergeBranchInto(
-    repo: RepoRef,
-    token: ResolvedVcsToken,
-    base: string,
-    headBranch: string,
-  ): Promise<"merged" | "conflict"> {
-    const response = await this.http.request({
-      method: "POST",
-      path: repoApiPath(repo, "/merges"),
-      token: token.token,
-      refreshToken: token.refresh,
-      body: { base, head: headBranch, commit_message: `tanren: speculatively integrate ${headBranch}` },
-    });
-    // 201 = a merge commit was created; 204 = nothing to merge (already current).
-    if (response.status === 201 || response.status === 204) {
-      return "merged";
-    }
-    if (response.status === 409) {
-      return "conflict";
-    }
-    // TYPED (see refSha): a 404/403 (head/base branch deleted/renamed mid-batch) is PERMANENT
-    // — an untyped throw defaulted retriable and re-drove the 3s infra loop forever; a 5xx stays
-    // retriable. The 409-conflict path above is unchanged (a genuine conflict is NOT an infra error).
-    throw refReadStatusError("speculative merge", `${headBranch} into ${base}`, response.status);
   }
 
   async retargetPullRequestBase(pr: PullRequestRef, newBase: string, token: ResolvedVcsToken): Promise<void> {

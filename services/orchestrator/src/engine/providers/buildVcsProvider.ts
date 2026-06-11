@@ -24,8 +24,6 @@ import type { GitHubPullRequestChecks } from "./github.js";
 import type { PullRequestContributors } from "../workflow/reviewMerge/governancePosture.js";
 import type {
   ActorIdentity,
-  BuildIntegrationBranchInput,
-  BuildIntegrationBranchResult,
   CreatedIssue,
   CreatedRepository,
   CreateIssueInput,
@@ -157,9 +155,6 @@ export class UnconfiguredVcsProvider implements VcsProvider {
     return this.fail();
   }
   async updateBranch(_pr: PullRequestRef, _token: ResolvedVcsToken): Promise<UpdateBranchResult> {
-    return this.fail();
-  }
-  async buildIntegrationBranch(_input: BuildIntegrationBranchInput): Promise<BuildIntegrationBranchResult> {
     return this.fail();
   }
   async retargetPullRequestBase(_pr: PullRequestRef, _newBase: string, _token: ResolvedVcsToken): Promise<void> {

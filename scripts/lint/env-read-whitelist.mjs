@@ -70,7 +70,6 @@ const NON_TANREN_ENV_ALLOWLIST = new Map([
   ["DASHBOARD_PORT", "dashboard HTTP listen port (documented default)"],
   // ── tanren-owns-the-engine kill-switch flags (documented post-apex §7) ──────
   ["MERGE_AUTHORITY_LIVE", "documented post-apex §7 kill-switch deletion"],
-  ["INTEGRATION_NODES_DRIVE", "documented post-apex §7 kill-switch deletion"],
 ]);
 
 // Files allowed to read `TANREN_*` directly. The envSchema files are the intended

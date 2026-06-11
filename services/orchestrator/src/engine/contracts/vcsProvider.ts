@@ -8,8 +8,7 @@
 // dispatch all live behind this one contract.
 //
 // The surface covers the full merge-coordination grain: auto-rebase
-// (`readMergeability`/`updateBranch`), conflict-resolution hooks, and
-// speculative-execution integration-branch ops. It is the VCS provider, NOT the
+// (`readMergeability`/`updateBranch`) and conflict-resolution hooks. It is the VCS provider, NOT the
 // merge QUEUE (§1.1): the native merge queue sits ABOVE it. `publishCheck` /
 // `publishStatus` let Tanren PUBLISH its own native gate verdict to the forge so
 // the PR UI shows it (the merge decision is already made by the native gate).
@@ -120,52 +119,14 @@ export interface PullRequestMergeability {
 }
 
 /**
- * one ancestor in a speculative integration branch — its branch ref + the
- * spec it implements (so the coordinator can route an A-vs-B conflict to the conflict
+ * one ancestor in an integration node's prospective merged state — its branch
+ * ref + the spec it implements (so the coordinator can route an A-vs-B conflict to the
  * intent-preserving resolver with the right intent). DAG order is the order the
  * coordinator passes these in (ancestors before dependents).
  */
 export interface IntegrationAncestor {
   specId: string;
   branch: string;
-}
-
-/** Input to building/refreshing a speculative integration branch. */
-export interface BuildIntegrationBranchInput {
-  repo: RepoRef;
-  token: ResolvedVcsToken;
-  /** The real base (`projects.default_branch`) the integration starts from. */
-  baseBranch: string;
-  /** The ephemeral integration ref to create/reset (e.g. `tanren/integ/<dependent>`). */
-  integrationBranch: string;
-  /** The unmerged ancestors to speculatively merge in, in DAG order. */
-  ancestors: ReadonlyArray<IntegrationAncestor>;
-}
-
-/**
- * the outcome of building a speculative integration branch. `integrated`
- * means every ancestor merged cleanly (the dependent's dynamic base is ready).
- * `conflict` means two ancestors conflict WITH EACH OTHER — surfaced HERE, early,
- * so the conflict resolver runs against the integration branch (not the innocent
- * dependent); `conflictBetween` names the pair so the resolver gets both intents.
- */
-export interface BuildIntegrationBranchResult {
-  outcome: "integrated" | "conflict";
-  /** The integration ref (echoed for the dynamic base). */
-  integrationBranch: string;
-  /** The ancestor spec ids that merged cleanly, in order. */
-  mergedAncestors: string[];
-  /**
-   * change-percolation: the head SHA each merged ancestor was integrated
-   * AT, keyed by ancestor spec id — recorded on the dependent's run as the
-   * divergence key, so a later ancestor advance is detectable. Present for the
-   * `mergedAncestors`; an ancestor that conflicted (not merged) is absent.
-   */
-  ancestorHeadShas: Record<string, string>;
-  /** On `conflict`: the two ancestor specs that conflict with each other. */
-  conflictBetween?: { specId: string; otherSpecId: string };
-  /** Human-readable detail (the forge message), for events/diagnostics. */
-  message: string;
 }
 
 /** The outcome of attempting to bring a PR branch up to date with its base. */
@@ -452,18 +413,6 @@ export interface VcsProvider {
    * broken work. It NEVER merges and NEVER silently swallows a conflict.
    */
   updateBranch(pr: PullRequestRef, token: ResolvedVcsToken): Promise<UpdateBranchResult>;
-
-  /**
-   * speculative execution: build (or reset + rebuild) the ephemeral
-   * SPECULATIVE INTEGRATION BRANCH for a dependent — `baseBranch` + each unmerged
-   * ancestor merged in DAG order (server-side forge merges). It NEVER touches
-   * `default_branch`/`main`; it writes only the ephemeral integration ref. When
-   * two ancestors conflict WITH EACH OTHER it returns `conflict` (naming the pair)
-   * rather than forcing it — the caller routes that pair to the conflict resolver and
-   * rebuilds; the dependent's PR bases on this ref (the dynamic base). Idempotent:
-   * re-running resets the ref to `baseBranch` first, so a stale integration is never additive.
-   */
-  buildIntegrationBranch(input: BuildIntegrationBranchInput): Promise<BuildIntegrationBranchResult>;
 
   /**
    * speculative execution — land-on-real-main: re-point an open PR's BASE to

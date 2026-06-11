@@ -52,12 +52,8 @@ export const CONFORMANCE_DIRTY_PR_NUMBER = 13;
 export const CONFORMANCE_HEAD_BRANCH = "tanren/run_conf";
 /** a branch that does not exist (readBranchHeadSha → undefined). */
 export const CONFORMANCE_ABSENT_BRANCH = "tanren/does-not-exist";
-/** ancestor branches that speculatively integrate cleanly onto the base. */
+/** the ephemeral integration ref `deleteBranch`'s idempotent-cleanup conformance pins. */
 export const CONFORMANCE_INTEGRATION_BRANCH = "tanren/integ/spec_c";
-export const CONFORMANCE_ANCESTOR_A = { specId: "spec_a", branch: "tanren/run_a" };
-export const CONFORMANCE_ANCESTOR_B = { specId: "spec_b", branch: "tanren/run_b" };
-/** an ancestor branch that conflicts WITH ANOTHER ancestor on the integration ref. */
-export const CONFORMANCE_ANCESTOR_CONFLICT = { specId: "spec_x", branch: "tanren/run_conflict" };
 /** a branch ref whose CI (readBranchChecks) is GREEN (prospective merged state passes). */
 export const CONFORMANCE_GREEN_BRANCH = "tanren/integ/green";
 /** a branch ref whose CI (readBranchChecks) is FAILING (a bad interaction). */
@@ -341,41 +337,6 @@ export function describeVcsProviderConformance(label: string, harness: VcsProvid
       const token = await resolve(provider);
       const result = await provider.updateBranch({ repo: REPO, number: CONFORMANCE_DIRTY_PR_NUMBER }, token);
       expect(result.outcome).toBe("conflict");
-    });
-
-    // ----: speculative integration branch -----------------------------
-
-    it("buildIntegrationBranch integrates clean ancestors onto the base in order", async () => {
-      const provider = harness.make();
-      const token = await resolve(provider);
-      const result = await provider.buildIntegrationBranch({
-        repo: REPO,
-        token,
-        baseBranch: CONFORMANCE_BASE_BRANCH,
-        integrationBranch: CONFORMANCE_INTEGRATION_BRANCH,
-        ancestors: [CONFORMANCE_ANCESTOR_A, CONFORMANCE_ANCESTOR_B],
-      });
-      expect(result.outcome).toBe("integrated");
-      expect(result.integrationBranch).toBe(CONFORMANCE_INTEGRATION_BRANCH);
-      expect(result.mergedAncestors).toEqual([CONFORMANCE_ANCESTOR_A.specId, CONFORMANCE_ANCESTOR_B.specId]);
-    });
-
-    it("buildIntegrationBranch surfaces an ancestor-vs-ancestor conflict (not a throw)", async () => {
-      const provider = harness.make();
-      const token = await resolve(provider);
-      const result = await provider.buildIntegrationBranch({
-        repo: REPO,
-        token,
-        baseBranch: CONFORMANCE_BASE_BRANCH,
-        integrationBranch: CONFORMANCE_INTEGRATION_BRANCH,
-        // A integrates, then the conflict ancestor collides with A on the ref.
-        ancestors: [CONFORMANCE_ANCESTOR_A, CONFORMANCE_ANCESTOR_CONFLICT],
-      });
-      expect(result.outcome).toBe("conflict");
-      expect(result.conflictBetween?.specId).toBe(CONFORMANCE_ANCESTOR_CONFLICT.specId);
-      // The other side is the previously-integrated ancestor A.
-      expect(result.conflictBetween?.otherSpecId).toBe(CONFORMANCE_ANCESTOR_A.specId);
-      expect(result.mergedAncestors).toEqual([CONFORMANCE_ANCESTOR_A.specId]);
     });
 
     it("retargetPullRequestBase re-points an open PR's base (lands a speculative dep on real main)", async () => {
