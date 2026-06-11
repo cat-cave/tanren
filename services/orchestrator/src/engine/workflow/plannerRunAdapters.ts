@@ -40,7 +40,6 @@ import type { AppendEvent, SubtaskLoopAdapters } from "./subtaskLoop.js";
 import { buildDefaultConflictResolver } from "./reviewMerge/conflictResolver/index.js";
 import { buildJjConflictApplier } from "./reviewMerge/conflictResolver/jjWorkspaceApplier.js";
 import { buildLiveJjWorkspace } from "../providers/liveJjWorkspace.js";
-import { conflictResolverJjLive } from "../merge/conflictResolverJjFlag.js";
 import type { WorkspaceConflictApplier } from "../contracts/conflictResolution.js";
 import type { ConflictResolverHook } from "./reviewMerge/index.js";
 
@@ -212,17 +211,12 @@ function defaultConflictResolver(input: RunPlannerLoopInput, deps: ConflictResol
   // a percolation re-execution's conflict is resolved in UPSTREAM-CHANGE mode.
   return async (conflictContext) => {
     const upstreamChange = await readPercolationUpstreamChange(input);
-    // Wave-3/S1 CUTOVER (`conflictResolverJjLive()`, default ON): provision a live jj
-    // workspace (A1's `buildLiveJjWorkspace`) and run the WHOLE resolver — adapters +
-    // re-gate + applier — over that runner + path, so the re-gate judges the
-    // jj-resolved tree. `rebaseOnto` RECORDS the conflict (fail-closed, no
+    // Provision a live jj workspace (A1's `buildLiveJjWorkspace`) and run the WHOLE
+    // resolver — adapters + re-gate + applier — over that runner + path, so the re-gate
+    // judges the jj-resolved tree. `rebaseOnto` RECORDS the conflict (fail-closed, no
     // `git merge --abort` / `|| true` fail-open). A clean run never reaches here, so no
-    // jj runner is allocated for the common path. Flag OFF is the clean kill-switch:
-    // the run's own runner + the git-merge-abort `SshWorkspaceConflictApplier`.
-    if (conflictResolverJjLive()) {
-      return resolveOverLiveJj(input, deps, upstreamChange, conflictContext);
-    }
-    return buildResolver(input, deps, upstreamChange)(conflictContext);
+    // jj runner is allocated for the common path.
+    return resolveOverLiveJj(input, deps, upstreamChange, conflictContext);
   };
 }
 
@@ -353,14 +347,14 @@ async function readPercolationUpstreamChange(
 function buildResolver(
   input: RunPlannerLoopInput,
   deps: ConflictResolverDeps,
-  upstreamChange?: { ancestorSpecId: string; changeSummary: string },
-  applier?: WorkspaceConflictApplier,
+  upstreamChange: { ancestorSpecId: string; changeSummary: string } | undefined,
+  applier: WorkspaceConflictApplier,
 ): ConflictResolverHook {
   const context = input.context;
   const routing = requireRouting(context.routing);
   const orgId = typeof context.orgId === "string" ? context.orgId : undefined;
   return buildDefaultConflictResolver({
-    ...(applier !== undefined && { applier }),
+    applier,
     pool: input.pool,
     ...(input.runStateWriter !== undefined && { runStateWriter: input.runStateWriter }),
     eventStore: deps.eventStore,
@@ -377,8 +371,6 @@ function buildResolver(
     specTitle: context.specTitle,
     specDescription: context.specDescription,
     acceptanceCriteria: context.acceptanceCriteria,
-    baseBranch: context.targetBranch,
-    headBranch: context.runBranch,
     ...(context.endpointBaseUrl !== undefined && { endpointBaseUrl: context.endpointBaseUrl }),
     routing,
     checker: deps.checker,

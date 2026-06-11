@@ -53,8 +53,6 @@ import {
 import { buildAdaptersFromRouting } from "../providers/adapterSelector.js";
 import { buildDefaultConflictResolver } from "../workflow/reviewMerge/conflictResolver/index.js";
 import { driveResolveOverJj } from "./driveConflictResolveJj.js";
-import { driveResolveOverGit } from "./driveConflictResolveGit.js";
-import { conflictResolverJjLive } from "./conflictResolverJjFlag.js";
 import type { WorkspaceConflictApplier } from "../contracts/conflictResolution.js";
 import type { ConflictResolverHook } from "../workflow/reviewMerge/index.js";
 
@@ -126,13 +124,19 @@ export interface DriveConflictResolveDeps {
   /** The capture cell the drive reads after `mergeForRun` returns. */
   verdict: DriveConflictVerdict;
   /**
-   * Test seam: build the conflict resolver hook over the provisioned runner +
-   * workspace. Production OMITS it → the REAL intent-preserving resolver
-   * (`buildResolverForDrive`) is the default (§8a: the default of an injectable
-   * seam is the real impl, never a stub). A test injects a scripted hook to assert
-   * the classify-then-escalate + percolation/cap guards WITHOUT a live model/runner.
+   * Test seam: build the conflict resolver hook over the provisioned jj workspace.
+   * Production OMITS it → the REAL intent-preserving resolver (`buildResolverForDrive`)
+   * is the default (§8a: the default of an injectable seam is the real impl, never a
+   * stub). A test injects a scripted hook to assert the classify-then-escalate +
+   * percolation/cap guards WITHOUT a live model/runner. It receives the jj workspace's
+   * runner + path + base + the jj applier the live workspace built.
    */
-  buildResolver?: (target: RunnerHandle, workspacePath: string, baseSha: string) => ConflictResolverHook;
+  buildResolver?: (
+    target: RunnerHandle,
+    workspacePath: string,
+    baseSha: string,
+    applier: WorkspaceConflictApplier,
+  ) => ConflictResolverHook;
 }
 
 /** The resolved run context the drive-path resolver clones + reasons over. */
@@ -187,18 +191,12 @@ export function buildDriveConflictResolve(deps: DriveConflictResolveDeps): Confl
 
     const ctx = await loadDriveRunContext(deps);
 
-    // Wave-3/S1 CUTOVER (`conflictResolverJjLive()`, default ON): provision a live jj
-    // workspace (A1's `buildLiveJjWorkspace`) and run the resolver over jj's FIRST-CLASS
-    // conflicts — `rebaseOnto` RECORDS the conflict (fail-closed, no `git merge --abort`
-    // / `|| true` fail-open). Flag OFF is the clean kill-switch: the git-clone +
-    // `SshWorkspaceConflictApplier` path, unchanged. The `buildResolver` TEST SEAM
-    // (production omits it) scripts the WHOLE resolver, so it short-circuits the flag —
-    // it always runs the git-style allocate-then-resolve so the classify/cap/yield
-    // wrapper is asserted identically under BOTH flag states.
-    const result =
-      deps.buildResolver !== undefined || !conflictResolverJjLive()
-        ? await driveResolveViaGit(deps, ctx, conflictContext)
-        : await driveResolveViaJj(deps, ctx, conflictContext);
+    // Provision a live jj workspace (A1's `buildLiveJjWorkspace`) and run the resolver
+    // over jj's FIRST-CLASS conflicts — `rebaseOnto` RECORDS the conflict (fail-closed,
+    // no `git merge --abort` / `|| true` fail-open). The `buildResolver` TEST SEAM
+    // (production omits it) scripts the WHOLE resolver over the SAME jj workspace, so the
+    // classify/cap/yield wrapper is asserted without a live model/runner.
+    const result = await driveResolveViaJj(deps, ctx, conflictContext);
 
     // RESOLVED → the merge retries + lands (autonomous). UNRESOLVED → the resolver
     // already routed ONE spec back to the planner (the real intent-carrying re-plan)
@@ -209,10 +207,11 @@ export function buildDriveConflictResolve(deps: DriveConflictResolveDeps): Confl
 }
 
 /**
- * The jj-backed drive resolve (the Wave-3/S1 cutover default): delegate to the extracted
- * `driveResolveOverJj` (which provisions the live jj workspace + the jj applier), passing
- * a `buildResolver` closure that assembles this file's adapters + re-gate over the SAME
- * runner + path the applier resolves into, so the re-gate judges the jj-resolved tree.
+ * The jj-backed drive resolve: delegate to the extracted `driveResolveOverJj` (which
+ * provisions the live jj workspace + the jj applier), passing a `buildResolver` closure
+ * that assembles this file's adapters + re-gate over the SAME runner + path the applier
+ * resolves into, so the re-gate judges the jj-resolved tree. The `buildResolver` TEST
+ * SEAM (production omits it) is threaded over that same jj workspace + applier.
  */
 async function driveResolveViaJj(
   deps: DriveConflictResolveDeps,
@@ -239,43 +238,9 @@ async function driveResolveViaJj(
       ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
       timeoutMs: deps.timeoutMs,
       buildResolver: ({ target, workspacePath, baseSha, applier }) =>
-        buildResolverForDrive(deps, ctx, target, workspacePath, baseSha, applier),
-    },
-    conflictContext,
-  );
-}
-
-/**
- * The git-clone + `SshWorkspaceConflictApplier` drive resolve — the kill-switch path
- * (`CONFLICT_RESOLVER_JJ_LIVE=0`), the pre-cutover mechanism unchanged. Delegates to the
- * extracted `driveResolveOverGit` (allocate + clone-head + release), threading the
- * `buildResolver` TEST SEAM when present (production assembles the real resolver).
- */
-async function driveResolveViaGit(
-  deps: DriveConflictResolveDeps,
-  ctx: DriveRunContext,
-  conflictContext: Parameters<ConflictResolverHook>[0],
-): Promise<{ resolved: boolean }> {
-  return driveResolveOverGit(
-    {
-      facts: {
-        orgId: deps.facts.orgId,
-        projectId: deps.facts.projectId,
-        runId: deps.facts.runId,
-        repoUrl: ctx.repoUrl,
-        headBranch: ctx.headBranch,
-        runnerImage: ctx.runnerImage,
-        ...(ctx.installation !== undefined && { installation: ctx.installation }),
-        githubCredentialRef: deps.facts.githubCredentialRef,
-        identitySecretRef: deps.identitySecretRef,
-      },
-      allocator: deps.allocator,
-      ssh: deps.ssh,
-      secrets: deps.secrets,
-      vcsProvider: deps.vcsProvider,
-      ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
-      timeoutMs: deps.timeoutMs,
-      buildResolver: deps.buildResolver ?? ((t, w, b) => buildResolverForDrive(deps, ctx, t, w, b)),
+        deps.buildResolver === undefined
+          ? buildResolverForDrive(deps, ctx, target, workspacePath, baseSha, applier)
+          : deps.buildResolver(target, workspacePath, baseSha, applier),
     },
     conflictContext,
   );
@@ -407,7 +372,7 @@ function buildResolverForDrive(
   target: RunnerHandle,
   workspacePath: string,
   baseSha: string,
-  applier?: WorkspaceConflictApplier,
+  applier: WorkspaceConflictApplier,
 ): ConflictResolverHook {
   const adapterDeps = {
     secrets: deps.secrets,
@@ -418,8 +383,8 @@ function buildResolverForDrive(
   };
   const adapters = buildAdaptersFromRouting(adapterDeps, ctx.routing);
   return buildDefaultConflictResolver({
-    // The injected jj applier (the cutover) or the git-merge-abort default (kill-switch).
-    ...(applier !== undefined && { applier }),
+    // The jj applier the live workspace built (the sole workspace mechanism).
+    applier,
     pool: deps.scopedPool,
     ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
     eventStore: deps.eventStore,
@@ -436,8 +401,6 @@ function buildResolverForDrive(
     specTitle: ctx.specTitle,
     specDescription: ctx.specDescription,
     acceptanceCriteria: ctx.acceptanceCriteria,
-    baseBranch: ctx.baseBranch,
-    headBranch: ctx.headBranch,
     ...(ctx.endpointBaseUrl !== undefined && { endpointBaseUrl: ctx.endpointBaseUrl }),
     routing: ctx.routing,
     checker: adapters.checker,

@@ -2,11 +2,11 @@
 // to Tanren's BOT login — NOT a `*@tanren.invalid` placeholder. A placeholder author
 // maps to a GitHub `null` login → reviewMerge `assessExternalChange` keys it
 // `<unknown>` → external → a strict-posture run BLOCKS its own PR (a dependent spec
-// that hit a conflict in v23 would strand at merge). These tests drive the two
-// on-runner authored-commit paths (the git-clone drive resolve + the live jj
-// workspace) with fakes and assert the bot identity (the resolved `<slug>[bot]`
-// login + its canonical `<id>+<login>@users.noreply.github.com` noreply email) is the
-// git author — and is recognized as Tanren's by the external-change gate.
+// that hit a conflict in v23 would strand at merge). These tests drive the on-runner
+// authored-commit path (the live jj workspace) with fakes and assert the bot identity
+// (the resolved `<slug>[bot]` login + its canonical
+// `<id>+<login>@users.noreply.github.com` noreply email) is the commit author — and is
+// recognized as Tanren's by the external-change gate.
 
 import { describe, expect, it } from "vitest";
 import type { RunnerHandle } from "../src/engine/contracts/allocator.js";
@@ -14,9 +14,7 @@ import { FakeAllocator } from "../src/engine/contracts/allocator.js";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
 import { FakeCommandSubstrate } from "../src/engine/contracts/commandSubstrate.js";
 import type { CommandResult, RunnerCommand } from "../src/engine/contracts/commandSubstrate.js";
-import type { ConflictResolverHook } from "../src/engine/workflow/reviewMerge/index.js";
 import { assessExternalChange, tanrenIdentity } from "../src/engine/workflow/reviewMerge/governancePosture.js";
-import { driveResolveOverGit, type DriveGitResolveDeps } from "../src/engine/merge/driveConflictResolveGit.js";
 import { buildLiveJjWorkspace, type LiveJjWorkspaceDeps } from "../src/engine/providers/liveJjWorkspace.js";
 import { InMemoryVcsProvider } from "./conformance/fakes/inMemoryVcsProvider.js";
 import { CONFORMANCE_ACTOR_LOGIN, CONFORMANCE_ACTOR_NOREPLY_EMAIL } from "./conformance/vcsProviderConformance.js";
@@ -33,53 +31,6 @@ class RecordingSubstrate extends FakeCommandSubstrate {
 const AUTHENTICATED_REF = "credential/github/dev";
 
 describe("conflict-resolve bot identity (finding #7)", () => {
-  it("git drive resolve: sets the BOT identity as the workspace git author (not resolver@tanren.invalid)", async () => {
-    const ssh = new RecordingSubstrate();
-    let resolverBuilt = false;
-    const deps: DriveGitResolveDeps = {
-      facts: {
-        orgId: "org_x",
-        projectId: "project_x",
-        runId: "run_x",
-        repoUrl: "https://github.com/o/r",
-        headBranch: "run_x",
-        runnerImage: "ghcr.io/o/runner:latest",
-        // AUTHENTICATED path (a static credential ref is configured) → the bot identity
-        // MUST resolve and be set as the git author (fail-closed otherwise).
-        githubCredentialRef: AUTHENTICATED_REF,
-        identitySecretRef: "secret/runner/identity",
-      },
-      allocator: new FakeAllocator(),
-      ssh,
-      secrets: new FakeSecretStore(),
-      vcsProvider: new InMemoryVcsProvider(),
-      timeoutMs: 1000,
-      // The resolver hook is not the unit under test — a no-op that records it ran.
-      buildResolver: (): ConflictResolverHook => {
-        resolverBuilt = true;
-        return async () => ({ resolved: true });
-      },
-    };
-
-    const result = await driveResolveOverGit(deps, {
-      runId: "run_x",
-      prUrl: "https://github.com/o/r/pull/7",
-      prNumber: 7,
-      baseBranch: "main",
-      message: "merge conflict in src/router.ts",
-    });
-    expect(result.resolved).toBe(true);
-    expect(resolverBuilt).toBe(true);
-
-    const clone = ssh.commands.find((c) => c.includes("git config user.name"));
-    expect(clone).toBeDefined();
-    // BOT-ATTRIBUTED: the resolved bot login + canonical noreply email — not the old
-    // `resolver@tanren.invalid` placeholder GitHub maps to a `null` login.
-    expect(clone).toContain(`git config user.name '${CONFORMANCE_ACTOR_LOGIN}'`);
-    expect(clone).toContain(`git config user.email '${CONFORMANCE_ACTOR_NOREPLY_EMAIL}'`);
-    expect(clone).not.toContain("resolver@tanren.invalid");
-  });
-
   it("live jj workspace: sets the BOT identity as the jj commit author (not tanren@local)", async () => {
     const ssh = new RecordingSubstrate();
     const deps: LiveJjWorkspaceDeps = {

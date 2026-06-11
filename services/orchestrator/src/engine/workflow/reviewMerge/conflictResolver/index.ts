@@ -27,7 +27,6 @@ import { PgConflictProvenanceReader } from "./provenance.js";
 import { PgProductVisionReader } from "./productVision.js";
 import { RunPathResolvedTreeReGate } from "./reGate.js";
 import { SpecStatusReplanRouter } from "./replanRouter.js";
-import { SshWorkspaceConflictApplier } from "./workspaceApplier.js";
 import { buildIntentPreservingConflictResolver } from "./resolver.js";
 
 /** A pool or a checked-out (org-scoped) client — the run's already-scoped client. */
@@ -51,8 +50,6 @@ export interface DefaultConflictResolverDeps {
   specTitle: string;
   specDescription: string;
   acceptanceCriteria: ReadonlyArray<string>;
-  baseBranch: string;
-  headBranch: string;
   endpointBaseUrl?: string;
   // The project routing (the conflict Answerer rides the `audit` chain head) and
   // the run's already-built checker/auditor adapters (the re-gate reuses them).
@@ -64,15 +61,13 @@ export interface DefaultConflictResolverDeps {
   // resolver into upstream-change mode (the ancestor's change flows INTO this spec).
   upstreamChange?: { ancestorSpecId: string; changeSummary: string };
   /**
-   * The workspace mechanism the resolver gathers/applies/publishes the conflict over.
-   * OMITTED ⇒ the git-merge-abort `SshWorkspaceConflictApplier` over `deps.ssh` +
-   * `deps.target` + `deps.workspacePath` (the kill-switch default). The two live
-   * wiring sites (the in-loop `direct_merge` resolver + the drive-pass resolver) inject
-   * the jj `JjWorkspaceConflictApplier` when `conflictResolverJjLive()` is on — the
-   * Wave-3/S1 cutover. ONLY the workspace mechanism changes; the resolver's
-   * classify-then-escalate / re-gate / replan logic above it is identical either way.
+   * The workspace mechanism the resolver gathers/applies/publishes the conflict over —
+   * the jj `JjWorkspaceConflictApplier` the two live wiring sites build (the in-loop
+   * `direct_merge` resolver + the drive-pass resolver), each over a freshly-provisioned
+   * live jj workspace. `rebaseOnto` RECORDS the conflict (fail-closed); the resolver's
+   * classify-then-escalate / re-gate / replan logic above it is mechanism-agnostic.
    */
-  applier?: WorkspaceConflictApplier;
+  applier: WorkspaceConflictApplier;
 }
 
 export function buildDefaultConflictResolver(deps: DefaultConflictResolverDeps): ConflictResolverHook {
@@ -108,18 +103,8 @@ export function buildDefaultConflictResolver(deps: DefaultConflictResolverDeps):
       client: deps.pool,
       ...(deps.orgId !== undefined && { orgId: deps.orgId }),
     }),
-    // The workspace mechanism: the injected jj applier (the cutover default the live
-    // wiring sites build) or the git-merge-abort fallback (the kill-switch path).
-    applier:
-      deps.applier ??
-      new SshWorkspaceConflictApplier({
-        ssh: deps.ssh,
-        target: deps.target,
-        workspacePath: deps.workspacePath,
-        baseBranch: deps.baseBranch,
-        headBranch: deps.headBranch,
-        timeoutMs: deps.timeoutMs,
-      }),
+    // The workspace mechanism: the jj applier the live wiring sites build.
+    applier: deps.applier,
     answerer: new AnswererBackedConflictInvoker({
       adapter: conflictAdapter,
       timeoutMs: deps.timeoutMs,
