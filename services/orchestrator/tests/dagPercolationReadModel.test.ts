@@ -12,11 +12,17 @@
 
 import type pg from "pg";
 import { describe, expect, it } from "vitest";
-import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
+import { InMemorySecretStore, type SecretValue } from "../src/engine/contracts/secretStore.js";
 import { PgPercolationReadModel } from "../src/engine/dag/percolationPg.js";
-import { GitHubVcsProvider } from "../src/engine/providers/githubVcsProvider.js";
 import type { GitHubHttpClient, GitHubHttpRequest, GitHubHttpResponse } from "../src/engine/providers/github.js";
-import type { ResolvedVcsToken, VcsCredentialContext, VcsProvider } from "../src/engine/contracts/vcsProvider.js";
+
+/** A secret store that returns a stub `github_token` for any ref (so the head-sha read's
+ * static-credential resolution succeeds without a live store). */
+class TokenSecretStore extends InMemorySecretStore {
+  override async get(ref: string): Promise<SecretValue | undefined> {
+    return { ref, value: "t" };
+  }
+}
 
 const ORG = "org_1";
 const PROJECT = "project_1";
@@ -84,7 +90,7 @@ class FakeClient {
             repo_url: "https://github.com/cat-cave/apex",
             default_branch: DEFAULT_BRANCH,
             project_config: { version: 1 },
-            org_config: { version: 1 },
+            org_config: { version: 1, defaultCredentials: { github_token: "credential/github/org/default" } },
           },
         ],
       };
@@ -118,26 +124,11 @@ const fetchRefGitHubHttp: GitHubHttpClient = {
   },
 };
 
-/**
- * The fake VcsProvider: a REAL `GitHubVcsProvider` over the scripted transport above (so the
- * read model's `GitHubCodeHost` resolves branch heads through it), with `resolveToken`
- * overridden to a fake token (the test's bare project/org config carries no App nor static
- * credential, and the head-sha read does not need a real one).
- */
-class FakeVcs extends GitHubVcsProvider {
-  constructor() {
-    super(fetchRefGitHubHttp);
-  }
-  override async resolveToken(_creds: VcsCredentialContext): Promise<ResolvedVcsToken> {
-    return { token: "t", source: "static", refresh: async () => "t" };
-  }
-}
-
 function makeReadModel(mergedSpecIds: string[]): PgPercolationReadModel {
   return new PgPercolationReadModel({
     pool: new FakePool(new Set(mergedSpecIds)) as unknown as pg.Pool,
-    vcsProvider: new FakeVcs() as unknown as VcsProvider,
-    secrets: new InMemorySecretStore(),
+    githubHttp: fetchRefGitHubHttp,
+    secrets: new TokenSecretStore(),
   });
 }
 
@@ -281,8 +272,8 @@ class DependentsFakeClient {
 function makeDependentsReadModel(pool: DependentsFakePool): PgPercolationReadModel {
   return new PgPercolationReadModel({
     pool: pool as unknown as pg.Pool,
-    vcsProvider: new FakeVcs() as unknown as VcsProvider,
-    secrets: new InMemorySecretStore(),
+    githubHttp: fetchRefGitHubHttp,
+    secrets: new TokenSecretStore(),
   });
 }
 

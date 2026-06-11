@@ -13,14 +13,14 @@ import type pg from "pg";
 import type { Allocator } from "../contracts/allocator.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
-import type { VcsProvider } from "../contracts/vcsProvider.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
+import { parseGitHubRepository, type GitHubHttpClient } from "../providers/github.js";
+import { resolveVcsToken } from "../credentials/vcsCredentials.js";
 import { CANONICAL_RUNNER_IMAGE, type GovernancePosture } from "../config/shared.js";
 import { installationFromOrgConfig, type OrgGithubAppInstallation } from "../config/orgConfig.js";
 import { migrateProjectConfig } from "../config/projectConfig.js";
 import { PgEventStore, type EventStore } from "../eventStore.js";
 import { publishGateVerdictBestEffort } from "../workflow/gate/index.js";
-import { vcsCredentialHttp } from "../credentials/vcsCredentialHttp.js";
 import { buildProjectHostSeams } from "../providers/hostFactory.js";
 import { runFreshRunnerMergeGate } from "./freshRunnerGate.js";
 import type { ReGateCiHook } from "../workflow/reviewMerge/index.js";
@@ -37,7 +37,8 @@ export interface BuildReGateCiForQueuedRunDeps {
   scopedPool: pg.Pool;
   eventStore?: EventStore;
   secrets: SecretStore;
-  vcsProvider: VcsProvider;
+  /** The shared (timed) GitHub HTTP client the CI-publish host seams build over. */
+  githubHttp: GitHubHttpClient;
   /** The runner allocator the re-gate provisions a short-lived runner from. */
   allocator: Allocator;
   /** The SSH substrate the re-gate clones + gates over. */
@@ -78,7 +79,7 @@ export function buildReGateCiForQueuedRun(deps: BuildReGateCiForQueuedRunDeps): 
           allocator: deps.allocator,
           ssh: deps.ssh,
           secrets: deps.secrets,
-          vcsProvider: deps.vcsProvider,
+          githubHttp: deps.githubHttp,
           ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
           eventStore,
           identitySecretRef: deps.identitySecretRef,
@@ -126,14 +127,14 @@ async function publishReGateVerdict(
   if (ctx.installation === undefined && staticRef.trim() === "") {
     return;
   }
-  const token = await deps.vcsProvider.resolveToken({
+  const token = await resolveVcsToken(deps.githubHttp, {
     secrets: deps.secrets,
     ...(ctx.installation !== undefined && { installation: ctx.installation }),
     ...(staticRef.trim() !== "" && { staticRef }),
     ...(deps.githubAppMinter !== undefined && { minter: deps.githubAppMinter }),
   });
-  const repo = deps.vcsProvider.parseRepository(ctx.repoUrl);
-  const { visibility } = buildProjectHostSeams(vcsCredentialHttp(deps.vcsProvider), async () => token);
+  const repo = parseGitHubRepository(ctx.repoUrl);
+  const { visibility } = buildProjectHostSeams(deps.githubHttp, async () => token);
   await publishGateVerdictBestEffort(
     {
       visibility,

@@ -6,7 +6,7 @@
 import type { GovernancePosture, MergeIntegration, ReviewPolicy } from "../src/engine/config/shared.js";
 import type { MergeProbe, ReviewProbe } from "../src/engine/workflow/reviewMerge/index.js";
 import type { MergeAuthorityBundle } from "../src/engine/workflow/reviewMerge/mergeDispatchTypes.js";
-import type { PullRequestMergeability } from "../src/engine/contracts/vcsProvider.js";
+import type { PullRequestMergeability } from "../src/engine/contracts/codeHostTypes.js";
 import type { GitHubHttpClient, GitHubHttpRequest, GitHubHttpResponse } from "../src/engine/providers/github.js";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
 import { storeGithubToken } from "../src/engine/credentials/githubToken.js";

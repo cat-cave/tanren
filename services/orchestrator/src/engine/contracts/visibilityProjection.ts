@@ -16,6 +16,8 @@
 // The projection is a MIRROR, not a gate — by construction, not by remembering to
 // wrap each call in a best-effort helper.
 
+import type { ReviewVerdictResult } from "../providers/githubReviewMerge.js";
+
 /** Input to opening/updating the external change request (a PR/MR) for a node. */
 export interface ChangeRequestInput {
   repoFullName: string;
@@ -83,6 +85,12 @@ export interface MarkChangeRequestReadyInput {
   changeRequestNumber: number;
 }
 
+/** Input to reading the external (host) review approval on a change request. */
+export interface ReadExternalApprovalInput {
+  repoFullName: string;
+  changeRequestNumber: number;
+}
+
 /**
  * The RAW best-effort projection impl — a host provides any subset of these (or
  * none). This is NOT the call surface: callers never hold a `VisibilityProjection`
@@ -117,6 +125,14 @@ export interface VisibilityProjection {
    * Optional + best-effort: a host that never drafts the mirror simply omits it.
    */
   markChangeRequestReady?(input: MarkChangeRequestReadyInput): Promise<void>;
+  /**
+   * Read the EXTERNAL (host) review approval on the change request (decomposition §5f).
+   * Host reviews are "optional external approvals" (§6) — Tanren's internal review record
+   * is the authoritative gate. Optional + best-effort: a host with no review surface omits
+   * it (the safe surface resolves `skipped`), and the review-poll treats a `skipped`/
+   * `failed` outcome as still-`pending`, never as a verdict.
+   */
+  readExternalApproval?(input: ReadExternalApprovalInput): Promise<ReviewVerdictResult>;
 }
 
 /** The recorded outcome of a projection attempt — a NOTE, never a gate. */
@@ -140,6 +156,7 @@ export interface SafeVisibilityProjection {
   readChangeRequestBase(input: ReadChangeRequestBaseInput): Promise<ProjectionOutcome<string>>;
   openTrackingIssue(input: TrackingIssueInput): Promise<ProjectionOutcome<ProjectedTrackingIssue>>;
   markChangeRequestReady(input: MarkChangeRequestReadyInput): Promise<ProjectionOutcome<void>>;
+  readExternalApproval(input: ReadExternalApprovalInput): Promise<ProjectionOutcome<ReviewVerdictResult>>;
 }
 
 /** Invoke one optional raw projection method through the best-effort severance. */
@@ -172,5 +189,6 @@ export function harden(raw: VisibilityProjection): SafeVisibilityProjection {
     readChangeRequestBase: (input) => severed(raw.readChangeRequestBase?.bind(raw), input),
     openTrackingIssue: (input) => severed(raw.openTrackingIssue?.bind(raw), input),
     markChangeRequestReady: (input) => severed(raw.markChangeRequestReady?.bind(raw), input),
+    readExternalApproval: (input) => severed(raw.readExternalApproval?.bind(raw), input),
   };
 }

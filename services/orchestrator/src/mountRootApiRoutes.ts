@@ -13,7 +13,7 @@ import { orgScopingPool } from "./engine/data/orgScopedDb.js";
 import { draftPrInputSchema, projectInputSchema, runInputSchema, specInputSchema } from "./inputSchemas.js";
 import type { SecretStore, CommandSubstrate } from "./engine/contracts/index.js";
 import { parseRawViewOptIn, redactEventRows } from "./routes/runs/redaction.js";
-import type { VcsProvider } from "./engine/contracts/vcsProvider.js";
+import type { GitHubHttpClient } from "./engine/providers/github.js";
 import type { GithubAppTokenMinter } from "./engine/providers/githubAppTokenMinter.js";
 import {
   DraftPrRunnerNotFoundError,
@@ -36,7 +36,8 @@ import { checkGenericProjectCreateConfig } from "./routes/projects/createConfigG
 export interface RootApiDeps {
   pool: pg.Pool;
   secrets: SecretStore;
-  vcsProvider: VcsProvider;
+  /** The shared (timed) GitHub HTTP client the per-run route host seams build over. */
+  githubHttp: GitHubHttpClient;
   githubAppMinter: GithubAppTokenMinter;
   identitySecretRef: string;
   // The per-run draft-PR route pushes the runner workspace branch over this
@@ -57,7 +58,7 @@ function actorOf(c: { var: { actor?: ActorContext } }): ActorContext | undefined
  * the prior inline block in `buildApp`; behavior is identical.
  */
 export function mountRootApiRoutes(app: Hono<ActorContextEnv>, deps: RootApiDeps): void {
-  const { pool, secrets, vcsProvider, githubAppMinter, identitySecretRef } = deps;
+  const { pool, secrets, githubHttp, githubAppMinter, identitySecretRef } = deps;
   // RLS HTTP-route scoping: these root handlers are RESOURCE-keyed (no `:orgId`
   // path segment), so the auth middleware resolves the request's org from the
   // addressed spec/run/project and publishes it on the `runWithJobOrgId` ambient.
@@ -148,7 +149,7 @@ export function mountRootApiRoutes(app: Hono<ActorContextEnv>, deps: RootApiDeps
         await publishDraftPullRequestForRun({
           pool: scopedPool,
           secrets,
-          vcsProvider,
+          githubHttp,
           ssh: deps.ssh,
           runId: c.req.param("runId"),
           identitySecretRef,

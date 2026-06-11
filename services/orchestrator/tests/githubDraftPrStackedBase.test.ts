@@ -4,7 +4,6 @@
 // non-speculative run) ⇒ the fallback (`default_branch`).
 
 import { describe, expect, it } from "vitest";
-import { vcsProviderOver } from "./helpers/vcsProvider.js";
 import { RecordingPool, RecordingSsh, ScriptedGitHubHttp } from "./helpers/githubDraftPrFakes.js";
 import type { RunnerHandle } from "../src/engine/contracts/allocator.js";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
@@ -68,7 +67,7 @@ describe("stacked-PR draft base", () => {
       pool: pool.asPgPool(),
       eventStore: events,
       secrets,
-      vcsProvider: vcsProviderOver(http),
+      githubHttp: http,
       ssh,
       target,
       runId: "run_123",

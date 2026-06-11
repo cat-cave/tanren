@@ -6,7 +6,6 @@
 // UNCHANGED: the MERGE still waits for ALL ancestors.
 
 import { describe, expect, it } from "vitest";
-import { vcsProviderOver } from "./helpers/vcsProvider.js";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
 import { FakeEventStore } from "./helpers/fakeEventStore.js";
 import { mergeForRun } from "../src/engine/workflow/reviewMerge/index.js";
@@ -71,7 +70,7 @@ describe("stacked-PR retarget walk (merge stage)", () => {
       eventStore: events,
       secrets: new FakeSecretStore(),
       resolveConflict: noopConflictResolver,
-      vcsProvider: vcsProviderOver(unusedHttp()),
+      githubHttp: unusedHttp(),
       runId: "run_1",
       mergeProbe: probe,
       mergeAuthority: authorityBundle(host, landed, { events }),
@@ -118,7 +117,7 @@ describe("stacked-PR retarget walk (merge stage)", () => {
       eventStore: events,
       secrets: new FakeSecretStore(),
       resolveConflict: noopConflictResolver,
-      vcsProvider: vcsProviderOver(unusedHttp()),
+      githubHttp: unusedHttp(),
       runId: "run_1",
       mergeProbe: probe,
       mergeAuthority: authorityBundle(host, landed, { events }),
@@ -155,7 +154,7 @@ describe("stacked-PR retarget walk (merge stage)", () => {
       eventStore: events,
       secrets: new FakeSecretStore(),
       resolveConflict: noopConflictResolver,
-      vcsProvider: vcsProviderOver(unusedHttp()),
+      githubHttp: unusedHttp(),
       runId: "run_1",
       mergeProbe: probe,
       mergeAuthority: authorityBundle(host, landed, { events }),

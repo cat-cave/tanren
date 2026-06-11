@@ -21,7 +21,7 @@
 import type pg from "pg";
 import type { ActorContext } from "../../../auth/schemas.js";
 import { mergeCapture, resolveLifecycle } from "./capture.js";
-import type { CreatedRepository, CreateRepositoryInput } from "../../contracts/vcsProvider.js";
+import type { CreatedRepository, CreateRepositoryInput } from "../../contracts/codeHostTypes.js";
 import { deriveProductGraph, type DeriveResult } from "./derive.js";
 import type { DeployPreflightCallback, GreenfieldDeployDependency, PrepareDeployCallback } from "./deployDependency.js";
 import type { SelectedTemplate, TemplateRegistryQuery } from "./templateSelection.js";

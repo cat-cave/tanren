@@ -1,22 +1,21 @@
 // Standalone VCS credential plumbing — the token + actor-identity resolution every
-// host seam needs, lifted OFF the `VcsProvider` interface (decomposition §5a). These
-// are NOT forge ops; they are the credential resolution `hostFactory`'s token supplier,
-// the jj authed-push, the bot-push-identity resolver, the live jj clone, and the
-// planner clone all need. Keeping them here (not on `CodeHost`) keeps the host seam
-// token-free — a host swap can't re-leak GitHub credential shape into the engine seam
-// (the `hostFactory.ts` doctrine).
+// host seam needs (decomposition §5a). These are NOT forge ops; they are the credential
+// resolution `hostFactory`'s token supplier, the jj authed-push, the bot-push-identity
+// resolver, the live jj clone, and the planner clone all need. Keeping them here (not on
+// `CodeHost`) keeps the host seam token-free — a host swap can't re-leak GitHub
+// credential shape into the engine seam (the `hostFactory.ts` doctrine).
 //
-// The body is exactly `GitHubVcsProvider.resolveToken` / `.resolveActorIdentity`
-// (extracted verbatim): `resolveGithubToken` (App-first, static fallback, hard-throw
+// THE SOLE credential resolver (the deleted `VcsProvider` interface delegated here
+// before PR-9 retired it): `resolveGithubToken` (App-first, static fallback, hard-throw
 // when neither is configured) wrapped into a `ResolvedVcsToken` whose lazy `identity`
 // supplier closes over the SAME `creds` that minted the token — so the run's git author
-// and the merge stage's Tanren-identity set can never disagree (MERGE-SAFETY). The
-// provider's two methods now DELEGATE here (additive — no behavior change).
+// and the merge stage's Tanren-identity set can never disagree (MERGE-SAFETY). A stage
+// resolves once (`resolveVcsToken(http, creds)`) and threads the token into many ops.
 
 import { resolveGithubToken } from "./githubTokenResolver.js";
 import { invokeTokenIdentity, resolveGithubActorIdentity } from "../providers/githubActorIdentity.js";
 import type { GitHubHttpClient } from "../providers/github.js";
-import type { ActorIdentity, ResolvedVcsToken, VcsCredentialContext } from "../contracts/vcsProvider.js";
+import type { ActorIdentity, ResolvedVcsToken, VcsCredentialContext } from "../contracts/codeHostTypes.js";
 
 /**
  * Resolve a usable access token (+ refresh supplier) for the repo from the credential

@@ -12,9 +12,8 @@ import type { OrgGithubAppInstallation } from "../src/engine/config/orgConfig.js
 import type { GitHubHttpClient, GitHubHttpRequest, GitHubHttpResponse } from "../src/engine/providers/github.js";
 import { prepareRunWorkspace } from "../src/engine/workflow/plannerRunWorkspace.js";
 import type { PlannerRunContext, RunPlannerLoopInput } from "../src/engine/workflow/plannerRun.js";
-import { vcsProviderOver } from "./helpers/vcsProvider.js";
 import * as vcsCredentials from "../src/engine/credentials/vcsCredentials.js";
-import type { ResolvedVcsToken, VcsCredentialContext } from "../src/engine/contracts/vcsProvider.js";
+import type { ResolvedVcsToken, VcsCredentialContext } from "../src/engine/contracts/codeHostTypes.js";
 
 const target: RunnerHandle = {
   backend: "ssh",
@@ -68,19 +67,19 @@ const installation: OrgGithubAppInstallation = {
 
 /**
  * §5a: credential resolution now runs through the standalone `resolveVcsToken(http, creds)`
- * helper, not `VcsProvider.resolveToken`. This spies on that helper to RECORD the credential
- * context each call receives and, when an App installation is present, short-circuits to a
- * fixed installation token (so the App-first path is observable without standing up a real
- * App-token minter). The provider stays a REAL `GitHubVcsProvider` (its GitHub client serves
- * the static-path `GET /user` identity read). Returns a `restore()` the test calls to undo
- * the spy. This proves the clone routes credential resolution App-first.
+ * helper, not a removed `VcsProvider.resolveToken`. This spies on that helper to RECORD the
+ * credential context each call receives and, when an App installation is present, short-circuits
+ * to a fixed installation token (so the App-first path is observable without standing up a real
+ * App-token minter). The `githubHttp` is the scripted transport (its `GET /user` serves the
+ * static-path identity read). Returns a `restore()` the test calls to undo the spy. This proves
+ * the clone routes credential resolution App-first.
  */
 function recordingResolver(): {
-  provider: ReturnType<typeof vcsProviderOver>;
+  githubHttp: GitHubHttpClient;
   calls: VcsCredentialContext[];
   restore: () => void;
 } {
-  const provider = vcsProviderOver(unusedHttp());
+  const githubHttp = unusedHttp();
   const calls: VcsCredentialContext[] = [];
   // Capture the REAL resolver before spying so the static path delegates to it (reads the
   // secret + serves the `GET /user` identity) without recursing into the spy.
@@ -107,7 +106,7 @@ function recordingResolver(): {
       // The static path delegates to the REAL resolver (reads the secret + serves identity).
       return realResolveVcsToken(http, creds);
     });
-  return { provider, calls, restore: () => spy.mockRestore() };
+  return { githubHttp, calls, restore: () => spy.mockRestore() };
 }
 
 function makeContext(overrides: Partial<PlannerRunContext> = {}): PlannerRunContext {
@@ -137,13 +136,13 @@ function makeInput(
   opts: {
     githubToken?: string;
     secrets?: FakeSecretStore;
-    vcsProvider?: ReturnType<typeof vcsProviderOver>;
+    githubHttp?: GitHubHttpClient;
   } = {},
 ): RunPlannerLoopInput {
   return {
     ssh,
     secrets: opts.secrets ?? new FakeSecretStore(),
-    vcsProvider: opts.vcsProvider ?? vcsProviderOver(unusedHttp()),
+    githubHttp: opts.githubHttp ?? unusedHttp(),
     context,
     timeoutMs: 500,
     bootstrapCommand: "true",
@@ -240,11 +239,11 @@ describe("prepareRunWorkspace clone authentication", () => {
 
   it("P2a Part 2: clone resolves APP-FIRST through the credential resolver when an App is installed", async () => {
     const ssh = new RecordingSsh();
-    const { provider, calls, restore } = recordingResolver();
+    const { githubHttp, calls, restore } = recordingResolver();
     try {
       // Both an App installation AND a static ref are present: App-first wins.
       await prepareRunWorkspace(
-        makeInput(ssh, makeContext({ installation }), { vcsProvider: provider }),
+        makeInput(ssh, makeContext({ installation }), { githubHttp }),
         target,
         "/workspace/runs/run_clone/repo",
       );
@@ -282,7 +281,7 @@ describe("prepareRunWorkspace clone authentication", () => {
 
     await expect(
       prepareRunWorkspace(
-        makeInput(ssh, makeContext(), { secrets, vcsProvider: vcsProviderOver(identityFailingHttp) }),
+        makeInput(ssh, makeContext(), { secrets, githubHttp: identityFailingHttp }),
         target,
         "/workspace/runs/run_clone/repo",
       ),
@@ -337,11 +336,11 @@ describe("prepareRunWorkspace clone authentication", () => {
     const ssh = new RecordingSsh();
     const secrets = new FakeSecretStore();
     await storeGithubToken(secrets, { ref: "credential/github/dev", token: TOKEN });
-    const { provider, calls, restore } = recordingResolver();
+    const { githubHttp, calls, restore } = recordingResolver();
 
     try {
       await prepareRunWorkspace(
-        makeInput(ssh, makeContext(), { secrets, vcsProvider: provider }),
+        makeInput(ssh, makeContext(), { secrets, githubHttp }),
         target,
         "/workspace/runs/run_clone/repo",
       );

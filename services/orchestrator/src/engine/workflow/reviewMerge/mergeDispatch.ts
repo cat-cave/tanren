@@ -29,9 +29,10 @@ import type { RunStateWriter } from "../../contracts/runStateWriter.js";
 import { applySpeculativeRetarget, resolveSpeculativeState } from "./speculativeStackRetarget.js";
 import { ensureSystemTask, routeTaskUpdate } from "../taskWriteRouting.js";
 import { PgEventStore, type EventStore } from "../../eventStore.js";
-import type { ResolvedVcsToken, RepoRef } from "../../contracts/vcsProvider.js";
+import type { ResolvedVcsToken, RepoRef } from "../../contracts/codeHostTypes.js";
 import { buildProjectHostSeams } from "../../providers/hostFactory.js";
-import { vcsCredentialHttp } from "../../credentials/vcsCredentialHttp.js";
+import { resolveVcsToken, resolveVcsActorIdentity } from "../../credentials/vcsCredentials.js";
+import { parsePullRequestRef } from "../../providers/githubRepoRef.js";
 import { buildFreshnessProbe } from "./freshnessProbe.js";
 import { buildBundleForMergeStage } from "../../merge/mergeAuthorityBundleBuild.js";
 import {
@@ -89,7 +90,7 @@ export function dispatchedIntegrationFor(mode: MergeIntegration): DispatchedInte
 export async function mergeForRun(input: MergeForRunInput): Promise<MergeForRunResult> {
   const context = await loadReviewMergeRunContext(input.pool, input.runId, contextOptionsFor(input));
   const eventStore = input.eventStore ?? new PgEventStore(input.pool);
-  const prRef = input.vcsProvider.parsePullRequest(context.prUrl);
+  const prRef = parsePullRequestRef(context.prUrl);
   const pr = { repo: prRef.repo, pullNumber: prRef.number };
   const integration = dispatchedIntegrationFor(context.mergeIntegration);
   const taskId = await ensureMergeTask(input.pool, context, input.runStateWriter);
@@ -243,7 +244,7 @@ async function evaluatePosture(
   // the SAME credential the contributor probe + the runner's git author use — so
   // the identity set matches the login Tanren's own commits actually carry. Merged
   // additively onto `context.tanrenLogins` (the default bot login + any configured
-  // overrides). A test that injects only a `contributorProbe` (no vcsProvider seam)
+  // overrides). A test that injects only a `contributorProbe` (no live host seam)
   // keeps the configured set.
   const resolvedLogins = await resolveTanrenLogins(input, context);
   const identity = tanrenIdentity([...context.tanrenLogins, ...resolvedLogins]);
@@ -278,13 +279,13 @@ async function resolveTanrenLogins(
   if (context.installation === undefined && context.staticCredentialRef === undefined) {
     return [];
   }
-  const resolved = await input.vcsProvider.resolveToken({
+  const resolved = await resolveVcsToken(input.githubHttp, {
     secrets: input.secrets,
     installation: context.installation,
     staticRef: context.staticCredentialRef,
     minter: input.githubAppMinter,
   });
-  const identity = await input.vcsProvider.resolveActorIdentity(resolved);
+  const identity = await resolveVcsActorIdentity(resolved);
   return [identity.login];
 }
 
@@ -301,15 +302,14 @@ async function buildHostProbe(
   repo: RepoRef,
   pullNumber: number,
 ): Promise<MergeProbe> {
-  const provider = input.vcsProvider;
   const resolveToken = (): Promise<ResolvedVcsToken> =>
-    provider.resolveToken({
+    resolveVcsToken(input.githubHttp, {
       secrets: input.secrets,
       installation: context.installation,
       staticRef: context.staticCredentialRef,
       minter: input.githubAppMinter,
     });
-  const { codeHost, visibility } = buildProjectHostSeams(vcsCredentialHttp(provider), resolveToken);
+  const { codeHost, visibility } = buildProjectHostSeams(input.githubHttp, resolveToken);
   return buildFreshnessProbe({
     codeHost,
     visibility,
@@ -337,17 +337,16 @@ function buildContributorProbe(
   repo: RepoRef,
   _pullNumber: number,
 ): ContributorProbe {
-  const provider = input.vcsProvider;
   return {
     listContributors: async (): Promise<PullRequestContributors> => {
       const resolveToken = (): Promise<ResolvedVcsToken> =>
-        provider.resolveToken({
+        resolveVcsToken(input.githubHttp, {
           secrets: input.secrets,
           installation: context.installation,
           staticRef: context.staticCredentialRef,
           minter: input.githubAppMinter,
         });
-      const { codeHost } = buildProjectHostSeams(vcsCredentialHttp(provider), resolveToken);
+      const { codeHost } = buildProjectHostSeams(input.githubHttp, resolveToken);
       const baseSha = await codeHost.fetchRef({ repo, remoteBranch: context.baseBranch });
       const headSha = await codeHost.fetchRef({ repo, remoteBranch: context.headBranch });
       if (baseSha === undefined || headSha === undefined) {

@@ -4,7 +4,6 @@
  * acceptanceHardTier.test.ts to keep that file under the 500-line cap.
  */
 import type { AuditAnswer, CheckAnswer, PlanAnswer } from "../src/engine/answerers/schemas/index.js";
-import { vcsProviderOver } from "./helpers/vcsProvider.js";
 import type { CiWhen } from "../src/engine/ci/index.js";
 import type {
   AllocationRequest,
@@ -212,7 +211,7 @@ export function hardTierWorkflowRunner(github: GitHubHttpClient, trace: HardTier
   return (input: Parameters<typeof runPlannerLoopWorkflow>[0]) =>
     runPlannerLoopWorkflow({
       ...input,
-      vcsProvider: vcsProviderOver(github),
+      githubHttp: github,
       maxCiPolls: 1,
       ciPollDelayMs: 0,
       sleep: async () => {},

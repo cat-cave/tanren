@@ -216,7 +216,7 @@ describe("the LIVE base-shift seams — unconditional + loud-throw on absent dep
     const counter = { reads: 0 };
     const coord = buildBaseShiftCoordinator({
       pool: countingPool(counter),
-      vcsProvider: {} as never,
+      githubHttp: {} as never,
       secrets: {} as never,
       ...runnerDeps(),
     });
@@ -235,7 +235,7 @@ describe("the LIVE base-shift seams — unconditional + loud-throw on absent dep
     const counter = { reads: 0 };
     const coord = buildBaseShiftCoordinator({
       pool: countingPool(counter),
-      vcsProvider: {} as never,
+      githubHttp: {} as never,
       secrets: {} as never,
       ...runnerDeps(),
     });
@@ -262,7 +262,7 @@ describe("the LIVE base-shift seams — unconditional + loud-throw on absent dep
     expect(() =>
       buildBaseShiftCoordinator({
         pool: { query: () => Promise.resolve({ rows: [], rowCount: 0 }) } as unknown as pg.Pool,
-        vcsProvider: {} as never,
+        githubHttp: {} as never,
         secrets: {} as never,
       }),
     ).toThrow(/The live base-shift deps are not wired/u);

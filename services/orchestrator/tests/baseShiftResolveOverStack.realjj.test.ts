@@ -21,7 +21,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { LiveJjWorkspace } from "../src/engine/providers/liveJjWorkspace.js";
 import type { SecretStore } from "../src/engine/contracts/secretStore.js";
-import type { VcsProvider } from "../src/engine/contracts/vcsProvider.js";
+import type { GitHubHttpClient } from "../src/engine/providers/github.js";
 import { JjWorkspaceVcsCore } from "../src/engine/providers/jjWorkspaceVcsCore.js";
 import { integrateOverWorkspace } from "../src/engine/dag/jjLocalIntegration.js";
 import { baseShiftStackLocalRef } from "../src/engine/dag/baseShiftStackAssembly.js";
@@ -41,11 +41,13 @@ function git(cwd: string, args: string[]): string {
 }
 
 // The anonymous push path (no installation + empty credentialRef) NEVER calls resolveToken.
-const noTokenVcsProvider = {
-  resolveToken: () => {
-    throw new Error("resolveToken must NOT be called on the anonymous push path");
+// The anonymous push path (no installation + empty credentialRef) NEVER hits the GitHub
+// transport — an inert client whose request throws proves it.
+const noTokenGitHubHttp: GitHubHttpClient = {
+  async request() {
+    throw new Error("the GitHub transport must NOT be reached on the anonymous push path");
   },
-} as unknown as VcsProvider;
+};
 
 const emptySecrets: SecretStore = {
   async get() {},
@@ -150,7 +152,7 @@ async function resolveOverAssembledStack(
     workspacePath: live.workspacePath,
     ssh,
     secrets: emptySecrets,
-    vcsProvider: noTokenVcsProvider,
+    githubHttp: noTokenGitHubHttp,
     facts: {
       repoUrl: originPath,
       baseBranch: "main",

@@ -41,7 +41,7 @@ import {
 } from "../src/engine/contracts/allocator.js";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
 import type { CommandSubstrate } from "../src/engine/contracts/commandSubstrate.js";
-import type { VcsProvider } from "../src/engine/contracts/vcsProvider.js";
+import type { GitHubHttpClient } from "../src/engine/providers/github.js";
 import { SshCommandSubstrate } from "../src/engine/ssh/index.js";
 import { runWorkspaceSshCommand } from "../src/engine/workspace/ssh.js";
 import { quoteSshShellArg } from "../src/engine/ssh/command.js";
@@ -84,9 +84,9 @@ describeLive(
       // (a genuine 3-way conflict). jj clones this local path — a real fixture over real SSH.
       const repoUrl = await seedConflictFixtureOnRunner(ssh, target);
 
-      // `resolveToken` MUST NOT be called for an anonymous (local-path) clone — pass a
-      // provider that throws if it ever is, proving the anonymous credential path is taken.
-      const vcsProvider = throwingVcsProvider();
+      // The GitHub transport MUST NOT be reached for an anonymous (local-path) clone — pass a
+      // client that throws if it ever is, proving the anonymous credential path is taken.
+      const githubHttp = throwingGitHubHttp();
 
       const live = await buildLiveJjWorkspace({
         facts: {
@@ -100,7 +100,7 @@ describeLive(
         allocator,
         ssh,
         secrets,
-        vcsProvider,
+        githubHttp,
         timeoutMs: 120_000,
       });
 
@@ -217,14 +217,13 @@ async function seedConflictFixtureOnRunner(ssh: CommandSubstrate, target: Runner
   return origin;
 }
 
-/** Throws — the trap returned for every `VcsProvider` member by `throwingVcsProvider`. */
-function failVcsProvider(): never {
-  throw new Error("VcsProvider must not be invoked for an anonymous local-path clone");
-}
-
-/** A `VcsProvider` whose every member throws — proves the anonymous clone never asks for a token. */
-function throwingVcsProvider(): VcsProvider {
-  return new Proxy({} as VcsProvider, { get: () => failVcsProvider });
+/** A `GitHubHttpClient` whose request throws — proves the anonymous clone never reaches GitHub. */
+function throwingGitHubHttp(): GitHubHttpClient {
+  return {
+    async request() {
+      throw new Error("the GitHub transport must not be invoked for an anonymous local-path clone");
+    },
+  };
 }
 
 function requiredEnv(name: string): string {

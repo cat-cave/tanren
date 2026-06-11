@@ -29,7 +29,7 @@ import type { RunCredentialScoping } from "../workflow/plannerRunScopedCreds.js"
 import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import type { EscapeHatches } from "../config/index.js";
 import { CostRecorder } from "../costs/recorder.js";
-import type { VcsProvider } from "../contracts/vcsProvider.js";
+import type { GitHubHttpClient } from "../providers/github.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
 import {
   buildBootstrapStackHeadShaWriteBack,
@@ -103,7 +103,8 @@ export interface RunExecutorDeps {
   // ref paths and reads the run's credentials through it (the broad VAULT_TOKEN
   // never reaches a runner). Omitted for a non-Vault backend.
   credentialScoping?: RunCredentialScoping;
-  vcsProvider: VcsProvider;
+  /** The shared (timed) GitHub HTTP client the run/merge host seams build over. */
+  githubHttp: GitHubHttpClient;
   // Part 2: shared App installation-token minter, threaded into the
   // workflow so the App-first CLONE token reuses the same minted/cached token as
   // the CI-poll / merge stages. Optional — the provider mints per-call when absent.
@@ -290,7 +291,7 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
         // Dimension D: thread the credential-scoping seam so the workflow
         // de-privileges the run's credential reads behind a per-run child token.
         ...(deps.credentialScoping === undefined ? {} : { credentialScoping: deps.credentialScoping }),
-        vcsProvider: deps.vcsProvider,
+        githubHttp: deps.githubHttp,
         // Part 2: the App-first clone reuses the shared minter when present.
         ...(deps.githubAppMinter === undefined ? {} : { githubAppMinter: deps.githubAppMinter }),
         context,

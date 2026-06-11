@@ -31,12 +31,12 @@ import type { Allocator } from "../contracts/allocator.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
-import type { IntegrationAncestor, RepoRef, ResolvedVcsToken, VcsProvider } from "../contracts/vcsProvider.js";
+import type { IntegrationAncestor, RepoRef, ResolvedVcsToken } from "../contracts/codeHostTypes.js";
 import type { CodeHost } from "../contracts/codeHost.js";
 import { orgScopingPool } from "../data/orgScopedDb.js";
-import { GitHubCodeHost } from "../providers/githubCodeHost.js";
-import { vcsCredentialHttp } from "../credentials/vcsCredentialHttp.js";
-import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
+import { GitHubCodeHost, parseGitHubRepository } from "../providers/githubCodeHost.js";
+import type { GitHubHttpClient, GithubAppTokenMinter } from "../providers/github.js";
+import { resolveVcsToken } from "../credentials/vcsCredentials.js";
 import { PgEventStore } from "../eventStore.js";
 import { PgIntegrationNodeModel } from "../dag/integrationNodesPg.js";
 import { driveBatchThroughNode } from "./batchIntegrationNodeDrive.js";
@@ -72,7 +72,8 @@ interface BatchBranchRow {
 
 export interface PgBatchCheckerDeps {
   pool: pg.Pool;
-  vcsProvider: VcsProvider;
+  /** The shared (timed) GitHub HTTP client the batch CodeHost + token reads build over. */
+  githubHttp: GitHubHttpClient;
   secrets: SecretStore;
   /** The runner allocator the native batch gate provisions a short-lived runner from. */
   allocator: Allocator;
@@ -131,13 +132,13 @@ export class PgBatchChecker implements BatchChecker {
 
     const installation = installationFromOrgConfig(project.org_config);
     const staticRef = resolveGithubStaticRef(project.project_config, project.org_config);
-    const token = await this.deps.vcsProvider.resolveToken({
+    const token = await resolveVcsToken(this.deps.githubHttp, {
       secrets: this.deps.secrets,
       ...(installation !== undefined && { installation }),
       ...(staticRef !== undefined && { staticRef }),
       ...(this.deps.githubAppMinter !== undefined && { minter: this.deps.githubAppMinter }),
     });
-    const repo = this.deps.vcsProvider.parseRepository(project.repo_url);
+    const repo = parseGitHubRepository(project.repo_url);
     // The host-neutral `CodeHost` the head-sha read routes through (decomposition PR-6):
     // built over the SAME GitHub HTTP client the run's provider holds + a supplier of the
     // token already resolved above (one resolve per check). `fetchRef` ≡ the old
@@ -252,7 +253,7 @@ export class PgBatchChecker implements BatchChecker {
             allocator: this.deps.allocator,
             ssh: this.deps.ssh,
             secrets: this.deps.secrets,
-            vcsProvider: this.deps.vcsProvider,
+            githubHttp: this.deps.githubHttp,
             ...(this.deps.githubAppMinter !== undefined && { githubAppMinter: this.deps.githubAppMinter }),
             timeoutMs: this.deps.timeoutMs,
           },
@@ -293,11 +294,11 @@ export class PgBatchChecker implements BatchChecker {
   /**
    * Build the host-neutral `CodeHost` the batch base head-sha read routes through
    * (decomposition PR-6), over the SAME GitHub HTTP client the run's provider holds
-   * (`vcsCredentialHttp`) + a supplier of the token already resolved for this check. The
+   * (the run's `githubHttp`) + a supplier of the token already resolved for this check. The
    * seam stays token-free; the plaintext token travels only in each call's auth header.
    */
   private buildCodeHost(token: ResolvedVcsToken): CodeHost {
-    const http = vcsCredentialHttp(this.deps.vcsProvider);
+    const http = this.deps.githubHttp;
     return new GitHubCodeHost(http, async () => ({
       token: token.token,
       ...(token.refresh !== undefined && { refresh: token.refresh }),

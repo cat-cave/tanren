@@ -22,7 +22,6 @@ import { prepareRunWorkspace } from "../src/engine/workflow/plannerRunWorkspace.
 import { bootstrapLocalIntegrationRef } from "../src/engine/dag/jjLocalBootstrap.js";
 import type { AncestorStack } from "../src/engine/dag/ancestorStack.js";
 import type { PlannerRunContext, RunPlannerLoopInput } from "../src/engine/workflow/plannerRun.js";
-import { vcsProviderOver } from "./helpers/vcsProvider.js";
 import type { GitHubHttpClient, GitHubHttpRequest, GitHubHttpResponse } from "../src/engine/providers/github.js";
 
 const target: RunnerHandle = {
@@ -104,7 +103,7 @@ function makeInput(ssh: CommandSubstrate, context: PlannerRunContext): RunPlanne
   return {
     ssh,
     secrets: new FakeSecretStore(),
-    vcsProvider: vcsProviderOver(unusedHttp()),
+    githubHttp: unusedHttp(),
     context,
     timeoutMs: 500,
     bootstrapCommand: "true",

@@ -11,9 +11,8 @@ import {
   validateGithubCredentialRef,
 } from "../credentials/githubToken.js";
 import { type EventStore, PgEventStore } from "../eventStore.js";
-import type { VcsProvider } from "../contracts/vcsProvider.js";
+import type { GitHubHttpClient } from "../providers/github.js";
 import { resolveVcsToken } from "../credentials/vcsCredentials.js";
-import { gitHubHttpOf } from "../providers/projectHostSeamsOver.js";
 import { GitHubVisibilityProjection } from "../providers/githubVisibilityProjection.js";
 import { parseGitHubRepository } from "../providers/github.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
@@ -32,7 +31,8 @@ export interface PublishDraftPullRequestInput {
   runStateWriter?: RunStateWriter;
   orgId?: string | null;
   secrets: SecretStore;
-  vcsProvider: VcsProvider;
+  /** The shared (timed) GitHub HTTP client the draft-PR open + token resolution build over. */
+  githubHttp: GitHubHttpClient;
   ssh: CommandSubstrate;
   target: RunnerHandle;
   runId: string;
@@ -75,7 +75,8 @@ export interface PublishDraftPullRequestForRunInput {
   pool: RunStateClient;
   eventStore?: EventStore;
   secrets: SecretStore;
-  vcsProvider: VcsProvider;
+  /** The shared (timed) GitHub HTTP client the draft-PR open + token resolution build over. */
+  githubHttp: GitHubHttpClient;
   ssh: CommandSubstrate;
   runId: string;
   githubCredentialRef?: string;
@@ -133,7 +134,7 @@ export async function publishDraftPullRequest(input: PublishDraftPullRequestInpu
 
   // §5a/PR-2: token resolution is credential PLUMBING, not a forge op — resolve through
   // the standalone `resolveVcsToken(http, creds)` over the provider's existing client,
-  // off the `VcsProvider` interface. §5c: the runner-workspace branch push stays a
+  // over the shared client. §5c: the runner-workspace branch push stays a
   // WORKSPACE HELPER (`pushWorkspaceBranchToGitHub`) — it is an SSH-over-runner concern
   // (needs `ssh`/`target`/`workspacePath`), NOT a host-API op, so it is kept out of the
   // `CodeHost` seam. The draft-PR OPEN moves onto the `VisibilityProjection` (the raw
@@ -141,7 +142,7 @@ export async function publishDraftPullRequest(input: PublishDraftPullRequestInpu
   // AUTHORITATIVE PR artifact (its url is persisted + gates the merge stage), so it uses
   // the RAW projection that THROWS on failure — NOT the hardened `SafeVisibilityProjection`
   // (which can never throw); a failed open must propagate, not silently skip.
-  const http = gitHubHttpOf(input.vcsProvider);
+  const http = input.githubHttp;
   const repo = parseGitHubRepository(input.repoUrl);
 
   try {
@@ -232,7 +233,7 @@ export async function publishDraftPullRequestForRun(
     pool: input.pool,
     eventStore: input.eventStore,
     secrets: input.secrets,
-    vcsProvider: input.vcsProvider,
+    githubHttp: input.githubHttp,
     ssh: input.ssh,
     target: sshRunnerHandle({
       host: context.runner.sshHost,

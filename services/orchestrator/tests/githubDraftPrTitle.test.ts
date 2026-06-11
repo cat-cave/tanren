@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { vcsProviderOver } from "./helpers/vcsProvider.js";
 import type { RunPoolSpecOverrides } from "./helpers/githubDraftPrFakes.js";
 import { RecordingRunPool, RecordingSsh, ScriptedGitHubHttp } from "./helpers/githubDraftPrFakes.js";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
@@ -37,7 +36,7 @@ async function publishedTitle(options: {
     pool: pool.asPgPool(),
     eventStore: new FakeEventStore(),
     secrets,
-    vcsProvider: vcsProviderOver(http),
+    githubHttp: http,
     ssh: new RecordingSsh(),
     runId: "run_123",
     identitySecretRef: "runner/local/identity",

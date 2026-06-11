@@ -70,7 +70,7 @@ export function buildBatchMergeCoordinator(deps: BuildMergeCoordinatorDeps): Mer
     runner: new PgMergeRunner(buildDriveMerge(deps)),
     checker: new PgBatchChecker({
       pool: deps.pool,
-      vcsProvider: deps.vcsProvider,
+      githubHttp: deps.githubHttp,
       secrets: deps.secrets,
       // The native batch gate provisions a fresh runner to gate the integration ref.
       allocator: deps.allocator,

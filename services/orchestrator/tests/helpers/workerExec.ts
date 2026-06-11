@@ -7,7 +7,6 @@
 // drive the SAME real workflow body without real Codex/SSH/GitHub.
 
 import type { AuditAnswer, CheckAnswer, PlanAnswer } from "../../src/engine/answerers/schemas/index.js";
-import { vcsProviderOver } from "./vcsProvider.js";
 import type {
   AllocationRequest,
   Allocator,
@@ -145,7 +144,7 @@ export function fakeWorkflowRunner(github: GitHubHttpClient) {
   return (input: Parameters<typeof runPlannerLoopWorkflow>[0]) =>
     runPlannerLoopWorkflow({
       ...input,
-      vcsProvider: vcsProviderOver(github),
+      githubHttp: github,
       maxCiPolls: 1,
       ciPollDelayMs: 0,
       sleep: async () => {},
@@ -272,7 +271,7 @@ export function deps(pool: WorkerPool, secrets: FakeSecretStore, jobQueue: FakeJ
     allocator: new RecordingAllocator(),
     ssh: new RecordingSsh(),
     secrets,
-    vcsProvider: vcsProviderOver(github),
+    githubHttp: github,
     identitySecretRef: "runner/test/identity",
     runWorkflow: fakeWorkflowRunner(github),
   };

@@ -56,7 +56,7 @@ function dispatcherLazy(
   const input = {
     pool: fakePool,
     secrets: {},
-    vcsProvider: {},
+    githubHttp: {},
     runId: "run_1",
     resolveConflict: async () => ({ resolved: true }),
     // The resolved-tree pre_merge re-gate runs BEFORE the lazy bundle build.
@@ -213,7 +213,7 @@ describe("conflict-resolved land re-enters the MergeAuthority (no parallel merge
     const input = {
       pool: fakePool,
       secrets: {},
-      vcsProvider: {},
+      githubHttp: {},
       runId: "run_1",
       resolveConflict: async () => ({ resolved: true }),
       // NO mergeAuthority, NO buildMergeAuthority — the authority is live (default flag).

@@ -12,7 +12,7 @@
 import { runAuthorityLand } from "../../merge/mergeAuthorityGate.js";
 import { evaluatePostureGate } from "../../forge/audits/postureGate.js";
 import type { AuditEnvelope } from "../../events/schemas/audit.js";
-import type { PullRequestMergeability } from "../../contracts/vcsProvider.js";
+import type { PullRequestMergeability } from "../../contracts/codeHostTypes.js";
 import type { MergeAuthorityBundle, MergeForRunResult, MergeOutcomeKind } from "./mergeDispatchTypes.js";
 import type { DispatcherDeps } from "./mergeDispatcher.js";
 

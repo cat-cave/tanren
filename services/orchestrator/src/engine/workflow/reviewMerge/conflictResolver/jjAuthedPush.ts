@@ -7,12 +7,10 @@
 import type { RunnerHandle } from "../../../contracts/allocator.js";
 import type { CommandSubstrate } from "../../../contracts/commandSubstrate.js";
 import type { SecretStore } from "../../../contracts/secretStore.js";
-import type { VcsProvider } from "../../../contracts/vcsProvider.js";
 import type { OrgGithubAppInstallation } from "../../../config/orgConfig.js";
 import type { GithubAppTokenMinter } from "../../../providers/githubAppTokenMinter.js";
 import { resolveVcsToken } from "../../../credentials/vcsCredentials.js";
-import { vcsCredentialHttp } from "../../../credentials/vcsCredentialHttp.js";
-import { githubHttpsRemote, parseGitHubRepository } from "../../../providers/github.js";
+import { githubHttpsRemote, parseGitHubRepository, type GitHubHttpClient } from "../../../providers/github.js";
 import { gitAuthedCommand, gitTokenAuthPrelude } from "../../../workspace/githubPush.js";
 import { quoteSshShellArg } from "../../../ssh/command.js";
 import { runWorkspaceSshCommand } from "../../../workspace/ssh.js";
@@ -23,7 +21,8 @@ export interface JjAuthedPushInput {
   target: RunnerHandle;
   workspacePath: string;
   secrets: SecretStore;
-  vcsProvider: VcsProvider;
+  /** The shared (timed) GitHub HTTP client the push-token resolution reads through. */
+  githubHttp: GitHubHttpClient;
   githubAppMinter?: GithubAppTokenMinter;
   /** The clone/push URL (also the HTTPS remote). */
   repoUrl: string;
@@ -44,13 +43,13 @@ export interface JjAuthedPushInput {
  */
 export async function pushJjHead(input: JjAuthedPushInput): Promise<void> {
   const staticRef = input.githubCredentialRef.trim();
-  // §5a: credential PLUMBING — resolve the push token via the standalone helper (off the
-  // provider's GitHub client), not a forge op on the `VcsProvider` seam.
+  // §5a: credential PLUMBING — resolve the push token via the standalone helper over the
+  // shared GitHub client, never a forge op on a host seam.
   const token =
     input.installation === undefined && staticRef === ""
       ? undefined
       : (
-          await resolveVcsToken(vcsCredentialHttp(input.vcsProvider), {
+          await resolveVcsToken(input.githubHttp, {
             secrets: input.secrets,
             ...(input.installation !== undefined && { installation: input.installation }),
             ...(staticRef !== "" && { staticRef }),

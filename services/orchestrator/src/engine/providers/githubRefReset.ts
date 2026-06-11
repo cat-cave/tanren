@@ -2,7 +2,7 @@
 // the retriable-classification the merge coordinators read. A transient transport/ref/
 // merge error is HELD + retried (never a wrong dequeue of a clean PR); a typed PERMANENT
 // error holds loud-once then escalates. (The server-side integration-ref reset that once
-// also lived here was deleted with `VcsProvider.buildIntegrationBranch` — the prospective
+// also lived here was deleted with the speculative-integration branch builder — the prospective
 // merged state now assembles LOCALLY over jj, so no host ref is reset.)
 
 /**

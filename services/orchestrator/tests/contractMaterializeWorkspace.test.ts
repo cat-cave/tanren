@@ -14,7 +14,6 @@ import { materializeContractFiles } from "../src/engine/forge/scaffold/index.js"
 import type { ProjectLifecycle } from "../src/engine/config/index.js";
 import { prepareRunWorkspace } from "../src/engine/workflow/plannerRunWorkspace.js";
 import type { PlannerRunContext, RunPlannerLoopInput } from "../src/engine/workflow/plannerRun.js";
-import { vcsProviderOver } from "./helpers/vcsProvider.js";
 import type { GitHubHttpClient } from "../src/engine/providers/github.js";
 
 const target: RunnerHandle = {
@@ -115,7 +114,7 @@ function makeInput(ssh: CommandSubstrate, context: PlannerRunContext): RunPlanne
   return {
     ssh,
     secrets: new FakeSecretStore(),
-    vcsProvider: vcsProviderOver(unusedHttp()),
+    githubHttp: unusedHttp(),
     context,
     timeoutMs: 500,
     bootstrapCommand: "true",

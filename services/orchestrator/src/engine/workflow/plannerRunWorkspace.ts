@@ -9,7 +9,7 @@
 // `cloneHeadSha` is threaded onward so the PR-branch cleanup can replay the
 // writer commits onto it (dropping the bootstrap commit) before the push.
 import type { RunnerHandle } from "../contracts/allocator.js";
-import type { ActorIdentity } from "../contracts/vcsProvider.js";
+import type { ActorIdentity } from "../contracts/codeHostTypes.js";
 import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import { githubHttpsRemote, parseGitHubRepository } from "../providers/github.js";
 import { quoteSshShellArg } from "../ssh/command.js";
@@ -23,7 +23,6 @@ import {
 } from "../workspace/index.js";
 import { gitAuthedCommand, gitTokenAuthPrelude } from "../workspace/githubPush.js";
 import { resolveVcsActorIdentity, resolveVcsToken } from "../credentials/vcsCredentials.js";
-import { vcsCredentialHttp } from "../credentials/vcsCredentialHttp.js";
 import { resolveBootstrapCommand } from "./gate/index.js";
 import type { RunPlannerLoopInput } from "./plannerRun.js";
 import { resolveAncestorStack } from "../dag/ancestorStack.js";
@@ -354,10 +353,10 @@ export interface ResolvedCloneCredential {
   identity: ActorIdentity | undefined;
 }
 
-// Resolves the run's GitHub token for the clone through the SAME VcsProvider
-// seam the rest of the run path uses (`resolveToken`), so the clone is
-// APP-FIRST: a caller-injected `githubToken` (test seam) wins; otherwise the
-// provider mints an auto-rotating App installation token when the org installed
+// Resolves the run's GitHub token for the clone through the SAME standalone
+// credential resolver the rest of the run path uses (`resolveVcsToken`), so the
+// clone is APP-FIRST: a caller-injected `githubToken` (test seam) wins; otherwise the
+// resolver mints an auto-rotating App installation token when the org installed
 // the App (`context.installation`), else reads the static `github_token` at the
 // run's resolved credential ref. This is a deliberate behavior change from the
 // prior static-ref-only clone — clone now prefers the App token when an App is
@@ -391,8 +390,8 @@ async function resolveCloneCredential(input: RunPlannerLoopInput): Promise<Resol
     return { token: undefined, identity: undefined };
   }
   // §5a: token + identity resolution is credential PLUMBING — resolve via the standalone
-  // helpers (off the provider's GitHub client), not forge ops on the `VcsProvider` seam.
-  const http = vcsCredentialHttp(input.vcsProvider);
+  // helpers over the shared GitHub client, never a forge op on a host seam.
+  const http = input.githubHttp;
   const resolved = await resolveVcsToken(http, {
     secrets: input.secrets,
     ...(input.context.installation !== undefined && { installation: input.context.installation }),

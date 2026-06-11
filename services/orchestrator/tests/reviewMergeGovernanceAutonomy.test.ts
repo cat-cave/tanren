@@ -8,7 +8,6 @@
 // `mergeForRun` (fixtures live here, never in src/).
 
 import { describe, expect, it } from "vitest";
-import { vcsProviderOver } from "./helpers/vcsProvider.js";
 import { FakeEventStore } from "./helpers/fakeEventStore.js";
 import {
   assessExternalChange,
@@ -84,7 +83,7 @@ describe("mergeForRun governance — autonomous-tier known-bot auto-approve (GAP
       eventStore: events,
       secrets: await tanrenSecrets(),
       resolveConflict: noopConflictResolver,
-      vcsProvider: vcsProviderOver(tanrenUserHttp()),
+      githubHttp: tanrenUserHttp(),
       runId: "run_1",
       mergeProbe: probe,
       mergeAuthority: authorityBundle(host, landed, { events }),
@@ -115,7 +114,7 @@ describe("mergeForRun governance — autonomous-tier known-bot auto-approve (GAP
       eventStore: events,
       secrets: await tanrenSecrets(),
       resolveConflict: noopConflictResolver,
-      vcsProvider: vcsProviderOver(tanrenUserHttp()),
+      githubHttp: tanrenUserHttp(),
       runId: "run_1",
       mergeProbe: probe,
       mergeAuthority: authorityBundle(host, landed, { events }),

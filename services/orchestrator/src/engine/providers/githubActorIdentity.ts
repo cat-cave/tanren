@@ -2,8 +2,8 @@
 // resolved credential — the single source of truth that keeps the run's git author
 // + the merge stage's Tanren-identity set in lockstep (both derive from one
 // credential, so Tanren's own commits attribute to a real login the external-change
-// gate recognizes, never `<unknown>`). Extracted from githubVcsProvider.ts (per-file
-// line cap); the provider's `resolveActorIdentity` composes these.
+// gate recognizes, never `<unknown>`). The standalone `vcsCredentials.ts` resolver
+// composes these (the sole identity path since PR-9 retired the `VcsProvider` seam).
 //
 //   - static credential → `GET /user` → the PAT user's login + numeric id.
 //   - App installation   → the App's bot login `<app-slug>[bot]` + bot id from
@@ -16,7 +16,7 @@
 import { loadGithubAppCredential } from "../credentials/githubApp.js";
 import { signAppJwt } from "./githubAppTokenMinter.js";
 import type { GitHubHttpClient } from "./github.js";
-import type { ActorIdentity, ResolvedVcsToken, VcsCredentialContext } from "../contracts/vcsProvider.js";
+import type { ActorIdentity, ResolvedVcsToken, VcsCredentialContext } from "../contracts/codeHostTypes.js";
 
 /** The canonical GitHub noreply address that maps an email back to a login. */
 function noreplyEmail(id: string, login: string): string {
@@ -24,9 +24,9 @@ function noreplyEmail(id: string, login: string): string {
 }
 
 /**
- * Invoke a resolved token's lazy identity supplier — the provider's
- * `resolveActorIdentity(token)`. Absent only on a token built outside the
- * provider's resolver (which never reaches the push path) → LOUD throw.
+ * Invoke a resolved token's lazy identity supplier — what `resolveVcsActorIdentity`
+ * calls. Absent only on a token built outside the standalone resolver (which never
+ * reaches the push path) → LOUD throw.
  */
 export async function invokeTokenIdentity(token: ResolvedVcsToken): Promise<ActorIdentity> {
   if (token.identity === undefined) {

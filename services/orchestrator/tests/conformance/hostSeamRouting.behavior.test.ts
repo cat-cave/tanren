@@ -28,7 +28,7 @@ import {
   type VisibilityProjection,
 } from "../../src/engine/contracts/visibilityProjection.js";
 import type { GitHubHttpClient, GitHubHttpRequest, GitHubHttpResponse } from "../../src/engine/providers/github.js";
-import type { ResolvedVcsToken } from "../../src/engine/contracts/vcsProvider.js";
+import type { ResolvedVcsToken } from "../../src/engine/contracts/codeHostTypes.js";
 
 const REPO_FULL_NAME = "cat-cave/apex";
 

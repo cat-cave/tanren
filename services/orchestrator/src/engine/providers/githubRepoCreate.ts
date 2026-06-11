@@ -1,5 +1,5 @@
 // GREENFIELD: the GitHub repository-CREATE flow (`POST /orgs/{owner}/repos`),
-// extracted from `githubVcsProvider.ts` so the provider stays under the per-file
+// extracted so the GitHub repo-create surface stays under the per-file
 // line cap. It mirrors the shape of the other GitHub side-effect helpers
 // (`actionsSecretSeal.ts`): a single function over the injected `GitHubHttpClient`
 // that performs the call, maps the documented error statuses onto the contract's
@@ -11,7 +11,7 @@ import {
   RepositoryCreationForbiddenError,
   type CreateRepositoryInput,
   type CreatedRepository,
-} from "../contracts/vcsProvider.js";
+} from "../contracts/codeHostTypes.js";
 import type { GitHubHttpClient } from "./github.js";
 
 /**

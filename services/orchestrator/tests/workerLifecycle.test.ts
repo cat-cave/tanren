@@ -10,7 +10,6 @@
 // real DB needed (the empty `PgJobQueue` claim returns idle immediately).
 
 import { describe, expect, it } from "vitest";
-import { vcsProviderOver } from "./helpers/vcsProvider.js";
 import type { Allocator } from "../src/engine/contracts/allocator.js";
 import type { ClaimJobOptions, JobClaimClient } from "../src/engine/contracts/jobClaim.js";
 import type { JobEnvelope } from "../src/engine/contracts/jobQueue.js";
@@ -51,7 +50,7 @@ function baseInput(pool: WorkerPool, concurrency: number) {
     allocator: noopAllocator,
     ssh: noopSsh,
     secrets: new FakeSecretStore(),
-    vcsProvider: vcsProviderOver(noopGitHub),
+    githubHttp: noopGitHub,
     identitySecretRef: "runner/test/identity",
   };
 }
@@ -174,7 +173,7 @@ describe("startRunWorker — dep wiring (lifecycle.ts)", () => {
       allocator: noopAllocator,
       ssh: noopSsh,
       secrets,
-      vcsProvider: vcsProviderOver(noopGitHub),
+      githubHttp: noopGitHub,
       identitySecretRef: "runner/test/identity",
       claimClient,
       options: { pollIntervalMs: 0, onResult: (r) => results.push(r) },

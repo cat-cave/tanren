@@ -13,7 +13,7 @@
 
 import { type GateOutcome } from "../workflow/gate/index.js";
 import { type ReviewVerdict } from "../contracts/dagLifecycle.js";
-import { type PullRequestMergeability } from "../contracts/vcsProvider.js";
+import { type PullRequestMergeability } from "../contracts/codeHostTypes.js";
 import { type AuditPosture } from "../contracts/auditPosture.js";
 import { type Finding } from "../contracts/findings.js";
 import { isNonNegativeFinite, nonNegativeFinite } from "../contracts/money.js";

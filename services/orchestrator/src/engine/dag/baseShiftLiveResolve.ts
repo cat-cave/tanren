@@ -28,7 +28,6 @@ import { buildSemEntityMergeFirstPass } from "../workflow/reviewMerge/conflictRe
 import { buildLiveJjWorkspace, type LiveJjWorkspace } from "../providers/liveJjWorkspace.js";
 import { GitHubCodeHost } from "../providers/githubCodeHost.js";
 import { parseGitHubRepository } from "../providers/github.js";
-import { vcsCredentialHttp } from "../credentials/vcsCredentialHttp.js";
 import { resolveVcsToken } from "../credentials/vcsCredentials.js";
 import type { AncestorStack } from "./ancestorStack.js";
 import { assembleBaseShiftStackLive } from "./baseShiftStackAssembly.js";
@@ -165,7 +164,7 @@ async function prepareResolveWorkspace(input: {
     allocator: deps.allocator,
     ssh: deps.ssh,
     secrets: deps.secrets,
-    vcsProvider: deps.vcsProvider,
+    githubHttp: deps.githubHttp,
     ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
     timeoutMs,
   });
@@ -210,7 +209,7 @@ async function runResolverOverWorkspace(input: {
     live,
     ssh: deps.ssh,
     secrets: deps.secrets,
-    vcsProvider: deps.vcsProvider,
+    githubHttp: deps.githubHttp,
     ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
     facts: applierFacts,
     ...(input.preOpenedWorkspace !== undefined && { preOpenedWorkspace: input.preOpenedWorkspace }),
@@ -318,14 +317,14 @@ function buildBaseShiftReGate(
 /**
  * Read the dependent's head branch sha back from the forge (the resolver force-pushed it),
  * through the host-neutral `CodeHost.fetchRef` seam (decomposition PR-6) rather than a
- * GitHub-shaped `VcsProvider` read. The `CodeHost` is built over the SAME GitHub HTTP client
- * the run's provider holds (`vcsCredentialHttp`) + a per-call token supplier (the standalone
+ * host read. The `CodeHost` is built over the SAME GitHub HTTP client the run holds
+ * (`deps.githubHttp`) + a per-call token supplier (the standalone
  * `resolveVcsToken`, §5a); `parseGitHubRepository` is the pure URL parse. Behavior-identical
  * (`fetchRef` ≡ the old `readBranchHeadSha`).
  */
 async function readResolvedHeadSha(deps: LiveBaseShiftDeps, ctx: BaseShiftRunContext): Promise<string | undefined> {
   const staticRef = ctx.githubCredentialRef.trim();
-  const http = vcsCredentialHttp(deps.vcsProvider);
+  const http = deps.githubHttp;
   const codeHost = new GitHubCodeHost(http, async () => {
     const resolved = await resolveVcsToken(http, {
       secrets: deps.secrets,

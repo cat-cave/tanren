@@ -29,7 +29,6 @@
 import type { Allocator, RunnerHandle } from "../contracts/allocator.js";
 import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import type { SecretStore } from "../contracts/secretStore.js";
-import type { VcsProvider } from "../contracts/vcsProvider.js";
 import type { WorkspaceVcsCore } from "../contracts/workspaceVcsCore.js";
 import type { OrgGithubAppInstallation } from "../config/orgConfig.js";
 import { CANONICAL_RUNNER_IMAGE } from "../config/shared.js";
@@ -43,7 +42,7 @@ import {
 } from "./jjWorkspaceVcsCore.js";
 import { resolveBotPushIdentity } from "./botPushIdentity.js";
 import { resolveVcsToken } from "../credentials/vcsCredentials.js";
-import { vcsCredentialHttp } from "../credentials/vcsCredentialHttp.js";
+import type { GitHubHttpClient } from "./github.js";
 import { githubHttpsRemote, parseGitHubRepository } from "./github.js";
 import type { GithubAppTokenMinter } from "./githubAppTokenMinter.js";
 import { createLogger } from "../observability/logger.js";
@@ -87,8 +86,8 @@ export interface LiveJjWorkspaceDeps {
   ssh: CommandSubstrate;
   /** The secret store the clone-token resolution reads from. */
   secrets: SecretStore;
-  /** The provider that owns the App-first / static clone-token resolution policy. */
-  vcsProvider: VcsProvider;
+  /** The shared (timed) GitHub HTTP client the clone-token resolution reads through. */
+  githubHttp: GitHubHttpClient;
   /** The shared installation-token minter (its cache lives here). */
   githubAppMinter?: GithubAppTokenMinter;
   /** Per-jj-command timeout (ms); defaults to {@link DEFAULT_LIVE_JJ_TIMEOUT_MS}. */
@@ -180,7 +179,7 @@ export async function buildLiveJjWorkspace(deps: LiveJjWorkspaceDeps): Promise<L
     const staticRef = facts.githubCredentialRef.trim();
     const identity = await resolveBotPushIdentity({
       secrets: deps.secrets,
-      vcsProvider: deps.vcsProvider,
+      githubHttp: deps.githubHttp,
       ...(facts.installation !== undefined && { installation: facts.installation }),
       githubCredentialRef: facts.githubCredentialRef,
       ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
@@ -201,7 +200,7 @@ export async function buildLiveJjWorkspace(deps: LiveJjWorkspaceDeps): Promise<L
             // §5a: the clone token is credential PLUMBING — resolve via the standalone
             // helper (off the provider's GitHub client), not a forge op on the seam.
             token: (
-              await resolveVcsToken(vcsCredentialHttp(deps.vcsProvider), {
+              await resolveVcsToken(deps.githubHttp, {
                 secrets: deps.secrets,
                 ...(facts.installation !== undefined && { installation: facts.installation }),
                 ...(staticRef !== "" && { staticRef }),

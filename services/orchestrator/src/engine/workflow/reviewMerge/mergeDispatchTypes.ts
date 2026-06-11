@@ -8,7 +8,8 @@ import type { RunStateWriter } from "../../contracts/runStateWriter.js";
 import type { SecretStore } from "../../contracts/secretStore.js";
 import type { EventStore } from "../../eventStore.js";
 import type { GithubAppTokenMinter } from "../../providers/githubAppTokenMinter.js";
-import type { PullRequestMergeability, VcsProvider } from "../../contracts/vcsProvider.js";
+import type { PullRequestMergeability } from "../../contracts/codeHostTypes.js";
+import type { GitHubHttpClient } from "../../providers/github.js";
 import type { RunStateClient } from "./context.js";
 import type { ContributorProbe } from "./governancePosture.js";
 import type { CodeHost } from "../../contracts/codeHost.js";
@@ -108,7 +109,8 @@ export interface MergeForRunInput {
   // when wired (remote-writes on); absent, the in-process org-scoped write runs.
   runStateWriter?: RunStateWriter;
   secrets: SecretStore;
-  vcsProvider: VcsProvider;
+  /** The shared (timed) GitHub HTTP client the merge stage's host seams build over. */
+  githubHttp: GitHubHttpClient;
   runId: string;
   githubAppMinter?: GithubAppTokenMinter;
   /** Run-resolved GitHub credential ref; see PollReviewForRunInput. */
@@ -123,8 +125,8 @@ export interface MergeForRunInput {
   mergeProbe?: MergeProbe;
   /**
    * test seam. Resolves the PR's distinct contributor logins for
-   * external-change detection. Production omits it → the dispatcher lists the
-   * PR commits through the VcsProvider and derives the logins.
+   * external-change detection. Production omits it → the dispatcher reads the
+   * commit authors over the sha range through `CodeHost.readCommitAuthors`.
    */
   contributorProbe?: ContributorProbe;
   /**
@@ -142,8 +144,8 @@ export interface MergeForRunInput {
   /**
    * up-to-date enforcement: re-poll the run's CI to a terminal verdict after
    * an auto-rebase advanced the branch (the branch HEAD moved, so the prior
-   * green is stale). Production wires this to `pollCiForRun` through the SAME
-   * vcsProvider seam; tests inject a scripted re-gate. Post-rebase re-gating is
+   * green is stale). Production wires this to `pollCiForRun` over the SAME
+   * GitHub HTTP client; tests inject a scripted re-gate. Post-rebase re-gating is
    * REQUIRED: when the branch was actually rebased and this hook is omitted, the
    * stage HARD-HOLDS (emits `merge.rebased` with `reGatedCi: false`, then the
    * recoverable `merge.conflict` outcome) rather than merging on unverified CI —

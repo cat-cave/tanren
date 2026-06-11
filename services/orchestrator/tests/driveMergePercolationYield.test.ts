@@ -13,7 +13,7 @@ import { buildDriveMerge } from "../src/engine/merge/coordinatorBuild.js";
 import { FakeAllocator } from "../src/engine/contracts/allocator.js";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
 import { FakeCommandSubstrate } from "../src/engine/contracts/commandSubstrate.js";
-import { InMemoryVcsProvider } from "./conformance/fakes/inMemoryVcsProvider.js";
+import { inertGitHubHttp } from "./helpers/githubHttp.js";
 
 const RUN_ID = "run_yield";
 const SPEC_ID = "spec_yield";
@@ -110,7 +110,7 @@ describe("buildDriveMerge — percolation mutual exclusion (the drive YIELDS, ne
     const drive = buildDriveMerge({
       pool: fakePool(),
       secrets: new FakeSecretStore(),
-      vcsProvider: new InMemoryVcsProvider(),
+      githubHttp: inertGitHubHttp(),
       allocator,
       ssh: new FakeCommandSubstrate(),
       identitySecretRef: "secret/runner/identity",

@@ -13,7 +13,8 @@
 // SAME run-activity bus the DagWalker / MergeCoordinator listen on, and it only
 // acts once a run has a `merge.completed` event (the authoritative merge signal,
 // which carries the merge sha). Token resolution + base-branch state route through
-// the VcsProvider; the run context loads through the shared review/merge loader.
+// the standalone credential resolver; the base-branch CI read routes through
+// `CodeHost.readBranchChecks` (§5e); the run context loads through the shared loader.
 //
 // IDEMPOTENCY (open at most ONE issue per merge, never spam): before filing, the
 // watcher checks for a prior `issue.opened` event on the run — present ⇒ it already
@@ -30,12 +31,13 @@ import type { EventStore } from "../eventStore.js";
 import { PgEventStore } from "../eventStore.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { SecretStore } from "../contracts/secretStore.js";
-import type { RepoRef, ResolvedVcsToken, VcsProvider } from "../contracts/vcsProvider.js";
+import type { RepoRef, ResolvedVcsToken } from "../contracts/codeHostTypes.js";
+import type { GitHubHttpClient } from "../providers/github.js";
 import type { ProjectedTrackingIssue, SafeVisibilityProjection } from "../contracts/visibilityProjection.js";
 import { parseGitHubPullRequestUrl } from "../providers/github.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
-import { buildProjectHostSeams } from "../providers/hostFactory.js";
-import { vcsCredentialHttp } from "../credentials/vcsCredentialHttp.js";
+import { buildProjectHostSeams, type ProjectHostSeams } from "../providers/hostFactory.js";
+import { resolveVcsToken } from "../credentials/vcsCredentials.js";
 import { type ActiveQuarantine, loadActiveQuarantine } from "../workflow/ciQuarantine.js";
 import { evaluateCiObservation, type CiObservation } from "../workflow/ciObservation.js";
 import { loadReviewMergeRunContext, type ReviewMergeRunContext } from "../workflow/reviewMerge/context.js";
@@ -48,7 +50,8 @@ export interface PostMergeWatcherDeps {
   /** The runtime (`tanren_app`) pool. The watcher re-reads under the system scope. */
   pool: pg.Pool;
   secrets: SecretStore;
-  vcsProvider: VcsProvider;
+  /** The shared (timed) GitHub HTTP client the watcher's host seams build over. */
+  githubHttp: GitHubHttpClient;
   /** Shared App installation-token minter (cache lives here), when an App is installed. */
   githubAppMinter?: GithubAppTokenMinter;
   /** Injectable for tests; defaults to a `PgEventStore` over `pool`. */
@@ -68,13 +71,14 @@ export interface PostMergeWatcherDeps {
    */
   claimStore?: PostMergeIssueClaimStore;
   /**
-   * Build the best-effort `VisibilityProjection` the tracking issue is published
-   * through, given the run's resolved token. Injectable for tests (a fake projection);
-   * defaults to `buildProjectHostSeams(vcsCredentialHttp(vcsProvider), …).visibility`
-   * — the hardened (never-rejecting) seam over the SAME GitHub HTTP client the run's
-   * `VcsProvider` already holds, with the per-run token supplier.
+   * Build the per-run `ProjectHostSeams` (`{ codeHost, visibility }`) the watcher reads
+   * the base-branch CI through (`codeHost.readBranchChecks`, §5e) and files the tracking
+   * issue through (`visibility.openTrackingIssue`, §6), given the run's resolved token.
+   * Injectable for tests (a fake pair); defaults to `buildProjectHostSeams(githubHttp, …)`
+   * — the real host seams over the SAME GitHub HTTP client the run holds, with the
+   * per-run token supplier.
    */
-  buildVisibility?: (token: ResolvedVcsToken) => SafeVisibilityProjection;
+  buildHostSeams?: (token: ResolvedVcsToken) => ProjectHostSeams;
 }
 
 /** The authoritative merge signal for a run: its `merge.completed` event. */
@@ -101,16 +105,16 @@ export class PostMergeWatcher {
   }
 
   /**
-   * The best-effort `VisibilityProjection` the tracking issue is published through,
-   * for the run's resolved token. Defaults to the hardened host seam over the run's
-   * GitHub HTTP client (`buildProjectHostSeams` — never-rejecting, §6); a test injects
-   * its own factory. Built per call so the token supplier carries the per-run token.
+   * The per-run `ProjectHostSeams` the watcher reads the base-branch CI through + files
+   * the tracking issue through, for the run's resolved token. Defaults to the real host
+   * seams over the run's GitHub HTTP client (`buildProjectHostSeams` — §5e/§6); a test
+   * injects its own factory. Built per call so the token supplier carries the per-run token.
    */
-  private buildVisibility(token: ResolvedVcsToken): SafeVisibilityProjection {
-    if (this.deps.buildVisibility !== undefined) {
-      return this.deps.buildVisibility(token);
+  private buildHostSeams(token: ResolvedVcsToken): ProjectHostSeams {
+    if (this.deps.buildHostSeams !== undefined) {
+      return this.deps.buildHostSeams(token);
     }
-    return buildProjectHostSeams(vcsCredentialHttp(this.deps.vcsProvider), async () => token).visibility;
+    return buildProjectHostSeams(this.deps.githubHttp, async () => token);
   }
 
   /**
@@ -135,13 +139,12 @@ export class PostMergeWatcher {
 
     const resolved = await this.resolveToken(context);
     // Derive the repo from the PR ref (robust for a `.../pull/N` URL). Pure helper
-    // (§5b) — a URL→`{repo,number}` parse, no provider state.
+    // (§5b) — a URL→`{repo,number}` parse, no host state.
     const repo = parseGitHubPullRequestUrl(context.prUrl).repo;
-    const checks = await this.deps.vcsProvider.readBranchChecks({
-      repo,
-      branch: context.baseBranch,
-      token: resolved,
-    });
+    // The per-run host seams: `codeHost` serves the §5e base-branch CI read; `visibility`
+    // serves the §6 best-effort tracking-issue publish. One token resolve drives both.
+    const seams = this.buildHostSeams(resolved);
+    const checks = await seams.codeHost.readBranchChecks({ repo, branch: context.baseBranch });
     // Resolve the org FIRST so the CI-intelligence quarantine read is org-scoped: a
     // proven-flaky base-branch check on the project's ACTIVE quarantine surface is
     // EXCLUDED from the failure verdict, so a known-flaky post-merge check no longer
@@ -165,7 +168,7 @@ export class PostMergeWatcher {
     });
     if (!won) return;
 
-    await this.fileTrackingIssue({ runId, orgId, context, repo, token: resolved, merge, observation });
+    await this.fileTrackingIssue({ runId, orgId, context, repo, visibility: seams.visibility, merge, observation });
   }
 
   /** Read the run's `merge.completed` event (the authoritative merge signal), system-scoped. */
@@ -255,7 +258,7 @@ export class PostMergeWatcher {
   }
 
   private async resolveToken(context: ReviewMergeRunContext) {
-    return this.deps.vcsProvider.resolveToken({
+    return resolveVcsToken(this.deps.githubHttp, {
       secrets: this.deps.secrets,
       ...(context.installation !== undefined && { installation: context.installation }),
       ...(context.staticCredentialRef !== undefined && { staticRef: context.staticCredentialRef }),
@@ -281,11 +284,11 @@ export class PostMergeWatcher {
     orgId: string;
     context: ReviewMergeRunContext;
     repo: RepoRef;
-    token: ResolvedVcsToken;
+    visibility: SafeVisibilityProjection;
     merge: MergeRecord;
     observation: CiObservation;
   }): Promise<void> {
-    const { runId, orgId, context, repo, token, merge, observation } = args;
+    const { runId, orgId, context, repo, visibility, merge, observation } = args;
     const failingChecks = observation.failingChecks.map((c) => ({
       kind: c.kind,
       name: c.name,
@@ -294,7 +297,6 @@ export class PostMergeWatcher {
     }));
     const title = `Post-merge CI failed on ${context.baseBranch} after merging ${context.specId} (PR #${merge.prNumber})`;
     const body = renderIssueBody({ context, merge, failingChecks, runId });
-    const visibility = this.buildVisibility(token);
     const outcome = await visibility.openTrackingIssue({
       repoFullName: `${repo.owner}/${repo.name}`,
       title,

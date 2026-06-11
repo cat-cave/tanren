@@ -7,7 +7,7 @@
 // seams resolve their access token through the SAME credential resolution the live
 // GitHub path already uses — the caller passes the `resolveVcsToken` closure it builds
 // from the standalone `credentials/vcsCredentials.ts:resolveVcsToken(http, creds)` (the
-// credential plumbing lifted OFF the `VcsProvider` interface, §5a; one resolve per stage,
+// standalone credential plumbing, §5a; one resolve per stage,
 // installation-or-static, with the 401-refresh re-mint). This factory NEVER reads a
 // secret itself; the seams stay token-free (a host swap can't leak GitHub credential
 // shape into the engine) — the plaintext token travels only in each call's auth
@@ -18,7 +18,7 @@ import { GitHubCodeHost, type CodeHostToken, type CodeHostTokenSupplier } from "
 import { GitHubVisibilityProjection } from "./githubVisibilityProjection.js";
 import { harden, type SafeVisibilityProjection } from "../contracts/visibilityProjection.js";
 import type { CodeHost } from "../contracts/codeHost.js";
-import type { ResolvedVcsToken } from "../contracts/vcsProvider.js";
+import type { ResolvedVcsToken } from "../contracts/codeHostTypes.js";
 import type { GitHubHttpClient } from "./github.js";
 
 /**

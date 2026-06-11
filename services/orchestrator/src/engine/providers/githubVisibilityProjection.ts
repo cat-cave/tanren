@@ -23,15 +23,16 @@ import type {
   PublishGateInput,
   PublishReviewInput,
   ReadChangeRequestBaseInput,
+  ReadExternalApprovalInput,
   RetargetChangeRequestInput,
   TrackingIssueInput,
   VisibilityProjection,
 } from "../contracts/visibilityProjection.js";
-import type { RepoRef, ResolvedVcsToken, StatusState } from "../contracts/vcsProvider.js";
+import type { RepoRef, ResolvedVcsToken, StatusState } from "../contracts/codeHostTypes.js";
 import type { GitHubHttpClient } from "./github.js";
 import { publishGitHubStatus } from "./githubPublishCheck.js";
 import { GitHubPullRequestService } from "./githubPullRequestReuse.js";
-import { GitHubReviewMergeService } from "./githubReviewMerge.js";
+import { GitHubReviewMergeService, type ReviewVerdictResult } from "./githubReviewMerge.js";
 import { retargetGithubPullRequestBase } from "./githubRetargetPullRequestBase.js";
 
 /**
@@ -209,6 +210,21 @@ export class GitHubVisibilityProjection implements VisibilityProjection {
     const repo = parseRepoFullName(input.repoFullName);
     const token = await this.resolveToken();
     await this.reviewMerge.markReadyForReview({
+      repo,
+      pullNumber: input.changeRequestNumber,
+      token: token.token,
+      refreshToken: token.refresh,
+    });
+  }
+
+  // readExternalApproval = read the host's PR reviews → a single actionable verdict
+  // (the `fetchReviewVerdict` the review-poll consults, §5f). Best-effort: a non-200 /
+  // forge error rejects here and `harden()` severs it to `failed` — the poll treats
+  // that as still-pending, never as a verdict (Tanren's internal record is the gate).
+  async readExternalApproval(input: ReadExternalApprovalInput): Promise<ReviewVerdictResult> {
+    const repo = parseRepoFullName(input.repoFullName);
+    const token = await this.resolveToken();
+    return this.reviewMerge.fetchReviewVerdict({
       repo,
       pullNumber: input.changeRequestNumber,
       token: token.token,

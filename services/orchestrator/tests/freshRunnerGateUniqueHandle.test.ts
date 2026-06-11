@@ -21,12 +21,8 @@ import type {
   RunnerHandle,
 } from "../src/engine/contracts/allocator.js";
 import type { RunnerCommand, CommandResult, CommandSubstrate } from "../src/engine/contracts/commandSubstrate.js";
-import type {
-  RepoRef,
-  ResolvedVcsToken,
-  VcsCredentialContext,
-  VcsProvider,
-} from "../src/engine/contracts/vcsProvider.js";
+import type { GitHubHttpClient } from "../src/engine/providers/github.js";
+import type { SecretValue } from "../src/engine/contracts/secretStore.js";
 import type { EventStore } from "../src/engine/eventStore.js";
 
 const RUN_ID = "run_apex_0001";
@@ -84,13 +80,18 @@ class GatePassingSsh implements CommandSubstrate {
   }
 }
 
-class FakeVcsProvider implements Partial<VcsProvider> {
-  async resolveToken(_creds: VcsCredentialContext): Promise<ResolvedVcsToken> {
-    return { token: "t", source: "static", refresh: async () => "t2" };
-  }
-  parseRepository(repoUrl: string): RepoRef {
-    const m = /github\.com\/([^/]+)\/([^/]+)/u.exec(repoUrl)!;
-    return { owner: m[1]!, name: m[2]! };
+/** The gate resolves a static push token via the standalone resolver — it never hits the
+ * GitHub transport on this path (the push goes over SSH), so an inert client is fine. */
+const inertGitHubHttp: GitHubHttpClient = {
+  async request() {
+    throw new Error("the fresh-runner gate must not reach the GitHub transport");
+  },
+};
+
+/** Returns a stub `github_token` for the configured ref so static-credential resolution succeeds. */
+class TokenSecretStore extends InMemorySecretStore {
+  override async get(ref: string): Promise<SecretValue | undefined> {
+    return { ref, value: "t" };
   }
 }
 
@@ -103,8 +104,8 @@ function makeDeps(allocator: Allocator, ssh: CommandSubstrate) {
   return {
     allocator,
     ssh,
-    secrets: new InMemorySecretStore(),
-    vcsProvider: new FakeVcsProvider() as unknown as VcsProvider,
+    secrets: new TokenSecretStore(),
+    githubHttp: inertGitHubHttp,
     eventStore: NOOP_EVENT_STORE,
     identitySecretRef: "id",
     timeoutMs: 1000,

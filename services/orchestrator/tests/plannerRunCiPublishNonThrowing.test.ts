@@ -27,7 +27,7 @@ describe("§3.8 verdict-publish prep is internally non-throwing", () => {
       ssh: {},
       secrets: {},
       timeoutMs: 1000,
-      vcsProvider: {
+      githubHttp: {
         resolveToken: async () => {
           throw new Error("vault transient failure minting publish token");
         },

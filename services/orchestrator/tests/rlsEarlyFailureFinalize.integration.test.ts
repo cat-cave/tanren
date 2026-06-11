@@ -28,7 +28,6 @@
 // `just smoke` via `just smoke-rls-early-finalize`.
 
 import { Pool } from "pg";
-import { vcsProviderOver } from "./helpers/vcsProvider.js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { migrate, setSystemPool } from "@tanren/db";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
@@ -157,7 +156,7 @@ describeDb("RLS early-failure finalize — a pre-scope throw still finalizes the
       allocator: INERT_ALLOCATOR,
       ssh: INERT_SSH,
       secrets: new FakeSecretStore(),
-      vcsProvider: vcsProviderOver(INERT_GITHUB),
+      githubHttp: INERT_GITHUB,
       identitySecretRef: "runner/test/identity",
       // No heartbeat noise; the job finishes in one synchronous pass.
       heartbeatIntervalMs: 1_000_000,

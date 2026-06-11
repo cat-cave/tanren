@@ -22,11 +22,11 @@ import type { SecretStore } from "../contracts/secretStore.js";
 import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import type { OrgGithubAppInstallation } from "../config/orgConfig.js";
 import type { GovernancePosture } from "../config/shared.js";
-import type { VcsProvider } from "../contracts/vcsProvider.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
 import type { EventStore } from "../eventStore.js";
 import type { EventName, EventPayload } from "../events/index.js";
-import { githubHttpsRemote, parseGitHubRepository } from "../providers/github.js";
+import { githubHttpsRemote, parseGitHubRepository, type GitHubHttpClient } from "../providers/github.js";
+import { resolveVcsToken } from "../credentials/vcsCredentials.js";
 import { gitAuthedCommand, gitTokenAuthPrelude } from "../workspace/githubPush.js";
 import { quoteSshShellArg } from "../ssh/command.js";
 import {
@@ -69,7 +69,8 @@ export interface FreshRunnerGateDeps {
   allocator: Allocator;
   ssh: CommandSubstrate;
   secrets: SecretStore;
-  vcsProvider: VcsProvider;
+  /** The shared (timed) GitHub HTTP client the gate's push-token resolution reads through. */
+  githubHttp: GitHubHttpClient;
   githubAppMinter?: GithubAppTokenMinter;
   eventStore: EventStore;
   /** The runner identity key ref (same value the worker boot seeds). */
@@ -165,7 +166,7 @@ async function cloneRefForGate(
     ctx.installation === undefined && staticRef.trim() === ""
       ? undefined
       : (
-          await deps.vcsProvider.resolveToken({
+          await resolveVcsToken(deps.githubHttp, {
             secrets: deps.secrets,
             ...(ctx.installation !== undefined && { installation: ctx.installation }),
             ...(staticRef.trim() !== "" && { staticRef }),
