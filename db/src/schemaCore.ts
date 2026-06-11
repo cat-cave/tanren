@@ -168,19 +168,6 @@ export const runs = pgTable(
     outcome: text("outcome"),
     prUrl: text("pr_url"),
     userId: text("user_id"),
-    // P2c-1 (autonomy-engine.md §2c): the SPECULATIVE INTEGRATION BRANCH this run's
-    // PR bases on (the dynamic base), when the DagWalker started it speculatively
-    // on one or more unmerged ancestors. NULL ⇒ a non-speculative run whose PR
-    // bases on `projects.default_branch` (the normal path). The merge stage never
-    // merges against this ref — it is the WORK base; the dependent's MERGE waits
-    // for the real ancestor merges, then re-gates against `default_branch`.
-    speculativeBase: text("speculative_base"),
-    // P2c-2 (autonomy-engine.md §2c CHANGE-PERCOLATION): the per-ancestor head SHA
-    // map this speculative run is BUILT ON (its current base) —
-    // `{ "<ancestorSpecId>": "<sha>" }`. Set at speculative start, and re-pointed
-    // (with `speculative_base`) when a percolation re-bases the dependent onto an
-    // ancestor's new head. NULL ⇒ a non-speculative run (nothing to percolate).
-    integratedAncestorShas: jsonb("integrated_ancestor_shas"),
     // P2c-2: the per-ancestor head SHA map this dependent's work has actually
     // RE-GATED CLEAN against — gate+checker+auditor genuinely re-ran (a real run)
     // and passed with no open P0/P1. This is the ABSORBED / TERMINATION key: the
@@ -386,9 +373,9 @@ export const postMergeIssueClaims = pgTable(
 // a merge-queue batch, and a stacked/chain PR — the speculative-vs-real and
 // eager-vs-unrelated divergence collapsed into one row.
 //
-// Wave 2 / Slice S0 is OBSERVE-ONLY: this table is WRITTEN ALONGSIDE the existing
-// `runs.speculative_base` + percolation columns (additive, try/catch-wrapped), and
-// drives NO control flow. The §8 guardrail — migrate the old speculative/percolation
+// Wave 2 / Slice S0 is OBSERVE-ONLY: this table is WRITTEN ALONGSIDE the jj-native
+// `runs.ancestor_stack` + percolation columns (additive, try/catch-wrapped), and
+// drives NO control flow. The §8 guardrail — migrate the speculative/percolation
 // state through an EXPLICIT compatibility read-model, never silent abandonment —
 // lives in `engine/dag/integrationNodesPg.ts` (the read-model projects existing run
 // rows into this shape). The columns mirror the FROZEN `IntegrationNode` typed

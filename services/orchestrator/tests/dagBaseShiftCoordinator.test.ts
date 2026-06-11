@@ -166,7 +166,7 @@ function recordingNodeReader(): RecordingNodeReader {
 /** Records EXACTLY which keep-run-row / replan writes ran — the never-discard assertions. */
 class RecordingPersistence implements BaseShiftPersistence {
   // jj-local: the re-point writes ONLY the re-resolved ancestor stack (the legacy
-  // `speculative_base` column is NULLed and no longer carried on the port).
+  // `speculative_base` column was dropped in WS-B PR-12 — never carried on the port).
   readonly repointStacks: Array<{ runId: string; ancestorStack: AncestorStack }> = [];
   readonly markedInFlight: Array<{ runId: string; ancestorSpecId: string; toSha: string }> = [];
   readonly replanned: Array<{ runId: string; specId: string; reason: string }> = [];
@@ -378,7 +378,7 @@ describe("§5-P0 settle fix (tanren-owns-the-engine.md §5) — a changes_reques
 // ancestor stack. Two coupling points vs the deleted synthesized-ref path: (1) the
 // coordinator THREADS the re-resolved ancestor stack to the opener (which assembles it
 // locally); (2) `keepRun` re-points `runs.ancestor_stack` to the re-resolved stack (a run is
-// "speculative" iff the stack is non-empty — `speculative_base` is no longer written).
+// "speculative" iff the stack is non-empty — the legacy `speculative_base` column is gone).
 describe("base-shift over the re-resolved ancestor stack", () => {
   it("the re-resolved stack is THREADED to the opener (assembled locally, not a synthesized ref)", async () => {
     const h = harness({ conflictOnRebase: false, reGate: "passed" });

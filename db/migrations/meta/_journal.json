@@ -232,6 +232,13 @@
       "when": 1781129392560,
       "tag": "0032_broken_slayback",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1781152799512,
+      "tag": "0033_fast_smiling_tiger",
+      "breakpoints": true
     }
   ]
 }

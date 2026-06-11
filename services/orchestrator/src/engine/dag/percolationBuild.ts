@@ -59,7 +59,7 @@ export interface BuildPercolationCoordinatorDeps {
   /**
    * Plane-split (autonomy loops): the control-plane run-state writer. When present
    * (remote-writes on), the change-percolation coordinator routes its keep-run-row
-   * writes (`speculative_base` re-point, `verified_ancestor_shas`), its replan-context
+   * writes (`ancestor_stack` re-point, `verified_ancestor_shas`), its replan-context
    * append, and its events through the control plane (the de-privileged data plane can
    * no longer write those tables directly); absent, direct on the pool.
    */

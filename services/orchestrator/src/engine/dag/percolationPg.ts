@@ -122,7 +122,7 @@ export class PgPercolationReadModel implements PercolationReadModel {
           specId: row.spec_id,
           runId: row.run_id,
           // jj-local: there is no synthesized host base ref; a run is speculative iff its
-          // `ancestor_stack` is non-empty. The legacy `speculative_base` is always NULL now.
+          // `ancestor_stack` is non-empty (the legacy `speculative_base` column was dropped).
           speculativeBase: null,
           integratedAncestorShas: buildBase,
           verifiedAncestorShas: verifiedShas,
@@ -145,7 +145,7 @@ export class PgPercolationReadModel implements PercolationReadModel {
     // a merged spec is NEVER a percolation dependent — its re-base is moot, and it
     // cannot be re-executed (the spec status is terminal, so a kick-off's reopen is
     // a no-op and the claim raises SpecNotRunnableError). The §2c marker-widening
-    // (load runs carrying a `percolation_pending` even with a NULL speculative_base)
+    // (load runs carrying a `percolation_pending` even with an empty ancestor_stack)
     // started ALSO loading the run of an already-merged spec when a STALE marker
     // lingered on it — returning it made the coordinator try to re-exec a merged
     // spec, aborting the whole pass. Drop them here, and CLEAR the moot marker

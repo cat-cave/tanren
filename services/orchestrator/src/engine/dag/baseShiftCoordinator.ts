@@ -392,8 +392,8 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
     // §2.2 jj-local: the keep-run re-points the EXISTING run onto the RE-RESOLVED ancestor
     // stack (the one the live opener just assembled `main + ordered ancestors` from) — empty
     // when every ancestor merged (non-speculative). There is NO synthesized integration ref:
-    // a run is "speculative" iff the stack is non-empty (§2.3), so `speculative_base` is
-    // ALWAYS NULL on this path (the legacy column is no longer written).
+    // a run is "speculative" iff the stack is non-empty (§2.3). The legacy `speculative_base`
+    // column was dropped (WS-B PR-12) — `ancestor_stack` is the sole base truth.
     const ancestorStack: AncestorStack = input.ancestorStack ?? [];
     await this.deps.persistence.repointBase({
       projectId: input.projectId,
