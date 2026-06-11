@@ -22,6 +22,7 @@
  */
 
 import type { Context, Hono } from "hono";
+import { formField } from "../formField.js";
 import { OrchestratorClient } from "../../api/orchestrator.js";
 import { getProjectDag } from "../../api/projectDag.js";
 import {
@@ -187,11 +188,11 @@ export function mountProjectScreens(app: Hono, deps: ShellDeps): void {
       return renderShell(c, ctx, { title: "tanren · new spec" }, notFoundBody(projectId));
     }
     const form = await c.req.parseBody({ all: true });
-    const title = String(form["title"] ?? "").trim();
-    const description = String(form["description"] ?? "").trim();
+    const title = formField(form, "title").trim();
+    const description = formField(form, "description").trim();
     const acceptanceCriteria = asArray(form["acceptanceCriteria"] as string | string[] | undefined);
     const dependsOn = asArray(form["dependsOn"] as string | string[] | undefined);
-    const milestoneId = String(form["milestoneId"] ?? "");
+    const milestoneId = formField(form, "milestoneId");
 
     const client = clientFor(c, deps);
     const reRender = (error: string) =>
@@ -235,11 +236,11 @@ export function mountProjectScreens(app: Hono, deps: ShellDeps): void {
   app.post("/projects/:projectId/insights/act", async (c) => {
     const projectId = c.req.param("projectId");
     const form = await c.req.parseBody();
-    const orgId = String(form["orgId"] ?? "");
-    const tool = String(form["tool"] ?? "");
+    const orgId = formField(form, "orgId");
+    const tool = formField(form, "tool");
     let args: Record<string, unknown> = {};
     try {
-      args = JSON.parse(String(form["args"] ?? "{}")) as Record<string, unknown>;
+      args = JSON.parse(formField(form, "args", "{}")) as Record<string, unknown>;
     } catch {
       args = {};
     }
@@ -336,12 +337,12 @@ function mountRoutingSettingsScreens(app: Hono, deps: ShellDeps): void {
   app.post("/settings/routing/:projectId/add", async (c) => {
     const projectId = c.req.param("projectId");
     const form = await c.req.parseBody();
-    const orgId = String(form["orgId"] ?? "");
-    const role = String(form["role"] ?? "") as RoleId;
+    const orgId = formField(form, "orgId");
+    const role = formField(form, "role") as RoleId;
     const entry: RoutingChainEntry = {
-      cli: String(form["cli"] ?? "").trim(),
-      model: String(form["model"] ?? "").trim(),
-      authRef: String(form["authRef"] ?? "").trim(),
+      cli: formField(form, "cli").trim(),
+      model: formField(form, "model").trim(),
+      authRef: formField(form, "authRef").trim(),
     };
     await mutateConfig(c, deps, orgId, projectId, (config) => {
       if (ROLE_IDS.includes(role) && entry.cli !== "" && entry.model !== "" && entry.authRef !== "") {
@@ -354,8 +355,8 @@ function mountRoutingSettingsScreens(app: Hono, deps: ShellDeps): void {
   app.post("/settings/routing/:projectId/remove", async (c) => {
     const projectId = c.req.param("projectId");
     const form = await c.req.parseBody();
-    const orgId = String(form["orgId"] ?? "");
-    const role = String(form["role"] ?? "") as RoleId;
+    const orgId = formField(form, "orgId");
+    const role = formField(form, "role") as RoleId;
     const index = Number(form["index"] ?? "-1");
     await mutateConfig(c, deps, orgId, projectId, (config) => {
       if (ROLE_IDS.includes(role)) {
@@ -369,10 +370,10 @@ function mountRoutingSettingsScreens(app: Hono, deps: ShellDeps): void {
   app.post("/settings/routing/:projectId/reorder", async (c) => {
     const projectId = c.req.param("projectId");
     const form = await c.req.parseBody();
-    const orgId = String(form["orgId"] ?? "");
-    const role = String(form["role"] ?? "") as RoleId;
+    const orgId = formField(form, "orgId");
+    const role = formField(form, "role") as RoleId;
     const index = Number(form["index"] ?? "-1");
-    const direction = String(form["direction"] ?? "");
+    const direction = formField(form, "direction");
     await mutateConfig(c, deps, orgId, projectId, (config) => {
       if (!ROLE_IDS.includes(role)) return;
       const chain = config.routing[role].chain;
@@ -392,9 +393,9 @@ function mountRoutingSettingsScreens(app: Hono, deps: ShellDeps): void {
   app.post("/settings/routing/:projectId/credentials", async (c) => {
     const projectId = c.req.param("projectId");
     const form = await c.req.parseBody();
-    const orgId = String(form["orgId"] ?? "");
-    const codexCredentialRef = String(form["codexCredentialRef"] ?? "").trim();
-    const githubCredentialRef = String(form["githubCredentialRef"] ?? "").trim();
+    const orgId = formField(form, "orgId");
+    const codexCredentialRef = formField(form, "codexCredentialRef").trim();
+    const githubCredentialRef = formField(form, "githubCredentialRef").trim();
     await mutateConfig(c, deps, orgId, projectId, (config) => {
       const credentials: {
         defaultLlm?: { cli: string; model: string; authRef: string };
@@ -415,7 +416,7 @@ function mountRoutingSettingsScreens(app: Hono, deps: ShellDeps): void {
   app.post("/settings/routing/:projectId/hatches", async (c) => {
     const projectId = c.req.param("projectId");
     const form = await c.req.parseBody();
-    const orgId = String(form["orgId"] ?? "");
+    const orgId = formField(form, "orgId");
     await mutateConfig(c, deps, orgId, projectId, (config) => {
       const next: Partial<EscapeHatches> = { ...config.escapeHatches };
       for (const field of ["maxWriterIterPerSubtask", "maxRetriesPerTransientFailure"] as const) {

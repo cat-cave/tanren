@@ -48,11 +48,7 @@ export const RecoveryStore = {
    * undefined when none exists) — the source for the last-good commit SHA.
    * Ordered ts DESC, id DESC, LIMIT 1, exactly as the inline read.
    */
-  async getLastCapturedEventPayload(
-    client: QueryClient,
-    runId: string,
-    _actor: ActorRef,
-  ): Promise<unknown | undefined> {
+  async getLastCapturedEventPayload(client: QueryClient, runId: string, _actor: ActorRef): Promise<unknown> {
     const result = await client.query<{ payload: unknown }>(
       `SELECT payload FROM events
        WHERE run_id = $1 AND event_type = 'workspace.git_captured'

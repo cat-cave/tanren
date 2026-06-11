@@ -25,7 +25,14 @@ import {
   TaskTimelineEntry,
 } from "./contract.js";
 import type { ProjectFeedItem as ProjectFeedItemType, RunDetail } from "./contract.js";
-import { RawCostRowSchema, RawEventRowSchema, RawRunSummaryRowSchema, RawTaskRowSchema } from "./rowSchemas.js";
+import {
+  RawCostRowSchema,
+  RawEventRowSchema,
+  RawRunSummaryRowSchema,
+  RawTaskRowSchema,
+  scalarText,
+  scalarTextOr,
+} from "./rowSchemas.js";
 
 // RLS R1: loaders accept the pool OR an org-scoped client (both expose `.query`).
 type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
@@ -47,16 +54,16 @@ function decodeRunSummary(raw: RawRunRow): RunSummary {
   // on a malformed row), never a laundered `as Date`.
   const ts = RawRunSummaryRowSchema.parse(raw);
   return RunSummary.parse({
-    runId: String(raw.run_id),
-    specId: String(raw.spec_id),
-    projectId: String(raw.project_id),
-    trigger: String(raw.trigger),
-    branch: String(raw.branch),
+    runId: scalarText(raw.run_id),
+    specId: scalarText(raw.spec_id),
+    projectId: scalarText(raw.project_id),
+    trigger: scalarText(raw.trigger),
+    branch: scalarText(raw.branch),
     status: RunStatus.parse(raw.status),
     outcome: raw.outcome === null || raw.outcome === undefined ? null : RunOutcome.parse(raw.outcome),
     startedAt: ts.started_at,
     endedAt: ts.ended_at,
-    prUrl: raw.pr_url === null || raw.pr_url === undefined ? null : String(raw.pr_url),
+    prUrl: raw.pr_url === null || raw.pr_url === undefined ? null : scalarText(raw.pr_url),
   });
 }
 
@@ -79,19 +86,21 @@ export async function fetchRunTasks(pool: QueryClient, runId: string, orgId: str
     // Decode the (nullable) task timestamps at the boundary into real Dates.
     const ts = RawTaskRowSchema.parse(row);
     return TaskTimelineEntry.parse({
-      taskId: String(row["task_id"]),
-      runId: String(row["run_id"]),
+      taskId: scalarText(row["task_id"]),
+      runId: scalarText(row["run_id"]),
       kind: TaskKind.parse(row["kind"]),
       parentTaskId:
-        row["parent_task_id"] === null || row["parent_task_id"] === undefined ? null : String(row["parent_task_id"]),
-      title: String(row["title"] ?? ""),
+        row["parent_task_id"] === null || row["parent_task_id"] === undefined
+          ? null
+          : scalarText(row["parent_task_id"]),
+      title: scalarTextOr(row["title"], ""),
       status: TaskStatus.parse(row["status"]),
       outcome: row["outcome"] === null || row["outcome"] === undefined ? null : TaskOutcome.parse(row["outcome"]),
       failureKind:
-        row["failure_kind"] === null || row["failure_kind"] === undefined ? null : String(row["failure_kind"]),
+        row["failure_kind"] === null || row["failure_kind"] === undefined ? null : scalarText(row["failure_kind"]),
       attempt: Number(row["attempt"] ?? 1),
-      cli: String(row["cli"] ?? ""),
-      model: row["model"] === null || row["model"] === undefined ? null : String(row["model"]),
+      cli: scalarTextOr(row["cli"], ""),
+      model: row["model"] === null || row["model"] === undefined ? null : scalarText(row["model"]),
       startedAt: ts.started_at,
       endedAt: ts.ended_at,
     });
@@ -151,7 +160,7 @@ function applyEventRedaction(
   return rows.map((row) => {
     // Decode the cursor-key id + event timestamp at the boundary into a real Date.
     const decoded = RawEventRowSchema.parse(row);
-    const eventType = String(row.event_type);
+    const eventType = scalarText(row.event_type);
     let payload: unknown = row.payload;
     let redactedPaths: string[] = [];
     if (actor !== undefined && isEventName(eventType)) {
@@ -167,10 +176,10 @@ function applyEventRedaction(
     return RunEventRow.parse({
       id: decoded.id,
       ts: decoded.ts,
-      runId: row.run_id === null || row.run_id === undefined ? null : String(row.run_id),
-      taskId: row.task_id === null || row.task_id === undefined ? null : String(row.task_id),
-      specId: row.spec_id === null || row.spec_id === undefined ? null : String(row.spec_id),
-      projectId: row.project_id === null || row.project_id === undefined ? null : String(row.project_id),
+      runId: row.run_id === null || row.run_id === undefined ? null : scalarText(row.run_id),
+      taskId: row.task_id === null || row.task_id === undefined ? null : scalarText(row.task_id),
+      specId: row.spec_id === null || row.spec_id === undefined ? null : scalarText(row.spec_id),
+      projectId: row.project_id === null || row.project_id === undefined ? null : scalarText(row.project_id),
       eventType,
       payload,
       redactedPaths,
@@ -270,19 +279,19 @@ function decodeCostRow(raw: CostQueryRow): RunCostRecord {
   const decoded = RawCostRowSchema.parse(raw);
   return RunCostRecord.parse({
     id: decoded.id,
-    runId: String(raw["run_id"]),
-    taskId: String(raw["task_id"]),
-    projectId: String(raw["project_id"]),
-    cli: String(raw["cli"]),
-    provider: String(raw["provider"]),
-    model: String(raw["model"]),
+    runId: scalarText(raw["run_id"]),
+    taskId: scalarText(raw["task_id"]),
+    projectId: scalarText(raw["project_id"]),
+    cli: scalarText(raw["cli"]),
+    provider: scalarText(raw["provider"]),
+    model: scalarText(raw["model"]),
     inputTokens: Number(raw["input_tokens"] ?? 0),
     cachedInputTokens: Number(raw["cached_input_tokens"] ?? 0),
     cacheCreationTokens: Number(raw["cache_creation_tokens"] ?? 0),
     outputTokens: Number(raw["output_tokens"] ?? 0),
     reasoningOutputTokens: Number(raw["reasoning_output_tokens"] ?? 0),
     totalTokens: Number(raw["total_tokens"] ?? 0),
-    costUsd: raw["cost_usd"] === null || raw["cost_usd"] === undefined ? null : String(raw["cost_usd"]),
+    costUsd: raw["cost_usd"] === null || raw["cost_usd"] === undefined ? null : scalarText(raw["cost_usd"]),
     billingMode: raw["billing_mode"] as RunCostRecord["billingMode"],
     costBasis: raw["cost_basis"] as RunCostRecord["costBasis"],
     recordedAt: decoded.recorded_at,

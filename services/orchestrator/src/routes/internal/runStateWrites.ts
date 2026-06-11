@@ -20,6 +20,7 @@
 // ONLY on the internal mTLS listener, never the public API.
 
 import { runWithOrgScope } from "@tanren/db";
+import { scalarTextOr } from "../../engine/data/scalarText.js";
 import { Hono, type Context } from "hono";
 import { z, ZodError } from "zod";
 import { CostRecorder } from "../../engine/costs/recorder.js";
@@ -234,7 +235,7 @@ export function createInternalRunStateWriteRoutes(deps: RunStateWriteRouteDeps):
       if (row === undefined) {
         return { updated: false };
       }
-      return { updated: true, specId: String(row.spec_id ?? ""), projectId: String(row.project_id ?? "") };
+      return { updated: true, specId: scalarTextOr(row.spec_id, ""), projectId: scalarTextOr(row.project_id, "") };
     });
     return c.json(result);
   });

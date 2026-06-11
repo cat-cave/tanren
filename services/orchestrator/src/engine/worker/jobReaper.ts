@@ -10,6 +10,7 @@
 // lives alongside the executor. observability stays OUT of here.
 
 import { runWithJobOrgId, runWithOrgScope, runWithSystemScope } from "@tanren/db";
+import { scalarText, scalarTextOr } from "../data/scalarText.js";
 import type pg from "pg";
 import { orgScopingPool } from "../data/orgScopedDb.js";
 import type { JobQueue, ReapedJob } from "../contracts/jobQueue.js";
@@ -193,9 +194,9 @@ async function loadRunLineage(
     return undefined;
   }
   return {
-    specId: String(row.spec_id ?? ""),
-    projectId: String(row.project_id ?? ""),
-    orgId: row.org_id === null || row.org_id === undefined ? null : String(row.org_id),
+    specId: scalarTextOr(row.spec_id, ""),
+    projectId: scalarTextOr(row.project_id, ""),
+    orgId: row.org_id === null || row.org_id === undefined ? null : scalarText(row.org_id),
   };
 }
 

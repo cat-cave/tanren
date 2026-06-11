@@ -160,7 +160,9 @@ export function buildSecretStore(env: SecretStoreEnv = process.env): SecretStore
           : { fieldLabel: required(env, "TANREN_OP_FIELD_LABEL") }),
       });
     default:
-      throw new Error(`unknown TANREN_SECRET_STORE='${kind}' (expected vault|gcp_sm|aws_sm|onepassword|memory)`);
+      throw new Error(
+        `unknown TANREN_SECRET_STORE='${String(kind)}' (expected vault|gcp_sm|aws_sm|onepassword|memory)`,
+      );
   }
 }
 

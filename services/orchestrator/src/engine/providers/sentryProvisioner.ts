@@ -365,7 +365,8 @@ export class SentryProvisioner implements IntegrationProvisioner {
     projectCtx?: ProjectContext,
   ): Promise<ProvisionedArtifact> {
     const dsn = await this.ensureDsn(meta, token, slug);
-    const orgId = projectCtx?.orgId ?? String((grant.metadata as { orgId?: unknown }).orgId ?? meta.orgSlug);
+    const metaOrgId = (grant.metadata as { orgId?: unknown }).orgId;
+    const orgId = projectCtx?.orgId ?? (typeof metaOrgId === "string" ? metaOrgId : meta.orgSlug);
     const ref = dsnSecretRef(orgId, slug);
     // The DSN → secret manager (managed cred ref), never DB/log/artifact value.
     await this.secrets.put({ ref, value: dsn });

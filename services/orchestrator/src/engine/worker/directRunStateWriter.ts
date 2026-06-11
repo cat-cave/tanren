@@ -11,6 +11,7 @@
 // is fully REVERSIBLE: flipping the flag off restores the direct write path.
 
 import { getJobOrgId, runWithOrgScope } from "@tanren/db";
+import { scalarTextOr } from "../data/scalarText.js";
 import type pg from "pg";
 import type {
   ClearRunPercolationPendingInput,
@@ -102,7 +103,7 @@ export class DirectRunStateWriter implements RunStateWriter {
       if (row === undefined) {
         return { updated: false };
       }
-      return { updated: true, specId: String(row.spec_id ?? ""), projectId: String(row.project_id ?? "") };
+      return { updated: true, specId: scalarTextOr(row.spec_id, ""), projectId: scalarTextOr(row.project_id, "") };
     });
   }
 

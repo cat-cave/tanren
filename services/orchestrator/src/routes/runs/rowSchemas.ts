@@ -20,6 +20,11 @@
 
 import { z } from "zod";
 
+// The scalar-column coercion (`scalarText`/`scalarTextOr`) lives in the neutral
+// pg-boundary util so engine/worker readers can share it; re-exported here for
+// the route loaders that already import from this module.
+export { scalarText, scalarTextOr } from "../../engine/data/scalarText.js";
+
 // --- Run summary / list rows ----------------------------------------------
 // `started_at` is NOT NULL in the schema (a run always has a start); `ended_at`
 // is null until the run finishes.

@@ -9,6 +9,7 @@
 // opts into rawView. The `repo.*` family lives in `repo.ts`.
 
 import { z } from "zod";
+import { scalarText } from "../../data/scalarText.js";
 import type pg from "pg";
 import type { ActorContext } from "../../../auth/schemas.js";
 import { resolveQueryClient } from "../../data/orgScopedDb.js";
@@ -169,15 +170,15 @@ export async function tanrenReadEvents(
   const limitIdx = params.length;
   const rows = await ForgeToolsStore.listEventsForTool(db, where, limitIdx, params, systemActor);
   const events: RedactedEventRow[] = rows.map((row: Record<string, unknown>) => {
-    const eventType = String(row["event_type"]);
+    const eventType = scalarText(row["event_type"]);
     if (!isEventName(eventType)) {
       return {
         id: row["id"] as number | string,
         ts: decodeEventTs(row["ts"]),
-        runId: row["run_id"] === null || row["run_id"] === undefined ? null : String(row["run_id"]),
-        taskId: row["task_id"] === null || row["task_id"] === undefined ? null : String(row["task_id"]),
-        specId: row["spec_id"] === null || row["spec_id"] === undefined ? null : String(row["spec_id"]),
-        projectId: row["project_id"] === null || row["project_id"] === undefined ? null : String(row["project_id"]),
+        runId: row["run_id"] === null || row["run_id"] === undefined ? null : scalarText(row["run_id"]),
+        taskId: row["task_id"] === null || row["task_id"] === undefined ? null : scalarText(row["task_id"]),
+        specId: row["spec_id"] === null || row["spec_id"] === undefined ? null : scalarText(row["spec_id"]),
+        projectId: row["project_id"] === null || row["project_id"] === undefined ? null : scalarText(row["project_id"]),
         eventType,
         payload: row["payload"],
         redactedPaths: [],
@@ -192,10 +193,10 @@ export async function tanrenReadEvents(
     return {
       id: row["id"] as number | string,
       ts: decodeEventTs(row["ts"]),
-      runId: row["run_id"] === null || row["run_id"] === undefined ? null : String(row["run_id"]),
-      taskId: row["task_id"] === null || row["task_id"] === undefined ? null : String(row["task_id"]),
-      specId: row["spec_id"] === null || row["spec_id"] === undefined ? null : String(row["spec_id"]),
-      projectId: row["project_id"] === null || row["project_id"] === undefined ? null : String(row["project_id"]),
+      runId: row["run_id"] === null || row["run_id"] === undefined ? null : scalarText(row["run_id"]),
+      taskId: row["task_id"] === null || row["task_id"] === undefined ? null : scalarText(row["task_id"]),
+      specId: row["spec_id"] === null || row["spec_id"] === undefined ? null : scalarText(row["spec_id"]),
+      projectId: row["project_id"] === null || row["project_id"] === undefined ? null : scalarText(row["project_id"]),
       eventType,
       payload: output.payload,
       redactedPaths: output.redactedPaths,

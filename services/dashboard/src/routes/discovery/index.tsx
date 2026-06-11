@@ -15,6 +15,7 @@
  */
 
 import type { Context, Hono } from "hono";
+import { formField } from "../formField.js";
 import { DiscoveryClient } from "../../api/discoveryClient.js";
 import type { DiscoveryInsight, PlacementKind, ProposedSpec } from "../../api/discoveryTypes.js";
 import { loadShellContext, renderShell, type ShellDeps } from "../../app/mountShell.js";
@@ -107,16 +108,16 @@ export function mountDiscoveryScreens(app: Hono, deps: ShellDeps): void {
       return renderShell(c, ctx, { title: "tanren · discover spec" }, notFound(projectId));
     }
     const form = await c.req.parseBody();
-    const variant = resolveVariant(String(form["variant"] ?? ""));
+    const variant = resolveVariant(formField(form, "variant"));
     const seed = SEED_INSIGHTS[variant];
     const insight: DiscoveryInsight = {
       variant,
-      source: String(form["source"] ?? seed.source) || seed.source,
-      sourceLabel: String(form["sourceLabel"] ?? seed.sourceLabel) || seed.sourceLabel,
-      who: String(form["who"] ?? seed.who) || seed.who,
-      when: String(form["when"] ?? seed.when) || seed.when,
-      glyph: String(form["glyph"] ?? seed.glyph) || seed.glyph,
-      body: String(form["body"] ?? seed.body).trim() || seed.body,
+      source: formField(form, "source", seed.source) || seed.source,
+      sourceLabel: formField(form, "sourceLabel", seed.sourceLabel) || seed.sourceLabel,
+      who: formField(form, "who", seed.who) || seed.who,
+      when: formField(form, "when", seed.when) || seed.when,
+      glyph: formField(form, "glyph", seed.glyph) || seed.glyph,
+      body: formField(form, "body", seed.body).trim() || seed.body,
     };
     const client = clientFor(c, deps);
     const { result } = await client.classify(ctx.org.id, projectId, insight);
@@ -144,11 +145,11 @@ export function mountDiscoveryScreens(app: Hono, deps: ShellDeps): void {
       return renderShell(c, ctx, { title: "tanren · discover spec" }, notFound(projectId));
     }
     const form = await c.req.parseBody();
-    const variant = resolveVariant(String(form["variant"] ?? ""));
-    const insight = safeJson<DiscoveryInsight>(String(form["insight"] ?? ""));
-    const proposals = safeJson<ProposedSpec[]>(String(form["proposals"] ?? "")) ?? [];
-    const placementKind = String(form["placementKind"] ?? "slot_after") as PlacementKind;
-    const placementLabel = String(form["placementLabel"] ?? "").trim();
+    const variant = resolveVariant(formField(form, "variant"));
+    const insight = safeJson<DiscoveryInsight>(formField(form, "insight"));
+    const proposals = safeJson<ProposedSpec[]>(formField(form, "proposals")) ?? [];
+    const placementKind = formField(form, "placementKind", "slot_after") as PlacementKind;
+    const placementLabel = formField(form, "placementLabel").trim();
 
     const reRender = (error: string) =>
       renderShell(

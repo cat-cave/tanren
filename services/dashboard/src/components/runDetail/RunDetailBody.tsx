@@ -226,7 +226,15 @@ function eventSummary(event: RunEventRow): string {
     const keys = Object.keys(rec);
     return keys.length === 0 ? "(empty)" : `{ ${keys.slice(0, 4).join(", ")} }`;
   }
-  return payload === null || payload === undefined ? "" : String(payload);
+  // Past the object branch, `payload` is a primitive. Narrow per type so the
+  // stringification is always well-defined (`String(symbol)` throws; an object
+  // would `[object Object]`, but the object case already returned above).
+  if (typeof payload === "string") return payload;
+  if (typeof payload === "number" || typeof payload === "bigint" || typeof payload === "boolean") {
+    return payload.toString();
+  }
+  if (typeof payload === "symbol") return payload.toString();
+  return "";
 }
 
 function Reasoning(props: RunDetailBodyProps & { selectedTaskId: string | null }) {

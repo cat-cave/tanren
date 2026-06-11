@@ -18,6 +18,7 @@
  */
 
 import type { Context, Hono } from "hono";
+import { formField } from "../../formField.js";
 import { ExistingBrownfieldClient } from "../../../api/existingBrownfieldClient.js";
 import type { GovernancePosture, ReconReport } from "../../../api/existingBrownfieldTypes.js";
 import { OrchestratorClient } from "../../../api/orchestrator.js";
@@ -92,7 +93,7 @@ export function mountExistingBrownfield(app: Hono, deps: ShellDeps): void {
   app.post("/onboarding/existing", async (c) => {
     const ctx = await loadShellContext(c, deps, { activeNavId: "onb-exist" });
     const form = await c.req.parseBody();
-    const phase = String(form["phase"] ?? "advance");
+    const phase = formField(form, "phase", "advance");
     if (phase === "link") return handleLink(c, ctx, deps, form);
     if (phase === "advance") return handleAdvance(c, ctx, deps, form);
     if (phase === "open-pr") return handleOpenPr(c, ctx, deps, form);
@@ -112,8 +113,8 @@ async function handleLink(c: Context, ctx: ShellContext, deps: ShellDeps, form: 
   const orgLogin = ctx.org?.login ?? "your org";
   const orgId = ctx.org?.id;
   const githubAppUrl = await resolveGithubAppUrl(c, deps);
-  const repoUrl = String(form["repoUrl"] ?? "").trim();
-  const name = String(form["name"] ?? "").trim() || repoUrl.split("/").pop() || "linked-project";
+  const repoUrl = formField(form, "repoUrl").trim();
+  const name = formField(form, "name").trim() || repoUrl.split("/").pop() || "linked-project";
   const linkError = (error: string, linked?: { repoUrl: string; files: BrownfieldDetectedFile[]; projectId: string }) =>
     render(
       c,
@@ -126,9 +127,9 @@ async function handleLink(c: Context, ctx: ShellContext, deps: ShellDeps, form: 
   const project = await product.createProject(orgId, {
     name,
     repoUrl,
-    defaultBranch: String(form["defaultBranch"] ?? "main"),
-    allocator: String(form["allocator"] ?? "local_docker"),
-    runnerImage: String(form["runnerImage"] ?? "tanren-runner"),
+    defaultBranch: formField(form, "defaultBranch", "main"),
+    allocator: formField(form, "allocator", "local_docker"),
+    runnerImage: formField(form, "runnerImage", "tanren-runner"),
   });
   if (project === undefined) return linkError("project create failed");
   const link = await product.brownfieldLink(orgId, project.projectId, { repoUrl });
@@ -164,8 +165,8 @@ async function handleLink(c: Context, ctx: ShellContext, deps: ShellDeps, form: 
 async function handleAdvance(c: Context, ctx: ShellContext, deps: ShellDeps, form: Record<string, unknown>) {
   const orgLogin = ctx.org?.login ?? "your org";
   const githubAppUrl = await resolveGithubAppUrl(c, deps);
-  const step = Number.parseInt(String(form["step"] ?? "2"), 10) || 2;
-  const repoUrl = String(form["repoUrl"] ?? "");
+  const step = Number.parseInt(formField(form, "step", "2"), 10) || 2;
+  const repoUrl = formField(form, "repoUrl");
   const report = parseReport(form["report"]);
   const projectId = projectIdFromForm(form, ctx);
   const next = Math.min(5, step + 1) as 2 | 3 | 4 | 5;
@@ -188,7 +189,7 @@ async function handleOpenPr(c: Context, ctx: ShellContext, deps: ShellDeps, form
   const orgLogin = ctx.org?.login ?? "your org";
   const orgId = ctx.org?.id;
   const githubAppUrl = await resolveGithubAppUrl(c, deps);
-  const repoUrl = String(form["repoUrl"] ?? "");
+  const repoUrl = formField(form, "repoUrl");
   const report = parseReport(form["report"]);
   const posture = postureFromForm(form);
   const projectId = projectIdFromForm(form, ctx);
@@ -233,7 +234,7 @@ async function handleSeed(c: Context, ctx: ShellContext, deps: ShellDeps, form: 
   const orgLogin = ctx.org?.login ?? "your org";
   const orgId = ctx.org?.id;
   const githubAppUrl = await resolveGithubAppUrl(c, deps);
-  const repoUrl = String(form["repoUrl"] ?? "");
+  const repoUrl = formField(form, "repoUrl");
   const report = parseReport(form["report"]);
   const projectId = projectIdFromForm(form, ctx);
   if (orgId === undefined || projectId === undefined || report === undefined) {
@@ -273,7 +274,7 @@ async function handleGovernance(c: Context, ctx: ShellContext, deps: ShellDeps, 
   const orgLogin = ctx.org?.login ?? "your org";
   const orgId = ctx.org?.id;
   const githubAppUrl = await resolveGithubAppUrl(c, deps);
-  const repoUrl = String(form["repoUrl"] ?? "");
+  const repoUrl = formField(form, "repoUrl");
   const posture = postureFromForm(form);
   const projectId = projectIdFromForm(form, ctx);
   const saved =
@@ -312,14 +313,14 @@ function keepPathsFromForm(form: Record<string, unknown>): string[] {
 }
 
 function postureFromForm(form: Record<string, unknown>): GovernancePosture {
-  const value = String(form["posture"] ?? "strict");
+  const value = formField(form, "posture", "strict");
   return value === "open" || value === "audit_only" ? value : "strict";
 }
 
 // The projectId rides forward on a hidden field once linked. We also fall back
 // to the only project on the shell context when present (single-project case).
 function projectIdFromForm(form: Record<string, unknown>, ctx: ShellContext): string | undefined {
-  const fromForm = String(form["projectId"] ?? "");
+  const fromForm = formField(form, "projectId");
   if (fromForm !== "") return fromForm;
   return ctx.projects.length === 1 ? ctx.projects[0]?.projectId : undefined;
 }
