@@ -1,0 +1,16 @@
+// The pool-backed PORTS the run worker constructs from `deps.pool` and hands to
+// `runPlannerLoopWorkflow` at the workflow call site. Co-located here so the worker
+// (`runExecutor.ts`) takes ONE module edge for the whole set rather than one per port
+// (keeping it under its module-dependency cap):
+//
+//   - `buildNativeQueueEnqueuer` — under `native_queue`, enters a ready run into the
+//     native merge queue (re-exported from the merge coordinator build).
+//   - `buildEagerBaseNodeUpsert` — WS-A PR-8 (walker-jj-local-integration-design.md §2.3):
+//     OBSERVE-ONLY, the jj-local dependent bootstrap records its `eager_base` integration
+//     node (the proof-reuse substrate) through an org-scoped UPSERT over the worker's pool.
+//
+// Both are thin org-scoped writers built over the worker's REAL pool, so the writes land
+// RLS-scoped (not on the org-scoping workflow proxy).
+
+export { buildNativeQueueEnqueuer } from "../merge/coordinatorBuild.js";
+export { buildEagerBaseNodeUpsert } from "../workflow/plannerRunJjLocalBootstrap.js";
