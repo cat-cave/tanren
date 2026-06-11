@@ -1,7 +1,9 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { runWithSystemScope } from "@tanren/db";
 import type pg from "pg";
+import { z } from "zod";
 import { defaultOrgConfigV1 } from "../engine/config/index.js";
+import { TokenScopeSchema } from "./schemas.js";
 import type {
   ActorContext,
   ActorScope,
@@ -57,12 +59,13 @@ export class IdentityStore {
   }
 
   async upsertUser(provider: User["provider"], claims: IdentityClaims): Promise<User> {
-    const existing = await this.pool.query("SELECT * FROM users WHERE provider = $1 AND provider_subject = $2", [
-      provider,
-      claims.providerSubject,
-    ]);
-    if ((existing.rowCount ?? 0) > 0) {
-      const row = existing.rows[0] as UserRow;
+    const existing = await this.pool.query<UserRow>(
+      "SELECT * FROM users WHERE provider = $1 AND provider_subject = $2",
+      [provider, claims.providerSubject],
+    );
+    const existingRow = existing.rows[0];
+    if (existingRow !== undefined) {
+      const row = existingRow;
       await this.pool.query(
         "UPDATE users SET login = $1, email = $2, display_name = $3, updated_at = now() WHERE id = $4",
         [claims.login, claims.email, claims.displayName, row.id],
@@ -226,7 +229,7 @@ export class IdentityStore {
     await this.pool.query("UPDATE api_tokens SET last_used_at = now() WHERE id = $1", [row.id]);
     return {
       userId: row.user_id,
-      scopes: (row.scopes ?? []) as TokenScope[],
+      scopes: z.array(TokenScopeSchema).parse(row.scopes ?? []),
       expiresAt: row.expires_at === null ? null : new Date(row.expires_at),
     };
   }

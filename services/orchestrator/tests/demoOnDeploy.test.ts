@@ -66,9 +66,12 @@ function fakePool(state: PoolState): pg.Pool {
         rowCount: 1,
       };
     }
-    // The org grant lookup (demoSurface resolution).
+    // The org grant lookup (demoSurface resolution). `status` is NOT NULL DEFAULT
+    // 'linked' on the real row; the store decodes it via the validated read seam.
     if (/FROM org_integrations WHERE org_id = \$1 AND provider_kind = \$2/u.test(sql)) {
-      return state.grant === undefined ? { rows: [], rowCount: 0 } : { rows: [{ ...state.grant }], rowCount: 1 };
+      return state.grant === undefined
+        ? { rows: [], rowCount: 0 }
+        : { rows: [{ status: "linked", ...state.grant }], rowCount: 1 };
     }
     // BehaviorStore.listForSpec join.
     if (/FROM behaviors b/u.test(sql) || /INNER JOIN spec_behaviors/u.test(sql)) {

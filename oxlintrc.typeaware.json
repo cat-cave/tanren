@@ -30,9 +30,19 @@
   // and the value-returning org-scoped callbacks made their early `return;` an
   // explicit `return undefined;`. Two suspicious rules are deferred with rationale
   // (NOT to dodge work):
-  //   • `no-unsafe-type-assertion` (378) — the pg-row trust-at-boundary effort;
-  //     fix is a typed-row helper / zod decode at the read seam, sequenced as a
-  //     follow-up wave (see the WS-H1b PR body for the per-module count split).
+  //   • `no-unsafe-type-assertion` (378) — the pg-row trust-at-boundary effort.
+  //     IN PROGRESS (WS-H1c): the typed pg-row READ SEAM landed — the `pgRows.ts`
+  //     helper (`queryRawRows`/`requireRow`/`oneOf`) + the `client.query<RawRow>()`
+  //     generic retype + zod-enum column decodes cleaned the ENTIRE Repositories /
+  //     store seam (repositories/*, notifications/store, forge/{threads,proposals},
+  //     dag/integrationNodesPg, auth/identityStore — ~71 casts), so a pg row is now
+  //     VALIDATED at the seam (fail-loud) instead of `as`-asserted past it. The rule
+  //     stays OFF until the remaining NON-pg-row classes are cleaned the same way —
+  //     remaining by area: orchestrator ~238 (HTTP `response.json()` decodes, the
+  //     `as never` Hono event writes, jsonb-walk `value as Record<…>` provider
+  //     guards, the `orgScopingPool` variadic proxy cast), dashboard ~57 (DOM/React
+  //     + client serializers), allocator ~7, cli ~8 (JSON.parse / external input).
+  //     Sequenced as follow-up waves (one per non-pg-row class).
   //   • `no-unnecessary-type-parameters` (4) — all 4 are single-use RETURN-position
   //     generics on typed JSON-parse / typed-`query` helpers (`sendJson<T>`,
   //     `safeJson<T>`, `query<R>`, `HonoJson<T>`). The rule's "fix" (drop the

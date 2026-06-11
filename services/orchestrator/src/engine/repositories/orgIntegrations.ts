@@ -11,6 +11,8 @@
 
 import type pg from "pg";
 import { randomUUID } from "node:crypto";
+import { z } from "zod";
+import { oneOf } from "../data/pgRows.js";
 import type { ActorRef } from "../state/actor.js";
 import type { OrgGrant } from "../contracts/integrationProvisioner.js";
 
@@ -27,7 +29,8 @@ export interface OrgIntegration {
   status: OrgIntegrationStatus;
 }
 
-export type OrgIntegrationStatus = "linked" | "provisioning" | "error";
+export const ORG_INTEGRATION_STATUSES = ["linked", "provisioning", "error"] as const;
+export type OrgIntegrationStatus = (typeof ORG_INTEGRATION_STATUSES)[number];
 
 /** The fields an upsert supplies; `id`/timestamps are managed by the store/DB. */
 export interface UpsertOrgIntegrationInput {
@@ -50,7 +53,9 @@ interface OrgIntegrationRow {
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+  // jsonb metadata blob: a real object decodes verbatim, anything else (null/array/
+  // scalar) defaults to `{}` — VALIDATED via zod, no unsafe narrow off `unknown`.
+  return z.record(z.string(), z.unknown()).catch({}).parse(value);
 }
 
 function asStringArray(value: unknown): string[] {
@@ -65,7 +70,7 @@ function mapRow(row: OrgIntegrationRow): OrgIntegration {
     credentialRef: row.credential_ref,
     metadata: asRecord(row.metadata),
     capabilities: asStringArray(row.capabilities),
-    status: row.status as OrgIntegrationStatus,
+    status: oneOf(row.status, ORG_INTEGRATION_STATUSES, "org_integrations.status"),
   };
 }
 

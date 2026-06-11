@@ -1,5 +1,6 @@
 import type pg from "pg";
 import { z } from "zod";
+import { nullableText } from "../data/scalarText.js";
 import type { ActorRef } from "../state/actor.js";
 
 type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
@@ -59,21 +60,21 @@ function decodeProjectRow(raw: RawProjectRow): ProjectRow {
     config: raw.config,
     // Absent on a fake/legacy row ⇒ the schema default ("active") applies.
     lifecycle: raw.lifecycle ?? undefined,
-    orgId: raw.org_id === undefined ? undefined : ((raw.org_id ?? null) as string | null),
+    orgId: raw.org_id === undefined ? undefined : nullableText(raw.org_id),
   });
 }
 
 export const ProjectStore = {
   /** All projects for an org, ordered by name (the project-list route). */
   async listForOrg(client: QueryClient, orgId: string, _actor: ActorRef): Promise<ProjectRow[]> {
-    const result = await client.query(
+    const result = await client.query<RawProjectRow>(
       `SELECT ${SELECT_PROJECT_COLUMNS}, lifecycle
          FROM projects
         WHERE org_id = $1
         ORDER BY name`,
       [orgId],
     );
-    return result.rows.map((row) => decodeProjectRow(row as RawProjectRow));
+    return result.rows.map((row) => decodeProjectRow(row));
   },
 
   /**
@@ -90,7 +91,7 @@ export const ProjectStore = {
     // clone remote (`githubHttpsRemote`) does. A retry must re-attach regardless of
     // which form the caller passes — so both stored and queried URLs are `.git`-trimmed.
     const canonical = repoUrl.replace(/\.git$/u, "");
-    const result = await client.query(
+    const result = await client.query<RawProjectRow>(
       `SELECT ${SELECT_PROJECT_COLUMNS}, org_id, lifecycle
          FROM projects
         WHERE regexp_replace(repo_url, '\\.git$', '') = $1
@@ -99,7 +100,7 @@ export const ProjectStore = {
     );
     const row = result.rows[0];
     if (row === undefined) return undefined;
-    return decodeProjectRow(row as RawProjectRow);
+    return decodeProjectRow(row);
   },
 
   /**
@@ -108,7 +109,7 @@ export const ProjectStore = {
    * caller decides access. `undefined` when no row exists.
    */
   async get(client: QueryClient, projectId: string, _actor: ActorRef): Promise<ProjectRow | undefined> {
-    const result = await client.query(
+    const result = await client.query<RawProjectRow>(
       `SELECT ${SELECT_PROJECT_COLUMNS}, org_id, lifecycle
          FROM projects
         WHERE project_id = $1`,
@@ -118,7 +119,7 @@ export const ProjectStore = {
     if (row === undefined) {
       return undefined;
     }
-    return decodeProjectRow(row as RawProjectRow);
+    return decodeProjectRow(row);
   },
 
   /**
@@ -127,12 +128,14 @@ export const ProjectStore = {
    * FROM projects WHERE project_id = $1`.
    */
   async getOrgId(client: QueryClient, projectId: string, _actor: ActorRef): Promise<string | null | undefined> {
-    const result = await client.query("SELECT org_id FROM projects WHERE project_id = $1", [projectId]);
-    const row = result.rows[0] as { org_id?: unknown } | undefined;
+    const result = await client.query<{ org_id?: unknown }>("SELECT org_id FROM projects WHERE project_id = $1", [
+      projectId,
+    ]);
+    const row = result.rows[0];
     if (row === undefined) {
       return undefined;
     }
-    return (row.org_id ?? null) as string | null;
+    return nullableText(row.org_id);
   },
 
   /**
@@ -145,22 +148,26 @@ export const ProjectStore = {
     projectId: string,
     _actor: ActorRef,
   ): Promise<{ orgId: string | null; defaultBranch: string | null } | undefined> {
-    const result = await client.query("SELECT org_id, default_branch FROM projects WHERE project_id = $1", [projectId]);
-    const row = result.rows[0] as { org_id?: unknown; default_branch?: unknown } | undefined;
+    const result = await client.query<{ org_id?: unknown; default_branch?: unknown }>(
+      "SELECT org_id, default_branch FROM projects WHERE project_id = $1",
+      [projectId],
+    );
+    const row = result.rows[0];
     if (row === undefined) {
       return undefined;
     }
     return {
-      orgId: (row.org_id ?? null) as string | null,
-      defaultBranch: (row.default_branch ?? null) as string | null,
+      orgId: nullableText(row.org_id),
+      defaultBranch: nullableText(row.default_branch),
     };
   },
 
   /** The raw stored `config` blob for a project (the posture writer read-modify-writes it). */
   async getConfig(client: QueryClient, projectId: string, _actor: ActorRef): Promise<unknown> {
-    const result = await client.query("SELECT config FROM projects WHERE project_id = $1", [projectId]);
-    const row = result.rows[0] as { config?: unknown } | undefined;
-    return row?.config;
+    const result = await client.query<{ config?: unknown }>("SELECT config FROM projects WHERE project_id = $1", [
+      projectId,
+    ]);
+    return result.rows[0]?.config;
   },
 
   /** Overwrite a project's `config` blob (the project PATCH + brownfield posture write). */

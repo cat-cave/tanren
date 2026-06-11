@@ -62,23 +62,26 @@ function decodeSpecRow(raw: RawSpecRow): SpecRow {
 
 export const SpecStore = {
   async get(client: QueryClient, specId: string, _actor: ActorRef): Promise<SpecRow | undefined> {
-    const result = await client.query(`SELECT ${SELECT_SPEC_COLUMNS} FROM specs WHERE spec_id = $1`, [specId]);
+    const result = await client.query<RawSpecRow>(`SELECT ${SELECT_SPEC_COLUMNS} FROM specs WHERE spec_id = $1`, [
+      specId,
+    ]);
     const row = result.rows[0];
     if (row === undefined) {
       return undefined;
     }
-    return decodeSpecRow(row as RawSpecRow);
+    return decodeSpecRow(row);
   },
 
   async list(client: QueryClient, filter: { projectId?: string } | undefined, _actor: ActorRef): Promise<SpecRow[]> {
     const projectId = filter?.projectId;
     const result =
       projectId === undefined
-        ? await client.query(`SELECT ${SELECT_SPEC_COLUMNS} FROM specs ORDER BY spec_id`)
-        : await client.query(`SELECT ${SELECT_SPEC_COLUMNS} FROM specs WHERE project_id = $1 ORDER BY spec_id`, [
-            projectId,
-          ]);
-    return result.rows.map((row) => decodeSpecRow(row as RawSpecRow));
+        ? await client.query<RawSpecRow>(`SELECT ${SELECT_SPEC_COLUMNS} FROM specs ORDER BY spec_id`)
+        : await client.query<RawSpecRow>(
+            `SELECT ${SELECT_SPEC_COLUMNS} FROM specs WHERE project_id = $1 ORDER BY spec_id`,
+            [projectId],
+          );
+    return result.rows.map((row) => decodeSpecRow(row));
   },
 
   /**
@@ -126,13 +129,14 @@ export const SpecStore = {
     _actor: ActorRef,
   ): Promise<SpecRow> {
     transitionSpec(next.from, next.to);
-    const result = await client.query(
+    const result = await client.query<RawSpecRow>(
       `UPDATE specs SET status = $2 WHERE spec_id = $1 RETURNING ${SELECT_SPEC_COLUMNS}`,
       [specId, next.to],
     );
-    if (result.rows.length === 0) {
+    const row = result.rows[0];
+    if (row === undefined) {
       throw new Error(`spec not found: ${specId}`);
     }
-    return decodeSpecRow(result.rows[0] as RawSpecRow);
+    return decodeSpecRow(row);
   },
 } as const;

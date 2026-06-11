@@ -26,3 +26,13 @@ export function scalarText(value: unknown): string {
 export function scalarTextOr(value: unknown, fallback: string): string {
   return value === null || value === undefined ? fallback : scalarText(value);
 }
+
+/**
+ * A NULLABLE text column: `string` for a real value, `null` for a NULL/absent
+ * column — the `(row.col ?? null) as string | null` shape at the read seam, without
+ * the unsafe `as`. A non-scalar value THROWS (no silent laundering of a jsonb/buffer
+ * past the seam), same fail-loud contract as `scalarText`.
+ */
+export function nullableText(value: unknown): string | null {
+  return value === null || value === undefined ? null : scalarText(value);
+}

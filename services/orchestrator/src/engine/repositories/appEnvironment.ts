@@ -11,15 +11,19 @@
 
 import type pg from "pg";
 import { randomUUID } from "node:crypto";
+import { z } from "zod";
+import { oneOf } from "../data/pgRows.js";
 import type { ActorRef } from "../state/actor.js";
 
 type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
 /** The phases an entry can reach (subset stored per entry on `scopes`). */
-export type AppEnvScope = "build" | "test" | "runtime" | "dev";
+export const APP_ENV_SCOPES = ["build", "test", "runtime", "dev"] as const;
+export type AppEnvScope = (typeof APP_ENV_SCOPES)[number];
 
 /** How the entry's value was supplied. */
-export type AppEnvSource = "byo" | "provisioned";
+export const APP_ENV_SOURCES = ["byo", "provisioned"] as const;
+export type AppEnvSource = (typeof APP_ENV_SOURCES)[number];
 
 /** A `project_app_env` row, in domain shape. Exactly one of valueRef/plainValue set. */
 export interface AppEnvEntry {
@@ -62,8 +66,8 @@ function mapRow(row: AppEnvRow): AppEnvEntry {
     key: row.key,
     valueRef: row.value_ref,
     plainValue: row.plain_value,
-    scopes: (row.scopes ?? []) as AppEnvScope[],
-    source: row.source as AppEnvSource,
+    scopes: z.array(z.enum(APP_ENV_SCOPES)).parse(row.scopes ?? []),
+    source: oneOf(row.source, APP_ENV_SOURCES, "project_app_env.source"),
     description: row.description,
   };
 }

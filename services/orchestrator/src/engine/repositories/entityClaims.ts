@@ -16,13 +16,16 @@
 
 import type pg from "pg";
 import { randomUUID } from "node:crypto";
+import { z } from "zod";
+import { oneOf } from "../data/pgRows.js";
 import type { ActorRef } from "../state/actor.js";
-import type { ClaimDecidability } from "../oracle/claimSelfValidation.js";
+import { CLAIM_DECIDABILITIES, type ClaimDecidability } from "../oracle/claimSelfValidation.js";
 
 type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
 /** The Claim lifecycle (entity_claims_status_check). */
-export type EntityClaimStatus = "open" | "self_resolved" | "agent_resolved" | "dismissed";
+export const ENTITY_CLAIM_STATUSES = ["open", "self_resolved", "agent_resolved", "dismissed"] as const;
+export type EntityClaimStatus = (typeof ENTITY_CLAIM_STATUSES)[number];
 
 /** An `entity_claims` row in domain shape. */
 export interface EntityClaim {
@@ -68,10 +71,7 @@ interface ClaimRow {
 }
 
 function mapRow(row: ClaimRow): EntityClaim {
-  const lastValidation =
-    row.last_validation !== null && typeof row.last_validation === "object"
-      ? (row.last_validation as Record<string, unknown>)
-      : {};
+  const lastValidation = z.record(z.string(), z.unknown()).catch({}).parse(row.last_validation);
   return {
     id: row.id,
     orgId: row.org_id,
@@ -81,8 +81,8 @@ function mapRow(row: ClaimRow): EntityClaim {
     entityKind: row.entity_kind,
     entityName: row.entity_name,
     entityPath: row.entity_path,
-    status: row.status as EntityClaimStatus,
-    decidability: row.decidability as ClaimDecidability,
+    status: oneOf(row.status, ENTITY_CLAIM_STATUSES, "entity_claims.status"),
+    decidability: oneOf(row.decidability, CLAIM_DECIDABILITIES, "entity_claims.decidability"),
     lastValidation,
   };
 }

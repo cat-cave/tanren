@@ -130,7 +130,9 @@ export function hasOrgScope(): boolean {
  * already owns that transaction, e.g. `createQueuedRunFromSpec`).
  */
 export function isPool(client: QueryClient): client is pg.Pool {
-  return typeof (client as { connect?: unknown }).connect === "function";
+  // A `pg.Pool` exposes `connect`; a checked-out `PoolClient` does not. Probe via
+  // `in` + a Reflect read (both narrow without an unsafe assertion off the union).
+  return "connect" in client && typeof Reflect.get(client, "connect") === "function";
 }
 
 /**

@@ -29,10 +29,13 @@ import {
   type IntegrationNodeMember,
   type IntegrationNodePurpose,
   type IntegrationNodeStatus,
+  INTEGRATION_NODE_PURPOSES,
+  INTEGRATION_NODE_STATUSES,
   memberKey,
   type ProofReuseKeyInput,
   proofReuseKey,
 } from "../contracts/integrationNodes.js";
+import { oneOf } from "../data/pgRows.js";
 import { type AncestorStack, resolveAncestorStack } from "./ancestorStack.js";
 import { createLogger } from "../observability/logger.js";
 
@@ -82,14 +85,20 @@ function decodeMembers(value: unknown): IntegrationNodeMember[] {
   const out: IntegrationNodeMember[] = [];
   for (const m of value) {
     if (m === null || typeof m !== "object") continue;
-    const r = m as Record<string, unknown>;
+    // Read each jsonb field through a Reflect probe (narrows off `object` without an
+    // unsafe `as Record<…>` assertion); a non-string drops the member, fail-quiet on
+    // a shape mismatch as before — this decode tolerates a partial/legacy member.
+    const specId = Reflect.get(m, "specId");
+    const runId = Reflect.get(m, "runId");
+    const branch = Reflect.get(m, "branch");
+    const headSha = Reflect.get(m, "headSha");
     if (
-      typeof r["specId"] === "string" &&
-      typeof r["runId"] === "string" &&
-      typeof r["branch"] === "string" &&
-      typeof r["headSha"] === "string"
+      typeof specId === "string" &&
+      typeof runId === "string" &&
+      typeof branch === "string" &&
+      typeof headSha === "string"
     ) {
-      out.push({ specId: r["specId"], runId: r["runId"], branch: r["branch"], headSha: r["headSha"] });
+      out.push({ specId, runId, branch, headSha });
     }
   }
   return out;
@@ -102,7 +111,7 @@ function rowToNode(row: IntegrationNodeRow): IntegrationNode {
     baseBranch: row.base_branch,
     baseSha: row.base_sha,
     ref: row.ref,
-    purpose: row.purpose as IntegrationNodePurpose,
+    purpose: oneOf(row.purpose, INTEGRATION_NODE_PURPOSES, "integration_nodes.purpose"),
     members: decodeMembers(row.members),
     memberKey: row.member_key,
     gateConfigHash: row.gate_config_hash,
@@ -110,7 +119,7 @@ function rowToNode(row: IntegrationNodeRow): IntegrationNode {
     affectedFingerprint: row.affected_fingerprint,
     ...(row.head_sha !== null && { headSha: row.head_sha }),
     ...(row.tree_hash !== null && { treeHash: row.tree_hash }),
-    status: row.status as IntegrationNodeStatus,
+    status: oneOf(row.status, INTEGRATION_NODE_STATUSES, "integration_nodes.status"),
   };
 }
 

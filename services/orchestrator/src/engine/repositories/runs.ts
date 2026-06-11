@@ -114,23 +114,24 @@ export interface RunListProjectionFilter {
 
 export const RunStore = {
   async get(client: QueryClient, runId: string, _actor: ActorRef): Promise<RunRow | undefined> {
-    const result = await client.query(`SELECT ${SELECT_RUN_COLUMNS} FROM runs WHERE run_id = $1`, [runId]);
+    const result = await client.query<RawRunRow>(`SELECT ${SELECT_RUN_COLUMNS} FROM runs WHERE run_id = $1`, [runId]);
     const row = result.rows[0];
     if (row === undefined) {
       return undefined;
     }
-    return decodeRunRow(row as RawRunRow);
+    return decodeRunRow(row);
   },
 
   async list(client: QueryClient, filter: { projectId?: string } | undefined, _actor: ActorRef): Promise<RunRow[]> {
     const projectId = filter?.projectId;
     const result =
       projectId === undefined
-        ? await client.query(`SELECT ${SELECT_RUN_COLUMNS} FROM runs ORDER BY started_at DESC`)
-        : await client.query(`SELECT ${SELECT_RUN_COLUMNS} FROM runs WHERE project_id = $1 ORDER BY started_at DESC`, [
-            projectId,
-          ]);
-    return result.rows.map((row) => decodeRunRow(row as RawRunRow));
+        ? await client.query<RawRunRow>(`SELECT ${SELECT_RUN_COLUMNS} FROM runs ORDER BY started_at DESC`)
+        : await client.query<RawRunRow>(
+            `SELECT ${SELECT_RUN_COLUMNS} FROM runs WHERE project_id = $1 ORDER BY started_at DESC`,
+            [projectId],
+          );
+    return result.rows.map((row) => decodeRunRow(row));
   },
 
   /**
@@ -143,11 +144,11 @@ export const RunStore = {
     orgId: string,
     _actor: ActorRef,
   ): Promise<RawRunSummaryRow | undefined> {
-    const result = await client.query(
+    const result = await client.query<RawRunSummaryRow>(
       `SELECT ${SELECT_RUN_SUMMARY_COLUMNS} FROM runs WHERE run_id = $1 AND org_id = $2`,
       [runId, orgId],
     );
-    return result.rows[0] === undefined ? undefined : (result.rows[0] as RawRunSummaryRow);
+    return result.rows[0];
   },
 
   /**
@@ -172,7 +173,7 @@ export const RunStore = {
       clauses.push(`r.spec_id = $${params.length}`);
     }
     const where = clauses.join(" AND ");
-    const result = await client.query(
+    const result = await client.query<RawRunListRow>(
       `SELECT r.run_id, r.spec_id, r.project_id, r.trigger, r.branch, r.status, r.outcome,
               r.pr_url, r.started_at, r.ended_at,
               s.title AS spec_title,
@@ -185,7 +186,7 @@ export const RunStore = {
         ORDER BY r.started_at DESC, r.run_id ASC`,
       params,
     );
-    return result.rows as RawRunListRow[];
+    return result.rows;
   },
 
   async updateStatus(
@@ -207,13 +208,14 @@ export const RunStore = {
       setOutcome = `, outcome = $${params.length}`;
     }
     const setEnded = next.setEndedAt === true ? ", ended_at = now()" : "";
-    const result = await client.query(
+    const result = await client.query<RawRunRow>(
       `UPDATE runs SET status = $2${setOutcome}${setEnded} WHERE run_id = $1 RETURNING ${SELECT_RUN_COLUMNS}`,
       params,
     );
-    if (result.rows.length === 0) {
+    const row = result.rows[0];
+    if (row === undefined) {
       throw new Error(`run not found: ${runId}`);
     }
-    return decodeRunRow(result.rows[0] as RawRunRow);
+    return decodeRunRow(row);
   },
 } as const;

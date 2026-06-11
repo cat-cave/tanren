@@ -106,7 +106,7 @@ export const ForgeToolsStore = {
     params: unknown[],
     _actor: ActorRef,
   ): Promise<Array<Record<string, unknown>>> {
-    const result = await client.query(
+    const result = await client.query<Record<string, unknown>>(
       `SELECT id, ts, run_id, task_id, spec_id, project_id, event_type, payload
      FROM events
      ${where}
@@ -114,7 +114,7 @@ export const ForgeToolsStore = {
      LIMIT $${limitIndex}`,
       params,
     );
-    return result.rows as Array<Record<string, unknown>>;
+    return result.rows;
   },
 
   /**
@@ -127,7 +127,7 @@ export const ForgeToolsStore = {
     params: unknown[],
     _actor: ActorRef,
   ): Promise<Array<Record<string, unknown>>> {
-    const result = await client.query(
+    const result = await client.query<Record<string, unknown>>(
       `SELECT id, task_id, run_id, project_id, cli, provider, model,
             input_tokens, cached_input_tokens, cache_creation_tokens,
             output_tokens, reasoning_output_tokens, total_tokens, cost_usd,
@@ -137,7 +137,7 @@ export const ForgeToolsStore = {
      ORDER BY recorded_at ASC, id ASC`,
       params,
     );
-    return result.rows as Array<Record<string, unknown>>;
+    return result.rows;
   },
 
   /** The org/project-reachable persona ids for `tanren.read_behaviors`. */
@@ -157,14 +157,14 @@ export const ForgeToolsStore = {
     personaIds: string[],
     _actor: ActorRef,
   ): Promise<ReadonlyArray<Record<string, unknown>>> {
-    const result = await client.query(
+    const result = await client.query<Record<string, unknown>>(
       `SELECT id, persona_id, title, given, "when", "then", description, metadata, created_at, updated_at
      FROM behaviors
      WHERE persona_id = ANY($1::text[])
      ORDER BY title`,
       [personaIds],
     );
-    return result.rows as ReadonlyArray<Record<string, unknown>>;
+    return result.rows;
   },
 
   // --- write tool (write.ts) ---
