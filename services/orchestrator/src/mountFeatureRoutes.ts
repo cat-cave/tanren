@@ -130,7 +130,7 @@ export function mountFeatureRoutes(app: Hono<ActorContextEnv>, deps: FeatureRout
     allocator: deps.allocator,
     ssh: deps.ssh,
     identitySecretRef: deps.identitySecretRef,
-    vcsProvider: deps.vcsProvider,
+    githubHttp,
     githubAppMinter,
     forgeInfra,
     auditPassRunner: forgeAnswerers.auditPassRunnerFor({ githubHttp, githubAppMinter }),
@@ -163,10 +163,10 @@ export function mountFeatureRoutes(app: Hono<ActorContextEnv>, deps: FeatureRout
   app.route(
     "/orgs",
     // GREENFIELD: the `/projects/greenfield` create path mints the org's GitHub App
-    // token + creates a brand-new repo through the VcsProvider seam, so the project
-    // routes carry the secrets/provider/minter deps (the brownfield-link route uses
-    // the same App resolution).
-    createProjectRoutes({ pool: scopedPool, secrets, vcsProvider: deps.vcsProvider, githubAppMinter }),
+    // token + creates a brand-new repo through the `CodeHost.createRepo` seam
+    // (constructed from `githubHttp`), so the project routes carry the
+    // secrets/http/minter deps (the brownfield-link route uses the same App resolution).
+    createProjectRoutes({ pool: scopedPool, secrets, githubHttp, githubAppMinter }),
   );
   // The app-env-to-Actions-secrets + CI-ingest-secrets routes are GONE: the native gate
   // runs the project's tests over SSH with the app env materialized in-process, and the
@@ -229,7 +229,7 @@ export function mountFeatureRoutes(app: Hono<ActorContextEnv>, deps: FeatureRout
       pool: scopedPool,
       secrets,
       answererFactory: forgeAnswerers.interview,
-      vcsProvider: deps.vcsProvider,
+      githubHttp,
       githubAppMinter,
       // Wave 4: selection no-match → CREATION. Onboarding's template selection
       // creates + seeds a template when none matches (else from-scratch).

@@ -285,7 +285,7 @@ describe("createTemplateFlow assembly — the live, mountable capability", () =>
     allocator: fakeAllocator as never,
     ssh: new RecordingSsh() as never,
     identitySecretRef: "id/ref",
-    vcsProvider: {} as never,
+    githubHttp: {} as never,
     githubAppMinter: {} as never,
     forgeInfra: { pool: {}, secrets: {}, allocator: fakeAllocator, ssh: {}, identitySecretRef: "id/ref" } as never,
     auditPassRunner: {
@@ -338,7 +338,7 @@ describe("buildCreateForNoMatch — synchronous create-then-seed, owner-threaded
     allocator: fakeAllocator as never,
     ssh: new RecordingSsh() as never,
     identitySecretRef: "id/ref",
-    vcsProvider: {} as never,
+    githubHttp: {} as never,
     githubAppMinter: {} as never,
     forgeInfra: { pool: {}, secrets: {}, allocator: fakeAllocator, ssh: {}, identitySecretRef: "id/ref" } as never,
     auditPassRunner: {

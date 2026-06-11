@@ -12,11 +12,28 @@ import {
   type PreparedGreenfieldDeploy,
   type SelectedTemplate,
 } from "../../src/engine/forge/interview/index.js";
+import { GithubAppTokenMinter } from "../../src/engine/providers/githubAppTokenMinter.js";
 import { createAuthMiddleware, type ActorContextEnv } from "../../src/middleware/auth.js";
 import { createOnboardingRoutes, type OnboardingRoutesOptions } from "../../src/routes/onboarding/index.js";
 import { createProjectRoutes } from "../../src/routes/projects/index.js";
-import { InMemoryVcsProvider } from "../conformance/fakes/inMemoryVcsProvider.js";
+import { FakeRepoCreateHttp } from "../conformance/fakes/fakeRepoCreateHttp.js";
 import type { RoutesPool } from "./routesPool.js";
+
+// The org-default static `github_token` ref `seedStaticTokenOrg` configures — the
+// repo-create static-credential fallback path. Seeded into the secret store so the
+// real `resolveVcsToken` static read resolves (decomposition PR-3: the route builds a
+// real `GitHubCodeHost`, so the token resolution actually runs in tests now).
+const STATIC_GITHUB_TOKEN_REF = "credential/github/org/org_acme/default";
+
+// A fake App-installation minter: return a canned installation token so the App-org
+// repo-create path resolves WITHOUT signing a JWT / hitting the network (mirrors the
+// established test pattern). The static-org path reads the seeded secret instead.
+function fakeGithubAppMinter(): GithubAppTokenMinter {
+  const minter = new GithubAppTokenMinter({ secrets: new InMemorySecretStore() });
+  minter.getInstallationToken = async () => "app-installation-token";
+  minter.refreshInstallationToken = async () => "app-installation-token";
+  return minter;
+}
 
 export const greenfieldActor: ActorContext = {
   userId: "user_alice",
@@ -52,13 +69,29 @@ const seededTemplate: SelectedTemplate = {
 
 export function appWithGreenfieldRoutes(
   pool: RoutesPool,
-  vcsProvider = new InMemoryVcsProvider(),
+  githubHttp: FakeRepoCreateHttp = new FakeRepoCreateHttp(),
   onboardingOverrides: Partial<
     Pick<OnboardingRoutesOptions, "preflightDeploy" | "prepareDeploy" | "createTemplateForNoMatch">
   > = {},
+  // INFRA-FAILURE injection (decomposition PR-3): when set, the static-credential
+  // secret read THROWS — exercising the no_silent_fallbacks fix that a token-resolution
+  // INFRA failure (Vault outage / corrupt config) PROPAGATES as a 500, never mislabeled
+  // `github_credential_missing` (a 400). The org still HAS a credential ref bound (the
+  // precheck passes), so the throw is genuine infra, not a missing-credential gap.
+  tokenResolutionInfraFailure = false,
 ) {
   const app = new Hono<ActorContextEnv>();
   const secrets = new InMemorySecretStore();
+  if (tokenResolutionInfraFailure) {
+    secrets.get = async () => {
+      throw new Error("vault unreachable: dial tcp 127.0.0.1:8200: connection refused");
+    };
+  } else {
+    // Seed the org-default static `github_token` secret so the static-credential
+    // repo-create path resolves a real token (the App-org path uses the fake minter).
+    void secrets.put({ ref: STATIC_GITHUB_TOKEN_REF, value: "ghp_static_repo_create_token" });
+  }
+  const githubAppMinter = fakeGithubAppMinter();
   app.use(
     "*",
     createAuthMiddleware({
@@ -78,7 +111,8 @@ export function appWithGreenfieldRoutes(
       pool: pool.asPgPool(),
       secrets,
       answererFactory: () => completingAnswerer,
-      vcsProvider,
+      githubHttp,
+      githubAppMinter,
       // The empty fixture registry never matches, so the no-match → just-in-time
       // creation seam seeds from a fixture published template (the doctrine: never a
       // project-direct from-scratch scaffold). Overridable per test.
@@ -86,8 +120,11 @@ export function appWithGreenfieldRoutes(
       ...onboardingOverrides,
     }),
   );
-  app.route("/orgs", createProjectRoutes({ pool: pool.asPgPool(), secrets, vcsProvider }));
-  return { app, vcsProvider };
+  app.route("/orgs", createProjectRoutes({ pool: pool.asPgPool(), secrets, githubHttp, githubAppMinter }));
+  // `githubHttp` is the repo-create transport fake; its `createdRepositories` is the
+  // assertable record of what the route created (the pre-decomposition tests asserted
+  // on `vcsProvider.createdRepositories`).
+  return { app, githubHttp };
 }
 
 export function preparedDeploy(

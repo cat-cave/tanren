@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { RepositoryCreationForbiddenError } from "../src/engine/contracts/vcsProvider.js";
 import { emptyCapture } from "../src/engine/forge/interview/index.js";
-import { InMemoryVcsProvider } from "./conformance/fakes/inMemoryVcsProvider.js";
+import { FakeRepoCreateHttp } from "./conformance/fakes/fakeRepoCreateHttp.js";
 import { RoutesPool } from "./helpers/routesPool.js";
 import {
   apexCapture,
@@ -11,23 +10,6 @@ import {
   seedGithubAppOrg,
   seedStaticTokenOrg,
 } from "./helpers/greenfieldRoutes.js";
-
-class ForbiddenCreateVcsProvider extends InMemoryVcsProvider {
-  override async createRepository(input: Parameters<InMemoryVcsProvider["createRepository"]>[0]) {
-    throw new RepositoryCreationForbiddenError(input.owner);
-  }
-}
-
-// A provider whose token resolution FAILS for an infra reason (Vault outage / App
-// mint failure / corrupt stored config) — NOT a missing credential. The org HAS a
-// static token bound, so the genuine missing-credential gap is already cleared;
-// this exercises the no_silent_fallbacks fix that a resolveToken failure must NOT
-// be mislabeled `github_credential_missing` (400) but PROPAGATE as a 500.
-class ResolveTokenInfraFailureVcsProvider extends InMemoryVcsProvider {
-  override async resolveToken(): Promise<never> {
-    throw new Error("vault unreachable: dial tcp 127.0.0.1:8200: connection refused");
-  }
-}
 
 class LinkedDeployRoutesPool extends RoutesPool {
   override async query(sql: string, params: unknown[] = []) {
@@ -153,8 +135,8 @@ describe("greenfield/apex deploy dependency routes", () => {
     const pool = new RoutesPool();
     seedGithubAppOrg(pool);
     pool.seedMembership("org_acme", "user_alice", "admin");
-    const vcs = new InMemoryVcsProvider();
-    const { app } = appWithRoutes(pool, vcs, {
+    const githubHttp = new FakeRepoCreateHttp();
+    const { app } = appWithRoutes(pool, githubHttp, {
       async preflightDeploy() {},
       async prepareDeploy() {
         throw new Error("deploy provision failed: provider token expired");
@@ -180,14 +162,14 @@ describe("greenfield/apex deploy dependency routes", () => {
     expect(pool.specs.size).toBe(0);
     expect(pool.inboxSources).toEqual([]);
     // The repo WAS created (repo-first) — a retry re-attaches to it instead of 409-ing.
-    expect(vcs.createdRepositories.length).toBe(1);
+    expect(githubHttp.createdRepositories.length).toBe(1);
   });
 
   it("creates a real repo and issues inbox source when onboarding derive succeeds", async () => {
     const pool = new RoutesPool();
     seedGithubAppOrg(pool);
     pool.seedMembership("org_acme", "user_alice", "admin");
-    const { app, vcsProvider } = appWithRoutes(pool, new InMemoryVcsProvider(), {
+    const { app, githubHttp } = appWithRoutes(pool, new FakeRepoCreateHttp(), {
       async preflightDeploy() {},
       async prepareDeploy() {
         return preparedDeploy();
@@ -212,7 +194,7 @@ describe("greenfield/apex deploy dependency routes", () => {
       repository: { fullName: string; repoUrl: string; defaultBranch: string };
       inboxSource: { created: boolean };
     };
-    expect(vcsProvider.createdRepositories).toEqual([
+    expect(githubHttp.createdRepositories).toEqual([
       { owner: "cat-cave", name: "apex-url-shortener-v22", private: true },
     ]);
     expect(body.repository).toEqual({
@@ -230,7 +212,7 @@ describe("greenfield/apex deploy dependency routes", () => {
     const pool = new RoutesPool();
     seedGithubAppOrg(pool);
     pool.seedMembership("org_acme", "user_alice", "admin");
-    const { app } = appWithRoutes(pool, new ForbiddenCreateVcsProvider(), {
+    const { app } = appWithRoutes(pool, new FakeRepoCreateHttp("forbidden"), {
       async preflightDeploy() {},
       async prepareDeploy() {
         return preparedDeploy();
@@ -260,7 +242,7 @@ describe("greenfield/apex deploy dependency routes", () => {
     const pool = new RoutesPool();
     seedStaticTokenOrg(pool);
     pool.seedMembership("org_acme", "user_alice", "admin");
-    const { app, vcsProvider } = appWithRoutes(pool, new InMemoryVcsProvider(), {
+    const { app, githubHttp } = appWithRoutes(pool, new FakeRepoCreateHttp(), {
       async preflightDeploy() {},
       async prepareDeploy() {
         return preparedDeploy();
@@ -281,7 +263,7 @@ describe("greenfield/apex deploy dependency routes", () => {
 
     // No App, but a static github_token org default IS configured → repo created.
     expect(res.status).toBe(201);
-    expect(vcsProvider.createdRepositories).toEqual([
+    expect(githubHttp.createdRepositories).toEqual([
       { owner: "cat-cave", name: "apex-url-shortener-v22", private: true },
     ]);
     expect(pool.specs.size).toBeGreaterThan(0);
@@ -291,7 +273,7 @@ describe("greenfield/apex deploy dependency routes", () => {
     const pool = new RoutesPool();
     pool.seedOrg({ id: "org_acme" });
     pool.seedMembership("org_acme", "user_alice", "admin");
-    const { app, vcsProvider } = appWithRoutes(pool, new InMemoryVcsProvider(), {
+    const { app, githubHttp } = appWithRoutes(pool, new FakeRepoCreateHttp(), {
       async preflightDeploy() {},
       async prepareDeploy() {
         return preparedDeploy();
@@ -311,7 +293,7 @@ describe("greenfield/apex deploy dependency routes", () => {
     expect(res.status).toBe(400);
     const body = (await res.json()) as { error: string };
     expect(body.error).toBe("github_credential_missing");
-    expect(vcsProvider.createdRepositories).toEqual([]);
+    expect(githubHttp.createdRepositories).toEqual([]);
     expect(pool.projects.size).toBe(0);
     expect(pool.specs.size).toBe(0);
     expect(pool.inboxSources).toEqual([]);
@@ -321,12 +303,19 @@ describe("greenfield/apex deploy dependency routes", () => {
     const pool = new RoutesPool();
     seedStaticTokenOrg(pool);
     pool.seedMembership("org_acme", "user_alice", "admin");
-    const { app, vcsProvider } = appWithRoutes(pool, new ResolveTokenInfraFailureVcsProvider(), {
-      async preflightDeploy() {},
-      async prepareDeploy() {
-        return preparedDeploy();
+    const githubHttp = new FakeRepoCreateHttp();
+    const { app } = appWithRoutes(
+      pool,
+      githubHttp,
+      {
+        async preflightDeploy() {},
+        async prepareDeploy() {
+          return preparedDeploy();
+        },
       },
-    });
+      // Force a token-resolution INFRA failure (the static secret read throws).
+      true,
+    );
 
     const res = await app.request("/orgs/org_acme/onboarding/interview/derive", {
       method: "POST",
@@ -346,7 +335,7 @@ describe("greenfield/apex deploy dependency routes", () => {
     const body = (await res.json()) as { error: string };
     expect(body.error).not.toBe("github_credential_missing");
     expect(body.error).toBe("interview_derive_failed");
-    expect(vcsProvider.createdRepositories).toEqual([]);
+    expect(githubHttp.createdRepositories).toEqual([]);
   });
 
   it("HALTS LOUD (template_required 409) on a no-match when no just-in-time creation is possible — never a from-scratch project scaffold", async () => {
@@ -356,7 +345,7 @@ describe("greenfield/apex deploy dependency routes", () => {
     const pool = new RoutesPool();
     seedGithubAppOrg(pool);
     pool.seedMembership("org_acme", "user_alice", "admin");
-    const { app, vcsProvider } = appWithRoutes(pool, new InMemoryVcsProvider(), {
+    const { app, githubHttp } = appWithRoutes(pool, new FakeRepoCreateHttp(), {
       async preflightDeploy() {},
       async prepareDeploy() {
         return preparedDeploy();
@@ -382,14 +371,14 @@ describe("greenfield/apex deploy dependency routes", () => {
     // No project / repo leaked through the fail-closed halt (it preceded creation).
     expect(pool.projects.size).toBe(0);
     expect(pool.specs.size).toBe(0);
-    expect(vcsProvider.createdRepositories).toEqual([]);
+    expect(githubHttp.createdRepositories).toEqual([]);
   });
 
   it("rejects direct greenfield project creation without deploy config before creating a repo", async () => {
     const pool = new RoutesPool();
     pool.seedOrg({ id: "org_acme" });
     pool.seedMembership("org_acme", "user_alice", "admin");
-    const { app, vcsProvider } = appWithRoutes(pool);
+    const { app, githubHttp } = appWithRoutes(pool);
 
     const res = await app.request("/orgs/org_acme/projects/greenfield", {
       method: "POST",
@@ -401,14 +390,14 @@ describe("greenfield/apex deploy dependency routes", () => {
     const body = (await res.json()) as { error: string };
     expect(body.error).toBe("deploy_provider_missing");
     expect(pool.projects.size).toBe(0);
-    expect(vcsProvider.createdRepositories).toEqual([]);
+    expect(githubHttp.createdRepositories).toEqual([]);
   });
 
   it("rejects direct greenfield project creation when deploy provider is not linked before creating a repo", async () => {
     const pool = new RoutesPool();
     pool.seedOrg({ id: "org_acme" });
     pool.seedMembership("org_acme", "user_alice", "admin");
-    const { app, vcsProvider } = appWithRoutes(pool);
+    const { app, githubHttp } = appWithRoutes(pool);
 
     const res = await app.request("/orgs/org_acme/projects/greenfield", {
       method: "POST",
@@ -427,7 +416,7 @@ describe("greenfield/apex deploy dependency routes", () => {
     expect(body.status).toBe("not_linked");
     expect(body.providerKind).toBe("deploy.vercel");
     expect(pool.projects.size).toBe(0);
-    expect(vcsProvider.createdRepositories).toEqual([]);
+    expect(githubHttp.createdRepositories).toEqual([]);
   });
 
   it("rejects direct greenfield project creation when linked deploy provider fails after repo-create", async () => {
@@ -437,7 +426,7 @@ describe("greenfield/apex deploy dependency routes", () => {
     const pool = new LinkedDeployRoutesPool();
     seedGithubAppOrg(pool);
     pool.seedMembership("org_acme", "user_alice", "admin");
-    const { app, vcsProvider } = appWithRoutes(pool);
+    const { app, githubHttp } = appWithRoutes(pool);
 
     const res = await app.request("/orgs/org_acme/projects/greenfield", {
       method: "POST",
@@ -456,6 +445,6 @@ describe("greenfield/apex deploy dependency routes", () => {
     // No project committed (deploy failed before the project row)…
     expect(pool.projects.size).toBe(0);
     // …but the repo WAS created (repo-first) — a retry re-attaches to it, no 409.
-    expect(vcsProvider.createdRepositories.length).toBe(1);
+    expect(githubHttp.createdRepositories.length).toBe(1);
   });
 });

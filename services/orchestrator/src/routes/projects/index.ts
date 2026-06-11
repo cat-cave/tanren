@@ -5,9 +5,10 @@
 //
 // GREENFIELD: the `/projects/greenfield` create path lets an end user start a
 // greenfield project WITHOUT bringing a repo — Tanren creates a brand-new repo
-// under the org's GitHub App grant (the `VcsProvider.createRepository` seam) and
-// binds the project to the real new repoUrl. The repo-create itself lives in
-// `greenfield.ts` so this file stays under the per-file line cap.
+// under the org's GitHub App grant (the minimal `CodeHost.createRepo` seam,
+// decomposition PR-3) and binds the project to the real new repoUrl. The
+// repo-create itself lives in `greenfield.ts` so this file stays under the per-file
+// line cap; it constructs the `CodeHost` from the shared GitHub HTTP client.
 
 import { Hono } from "hono";
 import type pg from "pg";
@@ -15,7 +16,7 @@ import { z } from "zod";
 import type { ActorContext } from "../../auth/schemas.js";
 import { migrateProjectConfig } from "../../engine/config/projectConfig.js";
 import type { SecretStore } from "../../engine/contracts/secretStore.js";
-import type { VcsProvider } from "../../engine/contracts/vcsProvider.js";
+import type { GitHubHttpClient } from "../../engine/providers/github.js";
 import type { GithubAppTokenMinter } from "../../engine/providers/githubAppTokenMinter.js";
 import { ProjectStore, type ProjectRow as RepoProjectRow } from "../../engine/repositories/index.js";
 import { systemActor } from "../../engine/state/actor.js";
@@ -31,9 +32,10 @@ import { handleProjectArchive, handleProjectUnarchive } from "./lifecycle.js";
 interface ProjectRoutesOptions {
   pool: pg.Pool;
   // GREENFIELD: the deps the `/projects/greenfield` create path needs to mint the
-  // org's GitHub App token + create the repo through the VcsProvider seam.
+  // org's GitHub App token + create the repo through the `CodeHost.createRepo` seam
+  // (constructed from the shared GitHub HTTP client).
   secrets: SecretStore;
-  vcsProvider: VcsProvider;
+  githubHttp: GitHubHttpClient;
   githubAppMinter?: GithubAppTokenMinter;
 }
 
@@ -102,7 +104,7 @@ export function createProjectRoutes(options: ProjectRoutesOptions) {
     return handleGreenfieldCreate(c, {
       pool: options.pool,
       secrets: options.secrets,
-      vcsProvider: options.vcsProvider,
+      githubHttp: options.githubHttp,
       githubAppMinter: options.githubAppMinter,
       orgId,
       actor,

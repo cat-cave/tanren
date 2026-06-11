@@ -21,7 +21,7 @@
 import type pg from "pg";
 import type { ActorContext } from "../../auth/schemas.js";
 import type { Allocator, CommandSubstrate, SecretStore } from "../../engine/contracts/index.js";
-import type { VcsProvider } from "../../engine/contracts/vcsProvider.js";
+import type { GitHubHttpClient } from "../../engine/providers/github.js";
 import { buildDagWalker, PgDagReadModel } from "../../engine/dag/walker.js";
 import { PgEventStore } from "../../engine/eventStore.js";
 import type { AuditPassRunner } from "../../engine/forge/audits/index.js";
@@ -71,8 +71,9 @@ export interface CreateTemplateFlowDeps {
   ssh: CommandSubstrate;
   identitySecretRef: string;
   // The greenfield repo-creation path (the template repo is authored off an empty
-  // repo, exactly like a greenfield product).
-  vcsProvider: VcsProvider;
+  // repo, exactly like a greenfield product) — the shared GitHub HTTP client the
+  // repo-create `CodeHost` is constructed from (decomposition PR-3).
+  githubHttp: GitHubHttpClient;
   githubAppMinter: GithubAppTokenMinter;
   // The shared Forge answerer infra (the research model call rides it).
   forgeInfra: ForgeAnswererInfra;
@@ -162,7 +163,7 @@ export function buildCreateTemplateDeps(
         createGreenfieldRepository({
           pool: deps.pool,
           secrets: deps.secrets,
-          vcsProvider: deps.vcsProvider,
+          githubHttp: deps.githubHttp,
           orgId,
           githubAppMinter: deps.githubAppMinter,
           input: repoInput,

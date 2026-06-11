@@ -1,11 +1,13 @@
 // GREENFIELD: the project-create path that needs NO existing repo. An end user
 // posts `{ name, owner, greenfield: true, private?, defaultBranch?, description? }`
-// (no repoUrl) and Tanren creates a brand-new GitHub repo via the
-// `VcsProvider.createRepository` seam — authenticating with the org's GitHub App
-// installation token when the App is installed, ELSE the org-default static
-// `github_token` (a PAT with repo-create scope) — then binds a new project to the
-// real new repoUrl. Extracted from `index.ts` so that file stays under the per-file
-// line cap. Org-scoping is preserved: the token resolves against THIS org's
+// (no repoUrl) and Tanren creates a brand-new GitHub repo via the minimal
+// `CodeHost.createRepo` seam (decomposition PR-3) — the route constructs the
+// `CodeHost` from the shared GitHub HTTP client + the standalone `resolveVcsToken`
+// credential supplier (decomposition §5a/PR-2), authenticating with the org's
+// GitHub App installation token when the App is installed, ELSE the org-default
+// static `github_token` (a PAT with repo-create scope) — then binds a new project to
+// the real new repoUrl. Extracted from `index.ts` so that file stays under the
+// per-file line cap. Org-scoping is preserved: the token resolves against THIS org's
 // App-installation/credentials, and `createProject` persists the row under the org
 // actor's RLS scope.
 
@@ -19,17 +21,13 @@ import {
   type ProvisionedArtifact,
 } from "../../engine/contracts/integrationProvisioner.js";
 import type { SecretStore } from "../../engine/contracts/secretStore.js";
+import { RepositoryAlreadyExistsError, RepositoryCreationForbiddenError } from "../../engine/contracts/vcsProvider.js";
 import {
-  type CreatedRepository,
-  type CreateRepositoryInput,
-  RepositoryAlreadyExistsError,
-  RepositoryCreationForbiddenError,
-  type VcsProvider,
-} from "../../engine/contracts/vcsProvider.js";
-import {
-  loadOrgDefaultGithubCredentialRef,
-  loadOrgGithubAppInstallation,
-} from "../../engine/credentials/orgGithubApp.js";
+  createGreenfieldRepository,
+  GithubCredentialMissingError,
+  type GreenfieldRepositoryCreateDeps,
+} from "./greenfieldRepoCreate.js";
+import type { GitHubHttpClient } from "../../engine/providers/github.js";
 import { OrgIntegrationsStore } from "../../engine/repositories/orgIntegrations.js";
 import {
   productionProvisionerDeps,
@@ -91,59 +89,18 @@ export type GreenfieldCreateInput = z.infer<typeof GreenfieldCreateSchema>;
 export interface GreenfieldCreateDeps {
   pool: pg.Pool;
   secrets: SecretStore;
-  vcsProvider: VcsProvider;
+  githubHttp: GitHubHttpClient;
   githubAppMinter?: GithubAppTokenMinter;
   orgId: string;
   actor: ActorContext;
   input: GreenfieldCreateInput;
 }
 
-export interface GreenfieldRepositoryCreateDeps {
-  pool: pg.Pool;
-  secrets: SecretStore;
-  vcsProvider: VcsProvider;
-  githubAppMinter?: GithubAppTokenMinter;
-  orgId: string;
-  input: CreateRepositoryInput;
-}
-
-export class GithubCredentialMissingError extends Error {
-  constructor() {
-    super("github credential missing");
-    this.name = "GithubCredentialMissingError";
-  }
-}
-
-export async function createGreenfieldRepository(deps: GreenfieldRepositoryCreateDeps): Promise<CreatedRepository> {
-  const { pool, secrets, vcsProvider, orgId, input } = deps;
-  // Resolve the org's repo-creation credential the SAME way the rest of the system
-  // does (resolveGithubToken): an App installation token when the org installed the
-  // App, ELSE the org-default static `github_token` (a PAT with repo-create scope).
-  // Repo creation is not App-only — requiring an installation here broke greenfield
-  // for an org that connected a static PAT (the documented fallback path).
-  const installation = await loadOrgGithubAppInstallation(pool, orgId);
-  const staticRef = await loadOrgDefaultGithubCredentialRef(pool, orgId);
-  // No App installation AND no org-default static credential ⇒ a real config gap,
-  // surfaced LOUD (the operator must connect a GitHub credential). Explicit — not a
-  // reliance on the resolver throwing — so the requirement is honest at this seam.
-  if (installation === undefined && staticRef === undefined) {
-    throw new GithubCredentialMissingError();
-  }
-  // The genuine missing-credential case is already surfaced LOUD above (the
-  // explicit installation/staticRef gap). A failure HERE is therefore NOT
-  // "you didn't bind a credential" — it is infra/corruption (Vault outage, App
-  // mint failure, an unparseable stored config). Let it PROPAGATE (a 500), never
-  // mislabel it as `github_credential_missing` (no_silent_fallbacks: a wrong,
-  // misleading user-facing verdict is itself a silent degrade).
-  const token = await vcsProvider.resolveToken({
-    secrets,
-    ...(installation !== undefined && { installation }),
-    ...(staticRef !== undefined && { staticRef }),
-    ...(deps.githubAppMinter === undefined ? {} : { minter: deps.githubAppMinter }),
-  });
-
-  return vcsProvider.createRepository(input, token);
-}
+// The repo-create step (credential-resolve + `CodeHost.createRepo`) lives in
+// `greenfieldRepoCreate.ts`; re-exported here so existing consumers (onboarding
+// derive + template create) keep importing it from the greenfield surface.
+export { createGreenfieldRepository, GithubCredentialMissingError };
+export type { GreenfieldRepositoryCreateDeps };
 
 export function greenfieldRepositoryErrorResponse(c: Context<ActorContextEnv>, error: unknown): Response | undefined {
   if (error instanceof GithubCredentialMissingError) {
@@ -175,7 +132,7 @@ export async function handleGreenfieldCreate(
   c: Context<ActorContextEnv>,
   deps: GreenfieldCreateDeps,
 ): Promise<Response> {
-  const { pool, secrets, vcsProvider, orgId, actor, input } = deps;
+  const { pool, secrets, githubHttp, orgId, actor, input } = deps;
   let deploy;
   try {
     deploy = resolveGreenfieldDeployDependency(input.deploy, { required: true });
@@ -221,7 +178,7 @@ export async function handleGreenfieldCreate(
     created = await createGreenfieldRepository({
       pool,
       secrets,
-      vcsProvider,
+      githubHttp,
       orgId,
       ...(deps.githubAppMinter === undefined ? {} : { githubAppMinter: deps.githubAppMinter }),
       input: {
