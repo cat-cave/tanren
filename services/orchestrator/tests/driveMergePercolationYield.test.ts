@@ -14,15 +14,15 @@ import { FakeAllocator } from "../src/engine/contracts/allocator.js";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
 import { FakeCommandSubstrate } from "../src/engine/contracts/commandSubstrate.js";
 import { InMemoryVcsProvider } from "./conformance/fakes/inMemoryVcsProvider.js";
-import { CONFORMANCE_CONFLICT_PR_NUMBER } from "./conformance/vcsProviderConformance.js";
 
 const RUN_ID = "run_yield";
 const SPEC_ID = "spec_yield";
 const PROJECT_ID = "project_yield";
 const ORG_ID = "org_yield";
-// PR number 9 — the InMemoryVcsProvider's well-known CONFLICT PR: readMergeability
-// returns `dirty`, so the merge dispatcher routes to the conflict-resolver hook.
-const PR_URL = `https://github.com/acme/widget/pull/${CONFORMANCE_CONFLICT_PR_NUMBER}`;
+// An arbitrary PR number for the run's PR URL. The CONFLICT here is forced via the
+// injected `baseShiftRebaseOverride` (jj owns conflict), not a fake mergeability read —
+// so the drive's conflict-resolver hook (where the percolation-yield lives) is reached.
+const PR_URL = "https://github.com/acme/widget/pull/9";
 
 const CONTROL = /^(BEGIN|COMMIT|ROLLBACK|SET LOCAL|NOTIFY)/u;
 const EVENTS_INSERT_PREFIX = `INSERT INTO ${["events"].join("")}`;

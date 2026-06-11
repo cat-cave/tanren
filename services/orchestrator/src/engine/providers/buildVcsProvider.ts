@@ -6,8 +6,9 @@
 // run+merge lifecycle supports today); `TANREN_VCS_PROVIDER` can name it
 // explicitly so a future `gitlab` impl slots in as a new case, not a refactor.
 //
-// The seam drives the forge's PR/merge VCS operations, NOT the merge QUEUE: the
-// queue drives the provider through its operations.
+// After the VcsProvider→CodeHost/VisibilityProjection decomposition the seam is the
+// RESIDUAL surface (credential/identity resolution, URL parsing, the two genuine-fork
+// forge reads); PR-9 deletes it once those reads are rehomed.
 
 import { FetchGitHubHttpClient, type GitHubHttpClient } from "./github.js";
 import { GitHubVcsProvider } from "./githubVcsProvider.js";
@@ -19,27 +20,13 @@ import { GithubAppTokenMinter } from "./githubAppTokenMinter.js";
 // client is the transport the provider composes; the minter caches the App
 // installation token the App-first clone/CI/merge stages reuse.
 export { FetchGitHubHttpClient, GithubAppTokenMinter };
-import type { MergePullRequestResult, ReviewVerdictResult, SubmitReviewEvent } from "./githubReviewMerge.js";
+import type { ReviewVerdictResult } from "./githubReviewMerge.js";
 import type { GitHubPullRequestChecks } from "./github.js";
-import type { PullRequestContributors } from "../workflow/reviewMerge/governancePosture.js";
 import type {
   ActorIdentity,
-  CreatedIssue,
-  CreatedRepository,
-  CreateIssueInput,
-  CreateRepositoryInput,
-  OpenDraftPullRequestInput,
-  OpenedPullRequest,
-  PublishCheckInput,
-  PublishedCheck,
-  PublishStatusInput,
-  PullRequestMergeability,
   PullRequestRef,
-  PullRequestState,
-  PushBranchInput,
   RepoRef,
   ResolvedVcsToken,
-  UpdateBranchResult,
   VcsCredentialContext,
   VcsProvider,
 } from "../contracts/vcsProvider.js";
@@ -78,33 +65,6 @@ export class UnconfiguredVcsProvider implements VcsProvider {
   parsePullRequest(_prUrl: string): PullRequestRef {
     return this.fail();
   }
-  async readPullRequestState(_pr: PullRequestRef, _token: ResolvedVcsToken): Promise<PullRequestState> {
-    return this.fail();
-  }
-  async pushBranch(_input: PushBranchInput): Promise<void> {
-    return this.fail();
-  }
-  async createRepository(_input: CreateRepositoryInput, _token: ResolvedVcsToken): Promise<CreatedRepository> {
-    return this.fail();
-  }
-  async openDraftPullRequest(_input: OpenDraftPullRequestInput): Promise<OpenedPullRequest> {
-    return this.fail();
-  }
-  async createIssue(_input: CreateIssueInput): Promise<CreatedIssue> {
-    return this.fail();
-  }
-  async publishCheck(_input: PublishCheckInput): Promise<PublishedCheck> {
-    return this.fail();
-  }
-  async publishStatus(_input: PublishStatusInput): Promise<void> {
-    return this.fail();
-  }
-  async markReadyForReview(_pr: PullRequestRef, _token: ResolvedVcsToken): Promise<void> {
-    return this.fail();
-  }
-  async readPullRequestChecks(_pr: PullRequestRef, _token: ResolvedVcsToken): Promise<GitHubPullRequestChecks> {
-    return this.fail();
-  }
   async readBranchChecks(_input: {
     repo: RepoRef;
     branch: string;
@@ -113,54 +73,6 @@ export class UnconfiguredVcsProvider implements VcsProvider {
     return this.fail();
   }
   async readReviewVerdict(_pr: PullRequestRef, _token: ResolvedVcsToken): Promise<ReviewVerdictResult> {
-    return this.fail();
-  }
-  async readPullRequestDiff(_pr: PullRequestRef, _token: ResolvedVcsToken): Promise<string> {
-    return this.fail();
-  }
-  async submitReview(
-    _pr: PullRequestRef,
-    _event: SubmitReviewEvent,
-    _body: string,
-    _token: ResolvedVcsToken,
-  ): Promise<void> {
-    return this.fail();
-  }
-  async listContributors(_pr: PullRequestRef, _token: ResolvedVcsToken): Promise<PullRequestContributors> {
-    return this.fail();
-  }
-  async mergePullRequest(
-    _pr: PullRequestRef,
-    _token: ResolvedVcsToken,
-    _mergeMethod?: "merge" | "squash" | "rebase",
-  ): Promise<MergePullRequestResult> {
-    return this.fail();
-  }
-  async readFileOnBranch(_input: {
-    repo: RepoRef;
-    ref: string;
-    path: string;
-    token: ResolvedVcsToken;
-  }): Promise<string | undefined> {
-    return this.fail();
-  }
-  async readBranchHeadSha(_input: {
-    repo: RepoRef;
-    branch: string;
-    token: ResolvedVcsToken;
-  }): Promise<string | undefined> {
-    return this.fail();
-  }
-  async readMergeability(_pr: PullRequestRef, _token: ResolvedVcsToken): Promise<PullRequestMergeability> {
-    return this.fail();
-  }
-  async updateBranch(_pr: PullRequestRef, _token: ResolvedVcsToken): Promise<UpdateBranchResult> {
-    return this.fail();
-  }
-  async retargetPullRequestBase(_pr: PullRequestRef, _newBase: string, _token: ResolvedVcsToken): Promise<void> {
-    return this.fail();
-  }
-  async deleteBranch(_repo: RepoRef, _branch: string, _token: ResolvedVcsToken): Promise<void> {
     return this.fail();
   }
 }
