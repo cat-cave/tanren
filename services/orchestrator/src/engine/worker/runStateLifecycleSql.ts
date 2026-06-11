@@ -61,15 +61,15 @@ export async function applySetSpecMetadata(client: QueryClient, input: SetSpecMe
 
 /**
  * Re-point a speculative run's dynamic base to the re-resolved ANCESTOR STACK (the
- * never-discard base-shift re-point). jj-local (WS-B PR-9): the base shift writes ONLY
- * `runs.ancestor_stack`; the legacy `speculative_base` column STAYS (dropped in PR-12) but
- * is NO LONGER WRITTEN — it is NULLed (jj-local has no synthesized host ref).
+ * never-discard base-shift re-point). jj-local: the base shift writes ONLY
+ * `runs.ancestor_stack` — the ordered stack is the sole base truth (jj-local has no
+ * synthesized host ref; the legacy `speculative_base` column was dropped in WS-B PR-12).
  */
 export async function applySetRunSpeculativeBase(
   client: QueryClient,
   input: SetRunSpeculativeBaseInput,
 ): Promise<void> {
-  await client.query("UPDATE runs SET speculative_base = NULL, ancestor_stack = $2::jsonb WHERE run_id = $1", [
+  await client.query("UPDATE runs SET ancestor_stack = $2::jsonb WHERE run_id = $1", [
     input.runId,
     input.ancestorStack === undefined ? null : JSON.stringify(input.ancestorStack),
   ]);

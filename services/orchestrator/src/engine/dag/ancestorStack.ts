@@ -4,16 +4,15 @@
 // ancestors — `[{ specId, runId, branch, headSha }]` (the SAME shape as
 // `IntegrationNodeMember`, `contracts/integrationNodes.ts:41`). Order is DAG order
 // (ancestors before dependents) and is LOAD-BEARING (it is the assembly order + the
-// `memberKey` order). This ONE ordered structure replaces the parallel pair the run
-// row carries today — `runs.speculative_base` (a single synthesized integration ref)
-// + `runs.integrated_ancestor_shas` (the per-ancestor head-sha map). A run is
-// "speculative" iff its stack is non-empty.
+// `memberKey` order). This ONE ordered structure replaced the parallel pair the run
+// row once carried — a single synthesized integration ref + a per-ancestor head-sha
+// map. A run is "speculative" iff its stack is non-empty.
 //
-// `runs.ancestor_stack` is the SOLE base source (WS-B PR-9): the walker/base-shift write
+// `runs.ancestor_stack` is the SOLE base source (WS-B PR-12): the walker/base-shift write
 // ONLY this column, and every read path (`runExecutionContext`, `plannerRunWorkspace`,
 // `githubDraftPr`, `resolveSpeculativeState`, `percolationPg`) resolves the stack from it
 // via `resolveAncestorStack`. The legacy `speculative_base` + `integrated_ancestor_shas`
-// columns are no longer written or read (they are dropped in PR-12's migration).
+// columns were dropped (WS-B PR-12's migration) — `ancestor_stack` is the only truth.
 
 import { z } from "zod";
 import type { IntegrationNodeMember } from "../contracts/integrationNodes.js";

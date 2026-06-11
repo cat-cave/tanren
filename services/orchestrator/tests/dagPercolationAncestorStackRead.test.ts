@@ -2,10 +2,10 @@
 // READ side now selects in-flight speculative dependents on the jj-native
 // `runs.ancestor_stack` (non-empty) and derives the build-base / divergence key from
 // `ancestor_stack[].headSha`, REPLACING the legacy `speculative_base IS NOT NULL` selection
-// + the `integrated_ancestor_shas` build-base read. This proves the read-side cutover is
-// behavior-equivalent (same dependents selected, same divergence map), with the dual-read
-// fallback to the legacy SHA map when the stack heads are still enqueue placeholders. Over a
-// FAKE pool + FAKE VcsProvider (test fixtures — they live here, never src/).
+// + the `integrated_ancestor_shas` build-base read (both columns dropped in WS-B PR-12 —
+// `ancestor_stack` is the sole truth). This proves the read-side selects the same dependents
+// + builds the same divergence map off the jj-native stack. Over a FAKE pool + FAKE
+// VcsProvider (test fixtures — they live here, never src/).
 
 import type pg from "pg";
 import { describe, expect, it } from "vitest";
@@ -120,9 +120,7 @@ describe("PgPercolationReadModel.loadSpeculativeDependents (WS-A PR-8c: reads an
     const pool = new StackRowFakePool({
       run_id: "run_dep",
       spec_id: "spec_dep",
-      speculative_base: "tanren/integ/spec_dep",
       ancestor_stack: [{ specId: "spec_a", runId: "run_a", branch: "tanren/spec_a", headSha: "sha-a" }],
-      integrated_ancestor_shas: { spec_a: "sha-a" },
       verified_ancestor_shas: null,
       percolation_pending: null,
     });
@@ -134,18 +132,15 @@ describe("PgPercolationReadModel.loadSpeculativeDependents (WS-A PR-8c: reads an
   });
 
   it("derives the build-base / divergence key from ancestor_stack[].headSha", async () => {
-    // The stack carries the per-ancestor head shas the assembly captured — the SAME shas the
-    // legacy `integrated_ancestor_shas` carried, so the detect keys off the SAME divergence.
+    // The stack carries the per-ancestor head shas the assembly captured — the SOLE divergence
+    // source now (the legacy `integrated_ancestor_shas` column was dropped in WS-B PR-12).
     const pool = new StackRowFakePool({
       run_id: "run_dep",
       spec_id: "spec_dep",
-      speculative_base: "tanren/integ/spec_dep",
       ancestor_stack: [
         { specId: "spec_a", runId: "run_a", branch: "tanren/spec_a", headSha: "sha-a" },
         { specId: "spec_b", runId: "run_b", branch: "tanren/spec_b", headSha: "sha-b" },
       ],
-      // A DIFFERENT legacy map — proving the stack (not the legacy column) is the source.
-      integrated_ancestor_shas: { spec_a: "stale", spec_b: "stale" },
       verified_ancestor_shas: null,
       percolation_pending: null,
     });

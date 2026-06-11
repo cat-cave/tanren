@@ -7,11 +7,11 @@
 //
 //   6.  create-queued-run runs the full multi-table createQueuedRunFromSpec
 //       (INSERT runs + claim spec + INSERT tasks + job_queue + run.queued/task.queued);
-//   6b. create-queued-run accepts the §2c PRESENT-but-NULL speculative base (a
+//   6b. create-queued-run accepts the §2c PRESENT-but-empty speculative base (a
 //       percolation re-exec whose ancestors all merged → a real run against main),
-//       lands `speculative_base = NULL`, and still SKIPS the done-only dep gate;
+//       lands an EMPTY `ancestor_stack`, and still SKIPS the done-only dep gate;
 //   7.  set-spec-metadata stamps the intake provenance (UPDATE specs SET metadata);
-//   8.  the change-percolation run-column ops (set speculative_base / reexec-id /
+//   8.  the change-percolation run-column ops (re-point ancestor_stack / reexec-id /
 //       merge a verified-ancestor sha / clear the pending marker).
 //
 // The run-state writes (append-event / record-cost / reconcile / finalize) +
@@ -158,9 +158,9 @@ describeDb("plane-split P3 — control-plane autonomy-loop create/intake writes 
   // `/internal/create-queued-run` with the `speculative` object PRESENT but carrying NO
   // ancestor stack (only the marker). Proven over the plane-split wire: the `speculative`
   // object's PRESENCE skips the done-only dependency gate (the spec is claimed pending→active
-  // even though no real dependency-done check ran), and the run lands with
-  // `speculative_base = NULL` (jj-local no longer writes that legacy column).
-  it("(6b) create-queued-run accepts a marker-only speculative object and creates a run with speculative_base = NULL", async () => {
+  // even though no real dependency-done check ran), and the run lands with an EMPTY
+  // `ancestor_stack` (non-speculative — the run targets plain default_branch).
+  it("(6b) create-queued-run accepts a marker-only speculative object and creates a non-speculative run (empty ancestor_stack)", async () => {
     const specId = `${SPEC}_walk_null_base`;
     await ownerPool().query(
       `INSERT INTO organizations (id, kind, external_id, login, display_name, config)
@@ -195,15 +195,16 @@ describeDb("plane-split P3 — control-plane autonomy-loop create/intake writes 
     });
 
     expect(run.runId).toMatch(/^run_/u);
-    // The run landed with a NULL speculative_base (a real run against main), org-scoped,
+    // The run landed with an EMPTY ancestor_stack (a real run against main), org-scoped,
     // AND the percolation marker round-tripped through the wire intact.
     const runRow = await ownerPool().query<{
       org_id: string;
       status: string;
-      speculative_base: string | null;
+      ancestor_stack: unknown[] | null;
       percolation_pending: { reexecOf?: string } | null;
-    }>("SELECT org_id, status, speculative_base, percolation_pending FROM runs WHERE run_id = $1", [run.runId]);
-    expect(runRow.rows[0]).toMatchObject({ org_id: ORG, status: "queued", speculative_base: null });
+    }>("SELECT org_id, status, ancestor_stack, percolation_pending FROM runs WHERE run_id = $1", [run.runId]);
+    expect(runRow.rows[0]).toMatchObject({ org_id: ORG, status: "queued" });
+    expect(runRow.rows[0]?.ancestor_stack ?? []).toEqual([]);
     expect(runRow.rows[0]?.percolation_pending?.reexecOf).toBe("spec_anc_not_done");
     // The done-only dependency gate was SKIPPED (present speculative object) — the spec
     // was still claimed open→in_flight despite its dependency being absent/not-done.
@@ -248,7 +249,8 @@ describeDb("plane-split P3 — control-plane autonomy-loop create/intake writes 
     const app = createInternalRunStateWriteRoutes({ pool: runtimePool(), verifier: new AllowAllPeerVerifier() });
     const writer = new HttpRunStateWriter("https://control.internal:3110", fetchInto(app));
 
-    // jj-local: the re-point writes ONLY `ancestor_stack` (the legacy `speculative_base` is NULLed).
+    // jj-local: the re-point writes ONLY `ancestor_stack` (the legacy `speculative_base`
+    // column was dropped in WS-B PR-12 — the ordered stack is the sole base truth).
     await writer.setRunSpeculativeBase({
       runId,
       orgId: ORG,
@@ -263,17 +265,12 @@ describeDb("plane-split P3 — control-plane autonomy-loop create/intake writes 
     });
 
     const row = await ownerPool().query<{
-      speculative_base: string | null;
       ancestor_stack: Array<{ specId: string; runId: string; branch: string; headSha: string }> | null;
       percolation_pending: { reexecRunId?: string };
       verified_ancestor_shas: Record<string, { sha?: string; reviewVerdict?: string }>;
-    }>(
-      "SELECT speculative_base, ancestor_stack, percolation_pending, verified_ancestor_shas FROM runs WHERE run_id = $1",
-      [runId],
-    );
-    // jj-local: the legacy `speculative_base` column is NULLed; the ordered ancestor stack
-    // is the SOLE base written, landing in `runs.ancestor_stack`.
-    expect(row.rows[0]?.speculative_base).toBeNull();
+    }>("SELECT ancestor_stack, percolation_pending, verified_ancestor_shas FROM runs WHERE run_id = $1", [runId]);
+    // jj-local: the ordered ancestor stack is the SOLE base written, landing in
+    // `runs.ancestor_stack` (the legacy `speculative_base` column was dropped).
     expect(row.rows[0]?.ancestor_stack).toEqual([
       { specId: "spec_anc", runId: "run_anc", branch: "tanren/spec_anc", headSha: "sha_anc" },
     ]);
