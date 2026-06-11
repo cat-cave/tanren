@@ -36,7 +36,6 @@ function fullRow(overrides: Record<string, unknown> = {}): Record<string, unknow
     branch: "tanren/feature",
     repo_url: "https://github.com/acme/repo",
     default_branch: "main",
-    speculative_base: null,
     runner_image: "ghcr.io/acme/runner:1",
     config: {
       version: 1,
@@ -104,12 +103,16 @@ describe("loadRunExecutionContext", () => {
     expect(context.targetBranch).toBe("develop");
   });
 
-  it("P2c-1: a speculative run's targetBranch is its integration branch (the DYNAMIC BASE), not default_branch", async () => {
+  it("§2c jj-local: a DEPENDENT speculative run's targetBranch is default_branch + its ancestor stack is threaded for the LOCAL assembly", async () => {
+    const stack = [{ specId: "spec_anc", runId: "run_anc", branch: "tanren/spec_anc", headSha: "sha_anc" }];
     const { context } = await loadRunExecutionContext(
-      rowPool(fullRow({ default_branch: "main", speculative_base: "tanren/integ/spec_1" })),
+      rowPool(fullRow({ default_branch: "main", ancestor_stack: stack })),
       { runId: "run_1", identitySecretRef: "id" },
     );
-    expect(context.targetBranch).toBe("tanren/integ/spec_1");
+    // The run's history root is `default_branch`; the dependent jj-assembles its base
+    // LOCALLY from the threaded ancestor stack (no synthesized integration ref).
+    expect(context.targetBranch).toBe("main");
+    expect(context.ancestorStack).toEqual(stack);
   });
 
   it("keeps only string acceptance criteria (drops non-strings)", async () => {

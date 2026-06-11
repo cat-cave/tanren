@@ -383,7 +383,6 @@ export const sensitivityRules: SensitivityRule[] = [
     ["runId", "public"],
     ["unmergedAncestors[]", "public"],
     ["threshold", "public"],
-    ["integrationBranch", "public"],
   ]),
   ...rulesFor("dag.spec.speculation_held", [
     ["specId", "public"],

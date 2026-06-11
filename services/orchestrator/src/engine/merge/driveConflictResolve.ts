@@ -330,7 +330,7 @@ async function loadDriveRunContext(deps: DriveConflictResolveDeps): Promise<Driv
     const result = await client.query<{
       repo_url: string;
       default_branch: string | null;
-      speculative_base: string | null;
+      ancestor_stack: unknown;
       branch: string;
       runner_image: string | null;
       config: unknown;
@@ -339,7 +339,7 @@ async function loadDriveRunContext(deps: DriveConflictResolveDeps): Promise<Driv
       description: string;
       acceptance_criteria: unknown;
     }>(
-      `SELECT p.repo_url, p.default_branch, r.speculative_base, r.branch, p.runner_image, p.config,
+      `SELECT p.repo_url, p.default_branch, r.ancestor_stack, r.branch, p.runner_image, p.config,
               o.config AS org_config, s.title, s.description, s.acceptance_criteria
          FROM runs r
          JOIN specs s ON s.spec_id = r.spec_id
@@ -360,12 +360,16 @@ async function loadDriveRunContext(deps: DriveConflictResolveDeps): Promise<Driv
     resolveCredentialsForRun(client, { projectConfig, orgScope: orgScopeFromRunOrgId(deps.facts.orgId) }),
   );
   const installation = installationFromOrgConfig(row.org_config);
+  // jj-local: the merge re-gates against the run's stacked base — the immediate unmerged
+  // ancestor's PR-head branch (the LAST `ancestor_stack` entry) when the run is stacked, else
+  // the project default. Mirrors the draft-PR stacked base (`resolveDraftPrBaseBranch`).
+  const immediateAncestorBranch = immediateAncestorBranchFromStack(row.ancestor_stack);
   return {
     repoUrl: row.repo_url,
-    // The merge re-gates against the run's MERGE-time base — the speculative
-    // integration base when set, else the project default (mirrors the run
-    // context's `targetBranch`).
-    baseBranch: row.speculative_base ?? row.default_branch ?? "main",
+    baseBranch:
+      immediateAncestorBranch !== undefined && immediateAncestorBranch !== ""
+        ? immediateAncestorBranch
+        : (row.default_branch ?? "main"),
     headBranch: row.branch,
     runnerImage: row.runner_image ?? DEFAULT_RESOLVER_RUNNER_IMAGE_FALLBACK,
     specTitle: row.title,
@@ -377,6 +381,16 @@ async function loadDriveRunContext(deps: DriveConflictResolveDeps): Promise<Driv
     ...(installation !== undefined && { installation }),
     governancePosture: projectConfig.governancePosture,
   };
+}
+
+/**
+ * The immediate-ancestor PR-head branch (the stacked base) from the run's `ancestor_stack`
+ * jsonb — the LAST entry's non-empty `branch`, or `undefined` for a non-speculative run. A
+ * minimal inline read (no zod) to keep this file's dependency count under the cap.
+ */
+function immediateAncestorBranchFromStack(ancestorStack: unknown): string | undefined {
+  const last = Array.isArray(ancestorStack) ? (ancestorStack.at(-1) as { branch?: unknown } | undefined) : undefined;
+  return typeof last?.branch === "string" && last.branch !== "" ? last.branch : undefined;
 }
 
 /**

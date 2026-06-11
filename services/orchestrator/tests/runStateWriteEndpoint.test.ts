@@ -264,19 +264,18 @@ describe("plane-split (autonomy loops) — create-queued-run maps benign per-spe
   });
 });
 
-// §2c contract parity: the route schema's `speculative.speculativeBase` must accept
-// `string | null` to byte-match the in-process `CreateSpecRunInput` (a percolation
-// re-exec whose every ancestor has merged has a NULL base — a real run against main —
-// yet still carries the percolation marker). Before the fix the schema was
-// `z.string().min(1)`, which 400'd the present-but-null base so the worker could never
-// create the §2c non-speculative re-exec at all. These cases need NO DB: validation
-// passing reaches the spec-load SELECT (the throwing pool → 500/409), and validation
-// failing returns 400 BEFORE any DB work.
-describe("plane-split (autonomy loops) — create-queued-run accepts a present-but-null speculative base (§2c)", () => {
-  it("PASSES validation for speculative: { speculativeBase: null } — reaches the DB (not a 400)", async () => {
+// §2.3 contract parity: the route schema's `speculative` block must byte-match the
+// in-process `CreateSpecRunInput.speculative` — the jj-local cutover (WS-B PR-9) dropped the
+// `speculativeBase`/`integratedAncestorShas` fields; a present block (an empty stack — the
+// "ancestor-merged → non-speculative re-base" carrying only the marker — OR a non-empty
+// `ancestorStack`) is the speculative-create signal that SKIPS the done-only gate. These
+// cases need NO DB: validation passing reaches the spec-load SELECT (the throwing pool →
+// 500), and validation failing returns 400 BEFORE any DB work.
+describe("plane-split (autonomy loops) — create-queued-run accepts the jj-local speculative block (§2.3)", () => {
+  it("PASSES validation for a marker-only speculative block (empty stack) — reaches the DB (not a 400)", async () => {
     const app = createInternalRunStateWriteRoutes({
       // The body is well-formed, so the handler proceeds to the spec-load SELECT, which
-      // this pool throws on → 500. The point: it is NOT a 400 — the null base validated.
+      // this pool throws on → 500. The point: it is NOT a 400 — the marker-only block validated.
       pool: poolThatThrowsOn(new Error("reached the DB — validation passed")),
       verifier: new AllowAllPeerVerifier(),
     });
@@ -284,7 +283,7 @@ describe("plane-split (autonomy loops) — create-queued-run accepts a present-b
       input: {
         specId: "spec_x",
         trigger: "percolation_reexec",
-        speculative: { speculativeBase: null, percolationPending: { reexecOf: "spec_anc" } },
+        speculative: { percolationPending: { reexecOf: "spec_anc" } },
       },
       actor: CREATE_RUN_BODY.actor,
     });
@@ -292,42 +291,40 @@ describe("plane-split (autonomy loops) — create-queued-run accepts a present-b
     expect(response.status).not.toBe(400);
   });
 
-  it("PASSES validation for a non-null speculative base too — the field stays nullable, not loosened to any", async () => {
+  it("PASSES validation for a non-empty ancestor stack — reaches the DB (not a 400)", async () => {
     const app = createInternalRunStateWriteRoutes({
       pool: poolThatThrowsOn(new Error("reached the DB — validation passed")),
       verifier: new AllowAllPeerVerifier(),
     });
     const response = await post(app, "/internal/create-queued-run", {
-      input: { specId: "spec_x", trigger: "dag_walker", speculative: { speculativeBase: "tanren/integ/x" } },
+      input: {
+        specId: "spec_x",
+        trigger: "dag_walker",
+        speculative: {
+          ancestorStack: [{ specId: "spec_a", runId: "run_a", branch: "tanren/spec_a", headSha: "a".repeat(40) }],
+        },
+      },
       actor: CREATE_RUN_BODY.actor,
     });
     expect(response.status).toBe(500);
   });
 
-  it("STILL rejects a genuinely-invalid speculative base (a number) with 400 before any DB work", async () => {
+  it("STILL rejects a malformed ancestor stack member (missing headSha) with 400 before any DB work", async () => {
     const app = createInternalRunStateWriteRoutes({
       // THROWING_POOL throws if touched — proving the 400 is returned pre-DB.
       pool: THROWING_POOL,
       verifier: new AllowAllPeerVerifier(),
     });
     const response = await post(app, "/internal/create-queued-run", {
-      input: { specId: "spec_x", trigger: "dag_walker", speculative: { speculativeBase: 123 } },
+      input: {
+        specId: "spec_x",
+        trigger: "dag_walker",
+        speculative: { ancestorStack: [{ specId: "spec_a", runId: "run_a", branch: "tanren/spec_a" }] },
+      },
       actor: CREATE_RUN_BODY.actor,
     });
     expect(response.status).toBe(400);
     expect((await response.json()).error).toBe("invalid_create_queued_run");
-  });
-
-  it("STILL rejects an empty-string speculative base with 400 — only null is added, the .min(1) string floor holds", async () => {
-    const app = createInternalRunStateWriteRoutes({
-      pool: THROWING_POOL,
-      verifier: new AllowAllPeerVerifier(),
-    });
-    const response = await post(app, "/internal/create-queued-run", {
-      input: { specId: "spec_x", trigger: "dag_walker", speculative: { speculativeBase: "" } },
-      actor: CREATE_RUN_BODY.actor,
-    });
-    expect(response.status).toBe(400);
   });
 });
 

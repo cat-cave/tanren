@@ -46,9 +46,8 @@ export function buildBaseShiftRebaseHook(deps: {
       const { decision, headSha } = await deps.coordinator.rebaseOnto({
         projectId,
         dependent,
-        newBaseRef: input.baseBranch,
-        // The merge-time base is the PR's plain base branch (not a speculative integration
-        // ref) — a non-speculative rebase straight onto it.
+        // The merge-time base is the PR's plain base branch (`default_branch`, not a
+        // speculative stack) — a non-speculative rebase straight onto it (empty stack).
         nonSpeculative: true,
         // The behind path is a base-branch advance, not an ancestor percolation: there is
         // NO ancestor spec + NO ancestor merged-sha. `ancestorSpecId` keys the marker on the

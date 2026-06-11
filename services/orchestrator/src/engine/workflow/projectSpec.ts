@@ -75,17 +75,16 @@ export interface CreateSpecRunInput {
   specId: string;
   trigger?: string;
   branch?: string;
-  // (§2c) SPECULATIVE start: `integratedAncestorShas` = build base,
-  // `verifiedAncestorShas` = absorbed carry-forward, `percolationPending` = marker.
-  // `speculativeBase: null` is the §2c "ancestor-merged → non-speculative re-base": a
-  // percolation re-exec where EVERY ancestor merged re-bases onto plain `default_branch`
-  // (a real run against main) — but still carries the marker and SKIPS the done-only gate.
+  // (§2c) SPECULATIVE start: the run is stacked on its unmerged ancestors. `ancestorStack`
+  // is the ordered list of those ancestors (the jj-local source of truth — the dependent
+  // assembles its base from these refs at bootstrap); `verifiedAncestorShas` = absorbed
+  // carry-forward, `percolationPending` = marker. A present `speculative` block (even an
+  // EMPTY stack — the §2c "ancestor-merged → non-speculative re-base" carrying only the
+  // marker) SKIPS the done-only dependency gate.
   speculative?: {
-    speculativeBase: string | null;
-    integratedAncestorShas?: Record<string, string>;
     verifiedAncestorShas?: Record<string, string>;
     percolationPending?: unknown;
-    // WS-A PR-1: the ordered ancestor stack, dual-written to `runs.ancestor_stack` (unread).
+    // The ordered ancestor stack, written to `runs.ancestor_stack` (the jj-local base source).
     ancestorStack?: AncestorStack;
   };
 }
@@ -327,20 +326,21 @@ async function createQueuedRunFromSpecOnClient(
   };
 
   // percolation columns — set only on a speculative start (`verified`/`pending` carried onto a re-execution run).
+  // The jj-local cutover (WS-B PR-9): the walker/base-shift write ONLY `ancestor_stack`; the
+  // legacy `speculative_base` + `integrated_ancestor_shas` columns STAY (dropped in PR-12's
+  // migration) but are NO LONGER WRITTEN — they insert NULL.
   const spec = input.speculative;
   await client.query(
     // org_id derived in-statement from the parent project (tanren tenancy).
     `INSERT INTO runs (run_id, spec_id, project_id, org_id, trigger, branch, status, speculative_base,
                        integrated_ancestor_shas, verified_ancestor_shas, percolation_pending, ancestor_stack)
-     VALUES ($1, $2, $3, (SELECT org_id FROM projects WHERE project_id = $3), $4, $5, 'queued', $6, $7, $8, $9, $10)`,
+     VALUES ($1, $2, $3, (SELECT org_id FROM projects WHERE project_id = $3), $4, $5, 'queued', NULL, NULL, $6, $7, $8)`,
     [
       run.runId,
       run.specId,
       run.projectId,
       run.trigger,
       run.branch,
-      spec?.speculativeBase ?? null,
-      jsonbOrNull(spec?.integratedAncestorShas),
       jsonbOrNull(spec?.verifiedAncestorShas),
       jsonbOrNull(spec?.percolationPending),
       jsonbOrNull(spec?.ancestorStack),

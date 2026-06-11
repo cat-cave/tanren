@@ -6,7 +6,10 @@
 //     truth; read fresh each tick, RLS-scoped to the project's org).
 //   - SpecRunDagEnqueuer: createQueuedRunFromSpec under a platform-admin actor carrying
 //     the project's org (the atomic pending→active claim is the idempotency boundary). A
-//     speculative start threads the dynamic base + skips the done-only dependency gate.
+//     speculative start threads the ancestor stack (the jj-local base) + skips the
+//     done-only dependency gate.
+//   - PgDagAncestorStackResolver: resolves a dependent's ordered unmerged-ancestor stack
+//     (org-scoped/RLS) — the real PR-head branches the dependent jj-assembles its base from.
 //   - PgDagEventEmitter: writes the dag.* events (enqueued / speculative /
 //     speculation_held / drained / budget.paused / budget.milestone /
 //     concurrency.saturated / config.corrupt) through the single org-scoped
@@ -30,6 +33,9 @@ import { type EventStore, PgEventStore } from "../eventStore.js";
 import { SpecPriority } from "../state/spec.js";
 import { createQueuedRunFromSpec } from "../workflow/projectSpec.js";
 import type { AncestorStack } from "./ancestorStack.js";
+// Re-export the ancestor-stack resolver seam + wiring (split into `ancestorStackResolverPg.ts`
+// for the line cap) so existing `./walkerPg.js` import sites keep importing them unchanged.
+export { type DagAncestorStackResolver, PgDagAncestorStackResolver } from "./ancestorStackResolverPg.js";
 
 /**
  * Map a persisted spec status (the SINGLE canonical `open/in_flight/review/merged/
@@ -161,8 +167,6 @@ export class SpecRunDagEnqueuer implements DagEnqueuer {
   async enqueueSpecRun(input: {
     projectId: string;
     specId: string;
-    speculativeBase?: string;
-    integratedAncestorShas?: Record<string, string>;
     ancestorStack?: AncestorStack;
   }): Promise<{ runId: string }> {
     const orgId = await runWithSystemScope(this.pool, async (client) => {
@@ -185,16 +189,12 @@ export class SpecRunDagEnqueuer implements DagEnqueuer {
     const createInput = {
       specId: input.specId,
       trigger: "dag_walker",
-      // A speculative start skips the done-only dependency gate and records the
-      // integration branch as the run's dynamic base + the per-ancestor head SHA map.
-      ...(input.speculativeBase !== undefined && {
+      // A speculative start (a present `ancestor_stack`) skips the done-only dependency
+      // gate and records the ordered unmerged-ancestor stack as the run's jj-local base
+      // source. NO synthesized host integration ref is written.
+      ...(input.ancestorStack !== undefined && {
         speculative: {
-          speculativeBase: input.speculativeBase,
-          ...(input.integratedAncestorShas !== undefined && {
-            integratedAncestorShas: input.integratedAncestorShas,
-          }),
-          // WS-A PR-1: dual-write the ordered ancestor stack (additive, unread for now).
-          ...(input.ancestorStack !== undefined && { ancestorStack: input.ancestorStack }),
+          ancestorStack: input.ancestorStack,
         },
       }),
     };
@@ -228,7 +228,6 @@ interface DagEventEmitter {
     runId: string;
     unmergedAncestors: string[];
     threshold: SpeculationThreshold;
-    integrationBranch: string;
   }): Promise<void>;
   emitSpeculationHeld(input: {
     projectId: string;
@@ -341,7 +340,6 @@ export class PgDagEventEmitter implements DagEventEmitter {
     runId: string;
     unmergedAncestors: string[];
     threshold: SpeculationThreshold;
-    integrationBranch: string;
   }): Promise<void> {
     await this.withScopedStore(input.projectId, (store) =>
       store.append({
@@ -354,7 +352,6 @@ export class PgDagEventEmitter implements DagEventEmitter {
           runId: input.runId,
           unmergedAncestors: input.unmergedAncestors,
           threshold: input.threshold,
-          integrationBranch: input.integrationBranch,
         },
       }),
     );

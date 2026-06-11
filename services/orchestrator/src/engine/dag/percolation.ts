@@ -295,8 +295,10 @@ export class PercolatingCoordinator implements ChangePercolationCoordinator {
         // later pass once its gate+checker+auditor terminate. Not absorbed here.
         result.reexecuting.push(dependent.specId);
       } else {
-        // held: an ancestor-vs-ancestor conflict on the rebuild (routed to the conflict resolver);
-        // the dependent is untouched + retried next notification.
+        // held: a never-discard base-shift hold surfaced as a structured kick-off result
+        // (a spec-vs-spec assembly conflict now surfaces as a `BaseShiftHeldError` thrown
+        // from the rebase, caught at the pass level above). The dependent is untouched +
+        // retried next notification.
         result.held.push(dependent.specId);
       }
       return;

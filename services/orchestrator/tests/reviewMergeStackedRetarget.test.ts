@@ -1,13 +1,11 @@
-// WS-A PR-5 (walker-jj-local-integration-design.md §3.2/§3.3): the STACKED-PR RETARGET
-// WALK at the merge stage, behind `WALKER_JJ_LOCAL_BASE` (default-OFF). When a dependent
-// is stacked on an ordered ancestor stack, each ancestor merge walks the PR base ONE step
-// down the stack — to the next still-unmerged ancestor's PR-head branch, then to
-// `default_branch` once the stack empties — and drops the merged head from
-// `runs.ancestor_stack`. The merge HOLD is UNCHANGED: the MERGE still waits for ALL
-// ancestors. Flag-OFF is byte-identical to the legacy integ→default single-step retarget
-// (covered in `reviewMergeP2c.test.ts`).
+// walker-jj-local-integration-design.md §3.2/§3.3: the STACKED-PR RETARGET WALK at the
+// merge stage (jj-local, unconditional). A dependent is stacked on an ordered ancestor stack
+// (`runs.ancestor_stack`); each ancestor merge walks the PR base ONE step down the stack — to
+// the next still-unmerged ancestor's PR-head branch, then to `default_branch` once the stack
+// empties — and drops the merged head from `runs.ancestor_stack`. The merge HOLD is
+// UNCHANGED: the MERGE still waits for ALL ancestors.
 
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { vcsProviderOver } from "./helpers/vcsProvider.js";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
 import { FakeEventStore } from "./helpers/fakeEventStore.js";
@@ -24,7 +22,7 @@ const member = (specId: string, branch: string): AncestorStack[number] => ({
   headSha: "a".repeat(40),
 });
 
-describe("WS-A PR-5 resolveStackRetarget (pure walk target)", () => {
+describe("resolveStackRetarget (pure walk target)", () => {
   it("drops merged heads and targets the IMMEDIATE still-unmerged ancestor branch", () => {
     const stack: AncestorStack = [member("spec_a", "br_a"), member("spec_b", "br_b"), member("spec_c", "br_c")];
     // spec_a merged → the immediate (last) remaining is spec_c.
@@ -40,22 +38,16 @@ describe("WS-A PR-5 resolveStackRetarget (pure walk target)", () => {
     expect(r.remainingStack).toEqual([]);
   });
 
-  it("a blank-branch (legacy sha-map) immediate ancestor falls back to default_branch", () => {
+  it("a blank-branch immediate ancestor falls back to default_branch (defensive)", () => {
     const stack: AncestorStack = [{ specId: "spec_a", runId: "", branch: "", headSha: "a".repeat(40) }];
     const r = resolveStackRetarget(stack, new Set(), "main");
     expect(r.toBase).toBe("main");
   });
 });
 
-describe("WS-A PR-5 stacked-PR retarget walk (merge stage, flag ON)", () => {
-  afterEach(() => {
-    delete process.env["WALKER_JJ_LOCAL_BASE"];
-  });
-
+describe("stacked-PR retarget walk (merge stage)", () => {
   it("walks the base ONE step to the next ancestor while the merge stays HELD; drops the merged head", async () => {
-    process.env["WALKER_JJ_LOCAL_BASE"] = "1";
     const pool = new ReviewMergePool("direct_merge");
-    pool.speculativeBase = "tanren/integ/spec_1";
     pool.specDependsOn = ["spec_a", "spec_b"];
     // immediate-below ancestor a merged; b still unmerged.
     pool.mergedAncestors = ["spec_a"];
@@ -90,9 +82,7 @@ describe("WS-A PR-5 stacked-PR retarget walk (merge stage, flag ON)", () => {
   });
 
   it("DIAMOND/3-ancestor: walks to default_branch + merges once the stack empties", async () => {
-    process.env["WALKER_JJ_LOCAL_BASE"] = "1";
     const pool = new ReviewMergePool("direct_merge");
-    pool.speculativeBase = "tanren/integ/spec_1";
     pool.specDependsOn = ["spec_a", "spec_b", "spec_c"];
     // all landed → hold clears.
     pool.mergedAncestors = ["spec_a", "spec_b", "spec_c"];
@@ -137,9 +127,7 @@ describe("WS-A PR-5 stacked-PR retarget walk (merge stage, flag ON)", () => {
   });
 
   it("steady state (live base already the walk target, no drop): no retarget, no write", async () => {
-    process.env["WALKER_JJ_LOCAL_BASE"] = "1";
     const pool = new ReviewMergePool("direct_merge");
-    pool.speculativeBase = "tanren/integ/spec_1";
     pool.specDependsOn = ["spec_a", "spec_b"];
     // nothing merged yet.
     pool.mergedAncestors = [];
@@ -166,54 +154,5 @@ describe("WS-A PR-5 stacked-PR retarget walk (merge stage, flag ON)", () => {
     expect(probe.retargetedBases).toEqual([]);
     expect(pool.ancestorStackWrites).toEqual([]);
     expect(events.events.some((e) => e.eventType === "merge.retargeted")).toBe(false);
-  });
-});
-
-describe("WS-A PR-5 flag OFF: identical to the legacy integ→default retarget", () => {
-  afterEach(() => {
-    delete process.env["WALKER_JJ_LOCAL_BASE"];
-  });
-
-  it("retargets integ→default_branch (NOT a stack walk) even when a stack is present", async () => {
-    // flag OFF (=0 break-glass to the legacy single-step retarget).
-    process.env["WALKER_JJ_LOCAL_BASE"] = "0";
-    const pool = new ReviewMergePool("direct_merge");
-    pool.speculativeBase = "tanren/integ/spec_1";
-    pool.specDependsOn = ["spec_a", "spec_b"];
-    // all merged → hold clears.
-    pool.mergedAncestors = ["spec_a", "spec_b"];
-    // A stack is present, but flag-off MUST ignore it (legacy single-step path).
-    pool.ancestorStack = [member("spec_a", "tanren/run_a"), member("spec_b", "tanren/run_b")];
-    const events = new FakeEventStore();
-    const probe = recordingMergeProbe(
-      { merged: true, mergeSha: "merge-sha", conflict: false, status: 200, message: "merged" },
-      {
-        mergeabilityReads: [
-          { state: "clean", behind: false, baseBranch: "tanren/integ/spec_1", headBranch: "tanren/run_1" },
-          { state: "clean", behind: false, baseBranch: "main", headBranch: "tanren/run_1" },
-        ],
-      },
-    );
-
-    const result = await mergeForRun({
-      pool: pool.asPgPool(),
-      eventStore: events,
-      secrets: new FakeSecretStore(),
-      resolveConflict: noopConflictResolver,
-      vcsProvider: vcsProviderOver(unusedHttp()),
-      runId: "run_1",
-      mergeProbe: probe,
-    });
-
-    expect(result.outcome).toBe("merged");
-    // Legacy single-step: integ → default_branch (main), NOT a stack walk.
-    expect(probe.retargetedBases).toEqual(["main"]);
-    expect(probe.mergeCalls).toBe(1);
-    // Flag-off NEVER writes ancestor_stack (the walk is the only writer).
-    expect(pool.ancestorStackWrites).toEqual([]);
-    expect(events.events.find((e) => e.eventType === "merge.retargeted")?.payload).toMatchObject({
-      fromBase: "tanren/integ/spec_1",
-      toBase: "main",
-    });
   });
 });

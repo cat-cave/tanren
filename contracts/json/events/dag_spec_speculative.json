@@ -2,9 +2,6 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
-    "integrationBranch": {
-      "type": "string"
-    },
     "runId": {
       "type": "string"
     },
@@ -31,8 +28,7 @@
     "specId",
     "runId",
     "unmergedAncestors",
-    "threshold",
-    "integrationBranch"
+    "threshold"
   ],
   "type": "object",
   "x-tanren-schema-id": "tanren.event.dag.spec.speculative"

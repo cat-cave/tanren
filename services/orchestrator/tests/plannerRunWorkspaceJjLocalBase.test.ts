@@ -1,21 +1,20 @@
-// WS-A PR-4 wiring (walker-jj-local-integration-design.md §2.1, §4): `prepareRunWorkspace`
-// chooses between the LEGACY single-ref clone and the jj-LOCAL base bootstrap purely on
-// (`WALKER_JJ_LOCAL_BASE` on) AND (a non-empty ancestor stack). This pins BOTH branches:
+// walker-jj-local-integration-design.md §2.1, §4: `prepareRunWorkspace` chooses between the
+// plain `default_branch` single-ref clone and the jj-LOCAL base bootstrap purely on whether
+// the run carries a non-empty ancestor stack. This pins BOTH branches:
 //
-//   FLAG-OFF / EMPTY STACK  ⇒ byte-identical to main: the `git clone --depth 1 --branch
-//                             <targetBranch>` command IS issued; NO jj op; clone-HEAD = the
-//                             clone's `git rev-parse HEAD`; NO `bootstrappedBaseRevision`.
-//   FLAG-ON + NON-EMPTY     ⇒ the bootstrap path: NO legacy `git clone --branch`; the jj
-//                             multi-ref assembly IS driven over the run's OWN runner; the
-//                             clone-HEAD = the assembled head; `bootstrappedBaseRevision` =
-//                             the LOCAL assembly bookmark (the conflict resolver's base).
+//   EMPTY STACK    ⇒ a non-speculative run: the `git clone --depth 1 --branch <default_branch>`
+//                    command IS issued; NO jj op; clone-HEAD = the clone's `git rev-parse
+//                    HEAD`; NO `bootstrappedBaseRevision`.
+//   NON-EMPTY      ⇒ the bootstrap path: NO `git clone --branch`; the jj multi-ref assembly IS
+//                    driven over the run's OWN runner; the clone-HEAD = the assembled head;
+//                    `bootstrappedBaseRevision` = the LOCAL assembly bookmark.
 //
-// The flag-ON case drives the REAL `JjWorkspaceVcsCore` over a command-dispatching
+// The bootstrap case drives the REAL `JjWorkspaceVcsCore` over a command-dispatching
 // substrate (jj sha reads → 40-hex shas, the conflict probe → "clean") so the wiring is
 // exercised end-to-end WITHOUT a real jj/runner — the assembly MECHANICS themselves are
 // already pinned by `ancestorStackAssembly.conformance.test.ts` over real jj.
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { RunnerHandle } from "../src/engine/contracts/allocator.js";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
 import type { RunnerCommand, CommandResult, CommandSubstrate } from "../src/engine/contracts/commandSubstrate.js";
@@ -126,47 +125,19 @@ function ranJj(ssh: DispatchingSsh): boolean {
   return ssh.commands.some((c) => c.command.command.includes("jj "));
 }
 
-describe("prepareRunWorkspace — WALKER_JJ_LOCAL_BASE base-bootstrap wiring", () => {
-  const KEY = "WALKER_JJ_LOCAL_BASE";
-  let prior: string | undefined;
-  beforeEach(() => {
-    prior = process.env[KEY];
-    delete process.env[KEY];
-  });
-  afterEach(() => {
-    if (prior === undefined) delete process.env[KEY];
-    else process.env[KEY] = prior;
-  });
-
-  it("FLAG OFF (=0 break-glass) + non-empty stack ⇒ the LEGACY single-ref clone", async () => {
-    process.env[KEY] = "0";
-    const ssh = new DispatchingSsh();
-    const prepared = await prepareRunWorkspace(
-      makeInput(ssh, makeContext({ ancestorStack: STACK })),
-      target,
-      WORKSPACE_PATH,
-    );
-    // The legacy `git clone --depth 1 --branch <targetBranch>` ran; NO jj assembly.
-    expect(ranLegacyClone(ssh)).toBe(true);
-    expect(ranJj(ssh)).toBe(false);
-    expect(prepared.cloneHeadSha).toBe(CLONE_HEAD);
-    // No locally-assembled base ⇒ the conflict resolver keeps `${targetBranch}@origin`.
-    expect(prepared.bootstrappedBaseRevision).toBeUndefined();
-  });
-
-  it("FLAG ON + EMPTY stack ⇒ still the LEGACY clone (a non-speculative run is unchanged)", async () => {
-    process.env[KEY] = "1";
+describe("prepareRunWorkspace — jj-local base-bootstrap wiring", () => {
+  it("EMPTY stack ⇒ the plain default_branch single-ref clone (a non-speculative run)", async () => {
     const ssh = new DispatchingSsh();
     // No ancestorStack on the context ⇒ resolveAncestorStack yields an empty stack.
     const prepared = await prepareRunWorkspace(makeInput(ssh, makeContext()), target, WORKSPACE_PATH);
     expect(ranLegacyClone(ssh)).toBe(true);
     expect(ranJj(ssh)).toBe(false);
     expect(prepared.cloneHeadSha).toBe(CLONE_HEAD);
+    // No locally-assembled base ⇒ the conflict resolver keeps `${default_branch}@origin`.
     expect(prepared.bootstrappedBaseRevision).toBeUndefined();
   });
 
-  it("FLAG ON + non-empty stack ⇒ the jj-LOCAL bootstrap: assembled head + the local base bookmark", async () => {
-    process.env[KEY] = "1";
+  it("non-empty stack ⇒ the jj-LOCAL bootstrap: assembled head + the local base bookmark", async () => {
     const ssh = new DispatchingSsh();
     const prepared = await prepareRunWorkspace(
       makeInput(ssh, makeContext({ ancestorStack: STACK })),

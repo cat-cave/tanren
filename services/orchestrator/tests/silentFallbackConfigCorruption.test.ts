@@ -16,7 +16,6 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { isAbsentProjectConfig } from "../src/engine/config/index.js";
-import { resolveGithubStaticRef as resolveGithubStaticRefSpeculative } from "../src/engine/dag/speculativeIntegrator.js";
 import {
   resolveGithubStaticRef as resolveGithubStaticRefBatch,
   resolveGovernancePosture,
@@ -62,10 +61,7 @@ describe("isAbsentProjectConfig — the propagate-vs-fall-through pivot", () => 
 });
 
 describe("resolveGithubStaticRef — PROPAGATE on a corrupt project config (wrong-identity guard)", () => {
-  for (const [name, resolve] of [
-    ["speculativeIntegrator", resolveGithubStaticRefSpeculative],
-    ["batchChecker", resolveGithubStaticRefBatch],
-  ] as const) {
+  for (const [name, resolve] of [["batchChecker", resolveGithubStaticRefBatch]] as const) {
     it(`${name}: THROWS on a corrupt project config instead of using the org-default token`, () => {
       // An unsupported version → UnknownConfigVersionError.
       expect(() => resolve(CORRUPT_PROJECT_CONFIG, ORG_CONFIG_WITH_DEFAULT)).toThrow(/unknown config version/iu);

@@ -34,7 +34,6 @@ import { DAG_CHANGE_CHANNEL, RUN_ACTIVITY_CHANNEL, type PgNotifyListener, runWit
 import type pg from "pg";
 import type { DagWalker } from "../contracts/dagWalker.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
-import type { SpeculativeIntegrator } from "../contracts/speculativeIntegrator.js";
 import { isTerminalStatus } from "../benchmark/runnerDb.js";
 import type { ChangePercolationCoordinator } from "./percolation.js";
 import { buildDagWalker, listWalkableProjectIds } from "./walker.js";
@@ -56,15 +55,10 @@ export interface DagWalkerSubscriberDeps {
   /** The shared LISTEN connection (the SAME one the SSE source / benchmark use). */
   notifyListener: PgNotifyListener;
   /**
-   * The speculative integrator the production walker uses to build a
-   * dependent's dynamic-base integration branch. Required when `walker` is not
-   * injected (the production path); a test that injects `walker` omits it.
-   */
-  integrator?: SpeculativeIntegrator;
-  /**
-   * The walker to drive. Defaults to the production `buildDagWalker(pool,
-   * { integrator })`. A test injects a recording walker to assert the event-driven
-   * trigger fires it (then `integrator` is not needed).
+   * The walker to drive. Defaults to the production `buildDagWalker(pool, {})` (the
+   * walker self-wires its org-scoped ancestor-stack resolver from the pool — no host
+   * integration builder is needed). A test injects a recording walker to assert the
+   * event-driven trigger fires it.
    */
   walker?: DagWalker;
   /**
@@ -156,14 +150,9 @@ export class DagWalkerSubscriber {
       deps.clearIntervalFn ?? ((handle) => clearInterval(handle as ReturnType<typeof setInterval>));
   }
 
-  /** Build the production walker; requires the integrator (no walker injected). */
+  /** Build the production walker (no walker injected) — it self-wires its seams from the pool. */
   private buildProductionWalker(): DagWalker {
-    const integrator = this.deps.integrator;
-    if (integrator === undefined) {
-      throw new Error("DagWalkerSubscriber requires a SpeculativeIntegrator when no walker is injected");
-    }
     return buildDagWalker(this.deps.pool, {
-      integrator,
       // Plane-split: route the walker's run-creation + dag.* events through the
       // control plane when a writer is wired; else direct on the pool.
       ...(this.deps.runStateWriter !== undefined && { runStateWriter: this.deps.runStateWriter }),

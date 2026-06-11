@@ -35,7 +35,7 @@ import type {
   ProjectBudgetState,
 } from "../src/engine/contracts/dagWalker.js";
 import type { DagLifecycleReadModel, DagLifecycleSnapshot } from "../src/engine/contracts/dagLifecycle.js";
-import type { SpeculativeIntegrator } from "../src/engine/contracts/speculativeIntegrator.js";
+import type { DagAncestorStackResolver } from "../src/engine/dag/walkerPg.js";
 
 const PROJECT = "proj_tick";
 const SPEC = "spec_ready";
@@ -102,9 +102,9 @@ const noBudgetGate: BudgetGate = {
   },
 };
 
-const neverIntegrator: SpeculativeIntegrator = {
-  buildIntegration: async (): Promise<never> => {
-    throw new Error("non-speculative spec: integrator must not be called");
+const neverStackResolver: DagAncestorStackResolver = {
+  resolveStack: async (): Promise<never> => {
+    throw new Error("non-speculative spec: the ancestor-stack resolver must not be called");
   },
 };
 
@@ -140,7 +140,7 @@ function buildWalker(enqueuer: DagEnqueuer, emitter: DagEventEmitter): EventEmit
     lifecycleReadModel: emptyLifecycleReadModel(),
     enqueuer,
     events: emitter,
-    integrator: neverIntegrator,
+    ancestorStackResolver: neverStackResolver,
     speculationConfig: async () => ({ threshold: "conservative", depthCap: 2 }),
     budgetGate: noBudgetGate,
     concurrency: () => 4,
@@ -198,7 +198,7 @@ describe("DagWalker benign-skip tolerance — a typed benign per-spec error is a
         lifecycleReadModel: twoReadySpecsLifecycle(),
         enqueuer,
         events: emitter,
-        integrator: neverIntegrator,
+        ancestorStackResolver: neverStackResolver,
         speculationConfig: async () => ({ threshold: "conservative", depthCap: 2 }),
         budgetGate: noBudgetGate,
         concurrency: () => 4,
@@ -256,7 +256,7 @@ describe("DagWalker benign-skip tolerance — a typed benign per-spec error is a
       lifecycleReadModel: twoReadySpecsLifecycle(),
       enqueuer,
       events: emitter,
-      integrator: neverIntegrator,
+      ancestorStackResolver: neverStackResolver,
       speculationConfig: async () => ({ threshold: "conservative", depthCap: 2 }),
       budgetGate: noBudgetGate,
       concurrency: () => 4,

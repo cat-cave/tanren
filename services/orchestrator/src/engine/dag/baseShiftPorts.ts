@@ -20,18 +20,17 @@ export type RebaseDecision = "rebased_clean" | "rebased_resolved" | "replanned" 
  * The dependent's run row + git branch survive every path.
  */
 export interface BaseShiftPersistence {
-  /** Re-point the EXISTING run's dynamic base (NULL when non-speculative). Keeps the row. */
+  /** Re-point the EXISTING run's dynamic base to the re-resolved ancestor stack. Keeps the row. */
   repointBase(input: {
     projectId: string;
     runId: string;
-    speculativeBase: string | null;
     /**
      * The re-resolved ordered ancestor stack persisted to `runs.ancestor_stack`
-     * (walker-jj-local-integration-design.md §2.2/§2.3). With `WALKER_JJ_LOCAL_BASE` ON it
-     * is the SOURCE OF TRUTH (a run is "speculative" iff non-empty); flag-off it is the
-     * PR-1 dual-write alongside the legacy `speculative_base`. Empty when non-speculative.
+     * (walker-jj-local-integration-design.md §2.2/§2.3) — the SOURCE OF TRUTH (a run is
+     * "speculative" iff non-empty). Empty when non-speculative (every ancestor merged). The
+     * legacy `speculative_base` column is NO LONGER written (jj-local has no host ref).
      */
-    ancestorStack?: AncestorStack;
+    ancestorStack: AncestorStack;
   }): Promise<void>;
   /** Stamp the in-flight percolation marker on the EXISTING run (the settle handle). */
   markInFlight(input: {

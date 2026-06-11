@@ -146,7 +146,11 @@ export const MergeSpeculativeHeldPayload = z
     prUrl: z.string(),
     prNumber: z.number().int(),
     integration: MergeIntegrationMode,
-    /** The integration branch the dependent's PR currently bases on. */
+    /**
+     * The base the dependent's PR currently stacks on — the immediate unmerged ancestor's
+     * PR-head branch (the stacked-PR base), or `default_branch` once the stack empties.
+     * jj-local: there is no synthesized integration ref.
+     */
     speculativeBase: z.string(),
     /** The ancestor spec ids that are not yet merged (the merge is held on these). */
     unmergedAncestors: z.array(z.string()).min(1),

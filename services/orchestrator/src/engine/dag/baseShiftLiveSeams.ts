@@ -41,7 +41,6 @@ import { loadBaseShiftRunContext, type BaseShiftRunContext } from "./baseShiftLi
 import { openLiveBaseShiftWorkspace, type LiveBaseShiftWorkspaceCore } from "./baseShiftLiveRebase.js";
 import { assembleBaseShiftStackWorkspace } from "./baseShiftStackAssembly.js";
 import { resolveBaseShiftConflict } from "./baseShiftLiveResolve.js";
-import { walkerJjLocalBase } from "./walkerJjLocalBaseFlag.js";
 import { runFreshRunnerMergeGate } from "../merge/freshRunnerGate.js";
 import { pushJjHead } from "../workflow/reviewMerge/conflictResolver/jjAuthedPush.js";
 
@@ -84,7 +83,6 @@ export class LiveBaseShiftWorkspaceProvider implements BaseShiftWorkspaceOpener 
   async open(input: {
     projectId: string;
     dependent: SpeculativeDependent;
-    newBaseRef: string;
     nonSpeculative: boolean;
     ancestorStack?: AncestorStack;
   }): Promise<{ workspaceId: string; path: string; branch: string; newBaseSha: string }> {
@@ -98,39 +96,40 @@ export class LiveBaseShiftWorkspaceProvider implements BaseShiftWorkspaceOpener 
       // §3.1: a RESOLVED commit sha (not the `<baseRef>@origin` jj revision token). jj
       // rebases onto a revision, and `jj rebase -d <sha>` accepts a sha, so this same value
       // is the rebase target AND a clean `integration.rebase` event field (no token pollution).
-      // On the jj-local path it is the LOCALLY-ASSEMBLED stack head; on the legacy path it is
-      // the single-ref clone's resolved base sha.
+      // Speculative ⇒ the LOCALLY-ASSEMBLED stack head; non-speculative ⇒ the `default_branch`
+      // clone's resolved base sha.
       newBaseSha: live.newBaseSha,
     };
   }
 
   /**
-   * Materialize the shifted base the dependent's branch rebases onto:
-   *   • WS-A PR-6 jj-local path (`WALKER_JJ_LOCAL_BASE` ON + a NON-EMPTY re-resolved stack):
-   *     ASSEMBLE the stack LOCALLY (`main + ordered ancestors`) on the dependent's own
-   *     short-lived runner (§2.2) — NO orchestrator-synthesized integration ref. A
-   *     non-speculative shift (empty stack) takes the plain `default_branch` clone below.
-   *   • Legacy path (flag-off / empty stack): the EXACT current single-ref clone of
-   *     `${newBaseRef}@origin` (the rebuilt integration ref) or `default_branch` — byte-
-   *     identical to before this PR.
+   * Materialize the shifted base the dependent's branch rebases onto (jj-local, §2.2):
+   *   • a NON-EMPTY re-resolved stack (a still-speculative shift): ASSEMBLE the stack
+   *     LOCALLY (`main + ordered ancestors`) on the dependent's own short-lived runner —
+   *     NO orchestrator-synthesized integration ref.
+   *   • an empty stack (a NON-speculative shift — every ancestor merged): the plain
+   *     `default_branch` clone (a REAL ref the clone imports, never a synthesized one).
    */
   private async openShiftedBaseWorkspace(
     input: {
       dependent: SpeculativeDependent;
-      newBaseRef: string;
       nonSpeculative: boolean;
       ancestorStack?: AncestorStack;
     },
     ctx: BaseShiftRunContext,
   ): Promise<LiveBaseShiftWorkspaceCore> {
     const stack = input.ancestorStack;
-    if (walkerJjLocalBase() && stack !== undefined && stack.length > 0) {
+    if (stack !== undefined && stack.length > 0) {
       return assembleBaseShiftStackWorkspace({ deps: this.deps, ctx, stack, timeoutMs: this.timeoutMs() });
     }
-    // Non-speculative (every ancestor merged) rebases onto plain `default_branch`; else the
-    // rebuilt speculative integration ref. Either way it is a real ref the clone imports.
-    const baseRef = input.nonSpeculative ? ctx.defaultBranch : input.newBaseRef;
-    return openLiveBaseShiftWorkspace({ deps: this.deps, ctx, baseRef, timeoutMs: this.timeoutMs() });
+    // A non-speculative shift (every ancestor merged) rebases onto plain `default_branch` —
+    // a REAL ref the clone imports (never a synthesized integration ref).
+    return openLiveBaseShiftWorkspace({
+      deps: this.deps,
+      ctx,
+      baseRef: ctx.defaultBranch,
+      timeoutMs: this.timeoutMs(),
+    });
   }
 
   /**
@@ -311,24 +310,23 @@ export class LiveBaseShiftConflictResolver implements BaseShiftConflictResolver 
     dependent: SpeculativeDependent;
     workspace: { workspaceId: string; path: string };
     rebase: { headSha: string };
-    newBaseRef: string;
     nonSpeculative: boolean;
     ancestorStack?: AncestorStack;
   }): Promise<ConflictResolution> {
     const ctx = await loadBaseShiftRunContext(this.deps.pool, input.dependent.runId);
-    // P0 fix: resolve + re-gate against the SHIFTED base the initial rebase used, NOT the
-    // project default. Non-speculative ⇒ plain default_branch; else the speculative
-    // integration ref (`newBaseRef`). A resolution proven against the wrong base would be a
-    // fail-OPEN (work marked `rebased_resolved` that never met the base it lands on).
-    const shiftedBase = input.nonSpeculative ? ctx.defaultBranch : input.newBaseRef;
+    // §2.2 jj-local: resolve + re-gate against the SHIFTED base the initial rebase used.
+    // A still-speculative shift assembles the re-resolved stack LOCALLY (below, via
+    // `ancestorStack`) and the `shiftedBase` is only the diagnostic clone base; a
+    // non-speculative shift rebases onto plain `default_branch`.
+    const shiftedBase = ctx.defaultBranch;
     return resolveBaseShiftConflict({
       deps: this.deps,
       ctx,
       shiftedBase,
-      // WS-A PR-6b (§2.2): the re-resolved stack the coordinator threaded through (the SAME
-      // the opener assembled). flag-ON + non-empty ⇒ the resolver assembles `main + ordered
-      // ancestors` LOCALLY instead of cloning `${shiftedBase}@origin`. Empty/flag-off ⇒
-      // single-ref clone (the non-speculative path passes no stack — plain default_branch).
+      // §2.2: the re-resolved stack the coordinator threaded through (the SAME the opener
+      // assembled). Non-empty ⇒ the resolver assembles `main + ordered ancestors` LOCALLY.
+      // Absent/empty (the non-speculative path passes no stack) ⇒ a plain `default_branch`
+      // single-ref clone (a REAL ref, never a synthesized one).
       ...(input.ancestorStack !== undefined && !input.nonSpeculative && { ancestorStack: input.ancestorStack }),
       timeoutMs: this.deps.timeoutMs ?? BASE_SHIFT_TIMEOUT_MS,
     });

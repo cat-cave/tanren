@@ -4,14 +4,16 @@
 // itself). Each tick it loads the spec DAG + the per-spec LIFECYCLE PROJECTION
 // under RLS, plans the tick with the pure `planSpeculativeDagTick` core (readiness
 // = all deps crossed the configured SPECULATION THRESHOLD, not just merged), and
-// for each ready spec builds its speculative integration branch (when it has
-// unmerged ancestors) and enqueues it against that DYNAMIC BASE through the SAME
-// createQueuedRunFromSpec path a manual operator trigger uses. The parallel
-// run-executor worker then runs them.
+// for each ready spec RESOLVES its ordered unmerged-ancestor stack (when it has
+// unmerged ancestors) and enqueues it carrying that `ancestor_stack` through the SAME
+// createQueuedRunFromSpec path a manual operator trigger uses. The dependent run's own
+// runner later jj-ASSEMBLES its base LOCALLY from those real ancestor PR-head refs (the
+// bootstrap, `plannerRunJjLocalBootstrap.ts`) — there is NO orchestrator-synthesized
+// `tanren/integ` host ref. The parallel run-executor worker then runs them.
 //
 // The pg seam wirings (read model + lifecycle projection + enqueuer + event
-// emitter) live in `walkerPg.ts`; the integration-branch builder is the
-// `SpeculativeIntegrator` seam (`speculativeIntegrator.ts`). The LISTEN/NOTIFY
+// emitter + the org-scoped ancestor-stack resolver) live in `walkerPg.ts`. The
+// LISTEN/NOTIFY
 // subscriber that runs the walker on startup + on every run.*-terminal /
 // merge.completed notification (incl. ancestor-merge → dependent re-gate) lives in
 // `subscriber.ts`.
@@ -38,13 +40,19 @@ import {
 } from "../contracts/dagWalker.js";
 import type { DagLifecycleReadModel } from "../contracts/dagLifecycle.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
-import type { SpeculativeIntegrator } from "../contracts/speculativeIntegrator.js";
 import { SpecDependenciesBlockedError, SpecNotRunnableError } from "../workflow/projectSpecErrors.js";
 import type { AncestorStack } from "./ancestorStack.js";
 import type { SpecReadiness } from "./speculation.js";
 import { PgBudgetGate } from "./budgetGate.js";
 import { PgDagLifecycleReadModel } from "./lifecycle.js";
-import { type DagEventEmitter, PgDagEventEmitter, PgDagReadModel, SpecRunDagEnqueuer } from "./walkerPg.js";
+import {
+  type DagAncestorStackResolver,
+  type DagEventEmitter,
+  PgDagAncestorStackResolver,
+  PgDagEventEmitter,
+  PgDagReadModel,
+  SpecRunDagEnqueuer,
+} from "./walkerPg.js";
 import { createLogger } from "../observability/logger.js";
 const log = createLogger("dag-walker");
 
@@ -74,8 +82,12 @@ export interface DagWalkerDeps {
    * `ceilingUsd: undefined` ⇒ unlimited ⇒ behavior byte-identical to today.
    */
   budgetGate: BudgetGate;
-  /** builds a dependent's speculative integration branch (the dynamic base). */
-  integrator: SpeculativeIntegrator;
+  /**
+   * Resolves a dependent's ordered unmerged-ancestor stack (the real PR-head branches it
+   * will jj-assemble its base from, DAG-ordered) — org-scoped (RLS). The walker persists
+   * this on the speculative run as `ancestor_stack`; NO host integration ref is built.
+   */
+  ancestorStackResolver: DagAncestorStackResolver;
   /** resolves the project's speculation threshold + depth cap from config. */
   speculationConfig: SpeculationConfigResolver;
   /**
@@ -92,8 +104,8 @@ export interface DagWalkerDeps {
  * The production DagWalker. `walk(projectId)` performs one full scheduling pass:
  * load the DAG + lifecycle snapshots under RLS → plan the tick with the pure
  * SPECULATIVE core (readiness = all deps crossed the configured threshold) → for
- * each ready spec, build its speculative integration branch (when it has unmerged
- * ancestors) and enqueue it against that dynamic base → emit the outcome event(s).
+ * each ready spec, resolve its ordered unmerged-ancestor stack (when it has unmerged
+ * ancestors) and enqueue it carrying that `ancestor_stack` → emit the outcome event(s).
  * It never holds DAG state in memory across ticks (it reloads every walk), so the
  * DAG rows are always the source of truth. The subscriber drives it on startup +
  * on every relevant notification (incl. ancestor `merge.completed`, which re-walks
@@ -161,9 +173,9 @@ export class EventEmittingDagWalker implements DagWalker {
       let inFlightBefore = plan.inFlightCount;
       for (const enqueue of plan.enqueues) {
         // PER-SPEC TOLERANCE (audit §3.13b): isolate each ready spec's enqueue so ONE
-        // poisoned spec (e.g. the speculative integrator throwing while building its
-        // integration branch) cannot abort the WHOLE tick and starve every spec ordered
-        // after it. A genuine (non-benign) failure on one spec is logged LOUD and skipped
+        // poisoned spec (e.g. the ancestor-stack resolver throwing while resolving the
+        // unmerged ancestor branches) cannot abort the WHOLE tick and starve every spec
+        // ordered after it. A genuine (non-benign) failure on one spec is logged LOUD and skipped
         // THIS tick — the OTHER ready specs still enqueue, and the next walk re-attempts
         // the failed one. (The two benign typed conditions are still swallowed quietly
         // inside `enqueueOrTolerate`; this catch is the backstop for everything else.)
@@ -179,14 +191,15 @@ export class EventEmittingDagWalker implements DagWalker {
           continue;
         }
         if (enqueued === undefined) {
-          // The spec was NOT enqueued this tick, for one of two benign reasons:
-          //   - a speculative integration surfaced an ancestor-vs-ancestor conflict
-          //     (the dependent is HELD — it cannot base on a broken integration —
-          //     and the walker retries once the pair reconciles/merges); OR
-          //   - a CONCURRENT tick already claimed it (SpecNotRunnableError — the
-          //     pending→active claim is the idempotency boundary, so this is the
-          //     expected, harmless concurrent-tick race, swallowed in enqueueOne).
-          // Either way: skip it this tick, no error.
+          // The spec was NOT enqueued this tick because a CONCURRENT tick already
+          // claimed it (SpecNotRunnableError — the pending→active claim is the
+          // idempotency boundary, so this is the expected, harmless concurrent-tick
+          // race, swallowed in enqueueOne). Skip it this tick, no error.
+          //
+          // NOTE (§4a / jj-local): an ancestor-vs-ancestor conflict is NO LONGER detected
+          // here — under the jj-local model there is no walk-time host build. The
+          // dependent enqueues optimistically; the conflict surfaces during its OWN
+          // bootstrap-time local assembly (fail-closed THROW), still before the writer runs.
           continue;
         }
         enqueuedSpecIds.push(enqueue.specId);
@@ -268,10 +281,11 @@ export class EventEmittingDagWalker implements DagWalker {
 
   /**
    * Enqueue one planned spec. A NON-speculative spec (all deps merged) enqueues
-   * against `default_branch` and emits dag.spec.enqueued. A SPECULATIVE spec first
-   * builds its integration branch; on an ancestor-vs-ancestor conflict it is held
-   * (returns undefined — the conflict pair surfaced for the resolver); else it
-   * enqueues against the integration branch and emits dag.spec.speculative.
+   * against `default_branch` and emits dag.spec.enqueued. A SPECULATIVE spec RESOLVES
+   * its ordered unmerged-ancestor stack (the real PR-head branches), persists it as
+   * `ancestor_stack`, and emits dag.spec.speculative. NO host integration ref is built
+   * — the dependent run jj-assembles its base LOCALLY at bootstrap from those refs (a
+   * spec-vs-spec conflict surfaces there, §4a, not here).
    */
   private async enqueueOne(
     projectId: string,
@@ -295,40 +309,21 @@ export class EventEmittingDagWalker implements DagWalker {
       return { runId: enqueued.runId };
     }
 
-    const integration = await this.deps.integrator.buildIntegration({
-      projectId,
-      dependentSpecId: enqueue.specId,
-      unmergedAncestorSpecIds: enqueue.unmergedAncestors,
-    });
-    if (integration.outcome === "conflict") {
-      // The conflict is BETWEEN two ancestors — surfaced early on the integration
-      // branch (§2c). The dependent is HELD this tick (it cannot base on a broken
-      // integration); this branch ONLY holds + logs, it does NOT resolve the conflict.
-      // The real resolution happens later when the conflicting ancestor is driven
-      // through the merge queue (the coordinator routes a base-dirty PR through the
-      // per-run intent-preserving resolver); the walker re-walks once the pair
-      // reconciles/merges. Logged (not silently dropped) per the §2c no-silent-drops rule.
-      log.warn(
-        "held speculative spec: ancestors dirty/conflict on the integration branch; awaiting merge-queue resolve",
-        {
-          specId: enqueue.specId,
-          ancestorSpecId: integration.conflictBetween?.specId,
-          otherAncestorSpecId: integration.conflictBetween?.otherSpecId,
-          integrationBranch: integration.integrationBranch,
-          message: integration.message,
-        },
-      );
-      return undefined;
-    }
+    // Resolve the ordered unmerged-ancestor stack — the real PR-head branches the
+    // dependent will jj-assemble its base from at bootstrap (DAG-ordered, org-scoped).
+    // NO host integration ref is built; the per-ancestor `headSha` is captured later, at
+    // bootstrap-assembly time (the PR-8c write-back), so it is an empty placeholder here.
+    const ancestorStack: AncestorStack = (
+      await this.deps.ancestorStackResolver.resolveStack({
+        projectId,
+        unmergedAncestorSpecIds: enqueue.unmergedAncestors,
+      })
+    ).map((member) => ({ specId: member.specId, runId: member.runId, branch: member.branch, headSha: "" }));
 
     const enqueued = await this.enqueueOrTolerate({
       projectId,
       specId: enqueue.specId,
-      speculativeBase: integration.integrationBranch,
-      // record the per-ancestor head SHA the run integrated against (the
-      // change-percolation divergence key); a later ancestor advance is detectable.
-      integratedAncestorShas: integration.ancestorHeadShas,
-      ancestorStack: integration.ancestorStack,
+      ancestorStack,
     });
     if (enqueued === undefined) return undefined;
     await this.deps.events.emitSpecSpeculative({
@@ -337,7 +332,6 @@ export class EventEmittingDagWalker implements DagWalker {
       runId: enqueued.runId,
       unmergedAncestors: enqueue.unmergedAncestors,
       threshold,
-      integrationBranch: integration.integrationBranch,
     });
     return { runId: enqueued.runId };
   }
@@ -363,8 +357,6 @@ export class EventEmittingDagWalker implements DagWalker {
   private async enqueueOrTolerate(input: {
     projectId: string;
     specId: string;
-    speculativeBase?: string;
-    integratedAncestorShas?: Record<string, string>;
     ancestorStack?: AncestorStack;
   }): Promise<{ runId: string } | undefined> {
     try {
@@ -447,8 +439,6 @@ export function buildSpeculationConfigResolver(pool: pg.Pool, events?: DagEventE
 }
 
 export interface BuildDagWalkerDeps {
-  /** The speculative integrator (builds the dynamic-base integration branch). */
-  integrator: SpeculativeIntegrator;
   /**
    * Plane-split (autonomy loops): the control-plane run-state writer. When present,
    * the enqueuer routes its run-CREATION through the control plane and the event
@@ -460,13 +450,13 @@ export interface BuildDagWalkerDeps {
 }
 
 /**
- * Build the production DagWalker from a runtime pool + the speculative integrator
- * — the single construction site the worker boot + subscriber use. Wires the pg
- * read model + lifecycle projection, the createQueuedRunFromSpec enqueuer, the pg
- * event emitter, and the per-project speculation-config resolver; the concurrency
- * ceiling defaults to the config surface (resolveWorkerConcurrency). When a
- * `runStateWriter` is supplied (plane-split remote-writes), the enqueuer + event
- * emitter route their tenant writes through the control plane instead.
+ * Build the production DagWalker from a runtime pool — the single construction site
+ * the worker boot + subscriber use. Wires the pg read model + lifecycle projection, the
+ * createQueuedRunFromSpec enqueuer, the org-scoped ancestor-stack resolver, the pg event
+ * emitter, and the per-project speculation-config resolver; the concurrency ceiling
+ * defaults to the config surface (resolveWorkerConcurrency). When a `runStateWriter` is
+ * supplied (plane-split remote-writes), the enqueuer + event emitter route their tenant
+ * writes through the control plane instead.
  */
 export function buildDagWalker(pool: pg.Pool, deps: BuildDagWalkerDeps): DagWalker {
   // Hoisted so the speculation-config resolver shares the SAME emitter — a corrupt
@@ -477,7 +467,7 @@ export function buildDagWalker(pool: pg.Pool, deps: BuildDagWalkerDeps): DagWalk
     lifecycleReadModel: new PgDagLifecycleReadModel(pool),
     enqueuer: new SpecRunDagEnqueuer(pool, deps.runStateWriter),
     events,
-    integrator: deps.integrator,
+    ancestorStackResolver: new PgDagAncestorStackResolver(pool),
     speculationConfig: buildSpeculationConfigResolver(pool, events),
     budgetGate: new PgBudgetGate(pool),
   });

@@ -26,7 +26,7 @@ import {
   clearPercolationPending,
   recordPercolationPending,
   recordReplanContext,
-  repointRunSpeculativeBase,
+  repointRunAncestorStack,
 } from "./percolationWrites.js";
 
 /**
@@ -41,13 +41,8 @@ export class PgBaseShiftPersistence implements BaseShiftPersistence {
     private readonly runStateWriter?: RunStateWriter,
   ) {}
 
-  async repointBase(input: {
-    projectId: string;
-    runId: string;
-    speculativeBase: string | null;
-    ancestorStack?: AncestorStack;
-  }): Promise<void> {
-    await repointRunSpeculativeBase(this.pool, input, this.runStateWriter);
+  async repointBase(input: { projectId: string; runId: string; ancestorStack: AncestorStack }): Promise<void> {
+    await repointRunAncestorStack(this.pool, input, this.runStateWriter);
   }
 
   async markInFlight(input: {

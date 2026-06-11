@@ -25,10 +25,9 @@
 // WITH the shift as context, alive.
 
 import type { PercolationDecision, SpeculativeDependent } from "../contracts/changePercolation.js";
-import { ancestorStackFromShaMap, type AncestorStack } from "./ancestorStack.js";
+import type { AncestorStack } from "./ancestorStack.js";
 import type { RebaseResult, WorkspaceVcsCore } from "../contracts/workspaceVcsCore.js";
 import type { PercolationReexecutor } from "./percolationOperation.js";
-import { walkerJjLocalBase } from "./walkerJjLocalBaseFlag.js";
 import {
   type BaseShiftEventEmitter,
   type BaseShiftNodeReader,
@@ -54,18 +53,14 @@ export interface BaseShiftWorkspaceOpener {
   open(input: {
     projectId: string;
     dependent: SpeculativeDependent;
-    /** The shifted base ref (the rebuilt integration branch, or plain `default_branch`). */
-    newBaseRef: string;
     /** True when EVERY ancestor merged (the rebase is onto plain `default_branch`). */
     nonSpeculative: boolean;
     /**
-     * WS-A PR-6 (walker-jj-local-integration-design.md §2.2): the RE-RESOLVED ordered
-     * ancestor stack (ancestors that merged are dropped; the rest at their new heads).
-     * With `WALKER_JJ_LOCAL_BASE` ON + a non-empty stack, the live opener ASSEMBLES this
-     * stack LOCALLY (`main + ordered ancestors`) and the coordinator `rebaseOnto`s the
-     * dependent's branch onto the assembled head — instead of cloning the single
-     * `${newBaseRef}@origin` synthesized integration ref. Empty / flag-off ⇒ the EXACT
-     * current single-ref clone (prod unchanged).
+     * §2.2: the RE-RESOLVED ordered ancestor stack (ancestors that merged are dropped; the
+     * rest at their new heads). A non-empty stack ⇒ the live opener ASSEMBLES it LOCALLY
+     * (`main + ordered ancestors`) and the coordinator `rebaseOnto`s the dependent's branch
+     * onto the assembled head — NO synthesized host integration ref. Empty (a non-speculative
+     * shift) ⇒ a plain `default_branch` clone (a REAL ref).
      */
     ancestorStack?: AncestorStack;
   }): Promise<{ workspaceId: string; path: string; branch: string; newBaseSha: string }>;
@@ -100,24 +95,19 @@ export interface BaseShiftConflictResolver {
     workspace: { workspaceId: string; path: string };
     rebase: RebaseResult & { outcome: "conflicted" };
     /**
-     * The SHIFTED base the conflict must be resolved + re-gated AGAINST — the SAME base the
-     * initial `rebaseOnto` used (the rebuilt speculative integration ref, or plain
-     * `default_branch` when non-speculative), NOT the project default. The resolver MUST
-     * gather/replay the conflict against THIS base, else it would resolve against the wrong
-     * base and mark work `rebased_resolved` that was never proven against the base it lands
-     * on (a fail-OPEN). `newBaseRef` is the branch the resolver re-clones + the conflict is
-     * gathered onto; `nonSpeculative` is true when EVERY ancestor merged (rebase onto plain
-     * `default_branch`).
+     * True when EVERY ancestor merged (the rebase + resolve is onto plain `default_branch`).
+     * A still-speculative shift (false) gathers/re-gates the conflict against the LOCALLY
+     * assembled stack head (the SAME base the initial `rebaseOnto` used) — never the project
+     * default — else it would mark work `rebased_resolved` that was never proven against the
+     * base it lands on (a fail-OPEN).
      */
-    newBaseRef: string;
     nonSpeculative: boolean;
     /**
-     * WS-A PR-6b (walker-jj-local-integration-design.md §2.2): the RE-RESOLVED ordered
-     * ancestor stack (the SAME one the OPENER assembled). With `WALKER_JJ_LOCAL_BASE` ON +
-     * a non-empty stack, the live resolver ASSEMBLES `main + ordered ancestors` LOCALLY and
-     * gathers + re-gates the recorded conflict against the assembled head — instead of
-     * cloning the synthesized `${newBaseRef}@origin` integration ref. Empty/absent/flag-off
-     * ⇒ the EXACT current single-ref clone (the resolver still resolves against `newBaseRef`).
+     * §2.2: the RE-RESOLVED ordered ancestor stack (the SAME one the OPENER assembled). A
+     * non-empty stack ⇒ the live resolver ASSEMBLES `main + ordered ancestors` LOCALLY and
+     * gathers + re-gates the recorded conflict against the assembled head — NO synthesized
+     * host integration ref. Empty/absent (a non-speculative shift) ⇒ a plain `default_branch`
+     * single-ref clone (a REAL ref).
      */
     ancestorStack?: AncestorStack;
   }): Promise<ConflictResolution>;
@@ -169,23 +159,18 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
     projectId: string;
     dependent: SpeculativeDependent;
     decision: PercolationDecision;
-    integrationBranch: string;
-    ancestorHeadShas: Record<string, string>;
+    ancestorStack: AncestorStack;
     nonSpeculative: boolean;
   }): Promise<{ reexecRunId: string }> {
-    // WS-A PR-6 (§2.2): the RE-RESOLVED ancestor stack is the kick-off's `ancestorHeadShas`
-    // — the per-ancestor head-sha map of the STILL-UNMERGED ancestors (merged ones already
-    // dropped by `PercolatingKickOff`). It is the SAME ordered content the keep-run dual-write
-    // persists; threaded to the opener so the live-jj-local path assembles `main + ordered
-    // ancestors` LOCALLY (flag-ON) instead of cloning the synthesized integration ref. Empty
-    // when non-speculative (every ancestor merged ⇒ a real run against plain `default_branch`).
-    const ancestorStack: AncestorStack = input.nonSpeculative ? [] : ancestorStackFromShaMap(input.ancestorHeadShas);
+    // §2.2: the RE-RESOLVED ordered ancestor stack the kick-off resolved (the still-unmerged
+    // ancestors at their new heads, with their real PR-head branches). The live opener
+    // assembles `main + ordered ancestors` LOCALLY from it — NO synthesized integration ref.
+    // Empty when non-speculative (every ancestor merged ⇒ a real run against `default_branch`).
     await this.rebaseOnto({
       projectId: input.projectId,
       dependent: input.dependent,
-      newBaseRef: input.integrationBranch,
       nonSpeculative: input.nonSpeculative,
-      ancestorStack,
+      ancestorStack: input.ancestorStack,
       ancestorSpecId: input.decision.ancestorSpecId,
       toSha: input.decision.toSha,
       ...(input.decision.immediateSeverity === "changes_requested" && {
@@ -214,12 +199,11 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
   async rebaseOnto(input: {
     projectId: string;
     dependent: SpeculativeDependent;
-    newBaseRef: string;
     nonSpeculative: boolean;
     /**
-     * WS-A PR-6 (§2.2): the re-resolved ancestor stack the live-jj-local opener assembles
-     * + the keep-run persists (flag-ON). Absent on the merge-`behind` path (a non-speculative
-     * base-branch advance — empty stack); the kick-off path passes the unmerged set.
+     * §2.2: the re-resolved ancestor stack the live-jj-local opener assembles + the keep-run
+     * persists. Absent on the merge-`behind` path (a non-speculative base-branch advance —
+     * empty stack); the kick-off path passes the unmerged set.
      */
     ancestorStack?: AncestorStack;
     ancestorSpecId: string;
@@ -268,7 +252,6 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
   private async openOrHold(input: {
     projectId: string;
     dependent: SpeculativeDependent;
-    newBaseRef: string;
     nonSpeculative: boolean;
     ancestorStack?: AncestorStack;
   }): Promise<{ workspaceId: string; path: string; branch: string; newBaseSha: string }> {
@@ -276,10 +259,9 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
       return await this.deps.opener.open({
         projectId: input.projectId,
         dependent: input.dependent,
-        newBaseRef: input.newBaseRef,
         nonSpeculative: input.nonSpeculative,
-        // WS-A PR-6 (§2.2): the live opener assembles this stack LOCALLY (flag-ON + non-empty)
-        // instead of cloning `${newBaseRef}@origin`; absent/empty/flag-off = single-ref clone.
+        // §2.2: the live opener assembles this stack LOCALLY (non-empty) — NO synthesized
+        // host ref; an empty stack (a non-speculative shift) takes the `default_branch` clone.
         ...(input.ancestorStack !== undefined && { ancestorStack: input.ancestorStack }),
       });
     } catch (error) {
@@ -294,7 +276,6 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
     branch: string;
     newBaseSha: string;
     nonSpeculative: boolean;
-    newBaseRef: string;
     ancestorStack?: AncestorStack;
     ancestorSpecId: string;
     toSha: string;
@@ -325,7 +306,6 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
     branch: string;
     newBaseSha: string;
     nonSpeculative: boolean;
-    newBaseRef: string;
     ancestorStack?: AncestorStack;
     ancestorSpecId: string;
     toSha: string;
@@ -339,13 +319,10 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
         dependent: input.dependent,
         workspace: input.ws,
         rebase: input.rebase,
-        // Resolve + re-gate against the SAME shifted base the initial rebase used (the
-        // speculative integration ref, or plain default_branch) — NEVER the project default.
-        newBaseRef: input.newBaseRef,
         nonSpeculative: input.nonSpeculative,
-        // WS-A PR-6b (§2.2): thread the re-resolved stack the OPENER assembled so the live
-        // resolver assembles the SAME `main + ordered ancestors` LOCALLY (flag-ON) instead of
-        // cloning `${newBaseRef}@origin`. Absent/empty/flag-off ⇒ the single-ref clone.
+        // §2.2: thread the re-resolved stack the OPENER assembled so the live resolver
+        // assembles the SAME `main + ordered ancestors` LOCALLY (non-empty) — NO synthesized
+        // host ref. Absent/empty (a non-speculative shift) ⇒ the `default_branch` single-ref clone.
         ...(input.ancestorStack !== undefined && { ancestorStack: input.ancestorStack }),
       });
     } catch (error) {
@@ -407,33 +384,20 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
     projectId: string;
     dependent: SpeculativeDependent;
     nonSpeculative: boolean;
-    newBaseRef: string;
     ancestorStack?: AncestorStack;
     ancestorSpecId: string;
     toSha: string;
     reviewVerdict?: "changes_requested";
   }): Promise<void> {
-    // WS-A PR-6 (§2.2): the "shifted base" the keep-run re-points the EXISTING run onto.
-    //   • flag-ON (`WALKER_JJ_LOCAL_BASE`): the source of truth is the RE-RESOLVED ancestor
-    //     stack (the one the live opener just assembled `main + ordered ancestors` from) —
-    //     empty when every ancestor merged. There is NO synthesized integration ref, so
-    //     `speculative_base` is NULL on this path (a run is "speculative" iff the stack is
-    //     non-empty, §2.3). The stack threaded in from `rebaseOnto` IS what was assembled.
-    //   • flag-OFF (production today): re-point `speculative_base` to the rebuilt integration
-    //     branch (NULL when non-speculative) and DUAL-WRITE the stack reconstructed from the
-    //     dependent's per-ancestor SHA map (PR-1, additive — written, not yet read). BYTE-
-    //     IDENTICAL to before this PR.
-    const jjLocal = walkerJjLocalBase();
-    const speculativeBase = jjLocal || input.nonSpeculative ? null : input.newBaseRef;
-    const ancestorStack: AncestorStack = jjLocal
-      ? (input.ancestorStack ?? [])
-      : input.nonSpeculative
-        ? []
-        : ancestorStackFromShaMap(input.dependent.integratedAncestorShas);
+    // §2.2 jj-local: the keep-run re-points the EXISTING run onto the RE-RESOLVED ancestor
+    // stack (the one the live opener just assembled `main + ordered ancestors` from) — empty
+    // when every ancestor merged (non-speculative). There is NO synthesized integration ref:
+    // a run is "speculative" iff the stack is non-empty (§2.3), so `speculative_base` is
+    // ALWAYS NULL on this path (the legacy column is no longer written).
+    const ancestorStack: AncestorStack = input.ancestorStack ?? [];
     await this.deps.persistence.repointBase({
       projectId: input.projectId,
       runId: input.dependent.runId,
-      speculativeBase,
       ancestorStack,
     });
     await this.deps.persistence.markInFlight({

@@ -1,14 +1,15 @@
 // Seam conformance suite for the `PercolationKickOff` contract
-// (`engine/contracts/changePercolation.ts`, autonomy-engine.md §2c
-// change-percolation). The reusable behavior spec EVERY kick-off must satisfy — the
-// FIRST phase of the chain re-integration for one (dependent, ancestor-change). It
-// pins the CONTRACT behaviorally through the public `kickOff` surface only:
-//   - a clean rebuild RE-EXECUTES the dependent (a real run re-gates the change) and
-//     returns the re-execution run id — it does NOT absorb / merge here (absorption
-//     is the SETTLE phase, only after that run re-gates clean);
-//   - an ancestor-vs-ancestor conflict on the rebuild HOLDS (routed to the P2b
-//     resolver), with NO re-execution kicked off and the dependent untouched.
-// Mirrors the SpeculativeIntegrator / DagWalker / VcsProvider suites.
+// (`engine/contracts/changePercolation.ts`, autonomy-engine.md §2c change-percolation;
+// walker-jj-local-integration-design.md §4). The reusable behavior spec EVERY kick-off
+// must satisfy — the FIRST phase of the chain re-integration for one (dependent,
+// ancestor-change). It pins the CONTRACT behaviorally through the public `kickOff` surface:
+//   - a clean re-resolve RE-EXECUTES the dependent (a real run re-gates the change) and
+//     returns the re-execution run id — it does NOT absorb / merge here (absorption is the
+//     SETTLE phase, only after that run re-gates clean);
+//   - a never-discard base-shift HOLD (a spec-vs-spec assembly conflict surfaces during the
+//     LOCAL stack assembly, §4a) PROPAGATES from `reexecute` — under jj-local there is no
+//     walk-time host build, so the conflict is no longer detected at kick-off; the hold is a
+//     thrown `BaseShiftHeldError` the PercolatingCoordinator catches.
 
 import { describe, expect, it } from "vitest";
 import type {
@@ -18,21 +19,21 @@ import type {
 } from "../../src/engine/contracts/changePercolation.js";
 
 export const CONF_PROJECT_ID = "project_percolation_conf";
-/** A dependent whose single ancestor cleanly re-integrates (→ re-execution). */
+/** A dependent whose single ancestor cleanly re-resolves (→ re-execution). */
 export const CONF_CLEAN_DEPENDENT: SpeculativeDependent = {
   specId: "spec_clean",
   runId: "run_clean",
-  speculativeBase: "tanren/integ/spec_clean",
+  speculativeBase: null,
   integratedAncestorShas: { spec_anc: "sha-old" },
   verifiedAncestorShas: { spec_anc: "sha-old" },
   lifecycleState: "building",
   openFindingMaxSeverity: "unaudited",
 };
-/** A dependent whose ancestors conflict WITH EACH OTHER on the rebuild (→ held). */
+/** A dependent whose base-shift assembly HOLDS (the re-executor throws BaseShiftHeldError). */
 export const CONF_CONFLICT_DEPENDENT: SpeculativeDependent = {
   specId: "spec_conflict",
   runId: "run_conflict",
-  speculativeBase: "tanren/integ/spec_conflict",
+  speculativeBase: null,
   integratedAncestorShas: { spec_anc: "sha-old", spec_anc2: "sha-old" },
   verifiedAncestorShas: { spec_anc: "sha-old", spec_anc2: "sha-old" },
   lifecycleState: "building",
@@ -73,17 +74,19 @@ export function describeChangePercolationConformance(
       expect(outcome.reexecRunId).not.toBe("");
     });
 
-    it("an ancestor-vs-ancestor conflict on the rebuild HOLDS (no re-execution)", async () => {
+    it("a never-discard base-shift HOLD propagates from the kick-off (the assembly conflict surfaces)", async () => {
       const op = harness.make();
-      const outcome = await op.kickOff({
-        projectId: CONF_PROJECT_ID,
-        dependent: CONF_CONFLICT_DEPENDENT,
-        decision: confDecision(),
-        mergedAncestorSpecIds: [],
-      });
-      expect(outcome.result).toBe("held");
-      // Never re-executed on a held rebuild (the ancestors conflict first).
-      expect(outcome.reexecRunId).toBeUndefined();
+      // jj-local (§4a): a spec-vs-spec conflict surfaces during the base-shift's LOCAL
+      // assembly, so the re-executor throws — the kick-off propagates it (the
+      // PercolatingCoordinator catches the BaseShiftHeldError as `held`). NEVER a silent merge.
+      await expect(
+        op.kickOff({
+          projectId: CONF_PROJECT_ID,
+          dependent: CONF_CONFLICT_DEPENDENT,
+          decision: confDecision(),
+          mergedAncestorSpecIds: [],
+        }),
+      ).rejects.toThrow(/held/iu);
     });
   });
 }

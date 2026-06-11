@@ -29,7 +29,7 @@ import type {
   DagLifecycleSnapshot,
   SpecLifecycle,
 } from "../../src/engine/contracts/dagLifecycle.js";
-import type { SpeculativeIntegrator } from "../../src/engine/contracts/speculativeIntegrator.js";
+import type { DagAncestorStackResolver } from "../../src/engine/dag/walkerPg.js";
 import {
   describeDagWalkerConformance,
   type DagWalkerConformanceHarness,
@@ -90,15 +90,15 @@ class MemoryReadModel implements DagReadModel {
   }
 }
 
-/** The conservative-threshold lifecycle read model + a never-called integrator —
+/** The conservative-threshold lifecycle read model + a never-called ancestor-stack resolver —
  *  object literals (not classes) to keep this file under the per-file class cap. */
 function memoryLifecycleReadModel(dag: MemoryDag): DagLifecycleReadModel {
   return { loadLifecycle: async (projectId: string): Promise<DagLifecycleSnapshot> => dag.lifecycle(projectId) };
 }
 
-const neverSpeculateIntegrator: SpeculativeIntegrator = {
-  buildIntegration: async (): Promise<never> => {
-    throw new Error("conformance suite runs conservative; the integrator must never be called");
+const neverSpeculateStackResolver: DagAncestorStackResolver = {
+  resolveStack: async (): Promise<never> => {
+    throw new Error("conformance suite runs conservative; the ancestor-stack resolver must never be called");
   },
 };
 
@@ -244,7 +244,7 @@ function makeHarness(ceiling: number): DagWalkerConformanceHarness {
     lifecycleReadModel: memoryLifecycleReadModel(dag),
     enqueuer: new RecordingEnqueuer(dag, enqueues),
     events: new RecordingEventEmitter(events),
-    integrator: neverSpeculateIntegrator,
+    ancestorStackResolver: neverSpeculateStackResolver,
     // The conformance suite pins the Phase-1 readiness contract (all deps merged/
     // done) — that is exactly the CONSERVATIVE threshold; depth cap is irrelevant.
     speculationConfig: async () => ({ threshold: "conservative", depthCap: 2 }),

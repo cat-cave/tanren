@@ -54,23 +54,20 @@ export type DagDrainedPayload = z.infer<typeof DagDrainedPayload>;
 
 // dag.spec.speculative (autonomy-engine.md §2c): the walker started a dependent
 // SPECULATIVELY — it crossed the configured speculation threshold while one or
-// more of its ancestors are not yet MERGED. The dependent's PR bases on a
-// speculative integration branch (main + the unmerged ancestors' branches merged
-// in DAG order); its MERGE still waits for those ancestors to genuinely merge.
-// This event names the unmerged ancestors + the threshold so the timeline shows
-// exactly what prospective merged world the dependent built against.
+// more of its ancestors are not yet MERGED. The dependent jj-ASSEMBLES its base
+// LOCALLY at bootstrap from `main + the unmerged ancestors' PR-head branches`
+// (DAG order; no synthesized host ref); its MERGE still waits for those ancestors
+// to genuinely merge. This event names the unmerged ancestors + the threshold so
+// the timeline shows exactly what prospective merged world the dependent built against.
 export const DagSpecSpeculativePayload = z
   .object({
     specId: z.string(),
     runId: z.string(),
     // The ancestors that have crossed the threshold but are NOT yet merged — the
-    // members of the speculative integration branch the dependent bases on.
+    // ordered stack the dependent jj-assembles its base from.
     unmergedAncestors: z.array(z.string()).min(1),
     // The configured speculation threshold that admitted this early start.
     threshold: z.enum(["conservative", "moderate", "aggressive"]),
-    // The integration branch ref the dependent's PR bases on (the prospective
-    // merged world). Present so the timeline links the dependent to its base.
-    integrationBranch: z.string(),
   })
   .strict();
 export type DagSpecSpeculativePayload = z.infer<typeof DagSpecSpeculativePayload>;
