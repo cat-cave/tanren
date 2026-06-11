@@ -1,5 +1,5 @@
-// Per-implementation invocation of the VcsProvider conformance suite. The SAME
-// behavior spec runs against:
+// Per-implementation invocation of the (residual) VcsProvider conformance suite.
+// The SAME behavior spec runs against:
 //   1. The PRODUCTION `GitHubVcsProvider`, over a scripted HTTP transport that
 //      answers each lifecycle endpoint the contract exercises (so the real
 //      provider's wrapping of the GitHub services + token resolver is pinned by
@@ -11,7 +11,6 @@
 // against the live stack; this suite is the behavioral contract every
 // VcsProvider impl must satisfy without a database or network.
 
-import { Buffer } from "node:buffer";
 import { describe, expect, it } from "vitest";
 import { InMemorySecretStore } from "../../src/engine/contracts/secretStore.js";
 import { GitHubVcsProvider } from "../../src/engine/providers/githubVcsProvider.js";
@@ -19,27 +18,16 @@ import type { GitHubHttpClient, GitHubHttpRequest, GitHubHttpResponse } from "..
 import type { VcsProvider } from "../../src/engine/contracts/vcsProvider.js";
 import { InMemoryVcsProvider } from "./fakes/inMemoryVcsProvider.js";
 import {
-  CONFORMANCE_ABSENT_BRANCH,
-  CONFORMANCE_BASE_BRANCH,
   CONFORMANCE_ACTOR_ID,
   CONFORMANCE_ACTOR_LOGIN,
-  CONFORMANCE_BEHIND_PR_NUMBER,
-  CONFORMANCE_DIRTY_PR_NUMBER,
-  CONFORMANCE_EXISTING_REPO_NAME,
   CONFORMANCE_FAILING_BRANCH,
-  CONFORMANCE_HEAD_BRANCH,
-  CONFORMANCE_PRESENT_FILE,
-  CONFORMANCE_PRESENT_FILE_BODY,
   describeVcsProviderConformance,
 } from "./vcsProviderConformance.js";
 
 const STATIC_REF = "credential/github/conformance";
 const HEAD_SHA = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
-/** the distinct SHA the FAILING integration ref resolves to (its check-runs fail). */
+/** the distinct SHA the FAILING base ref resolves to (its check-runs fail). */
 const FAILING_SHA = "fa11edfa11edfa11edfa11edfa11edfa11edfa11";
-const RETARGET_ALREADY_MAIN_PR = 17;
-const RETARGET_STILL_OLD_BASE_PR = 19;
-const STALE_INTEGRATION_BASE = "tanren/integ/stale";
 
 const ok = (body: unknown): GitHubHttpResponse => ({ status: 200, body });
 
@@ -57,64 +45,9 @@ class RoutingGitHubHttp implements GitHubHttpClient {
     if (input.method === "GET" && path === "/user") {
       return ok({ login: CONFORMANCE_ACTOR_LOGIN, id: Number(CONFORMANCE_ACTOR_ID) });
     }
-
-    // openDraftPullRequest: list (no open PR) then create (201).
-    if (input.method === "GET" && path.endsWith("/pulls")) return ok([]);
-    if (input.method === "POST" && path.endsWith("/pulls")) {
-      return {
-        status: 201,
-        body: { number: 7, html_url: "https://github.com/cat-cave/tanren-conformance/pull/7", draft: true },
-      };
-    }
-    // mergePullRequest: PR 9 conflicts (409); everything else merges (200).
-    if (input.method === "PUT" && path.endsWith("/pulls/9/merge")) {
-      return { status: 409, body: { message: "merge conflict" } };
-    }
-    if (input.method === "PUT" && path.endsWith("/merge")) return ok({ sha: "merge-sha", merged: true });
-    // updateBranch: the behind PR is accepted (202); the dirty PR conflicts
-    // (422); any other PR is already current (204).
-    const updateMatch = /\/pulls\/(\d+)\/update-branch$/u.exec(path);
-    if (input.method === "PUT" && updateMatch !== null) {
-      const number = Number(updateMatch[1]);
-      if (number === CONFORMANCE_BEHIND_PR_NUMBER)
-        return { status: 202, body: { message: "Updating pull request branch." } };
-      if (number === CONFORMANCE_DIRTY_PR_NUMBER) return { status: 422, body: { message: "merge conflict" } };
-      return { status: 204, body: {} };
-    }
-    // PR detail GET (mergeability + markReadyForReview node id): vary
-    // mergeable_state by PR number — the behind PR is `behind`, the dirty PR is
-    // `dirty`, everything else `clean`.
-    const detailMatch = /\/pulls\/(\d+)$/u.exec(path);
-    if (input.method === "GET" && detailMatch !== null) {
-      const number = Number(detailMatch[1]);
-      const mergeableState =
-        number === CONFORMANCE_BEHIND_PR_NUMBER ? "behind" : number === CONFORMANCE_DIRTY_PR_NUMBER ? "dirty" : "clean";
-      const baseRef = number === RETARGET_STILL_OLD_BASE_PR ? STALE_INTEGRATION_BASE : "main";
-      return ok({
-        node_id: "PR_node_7",
-        head: { sha: HEAD_SHA, ref: CONFORMANCE_HEAD_BRANCH },
-        base: { ref: baseRef },
-        mergeable_state: mergeableState,
-        state: "open",
-        merged: false,
-      });
-    }
-    // retargetPullRequestBase: PATCH /pulls/:n { base } → the updated PR.
-    const retargetMatch = /\/pulls\/(\d+)$/u.exec(path);
-    if (input.method === "PATCH" && retargetMatch !== null) {
-      const number = Number(retargetMatch[1]);
-      if (number === RETARGET_ALREADY_MAIN_PR || number === RETARGET_STILL_OLD_BASE_PR) {
-        return { status: 422, body: { message: "Validation Failed" } };
-      }
-      const base = (input.body as { base?: unknown } | undefined)?.base;
-      return ok({ number: 7, base: { ref: typeof base === "string" ? base : "main" } });
-    }
-    if (input.method === "POST" && path === "/graphql") {
-      return ok({ data: { markPullRequestReadyForReview: { pullRequest: { isDraft: false } } } });
-    }
-    // readPullRequestChecks / readBranchChecks: check-runs + commit status; protection
-    // 404. The FAILING integration ref's SHA reports a failed check (a bad
-    // interaction — the batch-check signal); every other commit is green.
+    // readBranchChecks: check-runs + commit status; protection 404. The FAILING
+    // base ref's SHA reports a failed check (a post-merge regression); every
+    // other commit is green.
     if (input.method === "GET" && path.endsWith("/check-runs")) {
       if (path.includes(FAILING_SHA)) {
         return ok({ check_runs: [{ name: "build", status: "completed", conclusion: "failure" }] });
@@ -129,61 +62,13 @@ class RoutingGitHubHttp implements GitHubHttpClient {
     if (input.method === "GET" && path.endsWith("/reviews")) {
       return ok([{ state: "APPROVED", user: { login: "bot" } }]);
     }
-    // readPullRequestDiff.
-    if (input.method === "GET" && path.endsWith("/files")) {
-      return ok([{ filename: "a.txt", patch: "@@ -1 +1 @@\n-x\n+y" }]);
-    }
-    // listContributors.
-    if (input.method === "GET" && path.endsWith("/commits")) {
-      return ok([{ author: { login: "author-bot" }, committer: { login: "author-bot" } }]);
-    }
-    // readBranchHeadSha / readBranchChecks resolve a branch's HEAD sha.
+    // readBranchChecks resolves a branch's HEAD sha: the FAILING base ref resolves
+    // to a SHA whose check-runs fail (so its CI is red).
     if (input.method === "GET" && /\/git\/ref\/heads\//u.test(path)) {
-      // readBranchHeadSha: the well-known absent branch 404s (missing ref).
-      if (path.includes(encodeURIComponent(CONFORMANCE_ABSENT_BRANCH))) {
-        return { status: 404, body: { message: "Not Found" } };
-      }
-      // readBranchChecks: the FAILING integration ref resolves to a SHA whose
-      // check-runs fail (so the prospective merged state's CI is red).
       if (path.includes(encodeURIComponent(CONFORMANCE_FAILING_BRANCH))) {
         return ok({ object: { sha: FAILING_SHA } });
       }
       return ok({ object: { sha: HEAD_SHA } });
-    }
-    // deleteBranch (cleanup): DELETE /git/refs/heads/:branch → 204.
-    if (input.method === "DELETE" && /\/git\/refs\/heads\//u.test(path)) {
-      return { status: 204, body: {} };
-    }
-    // createRepository (GREENFIELD): POST /orgs/:owner/repos. The taken name 422s
-    // (already-exists → typed error); any other name creates (201) with the real
-    // full_name/html_url/default_branch the auto_init seeded.
-    if (input.method === "POST" && /^\/orgs\/[^/]+\/repos$/u.test(path)) {
-      const name = (input.body as { name?: unknown } | undefined)?.name;
-      if (name === CONFORMANCE_EXISTING_REPO_NAME) {
-        return { status: 422, body: { message: "name already exists on this account" } };
-      }
-      return {
-        status: 201,
-        body: {
-          full_name: `cat-cave/${typeof name === "string" ? name : "repo"}`,
-          html_url: `https://github.com/cat-cave/${typeof name === "string" ? name : "repo"}`,
-          default_branch: "main",
-        },
-      };
-    }
-    // createIssue: POST /issues → 201 with the issue number + html_url.
-    if (input.method === "POST" && path.endsWith("/issues")) {
-      return {
-        status: 201,
-        body: { number: 42, html_url: "https://github.com/cat-cave/tanren-conformance/issues/42" },
-      };
-    }
-    // readFileOnBranch: present file → base64 content; everything else 404.
-    if (input.method === "GET" && path.includes(`/contents/${CONFORMANCE_PRESENT_FILE}`)) {
-      return ok({ content: Buffer.from(CONFORMANCE_PRESENT_FILE_BODY, "utf8").toString("base64"), encoding: "base64" });
-    }
-    if (input.method === "GET" && path.includes("/contents/")) {
-      return { status: 404, body: { message: "Not Found" } };
     }
     throw new Error(`unexpected GitHub request: ${input.method} ${input.path}`);
   }
@@ -205,36 +90,6 @@ describeVcsProviderConformance("GitHubVcsProvider", gitHubProviderHarness());
 describeVcsProviderConformance("InMemoryVcsProvider", {
   make: (): VcsProvider => new InMemoryVcsProvider(),
   creds: () => ({ secrets: new InMemorySecretStore(), staticRef: STATIC_REF }),
-});
-
-describe("GitHubVcsProvider.retargetPullRequestBase 422 reconciliation", () => {
-  it("treats a 422 retarget as success when a reconcile read shows the requested base", async () => {
-    const harness = gitHubProviderHarness();
-    const provider = harness.make();
-    const token = await provider.resolveToken(harness.creds());
-    await expect(
-      provider.retargetPullRequestBase(
-        { repo: { owner: "cat-cave", name: "tanren-conformance" }, number: RETARGET_ALREADY_MAIN_PR },
-        CONFORMANCE_BASE_BRANCH,
-        token,
-      ),
-    ).resolves.toBeUndefined();
-  });
-
-  it("keeps a 422 retarget failure loud when the reconcile read shows another base", async () => {
-    const harness = gitHubProviderHarness();
-    const provider = harness.make();
-    const token = await provider.resolveToken(harness.creds());
-    await expect(
-      provider.retargetPullRequestBase(
-        { repo: { owner: "cat-cave", name: "tanren-conformance" }, number: RETARGET_STILL_OLD_BASE_PR },
-        CONFORMANCE_BASE_BRANCH,
-        token,
-      ),
-    ).rejects.toThrow(
-      "GitHub PR base retarget to main failed: HTTP 422: Validation Failed; reconcile GET HTTP 200; observed base tanren/integ/stale",
-    );
-  });
 });
 
 // MERGE-SAFETY (self-identity) — App path: an installation token resolves the

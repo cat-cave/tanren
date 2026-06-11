@@ -1,19 +1,14 @@
-// GitHub API surface for the review→merge completion half of the run loop.
-// Kept separate from providers/github.ts (the draft-PR + CI surface) so each file stays
+// GitHub API surface for the review half of the run loop: mark-ready (un-draft),
+// fetch-review-verdict, submit-review. The merge/mergeability/update-branch grain it
+// once also carried is GONE post-cutover (the native `MergeAuthority` lands via
+// `CodeHost.landAuthorizedRef`, jj/`BaseShiftCoordinator` decide freshness — the
+// VcsProvider→CodeHost decomposition removed the dead host-merge methods). Kept
+// separate from providers/github.ts (the draft-PR + CI surface) so each file stays
 // under the 500-line cap. Every method takes a token + optional refreshToken supplier so
 // the resolver's 401-retry path flows through unchanged — no static-token reads.
 
 import type { GitHubHttpClient, GitHubRepository } from "./github.js";
-import { isTransientStatus } from "./githubRetry.js";
-import { MergeAmbiguousError, MergeTransientError } from "./mergeOutcomeErrors.js";
-import { parseMergeSha, parseMergedState, parseMessage } from "./githubReviewMergeParse.js";
-import {
-  parseMergeability,
-  type GitHubMergeabilityResult,
-  type GitHubUpdateBranchResult,
-} from "./githubBranchFreshness.js";
-
-export type { GitHubMergeabilityResult, GitHubUpdateBranchResult };
+import { parseMessage } from "./githubReviewMergeParse.js";
 
 /** A GitHub PR review state, normalized to the states the run loop reacts to. */
 export type GitHubReviewState = "approved" | "changes_requested" | "commented" | "dismissed" | "pending";
@@ -45,46 +40,21 @@ export interface ReviewVerdictResult {
   latest?: GitHubReview;
 }
 
-export interface MergePullRequestResult {
-  merged: boolean;
-  /** The merge commit sha when GitHub merged the PR. */
-  mergeSha?: string;
-  /** True when GitHub reported the merge could not be performed (405/409). */
-  conflict: boolean;
-  /** HTTP status + message for failed/non-conflict outcomes. */
-  status: number;
-  message: string;
-}
-
-export interface GitHubPullRequestState {
-  confirmed: boolean;
-  merged: boolean;
-  open: boolean;
-  sha?: string;
-}
-
 interface TokenInput {
   token: string;
   refreshToken?: () => Promise<string>;
 }
-
-/**
- * How many times the double-merge guard re-`PUT`s after a transient 5xx WHEN the
- * reconcile read confirms the PR is still open + unmerged (so a re-PUT cannot
- * double-merge). Bounded so a persistent gateway failure surfaces loudly, not spins.
- */
-const MERGE_TRANSIENT_RETRIES = 2;
 
 function repoPath(repo: GitHubRepository, suffix: string): string {
   return `/repos/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}${suffix}`;
 }
 
 /**
- * Review + merge GitHub operations: mark a draft PR ready-for-review, read the
- * latest reviews to derive a verdict, and perform a direct GitHub merge. The
- * merge method deliberately distinguishes a conflict (405/409 → recoverable)
- * from a hard failure so the merge dispatcher can route to the conflict-resolver
- * scaffolding.
+ * Review GitHub operations: mark a draft PR ready-for-review, read the latest
+ * reviews to derive a verdict, and submit a review (the simulated-reviewer COMMENT
+ * audit artifact). The host-merge/mergeability/update-branch operations were removed
+ * by the VcsProvider→CodeHost decomposition (the native `MergeAuthority` + jj own
+ * the land + freshness path).
  */
 export class GitHubReviewMergeService {
   constructor(private readonly http: GitHubHttpClient) {}
@@ -189,173 +159,6 @@ export class GitHubReviewMergeService {
       throw new Error(`GitHub submit-review failed: ${message}`);
     }
   }
-
-  /**
-   * Read the PR's per-file patches and concatenate them into a unified diff the
-   * reviewer Answerer judges. Uses `GET /pulls/:n/files` (JSON, page-bounded)
-   * rather than the raw `application/vnd.github.diff` media type so it flows
-   * through the existing JSON HTTP client unchanged. Files with no `patch`
-   * (binary, or truncated by GitHub) contribute a header line only.
-   */
-  async fetchPullRequestDiff(input: { repo: GitHubRepository; pullNumber: number } & TokenInput): Promise<string> {
-    const response = await this.http.request({
-      method: "GET",
-      path: repoPath(input.repo, `/pulls/${input.pullNumber}/files?per_page=100`),
-      token: input.token,
-      refreshToken: input.refreshToken,
-    });
-    if (response.status !== 200) {
-      throw new Error(`GitHub PR files fetch failed: HTTP ${response.status}`);
-    }
-    return renderFilesDiff(response.body);
-  }
-
-  /**
-   * Direct GitHub merge. A 200 is a merge; a 405 ("not mergeable") or 409 ("head
-   * changed" / merge conflict) is reported as a conflict rather than a throw, so
-   * the dispatcher can emit merge.conflict + a recoverable outcome. GitHub never
-   * bypasses required checks here — a PR blocked by branch protection returns
-   * 405 and surfaces as a non-merged result.
-   *
-   * GitHub-5xx resilience (double-merge guard): the merge `PUT` is NON-idempotent (a
-   * 504 may have ALREADY merged), so we opt OUT of the client's blind transient retry
-   * (`retryTransient: false`) and RE-READ the PR's `merged` state on a 5xx: confirmed
-   * merged → success; confirmed open+unmerged, retries left → re-`PUT`; confirmed
-   * open+unmerged, retries EXHAUSTED → THROW `MergeTransientError` (GAP #2d — the
-   * coordinator infra-HOLDs + re-drives, NOT a `merge.failed` that strands a clean PR);
-   * AMBIGUOUS (state unconfirmable) → THROW `MergeAmbiguousError` (a loud, operator-
-   * visible halt that never auto-re-`PUT`s). A real 405/409 still returns a conflict.
-   */
-  async mergePullRequest(
-    input: {
-      repo: GitHubRepository;
-      pullNumber: number;
-      mergeMethod?: "merge" | "squash" | "rebase";
-    } & TokenInput,
-  ): Promise<MergePullRequestResult> {
-    for (let attempt = 0; ; attempt += 1) {
-      const response = await this.http.request({
-        method: "PUT",
-        path: repoPath(input.repo, `/pulls/${input.pullNumber}/merge`),
-        token: input.token,
-        refreshToken: input.refreshToken,
-        // Do NOT let the client auto-retry this non-idempotent write on a 5xx — a 504
-        // may have merged. We reconcile against the PR's real state below instead.
-        retryTransient: false,
-        body: { merge_method: input.mergeMethod ?? "squash" },
-      });
-      if (response.status === 200) {
-        return {
-          merged: true,
-          mergeSha: parseMergeSha(response.body),
-          conflict: false,
-          status: 200,
-          message: "merged",
-        };
-      }
-      if (isTransientStatus(response.status)) {
-        // A gateway timeout on the PUT — re-read the authoritative state before deciding.
-        const merged = await this.readPullRequestState(input);
-        if (merged.confirmed && merged.merged) {
-          // The 504 raced a completed merge — treat as the success it was.
-          return { merged: true, mergeSha: merged.sha, conflict: false, status: 200, message: "merged" };
-        }
-        if (merged.confirmed && merged.open && attempt < MERGE_TRANSIENT_RETRIES) {
-          // Confirmed still open + not merged: safe to re-PUT (the merge never landed).
-          continue;
-        }
-        if (merged.confirmed && merged.open) {
-          // Re-PUTs exhausted but the reconcile read still POSITIVELY confirms open +
-          // unmerged — a genuine-transient-not-failed outcome. THROW the typed transient
-          // so the coordinator infra-HOLDs + re-drives (safe: the merge never landed),
-          // NOT a terminal `merge.failed` dequeue that would strand a clean PR.
-          throw new MergeTransientError(
-            `merge PUT for PR #${input.pullNumber} hit a persistent transient HTTP ${response.status}; PR confirmed open + unmerged after ${MERGE_TRANSIENT_RETRIES} re-tries — holding for re-drive`,
-          );
-        }
-        // AMBIGUOUS: the reconcile read could not confirm the state. The merge MAY have
-        // landed — auto-re-driving could DOUBLE-MERGE. THROW the typed ambiguous error
-        // → a LOUD operator-visible halt that never auto-re-PUTs.
-        throw new MergeAmbiguousError(
-          `merge PUT for PR #${input.pullNumber} hit a transient HTTP ${response.status} and the merged state could NOT be confirmed; refusing to auto-retry to avoid a double-merge — operator attention required`,
-        );
-      }
-      const message = parseMessage(response.body) ?? `HTTP ${response.status}`;
-      const conflict = response.status === 405 || response.status === 409;
-      return { merged: false, conflict, status: response.status, message };
-    }
-  }
-
-  /** Re-read the PR's authoritative merged/open state via safe `GET /pulls/{n}`. */
-  async readPullRequestState(
-    input: { repo: GitHubRepository; pullNumber: number } & TokenInput,
-  ): Promise<GitHubPullRequestState> {
-    const response = await this.http.request({
-      method: "GET",
-      path: repoPath(input.repo, `/pulls/${input.pullNumber}`),
-      token: input.token,
-      refreshToken: input.refreshToken,
-    });
-    if (response.status !== 200) {
-      return { confirmed: false, merged: false, open: false };
-    }
-    return { confirmed: true, ...parseMergedState(response.body) };
-  }
-
-  /**
-   * read the PR's up-to-date / mergeability state. GitHub computes
-   * `mergeable_state` asynchronously, so a freshly-opened/updated PR can briefly
-   * report `unknown` (with `mergeable: null`); the caller treats that as "do not
-   * assume current". `behind` is true when GitHub says the head is out of date
-   * with base (`mergeable_state: "behind"`). The base/head refs are surfaced so
-   * the rebase + events can name them without a second read.
-   */
-  async fetchMergeability(
-    input: { repo: GitHubRepository; pullNumber: number } & TokenInput,
-  ): Promise<GitHubMergeabilityResult> {
-    const response = await this.http.request({
-      method: "GET",
-      path: repoPath(input.repo, `/pulls/${input.pullNumber}`),
-      token: input.token,
-      refreshToken: input.refreshToken,
-    });
-    if (response.status !== 200) {
-      throw new Error(`GitHub PR mergeability fetch failed: HTTP ${response.status}`);
-    }
-    return parseMergeability(response.body);
-  }
-
-  /**
-   * bring the PR branch up to date with its base via GitHub's server-side
-   * update-branch endpoint (`PUT /pulls/{n}/update-branch`). A 202 is an
-   * accepted update (the branch advanced onto base — re-gate then merge); a 422
-   * is GitHub reporting the update cannot be performed because of a real merge
-   * conflict, surfaced as `conflict` (the caller routes to the resolver, NOT a
-   * merge); a 204 means the branch was already current. Required-checks /
-   * protection are never bypassed — this only advances the branch ref.
-   */
-  async updateBranch(
-    input: { repo: GitHubRepository; pullNumber: number } & TokenInput,
-  ): Promise<GitHubUpdateBranchResult> {
-    const response = await this.http.request({
-      method: "PUT",
-      path: repoPath(input.repo, `/pulls/${input.pullNumber}/update-branch`),
-      token: input.token,
-      refreshToken: input.refreshToken,
-    });
-    if (response.status === 202) {
-      return { outcome: "updated", message: parseMessage(response.body) ?? "branch update accepted" };
-    }
-    if (response.status === 204) {
-      return { outcome: "up_to_date", message: "branch already up to date" };
-    }
-    // 422 (and 409) are GitHub reporting the update cannot proceed because of a
-    // real conflict — a recoverable handoff to the resolver, NOT a hard failure.
-    if (response.status === 422 || response.status === 409) {
-      return { outcome: "conflict", message: parseMessage(response.body) ?? `HTTP ${response.status}` };
-    }
-    throw new Error(`GitHub update-branch failed: HTTP ${response.status}: ${parseMessage(response.body) ?? ""}`);
-  }
 }
 
 function parseReviews(value: unknown): GitHubReview[] {
@@ -430,29 +233,6 @@ export function reduceReviewVerdict(reviews: GitHubReview[]): ReviewVerdictResul
     return { verdict: "approved", latest: approval };
   }
   return { verdict: "pending" };
-}
-
-/**
- * Concatenate the per-file patches from a `GET /pulls/:n/files` JSON response
- * into a single unified-diff string. Each file contributes a `diff --git`
- * header plus its `patch` hunk (when present); a file without a patch (binary or
- * truncated) contributes the header alone so the reviewer still sees it changed.
- */
-function renderFilesDiff(value: unknown): string {
-  if (!Array.isArray(value)) {
-    throw new TypeError("GitHub PR files response was not an array");
-  }
-  const sections: string[] = [];
-  for (const entry of value) {
-    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
-      continue;
-    }
-    const object = entry as Record<string, unknown>;
-    const filename = typeof object["filename"] === "string" ? object["filename"] : "(unknown)";
-    const patch = typeof object["patch"] === "string" ? object["patch"] : undefined;
-    sections.push(patch === undefined ? `diff --git ${filename}` : `diff --git ${filename}\n${patch}`);
-  }
-  return sections.join("\n");
 }
 
 /** The GraphQL mutation that genuinely un-drafts a PR (REST cannot do this). */

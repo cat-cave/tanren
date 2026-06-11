@@ -196,10 +196,15 @@ class InMemoryClaimStore implements PostMergeIssueClaimStore {
 
 /**
  * The in-memory VcsProvider fake, with `readBranchChecks` overridden to return the
- * scripted post-merge CI state for the base branch (failure / pass / pending).
- * `failCreate` makes `createIssue` throw (to prove the claim is released).
+ * scripted post-merge CI state for the base branch (failure / pass / pending). The
+ * tracking-issue recording lives HERE (the watcher files via the `VisibilityProjection`
+ * seam — `VcsProvider.createIssue` was removed by the decomposition) so the existing
+ * `vcs.createdIssues` assertions still hold. `failCreate` makes the issue file throw
+ * (to prove the claim is released).
  */
 class ScriptedVcsProvider extends InMemoryVcsProvider {
+  /** Recorded tracking issues the `recordingVisibility` projection filed via this fake. */
+  readonly createdIssues: Array<{ title: string; body: string; labels: ReadonlyArray<string> }> = [];
   constructor(
     private readonly outcome: "fail" | "pass" | "pending",
     private readonly failCreate = false,
@@ -228,27 +233,29 @@ class ScriptedVcsProvider extends InMemoryVcsProvider {
       statuses: [],
     };
   }
-  override async createIssue(input: Parameters<InMemoryVcsProvider["createIssue"]>[0]) {
+  // eslint-disable-next-line @typescript-eslint/require-await
+  async recordIssue(input: { title: string; body: string; labels?: ReadonlyArray<string> }): Promise<{
+    number: number;
+    url: string;
+  }> {
     if (this.failCreate) throw new Error("GitHub issue create failed: HTTP 503");
-    return super.createIssue(input);
+    this.createdIssues.push({ title: input.title, body: input.body, labels: input.labels ?? [] });
+    const number = this.createdIssues.length;
+    return { number, url: `https://github.com/cat-cave/fix/issues/${number}` };
   }
 }
 
 /**
  * A RAW `VisibilityProjection` whose `openTrackingIssue` delegates to the fake
- * provider's `createIssue` (so the existing `vcs.createdIssues` assertions hold) —
+ * provider's issue recorder (so the existing `vcs.createdIssues` assertions hold) —
  * the post-merge watcher now files the tracking issue through this best-effort seam
- * (PR-4) rather than calling `VcsProvider.createIssue` directly. `harden`-ed into the
+ * (PR-4) rather than calling a `VcsProvider` method directly. `harden`-ed into the
  * never-rejecting `SafeVisibilityProjection` the watcher's `buildVisibility` returns.
  */
 function recordingVisibility(vcs: ScriptedVcsProvider): SafeVisibilityProjection {
   const raw: VisibilityProjection = {
     async openTrackingIssue(input: TrackingIssueInput) {
-      const slash = input.repoFullName.indexOf("/");
-      const repo: RepoRef = { owner: input.repoFullName.slice(0, slash), name: input.repoFullName.slice(slash + 1) };
-      const issue = await vcs.createIssue({
-        repo,
-        token: { token: "t", source: "static", refresh: async () => "t" },
+      const issue = await vcs.recordIssue({
         title: input.title,
         body: input.body,
         ...(input.labels !== undefined && { labels: [...input.labels] }),
