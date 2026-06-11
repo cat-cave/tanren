@@ -96,6 +96,12 @@ export interface OnboardingRoutesOptions {
     // derive request's `owner` so `maybeCreateTemplateForNoMatch` can actually create
     // (without it the create path had no owner and silently no-op'd; audit §3.11/2).
     repoOwner: string;
+    // The operator's EXPLICIT, already-linked deploy provider from THIS derive request
+    // (`deploy.providerKind`). Threaded so the no-match template build provisions deploy
+    // against the SAME provider the operator named (guaranteed linked by the derive's
+    // deploy preflight) — never a provider re-guessed from the lifecycle string that
+    // defaults to an unlinked `deploy.flyio` and halts the run with `template_required`.
+    deployProviderKind?: "deploy.vercel" | "deploy.flyio";
   }) => (lifecycle: CaptureLifecycle) => Promise<SelectedTemplate | undefined>;
 }
 
@@ -216,6 +222,12 @@ export function createOnboardingRoutes(options: OnboardingRoutesOptions) {
                   // Thread the REAL repo owner from the derive request so the no-match
                   // CREATE path lands the template repo under it (audit §3.11/2).
                   repoOwner: parsed.data.owner,
+                  // Thread the operator's EXPLICIT, already-linked deploy provider so the
+                  // no-match template BUILD provisions deploy against the SAME provider the
+                  // operator named (guaranteed linked by the deploy preflight) — never a
+                  // provider re-guessed from the lifecycle string that defaults to an
+                  // unlinked `deploy.flyio` and halts the derive with `template_required`.
+                  ...(parsed.data.deploy === undefined ? {} : { deployProviderKind: parsed.data.deploy.providerKind }),
                 }),
               }),
         },
