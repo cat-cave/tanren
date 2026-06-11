@@ -12,9 +12,13 @@ import {
 } from "../credentials/githubToken.js";
 import { type EventStore, PgEventStore } from "../eventStore.js";
 import type { VcsProvider } from "../contracts/vcsProvider.js";
+import { resolveVcsToken } from "../credentials/vcsCredentials.js";
+import { gitHubHttpOf } from "../providers/projectHostSeamsOver.js";
+import { GitHubVisibilityProjection } from "../providers/githubVisibilityProjection.js";
+import { parseGitHubRepository } from "../providers/github.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
 import { workspaceRepoPathForRun } from "../workspace/index.js";
-import { draftPrBranchName } from "../workspace/githubPush.js";
+import { draftPrBranchName, pushWorkspaceBranchToGitHub } from "../workspace/githubPush.js";
 import { type AncestorStack, resolveAncestorStack } from "../dag/ancestorStack.js";
 
 type RunStateClient = Pick<pg.Pool | pg.PoolClient, "query">;
@@ -65,7 +69,6 @@ export interface PublishedDraftPullRequest {
   branch: string;
   prUrl: string;
   prNumber: number;
-  reused: boolean;
 }
 
 export interface PublishDraftPullRequestForRunInput {
@@ -128,13 +131,26 @@ export async function publishDraftPullRequest(input: PublishDraftPullRequestInpu
     input.installation === undefined ? githubCredentialRefFromInput(input) : credentialRefOrUndefined(input);
   const ledgerRef = input.installation?.credentialRef ?? staticRef ?? "github_app";
 
+  // §5a/PR-2: token resolution is credential PLUMBING, not a forge op — resolve through
+  // the standalone `resolveVcsToken(http, creds)` over the provider's existing client,
+  // off the `VcsProvider` interface. §5c: the runner-workspace branch push stays a
+  // WORKSPACE HELPER (`pushWorkspaceBranchToGitHub`) — it is an SSH-over-runner concern
+  // (needs `ssh`/`target`/`workspacePath`), NOT a host-API op, so it is kept out of the
+  // `CodeHost` seam. The draft-PR OPEN moves onto the `VisibilityProjection` (the raw
+  // `GitHubVisibilityProjection.openOrUpdateChangeRequest`): the run-path open is the
+  // AUTHORITATIVE PR artifact (its url is persisted + gates the merge stage), so it uses
+  // the RAW projection that THROWS on failure — NOT the hardened `SafeVisibilityProjection`
+  // (which can never throw); a failed open must propagate, not silently skip.
+  const http = gitHubHttpOf(input.vcsProvider);
+  const repo = parseGitHubRepository(input.repoUrl);
+
   try {
     await eventStore.append({
       ...context,
       eventType: "credential.requested",
       payload: redactedGithubTokenResult(ledgerRef),
     });
-    const resolved = await input.vcsProvider.resolveToken({
+    const resolved = await resolveVcsToken(http, {
       secrets: input.secrets,
       installation: input.installation,
       staticRef,
@@ -145,15 +161,13 @@ export async function publishDraftPullRequest(input: PublishDraftPullRequestInpu
       eventType: "credential.loaded",
       payload: redactedGithubTokenResult(ledgerRef),
     });
-    await input.vcsProvider.pushBranch({
-      secrets: input.secrets,
+    await pushWorkspaceBranchToGitHub({
       ssh: input.ssh,
       target: input.target,
       workspacePath: input.workspacePath,
       repoUrl: input.repoUrl,
       branch,
-      credentialRef: ledgerRef,
-      token: resolved,
+      token: resolved.token,
       timeoutMs: input.timeoutMs,
       sourceRef: input.sourceRef,
     });
@@ -163,13 +177,13 @@ export async function publishDraftPullRequest(input: PublishDraftPullRequestInpu
       payload: { repoUrl: input.repoUrl, branch, credentialRef: ledgerRef, redacted: true },
     });
 
-    const pr = await input.vcsProvider.openDraftPullRequest({
-      repo: input.vcsProvider.parseRepository(input.repoUrl),
-      token: resolved,
+    const visibility = new GitHubVisibilityProjection(http, async () => resolved);
+    const pr = await visibility.openOrUpdateChangeRequest({
+      repoFullName: `${repo.owner}/${repo.name}`,
       headBranch: branch,
       baseBranch,
       title: input.title,
-      body: input.body,
+      ...(input.body !== undefined && { body: input.body }),
     });
     const prOrgId = typeof input.orgId === "string" ? input.orgId : undefined;
     if (input.runStateWriter !== undefined && prOrgId !== undefined) {
@@ -186,10 +200,9 @@ export async function publishDraftPullRequest(input: PublishDraftPullRequestInpu
         targetBranch: baseBranch,
         prUrl: pr.url,
         prNumber: pr.number,
-        reused: pr.reused,
       },
     });
-    return { branch, prUrl: pr.url, prNumber: pr.number, reused: pr.reused };
+    return { branch, prUrl: pr.url, prNumber: pr.number };
   } catch (error) {
     await eventStore.append({
       ...context,

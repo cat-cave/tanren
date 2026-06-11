@@ -20,6 +20,8 @@ import { installationFromOrgConfig, type OrgGithubAppInstallation } from "../con
 import { migrateProjectConfig } from "../config/projectConfig.js";
 import { PgEventStore, type EventStore } from "../eventStore.js";
 import { publishGateVerdictBestEffort } from "../workflow/gate/index.js";
+import { vcsCredentialHttp } from "../credentials/vcsCredentialHttp.js";
+import { buildProjectHostSeams } from "../providers/hostFactory.js";
 import { runFreshRunnerMergeGate } from "./freshRunnerGate.js";
 import type { ReGateCiHook } from "../workflow/reviewMerge/index.js";
 import { createLogger } from "../observability/logger.js";
@@ -130,11 +132,12 @@ async function publishReGateVerdict(
     ...(staticRef.trim() !== "" && { staticRef }),
     ...(deps.githubAppMinter !== undefined && { minter: deps.githubAppMinter }),
   });
+  const repo = deps.vcsProvider.parseRepository(ctx.repoUrl);
+  const { visibility } = buildProjectHostSeams(vcsCredentialHttp(deps.vcsProvider), async () => token);
   await publishGateVerdictBestEffort(
     {
-      vcsProvider: deps.vcsProvider,
-      repo: deps.vcsProvider.parseRepository(ctx.repoUrl),
-      token,
+      visibility,
+      repoFullName: `${repo.owner}/${repo.name}`,
       headSha,
       outcome: passed ? { passed: true, results: [] } : { passed: false, results: [], failure: RE_GATE_FAILURE },
     },

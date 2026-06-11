@@ -2,49 +2,40 @@
 // Two invariants are pinned here, both root-caused from a live apex run where a
 // fully-PASSING pipeline was halted by an HTTP 403 from the verdict publish:
 //
-//  1. `publishGateVerdict` issues a COMMIT STATUS (`publishStatus`), never a check-run
-//     (`publishCheck`). The Checks API is Apps-only — a token credential gets 403 — so a
-//     status is the universal, branch-protection-sufficient primitive for both.
-//  2. `publishGateVerdictBestEffort` treats a publish failure as NON-fatal: a thrown
-//     403 is CAUGHT (the run proceeds to merge on the internal verdict) and reported via
-//     the emit seam. A FAILED gate is never laundered — only a failed PUBLISH of a
-//     verdict is swallowed; the merge decision lives in the internal `gate.verdict`.
+//  1. `publishGateVerdict` issues the gate verdict through the best-effort
+//     `SafeVisibilityProjection.publishGate` seam (which the GitHub impl renders as a
+//     COMMIT STATUS, never a check-run — the Checks API is Apps-only, so a token
+//     credential 403s; a status is the universal, branch-protection-sufficient
+//     primitive for both). The seam can never reject — a publish failure surfaces as a
+//     `ProjectionOutcome`, never a throw.
+//  2. `publishGateVerdictBestEffort` treats a publish failure as NON-fatal: a `failed`
+//     projection outcome (the captured 403) is reported via the emit seam and the run
+//     proceeds to merge on the internal verdict. A FAILED gate is never laundered —
+//     only a failed PUBLISH of a verdict is reported; the merge decision lives in the
+//     internal `gate.verdict`.
 import { describe, expect, it } from "vitest";
-import type {
-  PublishCheckInput,
-  PublishedCheck,
-  PublishStatusInput,
-  RepoRef,
-  ResolvedVcsToken,
-  VcsProvider,
-} from "../src/engine/contracts/vcsProvider.js";
+import {
+  harden,
+  type VisibilityProjection,
+  type PublishGateInput,
+} from "../src/engine/contracts/visibilityProjection.js";
 import { publishGateVerdict } from "../src/engine/workflow/gate/publishGateVerdict.js";
 import { publishGateVerdictBestEffort } from "../src/engine/workflow/gate/publishGateVerdictBestEffort.js";
 import type { GateOutcome } from "../src/engine/workflow/gate/runGateForWhen.js";
 
-const REPO: RepoRef = { owner: "cat-cave", name: "tanren-fixture" };
-const TOKEN: ResolvedVcsToken = { token: "ghp_fake_token", source: "static", refresh: async () => "ghp_fake_token" };
+const REPO_FULL_NAME = "cat-cave/tanren-fixture";
 
-// A VcsProvider stub that records the publish calls (and can be made to throw). Only the
-// two publish methods are real; everything else throws if touched (it must not be).
-class RecordingPublishProvider {
-  readonly statuses: PublishStatusInput[] = [];
-  readonly checks: PublishCheckInput[] = [];
-  constructor(private readonly failStatusWith?: Error) {}
-  async publishStatus(input: PublishStatusInput): Promise<void> {
-    this.statuses.push(input);
-    if (this.failStatusWith !== undefined) throw this.failStatusWith;
-  }
-  async publishCheck(input: PublishCheckInput): Promise<PublishedCheck> {
-    this.checks.push(input);
-    return { id: 1, url: "https://github.com/x/y/runs/1" };
-  }
-  parseRepository(_url: string): RepoRef {
-    return REPO;
+// A RAW VisibilityProjection that records the publishGate calls (and can be made to
+// throw, simulating a forge 403). Hardened into the safe seam the gate functions take.
+class RecordingProjection implements VisibilityProjection {
+  readonly gates: PublishGateInput[] = [];
+  constructor(private readonly failWith?: Error) {}
+  // eslint-disable-next-line @typescript-eslint/require-await
+  async publishGate(input: PublishGateInput): Promise<void> {
+    this.gates.push(input);
+    if (this.failWith !== undefined) throw this.failWith;
   }
 }
-
-const asProvider = (p: RecordingPublishProvider): VcsProvider => p as unknown as VcsProvider;
 
 const passOutcome: GateOutcome = {
   passed: true,
@@ -57,42 +48,37 @@ const failOutcome: GateOutcome = {
 };
 
 describe("publishGateVerdict", () => {
-  it("publishes a COMMIT STATUS (not a check-run) for a token credential", async () => {
-    const provider = new RecordingPublishProvider();
-    await publishGateVerdict({
-      vcsProvider: asProvider(provider),
-      repo: REPO,
-      token: TOKEN,
+  it("publishes the gate verdict through the projection seam as a `tanren/gate` status", async () => {
+    const raw = new RecordingProjection();
+    const outcome = await publishGateVerdict({
+      visibility: harden(raw),
+      repoFullName: REPO_FULL_NAME,
       headSha: "abc123",
       outcome: passOutcome,
     });
-    // A status is issued; a check-run is NEVER issued (it would 403 on a token).
-    expect(provider.checks).toHaveLength(0);
-    expect(provider.statuses).toHaveLength(1);
-    const status = provider.statuses[0]!;
-    expect(status).toMatchObject({ context: "tanren/gate", state: "success", headSha: "abc123" });
-    // The token is passed through to the publish call's auth (never logged), not the body.
-    expect(status.token).toBe(TOKEN);
-    expect(status.description).toContain("passed");
+    expect(outcome.kind).toBe("projected");
+    expect(raw.gates).toHaveLength(1);
+    const gate = raw.gates[0]!;
+    expect(gate).toMatchObject({ repoFullName: REPO_FULL_NAME, headSha: "abc123", verdict: "passed" });
+    expect(gate.summary).toContain("passed");
   });
 
-  it("maps a failed gate to a failure status naming the failing tier + step", async () => {
-    const provider = new RecordingPublishProvider();
+  it("maps a failed gate to a `failed` verdict naming the failing tier + step", async () => {
+    const raw = new RecordingProjection();
     await publishGateVerdict({
-      vcsProvider: asProvider(provider),
-      repo: REPO,
-      token: TOKEN,
+      visibility: harden(raw),
+      repoFullName: REPO_FULL_NAME,
       headSha: "def456",
       outcome: failOutcome,
     });
-    const status = provider.statuses[0]!;
-    expect(status.state).toBe("failure");
-    expect(status.description).toContain("default");
-    expect(status.description).toContain("test");
+    const gate = raw.gates[0]!;
+    expect(gate.verdict).toBe("failed");
+    expect(gate.summary).toContain("default");
+    expect(gate.summary).toContain("test");
   });
 
-  it("bounds the description to GitHub's 140-char commit-status limit", async () => {
-    const provider = new RecordingPublishProvider();
+  it("bounds the summary to GitHub's 140-char commit-status limit", async () => {
+    const raw = new RecordingProjection();
     const longTiers = Array.from({ length: 30 }, (_, i) => ({
       passed: true as const,
       tier: `tier-${i}`,
@@ -100,24 +86,33 @@ describe("publishGateVerdict", () => {
       steps: [],
     }));
     await publishGateVerdict({
-      vcsProvider: asProvider(provider),
-      repo: REPO,
-      token: TOKEN,
+      visibility: harden(raw),
+      repoFullName: REPO_FULL_NAME,
       headSha: "sha",
       outcome: { passed: true, results: longTiers },
     });
-    expect(provider.statuses[0]!.description.length).toBeLessThanOrEqual(140);
+    expect(raw.gates[0]!.summary.length).toBeLessThanOrEqual(140);
+  });
+
+  it("on a host with NO publishGate, resolves `skipped` (never throws)", async () => {
+    const outcome = await publishGateVerdict({
+      visibility: harden({}),
+      repoFullName: REPO_FULL_NAME,
+      headSha: "abc123",
+      outcome: passOutcome,
+    });
+    expect(outcome.kind).toBe("skipped");
   });
 });
 
 describe("publishGateVerdictBestEffort", () => {
-  it("on a publish 403, CATCHES it (does not propagate) and reports via emit — the run proceeds", async () => {
-    const provider = new RecordingPublishProvider(new Error("GitHub status publish failed: HTTP 403"));
+  it("on a publish 403, the projection captures it (does not propagate) and reports via emit — the run proceeds", async () => {
+    const raw = new RecordingProjection(new Error("GitHub status publish failed: HTTP 403"));
     const emitted: Array<{ when: string; headSha: string; passed: boolean; reason: string }> = [];
     // A passing verdict whose forge publish 403s MUST resolve normally (no throw).
     await expect(
       publishGateVerdictBestEffort(
-        { vcsProvider: asProvider(provider), repo: REPO, token: TOKEN, headSha: "abc123", outcome: passOutcome },
+        { visibility: harden(raw), repoFullName: REPO_FULL_NAME, headSha: "abc123", outcome: passOutcome },
         "pre_merge",
         true,
         async (e) => {
@@ -129,15 +124,27 @@ describe("publishGateVerdictBestEffort", () => {
     expect(emitted).toHaveLength(1);
     expect(emitted[0]).toMatchObject({ when: "pre_merge", headSha: "abc123", passed: true });
     expect(emitted[0]!.reason).toContain("403");
-    // The token must NOT appear in the emitted reason.
-    expect(emitted[0]!.reason).not.toContain(TOKEN.token);
+  });
+
+  it("on a host with NO publishGate (skipped), reports the skip via emit and resolves", async () => {
+    const emitted: Array<{ reason: string }> = [];
+    await publishGateVerdictBestEffort(
+      { visibility: harden({}), repoFullName: REPO_FULL_NAME, headSha: "abc123", outcome: passOutcome },
+      "pre_merge",
+      true,
+      async (e) => {
+        emitted.push(e);
+      },
+    );
+    expect(emitted).toHaveLength(1);
+    expect(emitted[0]!.reason).toContain("skipped");
   });
 
   it("on a successful publish, emits nothing", async () => {
-    const provider = new RecordingPublishProvider();
+    const raw = new RecordingProjection();
     const emitted: unknown[] = [];
     await publishGateVerdictBestEffort(
-      { vcsProvider: asProvider(provider), repo: REPO, token: TOKEN, headSha: "abc123", outcome: passOutcome },
+      { visibility: harden(raw), repoFullName: REPO_FULL_NAME, headSha: "abc123", outcome: passOutcome },
       "pre_merge",
       true,
       async (e) => {
@@ -145,6 +152,6 @@ describe("publishGateVerdictBestEffort", () => {
       },
     );
     expect(emitted).toHaveLength(0);
-    expect(provider.statuses).toHaveLength(1);
+    expect(raw.gates).toHaveLength(1);
   });
 });

@@ -1,10 +1,13 @@
 // Post-merge auto-issue creation (tempering.md dimension A — the last core
 // run-loop item). After a run's PR merges onto `default_branch`, this watcher
-// reads the post-merge CI on the BASE branch (reusing the VcsProvider
-// `readBranchChecks` path + the SAME `evaluateCiObservation` evaluator the
+// reads the post-merge CI on the BASE branch (the host `readBranchChecks` read —
+// §5e, still a host read — + the SAME `evaluateCiObservation` evaluator the
 // run/queue CI poll uses) for the merge commit. When that CI FAILS, it auto-opens
-// ONE tracking issue via `VcsProvider.createIssue` so the regression is tracked,
-// then records `merge.post_merge_failed` + `issue.opened`.
+// ONE tracking issue through the best-effort `VisibilityProjection.openTrackingIssue?`
+// seam (tanren-owns-the-engine.md §6) so the regression is tracked, then records
+// `merge.post_merge_failed` + `issue.opened`. The projection is `harden`-severed, so
+// a host with no issue support resolves `skipped` (the watcher tolerates it, §4) and a
+// transient forge error resolves `failed` (the claim is released so a later wake retries).
 //
 // It reuses the existing seams — NOT a new poller: the subscriber wakes it on the
 // SAME run-activity bus the DagWalker / MergeCoordinator listen on, and it only
@@ -27,8 +30,12 @@ import type { EventStore } from "../eventStore.js";
 import { PgEventStore } from "../eventStore.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { SecretStore } from "../contracts/secretStore.js";
-import type { VcsProvider } from "../contracts/vcsProvider.js";
+import type { RepoRef, ResolvedVcsToken, VcsProvider } from "../contracts/vcsProvider.js";
+import type { ProjectedTrackingIssue, SafeVisibilityProjection } from "../contracts/visibilityProjection.js";
+import { parseGitHubPullRequestUrl } from "../providers/github.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
+import { buildProjectHostSeams } from "../providers/hostFactory.js";
+import { vcsCredentialHttp } from "../credentials/vcsCredentialHttp.js";
 import { type ActiveQuarantine, loadActiveQuarantine } from "../workflow/ciQuarantine.js";
 import { evaluateCiObservation, type CiObservation } from "../workflow/ciObservation.js";
 import { loadReviewMergeRunContext, type ReviewMergeRunContext } from "../workflow/reviewMerge/context.js";
@@ -57,9 +64,17 @@ export interface PostMergeWatcherDeps {
   /**
    * The CROSS-PROCESS atomic file-once guard. Injectable for tests; defaults to the
    * `PgPostMergeIssueClaimStore` over `pool`. Exactly one process across the fleet
-   * wins `claim()` per merged run, so only one `createIssue` ever fires.
+   * wins `claim()` per merged run, so only one tracking-issue publish ever fires.
    */
   claimStore?: PostMergeIssueClaimStore;
+  /**
+   * Build the best-effort `VisibilityProjection` the tracking issue is published
+   * through, given the run's resolved token. Injectable for tests (a fake projection);
+   * defaults to `buildProjectHostSeams(vcsCredentialHttp(vcsProvider), …).visibility`
+   * — the hardened (never-rejecting) seam over the SAME GitHub HTTP client the run's
+   * `VcsProvider` already holds, with the per-run token supplier.
+   */
+  buildVisibility?: (token: ResolvedVcsToken) => SafeVisibilityProjection;
 }
 
 /** The authoritative merge signal for a run: its `merge.completed` event. */
@@ -86,6 +101,19 @@ export class PostMergeWatcher {
   }
 
   /**
+   * The best-effort `VisibilityProjection` the tracking issue is published through,
+   * for the run's resolved token. Defaults to the hardened host seam over the run's
+   * GitHub HTTP client (`buildProjectHostSeams` — never-rejecting, §6); a test injects
+   * its own factory. Built per call so the token supplier carries the per-run token.
+   */
+  private buildVisibility(token: ResolvedVcsToken): SafeVisibilityProjection {
+    if (this.deps.buildVisibility !== undefined) {
+      return this.deps.buildVisibility(token);
+    }
+    return buildProjectHostSeams(vcsCredentialHttp(this.deps.vcsProvider), async () => token).visibility;
+  }
+
+  /**
    * Evaluate one run's post-merge state. Returns without effect when the run has
    * not merged, when this merge's issue is already claimed/filed, or when the
    * post-merge CI is pending/passing. Files exactly one issue on a genuine failure
@@ -106,8 +134,9 @@ export class PostMergeWatcher {
     if (context === undefined) return;
 
     const resolved = await this.resolveToken(context);
-    // Derive the repo from the PR ref (robust for a `.../pull/N` URL).
-    const repo = this.deps.vcsProvider.parsePullRequest(context.prUrl).repo;
+    // Derive the repo from the PR ref (robust for a `.../pull/N` URL). Pure helper
+    // (§5b) — a URL→`{repo,number}` parse, no provider state.
+    const repo = parseGitHubPullRequestUrl(context.prUrl).repo;
     const checks = await this.deps.vcsProvider.readBranchChecks({
       repo,
       branch: context.baseBranch,
@@ -235,17 +264,24 @@ export class PostMergeWatcher {
   }
 
   /**
-   * Open the single tracking issue, then mark the claim `filed` + record the two
-   * events. The claim is ALREADY held (this process won it). On a `createIssue`
-   * FAILURE the claim is RELEASED so a later wake re-claims + retries — a transient
-   * GitHub error never permanently suppresses the issue.
+   * Open the single tracking issue through the best-effort `VisibilityProjection`
+   * (the `openTrackingIssue?` seam — tanren-owns-the-engine.md §6), then mark the
+   * claim `filed` + record the two events. The claim is ALREADY held (this process
+   * won it). The projection is `harden`-severed, so a publish failure surfaces as a
+   * `ProjectionOutcome` rather than a throw:
+   *   - `projected` ⇒ the issue opened: settle the claim `filed` + record the events.
+   *   - `failed`    ⇒ a transient forge error: RELEASE the claim so a later wake
+   *                   re-claims + retries — never permanently suppressed.
+   *   - `skipped`   ⇒ the host provides no `openTrackingIssue` (no issue support):
+   *                   there is nothing to file, so RELEASE the claim and return —
+   *                   the watcher tolerates a projection without issue support (§4).
    */
   private async fileTrackingIssue(args: {
     runId: string;
     orgId: string;
     context: ReviewMergeRunContext;
-    repo: ReturnType<VcsProvider["parseRepository"]>;
-    token: Awaited<ReturnType<VcsProvider["resolveToken"]>>;
+    repo: RepoRef;
+    token: ResolvedVcsToken;
     merge: MergeRecord;
     observation: CiObservation;
   }): Promise<void> {
@@ -258,21 +294,25 @@ export class PostMergeWatcher {
     }));
     const title = `Post-merge CI failed on ${context.baseBranch} after merging ${context.specId} (PR #${merge.prNumber})`;
     const body = renderIssueBody({ context, merge, failingChecks, runId });
-    let issue;
-    try {
-      issue = await this.deps.vcsProvider.createIssue({
-        repo,
-        token,
-        title,
-        body,
-        labels: [POST_MERGE_FAILURE_LABEL],
-      });
-    } catch (error) {
-      // Release the claim so a later wake retries (at-most-once, never permanently
-      // suppressed). Re-throw so the subscriber logs the failure.
+    const visibility = this.buildVisibility(token);
+    const outcome = await visibility.openTrackingIssue({
+      repoFullName: `${repo.owner}/${repo.name}`,
+      title,
+      body,
+      labels: [POST_MERGE_FAILURE_LABEL],
+    });
+    if (outcome.kind !== "projected") {
+      // `failed` (transient) or `skipped` (no issue support): release the claim so a
+      // later wake re-claims (a transient error retries; a host without issue support
+      // simply re-skips, never permanently suppressed). Nothing is recorded — the
+      // `issue.opened`/`merge.post_merge_failed` events need the opened handle.
       await this.claimStore.release(runId);
-      throw error;
+      if (outcome.kind === "failed") {
+        throw new Error(`post-merge tracking-issue publish failed: ${outcome.error}`);
+      }
+      return;
     }
+    const issue: ProjectedTrackingIssue = outcome.value;
     // The issue opened: settle the claim to `filed` (the durable terminal marker).
     await this.claimStore.markFiled(runId, { url: issue.url, number: issue.number });
 

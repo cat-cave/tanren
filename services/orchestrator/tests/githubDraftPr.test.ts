@@ -395,7 +395,6 @@ describe("GitHub draft PR contract", () => {
       branch: "tanren/run_123",
       prUrl: "https://github.com/cat-cave/repo/pull/9",
       prNumber: 9,
-      reused: false,
     });
     expect(pool.updates).toEqual([{ runId: "run_123", prUrl: "https://github.com/cat-cave/repo/pull/9" }]);
     expect(events.events.map((event) => event.eventType)).toEqual([
