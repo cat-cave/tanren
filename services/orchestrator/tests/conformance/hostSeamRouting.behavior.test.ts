@@ -18,7 +18,6 @@
 // — they live HERE under tests/, never in src/.
 
 import { describe, expect, it } from "vitest";
-import { InMemoryVcsProvider } from "./fakes/inMemoryVcsProvider.js";
 import { GitHubCodeHost } from "../../src/engine/providers/githubCodeHost.js";
 import { buildProjectHostSeams } from "../../src/engine/providers/hostFactory.js";
 import { publishGateVerdictBestEffort } from "../../src/engine/workflow/gate/publishGateVerdictBestEffort.js";

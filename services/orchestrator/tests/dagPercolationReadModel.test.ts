@@ -105,7 +105,7 @@ class FakeClient {
  * model's real `GitHubCodeHost` reads through (decomposition PR-6 — the head-sha read moved
  * off `VcsProvider.readBranchHeadSha` onto the host seam).
  */
-class FetchRefGitHubHttp implements GitHubHttpClient {
+const fetchRefGitHubHttp: GitHubHttpClient = {
   async request(input: GitHubHttpRequest): Promise<GitHubHttpResponse> {
     const path = input.path.split("?")[0] ?? input.path;
     const match = /\/git\/ref\/heads\/([^/]+)$/u.exec(path);
@@ -115,8 +115,8 @@ class FetchRefGitHubHttp implements GitHubHttpClient {
       return { status: 200, body: { object: { sha } } };
     }
     throw new Error(`unexpected GitHub request: ${input.method} ${input.path}`);
-  }
-}
+  },
+};
 
 /**
  * The fake VcsProvider: a REAL `GitHubVcsProvider` over the scripted transport above (so the
@@ -126,7 +126,7 @@ class FetchRefGitHubHttp implements GitHubHttpClient {
  */
 class FakeVcs extends GitHubVcsProvider {
   constructor() {
-    super(new FetchRefGitHubHttp());
+    super(fetchRefGitHubHttp);
   }
   override async resolveToken(_creds: VcsCredentialContext): Promise<ResolvedVcsToken> {
     return { token: "t", source: "static", refresh: async () => "t" };
