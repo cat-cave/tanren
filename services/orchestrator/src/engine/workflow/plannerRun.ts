@@ -3,8 +3,8 @@
 // loop it publishes a draft PR, runs the NATIVE pre-merge gate (the merge authority,
 // in-loop over the command substrate — no forge CI poll) + publishes the `tanren/gate`
 // verdict, then drives review→merge. Non-pass outcomes (window_exhausted /
-// convergence_stalled / halted) map to a halted run without a PR; a Codex
-// usage-limit mid-loop is caught as window_exhausted, not a failure (PROJECT_BRIEF §4.3).
+// convergence_stalled / halted) map to a halted run without a PR; a mid-loop Codex
+// usage-limit is window_exhausted, not a failure (PROJECT_BRIEF §4.3).
 import type pg from "pg";
 import type { CiWhen } from "../ci/index.js";
 import type {
@@ -40,6 +40,7 @@ import type { GateOutcome } from "./gate/index.js";
 import {
   appTokenSeam,
   buildDefaultGate,
+  buildEntityRiskProducer,
   loopConfigSeam,
   nativeQueueSeam,
   resolveConflictResolverHook,
@@ -314,24 +315,22 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
     const { adapters, usageProbe, specValidator, budgetGate: iterationBudgetGate } = adapterResult;
     // MANAGED real-`usage.cost` capturer; BYOK has no platform metering ref → EXPLICIT narrated skip (apex v30). See helper.
     const captureRealProviderCost = await resolveManagedCapturer(input, appendEvent);
-    // the deterministic gate runs on the just-bootstrapped workspace.
-    // Resolve the CI config once (tanren-ci.yml, else the default) and run the tiers
-    // mapped to each lifecycle point over SSH — exit codes only, no Answerer.
+    // The deterministic gate on the just-bootstrapped workspace: resolve the CI config
+    // once (tanren-ci.yml, else the default) and run the tiers mapped to each lifecycle
+    // point over SSH — exit codes only, no Answerer.
     const runGate = input.runGate ?? buildDefaultGate(input, allocation.target, workspacePath, eventStore);
-    // The native merge-gate context: the merge authority runs `runGate` at `pre_merge`
-    // on the live runner + publishes the `tanren/gate` verdict. The same context feeds
-    // the post-rebase re-gate hook (`buildReGateCi`).
+    // The native merge-gate context: the merge authority runs `runGate` at `pre_merge` on
+    // the live runner + publishes `tanren/gate`. Same context feeds the re-gate hook.
     const mergeGateCtx: MergeGateRunContext = { runGate, target: allocation.target, workspacePath, eventStore };
 
-    // the write→gate→PR→CI→review tail can re-enter on a changes-requested
-    // review, re-running the loop with the reviewer feedback seeded as planner
-    // steering, up to maxReviewReworks. On approval it proceeds to merge; else halts.
+    // the write→gate→PR→CI→review tail re-enters on a changes-requested review (loop
+    // re-run with reviewer feedback as planner steering, up to maxReviewReworks).
     const maxReworks = input.maxReviewReworks ?? 1;
     const seedRejections: PlannerRejectionFeedback[] = [];
+    const entityRiskProducer = buildEntityRiskProducer(input, allocation.target, workspacePath);
     let outcome: SubtaskLoopOutcome | undefined;
     let pullRequest: PublishedDraftPullRequest | undefined;
-    let mergeGate: GateOutcome | undefined;
-    let review: PollReviewForRunResult | undefined;
+    let mergeGate: GateOutcome | undefined, review: PollReviewForRunResult | undefined;
 
     for (let reworks = 0; ; reworks += 1) {
       outcome = await runSubtaskLoop({
@@ -357,6 +356,7 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
         usageProbe,
         budgetGate: iterationBudgetGate,
         runGate,
+        entityRiskProducer,
         seedRejections: [...seedRejections],
         ...(captureRealProviderCost !== undefined && { captureRealProviderCost }),
         ...loopConfigSeam(context, specValidator),

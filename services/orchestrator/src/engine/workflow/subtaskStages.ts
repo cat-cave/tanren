@@ -14,6 +14,7 @@ import {
   classifyEntityRisk,
   isUnexpectedRiskFailure,
   type EntityChangeMap,
+  type EntityMapProduction,
   type EntityRiskSignal,
   type UnavailableReason,
 } from "../oracle/index.js";
@@ -284,27 +285,57 @@ export interface CheckerStageInput {
     subtaskIndex: number;
     verdict: CheckAnswer;
   }) => Record<string, unknown>;
-  // §3.1 entity-risk oracle (engine/oracle): the OPTIONAL neutral entity-change
-  // map (normalized from `sem diff` by a producer). When supplied, Tanren
-  // classifies it into a deterministic risk class and steers the checker posture
-  // BEFORE the LLM judgement. When ABSENT — the production default, since Tanren
-  // does not run sem host-side — the classifier returns the `unknown` class and
-  // the checker proceeds on the raw diff exactly as today (graceful fallback).
-  // `entityMapUnavailable` lets a producer distinguish a LEGITIMATE absence
-  // (`no-producer` / `producer-unsupported`, quiet) from an UNEXPECTED failure
-  // (`producer-errored`, logged loudly) per the no-silent-fallback doctrine.
+  // §3.1 entity-risk oracle (engine/oracle): the HOST-SIDE PRODUCER of the neutral
+  // entity-change map. In PRODUCTION the loop wires `entityRiskProducer` — a
+  // closure that shells `sem diff --from <baselineSha> --to HEAD --format json`
+  // READ-ONLY on the run's runner (over the existing command substrate) and
+  // normalizes it into the neutral `EntityChangeMap`. The stage classifies that
+  // map into a deterministic risk class and steers the checker posture BEFORE the
+  // LLM judgement. This is a NATIVE Tanren signal, NOT prompt injection — the
+  // agent still self-inspects the diff in its sandbox separately, and the raw sem
+  // output never reaches the prompt (docs/roadmap/entity-analysis-layer.md §3.1).
+  //
+  // GRACEFUL FALLBACK: when no producer is wired (unit callers), or the producer
+  // returns an unavailability, the classifier returns the `unknown` class and the
+  // checker proceeds on the raw diff exactly as today. The producer distinguishes
+  // a LEGITIMATE absence (`no-producer` / `producer-unsupported`, quiet) from an
+  // UNEXPECTED failure (`producer-errored`, logged loudly) per no-silent-fallback.
+  entityRiskProducer?: (baselineSha: string) => Promise<EntityMapProduction>;
+  // Direct-injection seam for unit paths that pin the classifier without a
+  // producer closure. Mutually exclusive with `entityRiskProducer` in practice;
+  // when the producer is wired, its result takes precedence over these.
   entityChangeMap?: EntityChangeMap;
   entityMapUnavailable?: UnavailableReason;
 }
 
 const checkerOracleLogger = createLogger("checker-entity-risk");
 
-// Derive the deterministic entity-risk signal for a checker stage. PURE w.r.t.
-// the inputs — wraps `classifyEntityRisk` so the production default (no map) is
-// the graceful `unknown`/`no-producer` signal. The wiring layer emits this as an
-// observable event AND, per the no-silent-fallback doctrine, logs the UNEXPECTED
-// `producer-errored` case loudly (the legitimate absent paths stay quiet).
-function deriveCheckerRiskSignal(args: CheckerStageInput): EntityRiskSignal {
+// Derive the deterministic entity-risk signal for a checker stage. Resolves the
+// neutral entity-change map FROM THE HOST-SIDE PRODUCER (the production path: `sem`
+// run read-only on the runner) and classifies it via the pure classifier; the
+// production default (no producer / an unavailability) is the graceful `unknown`
+// signal. The producer NEVER throws (every failure maps to an `UnavailableReason`),
+// but we still guard it: an unforeseen throw degrades to `producer-errored`
+// (UNEXPECTED, loud) rather than failing the checker. The wiring layer emits the
+// signal as an observable event AND logs the unexpected `producer-errored` case
+// loudly (the legitimate absent paths stay quiet).
+async function deriveCheckerRiskSignal(args: CheckerStageInput, baselineSha: string): Promise<EntityRiskSignal> {
+  // Production: shell `sem` on the runner via the wired producer. Its result
+  // (a map or an unavailability reason) takes precedence over any direct injection.
+  if (args.entityRiskProducer !== undefined) {
+    let production: EntityMapProduction;
+    try {
+      production = await args.entityRiskProducer(baselineSha);
+    } catch {
+      // The producer is contracted never to throw; a throw here is itself the
+      // unexpected case — degrade loudly, never let it fail the checker stage.
+      return classifyEntityRisk(undefined, "producer-errored");
+    }
+    return "map" in production
+      ? classifyEntityRisk(production.map)
+      : classifyEntityRisk(undefined, production.unavailable);
+  }
+  // Unit/direct-injection path: classify the supplied map / unavailability.
   return classifyEntityRisk(args.entityChangeMap, args.entityMapUnavailable);
 }
 
@@ -341,10 +372,14 @@ export async function runCheckerStage(args: CheckerStageInput): Promise<CheckerD
 
   // §3.1: derive the deterministic entity-risk signal BEFORE the LLM judgement,
   // emit it as the observable pre-LLM classification, and use it to steer the
-  // checker posture. The `unknown` class (no map / sem absent) is the graceful
-  // fallback: no posture steer, and the prompt is byte-identical to the no-oracle
-  // path. An UNEXPECTED producer failure is logged loudly (no-silent-fallback).
-  const riskSignal = deriveCheckerRiskSignal(args);
+  // checker posture. The signal is produced HOST-SIDE (the wired producer shells
+  // `sem` read-only on the runner over the same `baselineSha` the checker tells the
+  // agent to diff against) and classified natively. The `unknown` class (no
+  // producer / sem absent / can't-parse) is the graceful fallback: no posture
+  // steer, and the prompt is byte-identical to the no-oracle path. An UNEXPECTED
+  // producer failure is logged loudly (no-silent-fallback).
+  const baselineSha = checkerBaselineSha(args);
+  const riskSignal = await deriveCheckerRiskSignal(args, baselineSha);
   const riskPosture = checkerPostureFor(riskSignal);
   if (isUnexpectedRiskFailure(riskSignal.provenance)) {
     checkerOracleLogger.warn(
@@ -374,7 +409,7 @@ export async function runCheckerStage(args: CheckerStageInput): Promise<CheckerD
     specDescription: args.specDescription,
     acceptanceCriteria: args.acceptanceCriteria,
     subtask: args.subtask,
-    baselineSha: checkerBaselineSha(args),
+    baselineSha,
     // §3.1: steer ONLY when the signal is a real class; `unknown` adds no steer.
     riskSignal: riskSignal.riskClass === "unknown" ? undefined : riskSignal,
   };

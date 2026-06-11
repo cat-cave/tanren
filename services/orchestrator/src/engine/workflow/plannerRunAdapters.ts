@@ -42,6 +42,7 @@ import { buildJjConflictApplier } from "./reviewMerge/conflictResolver/jjWorkspa
 import { buildLiveJjWorkspace } from "../providers/liveJjWorkspace.js";
 import type { WorkspaceConflictApplier } from "../contracts/conflictResolution.js";
 import type { ConflictResolverHook } from "./reviewMerge/index.js";
+import { type EntityMapProduction, produceEntityChangeMap } from "../oracle/index.js";
 
 // Builds the run's four role adapters (plan/write/check/audit) by resolving the
 // project's effective routing table through the shared adapter selector. The
@@ -449,4 +450,19 @@ export async function resolveRunAdaptersWithBudgetPreflight(
     appendEvent,
   );
   return { adapters, usageProbe, specValidator, budgetGate };
+}
+
+// §3.1 HOST-SIDE entity-risk producer builder. Binds the run's command substrate +
+// runner handle + bootstrapped workspace into the `sem diff` producer the checker
+// stage invokes per subtask (over the SAME `baselineSha` the agent self-inspects
+// against). NATIVE deterministic signal — NOT prompt injection. The producer
+// degrades to the graceful `unknown` signal (sem absent / errors / can't parse the
+// stack) and is contracted never to throw.
+export function buildEntityRiskProducer(
+  input: RunPlannerLoopInput,
+  target: RunnerHandle,
+  workspacePath: string,
+): (baselineSha: string) => Promise<EntityMapProduction> {
+  return (baselineSha) =>
+    produceEntityChangeMap({ ssh: input.ssh, target, workspacePath, baselineSha, timeoutMs: input.timeoutMs });
 }

@@ -39,6 +39,7 @@ import {
 import type { BudgetGate } from "../contracts/dagWalker.js";
 import { type Finding, type FindingSeverity, severityRank } from "../contracts/findings.js";
 import type { CostRecorder } from "../costs/index.js";
+import type { EntityMapProduction } from "../oracle/index.js";
 import type { EventName, EventPayload } from "../events/index.js";
 import type { EventStore } from "../eventStore.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
@@ -61,9 +62,9 @@ const log = createLogger("subtask-loop");
 
 type LoopQueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
-// The worst severity among the work items KEPT in-spec this loopback — the
-// "are the leftovers mild?" input to the velocity-defer policy. Undefined when
-// nothing was kept (the leftover-severity gate is then vacuously satisfied).
+// The worst severity among the work items KEPT in-spec this loopback — the "are the
+// leftovers mild?" input to the velocity-defer policy. Undefined when nothing was
+// kept (the leftover-severity gate is then vacuously satisfied).
 function worstKeptSeverity(kept: ReadonlyArray<RoutedWorkItem>): FindingSeverity | undefined {
   let worst: FindingSeverity | undefined;
   for (const { item } of kept) {
@@ -140,13 +141,18 @@ export interface SubtaskLoopInput {
   // ceiling + cumulative spend at the TOP of each loop iteration, so an in-flight run
   // halts the instant its project crosses the ceiling — not just at enqueue time. The
   // SAME org-scoped seam the DagWalker uses (PgBudgetGate). Absent ⇒ no per-iteration
-  // budget enforcement (unit paths / a run with no budget concern), byte-identical to
-  // before this gate.
+  // budget enforcement (unit paths), byte-identical to before this gate.
   budgetGate?: BudgetGate;
   // the deterministic, exit-code-driven gate-check seam. `per_iteration` is the
   // tier-1 FAST gate (per task, BEFORE the checker); `pre_audit` is the tier-2 SPEC
   // gate (a CI fail becomes a P0 finding). Omitted → the gate is skipped (unit paths).
   runGate?: (input: { when: CiWhen; taskId?: string }) => Promise<GateOutcome>;
+  // §3.1 HOST-SIDE entity-risk producer: shells `sem diff` READ-ONLY on the run's
+  // runner and normalizes it into the neutral `EntityChangeMap` the checker
+  // classifies into its pre-LLM risk posture (NATIVE deterministic signal, NOT prompt
+  // injection — the agent still self-inspects separately). Wired in plannerRun; absent
+  // ⇒ the checker degrades to the graceful `unknown` signal (unit paths).
+  entityRiskProducer?: (baselineSha: string) => Promise<EntityMapProduction>;
   // prior rejections to seed the planner's rejectionHistory (review-rework re-entry).
   seedRejections?: ReadonlyArray<PlannerRejectionFeedback>;
   captureRealProviderCost?: RealProviderCostCapturer;
@@ -244,16 +250,13 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
 
   // finalize runs run-level accounting + reconciles cost, then returns the terminal
   // outcome. Routed through EVERY return so cost is captured regardless of how the run
-  // ended.
-  //
-  // GUARDED (audit §3.7d): the run-end ccusage/credit reconcile is BEST-EFFORT — it
-  // reaches the control plane / usage probe, any of which can blip. The run OUTCOME
-  // (passed / convergence_stalled / halted / window_exhausted) is the durable result
-  // of the whole loop and MUST persist regardless: a transient reconcile throw must
-  // NOT discard a finished run's outcome AND its spend back-fill in one go. So the
-  // reconcile is caught LOUD-but-non-fatal — the committed cost_records rows are
-  // already the row-is-truth budget source; only the run-end apportion estimate is
-  // missing — and the outcome always returns.
+  // ended. GUARDED (audit §3.7d): the run-end ccusage/credit reconcile is BEST-EFFORT
+  // — the control plane / usage probe can blip. The run OUTCOME (passed /
+  // convergence_stalled / halted / window_exhausted) is the durable result and MUST
+  // persist regardless: a transient reconcile throw must NOT discard a finished run's
+  // outcome AND its spend back-fill. So the reconcile is caught LOUD-but-non-fatal —
+  // the committed cost_records rows are already the row-is-truth budget source; only
+  // the run-end apportion estimate is missing — and the outcome always returns.
   const finalize = async (outcome: SubtaskLoopOutcome): Promise<SubtaskLoopOutcome> => {
     try {
       await observeRunAccounting(input, appendEvent, plannerTaskId, creditState);
@@ -272,18 +275,15 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
   // The cross-loop convergence state — the SOLE loop bound (NOT a retry counter). A
   // `progress`/`velocity_defer` resets it; a `stalled` increments; N consecutive halts.
   let convergenceState: ConvergenceState = { consecutiveStalls: 0 };
-  // The prior loop's findings, for the convergence delta read.
   let priorFindings: Finding[] = [];
   let loopCount = 0;
 
   while (true) {
     // PER-ITERATION BUDGET GATE (audit §3.7a): the enqueue-time gate only stops NEW
-    // work — an ALREADY in-flight cohort would otherwise keep iterating and spending
-    // PAST the ceiling (overspend ≈ cohort × per-run cost). Re-resolve the project's
-    // budget at the top of EVERY iteration so a run halts the instant its project
-    // crosses the ceiling (or the gate must fail closed — unpriced/unparseable spend).
-    // The halt PARKS the spec (requeueable) and stops this run's spend; raising the
-    // ceiling + requeue resumes it (escapable, never a permanent brick).
+    // work — an in-flight cohort would otherwise keep spending PAST the ceiling. Re-
+    // resolve the budget at the top of EVERY iteration so a run halts the instant its
+    // project crosses the ceiling (or the gate fails closed — unpriced spend). The halt
+    // PARKS the spec (requeueable); raising the ceiling + requeue resumes it.
     const budgetPause = await checkIterationBudget(input);
     if (budgetPause !== null) {
       await emitBudgetPause(input, appendEvent, plannerTaskId, budgetPause);
