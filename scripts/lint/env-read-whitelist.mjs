@@ -71,7 +71,6 @@ const NON_TANREN_ENV_ALLOWLIST = new Map([
   // ── tanren-owns-the-engine kill-switch flags (documented post-apex §7) ──────
   ["MERGE_AUTHORITY_LIVE", "documented post-apex §7 kill-switch deletion"],
   ["CONFLICT_RESOLVER_JJ_LIVE", "documented post-apex §7 kill-switch deletion"],
-  ["BASE_SHIFT_LIVE", "documented post-apex §7 kill-switch deletion"],
   ["INTEGRATION_NODES_DRIVE", "documented post-apex §7 kill-switch deletion"],
 ]);
 

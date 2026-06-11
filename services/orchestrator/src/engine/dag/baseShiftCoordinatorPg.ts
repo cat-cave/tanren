@@ -4,10 +4,11 @@
 // pg seams that need NO runner: the KEEP-RUN-ROW persistence (the never-discard writes),
 // the S0 integration-node read, and the `integration.rebase` instrumentation emitter.
 //
-// The live-jj workspace/re-gate/resolver seams that drive the ACTUAL rebase are the
-// FAIL-CLOSED HOLDS in `baseShiftHeldSeams.ts` (Wave-3-plumbed) — so a base shift on the
-// live engine HOLDS the dependent's work (the run row + branch survive, never-discard),
-// never silently discards or merges (the §0 boundary made literal).
+// The live-jj workspace/re-gate/resolver seams that drive the ACTUAL rebase live in
+// `baseShiftLiveSeams.ts` — they allocate a runner, rebase the dependent's branch in place
+// over jj, re-gate it, and resolve a recorded conflict. A seam failure throws a loud
+// `BaseShiftHeldError` so the dependent's work (the run row + branch) survives (never-discard),
+// never silently discarded or merged (the §0 boundary made literal).
 
 import type pg from "pg";
 import type { SpeculativeDependent } from "../contracts/changePercolation.js";
