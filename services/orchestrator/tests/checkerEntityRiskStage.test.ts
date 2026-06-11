@@ -95,4 +95,61 @@ describe("runCheckerStage — entity-risk oracle wiring (§3.1)", () => {
       unexpectedFailure: true,
     });
   });
+
+  it("classifies from the HOST-SIDE PRODUCER's map (the production wiring — real entity data, not the default unknown)", async () => {
+    const h = new CheckerHarness();
+    let producerBaseline: string | undefined;
+    await runCheckerStage({
+      ...checkerArgs(h),
+      baseSha: "base_sha_xyz",
+      entityRiskProducer: async (baselineSha) => {
+        producerBaseline = baselineSha;
+        return {
+          map: {
+            entities: [
+              { kind: "modified", nature: "structural", visibility: "internal" },
+              { kind: "deleted", nature: "structural", visibility: "internal" },
+            ],
+          },
+        };
+      },
+    });
+    // The producer is invoked over the checker's diff base (the same baselineSha
+    // the agent self-inspects against), and its map drives the classification.
+    expect(producerBaseline).toBe("base_sha_xyz");
+    expect(h.riskPayload()).toMatchObject({
+      riskClass: "structural",
+      provenance: "classified",
+      scrutiny: "heightened",
+      counts: { deletedOrRenamed: 1 },
+    });
+  });
+
+  it("uses the producer's unavailability (producer-errored) — the loud no-silent-fallback path", async () => {
+    const h = new CheckerHarness();
+    await runCheckerStage({
+      ...checkerArgs(h),
+      entityRiskProducer: async () => ({ unavailable: "producer-errored" }),
+    });
+    expect(h.riskPayload()).toMatchObject({
+      riskClass: "unknown",
+      provenance: "producer-errored",
+      unexpectedFailure: true,
+    });
+  });
+
+  it("degrades to producer-errored when the producer THROWS (contracted never to, so a throw is the unexpected case)", async () => {
+    const h = new CheckerHarness();
+    await runCheckerStage({
+      ...checkerArgs(h),
+      entityRiskProducer: async () => {
+        throw new Error("unexpected boom");
+      },
+    });
+    expect(h.riskPayload()).toMatchObject({
+      riskClass: "unknown",
+      provenance: "producer-errored",
+      unexpectedFailure: true,
+    });
+  });
 });

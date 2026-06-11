@@ -36,6 +36,7 @@
     "triaging",
     "admittable",
     "revset",
+    "revspec",
     "jjws",
     "wvcs",
     "dedupable",

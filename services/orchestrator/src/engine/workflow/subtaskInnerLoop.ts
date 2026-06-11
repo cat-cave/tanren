@@ -138,6 +138,9 @@ async function runOneSubtask(args: {
       timeoutMs: input.timeoutMs,
       appendEvent,
       buildUsage: input.costHooks?.buildCheckerUsage,
+      // §3.1: the host-side entity-risk producer (shells `sem` read-only on the
+      // runner). Absent on unit paths ⇒ the checker degrades to `unknown`.
+      ...(input.entityRiskProducer !== undefined && { entityRiskProducer: input.entityRiskProducer }),
     });
     if (decision.kind === "pass") {
       return { kind: "complete" };
