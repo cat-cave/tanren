@@ -32,7 +32,10 @@ import type { SecretStore } from "../contracts/secretStore.js";
 import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { IntegrationAncestor, RepoRef, ResolvedVcsToken, VcsProvider } from "../contracts/vcsProvider.js";
+import type { CodeHost } from "../contracts/codeHost.js";
 import { orgScopingPool } from "../data/orgScopedDb.js";
+import { GitHubCodeHost } from "../providers/githubCodeHost.js";
+import { vcsCredentialHttp } from "../credentials/vcsCredentialHttp.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
 import { PgEventStore } from "../eventStore.js";
 import { PgIntegrationNodeModel } from "../dag/integrationNodesPg.js";
@@ -135,6 +138,12 @@ export class PgBatchChecker implements BatchChecker {
       ...(this.deps.githubAppMinter !== undefined && { minter: this.deps.githubAppMinter }),
     });
     const repo = this.deps.vcsProvider.parseRepository(project.repo_url);
+    // The host-neutral `CodeHost` the head-sha read routes through (decomposition PR-6):
+    // built over the SAME GitHub HTTP client the run's provider holds + a supplier of the
+    // token already resolved above (one resolve per check). `fetchRef` ≡ the old
+    // `readBranchHeadSha`. (`readMergeability` below is the §5h freshness coupling — PR-7;
+    // it stays on the provider until that read is rehomed.)
+    const codeHost = this.buildCodeHost(token);
 
     for (const entry of input.entries) {
       const mergeability = await this.deps.vcsProvider.readMergeability({ repo, number: entry.prNumber }, token);
@@ -161,6 +170,7 @@ export class PgBatchChecker implements BatchChecker {
       staticRef,
       repo,
       token,
+      codeHost,
       tailSpecId,
       integrationRef: integrationBranch,
     });
@@ -183,14 +193,15 @@ export class PgBatchChecker implements BatchChecker {
     staticRef: string | undefined;
     repo: RepoRef;
     token: ResolvedVcsToken;
+    /** The host-neutral seam the base head-sha read routes through (decomposition PR-6). */
+    codeHost: CodeHost;
     tailSpecId: string;
     integrationRef: string;
   }): Promise<BatchCheckVerdict> {
     const { orgId, projectId, project, ordered, installation, staticRef, repo, tailSpecId, integrationRef } = args;
-    const baseSha = await this.deps.vcsProvider.readBranchHeadSha({
+    const baseSha = await args.codeHost.fetchRef({
       repo,
-      branch: project.default_branch,
-      token: args.token,
+      remoteBranch: project.default_branch,
     });
     if (baseSha === undefined) {
       // Fail-closed: an unreadable base head is an infra fault (a retriable hold), never a
@@ -283,6 +294,20 @@ export class PgBatchChecker implements BatchChecker {
       [[...runIds]],
     );
     return result.rows;
+  }
+
+  /**
+   * Build the host-neutral `CodeHost` the batch base head-sha read routes through
+   * (decomposition PR-6), over the SAME GitHub HTTP client the run's provider holds
+   * (`vcsCredentialHttp`) + a supplier of the token already resolved for this check. The
+   * seam stays token-free; the plaintext token travels only in each call's auth header.
+   */
+  private buildCodeHost(token: ResolvedVcsToken): CodeHost {
+    const http = vcsCredentialHttp(this.deps.vcsProvider);
+    return new GitHubCodeHost(http, async () => ({
+      token: token.token,
+      ...(token.refresh !== undefined && { refresh: token.refresh }),
+    }));
   }
 
   private async resolveProjectOrg(projectId: string): Promise<string | null> {

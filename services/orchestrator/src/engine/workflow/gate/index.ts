@@ -24,6 +24,6 @@ export {
 } from "./gateConfigFailure.js";
 export { advisoryStepNamesForPosture } from "./advisoryGate.js";
 export { runNativeMergeGate } from "./runMergeGate.js";
-export { publishGateVerdict, NATIVE_GATE_CHECK_NAME, type PublishGateVerdictInput } from "./publishGateVerdict.js";
+export { publishGateVerdict, type PublishGateVerdictInput } from "./publishGateVerdict.js";
 export { publishGateVerdictBestEffort, type EmitPublishFailed } from "./publishGateVerdictBestEffort.js";
 export { ingestGateJunit, type IngestGateJunitInput, type IngestGateJunitResult } from "./ingestGateJunit.js";

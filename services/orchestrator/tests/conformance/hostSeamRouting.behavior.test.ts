@@ -10,22 +10,27 @@
 //       (it never throws) is identical, and the only difference is a best-effort
 //       `gate.publish_failed` NOTE on failure — never a changed decision.
 //   (b) CodeHost READ substitution returns the SAME data the old provider path did —
-//       proven on the `VcsProviderCodeHost` read adapter (the live percolation head-sha
-//       site) AND on the real `GitHubCodeHost` over the existing github fake transport.
+//       proven on the real `GitHubCodeHost` over the existing github fake transport (the
+//       seam the live percolation / base-shift / batch head-sha sites now construct, after
+//       the transitional `VcsProviderCodeHost` adapter was deleted in decomposition PR-6).
 //
 // Fixtures (the in-memory VcsProvider + a scripted github transport) are TEST FIXTURES
 // — they live HERE under tests/, never in src/.
 
 import { describe, expect, it } from "vitest";
-import { InMemoryVcsProvider } from "./fakes/inMemoryVcsProvider.js";
-import { CONFORMANCE_PRESENT_FILE } from "./vcsProviderConformance.js";
 import { GitHubCodeHost } from "../../src/engine/providers/githubCodeHost.js";
 import { buildProjectHostSeams } from "../../src/engine/providers/hostFactory.js";
-import { VcsProviderCodeHost } from "../../src/engine/providers/vcsProviderCodeHost.js";
 import { publishGateVerdictBestEffort } from "../../src/engine/workflow/gate/publishGateVerdictBestEffort.js";
 import type { GateOutcome } from "../../src/engine/workflow/gate/runGateForWhen.js";
+import {
+  harden,
+  type PublishGateInput,
+  type VisibilityProjection,
+} from "../../src/engine/contracts/visibilityProjection.js";
 import type { GitHubHttpClient, GitHubHttpRequest, GitHubHttpResponse } from "../../src/engine/providers/github.js";
-import type { PublishStatusInput, ResolvedVcsToken } from "../../src/engine/contracts/vcsProvider.js";
+import type { ResolvedVcsToken } from "../../src/engine/contracts/vcsProvider.js";
+
+const REPO_FULL_NAME = "cat-cave/apex";
 
 const REPO = { owner: "cat-cave", name: "apex" } as const;
 const HEAD_SHA = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
@@ -47,31 +52,34 @@ interface RecordedEmit {
   reason: string;
 }
 
-// The shared in-memory fake does not model `publishStatus` (nothing gates on it in
-// its suite), so these test providers define it: one that SUCCEEDS (records the call)
-// and one that THROWS (drives the projection's `failed` severance). `publishStatus`
-// is not on the base class, so these are plain definitions (not `override`).
+// The engine now publishes the gate verdict through the `SafeVisibilityProjection`
+// seam (PR-4), so these test projections model `publishGate`: one that SUCCEEDS
+// (records the call) and one that THROWS (drives the projection's `failed` severance).
+// Each is a RAW `VisibilityProjection`, `harden`-ed into the safe seam the gate
+// functions take — exactly the shape the engine holds.
 
-/** A VcsProvider whose `publishStatus` SUCCEEDS (records the call) — the happy path. */
-class RecordingStatusVcsProvider extends InMemoryVcsProvider {
-  readonly published: PublishStatusInput[] = [];
-  async publishStatus(input: PublishStatusInput): Promise<void> {
+/** A projection whose `publishGate` SUCCEEDS (records the call) — the happy path. */
+class RecordingGateProjection implements VisibilityProjection {
+  readonly published: PublishGateInput[] = [];
+  // eslint-disable-next-line @typescript-eslint/require-await
+  async publishGate(input: PublishGateInput): Promise<void> {
     this.published.push(input);
   }
 }
 
-/** A VcsProvider whose `publishStatus` THROWS — drives the projection `failed` path. */
-class ThrowingStatusVcsProvider extends InMemoryVcsProvider {
-  async publishStatus(_input: PublishStatusInput): Promise<void> {
+/** A projection whose `publishGate` THROWS — drives the `failed` severance path. */
+class ThrowingGateProjection implements VisibilityProjection {
+  // eslint-disable-next-line @typescript-eslint/require-await
+  async publishGate(_input: PublishGateInput): Promise<void> {
     throw new Error("forge status publish 403 (simulated)");
   }
 }
 
 describe("(a) VisibilityProjection never blocks — recorded decision is byte-identical", () => {
-  async function runPublish(provider: InMemoryVcsProvider): Promise<RecordedEmit[]> {
+  async function runPublish(raw: VisibilityProjection): Promise<RecordedEmit[]> {
     const emits: RecordedEmit[] = [];
     await publishGateVerdictBestEffort(
-      { vcsProvider: provider, repo: { ...REPO }, token: fakeToken(), headSha: HEAD_SHA, outcome: PASSED_OUTCOME },
+      { visibility: harden(raw), repoFullName: REPO_FULL_NAME, headSha: HEAD_SHA, outcome: PASSED_OUTCOME },
       "pre_merge",
       true,
       async (e) => {
@@ -82,15 +90,15 @@ describe("(a) VisibilityProjection never blocks — recorded decision is byte-id
   }
 
   it("a SUCCEEDING gate publish mirrors the verdict and records NO publish-failed note", async () => {
-    const provider = new RecordingStatusVcsProvider();
-    const emits = await runPublish(provider);
+    const projection = new RecordingGateProjection();
+    const emits = await runPublish(projection);
     expect(emits).toEqual([]);
-    // The projection published the tanren/gate commit status mirroring the passed verdict.
-    expect(provider.published).toHaveLength(1);
-    expect(provider.published[0]).toMatchObject({
+    // The projection published the tanren/gate verdict mirroring the passed gate.
+    expect(projection.published).toHaveLength(1);
+    expect(projection.published[0]).toMatchObject({
+      repoFullName: REPO_FULL_NAME,
       headSha: HEAD_SHA,
-      context: "tanren/gate",
-      state: "success",
+      verdict: "passed",
     });
   });
 
@@ -98,7 +106,7 @@ describe("(a) VisibilityProjection never blocks — recorded decision is byte-id
     // The publish throws; the SafeVisibilityProjection captures it as `failed`. The
     // call resolves normally (no rejection) — the merge path proceeds on the internal
     // verdict exactly as on the success path. The ONLY difference is the best-effort note.
-    const emits = await runPublish(new ThrowingStatusVcsProvider());
+    const emits = await runPublish(new ThrowingGateProjection());
     expect(emits).toHaveLength(1);
     expect(emits[0]).toMatchObject({ when: "pre_merge", headSha: HEAD_SHA, passed: true });
     expect(emits[0]?.reason).toContain("403");
@@ -110,9 +118,8 @@ describe("(a) VisibilityProjection never blocks — recorded decision is byte-id
     // by the projection outcome. That invariance IS the never-blocks guarantee.
     const okResult = await publishGateVerdictBestEffort(
       {
-        vcsProvider: new RecordingStatusVcsProvider(),
-        repo: { ...REPO },
-        token: fakeToken(),
+        visibility: harden(new RecordingGateProjection()),
+        repoFullName: REPO_FULL_NAME,
         headSha: HEAD_SHA,
         outcome: PASSED_OUTCOME,
       },
@@ -122,9 +129,8 @@ describe("(a) VisibilityProjection never blocks — recorded decision is byte-id
     );
     const failResult = await publishGateVerdictBestEffort(
       {
-        vcsProvider: new ThrowingStatusVcsProvider(),
-        repo: { ...REPO },
-        token: fakeToken(),
+        visibility: harden(new ThrowingGateProjection()),
+        repoFullName: REPO_FULL_NAME,
         headSha: HEAD_SHA,
         outcome: PASSED_OUTCOME,
       },
@@ -146,9 +152,8 @@ describe("(a) VisibilityProjection never blocks — recorded decision is byte-id
     let emitAttempted = false;
     const result = await publishGateVerdictBestEffort(
       {
-        vcsProvider: new ThrowingStatusVcsProvider(),
-        repo: { ...REPO },
-        token: fakeToken(),
+        visibility: harden(new ThrowingGateProjection()),
+        repoFullName: REPO_FULL_NAME,
         headSha: HEAD_SHA,
         outcome: PASSED_OUTCOME,
       },
@@ -182,27 +187,6 @@ class FetchRefGitHubHttp implements GitHubHttpClient {
 }
 
 describe("(b) CodeHost read substitution returns the same data as the old provider path", () => {
-  it("VcsProviderCodeHost.fetchRef matches the provider's readBranchHeadSha (live percolation read)", async () => {
-    const provider = new InMemoryVcsProvider();
-    const token = fakeToken();
-    const branch = "feature/x";
-    const viaProvider = await provider.readBranchHeadSha({ repo: { ...REPO }, branch, token });
-    const codeHost = new VcsProviderCodeHost(provider, async () => token);
-    const viaSeam = await codeHost.fetchRef({ repo: { ...REPO }, remoteBranch: branch });
-    expect(viaSeam).toBe(viaProvider);
-    expect(viaSeam).toBe("sha-feature/x");
-  });
-
-  it("VcsProviderCodeHost.readFile matches the provider's readFileOnBranch", async () => {
-    const provider = new InMemoryVcsProvider();
-    const token = fakeToken();
-    const input = { repo: { ...REPO }, ref: "main", path: CONFORMANCE_PRESENT_FILE };
-    const viaProvider = await provider.readFileOnBranch({ ...input, token });
-    const codeHost = new VcsProviderCodeHost(provider, async () => token);
-    const viaSeam = await codeHost.readFile(input);
-    expect(viaSeam).toBe(viaProvider);
-  });
-
   it("GitHubCodeHost.fetchRef reads the same ref the github transport serves", async () => {
     const http = new FetchRefGitHubHttp({ "feature/y": "cafe1234cafe1234cafe1234cafe1234cafe1234" });
     const codeHost = new GitHubCodeHost(http, async () => ({ token: "ghs_x" }));

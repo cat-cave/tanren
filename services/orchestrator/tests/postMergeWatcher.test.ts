@@ -26,6 +26,12 @@ import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
 import { InMemoryVcsProvider } from "./conformance/fakes/inMemoryVcsProvider.js";
 import type { GitHubPullRequestChecks } from "../src/engine/providers/github.js";
 import type { RepoRef, ResolvedVcsToken, VcsCredentialContext } from "../src/engine/contracts/vcsProvider.js";
+import {
+  harden,
+  type SafeVisibilityProjection,
+  type TrackingIssueInput,
+  type VisibilityProjection,
+} from "../src/engine/contracts/visibilityProjection.js";
 
 const RUN_ID = "run_pm";
 const PROJECT_ID = "project_pm";
@@ -228,6 +234,31 @@ class ScriptedVcsProvider extends InMemoryVcsProvider {
   }
 }
 
+/**
+ * A RAW `VisibilityProjection` whose `openTrackingIssue` delegates to the fake
+ * provider's `createIssue` (so the existing `vcs.createdIssues` assertions hold) —
+ * the post-merge watcher now files the tracking issue through this best-effort seam
+ * (PR-4) rather than calling `VcsProvider.createIssue` directly. `harden`-ed into the
+ * never-rejecting `SafeVisibilityProjection` the watcher's `buildVisibility` returns.
+ */
+function recordingVisibility(vcs: ScriptedVcsProvider): SafeVisibilityProjection {
+  const raw: VisibilityProjection = {
+    async openTrackingIssue(input: TrackingIssueInput) {
+      const slash = input.repoFullName.indexOf("/");
+      const repo: RepoRef = { owner: input.repoFullName.slice(0, slash), name: input.repoFullName.slice(slash + 1) };
+      const issue = await vcs.createIssue({
+        repo,
+        token: { token: "t", source: "static", refresh: async () => "t" },
+        title: input.title,
+        body: input.body,
+        ...(input.labels !== undefined && { labels: [...input.labels] }),
+      });
+      return { url: issue.url, number: issue.number };
+    },
+  };
+  return harden(raw);
+}
+
 class StaticRefRequiredVcsProvider extends ScriptedVcsProvider {
   readonly staticRefs: Array<string | undefined> = [];
   override async resolveToken(creds: VcsCredentialContext): Promise<ResolvedVcsToken> {
@@ -255,6 +286,7 @@ function makeWatcher(args: {
     vcsProvider: vcs,
     eventStore: events,
     claimStore: claims,
+    buildVisibility: () => recordingVisibility(vcs),
   });
   return { watcher, vcs, events, claims };
 }

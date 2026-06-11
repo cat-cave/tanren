@@ -14,12 +14,9 @@ import type pg from "pg";
 import { describe, expect, it } from "vitest";
 import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
 import { PgPercolationReadModel } from "../src/engine/dag/percolationPg.js";
-import type {
-  RepoRef,
-  ResolvedVcsToken,
-  VcsCredentialContext,
-  VcsProvider,
-} from "../src/engine/contracts/vcsProvider.js";
+import { GitHubVcsProvider } from "../src/engine/providers/githubVcsProvider.js";
+import type { GitHubHttpClient, GitHubHttpRequest, GitHubHttpResponse } from "../src/engine/providers/github.js";
+import type { ResolvedVcsToken, VcsCredentialContext, VcsProvider } from "../src/engine/contracts/vcsProvider.js";
 
 const ORG = "org_1";
 const PROJECT = "project_1";
@@ -101,19 +98,38 @@ class FakeClient {
   }
 }
 
-/** A fake VcsProvider whose branch heads are configurable: each ancestor's run
- *  branch sits at `sha-old` (unchanged), while default_branch sits at the merge SHA. */
-class FakeVcs implements Partial<VcsProvider> {
-  async resolveToken(_creds: VcsCredentialContext): Promise<ResolvedVcsToken> {
+/**
+ * A scripted GitHub transport answering the git-ref reads `CodeHost.fetchRef` issues:
+ * `default_branch` sits at the merge SHA, every other branch (each ancestor's run branch)
+ * is UNCHANGED at `sha-old` (the squash-merge left it put). This is the fixture the read
+ * model's real `GitHubCodeHost` reads through (decomposition PR-6 — the head-sha read moved
+ * off `VcsProvider.readBranchHeadSha` onto the host seam).
+ */
+const fetchRefGitHubHttp: GitHubHttpClient = {
+  async request(input: GitHubHttpRequest): Promise<GitHubHttpResponse> {
+    const path = input.path.split("?")[0] ?? input.path;
+    const match = /\/git\/ref\/heads\/([^/]+)$/u.exec(path);
+    if (input.method === "GET" && match) {
+      const branch = decodeURIComponent(match[1] ?? "");
+      const sha = branch === DEFAULT_BRANCH ? MERGE_SHA : "sha-old";
+      return { status: 200, body: { object: { sha } } };
+    }
+    throw new Error(`unexpected GitHub request: ${input.method} ${input.path}`);
+  },
+};
+
+/**
+ * The fake VcsProvider: a REAL `GitHubVcsProvider` over the scripted transport above (so the
+ * read model's `GitHubCodeHost` resolves branch heads through it), with `resolveToken`
+ * overridden to a fake token (the test's bare project/org config carries no App nor static
+ * credential, and the head-sha read does not need a real one).
+ */
+class FakeVcs extends GitHubVcsProvider {
+  constructor() {
+    super(fetchRefGitHubHttp);
+  }
+  override async resolveToken(_creds: VcsCredentialContext): Promise<ResolvedVcsToken> {
     return { token: "t", source: "static", refresh: async () => "t" };
-  }
-  parseRepository(_repoUrl: string): RepoRef {
-    return { owner: "cat-cave", name: "apex" };
-  }
-  async readBranchHeadSha(input: { branch: string }): Promise<string | undefined> {
-    if (input.branch === DEFAULT_BRANCH) return MERGE_SHA;
-    // Every ancestor run branch is UNCHANGED (the squash-merge left it put).
-    return "sha-old";
   }
 }
 

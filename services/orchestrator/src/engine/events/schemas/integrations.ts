@@ -21,7 +21,6 @@ export const GithubPrCreatedPayload = z
     targetBranch: z.string(),
     prUrl: z.string(),
     prNumber: z.number().int(),
-    reused: z.boolean(),
   })
   .strict();
 
