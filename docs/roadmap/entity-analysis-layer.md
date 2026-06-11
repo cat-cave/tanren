@@ -1,11 +1,18 @@
 # Entity-Analysis Layer — `sem` as Tanren's entity primitive
 
-> **Status: increment 1 is BUILT in this PR.** It vendors `sem` into the runner
-> image and wires the Checker/Auditor + issue-triage answerer prompts to use it,
-> with a graceful raw-`git diff` fallback. The cherry-picked NATIVE builds in §3 —
-> the risk-triage/verdict oracle, the entity-merge first-pass in the jj
-> `BaseShiftCoordinator`, and entity-anchored issue Claims — are **follow-ons**,
-> deliberately not in scope here.
+> **Status: BUILT — increment 1 AND the §3 native builds are all shipped.**
+> Increment 1 vendored `sem` into the runner image and wired the Checker/Auditor +
+> issue-triage answerer prompts to use it (graceful raw-`git diff` fallback). The
+> cherry-picked NATIVE builds in §3 — **all three are now landed**: §3.1 the
+> checker risk-oracle fires from a host-side `sem` producer
+> (`engine/oracle/semEntityProducer.ts`, wired through `engine/oracle/index.ts`);
+> §3.2 the entity-merge deterministic first-pass runs in the base-shift conflict
+> path (`workflow/reviewMerge/conflictResolver/semEntityMerge.ts`,
+> `dag/baseShiftLiveResolve.ts`); §3.3 entity-anchored issue Claims are the
+> `entity_claims` table (`db/src/schemaClaims.ts`) plus
+> `engine/repositories/entityClaims.ts` and the self-validating oracle. The
+> per-section bodies below kept their original "follow-on" prose as the design
+> record; treat them as as-built.
 
 ## §0 — Why this exists
 
@@ -99,10 +106,10 @@ fallback and is authoritative.
 - Prompt-content tests: the Checker/Auditor + triage prompts instruct `sem` usage
   AND name the raw-diff fallback (so the fallback can never be silently dropped).
 
-## §3 — Cherry-picked NATIVE builds (follow-ons, NOT in this PR)
+## §3 — Cherry-picked NATIVE builds (ALL LANDED)
 
-These are the durable wins, mapped onto Tanren's existing seams. Each is a
-separate increment with its own design + tests.
+These are the durable wins, mapped onto Tanren's existing seams. Each shipped as a
+separate increment with its own tests; the prose below is the as-built design record.
 
 ### 3.1 Native risk-triage + verdict for the checker (our oracle taxonomy)
 
@@ -143,9 +150,9 @@ becomes a standing, self-validating Claim.
 
 ## §4 — Open questions / follow-on sequencing
 
-- **§3.1 first** (it sharpens the checker with no engine risk), then **§3.3**
-  (entity Claims ride the same `sem` primitive), then **§3.2** (gated behind the
-  post-apex jj/merge cutover, since it touches the engine).
+- **Sequencing (as-shipped):** §3.1 landed first (it sharpened the checker with no
+  engine risk), then §3.3 (entity Claims rode the same `sem` primitive), then §3.2
+  (after the jj/merge cutover was the single path, since it touches the engine).
 - **Cache locality:** `sem` keeps a SQLite entity cache; on the ephemeral runner
   sandbox each invocation may rebuild. If the entity map becomes a hot path (§3.1),
   evaluate persisting/priming the cache per workspace. Out of scope for

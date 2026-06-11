@@ -26,11 +26,24 @@
 > the only paths. The `integration.*` metrics read-side (`rebase_vs_rebuild`) is
 > **built** — the route, the compute reducer, and the insights loader are live.
 >
-> **What remains (separate, not the cutover):** a few §7 simplifications the cutover
-> did not require — the `VcsProvider` interface is still on disk (the 26-method →
-> minimal `CodeHost` reduction is its own pass), and `resolveSpeculativeState` /
-> the stacked-PR retarget still live in the merge dispatcher. These are net-delete
-> cleanups, not gates on the live path. The live cutover paths are **first exercised
+> **What landed since (the §7 decomposition):** the 26-method God-`VcsProvider` is
+> **fully DELETED** — decomposed across a 9-PR series into the minimal `CodeHost` +
+> best-effort `VisibilityProjection` (the `mergeable_state` read was severed to
+> `CodeHost.compareRefs` ancestry). The files `engine/contracts/vcsProvider.ts`,
+> `providers/githubVcsProvider.ts`, `buildVcsProvider.ts` (and the
+> `VcsProviderCodeHost` / `VcsProviderVisibilityProjection` adapters,
+> `PgSpeculativeIntegrator`) are gone; the surviving primitives moved to
+> `contracts/codeHostTypes.ts`, `providers/githubRepoRef.ts`, and the typed-pg-row
+> seam `engine/data/pgRows.ts`. A `grep VcsProvider services/*/src` now finds only
+> historical doc-comments, not a live interface.
+>
+> **What remains (separate, not the cutover):** one §7 simplification —
+> `resolveSpeculativeState` / the stacked-PR retarget
+> (`workflow/reviewMerge/speculativeStackRetarget.ts`) still live in the merge
+> dispatcher. This is **not dead percolation**: it is the jj-local `ancestor_stack`
+> base + PR-base retarget walk (`walker-jj-local-integration-design.md` §3.2/§3.3),
+> a net-keep mechanism whose only open question is a possible rename off the
+> "speculative" vocabulary. The live cutover paths are **first exercised
 > end-to-end by the next apex run** — apex v32 halted at scaffold-bootstrap before
 > reaching a merge, so a real merge through the jj/`MergeAuthority` path is the open
 > live-validation item (the engine is the single path regardless).
@@ -188,19 +201,19 @@ interface IssueSource { fetch(source): Promise<IngestedItem[]>; }   // GitHub = 
 interface IdentityProvider { buildAuthorizeUrl(...); exchangeCode(...); } // OAuth = one of N
 ```
 
-**Load-bearing GitHub coupling to sever** (where forge semantics drive engine control
-flow that must become Tanren's): PRs as durable engine handles (`pr_url` parsed to drive
-review/merge — `githubDraftPr.ts:133`, `reviewPolling.ts:111`, `mergeDispatch.ts:85`);
-GitHub review state drives control flow (`reviewPolling.ts:195` → Tanren review records,
-host reviews imported as _optional external approvals_); draft/ready gates merge
-(`reviewPolling.ts:125`); `mergeable_state`/`update-branch` decide freshness
-(`mergeDispatcher.ts:251`); the GitHub PR-merge endpoint _is_ the merge authority today
-(`mergeDispatcher.ts:169`); integration uses server-side merge refs
-(`speculativeIntegrator.ts:99`, `githubVcsProvider.ts:431`); post-merge reads host CI +
-opens host issues (`postMerge/watcher.ts:107`). After: GitHub/GitLab/Bitbucket/self-host
-differ only in `CodeHost` mechanics; PR/check/review are best-effort mirrors; Tanren's
-DB/events are the source of truth for gate verdicts, findings, review/demo, conflicts,
-merge authority, queue order, DORA.
+**Load-bearing GitHub coupling — SEVERED.** Where forge semantics once drove engine
+control flow that had to become Tanren's: PRs as durable engine handles, GitHub review
+state driving control flow, draft/ready gating merge, `mergeable_state`/`update-branch`
+deciding freshness, the GitHub PR-merge endpoint _being_ the merge authority,
+server-side merge refs, post-merge host-CI reads. With the §7 decomposition landed
+this is done: the `mergeable_state` read was severed to `CodeHost.compareRefs`
+(ancestry, not a forge verdict), the GitHub PR-merge endpoint is replaced by
+`MergeAuthority` + a `CodeHost` CAS land, the server-side merge refs are gone (the
+dependent jj-assembles from real ancestor PR-head refs), and the dead host-CI reads
+(`readPullRequestChecks`, `publishCheck`) are deleted. GitHub/GitLab/Bitbucket/self-host
+now differ only in `CodeHost` mechanics; PR/check/review are best-effort mirrors;
+Tanren's DB/events are the source of truth for gate verdicts, findings, review/demo,
+conflicts, merge authority, queue order, DORA.
 
 ## 7. It must get SIMPLER (a success criterion, not a hope)
 
@@ -221,10 +234,17 @@ the dependent jj-assembles from the real ancestor PR-head refs), `PgSpeculativeI
 
 - the percolation supersede+regenerate path + the strand reconciler are deleted, the two
   base-shift handlers collapsed to one never-discard `BaseShiftCoordinator`, and the
-  kill-switch env vars are removed (each live path is unconditional). The net is a delete.
-  **Still on disk** as a separate, non-blocking simplification: the `VcsProvider` interface
-  (the 26-method → minimal `CodeHost` reduction is its own pass) and `resolveSpeculativeState`
-  / the stacked-PR retarget in the merge dispatcher.
+  kill-switch env vars are removed (each live path is unconditional). **And the §7
+  decomposition itself is now done**: the 26-method God-`VcsProvider` is **fully
+  DELETED** — split across a 9-PR series into the minimal `CodeHost` + best-effort
+  `VisibilityProjection`, the `mergeable_state` read severed to `CodeHost.compareRefs`
+  ancestry, the dead methods (`readPullRequestChecks`, `publishCheck`, …) dropped, and
+  the surviving primitives lifted to `contracts/codeHostTypes.ts` /
+  `providers/githubRepoRef.ts` / the typed-row `engine/data/pgRows.ts` seam. The net is a
+  delete. **Still on disk** as the one remaining non-blocking simplification:
+  `resolveSpeculativeState` / the stacked-PR retarget in the merge dispatcher — which is
+  the live jj-local `ancestor_stack` base + retarget mechanism, not dead code (a
+  possible rename off the "speculative" name is its only open item).
 
 Guardrails (audit 8): use **jj-lib as the state authority, not CLI text-parsing**;
 `CodeHost` may host but must **never decide** freshness/conflict/gate; one
