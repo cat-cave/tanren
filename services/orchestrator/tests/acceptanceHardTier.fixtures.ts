@@ -228,21 +228,25 @@ export function hardTierWorkflowRunner(github: GitHubHttpClient, trace: HardTier
         }),
       },
       mergeProbe: {
-        // The branch is `dirty` on the freshness read (surfacing the merge-time conflict
-        // BEFORE the land), then `clean` once the resolver reconciles it — the authority
-        // then lands the resolved tree. This exercises the SAME merge-time conflict +
-        // resolver path the deleted host-merge 409-retry did, now on the authority land.
-        // `mergeAttempts` counts the land-path mergeability evaluations (conflict → success).
-        readMergeability: async () => {
+        // §5h: the branch is `behind` on the freshness read (the `CodeHost`-derived ancestry —
+        // never `dirty`); the unified `baseShiftRebase` hook surfaces the merge-time CONFLICT.
+        // After the resolver reconciles it the freshness reads `clean` and the authority lands
+        // the resolved tree — the SAME merge-time conflict + resolver path, now jj-owned.
+        // `mergeAttempts` counts the land-path freshness evaluations (conflict → success).
+        readFreshness: async () => {
           mergeCall += 1;
           trace.mergeAttempts = mergeCall;
           return mergeCall === 1
-            ? { state: "dirty" as const, behind: false, baseBranch: "main", headBranch: "tanren/run_hard" }
+            ? { state: "behind" as const, behind: true, baseBranch: "main", headBranch: "tanren/run_hard" }
             : { state: "clean" as const, behind: false, baseBranch: "main", headBranch: "tanren/run_hard" };
         },
-        updateBranch: async () => ({ outcome: "up_to_date" as const, message: "up to date" }),
+        readBaseBranch: async () => "main",
         retargetBase: async () => {},
       },
+      // §5h: the `behind` rebase routes through the unified base-shift hook, which surfaces
+      // the conflict (jj owns conflict). Inject a scripted hook so the no-DB run never
+      // allocates a runner; it returns `conflict` to drive the resolver path.
+      baseShiftRebase: async () => ({ outcome: "conflict", message: "branch conflicts with base" }),
       // The land is the unconditional `MergeAuthority` + CodeHost CAS; the resolved-tree
       // re-gate runs through the same `runGate` (passes), then the authority lands.
       mergeAuthority: hardTierAuthorityBundle(),

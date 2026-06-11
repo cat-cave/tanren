@@ -37,7 +37,7 @@ import {
   PercolationOwnsSpecError,
 } from "./driveConflictResolve.js";
 import { mergeForRun } from "../workflow/reviewMerge/index.js";
-import type { NativeQueueEnqueuer } from "../workflow/reviewMerge/index.js";
+import type { MergeForRunInput, NativeQueueEnqueuer } from "../workflow/reviewMerge/index.js";
 import type { MergeDriveOutcome } from "../contracts/mergeCoordinator.js";
 import type { DriveMergeForQueuedRun } from "./coordinator.js";
 import { PgMergeQueueModel } from "./coordinatorPg.js";
@@ -73,6 +73,19 @@ export interface BuildMergeCoordinatorDeps {
    * directly — byte-identical to today.
    */
   runStateWriter?: RunStateWriter;
+  /**
+   * TEST SEAM: the merge-stage freshness/retarget probe. Production OMITS it → the drive
+   * builds the real `CodeHost`-derived freshness probe from the GitHub provider (§5h). A
+   * no-DB unit run (no GitHub provider) injects it so the drive's freshness read does not
+   * require a GitHub HTTP client.
+   */
+  mergeProbe?: MergeForRunInput["mergeProbe"];
+  /**
+   * TEST SEAM: the in-loop `behind` base-shift hook. Production OMITS it → the drive wires
+   * the live `BaseShiftCoordinator` (§5h). A no-DB unit run injects a scripted hook so the
+   * `behind` rebase surfaces a controlled outcome without allocating a runner.
+   */
+  baseShiftRebaseOverride?: MergeForRunInput["baseShiftRebase"];
 }
 
 interface RunFacts {
@@ -149,7 +162,8 @@ export function buildDriveMerge(deps: BuildMergeCoordinatorDeps): DriveMergeForQ
     // picked up + mis-settled by the change-percolation poller.
     { suppressInFlightMarker: true },
   );
-  const baseShiftRebase = buildBaseShiftRebaseHook({ pool: deps.pool, coordinator: baseShiftCoordinator });
+  const baseShiftRebase =
+    deps.baseShiftRebaseOverride ?? buildBaseShiftRebaseHook({ pool: deps.pool, coordinator: baseShiftCoordinator });
   return async ({ runId }): Promise<MergeDriveOutcome> => {
     const facts = await resolveRunFacts(deps.pool, runId);
     // RLS scope for the merge drive's TENANT-TABLE READS. The coordinator subscriber
@@ -202,6 +216,9 @@ export function buildDriveMerge(deps: BuildMergeCoordinatorDeps): DriveMergeForQ
           vcsProvider: deps.vcsProvider,
           runId,
           resolvedGithubCredentialRef: facts.githubCredentialRef,
+          // TEST SEAM: an injected freshness/retarget probe (a no-DB unit run); production
+          // omits it → the merge stage builds the real `CodeHost`-derived probe (§5h).
+          ...(deps.mergeProbe !== undefined && { mergeProbe: deps.mergeProbe }),
           ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
           // The DRIVE flag: run the SAME directMerge logic (up-to-date/rebase +
           // conflict-resolution + retarget), labelled `native_queue`. The first

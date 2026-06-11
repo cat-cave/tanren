@@ -31,6 +31,10 @@ interface RepoState {
    * fast-forward (the happy land path of the frozen suite).
    */
   ffBase: Map<string, string>;
+  /** sha -> its parent shas (the commit graph `/compare` walks for ancestry/authors). */
+  parents: Map<string, string[]>;
+  /** sha -> the attributed author login (the `/compare` commits' author). */
+  authors: Map<string, string>;
 }
 
 /**
@@ -55,12 +59,22 @@ class StatefulGitHubHttp implements GitHubHttpClient {
       defaultBranch,
       branches: new Map([[defaultBranch, initialSha]]),
       ffBase: new Map(),
+      parents: new Map(),
+      authors: new Map(),
     });
   }
 
   /** Record that `sha` was built on `base` (so a ff-only update to it requires main == base). */
   setFastForwardBase(owner: string, name: string, sha: string, base: string): void {
     this.repos.get(`${owner}/${name}`)?.ffBase.set(sha, base);
+  }
+
+  /** Seed a commit's parents + author so `/compare` can report ancestry + authors. */
+  seedCommit(owner: string, name: string, sha: string, parents: ReadonlyArray<string>, author: string): void {
+    const repo = this.repos.get(`${owner}/${name}`);
+    if (repo === undefined) return;
+    repo.parents.set(sha, [...parents]);
+    repo.authors.set(sha, author);
   }
 
   /** Inject a one-shot mutation that fires right before the next PATCH lands. */
@@ -85,6 +99,15 @@ class StatefulGitHubHttp implements GitHubHttpClient {
     // readDefaultBranch: GET /repos/:o/:r
     if (input.method === "GET" && suffix === "") {
       return { status: 200, body: { default_branch: repo.defaultBranch } };
+    }
+
+    // compareRefs / readCommitAuthors: GET /compare/:base...:head — report the
+    // ancestry `status` + the base-exclusive `commits` (with author logins).
+    const compareMatch = /^\/compare\/(.+)\.\.\.(.+)$/u.exec(suffix);
+    if (input.method === "GET" && compareMatch !== null) {
+      const baseSha = decodeURIComponent(compareMatch[1] ?? "");
+      const headSha = decodeURIComponent(compareMatch[2] ?? "");
+      return { status: 200, body: compareBody(repo, baseSha, headSha) };
     }
 
     // fetchRef / land-read: GET /git/ref/heads/:branch
@@ -150,6 +173,45 @@ class StatefulGitHubHttp implements GitHubHttpClient {
 
     return { status: 404, body: { message: "unhandled endpoint" } };
   }
+}
+
+/** Does `fromSha` reach `targetSha` over the repo's parent edges? */
+function reachesIn(repo: RepoState, fromSha: string, targetSha: string): boolean {
+  const seen = new Set<string>();
+  const stack = [fromSha];
+  while (stack.length > 0) {
+    const sha = stack.pop();
+    if (sha === undefined || seen.has(sha)) continue;
+    if (sha === targetSha) return true;
+    seen.add(sha);
+    stack.push(...(repo.parents.get(sha) ?? []));
+  }
+  return false;
+}
+
+/** Build a GitHub-shaped `/compare` body (the `status` + base-exclusive `commits`). */
+function compareBody(repo: RepoState, baseSha: string, headSha: string): { status: string; commits: unknown[] } {
+  const status =
+    baseSha === headSha
+      ? "identical"
+      : reachesIn(repo, headSha, baseSha)
+        ? "ahead"
+        : reachesIn(repo, baseSha, headSha)
+          ? "behind"
+          : "diverged";
+  // The base-exclusive commit range (reachable from head, not from base).
+  const commits: unknown[] = [];
+  const seen = new Set<string>();
+  const stack = [headSha];
+  while (stack.length > 0) {
+    const sha = stack.pop();
+    if (sha === undefined || sha === baseSha || seen.has(sha)) continue;
+    seen.add(sha);
+    const author = repo.authors.get(sha);
+    if (author !== undefined) commits.push({ sha, author: { login: author }, committer: { login: author } });
+    stack.push(...(repo.parents.get(sha) ?? []));
+  }
+  return { status, commits };
 }
 
 const REPO = { owner: "owner", name: "repo" } as const;
@@ -233,6 +295,9 @@ describeCodeHostConformance(
       },
       seed: (_host, repo, defaultBranch, initialSha) => {
         transport.seedRepo(repo.owner, repo.name, defaultBranch, initialSha);
+      },
+      seedCommit: (_host, repo, sha, parents, author) => {
+        transport.seedCommit(repo.owner, repo.name, sha, parents, author);
       },
     };
   })(),

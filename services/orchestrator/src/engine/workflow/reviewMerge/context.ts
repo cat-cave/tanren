@@ -27,6 +27,12 @@ export interface ReviewMergeRunContext {
   prUrl: string;
   /** The PR's base branch (project default), for conflict-event payloads. */
   baseBranch: string;
+  /**
+   * The PR's HEAD branch (the run's `runs.branch`) — the ref whose head sha the
+   * §5h `CodeHost`-derived freshness signal compares against the base. `""` for a
+   * run that has not recorded a branch (the freshness probe then reports `unknown`).
+   */
+  headBranch: string;
   /** Resolved per-repo merge integration (project config). */
   mergeIntegration: MergeIntegration;
   /** external-push governance posture (project config). */
@@ -115,7 +121,7 @@ export async function loadReviewMergeRunContext(
   options: LoadReviewMergeRunContextOptions = {},
 ): Promise<ReviewMergeRunContext> {
   const result = await pool.query(
-    `SELECT r.run_id, r.spec_id, r.project_id, r.pr_url, p.config, p.default_branch, o.config AS org_config
+    `SELECT r.run_id, r.spec_id, r.project_id, r.pr_url, r.branch, p.config, p.default_branch, o.config AS org_config
      FROM runs r
      JOIN projects p ON p.project_id = r.project_id
      LEFT JOIN organizations o ON o.id = p.org_id
@@ -139,6 +145,7 @@ export async function loadReviewMergeRunContext(
     projectId: row.project_id,
     prUrl: row.pr_url,
     baseBranch: row.default_branch ?? "main",
+    headBranch: row.branch ?? "",
     mergeIntegration: projectConfig.mergeIntegration,
     governancePosture: projectConfig.governancePosture,
     policyVersion: projectConfig.version,
@@ -198,6 +205,7 @@ const ReviewMergeRunRow = z.object({
   spec_id: z.string(),
   project_id: z.string(),
   pr_url: z.string().nullable(),
+  branch: z.string().nullish(),
   config: z.unknown(),
   default_branch: z.string().nullable(),
   org_config: z.unknown(),

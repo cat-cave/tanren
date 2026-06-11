@@ -22,6 +22,7 @@ import type {
   ProjectedTrackingIssue,
   PublishGateInput,
   PublishReviewInput,
+  ReadChangeRequestBaseInput,
   RetargetChangeRequestInput,
   TrackingIssueInput,
   VisibilityProjection,
@@ -146,6 +147,30 @@ export class GitHubVisibilityProjection implements VisibilityProjection {
       newBase: input.newBaseBranch,
       token,
     });
+  }
+
+  // readChangeRequestBase = read the PR's CURRENT base ref (`GET /pulls/{n}` →
+  // `base.ref`), the speculative retarget walk's `fromBase`. A safe READ (it never
+  // mutates); a non-200 / malformed body throws, captured by `harden()` as `failed`
+  // (the walk then skips this pass — re-derived on the next ancestor merge).
+  async readChangeRequestBase(input: ReadChangeRequestBaseInput): Promise<string> {
+    const repo = parseRepoFullName(input.repoFullName);
+    const token = await this.resolveToken();
+    const response = await this.http.request({
+      method: "GET",
+      path: `/repos/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}/pulls/${input.changeRequestNumber}`,
+      token: token.token,
+      refreshToken: token.refresh,
+    });
+    if (response.status !== 200 || typeof response.body !== "object" || response.body === null) {
+      throw new Error(`GitHub PR base read failed for #${input.changeRequestNumber}: HTTP ${response.status}`);
+    }
+    const base = (response.body as { base?: { ref?: unknown } }).base;
+    const ref = base !== undefined && typeof base.ref === "string" ? base.ref : "";
+    if (ref === "") {
+      throw new TypeError(`GitHub PR #${input.changeRequestNumber} returned no base.ref`);
+    }
+    return ref;
   }
 
   // openTrackingIssue = file ONE best-effort tracking issue on the repo (the SAME

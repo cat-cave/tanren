@@ -253,10 +253,9 @@ describe("merge dispatch stage", () => {
   it("merge conflict → merge.conflict + recoverable (running) task, resolver hook invoked", async () => {
     const pool = new ReviewMergePool("direct_merge");
     const events = new FakeEventStore();
-    // A `dirty` mergeability surfaces the conflict BEFORE the land decision; the resolver
-    // declining (`resolved:false`) holds it recoverably — no land, no host PR-merge.
+    // §5h: `behind` freshness (never `dirty`); the base-shift hook surfaces the conflict; the resolver declining holds it recoverably (no land).
     const probe = recordingMergeProbe({
-      mergeability: { state: "dirty", behind: false, baseBranch: "main", headBranch: "tanren/run_1" },
+      mergeability: { state: "behind", behind: true, baseBranch: "main", headBranch: "tanren/run_1" },
     });
     const { host, landed } = authorityLand();
     let hookCalls = 0;
@@ -269,6 +268,7 @@ describe("merge dispatch stage", () => {
       runId: "run_1",
       mergeProbe: probe,
       mergeAuthority: authorityBundle(host, landed),
+      baseShiftRebase: async () => ({ outcome: "conflict", message: "branch conflicts with base" }),
       resolveConflict: async (ctx) => {
         hookCalls += 1;
         expect(ctx.baseBranch).toBe("main");

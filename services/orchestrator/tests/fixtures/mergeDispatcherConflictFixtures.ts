@@ -24,16 +24,21 @@ export function mergeability(state: PullRequestMergeability["state"]): PullReque
   return { state, behind: state === "behind", baseBranch: "main", headBranch: "feat" };
 }
 
-/** A probe whose mergeability is `dirty` first (to trigger the conflict), then scripted. */
+/**
+ * A probe whose freshness is `behind` first (so `ensureUpToDate` routes to the unified
+ * `baseShiftRebase` — which the dispatcher wires to surface a `conflict`, §5h), then the
+ * scripted post-resolution state the land authority re-judges.
+ */
 export function scriptedProbe(postResolution: PullRequestMergeability["state"]): MergeProbe {
   let read = 0;
   return {
-    // first read (ensureUpToDate) → dirty → conflict; subsequent (driveLand) → scripted.
-    readMergeability: async (): Promise<PullRequestMergeability> => {
+    // first read (ensureUpToDate) → behind → unified rebase surfaces a conflict; subsequent
+    // (driveLand → land) → the scripted post-resolution state.
+    readFreshness: async (): Promise<PullRequestMergeability> => {
       read += 1;
-      return mergeability(read === 1 ? "dirty" : postResolution);
+      return mergeability(read === 1 ? "behind" : postResolution);
     },
-    updateBranch: async () => ({ outcome: "up_to_date" as const, message: "" }),
+    readBaseBranch: async () => "main",
     retargetBase: async () => {},
   };
 }
@@ -151,6 +156,10 @@ export function buildDispatcher(args: {
     // The resolved-tree pre_merge re-gate (§5): defaults to passing so the authority
     // then judges the OTHER fail-closed inputs. A test overrides it.
     reGateCi: reGate(args.reGateStatus ?? "passed"),
+    // §5h: the `behind` freshness routes through the unified base-shift hook, which surfaces
+    // the CONFLICT (jj owns conflict — never a `mergeable_state` `dirty` read). This is what
+    // drives the conflict-resolved land flow the regression locks assert.
+    baseShiftRebase: async () => ({ outcome: "conflict" as const, message: "branch conflicts with base" }),
     mergeAuthority: args.bundle,
   } as unknown as MergeForRunInput;
   const deps: DispatcherDeps = {

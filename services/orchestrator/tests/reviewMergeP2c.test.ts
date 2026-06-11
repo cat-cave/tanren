@@ -179,10 +179,10 @@ describe("P2c-1 speculative-merge-hold (merge stage)", () => {
     expect(events.events.some((e) => e.eventType === "merge.completed")).toBe(false);
   });
 
-  it("§7 ONE HANDLER: a `behind` mergeability routes its rebase through the unified baseShiftRebase hook (NOT probe.updateBranch)", async () => {
+  it("§7 ONE HANDLER: a `behind` freshness routes its rebase through the unified baseShiftRebase hook", async () => {
     // tanren-owns-the-engine.md §7: the two divergent base-shift handlers collapse into
-    // ONE. When the `baseShiftRebase` hook is wired, a `behind` branch rebases via the
-    // unified `BaseShiftCoordinator.rebaseOnto`, NOT the separate server-side update-branch.
+    // ONE. A `behind` branch rebases via the unified `BaseShiftCoordinator.rebaseOnto` (the
+    // hook), the SOLE rebase path — the legacy server-side update-branch is GONE (§5h).
     const pool = new ReviewMergePool("direct_merge");
     const events = new FakeEventStore();
     const probe = recordingMergeProbe({
@@ -192,8 +192,6 @@ describe("P2c-1 speculative-merge-hold (merge stage)", () => {
         { state: "behind", behind: true, baseBranch: "main", headBranch: "tanren/run_1" },
         { state: "clean", behind: false, baseBranch: "main", headBranch: "tanren/run_1" },
       ],
-      // Wire updateBranch too — to PROVE the unified hook is used INSTEAD (it stays 0).
-      updateBranch: { outcome: "updated", message: "server-side update (must NOT be used)" },
     });
     const host = authorityHost();
     const landed: string[] = [];
@@ -212,7 +210,7 @@ describe("P2c-1 speculative-merge-hold (merge stage)", () => {
       runId: "run_1",
       mergeProbe: probe,
       mergeAuthority: authorityBundle(host, landed, { events }),
-      // THE ONE BASE-SHIFT HANDLER: the behind rebase routes here, not to updateBranch.
+      // THE ONE BASE-SHIFT HANDLER: the behind rebase routes here (the sole rebase path).
       // It surfaces the EXACT rebased PR head sha for the re-gate to bind to.
       baseShiftRebase: async (input) => {
         baseShiftCalls.push({ runId: input.runId, baseBranch: input.baseBranch });
@@ -226,10 +224,9 @@ describe("P2c-1 speculative-merge-hold (merge stage)", () => {
 
     expect(result.outcome).toBe("merged");
     expect(landed).toEqual([AUTHORITY_HEAD_SHA]);
-    // The UNIFIED hook drove the rebase…
+    // The UNIFIED hook drove the rebase (the sole rebase path; the server-side
+    // update-branch fallback is gone — §5h).
     expect(baseShiftCalls).toEqual([{ runId: "run_1", baseBranch: "main" }]);
-    // …and the separate server-side update-branch was NEVER called (one path).
-    expect(probe.updateBranchCalls).toBe(0);
     // §5 COMMIT-BINDING: the dispatcher threaded the rebased PR-head sha into the re-gate
     // (so the re-gate verdict binds to the landed commit, not the stale workspace HEAD).
     expect(reGateCalls).toEqual([{ rebasedHeadSha: REBASED_PR_HEAD }]);
@@ -304,8 +301,10 @@ describe("P2c-1 speculative-merge-hold (merge stage)", () => {
     pool.specDependsOn = ["spec_a"];
     pool.mergedAncestors = ["spec_a"];
     const events = new FakeEventStore();
+    // §5h: freshness reports `behind` (never `dirty`); the unified base-shift hook surfaces
+    // the conflict — the resolver then declines → recoverable `conflict`.
     const probe = recordingMergeProbe({
-      mergeability: { state: "dirty", behind: false, baseBranch: "main", headBranch: "tanren/run_1" },
+      mergeability: { state: "behind", behind: true, baseBranch: "main", headBranch: "tanren/run_1" },
     });
     const host = authorityHost();
     const landed: string[] = [];
@@ -319,6 +318,7 @@ describe("P2c-1 speculative-merge-hold (merge stage)", () => {
       runId: "run_1",
       mergeProbe: probe,
       mergeAuthority: authorityBundle(host, landed, { events }),
+      baseShiftRebase: async () => ({ outcome: "conflict", message: "branch conflicts with base" }),
       resolveConflict: async () => {
         conflictResolverCalls += 1;
         return { resolved: false };

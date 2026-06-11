@@ -15,21 +15,24 @@
 // conflict-resolver attaches to. Required checks are never bypassed: a
 // branch-protected PR returns 405 and is reported as not-merged, not forced.
 //
-// up-to-date enforcement: BEFORE the direct merge, the stage reads the PR
-// branch's mergeability (`readMergeability`). A `behind` branch is auto-rebased
-// via the server-side update-branch API (`updateBranch`) and its CI is re-polled
-// to green (`reGateCi`) before merging — emitting `merge.behind` + `merge.rebased`
-// for visibility. A `dirty` branch (or a 422 from update-branch) is routed to the
-// conflict-resolver hook + the recoverable `merge.conflict` outcome, NOT merged.
-// So a stale/conflicting branch is DETECTED and routed, not discovered as a raw
-// 405/409 at merge time.
+// up-to-date enforcement (§5h SEVER — decomposition PR-7): BEFORE the land, the stage reads
+// the PR branch's FRESHNESS as a `CodeHost`-derived ANCESTRY signal (`fetchRef` +
+// `compareRefs` over the base/head shas), NOT the GitHub `mergeable_state`. A `behind` branch
+// is auto-rebased through the UNIFIED jj `baseShiftRebase` hook and its CI is re-polled to
+// green (`reGateCi`) before landing — emitting `merge.behind` + `merge.rebased`. The jj rebase
+// (not a `mergeable_state` read) surfaces a genuine CONFLICT, which is routed to the
+// conflict-resolver hook + the recoverable `merge.conflict` outcome, NOT merged. So a
+// stale/conflicting branch is DETECTED and routed natively, never via a forge merge API.
 
 import type { MergeIntegration } from "../../config/shared.js";
 import type { RunStateWriter } from "../../contracts/runStateWriter.js";
 import { applySpeculativeRetarget, resolveSpeculativeState } from "./speculativeStackRetarget.js";
 import { ensureSystemTask, routeTaskUpdate } from "../taskWriteRouting.js";
 import { PgEventStore, type EventStore } from "../../eventStore.js";
-import type { PullRequestRef, RepoRef } from "../../contracts/vcsProvider.js";
+import type { ResolvedVcsToken, RepoRef } from "../../contracts/vcsProvider.js";
+import { buildProjectHostSeams } from "../../providers/hostFactory.js";
+import { vcsCredentialHttp } from "../../credentials/vcsCredentialHttp.js";
+import { buildFreshnessProbe } from "./freshnessProbe.js";
 import { buildBundleForMergeStage } from "../../merge/mergeAuthorityBundleBuild.js";
 import {
   contextOptionsFor,
@@ -105,7 +108,7 @@ export async function mergeForRun(input: MergeForRunInput): Promise<MergeForRunR
   // stack walk retargets it onto real `default_branch`.
   const speculative = await resolveSpeculativeState(input.pool, context.runId);
 
-  const probe = input.mergeProbe ?? (await buildGitHubProbe(input, context, pr.repo, pr.pullNumber));
+  const probe = input.mergeProbe ?? (await buildHostProbe(input, context, pr.repo, pr.pullNumber));
 
   const speculativeHold = speculative !== undefined && speculative.unmergedAncestors.length > 0;
   if (speculative !== undefined) {
@@ -285,49 +288,75 @@ async function resolveTanrenLogins(
   return [identity.login];
 }
 
-async function buildGitHubProbe(
+/**
+ * Build the live merge-stage {@link MergeProbe} over the project's HOST SEAMS
+ * (decomposition PR-7 / §5h): the `CodeHost`-derived freshness signal (ancestry over the
+ * PR's base/head shas — NOT the GitHub `mergeable_state`) + the best-effort
+ * `VisibilityProjection` for the speculative base re-point. Both seams resolve their token
+ * through the SAME credential context the bundle build + contributor read use (one resolve).
+ */
+async function buildHostProbe(
   input: MergeForRunInput,
   context: ReviewMergeRunContext,
   repo: RepoRef,
   pullNumber: number,
 ): Promise<MergeProbe> {
   const provider = input.vcsProvider;
-  const resolved = await provider.resolveToken({
-    secrets: input.secrets,
-    installation: context.installation,
-    staticRef: context.staticCredentialRef,
-    minter: input.githubAppMinter,
+  const resolveToken = (): Promise<ResolvedVcsToken> =>
+    provider.resolveToken({
+      secrets: input.secrets,
+      installation: context.installation,
+      staticRef: context.staticCredentialRef,
+      minter: input.githubAppMinter,
+    });
+  const { codeHost, visibility } = buildProjectHostSeams(vcsCredentialHttp(provider), resolveToken);
+  return buildFreshnessProbe({
+    codeHost,
+    visibility,
+    repo,
+    baseBranch: context.baseBranch,
+    headBranch: context.headBranch,
+    repoFullName: `${repo.owner}/${repo.name}`,
+    prNumber: pullNumber,
   });
-  const pr: PullRequestRef = { repo, number: pullNumber };
-  return {
-    readMergeability: () => provider.readMergeability(pr, resolved),
-    updateBranch: () => provider.updateBranch(pr, resolved),
-    retargetBase: (newBase) => provider.retargetPullRequestBase(pr, newBase, resolved),
-  };
 }
 
 /**
- * production contributor probe. Lists the PR's commits through the
- * VcsProvider and collects the distinct author + committer logins for the
- * external-change detection in the governance/review-merge decision path. Token
- * resolution is lazy — only paid when the gate actually needs contributors.
+ * production contributor probe (decomposition PR-7 / §5g). Reads the distinct author +
+ * committer logins over the PR's commit RANGE (`baseSha..headSha`) through the host-neutral,
+ * sha-addressed `CodeHost.readCommitAuthors` — replacing the forge-PR-shaped
+ * `listContributors`. The range shas are resolved from the run's base/head branches via
+ * `CodeHost.fetchRef`; an unresolvable head sha yields NO contributors (the strict-posture
+ * gate then sees no external change — a fail-closed `[]` is never a silent external-approve,
+ * the posture gate decides on the read set). Token resolution is lazy (only paid when the
+ * gate needs contributors).
  */
 function buildContributorProbe(
   input: MergeForRunInput,
   context: ReviewMergeRunContext,
   repo: RepoRef,
-  pullNumber: number,
+  _pullNumber: number,
 ): ContributorProbe {
   const provider = input.vcsProvider;
   return {
     listContributors: async (): Promise<PullRequestContributors> => {
-      const resolved = await provider.resolveToken({
-        secrets: input.secrets,
-        installation: context.installation,
-        staticRef: context.staticCredentialRef,
-        minter: input.githubAppMinter,
-      });
-      return provider.listContributors({ repo, number: pullNumber }, resolved);
+      const resolveToken = (): Promise<ResolvedVcsToken> =>
+        provider.resolveToken({
+          secrets: input.secrets,
+          installation: context.installation,
+          staticRef: context.staticCredentialRef,
+          minter: input.githubAppMinter,
+        });
+      const { codeHost } = buildProjectHostSeams(vcsCredentialHttp(provider), resolveToken);
+      const baseSha = await codeHost.fetchRef({ repo, remoteBranch: context.baseBranch });
+      const headSha = await codeHost.fetchRef({ repo, remoteBranch: context.headBranch });
+      if (baseSha === undefined || headSha === undefined) {
+        // An unresolvable base/head ref: no commit range to read authors over. The posture
+        // gate decides on the (empty) read set; it does NOT silently approve — a strict
+        // posture with no observed external change proceeds because there IS none to gate.
+        return { logins: [] };
+      }
+      return codeHost.readCommitAuthors(repo, baseSha, headSha);
     },
   };
 }

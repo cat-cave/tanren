@@ -222,28 +222,29 @@ export function pendingReview() {
 // (the enforcement is a no-op; the merge() outcome drives the result, as pre-P2a).
 function cleanFreshness() {
   return {
-    readMergeability: async () => ({
+    readFreshness: async () => ({
       state: "clean" as const,
       behind: false,
       baseBranch: "main",
       headBranch: "tanren/run_1",
     }),
-    updateBranch: async () => ({ outcome: "up_to_date" as const, message: "up to date" }),
-    // non-speculative fixtures never re-target (no speculative_base),
+    // non-speculative fixtures never re-target (no speculative stack),
     // but the probe must satisfy the full MergeProbe contract.
+    readBaseBranch: async () => "main",
     retargetBase: async () => {},
   };
 }
 
-// A mergeability/branch-state probe whose freshness surfaces a `dirty` conflict BEFORE
-// the land (the resolver then declines → recoverable `conflict`). The land itself is the
-// unconditional `MergeAuthority`; there is no host `merge()`.
+// A freshness probe whose signal is `behind` (§5h: the `CodeHost`-derived ancestry — never
+// `dirty`); the conflict is surfaced by the unified `baseShiftRebase` hook the merge stage
+// wires. Paired with a `baseShiftRebase` that returns `conflict`, the resolver then declines
+// → recoverable `conflict`. The land itself is the unconditional `MergeAuthority`.
 export function conflictMerge() {
   return {
     ...cleanFreshness(),
-    readMergeability: async () => ({
-      state: "dirty" as const,
-      behind: false,
+    readFreshness: async () => ({
+      state: "behind" as const,
+      behind: true,
       baseBranch: "main",
       headBranch: "tanren/run_1",
     }),

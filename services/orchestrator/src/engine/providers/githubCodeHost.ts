@@ -25,11 +25,13 @@ import { repoPath, type GitHubHttpClient } from "./github.js";
 import type {
   CodeHost,
   CodeHostRepoRef,
+  CommitAuthors,
   CreateHostRepoInput,
   CreatedHostRepo,
   HostCommit,
   LandAuthorizedRefInput,
   LandResult,
+  RefAncestry,
 } from "../contracts/codeHost.js";
 
 /** The plaintext push/read token + an optional one-shot 401 re-mint (mirrors `ResolvedVcsToken`). */
@@ -78,6 +80,15 @@ function isNonFastForward(body: unknown): boolean {
   }
   const message = (body as { message?: unknown }).message;
   return typeof message === "string" && /not a fast forward/iu.test(message);
+}
+
+/** Lift a `login` from a compare-commit `author`/`committer` user object (`""` if absent). */
+function loginOf(user: unknown): string {
+  if (typeof user !== "object" || user === null || Array.isArray(user)) {
+    return "";
+  }
+  const login = (user as Record<string, unknown>)["login"];
+  return typeof login === "string" ? login : "";
 }
 
 /** Lift `object.sha` from a `git/ref` / `git/refs` response body, or `undefined`. */
@@ -256,6 +267,72 @@ export class GitHubCodeHost implements CodeHost {
       sections.push(patch === undefined ? `diff --git ${filename}` : `diff --git ${filename}\n${patch}`);
     }
     return sections.join("\n");
+  }
+
+  /**
+   * Compare two shas via `GET /compare/:base...:head` and map GitHub's `status`
+   * (`identical`/`ahead`/`behind`/`diverged`) onto {@link RefAncestry}. This is GitHub
+   * computing pure commit-graph ANCESTRY (NOT `mergeable_state` / a 3-way merge) — the
+   * freshness primitive the merge path derives `clean`/`behind` from (decomposition
+   * PR-7 / §5h). An unrecognized status is the most-uncertain `diverged` (a rebase is
+   * required; never silently read as up-to-date).
+   */
+  async compareRefs(repo: CodeHostRepoRef, baseSha: string, headSha: string): Promise<RefAncestry> {
+    const status = (await this.readCompare(repo, baseSha, headSha)).status;
+    switch (status) {
+      case "identical":
+        return "identical";
+      case "ahead":
+        return "ahead";
+      case "behind":
+        return "behind";
+      default:
+        // `diverged` and any unrecognized/missing status: the head is NOT a fast-forward
+        // of the base → a rebase is required (fail-closed toward "not fresh").
+        return "diverged";
+    }
+  }
+
+  /**
+   * Read the distinct author + committer logins over `baseSha..headSha` via the SAME
+   * `GET /compare` endpoint (decomposition PR-7 / §5g): the host-neutral, sha-addressed
+   * commit-author read for the governance external-change gate, replacing the
+   * forge-PR-shaped `listContributors`.
+   */
+  async readCommitAuthors(repo: CodeHostRepoRef, baseSha: string, headSha: string): Promise<CommitAuthors> {
+    const commits = (await this.readCompare(repo, baseSha, headSha)).commits;
+    const logins: string[] = [];
+    for (const commit of commits) {
+      if (typeof commit !== "object" || commit === null || Array.isArray(commit)) {
+        continue;
+      }
+      const record = commit as Record<string, unknown>;
+      logins.push(loginOf(record["author"]), loginOf(record["committer"]));
+    }
+    return { logins };
+  }
+
+  /** Read the raw `/compare/:base...:head` body once (status + commits), JSON-shaped. */
+  private async readCompare(
+    repo: CodeHostRepoRef,
+    baseSha: string,
+    headSha: string,
+  ): Promise<{ status: string; commits: ReadonlyArray<unknown> }> {
+    const token = await this.resolveToken();
+    const response = await this.http.request({
+      method: "GET",
+      path: repoPath(repo, `/compare/${encodeURIComponent(baseSha)}...${encodeURIComponent(headSha)}`),
+      token: token.token,
+      ...(token.refresh !== undefined && { refreshToken: token.refresh }),
+    });
+    if (response.status !== 200 || typeof response.body !== "object" || response.body === null) {
+      throw new Error(`GitHub compare ${baseSha}...${headSha} failed: HTTP ${response.status}`);
+    }
+    const body = response.body as { status?: unknown; commits?: unknown };
+    return {
+      status: typeof body.status === "string" ? body.status : "",
+      commits: Array.isArray(body.commits) ? body.commits : [],
+    };
   }
 
   async readFile(input: { repo: CodeHostRepoRef; ref: string; path: string }): Promise<string | undefined> {

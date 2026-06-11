@@ -47,8 +47,8 @@ import {
 /** A probe that is ALWAYS `clean` (no conflict / never `behind`) — the unprotected-repo land. */
 function cleanProbe(): MergeProbe {
   return {
-    readMergeability: async () => mergeability("clean"),
-    updateBranch: async () => ({ outcome: "up_to_date" as const, message: "" }),
+    readFreshness: async () => mergeability("clean"),
+    readBaseBranch: async () => "main",
     retargetBase: async () => {},
   };
 }

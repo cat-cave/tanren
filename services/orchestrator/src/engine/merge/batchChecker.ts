@@ -141,21 +141,15 @@ export class PgBatchChecker implements BatchChecker {
     // The host-neutral `CodeHost` the head-sha read routes through (decomposition PR-6):
     // built over the SAME GitHub HTTP client the run's provider holds + a supplier of the
     // token already resolved above (one resolve per check). `fetchRef` ≡ the old
-    // `readBranchHeadSha`. (`readMergeability` below is the §5h freshness coupling — PR-7;
-    // it stays on the provider until that read is rehomed.)
+    // `readBranchHeadSha`.
+    //
+    // §5h SEVER (decomposition PR-7): the old per-entry `readMergeability` `mergeable_state`
+    // "dirty" pre-screen is GONE. The host never DECIDES conflict — the jj INTEGRATION-NODE
+    // DRIVE below assembles the prospective merged state locally over jj and surfaces a real
+    // base-conflict as a `conflict` verdict (with `conflictsWithBase` + `conflictBetween`),
+    // the authoritative conflict signal. A `mergeable_state` pre-check would both re-leak the
+    // forge coupling AND double-judge a decision jj now owns.
     const codeHost = this.buildCodeHost(token);
-
-    for (const entry of input.entries) {
-      const mergeability = await this.deps.vcsProvider.readMergeability({ repo, number: entry.prNumber }, token);
-      if (mergeability.state === "dirty") {
-        return {
-          result: "conflict",
-          message: `batch entry ${entry.specId} conflicts with ${project.default_branch}`,
-          conflictsWithBase: true,
-          conflictBetween: { specId: entry.specId, otherSpecId: project.default_branch },
-        };
-      }
-    }
 
     // §3 INTEGRATION-NODE DRIVE: assemble the prospective merged state LOCALLY over jj (no
     // host ref), UPSERT the node, and PROOF-REUSE the gate verdict (skip the re-gate on a

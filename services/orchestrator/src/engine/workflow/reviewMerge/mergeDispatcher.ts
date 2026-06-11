@@ -201,10 +201,10 @@ export class MergeDispatcher implements LandOps {
    */
   private async ensureUpToDate(): Promise<{ kind: "proceed" } | { kind: "halt"; result: MergeForRunResult }> {
     const { probe, eventStore, context } = this.deps;
-    const mergeability = await probe.readMergeability();
-    if (mergeability.state === "dirty") {
-      return { kind: "halt", result: await this.handleBranchConflict(mergeability, "branch conflicts with base") };
-    }
+    // §5h: freshness is now a `CodeHost`-derived ANCESTRY signal (`clean`/`behind`/`unknown`),
+    // NOT the GitHub `mergeable_state` read. It NEVER reports `dirty`: a `behind` branch routes
+    // through the unified `baseShiftRebase` (jj), which surfaces a genuine conflict itself.
+    const mergeability = await probe.readFreshness();
     if (mergeability.state !== "behind") {
       // clean / blocked / unknown: nothing to rebase. The authority decides the land
       // (it blocks on blocked/unknown) — this is no longer a merge-proceed decision.

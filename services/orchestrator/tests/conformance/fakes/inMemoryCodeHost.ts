@@ -8,11 +8,13 @@
 import type {
   CodeHost,
   CodeHostRepoRef,
+  CommitAuthors,
   CreateHostRepoInput,
   CreatedHostRepo,
   HostCommit,
   LandAuthorizedRefInput,
   LandResult,
+  RefAncestry,
 } from "../../../src/engine/contracts/codeHost.js";
 import { LandCasRejectedError } from "../../../src/engine/providers/githubCodeHost.js";
 
@@ -21,6 +23,8 @@ interface RepoState {
   /** branch -> head sha */
   branches: Map<string, string>;
   commits: Map<string, HostCommit>;
+  /** sha -> the author/committer login attributed to that commit (for readCommitAuthors). */
+  authors: Map<string, string>;
 }
 
 function key(repo: CodeHostRepoRef): string {
@@ -38,7 +42,15 @@ export class InMemoryCodeHost implements CodeHost {
       commits: new Map([
         [initialSha, { sha: initialSha, parents: [], message: "init", treeSha: `tree-${initialSha}` }],
       ]),
+      authors: new Map(),
     });
+  }
+
+  /** Seed a commit with explicit parents + an attributed author login (test setup helper). */
+  seedCommit(repo: CodeHostRepoRef, sha: string, parents: ReadonlyArray<string>, author = "tanren[bot]"): void {
+    const st = this.require(repo);
+    st.commits.set(sha, { sha, parents: [...parents], message: `commit ${sha}`, treeSha: `tree-${sha}` });
+    st.authors.set(sha, author);
   }
 
   async createRepo(input: CreateHostRepoInput): Promise<CreatedHostRepo> {
@@ -73,6 +85,56 @@ export class InMemoryCodeHost implements CodeHost {
 
   async readDiff(_repo: CodeHostRepoRef, baseSha: string, headSha: string): Promise<string> {
     return `diff ${baseSha}..${headSha}`;
+  }
+
+  /**
+   * Pure commit-graph ANCESTRY over the seeded parent edges (the SAME relation GitHub's
+   * `/compare` `status` reports — NOT a 3-way merge): identical ⇒ same sha; ahead ⇒ the
+   * head reaches the base (the base is an ancestor of the head); behind ⇒ the base reaches
+   * the head; else diverged.
+   */
+  async compareRefs(repo: CodeHostRepoRef, baseSha: string, headSha: string): Promise<RefAncestry> {
+    if (baseSha === headSha) return "identical";
+    const st = this.require(repo);
+    const headReachesBase = this.reaches(st, headSha, baseSha);
+    const baseReachesHead = this.reaches(st, baseSha, headSha);
+    if (headReachesBase) return "ahead";
+    if (baseReachesHead) return "behind";
+    return "diverged";
+  }
+
+  async readCommitAuthors(repo: CodeHostRepoRef, baseSha: string, headSha: string): Promise<CommitAuthors> {
+    const st = this.require(repo);
+    // The range is the commits reachable from head but NOT from base (base-exclusive),
+    // mirroring `/compare/:base...:head` `commits`.
+    const logins: string[] = [];
+    const seen = new Set<string>();
+    const stack = [headSha];
+    while (stack.length > 0) {
+      const sha = stack.pop();
+      if (sha === undefined || sha === baseSha || seen.has(sha)) continue;
+      seen.add(sha);
+      const author = st.authors.get(sha);
+      if (author !== undefined) logins.push(author);
+      const commit = st.commits.get(sha);
+      if (commit !== undefined) stack.push(...commit.parents);
+    }
+    return { logins };
+  }
+
+  /** Does `fromSha` reach `targetSha` by walking parent edges (bounded by the seeded graph)? */
+  private reaches(st: RepoState, fromSha: string, targetSha: string): boolean {
+    const seen = new Set<string>();
+    const stack = [fromSha];
+    while (stack.length > 0) {
+      const sha = stack.pop();
+      if (sha === undefined || seen.has(sha)) continue;
+      if (sha === targetSha) return true;
+      seen.add(sha);
+      const commit = st.commits.get(sha);
+      if (commit !== undefined) stack.push(...commit.parents);
+    }
+    return false;
   }
 
   async readFile(input: { repo: CodeHostRepoRef; ref: string; path: string }): Promise<string | undefined> {

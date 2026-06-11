@@ -228,6 +228,10 @@ describe("runPlannerLoopWorkflow — merge-outcome mapping (direct_merge)", () =
         reviewProbe: approvingReview(),
         mergeProbe: conflictMerge(),
         mergeAuthority: plannerAuthorityBundle(plannerAuthorityHost()),
+        // §5h: the `behind` freshness routes through the unified base-shift hook, which
+        // surfaces the conflict (jj owns conflict). Inject a scripted hook so the no-DB unit
+        // run never allocates a runner; it returns `conflict` to drive the resolver path.
+        baseShiftRebase: async () => ({ outcome: "conflict", message: "branch conflicts with base" }),
         // Isolate the merge-outcome mapping (conflict → halted) from the
         // resolver's own behavior (covered by conflictResolver.test.ts): inject
         // the test-fixture no-op resolver so the conflict stays unresolved.

@@ -161,14 +161,15 @@ export function fakeWorkflowRunner(github: GitHubHttpClient) {
         }),
       },
       mergeProbe: {
-        // branch reports clean → up-to-date enforcement is a no-op.
-        readMergeability: async () => ({
+        // branch reports clean → up-to-date enforcement is a no-op (§5h: the
+        // `CodeHost`-derived freshness signal, not a `mergeable_state` read).
+        readFreshness: async () => ({
           state: "clean" as const,
           behind: false,
           baseBranch: "main",
           headBranch: "tanren/run",
         }),
-        updateBranch: async () => ({ outcome: "up_to_date" as const, message: "up to date" }),
+        readBaseBranch: async () => "main",
         retargetBase: async () => {},
       },
       // The land is the unconditional `MergeAuthority` + CodeHost ff-only CAS (no host
