@@ -18,7 +18,7 @@
 // injected (the `buildResolver` test seam) so we assert the wrapper's classification
 // without driving the live model/SSH machinery (which the resolver-core suite covers).
 
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import type pg from "pg";
 import { FakeAllocator } from "../src/engine/contracts/allocator.js";
 import type { AllocationRequest, RunnerHandle } from "../src/engine/contracts/allocator.js";
@@ -182,7 +182,7 @@ describe("buildDriveConflictResolve — classify-then-escalate + percolation/cap
     expect(allocator.releaseCalls).toBe(1);
   });
 
-  it("allocates the short-lived resolver with a unique synthetic handle, not the original run id", async () => {
+  it("allocates the short-lived live-jj resolver with a unique synthetic handle, not the original run id", async () => {
     const pool = fakePool({ priorReplans: 0 });
     const allocator = new SpyAllocator();
     const verdict: DriveConflictVerdict = {};
@@ -196,8 +196,10 @@ describe("buildDriveConflictResolve — classify-then-escalate + percolation/cap
 
     await hook(CONTEXT);
 
+    // The live jj workspace allocates a RUNLESS synthetic `run_live_jj_*` handle (so a
+    // retained `runner_<runId>` row from the real run can't collide) — never the run id.
     const handle = allocator.requests[0]?.runId;
-    expect(handle).toMatch(/^run_x-resolve-[0-9a-f-]+$/u);
+    expect(handle).toMatch(/^run_live_jj_[0-9a-f]+$/u);
     expect(handle).not.toBe(FACTS.runId);
     expect(allocator.requests[0]).toMatchObject({
       runless: true,
@@ -262,18 +264,11 @@ describe("buildDriveConflictResolve — classify-then-escalate + percolation/cap
   });
 });
 
-// The Wave-3/S1 cutover: with NO `buildResolver` seam (the production shape), the flag
-// selects the WORKSPACE MECHANISM — jj (default ON) vs the git-merge-abort path (OFF).
-// Asserted by which clone command the workspace mechanism issues over the substrate.
-describe("buildDriveConflictResolve — jj cutover flag selects the workspace mechanism", () => {
-  const prior = process.env["CONFLICT_RESOLVER_JJ_LIVE"];
-  afterEach(() => {
-    if (prior === undefined) delete process.env["CONFLICT_RESOLVER_JJ_LIVE"];
-    else process.env["CONFLICT_RESOLVER_JJ_LIVE"] = prior;
-  });
-
-  it("FLAG ON (default): provisions the live jj workspace — the clone is `jj git clone`, never `git clone`", async () => {
-    delete process.env["CONFLICT_RESOLVER_JJ_LIVE"];
+// With NO `buildResolver` seam (the production shape), the drive provisions the live jj
+// workspace as the WORKSPACE MECHANISM — asserted by the `jj git clone` it issues over
+// the substrate (never a plain `git clone`).
+describe("buildDriveConflictResolve — the workspace mechanism is the live jj workspace", () => {
+  it("provisions the live jj workspace — the clone is `jj git clone`, never `git clone`", async () => {
     const pool = fakePool({ priorReplans: 0 });
     const allocator = new SpyAllocator();
     const ssh = new RecordingSubstrate();
@@ -289,26 +284,12 @@ describe("buildDriveConflictResolve — jj cutover flag selects the workspace me
 
     expect(allocator.allocateCalls).toBe(1);
     expect(ssh.commands.some((c) => c.includes("jj git clone"))).toBe(true);
-    // No PLAIN `git clone` (the git-merge-abort path's clone) — only `jj git clone`.
+    // No PLAIN `git clone` — the jj workspace is the sole mechanism.
     expect(ssh.commands.some((c) => isPlainGitClone(c))).toBe(false);
-  });
-
-  it("FLAG OFF (kill-switch): reverts to the git-clone path — `git clone`, never `jj git clone`", async () => {
-    process.env["CONFLICT_RESOLVER_JJ_LIVE"] = "0";
-    const pool = fakePool({ priorReplans: 0 });
-    const allocator = new SpyAllocator();
-    const ssh = new RecordingSubstrate();
-    const hook = buildDriveConflictResolve(makeDeps(pool, allocator, {}, undefined, ssh));
-
-    await hook(CONTEXT).catch(() => {});
-
-    expect(allocator.allocateCalls).toBe(1);
-    expect(ssh.commands.some((c) => isPlainGitClone(c))).toBe(true);
-    expect(ssh.commands.some((c) => c.includes("jj git clone"))).toBe(false);
   });
 });
 
-/** True for a PLAIN `git clone` (the git-merge-abort path) — NOT the jj `jj git clone`. */
+/** True for a PLAIN `git clone` — NOT the jj `jj git clone`. */
 function isPlainGitClone(command: string): boolean {
   return /(?<!jj )(?<![A-Za-z])git clone\b/u.test(command);
 }
