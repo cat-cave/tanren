@@ -232,15 +232,20 @@ class DependentsFakeClient {
         })),
       };
     }
-    // The dependents load: each run carries a build base + a stale in-flight marker.
+    // The dependents load: each run carries a non-empty jj-native `ancestor_stack` (WS-A
+    // PR-8c: the build-base + divergence key now derive from `ancestor_stack[].headSha`, not
+    // the legacy `integrated_ancestor_shas`) + a stale in-flight marker. The legacy column is
+    // still returned (the dual-read fallback) but is no longer the primary divergence source.
     if (text.includes("FROM runs r") && text.includes("r.percolation_pending")) {
       const marker = { ancestorSpecId: "spec_anc", toSha: "sha-new", reexecRunId: "run_reexec" };
+      const stack = [{ specId: "spec_anc", runId: "run_anc", branch: "tanren/spec_anc", headSha: "sha-old" }];
       return {
         rows: [
           {
             run_id: "run_spec_merged",
             spec_id: "spec_merged",
             speculative_base: "tanren/integ/spec_merged",
+            ancestor_stack: stack,
             integrated_ancestor_shas: { spec_anc: "sha-old" },
             verified_ancestor_shas: { spec_anc: "sha-old" },
             percolation_pending: marker,
@@ -249,6 +254,7 @@ class DependentsFakeClient {
             run_id: "run_spec_live",
             spec_id: "spec_live",
             speculative_base: "tanren/integ/spec_live",
+            ancestor_stack: stack,
             integrated_ancestor_shas: { spec_anc: "sha-old" },
             verified_ancestor_shas: { spec_anc: "sha-old" },
             percolation_pending: marker,

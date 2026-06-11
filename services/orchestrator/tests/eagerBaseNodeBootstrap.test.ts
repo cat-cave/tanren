@@ -16,13 +16,14 @@
 //   `tanren_app` role — the eager_base node lands org-scoped, an off-scope org sees ZERO
 //   rows, and a re-bootstrap of the SAME base + ordered ancestors is IDEMPOTENT (an UPSERT,
 //   not a duplicate row).
+//
+// The shared command-substrate / context / DB plumbing fixtures live in
+// `helpers/jjLocalBootstrapFixtures.ts` (shared with the WS-A PR-8c head-sha write-back
+// suite, `bootstrapStackHeadShaWriteBack.test.ts`).
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { Pool } from "pg";
 import { getSystemPool, migrate, runWithOrgScope, setSystemPool } from "@tanren/db";
-import type { RunnerHandle } from "../src/engine/contracts/allocator.js";
-import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
-import type { RunnerCommand, CommandResult, CommandSubstrate } from "../src/engine/contracts/commandSubstrate.js";
 import { prepareRunWorkspace } from "../src/engine/workflow/plannerRunWorkspace.js";
 import {
   buildEagerBaseNodeUpsert,
@@ -32,102 +33,26 @@ import {
 import { bootstrapLocalIntegrationRef } from "../src/engine/dag/jjLocalBootstrap.js";
 import { memberKey } from "../src/engine/contracts/integrationNodes.js";
 import { PgIntegrationNodeModel } from "../src/engine/dag/integrationNodesPg.js";
-import type { AncestorStack } from "../src/engine/dag/ancestorStack.js";
-import type { PlannerRunContext, RunPlannerLoopInput } from "../src/engine/workflow/plannerRun.js";
-import { vcsProviderOver } from "./helpers/vcsProvider.js";
-import type { GitHubHttpClient, GitHubHttpRequest, GitHubHttpResponse } from "../src/engine/providers/github.js";
-
-const target: RunnerHandle = {
-  backend: "ssh",
-  host: "runner",
-  port: 22,
-  username: "tanren",
-  hostKeyFingerprint: "SHA256:runner-host",
-  identitySecretRef: "runner/test/identity",
-};
-
-function out(stdout: string): CommandResult {
-  return { exitCode: 0, stdout, stderr: "", timedOut: false };
-}
-
-const ASSEMBLED_HEAD = "a".repeat(40);
-const MEMBER_SHA = "b".repeat(40);
-const TREE_HASH = "d".repeat(40);
-const CLONE_HEAD = "c".repeat(40);
-const WORKSPACE_PATH = "/workspace/runs/run_dep/repo";
-const RUN_BRANCH = "tanren/run_dep";
-
-function unusedHttp(): GitHubHttpClient {
-  return {
-    request: async (req: GitHubHttpRequest): Promise<GitHubHttpResponse> => {
-      throw new Error(`no GitHub HTTP expected in this unit path: ${req.method} ${req.path}`);
-    },
-  };
-}
-
-// A command-dispatching substrate identical in spirit to plannerRunWorkspaceJjLocalBase's:
-// the jj `commit_id` reads → the assembled head, the conflict probe → CLEAN, the tree read →
-// a tree hash, the legacy clone → the clone HEAD. The REAL JjWorkspaceVcsCore drives the
-// assembly with no real jj/runner.
-class DispatchingSsh implements CommandSubstrate {
-  readonly commands: Array<{ target: RunnerHandle; command: RunnerCommand }> = [];
-
-  async run(sshTarget: RunnerHandle, command: RunnerCommand): Promise<CommandResult> {
-    this.commands.push({ target: sshTarget, command });
-    const cmd = command.command;
-    if (cmd.includes("conflicted") && cmd.includes("clean")) return out("change0\tclean");
-    // The per-member PRISTINE head read (`jj log -r '<branch>@origin' -T 'commit_id'`) ⇒ a
-    // member sha — checked BEFORE the bare `commit_id` branch (both use the commit_id
-    // template; the `@origin` revset disambiguates the member read from the head read).
-    if (cmd.includes("@origin")) return out(MEMBER_SHA);
-    if (cmd.includes("commit_id")) return out(ASSEMBLED_HEAD);
-    if (cmd.includes("rev-parse") && cmd.includes("^{tree}")) return out(TREE_HASH);
-    if (cmd.includes("git clone") || cmd.includes("rev-parse HEAD")) return out(CLONE_HEAD);
-    return out("");
-  }
-}
-
-function makeContext(overrides: Partial<PlannerRunContext> = {}): PlannerRunContext {
-  return {
-    runId: "run_dep",
-    specId: "spec_dep",
-    projectId: "project_dep",
-    orgId: "org_dep",
-    repoUrl: "https://github.com/cat-cave/dep-fixture",
-    targetBranch: "main",
-    runBranch: RUN_BRANCH,
-    specTitle: "t",
-    specDescription: "d",
-    acceptanceCriteria: [],
-    runnerImage: "image",
-    identitySecretRef: "runner/test/identity",
-    githubCredentialRef: "",
-    ...overrides,
-  };
-}
-
-function makeInput(
-  ssh: CommandSubstrate,
-  context: PlannerRunContext,
-  eagerBaseNodeUpsert?: EagerBaseNodeUpsert,
-): RunPlannerLoopInput {
-  return {
-    ssh,
-    secrets: new FakeSecretStore(),
-    vcsProvider: vcsProviderOver(unusedHttp()),
-    context,
-    timeoutMs: 500,
-    bootstrapCommand: "true",
-    runBootstrap: async () => {},
-    commitBootstrap: async () => "",
-    ...(eagerBaseNodeUpsert !== undefined && { eagerBaseNodeUpsert }),
-  } as unknown as RunPlannerLoopInput;
-}
-
-const STACK: AncestorStack = [
-  { specId: "spec-a", runId: "run-a", branch: "feat-a", headSha: "" },
-  { specId: "spec-b", runId: "run-b", branch: "feat-b", headSha: "" },
-];
+import {
+  ADMIN_URL,
+  APP_PASSWORD,
+  APP_ROLE,
+  ASSEMBLED_HEAD,
+  dbName,
+  DispatchingSsh,
+  makeContext,
+  makeInput,
+  RLS_DB_ENABLED,
+  RUN_BRANCH,
+  STACK,
+  SYSTEM_PASSWORD,
+  SYSTEM_ROLE,
+  target,
+  TREE_HASH,
+  withDatabase,
+  withRole,
+  WORKSPACE_PATH,
+} from "./helpers/jjLocalBootstrapFixtures.js";
 
 // ===========================================================================
 // PURE / WIRING layer — always-on, no DB.
@@ -174,8 +99,8 @@ describe("eager_base node bootstrap UPSERT (wiring)", () => {
     // The members are the ORDERED ancestor stack (DAG order is load-bearing for the
     // memberKey), each `{specId, runId, branch, headSha}` with the assembly-captured sha.
     expect(facts.members).toEqual([
-      { specId: "spec-a", runId: "run-a", branch: "feat-a", headSha: MEMBER_SHA },
-      { specId: "spec-b", runId: "run-b", branch: "feat-b", headSha: MEMBER_SHA },
+      { specId: "spec-a", runId: "run-a", branch: "feat-a", headSha: "b".repeat(40) },
+      { specId: "spec-b", runId: "run-b", branch: "feat-b", headSha: "b".repeat(40) },
     ]);
   });
 
@@ -225,36 +150,13 @@ describe("eager_base node bootstrap UPSERT (wiring)", () => {
 // DB layer — the REAL buildEagerBaseNodeUpsert UPSERT + fail-closed RLS.
 // ===========================================================================
 
-const enabled = process.env["TANREN_RLS_DB_TEST"] === "1";
-const describeDb = enabled ? describe : describe.skip;
-
-const SYSTEM_ROLE = "tanren_system";
-const SYSTEM_PASSWORD = process.env["TANREN_SYSTEM_DB_PASSWORD"] ?? "tanren_system";
-const ADMIN_URL = process.env["DATABASE_URL"] ?? "postgres://tanren:tanren@localhost:5432/tanren";
-const APP_ROLE = "tanren_app";
-const APP_PASSWORD = process.env["TANREN_APP_DB_PASSWORD"] ?? "tanren_app";
+const describeDb = RLS_DB_ENABLED ? describe : describe.skip;
 
 const ORG = "org_eager_base";
 const PROJECT = `proj_${ORG}`;
 
-function dbName(): string {
-  return `tanren_eager_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
-}
-function withRole(url: string, role: string, password: string, database: string): string {
-  const parsed = new URL(url);
-  parsed.username = role;
-  parsed.password = password;
-  parsed.pathname = `/${database}`;
-  return parsed.toString();
-}
-function withDatabase(url: string, database: string): string {
-  const parsed = new URL(url);
-  parsed.pathname = `/${database}`;
-  return parsed.toString();
-}
-
 describeDb("eager_base node bootstrap UPSERT (real DB + fail-closed RLS)", () => {
-  const database = dbName();
+  const database = dbName("eager");
   let ownerPool: Pool;
   let appPool: Pool;
   let upsert: EagerBaseNodeUpsert;

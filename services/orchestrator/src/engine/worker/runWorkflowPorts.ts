@@ -8,9 +8,16 @@
 //   - `buildEagerBaseNodeUpsert` — WS-A PR-8 (walker-jj-local-integration-design.md §2.3):
 //     OBSERVE-ONLY, the jj-local dependent bootstrap records its `eager_base` integration
 //     node (the proof-reuse substrate) through an org-scoped UPSERT over the worker's pool.
+//   - `buildBootstrapStackHeadShaWriteBack` — WS-A PR-8c (same §2.3): the jj-local
+//     dependent bootstrap folds the assembly-captured per-ancestor head shas BACK into
+//     `runs.ancestor_stack[].headSha` through an org-scoped UPDATE over the worker's pool,
+//     so percolation's divergence key reads the shas from `ancestor_stack`.
 //
-// Both are thin org-scoped writers built over the worker's REAL pool, so the writes land
+// All are thin org-scoped writers built over the worker's REAL pool, so the writes land
 // RLS-scoped (not on the org-scoping workflow proxy).
 
 export { buildNativeQueueEnqueuer } from "../merge/coordinatorBuild.js";
-export { buildEagerBaseNodeUpsert } from "../workflow/plannerRunJjLocalBootstrap.js";
+export {
+  buildBootstrapStackHeadShaWriteBack,
+  buildEagerBaseNodeUpsert,
+} from "../workflow/plannerRunJjLocalBootstrap.js";

@@ -8,6 +8,7 @@
 // the legacy single-ref clone of an orchestrator-synthesized `tanren/integ/<dep>` host ref.
 // The chooser lives in plannerRunWorkspace's `cloneWorkspace`; this module owns the
 // bootstrap arm + the shared `ClonedWorkspace` result.
+import { runWithOrgScope } from "@tanren/db";
 import type pg from "pg";
 import type { RunnerHandle } from "../contracts/allocator.js";
 import { githubHttpsRemote, parseGitHubRepository } from "../providers/github.js";
@@ -112,6 +113,97 @@ export function buildEagerBaseNodeUpsert(pool: pg.Pool): EagerBaseNodeUpsert {
       status: "ready",
     });
   };
+}
+
+/**
+ * WS-A PR-8c (walker-jj-local-integration-design.md §2.3) — the facts the dependent
+ * bootstrap writes the per-ancestor head shas BACK into `runs.ancestor_stack[].headSha`
+ * from. At enqueue the walker writes the stack with EMPTY/placeholder `headSha` (it does
+ * not yet know the assembled head shas); the bootstrap assembly is where the real
+ * per-ancestor pristine PR-head shas are captured (`memberHeadShas`). This write-back
+ * folds those shas into the persisted stack so percolation's DIVERGENCE KEY reads them
+ * from `ancestor_stack[].headSha` (the read previously came from the legacy
+ * `integrated_ancestor_shas` the deleted integrator captured at enqueue).
+ */
+export interface BootstrapStackHeadShaWriteBackFacts {
+  orgId: string;
+  runId: string;
+  /** The ordered stack with the assembly-captured `headSha` zipped in (DAG order). */
+  stack: AncestorStack;
+}
+
+/**
+ * WS-A PR-8c — the write-back port the dependent bootstrap folds the assembly-captured
+ * per-ancestor head shas into `runs.ancestor_stack[].headSha` through. Org-scoped (RLS);
+ * IDEMPOTENT (re-writing the same shas is a no-op). Like {@link EagerBaseNodeUpsert} it
+ * NEVER gates the run: a failure is loud-logged + swallowed (the divergence key it feeds
+ * is recoverable — a missing head sha drops the entry from the detect, never bricks). It
+ * is injected as a port so the bootstrap unit/conformance paths drive it without a live DB.
+ */
+export type BootstrapStackHeadShaWriteBack = (facts: BootstrapStackHeadShaWriteBackFacts) => Promise<void>;
+
+/**
+ * WS-A PR-8c — the Pg-backed {@link BootstrapStackHeadShaWriteBack} the run worker wires
+ * (mirrors `buildEagerBaseNodeUpsert`): an org-scoped UPDATE of `runs.ancestor_stack` over
+ * the worker's real pool, so the write lands RLS-scoped (an off-scope run sees zero rows
+ * and updates nothing). It replaces the WHOLE jsonb with the head-sha-filled ordered stack
+ * — the assembly is the authoritative source of the stack's per-ancestor shas, and the
+ * order is unchanged, so this is idempotent.
+ */
+export function buildBootstrapStackHeadShaWriteBack(pool: pg.Pool): BootstrapStackHeadShaWriteBack {
+  return async (facts) => {
+    await runWithOrgScope(pool, facts.orgId, async (client) => {
+      await client.query("UPDATE runs SET ancestor_stack = $2::jsonb WHERE run_id = $1", [
+        facts.runId,
+        JSON.stringify([...facts.stack]),
+      ]);
+    });
+  };
+}
+
+/**
+ * WS-A PR-8c — fold the assembly-captured per-ancestor head shas back into
+ * `runs.ancestor_stack[].headSha`. Zips the ordered ancestor `stack` with the per-ancestor
+ * pristine head shas the assembly captured (`memberHeadShas`, keyed by spec id) — the SAME
+ * order as the persisted stack — and writes the head-sha-filled stack back so percolation's
+ * divergence key reads the shas from `ancestor_stack`. A failure NEVER breaks the run: it is
+ * loud-logged + swallowed (the divergence key is recoverable). A null org (no tenant key)
+ * is skipped (nothing to RLS-scope to).
+ */
+async function recordBootstrapStackHeadShas(
+  writeBack: BootstrapStackHeadShaWriteBack,
+  input: RunPlannerLoopInput,
+  stack: AncestorStack,
+  bootstrapped: BootstrapDependentBaseSuccess,
+): Promise<void> {
+  const orgId = input.context.orgId;
+  if (orgId === undefined || orgId === null) {
+    // A null-org (CLI) run has no tenant key to scope a tenant write to — skip it.
+    return;
+  }
+  try {
+    await writeBack({
+      orgId,
+      runId: input.context.runId,
+      stack: stack.map((ancestor) => ({
+        specId: ancestor.specId,
+        runId: ancestor.runId,
+        branch: ancestor.branch,
+        // The pristine ancestor PR-head sha captured AT assembly time (the divergence key
+        // percolation reads off `ancestor_stack[].headSha`), zipped in by spec id; "" only
+        // if the assembly did not surface it (it always does for a real assembly).
+        headSha: bootstrapped.memberHeadShas[ancestor.specId] ?? "",
+      })),
+    });
+  } catch (error) {
+    // The divergence key is recoverable (a missing head sha drops the entry from the detect,
+    // never bricks the run) — a write-back failure must NEVER break the run. Loud-log + go on.
+    log.warn(
+      "bootstrap ancestor_stack head-sha write-back failed (non-fatal)",
+      { runBranch: input.context.runBranch, projectId: input.context.projectId },
+      error,
+    );
+  }
 }
 
 /**
@@ -249,6 +341,17 @@ export async function bootstrapDependentWorkspace(
   // port is absent on unit paths that do not exercise the node write.
   if (input.eagerBaseNodeUpsert !== undefined) {
     await recordEagerBaseNode(input.eagerBaseNodeUpsert, input, stack, result);
+  }
+  // WS-A PR-8c (§2.3): fold the assembly-captured per-ancestor head shas BACK into
+  // `runs.ancestor_stack[].headSha` (additive — at enqueue the stack entries carry an
+  // empty placeholder headSha; the assembly fills them). Percolation's divergence key
+  // then reads the shas from `ancestor_stack` (replacing the legacy
+  // `integrated_ancestor_shas` the deleted integrator captured at enqueue). Like the
+  // eager-base record this does NOT gate the run: a failure is loud-logged + swallowed
+  // inside `recordBootstrapStackHeadShas`. The port is absent on unit paths that do not
+  // exercise the write-back.
+  if (input.bootstrapStackHeadShaWriteBack !== undefined) {
+    await recordBootstrapStackHeadShas(input.bootstrapStackHeadShaWriteBack, input, stack, result);
   }
   // The assembled head is the run's clone-HEAD; the LOCAL assembly bookmark is the
   // conflict resolver's merge-time base (a stable, deterministic name — NEVER a host ref).
