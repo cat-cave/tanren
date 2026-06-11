@@ -26,6 +26,7 @@
 
 import type { MergeIntegration } from "../../config/shared.js";
 import type { RunStateWriter } from "../../contracts/runStateWriter.js";
+import { applySpeculativeRetarget, resolveSpeculativeState } from "./speculativeStackRetarget.js";
 import { ensureSystemTask, routeTaskUpdate } from "../taskWriteRouting.js";
 import { PgEventStore, type EventStore } from "../../eventStore.js";
 import type { PullRequestRef, RepoRef } from "../../contracts/vcsProvider.js";
@@ -107,6 +108,21 @@ export async function mergeForRun(input: MergeForRunInput): Promise<MergeForRunR
 
   const speculativeHold = speculative !== undefined && speculative.unmergedAncestors.length > 0;
   if (speculative !== undefined) {
+    // §2c + WS-A PR-5: re-target the PR base — the stacked-PR WALK (flag-on; base tracks
+    // the immediate still-unmerged ancestor + drops merged heads from `ancestor_stack`) OR
+    // the legacy integ→default_branch single step (flag-off; only once the hold clears).
+    // The MERGE HOLD is UNCHANGED and handled below; this only walks the BASE.
+    await applySpeculativeRetarget({
+      pool: input.pool,
+      eventStore,
+      context,
+      taskId,
+      integration,
+      prNumber: pr.pullNumber,
+      probe,
+      speculative,
+      speculativeHold,
+    });
     // (a) HOLD while any ancestor is still unmerged — no unreviewed ancestor code
     // reaches `main` early. The DagWalker re-walks on the ancestor merge.completed,
     // re-entering this stage once the ancestors land.
@@ -136,32 +152,6 @@ export async function mergeForRun(input: MergeForRunInput): Promise<MergeForRunR
           prNumber: pr.pullNumber,
           message: `merge held: ancestors not yet merged (${speculative.unmergedAncestors.join(", ")})`,
         };
-      }
-    }
-    // (b) HOLD CLEARED (all ancestors merged): RE-TARGET the PR base from the
-    // integration ref to `default_branch` (§2c step 3) so the dependent lands on
-    // REAL `main`, never the integration ref. The up-to-date/auto-rebase + CI
-    // re-gate below then brings the branch current with `default_branch`. The base
-    // is re-pointed on the forge BEFORE any merge call, so directMerge's
-    // mergeability read + merge act against `default_branch`.
-    if (!speculativeHold && speculative.speculativeBase !== context.baseBranch) {
-      const mergeability = await probe.readMergeability();
-      if (mergeability.baseBranch !== context.baseBranch) {
-        await probe.retargetBase(context.baseBranch);
-        await eventStore.append({
-          runId: context.runId,
-          specId: context.specId,
-          projectId: context.projectId,
-          taskId,
-          eventType: "merge.retargeted",
-          payload: {
-            prUrl: context.prUrl,
-            prNumber: pr.pullNumber,
-            integration,
-            fromBase: speculative.speculativeBase,
-            toBase: context.baseBranch,
-          },
-        });
       }
     }
   }
@@ -229,75 +219,6 @@ export async function mergeForRun(input: MergeForRunInput): Promise<MergeForRunR
   // retarget). The dispatcher labels its events from `this.deps.integration`, so a
   // drive pass records `native_queue` — not a second merge implementation.
   return dispatcher.directMerge();
-}
-
-/**
- * §2c: the speculative state of a run at merge time. `undefined` for a
- * NORMAL run (no `speculative_base`) — it merges against `default_branch` as
- * always. For a SPECULATIVE run, `speculativeBase` is the integration ref the PR
- * is based on and `unmergedAncestors` is the (possibly empty) set of deps not yet
- * genuinely merged. The merge stage uses this to:
- *   - HOLD the merge while `unmergedAncestors` is non-empty (no unreviewed ancestor
- *     code reaches `main` early — the dependent's WORK ran on the integration
- *     branch, but its MERGE waits), and
- *   - once it clears (all deps `done`/`merged`), RE-TARGET the PR base from the
- *     integration ref to `default_branch` so the dependent lands on real `main`,
- *     then clean up the integration ref.
- * A `done`/`merged` ancestor is satisfied; anything else is unmerged.
- */
-async function resolveSpeculativeState(
-  pool: RunStateClient,
-  runId: string,
-): Promise<{ speculativeBase: string; unmergedAncestors: string[] } | undefined> {
-  const runResult = await pool.query<{ speculative_base: string | null; spec_id: string; project_id: string }>(
-    "SELECT speculative_base, spec_id, project_id FROM runs WHERE run_id = $1",
-    [runId],
-  );
-  const run = runResult.rows[0];
-  if (run === undefined || run.speculative_base === null) {
-    return undefined;
-  }
-  const specResult = await pool.query<{ depends_on: string[] | null }>(
-    "SELECT depends_on FROM specs WHERE spec_id = $1",
-    [run.spec_id],
-  );
-  const dependsOn = (specResult.rows[0]?.depends_on ?? []).filter((id): id is string => typeof id === "string");
-  if (dependsOn.length === 0) {
-    // A speculative run with no deps is degenerate, but still bases on the
-    // integration ref — surface it with an empty unmerged set so the stage
-    // re-targets to default_branch before merging (it must not merge into integ).
-    return { speculativeBase: run.speculative_base, unmergedAncestors: [] };
-  }
-  // The ancestors that are genuinely merged; an unresolved speculative merge hold
-  // disqualifies the row even if the spec status was advanced incorrectly.
-  const mergedResult = await pool.query<{ spec_id: string }>(
-    `SELECT s.spec_id
-       FROM specs s
-      WHERE s.project_id = $1
-        AND s.spec_id = ANY($2::text[])
-        AND s.status = 'merged'
-        AND NOT EXISTS (
-          SELECT 1
-            FROM events held
-           WHERE held.project_id = s.project_id
-             AND held.org_id = s.org_id
-             AND held.spec_id = s.spec_id
-             AND held.event_type = 'merge.speculative_held'
-             AND NOT EXISTS (
-               SELECT 1
-                 FROM events done
-                WHERE done.project_id = held.project_id
-                  AND done.org_id = held.org_id
-                  AND done.spec_id = held.spec_id
-                  AND done.event_type = 'merge.completed'
-                  AND (done.ts > held.ts OR (done.ts = held.ts AND done.id > held.id))
-             )
-        )`,
-    [run.project_id, dependsOn],
-  );
-  const merged = new Set(mergedResult.rows.map((row) => row.spec_id));
-  const unmergedAncestors = dependsOn.filter((id) => !merged.has(id));
-  return { speculativeBase: run.speculative_base, unmergedAncestors };
 }
 
 /**

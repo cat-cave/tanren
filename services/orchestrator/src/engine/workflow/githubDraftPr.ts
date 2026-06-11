@@ -15,6 +15,8 @@ import type { VcsProvider } from "../contracts/vcsProvider.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
 import { workspaceRepoPathForRun } from "../workspace/index.js";
 import { draftPrBranchName } from "../workspace/githubPush.js";
+import { type AncestorStack, resolveAncestorStack } from "../dag/ancestorStack.js";
+import { walkerJjLocalBase } from "../dag/walkerJjLocalBaseFlag.js";
 
 type RunStateClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
@@ -36,6 +38,15 @@ export interface PublishDraftPullRequestInput {
   workspacePath: string;
   repoUrl: string;
   targetBranch: string;
+  /**
+   * WS-A PR-5 (walker-jj-local-integration-design.md §3.1): the ordered ancestor stack
+   * this dependent speculative run is stacked on. With `WALKER_JJ_LOCAL_BASE` ON and a
+   * NON-EMPTY stack, the draft PR bases on the IMMEDIATE ancestor's PR-head branch (the
+   * LAST stack entry) — a true stacked PR showing only this run's delta over its ancestor.
+   * Flag-OFF or empty ⇒ EXACTLY today's behavior (`targetBranch`, i.e.
+   * `speculative_base ?? default_branch`). Absent on a non-speculative run.
+   */
+  ancestorStack?: AncestorStack;
   runBranch?: string;
   title: string;
   body?: string;
@@ -89,10 +100,32 @@ export class DraftPrRunnerNotFoundError extends Error {
   }
 }
 
+/**
+ * WS-A PR-5 (walker-jj-local-integration-design.md §3.1): resolve the draft PR's base
+ * branch. When `WALKER_JJ_LOCAL_BASE` is ON AND the run carries a NON-EMPTY ancestor
+ * stack, the base is the IMMEDIATE ancestor's PR-head branch (the LAST stack entry) — a
+ * true human-stacked PR (GitHub then renders only this run's delta over its ancestor).
+ * Flag-OFF OR an empty stack ⇒ EXACTLY today's behavior: `fallbackBase` (the run's
+ * `targetBranch` = `speculative_base ?? default_branch`). Pure modulo the flag read.
+ */
+export function resolveDraftPrBaseBranch(fallbackBase: string, ancestorStack: AncestorStack | undefined): string {
+  if (!walkerJjLocalBase() || ancestorStack === undefined || ancestorStack.length === 0) {
+    return fallbackBase;
+  }
+  const immediateAncestor = ancestorStack.at(-1);
+  // A stack member with a blank branch (a legacy sha-map reconstruction carries no
+  // branch, ancestorStack.ts) cannot be a PR base — fall back rather than open against "".
+  return immediateAncestor !== undefined && immediateAncestor.branch !== "" ? immediateAncestor.branch : fallbackBase;
+}
+
 export async function publishDraftPullRequest(input: PublishDraftPullRequestInput): Promise<PublishedDraftPullRequest> {
   const eventStore = input.eventStore ?? new PgEventStore(input.pool);
   const context = eventContext(input);
   const branch = draftPrBranchName({ runId: input.runId, requestedBranch: input.runBranch });
+  // §3.1 stacked-PR base: the immediate-ancestor PR-head branch when flag-on + stacked,
+  // else today's `targetBranch`. The persisted/event `targetBranch` reflects the BASE the
+  // PR actually opened against.
+  const baseBranch = resolveDraftPrBaseBranch(input.targetBranch, input.ancestorStack);
   // With an App installation the static ref is optional; the ledger label is
   // the App credential ref in that case.
   const staticRef =
@@ -138,7 +171,7 @@ export async function publishDraftPullRequest(input: PublishDraftPullRequestInpu
       repo: input.vcsProvider.parseRepository(input.repoUrl),
       token: resolved,
       headBranch: branch,
-      baseBranch: input.targetBranch,
+      baseBranch,
       title: input.title,
       body: input.body,
     });
@@ -154,7 +187,7 @@ export async function publishDraftPullRequest(input: PublishDraftPullRequestInpu
       payload: {
         repoUrl: input.repoUrl,
         branch,
-        targetBranch: input.targetBranch,
+        targetBranch: baseBranch,
         prUrl: pr.url,
         prNumber: pr.number,
         reused: pr.reused,
@@ -209,6 +242,9 @@ export async function publishDraftPullRequestForRun(
     // — so the operator `POST /runs/:id/github/draft-pr` route opens the same base
     // the autonomous loop does (not always `default_branch`).
     targetBranch: context.speculativeBase ?? context.defaultBranch,
+    // §3.1: when flag-on + stacked, the base is re-resolved to the immediate ancestor
+    // inside `publishDraftPullRequest`; flag-off ⇒ `targetBranch` above.
+    ...(context.ancestorStack !== undefined && { ancestorStack: context.ancestorStack }),
     runBranch: context.branch,
     // GitHub rejects an EMPTY PR title with 422 (`missing_field: title`) — proven live
     // on apex v31. `??` does NOT catch an empty string, so an empty `input.title` (a
@@ -234,6 +270,8 @@ async function loadDraftPrRunContext(pool: RunStateClient, runId: string): Promi
        r.project_id,
        r.branch,
        r.speculative_base,
+       r.ancestor_stack,
+       r.integrated_ancestor_shas,
        p.repo_url,
        p.default_branch,
        p.config,
@@ -261,12 +299,22 @@ async function loadDraftPrRunContext(pool: RunStateClient, runId: string): Promi
   if (row === undefined) {
     return undefined;
   }
+  // WS-A PR-5: re-hydrate the ordered ancestor stack (DUAL-READ — the new
+  // `runs.ancestor_stack` column when present, else reconstructed from the legacy
+  // `integrated_ancestor_shas` map). Empty for a non-speculative run. The stacked-PR
+  // base reads it (flag-gated) so the operator route opens the same base the loop does.
+  const ancestorStack = resolveAncestorStack({
+    ancestorStack: row.ancestor_stack,
+    speculativeBase: row.speculative_base,
+    integratedAncestorShas: row.integrated_ancestor_shas,
+  });
   return {
     runId: row.run_id,
     specId: row.spec_id,
     projectId: row.project_id,
     branch: row.branch,
     speculativeBase: row.speculative_base ?? undefined,
+    ...(ancestorStack.length > 0 && { ancestorStack }),
     repoUrl: row.repo_url,
     defaultBranch: row.default_branch,
     projectConfig: asRecord(row.config),
@@ -312,6 +360,8 @@ interface DraftPrRunContext {
   branch: string;
   /** the speculative integration branch (dynamic base), when speculative. */
   speculativeBase?: string;
+  /** WS-A PR-5: the ordered ancestor stack (flag-gated stacked-PR base). */
+  ancestorStack?: AncestorStack;
   repoUrl: string;
   defaultBranch: string;
   projectConfig: Record<string, unknown>;
@@ -331,6 +381,8 @@ interface DraftPrRunRow {
   project_id: string;
   branch: string;
   speculative_base: string | null;
+  ancestor_stack: unknown;
+  integrated_ancestor_shas: unknown;
   repo_url: string;
   default_branch: string;
   config: unknown;

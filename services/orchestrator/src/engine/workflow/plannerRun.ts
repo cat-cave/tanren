@@ -388,6 +388,9 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
         workspacePath,
         repoUrl: context.repoUrl,
         targetBranch: context.targetBranch,
+        // WS-A PR-5 (§3.1): the ancestor stack so the draft PR bases on the immediate
+        // ancestor's PR-head branch (flag-gated stacked PR); flag-off ⇒ `targetBranch`.
+        ...(context.ancestorStack !== undefined && { ancestorStack: context.ancestorStack }),
         runBranch: context.runBranch,
         title: `Tanren: ${context.specTitle}`,
         body: context.specDescription,

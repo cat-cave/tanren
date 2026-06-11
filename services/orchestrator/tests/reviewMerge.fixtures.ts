@@ -158,20 +158,39 @@ export class ReviewMergePool {
   mergedAncestors: string[] = [];
   unresolvedSpeculativeHolds: string[] = [];
   /**
+   * WS-A PR-5: the ordered `runs.ancestor_stack` the stacked-PR retarget walk reads
+   * (flag-on). Default empty ⇒ the legacy single-ref path. A test sets it to drive the
+   * walk; `ancestorStackWrites` records each persisted drop (`UPDATE runs SET ancestor_stack`).
+   */
+  ancestorStack: unknown = null;
+  readonly ancestorStackWrites: Array<{ runId: string; stack: unknown }> = [];
+  /**
    * GAP #3: the configurable platform / known-automation committer logins. Set by a test
    * to prove the autonomous-tier auto-approve; absent ⇒ the config omits the key.
    */
   governancePlatformLogins: string[] | undefined = undefined;
 
   async query(sql: string, params: unknown[]): Promise<{ rows: unknown[]; rowCount: number }> {
-    if (sql.startsWith("SELECT speculative_base, spec_id, project_id FROM runs")) {
+    if (sql.startsWith("SELECT speculative_base, ancestor_stack, integrated_ancestor_shas, spec_id, project_id")) {
       const run = this.runs.find((r) => r.run_id === params[0]);
       return run === undefined
         ? { rows: [], rowCount: 0 }
         : {
-            rows: [{ speculative_base: this.speculativeBase, spec_id: run.spec_id, project_id: run.project_id }],
+            rows: [
+              {
+                speculative_base: this.speculativeBase,
+                ancestor_stack: this.ancestorStack,
+                integrated_ancestor_shas: null,
+                spec_id: run.spec_id,
+                project_id: run.project_id,
+              },
+            ],
             rowCount: 1,
           };
+    }
+    if (sql.startsWith("UPDATE runs SET ancestor_stack")) {
+      this.ancestorStackWrites.push({ runId: String(params[0]), stack: JSON.parse(String(params[1])) });
+      return { rows: [], rowCount: 1 };
     }
     if (sql.startsWith("SELECT depends_on FROM specs")) {
       return { rows: [{ depends_on: this.specDependsOn }], rowCount: 1 };
