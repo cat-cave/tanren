@@ -17,6 +17,7 @@ import type { CiWhen } from "../ci/index.js";
 import type { GateOutcome } from "../workflow/gate/index.js";
 import { advisoryStepNamesForPosture, resolveGateConfig, runGateForWhen } from "../workflow/gate/index.js";
 import type { RunnerHandle } from "../contracts/allocator.js";
+import type { WorkspaceHandle } from "../contracts/workspaceVcsCore.js";
 import { buildAdaptersFromRouting } from "../providers/adapterSelector.js";
 import {
   buildJjConflictApplier,
@@ -24,15 +25,26 @@ import {
 } from "../workflow/reviewMerge/conflictResolver/jjWorkspaceApplier.js";
 import { buildDefaultConflictResolver } from "../workflow/reviewMerge/conflictResolver/index.js";
 import { buildLiveJjWorkspace, type LiveJjWorkspace } from "../providers/liveJjWorkspace.js";
+import type { AncestorStack } from "./ancestorStack.js";
+import { assembleBaseShiftStackLive } from "./baseShiftStackAssembly.js";
+import { walkerJjLocalBase } from "./walkerJjLocalBaseFlag.js";
 import type { BaseShiftRunContext } from "./baseShiftLiveContext.js";
 import type { ConflictResolution } from "./baseShiftCoordinator.js";
 import type { LiveBaseShiftDeps } from "./baseShiftLiveSeams.js";
 
 /**
- * Run the live intent-preserving jj resolver over a freshly provisioned live jj workspace,
- * re-gating + force-pushing the resolved head on a fit. The conflict is gathered + re-gated
- * against `shiftedBase` — the SAME base the initial `rebaseOnto` used (the speculative
- * integration ref, or plain `default_branch`), NEVER the project default (a P0 fail-open).
+ * Run the live intent-preserving jj resolver, re-gating + force-pushing the resolved head on
+ * a fit. The conflict is gathered + re-gated against the SHIFTED base the initial `rebaseOnto`
+ * used (NEVER the project default — a P0 fail-open). HOW that shifted base is materialized:
+ *
+ *   • WS-A PR-6b jj-local path (`WALKER_JJ_LOCAL_BASE` ON + a NON-EMPTY re-resolved stack):
+ *     ASSEMBLE the stack LOCALLY (`main + ordered ancestors`) on the dependent's own short-lived
+ *     runner (the SAME `assembleBaseShiftStackLive` the opener uses) and gather + re-gate the
+ *     recorded conflict against the LOCALLY-ASSEMBLED stack HEAD — NO `tanren/integ` clone.
+ *   • Legacy path (flag-off / empty stack): the EXACT current single-ref clone of
+ *     `${shiftedBase}@origin` (the rebuilt integration ref, or plain `default_branch` when
+ *     non-speculative) — byte-identical to before this PR.
+ *
  * Returns `{resolved, headSha}` (the resolved head read back from the forge) or
  * `{resolved:false, reason}` (the coordinator replans — the work stays alive). All tenant
  * reads/writes run under the dependent's org.
@@ -42,36 +54,33 @@ export async function resolveBaseShiftConflict(input: {
   ctx: BaseShiftRunContext;
   /** The shifted base the conflict is gathered + re-gated against (NOT the project default). */
   shiftedBase: string;
+  /**
+   * WS-A PR-6b (§2.2): the RE-RESOLVED ordered ancestor stack. With `WALKER_JJ_LOCAL_BASE`
+   * ON + a non-empty stack, the resolver ASSEMBLES it LOCALLY and gathers the conflict against
+   * the assembled head instead of cloning `${shiftedBase}@origin`. Empty/absent/flag-off ⇒ the
+   * single-ref clone.
+   */
+  ancestorStack?: AncestorStack;
   timeoutMs: number;
 }): Promise<ConflictResolution> {
-  const { deps, ctx, shiftedBase, timeoutMs } = input;
+  const { deps, ctx, shiftedBase, ancestorStack, timeoutMs } = input;
   return runWithJobOrgId(ctx.orgId, async () => {
-    const live = await buildLiveJjWorkspace({
-      facts: {
-        orgId: ctx.orgId,
-        projectId: ctx.projectId,
-        repoUrl: ctx.repoUrl,
-        runnerImage: ctx.runnerImage,
-        ...(ctx.installation !== undefined && { installation: ctx.installation }),
-        githubCredentialRef: ctx.githubCredentialRef,
-        identitySecretRef: deps.identitySecretRef,
-      },
-      allocator: deps.allocator,
-      ssh: deps.ssh,
-      secrets: deps.secrets,
-      vcsProvider: deps.vcsProvider,
-      ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
+    const prepared = await prepareResolveWorkspace({ deps, ctx, shiftedBase, ancestorStack, timeoutMs });
+    const resolved = await runResolverOverWorkspace({
+      deps,
+      ctx,
+      live: prepared.live,
+      reGateBaseSha: prepared.reGateBaseSha,
+      applierFacts: prepared.applierFacts,
+      ...(prepared.preOpenedWorkspace !== undefined && { preOpenedWorkspace: prepared.preOpenedWorkspace }),
       timeoutMs,
+    }).catch(async (error: unknown) => {
+      // FAIL-CLOSED: a failure BEFORE the applier's gather() took ownership would leak the
+      // runner — release it loudly. (Once gather() runs, the applier's terminal step owns
+      // release; a second release is a no-op.)
+      await prepared.live.release();
+      throw error;
     });
-    const resolved = await runResolverOverWorkspace({ deps, ctx, shiftedBase, live, timeoutMs }).catch(
-      async (error: unknown) => {
-        // FAIL-CLOSED: a failure BEFORE the applier's gather() took ownership would leak the
-        // runner — release it loudly. (Once gather() runs, the applier's terminal step owns
-        // release; a second release is a no-op.)
-        await live.release();
-        throw error;
-      },
-    );
     if (!resolved) {
       // The resolver routed ONE spec back to the planner (bounded re-plan) OR judged the
       // intents irreconcilable — either way the old work no longer fits as-is. The
@@ -87,6 +96,76 @@ export async function resolveBaseShiftConflict(input: {
     }
     return { resolved: true, headSha };
   });
+}
+
+/** The materialized resolve workspace + the base wiring the resolver gathers/re-gates against. */
+interface PreparedResolveWorkspace {
+  /** The OPEN live jj workspace the applier resolves over (the caller owns `release()`). */
+  live: LiveJjWorkspace;
+  /** The applier facts (the rebase TARGET differs per path: a local sha vs `${shiftedBase}@origin`). */
+  applierFacts: JjConflictApplierFacts;
+  /** The re-gate baseline (the LOCAL assembled head sha, or `shiftedBase`). */
+  reGateBaseSha: string;
+  /** Present on the jj-local path: the already-assembled workspace the applier gathers over (no re-clone). */
+  preOpenedWorkspace?: WorkspaceHandle;
+}
+
+/**
+ * Materialize the shifted base the conflict is gathered + re-gated against:
+ *   • jj-local path (flag-ON + non-empty stack): ASSEMBLE `main + ordered ancestors` LOCALLY
+ *     (`assembleBaseShiftStackLive`) and hand the applier the OPEN workspace + the assembled
+ *     head SHA as the rebase target — NO synthesized-ref clone.
+ *   • legacy path: a fresh live workspace the applier clones `${shiftedBase}@origin` into,
+ *     with `baseRevision = ${shiftedBase}@origin` (byte-identical to before this PR).
+ */
+async function prepareResolveWorkspace(input: {
+  deps: LiveBaseShiftDeps;
+  ctx: BaseShiftRunContext;
+  shiftedBase: string;
+  ancestorStack?: AncestorStack;
+  timeoutMs: number;
+}): Promise<PreparedResolveWorkspace> {
+  const { deps, ctx, shiftedBase, ancestorStack, timeoutMs } = input;
+  if (walkerJjLocalBase() && ancestorStack !== undefined && ancestorStack.length > 0) {
+    // ASSEMBLE the re-resolved stack LOCALLY on the dependent's own runner (the SAME assembly
+    // the opener runs). The applier then gathers over THIS open workspace and rebases the
+    // dependent's head onto the assembled head SHA — never the synthesized `${shiftedBase}@origin`.
+    const assembled = await assembleBaseShiftStackLive({ deps, ctx, stack: ancestorStack, timeoutMs });
+    return {
+      live: assembled.live,
+      // The applier skips the re-clone (`preOpenedWorkspace`) + rebases onto the LOCAL assembled
+      // head sha. `baseBranch` stays the default branch (the assembly's clone base) for diagnostics.
+      applierFacts: {
+        repoUrl: ctx.repoUrl,
+        baseBranch: ctx.defaultBranch,
+        baseRevision: assembled.assembledHeadSha,
+        headBranch: ctx.headBranch,
+        ...(ctx.installation !== undefined && { installation: ctx.installation }),
+        githubCredentialRef: ctx.githubCredentialRef,
+      },
+      reGateBaseSha: assembled.assembledHeadSha,
+      preOpenedWorkspace: assembled.workspace,
+    };
+  }
+  // LEGACY single-ref path: a fresh workspace the applier clones `${shiftedBase}@origin` into.
+  const live = await buildLiveJjWorkspace({
+    facts: {
+      orgId: ctx.orgId,
+      projectId: ctx.projectId,
+      repoUrl: ctx.repoUrl,
+      runnerImage: ctx.runnerImage,
+      ...(ctx.installation !== undefined && { installation: ctx.installation }),
+      githubCredentialRef: ctx.githubCredentialRef,
+      identitySecretRef: deps.identitySecretRef,
+    },
+    allocator: deps.allocator,
+    ssh: deps.ssh,
+    secrets: deps.secrets,
+    vcsProvider: deps.vcsProvider,
+    ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
+    timeoutMs,
+  });
+  return { live, applierFacts: baseShiftApplierFacts(ctx, shiftedBase), reGateBaseSha: shiftedBase };
 }
 
 /**
@@ -113,19 +192,24 @@ export function baseShiftApplierFacts(ctx: BaseShiftRunContext, shiftedBase: str
 async function runResolverOverWorkspace(input: {
   deps: LiveBaseShiftDeps;
   ctx: BaseShiftRunContext;
-  /** The shifted base the conflict is gathered + re-gated against (NOT the project default). */
-  shiftedBase: string;
   live: LiveJjWorkspace;
+  /** The applier facts (the rebase target is a LOCAL sha on the jj-local path, else `${shiftedBase}@origin`). */
+  applierFacts: JjConflictApplierFacts;
+  /** The re-gate baseline (the LOCAL assembled head sha, or `shiftedBase`). */
+  reGateBaseSha: string;
+  /** Present on the jj-local path: the already-assembled workspace the applier gathers over (no re-clone). */
+  preOpenedWorkspace?: WorkspaceHandle;
   timeoutMs: number;
 }): Promise<boolean> {
-  const { deps, ctx, shiftedBase, live, timeoutMs } = input;
+  const { deps, ctx, live, applierFacts, reGateBaseSha, timeoutMs } = input;
   const applier = buildJjConflictApplier({
     live,
     ssh: deps.ssh,
     secrets: deps.secrets,
     vcsProvider: deps.vcsProvider,
     ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
-    facts: baseShiftApplierFacts(ctx, shiftedBase),
+    facts: applierFacts,
+    ...(input.preOpenedWorkspace !== undefined && { preOpenedWorkspace: input.preOpenedWorkspace }),
     timeoutMs,
   });
   const adapters = buildAdaptersFromRouting(
@@ -148,8 +232,9 @@ async function runResolverOverWorkspace(input: {
     target: live.target,
     workspacePath: live.workspacePath,
     // The re-gate baseline is the SHIFTED base the resolved tree sits on (the resolution is
-    // proven against the base it lands on, not the project default).
-    baseSha: shiftedBase,
+    // proven against the base it lands on, not the project default): the LOCALLY-assembled
+    // stack head sha on the jj-local path, or the single-ref `shiftedBase` on the legacy path.
+    baseSha: reGateBaseSha,
     timeoutMs,
     runId: ctx.runId,
     projectId: ctx.projectId,
@@ -158,7 +243,9 @@ async function runResolverOverWorkspace(input: {
     specTitle: ctx.specTitle,
     specDescription: ctx.specDescription,
     acceptanceCriteria: ctx.acceptanceCriteria,
-    baseBranch: shiftedBase,
+    // `baseBranch` only feeds the git-merge-abort fallback applier (which we never use — the
+    // jj applier is always injected), so it is the applier's diagnostic base branch value.
+    baseBranch: applierFacts.baseBranch,
     headBranch: ctx.headBranch,
     ...(ctx.endpointBaseUrl !== undefined && { endpointBaseUrl: ctx.endpointBaseUrl }),
     routing: ctx.routing,
@@ -170,7 +257,7 @@ async function runResolverOverWorkspace(input: {
     runId: ctx.runId,
     prUrl: ctx.repoUrl,
     prNumber: 0,
-    baseBranch: shiftedBase,
+    baseBranch: applierFacts.baseBranch,
     message: "base-shift rebase conflict",
   });
   return result.resolved;

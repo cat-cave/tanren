@@ -113,15 +113,19 @@ class ConflictingCore implements WorkspaceVcsCore {
   async opUndo(): Promise<void> {}
 }
 
-/** A resolver that RECORDS the shifted base the coordinator handed it. */
+/** A resolver that RECORDS the shifted base + the re-resolved stack the coordinator handed it. */
 function recordingResolver(): BaseShiftConflictResolver & {
-  seen: Array<{ newBaseRef: string; nonSpeculative: boolean }>;
+  seen: Array<{ newBaseRef: string; nonSpeculative: boolean; ancestorStack?: AncestorStack }>;
 } {
-  const seen: Array<{ newBaseRef: string; nonSpeculative: boolean }> = [];
+  const seen: Array<{ newBaseRef: string; nonSpeculative: boolean; ancestorStack?: AncestorStack }> = [];
   return {
     seen,
     async resolve(input) {
-      seen.push({ newBaseRef: input.newBaseRef, nonSpeculative: input.nonSpeculative });
+      seen.push({
+        newBaseRef: input.newBaseRef,
+        nonSpeculative: input.nonSpeculative,
+        ...(input.ancestorStack !== undefined && { ancestorStack: input.ancestorStack }),
+      });
       return { resolved: true, headSha: "sha-resolved" } satisfies ConflictResolution;
     },
   };
@@ -216,6 +220,34 @@ describe("BaseShiftCoordinator — threads the SHIFTED base (newBaseRef + nonSpe
       toSha: "sha-new",
     });
     expect(resolver.seen).toEqual([{ newBaseRef: DEFAULT_BRANCH, nonSpeculative: true }]);
+  });
+
+  // WS-A PR-6b (§2.2): the coordinator THREADS the re-resolved stack into the RESOLVER (not
+  // just the opener) so the live resolver assembles the SAME `main + ordered ancestors`
+  // LOCALLY instead of cloning `${newBaseRef}@origin` when it gathers the recorded conflict.
+  it("a CONFLICTED speculative shift hands the resolver the re-resolved stack (for the LOCAL assembly)", async () => {
+    const resolver = recordingResolver();
+    const coord = new BaseShiftCoordinator({
+      workspace: new ConflictingCore(),
+      opener: SPEC_OPENER,
+      reGate: passingReGate,
+      resolver,
+      persistence: noopPersistence,
+      nodes: noNodes,
+      events: noopEvents,
+    });
+    await coord.rebaseOnto({
+      projectId: "project_1",
+      dependent: dependent(),
+      newBaseRef: SHIFTED_BASE,
+      nonSpeculative: false,
+      ancestorStack: RESOLVED_STACK,
+      ancestorSpecId: "spec_a",
+      toSha: "sha-new",
+    });
+    // The resolver received the SAME re-resolved stack the opener did — so the live resolve
+    // assembles `main + ordered ancestors` LOCALLY (no `${newBaseRef}@origin` clone).
+    expect(resolver.seen).toEqual([{ newBaseRef: SHIFTED_BASE, nonSpeculative: false, ancestorStack: RESOLVED_STACK }]);
   });
 });
 

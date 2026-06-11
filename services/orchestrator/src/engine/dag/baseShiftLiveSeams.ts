@@ -313,6 +313,7 @@ export class LiveBaseShiftConflictResolver implements BaseShiftConflictResolver 
     rebase: { headSha: string };
     newBaseRef: string;
     nonSpeculative: boolean;
+    ancestorStack?: AncestorStack;
   }): Promise<ConflictResolution> {
     const ctx = await loadBaseShiftRunContext(this.deps.pool, input.dependent.runId);
     // P0 fix: resolve + re-gate against the SHIFTED base the initial rebase used, NOT the
@@ -324,6 +325,11 @@ export class LiveBaseShiftConflictResolver implements BaseShiftConflictResolver 
       deps: this.deps,
       ctx,
       shiftedBase,
+      // WS-A PR-6b (§2.2): the re-resolved stack the coordinator threaded through (the SAME
+      // the opener assembled). flag-ON + non-empty ⇒ the resolver assembles `main + ordered
+      // ancestors` LOCALLY instead of cloning `${shiftedBase}@origin`. Empty/flag-off ⇒
+      // single-ref clone (the non-speculative path passes no stack — plain default_branch).
+      ...(input.ancestorStack !== undefined && !input.nonSpeculative && { ancestorStack: input.ancestorStack }),
       timeoutMs: this.deps.timeoutMs ?? BASE_SHIFT_TIMEOUT_MS,
     });
   }
