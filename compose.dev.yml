@@ -99,6 +99,10 @@ services:
       TANREN_INTERNAL_TLS_CERT: /etc/tanren/mtls/server.crt
       TANREN_INTERNAL_TLS_KEY: /etc/tanren/mtls/server.key
       TANREN_INTERNAL_TLS_CA: /etc/tanren/mtls/ca.crt
+      # Apex mode (off by default): engine/config/apexMode.ts reads this in the
+      # orchestrator too (audit-posture self-config / LOUD readiness failures).
+      # Mirror the worker passthrough so it is threaded onto both planes.
+      TANREN_APEX_MODE: ${TANREN_APEX_MODE:-}
     volumes:
       - /tmp/tanren-mtls:/etc/tanren/mtls:ro
     secrets:
