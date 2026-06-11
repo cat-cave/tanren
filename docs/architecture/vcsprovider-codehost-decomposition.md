@@ -1,7 +1,18 @@
 # `VcsProvider` → `CodeHost` / `VisibilityProjection` decomposition — design + PR plan
 
-Status: design (gates a multi-PR build). Read-only investigation; no production code
-in this change.
+> Status: **IMPLEMENTED — landed across a 9-PR series.** This doc was the design that
+> gated the build; the build is now done. The 26-method `VcsProvider` interface and its
+> impls (`engine/contracts/vcsProvider.ts`, `providers/githubVcsProvider.ts`,
+> `buildVcsProvider.ts`, the `VcsProviderCodeHost` / `VcsProviderVisibilityProjection`
+> adapters, `UnconfiguredVcsProvider`) are **DELETED** — a `grep VcsProvider services/*/src`
+> finds only historical doc-comments. The methods are decomposed onto the minimal
+> `CodeHost` (host I/O) + best-effort `VisibilityProjection` (PR/check/comment mirror);
+> the `mergeable_state` read was severed to `CodeHost.compareRefs` (ancestry, not a forge
+> verdict); the DEAD methods (`readPullRequestState`, `publishCheck`,
+> `readPullRequestChecks`, …) were dropped, not ported; and the surviving primitives
+> moved to `contracts/codeHostTypes.ts`, `providers/githubRepoRef.ts`, and the typed-pg-row
+> read seam `engine/data/pgRows.ts`. The classification + PR sequence below is retained as
+> the as-built record.
 
 ## 0. Context
 
@@ -22,12 +33,12 @@ seams that REPLACE the monolithic forge interface:
   `services/orchestrator/src/engine/contracts/visibilityProjection.ts` with a live
   GitHub impl `githubVisibilityProjection.ts`.
 
-What **remains** is the net-delete cleanup the cutover deferred (§7, "deferred to
-post-apex" / "separate net-delete cleanup, not a gate on the live path"): the 26-method
+This net-delete cleanup the cutover deferred (§7) is now **DONE**: the 26-method
 `VcsProvider` (`engine/contracts/vcsProvider.ts`) plus its impls
 (`githubVcsProvider.ts`, `buildVcsProvider.ts`, the `VcsProviderCodeHost` /
-`VcsProviderVisibilityProjection` adapters, `UnconfiguredVcsProvider`) are still on disk
-and ~32 files still carry a `: VcsProvider` type annotation.
+`VcsProviderVisibilityProjection` adapters, `UnconfiguredVcsProvider`) are **deleted**,
+and the ~32 `: VcsProvider`-annotated importers were migrated onto the target seams. No
+`: VcsProvider` type annotation survives.
 
 This doc enumerates every `VcsProvider` method, classifies it onto the target seams (or
 marks it dead), buckets the importers, names the new methods the target seams must

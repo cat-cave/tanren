@@ -91,17 +91,23 @@ real credits under the $50 ceiling.
 halted at scaffold-bootstrap and flushed #496/#497/#498). The rest of the forward
 to-do (`ROADMAP.md` §4):
 
-- **tanren-owns-the-engine — cutover COMPLETE; residual §7 cleanups remain.** The
+- **tanren-owns-the-engine — cutover COMPLETE, §7 decomposition LANDED.** The
   walker/percolation → jj-local cutover landed, the kill-switch flags are deleted
   (each live path unconditional), the legacy `speculative_base` +
   `integrated_ancestor_shas` columns are dropped, and the `integration.*` metrics
-  read-side (`rebase_vs_rebuild`) is built. What remains is _separate_ net-delete
-  cleanup, not a gate on the live path: the `VcsProvider` interface still on disk
-  (the 26-method → minimal `CodeHost` reduction) and `resolveSpeculativeState` / the
-  stacked-PR retarget still in the merge dispatcher. A real merge through the live
-  jj/`MergeAuthority` path is the open live-validation item (apex v32 halted at
-  scaffold-bootstrap before reaching one). See
-  `docs/architecture/tanren-owns-the-engine.md` §7–§8.
+  read-side (`rebase_vs_rebuild`) is built. The **26-method `VcsProvider` God-interface
+  is now fully DELETED** — decomposed across a 9-PR series into the minimal
+  `CodeHost` plus the best-effort `VisibilityProjection` (`mergeable_state` severed to
+  `CodeHost.compareRefs` ancestry; dead methods dropped; primitives lifted to
+  `contracts/codeHostTypes.ts` / `providers/githubRepoRef.ts` / the typed-pg-row
+  `engine/data/pgRows.ts` seam). A `grep VcsProvider services/*/src` finds only
+  doc-comments. The one thing still on disk is **not** dead code:
+  `resolveSpeculativeState` / the stacked-PR retarget — the live jj-local
+  `ancestor_stack` base + retarget walk (only a possible rename off the "speculative"
+  vocabulary remains). A real merge through the live jj/`MergeAuthority` path is the
+  open live-validation item (apex v32 halted at scaffold-bootstrap before reaching
+  one). See `docs/architecture/tanren-owns-the-engine.md` §7–§8 plus
+  `docs/architecture/vcsprovider-codehost-decomposition.md`.
 - **Thread `TANREN_APEX_MODE` to the orchestrator compose service** (v33-prep).
   Today it is wired only on the `worker` service, but the orchestrator reads it too
   (`engine/config/apexMode.ts`) — until threaded, export it on the host. One-line

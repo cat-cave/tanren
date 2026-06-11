@@ -100,10 +100,13 @@ engine is the single path regardless:
   BYPASSRLS fallback removed (fail-closed).
 
 The walker/percolation → jj-local cutover and the `integration.*` metrics read-side
-are **done**. What remains is a separate, non-blocking §7 simplification (§4): the
-`VcsProvider` interface still on disk (the 26-method → minimal `CodeHost` reduction)
-and `resolveSpeculativeState` / the stacked-PR retarget in the merge dispatcher —
-net-delete cleanups, not gates on the live path.
+are **done**, and so is the §7 `VcsProvider` decomposition — the 26-method
+God-interface is **fully DELETED** (a `grep VcsProvider services/*/src` finds only
+doc-comments), split into the minimal `CodeHost` + best-effort `VisibilityProjection`
+across a 9-PR series. The one residual (§4) is **not** dead code:
+`resolveSpeculativeState` / the stacked-PR retarget in the merge dispatcher, which is
+the live jj-local `ancestor_stack` base + retarget walk (a possible rename off the
+"speculative" name is its only open item).
 
 ---
 
@@ -243,10 +246,11 @@ cite); the merge-engine cutover rationale is
   `MergeAuthority` are Tanren's own and the gate runs over SSH publishing a
   `tanren/gate` check (no Mergify, no Actions) — so the residual GitHub coupling is
   the thin `CodeHost` surface (push/fetch refs + land-to-`main`) plus the optional
-  `VisibilityProjection` mirror. The legacy `VcsProvider` impls remain on disk
-  pending the residual §7 simplification (§4) — a net-delete cleanup, not a gate on
-  the live path. A second backend (GitLab/Gitea) is a new `CodeHost` impl, held
-  until a real second-backend requirement exists (§5).
+  `VisibilityProjection` mirror. The legacy `VcsProvider` interface + impls are
+  **DELETED** (the §7 decomposition landed across a 9-PR series; `mergeable_state`
+  severed to `CodeHost.compareRefs` ancestry) — only doc-comments name it now. A
+  second backend (GitLab/Gitea) is a new `CodeHost` impl, held until a real
+  second-backend requirement exists (§5).
 - **The strictness & testing ladder is the standing quality posture.** The gate is
   a 15-step `just fast-check` (format-check, lint, types-lint, architecture,
   schema/state/event/answerer/contract drift, knip, spelling, typecheck, test,
@@ -300,19 +304,29 @@ cite); the merge-engine cutover rationale is
   but the orchestrator reads it too (`engine/config/apexMode.ts` — audit-posture /
   self-config). Until threaded, export it on the host before `just up-dev`. One-line
   compose fix to land.
-- **tanren-owns-the-engine — cutover COMPLETE; residual §7 simplification remains.**
-  The cutover is the single live path (§1): the walker/percolation → jj-local cutover
-  landed (the dependent run jj-assembles its base from the real ancestor PR-head refs
-  — no synthesized `tanren/integ` ref), `PgSpeculativeIntegrator` is deleted, the
-  kill-switch flags are removed (each path unconditional), the legacy
-  `speculative_base` + `integrated_ancestor_shas` columns are dropped, and the
-  `integration.*` metrics read-side (`rebase_vs_rebuild` — tokens / wall-clock) is
-  built. What remains is a _separate_ net-delete cleanup, not a gate on the live path
-  (`docs/architecture/tanren-owns-the-engine.md` §7–§8): the 26-method
-  GitHub-PR-shaped `VcsProvider` interface → the minimal `CodeHost` reduction, and
-  `resolveSpeculativeState` / the stacked-PR retarget still in the merge dispatcher.
-  A real merge through the live jj/`MergeAuthority` path is the open live-validation
-  item (apex v32 halted at scaffold-bootstrap before reaching one).
+- **tanren-owns-the-engine — cutover COMPLETE, §7 decomposition LANDED; one
+  net-keep residual.** The cutover is the single live path (§1): the
+  walker/percolation → jj-local cutover landed (the dependent run jj-assembles its
+  base from the real ancestor PR-head refs — no synthesized `tanren/integ` ref),
+  `PgSpeculativeIntegrator` is deleted, the kill-switch flags are removed (each path
+  unconditional), the legacy `speculative_base` + `integrated_ancestor_shas` columns
+  are dropped, and the `integration.*` metrics read-side (`rebase_vs_rebuild` —
+  tokens / wall-clock) is built. The **§7 `VcsProvider` decomposition is now also
+  done**: the 26-method GitHub-PR-shaped God-interface is **fully DELETED**
+  (decomposed across a 9-PR series into the minimal `CodeHost` + best-effort
+  `VisibilityProjection`; `mergeable_state` severed to `CodeHost.compareRefs`
+  ancestry; the dead methods dropped; primitives lifted to `contracts/codeHostTypes.ts`
+  / `providers/githubRepoRef.ts` / the typed-pg-row `engine/data/pgRows.ts` seam — a
+  `grep VcsProvider services/*/src` finds only doc-comments). What still lives on
+  disk is **not** dead code: `resolveSpeculativeState` / the stacked-PR retarget
+  (`workflow/reviewMerge/speculativeStackRetarget.ts`) is the live jj-local
+  `ancestor_stack` base + PR-base retarget walk
+  (`walker-jj-local-integration-design.md` §3.2/§3.3) — a net-keep whose only open
+  item is a possible rename off the "speculative" vocabulary. A real merge through
+  the live jj/`MergeAuthority` path is the open live-validation item (apex v32 halted
+  at scaffold-bootstrap before reaching one). See
+  `docs/architecture/tanren-owns-the-engine.md` §7–§8 +
+  `docs/architecture/vcsprovider-codehost-decomposition.md`.
 - **Benchmark seed corpus.** The tanren-method benchmark toolkit is code-complete
   (`engine/benchmark/**` — runner, scorecard, reducers, accept, store, stats;
   experiments routes; `tanren experiments`/`cells` CLI). What remains is the
@@ -332,20 +346,37 @@ cite); the merge-engine cutover rationale is
   now an explicit `OrgScope` discriminated mode (`{ kind: "org" }` vs
   `{ kind: "unscopedPlatform" }`) that fails loud (`UnscopedOrgError`) on a missing
   tenant scope rather than degrading to BYOK.
-- **Type-aware lint strictness ratchet.** The type-aware pass
-  (`oxlint --type-aware`, config `oxlintrc.typeaware.json`, powered by
-  oxlint-tsgolint/tsgo) currently runs only the 3 high-value typed rules ported
-  from the old ESLint pass (`no-floating-promises`, `no-misused-promises`,
-  `await-thenable`) with the broader type-aware **categories OFF**. Planned: turn
-  those categories on (`no-base-to-string`, `unbound-method`,
-  `restrict-template-expressions`, …), triage the surfaced warnings, and ratchet
-  them to error — a strictness wave for broader type-aware coverage.
-- **Entity-analysis layer — native follow-ons.** Increment 1 (vendor `sem` +
-  answerer wiring) has landed. The remaining native follow-ons: inspect's
-  risk-triage + a ConGra verdict for the checker; weave's entity-merge as a native
-  first-pass in the jj `BaseShiftCoordinator` conflict path (a native pre-pass, NOT
-  a git merge driver — a git driver clashes with jj); and entity-anchored issue
-  Claims.
+- **Type-aware lint strictness ratchet — `no-unsafe-type-assertion` tail (~310
+  casts).** The type-aware pass (`oxlint --type-aware`, config
+  `oxlintrc.typeaware.json`, powered by oxlint-tsgolint/tsgo) is ratcheted
+  rule-by-rule and the bulk of the wave is **done**: the **`correctness` category is
+  ON at error** (all its rules triaged to zero and the surfaced bugs fixed — a
+  `[object Object]`-stringification class on raw pg rows + Hono bodies, `never`-
+  template guards, redundant unions — except `unbound-method`, held off as
+  false-positive-only on function-valued object props), and the **tractable
+  `suspicious` rules are individually at error** (`no-unnecessary-type-assertion`
+  / `-conversion` / `-boolean-literal-compare` / `-template-expression` /
+  `-type-arguments`, plus the exhaustive-`switch` `never`-default). The one large
+  deferred rule is **`no-unsafe-type-assertion`** (the `suspicious` category stays
+  OFF for it): the pg-row trust-at-boundary class is **done** via the `pgRows.ts`
+  typed read seam (`queryRawRows` / `requireRow` / `oneOf` + `client.query<RawRow>()`
+  - zod-enum decodes — the whole Repositories/store seam now validates rather than
+    `as`-asserts), but **~310 non-pg-row casts remain**, sequenced as incremental
+    per-class waves: orchestrator HTTP/Hono ~238 (`response.json()` decodes, `as never`
+    event writes, jsonb-walk provider guards, the `orgScopingPool` proxy), dashboard
+    ~57 (DOM/React + client serializers), allocator ~7, cli ~8 (`JSON.parse` /
+    external input). `no-unnecessary-type-parameters` (4) is also held — its "fix"
+    would push unsafe casts out to callers. The remaining categories
+    (pedantic/style/restriction/nursery) stay OFF pending later rule-by-rule ratchets.
+- **Entity-analysis layer — BUILT (was native follow-ons).** All of it landed:
+  increment 1 (vendor `sem` + answerer wiring), §3.1 the checker risk-oracle from a
+  host-side `sem` producer (`engine/oracle/semEntityProducer.ts`), §3.2 the
+  entity-merge native first-pass in the base-shift conflict path
+  (`workflow/reviewMerge/conflictResolver/semEntityMerge.ts`,
+  `dag/baseShiftLiveResolve.ts` — a library pre-pass, NOT a git merge driver), and
+  §3.3 entity-anchored issue Claims (`entity_claims` /
+  `engine/repositories/entityClaims.ts` + the self-validating oracle). See
+  `docs/roadmap/entity-analysis-layer.md` for the as-built record.
 - **§6 apex-e2e test gaps.** The hermetic apex e2e driver exists (§6); close the
   remaining gaps in its coverage of the post-scaffold loops as v33 exercises them.
 
