@@ -83,7 +83,6 @@ function fakePool(opts: { percolationPending?: unknown; priorReplans: number }):
           {
             repo_url: "https://github.com/o/r",
             default_branch: "main",
-            speculative_base: null,
             branch: "run_x",
             runner_image: "ghcr.io/o/runner:latest",
             config: projectConfig,

@@ -28,7 +28,7 @@ export interface BaseShiftPersistence {
      * The re-resolved ordered ancestor stack persisted to `runs.ancestor_stack`
      * (walker-jj-local-integration-design.md §2.2/§2.3) — the SOURCE OF TRUTH (a run is
      * "speculative" iff non-empty). Empty when non-speculative (every ancestor merged). The
-     * legacy `speculative_base` column is NO LONGER written (jj-local has no host ref).
+     * legacy `speculative_base` column was dropped (WS-B PR-12; jj-local has no host ref).
      */
     ancestorStack: AncestorStack;
   }): Promise<void>;

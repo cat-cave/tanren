@@ -326,15 +326,15 @@ async function createQueuedRunFromSpecOnClient(
   };
 
   // percolation columns — set only on a speculative start (`verified`/`pending` carried onto a re-execution run).
-  // The jj-local cutover (WS-B PR-9): the walker/base-shift write ONLY `ancestor_stack`; the
-  // legacy `speculative_base` + `integrated_ancestor_shas` columns STAY (dropped in PR-12's
-  // migration) but are NO LONGER WRITTEN — they insert NULL.
+  // The jj-local cutover: the walker/base-shift write ONLY `ancestor_stack` — the ordered stack
+  // is the SOLE base truth (the legacy `speculative_base` + `integrated_ancestor_shas` columns
+  // were dropped in WS-B PR-12's migration).
   const spec = input.speculative;
   await client.query(
     // org_id derived in-statement from the parent project (tanren tenancy).
-    `INSERT INTO runs (run_id, spec_id, project_id, org_id, trigger, branch, status, speculative_base,
-                       integrated_ancestor_shas, verified_ancestor_shas, percolation_pending, ancestor_stack)
-     VALUES ($1, $2, $3, (SELECT org_id FROM projects WHERE project_id = $3), $4, $5, 'queued', NULL, NULL, $6, $7, $8)`,
+    `INSERT INTO runs (run_id, spec_id, project_id, org_id, trigger, branch, status,
+                       verified_ancestor_shas, percolation_pending, ancestor_stack)
+     VALUES ($1, $2, $3, (SELECT org_id FROM projects WHERE project_id = $3), $4, $5, 'queued', $6, $7, $8)`,
     [
       run.runId,
       run.specId,

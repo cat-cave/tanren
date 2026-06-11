@@ -241,9 +241,9 @@ export async function recordPercolationPending(
 
 /**
  * Re-point an EXISTING run's dynamic base onto the re-resolved ANCESTOR STACK (the
- * never-discard base-shift re-point; empty ⇒ non-speculative). jj-local (WS-B PR-9): writes
- * ONLY `runs.ancestor_stack`; the legacy `speculative_base` column STAYS (dropped in PR-12)
- * but is NULLed (jj-local has no synthesized host ref).
+ * never-discard base-shift re-point; empty ⇒ non-speculative). jj-local: writes ONLY
+ * `runs.ancestor_stack` — the ordered stack is the sole base truth (jj-local has no
+ * synthesized host ref; the legacy `speculative_base` column was dropped in WS-B PR-12).
  */
 export async function repointRunAncestorStack(
   pool: pg.Pool,
@@ -261,7 +261,7 @@ export async function repointRunAncestorStack(
     return;
   }
   await orgScopedWrite(pool, input.projectId, async (client) => {
-    await client.query("UPDATE runs SET speculative_base = NULL, ancestor_stack = $2::jsonb WHERE run_id = $1", [
+    await client.query("UPDATE runs SET ancestor_stack = $2::jsonb WHERE run_id = $1", [
       input.runId,
       JSON.stringify(input.ancestorStack),
     ]);
