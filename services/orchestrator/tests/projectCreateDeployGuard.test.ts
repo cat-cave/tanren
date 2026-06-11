@@ -351,7 +351,7 @@ function orgProjectHarness() {
     createProjectRoutes({
       pool: pool.asPgPool(),
       secrets: new InMemorySecretStore(),
-      vcsProvider: new InMemoryVcsProvider(),
+      githubHttp: {} as never,
     }),
   );
   return { app, pool };

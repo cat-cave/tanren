@@ -50,9 +50,9 @@ function buildHarness(boundActor: ActorContext = admin) {
       localDevActor: boundActor,
     }),
   );
-  // `secrets`/`vcsProvider` are only used by the greenfield create path, never by
+  // `secrets`/`githubHttp` are only used by the greenfield create path, never by
   // the governance routes — stubbed for construction only.
-  app.route("/orgs", createProjectRoutes({ pool: pool.asPgPool(), secrets: {} as never, vcsProvider: {} as never }));
+  app.route("/orgs", createProjectRoutes({ pool: pool.asPgPool(), secrets: {} as never, githubHttp: {} as never }));
   return { app, pool };
 }
 

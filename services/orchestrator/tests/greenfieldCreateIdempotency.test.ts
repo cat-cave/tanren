@@ -7,7 +7,7 @@
 //   - a slug with no hostname-safe content is rejected, never shipped.
 
 import { describe, expect, it } from "vitest";
-import { InMemoryVcsProvider } from "./conformance/fakes/inMemoryVcsProvider.js";
+import { FakeRepoCreateHttp } from "./conformance/fakes/fakeRepoCreateHttp.js";
 import { RoutesPool } from "./helpers/routesPool.js";
 import { apexCapture, appWithGreenfieldRoutes, preparedDeploy, seedGithubAppOrg } from "./helpers/greenfieldRoutes.js";
 
@@ -18,9 +18,9 @@ describe("greenfield create — atomicity + idempotency (audit §3.10)", () => {
     const pool = new RoutesPool();
     seedGithubAppOrg(pool);
     pool.seedMembership("org_acme", "user_alice", "admin");
-    const vcs = new InMemoryVcsProvider();
+    const githubHttp = new FakeRepoCreateHttp();
     let deployProvisions = 0;
-    const { app } = appWithGreenfieldRoutes(pool, vcs, {
+    const { app } = appWithGreenfieldRoutes(pool, githubHttp, {
       async preflightDeploy() {},
       async prepareDeploy() {
         deployProvisions += 1;
@@ -43,7 +43,7 @@ describe("greenfield create — atomicity + idempotency (audit §3.10)", () => {
     });
     expect(first.status).toBe(201);
     const firstBody = (await first.json()) as { projectId: string };
-    expect(vcs.createdRepositories).toHaveLength(1);
+    expect(githubHttp.createdRepositories).toHaveLength(1);
     expect(deployProvisions).toBe(1);
     expect(pool.projects.size).toBe(1);
 
@@ -59,7 +59,7 @@ describe("greenfield create — atomicity + idempotency (audit §3.10)", () => {
     const retryBody = (await retry.json()) as { projectId: string };
     expect(retryBody.projectId).toBe(firstBody.projectId);
     // not 2 — no double repo-create, no double deploy-app provision, single project.
-    expect(vcs.createdRepositories).toHaveLength(1);
+    expect(githubHttp.createdRepositories).toHaveLength(1);
     expect(deployProvisions).toBe(1);
     expect(pool.projects.size).toBe(1);
   });
@@ -68,8 +68,8 @@ describe("greenfield create — atomicity + idempotency (audit §3.10)", () => {
     const pool = new RoutesPool();
     seedGithubAppOrg(pool);
     pool.seedMembership("org_acme", "user_alice", "admin");
-    const vcs = new InMemoryVcsProvider();
-    const { app } = appWithGreenfieldRoutes(pool, vcs, {
+    const githubHttp = new FakeRepoCreateHttp();
+    const { app } = appWithGreenfieldRoutes(pool, githubHttp, {
       async preflightDeploy() {},
       async prepareDeploy() {
         return preparedDeploy();
@@ -91,15 +91,15 @@ describe("greenfield create — atomicity + idempotency (audit §3.10)", () => {
     });
     expect(res.status).toBe(201);
     // The repo was created under the NORMALIZED slug (no spaces/uppercase/punctuation).
-    expect(vcs.createdRepositories).toEqual([{ owner: "cat-cave", name: "my-cool-app", private: true }]);
+    expect(githubHttp.createdRepositories).toEqual([{ owner: "cat-cave", name: "my-cool-app", private: true }]);
   });
 
   it("REJECTS a slug with no hostname-safe content (never ships an empty/invalid repo name)", async () => {
     const pool = new RoutesPool();
     seedGithubAppOrg(pool);
     pool.seedMembership("org_acme", "user_alice", "admin");
-    const vcs = new InMemoryVcsProvider();
-    const { app } = appWithGreenfieldRoutes(pool, vcs, {
+    const githubHttp = new FakeRepoCreateHttp();
+    const { app } = appWithGreenfieldRoutes(pool, githubHttp, {
       async preflightDeploy() {},
       async prepareDeploy() {
         return preparedDeploy();
@@ -117,7 +117,7 @@ describe("greenfield create — atomicity + idempotency (audit §3.10)", () => {
       }),
     });
     expect(res.status).toBe(400);
-    expect(vcs.createdRepositories).toEqual([]);
+    expect(githubHttp.createdRepositories).toEqual([]);
     expect(pool.projects.size).toBe(0);
   });
 });

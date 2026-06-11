@@ -52,7 +52,7 @@ function buildHarness(boundActor: ActorContext = admin) {
       localDevActor: boundActor,
     }),
   );
-  app.route("/orgs", createProjectRoutes({ pool: pool.asPgPool(), secrets: {} as never, vcsProvider: {} as never }));
+  app.route("/orgs", createProjectRoutes({ pool: pool.asPgPool(), secrets: {} as never, githubHttp: {} as never }));
   return { app, pool };
 }
 

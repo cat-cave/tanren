@@ -27,7 +27,7 @@ import { runWithOrgScope } from "@tanren/db";
 import type { ActorContext } from "../../auth/schemas.js";
 import { TemplateStore } from "../../engine/repositories/index.js";
 import type { SecretStore } from "../../engine/contracts/secretStore.js";
-import type { VcsProvider } from "../../engine/contracts/vcsProvider.js";
+import type { GitHubHttpClient } from "../../engine/providers/github.js";
 import { provisionAutonomousProject } from "../../engine/workflow/provisionAutonomousProject.js";
 import {
   DeployNotLinkedError,
@@ -75,7 +75,7 @@ export interface OnboardingRoutesOptions {
   // no project exists yet). Production passes `buildForgeInterviewAnswererFactory`
   // (a real provider answerer); tests pass a fake. REQUIRED — no fallback.
   answererFactory: (target: ForgeAnswererTarget) => InterviewAnswerer;
-  vcsProvider?: VcsProvider;
+  githubHttp?: GitHubHttpClient;
   githubAppMinter?: GithubAppTokenMinter;
   preflightDeploy?: DeployPreflightCallback;
   prepareDeploy?: PrepareDeployCallback;
@@ -171,9 +171,10 @@ export function createOnboardingRoutes(options: OnboardingRoutesOptions) {
             projectName: input.projectName,
             deploy: input,
           }));
-      if (options.vcsProvider === undefined) {
+      if (options.githubHttp === undefined) {
         return c.json({ error: "vcs_provider_missing" }, 500);
       }
+      const githubHttp = options.githubHttp;
       const templateRegistryQuery: TemplateRegistryQuery = (query, queryActor) =>
         runWithOrgScope(options.pool, orgId, (client) => TemplateStore.listByCapabilities(client, query, queryActor));
       const result = await deriveFromCapture(
@@ -189,7 +190,7 @@ export function createOnboardingRoutes(options: OnboardingRoutesOptions) {
             createGreenfieldRepository({
               pool: options.pool,
               secrets: options.secrets,
-              vcsProvider: options.vcsProvider as VcsProvider,
+              githubHttp,
               orgId,
               ...(options.githubAppMinter === undefined ? {} : { githubAppMinter: options.githubAppMinter }),
               input,

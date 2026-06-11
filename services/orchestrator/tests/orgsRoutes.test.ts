@@ -5,7 +5,6 @@ import { createAuthMiddleware, type ActorContextEnv } from "../src/middleware/au
 import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
 import { createOrgRoutes } from "../src/routes/orgs/index.js";
 import { createProjectRoutes } from "../src/routes/projects/index.js";
-import { InMemoryVcsProvider } from "./conformance/fakes/inMemoryVcsProvider.js";
 import { createFakeIdentityPool } from "./helpers/fakeIdentityPool.js";
 import { RoutesPool } from "./helpers/routesPool.js";
 
@@ -32,7 +31,7 @@ function buildHarness(actor: ActorContext) {
     createProjectRoutes({
       pool: pool.asPgPool(),
       secrets: new InMemorySecretStore(),
-      vcsProvider: new InMemoryVcsProvider(),
+      githubHttp: {} as never,
     }),
   );
   return { app, pool, identityPool };
