@@ -22,6 +22,18 @@ export interface CodeHostConformanceHarness {
    * creates the repo via the API; the in-memory fake seeds a map.)
    */
   seed(host: CodeHost, repo: CodeHostRepoRef, defaultBranch: string, initialSha: string): Promise<void> | void;
+  /**
+   * Seed a commit with explicit parents + an attributed author login, so the
+   * ancestry (`compareRefs`) + author-range (`readCommitAuthors`) cases have a graph
+   * to walk. Optional: a harness that cannot synthesize a commit graph skips those cases.
+   */
+  seedCommit?(
+    host: CodeHost,
+    repo: CodeHostRepoRef,
+    sha: string,
+    parents: ReadonlyArray<string>,
+    author: string,
+  ): Promise<void> | void;
 }
 
 const REPO: CodeHostRepoRef = { owner: "owner", name: "repo" };
@@ -63,6 +75,29 @@ export function describeCodeHostConformance(label: string, harness: CodeHostConf
 
       expect(result.mainSha).toBe("sha-authorized-1");
       expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-authorized-1");
+    });
+
+    it("compareRefs / readCommitAuthors derive ANCESTRY + authors over the commit graph", async () => {
+      const seedCommit = harness.seedCommit;
+      // A harness that cannot synthesize a commit graph skips these graph-only cases.
+      if (seedCommit === undefined) return;
+      const host = harness.make();
+      await harness.seed(host, REPO, "main", "sha-base");
+      // head = base + one commit (ahead); a sibling diverges off base.
+      await seedCommit(host, REPO, "sha-base", [], "tanren[bot]");
+      await seedCommit(host, REPO, "sha-head", ["sha-base"], "alice");
+      await seedCommit(host, REPO, "sha-diverged", ["sha-base"], "bob");
+
+      // identical / ahead / behind / diverged ancestry.
+      expect(await host.compareRefs(REPO, "sha-base", "sha-base")).toBe("identical");
+      expect(await host.compareRefs(REPO, "sha-base", "sha-head")).toBe("ahead");
+      expect(await host.compareRefs(REPO, "sha-head", "sha-base")).toBe("behind");
+      expect(await host.compareRefs(REPO, "sha-head", "sha-diverged")).toBe("diverged");
+
+      // authors over base..head (base-exclusive) is the head commit's author.
+      const authors = await host.readCommitAuthors(REPO, "sha-base", "sha-head");
+      expect(authors.logins).toContain("alice");
+      expect(authors.logins).not.toContain("tanren[bot]");
     });
 
     it("landAuthorizedRef REJECTS a stale compare-and-swap (main moved underneath)", async () => {

@@ -39,6 +39,7 @@ import { buildReGateCi, type MergeGateRunContext, runMergeGateForRun } from "./p
 import type { GateOutcome } from "./gate/index.js";
 import {
   appTokenSeam,
+  baseShiftRebaseSeam,
   buildDefaultGate,
   buildEntityRiskProducer,
   loopConfigSeam,
@@ -73,6 +74,7 @@ import {
   reviewerRejection,
   type ConflictResolverHook,
   type MergeAuthorityBundle,
+  type MergeForRunInput,
   type MergeForRunResult,
   type MergeProbe,
   type NativeQueueEnqueuer,
@@ -204,15 +206,15 @@ export interface RunPlannerLoopInput {
   // BUDGET-SAFETY (M6) + §3.7a: the budget-gate seam the ceiling preflight + the loop's
   // per-iteration in-flight gate share. Defaults to PgBudgetGate over `pool`; tests inject.
   budgetGate?: BudgetGate;
-  // reviewPolicy: "simulated" seam. Omitted in production → the reviewer
-  // Answerer is resolved from the project routing (audit chain head; Codex by
-  // default). Only invoked when the project's reviewPolicy is "simulated".
+  // reviewPolicy: "simulated" seam. Omitted in production → the reviewer Answerer is resolved
+  // from the project routing (audit chain head; Codex by default). Only for reviewPolicy "simulated".
   buildSimulatedReviewer?: (ctx: PlannerRunAdapterContext) => AnswererAdapter<ReviewAnswer>;
-  // review→merge tail seams. Omitted in production → the real GitHub
-  // review/merge stages drive through the resolver. Tests inject mocks
-  // so unit runs never hit GitHub.
+  // review→merge tail seams. Omitted in production → the real GitHub review/merge stages
+  // drive through the resolver. Tests inject mocks so unit runs never hit GitHub.
   reviewProbe?: ReviewProbe;
   mergeProbe?: MergeProbe;
+  // TEST SEAM (§5h): the in-loop `behind` rebase hook (production → `baseShiftRebaseSeam`).
+  baseShiftRebase?: MergeForRunInput["baseShiftRebase"];
   // TEST SEAM: a pre-built bundle (a no-DB unit run injects it; production builds it).
   mergeAuthority?: MergeAuthorityBundle;
   resolveConflict?: ConflictResolverHook;
@@ -459,9 +461,7 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
       resolvedGithubCredentialRef: context.githubCredentialRef,
       mergeProbe: input.mergeProbe,
       ...(input.mergeAuthority !== undefined && { mergeAuthority: input.mergeAuthority }),
-      // the intent-preserving conflict resolver is the PRODUCTION DEFAULT for the
-      // resolveConflict hook. Tests inject input.resolveConflict to skip the live
-      // runner/model; production omits it → the real resolver, from the merge context.
+      // The intent-preserving conflict resolver — the PRODUCTION DEFAULT (tests inject input.resolveConflict).
       resolveConflict: resolveConflictResolverHook(input, {
         eventStore,
         target: allocation.target,
@@ -473,11 +473,11 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
         // WS-A PR-4: the jj-local-assembled base → the resolver's merge-time base (absent ⇒ unchanged).
         ...(bootstrappedBaseRevision !== undefined && { bootstrappedBaseRevision }),
       }),
-      // After an auto-rebase the prior verdict is stale → re-run the native `pre_merge`
-      // gate + re-publish before merging (the merge authority, no forge poll).
+      // After an auto-rebase the prior verdict is stale → re-run the native `pre_merge` gate.
       reGateCi: buildReGateCi(input, mergeGateCtx),
-      // §5: the authority RE-READS the gate + review verdicts FRESH at land time
-      // (post-resolution) from the durable record — never pre-conflict captures.
+      // THE ONE BASE-SHIFT HANDLER (§7 / §5h): the unified jj rebase, no server update-branch.
+      baseShiftRebase: baseShiftRebaseSeam(context, input),
+      // §5: the authority RE-READS the gate + review verdicts FRESH at land time (post-resolution).
       ...nativeQueueSeam(input),
     });
 

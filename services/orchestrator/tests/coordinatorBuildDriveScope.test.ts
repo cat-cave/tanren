@@ -189,6 +189,14 @@ function driveDeps(pool: pg.Pool) {
     allocator: new FakeAllocator(),
     ssh: new FakeCommandSubstrate(),
     identitySecretRef: "secret/runner/identity",
+    // §5h: the merge stage builds the `CodeHost`-derived freshness probe from a GitHub
+    // provider; this no-DB run uses an `InMemoryVcsProvider`, so inject a clean probe (the
+    // hand-off never reads freshness anyway) to keep the drive off the GitHub HTTP client.
+    mergeProbe: {
+      readFreshness: async () => ({ state: "clean" as const, behind: false, baseBranch: "main", headBranch: "feat" }),
+      readBaseBranch: async () => "main",
+      retargetBase: async () => {},
+    },
   };
 }
 

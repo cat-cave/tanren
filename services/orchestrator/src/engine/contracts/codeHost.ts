@@ -46,6 +46,29 @@ export interface HostCommit {
   treeSha: string;
 }
 
+/**
+ * The ANCESTRY relation of a head ref to a base ref — a pure commit-graph fact
+ * (NOT a 3-way merge / `mergeable_state`):
+ *   - `identical` — the two shas are the same commit.
+ *   - `ahead`     — the head CONTAINS the base (the base is an ancestor of the head);
+ *                   the head is up-to-date with / ahead of the base.
+ *   - `behind`    — the base CONTAINS the head (the base advanced past the head); the
+ *                   head needs a rebase onto the advanced base.
+ *   - `diverged`  — neither contains the other (both have commits the other lacks);
+ *                   a rebase is required (a CONFLICT, if any, is surfaced by the rebase
+ *                   itself — never computed here; the host HOSTS, it never DECIDES).
+ * This is the FRESHNESS primitive the merge path derives `clean`/`behind` from after
+ * the `mergeable_state` coupling was severed (decomposition PR-7 / §5h): the host
+ * computes ancestry, the jj rebase owns conflict.
+ */
+export type RefAncestry = "identical" | "ahead" | "behind" | "diverged";
+
+/** Distinct author + committer logins observed over a sha range (host-neutral). */
+export interface CommitAuthors {
+  /** Lower-cased distinct logins across the range's commit authors + committers. */
+  logins: ReadonlyArray<string>;
+}
+
 /** Input to landing an AUTHORIZED ref into `main` — a plain push, not a merge API. */
 export interface LandAuthorizedRefInput {
   repo: CodeHostRepoRef;
@@ -90,6 +113,24 @@ export interface CodeHost {
 
   /** Read the unified diff between two refs/shas (the reviewer Answerer judges this). */
   readDiff(repo: CodeHostRepoRef, baseSha: string, headSha: string): Promise<string>;
+
+  /**
+   * Compare two refs/shas and return their ANCESTRY relation — the FRESHNESS
+   * primitive the merge path derives `clean`/`behind` from (decomposition PR-7 / §5h).
+   * It computes pure commit-graph ancestry (does the head contain the base, or has the
+   * base advanced past it?), NEVER a 3-way merge: the host HOSTS, it never DECIDES
+   * conflict (the jj rebase owns that). A future GitLab/Bitbucket impl maps it from its
+   * own compare semantics.
+   */
+  compareRefs(repo: CodeHostRepoRef, baseSha: string, headSha: string): Promise<RefAncestry>;
+
+  /**
+   * Read the distinct author + committer logins over a sha RANGE (`baseSha..headSha`)
+   * — the host-neutral, sha-addressed commit-author read the governance external-change
+   * gate uses (decomposition PR-7 / §5g), replacing the forge-PR-shaped `listContributors`.
+   * Same `/compare` read `readDiff` uses; a future backend maps it from its own range read.
+   */
+  readCommitAuthors(repo: CodeHostRepoRef, baseSha: string, headSha: string): Promise<CommitAuthors>;
 
   /** Read a file's UTF-8 content on `ref`, or `undefined` if it does not exist there. */
   readFile(input: { repo: CodeHostRepoRef; ref: string; path: string }): Promise<string | undefined>;

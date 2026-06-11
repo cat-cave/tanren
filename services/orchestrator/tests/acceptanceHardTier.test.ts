@@ -164,14 +164,16 @@ describe("acceptance hard tier (dequeue→execute, all hard paths)", () => {
             }),
           },
           mergeProbe: {
-            // branch reports clean → up-to-date enforcement is a no-op.
-            readMergeability: async () => ({
+            // branch reports clean → up-to-date enforcement is a no-op (§5h: the
+            // `CodeHost`-derived freshness, not a `mergeable_state` read).
+            readFreshness: async () => ({
               state: "clean" as const,
               behind: false,
               baseBranch: "main",
               headBranch: "tanren/run_hard",
             }),
-            updateBranch: async () => ({ outcome: "up_to_date" as const, message: "up to date" }),
+            readBaseBranch: async () => "main",
+            retargetBase: async () => {},
           },
           // The land is the unconditional `MergeAuthority` + CodeHost CAS (no host PR-merge).
           mergeAuthority: hardTierAuthorityBundle(),

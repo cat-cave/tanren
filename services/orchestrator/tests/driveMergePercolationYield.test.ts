@@ -114,6 +114,16 @@ describe("buildDriveMerge — percolation mutual exclusion (the drive YIELDS, ne
       allocator,
       ssh: new FakeCommandSubstrate(),
       identitySecretRef: "secret/runner/identity",
+      // §5h: freshness is the `CodeHost`-derived ancestry signal — inject a `behind` probe +
+      // a base-shift hook that surfaces the CONFLICT (jj owns conflict), so the conflict
+      // reaches the drive's resolver hook (where the percolation-yield lives) without a real
+      // GitHub provider / a real jj rebase.
+      mergeProbe: {
+        readFreshness: async () => ({ state: "behind", behind: true, baseBranch: "main", headBranch: "tanren/run_1" }),
+        readBaseBranch: async () => "main",
+        retargetBase: async () => {},
+      },
+      baseShiftRebaseOverride: async () => ({ outcome: "conflict", message: "branch conflicts with base" }),
     });
 
     const outcome = await drive({ runId: RUN_ID, projectId: PROJECT_ID });

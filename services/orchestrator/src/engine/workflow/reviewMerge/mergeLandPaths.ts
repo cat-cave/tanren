@@ -20,10 +20,11 @@ import type { DispatcherDeps } from "./mergeDispatcher.js";
  * THE ONE BASE-SHIFT HANDLER (tanren-owns-the-engine.md §7): rebase a `behind` branch
  * onto its base through the unified `baseShiftRebase` hook (`BaseShiftCoordinator.rebaseOnto`
  * — the SAME path change-percolation uses; the two divergent base-shift handlers collapse
- * into ONE). Absent ⇒ the pre-fold server-side `probe.updateBranch()` (retained through
- * S2 so a not-yet-wired caller still rebases — never a silent skip), with its `updated`
- * mapped onto the unified `rebased`. Extracted as a free function to keep the dispatcher
- * under the 500-line cap.
+ * into ONE). The hook is now UNCONDITIONAL on every land-driving caller (the in-loop
+ * `direct_merge` path AND the native_queue DRIVE pass both wire it; decomposition PR-7 /
+ * §5h) — the legacy server-side `probe.updateBranch()` fallback is GONE. An absent hook is
+ * a fail-closed HOLD (a wiring bug — never a silent server-side update), never a proceed.
+ * Extracted as a free function to keep the dispatcher under the 500-line cap.
  */
 export async function rebaseBehindBranch(
   deps: DispatcherDeps,
@@ -32,23 +33,23 @@ export async function rebaseBehindBranch(
   outcome: "rebased" | "up_to_date" | "conflict" | "held";
   message?: string;
   // COMMIT-BINDING (§5): the rebased PR head sha the dispatcher anchors the re-gate
-  // verdict on. Present only via the unified `baseShiftRebase` hook; ABSENT on the
-  // legacy server-side `updateBranch` fallback (no head sha to report) ⇒ the re-gate
-  // has no proven head ⇒ the pre_merge gate fails closed rather than binding wrong.
+  // verdict on. Present via the unified `baseShiftRebase` hook; the re-gate fails closed
+  // rather than binding wrong when a hook returns no head sha.
   rebasedHeadSha?: string;
 }> {
-  const { input, context, probe } = deps;
-  if (input.baseShiftRebase !== undefined) {
-    const head = mergeability.headBranch;
-    return input.baseShiftRebase({
-      runId: context.runId,
-      baseBranch: mergeability.baseBranch || context.baseBranch,
-      ...(head !== "" && head !== undefined && { headBranch: head }),
-    });
+  const { input, context } = deps;
+  if (input.baseShiftRebase === undefined) {
+    // FAIL-CLOSED: the unified base-shift hook is REQUIRED on every land-driving caller. Its
+    // absence is a wiring bug, not a license to server-side update-branch — HOLD (recoverable),
+    // never a silent merge of a stale/unverified rebase.
+    return { outcome: "held", message: "base-shift rebase hook is not wired — cannot rebase a behind branch (held)" };
   }
-  const updated = await probe.updateBranch();
-  const outcome = updated.outcome === "updated" ? "rebased" : updated.outcome;
-  return { outcome, ...(updated.message !== undefined && { message: updated.message }) };
+  const head = mergeability.headBranch;
+  return input.baseShiftRebase({
+    runId: context.runId,
+    baseBranch: mergeability.baseBranch || context.baseBranch,
+    ...(head !== "" && head !== undefined && { headBranch: head }),
+  });
 }
 
 /**
@@ -104,7 +105,9 @@ async function landViaAuthorityAttempt(
   casRetries: number,
 ): Promise<MergeForRunResult> {
   const { context, pr } = deps;
-  const mergeability = await deps.probe.readMergeability();
+  // §5h: the freshness signal the authority gates on is the `CodeHost`-derived ancestry
+  // (`clean`/`behind`/`unknown`) — never the GitHub `mergeable_state`. Only `clean` clears.
+  const mergeability = await deps.probe.readFreshness();
   const disposition = await runAuthorityLand({
     bundle,
     mergeability,

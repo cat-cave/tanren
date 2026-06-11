@@ -61,6 +61,8 @@ function dispatcherLazy(
     resolveConflict: async () => ({ resolved: true }),
     // The resolved-tree pre_merge re-gate runs BEFORE the lazy bundle build.
     reGateCi: reGate(reGateStatus),
+    // §5h: the `behind` freshness routes through the unified base-shift hook → conflict.
+    baseShiftRebase: async () => ({ outcome: "conflict" as const, message: "branch conflicts with base" }),
     buildMergeAuthority: async () => {
       state.builds += 1;
       return buildBundle();
@@ -205,8 +207,8 @@ describe("conflict-resolved land re-enters the MergeAuthority (no parallel merge
     // NEITHER a pre-built bundle NOR a builder → fail-closed BLOCK (the now-unconditional
     // safety): the land is the SOLE authority path, never a fall-through that lands.
     const probe = scriptedProbe("clean");
-    // Override mergeability to always `clean` (no conflict) so directMerge → driveLand.
-    const cleanProbe = { ...probe, readMergeability: async () => mergeability("clean") } as MergeProbe;
+    // Override freshness to always `clean` (no rebase) so directMerge → driveLand.
+    const cleanProbe = { ...probe, readFreshness: async () => mergeability("clean") } as MergeProbe;
     const events = recordingEventStore();
     const input = {
       pool: fakePool,

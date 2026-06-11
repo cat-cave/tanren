@@ -10,4 +10,7 @@ describeCodeHostConformance("InMemoryCodeHost (reference fake)", {
   seed: (host, repo, defaultBranch, initialSha) => {
     (host as InMemoryCodeHost).seed(repo, defaultBranch, initialSha);
   },
+  seedCommit: (host, repo, sha, parents, author) => {
+    (host as InMemoryCodeHost).seedCommit(repo, sha, parents, author);
+  },
 });

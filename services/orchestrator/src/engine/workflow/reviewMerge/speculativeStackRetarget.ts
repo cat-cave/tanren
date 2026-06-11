@@ -142,8 +142,12 @@ async function retargetStackWalk(args: {
     args.speculative.mergedSpecIds,
     args.defaultBranch,
   );
-  const mergeability = await args.probe.readMergeability();
-  if (mergeability.baseBranch !== toBase) {
+  // §5h: read the PR's live base off the freshness probe's `readBaseBranch` (the
+  // `CodeHost`/projection-backed read), NOT the GitHub `mergeable_state` snapshot. The
+  // retarget itself routes through the best-effort `VisibilityProjection` (a forge-UI mirror —
+  // the land targets the real default branch regardless of this cosmetic PR base).
+  const fromBase = await args.probe.readBaseBranch();
+  if (fromBase !== toBase) {
     await args.probe.retargetBase(toBase);
     await args.eventStore.append({
       runId: args.context.runId,
@@ -155,7 +159,7 @@ async function retargetStackWalk(args: {
         prUrl: args.context.prUrl,
         prNumber: args.prNumber,
         integration: args.integration,
-        fromBase: mergeability.baseBranch,
+        fromBase,
         toBase,
       },
     });

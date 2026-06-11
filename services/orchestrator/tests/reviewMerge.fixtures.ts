@@ -6,7 +6,7 @@
 import type { GovernancePosture, MergeIntegration, ReviewPolicy } from "../src/engine/config/shared.js";
 import type { MergeProbe, ReviewProbe } from "../src/engine/workflow/reviewMerge/index.js";
 import type { MergeAuthorityBundle } from "../src/engine/workflow/reviewMerge/mergeDispatchTypes.js";
-import type { PullRequestMergeability, UpdateBranchResult } from "../src/engine/contracts/vcsProvider.js";
+import type { PullRequestMergeability } from "../src/engine/contracts/vcsProvider.js";
 import type { GitHubHttpClient, GitHubHttpRequest, GitHubHttpResponse } from "../src/engine/providers/github.js";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
 import { storeGithubToken } from "../src/engine/credentials/githubToken.js";
@@ -79,11 +79,12 @@ export function approvingReviewProbe(): ReviewProbe & { markedReady: boolean } {
 export function recordingMergeProbe(
   // by default the probe reports the branch CLEAN + up to date, so existing
   // merge tests exercise the unchanged "land once" path. The freshness tests
-  // override these to drive the behind / dirty branches.
+  // override these to drive the behind branch. §5h (decomposition PR-7): the probe's
+  // `readFreshness` now models the `CodeHost`-derived ancestry signal (clean/behind/unknown);
+  // `readBaseBranch` is the live PR base the speculative walk's `fromBase` reads.
   freshness: {
     mergeability?: PullRequestMergeability;
     mergeabilityReads?: PullRequestMergeability[];
-    updateBranch?: UpdateBranchResult;
   } = {},
 ) {
   const defaultMergeability: PullRequestMergeability = freshness.mergeability ?? {
@@ -93,28 +94,29 @@ export function recordingMergeProbe(
     headBranch: "tanren/run_1",
   };
   const mergeabilityReads = freshness.mergeabilityReads ?? [defaultMergeability];
-  const update: UpdateBranchResult = freshness.updateBranch ?? { outcome: "up_to_date", message: "up to date" };
   return {
     mergeabilityCalls: 0,
-    updateBranchCalls: 0,
     // record the retarget so the speculative-land-on-main tests
     // can assert the PR base was re-pointed to default_branch.
     retargetedBases: [] as string[],
-    async readMergeability() {
+    // Both `readFreshness` (the ensureUpToDate read) and `readBaseBranch` (the speculative
+    // walk's `fromBase` read) consume the scripted read sequence in order — preserving the
+    // pre-§5h single-`readMergeability` call ordering the freshness/retarget tests script.
+    async readFreshness() {
       const mergeability = mergeabilityReads[Math.min(this.mergeabilityCalls, mergeabilityReads.length - 1)];
       this.mergeabilityCalls += 1;
       return mergeability;
     },
-    async updateBranch() {
-      this.updateBranchCalls += 1;
-      return update;
+    async readBaseBranch() {
+      const mergeability = mergeabilityReads[Math.min(this.mergeabilityCalls, mergeabilityReads.length - 1)];
+      this.mergeabilityCalls += 1;
+      return mergeability?.baseBranch ?? "main";
     },
     async retargetBase(newBase: string) {
       this.retargetedBases.push(newBase);
     },
   } satisfies MergeProbe & {
     mergeabilityCalls: number;
-    updateBranchCalls: number;
     retargetedBases: string[];
   };
 }

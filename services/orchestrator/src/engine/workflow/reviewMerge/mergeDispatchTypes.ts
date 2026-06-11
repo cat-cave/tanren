@@ -8,7 +8,7 @@ import type { RunStateWriter } from "../../contracts/runStateWriter.js";
 import type { SecretStore } from "../../contracts/secretStore.js";
 import type { EventStore } from "../../eventStore.js";
 import type { GithubAppTokenMinter } from "../../providers/githubAppTokenMinter.js";
-import type { PullRequestMergeability, UpdateBranchResult, VcsProvider } from "../../contracts/vcsProvider.js";
+import type { PullRequestMergeability, VcsProvider } from "../../contracts/vcsProvider.js";
 import type { RunStateClient } from "./context.js";
 import type { ContributorProbe } from "./governancePosture.js";
 import type { CodeHost } from "../../contracts/codeHost.js";
@@ -151,13 +151,13 @@ export interface MergeForRunInput {
    */
   reGateCi?: ReGateCiHook;
   /**
-   * THE ONE BASE-SHIFT HANDLER (§7): when present, a `behind` mergeability routes its
-   * rebase through this unified hook (`BaseShiftCoordinator.rebaseOnto`) instead of the
-   * separate server-side `probe.updateBranch()`. This is the fold that collapses the two
-   * divergent "the base moved, re-derive the work" paths into one. Absent ⇒ the dispatcher
-   * falls back to `probe.updateBranch()` (the pre-fold path retained through S2 so a
-   * caller that has not yet wired the unified hook still rebases a behind branch — never a
-   * silent skip). Production wires it; tests inject a recording hook to prove the route.
+   * THE ONE BASE-SHIFT HANDLER (§7 / decomposition PR-7 §5h): a `behind` freshness routes its
+   * rebase through this unified hook (`BaseShiftCoordinator.rebaseOnto`) — the SOLE rebase
+   * path. The legacy server-side `update-branch` fallback is GONE: this hook is wired
+   * UNCONDITIONALLY on every land-driving caller (the in-loop `direct_merge` via
+   * `baseShiftRebaseSeam`, the native_queue DRIVE via `coordinatorBuild`). Absent ⇒ a
+   * fail-closed HOLD (a wiring bug), never a silent server-side update. Tests inject a
+   * recording hook to prove the route.
    */
   baseShiftRebase?: BaseShiftRebaseHook;
   /**
@@ -213,20 +213,37 @@ export type NativeQueueEnqueuer = (input: {
 }) => Promise<{ created: boolean }>;
 
 /**
- * Injectable mergeability/branch-state probe (real GitHub by default; mocked in tests).
- * NOT a land path — the land is the unconditional `MergeAuthority` + `CodeHost` CAS; this
- * probe only reads mergeability + drives the legacy server-side branch ops (update /
- * retarget) the dispatcher still needs.
+ * Injectable FRESHNESS probe (real `CodeHost`-derived by default; mocked in tests).
+ * NOT a land path — the land is the unconditional `MergeAuthority` + `CodeHost` CAS.
+ *
+ * §5h SEVER (decomposition PR-7): freshness is NO LONGER the GitHub `mergeable_state`
+ * read. `readFreshness` derives the `clean`/`behind` signal from a `CodeHost.fetchRef` +
+ * `CodeHost.compareRefs` ANCESTRY comparison of the PR's base/head shas — a pure
+ * commit-graph fact, never a host 3-way merge. CONFLICT is NOT derived here: a `behind`
+ * branch routes through the unified `baseShiftRebase` (jj), which surfaces a genuine
+ * conflict itself — the host HOSTS, the jj rebase DECIDES conflict. So `readFreshness`
+ * yields only `clean` / `behind` / `unknown` (an unresolvable base/head sha), never `dirty`.
  */
 export interface MergeProbe {
-  /** read the PR branch's up-to-date / mergeability state before merging. */
-  readMergeability(): Promise<PullRequestMergeability>;
-  /** bring the PR branch up to date with its base (server-side update). */
-  updateBranch(): Promise<UpdateBranchResult>;
   /**
-   * §2c step 3: re-point the PR's base to `newBase` (default_branch) when
-   * a speculative dependent's hold clears, so it lands on real `main`, not the
-   * ephemeral integration ref. Followed by the rebase + re-gate flow.
+   * Derive the PR branch's up-to-date / freshness state from the host ANCESTRY of its
+   * base/head shas (`CodeHost.fetchRef` + `compareRefs`) — `clean` (head contains base),
+   * `behind` (base advanced past head), or `unknown` (an unresolvable sha). NEVER `dirty`:
+   * conflict is surfaced by the jj rebase, not a `mergeable_state` read.
+   */
+  readFreshness(): Promise<PullRequestMergeability>;
+  /**
+   * The PR's current BASE branch name — read for the speculative stacked-PR retarget
+   * walk's `fromBase` (a forge-PR-shaped read that belongs to the §7-deferred
+   * speculative-retarget cleanup, NOT the freshness coupling). Returns `""` when the
+   * base cannot be read.
+   */
+  readBaseBranch(): Promise<string>;
+  /**
+   * §2c step 3: re-point the PR's base to `newBase` (default_branch) when a speculative
+   * dependent's hold clears, so it lands on real `main`. Routed through the best-effort
+   * `VisibilityProjection.retargetChangeRequest` (decomposition PR-7 / §5h item 3) — the
+   * base re-point is a forge-UI mirror op, not a host-decision.
    */
   retargetBase(newBase: string): Promise<void>;
 }

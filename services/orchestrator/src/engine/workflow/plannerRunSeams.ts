@@ -12,7 +12,8 @@ import type { SpecQualityAnswerer } from "../forge/specQuality/index.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
 import type { PlannerRunContext, RunPlannerLoopInput } from "./plannerRun.js";
 import type { TriageSpecValidator } from "./loopFindings.js";
-import type { NativeQueueEnqueuer } from "./reviewMerge/index.js";
+import type { MergeForRunInput, NativeQueueEnqueuer } from "./reviewMerge/index.js";
+import { buildInLoopBaseShiftRebaseHook } from "../merge/inLoopBaseShift.js";
 
 /**
  * the optional lifecycle-writer seam for a sub-stage input — the
@@ -49,6 +50,33 @@ export function loopConfigSeam(
     ...(context.creditUsdRate !== undefined && { creditUsdRate: context.creditUsdRate }),
     specValidator: { validator: specValidator },
   };
+}
+
+/**
+ * THE ONE BASE-SHIFT HANDLER seam (§7 / decomposition PR-7 §5h): the in-loop `direct_merge`
+ * `behind` rebase hook. Production omits `input.baseShiftRebase` → wire the live
+ * `BaseShiftCoordinator` (the SAME unified jj rebase the native_queue DRIVE uses), making the
+ * base-shift UNCONDITIONAL across every land-driving caller (so the legacy server-side
+ * update-branch fallback is gone). A no-DB unit run injects `input.baseShiftRebase` so it
+ * never allocates a runner. The runner allocator / SSH / identity are the SAME this run holds.
+ */
+export function baseShiftRebaseSeam(
+  context: PlannerRunContext,
+  input: RunPlannerLoopInput,
+): NonNullable<MergeForRunInput["baseShiftRebase"]> {
+  return (
+    input.baseShiftRebase ??
+    buildInLoopBaseShiftRebaseHook({
+      pool: input.pool,
+      vcsProvider: input.vcsProvider,
+      secrets: input.secrets,
+      allocator: input.allocator,
+      ssh: input.ssh,
+      identitySecretRef: context.identitySecretRef,
+      ...(input.githubAppMinter !== undefined && { githubAppMinter: input.githubAppMinter }),
+      ...writerSeam(input),
+    })
+  );
 }
 
 // App-first push/PR-create credential seam (clone-path parity): mint the App token when installed, else the static ref.

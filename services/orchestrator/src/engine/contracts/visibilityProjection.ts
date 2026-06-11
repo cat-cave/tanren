@@ -53,6 +53,12 @@ export interface RetargetChangeRequestInput {
   newBaseBranch: string;
 }
 
+/** Input to reading an external change request's current base branch. */
+export interface ReadChangeRequestBaseInput {
+  repoFullName: string;
+  changeRequestNumber: number;
+}
+
 /**
  * Input to opening a best-effort tracking issue on the forge — the home for the
  * post-merge-failure tracking issue (the regression note filed when the post-merge
@@ -93,6 +99,14 @@ export interface VisibilityProjection {
   /** Retarget the external change request's base. Optional + best-effort. */
   retargetChangeRequest?(input: RetargetChangeRequestInput): Promise<void>;
   /**
+   * Read the external change request's CURRENT base branch — the speculative stacked-PR
+   * retarget walk's `fromBase` (it tracks the live forge base across walks). Optional +
+   * best-effort: a host that omits it leaves the walk to re-derive on the next ancestor
+   * merge (the base re-point is a cosmetic forge mirror — the land targets the real
+   * default branch regardless).
+   */
+  readChangeRequestBase?(input: ReadChangeRequestBaseInput): Promise<string>;
+  /**
    * Open a best-effort tracking issue on the forge (the post-merge-failure
    * regression note). Optional + best-effort: a host with no issue support simply
    * does not provide it → the safe surface resolves it `skipped`, never an error.
@@ -123,6 +137,7 @@ export interface SafeVisibilityProjection {
   publishGate(input: PublishGateInput): Promise<ProjectionOutcome<void>>;
   publishReview(input: PublishReviewInput): Promise<ProjectionOutcome<void>>;
   retargetChangeRequest(input: RetargetChangeRequestInput): Promise<ProjectionOutcome<void>>;
+  readChangeRequestBase(input: ReadChangeRequestBaseInput): Promise<ProjectionOutcome<string>>;
   openTrackingIssue(input: TrackingIssueInput): Promise<ProjectionOutcome<ProjectedTrackingIssue>>;
   markChangeRequestReady(input: MarkChangeRequestReadyInput): Promise<ProjectionOutcome<void>>;
 }
@@ -154,6 +169,7 @@ export function harden(raw: VisibilityProjection): SafeVisibilityProjection {
     publishGate: (input) => severed(raw.publishGate?.bind(raw), input),
     publishReview: (input) => severed(raw.publishReview?.bind(raw), input),
     retargetChangeRequest: (input) => severed(raw.retargetChangeRequest?.bind(raw), input),
+    readChangeRequestBase: (input) => severed(raw.readChangeRequestBase?.bind(raw), input),
     openTrackingIssue: (input) => severed(raw.openTrackingIssue?.bind(raw), input),
     markChangeRequestReady: (input) => severed(raw.markChangeRequestReady?.bind(raw), input),
   };
