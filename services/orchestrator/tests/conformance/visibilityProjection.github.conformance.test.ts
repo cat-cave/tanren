@@ -23,7 +23,10 @@ import { describeVisibilityProjectionConformance } from "./visibilityProjectionC
 const REPO_FULL_NAME = "cat-cave/apex";
 const PR_NUMBER = 7;
 const PR_URL = "https://github.com/cat-cave/apex/pull/7";
+const PR_NODE_ID = "PR_kwDOabc123";
 const HEAD_SHA = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
+const ISSUE_NUMBER = 42;
+const ISSUE_URL = "https://github.com/cat-cave/apex/issues/42";
 
 const ok = (body: unknown): GitHubHttpResponse => ({ status: 200, body });
 
@@ -35,8 +38,9 @@ function fakeToken(): ResolvedVcsToken {
 /**
  * A scripted GitHub HTTP transport answering exactly the endpoints the projection
  * exercises: PR find (none) + create (201), commit-status post (201), review submit
- * (201), and the base-retarget PATCH (200). Routes on method + path so the suite can
- * call operations in any order. Only the fields the impl reads are populated.
+ * (201), the base-retarget PATCH (200), the tracking-issue POST (201), and the
+ * mark-ready flow (PR node-id GET 200 + GraphQL mutation 200). Routes on method +
+ * path so the suite can call operations in any order. Only fields the impl reads.
  */
 class SuccessGitHubHttp implements GitHubHttpClient {
   async request(input: GitHubHttpRequest): Promise<GitHubHttpResponse> {
@@ -58,6 +62,17 @@ class SuccessGitHubHttp implements GitHubHttpClient {
     if (input.method === "PATCH" && /\/pulls\/\d+$/u.test(path)) {
       const base = (input.body as { base?: unknown } | undefined)?.base;
       return ok({ number: PR_NUMBER, base: { ref: typeof base === "string" ? base : "main" } });
+    }
+    // openTrackingIssue: POST /issues → 201 with the issue number + html_url.
+    if (input.method === "POST" && path.endsWith("/issues")) {
+      return { status: 201, body: { number: ISSUE_NUMBER, html_url: ISSUE_URL } };
+    }
+    // markChangeRequestReady: GET /pulls/{n} (node id) then POST /graphql (mutation).
+    if (input.method === "GET" && /\/pulls\/\d+$/u.test(path)) {
+      return ok({ number: PR_NUMBER, node_id: PR_NODE_ID });
+    }
+    if (input.method === "POST" && path === "/graphql") {
+      return ok({ data: { markPullRequestReadyForReview: { pullRequest: { id: PR_NODE_ID } } } });
     }
     throw new Error(`unexpected GitHub request: ${input.method} ${input.path}`);
   }
@@ -117,6 +132,24 @@ describe("GitHubVisibilityProjection success path (best-effort surface returns p
       repoFullName: REPO_FULL_NAME,
       changeRequestNumber: PR_NUMBER,
       newBaseBranch: "main",
+    });
+    expect(outcome.kind).toBe("projected");
+  });
+
+  it("openTrackingIssue files an issue and returns the projected handle", async () => {
+    const outcome = await makeSafe().openTrackingIssue({
+      repoFullName: REPO_FULL_NAME,
+      title: "post-merge regression",
+      body: "the post-merge gate on the default branch failed",
+      labels: ["regression"],
+    });
+    expect(outcome).toEqual({ kind: "projected", value: { url: ISSUE_URL, number: ISSUE_NUMBER } });
+  });
+
+  it("markChangeRequestReady un-drafts the PR mirror and returns projected", async () => {
+    const outcome = await makeSafe().markChangeRequestReady({
+      repoFullName: REPO_FULL_NAME,
+      changeRequestNumber: PR_NUMBER,
     });
     expect(outcome.kind).toBe("projected");
   });

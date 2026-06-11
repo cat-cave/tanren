@@ -54,6 +54,30 @@ export interface RetargetChangeRequestInput {
 }
 
 /**
+ * Input to opening a best-effort tracking issue on the forge — the home for the
+ * post-merge-failure tracking issue (the regression note filed when the post-merge
+ * CI on the default branch fails). Carries only non-secret, code-controlled fields.
+ */
+export interface TrackingIssueInput {
+  repoFullName: string;
+  title: string;
+  body: string;
+  labels?: ReadonlyArray<string>;
+}
+
+/** The opened tracking issue handle (a best-effort, human-facing artifact). */
+export interface ProjectedTrackingIssue {
+  url: string;
+  number: number;
+}
+
+/** Input to un-drafting (marking ready) the external change request mirror. */
+export interface MarkChangeRequestReadyInput {
+  repoFullName: string;
+  changeRequestNumber: number;
+}
+
+/**
  * The RAW best-effort projection impl — a host provides any subset of these (or
  * none). This is NOT the call surface: callers never hold a `VisibilityProjection`
  * directly. Each method MAY reject (it talks to an external forge); `harden` is what
@@ -68,6 +92,17 @@ export interface VisibilityProjection {
   publishReview?(input: PublishReviewInput): Promise<void>;
   /** Retarget the external change request's base. Optional + best-effort. */
   retargetChangeRequest?(input: RetargetChangeRequestInput): Promise<void>;
+  /**
+   * Open a best-effort tracking issue on the forge (the post-merge-failure
+   * regression note). Optional + best-effort: a host with no issue support simply
+   * does not provide it → the safe surface resolves it `skipped`, never an error.
+   */
+  openTrackingIssue?(input: TrackingIssueInput): Promise<ProjectedTrackingIssue>;
+  /**
+   * Un-draft the external change request mirror (mark it ready for review).
+   * Optional + best-effort: a host that never drafts the mirror simply omits it.
+   */
+  markChangeRequestReady?(input: MarkChangeRequestReadyInput): Promise<void>;
 }
 
 /** The recorded outcome of a projection attempt — a NOTE, never a gate. */
@@ -88,6 +123,8 @@ export interface SafeVisibilityProjection {
   publishGate(input: PublishGateInput): Promise<ProjectionOutcome<void>>;
   publishReview(input: PublishReviewInput): Promise<ProjectionOutcome<void>>;
   retargetChangeRequest(input: RetargetChangeRequestInput): Promise<ProjectionOutcome<void>>;
+  openTrackingIssue(input: TrackingIssueInput): Promise<ProjectionOutcome<ProjectedTrackingIssue>>;
+  markChangeRequestReady(input: MarkChangeRequestReadyInput): Promise<ProjectionOutcome<void>>;
 }
 
 /** Invoke one optional raw projection method through the best-effort severance. */
@@ -117,5 +154,7 @@ export function harden(raw: VisibilityProjection): SafeVisibilityProjection {
     publishGate: (input) => severed(raw.publishGate?.bind(raw), input),
     publishReview: (input) => severed(raw.publishReview?.bind(raw), input),
     retargetChangeRequest: (input) => severed(raw.retargetChangeRequest?.bind(raw), input),
+    openTrackingIssue: (input) => severed(raw.openTrackingIssue?.bind(raw), input),
+    markChangeRequestReady: (input) => severed(raw.markChangeRequestReady?.bind(raw), input),
   };
 }
