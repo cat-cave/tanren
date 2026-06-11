@@ -49,6 +49,7 @@ import {
   writerSeam,
 } from "./plannerRunAdapters.js";
 import { prepareRunWorkspace, type BootstrapStepInput, type CommitBootstrapStepInput } from "./plannerRunWorkspace.js";
+import type { EagerBaseNodeUpsert } from "./plannerRunJjLocalBootstrap.js";
 import {
   applyScopedRunCredentials,
   buildFinalizeRunState,
@@ -214,6 +215,12 @@ export interface RunPlannerLoopInput {
   resolveConflict?: ConflictResolverHook;
   // native_queue: enters a ready run into the native merge queue (→ mergeForRun).
   nativeQueueEnqueuer?: NativeQueueEnqueuer;
+  // WS-A PR-8 (walker-jj-local-integration-design.md §2.3, fork F4): OBSERVE-ONLY — the
+  // port the jj-local dependent bootstrap UPSERTs its `eager_base` integration node
+  // through (the proof-reuse substrate the batch path's `merge_batch` node shares). It
+  // NEVER gates the run; a failure is loud-logged + swallowed. Built by the worker from
+  // its real pool (`buildEagerBaseNodeUpsert`); absent on unit paths ⇒ no node write.
+  eagerBaseNodeUpsert?: EagerBaseNodeUpsert;
   // Max review→rework re-entries before the run halts pending operator action.
   maxReviewReworks?: number;
   // Plane B: the PROJECT's dev+test app env — env vars + secrets the

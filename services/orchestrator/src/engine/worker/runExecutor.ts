@@ -31,7 +31,7 @@ import type { EscapeHatches } from "../config/index.js";
 import { CostRecorder } from "../costs/recorder.js";
 import type { VcsProvider } from "../contracts/vcsProvider.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
-import { buildNativeQueueEnqueuer } from "../merge/coordinatorBuild.js";
+import { buildEagerBaseNodeUpsert, buildNativeQueueEnqueuer } from "./runWorkflowPorts.js";
 import { createLogger, finalizeRunRecoverable } from "./runFinalize.js";
 import { classifyRunFailure } from "./runFailureClassifier.js";
 import { startHeartbeat, type HeartbeatMiss } from "./runHeartbeat.js";
@@ -301,6 +301,10 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
         // native merge queue (the coordinator drives the actual merge). Built from
         // the worker's real pool so the queue write is RLS-scoped.
         nativeQueueEnqueuer: buildNativeQueueEnqueuer(deps.pool),
+        // WS-A PR-8: OBSERVE-ONLY — the jj-local dependent bootstrap records its
+        // `eager_base` integration node (the proof-reuse substrate) through this
+        // org-scoped UPSERT over the worker's real pool. It never gates the run.
+        eagerBaseNodeUpsert: buildEagerBaseNodeUpsert(deps.pool),
       }),
     );
     await deps.jobQueue.complete(job.id);
