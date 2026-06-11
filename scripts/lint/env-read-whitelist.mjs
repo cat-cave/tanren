@@ -72,7 +72,6 @@ const NON_TANREN_ENV_ALLOWLIST = new Map([
   ["MERGE_AUTHORITY_LIVE", "documented post-apex §7 kill-switch deletion"],
   ["CONFLICT_RESOLVER_JJ_LIVE", "documented post-apex §7 kill-switch deletion"],
   ["BASE_SHIFT_LIVE", "documented post-apex §7 kill-switch deletion"],
-  ["INTEGRATION_NODES_DRIVE", "documented post-apex §7 kill-switch deletion"],
 ]);
 
 // Files allowed to read `TANREN_*` directly. The envSchema files are the intended

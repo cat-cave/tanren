@@ -74,9 +74,8 @@ export function resolveAncestorStack(run: AncestorStackRunRow): AncestorStack {
 // This is the pure DAG-resolve previously inline in `PgSpeculativeIntegrator`
 // (`speculativeIntegrator.ts` `loadAncestorBranches` + the ordering loop). The
 // per-ancestor `headSha` is NOT resolved here — it is captured at assembly time by
-// the caller (today the `VcsProvider.buildIntegrationBranch` build, tomorrow the
-// jj-local assembly), so this resolver returns the `{ specId, runId, branch }`
-// triples and the caller zips in `headSha`.
+// the caller (the jj-local integration assembly), so this resolver returns the
+// `{ specId, runId, branch }` triples and the caller zips in `headSha`.
 
 /**
  * One resolved unmerged ancestor — its (spec, run) and the PR-head `branch`, in

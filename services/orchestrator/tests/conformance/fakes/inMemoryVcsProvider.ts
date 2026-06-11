@@ -7,7 +7,6 @@
 import {
   CONFORMANCE_ABSENT_BRANCH,
   CONFORMANCE_ABSENT_FILE,
-  CONFORMANCE_ANCESTOR_CONFLICT,
   CONFORMANCE_BASE_BRANCH,
   CONFORMANCE_BEHIND_PR_NUMBER,
   CONFORMANCE_CONFLICT_PR_NUMBER,
@@ -33,8 +32,6 @@ import {
 } from "../vcsProviderConformance.js";
 import type {
   ActorIdentity,
-  BuildIntegrationBranchInput,
-  BuildIntegrationBranchResult,
   CreatedIssue,
   CreatedRepository,
   CreateIssueInput,
@@ -199,32 +196,6 @@ export class InMemoryVcsProvider implements VcsProvider {
       return { outcome: "conflict", message: "merge conflict" };
     }
     return { outcome: "up_to_date", message: "already up to date" };
-  }
-  async buildIntegrationBranch(input: BuildIntegrationBranchInput): Promise<BuildIntegrationBranchResult> {
-    // Merge ancestors in order until one matches the well-known conflict ancestor
-    // — that one collides with whatever was integrated before it.
-    const merged: string[] = [];
-    for (const ancestor of input.ancestors) {
-      if (ancestor.specId === CONFORMANCE_ANCESTOR_CONFLICT.specId) {
-        const otherSpecId = merged.at(-1) ?? input.baseBranch;
-        return {
-          outcome: "conflict",
-          integrationBranch: input.integrationBranch,
-          mergedAncestors: merged,
-          ancestorHeadShas: Object.fromEntries(merged.map((id) => [id, `sha-${id}`])),
-          conflictBetween: { specId: ancestor.specId, otherSpecId },
-          message: `ancestor ${ancestor.specId} conflicts with ${otherSpecId}`,
-        };
-      }
-      merged.push(ancestor.specId);
-    }
-    return {
-      outcome: "integrated",
-      integrationBranch: input.integrationBranch,
-      mergedAncestors: merged,
-      ancestorHeadShas: Object.fromEntries(merged.map((id) => [id, `sha-${id}`])),
-      message: `integrated ${merged.length} ancestor(s)`,
-    };
   }
   /** Recorded retargets/deletes so the conformance suite can assert them. */
   readonly retargets: Array<{ prNumber: number; newBase: string }> = [];

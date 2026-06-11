@@ -1,9 +1,8 @@
 // JJ-LOCAL INTEGRATION (tanren-owns-the-engine.md §3 — the one unified run model, §7 —
 // "the server-side integration-branch build + 409 handling" is deleted), Wave-3 /
-// Slice-3b. REPLACES `PgSpeculativeIntegrator.buildIntegration` / the batch-checker's
-// `VcsProvider.buildIntegrationBranch` (the server-side `tanren/integ`/`tanren/batch`
-// host ref assembled via the 409-prone GitHub `/merges` API) with a LOCAL integration
-// over A1's `buildLiveJjWorkspace`:
+// Slice-3b. The SOLE integration assembler: a LOCAL integration over A1's
+// `buildLiveJjWorkspace`, replacing the deleted server-side host-ref build (the
+// `tanren/integ`/`tanren/batch` ref assembled via the 409-prone GitHub `/merges` API):
 //
 //   1. Open ONE live jj workspace on the base branch (jj's `git clone --colocate`
 //      fetches the base + every member bookmark as `<branch>@origin`).

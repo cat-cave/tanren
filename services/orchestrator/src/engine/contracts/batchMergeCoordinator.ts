@@ -8,10 +8,9 @@
 //      the queue's eligibility + ordering: `isEligible` + `compareEntries`), capped
 //      by a config knob (never silently truncated — a cap is LOGGED).
 //   2. BATCH-CHECKS the PROSPECTIVE MERGED STATE — `default_branch + batch PRs`
-//      speculatively merged in DAG order (reuse the SpeculativeIntegrator /
-//      `buildIntegrationBranch`), then runs the CI/gate against that integration ref
-//      (the `VcsProvider` CI seam). It is a SPECULATIVE check — it NEVER touches
-//      `default_branch`.
+//      integrated in DAG order over the jj-local integration node, then runs the
+//      native CI/gate against that assembled state. It is a SPECULATIVE check — it
+//      NEVER touches `default_branch`.
 //   3. On PASS — the batch is validated as a combined unit → the coordinator drives
 //      its entries' real merges in DAG order through the native queue's drive path (no
 //      re-surprises). Serialization + the native queue's ordering/lease guarantees still hold
@@ -266,9 +265,9 @@ export type BatchCheckVerdict =
 /**
  * Speculatively integrate the given entries (in the supplied DAG order) onto
  * `default_branch` and run the CI/gate against the prospective merged tree. The
- * production impl reuses the SpeculativeIntegrator (`buildIntegrationBranch`)
- * to assemble the ephemeral integration ref, then the VcsProvider CI seam to check
- * it. It NEVER touches `default_branch` — only the ephemeral batch-integration ref.
+ * production impl assembles the prospective merged state over the jj-local
+ * integration node, then runs the native gate over it (proof-reuse where a recorded
+ * passing proof matches). It NEVER touches `default_branch`.
  * An empty entry list checks the BASE (`default_branch`) alone — which passes (the
  * base is green) — so the bisect's `checkPrefix(0)` invariant holds without a special
  * case. Tests inject a fake that scripts which entry-sets pass/fail (modelling a

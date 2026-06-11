@@ -23,7 +23,6 @@ import {
   CONFORMANCE_BASE_BRANCH,
   CONFORMANCE_ACTOR_ID,
   CONFORMANCE_ACTOR_LOGIN,
-  CONFORMANCE_ANCESTOR_CONFLICT,
   CONFORMANCE_BEHIND_PR_NUMBER,
   CONFORMANCE_DIRTY_PR_NUMBER,
   CONFORMANCE_EXISTING_REPO_NAME,
@@ -138,9 +137,7 @@ class RoutingGitHubHttp implements GitHubHttpClient {
     if (input.method === "GET" && path.endsWith("/commits")) {
       return ok([{ author: { login: "author-bot" }, committer: { login: "author-bot" } }]);
     }
-    // buildIntegrationBranch: resolve the base ref sha, (re)create the
-    // ephemeral integration ref, then merge each ancestor branch. The conflict
-    // ancestor's branch yields a 409 from the merges endpoint.
+    // readBranchHeadSha / readBranchChecks resolve a branch's HEAD sha.
     if (input.method === "GET" && /\/git\/ref\/heads\//u.test(path)) {
       // readBranchHeadSha: the well-known absent branch 404s (missing ref).
       if (path.includes(encodeURIComponent(CONFORMANCE_ABSENT_BRANCH))) {
@@ -153,20 +150,9 @@ class RoutingGitHubHttp implements GitHubHttpClient {
       }
       return ok({ object: { sha: HEAD_SHA } });
     }
-    if (input.method === "POST" && path.endsWith("/git/refs")) {
-      return { status: 201, body: { ref: "refs/heads/integ" } };
-    }
-    if (input.method === "PATCH" && /\/git\/refs\/heads\//u.test(path)) {
-      return ok({ ref: "refs/heads/integ" });
-    }
     // deleteBranch (cleanup): DELETE /git/refs/heads/:branch → 204.
     if (input.method === "DELETE" && /\/git\/refs\/heads\//u.test(path)) {
       return { status: 204, body: {} };
-    }
-    if (input.method === "POST" && path.endsWith("/merges")) {
-      const head = (input.body as { head?: unknown } | undefined)?.head;
-      if (head === CONFORMANCE_ANCESTOR_CONFLICT.branch) return { status: 409, body: { message: "Merge conflict" } };
-      return { status: 201, body: { sha: "integ-merge-sha" } };
     }
     // createRepository (GREENFIELD): POST /orgs/:owner/repos. The taken name 422s
     // (already-exists → typed error); any other name creates (201) with the real
