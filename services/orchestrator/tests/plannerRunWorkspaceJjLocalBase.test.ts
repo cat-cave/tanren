@@ -138,8 +138,8 @@ describe("prepareRunWorkspace — WALKER_JJ_LOCAL_BASE base-bootstrap wiring", (
     else process.env[KEY] = prior;
   });
 
-  it("FLAG OFF + non-empty stack ⇒ the LEGACY single-ref clone (byte-identical to main)", async () => {
-    delete process.env[KEY];
+  it("FLAG OFF (=0 break-glass) + non-empty stack ⇒ the LEGACY single-ref clone", async () => {
+    process.env[KEY] = "0";
     const ssh = new DispatchingSsh();
     const prepared = await prepareRunWorkspace(
       makeInput(ssh, makeContext({ ancestorStack: STACK })),

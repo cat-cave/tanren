@@ -33,8 +33,8 @@ describe("WS-A PR-5 stacked-PR draft base", () => {
     delete process.env["WALKER_JJ_LOCAL_BASE"];
   });
 
-  it("flag OFF: base is the fallback (today's targetBranch) even with a stack", () => {
-    delete process.env["WALKER_JJ_LOCAL_BASE"];
+  it("flag OFF (=0 break-glass): base is the fallback (today's targetBranch) even with a stack", () => {
+    process.env["WALKER_JJ_LOCAL_BASE"] = "0";
     const stack: AncestorStack = [member("spec_a", "tanren/run_a"), member("spec_b", "tanren/run_b")];
     expect(resolveDraftPrBaseBranch("tanren/integ/spec_d", stack)).toBe("tanren/integ/spec_d");
   });

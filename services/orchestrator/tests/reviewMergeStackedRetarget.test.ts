@@ -175,8 +175,8 @@ describe("WS-A PR-5 flag OFF: identical to the legacy integ→default retarget",
   });
 
   it("retargets integ→default_branch (NOT a stack walk) even when a stack is present", async () => {
-    // flag OFF.
-    delete process.env["WALKER_JJ_LOCAL_BASE"];
+    // flag OFF (=0 break-glass to the legacy single-step retarget).
+    process.env["WALKER_JJ_LOCAL_BASE"] = "0";
     const pool = new ReviewMergePool("direct_merge");
     pool.speculativeBase = "tanren/integ/spec_1";
     pool.specDependsOn = ["spec_a", "spec_b"];

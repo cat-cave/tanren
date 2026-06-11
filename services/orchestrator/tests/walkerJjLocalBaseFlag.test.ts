@@ -1,14 +1,13 @@
-// The `WALKER_JJ_LOCAL_BASE` flag (walker-jj-local-integration-design.md §7 PR-4) is the
-// ONE engine flag that defaults OFF — the OPPOSITE polarity of the kill-switches. It is a
-// build-forward gate: the jj-local base path is reachable ONLY when an operator EXPLICITLY
-// sets `WALKER_JJ_LOCAL_BASE=1`. PR-7 flips the default; PR-9 removes the flag. This pins
-// the default-OFF polarity so a regression (e.g. copying the `!== "0"` kill-switch shape)
-// can't silently make the unproven path live in production.
+// The `WALKER_JJ_LOCAL_BASE` flag (walker-jj-local-integration-design.md §7 PR-7) now
+// DEFAULTS ON — the SAME polarity as the engine kill-switches. PR-7 flipped it: the
+// jj-local base path is the LIVE default, and `WALKER_JJ_LOCAL_BASE=0` is the break-glass
+// to the legacy single-ref clone (which stays until PR-9). This pins the default-ON polarity
+// so a regression can't silently revert the proven path off in production.
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { walkerJjLocalBase } from "../src/engine/dag/walkerJjLocalBaseFlag.js";
 
-describe("WALKER_JJ_LOCAL_BASE flag (default-OFF, opt-in)", () => {
+describe("WALKER_JJ_LOCAL_BASE flag (default-ON, kill-switch via `0`)", () => {
   const KEY = "WALKER_JJ_LOCAL_BASE";
   let prior: string | undefined;
 
@@ -21,20 +20,25 @@ describe("WALKER_JJ_LOCAL_BASE flag (default-OFF, opt-in)", () => {
     else process.env[KEY] = prior;
   });
 
-  it("DEFAULT OFF: unset ⇒ false (production keeps the legacy single-ref clone)", () => {
+  it("DEFAULT ON: unset ⇒ true (production takes the jj-local base path)", () => {
     delete process.env[KEY];
+    expect(walkerJjLocalBase()).toBe(true);
+  });
+
+  it("OFF only for the explicit `0` token (break-glass to the legacy single-ref clone)", () => {
+    process.env[KEY] = "0";
     expect(walkerJjLocalBase()).toBe(false);
   });
 
-  it("ON only for the explicit `1` token", () => {
+  it("ON for the explicit `1` token", () => {
     process.env[KEY] = "1";
     expect(walkerJjLocalBase()).toBe(true);
   });
 
-  it('any other value stays OFF (no kill-switch `!== "0"` polarity — a typo can\'t enable it)', () => {
-    for (const value of ["0", "true", "on", "yes", "", " 1 ", "2"]) {
+  it('any other value stays ON (kill-switch `!== "0"` polarity — only `0` reverts)', () => {
+    for (const value of ["true", "on", "yes", "", " 0 ", "2"]) {
       process.env[KEY] = value;
-      expect(walkerJjLocalBase()).toBe(false);
+      expect(walkerJjLocalBase()).toBe(true);
     }
   });
 });
