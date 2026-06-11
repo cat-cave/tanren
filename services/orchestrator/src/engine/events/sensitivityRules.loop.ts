@@ -98,4 +98,35 @@ export const specLoopStageSensitivityRules: SensitivityRule[] = [
     ["maxConsecutiveStalls", "public"],
     ["reason", "public"],
   ]),
+  // §3.3 entity-anchored Claims (the Tanren-native defect ledger). All fields are
+  // product-quality narration — entity identity (a structural hash / name) + a
+  // defect provenance link + a rationale — never secret-bearing.
+  ...rulesFor("forge.claim.anchored", [
+    ["claimId", "public"],
+    ["orgId", "public"],
+    ["projectId", "public"],
+    ["candidateId", "public"],
+    ["entityId", "public"],
+    ["entityKind", "public"],
+    ["entityName", "public"],
+  ]),
+  ...rulesFor("forge.claim.self_resolved", [
+    ["claimId", "public"],
+    ["orgId", "public"],
+    ["projectId", "public"],
+    ["entityId", "public"],
+    ["entityName", "public"],
+    ["decidability", "public"],
+    ["rationale", "public"],
+  ]),
+  ...rulesFor("forge.claim.validated", [
+    ["claimId", "public"],
+    ["orgId", "public"],
+    ["projectId", "public"],
+    ["entityId", "public"],
+    ["probeStatus", "public"],
+    ["decidability", "public"],
+    ["unexpectedUnavailable", "public"],
+    ["rationale", "public"],
+  ]),
 ];

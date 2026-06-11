@@ -56,6 +56,25 @@ export const TriageRoutableSpec = z
   .strict();
 export type TriageRoutableSpec = z.infer<typeof TriageRoutableSpec>;
 
+// §3.3 entity-anchored Claims: when a candidate targets a specific code ENTITY,
+// the triage agent reports its STRUCTURAL-HASH IDENTITY here (via `sem`'s entity
+// identity — the §2.3 staleness primitive) so the engine can anchor a DURABLE
+// Claim in the defect ledger (engine/repositories/entityClaims.ts). `entityId` is
+// the identity that survives a rename/move (NOT a file:line, which a refactor
+// orphans); `kind`/`name`/`path` are the display anchor + the raw-grep fallback
+// locator. Null/absent when the candidate has no single target entity (a broad
+// feature request, a non-code project the agent couldn't anchor) — no Claim is
+// anchored then. GENERAL: `kind` is a free-form producer label, never an enum.
+export const TriageEntityAnchor = z
+  .object({
+    entityId: z.string().min(1).max(400),
+    kind: z.string().min(1).max(80).default("unknown"),
+    name: z.string().max(200).default(""),
+    path: z.string().max(400).default(""),
+  })
+  .strict();
+export type TriageEntityAnchor = z.infer<typeof TriageEntityAnchor>;
+
 export const CandidateTriage = z
   .object({
     // dedupe: prose on whether this matches an existing spec/candidate.
@@ -74,6 +93,10 @@ export const CandidateTriage = z
     // The model fills this for an auto-routable candidate; otherwise null and the
     // candidate lands in the inbox for operator review.
     routableSpec: TriageRoutableSpec.nullable().default(null),
+    // §3.3: the target ENTITY the candidate is about, by structural-hash identity,
+    // so the engine anchors a durable Claim in the defect ledger. Null when the
+    // candidate has no single target entity (the agent could not anchor one).
+    entityAnchor: TriageEntityAnchor.nullable().default(null),
   })
   .strict();
 export type CandidateTriage = z.infer<typeof CandidateTriage>;

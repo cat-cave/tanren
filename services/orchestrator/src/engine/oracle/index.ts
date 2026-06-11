@@ -19,6 +19,20 @@ export {
 
 export { checkerPostureFor, renderRiskPostureLines, type CheckerRiskPosture } from "./checkerRiskPosture.js";
 
+// §3.3: the SELF-VALIDATING CLAIM oracle — the durable form of the §2.3 staleness
+// check. A Claim anchored to an entity self-resolves ONLY on positive evidence the
+// entity is GONE; absence of evidence keeps it open (no-silent-fallback). Pure
+// decision core; the driver (claimSelfValidationDriver.ts) runs the producer + persists.
+export {
+  validateClaimAgainstEntity,
+  type EntityProbeOutcome,
+  type EntityProbeStatus,
+  type ProbeUnavailableReason,
+  type ClaimSelfValidationVerdict,
+  type ClaimSelfValidationTransition,
+  type ClaimDecidability,
+} from "./claimSelfValidation.js";
+
 // The HOST-SIDE PRODUCER of the entity-change map (§3.1): runs `sem` read-only on
 // the runner to compute the deterministic signal natively (NOT prompt injection),
 // with the graceful `unknown` fallback when sem is absent / errors / can't parse.

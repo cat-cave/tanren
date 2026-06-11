@@ -6,6 +6,7 @@ export {
   InboxSource,
   TriageVerdict,
   TriageRoutableSpec,
+  TriageEntityAnchor,
   CandidateTriage,
   CandidateStatus,
   Candidate,
@@ -87,3 +88,21 @@ export {
   type AcceptCandidateInput,
   type AcceptCandidateResult,
 } from "./engine.js";
+
+// §3.3 entity-anchored Claims — the on-triage CONSULT + ANCHOR intake helpers.
+export {
+  anchorClaimForCandidate,
+  claimAlreadySelfResolved,
+  type ClaimEventSink,
+  type ClaimLedgerConfig,
+} from "./claimsIntake.js";
+
+// §3.3 entity-anchored Claims — the self-validation sweep driver (the durable form
+// of the §2.3 staleness check). A scheduler/audit run invokes it over a project.
+export {
+  selfValidateProjectClaims,
+  type EntityClaimProbe,
+  type ClaimValidationEventSink,
+  type SelfValidateProjectInput,
+  type SelfValidateProjectResult,
+} from "./claimSelfValidationDriver.js";

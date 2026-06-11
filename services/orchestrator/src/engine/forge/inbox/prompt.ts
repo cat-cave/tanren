@@ -37,6 +37,18 @@ const ENTITY_IDENTITY_TRIAGE_LINES: string[] = [
   "`git log`/grep search of the named symbol — that raw search is always authoritative.",
   "Never block or change your verdict merely because `sem` is unavailable.",
   "",
+  // §3.3: report the target entity's DURABLE identity so the engine anchors a
+  // standing, self-validating Claim (the durable form of this one-shot check). The
+  // structural-hash identity is what survives the refactor a line anchor loses.
+  "ENTITY ANCHOR (§3.3 defect ledger): WHEN this candidate targets a single code",
+  "entity AND you could resolve it, set `entityAnchor` to that entity's DURABLE",
+  "identity — `entityId` = its `sem` structural-hash identity (NOT a file:line; the",
+  "identity that survives a rename/move), plus its `kind` (function/class/type/…),",
+  "`name`, and `path`. This anchors a durable Claim that SELF-RESOLVES later if the",
+  "entity is refactored away. Set `entityAnchor` to null when there is no single",
+  "target entity (a broad feature request) or you could not anchor one — do NOT",
+  "fabricate an identity.",
+  "",
 ];
 
 // The root-cause triage branch for a CI-insight candidate (PR3 generative loop).
@@ -114,6 +126,8 @@ export function buildTriagePrompt(context: TriageAnswererContext): string {
     "  commit into the DAG — a `title`, a `description`, concrete `acceptanceCriteria`,",
     "  any `dependsOn` (existing spec-ids above this spec builds on), and a `priority`",
     "  (`P0`/`P1`/`P2`/`tbd`). For every other verdict, set `routableSpec` to null.",
+    "- `entityAnchor`: the target entity's durable structural-hash identity (per the",
+    "  ENTITY ANCHOR guidance above), or null when there is no single target entity.",
     "",
     "When you author the `routableSpec`, it MUST satisfy the spec-quality contract —",
     "it is gated by the spec-quality validator before it lands, and a spec that fails",
