@@ -104,6 +104,26 @@ CREATE TABLE "cost_records" (
 	CONSTRAINT "cost_records_cost_basis_check" CHECK ("cost_records"."cost_basis" IN ('ccusage','provider_response','credits','unknown','unattributed'))
 );
 --> statement-breakpoint
+CREATE TABLE "entity_claims" (
+	"id" text PRIMARY KEY NOT NULL,
+	"org_id" text NOT NULL,
+	"project_id" text NOT NULL,
+	"candidate_id" text,
+	"entity_id" text NOT NULL,
+	"entity_kind" text DEFAULT 'unknown' NOT NULL,
+	"entity_name" text DEFAULT '' NOT NULL,
+	"entity_path" text DEFAULT '' NOT NULL,
+	"status" text DEFAULT 'open' NOT NULL,
+	"decidability" text DEFAULT 'unchecked' NOT NULL,
+	"last_validation" jsonb DEFAULT '{}'::jsonb NOT NULL,
+	"last_validated_at" timestamp with time zone,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"resolved_at" timestamp with time zone,
+	CONSTRAINT "entity_claims_status_check" CHECK ("entity_claims"."status" IN ('open','self_resolved','agent_resolved','dismissed')),
+	CONSTRAINT "entity_claims_decidability_check" CHECK ("entity_claims"."decidability" IN ('decidable','needs_agent','unchecked'))
+);
+--> statement-breakpoint
 CREATE TABLE "events" (
 	"id" bigserial PRIMARY KEY NOT NULL,
 	"ts" timestamp with time zone DEFAULT now() NOT NULL,
@@ -115,7 +135,7 @@ CREATE TABLE "events" (
 	"event_type" text NOT NULL,
 	"payload" jsonb DEFAULT '{}'::jsonb NOT NULL,
 	"user_id" text,
-	CONSTRAINT "events_event_type_check" CHECK ("events"."event_type" IN ('allocator.allocated','allocator.failed','allocator.requested','app_env.runtime_attached','auditor.completed','auditor.failed','auditor.rejected','auditor.started','auditor.verdict','benchmark.accept.failed','benchmark.accept.passed','checker.completed','checker.failed','checker.rejected','checker.started','checker.verdict','ci.flaky.detected','ci.test.quarantined','ci.tests.reported','cost.ceiling_unreachable','cost.credit_rate_unknown','cost.failed','cost.overage_unobservable','cost.resolved','cost.unattributed','credential.failed','credential.loaded','credential.requested','credential.scoped_token_minted','dag.budget.paused','dag.concurrency.saturated','dag.drained','dag.spec.enqueued','dag.spec.needs_attention','dag.spec.percolated','dag.spec.percolating','dag.spec.percolation_deferred','dag.spec.percolation_replan','dag.spec.speculation_held','dag.spec.speculative','dag.spec.unstranded','demo.completed','demo.evidence.recorded','deploy.triggered','deploy.verified','gate.advisory_failed','gate.failed','gate.passed','gate.started','gate.verdict','github.branch.pushed','github.failed','github.pr.created','github.pr.merged','github.pr.ready','hello.completed','hello.ssh_completed','hello.ssh_started','hello.started','integration.provisioned','issue.opened','job.dead_lettered','merge.batch.bisecting','merge.batch.checking','merge.batch.culprit','merge.batch.infra_blocked','merge.batch.passed','merge.behind','merge.blocked','merge.completed','merge.conflict','merge.conflict.irreconcilable','merge.conflict.replan_routed','merge.conflict.resolved','merge.conflict.resolving','merge.dequeued','merge.failed','merge.integration_cleaned','merge.post_merge_failed','merge.queue.advanced','merge.queue.infra_blocked','merge.queued','merge.rebased','merge.retargeted','merge.speculative_held','notification.enqueued','notification.failed','notification.sent','planner.completed','planner.failed','planner.rerequested','planner.started','planner.subtasks.emitted','recovery.inspection_opened','recovery.replan_queued','recovery.revise_routed','recovery.rollback_queued','redaction.raw_access','release.finalized','review.approved','review.auto_approved','review.changes_requested','review.requested','run.completed','run.failed','run.queued','run.started','runner.allocated','runner.failed','runner.released','task.completed','task.failed','task.queued','task.started','usage.accounting.observed','usage.window.observed','usage.window.pressure','workspace.failed','workspace.git_captured','workspace.prepared','writer.completed','writer.failed','writer.started','writer.subtask.completed','writer.subtask.failed','writer.subtask.started'))
+	CONSTRAINT "events_event_type_check" CHECK ("events"."event_type" IN ('allocator.allocated','allocator.failed','allocator.requested','app_env.runtime_attached','audit.posture_strands_findings','auditor.completed','auditor.failed','auditor.findings_routed','auditor.rejected','auditor.started','auditor.verdict','benchmark.accept.failed','benchmark.accept.passed','checker.completed','checker.entity_risk','checker.failed','checker.rejected','checker.started','checker.verdict','ci.flaky.detected','ci.junit_missing','ci.test.quarantined','ci.tests.reported','convergence.assessed','convergence.stalled','convergence.started','cost.ceiling_unreachable','cost.credit_rate_unknown','cost.failed','cost.managed_metering_skipped','cost.notional_unpriced','cost.overage_unobservable','cost.provider_capture_failed','cost.reconcile_failed','cost.resolved','cost.unattributed','credential.configured','credential.failed','credential.github.configured','credential.loaded','credential.requested','credential.scoped_token_minted','dag.budget.milestone','dag.budget.paused','dag.concurrency.saturated','dag.config.corrupt','dag.drained','dag.spec.attention_resolved','dag.spec.enqueued','dag.spec.needs_attention','dag.spec.percolated','dag.spec.percolating','dag.spec.percolation_deferred','dag.spec.percolation_replan','dag.spec.speculation_held','dag.spec.speculative','demo.completed','demo.evidence.recorded','demoRun.started','demoRun.verdict','deploy.failed','deploy.skipped','deploy.triggered','deploy.verified','forge.claim.anchored','forge.claim.self_resolved','forge.claim.validated','gate.advisory_failed','gate.failed','gate.passed','gate.publish_failed','gate.quarantine_excluded','gate.started','gate.verdict','github.branch.pushed','github.failed','github.pr.created','github.pr.merged','github.pr.ready','hello.completed','hello.ssh_completed','hello.ssh_started','hello.started','integration.proof.reused','integration.provisioned','integration.rebase','issue.opened','job.dead_lettered','merge.batch.bisecting','merge.batch.checking','merge.batch.culprit','merge.batch.infra_blocked','merge.batch.passed','merge.behind','merge.blocked','merge.completed','merge.conflict','merge.conflict.entity_merged','merge.conflict.irreconcilable','merge.conflict.replan_routed','merge.conflict.resolved','merge.conflict.resolving','merge.dequeued','merge.failed','merge.post_merge_failed','merge.queue.advanced','merge.queue.infra_blocked','merge.queued','merge.rebased','merge.retargeted','merge.speculative_held','notification.enqueued','notification.failed','notification.sent','planner.completed','planner.failed','planner.rerequested','planner.started','planner.subtasks.emitted','recovery.inspection_opened','recovery.replan_queued','recovery.revise_routed','recovery.rollback_queued','redaction.raw_access','release.finalized','review.approved','review.auto_approved','review.changes_requested','review.requested','run.cancelled','run.completed','run.failed','run.queued','run.started','runner.allocated','runner.failed','runner.released','runner.swept','spec.cancelled','task.completed','task.failed','task.queued','task.started','template.creation.failed','template.creation.published','template.creation.started','template.registered','template.selection.no_match','template.status_changed','triage.completed','triage.started','usage.accounting.observed','usage.read_failed','usage.token_accounting_failed','usage.window.observed','usage.window.pressure','workspace.failed','workspace.git_captured','workspace.prepared','writer.completed','writer.failed','writer.started','writer.subtask.completed','writer.subtask.failed','writer.subtask.started'))
 );
 --> statement-breakpoint
 CREATE TABLE "experiment_cells" (
@@ -211,6 +231,39 @@ CREATE TABLE "inbox_sources" (
 	CONSTRAINT "inbox_sources_auto_route_check" CHECK ("inbox_sources"."auto_route" IN ('true','false'))
 );
 --> statement-breakpoint
+CREATE TABLE "integration_nodes" (
+	"node_id" text PRIMARY KEY NOT NULL,
+	"project_id" text NOT NULL,
+	"org_id" text NOT NULL,
+	"base_branch" text NOT NULL,
+	"base_sha" text NOT NULL,
+	"ref" text NOT NULL,
+	"purpose" text NOT NULL,
+	"members" jsonb DEFAULT '[]'::jsonb NOT NULL,
+	"member_key" text NOT NULL,
+	"gate_config_hash" text DEFAULT '' NOT NULL,
+	"policy_version" text DEFAULT '' NOT NULL,
+	"affected_fingerprint" text DEFAULT '' NOT NULL,
+	"head_sha" text,
+	"tree_hash" text,
+	"status" text DEFAULT 'building' NOT NULL,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
+	CONSTRAINT "integration_nodes_purpose_check" CHECK ("integration_nodes"."purpose" IN ('eager_base','merge_batch','stack_head','bisect_prefix')),
+	CONSTRAINT "integration_nodes_status_check" CHECK ("integration_nodes"."status" IN ('building','ready','landed','stale'))
+);
+--> statement-breakpoint
+CREATE TABLE "integration_proofs" (
+	"proof_id" text PRIMARY KEY NOT NULL,
+	"project_id" text NOT NULL,
+	"org_id" text NOT NULL,
+	"node_id" text NOT NULL,
+	"proof_reuse_key" text NOT NULL,
+	"verdict" text NOT NULL,
+	"evidence" jsonb DEFAULT '{}'::jsonb NOT NULL,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
 CREATE TABLE "job_queue" (
 	"id" bigserial PRIMARY KEY NOT NULL,
 	"run_id" text,
@@ -252,6 +305,15 @@ CREATE TABLE "merge_queue" (
 	CONSTRAINT "merge_queue_dequeue_reason_check" CHECK ("merge_queue"."dequeue_reason" IS NULL OR "merge_queue"."dequeue_reason" IN ('conflict','blocked','failed','superseded','needs_attention'))
 );
 --> statement-breakpoint
+CREATE TABLE "merge_queue_holds" (
+	"scope_id" text NOT NULL,
+	"kind" text NOT NULL,
+	"org_id" text NOT NULL,
+	"attempts" text DEFAULT '0' NOT NULL,
+	"last_attempt_at" timestamp with time zone DEFAULT now() NOT NULL,
+	CONSTRAINT "merge_queue_holds_kind_check" CHECK ("merge_queue_holds"."kind" IN ('recoverable_drive','batch_infra'))
+);
+--> statement-breakpoint
 CREATE TABLE "milestones" (
 	"id" text PRIMARY KEY NOT NULL,
 	"project_id" text NOT NULL,
@@ -275,7 +337,7 @@ CREATE TABLE "notification_routes" (
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
 	CONSTRAINT "notification_routes_min_severity_check" CHECK ("notification_routes"."min_severity" IN ('ok','info','warn','fail')),
-	CONSTRAINT "notification_routes_event_name_check" CHECK ("notification_routes"."event_name" IN ('allocator.allocated','allocator.failed','allocator.requested','app_env.runtime_attached','auditor.completed','auditor.failed','auditor.rejected','auditor.started','auditor.verdict','benchmark.accept.failed','benchmark.accept.passed','checker.completed','checker.failed','checker.rejected','checker.started','checker.verdict','ci.flaky.detected','ci.test.quarantined','ci.tests.reported','cost.ceiling_unreachable','cost.credit_rate_unknown','cost.failed','cost.overage_unobservable','cost.resolved','cost.unattributed','credential.failed','credential.loaded','credential.requested','credential.scoped_token_minted','dag.budget.paused','dag.concurrency.saturated','dag.drained','dag.spec.enqueued','dag.spec.needs_attention','dag.spec.percolated','dag.spec.percolating','dag.spec.percolation_deferred','dag.spec.percolation_replan','dag.spec.speculation_held','dag.spec.speculative','dag.spec.unstranded','demo.completed','demo.evidence.recorded','deploy.triggered','deploy.verified','gate.advisory_failed','gate.failed','gate.passed','gate.started','gate.verdict','github.branch.pushed','github.failed','github.pr.created','github.pr.merged','github.pr.ready','hello.completed','hello.ssh_completed','hello.ssh_started','hello.started','integration.provisioned','issue.opened','job.dead_lettered','merge.batch.bisecting','merge.batch.checking','merge.batch.culprit','merge.batch.infra_blocked','merge.batch.passed','merge.behind','merge.blocked','merge.completed','merge.conflict','merge.conflict.irreconcilable','merge.conflict.replan_routed','merge.conflict.resolved','merge.conflict.resolving','merge.dequeued','merge.failed','merge.integration_cleaned','merge.post_merge_failed','merge.queue.advanced','merge.queue.infra_blocked','merge.queued','merge.rebased','merge.retargeted','merge.speculative_held','notification.enqueued','notification.failed','notification.sent','planner.completed','planner.failed','planner.rerequested','planner.started','planner.subtasks.emitted','recovery.inspection_opened','recovery.replan_queued','recovery.revise_routed','recovery.rollback_queued','redaction.raw_access','release.finalized','review.approved','review.auto_approved','review.changes_requested','review.requested','run.completed','run.failed','run.queued','run.started','runner.allocated','runner.failed','runner.released','task.completed','task.failed','task.queued','task.started','usage.accounting.observed','usage.window.observed','usage.window.pressure','workspace.failed','workspace.git_captured','workspace.prepared','writer.completed','writer.failed','writer.started','writer.subtask.completed','writer.subtask.failed','writer.subtask.started')),
+	CONSTRAINT "notification_routes_event_name_check" CHECK ("notification_routes"."event_name" IN ('allocator.allocated','allocator.failed','allocator.requested','app_env.runtime_attached','audit.posture_strands_findings','auditor.completed','auditor.failed','auditor.findings_routed','auditor.rejected','auditor.started','auditor.verdict','benchmark.accept.failed','benchmark.accept.passed','checker.completed','checker.entity_risk','checker.failed','checker.rejected','checker.started','checker.verdict','ci.flaky.detected','ci.junit_missing','ci.test.quarantined','ci.tests.reported','convergence.assessed','convergence.stalled','convergence.started','cost.ceiling_unreachable','cost.credit_rate_unknown','cost.failed','cost.managed_metering_skipped','cost.notional_unpriced','cost.overage_unobservable','cost.provider_capture_failed','cost.reconcile_failed','cost.resolved','cost.unattributed','credential.configured','credential.failed','credential.github.configured','credential.loaded','credential.requested','credential.scoped_token_minted','dag.budget.milestone','dag.budget.paused','dag.concurrency.saturated','dag.config.corrupt','dag.drained','dag.spec.attention_resolved','dag.spec.enqueued','dag.spec.needs_attention','dag.spec.percolated','dag.spec.percolating','dag.spec.percolation_deferred','dag.spec.percolation_replan','dag.spec.speculation_held','dag.spec.speculative','demo.completed','demo.evidence.recorded','demoRun.started','demoRun.verdict','deploy.failed','deploy.skipped','deploy.triggered','deploy.verified','forge.claim.anchored','forge.claim.self_resolved','forge.claim.validated','gate.advisory_failed','gate.failed','gate.passed','gate.publish_failed','gate.quarantine_excluded','gate.started','gate.verdict','github.branch.pushed','github.failed','github.pr.created','github.pr.merged','github.pr.ready','hello.completed','hello.ssh_completed','hello.ssh_started','hello.started','integration.proof.reused','integration.provisioned','integration.rebase','issue.opened','job.dead_lettered','merge.batch.bisecting','merge.batch.checking','merge.batch.culprit','merge.batch.infra_blocked','merge.batch.passed','merge.behind','merge.blocked','merge.completed','merge.conflict','merge.conflict.entity_merged','merge.conflict.irreconcilable','merge.conflict.replan_routed','merge.conflict.resolved','merge.conflict.resolving','merge.dequeued','merge.failed','merge.post_merge_failed','merge.queue.advanced','merge.queue.infra_blocked','merge.queued','merge.rebased','merge.retargeted','merge.speculative_held','notification.enqueued','notification.failed','notification.sent','planner.completed','planner.failed','planner.rerequested','planner.started','planner.subtasks.emitted','recovery.inspection_opened','recovery.replan_queued','recovery.revise_routed','recovery.rollback_queued','redaction.raw_access','release.finalized','review.approved','review.auto_approved','review.changes_requested','review.requested','run.cancelled','run.completed','run.failed','run.queued','run.started','runner.allocated','runner.failed','runner.released','runner.swept','spec.cancelled','task.completed','task.failed','task.queued','task.started','template.creation.failed','template.creation.published','template.creation.started','template.registered','template.selection.no_match','template.status_changed','triage.completed','triage.started','usage.accounting.observed','usage.read_failed','usage.token_accounting_failed','usage.window.observed','usage.window.pressure','workspace.failed','workspace.git_captured','workspace.prepared','writer.completed','writer.failed','writer.started','writer.subtask.completed','writer.subtask.failed','writer.subtask.started')),
 	CONSTRAINT "notification_routes_enabled_check" CHECK ("notification_routes"."enabled" IN (0,1))
 );
 --> statement-breakpoint
@@ -286,6 +348,7 @@ CREATE TABLE "notification_targets" (
 	"user_id" text,
 	"channel_kind" text NOT NULL,
 	"destination" text NOT NULL,
+	"base_url" text,
 	"label" text NOT NULL,
 	"enabled" integer DEFAULT 1 NOT NULL,
 	"weekend_mute" integer DEFAULT 0 NOT NULL,
@@ -295,7 +358,8 @@ CREATE TABLE "notification_targets" (
 	CONSTRAINT "notification_targets_scope_check" CHECK ("notification_targets"."scope" IN ('org','user')),
 	CONSTRAINT "notification_targets_scope_user_check" CHECK (("notification_targets"."scope" = 'org' AND "notification_targets"."user_id" IS NULL) OR ("notification_targets"."scope" = 'user' AND "notification_targets"."user_id" IS NOT NULL)),
 	CONSTRAINT "notification_targets_enabled_check" CHECK ("notification_targets"."enabled" IN (0,1)),
-	CONSTRAINT "notification_targets_weekend_mute_check" CHECK ("notification_targets"."weekend_mute" IN (0,1))
+	CONSTRAINT "notification_targets_weekend_mute_check" CHECK ("notification_targets"."weekend_mute" IN (0,1)),
+	CONSTRAINT "notification_targets_base_url_check" CHECK ("notification_targets"."base_url" IS NULL OR "notification_targets"."base_url" ~ '^https?://')
 );
 --> statement-breakpoint
 CREATE TABLE "notifications" (
@@ -338,7 +402,7 @@ CREATE TABLE "organizations" (
 	"external_id" text NOT NULL,
 	"login" text NOT NULL,
 	"display_name" text NOT NULL,
-	"config" jsonb DEFAULT '{}'::jsonb NOT NULL,
+	"config" jsonb DEFAULT '{"version":1}'::jsonb NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
 	CONSTRAINT "organizations_kind_check" CHECK ("organizations"."kind" IN ('github_org','github_user','oidc'))
@@ -402,7 +466,7 @@ CREATE TABLE "projects" (
 	"default_branch" text DEFAULT 'main' NOT NULL,
 	"runner_image" text DEFAULT 'ghcr.io/cat-cave/tanren-runner:v0' NOT NULL,
 	"allocator" text DEFAULT 'local-docker' NOT NULL,
-	"config" jsonb DEFAULT '{}'::jsonb NOT NULL,
+	"config" jsonb DEFAULT '{"version":1}'::jsonb NOT NULL,
 	"lifecycle" text DEFAULT 'active' NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"org_id" text NOT NULL
@@ -466,12 +530,12 @@ CREATE TABLE "runs" (
 	"outcome" text,
 	"pr_url" text,
 	"user_id" text,
-	"speculative_base" text,
-	"integrated_ancestor_shas" jsonb,
 	"verified_ancestor_shas" jsonb,
 	"percolation_pending" jsonb,
+	"auth_ref" text,
+	"ancestor_stack" jsonb,
 	CONSTRAINT "runs_status_check" CHECK ("runs"."status" IN ('queued','running','halted','completed','failed','cancelled')),
-	CONSTRAINT "runs_outcome_check" CHECK ("runs"."outcome" IS NULL OR "runs"."outcome" IN ('ok','hello_complete','phase1_fixture_complete','phase2_easy_complete','phase2_medium_complete','halted','escape_hatch_hit','retry_budget_exhausted','window_exhausted','cancelled','failed'))
+	CONSTRAINT "runs_outcome_check" CHECK ("runs"."outcome" IS NULL OR "runs"."outcome" IN ('ok','halted','escape_hatch_hit','retry_budget_exhausted','convergence_stalled','window_exhausted','cancelled','failed'))
 );
 --> statement-breakpoint
 CREATE TABLE "sessions" (
@@ -539,10 +603,23 @@ CREATE TABLE "tasks" (
 	"model" text,
 	"attempt" integer DEFAULT 1 NOT NULL,
 	"user_id" text,
-	CONSTRAINT "tasks_kind_check" CHECK ("tasks"."kind" IN ('plan','write','check','audit','ci','review','merge','demo','forge')),
+	CONSTRAINT "tasks_kind_check" CHECK ("tasks"."kind" IN ('plan','write','check','audit','ci','review','merge','demo','forge','triage','convergence')),
 	CONSTRAINT "tasks_status_check" CHECK ("tasks"."status" IN ('queued','claimed','running','done','failed','cancelled')),
 	CONSTRAINT "tasks_agent_kind_check" CHECK ("tasks"."agent_kind" IN ('system','operator','writer','answerer','forge_template','ci_poller')),
 	CONSTRAINT "tasks_outcome_check" CHECK ("tasks"."outcome" IS NULL OR "tasks"."outcome" IN ('passed','ok','pending','failed','rejected_by_checker','rejected_by_auditor','timed_out','crashed','window_exhausted','cancelled'))
+);
+--> statement-breakpoint
+CREATE TABLE "templates" (
+	"id" text PRIMARY KEY NOT NULL,
+	"org_id" text NOT NULL,
+	"repo_ref" text NOT NULL,
+	"manifest" jsonb NOT NULL,
+	"status" text DEFAULT 'draft' NOT NULL,
+	"channel" text DEFAULT 'lts' NOT NULL,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
+	CONSTRAINT "templates_status_check" CHECK ("templates"."status" IN ('draft','validated','degraded','official')),
+	CONSTRAINT "templates_channel_check" CHECK ("templates"."channel" IN ('lts','nightly'))
 );
 --> statement-breakpoint
 CREATE TABLE "users" (
@@ -555,6 +632,21 @@ CREATE TABLE "users" (
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
 	CONSTRAINT "users_provider_check" CHECK ("users"."provider" IN ('github_oauth','oidc','local_dev'))
+);
+--> statement-breakpoint
+CREATE TABLE "webhook_events" (
+	"id" text PRIMARY KEY NOT NULL,
+	"source_id" text NOT NULL,
+	"org_id" text NOT NULL,
+	"event_type" text NOT NULL,
+	"delivery_id" text,
+	"payload" jsonb DEFAULT '{}'::jsonb NOT NULL,
+	"status" text DEFAULT 'received' NOT NULL,
+	"attempts" integer DEFAULT 0 NOT NULL,
+	"last_error" text,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
+	CONSTRAINT "webhook_events_status_check" CHECK ("webhook_events"."status" IN ('received','processed','failed','dead_lettered'))
 );
 --> statement-breakpoint
 CREATE TABLE "workflow_insights" (
@@ -583,6 +675,9 @@ ALTER TABLE "ci_test_results" ADD CONSTRAINT "ci_test_results_org_id_organizatio
 ALTER TABLE "ci_test_results" ADD CONSTRAINT "ci_test_results_run_id_runs_run_id_fk" FOREIGN KEY ("run_id") REFERENCES "public"."runs"("run_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "cost_records" ADD CONSTRAINT "cost_records_task_id_tasks_task_id_fk" FOREIGN KEY ("task_id") REFERENCES "public"."tasks"("task_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "cost_records" ADD CONSTRAINT "cost_records_org_id_organizations_id_fk" FOREIGN KEY ("org_id") REFERENCES "public"."organizations"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "entity_claims" ADD CONSTRAINT "entity_claims_org_id_organizations_id_fk" FOREIGN KEY ("org_id") REFERENCES "public"."organizations"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "entity_claims" ADD CONSTRAINT "entity_claims_project_id_projects_project_id_fk" FOREIGN KEY ("project_id") REFERENCES "public"."projects"("project_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "entity_claims" ADD CONSTRAINT "entity_claims_candidate_id_candidates_id_fk" FOREIGN KEY ("candidate_id") REFERENCES "public"."candidates"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "events" ADD CONSTRAINT "events_org_id_organizations_id_fk" FOREIGN KEY ("org_id") REFERENCES "public"."organizations"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "experiment_cells" ADD CONSTRAINT "experiment_cells_experiment_id_experiments_experiment_id_fk" FOREIGN KEY ("experiment_id") REFERENCES "public"."experiments"("experiment_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "experiment_trials" ADD CONSTRAINT "experiment_trials_cell_id_experiment_cells_cell_id_fk" FOREIGN KEY ("cell_id") REFERENCES "public"."experiment_cells"("cell_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
@@ -596,11 +691,17 @@ ALTER TABLE "forge_threads" ADD CONSTRAINT "forge_threads_project_id_projects_pr
 ALTER TABLE "forge_turns" ADD CONSTRAINT "forge_turns_thread_id_forge_threads_id_fk" FOREIGN KEY ("thread_id") REFERENCES "public"."forge_threads"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "inbox_sources" ADD CONSTRAINT "inbox_sources_org_id_organizations_id_fk" FOREIGN KEY ("org_id") REFERENCES "public"."organizations"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "inbox_sources" ADD CONSTRAINT "inbox_sources_project_id_projects_project_id_fk" FOREIGN KEY ("project_id") REFERENCES "public"."projects"("project_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "integration_nodes" ADD CONSTRAINT "integration_nodes_project_id_projects_project_id_fk" FOREIGN KEY ("project_id") REFERENCES "public"."projects"("project_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "integration_nodes" ADD CONSTRAINT "integration_nodes_org_id_organizations_id_fk" FOREIGN KEY ("org_id") REFERENCES "public"."organizations"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "integration_proofs" ADD CONSTRAINT "integration_proofs_project_id_projects_project_id_fk" FOREIGN KEY ("project_id") REFERENCES "public"."projects"("project_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "integration_proofs" ADD CONSTRAINT "integration_proofs_org_id_organizations_id_fk" FOREIGN KEY ("org_id") REFERENCES "public"."organizations"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "integration_proofs" ADD CONSTRAINT "integration_proofs_node_id_integration_nodes_node_id_fk" FOREIGN KEY ("node_id") REFERENCES "public"."integration_nodes"("node_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "job_queue" ADD CONSTRAINT "job_queue_task_id_tasks_task_id_fk" FOREIGN KEY ("task_id") REFERENCES "public"."tasks"("task_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "merge_queue" ADD CONSTRAINT "merge_queue_run_id_runs_run_id_fk" FOREIGN KEY ("run_id") REFERENCES "public"."runs"("run_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "merge_queue" ADD CONSTRAINT "merge_queue_spec_id_specs_spec_id_fk" FOREIGN KEY ("spec_id") REFERENCES "public"."specs"("spec_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "merge_queue" ADD CONSTRAINT "merge_queue_project_id_projects_project_id_fk" FOREIGN KEY ("project_id") REFERENCES "public"."projects"("project_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "merge_queue" ADD CONSTRAINT "merge_queue_org_id_organizations_id_fk" FOREIGN KEY ("org_id") REFERENCES "public"."organizations"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "merge_queue_holds" ADD CONSTRAINT "merge_queue_holds_org_id_organizations_id_fk" FOREIGN KEY ("org_id") REFERENCES "public"."organizations"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "milestones" ADD CONSTRAINT "milestones_project_id_projects_project_id_fk" FOREIGN KEY ("project_id") REFERENCES "public"."projects"("project_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "notification_routes" ADD CONSTRAINT "notification_routes_target_id_notification_targets_id_fk" FOREIGN KEY ("target_id") REFERENCES "public"."notification_targets"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "notification_targets" ADD CONSTRAINT "notification_targets_org_id_organizations_id_fk" FOREIGN KEY ("org_id") REFERENCES "public"."organizations"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
@@ -639,6 +740,9 @@ ALTER TABLE "specs" ADD CONSTRAINT "specs_org_id_organizations_id_fk" FOREIGN KE
 ALTER TABLE "tasks" ADD CONSTRAINT "tasks_run_id_runs_run_id_fk" FOREIGN KEY ("run_id") REFERENCES "public"."runs"("run_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "tasks" ADD CONSTRAINT "tasks_org_id_organizations_id_fk" FOREIGN KEY ("org_id") REFERENCES "public"."organizations"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "tasks" ADD CONSTRAINT "tasks_parent_task_id_tasks_task_id_fk" FOREIGN KEY ("parent_task_id") REFERENCES "public"."tasks"("task_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "templates" ADD CONSTRAINT "templates_org_id_organizations_id_fk" FOREIGN KEY ("org_id") REFERENCES "public"."organizations"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "webhook_events" ADD CONSTRAINT "webhook_events_source_id_inbox_sources_id_fk" FOREIGN KEY ("source_id") REFERENCES "public"."inbox_sources"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "webhook_events" ADD CONSTRAINT "webhook_events_org_id_organizations_id_fk" FOREIGN KEY ("org_id") REFERENCES "public"."organizations"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "workflow_insights" ADD CONSTRAINT "workflow_insights_project_id_projects_project_id_fk" FOREIGN KEY ("project_id") REFERENCES "public"."projects"("project_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "workflow_insights" ADD CONSTRAINT "workflow_insights_acknowledged_by_users_id_fk" FOREIGN KEY ("acknowledged_by") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 CREATE INDEX "api_tokens_user_id" ON "api_tokens" USING btree ("user_id");--> statement-breakpoint
@@ -656,6 +760,11 @@ CREATE INDEX "ci_test_results_project_test" ON "ci_test_results" USING btree ("p
 CREATE INDEX "ci_test_results_run" ON "ci_test_results" USING btree ("run_id");--> statement-breakpoint
 CREATE INDEX "cost_records_org_id" ON "cost_records" USING btree ("org_id");--> statement-breakpoint
 CREATE INDEX "cost_records_org_run" ON "cost_records" USING btree ("org_id","run_id");--> statement-breakpoint
+CREATE UNIQUE INDEX "entity_claims_project_entity_candidate_unique" ON "entity_claims" USING btree ("project_id","entity_id","candidate_id");--> statement-breakpoint
+CREATE INDEX "entity_claims_org_id" ON "entity_claims" USING btree ("org_id");--> statement-breakpoint
+CREATE INDEX "entity_claims_org_project" ON "entity_claims" USING btree ("org_id","project_id");--> statement-breakpoint
+CREATE INDEX "entity_claims_project_status" ON "entity_claims" USING btree ("project_id","status");--> statement-breakpoint
+CREATE INDEX "entity_claims_candidate_id" ON "entity_claims" USING btree ("candidate_id");--> statement-breakpoint
 CREATE INDEX "events_run_id_ts" ON "events" USING btree ("run_id","ts");--> statement-breakpoint
 CREATE INDEX "events_event_type" ON "events" USING btree ("event_type");--> statement-breakpoint
 CREATE INDEX "events_org_id" ON "events" USING btree ("org_id");--> statement-breakpoint
@@ -677,12 +786,21 @@ CREATE INDEX "forge_turns_thread_id" ON "forge_turns" USING btree ("thread_id");
 CREATE INDEX "inbox_sources_org_id" ON "inbox_sources" USING btree ("org_id");--> statement-breakpoint
 CREATE INDEX "inbox_sources_project_id" ON "inbox_sources" USING btree ("project_id");--> statement-breakpoint
 CREATE UNIQUE INDEX "inbox_sources_provisioned_unique" ON "inbox_sources" USING btree ("org_id","project_id","kind") WHERE ("inbox_sources"."config"->>'managedBy') = 'integration-provisioner';--> statement-breakpoint
+CREATE INDEX "integration_nodes_org_id" ON "integration_nodes" USING btree ("org_id");--> statement-breakpoint
+CREATE INDEX "integration_nodes_org_project" ON "integration_nodes" USING btree ("org_id","project_id");--> statement-breakpoint
+CREATE UNIQUE INDEX "integration_nodes_org_member_key_unique" ON "integration_nodes" USING btree ("org_id","member_key");--> statement-breakpoint
+CREATE INDEX "integration_proofs_org_id" ON "integration_proofs" USING btree ("org_id");--> statement-breakpoint
+CREATE INDEX "integration_proofs_org_project" ON "integration_proofs" USING btree ("org_id","project_id");--> statement-breakpoint
+CREATE INDEX "integration_proofs_node_id" ON "integration_proofs" USING btree ("node_id");--> statement-breakpoint
+CREATE UNIQUE INDEX "integration_proofs_org_reuse_key_unique" ON "integration_proofs" USING btree ("org_id","proof_reuse_key");--> statement-breakpoint
 CREATE INDEX "job_queue_queued" ON "job_queue" USING btree ("task_kind","enqueued_at") WHERE "job_queue"."status" = 'queued';--> statement-breakpoint
 CREATE INDEX "job_queue_lease" ON "job_queue" USING btree ("leased_until") WHERE "job_queue"."status" = 'running';--> statement-breakpoint
 CREATE INDEX "merge_queue_org_id" ON "merge_queue" USING btree ("org_id");--> statement-breakpoint
 CREATE INDEX "merge_queue_org_project" ON "merge_queue" USING btree ("org_id","project_id");--> statement-breakpoint
 CREATE INDEX "merge_queue_org_project_status" ON "merge_queue" USING btree ("org_id","project_id","status");--> statement-breakpoint
 CREATE UNIQUE INDEX "merge_queue_active_run_unique" ON "merge_queue" USING btree ("run_id") WHERE status IN ('queued', 'merging');--> statement-breakpoint
+CREATE UNIQUE INDEX "merge_queue_holds_identity" ON "merge_queue_holds" USING btree ("org_id","scope_id","kind");--> statement-breakpoint
+CREATE INDEX "merge_queue_holds_org_id" ON "merge_queue_holds" USING btree ("org_id");--> statement-breakpoint
 CREATE UNIQUE INDEX "milestones_project_label_unique" ON "milestones" USING btree ("project_id","label");--> statement-breakpoint
 CREATE UNIQUE INDEX "milestones_project_order_unique" ON "milestones" USING btree ("project_id","order_index");--> statement-breakpoint
 CREATE UNIQUE INDEX "notification_routes_target_event_unique" ON "notification_routes" USING btree ("target_id","event_name");--> statement-breakpoint
@@ -707,6 +825,7 @@ CREATE INDEX "runners_org_id" ON "runners" USING btree ("org_id");--> statement-
 CREATE INDEX "runs_org_id" ON "runs" USING btree ("org_id");--> statement-breakpoint
 CREATE INDEX "runs_org_run" ON "runs" USING btree ("org_id","run_id");--> statement-breakpoint
 CREATE INDEX "runs_org_project" ON "runs" USING btree ("org_id","project_id");--> statement-breakpoint
+CREATE INDEX "runs_org_auth_ref" ON "runs" USING btree ("org_id","auth_ref");--> statement-breakpoint
 CREATE INDEX "sessions_user_id" ON "sessions" USING btree ("user_id");--> statement-breakpoint
 CREATE INDEX "sessions_expires_at" ON "sessions" USING btree ("expires_at");--> statement-breakpoint
 CREATE INDEX "spec_behaviors_behavior_id" ON "spec_behaviors" USING btree ("behavior_id");--> statement-breakpoint
@@ -716,23 +835,26 @@ CREATE INDEX "spec_milestones_milestone_id" ON "spec_milestones" USING btree ("m
 CREATE INDEX "specs_org_id" ON "specs" USING btree ("org_id");--> statement-breakpoint
 CREATE INDEX "tasks_org_id" ON "tasks" USING btree ("org_id");--> statement-breakpoint
 CREATE INDEX "tasks_org_run" ON "tasks" USING btree ("org_id","run_id");--> statement-breakpoint
+CREATE INDEX "templates_org_id" ON "templates" USING btree ("org_id");--> statement-breakpoint
+CREATE INDEX "templates_status" ON "templates" USING btree ("status");--> statement-breakpoint
+CREATE INDEX "templates_channel" ON "templates" USING btree ("channel");--> statement-breakpoint
 CREATE UNIQUE INDEX "users_provider_subject_unique" ON "users" USING btree ("provider","provider_subject");--> statement-breakpoint
+CREATE INDEX "webhook_events_org_id" ON "webhook_events" USING btree ("org_id");--> statement-breakpoint
+CREATE INDEX "webhook_events_source_id" ON "webhook_events" USING btree ("source_id");--> statement-breakpoint
+CREATE INDEX "webhook_events_status" ON "webhook_events" USING btree ("status");--> statement-breakpoint
 CREATE INDEX "workflow_insights_project_kind" ON "workflow_insights" USING btree ("project_id","kind","computed_at" desc);
---> statement-breakpoint
 -- ===========================================================================
 -- RLS + roles + plane-split de-privilege (hand-written tail).
 --
--- This block is the collapsed equivalent of the staged R-wave + plane-split
--- migrations (old chain 0029–0035, 0045, 0047, 0049, 0051, 0067): it creates
--- the three runtime roles, enables Row-Level Security with a deny-by-default
--- org-isolation policy on every tenant table, and applies the data-plane
--- de-privilege REVOKEs. Drizzle does not model roles/RLS/grants, so this lives
--- as hand-written SQL appended after the generated DDL above. Migrations run as
--- the OWNER (`tanren`); only the runtime query paths connect as the restricted
--- roles the policies govern.
+-- Drizzle does not model roles, Row-Level Security, or grants, so this block
+-- lives as hand-written SQL appended after the generated DDL above: it creates
+-- the three runtime roles, applies the data-plane de-privilege REVOKEs, and
+-- enables RLS with a deny-by-default org-isolation policy on every tenant
+-- table. Migrations run as the OWNER (`tanren`); only the runtime query paths
+-- connect as the restricted roles the policies govern.
 --
 -- Idempotent: every role create guards on pg_roles, every policy DROPs IF
--- EXISTS, so re-running the full migration set on an existing DB never errors.
+-- EXISTS, so re-running the migration on an existing DB never errors.
 -- ===========================================================================
 
 -- --- Role: tanren_app (restricted control-plane runtime, NOBYPASSRLS) --------
@@ -806,8 +928,8 @@ REVOKE INSERT, UPDATE, DELETE ON TABLE tasks FROM tanren_dataplane;--> statement
 -- the GUC via SET LOCAL, so a correctly-scoped query behaves exactly as before.
 -- Tables without their own org_id are scoped through their parent via EXISTS.
 -- Cross-org system tables (job_queue, users, sessions, api_tokens,
--- notifications, rate_limit_observations, org_members-adjacent) stay OUTSIDE
--- RLS. Idempotent via DROP POLICY IF EXISTS.
+-- notifications, rate_limit_observations) stay OUTSIDE RLS. Idempotent via
+-- DROP POLICY IF EXISTS.
 -- ===========================================================================
 
 -- 3a. Direct-org_id tenant tables (own org_id column = the tenant key).
@@ -820,7 +942,8 @@ BEGIN
     'personas', 'org_members', 'forge_threads', 'forge_action_proposals',
     'inbox_sources', 'candidates', 'notification_targets', 'audit_jobs',
     'merge_queue', 'post_merge_issue_claims', 'org_integrations', 'experiments',
-    'ci_test_results'
+    'ci_test_results', 'integration_nodes', 'integration_proofs',
+    'merge_queue_holds', 'webhook_events', 'entity_claims'
   ]
   LOOP
     EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);
@@ -842,7 +965,17 @@ CREATE POLICY rls_org_isolation ON organizations FOR ALL
   USING (id = current_setting('app.current_org_id', true))
   WITH CHECK (id = current_setting('app.current_org_id', true));--> statement-breakpoint
 
--- 3c. FK-scoped tenant tables (no own org_id; scoped via the parent's org_id).
+-- 3c. templates: direct org_id, WITH a cross-org-READABLE `official` tier so any
+--     org can SEED from a blessed template. The WITH CHECK keeps the write side
+--     org-owned (no official escape hatch) — an official template is authored
+--     only under the platform org that owns the row.
+ALTER TABLE templates ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
+DROP POLICY IF EXISTS rls_org_isolation ON templates;--> statement-breakpoint
+CREATE POLICY rls_org_isolation ON templates FOR ALL
+  USING (org_id = current_setting('app.current_org_id', true) OR status = 'official')
+  WITH CHECK (org_id = current_setting('app.current_org_id', true));--> statement-breakpoint
+
+-- 3d. FK-scoped tenant tables (no own org_id; scoped via the parent's org_id).
 ALTER TABLE behaviors ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
 DROP POLICY IF EXISTS rls_org_isolation ON behaviors;--> statement-breakpoint
 CREATE POLICY rls_org_isolation ON behaviors FOR ALL
