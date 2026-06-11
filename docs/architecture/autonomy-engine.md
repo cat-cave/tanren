@@ -13,23 +13,26 @@ the in-code `§`-anchored comments cite. The section anchors below (§1.x, §1a,
 §1b, §1d, §2b, §2c, §2d, §3 proof 6, §8a, §8b) are stable: ~a dozen source
 comments reference them, so the anchored sections survive at this path.
 
-> **The tanren-owns-the-engine cutover (merged, flag-on, merge paths still
-> apex-unproven).** The merge coordination described in §2 was originally built on a
-> `VcsProvider`-shaped, speculative-integration-plus-change-percolation model.
-> That model has since been **superseded and the cutover merged**: a jj (jujutsu)
-> `WorkspaceVcsCore` is the VCS core, a guaranteed fail-closed **`MergeAuthority`**
-> is the sole merge decision, a **never-discard** `BaseShiftCoordinator` rebases
-> dependent work in place (the old "supersede + regenerate" percolation that _did_
-> discard and re-plan work is replaced — not preserved), and the auditor emits
-> **P0–P3 findings** gated by an **`auditPosture`** DORA knob. These live paths are
-> **default-on behind kill-switch env vars** (`MERGE_AUTHORITY_LIVE`,
-> `CONFLICT_RESOLVER_JJ_LIVE`, `BASE_SHIFT_LIVE`, `INTEGRATION_NODES_DRIVE`) and
-> are **still apex-unproven for the merge path** — apex v32 ran live but halted at
-> scaffold-bootstrap before reaching a merge, so the jj-against-a-runner merge path
-> has not yet been exercised end-to-end; the flags are the kill-switches. §2b/§2c below
-> are rewritten to the never-discard reality; the full rationale, the unified
-> `integration_nodes` run model, and the deferred post-apex deletions are in
-> `docs/architecture/tanren-owns-the-engine.md`.
+> **The tanren-owns-the-engine cutover is COMPLETE — the single live path.** The
+> merge coordination described in §2 was originally built on a `VcsProvider`-shaped,
+> speculative-integration-plus-change-percolation model. That model has since been
+> **superseded and the cutover completed**: a jj (jujutsu) `WorkspaceVcsCore` is the
+> VCS core, a guaranteed fail-closed **`MergeAuthority`** is the sole merge decision,
+> a **never-discard** `BaseShiftCoordinator` rebases dependent work in place (the old
+> "supersede + regenerate" percolation that _did_ discard and re-plan work is gone),
+> and the auditor emits **P0–P3 findings** gated by an **`auditPosture`** DORA knob.
+> The cutover is **no longer flag-gated** — the WS-A/WS-B series deleted the
+> kill-switch env vars (`MERGE_AUTHORITY_LIVE`, `CONFLICT_RESOLVER_JJ_LIVE`,
+> `BASE_SHIFT_LIVE`, `INTEGRATION_NODES_DRIVE`, `WALKER_JJ_LOCAL_BASE`); each live
+> path is unconditional, the dependent run jj-assembles its base from the real
+> ancestor PR-head refs (no synthesized `tanren/integ` ref), and the legacy
+> `speculative_base` + `integrated_ancestor_shas` columns are dropped. These live
+> paths are **first exercised end-to-end by the next apex run** — apex v32 halted at
+> scaffold-bootstrap before reaching a merge, so a real merge through the
+> jj/`MergeAuthority` path is the open live-validation item (the engine is the single
+> path regardless). §2b/§2c below are rewritten to the never-discard reality; the
+> full rationale, the unified `integration_nodes` run model, and the residual §7
+> simplification are in `docs/architecture/tanren-owns-the-engine.md`.
 
 ## 1. Architectural principles
 
@@ -181,8 +184,8 @@ spec and what is now on the base:
 This is the principle made concrete: **the DAG knows the intent of every change,
 so a conflict is a re-planning problem, not a text-picking problem.**
 
-Post-cutover (flag-on, default), the live resolver runs over **jj first-class
-conflicts** (`conflictResolverJjLive`): a rebase that conflicts _still succeeds_
+Post-cutover (the unconditional live path), the live resolver runs over **jj
+first-class conflicts**: a rebase that conflicts _still succeeds_
 and records the conflict _in_ the commit, which the resolver then resolves — there
 is no `git merge --no-ff` + `--diff-filter=U` + `merge --abort` dance and no
 `|| true` that swallows infra/auth failures. "A conflict must never brick" is true
@@ -219,7 +222,7 @@ object is an eager dependent build, a merge-queue batch, and a stacked PR; the
 old speculative-vs-real divergence is killed).
 
 1. The dependent's branch is integrated jj-locally against its ordered ancestors
-   (`integrationNodesDrive`, flag-on). If ancestors conflict _with each other_, it
+   (the unconditional live path). If ancestors conflict _with each other_, it
    surfaces **here, early** via jj first-class conflicts — intent-preserving
    resolution (§2b) runs against it, not against poor C.
 2. C builds against the prospective merged world (the integration node's base).
@@ -253,9 +256,9 @@ changes after dependents started (a P3 patch, a reviewer edit, a new finding), i
 propagating the resolution down the stack via jj's automatic descendant rebase —
 rather than cancel-and-regenerate. It is a chain re-integration, not a rollback.
 Because work is never discarded, deeper eager chains are just more rebases, all
-useful; the `integration.*` metrics (read-side **deferred until a run reaches a merge**, see
-§7 of `tanren-owns-the-engine.md`) instrument `rebase_vs_rebuild` to _prove_
-resolution costs less than rebuild rather than assume it.
+useful; the `integration.*` metrics (read-side **built** — route + compute +
+insights, see §7/§8 of `tanren-owns-the-engine.md`) instrument `rebase_vs_rebuild`
+to _prove_ resolution costs less than rebuild rather than assume it.
 
 Severity gates _whether_ a rebase is needed promptly: a **P0/P1** finding or
 **changes-requested** on A triggers immediate re-integration; **P2/P3** changes

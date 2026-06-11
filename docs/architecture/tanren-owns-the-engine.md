@@ -1,31 +1,39 @@
 # Tanren owns the engine — jj workspace, minimal GitHub, unified runs, guaranteed merge authority
 
-> Status: **implemented, flag-on, merge paths still apex-unproven** (Waves 0–3 merged).
-> Supersedes the "speculative execution / percolation" framing in
-> `autonomy-engine.md §2c` — that doc's §2b/§2c are rewritten to this model.
-> Origin: the live apex run stalled on a merge-queue conflict the resolver never
-> engaged (run-discipline trigger); five Codex audits + the operator's reframe.
+> Status: **COMPLETE — the cutover is the single live path** (Waves 0–3 merged;
+> the WS-A/WS-B series landed the deletions). Supersedes the "speculative execution
+> / percolation" framing in `autonomy-engine.md §2c` — that doc's §2b/§2c are
+> rewritten to this model. Origin: the live apex run stalled on a merge-queue
+> conflict the resolver never engaged (run-discipline trigger); five Codex audits +
+> the operator's reframe.
 >
-> **What is DONE (merged on `main`):** the four seam contracts + conformance
+> **What is DONE (the live path on `main`):** the four seam contracts + conformance
 > suites (Wave 0); the jj `WorkspaceVcsCore`, minimal `CodeHost`, guaranteed
 > `MergeAuthority`, best-effort `VisibilityProjection` impls (Wave 1); the unified
-> `integration_nodes` run model, `MergeAuthority` as the LIVE sole merge decision,
-> the never-discard `BaseShiftCoordinator`, and audit-as-P0–P3-findings gated by
-> `auditPosture` (Wave 2); and the live jj conflict resolver, live base-shift
-> execution, and `integration_nodes` proof-reuse + jj-local integration (Wave 3),
-> all **default-on behind kill-switch env vars** (`MERGE_AUTHORITY_LIVE`,
-> `CONFLICT_RESOLVER_JJ_LIVE`, `BASE_SHIFT_LIVE`, `INTEGRATION_NODES_DRIVE`).
-> Migrations `0007`–`0011` carry the `integration_nodes` table + the new events.
+> `integration_nodes` run model, `MergeAuthority` as the sole merge decision, the
+> never-discard `BaseShiftCoordinator`, and audit-as-P0–P3-findings gated by
+> `auditPosture` (Wave 2); the live jj conflict resolver, live base-shift execution,
+> and `integration_nodes` proof-reuse + jj-local integration (Wave 3); and — in the
+> WS-A/WS-B follow-on series — the **walker/percolation → jj-local cutover** and the
+> deletion of the kill-switch flags themselves. The cutover is **no longer
+> flag-gated**: there are no `MERGE_AUTHORITY_LIVE` / `CONFLICT_RESOLVER_JJ_LIVE` /
+> `BASE_SHIFT_LIVE` / `INTEGRATION_NODES_DRIVE` / `WALKER_JJ_LOCAL_BASE` env vars —
+> each live path is unconditional. The dependent run's base is jj-assembled locally
+> from the **real ancestor PR-head refs** (`runs.ancestor_stack`); there is **no
+> orchestrator-synthesized `tanren/integ` host ref**, and the legacy
+> `runs.speculative_base` + `integrated_ancestor_shas` columns are dropped. The
+> never-discard base-shift rebase and the `MergeAuthority` + `CodeHost` CAS land are
+> the only paths. The `integration.*` metrics read-side (`rebase_vs_rebuild`) is
+> **built** — the route, the compute reducer, and the insights loader are live.
 >
-> **What is PENDING:** the live jj-against-a-runner merge path is **still
-> apex-unproven**. **apex v32 ran live but halted at scaffold-bootstrap — it never
-> reached a merge**, so the flag-on jj/merge live paths have not yet been exercised
-> end-to-end; the flags remain the kill-switches. The §7 deletions (the now-dead
-> `speculativeIntegrator`, the git-merge-abort `workspaceApplier` dance,
-> `resolveSpeculativeState`, the 26-method `VcsProvider` → 8-method minimal
-> `CodeHost`), the walker/percolation `speculativeIntegrator` → jj-local cutover,
-> and the `integration.*` metrics read-side **stay deferred until a run actually
-> reaches a merge** and proves the flag-on live paths.
+> **What remains (separate, not the cutover):** a few §7 simplifications the cutover
+> did not require — the `VcsProvider` interface is still on disk (the 26-method →
+> minimal `CodeHost` reduction is its own pass), and `resolveSpeculativeState` /
+> the stacked-PR retarget still live in the merge dispatcher. These are net-delete
+> cleanups, not gates on the live path. The live cutover paths are **first exercised
+> end-to-end by the next apex run** — apex v32 halted at scaffold-bootstrap before
+> reaching a merge, so a real merge through the jj/`MergeAuthority` path is the open
+> live-validation item (the engine is the single path regardless).
 
 ## 0. The governing principle — guaranteed-internal vs best-effort-external
 
@@ -206,6 +214,18 @@ bug-class _born_ of cancel+recreate — deleted, not fixed), inferred severity, 
 divergent base-shift handlers (→ one), and most of the GitHub-PR-shaped `VcsProvider`
 (→ an 8-method minimal `CodeHost`). **If the refactor doesn't net-delete code, it's wrong.**
 
+**Landed.** The cutover deletions are merged: the git-merge-abort conflict dance is
+gone (jj records the conflict; the live resolver runs jj-first), the server-side
+integration-branch build + 409 handling is gone (no synthesized `tanren/integ` ref —
+the dependent jj-assembles from the real ancestor PR-head refs), `PgSpeculativeIntegrator`
+
+- the percolation supersede+regenerate path + the strand reconciler are deleted, the two
+  base-shift handlers collapsed to one never-discard `BaseShiftCoordinator`, and the
+  kill-switch env vars are removed (each live path is unconditional). The net is a delete.
+  **Still on disk** as a separate, non-blocking simplification: the `VcsProvider` interface
+  (the 26-method → minimal `CodeHost` reduction is its own pass) and `resolveSpeculativeState`
+  / the stacked-PR retarget in the merge dispatcher.
+
 Guardrails (audit 8): use **jj-lib as the state authority, not CLI text-parsing**;
 `CodeHost` may host but must **never decide** freshness/conflict/gate; one
 `MergeAuthority`, never two gate authorities; preserve eager/dependent work but model it
@@ -214,10 +234,12 @@ events through an explicit compatibility read-model, not silent abandonment.
 
 ## 8. Action plan — parallel waves, audits, validation, back to apex
 
-The waves below are **merged**; the per-wave status is inline. The flag-on live
-merge paths are **still apex-unproven** — apex v32 ran but halted at
-scaffold-bootstrap before reaching a merge — and the §7 deletions stay **deferred
-until a run actually reaches a merge** (see the status header).
+The waves below are **merged**; the per-wave status is inline. The kill-switch flags
+have since been **deleted** (the WS-A/WS-B series) — each live path is unconditional,
+so "(flag-on)" below means "merged then made the single path." A real merge through
+the live jj/`MergeAuthority` path is the open live-validation item (apex v32 halted at
+scaffold-bootstrap before reaching a merge), but the engine is the single path
+regardless (see the status header).
 
 **Wave 0 — lock the design (this doc). DONE.** The four seam contracts +
 `integration_nodes` schema + `auditPosture` policy shape + the guaranteed/best-effort
@@ -234,23 +256,26 @@ retained**) · `CodeHost` (`githubCodeHost.ts`, minimal GitHub host + CAS land-t
 mergeAuthorityImpl.ts`) · `VisibilityProjection` (`githubVisibilityProjection.ts`, the
 best-effort PR/check mirror). Each was Codex-audited + gated + CI + merged.
 
-**Wave 2 — unify on the seams. DONE (flag-on).** `integration_nodes` (persisted,
+**Wave 2 — unify on the seams. DONE.** `integration_nodes` (persisted,
 observe-only first, with a compat read-model) · the unified run body (the
 speculative-vs-real divergence killed) · the never-discard `BaseShiftCoordinator`
 (jj-rebase in place replacing the percolation supersede+regenerate — the strand
-reconciler **deleted**, net −906 src LOC) · `MergeAuthority` as the LIVE sole merge
-decision (`MERGE_AUTHORITY_LIVE`) · audit-as-P0–P3-findings + `auditPosture`
+reconciler **deleted**, net −906 src LOC) · `MergeAuthority` as the sole merge
+decision · audit-as-P0–P3-findings + `auditPosture`
 (authoritative in the merge decision). Absorbed the two apex stall fixes
 (conflict-resolver-on-the-merge-path, intake-poller App→static cred) as natural
 consequences, not patches.
 
-**Wave 3 — leverage + proof. DONE (flag-on).** jj into the live conflict resolver
-(`CONFLICT_RESOLVER_JJ_LIVE`, §5-P1 closed) · live base-shift execution
-(`BASE_SHIFT_LIVE`, never-discard rebase) · `integration_nodes` proof-reuse + jj-local
-integration (`INTEGRATION_NODES_DRIVE`) · `buildLiveJjWorkspace` (jj against a live
-allocated runner). **Still pending (deferred post-apex):** the `integration.*` metrics
-read-side (prove rebase<rebuild) and the broader affected-tier gate-skipping / stacked-PR
-projection polish.
+**Wave 3 — leverage + proof. DONE.** jj into the live conflict resolver (§5-P1
+closed) · live base-shift execution (never-discard rebase) · `integration_nodes`
+proof-reuse + jj-local integration · `buildLiveJjWorkspace` (jj against a live
+allocated runner). The follow-on WS-A/WS-B series then completed the
+walker/percolation → jj-local cutover (the dependent run jj-assembles its base from
+the real ancestor PR-head refs — no synthesized `tanren/integ` ref), **deleted the
+kill-switch flags** (each path unconditional), dropped the legacy
+`speculative_base` + `integrated_ancestor_shas` columns, and **built the
+`integration.*` metrics read-side** — the `rebase_vs_rebuild` route + compute
+reducer + insights loader (prove rebase < rebuild) are live.
 
 **Between every wave: validation gates** — `just ci` + `just smoke` + the new
 conformance suites + a Codex adversarial pass on the wave's diff; nothing advanced on a
@@ -262,9 +287,10 @@ modes the audits found are gone.
 model), and `CLAUDE.md`. Code must embody the doctrine (the former doc/reality mismatch —
 "NOT discard" while the old code discarded — is itself a bug now deleted).
 
-**Back to apex (in progress):** rebuild the stack on the refactored `main` →
-re-provision (codex/github/vercel over the API) → fresh derive (v+1) → drive the
-autonomy loops. **apex v32 ran on this refactored `main` but halted at
-scaffold-bootstrap and never reached a merge**, so it did not yet exercise the
-flag-on jj/merge live paths — that proof is what the cutover is still pending on,
-and the §7 deletions wait for a run that reaches a merge.
+**Back to apex (the live-validation vehicle):** rebuild the stack on the cutover
+`main` → re-provision (codex/github/vercel over the API) → fresh derive (v+1) →
+drive the autonomy loops. apex is the single path's first end-to-end exercise:
+**apex v32 halted at scaffold-bootstrap and never reached a merge**, so a real merge
+through the live jj/`MergeAuthority` path is still the open validation item. The
+cutover itself is complete — the engine is the single path whether or not a given
+apex run reaches a merge.
