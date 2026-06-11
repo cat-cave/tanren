@@ -14,6 +14,7 @@
  */
 
 import type { Context, Hono } from "hono";
+import { formField } from "../formField.js";
 import { OrchestratorClient } from "../../api/orchestrator.js";
 import type { OrgConfig } from "../../api/types.js";
 import { loadShellContext, renderShell, type ShellDeps } from "../../app/mountShell.js";
@@ -105,8 +106,8 @@ export function mountConfigScreen(app: Hono, deps: ShellDeps): void {
   app.post("/settings/config/toggle", async (c: Context) => {
     const ctx = await loadShellContext(c, deps, { activeNavId: "settings" });
     const form = await c.req.parseBody();
-    const enable = String(form["enable"] ?? "") === "1";
-    const repo = String(form["repo"] ?? "").trim();
+    const enable = formField(form, "enable") === "1";
+    const repo = formField(form, "repo").trim();
     if (ctx.org !== undefined) {
       const client = clientFor(c, deps);
       const current = await client.getOrg(ctx.org.id);

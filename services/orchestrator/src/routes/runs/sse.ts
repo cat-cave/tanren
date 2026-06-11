@@ -37,7 +37,7 @@ import {
   type TaskTimelineEntry,
 } from "./contract.js";
 import { CostStore, EventStore } from "../../engine/repositories/index.js";
-import { RawCostRowSchema, RawEventRowSchema } from "./rowSchemas.js";
+import { RawCostRowSchema, RawEventRowSchema, scalarText } from "./rowSchemas.js";
 import { systemActor } from "../../engine/state/actor.js";
 import { fetchRunCostsForSnapshot, fetchRunEventsForSnapshot, fetchRunSummary, fetchRunTasks } from "./list.js";
 
@@ -287,7 +287,7 @@ export class SseDriver {
       // Decode the cursor-key id + event timestamp at the boundary into a real
       // Date (a malformed row throws here, never a laundered `as Date`).
       const decoded = RawEventRowSchema.parse(row);
-      const eventType = String(row["event_type"]);
+      const eventType = scalarText(row["event_type"]);
       let payload: unknown = row["payload"];
       let redactedPaths: string[] = [];
       if (isEventName(eventType)) {
@@ -303,10 +303,10 @@ export class SseDriver {
       out.push({
         id: decoded.id,
         ts: decoded.ts,
-        runId: row["run_id"] === null || row["run_id"] === undefined ? null : String(row["run_id"]),
-        taskId: row["task_id"] === null || row["task_id"] === undefined ? null : String(row["task_id"]),
-        specId: row["spec_id"] === null || row["spec_id"] === undefined ? null : String(row["spec_id"]),
-        projectId: row["project_id"] === null || row["project_id"] === undefined ? null : String(row["project_id"]),
+        runId: row["run_id"] === null || row["run_id"] === undefined ? null : scalarText(row["run_id"]),
+        taskId: row["task_id"] === null || row["task_id"] === undefined ? null : scalarText(row["task_id"]),
+        specId: row["spec_id"] === null || row["spec_id"] === undefined ? null : scalarText(row["spec_id"]),
+        projectId: row["project_id"] === null || row["project_id"] === undefined ? null : scalarText(row["project_id"]),
         eventType,
         payload,
         redactedPaths,
@@ -328,19 +328,19 @@ export class SseDriver {
       const decoded = RawCostRowSchema.parse(row);
       return {
         id: decoded.id,
-        runId: String(row["run_id"]),
-        taskId: String(row["task_id"]),
-        projectId: String(row["project_id"]),
-        cli: String(row["cli"]),
-        provider: String(row["provider"]),
-        model: String(row["model"]),
+        runId: scalarText(row["run_id"]),
+        taskId: scalarText(row["task_id"]),
+        projectId: scalarText(row["project_id"]),
+        cli: scalarText(row["cli"]),
+        provider: scalarText(row["provider"]),
+        model: scalarText(row["model"]),
         inputTokens: Number(row["input_tokens"] ?? 0),
         cachedInputTokens: Number(row["cached_input_tokens"] ?? 0),
         cacheCreationTokens: Number(row["cache_creation_tokens"] ?? 0),
         outputTokens: Number(row["output_tokens"] ?? 0),
         reasoningOutputTokens: Number(row["reasoning_output_tokens"] ?? 0),
         totalTokens: Number(row["total_tokens"] ?? 0),
-        costUsd: row["cost_usd"] === null || row["cost_usd"] === undefined ? null : String(row["cost_usd"]),
+        costUsd: row["cost_usd"] === null || row["cost_usd"] === undefined ? null : scalarText(row["cost_usd"]),
         billingMode: row["billing_mode"] as RunCostRecord["billingMode"],
         costBasis: row["cost_basis"] as RunCostRecord["costBasis"],
         recordedAt: decoded.recorded_at,

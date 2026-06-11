@@ -3,6 +3,7 @@ import type { ActorContext } from "../../auth/schemas.js";
 import { PgEventStore } from "../../engine/eventStore.js";
 import { isEventName } from "../../engine/events/index.js";
 import { emitRedactionAudit, hasElevatedScope, redactEventPayload } from "../../engine/redaction/index.js";
+import { scalarText, scalarTextOr } from "./rowSchemas.js";
 
 interface RedactEventRowsInput {
   pool: pg.Pool;
@@ -25,7 +26,7 @@ export async function redactEventRows(input: RedactEventRowsInput): Promise<{
   const eventStoreForAudit = new PgEventStore(pool);
   const auditEmissions: Promise<void>[] = [];
   const serialized = rows.map((row) => {
-    const eventType = String(row["event_type"]);
+    const eventType = scalarText(row["event_type"]);
     if (actor === undefined || !isEventName(eventType)) {
       return row;
     }
@@ -40,11 +41,11 @@ export async function redactEventRows(input: RedactEventRowsInput): Promise<{
         emitRedactionAudit({
           store: eventStoreForAudit,
           actor,
-          runId: String(row["run_id"] ?? runId),
-          specId: String(row["spec_id"] ?? ""),
-          projectId: String(row["project_id"] ?? ""),
-          taskId: row["task_id"] !== null && row["task_id"] !== undefined ? String(row["task_id"]) : undefined,
-          eventReadId: String(row["id"]),
+          runId: scalarTextOr(row["run_id"], runId),
+          specId: scalarTextOr(row["spec_id"], ""),
+          projectId: scalarTextOr(row["project_id"], ""),
+          taskId: row["task_id"] !== null && row["task_id"] !== undefined ? scalarText(row["task_id"]) : undefined,
+          eventReadId: scalarText(row["id"]),
           eventReadType: eventType,
           paths: output.rawAccessedPaths,
         }),

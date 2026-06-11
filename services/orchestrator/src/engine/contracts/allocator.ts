@@ -43,7 +43,7 @@ export function sshRunnerHandle(fields: Omit<SshRunnerHandle, "backend">): SshRu
 // backend lands.
 export function asSshRunnerHandle(handle: RunnerHandle): SshRunnerHandle {
   if (handle.backend !== "ssh") {
-    throw new Error(`expected an SSH runner handle, got backend "${handle.backend}"`);
+    throw new Error(`expected an SSH runner handle, got backend "${String(handle.backend)}"`);
   }
   return handle as SshRunnerHandle;
 }

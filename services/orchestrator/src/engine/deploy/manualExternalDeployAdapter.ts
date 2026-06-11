@@ -126,7 +126,7 @@ function declaredSurfaceKind(grant: OrgGrant): ManualExternalSurfaceKind {
   throw new DeployAdapterConfigError(
     MANUAL_EXTERNAL_ADAPTER_KIND,
     "manualExternalKind",
-    `must be 'web_url' or 'download' when set (got '${String(value)}')`,
+    `must be 'web_url' or 'download' when set (got '${JSON.stringify(value)}')`,
   );
 }
 

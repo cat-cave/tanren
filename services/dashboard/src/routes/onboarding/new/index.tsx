@@ -25,6 +25,7 @@
  */
 
 import type { Context, Hono } from "hono";
+import { formField } from "../../formField.js";
 import { OnboardingNewClient } from "../../../api/onboardingNewClient.js";
 import { OrchestratorClient } from "../../../api/orchestrator.js";
 import { emptyCapture, type InterviewCapture } from "../../../api/onboardingNewTypes.js";
@@ -119,7 +120,7 @@ export function mountGreenfieldOnboarding(app: Hono, deps: ShellDeps): void {
       return renderShell(c, ctx, { title: "tanren · new project" }, noOrgBody());
     }
     const form = await c.req.parseBody();
-    const phase = String(form["phase"] ?? "round");
+    const phase = formField(form, "phase", "round");
     const step = Number.parseInt(c.req.query("step") ?? "1", 10) || 1;
 
     if (phase === "round") {
@@ -129,7 +130,7 @@ export function mountGreenfieldOnboarding(app: Hono, deps: ShellDeps): void {
       return handleDerive(c, ctx, deps, parseCapture(form["capture"]));
     }
     // step 3 advance: the projectId rode forward on the derived-summary form.
-    const projectId = String(form["projectId"] ?? "");
+    const projectId = formField(form, "projectId");
     if (projectId === "") {
       return renderShell(
         c,
@@ -144,8 +145,8 @@ export function mountGreenfieldOnboarding(app: Hono, deps: ShellDeps): void {
 
 async function handleRound(c: Context, ctx: ShellContext, deps: ShellDeps, form: Record<string, unknown>) {
   const orgId = ctx.org!.id;
-  const round = Number.parseInt(String(form["round"] ?? "1"), 10) || 1;
-  const answer = String(form["answer"] ?? "");
+  const round = Number.parseInt(formField(form, "round", "1"), 10) || 1;
+  const answer = formField(form, "answer");
   const capture = parseCapture(form["capture"]);
   const { result } = await newClient(c, deps).round(orgId, { round, answer, capture });
   return renderShell(

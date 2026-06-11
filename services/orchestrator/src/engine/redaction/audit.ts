@@ -23,7 +23,10 @@ export interface RedactionAuditInput {
   projectId: string;
   taskId?: string;
   eventReadId: string;
-  eventReadType: EventName | string;
+  // A known event name (autocomplete-friendly) OR any string — the read event
+  // type may be an unrecognized name. `string & {}` keeps the `EventName`
+  // suggestions without collapsing the union to a bare `string`.
+  eventReadType: EventName | (string & {});
   paths: ReadonlyArray<string>;
   // Optional: override timestamp (defaults to now). Tests pin this.
   now?: () => Date;

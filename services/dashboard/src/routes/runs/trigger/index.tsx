@@ -21,6 +21,7 @@
  */
 
 import type { Context, Hono } from "hono";
+import { formField } from "../../formField.js";
 import { OrchestratorClient } from "../../../api/orchestrator.js";
 import { loadShellContext, renderShell, type ShellDeps } from "../../../app/mountShell.js";
 import { SpecListBody } from "../../../components/project/SpecCreateBody.js";
@@ -64,7 +65,7 @@ export function mountTriggerScreens(app: Hono, deps: ShellDeps): void {
     }
 
     const form = await c.req.parseBody();
-    const branchRaw = String(form["branch"] ?? "").trim();
+    const branchRaw = formField(form, "branch").trim();
     const client = clientFor(c, deps);
     const result = await client.triggerRun(ctx.org.id, projectId, specId, {
       trigger: "dashboard",

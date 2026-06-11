@@ -11,6 +11,7 @@
 // no-op — exactly-once preserved.
 
 import { runWithJobOrgId, runWithOrgScope, runWithSystemScope } from "@tanren/db";
+import { scalarTextOr } from "../data/scalarText.js";
 import type pg from "pg";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import { PgEventStore } from "../eventStore.js";
@@ -117,8 +118,8 @@ export async function finalizeRunRecoverable(
     );
     const row = updated.rows[0] as { spec_id?: unknown; project_id?: unknown } | undefined;
     if (row !== undefined) {
-      const specId = String(row.spec_id ?? "");
-      const projectId = String(row.project_id ?? "");
+      const specId = scalarTextOr(row.spec_id, "");
+      const projectId = scalarTextOr(row.project_id, "");
       // Mirror the workflow's recoverable-finalize: emit run.failed so the
       // timeline/notifications surface the worker-level failure. Best-effort —
       // never let an event write mask the original error path. PgEventStore is
