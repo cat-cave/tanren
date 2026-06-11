@@ -255,6 +255,29 @@ export const MergeConflictResolvedPayload = z
   })
   .strict();
 
+// the DETERMINISTIC entity-merge first-pass (docs/roadmap/entity-analysis-layer.md
+// §3.2): `weave`-inspired library first-pass. Emitted ONLY when the base-shift conflict was
+// resolved DETERMINISTICALLY at the entity level (two edits to DIFFERENT entities of the
+// same file) — the agent resolver was SKIPPED. It is DISTINCT from `merge.conflict.resolved`
+// (which always implies an agent/Answerer resolution) so the observability read-side can
+// measure how often the deterministic first-pass fires vs the agent. The re-gate still ran:
+// a deterministic splice never merges unverified.
+export const MergeConflictEntityMergedPayload = z
+  .object({
+    prUrl: z.string(),
+    prNumber: z.number().int(),
+    integration: MergeIntegrationMode,
+    baseBranch: z.string(),
+    mergingSpecId: z.string(),
+    /** The conflicted files the deterministic entity-merge spliced (both sides' edits landed). */
+    resolvedFiles: z.array(z.string()),
+    /** The distinct entity ids the first-pass merged (the disjoint entities both sides touched). */
+    entityIds: z.array(z.string()),
+    /** Always true — the spliced tree is published ONLY after a clean re-gate. */
+    reGated: z.boolean(),
+  })
+  .strict();
+
 export const MergeConflictIrreconcilablePayload = z
   .object({
     prUrl: z.string(),

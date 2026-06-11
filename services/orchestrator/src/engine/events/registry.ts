@@ -79,6 +79,7 @@ import {
   MergeBlockedPayload,
   MergeCompletedPayload,
   MergeConflictPayload,
+  MergeConflictEntityMergedPayload,
   MergeConflictIrreconcilablePayload,
   MergeConflictReplanRoutedPayload,
   MergeConflictResolvedPayload,
@@ -309,9 +310,10 @@ export const EventRegistry = {
   // up-to-date enforcement: branch behind base → auto-rebase + re-gate CI.
   "merge.behind": MergeBehindPayload,
   "merge.rebased": MergeRebasedPayload,
-  // intent-preserving conflict resolution: resolver invoked → resolved (re-gated) or irreconcilable (one spec re-planned, intent kept alive).
+  // intent-preserving conflict resolution: resolver invoked → resolved (re-gated) or irreconcilable (one spec re-planned, intent kept alive); §3.2 entity_merged = the deterministic different-entity-same-file splice (agent SKIPPED).
   "merge.conflict.resolving": MergeConflictResolvingPayload,
   "merge.conflict.resolved": MergeConflictResolvedPayload,
+  "merge.conflict.entity_merged": MergeConflictEntityMergedPayload,
   "merge.conflict.irreconcilable": MergeConflictIrreconcilablePayload,
   "merge.conflict.replan_routed": MergeConflictReplanRoutedPayload,
   // external-push governance posture block (strict / audit_only)

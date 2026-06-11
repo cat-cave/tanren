@@ -24,6 +24,7 @@ import {
   type JjConflictApplierFacts,
 } from "../workflow/reviewMerge/conflictResolver/jjWorkspaceApplier.js";
 import { buildDefaultConflictResolver } from "../workflow/reviewMerge/conflictResolver/index.js";
+import { buildSemEntityMergeFirstPass } from "../workflow/reviewMerge/conflictResolver/semEntityMerge.js";
 import { buildLiveJjWorkspace, type LiveJjWorkspace } from "../providers/liveJjWorkspace.js";
 import type { AncestorStack } from "./ancestorStack.js";
 import { assembleBaseShiftStackLive } from "./baseShiftStackAssembly.js";
@@ -223,6 +224,16 @@ async function runResolverOverWorkspace(input: {
   );
   const resolver = buildDefaultConflictResolver({
     applier,
+    // §3.2 the deterministic entity-merge FIRST-PASS over the SAME live jj workspace. It reads
+    // the three conflict terms marker-free (`jj file show -r <rev>`): theirs = the shifted base
+    // the rebase landed on (`applierFacts.baseRevision`), ours = the dependent's PRE-rebase head
+    // (`<headBranch>@origin`, untouched by the local rebase). A different-entity-same-file
+    // conflict splices deterministically (skipping the agent); anything not provably disjoint
+    // (or sem-absent / a same-entity edit) defers to the agent resolver below, exactly as today.
+    entityFirstPass: buildSemEntityMergeFirstPass(
+      { ssh: deps.ssh, target: live.target, workspacePath: live.workspacePath, timeoutMs },
+      { oursRev: `${ctx.headBranch}@origin`, theirsRev: applierFacts.baseRevision },
+    ),
     pool: deps.scopedPool,
     ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
     eventStore: deps.eventStore,
