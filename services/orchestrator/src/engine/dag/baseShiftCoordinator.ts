@@ -111,6 +111,15 @@ export interface BaseShiftConflictResolver {
      */
     newBaseRef: string;
     nonSpeculative: boolean;
+    /**
+     * WS-A PR-6b (walker-jj-local-integration-design.md §2.2): the RE-RESOLVED ordered
+     * ancestor stack (the SAME one the OPENER assembled). With `WALKER_JJ_LOCAL_BASE` ON +
+     * a non-empty stack, the live resolver ASSEMBLES `main + ordered ancestors` LOCALLY and
+     * gathers + re-gates the recorded conflict against the assembled head — instead of
+     * cloning the synthesized `${newBaseRef}@origin` integration ref. Empty/absent/flag-off
+     * ⇒ the EXACT current single-ref clone (the resolver still resolves against `newBaseRef`).
+     */
+    ancestorStack?: AncestorStack;
   }): Promise<ConflictResolution>;
 }
 
@@ -334,6 +343,10 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
         // speculative integration ref, or plain default_branch) — NEVER the project default.
         newBaseRef: input.newBaseRef,
         nonSpeculative: input.nonSpeculative,
+        // WS-A PR-6b (§2.2): thread the re-resolved stack the OPENER assembled so the live
+        // resolver assembles the SAME `main + ordered ancestors` LOCALLY (flag-ON) instead of
+        // cloning `${newBaseRef}@origin`. Absent/empty/flag-off ⇒ the single-ref clone.
+        ...(input.ancestorStack !== undefined && { ancestorStack: input.ancestorStack }),
       });
     } catch (error) {
       // A resolver INFRA failure is fail-closed HOLD — the recorded conflict (and the

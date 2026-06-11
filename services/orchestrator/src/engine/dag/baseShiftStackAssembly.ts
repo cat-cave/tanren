@@ -23,7 +23,8 @@
 
 import { quoteSshShellArg } from "../ssh/command.js";
 import { runWorkspaceSshCommand } from "../workspace/ssh.js";
-import { buildLiveJjWorkspace } from "../providers/liveJjWorkspace.js";
+import { buildLiveJjWorkspace, type LiveJjWorkspace } from "../providers/liveJjWorkspace.js";
+import type { WorkspaceHandle } from "../contracts/workspaceVcsCore.js";
 import { integrateOverWorkspace, type JjIntegrationMember } from "./jjLocalIntegration.js";
 import type { AncestorStack } from "./ancestorStack.js";
 import type { BaseShiftRunContext } from "./baseShiftLiveContext.js";
@@ -71,6 +72,58 @@ export async function assembleBaseShiftStackWorkspace(input: {
   stack: AncestorStack;
   timeoutMs: number;
 }): Promise<LiveBaseShiftWorkspaceCore> {
+  const { ctx } = input;
+  const assembled = await assembleBaseShiftStackLive(input);
+  // Wrap the open assembly into the coordinator-facing `LiveBaseShiftWorkspaceCore` (the
+  // SAME shape `openLiveBaseShiftWorkspace` returns for the single-ref path): the rebase
+  // TARGET is the LOCALLY-assembled stack head, not `${newBaseRef}@origin`.
+  return {
+    core: assembled.live.core,
+    handle: assembled.workspace,
+    newBaseSha: assembled.assembledHeadSha,
+    pushFacts: {
+      target: assembled.live.target,
+      workspacePath: assembled.live.workspacePath,
+      repoUrl: ctx.repoUrl,
+      headBranch: ctx.headBranch,
+      ...(ctx.installation !== undefined && { installation: ctx.installation }),
+      githubCredentialRef: ctx.githubCredentialRef,
+    },
+    release: assembled.live.release,
+  };
+}
+
+/** An OPEN base-shift stack assembly: the live workspace, the integrated head handle, the assembled head sha. */
+export interface AssembledBaseShiftStack {
+  /** The OPEN live jj workspace the stack was assembled in (the caller owns `release()`). */
+  live: LiveJjWorkspace;
+  /** The open workspace handle `integrateOverWorkspace` assembled the stack in. */
+  workspace: WorkspaceHandle;
+  /** The assembled stack head's REAL commit sha — the `rebaseOnto -d` target (NOT a host ref). */
+  assembledHeadSha: string;
+}
+
+/**
+ * WS-A PR-6 / PR-6b (§2.2) — the SHARED local stack assembly both the base-shift OPENER
+ * (`assembleBaseShiftStackWorkspace`) and the base-shift CONFLICT RESOLVER
+ * (`baseShiftLiveResolve.ts`) drive. Open a live jj workspace, jj-`--colocate` clone
+ * `default_branch + each ancestor PR-head bookmark`, STACK the ordered ancestors onto the
+ * default branch via `integrateOverWorkspace`, and prepare the dependent's OWN published
+ * head for an in-place rebase onto the assembled head. Returns the OPEN workspace + the
+ * assembled head sha — the caller (opener OR resolver) rebases the dependent's branch onto
+ * `assembledHeadSha` and owns `live.release()`.
+ *
+ * FAIL-CLOSED: a clone/track/stack failure (or a spec-vs-spec assembly conflict) releases
+ * the runner LOUDLY before re-throwing. (`stack` is the caller's already-non-empty
+ * re-resolved stack — the empty/flag-off cases never reach here.)
+ */
+export async function assembleBaseShiftStackLive(input: {
+  deps: LiveBaseShiftDeps;
+  ctx: BaseShiftRunContext;
+  /** The re-resolved ordered ancestor stack (non-empty — DAG order, ancestors first). */
+  stack: AncestorStack;
+  timeoutMs: number;
+}): Promise<AssembledBaseShiftStack> {
   const { deps, ctx, stack, timeoutMs } = input;
   const live = await buildLiveJjWorkspace({
     facts: {
@@ -132,24 +185,7 @@ export async function assembleBaseShiftStackWorkspace(input: {
         `jj config set --repo ${quoteSshShellArg('revset-aliases."immutable_heads()"')} ${quoteSshShellArg("none()")}`,
       ].join(" && "),
     });
-    return {
-      core: live.core,
-      handle: workspace,
-      // The assembled stack head's REAL commit sha (`integrateOverWorkspace` materialized it
-      // from the clean exported ref) — the `rebaseOnto -d` target AND the clean
-      // `integration.rebase` event field. The dependent's branch rebases onto THIS, not
-      // `${newBaseRef}@origin`.
-      newBaseSha: integration.headSha,
-      pushFacts: {
-        target: live.target,
-        workspacePath: live.workspacePath,
-        repoUrl: ctx.repoUrl,
-        headBranch: ctx.headBranch,
-        ...(ctx.installation !== undefined && { installation: ctx.installation }),
-        githubCredentialRef: ctx.githubCredentialRef,
-      },
-      release: live.release,
-    };
+    return { live, workspace, assembledHeadSha: integration.headSha };
   } catch (error) {
     // FAIL-CLOSED: a failed clone/assembly/prep must NOT leak the runner — release loudly
     // before re-throwing (the coordinator maps the throw to a hold; the work survives).

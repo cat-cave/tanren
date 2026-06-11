@@ -82,6 +82,16 @@ export interface JjConflictApplierDeps {
   githubAppMinter?: GithubAppTokenMinter;
   facts: JjConflictApplierFacts;
   timeoutMs: number;
+  /**
+   * An ALREADY-open workspace handle to gather over INSTEAD of cloning a fresh one
+   * (WS-A PR-6b, walker-jj-local-integration-design.md §2.2). The base-shift resolver's
+   * jj-local path assembles `main + ordered ancestors` LOCALLY in its own workspace
+   * (`integrateOverWorkspace` leaves it open at the assembled head), then `facts.baseRevision`
+   * is that LOCAL assembled-head sha — there is no single host ref to clone. When set,
+   * `gather()` skips `openWorkspace` and rebases the head onto the local assembled head in
+   * THIS workspace; absent ⇒ the unchanged clone-then-rebase path (every other consumer).
+   */
+  preOpenedWorkspace?: WorkspaceHandle;
   /** Release the live workspace's runner (LOUD on leak) — run on the terminal step. */
   release: () => Promise<void>;
 }
@@ -113,11 +123,18 @@ export class JjWorkspaceConflictApplier implements WorkspaceConflictApplier {
    */
   async gather(): Promise<GatheredConflict> {
     const { core, facts } = this.deps;
-    const workspace = await core.openWorkspace({
-      repoUrl: facts.repoUrl,
-      baseBranch: facts.baseBranch,
-      path: this.deps.workspacePath,
-    });
+    // WS-A PR-6b (§2.2): the base-shift jj-local resolver hands us an ALREADY-open workspace
+    // whose `facts.baseRevision` is a LOCAL assembled-stack head (`main + ordered ancestors`,
+    // assembled by `integrateOverWorkspace`) — there is no single host ref to clone, and a
+    // re-clone would discard the local assembly. Reuse the open handle; every other consumer
+    // (preOpenedWorkspace absent) clones a fresh workspace on `facts.baseBranch` as before.
+    const workspace =
+      this.deps.preOpenedWorkspace ??
+      (await core.openWorkspace({
+        repoUrl: facts.repoUrl,
+        baseBranch: facts.baseBranch,
+        path: this.deps.workspacePath,
+      }));
     // Prepare the just-cloned workspace for the rebase of a LIVE published head:
     //  1. `jj git clone` imports a NON-default branch only as a REMOTE-tracking
     //     bookmark (`<head>@origin`), so create the LOCAL `<head>` bookmark that
@@ -271,6 +288,12 @@ export interface BuildJjConflictApplierDeps {
   githubAppMinter?: GithubAppTokenMinter;
   facts: JjConflictApplierFacts;
   timeoutMs: number;
+  /**
+   * WS-A PR-6b (§2.2): an already-open workspace handle the applier gathers over instead of
+   * cloning a fresh one — the base-shift jj-local resolver's locally-assembled stack workspace.
+   * Absent ⇒ the applier clones a fresh workspace on `facts.baseBranch` (every other consumer).
+   */
+  preOpenedWorkspace?: WorkspaceHandle;
 }
 
 /**
@@ -294,6 +317,7 @@ export function buildJjConflictApplier(deps: BuildJjConflictApplierDeps): JjWork
     ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
     facts: deps.facts,
     timeoutMs: deps.timeoutMs,
+    ...(deps.preOpenedWorkspace !== undefined && { preOpenedWorkspace: deps.preOpenedWorkspace }),
     release: deps.live.release,
   });
 }
