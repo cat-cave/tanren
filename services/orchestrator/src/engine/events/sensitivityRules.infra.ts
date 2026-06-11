@@ -174,7 +174,6 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["targetBranch", "public"],
     ["prUrl", "public"],
     ["prNumber", "public"],
-    ["reused", "public"],
   ]),
   ...rulesFor("github.pr.ready", [
     ["prUrl", "public"],
