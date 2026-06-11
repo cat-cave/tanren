@@ -16,8 +16,26 @@ import { FakeCommandSubstrate } from "../src/engine/contracts/commandSubstrate.j
 import type { CommandResult, RunnerCommand } from "../src/engine/contracts/commandSubstrate.js";
 import { assessExternalChange, tanrenIdentity } from "../src/engine/workflow/reviewMerge/governancePosture.js";
 import { buildLiveJjWorkspace, type LiveJjWorkspaceDeps } from "../src/engine/providers/liveJjWorkspace.js";
-import { InMemoryVcsProvider } from "./conformance/fakes/inMemoryVcsProvider.js";
-import { CONFORMANCE_ACTOR_LOGIN, CONFORMANCE_ACTOR_NOREPLY_EMAIL } from "./conformance/vcsProviderConformance.js";
+import type { GitHubHttpClient, GitHubHttpRequest, GitHubHttpResponse } from "../src/engine/providers/github.js";
+import { vcsProviderOver } from "./helpers/vcsProvider.js";
+import {
+  CONFORMANCE_ACTOR_ID,
+  CONFORMANCE_ACTOR_LOGIN,
+  CONFORMANCE_ACTOR_NOREPLY_EMAIL,
+} from "./conformance/vcsProviderConformance.js";
+
+// §5a: the bot-push-identity resolution now runs through the standalone credential helpers
+// off a REAL `GitHubVcsProvider`'s GitHub client. The transport serves the static-credential
+// identity read (`GET /user`) returning the conformance actor, so the resolved bot login +
+// canonical noreply email match `CONFORMANCE_ACTOR_*` exactly.
+class ConformanceUserGitHubHttp implements GitHubHttpClient {
+  async request(input: GitHubHttpRequest): Promise<GitHubHttpResponse> {
+    if (input.method === "GET" && input.path === "/user") {
+      return { status: 200, body: { login: CONFORMANCE_ACTOR_LOGIN, id: Number(CONFORMANCE_ACTOR_ID) } };
+    }
+    throw new Error(`unexpected GitHub request: ${input.method} ${input.path}`);
+  }
+}
 
 /** Records every command the workspace mechanism runs so the test reads the clone/config. */
 class RecordingSubstrate extends FakeCommandSubstrate {
@@ -33,6 +51,9 @@ const AUTHENTICATED_REF = "credential/github/dev";
 describe("conflict-resolve bot identity (finding #7)", () => {
   it("live jj workspace: sets the BOT identity as the jj commit author (not tanren@local)", async () => {
     const ssh = new RecordingSubstrate();
+    // The static credential the run resolves its push token (and bot identity) from.
+    const secrets = new FakeSecretStore();
+    await secrets.put({ ref: AUTHENTICATED_REF, value: "ghp_fake_static" });
     const deps: LiveJjWorkspaceDeps = {
       facts: {
         orgId: "org_x",
@@ -43,8 +64,8 @@ describe("conflict-resolve bot identity (finding #7)", () => {
       },
       allocator: new FakeAllocator(),
       ssh,
-      secrets: new FakeSecretStore(),
-      vcsProvider: new InMemoryVcsProvider(),
+      secrets,
+      vcsProvider: vcsProviderOver(new ConformanceUserGitHubHttp()),
       timeoutMs: 1000,
     };
     const live = await buildLiveJjWorkspace(deps);

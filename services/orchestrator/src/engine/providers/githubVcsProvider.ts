@@ -5,8 +5,7 @@
 // provider-neutral seam — it wraps GitHub logic, never re-implements it, so
 // behavior is preserved exactly. The HTTP client is injected at construction.
 
-import { resolveGithubToken } from "../credentials/githubTokenResolver.js";
-import { invokeTokenIdentity, resolveGithubActorIdentity } from "./githubActorIdentity.js";
+import { resolveVcsActorIdentity, resolveVcsToken } from "../credentials/vcsCredentials.js";
 import {
   publishGitHubCheck,
   publishGitHubStatus,
@@ -105,26 +104,15 @@ export class GitHubVcsProvider implements VcsProvider {
     this.reviewMerge = new GitHubReviewMergeService(http);
   }
 
+  // §5a: token + identity resolution is credential PLUMBING (every host seam needs it),
+  // not a forge op — the body lives in the standalone `credentials/vcsCredentials.ts`.
+  // These two methods DELEGATE so not-yet-migrated `VcsProvider` callers still work.
   async resolveToken(creds: VcsCredentialContext): Promise<ResolvedVcsToken> {
-    const resolved = await resolveGithubToken({
-      secrets: creds.secrets,
-      installation: creds.installation,
-      staticRef: creds.staticRef,
-      minter: creds.minter,
-    });
-    const token: ResolvedVcsToken = {
-      token: resolved.token,
-      source: resolved.source,
-      refresh: resolved.refresh,
-      // MERGE-SAFETY: the lazy identity supplier closes over the SAME creds that resolved
-      // the token (run git author + merge identity set can't disagree).
-      identity: () => resolveGithubActorIdentity(this.http, token, creds),
-    };
-    return token;
+    return resolveVcsToken(this.http, creds);
   }
 
   async resolveActorIdentity(token: ResolvedVcsToken): Promise<ActorIdentity> {
-    return invokeTokenIdentity(token);
+    return resolveVcsActorIdentity(token);
   }
 
   parseRepository(repoUrl: string): RepoRef {

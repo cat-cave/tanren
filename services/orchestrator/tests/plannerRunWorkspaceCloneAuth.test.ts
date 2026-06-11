@@ -3,7 +3,7 @@
 // over SSH stdin via the shared git credential helper — it must NEVER appear in
 // the command string (process args / event log) or in the SSH stdin echoed into
 // any event. Without a token the clone stays the plain public-repo path.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { RunnerHandle } from "../src/engine/contracts/allocator.js";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
 import type { RunnerCommand, CommandResult, CommandSubstrate } from "../src/engine/contracts/commandSubstrate.js";
@@ -13,7 +13,8 @@ import type { GitHubHttpClient, GitHubHttpRequest, GitHubHttpResponse } from "..
 import { prepareRunWorkspace } from "../src/engine/workflow/plannerRunWorkspace.js";
 import type { PlannerRunContext, RunPlannerLoopInput } from "../src/engine/workflow/plannerRun.js";
 import { vcsProviderOver } from "./helpers/vcsProvider.js";
-import type { VcsCredentialContext } from "../src/engine/contracts/vcsProvider.js";
+import * as vcsCredentials from "../src/engine/credentials/vcsCredentials.js";
+import type { ResolvedVcsToken, VcsCredentialContext } from "../src/engine/contracts/vcsProvider.js";
 
 const target: RunnerHandle = {
   backend: "ssh",
@@ -66,42 +67,47 @@ const installation: OrgGithubAppInstallation = {
 };
 
 /**
- * A VcsProvider that delegates everything to the REAL GitHubVcsProvider but
- * RECORDS the credential context each `resolveToken` receives and, when an App
- * installation is present, short-circuits to a fixed installation token (so the
- * App-first path is observable without standing up a real App-token minter).
- * This proves the clone routes through the seam App-first.
+ * §5a: credential resolution now runs through the standalone `resolveVcsToken(http, creds)`
+ * helper, not `VcsProvider.resolveToken`. This spies on that helper to RECORD the credential
+ * context each call receives and, when an App installation is present, short-circuits to a
+ * fixed installation token (so the App-first path is observable without standing up a real
+ * App-token minter). The provider stays a REAL `GitHubVcsProvider` (its GitHub client serves
+ * the static-path `GET /user` identity read). Returns a `restore()` the test calls to undo
+ * the spy. This proves the clone routes credential resolution App-first.
  */
-function recordingProvider(): { provider: ReturnType<typeof vcsProviderOver>; calls: VcsCredentialContext[] } {
-  const real = vcsProviderOver(unusedHttp());
+function recordingResolver(): {
+  provider: ReturnType<typeof vcsProviderOver>;
+  calls: VcsCredentialContext[];
+  restore: () => void;
+} {
+  const provider = vcsProviderOver(unusedHttp());
   const calls: VcsCredentialContext[] = [];
-  const provider = new Proxy(real, {
-    get(inner, prop, receiver) {
-      if (prop === "resolveToken") {
-        return async (creds: VcsCredentialContext) => {
-          calls.push(creds);
-          if (creds.installation !== undefined) {
-            // MERGE-SAFETY: the App-first short-circuit also carries an identity
-            // supplier (the App bot login) so resolveActorIdentity resolves the
-            // git author without standing up a real App-token minter.
-            return {
-              token: APP_TOKEN,
-              source: "github_app" as const,
-              refresh: async () => APP_TOKEN,
-              identity: async () => ({
-                login: "tanren-app[bot]",
-                id: "12345",
-                noreplyEmail: "12345+tanren-app[bot]@users.noreply.github.com",
-              }),
-            };
-          }
-          return inner.resolveToken(creds);
+  // Capture the REAL resolver before spying so the static path delegates to it (reads the
+  // secret + serves the `GET /user` identity) without recursing into the spy.
+  const realResolveVcsToken = vcsCredentials.resolveVcsToken;
+  const spy = vi
+    .spyOn(vcsCredentials, "resolveVcsToken")
+    .mockImplementation(async (http, creds: VcsCredentialContext): Promise<ResolvedVcsToken> => {
+      calls.push(creds);
+      if (creds.installation !== undefined) {
+        // MERGE-SAFETY: the App-first short-circuit also carries an identity supplier (the
+        // App bot login) so resolveVcsActorIdentity resolves the git author without standing
+        // up a real App-token minter.
+        return {
+          token: APP_TOKEN,
+          source: "github_app" as const,
+          refresh: async () => APP_TOKEN,
+          identity: async () => ({
+            login: "tanren-app[bot]",
+            id: "12345",
+            noreplyEmail: "12345+tanren-app[bot]@users.noreply.github.com",
+          }),
         };
       }
-      return Reflect.get(inner, prop, receiver);
-    },
-  });
-  return { provider, calls };
+      // The static path delegates to the REAL resolver (reads the secret + serves identity).
+      return realResolveVcsToken(http, creds);
+    });
+  return { provider, calls, restore: () => spy.mockRestore() };
 }
 
 function makeContext(overrides: Partial<PlannerRunContext> = {}): PlannerRunContext {
@@ -232,49 +238,51 @@ describe("prepareRunWorkspace clone authentication", () => {
     expect(clone?.command).not.toContain("git config user.name");
   });
 
-  it("P2a Part 2: clone resolves APP-FIRST through the VcsProvider seam when an App is installed", async () => {
+  it("P2a Part 2: clone resolves APP-FIRST through the credential resolver when an App is installed", async () => {
     const ssh = new RecordingSsh();
-    const { provider, calls } = recordingProvider();
-    // Both an App installation AND a static ref are present: App-first wins.
-    await prepareRunWorkspace(
-      makeInput(ssh, makeContext({ installation }), { vcsProvider: provider }),
-      target,
-      "/workspace/runs/run_clone/repo",
-    );
+    const { provider, calls, restore } = recordingResolver();
+    try {
+      // Both an App installation AND a static ref are present: App-first wins.
+      await prepareRunWorkspace(
+        makeInput(ssh, makeContext({ installation }), { vcsProvider: provider }),
+        target,
+        "/workspace/runs/run_clone/repo",
+      );
 
-    // The clone resolved through the seam carrying the installation (App-first),
-    // and used the minted installation token over stdin — not the static ref.
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.installation).toEqual(installation);
-    const clone = ssh.commands[0]?.command;
-    expect(clone?.stdin).toBe(APP_TOKEN);
-    expect(clone?.command).toContain("GIT_ASKPASS");
-    expect(clone?.command).not.toContain(APP_TOKEN);
+      // The clone resolved credentials carrying the installation (App-first), and used the
+      // minted installation token over stdin — not the static ref.
+      expect(calls).toHaveLength(1);
+      expect(calls[0]?.installation).toEqual(installation);
+      const clone = ssh.commands[0]?.command;
+      expect(clone?.stdin).toBe(APP_TOKEN);
+      expect(clone?.command).toContain("GIT_ASKPASS");
+      expect(clone?.command).not.toContain(APP_TOKEN);
+    } finally {
+      restore();
+    }
   });
 
   it("MERGE-SAFETY: an authenticated run THROWS (no silent .invalid fallback) when identity resolution fails", async () => {
     const ssh = new RecordingSsh();
     const secrets = new FakeSecretStore();
     await storeGithubToken(secrets, { ref: "credential/github/dev", token: TOKEN });
-    // A provider whose token resolves but whose actor-identity resolution FAILS
-    // (e.g. GitHub returns a 5xx on GET /user). The run is authenticated (a static
-    // credential ref is present), so this MUST be a loud throw — never a degrade to
-    // the unattributable `planner@tanren.invalid` author.
-    const real = vcsProviderOver(unusedHttp());
-    const failingProvider = new Proxy(real, {
-      get(inner, prop, receiver) {
-        if (prop === "resolveActorIdentity") {
-          return async () => {
-            throw new Error("GitHub token identity read (GET /user) failed: HTTP 503");
-          };
+    // A real provider whose token resolves (the secret is present) but whose actor-identity
+    // read FAILS — the transport returns 503 on `GET /user`, so the standalone
+    // `resolveVcsActorIdentity` (invoking the token's lazy identity supplier) throws. The
+    // run is authenticated (a static credential ref is present), so this MUST be a loud
+    // throw — never a degrade to the unattributable `planner@tanren.invalid` author.
+    const identityFailingHttp: GitHubHttpClient = {
+      request: async (req: GitHubHttpRequest): Promise<GitHubHttpResponse> => {
+        if (req.method === "GET" && (req.path === "/user" || req.path.startsWith("/user?"))) {
+          return { status: 503, body: {} };
         }
-        return Reflect.get(inner, prop, receiver);
+        throw new Error(`clone-auth must not issue GitHub HTTP: ${req.method} ${req.path}`);
       },
-    });
+    };
 
     await expect(
       prepareRunWorkspace(
-        makeInput(ssh, makeContext(), { secrets, vcsProvider: failingProvider }),
+        makeInput(ssh, makeContext(), { secrets, vcsProvider: vcsProviderOver(identityFailingHttp) }),
         target,
         "/workspace/runs/run_clone/repo",
       ),
@@ -325,21 +333,25 @@ describe("prepareRunWorkspace clone authentication", () => {
     expect(setIdentity?.command).toContain("git config user.email 'planner@tanren.invalid'");
   });
 
-  it("P2a Part 2: clone routes through the seam (no installation) carrying the static ref only", async () => {
+  it("P2a Part 2: clone routes credential resolution (no installation) carrying the static ref only", async () => {
     const ssh = new RecordingSsh();
     const secrets = new FakeSecretStore();
     await storeGithubToken(secrets, { ref: "credential/github/dev", token: TOKEN });
-    const { provider, calls } = recordingProvider();
+    const { provider, calls, restore } = recordingResolver();
 
-    await prepareRunWorkspace(
-      makeInput(ssh, makeContext(), { secrets, vcsProvider: provider }),
-      target,
-      "/workspace/runs/run_clone/repo",
-    );
+    try {
+      await prepareRunWorkspace(
+        makeInput(ssh, makeContext(), { secrets, vcsProvider: provider }),
+        target,
+        "/workspace/runs/run_clone/repo",
+      );
 
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.installation).toBeUndefined();
-    expect(calls[0]?.staticRef).toBe("credential/github/dev");
-    expect(ssh.commands[0]?.command.stdin).toBe(TOKEN);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]?.installation).toBeUndefined();
+      expect(calls[0]?.staticRef).toBe("credential/github/dev");
+      expect(ssh.commands[0]?.command.stdin).toBe(TOKEN);
+    } finally {
+      restore();
+    }
   });
 });
