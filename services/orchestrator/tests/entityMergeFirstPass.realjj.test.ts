@@ -35,10 +35,31 @@ function git(cwd: string, args: string[]): string {
   return execFileSync("git", args, { cwd, env: gitEnv(), stdio: ["ignore", "pipe", "inherit"] }).toString();
 }
 
+// Detect the REAL entity-diff `sem` (Ataraxy Labs) on the host. `sem` is vendored on the
+// RUNNER image, NOT on the CI host that runs `just test` — so this realjj+real-sem case must
+// SKIP when it is absent (the §3.1-producer realjj test skips the same way; graceful absence
+// IS the §3.2 contract — the UNIT suite with fakes validates the logic in CI either way).
+//
+// We don't trust `sem --version` alone: a DIFFERENT `sem` binary may sit on PATH and answer
+// `--version` (a false positive that made #529's CI fail). Instead we FUNCTIONALLY probe the
+// entity differ — feed `sem diff --stdin --json` a trivial one-entity FileChange and confirm
+// it returns the entity-diff envelope (a `changes` array). Only the real entity `sem` does.
 function hasSem(): boolean {
   try {
-    execFileSync("sem", ["--version"], { stdio: ["ignore", "ignore", "ignore"] });
-    return true;
+    const probe = JSON.stringify([
+      {
+        filePath: "probe.js",
+        status: "modified",
+        beforeContent: "function p() { return 1; }\n",
+        afterContent: "function p() { return 2; }\n",
+      },
+    ]);
+    const out = execFileSync("sem", ["diff", "--stdin", "--json"], {
+      input: probe,
+      stdio: ["pipe", "pipe", "ignore"],
+    }).toString();
+    const parsed = JSON.parse(out) as { changes?: unknown };
+    return Array.isArray(parsed.changes);
   } catch {
     return false;
   }
