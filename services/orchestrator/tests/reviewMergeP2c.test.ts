@@ -7,7 +7,7 @@
 // first pass still ENTERS the queue; the queue's dependency ordering holds it
 // until ancestors land. Once ancestors have all merged, the dependent proceeds.
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { vcsProviderOver } from "./helpers/vcsProvider.js";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
 import { FakeEventStore } from "./helpers/fakeEventStore.js";
@@ -16,6 +16,15 @@ import { noopConflictResolver } from "./fixtures/noopConflictResolver.js";
 import { recordingMergeProbe, ReviewMergePool, unusedHttp } from "./reviewMerge.fixtures.js";
 
 describe("P2c-1 speculative-merge-hold (merge stage)", () => {
+  // WS-A PR-7: `WALKER_JJ_LOCAL_BASE` now defaults ON. The merge HOLD gating is flag-agnostic
+  // (it waits on genuinely-merged ancestors regardless of base path), so the hold tests below
+  // need no flag. The LEGACY single-ref integ→default retarget + integ-ref cleanup (the three
+  // tests that set `=0` below) is the break-glass path; its stack-walk replacement is covered
+  // by reviewMergeStackedRetarget.test.ts. The legacy path stays until WS-B/PR-9 deletes it.
+  afterEach(() => {
+    delete process.env["WALKER_JJ_LOCAL_BASE"];
+  });
+
   it("HOLDS a speculative dependent's merge while an ancestor is unmerged (no merge API call)", async () => {
     const pool = new ReviewMergePool("direct_merge");
     // The run is speculative on spec_a + spec_b; only spec_a has merged.
@@ -137,6 +146,8 @@ describe("P2c-1 speculative-merge-hold (merge stage)", () => {
   });
 
   it("a held speculative dependent resumes autonomously once the ancestor really merges", async () => {
+    // Legacy single-ref retarget path (no ancestor_stack) — the `=0` break-glass.
+    process.env["WALKER_JJ_LOCAL_BASE"] = "0";
     const pool = new ReviewMergePool("direct_merge");
     pool.speculativeBase = "tanren/integ/spec_1";
     pool.specDependsOn = ["spec_a"];
@@ -202,6 +213,8 @@ describe("P2c-1 speculative-merge-hold (merge stage)", () => {
   });
 
   it("RE-TARGETS to default_branch + merges on real main once ALL ancestors merged, then cleans the integ ref", async () => {
+    // Legacy single-ref retarget path (no ancestor_stack) — the `=0` break-glass.
+    process.env["WALKER_JJ_LOCAL_BASE"] = "0";
     const pool = new ReviewMergePool("direct_merge");
     // Still flagged speculative (PR is based on the integration ref), but every
     // ancestor has now merged — the hold clears.
@@ -255,6 +268,8 @@ describe("P2c-1 speculative-merge-hold (merge stage)", () => {
   });
 
   it("a cleared-hold dependent merges via the P2a rebase-onto-main path (behind → updateBranch → merge on main)", async () => {
+    // Legacy single-ref retarget path (no ancestor_stack) — the `=0` break-glass.
+    process.env["WALKER_JJ_LOCAL_BASE"] = "0";
     const pool = new ReviewMergePool("direct_merge");
     pool.speculativeBase = "tanren/integ/spec_1";
     pool.specDependsOn = ["spec_a"];

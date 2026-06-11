@@ -267,6 +267,13 @@ async function reexec(h: Harness, over: Partial<Parameters<BaseShiftCoordinator[
 }
 
 describe("BaseShiftCoordinator — never-discard rebase (NOT supersede+regenerate)", () => {
+  // WS-A PR-7: `WALKER_JJ_LOCAL_BASE` now defaults ON, so the default keepRun re-point is the
+  // jj-local one (NULL speculative_base + the re-resolved stack the opener assembled). The
+  // legacy synthesized-ref re-point is covered by the explicit `=0` break-glass case below.
+  afterEach(() => {
+    delete process.env["WALKER_JJ_LOCAL_BASE"];
+  });
+
   it("THE PROOF: an ancestor lands ⇒ the dependent's run row is the SAME run_id (rebase, no new run)", async () => {
     const h = harness({ conflictOnRebase: false, reGate: "passed" });
     const result = await reexec(h);
@@ -275,17 +282,36 @@ describe("BaseShiftCoordinator — never-discard rebase (NOT supersede+regenerat
     expect(result.reexecRunId).toBe(DEP_RUN);
     // (1) the branch was REBASED on the jj core (rebaseOnto invoked) — never a fresh clone.
     expect(h.workspace.rebaseCalls).toEqual([{ branch: DEP_BRANCH, baseSha: "sha-new-base" }]);
-    // (1) the run row was KEPT: re-pointed + marked in-flight pointing at the SAME run.
-    expect(h.persistence.repointCalls).toEqual([{ runId: DEP_RUN, speculativeBase: "tanren/integ/spec_b" }]);
-    // WS-A PR-1: the ancestor stack is DUAL-WRITTEN alongside the legacy base — the
-    // re-resolved stack reconstructed from the dependent's per-ancestor SHA map.
+    // (1) the run row was KEPT: re-pointed + marked in-flight pointing at the SAME run. Under
+    // the default jj-local path there is NO synthesized integration ref, so speculative_base
+    // is NULLed and the stack column is the sole source of truth (the re-resolved stack).
+    expect(h.persistence.repointCalls).toEqual([{ runId: DEP_RUN, speculativeBase: null }]);
     expect(h.persistence.repointStacks).toEqual([
-      { runId: DEP_RUN, ancestorStack: [{ specId: "spec_a", runId: "", branch: "", headSha: "sha-old" }] },
+      { runId: DEP_RUN, ancestorStack: [{ specId: "spec_a", runId: "", branch: "", headSha: "sha-new" }] },
     ]);
     expect(h.persistence.markedInFlight).toEqual([{ runId: DEP_RUN, ancestorSpecId: "spec_a", toSha: "sha-new" }]);
     // (1) re-plan was NOT invoked on a clean rebase + passing re-gate (tokens REUSED).
     expect(h.persistence.replanned).toEqual([]);
     // S0: the affected integration_nodes were consulted (observe-only).
+    expect(h.nodes.calls).toBe(1);
+  });
+
+  it("THE PROOF (=0 break-glass): the legacy synthesized-ref re-point + SHA-map dual-write, SAME run", async () => {
+    // Until WS-B/PR-9 deletes it, the break-glass `=0` keeps the legacy keepRun: re-point
+    // speculative_base to the rebuilt integration branch + dual-write the stack reconstructed
+    // from the per-ancestor SHA map. The never-discard invariant holds on BOTH paths.
+    process.env["WALKER_JJ_LOCAL_BASE"] = "0";
+    const h = harness({ conflictOnRebase: false, reGate: "passed" });
+    const result = await reexec(h);
+
+    expect(result.reexecRunId).toBe(DEP_RUN);
+    expect(h.workspace.rebaseCalls).toEqual([{ branch: DEP_BRANCH, baseSha: "sha-new-base" }]);
+    expect(h.persistence.repointCalls).toEqual([{ runId: DEP_RUN, speculativeBase: "tanren/integ/spec_b" }]);
+    expect(h.persistence.repointStacks).toEqual([
+      { runId: DEP_RUN, ancestorStack: [{ specId: "spec_a", runId: "", branch: "", headSha: "sha-old" }] },
+    ]);
+    expect(h.persistence.markedInFlight).toEqual([{ runId: DEP_RUN, ancestorSpecId: "spec_a", toSha: "sha-new" }]);
+    expect(h.persistence.replanned).toEqual([]);
     expect(h.nodes.calls).toBe(1);
   });
 
@@ -439,11 +465,12 @@ describe("WS-A PR-6 — flag-gated base-shift over the re-resolved ancestor stac
     expect(h.persistence.repointStacks).toEqual([{ runId: DEP_RUN, ancestorStack: [] }]);
   });
 
-  it("flag-OFF (default): IDENTICAL to today — speculative_base re-pointed + the SHA-map dual-write", async () => {
-    // No flag set. keepRun re-points the synthesized integration ref + dual-writes the stack
-    // reconstructed from the dependent's per-ancestor SHA map (the PR-1 additive write). The
-    // opener still RECEIVES the stack (it is threaded unconditionally) but the LIVE opener's
-    // assembly branch is flag-gated, so flag-off it clones `${newBaseRef}@origin` as today.
+  it("flag-OFF (=0 break-glass): IDENTICAL to legacy — speculative_base re-pointed + the SHA-map dual-write", async () => {
+    // Break-glass `=0`. keepRun re-points the synthesized integration ref + dual-writes the
+    // stack reconstructed from the dependent's per-ancestor SHA map (the PR-1 additive write).
+    // The opener still RECEIVES the stack (it is threaded unconditionally) but the LIVE
+    // opener's assembly branch is flag-gated, so flag-off it clones `${newBaseRef}@origin`.
+    process.env["WALKER_JJ_LOCAL_BASE"] = "0";
     const h = harness({ conflictOnRebase: false, reGate: "passed" });
     await reexec(h, { ancestorHeadShas: { spec_a: "sha-a-new" } });
     expect(h.persistence.repointCalls).toEqual([{ runId: DEP_RUN, speculativeBase: "tanren/integ/spec_b" }]);
