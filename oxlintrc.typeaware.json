@@ -17,11 +17,32 @@
   // those from a real class method. It is NOT disabled to dodge work; the rest
   // of the category is at error.
   //
+  // STRICTNESS RATCHET (WS-H1b, rule-by-rule). The `suspicious` category is
+  // ratcheted the SAME way `correctness` was — not as a category flip, but
+  // rule-by-rule, because its dominant rule `no-unsafe-type-assertion` (378 hits,
+  // mostly the INTENTIONAL pg-row `as` casts at trusted DB read-seams) is a large
+  // standalone effort that wants the typed-row / zod-at-the-seam treatment, not a
+  // blanket flip. So the category stays OFF and the TRACTABLE suspicious rules are
+  // enabled INDIVIDUALLY at error below, with every surfaced site FIXED (not
+  // silenced): the redundant casts/conversions/template-literals/boolean-literal
+  // compares were removed at the seam; the `consistent-return` exhaustive switches
+  // grew a `never`-asserting `default` (so a new union member is a COMPILE error),
+  // and the value-returning org-scoped callbacks made their early `return;` an
+  // explicit `return undefined;`. Two suspicious rules are deferred with rationale
+  // (NOT to dodge work):
+  //   • `no-unsafe-type-assertion` (378) — the pg-row trust-at-boundary effort;
+  //     fix is a typed-row helper / zod decode at the read seam, sequenced as a
+  //     follow-up wave (see the WS-H1b PR body for the per-module count split).
+  //   • `no-unnecessary-type-parameters` (4) — all 4 are single-use RETURN-position
+  //     generics on typed JSON-parse / typed-`query` helpers (`sendJson<T>`,
+  //     `safeJson<T>`, `query<R>`, `HonoJson<T>`). The rule's "fix" (drop the
+  //     generic → return `unknown` and cast at every call site) would PUSH unsafe
+  //     `as` casts out to callers — the opposite of the trust-at-boundary doctrine.
+  //
   // The remaining categories stay OFF pending follow-up rule-by-rule ratchets
-  // (suspicious/pedantic/style/restriction/nursery — see the WS-H1 PR body for
-  // per-rule finding counts). The 3 original high-value typed rules below stay
-  // pinned (they predate the category being on; keeping them explicit documents
-  // the floor).
+  // (pedantic/style/restriction/nursery — see the WS-H1 PR body for per-rule
+  // finding counts). The 3 original high-value typed rules below stay pinned (they
+  // predate the category being on; keeping them explicit documents the floor).
   "categories": {
     "correctness": "error",
     "suspicious": "off",
@@ -38,6 +59,15 @@
     // FALSE-POSITIVE-only on this codebase (function-valued `refresh`/`sleep`
     // object properties, not class methods). Held off with rationale, not to
     // dodge work — the rest of `correctness` is at error above.
-    "typescript/unbound-method": "off"
+    "typescript/unbound-method": "off",
+    // WS-H1b: the tractable `suspicious` rules, enabled rule-by-rule at error with
+    // every surfaced site fixed (the `suspicious` category itself stays OFF until
+    // the `no-unsafe-type-assertion` pg-row seam wave lands — see the header).
+    "typescript/no-unnecessary-type-assertion": "error",
+    "typescript/no-unnecessary-type-conversion": "error",
+    "typescript/no-unnecessary-boolean-literal-compare": "error",
+    "typescript/no-unnecessary-template-expression": "error",
+    "typescript/no-unnecessary-type-arguments": "error",
+    "typescript/consistent-return": "error"
   }
 }

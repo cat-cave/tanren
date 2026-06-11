@@ -139,6 +139,10 @@ function presetDefaults(name: OidcPreset | undefined): PresetDefaults {
       return authentikPresetDefaults();
     case undefined:
       return {};
+    default: {
+      const exhaustive: never = name;
+      throw new Error(`presetDefaults: unhandled preset ${String(exhaustive)}`);
+    }
   }
 }
 

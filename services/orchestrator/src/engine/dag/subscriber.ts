@@ -110,13 +110,13 @@ async function resolveRunTrigger(
   pool: pg.Pool,
   runId: string,
 ): Promise<{ projectId: string; terminal: boolean } | undefined> {
-  return runWithSystemScope(pool, async (client) => {
+  return runWithSystemScope(pool, async (client): Promise<{ projectId: string; terminal: boolean } | undefined> => {
     const result = await client.query<{ project_id: string | null; status: string }>(
       "SELECT project_id, status FROM runs WHERE run_id = $1",
       [runId],
     );
     const row = result.rows[0];
-    if (row === undefined || row.project_id === null) return;
+    if (row === undefined || row.project_id === null) return undefined;
     return { projectId: row.project_id, terminal: isTerminalStatus(row.status) };
   });
 }

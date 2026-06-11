@@ -326,7 +326,7 @@ async function loadDraftPrRunContext(pool: RunStateClient, runId: string): Promi
         ? undefined
         : {
             sshHost: row.ssh_host,
-            sshPort: Number(row.ssh_port),
+            sshPort: row.ssh_port,
             hostKeyFingerprint: row.host_key_fingerprint,
           },
   };

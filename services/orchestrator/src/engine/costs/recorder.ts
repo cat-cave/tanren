@@ -411,14 +411,14 @@ export class CostRecorder {
       await this.emitReconcileFailed(client, runId, totalCostUsd, basis, "no_rows");
       return { updated: 0 };
     }
-    const totalTokens = rows.rows.reduce((sum, row) => sum + Number(row.total_tokens), 0);
+    const totalTokens = rows.rows.reduce((sum, row) => sum + row.total_tokens, 0);
     if (totalTokens <= 0) {
       await this.emitReconcileFailed(client, runId, totalCostUsd, basis, "zero_token_denominator");
       return { updated: 0 };
     }
     let updated = 0;
     for (const row of rows.rows) {
-      const share = Number(row.total_tokens) / totalTokens;
+      const share = row.total_tokens / totalTokens;
       const apportioned = (totalCostUsd * share).toFixed(6);
       updated += await this.applyApportionedRow(client, row, apportioned, basis);
     }

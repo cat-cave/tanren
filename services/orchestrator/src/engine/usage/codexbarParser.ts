@@ -54,7 +54,7 @@ export function parseCodexbarUsage(stdout: string, provider: string): WindowUsag
   if (match === undefined) {
     return null;
   }
-  const usage = isObject(match["usage"]) ? (match["usage"] as Record<string, unknown>) : undefined;
+  const usage = isObject(match["usage"]) ? match["usage"] : undefined;
   if (usage === undefined) {
     return null;
   }

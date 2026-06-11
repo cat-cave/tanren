@@ -69,7 +69,7 @@ export function resolveDeployTarget(input: {
     return { kind: "configured", target: { provider, appId, orgId: input.orgId, policyVersion } };
   }
   // Config is incomplete. No deploy expected ⇒ legitimate no-op; otherwise LOUD.
-  if (input.deployIntent === false) return { kind: "none" };
+  if (!input.deployIntent) return { kind: "none" };
   const missingFields: string[] = [];
   if (typeof provider !== "string") missingFields.push("deployProvider");
   if (typeof appId !== "string") missingFields.push("deployAppId");

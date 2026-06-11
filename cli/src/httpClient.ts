@@ -24,14 +24,14 @@ function mergeAuthHeaders(init: RequestInit | undefined, auth: Record<string, st
   return { ...init, headers };
 }
 
-export async function request(path: string, init?: RequestInit) {
+export async function request(path: string, init?: RequestInit): Promise<unknown> {
   const auth = await authHeaders();
   const finalInit = mergeAuthHeaders(init, auth);
   const response = await fetch(`${orchestratorUrl}${path}`, finalInit);
   if (!response.ok) {
     throw new Error(`${init?.method ?? "GET"} ${path} failed: ${response.status} ${await response.text()}`);
   }
-  return response.json() as Promise<unknown>;
+  return response.json();
 }
 
 export async function jsonRequest(

@@ -323,7 +323,7 @@ export class PgMergeQueueModel implements MergeQueueModel {
   async supersedePriorRunEntry(runId: string): Promise<SupersededEntry | undefined> {
     const orgId = await this.resolveRunOrg(runId);
     if (orgId === null) return undefined;
-    return runWithOrgScope(this.pool, orgId, async (client) => {
+    return runWithOrgScope(this.pool, orgId, async (client): Promise<SupersededEntry | undefined> => {
       // Atomically retire the prior run's ACTIVE (queued/merging) entry — the partial
       // unique index guarantees at most one — so the spec stops having two live
       // entries (the percolation self-conflict). `RETURNING` carries the spec/PR facts
@@ -342,7 +342,7 @@ export class PgMergeQueueModel implements MergeQueueModel {
         [runId],
       );
       const row = result.rows[0];
-      if (row === undefined) return;
+      if (row === undefined) return undefined;
       return {
         queueId: row.queue_id,
         runId,

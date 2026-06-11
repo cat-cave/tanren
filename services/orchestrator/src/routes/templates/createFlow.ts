@@ -226,7 +226,7 @@ export function buildCreateForNoMatch(
     repoOwner: string;
   },
 ): (lifecycle: CaptureLifecycle) => Promise<SelectedTemplate | undefined> {
-  return async (lifecycle: CaptureLifecycle) => {
+  return async (lifecycle: CaptureLifecycle): Promise<SelectedTemplate | undefined> => {
     const request: TemplateCreationRequest = { ...requestFromLifecycle(lifecycle), owner: ctx.repoOwner };
     const createDeps = buildCreateTemplateDeps(deps, { orgId: ctx.orgId, actor: ctx.actor, request });
 
@@ -241,13 +241,13 @@ export function buildCreateForNoMatch(
     //    `maybeCreateTemplateForNoMatch` hook re-checks the registry (it may have been
     //    populated by a concurrent create) then runs the fail-closed creation gate.
     const decision = await maybeCreateTemplateForNoMatch(createDeps, request);
-    if (decision.created === false) {
+    if (!decision.created) {
       const proof = decision.template.manifest.validationProof;
       if (proof === null) {
         // A matched template with no proof is not seedable — return nothing so
         // selection halts loud (`TemplateRequiredError`), never a from-scratch seed.
         log.warn("no-match hook returned an unproven template (no validationProof)", { stack: request.stack });
-        return;
+        return undefined;
       }
       return { templateRef: decision.template.id, repoRef: decision.template.repoRef, validationProof: proof };
     }

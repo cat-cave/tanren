@@ -470,7 +470,7 @@ export function assertEventName(value: string): asserts value is EventName {
 }
 
 export function listEventNames(): EventName[] {
-  return [...eventNames].sort() as EventName[];
+  return [...eventNames].sort();
 }
 
 export class UnknownEventTypeError extends Error {

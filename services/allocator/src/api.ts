@@ -85,12 +85,13 @@ function requireBearer(token: string) {
       json: (body: unknown, status: number) => unknown;
     },
     next: () => Promise<void>,
-  ) => {
+  ): Promise<unknown> => {
     const provided = c.req.header("authorization");
     if (provided !== `Bearer ${token}`) {
       return c.json({ error: "unauthorized" }, 401);
     }
     await next();
+    return undefined;
   };
 }
 

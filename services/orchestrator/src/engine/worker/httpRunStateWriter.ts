@@ -277,5 +277,5 @@ function parseSpecDependenciesBlocked(body: string): { specId: string; blockedBy
   ) {
     return undefined;
   }
-  return { specId, blockedBy: blockedBy as string[] };
+  return { specId, blockedBy };
 }

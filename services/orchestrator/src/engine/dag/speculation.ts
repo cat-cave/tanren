@@ -77,6 +77,10 @@ export function ancestorCrossedThreshold(lifecycle: SpecLifecycle, threshold: Sp
       }
       return !isBlockingForModerate(lifecycle.openFindingMaxSeverity);
     }
+    default: {
+      const exhaustive: never = threshold;
+      throw new Error(`ancestorCrossedThreshold: unhandled threshold ${String(exhaustive)}`);
+    }
   }
 }
 

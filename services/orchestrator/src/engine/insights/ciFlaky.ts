@@ -216,7 +216,7 @@ export async function loadCiTestObservations(
     headSha: row.head_sha,
     outcome: normalizeTestOutcome(row.outcome),
     durationMs: row.duration_ms,
-    retries: Number(row.retries),
+    retries: row.retries,
     observedAt: row.observed_at instanceof Date ? row.observed_at : new Date(row.observed_at),
   }));
 }

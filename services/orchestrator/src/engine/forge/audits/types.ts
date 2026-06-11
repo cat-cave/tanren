@@ -88,6 +88,10 @@ export function findingToInboxSeverity(severity: FindingSeverity): "info" | "war
       return "warn";
     case "P3":
       return "info";
+    default: {
+      const exhaustive: never = severity;
+      throw new Error(`findingToInboxSeverity: unhandled severity ${String(exhaustive)}`);
+    }
   }
 }
 

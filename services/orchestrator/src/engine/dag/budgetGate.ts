@@ -201,5 +201,9 @@ function budgetWindowClause(period: BudgetPeriod): string {
       return " AND recorded_at >= date_trunc('year', now())";
     case "total":
       return "";
+    default: {
+      const exhaustive: never = period;
+      throw new Error(`budgetWindowClause: unhandled period ${String(exhaustive)}`);
+    }
   }
 }

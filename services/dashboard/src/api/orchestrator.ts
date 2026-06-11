@@ -252,7 +252,7 @@ export class OrchestratorClient extends OrchestratorOrgConfigClient {
     projectId: string,
     config: ProjectConfig,
   ): Promise<{ ok: boolean; status: number }> {
-    const result = await this.sendJson<unknown>(
+    const result = await this.sendJson(
       "PATCH",
       `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}`,
       { config },

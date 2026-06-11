@@ -149,13 +149,13 @@ export async function readRunStatus(
   orgId: string,
   runId: string,
 ): Promise<RunStatusSnapshot | undefined> {
-  return runWithOrgScope(pool, orgId, async (client) => {
+  return runWithOrgScope(pool, orgId, async (client): Promise<RunStatusSnapshot | undefined> => {
     const result = await client.query<{ status: string; outcome: string | null }>(
       `SELECT status, outcome FROM runs WHERE run_id = $1`,
       [runId],
     );
     const row = result.rows[0];
-    if (row === undefined) return;
+    if (row === undefined) return undefined;
     return { status: row.status, outcome: row.outcome, merged: MERGED_STATUSES.has(row.status) };
   });
 }
@@ -200,7 +200,7 @@ export async function readActiveRateLimitGate(
   return {
     provider,
     observation: row.observation,
-    retryAfterS: row.retry_after_s === null ? null : Number(row.retry_after_s),
+    retryAfterS: row.retry_after_s,
     ts: new Date(row.ts),
   };
 }

@@ -214,7 +214,7 @@ export type GatedConfigWriteResult =
  * `gated` WITHOUT touching the DB (apply-on-merge takes over later).
  */
 export async function gatedConfigWrite(input: GatedConfigWriteInput): Promise<GatedConfigWriteResult> {
-  const gateOn = input.next.auditGateEnabled === true;
+  const gateOn = input.next.auditGateEnabled;
   if (!gateOn || !isBucketBChange(input.prev, input.next)) {
     return { kind: "apply-directly", config: input.next };
   }
@@ -263,7 +263,7 @@ export async function applyOnMerge(input: {
   merged: OrgConfigV1;
   persist: (config: OrgConfigV1) => Promise<void>;
 }): Promise<boolean> {
-  if (input.current.auditGateEnabled !== true) {
+  if (!input.current.auditGateEnabled) {
     return false;
   }
   await input.persist(input.merged);

@@ -36,7 +36,7 @@ export function parseCcusageAccounting(stdout: string, cli: string): CcusagePars
   if (!isObject(parsed)) {
     return { failed: { detail: stdoutTail(stdout) } };
   }
-  const totalsRecord = isObject(parsed["totals"]) ? (parsed["totals"] as Record<string, unknown>) : undefined;
+  const totalsRecord = isObject(parsed["totals"]) ? parsed["totals"] : undefined;
   const dailyArray = Array.isArray(parsed["daily"]) ? parsed["daily"] : undefined;
   if (totalsRecord === undefined && dailyArray === undefined) {
     // A parseable object that is NOT a ccusage report — contract drift, loud.
@@ -68,7 +68,7 @@ function collectPerModel(daily: unknown[]): CcusageModelUsage[] {
     if (!isObject(day) || !isObject(day["models"])) {
       continue;
     }
-    for (const [model, raw] of Object.entries(day["models"] as Record<string, unknown>)) {
+    for (const [model, raw] of Object.entries(day["models"])) {
       if (!isObject(raw)) {
         continue;
       }
