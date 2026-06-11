@@ -20,8 +20,6 @@ import {
   type MergeProbe,
 } from "./mergeDispatchTypes.js";
 import { landViaAuthority, rebaseBehindBranch, reGateResolvedTree, type LandOps } from "./mergeLandPaths.js";
-import { createLogger } from "../../observability/logger.js";
-const log = createLogger("merge");
 
 export interface DispatcherDeps {
   input: MergeForRunInput;
@@ -31,12 +29,6 @@ export interface DispatcherDeps {
   integration: DispatchedIntegration;
   pr: { repo: RepoRef; pullNumber: number };
   probe: MergeProbe;
-  /**
-   * §2c cleanup: the ephemeral integration ref to delete AFTER a
-   * speculative dependent merges onto `default_branch`. Present only for a
-   * speculative run whose hold cleared; absent for a normal run.
-   */
-  speculativeCleanup?: string;
 }
 
 export class MergeDispatcher implements LandOps {
@@ -197,30 +189,6 @@ export class MergeDispatcher implements LandOps {
       );
     }
     return landViaAuthority(this.deps, this, bundle);
-  }
-
-  /**
-   * §2c cleanup: delete the ephemeral integration ref after a speculative
-   * dependent merged onto `default_branch`. No-op for a normal run (no cleanup
-   * ref). Best-effort: a delete failure is logged + swallowed — the merge already
-   * landed, so cleanup must never turn a successful merge into a failure. Emits
-   * `merge.integration_cleaned` on success for the audit trail.
-   */
-  async cleanupIntegrationBranch(): Promise<void> {
-    const { speculativeCleanup, probe, eventStore, integration } = this.deps;
-    if (speculativeCleanup === undefined) {
-      return;
-    }
-    try {
-      await probe.deleteIntegrationBranch(speculativeCleanup);
-      await eventStore.append({
-        ...this.base(),
-        eventType: "merge.integration_cleaned",
-        payload: { ...this.prFields(), integration, integrationBranch: speculativeCleanup },
-      });
-    } catch (error) {
-      log.warn("integration-ref cleanup failed (already landed)", { branch: speculativeCleanup }, error);
-    }
   }
 
   /**

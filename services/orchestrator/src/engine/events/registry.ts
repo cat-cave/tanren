@@ -84,7 +84,6 @@ import {
   MergeConflictResolvedPayload,
   MergeConflictResolvingPayload,
   MergeFailedPayload,
-  MergeIntegrationCleanedPayload,
   MergeQueuedPayload,
   MergeRebasedPayload,
   MergeRetargetedPayload,
@@ -318,10 +317,9 @@ export const EventRegistry = {
   // external-push governance posture block (strict / audit_only)
   "merge.blocked": MergeBlockedPayload,
   // §2c: a speculative dependent's MERGE held until its ancestors merge, then re-targeted
-  // from the integration ref to default_branch + the ref cleaned.
+  // from the integration ref to default_branch.
   "merge.speculative_held": MergeSpeculativeHeldPayload,
   "merge.retargeted": MergeRetargetedPayload,
-  "merge.integration_cleaned": MergeIntegrationCleanedPayload,
   // §2d: the native intelligent merge queue. A ready run ENTERS the queue (merge.queued w/
   // native_queue), the coordinator selects the DAG-ordered head (merge.queue.advanced), and an
   // entry that left without merging records merge.dequeued. Serialized: one merge at a time.

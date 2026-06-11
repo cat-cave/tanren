@@ -35,7 +35,6 @@ export function scriptedProbe(postResolution: PullRequestMergeability["state"]):
     },
     updateBranch: async () => ({ outcome: "up_to_date" as const, message: "" }),
     retargetBase: async () => {},
-    deleteIntegrationBranch: async () => {},
   };
 }
 

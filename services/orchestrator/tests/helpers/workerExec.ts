@@ -170,7 +170,6 @@ export function fakeWorkflowRunner(github: GitHubHttpClient) {
         }),
         updateBranch: async () => ({ outcome: "up_to_date" as const, message: "up to date" }),
         retargetBase: async () => {},
-        deleteIntegrationBranch: async () => {},
       },
       // The land is the unconditional `MergeAuthority` + CodeHost ff-only CAS (no host
       // PR-merge). Seed the in-memory host for the worker run's repo/PR head so the

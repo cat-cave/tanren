@@ -239,6 +239,13 @@
       "when": 1781152799512,
       "tag": "0033_fast_smiling_tiger",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1781153941046,
+      "tag": "0034_petite_toad",
+      "breakpoints": true
     }
   ]
 }

@@ -97,10 +97,9 @@ export function recordingMergeProbe(
   return {
     mergeabilityCalls: 0,
     updateBranchCalls: 0,
-    // record the retarget + cleanup so the speculative-land-on-main tests
-    // can assert the PR base was re-pointed to default_branch + the integ ref cleaned.
+    // record the retarget so the speculative-land-on-main tests
+    // can assert the PR base was re-pointed to default_branch.
     retargetedBases: [] as string[],
-    deletedIntegrationBranches: [] as string[],
     async readMergeability() {
       const mergeability = mergeabilityReads[Math.min(this.mergeabilityCalls, mergeabilityReads.length - 1)];
       this.mergeabilityCalls += 1;
@@ -113,14 +112,10 @@ export function recordingMergeProbe(
     async retargetBase(newBase: string) {
       this.retargetedBases.push(newBase);
     },
-    async deleteIntegrationBranch(branch: string) {
-      this.deletedIntegrationBranches.push(branch);
-    },
   } satisfies MergeProbe & {
     mergeabilityCalls: number;
     updateBranchCalls: number;
     retargetedBases: string[];
-    deletedIntegrationBranches: string[];
   };
 }
 

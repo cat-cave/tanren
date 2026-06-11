@@ -180,9 +180,6 @@ export async function mergeForRun(input: MergeForRunInput): Promise<MergeForRunR
     integration,
     pr,
     probe,
-    // jj-local: there is NO synthesized integration ref to clean after merge (the dependent
-    // assembled its base LOCALLY + stacked on real PR-head branches), so `speculativeCleanup`
-    // is never set. `cleanupIntegrationBranch` (kept for PR-11) is a no-op without it.
   });
 
   // governance posture gate. Only Tanren-initiated auto-merges
@@ -306,7 +303,6 @@ async function buildGitHubProbe(
     readMergeability: () => provider.readMergeability(pr, resolved),
     updateBranch: () => provider.updateBranch(pr, resolved),
     retargetBase: (newBase) => provider.retargetPullRequestBase(pr, newBase, resolved),
-    deleteIntegrationBranch: (branch) => provider.deleteBranch(repo, branch, resolved),
   };
 }
 

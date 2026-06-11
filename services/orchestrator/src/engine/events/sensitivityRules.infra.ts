@@ -340,7 +340,7 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["speculativeBase", "public"],
     ["unmergedAncestors[]", "public"],
   ]),
-  // §2c step 3: the cleared-hold retarget to default_branch + ref cleanup
+  // §2c step 3: the cleared-hold retarget to default_branch
   // — PR identifiers + branch refs, all public.
   ...rulesFor("merge.retargeted", [
     ["prUrl", "public"],
@@ -348,12 +348,6 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["integration", "public"],
     ["fromBase", "public"],
     ["toBase", "public"],
-  ]),
-  ...rulesFor("merge.integration_cleaned", [
-    ["prUrl", "public"],
-    ["prNumber", "public"],
-    ["integration", "public"],
-    ["integrationBranch", "public"],
   ]),
   // intent-preserving conflict resolution — PR identifiers + spec ids +
   // refs + the DAG-edge signal + file paths + reasoning prose, all public.

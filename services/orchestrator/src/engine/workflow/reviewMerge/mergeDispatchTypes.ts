@@ -116,7 +116,7 @@ export interface MergeForRunInput {
   /**
    * Test seam. When provided, the stage uses this instead of GitHub for the
    * mergeability/branch-state probe operations (readMergeability / updateBranch /
-   * retargetBase / deleteIntegrationBranch). Production omits it → the dispatcher builds
+   * retargetBase). Production omits it → the dispatcher builds
    * the real probe through the resolved token. NOT a land path: the land is the
    * unconditional `MergeAuthority`, regardless of this seam.
    */
@@ -216,7 +216,7 @@ export type NativeQueueEnqueuer = (input: {
  * Injectable mergeability/branch-state probe (real GitHub by default; mocked in tests).
  * NOT a land path — the land is the unconditional `MergeAuthority` + `CodeHost` CAS; this
  * probe only reads mergeability + drives the legacy server-side branch ops (update /
- * retarget / delete) the dispatcher still needs.
+ * retarget) the dispatcher still needs.
  */
 export interface MergeProbe {
   /** read the PR branch's up-to-date / mergeability state before merging. */
@@ -229,11 +229,6 @@ export interface MergeProbe {
    * ephemeral integration ref. Followed by the rebase + re-gate flow.
    */
   retargetBase(newBase: string): Promise<void>;
-  /**
-   * §2c cleanup: delete the ephemeral integration ref after the dependent
-   * merged. Best-effort + idempotent (a missing ref is success).
-   */
-  deleteIntegrationBranch(branch: string): Promise<void>;
 }
 
 /**

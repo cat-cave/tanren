@@ -50,7 +50,6 @@ function cleanProbe(): MergeProbe {
     readMergeability: async () => mergeability("clean"),
     updateBranch: async () => ({ outcome: "up_to_date" as const, message: "" }),
     retargetBase: async () => {},
-    deleteIntegrationBranch: async () => {},
   };
 }
 
