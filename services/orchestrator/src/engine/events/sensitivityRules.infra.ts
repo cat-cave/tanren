@@ -373,6 +373,20 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["resolvedFiles[]", "public"],
     ["reGated", "public"],
   ]),
+  // §3.2 deterministic entity-merge — PR identifiers + spec id + the spliced files +
+  // the merged entity ids (structural identities, not secrets), all public.
+  ...rulesFor("merge.conflict.entity_merged", [
+    ["prUrl", "public"],
+    ["prNumber", "public"],
+    ["integration", "public"],
+    ["baseBranch", "public"],
+    ["mergingSpecId", "public"],
+    ["resolvedFiles", "public"],
+    ["resolvedFiles[]", "public"],
+    ["entityIds", "public"],
+    ["entityIds[]", "public"],
+    ["reGated", "public"],
+  ]),
   ...rulesFor("merge.conflict.irreconcilable", [
     ["prUrl", "public"],
     ["prNumber", "public"],

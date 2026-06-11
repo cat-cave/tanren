@@ -100,6 +100,7 @@ export const eventTypeNames = [
   "merge.blocked",
   "merge.completed",
   "merge.conflict",
+  "merge.conflict.entity_merged",
   "merge.conflict.irreconcilable",
   "merge.conflict.replan_routed",
   "merge.conflict.resolved",

@@ -154,26 +154,29 @@ intelligent merge queue** (DAG-order serialized merge + batch-check + bisect),
 **Mergify removed entirely**. The durable design rationale is
 **`docs/architecture/autonomy-engine.md`**.
 
-**The tanren-owns-the-engine cutover is merged and flag-on (merge paths still
-apex-unproven).** The GitHub-shaped `VcsProvider` is decomposed by purpose into four
-seams — a **jj (jujutsu) `WorkspaceVcsCore`** (jj-only, no git fallback;
+**The tanren-owns-the-engine cutover is COMPLETE — it is the single live path.**
+The GitHub-shaped `VcsProvider` is decomposed by purpose into four seams — a **jj
+(jujutsu) `WorkspaceVcsCore`** (jj-only, no git fallback;
 `engine/providers/jjWorkspaceVcsCore.ts`), a minimal **`CodeHost`**
 (push/fetch/land-to-`main`; `githubCodeHost.ts`), the guaranteed fail-closed
 **`MergeAuthority`** (the sole merge decision; `engine/merge/mergeAuthorityImpl.ts`),
 and best-effort **`VisibilityProjection`** (the PR/check mirror). The unified
 **`integration_nodes`** run model replaces the speculative-vs-real divergence; a
 **never-discard `BaseShiftCoordinator`** rebases dependent work in place (the old
-percolation _superseded + regenerated_ — discarding work; that is replaced, not
-preserved); and the auditor emits **P0–P3 findings** gated by an **`auditPosture`**
-DORA knob. The live paths — jj as the conflict resolver, live base-shift, and
-`integration_nodes` proof-reuse + jj-local integration — are **default-on behind
-kill-switch env vars** (`MERGE_AUTHORITY_LIVE`, `CONFLICT_RESOLVER_JJ_LIVE`,
-`BASE_SHIFT_LIVE`, `INTEGRATION_NODES_DRIVE`). apex v32 exercised the early live
-paths but **halted at scaffold-bootstrap before any merge**, so the flag-on
-**merge** paths are still **not apex-proven**; the deletions (the now-dead
-`speculativeIntegrator`, the git-merge-abort applier dance, the 26-method
-`VcsProvider`) are deferred until a run reaches a merge. Full rationale:
-**`docs/architecture/tanren-owns-the-engine.md`**.
+percolation _superseded + regenerated_ — discarding work; that is gone); and the
+auditor emits **P0–P3 findings** gated by an **`auditPosture`** DORA knob. The
+cutover is **no longer flag-gated**: the WS-A/WS-B series deleted the kill-switch
+env vars (`MERGE_AUTHORITY_LIVE`, `CONFLICT_RESOLVER_JJ_LIVE`, `BASE_SHIFT_LIVE`,
+`INTEGRATION_NODES_DRIVE`, `WALKER_JJ_LOCAL_BASE`) — jj as the conflict resolver,
+live base-shift, and jj-local integration are unconditional. A dependent run
+jj-assembles its base from the **real ancestor PR-head refs** (`runs.ancestor_stack`
+— true stacked PRs); there is **no synthesized `tanren/integ` host ref**, and the
+legacy `speculative_base` + `integrated_ancestor_shas` columns are dropped. The
+`integration.*` metrics read-side (`rebase_vs_rebuild`) is **built** (route +
+compute + insights). apex remains the live-validation vehicle — a real merge through
+the live jj/`MergeAuthority` path is the open item (apex v32 halted at
+scaffold-bootstrap before reaching one) — but the engine is the single path
+regardless. Full rationale: **`docs/architecture/tanren-owns-the-engine.md`**.
 
 **The only remaining major effort is Phase 3 — `apex`**: a max-difficulty fixture
 that takes a one-paragraph brief to a deployed product (URL shortener + Slack bot +

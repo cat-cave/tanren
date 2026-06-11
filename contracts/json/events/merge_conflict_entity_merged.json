@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "baseBranch": {
+      "type": "string"
+    },
+    "entityIds": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "integration": {
+      "enum": [
+        "native_queue",
+        "direct_merge",
+        "external_reviewer"
+      ],
+      "type": "string"
+    },
+    "mergingSpecId": {
+      "type": "string"
+    },
+    "prNumber": {
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+    },
+    "prUrl": {
+      "type": "string"
+    },
+    "reGated": {
+      "type": "boolean"
+    },
+    "resolvedFiles": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "prUrl",
+    "prNumber",
+    "integration",
+    "baseBranch",
+    "mergingSpecId",
+    "resolvedFiles",
+    "entityIds",
+    "reGated"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.merge.conflict.entity_merged"
+}

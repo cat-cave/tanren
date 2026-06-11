@@ -32,3 +32,14 @@ export {
   type ClaimSelfValidationTransition,
   type ClaimDecidability,
 } from "./claimSelfValidation.js";
+
+// The HOST-SIDE PRODUCER of the entity-change map (§3.1): runs `sem` read-only on
+// the runner to compute the deterministic signal natively (NOT prompt injection),
+// with the graceful `unknown` fallback when sem is absent / errors / can't parse.
+export {
+  produceEntityChangeMap,
+  parseSemDiffJson,
+  semDiffCommand,
+  type EntityMapProduction,
+  type SemEntityProducerInput,
+} from "./semEntityProducer.js";

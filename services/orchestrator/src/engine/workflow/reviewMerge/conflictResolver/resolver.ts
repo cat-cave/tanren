@@ -40,8 +40,20 @@ import {
 } from "../../../contracts/conflictResolution.js";
 import type { ConflictContext, ConflictResolverHook } from "../mergeDispatchTypes.js";
 import { createLogger } from "../../../observability/logger.js";
+import type { EntityMergeOutcome } from "./entityMergeFirstPass.js";
 
 const log = createLogger("conflict-resolver");
+
+/**
+ * §3.2 the DETERMINISTIC ENTITY-MERGE FIRST-PASS. Given the conflicted paths, attempt a
+ * `weave`-inspired entity-level resolution (two edits to DIFFERENT entities of the same file
+ * are not a real conflict): on success the merged file contents are returned and the agent
+ * resolver is SKIPPED; on a defer (same-entity edit, `sem` absent/errored, unprovable
+ * disjointness) the agent resolver runs exactly as today. NEVER throws.
+ */
+export interface EntityMergeFirstPassHook {
+  attempt(input: { conflictedPaths: ReadonlyArray<string> }): Promise<EntityMergeOutcome>;
+}
 
 export interface IntentPreservingResolverDeps {
   /** The run's project + the merging spec + its intent (captured per-run). */
@@ -61,6 +73,14 @@ export interface IntentPreservingResolverDeps {
   productVision?: ProductVisionReader;
   /** Gather hunks + apply/publish/abort the resolution over the runner workspace. */
   applier: WorkspaceConflictApplier;
+  /**
+   * §3.2 the deterministic entity-merge FIRST-PASS (optional). When present, it runs AFTER
+   * `gather()` and BEFORE the agent Answerer: a different-entity-same-file conflict is
+   * spliced deterministically (the agent is skipped, but the spliced tree still re-gates);
+   * anything not provably entity-disjoint defers to the agent path below, unchanged. Absent
+   * ⇒ the resolver behaves exactly as before this PR (the agent resolves every conflict).
+   */
+  entityFirstPass?: EntityMergeFirstPassHook;
   /** The conflict-resolution Answerer (read-only; both intents + hunks + edge). */
   answerer: ConflictAnswererInvoker;
   /** Re-run gate + checker + auditor against the resolved tree (never merge unverified). */
@@ -108,6 +128,55 @@ export function buildIntentPreservingConflictResolver(deps: IntentPreservingReso
         { specId: deps.mergingSpecIntent.specId },
       );
       return { resolved: false };
+    }
+
+    // §3.2 DETERMINISTIC ENTITY-MERGE FIRST-PASS (before the agent + before provenance):
+    // a `weave`-inspired library first-pass. If every conflicted file's two sides edit
+    // DIFFERENT entities, splice both edits onto the base deterministically — apply +
+    // RE-GATE the spliced tree, and on a clean re-gate publish + skip the agent entirely.
+    // A defer (same-entity edit, sem absent/errored, unprovable disjointness) OR a failed
+    // re-gate of the splice falls THROUGH to the agent resolver below, exactly as today —
+    // the first-pass NEVER changes a verdict it cannot make safely (the binding never-brick
+    // / never-silently-mis-resolve principle; the agent path remains authoritative).
+    if (deps.entityFirstPass !== undefined) {
+      const firstPass = await deps.entityFirstPass.attempt({ conflictedPaths });
+      if (firstPass.resolved) {
+        await deps.applier.applyResolution(firstPass.files);
+        const resolvedPaths = firstPass.files.map((f) => f.path);
+        const verdict = await deps.reGate.reGate({ resolvedFiles: resolvedPaths });
+        if (verdict.passed) {
+          await deps.applier.publishResolved();
+          await deps.eventStore.append({
+            runId: context.runId,
+            specId: deps.mergingSpecIntent.specId,
+            projectId: deps.projectId,
+            eventType: "merge.conflict.entity_merged",
+            payload: {
+              prUrl: context.prUrl,
+              prNumber: context.prNumber,
+              integration: "direct_merge",
+              baseBranch: context.baseBranch,
+              mergingSpecId: deps.mergingSpecIntent.specId,
+              resolvedFiles: resolvedPaths,
+              entityIds: [...firstPass.entityIds],
+              reGated: true,
+            },
+          });
+          return { resolved: true };
+        }
+        // The deterministic splice did NOT survive the re-gate — it was not a safe resolution
+        // after all. DON'T merge it; fall through to the agent resolver (which gathers the
+        // conflict afresh). Observed loudly so a wrong-splice→re-gate-fail is visible.
+        log.warn("entity-merge first-pass re-gate FAILED; deferring to the agent resolver", {
+          specId: deps.mergingSpecIntent.specId,
+          failedStage: verdict.failedStage,
+        });
+      } else {
+        log.info("entity-merge first-pass deferred to the agent resolver", {
+          specId: deps.mergingSpecIntent.specId,
+          reason: firstPass.reason,
+        });
+      }
     }
 
     const provenance = await deps.provenance.read({
