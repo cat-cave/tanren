@@ -130,9 +130,9 @@ async function resolveRunFacts(pool: pg.Pool, runId: string): Promise<RunFacts> 
  */
 export function buildDriveMerge(deps: BuildMergeCoordinatorDeps): DriveMergeForQueuedRun {
   // THE ONE BASE-SHIFT HANDLER (§7): the merge-path `behind` rebase routes through the
-  // SAME `BaseShiftCoordinator` the change-percolation kick-off uses (live seams under
-  // `baseShiftLive()`, default ON; the allocator/ssh/identity are the SAME the drive
-  // resolver uses) — never a second server-side update-branch. Built once per drive build.
+  // SAME `BaseShiftCoordinator` the change-percolation kick-off uses (the live jj seams;
+  // the allocator/ssh/identity are the SAME the drive resolver uses) — never a second
+  // server-side update-branch. Built once per drive build.
   const baseShiftCoordinator = buildBaseShiftCoordinator(
     {
       pool: deps.pool,

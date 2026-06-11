@@ -124,10 +124,10 @@ export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<Auton
     // spec reopen + re-execution run-CREATE + events through the control plane when
     // wired; else direct on the pool (byte-identical).
     ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
-    // Wave-3/Slice-2 LIVE base shift: the runner allocator + SSH substrate + identity ref
-    // (the SAME the merge coordinator's drive resolver uses) so a base shift actually
-    // REBASES the dependent's branch in place over jj + re-gates it (flag `baseShiftLive()`,
-    // default ON). Absent here ⇒ the fail-closed `Held*` stubs hold the work loudly.
+    // The LIVE base shift: the runner allocator + SSH substrate + identity ref (the SAME
+    // the merge coordinator's drive resolver uses) so a base shift actually REBASES the
+    // dependent's branch in place over jj + re-gates it. These are REQUIRED — absent, the
+    // base-shift handler cannot drive a live runner and construction throws loud.
     allocator: deps.allocator,
     ssh: deps.ssh,
     identitySecretRef: deps.identitySecretRef,
