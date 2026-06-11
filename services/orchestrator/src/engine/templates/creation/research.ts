@@ -39,6 +39,14 @@ export interface TemplateCreationRequest {
   // The deploy target the template's `just deploy` should wire ("vercel",
   // "flyio", "hetzner"). Absent ⇒ the template ships no deploy hook.
   deployTarget?: string;
+  // The EXPLICIT, already-linked deploy provider the template-build project must
+  // provision against — threaded verbatim from the operator's greenfield derive
+  // choice (`deploy.providerKind`, preflighted as linked). When present this is
+  // AUTHORITATIVE: the build provisions THIS provider, never one re-guessed from
+  // `deployTarget`. The no-match onboarding path ALWAYS carries it (the derive
+  // requires an explicit deploy provider); the standalone operator create route may
+  // omit it and fall back to the `deployTarget` heuristic.
+  deployProviderKind?: "deploy.vercel" | "deploy.flyio";
   // Whether the template must bake behavior-driven specs (the BDD feature set).
   // Defaults true (the full-bar doctrine) — the request can opt out for a stack
   // with no BDD concept.

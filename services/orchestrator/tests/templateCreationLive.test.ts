@@ -307,6 +307,9 @@ describe("createTemplateFlow assembly — the live, mountable capability", () =>
       actor: { userId: "u", orgId: "org_acme", projectId: null, scopes: ["org:admin"], source: "session" },
       templateRegistryQuery: async () => [],
       repoOwner: "cat-cave",
+      // The operator's explicit, linked deploy provider threads through the ctx (type-checks
+      // the apex-v33 fix: the no-match build follows the named provider, not a flyio re-guess).
+      deployProviderKind: "deploy.vercel",
     });
     expect(typeof seam).toBe("function");
   });

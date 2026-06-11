@@ -52,14 +52,23 @@ const log = createLogger("template-creation");
 
 // The deploy provider a template-build project provisions. A template REPO does not
 // ship a deployed product, but the greenfield derive REQUIRES a deploy dependency
-// (the apex/greenfield contract). We map the request's `deployTarget` onto the
-// supported deploy providers; an unmapped/absent target defaults to `deploy.flyio`
-// so the derive's required-deploy invariant is satisfied without hardcoding a stack
-// (the deploy is the template's CI deploy hook, exercised but not a live product).
-function deployDependencyFor(request: TemplateCreationRequest): { providerKind: string; name: string } {
+// (the apex/greenfield contract). When the request carries an EXPLICIT
+// `deployProviderKind` — the operator's already-linked, preflighted derive choice —
+// it is AUTHORITATIVE: the build provisions THAT provider, never one re-guessed. The
+// no-match onboarding path always supplies it (the derive requires an explicit deploy
+// provider, guaranteed linked), so the template build never demands a provider the org
+// has not linked. Only the standalone operator create route (which may pass a free-form
+// `deployTarget` with no explicit providerKind) falls back to the target-string
+// heuristic. We NEVER let that heuristic shadow an explicit choice, and never silently
+// default to flyio when an explicit, linked provider was supplied.
+export function deployDependencyFor(request: TemplateCreationRequest): { providerKind: string; name: string } {
+  const name = `tmpl-${request.stack}`.slice(0, 80);
+  if (request.deployProviderKind !== undefined) {
+    return { providerKind: request.deployProviderKind, name };
+  }
   const target = (request.deployTarget ?? "").toLowerCase();
   const providerKind = target.includes("vercel") ? "deploy.vercel" : "deploy.flyio";
-  return { providerKind, name: `tmpl-${request.stack}`.slice(0, 80) };
+  return { providerKind, name };
 }
 
 /** The infra `mountFeatureRoutes` assembles the live create flow from. */
@@ -224,10 +233,21 @@ export function buildCreateForNoMatch(
     actor: ActorContext;
     templateRegistryQuery: TemplateRegistryQuery;
     repoOwner: string;
+    // The operator's EXPLICIT, already-linked deploy provider from the derive request.
+    // Threaded verbatim so the template build provisions against the SAME provider the
+    // operator named (guaranteed linked by the derive preflight) — never a provider
+    // re-guessed from the lifecycle string that defaults to an unlinked `deploy.flyio`.
+    // The greenfield/apex derive always supplies it; only a deploy-less derive omits it
+    // (then the build falls back to the `deployTarget` heuristic).
+    deployProviderKind?: "deploy.vercel" | "deploy.flyio";
   },
 ): (lifecycle: CaptureLifecycle) => Promise<SelectedTemplate | undefined> {
   return async (lifecycle: CaptureLifecycle): Promise<SelectedTemplate | undefined> => {
-    const request: TemplateCreationRequest = { ...requestFromLifecycle(lifecycle), owner: ctx.repoOwner };
+    const request: TemplateCreationRequest = {
+      ...requestFromLifecycle(lifecycle),
+      owner: ctx.repoOwner,
+      ...(ctx.deployProviderKind === undefined ? {} : { deployProviderKind: ctx.deployProviderKind }),
+    };
     const createDeps = buildCreateTemplateDeps(deps, { orgId: ctx.orgId, actor: ctx.actor, request });
 
     // 1. FAST existing-match check (no build). A pre-existing validated/official
