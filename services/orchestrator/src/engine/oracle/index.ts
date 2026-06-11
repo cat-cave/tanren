@@ -18,3 +18,17 @@ export {
 } from "./entityRiskTaxonomy.js";
 
 export { checkerPostureFor, renderRiskPostureLines, type CheckerRiskPosture } from "./checkerRiskPosture.js";
+
+// §3.3: the SELF-VALIDATING CLAIM oracle — the durable form of the §2.3 staleness
+// check. A Claim anchored to an entity self-resolves ONLY on positive evidence the
+// entity is GONE; absence of evidence keeps it open (no-silent-fallback). Pure
+// decision core; the driver (claimSelfValidationDriver.ts) runs the producer + persists.
+export {
+  validateClaimAgainstEntity,
+  type EntityProbeOutcome,
+  type EntityProbeStatus,
+  type ProbeUnavailableReason,
+  type ClaimSelfValidationVerdict,
+  type ClaimSelfValidationTransition,
+  type ClaimDecidability,
+} from "./claimSelfValidation.js";

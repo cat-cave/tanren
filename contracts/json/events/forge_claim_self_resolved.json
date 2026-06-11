@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "claimId": {
+      "type": "string"
+    },
+    "decidability": {
+      "enum": [
+        "decidable",
+        "needs_agent",
+        "unchecked"
+      ],
+      "type": "string"
+    },
+    "entityId": {
+      "type": "string"
+    },
+    "entityName": {
+      "type": "string"
+    },
+    "orgId": {
+      "type": "string"
+    },
+    "projectId": {
+      "type": "string"
+    },
+    "rationale": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "claimId",
+    "orgId",
+    "projectId",
+    "entityId",
+    "entityName",
+    "decidability",
+    "rationale"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.forge.claim.self_resolved"
+}

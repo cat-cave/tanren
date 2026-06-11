@@ -22,6 +22,14 @@ export {
   type RegisterTemplateInput,
   type TemplateCapabilityQuery,
 } from "./templates.js";
+// Entity-anchored issue CLAIMS (§3.3): the Tanren-native defect ledger store.
+export {
+  EntityClaimStore,
+  type EntityClaim,
+  type EntityClaimStatus,
+  type AnchorClaimInput,
+  type ClaimValidationUpdate,
+} from "./entityClaims.js";
 // Forge + recovery data-access stores. The thread/turn/proposal stores live
 // under engine/forge (their routes import them by name); the seam aggregates
 // them here so callers depend on the `Repositories` contract. The discovery /

@@ -495,6 +495,6 @@ export { experiments, experimentCells, experimentTrials } from "./schemaBenchmar
 // integration registry (Plane A) + the built product's app-environment store
 // (Plane B). See schemaIntegrations.ts for the two-plane rationale.
 export { orgIntegrations, projectAppEnv } from "./schemaIntegrations.js";
-// Tanren-native templating (wave 1): the template REGISTRY — org-scoped with an
-// official/cat-cave cross-org-readable tier. See schemaTemplates.ts.
+// Templating REGISTRY (schemaTemplates.ts) + §3.3 entity-anchored CLAIMS ledger (schemaClaims.ts).
 export { templates } from "./schemaTemplates.js";
+export { entityClaims } from "./schemaClaims.js";

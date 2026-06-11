@@ -44,6 +44,7 @@ import {
   OrgIntegrationsStore,
   AppEnvironmentStore,
   TemplateStore,
+  EntityClaimStore,
 } from "../repositories/index.js";
 
 /** A pool or a checked-out (org-scoped) client — anything that can run a query. */
@@ -100,6 +101,8 @@ export interface Repositories {
   readonly appEnvironment: typeof AppEnvironmentStore;
   /** Tanren-native templating (wave 1): the `templates` registry (CRUD + capability query + status). */
   readonly templates: typeof TemplateStore;
+  /** §3.3 entity-anchored issue CLAIMS: the Tanren-native defect ledger (`entity_claims`). */
+  readonly entityClaims: typeof EntityClaimStore;
 }
 
 /**
@@ -134,6 +137,7 @@ export const pgRepositories: Repositories = {
   orgIntegrations: OrgIntegrationsStore,
   appEnvironment: AppEnvironmentStore,
   templates: TemplateStore,
+  entityClaims: EntityClaimStore,
 } as const;
 
 export type { ActorRef };

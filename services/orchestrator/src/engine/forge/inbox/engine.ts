@@ -33,6 +33,7 @@ import {
   type SpecQualityAnswerer,
 } from "../specQuality/index.js";
 import { InboxStore } from "../../repositories/inbox.js";
+import { anchorClaimForCandidate, claimAlreadySelfResolved, type ClaimLedgerConfig } from "./claimsIntake.js";
 import { resolveProjectPlacement } from "./placement.js";
 import type {
   Candidate,
@@ -53,6 +54,13 @@ export interface InboxEngineDeps {
   // Connectors keyed by source kind. The route wires the GitHub Issues
   // connector; tests inject fakes. A source with no connector is skipped.
   connectors: ReadonlyMap<string, SourceConnector>;
+  // §3.3 entity-anchored Claims (the Tanren-native defect ledger). When wired, a
+  // triaged candidate carrying an `entityAnchor` ANCHORS a durable Claim to that
+  // entity's structural-hash identity (the durable form of the §2.3 one-shot
+  // staleness check); and the engine CONSULTS the ledger so a candidate whose Claim
+  // already SELF-RESOLVED is not re-routed as live work. Optional: absent ⇒ the
+  // ledger is inert and ingestion behaves exactly as before (graceful, no Claim).
+  claimLedger?: ClaimLedgerConfig;
   // The triage answerer — REQUIRED for ingestion. Production resolves a real
   // provider answerer from the project's `forge` routing (the model reaches a
   // real verdict); tests inject a fake. There is NO production fallback to a
@@ -114,6 +122,26 @@ export async function ingestSource(
     // System sources whose triage is auto-routable promote straight through.
     const status = triage.verdict === "auto_routable" ? "auto_routed" : "triaged";
     let candidate = await InboxStore.upsertCandidate(deps.pool, source, item, triage, status);
+
+    // §3.3 entity-anchored Claims (the Tanren-native defect ledger). CONSULT the
+    // ledger first: if this candidate already carries a SELF-RESOLVED Claim (a prior
+    // triage anchored it to an entity that has since been refactored away), it is a
+    // stale issue — do NOT re-route it as live. Then ANCHOR/refresh a durable Claim
+    // from the triage's entity identity, so the one-shot verdict becomes a standing,
+    // self-validating Claim. Inert (and ingestion byte-identical) when no ledger is wired.
+    if (deps.claimLedger !== undefined) {
+      const alreadyResolved = await claimAlreadySelfResolved(deps.pool, candidate.id);
+      if (alreadyResolved) {
+        log.info("candidate has a self-resolved entity Claim — closing as stale, not re-routing", {
+          candidateId: candidate.id,
+        });
+        candidate = (await InboxStore.resolveCandidate(deps.pool, candidate.id, "closed_duplicate", null)) ?? candidate;
+        out.push(candidate);
+        continue;
+      }
+      await anchorClaimForCandidate(deps.pool, deps.claimLedger, candidate, triage);
+    }
+
     // §3.6 status-guard (dup-spec race): GUARD on the upsert's RETURNED status, not
     // the local triage verdict. The upsert is idempotent on (source, externalId) and
     // keeps an already-terminal status — so a concurrent re-ingest of the same item
