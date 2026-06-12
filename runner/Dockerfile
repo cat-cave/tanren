@@ -227,6 +227,64 @@ RUN useradd --create-home --shell /bin/bash --uid 1000 tanren \
   && chown -R tanren:tanren /workspace /home/tanren/.ssh /tanren-runtime \
   && chmod 700 /home/tanren/.ssh /tanren-runtime
 
+# === WARM mise BASELINE — the GOLDEN IMAGE's speed mechanism (env-management.md
+# §3 Layer 3 + §7 P2). The runner ships NO project toolchain BAKED ON PATH (the
+# harness node at /usr/local stays the only PATH node — isolation invariant from
+# P0a). Instead we pre-WARM a SHARED mise data dir with the empirically-common
+# baseline (runner/mise.baseline.toml) so a project declaring that baseline gets a
+# warm CACHE HIT at workspace-prep instead of a cold download.
+#
+# THE SHARED-DATA-DIR MECHANISM (how the warm cache stays usable by `tanren` AND
+# isolated from the harness):
+#   - /opt/tanren/mise is the shared mise DATA dir (installs/, shims/, lockfile),
+#     /opt/tanren/mise-cache the CACHE dir. Both are OWNED BY `tanren` (uid 1000)
+#     and world-readable. Ownership-by-tanren (not root-owned read-only) is
+#     deliberate: it makes the dir the warm baseline AND writable for the DELTA —
+#     a project declaring an OFF-baseline version cold-installs into the SAME dir
+#     in user space (no EACCES), exactly the layering §3 Layer 3 describes.
+#   - The `tanren` user defaults MISE_DATA_DIR/MISE_CACHE_DIR to these via
+#     /etc/profile.d (login shells) AND ~/.config/mise/config.toml-adjacent env —
+#     so an interactive SSH session + the gate's `mise install`/`mise activate`
+#     (engine/ssh/miseActivate.ts) resolve the pre-warmed installs.
+#   - mise is NEVER globally ACTIVATED (no `mise activate` in any profile that
+#     mutates PATH unconditionally — see the mise install block above). A bare
+#     shell therefore still resolves the /usr/local HARNESS node; codex/codexbar/
+#     ccusage stay on the harness node regardless of the warm baseline. The warm
+#     toolchains are only used when a command opts in (the project-command path's
+#     `eval "$(mise activate bash)"`), never the harness/answerer path.
+ENV TANREN_MISE_DATA_DIR=/opt/tanren/mise \
+  TANREN_MISE_CACHE_DIR=/opt/tanren/mise-cache
+COPY runner/mise.baseline.toml /opt/tanren/mise.baseline.toml
+RUN set -eu; \
+  mkdir -p "${TANREN_MISE_DATA_DIR}" "${TANREN_MISE_CACHE_DIR}" /home/tanren/.config/mise; \
+  chown -R tanren:tanren /opt/tanren "${TANREN_MISE_DATA_DIR}" "${TANREN_MISE_CACHE_DIR}"; \
+  # Persist the shared-dir env for `tanren` login shells (interactive SSH) so the
+  # gate's mise commands resolve the SHARED data dir. profile.d is sourced by the
+  # login shell sshd starts; we also write a non-login fallback via ~/.bashrc.
+  printf 'export MISE_DATA_DIR=%s\nexport MISE_CACHE_DIR=%s\n' "${TANREN_MISE_DATA_DIR}" "${TANREN_MISE_CACHE_DIR}" \
+    > /etc/profile.d/tanren-mise-shared-dir.sh; \
+  chmod 644 /etc/profile.d/tanren-mise-shared-dir.sh; \
+  printf '\n# Golden-image shared mise warm-baseline data dir (env-management.md P2).\nexport MISE_DATA_DIR=%s\nexport MISE_CACHE_DIR=%s\n' \
+    "${TANREN_MISE_DATA_DIR}" "${TANREN_MISE_CACHE_DIR}" >> /home/tanren/.bashrc; \
+  chown tanren:tanren /home/tanren/.bashrc; \
+  # Pre-warm AS `tanren` (uid 1000) so every install dir is tanren-owned — the
+  # same user the SSH gate runs as resolves them read-only on a hit and can write
+  # the delta on a miss. `mise trust` clears the config-trust gate for the
+  # Tanren-baked baseline config; `mise install` resolves each loose major to the
+  # latest patch at BUILD time (freshness — never a stale exact pin) and downloads
+  # it once into the shared dir.
+  su -s /bin/sh tanren -c '\
+    set -eu; \
+    export MISE_DATA_DIR='"${TANREN_MISE_DATA_DIR}"' MISE_CACHE_DIR='"${TANREN_MISE_CACHE_DIR}"' MISE_YES=1; \
+    export MISE_GLOBAL_CONFIG_FILE=/opt/tanren/mise.baseline.toml; \
+    mise trust /opt/tanren/mise.baseline.toml; \
+    mise install; \
+    echo "=== golden-image warm baseline (resolved patches) ==="; \
+    mise ls --installed; \
+  '; \
+  # World-readable so a warm hit is a pure read; tanren keeps write for the delta.
+  chmod -R a+rX "${TANREN_MISE_DATA_DIR}"
+
 RUN sed -i 's/#PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config \
   && sed -i 's/#PubkeyAuthentication yes/PubkeyAuthentication yes/' /etc/ssh/sshd_config
 
