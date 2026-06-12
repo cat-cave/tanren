@@ -7,10 +7,32 @@ import {
 } from "../src/engine/ssh/keygen.js";
 import { hostKeyFingerprintMatches, sshSha256Fingerprint } from "../src/engine/ssh/fingerprint.js";
 
-// A real well-formed ed25519 keypair captured once (via the real generator with
-// the spy not yet installed) so the retry tests have a known-GOOD value to feed
-// back after the simulated malformed ones.
-const GOOD = sshUtils.generateKeyPairSync("ed25519");
+// A real, well-formed ed25519 keypair captured ONCE from the real generator and
+// frozen as a literal constant. The retry tests feed this back as the "good"
+// key after the simulated malformed ones, and assert the returned key
+// round-trips (parseKey -> getPublicSSH).
+//
+// This MUST be a fixed literal, not a live `sshUtils.generateKeyPairSync()`
+// call: ssh2@1.17.0's native keygen is itself non-deterministic (~0.36% of keys
+// have the broken-length-prefix bug), so capturing GOOD live at module-load
+// re-introduced the exact flake these tests guard against — a malformed GOOD
+// passes the `.toBe(GOOD.public)` compare but then fails the round-trip
+// assertion. A frozen, pre-verified-round-tripping literal is deterministic.
+// (Verified once at capture time: `parseKey` succeeds and `getPublicSSH()`
+// re-encodes cleanly.)
+const GOOD: { public: string; private: string } = {
+  public: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGLYLard7cO5vu+DKtX57F5oDsyz5nW3Gqj2FbX6azDt",
+  private: [
+    "-----BEGIN OPENSSH PRIVATE KEY-----",
+    "b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtz",
+    "c2gtZWQyNTUxOQAAACBi2C2q3e3Dub7vgyrV+exeaA7Ms+Z1txqo9hW1+msw7QAA",
+    "AIg13D2ENdw9hAAAAAtzc2gtZWQyNTUxOQAAACBi2C2q3e3Dub7vgyrV+exeaA7M",
+    "s+Z1txqo9hW1+msw7QAAAEAuvt+g+jhtn47vvT2Xk2tNN0IOY/5/ESV0nh1hqG/W",
+    "iGLYLard7cO5vu+DKtX57F5oDsyz5nW3Gqj2FbX6azDtAAAAAAECAwQF",
+    "-----END OPENSSH PRIVATE KEY-----",
+    "",
+  ].join("\n"),
+};
 // A malformed public key: `parseKey` rejects it, exactly as the ssh2 length-
 // prefix bug's output does, so the generator's round-trip validation fails.
 const MALFORMED = { public: "ssh-ed25519 not-base64!!!", private: GOOD.private };
