@@ -49,6 +49,7 @@ const TS_LIFECYCLE: CaptureLifecycle = {
   tier3: "pnpm lint && pnpm typecheck && pnpm build && pnpm test",
   build: "pnpm build",
   deploy: "flyctl deploy",
+  upgrade: "",
   toolchain: {},
 };
 
@@ -62,6 +63,7 @@ const DRIFTED: CaptureLifecycle = {
   tier3: "pnpm lint && pnpm typecheck && pnpm build && pnpm test",
   build: "pnpm build",
   deploy: "flyctl deploy",
+  upgrade: "",
   toolchain: {},
 };
 

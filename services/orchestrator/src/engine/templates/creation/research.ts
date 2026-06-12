@@ -80,6 +80,11 @@ export interface ResearchedLifecycle {
   tier3: string;
   build: string;
   deploy: string;
+  // The researched `upgrade` verb (environment-management.md §4.5/§7 P1) — the
+  // stack's dependency-bump command (`pnpm update --latest` / `cargo update` / …),
+  // projected onto the template's `CaptureLifecycle.upgrade`. Optional/absent ⇒ the
+  // template fills the `upgrade` target with a loud STUB (no Tanren-driven upgrade lever).
+  upgrade?: string;
   // The researched TOOLCHAIN (environment-management.md §3) — mise tool-name →
   // version-spec at CURRENT/LTS versions for the stack (node/pnpm/python/…).
   // Projected onto the template's `CaptureLifecycle.toolchain` so the build

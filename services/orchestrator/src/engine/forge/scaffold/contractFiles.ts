@@ -33,6 +33,7 @@ import {
   SKELETON_MISE_CONFIG_PATH,
   renderJustfile,
   renderMiseToml,
+  stubRecipeBody,
 } from "./skeleton.js";
 
 // One file the materialization writes into the workspace verbatim (path + exact
@@ -57,6 +58,10 @@ const TARGET_FIELDS: ReadonlyArray<{
   { target: "tier-3", field: "tier3" },
   { target: "build", field: "build" },
   { target: "deploy", field: "deploy" },
+  // The `upgrade` verb (environment-management.md §4.5/§7 P1) — bumps deps to latest.
+  // The command is the project's declaration (may be "" ⇒ a STUB target that fails
+  // loudly, so an un-declared upgrade can never silently no-op a version-change node).
+  { target: "upgrade", field: "upgrade" },
 ] as const;
 
 // Render one justfile recipe BODY from a captured command. just requires every
@@ -77,8 +82,19 @@ function recipeBody(command: string): string {
 // filled justfile can never drift from the contract shape. Stack-AGNOSTIC: a cargo
 // or pandoc lifecycle fills the targets identically to a pnpm one.
 export function renderLifecycleJustfile(lifecycle: ProjectLifecycle): string {
-  const byTarget = new Map(TARGET_FIELDS.map(({ target, field }) => [target, lifecycle[field].trim()]));
-  return renderJustfile((target) => recipeBody(byTarget.get(target) ?? ""));
+  // `?? ""` defends the OPTIONAL `upgrade` verb: the parsed `ProjectLifecycle` always
+  // carries it (default ""), but a lifecycle assembled WITHOUT going through the schema
+  // (e.g. a partial fixture) may omit it — treat a missing command as "" (→ STUB), never
+  // a crash.
+  const byTarget = new Map(TARGET_FIELDS.map(({ target, field }) => [target, (lifecycle[field] ?? "").trim()]));
+  // An UNFILLED target (an optional verb the project declared no command for, e.g.
+  // `upgrade=""` on a pure-shell stack) renders the LOUD STUB (`exit 1`), never an
+  // empty recipe that would silently pass the gate — so an un-declared `just upgrade`
+  // cannot make a version-change node a silent no-op.
+  return renderJustfile((target) => {
+    const command = byTarget.get(target) ?? "";
+    return command === "" ? stubRecipeBody(target) : recipeBody(command);
+  });
 }
 
 // The deterministic contract-file manifest for a project's lifecycle: the

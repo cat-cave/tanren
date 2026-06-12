@@ -48,10 +48,14 @@ export const JUNIT_REPORT_PATH = "reports/junit.xml";
 //     merge-queue authority.
 // `bootstrap.run` is `just bootstrap`. This default mirrors the skeleton's ci.yml
 // (engine/forge/scaffold/skeleton.ts) — both are the same lifecycle map.
+// `upgrade.run` is `just upgrade` (environment-management.md §4.5/§7 P1): the
+// dependency-bump verb a version-change DAG node runs. Like every other verb it
+// defers to `just <target>`; the actual bump command lives in the project's justfile.
 export const DEFAULT_CI_CONFIG: CiConfigV1 = Object.freeze(
   CiConfigV1.parse({
     version: 1,
     bootstrap: { run: "just bootstrap" },
+    upgrade: { run: "just upgrade" },
     tiers: {
       fast: [{ name: "tier-1", run: "just tier-1" }],
       slow: [{ name: "tier-2", run: "just tier-2", junitReport: JUNIT_REPORT_PATH }],
@@ -108,6 +112,16 @@ export function stepsFor(config: CiConfigV1, when: CiWhen): CiStep[] {
 // The bootstrap/install command, or undefined when the repo declares none.
 export function bootstrapCommand(config: CiConfigV1): string | undefined {
   return config.bootstrap?.run;
+}
+
+// The dependency-bump command a version-change DAG node runs (environment-
+// management.md §4.5/§7 P1), or undefined when the repo declares no `upgrade` verb.
+// The COMMAND is the project's own (conventionally `just upgrade`, deferring to its
+// stack's `pnpm update --latest` / `cargo update` / …) — Tanren names no dependency
+// manager. Absence is semantic: a project with no `upgrade` verb has no Tanren-driven
+// forced-upgrade lever (and the generator refuses to emit a no-op upgrade spec for it).
+export function upgradeCommand(config: CiConfigV1): string | undefined {
+  return config.upgrade?.run;
 }
 
 // The DECLARED JUnit report among the tiers mapped to a lifecycle point — the

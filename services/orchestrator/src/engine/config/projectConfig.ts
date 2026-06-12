@@ -124,6 +124,13 @@ export const ProjectLifecycle = z
     tier3: z.string().min(1).max(400),
     build: z.string().min(1).max(400),
     deploy: z.string().min(1).max(400),
+    // The `upgrade` verb (environment-management.md §4.5/§7 P1) — the stack command
+    // that bumps deps to latest + regenerates the lockfile, filling the `upgrade`
+    // justfile target. Mirrors `CaptureLifecycle.upgrade`; the derive projects the
+    // capture onto this field. Optional — absent OR "" ⇒ the `upgrade` target STUBs and
+    // the upgrade-spec generator refuses to emit a no-op upgrade node. Allows "" (a
+    // project may explicitly declare no upgrade command), defaulting to "" when omitted.
+    upgrade: z.string().max(400).default(""),
     // The project's TOOLCHAIN (mise tool-name → version-spec; see `ProjectToolchain`).
     // Optional — defaults to `{}` (no toolchain declared ⇒ no `mise.toml`). Mirrors
     // `CaptureLifecycle.toolchain`; the derive projects that capture onto this field.
@@ -131,6 +138,31 @@ export const ProjectLifecycle = z
   })
   .strict();
 export type ProjectLifecycle = z.infer<typeof ProjectLifecycle>;
+
+// The UPGRADE POLICY (environment-management.md §4.5/§7 P1) — Tanren owns the POLICY,
+// the project owns the COMMAND (`.tanren/ci.yml` `upgrade.run`). Language-agnostic
+// (Renovate-style): Tanren names no ecosystem here, only the generic knobs that shape
+// WHEN/HOW a version-change DAG node is generated. The generated change still runs
+// through the never-break-main gate (§4.5) — this policy never bypasses it.
+export const ProjectUpgradePolicy = z
+  .object({
+    // `keep-current` posture: whether Tanren may GENERATE forced-upgrade work for this
+    // project (the operator endpoint + the future scheduled freshness/CVE sources). When
+    // `false`, the project pins its declared versions and Tanren generates no upgrade
+    // node (legacy/pinned projects are first-class — Tanren is un-opinionated on version
+    // CHOICE; §4.5 motivation 1/4). Defaults to `true` (stay current, anti-stale-version).
+    keepCurrent: z.boolean().default(true),
+    // The supply-chain COOLDOWN: a just-published version younger than this many days is
+    // NOT adopted (dodges a freshly-compromised release). A LANGUAGE-AGNOSTIC policy knob
+    // — Tanren passes it to the generated upgrade node's intent (the project's `upgrade`
+    // command honors it via its own tooling, e.g. Renovate's `minimumReleaseAge`); Tanren
+    // never parses package metadata itself. Defaults to 3 days. Integer ≥ 0 (0 = no cooldown).
+    minimumReleaseAgeDays: z.number().int().min(0).max(365).default(3),
+  })
+  .strict();
+export type ProjectUpgradePolicy = z.infer<typeof ProjectUpgradePolicy>;
+
+export const DEFAULT_UPGRADE_POLICY: ProjectUpgradePolicy = Object.freeze(ProjectUpgradePolicy.parse({}));
 
 export const ProjectConfigV1 = z
   .object({
@@ -270,6 +302,13 @@ export const ProjectConfigV1 = z
     // Optional: absent ⇒ no captured lifecycle (a brownfield/HTTP project that
     // already ships its own contract files — no materialization).
     lifecycle: ProjectLifecycle.optional(),
+    // The UPGRADE POLICY (environment-management.md §4.5/§7 P1) — Tanren owns the
+    // POLICY (keep-current posture + supply-chain cooldown), the project owns the
+    // COMMAND (the `.tanren/ci.yml` `upgrade` verb). A governed SETTING, like
+    // `governancePosture`/`auditPosture`. Defaults to `DEFAULT_UPGRADE_POLICY`
+    // (keep-current on, 3-day cooldown). The generated upgrade node always runs the
+    // full gate (§4.5) — this policy shapes WHEN work is generated, never bypasses it.
+    upgradePolicy: ProjectUpgradePolicy.default(DEFAULT_UPGRADE_POLICY),
     // TEMPLATING WAVE 3: the seed reference when the greenfield scaffold SEEDED from
     // a validated template (see `ProjectTemplateRef`, templating-system.md §3).
     // Persisted so the decision is observable + the run path can clone the

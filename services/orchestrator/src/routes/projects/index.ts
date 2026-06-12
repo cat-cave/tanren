@@ -27,7 +27,7 @@ import { BudgetPutSchema, handleBudgetGet, handleBudgetPut } from "./budget.js";
 import { checkFullProjectConfigPatch, checkGenericProjectCreateConfig } from "./createConfigGuard.js";
 import { GovernancePutSchema, handleGovernanceGet, handleGovernancePut } from "./governance.js";
 import { GreenfieldCreateSchema, handleGreenfieldCreate } from "./greenfield.js";
-import { handleProjectArchive, handleProjectUnarchive } from "./lifecycle.js";
+import { handleProjectArchive, handleProjectUnarchive, handleProjectUpgrade } from "./lifecycle.js";
 
 interface ProjectRoutesOptions {
   pool: pg.Pool;
@@ -230,6 +230,21 @@ export function createProjectRoutes(options: ProjectRoutesOptions) {
       return c.json({ error: "org_admin_required" }, 403);
     }
     return handleProjectUnarchive(c, options.pool, orgId, c.req.param("projectId"));
+  });
+
+  // The dependency-UPGRADE surface (environment-management.md §4.5/§7 P1): generate a
+  // version-change DAG NODE that bumps deps to latest via the project's `just upgrade`
+  // and runs it through the never-break-main gate (the same `acceptProposals`
+  // spec-creation path every other unit of work uses — NO un-gated lockfile mutation).
+  // org-member (it generates ordinary backlog work, gated like any change). The handler
+  // lives in `upgrade.ts` to keep this file under its dependency + line caps.
+  app.post("/:orgId/projects/:projectId/upgrade", async (c) => {
+    const actor = requireActor(c);
+    const orgId = c.req.param("orgId");
+    if (!actorCanAccessOrg(actor, orgId)) {
+      return c.json({ error: "org_access_denied" }, 403);
+    }
+    return handleProjectUpgrade(c, options.pool, orgId, c.req.param("projectId"), actor);
   });
 
   return app;

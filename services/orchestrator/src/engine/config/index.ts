@@ -80,11 +80,13 @@ export type {
 } from "./tanrenConfigGate.js";
 
 export {
+  DEFAULT_UPGRADE_POLICY,
   ProjectConfigV1,
   ProjectConfigVersioned,
   ProjectCredentialRefs,
   ProjectLifecycle,
   ProjectTemplateRef,
+  ProjectUpgradePolicy,
   SUPPORTED_PROJECT_CONFIG_VERSIONS,
   defaultProjectConfigV1,
   isAbsentProjectConfig,

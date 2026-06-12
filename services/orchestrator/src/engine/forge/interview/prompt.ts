@@ -50,6 +50,14 @@ export function buildInterviewPrompt(context: InterviewAnswererContext): string 
     "  - `tier3`: the full pre-merge gate (usually tier1 + tier2 together)",
     "  - `build`: produce the artifact (e.g. 'pnpm build' | 'cargo build --release' | 'pandoc … --to epub')",
     "  - `deploy`: ship it (e.g. 'pnpm deploy' | 'flyctl deploy' | 'publish')",
+    // UPGRADE VERB (environment-management.md §4.5/§7 P1): the command that BUMPS deps
+    // to latest + regenerates the lockfile. Tanren runs it as a GATED DAG node (never a
+    // side stream) so a breaking bump is rejected without ever breaking main. The
+    // command is the PROJECT's — Tanren names no dependency manager. Omit only for a
+    // stack with literally nothing to upgrade (a pure-shell/system-package project).
+    "  - `upgrade`: bump deps to latest + regenerate the lockfile (e.g. 'pnpm update --latest' |",
+    "      'cargo update' | 'uv lock --upgrade' | 'go get -u ./...'). Omit only for a stack with",
+    "      nothing to upgrade. Tanren runs this as a gated DAG node, never a side stream.",
     // TOOLCHAIN (environment-management.md §3): the architecture step ALSO declares
     // the project's toolchain — the runtime/tool VERSIONS the stack needs, provisioned
     // at workspace-prep via `mise` in user space (the runner ships NO project toolchain).
