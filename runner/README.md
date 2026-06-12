@@ -46,8 +46,8 @@ workspace-prep is a warm **cache hit** (instant), not a cold download.
 
 - **Baked (the warm baseline) — `runner/mise.baseline.toml`:** the lean,
   slow-to-install AND common toolchains, pre-warmed into the **shared** mise data
-  dir `/opt/tanren/mise` at build time: **node 24** (current LTS), **pnpm 10**,
-  **python 3.13** (current stable), **go 1.26** (current stable). Versions are
+  dir `/opt/tanren/mise` at build time: **node 24** (current LTS), **pnpm 11**,
+  **python 3.14** (current stable), **go 1.26** (current stable). Versions are
   **loose majors** so each refresh resolves the latest patch — never a stale pin.
 - **Delta'd (cold-installed at prep):** anything OFF the baseline (node 20, python
   3.11, rust, bun, …) `mise install`s into the **same** `tanren`-owned data dir in

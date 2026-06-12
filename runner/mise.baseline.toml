@@ -6,10 +6,11 @@
 # TRIM DISCIPLINE (GitHub `runner-images` rule: bake what is slow-to-install AND
 # common; omit the rare). This set is deliberately LEAN — the four toolchains the
 # common project actually declares, nothing else:
-#   - node 24   — current LTS (Krypton). The dominant JS/TS runtime.
-#   - pnpm 10   — the package manager the apex/TS scaffolds declare.
-#   - python 3.13 — current stable; the common Python runtime.
-#   - go 1.26   — current stable; the common Go toolchain.
+#   - node 24   — current LTS (Krypton). The dominant JS/TS runtime. KEPT on the
+#                 LTS line on purpose — NOT bumped to a non-LTS 25.
+#   - pnpm 11   — current latest (11.6.x); the package manager the TS scaffolds use.
+#   - python 3.14 — current latest stable (3.14.x); the common Python runtime.
+#   - go 1.26   — current latest stable; the common Go toolchain.
 # A project declaring something OFF this baseline (node 20, python 3.11, rust,
 # bun, …) is NOT a failure — it cold-installs into the SAME user-space data dir
 # at workspace-prep. The baseline only makes the COMMON case near-instant.
@@ -21,6 +22,6 @@
 # pre-warmed install — a warm hit. NEVER pin an exact stale patch here.
 [tools]
 node = "24"
-pnpm = "10"
-python = "3.13"
+pnpm = "11"
+python = "3.14"
 go = "1.26"
