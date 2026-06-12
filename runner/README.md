@@ -34,3 +34,50 @@ allocator removes the underlying volumes on every release path (success or
 failure).
 
 Claude, opencode, `ccusage`, and `codexbar` remain deferred.
+
+## Golden image — warm mise baseline + trim policy (P2)
+
+This image IS the **golden base** (environment-management.md §3 Layer 3 + §7 P2):
+the neutral sandbox + Tanren's harness + `mise` + a **warm mise cache of the
+empirically-common baseline**, so a typical project's `mise install` at
+workspace-prep is a warm **cache hit** (instant), not a cold download.
+
+### What is baked vs delta'd
+
+- **Baked (the warm baseline) — `runner/mise.baseline.toml`:** the lean,
+  slow-to-install AND common toolchains, pre-warmed into the **shared** mise data
+  dir `/opt/tanren/mise` at build time: **node 24** (current LTS), **pnpm 11**,
+  **python 3.14** (current stable), **go 1.26** (current stable). Versions are
+  **loose majors** so each refresh resolves the latest patch — never a stale pin.
+- **Delta'd (cold-installed at prep):** anything OFF the baseline (node 20, python
+  3.11, rust, bun, …) `mise install`s into the **same** `tanren`-owned data dir in
+  user space — no failure, just not warm. This is the §3 Layer 3 baseline-vs-delta
+  layering.
+
+### Trim discipline (GitHub `runner-images` rule)
+
+**Bake what's slow-to-install AND common; omit the rare.** The baseline is
+deliberately four toolchains — NOT "everything". Adding a tool to the baseline is a
+trade: image size + refresh time vs. how often a project actually declares it. The
+bar to bake: slow to install **and** declared by a meaningful share of projects.
+
+### Harness/baseline isolation
+
+`mise` is installed as a binary only and is **never globally activated**, so the
+shared warm baseline never shadows the **harness** node (`/usr/local`, node 24): a
+bare SSH shell + `codex`/`codexbar`/`ccusage` resolve the harness node regardless of
+what the warm baseline (or a project's `mise.toml`) declares. A project's toolchain
+is active only within a command that opts in (`eval "$(mise activate bash)"`, via
+`engine/ssh/miseActivate.ts`). The shared `/opt/tanren/mise` dir is `tanren`-owned
+(warm + writable for the delta) yet world-readable (a warm hit is a pure read).
+
+### Build + registry
+
+- `just build-golden-image` (→ `scripts/dev/build-golden-image.sh`): BuildKit build,
+  content-digest tag (`golden-<digest>`), registry `mode=max` cache. Local by
+  default; `PUSH=1 REGISTRY=localhost:5000` pushes to the dev registry.
+- `compose.dev.yml` ships a local `registry:2` (host `:5000`) — the self-hosted OCI
+  backend that makes the later phases (P3 env_key resolution, P4 JIT creation)
+  locally validatable with no cloud.
+- `.github/workflows/golden-image.yml` re-bakes + pushes on every `main` change to
+  `runner/**` (refresh-on-`main`), applying the same cache.

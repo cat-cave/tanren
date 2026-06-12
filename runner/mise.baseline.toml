@@ -1,0 +1,27 @@
+# Golden-image WARM BASELINE — the empirically-common project toolchain that the
+# runner image pre-warms into a shared mise data dir at build time, so a typical
+# project's `mise install` is a warm CACHE HIT (instant), not a cold download.
+# environment-management.md §3 Layer 3 + §7 P2.
+#
+# TRIM DISCIPLINE (GitHub `runner-images` rule: bake what is slow-to-install AND
+# common; omit the rare). This set is deliberately LEAN — the four toolchains the
+# common project actually declares, nothing else:
+#   - node 24   — current LTS (Krypton). The dominant JS/TS runtime. KEPT on the
+#                 LTS line on purpose — NOT bumped to a non-LTS 25.
+#   - pnpm 11   — current latest (11.6.x); the package manager the TS scaffolds use.
+#   - python 3.14 — current latest stable (3.14.x); the common Python runtime.
+#   - go 1.26   — current latest stable; the common Go toolchain.
+# A project declaring something OFF this baseline (node 20, python 3.11, rust,
+# bun, …) is NOT a failure — it cold-installs into the SAME user-space data dir
+# at workspace-prep. The baseline only makes the COMMON case near-instant.
+#
+# VERSIONS ARE INTENTIONALLY LOOSE MAJORS (never a stale exact pin): mise resolves
+# `node = "24"` → the latest 24.x at BUILD time, so every golden-image refresh
+# (refresh-on-`main`) bakes the freshest patch with zero edits here. A project that
+# declares the same loose major (`node = "24"`) therefore resolves to the SAME
+# pre-warmed install — a warm hit. NEVER pin an exact stale patch here.
+[tools]
+node = "24"
+pnpm = "11"
+python = "3.14"
+go = "1.26"
