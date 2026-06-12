@@ -30,6 +30,17 @@ export {
   type AnchorClaimInput,
   type ClaimValidationUpdate,
 } from "./entityClaims.js";
+// Environment management (environment-management.md §7 P3): the ENVIRONMENT
+// registry store — content-key (`env_key`) resolution + capability query + status
+// lifecycle, org-scoped with the cross-org official tier (migration
+// 0001_environments_registry). The env-layer counterpart of `TemplateStore`.
+export {
+  EnvironmentStore,
+  type Environment,
+  type EnvironmentStatus,
+  type RegisterEnvironmentInput,
+  type EnvironmentCapabilityQuery,
+} from "./environments.js";
 // Forge + recovery data-access stores. The thread/turn/proposal stores live
 // under engine/forge (their routes import them by name); the seam aggregates
 // them here so callers depend on the `Repositories` contract. The discovery /

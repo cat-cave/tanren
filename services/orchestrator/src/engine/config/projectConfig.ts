@@ -85,6 +85,27 @@ export const ProjectTemplateRef = z
   .strict();
 export type ProjectTemplateRef = z.infer<typeof ProjectTemplateRef>;
 
+// Environment management (environment-management.md §6 + §7 P3) — the ENVIRONMENT
+// BINDING recorded on a project: which `environments`-registry env its toolchain
+// resolved to (the env-layer counterpart of `ProjectTemplateRef`). Persisted on the
+// project config (not a new column) so the resolution decision is OBSERVABLE.
+// Present ONLY when the project declared a toolchain (so an `envKey` was computed);
+// `environmentRef` is present ONLY on a registry MATCH (absent on the golden-base
+// fallback — the env_key was computed but no validated env matched, P3's no-match).
+export const ProjectEnvironmentRef = z
+  .object({
+    // The content key the project's toolchain hashed to (computeEnvKey).
+    envKey: z.string().min(1),
+    // The matched environment's registry id (`environments.id`), when a
+    // validated/official env resolved. Absent on the golden-base no-match fallback.
+    environmentRef: z.string().min(1).optional(),
+    // The runner image the binding resolved to — `env.image_ref` on a match, the
+    // golden BASE image on a no-match. The OBSERVABLE record of what booted.
+    imageRef: z.string().min(1),
+  })
+  .strict();
+export type ProjectEnvironmentRef = z.infer<typeof ProjectEnvironmentRef>;
+
 // The project's CONCRETE LIFECYCLE — the captured stack commands behind the six
 // conventional justfile targets (stack-flexible contract,
 // docs/operator-guide/ci-config.md). Persisted here so the RUN path can
@@ -315,6 +336,12 @@ export const ProjectConfigV1 = z
     // template's conforming files as the scaffold base. Optional: absent ⇒ the
     // from-scratch path (no template matched — the apex default).
     templateRef: ProjectTemplateRef.optional(),
+    // Environment management (env P3): the ENVIRONMENT binding the project's
+    // toolchain resolved to (see `ProjectEnvironmentRef`, environment-management.md
+    // §6/§7 P3). Recorded by the per-project env-resolution at the image seam so the
+    // decision is OBSERVABLE. Optional: absent ⇒ the project declared no toolchain
+    // (no env_key — the golden-base path, the apex default).
+    environmentRef: ProjectEnvironmentRef.optional(),
   })
   .strict();
 export type ProjectConfigV1 = z.infer<typeof ProjectConfigV1>;
