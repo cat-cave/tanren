@@ -19,6 +19,7 @@ export class FakeVaultTokenMinter implements VaultTokenMinter {
 
   async mintScopedRunToken(input: MintScopedRunTokenInput): Promise<ScopedRunToken> {
     const refPaths = normalize(input.credentialRefPaths);
+    const writableRefPaths = normalizeWritable(input.writableCredentialRefPaths, refPaths);
     if (!Number.isFinite(input.ttlSeconds) || input.ttlSeconds <= 0) {
       throw new Error("scoped run token requires a positive TTL");
     }
@@ -32,6 +33,7 @@ export class FakeVaultTokenMinter implements VaultTokenMinter {
       token: `fake-child::${policyName}`,
       policyName,
       refPaths,
+      writableRefPaths,
       ttlSeconds: Math.floor(input.ttlSeconds),
       numUses: input.numUses,
     };
@@ -48,6 +50,22 @@ function normalize(refPaths: readonly string[]): string[] {
   for (const ref of cleaned) {
     if (ref.includes("*") || ref.split("/").includes("..")) {
       throw new Error(`credential ref path is not safe to scope a policy on: ${ref}`);
+    }
+  }
+  return cleaned;
+}
+
+// The writable (rotating) subset MUST be ⊆ the read set — granting write on a path
+// the run does not also read would widen the policy. Mirrors the real impl's invariant.
+function normalizeWritable(writableRefPaths: readonly string[] | undefined, readRefPaths: readonly string[]): string[] {
+  if (writableRefPaths === undefined) {
+    return [];
+  }
+  const readSet = new Set(readRefPaths);
+  const cleaned = [...new Set(writableRefPaths.map((r) => r.trim()).filter((r) => r !== ""))].sort();
+  for (const ref of cleaned) {
+    if (!readSet.has(ref)) {
+      throw new Error(`writable credential ref path is not in the run's read set (would widen the policy): ${ref}`);
     }
   }
   return cleaned;

@@ -111,6 +111,51 @@ export function collectRunCredentialRefPaths(context: PlannerRunContext): string
 }
 
 /**
+ * The subset of the run's credential refs that ROTATE and so must be WRITTEN BACK —
+ * the scoped policy grants `create`+`update` on these (not just `read`). The ONLY
+ * rotating credential today is the BYOK Codex ChatGPT auth bundle: codex refreshes
+ * its access/refresh tokens on each call and writes a new `auth.json`; the run
+ * persists that fresh bundle (`providers/codex.ts` → `storeCodexAuthBundle`) so the
+ * next call/run does not reuse a stale (possibly-revoked) refresh token. Without the
+ * write grant that persist-back 403s and the run halts — the exact apex-v33 failure.
+ *
+ * The signal mirrors codex.ts's own `auth.bundleAuth` write-back condition: a routing
+ * entry with `cli === "codex"` whose `authRef` is a `credential/codex/` ref, on a
+ * BYOK run (no `endpointBaseUrl`). A MANAGED codex run authenticates with a static
+ * api_key (no token rotation, nothing to write back), and a static github token / api
+ * key never rotates — so neither is ever writable. Every ref returned here is also in
+ * {@link collectRunCredentialRefPaths} (writable is a capability on a ref the run
+ * already reads, never a new path), so the policy is never widened beyond the run's
+ * own credentials.
+ */
+export function collectRotatingCredentialRefPaths(context: PlannerRunContext): string[] {
+  // Managed mode (an OpenAI-compatible endpoint) is a static api_key — no rotation.
+  if (context.endpointBaseUrl !== undefined) {
+    return [];
+  }
+  const refs = new Set<string>();
+  const consider = (entry: { cli: string; authRef: string } | undefined): void => {
+    if (entry === undefined) {
+      return;
+    }
+    const authRef = entry.authRef.trim();
+    if (entry.cli === "codex" && authRef.startsWith("credential/codex/")) {
+      refs.add(authRef);
+    }
+  };
+  const routing = context.routing;
+  if (routing !== undefined) {
+    for (const role of Object.values(routing)) {
+      for (const entry of role.chain) {
+        consider(entry);
+      }
+    }
+  }
+  consider(context.defaultLlm);
+  return [...refs].sort();
+}
+
+/**
  * The default run-hours ceiling — the SAME value the allocator's abandoned-runner
  * sweeper uses (`TANREN_MAX_RUN_HOURS`, default 6h, in `services/allocator`). Kept
  * in sync structurally: the scoped-token TTL below DERIVES from this ceiling so the
@@ -206,6 +251,10 @@ export async function resolveScopedRunCredentials(
   if (scoping === undefined || refPaths.length === 0) {
     return { secrets: input.secrets };
   }
+  // The rotating subset (the BYOK Codex bundle) the policy must grant WRITE on so the
+  // run's post-call auth-bundle persist-back succeeds instead of 403-ing. Always ⊆
+  // refPaths (the minter re-asserts that), so the policy is never widened.
+  const writableRefPaths = collectRotatingCredentialRefPaths(input.context);
   const scoped = await buildScopedCredentialAccess({
     minter: scoping.minter,
     addr: scoping.addr,
@@ -215,6 +264,7 @@ export async function resolveScopedRunCredentials(
       runId: input.context.runId,
       orgId: input.context.orgId ?? null,
       credentialRefPaths: refPaths,
+      writableCredentialRefPaths: writableRefPaths,
       // r6 §2: the TTL pinned at boot from the INJECTED env (on `scoping`), NOT
       // re-read from the global `process.env` here — so the minted token's lifetime
       // is the one the worker booted with.
@@ -223,10 +273,11 @@ export async function resolveScopedRunCredentials(
     },
   });
   // Audit: a scoped token was minted for the run. The payload carries the scope
-  // (ref paths the policy covers + bounds), NEVER the token value.
+  // (ref paths the policy covers, the writable subset, + bounds), NEVER the token value.
   await appendEvent("credential.scoped_token_minted", {
     policyName: scoped.scope.policyName,
     refPaths: scoped.scope.refPaths,
+    writableRefPaths: scoped.scope.writableRefPaths,
     ttlSeconds: scoped.scope.ttlSeconds,
     numUses: scoped.scope.numUses,
   });

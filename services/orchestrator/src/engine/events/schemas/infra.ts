@@ -201,6 +201,10 @@ export const CredentialScopedTokenMintedPayload = z
   .object({
     policyName: z.string(),
     refPaths: z.array(z.string()),
+    // The subset of refPaths the policy ALSO granted create+update on — the rotating
+    // credentials the run writes back (the BYOK Codex ChatGPT bundle). Always ⊆ refPaths;
+    // empty when the run has no rotating credential. Redacted like refPaths (tenant-embedded).
+    writableRefPaths: z.array(z.string()),
     ttlSeconds: z.number().int(),
     numUses: z.number().int(),
   })

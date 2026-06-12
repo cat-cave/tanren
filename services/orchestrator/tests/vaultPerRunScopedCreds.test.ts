@@ -17,6 +17,7 @@ import { VaultSecretStore } from "../src/engine/contracts/secretStore.js";
 import {
   applyScopedRunCredentials,
   buildRunCredentialScoping,
+  collectRotatingCredentialRefPaths,
   collectRunCredentialRefPaths,
   resolveScopedRunCredentials,
   resolveScopedRunTokenTtlSeconds,
@@ -38,6 +39,16 @@ import {
 
 const GH_REF = "credential/github/org/org-acme/bot";
 const CODEX_REF = "credential/codex/org/org-acme/default";
+
+// Extract the single HCL `path "<dataPath>" { ... }` stanza for a data path so a
+// per-ref capability assertion can't be confused by another ref's stanza.
+function stanzaFor(hcl: string, dataPath: string): string {
+  const start = hcl.indexOf(`path "${dataPath}"`);
+  expect(start).toBeGreaterThanOrEqual(0);
+  const close = hcl.indexOf("}", start);
+  expect(close).toBeGreaterThan(start);
+  return hcl.slice(start, close + 1);
+}
 
 describe("VaultRunTokenMinter — policy scoping + token bounds", () => {
   it("writes a read-only policy with one stanza per ref's data path (no wildcard) using the broad token", async () => {
@@ -76,6 +87,79 @@ describe("VaultRunTokenMinter — policy scoping + token bounds", () => {
 
     // The BROAD token was used ONLY for the two admin (policy + create) calls.
     expect(vault.adminTokensSeen).toEqual(["BROAD", "BROAD"]);
+  });
+
+  it("grants read+create+update on a WRITABLE (rotating) ref while read-only refs stay read-only, never widening", async () => {
+    const vault = vaultTokenFetch();
+    const minter = new VaultRunTokenMinter({ addr: "http://vault:8200", token: "BROAD", fetchImpl: vault.fetch });
+
+    // The codex bundle ROTATES (writable); the github token is static (read-only).
+    const minted = await minter.mintScopedRunToken({
+      runId: "run-rot",
+      orgId: "org-acme",
+      credentialRefPaths: [GH_REF, CODEX_REF],
+      writableCredentialRefPaths: [CODEX_REF],
+      ttlSeconds: 900,
+      numUses: 16,
+    });
+
+    expect(vault.policyWrites).toHaveLength(1);
+    const hcl = vault.policyWrites[0]!.policyHcl;
+
+    // The rotating codex ref's stanza grants read+create+update (the write-back path:
+    // KV-v2 stores a new secret version via create/update on the data path).
+    const codexStanza = stanzaFor(hcl, `secret/data/${CODEX_REF}`);
+    expect(codexStanza).toContain(`["read", "create", "update"]`);
+    expect(codexStanza).toContain("create");
+    expect(codexStanza).toContain("update");
+
+    // The static github ref stays READ-ONLY — write is granted ONLY where rotation happens.
+    const ghStanza = stanzaFor(hcl, `secret/data/${GH_REF}`);
+    expect(ghStanza).toContain(`["read"]`);
+    expect(ghStanza).not.toContain("create");
+    expect(ghStanza).not.toContain("update");
+
+    // No widening: still exactly the two run refs, no wildcard, no extra path.
+    expect(hcl).not.toContain("*");
+    expect(minted.refPaths).toEqual([CODEX_REF, GH_REF]);
+    expect(minted.writableRefPaths).toEqual([CODEX_REF]);
+    // The writable set is reported as a SUBSET of the read set (a capability on a ref
+    // the run already reads, never a new path).
+    expect(minted.refPaths).toEqual(expect.arrayContaining(minted.writableRefPaths));
+  });
+
+  it("defaults to read-only (no write) when no writable ref is requested", async () => {
+    const vault = vaultTokenFetch();
+    const minter = new VaultRunTokenMinter({ addr: "http://vault:8200", token: "BROAD", fetchImpl: vault.fetch });
+    const minted = await minter.mintScopedRunToken({
+      runId: "run-ro",
+      orgId: "org-acme",
+      credentialRefPaths: [GH_REF, CODEX_REF],
+      ttlSeconds: 900,
+      numUses: 16,
+    });
+    const hcl = vault.policyWrites[0]!.policyHcl;
+    // No write capability anywhere — the default mint is strictly read-only.
+    expect(hcl).not.toMatch(/create|update|delete|sudo|list/u);
+    expect(minted.writableRefPaths).toEqual([]);
+  });
+
+  it("REJECTS a writable ref that is not in the run's read set (no policy widening)", async () => {
+    const vault = vaultTokenFetch();
+    const minter = new VaultRunTokenMinter({ addr: "http://vault:8200", token: "BROAD", fetchImpl: vault.fetch });
+    await expect(
+      minter.mintScopedRunToken({
+        runId: "run-bad",
+        orgId: "org-acme",
+        credentialRefPaths: [GH_REF],
+        // Granting write on a path NOT in the read set would widen the policy.
+        writableCredentialRefPaths: [CODEX_REF],
+        ttlSeconds: 900,
+        numUses: 16,
+      }),
+    ).rejects.toThrow(/not in the run's read set/u);
+    // No policy was written for an unsafe mint.
+    expect(vault.policyWrites).toHaveLength(0);
   });
 
   it("the scoped store reads ONLY the run's refs and is DENIED another run's ref", async () => {
@@ -157,6 +241,52 @@ describe("collectRunCredentialRefPaths", () => {
     expect(refs).toContain("credential/github_app/org/org-acme/default");
     // The empty sentinel itself is never a path.
     expect(refs).not.toContain("");
+  });
+});
+
+describe("collectRotatingCredentialRefPaths", () => {
+  it("marks the BYOK Codex bundle ref as rotating (writable) — the write-back path", () => {
+    const ctx = context();
+    ctx.orgId = "org-acme";
+    ctx.defaultLlm = { cli: "codex", model: "default", authRef: CODEX_REF };
+    ctx.githubCredentialRef = GH_REF;
+    ctx.routing = {
+      plan: { chain: [{ cli: "codex", model: "m", authRef: CODEX_REF }] },
+      write: { chain: [{ cli: "codex", model: "m", authRef: CODEX_REF }] },
+      check: { chain: [] },
+      audit: { chain: [] },
+      demo: { chain: [] },
+      forge: { chain: [] },
+    };
+    const rotating = collectRotatingCredentialRefPaths(ctx);
+    expect(rotating).toEqual([CODEX_REF]);
+    // The rotating set is a SUBSET of the full read set (never a new path).
+    expect(collectRunCredentialRefPaths(ctx)).toEqual(expect.arrayContaining(rotating));
+  });
+
+  it("never marks a static github token or a non-codex LLM ref as rotating", () => {
+    const ctx = context();
+    ctx.orgId = "org-acme";
+    ctx.githubCredentialRef = GH_REF;
+    ctx.defaultLlm = { cli: "claude", model: "m", authRef: "credential/claude/org/org-acme/default" };
+    ctx.routing = {
+      plan: { chain: [{ cli: "claude", model: "m", authRef: "credential/claude/org/org-acme/default" }] },
+      write: { chain: [] },
+      check: { chain: [] },
+      audit: { chain: [] },
+      demo: { chain: [] },
+      forge: { chain: [] },
+    };
+    expect(collectRotatingCredentialRefPaths(ctx)).toEqual([]);
+  });
+
+  it("does NOT mark codex as rotating in MANAGED mode (static api_key, no token rotation)", () => {
+    const ctx = context();
+    ctx.orgId = "org-acme";
+    ctx.defaultLlm = { cli: "codex", model: "default", authRef: CODEX_REF };
+    // Managed mode: codex authenticates with a static OpenRouter api_key — nothing rotates.
+    ctx.endpointBaseUrl = "https://managed.example/v1";
+    expect(collectRotatingCredentialRefPaths(ctx)).toEqual([]);
   });
 });
 
