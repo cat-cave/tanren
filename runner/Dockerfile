@@ -24,9 +24,38 @@ ARG CODEXBAR_VERSION=0.30.0
 ARG CCUSAGE_VERSION=
 
 RUN npm install -g @openai/codex@0.133.0 \
-  && npm install -g pnpm@10 \
   && if [ -n "${CCUSAGE_VERSION}" ]; then npm install -g "ccusage@${CCUSAGE_VERSION}"; else npm install -g ccusage; fi \
   && npm cache clean --force
+
+# corepack-based package-manager bootstrap for the NON-ROOT ssh user `tanren`.
+#
+# Tanren is stack-agnostic: a ts/pnpm project's `just bootstrap` runs the standard
+# `corepack enable pnpm && pnpm install --frozen-lockfile`. That must work over SSH
+# as the non-root `tanren` user. Without this block it fails three ways (all
+# confirmed against the live runner):
+#   1. EACCES — `corepack enable` symlinks shims into root-owned /usr/bin, which
+#      `tanren` can't write. Running `corepack enable` HERE as root creates those
+#      shims once (root-owned), so the runtime `corepack enable` by `tanren` is an
+#      idempotent no-op success instead of a permission-denied failure.
+#   2. broken pnpm — corepack defaults to "latest", which auto-fetches pnpm 11.x;
+#      that build throws ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING on this node. We
+#      pin a known-good pnpm 10.x via `corepack prepare ... --activate` and set
+#      COREPACK_DEFAULT_TO_LATEST=0 so corepack NEVER silently upgrades to it.
+#   3. ambiguity — a second `npm install -g pnpm@10` would shadow the corepack
+#      shim; removed above so corepack is the single pnpm source.
+# COREPACK_HOME is a shared world-readable dir so the prepared pnpm is usable by
+# `tanren` at runtime (corepack's per-user default ~/.cache would not be primed).
+# The pin matches the previously-working pre-installed pnpm; bumping is one line.
+ENV COREPACK_HOME=/opt/corepack \
+    COREPACK_DEFAULT_TO_LATEST=0
+ARG PNPM_VERSION=10.34.3
+RUN set -eu; \
+  mkdir -p "${COREPACK_HOME}"; \
+  corepack enable; \
+  corepack prepare "pnpm@${PNPM_VERSION}" --activate; \
+  chmod -R a+rX "${COREPACK_HOME}"; \
+  # sanity: the prepared pnpm runs as-is at build time
+  pnpm --version
 
 # Download the codexbar linux CLI for the build arch, verify its published
 # .sha256, and install the binary to /usr/local/bin/codexbar. The release
