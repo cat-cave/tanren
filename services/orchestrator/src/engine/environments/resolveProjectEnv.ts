@@ -64,7 +64,7 @@ export interface ProjectEnvBinding {
 
 /** The inputs resolution reads — the project's declared toolchain (the committed lockfile counterpart). */
 export interface ResolveProjectEnvInput {
-  // The project's declared `mise` toolchain (tool-name → version-spec). EMPTY/absent
+  // The project's declared `mise` toolchain (list of {name, version}). EMPTY/absent
   // ⇒ the project declared no toolchain (no `mise.toml`) ⇒ the project's `baseImage`.
   toolchain: ProjectToolchain | undefined;
   // The project's per-project runner image (`projects.runner_image`) — the fallback
@@ -98,7 +98,7 @@ export async function resolveProjectEnv(
   const baseImage = input.baseImage ?? GOLDEN_BASE_IMAGE;
   // No declared toolchain ⇒ no env_key ⇒ the project's base image (a fresh greenfield
   // first boot, or a brownfield project that ships no `mise.toml`). Flow preserved.
-  if (toolchain === undefined || Object.keys(toolchain).length === 0) {
+  if (toolchain === undefined || toolchain.length === 0) {
     return { imageRef: baseImage, source: "golden-base-no-toolchain" };
   }
 

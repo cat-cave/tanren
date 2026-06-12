@@ -43,7 +43,7 @@ function fakeSubstrate(matchers: Matcher[]): { ssh: CommandSubstrate; calls: str
 const NOW = (): Date => new Date("2026-06-12T00:00:00.000Z");
 
 describe("runEnvValidationHarness — positive smoke + isolation negative controls", () => {
-  const toolchain = { node: "18" } as const;
+  const toolchain = [{ name: "node", version: "18" }];
 
   it("an ISOLATED, WORKING env PASSES (smoke green, both controls proven)", async () => {
     const plan = buildEnvNegativeControlPlan(toolchain);
@@ -184,7 +184,7 @@ describe("runEnvValidationHarness — positive smoke + isolation negative contro
 
 describe("buildEnvNegativeControlPlan — derives isolation probes from the toolchain", () => {
   it("probes an undeclared BASELINE tool when the project declares fewer baseline tools", () => {
-    const plan = buildEnvNegativeControlPlan({ node: "18" });
+    const plan = buildEnvNegativeControlPlan([{ name: "node", version: "18" }]);
     // node is declared, so the undeclared probe picks a baseline tool the project did
     // NOT declare (pnpm/python/go) — a real golden-base-leak risk.
     expect(["pnpm", "python", "go"]).toContain(plan.undeclaredTool.tool);
@@ -193,7 +193,13 @@ describe("buildEnvNegativeControlPlan — derives isolation probes from the tool
   });
 
   it("falls back to the absent SENTINEL when the project declares every baseline tool", () => {
-    const plan = buildEnvNegativeControlPlan({ node: "24", pnpm: "11", python: "3.14", go: "1.26", rust: "1.80" });
+    const plan = buildEnvNegativeControlPlan([
+      { name: "node", version: "24" },
+      { name: "pnpm", version: "11" },
+      { name: "python", version: "3.14" },
+      { name: "go", version: "1.26" },
+      { name: "rust", version: "1.80" },
+    ]);
     // No baseline tool is left undeclared → the sentinel (a tool no env should resolve).
     expect(plan.undeclaredTool.tool).toBe("cobol");
   });

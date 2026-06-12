@@ -63,7 +63,10 @@ const groundedOutput: ResearchOutput = {
     deploy: "pnpm deploy",
     // The researched toolchain (current/latest) the model emits so the template-build
     // project gets a non-empty `CaptureLifecycle.toolchain` → a materialized `mise.toml`.
-    toolchain: { node: "24", pnpm: "11" },
+    toolchain: [
+      { name: "node", version: "24" },
+      { name: "pnpm", version: "11" },
+    ],
   },
   tooling: {
     typecheck: true,
@@ -90,7 +93,10 @@ describe("LIVE research seam — wrapProviderResearcher", () => {
     // The researched toolchain threads onto the lifecycle (apex-v34): this is what
     // makes the template-build project get a `mise.toml` so `mise install` provisions
     // node/pnpm before `just bootstrap` — without it bootstrap fails (`pnpm: not found`).
-    expect(research.lifecycle.toolchain).toEqual({ node: "24", pnpm: "11" });
+    expect(research.lifecycle.toolchain).toEqual([
+      { name: "node", version: "24" },
+      { name: "pnpm", version: "11" },
+    ]);
     // grounding gate passes for a sourced result
     expect(() => assertGroundedResearch(research, request.stack)).not.toThrow();
   });

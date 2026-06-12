@@ -251,7 +251,7 @@ function configWithToolchain(): Record<string, unknown> {
       build: "just build",
       deploy: "just deploy",
       upgrade: "just upgrade",
-      toolchain: { node: "22" },
+      toolchain: [{ name: "node", version: "22" }],
     },
   };
 }

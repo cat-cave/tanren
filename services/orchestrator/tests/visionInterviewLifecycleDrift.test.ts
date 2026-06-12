@@ -50,7 +50,7 @@ const TS_LIFECYCLE: CaptureLifecycle = {
   build: "pnpm build",
   deploy: "flyctl deploy",
   upgrade: "",
-  toolchain: {},
+  toolchain: [],
 };
 
 // A DRIFTED re-emission: stack label re-written, the tier-2 reporter swapped
@@ -64,7 +64,7 @@ const DRIFTED: CaptureLifecycle = {
   build: "pnpm build",
   deploy: "flyctl deploy",
   upgrade: "",
-  toolchain: {},
+  toolchain: [],
 };
 
 const confirmedCapture = (): InterviewCapture => ({

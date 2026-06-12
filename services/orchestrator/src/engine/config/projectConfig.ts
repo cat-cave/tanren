@@ -120,20 +120,25 @@ export type ProjectEnvironmentRef = z.infer<typeof ProjectEnvironmentRef>;
 // (newline-joined for multi-line); `stack` is a descriptive label Tanren never
 // branches on. STRICT: either the full lifecycle is present or it is absent (a
 // project that never captured one) — never a partial placeholder.
-// The project's TOOLCHAIN (environment-management.md §3) — a STACK-AGNOSTIC map of
-// mise tool-name → version-spec the project chose (mirrors the interview's
+// The project's TOOLCHAIN (environment-management.md §3) — a STACK-AGNOSTIC LIST of
+// {name, version} entries the project chose (mirrors the interview's
 // `CaptureToolchain`). Persisted here so the RUN path materializes a deterministic
 // `mise.toml` `[tools]` table from the project's OWN declaration and `mise install`s
 // it at workspace-prep in user space — making `node`/`pnpm`/etc resolve to the
 // declared versions for the project's gate/bootstrap commands, WITHOUT touching
-// Tanren's harness (codex keeps the runner's isolated node). Keys are validated as
-// mise-safe tool names; values are bounded version specs. EMPTY = the project
-// declared no toolchain (no `mise.toml`; Tanren invents no versions).
+// Tanren's harness (codex keeps the runner's isolated node). `name` is validated as a
+// mise-safe tool name; `version` is a bounded version spec. EMPTY = the project
+// declared no toolchain (no `mise.toml`; Tanren invents no versions). A LIST, not a
+// keyed record, so the lifecycle stays OpenAI-strict-schema-renderable (apex v34).
 const MISE_TOOL_NAME = /^[a-z0-9][a-z0-9._-]*$/u;
-export const ProjectToolchain = z.record(
-  z.string().min(1).max(80).regex(MISE_TOOL_NAME, "mise tool name must be lowercase alphanumeric + . _ -"),
-  z.string().min(1).max(80),
-);
+export const ProjectToolEntry = z
+  .object({
+    name: z.string().min(1).max(80).regex(MISE_TOOL_NAME, "mise tool name must be lowercase alphanumeric + . _ -"),
+    version: z.string().min(1).max(80),
+  })
+  .strict();
+export type ProjectToolEntry = z.infer<typeof ProjectToolEntry>;
+export const ProjectToolchain = z.array(ProjectToolEntry);
 export type ProjectToolchain = z.infer<typeof ProjectToolchain>;
 
 export const ProjectLifecycle = z
@@ -152,10 +157,10 @@ export const ProjectLifecycle = z
     // the upgrade-spec generator refuses to emit a no-op upgrade node. Allows "" (a
     // project may explicitly declare no upgrade command), defaulting to "" when omitted.
     upgrade: z.string().max(400).default(""),
-    // The project's TOOLCHAIN (mise tool-name → version-spec; see `ProjectToolchain`).
-    // Optional — defaults to `{}` (no toolchain declared ⇒ no `mise.toml`). Mirrors
+    // The project's TOOLCHAIN (list of {name, version}; see `ProjectToolchain`).
+    // Optional — defaults to `[]` (no toolchain declared ⇒ no `mise.toml`). Mirrors
     // `CaptureLifecycle.toolchain`; the derive projects that capture onto this field.
-    toolchain: ProjectToolchain.default({}),
+    toolchain: ProjectToolchain.default([]),
   })
   .strict();
 export type ProjectLifecycle = z.infer<typeof ProjectLifecycle>;

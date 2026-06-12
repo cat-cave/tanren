@@ -3,12 +3,20 @@
 //
 // ROOT CAUSE these tests pin: the just-in-time template-creation meta-flow builds a
 // "template-build" Tanren project whose `CaptureLifecycle` carried a `stack` label +
-// pnpm command strings but an EMPTY `toolchain` ({}). So no `mise.toml` was
+// pnpm command strings but an EMPTY `toolchain` ([]). So no `mise.toml` was
 // materialized, the workspace-prep mise-install step skipped, and `just bootstrap`
 // failed (`pnpm: not found`, exit 127) because the runner ships NO project toolchain.
 //
+// apex-v34 part 2: the toolchain is modeled as an ARRAY of {name, version}, NOT a
+// keyed record. A `z.record(z.string().regex(...), …)` rendered to JSON Schema with
+// `propertyNames` (from the key regex) + an open record, which OpenAI strict
+// structured outputs REJECT (HTTP 400 `'propertyNames' is not permitted`) — failing
+// the research answerer (`tanren.template_research.v1`) and the interview architecture
+// answerer. The array of fixed-shape objects renders strict-valid (see the schema test
+// below).
+//
 // THE FIX (mirrors the interview architecture step, forge/interview/prompt.ts):
-//   1. the research OUTPUT SCHEMA carries `toolchain` (a mise tool→version map);
+//   1. the research OUTPUT SCHEMA carries `toolchain` (a list of {name, version});
 //   2. the research PROMPT instructs the model to emit it at CURRENT/LTS versions;
 //   3. the orchestration mapping threads it onto `ResearchedLifecycle.toolchain`;
 //   4. spec-authoring projects it onto the template-build `CaptureLifecycle.toolchain`
@@ -18,6 +26,8 @@
 // only assert the field is carried + threaded (with a representative ts/pnpm output).
 
 import { describe, expect, it } from "vitest";
+import { renderAnswererJsonSchema } from "../src/engine/answerers/schemas/index.js";
+import { InterviewRoundOutput } from "../src/engine/forge/interview/types.js";
 import { renderMiseToml } from "../src/engine/forge/scaffold/skeleton.js";
 import {
   authorTemplateBuildCapture,
@@ -47,7 +57,10 @@ const tsPnpmOutput: ResearchOutput = {
     tier3: "pnpm test:e2e",
     build: "pnpm build",
     deploy: "pnpm deploy",
-    toolchain: { node: "24", pnpm: "11" },
+    toolchain: [
+      { name: "node", version: "24" },
+      { name: "pnpm", version: "11" },
+    ],
   },
   tooling: { typecheck: true, lint: true, test: true, mutation: false, junit: true, bdd: false },
   summary: "modern TS/pnpm",
@@ -65,16 +78,19 @@ function fakeResearchAdapter(output: ResearchOutput): AnswererAdapter<ResearchOu
 }
 
 describe("research OUTPUT SCHEMA carries the toolchain", () => {
-  it("accepts a researched toolchain (mise tool→version) on the lifecycle", () => {
+  it("accepts a researched toolchain (list of {name, version}) on the lifecycle", () => {
     const parsed = ResearchOutput.parse(tsPnpmOutput);
-    expect(parsed.lifecycle.toolchain).toEqual({ node: "24", pnpm: "11" });
+    expect(parsed.lifecycle.toolchain).toEqual([
+      { name: "node", version: "24" },
+      { name: "pnpm", version: "11" },
+    ]);
   });
 
   it("rejects a mise-unsafe tool name (would break the deterministic `[tools]` projection)", () => {
     expect(() =>
       ResearchOutput.parse({
         ...tsPnpmOutput,
-        lifecycle: { ...tsPnpmOutput.lifecycle, toolchain: { "bad name": "1" } },
+        lifecycle: { ...tsPnpmOutput.lifecycle, toolchain: [{ name: "bad name", version: "1" }] },
       }),
     ).toThrow(/mise tool name/u);
   });
@@ -100,7 +116,10 @@ describe("the researched toolchain threads onto the lifecycle + template-build c
   it("`wrapProviderResearcher` carries a non-empty toolchain through to the lifecycle", async () => {
     const researcher = wrapProviderResearcher(fakeResearchAdapter(tsPnpmOutput));
     const research = await researcher.research(request);
-    expect(research.lifecycle.toolchain).toEqual({ node: "24", pnpm: "11" });
+    expect(research.lifecycle.toolchain).toEqual([
+      { name: "node", version: "24" },
+      { name: "pnpm", version: "11" },
+    ]);
   });
 
   it("an omitted toolchain stays undefined through the mapping (no mise.toml for a no-tool stack)", async () => {
@@ -113,13 +132,22 @@ describe("the researched toolchain threads onto the lifecycle + template-build c
   it("a ts/pnpm research → a non-empty CaptureLifecycle.toolchain → a materialized mise.toml", () => {
     const research: TemplateResearch = {
       researchSources: tsPnpmOutput.researchSources,
-      lifecycle: { ...tsPnpmOutput.lifecycle, toolchain: { node: "24", pnpm: "11" } },
+      lifecycle: {
+        ...tsPnpmOutput.lifecycle,
+        toolchain: [
+          { name: "node", version: "24" },
+          { name: "pnpm", version: "11" },
+        ],
+      },
       tooling: tsPnpmOutput.tooling,
       summary: tsPnpmOutput.summary,
     };
     const capture = authorTemplateBuildCapture(request, research);
     // The invariant: the template-build project ends up with a non-empty toolchain.
-    expect(capture.lifecycle.toolchain).toEqual({ node: "24", pnpm: "11" });
+    expect(capture.lifecycle.toolchain).toEqual([
+      { name: "node", version: "24" },
+      { name: "pnpm", version: "11" },
+    ]);
     // ...so the scaffold renders a `mise.toml` `[tools]` table → `mise install` provisions
     // node+pnpm at workspace-prep, so `just bootstrap` (pnpm install) finds pnpm.
     const mise = renderMiseToml(capture.lifecycle.toolchain);
@@ -144,6 +172,101 @@ describe("the researched toolchain threads onto the lifecycle + template-build c
       summary: "pure-shell",
     };
     const capture = authorTemplateBuildCapture(request, research);
-    expect(capture.lifecycle.toolchain).toEqual({});
+    expect(capture.lifecycle.toolchain).toEqual([]);
+  });
+});
+
+// apex-v34 — the lifecycle is part of the research answerer's structured-output
+// schema. A keyed-record `toolchain` rendered `propertyNames` (from its key regex),
+// which OpenAI strict structured outputs REJECT (HTTP 400). The array-of-objects
+// shape must render a strict-valid schema with NO `propertyNames` anywhere.
+// Walk every node of a rendered JSON schema, collecting the paths where a
+// `propertyNames` key appears (the strict-mode-forbidden record artifact).
+function findPropertyNames(node: unknown, path: string): string[] {
+  const hits: string[] = [];
+  if (Array.isArray(node)) {
+    node.forEach((item, i) => hits.push(...findPropertyNames(item, `${path}[${i}]`)));
+    return hits;
+  }
+  if (typeof node !== "object" || node === null) return hits;
+  const obj = node as Record<string, unknown>;
+  if ("propertyNames" in obj) hits.push(path);
+  for (const [key, value] of Object.entries(obj)) {
+    hits.push(...findPropertyNames(value, `${path}.${key}`));
+  }
+  return hits;
+}
+
+// Locate the rendered toolchain node (an array whose items are {name, version}).
+// The rendered lifecycle may be inlined or live under $defs/$ref — scan the whole
+// schema for the FIRST `toolchain` property node, the array we reshaped.
+function findToolchain(schema: Record<string, unknown>): Record<string, unknown> {
+  const found: Record<string, unknown>[] = [];
+  const visit = (node: unknown): void => {
+    if (Array.isArray(node)) {
+      for (const item of node) visit(item);
+      return;
+    }
+    if (typeof node !== "object" || node === null) return;
+    const obj = node as Record<string, unknown>;
+    const props = obj["properties"];
+    if (props !== undefined && typeof props === "object" && props !== null) {
+      const tc = (props as Record<string, unknown>)["toolchain"];
+      if (tc !== undefined && typeof tc === "object" && tc !== null) {
+        found.push(tc as Record<string, unknown>);
+      }
+    }
+    for (const value of Object.values(obj)) visit(value);
+  };
+  visit(schema);
+  const node = found[0];
+  if (node === undefined) throw new Error("no `toolchain` property node found in the rendered schema");
+  return node;
+}
+
+// A schema node whose `type` admits "array" (a bare `"array"` or a `["array","null"]`
+// nullable widening the strict renderer applies to an optional field).
+function typeIncludesArray(node: Record<string, unknown> | undefined): boolean {
+  if (node === undefined) return false;
+  const t = node["type"];
+  return t === "array" || (Array.isArray(t) && t.includes("array"));
+}
+
+describe("the research answerer JSON schema is OpenAI-strict-valid (no propertyNames)", () => {
+  it("renders NO `propertyNames` anywhere in the research output schema", () => {
+    const schema = renderAnswererJsonSchema(ResearchOutput);
+    const hits = findPropertyNames(schema, "$");
+    expect(hits).toEqual([]);
+  });
+
+  it("renders NO `propertyNames` in the INTERVIEW round output schema (the other lifecycle answerer)", () => {
+    // The interview architecture answerer ALSO emits a `CaptureLifecycle.toolchain` —
+    // it must be strict-valid too. (The root-cause HTTP 400 broke both answerers.)
+    const schema = renderAnswererJsonSchema(InterviewRoundOutput);
+    expect(findPropertyNames(schema, "$")).toEqual([]);
+  });
+
+  it("renders the toolchain as an ARRAY of {name, version} objects (not an open record)", () => {
+    const schema = renderAnswererJsonSchema(ResearchOutput);
+    const toolchain = findToolchain(schema);
+    // The reshaped toolchain. `toolchain` is strict-optional, so the renderer makes it
+    // nullable — a scalar/array `type` widens to a `["array","null"]` type array (the
+    // compact form), or an `anyOf:[<array>, {type:null}]` wrap. Resolve the array node.
+    const arrayNode = typeIncludesArray(toolchain)
+      ? toolchain
+      : ((toolchain["anyOf"] as Record<string, unknown>[] | undefined)?.find((b) => typeIncludesArray(b)) ?? undefined);
+    expect(arrayNode).toBeDefined();
+    expect(typeIncludesArray(arrayNode)).toBe(true);
+    // Its items are a fixed-shape object with `name` + `version` — strict mode requires
+    // additionalProperties:false (enforced by renderAnswererJsonSchema). Crucially the
+    // `name` mise-tool regex renders as a `pattern` on the STRING FIELD (permitted),
+    // NOT a `propertyNames` on a record (which OpenAI strict mode rejects).
+    const items = arrayNode?.["items"] as Record<string, unknown> | undefined;
+    expect(items?.["type"]).toBe("object");
+    expect(items?.["additionalProperties"]).toBe(false);
+    const itemProps = items?.["properties"] as Record<string, unknown> | undefined;
+    expect(Object.keys(itemProps ?? {}).sort()).toEqual(["name", "version"]);
+    const nameField = itemProps?.["name"] as Record<string, unknown> | undefined;
+    expect(typeof nameField?.["pattern"]).toBe("string");
   });
 });

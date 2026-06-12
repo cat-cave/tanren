@@ -35,7 +35,10 @@ const TS_LIFECYCLE: ProjectLifecycle = {
   // The project's declared dependency-bump verb (environment-management.md §4.5).
   upgrade: "pnpm update --latest",
   // The project's declared toolchain — materialized into a mise.toml [tools] table.
-  toolchain: { node: "24", pnpm: "10" },
+  toolchain: [
+    { name: "node", version: "24" },
+    { name: "pnpm", version: "10" },
+  ],
 };
 
 const RUST_LIFECYCLE: ProjectLifecycle = {
@@ -47,7 +50,7 @@ const RUST_LIFECYCLE: ProjectLifecycle = {
   build: "cargo build --release",
   deploy: "flyctl deploy",
   upgrade: "cargo update",
-  toolchain: { rust: "stable" },
+  toolchain: [{ name: "rust", version: "stable" }],
 };
 
 // A non-code lifecycle — the contract's generality proof. It declares NO mise
@@ -62,7 +65,7 @@ const NOVEL_LIFECYCLE: ProjectLifecycle = {
   build: "pandoc chapters/*.md --to epub --output book.epub",
   deploy: "python scripts/publish.py",
   upgrade: "",
-  toolchain: {},
+  toolchain: [],
 };
 
 // A multi-line command (newline-joined in the capture) — each line must become its
@@ -76,7 +79,7 @@ const MULTILINE_LIFECYCLE: ProjectLifecycle = {
   build: "pnpm build",
   deploy: "flyctl deploy",
   upgrade: "pnpm update --latest",
-  toolchain: {},
+  toolchain: [],
 };
 
 const TARGETS = ["bootstrap", "tier-1", "tier-2", "tier-3", "build", "deploy", "upgrade"] as const;
@@ -223,16 +226,35 @@ describe("materializeContractFiles · the manifest at the conventional paths", (
   });
 });
 
-describe("renderMiseToml / materializeContractFiles · the mise.toml is rendered from the toolchain map", () => {
+describe("renderMiseToml / materializeContractFiles · the mise.toml is rendered from the toolchain list", () => {
   it("renders a [tools] table with each tool=version, sorted + deterministic", () => {
-    const toml = renderMiseToml({ pnpm: "10", node: "24" });
+    const toml = renderMiseToml([
+      { name: "pnpm", version: "10" },
+      { name: "node", version: "24" },
+    ]);
     expect(toml).toContain("[tools]");
     expect(toml).toContain('node = "24"');
     expect(toml).toContain('pnpm = "10"');
-    // Keys are emitted in stable sorted order (node before pnpm).
+    // Tools are emitted in stable name-sorted order (node before pnpm).
     expect(toml.indexOf('node = "24"')).toBeLessThan(toml.indexOf('pnpm = "10"'));
-    // Deterministic: same input → byte-identical output.
-    expect(renderMiseToml({ node: "24", pnpm: "10" })).toBe(toml);
+    // Deterministic: same name→version set (any order) → byte-identical output.
+    expect(
+      renderMiseToml([
+        { name: "node", version: "24" },
+        { name: "pnpm", version: "10" },
+      ]),
+    ).toBe(toml);
+  });
+
+  it("de-duplicates a repeated tool last-wins (never a duplicate [tools] key)", () => {
+    const toml = renderMiseToml([
+      { name: "node", version: "20" },
+      { name: "node", version: "24" },
+    ]);
+    expect(toml).toContain('node = "24"');
+    expect(toml).not.toContain('node = "20"');
+    // Exactly one `node = ` line.
+    expect((toml.match(/^node = /gmu) ?? []).length).toBe(1);
   });
 
   it("materializes the mise.toml from the lifecycle toolchain, at the conventional path", () => {
@@ -253,7 +275,7 @@ describe("renderMiseToml / materializeContractFiles · the mise.toml is rendered
   });
 
   it("escapes a version-spec so it cannot break the TOML string", () => {
-    const toml = renderMiseToml({ node: 'a"b\\c' });
+    const toml = renderMiseToml([{ name: "node", version: 'a"b\\c' }]);
     expect(toml).toContain('node = "a\\"b\\\\c"');
   });
 });

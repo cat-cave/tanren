@@ -60,8 +60,8 @@ export const GOLDEN_BASELINE_TOOLCHAIN: Readonly<Record<string, string>> = Objec
  * anchor the env_key already uses); Tanren parses no semver here.
  */
 export function toolchainCoveredByGoldenBaseline(toolchain: ProjectToolchain): boolean {
-  for (const [tool, spec] of Object.entries(toolchain)) {
-    const baselineSpec = GOLDEN_BASELINE_TOOLCHAIN[tool];
+  for (const { name, version } of toolchain) {
+    const baselineSpec = GOLDEN_BASELINE_TOOLCHAIN[name];
     // The baseline never warmed this tool at all (an off-baseline TOOL — rust, bun,
     // …) ⇒ not covered.
     if (baselineSpec === undefined) {
@@ -70,7 +70,7 @@ export function toolchainCoveredByGoldenBaseline(toolchain: ProjectToolchain): b
     // The baseline warmed this tool but at a DIFFERENT version-spec (an off-baseline
     // VERSION — node 18 vs the baseline 24) ⇒ not covered. Compare the trimmed spec
     // string (the env_key's normalization), never parse semver.
-    if (baselineSpec.trim() !== spec.trim()) {
+    if (baselineSpec.trim() !== version.trim()) {
       return false;
     }
   }

@@ -47,6 +47,17 @@ import { environmentValidates } from "./envValidationProof.js";
 
 const log = createLogger("env-creation");
 
+// Project the declared toolchain (a list of {name, version}) into the persisted
+// `EnvironmentCapabilities.tools` SUMMARY MAP (name → version) the registry stores +
+// selection queries. De-duped last-wins, matching `renderMiseToml`'s projection.
+function toolchainCapabilityMap(toolchain: ProjectToolchain): Record<string, string> {
+  const tools: Record<string, string> = {};
+  for (const { name, version } of toolchain) {
+    tools[name] = version;
+  }
+  return tools;
+}
+
 // The injected collaborators the env meta-flow drives. The build + the runner
 // allocation are SEAMS so the orchestration is exercised end-to-end against stubs
 // (a stubbed builder + a fake allocator/substrate) — the wave's test contract.
@@ -162,7 +173,7 @@ export async function createEnvironment(
       orgId,
       envKey,
       imageRef: built.imageRef,
-      capabilities: { tools: { ...request.toolchain } },
+      capabilities: { tools: toolchainCapabilityMap(request.toolchain) },
       provenance,
       status: "validated",
       validationProof: proof,

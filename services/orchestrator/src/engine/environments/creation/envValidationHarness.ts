@@ -71,7 +71,7 @@ export async function runEnvValidationHarness(input: EnvValidationHarnessInput):
 // version (the env baked the wrong thing) fails the smoke. Short-circuits on the
 // first failure (a single tool that did not bake means the env is not valid).
 async function runPositiveSmoke(input: EnvValidationHarnessInput): Promise<boolean> {
-  for (const [tool, declaredSpec] of Object.entries(input.toolchain)) {
+  for (const { name: tool, version: declaredSpec } of input.toolchain) {
     const ok = await toolResolvesToLockedVersion(input, tool, declaredSpec);
     if (!ok) {
       return false;

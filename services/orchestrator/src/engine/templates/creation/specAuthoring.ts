@@ -43,9 +43,9 @@ function lifecycleFor(request: TemplateCreationRequest, research: TemplateResear
     // Project the researched `upgrade` verb onto the template's lifecycle so the build
     // materializes the `upgrade` justfile target. Absent ⇒ "" (a loud STUB target).
     upgrade: research.lifecycle.upgrade ?? "",
-    // Project the researched toolchain (mise tool→version) onto the template's
+    // Project the researched toolchain (list of {name, version}) onto the template's
     // lifecycle so the build materializes a `mise.toml`. Absent ⇒ empty (no mise.toml).
-    toolchain: research.lifecycle.toolchain ?? {},
+    toolchain: research.lifecycle.toolchain ?? [],
   };
 }
 
