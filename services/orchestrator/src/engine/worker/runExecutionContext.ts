@@ -17,6 +17,8 @@ import type { ResolvedRunCredentials } from "../credentials/resolveCredentials.j
 import { orgScopeFromRunOrgId, resolveCredentialsForRun } from "../credentials/resolveCredentials.js";
 import { materializeContractFiles } from "../forge/scaffold/index.js";
 import { resolveAncestorStack } from "../dag/ancestorStack.js";
+import { resolveProjectEnv } from "../environments/index.js";
+import { systemActor } from "../state/actor.js";
 import type { PlannerRunContext } from "../workflow/plannerRun.js";
 
 type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
@@ -146,6 +148,23 @@ export async function loadRunExecutionContext(
   // unknown version (no silent default), mirroring the route read-path parser.
   const projectConfig = migrateProjectConfig(decoded.config);
 
+  // Environment management (environment-management.md §3 Layer 4 + §6 + §7 P3): the
+  // PER-PROJECT env resolution at the image seam. Resolve the runner image from the
+  // `environments` registry by the project's TOOLCHAIN CONTENT KEY (`env_key`)
+  // instead of using the per-project `runner_image` default directly: read the
+  // project's committed toolchain (the deterministic `mise.lock` counterpart) →
+  // computeEnvKey → registry lookup for a VALIDATED/OFFICIAL match → `env.image_ref`.
+  // On a no-match (or no declared toolchain — a fresh greenfield first boot) it
+  // FALLS BACK to the warm golden base, so a project with no env resolves exactly as
+  // today. `pool` here is the run's ORG-SCOPED client (loadRunContextScoped wraps
+  // this in runWithOrgScope), so the RLS-scoped registry lookup sees the org's envs
+  // + the cross-org official catalogue.
+  const envBinding = await resolveProjectEnv(
+    pool,
+    { toolchain: projectConfig.lifecycle?.toolchain, baseImage: decoded.runner_image },
+    systemActor,
+  );
+
   // resolveCredentialsForRun reads organizations.config for the org-default layer.
   // A run is ALWAYS tenant-scoped: `projects.org_id` (joined as `p.org_id`) is
   // NOT-NULL, so a real run row carries a real org id. We thread it through
@@ -184,7 +203,10 @@ export async function loadRunExecutionContext(
     specTitle: decoded.title,
     specDescription: decoded.description,
     acceptanceCriteria: stringArray(decoded.acceptance_criteria),
-    runnerImage: decoded.runner_image,
+    // env P3: the env-RESOLVED runner image — `env.image_ref` on a registry match,
+    // else the golden base (the no-match / no-toolchain fallback). Replaces the
+    // direct `runner_image` default read; the existing flow (no env) is preserved.
+    runnerImage: envBinding.imageRef,
     identitySecretRef: input.identitySecretRef,
     githubCredentialRef: resolved.githubCredentialRef,
     // Part 2: the org App installation, so the clone resolves App-first.
@@ -240,7 +262,23 @@ export async function loadRunExecutionContext(
     ...(ancestorStack.length > 0 && { ancestorStack }),
   };
 
-  return { context, projectConfig, orgId: decoded.org_id };
+  // env P3: record the resolved env binding on the returned project config so the
+  // resolution decision is OBSERVABLE (the env-layer counterpart of `templateRef`).
+  // Present only when the project declared a toolchain (so an `envKey` was computed)
+  // — a no-toolchain project (golden-base path) leaves it absent, exactly as today.
+  const resolvedConfig: ProjectConfigV1 =
+    envBinding.envKey === undefined
+      ? projectConfig
+      : {
+          ...projectConfig,
+          environmentRef: {
+            envKey: envBinding.envKey,
+            imageRef: envBinding.imageRef,
+            ...(envBinding.environmentRef !== undefined && { environmentRef: envBinding.environmentRef }),
+          },
+        };
+
+  return { context, projectConfig: resolvedConfig, orgId: decoded.org_id };
 }
 
 /**

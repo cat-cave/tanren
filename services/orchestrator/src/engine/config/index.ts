@@ -84,6 +84,7 @@ export {
   ProjectConfigV1,
   ProjectConfigVersioned,
   ProjectCredentialRefs,
+  ProjectEnvironmentRef,
   ProjectLifecycle,
   ProjectTemplateRef,
   ProjectUpgradePolicy,

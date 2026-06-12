@@ -8,6 +8,13 @@
       "when": 1781158489845,
       "tag": "0000_collapsed_baseline",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1781286658662,
+      "tag": "0001_environments_registry",
+      "breakpoints": true
     }
   ]
 }

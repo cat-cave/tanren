@@ -215,6 +215,91 @@ describe("loadRunExecutionContext", () => {
   });
 });
 
+// Environment management (env P3) — the per-project env resolution at the image
+// seam, exercised THROUGH the loader. A stub that distinguishes the `environments`
+// registry lookup (returning either a match or no rows) from the run⋈spec join.
+function envRowPool(row: Record<string, unknown>, env: { match?: Record<string, unknown> } = {}): pg.Pool {
+  return {
+    async query(sql: string) {
+      const trimmed = sql.trim();
+      if (trimmed.startsWith("SELECT config FROM organizations")) {
+        return { rows: [{ config: { version: 1 } }], rowCount: 1 };
+      }
+      if (trimmed.includes("FROM environments")) {
+        return env.match === undefined ? { rows: [], rowCount: 0 } : { rows: [env.match], rowCount: 1 };
+      }
+      return { rows: [row], rowCount: 1 };
+    },
+  } as unknown as pg.Pool;
+}
+
+// A config carrying a declared toolchain (so resolution computes an env_key + hits
+// the registry). The lifecycle is otherwise minimal — only `toolchain` is read here.
+function configWithToolchain(): Record<string, unknown> {
+  return {
+    version: 1,
+    credentials: {
+      defaultLlm: { cli: "codex", model: "default", authRef: "credential/codex/dev" },
+      githubCredentialRef: "cred/gh",
+    },
+    lifecycle: {
+      stack: "ts-pnpm",
+      bootstrap: "just bootstrap",
+      tier1: "just tier-1",
+      tier2: "just tier-2",
+      tier3: "just tier-3",
+      build: "just build",
+      deploy: "just deploy",
+      upgrade: "just upgrade",
+      toolchain: { node: "22" },
+    },
+  };
+}
+
+describe("loadRunExecutionContext — env resolution at the image seam (env P3)", () => {
+  it("no declared toolchain → keeps the project runner_image + records NO environmentRef", async () => {
+    const { context, projectConfig } = await loadRunExecutionContext(rowPool(fullRow()), {
+      runId: "run_1",
+      identitySecretRef: "id",
+    });
+    expect(context.runnerImage).toBe("ghcr.io/acme/runner:1");
+    expect(projectConfig.environmentRef).toBeUndefined();
+  });
+
+  it("a declared toolchain with NO registry match → golden-base fallback, env_key recorded, no environmentRef", async () => {
+    const { context, projectConfig } = await loadRunExecutionContext(
+      envRowPool(fullRow({ config: configWithToolchain() })),
+      { runId: "run_1", identitySecretRef: "id" },
+    );
+    // No match ⇒ the project's runner_image (its base), but the env_key WAS computed.
+    expect(context.runnerImage).toBe("ghcr.io/acme/runner:1");
+    expect(projectConfig.environmentRef?.envKey).toMatch(/^[0-9a-f]{64}$/u);
+    expect(projectConfig.environmentRef?.environmentRef).toBeUndefined();
+    expect(projectConfig.environmentRef?.imageRef).toBe("ghcr.io/acme/runner:1");
+  });
+
+  it("a declared toolchain WITH a validated registry match → env.image_ref + environmentRef recorded", async () => {
+    const match = {
+      id: "env_matched",
+      org_id: "org_42",
+      env_key: "ignored-by-test",
+      image_ref: "registry:5000/tanren-env@sha256:matched",
+      capabilities: { tools: { node: "22" } },
+      channel: "lts",
+      status: "validated",
+      provenance: { baseDigest: "golden-deadbeef", miseLockHash: "h" },
+      validation_proof: null,
+    };
+    const { context, projectConfig } = await loadRunExecutionContext(
+      envRowPool(fullRow({ config: configWithToolchain() }), { match }),
+      { runId: "run_1", identitySecretRef: "id" },
+    );
+    expect(context.runnerImage).toBe("registry:5000/tanren-env@sha256:matched");
+    expect(projectConfig.environmentRef?.environmentRef).toBe("env_matched");
+    expect(projectConfig.environmentRef?.imageRef).toBe("registry:5000/tanren-env@sha256:matched");
+  });
+});
+
 describe("buildEffectiveRouting", () => {
   it("fills every empty loop-role chain with a default-Codex entry", () => {
     const effective = buildEffectiveRouting(emptyRoutingTable(), {

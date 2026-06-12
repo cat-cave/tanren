@@ -491,10 +491,10 @@ export { workflowInsights, quarantinedTests, ciTestResults } from "./schemaInsig
 export { inboxSources, candidates, webhookEvents } from "./schemaInbox.js";
 export { auditJobs } from "./schemaAudits.js";
 export { experiments, experimentCells, experimentTrials } from "./schemaBenchmark.js";
-// Integration-provisioning foundation (P-INT-0 + P-APP-ENV-0): the org-level
-// integration registry (Plane A) + the built product's app-environment store
-// (Plane B). See schemaIntegrations.ts for the two-plane rationale.
+// Integration-provisioning foundation (P-INT-0 + P-APP-ENV-0): the org-level integration registry (Plane A) + app-environment store (Plane B; schemaIntegrations.ts).
 export { orgIntegrations, projectAppEnv } from "./schemaIntegrations.js";
 // Templating REGISTRY (schemaTemplates.ts) + §3.3 entity-anchored CLAIMS ledger (schemaClaims.ts).
 export { templates } from "./schemaTemplates.js";
 export { entityClaims } from "./schemaClaims.js";
+// Environment management (schemaEnvironments.ts, env-management.md §7 P3): the ENVIRONMENT registry — `env_key`-hashed runner-image catalogue, parallel to `templates`.
+export { environments } from "./schemaEnvironments.js";
