@@ -10,6 +10,7 @@ import {
   resolveCiConfig,
   stepsFor,
   tiersFor,
+  upgradeCommand,
 } from "../src/engine/ci/index.js";
 
 const VALID = `version: 1
@@ -62,6 +63,10 @@ describe("resolveCiConfig — missing", () => {
     expect(cfg.tiers.merge?.map((s) => s.run)).toEqual(["just tier-3"]);
     // bootstrap defers to `just bootstrap` (the project owns its stack's install).
     expect(bootstrapCommand(cfg)).toBe("just bootstrap");
+    // The `upgrade` verb (environment-management.md §4.5) defers to `just upgrade` —
+    // the dependency-bump command a version-change DAG node runs. Names NO stack.
+    expect(upgradeCommand(cfg)).toBe("just upgrade");
+    expect(upgradeCommand(cfg)).not.toMatch(/pnpm|npm|corepack|cargo|node/u);
   });
 
   it("keeps the JUnit report-path convention fixed for the per-test ingest", () => {
@@ -183,6 +188,66 @@ when:
     - pre_merge
 `;
     expect(bootstrapCommand(resolveCiConfig(noBootstrap))).toBeUndefined();
+  });
+
+  it("parses the optional `upgrade` verb — the project's own dependency-bump command (stack-agnostic)", () => {
+    // The `upgrade` verb (environment-management.md §4.5/§7 P1) is opaque + project-
+    // declared (same `{ run }` shape as bootstrap) — Tanren names no dependency manager.
+    const withUpgrade = `version: 1
+upgrade:
+  run: "cargo update"
+tiers:
+  fast:
+    - name: lint
+      run: cargo clippy
+  slow:
+    - name: build
+      run: cargo build
+when:
+  fast:
+    - per_iteration
+  slow:
+    - pre_merge
+`;
+    expect(upgradeCommand(resolveCiConfig(withUpgrade))).toBe("cargo update");
+  });
+
+  it("treats the `upgrade` verb as optional — absent ⇒ no Tanren-driven upgrade lever", () => {
+    const noUpgrade = `version: 1
+tiers:
+  fast:
+    - name: lint
+      run: pnpm lint
+  slow:
+    - name: build
+      run: pnpm build
+when:
+  fast:
+    - per_iteration
+  slow:
+    - pre_merge
+`;
+    expect(upgradeCommand(resolveCiConfig(noUpgrade))).toBeUndefined();
+  });
+
+  it("rejects an `upgrade` block with no `run` (strict shape, like bootstrap)", () => {
+    const badUpgrade = `version: 1
+upgrade:
+  cmd: pnpm update
+tiers:
+  fast:
+    - name: lint
+      run: pnpm lint
+  slow:
+    - name: build
+      run: pnpm build
+when:
+  fast:
+    - per_iteration
+  slow:
+    - pre_merge
+`;
+    expect(() => resolveCiConfig(badUpgrade)).toThrow(CiConfigValidationError);
   });
 });
 

@@ -19,8 +19,10 @@ describe("skeleton .tanren/ci.yml — round-trips through resolveCiConfig", () =
   it("resolves as a valid CiConfigV1 with the justfile-convention 3-tier lifecycle map", () => {
     const config = resolveCiConfig(SKELETON_CI_CONFIG);
     expect(config.version).toBe(1);
-    // bootstrap + every tier step defer to `just <target>` — Tanren names NO stack.
+    // bootstrap + the upgrade verb + every tier step defer to `just <target>` — Tanren names NO stack.
     expect(config.bootstrap?.run).toBe("just bootstrap");
+    // The `upgrade` verb (environment-management.md §4.5) defers to `just upgrade`.
+    expect(config.upgrade?.run).toBe("just upgrade");
     expect((config.tiers.fast ?? []).map((s) => s.run)).toEqual(["just tier-1"]);
     expect((config.tiers.slow ?? []).map((s) => s.run)).toEqual(["just tier-2"]);
     expect((config.tiers.merge ?? []).map((s) => s.run)).toEqual(["just tier-3"]);
@@ -45,18 +47,19 @@ describe("skeleton .tanren/ci.yml — round-trips through resolveCiConfig", () =
 
 describe("skeleton justfile — every conventional target is a LOUD stub", () => {
   it("declares the conventional lifecycle targets", () => {
-    for (const target of ["bootstrap:", "tier-1:", "tier-2:", "tier-3:", "build:", "deploy:"]) {
+    for (const target of ["bootstrap:", "tier-1:", "tier-2:", "tier-3:", "build:", "deploy:", "upgrade:"]) {
       expect(SKELETON_JUSTFILE).toContain(target);
     }
   });
 
   it("each stub fails LOUDLY (exit 1) so an unfilled target never silently passes a gate", () => {
-    // One `exit 1` per conventional target (6).
+    // One `exit 1` per conventional target (7, incl. the §4.5 `upgrade` verb).
     const exits = SKELETON_JUSTFILE.match(/exit 1/gu) ?? [];
-    expect(exits).toHaveLength(6);
+    expect(exits).toHaveLength(7);
     // The stub echoes a "define this target" instruction, naming the target.
     expect(SKELETON_JUSTFILE).toContain("tanren: define 'bootstrap'");
     expect(SKELETON_JUSTFILE).toContain("tanren: define 'tier-1'");
+    expect(SKELETON_JUSTFILE).toContain("tanren: define 'upgrade'");
   });
 
   it("recipe bodies are TAB-indented (just requires a tab, not spaces)", () => {

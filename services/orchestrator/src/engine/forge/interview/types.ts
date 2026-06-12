@@ -172,6 +172,16 @@ export const CaptureLifecycle = z
     tier3: z.string().min(1).max(400),
     build: z.string().min(1).max(400),
     deploy: z.string().min(1).max(400),
+    // The `upgrade` verb (environment-management.md §4.5/§7 P1) — the stack command
+    // that BUMPS this project's dependencies to latest + regenerates its lockfile
+    // (`pnpm update --latest` | `cargo update` | `uv lock --upgrade` | `go get -u`),
+    // filling the `upgrade` justfile target. Tanren NEVER hardcodes the command — the
+    // project declares it. Optional: a project with literally nothing to upgrade (a
+    // pure-shell/system-package stack) declares a no-op; absent OR "" ⇒ the `upgrade`
+    // target STUBs and the project has no Tanren-driven forced-upgrade lever. Allows ""
+    // (a project may explicitly declare no upgrade command) — unlike the tier verbs,
+    // which are required — defaulting to "" when omitted.
+    upgrade: z.string().max(400).default(""),
     // The project's TOOLCHAIN (mise tool-name → version-spec; see `CaptureToolchain`).
     // OPTIONAL: a project may declare none (provisions inside its own bootstrap, or
     // rides the runner baseline) — absent/empty ⇒ no `mise.toml` materialized.

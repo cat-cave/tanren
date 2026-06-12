@@ -86,6 +86,12 @@ export const SKELETON_CI_CONFIG = `# .tanren/ci.yml — Tanren's native gate def
 version: 1
 bootstrap:
   run: just bootstrap
+# upgrade (environment-management.md §4.5) — the dependency-bump verb a version-change
+# DAG node runs. Defers to \`just upgrade\` (the stack's \`pnpm update --latest\` /
+# \`cargo update\` / … lives in the justfile). Tanren runs it as a GATED node, never a
+# side stream — a breaking bump is rejected loudly and main never breaks.
+upgrade:
+  run: just upgrade
 tiers:
   # tier-1 (per_iteration) — the cheap gate after every writer iteration.
   fast:
@@ -124,6 +130,11 @@ const SKELETON_JUSTFILE_TARGETS: ReadonlyArray<{ readonly target: string; readon
   { target: "tier-3", comment: "tier-3 — the heaviest pre-merge gate (the merge authority)." },
   { target: "build", comment: "build the deployable artifact." },
   { target: "deploy", comment: "deploy the built artifact to the target." },
+  {
+    target: "upgrade",
+    comment:
+      "upgrade — bump dependencies to latest + regenerate the lockfile (e.g.\n# 'pnpm update --latest' | 'cargo update' | 'uv lock --upgrade' | 'go get -u ./...').\n# Tanren runs this as a GATED DAG node (environment-management.md §4.5) — never a\n# side stream — so a breaking bump is rejected without ever breaking main.",
+  },
 ]);
 
 // Render a justfile from a per-target recipe-body function. `body` returns the
@@ -149,6 +160,13 @@ export function renderJustfile(body: (target: string) => string): string {
 // indented (just requires a tab, not spaces) — keep the literal tab below.
 const STUB = (target: string): string =>
   `\t@echo "tanren: define '${target}' for this project's stack (edit the justfile)" && exit 1`;
+
+// The LOUD-STUB recipe body for a target, exported so the lifecycle-filled justfile
+// (contractFiles.ts) renders it for an OPTIONAL verb the project declared no command
+// for (e.g. `upgrade=""`): an unfilled target `exit 1`s rather than silently passing.
+export function stubRecipeBody(target: string): string {
+  return STUB(target);
+}
 
 export const SKELETON_JUSTFILE = renderJustfile(STUB);
 

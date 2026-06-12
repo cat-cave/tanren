@@ -32,6 +32,8 @@ const TS_LIFECYCLE: ProjectLifecycle = {
   tier3: "pnpm lint && pnpm typecheck && pnpm build && pnpm test",
   build: "pnpm build",
   deploy: "flyctl deploy",
+  // The project's declared dependency-bump verb (environment-management.md §4.5).
+  upgrade: "pnpm update --latest",
   // The project's declared toolchain — materialized into a mise.toml [tools] table.
   toolchain: { node: "24", pnpm: "10" },
 };
@@ -44,11 +46,13 @@ const RUST_LIFECYCLE: ProjectLifecycle = {
   tier3: "cargo clippy --all-targets -- -D warnings && cargo test",
   build: "cargo build --release",
   deploy: "flyctl deploy",
+  upgrade: "cargo update",
   toolchain: { rust: "stable" },
 };
 
 // A non-code lifecycle — the contract's generality proof. It declares NO mise
 // toolchain (a pure-shell/system-package stack) — so NO mise.toml is materialized.
+// It also declares NO `upgrade` verb (nothing to upgrade) — so that target STUBs.
 const NOVEL_LIFECYCLE: ProjectLifecycle = {
   stack: "novel/pandoc",
   bootstrap: "pip install -r requirements.txt",
@@ -57,6 +61,7 @@ const NOVEL_LIFECYCLE: ProjectLifecycle = {
   tier3: "aspell check chapters/*.md && python scripts/consistency-check.py",
   build: "pandoc chapters/*.md --to epub --output book.epub",
   deploy: "python scripts/publish.py",
+  upgrade: "",
   toolchain: {},
 };
 
@@ -70,10 +75,11 @@ const MULTILINE_LIFECYCLE: ProjectLifecycle = {
   tier3: "pnpm test",
   build: "pnpm build",
   deploy: "flyctl deploy",
+  upgrade: "pnpm update --latest",
   toolchain: {},
 };
 
-const TARGETS = ["bootstrap", "tier-1", "tier-2", "tier-3", "build", "deploy"] as const;
+const TARGETS = ["bootstrap", "tier-1", "tier-2", "tier-3", "build", "deploy", "upgrade"] as const;
 
 // The justfile's recipe BODIES — the TAB-indented command lines (a leading comment
 // may list example stacks as guidance, which is not an executed command). Assertions
@@ -129,6 +135,9 @@ describe("materializeContractFiles · the justfile is filled from the lifecycle 
     expect(justfile).toContain("pnpm install --frozen-lockfile");
     expect(justfile).toContain("pnpm lint && pnpm typecheck");
     expect(justfile).toContain("pnpm build && pnpm test -- --reporter=junit --outputFile=reports/junit.xml");
+    // The `upgrade` verb (environment-management.md §4.5) fills its target with the
+    // project's declared bump command — Tanren names no dependency manager.
+    expect(justfile).toContain("pnpm update --latest");
     // No OTHER stack leaks into the RECIPE BODIES (the header comment lists example
     // stacks as guidance — that is not an executed command; assert on tab lines).
     for (const body of recipeBodies(justfile)) {
@@ -175,6 +184,25 @@ describe("materializeContractFiles · the justfile is filled from the lifecycle 
     const a = materializeContractFiles(TS_LIFECYCLE);
     const b = materializeContractFiles(TS_LIFECYCLE);
     expect(a).toEqual(b);
+  });
+
+  it("an UNDECLARED `upgrade` verb renders a LOUD STUB (exit 1), never a silent no-op", () => {
+    // The novel/pandoc lifecycle declares no `upgrade` command (nothing to upgrade). The
+    // filled justfile must STUB that target — an empty recipe would silently pass a
+    // version-change gate, which §4.5 forbids. The other six targets stay filled.
+    const justfile = renderLifecycleJustfile(NOVEL_LIFECYCLE);
+    expect(justfile).toContain("upgrade:");
+    // The stub line names the upgrade target + exits 1.
+    expect(justfile).toMatch(/upgrade:\n\t@echo "tanren: define 'upgrade'.*&& exit 1/u);
+    // The DECLARED targets are NOT stubbed.
+    expect(justfile).toContain("aspell check chapters/*.md");
+    expect(justfile).toContain("pandoc chapters/*.md --to epub --output book.epub");
+  });
+
+  it("a DECLARED `upgrade` verb fills the target with the real command (no stub)", () => {
+    const justfile = renderLifecycleJustfile(RUST_LIFECYCLE);
+    expect(justfile).toMatch(/upgrade:\n\tcargo update/u);
+    expect(justfile).not.toContain("tanren: define 'upgrade'");
   });
 });
 

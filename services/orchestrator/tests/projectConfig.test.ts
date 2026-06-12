@@ -352,4 +352,45 @@ describe("ProjectConfigV1 lifecycle toolchain (env P0b/c)", () => {
       }),
     ).toThrow(/.+/u);
   });
+
+  it("round-trips the lifecycle `upgrade` verb (environment-management.md §4.5)", () => {
+    const cfg = migrateProjectConfig({
+      version: 1,
+      lifecycle: { ...baseLifecycle, upgrade: "pnpm update --latest" },
+    });
+    expect(cfg.lifecycle?.upgrade).toBe("pnpm update --latest");
+  });
+
+  it("defaults the lifecycle `upgrade` verb to empty when omitted (no upgrade lever)", () => {
+    const cfg = migrateProjectConfig({ version: 1, lifecycle: baseLifecycle });
+    expect(cfg.lifecycle?.upgrade).toBe("");
+  });
+});
+
+describe("ProjectConfigV1 upgrade policy (env P1, environment-management.md §4.5)", () => {
+  it("defaults to keep-current ON + a 3-day supply-chain cooldown", () => {
+    const cfg = migrateProjectConfig({ version: 1 });
+    expect(cfg.upgradePolicy).toEqual({ keepCurrent: true, minimumReleaseAgeDays: 3 });
+  });
+
+  it("round-trips an explicit policy (pinned project, longer cooldown)", () => {
+    const cfg = migrateProjectConfig({
+      version: 1,
+      upgradePolicy: { keepCurrent: false, minimumReleaseAgeDays: 14 },
+    });
+    expect(cfg.upgradePolicy.keepCurrent).toBe(false);
+    expect(cfg.upgradePolicy.minimumReleaseAgeDays).toBe(14);
+  });
+
+  it("accepts a 0-day cooldown (no cooldown) but rejects a negative one", () => {
+    expect(
+      migrateProjectConfig({ version: 1, upgradePolicy: { minimumReleaseAgeDays: 0 } }).upgradePolicy
+        .minimumReleaseAgeDays,
+    ).toBe(0);
+    expect(() => migrateProjectConfig({ version: 1, upgradePolicy: { minimumReleaseAgeDays: -1 } })).toThrow(/.+/u);
+  });
+
+  it("rejects an unknown key inside the upgrade policy (strict)", () => {
+    expect(() => migrateProjectConfig({ version: 1, upgradePolicy: { somethingElse: true } })).toThrow(/.+/u);
+  });
 });

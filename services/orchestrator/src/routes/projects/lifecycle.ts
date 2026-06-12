@@ -25,6 +25,12 @@ import type { Context } from "hono";
 import type pg from "pg";
 import type { ProjectLifecycle } from "../../engine/repositories/index.js";
 
+// Re-export the dependency-UPGRADE handler (environment-management.md §4.5/§7 P1) — a
+// sibling project POST-action handler in `upgrade.ts`. Surfacing it through this module
+// keeps the project route file (`index.ts`) under its per-file dependency cap: it imports
+// all the project-action handlers (archive/unarchive/upgrade) from one module.
+export { handleProjectUpgrade } from "./upgrade.js";
+
 /** The shape both archive + unarchive return. */
 export interface LifecycleView {
   projectId: string;

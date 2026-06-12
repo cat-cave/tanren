@@ -7,6 +7,7 @@ export {
   CiConfigV1,
   CiStep,
   CiTiers,
+  CiUpgrade,
   CiWhen,
   CiWhenPolicy,
   SUPPORTED_CI_CONFIG_VERSIONS,
@@ -22,6 +23,7 @@ export {
   resolveCiConfig,
   stepsFor,
   tiersFor,
+  upgradeCommand,
 } from "./resolve.js";
 
 export { parseYaml } from "./yaml.js";

@@ -35,6 +35,7 @@ const TS_LIFECYCLE: ProjectLifecycle = {
   tier3: "pnpm test",
   build: "pnpm build",
   deploy: "flyctl deploy",
+  upgrade: "pnpm update --latest",
   toolchain: {},
 };
 

@@ -52,6 +52,29 @@ export const CiBootstrap = z
   .strict();
 export type CiBootstrap = z.infer<typeof CiBootstrap>;
 
+// ---- Upgrade ---------------------------------------------------------------
+
+// Optional `upgrade` verb (environment-management.md §4.5 + §7 P1) — the
+// project-declared command that BUMPS this project's dependencies to latest and
+// regenerates its lockfile (conventionally `just upgrade`, deferring to the
+// project's stack — Tanren names NO dependency-manager: `pnpm update --latest`,
+// `cargo update`, `uv lock --upgrade`, `go get -u ./...`, …). Same opaque `{ run }`
+// shape as `bootstrap`; Tanren never parses the shell.
+//
+// This verb only PRODUCES the new declaration/lockfile. What makes a version change
+// SAFE is that it runs as a first-class DAG node through the same never-break-main
+// gate as any code change (§4.5) — the upgrade-spec generator
+// (engine/forge/upgrade/generator.ts) inserts it via the existing spec-creation path,
+// NEVER as a side stream that mutates dependencies and merges un-gated. Optional: a
+// project that declares no `upgrade` verb has no Tanren-driven forced-upgrade lever
+// (the design's Renovate escape hatch is FUTURE work, not this verb).
+export const CiUpgrade = z
+  .object({
+    run: z.string().min(1),
+  })
+  .strict();
+export type CiUpgrade = z.infer<typeof CiUpgrade>;
+
 // ---- Tiers -----------------------------------------------------------------
 
 // The set of named tiers. `fast` and `slow` are REQUIRED so the in-loop gate
@@ -80,6 +103,10 @@ export const CiConfigV1 = z
   .object({
     version: z.literal(1),
     bootstrap: CiBootstrap.optional(),
+    // The project's dependency-bump command (environment-management.md §4.5/§7 P1).
+    // Optional + opaque — see `CiUpgrade`. Tanren runs it inside a gated upgrade DAG
+    // node, never a side stream.
+    upgrade: CiUpgrade.optional(),
     tiers: CiTiers,
     when: CiWhenPolicy,
   })
