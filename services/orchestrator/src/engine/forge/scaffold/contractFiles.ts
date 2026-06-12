@@ -26,7 +26,14 @@
 // actual PROJECT CODE (package.json / src / …); it never touches the contract files.
 
 import type { ProjectLifecycle } from "../../config/index.js";
-import { SKELETON_CI_CONFIG, SKELETON_CI_CONFIG_PATH, SKELETON_JUSTFILE_PATH, renderJustfile } from "./skeleton.js";
+import {
+  SKELETON_CI_CONFIG,
+  SKELETON_CI_CONFIG_PATH,
+  SKELETON_JUSTFILE_PATH,
+  SKELETON_MISE_CONFIG_PATH,
+  renderJustfile,
+  renderMiseToml,
+} from "./skeleton.js";
 
 // One file the materialization writes into the workspace verbatim (path + exact
 // bytes). The RUN path commits these before the writer authors any code.
@@ -40,15 +47,17 @@ export interface ContractFile {
 // target NAMES + their lifecycle order — never the commands (those are the
 // project's declaration). Mirrors the interview's CONVENTIONAL_TARGETS so the
 // filled justfile matches the captured lifecycle 1:1.
-const TARGET_FIELDS: ReadonlyArray<{ readonly target: string; readonly field: keyof Omit<ProjectLifecycle, "stack"> }> =
-  [
-    { target: "bootstrap", field: "bootstrap" },
-    { target: "tier-1", field: "tier1" },
-    { target: "tier-2", field: "tier2" },
-    { target: "tier-3", field: "tier3" },
-    { target: "build", field: "build" },
-    { target: "deploy", field: "deploy" },
-  ] as const;
+const TARGET_FIELDS: ReadonlyArray<{
+  readonly target: string;
+  readonly field: keyof Omit<ProjectLifecycle, "stack" | "toolchain">;
+}> = [
+  { target: "bootstrap", field: "bootstrap" },
+  { target: "tier-1", field: "tier1" },
+  { target: "tier-2", field: "tier2" },
+  { target: "tier-3", field: "tier3" },
+  { target: "build", field: "build" },
+  { target: "deploy", field: "deploy" },
+] as const;
 
 // Render one justfile recipe BODY from a captured command. just requires every
 // recipe line to start with a TAB (not spaces) — a multi-line command
@@ -74,11 +83,20 @@ export function renderLifecycleJustfile(lifecycle: ProjectLifecycle): string {
 
 // The deterministic contract-file manifest for a project's lifecycle: the
 // stack-agnostic `.tanren/ci.yml` (SKELETON_CI_CONFIG VERBATIM — the correct-shape
-// `just`-map, never LLM-authored) + the lifecycle-FILLED `justfile`. The RUN path
-// writes these into the workspace exactly as returned, before the writer runs.
+// `just`-map, never LLM-authored) + the lifecycle-FILLED `justfile` + (when the
+// project declared a toolchain) a `mise.toml` rendered from the toolchain map. The
+// RUN path writes these into the workspace exactly as returned, before the writer
+// runs. The `mise.toml` is a DETERMINISTIC projection (like the justfile) — NEVER
+// LLM-authored; an EMPTY/absent toolchain materializes NO mise.toml (a project may
+// legitimately declare none and provision inside its own bootstrap shell — Tanren
+// invents no versions).
 export function materializeContractFiles(lifecycle: ProjectLifecycle): ContractFile[] {
-  return [
+  const files: ContractFile[] = [
     { path: SKELETON_CI_CONFIG_PATH, content: SKELETON_CI_CONFIG },
     { path: SKELETON_JUSTFILE_PATH, content: renderLifecycleJustfile(lifecycle) },
   ];
+  if (Object.keys(lifecycle.toolchain).length > 0) {
+    files.push({ path: SKELETON_MISE_CONFIG_PATH, content: renderMiseToml(lifecycle.toolchain) });
+  }
+  return files;
 }

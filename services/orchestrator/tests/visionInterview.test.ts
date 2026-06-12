@@ -40,6 +40,7 @@ const TS_LIFECYCLE: CaptureLifecycle = {
   tier3: "pnpm lint && pnpm typecheck && pnpm build && pnpm test",
   build: "pnpm build",
   deploy: "flyctl deploy",
+  toolchain: {},
 };
 
 // A capture WITH the lifecycle (so a deploy-guard test isolates the deploy guard,

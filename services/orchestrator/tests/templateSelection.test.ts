@@ -45,6 +45,7 @@ const TS_LIFECYCLE: CaptureLifecycle = {
   tier3: "pnpm ci",
   build: "pnpm build",
   deploy: "vercel deploy --prod",
+  toolchain: {},
 };
 
 function freshProof(overrides: Partial<TemplateValidationProof> = {}): TemplateValidationProof {
@@ -125,6 +126,7 @@ describe("deriveCapabilityQuery · capability filter from the lifecycle", () => 
       tier3: "full-review",
       build: "pandoc book.md -o book.epub",
       deploy: "publish-epub",
+      toolchain: {},
     };
     // An unaliased token expands to JUST itself — no spurious runtimes leak in.
     expect(deriveCapabilityQuery(novel).query.runtimeAny).toEqual(["novel"]);

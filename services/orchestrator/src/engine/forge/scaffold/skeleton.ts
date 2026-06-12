@@ -34,6 +34,42 @@ export const SKELETON_JUSTFILE_PATH = "justfile";
 // The conventional path of the native gate definition Tanren reads.
 export const SKELETON_CI_CONFIG_PATH = ".tanren/ci.yml";
 
+// The conventional path of the project's TOOLCHAIN declaration
+// (environment-management.md §3 Layer 1): `mise.toml`, a `[tools]` table of the
+// project's declared tool→version set. Materialized DETERMINISTICALLY from the
+// lifecycle's `toolchain` map (NEVER LLM-authored, like the justfile) and provisioned
+// at workspace-prep via `mise install`. Absent when the project declares no toolchain.
+export const SKELETON_MISE_CONFIG_PATH = "mise.toml";
+
+// Escape a value for a TOML basic (double-quoted) string: `\` and `"` so a
+// version-spec can never break out of the quoted string in the `[tools]` table.
+function escapeTomlString(value: string): string {
+  return value.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
+}
+
+// Render a deterministic `mise.toml` `[tools]` table from the project's declared
+// toolchain map (tool-name → version-spec). A PURE projection — no stack literal, no
+// LLM, no invented version. Keys are emitted in a STABLE (sorted) order so the file is
+// byte-deterministic. Each value is rendered as a TOML basic string, with `\` and `"`
+// escaped so a version-spec can never break out of the quoted string. The caller
+// (contractFiles.ts) only renders this when the map is NON-EMPTY — an empty toolchain
+// materializes NO mise.toml at all (Tanren invents no versions).
+export function renderMiseToml(toolchain: Readonly<Record<string, string>>): string {
+  const tools = Object.keys(toolchain)
+    .sort()
+    .map((tool) => `${tool} = "${escapeTomlString(toolchain[tool] ?? "")}"`)
+    .join("\n");
+  return (
+    "# mise.toml — this project's TOOLCHAIN, the versions of the tools its stack needs.\n" +
+    "# Tanren materializes this DETERMINISTICALLY from the project's declared toolchain\n" +
+    "# (no LLM) and provisions it at workspace-prep via `mise install` in user space —\n" +
+    "# so a bare `node`/`pnpm`/etc in the justfile resolves to THESE versions. Tanren's\n" +
+    "# own harness (codex) stays on the runner's isolated node, untouched.\n" +
+    "[tools]\n" +
+    `${tools}\n`
+  );
+}
+
 // The stack-AGNOSTIC `.tanren/ci.yml` (CiConfigV1). It maps the three lifecycle
 // tiers to `just <target>` — NO stack command (pnpm/cargo/python/…) appears; the
 // stack lives in the justfile. `bootstrap.run` is `just bootstrap`. The three tiers

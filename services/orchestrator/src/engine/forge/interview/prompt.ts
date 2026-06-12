@@ -50,6 +50,21 @@ export function buildInterviewPrompt(context: InterviewAnswererContext): string 
     "  - `tier3`: the full pre-merge gate (usually tier1 + tier2 together)",
     "  - `build`: produce the artifact (e.g. 'pnpm build' | 'cargo build --release' | 'pandoc … --to epub')",
     "  - `deploy`: ship it (e.g. 'pnpm deploy' | 'flyctl deploy' | 'publish')",
+    // TOOLCHAIN (environment-management.md §3): the architecture step ALSO declares
+    // the project's toolchain — the runtime/tool VERSIONS the stack needs, provisioned
+    // at workspace-prep via `mise` in user space (the runner ships NO project toolchain).
+    // The keys are `mise` tool names (node/pnpm/python/go/rust/…); the values are the
+    // versions the PROJECT chose. CURRENT/LTS BY DEFAULT (the anti-stale-version rule):
+    // pick the LATEST stable / current-LTS versions a fresh project would adopt today
+    // (e.g. node '24', pnpm '10', python '3.13') — NEVER years-old defaults — UNLESS the
+    // operator's intent explicitly calls for a legacy/pinned/nightly toolchain. Omit
+    // `toolchain` (or leave it empty) ONLY for a stack with NO tool mise can provision
+    // (a pure-shell or system-package project) — then the bootstrap shell provisions it.
+    "  - `toolchain`: a map of mise tool-name → version the stack needs, at CURRENT/LTS",
+    "      versions by default (e.g. { node: '24', pnpm: '10' } | { python: '3.13' } |",
+    "      { rust: 'stable', go: '1.23' }). Pick the latest stable / current LTS a fresh",
+    "      project adopts TODAY — never years-old versions — unless the operator asks for",
+    "      a legacy/pinned/nightly toolchain. Omit it only for a stack with no mise tool.",
     "A tier that runs tests should write a machine-readable report to a known path",
     "(the test-report convention). The lifecycle is REQUIRED before the interview can",
     "complete — never leave it null and never assume Node/pnpm.",

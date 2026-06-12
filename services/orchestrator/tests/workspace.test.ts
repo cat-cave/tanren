@@ -152,7 +152,10 @@ describe("workspace bootstrap (P3-0006)", () => {
 
     expect(result.exitCode).toBe(0);
     expect(ssh.commands).toHaveLength(1);
-    expect(ssh.commands[0]?.command.command).toBe("pnpm install");
+    // The EXECUTED command is mise-activated (project path) so a bare `pnpm` resolves
+    // to the declared toolchain; the project's own command runs verbatim at the tail.
+    expect(ssh.commands[0]?.command.command.endsWith("pnpm install")).toBe(true);
+    expect(ssh.commands[0]?.command.command).toContain("mise activate bash");
     expect(ssh.commands[0]?.command.cwd).toBe(workspacePath);
   });
 
@@ -160,7 +163,7 @@ describe("workspace bootstrap (P3-0006)", () => {
     const ssh = new ScriptedSsh([{ exitCode: 0, stdout: "", stderr: "", timedOut: false }]);
     await bootstrapWorkspace({ ssh, target, workspacePath, timeoutMs: 100 });
 
-    expect(ssh.commands[0]?.command.command).toBe(DEFAULT_BOOTSTRAP_COMMAND);
+    expect(ssh.commands[0]?.command.command.endsWith(DEFAULT_BOOTSTRAP_COMMAND)).toBe(true);
     // `just bootstrap` when a justfile is present — and NO baked-in stack command.
     expect(DEFAULT_BOOTSTRAP_COMMAND).toContain("just bootstrap");
     expect(DEFAULT_BOOTSTRAP_COMMAND).not.toMatch(/pnpm|npm|corepack|node/u);

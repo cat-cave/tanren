@@ -10,6 +10,7 @@
 import { describe, expect, it } from "vitest";
 import { loadActiveQuarantine, QUARANTINE_ENV_VAR, quarantineEnv } from "../src/engine/workflow/ciQuarantine.js";
 import { runGateTier } from "../src/engine/workflow/gate/runGateTier.js";
+import { withMiseActivation } from "../src/engine/ssh/miseActivate.js";
 import type { RunnerHandle } from "../src/engine/contracts/allocator.js";
 import type { RunnerCommand, CommandResult, CommandSubstrate } from "../src/engine/contracts/commandSubstrate.js";
 import type { EventName, EventPayload } from "../src/engine/events/index.js";
@@ -108,7 +109,7 @@ describe("runGateTier flaky-quarantine actuation (CLOSES the flaky→quarantine�
     // `unit` is on the project's ACTIVE quarantine surface (proven-flaky). It FAILS, but its
     // failure is EXCLUDED — the tier keeps running and PASSES, a gate.quarantine_excluded
     // warning fires instead of gate.failed, so the merge can go green while a fix is in flight.
-    const ssh = new RecordingSsh((c) => (c === "pnpm test:unit" ? { exitCode: 1, stderr: "flake boom" } : {}));
+    const ssh = new RecordingSsh((c) => (c.endsWith("pnpm test:unit") ? { exitCode: 1, stderr: "flake boom" } : {}));
     const { events, appendEvent } = recordingEvents();
     const result = await runGateTier({
       ssh,
@@ -127,7 +128,9 @@ describe("runGateTier flaky-quarantine actuation (CLOSES the flaky→quarantine�
 
     expect(result.passed).toBe(true);
     // The quarantined step did NOT short-circuit the rest — build still ran + passed.
-    expect(ssh.commands.map((c) => c.command)).toEqual(["pnpm test:unit", "pnpm build"]);
+    expect(ssh.commands.map((c) => c.command)).toEqual(
+      ["pnpm test:unit", "pnpm build"].map((c) => withMiseActivation(c)),
+    );
     expect(result.steps.find((s) => s.name === "unit")?.passed).toBe(false);
     expect(events.map((e) => e.eventType)).toEqual(["gate.started", "gate.quarantine_excluded", "gate.passed"]);
     const excluded = events.find((e) => e.eventType === "gate.quarantine_excluded")!.payload as {
@@ -141,7 +144,7 @@ describe("runGateTier flaky-quarantine actuation (CLOSES the flaky→quarantine�
   it("a NON-quarantined step's failure still BLOCKS even when another step is quarantined", async () => {
     // `build` is NOT quarantined → its failure blocks (gate.failed). Quarantine narrows to the
     // proven-flaky step only; a real regression in any other step still red-gates the merge.
-    const ssh = new RecordingSsh((c) => (c === "pnpm build" ? { exitCode: 1, stderr: "real break" } : {}));
+    const ssh = new RecordingSsh((c) => (c.endsWith("pnpm build") ? { exitCode: 1, stderr: "real break" } : {}));
     const { events, appendEvent } = recordingEvents();
     const result = await runGateTier({
       ssh,

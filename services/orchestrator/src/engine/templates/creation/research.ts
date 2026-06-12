@@ -80,6 +80,11 @@ export interface ResearchedLifecycle {
   tier3: string;
   build: string;
   deploy: string;
+  // The researched TOOLCHAIN (environment-management.md §3) — mise tool-name →
+  // version-spec at CURRENT/LTS versions for the stack (node/pnpm/python/…).
+  // Projected onto the template's `CaptureLifecycle.toolchain` so the build
+  // materializes a `mise.toml`. Optional/absent ⇒ no toolchain (no mise.toml).
+  toolchain?: Record<string, string>;
 }
 
 // The tooling/feature decisions the research produced for the stack — which parts

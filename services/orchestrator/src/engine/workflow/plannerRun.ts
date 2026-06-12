@@ -51,6 +51,7 @@ import {
   writerSeam,
 } from "./plannerRunAdapters.js";
 import { prepareRunWorkspace, type BootstrapStepInput, type CommitBootstrapStepInput } from "./plannerRunWorkspace.js";
+import type { ProvisionMiseToolchainInput } from "../workspace/bootstrap.js";
 import type { BootstrapStackHeadShaWriteBack, EagerBaseNodeUpsert } from "./plannerRunJjLocalBootstrap.js";
 import {
   applyScopedRunCredentials,
@@ -151,10 +152,9 @@ export interface RunPlannerLoopInput {
   // direct DB write). The run worker injects a writer-backed recorder so the cost
   // INSERT routes through the control-plane endpoint when remote-writes is on.
   recorder?: CostRecorder;
-  // How the workflow finalizes the run (the terminal `UPDATE runs`).
-  // Defaults to the in-process org-scoped UPDATE on `pool`; the worker injects a
-  // writer-backed finalizer that routes through the control-plane endpoint when
-  // remote-writes is on. Returns nothing — the workflow doesn't branch on it.
+  // How the workflow finalizes the run (the terminal `UPDATE runs`). Defaults to the
+  // in-process org-scoped UPDATE on `pool`; the worker injects a writer-backed
+  // finalizer that routes through the control-plane endpoint when remote-writes is on.
   finalizeRun?: (input: { runId: string; status: string; outcome: string; fromStatuses: string[] }) => Promise<void>;
   // the run/spec/task LIFECYCLE writer. When present (remote-writes
   // on, the run has an org), every non-finalize `runs` / `specs` / `tasks` write the
@@ -181,22 +181,22 @@ export interface RunPlannerLoopInput {
   ciPollDelayMs?: number;
   sleep?: (ms: number) => Promise<void>;
   pressureThresholdPercent?: number;
-  // explicit install-command override run over SSH after clone. When
-  // omitted the run resolves the repo's tanren-ci.yml `bootstrap.run`, else a
-  // default (cold bootstrap: DEFAULT_BOOTSTRAP_COMMAND; in-loop deps-ensure:
-  // greenfield-aware, see buildDefaultGate).
+  // explicit install-command override run over SSH after clone. Omitted ⇒ the run
+  // resolves the repo's tanren-ci.yml `bootstrap.run`, else a default (cold bootstrap:
+  // DEFAULT_BOOTSTRAP_COMMAND; in-loop deps-ensure: greenfield-aware, buildDefaultGate).
   bootstrapCommand?: string;
-  // Test seam: when omitted, the real bootstrapWorkspace runs over SSH. Tests
-  // inject a no-op (or scripted failure) so unit runs never depend on a real install.
+  // Test seam: omitted ⇒ real bootstrapWorkspace over SSH; tests inject a no-op (or
+  // scripted failure) so unit runs never depend on a real install.
   runBootstrap?: (input: BootstrapStepInput) => Promise<void>;
-  // Test seam mirroring runBootstrap: the synthetic post-bootstrap commit whose sha
-  // becomes the writer's diff base (run baseSha). When omitted, the real
-  // commitBootstrapState runs over SSH; tests inject a scripted sha (or "").
+  // Test seam: the mise toolchain provision run BEFORE bootstrap (env-management §3);
+  // omitted ⇒ real `mise trust && mise install` over SSH (no-op when no mise.toml).
+  provisionMise?: (input: ProvisionMiseToolchainInput) => Promise<void>;
+  // Test seam: omitted ⇒ real commitBootstrapState over SSH (the synthetic
+  // post-bootstrap commit whose sha is the writer's diff base); tests inject a sha.
   commitBootstrap?: (input: CommitBootstrapStepInput) => Promise<string>;
-  // test seam: the deterministic gate the loop runs per writer iteration
-  // (fast tier) and before audit (slow tier). When omitted, the default reads the
-  // workspace's tanren-ci.yml (or the default) and runs the mapped tiers.
-  // Tests inject a mock to assert routing without a live runner.
+  // Test seam: the deterministic gate the loop runs per writer iteration (fast tier)
+  // and before audit (slow tier). Omitted ⇒ the default reads the workspace's
+  // tanren-ci.yml (or the default) and runs the mapped tiers; tests inject a mock.
   runGate?: (input: { when: CiWhen; taskId?: string }) => Promise<GateOutcome>;
   // Test seams. Omitted in production → real Codex adapters + SSH usage probe.
   buildAdapters?: (ctx: PlannerRunAdapterContext) => SubtaskLoopAdapters;

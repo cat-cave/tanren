@@ -36,7 +36,7 @@ import type { CaptureLifecycle } from "./types.js";
 // matching project code; it does NOT fill the targets (they are materialized).
 const CONVENTIONAL_TARGETS: ReadonlyArray<{
   readonly target: string;
-  readonly field: keyof Omit<CaptureLifecycle, "stack">;
+  readonly field: keyof Omit<CaptureLifecycle, "stack" | "toolchain">;
   readonly semantics: string;
 }> = [
   { target: "bootstrap", field: "bootstrap", semantics: "install/restore dependencies" },

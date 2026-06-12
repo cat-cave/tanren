@@ -101,7 +101,7 @@ describe("run-workspace app-env injection (gate)", () => {
     expect(JSON.stringify(passed)).not.toContain("export RESEND_API_KEY");
   });
 
-  it("without an app env the command is unchanged (behavior-identical to before)", async () => {
+  it("without an app env the command carries NO app-env prelude (only the mise activation)", async () => {
     const ssh = new RecordingSsh();
     const { appendEvent } = recordingEvents();
     await runGateTier({
@@ -114,7 +114,12 @@ describe("run-workspace app-env injection (gate)", () => {
       timeoutMs: 1000,
       appendEvent,
     });
-    expect(ssh.commands[0]?.command).toBe("pnpm test");
+    const executed = ssh.commands[0]?.command ?? "";
+    // No app-env prelude (no `export …=` for app secrets). The project command runs
+    // verbatim at the tail; the only prelude is the mise activation (project path).
+    expect(executed).not.toContain("export A_KEY");
+    expect(executed.endsWith("pnpm test")).toBe(true);
+    expect(executed).toContain("mise activate bash");
   });
 });
 

@@ -26,6 +26,7 @@ import type { RunnerHandle } from "../contracts/allocator.js";
 import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import { runGateForWhen } from "../workflow/gate/runGateForWhen.js";
 import type { GateAppendEvent } from "../workflow/gate/runGateTier.js";
+import { miseProvisionCommand, withMiseActivation } from "../ssh/miseActivate.js";
 import { type NegativeControlResult, type TemplateValidationProof } from "./manifest.js";
 import { type GateInvocation, type NegativeControl } from "./negativeControls.js";
 import { createScratchCopy, removeScratchCopy, type ScratchCopyDeps, writeDefectFiles } from "./scratchCopy.js";
@@ -114,8 +115,13 @@ async function runPositiveControls(input: ValidationHarnessInput, appendEvent: G
   // then carry their own setup), never a silent assumption.
   const bootstrap = bootstrapCommand(input.config);
   if (bootstrap !== undefined) {
+    // TOOLCHAIN PROVISION + ACTIVATION (environment-management.md §3): provision the
+    // template's declared toolchain (`mise trust && mise install` when a `mise.toml` is
+    // present, else a no-op) THEN run its bootstrap mise-activated, so a bare
+    // `pnpm`/`node` resolves to the template's declared versions. PROJECT path — the
+    // template's commands, not Tanren's harness.
     const result = await input.ssh.run(input.target, {
-      command: bootstrap,
+      command: `set -e; ${miseProvisionCommand()} && { ${withMiseActivation(bootstrap)}; }`,
       cwd: input.workspacePath,
       timeoutMs: input.timeoutMs,
     });
@@ -143,10 +149,11 @@ async function runPositiveControls(input: ValidationHarnessInput, appendEvent: G
       return false;
     }
   }
-  // The build positive control.
+  // The build positive control — mise-activated so a bare `pnpm`/`node` in the
+  // template's `just build` resolves to its declared toolchain (PROJECT path).
   const build = input.buildStep ?? DEFAULT_BUILD_STEP;
   const result = await input.ssh.run(input.target, {
-    command: build.run,
+    command: withMiseActivation(build.run),
     cwd: input.workspacePath,
     timeoutMs: input.timeoutMs,
   });

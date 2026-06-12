@@ -9,6 +9,7 @@ import type { RunnerHandle } from "../contracts/allocator.js";
 import type { CommandResult, CommandSubstrate } from "../contracts/commandSubstrate.js";
 import { quoteSshShellArg } from "../ssh/command.js";
 import { withAppEnv } from "../ssh/appEnvPrelude.js";
+import { miseProvisionCommand, withMiseActivation } from "../ssh/miseActivate.js";
 import { runWorkspaceSshCommand } from "./ssh.js";
 
 // The commit message used for the synthetic post-bootstrap commit. Install
@@ -99,7 +100,12 @@ export async function bootstrapWorkspace(input: BootstrapWorkspaceInput): Promis
   // `workspace.failed` / `run.failed` events. Mirrors the gate path, which keeps
   // the original `step.run` in `gate.*` events.
   const result = await input.ssh.run(input.target, {
-    command: withAppEnv(command, input.appEnv),
+    // PROJECT-COMMAND path: mise-activate so the project's `just bootstrap` (a bare
+    // `pnpm install`/`node`/etc) resolves to its `mise.toml`-declared toolchain (a
+    // no-op when none was declared), THEN prepend the app-env prelude — both on the
+    // EXECUTED string only, so the error/event command stays prelude-free. The codex
+    // harness path never runs through here, so it keeps the runner's isolated node.
+    command: withMiseActivation(withAppEnv(command, input.appEnv)),
     cwd: input.workspacePath,
     timeoutMs: input.timeoutMs,
   });
@@ -115,6 +121,59 @@ export async function bootstrapWorkspace(input: BootstrapWorkspaceInput): Promis
     );
   }
   return result;
+}
+
+// A typed, observable mise-provisioning failure (environment-management.md §3). Carries
+// the exit code + a bounded output tail so a halting run has a concrete diagnostic. Per
+// the no-silent-fallback doctrine a failed `mise install` HALTS the run loudly — never a
+// silent skip of the project's declared toolchain.
+export class WorkspaceMiseProvisionError extends Error {
+  override readonly name = "WorkspaceMiseProvisionError";
+
+  constructor(
+    readonly workspacePath: string,
+    readonly exitCode: number | null,
+    readonly outputTail: string,
+    readonly timedOut: boolean,
+  ) {
+    super(miseProvisionFailureMessage(exitCode, outputTail, timedOut));
+  }
+}
+
+export interface ProvisionMiseToolchainInput {
+  ssh: CommandSubstrate;
+  target: RunnerHandle;
+  workspacePath: string;
+  timeoutMs: number;
+}
+
+// Provision the project's DECLARED toolchain at workspace-prep, BEFORE the project's
+// `just bootstrap` runs (environment-management.md §3 Layer 2). When a `mise.toml` is
+// present in the workspace, run `mise trust <mise.toml>` (mise's config-trust security
+// gate — the file is Tanren-materialized + trusted) then `mise install` over SSH, which
+// downloads the declared tools into the `tanren` user space (no root-owned writes — the
+// corepack `/usr/bin` EACCES is gone). When no `mise.toml` is present (the project
+// declared no toolchain) it is a guarded no-op. A nonzero exit / timeout / substrate
+// failure throws `WorkspaceMiseProvisionError` so the run halts LOUDLY — never a silent
+// skip. This is the PROJECT path; it never touches Tanren's harness (codex keeps the
+// runner's isolated node — mise is not globally activated).
+export async function provisionMiseToolchain(input: ProvisionMiseToolchainInput): Promise<void> {
+  const result = await input.ssh.run(input.target, {
+    // `set -e` so a failed `mise trust`/`mise install` surfaces a nonzero exit (the
+    // guard's `&&` chain already aborts on the first failure within the present branch).
+    command: `set -e; ${miseProvisionCommand()}`,
+    cwd: input.workspacePath,
+    timeoutMs: input.timeoutMs,
+  });
+  const succeeded = result.failure === undefined && !result.timedOut && result.exitCode === 0;
+  if (!succeeded) {
+    throw new WorkspaceMiseProvisionError(
+      input.workspacePath,
+      result.exitCode,
+      tailOf(combinedOutput(result)),
+      result.timedOut,
+    );
+  }
 }
 
 // The sentinel the guarded install prints on the NO-OP path (manifest absent, or
@@ -213,16 +272,27 @@ export async function ensureWorkspaceDepsInstalled(
   // project's `just bootstrap` is the idempotency authority, so a redundant run is a
   // cheap no-op. `set -e` is intentionally NOT used at the top — the `if`/`else`
   // already controls flow and the bootstrap command surfaces its own nonzero exit.
+  // TOOLCHAIN PROVISION (environment-management.md §3): inside the contract-present
+  // branch, BEFORE the project's bootstrap, provision the declared toolchain — `mise
+  // trust && mise install` when a `mise.toml` is present (a no-op when none). Chained
+  // with `&&` so a failed install ABORTS the branch (the project's bootstrap never runs
+  // against a tree whose toolchain failed to install — the nonzero exit surfaces as
+  // WorkspaceDepsInstallError, a LOUD halt). `miseProvisionCommand()` is self-guarding (skips when no
+  // mise.toml), so a no-toolchain project runs the project's bootstrap exactly as before.
   const guarded =
     `if [ -f ${JUSTFILE_PATH} ] || [ -f .tanren/ci.yml ]; then ` +
-    `echo ${quoteSshShellArg(DEPS_INSTALL_SENTINEL)}; ${command}; ` +
+    `echo ${quoteSshShellArg(DEPS_INSTALL_SENTINEL)}; ${miseProvisionCommand()} && { ${command}; }; ` +
     `else echo ${quoteSshShellArg(DEPS_NOOP_SENTINEL)}; fi`;
   // SUBSTRATE BOUNDARY: the app-env prelude is prepended to the EXECUTED guard
   // ONLY, never to `command` (the value carried into the error below), so a
   // failed install surfaces the ORIGINAL install command and no app-secret value
   // reaches WorkspaceDepsInstallError or the run's event payloads.
   const result = await input.ssh.run(input.target, {
-    command: withAppEnv(guarded, input.appEnv),
+    // PROJECT-COMMAND path: mise-activate the guarded install (so a writer-added dep
+    // installs under the project's declared toolchain — a no-op when none declared),
+    // THEN prepend the app-env prelude. Both on the EXECUTED string only; the error
+    // command stays the ORIGINAL (prelude-free). Codex never runs through this path.
+    command: withMiseActivation(withAppEnv(guarded, input.appEnv)),
     cwd: input.workspacePath,
     timeoutMs: input.timeoutMs,
   });
@@ -241,6 +311,12 @@ export async function ensureWorkspaceDepsInstalled(
   // on stdout tells the caller the install path was taken (vs the no-op skip), so
   // it can cache "deps installed" and skip the stat round-trip on the next gate.
   return { installed: result.stdout.includes(DEPS_INSTALL_SENTINEL) };
+}
+
+function miseProvisionFailureMessage(exitCode: number | null, outputTail: string, timedOut: boolean): string {
+  const reason = timedOut ? "timed out" : `exited ${exitCode ?? "unknown"}`;
+  const tail = outputTail === "" ? "" : `: ${outputTail}`;
+  return `workspace mise toolchain provision (mise trust && mise install) ${reason}${tail}`;
 }
 
 function depsInstallFailureMessage(

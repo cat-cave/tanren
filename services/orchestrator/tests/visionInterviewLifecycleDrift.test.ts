@@ -49,6 +49,7 @@ const TS_LIFECYCLE: CaptureLifecycle = {
   tier3: "pnpm lint && pnpm typecheck && pnpm build && pnpm test",
   build: "pnpm build",
   deploy: "flyctl deploy",
+  toolchain: {},
 };
 
 // A DRIFTED re-emission: stack label re-written, the tier-2 reporter swapped
@@ -61,6 +62,7 @@ const DRIFTED: CaptureLifecycle = {
   tier3: "pnpm lint && pnpm typecheck && pnpm build && pnpm test",
   build: "pnpm build",
   deploy: "flyctl deploy",
+  toolchain: {},
 };
 
 const confirmedCapture = (): InterviewCapture => ({

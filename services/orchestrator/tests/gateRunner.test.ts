@@ -15,6 +15,7 @@ import {
 import { runGateForWhen } from "../src/engine/workflow/gate/runGateForWhen.js";
 import { runGateTier } from "../src/engine/workflow/gate/runGateTier.js";
 import { advisoryStepNamesForPosture } from "../src/engine/workflow/gate/advisoryGate.js";
+import { withMiseActivation } from "../src/engine/ssh/miseActivate.js";
 
 const target: RunnerHandle = { host: "h", port: 22, username: "u", hostKeyFingerprint: "fp" };
 
@@ -63,14 +64,26 @@ describe("runGateTier", () => {
 
     expect(result.passed).toBe(true);
     expect(result.steps).toHaveLength(2);
-    expect(ssh.commands.map((c) => c.command)).toEqual(["pnpm lint", "pnpm test"]);
+    // PROJECT-COMMAND path: the EXECUTED command is mise-activated (guarded on a
+    // mise.toml) so a bare `pnpm`/`node` resolves to the project's declared toolchain;
+    // the project's own command still runs verbatim after the activation prelude.
+    expect(ssh.commands.map((c) => c.command)).toEqual([
+      withMiseActivation("pnpm lint"),
+      withMiseActivation("pnpm test"),
+    ]);
+    for (const c of ssh.commands) {
+      expect(c.command).toContain("mise activate bash");
+      expect(c.command).toContain("mise.toml");
+    }
+    // The RECORDED step.run (events + outcome) stays the ORIGINAL command (no prelude).
+    expect(result.steps.map((s) => s.run)).toEqual(["pnpm lint", "pnpm test"]);
     expect(ssh.commands.every((c) => c.cwd === "/ws")).toBe(true);
     expect(events.map((e) => e.eventType)).toEqual(["gate.started", "gate.passed"]);
     expect(events.every((e) => e.taskId === "task_w")).toBe(true);
   });
 
   it("fails on the first nonzero step, short-circuits later steps, and emits gate.failed", async () => {
-    const ssh = new RecordingSsh((c) => (c === "pnpm lint" ? { exitCode: 2, stderr: "boom" } : {}));
+    const ssh = new RecordingSsh((c) => (c.endsWith("pnpm lint") ? { exitCode: 2, stderr: "boom" } : {}));
     const { events, appendEvent } = recordingEvents();
     const result = await runGateTier({
       ssh,
@@ -91,7 +104,7 @@ describe("runGateTier", () => {
     expect(result.failedStep).toBe("lint");
     expect(result.exitCode).toBe(2);
     // The second step never ran (only the failing first command was issued).
-    expect(ssh.commands.map((c) => c.command)).toEqual(["pnpm lint"]);
+    expect(ssh.commands.map((c) => c.command)).toEqual([withMiseActivation("pnpm lint")]);
     expect(events.map((e) => e.eventType)).toEqual(["gate.started", "gate.failed"]);
     expect((events[1]!.payload as { failedStep: string }).failedStep).toBe("lint");
   });
@@ -137,7 +150,7 @@ describe("runGateTier advisory steps (lenient posture)", () => {
     // lint fails (advisory under lenient) but test passes (blocking). The tier
     // must still PASS, lint must NOT short-circuit test, and a gate.advisory_failed
     // warning must be emitted instead of gate.failed.
-    const ssh = new RecordingSsh((c) => (c === "pnpm lint" ? { exitCode: 2, stderr: "lint boom" } : {}));
+    const ssh = new RecordingSsh((c) => (c.endsWith("pnpm lint") ? { exitCode: 2, stderr: "lint boom" } : {}));
     const { events, appendEvent } = recordingEvents();
     const result = await runGateTier({
       ssh,
@@ -157,7 +170,9 @@ describe("runGateTier advisory steps (lenient posture)", () => {
 
     expect(result.passed).toBe(true);
     // Every step ran (lint did NOT short-circuit the rest).
-    expect(ssh.commands.map((c) => c.command)).toEqual(["pnpm lint", "pnpm typecheck", "pnpm test"]);
+    expect(ssh.commands.map((c) => c.command)).toEqual(
+      ["pnpm lint", "pnpm typecheck", "pnpm test"].map((c) => withMiseActivation(c)),
+    );
     // The failing advisory step is recorded with passed=false, the tier still passes.
     expect(result.steps.find((s) => s.name === "lint")?.passed).toBe(false);
     expect(events.map((e) => e.eventType)).toEqual(["gate.started", "gate.advisory_failed", "gate.passed"]);
@@ -172,7 +187,7 @@ describe("runGateTier advisory steps (lenient posture)", () => {
   it("a BLOCKING step's failure still fails the tier even under an advisory set", async () => {
     // build is NOT in the advisory set → its failure blocks (gate.failed), exactly
     // as strict. This is the functional-but-weak guard: build/test always block.
-    const ssh = new RecordingSsh((c) => (c === "pnpm build" ? { exitCode: 1, stderr: "build broke" } : {}));
+    const ssh = new RecordingSsh((c) => (c.endsWith("pnpm build") ? { exitCode: 1, stderr: "build broke" } : {}));
     const { events, appendEvent } = recordingEvents();
     const result = await runGateTier({
       ssh,
@@ -193,7 +208,7 @@ describe("runGateTier advisory steps (lenient posture)", () => {
     if (result.passed) return;
     expect(result.failedStep).toBe("build");
     // build short-circuits test (blocking failure stops the tier).
-    expect(ssh.commands.map((c) => c.command)).toEqual(["pnpm build"]);
+    expect(ssh.commands.map((c) => c.command)).toEqual([withMiseActivation("pnpm build")]);
     expect(events.map((e) => e.eventType)).toEqual(["gate.started", "gate.failed"]);
   });
 });
@@ -233,7 +248,7 @@ describe("runGateForWhen", () => {
 
   it("stops at the first failing tier and surfaces its failure", async () => {
     // The stack-agnostic default slow tier is the single step `tier-2` (run `just tier-2`).
-    const ssh = new RecordingSsh((c) => (c === "just tier-2" ? { exitCode: 1 } : {}));
+    const ssh = new RecordingSsh((c) => (c.endsWith("just tier-2") ? { exitCode: 1 } : {}));
     const { appendEvent } = recordingEvents();
     const outcome = await runGateForWhen({
       ssh,
@@ -312,7 +327,7 @@ describe("runGateForWhen", () => {
   });
 
   it("emits a failing gate.verdict naming the blocking tier+step", async () => {
-    const ssh = new RecordingSsh((c) => (c === "just tier-2" ? { exitCode: 1 } : {}));
+    const ssh = new RecordingSsh((c) => (c.endsWith("just tier-2") ? { exitCode: 1 } : {}));
     const { events, appendEvent } = recordingEvents();
     const outcome = await runGateForWhen({
       ssh,

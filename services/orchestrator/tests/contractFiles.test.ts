@@ -18,8 +18,10 @@ import {
   SKELETON_CI_CONFIG,
   SKELETON_CI_CONFIG_PATH,
   SKELETON_JUSTFILE_PATH,
+  SKELETON_MISE_CONFIG_PATH,
   materializeContractFiles,
   renderLifecycleJustfile,
+  renderMiseToml,
 } from "../src/engine/forge/scaffold/index.js";
 
 const TS_LIFECYCLE: ProjectLifecycle = {
@@ -30,6 +32,8 @@ const TS_LIFECYCLE: ProjectLifecycle = {
   tier3: "pnpm lint && pnpm typecheck && pnpm build && pnpm test",
   build: "pnpm build",
   deploy: "flyctl deploy",
+  // The project's declared toolchain — materialized into a mise.toml [tools] table.
+  toolchain: { node: "24", pnpm: "10" },
 };
 
 const RUST_LIFECYCLE: ProjectLifecycle = {
@@ -40,9 +44,11 @@ const RUST_LIFECYCLE: ProjectLifecycle = {
   tier3: "cargo clippy --all-targets -- -D warnings && cargo test",
   build: "cargo build --release",
   deploy: "flyctl deploy",
+  toolchain: { rust: "stable" },
 };
 
-// A non-code lifecycle — the contract's generality proof.
+// A non-code lifecycle — the contract's generality proof. It declares NO mise
+// toolchain (a pure-shell/system-package stack) — so NO mise.toml is materialized.
 const NOVEL_LIFECYCLE: ProjectLifecycle = {
   stack: "novel/pandoc",
   bootstrap: "pip install -r requirements.txt",
@@ -51,6 +57,7 @@ const NOVEL_LIFECYCLE: ProjectLifecycle = {
   tier3: "aspell check chapters/*.md && python scripts/consistency-check.py",
   build: "pandoc chapters/*.md --to epub --output book.epub",
   deploy: "python scripts/publish.py",
+  toolchain: {},
 };
 
 // A multi-line command (newline-joined in the capture) — each line must become its
@@ -63,6 +70,7 @@ const MULTILINE_LIFECYCLE: ProjectLifecycle = {
   tier3: "pnpm test",
   build: "pnpm build",
   deploy: "flyctl deploy",
+  toolchain: {},
 };
 
 const TARGETS = ["bootstrap", "tier-1", "tier-2", "tier-3", "build", "deploy"] as const;
@@ -170,10 +178,54 @@ describe("materializeContractFiles · the justfile is filled from the lifecycle 
   });
 });
 
-describe("materializeContractFiles · the manifest is exactly the two contract files at their conventional paths", () => {
-  it("is the ci.yml + justfile, nothing else", () => {
+describe("materializeContractFiles · the manifest at the conventional paths", () => {
+  it("when a toolchain is declared: ci.yml + justfile + mise.toml, nothing else", () => {
     const files = materializeContractFiles(TS_LIFECYCLE);
+    expect(files.map((f) => f.path).sort()).toEqual(
+      [SKELETON_CI_CONFIG_PATH, SKELETON_JUSTFILE_PATH, SKELETON_MISE_CONFIG_PATH].sort(),
+    );
+    expect(files).toHaveLength(3);
+  });
+
+  it("when NO toolchain is declared: ci.yml + justfile only — NO mise.toml (Tanren invents no versions)", () => {
+    const files = materializeContractFiles(NOVEL_LIFECYCLE);
     expect(files.map((f) => f.path).sort()).toEqual([SKELETON_CI_CONFIG_PATH, SKELETON_JUSTFILE_PATH].sort());
+    expect(files.find((f) => f.path === SKELETON_MISE_CONFIG_PATH)).toBeUndefined();
     expect(files).toHaveLength(2);
+  });
+});
+
+describe("renderMiseToml / materializeContractFiles · the mise.toml is rendered from the toolchain map", () => {
+  it("renders a [tools] table with each tool=version, sorted + deterministic", () => {
+    const toml = renderMiseToml({ pnpm: "10", node: "24" });
+    expect(toml).toContain("[tools]");
+    expect(toml).toContain('node = "24"');
+    expect(toml).toContain('pnpm = "10"');
+    // Keys are emitted in stable sorted order (node before pnpm).
+    expect(toml.indexOf('node = "24"')).toBeLessThan(toml.indexOf('pnpm = "10"'));
+    // Deterministic: same input → byte-identical output.
+    expect(renderMiseToml({ node: "24", pnpm: "10" })).toBe(toml);
+  });
+
+  it("materializes the mise.toml from the lifecycle toolchain, at the conventional path", () => {
+    const mise = materializeContractFiles(TS_LIFECYCLE).find((f) => f.path === SKELETON_MISE_CONFIG_PATH);
+    expect(mise).toBeDefined();
+    expect(mise?.content).toContain("[tools]");
+    expect(mise?.content).toContain('node = "24"');
+    expect(mise?.content).toContain('pnpm = "10"');
+  });
+
+  it("renders a non-node toolchain just the same (stack-agnostic) — a rust toolchain", () => {
+    const mise = materializeContractFiles(RUST_LIFECYCLE).find((f) => f.path === SKELETON_MISE_CONFIG_PATH);
+    expect(mise?.content).toContain('rust = "stable"');
+    // No OTHER tool leaks into the [tools] BODY (the header comment lists node/pnpm as
+    // guidance — that is not a declared tool; assert on the `<tool> = "<v>"` lines).
+    const toolLines = (mise?.content ?? "").split("\n").filter((l) => / = "/u.test(l));
+    expect(toolLines).toEqual(['rust = "stable"']);
+  });
+
+  it("escapes a version-spec so it cannot break the TOML string", () => {
+    const toml = renderMiseToml({ node: 'a"b\\c' });
+    expect(toml).toContain('node = "a\\"b\\\\c"');
   });
 });
