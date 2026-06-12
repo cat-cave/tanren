@@ -3,9 +3,11 @@
 // scoped-token-backed `VaultSecretStore`.
 //
 // The mint is two Vault calls under the BROAD token:
-//   1. POST /v1/sys/policies/acl/<policyName> — write an ACL policy granting the
-//      single capability `read` on EXACTLY the KV-v2 data paths for this run's
-//      credential refs (`<mount>/data/<ref>`). One stanza per ref; never a glob.
+//   1. POST /v1/sys/policies/acl/<policyName> — write an ACL policy over EXACTLY
+//      the KV-v2 data paths for this run's credential refs (`<mount>/data/<ref>`):
+//      `read` on each, plus `create`+`update` on the ROTATING subset (the BYOK Codex
+//      ChatGPT bundle, which the run writes back after codex refreshes it). One
+//      stanza per ref; never a glob; the writable subset is always ⊆ the read set.
 //   2. POST /v1/auth/token/create — create a child token carrying ONLY that
 //      policy, with `ttl`, `num_uses`, `renewable:false`, and `no_parent:true`
 //      (orphan, so a leaked child cannot be revoked-with-parent-tree nor outlive
@@ -46,6 +48,7 @@ export class VaultRunTokenMinter implements VaultTokenMinter {
 
   async mintScopedRunToken(input: MintScopedRunTokenInput): Promise<ScopedRunToken> {
     const refPaths = normalizeRefPaths(input.credentialRefPaths);
+    const writableRefPaths = normalizeWritableRefPaths(input.writableCredentialRefPaths, refPaths);
     const ttlSeconds = boundedTtl(input.ttlSeconds);
     const numUses = boundedUses(input.numUses);
     if (!SAFE_NAME.test(input.runId)) {
@@ -53,24 +56,31 @@ export class VaultRunTokenMinter implements VaultTokenMinter {
     }
     const policyName = `tanren-run-${input.runId}`;
 
-    // 1) Write the run-specific read-only policy: one stanza per ref's KV-v2 data
-    //    path, capability `read` ONLY. No wildcard, no widening.
-    await this.writePolicy(policyName, this.renderPolicy(refPaths));
+    // 1) Write the run-specific policy: one stanza per ref's KV-v2 data path —
+    //    `read` on each, plus `create`+`update` on the rotating (writable) subset.
+    //    No wildcard, no widening; the writable subset is always ⊆ the read set.
+    await this.writePolicy(policyName, this.renderPolicy(refPaths, new Set(writableRefPaths)));
 
     // 2) Create the child token carrying ONLY that policy — short TTL, bounded
     //    uses, non-renewable, orphan.
     const token = await this.createChildToken({ policyName, ttlSeconds, numUses, runId: input.runId });
 
-    return { token, policyName, refPaths, ttlSeconds, numUses };
+    return { token, policyName, refPaths, writableRefPaths, ttlSeconds, numUses };
   }
 
-  /** Map an agnostic SecretStore ref to its KV v2 data path stanza, capability `read`. */
-  private renderPolicy(refPaths: readonly string[]): string {
+  /**
+   * Map an agnostic SecretStore ref to its KV v2 data path stanza. A ref in
+   * `writable` gets `read`+`create`+`update` (a rotating credential the run writes
+   * back — KV-v2 stores a secret version via `create`/`update` on the data path);
+   * every other ref gets `read` only. No glob; one stanza per ref.
+   */
+  private renderPolicy(refPaths: readonly string[], writable: ReadonlySet<string>): string {
     return refPaths
       .map((ref) => {
         const dataPath = `${this.mount}/data/${ref}`;
-        // HCL stanza: read-only on this EXACT path (no glob).
-        return `path "${dataPath}" {\n  capabilities = ["read"]\n}`;
+        const capabilities = writable.has(ref) ? `["read", "create", "update"]` : `["read"]`;
+        // HCL stanza on this EXACT path (no glob).
+        return `path "${dataPath}" {\n  capabilities = ${capabilities}\n}`;
       })
       .join("\n\n");
   }
@@ -168,6 +178,31 @@ function normalizeRefPaths(refPaths: readonly string[]): string[] {
     // would widen the policy beyond the run's own credentials.
     if (ref.includes("*") || ref.split("/").includes("..")) {
       throw new Error(`credential ref path is not safe to scope a policy on: ${ref}`);
+    }
+  }
+  return cleaned;
+}
+
+/**
+ * Normalize the WRITABLE (rotating-credential) subset: dedup + sort, then assert
+ * every entry is also in the run's read set (`refPaths`). Writable is a CAPABILITY
+ * on a ref the run already reads — granting write on a path the policy does not also
+ * read would WIDEN it beyond the run's own credentials, so a non-member is a hard
+ * error. Empty/undefined is fine (a run with no rotating credential — every ref stays
+ * read-only). The read set is already glob/`..`-validated, so the subset inherits that.
+ */
+function normalizeWritableRefPaths(
+  writableRefPaths: readonly string[] | undefined,
+  readRefPaths: readonly string[],
+): string[] {
+  if (writableRefPaths === undefined) {
+    return [];
+  }
+  const readSet = new Set(readRefPaths);
+  const cleaned = [...new Set(writableRefPaths.map((ref) => ref.trim()).filter((ref) => ref !== ""))].sort();
+  for (const ref of cleaned) {
+    if (!readSet.has(ref)) {
+      throw new Error(`writable credential ref path is not in the run's read set (would widen the policy): ${ref}`);
     }
   }
   return cleaned;

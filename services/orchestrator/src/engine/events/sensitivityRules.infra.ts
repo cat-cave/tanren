@@ -105,6 +105,7 @@ export const infraSensitivityRules: SensitivityRule[] = [
   ...rulesFor("credential.scoped_token_minted", [
     ["policyName", "public"],
     ["refPaths[]", "redacted"],
+    ["writableRefPaths[]", "redacted"],
     ["ttlSeconds", "public"],
     ["numUses", "public"],
   ]),

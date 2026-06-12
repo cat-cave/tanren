@@ -6,7 +6,9 @@
 // same token that can read EVERY tenant's secrets. This seam removes that: for a
 // single run, it mints a short-lived Vault CHILD token whose policy grants `read`
 // ONLY on that run's own credential ref paths (not a wildcard, not another
-// run's, not another org's), with a bounded TTL + use count, non-renewable and
+// run's, not another org's) — PLUS `create`+`update` on the run's ROTATING refs
+// (the BYOK Codex ChatGPT bundle, which codex refreshes mid-run and the run must
+// persist back), with a bounded TTL + use count, non-renewable and
 // orphaned (no-parent). The run's credential reads/materialization then use THAT
 // scoped token; the broad token stays only at the orchestrator boot to MINT
 // children and is NEVER handed to a runner or logged.
@@ -17,8 +19,11 @@
 // smoke/e2e against a real Vault.
 //
 // SECURITY PROPERTIES (conformance + the verifier hammer these):
-//   - the minted token's policy grants `read` ONLY on the exact run's credential
-//     ref data paths — never a wildcard, never another run's/org's paths;
+//   - the minted token's policy grants `read` on the exact run's credential ref
+//     data paths — never a wildcard, never another run's/org's paths — plus
+//     `create`+`update` on the ROTATING subset (always ⊆ the read set, never a new
+//     path); a non-rotating ref is read-only and write is granted ONLY where a
+//     write-back genuinely happens;
 //   - the token carries a bounded TTL and `num_uses`, is non-renewable, and is an
 //     orphan (no-parent) so a leaked child cannot outlive its run or renew;
 //   - the broad token is used only to call the mint API — it is never returned,
@@ -45,6 +50,21 @@ export interface MintScopedRunTokenInput {
    * no credentials to read should not mint a token at all).
    */
   credentialRefPaths: readonly string[];
+  /**
+   * The subset of `credentialRefPaths` the run may also WRITE BACK — the ROTATING
+   * credentials it must persist a refreshed value for. The ONLY member today is the
+   * BYOK Codex ChatGPT auth bundle (`credential/codex/...`): codex rotates its
+   * access/refresh tokens on each call and writes a NEW `auth.json`; the run must
+   * persist that fresh bundle to the secret store, else the next call/run reuses a
+   * stale (possibly-revoked) refresh token. The policy grants `read`+`create`+`update`
+   * on these and `read` on every other ref. A static credential (a GitHub token, a
+   * BYOK api_key) does NOT rotate, so it is never here — write is granted ONLY where a
+   * write-back genuinely happens. EVERY entry MUST also appear in `credentialRefPaths`
+   * (writable is a CAPABILITY on a ref the run already reads, never a new path); an
+   * entry not in the read set is a hard error — it would widen the policy beyond the
+   * run's own credentials. Optional / may be empty (a run with no rotating credential).
+   */
+  writableCredentialRefPaths?: readonly string[];
   /** The child token's TTL in seconds (bounded; the real impl rejects <=0). */
   ttlSeconds: number;
   /**
@@ -67,6 +87,13 @@ export interface ScopedRunToken {
   policyName: string;
   /** The exact ref paths the policy granted `read` on (deduped, sorted). Non-secret. */
   refPaths: string[];
+  /**
+   * The subset of `refPaths` the policy ALSO granted `create`+`update` on — the
+   * rotating credentials the run may write back (the BYOK Codex ChatGPT bundle).
+   * Deduped + sorted, always a subset of `refPaths`. Empty when the run has no
+   * rotating credential. Non-secret audit material (same tenancy as `refPaths`).
+   */
+  writableRefPaths: string[];
   /** The granted TTL in seconds (non-secret audit material). */
   ttlSeconds: number;
   /** The granted max use count (non-secret audit material). */
@@ -80,10 +107,11 @@ export interface ScopedRunToken {
  */
 export interface VaultTokenMinter {
   /**
-   * Write a run-specific read-only policy covering EXACTLY
-   * `input.credentialRefPaths` (no wildcard, no widening) and create a child
-   * token bound to it — short TTL, bounded `num_uses`, non-renewable, orphan.
-   * Returns the scoped token + non-secret audit material.
+   * Write a run-specific policy covering EXACTLY `input.credentialRefPaths` (no
+   * wildcard, no widening) — `read` on all of them, plus `create`+`update` on the
+   * `input.writableCredentialRefPaths` rotating subset — and create a child token
+   * bound to it — short TTL, bounded `num_uses`, non-renewable, orphan. Returns the
+   * scoped token + non-secret audit material.
    */
   mintScopedRunToken(input: MintScopedRunTokenInput): Promise<ScopedRunToken>;
 }
