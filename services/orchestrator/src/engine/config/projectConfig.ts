@@ -99,6 +99,22 @@ export type ProjectTemplateRef = z.infer<typeof ProjectTemplateRef>;
 // (newline-joined for multi-line); `stack` is a descriptive label Tanren never
 // branches on. STRICT: either the full lifecycle is present or it is absent (a
 // project that never captured one) — never a partial placeholder.
+// The project's TOOLCHAIN (environment-management.md §3) — a STACK-AGNOSTIC map of
+// mise tool-name → version-spec the project chose (mirrors the interview's
+// `CaptureToolchain`). Persisted here so the RUN path materializes a deterministic
+// `mise.toml` `[tools]` table from the project's OWN declaration and `mise install`s
+// it at workspace-prep in user space — making `node`/`pnpm`/etc resolve to the
+// declared versions for the project's gate/bootstrap commands, WITHOUT touching
+// Tanren's harness (codex keeps the runner's isolated node). Keys are validated as
+// mise-safe tool names; values are bounded version specs. EMPTY = the project
+// declared no toolchain (no `mise.toml`; Tanren invents no versions).
+const MISE_TOOL_NAME = /^[a-z0-9][a-z0-9._-]*$/u;
+export const ProjectToolchain = z.record(
+  z.string().min(1).max(80).regex(MISE_TOOL_NAME, "mise tool name must be lowercase alphanumeric + . _ -"),
+  z.string().min(1).max(80),
+);
+export type ProjectToolchain = z.infer<typeof ProjectToolchain>;
+
 export const ProjectLifecycle = z
   .object({
     stack: z.string().min(1).max(120),
@@ -108,6 +124,10 @@ export const ProjectLifecycle = z
     tier3: z.string().min(1).max(400),
     build: z.string().min(1).max(400),
     deploy: z.string().min(1).max(400),
+    // The project's TOOLCHAIN (mise tool-name → version-spec; see `ProjectToolchain`).
+    // Optional — defaults to `{}` (no toolchain declared ⇒ no `mise.toml`). Mirrors
+    // `CaptureLifecycle.toolchain`; the derive projects that capture onto this field.
+    toolchain: ProjectToolchain.default({}),
   })
   .strict();
 export type ProjectLifecycle = z.infer<typeof ProjectLifecycle>;

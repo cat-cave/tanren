@@ -40,6 +40,9 @@ function lifecycleFor(request: TemplateCreationRequest, research: TemplateResear
     tier3: research.lifecycle.tier3,
     build: research.lifecycle.build,
     deploy: research.lifecycle.deploy,
+    // Project the researched toolchain (mise tool→version) onto the template's
+    // lifecycle so the build materializes a `mise.toml`. Absent ⇒ empty (no mise.toml).
+    toolchain: research.lifecycle.toolchain ?? {},
   };
 }
 

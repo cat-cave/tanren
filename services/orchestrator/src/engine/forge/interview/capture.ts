@@ -38,6 +38,16 @@ function mergeByKey<T>(existing: readonly T[], delta: readonly T[], key: (item: 
   return [...seen.values()];
 }
 
+// Two toolchain maps are equal iff they have the same tool→version pairs (order
+// irrelevant). Compared so a toolchain-only re-emission is correctly seen as a
+// CHANGE (not silently "unchanged") by the drift guard.
+function toolchainEqual(a: CaptureLifecycle["toolchain"], b: CaptureLifecycle["toolchain"]): boolean {
+  const aKeys = Object.keys(a);
+  const bKeys = Object.keys(b);
+  if (aKeys.length !== bKeys.length) return false;
+  return aKeys.every((key) => a[key] === b[key]);
+}
+
 function lifecycleEqual(a: CaptureLifecycle, b: CaptureLifecycle): boolean {
   return (
     a.stack === b.stack &&
@@ -46,7 +56,8 @@ function lifecycleEqual(a: CaptureLifecycle, b: CaptureLifecycle): boolean {
     a.tier2 === b.tier2 &&
     a.tier3 === b.tier3 &&
     a.build === b.build &&
-    a.deploy === b.deploy
+    a.deploy === b.deploy &&
+    toolchainEqual(a.toolchain, b.toolchain)
   );
 }
 

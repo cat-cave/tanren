@@ -139,6 +139,28 @@ export type CaptureArchitectureLine = z.infer<typeof CaptureArchitectureLine>;
 // (newline-joined). `stack` is the human-readable stack/runtime label
 // ("ts/pnpm", "rust/cargo", "python/uv", "novel/pandoc") — descriptive only;
 // Tanren never branches on it.
+// The project's TOOLCHAIN declaration (environment-management.md §3 Layer 1) — a
+// STACK-AGNOSTIC map of mise tool-name → version-spec the project CHOSE. The keys
+// are `mise` tool names (`node`, `pnpm`, `python`, `go`, `rust`, …); the values are
+// version strings the project picked (`"24"`, `"10"`, `"3.13"`, `"latest"`,
+// `"nightly"`, …). Tanren names NO stack here — it is a generic `Record` validated
+// only for shape, NEVER for a known tool set. It is materialized DETERMINISTICALLY
+// into a `mise.toml` `[tools]` table (the scaffold projection, like the justfile)
+// and provisioned at workspace-prep via `mise install` in the `tanren` user space —
+// which makes the project's `node`/`pnpm`/etc resolve to the declared versions when
+// the project's gate/bootstrap commands run, WITHOUT touching Tanren's own harness
+// (codex stays on the runner's isolated node). Keys are validated as mise-safe tool
+// names (no shell-breaking chars) so the deterministic `[tools]` projection cannot
+// be smuggled into; values are bounded version specs. An EMPTY map = the project
+// declared no toolchain (it provisions inside its own `bootstrap` shell, or uses the
+// runner baseline) — no `mise.toml` is materialized, and Tanren invents no versions.
+const MISE_TOOL_NAME = /^[a-z0-9][a-z0-9._-]*$/u;
+export const CaptureToolchain = z.record(
+  z.string().min(1).max(80).regex(MISE_TOOL_NAME, "mise tool name must be lowercase alphanumeric + . _ -"),
+  z.string().min(1).max(80),
+);
+export type CaptureToolchain = z.infer<typeof CaptureToolchain>;
+
 export const CaptureLifecycle = z
   .object({
     // The chosen stack/runtime label (descriptive — NOT a switch Tanren reads).
@@ -150,6 +172,11 @@ export const CaptureLifecycle = z
     tier3: z.string().min(1).max(400),
     build: z.string().min(1).max(400),
     deploy: z.string().min(1).max(400),
+    // The project's TOOLCHAIN (mise tool-name → version-spec; see `CaptureToolchain`).
+    // OPTIONAL: a project may declare none (provisions inside its own bootstrap, or
+    // rides the runner baseline) — absent/empty ⇒ no `mise.toml` materialized.
+    // Defaults to `{}` so an answerer that omits it still parses.
+    toolchain: CaptureToolchain.default({}),
   })
   .strict();
 export type CaptureLifecycle = z.infer<typeof CaptureLifecycle>;

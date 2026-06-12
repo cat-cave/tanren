@@ -9,7 +9,9 @@ export {
   SKELETON_FILES,
   SKELETON_JUSTFILE,
   SKELETON_JUSTFILE_PATH,
+  SKELETON_MISE_CONFIG_PATH,
   SKELETON_README,
+  renderMiseToml,
 } from "./skeleton.js";
 export type { SkeletonFile } from "./skeleton.js";
 // The DETERMINISTIC contract-file projection (v27 fix): the `.tanren/ci.yml` +

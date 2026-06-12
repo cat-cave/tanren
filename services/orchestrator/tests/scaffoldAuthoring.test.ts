@@ -30,6 +30,7 @@ const TS_LIFECYCLE: CaptureLifecycle = {
   tier3: "pnpm lint && pnpm typecheck && pnpm build && pnpm test",
   build: "pnpm build",
   deploy: "flyctl deploy",
+  toolchain: {},
 };
 
 const RUST_LIFECYCLE: CaptureLifecycle = {
@@ -40,6 +41,7 @@ const RUST_LIFECYCLE: CaptureLifecycle = {
   tier3: "cargo clippy --all-targets -- -D warnings && cargo test",
   build: "cargo build --release",
   deploy: "flyctl deploy",
+  toolchain: {},
 };
 
 // A non-code project — the contract's generality proof: a Russian-novel
@@ -52,6 +54,7 @@ const NOVEL_LIFECYCLE: CaptureLifecycle = {
   tier3: "aspell check chapters/*.md && python scripts/consistency-check.py",
   build: "pandoc chapters/*.md --to epub --output book.epub",
   deploy: "python scripts/publish.py",
+  toolchain: {},
 };
 
 describe("buildScaffoldDescription · narrows the writer to project CODE (contract files materialized)", () => {

@@ -35,6 +35,7 @@ const TS_LIFECYCLE: ProjectLifecycle = {
   tier3: "pnpm test",
   build: "pnpm build",
   deploy: "flyctl deploy",
+  toolchain: {},
 };
 
 // Records every command + stdin; yields the clone HEAD on every call (the trailing

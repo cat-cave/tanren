@@ -10,6 +10,7 @@ import type { RunnerHandle } from "../../contracts/allocator.js";
 import type { CommandResult, CommandSubstrate } from "../../contracts/commandSubstrate.js";
 import type { EventName, EventPayload } from "../../events/index.js";
 import { withAppEnv } from "../../ssh/appEnvPrelude.js";
+import { withMiseActivation } from "../../ssh/miseActivate.js";
 
 // Captured command output can be large; we keep only the last N characters so
 // the emitted gate.* events and the typed result carry a useful, bounded
@@ -98,9 +99,14 @@ export async function runGateTier(input: RunGateTierInput): Promise<GateTierResu
   const outcomes: GateStepOutcome[] = [];
   for (const step of input.steps) {
     const result = await input.ssh.run(input.target, {
-      // The app-env prelude is prepended to the EXECUTED command only; the
-      // emitted `step.run` below stays the original (no secret in events).
-      command: withAppEnv(step.run, input.appEnv),
+      // PROJECT-COMMAND path: mise-activate so a bare `node`/`pnpm`/etc in the
+      // project's gate command resolves to its `mise.toml`-declared toolchain (a
+      // no-op when the project declared none), THEN prepend the app-env prelude.
+      // Both are prepended to the EXECUTED command only; the emitted `step.run`
+      // below stays the original (no secret, no prelude in events). This is the
+      // PROJECT path — codex/answerers never run through here, so the harness keeps
+      // the runner's isolated node.
+      command: withMiseActivation(withAppEnv(step.run, input.appEnv)),
       cwd: input.workspacePath,
       timeoutMs: input.timeoutMs,
     });

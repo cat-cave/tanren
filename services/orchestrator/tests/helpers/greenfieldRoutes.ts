@@ -156,6 +156,7 @@ export const GREENFIELD_TS_LIFECYCLE = {
   tier3: "pnpm lint && pnpm typecheck && pnpm build && pnpm test",
   build: "pnpm build",
   deploy: "flyctl deploy",
+  toolchain: {},
 };
 
 // A capture WITH a lifecycle but no deploy — isolates the deploy-guard rejection so it

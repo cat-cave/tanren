@@ -319,3 +319,37 @@ describe("ProjectConfigV1 speculation knobs (P2c-1, §2c)", () => {
     );
   });
 });
+
+describe("ProjectConfigV1 lifecycle toolchain (env P0b/c)", () => {
+  const baseLifecycle = {
+    stack: "ts/pnpm",
+    bootstrap: "pnpm install",
+    tier1: "pnpm lint",
+    tier2: "pnpm test",
+    tier3: "pnpm test",
+    build: "pnpm build",
+    deploy: "flyctl deploy",
+  };
+
+  it("round-trips an explicit toolchain map on the lifecycle", () => {
+    const cfg = migrateProjectConfig({
+      version: 1,
+      lifecycle: { ...baseLifecycle, toolchain: { node: "24", pnpm: "10" } },
+    });
+    expect(cfg.lifecycle?.toolchain).toEqual({ node: "24", pnpm: "10" });
+  });
+
+  it("defaults the toolchain to an empty map when omitted (a project declares none)", () => {
+    const cfg = migrateProjectConfig({ version: 1, lifecycle: baseLifecycle });
+    expect(cfg.lifecycle?.toolchain).toEqual({});
+  });
+
+  it("rejects a toolchain key that is not a mise-safe tool name", () => {
+    expect(() =>
+      migrateProjectConfig({
+        version: 1,
+        lifecycle: { ...baseLifecycle, toolchain: { "bad name!": "1" } },
+      }),
+    ).toThrow(/.+/u);
+  });
+});

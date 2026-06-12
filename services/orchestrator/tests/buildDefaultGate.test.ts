@@ -110,11 +110,11 @@ class InterpretingSsh implements CommandSubstrate {
     // Gate steps. Without a prepared tree, every `just tier-*` "tool not found"
     // (exit 127). With a prepared tree, tier-1's outcome is governed by tier1Exit;
     // tier-2/tier-3 pass.
-    if (cmd.startsWith("just tier-")) {
+    if (cmd.includes("just tier-")) {
       if (!this.state.prepared) {
         return { exitCode: 127, stdout: "", stderr: "sh: 1: tool: not found", timedOut: false };
       }
-      if (cmd === "just tier-1") {
+      if (cmd.endsWith("just tier-1")) {
         return this.state.tier1Exit === 0 ? ok : { ...ok, exitCode: this.state.tier1Exit, stderr: "tier-1 error" };
       }
       return ok;
@@ -151,7 +151,7 @@ describe("buildDefaultGate — greenfield deps-ensure", () => {
     expect(outcome.passed).toBe(true);
     // The bootstrap guard ran BEFORE the first `just tier-1` (ordering is load-bearing).
     const ensureIdx = ssh.commands.findIndex((c) => c.command.includes("deps-ensure"));
-    const tier1Idx = ssh.commands.findIndex((c) => c.command === "just tier-1");
+    const tier1Idx = ssh.commands.findIndex((c) => c.command.endsWith("just tier-1"));
     expect(ensureIdx).toBeGreaterThanOrEqual(0);
     expect(tier1Idx).toBeGreaterThan(ensureIdx);
     // No gate.failed: the tree is prepared, so tier-1 exits 0.
@@ -255,7 +255,7 @@ describe("buildDefaultGate — lenient posture", () => {
     expect((advisory!.payload as { advisoryStep: string }).advisoryStep).toBe("tier-1");
     expect(events.events.some((e) => e.eventType === "gate.failed")).toBe(false);
     // The fast tier's tier-1 step ran (the advisory did not crash the gate).
-    expect(ssh.commands.some((c) => c.command === "just tier-1")).toBe(true);
+    expect(ssh.commands.some((c) => c.command.endsWith("just tier-1"))).toBe(true);
   });
 
   it("under the strict default the same failing tier-1 FAILS the gate", async () => {
