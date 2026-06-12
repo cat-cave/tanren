@@ -325,6 +325,7 @@
     "prio",
     "programbench",
     "pulumi",
+    "pydantic",
     "pytest",
     "qwen",
     "rasterisation",

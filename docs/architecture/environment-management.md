@@ -49,6 +49,13 @@ in the baked image.
    environment creation.
 3. **Environments are first-class, templated, layered, living artifacts** — paired
    with code templates, not welded to them.
+4. **Version changes are DAG nodes — never a side stream; main never breaks.** Tanren
+   is _not_ opinionated on version choice (latest / nightly / legacy are all enabled —
+   the project declares). Tanren _is_ opinionated that it must **work** and that **main
+   never breaks**. So every version change — an upgrade, a pin, _or_ a downgrade — is a
+   **first-class unit of work in the DAG**, gated by the same never-break-main
+   `MergeAuthority` path as any code change. A version bump is NEVER applied through a
+   side pipeline that bypasses the gate. See §4.5.
 
 ## 3. The model — four layers
 
@@ -140,18 +147,17 @@ layers — and the **speed mechanism** (workspaces must boot fast).
 **Continuous refresh + trim:** golden bases rebuild as `main`/env-specs change; the trim
 pass keeps them lean (bake slow+common, delta the rest).
 
-**Required `upgrade` verb — deterministic forced upgrades.** `CiConfigV1` gains an
-`upgrade` lifecycle verb alongside bootstrap/tiers (and the `justfile` gains the target),
+**Required `upgrade` verb — the command a version-change node runs.** `CiConfigV1` gains
+an `upgrade` lifecycle verb alongside bootstrap/tiers (and the `justfile` gains the target),
 **required** so every project declares how to bump deps to latest (`pnpm update --latest`,
 `cargo update`, `uv lock --upgrade`, `go get -u`, …). Tanren owns the **policy**, not the
 command (Renovate-style, language-agnostic): a `keep-current` posture, a
 `minimum_release_age` cooldown (dodge just-published supply-chain'd versions), and
-group/one-PR knobs. A forced-upgrade run regenerates the lockfile, recomputes `env_key`,
-rebuilds+revalidates the env image, and runs the existing tier/build gate to prove green
-before merge — **forced upgrade and env-image refresh are the same pipeline.** This is
-the _structural_ fix for agents picking multi-year-old versions, beyond prompting. Escape
-hatch for a project that declares no `upgrade` verb: Tanren runs Renovate (self-hosted) to
-open the changeset, then routes it through the same gate.
+group/one-PR knobs. The verb only _produces_ the new declaration/lockfile; what makes it
+safe is that the resulting version change runs through the DAG gate (§4.5), not a side
+pipeline. This is the _structural_ fix for agents picking multi-year-old versions, beyond
+prompting. Escape hatch for a project that declares no `upgrade` verb: Tanren runs Renovate
+(self-hosted) to compute the changeset, then routes it through the same DAG gate.
 
 ## 4. How it composes (one paragraph)
 
@@ -164,6 +170,50 @@ positive smoke + negative controls**, and publishes the validated env image. The
 **`upgrade` verb** (project command + Tanren policy) forces deps to latest, regenerates
 lockfiles, recomputes `env_key`, and rebuilds+revalidates through the same gate. **Tanren
 core hardcodes no toolchain or version anywhere.**
+
+## 4.5. Version changes are DAG nodes — never break main
+
+Tanren is deliberately **un-opinionated on version choice** and deliberately
+**opinionated that it works**. Those cut both ways for legacy _and_ latest, and they
+reconcile through one rule: **a version change is a first-class unit of work in the DAG,
+gated like any other — never applied through a side stream.**
+
+The four motivations and how they land:
+
+1. **Legacy/nightly/latest all enabled.** The project declares its versions (§3 Layer 1);
+   Tanren never forces a channel. A project pinning a decade-old toolchain is as valid as
+   one on nightly.
+2. **Upgrades made seamless (CVEs, freshness).** Tanren can _generate_ version-change work
+   — a CVE advisory, a scheduled freshness pass, the `upgrade` verb's forced-latest — as
+   units of work, so staying current is cheap, not a chore.
+3. **No human-in-the-loop per package.** Those generated changes flow through the SAME
+   autonomous loop Tanren already runs for any work: triage → spec → **DAG-insert** →
+   execute → gate → merge. The autonomy engine drives dependency maintenance; a human is
+   pulled in only on a genuine break or a real product/architecture decision
+   (`needs_attention` discipline), never for routine bumps.
+4. **Purposeful pins are not overridden.** The generated-upgrade flow is intent-preserving:
+   it proposes within the project's declared constraints and never silently rewrites a
+   deliberate pin. Intent is data the flow respects, not noise it steamrolls.
+
+**The opinionated core — never break main.** Because every version change (upgrade, pin,
+_or_ downgrade) is a DAG node, it runs the project's full gate — the new toolchain installs
+
+- validates (§4 env-image positive/negative controls) AND the project still builds/tests
+  green under it:
+
+* **Green → it merges.** Main moves forward, now on the new version, still working.
+* **Red → it is LOUDLY REJECTED**, with the precise reason (this version breaks _these_
+  gate steps) and what adoption would require. The human learns exactly why, and **main
+  stays green.** A "random pydantic v2 → v1 downgrade" cannot silently land and brick main:
+  routed through the DAG, it fails the gate and is rejected with a legible diagnosis, the
+  same `MergeAuthority` fail-closed path that guards every other change.
+
+This is not a new subsystem — it is dependency/version management expressed as Tanren's
+_existing_ general model (the DAG drives gated work; `MergeAuthority` never breaks main;
+the issue→triage→fix loop ingests generated work). The env-image rebuild+validate (§4) is a
+_step inside_ a version-change node's gate, never a bypass of it. **The `upgrade` verb and
+the autonomous upgrade flows are how the work is _generated_; the DAG + `MergeAuthority` are
+what make it _safe_.**
 
 ## 5. Coupling to code templates — paired, not welded
 
@@ -186,6 +236,7 @@ capability-keyed selection + negative-control publish gate.
 | Workspace-prep delta         | clone → materialize contract files → jj init → bootstrap (`plannerRunWorkspace.ts`)                                        | insert env-resolve + `mise install` delta before bootstrap                                                                       |
 | Validation negative controls | typecheck/lint/test/mutation (`validationProof.ts`)                                                                        | add a `toolchain`/isolation negative control for env images                                                                      |
 | Golden-image build/cache     | none                                                                                                                       | BuildKit golden-base build (refresh-on-`main`) + OCI registry + `mode=max` cache; attic for Nix tier                             |
+| Version-change flow          | none (no dep/version maintenance path)                                                                                     | generate upgrade/CVE/freshness work as DAG nodes via the existing triage→spec→DAG-insert loop; gated by `MergeAuthority` (§4.5)  |
 
 Constraint preserved: `.tanren/ci.yml` stays a **deterministic skeleton** (never
 LLM-authored); only the `justfile` + the new `mise.toml`/`flake.nix` are lifecycle-filled.
@@ -197,8 +248,12 @@ LLM-authored); only the `justfile` + the new `mise.toml`/`flake.nix` are lifecyc
   materializes a `mise.toml` from the lifecycle; bootstrap becomes `mise install &&
 <project install>` in user space (kills the corepack/`/usr/bin` EACCES). _This alone
   lets apex proceed._
-- **P1 — `upgrade` verb.** `CiConfigV1` + skeleton + `justfile` + the forced-upgrade
-  policy; scaffold-time upgrade so new projects start near-latest.
+- **P1 — `upgrade` verb + version-change-as-DAG-node (§4.5).** `CiConfigV1` + skeleton +
+  `justfile` `upgrade` target + the forced-upgrade policy; the autonomous generator that
+  turns a CVE/freshness/forced-upgrade into a DAG node routed through the existing
+  triage→spec→DAG-insert→gate→merge loop (intent-preserving; never overrides a pin; a
+  breaking change is gate-rejected loudly, never breaks main); scaffold-time upgrade so new
+  projects start near-latest.
 - **P2 — Golden-image build + refresh-on-`main` + trim.** BuildKit pipeline, OCI
   registry, `mode=max` cache, content-digest tagging.
 - **P3 — Environment registry + `env_key` resolution + per-project binding.** The
