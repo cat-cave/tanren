@@ -49,7 +49,17 @@ export interface ProjectEnvBinding {
   // (absent on a no-match / golden-base fallback).
   environmentRef?: string;
   // Why this image was chosen — observable on the project config + in logs.
-  source: "registry-match" | "golden-base-no-match" | "golden-base-no-toolchain";
+  //   - `registry-match`           — a validated env was already in the registry.
+  //   - `golden-base-no-match`     — P3 placeholder: a no-match for a declared
+  //                                  toolchain fell back to the golden base. P4's
+  //                                  router (resolveProjectEnvWithCreation) consumes
+  //                                  THIS source as its "should I build?" signal,
+  //                                  then re-labels the result (short-circuit ⇒ stays
+  //                                  this; JIT-built ⇒ `jit-created`).
+  //   - `golden-base-no-toolchain` — the project declared no toolchain (golden base).
+  //   - `jit-created`              — P4 JIT-built + validated + published a new env
+  //                                  for an off-baseline toolchain, and seeded from it.
+  source: "registry-match" | "golden-base-no-match" | "golden-base-no-toolchain" | "jit-created";
 }
 
 /** The inputs resolution reads — the project's declared toolchain (the committed lockfile counterpart). */

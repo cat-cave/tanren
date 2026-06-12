@@ -106,6 +106,10 @@ const ENV_READ_FILE_WHITELIST = new Set([
   // Notification default channel/destination/severity + ntfy base URL.
   "services/orchestrator/src/engine/notifications/build.ts",
   "services/orchestrator/src/engine/notifications/channels/ntfy.ts",
+  // JIT env-image creation boot config (env-management.md §7 P4): the env registry +
+  // image name + push posture + build/validate timeouts + the build-script path —
+  // read once at worker boot to build the EnvCreationDeps (gated on TANREN_ENV_REGISTRY).
+  "services/orchestrator/src/engine/environments/creation/envCreationConfig.ts",
   // ── allocator boot ─────────────────────────────────────────────────────────
   // main.ts: the BYPASSRLS system DB URL pool selection.
   "services/allocator/src/main.ts",

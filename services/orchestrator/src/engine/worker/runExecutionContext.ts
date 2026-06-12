@@ -18,6 +18,11 @@ import { orgScopeFromRunOrgId, resolveCredentialsForRun } from "../credentials/r
 import { materializeContractFiles } from "../forge/scaffold/index.js";
 import { resolveAncestorStack } from "../dag/ancestorStack.js";
 import { resolveProjectEnv } from "../environments/index.js";
+// The P4 JIT env-image refinement step (env-management.md §4 + §7) is the "second half"
+// of env resolution — the no-match router that must run OUTSIDE this read txn (it builds
+// + validates an image). Re-exported here (env resolution's home) so the run executor
+// imports it alongside `loadRunExecutionContext` without a separate dependency.
+export { refineRunnerImageForEnv, type EnvCreationDeps } from "./runExecutorEnvRefine.js";
 import { systemActor } from "../state/actor.js";
 import type { PlannerRunContext } from "../workflow/plannerRun.js";
 

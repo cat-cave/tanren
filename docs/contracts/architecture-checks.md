@@ -5,7 +5,7 @@
 ## Checks
 
 - `file-line-max-500`: source, config, and docs files must stay at or below 500 lines. Exclusions are `PROJECT_BRIEF.md`, `pnpm-lock.yaml`, generated output, dependencies, and documented migration metadata exceptions.
-- `no-host-process-spawn`: `node:child_process` and `child_process` imports are allowed only in `services/orchestrator/src/engine/cli-runner/**`.
+- `no-host-process-spawn`: `node:child_process` and `child_process` imports are allowed only in `services/orchestrator/src/engine/cli-runner/**` and in the single JIT env-image build driver `services/orchestrator/src/engine/environments/creation/liveEnvBuildDriver.ts`. The latter is a confined host-side image-build seam (it shells `scripts/dev/build-env-image.sh` to run BuildKit on the orchestrator host, exactly as the golden-image refresh does); it is not workload execution, which still routes through the SSH `CommandSubstrate` seam.
 - `no-docker-exec-for-workloads`: `container.exec(` and shell `docker exec` workload patterns are allowed only in allocator lifecycle code.
 - `no-host-bind-mounts`: Compose and Docker API host bind mounts are blocked. Named volumes are allowed. The only host bind exception is the orchestrator Docker socket mount documented below.
 - `docker-api-allocator-only`: Docker socket and Docker Engine container API access are confined to `services/orchestrator/src/engine/allocators/**`. The Docker socket mount in `compose.dev.yml` and `compose.prod.yml` exists only so `LocalDockerAllocator` can claim and inspect the shared local runner.

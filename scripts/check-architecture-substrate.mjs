@@ -22,6 +22,17 @@ export function checkNoHostProcessSpawn(projectFiles) {
       invariantDocExclusions.has(file) ||
       file.startsWith("services/orchestrator/src/engine/cli-runner/") ||
       file.startsWith("scripts/") ||
+      // The JIT env-image build driver (env-management.md §4 + §7 P4) is a confined
+      // host-process-spawn capability, the same category as cli-runner: it shells the
+      // BuildKit build (`build-env-image.sh`) on the ORCHESTRATOR HOST (where
+      // docker/buildx + the registry live), exactly as the golden-image refresh does.
+      // This is NOT workload execution (that still routes through the SSH
+      // CommandSubstrate seam, which this driver does not touch) — it is an
+      // image-build seam, analogous to a `just build-golden-image` run, surfaced as an
+      // orchestrator-driven seam rather than a hand-run script. The ban targets
+      // engine WORKLOAD spawning, not the host-side image build; this single driver is
+      // the only env-creation file permitted to import child_process.
+      file === "services/orchestrator/src/engine/environments/creation/liveEnvBuildDriver.ts" ||
       // Test fixtures may spawn local processes: the ban targets the ENGINE (which
       // must route through the CommandSubstrate seam), not a tests/ fixture that
       // IMPLEMENTS a local CommandSubstrate to drive a real git/jj process in a

@@ -42,7 +42,12 @@ import { startHeartbeat, type HeartbeatMiss } from "./runHeartbeat.js";
 import { systemActor } from "../state/actor.js";
 import { resolveAppEnvForScope } from "../workflow/resolveAppEnv.js";
 import type { AppEnvScope } from "../repositories/appEnvironment.js";
-import { loadRunExecutionContext, type RunExecutionContext } from "./runExecutionContext.js";
+import {
+  loadRunExecutionContext,
+  refineRunnerImageForEnv,
+  type EnvCreationDeps,
+  type RunExecutionContext,
+} from "./runExecutionContext.js";
 import { runPlannerLoopWorkflow, type PlannerRunResult, type RunPlannerLoopInput } from "../workflow/plannerRun.js";
 
 const log = createLogger("run-executor");
@@ -129,6 +134,14 @@ export interface RunExecutorDeps {
   // wrapper that calls the real workflow with fake adapters / usage probe so
   // the dequeue→execute seam is proven without real Codex/SSH.
   runWorkflow?: (input: RunPlannerLoopInput) => Promise<PlannerRunResult>;
+  // Environment management (env-management.md §4 + §7 P4): the JIT env-image creation
+  // seams (the BuildKit build driver + the validation timeout/now). When WIRED, a run
+  // whose toolchain is OFF-baseline AND has no registry match triggers a synchronous
+  // build→validate→publish of a real env image (over `allocator`/`ssh` above) before
+  // the workspace seeds — replacing P3's golden-base no-match placeholder. Omitted
+  // (the default) ⇒ the P3 behavior is byte-identical (a no-match resolves to the
+  // golden base), so existing paths/tests are unchanged; the live worker wires it.
+  envCreation?: EnvCreationDeps;
 }
 
 export type ExecuteJobResult =
@@ -214,8 +227,19 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
     // above fail-closed a null one), so the hydration ALWAYS runs under
     // `runWithOrgScope` — every read carries `app.current_org_id` and the policy
     // admits the run's own rows. There is no null-org BYPASSRLS hydration path.
-    const { context, orgId } = await loadRunContextScoped(deps, runId, claimedOrgId);
+    const { context, orgId, projectConfig } = await loadRunContextScoped(deps, runId, claimedOrgId);
     resolvedOrgId = orgId;
+
+    // Environment management (env-management.md §4 + §7 P4): JIT env-image creation at
+    // the no-match path. `loadRunContextScoped` already ran P3's resolution
+    // (context.runnerImage = a registry match OR the golden-base no-match placeholder).
+    // When the JIT-creation seams are wired AND this run's toolchain is OFF-baseline
+    // with no registry match, build→validate→publish a real env image NOW (over
+    // deps.allocator/ssh, OUTSIDE the scoped read txn, so a multi-minute build never
+    // holds a connection) and seed from it. A baseline-subset toolchain short-circuits
+    // to the golden base (no build); a creation FAILURE propagates LOUD (no silent
+    // golden-base degrade). Omitted seams ⇒ P3 behavior, byte-identical.
+    await refineRunnerImageForEnv({ pool: deps.pool, creation: deps.envCreation, context, projectConfig, orgId });
 
     // RLS wave R1: the claim above ran under the worker's SYSTEM context — the
     // `job_queue` claim spans tenants (job_queue stays OUTSIDE RLS in R2), so it
