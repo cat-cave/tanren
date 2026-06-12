@@ -1,22 +1,66 @@
 FROM debian:trixie-slim
 
+# Neutral sandbox base — a C toolchain to COMPILE things (build-essential),
+# git/ssh/network, python3 (interpreter for tooling, NOT a project stack pin),
+# tini, and the decompressors the pinned-binary installs below need (xz-utils
+# for the official node tarball). Deliberately NO project toolchain: no apt
+# `nodejs`/`npm`/`pnpm`. The project provisions its own node/python/rust/etc at
+# its declared versions at runtime via `mise` (installed below) in user space —
+# Tanren core hardcodes ZERO project toolchain (environment-management.md §2).
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
     build-essential \
     ca-certificates \
     curl \
     git \
-    nodejs \
-    npm \
     openssh-server \
     python3 \
     tini \
+    xz-utils \
   && rm -rf /var/lib/apt/lists/*
+
+# Harness node — Tanren's OWN infrastructure node, NOT the project's stack. The
+# harness CLIs below (codex/codexbar/ccusage) are node programs Tanren ships; they
+# need a node that is stable and independent of whatever toolchain a project later
+# provisions via `mise`. This is installed to /usr/local (on the system PATH ahead
+# of any per-project mise shims, which are never globally activated — see below),
+# so a bare non-`tanren`-mise shell always resolves THIS node. The apt `nodejs` is
+# the stale v20; we pin the current node 24 LTS (Krypton) from the official dist
+# and verify it against the release SHASUMS256. This is a HARNESS dependency (a
+# Tanren-owned version), which the doctrine explicitly permits — it is not a
+# project version. Bumping is a one-line --build-arg change. Source verified
+# against upstream on 2026-06-12:
+#   https://nodejs.org/dist/v24.16.0/ (current LTS)
+ARG NODE_VERSION=24.16.0
+RUN set -eu; \
+  case "$(dpkg --print-architecture)" in \
+    amd64) NODE_ARCH="x64" ;; \
+    arm64) NODE_ARCH="arm64" ;; \
+    *) echo "unsupported arch for node: $(dpkg --print-architecture)" >&2; exit 1 ;; \
+  esac; \
+  ASSET="node-v${NODE_VERSION}-linux-${NODE_ARCH}.tar.xz"; \
+  BASE="https://nodejs.org/dist/v${NODE_VERSION}"; \
+  cd /tmp; \
+  curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 --connect-timeout 30 -o "${ASSET}" "${BASE}/${ASSET}"; \
+  curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 --connect-timeout 30 -o SHASUMS256.txt "${BASE}/SHASUMS256.txt"; \
+  EXPECTED="$(awk -v a="${ASSET}" '$2 == a {print $1}' SHASUMS256.txt)"; \
+  [ -n "${EXPECTED}" ] || { echo "node: no checksum for ${ASSET} in SHASUMS256.txt" >&2; exit 1; }; \
+  ACTUAL="$(sha256sum "${ASSET}" | awk '{print $1}')"; \
+  [ "${EXPECTED}" = "${ACTUAL}" ] || { echo "node sha256 mismatch: expected ${EXPECTED} got ${ACTUAL}" >&2; exit 1; }; \
+  tar xJf "${ASSET}" -C /usr/local --strip-components=1 \
+    --exclude='*/CHANGELOG.md' --exclude='*/LICENSE' --exclude='*/README.md'; \
+  rm -rf "/tmp/${ASSET}" /tmp/SHASUMS256.txt; \
+  node --version; \
+  npm --version
 
 # codexbar (live subscription-window state) and ccusage (token-consumption
 # accounting) run runner-side over SSH against the per-run CODEX_HOME — the
 # orchestrator engine never spawns host processes. Both are fast-moving betas,
 # so their versions are build args: bumping is a one-line --build-arg change.
+# These are HARNESS CLIs (Tanren infrastructure), installed globally against the
+# harness node above — they are NOT a project toolchain. NOTE: there is no
+# `pnpm` here on purpose: pnpm is a PROJECT tool, which the project provisions
+# per-project via `mise` (the runner bakes no project stack).
 # Sources verified against upstream on 2026-05-27:
 #   codexbar: https://github.com/steipete/CodexBar/releases/tag/v0.30.0
 #   ccusage:  https://www.npmjs.com/package/ccusage
@@ -24,7 +68,6 @@ ARG CODEXBAR_VERSION=0.30.0
 ARG CCUSAGE_VERSION=
 
 RUN npm install -g @openai/codex@0.133.0 \
-  && npm install -g pnpm@10 \
   && if [ -n "${CCUSAGE_VERSION}" ]; then npm install -g "ccusage@${CCUSAGE_VERSION}"; else npm install -g ccusage; fi \
   && npm cache clean --force
 
@@ -100,6 +143,49 @@ RUN set -eu; \
   install -m 0755 /tmp/just/just /usr/local/bin/just; \
   rm -rf /tmp/just "/tmp/${ASSET}"; \
   just --version
+
+# mise (jdx/mise) — the single GENERAL, per-project toolchain provisioner. This
+# is what replaces the old baked `pnpm@10` + corepack: the runner ships NO project
+# toolchain, and instead a project declares its tools/versions (`mise.toml` +
+# `mise.lock`: node/python/rust/pnpm/… at the PROJECT's chosen versions) and the
+# project's lifecycle commands provision them at runtime in user space via
+# `mise install` (environment-management.md §2/§3). mise is rootless — its data,
+# install and cache dirs default under $HOME (~/.local/share/mise, ~/.cache/mise),
+# which is writable for the non-root `tanren` user — so a project toolchain never
+# needs to write root-owned paths (the corepack `/usr/bin` EACCES is gone).
+#
+# CRITICAL — harness/project isolation: mise is installed ONLY as a binary on the
+# system PATH; it is NOT globally shell-activated for `tanren` (no `mise activate`
+# in any login/profile script). A bare shell therefore sees the HARNESS node
+# (/usr/local/bin, above) — codex/codexbar/ccusage keep working regardless of what
+# node a project declares. A project's mise toolchain only shadows node WITHIN a
+# command that explicitly opts in (`mise exec --` / `eval "$(mise activate bash)"`);
+# that per-lifecycle wiring lands in a later PR. This PR only makes the runner
+# CAPABLE. The binary is verified against the release's SHASUMS256.txt. Pinned +
+# arch-mapped; bumping is a one-line --build-arg change. Source verified against
+# upstream on 2026-06-12:
+#   https://github.com/jdx/mise/releases/tag/v2026.6.4
+ARG MISE_VERSION=2026.6.4
+RUN set -eu; \
+  case "$(dpkg --print-architecture)" in \
+    amd64) MISE_ARCH="x64" ;; \
+    arm64) MISE_ARCH="arm64" ;; \
+    *) echo "unsupported arch for mise: $(dpkg --print-architecture)" >&2; exit 1 ;; \
+  esac; \
+  ASSET="mise-v${MISE_VERSION}-linux-${MISE_ARCH}-musl.tar.gz"; \
+  BASE="https://github.com/jdx/mise/releases/download/v${MISE_VERSION}"; \
+  cd /tmp; \
+  curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 --connect-timeout 30 -o "${ASSET}" "${BASE}/${ASSET}"; \
+  curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 --connect-timeout 30 -o SHASUMS256.txt "${BASE}/SHASUMS256.txt"; \
+  EXPECTED="$(awk -v a="${ASSET}" '{f=$2; sub(/^\.\//,"",f)} f == a {print $1}' SHASUMS256.txt)"; \
+  [ -n "${EXPECTED}" ] || { echo "mise: no checksum for ${ASSET} in SHASUMS256.txt" >&2; exit 1; }; \
+  ACTUAL="$(sha256sum "${ASSET}" | awk '{print $1}')"; \
+  [ "${EXPECTED}" = "${ACTUAL}" ] || { echo "mise sha256 mismatch: expected ${EXPECTED} got ${ACTUAL}" >&2; exit 1; }; \
+  mkdir -p /tmp/mise; \
+  tar xzf "${ASSET}" -C /tmp/mise; \
+  install -m 0755 /tmp/mise/mise/bin/mise /usr/local/bin/mise; \
+  rm -rf /tmp/mise "/tmp/${ASSET}" /tmp/SHASUMS256.txt; \
+  mise --version
 
 # sem — the entity-level diff tool (tree-sitter entity extraction: every
 # function/class/method/type as a graph node with structural-hash identity, 26+
