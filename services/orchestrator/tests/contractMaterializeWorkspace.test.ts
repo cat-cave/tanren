@@ -36,7 +36,7 @@ const TS_LIFECYCLE: ProjectLifecycle = {
   build: "pnpm build",
   deploy: "flyctl deploy",
   upgrade: "pnpm update --latest",
-  toolchain: {},
+  toolchain: [],
 };
 
 // Records every command + stdin; yields the clone HEAD on every call (the trailing

@@ -98,7 +98,7 @@ export async function resolveProjectEnvWithCreation(
   // A no-match WITH a declared toolchain. The toolchain is present (no-match implies a
   // non-empty toolchain — the no-toolchain case never reaches here).
   const toolchain = input.toolchain;
-  if (toolchain === undefined || Object.keys(toolchain).length === 0) {
+  if (toolchain === undefined || toolchain.length === 0) {
     // Defensive: a no-match must carry a toolchain. If somehow not, keep the P3 binding.
     return binding;
   }

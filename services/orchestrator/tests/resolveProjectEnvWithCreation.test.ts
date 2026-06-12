@@ -114,7 +114,15 @@ describe("resolveProjectEnvWithCreation — the P4 no-match router", () => {
     const stub = stubBuildDriver();
     const binding = await resolveProjectEnvWithCreation(
       fakeClient(),
-      { toolchain: { node: "24", pnpm: "11" }, baseImage: GOLDEN, orgId: "org_1", projectId: "proj_1" },
+      {
+        toolchain: [
+          { name: "node", version: "24" },
+          { name: "pnpm", version: "11" },
+        ],
+        baseImage: GOLDEN,
+        orgId: "org_1",
+        projectId: "proj_1",
+      },
       systemActor,
       creationDeps(stub.driver, { node: "24", pnpm: "11" }),
     );
@@ -128,7 +136,7 @@ describe("resolveProjectEnvWithCreation — the P4 no-match router", () => {
     const stub = stubBuildDriver();
     const binding = await resolveProjectEnvWithCreation(
       fakeClient(),
-      { toolchain: { node: "18" }, baseImage: GOLDEN, orgId: "org_1", projectId: "proj_1" },
+      { toolchain: [{ name: "node", version: "18" }], baseImage: GOLDEN, orgId: "org_1", projectId: "proj_1" },
       systemActor,
       creationDeps(stub.driver, { node: "18" }),
     );
@@ -143,7 +151,7 @@ describe("resolveProjectEnvWithCreation — the P4 no-match router", () => {
     const stub = stubBuildDriver();
     const binding = await resolveProjectEnvWithCreation(
       fakeClient(),
-      { toolchain: { rust: "nightly" }, baseImage: GOLDEN, orgId: "org_1", projectId: "proj_1" },
+      { toolchain: [{ name: "rust", version: "nightly" }], baseImage: GOLDEN, orgId: "org_1", projectId: "proj_1" },
       systemActor,
       creationDeps(stub.driver, { rust: "nightly" }),
     );
@@ -169,7 +177,13 @@ describe("resolveProjectEnvWithCreation — the P4 no-match router", () => {
     await expect(
       resolveProjectEnvWithCreation(
         fakeClient(),
-        { toolchain: { rust: "nightly" }, baseImage: GOLDEN, orgId: "org_1", projectId: "proj_1", flakePresent: true },
+        {
+          toolchain: [{ name: "rust", version: "nightly" }],
+          baseImage: GOLDEN,
+          orgId: "org_1",
+          projectId: "proj_1",
+          flakePresent: true,
+        },
         systemActor,
         creationDeps(stub.driver, { rust: "nightly" }),
       ),
@@ -187,7 +201,7 @@ describe("resolveProjectEnvWithCreation — the P4 no-match router", () => {
     await expect(
       resolveProjectEnvWithCreation(
         fakeClient(),
-        { toolchain: { node: "18" }, baseImage: GOLDEN, orgId: "org_1", projectId: "proj_1" },
+        { toolchain: [{ name: "node", version: "18" }], baseImage: GOLDEN, orgId: "org_1", projectId: "proj_1" },
         systemActor,
         creationDeps(failing, { node: "18" }),
       ),

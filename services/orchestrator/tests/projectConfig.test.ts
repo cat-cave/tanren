@@ -331,24 +331,33 @@ describe("ProjectConfigV1 lifecycle toolchain (env P0b/c)", () => {
     deploy: "flyctl deploy",
   };
 
-  it("round-trips an explicit toolchain map on the lifecycle", () => {
+  it("round-trips an explicit toolchain list on the lifecycle", () => {
     const cfg = migrateProjectConfig({
       version: 1,
-      lifecycle: { ...baseLifecycle, toolchain: { node: "24", pnpm: "10" } },
+      lifecycle: {
+        ...baseLifecycle,
+        toolchain: [
+          { name: "node", version: "24" },
+          { name: "pnpm", version: "10" },
+        ],
+      },
     });
-    expect(cfg.lifecycle?.toolchain).toEqual({ node: "24", pnpm: "10" });
+    expect(cfg.lifecycle?.toolchain).toEqual([
+      { name: "node", version: "24" },
+      { name: "pnpm", version: "10" },
+    ]);
   });
 
-  it("defaults the toolchain to an empty map when omitted (a project declares none)", () => {
+  it("defaults the toolchain to an empty list when omitted (a project declares none)", () => {
     const cfg = migrateProjectConfig({ version: 1, lifecycle: baseLifecycle });
-    expect(cfg.lifecycle?.toolchain).toEqual({});
+    expect(cfg.lifecycle?.toolchain).toEqual([]);
   });
 
-  it("rejects a toolchain key that is not a mise-safe tool name", () => {
+  it("rejects a toolchain entry whose name is not a mise-safe tool name", () => {
     expect(() =>
       migrateProjectConfig({
         version: 1,
-        lifecycle: { ...baseLifecycle, toolchain: { "bad name!": "1" } },
+        lifecycle: { ...baseLifecycle, toolchain: [{ name: "bad name!", version: "1" }] },
       }),
     ).toThrow(/.+/u);
   });

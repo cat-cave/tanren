@@ -17,7 +17,7 @@ import { systemActor } from "../src/engine/state/actor.js";
 // PUBLISHES (status `validated` + image_ref + proof); a FAILED validation NEVER
 // publishes (a LOUD EnvironmentValidationFailedError); a failed BUILD propagates LOUD.
 
-const TOOLCHAIN = { node: "18" } as const;
+const TOOLCHAIN = [{ name: "node", version: "18" }];
 
 // A fake pool whose `query` records every INSERT and echoes back the inserted env row
 // (mirroring EnvironmentStore.create's RETURNING shape) so the publish is observable

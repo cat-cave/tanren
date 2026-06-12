@@ -18,18 +18,18 @@ import { CaptureToolchain } from "../../forge/interview/types.js";
 // silent blank lifecycle (which would materialize an empty justfile target) is a
 // LOUD parse failure, never a quiet no-op gate.
 //
-// `toolchain` (environment-management.md §3 Layer 1) — the mise tool-name → version
-// map the researched stack needs, at CURRENT/LTS versions. The model MUST populate it
-// for any stack mise can provision (node/pnpm/python/go/rust/…), so the template-build
-// project's lifecycle gets a NON-EMPTY `toolchain`, the scaffold materializes a
-// `mise.toml`, and `mise install` provisions the toolchain BEFORE `just bootstrap` runs
-// — without it, bootstrap fails (`pnpm: not found`) because the runner ships no project
-// toolchain. Reuses the same stack-agnostic `CaptureToolchain` record the interview
-// architecture step emits (mise-safe keys, bounded version strings) — Tanren names NO
-// tool/version, the model researches them. Optional ONLY for a stack with no mise tool
-// (a pure-shell/system-package stack that provisions inside its own bootstrap shell);
-// absent/empty ⇒ no `mise.toml`. The orchestration mapping carries it onto
-// `CaptureLifecycle.toolchain` (`liveResearch.ts` `researchFromOutput`).
+// `toolchain` (environment-management.md §3 Layer 1) — the LIST of {name, version}
+// entries the researched stack needs, at CURRENT/LTS versions. The model MUST populate
+// it for any stack mise can provision (node/pnpm/python/go/rust/…), so the
+// template-build project's lifecycle gets a NON-EMPTY `toolchain`, the scaffold
+// materializes a `mise.toml`, and `mise install` provisions the toolchain BEFORE
+// `just bootstrap` runs — without it, bootstrap fails (`pnpm: not found`) because the
+// runner ships no project toolchain. Reuses the same stack-agnostic `CaptureToolchain`
+// array the interview architecture step emits (mise-safe `name`, bounded `version`) —
+// Tanren names NO tool/version, the model researches them. Optional ONLY for a stack
+// with no mise tool (a pure-shell/system-package stack that provisions inside its own
+// bootstrap shell); absent/empty ⇒ no `mise.toml`. The orchestration mapping carries it
+// onto `CaptureLifecycle.toolchain` (`liveResearch.ts` `researchFromOutput`).
 export const ResearchedLifecycleOutput = z
   .object({
     bootstrap: z.string().min(1).max(2000),

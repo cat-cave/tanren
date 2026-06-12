@@ -100,7 +100,7 @@ export function renderLifecycleJustfile(lifecycle: ProjectLifecycle): string {
 // The deterministic contract-file manifest for a project's lifecycle: the
 // stack-agnostic `.tanren/ci.yml` (SKELETON_CI_CONFIG VERBATIM — the correct-shape
 // `just`-map, never LLM-authored) + the lifecycle-FILLED `justfile` + (when the
-// project declared a toolchain) a `mise.toml` rendered from the toolchain map. The
+// project declared a toolchain) a `mise.toml` rendered from the toolchain list. The
 // RUN path writes these into the workspace exactly as returned, before the writer
 // runs. The `mise.toml` is a DETERMINISTIC projection (like the justfile) — NEVER
 // LLM-authored; an EMPTY/absent toolchain materializes NO mise.toml (a project may
@@ -111,7 +111,7 @@ export function materializeContractFiles(lifecycle: ProjectLifecycle): ContractF
     { path: SKELETON_CI_CONFIG_PATH, content: SKELETON_CI_CONFIG },
     { path: SKELETON_JUSTFILE_PATH, content: renderLifecycleJustfile(lifecycle) },
   ];
-  if (Object.keys(lifecycle.toolchain).length > 0) {
+  if (lifecycle.toolchain.length > 0) {
     files.push({ path: SKELETON_MISE_CONFIG_PATH, content: renderMiseToml(lifecycle.toolchain) });
   }
   return files;

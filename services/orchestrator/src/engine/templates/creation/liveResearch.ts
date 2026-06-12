@@ -74,7 +74,7 @@ export function buildResearchPrompt(request: TemplateCreationRequest): string {
     // project gets an empty toolchain → no `mise.toml` is materialized → `mise install`
     // is skipped → `just bootstrap` fails (`pnpm: not found`). CURRENT/LTS by default
     // (the anti-stale-version rule) — never years-old versions. Tanren names no tool.
-    "Decide the project TOOLCHAIN in `toolchain`: a map of `mise` tool-name → version the researched stack needs (the runtime + package manager + any pinned tools), so Tanren can provision it via mise before bootstrap. Use CURRENT/LTS versions a fresh project would adopt TODAY (e.g. { node: '24', pnpm: '11' } | { python: '3.14' } | { rust: 'stable', go: '1.23' }) — NEVER years-old versions — unless the brief explicitly calls for a legacy/pinned/nightly toolchain. The keys are mise tool names (node/pnpm/python/go/rust/…); the values are version strings. Omit `toolchain` (or leave it empty) ONLY for a stack with NO tool mise can provision (a pure-shell / system-package stack that provisions inside its own bootstrap).",
+    "Decide the project TOOLCHAIN in `toolchain`: a list of { name, version } entries the researched stack needs (the runtime + package manager + any pinned tools), so Tanren can provision it via mise before bootstrap. Each `name` is a `mise` tool name (node/pnpm/python/go/rust/…); each `version` is a version string. Use CURRENT/LTS versions a fresh project would adopt TODAY (e.g. [{ name: 'node', version: '24' }, { name: 'pnpm', version: '11' }] | [{ name: 'python', version: '3.14' }] | [{ name: 'rust', version: 'stable' }, { name: 'go', version: '1.23' }]) — NEVER years-old versions — unless the brief explicitly calls for a legacy/pinned/nightly toolchain. Omit `toolchain` (or leave it empty) ONLY for a stack with NO tool mise can provision (a pure-shell / system-package stack that provisions inside its own bootstrap).",
     "Decide which full-bar gates this stack supports (typecheck / lint / test / mutation / junit / bdd) — only mark a gate present if the researched toolchain genuinely provides it (a gate that is green-by-accident must NOT be claimed). When mutation is present, give the concrete mutation command in mutationStep.",
     "Summarize the rationale (the chosen tooling + why) in `summary`.",
   ];
@@ -117,7 +117,7 @@ function researchFromOutput(output: ResearchOutput): TemplateResearch {
   // A populated toolchain is what makes the template-build project materialize a
   // `mise.toml` so `mise install` provisions the stack before `just bootstrap`.
   const toolchain = output.lifecycle.toolchain;
-  const hasToolchain = toolchain !== undefined && Object.keys(toolchain).length > 0;
+  const hasToolchain = toolchain !== undefined && toolchain.length > 0;
   return {
     researchSources: [...output.researchSources],
     lifecycle: {
@@ -127,7 +127,7 @@ function researchFromOutput(output: ResearchOutput): TemplateResearch {
       tier3: output.lifecycle.tier3,
       build: output.lifecycle.build,
       deploy: output.lifecycle.deploy,
-      ...(hasToolchain ? { toolchain: { ...toolchain } } : {}),
+      ...(hasToolchain ? { toolchain: [...toolchain] } : {}),
     },
     tooling: {
       typecheck: output.tooling.typecheck,

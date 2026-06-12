@@ -10,35 +10,40 @@ import { resolve } from "node:path";
 // SUBSET check that short-circuits JIT env-image creation. A baseline-subset toolchain
 // (apex-style node+pnpm) must NEVER trigger a build; an off-baseline version/tool must.
 
+// The toolchain is a LIST of {name, version}; this helper keeps the table terse.
+function tc(map: Record<string, string>): { name: string; version: string }[] {
+  return Object.entries(map).map(([name, version]) => ({ name, version }));
+}
+
 describe("toolchainCoveredByGoldenBaseline — the golden-base short-circuit", () => {
   it("an apex-style baseline-subset toolchain (node+pnpm) is COVERED → no build", () => {
-    expect(toolchainCoveredByGoldenBaseline({ node: "24", pnpm: "11" })).toBe(true);
+    expect(toolchainCoveredByGoldenBaseline(tc({ node: "24", pnpm: "11" }))).toBe(true);
   });
 
   it("the FULL baseline is covered (every tool at its baseline spec)", () => {
-    expect(toolchainCoveredByGoldenBaseline({ node: "24", pnpm: "11", python: "3.14", go: "1.26" })).toBe(true);
+    expect(toolchainCoveredByGoldenBaseline(tc({ node: "24", pnpm: "11", python: "3.14", go: "1.26" }))).toBe(true);
   });
 
   it("an EMPTY toolchain is trivially covered (asks for nothing off-baseline)", () => {
-    expect(toolchainCoveredByGoldenBaseline({})).toBe(true);
+    expect(toolchainCoveredByGoldenBaseline([])).toBe(true);
   });
 
   it("an OFF-baseline VERSION of a baseline tool is NOT covered → build", () => {
     // node 18 is off the baseline node 24 → a different install the base never warmed.
-    expect(toolchainCoveredByGoldenBaseline({ node: "18" })).toBe(false);
-    expect(toolchainCoveredByGoldenBaseline({ python: "3.11" })).toBe(false);
+    expect(toolchainCoveredByGoldenBaseline(tc({ node: "18" }))).toBe(false);
+    expect(toolchainCoveredByGoldenBaseline(tc({ python: "3.11" }))).toBe(false);
     // An exact pin of a baseline major is still a DIFFERENT spec string → build.
-    expect(toolchainCoveredByGoldenBaseline({ node: "24.2.0" })).toBe(false);
+    expect(toolchainCoveredByGoldenBaseline(tc({ node: "24.2.0" }))).toBe(false);
   });
 
   it("an OFF-baseline TOOL the baseline never warmed is NOT covered → build", () => {
-    expect(toolchainCoveredByGoldenBaseline({ rust: "nightly" })).toBe(false);
-    expect(toolchainCoveredByGoldenBaseline({ bun: "1" })).toBe(false);
+    expect(toolchainCoveredByGoldenBaseline(tc({ rust: "nightly" }))).toBe(false);
+    expect(toolchainCoveredByGoldenBaseline(tc({ bun: "1" }))).toBe(false);
   });
 
   it("a MIX of a covered tool + one off-baseline tool is NOT covered (a single delta forces a build)", () => {
-    expect(toolchainCoveredByGoldenBaseline({ node: "24", rust: "nightly" })).toBe(false);
-    expect(toolchainCoveredByGoldenBaseline({ node: "18", pnpm: "11" })).toBe(false);
+    expect(toolchainCoveredByGoldenBaseline(tc({ node: "24", rust: "nightly" }))).toBe(false);
+    expect(toolchainCoveredByGoldenBaseline(tc({ node: "18", pnpm: "11" }))).toBe(false);
   });
 
   it("the TS baseline map mirrors runner/mise.baseline.toml (the two must never drift)", () => {

@@ -18,6 +18,7 @@
 // a fixed decision set, so the creation orchestration is exercised without a live
 // LLM/web call. Tanren's own TypeScript names NO stack here.
 
+import type { CaptureToolchain } from "../../forge/interview/types.js";
 import type { TemplateChannel } from "../manifest.js";
 
 // What the operator (or the no-match selection hook) asks Tanren to create a
@@ -85,11 +86,11 @@ export interface ResearchedLifecycle {
   // projected onto the template's `CaptureLifecycle.upgrade`. Optional/absent ⇒ the
   // template fills the `upgrade` target with a loud STUB (no Tanren-driven upgrade lever).
   upgrade?: string;
-  // The researched TOOLCHAIN (environment-management.md §3) — mise tool-name →
-  // version-spec at CURRENT/LTS versions for the stack (node/pnpm/python/…).
+  // The researched TOOLCHAIN (environment-management.md §3) — a list of {name,
+  // version} entries at CURRENT/LTS versions for the stack (node/pnpm/python/…).
   // Projected onto the template's `CaptureLifecycle.toolchain` so the build
   // materializes a `mise.toml`. Optional/absent ⇒ no toolchain (no mise.toml).
-  toolchain?: Record<string, string>;
+  toolchain?: CaptureToolchain;
 }
 
 // The tooling/feature decisions the research produced for the stack — which parts

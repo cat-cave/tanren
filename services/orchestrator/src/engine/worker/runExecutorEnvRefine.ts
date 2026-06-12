@@ -44,7 +44,7 @@ export async function refineRunnerImageForEnv(input: RefineRunnerImageForEnvInpu
     return;
   }
   const toolchain = projectConfig.lifecycle?.toolchain;
-  if (toolchain === undefined || Object.keys(toolchain).length === 0) {
+  if (toolchain === undefined || toolchain.length === 0) {
     // No declared toolchain → nothing to build (the golden base stands).
     return;
   }

@@ -65,8 +65,9 @@ export interface EnvNegativeControlPlan {
 // baseline tool (nothing baseline-shaped left to probe — but isolation must STILL be
 // proven, so we probe a tool no env should ever have).
 function pickUndeclaredTool(toolchain: ProjectToolchain): EnvNegativeControl {
+  const declaredNames = new Set(toolchain.map((entry) => entry.name));
   for (const baselineTool of Object.keys(GOLDEN_BASELINE_TOOLCHAIN)) {
-    if (!(baselineTool in toolchain)) {
+    if (!declaredNames.has(baselineTool)) {
       return {
         capability: "undeclaredToolAbsent",
         tool: baselineTool,
@@ -99,8 +100,13 @@ function forbiddenVersionFor(declaredSpec: string): string {
 // so this is always called with at least one tool — but we guard with the sentinel
 // to stay total (a forbidden sentinel version that must not resolve either).
 function pickForbiddenVersion(toolchain: ProjectToolchain): EnvNegativeControl {
-  const tools = Object.keys(toolchain).sort();
-  const tool = tools[0];
+  // De-dup by name (last-wins, matching `renderMiseToml`), then take the first tool by
+  // sorted name for determinism.
+  const byName = new Map<string, string>();
+  for (const entry of toolchain) {
+    byName.set(entry.name, entry.version);
+  }
+  const tool = [...byName.keys()].sort()[0];
   if (tool === undefined) {
     return {
       capability: "forbiddenVersionAbsent",
@@ -109,7 +115,7 @@ function pickForbiddenVersion(toolchain: ProjectToolchain): EnvNegativeControl {
       description: `forbidden version of sentinel "${ABSENT_SENTINEL_TOOL}" must NOT resolve`,
     };
   }
-  const declaredSpec = toolchain[tool] ?? "";
+  const declaredSpec = byName.get(tool) ?? "";
   const forbiddenVersion = forbiddenVersionFor(declaredSpec);
   return {
     capability: "forbiddenVersionAbsent",

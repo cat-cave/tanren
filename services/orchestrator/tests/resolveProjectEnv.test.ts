@@ -16,7 +16,13 @@ import { systemActor } from "../src/engine/state/actor.js";
 //   - no-match      → the golden base (P4 will JIT-build instead)
 //   - no lockfile   → the golden base (a fresh greenfield first boot, today's flow)
 
-const TOOLCHAIN = { node: "22", python: "3.13" } as const;
+const TOOLCHAIN = [
+  { name: "node", version: "22" },
+  { name: "python", version: "3.13" },
+] as const;
+// The persisted `capabilities.tools` registry SUMMARY MAP (name → version) — a
+// record, unlike the lifecycle's {name, version} list.
+const TOOLCHAIN_TOOLS: Record<string, string> = { node: "22", python: "3.13" };
 
 // A fake QueryClient that returns ONE `environments` row from `getByEnvKey` when
 // the looked-up env_key matches, else zero rows. Captures the looked-up env_key so
@@ -40,7 +46,7 @@ function fakeClient(opts: { match?: { id: string; imageRef: string } }): {
           org_id: "org_x",
           env_key: envKey,
           image_ref: opts.match.imageRef,
-          capabilities: { tools: { ...TOOLCHAIN } },
+          capabilities: { tools: { ...TOOLCHAIN_TOOLS } },
           channel: "lts",
           status: "validated",
           provenance: { baseDigest: resolveGoldenBaseDigest(), miseLockHash: "abc" },
@@ -67,7 +73,7 @@ describe("resolveProjectEnv — per-project env binding at the image seam", () =
 
   it("EMPTY toolchain → the golden base (no env_key, no lookup)", async () => {
     const { client, lookups } = fakeClient({});
-    const binding = await resolveProjectEnv(client, { toolchain: {} }, systemActor);
+    const binding = await resolveProjectEnv(client, { toolchain: [] }, systemActor);
     expect(binding.imageRef).toBe(GOLDEN_BASE_IMAGE);
     expect(binding.source).toBe("golden-base-no-toolchain");
     expect(lookups).toHaveLength(0);
@@ -86,11 +92,14 @@ describe("resolveProjectEnv — per-project env binding at the image seam", () =
 
   it("a declared toolchain with NO registry match → the golden base (P4 JIT-builds)", async () => {
     const { client, lookups } = fakeClient({});
-    const binding = await resolveProjectEnv(client, { toolchain: { ...TOOLCHAIN } }, systemActor);
+    const binding = await resolveProjectEnv(client, { toolchain: [...TOOLCHAIN] }, systemActor);
     expect(binding.imageRef).toBe(GOLDEN_BASE_IMAGE);
     expect(binding.source).toBe("golden-base-no-match");
     // The env_key WAS computed (over the project's rendered mise lockfile).
-    const expectedKey = computeEnvKey({ baseDigest: resolveGoldenBaseDigest(), miseLock: renderMiseToml(TOOLCHAIN) });
+    const expectedKey = computeEnvKey({
+      baseDigest: resolveGoldenBaseDigest(),
+      miseLock: renderMiseToml([...TOOLCHAIN]),
+    });
     expect(binding.envKey).toBe(expectedKey);
     expect(binding.environmentRef).toBeUndefined();
     expect(lookups).toEqual([expectedKey]);
@@ -99,11 +108,14 @@ describe("resolveProjectEnv — per-project env binding at the image seam", () =
   it("a declared toolchain WITH a validated registry match → env.image_ref", async () => {
     const matchImage = "registry:5000/tanren-env@sha256:abc123";
     const { client, lookups } = fakeClient({ match: { id: "env_match", imageRef: matchImage } });
-    const binding = await resolveProjectEnv(client, { toolchain: { ...TOOLCHAIN } }, systemActor);
+    const binding = await resolveProjectEnv(client, { toolchain: [...TOOLCHAIN] }, systemActor);
     expect(binding.imageRef).toBe(matchImage);
     expect(binding.source).toBe("registry-match");
     expect(binding.environmentRef).toBe("env_match");
-    const expectedKey = computeEnvKey({ baseDigest: resolveGoldenBaseDigest(), miseLock: renderMiseToml(TOOLCHAIN) });
+    const expectedKey = computeEnvKey({
+      baseDigest: resolveGoldenBaseDigest(),
+      miseLock: renderMiseToml([...TOOLCHAIN]),
+    });
     expect(binding.envKey).toBe(expectedKey);
     expect(lookups).toEqual([expectedKey]);
   });
