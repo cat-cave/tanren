@@ -31,6 +31,12 @@ import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js"
 import { createLogger } from "../observability/logger.js";
 import { JobReaper } from "./jobReaper.js";
 import { RunWorker, type RunWorkerOptions } from "./runWorker.js";
+import { buildEnvCreationFromEnv, type EnvCreationDeps } from "../environments/creation/index.js";
+
+// Re-exported so the worker boot builds the JIT env-creation seams (env-management.md
+// §4 + §7 P4) without taking a direct dependency on the env-creation module (keeping
+// boot.ts under its import-dependency cap). The seams are gated on TANREN_ENV_REGISTRY.
+export { buildEnvCreationFromEnv };
 
 const log = createLogger("run-worker");
 
@@ -72,6 +78,11 @@ export interface StartRunWorkerInput {
   // TANREN_DATA_PLANE_REMOTE_WRITES=1) that routes writes through the
   // control-plane endpoints over mTLS.
   runStateWriter?: RunStateWriter;
+  // Environment management (env-management.md §4 + §7 P4): the JIT env-image creation
+  // seams threaded to the executor. Wired ⇒ an off-baseline no-match run synchronously
+  // builds→validates→publishes a real env image before seeding. Omitted ⇒ P3's
+  // golden-base no-match fallback (byte-identical).
+  envCreation?: EnvCreationDeps;
   options?: RunWorkerOptions;
 }
 
@@ -113,6 +124,7 @@ export function startRunWorker(input: StartRunWorkerInput): StartedRunWorker {
       identitySecretRef: input.identitySecretRef,
       ...(input.claimClient === undefined ? {} : { claimClient: input.claimClient }),
       ...(input.runStateWriter === undefined ? {} : { runStateWriter: input.runStateWriter }),
+      ...(input.envCreation === undefined ? {} : { envCreation: input.envCreation }),
     },
     { concurrency: input.concurrency, notifyListener, ...input.options },
   );

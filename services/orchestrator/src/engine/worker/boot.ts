@@ -24,6 +24,7 @@ import { assertStandaloneRemoteWritesConfigured, buildRunStateWriterFromEnv } fr
 import type { JobReaper } from "./jobReaper.js";
 import type { RunWorker } from "./runWorker.js";
 import {
+  buildEnvCreationFromEnv,
   buildRunCredentialScoping,
   startRunWorker,
   startRunWorkspaceReaper,
@@ -156,6 +157,18 @@ export async function bootRunWorker(mode: WorkerBootMode = "in-process"): Promis
       ? "per-run credential scoping OFF (non-Vault secret store; reads use the backend store directly)"
       : "per-run credential scoping ON (each run reads via a short-lived Vault child token; dimension D)",
   );
+  // Environment management (env-management.md §4 + §7 P4): the JIT env-image creation
+  // seams, built from the env config surface (the build driver shelling
+  // build-env-image.sh + the validation allocator/ssh). Gated ON only when a registry
+  // is configured (`TANREN_ENV_REGISTRY`); OFF ⇒ undefined ⇒ the executor keeps P3's
+  // golden-base no-match fallback. The validation runner is allocated from the SAME
+  // shared allocator/ssh the run worker uses.
+  const envCreation = buildEnvCreationFromEnv({ allocator, ssh, identitySecretRef });
+  log.info(
+    envCreation === undefined
+      ? "JIT env-image creation OFF (TANREN_ENV_REGISTRY unset; off-baseline no-match falls back to the golden base)"
+      : "JIT env-image creation ON (off-baseline no-match builds→validates→publishes a real env image)",
+  );
   const { worker, reaper } = startRunWorker({
     pool,
     concurrency,
@@ -170,6 +183,7 @@ export async function bootRunWorker(mode: WorkerBootMode = "in-process"): Promis
     identitySecretRef,
     ...(claimClient === undefined ? {} : { claimClient }),
     ...(runStateWriter === undefined ? {} : { runStateWriter }),
+    ...(envCreation === undefined ? {} : { envCreation }),
   });
   // Autonomy engine §1a + §1d: start the worker's autonomy background loops — the
   // per-project DagWalker (subscribes to the run-activity bus and self-drives the
