@@ -67,6 +67,14 @@ export function buildResearchPrompt(request: TemplateCreationRequest): string {
     ...(request.note === undefined || request.note.trim() === "" ? [] : [`- operator note: ${request.note}`]),
     "",
     "Decide the concrete `just`-target lifecycle commands for this stack (bootstrap / tier1 / tier2 / tier3 / build / deploy), filling each with the ACTUAL command(s) for the researched toolchain. tier1 is the fast format+lint+typecheck gate, tier2 the test gate, tier3 the pre-merge/e2e gate.",
+    // TOOLCHAIN (environment-management.md §3 Layer 1) — mirror the interview
+    // architecture step (forge/interview/prompt.ts): the research MUST also declare the
+    // tool VERSIONS the stack needs, provisioned at workspace-prep via `mise` in user
+    // space (the runner ships NO project toolchain). Without this the template-build
+    // project gets an empty toolchain → no `mise.toml` is materialized → `mise install`
+    // is skipped → `just bootstrap` fails (`pnpm: not found`). CURRENT/LTS by default
+    // (the anti-stale-version rule) — never years-old versions. Tanren names no tool.
+    "Decide the project TOOLCHAIN in `toolchain`: a map of `mise` tool-name → version the researched stack needs (the runtime + package manager + any pinned tools), so Tanren can provision it via mise before bootstrap. Use CURRENT/LTS versions a fresh project would adopt TODAY (e.g. { node: '24', pnpm: '11' } | { python: '3.14' } | { rust: 'stable', go: '1.23' }) — NEVER years-old versions — unless the brief explicitly calls for a legacy/pinned/nightly toolchain. The keys are mise tool names (node/pnpm/python/go/rust/…); the values are version strings. Omit `toolchain` (or leave it empty) ONLY for a stack with NO tool mise can provision (a pure-shell / system-package stack that provisions inside its own bootstrap).",
     "Decide which full-bar gates this stack supports (typecheck / lint / test / mutation / junit / bdd) — only mark a gate present if the researched toolchain genuinely provides it (a gate that is green-by-accident must NOT be claimed). When mutation is present, give the concrete mutation command in mutationStep.",
     "Summarize the rationale (the chosen tooling + why) in `summary`.",
   ];
@@ -104,9 +112,23 @@ export function wrapProviderResearcher(
 // capabilities). The grounding (≥1 source) is asserted at the orchestration
 // boundary (`assertGroundedResearch`), not silently defaulted here.
 function researchFromOutput(output: ResearchOutput): TemplateResearch {
+  // Carry the researched `toolchain` onto the lifecycle ONLY when the model declared a
+  // non-empty one (a stack with no mise tool legitimately omits it ⇒ no `mise.toml`).
+  // A populated toolchain is what makes the template-build project materialize a
+  // `mise.toml` so `mise install` provisions the stack before `just bootstrap`.
+  const toolchain = output.lifecycle.toolchain;
+  const hasToolchain = toolchain !== undefined && Object.keys(toolchain).length > 0;
   return {
     researchSources: [...output.researchSources],
-    lifecycle: { ...output.lifecycle },
+    lifecycle: {
+      bootstrap: output.lifecycle.bootstrap,
+      tier1: output.lifecycle.tier1,
+      tier2: output.lifecycle.tier2,
+      tier3: output.lifecycle.tier3,
+      build: output.lifecycle.build,
+      deploy: output.lifecycle.deploy,
+      ...(hasToolchain ? { toolchain: { ...toolchain } } : {}),
+    },
     tooling: {
       typecheck: output.tooling.typecheck,
       lint: output.tooling.lint,
