@@ -9,7 +9,7 @@ import {
   type ValidateEmittedSpecsInput,
 } from "../forge/specQuality/index.js";
 import type { RoutedWorkItem } from "./loopPolicy.js";
-import { CI_CONFIG_GATE_TIER, type GateOutcome } from "./gate/index.js";
+import { BOOTSTRAP_GATE_TIER, CI_CONFIG_GATE_TIER, type GateOutcome } from "./gate/index.js";
 
 /**
  * Turn a failed SPEC GATE (tier-2: tests + full checks) into a P0 FINDING. A CI failure
@@ -33,6 +33,29 @@ export function gateFindings(gate: Extract<GateOutcome, { passed: false }>): Fin
       severity: "P0",
       title: "The repo's `.tanren/ci.yml` is invalid",
       body: `The native gate config (\`.tanren/ci.yml\`) failed to validate, so the ${failure.when} gate cannot run (fail-closed — an invalid gate config is NOT a pass). Fix the config in this spec: ${issues}`,
+    };
+  }
+  // A WRITER-AUTHORED scaffold deps-install failure (the project's `just bootstrap`
+  // exited nonzero — e.g. pnpm's `ERR_PNPM_IGNORED_BUILDS`). This is the writer's OWN
+  // package manifest / lockfile, so the loop must FIX THE SCAFFOLD (not chase a phantom
+  // build failure). Name it precisely + feed the writer the bootstrap output (captured
+  // in the synthetic step's outputTail) so the re-author addresses the concrete error.
+  // The stable id (`gate-tanren-bootstrap-deps-install`) dedupes a recurring bootstrap
+  // failure across loops, so the convergence answerer bounds the self-heal loop. The
+  // mise toolchain provision is NOT routed here — it halts terminally at workspace-prep.
+  if (failure.tier === BOOTSTRAP_GATE_TIER) {
+    const output = failure.steps[0]?.outputTail ?? failure.failedStep;
+    const exit =
+      failure.exitCode === null ? "no exit code (timed out or substrate failure)" : `exit ${failure.exitCode}`;
+    return {
+      id: `gate-${failure.tier}-${failure.failedStep}`,
+      severity: "P0",
+      title: "The scaffold's `just bootstrap` (deps install) failed",
+      body:
+        `The project's deps install (\`just bootstrap\`) failed during the ${failure.when} gate with ${exit}, so ` +
+        `the tree cannot build or test (fail-closed — an unbuildable tree is NOT a pass). This is almost always a ` +
+        `defect in the scaffold you authored (e.g. a \`package.json\` that does not install cleanly). Fix the ` +
+        `scaffold in this spec so \`just bootstrap\` succeeds. Bootstrap output: ${output}`,
     };
   }
   const exit = failure.exitCode === null ? "no exit code (timed out or substrate failure)" : `exit ${failure.exitCode}`;

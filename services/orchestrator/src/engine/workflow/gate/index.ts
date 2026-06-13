@@ -22,6 +22,12 @@ export {
   invalidCiConfigGateOutcome,
   isInvalidCiConfigError,
 } from "./gateConfigFailure.js";
+export {
+  BOOTSTRAP_GATE_STEP,
+  BOOTSTRAP_GATE_TIER,
+  isWorkspaceDepsInstallError,
+  workspaceDepsInstallGateOutcome,
+} from "./bootstrapFailure.js";
 export { advisoryStepNamesForPosture } from "./advisoryGate.js";
 export { runNativeMergeGate } from "./runMergeGate.js";
 export { publishGateVerdict, type PublishGateVerdictInput } from "./publishGateVerdict.js";
