@@ -257,7 +257,15 @@ ENV TANREN_MISE_DATA_DIR=/opt/tanren/mise \
 COPY runner/mise.baseline.toml /opt/tanren/mise.baseline.toml
 RUN set -eu; \
   mkdir -p "${TANREN_MISE_DATA_DIR}" "${TANREN_MISE_CACHE_DIR}" /home/tanren/.config/mise; \
-  chown -R tanren:tanren /opt/tanren "${TANREN_MISE_DATA_DIR}" "${TANREN_MISE_CACHE_DIR}"; \
+  # Own the ENTIRE /home/tanren/.config tree as `tanren` — NOT just the mise dirs.
+  # `mkdir -p .../.config/mise` (above) CREATES /home/tanren/.config as ROOT; left
+  # root:root (mode 755) the non-root `tanren` user can READ but NOT create sibling
+  # subdirs. jj then cannot create its per-repo secure-config state dir
+  # (`~/.config/jj/repos/<hash>`) — "Failed to determine the secure config for a
+  # repo: ... Permission denied (os error 13)" — which strands BOTH the per-spec
+  # `jj git clone` AND the tier-3 native (jj) merge. Chowning the whole tree keeps
+  # ~/.config writable for jj (and any other tool that uses it).
+  chown -R tanren:tanren /opt/tanren "${TANREN_MISE_DATA_DIR}" "${TANREN_MISE_CACHE_DIR}" /home/tanren/.config; \
   # Persist the shared-dir env for `tanren` login shells (interactive SSH) so the
   # gate's mise commands resolve the SHARED data dir. profile.d is sourced by the
   # login shell sshd starts; we also write a non-login fallback via ~/.bashrc.
@@ -284,6 +292,22 @@ RUN set -eu; \
   '; \
   # World-readable so a warm hit is a pure read; tanren keeps write for the delta.
   chmod -R a+rX "${TANREN_MISE_DATA_DIR}"
+
+# jj user-level identity DEFAULT for the `tanren` user. jj 0.42 commits with the
+# EMPTY identity (and warns "Name and email not configured ... can't be pushed to
+# remotes") until user.name/email are set. Tanren's run path sets a PER-REPO identity
+# right after `jj git clone` (`jj config set --repo user.name/email` in
+# JjWorkspaceVcsCore.openWorkspace — a bot login on the live merge/conflict-resolve
+# path, else a non-attributable default), and a `--repo` value OVERRIDES this
+# `--user` default, so the per-run identity is unchanged. This baked default is a
+# belt-and-suspenders: it gives `tanren` a usable author during the clone window
+# (silencing the empty-identity warning) and for any ad-hoc/diagnostic jj invocation,
+# so no jj commit is ever stranded on the empty identity. Written as a tanren-owned
+# ~/.config/jj/config.toml (the tree is tanren-owned by the chown above).
+RUN set -eu; \
+  mkdir -p /home/tanren/.config/jj; \
+  printf '[user]\nname = "Tanren Bot"\nemail = "bot@tanren.invalid"\n' > /home/tanren/.config/jj/config.toml; \
+  chown -R tanren:tanren /home/tanren/.config/jj
 
 RUN sed -i 's/#PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config \
   && sed -i 's/#PubkeyAuthentication yes/PubkeyAuthentication yes/' /etc/ssh/sshd_config
