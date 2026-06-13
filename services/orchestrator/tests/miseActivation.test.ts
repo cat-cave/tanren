@@ -4,7 +4,8 @@
 // (so a bare `node`/`pnpm` resolves to the project's `mise.toml`-declared toolchain),
 // while the HARNESS path (codex writer + answerer) is NEVER mise-activated (it keeps
 // the runner's isolated node, per P0a). These tests pin both halves:
-//   - `withMiseActivation` prefixes the project command with a guarded `mise activate`;
+//   - `withMiseActivation` prefixes the project command with a guarded NON-INTERACTIVE
+//     `mise activate bash --shims` (NOT the interactive hook mode — see below);
 //   - `miseProvisionCommand` is a guarded `mise trust && mise install`;
 //   - the codex exec command builders contain NO mise activation (the harness path).
 
@@ -13,9 +14,17 @@ import { miseProvisionCommand, withMiseActivation } from "../src/engine/ssh/mise
 import { buildCodexAnswererExecCommand, buildCodexExecCommand } from "../src/engine/providers/codexExecCommand.js";
 
 describe("withMiseActivation · the PROJECT-command path is mise-activated", () => {
-  it("prefixes the command with a `mise activate bash` eval, guarded on a mise.toml", () => {
+  it("prefixes the command with a NON-INTERACTIVE `--shims` activate, guarded on a mise.toml", () => {
     const wrapped = withMiseActivation("pnpm install");
-    expect(wrapped).toContain('eval "$(mise activate bash)"');
+    // SHIMS / non-interactive activation: `--shims` emits a plain POSIX
+    // `export PATH="…/shims:$PATH"` that IMMEDIATELY puts the toolchain on PATH for the
+    // rest of the `bash -c`/`sh -c` command. This is the crux of the fix.
+    expect(wrapped).toContain('eval "$(mise activate bash --shims)"');
+    // NOT the bare/hook mode: `mise activate bash` (no `--shims`) installs an INTERACTIVE
+    // precmd/chpwd hook that never fires for a non-interactive `bash -c`, and its bash-only
+    // syntax `eval`s to an error under a `sh`/dash project shell — so PATH is never set and
+    // a bare `pnpm` is `not found` (the observed apex exit-127 failure).
+    expect(wrapped).not.toContain('eval "$(mise activate bash)"');
     // GUARDED: only activates when a mise.toml is present in the cwd, so a project that
     // declared no toolchain runs unchanged (the activation is a no-op skip).
     expect(wrapped).toContain("[ -f 'mise.toml' ]");
