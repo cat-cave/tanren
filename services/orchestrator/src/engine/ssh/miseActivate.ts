@@ -9,9 +9,10 @@
 //     deploy commands that run through the gate). These run the project's DECLARED
 //     shell, which may call a bare `pnpm`/`node`/`python`. They MUST be mise-activated
 //     so those resolve to the project's declared toolchain. `withMiseActivation`
-//     prefixes them with `eval "$(mise activate bash)"`, guarded on a `mise.toml`
-//     being present in the cwd (so a project that declared no toolchain is unaffected
-//     — the activation is a no-op).
+//     prefixes them with `eval "$(mise activate bash --shims)"` (the documented
+//     non-interactive / CI activation — see `miseActivationPrelude` for WHY hook-mode
+//     is wrong here), guarded on a `mise.toml` being present in the cwd (so a project
+//     that declared no toolchain is unaffected — the activation is a no-op).
 //   - HARNESS / answerer path — `codex` (writer + Checker/Auditor). It runs on the
 //     runner's OWN isolated node (P0a installs the harness node on the system PATH and
 //     does NOT globally activate mise). This module is NEVER applied there: the codex
@@ -30,18 +31,34 @@ import { quoteSshShellArg } from "./command.js";
 // guard tests for THIS file in the command's cwd before activating.
 const MISE_CONFIG_REL_PATH = "mise.toml";
 
-// The mise activation prelude. `mise activate bash` emits the shell hook that prepends
-// the project's mise shims to PATH for the rest of the command; we `eval` it so a bare
-// `node`/`pnpm` resolves to the declared version. GUARDED: it only activates when a
-// `mise.toml` exists in the cwd, so a project that declared NO toolchain (no mise.toml
-// materialized) runs exactly as before (the activation is skipped, a pure no-op).
-// `MISE_YES=1` keeps any mise sub-action non-interactive. The whole prelude is one
-// `if … fi; ` statement chained before the real command with `;` (NOT `&&`): a project
-// with no mise.toml must still run its command — the guard is a skip, not a gate.
+// The mise activation prelude. It uses the `--shims` mode of `mise activate`, which
+// emits a plain, POSIX `export PATH="…/shims:$PATH"` that IMMEDIATELY puts the project's
+// mise shims on PATH for the rest of the `bash -c`/`sh -c` command (the shims dispatch
+// to the per-dir active version resolved from `mise.toml`); we `eval` it so a bare
+// `node`/`pnpm` resolves to the declared version.
+//
+// WHY NOT plain `eval "$(mise activate bash)"` (the hook mode): that emits an
+// INTERACTIVE shell hook (a `mise()` shim function + a `_mise_hook` precmd/chpwd hook)
+// whose PATH update fires only on an interactive prompt or a `cd` — NOT immediately for
+// the non-interactive `bash -c "<prelude>; <command>"` we run over SSH, so a bare
+// `pnpm` would not be found (the observed apex failure: `mise install` provisions
+// node+pnpm fine, then `pnpm install` dies with `sh: pnpm: not found`, exit 127). The
+// hook-mode output is also full of bash-only syntax (`__MISE_FLAGS=()` arrays,
+// `declare -f`, `[[ … ]]`), so under a non-bash project shell (e.g. a `just` recipe run
+// via `sh`/dash, the actual live failure shell) it `eval`s to a syntax error and never
+// touches PATH at all. The `--shims` export is POSIX-clean and is inherited by child
+// shells, so the toolchain survives into `just`/`sh -c` sub-invocations too.
+//
+// GUARDED: it only activates when a `mise.toml` exists in the cwd, so a project that
+// declared NO toolchain (no mise.toml materialized) runs exactly as before (the
+// activation is skipped, a pure no-op). `MISE_YES=1` keeps any mise sub-action
+// non-interactive. The whole prelude is one `if … fi; ` statement chained before the
+// real command with `;` (NOT `&&`): a project with no mise.toml must still run its
+// command — the guard is a skip, not a gate.
 function miseActivationPrelude(): string {
   return (
     `if [ -f ${quoteSshShellArg(MISE_CONFIG_REL_PATH)} ]; then ` +
-    `export MISE_YES=1; eval "$(mise activate bash)"; fi; `
+    `export MISE_YES=1; eval "$(mise activate bash --shims)"; fi; `
   );
 }
 
