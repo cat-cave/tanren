@@ -112,6 +112,35 @@ describe("research PROMPT instructs the model to emit the toolchain at current/l
   });
 });
 
+// apex v34: the research path generated `pnpm install --frozen-lockfile` for `bootstrap`,
+// which fails the cold checkout of the from-scratch template-build repo (no lockfile yet ⇒
+// ERR_PNPM_NO_LOCKFILE), stranding the scaffold + halting the run. The interview prompt
+// already carried this guidance (#496); the research prompt was the missing mirror. The
+// research prompt MUST steer a fresh-repo-safe non-frozen bootstrap that generates +
+// commits the lockfile.
+describe("research PROMPT instructs a fresh-repo-safe (non-frozen) bootstrap", () => {
+  it("does NOT recommend a frozen/locked install for `bootstrap` (would brick the cold template repo)", () => {
+    const prompt = buildResearchPrompt(request);
+    // No frozen/locked install is RECOMMENDED as the bootstrap example.
+    expect(prompt).not.toMatch(/'pnpm install --frozen-lockfile'/u);
+    const lower = prompt.toLowerCase();
+    // It steers a FRESH-REPO-SAFE bootstrap that writes the lockfile on a from-scratch repo,
+    // and explicitly forbids a frozen/locked install on the first scaffold.
+    expect(lower).toMatch(/fresh-repo-safe|fresh repo|clean checkout|cold checkout/u);
+    expect(lower).toMatch(/writes the lockfile|generate the lockfile|generates the lockfile/u);
+    expect(lower).toContain("do not use a frozen");
+    expect(lower).toContain("--frozen-lockfile");
+    // The generated lockfile is committed in the scaffold so later/CI installs reproduce.
+    expect(lower).toMatch(/committed in the scaffold|commit/u);
+  });
+
+  it("instructs the test-report convention (a test tier writes a machine-readable report)", () => {
+    const lower = buildResearchPrompt(request).toLowerCase();
+    expect(lower).toContain("machine-readable report");
+    expect(lower).toContain("test-report convention");
+  });
+});
+
 describe("the researched toolchain threads onto the lifecycle + template-build capture", () => {
   it("`wrapProviderResearcher` carries a non-empty toolchain through to the lifecycle", async () => {
     const researcher = wrapProviderResearcher(fakeResearchAdapter(tsPnpmOutput));
