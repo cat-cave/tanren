@@ -16,9 +16,11 @@ import {
   ingestGateJunit,
   invalidCiConfigGateOutcome,
   isInvalidCiConfigError,
+  isWorkspaceDepsInstallError,
   resolveBootstrapCommand,
   resolveGateConfig,
   runGateForWhen,
+  workspaceDepsInstallGateOutcome,
 } from "./gate/index.js";
 import type { CiConfigV1, CiConfigValidationError, CiYamlParseError } from "../ci/index.js";
 import { ensureWorkspaceDepsInstalled, resolveWorkspaceHeadSha } from "../workspace/index.js";
@@ -200,8 +202,22 @@ export function buildDefaultGate(
     // bootstrap` is idempotent (it reconciles an already-prepared tree as a cheap
     // no-op), and re-running it each gate is what catches a writer-added dependency
     // authored AFTER an earlier iteration's install — a one-shot latch would skip it
-    // and the gate would die on a missing binary. A real failure throws
-    // WorkspaceDepsInstallError and halts the run loudly (no silent skip).
+    // and the gate would die on a missing binary.
+    //
+    // SELF-HEALING SCAFFOLD: a `just bootstrap` (deps install) failure is almost always
+    // a defect in the WRITER's OWN authored scaffold (e.g. a `package.json` that does
+    // not install cleanly — pnpm's `ERR_PNPM_IGNORED_BUILDS`, a bad lockfile). That is
+    // WRITER-FIXABLE, so a `WorkspaceDepsInstallError` is NOT a terminal strand: it is
+    // projected onto a fail-closed `{ passed: false }` gate outcome carrying the
+    // bootstrap output (→ `gateFindings` P0: "the scaffold's `just bootstrap` failed")
+    // and routed straight back to the writer loop — exactly like the invalid-`.tanren/
+    // ci.yml` boundary above. The writer re-authors the scaffold and bootstrap is
+    // retried; the convergence answerer (the sole loop bound) terminates a scaffold the
+    // writer cannot fix within budget. ANY OTHER throw — a substrate/transport fault, OR
+    // a `WorkspaceMiseProvisionError` (the declared-toolchain provision, NOT writer-
+    // fixable) — propagates loudly and halts the run (no-silent-fallback). Note the mise
+    // provision runs at workspace-prep BEFORE this loop, so it never reaches here; this
+    // catch only ever sees the project's `just bootstrap`.
     //
     // The command is the resolved one (an `input.bootstrapCommand` override or the
     // repo's `.tanren/ci.yml` `bootstrap.run`, conventionally `just bootstrap`), or —
@@ -210,14 +226,25 @@ export function buildDefaultGate(
     // Tanren names NO stack and makes NO greenfield-vs-frozen choice: that concern
     // lives inside the project's `just bootstrap` recipe.
     const resolvedInstallCommand = await installCommandPromise;
-    await ensureWorkspaceDepsInstalled({
-      ssh: input.ssh,
-      target,
-      workspacePath,
-      ...(resolvedInstallCommand === undefined ? {} : { command: resolvedInstallCommand }),
-      ...(input.appEnv === undefined ? {} : { appEnv: input.appEnv }),
-      timeoutMs: input.timeoutMs,
-    });
+    try {
+      await ensureWorkspaceDepsInstalled({
+        ssh: input.ssh,
+        target,
+        workspacePath,
+        ...(resolvedInstallCommand === undefined ? {} : { command: resolvedInstallCommand }),
+        ...(input.appEnv === undefined ? {} : { appEnv: input.appEnv }),
+        timeoutMs: input.timeoutMs,
+      });
+    } catch (error: unknown) {
+      // WRITER-FIXABLE scaffold: route the deps-install failure back to the writer loop
+      // as a P0 finding (fail-closed, carrying the bootstrap output) instead of letting
+      // it escape and terminally strand the spec. Any non-deps-install throw (substrate
+      // fault, mise provision) re-throws and halts the run loudly.
+      if (isWorkspaceDepsInstallError(error)) {
+        return workspaceDepsInstallGateOutcome(error, when, appendEvent, taskId);
+      }
+      throw error;
+    }
     // `resolved` is the `{ ok }` branch here (the `{ invalid }` branch returned above;
     // an `undefined` is impossible since resolveGateConfig always yields a config or
     // throws). Narrow to the parsed config for the tier run.
