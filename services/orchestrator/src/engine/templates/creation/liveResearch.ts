@@ -67,6 +67,15 @@ export function buildResearchPrompt(request: TemplateCreationRequest): string {
     ...(request.note === undefined || request.note.trim() === "" ? [] : [`- operator note: ${request.note}`]),
     "",
     "Decide the concrete `just`-target lifecycle commands for this stack (bootstrap / tier1 / tier2 / tier3 / build / deploy), filling each with the ACTUAL command(s) for the researched toolchain. tier1 is the fast format+lint+typecheck gate, tier2 the test gate, tier3 the pre-merge/e2e gate.",
+    // FRESH-REPO-SAFE BOOTSTRAP (apex v34) — mirror the interview architecture step
+    // (forge/interview/prompt.ts): `bootstrap` runs on a COLD CHECKOUT of a from-scratch
+    // template-build repo that has NO committed lockfile yet, so the FIRST bootstrap must
+    // be a plain install that GENERATES the lockfile (e.g. `pnpm install`), never a
+    // frozen/locked install that PRESUMES a committed lockfile. A `--frozen-lockfile`
+    // (or `npm ci` / `cargo build --locked` / `uv sync --frozen`) here fails the cold
+    // bootstrap before any lockfile exists (ERR_PNPM_NO_LOCKFILE), stranding the scaffold.
+    // The generated lockfile is committed in the scaffold so later/CI installs reproduce.
+    "`bootstrap` MUST be a FRESH-REPO-SAFE plain install that WRITES the lockfile on a from-scratch repo (e.g. 'pnpm install' | 'cargo fetch' | 'uv sync'). Do NOT use a frozen/locked install ('--frozen-lockfile' / 'npm ci' / 'cargo build --locked' / 'uv sync --frozen'): this template-build repo is a COLD CHECKOUT with NO committed lockfile yet, so a frozen/locked install fails the first bootstrap before any lockfile exists. The generated lockfile is committed in the scaffold so later/CI installs are reproducible.",
     // TOOLCHAIN (environment-management.md §3 Layer 1) — mirror the interview
     // architecture step (forge/interview/prompt.ts): the research MUST also declare the
     // tool VERSIONS the stack needs, provisioned at workspace-prep via `mise` in user
@@ -76,6 +85,10 @@ export function buildResearchPrompt(request: TemplateCreationRequest): string {
     // (the anti-stale-version rule) — never years-old versions. Tanren names no tool.
     "Decide the project TOOLCHAIN in `toolchain`: a list of { name, version } entries the researched stack needs (the runtime + package manager + any pinned tools), so Tanren can provision it via mise before bootstrap. Each `name` is a `mise` tool name (node/pnpm/python/go/rust/…); each `version` is a version string. Use CURRENT/LTS versions a fresh project would adopt TODAY (e.g. [{ name: 'node', version: '24' }, { name: 'pnpm', version: '11' }] | [{ name: 'python', version: '3.14' }] | [{ name: 'rust', version: 'stable' }, { name: 'go', version: '1.23' }]) — NEVER years-old versions — unless the brief explicitly calls for a legacy/pinned/nightly toolchain. Omit `toolchain` (or leave it empty) ONLY for a stack with NO tool mise can provision (a pure-shell / system-package stack that provisions inside its own bootstrap).",
     "Decide which full-bar gates this stack supports (typecheck / lint / test / mutation / junit / bdd) — only mark a gate present if the researched toolchain genuinely provides it (a gate that is green-by-accident must NOT be claimed). When mutation is present, give the concrete mutation command in mutationStep.",
+    // TEST-REPORT CONVENTION — mirror the interview architecture step
+    // (forge/interview/prompt.ts): a tier that runs tests should write a
+    // machine-readable report to a known path, so the gate verdict is parseable.
+    "A tier that runs tests should write a machine-readable report to a known path (the test-report convention) — include the report flag/path in the tier command (e.g. a junit reporter writing to 'reports/junit.xml') when the researched test runner supports it.",
     "Summarize the rationale (the chosen tooling + why) in `summary`.",
   ];
   return lines.join("\n");
