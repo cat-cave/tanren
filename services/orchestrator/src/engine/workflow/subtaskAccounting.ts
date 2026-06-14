@@ -45,10 +45,19 @@ function runAuthRef(input: SubtaskLoopInput): string {
 // CONCURRENT run on the SAME credential can be COUNTED at drawdown-measurement time.
 // Best-effort + LOUD-but-non-fatal: a stamp failure must never fail the run (the
 // reconcile then falls back to attributing the full delta — the prior behavior), but
-// it is surfaced so the over-attribution risk is not silent. Runs org-scoped via
-// `input.pool` (the worker's job-org-scoped loop client).
+// it is surfaced so the over-attribution risk is not silent.
+//
+// PLANE-SPLIT: this is an `UPDATE runs`, a control-plane table the de-privileged data
+// plane can no longer write directly (migration 0035). So it routes through the
+// `runStateWriter` (the control plane) when remote-writes is on — org resolves from the
+// ambient per-job scope server-side; absent a writer, the byte-identical in-process
+// UPDATE on `input.pool` (the dev path).
 async function stampRunAuthRef(input: SubtaskLoopInput): Promise<void> {
   try {
+    if (input.runStateWriter !== undefined) {
+      await input.runStateWriter.setRunAuthRef({ runId: input.context.runId, authRef: runAuthRef(input) });
+      return;
+    }
     await input.pool.query(`UPDATE runs SET auth_ref = $2 WHERE run_id = $1 AND auth_ref IS DISTINCT FROM $2`, [
       input.context.runId,
       runAuthRef(input),

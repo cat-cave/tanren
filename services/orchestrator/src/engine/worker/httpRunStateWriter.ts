@@ -18,6 +18,7 @@ import type {
   ClearRunPercolationPendingInput,
   CreateQueuedRunInput,
   CreateSpecRemoteInput,
+  FinalizeLandInput,
   FinalizeRunInput,
   FinalizeRunResult,
   InsertTaskInput,
@@ -25,6 +26,7 @@ import type {
   RecordCostInput,
   ReconcileCostInput,
   RunStateWriter,
+  SetRunAuthRefInput,
   SetRunPercolationReexecIdInput,
   SetRunPrUrlInput,
   SetRunSpeculativeBaseInput,
@@ -102,6 +104,18 @@ export class HttpRunStateWriter implements RunStateWriter {
 
   async setRunPrUrl(input: SetRunPrUrlInput): Promise<void> {
     await this.post<void>("/internal/set-run-pr-url", input);
+  }
+
+  async setRunAuthRef(input: SetRunAuthRefInput): Promise<void> {
+    // The subtask loop carries no explicit org, so resolve it from the ambient
+    // per-job scope when omitted (like the `tasks` ops).
+    await this.post<void>("/internal/set-run-auth-ref", { ...input, orgId: input.orgId ?? this.requireOrgId() });
+  }
+
+  async finalizeLand(input: FinalizeLandInput): Promise<{ auditId: string }> {
+    // The §5 durable land transaction carries the org explicitly (the merge stage holds
+    // the run context), so no ambient lookup is needed — mirroring finalizeRun.
+    return this.post<{ auditId: string }>("/internal/finalize-land", input);
   }
 
   async setSpecStatus(input: SetSpecStatusInput): Promise<void> {

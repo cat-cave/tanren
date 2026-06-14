@@ -19,6 +19,7 @@ import {
   type BuildBootstrapWorkspacePort,
 } from "../dag/jjLocalBootstrap.js";
 import type { AncestorStack } from "../dag/ancestorStack.js";
+import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import { PgIntegrationNodeModel } from "../dag/integrationNodesPg.js";
 import type { LiveJjWorkspace, LiveJjWorkspaceDeps } from "../providers/liveJjWorkspace.js";
 import {
@@ -143,15 +144,26 @@ export interface BootstrapStackHeadShaWriteBackFacts {
 export type BootstrapStackHeadShaWriteBack = (facts: BootstrapStackHeadShaWriteBackFacts) => Promise<void>;
 
 /**
- * WS-A PR-8c — the Pg-backed {@link BootstrapStackHeadShaWriteBack} the run worker wires
- * (mirrors `buildEagerBaseNodeUpsert`): an org-scoped UPDATE of `runs.ancestor_stack` over
- * the worker's real pool, so the write lands RLS-scoped (an off-scope run sees zero rows
- * and updates nothing). It replaces the WHOLE jsonb with the head-sha-filled ordered stack
- * — the assembly is the authoritative source of the stack's per-ancestor shas, and the
- * order is unchanged, so this is idempotent.
+ * WS-A PR-8c — the Pg-backed {@link BootstrapStackHeadShaWriteBack} the run worker wires:
+ * an UPDATE of `runs.ancestor_stack` with the head-sha-filled ordered stack. It replaces
+ * the WHOLE jsonb — the assembly is the authoritative source of the stack's per-ancestor
+ * shas, and the order is unchanged, so this is idempotent.
+ *
+ * PLANE-SPLIT: `runs` is a CONTROL-PLANE table the de-privileged data plane can no longer
+ * write directly (migration 0035). So when a `RunStateWriter` is wired (remote-writes on)
+ * this routes through it — reusing `setRunSpeculativeBase`, whose SQL is BYTE-IDENTICAL
+ * (`UPDATE runs SET ancestor_stack = $2::jsonb WHERE run_id = $1`). Absent a writer (the
+ * in-process dev path), it runs the same org-scoped UPDATE on the worker pool directly.
  */
-export function buildBootstrapStackHeadShaWriteBack(pool: pg.Pool): BootstrapStackHeadShaWriteBack {
+export function buildBootstrapStackHeadShaWriteBack(
+  pool: pg.Pool,
+  writer?: RunStateWriter,
+): BootstrapStackHeadShaWriteBack {
   return async (facts) => {
+    if (writer !== undefined) {
+      await writer.setRunSpeculativeBase({ runId: facts.runId, orgId: facts.orgId, ancestorStack: facts.stack });
+      return;
+    }
     await runWithOrgScope(pool, facts.orgId, async (client) => {
       await client.query("UPDATE runs SET ancestor_stack = $2::jsonb WHERE run_id = $1", [
         facts.runId,

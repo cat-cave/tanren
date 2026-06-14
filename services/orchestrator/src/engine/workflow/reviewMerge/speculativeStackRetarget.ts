@@ -7,6 +7,7 @@
 
 import { type AncestorStack, resolveAncestorStack } from "../../dag/ancestorStack.js";
 import type { EventStore } from "../../eventStore.js";
+import type { RunStateWriter } from "../../contracts/runStateWriter.js";
 import type { ReviewMergeRunContext, RunStateClient } from "./context.js";
 import type { DispatchedIntegration, MergeProbe } from "./mergeDispatchTypes.js";
 
@@ -126,17 +127,7 @@ export function resolveStackRetarget(
  * (idempotent) stack-drop persists; no `retargetBase` / `merge.retargeted` is emitted.
  * The merge HOLD is the caller's concern and is UNCHANGED; this only walks the BASE.
  */
-async function retargetStackWalk(args: {
-  pool: RunStateClient;
-  eventStore: EventStore;
-  context: ReviewMergeRunContext;
-  taskId: string;
-  integration: DispatchedIntegration;
-  prNumber: number;
-  probe: MergeProbe;
-  speculative: SpeculativeState;
-  defaultBranch: string;
-}): Promise<void> {
+async function retargetStackWalk(args: SpeculativeRetargetArgs & { defaultBranch: string }): Promise<void> {
   const { toBase, remainingStack } = resolveStackRetarget(
     args.speculative.ancestorStack,
     args.speculative.mergedSpecIds,
@@ -164,9 +155,23 @@ async function retargetStackWalk(args: {
       },
     });
   }
-  // Drop the merged heads from `runs.ancestor_stack` (additive PR-1 dual-write column).
-  // Only when the stack actually shrank, so a steady-state re-entry issues no write.
+  // Drop the merged heads from `runs.ancestor_stack`. Only when the stack actually shrank,
+  // so a steady-state re-entry issues no write.
+  //
+  // PLANE-SPLIT: `runs` is a CONTROL-PLANE table the de-privileged data plane can no longer
+  // write directly (migration 0035). So when a `RunStateWriter` + org are wired (remote-writes
+  // on) this routes through `setRunSpeculativeBase`, whose SQL is BYTE-IDENTICAL
+  // (`UPDATE runs SET ancestor_stack = $2::jsonb WHERE run_id = $1`); absent them (the
+  // in-process dev path), it runs the same UPDATE on the pool directly.
   if (remainingStack.length !== args.speculative.ancestorStack.length) {
+    if (args.runStateWriter !== undefined && args.orgId !== undefined) {
+      await args.runStateWriter.setRunSpeculativeBase({
+        runId: args.context.runId,
+        orgId: args.orgId,
+        ancestorStack: remainingStack,
+      });
+      return;
+    }
     await args.pool.query("UPDATE runs SET ancestor_stack = $2::jsonb WHERE run_id = $1", [
       args.context.runId,
       JSON.stringify(remainingStack),
@@ -178,6 +183,14 @@ async function retargetStackWalk(args: {
 export interface SpeculativeRetargetArgs {
   pool: RunStateClient;
   eventStore: EventStore;
+  /**
+   * PLANE-SPLIT: the run-state writer the `runs.ancestor_stack` head-drop routes through
+   * when remote-writes is on (the de-privileged data plane can't `UPDATE runs` directly).
+   * Absent ⇒ the in-process UPDATE on `pool` (the dev path), byte-identical.
+   */
+  runStateWriter?: RunStateWriter;
+  /** The run's org (the ambient per-job org), required to scope the remote `setRunSpeculativeBase`. */
+  orgId?: string;
   context: ReviewMergeRunContext;
   taskId: string;
   integration: DispatchedIntegration;

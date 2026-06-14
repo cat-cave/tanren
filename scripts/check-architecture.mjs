@@ -25,11 +25,11 @@ const roadmapDocs = ["PROJECT_BRIEF.md", "ROADMAP.md", "docs/architecture/autono
 const vendoredData = ["services/orchestrator/src/engine/costs/pricing/model_prices.json", "cspell.json"];
 const lineMaxExclusions = new Set([...roadmapDocs, ...vendoredData, "pnpm-lock.yaml", "justfile"]);
 const invariantDocExclusions = new Set(["PROJECT_BRIEF.md", "docs/contracts/architecture-checks.md"]);
+const p3bProof = /(direct INSERT INTO events|same event \(contrast\)|reported event is DENIED direct)/su;
+const p3cProof = /merge-LAND finalize \(events \+ specs\) by the data-plane role/su;
 const rawEventWriteProofs = [
-  [
-    "services/orchestrator/tests/planeSplitP3bDeprivilege.integration.test.ts",
-    /REJECTS a direct INSERT INTO events by the data-plane role|control-plane tanren_app role CAN insert the same event \(contrast\)/su,
-  ],
+  ["services/orchestrator/tests/planeSplitP3bDeprivilege.integration.test.ts", p3bProof],
+  ["services/orchestrator/tests/planeSplitP3cDeprivilege.integration.test.ts", p3cProof],
   ["scripts/smoke/plane-split-deprivilege.ts", /Assert a direct `events` INSERT by the de-privileged/su],
 ];
 const requiredDocs = [

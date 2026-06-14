@@ -11,6 +11,7 @@ import type {
   ClearRunPercolationPendingInput,
   InsertTaskInput,
   MergeRunVerifiedAncestorShaInput,
+  SetRunAuthRefInput,
   SetRunPercolationReexecIdInput,
   SetRunPrUrlInput,
   SetRunSpeculativeBaseInput,
@@ -34,6 +35,18 @@ export async function applySetRunStatus(client: QueryClient, input: SetRunStatus
 /** The `UPDATE runs SET pr_url` after the draft PR is opened. */
 export async function applySetRunPrUrl(client: QueryClient, input: SetRunPrUrlInput): Promise<void> {
   await client.query("UPDATE runs SET pr_url = $2 WHERE run_id = $1", [input.runId, input.prUrl]);
+}
+
+/**
+ * Stamp `runs.auth_ref` (subtask-accounting concurrent-credential dedup). Idempotent —
+ * `WHERE auth_ref IS DISTINCT FROM $2` makes a re-stamp of the same value a no-op. The
+ * string is byte-identical to the inline `stampRunAuthRef` UPDATE.
+ */
+export async function applySetRunAuthRef(client: QueryClient, input: SetRunAuthRefInput): Promise<void> {
+  await client.query("UPDATE runs SET auth_ref = $2 WHERE run_id = $1 AND auth_ref IS DISTINCT FROM $2", [
+    input.runId,
+    input.authRef,
+  ]);
 }
 
 /** The `UPDATE specs SET status` (`in_flight` / merge-outcome). */

@@ -24,6 +24,7 @@ import {
   applyClearRunPercolationPending,
   applyInsertTask,
   applyMergeRunVerifiedAncestorSha,
+  applySetRunAuthRef,
   applySetRunPercolationReexecId,
   applySetRunPrUrl,
   applySetRunSpeculativeBase,
@@ -33,8 +34,10 @@ import {
   applySupersedeQueuedPlannerTask,
   applyUpdateTask,
 } from "../../engine/worker/runStateLifecycleSql.js";
+import { applyFinalizeLand } from "../../engine/merge/mergeAuthorityLandFinalizer.js";
 import { verifyInternalPeer, type RunStateWriteRouteDeps } from "./internalWriteShared.js";
 import { ancestorStackSchema } from "../../engine/dag/ancestorStack.js";
+import { AuditEnvelope } from "../../engine/events/schemas/audit.js";
 
 const setRunStatusSchema = z.object({
   runId: z.string().min(1),
@@ -47,6 +50,25 @@ const setRunPrUrlSchema = z.object({
   runId: z.string().min(1),
   orgId: z.string().min(1),
   prUrl: z.string().min(1),
+});
+
+const setRunAuthRefSchema = z.object({
+  runId: z.string().min(1),
+  orgId: z.string().min(1),
+  authRef: z.string().min(1),
+});
+
+const finalizeLandSchema = z.object({
+  orgId: z.string().min(1),
+  runId: z.string().min(1),
+  specId: z.string().min(1),
+  projectId: z.string().min(1),
+  taskId: z.string().min(1),
+  prUrl: z.string().min(1),
+  prNumber: z.number().int(),
+  integration: z.enum(["direct_merge", "native_queue"]),
+  mergeSha: z.string().min(1),
+  auditEnvelope: AuditEnvelope,
 });
 
 const setSpecStatusSchema = z.object({
@@ -159,6 +181,33 @@ export function registerRunStateLifecycleRoutes(app: Hono, deps: RunStateWriteRo
     }
     await runWithOrgScope(deps.pool, parsed.data.orgId, (client) => applySetRunPrUrl(client, parsed.data));
     return c.body(null, 204);
+  });
+
+  app.post("/internal/set-run-auth-ref", async (c) => {
+    if (!authnPeer(c)) {
+      return c.json({ error: "untrusted_peer" }, 401);
+    }
+    const parsed = setRunAuthRefSchema.safeParse(await c.req.json().catch(() => {}));
+    if (!parsed.success) {
+      return c.json({ error: "invalid_set_run_auth_ref", issues: parsed.error.issues }, 400);
+    }
+    await runWithOrgScope(deps.pool, parsed.data.orgId, (client) => applySetRunAuthRef(client, parsed.data));
+    return c.body(null, 204);
+  });
+
+  // The §5 durable merge-LAND finalize: `merge.completed` + the guarded spec `merged`
+  // flip in ONE org-scoped transaction. Returns `{ auditId }` (the run id) — the
+  // worker's `finalizeLand` returns it as the land's durable handle.
+  app.post("/internal/finalize-land", async (c) => {
+    if (!authnPeer(c)) {
+      return c.json({ error: "untrusted_peer" }, 401);
+    }
+    const parsed = finalizeLandSchema.safeParse(await c.req.json().catch(() => {}));
+    if (!parsed.success) {
+      return c.json({ error: "invalid_finalize_land", issues: parsed.error.issues }, 400);
+    }
+    await runWithOrgScope(deps.pool, parsed.data.orgId, (client) => applyFinalizeLand(client, parsed.data));
+    return c.json({ auditId: parsed.data.runId });
   });
 
   app.post("/internal/set-spec-status", async (c) => {

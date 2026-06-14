@@ -24,6 +24,7 @@
 // conflict-resolver hook + the recoverable `merge.conflict` outcome, NOT merged. So a
 // stale/conflicting branch is DETECTED and routed natively, never via a forge merge API.
 
+import { getJobOrgId } from "@tanren/db";
 import type { MergeIntegration } from "../../config/shared.js";
 import type { RunStateWriter } from "../../contracts/runStateWriter.js";
 import { applySpeculativeRetarget, resolveSpeculativeState } from "./speculativeStackRetarget.js";
@@ -120,6 +121,11 @@ export async function mergeForRun(input: MergeForRunInput): Promise<MergeForRunR
     await applySpeculativeRetarget({
       pool: input.pool,
       eventStore,
+      // PLANE-SPLIT: route the `runs.ancestor_stack` head-drop through the control plane
+      // when remote-writes is on (the de-privileged data plane can't UPDATE runs). The org
+      // is the ambient per-job org the worker set (`runWithJobOrgId`), as the task ops use.
+      ...(input.runStateWriter !== undefined && { runStateWriter: input.runStateWriter }),
+      ...(getJobOrgId() !== undefined && { orgId: getJobOrgId() }),
       context,
       taskId,
       integration,

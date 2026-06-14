@@ -234,4 +234,35 @@ describeDb("plane-split P3b — the de-privileged tanren_dataplane role (real PG
     const events = await ownerPool.query("SELECT 1 FROM events WHERE run_id = $1", [RUN]);
     expect(events.rowCount).toBe(1);
   });
+
+  // (f) APEX v34 — the native JUnit ingest's `ci.tests.reported` event. The per-test
+  // `ci_test_results` rows stay a DATA-PLANE write (the role keeps that grant), but the
+  // summary event lands in `events` — so a direct emit by the data-plane role is REJECTED
+  // (the live "native JUnit ingest failed (non-blocking): permission denied for table
+  // events"). The per-test ROWS still write directly; only the event routes through the
+  // control plane (the injected EventStore). Assert both halves.
+  it("(f) the JUnit ingest writes ci_test_results directly but its ci.tests.reported event is DENIED direct", async () => {
+    // The per-test grain rows are a data-plane table the role STILL writes directly.
+    const rows = await inOrgScope(dataPlanePool, (client) =>
+      client.query(
+        `INSERT INTO ci_test_results
+           (id, project_id, org_id, test_id, file, suite, head_sha, run_id, attempt, outcome, duration_ms, retries, observed_at)
+         VALUES ($5, $1, $2, 'add › adds', 'src/math.test.ts', 'add', $3, $4, 1, 'passed', 10, 0, now())`,
+        [PROJECT, ORG, "f".repeat(40), RUN, "00000000-0000-0000-0000-000000000001"],
+      ),
+    );
+    expect(rows.rowCount).toBe(1);
+    // But the `ci.tests.reported` summary event is a control-plane `events` write — DENIED
+    // directly, so the ingest MUST route it through the injected EventStore (the writer).
+    // (The control-plane role CAN write `events` — proven generically in (a)/(e) above.)
+    await expect(
+      inOrgScope(dataPlanePool, (client) =>
+        client.query(
+          `INSERT INTO events (run_id, project_id, org_id, event_type, payload)
+           VALUES ($1, $2, $3, 'ci.tests.reported', '{}'::jsonb)`,
+          [RUN, PROJECT, ORG],
+        ),
+      ),
+    ).rejects.toMatchObject({ code: "42501" });
+  });
 });

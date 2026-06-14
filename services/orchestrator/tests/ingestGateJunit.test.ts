@@ -12,6 +12,8 @@ import { describe, expect, it } from "vitest";
 import { ingestGateJunit } from "../src/engine/workflow/gate/ingestGateJunit.js";
 import type { RunnerHandle } from "../src/engine/contracts/allocator.js";
 import type { RunnerCommand, CommandResult, CommandSubstrate } from "../src/engine/contracts/commandSubstrate.js";
+import type { AppendEventInput, EventStore } from "../src/engine/eventStore.js";
+import type { EventName } from "../src/engine/events/index.js";
 
 const TARGET: RunnerHandle = {
   backend: "ssh",
@@ -63,10 +65,15 @@ class JunitSsh implements CommandSubstrate {
   }
 }
 
-/** A fake client recording the per-test INSERTs + the events append. */
+/**
+ * A fake client recording the per-test `ci_test_results` INSERTs. PLANE-SPLIT: it
+ * REJECTS any `events` write — the `ci.tests.reported` append must NOT ride the
+ * (de-privileged) ingest client; it routes through the injected `EventStore` (the
+ * control-plane writer in production). A direct `events` INSERT here mirrors the live
+ * `permission denied for table events`, so the test fails loudly if the routing regresses.
+ */
 class RecordingClient {
   readonly inserts: unknown[][] = [];
-  readonly events: string[] = [];
   async query(sql: string, params: unknown[] = []): Promise<{ rows: unknown[]; rowCount: number }> {
     const text = sql.trim();
     if (
@@ -81,21 +88,36 @@ class RecordingClient {
       this.inserts.push(params);
       return { rows: [], rowCount: 1 };
     }
-    // The PgEventStore append (the `event_type` column marks it as the events write).
+    // The data-plane ingest client must NEVER write `events` directly — that is the
+    // control-plane writer's job (the plane-split boundary). Mimic the de-privileged deny.
     if (text.startsWith("INSERT INTO") && text.includes("event_type")) {
-      this.events.push(String(params[4] ?? ""));
-      return { rows: [], rowCount: 1 };
+      throw Object.assign(new Error("permission denied for table events"), { code: "42501" });
     }
     return { rows: [], rowCount: 0 };
   }
 }
 
-function deps(ssh: CommandSubstrate, client: RecordingClient, expectReport: boolean, tier = "slow") {
+/** A fake control-plane-routed event store recording the `ci.tests.reported` append. */
+class RecordingEventStore implements EventStore {
+  readonly events: EventName[] = [];
+  async append<N extends EventName>(input: AppendEventInput<N>): Promise<void> {
+    this.events.push(input.eventType);
+  }
+}
+
+function deps(
+  ssh: CommandSubstrate,
+  client: RecordingClient,
+  eventStore: EventStore,
+  expectReport: boolean,
+  tier = "slow",
+) {
   return {
     ssh,
     target: TARGET,
     workspacePath: "/ws",
     client: client as unknown as Pick<pg.Pool | pg.PoolClient, "query">,
+    eventStore,
     runId: "run_1",
     projectId: "proj_1",
     orgId: "org_1",
@@ -113,41 +135,52 @@ function deps(ssh: CommandSubstrate, client: RecordingClient, expectReport: bool
 describe("ingestGateJunit — native in-process per-test ingest", () => {
   it("parses + ingests the runner's JUnit report under the run's org", async () => {
     const client = new RecordingClient();
-    const result = await ingestGateJunit(deps(new JunitSsh({ kind: "present", xml: JUNIT_XML }), client, true));
+    const eventStore = new RecordingEventStore();
+    const result = await ingestGateJunit(
+      deps(new JunitSsh({ kind: "present", xml: JUNIT_XML }), client, eventStore, true),
+    );
     expect(result).toEqual({ kind: "ingested", inserted: 2 });
     // Two per-test rows persisted, org-stamped (org_id is param $3).
     expect(client.inserts).toHaveLength(2);
     expect(client.inserts.every((p) => p[2] === "org_1")).toBe(true);
-    // A `ci.tests.reported` summary event was emitted in-process.
-    expect(client.events).toContain("ci.tests.reported");
+    // PLANE-SPLIT: the `ci.tests.reported` summary event routed through the (control-plane)
+    // EventStore, NOT the de-privileged ingest client (which throws on a direct events write).
+    expect(eventStore.events).toContain("ci.tests.reported");
   });
 
   it("expectReport=false + absent report → a QUIET no-op (no junit-writing test step ran)", async () => {
     const client = new RecordingClient();
-    const result = await ingestGateJunit(deps(new JunitSsh({ kind: "absent" }), client, false));
+    const eventStore = new RecordingEventStore();
+    const result = await ingestGateJunit(deps(new JunitSsh({ kind: "absent" }), client, eventStore, false));
     // No grain expected (e.g. the scaffold fast tier = lint+typecheck) ⇒ skipped, quiet.
     expect(result).toEqual({ kind: "skipped_no_test_step" });
     expect(client.inserts).toHaveLength(0);
-    expect(client.events).toHaveLength(0);
+    expect(eventStore.events).toHaveLength(0);
   });
 
   it("expectReport=true + absent report → LOUD missing_expected(absent) (flaky-intelligence blind)", async () => {
     const client = new RecordingClient();
-    const result = await ingestGateJunit(deps(new JunitSsh({ kind: "absent" }), client, true));
+    const result = await ingestGateJunit(
+      deps(new JunitSsh({ kind: "absent" }), client, new RecordingEventStore(), true),
+    );
     expect(result).toEqual({ kind: "missing_expected", reason: "absent" });
     expect(client.inserts).toHaveLength(0);
   });
 
   it("expectReport=true + empty report → LOUD missing_expected(empty)", async () => {
     const client = new RecordingClient();
-    const result = await ingestGateJunit(deps(new JunitSsh({ kind: "empty" }), client, true));
+    const result = await ingestGateJunit(
+      deps(new JunitSsh({ kind: "empty" }), client, new RecordingEventStore(), true),
+    );
     expect(result).toEqual({ kind: "missing_expected", reason: "empty" });
     expect(client.inserts).toHaveLength(0);
   });
 
   it("expectReport=true + a failed SSH read → LOUD missing_expected(read_failed), distinct from absent", async () => {
     const client = new RecordingClient();
-    const result = await ingestGateJunit(deps(new JunitSsh({ kind: "read_failed" }), client, true));
+    const result = await ingestGateJunit(
+      deps(new JunitSsh({ kind: "read_failed" }), client, new RecordingEventStore(), true),
+    );
     expect(result).toEqual({ kind: "missing_expected", reason: "read_failed" });
     expect(client.inserts).toHaveLength(0);
   });

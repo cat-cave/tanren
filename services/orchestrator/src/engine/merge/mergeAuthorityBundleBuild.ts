@@ -27,14 +27,22 @@ import type { GateOutcome } from "../workflow/gate/index.js";
 import type { ReviewVerdict } from "../contracts/dagLifecycle.js";
 import type { ProjectBudgetState } from "../contracts/dagWalker.js";
 import type { ResolvedVcsToken } from "../contracts/codeHostTypes.js";
+import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { RawBudgetScope, RawDemoVerification, RawHitlSignoff } from "./mergeAuthorityInputs.js";
 import type { MergeAuthorityBundle, MergeForRunInput } from "../workflow/reviewMerge/mergeDispatchTypes.js";
 import type { ReviewMergeRunContext } from "../workflow/reviewMerge/context.js";
 
 /** Everything the call site holds to build the bundle for one run's land. */
 export interface BuildMergeAuthorityBundleInput {
-  /** The real pool the durable finalize opens its org-scoped transaction on. */
+  /** The real pool the durable finalize opens its org-scoped transaction on (when no remote writer). */
   pool: pg.Pool;
+  /**
+   * PLANE-SPLIT: the run-state writer the durable land finalize routes its
+   * `merge.completed` + spec `merged` flip through when remote-writes is on (the
+   * de-privileged data plane cannot write `events`/`specs` directly). Absent ⇒ the
+   * in-process finalize on `pool` (the dev path), byte-identical.
+   */
+  runStateWriter?: RunStateWriter;
   /** The shared (timed) GitHub HTTP client the land `CodeHost` is built over. */
   githubHttp: GitHubHttpClient;
   /** Resolve the active GitHub token (the SAME closure the merge probe resolves with). */
@@ -115,7 +123,7 @@ export function buildMergeAuthorityBundle(input: BuildMergeAuthorityBundleInput)
   return {
     codeHost: codeHostFor(input.githubHttp, input.resolveToken),
     orgId: input.orgId,
-    finalizerFor: (context) => buildLandFinalizer(input.pool, context),
+    finalizerFor: (context) => buildLandFinalizer(input.pool, context, input.runStateWriter),
     gateConfigHash: "",
     policyVersion: String(input.policyVersion),
     gateOutcome: input.gateOutcome,
@@ -180,6 +188,9 @@ export async function buildBundleForMergeStage(
   const findings = await resolveLandTimeFindings(pool, row.org_id, context.runId);
   return buildMergeAuthorityBundle({
     pool,
+    // PLANE-SPLIT: route the durable land finalize through the control plane when a
+    // remote writer is wired (the de-privileged data plane can't write events/specs).
+    ...(input.runStateWriter !== undefined && { runStateWriter: input.runStateWriter }),
     githubHttp: input.githubHttp,
     resolveToken: () =>
       resolveVcsToken(input.githubHttp, {
