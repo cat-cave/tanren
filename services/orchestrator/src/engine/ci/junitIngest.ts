@@ -1,15 +1,20 @@
 // CI-intelligence ingestion (foundation): the persistence + event side of the
-// JUnit upload. The route resolves the run (system-scoped, since the runner-push
-// carries no tenant context), then calls `ingestJunitResults` UNDER that run's
-// org scope so the per-test INSERTs and the emitted `ci.tests.reported` event
-// both respect RLS (deny-by-default; a write off the wrong org is denied 42501).
+// JUnit upload. The native gate ingest resolves the run under its org scope, then calls
+// `ingestJunitResults` so the per-test INSERTs respect RLS (deny-by-default).
+//
+// PLANE-SPLIT: `ci_test_results` is a DATA-PLANE table (the de-privileged
+// `tanren_dataplane` role keeps full write on it), so the per-test rows INSERT directly
+// on the org-scoped `client`. The emitted `ci.tests.reported` event lands in `events` —
+// a CONTROL-PLANE table the data plane can no longer write directly (migration 0031) —
+// so it routes through the caller's `EventStore` (the run-state writer when remote-writes
+// is on, else the in-process `PgEventStore`), exactly like every other workflow event.
 //
 // Append-only: each upload inserts one row per parsed `<testcase>` for this
 // (run, attempt). It never updates — per-test HISTORY is the asset.
 
 import type pg from "pg";
 import { randomUUID } from "node:crypto";
-import { PgEventStore } from "../eventStore.js";
+import type { EventStore } from "../eventStore.js";
 import type { JunitReport } from "./junit.js";
 
 type WriteClient = Pick<pg.Pool | pg.PoolClient, "query">;
@@ -22,8 +27,15 @@ export interface JunitRunContext {
 }
 
 export interface IngestJunitInput {
-  /** The org-scoped client (inside `runWithOrgScope`) the INSERT + event ride. */
+  /** The org-scoped client the per-test `ci_test_results` INSERTs run on (a data-plane table). */
   client: WriteClient;
+  /**
+   * The event store the `ci.tests.reported` append routes through — the run-state writer
+   * (control plane) when remote-writes is on, else the in-process `PgEventStore`. `events`
+   * is a control-plane table the data plane cannot write directly, so the event NEVER goes
+   * straight to `client`.
+   */
+  eventStore: EventStore;
   run: JunitRunContext;
   report: JunitReport;
   /** The commit SHA the report was produced against (CI `github.sha`). */
@@ -77,9 +89,9 @@ export async function ingestJunitResults(input: IngestJunitInput): Promise<Inges
     );
   }
 
-  // Emit on the SAME org-scoped client so the event INSERT joins this txn + RLS.
-  const events = new PgEventStore(client);
-  await events.append({
+  // Emit through the caller's event store — the control-plane writer when remote-writes
+  // is on (the data plane cannot INSERT `events` directly), else the in-process store.
+  await input.eventStore.append({
     runId: run.runId,
     projectId: run.projectId,
     eventType: "ci.tests.reported",

@@ -26,6 +26,7 @@ import type { TokenUsage } from "../providers/types.js";
 import type { ActorContext } from "../../auth/schemas.js";
 import type { CreateSpecInput, CreateSpecRunInput, SpecContract, SpecRunContract } from "../workflow/projectSpec.js";
 import type { AncestorStack } from "../dag/ancestorStack.js";
+import type { AuditEnvelope } from "../events/schemas/audit.js";
 
 /** A run-finalize transition the worker drives at run end / failure. */
 export interface FinalizeRunInput {
@@ -85,6 +86,22 @@ export interface SetRunPrUrlInput {
   runId: string;
   orgId: string;
   prUrl: string;
+}
+
+/**
+ * Stamp `runs.auth_ref` (the per-run credential-dedup key) — the subtask-accounting
+ * concurrent-credential drawdown stamp. The de-privileged data plane can no longer
+ * `UPDATE runs` directly (migration 0035), so this routes through the control plane.
+ * Idempotent: the same value every time (`WHERE auth_ref IS DISTINCT FROM $2`). Org
+ * resolves from the ambient per-job scope when omitted (like the `tasks` ops), since
+ * the subtask loop carries no explicit org on its context.
+ */
+export interface SetRunAuthRefInput {
+  runId: string;
+  /** Resolve org from the ambient per-job scope when omitted (like {@link UpdateTaskInput}). */
+  orgId?: string;
+  /** The run's resolved credential identity (the writer adapter's authRef). */
+  authRef: string;
 }
 
 // --- Change-percolation (the DagWalker loop's §2c run-column writes). ---
@@ -249,6 +266,33 @@ export interface ReconcileCostInput {
 }
 
 /**
+ * The DURABLE merge-LAND finalize (tanren-owns-the-engine.md §5): the `merge.completed`
+ * event + the guarded spec `merged` flip, recorded together in ONE org-scoped
+ * transaction so the internal state can never silently disagree with the host. This is
+ * the LAST step of `MergeAuthority.land` (after the external host land already advanced
+ * `main`). It writes `events` + `specs` — both de-privileged on the data plane
+ * (migrations 0031/0035) — so the worker-driven land routes the WHOLE transaction
+ * through the control plane. A failure here is the `merge_state_unknown` reconcile
+ * signal the authority maps; it is NEVER swallowed into a silent inconsistency.
+ */
+export interface FinalizeLandInput {
+  /** The owning run's org, so the finalize transaction is org-scoped server-side (or in-process). */
+  orgId: string;
+  runId: string;
+  specId: string;
+  projectId: string;
+  taskId: string;
+  prUrl: string;
+  prNumber: number;
+  /** Labels the `merge.completed` event (`direct_merge` / `native_queue`). */
+  integration: "direct_merge" | "native_queue";
+  /** The host sha `main` advanced to (recorded as `mergeSha` on `merge.completed`). */
+  mergeSha: string;
+  /** The policy version + initiating/approving actors stamped onto `merge.completed`. */
+  auditEnvelope: AuditEnvelope;
+}
+
+/**
  * Plane-split (autonomy loops): the run-CREATE write the autonomous loops drive —
  * the DagWalker enqueuing a ready spec, the merge coordinator re-executing a
  * conflicting spec, and the intake re-running a routed spec. Unlike the run
@@ -321,6 +365,9 @@ export interface RunStateWriter extends EventStore {
   /** The `UPDATE runs SET pr_url` after the draft PR is opened. */
   setRunPrUrl(input: SetRunPrUrlInput): Promise<void>;
 
+  /** Stamp `runs.auth_ref` (the subtask-accounting concurrent-credential dedup key). */
+  setRunAuthRef(input: SetRunAuthRefInput): Promise<void>;
+
   /** The `UPDATE specs SET status` (`in_flight` / merge-outcome). */
   setSpecStatus(input: SetSpecStatusInput): Promise<void>;
 
@@ -347,6 +394,12 @@ export interface RunStateWriter extends EventStore {
    * ambient per-job scope.
    */
   supersedeQueuedPlannerTask(input: { runId: string; orgId?: string }): Promise<void>;
+
+  /**
+   * The durable merge-LAND finalize (§5): `merge.completed` + the guarded spec
+   * `merged` flip in ONE org-scoped transaction. The last step of an authorized land.
+   */
+  finalizeLand(input: FinalizeLandInput): Promise<{ auditId: string }>;
 
   /** Insert one `tasks` row (subtask / CI / review / merge). */
   insertTask(input: InsertTaskInput): Promise<void>;

@@ -17,6 +17,7 @@ import type {
   ClearRunPercolationPendingInput,
   CreateQueuedRunInput,
   CreateSpecRemoteInput,
+  FinalizeLandInput,
   FinalizeRunInput,
   FinalizeRunResult,
   InsertTaskInput,
@@ -24,6 +25,7 @@ import type {
   RecordCostInput,
   ReconcileCostInput,
   RunStateWriter,
+  SetRunAuthRefInput,
   SetRunPercolationReexecIdInput,
   SetRunPrUrlInput,
   SetRunSpeculativeBaseInput,
@@ -45,6 +47,7 @@ import {
   applyClearRunPercolationPending,
   applyInsertTask,
   applyMergeRunVerifiedAncestorSha,
+  applySetRunAuthRef,
   applySetRunPercolationReexecId,
   applySetRunPrUrl,
   applySetRunSpeculativeBase,
@@ -54,6 +57,7 @@ import {
   applySupersedeQueuedPlannerTask,
   applyUpdateTask,
 } from "./runStateLifecycleSql.js";
+import { applyFinalizeLand } from "../merge/mergeAuthorityLandFinalizer.js";
 
 /**
  * The in-process run-state writer. Constructed with the worker's pool (typically
@@ -122,6 +126,20 @@ export class DirectRunStateWriter implements RunStateWriter {
 
   async setRunPrUrl(input: SetRunPrUrlInput): Promise<void> {
     await runWithOrgScope(this.pool, input.orgId, (client) => applySetRunPrUrl(client, input));
+  }
+
+  async setRunAuthRef(input: SetRunAuthRefInput): Promise<void> {
+    // The subtask loop carries no explicit org on its context, so (like the task ops)
+    // resolve it from the ambient per-job scope when omitted.
+    await this.inTaskScope(input.orgId, (client) => applySetRunAuthRef(client, input));
+  }
+
+  async finalizeLand(input: FinalizeLandInput): Promise<{ auditId: string }> {
+    // The §5 durable land transaction (merge.completed + the guarded spec `merged`
+    // flip) in ONE org-scoped transaction — the SAME applier the control-plane
+    // endpoint runs server-side.
+    await runWithOrgScope(this.pool, input.orgId, (client) => applyFinalizeLand(client, input));
+    return { auditId: input.runId };
   }
 
   async setSpecStatus(input: SetSpecStatusInput): Promise<void> {

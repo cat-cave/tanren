@@ -290,7 +290,18 @@ export function buildDefaultGate(
     // grain, straight from the runner, no webhook. Best-effort: it never affects the
     // verdict. "JUnit expected" is decided from the DECLARED contract field, not a
     // command sniff; a declared-but-absent report emits a durable `ci.junit_missing`.
-    await ingestGateJunitBestEffort(input, target, workspacePath, headSha, outcome, config, when, appendEvent, taskId);
+    await ingestGateJunitBestEffort(
+      input,
+      target,
+      workspacePath,
+      headSha,
+      outcome,
+      config,
+      when,
+      eventStore,
+      appendEvent,
+      taskId,
+    );
     return outcome;
   };
 }
@@ -356,6 +367,10 @@ async function ingestGateJunitBestEffort(
   outcome: GateOutcome,
   config: CiConfigV1,
   when: CiWhen,
+  // The control-plane-routed event store: the `ci.tests.reported` append the ingest emits
+  // lands in `events` (a control-plane table the data plane can't write directly), so it
+  // routes through here (the run-state writer when remote-writes is on), NOT `input.pool`.
+  eventStore: EventStore,
   appendEvent: <N extends EventName>(eventType: N, payload: EventPayload<N>, taskId?: string) => Promise<void>,
   taskId: string | undefined,
 ): Promise<void> {
@@ -375,6 +390,7 @@ async function ingestGateJunitBestEffort(
       target,
       workspacePath,
       client: input.pool,
+      eventStore,
       runId: input.context.runId,
       projectId: input.context.projectId,
       orgId,

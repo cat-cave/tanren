@@ -25,13 +25,30 @@
 //       endpoints perform server-side, so the run lifecycle still works through
 //       the control plane.
 //
+// APEX v34 — the FOUR worker write paths that hit `permission denied` on a live run
+// because they wrote `runs`/`events`/`specs` DIRECTLY instead of routing through the
+// control-plane remote-write seam (now fixed to route through the writer):
+//   (f) the subtask-accounting `runs.auth_ref` stamp — DENIED direct; SUCCEEDS via
+//       `applySetRunAuthRef` under the control-plane role (the `/internal/set-run-auth-ref`
+//       endpoint runs this server-side);
+//   (g) the jj-local-bootstrap `runs.ancestor_stack` head-sha write-back + the
+//       speculative-retarget head-drop — DENIED direct; SUCCEED via the SAME
+//       `setRunSpeculativeBase` UPDATE under the control-plane role;
+//   (h) THE FATAL ONE — the durable merge-LAND finalize (`merge.completed` event +
+//       the spec `merged` flip) — DENIED direct on BOTH `events` and `specs`; SUCCEEDS
+//       atomically via `applyFinalizeLand` under the control-plane role (the
+//       `/internal/finalize-land` endpoint), so a worker running as `tanren_dataplane`
+//       can complete a tier-3 merge WITHOUT a `permission denied`.
+//
 // Gated behind TANREN_RLS_DB_TEST=1 + an owner/superuser DATABASE_URL (the
 // migration role), exactly like the RLS cohort + P3a/P3b tests. Wired into
 // `just smoke` via `just smoke-plane-split-p3c`.
 
 import { Pool, type PoolClient } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { migrate } from "@tanren/db";
+import { migrate, runWithOrgScope } from "@tanren/db";
+import { applySetRunAuthRef } from "../src/engine/worker/runStateLifecycleSql.js";
+import { applyFinalizeLand } from "../src/engine/merge/mergeAuthorityLandFinalizer.js";
 
 const enabled = process.env["TANREN_RLS_DB_TEST"] === "1";
 const describeDb = enabled ? describe : describe.skip;
@@ -240,5 +257,93 @@ describeDb("plane-split P3c — the de-privileged run/spec/task lifecycle writes
     // The control-plane writes landed (owner read bypasses RLS).
     const moved = await ownerPool.query("SELECT status FROM runs WHERE run_id = $1", [RUN]);
     expect(moved.rows[0]).toMatchObject({ status: "running" });
+  });
+
+  // (f) APEX v34 — the subtask-accounting `runs.auth_ref` stamp. A direct UPDATE by the
+  // data-plane role is REJECTED (the live "failed to stamp runs.auth_ref ... permission
+  // denied for table runs"); the SAME stamp via `applySetRunAuthRef` under the
+  // control-plane role SUCCEEDS — so it MUST route through the control plane.
+  it("(f) REJECTS a direct runs.auth_ref stamp by the data-plane role; the control plane CAN", async () => {
+    await expect(
+      inOrgScope(dataPlanePool, (client) =>
+        client.query("UPDATE runs SET auth_ref = $2 WHERE run_id = $1 AND auth_ref IS DISTINCT FROM $2", [
+          RUN,
+          "auth_creds_v1",
+        ]),
+      ),
+    ).rejects.toMatchObject({ code: "42501" });
+    // The control-plane applier (what `/internal/set-run-auth-ref` runs server-side) lands.
+    await inOrgScope(appPool, (client) => applySetRunAuthRef(client, { runId: RUN, authRef: "auth_creds_v1" }));
+    const stamped = await ownerPool.query("SELECT auth_ref FROM runs WHERE run_id = $1", [RUN]);
+    expect(stamped.rows[0]).toMatchObject({ auth_ref: "auth_creds_v1" });
+  });
+
+  // (g) APEX v34 — the jj-local-bootstrap head-sha write-back + the speculative retarget
+  // head-drop both `UPDATE runs SET ancestor_stack`. A direct write by the data-plane role
+  // is REJECTED (the live "bootstrap ancestor_stack head-sha write-back failed ...
+  // permission denied for table runs"); the SAME UPDATE under the control-plane role
+  // SUCCEEDS — so both route through `setRunSpeculativeBase`.
+  it("(g) REJECTS a direct runs.ancestor_stack write-back by the data-plane role; the control plane CAN", async () => {
+    const stack = JSON.stringify([{ specId: "s_a", runId: "r_a", branch: "b_a", headSha: "f".repeat(40) }]);
+    await expect(
+      inOrgScope(dataPlanePool, (client) =>
+        client.query("UPDATE runs SET ancestor_stack = $2::jsonb WHERE run_id = $1", [RUN, stack]),
+      ),
+    ).rejects.toMatchObject({ code: "42501" });
+    // The control-plane UPDATE (what `setRunSpeculativeBase` runs server-side) lands.
+    await inOrgScope(appPool, (client) =>
+      client.query("UPDATE runs SET ancestor_stack = $2::jsonb WHERE run_id = $1", [RUN, stack]),
+    );
+    const written = await ownerPool.query("SELECT ancestor_stack FROM runs WHERE run_id = $1", [RUN]);
+    expect((written.rows[0] as { ancestor_stack: unknown[] }).ancestor_stack).toHaveLength(1);
+  });
+
+  // (h) APEX v34 — THE FATAL ONE: the durable merge-LAND finalize (`merge.completed`
+  // event + the guarded spec `merged` flip). The data-plane role can write NEITHER
+  // `events` nor `specs`, so a direct land transaction is REJECTED — the tier-3 merge
+  // strands. The SAME transaction via `applyFinalizeLand` under the control-plane role
+  // SUCCEEDS, landing BOTH writes atomically — so a worker as `tanren_dataplane` can
+  // complete a tier-3 merge by routing the finalize through `/internal/finalize-land`.
+  it("(h) REJECTS the direct merge-LAND finalize (events + specs) by the data-plane role; the control plane lands it", async () => {
+    // The two component writes the land transaction performs, each rejected directly.
+    await expect(
+      inOrgScope(dataPlanePool, (client) =>
+        client.query(
+          `INSERT INTO events (run_id, spec_id, project_id, org_id, event_type, payload)
+           VALUES ($1, $2, $3, $4, 'merge.completed', '{}'::jsonb)`,
+          [RUN, SPEC, PROJECT, ORG],
+        ),
+      ),
+    ).rejects.toMatchObject({ code: "42501" });
+    await expect(
+      inOrgScope(dataPlanePool, (client) =>
+        client.query("UPDATE specs SET status = 'merged' WHERE spec_id = $1 AND status <> 'merged'", [SPEC]),
+      ),
+    ).rejects.toMatchObject({ code: "42501" });
+
+    // The control-plane finalize (what `/internal/finalize-land` runs server-side) lands
+    // `merge.completed` + the spec `merged` flip together — the tier-3 land completes. Use
+    // the real `runWithOrgScope` (the endpoint's exact wrapper) so the PgEventStore append
+    // resolves its ambient org-scoped client, then RLS admits the org's own rows.
+    await runWithOrgScope(appPool, ORG, (client) =>
+      applyFinalizeLand(client, {
+        orgId: ORG,
+        runId: RUN,
+        specId: SPEC,
+        projectId: PROJECT,
+        taskId: TASK,
+        prUrl: "https://example.com/r/pull/1",
+        prNumber: 1,
+        integration: "native_queue",
+        mergeSha: "c".repeat(40),
+        auditEnvelope: { policyVersion: 1 },
+      }),
+    );
+    const landed = await ownerPool.query(
+      `SELECT (SELECT status FROM specs WHERE spec_id = $1) AS spec_status,
+              (SELECT count(*)::int FROM events WHERE run_id = $2 AND event_type = 'merge.completed') AS merge_events`,
+      [SPEC, RUN],
+    );
+    expect(landed.rows[0]).toMatchObject({ spec_status: "merged", merge_events: 1 });
   });
 });

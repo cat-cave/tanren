@@ -20,22 +20,32 @@
 //     `ci.junit_missing` event + a console.error). That state means flaky-intelligence
 //     just went blind (a reporter misconfig / a runner crash after the step) and MUST be
 //     visible — never a silent degrade to "no grain".
-// A genuinely-malformed report is a LOUD throw from `parseJunitReport`. The INSERT +
-// its event ride on the run's ambient org scope (the gate already runs under
-// `runWithJobOrgId` / `runWithOrgScope`), so RLS admits them.
+// A genuinely-malformed report is a LOUD throw from `parseJunitReport`. The per-test
+// `ci_test_results` INSERT rides the run's ambient org scope (the gate already runs under
+// `runWithJobOrgId` / `runWithOrgScope`) on the data-plane role that keeps that grant; the
+// `ci.tests.reported` event routes through the caller's `EventStore` (the control-plane
+// writer when remote-writes is on — the data plane can't INSERT `events` directly).
 import type pg from "pg";
 import { parseJunitReport } from "../../ci/junit.js";
 import { ingestJunitResults } from "../../ci/junitIngest.js";
 import type { RunnerHandle } from "../../contracts/allocator.js";
 import type { CommandSubstrate } from "../../contracts/commandSubstrate.js";
+import type { EventStore } from "../../eventStore.js";
 import { quoteSshShellArg } from "../../ssh/command.js";
 
 export interface IngestGateJunitInput {
   ssh: CommandSubstrate;
   target: RunnerHandle;
   workspacePath: string;
-  /** The ambient-org-scoped client the per-test INSERT + event ride (RLS-checked). */
+  /** The ambient-org-scoped client the per-test `ci_test_results` INSERT runs on (a data-plane table). */
   client: Pick<pg.Pool | pg.PoolClient, "query">;
+  /**
+   * The event store the `ci.tests.reported` append routes through — the run-state writer
+   * (control plane) when remote-writes is on, else the in-process `PgEventStore`. The
+   * data plane can no longer INSERT `events` directly (migration 0031), so the event
+   * NEVER rides the de-privileged `client`.
+   */
+  eventStore: EventStore;
   runId: string;
   projectId: string;
   orgId: string;
@@ -107,6 +117,7 @@ export async function ingestGateJunit(input: IngestGateJunitInput): Promise<Inge
   const report = parseJunitReport(read.xml);
   const result = await ingestJunitResults({
     client: input.client,
+    eventStore: input.eventStore,
     run: { runId: input.runId, projectId: input.projectId, orgId: input.orgId },
     report,
     headSha: input.headSha,

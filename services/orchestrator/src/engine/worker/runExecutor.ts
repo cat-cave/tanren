@@ -335,10 +335,12 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
         // org-scoped UPSERT over the worker's real pool. It never gates the run.
         eagerBaseNodeUpsert: buildEagerBaseNodeUpsert(deps.pool),
         // WS-A PR-8c: the jj-local dependent bootstrap folds the assembly-captured
-        // per-ancestor head shas BACK into `runs.ancestor_stack[].headSha` through this
-        // org-scoped UPDATE over the worker's real pool, so percolation's divergence key
-        // reads the shas from `ancestor_stack`. It never gates the run.
-        bootstrapStackHeadShaWriteBack: buildBootstrapStackHeadShaWriteBack(deps.pool),
+        // per-ancestor head shas BACK into `runs.ancestor_stack[].headSha`, so percolation's
+        // divergence key reads the shas from `ancestor_stack`. PLANE-SPLIT: `runs` is
+        // de-privileged on the data plane (migration 0035), so when a remote writer is wired
+        // this routes the UPDATE through the control plane (else the in-process UPDATE on the
+        // worker pool — byte-identical). It never gates the run.
+        bootstrapStackHeadShaWriteBack: buildBootstrapStackHeadShaWriteBack(deps.pool, remoteWriter),
       }),
     );
     await deps.jobQueue.complete(job.id);
