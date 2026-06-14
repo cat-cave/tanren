@@ -369,7 +369,19 @@ function fakeRecovery(opts: {
       reset.push(specId);
       return true;
     },
-    priorRecoveryCount: async () => opts.priorRecoveries ?? 0,
+    // The progress-aware bound reads each prior recovery's progress signal; a bare
+    // count here synthesizes that many IDENTICAL no-progress recoveries matching the
+    // current snapshot (a stuck build — the case these tests model).
+    priorRecoveries: async () => {
+      const merged = opts.nodes.filter((n) => n.phase === "done").length;
+      const stranded = [...new Set(opts.nodes.filter((n) => n.phase === "terminal_blocked").map((n) => n.specId))].sort(
+        (x, y) => (x < y ? -1 : x > y ? 1 : 0),
+      );
+      return Array.from({ length: opts.priorRecoveries ?? 0 }, () => ({
+        mergedCount: merged,
+        strandedSpecIds: stranded,
+      }));
+    },
     hasPublishedValidatedTemplate: async () => opts.published ?? false,
     events: opts.events,
     ...(opts.maxAttempts === undefined ? {} : { maxAttempts: opts.maxAttempts }),

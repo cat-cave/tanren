@@ -8,9 +8,10 @@
 //                                  `needs_attention`) back to `open` + emits a loud
 //                                  `dag.spec.attention_resolved`-style record + wakes
 //                                  the DagWalker (so the spec re-drives from scratch).
-//   - priorRecoveryCount         → COUNT of prior `template.build.recovered` events for
-//                                  the build project (the durable attempt counter that
-//                                  BOUNDS the recovery — survives derives/restarts).
+//   - priorRecoveries            → the PROGRESS SIGNAL (`mergedCount` + `strandedSpecIds`)
+//                                  of each prior `template.build.recovered` event for the
+//                                  build project, in order (the durable record that BOUNDS
+//                                  the recovery in a PROGRESS-AWARE way — survives derives/restarts).
 //   - hasPublishedValidatedTemplate → whether this build already published a validated
 //                                  template (the succeeded-build short-circuit).
 //
@@ -25,7 +26,7 @@ import type { ActorContext } from "../../../auth/schemas.js";
 import { PgDagReadModel } from "../../dag/walker.js";
 import { PgEventStore } from "../../eventStore.js";
 import { TemplateStore } from "../../repositories/templates.js";
-import type { TemplateBuildRecoveryDeps } from "./recovery.js";
+import type { RecoveryProgressSignal, TemplateBuildRecoveryDeps } from "./recovery.js";
 
 // The spec statuses the recovery resets back to `open` — the THREE terminal-blocked
 // states the DAG read model classifies as `terminal_blocked` (a stranded
@@ -55,7 +56,7 @@ export function buildLiveTemplateBuildRecovery(
   return {
     loadSnapshot: (projectId) => readModel.loadSnapshot(projectId),
     resetStrandedSpec: (input) => resetStrandedSpec(pool, input),
-    priorRecoveryCount: (projectId) => priorRecoveryCount(pool, projectId),
+    priorRecoveries: (projectId) => priorRecoveries(pool, projectId),
     hasPublishedValidatedTemplate: (projectId) => hasPublishedValidatedTemplate(pool, actor, projectId),
     events: new PgEventStore(pool),
     ...(options?.maxAttempts === undefined ? {} : { maxAttempts: options.maxAttempts }),
@@ -99,19 +100,27 @@ async function resetStrandedSpec(pool: pg.Pool, input: { projectId: string; spec
   });
 }
 
-// COUNT prior `template.build.recovered` events for the build project — the durable
-// attempt counter that bounds the recovery. Org-scoped (RLS); read off the event log,
-// not an in-memory counter, so the bound survives across derives/restarts.
-async function priorRecoveryCount(pool: pg.Pool, projectId: string): Promise<number> {
+// READ the PROGRESS SIGNAL of each prior `template.build.recovered` event for the build
+// project, in chronological order — the durable record that bounds the recovery
+// in a PROGRESS-AWARE way (the consecutive-no-progress streak is computed off these). Org-scoped
+// (RLS); read off the event log, not an in-memory counter, so the bound survives across
+// derives/restarts. A row missing the progress fields (a pre-progress-aware recovery)
+// degrades to a conservative empty/zero signal — it reads as a no-progress step, so the
+// bound never under-counts toward exhaustion.
+async function priorRecoveries(pool: pg.Pool, projectId: string): Promise<RecoveryProgressSignal[]> {
   const orgId = await resolveProjectOrg(pool, projectId);
-  if (orgId === null) return 0;
+  if (orgId === null) return [];
   return runWithOrgScope(pool, orgId, async (client) => {
-    const result = await client.query<{ count: string }>(
-      `SELECT COUNT(*)::text AS count FROM events
-        WHERE project_id = $1 AND event_type = 'template.build.recovered'`,
+    const result = await client.query<{ payload: { mergedCount?: number; strandedSpecIds?: string[] } }>(
+      `SELECT payload FROM events
+        WHERE project_id = $1 AND event_type = 'template.build.recovered'
+        ORDER BY ts ASC, id ASC`,
       [projectId],
     );
-    return Number(result.rows[0]?.count ?? "0");
+    return result.rows.map((row) => ({
+      mergedCount: row.payload.mergedCount ?? 0,
+      strandedSpecIds: row.payload.strandedSpecIds ?? [],
+    }));
   });
 }
 
