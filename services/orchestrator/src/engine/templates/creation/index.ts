@@ -33,3 +33,13 @@ export {
   TemplateValidationFailedError,
 } from "./createTemplate.js";
 export { maybeCreateTemplateForNoMatch, type NoMatchDecision } from "./noMatchHook.js";
+// Template-build SELF-RECOVERY (templating-system.md §2): the bounded auto-requeue of a
+// stranded, bound template-build so it never needs manual DB clearing.
+export {
+  recoverStrandedTemplateBuild,
+  TemplateBuildRecoveryExhaustedError,
+  DEFAULT_MAX_RECOVERY_ATTEMPTS,
+  type TemplateBuildRecoveryDeps,
+  type TemplateBuildRecoveryOutcome,
+} from "./recovery.js";
+export { buildLiveTemplateBuildRecovery } from "./liveRecovery.js";

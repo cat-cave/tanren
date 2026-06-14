@@ -34,6 +34,7 @@ import type { ForgeAnswererInfra } from "../../engine/forge/providerFactory.js";
 import type { GithubAppTokenMinter } from "../../engine/providers/githubAppTokenMinter.js";
 import { buildTemplateResearcher } from "../../engine/templates/creation/liveResearch.js";
 import { buildRunLoopBuildDriver } from "../../engine/templates/creation/liveBuildDriver.js";
+import { buildLiveTemplateBuildRecovery } from "../../engine/templates/creation/liveRecovery.js";
 import { resolveConvergedProjectFacts } from "../../engine/templates/creation/convergedFacts.js";
 import { buildTemplateAuditor } from "../../engine/templates/creation/liveAuditor.js";
 import { maybeCreateTemplateForNoMatch, type CreateTemplateDeps } from "../../engine/templates/index.js";
@@ -147,12 +148,20 @@ export function buildCreateTemplateDeps(
     throw new Error("template creation requires a GitHub owner (request.owner or a configured org owner)");
   }
   const deploy = deployDependencyFor(request);
+  // SELF-RECOVERY seam (templating-system.md §2): the template-build derive is bound to
+  // a deterministic slug, so a re-trigger RESUMES the SAME (possibly stranded) build. The
+  // recovery DETECTS a bound, not-yet-validated build with terminally-blocked spec(s) and
+  // AUTO-REQUEUES them (reset → `open`, re-driven from scratch), BOUNDED (a loud terminal
+  // failure after the cap) — so a stranded build NEVER needs manual DB clearing.
+  const recovery = buildLiveTemplateBuildRecovery(deps.pool, actor);
+
   return {
     pool: deps.pool,
     events: new PgEventStore(deps.pool),
     actor,
     researcher,
     buildDriver,
+    recovery,
     deriveOptions: {
       owner,
       autonomy: "auto",

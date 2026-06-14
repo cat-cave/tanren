@@ -44,6 +44,7 @@ import {
   type TemplateResearcher,
 } from "./research.js";
 import { authorTemplateBuildCapture, capabilitiesFor } from "./specAuthoring.js";
+import { recoverStrandedTemplateBuild, type TemplateBuildRecoveryDeps } from "./recovery.js";
 import { createLogger } from "../../observability/logger.js";
 
 const log = createLogger("template-creation");
@@ -71,6 +72,16 @@ export interface CreateTemplateDeps {
   // entity-creation DB path. The default is the live function — this seam is for
   // test isolation, not an alternate production path.
   derive?: (pool: pg.Pool, input: DeriveInput) => Promise<DeriveResult>;
+  // The SELF-RECOVERY seam (recovery.ts). The template-build derive is bound to a
+  // deterministic slug, so a re-trigger for the same stack RESUMES the SAME (possibly
+  // stranded) build project. BEFORE re-driving, this seam DETECTS a bound, not-yet-
+  // validated build with terminally-blocked spec(s) and AUTO-REQUEUES them (reset to
+  // `open` → the DagWalker re-drives from scratch with the current code), BOUNDED (a
+  // loud `TemplateBuildRecoveryExhaustedError` after the cap). Absent ⇒ recovery is
+  // skipped (a test that does not exercise the resume path omits it); the live route
+  // always wires it (`buildLiveTemplateBuildRecovery`) so a stranded build never needs
+  // manual DB clearing.
+  recovery?: TemplateBuildRecoveryDeps;
   // The clock — passed so the proof's validatedAt is deterministic in tests.
   now: () => Date;
   // The harness/positive-control timeout.
@@ -171,8 +182,24 @@ export async function createTemplate(
     payload: { orgId, stack: request.stack },
   });
 
-  // From here a failure carries the build project id on `template.creation.failed`.
+  // SELF-RECOVERY (templating-system.md §2 + the autonomy thesis): the derive RESUMES
+  // a bound build project (the deterministic slug). If that resumed build STRANDED on a
+  // prior attempt (terminally-blocked spec, no validated publish), AUTO-REQUEUE it —
+  // reset the stranded specs to `open` so the build re-drives from scratch with the
+  // CURRENT code — instead of resuming-and-re-stranding or needing a human DB clear.
+  // BOUNDED: after the cap, `recoverStrandedTemplateBuild` throws
+  // `TemplateBuildRecoveryExhaustedError` (a loud terminal failure → durable
+  // `template.creation.failed`), never an infinite retry. A fresh build (or a build
+  // with no stranded spec) is a clean `not_stranded` no-op. From here a failure carries
+  // the build project id on `template.creation.failed`.
   try {
+    if (deps.recovery !== undefined) {
+      await recoverStrandedTemplateBuild(deps.recovery, {
+        orgId,
+        projectId: derived.projectId,
+        stack: request.stack,
+      });
+    }
     return await buildValidatePublish(deps, request, research, derived, orgId);
   } catch (error) {
     await emitCreationFailed(deps, orgId, request.stack, derived.projectId, error);

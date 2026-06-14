@@ -98,6 +98,56 @@ export const TemplateCreationFailedPayload = z
   })
   .strict();
 
+// ── Self-recovery events (templating-system.md §2 + autonomy thesis) ─────────
+//
+// A template-build is itself an agent-driven Tanren project, so its specs WILL
+// sometimes terminally strand (`needs_attention`/halted/cancelled) or fail to
+// converge. The build project is bound to a DETERMINISTIC slug, so the NEXT derive
+// for the same stack RESUMES the SAME failed project — and re-strands forever. The
+// only "recovery" used to be a human deleting the project's DB rows. Tanren now
+// recovers ON ITS OWN: on the resume path, before driving the build, a bound
+// build that has NOT published a validated template AND has terminally-blocked
+// spec(s) is AUTO-REQUEUED (the stranded specs reset to `open` so the DagWalker
+// re-drives them from scratch with the CURRENT code). These events make that
+// self-recovery OBSERVABLE — recovered (not silently retried), and exhausted
+// (bounded — a genuine "this stack cannot be built autonomously" signal after K
+// attempts, never an infinite loop). Non-secret descriptors only.
+
+// `template.build.recovered` — Tanren detected a bound, not-yet-validated
+// template-build with terminally-stranded spec(s) and AUTO-REQUEUED them (reset to
+// `open`) so a fresh attempt runs with the current code, instead of resuming-and-
+// re-stranding or needing a human DB clear. Records which specs were requeued + the
+// recovery attempt number (1-based) so the bound is visible in the timeline.
+export const TemplateBuildRecoveredPayload = z
+  .object({
+    orgId: z.string(),
+    stack: z.string(),
+    /** The terminally-blocked specs reset to `open` (re-drivable) by this recovery. */
+    requeuedSpecIds: z.array(z.string()),
+    /** 1-based attempt number THIS recovery is (the bound is `maxAttempts`). */
+    attempt: z.number().int().positive(),
+    /** The configured cap on auto-recoveries before a loud terminal failure. */
+    maxAttempts: z.number().int().positive(),
+  })
+  .strict();
+
+// `template.build.recovery_exhausted` — the bounded auto-recovery hit its cap: the
+// build STILL strands after `maxAttempts` recoveries, so Tanren STOPS recovering
+// and surfaces a LOUD, durable terminal failure (a genuine "this stack's template
+// cannot be built autonomously" signal). NOT papering over a permanently-broken
+// stack: the loud halt is the point. `requeuedSpecIds` are the specs still stranded
+// at exhaustion.
+export const TemplateBuildRecoveryExhaustedPayload = z
+  .object({
+    orgId: z.string(),
+    stack: z.string(),
+    /** The specs still terminally blocked at the recovery cap. */
+    requeuedSpecIds: z.array(z.string()),
+    /** The cap that was reached (the number of prior recoveries that did not converge). */
+    maxAttempts: z.number().int().positive(),
+  })
+  .strict();
+
 // The template REGISTRY lifecycle sub-registry, spread into the main EventRegistry
 // (mirroring `loopEventRegistry`) so the registry.ts file stays under the 500-line
 // cap. Non-secret descriptors only (id / org / repo ref / stack / tier).
@@ -108,4 +158,6 @@ export const templateEventRegistry = {
   "template.creation.started": TemplateCreationStartedPayload,
   "template.creation.published": TemplateCreationPublishedPayload,
   "template.creation.failed": TemplateCreationFailedPayload,
+  "template.build.recovered": TemplateBuildRecoveredPayload,
+  "template.build.recovery_exhausted": TemplateBuildRecoveryExhaustedPayload,
 } as const;

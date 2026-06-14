@@ -15,6 +15,13 @@
       "when": 1781286658662,
       "tag": "0001_environments_registry",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1781398836520,
+      "tag": "0002_template_build_recovery_events",
+      "breakpoints": true
     }
   ]
 }

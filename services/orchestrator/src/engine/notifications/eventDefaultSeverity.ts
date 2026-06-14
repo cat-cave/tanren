@@ -215,6 +215,15 @@ const SEVERITY_OVERRIDES: Partial<Record<EventName, Severity>> = {
   // running an experiment wants surfaced (warn).
   "benchmark.accept.passed": "ok",
   "benchmark.accept.failed": "warn",
+
+  // Template-build SELF-RECOVERY: Tanren auto-requeued a stranded template-build
+  // (instead of resuming-and-re-stranding or needing a human DB clear). The recovery
+  // is a degraded-but-handled signal an operator wants visible (Tanren healed itself,
+  // not silently) → `warn`. Exhaustion is the LOUD terminal failure after the bounded
+  // cap (a genuine "this stack cannot be built autonomously") → `fail`, so it clears
+  // the matrix warn floor AND the code-level default route, reaching the operator.
+  "template.build.recovered": "warn",
+  "template.build.recovery_exhausted": "fail",
 };
 
 // Sealed: every EventName must have a default severity. Missing keys would
