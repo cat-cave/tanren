@@ -49,4 +49,4 @@ export {
   type NativeQueueEnqueuer,
   type ReGateCiHook,
 } from "./mergeDispatch.js";
-export { reviewerRejection } from "./steering.js";
+export { mergeGateRejection, reviewerRejection } from "./steering.js";
