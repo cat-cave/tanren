@@ -34,11 +34,9 @@ import type { AnswererAdapter } from "../providers/types.js";
 import type { UsageProbe } from "../usage/index.js";
 import type { ContractFile } from "../forge/scaffold/index.js";
 import { workspaceRepoPathForRun } from "../workspace/index.js";
-import { prepareCleanPrBranch } from "../workspace/githubPush.js";
-import { buildReGateCi, type MergeGateRunContext, runMergeGateForRun } from "./plannerRunCi.js";
+import { buildReGateCi, type MergeGateRunContext, runPublishGateStage } from "./plannerRunCi.js";
 import type { GateOutcome } from "./gate/index.js";
 import {
-  appTokenSeam,
   baseShiftRebaseSeam,
   buildDefaultGate,
   buildEntityRiskProducer,
@@ -54,20 +52,21 @@ import { prepareRunWorkspace, type BootstrapStepInput, type CommitBootstrapStepI
 import type { ProvisionMiseToolchainInput } from "../workspace/bootstrap.js";
 import type { BootstrapStackHeadShaWriteBack, EagerBaseNodeUpsert } from "./plannerRunJjLocalBootstrap.js";
 import {
+  applyReviewVerdict,
   applyScopedRunCredentials,
   buildFinalizeRunState,
   finalizeMergeOutcome,
   finalizeNonPassAndPark,
   finalizeWorkflowError,
   markRunRunning,
+  type MergeGateBudget,
   releaseRunnerWithCleanupProof,
   type RunCredentialScoping,
   runnerPayload,
   runOutcomeFor,
-  setSpecStatus,
   supersedeQueuedPlannerTask,
 } from "./plannerRunFinalize.js";
-import { publishDraftPullRequest, type PublishedDraftPullRequest } from "./githubDraftPr.js";
+import type { PublishedDraftPullRequest } from "./githubDraftPr.js";
 import type { PlannerRejectionFeedback } from "./planner/planner.js";
 import {
   mergeForRun,
@@ -229,11 +228,13 @@ export interface RunPlannerLoopInput {
   bootstrapStackHeadShaWriteBack?: BootstrapStackHeadShaWriteBack;
   // Max review→rework re-entries before the run halts pending operator action.
   maxReviewReworks?: number;
-  // Plane B: the PROJECT's dev+test app env — env vars + secrets the
-  // product Tanren is BUILDING needs to run+test its app. Resolved by the worker
-  // from `project_app_env` (dev+test), materialized over the runner into the building
-  // agent's command env (gate + bootstrap), NEVER logged and DISTINCT from Tanren's
-  // own provider creds. Undefined ⇒ no env.
+  // SELF-HEAL (apex v34): max pre_merge-gate→writer self-heal re-entries before a LOUD
+  // halt. See `mergeGateSelfHeal` in plannerRunCi.ts. Absent ⇒ the documented default.
+  maxMergeGateReworks?: number;
+  // Plane B: the PROJECT's dev+test app env — env vars + secrets the product Tanren is
+  // BUILDING needs to run+test its app. Resolved by the worker from `project_app_env`,
+  // materialized over the runner into the building agent's command env (gate + bootstrap),
+  // NEVER logged + DISTINCT from Tanren's own provider creds. Undefined ⇒ no env.
   appEnv?: Record<string, string>;
 }
 
@@ -328,6 +329,9 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
     // the write→gate→PR→CI→review tail re-enters on a changes-requested review (loop
     // re-run with reviewer feedback as planner steering, up to maxReviewReworks).
     const maxReworks = input.maxReviewReworks ?? 1;
+    // SELF-HEAL (apex v34): the dedicated pre_merge-gate→writer budget (see
+    // `mergeGateSelfHeal` in plannerRunCi.ts), never starving/starved by the review budget.
+    const mergeGateBudget: MergeGateBudget = { used: 0, max: input.maxMergeGateReworks ?? 2 };
     const seedRejections: PlannerRejectionFeedback[] = [];
     const entityRiskProducer = buildEntityRiskProducer(input, allocation.target, workspacePath);
     let outcome: SubtaskLoopOutcome | undefined;
@@ -371,50 +375,28 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
         return { runId: context.runId, workspacePath, outcome };
       }
 
-      // Prepare the PR branch: replay the writer commits onto the clone HEAD, dropping
-      // the synthetic bootstrap commit (+ install artifacts), so the pushed branch / PR
-      // carries only the writer's changes. The working HEAD is left intact so a
-      // review-rework re-entry keeps its bootstrapSha diff base. No-op on fake-SSH.
-      const pushSource = await prepareCleanPrBranch({
-        ssh: input.ssh,
-        target: allocation.target,
-        workspacePath,
+      // Publish the cleaned draft PR, run the merge-authority `pre_merge` gate, and (apex
+      // v34 SELF-HEAL) route a writer-fixable gate failure back to the writer instead of
+      // the old `code:internal` throw + strand — all extracted to `runPublishGateStage` in
+      // plannerRunCi.ts (keeps this file under cap + its branching out of this function).
+      // The stage returns: `rework` (re-enter the writer — `continue`), `halt` (bounded-out:
+      // finalized + parked LOUD, the loop returns), or `merged` (gate passed — fall through
+      // to review). It also surfaces the published PR + gate verdict for the merge tail.
+      const stage = await runPublishGateStage(input, mergeGateCtx, context, {
         cloneHeadSha,
         bootstrapSha,
-        timeoutMs: input.timeoutMs,
+        finalizeRunState,
+        appendEvent,
+        seedRejections,
+        budget: mergeGateBudget,
       });
-
-      pullRequest = await publishDraftPullRequest({
-        pool: input.pool,
-        eventStore,
-        ...writerSeam(input),
-        orgId: context.orgId,
-        secrets: input.secrets,
-        githubHttp: input.githubHttp,
-        ssh: input.ssh,
-        target: allocation.target,
-        sourceRef: pushSource.ref,
-        runId: context.runId,
-        specId: context.specId,
-        projectId: context.projectId,
-        workspacePath,
-        repoUrl: context.repoUrl,
-        targetBranch: context.targetBranch,
-        // WS-A PR-5 (§3.1): the ancestor stack so the draft PR bases on the immediate
-        // ancestor's PR-head branch (flag-gated stacked PR); flag-off ⇒ `targetBranch`.
-        ...(context.ancestorStack !== undefined && { ancestorStack: context.ancestorStack }),
-        runBranch: context.runBranch,
-        title: `Tanren: ${context.specTitle}`,
-        body: context.specDescription,
-        githubCredentialRef: context.githubCredentialRef,
-        ...appTokenSeam(context, input),
-        timeoutMs: input.timeoutMs,
-      });
-      // THE MERGE AUTHORITY (native delivery): run the `pre_merge` gate on the live
-      // runner + publish the `tanren/gate` verdict. Passing proceeds; failing THROWS.
-      // COMMIT-BINDING (§5): the gate anchors its verdict on the PUSHED PR head sha (the
-      // cleaned ref) — NOT the workspace HEAD — so the authority's gatedHeadSha matches.
-      mergeGate = await runMergeGateForRun(input, mergeGateCtx, pushSource.headSha);
+      pullRequest = stage.pullRequest;
+      mergeGate = stage.mergeGate;
+      if (stage.kind === "rework") continue;
+      if (stage.kind === "halt") {
+        releaseReason = "failed";
+        return { runId: context.runId, workspacePath, outcome, pullRequest, mergeGate };
+      }
 
       review = await pollReviewForRun({
         pool: input.pool,
@@ -433,19 +415,20 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
         ...simulatedReviewSeam(input, adapterCtx),
       });
 
-      if (review.verdict === "approved") {
-        break;
-      }
-      if (review.verdict === "changes_requested" && reworks < maxReworks) {
-        // Re-enter the writer loop with the reviewer feedback as planner steering. The
-        // spec returns to in_flight; the next pass re-plans against the feedback.
-        seedRejections.push(reviewerRejection(review, pullRequest.branch));
-        await setSpecStatus(input, context, "in_flight");
-        continue;
-      }
-      // Pending after the budget, or changes-requested with the rework budget exhausted:
-      // halt for operator action + park the spec (finding #3: requeueable). No merge.
-      await finalizeNonPassAndPark(input, finalizeRunState, context, appendEvent, "halted");
+      // Map the review verdict (extracted to plannerRunFinalize.ts, mirroring the merge-gate
+      // self-heal): `merge` → proceed; `rework` → re-enter the writer (spec back to
+      // in_flight); `halt` → finalized + parked LOUD, the loop returns. No merge on non-pass.
+      const reviewMove = await applyReviewVerdict(
+        input,
+        finalizeRunState,
+        context,
+        appendEvent,
+        { verdict: review.verdict, rejection: reviewerRejection(review, pullRequest.branch) },
+        seedRejections,
+        reworks < maxReworks,
+      );
+      if (reviewMove === "merge") break;
+      if (reviewMove === "rework") continue;
       releaseReason = "failed";
       return { runId: context.runId, workspacePath, outcome, pullRequest, mergeGate, review };
     }

@@ -160,7 +160,13 @@ async function runOneSubtask(args: {
   };
 }
 
-function gateReason(gate: Extract<GateOutcome, { passed: false }>): string {
+// Render a failed gate into the writer-rework steering string: a header naming the
+// failing tier/step/exit, plus the failed step's captured output tail (the ACTUAL
+// type/lint/test error) so the writer fixes the real failure instead of re-running the
+// gate to rediscover it. Shared by the fast-tier (per_iteration) writer steering here
+// AND the merge-tier (pre_merge) self-heal re-entry (`mergeGateRejection`), so every
+// gate point feeds the writer the same actionable failure content.
+export function gateReason(gate: Extract<GateOutcome, { passed: false }>): string {
   const { failure } = gate;
   const exit = failure.exitCode === null ? "no exit code" : `exit ${failure.exitCode}`;
   const header = `gate tier "${failure.tier}" (${failure.when}) failed at step "${failure.failedStep}" with ${exit}`;

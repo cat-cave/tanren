@@ -17,6 +17,7 @@ import { AllocatorReleaseFinalizer } from "../contracts/releaseFinalizer.js";
 import { CodexUsageLimitError } from "../providers/codex.js";
 import type { EventName, EventPayload } from "../events/index.js";
 import { removeRunWorkspaceDir, WorkspaceBootstrapError } from "../workspace/index.js";
+import type { PlannerRejectionFeedback } from "./planner/planner.js";
 import type { MergeForRunResult } from "./reviewMerge/index.js";
 import type { PlannerRunContext, RunPlannerLoopInput } from "./plannerRun.js";
 import type { SubtaskLoopOutcome } from "./subtaskLoop.js";
@@ -188,6 +189,70 @@ export async function finalizeNonPassAndPark(
 ): Promise<void> {
   await finalizeNonPass(finalizeRunState, context.runId, outcome);
   await parkSpecNeedsAttentionForHaltedRun(input, context, appendEvent, outcome);
+}
+
+/** Mutable self-heal budget for the pre_merge gate: `used` re-entries out of `max`. */
+export interface MergeGateBudget {
+  used: number;
+  readonly max: number;
+}
+
+/**
+ * SELF-HEAL (apex v34): apply the BOUNDED merge stage's decision for a FAILED `pre_merge`
+ * gate (the bound is `mergeGateSelfHeal` in plannerRunCi.ts). With budget left: seed the
+ * carried steering (the failing tier/step/OUTPUT), bump the counter, return the spec to
+ * `in_flight` and signal `"rework"` so the loop re-enters the writer. Budget spent:
+ * finalize the run halted + park the spec `needs_attention` and signal `"halt"`. Owns the
+ * budget + the lifecycle writes here so plannerRun.ts stays under the 500-line cap (and so
+ * the loop branches on the single returned signal, not on the budget internals).
+ */
+export async function applyFailedMergeGate(
+  input: RunPlannerLoopInput,
+  finalizeRunState: FinalizeRunState,
+  context: PlannerRunContext,
+  appendEvent: <N extends EventName>(eventType: N, payload: EventPayload<N>, taskId?: string) => Promise<void>,
+  decision: { kind: "rework"; rejection: PlannerRejectionFeedback } | { kind: "halt" },
+  seedRejections: PlannerRejectionFeedback[],
+  budget: MergeGateBudget,
+): Promise<"rework" | "halt"> {
+  if (decision.kind === "halt") {
+    await finalizeNonPassAndPark(input, finalizeRunState, context, appendEvent, "halted");
+    return "halt";
+  }
+  budget.used += 1;
+  seedRejections.push(decision.rejection);
+  await setSpecStatus(input, context, "in_flight");
+  return "rework";
+}
+
+/**
+ * Apply a PR review verdict to the planner loop: `approved` → `merge` (proceed to the
+ * merge stage); `changes_requested` within the rework budget → seed the reviewer feedback,
+ * return the spec to `in_flight`, and signal `rework` (re-enter the writer); otherwise
+ * (pending after the poll budget, or changes-requested with the rework budget exhausted) →
+ * finalize the run halted + park the spec `needs_attention` and signal `halt`. Mirrors the
+ * merge-gate `applyFailedMergeGate` self-heal; extracted to keep plannerRun.ts under cap +
+ * its branching out of `runPlannerLoopWorkflow`.
+ */
+export async function applyReviewVerdict(
+  input: RunPlannerLoopInput,
+  finalizeRunState: FinalizeRunState,
+  context: PlannerRunContext,
+  appendEvent: <N extends EventName>(eventType: N, payload: EventPayload<N>, taskId?: string) => Promise<void>,
+  review: { verdict: string; rejection: PlannerRejectionFeedback },
+  seedRejections: PlannerRejectionFeedback[],
+  withinReworkBudget: boolean,
+): Promise<"merge" | "rework" | "halt"> {
+  if (review.verdict === "approved") {
+    return "merge";
+  }
+  if (review.verdict === "changes_requested" && withinReworkBudget) {
+    seedRejections.push(review.rejection);
+    await setSpecStatus(input, context, "in_flight");
+    return "rework";
+  }
+  await finalizeNonPassAndPark(input, finalizeRunState, context, appendEvent, "halted");
+  return "halt";
 }
 
 /**
