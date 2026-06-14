@@ -73,6 +73,15 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["workspacePath", "public"],
     ["message", "public"],
   ]),
+  // apex v35: prep `just bootstrap` deps-install deferred to the gate self-heal (outputTail secret).
+  ...rulesFor("workspace.bootstrap_deferred", [
+    ["runnerId", "public"],
+    ["workspacePath", "public"],
+    ["command", "public"],
+    ["exitCode", "public"],
+    ["timedOut", "public"],
+    ["outputTail", "secret"],
+  ]),
 
   // credentials — refs are redacted; raw value never appears in payloads
   ...rulesFor("credential.requested", [

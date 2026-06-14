@@ -387,36 +387,46 @@ describe("runPlannerLoopWorkflow", () => {
     expect(bootstrapCalls).toEqual([undefined]);
   });
 
-  it("halts on a workspace bootstrap failure and surfaces it as a recoverable run", async () => {
+  it("SELF-HEALS a workspace-PREP bootstrap failure: defers to the gate, does NOT strand the spec (apex v35)", async () => {
+    // apex v35 (mirroring #562's gate-bootstrap self-heal): a writer-fixable PREP bootstrap
+    // failure is DEFERRED to the gate's self-healing path (a loud `workspace.bootstrap_deferred`,
+    // the writer loop proceeds) instead of escaping → workspace.failed → stranding the spec.
     const { ctx, pool, events, secrets, allocator, ssh } = await setup();
 
-    await expect(
-      runPlannerLoopScoped({
-        pool: pool.asPgPool(),
-        eventStore: events,
-        allocator,
-        ssh,
-        secrets,
-        githubHttp: new ScriptedGitHubHttp([]),
-        context: ctx,
-        escapeHatches: {
-          maxWriterIterPerSubtask: 5,
-          maxRetriesPerTransientFailure: 3,
-        },
-        timeoutMs: 100,
-        runBootstrap: async (input) => {
-          throw new WorkspaceBootstrapError(input.workspacePath, "just bootstrap", 1, "tier-1 tool: not found", false);
-        },
-        buildAdapters: () => twoSubtaskAdapters([completeCheck, completeCheck]),
-        buildUsageProbe: () => fakeProbe(healthyWindow(), accounting(null)),
-      }),
-    ).rejects.toBeInstanceOf(WorkspaceBootstrapError);
-
-    expect(pool.runStatus).toEqual({ status: "halted", outcome: "halted" });
-    const failure = events.events.find((event) => event.eventType === "workspace.failed");
-    expect(failure?.payload).toMatchObject({
-      message: expect.stringContaining("tier-1 tool: not found"),
+    await runPlannerLoopScoped({
+      pool: pool.asPgPool(),
+      eventStore: events,
+      allocator,
+      ssh,
+      secrets,
+      githubHttp: passingGitHub(),
+      context: ctx,
+      escapeHatches: { maxWriterIterPerSubtask: 5, maxRetriesPerTransientFailure: 3 },
+      timeoutMs: 100,
+      maxCiPolls: 1,
+      sleep: async () => {},
+      runBootstrap: async (input) => {
+        throw new WorkspaceBootstrapError(input.workspacePath, "just bootstrap", 1, "tier-1 tool: not found", false);
+      },
+      buildAdapters: () => twoSubtaskAdapters([completeCheck, completeCheck]),
+      buildUsageProbe: () => fakeProbe(healthyWindow(), accounting(0.5)),
+      reviewProbe: approvingReview(),
+      mergeProbe: noopMerge(),
     });
+
+    // The deferral is recorded LOUDLY, carrying the (prelude-free) bootstrap output.
+    const deferred = events.events.find((event) => event.eventType === "workspace.bootstrap_deferred");
+    expect(deferred?.payload).toMatchObject({
+      command: "just bootstrap",
+      exitCode: 1,
+      timedOut: false,
+      outputTail: expect.stringContaining("tier-1 tool: not found"),
+    });
+    // NOT the old terminal strand: no workspace.failed, and the writer loop ran (after the defer).
+    expect(events.events.some((event) => event.eventType === "workspace.failed")).toBe(false);
+    const names = events.events.map((event) => event.eventType);
+    expect(names).toContain("writer.subtask.started");
+    expect(names.indexOf("workspace.bootstrap_deferred")).toBeLessThan(names.indexOf("writer.subtask.started"));
     expect(allocator.releases).toEqual(["runner_planner"]);
   });
 

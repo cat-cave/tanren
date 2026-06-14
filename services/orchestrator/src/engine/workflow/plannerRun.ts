@@ -55,6 +55,7 @@ import {
   applyReviewVerdict,
   applyScopedRunCredentials,
   buildFinalizeRunState,
+  emitPrepBootstrapDeferred,
   finalizeMergeOutcome,
   finalizeNonPassAndPark,
   finalizeWorkflowError,
@@ -296,16 +297,17 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
     // answerer review base (the contract-files commit when one was made, else the bootstrap
     // commit); `cloneHeadSha` is the writer's replay base; `bootstrappedBaseRevision` is set
     // ONLY on the jj-local path (the conflict resolver's merge-time base). See the module.
-    const { cloneHeadSha, bootstrapSha, baseSha, bootstrappedBaseRevision } = await prepareRunWorkspace(
-      input,
-      allocation.target,
-      workspacePath,
-    );
+    const { cloneHeadSha, bootstrapSha, baseSha, bootstrappedBaseRevision, prepBootstrapDeferred } =
+      await prepareRunWorkspace(input, allocation.target, workspacePath);
     await appendEvent("workspace.prepared", {
       workspacePath,
       repoUrl: context.repoUrl,
       targetBranch: context.targetBranch,
     });
+    // SELF-HEAL (apex v35): when the workspace-PREP `just bootstrap` deps-install was DEFERRED
+    // to the gate self-heal (a writer-fixable scaffold defect, not a strand) emit the loud
+    // `workspace.bootstrap_deferred` — see {@link emitPrepBootstrapDeferred}.
+    await emitPrepBootstrapDeferred(appendEvent, workspacePath, prepBootstrapDeferred);
 
     const adapterCtx: PlannerRunAdapterContext = {
       runId: context.runId,

@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "command": {
+      "type": "string"
+    },
+    "exitCode": {
+      "anyOf": [
+        {
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "outputTail": {
+      "type": "string"
+    },
+    "runnerId": {
+      "type": "string"
+    },
+    "timedOut": {
+      "type": "boolean"
+    },
+    "workspacePath": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "workspacePath",
+    "command",
+    "exitCode",
+    "timedOut",
+    "outputTail"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.workspace.bootstrap_deferred"
+}

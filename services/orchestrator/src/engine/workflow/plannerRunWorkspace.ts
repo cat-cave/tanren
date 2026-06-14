@@ -21,6 +21,7 @@ import {
   provisionMiseToolchain,
   runWorkspaceSshCommand,
   seedWorkspaceLocalIgnore,
+  WorkspaceBootstrapError,
   type ProvisionMiseToolchainInput,
 } from "../workspace/index.js";
 import { gitAuthedCommand, gitTokenAuthPrelude } from "../workspace/githubPush.js";
@@ -78,6 +79,11 @@ export interface PreparedRunWorkspace {
   // the legacy single-ref clone path (flag off / empty stack) ⇒ the conflict resolver keeps
   // `${targetBranch}@origin` exactly as today.
   bootstrappedBaseRevision?: string;
+  // SELF-HEAL (apex v35): set when the workspace-PREP `just bootstrap` (deps install) failed
+  // and was DEFERRED to the gate's self-healing path instead of terminally stranding the
+  // spec — see the prep-bootstrap block + the `workspace.bootstrap_deferred` schema. Absent
+  // ⇒ the prep bootstrap succeeded (or no-op). The caller emits the deferral event from this.
+  prepBootstrapDeferred?: { command: string; exitCode: number | null; timedOut: boolean; outputTail: string };
 }
 
 // Clones the target branch + installs deps + commits the bootstrap state, and
@@ -137,18 +143,31 @@ export async function prepareRunWorkspace(
   // Plane B: the building agent runs install/build under the
   // project's dev+test app env. The app env is passed SEPARATELY (NOT folded into
   // the command string): `bootstrapWorkspace` builds the `export …;` prelude at
-  // the SSH substrate boundary and prepends it to the EXECUTED command only, so
-  // the ORIGINAL command — the value that flows into WorkspaceBootstrapError and
-  // the `workspace.failed` / `run.failed` event payloads — never carries an
-  // app-secret value. Distinct from Tanren's own provider creds.
-  await runBootstrap({
-    ssh: input.ssh,
-    target,
-    workspacePath,
-    command: resolvedBootstrapCommand,
-    ...(input.appEnv === undefined ? {} : { appEnv: input.appEnv }),
-    timeoutMs: input.timeoutMs,
-  });
+  // the SSH substrate boundary and prepends it to the EXECUTED command only, so the
+  // ORIGINAL command — the value that flows into WorkspaceBootstrapError and the
+  // `workspace.bootstrap_deferred` payload — never carries an app-secret value.
+  //
+  // SELF-HEAL (apex v35): a prep `just bootstrap` (deps install) failure is almost always a
+  // WRITER-OWN-scaffold defect — the per-gate `ensureWorkspaceDepsInstalled` failure #562 made
+  // self-heal, REDUNDANT with it (same `just bootstrap`). So a writer-fixable
+  // `WorkspaceBootstrapError` is caught + DEFERRED to the gate's self-healing path (prep
+  // continues, the writer loop runs, the gate re-runs + routes — bounded by convergence) not
+  // stranded. ANY OTHER throw — a substrate fault, OR the mise PROVISION (threw ABOVE) — propagates.
+  let prepBootstrapDeferred: PreparedRunWorkspace["prepBootstrapDeferred"];
+  try {
+    await runBootstrap({
+      ssh: input.ssh,
+      target,
+      workspacePath,
+      command: resolvedBootstrapCommand,
+      ...(input.appEnv === undefined ? {} : { appEnv: input.appEnv }),
+      timeoutMs: input.timeoutMs,
+    });
+  } catch (error: unknown) {
+    if (!(error instanceof WorkspaceBootstrapError)) throw error;
+    const { command, exitCode, timedOut, outputTail } = error;
+    prepBootstrapDeferred = { command, exitCode, timedOut, outputTail };
+  }
 
   // Commit the bootstrap-generated tree as ONE synthetic commit on top of the
   // clone HEAD; its sha is the writer's diff base. When bootstrap produced
@@ -198,6 +217,8 @@ export async function prepareRunWorkspace(
     ...(cloned.bootstrappedBaseRevision !== undefined && {
       bootstrappedBaseRevision: cloned.bootstrappedBaseRevision,
     }),
+    // apex v35: surface a deferred prep-bootstrap failure so the caller emits the event.
+    ...(prepBootstrapDeferred !== undefined && { prepBootstrapDeferred }),
   };
 }
 

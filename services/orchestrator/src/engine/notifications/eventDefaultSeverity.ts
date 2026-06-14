@@ -82,6 +82,9 @@ const SEVERITY_OVERRIDES: Partial<Record<EventName, Severity>> = {
   "workspace.prepared": "info",
   "workspace.git_captured": "info",
   "workspace.failed": "warn",
+  // apex v35: prep deps-install failed but was deferred to the gate self-heal (not a
+  // strand). Warn — loud enough to surface on the timeline, not a terminal failure.
+  "workspace.bootstrap_deferred": "warn",
 
   // Credentials
   "credential.requested": "info",

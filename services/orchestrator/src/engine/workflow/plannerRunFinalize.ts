@@ -18,6 +18,7 @@ import { CodexUsageLimitError } from "../providers/codex.js";
 import type { EventName, EventPayload } from "../events/index.js";
 import { removeRunWorkspaceDir, WorkspaceBootstrapError } from "../workspace/index.js";
 import type { PlannerRejectionFeedback } from "./planner/planner.js";
+import type { PreparedRunWorkspace } from "./plannerRunWorkspace.js";
 import type { MergeForRunResult } from "./reviewMerge/index.js";
 import type { PlannerRunContext, RunPlannerLoopInput } from "./plannerRun.js";
 import type { SubtaskLoopOutcome } from "./subtaskLoop.js";
@@ -325,6 +326,31 @@ export interface WorkflowErrorContext {
 }
 
 /**
+ * SELF-HEAL (apex v35): emit the loud `workspace.bootstrap_deferred` event WHEN the
+ * workspace-PREP `just bootstrap` (deps install) failed and was DEFERRED to the gate's
+ * self-healing path (rather than terminally stranding the spec — see
+ * `PreparedRunWorkspace.prepBootstrapDeferred` + `prepareRunWorkspace`). A no-op when the
+ * prep bootstrap succeeded (or was a no-op). The mise PROVISION step is NOT writer-fixable
+ * and already threw terminally inside `prepareRunWorkspace` (→ `finalizeWorkflowError`) — it
+ * never produces this signal. The command is prelude-free + the output tail bounded
+ * (substrate boundary), so no app-secret value reaches the payload.
+ */
+export async function emitPrepBootstrapDeferred(
+  appendEvent: <N extends EventName>(eventType: N, payload: EventPayload<N>, taskId?: string) => Promise<void>,
+  workspacePath: string,
+  deferred: PreparedRunWorkspace["prepBootstrapDeferred"],
+): Promise<void> {
+  if (deferred === undefined) return;
+  await appendEvent("workspace.bootstrap_deferred", {
+    workspacePath,
+    command: deferred.command,
+    exitCode: deferred.exitCode,
+    timedOut: deferred.timedOut,
+    outputTail: deferred.outputTail,
+  });
+}
+
+/**
  * Finalize the run for a workflow throw + emit its event. A WorkspaceBootstrap
  * failure or a Codex usage-limit are RECOVERABLE (a halt with a distinct
  * outcome), not a crash; anything else lands the run `failed`. The caller
@@ -341,6 +367,12 @@ export async function finalizeWorkflowError(error: unknown, ctx: WorkflowErrorCo
     // be gated. Surface it as a halting, recoverable outcome (lands on the
     // recovery surface) rather than a crash, reusing the
     // workspace.failed event + the halted run state.
+    //
+    // RESIDUAL SAFETY NET (apex v35): the workspace-PREP `just bootstrap` deps-install no
+    // longer ESCAPES as this error — a writer-fixable failure there is now caught in
+    // `prepareRunWorkspace` and DEFERRED to the gate's self-healing path (it emits
+    // `workspace.bootstrap_deferred`, never reaching here). This branch remains the
+    // fail-closed handler for any other `WorkspaceBootstrapError` that escapes the loop.
     await ctx.appendEvent("workspace.failed", { workspacePath: ctx.workspacePath, message: error.message });
     await finalizeNonPass(ctx.finalizeRunState, ctx.context.runId, "halted");
     await parkSpecNeedsAttentionForHaltedRun(ctx.input, ctx.context, ctx.appendEvent, "halted");
