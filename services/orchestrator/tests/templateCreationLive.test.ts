@@ -1,17 +1,17 @@
 // Tests for the LIVE template-creation seams (wave 4) + the selection→creation
 // wiring — the real, mountable capability:
-//   1. the LIVE RESEARCH seam (`wrapProviderResearcher`): a real-model structured
-//      call mapped to TemplateResearch; grounding flows through; an ungrounded
-//      result fails LOUD at the orchestration boundary.
-//   2. the LIVE BUILD-DRIVER seam (`buildRunLoopBuildDriver`): the wiring SHAPE —
-//      walk → poll convergence → resolve → allocate → clone → bootstrap → handle;
-//      a stranded spec + a convergence timeout both fail LOUD.
-//   3. the LIVE AUDITOR (`buildTemplateAuditor`): counts `fail`-severity findings.
-//   4. the SELECTION no-match → CREATION wiring (`selectTemplate` + `createForNoMatch`):
-//      no validated template → creation runs → SEED from the freshly-created one.
+//   1. LIVE RESEARCH (`wrapProviderResearcher`): model output → TemplateResearch;
+//      grounding flows through; an ungrounded result fails LOUD.
+//   2. LIVE BUILD-DRIVER (`buildRunLoopBuildDriver`): the wiring SHAPE (walk → poll
+//      convergence → resolve → allocate → clone → bootstrap → handle) + the
+//      convergence policy — converge as far as possible; strand only on a GENUINE
+//      deadlock (every remaining spec terminal_blocked) or the bounded deadline.
+//   3. LIVE AUDITOR (`buildTemplateAuditor`): counts `fail`-severity findings.
+//   4. SELECTION no-match → CREATION (`selectTemplate` + `createForNoMatch`): no
+//      validated template → creation runs → SEED from the freshly-created one.
 //
-// The model/runner/DB are all SEAMS — a fake adapter, fake sub-seams, and an
-// in-memory registry — so the wiring is proven without a live model or runner.
+// The model/runner/DB are all SEAMS (a fake adapter, fake sub-seams, an in-memory
+// registry) so the wiring is proven without a live model or runner.
 
 import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_CI_CONFIG } from "../src/engine/ci/index.js";
@@ -120,9 +120,9 @@ describe("LIVE research seam — wrapProviderResearcher", () => {
   });
 });
 
-// ── LIVE build-driver wiring shape ──────────────────────────────────────────
-// A walker that just records walks (the run worker drives the actual runs); a
-// snapshot fn scripted to converge after N polls.
+// ── LIVE build-driver wiring shape + convergence policy ─────────────────────
+// A walker that records walks (the run worker drives actual runs); a snapshot fn
+// scripted to converge / strand / linger after N polls.
 function snapshotWith(phases: Array<DagSnapshot["nodes"][number]["phase"]>): DagSnapshot {
   return {
     projectId: "project_tmpl",
@@ -157,11 +157,7 @@ class RecordingSsh implements CommandSubstrate {
 const releasedRunners: string[] = [];
 const fakeAllocator = {
   async allocate() {
-    return {
-      runnerId: "runner_1",
-      imageSha: "img@sha",
-      target: { backend: "ssh" } as RunnerHandle,
-    };
+    return { runnerId: "runner_1", imageSha: "img@sha", target: { backend: "ssh" } as RunnerHandle };
   },
   async release(runnerId: string) {
     releasedRunners.push(runnerId);
@@ -203,7 +199,7 @@ function buildDriverDeps(overrides: { loadSnapshot: (p: string) => Promise<DagSn
   };
 }
 
-describe("LIVE build-driver — wiring shape", () => {
+describe("LIVE build-driver — wiring shape + convergence policy", () => {
   it("walks + polls to convergence, then allocates + clones@sha + bootstraps + resolves a handle", async () => {
     let poll = 0;
     const { ssh, walker, deps } = buildDriverDeps({
@@ -213,40 +209,60 @@ describe("LIVE build-driver — wiring shape", () => {
         return poll < 2 ? snapshotWith(["in_flight", "pending"]) : snapshotWith(["done", "done"]);
       },
     });
-    const driver = buildRunLoopBuildDriver(deps);
-    const built = await driver.build({ orgId: "org_acme", projectId: "project_tmpl" });
+    const built = await buildRunLoopBuildDriver(deps).build({ orgId: "org_acme", projectId: "project_tmpl" });
 
-    // converged after polling; the walker was kicked each poll.
+    // converged after polling (walker kicked each poll); the handle is the converged
+    // repo/commit + a resolved config + the auditor; the clone fetched the EXACT sha.
     expect(walker.walked.length).toBeGreaterThanOrEqual(2);
-    // the handle is the converged repo/commit + a resolved config + the auditor.
     expect(built.repoRef).toBe(convergedFacts.repoRef);
     expect(built.builtSha).toBe("a".repeat(40));
     expect(built.config).toEqual(DEFAULT_CI_CONFIG);
     expect(built.auditor).toBe(stubAuditor);
-    // the clone fetched the EXACT converged sha (not a branch tip).
-    const cloned = ssh.commands.find((c) => c.command.includes("git fetch"));
-    expect(cloned?.command).toContain("a".repeat(40));
+    expect(ssh.commands.find((c) => c.command.includes("git fetch"))?.command).toContain("a".repeat(40));
 
-    // the handle carries a `release` that tears down the ALLOCATED validation runner
-    // (audit §3.11/4: the validation runner must not leak). Not yet released — the
-    // creation flow calls it in its `finally`; calling it here releases runner_1.
+    // the handle's `release` tears down the ALLOCATED validation runner (audit
+    // §3.11/4: the validation runner must not leak).
     releasedRunners.length = 0;
     await built.release();
     expect(releasedRunners).toEqual(["runner_1"]);
   });
 
-  it("a stranded spec (terminal_blocked) fails LOUD — never validates a partial template", async () => {
-    const { deps } = buildDriverDeps({
-      loadSnapshot: async () => snapshotWith(["done", "terminal_blocked"]),
-    });
-    const driver = buildRunLoopBuildDriver(deps);
-    await expect(driver.build({ orgId: "org_acme", projectId: "project_tmpl" })).rejects.toThrow(/STRANDED|blocked/u);
+  it("a GENUINE deadlock (every remaining spec terminal_blocked) fails LOUD — no partial template", async () => {
+    // One merged, the only other terminally blocked — no forward progress ⇒ strand now.
+    const { deps } = buildDriverDeps({ loadSnapshot: async () => snapshotWith(["done", "terminal_blocked"]) });
+    await expect(buildRunLoopBuildDriver(deps).build({ orgId: "org_acme", projectId: "project_tmpl" })).rejects.toThrow(
+      /STRANDED|blocked/u,
+    );
   });
 
-  it("a non-converging build fails LOUD at the deadline", async () => {
+  it("one terminal_blocked spec does NOT strand while others can still merge — waits, then converges", async () => {
+    // apex live finding: a dependent strands fast, but the scaffold it is blocked behind
+    // is still in_flight + mergeable. The build must NOT give up on the first
+    // terminal_blocked spec — it polls, lets the scaffold merge, and converges.
+    // poll 1: scaffold mergeable + dependent stranded ⇒ forward progress ⇒ don't strand.
+    // poll 2: scaffold merged, dependent re-ready. poll 3: both done ⇒ converged.
+    const scripted: Array<DagSnapshot["nodes"][number]["phase"][]> = [
+      ["in_flight", "terminal_blocked"],
+      ["done", "in_flight"],
+      ["done", "done"],
+    ];
+    let poll = 0;
+    const { ssh, walker, deps } = buildDriverDeps({
+      loadSnapshot: async () => snapshotWith(scripted[Math.min(poll++, scripted.length - 1)]),
+    });
+    const built = await buildRunLoopBuildDriver(deps).build({ orgId: "org_acme", projectId: "project_tmpl" });
+    // kept polling past the strand and reached convergence.
+    expect(walker.walked.length).toBeGreaterThanOrEqual(3);
+    expect(built.builtSha).toBe("a".repeat(40));
+    expect(ssh.commands.find((c) => c.command.includes("git fetch"))?.command).toContain("a".repeat(40));
+  });
+
+  it("a non-converging build fails LOUD at the deadline (a lingering strand stays bounded too)", async () => {
+    // Blocked strand + a perpetually-in_flight scaffold: forward progress is nominally
+    // possible (so no strand), but the deadline still bounds the wait — never infinite.
     let clock = 0;
     const { ssh, deps } = buildDriverDeps({
-      loadSnapshot: async () => snapshotWith(["in_flight", "pending"]),
+      loadSnapshot: async () => snapshotWith(["in_flight", "terminal_blocked"]),
     });
     const driver = buildRunLoopBuildDriver({
       ...deps,
@@ -254,7 +270,6 @@ describe("LIVE build-driver — wiring shape", () => {
       convergence: { deadlineMs: 9_000, pollIntervalMs: 1 },
     });
     await expect(driver.build({ orgId: "org_acme", projectId: "project_tmpl" })).rejects.toThrow(/did not converge/u);
-    // never reached the clone (no convergence).
     expect(ssh.commands.find((c) => c.command.includes("git fetch"))).toBeUndefined();
   });
 });
@@ -288,11 +303,10 @@ describe("LIVE auditor — buildTemplateAuditor", () => {
   });
 });
 
-// ── createTemplateFlow assembly (the route is LIVE, not injection-gated) ─────
-describe("createTemplateFlow assembly — the live, mountable capability", () => {
-  // The flow deps the mount assembles (all sub-infra is a seam; cast stubs since
-  // assembly does no I/O until the flow runs).
-  const deps = {
+// The flow deps the mount assembles (all sub-infra is a seam; cast stubs since
+// assembly does no I/O until the flow runs).
+function flowDeps(): CreateTemplateFlowDeps {
+  return {
     pool: {} as never,
     secrets: {} as never,
     allocator: fakeAllocator as never,
@@ -308,6 +322,11 @@ describe("createTemplateFlow assembly — the live, mountable capability", () =>
     } as never,
     repoOwner: "cat-cave",
   } as unknown as CreateTemplateFlowDeps;
+}
+
+// ── createTemplateFlow assembly (the route is LIVE, not injection-gated) ─────
+describe("createTemplateFlow assembly — the live, mountable capability", () => {
+  const deps = flowDeps();
 
   it("buildCreateTemplateFlow assembles a runnable flow (the route mounts it unconditionally)", () => {
     const flow = buildCreateTemplateFlow(deps);
@@ -328,10 +347,6 @@ describe("createTemplateFlow assembly — the live, mountable capability", () =>
   });
 });
 
-// The no-match seam is ASYNC (audit §3.11/3): it must NOT run the 60-min creation
-// inline in the derive request. It (1) checks the registry for an existing validated
-// match synchronously (seed it if present), else (2) fires creation in the BACKGROUND
-// and returns `undefined` immediately so the derive proceeds from-scratch THIS run.
 // A pool whose template-capability query returns the scripted rows; records calls.
 function poolReturning(rows: ReadonlyArray<unknown>) {
   const queries: string[] = [];
@@ -347,23 +362,7 @@ function poolReturning(rows: ReadonlyArray<unknown>) {
 }
 
 describe("buildCreateForNoMatch — synchronous create-then-seed, owner-threaded", () => {
-  // Local flow deps (the assembly does no I/O until the flow runs; all sub-infra stubbed).
-  const deps = {
-    pool: {} as never,
-    secrets: {} as never,
-    allocator: fakeAllocator as never,
-    ssh: new RecordingSsh() as never,
-    identitySecretRef: "id/ref",
-    githubHttp: {} as never,
-    githubAppMinter: {} as never,
-    forgeInfra: { pool: {}, secrets: {}, allocator: fakeAllocator, ssh: {}, identitySecretRef: "id/ref" } as never,
-    auditPassRunner: {
-      async run() {
-        return { findings: [] };
-      },
-    } as never,
-    repoOwner: "cat-cave",
-  } as unknown as CreateTemplateFlowDeps;
+  const deps = flowDeps();
 
   const ctx = {
     orgId: "org_acme",

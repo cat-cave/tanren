@@ -123,10 +123,21 @@ export function buildRunLoopBuildDriver(deps: RunLoopBuildDriverDeps): TemplateB
 
 // Poll the project's DAG until it CONVERGES — every spec `done` (merged) and at
 // least one spec exists. A spec in `terminal_blocked` (halted / cancelled /
-// needs_attention) STRANDS the build: the template cannot bake the full bar with a
-// blocked spec, so we fail LOUD rather than validate a partial template. The walker
-// is kicked each poll (idempotent) so the build does not depend solely on the
+// needs_attention) does NOT, on its own, strand the build: as long as OTHER specs
+// are still making forward progress (pending or in_flight — they can still merge,
+// e.g. the scaffold a dependent is blocked behind), we keep polling and let the DAG
+// converge AS FAR AS IT CAN. We declare the build STRANDED only when there is NO
+// forward progress possible — a GENUINE deadlock: every remaining (non-`done`) spec
+// is `terminal_blocked`. We fail LOUD then rather than validate a partial template.
+// The convergence DEADLINE still bounds the wait — never an infinite poll. The
+// walker is kicked each poll (idempotent) so the build does not depend solely on the
 // ambient subscriber being up.
+//
+// Why this matters (apex live finding): a dependent spec stranded fast (blocked on
+// an unmerged dependency); the old code threw STRANDED on the first
+// `terminal_blocked` spec and gave up WHILE the scaffold spec was still `in_flight`
+// and mergeable — so nothing ever merged. Waiting for the in-progress merges lets
+// the scaffold land before we judge the blocked strand a deadlock.
 async function driveToConvergence(
   deps: RunLoopBuildDriverDeps,
   projectId: string,
@@ -139,16 +150,6 @@ async function driveToConvergence(
     await deps.walker.walk(projectId);
     const snapshot = await deps.loadSnapshot(projectId);
 
-    const blocked = snapshot.nodes.filter((n) => n.phase === "terminal_blocked");
-    if (blocked.length > 0) {
-      throw new TemplateBuildFailedError(
-        projectId,
-        `template build STRANDED — ${String(blocked.length)} spec(s) terminally blocked (halted/cancelled/needs_attention): ${blocked
-          .map((n) => n.specId)
-          .join(", ")}`,
-      );
-    }
-
     const total = snapshot.nodes.length;
     const done = snapshot.nodes.filter((n) => n.phase === "done").length;
     // CONVERGED — every spec merged.
@@ -156,10 +157,30 @@ async function driveToConvergence(
       return;
     }
 
-    if (now() >= deadline) {
+    const blocked = snapshot.nodes.filter((n) => n.phase === "terminal_blocked");
+    // FORWARD PROGRESS is possible iff some non-`done`, non-`terminal_blocked` spec
+    // remains (a `pending` or `in_flight` spec that can still merge). A
+    // `terminal_blocked` strand only deadlocks the build when NO such spec is left.
+    const progressing = total - done - blocked.length;
+    if (blocked.length > 0 && progressing === 0) {
+      // GENUINE deadlock: every remaining spec is terminally blocked — nothing can
+      // advance, so waiting cannot help. Fail LOUD with the blocked specs.
       throw new TemplateBuildFailedError(
         projectId,
-        `template build did not converge within ${String(deps.convergence.deadlineMs)}ms (${String(done)}/${String(total)} specs merged)`,
+        `template build STRANDED — ${String(blocked.length)} spec(s) terminally blocked (halted/cancelled/needs_attention) and no remaining spec can make forward progress: ${blocked
+          .map((n) => n.specId)
+          .join(", ")}`,
+      );
+    }
+
+    if (now() >= deadline) {
+      const blockedNote =
+        blocked.length > 0
+          ? ` — ${String(blocked.length)} spec(s) terminally blocked (${blocked.map((n) => n.specId).join(", ")})`
+          : "";
+      throw new TemplateBuildFailedError(
+        projectId,
+        `template build did not converge within ${String(deps.convergence.deadlineMs)}ms (${String(done)}/${String(total)} specs merged)${blockedNote}`,
       );
     }
     await sleep(deps.convergence.pollIntervalMs);
