@@ -35,6 +35,7 @@ import type { GithubAppTokenMinter } from "../../engine/providers/githubAppToken
 import { buildTemplateResearcher } from "../../engine/templates/creation/liveResearch.js";
 import { buildRunLoopBuildDriver } from "../../engine/templates/creation/liveBuildDriver.js";
 import { buildLiveTemplateBuildRecovery } from "../../engine/templates/creation/liveRecovery.js";
+import { buildCreationUpgrade } from "../../engine/templates/creation/creationUpgrade.js";
 import { resolveConvergedProjectFacts } from "../../engine/templates/creation/convergedFacts.js";
 import { buildTemplateAuditor } from "../../engine/templates/creation/liveAuditor.js";
 import { maybeCreateTemplateForNoMatch, type CreateTemplateDeps } from "../../engine/templates/index.js";
@@ -154,6 +155,12 @@ export function buildCreateTemplateDeps(
   // AUTO-REQUEUES them (reset → `open`, re-driven from scratch), BOUNDED (a loud terminal
   // failure after the cap) — so a stranded build NEVER needs manual DB clearing.
   const recovery = buildLiveTemplateBuildRecovery(deps.pool, actor);
+  // CREATION-TIME UPGRADE seam (environment-management.md §4.5/§7 P1): the once-at-birth,
+  // gated `just upgrade` node so a freshly-created template starts near-latest (defeats the
+  // model's training-cutoff version freeze). Inserts the SAME gated DAG node the periodic
+  // generator does, depending on the build specs — the build's convergence drive runs it
+  // through the full gate; a project with no upgrade verb skips loud.
+  const creationUpgrade = buildCreationUpgrade({ pool: deps.pool });
 
   return {
     pool: deps.pool,
@@ -162,6 +169,7 @@ export function buildCreateTemplateDeps(
     researcher,
     buildDriver,
     recovery,
+    creationUpgrade,
     deriveOptions: {
       owner,
       autonomy: "auto",

@@ -48,6 +48,19 @@ export const templatesSensitivityRules: SensitivityRule[] = [
     ["stack", "public"],
     ["reason", "public"],
   ]),
+  // template.creation.upgraded: the once-at-birth gated upgrade node was inserted.
+  ...rulesFor("template.creation.upgraded", [
+    ["orgId", "public"],
+    ["stack", "public"],
+    ["specId", "public"],
+    ["afterSpecIds[]", "public"],
+  ]),
+  // template.creation.upgrade_skipped: the loud skip (no upgrade verb / pinned).
+  ...rulesFor("template.creation.upgrade_skipped", [
+    ["orgId", "public"],
+    ["stack", "public"],
+    ["reason", "public"],
+  ]),
   // template.build.recovered: the auto-requeue of a stranded build (spec ids + the
   // bounded attempt number + the progress signal — all non-secret descriptors).
   ...rulesFor("template.build.recovered", [

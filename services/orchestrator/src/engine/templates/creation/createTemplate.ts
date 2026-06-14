@@ -45,6 +45,7 @@ import {
 } from "./research.js";
 import { authorTemplateBuildCapture, capabilitiesFor } from "./specAuthoring.js";
 import { recoverStrandedTemplateBuild, type TemplateBuildRecoveryDeps } from "./recovery.js";
+import { type CreationUpgrade, runCreationTimeUpgrade } from "./creationUpgrade.js";
 import { createLogger } from "../../observability/logger.js";
 
 const log = createLogger("template-creation");
@@ -82,6 +83,15 @@ export interface CreateTemplateDeps {
   // always wires it (`buildLiveTemplateBuildRecovery`) so a stranded build never needs
   // manual DB clearing.
   recovery?: TemplateBuildRecoveryDeps;
+  // CREATION-TIME UPGRADE seam (environment-management.md §4.5/§7 P1 — "scaffold-time
+  // upgrade so new projects start near-latest"). BEFORE driving the build, this inserts a
+  // once-at-birth `just upgrade` node into the template-build DAG, depending on the build
+  // specs so it runs only AFTER the template reaches a green gate; the build driver's
+  // convergence drive then runs it through the full gate (a broken bump self-heals via the
+  // writer loop, never a hard fail). A project with no upgrade verb SKIPS LOUDLY (a durable
+  // event). Absent ⇒ the once-at-birth upgrade is not run (a test that does not exercise it
+  // omits it); the live route always wires `buildCreationUpgrade`.
+  creationUpgrade?: CreationUpgrade;
   // The clock — passed so the proof's validatedAt is deterministic in tests.
   now: () => Date;
   // The harness/positive-control timeout.
@@ -200,6 +210,24 @@ export async function createTemplate(
         stack: request.stack,
       });
     }
+
+    // CREATION-TIME UPGRADE (environment-management.md §4.5/§7 P1): insert the once-at-birth
+    // `just upgrade` node into the build DAG BEFORE driving it, depending on the build specs
+    // so it runs only AFTER the template reaches a green gate. The build driver's convergence
+    // drive then runs it through the full gate (green → born at latest; red → self-heals via
+    // the writer loop). A project with no upgrade verb SKIPS LOUDLY. Best-effort + bounded:
+    // it never aborts the build (the actual product) — a broken bump self-heals through the
+    // gate, an absent verb is a loud skip.
+    if (deps.creationUpgrade !== undefined) {
+      await runCreationTimeUpgrade(deps.creationUpgrade, deps.events, {
+        orgId,
+        projectId: derived.projectId,
+        actor: deps.actor,
+        stack: request.stack,
+        dependsOn: derived.specIds,
+      });
+    }
+
     return await buildValidatePublish(deps, request, research, derived, orgId);
   } catch (error) {
     await emitCreationFailed(deps, orgId, request.stack, derived.projectId, error);
