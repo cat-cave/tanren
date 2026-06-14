@@ -23,6 +23,7 @@ import {
   DEFAULT_MAX_RECOVERY_ATTEMPTS,
   recoverStrandedTemplateBuild,
   TemplateBuildRecoveryExhaustedError,
+  type RecoveryProgressSignal,
   type TemplateBuildRecoveryDeps,
 } from "../src/engine/templates/index.js";
 
@@ -47,9 +48,24 @@ function snapshot(projectId: string, nodes: DagSpecNode[]): DagSnapshot {
   return { projectId, nodes, archived: false };
 }
 
+// The stranded set of the CURRENT snapshot, normalized (sorted, deduped) the same way
+// the recovery does — used to synthesize "no-progress" prior recoveries that match it.
+function strandedOf(nodes: DagSpecNode[]): string[] {
+  return [...new Set(nodes.filter((n) => n.phase === "terminal_blocked").map((n) => n.specId))].sort((x, y) =>
+    x < y ? -1 : x > y ? 1 : 0,
+  );
+}
+
+function mergedOf(nodes: DagSpecNode[]): number {
+  return nodes.filter((n) => n.phase === "done").length;
+}
+
 interface FakeOptions {
   nodes: DagSpecNode[];
-  priorRecoveries?: number;
+  // EITHER a count of prior recoveries (synthesized as IDENTICAL no-progress signals
+  // matching the current snapshot — the stuck-build case the flat cap modeled), OR an
+  // explicit ordered list of prior progress signals (to model a converging build).
+  priorRecoveries?: number | RecoveryProgressSignal[];
   published?: boolean;
   // Spec ids the reset should report as NOT reset (a concurrent recovery race).
   resetSkips?: string[];
@@ -60,6 +76,15 @@ function makeDeps(opts: FakeOptions): { deps: TemplateBuildRecoveryDeps; events:
   const events = new RecordingEvents();
   const reset: string[] = [];
   const skips = new Set(opts.resetSkips ?? []);
+  // A bare count synthesizes that many IDENTICAL no-progress recoveries (same merged
+  // count + same stranded set as the current snapshot) — so the historical flat-cap
+  // tests model a truly-stuck build and still exhaust.
+  const priorSignals: RecoveryProgressSignal[] = Array.isArray(opts.priorRecoveries)
+    ? opts.priorRecoveries
+    : Array.from({ length: opts.priorRecoveries ?? 0 }, () => ({
+        mergedCount: mergedOf(opts.nodes),
+        strandedSpecIds: strandedOf(opts.nodes),
+      }));
   const deps: TemplateBuildRecoveryDeps = {
     loadSnapshot: async (projectId) => snapshot(projectId, opts.nodes),
     resetStrandedSpec: async ({ specId }) => {
@@ -67,7 +92,7 @@ function makeDeps(opts: FakeOptions): { deps: TemplateBuildRecoveryDeps; events:
       reset.push(specId);
       return true;
     },
-    priorRecoveryCount: async () => opts.priorRecoveries ?? 0,
+    priorRecoveries: async () => priorSignals,
     hasPublishedValidatedTemplate: async () => opts.published ?? false,
     events,
     ...(opts.maxAttempts === undefined ? {} : { maxAttempts: opts.maxAttempts }),
@@ -217,5 +242,143 @@ describe("recoverStrandedTemplateBuild — a healthy build is a no-op", () => {
     expect(outcome).toEqual({ kind: "not_stranded" });
     expect(reset).toEqual([]);
     expect(events.appended).toEqual([]);
+  });
+});
+
+// ---- 5. PROGRESS-AWARE bound: converging keeps recovering, stuck exhausts ----
+
+describe("recoverStrandedTemplateBuild — the bound is PROGRESS-AWARE", () => {
+  it("a build that keeps MERGING more specs recovers past the flat cap (it is converging)", async () => {
+    // Already over the flat cap (4 prior recoveries, default cap 3) — BUT each prior
+    // recovery merged strictly more specs (1→2→3→4), and the current snapshot has even
+    // more merged (5). Every step made progress ⇒ consecutive no-progress streak is 0 ⇒
+    // it keeps recovering, NOT exhaust.
+    const { deps, events } = makeDeps({
+      nodes: [
+        node("m1", "done"),
+        node("m2", "done"),
+        node("m3", "done"),
+        node("m4", "done"),
+        node("m5", "done"),
+        node("s1", "terminal_blocked"),
+      ],
+      priorRecoveries: [
+        { mergedCount: 1, strandedSpecIds: ["s1"] },
+        { mergedCount: 2, strandedSpecIds: ["s1"] },
+        { mergedCount: 3, strandedSpecIds: ["s1"] },
+        { mergedCount: 4, strandedSpecIds: ["s1"] },
+      ],
+    });
+
+    const outcome = await recoverStrandedTemplateBuild(deps, ctx);
+    // Recovered (not exhausted), and the visible attempt is the no-progress streak +1 = 1.
+    expect(outcome).toMatchObject({ kind: "requeued", attempt: 1 });
+    const recovered = events.appended.find((e) => e.eventType === "template.build.recovered");
+    expect(recovered?.payload).toMatchObject({ mergedCount: 5, strandedSpecIds: ["s1"], attempt: 1 });
+  });
+
+  it("a build whose STRANDED SET changes recovers past the flat cap (a different spec now blocks)", async () => {
+    // Over the flat cap (3 prior), same merged count throughout, but the stranded set
+    // shifted each recovery (s1 → s2 → s3) and is again different now (s4). The set
+    // changing IS progress ⇒ no-progress streak 0 ⇒ keeps recovering.
+    const { deps } = makeDeps({
+      nodes: [node("d1", "done"), node("s4", "terminal_blocked")],
+      priorRecoveries: [
+        { mergedCount: 1, strandedSpecIds: ["s1"] },
+        { mergedCount: 1, strandedSpecIds: ["s2"] },
+        { mergedCount: 1, strandedSpecIds: ["s3"] },
+      ],
+    });
+    const outcome = await recoverStrandedTemplateBuild(deps, ctx);
+    expect(outcome).toMatchObject({ kind: "requeued", attempt: 1 });
+  });
+
+  it("a build STUCK at the SAME failure (no new merges, same stranded set) K times STILL exhausts loud", async () => {
+    // Same merged count AND same stranded set across all 3 prior recoveries and the
+    // current snapshot — zero forward progress, K=3 consecutive ⇒ exhaust loud.
+    const { deps, events, reset } = makeDeps({
+      nodes: [node("d1", "done"), node("s1", "terminal_blocked")],
+      priorRecoveries: [
+        { mergedCount: 1, strandedSpecIds: ["s1"] },
+        { mergedCount: 1, strandedSpecIds: ["s1"] },
+        { mergedCount: 1, strandedSpecIds: ["s1"] },
+      ],
+    });
+    await expect(recoverStrandedTemplateBuild(deps, ctx)).rejects.toBeInstanceOf(TemplateBuildRecoveryExhaustedError);
+    expect(reset).toEqual([]);
+    const exhausted = events.appended.find((e) => e.eventType === "template.build.recovery_exhausted");
+    expect(exhausted?.payload).toMatchObject({ mergedCount: 1, strandedSpecIds: ["s1"], maxAttempts: 3 });
+  });
+
+  it("only CONSECUTIVE trailing no-progress recoveries count: early progress does NOT forgive a recent freeze", async () => {
+    // Five priors: it converged early (merged 1→2→3) then FROZE at the same failure for
+    // the last steps. The current snapshot matches the frozen tail. The consecutive
+    // no-progress streak is exactly the frozen run, which meets the cap ⇒ exhaust. The
+    // bound MUST still terminate a build that stopped advancing, even if it once moved.
+    const { deps } = makeDeps({
+      nodes: [node("d1", "done"), node("d2", "done"), node("d3", "done"), node("s1", "terminal_blocked")],
+      maxAttempts: 3,
+      priorRecoveries: [
+        // The progress era: merged 1→2→3, stranded set shifting.
+        { mergedCount: 1, strandedSpecIds: ["sa"] },
+        { mergedCount: 2, strandedSpecIds: ["sb"] },
+        // Frozen from here: merged 3, stranded {s1} — three consecutive no-progress steps.
+        { mergedCount: 3, strandedSpecIds: ["s1"] },
+        { mergedCount: 3, strandedSpecIds: ["s1"] },
+        { mergedCount: 3, strandedSpecIds: ["s1"] },
+      ],
+    });
+    await expect(recoverStrandedTemplateBuild(deps, ctx)).rejects.toBeInstanceOf(TemplateBuildRecoveryExhaustedError);
+  });
+
+  it("a SINGLE step of progress resets the streak: a recovery right after progress is attempt 1 again", async () => {
+    // Frozen for a while, then the current snapshot finally merged one more (3→4). That
+    // single forward step makes the most-recent comparison progress ⇒ streak 0 ⇒ recover.
+    const { deps, events } = makeDeps({
+      nodes: [
+        node("d1", "done"),
+        node("d2", "done"),
+        node("d3", "done"),
+        node("d4", "done"),
+        node("s1", "terminal_blocked"),
+      ],
+      maxAttempts: 2,
+      priorRecoveries: [
+        { mergedCount: 3, strandedSpecIds: ["s1"] },
+        { mergedCount: 3, strandedSpecIds: ["s1"] },
+        { mergedCount: 3, strandedSpecIds: ["s1"] },
+      ],
+    });
+    const outcome = await recoverStrandedTemplateBuild(deps, ctx);
+    expect(outcome).toMatchObject({ kind: "requeued", attempt: 1 });
+    expect(events.appended.find((e) => e.eventType === "template.build.recovered")?.payload).toMatchObject({
+      mergedCount: 4,
+    });
+  });
+
+  it("BOUNDED: a forever-stuck build terminates (does not infinitely recover) under the progress-aware cap", async () => {
+    // Simulate repeated recoveries that never make progress, feeding each emitted signal
+    // back as a prior. The cap MUST be hit within a bounded number of iterations.
+    const priors: RecoveryProgressSignal[] = [];
+    const nodes = [node("d1", "done"), node("s1", "terminal_blocked")];
+    let thrown: unknown;
+    for (let i = 0; i < 50; i++) {
+      const { deps } = makeDeps({ nodes, maxAttempts: 3, priorRecoveries: priors });
+      const result = await recoverStrandedTemplateBuild(deps, ctx).then(
+        () => "recovered" as const,
+        (error: unknown) => error,
+      );
+      if (result === "recovered") {
+        // No progress was made (same nodes) ⇒ record an identical no-progress signal.
+        priors.push({ mergedCount: 1, strandedSpecIds: ["s1"] });
+        continue;
+      }
+      thrown = result;
+      break;
+    }
+    // It terminated (did NOT loop forever) by throwing exhausted, after exactly the
+    // cap's worth of no-progress recoveries.
+    expect(thrown).toBeInstanceOf(TemplateBuildRecoveryExhaustedError);
+    expect(priors.length).toBe(3);
   });
 });

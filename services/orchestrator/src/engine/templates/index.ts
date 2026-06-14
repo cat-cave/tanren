@@ -80,9 +80,11 @@ export {
   recoverStrandedTemplateBuild,
   TemplateBuildRecoveryExhaustedError,
   DEFAULT_MAX_RECOVERY_ATTEMPTS,
+  consecutiveNoProgressCount,
   buildLiveTemplateBuildRecovery,
   type TemplateBuildRecoveryDeps,
   type TemplateBuildRecoveryOutcome,
+  type RecoveryProgressSignal,
 } from "./creation/index.js";
 // WAVE 5 — the MAINTENANCE flow (templating-system.md §4): the re-validation loop,
 // the lts/nightly channel policy, the nightly→lts graduation gate (the canary), and

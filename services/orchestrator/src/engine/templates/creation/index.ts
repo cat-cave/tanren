@@ -39,7 +39,9 @@ export {
   recoverStrandedTemplateBuild,
   TemplateBuildRecoveryExhaustedError,
   DEFAULT_MAX_RECOVERY_ATTEMPTS,
+  consecutiveNoProgressCount,
   type TemplateBuildRecoveryDeps,
   type TemplateBuildRecoveryOutcome,
+  type RecoveryProgressSignal,
 } from "./recovery.js";
 export { buildLiveTemplateBuildRecovery } from "./liveRecovery.js";

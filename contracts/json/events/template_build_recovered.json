@@ -12,6 +12,11 @@
       "maximum": 9007199254740991,
       "type": "integer"
     },
+    "mergedCount": {
+      "maximum": 9007199254740991,
+      "minimum": 0,
+      "type": "integer"
+    },
     "orgId": {
       "type": "string"
     },
@@ -23,6 +28,12 @@
     },
     "stack": {
       "type": "string"
+    },
+    "strandedSpecIds": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
     }
   },
   "required": [
@@ -30,7 +41,9 @@
     "stack",
     "requeuedSpecIds",
     "attempt",
-    "maxAttempts"
+    "maxAttempts",
+    "mergedCount",
+    "strandedSpecIds"
   ],
   "type": "object",
   "x-tanren-schema-id": "tanren.event.template.build.recovered"

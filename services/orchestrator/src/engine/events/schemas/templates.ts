@@ -124,10 +124,22 @@ export const TemplateBuildRecoveredPayload = z
     stack: z.string(),
     /** The terminally-blocked specs reset to `open` (re-drivable) by this recovery. */
     requeuedSpecIds: z.array(z.string()),
-    /** 1-based attempt number THIS recovery is (the bound is `maxAttempts`). */
+    /**
+     * 1-based position in the CONSECUTIVE NO-PROGRESS streak this recovery occupies
+     * (the bound `maxAttempts` caps the streak, not a flat count — a converging build
+     * keeps showing low attempts even after many total recoveries).
+     */
     attempt: z.number().int().positive(),
-    /** The configured cap on auto-recoveries before a loud terminal failure. */
+    /** The configured cap on consecutive no-progress auto-recoveries before a loud terminal failure. */
     maxAttempts: z.number().int().positive(),
+    /**
+     * PROGRESS SIGNAL — count of MERGED (`done`) specs at this recovery. With
+     * `strandedSpecIds` it makes the converged-vs-stuck judgement reconstructible
+     * from the durable event log across restarts.
+     */
+    mergedCount: z.number().int().nonnegative(),
+    /** PROGRESS SIGNAL — the terminally-stranded spec ids at this recovery (sorted, deduped). */
+    strandedSpecIds: z.array(z.string()),
   })
   .strict();
 
@@ -143,8 +155,12 @@ export const TemplateBuildRecoveryExhaustedPayload = z
     stack: z.string(),
     /** The specs still terminally blocked at the recovery cap. */
     requeuedSpecIds: z.array(z.string()),
-    /** The cap that was reached (the number of prior recoveries that did not converge). */
+    /** The cap that was reached (the number of CONSECUTIVE no-progress recoveries). */
     maxAttempts: z.number().int().positive(),
+    /** PROGRESS SIGNAL — count of MERGED (`done`) specs at exhaustion. */
+    mergedCount: z.number().int().nonnegative(),
+    /** PROGRESS SIGNAL — the terminally-stranded spec ids at exhaustion (sorted, deduped). */
+    strandedSpecIds: z.array(z.string()),
   })
   .strict();
 
