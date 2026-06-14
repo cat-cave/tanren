@@ -75,9 +75,11 @@ describe("conflict-resolve bot identity (finding #7)", () => {
     const identityCmd = ssh.commands.find((c) => c.includes("jj config set --repo user.email"));
     expect(identityCmd).toBeDefined();
     // BOT-ATTRIBUTED: the jj author is the resolved bot login + noreply, so a commit jj
-    // exports + pushes onto a PR is recognized as Tanren's — not `tanren@local`.
-    expect(identityCmd).toContain(`jj config set --repo user.name '${CONFORMANCE_ACTOR_LOGIN}'`);
-    expect(identityCmd).toContain(`jj config set --repo user.email '${CONFORMANCE_ACTOR_NOREPLY_EMAIL}'`);
+    // exports + pushes onto a PR is recognized as Tanren's — not `tanren@local`. The value
+    // is a TOML-quoted basic string (jj parses <VALUE> as TOML) inside the shell quoting, so
+    // a `[bot]` login is settable without a TOML parse error.
+    expect(identityCmd).toContain(`jj config set --repo user.name '"${CONFORMANCE_ACTOR_LOGIN}"'`);
+    expect(identityCmd).toContain(`jj config set --repo user.email '"${CONFORMANCE_ACTOR_NOREPLY_EMAIL}"'`);
     expect(identityCmd).not.toContain("tanren@local");
   });
 

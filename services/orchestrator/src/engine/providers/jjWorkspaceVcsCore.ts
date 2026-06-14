@@ -36,6 +36,7 @@ import type {
 import { quoteSshShellArg } from "../ssh/command.js";
 import { runWorkspaceSshCommand } from "../workspace/ssh.js";
 import { buildJjCloneCommand, type JjCloneCredential } from "./jjCloneAuth.js";
+import { toTomlString } from "./jjConfigValue.js";
 
 export type { JjCloneCredential } from "./jjCloneAuth.js";
 
@@ -198,9 +199,14 @@ export class JjWorkspaceVcsCore implements WorkspaceVcsCore {
     // attributes to the bot login the external-change gate recognizes as Tanren's.
     // Absent ⇒ the non-attributable `Tanren` / `tanren@local` default (conformance +
     // the public/unauthenticated path, which never lands a commit on a real PR).
+    // TOML-VALUE: `jj config set` parses <VALUE> as a TOML expression, so a bot login like
+    // `tanren-cat-cave-validation[bot]` (the `[` opens a TOML array) is a hard parse error,
+    // not a literal — which deterministically infra-blocks every merge. {@link toTomlString}
+    // hands jj an explicitly TOML-quoted basic string; jj stores the literal value (no
+    // leaked quotes). This is orthogonal to the shell quoting `quoteSshShellArg` adds.
     await this.runJj(input.path, [
-      `jj config set --repo user.name ${quoteSshShellArg(this.commitIdentity.name)}`,
-      `jj config set --repo user.email ${quoteSshShellArg(this.commitIdentity.email)}`,
+      `jj config set --repo user.name ${quoteSshShellArg(toTomlString(this.commitIdentity.name))}`,
+      `jj config set --repo user.email ${quoteSshShellArg(toTomlString(this.commitIdentity.email))}`,
       // Put the working copy onto the base branch (a working commit on top of it, so
       // edits never land directly on the immutable base bookmark).
       `jj new ${quoteSshShellArg(input.baseBranch)}`,
