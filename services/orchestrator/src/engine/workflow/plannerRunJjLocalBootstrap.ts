@@ -26,6 +26,7 @@ import {
   autoSnapshotWorkingEdit,
   identityJjRefResolver,
   type JjCloneCredential,
+  type JjCommitIdentity,
   JjWorkspaceVcsCore,
 } from "../providers/jjWorkspaceVcsCore.js";
 import { createLogger } from "../observability/logger.js";
@@ -303,6 +304,34 @@ export async function bootstrapDependentWorkspace(
     resolved.token === undefined
       ? undefined
       : { token: resolved.token, httpsRemote: githubHttpsRemote(parseGitHubRepository(context.repoUrl)) };
+  // MERGE-SAFETY (self-identity): thread the resolved BOT identity into the jj core as its
+  // `commitIdentity` so EVERY commit this assembly authors attributes to the bot login the
+  // external-change gate recognizes as Tanren's. Without this the core falls back to its
+  // `tanren@local` default — so `core.branch(ws, runBranch, localRef)`'s `jj new` working
+  // commit (the run branch head the writer commits onto, which lands on the dependent's PR
+  // branch) is authored `tanren@local` → GitHub reports a NULL author → the gate keys it
+  // `<unknown>` → external → an `autonomy: auto` PR BLOCKS with no operator to approve it
+  // (the no-PR-ever-merged root cause for a dependent/template build). `resolved.identity`
+  // is the SAME identity the run's git writer commits as (resolveCloneCredential), so the
+  // jj-authored run-branch head and the git-authored writer commits agree on the bot login.
+  //
+  // FAIL-CLOSED: an AUTHENTICATED clone (a token is present) MUST carry a resolved bot
+  // identity — `resolveCloneCredential` throws loudly when an authenticated run cannot
+  // resolve one, so a token WITHOUT an identity here is an invariant breach (mirrors
+  // `resolveBotPushIdentity`'s loud-throw contract); we refuse rather than silently fall
+  // back to `tanren@local`. The genuinely UNAUTHENTICATED public path (no token) has no
+  // identity and uses the core's non-attributable default (it never pushes as Tanren).
+  if (resolved.token !== undefined && resolved.identity === undefined) {
+    throw new Error(
+      `jj-local bootstrap: authenticated clone of ${context.runBranch} resolved a token but NO bot ` +
+        `identity — refusing to author the assembled run branch as the unattributable tanren@local ` +
+        `default (it would block the PR as an <unknown> external change)`,
+    );
+  }
+  const commitIdentity: JjCommitIdentity | undefined =
+    resolved.identity === undefined
+      ? undefined
+      : { name: resolved.identity.login, email: resolved.identity.noreplyEmail };
   // The port that hands `bootstrapDependentBase` a workspace bound to the RUN's OWN runner +
   // path (no allocation) with a NO-OP release (the run's `finally` owns the real release).
   const buildWorkspace: BuildBootstrapWorkspacePort = async (): Promise<LiveJjWorkspace> => ({
@@ -312,6 +341,7 @@ export async function bootstrapDependentWorkspace(
       timeoutMs: input.timeoutMs,
       refResolver: identityJjRefResolver,
       workingEdit: autoSnapshotWorkingEdit,
+      ...(commitIdentity !== undefined && { commitIdentity }),
       ...(cloneCredential !== undefined && { cloneCredential }),
     }),
     target,
