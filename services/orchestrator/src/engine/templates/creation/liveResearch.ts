@@ -84,6 +84,22 @@ export function buildResearchPrompt(request: TemplateCreationRequest): string {
     // is skipped → `just bootstrap` fails (`pnpm: not found`). CURRENT/LTS by default
     // (the anti-stale-version rule) — never years-old versions. Tanren names no tool.
     "Decide the project TOOLCHAIN in `toolchain`: a list of { name, version } entries the researched stack needs (the runtime + package manager + any pinned tools), so Tanren can provision it via mise before bootstrap. Each `name` is a `mise` tool name (node/pnpm/python/go/rust/…); each `version` is a version string. Use CURRENT/LTS versions a fresh project would adopt TODAY (e.g. [{ name: 'node', version: '24' }, { name: 'pnpm', version: '11' }] | [{ name: 'python', version: '3.14' }] | [{ name: 'rust', version: 'stable' }, { name: 'go', version: '1.23' }]) — NEVER years-old versions — unless the brief explicitly calls for a legacy/pinned/nightly toolchain. Omit `toolchain` (or leave it empty) ONLY for a stack with NO tool mise can provision (a pure-shell / system-package stack that provisions inside its own bootstrap).",
+    // LATEST-BY-DEFAULT (environment-management.md §4.5/§7 — the anti-stale-version
+    // doctrine). A model has a TRAINING CUTOFF: the versions it remembers are already
+    // stale by the time a template is created. Without this guidance a fresh template
+    // freezes the cutoff's versions into EVERY project seeded from it forever (apex
+    // finding: a live run pinned node 24 + pnpm 10 when pnpm 11 was current). The
+    // anti-stale rule is GENERIC — Tanren names no version; the model picks the latest.
+    // The non-opinionated doctrine still holds: a deliberately-pinned legacy/specific
+    // version is allowed WHEN THE BRIEF REQUIRES IT.
+    "VERSIONS — CHOOSE THE LATEST STABLE. For the toolchain (language/runtime/package-manager versions) AND for every dependency, choose the LATEST STABLE release. Do NOT pin to the versions from your training cutoff — assume NEWER versions exist than the ones you remember, and research the current latest. Pin an older / specific / legacy / nightly version ONLY when the project (the brief / operator note) explicitly requires it.",
+    // UPGRADE VERB — environment-management.md §4.5/§7 P1. The `upgrade` verb is the
+    // generic anti-stale LEVER: a freshly-created template runs it once (creation-time
+    // upgrade) and the ongoing generator runs it periodically. Tanren names no command —
+    // the project authors the stack-specific one. CRITICAL (Part 3): the verb must cover
+    // BOTH the TOOLCHAIN (the mise pins) AND the dependencies — `pnpm update --latest`
+    // alone bumps deps but leaves the `mise.toml` node/pnpm pins stale.
+    "Decide the project's `upgrade` verb in `upgrade`: the SINGLE command that bumps EVERYTHING to latest — BOTH the declared TOOLCHAIN (the mise-pinned runtime/package-manager versions in `mise.toml`) AND the dependencies. For a mise stack this means bumping the `mise.toml` pins to latest then re-installing AND bumping deps, e.g. 'mise upgrade --bump && mise install && pnpm update --latest' | 'mise upgrade --bump && mise install && cargo update' | 'mise upgrade --bump && mise install && uv lock --upgrade'. A deps-only command (e.g. a bare 'pnpm update --latest') is WRONG — it leaves the toolchain pins stale. Omit `upgrade` ONLY for a stack with genuinely nothing to upgrade (a pure-prose stack); a stack with a toolchain or deps MUST declare it.",
     "Decide which full-bar gates this stack supports (typecheck / lint / test / mutation / junit / bdd) — only mark a gate present if the researched toolchain genuinely provides it (a gate that is green-by-accident must NOT be claimed). When mutation is present, give the concrete mutation command in mutationStep.",
     // TEST-REPORT CONVENTION — mirror the interview architecture step
     // (forge/interview/prompt.ts): a tier that runs tests should write a
@@ -131,6 +147,11 @@ function researchFromOutput(output: ResearchOutput): TemplateResearch {
   // `mise.toml` so `mise install` provisions the stack before `just bootstrap`.
   const toolchain = output.lifecycle.toolchain;
   const hasToolchain = toolchain !== undefined && toolchain.length > 0;
+  // Carry the researched `upgrade` verb onto the lifecycle ONLY when the model declared a
+  // non-empty one. Absent/blank ⇒ no upgrade verb (the template fills the `upgrade` target
+  // with a loud STUB and the creation-time upgrade is a loud skip — no Tanren upgrade lever).
+  const upgrade = output.lifecycle.upgrade?.trim();
+  const hasUpgrade = upgrade !== undefined && upgrade !== "";
   return {
     researchSources: [...output.researchSources],
     lifecycle: {
@@ -140,6 +161,7 @@ function researchFromOutput(output: ResearchOutput): TemplateResearch {
       tier3: output.lifecycle.tier3,
       build: output.lifecycle.build,
       deploy: output.lifecycle.deploy,
+      ...(hasUpgrade ? { upgrade } : {}),
       ...(hasToolchain ? { toolchain: [...toolchain] } : {}),
     },
     tooling: {

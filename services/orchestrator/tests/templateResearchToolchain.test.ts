@@ -118,6 +118,74 @@ describe("research PROMPT instructs the model to emit the toolchain at current/l
 // already carried this guidance (#496); the research prompt was the missing mirror. The
 // research prompt MUST steer a fresh-repo-safe non-frozen bootstrap that generates +
 // commits the lockfile.
+// FRESH-TEMPLATES-START-AT-LATEST (environment-management.md §4.5/§7) — a model has a
+// TRAINING CUTOFF, so without explicit steering a fresh template freezes the cutoff's
+// versions into every project seeded from it (apex finding: a live run pinned node 24 +
+// pnpm 10 when pnpm 11 was current). The research prompt MUST steer latest-by-default for
+// BOTH the toolchain AND deps, while honoring the non-opinionated doctrine (a deliberate
+// legacy pin is allowed when the brief requires it).
+describe("research PROMPT steers LATEST versions (anti-training-cutoff freeze)", () => {
+  it("instructs choosing the LATEST stable and NOT pinning to the training cutoff", () => {
+    const prompt = buildResearchPrompt(request);
+    const lower = prompt.toLowerCase();
+    expect(lower).toContain("latest stable");
+    expect(lower).toContain("training cutoff");
+    // The non-opinionated escape hatch: a deliberate legacy/specific pin is allowed.
+    expect(lower).toMatch(/legacy|specific|explicitly require/u);
+  });
+
+  it("the latest-version steering covers BOTH the toolchain AND the dependencies", () => {
+    const lower = buildResearchPrompt(request).toLowerCase();
+    // The guidance names both the toolchain (language/runtime/package-manager) and deps.
+    expect(lower).toContain("toolchain");
+    expect(lower).toContain("dependenc");
+  });
+});
+
+// PART 3 — the AUTHORED `upgrade` verb must bump BOTH the toolchain (the mise pins) AND
+// the deps. A deps-only `pnpm update --latest` leaves the node/pnpm pins in `mise.toml`
+// stale. The prompt steers the model to author a verb covering both (Tanren names no
+// command — it lives in the project's justfile).
+describe("research PROMPT instructs the `upgrade` verb to cover the TOOLCHAIN, not just deps", () => {
+  it("asks for an `upgrade` verb that bumps the toolchain pins AND the deps to latest", () => {
+    const lower = buildResearchPrompt(request).toLowerCase();
+    expect(lower).toContain("upgrade");
+    // It must name BOTH the toolchain pins and the deps as the verb's scope.
+    expect(lower).toMatch(/toolchain.*(and|both).*depend|both the toolchain/u);
+    // A deps-only command is explicitly called out as WRONG.
+    expect(lower).toContain("deps-only");
+  });
+});
+
+// The research OUTPUT SCHEMA carries the `upgrade` verb so the model can actually emit it
+// (it was previously read by the mapping but absent from the strict schema → not emittable).
+describe("research OUTPUT SCHEMA carries the `upgrade` verb", () => {
+  it("accepts a researched `upgrade` command on the lifecycle", () => {
+    const parsed = ResearchOutput.parse({
+      ...tsPnpmOutput,
+      lifecycle: { ...tsPnpmOutput.lifecycle, upgrade: "mise upgrade --bump && mise install && pnpm update --latest" },
+    });
+    expect(parsed.lifecycle.upgrade).toBe("mise upgrade --bump && mise install && pnpm update --latest");
+  });
+
+  it("threads the researched `upgrade` verb onto the lifecycle (and stays absent when omitted)", async () => {
+    const withUpgrade = wrapProviderResearcher(
+      fakeResearchAdapter({
+        ...tsPnpmOutput,
+        lifecycle: {
+          ...tsPnpmOutput.lifecycle,
+          upgrade: "mise upgrade --bump && mise install && pnpm update --latest",
+        },
+      }),
+    );
+    const research = await withUpgrade.research(request);
+    expect(research.lifecycle.upgrade).toBe("mise upgrade --bump && mise install && pnpm update --latest");
+
+    const withoutUpgrade = wrapProviderResearcher(fakeResearchAdapter(tsPnpmOutput));
+    expect((await withoutUpgrade.research(request)).lifecycle.upgrade).toBeUndefined();
+  });
+});
+
 describe("research PROMPT instructs a fresh-repo-safe (non-frozen) bootstrap", () => {
   it("does NOT recommend a frozen/locked install for `bootstrap` (would brick the cold template repo)", () => {
     const prompt = buildResearchPrompt(request);

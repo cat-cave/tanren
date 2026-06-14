@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "afterSpecIds": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "orgId": {
+      "type": "string"
+    },
+    "specId": {
+      "type": "string"
+    },
+    "stack": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "orgId",
+    "stack",
+    "specId",
+    "afterSpecIds"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.template.creation.upgraded"
+}

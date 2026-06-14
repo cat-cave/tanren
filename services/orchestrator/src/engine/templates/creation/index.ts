@@ -45,3 +45,13 @@ export {
   type RecoveryProgressSignal,
 } from "./recovery.js";
 export { buildLiveTemplateBuildRecovery } from "./liveRecovery.js";
+// CREATION-TIME UPGRADE (environment-management.md §4.5/§7 P1): the once-at-birth, gated
+// `just upgrade` node that makes a freshly-created template start near-latest.
+export {
+  buildCreationUpgrade,
+  runCreationTimeUpgrade,
+  type CreationUpgrade,
+  type CreationUpgradeDeps,
+  type CreationUpgradeInput,
+  type CreationUpgradeOutcome,
+} from "./creationUpgrade.js";

@@ -85,6 +85,14 @@ export {
   type TemplateBuildRecoveryDeps,
   type TemplateBuildRecoveryOutcome,
   type RecoveryProgressSignal,
+  // CREATION-TIME UPGRADE (environment-management.md §4.5/§7 P1): the once-at-birth,
+  // gated `just upgrade` node so a freshly-created template starts near-latest.
+  buildCreationUpgrade,
+  runCreationTimeUpgrade,
+  type CreationUpgrade,
+  type CreationUpgradeDeps,
+  type CreationUpgradeInput,
+  type CreationUpgradeOutcome,
 } from "./creation/index.js";
 // WAVE 5 — the MAINTENANCE flow (templating-system.md §4): the re-validation loop,
 // the lts/nightly channel policy, the nightly→lts graduation gate (the canary), and

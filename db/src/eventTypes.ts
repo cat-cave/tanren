@@ -151,6 +151,8 @@ export const eventTypeNames = [
   "template.creation.failed",
   "template.creation.published",
   "template.creation.started",
+  "template.creation.upgrade_skipped",
+  "template.creation.upgraded",
   "template.registered",
   "template.selection.no_match",
   "template.status_changed",

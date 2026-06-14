@@ -30,6 +30,12 @@ import { CaptureToolchain } from "../../forge/interview/types.js";
 // with no mise tool (a pure-shell/system-package stack that provisions inside its own
 // bootstrap shell); absent/empty ⇒ no `mise.toml`. The orchestration mapping carries it
 // onto `CaptureLifecycle.toolchain` (`liveResearch.ts` `researchFromOutput`).
+//
+// `upgrade` (environment-management.md §4.5/§7 P1) — the project's `upgrade` verb: the
+// SINGLE command that bumps BOTH the toolchain (the mise pins) AND the dependencies to
+// latest. Optional (a stack with literally nothing to upgrade omits it ⇒ a loud STUB
+// target + a loud creation-time skip). Carried onto `ResearchedLifecycle.upgrade` by the
+// orchestration mapping; the COMMAND is the project's own (Tanren names no bump command).
 export const ResearchedLifecycleOutput = z
   .object({
     bootstrap: z.string().min(1).max(2000),
@@ -38,6 +44,7 @@ export const ResearchedLifecycleOutput = z
     tier3: z.string().min(1).max(2000),
     build: z.string().min(1).max(2000),
     deploy: z.string().min(1).max(2000),
+    upgrade: z.string().min(1).max(2000).optional(),
     toolchain: CaptureToolchain.optional(),
   })
   .strict();

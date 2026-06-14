@@ -98,6 +98,43 @@ export const TemplateCreationFailedPayload = z
   })
   .strict();
 
+// ── Creation-time upgrade events (environment-management.md §4.5/§7 P1) ───────
+//
+// A freshly-created template gets a ONCE-AT-BIRTH `just upgrade` node inserted into
+// its build DAG so it starts near-LATEST (defeats the model's training-cutoff version
+// freeze). These events make that gated bump OBSERVABLE: it ran (a node was inserted),
+// or it was skipped LOUDLY (the project declares no upgrade verb, or is pinned — NEVER
+// a silent no-op). Non-secret descriptors only.
+
+// `template.creation.upgraded` — the once-at-birth upgrade node was inserted into the
+// build DAG, depending on the build specs (so it runs after the template's green gate).
+// The build's convergence drive runs it through the full gate (green → born at latest;
+// red → self-heals via the writer loop). `specId` is the inserted node; `afterSpecIds`
+// the build specs it gates behind (the before signal).
+export const TemplateCreationUpgradedPayload = z
+  .object({
+    orgId: z.string(),
+    stack: z.string(),
+    /** The inserted gated upgrade DAG node. */
+    specId: z.string(),
+    /** The build specs the once-at-birth upgrade gates behind (it runs after their green gate). */
+    afterSpecIds: z.array(z.string()),
+  })
+  .strict();
+
+// `template.creation.upgrade_skipped` — the once-at-birth upgrade did NOT run: the
+// project declares no `upgrade` verb (`no_upgrade_command`) or is deliberately pinned
+// (`policy_pinned`). The LOUD-skip record (the no-silent-fallback guarantee) — never a
+// hidden no-op.
+export const TemplateCreationUpgradeSkippedPayload = z
+  .object({
+    orgId: z.string(),
+    stack: z.string(),
+    /** Why the once-at-birth upgrade was skipped (a semantic refusal, not a failure). */
+    reason: z.enum(["no_upgrade_command", "policy_pinned"]),
+  })
+  .strict();
+
 // ── Self-recovery events (templating-system.md §2 + autonomy thesis) ─────────
 //
 // A template-build is itself an agent-driven Tanren project, so its specs WILL
@@ -174,6 +211,8 @@ export const templateEventRegistry = {
   "template.creation.started": TemplateCreationStartedPayload,
   "template.creation.published": TemplateCreationPublishedPayload,
   "template.creation.failed": TemplateCreationFailedPayload,
+  "template.creation.upgraded": TemplateCreationUpgradedPayload,
+  "template.creation.upgrade_skipped": TemplateCreationUpgradeSkippedPayload,
   "template.build.recovered": TemplateBuildRecoveredPayload,
   "template.build.recovery_exhausted": TemplateBuildRecoveryExhaustedPayload,
 } as const;

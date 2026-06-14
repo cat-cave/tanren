@@ -149,8 +149,11 @@ pass keeps them lean (bake slow+common, delta the rest).
 
 **Required `upgrade` verb — the command a version-change node runs.** `CiConfigV1` gains
 an `upgrade` lifecycle verb alongside bootstrap/tiers (and the `justfile` gains the target),
-**required** so every project declares how to bump deps to latest (`pnpm update --latest`,
-`cargo update`, `uv lock --upgrade`, `go get -u`, …). Tanren owns the **policy**, not the
+**required** so every project declares how to bump to latest. **The verb must cover BOTH
+the toolchain AND the dependencies** — a deps-only `pnpm update --latest` leaves the
+`mise.toml` runtime/package-manager pins stale, so the authored command bumps the toolchain
+pins too (e.g. `mise upgrade --bump && mise install && pnpm update --latest`;
+`… && cargo update`; `… && uv lock --upgrade`). Tanren owns the **policy**, not the
 command (Renovate-style, language-agnostic): a `keep-current` posture, a
 `minimum_release_age` cooldown (dodge just-published supply-chain'd versions), and
 group/one-PR knobs. The verb only _produces_ the new declaration/lockfile; what makes it
@@ -158,6 +161,34 @@ safe is that the resulting version change runs through the DAG gate (§4.5), not
 pipeline. This is the _structural_ fix for agents picking multi-year-old versions, beyond
 prompting. Escape hatch for a project that declares no `upgrade` verb: Tanren runs Renovate
 (self-hosted) to compute the changeset, then routes it through the same DAG gate.
+
+**Fresh templates start at the latest versions (the two-lever anti-stale fix).** An agent
+authoring a template-from-scratch pins versions from its **training cutoff** — already
+stale (an apex run pinned node 24 + pnpm 10 when pnpm 11 was current, and mise then
+installed pnpm 11.6 anyway, a silent mismatch). Two **generic, stack-agnostic** levers fix
+this so a freshly-created template is born current — neither bakes any pnpm/cargo/… branch
+into Tanren core:
+
+1. **Prompt latest-by-default.** The template-creation research/author prompt
+   (`engine/templates/creation/liveResearch.ts`) instructs the model to choose the **LATEST
+   stable** release for the toolchain (language/runtime/package-manager versions) AND for
+   every dependency, and to **NOT pin to the training cutoff** (assume newer versions exist).
+   The non-opinionated doctrine holds: a deliberately-pinned legacy/specific/nightly version
+   is allowed **when the brief explicitly requires it** (§4.5 motivation 1/4). The same
+   prompt steers the authored `upgrade` verb to cover both the toolchain pins and the deps.
+2. **Creation-time gated `upgrade`.** A freshly-born template never gets the ongoing
+   generator's periodic bump, so creation runs the project's declared `upgrade` verb **once,
+   at birth, gated.** After the scaffold/features reach a green gate and **before publish**,
+   the creation flow (`engine/templates/creation/creationUpgrade.ts`) inserts the **SAME
+   gated DAG node** the ongoing generator inserts (`generateUpgradeSpec`), made to depend on
+   the build specs so it runs only after the green gate. The build's existing convergence
+   drive runs it through the full gate: **green → the template is born at latest; red → it
+   routes through the EXISTING write→gate self-heal loop** (the writer fixes the bump), never
+   a hard fail and never a side pipeline. It is **bounded** by the build's existing
+   convergence budget. A project that declares **no** `upgrade` verb (or is pinned) **SKIPS
+   LOUDLY** — a durable `template.creation.upgrade_skipped` event — never a silent no-op; a
+   successful insert emits `template.creation.upgraded`. Tanren names no bump command here:
+   the inserted node runs the project's opaque `just upgrade`.
 
 ## 4. How it composes (one paragraph)
 
@@ -252,8 +283,9 @@ LLM-authored); only the `justfile` + the new `mise.toml`/`flake.nix` are lifecyc
   `justfile` `upgrade` target + the forced-upgrade policy; the autonomous generator that
   turns a CVE/freshness/forced-upgrade into a DAG node routed through the existing
   triage→spec→DAG-insert→gate→merge loop (intent-preserving; never overrides a pin; a
-  breaking change is gate-rejected loudly, never breaks main); scaffold-time upgrade so new
-  projects start near-latest.
+  breaking change is gate-rejected loudly, never breaks main); **creation-time upgrade so a
+  freshly-created template is born at latest** (the prompt latest-default + the once-at-birth
+  gated `just upgrade` node — both stack-agnostic, no version baked into core).
 - **P2 — Golden-image build + refresh-on-`main` + trim.** BuildKit pipeline, OCI
   registry, `mode=max` cache, content-digest tagging.
 - **P3 — Environment registry + `env_key` resolution + per-project binding.** The

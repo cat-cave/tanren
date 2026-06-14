@@ -57,6 +57,12 @@ export interface GenerateUpgradeSpecInput {
   // passes the request actor; a future scheduled trigger passes a system actor carrying
   // the project's org.
   actor: ActorContext;
+  // Existing spec-ids the generated upgrade node must depend on (so it runs AFTER them).
+  // The CREATION-TIME upgrade (template-creation flow) passes the scaffold/feature spec
+  // ids so the once-at-birth upgrade runs only AFTER the template reaches a green gate —
+  // there are deps + a `mise.toml` to bump by then. The ongoing/periodic operator trigger
+  // omits it (the upgrade is independent maintenance work). Absent/empty ⇒ no edges.
+  dependsOn?: ReadonlyArray<string>;
 }
 
 export interface GenerateUpgradeSpecDeps {
@@ -95,7 +101,7 @@ export async function generateUpgradeSpec(
     return { kind: "refused", reason: "no_upgrade_command" };
   }
 
-  const proposal = buildUpgradeProposal(policy);
+  const proposal = buildUpgradeProposal(policy, input.dependsOn ?? []);
   const { accepted } = await acceptProposals(
     { pool: deps.pool },
     {
@@ -120,7 +126,7 @@ export async function generateUpgradeSpec(
 // description names `just upgrade`, not any dependency manager (the command lives in the
 // project's justfile). The supply-chain COOLDOWN is carried as INTENT for the writer to
 // honor via the project's own tooling — Tanren never parses package metadata itself.
-function buildUpgradeProposal(policy: ProjectUpgradePolicy): ProposedSpec {
+function buildUpgradeProposal(policy: ProjectUpgradePolicy, dependsOn: ReadonlyArray<string>): ProposedSpec {
   const cooldown =
     policy.minimumReleaseAgeDays > 0
       ? `Respect the supply-chain cooldown: do not adopt any version published in the last ${policy.minimumReleaseAgeDays} day(s) (dodges a freshly-compromised release) — honor this through the project's own upgrade tooling.`
@@ -129,12 +135,14 @@ function buildUpgradeProposal(policy: ProjectUpgradePolicy): ProposedSpec {
     proposalId: "upgrade_deps",
     title: UPGRADE_SPEC_TITLE,
     description: [
-      "Bump this project's dependencies to the latest versions allowed by its upgrade policy,",
+      "Bump this project's TOOLCHAIN (the declared runtime/package-manager versions, e.g. the",
+      "`mise.toml` pins) AND its dependencies to the latest versions allowed by its upgrade policy,",
       "then regenerate the lockfile and commit the result.",
       "",
       "Run the project's declared upgrade verb (`just upgrade`) to perform the bump + lockfile",
       "regeneration — Tanren names no dependency manager; the actual command lives in the",
-      "project's justfile. Do NOT hand-edit dependency manifests or lockfiles by another route.",
+      "project's justfile (and must cover BOTH the toolchain pins and the deps). Do NOT hand-edit",
+      "dependency manifests or lockfiles by another route.",
       "",
       cooldown,
       "",
@@ -151,7 +159,7 @@ function buildUpgradeProposal(policy: ProjectUpgradePolicy): ProposedSpec {
       "The full gate (tiers + build) passes under the new versions; a breaking change is rejected, not forced.",
       "No deliberately-pinned version is silently overridden.",
     ],
-    dependsOn: [],
+    dependsOn: [...dependsOn],
     priority: "tbd",
     estLabel: "",
   };
