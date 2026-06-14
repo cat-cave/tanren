@@ -75,6 +75,14 @@ export {
   buildTemplateAuditor,
   type ConvergedProjectFacts,
   type RunLoopBuildDriverDeps,
+  // Template-build SELF-RECOVERY (templating-system.md §2): the bounded auto-requeue
+  // of a stranded, bound template-build so it never needs manual DB clearing.
+  recoverStrandedTemplateBuild,
+  TemplateBuildRecoveryExhaustedError,
+  DEFAULT_MAX_RECOVERY_ATTEMPTS,
+  buildLiveTemplateBuildRecovery,
+  type TemplateBuildRecoveryDeps,
+  type TemplateBuildRecoveryOutcome,
 } from "./creation/index.js";
 // WAVE 5 — the MAINTENANCE flow (templating-system.md §4): the re-validation loop,
 // the lts/nightly channel policy, the nightly→lts graduation gate (the canary), and

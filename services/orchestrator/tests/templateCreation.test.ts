@@ -19,12 +19,15 @@ import type { RunnerHandle } from "../src/engine/contracts/allocator.js";
 import type { CommandResult, CommandSubstrate, RunnerCommand } from "../src/engine/contracts/commandSubstrate.js";
 import type { EventStore } from "../src/engine/eventStore.js";
 import type { DeriveInput, DeriveResult } from "../src/engine/forge/interview/derive.js";
+import type { DagSnapshot, DagSpecNode } from "../src/engine/contracts/dagWalker.js";
 import {
   type BuiltTemplate,
   type CreateTemplateDeps,
   createTemplate,
   type TemplateAuditor,
   type TemplateBuildDriver,
+  type TemplateBuildRecoveryDeps,
+  TemplateBuildRecoveryExhaustedError,
   type TemplateCreationRequest,
   type TemplateResearch,
   type TemplateResearcher,
@@ -332,5 +335,112 @@ describe("createTemplate — ungrounded research fails LOUD before any build", (
     };
     await expect(createTemplate(d, request)).rejects.toThrow(/ungrounded|no sources/u);
     expect(pool.rows).toHaveLength(0);
+  });
+});
+
+// ---- Self-recovery: a RESUMED stranded build is auto-requeued, bounded ------
+//
+// The robustness gap: a template-build is bound to a deterministic slug, so a re-
+// trigger RESUMES the SAME (possibly stranded) build project — and re-strands forever.
+// On the resume path, BEFORE driving the build, the injected `recovery` seam DETECTS a
+// stranded build (terminally-blocked spec, no validated publish) and AUTO-REQUEUES it,
+// BOUNDED. These tests inject a fake recovery seam over a fake DAG to prove the wiring.
+
+function recoveryNode(specId: string, phase: DagSpecNode["phase"]): DagSpecNode {
+  return { specId, phase, dependsOn: [], priority: "tbd", orderKey: 0 };
+}
+
+interface FakeRecovery {
+  recovery: TemplateBuildRecoveryDeps;
+  reset: string[];
+}
+
+function fakeRecovery(opts: {
+  events: RecordingEvents;
+  nodes: DagSpecNode[];
+  priorRecoveries?: number;
+  published?: boolean;
+  maxAttempts?: number;
+}): FakeRecovery {
+  const reset: string[] = [];
+  const recovery: TemplateBuildRecoveryDeps = {
+    loadSnapshot: async (projectId): Promise<DagSnapshot> => ({ projectId, nodes: opts.nodes, archived: false }),
+    resetStrandedSpec: async ({ specId }) => {
+      reset.push(specId);
+      return true;
+    },
+    priorRecoveryCount: async () => opts.priorRecoveries ?? 0,
+    hasPublishedValidatedTemplate: async () => opts.published ?? false,
+    events: opts.events,
+    ...(opts.maxAttempts === undefined ? {} : { maxAttempts: opts.maxAttempts }),
+  };
+  return { recovery, reset };
+}
+
+describe("createTemplate — RESUME path auto-recovers a stranded template-build", () => {
+  it("a resumed build with a terminally-stranded spec is REQUEUED (reset + recovered event), then re-built + published", async () => {
+    const ssh = new ScriptedSsh({ typecheck: "real", lint: "real", test: "real" });
+    const pool = new TemplatesPool();
+    const events = new RecordingEvents();
+    const { recovery, reset } = fakeRecovery({
+      events,
+      nodes: [recoveryNode("s1", "done"), recoveryNode("s2", "terminal_blocked")],
+    });
+    const d = { ...deps(ssh, pool, events), recovery };
+
+    const result = await createTemplate(d, request);
+
+    // The stranded spec was reset to re-drivable BEFORE the build ran (the requeue).
+    expect(reset).toEqual(["s2"]);
+    const recovered = events.appended.find((e) => e.eventType === "template.build.recovered");
+    expect(recovered).toMatchObject({
+      projectId: "project_tmpl",
+      payload: { stack: "ts-pnpm", requeuedSpecIds: ["s2"], attempt: 1 },
+    });
+    // And the recovered build re-drove to convergence + published (the stub driver
+    // returns a clean built template; the harness validates it) — NOT re-stranded.
+    expect(result.template.status).toBe("validated");
+    expect(pool.rows).toHaveLength(1);
+  });
+
+  it("BOUNDED: after the recovery cap the resume fails LOUD (recovery_exhausted + creation.failed), no publish", async () => {
+    const ssh = new ScriptedSsh({ typecheck: "real", lint: "real", test: "real" });
+    const pool = new TemplatesPool();
+    const events = new RecordingEvents();
+    const { recovery, reset } = fakeRecovery({
+      events,
+      nodes: [recoveryNode("s1", "terminal_blocked")],
+      priorRecoveries: 3,
+      maxAttempts: 3,
+    });
+    const d = { ...deps(ssh, pool, events), recovery };
+
+    await expect(createTemplate(d, request)).rejects.toBeInstanceOf(TemplateBuildRecoveryExhaustedError);
+
+    // No requeue this time (bounded), nothing published, and the LOUD durable records
+    // were emitted (recovery_exhausted + the creation.failed envelope).
+    expect(reset).toEqual([]);
+    expect(pool.rows).toHaveLength(0);
+    expect(events.appended.find((e) => e.eventType === "template.build.recovery_exhausted")).toBeDefined();
+    const failed = events.appended.find((e) => e.eventType === "template.creation.failed");
+    expect(failed).toMatchObject({ projectId: "project_tmpl", payload: { stack: "ts-pnpm" } });
+  });
+
+  it("a build that already PUBLISHED a validated template is NOT recovered (no spec reset)", async () => {
+    const ssh = new ScriptedSsh({ typecheck: "real", lint: "real", test: "real" });
+    const pool = new TemplatesPool();
+    const events = new RecordingEvents();
+    const { recovery, reset } = fakeRecovery({
+      events,
+      nodes: [recoveryNode("s1", "terminal_blocked")],
+      published: true,
+    });
+    const d = { ...deps(ssh, pool, events), recovery };
+
+    await createTemplate(d, request);
+
+    // The succeeded-build short-circuit: no spec was reset, no recovery event emitted.
+    expect(reset).toEqual([]);
+    expect(events.appended.find((e) => e.eventType === "template.build.recovered")).toBeUndefined();
   });
 });

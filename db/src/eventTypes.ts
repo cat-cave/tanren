@@ -146,6 +146,8 @@ export const eventTypeNames = [
   "task.failed",
   "task.queued",
   "task.started",
+  "template.build.recovered",
+  "template.build.recovery_exhausted",
   "template.creation.failed",
   "template.creation.published",
   "template.creation.started",

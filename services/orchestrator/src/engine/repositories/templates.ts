@@ -255,4 +255,30 @@ export const TemplateStore = {
   async markDegraded(client: QueryClient, id: string, actor: ActorRef): Promise<Template | undefined> {
     return this.updateStatus(client, id, "degraded", actor);
   },
+
+  /**
+   * The VALIDATED template a given template-BUILD project published, if any — the
+   * self-recovery "did this build already succeed?" check (templating-system.md §2).
+   * A template's `manifest.provenance.createdByRunId` is the build project id that
+   * authored it; a build that PUBLISHED carries a `validated`/`official` row keyed to
+   * it. Returns that row (so the resume short-circuits — a succeeded build is NEVER
+   * re-driven) or undefined (no validated publish → the build is recoverable). RLS
+   * still bounds the rows (own + official).
+   */
+  async findValidatedByBuildProject(
+    client: QueryClient,
+    buildProjectId: string,
+    _actor: ActorRef,
+  ): Promise<Template | undefined> {
+    const result = await client.query<TemplateRow>(
+      `SELECT ${COLUMNS} FROM templates
+        WHERE manifest -> 'provenance' ->> 'createdByRunId' = $1
+          AND status IN ('validated', 'official')
+        ORDER BY created_at DESC
+        LIMIT 1`,
+      [buildProjectId],
+    );
+    const row = result.rows[0];
+    return row === undefined ? undefined : mapRow(row);
+  },
 } as const;
