@@ -10,7 +10,7 @@
 // member-head divergence keys are the PRISTINE pre-integration remote heads.
 
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -123,5 +123,45 @@ describe("§3.5 jj-local batch integration (real jj)", () => {
     // The integrated head is NOT either pristine member head (it is the stacked result).
     expect(result.headSha).not.toBe(result.memberHeadShas["spec-a"]);
     expect(result.headSha).not.toBe(result.memberHeadShas["spec-b"]);
+  });
+
+  it("MATERIALIZES the integrated tree on disk — the working copy carries member files absent from the base (the no-PR-ever-merged regression)", async () => {
+    // THE root cause this fixes: after the rebase loop assembles `localRef`, the working copy
+    // at `workspacePath` still sat on the BASE (`openWorkspace` ends with `jj new <base>`;
+    // `jj rebase`/`jj bookmark set` move commits/bookmarks but NEVER `@`). The batch re-gate
+    // ran `pre_merge` against that base tree — a greenfield scaffold has no justfile on the
+    // base, so the gate failed with `no justfile found` and the batch was bisected/dequeued.
+    // Every batch check gated the wrong tree, so NO PR ever merged. The fix checks out the
+    // integrated head (`jj edit <localRef>`) before returning. This proves it END-TO-END over
+    // REAL jj: the on-disk working copy after the integration carries BOTH members' files
+    // (`a.txt` + `b.txt`), neither of which exists on the base. WITHOUT the checkout the
+    // working copy is still the base tree (only `base.txt`) and these assertions FAIL.
+    const { originPath } = makeBatchFixture();
+    const live = liveLocalJj();
+    const ssh = new LocalCommandSubstrate();
+
+    const result = await integrateOverWorkspace(live, ssh, {
+      baseBranch: "main",
+      repoUrl: originPath,
+      members: [
+        { specId: "spec-a", branch: "feat-a" },
+        { specId: "spec-b", branch: "feat-b" },
+      ],
+      localRef: "tanren-batch-test",
+      timeoutMs: 60_000,
+    });
+
+    expect(result.outcome).toBe("integrated");
+    if (result.outcome !== "integrated") return;
+
+    // The on-disk working copy at `workspacePath` reflects the INTEGRATED head, NOT the base.
+    // Both members' files are present (each member adds a distinct file off the base) —
+    // exactly what the `pre_merge` gate must see when it runs against this workspace.
+    expect(existsSync(join(live.workspacePath, "a.txt"))).toBe(true);
+    expect(existsSync(join(live.workspacePath, "b.txt"))).toBe(true);
+    expect(readFileSync(join(live.workspacePath, "a.txt"), "utf8")).toBe("a\n");
+    expect(readFileSync(join(live.workspacePath, "b.txt"), "utf8")).toBe("b\n");
+    // The base file is of course still present (the integration is base + members).
+    expect(existsSync(join(live.workspacePath, "base.txt"))).toBe(true);
   });
 });
