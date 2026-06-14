@@ -174,6 +174,25 @@ export async function integrateOverWorkspace(
     merged.push(member.specId);
   }
 
+  // Materialize the integrated tree ON DISK before returning. `jj rebase` + `jj bookmark
+  // set` only move COMMITS/BOOKMARKS — they NEVER move `@` (the working copy), which
+  // `openWorkspace` left on the BASE branch (`jj new <baseBranch>`). Without this, the
+  // continuation runs against `workspacePath`'s BASE tree (no member files), not the
+  // integrated head — the no-PR-ever-merged root cause: the batch re-gate runs `pre_merge`
+  // on the base working copy, so a greenfield scaffold failed with `no justfile found`
+  // (the scaffold's files live ONLY on the integrated bookmark, never on the base working
+  // copy), got bisected/blamed, and dequeued as a `conflict`. `checkout` (`jj edit
+  // <localRef>`) checks out that commit's tree on the colocated workspace, so the on-disk
+  // working copy at `workspacePath` now reflects the integrated files. Done ONLY on the
+  // CLEAN path (a conflicted member short-circuited above — there is nothing clean to
+  // materialize, and `exportCleanGitRef` would refuse it anyway).
+  //
+  // SAFE for the BOOTSTRAP consumer (`bootstrapDependentBase`): it then runs `core.branch(
+  // ws, runBranch, localRef)`, which creates the run branch with `localRef` as the EXPLICIT
+  // parent (`jj new localRef`), independent of where `@` sits — and leaves `@` on a fresh
+  // child of `localRef` (still the integrated tree). Moving `@` to `localRef` first does
+  // not disturb it.
+  await core.checkout(ws, input.localRef);
   // Export the CLEAN local ref (REFUSES a still-conflicted ref — the §2 boundary) +
   // materialize the node's head + tree. The export wrote the git ref into the colocated
   // .git, so the tree is read from git off the exported head sha.
