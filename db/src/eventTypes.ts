@@ -161,6 +161,7 @@ export const eventTypeNames = [
   "usage.token_accounting_failed",
   "usage.window.observed",
   "usage.window.pressure",
+  "workspace.bootstrap_deferred",
   "workspace.failed",
   "workspace.git_captured",
   "workspace.prepared",

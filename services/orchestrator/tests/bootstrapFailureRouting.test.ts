@@ -19,7 +19,11 @@ import type { CiWhen } from "../src/engine/ci/index.js";
 import type { RunnerHandle } from "../src/engine/contracts/allocator.js";
 import type { RunnerCommand, CommandResult, CommandSubstrate } from "../src/engine/contracts/commandSubstrate.js";
 import { BOOTSTRAP_GATE_TIER, type GateOutcome } from "../src/engine/workflow/gate/index.js";
-import { provisionMiseToolchain, WorkspaceMiseProvisionError } from "../src/engine/workspace/index.js";
+import {
+  provisionMiseToolchain,
+  WorkspaceBootstrapError,
+  WorkspaceMiseProvisionError,
+} from "../src/engine/workspace/index.js";
 import { prepareRunWorkspace } from "../src/engine/workflow/plannerRunWorkspace.js";
 import { buildDefaultGate } from "../src/engine/workflow/plannerRunAdapters.js";
 import type { PlannerRunContext, RunPlannerLoopInput } from "../src/engine/workflow/plannerRun.js";
@@ -165,6 +169,108 @@ describe("the mise PROVISION step stays a TERMINAL halt (NOT writer-fixable)", (
     } as unknown as RunPlannerLoopInput;
     // The mise provision is the FIRST workspace-prep step that fails ⇒ a loud throw,
     // never a deps-install gate finding routed to the writer.
+    await expect(prepareRunWorkspace(input, target, workspacePath)).rejects.toBeInstanceOf(WorkspaceMiseProvisionError);
+  });
+});
+
+// A minimal SSH that succeeds every workspace-prep round-trip (clone / identity / seed
+// ignore / `.tanren/ci.yml` read / commit / contract files). It returns a 40-hex sha for
+// the clone + commit `git rev-parse HEAD` so the prep proceeds to the bootstrap step,
+// which the test drives through the `runBootstrap` seam (not this SSH).
+class PrepOkSsh implements CommandSubstrate {
+  readonly commands: RunnerCommand[] = [];
+  async run(_t: RunnerHandle, command: RunnerCommand): Promise<CommandResult> {
+    this.commands.push(command);
+    const ok = { exitCode: 0, stdout: "", stderr: "", timedOut: false };
+    // `.tanren/ci.yml` read returns empty ⇒ the resolver yields no explicit bootstrap
+    // command (the stack-agnostic default), keeping the prep path simple.
+    if (command.command.includes(".tanren/ci.yml")) return ok;
+    // Clone + commit-bootstrap-state `git rev-parse HEAD` ⇒ a real 40-hex sha.
+    if (command.command.includes("git rev-parse HEAD")) return { ...ok, stdout: `${"a".repeat(40)}\n` };
+    return ok;
+  }
+}
+
+// The pnpm-11 evidence at workspace-PREP: the prep `just bootstrap` exits 1. Mirrors the
+// gate-bootstrap case above, but for the prep step (`bootstrapWorkspace`, before the writer
+// loop). #562 self-healed the GATE bootstrap; apex v35 self-heals the PREP bootstrap too.
+const PREP_BOOTSTRAP_COMMAND = "just bootstrap";
+function prepBootstrapError(): WorkspaceBootstrapError {
+  return new WorkspaceBootstrapError(workspacePath, PREP_BOOTSTRAP_COMMAND, 1, PNPM_IGNORED_BUILDS, false);
+}
+
+describe("the workspace-PREP `just bootstrap` deps-install self-heals via the gate (NOT a terminal strand)", () => {
+  it("prepareRunWorkspace does NOT throw on a prep bootstrap deps-install failure — it DEFERS to the gate", async () => {
+    const input = {
+      ssh: new PrepOkSsh(),
+      context: context(),
+      timeoutMs: 100,
+      githubToken: "ghs_test",
+      // The mise provision is a no-op here (the FIXABLE thing is the project's bootstrap).
+      provisionMise: async () => {},
+      // The PREP `just bootstrap` (deps install) FAILS — the writer-fixable scaffold defect.
+      runBootstrap: async () => {
+        throw prepBootstrapError();
+      },
+      // The bootstrap commit still lands (--allow-empty); return a concrete base sha.
+      commitBootstrap: async () => "b".repeat(40),
+    } as unknown as RunPlannerLoopInput;
+
+    // Today this throw escaped prepareRunWorkspace → workspace.failed → the spec stranded
+    // at needs_attention. The fix DEFERS it: prepareRunWorkspace returns normally, carrying
+    // a `prepBootstrapDeferred` signal so the caller emits `workspace.bootstrap_deferred`
+    // and the writer loop runs (the gate's `ensureWorkspaceDepsInstalled` re-runs + #562
+    // self-heals a still-broken scaffold).
+    const prepared = await prepareRunWorkspace(input, target, workspacePath);
+
+    expect(prepared.prepBootstrapDeferred).toBeDefined();
+    expect(prepared.prepBootstrapDeferred?.exitCode).toBe(1);
+    expect(prepared.prepBootstrapDeferred?.timedOut).toBe(false);
+    expect(prepared.prepBootstrapDeferred?.command).toBe(PREP_BOOTSTRAP_COMMAND);
+    // The bootstrap output (the ERR_PNPM_… detail) rides in the signal so the caller's
+    // `workspace.bootstrap_deferred` event surfaces exactly what the gate will route.
+    expect(prepared.prepBootstrapDeferred?.outputTail).toContain("ERR_PNPM_IGNORED_BUILDS");
+    // The prep still produced a base sha (the writer loop has a diff base to run against).
+    expect(prepared.baseSha).toBe("b".repeat(40));
+  });
+
+  it("a NON-deps-install prep throw (a substrate fault) still propagates LOUDLY (no silent defer)", async () => {
+    const input = {
+      ssh: new PrepOkSsh(),
+      context: context(),
+      timeoutMs: 100,
+      githubToken: "ghs_test",
+      provisionMise: async () => {},
+      // A generic (non-WorkspaceBootstrapError) throw is NOT writer-fixable — it must
+      // propagate, never be recast as a defer (no-silent-fallback).
+      runBootstrap: async () => {
+        throw new Error("ssh transport reset");
+      },
+      commitBootstrap: async () => "b".repeat(40),
+    } as unknown as RunPlannerLoopInput;
+
+    await expect(prepareRunWorkspace(input, target, workspacePath)).rejects.toThrow("ssh transport reset");
+  });
+
+  it("the mise PROVISION failure stays terminal even on the prep path (NOT deferred to the writer)", async () => {
+    // The mise provision runs BEFORE the prep bootstrap; a failed one throws
+    // WorkspaceMiseProvisionError and never reaches the deps-install defer. Symmetric with
+    // #562: only the project's `just bootstrap` is writer-fixable, the toolchain is not.
+    const input = {
+      ssh: new PrepOkSsh(),
+      context: context(),
+      timeoutMs: 100,
+      githubToken: "ghs_test",
+      provisionMise: async () => {
+        throw new WorkspaceMiseProvisionError(workspacePath, 1, "mise: failed to install node@22", false);
+      },
+      // The bootstrap would defer, but the mise provision fails FIRST ⇒ a terminal throw.
+      runBootstrap: async () => {
+        throw prepBootstrapError();
+      },
+      commitBootstrap: async () => "b".repeat(40),
+    } as unknown as RunPlannerLoopInput;
+
     await expect(prepareRunWorkspace(input, target, workspacePath)).rejects.toBeInstanceOf(WorkspaceMiseProvisionError);
   });
 });

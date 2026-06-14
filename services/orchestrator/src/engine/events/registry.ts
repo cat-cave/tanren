@@ -56,6 +56,7 @@ import {
   UsageTokenAccountingFailedPayload,
   UsageWindowObservedPayload,
   UsageWindowPressurePayload,
+  WorkspaceBootstrapDeferredPayload,
   WorkspaceFailedPayload,
   WorkspaceGitCapturedPayload,
   WorkspacePreparedPayload,
@@ -240,6 +241,7 @@ export const EventRegistry = {
   "workspace.prepared": WorkspacePreparedPayload,
   "workspace.git_captured": WorkspaceGitCapturedPayload,
   "workspace.failed": WorkspaceFailedPayload,
+  "workspace.bootstrap_deferred": WorkspaceBootstrapDeferredPayload,
   // Credentials
   "credential.requested": CredentialRequestedPayload,
   "credential.loaded": CredentialLoadedPayload,
@@ -278,12 +280,10 @@ export const EventRegistry = {
   "github.failed": GithubFailedPayload,
 
   // Flaky-test detection + auto-quarantine: the detector flags a STEP that toggled outcome on
-  // UNCHANGED code (ci.flaky.detected) + records it on the quarantine surface (ci.test.quarantined).
-  // A consistently-failing step is never flagged — quarantine ≠ ignore-failures.
+  // UNCHANGED code + quarantines it (a consistently-failing step is never flagged — ≠ ignore).
   "ci.flaky.detected": CiFlakyDetectedPayload,
   "ci.test.quarantined": CiTestQuarantinedPayload,
-  // CI-intelligence per-test grain: the native gate ingested the runner's JUnit report IN-PROCESS
-  // into per-test rows (ci_test_results). Summary counts only — never secrets.
+  // CI-intelligence per-test grain: the native gate ingested the runner's JUnit report (summary).
   "ci.tests.reported": CiTestsReportedPayload,
   // A gate tier DECLARED a `junitReport` but produced none — DURABLE + advisory no-silent-skip signal.
   "ci.junit_missing": CiJunitMissingPayload,

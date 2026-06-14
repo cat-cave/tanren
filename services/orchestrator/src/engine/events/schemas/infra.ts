@@ -150,6 +150,33 @@ export const WorkspaceFailedPayload = z
   })
   .strict();
 
+// workspace.bootstrap_deferred — the workspace-PREP `just bootstrap` (deps install)
+// exited nonzero, but rather than terminally strand the spec (the old behavior), the
+// deps-install authority is DEFERRED to the gate's already-self-healing
+// `ensureWorkspaceDepsInstalled` (apex v35, mirroring #562's gate-bootstrap handling).
+// The prep deps-install is REDUNDANT with the per-gate one (same `just bootstrap`), so a
+// writer-fixable failure here is best-effort: workspace-prep continues, the writer loop
+// runs, and the gate re-runs the bootstrap — a still-failing one routes to the writer as
+// a P0 finding (bounded by convergence). This event records the deferral loudly so the
+// timeline shows the prep bootstrap was skipped-not-fatal. The mise PROVISION step (the
+// declared toolchain) is NOT writer-fixable and keeps its terminal halt — it never reaches
+// here. The `command` is prelude-free + the `outputTail` is bounded (substrate boundary),
+// but the tail is marked secret out of caution (mirroring gate.failed steps[].outputTail).
+export const WorkspaceBootstrapDeferredPayload = z
+  .object({
+    runnerId: z.string().optional(),
+    workspacePath: z.string(),
+    // The original prep bootstrap command (prelude-free — see bootstrap.ts substrate
+    // boundary), so no app-secret value can reach the payload.
+    command: z.string(),
+    // The bootstrap process exit code, or null on a timeout / no-exit substrate result.
+    exitCode: z.number().int().nullable(),
+    timedOut: z.boolean(),
+    // The bounded bootstrap stdout/stderr tail (the install error detail).
+    outputTail: z.string(),
+  })
+  .strict();
+
 const CredentialReference = z
   .object({
     credentialKind: z.string(),
