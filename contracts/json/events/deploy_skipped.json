@@ -12,7 +12,8 @@
     "reason": {
       "enum": [
         "config_incomplete",
-        "merge_sha_missing"
+        "merge_sha_missing",
+        "template_build"
       ],
       "type": "string"
     }
