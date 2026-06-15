@@ -399,17 +399,18 @@ export const IntegrationProofReusedPayload = z
   .strict();
 export type IntegrationProofReusedPayload = z.infer<typeof IntegrationProofReusedPayload>;
 
-// NEVER-STRAND reconciler events: the DAG's self-healing safety net. A spec can get stuck OCCUPYING
-// A SLOT (`active`/`in_flight`) with NO live run — the recurring stranding bug (a percolation §2c
-// re-exec halts → the spec stays `active`, both runs terminal, the orphaned marker can't self-heal).
-// The reconciler detects the confirmed strand (slot-occupying + all runs terminal + not merge-queued
-// + no LIVE percolation marker) and re-enqueues it, with BOUNDED escalation to a loud needs_attention.
-
-// The reason a confirmed strand was detected — shared by both strand events. `halted_reexec` /
-// `orphaned_marker` / `no_live_run` are the reconciler's slot-occupying-no-live-run cases (§2c);
-// `persistent_failure` (apex v35) is a spec whose run failed the SAME classified way K consecutive
-// times (each transient RE-DRIVEN but never converged) — a genuinely STUCK spec (a bug / mis-spec).
-const StrandReason = z.enum(["halted_reexec", "orphaned_marker", "no_live_run", "persistent_failure"]);
+// GENUINE-HALT escalation reasons (apex v35 — the unified run-finalize authority,
+// `runFinalizeAuthority.ts`). `needs_attention` is RESERVED for the three GENUINE-HALT
+// classes; a RANDOM/TRANSIENT/internal/crash/orphan fault NEVER rests here — it RE-DRIVES
+// (emitting `dag.spec.redriven`). The old slot-occupying strand reasons (`halted_reexec` /
+// `orphaned_marker` / `no_live_run`) are GONE: they were transient classes the per-path
+// logic mis-parked; their diagnostic detail now rides `dag.spec.redriven.failureCode`.
+//   - `misconfiguration` — a structural cause a human must fix (missing/unscoped credential,
+//     unresolvable provider mode). Never self-heals on retry, so it escalates immediately.
+//   - `persistent_failure` — the run failed the SAME classified way K consecutive times (each
+//     transient RE-DRIVEN but never converged): a genuinely STUCK spec (a bug / mis-spec).
+//   - `human_decision` — a genuine merge-boundary decision (a HITL hold / changes-requested).
+const StrandReason = z.enum(["misconfiguration", "persistent_failure", "human_decision"]);
 // One of the strand's terminal runs (its id + final status) — for the audit trail.
 const StrandTerminalRun = z.object({ runId: z.string(), status: z.string() }).strict();
 

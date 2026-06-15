@@ -142,6 +142,63 @@ threaded through `createSpec` and the discovery/triage acceptance path; the
 `DagWalker` orders the ready set by it. This is what makes "prioritized around"
 real instead of FIFO.
 
+## 1c. Run-finalize — the ONE authority, the 3-bucket model
+
+<a id="s1c"></a>Every run attempt has exactly **one** terminal outcome, and that
+outcome maps to exactly **one of three buckets**. This is the binding model — and
+it lives in **one** decision authority (`engine/workflow/runFinalizeAuthority.ts`,
+`decideRunDisposition`), applied identically whether the outcome arrives via the
+**workflow** path (the planner-loop's own `catch` + non-pass exits + the merge
+stage), the **worker** path (`runExecutor.ts`'s outer catch), or the **orphan
+reconciler** (`runFinalize.ts`'s crashed-slot safety net). The decision is a pure,
+DB-free core; the **appliers** (`plannerRunRedrive.ts`, `plannerRunFinalize.ts`,
+`runFinalize.ts`) perform the lifecycle writes the verdict dictates.
+
+1. **RE-DRIVE (retry).** Any **random / transient / internal / flaky /
+   writer-mistake / codex-hiccup / merge-conflict-resolvable / crashed-run /
+   orphaned-slot** failure. The run halts **recoverable** (work never discarded),
+   the spec returns to `open`, the walker enqueues a successor run, and an
+   **observable `dag.spec.redriven`** event records the retry (carrying the
+   classified failure code + the consecutive-same-failure counter + the backoff).
+   A random failure is **never** tolerable as terminal. The **only** bound is a
+   **consecutive-same-failure counter** (the _same_ classified failure K times in a
+   row → escalate; **any progress or a _different_ failure resets it**) plus
+   backoff — **never** a wall-clock deadline, **never** an infinite identical
+   hot-loop. A benign ancestor-wait re-drives with **no** fault (it never counts
+   toward the cap; the ancestor _will_ publish its head).
+
+2. **GENUINE-HALT.** **Only** four structural classes: **budget exhaustion**
+   (`dag.budget.paused`), **misconfiguration** (a missing/unscoped credential, an
+   unresolvable provider mode), **mis-spec** / **persistent-same-failure** (the
+   same failure K consecutive times — a genuinely stuck spec), and a **genuine
+   human-decision** (a real product/architecture decision a human must _make_ —
+   e.g. a HITL hold or changes-requested at land time). These → `needs_attention`
+   with a **specific, actionable reason** (`misconfiguration` /
+   `persistent_failure` / `human_decision`). `needs_attention` is **reserved** for
+   these — a transient fault never rests here.
+
+3. **CONVERGE.** Success — the PR landed (`merged` / `done`).
+
+A run attempt is finalized **exactly once** by this authority (the
+single-finalize invariant): the workflow's own finalizer runs first and fully; a
+re-driven attempt is terminally disposed of (the workflow returns normally, never
+re-throwing into the worker's strand path); a genuine-halt re-throws **wrapped** in
+`WorkflowFinalizedError` so the worker skips its safety-net re-finalize; a
+**genuinely orphaned** crash (the workflow finalizer never ran, a _raw_ error
+escapes) is the worker's safety net — and, because a crash is a transient class, it
+too **re-drives** (bounded by the same consecutive-same-failure cap), never the old
+terminal strand. There is **no whole-DAG wall-clock deadline** — a build runs until
+CONVERGE or GENUINE-HALT, re-driving everything else (the build driver's
+converge-or-genuine-deadlock termination uses the shared `specProgress`
+classification: it halts loud only when **no** spec can make forward progress, never
+on a transient).
+
+This **collapses** the old fragmentation: the per-path strand reasons
+(`halted_reexec` / `orphaned_marker` / `no_live_run`) are gone — they were transient
+classes the scattered per-path logic mis-parked (the same transient failure stranding
+under _three_ different reasons run-to-run). They now all RE-DRIVE; their diagnostic
+detail rides `dag.spec.redriven.failureCode`, not a distinct terminal behavior.
+
 ## 1d. Autonomous intake — webhook-first, poll-fallback
 
 <a id="s1d"></a>Issue/signal intake runs **without an operator clicking

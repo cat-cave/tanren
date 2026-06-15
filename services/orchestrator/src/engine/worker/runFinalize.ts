@@ -18,6 +18,11 @@ import { PgEventStore } from "../eventStore.js";
 import type { ClassifiedRunFailure } from "./runFailureClassifier.js";
 import { createLogger } from "../observability/logger.js";
 import { isWorkflowFinalized, rawCauseOf } from "../workflow/workflowErrorDisposition.js";
+import {
+  decideRunDisposition,
+  DEFAULT_REDRIVE_ESCALATE_AT,
+  redriveBackoffSeconds,
+} from "../workflow/runFinalizeAuthority.js";
 // Re-exported so runExecutor (which already imports finalizeRunRecoverable here)
 // gets the logger factory + the WorkflowFinalizedError unwrap WITHOUT separate imports
 // (its dependency cap is at 12). `rawCauseOf` lets the worker classify the raw cause.
@@ -130,23 +135,17 @@ export async function finalizeRunRecoverable(
           })
           .catch((error: unknown) => logFinalizeSwallow("run.failed append (remote)", { runId }, error)),
       );
-      // NEVER-STRAND (finding #3): a worker-level force-halt (a crash the workflow's
-      // own spec-aware finalize never reached) must not leave the spec at `in_flight`
-      // with a dead run. Park it at `needs_attention` (guarded so the workflow's
-      // earlier park / a merged spec is a no-op) so the slot frees + the operator can
-      // requeue it. Best-effort — but a park FAILURE is LOGGED LOUDLY (a stranded
+      // NEVER-STRAND (apex v35): a worker-level force-halt (a crash the workflow's own
+      // spec-aware finalize never reached) must not leave the spec at `in_flight` with a
+      // dead run. RE-DRIVE it (spec → `open`, `dag.spec.redriven`, guarded so the
+      // workflow's earlier finalize / a merged spec is a no-op) so the walker re-attempts
+      // — or, at the consecutive-same-failure cap, genuine-halt `needs_attention`. The
+      // crash is TRANSIENT, never a human-decision. A park FAILURE is LOGGED LOUDLY (a stranded
       // spec must never vanish silently), not swallowed.
       if (result.specId !== undefined && result.specId !== "") {
-        await parkStrandedSpecRemote(
-          pool,
-          writer,
-          orgId,
-          result.specId,
-          result.projectId ?? "",
-          runId,
-          failure.summary,
-        ).catch((error: unknown) =>
-          logFinalizeSwallow("stranded-spec park (remote)", { runId, specId: result.specId }, error),
+        await parkStrandedSpecRemote(pool, writer, orgId, result.specId, result.projectId ?? "", runId, failure).catch(
+          (error: unknown) =>
+            logFinalizeSwallow("stranded-spec park (remote)", { runId, specId: result.specId }, error),
         );
       }
     }
@@ -181,13 +180,13 @@ export async function finalizeRunRecoverable(
           payload: { status: "halted", failureCode: failure.code, stage: failure.stage, message: failure.summary },
         })
         .catch((error: unknown) => logFinalizeSwallow("run.failed append (in-process)", { runId }, error));
-      // NEVER-STRAND (finding #3): park the spec at `needs_attention` (guarded so a
-      // merged spec or the workflow's earlier park is a no-op) so a worker-level
-      // force-halt frees the DAG slot + the operator can requeue it — the spec is
-      // never left `in_flight` with a dead run. A park FAILURE is LOGGED LOUDLY (a
-      // stranded spec must never vanish silently), not swallowed.
+      // NEVER-STRAND (apex v35): RE-DRIVE the orphaned spec (→ `open` + `dag.spec.redriven`,
+      // guarded so a merged spec or the workflow's earlier finalize is a no-op) so the walker
+      // re-attempts — or genuine-halt at the consecutive-same-failure cap. The spec is never
+      // left `in_flight` with a dead run, and a crash is TRANSIENT (re-driven, not parked). A
+      // park FAILURE is LOGGED LOUDLY (a stranded spec must never vanish silently), not swallowed.
       if (specId !== "") {
-        await parkStrandedSpecInProcess(client, specId, projectId, runId, failure.summary).catch((error: unknown) =>
+        await parkStrandedSpecInProcess(client, specId, projectId, runId, failure).catch((error: unknown) =>
           logFinalizeSwallow("stranded-spec park (in-process)", { runId, specId }, error),
         );
       }
@@ -195,32 +194,77 @@ export async function finalizeRunRecoverable(
   });
 }
 
-// The reason a worker-level force-halt parks the spec (one parked-state message).
-// `summary` is the PUBLIC-SAFE classified failure summary (never the raw caught-error
-// string) — this is a public `dag.spec.needs_attention.message`, so it must not leak.
-function strandMessage(runId: string, summary: string): string {
-  return `run ${runId} force-halted by the worker (${summary}); the spec cannot self-heal — requeue after addressing the cause`;
-}
+// UNIFIED RUN-FINALIZE (apex v35): a GENUINELY orphaned slot (a crashed run whose
+// workflow finalizer never ran) is a CRASH class — TRANSIENT, so it RE-DRIVES (the spec
+// returns to `open`, the walker re-enqueues a successor), emitting `dag.spec.redriven`
+// rather than the old terminal `no_live_run` strand. A crash is not a human-decision; the
+// build must re-attempt it, never park it. The re-drive is bounded by the SAME
+// consecutive-same-failure counter the workflow path uses: the orphan reads the spec's
+// prior `dag.spec.redriven` events for the current failure code, and at the cap K
+// (a spec crashing the SAME way K times) genuine-HALTS to `needs_attention reason:
+// persistent_failure`. This folds the old `no_live_run`/`orphaned_marker` strand reasons
+// into RE-DRIVE, and the only worker-orphan path to `needs_attention` is the bounded
+// persistent-failure escalation — the unified 3-bucket model, applied at the worker too.
 
-/** The `dag.spec.needs_attention` payload a worker-level strand emits (source `strand`). */
-function strandNeedsAttentionPayload(runId: string, specId: string, message: string) {
+/** The `dag.spec.redriven` payload a worker-level orphan re-drive emits (the OBSERVABLE retry). */
+function orphanRedrivenPayload(runId: string, specId: string, failure: ClassifiedRunFailure, consecutive: number) {
   return {
-    source: "strand" as const,
     specId,
-    reason: "no_live_run" as const,
-    terminalRuns: [{ runId, status: "halted" }],
-    attempts: 1,
-    message: strandMessage(runId, message),
+    runId,
+    failureCode: failure.code,
+    stage: failure.stage,
+    consecutiveSameFailure: Math.max(1, consecutive),
+    escalateAtAttempts: DEFAULT_REDRIVE_ESCALATE_AT,
+    backoffSeconds: redriveBackoffSeconds(consecutive),
   };
 }
 
+/** The `dag.spec.needs_attention` payload a worker-level persistent-failure escalation emits. */
+function orphanPersistentPayload(runId: string, specId: string, failure: ClassifiedRunFailure, consecutive: number) {
+  return {
+    source: "strand" as const,
+    specId,
+    reason: "persistent_failure" as const,
+    terminalRuns: [{ runId, status: "halted" }],
+    attempts: consecutive,
+    message:
+      `the run crashed the same way (${failure.code} @ ${failure.stage}: ${failure.summary}) ${consecutive} ` +
+      `times in a row — the spec is genuinely stuck (a bug or mis-spec, not a flake); requeue after addressing the cause`,
+  };
+}
+
+/** Decide the orphan disposition (re-drive under the cap, genuine-halt at the cap) from the failure code. */
+function decideOrphan(failure: ClassifiedRunFailure, consecutive: number): "re_drive" | "genuine_halt" {
+  const disposition = decideRunDisposition({ kind: "error", error: new OrphanFailureProxy(failure) }, consecutive);
+  return disposition.bucket === "genuine_halt" ? "genuine_halt" : "re_drive";
+}
+
+// A minimal proxy so the orphan path reuses the SAME authority decision as the workflow
+// path: it carries the already-classified failure CODE via its `name`, which
+// `classifyRunFailure` keys off (the authority then maps code → bucket). This keeps the
+// 3-bucket mapping in ONE place rather than re-implementing it here.
+class OrphanFailureProxy extends Error {
+  constructor(failure: ClassifiedRunFailure) {
+    super(failure.summary);
+    this.name = ORPHAN_PROXY_NAME_BY_CODE[failure.code];
+  }
+}
+// The error-class name each code maps to, so `classifyRunFailure` recovers the same code.
+const ORPHAN_PROXY_NAME_BY_CODE: Readonly<Record<ClassifiedRunFailure["code"], string>> = {
+  workspace: "WorkspaceBootstrapError",
+  credential: "MissingCredentialError",
+  usage_limit: "CodexUsageLimitError",
+  merge: "__OrphanMergeFault",
+  deploy: "__OrphanDeployFault",
+  internal: "__OrphanInternalFault",
+};
+
 /**
- * Park a worker-force-halted run's spec at `needs_attention` over the control plane.
- * The guarded `setSpecStatus` (`notFromStatuses`) makes the flip a no-op when the
- * spec is already `merged` or `needs_attention`. The event is emitted ONLY when the
- * spec was still OCCUPYING a slot (`in_flight`/`review`) — so a spec the workflow's
- * own finalize already parked never gets a DUPLICATE `dag.spec.needs_attention` event
- * (the worker-level park is a safety net for crashes that bypass the workflow finalize).
+ * Re-drive (or, at the cap, genuine-halt) a GENUINELY orphaned spec over the control
+ * plane. Reads spec occupancy + a SUCCESSOR run + the consecutive-same-failure count in
+ * one org-scoped read, then applies the unified disposition: under the cap → spec `open` +
+ * `dag.spec.redriven`; at the cap → spec `needs_attention reason:persistent_failure`. A
+ * spec with a fresh successor (a re-drive in flight) or not occupying a slot is skipped.
  */
 async function parkStrandedSpecRemote(
   pool: pg.Pool,
@@ -229,38 +273,43 @@ async function parkStrandedSpecRemote(
   specId: string,
   projectId: string,
   runId: string,
-  message: string,
+  failure: ClassifiedRunFailure,
 ): Promise<void> {
-  // Read the spec status + check for a SUCCESSOR run in ONE org-scoped read:
-  //  - `occupying`: only an `in_flight`/`review` spec is a candidate strand. A spec
-  //    already parked/merged/open means another finalize handled it — skip.
-  //  - `hasSuccessor` (apex v35 Bug 1): a re-drive (#579) RELEASES the failed run and
-  //    ENQUEUES a successor run, briefly leaving the spec occupying a slot while the
-  //    successor is still `queued`/`running`. Such a spec is TRANSITIONING, not
-  //    orphaned — DO NOT strand it. Only a slot with NO live successor is genuinely
-  //    orphaned (the safety net's true target).
-  // FAIL-CLOSED on a read FAILURE toward stranding the occupying spec (a genuinely
-  // stranded spec must never vanish), but treat an unreadable successor as ABSENT so
-  // the genuine-orphan strand still fires; `setSpecStatus`'s `notFromStatuses` guard
-  // keeps the park a safe no-op if the spec is not actually a strand.
+  // Read spec occupancy + the SUCCESSOR probe + the consecutive-same-failure count in ONE
+  // org-scoped read. FAIL-CLOSED on a read failure toward re-driving the occupying spec (a
+  // genuine orphan must never vanish silently); treat an unreadable successor as ABSENT.
   const slot = await runWithOrgScope(pool, orgId, async (client) => {
     const specStatus = await client.query<{ status: string }>("SELECT status FROM specs WHERE spec_id = $1", [specId]);
     const occupying = specStatus.rows[0]?.status === "in_flight" || specStatus.rows[0]?.status === "review";
     const successor = await client.query(SUCCESSOR_RUN_SQL, [specId, runId]);
-    return { occupying, hasSuccessor: (successor.rowCount ?? 0) > 0 };
+    const consecutive = await readOrphanConsecutive(client, specId, failure.code);
+    return { occupying, hasSuccessor: (successor.rowCount ?? 0) > 0, consecutive };
   }).catch((error: unknown) => {
-    logFinalizeSwallow(
-      "occupancy/successor read (remote, fail-closed → attempting guarded park)",
-      { runId, specId },
-      error,
-    );
-    return { occupying: true, hasSuccessor: false };
+    logFinalizeSwallow("occupancy/successor read (remote, fail-closed → re-drive)", { runId, specId }, error);
+    return { occupying: true, hasSuccessor: false, consecutive: 1 };
   });
   if (!slot.occupying) return;
   if (slot.hasSuccessor) {
     logStrandSkippedForSuccessor(runId, specId);
     return;
   }
+  if (decideOrphan(failure, slot.consecutive) === "re_drive") {
+    // RE-DRIVE: return the spec to `open` (the walker re-enqueues) — never a terminal strand.
+    await writer.setSpecStatus({ specId, orgId, status: "open", notFromStatuses: ["merged", "needs_attention"] });
+    await runWithJobOrgId(orgId, () =>
+      writer
+        .append({
+          runId,
+          specId,
+          projectId,
+          eventType: "dag.spec.redriven",
+          payload: orphanRedrivenPayload(runId, specId, failure, slot.consecutive),
+        })
+        .catch((error: unknown) => logFinalizeSwallow("dag.spec.redriven append (remote)", { runId, specId }, error)),
+    );
+    return;
+  }
+  // GENUINE-HALT (the cap K reached — a persistently-crashing spec): park `needs_attention`.
   await writer.setSpecStatus({
     specId,
     orgId,
@@ -274,7 +323,7 @@ async function parkStrandedSpecRemote(
         specId,
         projectId,
         eventType: "dag.spec.needs_attention",
-        payload: strandNeedsAttentionPayload(runId, specId, message),
+        payload: orphanPersistentPayload(runId, specId, failure, slot.consecutive),
       })
       .catch((error: unknown) =>
         logFinalizeSwallow("dag.spec.needs_attention append (remote)", { runId, specId }, error),
@@ -283,48 +332,68 @@ async function parkStrandedSpecRemote(
 }
 
 /**
- * Park a worker-force-halted run's spec at `needs_attention` in-process (the
- * single-role path). The guarded UPDATE (`status NOT IN ('merged','needs_attention')`)
- * makes it a no-op when the spec is already terminal — idempotent with the workflow's
- * earlier park. The event append joins the in-scope transaction (org-scoped client).
+ * Re-drive (or, at the cap, genuine-halt) a GENUINELY orphaned spec in-process (the
+ * single-role path). A SUCCESSOR run present ⇒ skip (a re-drive in flight). Under the cap
+ * the spec returns to `open` + `dag.spec.redriven`; at the cap it parks `needs_attention
+ * reason:persistent_failure`. The guarded UPDATE is the idempotency boundary.
  */
 export async function parkStrandedSpecInProcess(
   client: pg.PoolClient,
   specId: string,
   projectId: string,
   runId: string,
-  message: string,
+  failure: ClassifiedRunFailure,
 ): Promise<void> {
-  // RE-DRIVE ↔ ORPHAN ATOMICITY (apex v35 Bug 1): if a SUCCESSOR run is already
-  // queued/running for this spec, the spec is TRANSITIONING (a re-drive enqueued a
-  // new run), NOT orphaned — skip the strand entirely (the successor's own finalize
-  // governs it). Only a slot with NO live successor is genuinely orphaned.
+  // RE-DRIVE ↔ ORPHAN ATOMICITY (apex v35 Bug 1): a fresh queued/running SUCCESSOR run ⇒
+  // the spec is TRANSITIONING (a re-drive enqueued it), NOT orphaned — skip entirely.
   const successor = await client.query(SUCCESSOR_RUN_SQL, [specId, runId]);
   if ((successor.rowCount ?? 0) > 0) {
     logStrandSkippedForSuccessor(runId, specId);
     return;
   }
-  // Park ONLY an occupying spec (`in_flight`/`review`) — a guarded flip that RETURNS
-  // the row only when it moved. A spec already parked/merged/open matches zero rows,
-  // so the event is NOT emitted (idempotent with the workflow's own park — no
-  // duplicate `dag.spec.needs_attention`).
+  const consecutive = await readOrphanConsecutive(client, specId, failure.code);
+  const redrive = decideOrphan(failure, consecutive) === "re_drive";
+  // Guard ONLY an occupying spec (`in_flight`/`review`) — a flip that RETURNS the row only
+  // when it moved (idempotent with the workflow's own finalize, no duplicate event).
+  const targetStatus = redrive ? "open" : "needs_attention";
   const flipped = await client.query(
-    `UPDATE specs SET status = 'needs_attention'
+    `UPDATE specs SET status = '${targetStatus}'
        WHERE spec_id = $1 AND status IN ('in_flight', 'review') RETURNING spec_id`,
     [specId],
   );
   if (flipped.rowCount === 0) return;
+  const event = redrive
+    ? { eventType: "dag.spec.redriven" as const, payload: orphanRedrivenPayload(runId, specId, failure, consecutive) }
+    : {
+        eventType: "dag.spec.needs_attention" as const,
+        payload: orphanPersistentPayload(runId, specId, failure, consecutive),
+      };
   await new PgEventStore(client)
-    .append({
-      runId,
-      specId,
-      projectId,
-      eventType: "dag.spec.needs_attention",
-      payload: strandNeedsAttentionPayload(runId, specId, message),
-    })
-    .catch((error: unknown) =>
-      logFinalizeSwallow("dag.spec.needs_attention append (in-process)", { runId, specId }, error),
+    .append({ runId, specId, projectId, ...event })
+    .catch((error: unknown) => logFinalizeSwallow(`${event.eventType} append (in-process)`, { runId, specId }, error));
+}
+
+/**
+ * Read the CONSECUTIVE-same-failure count for the orphan path (this failure included),
+ * over an already-org-scoped client: count the trailing run of prior `dag.spec.redriven`
+ * events whose `failureCode` matches the current one (a different code resets the streak).
+ * FAIL-CLOSED toward re-driving: an unreadable history returns 1 (the first of its kind).
+ */
+async function readOrphanConsecutive(client: pg.PoolClient, specId: string, code: string): Promise<number> {
+  try {
+    const result = await client.query<{ payload: { failureCode?: string } }>(
+      `SELECT payload FROM events WHERE spec_id = $1 AND event_type = 'dag.spec.redriven' ORDER BY ts DESC, id DESC`,
+      [specId],
     );
+    let priorSameRun = 0;
+    for (const row of result.rows) {
+      if (row.payload.failureCode !== code) break;
+      priorSameRun += 1;
+    }
+    return priorSameRun + 1;
+  } catch {
+    return 1;
+  }
 }
 
 /**

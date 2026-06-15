@@ -14,10 +14,9 @@
         },
         "reason": {
           "enum": [
-            "halted_reexec",
-            "orphaned_marker",
-            "no_live_run",
-            "persistent_failure"
+            "misconfiguration",
+            "persistent_failure",
+            "human_decision"
           ],
           "type": "string"
         },
