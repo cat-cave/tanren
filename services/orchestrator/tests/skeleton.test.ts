@@ -23,6 +23,8 @@ describe("skeleton .tanren/ci.yml — round-trips through resolveCiConfig", () =
     expect(config.bootstrap?.run).toBe("just bootstrap");
     // The `upgrade` verb (environment-management.md §4.5) defers to `just upgrade`.
     expect(config.upgrade?.run).toBe("just upgrade");
+    // The `deploy` verb (the ci.yml home for the lifecycle deploy command) defers to `just deploy`.
+    expect(config.deploy?.run).toBe("just deploy");
     expect((config.tiers.fast ?? []).map((s) => s.run)).toEqual(["just tier-1"]);
     expect((config.tiers.slow ?? []).map((s) => s.run)).toEqual(["just tier-2"]);
     expect((config.tiers.merge ?? []).map((s) => s.run)).toEqual(["just tier-3"]);

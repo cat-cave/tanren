@@ -51,11 +51,15 @@ export const JUNIT_REPORT_PATH = "reports/junit.xml";
 // `upgrade.run` is `just upgrade` (environment-management.md §4.5/§7 P1): the
 // dependency-bump verb a version-change DAG node runs. Like every other verb it
 // defers to `just <target>`; the actual bump command lives in the project's justfile.
+// `deploy.run` is `just deploy`: the project's deploy COMMAND (the ci.yml home for the
+// lifecycle deploy point). Stack/target-agnostic — defers to `just deploy`; the deploy
+// provider/target is a separate org-integration concern (deployTargetResolution.ts).
 export const DEFAULT_CI_CONFIG: CiConfigV1 = Object.freeze(
   CiConfigV1.parse({
     version: 1,
     bootstrap: { run: "just bootstrap" },
     upgrade: { run: "just upgrade" },
+    deploy: { run: "just deploy" },
     tiers: {
       fast: [{ name: "tier-1", run: "just tier-1" }],
       slow: [{ name: "tier-2", run: "just tier-2", junitReport: JUNIT_REPORT_PATH }],
@@ -122,6 +126,17 @@ export function bootstrapCommand(config: CiConfigV1): string | undefined {
 // forced-upgrade lever (and the generator refuses to emit a no-op upgrade spec for it).
 export function upgradeCommand(config: CiConfigV1): string | undefined {
   return config.upgrade?.run;
+}
+
+// The project's deploy command (the ci.yml home for the lifecycle deploy point), or
+// undefined when the repo declares no `deploy` verb. The COMMAND is the project's own
+// (conventionally `just deploy`, deferring to its stack's release command) — Tanren
+// names no deploy tool. STACK/TARGET-AGNOSTIC: this is ONLY the command; the deploy
+// provider/target (the app + credentials to release onto) is a separate org-integration
+// concern (engine/postMerge/deployTargetResolution.ts), never derived here. Absence is
+// semantic: a project with no `deploy` verb has no Tanren-runnable deploy command.
+export function deployCommand(config: CiConfigV1): string | undefined {
+  return config.deploy?.run;
 }
 
 // The DECLARED JUnit report among the tiers mapped to a lifecycle point — the

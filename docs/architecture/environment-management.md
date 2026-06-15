@@ -162,6 +162,25 @@ pipeline. This is the _structural_ fix for agents picking multi-year-old version
 prompting. Escape hatch for a project that declares no `upgrade` verb: Tanren runs Renovate
 (self-hosted) to compute the changeset, then routes it through the same DAG gate.
 
+**Optional `deploy` verb — the ci.yml home for the lifecycle deploy command.** `CiConfigV1`
+also carries a `deploy` lifecycle verb alongside `bootstrap`/`upgrade`/tiers — the same
+opaque `{ run }` shape (conventionally `just deploy`, the actual release command living in
+the justfile; Tanren names no deploy tool). The lifecycle already treats `deploy` as a
+first-class point (`engine/forge/interview/types.ts`; the template-creation research
+lifecycle), so a template-build's `deploy` spec **projects its lifecycle deploy command
+into the authored `.tanren/ci.yml` as `deploy.run`** — the same way `build`/`upgrade`/tier
+verbs project (every verb defers to `just <target>`, filled from the captured lifecycle).
+Before this verb existed, the strict `CiConfigV1` **rejected** any ci.yml that declared
+`deploy:` (`Unrecognized key: "deploy"`), infinite-looping the deploy spec — it had nowhere
+to land the command. It is **optional** (like `upgrade`): a project with no `deploy` verb has
+no Tanren-runnable deploy command (absence is semantic, no silent fallback). It is **stack-
+AND target-agnostic** — `run` holds ONLY the project's own deploy COMMAND, never a
+provider-specific (vercel/fly/…) branch; the deploy **provider/target** (the app to release
+onto + its credentials) is a separate org-integration concern
+(`engine/postMerge/deployTargetResolution.ts`), not this verb. (Wiring the post-merge
+deploy-on-merge watcher — which today triggers a provider-API release, not a shell command —
+to read `deployCommand(config)` is a follow-on, not part of this schema fix.)
+
 **Fresh templates start at the latest versions (the two-lever anti-stale fix).** An agent
 authoring a template-from-scratch pins versions from its **training cutoff** — already
 stale (an apex run pinned node 24 + pnpm 10 when pnpm 11 was current, and mise then
@@ -264,6 +283,7 @@ capability-keyed selection + negative-control publish gate.
 | Env registry                 | none                                                                                                                       | new `environments` table + store, parallel to `TemplateStore`/`manifest.ts` (capabilities, channel, provenance, validationProof) |
 | Toolchain declaration        | `CaptureLifecycle.stack` is a label only (`forge/interview/types.ts`)                                                      | add optional toolchain declaration; scaffold materializes `mise.toml`/`flake.nix` (skeleton path, like `contractFiles.ts`)       |
 | `upgrade` verb               | absent from `CiConfigV1` (`ci/schema.ts`) + skeleton                                                                       | add `upgrade` to schema + `SKELETON_CI_CONFIG` + `justfile` targets                                                              |
+| `deploy` verb                | `CiConfigV1` had no `deploy` key, so the strict schema rejected an authored ci.yml's lifecycle `deploy:` (infinite-loop)   | add a `CiDeploy` `{ run }` verb to schema + `SKELETON_CI_CONFIG` (`deploy.run: just deploy`) + a `deployCommand` resolver        |
 | Workspace-prep delta         | clone → materialize contract files → jj init → bootstrap (`plannerRunWorkspace.ts`)                                        | insert env-resolve + `mise install` delta before bootstrap                                                                       |
 | Validation negative controls | typecheck/lint/test/mutation (`validationProof.ts`)                                                                        | add a `toolchain`/isolation negative control for env images                                                                      |
 | Golden-image build/cache     | none                                                                                                                       | BuildKit golden-base build (refresh-on-`main`) + OCI registry + `mode=max` cache; attic for Nix tier                             |

@@ -98,6 +98,12 @@ bootstrap:
 # side stream — a breaking bump is rejected loudly and main never breaks.
 upgrade:
   run: just upgrade
+# deploy — the project's deploy COMMAND (the ci.yml home for the lifecycle deploy point).
+# Defers to \`just deploy\` (the stack's release command lives in the justfile). Tanren names
+# no deploy tool; the deploy PROVIDER/TARGET (the app + credentials) is a separate
+# org-integration concern, never a stack/target branch here.
+deploy:
+  run: just deploy
 tiers:
   # tier-1 (per_iteration) — the cheap gate after every writer iteration.
   fast:

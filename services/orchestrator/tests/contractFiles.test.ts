@@ -12,7 +12,7 @@
 //      just the same, and the ci.yml is identical for every stack.
 
 import { describe, expect, it } from "vitest";
-import { resolveCiConfig } from "../src/engine/ci/index.js";
+import { deployCommand, resolveCiConfig } from "../src/engine/ci/index.js";
 import type { ProjectLifecycle } from "../src/engine/config/index.js";
 import {
   SKELETON_CI_CONFIG,
@@ -111,6 +111,27 @@ describe("materializeContractFiles · the .tanren/ci.yml is SKELETON_CI_CONFIG v
     expect(config.when.fast).toEqual(["per_iteration"]);
     expect(config.when.slow).toEqual(["pre_audit"]);
     expect(config.when.merge).toEqual(["pre_merge"]);
+    // The `upgrade` + `deploy` verbs (environment-management.md §4.5) defer to `just <target>`.
+    expect(config.upgrade?.run).toBe("just upgrade");
+    expect(config.deploy?.run).toBe("just deploy");
+  });
+
+  it("projects the lifecycle DEPLOY command into the ci.yml `deploy.run` → justfile (a template-build's deploy spec)", () => {
+    // The ci.yml carries a `deploy` verb (`deploy.run: just deploy`), and `just deploy` is
+    // filled from the captured lifecycle deploy command. So a template-build's `deploy`
+    // spec — whose lifecycle deploy command is `flyctl deploy` (RUST) / `python …` (NOVEL) —
+    // lands as the ci.yml deploy verb's eventual command, the SAME way build/upgrade/tier
+    // verbs project (all defer to `just <target>`, filled from the lifecycle). Before this
+    // verb, the strict CiConfigV1 REJECTED a ci.yml that declared `deploy:` (the live loop).
+    const files = materializeContractFiles(RUST_LIFECYCLE);
+    const ci = files.find((f) => f.path === SKELETON_CI_CONFIG_PATH);
+    const config = resolveCiConfig(ci?.content ?? "");
+    // The ci.yml's deploy verb resolves to the stack-agnostic `just deploy` defer.
+    expect(deployCommand(config)).toBe("just deploy");
+    // …and `just deploy` is the captured lifecycle deploy command (the project's own).
+    const justfile = files.find((f) => f.path === SKELETON_JUSTFILE_PATH)?.content ?? "";
+    expect(justfile).toMatch(/deploy:\n\tflyctl deploy/u);
+    expect(justfile).not.toContain("tanren: define 'deploy'");
   });
 
   it("the ci.yml run commands name NO stack — every step defers to `just`", () => {
