@@ -75,6 +75,30 @@ export const CiUpgrade = z
   .strict();
 export type CiUpgrade = z.infer<typeof CiUpgrade>;
 
+// ---- Deploy ----------------------------------------------------------------
+
+// Optional `deploy` verb — the project-declared command that releases the built
+// artifact to its target (conventionally `just deploy`, deferring to the project's
+// stack — Tanren names NO deploy tool). It is the ci.yml HOME for the lifecycle's
+// `deploy` command (engine/forge/interview/types.ts; the lifecycle's first-class
+// `deploy` point); a template-build's `deploy` spec projects its lifecycle deploy
+// command HERE, so the strict `CiConfigV1` accepts a `.tanren/ci.yml` that carries
+// it. Same opaque `{ run }` shape as `bootstrap`/`upgrade`; Tanren never parses the
+// shell.
+//
+// STACK-AGNOSTIC + TARGET-AGNOSTIC: `run` holds ONLY the project's own deploy
+// COMMAND — never a stack-specific (vercel/fly/…) branch. The deploy PROVIDER/TARGET
+// (the app to release onto + its credentials) is a separate concern, resolved from
+// the org's integration grants (engine/postMerge/deployTargetResolution.ts), not
+// from this verb. Optional: a project that declares no `deploy` verb has no
+// Tanren-runnable deploy COMMAND (absence is semantic — no silent fallback).
+export const CiDeploy = z
+  .object({
+    run: z.string().min(1),
+  })
+  .strict();
+export type CiDeploy = z.infer<typeof CiDeploy>;
+
 // ---- Tiers -----------------------------------------------------------------
 
 // The set of named tiers. `fast` and `slow` are REQUIRED so the in-loop gate
@@ -107,6 +131,12 @@ export const CiConfigV1 = z
     // Optional + opaque — see `CiUpgrade`. Tanren runs it inside a gated upgrade DAG
     // node, never a side stream.
     upgrade: CiUpgrade.optional(),
+    // The project's deploy command (engine/forge/interview lifecycle `deploy`). Optional
+    // + opaque — see `CiDeploy`. The ci.yml HOME for the lifecycle deploy command, so a
+    // template-build's `deploy` spec can author a ci.yml that carries it (the strict
+    // schema rejected it before this verb existed). Stack/target-agnostic: just the
+    // project's COMMAND; the deploy provider/target is a separate org-integration concern.
+    deploy: CiDeploy.optional(),
     tiers: CiTiers,
     when: CiWhenPolicy,
   })

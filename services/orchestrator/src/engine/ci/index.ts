@@ -5,6 +5,7 @@
 export {
   CiBootstrap,
   CiConfigV1,
+  CiDeploy,
   CiStep,
   CiTiers,
   CiUpgrade,
@@ -19,6 +20,7 @@ export {
   DEFAULT_CI_CONFIG,
   JUNIT_REPORT_PATH,
   bootstrapCommand,
+  deployCommand,
   junitReportFor,
   resolveCiConfig,
   stepsFor,

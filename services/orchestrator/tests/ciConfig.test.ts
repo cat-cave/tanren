@@ -5,6 +5,7 @@ import {
   DEFAULT_CI_CONFIG,
   JUNIT_REPORT_PATH,
   bootstrapCommand,
+  deployCommand,
   junitReportFor,
   parseYaml,
   resolveCiConfig,
@@ -67,6 +68,10 @@ describe("resolveCiConfig — missing", () => {
     // the dependency-bump command a version-change DAG node runs. Names NO stack.
     expect(upgradeCommand(cfg)).toBe("just upgrade");
     expect(upgradeCommand(cfg)).not.toMatch(/pnpm|npm|corepack|cargo|node/u);
+    // The `deploy` verb (the ci.yml home for the lifecycle deploy command) defers to
+    // `just deploy` — names NO stack/target (the provider/target is a separate concern).
+    expect(deployCommand(cfg)).toBe("just deploy");
+    expect(deployCommand(cfg)).not.toMatch(/vercel|fly|flyctl|pnpm|cargo|node/u);
   });
 
   it("keeps the JUnit report-path convention fixed for the per-test ingest", () => {
@@ -248,6 +253,90 @@ when:
     - pre_merge
 `;
     expect(() => resolveCiConfig(badUpgrade)).toThrow(CiConfigValidationError);
+  });
+
+  it("parses the optional `deploy` verb — the project's own deploy command (the ci.yml home for the lifecycle deploy point)", () => {
+    // The `deploy` verb gives the lifecycle deploy command a home in the strict CiConfigV1,
+    // so a template-build's `deploy` spec can author a ci.yml that declares it (the live
+    // loop: the strict schema USED to reject `Unrecognized key: "deploy"`). Opaque +
+    // project-declared (same `{ run }` shape as bootstrap/upgrade) — Tanren names no deploy tool.
+    const withDeploy = `version: 1
+deploy:
+  run: "flyctl deploy"
+tiers:
+  fast:
+    - name: lint
+      run: cargo clippy
+  slow:
+    - name: build
+      run: cargo build
+when:
+  fast:
+    - per_iteration
+  slow:
+    - pre_merge
+`;
+    expect(deployCommand(resolveCiConfig(withDeploy))).toBe("flyctl deploy");
+  });
+
+  it("a ci.yml that declares `deploy` no longer fails the strict schema (the live infinite-loop fix)", () => {
+    // Before the `deploy` verb existed, this exact shape failed with
+    // `<root>: Unrecognized key: "deploy"`, infinite-looping a template-build's deploy spec.
+    const withDeploy = `version: 1
+deploy:
+  run: just deploy
+tiers:
+  fast:
+    - name: tier-1
+      run: just tier-1
+  slow:
+    - name: tier-2
+      run: just tier-2
+when:
+  fast:
+    - per_iteration
+  slow:
+    - pre_merge
+`;
+    expect(() => resolveCiConfig(withDeploy)).not.toThrow();
+  });
+
+  it("treats the `deploy` verb as optional — absent ⇒ no Tanren-runnable deploy command", () => {
+    const noDeploy = `version: 1
+tiers:
+  fast:
+    - name: lint
+      run: pnpm lint
+  slow:
+    - name: build
+      run: pnpm build
+when:
+  fast:
+    - per_iteration
+  slow:
+    - pre_merge
+`;
+    expect(deployCommand(resolveCiConfig(noDeploy))).toBeUndefined();
+  });
+
+  it("rejects a `deploy` block with no `run` (strict shape, like bootstrap/upgrade)", () => {
+    const badDeploy = `version: 1
+deploy:
+  cmd: flyctl deploy
+tiers:
+  fast:
+    - name: lint
+      run: pnpm lint
+  slow:
+    - name: build
+      run: pnpm build
+when:
+  fast:
+    - per_iteration
+  slow:
+    - pre_merge
+`;
+    expect(() => resolveCiConfig(badDeploy)).toThrow(CiConfigValidationError);
   });
 });
 
