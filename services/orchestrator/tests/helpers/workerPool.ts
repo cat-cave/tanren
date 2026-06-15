@@ -40,6 +40,11 @@ export class WorkerPool {
   // >0 ⇒ a re-drive's freshly-queued successor exists ⇒ the spec is transitioning, not
   // orphaned. Defaults to 0 (no successor → a genuine orphan strands).
   successorRunCount = 0;
+  // The orphan path's consecutive-same-failure read (`SELECT payload FROM events ...
+  // dag.spec.redriven`): the prior re-driven failure codes newest→oldest. The orphan
+  // re-drives under the cap (spec → `open`) and genuine-halts at it. Defaults to empty
+  // (first failure of its kind ⇒ re-drive).
+  priorRedrivenFailureCodes: string[] = [];
   prUrl: string | null = null;
   // Test-support for the org-scoping mutants (runExecutor org-scope establishment
   // + finalize): when set, the run⋈spec⋈project read echoes this org on the
@@ -209,15 +214,28 @@ export class WorkerPool {
       const n = this.successorRunCount;
       return { rows: n > 0 ? [{}] : [], rowCount: n };
     }
-    // The in-process orphan strand: a GUARDED `in_flight`/`review` → `needs_attention`
-    // flip that RETURNS the row only when it moved (so the strand event fires only for a
-    // genuinely-occupying spec). Observed so a test can assert the worker stranded — or,
-    // for the single-finalize invariant, that it did NOT (a `WorkflowFinalizedError` skips
-    // `finalizeRunRecoverable` entirely, so this query never runs).
-    if (trimmed.startsWith("UPDATE specs SET status = 'needs_attention'")) {
+    // The orphan path's consecutive-same-failure read: prior `dag.spec.redriven` events
+    // (newest→oldest) the authority's cap keys off.
+    if (trimmed.startsWith("SELECT payload FROM events") && trimmed.includes("dag.spec.redriven")) {
+      return {
+        rows: this.priorRedrivenFailureCodes.map((c) => ({ payload: { failureCode: c } })),
+        rowCount: this.priorRedrivenFailureCodes.length,
+      };
+    }
+    // The in-process orphan disposition: a GUARDED `in_flight`/`review` → `open` (a
+    // RE-DRIVE, under the cap) or → `needs_attention` (the persistent-failure escalation
+    // at the cap) flip that RETURNS the row only when it moved (so the event fires only
+    // for a genuinely-occupying spec). Observed so a test can assert the worker re-drove /
+    // escalated — or, for the single-finalize invariant, that it did NOT (a
+    // `WorkflowFinalizedError` skips `finalizeRunRecoverable` entirely).
+    const orphanFlip =
+      /^UPDATE specs SET status = '(open|needs_attention)'\s+WHERE spec_id = \$1 AND status IN \('in_flight', 'review'\)/u.exec(
+        trimmed,
+      );
+    if (orphanFlip !== null) {
       const occupying = this.specStatus === "in_flight" || this.specStatus === "review";
       if (!occupying) return { rows: [], rowCount: 0 };
-      this.specStatus = "needs_attention";
+      this.specStatus = orphanFlip[1] ?? "needs_attention";
       return { rows: [{ spec_id: String(params[0]) }], rowCount: 1 };
     }
     // spec status transitions (claim 'in_flight', finalize 'merged')

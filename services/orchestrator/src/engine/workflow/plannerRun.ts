@@ -60,14 +60,14 @@ import {
   buildFinalizeRunState,
   emitPrepBootstrapDeferred,
   finalizeMergeOutcome,
-  finalizeNonPassAndPark,
+  finalizeNonPassOutcome,
   finalizeWorkflowThrow,
   markRunRunning,
   type MergeGateBudget,
+  nonPassDetailFor,
   releaseRunnerWithCleanupProof,
   type RunCredentialScoping,
   runnerPayload,
-  runOutcomeFor,
   supersedeQueuedPlannerTask,
 } from "./plannerRunFinalize.js";
 import type { RedriveHistoryReader } from "./plannerRunRedrive.js";
@@ -387,8 +387,9 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
       });
 
       if (outcome.kind !== "passed") {
-        // finding #3: halt the run AND park the spec (requeueable, never stuck in_flight).
-        await finalizeNonPassAndPark(input, finalizeRunState, context, appendEvent, runOutcomeFor(outcome));
+        // UNIFIED RUN-FINALIZE (apex v35): a non-pass loop exit is TRANSIENT — RE-DRIVE (the
+        // authority bounds it by the consecutive-same-failure cap), never a direct park.
+        await finalizeNonPassOutcome(input, finalizeRunState, context, appendEvent, nonPassDetailFor(outcome));
         releaseReason = "failed";
         return { runId: context.runId, workspacePath, outcome };
       }
@@ -482,14 +483,13 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
       ...nativeQueueSeam(input),
     });
 
-    // Finalize the run + spec for the merge stage's outcome (a native_queue enqueue leaves the spec NON-done).
-    await finalizeMergeOutcome(input, finalizeRunState, context, merge);
+    await finalizeMergeOutcome(input, finalizeRunState, context, appendEvent, merge);
     releaseReason = "completed";
     return { runId: context.runId, workspacePath, outcome, pullRequest, mergeGate, review, merge };
   } catch (error) {
-    // SINGLE-FINALIZE INVARIANT (apex v35): finalize the run+spec ONCE (spec-aware) and either RETURN a
-    // recoverable-halt result for a re-driven attempt (never re-throw into the worker's strand path, the
-    // #580 double-finalize) or re-throw WRAPPED — the full orchestration lives in `finalizeWorkflowThrow`.
+    // SINGLE-FINALIZE INVARIANT (apex v35): finalize the run+spec ONCE (spec-aware) — RETURN a
+    // re-driven recoverable-halt result (never re-throw into the worker's strand path, the #580
+    // double-finalize) or re-throw WRAPPED. The orchestration lives in `finalizeWorkflowThrow`.
     releaseReason = "failed";
     return await finalizeWorkflowThrow(error, { finalizeRunState, appendEvent, workspacePath, input, context });
   } finally {

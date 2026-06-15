@@ -6,7 +6,6 @@ import { describe, expect, it } from "vitest";
 import type { RunnerHandle } from "../src/engine/contracts/allocator.js";
 import type { RunnerCommand, CommandResult, CommandSubstrate } from "../src/engine/contracts/commandSubstrate.js";
 import { CodexUsageLimitError } from "../src/engine/providers/codex.js";
-import { isWorkflowFinalized, rawCauseOf } from "../src/engine/workflow/workflowErrorDisposition.js";
 import { WorkspaceBootstrapError } from "../src/engine/workspace/index.js";
 import {
   accounting,
@@ -425,7 +424,7 @@ describe("runPlannerLoopWorkflow", () => {
     expect(allocator.releases).toEqual(["runner_planner"]);
   });
 
-  it("maps a Codex usage-limit thrown mid-loop to a halted window_exhausted run", async () => {
+  it("RE-DRIVES a Codex usage-limit thrown mid-loop (a transient window) — run halts, spec re-driven, no throw", async () => {
     const { ctx, pool, events, secrets, allocator, ssh } = await setup();
     const throwingPlanner: AnswererAdapter<PlanAnswer> = {
       kind: "answerer",
@@ -436,9 +435,9 @@ describe("runPlannerLoopWorkflow", () => {
       },
     };
 
-    // SINGLE-FINALIZE INVARIANT (apex v35): a usage-limit is a `recoverable_halt` — the workflow's own
-    // finalizer lands the run window_exhausted + parks the spec, then re-throws WRAPPED in
-    // `WorkflowFinalizedError` (the worker then SKIPS its already-done finalize), preserving the raw cause.
+    // UNIFIED RUN-FINALIZE (apex v35): a usage-limit is TRANSIENT (a recoverable window) ⇒ RE-DRIVE.
+    // The run halts `window_exhausted` (WHY preserved), the spec returns to `open` + `dag.spec.redriven`,
+    // and the workflow RETURNS NORMALLY (never re-throws into the worker's strand path).
     const run = runPlannerLoopScoped({
       pool: pool.asPgPool(),
       eventStore: events,
@@ -461,13 +460,13 @@ describe("runPlannerLoopWorkflow", () => {
       }),
       buildUsageProbe: () => fakeProbe(healthyWindow(), accounting(null)),
     });
-    const thrown = await run.catch((error: unknown) => error);
-
-    const wrapped = isWorkflowFinalized(thrown) ? thrown : undefined;
-    expect(wrapped?.disposition).toBe("recoverable_halt");
-    // The raw error is preserved as the wrapper's cause (the public failure vocabulary is unchanged).
-    expect(rawCauseOf(thrown)).toBeInstanceOf(CodexUsageLimitError);
+    // RE-DRIVE returns NORMALLY (no throw).
+    const result = await run;
+    expect(result.reDriven).toBe(true);
     expect(pool.runStatus).toEqual({ status: "halted", outcome: "window_exhausted" });
+    expect(pool.specStatuses.at(-1)).toBe("open");
+    const redriven = events.events.find((e) => e.eventType === "dag.spec.redriven");
+    expect(redriven?.payload).toMatchObject({ failureCode: "usage_limit" });
     expect(allocator.releases).toEqual(["runner_planner"]);
   });
 });

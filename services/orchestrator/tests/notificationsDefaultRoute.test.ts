@@ -51,7 +51,7 @@ describe("NotificationDispatcher default route", () => {
         payload: {
           source: "strand",
           specId: "spec_1",
-          reason: "no_live_run",
+          reason: "persistent_failure",
           terminalRuns: [],
           attempts: 3,
           message: "the autonomous self-heal could not make progress; a decision is needed",
@@ -79,7 +79,7 @@ describe("NotificationDispatcher default route", () => {
       {
         source: "strand" as const,
         specId: "spec_1",
-        reason: "no_live_run" as const,
+        reason: "persistent_failure" as const,
         terminalRuns: [],
         attempts: 3,
         message: "the autonomous self-heal could not make progress; a decision is needed",
@@ -130,7 +130,7 @@ describe("NotificationDispatcher default route", () => {
         payload: {
           source: "strand",
           specId: "spec_1",
-          reason: "no_live_run",
+          reason: "persistent_failure",
           terminalRuns: [],
           attempts: 3,
           message: "the autonomous self-heal could not make progress; a decision is needed",

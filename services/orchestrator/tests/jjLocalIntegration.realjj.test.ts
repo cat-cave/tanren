@@ -230,9 +230,9 @@ describe("§3.5 jj-local batch integration (real jj)", () => {
     // THE RACE this fixes (tanren-owns-the-engine.md §3): the dependent's `build` run was
     // in-flight assembling against `feat-a@origin` when the scaffold's PR MERGED and the merge
     // DELETED `feat-a`. WITHOUT the fix the `feat-a@origin` read throws
-    // (`WorkspaceCommandError: jj read bookmark sha failed`) → the run fails `internal` → the
-    // dependent TERMINALLY strands (`needs_attention reason:halted_reexec source:strand`) and
-    // everything downstream stays `open`. WITH the fix: `feat-a`'s commit is PROVEN in the base
+    // (`WorkspaceCommandError: jj read bookmark sha failed`) → the run fails `internal` → in the
+    // unified model the dependent would RE-DRIVE (never the old terminal strand) but burn the
+    // re-drive budget needlessly, and everything downstream stays `open`. WITH the fix: `feat-a`'s commit is PROVEN in the base
     // (its `knownHeadSha` is contained in `main`), so it is DROPPED, and the still-live `feat-b`
     // assembles against the new base — the dependent proceeds.
     const { originPath, mergedHeadSha } = makeMergedAncestorFixture();

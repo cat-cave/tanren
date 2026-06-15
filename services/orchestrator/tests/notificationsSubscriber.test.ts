@@ -139,7 +139,7 @@ describe("NotificationSubscriber", () => {
           payload: {
             source: "strand",
             specId: "spec_1",
-            reason: "no_live_run",
+            reason: "persistent_failure",
             terminalRuns: [],
             attempts: 3,
             message: "the autonomous self-heal could not make progress; a decision is needed",

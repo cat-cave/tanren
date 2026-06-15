@@ -1,17 +1,15 @@
-// apex v22 run-discipline finding #3: a DAG spec stuck in `in_flight` is
-// unrecoverable. A terminal-failed/halted run used to finalize the RUN to
-// halted/failed but leave the SPEC at `in_flight` — which the DagWalker maps to
-// OCCUPYING-A-SLOT, so the walker never re-attempts and neither operator-API path
-// (`requeue` needs_attention-only, `runs` open-only) can recover it. This suite
-// proves the fix: every terminal run outcome transitions the spec OUT of `in_flight`
-// to the operator-recoverable `needs_attention` (freeing the slot + emitting the loud
-// `dag.spec.needs_attention`), AND the requeue path can re-enter it at `open`.
+// apex v35 — the UNIFIED run-finalize at the WORKFLOW error boundary (finalizeWorkflowError).
+// EVERY thrown run-error routes through the ONE authority and lands in exactly one bucket:
+//   • a RANDOM/TRANSIENT/internal fault → RE-DRIVE (run halts recoverable, spec → `open`,
+//     `dag.spec.redriven`) — never the old terminal park;
+//   • a credential MISCONFIGURATION → GENUINE-HALT (run failed, spec `needs_attention`);
+//   • the SAME failure K times → GENUINE-HALT `persistent_failure` (no hot-loop);
+//   • a benign ancestor-wait → a NO-FAULT RE-DRIVE (spec → `open`, ancestor_not_ready).
+// These assertions FAIL against the pre-redesign per-branch park logic (which parked the
+// transient/usage-limit/workspace branches at `needs_attention`).
 
 import { describe, expect, it } from "vitest";
-import {
-  finalizeWorkflowError,
-  parkSpecNeedsAttentionForHaltedRun,
-} from "../src/engine/workflow/plannerRunFinalize.js";
+import { finalizeWorkflowError } from "../src/engine/workflow/plannerRunFinalize.js";
 import type { PlannerRunContext, RunPlannerLoopInput } from "../src/engine/workflow/plannerRun.js";
 import type { EventName, EventPayload } from "../src/engine/events/index.js";
 import { isAllowedSpecTransition } from "../src/engine/state/spec.js";
@@ -99,45 +97,18 @@ function redriven(
       });
 }
 
-/** The `dag.spec.needs_attention` event the park emitted (asserts it is loud + typed). */
+/** The `dag.spec.needs_attention` event a GENUINE-HALT emitted (asserts it is loud + typed). */
 function needsAttention(events: CapturedEvent[]): { source: string; reason: string; message: string } | undefined {
   const e = events.find((x) => x.eventType === "dag.spec.needs_attention");
   return e === undefined ? undefined : (e.payload as { source: string; reason: string; message: string });
 }
 
-describe("parkSpecNeedsAttentionForHaltedRun — finding #3 never-strand", () => {
-  it("transitions the spec out of in_flight to needs_attention + emits the loud event", async () => {
-    const pool = new RecordingPool();
-    const { events, appendEvent, input } = harness(pool);
-
-    await parkSpecNeedsAttentionForHaltedRun(input, ctx(), appendEvent, "retry_budget_exhausted");
-
-    // The SPEC left in_flight for the operator-recoverable needs_attention.
-    expect(pool.specStatusWritten()).toBe("needs_attention");
-    // A loud, typed escalation event was emitted (source `strand`, framed as a decision).
-    const na = needsAttention(events);
-    expect(na?.source).toBe("strand");
-    expect(na?.reason).toBe("halted_reexec");
-    expect(na?.message).toContain("requeue");
-  });
-
-  it("the needs_attention status is operator-requeueable (the recovery path)", () => {
-    // The requeue endpoint flips `needs_attention → open`; the state machine permits
-    // exactly that exit, so a parked spec is genuinely recoverable over the API.
-    expect(isAllowedSpecTransition("needs_attention", "open")).toBe(true);
-    // And from in_flight the park transition itself is legal.
-    expect(isAllowedSpecTransition("in_flight", "needs_attention")).toBe(true);
-  });
-});
-
-describe("finalizeWorkflowError — a GENUINE-TERMINAL misconfiguration escalates (not just halts the run)", () => {
-  it("a MissingCredentialError (misconfiguration) halts the run AND escalates the spec with a SPECIFIC diagnostic", async () => {
+describe("finalizeWorkflowError — a GENUINE-TERMINAL misconfiguration GENUINE-HALTS (not just halts the run)", () => {
+  it("a MissingCredentialError (misconfiguration) lands the run failed AND escalates the spec with a SPECIFIC diagnostic", async () => {
     const pool = new RecordingPool();
     const { events, appendEvent, finalizeRunState, input } = harness(pool);
 
-    // A MissingCredentialError is a STRUCTURAL cause a human must fix (misconfiguration) —
-    // it is NOT random/transient, so it escalates immediately (never re-driven forever).
-    await finalizeWorkflowError(new MissingCredentialError("github_token"), {
+    const disposition = await finalizeWorkflowError(new MissingCredentialError("github_token"), {
       finalizeRunState,
       appendEvent,
       workspacePath: "/workspace/runs/run_1",
@@ -145,26 +116,27 @@ describe("finalizeWorkflowError — a GENUINE-TERMINAL misconfiguration escalate
       context: ctx(),
     });
 
-    // The RUN finalizes failed (a genuine-terminal misconfiguration), and the SPEC is
-    // parked at needs_attention — NOT silently stranded at in_flight, NOT re-driven.
+    // The unified bucket: a misconfiguration is a GENUINE-HALT.
+    expect(disposition).toBe("genuine_halt");
+    // The RUN finalizes failed; the SPEC parks at needs_attention — NOT stranded at in_flight, NOT re-driven.
     expect(pool.terminalRunWrite()).toEqual({ status: "failed", outcome: "failed" });
     expect(pool.specStatusWritten()).toBe("needs_attention");
     const na = needsAttention(events);
     expect(na?.source).toBe("strand");
-    // FAIL-LOUD: a SPECIFIC, actionable diagnostic (the classified credential fault) — never a
-    // bare "internal error". It names the credential stage + frames it as a human fix.
+    expect(na?.reason).toBe("misconfiguration");
+    // FAIL-LOUD: a SPECIFIC, actionable diagnostic (the classified credential fault), never a bare error.
     expect(na?.message).toContain("credential");
-    expect(na?.message).toContain("structural cause a human");
+    expect(na?.message).toContain("a human must fix");
     // And there is NO re-drive — a misconfiguration is never re-driven.
     expect(redriven(events)).toBeUndefined();
   });
 
-  it("a recoverable usage-limit halt also parks the spec", async () => {
+  it("a recoverable usage-limit fault RE-DRIVES (the whack-a-mole park is gone) — not needs_attention", async () => {
     const pool = new RecordingPool();
-    const { events, appendEvent, finalizeRunState, input } = harness(pool);
+    const { events, appendEvent, finalizeRunState, input } = harness(pool, readerReturning(1));
     const { CodexUsageLimitError } = await import("../src/engine/providers/codex.js");
 
-    await finalizeWorkflowError(new CodexUsageLimitError("primary", "out of quota"), {
+    const disposition = await finalizeWorkflowError(new CodexUsageLimitError("primary", "out of quota"), {
       finalizeRunState,
       appendEvent,
       workspacePath: "/workspace/runs/run_1",
@@ -172,9 +144,33 @@ describe("finalizeWorkflowError — a GENUINE-TERMINAL misconfiguration escalate
       context: ctx(),
     });
 
-    expect(pool.terminalRunWrite()).toEqual({ status: "halted", outcome: "window_exhausted" });
-    expect(pool.specStatusWritten()).toBe("needs_attention");
-    expect(needsAttention(events)?.reason).toBe("halted_reexec");
+    // A usage window is TRANSIENT — the spec re-drives (the walker re-attempts after the window).
+    expect(disposition).toBe("re_drive");
+    expect(pool.specStatusWritten()).toBe("open");
+    expect(needsAttention(events)).toBeUndefined();
+    // The usage pressure is still surfaced loudly (the diagnostic event), and the re-drive is observable.
+    expect(events.find((e) => e.eventType === "usage.window.pressure")).toBeDefined();
+    expect(redriven(events)?.failureCode).toBe("usage_limit");
+  });
+
+  it("a workspace-bootstrap fault RE-DRIVES (transient deps install), surfacing workspace.failed", async () => {
+    const pool = new RecordingPool();
+    const { events, appendEvent, finalizeRunState, input } = harness(pool, readerReturning(1));
+    const { WorkspaceBootstrapError } = await import("../src/engine/workspace/index.js");
+
+    const disposition = await finalizeWorkflowError(new WorkspaceBootstrapError("deps install failed"), {
+      finalizeRunState,
+      appendEvent,
+      workspacePath: "/workspace/runs/run_1",
+      input,
+      context: ctx(),
+    });
+
+    expect(disposition).toBe("re_drive");
+    expect(pool.specStatusWritten()).toBe("open");
+    expect(needsAttention(events)).toBeUndefined();
+    expect(events.find((e) => e.eventType === "workspace.failed")).toBeDefined();
+    expect(redriven(events)?.failureCode).toBe("workspace");
   });
 });
 
@@ -184,26 +180,26 @@ describe("finalizeWorkflowError — a NON-TERMINAL headless ancestor benign-WAIT
     const { events, appendEvent, finalizeRunState, input } = harness(pool);
     const { AncestorNotReadyError } = await import("../src/engine/dag/jjLocalIntegration.js");
 
-    // The dependent reached its base-shift assembly but its ancestor `deploy` (spec
-    // `spec_deploy`) was still `in_flight` — no PR/branch published yet. WITHOUT the benign
-    // branch this would land like any other hard error: run `failed`, spec parked
-    // `needs_attention` (a TERMINAL strand). WITH it: the run halts recoverable + the spec
-    // returns to `open` so the walker re-drives it once the ancestor publishes its head.
-    await finalizeWorkflowError(new AncestorNotReadyError("spec_deploy", "tanren/deploy-x", "in_flight", "main"), {
-      finalizeRunState,
-      appendEvent,
-      workspacePath: "/workspace/runs/run_1",
-      input,
-      context: ctx(),
-    });
+    const disposition = await finalizeWorkflowError(
+      new AncestorNotReadyError("spec_deploy", "tanren/deploy-x", "in_flight", "main"),
+      {
+        finalizeRunState,
+        appendEvent,
+        workspacePath: "/workspace/runs/run_1",
+        input,
+        context: ctx(),
+      },
+    );
 
+    expect(disposition).toBe("re_drive");
     // The run HALTED (recoverable, work not discarded) — NOT `failed`.
     expect(pool.terminalRunWrite()).toEqual({ status: "halted", outcome: "halted" });
-    // The dependent's SPEC returned to `open` (the walker's re-drive bucket), NOT
-    // `needs_attention` — it does NOT terminally strand.
+    // The dependent's SPEC returned to `open`, NOT `needs_attention`.
     expect(pool.specStatusWritten()).toBe("open");
     expect(needsAttention(events)).toBeUndefined();
-    // The benign-wait was surfaced loudly (never silent) with the ancestor + its phase.
+    // A benign wait carries NO fault — it emits ancestor_not_ready, NOT dag.spec.redriven (it
+    // never counts toward the consecutive-same-failure cap).
+    expect(redriven(events)).toBeUndefined();
     const wait = events.find((e) => e.eventType === "dag.spec.ancestor_not_ready");
     expect(wait?.payload).toMatchObject({
       specId: "spec_1",
@@ -214,8 +210,6 @@ describe("finalizeWorkflowError — a NON-TERMINAL headless ancestor benign-WAIT
   });
 
   it("open is a re-drive-eligible status (the walker picks it up) — the never-discard re-drive, not a strand", () => {
-    // `open` maps to the walker's `pending` bucket (a spec it MAY start), so the dependent is
-    // genuinely re-driven on a later tick — the never-discard re-drive, no operator poke.
     expect(isAllowedSpecTransition("in_flight", "open")).toBe(true);
   });
 });
@@ -223,13 +217,8 @@ describe("finalizeWorkflowError — a NON-TERMINAL headless ancestor benign-WAIT
 describe("finalizeWorkflowError — a RANDOM / TRANSIENT failure is RE-DRIVEN, never terminally stranded (apex v35)", () => {
   it("a generic/internal error RE-DRIVES the spec (→ open + dag.spec.redriven), NOT needs_attention", async () => {
     const pool = new RecordingPool();
-    // First failure of its kind ⇒ the reader returns 1 (under the cap) ⇒ re-drive.
     const { events, appendEvent, finalizeRunState, input } = harness(pool, readerReturning(1));
 
-    // The exact stranded-on-internal-error bug: a bare unclassified Error (a codex hiccup, a
-    // writer mistake, a flaky step). WITHOUT the fix this lands run `failed` + spec parked
-    // `needs_attention` (a TERMINAL strand). WITH it: the run halts recoverable, the spec
-    // returns to `open`, and the walker re-drives it.
     const disposition = await finalizeWorkflowError(new Error("the run failed with an internal error"), {
       finalizeRunState,
       appendEvent,
@@ -238,16 +227,10 @@ describe("finalizeWorkflowError — a RANDOM / TRANSIENT failure is RE-DRIVEN, n
       context: ctx(),
     });
 
-    // SINGLE-FINALIZE INVARIANT (apex v35): the disposition is the EXPLICIT signal the workflow
-    // `catch` keys off to NOT re-throw into the worker's strand path (a re-driven attempt is
-    // terminally disposed of — never double-finalized).
-    expect(disposition).toBe("re_driven");
-    // The run HALTED (recoverable, work not discarded) — NOT `failed`.
+    expect(disposition).toBe("re_drive");
     expect(pool.terminalRunWrite()).toEqual({ status: "halted", outcome: "halted" });
-    // The spec returned to `open` (the walker's re-drive bucket), NOT `needs_attention`.
     expect(pool.specStatusWritten()).toBe("open");
     expect(needsAttention(events)).toBeUndefined();
-    // The re-drive was surfaced LOUDLY (an OBSERVABLE retry event, not a silent toleration).
     const rd = redriven(events);
     expect(rd?.specId).toBe("spec_1");
     expect(rd?.failureCode).toBe("internal");
@@ -255,9 +238,8 @@ describe("finalizeWorkflowError — a RANDOM / TRANSIENT failure is RE-DRIVEN, n
     expect(rd?.escalateAtAttempts).toBe(DEFAULT_REDRIVE_ESCALATE_AT);
   });
 
-  it("the SAME internal failure K times in a row ESCALATES once to needs_attention (a stuck spec) — never a hot-loop", async () => {
+  it("the SAME internal failure K times in a row GENUINE-HALTS once to needs_attention (a stuck spec) — never a hot-loop", async () => {
     const pool = new RecordingPool();
-    // The reader reports the cap reached: the SAME classified failure K consecutive times.
     const { events, appendEvent, finalizeRunState, input } = harness(
       pool,
       readerReturning(DEFAULT_REDRIVE_ESCALATE_AT),
@@ -271,18 +253,12 @@ describe("finalizeWorkflowError — a RANDOM / TRANSIENT failure is RE-DRIVEN, n
       context: ctx(),
     });
 
-    // The genuine-terminal escalation is re-thrown wrapped (the job still fails) — but the
-    // disposition is NOT `re_driven`, so the worker still SKIPS its re-finalize (already escalated).
-    expect(disposition).toBe("escalated");
-    // At the cap the spec is GENUINELY STUCK (same failure every time) — it escalates as a
-    // human-decision, run `failed`, spec parked — NOT re-driven again (no infinite loop).
+    expect(disposition).toBe("genuine_halt");
     expect(pool.terminalRunWrite()).toEqual({ status: "failed", outcome: "failed" });
     expect(pool.specStatusWritten()).toBe("needs_attention");
     expect(redriven(events)).toBeUndefined();
     const na = needsAttention(events);
     expect(na?.source).toBe("strand");
-    // The diagnostic names the REPEATED-failure count + that it is stuck (a bug/mis-spec),
-    // never a bare "internal error".
     expect(na?.message).toContain(`${DEFAULT_REDRIVE_ESCALATE_AT} times in a row`);
     expect(na?.message).toContain("genuinely stuck");
     expect((na as { reason: string }).reason).toBe("persistent_failure");
@@ -291,10 +267,9 @@ describe("finalizeWorkflowError — a RANDOM / TRANSIENT failure is RE-DRIVEN, n
 
   it("without a wired reader (a no-DB unit path) a transient still RE-DRIVES (never a spurious escalation)", async () => {
     const pool = new RecordingPool();
-    // No reader wired (a no-DB unit path).
     const { events, appendEvent, finalizeRunState, input } = harness(pool);
 
-    await finalizeWorkflowError(new Error("some flaky internal blip"), {
+    const disposition = await finalizeWorkflowError(new Error("some flaky internal blip"), {
       finalizeRunState,
       appendEvent,
       workspacePath: "/workspace/runs/run_1",
@@ -302,6 +277,7 @@ describe("finalizeWorkflowError — a RANDOM / TRANSIENT failure is RE-DRIVEN, n
       context: ctx(),
     });
 
+    expect(disposition).toBe("re_drive");
     expect(pool.specStatusWritten()).toBe("open");
     expect(redriven(events)?.consecutiveSameFailure).toBe(1);
     expect(needsAttention(events)).toBeUndefined();

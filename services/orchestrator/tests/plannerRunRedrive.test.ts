@@ -1,40 +1,15 @@
-// apex v35 — RE-DRIVE random/transient spec-run failures (robustness over recovery).
-// Unit-tests the failure-classification (`classifyRedrive`), the backoff growth, and the
-// consecutive-same-failure reader (`buildRedriveHistoryReader`): a RANDOM/TRANSIENT fault is
-// RETRIABLE (re-driven), a misconfiguration is GENUINE-TERMINAL (escalate), and the reader
-// counts the trailing run of SAME-code prior re-drives (a different code = progress = reset).
+// apex v35 — the re-drive APPLIER's reusable pieces (plannerRunRedrive.ts): the backoff
+// growth + the consecutive-same-failure reader (`buildRedriveHistoryReader`). The
+// CLASSIFICATION + the 3-bucket decision now live in the authority core
+// (runFinalizeAuthority.ts, covered by runFinalizeAuthority.test.ts); this module owns the
+// durable-event-log count the authority's bound keys off (a different code = progress = reset).
 
 import { describe, expect, it } from "vitest";
 import {
   buildRedriveHistoryReader,
-  classifyRedrive,
   DEFAULT_REDRIVE_ESCALATE_AT,
   redriveBackoffSeconds,
 } from "../src/engine/workflow/plannerRunRedrive.js";
-import { MissingCredentialError, UnscopedOrgError } from "../src/engine/credentials/resolveCredentials.js";
-
-describe("classifyRedrive — random/transient = retriable; misconfiguration = genuine-terminal", () => {
-  it("an UNRECOGNIZED / generic error is RETRIABLE (the bare internal error that used to strand)", () => {
-    const c = classifyRedrive(new Error("the run failed with an internal error"));
-    expect(c.retriable).toBe(true);
-    expect(c.code).toBe("internal");
-  });
-
-  it("a non-Error throw is RETRIABLE (falls to the internal code)", () => {
-    expect(classifyRedrive("a string blip").retriable).toBe(true);
-    expect(classifyRedrive(null).retriable).toBe(true);
-  });
-
-  it("a MissingCredentialError (misconfiguration) is GENUINE-TERMINAL — never re-driven", () => {
-    const c = classifyRedrive(new MissingCredentialError("github_token"));
-    expect(c.retriable).toBe(false);
-    expect(c.code).toBe("credential");
-  });
-
-  it("an UnscopedOrgError (a credential-scope misconfiguration) is GENUINE-TERMINAL", () => {
-    expect(classifyRedrive(new UnscopedOrgError()).retriable).toBe(false);
-  });
-});
 
 describe("redriveBackoffSeconds — grows with the consecutive-same-failure count, capped", () => {
   it("grows linearly then caps", () => {

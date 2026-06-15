@@ -1,101 +1,38 @@
-// RE-DRIVE a random/transient/internal spec-run failure instead of terminally
-// stranding it (apex v35 — "robustness over recovery"). The product doctrine: a spec
-// failing due to a RANDOM / TRANSIENT failure must NEVER be tolerated as terminal — it
-// must be RE-DRIVEN. `needs_attention` is RESERVED for genuine human-decisions; it must
-// NEVER be the resting place for a random/transient/internal failure. A build runs until
-// it CONVERGES, retrying random failures, and only HALTS for a STRUCTURAL reason: budget
-// exhaustion, mis-spec, misconfiguration, or a real human-decision.
+// APPLY a {@link RunDisposition} to a run's lifecycle (apex v35 — the unified
+// run-finalize authority). The DECISION (the 3-bucket mapping: RE-DRIVE | GENUINE-HALT |
+// CONVERGE) lives in `runFinalizeAuthority.ts` — a pure, DB-free core. THIS module is the
+// APPLIER: given a decided disposition + the run/spec write seams, it performs the
+// lifecycle writes + emits the ONE observable event for that bucket, consistently, from
+// whichever path produced the outcome (the workflow error catch, a non-pass exit, the
+// merge stage, or the worker orphan reconciler). It also owns the consecutive-same-failure
+// READER (the durable-event-log count the authority's bound keys off).
 //
-// This module owns the failure-classification at the workflow's run-failure boundary
-// (`finalizeWorkflowError`'s catch path). It splits a thrown error into:
-//
-//   • RETRIABLE — transient/random/internal/flaky/codex-hiccup/writer-mistake: the spec
-//     is RE-DRIVEN (run halts RECOVERABLE, spec returns to `open`, the walker re-enqueues
-//     it), with an OBSERVABLE `dag.spec.redriven` event (never a strand). The re-drive is
-//     BOUNDED by a CONSECUTIVE-same-failure counter (mirrors the progress-aware recovery
-//     bound in templates/creation/recovery.ts): a DIFFERENT classified failure resets the
-//     count, so a flapping-but-eventually-different spec keeps retrying; the SAME failure
-//     K consecutive times escalates LOUDLY (it is genuinely STUCK, not a flake).
-//
-//   • GENUINE-TERMINAL — a misconfiguration / credential fault (a structural cause a human
-//     must fix), or the persistent-same-failure escalation above: the spec parks at
-//     `needs_attention` with a SPECIFIC diagnostic (never a bare "internal error"). Budget
-//     exhaustion and the named recoverable faults (workspace/usage-limit/ancestor-wait)
-//     are handled by their OWN branches in `finalizeWorkflowError`, not here.
-//
-// The classification keys off the SAME closed run-failure vocabulary the worker's
-// `classifyRunFailure` produces (error CLASS name → `{ code, stage }`), so the public
-// `dag.spec.redriven` / `dag.spec.needs_attention` payloads never carry the raw error
-// string. The consecutive-same-failure count is read from the durable event log (prior
-// `dag.spec.redriven` events for THIS spec), so the bound survives restarts.
+// The product doctrine it embodies: a spec failing due to a RANDOM / TRANSIENT fault must
+// NEVER be tolerated as terminal — it RE-DRIVES (run halts recoverable, spec → `open`, the
+// walker re-enqueues), emitting an OBSERVABLE `dag.spec.redriven` (never a strand). The
+// re-drive is BOUNDED ONLY by a CONSECUTIVE-same-failure counter (a DIFFERENT failure / any
+// progress resets it) — never a wall-clock deadline. `needs_attention` is RESERVED for the
+// three GENUINE-HALT classes (misconfiguration / persistent-same-failure / human-decision),
+// each with a SPECIFIC, actionable diagnostic (never a bare "internal error").
 
 import type pg from "pg";
 import { runWithOrgScope } from "@tanren/db";
-import { classifyRunFailure, type RunFailureCode } from "../worker/runFailureClassifier.js";
+import type { RunFailureCode } from "../worker/runFailureClassifier.js";
 import { createLogger } from "../observability/logger.js";
 import type { EventName, EventPayload } from "../events/index.js";
-import type { WorkflowErrorDisposition } from "./workflowErrorDisposition.js";
+import {
+  decideRunDisposition,
+  DEFAULT_REDRIVE_ESCALATE_AT,
+  redriveBackoffSeconds,
+  type RunDisposition,
+  type TerminalOutcome,
+} from "./runFinalizeAuthority.js";
 
 const log = createLogger("run-redrive");
 
-// The DEFAULT cap K on CONSECUTIVE SAME-classified-failure re-drives before a spec
-// escalates loudly to `needs_attention`. Generous (a random failure resolves on retry;
-// the per-spec/per-step timeouts remain the hang-detector), but BOUNDED so a genuinely
-// STUCK spec (same bug/mis-spec every time) surfaces as a human-decision rather than
-// hot-looping forever. A DIFFERENT failure code (any progress) resets the count, so a
-// spec that is flapping-but-advancing keeps retrying past this flat K.
-export const DEFAULT_REDRIVE_ESCALATE_AT = 4;
-
-// The base backoff (seconds) between re-drives + the per-attempt growth, so the
-// re-enqueue does not hot-loop. The walker honors `backoffSeconds` (the cooldown before
-// it re-picks the `open` spec). Grows linearly with the consecutive-same-failure count,
-// capped, so an early flake retries promptly while a repeatedly-failing spec backs off.
-const REDRIVE_BACKOFF_BASE_SECONDS = 30;
-const REDRIVE_BACKOFF_MAX_SECONDS = 600;
-
-// A GENUINE-TERMINAL failure code: a STRUCTURAL cause a human must fix (a misconfiguration
-// / missing-or-unscoped credential / unresolvable provider mode). These never self-heal on
-// retry, so they escalate to `needs_attention` IMMEDIATELY with a specific diagnostic —
-// they are NOT random/transient. `usage_limit` is NOT here (it is the recoverable
-// window-exhausted halt, handled by its own branch); `workspace` is NOT here (its named
-// error has its own recoverable branch). Everything ELSE (`internal`, `merge`, `deploy`,
-// and any unrecognized error → the `internal` default) is RETRIABLE — a random failure.
-const GENUINE_TERMINAL_CODES: ReadonlySet<RunFailureCode> = new Set<RunFailureCode>(["credential"]);
-
-/** A classified run failure routed to a re-drive (retriable) or a genuine-terminal escalation. */
-export interface RedriveClassification {
-  /** RETRIABLE (a random/transient/internal fault) → re-drive; else a genuine-terminal escalation. */
-  retriable: boolean;
-  /** The public-safe closed-vocabulary failure code (never the raw error string). */
-  code: RunFailureCode;
-  /** The public-safe run stage the failure is attributed to. */
-  stage: "bootstrap" | "credentials" | "workspace" | "agent" | "merge" | "deploy" | "run";
-  /** The FIXED, public-safe summary (never the raw error string). */
-  summary: string;
-}
-
-/**
- * Classify a thrown run-error into a re-drive (retriable random/transient fault) vs a
- * genuine-terminal escalation (a misconfiguration a human must fix). Keys off the SAME
- * closed run-failure vocabulary as the worker's `classifyRunFailure` — an unrecognized
- * error falls into the `internal` code, which is RETRIABLE (the bare "internal error"
- * that used to terminally strand). The returned strings are all public-safe.
- */
-export function classifyRedrive(error: unknown): RedriveClassification {
-  const classified = classifyRunFailure(error);
-  return {
-    retriable: !GENUINE_TERMINAL_CODES.has(classified.code),
-    code: classified.code,
-    stage: classified.stage,
-    summary: classified.summary,
-  };
-}
-
-/** The walker-honored re-drive backoff (seconds) for the Nth consecutive same-failure re-drive. */
-export function redriveBackoffSeconds(consecutiveSameFailure: number): number {
-  const grown = REDRIVE_BACKOFF_BASE_SECONDS * Math.max(1, consecutiveSameFailure);
-  return Math.min(grown, REDRIVE_BACKOFF_MAX_SECONDS);
-}
+// Re-exported so the historical import sites (tests, the worker wiring) keep their imports
+// pointed at this module while the decision constants live in the authority core.
+export { DEFAULT_REDRIVE_ESCALATE_AT, redriveBackoffSeconds };
 
 /** Facts a consecutive-same-failure read needs: the spec + its org + the failure code now seen. */
 export interface RedriveHistoryFacts {
@@ -106,16 +43,12 @@ export interface RedriveHistoryFacts {
 }
 
 /**
- * Read the CONSECUTIVE-same-failure count for a spec (this failure included). Mirrors the
- * progress-aware recovery bound: it walks the spec's prior `dag.spec.redriven` events
- * NEWEST→OLDEST and counts the trailing run of re-drives whose `failureCode` MATCHES the
- * current one — stopping at the first DIFFERENT code (a different failure = progress, which
- * resets the streak). A `dag.spec.attention_resolved` / `dag.spec.merged`-style advance also
- * stops the walk (the operator resolved it, or it advanced) — but the simplest durable signal
- * is the trailing same-code run, which is what we read here.
- *
- * Returns the count INCLUDING the current failure (so the first failure of its kind returns 1).
- * At >= K (`escalateAtAttempts`) the caller escalates instead of re-driving.
+ * Read the CONSECUTIVE-same-failure count for a spec (this failure included). Walks the
+ * spec's prior `dag.spec.redriven` events NEWEST→OLDEST and counts the trailing run of
+ * re-drives whose `failureCode` MATCHES the current one — stopping at the first DIFFERENT
+ * code (a different failure = progress, which resets the streak). Returns the count
+ * INCLUDING the current failure (so the first failure of its kind returns 1). At >= K
+ * (`escalateAtAttempts`) the authority escalates instead of re-driving.
  */
 export type RedriveHistoryReader = (facts: RedriveHistoryFacts) => Promise<number>;
 
@@ -158,21 +91,22 @@ export function buildRedriveHistoryReader(pool: pg.Pool): RedriveHistoryReader {
   };
 }
 
-/** The append-event seam the re-drive/escalate emits its observable timeline events through. */
+/** The append-event seam the applier emits its observable timeline events through. */
 type AppendEvent = <N extends EventName>(eventType: N, payload: EventPayload<N>, taskId?: string) => Promise<void>;
 
 /**
- * The run/spec write seams + facts the re-drive/escalate body needs, handed in by
- * `finalizeWorkflowError` (so this module never imports back into `plannerRunFinalize.ts` —
- * the file-size cap holds without a circular import). `finalizeNonPass`/`setSpecStatus` route
- * through the SAME lifecycle-writer seams the rest of the finalize path uses.
+ * The run/spec write seams + facts the applier needs, handed in by `finalizeWorkflowError`
+ * (so this module never imports back into `plannerRunFinalize.ts` — the file-size cap holds
+ * without a circular import). All route through the SAME lifecycle-writer seams the rest of
+ * the finalize path uses.
  */
-export interface RedriveSeams {
-  /** Halt the run RECOVERABLE (work not discarded) — the re-drive's run finalize. */
-  finalizeNonPass: (outcome: "halted") => Promise<void>;
-  /** Set the spec status (→ `open` to re-drive, → `needs_attention` to escalate). */
+export interface DispositionSeams {
+  /** Halt the run RECOVERABLE (work not discarded) — the re-drive's run finalize. The
+   * distinct `window_exhausted` / `convergence_stalled` outcome preserves WHY for recovery. */
+  finalizeNonPass: (outcome: "halted" | "window_exhausted" | "convergence_stalled") => Promise<void>;
+  /** Set the spec status (→ `open` to re-drive, → `needs_attention` to genuine-halt). */
   setSpecStatus: (status: string) => Promise<void>;
-  /** The remote/in-process terminal-run finalizer (the genuine-terminal `failed` write). */
+  /** The remote/in-process terminal-run finalizer (the genuine-halt `failed` write). */
   finalizeRunState: (
     status: string,
     outcome: string,
@@ -182,63 +116,79 @@ export interface RedriveSeams {
   ) => Promise<void>;
 }
 
-/** The run/spec facts the re-drive/escalate reads (the subset of the workflow error context it uses). */
-export interface RedriveErrorContext {
+/** The run/spec facts the applier reads (the subset of the workflow error context it uses). */
+export interface DispositionContext {
   appendEvent: AppendEvent;
   input: { redriveHistoryReader?: RedriveHistoryReader };
   context: { runId: string; specId: string; orgId?: unknown };
 }
 
+/** The bucket a terminal outcome was disposed into (the workflow `catch` keys off this). */
+export type DispositionBucket = RunDisposition["bucket"];
+
 /**
- * The previously-stranding generic-error tail, now CLASSIFIED (apex v35). A RETRIABLE
- * random/transient fault under the consecutive-same-failure cap is RE-DRIVEN: the run halts
- * RECOVERABLE, the spec returns to `open` (the walker's re-drive bucket), and an OBSERVABLE
- * `dag.spec.redriven` event is emitted (never a strand). A GENUINE-TERMINAL fault (a
- * misconfiguration) — OR the SAME classified failure reaching the cap K — escalates LOUDLY to
- * `needs_attention` with a SPECIFIC diagnostic (never a bare "internal error"), once, not in a
- * hot-loop. Backoff grows with the consecutive-same-failure count so a re-drive never hot-loops.
+ * DECIDE + APPLY a terminal outcome's disposition. Reads the consecutive-same-failure count
+ * (the durable bound), asks the authority for the bucket, then performs the lifecycle writes:
  *
- * SINGLE-FINALIZE INVARIANT (apex v35): returns the DISPOSITION so the workflow `catch` knows
- * the run+spec were ALREADY finalized here — a `re_driven` attempt is terminally disposed of
- * (the workflow returns normally, NEVER re-throws into the worker's strand path), while an
- * `escalated` genuine-terminal fault still fails the job (re-thrown wrapped). Either way the
- * worker must not re-finalize (see {@link WorkflowFinalizedError}).
+ *   • RE-DRIVE — run halts RECOVERABLE, spec → `open`, an OBSERVABLE `dag.spec.redriven`
+ *     event (carrying the failure code + the consecutive-same-failure counter + the backoff).
+ *     The attempt is terminally disposed of; the walker's successor run is the continuation.
+ *   • GENUINE-HALT — run → `failed`, spec → `needs_attention`, a `dag.spec.needs_attention`
+ *     event with a SPECIFIC reason (`misconfiguration` / `persistent_failure` / `human_decision`).
+ *   • CONVERGE — the caller owns the merged-run write; never reached on the error path.
+ *
+ * Returns the bucket so the workflow `catch` knows whether the attempt was terminally disposed
+ * of (re-drive ⇒ return normally, NEVER re-throw into the worker's strand path — the #580
+ * double-finalize) or still fails the job (genuine-halt ⇒ re-throw wrapped).
  */
-export async function redriveOrEscalateWorkflowError(
-  error: unknown,
-  ctx: RedriveErrorContext,
-  seams: RedriveSeams,
-): Promise<WorkflowErrorDisposition> {
-  const classification = classifyRedrive(error);
-  // The consecutive-same-failure count (this failure included). Without a wired reader (a
-  // no-DB unit path) treat it as the first failure of its kind ⇒ re-drive, never a spurious
-  // escalation. FAIL-CLOSED toward re-driving is the reader's own contract.
-  const consecutiveSameFailure = await readConsecutiveSameFailure(ctx, classification.code);
-  const escalateAt = DEFAULT_REDRIVE_ESCALATE_AT;
-
-  // RETRIABLE + under the cap ⇒ RE-DRIVE. A genuine-terminal fault (a misconfiguration) is
-  // NOT retriable; the SAME failure reaching the cap is a genuinely stuck spec — both escalate.
-  if (classification.retriable && consecutiveSameFailure < escalateAt) {
-    // The run halts RECOVERABLE (work not discarded), the spec returns to `open` so the walker
-    // RE-DRIVES it — the same never-discard re-drive a benign ancestor-wait gets.
-    await seams.finalizeNonPass("halted");
-    await seams.setSpecStatus("open");
-    await ctx.appendEvent("dag.spec.redriven", {
-      specId: ctx.context.specId,
-      runId: ctx.context.runId,
-      failureCode: classification.code,
-      stage: classification.stage,
-      consecutiveSameFailure,
-      escalateAtAttempts: escalateAt,
-      backoffSeconds: redriveBackoffSeconds(consecutiveSameFailure),
-    });
-    return "re_driven";
+export async function applyTerminalOutcome(
+  outcome: TerminalOutcome,
+  ctx: DispositionContext,
+  seams: DispositionSeams,
+): Promise<DispositionBucket> {
+  const consecutive = await readConsecutiveSameFailure(ctx, outcome);
+  const disposition = decideRunDisposition(outcome, consecutive);
+  if (disposition.bucket === "re_drive") {
+    await applyRedrive(ctx, seams, disposition);
+    return "re_drive";
   }
+  if (disposition.bucket === "genuine_halt") {
+    await applyGenuineHalt(ctx, seams, disposition);
+    return "genuine_halt";
+  }
+  return "converge";
+}
 
-  // GENUINE-TERMINAL: a misconfiguration a human must fix, OR the SAME failure K consecutive
-  // times (a genuinely stuck spec). Land the run `failed` (a hard, non-recoverable terminal)
-  // and escalate LOUDLY to `needs_attention` with a SPECIFIC diagnostic — never a bare
-  // "internal error" strand.
+/** Apply a RE-DRIVE: halt the run recoverable, return the spec to `open`, emit `dag.spec.redriven`. */
+async function applyRedrive(
+  ctx: DispositionContext,
+  seams: DispositionSeams,
+  disposition: Extract<RunDisposition, { bucket: "re_drive" }>,
+): Promise<void> {
+  await seams.finalizeNonPass(disposition.runOutcome);
+  await seams.setSpecStatus("open");
+  // A re-drive WITH a classified failure emits the OBSERVABLE `dag.spec.redriven` (the
+  // consecutive-same-failure counter rides it so the bound is visible on the timeline). A
+  // NO-FAULT re-drive (an ancestor-wait / a merge hold) carries no failure code and so does
+  // not count toward the cap — it re-opens silently (its own event, if any, is the caller's).
+  if (disposition.failure === undefined) return;
+  await ctx.appendEvent("dag.spec.redriven", {
+    specId: ctx.context.specId,
+    runId: ctx.context.runId,
+    failureCode: disposition.failure.code,
+    stage: disposition.failure.stage,
+    consecutiveSameFailure: disposition.consecutiveSameFailure,
+    escalateAtAttempts: DEFAULT_REDRIVE_ESCALATE_AT,
+    backoffSeconds: disposition.backoffSeconds,
+  });
+}
+
+/** Apply a GENUINE-HALT: land the run `failed`, park the spec `needs_attention` with a specific reason. */
+async function applyGenuineHalt(
+  ctx: DispositionContext,
+  seams: DispositionSeams,
+  disposition: Extract<RunDisposition, { bucket: "genuine_halt" }>,
+): Promise<void> {
   await seams.finalizeRunState(
     "failed",
     "failed",
@@ -246,48 +196,26 @@ export async function redriveOrEscalateWorkflowError(
     "UPDATE runs SET status = 'failed', outcome = 'failed', ended_at = now() WHERE run_id = $1",
     [ctx.context.runId],
   );
-  await escalateGenuineTerminal(ctx, seams, classification, consecutiveSameFailure, escalateAt);
-  return "escalated";
-}
-
-/** Read the consecutive-same-failure count via the wired reader (1 ⇒ first of its kind / no reader). */
-async function readConsecutiveSameFailure(ctx: RedriveErrorContext, code: RunFailureCode): Promise<number> {
-  const reader = ctx.input.redriveHistoryReader;
-  const orgId = typeof ctx.context.orgId === "string" ? ctx.context.orgId : undefined;
-  if (reader === undefined || orgId === undefined) return 1;
-  return reader({ orgId, specId: ctx.context.specId, code });
-}
-
-/**
- * Escalate a GENUINE-TERMINAL run failure to `needs_attention` with a SPECIFIC, actionable
- * diagnostic (never a bare "internal error"). A misconfiguration is framed as "fix the
- * configured cause + requeue"; a persistent same-failure is framed as the repeated-failure
- * diagnostic + the retry count. Both carry the classified (public-safe) failure code/stage.
- */
-async function escalateGenuineTerminal(
-  ctx: RedriveErrorContext,
-  seams: RedriveSeams,
-  classification: RedriveClassification,
-  consecutiveSameFailure: number,
-  escalateAt: number,
-): Promise<void> {
-  // The DECISION ask (escalation discipline): a SPECIFIC, actionable reason — the classified
-  // failure + (for a persistent failure) the repeated-failure count — never "an error occurred".
-  const persistent = classification.retriable && consecutiveSameFailure >= escalateAt;
-  const reason = persistent ? "persistent_failure" : "halted_reexec";
-  const message = persistent
-    ? `the run failed the same way (${classification.code} @ ${classification.stage}: ${classification.summary}) ` +
-      `${consecutiveSameFailure} times in a row — the spec is genuinely stuck (a bug or mis-spec, not a flake); ` +
-      `requeue after addressing the cause`
-    : `${classification.summary} (${classification.code} @ ${classification.stage}) — a structural cause a human ` +
-      `must fix; requeue after addressing it`;
   await seams.setSpecStatus("needs_attention");
   await ctx.appendEvent("dag.spec.needs_attention", {
     source: "strand",
     specId: ctx.context.specId,
-    reason,
+    reason: disposition.reason,
     terminalRuns: [{ runId: ctx.context.runId, status: "failed" }],
-    attempts: consecutiveSameFailure,
-    message,
+    attempts: disposition.consecutiveSameFailure,
+    message: disposition.message,
   });
+}
+
+/** Read the consecutive-same-failure count via the wired reader (1 ⇒ first of its kind / no reader / no fault). */
+async function readConsecutiveSameFailure(ctx: DispositionContext, outcome: TerminalOutcome): Promise<number> {
+  // Only an error / non-pass outcome carries a counted failure code; decide a probe code
+  // up front so the reader (when wired) counts the right streak. A merge / ancestor-wait
+  // outcome never counts toward the cap, so the count is immaterial (return 1).
+  const probe = decideRunDisposition(outcome, 0);
+  const code = probe.bucket === "converge" ? undefined : probe.failure?.code;
+  const reader = ctx.input.redriveHistoryReader;
+  const orgId = typeof ctx.context.orgId === "string" ? ctx.context.orgId : undefined;
+  if (reader === undefined || orgId === undefined || code === undefined) return 1;
+  return reader({ orgId, specId: ctx.context.specId, code });
 }

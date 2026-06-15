@@ -18,7 +18,8 @@ import { CodexUsageLimitError } from "../providers/codex.js";
 import type { EventName, EventPayload } from "../events/index.js";
 import { removeRunWorkspaceDir, WorkspaceBootstrapError } from "../workspace/index.js";
 import { AncestorNotReadyError } from "../dag/jjLocalIntegration.js";
-import { redriveOrEscalateWorkflowError } from "./plannerRunRedrive.js";
+import { applyTerminalOutcome, type DispositionSeams } from "./plannerRunRedrive.js";
+import type { NonPassDetail, TerminalOutcome } from "./runFinalizeAuthority.js";
 import { resolveWorkflowThrow, type WorkflowErrorDisposition } from "./workflowErrorDisposition.js";
 import type { PlannerRejectionFeedback } from "./planner/planner.js";
 import type { PreparedRunWorkspace } from "./plannerRunWorkspace.js";
@@ -104,18 +105,6 @@ export async function setSpecStatus(
   await input.pool.query("UPDATE specs SET status = $2 WHERE spec_id = $1", [context.specId, status]);
 }
 
-/** Maps a non-pass loop outcome to the persisted run.outcome value (all → halted). */
-export function runOutcomeFor(outcome: SubtaskLoopOutcome): "window_exhausted" | "convergence_stalled" | "halted" {
-  if (outcome.kind === "window_exhausted") {
-    return "window_exhausted";
-  }
-  // SPEC-LOOP REDESIGN: the convergence-stall halt replaces the purged retry-cap halt.
-  if (outcome.kind === "convergence_stalled") {
-    return "convergence_stalled";
-  }
-  return "halted";
-}
-
 /** Finalize a non-pass loop outcome to a halted run (distinct outcome preserves WHY). */
 export async function finalizeNonPass(
   finalizeRunState: FinalizeRunState,
@@ -135,52 +124,52 @@ export async function finalizeNonPass(
 }
 
 /**
- * NEVER-STRAND the spec when its run finalizes TERMINAL-WITHOUT-MERGE (apex v22 run-discipline finding
- * #3). A halted/failed planner run otherwise leaves the SPEC at `in_flight` (the DagWalker reads this as
- * OCCUPYING-A-SLOT — never re-attempted, unrecoverable by either operator-API path). The fail-closed,
- * LOUD recovery: park the spec at terminal `needs_attention` (freeing its slot, blocking ONLY its
- * dependents) + emit `dag.spec.needs_attention` so it reaches a human AND `requeue` can re-enter it at
- * `open`. The flip goes through the SAME `setSpecStatus` seam; the event reuses `strand`/`halted_reexec`.
+ * Build the {@link DispositionSeams} from the workflow's run/spec write closures — the
+ * SINGLE place a terminal outcome's lifecycle writes are applied (re-drive: run halted +
+ * spec → `open`; genuine-halt: run failed + spec → `needs_attention`). Reused by every
+ * terminal site so the disposition is applied identically.
  */
-export async function parkSpecNeedsAttentionForHaltedRun(
+function dispositionSeams(
   input: RunPlannerLoopInput,
+  finalizeRunState: FinalizeRunState,
   context: PlannerRunContext,
-  appendEvent: <N extends EventName>(eventType: N, payload: EventPayload<N>, taskId?: string) => Promise<void>,
-  outcome: "window_exhausted" | "convergence_stalled" | "halted" | "failed",
-): Promise<void> {
-  // The spec is `in_flight` at every halted-run finalize site (the claim set it; the
-  // rework re-entry re-set it), so this is the intended `in_flight → needs_attention`
-  // transition. Mirrors the merge stage's blocked/handed_off escalation.
-  await setSpecStatus(input, context, "needs_attention");
-  await appendEvent("dag.spec.needs_attention", {
-    source: "strand",
-    specId: context.specId,
-    reason: "halted_reexec",
-    // The run that just halted (its terminal status) — the parked-state halt history.
-    terminalRuns: [{ runId: context.runId, status: "halted" }],
-    // No bounded re-enqueue counter exists for a run-terminal strand: the run made one
-    // halted attempt, so the visible attempt count is 1.
-    attempts: 1,
-    // The DECISION ask (escalation discipline): "self-heal could not make progress — a
-    // human must decide", not "an error occurred".
-    message: `run halted (${outcome}); the spec cannot self-heal — requeue after addressing the cause`,
-  });
+): DispositionSeams {
+  return {
+    finalizeRunState,
+    finalizeNonPass: (outcome) => finalizeNonPass(finalizeRunState, context.runId, outcome),
+    setSpecStatus: (status) => setSpecStatus(input, context, status),
+  };
 }
 
 /**
- * Finalize a non-pass loop outcome (run → halted) AND park its spec at
- * `needs_attention` (finding #3 never-strand) — the genuine-strand pair used by the
- * planner-loop's non-pass + rework-exhausted exits, which have NO further driver.
+ * UNIFIED RUN-FINALIZE (apex v35): route a NON-PASS planner-loop exit (the writer never
+ * converged / a usage window exhausted / a convergence stall / a merge-gate budget spent /
+ * a review stalled) through the ONE finalize authority. ALL non-pass exits are TRANSIENT —
+ * the spec RE-DRIVES (run halts recoverable, spec → `open`, `dag.spec.redriven`), bounded by
+ * the consecutive-same-failure counter (a spec stalling the SAME way K times → genuine-halt).
+ * This REPLACES the old `finalizeNonPassAndPark`, which PARKED every non-pass exit at
+ * `needs_attention` — the whack-a-mole bug (a transient stall mis-classified as a human-
+ * decision). `needs_attention` is now reached ONLY when the authority decides genuine-halt.
  */
-export async function finalizeNonPassAndPark(
+export async function finalizeNonPassOutcome(
   input: RunPlannerLoopInput,
   finalizeRunState: FinalizeRunState,
   context: PlannerRunContext,
   appendEvent: <N extends EventName>(eventType: N, payload: EventPayload<N>, taskId?: string) => Promise<void>,
-  outcome: "window_exhausted" | "convergence_stalled" | "halted",
+  detail: NonPassDetail,
 ): Promise<void> {
-  await finalizeNonPass(finalizeRunState, context.runId, outcome);
-  await parkSpecNeedsAttentionForHaltedRun(input, context, appendEvent, outcome);
+  await applyTerminalOutcome(
+    { kind: "non_pass", detail },
+    { appendEvent, input, context },
+    dispositionSeams(input, finalizeRunState, context),
+  );
+}
+
+/** The non-pass loop outcome → the authority's public-safe sub-reason (the diagnostic detail). */
+export function nonPassDetailFor(outcome: SubtaskLoopOutcome): NonPassDetail {
+  if (outcome.kind === "window_exhausted") return "window_exhausted";
+  if (outcome.kind === "convergence_stalled") return "convergence_stalled";
+  return "halted";
 }
 
 /** Mutable self-heal budget for the pre_merge gate: `used` re-entries out of `max`. */
@@ -206,7 +195,9 @@ export async function applyFailedMergeGate(
   budget: MergeGateBudget,
 ): Promise<"rework" | "halt"> {
   if (decision.kind === "halt") {
-    await finalizeNonPassAndPark(input, finalizeRunState, context, appendEvent, "halted");
+    // The pre-merge gate was not satisfied within the self-heal budget — a TRANSIENT
+    // failure (the writer's own scaffold/tests), so the spec RE-DRIVES (not parks).
+    await finalizeNonPassOutcome(input, finalizeRunState, context, appendEvent, "merge_gate_unsatisfied");
     return "halt";
   }
   budget.used += 1;
@@ -241,62 +232,55 @@ export async function applyReviewVerdict(
     await setSpecStatus(input, context, "in_flight");
     return "rework";
   }
-  await finalizeNonPassAndPark(input, finalizeRunState, context, appendEvent, "halted");
+  // Pending after the poll budget, or changes-requested with the rework budget exhausted —
+  // a TRANSIENT stall, so the spec RE-DRIVES (the walker re-attempts), not parks.
+  await finalizeNonPassOutcome(input, finalizeRunState, context, appendEvent, "review_stalled");
   return "halt";
 }
 
 /**
- * Finalize the run + spec for the merge stage's terminal outcome:
- *   - conflict → recoverable halt, spec NOT merged;
- *   - blocked/handed_off/non-native queued → spec `needs_attention`, run halted;
- *   - failed → run failed;
- *   - merged → run completed/ok; spec `merged`;
- *   - native_queue queued → run completed/ok, spec NOT merged (Tanren still owns the merge; the
- *     coordinator's DRIVE pass sets the spec `merged` only after the PR actually lands).
+ * UNIFIED RUN-FINALIZE (apex v35): finalize the run + spec for the merge stage's terminal
+ * outcome, routing the spec disposition through the ONE finalize authority's merge-outcome
+ * map (`decideRunDisposition` → `kind: "merge"`):
+ *   - `merged` → CONVERGE: run completed/ok, spec `merged`.
+ *   - native_queue `queued` → run completed/ok, spec left NON-done (Tanren still owns the
+ *     merge; the coordinator's DRIVE pass marks it `merged` only after the PR actually lands).
+ *   - `needs_attention` → GENUINE-HALT: a real human-decision (HITL hold / changes-requested
+ *     at land time) — run failed, spec `needs_attention` (the ONLY merge-stage park).
+ *   - `blocked` (a transient authority refusal / CAS race) / `conflict` (resolvable) /
+ *     `handed_off` / non-native `queued` / `failed` → RE-DRIVE: run halts recoverable, spec →
+ *     `open`, the walker re-attempts. These were the whack-a-mole parks now folded to re-drive
+ *     (a transient hold is NOT a human-decision; the work is never discarded).
  */
 export async function finalizeMergeOutcome(
   input: RunPlannerLoopInput,
   finalizeRunState: FinalizeRunState,
   context: PlannerRunContext,
+  appendEvent: <N extends EventName>(eventType: N, payload: EventPayload<N>, taskId?: string) => Promise<void>,
   merge: Pick<MergeForRunResult, "outcome" | "integration">,
 ): Promise<void> {
   const { outcome, integration } = merge;
-  if (outcome === "conflict") {
-    await finalizeNonPass(finalizeRunState, context.runId, "halted");
-    return;
-  }
-  if (outcome === "blocked" || outcome === "needs_attention" || outcome === "handed_off") {
-    // `blocked` (a recoverable authority hold) / `needs_attention` (a genuine human
-    // decision) / `handed_off` all halt the run with the spec parked for the recovery /
-    // operator surface — the run is NOT failed (the work survives, never discarded).
-    await setSpecStatus(input, context, "needs_attention");
-    await finalizeNonPass(finalizeRunState, context.runId, "halted");
-    return;
-  }
-  if (outcome === "failed") {
+  // A native_queue `queued` enqueue is the coordinator's continuation — the RUN completes
+  // ok (the coordinator drives the actual land), the spec is left non-done. Handle it
+  // explicitly here; every OTHER merge outcome routes through the unified authority.
+  if (outcome === "merged" || (outcome === "queued" && integration === "native_queue")) {
+    if (outcome === "merged") await setSpecStatus(input, context, "merged");
     await finalizeRunState(
-      "failed",
-      "failed",
+      "completed",
+      "ok",
       ["running", "queued"],
-      "UPDATE runs SET status = 'failed', outcome = 'failed', ended_at = now() WHERE run_id = $1",
+      "UPDATE runs SET status = 'completed', outcome = 'ok', ended_at = now() WHERE run_id = $1",
       [context.runId],
     );
     return;
   }
-  if (outcome === "queued" && integration !== "native_queue") {
-    await setSpecStatus(input, context, "needs_attention");
-    await finalizeNonPass(finalizeRunState, context.runId, "halted");
-    return;
-  }
-  if (outcome === "merged") {
-    await setSpecStatus(input, context, "merged");
-  }
-  await finalizeRunState(
-    "completed",
-    "ok",
-    ["running", "queued"],
-    "UPDATE runs SET status = 'completed', outcome = 'ok', ended_at = now() WHERE run_id = $1",
-    [context.runId],
+  // `needs_attention` (genuine human-decision) → genuine-halt; every other hold/conflict/
+  // handoff/failed/non-native-queued → re-drive. The authority owns the bucket; the appliers
+  // own the run/spec writes (the genuine-halt lands the run `failed` + parks the spec).
+  await applyTerminalOutcome(
+    { kind: "merge", mergeOutcome: outcome },
+    { appendEvent, input, context },
+    dispositionSeams(input, finalizeRunState, context),
   );
 }
 
@@ -334,79 +318,81 @@ export async function emitPrepBootstrapDeferred(
 }
 
 /**
- * Finalize the run for a workflow throw + emit its event. A WorkspaceBootstrap failure / Codex
- * usage-limit are RECOVERABLE (a distinct halt), not a crash; anything else lands the run `failed`.
+ * UNIFIED RUN-FINALIZE (apex v35): finalize the run+spec for a thrown run-error through the
+ * ONE finalize authority. EVERY thrown error normalizes into a {@link TerminalOutcome} the
+ * authority maps to a bucket:
  *
- * NEVER-STRAND: a thrown error never leaves the spec `in_flight` with a dead run — a benign
- * ancestor-wait / generic random/transient fault RE-DRIVES the spec (→ `open`, apex v35); a
- * recoverable infra fault or a genuine-terminal misconfiguration / persistent same-failure parks
- * it at `needs_attention` — see {@link redriveOrEscalateWorkflowError}.
+ *   - an `AncestorNotReadyError` is a BENIGN WAIT (the dependent ran ahead of a non-terminal
+ *     ancestor that has not published its head) ⇒ a NO-FAULT RE-DRIVE (run halts recoverable,
+ *     spec → `open`); it ALSO emits the diagnostic `dag.spec.ancestor_not_ready` (it never
+ *     counts toward the consecutive-same-failure cap — the ancestor WILL publish).
+ *   - a `WorkspaceBootstrapError` / `CodexUsageLimitError` are RECOVERABLE / TRANSIENT
+ *     (deps-install hiccup / usage window) ⇒ RE-DRIVE (the spec re-attempts), each emitting
+ *     its own diagnostic event (`workspace.failed` / `usage.window.pressure`).
+ *   - any OTHER error is a RANDOM / TRANSIENT / INTERNAL fault ⇒ RE-DRIVE; ONLY a
+ *     credential misconfiguration genuine-halts immediately, and the SAME classified failure
+ *     K consecutive times genuine-halts as a persistent failure.
  *
- * SINGLE-FINALIZE INVARIANT (apex v35): EVERY branch finalizes BOTH the run's terminal status AND
- * the spec's, returning the {@link WorkflowErrorDisposition} `finalizeWorkflowThrow` acts on.
+ * No branch here PARKS a transient fault — `needs_attention` is reached ONLY when the
+ * authority decides genuine-halt. This collapses the old per-branch park logic (the
+ * whack-a-mole) into the ONE decision. EVERY path finalizes BOTH the run's terminal status
+ * AND the spec's, returning the {@link WorkflowErrorDisposition} `finalizeWorkflowThrow` acts on.
  */
 export async function finalizeWorkflowError(
   error: unknown,
   ctx: WorkflowErrorContext,
 ): Promise<WorkflowErrorDisposition> {
+  // Emit the per-error DIAGNOSTIC event (the timeline still shows WHY the run failed) BEFORE
+  // routing the spec disposition through the unified authority — these are observability, not
+  // a separate terminal behavior.
+  const outcome = await emitDiagnosticAndNormalize(error, ctx);
+  const bucket = await applyTerminalOutcome(
+    outcome,
+    ctx,
+    dispositionSeams(ctx.input, ctx.finalizeRunState, ctx.context),
+  );
+  return bucket === "genuine_halt" ? "genuine_halt" : "re_drive";
+}
+
+/**
+ * Emit the per-error-class DIAGNOSTIC event and NORMALIZE the thrown error into the
+ * {@link TerminalOutcome} the authority decides over. The diagnostic events are the
+ * observable timeline detail; the disposition (re-drive vs genuine-halt) is the authority's.
+ */
+async function emitDiagnosticAndNormalize(error: unknown, ctx: WorkflowErrorContext): Promise<TerminalOutcome> {
   if (error instanceof AncestorNotReadyError) {
-    // NEVER-STRAND, BENIGN WAIT (tanren-owns-the-engine.md §3): the dependent reached its
-    // base-shift assembly but a NON-TERMINAL ancestor had not published its head yet — it WILL
-    // (the dependent ran ahead of it). NOT a fault: finalize the run a recoverable HALT + return
-    // the SPEC to `open` so the walker RE-DRIVES it once the ancestor is ready (the never-discard
-    // re-drive a base shift gets), NOT a terminal `needs_attention` strand. The error only raises
-    // for `pending`/`in_flight` — the phase is the proof the wait is benign.
-    const ancestorPhase = error.phase === "in_flight" ? "in_flight" : "pending";
-    await finalizeNonPass(ctx.finalizeRunState, ctx.context.runId, "halted");
-    await setSpecStatus(ctx.input, ctx.context, "open");
+    // BENIGN WAIT (tanren-owns-the-engine.md §3): surface the not-yet-ready ancestor + its
+    // non-terminal phase, then re-drive with NO fault (it never counts toward the cap).
     await ctx.appendEvent("dag.spec.ancestor_not_ready", {
       specId: ctx.context.specId,
       runId: ctx.context.runId,
       ancestorSpecId: error.specId,
-      ancestorPhase,
+      ancestorPhase: error.phase === "in_flight" ? "in_flight" : "pending",
     });
-    return "recoverable_halt";
+    return { kind: "ancestor_wait" };
   }
   if (error instanceof WorkspaceBootstrapError) {
-    // Dependency install failed: the workspace can't build/test, so the run can't
-    // be gated. Surface it as a halting, recoverable outcome (lands on the
-    // recovery surface) rather than a crash, reusing the
-    // workspace.failed event + the halted run state.
-    //
-    // RESIDUAL SAFETY NET (apex v35): the workspace-PREP `just bootstrap` deps-install no
-    // longer ESCAPES as this error — a writer-fixable failure there is now caught in
-    // `prepareRunWorkspace` and DEFERRED to the gate's self-healing path (it emits
-    // `workspace.bootstrap_deferred`, never reaching here). This branch remains the
-    // fail-closed handler for any other `WorkspaceBootstrapError` that escapes the loop.
+    // A deps-install / bootstrap hiccup the workspace could not build through — TRANSIENT.
+    // Surface `workspace.failed`, then re-drive (the classifier maps it to `workspace`, a
+    // retriable code; the consecutive-same-failure cap escalates a persistently-broken one).
     await ctx.appendEvent("workspace.failed", { workspacePath: ctx.workspacePath, message: error.message });
-    await finalizeNonPass(ctx.finalizeRunState, ctx.context.runId, "halted");
-    await parkSpecNeedsAttentionForHaltedRun(ctx.input, ctx.context, ctx.appendEvent, "halted");
-    return "recoverable_halt";
+    return { kind: "error", error };
   }
   if (error instanceof CodexUsageLimitError) {
-    // Authenticated but out of quota mid-loop: a recoverable window state, not a
-    // crash (PROJECT_BRIEF §4.3). Record it as such.
-    await finalizeNonPass(ctx.finalizeRunState, ctx.context.runId, "window_exhausted");
+    // Authenticated but out of quota mid-loop (PROJECT_BRIEF §4.3): a recoverable window
+    // state, TRANSIENT. Surface the pressure signal, then re-drive (the walker re-attempts
+    // once the window recovers; the `usage_limit` code is retriable).
     await ctx.appendEvent("usage.window.pressure", {
       provider: "openai",
       slot: "primary",
       usedPercent: 100,
       resetsAt: new Date().toISOString(),
     });
-    await parkSpecNeedsAttentionForHaltedRun(ctx.input, ctx.context, ctx.appendEvent, "window_exhausted");
-    return "recoverable_halt";
+    return { kind: "error", error };
   }
-  // ROBUSTNESS OVER RECOVERY (apex v35): an UNRECOGNIZED / generic error reaching here is, by
-  // doctrine, a RANDOM / TRANSIENT / INTERNAL fault — NOT a structural cause. It is RE-DRIVEN, never
-  // terminally stranded at `needs_attention`; only a GENUINE-TERMINAL fault (a misconfiguration) or the
-  // PERSISTENT same-failure case (the SAME classified failure K consecutive times) escalates. Budget /
-  // window-exhausted / workspace-bootstrap / ancestor-wait have their OWN branches above. The classify +
-  // re-drive/escalate body lives in `plannerRunRedrive.ts` (the file-size cap holds without a cycle).
-  return redriveOrEscalateWorkflowError(error, ctx, {
-    finalizeRunState: ctx.finalizeRunState,
-    finalizeNonPass: (outcome) => finalizeNonPass(ctx.finalizeRunState, ctx.context.runId, outcome),
-    setSpecStatus: (status) => setSpecStatus(ctx.input, ctx.context, status),
-  });
+  // Any other error: a RANDOM / TRANSIENT / INTERNAL fault (or a credential misconfiguration
+  // the authority genuine-halts). The classifier keys off the error CLASS name.
+  return { kind: "error", error };
 }
 
 /**
