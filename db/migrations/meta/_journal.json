@@ -36,6 +36,13 @@
       "when": 1781463665460,
       "tag": "0004_template_creation_upgrade_events",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1781491396612,
+      "tag": "0005_natural_gamora",
+      "breakpoints": true
     }
   ]
 }

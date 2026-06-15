@@ -50,6 +50,7 @@ export const eventTypeNames = [
   "dag.concurrency.saturated",
   "dag.config.corrupt",
   "dag.drained",
+  "dag.spec.ancestor_not_ready",
   "dag.spec.attention_resolved",
   "dag.spec.enqueued",
   "dag.spec.needs_attention",

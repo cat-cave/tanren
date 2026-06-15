@@ -157,6 +157,7 @@ import {
   DagConcurrencySaturatedPayload,
   DagConfigCorruptPayload,
   DagDrainedPayload,
+  DagSpecAncestorNotReadyPayload,
   DagSpecAttentionResolvedPayload,
   DagSpecEnqueuedPayload,
   DagSpecNeedsAttentionPayload,
@@ -423,6 +424,8 @@ export const EventRegistry = {
   // integration branch, or was held over the depth cap.
   "dag.spec.speculative": DagSpecSpeculativePayload,
   "dag.spec.speculation_held": DagSpecSpeculationHeldPayload,
+  // §3 NEVER-DISCARD: a dependent benign-WAITS (spec → open) for a non-terminal ancestor that has not published its head yet — never a terminal strand.
+  "dag.spec.ancestor_not_ready": DagSpecAncestorNotReadyPayload,
   // §2c CHANGE-PERCOLATION: an ancestor changed after a dependent started speculatively
   // — the delta percolates down the chain (NOT discarded): started/absorbed/deferred/replan.
   "dag.spec.percolating": DagSpecPercolatingPayload,
@@ -447,11 +450,8 @@ export const EventRegistry = {
   // its bounded re-enqueue budget so the DagWalker genuinely re-runs it.
   "dag.spec.attention_resolved": DagSpecAttentionResolvedPayload,
 
-  // Plane B app environment: the project's runtime-scoped app env was attached to the
-  // DEPLOYED app (Vercel/Fly). Records the deploy target + the env KEY NAMES only —
-  // never a secret value. (There is no CI-secret-propagation event: the native gate
-  // runs the project's tests over SSH with the app env materialized in-process — no
-  // Actions secrets to propagate.)
+  // Plane B app environment: the project's runtime-scoped app env was attached to the DEPLOYED
+  // app (Vercel/Fly). Records the deploy target + env KEY NAMES only — never a secret value.
   "app_env.runtime_attached": AppEnvRuntimeAttachedPayload,
 } as const satisfies Record<string, z.ZodTypeAny>;
 

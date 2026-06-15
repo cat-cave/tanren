@@ -29,6 +29,38 @@ import { quoteSshShellArg } from "../ssh/command.js";
 import { runWorkspaceSshCommand } from "../workspace/ssh.js";
 import { buildLiveJjWorkspace, type LiveJjWorkspaceDeps, type LiveJjWorkspace } from "../providers/liveJjWorkspace.js";
 
+/**
+ * A member's SPEC lifecycle bucket (mirrors the walker's `classifySpecStatus`), used to
+ * classify a member whose `<branch>@origin` is GONE and did NOT merge: `pending`/`in_flight`
+ * are NON-TERMINAL (the ancestor WILL publish a head — BENIGN wait); `terminal_blocked` never
+ * will (LOUD fault); `done` (an unprovable merge here — the merged-drop handles real merges via
+ * `knownHeadSha`) is also a LOUD fault.
+ */
+export type AncestorSpecPhase = "pending" | "in_flight" | "done" | "terminal_blocked";
+
+/**
+ * A member's `<branch>@origin` is GONE and it did NOT merge, but its SPEC is still NON-TERMINAL
+ * (it WILL publish a head): a BENIGN "not ready yet" condition, NOT a fault. The dependent must
+ * benign-WAIT (re-driven once the ancestor is ready), never TERMINALLY strand. Distinguished by
+ * TYPE from the loud `Error` the fail-closed default throws, so the run finalizer routes it to
+ * the never-discard re-drive (not `needs_attention`).
+ */
+export class AncestorNotReadyError extends Error {
+  constructor(
+    readonly specId: string,
+    readonly branch: string,
+    readonly phase: AncestorSpecPhase,
+    baseBranch: string,
+  ) {
+    super(
+      `jj-local integration: member ${specId} (${branch}) has no ${branch}@origin ref and did NOT ` +
+        `merge into ${baseBranch}, but its spec is still ${phase} (non-terminal) — the ancestor has not ` +
+        `published its head yet; the dependent benign-waits to be re-driven (never strands)`,
+    );
+    this.name = "AncestorNotReadyError";
+  }
+}
+
 /** One ordered member to integrate: its remote bookmark name (the PR head branch). */
 export interface JjIntegrationMember {
   specId: string;
@@ -45,6 +77,12 @@ export interface JjIntegrationMember {
    * the base) keeps the missing-branch a LOUD failure — only a PROVEN merge is benign.
    */
   knownHeadSha?: string;
+  /**
+   * The member's SPEC lifecycle bucket at assembly time (`classifySpecStatus`). For the "branch
+   * gone, not merged" case: a `pending`/`in_flight` ancestor WILL publish a head (BENIGN wait)
+   * vs. a `terminal_blocked` one that never will (LOUD fault). ABSENT ⇒ the fail-closed default.
+   */
+  ancestorPhase?: AncestorSpecPhase;
 }
 
 /** The facts the jj-local integration clones + stacks against. */
@@ -275,15 +313,16 @@ async function prepareMemberBookmarks(
  *
  * For each ordered member:
  *   - the `<branch>@origin` ref RESOLVES ⇒ a live member (kept, in order);
- *   - the ref is GONE but the member MERGED — PROVEN by its `knownHeadSha`
- *     (`ancestor_stack[].headSha`) being a non-empty 40-hex sha CONTAINED in `<baseBranch>
- *     @origin` ⇒ DROP it (its content is in the base, mirroring the coordinator's "ancestors
- *     that merged are dropped"); continue with a smaller, still-correct stack;
- *   - the ref is GONE for ANY OTHER reason (no known head sha, or a head sha NOT contained in
- *     the base) ⇒ a LOUD throw (a genuine missing ref is never silently masked).
+ *   - GONE but PROVEN merged (`knownHeadSha` is a 40-hex sha CONTAINED in `<baseBranch>@origin`)
+ *     ⇒ DROP it (its content is in the base) and continue with a smaller, still-correct stack;
+ *   - GONE, not merged, but its SPEC is still NON-TERMINAL (`pending`/`in_flight` — it WILL
+ *     publish a head) ⇒ a BENIGN {@link AncestorNotReadyError}: the dependent ran ahead of the
+ *     ancestor's `pr_open`; it benign-WAITS to be re-driven, never TERMINALLY strands;
+ *   - GONE for ANY OTHER reason (no/unknown phase, a TERMINAL ancestor, a phantom/off-scope ref)
+ *     ⇒ a LOUD throw (a genuine missing ref is never silently masked).
  *
- * FAIL-CLOSED: only a PROVEN merge (commit-in-base) is benign; an absence we cannot explain
- * stays a hard failure.
+ * FAIL-CLOSED: a proven merge DROPS; a provably non-terminal ancestor benign-waits; everything
+ * else (the default when we can prove neither) stays a hard failure.
  */
 async function resolveLiveMembers(
   ssh: CommandSubstrate,
@@ -310,10 +349,17 @@ async function resolveLiveMembers(
       // Its content is already in `baseBranch` — drop it (never-discard: nothing is lost).
       continue;
     }
+    // NOT merged, branch gone. BENIGN iff the ancestor's SPEC is still NON-TERMINAL (it WILL
+    // publish a head) — the dependent ran ahead of `pr_open`; it benign-WAITS, never strands.
+    // FAIL-CLOSED: an absent/unknown phase, a TERMINAL ancestor, or a `done`-but-unprovable
+    // member all stay LOUD — only a provably non-terminal phase is benign.
+    if (member.ancestorPhase === "pending" || member.ancestorPhase === "in_flight") {
+      throw new AncestorNotReadyError(member.specId, member.branch, member.ancestorPhase, baseBranch);
+    }
     throw new Error(
       `jj-local integration: member ${member.specId} (${member.branch}) has no ${member.branch}@origin ref ` +
-        `and did NOT merge into ${baseBranch} (knownHeadSha=${knownHeadSha ?? "<none>"}) — refusing to silently ` +
-        `drop a genuinely missing ancestor branch`,
+        `and did NOT merge into ${baseBranch} (knownHeadSha=${knownHeadSha ?? "<none>"}, ancestorPhase=` +
+        `${member.ancestorPhase ?? "<unknown>"}) — refusing to silently drop a genuinely missing ancestor branch`,
     );
   }
   return live;

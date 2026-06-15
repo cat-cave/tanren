@@ -16,7 +16,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { LiveJjWorkspace } from "../src/engine/providers/liveJjWorkspace.js";
 import { JjWorkspaceVcsCore } from "../src/engine/providers/jjWorkspaceVcsCore.js";
-import { integrateOverWorkspace } from "../src/engine/dag/jjLocalIntegration.js";
+import { AncestorNotReadyError, integrateOverWorkspace } from "../src/engine/dag/jjLocalIntegration.js";
 import { LOCAL_HANDLE, LocalCommandSubstrate } from "./conformance/fakes/localCommandSubstrate.js";
 import { assertGitDirUnder, fixtureGitEnv } from "./conformance/fakes/fixtureGitEnv.js";
 
@@ -271,7 +271,8 @@ describe("§3.5 jj-local batch integration (real jj)", () => {
   it("FAILS LOUD for a genuinely-missing ancestor branch (deleted but NOT merged) — no silent masking", async () => {
     // FAIL-CLOSED counterpart: `feat-gone`'s branch is also gone, but its commit is NOT in
     // `main` (it never merged). A truly missing ancestor must stay a LOUD failure — the benign
-    // drop is ONLY for a PROVEN merge (commit-in-base), never every missing branch.
+    // drop is ONLY for a PROVEN merge (commit-in-base), never every missing branch. With NO
+    // `ancestorPhase` (the fail-closed default) it stays the loud `Error`, not a benign wait.
     const { originPath, goneUnmergedHeadSha } = makeMergedAncestorFixture();
     const live = liveLocalJj();
     const ssh = new LocalCommandSubstrate();
@@ -282,6 +283,59 @@ describe("§3.5 jj-local batch integration (real jj)", () => {
         repoUrl: originPath,
         members: [{ specId: "spec-gone", branch: "feat-gone", knownHeadSha: goneUnmergedHeadSha }],
         localRef: "tanren-batch-gone",
+        timeoutMs: 60_000,
+      }),
+    ).rejects.toThrow(/did NOT merge into main/u);
+  });
+
+  it("BENIGN-WAITS for a NON-TERMINAL headless ancestor (branch not published yet) — AncestorNotReadyError, NOT a strand", async () => {
+    // THE BUG this fixes (tanren-owns-the-engine.md §3 never-discard, apex v35): the dependent
+    // was driven speculatively but its ancestor `deploy` was still `in_flight` — its gate
+    // looping, NO PR/branch published yet. The branch is GONE (never existed on origin) AND it
+    // did NOT merge — but its SPEC is non-terminal (it WILL publish a head). WITHOUT the fix
+    // this is the SAME loud `Error` as a phantom branch → the run fails `internal` → the
+    // dependent TERMINALLY strands. WITH the fix: because the member carries a non-terminal
+    // `ancestorPhase`, the assembly raises the BENIGN `AncestorNotReadyError` (a typed wait the
+    // finalizer routes to a re-drive, never `needs_attention`). `feat-gone`'s commit is NOT in
+    // `main`, so the merged-drop path does NOT apply — the phase is what makes it benign.
+    const { originPath } = makeMergedAncestorFixture();
+    const live = liveLocalJj();
+    const ssh = new LocalCommandSubstrate();
+
+    await expect(
+      integrateOverWorkspace(live, ssh, {
+        baseBranch: "main",
+        repoUrl: originPath,
+        // No `knownHeadSha` (the ancestor never published a head), but its spec is `in_flight`.
+        members: [{ specId: "spec-deploy", branch: "feat-gone", ancestorPhase: "in_flight" }],
+        localRef: "tanren-batch-not-ready",
+        timeoutMs: 60_000,
+      }),
+    ).rejects.toBeInstanceOf(AncestorNotReadyError);
+  });
+
+  it("FAILS LOUD (no benign wait) for a TERMINAL headless ancestor — it will NEVER publish a head", async () => {
+    // CASE-3 FAIL-CLOSED: the ancestor branch is gone, did NOT merge, AND its spec is
+    // `terminal_blocked` (halted/cancelled/needs_attention) — it will NEVER publish a head.
+    // This is NOT a benign wait (there is nothing to wait for): it stays the LOUD `Error`, NOT
+    // an `AncestorNotReadyError`. Only a PROVABLY non-terminal phase is benign.
+    const { originPath, goneUnmergedHeadSha } = makeMergedAncestorFixture();
+    const live = liveLocalJj();
+    const ssh = new LocalCommandSubstrate();
+
+    await expect(
+      integrateOverWorkspace(live, ssh, {
+        baseBranch: "main",
+        repoUrl: originPath,
+        members: [
+          {
+            specId: "spec-dead",
+            branch: "feat-gone",
+            knownHeadSha: goneUnmergedHeadSha,
+            ancestorPhase: "terminal_blocked",
+          },
+        ],
+        localRef: "tanren-batch-dead",
         timeoutMs: 60_000,
       }),
     ).rejects.toThrow(/did NOT merge into main/u);

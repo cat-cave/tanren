@@ -13,12 +13,15 @@ import type pg from "pg";
 import type { RunnerHandle } from "../contracts/allocator.js";
 import { githubHttpsRemote, parseGitHubRepository } from "../providers/github.js";
 import {
+  type AncestorPhaseBySpecId,
   bootstrapDependentBase,
   type BootstrapDependentBaseSuccess,
   bootstrapLocalIntegrationRef,
   type BuildBootstrapWorkspacePort,
 } from "../dag/jjLocalBootstrap.js";
 import type { AncestorStack } from "../dag/ancestorStack.js";
+import { classifySpecStatus } from "../dag/walkerPg.js";
+import type { AncestorSpecPhase } from "../dag/jjLocalIntegration.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import { PgIntegrationNodeModel } from "../dag/integrationNodesPg.js";
 import type { LiveJjWorkspace, LiveJjWorkspaceDeps } from "../providers/liveJjWorkspace.js";
@@ -268,6 +271,79 @@ async function recordEagerBaseNode(
 }
 
 /**
+ * The facts the ancestor-phase read needs: the org tenant key (RLS) + the ancestor spec ids
+ * to classify. Mirrors {@link EagerBaseNodeUpsertFacts}'s org-scoped-port shape.
+ */
+export interface AncestorPhaseReadFacts {
+  orgId: string;
+  /** The distinct ancestor spec ids whose lifecycle bucket the assembly needs. */
+  specIds: ReadonlyArray<string>;
+}
+
+/**
+ * A port that reads each ancestor spec's LIFECYCLE BUCKET (`classifySpecStatus` of
+ * `specs.status`) at bootstrap time, org-scoped (RLS). Threaded into the assembly so the
+ * "ancestor branch gone, not merged" case can benign-WAIT (re-driven) when the ancestor spec
+ * is still non-terminal (`pending`/`in_flight` — it WILL publish a head) instead of TERMINALLY
+ * stranding the dependent — vs. a LOUD fault for a TERMINAL ancestor (`terminal_blocked`) that
+ * never will. Injected as a port (like {@link EagerBaseNodeUpsert}) so the bootstrap
+ * unit/conformance paths drive it without a live DB, and so it gets a REAL `pg.Pool` (the run
+ * loop's `input.pool` is only a query client, not a connect-capable pool for `runWithOrgScope`).
+ */
+export type AncestorPhaseReader = (facts: AncestorPhaseReadFacts) => Promise<AncestorPhaseBySpecId>;
+
+/**
+ * The Pg-backed {@link AncestorPhaseReader} the run worker wires: an org-scoped read of
+ * `specs.status` mapped through `classifySpecStatus`. FAIL-CLOSED: a spec the scoped read does
+ * NOT return (off-scope, deleted, unreadable) is simply ABSENT from the map ⇒ the assembly's
+ * loud-throw default (we never assume a non-terminal phase we could not read).
+ */
+export function buildAncestorPhaseReader(pool: pg.Pool): AncestorPhaseReader {
+  return async (facts) => {
+    const phases = new Map<string, AncestorSpecPhase>();
+    if (facts.specIds.length === 0) return phases;
+    await runWithOrgScope(pool, facts.orgId, async (client) => {
+      const result = await client.query<{ spec_id: string; status: string }>(
+        "SELECT spec_id, status FROM specs WHERE spec_id = ANY($1::text[])",
+        [[...facts.specIds]],
+      );
+      for (const row of result.rows) {
+        phases.set(row.spec_id, classifySpecStatus(row.status));
+      }
+    });
+    return phases;
+  };
+}
+
+/**
+ * Resolve the ancestor specs' lifecycle buckets via the injected {@link AncestorPhaseReader}
+ * (when wired). Returns an EMPTY map — the assembly's fail-closed loud default — when no reader
+ * is wired (a unit path), the run has no org (CLI), the stack is empty, or the read FAILS.
+ *
+ * FAIL-CLOSED: a read failure is loud-logged + treated as "no phases known" (the loud default
+ * everywhere it matters), NEVER silently turning a real missing-ancestor fault into a benign
+ * wait — only a phase we positively READ as non-terminal makes a member benign.
+ */
+async function readAncestorPhases(input: RunPlannerLoopInput, stack: AncestorStack): Promise<AncestorPhaseBySpecId> {
+  const reader = input.ancestorPhaseReader;
+  const orgId = input.context.orgId;
+  if (reader === undefined || orgId === undefined || orgId === null || stack.length === 0) {
+    return new Map();
+  }
+  const specIds = [...new Set(stack.map((ancestor) => ancestor.specId))];
+  try {
+    return await reader({ orgId, specIds });
+  } catch (error) {
+    log.warn(
+      "ancestor-phase read for the dependent bootstrap failed (members default to fail-closed loud)",
+      { runBranch: input.context.runBranch, projectId: input.context.projectId },
+      error,
+    );
+    return new Map();
+  }
+}
+
+/**
  * WS-A PR-4 (walker-jj-local-integration-design.md §2.1) — the jj-local bootstrap variant
  * of the run's workspace clone. Assembles `default_branch + ordered ancestor PR-head refs`
  * jj-LOCALLY on the run's OWN allocated runner + `workspacePath` (NO extra allocation),
@@ -354,6 +430,9 @@ export async function bootstrapDependentWorkspace(
   // `integrateOverWorkspace` reads only `ssh` off the deps; the workspace itself comes from
   // the port above (the run's runner), so no runner is allocated here.
   const workspaceDeps = { ssh: input.ssh } as unknown as LiveJjWorkspaceDeps;
+  // The ancestor specs' lifecycle buckets at bootstrap time — so a missing-but-not-merged
+  // ancestor whose SPEC is still non-terminal benign-WAITS (re-driven) rather than stranding.
+  const phaseBySpecId = await readAncestorPhases(input, stack);
   const result = await bootstrapDependentBase(
     stack,
     workspaceDeps,
@@ -365,6 +444,7 @@ export async function bootstrapDependentWorkspace(
       runBranch: context.runBranch,
       timeoutMs: input.timeoutMs,
     },
+    phaseBySpecId,
     buildWorkspace,
   );
   if (result.outcome !== "bootstrapped") {

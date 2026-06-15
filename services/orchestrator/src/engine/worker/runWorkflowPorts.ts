@@ -18,6 +18,7 @@
 
 export { buildNativeQueueEnqueuer } from "../merge/coordinatorBuild.js";
 export {
+  buildAncestorPhaseReader,
   buildBootstrapStackHeadShaWriteBack,
   buildEagerBaseNodeUpsert,
 } from "../workflow/plannerRunJjLocalBootstrap.js";
