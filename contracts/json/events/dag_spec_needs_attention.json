@@ -16,7 +16,8 @@
           "enum": [
             "halted_reexec",
             "orphaned_marker",
-            "no_live_run"
+            "no_live_run",
+            "persistent_failure"
           ],
           "type": "string"
         },

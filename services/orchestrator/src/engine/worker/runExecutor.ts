@@ -36,6 +36,7 @@ import {
   buildBootstrapStackHeadShaWriteBack,
   buildEagerBaseNodeUpsert,
   buildNativeQueueEnqueuer,
+  buildRedriveHistoryReader,
 } from "./runWorkflowPorts.js";
 import { createLogger, finalizeRunRecoverable } from "./runFinalize.js";
 import { classifyRunFailure } from "./runFailureClassifier.js";
@@ -346,6 +347,10 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
         // dependent whose ancestor is non-terminal but headless BENIGN-WAITS (re-driven)
         // instead of terminally stranding. Org-scoped read over the worker's real pool.
         ancestorPhaseReader: buildAncestorPhaseReader(deps.pool),
+        // ROBUSTNESS (apex v35): the run-failure boundary re-drives a random/transient fault
+        // (spec → open) instead of stranding it, bounded by this consecutive-same-failure reader
+        // (the SAME classified failure K times escalates loudly). Org-scoped read over the pool.
+        redriveHistoryReader: buildRedriveHistoryReader(deps.pool),
       }),
     );
     await deps.jobQueue.complete(job.id);

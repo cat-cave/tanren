@@ -1,13 +1,11 @@
 import { z } from "zod";
 
-// DagWalker events (autonomy-engine.md §1a). The DagWalker is a per-project
-// background SCHEDULER over the existing run executor: on startup and on every
-// run.*-terminal / merge.completed notification for the project it loads the spec
-// DAG, computes the ready set (pending specs whose dependencies are all DONE),
-// and enqueues up to the governed concurrency headroom of ready specs via the
-// existing createQueuedRunFromSpec path. These events make that autonomous
-// scheduling decision VISIBLE — every spec the walker auto-enqueues, every time
-// the DAG drains, and every time the walker pauses for lack of budget headroom.
+// DagWalker events (autonomy-engine.md §1a). The DagWalker is a per-project background SCHEDULER
+// over the existing run executor: on startup and on every run.*-terminal / merge.completed
+// notification it loads the spec DAG, computes the ready set (pending specs whose dependencies are
+// all DONE), and enqueues up to the governed concurrency headroom via createQueuedRunFromSpec. These
+// events make that autonomous scheduling decision VISIBLE — every spec the walker auto-enqueues,
+// every time the DAG drains, and every time the walker pauses for lack of budget headroom.
 //
 // Milestones are LABELS, never gates: the walker never pauses at a milestone
 // boundary, so there is no milestone event here — only the real scheduling
@@ -16,11 +14,10 @@ import { z } from "zod";
 // configured ceiling); the concurrency-saturated hold is "no in-flight slot
 // free" — historically conflated under `budget.paused`, now split honestly.
 
-// dag.spec.enqueued: the walker auto-selected a ready spec and enqueued a run for
-// it through createQueuedRunFromSpec (the SAME path an operator's manual trigger
-// uses). Carries the new run id + the spec it was created from, the readiness
-// reason (deps satisfied), and the live in-flight count vs. the governed ceiling
-// at enqueue time, so the timeline shows exactly why the walker chose to run it.
+// dag.spec.enqueued: the walker auto-selected a ready spec and enqueued a run for it through
+// createQueuedRunFromSpec (the SAME path an operator's manual trigger uses). Carries the new run id
+// + the spec it was created from, the readiness reason (deps satisfied), and the live in-flight count
+// vs. the governed ceiling at enqueue time, so the timeline shows why the walker chose to run it.
 export const DagSpecEnqueuedPayload = z
   .object({
     specId: z.string(),
@@ -93,6 +90,9 @@ export const DagSpecAncestorNotReadyPayload = z
   })
   .strict();
 export type DagSpecAncestorNotReadyPayload = z.infer<typeof DagSpecAncestorNotReadyPayload>;
+
+// dag.spec.redriven (apex v35) is defined in `dagRedrive.ts` (file-size cap) and re-exported here.
+export { DagSpecRedrivenPayload } from "./dagRedrive.js";
 
 // dag.spec.speculation_held (autonomy-engine.md §2c open decision §6): a dependent
 // WOULD be ready under the threshold, but its unmerged-ancestor DEPTH exceeds the
@@ -399,24 +399,24 @@ export const IntegrationProofReusedPayload = z
   .strict();
 export type IntegrationProofReusedPayload = z.infer<typeof IntegrationProofReusedPayload>;
 
-// NEVER-STRAND reconciler events: the DAG's self-healing safety net. A spec can get
-// stuck OCCUPYING A SLOT (`active`/`in_flight`) with NO live run — the recurring
-// stranding bug (a percolation §2c re-exec halts → the spec stays `active`, both its
-// runs terminal, the orphaned marker can't self-heal). The reconciler detects the
-// confirmed strand (slot-occupying + all runs terminal + not merge-queued + no LIVE
-// percolation marker) and re-enqueues it, with BOUNDED escalation to a loud
-// needs_attention. These events make every heal + every escalation VISIBLE.
+// NEVER-STRAND reconciler events: the DAG's self-healing safety net. A spec can get stuck OCCUPYING
+// A SLOT (`active`/`in_flight`) with NO live run — the recurring stranding bug (a percolation §2c
+// re-exec halts → the spec stays `active`, both runs terminal, the orphaned marker can't self-heal).
+// The reconciler detects the confirmed strand (slot-occupying + all runs terminal + not merge-queued
+// + no LIVE percolation marker) and re-enqueues it, with BOUNDED escalation to a loud needs_attention.
 
-// The reason a confirmed strand was detected — shared by both strand events.
-const StrandReason = z.enum(["halted_reexec", "orphaned_marker", "no_live_run"]);
+// The reason a confirmed strand was detected — shared by both strand events. `halted_reexec` /
+// `orphaned_marker` / `no_live_run` are the reconciler's slot-occupying-no-live-run cases (§2c);
+// `persistent_failure` (apex v35) is a spec whose run failed the SAME classified way K consecutive
+// times (each transient RE-DRIVEN but never converged) — a genuinely STUCK spec (a bug / mis-spec).
+const StrandReason = z.enum(["halted_reexec", "orphaned_marker", "no_live_run", "persistent_failure"]);
 // One of the strand's terminal runs (its id + final status) — for the audit trail.
 const StrandTerminalRun = z.object({ runId: z.string(), status: z.string() }).strict();
 
-// dag.spec.needs_attention: a spec parked at the terminal `needs_attention` status —
-// freeing the DAG slot and blocking ONLY its dependents (never the whole DAG),
-// surfacing a loud, bounded ask-for-help. A discriminated union on `source` because
-// TWO subsystems reach the SAME terminal parked state, each carrying its own halt
-// history:
+// dag.spec.needs_attention: a spec parked at the terminal `needs_attention` status — freeing the
+// DAG slot and blocking ONLY its dependents (never the whole DAG), surfacing a loud, bounded ask-
+// for-help. A discriminated union on `source` because TWO subsystems reach the SAME terminal parked
+// state, each carrying its own halt history:
 //   - `strand`: the NEVER-STRAND reconciler exhausted the bounded re-enqueue cap (a
 //     spec stuck occupying a slot with no live run) — the canonical §2c safety net.
 //   - `merge_conflict`: the native merge queue's intent-preserving conflict resolver

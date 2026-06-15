@@ -22,3 +22,7 @@ export {
   buildBootstrapStackHeadShaWriteBack,
   buildEagerBaseNodeUpsert,
 } from "../workflow/plannerRunJjLocalBootstrap.js";
+// apex v35 ROBUSTNESS: the consecutive-same-failure reader the run-failure boundary uses to
+// decide RE-DRIVE (a random/transient fault) vs ESCALATE (the SAME failure K times). An
+// org-scoped read of the spec's prior `dag.spec.redriven` events over the worker's real pool.
+export { buildRedriveHistoryReader } from "../workflow/plannerRunRedrive.js";
