@@ -43,6 +43,13 @@
       "when": 1781491396612,
       "tag": "0005_natural_gamora",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1781498739362,
+      "tag": "0006_neat_jackpot",
+      "breakpoints": true
     }
   ]
 }

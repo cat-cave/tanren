@@ -18,6 +18,7 @@ import { CodexUsageLimitError } from "../providers/codex.js";
 import type { EventName, EventPayload } from "../events/index.js";
 import { removeRunWorkspaceDir, WorkspaceBootstrapError } from "../workspace/index.js";
 import { AncestorNotReadyError } from "../dag/jjLocalIntegration.js";
+import { redriveOrEscalateWorkflowError } from "./plannerRunRedrive.js";
 import type { PlannerRejectionFeedback } from "./planner/planner.js";
 import type { PreparedRunWorkspace } from "./plannerRunWorkspace.js";
 import type { MergeForRunResult } from "./reviewMerge/index.js";
@@ -133,23 +134,15 @@ export async function finalizeNonPass(
 }
 
 /**
- * NEVER-STRAND the spec when its run finalizes TERMINAL-WITHOUT-MERGE (apex v22
- * run-discipline finding #3). A halted/failed planner run otherwise leaves the SPEC
- * at `in_flight`, which the DagWalker maps to OCCUPYING-A-SLOT — so the walker never
- * re-attempts, and neither operator-API path can recover it (`requeue` only handles
- * `needs_attention`; `runs` only queues from `open`). The spec is permanently stuck.
+ * NEVER-STRAND the spec when its run finalizes TERMINAL-WITHOUT-MERGE (apex v22 run-discipline
+ * finding #3). A halted/failed planner run otherwise leaves the SPEC at `in_flight`, which the
+ * DagWalker maps to OCCUPYING-A-SLOT — so the walker never re-attempts, and neither operator-API
+ * path can recover it (`requeue` only handles `needs_attention`; `runs` only queues from `open`).
  *
- * This is the fail-closed, LOUD recovery: park the spec at the terminal
- * `needs_attention` status (freeing its DAG slot, blocking ONLY its dependents) +
- * emit the `dag.spec.needs_attention` event so the parked state reaches a human AND
- * the operator `requeue` endpoint can re-enter it at `open`. An infra failure (e.g.
- * `MissingCredentialError`) thus SURFACES as an explicit ask-for-help rather than
- * silently stranding the spec — the autonomy loop survives a run failure without a
- * human DB poke.
- *
- * The spec-status flip goes through the SAME `setSpecStatus` seam (control-plane when wired,
- * else in-process org-scoped). The `dag.spec.needs_attention` event reuses the `strand` source
- * (one parked-state vocabulary the operator `requeue` reads) with reason `halted_reexec`.
+ * The fail-closed, LOUD recovery: park the spec at terminal `needs_attention` (freeing its DAG slot,
+ * blocking ONLY its dependents) + emit `dag.spec.needs_attention` so the parked state reaches a human
+ * AND the operator `requeue` endpoint can re-enter it at `open`. The status flip goes through the
+ * SAME `setSpecStatus` seam; the event reuses the `strand` source with reason `halted_reexec`.
  */
 export async function parkSpecNeedsAttentionForHaltedRun(
   input: RunPlannerLoopInput,
@@ -317,9 +310,8 @@ export interface WorkflowErrorContext {
   finalizeRunState: FinalizeRunState;
   appendEvent: <N extends EventName>(eventType: N, payload: EventPayload<N>, taskId?: string) => Promise<void>;
   workspacePath: string;
-  // NEVER-STRAND (finding #3): the loop input + run context so a thrown-error finalize can park
-  // the SPEC at `needs_attention` (not just the run) — an infra failure frees the DAG slot +
-  // becomes operator-requeueable instead of stranding at `in_flight` forever.
+  // NEVER-STRAND: the loop input + run context so a thrown-error finalize can re-drive
+  // (→ `open`) or park (→ `needs_attention`) the SPEC — never strand it at `in_flight`.
   input: RunPlannerLoopInput;
   context: PlannerRunContext;
 }
@@ -355,10 +347,11 @@ export async function emitPrepBootstrapDeferred(
  * outcome), not a crash; anything else lands the run `failed`. The caller
  * re-throws after this so the worker still fails the job.
  *
- * NEVER-STRAND (finding #3): EVERY branch also parks the SPEC at `needs_attention`
- * via {@link parkSpecNeedsAttentionForHaltedRun}, so a thrown error (recoverable OR a
- * hard `failed`, including an infra `MissingCredentialError`) leaves the spec in a
- * non-occupying, operator-requeueable state — never `in_flight` with a dead run.
+ * NEVER-STRAND: a thrown error never leaves the spec `in_flight` with a dead run. A
+ * benign ancestor-wait + a generic random/transient fault RE-DRIVE the spec (→ `open`,
+ * apex v35); a recoverable infra fault (workspace/usage-limit) or a genuine-terminal
+ * misconfiguration / persistent same-failure parks it at `needs_attention` (operator-
+ * requeueable) — see {@link redriveOrEscalateWorkflowError} for the classification.
  */
 export async function finalizeWorkflowError(error: unknown, ctx: WorkflowErrorContext): Promise<void> {
   if (error instanceof AncestorNotReadyError) {
@@ -408,14 +401,19 @@ export async function finalizeWorkflowError(error: unknown, ctx: WorkflowErrorCo
     await parkSpecNeedsAttentionForHaltedRun(ctx.input, ctx.context, ctx.appendEvent, "window_exhausted");
     return;
   }
-  await ctx.finalizeRunState(
-    "failed",
-    "failed",
-    ["running", "queued"],
-    "UPDATE runs SET status = 'failed', outcome = 'failed', ended_at = now() WHERE run_id = $1",
-    [ctx.context.runId],
-  );
-  await parkSpecNeedsAttentionForHaltedRun(ctx.input, ctx.context, ctx.appendEvent, "failed");
+  // ROBUSTNESS OVER RECOVERY (apex v35): an UNRECOGNIZED / generic error reaching here is, by
+  // doctrine, a RANDOM / TRANSIENT / INTERNAL fault (a codex hiccup, a writer mistake, a flaky
+  // step) — NOT a structural cause. It is RE-DRIVEN, never terminally stranded at
+  // `needs_attention`; only a GENUINE-TERMINAL fault (a misconfiguration) or the PERSISTENT
+  // same-failure case (the SAME classified failure K consecutive times) escalates. Budget /
+  // window-exhausted / workspace-bootstrap / ancestor-wait are handled by their OWN branches
+  // above. The classify + re-drive/escalate body lives in `plannerRunRedrive.ts` (handed the
+  // run/spec write seams so the file-size cap holds without a circular import).
+  await redriveOrEscalateWorkflowError(error, ctx, {
+    finalizeRunState: ctx.finalizeRunState,
+    finalizeNonPass: (outcome) => finalizeNonPass(ctx.finalizeRunState, ctx.context.runId, outcome),
+    setSpecStatus: (status) => setSpecStatus(ctx.input, ctx.context, status),
+  });
 }
 
 // The spec-run trigger pre-creates a queued 'plan' task + job_queue row for the

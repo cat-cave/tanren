@@ -44,6 +44,20 @@ export const strandSensitivityRules: SensitivityRule[] = [
     ["runnerId", "public"],
     ["runnerReleased", "public"],
   ]),
+  // dag.spec.redriven (apex v35): a random/transient run failure RE-DRIVES the spec
+  // (→ open) instead of stranding it — the never-strand sibling. All fields public-safe:
+  // spec/run ids (run lineage), the CLASSIFIED failure code + stage (closed vocabulary,
+  // never the raw error string), and the consecutive-failure / cap / backoff counters
+  // (no diff content, credentials, or command output).
+  ...rulesFor("dag.spec.redriven", [
+    ["specId", "public"],
+    ["runId", "public"],
+    ["failureCode", "public"],
+    ["stage", "public"],
+    ["consecutiveSameFailure", "public"],
+    ["escalateAtAttempts", "public"],
+    ["backoffSeconds", "public"],
+  ]),
   // dag.spec.attention_resolved: an operator resolved a needs_attention escalation
   // and re-queued the spec. All fields are public — the spec id is run lineage, the
   // `fromSource` is an enum label, and `resolvedBy` is a user id (an actor handle, no

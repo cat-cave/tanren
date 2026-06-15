@@ -16,6 +16,7 @@ import type { PlannerRunContext, RunPlannerLoopInput } from "../src/engine/workf
 import type { EventName, EventPayload } from "../src/engine/events/index.js";
 import { isAllowedSpecTransition } from "../src/engine/state/spec.js";
 import { MissingCredentialError } from "../src/engine/credentials/resolveCredentials.js";
+import { DEFAULT_REDRIVE_ESCALATE_AT, type RedriveHistoryReader } from "../src/engine/workflow/plannerRunRedrive.js";
 
 /** Records the spec-status UPDATEs + the run finalize so we can assert the transition. */
 class RecordingPool {
@@ -49,11 +50,12 @@ interface CapturedEvent {
 }
 
 function ctx(): PlannerRunContext {
-  return { runId: "run_1", specId: "spec_1", projectId: "project_1" } as unknown as PlannerRunContext;
+  // `orgId` is present so the re-drive history reader (when wired) is consulted.
+  return { runId: "run_1", specId: "spec_1", projectId: "project_1", orgId: "org_1" } as unknown as PlannerRunContext;
 }
 
 /** A recording appendEvent + the in-process finalizeRunState the real workflow uses. */
-function harness(pool: RecordingPool) {
+function harness(pool: RecordingPool, redriveHistoryReader?: RedriveHistoryReader) {
   const events: CapturedEvent[] = [];
   const appendEvent = async <N extends EventName>(eventType: N, payload: EventPayload<N>): Promise<void> => {
     events.push({ eventType, payload });
@@ -67,8 +69,34 @@ function harness(pool: RecordingPool) {
   ): Promise<void> => {
     await pool.query(sql, params);
   };
-  const input = { pool: pool.asPgPool() } as unknown as RunPlannerLoopInput;
+  const input = {
+    pool: pool.asPgPool(),
+    ...(redriveHistoryReader !== undefined && { redriveHistoryReader }),
+  } as unknown as RunPlannerLoopInput;
   return { events, appendEvent, finalizeRunState, input };
+}
+
+/** A fixed consecutive-same-failure reader (the count it reports drives re-drive vs escalate). */
+function readerReturning(count: number): RedriveHistoryReader {
+  return async () => count;
+}
+
+/** The `dag.spec.redriven` event the re-drive emitted (asserts an OBSERVABLE retry, not a strand). */
+function redriven(
+  events: CapturedEvent[],
+):
+  | { specId: string; runId: string; failureCode: string; consecutiveSameFailure: number; escalateAtAttempts: number }
+  | undefined {
+  const e = events.find((x) => x.eventType === "dag.spec.redriven");
+  return e === undefined
+    ? undefined
+    : (e.payload as {
+        specId: string;
+        runId: string;
+        failureCode: string;
+        consecutiveSameFailure: number;
+        escalateAtAttempts: number;
+      });
 }
 
 /** The `dag.spec.needs_attention` event the park emitted (asserts it is loud + typed). */
@@ -102,12 +130,13 @@ describe("parkSpecNeedsAttentionForHaltedRun — finding #3 never-strand", () =>
   });
 });
 
-describe("finalizeWorkflowError — an infra failure parks the spec (not just halts the run)", () => {
-  it("a MissingCredentialError halts the run AND parks the spec for requeue", async () => {
+describe("finalizeWorkflowError — a GENUINE-TERMINAL misconfiguration escalates (not just halts the run)", () => {
+  it("a MissingCredentialError (misconfiguration) halts the run AND escalates the spec with a SPECIFIC diagnostic", async () => {
     const pool = new RecordingPool();
     const { events, appendEvent, finalizeRunState, input } = harness(pool);
 
-    // The exact apex v22 infra failure: the run threw MissingCredentialError.
+    // A MissingCredentialError is a STRUCTURAL cause a human must fix (misconfiguration) —
+    // it is NOT random/transient, so it escalates immediately (never re-driven forever).
     await finalizeWorkflowError(new MissingCredentialError("github_token"), {
       finalizeRunState,
       appendEvent,
@@ -116,11 +145,18 @@ describe("finalizeWorkflowError — an infra failure parks the spec (not just ha
       context: ctx(),
     });
 
-    // The RUN finalizes failed (a generic hard error), and crucially the SPEC is
-    // parked at needs_attention — NOT silently stranded at in_flight.
+    // The RUN finalizes failed (a genuine-terminal misconfiguration), and the SPEC is
+    // parked at needs_attention — NOT silently stranded at in_flight, NOT re-driven.
     expect(pool.terminalRunWrite()).toEqual({ status: "failed", outcome: "failed" });
     expect(pool.specStatusWritten()).toBe("needs_attention");
-    expect(needsAttention(events)?.source).toBe("strand");
+    const na = needsAttention(events);
+    expect(na?.source).toBe("strand");
+    // FAIL-LOUD: a SPECIFIC, actionable diagnostic (the classified credential fault) — never a
+    // bare "internal error". It names the credential stage + frames it as a human fix.
+    expect(na?.message).toContain("credential");
+    expect(na?.message).toContain("structural cause a human");
+    // And there is NO re-drive — a misconfiguration is never re-driven.
+    expect(redriven(events)).toBeUndefined();
   });
 
   it("a recoverable usage-limit halt also parks the spec", async () => {
@@ -181,5 +217,86 @@ describe("finalizeWorkflowError — a NON-TERMINAL headless ancestor benign-WAIT
     // `open` maps to the walker's `pending` bucket (a spec it MAY start), so the dependent is
     // genuinely re-driven on a later tick — the never-discard re-drive, no operator poke.
     expect(isAllowedSpecTransition("in_flight", "open")).toBe(true);
+  });
+});
+
+describe("finalizeWorkflowError — a RANDOM / TRANSIENT failure is RE-DRIVEN, never terminally stranded (apex v35)", () => {
+  it("a generic/internal error RE-DRIVES the spec (→ open + dag.spec.redriven), NOT needs_attention", async () => {
+    const pool = new RecordingPool();
+    // First failure of its kind ⇒ the reader returns 1 (under the cap) ⇒ re-drive.
+    const { events, appendEvent, finalizeRunState, input } = harness(pool, readerReturning(1));
+
+    // The exact stranded-on-internal-error bug: a bare unclassified Error (a codex hiccup, a
+    // writer mistake, a flaky step). WITHOUT the fix this lands run `failed` + spec parked
+    // `needs_attention` (a TERMINAL strand). WITH it: the run halts recoverable, the spec
+    // returns to `open`, and the walker re-drives it.
+    await finalizeWorkflowError(new Error("the run failed with an internal error"), {
+      finalizeRunState,
+      appendEvent,
+      workspacePath: "/workspace/runs/run_1",
+      input,
+      context: ctx(),
+    });
+
+    // The run HALTED (recoverable, work not discarded) — NOT `failed`.
+    expect(pool.terminalRunWrite()).toEqual({ status: "halted", outcome: "halted" });
+    // The spec returned to `open` (the walker's re-drive bucket), NOT `needs_attention`.
+    expect(pool.specStatusWritten()).toBe("open");
+    expect(needsAttention(events)).toBeUndefined();
+    // The re-drive was surfaced LOUDLY (an OBSERVABLE retry event, not a silent toleration).
+    const rd = redriven(events);
+    expect(rd?.specId).toBe("spec_1");
+    expect(rd?.failureCode).toBe("internal");
+    expect(rd?.consecutiveSameFailure).toBe(1);
+    expect(rd?.escalateAtAttempts).toBe(DEFAULT_REDRIVE_ESCALATE_AT);
+  });
+
+  it("the SAME internal failure K times in a row ESCALATES once to needs_attention (a stuck spec) — never a hot-loop", async () => {
+    const pool = new RecordingPool();
+    // The reader reports the cap reached: the SAME classified failure K consecutive times.
+    const { events, appendEvent, finalizeRunState, input } = harness(
+      pool,
+      readerReturning(DEFAULT_REDRIVE_ESCALATE_AT),
+    );
+
+    await finalizeWorkflowError(new Error("the run failed with an internal error"), {
+      finalizeRunState,
+      appendEvent,
+      workspacePath: "/workspace/runs/run_1",
+      input,
+      context: ctx(),
+    });
+
+    // At the cap the spec is GENUINELY STUCK (same failure every time) — it escalates as a
+    // human-decision, run `failed`, spec parked — NOT re-driven again (no infinite loop).
+    expect(pool.terminalRunWrite()).toEqual({ status: "failed", outcome: "failed" });
+    expect(pool.specStatusWritten()).toBe("needs_attention");
+    expect(redriven(events)).toBeUndefined();
+    const na = needsAttention(events);
+    expect(na?.source).toBe("strand");
+    // The diagnostic names the REPEATED-failure count + that it is stuck (a bug/mis-spec),
+    // never a bare "internal error".
+    expect(na?.message).toContain(`${DEFAULT_REDRIVE_ESCALATE_AT} times in a row`);
+    expect(na?.message).toContain("genuinely stuck");
+    expect((na as { reason: string }).reason).toBe("persistent_failure");
+    expect((na as { attempts: number }).attempts).toBe(DEFAULT_REDRIVE_ESCALATE_AT);
+  });
+
+  it("without a wired reader (a no-DB unit path) a transient still RE-DRIVES (never a spurious escalation)", async () => {
+    const pool = new RecordingPool();
+    // No reader wired (a no-DB unit path).
+    const { events, appendEvent, finalizeRunState, input } = harness(pool);
+
+    await finalizeWorkflowError(new Error("some flaky internal blip"), {
+      finalizeRunState,
+      appendEvent,
+      workspacePath: "/workspace/runs/run_1",
+      input,
+      context: ctx(),
+    });
+
+    expect(pool.specStatusWritten()).toBe("open");
+    expect(redriven(events)?.consecutiveSameFailure).toBe(1);
+    expect(needsAttention(events)).toBeUndefined();
   });
 });

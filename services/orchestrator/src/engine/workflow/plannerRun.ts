@@ -71,6 +71,7 @@ import {
   runOutcomeFor,
   supersedeQueuedPlannerTask,
 } from "./plannerRunFinalize.js";
+import type { RedriveHistoryReader } from "./plannerRunRedrive.js";
 import type { PublishedDraftPullRequest } from "./githubDraftPr.js";
 import type { PlannerRejectionFeedback } from "./planner/planner.js";
 import {
@@ -236,6 +237,11 @@ export interface RunPlannerLoopInput {
   // dependent BENIGN-WAIT (re-driven) rather than terminally strand. Built by the worker
   // (`buildAncestorPhaseReader`); absent on no-DB unit paths ⇒ the assembly's fail-closed loud default.
   ancestorPhaseReader?: AncestorPhaseReader;
+  // apex v35 ROBUSTNESS: the consecutive-same-failure reader the run-failure boundary uses to decide
+  // RE-DRIVE (a random/transient fault) vs ESCALATE (the SAME classified failure K times — a stuck
+  // spec). Built by the worker (`buildRedriveHistoryReader`); absent on a no-DB unit path ⇒ treat as
+  // the first failure of its kind (re-drive), so a unit run never spuriously escalates.
+  redriveHistoryReader?: RedriveHistoryReader;
   // Max review→rework re-entries before the run halts pending operator action.
   maxReviewReworks?: number;
   // SELF-HEAL (apex v34): max pre_merge-gate→writer self-heal re-entries before a LOUD

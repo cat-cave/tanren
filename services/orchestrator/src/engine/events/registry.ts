@@ -165,6 +165,7 @@ import {
   DagSpecPercolatingPayload,
   DagSpecPercolationDeferredPayload,
   DagSpecPercolationReplanPayload,
+  DagSpecRedrivenPayload,
   DagSpecSpeculationHeldPayload,
   DagSpecSpeculativePayload,
   IntegrationProofReusedPayload,
@@ -420,26 +421,25 @@ export const EventRegistry = {
   "dag.concurrency.saturated": DagConcurrencySaturatedPayload,
   // no_silent_fallbacks (LOUD-DEFAULT): a corrupt project config surfaced — not swallowed.
   "dag.config.corrupt": DagConfigCorruptPayload,
-  // §2c: speculative execution — a dependent started early on a speculative
-  // integration branch, or was held over the depth cap.
+  // §2c: speculative execution — a dependent started early on a speculative branch, or held over the depth cap.
   "dag.spec.speculative": DagSpecSpeculativePayload,
   "dag.spec.speculation_held": DagSpecSpeculationHeldPayload,
-  // §3 NEVER-DISCARD: a dependent benign-WAITS (spec → open) for a non-terminal ancestor that has not published its head yet — never a terminal strand.
+  // §3 NEVER-DISCARD: a dependent benign-WAITS (→ open) for a non-terminal ancestor that has not published its head.
   "dag.spec.ancestor_not_ready": DagSpecAncestorNotReadyPayload,
-  // §2c CHANGE-PERCOLATION: an ancestor changed after a dependent started speculatively
-  // — the delta percolates down the chain (NOT discarded): started/absorbed/deferred/replan.
+  // apex v35: a random/transient run failure RE-DRIVES the spec (→ open), never a terminal strand.
+  "dag.spec.redriven": DagSpecRedrivenPayload,
+  // §2c CHANGE-PERCOLATION: an ancestor changed after a dependent started speculatively — the delta percolates the chain (NOT discarded).
   "dag.spec.percolating": DagSpecPercolatingPayload,
   "dag.spec.percolated": DagSpecPercolatedPayload,
   "dag.spec.percolation_deferred": DagSpecPercolationDeferredPayload,
   "dag.spec.percolation_replan": DagSpecPercolationReplanPayload,
-  // §3/§7 NEVER-DISCARD REBASE: the BaseShiftCoordinator rebased the dependent's
-  // EXISTING branch in place (same run row). Records the categorical `decision` +
-  // kept `runId`; the `rebase_vs_rebuild` read-side joins cost at read time.
+  // §3/§7 NEVER-DISCARD REBASE: the BaseShiftCoordinator rebased the dependent's EXISTING branch in
+  // place (same run row). Records the categorical `decision` + kept `runId`; the `rebase_vs_rebuild`
+  // read-side joins cost at read time.
   "integration.rebase": IntegrationRebasePayload,
-  // §3 PROOF REUSE: the gate/CI verdict site found a recorded PASSING proof whose
-  // six-component `proofReuseKey` matched the live inputs EXACTLY, so it SKIPPED the
-  // re-gate and reused the verdict — emitted ONLY on an exact match against a passing
-  // proof (any drift / non-pass / unknown key recomputes).
+  // §3 PROOF REUSE: the gate/CI verdict site found a recorded PASSING proof whose six-component
+  // `proofReuseKey` matched the live inputs EXACTLY, so it SKIPPED the re-gate and reused the verdict
+  // — emitted ONLY on an exact match against a passing proof (any drift / non-pass / unknown recomputes).
   "integration.proof.reused": IntegrationProofReusedPayload,
   // A spec parked at the terminal needs_attention status (the DAG frees its slot +
   // blocks only its dependents, asking a human loudly). Reached by the native merge
