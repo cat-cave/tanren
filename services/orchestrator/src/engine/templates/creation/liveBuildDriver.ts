@@ -32,6 +32,7 @@ import type { CiConfigV1 } from "../../ci/index.js";
 import type { Allocator, RunnerHandle } from "../../contracts/allocator.js";
 import type { CommandSubstrate } from "../../contracts/commandSubstrate.js";
 import type { DagSnapshot, DagWalker } from "../../contracts/dagWalker.js";
+import { isConverged, isDeadlocked, tallyBuildProgress } from "../../contracts/specProgress.js";
 import { resolveBootstrapCommand, resolveGateConfig } from "../../workflow/gate/index.js";
 import { bootstrapWorkspace, runWorkspaceSshCommand, workspaceRepoPathForRun } from "../../workspace/index.js";
 import { quoteSshShellArg } from "../../ssh/command.js";
@@ -126,27 +127,45 @@ export function buildRunLoopBuildDriver(deps: RunLoopBuildDriverDeps): TemplateB
 // Poll the project's DAG until it CONVERGES — every spec `done` (merged) and at
 // least one spec exists. A spec in `terminal_blocked` (halted / cancelled /
 // needs_attention) does NOT, on its own, strand the build: as long as OTHER specs
-// are still making forward progress (pending or in_flight — they can still merge,
-// e.g. the scaffold a dependent is blocked behind), we keep polling and let the DAG
-// converge AS FAR AS IT CAN. We declare the build STRANDED only when there is NO
-// forward progress possible — a GENUINE deadlock: every remaining (non-`done`) spec
-// is `terminal_blocked`. We fail LOUD then rather than validate a partial template.
+// are still making forward progress (a `pending` spec that can still run, or an
+// `in_flight` one — they can still merge, e.g. the scaffold a dependent is blocked
+// behind), we keep polling and let the DAG converge AS FAR AS IT CAN. We declare the
+// build STRANDED only when there is NO forward progress possible — a GENUINE
+// deadlock. We fail LOUD then rather than validate a partial template.
+//
+// FORWARD-PROGRESS is the SHARED classification (engine/contracts/specProgress.ts —
+// `tallyBuildProgress`), the SAME vocabulary the orphan-slot reconciler uses, so the
+// driver's deadlock detection and the reconciler's strand decision can never
+// disagree. A spec is `progressing` iff it is in-flight OR runnable-pending; it is
+// NOT progressing when it is terminal OR TRANSITIVELY BLOCKED (apex v35 Bug 2): a
+// `pending` spec whose ancestor (directly or through a chain of pending ancestors)
+// is terminal can NEVER run, so counting it as progressing would HANG the build
+// forever. When the remaining specs are exactly {terminal ∪ transitively-blocked},
+// `progressing === 0` and the build HALTS LOUD — surfacing the GENUINE terminal
+// (needs_attention) spec(s) as the human-decision blockers, never a silent hang.
 //
 // There is NO whole-build wall-clock deadline. As long as ANY spec is still
-// `pending`/`in_flight` (forward progress is possible) we keep polling INDEFINITELY —
-// a build can legitimately be many specs over a long time (the codex writer alone
-// takes minutes per call), and artificially killing a build that is still authoring
-// /merging specs is wrong. The ONLY legitimate timeouts are PER-SPEC (the ssh / codex
-// / gate timeouts inside an individual spec run); a hung spec times out, fails into
-// `terminal_blocked`, and that failure then feeds the genuine-deadlock detection here.
-// The walker is kicked each poll (idempotent) so the build does not depend solely on
-// the ambient subscriber being up.
+// progressing (forward progress is possible — including a JUST-RE-DRIVEN spec, which
+// is in-flight or runnable-pending) we keep polling INDEFINITELY — a build can
+// legitimately be many specs over a long time (the codex writer alone takes minutes
+// per call), and artificially killing a build that is still authoring/merging specs
+// is wrong. The ONLY legitimate timeouts are PER-SPEC (the ssh / codex / gate
+// timeouts inside an individual spec run); a hung spec times out, fails into
+// `terminal_blocked`, and that failure then feeds the genuine-deadlock detection
+// here (its transitively-blocked dependents stop counting as progressing). The
+// walker is kicked each poll (idempotent) so the build does not depend solely on the
+// ambient subscriber being up.
 //
 // Why the deadlock rule matters (apex live finding): a dependent spec stranded fast
 // (blocked on an unmerged dependency); the old code threw STRANDED on the first
 // `terminal_blocked` spec and gave up WHILE the scaffold spec was still `in_flight`
 // and mergeable — so nothing ever merged. Waiting for the in-progress merges lets
-// the scaffold land before we judge the blocked strand a deadlock.
+// the scaffold land before we judge the blocked strand a deadlock. The DUAL bug
+// (apex v35): the old `total - done - blocked` count miscounted a terminal spec's
+// transitively-blocked dependents as progressing, so a build whose only remaining
+// specs were a `needs_attention` spec + its dependents NEVER halted — it HUNG. The
+// shared tally fixes both: it neither gives up too early (in-flight specs still
+// count) nor hangs (transitively-blocked specs do not).
 async function driveToConvergence(
   deps: RunLoopBuildDriverDeps,
   projectId: string,
@@ -157,34 +176,43 @@ async function driveToConvergence(
     await deps.walker.walk(projectId);
     const snapshot = await deps.loadSnapshot(projectId);
 
-    const total = snapshot.nodes.length;
-    const done = snapshot.nodes.filter((n) => n.phase === "done").length;
+    const tally = tallyBuildProgress(snapshot);
     // CONVERGED — every spec merged.
-    if (total > 0 && done === total) {
+    if (isConverged(tally)) {
       return;
     }
 
-    const blocked = snapshot.nodes.filter((n) => n.phase === "terminal_blocked");
-    // FORWARD PROGRESS is possible iff some non-`done`, non-`terminal_blocked` spec
-    // remains (a `pending` or `in_flight` spec that can still merge). A
-    // `terminal_blocked` strand only deadlocks the build when NO such spec is left.
-    const progressing = total - done - blocked.length;
-    if (blocked.length > 0 && progressing === 0) {
-      // GENUINE deadlock: every remaining spec is terminally blocked — nothing can
-      // advance, so waiting cannot help. Fail LOUD with the blocked specs.
-      throw new TemplateBuildFailedError(
-        projectId,
-        `template build STRANDED — ${String(blocked.length)} spec(s) terminally blocked (halted/cancelled/needs_attention) and no remaining spec can make forward progress: ${blocked
-          .map((n) => n.specId)
-          .join(", ")}`,
-      );
+    if (isDeadlocked(tally)) {
+      // GENUINE deadlock: NO spec can ever make forward progress (zero in-flight,
+      // zero runnable-pending) yet the build has not converged — the remaining specs
+      // are {terminally blocked} ∪ {pending specs a terminal ancestor blocks
+      // transitively}. Waiting cannot help. Fail LOUD, naming BOTH the genuine
+      // terminal blockers (the human-decision specs) AND the dependents they stranded
+      // — never a silent hang, never a partial-template validate.
+      throw new TemplateBuildFailedError(projectId, deadlockMessage(tally));
     }
 
-    // Otherwise some spec is still pending/in_flight — forward progress is still
-    // possible. Keep polling INDEFINITELY (this is a poll cadence, NOT a deadline);
-    // a build can legitimately run many specs over a long time.
+    // Otherwise some spec is still progressing (in-flight or runnable-pending) —
+    // forward progress is still possible. Keep polling INDEFINITELY (this is a poll
+    // cadence, NOT a deadline); a build can legitimately run many specs over a long
+    // time, and a just-re-driven spec is progressing.
     await sleep(deps.convergence.pollIntervalMs);
   }
+}
+
+// The LOUD deadlock diagnostic: names the GENUINE structural blockers (the terminal
+// / needs_attention specs a human must decide on) FIRST, then the dependents they
+// transitively stranded, so the failure surfaces exactly which specs + why.
+function deadlockMessage(tally: ReturnType<typeof tallyBuildProgress>): string {
+  const terminal =
+    tally.terminalSpecIds.length > 0
+      ? `${String(tally.terminalSpecIds.length)} terminally-blocked (halted/cancelled/needs_attention): ${tally.terminalSpecIds.join(", ")}`
+      : "no terminal specs";
+  const dependents =
+    tally.transitivelyBlockedSpecIds.length > 0
+      ? `; ${String(tally.transitivelyBlockedSpecIds.length)} dependent(s) it transitively blocked: ${tally.transitivelyBlockedSpecIds.join(", ")}`
+      : "";
+  return `template build STRANDED — no remaining spec can make forward progress (${String(tally.done)}/${String(tally.total)} merged). The human-decision blockers are ${terminal}${dependents}. Resolve the blocked spec(s) and requeue.`;
 }
 
 // Allocate a runner, clone the conforming repo at the converged sha, bootstrap it,
