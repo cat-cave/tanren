@@ -37,6 +37,32 @@ function logFinalizeSwallow(op: string, ids: { runId: string; specId?: string },
   );
 }
 
+// RE-DRIVE ↔ ORPHAN-RECONCILER ATOMICITY (apex v35 Bug 1). The worker-level
+// force-halt is the §2c safety net for a GENUINELY orphaned slot: a run that died
+// (a crash bypassing the workflow's own spec-aware finalize) leaving its spec
+// `in_flight` with NO live run. But it MUST NOT fire in the RACE WINDOW of a
+// re-drive (#579): the workflow re-drive RELEASES the failed run and ENQUEUES a
+// successor run (`run.queued` + `dag.spec.enqueued`), and for a brief window the
+// spec occupies a slot while its successor run is still `queued`/`running` (not yet
+// "live"). A re-driven spec with a fresh successor run is TRANSITIONING, not
+// orphaned — stranding it `no_live_run` is the false positive that bricked the live
+// build. So before stranding we check for a SUCCESSOR run: a run for THIS spec,
+// distinct from the failing one, still in a startup/live state (`queued`/`running`).
+// A successor present ⇒ recognize the queued/enqueued startup state as VALID
+// occupancy and SKIP the strand (logged observably). A successor ABSENT ⇒ the slot
+// is GENUINELY orphaned (a dead run with no queued successor) and we still strand —
+// the safety net is preserved, only the false positive removed.
+const SUCCESSOR_RUN_SQL =
+  "SELECT 1 FROM runs WHERE spec_id = $1 AND run_id <> $2 AND status IN ('queued', 'running') LIMIT 1";
+
+/** Log that a spec's strand was SKIPPED because a successor run is transitioning it (re-drive). */
+function logStrandSkippedForSuccessor(runId: string, specId: string): void {
+  log.info("orphan-strand SKIPPED — spec has a fresh successor run (re-drive in flight, not orphaned)", {
+    runId,
+    specId,
+  });
+}
+
 /**
  * Force a run that a failed workflow left in a non-recoverable terminal state
  * (`failed`) or still `running` (crash) into a recoverable `halted` outcome so
@@ -183,20 +209,36 @@ async function parkStrandedSpecRemote(
   runId: string,
   message: string,
 ): Promise<void> {
-  // Read the current status FIRST: only an occupying spec (in_flight/review) is a
-  // genuine strand. A spec already parked/merged/open means another finalize handled
-  // it — flip nothing, emit nothing (no double-escalate). FAIL-CLOSED on a read
-  // FAILURE: rather than silently returning false (which would leave a genuinely
-  // stranded spec not parked + invisible), log loudly and ATTEMPT the guarded park —
-  // `setSpecStatus`'s `notFromStatuses` guard makes it a safe no-op on a non-strand.
-  const occupying = await runWithOrgScope(pool, orgId, async (client) => {
-    const result = await client.query<{ status: string }>("SELECT status FROM specs WHERE spec_id = $1", [specId]);
-    return result.rows[0]?.status === "in_flight" || result.rows[0]?.status === "review";
+  // Read the spec status + check for a SUCCESSOR run in ONE org-scoped read:
+  //  - `occupying`: only an `in_flight`/`review` spec is a candidate strand. A spec
+  //    already parked/merged/open means another finalize handled it — skip.
+  //  - `hasSuccessor` (apex v35 Bug 1): a re-drive (#579) RELEASES the failed run and
+  //    ENQUEUES a successor run, briefly leaving the spec occupying a slot while the
+  //    successor is still `queued`/`running`. Such a spec is TRANSITIONING, not
+  //    orphaned — DO NOT strand it. Only a slot with NO live successor is genuinely
+  //    orphaned (the safety net's true target).
+  // FAIL-CLOSED on a read FAILURE toward stranding the occupying spec (a genuinely
+  // stranded spec must never vanish), but treat an unreadable successor as ABSENT so
+  // the genuine-orphan strand still fires; `setSpecStatus`'s `notFromStatuses` guard
+  // keeps the park a safe no-op if the spec is not actually a strand.
+  const slot = await runWithOrgScope(pool, orgId, async (client) => {
+    const specStatus = await client.query<{ status: string }>("SELECT status FROM specs WHERE spec_id = $1", [specId]);
+    const occupying = specStatus.rows[0]?.status === "in_flight" || specStatus.rows[0]?.status === "review";
+    const successor = await client.query(SUCCESSOR_RUN_SQL, [specId, runId]);
+    return { occupying, hasSuccessor: (successor.rowCount ?? 0) > 0 };
   }).catch((error: unknown) => {
-    logFinalizeSwallow("occupancy read (remote, fail-closed → attempting guarded park)", { runId, specId }, error);
-    return true;
+    logFinalizeSwallow(
+      "occupancy/successor read (remote, fail-closed → attempting guarded park)",
+      { runId, specId },
+      error,
+    );
+    return { occupying: true, hasSuccessor: false };
   });
-  if (!occupying) return;
+  if (!slot.occupying) return;
+  if (slot.hasSuccessor) {
+    logStrandSkippedForSuccessor(runId, specId);
+    return;
+  }
   await writer.setSpecStatus({
     specId,
     orgId,
@@ -224,13 +266,22 @@ async function parkStrandedSpecRemote(
  * makes it a no-op when the spec is already terminal — idempotent with the workflow's
  * earlier park. The event append joins the in-scope transaction (org-scoped client).
  */
-async function parkStrandedSpecInProcess(
+export async function parkStrandedSpecInProcess(
   client: pg.PoolClient,
   specId: string,
   projectId: string,
   runId: string,
   message: string,
 ): Promise<void> {
+  // RE-DRIVE ↔ ORPHAN ATOMICITY (apex v35 Bug 1): if a SUCCESSOR run is already
+  // queued/running for this spec, the spec is TRANSITIONING (a re-drive enqueued a
+  // new run), NOT orphaned — skip the strand entirely (the successor's own finalize
+  // governs it). Only a slot with NO live successor is genuinely orphaned.
+  const successor = await client.query(SUCCESSOR_RUN_SQL, [specId, runId]);
+  if ((successor.rowCount ?? 0) > 0) {
+    logStrandSkippedForSuccessor(runId, specId);
+    return;
+  }
   // Park ONLY an occupying spec (`in_flight`/`review`) — a guarded flip that RETURNS
   // the row only when it moved. A spec already parked/merged/open matches zero rows,
   // so the event is NOT emitted (idempotent with the workflow's own park — no

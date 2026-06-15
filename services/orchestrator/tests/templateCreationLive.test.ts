@@ -4,8 +4,7 @@
 //      grounding flows through; an ungrounded result fails LOUD.
 //   2. LIVE BUILD-DRIVER (`buildRunLoopBuildDriver`): the wiring SHAPE (walk → poll
 //      convergence → resolve → allocate → clone → bootstrap → handle) + the
-//      convergence policy — converge as far as possible; strand ONLY on a GENUINE
-//      deadlock. There is NO whole-build wall-clock deadline (polls indefinitely).
+//      convergence policy — NO whole-build wall-clock deadline (polls indefinitely).
 //   3. LIVE AUDITOR (`buildTemplateAuditor`): counts `fail`-severity findings.
 //   4. SELECTION no-match → CREATION (`selectTemplate` + `createForNoMatch`): no
 //      validated template → creation runs → SEED from the freshly-created one.
@@ -277,6 +276,7 @@ describe("LIVE build-driver — wiring shape + convergence policy", () => {
     expect(walker.walked.length).toBe(pollsBeforeConverge);
     expect(built.builtSha).toBe("a".repeat(40));
   });
+  // Bug 2 (HALT-not-HANG deadlock) → liveBuildDriverDeadlock.test.ts.
 });
 
 // ── LIVE auditor — counts blocking findings ─────────────────────────────────
