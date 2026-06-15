@@ -47,9 +47,18 @@ export class BaseShiftStackAssemblyConflictError extends Error {
   }
 }
 
-/** Map the re-resolved ancestor stack to the ordered jj-local integration members. */
+/**
+ * Map the re-resolved ancestor stack to the ordered jj-local integration members. The
+ * ancestor's `headSha` rides through as `knownHeadSha` so the assembly can PROVE a
+ * merged-and-deleted ancestor (its commit now in the base) and drop it rather than crash on
+ * the vanished branch (the never-discard mid-flight-merge race, §3).
+ */
 function membersForStack(stack: AncestorStack): JjIntegrationMember[] {
-  return stack.map((ancestor) => ({ specId: ancestor.specId, branch: ancestor.branch }));
+  return stack.map((ancestor) => ({
+    specId: ancestor.specId,
+    branch: ancestor.branch,
+    ...(ancestor.headSha !== "" && { knownHeadSha: ancestor.headSha }),
+  }));
 }
 
 /**

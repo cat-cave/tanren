@@ -104,9 +104,19 @@ export type BootstrapDependentBaseResult =
   | BootstrapDependentBaseSuccess
   | Extract<JjLocalIntegrationResult, { outcome: "conflict" }>;
 
-/** Map an ordered ancestor stack to the ordered jj-local integration members. */
+/**
+ * Map an ordered ancestor stack to the ordered jj-local integration members. The ancestor's
+ * `headSha` (`ancestor_stack[].headSha`) rides through as `knownHeadSha` so the assembly can
+ * PROVE a merged-and-deleted ancestor (its commit now in the base) and drop it rather than
+ * crash on the vanished branch (the never-discard mid-flight-merge race, §3) — an empty
+ * placeholder sha simply makes a genuinely-missing branch stay a loud failure.
+ */
 function membersForStack(stack: AncestorStack): JjIntegrationMember[] {
-  return stack.map((ancestor) => ({ specId: ancestor.specId, branch: ancestor.branch }));
+  return stack.map((ancestor) => ({
+    specId: ancestor.specId,
+    branch: ancestor.branch,
+    ...(ancestor.headSha !== "" && { knownHeadSha: ancestor.headSha }),
+  }));
 }
 
 /**
