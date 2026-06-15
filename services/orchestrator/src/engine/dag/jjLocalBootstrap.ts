@@ -41,11 +41,21 @@
 import type { AncestorStack } from "./ancestorStack.js";
 import { buildLiveJjWorkspace, type LiveJjWorkspace, type LiveJjWorkspaceDeps } from "../providers/liveJjWorkspace.js";
 import {
+  type AncestorSpecPhase,
   type JjIntegrationMember,
   type JjLocalIntegrationInput,
   type JjLocalIntegrationResult,
   integrateOverWorkspace,
 } from "./jjLocalIntegration.js";
+
+/**
+ * The ancestor SPEC lifecycle bucket per ancestor spec id, captured at bootstrap time (the
+ * caller reads it from `specs.status` via `classifySpecStatus`). Threaded into the assembly
+ * so the "ancestor branch gone, not merged" case can distinguish a BENIGN race (the ancestor
+ * spec is still `pending`/`in_flight` and WILL publish a head) from a LOUD fault (a TERMINAL
+ * ancestor that never will). A spec ABSENT from the map ⇒ the fail-closed default (loud).
+ */
+export type AncestorPhaseBySpecId = ReadonlyMap<string, AncestorSpecPhase>;
 
 /** The local bookmark name the dependent's prospective base materializes as (NEVER pushed). */
 export function bootstrapLocalIntegrationRef(runBranch: string): string {
@@ -110,13 +120,22 @@ export type BootstrapDependentBaseResult =
  * PROVE a merged-and-deleted ancestor (its commit now in the base) and drop it rather than
  * crash on the vanished branch (the never-discard mid-flight-merge race, §3) — an empty
  * placeholder sha simply makes a genuinely-missing branch stay a loud failure.
+ *
+ * The ancestor's SPEC lifecycle bucket (from `phaseBySpecId`) rides through as `ancestorPhase`
+ * so the "branch gone, not merged" case can benign-WAIT (re-driven) when the ancestor spec is
+ * still non-terminal, instead of TERMINALLY stranding the dependent. A spec ABSENT from the
+ * map ⇒ no `ancestorPhase` ⇒ the assembly's fail-closed default (the loud throw).
  */
-function membersForStack(stack: AncestorStack): JjIntegrationMember[] {
-  return stack.map((ancestor) => ({
-    specId: ancestor.specId,
-    branch: ancestor.branch,
-    ...(ancestor.headSha !== "" && { knownHeadSha: ancestor.headSha }),
-  }));
+function membersForStack(stack: AncestorStack, phaseBySpecId: AncestorPhaseBySpecId): JjIntegrationMember[] {
+  return stack.map((ancestor) => {
+    const phase = phaseBySpecId.get(ancestor.specId);
+    return {
+      specId: ancestor.specId,
+      branch: ancestor.branch,
+      ...(ancestor.headSha !== "" && { knownHeadSha: ancestor.headSha }),
+      ...(phase !== undefined && { ancestorPhase: phase }),
+    };
+  });
 }
 
 /**
@@ -152,13 +171,14 @@ export async function bootstrapDependentBase(
   stack: AncestorStack,
   workspaceDeps: LiveJjWorkspaceDeps,
   input: BootstrapDependentBaseInput,
+  phaseBySpecId: AncestorPhaseBySpecId,
   buildWorkspace: BuildBootstrapWorkspacePort = buildLiveJjWorkspace,
 ): Promise<BootstrapDependentBaseResult> {
   const localRef = bootstrapLocalIntegrationRef(input.runBranch);
   const integrationInput: JjLocalIntegrationInput = {
     baseBranch: input.baseBranch,
     repoUrl: input.repoUrl,
-    members: membersForStack(stack),
+    members: membersForStack(stack, phaseBySpecId),
     localRef,
     timeoutMs: input.timeoutMs,
   };

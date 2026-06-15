@@ -17,6 +17,7 @@ import { AllocatorReleaseFinalizer } from "../contracts/releaseFinalizer.js";
 import { CodexUsageLimitError } from "../providers/codex.js";
 import type { EventName, EventPayload } from "../events/index.js";
 import { removeRunWorkspaceDir, WorkspaceBootstrapError } from "../workspace/index.js";
+import { AncestorNotReadyError } from "../dag/jjLocalIntegration.js";
 import type { PlannerRejectionFeedback } from "./planner/planner.js";
 import type { PreparedRunWorkspace } from "./plannerRunWorkspace.js";
 import type { MergeForRunResult } from "./reviewMerge/index.js";
@@ -146,10 +147,9 @@ export async function finalizeNonPass(
  * silently stranding the spec — the autonomy loop survives a run failure without a
  * human DB poke.
  *
- * The spec-status flip goes through the SAME `setSpecStatus` seam (control-plane when
- * wired, else in-process org-scoped). The `dag.spec.needs_attention` event reuses the
- * `strand` source (one parked-state vocabulary the operator `requeue` reads) with
- * reason `halted_reexec`.
+ * The spec-status flip goes through the SAME `setSpecStatus` seam (control-plane when wired,
+ * else in-process org-scoped). The `dag.spec.needs_attention` event reuses the `strand` source
+ * (one parked-state vocabulary the operator `requeue` reads) with reason `halted_reexec`.
  */
 export async function parkSpecNeedsAttentionForHaltedRun(
   input: RunPlannerLoopInput,
@@ -317,10 +317,9 @@ export interface WorkflowErrorContext {
   finalizeRunState: FinalizeRunState;
   appendEvent: <N extends EventName>(eventType: N, payload: EventPayload<N>, taskId?: string) => Promise<void>;
   workspacePath: string;
-  // NEVER-STRAND (finding #3): the loop input + run context (`context.runId` is the run
-  // id) so a thrown-error finalize can park the SPEC at `needs_attention` (not just the
-  // run at halted/failed) — an infra failure (e.g. MissingCredentialError) frees the DAG
-  // slot + becomes operator-requeueable instead of stranding at `in_flight` forever.
+  // NEVER-STRAND (finding #3): the loop input + run context so a thrown-error finalize can park
+  // the SPEC at `needs_attention` (not just the run) — an infra failure frees the DAG slot +
+  // becomes operator-requeueable instead of stranding at `in_flight` forever.
   input: RunPlannerLoopInput;
   context: PlannerRunContext;
 }
@@ -330,10 +329,10 @@ export interface WorkflowErrorContext {
  * workspace-PREP `just bootstrap` (deps install) failed and was DEFERRED to the gate's
  * self-healing path (rather than terminally stranding the spec — see
  * `PreparedRunWorkspace.prepBootstrapDeferred` + `prepareRunWorkspace`). A no-op when the
- * prep bootstrap succeeded (or was a no-op). The mise PROVISION step is NOT writer-fixable
- * and already threw terminally inside `prepareRunWorkspace` (→ `finalizeWorkflowError`) — it
- * never produces this signal. The command is prelude-free + the output tail bounded
- * (substrate boundary), so no app-secret value reaches the payload.
+ * prep bootstrap succeeded (or was a no-op). The mise PROVISION step is NOT writer-fixable and
+ * already threw terminally inside `prepareRunWorkspace` (→ `finalizeWorkflowError`) — it never
+ * produces this signal. The command is prelude-free + the output tail bounded, so no app-secret
+ * value reaches the payload.
  */
 export async function emitPrepBootstrapDeferred(
   appendEvent: <N extends EventName>(eventType: N, payload: EventPayload<N>, taskId?: string) => Promise<void>,
@@ -362,6 +361,24 @@ export async function emitPrepBootstrapDeferred(
  * non-occupying, operator-requeueable state — never `in_flight` with a dead run.
  */
 export async function finalizeWorkflowError(error: unknown, ctx: WorkflowErrorContext): Promise<void> {
+  if (error instanceof AncestorNotReadyError) {
+    // NEVER-STRAND, BENIGN WAIT (tanren-owns-the-engine.md §3): the dependent reached its
+    // base-shift assembly but a NON-TERMINAL ancestor had not published its head yet — it WILL
+    // (the dependent ran ahead of it). NOT a fault: finalize the run a recoverable HALT + return
+    // the SPEC to `open` so the walker RE-DRIVES it once the ancestor is ready (the never-discard
+    // re-drive a base shift gets), NOT a terminal `needs_attention` strand. The error only raises
+    // for `pending`/`in_flight` — the phase is the proof the wait is benign.
+    const ancestorPhase = error.phase === "in_flight" ? "in_flight" : "pending";
+    await finalizeNonPass(ctx.finalizeRunState, ctx.context.runId, "halted");
+    await setSpecStatus(ctx.input, ctx.context, "open");
+    await ctx.appendEvent("dag.spec.ancestor_not_ready", {
+      specId: ctx.context.specId,
+      runId: ctx.context.runId,
+      ancestorSpecId: error.specId,
+      ancestorPhase,
+    });
+    return;
+  }
   if (error instanceof WorkspaceBootstrapError) {
     // Dependency install failed: the workspace can't build/test, so the run can't
     // be gated. Surface it as a halting, recoverable outcome (lands on the

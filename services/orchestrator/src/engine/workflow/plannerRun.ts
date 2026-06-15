@@ -50,7 +50,11 @@ import {
 } from "./plannerRunAdapters.js";
 import { prepareRunWorkspace, type BootstrapStepInput, type CommitBootstrapStepInput } from "./plannerRunWorkspace.js";
 import type { ProvisionMiseToolchainInput } from "../workspace/bootstrap.js";
-import type { BootstrapStackHeadShaWriteBack, EagerBaseNodeUpsert } from "./plannerRunJjLocalBootstrap.js";
+import type {
+  AncestorPhaseReader,
+  BootstrapStackHeadShaWriteBack,
+  EagerBaseNodeUpsert,
+} from "./plannerRunJjLocalBootstrap.js";
 import {
   applyReviewVerdict,
   applyScopedRunCredentials,
@@ -227,6 +231,11 @@ export interface RunPlannerLoopInput {
   eagerBaseNodeUpsert?: EagerBaseNodeUpsert;
   /** WS-A PR-8c (§2.3): bootstrap → `runs.ancestor_stack[].headSha` write-back (percolation's divergence key); see plannerRunJjLocalBootstrap. */
   bootstrapStackHeadShaWriteBack?: BootstrapStackHeadShaWriteBack;
+  // §3 NEVER-DISCARD (apex v35): reads the ancestor specs' lifecycle buckets at the dependent
+  // bootstrap so a missing-but-not-merged ancestor whose SPEC is still non-terminal makes the
+  // dependent BENIGN-WAIT (re-driven) rather than terminally strand. Built by the worker
+  // (`buildAncestorPhaseReader`); absent on no-DB unit paths ⇒ the assembly's fail-closed loud default.
+  ancestorPhaseReader?: AncestorPhaseReader;
   // Max review→rework re-entries before the run halts pending operator action.
   maxReviewReworks?: number;
   // SELF-HEAL (apex v34): max pre_merge-gate→writer self-heal re-entries before a LOUD

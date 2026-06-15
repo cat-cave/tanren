@@ -32,6 +32,7 @@ import { CostRecorder } from "../costs/recorder.js";
 import type { GitHubHttpClient } from "../providers/github.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
 import {
+  buildAncestorPhaseReader,
   buildBootstrapStackHeadShaWriteBack,
   buildEagerBaseNodeUpsert,
   buildNativeQueueEnqueuer,
@@ -341,6 +342,10 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
         // this routes the UPDATE through the control plane (else the in-process UPDATE on the
         // worker pool — byte-identical). It never gates the run.
         bootstrapStackHeadShaWriteBack: buildBootstrapStackHeadShaWriteBack(deps.pool, remoteWriter),
+        // §3 NEVER-DISCARD (apex v35): reads the ancestor specs' lifecycle buckets so a
+        // dependent whose ancestor is non-terminal but headless BENIGN-WAITS (re-driven)
+        // instead of terminally stranding. Org-scoped read over the worker's real pool.
+        ancestorPhaseReader: buildAncestorPhaseReader(deps.pool),
       }),
     );
     await deps.jobQueue.complete(job.id);

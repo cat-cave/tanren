@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "ancestorPhase": {
+      "enum": [
+        "pending",
+        "in_flight"
+      ],
+      "type": "string"
+    },
+    "ancestorSpecId": {
+      "type": "string"
+    },
+    "runId": {
+      "type": "string"
+    },
+    "specId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "specId",
+    "runId",
+    "ancestorSpecId",
+    "ancestorPhase"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.dag.spec.ancestor_not_ready"
+}

@@ -32,6 +32,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { AncestorStack } from "../../src/engine/dag/ancestorStack.js";
 import {
+  type AncestorPhaseBySpecId,
   bootstrapDependentBase,
   bootstrapLocalIntegrationRef,
   type BootstrapDependentBaseInput,
@@ -122,6 +123,13 @@ function bootstrapInput(originPath: string, runBranch: string): BootstrapDepende
   return { repoUrl: originPath, baseBranch: "main", runBranch, timeoutMs: 60_000 };
 }
 
+/**
+ * No ancestor phases — these fixtures keep every ancestor branch LIVE, so the
+ * branch-gone-but-not-merged classification (the only place `ancestorPhase` is read) never
+ * triggers. An empty map is the fail-closed default everywhere it would matter.
+ */
+const NO_PHASES: AncestorPhaseBySpecId = new Map();
+
 /** A workspace builder port that hands back a pre-built local jj workspace (no allocation). */
 function localBuilder(live: LiveJjWorkspace): (deps: LiveJjWorkspaceDeps) => Promise<LiveJjWorkspace> {
   return async () => live;
@@ -154,6 +162,7 @@ describe("jj-local bootstrap assembly (real jj) — ancestor-stack assembly conf
       stack,
       localDeps(),
       bootstrapInput(originPath, "dep-run"),
+      NO_PHASES,
       localBuilder(live),
     );
 
@@ -194,6 +203,7 @@ describe("jj-local bootstrap assembly (real jj) — ancestor-stack assembly conf
       stack,
       localDeps(),
       bootstrapInput(originPath, "dep-run"),
+      NO_PHASES,
       localBuilder(live),
     );
     expect(result.outcome).toBe("bootstrapped");
@@ -238,6 +248,7 @@ describe("jj-local bootstrap assembly (real jj) — ancestor-stack assembly conf
       stack,
       localDeps(),
       bootstrapInput(originPath, "dep-run"),
+      NO_PHASES,
       localBuilder(live),
     );
 
@@ -260,6 +271,7 @@ describe("jj-local bootstrap assembly (real jj) — ancestor-stack assembly conf
       stack,
       localDeps(),
       bootstrapInput(originPath, "dep-run"),
+      NO_PHASES,
       localBuilder(live),
     );
     expect(result.outcome).toBe("bootstrapped");

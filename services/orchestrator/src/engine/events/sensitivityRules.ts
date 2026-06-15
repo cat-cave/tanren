@@ -334,8 +334,7 @@ export const sensitivityRules: SensitivityRule[] = [
     ["steps[].outputTail", "secret"],
   ]),
 
-  // DagWalker (autonomy-engine.md §1a) scheduling events. Every field is a spec/run
-  // id or a non-sensitive count (in-flight / ceiling / breakdown) — all public.
+  // DagWalker (autonomy-engine.md §1a) scheduling events — spec/run ids + non-sensitive counts, public.
   ...rulesFor("dag.spec.enqueued", [
     ["specId", "public"],
     ["runId", "public"],
@@ -355,8 +354,7 @@ export const sensitivityRules: SensitivityRule[] = [
     ["readyHeldBack", "public"],
     ["reason", "public"],
   ]),
-  // The budget FRACTION milestone (50% / 80%): the band + the ceiling/spend figures +
-  // the period. All non-secret (dollar figures + a band label), exactly like the pause.
+  // The budget FRACTION milestone (50% / 80%): band + ceiling/spend figures + period, all public.
   ...rulesFor("dag.budget.milestone", [
     ["band", "public"],
     ["ceilingUsd", "public"],
@@ -368,16 +366,14 @@ export const sensitivityRules: SensitivityRule[] = [
     ["inFlightCount", "public"],
     ["concurrencyCeiling", "public"],
   ]),
-  // (no_silent_fallbacks) the corrupt-config surface — the knob label, the applied
-  // safe default, and the parse-error reason. None carry secrets/credentials/diffs.
+  // (no_silent_fallbacks) the corrupt-config surface — knob label + applied default + reason, public.
   ...rulesFor("dag.config.corrupt", [
     ["knob", "public"],
     ["appliedDefault.threshold", "public"],
     ["appliedDefault.depthCap", "public"],
     ["reason", "public"],
   ]),
-  // (§2c) speculative-execution events — spec/run ids, ancestor ids, the
-  // threshold label, the integration branch ref, and non-sensitive counts.
+  // (§2c) speculative-execution events — spec/run/ancestor ids + threshold label + counts, public.
   ...rulesFor("dag.spec.speculative", [
     ["specId", "public"],
     ["runId", "public"],
@@ -390,10 +386,15 @@ export const sensitivityRules: SensitivityRule[] = [
     ["depth", "public"],
     ["depthCap", "public"],
   ]),
-  // (§2c) change-percolation events — spec/run/ancestor ids, ancestor head
-  // SHAs (public: a commit hash is not a secret), the severity label, the resolver
-  // flag, and the irreconcilable diagnosis reason. None carry diff content,
-  // credentials, or command output.
+  // (§3) benign-wait for a not-yet-ready ancestor — spec/run/ancestor ids + phase label, public.
+  ...rulesFor("dag.spec.ancestor_not_ready", [
+    ["specId", "public"],
+    ["runId", "public"],
+    ["ancestorSpecId", "public"],
+    ["ancestorPhase", "public"],
+  ]),
+  // (§2c) change-percolation events — spec/run/ancestor ids, ancestor head SHAs (a commit hash
+  // is not a secret), severity label, resolver flag, diagnosis reason. No diff/cred/output.
   ...rulesFor("dag.spec.percolating", [
     ["specId", "public"],
     ["runId", "public"],

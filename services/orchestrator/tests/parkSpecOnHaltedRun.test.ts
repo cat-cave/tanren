@@ -141,3 +141,45 @@ describe("finalizeWorkflowError — an infra failure parks the spec (not just ha
     expect(needsAttention(events)?.reason).toBe("halted_reexec");
   });
 });
+
+describe("finalizeWorkflowError — a NON-TERMINAL headless ancestor benign-WAITS, never strands (apex v35)", () => {
+  it("an AncestorNotReadyError returns the spec to OPEN (re-driven) + emits ancestor_not_ready — NOT needs_attention", async () => {
+    const pool = new RecordingPool();
+    const { events, appendEvent, finalizeRunState, input } = harness(pool);
+    const { AncestorNotReadyError } = await import("../src/engine/dag/jjLocalIntegration.js");
+
+    // The dependent reached its base-shift assembly but its ancestor `deploy` (spec
+    // `spec_deploy`) was still `in_flight` — no PR/branch published yet. WITHOUT the benign
+    // branch this would land like any other hard error: run `failed`, spec parked
+    // `needs_attention` (a TERMINAL strand). WITH it: the run halts recoverable + the spec
+    // returns to `open` so the walker re-drives it once the ancestor publishes its head.
+    await finalizeWorkflowError(new AncestorNotReadyError("spec_deploy", "tanren/deploy-x", "in_flight", "main"), {
+      finalizeRunState,
+      appendEvent,
+      workspacePath: "/workspace/runs/run_1",
+      input,
+      context: ctx(),
+    });
+
+    // The run HALTED (recoverable, work not discarded) — NOT `failed`.
+    expect(pool.terminalRunWrite()).toEqual({ status: "halted", outcome: "halted" });
+    // The dependent's SPEC returned to `open` (the walker's re-drive bucket), NOT
+    // `needs_attention` — it does NOT terminally strand.
+    expect(pool.specStatusWritten()).toBe("open");
+    expect(needsAttention(events)).toBeUndefined();
+    // The benign-wait was surfaced loudly (never silent) with the ancestor + its phase.
+    const wait = events.find((e) => e.eventType === "dag.spec.ancestor_not_ready");
+    expect(wait?.payload).toMatchObject({
+      specId: "spec_1",
+      runId: "run_1",
+      ancestorSpecId: "spec_deploy",
+      ancestorPhase: "in_flight",
+    });
+  });
+
+  it("open is a re-drive-eligible status (the walker picks it up) — the never-discard re-drive, not a strand", () => {
+    // `open` maps to the walker's `pending` bucket (a spec it MAY start), so the dependent is
+    // genuinely re-driven on a later tick — the never-discard re-drive, no operator poke.
+    expect(isAllowedSpecTransition("in_flight", "open")).toBe(true);
+  });
+});
