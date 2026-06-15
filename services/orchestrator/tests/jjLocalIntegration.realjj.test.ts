@@ -29,12 +29,12 @@ function gitEnv(): NodeJS.ProcessEnv {
   return fixtureGitEnv(process.env);
 }
 
-function git(cwd: string, args: string[]): void {
-  execFileSync("git", args, {
+function git(cwd: string, args: string[]): string {
+  return execFileSync("git", args, {
     cwd,
     env: gitEnv(),
-    stdio: ["ignore", "ignore", "inherit"],
-  });
+    stdio: ["ignore", "pipe", "inherit"],
+  }).toString();
 }
 
 /**
@@ -71,6 +71,67 @@ function makeBatchFixture(): { originPath: string } {
   git(work, ["checkout", "--quiet", "main"]);
   git(work, ["clone", "--quiet", "--bare", work, originPath]);
   return { originPath };
+}
+
+/**
+ * The never-discard mid-flight-merge RACE fixture (tanren-owns-the-engine.md §3): `main` plus
+ * the dependent's still-live ancestor `feat-b`, PLUS an ancestor `feat-a` that ALREADY MERGED
+ * — its commit was fast-forwarded INTO `main` and its head branch DELETED (exactly what the
+ * forge does when a PR merges). The dependent (the build spec) was in-flight assembling
+ * against `feat-a@origin` when it vanished. `mergedHeadSha` is `feat-a`'s pristine head sha
+ * (now contained in `main`) — the `ancestor_stack[].headSha` the assembly proves the merge
+ * from. `goneUnmergedHeadSha` is a real sha NOT in `main` (a genuinely-missing branch).
+ */
+function makeMergedAncestorFixture(): { originPath: string; mergedHeadSha: string; goneUnmergedHeadSha: string } {
+  const root = mkdtempSync(join(tmpdir(), "tanren-jj-local-merged-"));
+  const work = join(root, "seed");
+  const originPath = join(root, "origin.git");
+  mkdirSync(work, { recursive: true });
+
+  git(work, ["init", "--quiet", "--initial-branch=main"]);
+  assertGitDirUnder(work, root, gitEnv());
+  writeFileSync(join(work, "base.txt"), "base\n");
+  git(work, ["add", "-A"]);
+  git(work, ["commit", "--quiet", "-m", "base"]);
+
+  // The ancestor `feat-a` (the scaffold) — commit it, capture its head, then MERGE it into
+  // `main` (fast-forward) and DELETE the branch: the merged-and-deleted state.
+  git(work, ["checkout", "--quiet", "-b", "feat-a"]);
+  writeFileSync(join(work, "a.txt"), "a\n");
+  git(work, ["add", "-A"]);
+  git(work, ["commit", "--quiet", "-m", "feat a"]);
+  const mergedHeadSha = revParse(work, "feat-a");
+
+  // A genuinely-UNMERGED, soon-to-be-gone branch: commit it, capture its head, then delete it
+  // WITHOUT merging — its commit is NOT contained in `main` (a real missing-ref fault).
+  git(work, ["checkout", "--quiet", "main"]);
+  git(work, ["checkout", "--quiet", "-b", "feat-gone"]);
+  writeFileSync(join(work, "gone.txt"), "gone\n");
+  git(work, ["add", "-A"]);
+  git(work, ["commit", "--quiet", "-m", "feat gone"]);
+  const goneUnmergedHeadSha = revParse(work, "feat-gone");
+
+  // The still-live dependent ancestor `feat-b`.
+  git(work, ["checkout", "--quiet", "main"]);
+  git(work, ["checkout", "--quiet", "-b", "feat-b"]);
+  writeFileSync(join(work, "b.txt"), "b\n");
+  git(work, ["add", "-A"]);
+  git(work, ["commit", "--quiet", "-m", "feat b"]);
+
+  // MERGE feat-a into main (fast-forward — its commit now lives in `main`) and DELETE both the
+  // merged branch AND the unmerged one, so neither `feat-a@origin` nor `feat-gone@origin`
+  // exists on the clone (the mid-flight vanish).
+  git(work, ["checkout", "--quiet", "main"]);
+  git(work, ["merge", "--quiet", "--ff-only", "feat-a"]);
+  git(work, ["branch", "--quiet", "-D", "feat-a"]);
+  git(work, ["branch", "--quiet", "-D", "feat-gone"]);
+
+  git(work, ["clone", "--quiet", "--bare", work, originPath]);
+  return { originPath, mergedHeadSha, goneUnmergedHeadSha };
+}
+
+function revParse(cwd: string, ref: string): string {
+  return git(cwd, ["rev-parse", ref]).trim();
 }
 
 /** A LiveJjWorkspace over the REAL jj CLI on the local substrate (anonymous clone of a local fixture). */
@@ -163,5 +224,66 @@ describe("§3.5 jj-local batch integration (real jj)", () => {
     expect(readFileSync(join(live.workspacePath, "b.txt"), "utf8")).toBe("b\n");
     // The base file is of course still present (the integration is base + members).
     expect(existsSync(join(live.workspacePath, "base.txt"))).toBe(true);
+  });
+
+  it("DROPS a merged-and-deleted ancestor (its branch vanished mid-flight) and assembles against the new base — never strands", async () => {
+    // THE RACE this fixes (tanren-owns-the-engine.md §3): the dependent's `build` run was
+    // in-flight assembling against `feat-a@origin` when the scaffold's PR MERGED and the merge
+    // DELETED `feat-a`. WITHOUT the fix the `feat-a@origin` read throws
+    // (`WorkspaceCommandError: jj read bookmark sha failed`) → the run fails `internal` → the
+    // dependent TERMINALLY strands (`needs_attention reason:halted_reexec source:strand`) and
+    // everything downstream stays `open`. WITH the fix: `feat-a`'s commit is PROVEN in the base
+    // (its `knownHeadSha` is contained in `main`), so it is DROPPED, and the still-live `feat-b`
+    // assembles against the new base — the dependent proceeds.
+    const { originPath, mergedHeadSha } = makeMergedAncestorFixture();
+    const live = liveLocalJj();
+    const ssh = new LocalCommandSubstrate();
+
+    const result = await integrateOverWorkspace(live, ssh, {
+      baseBranch: "main",
+      repoUrl: originPath,
+      members: [
+        // The merged-and-deleted ancestor — its branch is GONE, but its commit is in `main`.
+        { specId: "spec-scaffold", branch: "feat-a", knownHeadSha: mergedHeadSha },
+        // The still-live ancestor.
+        { specId: "spec-other", branch: "feat-b" },
+      ],
+      localRef: "tanren-batch-merged-race",
+      timeoutMs: 60_000,
+    });
+
+    // The assembly SUCCEEDS (no strand): the merged ancestor was dropped, `feat-b` stacked on
+    // the new base (which now contains feat-a's content via the merge).
+    expect(result.outcome).toBe("integrated");
+    if (result.outcome !== "integrated") return;
+    expect(result.headSha).toMatch(/^[0-9a-f]{40}$/u);
+    // The dropped ancestor contributes NO member-head key (it is no longer a stack member).
+    expect(result.memberHeadShas["spec-scaffold"]).toBeUndefined();
+    // The surviving member's pristine head key is present.
+    expect(result.memberHeadShas["spec-other"]).toMatch(/^[0-9a-f]{40}$/u);
+    // The integrated working copy carries BOTH the merged ancestor's file (now in the base via
+    // the merge) AND the live member's file — the dependent's base is the new merged base + the
+    // remaining stack, exactly what never-discard re-drive requires.
+    expect(existsSync(join(live.workspacePath, "a.txt"))).toBe(true);
+    expect(existsSync(join(live.workspacePath, "b.txt"))).toBe(true);
+  });
+
+  it("FAILS LOUD for a genuinely-missing ancestor branch (deleted but NOT merged) — no silent masking", async () => {
+    // FAIL-CLOSED counterpart: `feat-gone`'s branch is also gone, but its commit is NOT in
+    // `main` (it never merged). A truly missing ancestor must stay a LOUD failure — the benign
+    // drop is ONLY for a PROVEN merge (commit-in-base), never every missing branch.
+    const { originPath, goneUnmergedHeadSha } = makeMergedAncestorFixture();
+    const live = liveLocalJj();
+    const ssh = new LocalCommandSubstrate();
+
+    await expect(
+      integrateOverWorkspace(live, ssh, {
+        baseBranch: "main",
+        repoUrl: originPath,
+        members: [{ specId: "spec-gone", branch: "feat-gone", knownHeadSha: goneUnmergedHeadSha }],
+        localRef: "tanren-batch-gone",
+        timeoutMs: 60_000,
+      }),
+    ).rejects.toThrow(/did NOT merge into main/u);
   });
 });
