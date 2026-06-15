@@ -4,8 +4,8 @@
 //      grounding flows through; an ungrounded result fails LOUD.
 //   2. LIVE BUILD-DRIVER (`buildRunLoopBuildDriver`): the wiring SHAPE (walk → poll
 //      convergence → resolve → allocate → clone → bootstrap → handle) + the
-//      convergence policy — converge as far as possible; strand only on a GENUINE
-//      deadlock (every remaining spec terminal_blocked) or the bounded deadline.
+//      convergence policy — converge as far as possible; strand ONLY on a GENUINE
+//      deadlock. There is NO whole-build wall-clock deadline (polls indefinitely).
 //   3. LIVE AUDITOR (`buildTemplateAuditor`): counts `fail`-severity findings.
 //   4. SELECTION no-match → CREATION (`selectTemplate` + `createForNoMatch`): no
 //      validated template → creation runs → SEED from the freshly-created one.
@@ -192,9 +192,8 @@ function buildDriverDeps(overrides: { loadSnapshot: (p: string) => Promise<DagSn
       resolveConverged: async () => convergedFacts,
       auditorFor: () => stubAuditor,
       timeoutMs: 1000,
-      convergence: { deadlineMs: 10_000, pollIntervalMs: 1 },
+      convergence: { pollIntervalMs: 1 },
       sleep: async () => {},
-      now: () => 0,
     },
   };
 }
@@ -228,7 +227,7 @@ describe("LIVE build-driver — wiring shape + convergence policy", () => {
   });
 
   it("a GENUINE deadlock (every remaining spec terminal_blocked) fails LOUD — no partial template", async () => {
-    // One merged, the only other terminally blocked — no forward progress ⇒ strand now.
+    // One merged, the only other terminally blocked ⇒ no forward progress ⇒ strand now.
     const { deps } = buildDriverDeps({ loadSnapshot: async () => snapshotWith(["done", "terminal_blocked"]) });
     await expect(buildRunLoopBuildDriver(deps).build({ orgId: "org_acme", projectId: "project_tmpl" })).rejects.toThrow(
       /STRANDED|blocked/u,
@@ -238,9 +237,8 @@ describe("LIVE build-driver — wiring shape + convergence policy", () => {
   it("one terminal_blocked spec does NOT strand while others can still merge — waits, then converges", async () => {
     // apex live finding: a dependent strands fast, but the scaffold it is blocked behind
     // is still in_flight + mergeable. The build must NOT give up on the first
-    // terminal_blocked spec — it polls, lets the scaffold merge, and converges.
-    // poll 1: scaffold mergeable + dependent stranded ⇒ forward progress ⇒ don't strand.
-    // poll 2: scaffold merged, dependent re-ready. poll 3: both done ⇒ converged.
+    // terminal_blocked spec — poll 1: forward progress ⇒ don't strand; poll 2: scaffold
+    // merged, dependent re-ready; poll 3: both done ⇒ converged.
     const scripted: Array<DagSnapshot["nodes"][number]["phase"][]> = [
       ["in_flight", "terminal_blocked"],
       ["done", "in_flight"],
@@ -257,20 +255,27 @@ describe("LIVE build-driver — wiring shape + convergence policy", () => {
     expect(ssh.commands.find((c) => c.command.includes("git fetch"))?.command).toContain("a".repeat(40));
   });
 
-  it("a non-converging build fails LOUD at the deadline (a lingering strand stays bounded too)", async () => {
-    // Blocked strand + a perpetually-in_flight scaffold: forward progress is nominally
-    // possible (so no strand), but the deadline still bounds the wait — never infinite.
+  it("a build still progressing NEVER terminates on a wall clock — polls indefinitely until convergence", async () => {
+    // The PRINCIPLE: NO whole-build time bound. A blocked strand beside a perpetually-
+    // in_flight scaffold keeps forward progress possible (no deadlock), so the driver must
+    // KEEP polling — never throw — however much simulated time passes, then converge.
     let clock = 0;
-    const { ssh, deps } = buildDriverDeps({
-      loadSnapshot: async () => snapshotWith(["in_flight", "terminal_blocked"]),
+    let poll = 0;
+    const pollsBeforeConverge = 5_000;
+    const { walker, deps } = buildDriverDeps({
+      loadSnapshot: async () => {
+        clock += 10 * 60 * 1000;
+        poll += 1;
+        return poll < pollsBeforeConverge
+          ? snapshotWith(["in_flight", "terminal_blocked"])
+          : snapshotWith(["done", "done"]);
+      },
     });
-    const driver = buildRunLoopBuildDriver({
-      ...deps,
-      now: () => (clock += 5_000),
-      convergence: { deadlineMs: 9_000, pollIntervalMs: 1 },
-    });
-    await expect(driver.build({ orgId: "org_acme", projectId: "project_tmpl" })).rejects.toThrow(/did not converge/u);
-    expect(ssh.commands.find((c) => c.command.includes("git fetch"))).toBeUndefined();
+    const built = await buildRunLoopBuildDriver(deps).build({ orgId: "org_acme", projectId: "project_tmpl" });
+    expect(poll).toBe(pollsBeforeConverge);
+    expect(clock).toBeGreaterThan(60 * 60 * 1000);
+    expect(walker.walked.length).toBe(pollsBeforeConverge);
+    expect(built.builtSha).toBe("a".repeat(40));
   });
 });
 
