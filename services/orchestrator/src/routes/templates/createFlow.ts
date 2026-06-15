@@ -94,14 +94,15 @@ export interface CreateTemplateFlowDeps {
   // connected owner) when the request does not name one. A template must land in a
   // real repo, never a silent skip — an absent owner on both is a LOUD failure.
   repoOwner?: string;
-  // The convergence poll budget (the DAG drives asynchronously). Bounded so a
-  // non-converging build fails LOUD rather than hanging.
-  convergence?: { deadlineMs: number; pollIntervalMs: number };
+  // The convergence poll cadence (the DAG drives asynchronously). There is NO
+  // whole-build wall-clock deadline — a build that is still progressing polls
+  // indefinitely; it fails LOUD only on a genuine deadlock (blocked + no progress).
+  convergence?: { pollIntervalMs: number };
   // Per-SSH-command timeout for the validation clone/bootstrap.
   timeoutMs?: number;
 }
 
-const DEFAULT_CONVERGENCE = { deadlineMs: 60 * 60 * 1000, pollIntervalMs: 15_000 };
+const DEFAULT_CONVERGENCE = { pollIntervalMs: 15_000 };
 const DEFAULT_TIMEOUT_MS = 600_000;
 
 // Assemble the full `CreateTemplateDeps` the creation meta-flow runs on, for one

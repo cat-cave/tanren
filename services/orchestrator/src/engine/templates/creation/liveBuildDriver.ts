@@ -15,13 +15,17 @@
 // live benchmark accept seam (engine/benchmark/liveAccept.ts) uses. The resulting
 // `BuiltTemplate` is exactly what the validation harness consumes.
 //
-// FAIL LOUD, never silent: a project that does NOT converge within the deadline, a
-// project that STRANDS (a spec terminally blocked / needs_attention), or a
-// converged project with no resolvable repo/commit all throw `TemplateBuildFailedError`
-// — the creation flow aborts WITHOUT publishing. Sub-seams (the walker, the
-// snapshot read, the clone/bootstrap, the sleep clock) are injected so the wiring
-// is unit-testable without a live runner; the production defaults wire the real
-// infra in `createTemplateFlow`.
+// FAIL LOUD, never silent: a project that STRANDS in a GENUINE deadlock (blocked
+// spec(s) AND no remaining spec can make forward progress) or a converged project
+// with no resolvable repo/commit throws `TemplateBuildFailedError` — the creation
+// flow aborts WITHOUT publishing. There is NO whole-build wall-clock deadline: a
+// build that is still making progress (any spec pending/in_flight) keeps polling
+// INDEFINITELY — a build can legitimately be many specs over a long time, and the
+// only legitimate timeouts are PER-SPEC (ssh/codex/gate), which fail a hung spec
+// into terminal_blocked and so feed the genuine-deadlock detection. Sub-seams (the
+// walker, the snapshot read, the clone/bootstrap, the sleep clock) are injected so
+// the wiring is unit-testable without a live runner; the production defaults wire
+// the real infra in `createTemplateFlow`.
 
 import type pg from "pg";
 import type { CiConfigV1 } from "../../ci/index.js";
@@ -70,16 +74,14 @@ export interface RunLoopBuildDriverDeps {
   auditorFor: (input: { orgId: string; projectId: string }) => TemplateAuditor;
   // Per-SSH-command timeout for the clone/bootstrap/gate-config reads.
   timeoutMs: number;
-  // The convergence poll budget + cadence (the DAG drives asynchronously). The
-  // driver polls the snapshot until convergence or the deadline.
+  // The convergence poll cadence (the DAG drives asynchronously). The driver polls
+  // the snapshot until convergence or a genuine deadlock — there is NO whole-build
+  // wall-clock deadline, so a build that is still progressing polls indefinitely.
   convergence: {
-    deadlineMs: number;
     pollIntervalMs: number;
   };
   // Injectable sleep (defaults to a real timer) so the poll loop is fast in tests.
   sleep?: (ms: number) => Promise<void>;
-  // Injectable clock (defaults to Date.now) so the deadline is deterministic in tests.
-  now?: () => number;
 }
 
 const realSleep = (ms: number): Promise<void> =>
@@ -92,13 +94,13 @@ const realSleep = (ms: number): Promise<void> =>
 // validation handle. `createTemplateFlow` is the single construction site.
 export function buildRunLoopBuildDriver(deps: RunLoopBuildDriverDeps): TemplateBuildDriver {
   const sleep = deps.sleep ?? realSleep;
-  const now = deps.now ?? Date.now;
   return {
     async build(input: { orgId: string; projectId: string }): Promise<BuiltTemplate> {
       // 1. DRIVE the DAG to convergence (the worker + the walker advance it; we
-      //    kick + poll). Throws TemplateBuildFailedError on a stranded spec or a
-      //    convergence timeout — never a silent "built anyway".
-      await driveToConvergence(deps, input.projectId, sleep, now);
+      //    kick + poll). Throws TemplateBuildFailedError ONLY on a genuine deadlock
+      //    (blocked + nothing can progress) — never a silent "built anyway", and
+      //    never a wall-clock kill of a build still making progress.
+      await driveToConvergence(deps, input.projectId, sleep);
 
       // 2. Resolve the converged conforming repo + commit + runner image. A
       //    converged project with no resolvable repo/commit cannot be validated.
@@ -129,12 +131,19 @@ export function buildRunLoopBuildDriver(deps: RunLoopBuildDriverDeps): TemplateB
 // converge AS FAR AS IT CAN. We declare the build STRANDED only when there is NO
 // forward progress possible — a GENUINE deadlock: every remaining (non-`done`) spec
 // is `terminal_blocked`. We fail LOUD then rather than validate a partial template.
-// The convergence DEADLINE still bounds the wait — never an infinite poll. The
-// walker is kicked each poll (idempotent) so the build does not depend solely on the
-// ambient subscriber being up.
 //
-// Why this matters (apex live finding): a dependent spec stranded fast (blocked on
-// an unmerged dependency); the old code threw STRANDED on the first
+// There is NO whole-build wall-clock deadline. As long as ANY spec is still
+// `pending`/`in_flight` (forward progress is possible) we keep polling INDEFINITELY —
+// a build can legitimately be many specs over a long time (the codex writer alone
+// takes minutes per call), and artificially killing a build that is still authoring
+// /merging specs is wrong. The ONLY legitimate timeouts are PER-SPEC (the ssh / codex
+// / gate timeouts inside an individual spec run); a hung spec times out, fails into
+// `terminal_blocked`, and that failure then feeds the genuine-deadlock detection here.
+// The walker is kicked each poll (idempotent) so the build does not depend solely on
+// the ambient subscriber being up.
+//
+// Why the deadlock rule matters (apex live finding): a dependent spec stranded fast
+// (blocked on an unmerged dependency); the old code threw STRANDED on the first
 // `terminal_blocked` spec and gave up WHILE the scaffold spec was still `in_flight`
 // and mergeable — so nothing ever merged. Waiting for the in-progress merges lets
 // the scaffold land before we judge the blocked strand a deadlock.
@@ -142,9 +151,7 @@ async function driveToConvergence(
   deps: RunLoopBuildDriverDeps,
   projectId: string,
   sleep: (ms: number) => Promise<void>,
-  now: () => number,
 ): Promise<void> {
-  const deadline = now() + deps.convergence.deadlineMs;
   for (;;) {
     // Kick the walker (advances any newly-ready spec); idempotent with the worker.
     await deps.walker.walk(projectId);
@@ -173,16 +180,9 @@ async function driveToConvergence(
       );
     }
 
-    if (now() >= deadline) {
-      const blockedNote =
-        blocked.length > 0
-          ? ` — ${String(blocked.length)} spec(s) terminally blocked (${blocked.map((n) => n.specId).join(", ")})`
-          : "";
-      throw new TemplateBuildFailedError(
-        projectId,
-        `template build did not converge within ${String(deps.convergence.deadlineMs)}ms (${String(done)}/${String(total)} specs merged)${blockedNote}`,
-      );
-    }
+    // Otherwise some spec is still pending/in_flight — forward progress is still
+    // possible. Keep polling INDEFINITELY (this is a poll cadence, NOT a deadline);
+    // a build can legitimately run many specs over a long time.
     await sleep(deps.convergence.pollIntervalMs);
   }
 }
