@@ -18,11 +18,22 @@
 // no-pool state mid-file (e.g. runWithSystemScopeFailClosed.test.ts) drives its own
 // `resetSystemPool()` / `allowRuntimePoolAsSystemForTests(false)` explicitly.
 
-import { afterAll, beforeAll } from "vitest";
+import { afterAll, beforeAll, beforeEach } from "vitest";
 import { allowRuntimePoolAsSystemForTests, resetSystemPool } from "@tanren/db";
+import { sharedMainHeadCache } from "../../services/orchestrator/src/engine/providers/mainHeadCache.js";
 
 beforeAll(() => {
   allowRuntimePoolAsSystemForTests(true);
+});
+
+// apex-v35: the GitHub default-branch head cache is a PROCESS-shared singleton (so the
+// batch/percolation/post-merge readers in one worker collapse their redundant `main`-head
+// reads). In tests many cases reuse the same `owner/name/main` key with DIFFERENT expected
+// shas; clear the shared cache before each so a prior case's cached head never leaks into
+// the next (matching the systemPool isolation rationale). Production never clears it — the
+// short TTL + the landAuthorizedRef CAS guard freshness there.
+beforeEach(() => {
+  sharedMainHeadCache.clear();
 });
 
 afterAll(() => {
