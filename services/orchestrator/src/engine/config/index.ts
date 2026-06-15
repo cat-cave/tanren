@@ -91,6 +91,7 @@ export {
   SUPPORTED_PROJECT_CONFIG_VERSIONS,
   defaultProjectConfigV1,
   isAbsentProjectConfig,
+  isTemplateBuildProjectConfig,
   migrateProjectConfig,
   projectConfigJsonSchema,
 } from "./projectConfig.js";

@@ -259,9 +259,15 @@ describe("deriveFromCapture · creates the product graph (no migration)", () => 
     const [scaffold, build, deploy] = derived.specIds.map((id) => state.specs.get(id));
 
     // The lifecycle is persisted onto the project config (the run materializes from it).
-    const config = configs.get(derived.projectId) as { lifecycle?: { stack?: string; bootstrap?: string } } | undefined;
+    const config = configs.get(derived.projectId) as
+      | { lifecycle?: { stack?: string; bootstrap?: string }; templateBuild?: boolean }
+      | undefined;
     expect(config?.lifecycle?.stack).toBe("ts/pnpm");
     expect(config?.lifecycle?.bootstrap).toBe("pnpm install");
+    // TEMPLATE-BUILD MARKER: a `scaffoldOrigin: "template_build"` derive persists
+    // `templateBuild: true` onto the project config — the REAL signal the deploy-on-merge
+    // watcher reads to SKIP deploying a template-creation build (a template is not a product).
+    expect(config?.templateBuild).toBe(true);
 
     const desc = scaffold?.description ?? "";
     // The writer is told the contract files are pre-committed (materialized).
@@ -391,6 +397,10 @@ describe("deriveFromCapture · creates the product graph (no migration)", () => 
     // safe review/merge defaults hold, but greenfield drives the non-frozen ensure.
     expect(config?.greenfield).toBe(true);
     expect(config?.deployProvider).toBe("deploy.vercel");
+    // A NORMAL product derive (default `scaffoldOrigin: "project"`) does NOT mark
+    // `templateBuild` — the persisted config parses it to the `false` default, so it
+    // deploys on merge as before (only a template-build derive sets it true).
+    expect(config?.["templateBuild"]).toBe(false);
   });
 
   it("FINDING deploy: omitting autonomy does not bypass required deploy", async () => {

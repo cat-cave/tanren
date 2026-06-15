@@ -4,8 +4,10 @@
 // mappings (deploy audit envelope, repo slug from a PR URL, merged SHA from a
 // `merge.completed` payload).
 
-import { runWithJobOrgId } from "@tanren/db";
+import { runWithJobOrgId, runWithSystemScope } from "@tanren/db";
+import type pg from "pg";
 import { serviceAuditActor, type AuditEnvelope } from "../events/schemas/audit.js";
+import { isTemplateBuildProjectConfig } from "../config/index.js";
 import type { EventStore } from "../eventStore.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { DeployHttpTransport } from "../provisioners/deployTransport.js";
@@ -14,6 +16,9 @@ import { buildDeployAdapter } from "../deploy/buildDeployAdapter.js";
 import { DIRECT_API_ADAPTER_KIND } from "../deploy/directApiDeployAdapter.js";
 import type { UrlReachabilityProbe, VerifyPollPolicy } from "../contracts/deployAdapter.js";
 import type { ProjectDeployTarget } from "./deployOnMerge.js";
+import { createLogger } from "../observability/logger.js";
+
+const log = createLogger("deploy-on-merge");
 
 // FIXED, non-secret `deploy.failed.reason`s. Deliberately NOT the raw error: it can
 // embed provider-supplied HTTP response text (a potential secret), and this reason is
@@ -73,11 +78,13 @@ export async function appendDeployFailed(
 }
 
 /**
- * Append the DURABLE `deploy.skipped` for a PRE-resolution skip (incomplete deploy
- * config / a missing mergeSha) under the org scope — so the operator + run timeline SEE
- * the skip instead of a console-only log line. The `reason` is a fixed code; `detail` is
- * a bounded, non-secret string (the resolution reason / wiring detail). Emitted BEFORE
- * the watcher fails loud (config_incomplete / merge_sha_missing both still throw).
+ * Append the DURABLE `deploy.skipped` under the org scope — so the operator + run
+ * timeline SEE the skip instead of a console-only log line. The `reason` is a fixed
+ * code; `detail` is a bounded, non-secret string (the resolution reason / wiring
+ * detail). Two reasons (config_incomplete / merge_sha_missing) are emitted BEFORE the
+ * watcher fails LOUD; `template_build` is a LEGITIMATE skip (a template-creation build
+ * authors a template, not a product, so no product deploy fires) — recorded here so the
+ * skip is observable, but the watcher returns WITHOUT throwing on it.
  */
 export async function appendDeploySkipped(
   ctx: Pick<DeployVerifyContext, "eventStore">,
@@ -85,7 +92,7 @@ export async function appendDeploySkipped(
     runId: string;
     projectId: string;
     orgId: string;
-    reason: "config_incomplete" | "merge_sha_missing";
+    reason: "config_incomplete" | "merge_sha_missing" | "template_build";
     detail: string;
   },
 ): Promise<void> {
@@ -97,6 +104,50 @@ export async function appendDeploySkipped(
       payload: { projectId: args.projectId, reason: args.reason, detail: args.detail },
     });
   });
+}
+
+/**
+ * Skip deploy-on-merge for a TEMPLATE-CREATION build. Reads the REAL config-driven
+ * `templateBuild` marker (never a repo-name heuristic) off the same `projects` row the
+ * deploy-target resolver consults, WITHOUT a strict full-config parse so an unrelated
+ * config-shape concern can never mask the signal. A template-build project authors a
+ * reusable template, not a running product, so no product deploy fires. Returns `true`
+ * after recording a DURABLE OBSERVABLE `deploy.skipped` (reason `template_build`) — a
+ * LEGITIMATE skip, NOT a failure (no `deploy.failed`, no throw). Returns `false` for a
+ * normal product (it deploys on merge as before). A project with no org cannot scope the
+ * tenant `events` write — the `log.info` is then the observable record.
+ */
+export async function skipTemplateBuildDeploy(
+  pool: pg.Pool,
+  ctx: Pick<DeployVerifyContext, "eventStore">,
+  args: { runId: string; projectId: string },
+): Promise<boolean> {
+  const row = await runWithSystemScope(pool, async (client) => {
+    const result = await client.query<{ config: unknown; org_id: string | null }>(
+      "SELECT config, org_id FROM projects WHERE project_id = $1",
+      [args.projectId],
+    );
+    return result.rows[0];
+  });
+  if (row === undefined || !isTemplateBuildProjectConfig(row.config)) return false;
+  const detail =
+    `project '${args.projectId}' is a template-creation build — it authors a reusable template, not a ` +
+    `running product, so no product deploy is triggered on merge (the template carries a deploy verb for the ` +
+    `PRODUCTS later built from it)`;
+  log.info("merged template-creation build — skipping deploy-on-merge (a template is not a deployed product)", {
+    runId: args.runId,
+    projectId: args.projectId,
+  });
+  if (row.org_id !== null) {
+    await appendDeploySkipped(ctx, {
+      runId: args.runId,
+      projectId: args.projectId,
+      orgId: row.org_id,
+      reason: "template_build",
+      detail,
+    });
+  }
+  return true;
 }
 
 /**

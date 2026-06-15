@@ -342,15 +342,15 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
   }
   const config = {
     ...baseConfig,
+    // TEMPLATE-BUILD MARKER (config/projectConfig.ts): the real provenance the deploy-on-merge
+    // watcher reads to SKIP a template build (a template is not a deployed product).
+    ...(scaffoldOrigin === "template_build" ? { templateBuild: true } : {}),
     ...productVisionConfig(capture),
-    // DETERMINISTIC CONTRACT FILES (v27 fix): PERSIST the captured lifecycle onto the
-    // project config so the RUN path materializes the contract files (`.tanren/ci.yml`
-    // + `justfile`) from it — they are NEVER LLM-authored. `CaptureLifecycle` maps 1:1
-    // to `ProjectLifecycle` (same fields). Non-null here (validated above).
+    // DETERMINISTIC CONTRACT FILES (v27 fix): PERSIST the captured lifecycle so the RUN path
+    // materializes the contract files (`.tanren/ci.yml` + `justfile`) — never LLM-authored.
     lifecycle: capture.lifecycle,
     // TEMPLATING WAVE 3 — persist the seed reference when a template was selected
-    // (strong/partial); absent on the from-scratch path. Recorded so the decision is
-    // OBSERVABLE on the project config + the run can seed from the template repo.
+    // (strong/partial); absent from-scratch. OBSERVABLE + the run seeds from the template repo.
     ...templateRefConfig(templateSelection),
     ...preparedDeploy.projectConfig,
   };

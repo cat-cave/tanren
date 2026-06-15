@@ -143,13 +143,17 @@ export type DeployFailedPayload = z.infer<typeof DeployFailedPayload>;
 //     the project config has no complete deploy target (no provider/appId to deploy onto).
 //   • `merge_sha_missing` — the `merge.completed` carried no mergeSha, so there is no
 //     merged commit to deploy (a merge-wiring bug).
+//   • `template_build` — the merged project is a TEMPLATE-CREATION build (it authors a
+//     reusable template/scaffold, not a running product), so a product deploy must NOT
+//     fire. A LEGITIMATE skip (NOT a failure) — recorded here so the skip is observable
+//     instead of a silent no-op, but the watcher does NOT throw on it.
 // SECURITY: non-secret (a project id + a fixed reason code + a bounded detail string).
 export const DeploySkippedPayload = z
   .object({
     /** The project whose merge could not resolve a deploy. */
     projectId: z.string().min(1),
     /** Why the deploy could not be resolved (fixed reason code, drives operator triage). */
-    reason: z.enum(["config_incomplete", "merge_sha_missing"]),
+    reason: z.enum(["config_incomplete", "merge_sha_missing", "template_build"]),
     /** A bounded, non-secret detail string (the resolution reason / wiring detail). */
     detail: z.string(),
   })

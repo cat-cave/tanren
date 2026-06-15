@@ -1,9 +1,7 @@
-// Deploy-on-merge ("a deploy happened") coverage: a merged run attaches the runtime app
-// env BEFORE it TRIGGERS a real deploy of the merged ref (env-before-trigger ordering
-// asserted); no-config + no-intent is a clean no-op; a PRE-resolution failure (incomplete
-// config / no mergeSha) records a DURABLE `deploy.skipped` BEFORE failing LOUD (never a
-// console-only swallow); a re-check is idempotent; a missing grant fails LOUD. Driven over
-// a fake pool + the scripted deploy transport — no Postgres, no real provider.
+// Deploy-on-merge ("a deploy happened") coverage: env-before-trigger ordering; no-config +
+// no-intent no-op; a template-creation build is SKIPPED (`deploy.skipped` template_build); a
+// PRE-resolution failure records a DURABLE `deploy.skipped` BEFORE failing LOUD; idempotency +
+// a missing grant fails LOUD. Driven over a fake pool + the scripted transport (no Postgres).
 
 import { describe, expect, it } from "vitest";
 import type pg from "pg";
@@ -23,24 +21,17 @@ const MERGE_SHA = "abc1234def5678901234567890abcdef12345678";
 const PRIOR_DEPLOYMENT_ID = "vercel_dep_prior";
 
 interface PoolState {
-  /** Whether the run merged. */
   merged: boolean;
-  /** The project config (carries the deploy target when present). */
+  /** The project config (carries the deploy target + the `templateBuild` skip marker). */
   config: Record<string, unknown>;
-  /** The org grant row (org_integrations) for the deploy provider, when linked. */
   grant?: { provider_kind: string; credential_ref: string; metadata: Record<string, unknown>; status?: string };
-  /**
-   * The org's `org_integrations` grant LIST the deploy-intent probe reads
-   * (loadDeployTarget → OrgIntegrationsStore.list). Used to distinguish a legitimate
-   * "no deploy configured" no-op from an "incomplete deploy config when a deploy was
-   * expected" loud failure. Defaults to [] (no deploy intent).
-   */
+  /** The deploy-intent grant LIST (OrgIntegrationsStore.list); [] = no deploy intent. */
   linkedGrants?: Array<{ provider_kind: string; capabilities?: string[]; credential_ref?: string }>;
-  /** Whether a prior deploy.triggered exists for the run (resume-verify path). */
+  /** A prior deploy.triggered exists (resume-verify path). */
   alreadyDeployed?: boolean;
-  /** Whether a prior deploy.verified exists (full idempotency — skip entirely). */
+  /** A prior deploy.verified exists (full idempotency — skip entirely). */
   alreadyVerified?: boolean;
-  /** Whether a prior deploy.failed exists (TERMINAL — skip entirely, no self-loop). */
+  /** A prior deploy.failed exists (TERMINAL — skip entirely, no self-loop). */
   alreadyFailed?: boolean;
   /** Omit mergeSha from merge.completed (a merge that recorded no SHA — fail loud). */
   noMergeSha?: boolean;
@@ -115,11 +106,10 @@ function secrets(): InMemorySecretStore {
   return store;
 }
 
-// The scripted transport assigns the created app the id `vercel_app_1` — the
-// provider-side handle the provisioner would have stored as `deployAppId`.
+// The scripted transport assigns the created app id `vercel_app_1` (the provider-side handle
+// the provisioner would have stored as `deployAppId`). `version: 1` mirrors a real persisted
+// config — the watcher parses it through the strict migrator (a missing version is a LOUD error).
 const VERCEL_APP_ID = "vercel_app_1";
-// `version: 1` mirrors a real persisted project config — the deploy watcher parses it
-// through the strict migrator for the governance policy version (a missing version is a LOUD prod error).
 const VERCEL_TARGET = { version: 1, deployProvider: "deploy.vercel", deployAppId: VERCEL_APP_ID };
 const VERCEL_GRANT = {
   provider_kind: "deploy.vercel",
@@ -129,14 +119,14 @@ const VERCEL_GRANT = {
   status: "linked",
 };
 
-// The REAL v13 github gitSource shape: org (owner) + bare repo + the commit in `sha`
-// (and `ref`, which accepts a SHA) — the shape Vercel's deployments API requires.
+// The REAL v13 github gitSource shape Vercel's deployments API requires: org + bare repo + the
+// commit in `sha` (and `ref`, which accepts a SHA).
 function githubGitSource(org: string, repo: string, sha: string): Record<string, string> {
   return { type: "github", org, repo, ref: sha, sha };
 }
 
-// Assert a DURABLE org-scoped `deploy.skipped` with the given reason + detail substring
-// was recorded (the pre-resolution-failure record, not a console-only swallow).
+// Assert a DURABLE org-scoped `deploy.skipped` with the given reason + detail substring was
+// recorded (not a console-only swallow).
 function expectSkipped(events: RecordingEventStore, reason: string, detailSubstr: string): void {
   const skipped = events.appends.find((a) => a.eventType === "deploy.skipped");
   expect(skipped).toBeDefined();
@@ -152,8 +142,7 @@ async function run(state: PoolState, transport: ScriptedDeployTransport, events:
     secrets: secrets(),
     transport,
     eventStore: events,
-    // Scripted smoke probe + instant poll so verify runs over the scripted transport (no
-    // network / no real timers); the transport reports READY by default (polls once, 200).
+    // Scripted smoke probe + instant poll so verify runs over the scripted transport (READY by default).
     urlProbe: scriptedUrlProbe(),
     verifyPoll: instantVerifyPollPolicy(),
   });
@@ -191,14 +180,12 @@ describe("DeployOnMergeWatcher (a deploy happened)", () => {
       events,
     );
 
-    // A real deploy fired with the merged ref in the REAL v13 github gitSource shape: org
-    // (owner) + bare repo + the merged COMMIT SHA (in sha), not the (deleted) PR branch.
+    // A real deploy fired with the merged COMMIT SHA in the REAL v13 github gitSource shape.
     const triggered = transport.deploysTriggered();
     expect(triggered).toHaveLength(1);
     expect(triggered[0]!.body["gitSource"]).toEqual(githubGitSource("acme", "widget", MERGE_SHA));
     expect(transport.envByApp()[VERCEL_APP_ID]).toEqual({ RESEND_API_KEY: "re_live_secret" });
-    // ENV BEFORE TRIGGER: `set_env` was attached BEFORE `deploy_trigger`, so the released
-    // deployment actually carries its secrets (the leading `create` seeded the app).
+    // ENV BEFORE TRIGGER: `set_env` was attached BEFORE `deploy_trigger` (the lead `create` seeded the app).
     const log = transport.requestLog();
     expect(log.indexOf("set_env")).toBeGreaterThanOrEqual(0);
     expect(log.indexOf("set_env")).toBeLessThan(log.indexOf("deploy_trigger"));
@@ -210,16 +197,14 @@ describe("DeployOnMergeWatcher (a deploy happened)", () => {
     expect(payload["provider"]).toBe("deploy.vercel");
     expect(payload["url"]).toMatch(/^https:\/\//u);
     expect(JSON.stringify(deploy)).not.toContain("re_live_secret");
-    // AUDIT-EVIDENCE BASELINE: policy version + initiating actor (the autonomous service,
-    // no approver) + a NON-SECRET artifact provenance ref (no checksum here).
+    // AUDIT-EVIDENCE BASELINE: policy version + service actor (no approver) + a NON-SECRET provenance ref.
     expect(payload["policyVersion"]).toBe(1);
     expect(payload["initiatingActor"]).toEqual({ kind: "service", id: "tanren-engine" });
     expect(payload["approvingActor"]).toBeUndefined();
     expect(payload["artifact"]).toEqual({ provenanceRef: `deploy.vercel:vercel_deploy_1@${MERGE_SHA}` });
     expect((payload["artifact"] as Record<string, unknown>)["checksum"]).toBeUndefined();
 
-    // The deploy is PROVEN, not fire-and-forget: verify polled to READY + smoked the URL,
-    // recording deploy.verified (provider + url + state + smoke status).
+    // PROVEN, not fire-and-forget: verify polled to READY + smoked the URL → deploy.verified.
     const verified = events.appends.find((a) => a.eventType === "deploy.verified");
     expect(verified).toBeDefined();
     expect(verified!.ambientOrgId).toBe(ORG_ID);
@@ -231,6 +216,8 @@ describe("DeployOnMergeWatcher (a deploy happened)", () => {
     expect(JSON.stringify(verified)).not.toContain("deploy_token");
     expect(vPayload["policyVersion"]).toBe(1);
     expect(vPayload["initiatingActor"]).toEqual({ kind: "service", id: "tanren-engine" });
+    // NEGATIVE CONTROL: a NORMAL product (no `templateBuild` marker) deploys on merge as before — the guard never skips it.
+    expect(events.appends.find((a) => a.eventType === "deploy.skipped")).toBeUndefined();
   });
 
   it("fails LOUD when the triggered deploy never becomes READY (verify guard)", async () => {
@@ -251,8 +238,7 @@ describe("DeployOnMergeWatcher (a deploy happened)", () => {
       verifyPoll: instantVerifyPollPolicy(3),
       verifyMaxAttempts: 2,
     });
-    // The deployment reports ERROR on every attempt — verify exhausts its bounded retry,
-    // escalates LOUD (deploy.failed), re-throws. No deploy.verified.
+    // ERROR on every attempt — verify exhausts its bounded retry, escalates LOUD, re-throws.
     transport.scriptDeploymentStates("vercel_deploy_1", ["ERROR"]);
     await expect(watcher.check(RUN_ID)).rejects.toThrow(/FAILURE state 'ERROR'/u);
     expect(events.appends.find((a) => a.eventType === "deploy.verified")).toBeUndefined();
@@ -261,17 +247,15 @@ describe("DeployOnMergeWatcher (a deploy happened)", () => {
     expect(failed!.ambientOrgId).toBe(ORG_ID);
     const fPayload = failed!.payload as Record<string, unknown>;
     expect(fPayload["attempts"]).toBe(2);
-    // The reason is a FIXED non-secret summary — NOT the raw verify error (which could
-    // embed provider response text). The provider state string must NOT be persisted.
+    // The reason is a FIXED non-secret summary — NOT the raw verify error / provider state.
     expect(fPayload["reason"]).toContain("did not reach a live deployment");
     expect(fPayload["reason"]).not.toMatch(/ERROR/u);
     expect(JSON.stringify(failed)).not.toContain("deploy_token");
   });
 
   it("records a DURABLE trigger-phase deploy.failed when an EXPECTED deploy throws before any trigger", async () => {
-    // A deploy is EXPECTED (a target resolved) but throws BEFORE the verify retry — here a
-    // denied egress target. It must append a LOUD `deploy.failed` (phase=trigger, no
-    // deploymentId/attempts) before re-throwing, not swallow the throw as a log line.
+    // A deploy is EXPECTED (a target resolved) but throws BEFORE the verify retry (a denied
+    // egress target) — it must append a LOUD trigger-phase `deploy.failed`, not swallow it.
     const transport = scriptedDeployTransport("vercel", []);
     await transport.request({
       method: "POST",
@@ -287,8 +271,7 @@ describe("DeployOnMergeWatcher (a deploy happened)", () => {
       eventStore: events,
       urlProbe: scriptedUrlProbe(),
       verifyPoll: instantVerifyPollPolicy(),
-      // A restrictive policy that DENIES the target — a trigger-phase failure (the deploy
-      // never fires) that the watcher must record durably, not swallow.
+      // A restrictive policy that DENIES the target — a trigger-phase failure the watcher records.
       egressPolicy: {
         allowsEgress: () => ({ allowed: true, reason: "test" }),
         allowsDeployTarget: () => ({ allowed: false, reason: "off-allowlist deploy target" }),
@@ -298,8 +281,7 @@ describe("DeployOnMergeWatcher (a deploy happened)", () => {
     // No deploy fired (the target was denied) and the deploy was NEVER proven live.
     expect(transport.deploysTriggered()).toEqual([]);
     expect(events.appends.find((a) => a.eventType === "deploy.verified")).toBeUndefined();
-    // The LOUD + DURABLE record: an org-scoped trigger-phase deploy.failed, fixed reason,
-    // NO deploymentId/attempts (no deployment ever existed).
+    // The LOUD + DURABLE record: an org-scoped trigger-phase deploy.failed, no deploymentId/attempts.
     const failed = events.appends.find((a) => a.eventType === "deploy.failed");
     expect(failed).toBeDefined();
     expect(failed!.ambientOrgId).toBe(ORG_ID);
@@ -312,8 +294,8 @@ describe("DeployOnMergeWatcher (a deploy happened)", () => {
   });
 
   it("does NOT double-record on a verify-phase failure (only the verify-phase deploy.failed)", async () => {
-    // A verify exhaustion records its OWN verify-phase deploy.failed before re-throwing;
-    // the outer trigger-phase guard must NOT add a second one for the same throw.
+    // A verify exhaustion records its OWN verify-phase deploy.failed; the outer trigger-phase
+    // guard must NOT add a second one for the same throw.
     const transport = scriptedDeployTransport("vercel", []);
     await transport.request({
       method: "POST",
@@ -339,8 +321,8 @@ describe("DeployOnMergeWatcher (a deploy happened)", () => {
   });
 
   it("is TERMINAL on deploy.failed: a re-check after a prior failure is a no-op (no self-loop)", async () => {
-    // deploy.failed is run-scoped (its append wakes the subscriber), so a prior one must
-    // gate check() to a no-op — never re-verify nor append a second deploy.failed.
+    // deploy.failed is run-scoped (its append wakes the subscriber), so a prior one gates
+    // check() to a no-op — never re-verify nor append a second deploy.failed.
     const transport = scriptedDeployTransport("vercel", []);
     await transport.request({
       method: "POST",
@@ -372,8 +354,7 @@ describe("DeployOnMergeWatcher (a deploy happened)", () => {
       verifyPoll: instantVerifyPollPolicy(),
       verifyMaxAttempts: 2,
     });
-    // Attempt 1 reads ERROR (transient → throws); the retry's attempt 2 reads READY → the
-    // deploy is proven live. No deploy.failed escalation.
+    // Attempt 1 reads ERROR (transient → throws); attempt 2 reads READY → proven live, no fail.
     transport.scriptDeploymentStates("vercel_deploy_1", ["ERROR", "READY"]);
     await watcher.check(RUN_ID);
     expect(events.appends.find((a) => a.eventType === "deploy.verified")).toBeDefined();
@@ -381,8 +362,7 @@ describe("DeployOnMergeWatcher (a deploy happened)", () => {
   });
 
   it("is a clean NO-OP for a project with no deploy config AND no deploy intent (no error, no deploy)", async () => {
-    // No deployProvider/deployAppId AND the org links NO deploy-capable integration ⇒
-    // a LEGITIMATE no-op (most projects have no deploy target). Logged, never an error.
+    // No deployProvider/deployAppId AND no deploy-capable grant ⇒ a LEGITIMATE no-op (logged).
     const transport = scriptedDeployTransport("vercel");
     const events = new RecordingEventStore();
     await run({ merged: true, config: {}, linkedGrants: [] }, transport, events);
@@ -391,10 +371,8 @@ describe("DeployOnMergeWatcher (a deploy happened)", () => {
   });
 
   it("fails LOUD when a deploy IS expected (a deploy integration is linked) but the config is INCOMPLETE", async () => {
-    // The org links a deploy-capable integration (deploy is EXPECTED) but the project
-    // config carries no complete deploy target. For apex (which proves a live URL) this
-    // must NEVER silently skip and make the run look "done" without a deployment — it is
-    // a LOUD fail-closed misconfiguration. Probed via a grant whose CAPABILITY is deploy.
+    // The org links a deploy-capable integration (deploy EXPECTED) but the config carries no
+    // complete target — a LOUD fail-closed misconfiguration. Probed via a deploy-CAPABILITY grant.
     const transport = scriptedDeployTransport("vercel");
     const events = new RecordingEventStore();
     await expect(
@@ -415,8 +393,8 @@ describe("DeployOnMergeWatcher (a deploy happened)", () => {
   });
 
   it("fails LOUD on an INCOMPLETE config when the deploy intent comes from a deploy PROVIDER grant kind", async () => {
-    // Deploy intent is also signalled by a grant whose provider_kind IS a deploy
-    // provider (deploy.vercel/deploy.flyio), even with no explicit `deploy` capability.
+    // Deploy intent is also signalled by a grant whose provider_kind IS a deploy provider
+    // (deploy.vercel/deploy.flyio), even with no explicit `deploy` capability.
     const transport = scriptedDeployTransport("vercel");
     const events = new RecordingEventStore();
     await expect(
@@ -435,6 +413,31 @@ describe("DeployOnMergeWatcher (a deploy happened)", () => {
     expectSkipped(events, "config_incomplete", "no complete deploy target");
   });
 
+  it("SKIPS a template-creation build (a template is not a deployed product): deploy.skipped, no deploy", async () => {
+    // A TEMPLATE-BUILD project legitimately carries a COMPLETE deploy target + a linked grant (so
+    // PRODUCTS built FROM it deploy later), but the build itself must NEVER deploy: the watcher reads
+    // the REAL `templateBuild` marker, short-circuits BEFORE resolving a target, records `deploy.skipped`.
+    const transport = scriptedDeployTransport("vercel", []);
+    const events = new RecordingEventStore();
+    await run(
+      {
+        merged: true,
+        config: { ...VERCEL_TARGET, templateBuild: true },
+        grant: VERCEL_GRANT,
+        linkedGrants: [{ provider_kind: "deploy.vercel" }],
+      },
+      transport,
+      events,
+    );
+    // NO product deploy fired, and NO deploy.failed (this is a legitimate skip).
+    expect(transport.deploysTriggered()).toEqual([]);
+    expect(events.appends.find((a) => a.eventType === "deploy.triggered")).toBeUndefined();
+    expect(events.appends.find((a) => a.eventType === "deploy.failed")).toBeUndefined();
+    expect(events.appends.find((a) => a.eventType === "deploy.verified")).toBeUndefined();
+    // The OBSERVABLE skip: a DURABLE org-scoped deploy.skipped, reason template_build.
+    expectSkipped(events, "template_build", "template-creation build");
+  });
+
   it("is a no-op when the run has not merged", async () => {
     const transport = scriptedDeployTransport("vercel");
     const events = new RecordingEventStore();
@@ -451,9 +454,8 @@ describe("DeployOnMergeWatcher (a deploy happened)", () => {
   });
 
   it("RESUMES verification after a prior unverified trigger — re-verifies, never re-triggers", async () => {
-    // A transient verify failure left `deploy.triggered` but no `deploy.verified`. The
-    // re-check must NOT re-deploy; it re-verifies the SAME deployment (prior deploymentId)
-    // and records deploy.verified — the fix for a transient failure dead-ending the deploy.
+    // A transient verify failure left `deploy.triggered` but no `deploy.verified`. The re-check
+    // must NOT re-deploy; it re-verifies the SAME (prior) deployment and records deploy.verified.
     const transport = scriptedDeployTransport("vercel", []);
     // Seed the app so verify can resolve the prior deployment's status under the grant.
     await transport.request({
@@ -464,11 +466,9 @@ describe("DeployOnMergeWatcher (a deploy happened)", () => {
     });
     const events = new RecordingEventStore();
     await run({ merged: true, config: VERCEL_TARGET, grant: VERCEL_GRANT, alreadyDeployed: true }, transport, events);
-    // No fresh deploy was triggered.
+    // No fresh deploy triggered; verification polled the PRIOR deployment's status and succeeded.
     expect(transport.deploysTriggered()).toEqual([]);
-    // Verification actually polled the PRIOR deployment's status (not a no-op).
     expect(transport.statusPolls(PRIOR_DEPLOYMENT_ID)).toBeGreaterThan(0);
-    // Verification ran against the PRIOR deployment and now succeeded.
     const verified = events.appends.find((a) => a.eventType === "deploy.verified");
     expect(verified).toBeDefined();
     expect((verified!.payload as Record<string, unknown>)["deploymentId"]).toBe(PRIOR_DEPLOYMENT_ID);

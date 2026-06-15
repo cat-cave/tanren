@@ -5,23 +5,22 @@
 // runtime secrets — so the live product reflects the merge. It reacts on the SAME
 // `merge.completed` run-activity bus the post-merge issue-watcher uses — no new poller.
 //
-// GATED on a deploy artifact via a THREE-WAY intent resolution — NONE (legitimate
-// no-op, LOGGED) / INCOMPLETE-but-expected (LOUD fail-closed) / CONFIGURED (fires) —
-// so a misconfigured-but-expected deploy can NEVER silently skip and make a run (apex)
-// look "done" without a live deployment. Full rationale in `deployTargetResolution.ts`.
+// A TEMPLATE-CREATION build is SKIPPED up front (`deploy.skipped` reason `template_build` —
+// it authors a template, not a product). Otherwise GATED via a THREE-WAY intent resolution —
+// NONE (legitimate no-op, LOGGED) / INCOMPLETE-but-expected (LOUD fail-closed) / CONFIGURED
+// (fires) — so a misconfigured-but-expected deploy can NEVER silently skip and make a run
+// (apex) look "done" without a live deployment. Full rationale in `deployTargetResolution.ts`.
 //
 // DURABLE FAILURE: once a target resolves (a deploy is EXPECTED), ANY throw — verify
-// exhaustion OR a trigger/attach failure — records a durable `deploy.failed` (→ a `warn`
-// notification) BEFORE re-throwing, so the failure is loud + persisted, never a swallowed
-// subscriber log line that leaves the merge looking "done" with no live URL.
-//
-// IDEMPOTENT per merge: it gates on a prior TERMINAL `deploy.verified`/`deploy.failed` and
+// exhaustion OR a trigger/attach failure — records a durable `deploy.failed` (→ a `warn`)
+// BEFORE re-throwing, never a swallowed log line that leaves the merge looking "done".
+// IDEMPOTENT per merge: gates on a prior TERMINAL `deploy.verified`/`deploy.failed` and
 // resumes a prior unverified `deploy.triggered` — one deploy per merge.
 //
 // SECRET DISCIPLINE: the runtime env VALUES flow only into `attachRuntimeAppEnv`'s
-// provider set-env request; the deploy token only into the provider's bearer. The
-// emitted `deploy.triggered` carries provider + app id + resolved URL + deployment id —
-// all non-secret — never a token/value.
+// provider set-env request; the deploy token only into the provider's bearer. The emitted
+// `deploy.triggered` carries provider + app id + resolved URL + deployment id — all
+// non-secret — never a token/value.
 
 import { runWithJobOrgId, runWithSystemScope } from "@tanren/db";
 import type pg from "pg";
@@ -36,6 +35,7 @@ import {
   type DeployVerifyContext,
   mergeShaFromPayload,
   repoSlugFromPrUrl,
+  skipTemplateBuildDeploy,
   verifyDeploy,
 } from "./deployOnMergeReads.js";
 import type { SecretStore } from "../contracts/secretStore.js";
@@ -67,9 +67,9 @@ export interface ProjectDeployTarget {
   appId: string;
   orgId: string;
   /**
-   * AUDIT-EVIDENCE BASELINE: the governance policy version (the project config
-   * version), stamped onto the governing `deploy.triggered` / `deploy.verified`
-   * events so the audit trail records which policy revision the deploy ran under.
+   * AUDIT-EVIDENCE BASELINE: the governance policy version (the project config version),
+   * stamped onto the governing `deploy.triggered` / `deploy.verified` events so the audit
+   * trail records which policy revision the deploy ran under.
    */
   policyVersion: number;
 }
@@ -143,9 +143,9 @@ export class DeployOnMergeWatcher {
 
   /**
    * Attach runtime env + trigger the project's deploy for a merged run. A no-op when not
-   * merged / no deploy configured (LOGGED) / already deployed; a durable `deploy.skipped` +
-   * LOUD throw on a pre-resolution failure (incomplete config / missing mergeSha); a LOUD
-   * throw when a configured deploy fails.
+   * merged / no deploy configured (LOGGED) / a template-creation build (`deploy.skipped`) /
+   * already deployed; a durable `deploy.skipped` + LOUD throw on a pre-resolution failure
+   * (incomplete config / missing mergeSha); LOUD throw when a configured deploy fails.
    */
   async check(runId: string): Promise<void> {
     if (runId === "") return;
@@ -153,10 +153,15 @@ export class DeployOnMergeWatcher {
     if (merged.kind === "not_merged") return;
 
     const projectId = merged.kind === "ok" ? merged.info.projectId : merged.projectId;
+
+    // TEMPLATE-CREATION BUILD SKIP: a template-build project authors a template, NOT a
+    // product — short-circuit BEFORE resolving a target, recording a DURABLE OBSERVABLE
+    // `deploy.skipped` (reason `template_build`); a LEGITIMATE skip, no `deploy.failed`/throw.
+    if (await skipTemplateBuildDeploy(this.deps.pool, this.verifyCtx, { runId, projectId })) return;
+
     const resolved = await this.loadDeployTarget(projectId);
     if (resolved.kind === "none") {
-      // No deploy EXPECTED (no config, no linked deploy integration) — a legitimate no-op
-      // even when the merge recorded no sha (there is nothing to deploy).
+      // No deploy EXPECTED (no config, no linked deploy integration) — a legitimate no-op.
       log.info("merged with no deploy configured/linked — skipping deploy (legitimate no-op)", { runId, projectId });
       return;
     }
@@ -434,10 +439,10 @@ export class DeployOnMergeWatcher {
   }
 
   /**
-   * Whether this run reached a TERMINAL deploy outcome — `deploy.verified` (proven live)
-   * OR `deploy.failed` (verify retry exhausted). Both gate `check()` to a no-op: a FAILED
-   * deploy must NOT be re-verified — its run-scoped append wakes the subscriber, so
-   * without the terminal gate the next pass would re-verify + re-append, self-looping.
+   * Whether this run reached a TERMINAL deploy outcome — `deploy.verified` (proven live) OR
+   * `deploy.failed` (verify retry exhausted). Both gate `check()` to a no-op: a FAILED deploy
+   * must NOT be re-verified — its run-scoped append wakes the subscriber, so without the
+   * terminal gate the next pass would re-verify + re-append, self-looping.
    */
   private async alreadyTerminal(runId: string): Promise<boolean> {
     return runWithSystemScope(this.deps.pool, async (client) => {
@@ -449,10 +454,7 @@ export class DeployOnMergeWatcher {
     });
   }
 
-  /**
-   * The deploymentId of this run's latest `deploy.triggered`, if any. Drives the
-   * RESUME path (re-verify the same live deployment rather than re-trigger a build).
-   */
+  /** The latest `deploy.triggered` deploymentId, if any — drives the RESUME (re-verify) path. */
   private async priorTriggeredDeploymentId(runId: string): Promise<string | undefined> {
     return runWithSystemScope(this.deps.pool, async (client): Promise<string | undefined> => {
       const result = await client.query<{ payload: unknown }>(
@@ -492,8 +494,6 @@ export function buildDeployOnMergeWatcher(deps: {
   });
 }
 
-// Re-export the demo-on-deploy watcher factory off this same post-merge-deploy-path
-// module, so the autonomy-loops boot imports both deploy-path watchers from ONE
-// symbol source (keeps that file under the max-dependencies cap). The demo watcher
-// runs right after this one on the same wake (demos-as-evidence).
+// Re-export the demo-on-deploy watcher factory off this same module so the autonomy-loops
+// boot imports both deploy-path watchers from ONE symbol source (the max-dependencies cap).
 export { buildDemoOnDeployWatcher } from "./demoOnDeploy.js";
