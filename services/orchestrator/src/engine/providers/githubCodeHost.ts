@@ -21,7 +21,14 @@
 
 import { decodeBase64Content } from "../contracts/repoHostErrors.js";
 import { createGitHubRepository } from "./githubRepoCreate.js";
-import { GitHubStatusService, repoPath, type GitHubHttpClient, type GitHubPullRequestChecks } from "./github.js";
+import {
+  GitHubStatusService,
+  repoPath,
+  withErrorDetail,
+  type GitHubHttpClient,
+  type GitHubPullRequestChecks,
+} from "./github.js";
+import { mainHeadCacheKey, sharedMainHeadCache, type MainHeadCache } from "./mainHeadCache.js";
 // Re-export the pure repo-URL parser so a stage that already imports `GitHubCodeHost`
 // (the merge/percolation reads) sources `RepoRef` parsing here too — one fewer dep there.
 export { parseGitHubRepository } from "./github.js";
@@ -110,12 +117,22 @@ function refObjectSha(body: unknown): string | undefined {
  */
 export class GitHubCodeHost implements CodeHost {
   private readonly status: GitHubStatusService;
+  /**
+   * apex-v35 VOLUME guard: the SHARED short-TTL/single-flight cache for the default-branch
+   * head read (`fetchRef`). Defaults to the process-shared instance so the batch /
+   * percolation / post-merge readers in one process collapse their redundant `main`-head
+   * reads; a fresh instance can be injected for test isolation. NOT consulted by the
+   * `landAuthorizedRef` CAS read (that stays fresh); BUSTED whenever this host moves the ref.
+   */
+  private readonly mainHeadCache: MainHeadCache;
 
   constructor(
     private readonly http: GitHubHttpClient,
     private readonly resolveToken: CodeHostTokenSupplier,
+    mainHeadCache: MainHeadCache = sharedMainHeadCache,
   ) {
     this.status = new GitHubStatusService(http);
+    this.mainHeadCache = mainHeadCache;
   }
 
   async createRepo(input: CreateHostRepoInput): Promise<CreatedHostRepo> {
@@ -181,6 +198,7 @@ export class GitHubCodeHost implements CodeHost {
       body: { ref: `refs/heads/${input.remoteBranch}`, sha: input.sha },
     });
     if (create.status === 201) {
+      this.mainHeadCache.invalidate(mainHeadCacheKey(input.repo.owner, input.repo.name, input.remoteBranch));
       return;
     }
     if (create.status !== 422) {
@@ -207,10 +225,15 @@ export class GitHubCodeHost implements CodeHost {
     if (update.status !== 200) {
       throw new Error(`GitHub ref update for ${input.remoteBranch} failed: HTTP ${update.status}`);
     }
+    this.mainHeadCache.invalidate(mainHeadCacheKey(input.repo.owner, input.repo.name, input.remoteBranch));
   }
 
   async fetchRef(input: { repo: CodeHostRepoRef; remoteBranch: string }): Promise<string | undefined> {
-    return this.readBranchSha(input.repo, input.remoteBranch);
+    // apex-v35 VOLUME guard: collapse the redundant `main`-head reads (batch/percolation/
+    // post-merge each re-read it every cycle) behind the short-TTL single-flight cache. A
+    // throw (403/transient) is NOT cached and propagates; a merge to this branch busts it.
+    const key = mainHeadCacheKey(input.repo.owner, input.repo.name, input.remoteBranch);
+    return this.mainHeadCache.read(key, () => this.readBranchSha(input.repo, input.remoteBranch));
   }
 
   async readCommit(repo: CodeHostRepoRef, sha: string): Promise<HostCommit> {
@@ -434,6 +457,9 @@ export class GitHubCodeHost implements CodeHost {
       throw new Error(`GitHub land of ${input.authorizedSha} onto ${input.intoMain} failed: HTTP ${update.status}`);
     }
     const landedSha = refObjectSha(update.body) ?? input.authorizedSha;
+    // The default-branch head MOVED — bust the cached head so the next batch/post-merge
+    // read sees the new base immediately (never a stale-base merge decision).
+    this.mainHeadCache.invalidate(mainHeadCacheKey(input.repo.owner, input.repo.name, input.intoMain));
     return { mainSha: landedSha };
   }
 
@@ -450,7 +476,7 @@ export class GitHubCodeHost implements CodeHost {
       return undefined;
     }
     if (response.status !== 200) {
-      throw new Error(`GitHub ref read for ${branch} failed: HTTP ${response.status}`);
+      throw new Error(withErrorDetail(`GitHub ref read for ${branch} failed: HTTP ${response.status}`, response));
     }
     return refObjectSha(response.body);
   }

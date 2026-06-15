@@ -8,6 +8,8 @@ export { decodeBase64Content } from "../contracts/repoHostErrors.js";
 // retired `buildVcsProvider.js` convenience re-export used to provide).
 export { GithubAppTokenMinter } from "./githubAppTokenMinter.js";
 import {
+  appendErrorDetail,
+  buildErrorDetail,
   DEFAULT_RATE_LIMIT_RETRIES,
   DEFAULT_TRANSIENT_RETRIES,
   headerGetter,
@@ -105,11 +107,21 @@ export interface GitHubHttpResponse {
   status: number;
   body: unknown;
   /**
-   * rate-limit signal lifted from the response headers. Present when
-   * GitHub reports a `Retry-After` (seconds) or an exhausted primary rate-limit
-   * window (`X-RateLimit-Remaining: 0` + `X-RateLimit-Reset` epoch seconds).
+   * rate-limit signal lifted from the response: a `Retry-After` (seconds), an exhausted
+   * primary window (`X-RateLimit-Remaining: 0` + `X-RateLimit-Reset`), or a secondary/abuse
+   * body (the bounded secondary default).
    */
   retryAfterMs?: number;
+  /**
+   * Enriched non-2xx detail (the GitHub `message` + rate-limit headers) so a thrown `HTTP
+   * <status>` carries WHY (the apex-v35 raw-`HTTP 403` diagnosis gap). `undefined` on a 2xx.
+   */
+  errorDetail?: string;
+}
+
+/** Append a response's enriched detail to a caller's `HTTP <status>` error string. */
+export function withErrorDetail(base: string, response: GitHubHttpResponse): string {
+  return appendErrorDetail(base, response.errorDetail);
 }
 
 export interface GitHubHttpClient {
@@ -185,12 +197,25 @@ export class FetchGitHubHttpClient implements GitHubHttpClient {
         token = await input.refreshToken();
         continue;
       }
-      // rate-limited — honor Retry-After / X-RateLimit-Reset, back off, and retry up
-      // to the rate-limit ceiling (its OWN counter, independent of any prior transient
-      // 503 retries) rather than hammering GitHub.
+      // rate-limited — honor Retry-After / X-RateLimit-Reset / a secondary-limit body,
+      // back off, and retry up to the rate-limit ceiling (its OWN counter, independent of
+      // any prior transient 503 retries) rather than hammering GitHub. This is checked
+      // BEFORE the 403 force-mint so a secondary-rate-limit 403 backs off (re-minting the
+      // token would not clear a rate limit, only burn another API call).
       if (response.retryAfterMs !== undefined && rateLimitRetries < this.maxRateLimitRetries) {
         await this.sleep(response.retryAfterMs);
         rateLimitRetries += 1;
+        continue;
+      }
+      // 403 with a token supplier, NOT a rate limit: an installation token can edge-case
+      // a 403 (instead of a 401) when revoked/rotated mid-flight. Force-mint ONCE and
+      // retry — mirroring the 401 path, sharing the one-shot `refreshed` flag so we never
+      // loop. A 403 that PERSISTS after the re-mint (or one already classified rate-limit
+      // above) falls through to surface LOUDLY — a genuine permission error is never
+      // silently retried forever.
+      if (response.status === 403 && input.refreshToken !== undefined && !refreshed) {
+        refreshed = true;
+        token = await input.refreshToken();
         continue;
       }
       // GitHub-5xx resilience: a transient gateway failure (502/503/504/408) self-heals
@@ -224,10 +249,13 @@ export class FetchGitHubHttpClient implements GitHubHttpClient {
       body: body === undefined ? undefined : JSON.stringify(body),
     });
     const text = await response.text();
+    const responseBody = text === "" ? undefined : JSON.parse(text);
+    const getHeader = headerGetter(response.headers);
     return {
       status: response.status,
-      body: text === "" ? undefined : JSON.parse(text),
-      retryAfterMs: rateLimitBackoffMs(response.status, headerGetter(response.headers), this.now()),
+      body: responseBody,
+      retryAfterMs: rateLimitBackoffMs(response.status, getHeader, this.now(), responseBody),
+      ...(response.status >= 400 && { errorDetail: buildErrorDetail(response.status, responseBody, getHeader) }),
     };
   }
 }
@@ -254,7 +282,7 @@ export class GitHubStatusService {
       refreshToken: input.refreshToken,
     });
     if (pull.status !== 200) {
-      throw new Error(`GitHub PR fetch failed: HTTP ${pull.status}`);
+      throw new Error(withErrorDetail(`GitHub PR fetch failed: HTTP ${pull.status}`, pull));
     }
     const head = parsePullRequestHead(pull.body);
     const baseBranch = parseBaseBranch((pull.body as Record<string, unknown> | undefined)?.["base"]);
@@ -289,7 +317,9 @@ export class GitHubStatusService {
       refreshToken: input.refreshToken,
     });
     if (refResponse.status !== 200) {
-      throw new Error(`GitHub branch ref fetch failed for ${input.branch}: HTTP ${refResponse.status}`);
+      throw new Error(
+        withErrorDetail(`GitHub branch ref fetch failed for ${input.branch}: HTTP ${refResponse.status}`, refResponse),
+      );
     }
     const sha = parseRefObjectSha(refResponse.body);
     if (sha === undefined) {
@@ -379,7 +409,12 @@ export class GitHubStatusService {
       return undefined;
     }
     if (response.status !== 200) {
-      throw new Error(`GitHub branch-protection read failed for ${input.baseBranch}: HTTP ${response.status}`);
+      throw new Error(
+        withErrorDetail(
+          `GitHub branch-protection read failed for ${input.baseBranch}: HTTP ${response.status}`,
+          response,
+        ),
+      );
     }
     return parseRequiredContexts(response.body);
   }

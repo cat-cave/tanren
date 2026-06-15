@@ -25,15 +25,13 @@ export const MAX_BATCH_INFRA_HOLDS = 5;
 import type { CoordinateResult, MergeQueueEntry, MergeQueueModel } from "../contracts/mergeCoordinator.js";
 import type { BatchMergeEventEmitter } from "./batchCoordinator.js";
 import { type HoldCeilingStore, InMemoryHoldCeilingStore } from "./holdCeilingStore.js";
-import { alertRetryAfterMs } from "./retrySchedule.js";
+import { alertRetryAfterMs, recoverableRetryDelayMs } from "./retrySchedule.js";
 import { createLogger } from "../observability/logger.js";
 
 const log = createLogger("batch-coordinator");
 
 /** The in-pass retry budget already burned before a hold (for the emitted attempt count). */
 const HELD_AFTER_ATTEMPTS = 3;
-/** How long after a RECOVERABLE infra hold the subscriber re-drives the project. */
-const INFRA_HOLD_RETRY_AFTER_MS = 3000;
 /** Longer re-drive delay after a terminal alert so persistent outages do not hot-loop. */
 export const INFRA_HOLD_ALERT_RETRY_AFTER_MS = alertRetryAfterMs;
 
@@ -78,7 +76,17 @@ export async function holdOnInfra(args: {
     return { projectId, holdReason: "infra_error", retryAfterMs: INFRA_HOLD_ALERT_RETRY_AFTER_MS, queueDepth };
   }
   await events.emitInfraBlocked({ projectId, batch, message, attempts: HELD_AFTER_ATTEMPTS });
-  return { projectId, holdReason: "infra_error", retryAfterMs: INFRA_HOLD_RETRY_AFTER_MS, queueDepth };
+  // apex-v35 VOLUME guard: back off the re-drive EXPONENTIALLY across consecutive holds
+  // (3s → 10s → 30s → 60s) rather than a fixed ~3s hammer. A PERSISTENT upstream 403 (the
+  // secondary-rate-limit case) is sustained by the re-drive volume itself, so a fixed-interval
+  // re-check is a hot-loop that re-provokes the limit. Reusing the single-source recoverable
+  // curve keeps every merge backoff consistent; the streak count drives the index.
+  return {
+    projectId,
+    holdReason: "infra_error",
+    retryAfterMs: recoverableRetryDelayMs(recorded.holds),
+    queueDepth,
+  };
 }
 
 export async function terminalInfraBlock(args: {

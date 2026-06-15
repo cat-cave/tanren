@@ -11,6 +11,7 @@ import {
   type GitHubHttpResponse,
 } from "../src/engine/providers/github.js";
 import {
+  isSecondaryRateLimitBody,
   MAX_RATE_LIMIT_BACKOFF_MS,
   MIN_RATE_LIMIT_BACKOFF_MS,
   rateLimitBackoffMs,
@@ -97,6 +98,92 @@ describe("github rate-limit backoff (P3-0028)", () => {
     expect(slept).toContain(7_000);
     expect(call).toBe(5);
     expect(response).toMatchObject({ status: 200, body: { ok: true } });
+  });
+
+  it("apex-v35: classifies a SECONDARY rate-limit 403 (body only, no headers) as rate-limited", () => {
+    const now = 1_000_000;
+    const secondaryBody = {
+      message: "You have exceeded a secondary rate limit. Please wait a few minutes before you try again.",
+      documentation_url: "https://docs.github.com/rest/overview/resources-in-the-rest-api#secondary-rate-limits",
+    };
+    // The bug: this 403 carries NEITHER `Retry-After` NOR `X-RateLimit-Remaining: 0`, so the
+    // header-only classifier returned `undefined` and the engine hot-looped on a raw HTTP 403.
+    // WITHOUT the body classifier this is undefined (the assertion that fails pre-fix):
+    expect(rateLimitBackoffMs(403, get({}), now, secondaryBody)).toBe(MAX_RATE_LIMIT_BACKOFF_MS);
+    expect(rateLimitBackoffMs(429, get({}), now, secondaryBody)).toBe(MAX_RATE_LIMIT_BACKOFF_MS);
+    // The matcher is body-shape only; a non-secondary 403 body is still NOT rate-limited.
+    expect(
+      rateLimitBackoffMs(403, get({}), now, { message: "Resource not accessible by integration" }),
+    ).toBeUndefined();
+    expect(isSecondaryRateLimitBody(secondaryBody)).toBe(true);
+    expect(isSecondaryRateLimitBody({ message: "Bad credentials" })).toBe(false);
+  });
+
+  it("apex-v35: backs off + RETRIES a secondary-rate-limit 403 (body only) then succeeds", async () => {
+    const slept: number[] = [];
+    let call = 0;
+    const fetchImpl = (async () => {
+      call += 1;
+      if (call === 1) {
+        return new Response(
+          JSON.stringify({ message: "You have exceeded a secondary rate limit. Please wait a few minutes." }),
+          { status: 403 },
+        );
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const client = new FetchGitHubHttpClient({ fetchImpl, sleep: async (ms) => void slept.push(ms) });
+    const response = await client.request({ method: "GET", path: "/git/ref/heads/main", token: "t" });
+    // Backed off the bounded secondary default (not a raw 403 hot-loop) then succeeded.
+    expect(slept).toEqual([MAX_RATE_LIMIT_BACKOFF_MS]);
+    expect(response).toMatchObject({ status: 200, body: { ok: true } });
+  });
+
+  it("apex-v35: a TOKEN 403 force-mints ONCE then retries; a persistent genuine 403 surfaces loud", async () => {
+    // (a) a token-403 clears after a single force-mint.
+    let minted = 0;
+    let call = 0;
+    const fetchOnceThen200 = (async () => {
+      call += 1;
+      if (call === 1) return new Response(JSON.stringify({ message: "Bad credentials" }), { status: 403 });
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const client = new FetchGitHubHttpClient({ fetchImpl: fetchOnceThen200, sleep: async () => {} });
+    const ok = await client.request({
+      method: "GET",
+      path: "/git/ref/heads/main",
+      token: "stale",
+      refreshToken: async () => {
+        minted += 1;
+        return "fresh";
+      },
+    });
+    expect(minted).toBe(1);
+    expect(ok).toMatchObject({ status: 200, body: { ok: true } });
+
+    // (b) a PERSISTENT genuine 403 (not rate-limit) re-mints ONCE then surfaces the 403 —
+    // never an infinite re-mint loop, and the body is preserved for diagnosis.
+    let mints2 = 0;
+    let calls2 = 0;
+    const fetchAlways403 = (async () => {
+      calls2 += 1;
+      return new Response(JSON.stringify({ message: "Resource not accessible by integration" }), { status: 403 });
+    }) as unknown as typeof fetch;
+    const client2 = new FetchGitHubHttpClient({ fetchImpl: fetchAlways403, sleep: async () => {} });
+    const denied = await client2.request({
+      method: "GET",
+      path: "/git/ref/heads/main",
+      token: "t",
+      refreshToken: async () => {
+        mints2 += 1;
+        return "fresh";
+      },
+    });
+    // Exactly one re-mint, then it gives up (no loop): the original + one retry after.
+    expect(mints2).toBe(1);
+    expect(calls2).toBe(2);
+    expect(denied.status).toBe(403);
+    expect(denied.errorDetail).toMatch(/Resource not accessible by integration/u);
   });
 
   it("gives up after the retry ceiling instead of looping forever", async () => {
