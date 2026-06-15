@@ -9,9 +9,12 @@ import {
   type SshRunnerHandle,
 } from "../contracts/allocator.js";
 import { normalizeHostKeyFingerprint } from "../ssh/fingerprint.js";
+import { withSshTransientRetry } from "../ssh/transientRetry.js";
+import { createLogger } from "../observability/logger.js";
 import type { RunnerStore } from "./runnerStore.js";
 
 const allocatorName = "static-runner";
+const log = createLogger("static-runner");
 
 export interface StaticRunnerAllocatorOptions {
   /** Hostname or IP the orchestrator should SSH to. */
@@ -31,8 +34,18 @@ export interface StaticRunnerAllocatorOptions {
   runners: RunnerStore;
   /** Timeout for the TOFU discovery handshake. */
   discoverTimeoutMs?: number;
+  /**
+   * Number of transient-retry ATTEMPTS for the TOFU discovery handshake (the first
+   * try + transient retries). A momentary `ECONNRESET`/`ECONNREFUSED` while the runner
+   * is briefly unavailable is RETRIED with backoff before failing; a genuine
+   * non-transient error (auth, bad fingerprint) still fails on the first attempt.
+   * Defaults to the shared `DEFAULT_SSH_TRANSIENT_ATTEMPTS`.
+   */
+  discoverTransientAttempts?: number;
   /** Override for tests. */
   clientFactory?: () => Pick<Client, "connect" | "destroy" | "end" | "once" | "on">;
+  /** Override the transient-retry sleep (tests inject a no-wait sleep). */
+  retrySleep?: (ms: number) => Promise<void>;
 }
 
 /**
@@ -102,7 +115,32 @@ export class StaticRunnerAllocator implements Allocator {
     await this.options.runners.release(runnerId);
   }
 
+  /**
+   * Discover the runner's host-key fingerprint, RETRYING transient network blips. The
+   * static runner regenerates host keys per restart, so this opens a raw SSH connection on
+   * every allocate (TOFU); a momentary `read ECONNRESET` (the runner briefly unavailable /
+   * a reset mid-handshake) is a TRANSIENT failure that must NOT fail the allocate — it is
+   * retried with bounded backoff (the apex-v35 false-escalation root cause). A genuine
+   * non-transient failure (auth, an unparseable fingerprint) still fails loud on the first
+   * attempt; exhausting the retries surfaces the real underlying cause (no silent fallback).
+   */
   private async discoverHostKeyFingerprint(host: string, port: number): Promise<string> {
+    return await withSshTransientRetry(() => this.discoverHostKeyFingerprintOnce(host, port), {
+      ...(this.options.discoverTransientAttempts !== undefined && { attempts: this.options.discoverTransientAttempts }),
+      ...(this.options.retrySleep !== undefined && { sleep: this.options.retrySleep }),
+      onRetry: ({ attempt, delayMs, error }) => {
+        log.warn("static runner host key discovery hit a transient network error; retrying with backoff", {
+          host,
+          port,
+          attempt,
+          delayMs,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      },
+    });
+  }
+
+  private async discoverHostKeyFingerprintOnce(host: string, port: number): Promise<string> {
     const timeoutMs = this.options.discoverTimeoutMs ?? 10_000;
     return await new Promise<string>((resolve, reject) => {
       const client = this.clientFactory();

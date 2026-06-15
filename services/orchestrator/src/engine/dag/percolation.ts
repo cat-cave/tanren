@@ -39,6 +39,7 @@ import {
 } from "../contracts/changePercolation.js";
 import { SpecNotRunnableError } from "../workflow/projectSpecErrors.js";
 import { BaseShiftHeldError } from "./baseShiftCoordinator.js";
+import { HeldReDriveBackoff } from "./heldReDriveBackoff.js";
 import { createLogger } from "../observability/logger.js";
 
 const log = createLogger("change-percolation");
@@ -97,6 +98,16 @@ export interface PercolationCoordinatorDeps {
   kickOff: PercolationKickOff;
   settler: PercolationSettler;
   events: PercolationEventEmitter;
+  /**
+   * Per-spec HELD re-drive backoff (Part B of the apex-v35 false-escalation fix). The
+   * percolation notification fires RAPIDLY (the live run: 388 `percolating` events), so a
+   * TRANSIENT base-shift HOLD would otherwise re-fail many times per second and burn the
+   * consecutive-same-failure cap (K=4) into a FALSE `persistent_failure`. This spaces the
+   * re-drive of the SAME held spec (3s → 10s → 30s → 60s, clamped) so the K-cap counts
+   * genuine repeated failures over TIME, not a sub-second hot-loop. Injectable for tests
+   * (clock control); a default in-memory instance is used when absent.
+   */
+  heldBackoff?: HeldReDriveBackoff;
 }
 
 function emptyResult(projectId: string): PercolationPassResult {
@@ -124,7 +135,11 @@ function emptyResult(projectId: string): PercolationPassResult {
  * across passes as each notification re-detects.
  */
 export class PercolatingCoordinator implements ChangePercolationCoordinator {
-  constructor(private readonly deps: PercolationCoordinatorDeps) {}
+  private readonly heldBackoff: HeldReDriveBackoff;
+
+  constructor(private readonly deps: PercolationCoordinatorDeps) {
+    this.heldBackoff = deps.heldBackoff ?? new HeldReDriveBackoff();
+  }
 
   async percolate(projectId: string): Promise<PercolationPassResult> {
     const dependents = await this.deps.readModel.loadSpeculativeDependents(projectId);
@@ -145,9 +160,15 @@ export class PercolatingCoordinator implements ChangePercolationCoordinator {
         // it as `held` (a distinct recoverable outcome), so "the live engine HOLDS the
         // work" is observable + visibly recoverable, never mislabeled a real failure.
         if (error instanceof BaseShiftHeldError) {
-          log.warn("dependent HELD (fail-closed; work survives, retried next notification)", {
+          // Part B (apex-v35): record the HELD so the SAME spec's next re-drive is SPACED
+          // by the backoff curve — a transient hold must not re-fail 4× in 3s and burn the
+          // K-cap into a false `persistent_failure`. The work survives untouched.
+          const { holds, delayMs } = this.heldBackoff.recordHeld(dependent.specId);
+          log.warn("dependent HELD (fail-closed; work survives, re-drive spaced by backoff)", {
             specId: dependent.specId,
             message: error.message,
+            consecutiveHolds: holds,
+            nextReDriveInMs: delayMs,
           });
           result.held.push(dependent.specId);
           continue;
@@ -172,9 +193,27 @@ export class PercolatingCoordinator implements ChangePercolationCoordinator {
   ): Promise<void> {
     // PHASE 1 — settle any in-flight percolation FIRST. While a marker is set the
     // dependent is mid-absorb; we resolve it (or wait) and NEVER kick a second one
-    // off (the loop guard). Only a settled/absent marker proceeds to detection.
+    // off (the loop guard). Only a settled/absent marker proceeds to detection. A
+    // settle means the dependent is NOT held this pass — clear any HELD backoff so a
+    // later genuine hold starts the curve fresh.
     if (dependent.pending !== undefined) {
+      this.heldBackoff.clear(dependent.specId);
       await this.settle(projectId, dependent, dependent.pending, result);
+      return;
+    }
+    // Part B (apex-v35): a spec HELD on a recent pass is not re-drive-eligible until its
+    // backoff window elapses — SKIP the kick-off (which would re-fail a transient infra
+    // hold) and keep it `held` this pass. The percolation notification fires rapidly (388
+    // `percolating` events in the live run); without this a transient hold re-fails ~4× in
+    // ~3s and burns the K=4 consecutive-failure cap into a FALSE escalation. The work is
+    // untouched; it re-drives once spaced, so a GENUINE persistent hold still escalates at
+    // K — just counting spaced retries over time, never a sub-second hot-loop.
+    if (this.heldBackoff.shouldSkip(dependent.specId)) {
+      log.debug("dependent HELD re-drive spaced by backoff (skipped this notification)", {
+        specId: dependent.specId,
+        remainingMs: this.heldBackoff.remainingMs(dependent.specId),
+      });
+      result.held.push(dependent.specId);
       return;
     }
     // PHASE 2 — detect a new change.
@@ -285,6 +324,8 @@ export class PercolatingCoordinator implements ChangePercolationCoordinator {
               status: error.status,
             },
           );
+          // Terminal/moot — not held; clear any backoff.
+          this.heldBackoff.clear(dependent.specId);
           result.skipped.push(dependent.specId);
           return;
         }
@@ -292,13 +333,22 @@ export class PercolatingCoordinator implements ChangePercolationCoordinator {
       }
       if (outcome.result === "reexecuting") {
         // A REAL re-execution is now in flight; it settles (absorbs/replans) on a
-        // later pass once its gate+checker+auditor terminate. Not absorbed here.
+        // later pass once its gate+checker+auditor terminate. Not absorbed here. NOT held
+        // this pass — clear any backoff so a later genuine hold starts the curve fresh.
+        this.heldBackoff.clear(dependent.specId);
         result.reexecuting.push(dependent.specId);
       } else {
         // held: a never-discard base-shift hold surfaced as a structured kick-off result
         // (a spec-vs-spec assembly conflict now surfaces as a `BaseShiftHeldError` thrown
         // from the rebase, caught at the pass level above). The dependent is untouched +
-        // retried next notification.
+        // retried next notification — Part B SPACES that re-drive so a transient hold can
+        // never burn the K-cap into a false escalation.
+        const { holds, delayMs } = this.heldBackoff.recordHeld(dependent.specId);
+        log.warn("dependent HELD via kick-off result; re-drive spaced by backoff", {
+          specId: dependent.specId,
+          consecutiveHolds: holds,
+          nextReDriveInMs: delayMs,
+        });
         result.held.push(dependent.specId);
       }
       return;
@@ -314,12 +364,15 @@ export class PercolatingCoordinator implements ChangePercolationCoordinator {
         pendingAncestorSha: lazy.toSha,
         severity: lazy.lazySeverity,
       });
+      // Deferred (lazy) — not held this pass; clear any backoff.
+      this.heldBackoff.clear(dependent.specId);
       result.deferred.push(dependent.specId);
       return;
     }
 
     // No actionable change — every ancestor's live SHA still matches what the
-    // dependent re-gated clean against (the termination key).
+    // dependent re-gated clean against (the termination key). Not held; clear backoff.
+    this.heldBackoff.clear(dependent.specId);
     result.unchanged.push(dependent.specId);
   }
 }

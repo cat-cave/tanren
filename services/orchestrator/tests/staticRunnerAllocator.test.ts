@@ -24,6 +24,12 @@ interface FakeClientOptions {
    * second emission has no listener and Node's EventEmitter throws → crash.
    */
   doubleEmitOnDestroy?: boolean;
+  /**
+   * Emit a TRANSIENT socket reset ("read ECONNRESET") as the handshake error instead of
+   * the default non-transient host-key-verification failure. Used to drive the Part A
+   * transient-retry path (a momentary network blip mid-handshake).
+   */
+  transientReset?: boolean;
 }
 
 // The exact ssh2 connect config the discovery handshake builds. Captured so a
@@ -66,7 +72,12 @@ function fakeClientFactory(opts: FakeClientOptions, captured?: CapturedConnect) 
             config.hostVerifier?.(opts.fingerprint);
           }
           if (opts.emitError ?? true) {
-            emitter.emit("error", new Error("Handshake failed: host key verification failed"));
+            emitter.emit(
+              "error",
+              new Error(
+                opts.transientReset === true ? "read ECONNRESET" : "Handshake failed: host key verification failed",
+              ),
+            );
           }
         });
         return emitter;
@@ -273,6 +284,109 @@ describe("StaticRunnerAllocator", () => {
         identitySecretRef: "runner/dev/identity",
       }),
     ).rejects.toThrow(/unparseable fingerprint/u);
+    expect(runners.claims).toEqual([]);
+  });
+
+  it("retries a transient ECONNRESET during host-key discovery, then succeeds", async () => {
+    // Part A (apex-v35): a momentary `read ECONNRESET` while the runner is briefly
+    // unavailable mid-handshake is TRANSIENT — it must NOT fail the allocate. The first
+    // attempt errors with ECONNRESET; the retry succeeds and the fingerprint is captured.
+    const runners = new FakeRunnerStore();
+    let attempt = 0;
+    const factory = () => {
+      attempt += 1;
+      // First attempt: emit a transient socket reset (no fingerprint captured).
+      // Subsequent attempts: a normal successful discovery.
+      const fp = attempt === 1 ? undefined : "c".repeat(64);
+      const errored = attempt === 1;
+      return fakeClientFactory({
+        fingerprint: fp,
+        emitError: true,
+        ...(errored && { transientReset: true }),
+      })();
+    };
+    const allocator = new StaticRunnerAllocator({
+      host: "runner",
+      port: 22,
+      runners,
+      clientFactory: factory,
+      // A no-wait sleep keeps the test fast.
+      retrySleep: async () => {},
+    });
+
+    const allocation = await allocator.allocate({
+      runId: "run_retry",
+      projectId: "p",
+      runnerImage: "img",
+      identitySecretRef: "runner/dev/identity",
+    });
+
+    // The first ECONNRESET was retried, the second attempt succeeded.
+    expect(attempt).toBe(2);
+    const expected = "SHA256:" + Buffer.from("c".repeat(64), "hex").toString("base64").replace(/=+$/u, "");
+    expect(allocation.target.hostKeyFingerprint).toBe(expected);
+    expect(runners.claims).toHaveLength(1);
+  });
+
+  it("fails loud after the bounded retries when EVERY attempt is a transient ECONNRESET", async () => {
+    // A persistent transient (the runner stays down): retry the bounded number of times,
+    // then surface LOUD with the real cause — never a silent fallback, never an infinite loop.
+    const runners = new FakeRunnerStore();
+    let attempt = 0;
+    const factory = () => {
+      attempt += 1;
+      return fakeClientFactory({ fingerprint: undefined, emitError: true, transientReset: true })();
+    };
+    const allocator = new StaticRunnerAllocator({
+      host: "runner",
+      port: 22,
+      runners,
+      clientFactory: factory,
+      discoverTransientAttempts: 3,
+      retrySleep: async () => {},
+    });
+
+    await expect(
+      allocator.allocate({
+        runId: "run_persist",
+        projectId: "p",
+        runnerImage: "img",
+        identitySecretRef: "runner/dev/identity",
+      }),
+    ).rejects.toThrow(/ECONNRESET/u);
+    // All bounded attempts were exhausted before failing loud.
+    expect(attempt).toBe(3);
+    expect(runners.claims).toEqual([]);
+  });
+
+  it("does NOT retry a non-transient (auth/host-key) discovery failure — fails immediately", async () => {
+    // A genuine non-transient failure (host key verification / auth) is NOT a blip — it
+    // must fail on the FIRST attempt, never be retried as if it were a transient.
+    const runners = new FakeRunnerStore();
+    let attempt = 0;
+    const factory = () => {
+      attempt += 1;
+      return fakeClientFactory({ fingerprint: undefined, emitError: true })();
+    };
+    const allocator = new StaticRunnerAllocator({
+      host: "runner",
+      port: 22,
+      runners,
+      clientFactory: factory,
+      discoverTransientAttempts: 4,
+      retrySleep: async () => {},
+    });
+
+    await expect(
+      allocator.allocate({
+        runId: "run_auth",
+        projectId: "p",
+        runnerImage: "img",
+        identitySecretRef: "runner/dev/identity",
+      }),
+    ).rejects.toThrow(/host key discovery failed/u);
+    // A non-transient error is NOT retried — it fails on the first attempt.
+    expect(attempt).toBe(1);
     expect(runners.claims).toEqual([]);
   });
 
