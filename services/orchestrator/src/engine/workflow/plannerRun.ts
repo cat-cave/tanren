@@ -1,10 +1,9 @@
 // The real planner-loop run-trigger: drives runSubtaskLoop with real Codex adapters
-// (injectable factories default to real Codex/SSH; tests inject fakes). On a passing
-// loop it publishes a draft PR, runs the NATIVE pre-merge gate (the merge authority,
-// in-loop over the command substrate — no forge CI poll) + publishes the `tanren/gate`
-// verdict, then drives review→merge. Non-pass outcomes (window_exhausted /
-// convergence_stalled / halted) map to a halted run without a PR; a mid-loop Codex
-// usage-limit is window_exhausted, not a failure (PROJECT_BRIEF §4.3).
+// (injectable factories default to real Codex/SSH; tests inject fakes). On a passing loop it
+// publishes a draft PR, runs the NATIVE pre-merge gate (the merge authority, in-loop over the
+// command substrate — no forge CI poll) + publishes the `tanren/gate` verdict, then drives
+// review→merge. Non-pass outcomes (window_exhausted / convergence_stalled / halted) map to a
+// halted run without a PR; a mid-loop Codex usage-limit is window_exhausted (PROJECT_BRIEF §4.3).
 import type pg from "pg";
 import type { CiWhen } from "../ci/index.js";
 import type {
@@ -62,7 +61,7 @@ import {
   emitPrepBootstrapDeferred,
   finalizeMergeOutcome,
   finalizeNonPassAndPark,
-  finalizeWorkflowError,
+  finalizeWorkflowThrow,
   markRunRunning,
   type MergeGateBudget,
   releaseRunnerWithCleanupProof,
@@ -95,8 +94,8 @@ export interface PlannerRunContext {
   runId: string;
   specId: string;
   projectId: string;
-  // The org the run belongs to (null = unscoped); threaded into allocate so the
-  // sidecar allocator persists its `runners` row under the org's RLS scope.
+  // The org the run belongs to (null = unscoped); threaded into allocate so the sidecar allocator
+  // persists its `runners` row under the org's RLS scope.
   orgId?: string | null;
   repoUrl: string;
   targetBranch: string;
@@ -109,8 +108,8 @@ export interface PlannerRunContext {
   runnerImage: string;
   identitySecretRef: string;
   githubCredentialRef: string;
-  // Part 2: the org's GitHub App installation, when installed. Clone/push/PR/CI/merge
-  // mint the token App-first through the seam, else the static `githubCredentialRef`.
+  // Part 2: the org's GitHub App installation, when installed. Clone/push/PR/CI/merge mint the token
+  // App-first through the seam, else the static `githubCredentialRef`.
   installation?: OrgGithubAppInstallation;
   // Resolved DEFAULT LLM entry {cli, model, authRef} — heads every empty loop-role chain (provider-agnostic). Tests may omit.
   defaultLlm?: RoutingChainEntry;
@@ -120,9 +119,9 @@ export interface PlannerRunContext {
   endpointBaseUrl?: string;
   // Governance posture (run worker): drives the gate's advisory policy (`lenient` ⇒ lint/typecheck advisory; absent ⇒ strict).
   governancePosture?: GovernancePosture;
-  // SPEC-LOOP REDESIGN (docs/roadmap/spec-loop-redesign.md): the per-project audit
-  // posture (triage P1–P3 → tasks-here vs new specs) + the convergence policy (the SOLE
-  // loop bound). Absent on unit paths ⇒ DEFAULT_AUDIT_POSTURE / DEFAULT_CONVERGENCE_POLICY.
+  // SPEC-LOOP REDESIGN (docs/roadmap/spec-loop-redesign.md): the per-project audit posture (triage
+  // P1–P3 → tasks-here vs new specs) + the convergence policy (the SOLE loop bound). Absent on unit
+  // paths ⇒ DEFAULT_AUDIT_POSTURE / DEFAULT_CONVERGENCE_POLICY.
   auditPosture?: AuditPostureConfig;
   convergencePolicy?: ConvergencePolicyConfig;
   // AUDIT-EVIDENCE BASELINE: governance policy version (project config version), stamped onto the `gate.verdict` roll-up. Absent on unit paths with no config.
@@ -135,8 +134,7 @@ export interface PlannerRunContext {
   contractFiles?: ReadonlyArray<ContractFile>;
   // TEMPLATING WAVE 3 (templating-system.md §3): the SELECTED template's repo ref to SEED from (from `projectConfig.templateRef`). When set, the run clones the template's conforming files into the workspace BEFORE the writer — so the scaffold writer's "seed already committed" assertion holds and it specializes the seed instead of authoring from scratch. Absent ⇒ no match ⇒ the from-scratch contract-file path runs.
   templateSeed?: { repoRef: string };
-  // WS-A PR-4: the ordered ancestor stack this dependent speculative run is stacked on (from
-  // `runs.ancestor_stack`). With `WALKER_JJ_LOCAL_BASE` on + non-empty, the workspace bootstrap jj-assembles the base from these ancestor refs vs the legacy single-ref clone.
+  // WS-A PR-4: the ordered ancestor stack this dependent speculative run is stacked on (from `runs.ancestor_stack`). With `WALKER_JJ_LOCAL_BASE` on + non-empty, the workspace bootstrap jj-assembles the base from these ancestor refs vs the legacy single-ref clone.
   ancestorStack?: AncestorStack;
 }
 
@@ -259,14 +257,17 @@ export interface PlannerRunResult {
   workspacePath: string;
   outcome: SubtaskLoopOutcome;
   pullRequest?: PublishedDraftPullRequest;
-  // The native pre-merge gate verdict (the merge authority). Omitted when the run
-  // halted before the gate.
+  // The native pre-merge gate verdict (the merge authority). Omitted when the run halted before the gate.
   mergeGate?: GateOutcome;
   // The review→merge tail. `review` carries the final review verdict and `merge` the
   // merge-stage outcome. Both omitted when the run halted before the gate or stopped
   // at changes-requested after exhausting the rework budget.
   review?: PollReviewForRunResult;
   merge?: MergeForRunResult;
+  // SINGLE-FINALIZE INVARIANT (apex v35): set when a thrown run-error was RE-DRIVEN by the workflow's
+  // own finalizer (run → halted, spec → open, `dag.spec.redriven`); the workflow then returns NORMALLY
+  // instead of re-throwing into the worker's strand path (the #580 double-finalize).
+  reDriven?: boolean;
 }
 
 export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Promise<PlannerRunResult> {
@@ -486,12 +487,11 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
     releaseReason = "completed";
     return { runId: context.runId, workspacePath, outcome, pullRequest, mergeGate, review, merge };
   } catch (error) {
-    // Finalize the run for the thrown error (recoverable halt for a known bootstrap/
-    // usage-limit fault, else a generic `failed`) + park the SPEC (finding #3:
-    // requeueable, never stuck in_flight), then re-throw so the worker fails the job.
+    // SINGLE-FINALIZE INVARIANT (apex v35): finalize the run+spec ONCE (spec-aware) and either RETURN a
+    // recoverable-halt result for a re-driven attempt (never re-throw into the worker's strand path, the
+    // #580 double-finalize) or re-throw WRAPPED — the full orchestration lives in `finalizeWorkflowThrow`.
     releaseReason = "failed";
-    await finalizeWorkflowError(error, { finalizeRunState, appendEvent, workspacePath, input, context });
-    throw error;
+    return await finalizeWorkflowThrow(error, { finalizeRunState, appendEvent, workspacePath, input, context });
   } finally {
     // SECURITY-BASELINE CLEANUP-PROOF: remove the run's `/workspace/runs/<runId>` sandbox (layer 1 of the ≈204 GB disk-leak fix), then release through the RELEASE FINALIZER seam + emit `release.finalized`. The helper never throws (a throw here would mask the run's error); `releaseReason` reflects the run's outcome.
     const runWorkspace = { ssh: input.ssh, target: allocation.target, runId: context.runId };
