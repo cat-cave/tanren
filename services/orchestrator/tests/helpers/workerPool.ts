@@ -36,6 +36,10 @@ interface RunRow {
 export class WorkerPool {
   runStatus: { status: string; outcome: string | null } = { status: "queued", outcome: null };
   specStatus = "pending";
+  // The orphan-strand SUCCESSOR-run probe (`SELECT 1 FROM runs WHERE spec_id = $1 ...`):
+  // >0 ⇒ a re-drive's freshly-queued successor exists ⇒ the spec is transitioning, not
+  // orphaned. Defaults to 0 (no successor → a genuine orphan strands).
+  successorRunCount = 0;
   prUrl: string | null = null;
   // Test-support for the org-scoping mutants (runExecutor org-scope establishment
   // + finalize): when set, the run⋈spec⋈project read echoes this org on the
@@ -194,6 +198,27 @@ export class WorkerPool {
       }
       this.events.push({ eventType, payload });
       return { rows: [{ id: "1" }], rowCount: 1 };
+    }
+    // Orphan-strand reads (`parkStrandedSpecInProcess`): the spec's current status +
+    // the SUCCESSOR-run probe. `successorRunCount` lets a test simulate a re-drive's
+    // freshly-queued successor (>0 ⇒ the spec is transitioning, not orphaned).
+    if (trimmed.startsWith("SELECT status FROM specs WHERE spec_id = $1")) {
+      return single({ status: this.specStatus });
+    }
+    if (trimmed.startsWith("SELECT 1 FROM runs WHERE spec_id = $1")) {
+      const n = this.successorRunCount;
+      return { rows: n > 0 ? [{}] : [], rowCount: n };
+    }
+    // The in-process orphan strand: a GUARDED `in_flight`/`review` → `needs_attention`
+    // flip that RETURNS the row only when it moved (so the strand event fires only for a
+    // genuinely-occupying spec). Observed so a test can assert the worker stranded — or,
+    // for the single-finalize invariant, that it did NOT (a `WorkflowFinalizedError` skips
+    // `finalizeRunRecoverable` entirely, so this query never runs).
+    if (trimmed.startsWith("UPDATE specs SET status = 'needs_attention'")) {
+      const occupying = this.specStatus === "in_flight" || this.specStatus === "review";
+      if (!occupying) return { rows: [], rowCount: 0 };
+      this.specStatus = "needs_attention";
+      return { rows: [{ spec_id: String(params[0]) }], rowCount: 1 };
     }
     // spec status transitions (claim 'in_flight', finalize 'merged')
     if (trimmed.startsWith("UPDATE specs SET status = 'in_flight'")) {

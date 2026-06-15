@@ -1,13 +1,12 @@
-// runPlannerLoopWorkflow integration tests. The workflow is driven
-// with fake adapters + a fake usage probe (so no real SSH/Codex), asserting on
-// the persisted run state, the PR/CI tail on a passing loop, the halted
-// mapping for non-pass outcomes, and the CodexUsageLimitError → window
-// escalation path. Allocator release always runs (finally). Shared fakes +
-// builders live in plannerRun.fixtures.ts (500-line cap split).
+// runPlannerLoopWorkflow integration tests. The workflow is driven with fake adapters + a fake usage
+// probe (so no real SSH/Codex), asserting on the persisted run state, the PR/CI tail on a passing loop,
+// the halted mapping for non-pass outcomes, and the CodexUsageLimitError → window escalation path.
+// Allocator release always runs (finally). Shared fakes + builders live in plannerRun.fixtures.ts.
 import { describe, expect, it } from "vitest";
 import type { RunnerHandle } from "../src/engine/contracts/allocator.js";
 import type { RunnerCommand, CommandResult, CommandSubstrate } from "../src/engine/contracts/commandSubstrate.js";
 import { CodexUsageLimitError } from "../src/engine/providers/codex.js";
+import { isWorkflowFinalized, rawCauseOf } from "../src/engine/workflow/workflowErrorDisposition.js";
 import { WorkspaceBootstrapError } from "../src/engine/workspace/index.js";
 import {
   accounting,
@@ -84,9 +83,8 @@ describe("runPlannerLoopWorkflow", () => {
 
   it("re-iterates the writer on a checker incompleteness and still completes (medium-tier loop shape)", async () => {
     const { ctx, pool, events, secrets, allocator, ssh } = await setup(directMergeConfig());
-    // SPEC-LOOP REDESIGN: a checker incompleteness loops back to the WRITER (not the
-    // planner). The first subtask's checker reports incomplete once, then complete; the
-    // writer re-iterates IN-TASK. No planner re-plan is triggered.
+    // SPEC-LOOP REDESIGN: a checker incompleteness loops back to the WRITER (not the planner). The first
+    // subtask's checker reports incomplete once, then complete; the writer re-iterates IN-TASK (no re-plan).
     const adapters = {
       planner: makePlanner([
         buildPlan([
@@ -154,9 +152,8 @@ describe("runPlannerLoopWorkflow", () => {
     expect(result.outcome.kind).toBe("window_exhausted");
     expect(result.pullRequest).toBeUndefined();
     expect(pool.runStatus).toEqual({ status: "halted", outcome: "window_exhausted" });
-    // No PR/CI/merge request was made. The ONLY GitHub call is the authenticated
-    // clone's MERGE-SAFETY identity read (`GET /user`) — it runs during clone,
-    // before the window-pressure halt; everything else (PR open, etc.) is skipped.
+    // No PR/CI/merge request was made. The ONLY GitHub call is the authenticated clone's MERGE-SAFETY
+    // identity read (`GET /user`), during clone before the window-pressure halt; everything else skipped.
     expect(github.requests.filter((r) => !(r.method === "GET" && r.path.startsWith("/user")))).toHaveLength(0);
     expect(allocator.releases).toEqual(["runner_planner"]);
   });
@@ -229,8 +226,7 @@ describe("runPlannerLoopWorkflow", () => {
       mergeProbe: noopMerge(),
     });
 
-    // Bootstrap install runs first, THEN its state is committed (the writer's
-    // diff base), THEN the writer loop runs.
+    // Bootstrap install runs first, THEN its state is committed (the writer's diff base), THEN the writer loop runs.
     expect(order).toEqual(["bootstrap", "commit-bootstrap"]);
     const names = events.events.map((event) => event.eventType);
     expect(names.indexOf("workspace.prepared")).toBeLessThan(names.indexOf("writer.subtask.started"));
@@ -355,10 +351,9 @@ describe("runPlannerLoopWorkflow", () => {
 
   it("falls back to the default bootstrap command when the repo ships no .tanren/ci.yml", async () => {
     const { ctx, pool, events, secrets, allocator } = await setup();
-    // Default fixture SSH returns empty output for every command, so the config
-    // read yields no .tanren/ci.yml → the resolver returns undefined → the
-    // bootstrap step applies DEFAULT_BOOTSTRAP_COMMAND (command left undefined).
-    // no config file present
+    // Default fixture SSH returns empty output for every command, so the config read yields no
+    // .tanren/ci.yml → the resolver returns undefined → the bootstrap step applies
+    // DEFAULT_BOOTSTRAP_COMMAND (command left undefined; no config file present).
     const ssh = new ConfigReadingSsh("");
     const bootstrapCalls: Array<string | undefined> = [];
 
@@ -441,40 +436,45 @@ describe("runPlannerLoopWorkflow", () => {
       },
     };
 
-    await expect(
-      runPlannerLoopScoped({
-        pool: pool.asPgPool(),
-        eventStore: events,
-        allocator,
-        ssh,
-        secrets,
-        githubHttp: new ScriptedGitHubHttp([]),
-        context: ctx,
-        escapeHatches: {
-          maxWriterIterPerSubtask: 5,
-          maxRetriesPerTransientFailure: 3,
-        },
-        timeoutMs: 100,
-        buildAdapters: () => ({
-          planner: throwingPlanner,
-          writer: makeWriter(["d\n"]),
-          checker: makeChecker([completeCheck]) as AnswererAdapter<CheckAnswer>,
-          auditor: makeAuditor([cleanAudit]) as AnswererAdapter<AuditAnswer>,
-          ...loopStageAdapters(),
-        }),
-        buildUsageProbe: () => fakeProbe(healthyWindow(), accounting(null)),
+    // SINGLE-FINALIZE INVARIANT (apex v35): a usage-limit is a `recoverable_halt` — the workflow's own
+    // finalizer lands the run window_exhausted + parks the spec, then re-throws WRAPPED in
+    // `WorkflowFinalizedError` (the worker then SKIPS its already-done finalize), preserving the raw cause.
+    const run = runPlannerLoopScoped({
+      pool: pool.asPgPool(),
+      eventStore: events,
+      allocator,
+      ssh,
+      secrets,
+      githubHttp: new ScriptedGitHubHttp([]),
+      context: ctx,
+      escapeHatches: {
+        maxWriterIterPerSubtask: 5,
+        maxRetriesPerTransientFailure: 3,
+      },
+      timeoutMs: 100,
+      buildAdapters: () => ({
+        planner: throwingPlanner,
+        writer: makeWriter(["d\n"]),
+        checker: makeChecker([completeCheck]) as AnswererAdapter<CheckAnswer>,
+        auditor: makeAuditor([cleanAudit]) as AnswererAdapter<AuditAnswer>,
+        ...loopStageAdapters(),
       }),
-    ).rejects.toBeInstanceOf(CodexUsageLimitError);
+      buildUsageProbe: () => fakeProbe(healthyWindow(), accounting(null)),
+    });
+    const thrown = await run.catch((error: unknown) => error);
 
+    const wrapped = isWorkflowFinalized(thrown) ? thrown : undefined;
+    expect(wrapped?.disposition).toBe("recoverable_halt");
+    // The raw error is preserved as the wrapper's cause (the public failure vocabulary is unchanged).
+    expect(rawCauseOf(thrown)).toBeInstanceOf(CodexUsageLimitError);
     expect(pool.runStatus).toEqual({ status: "halted", outcome: "window_exhausted" });
     expect(allocator.releases).toEqual(["runner_planner"]);
   });
 });
 
-// SSH fake that returns the given .tanren/ci.yml text when the bootstrap-command
-// resolver cats the repo config, and an empty success for every other command
-// (clone, etc.). An empty `configYaml` models a repo with no .tanren/ci.yml — the
-// `cat`-if-present command simply prints nothing.
+// SSH fake that returns the given .tanren/ci.yml text when the bootstrap-command resolver cats the repo
+// config, and an empty success for every other command (clone, etc.). An empty `configYaml` models a repo
+// with no .tanren/ci.yml — the `cat`-if-present command simply prints nothing.
 class ConfigReadingSsh implements CommandSubstrate {
   constructor(private readonly configYaml: string) {}
 

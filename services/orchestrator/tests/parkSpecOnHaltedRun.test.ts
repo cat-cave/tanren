@@ -230,7 +230,7 @@ describe("finalizeWorkflowError — a RANDOM / TRANSIENT failure is RE-DRIVEN, n
     // writer mistake, a flaky step). WITHOUT the fix this lands run `failed` + spec parked
     // `needs_attention` (a TERMINAL strand). WITH it: the run halts recoverable, the spec
     // returns to `open`, and the walker re-drives it.
-    await finalizeWorkflowError(new Error("the run failed with an internal error"), {
+    const disposition = await finalizeWorkflowError(new Error("the run failed with an internal error"), {
       finalizeRunState,
       appendEvent,
       workspacePath: "/workspace/runs/run_1",
@@ -238,6 +238,10 @@ describe("finalizeWorkflowError — a RANDOM / TRANSIENT failure is RE-DRIVEN, n
       context: ctx(),
     });
 
+    // SINGLE-FINALIZE INVARIANT (apex v35): the disposition is the EXPLICIT signal the workflow
+    // `catch` keys off to NOT re-throw into the worker's strand path (a re-driven attempt is
+    // terminally disposed of — never double-finalized).
+    expect(disposition).toBe("re_driven");
     // The run HALTED (recoverable, work not discarded) — NOT `failed`.
     expect(pool.terminalRunWrite()).toEqual({ status: "halted", outcome: "halted" });
     // The spec returned to `open` (the walker's re-drive bucket), NOT `needs_attention`.
@@ -259,7 +263,7 @@ describe("finalizeWorkflowError — a RANDOM / TRANSIENT failure is RE-DRIVEN, n
       readerReturning(DEFAULT_REDRIVE_ESCALATE_AT),
     );
 
-    await finalizeWorkflowError(new Error("the run failed with an internal error"), {
+    const disposition = await finalizeWorkflowError(new Error("the run failed with an internal error"), {
       finalizeRunState,
       appendEvent,
       workspacePath: "/workspace/runs/run_1",
@@ -267,6 +271,9 @@ describe("finalizeWorkflowError — a RANDOM / TRANSIENT failure is RE-DRIVEN, n
       context: ctx(),
     });
 
+    // The genuine-terminal escalation is re-thrown wrapped (the job still fails) — but the
+    // disposition is NOT `re_driven`, so the worker still SKIPS its re-finalize (already escalated).
+    expect(disposition).toBe("escalated");
     // At the cap the spec is GENUINELY STUCK (same failure every time) — it escalates as a
     // human-decision, run `failed`, spec parked — NOT re-driven again (no infinite loop).
     expect(pool.terminalRunWrite()).toEqual({ status: "failed", outcome: "failed" });

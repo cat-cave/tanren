@@ -17,9 +17,11 @@ import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import { PgEventStore } from "../eventStore.js";
 import type { ClassifiedRunFailure } from "./runFailureClassifier.js";
 import { createLogger } from "../observability/logger.js";
+import { isWorkflowFinalized, rawCauseOf } from "../workflow/workflowErrorDisposition.js";
 // Re-exported so runExecutor (which already imports finalizeRunRecoverable here)
-// gets the logger factory WITHOUT a separate import (its dependency cap is at 12).
-export { createLogger };
+// gets the logger factory + the WorkflowFinalizedError unwrap WITHOUT separate imports
+// (its dependency cap is at 12). `rawCauseOf` lets the worker classify the raw cause.
+export { createLogger, rawCauseOf };
 
 const log = createLogger("run-finalize");
 
@@ -69,6 +71,14 @@ function logStrandSkippedForSuccessor(runId: string, specId: string): void {
  * it lands on the recovery surface (`RECOVERABLE_OUTCOMES`). A run the workflow
  * already finalized as recoverable (halted / window_exhausted /
  * retry_budget_exhausted) or terminal-good (`done`) is left untouched.
+ *
+ * SINGLE-FINALIZE INVARIANT (apex v35): this is the §2c safety net for a GENUINELY
+ * orphaned slot ONLY — a run whose workflow finalizer NEVER ran (a crash, the error
+ * escaping RAW). `originalError` being a {@link WorkflowFinalizedError} is the EXPLICIT
+ * signal that the workflow already finalized this attempt (re-drove → returned normally,
+ * so it never reaches here; parked / escalated → re-thrown wrapped): re-finalizing it is
+ * the double-finalize that stranded a just-re-driven spec `no_live_run` (#580). So a
+ * wrapped error SHORT-CIRCUITS this safety net — keyed off the type, never a timing probe.
  */
 export async function finalizeRunRecoverable(
   pool: pg.Pool,
@@ -80,7 +90,19 @@ export async function finalizeRunRecoverable(
   // the raw detail lives off the public path (job_queue.failure_message + a log).
   failure: ClassifiedRunFailure,
   orgId: string | null,
+  // The ORIGINAL caught error (the wrapper or the raw cause). A `WorkflowFinalizedError`
+  // means the workflow already finalized the run+spec ⇒ skip this safety-net strand.
+  originalError?: unknown,
 ): Promise<void> {
+  // SINGLE-FINALIZE: the workflow already finalized this attempt (run AND spec) ⇒ the
+  // safety net must NOT re-finalize/re-strand it. A genuine orphan throws RAW ⇒ proceed.
+  if (isWorkflowFinalized(originalError)) {
+    log.info("orphan-finalize SKIPPED — the workflow already finalized this run attempt", {
+      runId,
+      disposition: originalError.disposition,
+    });
+    return;
+  }
   // When a remote writer is wired AND the run has an org, route
   // the finalize (UPDATE runs → halted) + the run.failed event through the
   // control-plane endpoints. The finalize endpoint applies the SAME

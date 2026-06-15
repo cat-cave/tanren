@@ -34,6 +34,7 @@ import { runWithOrgScope } from "@tanren/db";
 import { classifyRunFailure, type RunFailureCode } from "../worker/runFailureClassifier.js";
 import { createLogger } from "../observability/logger.js";
 import type { EventName, EventPayload } from "../events/index.js";
+import type { WorkflowErrorDisposition } from "./workflowErrorDisposition.js";
 
 const log = createLogger("run-redrive");
 
@@ -196,12 +197,18 @@ export interface RedriveErrorContext {
  * misconfiguration) — OR the SAME classified failure reaching the cap K — escalates LOUDLY to
  * `needs_attention` with a SPECIFIC diagnostic (never a bare "internal error"), once, not in a
  * hot-loop. Backoff grows with the consecutive-same-failure count so a re-drive never hot-loops.
+ *
+ * SINGLE-FINALIZE INVARIANT (apex v35): returns the DISPOSITION so the workflow `catch` knows
+ * the run+spec were ALREADY finalized here — a `re_driven` attempt is terminally disposed of
+ * (the workflow returns normally, NEVER re-throws into the worker's strand path), while an
+ * `escalated` genuine-terminal fault still fails the job (re-thrown wrapped). Either way the
+ * worker must not re-finalize (see {@link WorkflowFinalizedError}).
  */
 export async function redriveOrEscalateWorkflowError(
   error: unknown,
   ctx: RedriveErrorContext,
   seams: RedriveSeams,
-): Promise<void> {
+): Promise<WorkflowErrorDisposition> {
   const classification = classifyRedrive(error);
   // The consecutive-same-failure count (this failure included). Without a wired reader (a
   // no-DB unit path) treat it as the first failure of its kind ⇒ re-drive, never a spurious
@@ -225,7 +232,7 @@ export async function redriveOrEscalateWorkflowError(
       escalateAtAttempts: escalateAt,
       backoffSeconds: redriveBackoffSeconds(consecutiveSameFailure),
     });
-    return;
+    return "re_driven";
   }
 
   // GENUINE-TERMINAL: a misconfiguration a human must fix, OR the SAME failure K consecutive
@@ -240,6 +247,7 @@ export async function redriveOrEscalateWorkflowError(
     [ctx.context.runId],
   );
   await escalateGenuineTerminal(ctx, seams, classification, consecutiveSameFailure, escalateAt);
+  return "escalated";
 }
 
 /** Read the consecutive-same-failure count via the wired reader (1 ⇒ first of its kind / no reader). */

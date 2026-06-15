@@ -38,7 +38,7 @@ import {
   buildNativeQueueEnqueuer,
   buildRedriveHistoryReader,
 } from "./runWorkflowPorts.js";
-import { createLogger, finalizeRunRecoverable } from "./runFinalize.js";
+import { createLogger, finalizeRunRecoverable, rawCauseOf } from "./runFinalize.js";
 import { classifyRunFailure } from "./runFailureClassifier.js";
 import { startHeartbeat, type HeartbeatMiss } from "./runHeartbeat.js";
 import { systemActor } from "../state/actor.js";
@@ -328,44 +328,41 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
         timeoutMs: deps.timeoutMs ?? DEFAULT_TIMEOUT_MS,
         maxCiPolls: deps.maxCiPolls ?? DEFAULT_MAX_CI_POLLS,
         ciPollDelayMs: deps.ciPollDelayMs ?? DEFAULT_CI_POLL_DELAY_MS,
-        // under `native_queue` the merge stage enters the ready run into the
-        // native merge queue (the coordinator drives the actual merge). Built from
-        // the worker's real pool so the queue write is RLS-scoped.
+        // under `native_queue` the merge stage enters the ready run into the native merge queue (the
+        // coordinator drives the actual merge). Built from the worker's real pool so the write is RLS-scoped.
         nativeQueueEnqueuer: buildNativeQueueEnqueuer(deps.pool),
-        // WS-A PR-8: OBSERVE-ONLY — the jj-local dependent bootstrap records its
-        // `eager_base` integration node (the proof-reuse substrate) through this
-        // org-scoped UPSERT over the worker's real pool. It never gates the run.
+        // WS-A PR-8: OBSERVE-ONLY — the jj-local dependent bootstrap records its `eager_base` integration
+        // node (the proof-reuse substrate) through this org-scoped UPSERT over the pool. Never gates the run.
         eagerBaseNodeUpsert: buildEagerBaseNodeUpsert(deps.pool),
         // WS-A PR-8c: the jj-local dependent bootstrap folds the assembly-captured
-        // per-ancestor head shas BACK into `runs.ancestor_stack[].headSha`, so percolation's
-        // divergence key reads the shas from `ancestor_stack`. PLANE-SPLIT: `runs` is
-        // de-privileged on the data plane (migration 0035), so when a remote writer is wired
-        // this routes the UPDATE through the control plane (else the in-process UPDATE on the
-        // worker pool — byte-identical). It never gates the run.
+        // per-ancestor head shas BACK into `runs.ancestor_stack[].headSha`, so percolation's divergence
+        // key reads the shas from `ancestor_stack`. PLANE-SPLIT: `runs` is de-privileged on the data plane
+        // (migration 0035), so a wired remote writer routes the UPDATE through the control plane (else the
+        // byte-identical in-process UPDATE on the worker pool). It never gates the run.
         bootstrapStackHeadShaWriteBack: buildBootstrapStackHeadShaWriteBack(deps.pool, remoteWriter),
-        // §3 NEVER-DISCARD (apex v35): reads the ancestor specs' lifecycle buckets so a
-        // dependent whose ancestor is non-terminal but headless BENIGN-WAITS (re-driven)
-        // instead of terminally stranding. Org-scoped read over the worker's real pool.
+        // §3 NEVER-DISCARD (apex v35): reads the ancestor specs' lifecycle buckets so a dependent whose
+        // ancestor is non-terminal but headless BENIGN-WAITS (re-driven) instead of stranding. Org-scoped.
         ancestorPhaseReader: buildAncestorPhaseReader(deps.pool),
-        // ROBUSTNESS (apex v35): the run-failure boundary re-drives a random/transient fault
-        // (spec → open) instead of stranding it, bounded by this consecutive-same-failure reader
-        // (the SAME classified failure K times escalates loudly). Org-scoped read over the pool.
+        // ROBUSTNESS (apex v35): the run-failure boundary re-drives a random/transient fault (spec → open)
+        // instead of stranding, bounded by this consecutive-same-failure reader (SAME failure K times
+        // escalates loudly). Org-scoped read over the pool.
         redriveHistoryReader: buildRedriveHistoryReader(deps.pool),
       }),
     );
     await deps.jobQueue.complete(job.id);
     return { kind: "completed", jobId: job.id, runId, outcome: result.outcome.kind };
   } catch (error) {
-    // PUBLIC-ERROR-LEAK hardening: this catch wraps the WHOLE run, so `error` can
-    // carry URLs / repo refs / command fragments / provider responses / secret-adjacent
-    // text. So we split internal-vs-public:
-    //   • the raw message → `job_queue.failure_message` (INTERNAL, outside RLS) + a
-    //     redacted log — the operator's full-detail triage source.
-    //   • a CLASSIFIED `{ code, stage, summary }` (closed vocabulary, never the raw
-    //     string) → the PUBLIC `run.failed` / `dag.spec.needs_attention` events.
-    // The raw string NEVER reaches a public event payload.
-    const classified = classifyRunFailure(error);
-    const failure = { kind: failureKind(error), message: messageOf(error) };
+    // SINGLE-FINALIZE INVARIANT (apex v35): UNWRAP a `WorkflowFinalizedError` to its raw cause so the
+    // job-fail accounting + internal log see the SAME raw error the workflow caught (the public failure
+    // vocabulary is unchanged by the wrapper).
+    const raw = rawCauseOf(error);
+    // PUBLIC-ERROR-LEAK hardening: this catch wraps the WHOLE run, so `raw` can carry URLs / repo refs /
+    // command fragments / provider responses / secret-adjacent text. So we split internal-vs-public: the
+    // raw message → `job_queue.failure_message` (INTERNAL, outside RLS) + a redacted log (the operator's
+    // full-detail triage source); a CLASSIFIED `{ code, stage, summary }` (closed vocabulary, never the
+    // raw string) → the PUBLIC `run.failed` / `dag.spec.needs_attention` events.
+    const classified = classifyRunFailure(raw);
+    const failure = { kind: failureKind(raw), message: messageOf(raw) };
     await deps.jobQueue.fail(job.id, failure);
     // Internal-only redacted log: the raw detail surfaces for operator triage off the
     // public timeline, run through the same event redactor that strips URLs/tokens/paths.
@@ -375,7 +372,11 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
       stage: classified.stage,
       detail: redactErrorDetail(failure.message),
     });
-    await finalizeRunRecoverable(deps.pool, deps.runStateWriter, runId, classified, resolvedOrgId);
+    // SINGLE-FINALIZE INVARIANT (apex v35): the §2c `no_live_run` orphan strand runs ONLY for a GENUINELY
+    // orphaned run (a crash whose finalizer never ran, the error escaping RAW). Passing the original
+    // `error` through lets `finalizeRunRecoverable` SKIP the strand for a `WorkflowFinalizedError` (the
+    // workflow already finalized the run+spec) — the #580 double-finalize, keyed off the type, not timing.
+    await finalizeRunRecoverable(deps.pool, deps.runStateWriter, runId, classified, resolvedOrgId, error);
     return { kind: "failed", jobId: job.id, runId, failure };
   } finally {
     await stopHeartbeat();
@@ -390,11 +391,10 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
  * run's own rows. There is no null-org `runWithSystemScope` BYPASSRLS fallback: a
  * tenant run is never hydrated cross-RLS.
  *
- * Cross-check: if the job's org and the run's actual `org_id` ever disagree, the
- * scoped read returns no row → `RunExecutionContextNotFoundError`, which fails
- * the job loudly rather than silently executing under the wrong tenant. The
- * loaded `orgId` is then asserted non-null (defense in depth: `runs.org_id` is
- * NOT NULL, so a null here is a corruption — fail loud, never run BYPASSRLS).
+ * Cross-check: if the job's org and the run's actual `org_id` disagree, the scoped read returns no
+ * row → `RunExecutionContextNotFoundError`, failing the job loudly rather than silently executing
+ * under the wrong tenant. The loaded `orgId` is then asserted non-null (defense in depth: `runs.org_id`
+ * is NOT NULL, so a null here is a corruption — fail loud, never run BYPASSRLS).
  */
 async function loadRunContextScoped(
   deps: RunExecutorDeps,

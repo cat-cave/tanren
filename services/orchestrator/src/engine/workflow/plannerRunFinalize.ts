@@ -19,10 +19,11 @@ import type { EventName, EventPayload } from "../events/index.js";
 import { removeRunWorkspaceDir, WorkspaceBootstrapError } from "../workspace/index.js";
 import { AncestorNotReadyError } from "../dag/jjLocalIntegration.js";
 import { redriveOrEscalateWorkflowError } from "./plannerRunRedrive.js";
+import { resolveWorkflowThrow, type WorkflowErrorDisposition } from "./workflowErrorDisposition.js";
 import type { PlannerRejectionFeedback } from "./planner/planner.js";
 import type { PreparedRunWorkspace } from "./plannerRunWorkspace.js";
 import type { MergeForRunResult } from "./reviewMerge/index.js";
-import type { PlannerRunContext, RunPlannerLoopInput } from "./plannerRun.js";
+import type { PlannerRunContext, PlannerRunResult, RunPlannerLoopInput } from "./plannerRun.js";
 import type { SubtaskLoopOutcome } from "./subtaskLoop.js";
 import { createLogger } from "../observability/logger.js";
 
@@ -134,15 +135,12 @@ export async function finalizeNonPass(
 }
 
 /**
- * NEVER-STRAND the spec when its run finalizes TERMINAL-WITHOUT-MERGE (apex v22 run-discipline
- * finding #3). A halted/failed planner run otherwise leaves the SPEC at `in_flight`, which the
- * DagWalker maps to OCCUPYING-A-SLOT — so the walker never re-attempts, and neither operator-API
- * path can recover it (`requeue` only handles `needs_attention`; `runs` only queues from `open`).
- *
- * The fail-closed, LOUD recovery: park the spec at terminal `needs_attention` (freeing its DAG slot,
- * blocking ONLY its dependents) + emit `dag.spec.needs_attention` so the parked state reaches a human
- * AND the operator `requeue` endpoint can re-enter it at `open`. The status flip goes through the
- * SAME `setSpecStatus` seam; the event reuses the `strand` source with reason `halted_reexec`.
+ * NEVER-STRAND the spec when its run finalizes TERMINAL-WITHOUT-MERGE (apex v22 run-discipline finding
+ * #3). A halted/failed planner run otherwise leaves the SPEC at `in_flight` (the DagWalker reads this as
+ * OCCUPYING-A-SLOT — never re-attempted, unrecoverable by either operator-API path). The fail-closed,
+ * LOUD recovery: park the spec at terminal `needs_attention` (freeing its slot, blocking ONLY its
+ * dependents) + emit `dag.spec.needs_attention` so it reaches a human AND `requeue` can re-enter it at
+ * `open`. The flip goes through the SAME `setSpecStatus` seam; the event reuses `strand`/`halted_reexec`.
  */
 export async function parkSpecNeedsAttentionForHaltedRun(
   input: RunPlannerLoopInput,
@@ -192,13 +190,11 @@ export interface MergeGateBudget {
 }
 
 /**
- * SELF-HEAL (apex v34): apply the BOUNDED merge stage's decision for a FAILED `pre_merge`
- * gate (the bound is `mergeGateSelfHeal` in plannerRunCi.ts). With budget left: seed the
- * carried steering (the failing tier/step/OUTPUT), bump the counter, return the spec to
- * `in_flight` and signal `"rework"` so the loop re-enters the writer. Budget spent:
- * finalize the run halted + park the spec `needs_attention` and signal `"halt"`. Owns the
- * budget + the lifecycle writes here so plannerRun.ts stays under the 500-line cap (and so
- * the loop branches on the single returned signal, not on the budget internals).
+ * SELF-HEAL (apex v34): apply the BOUNDED merge stage's decision for a FAILED `pre_merge` gate (the
+ * bound is `mergeGateSelfHeal` in plannerRunCi.ts). With budget left: seed the carried steering (the
+ * failing tier/step/OUTPUT), bump the counter, return the spec to `in_flight` and signal `"rework"`
+ * (re-enter the writer). Budget spent: finalize the run halted + park the spec `needs_attention` and
+ * signal `"halt"`. Owns the budget + lifecycle writes so the loop branches on the single returned signal.
  */
 export async function applyFailedMergeGate(
   input: RunPlannerLoopInput,
@@ -255,9 +251,8 @@ export async function applyReviewVerdict(
  *   - blocked/handed_off/non-native queued → spec `needs_attention`, run halted;
  *   - failed → run failed;
  *   - merged → run completed/ok; spec `merged`;
- *   - native_queue queued → run completed/ok, spec NOT merged. The enqueue
- *     succeeded, but Tanren still owns the merge and the coordinator's DRIVE pass
- *     sets the spec `merged` only after the PR actually lands.
+ *   - native_queue queued → run completed/ok, spec NOT merged (Tanren still owns the merge; the
+ *     coordinator's DRIVE pass sets the spec `merged` only after the PR actually lands).
  */
 export async function finalizeMergeOutcome(
   input: RunPlannerLoopInput,
@@ -317,14 +312,11 @@ export interface WorkflowErrorContext {
 }
 
 /**
- * SELF-HEAL (apex v35): emit the loud `workspace.bootstrap_deferred` event WHEN the
- * workspace-PREP `just bootstrap` (deps install) failed and was DEFERRED to the gate's
- * self-healing path (rather than terminally stranding the spec — see
- * `PreparedRunWorkspace.prepBootstrapDeferred` + `prepareRunWorkspace`). A no-op when the
- * prep bootstrap succeeded (or was a no-op). The mise PROVISION step is NOT writer-fixable and
- * already threw terminally inside `prepareRunWorkspace` (→ `finalizeWorkflowError`) — it never
- * produces this signal. The command is prelude-free + the output tail bounded, so no app-secret
- * value reaches the payload.
+ * SELF-HEAL (apex v35): emit the loud `workspace.bootstrap_deferred` event WHEN the workspace-PREP
+ * `just bootstrap` (deps install) failed and was DEFERRED to the gate's self-healing path (see
+ * `PreparedRunWorkspace.prepBootstrapDeferred`). A no-op when the prep bootstrap succeeded. The mise
+ * PROVISION step is NOT writer-fixable and already threw terminally inside `prepareRunWorkspace`. The
+ * command is prelude-free + the output tail bounded, so no app-secret value reaches the payload.
  */
 export async function emitPrepBootstrapDeferred(
   appendEvent: <N extends EventName>(eventType: N, payload: EventPayload<N>, taskId?: string) => Promise<void>,
@@ -342,18 +334,21 @@ export async function emitPrepBootstrapDeferred(
 }
 
 /**
- * Finalize the run for a workflow throw + emit its event. A WorkspaceBootstrap
- * failure or a Codex usage-limit are RECOVERABLE (a halt with a distinct
- * outcome), not a crash; anything else lands the run `failed`. The caller
- * re-throws after this so the worker still fails the job.
+ * Finalize the run for a workflow throw + emit its event. A WorkspaceBootstrap failure / Codex
+ * usage-limit are RECOVERABLE (a distinct halt), not a crash; anything else lands the run `failed`.
  *
- * NEVER-STRAND: a thrown error never leaves the spec `in_flight` with a dead run. A
- * benign ancestor-wait + a generic random/transient fault RE-DRIVE the spec (→ `open`,
- * apex v35); a recoverable infra fault (workspace/usage-limit) or a genuine-terminal
- * misconfiguration / persistent same-failure parks it at `needs_attention` (operator-
- * requeueable) — see {@link redriveOrEscalateWorkflowError} for the classification.
+ * NEVER-STRAND: a thrown error never leaves the spec `in_flight` with a dead run — a benign
+ * ancestor-wait / generic random/transient fault RE-DRIVES the spec (→ `open`, apex v35); a
+ * recoverable infra fault or a genuine-terminal misconfiguration / persistent same-failure parks
+ * it at `needs_attention` — see {@link redriveOrEscalateWorkflowError}.
+ *
+ * SINGLE-FINALIZE INVARIANT (apex v35): EVERY branch finalizes BOTH the run's terminal status AND
+ * the spec's, returning the {@link WorkflowErrorDisposition} `finalizeWorkflowThrow` acts on.
  */
-export async function finalizeWorkflowError(error: unknown, ctx: WorkflowErrorContext): Promise<void> {
+export async function finalizeWorkflowError(
+  error: unknown,
+  ctx: WorkflowErrorContext,
+): Promise<WorkflowErrorDisposition> {
   if (error instanceof AncestorNotReadyError) {
     // NEVER-STRAND, BENIGN WAIT (tanren-owns-the-engine.md §3): the dependent reached its
     // base-shift assembly but a NON-TERMINAL ancestor had not published its head yet — it WILL
@@ -370,7 +365,7 @@ export async function finalizeWorkflowError(error: unknown, ctx: WorkflowErrorCo
       ancestorSpecId: error.specId,
       ancestorPhase,
     });
-    return;
+    return "recoverable_halt";
   }
   if (error instanceof WorkspaceBootstrapError) {
     // Dependency install failed: the workspace can't build/test, so the run can't
@@ -386,7 +381,7 @@ export async function finalizeWorkflowError(error: unknown, ctx: WorkflowErrorCo
     await ctx.appendEvent("workspace.failed", { workspacePath: ctx.workspacePath, message: error.message });
     await finalizeNonPass(ctx.finalizeRunState, ctx.context.runId, "halted");
     await parkSpecNeedsAttentionForHaltedRun(ctx.input, ctx.context, ctx.appendEvent, "halted");
-    return;
+    return "recoverable_halt";
   }
   if (error instanceof CodexUsageLimitError) {
     // Authenticated but out of quota mid-loop: a recoverable window state, not a
@@ -399,21 +394,36 @@ export async function finalizeWorkflowError(error: unknown, ctx: WorkflowErrorCo
       resetsAt: new Date().toISOString(),
     });
     await parkSpecNeedsAttentionForHaltedRun(ctx.input, ctx.context, ctx.appendEvent, "window_exhausted");
-    return;
+    return "recoverable_halt";
   }
   // ROBUSTNESS OVER RECOVERY (apex v35): an UNRECOGNIZED / generic error reaching here is, by
-  // doctrine, a RANDOM / TRANSIENT / INTERNAL fault (a codex hiccup, a writer mistake, a flaky
-  // step) — NOT a structural cause. It is RE-DRIVEN, never terminally stranded at
-  // `needs_attention`; only a GENUINE-TERMINAL fault (a misconfiguration) or the PERSISTENT
-  // same-failure case (the SAME classified failure K consecutive times) escalates. Budget /
-  // window-exhausted / workspace-bootstrap / ancestor-wait are handled by their OWN branches
-  // above. The classify + re-drive/escalate body lives in `plannerRunRedrive.ts` (handed the
-  // run/spec write seams so the file-size cap holds without a circular import).
-  await redriveOrEscalateWorkflowError(error, ctx, {
+  // doctrine, a RANDOM / TRANSIENT / INTERNAL fault — NOT a structural cause. It is RE-DRIVEN, never
+  // terminally stranded at `needs_attention`; only a GENUINE-TERMINAL fault (a misconfiguration) or the
+  // PERSISTENT same-failure case (the SAME classified failure K consecutive times) escalates. Budget /
+  // window-exhausted / workspace-bootstrap / ancestor-wait have their OWN branches above. The classify +
+  // re-drive/escalate body lives in `plannerRunRedrive.ts` (the file-size cap holds without a cycle).
+  return redriveOrEscalateWorkflowError(error, ctx, {
     finalizeRunState: ctx.finalizeRunState,
     finalizeNonPass: (outcome) => finalizeNonPass(ctx.finalizeRunState, ctx.context.runId, outcome),
     setSpecStatus: (status) => setSpecStatus(ctx.input, ctx.context, status),
   });
+}
+
+/**
+ * SINGLE-FINALIZE INVARIANT (apex v35): the workflow `catch` body — finalize the run+spec ONCE
+ * ({@link finalizeWorkflowError}), then `resolveWorkflowThrow`: a `re_driven` disposition RETURNS a
+ * recoverable-halt {@link PlannerRunResult} normally (the walker's successor run is the continuation —
+ * NEVER re-throw into the worker's strand path, the #580 double-finalize); else re-throw WRAPPED so the
+ * worker skips its already-done finalize.
+ */
+export async function finalizeWorkflowThrow(error: unknown, ctx: WorkflowErrorContext): Promise<PlannerRunResult> {
+  const disposition = await finalizeWorkflowError(error, ctx);
+  return resolveWorkflowThrow(disposition, error, () => ({
+    runId: ctx.context.runId,
+    workspacePath: ctx.workspacePath,
+    outcome: { kind: "halted", loopCount: 0, reason: "re_driven" },
+    reDriven: true,
+  }));
 }
 
 // The spec-run trigger pre-creates a queued 'plan' task + job_queue row for the
@@ -437,26 +447,17 @@ export async function supersedeQueuedPlannerTask(input: RunPlannerLoopInput, run
 }
 
 // SECURITY-BASELINE CLEANUP-PROOF (tanren-direction.md § "Security Baseline":
-// "Release events prove cleanup and list residual resources, if any."). The runner is
-// an untrusted-code surface; the audit trail must record WHETHER its run-end teardown
-// actually succeeded, not assume it. `runner.released` narrates the intent;
-// `release.finalized` is the PROOF — `cleanedUp: false` with the runner listed as a
-// residual resource (+ a non-secret `failureReason`) when the release throws, so an
-// orphan sweeper / operator can reconcile the leak. This is the audit EVENT only — the
-// allocator still owns the destroy/wipe mechanism. Lives here (a module plannerRun.ts
-// already imports) so the run keeps its dependency count under the cap.
+// "Release events prove cleanup and list residual resources, if any."). The runner is an
+// untrusted-code surface; the audit trail must record WHETHER its run-end teardown succeeded, not
+// assume it. `runner.released` narrates the intent; `release.finalized` is the PROOF — `cleanedUp:
+// false` + the runner listed as a residual resource (+ a non-secret `failureReason`) when the release
+// throws, so an orphan sweeper / operator reconciles the leak (the allocator still owns destroy/wipe).
 //
-// Called from the run's `finally`, so it MUST NOT re-throw: a throw would mask the
-// run's real failure (the catch already finalized + re-raised it). The event is the
-// loud record of a failed teardown WITHOUT swallowing the original error.
-//
-// `runWorkspace` is layer 1 of the run-sandbox disk-leak fix (≈204 GB incident):
-// BEFORE the runner is released, the run's `/workspace/runs/<runId>` dir is removed
-// over SSH. On a STATIC / long-lived reused runner `/workspace` survives every run,
-// so this is the inline reclaim of the run's clone+build tree; on an EPHEMERAL runner
-// the release destroys the volume anyway (the `rm` is then a cheap, harmless no-op
-// against a soon-dead container). The removal NEVER throws — a failed `rm` is logged
-// and tolerated, exactly like the release leak, so it cannot mask the run's outcome.
+// Called from the run's `finally`, so it MUST NOT re-throw (a throw would mask the run's real failure
+// the catch already finalized + re-raised). `runWorkspace` is layer 1 of the run-sandbox disk-leak fix
+// (≈204 GB incident): BEFORE release, the run's `/workspace/runs/<runId>` dir is removed over SSH — the
+// inline reclaim of the clone+build tree on a STATIC reused runner (a cheap no-op on an EPHEMERAL one
+// the release destroys anyway). The `rm` NEVER throws — a failure is logged + tolerated like the leak.
 export async function releaseRunnerWithCleanupProof(
   allocator: Allocator,
   runnerId: string,
