@@ -21,6 +21,7 @@
 
 import { describe, expect, it } from "vitest";
 import type { AppendEventInput, EventStore } from "../src/engine/eventStore.js";
+import { SpecNotRunnableError } from "../src/engine/workflow/projectSpecErrors.js";
 import {
   MAX_BASE_SHIFT_REPLANS,
   type PriorReplanCounter,
@@ -71,6 +72,25 @@ class RecordingEnqueuer implements ReplanEnqueuer {
   }): Promise<{ replanRunId: string; plannerTaskId: string }> {
     this.calls.push(input);
     return { replanRunId: this.replanRunId, plannerTaskId: `task_${this.replanRunId}` };
+  }
+}
+
+/** An enqueuer that THROWS the benign already-claimed race (a concurrent tick took the spec). */
+class AlreadyClaimedEnqueuer implements ReplanEnqueuer {
+  calls = 0;
+  async enqueue(input: { specId: string }): Promise<{ replanRunId: string; plannerTaskId: string }> {
+    this.calls += 1;
+    throw new SpecNotRunnableError(input.specId, "in_flight");
+  }
+}
+
+/** An enqueuer that FAILS genuinely (no run created, no concurrent tick owns the spec). */
+class FailingEnqueuer implements ReplanEnqueuer {
+  calls = 0;
+  constructor(private readonly error: Error = new Error("run-create connection refused")) {}
+  async enqueue(): Promise<{ replanRunId: string; plannerTaskId: string }> {
+    this.calls += 1;
+    throw this.error;
   }
 }
 
@@ -178,5 +198,62 @@ describe("base-shift / percolation replan routing (v35 — a routed replan ACTUA
     expect(escalation.source).toBe("strand");
     expect(escalation.reason).toBe("human_decision");
     expect(escalation.attempts).toBe(MAX_BASE_SHIFT_REPLANS);
+  });
+
+  // THE v35 STRAND BUG (fixed): the enqueue could SWALLOW a genuine failure and STILL emit
+  // `merge.conflict.replan_routed` with NO `recovery.replan_queued` and no live run — the
+  // exact `replanned`-strand the live run hit (a spec stuck >1h, no re-plan). A routed replan
+  // that cannot RUN must ESCALATE loudly, never record a bare routing that strands.
+  it("NEVER-STRAND: a GENUINE enqueue failure ESCALATES (needs_attention) — never a bare replan_routed strand", async () => {
+    const pool = new RecordingPool();
+    const eventStore = new RecordingEventStore();
+    const enqueuer = new FailingEnqueuer(new Error("run-create connection refused"));
+    const router = buildRouter({ pool, eventStore, enqueuer, priorReplans: counterReturning(0) });
+
+    await router.routeBackToPlanner({
+      specId: "spec_b",
+      newContext: "re-plan ON TOP OF spec_a (sha-new)",
+      otherSpecId: "spec_a",
+    });
+
+    // The enqueue WAS attempted (the never-discard re-author was tried).
+    expect(enqueuer.calls).toBe(1);
+    // THE FIX: NO bare `replan_routed` strand — a routing that cannot run is not recorded as a
+    // (cap-counting) routing, and NO `recovery.replan_queued` claims a run that does not exist.
+    expect(eventStore.events.some((e) => e.eventType === "merge.conflict.replan_routed")).toBe(false);
+    expect(eventStore.events.some((e) => e.eventType === "recovery.replan_queued")).toBe(false);
+    // Instead it ESCALATES loudly so a human sees the stuck spec (frees the slot).
+    expect(pool.statusWrites).toContainEqual({ specId: "spec_b", status: "needs_attention" });
+    const escalation = payloadOf(eventStore.events, "dag.spec.needs_attention");
+    expect(escalation.source).toBe("strand");
+    expect(escalation.reason).toBe("persistent_failure");
+    expect(String(escalation.message)).toMatch(/could NOT enqueue the re-plan run/u);
+    expect(String(escalation.message)).toMatch(/connection refused/u);
+  });
+
+  // The BENIGN race (a concurrent tick already claimed the re-opened spec): the spec IS being
+  // re-driven on that run, so this is NOT a strand — the routing is recorded (observable; the
+  // concurrent tick emitted its own `run.queued`), but it does NOT escalate (no human needed)
+  // and emits NO `recovery.replan_queued` (no NEW run id to name — never a fabricated id).
+  it("BENIGN race: an already-claimed spec records the routing, emits no fake replan_queued, does NOT escalate", async () => {
+    const pool = new RecordingPool();
+    const eventStore = new RecordingEventStore();
+    const enqueuer = new AlreadyClaimedEnqueuer();
+    const router = buildRouter({ pool, eventStore, enqueuer, priorReplans: counterReturning(0) });
+
+    await router.routeBackToPlanner({
+      specId: "spec_b",
+      newContext: "re-plan ON TOP OF spec_a (sha-new)",
+      otherSpecId: "spec_a",
+    });
+
+    expect(enqueuer.calls).toBe(1);
+    // The routing IS recorded + observable (a run IS being driven for the spec).
+    expect(eventStore.events.some((e) => e.eventType === "merge.conflict.replan_routed")).toBe(true);
+    // No `recovery.replan_queued` with a fabricated run id (no NEW run was created here).
+    expect(eventStore.events.some((e) => e.eventType === "recovery.replan_queued")).toBe(false);
+    // It does NOT escalate (the spec is re-driving on the concurrent run, not stuck).
+    expect(eventStore.events.some((e) => e.eventType === "dag.spec.needs_attention")).toBe(false);
+    expect(pool.statusWrites.some((w) => w.status === "needs_attention")).toBe(false);
   });
 });
