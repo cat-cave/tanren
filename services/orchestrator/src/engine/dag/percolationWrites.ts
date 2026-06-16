@@ -18,6 +18,10 @@ import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import { type AncestorStack, resolveAncestorStack } from "./ancestorStack.js";
 import { PgEventStore } from "../eventStore.js";
 import { SpecStatusReplanRouter } from "../workflow/reviewMerge/conflictResolver/replanRouter.js";
+import {
+  buildPriorReplanCounter,
+  buildReplanEnqueuer,
+} from "../workflow/reviewMerge/conflictResolver/replanEnqueuerPg.js";
 
 /**
  * Append `integration.rebase` (tanren-owns-the-engine.md §3/§7 — the never-discard
@@ -311,6 +315,14 @@ export async function recordReplanContext(
   const newContext = `Percolation: re-plan ON TOP OF the upstream change from ${input.ancestorSpecId} (${input.ancestorSha}). ${input.reason}`;
   const orgId = await resolveProjectOrg(pool, input.projectId);
   if (orgId === null) throw new Error(`project ${input.projectId} has no org for the change-percolation replan`);
+  // v35 NEVER-STALL: the router re-opens the spec to `open`, ENQUEUES a fresh re-plan run
+  // (the never-discard re-author on the new base), and emits the OBSERVABLE
+  // `recovery.replan_queued` — so a routed replan ACTUALLY RUNS instead of stranding the
+  // spec `in_flight` with no live run. The enqueuer + the bounded-replan counter are built
+  // over the RAW pool (the run-create + the events-count read open their own connections),
+  // independent of the event-append plane below.
+  const enqueuer = buildReplanEnqueuer(pool, runStateWriter);
+  const priorReplans = buildPriorReplanCounter(pool);
   // Plane-split: the writer IS the EventStore + carries the status write; else the
   // in-process org-scoped client backs BOTH the status UPDATE and the event append.
   if (runStateWriter !== undefined) {
@@ -321,6 +333,8 @@ export async function recordReplanContext(
       eventStore: runStateWriter,
       runId: input.runId,
       projectId: input.projectId,
+      enqueuer,
+      priorReplans,
     });
     await runWithJobOrgId(orgId, () =>
       router.routeBackToPlanner({ specId: input.specId, newContext, otherSpecId: input.ancestorSpecId }),
@@ -330,9 +344,12 @@ export async function recordReplanContext(
   await runWithOrgScope(pool, orgId, async (client) => {
     const router = new SpecStatusReplanRouter({
       pool: client,
+      orgId,
       eventStore: new PgEventStore(client),
       runId: input.runId,
       projectId: input.projectId,
+      enqueuer,
+      priorReplans,
     });
     await router.routeBackToPlanner({ specId: input.specId, newContext, otherSpecId: input.ancestorSpecId });
   });
