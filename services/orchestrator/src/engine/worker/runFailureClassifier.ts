@@ -16,7 +16,14 @@
 // summary — never a pass-through of the raw string.
 
 /** Closed vocabulary of run-failure codes surfaced on the public timeline. */
-export type RunFailureCode = "workspace" | "credential" | "usage_limit" | "merge" | "deploy" | "internal";
+export type RunFailureCode =
+  | "workspace"
+  | "credential"
+  | "usage_limit"
+  | "merge"
+  | "deploy"
+  | "empty_writer_output"
+  | "internal";
 
 /** Closed vocabulary of the run STAGE a failure is attributed to. */
 export type RunFailureStage = "bootstrap" | "credentials" | "workspace" | "agent" | "merge" | "deploy" | "run";
@@ -49,6 +56,16 @@ const BY_ERROR_NAME: Readonly<Record<string, ClassifiedRunFailure>> = {
     code: "internal",
     stage: "bootstrap",
     summary: "the run's execution context could not be loaded",
+  },
+  // The writer produced NO commit ahead of the base this attempt (GitHub rejected the PR
+  // open with "No commits between base and head", and the pushed head equals the run base).
+  // A TRANSIENT (a degraded/slow codex returning nothing), NOT a hard internal error — it
+  // RE-DRIVES under the consecutive-same-failure cap (a spec that genuinely can never
+  // commit after K escalates LOUD as `persistent_failure`, never a silent stall/hot-loop).
+  EmptyWriterCommitError: {
+    code: "empty_writer_output",
+    stage: "agent",
+    summary: "the writer produced no commit ahead of the base this attempt",
   },
 };
 

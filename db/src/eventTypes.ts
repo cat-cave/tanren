@@ -83,6 +83,7 @@ export const eventTypeNames = [
   "github.failed",
   "github.pr.created",
   "github.pr.merged",
+  "github.pr.no_commits",
   "github.pr.ready",
   "hello.completed",
   "hello.ssh_completed",

@@ -47,6 +47,22 @@ export const GithubFailedPayload = z
   })
   .strict();
 
+// github.pr.no_commits — the PR open was rejected because the branch has NOTHING ahead of
+// the base ("No commits between base and head"). NOT a failure: an OBSERVABLE record of how
+// the PR-creation stage disposed of it (the converge-or-redrive decision is never silent).
+//   - `converged`: the writer DID author a commit but its content is already present in the
+//     base (the spec is satisfied by the base) → the spec converges (merged/done), as a
+//     normal merge would; mirrors the empty-diff accept at the checker layer (#586).
+//   - `redrive`: the writer produced no commit ahead of the base this attempt (a transient
+//     degraded/slow codex) → the spec re-drives (bounded by the consecutive-same-failure cap).
+export const GithubPrNoCommitsPayload = z
+  .object({
+    branch: z.string(),
+    targetBranch: z.string(),
+    disposition: z.enum(["converged", "redrive"]),
+  })
+  .strict();
+
 export const ReviewRequestedPayload = z
   .object({
     prUrl: z.string(),

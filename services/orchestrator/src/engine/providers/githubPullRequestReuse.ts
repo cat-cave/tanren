@@ -21,6 +21,57 @@ import type {
 } from "./github.js";
 import { asPullArray, parsePullRequest, repoPath } from "./github.js";
 
+/**
+ * The branch being PR'd has NOTHING ahead of the base — GitHub rejects the open with a
+ * 422 `{ code: "custom", message: "No commits between <base> and <head>" }`. This is NOT a
+ * generic internal failure: it has exactly TWO legitimate causes the PR-creation stage
+ * must handle gracefully (never a hard escalating `internal` strand) —
+ *   (a) the spec's work is ALREADY PRESENT in the base (a prior iteration merged, or the
+ *       base already satisfies the criteria) ⇒ the spec is effectively DONE → CONVERGE;
+ *   (b) the writer genuinely produced NO commit this attempt (a degraded/slow codex
+ *       returned nothing) ⇒ TRANSIENT → RE-DRIVE.
+ * Thrown as a TYPED error (keyed off the GitHub error CODE + message, not a brittle
+ * string sniff at the call site) so the PR-creation stage discriminates (a) vs (b) and
+ * routes converge-or-redrive — mirroring the empty-diff accept at the checker layer (#586).
+ * A 422 that is NOT this case (e.g. an empty-title `missing_field`) still throws the
+ * generic loud error below.
+ */
+export class NoCommitsBetweenBaseAndHeadError extends Error {
+  readonly baseBranch: string;
+  readonly headBranch: string;
+
+  constructor(baseBranch: string, headBranch: string) {
+    super(`GitHub draft PR open rejected: no commits between ${baseBranch} and ${headBranch}`);
+    this.name = "NoCommitsBetweenBaseAndHeadError";
+    this.baseBranch = baseBranch;
+    this.headBranch = headBranch;
+  }
+}
+
+/**
+ * Does GitHub's 422 body specifically signal "No commits between base and head"? Keys off
+ * the structured error CODE (`custom`) + the message text GitHub returns for an empty PR —
+ * NOT a bare substring of the top-level message, so an unrelated 422 (a `missing_field`
+ * title, a malformed body) never gets mis-routed as a benign empty branch.
+ */
+function isNoCommitsBetween(body: unknown): boolean {
+  if (typeof body !== "object" || body === null) {
+    return false;
+  }
+  const errors = (body as { errors?: unknown }).errors;
+  if (!Array.isArray(errors)) {
+    return false;
+  }
+  return errors.some((entry) => {
+    if (typeof entry !== "object" || entry === null) {
+      return false;
+    }
+    const code = (entry as { code?: unknown }).code;
+    const message = (entry as { message?: unknown }).message;
+    return code === "custom" && typeof message === "string" && /no commits between/iu.test(message);
+  });
+}
+
 export class GitHubPullRequestService {
   constructor(private readonly http: GitHubHttpClient) {}
 
@@ -55,6 +106,14 @@ export class GitHubPullRequestService {
       const afterRace = await this.findOpenPullRequest(input);
       if (afterRace !== undefined) {
         return await this.reuseExistingPullRequest(input, afterRace);
+      }
+      // A 422 whose error is specifically "No commits between <base> and <head>": the
+      // pushed branch has NOTHING ahead of the base. This is NOT a generic internal
+      // failure — it is either work-already-present (converge) or an empty writer output
+      // (re-drive). Throw the TYPED error so the PR-creation stage discriminates + routes
+      // converge-or-redrive; it must NEVER hard-strand as an escalating `internal` error.
+      if (isNoCommitsBetween(created.body)) {
+        throw new NoCommitsBetweenBaseAndHeadError(input.baseBranch, input.headBranch);
       }
     }
     // Surface GitHub's response body (errors/message), never just the status: a 422 that

@@ -72,6 +72,12 @@ describe("decideRunDisposition — RE-DRIVE: every random/transient/internal/cra
       expect(decideRunDisposition({ kind: "merge", mergeOutcome }, 0).bucket).toBe("re_drive");
     }
   });
+
+  it("an empty-writer-commit fault (no commits between base and head) RE-DRIVES, never a hard internal strand (v35)", async () => {
+    const { EmptyWriterCommitError } = await import("../src/engine/workflow/plannerRunCi.js");
+    const d = decideRunDisposition({ kind: "error", error: new EmptyWriterCommitError("tanren/run_1", "main") }, 1);
+    expect(d).toMatchObject({ bucket: "re_drive", failure: { code: "empty_writer_output" } });
+  });
 });
 
 describe("decideRunDisposition — GENUINE-HALT: only the four structural classes", () => {
@@ -104,6 +110,14 @@ describe("decideRunDisposition — GENUINE-HALT: only the four structural classe
   it("a merge `needs_attention` (a genuine HITL/changes-requested decision) GENUINE-HALTS as a human_decision", () => {
     const d = decideRunDisposition({ kind: "merge", mergeOutcome: "needs_attention" }, 0);
     expect(d).toMatchObject({ bucket: "genuine_halt", reason: "human_decision" });
+  });
+
+  it("an empty-writer-commit fault that recurs K times GENUINE-HALTS as a persistent_failure (bounded, no silent stall)", async () => {
+    const { EmptyWriterCommitError } = await import("../src/engine/workflow/plannerRunCi.js");
+    const err = new EmptyWriterCommitError("tanren/run_1", "main");
+    expect(decideRunDisposition({ kind: "error", error: err }, K - 1).bucket).toBe("re_drive");
+    const at = decideRunDisposition({ kind: "error", error: err }, K);
+    expect(at).toMatchObject({ bucket: "genuine_halt", reason: "persistent_failure" });
   });
 });
 

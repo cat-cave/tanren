@@ -44,8 +44,14 @@ import { resolveVcsToken } from "../credentials/vcsCredentials.js";
 import type { EventStore } from "../eventStore.js";
 import type { EventName, EventPayload } from "../events/index.js";
 import { publishDraftPullRequest, type PublishedDraftPullRequest } from "./githubDraftPr.js";
+import { NoCommitsBetweenBaseAndHeadError } from "../providers/githubPullRequestReuse.js";
 import { appTokenSeam, writerSeam } from "./plannerRunSeams.js";
-import { applyFailedMergeGate, type FinalizeRunState, type MergeGateBudget } from "./plannerRunFinalize.js";
+import {
+  applyFailedMergeGate,
+  finalizeMergeOutcome,
+  type FinalizeRunState,
+  type MergeGateBudget,
+} from "./plannerRunFinalize.js";
 import { mergeGateRejection, type ReGateCiHook } from "./reviewMerge/index.js";
 import type { PlannerRejectionFeedback } from "./planner/planner.js";
 import type { PlannerRunContext, RunPlannerLoopInput } from "./plannerRun.js";
@@ -65,20 +71,64 @@ export interface MergeGateRunContext {
 }
 
 /**
+ * The branch being PR'd had NOTHING ahead of the base (GitHub's 422 "No commits between
+ * base and head"). The PR-creation stage discriminates the two legitimate causes and routes
+ * each WITHOUT a hard escalating `internal` failure (mirroring the empty-diff accept #586 at
+ * the PR layer):
+ *   - `converged`: the writer DID author a commit ahead of the clone base, but its content
+ *     is already present in the base (the spec is satisfied by the base / a prior iteration
+ *     landed) ⇒ the spec CONVERGES (merged/done), the same terminal-success the merge path
+ *     takes, so the DAG advances + dependents unblock.
+ *   - `redrive`: the cleaned PR head EQUALS the clone base (the writer produced no commit
+ *     this attempt — a degraded/slow codex returned nothing) ⇒ a TRANSIENT re-drive.
+ */
+export type NoCommitsDisposition = "converged" | "redrive";
+
+/**
+ * The writer produced NO commit ahead of the base this attempt (the `redrive` branch of a
+ * "No commits between base and head" 422). A TRANSIENT — classified `empty_writer_output`
+ * (retriable), so the unified finalize RE-DRIVES it under the consecutive-same-failure cap
+ * (after K it escalates LOUD as a GENUINE `persistent_failure` needs_attention, never a
+ * silent stall / hot-loop), NOT a hard `internal` strand.
+ */
+export class EmptyWriterCommitError extends Error {
+  constructor(branch: string, baseBranch: string) {
+    super(`the writer produced no commit on ${branch} ahead of ${baseBranch} this attempt`);
+    this.name = "EmptyWriterCommitError";
+  }
+}
+
+/** The result of preparing + publishing the cleaned draft PR: a published PR, or a no-commits disposition. */
+export type PublishCleanedDraftPrResult =
+  | { kind: "published"; pushSource: CleanedPushSource; pullRequest: PublishedDraftPullRequest }
+  | { kind: "no_commits"; pushSource: CleanedPushSource; disposition: NoCommitsDisposition };
+
+type CleanedPushSource = Awaited<ReturnType<typeof prepareCleanPrBranch>>;
+
+/**
  * Prepare the cleaned PR branch + publish the draft PR for one writer-loop pass. Replays
  * the writer commits onto the clone HEAD, dropping the synthetic bootstrap commit (+
  * install artifacts) so the pushed branch / PR carries only the writer's changes (the
  * working HEAD is left intact so a review/merge-gate-rework re-entry keeps its bootstrapSha
  * diff base — no-op on fake-SSH), then publishes the draft PR. Returns both the cleaned
  * push source (its `headSha` is the commit the `pre_merge` gate + land authority bind to,
- * §5) and the published PR. Extracted from the loop body to keep plannerRun.ts under cap.
+ * §5) and the published PR.
+ *
+ * GRACEFUL EMPTY-BRANCH HANDLING (v35): when GitHub rejects the open with "No commits
+ * between base and head" ({@link NoCommitsBetweenBaseAndHeadError}), the branch has NOTHING
+ * ahead of the base — this is NOT a hard internal error. We DISCRIMINATE here using the
+ * cleaned PR head vs the clone base (the rebase `--onto` target the PR diffs against): a
+ * head EQUAL to the clone base means the writer produced no commit (`redrive` — transient),
+ * and a head AHEAD of the base whose content GitHub still finds empty means the work is
+ * already present in the base (`converged` — done). Extracted from the loop body to keep
+ * plannerRun.ts under cap.
  */
 export async function publishCleanedDraftPr(
   input: RunPlannerLoopInput,
   ctx: { target: RunnerHandle; workspacePath: string; eventStore: EventStore },
   context: PlannerRunContext,
   shas: { cloneHeadSha: string; bootstrapSha: string },
-): Promise<{ pushSource: Awaited<ReturnType<typeof prepareCleanPrBranch>>; pullRequest: PublishedDraftPullRequest }> {
+): Promise<PublishCleanedDraftPrResult> {
   const pushSource = await prepareCleanPrBranch({
     ssh: input.ssh,
     target: ctx.target,
@@ -87,33 +137,59 @@ export async function publishCleanedDraftPr(
     bootstrapSha: shas.bootstrapSha,
     timeoutMs: input.timeoutMs,
   });
-  const pullRequest = await publishDraftPullRequest({
-    pool: input.pool,
-    eventStore: ctx.eventStore,
-    ...writerSeam(input),
-    orgId: context.orgId,
-    secrets: input.secrets,
-    githubHttp: input.githubHttp,
-    ssh: input.ssh,
-    target: ctx.target,
-    sourceRef: pushSource.ref,
-    runId: context.runId,
-    specId: context.specId,
-    projectId: context.projectId,
-    workspacePath: ctx.workspacePath,
-    repoUrl: context.repoUrl,
-    targetBranch: context.targetBranch,
-    // WS-A PR-5 (§3.1): the ancestor stack so the draft PR bases on the immediate
-    // ancestor's PR-head branch (flag-gated stacked PR); flag-off ⇒ `targetBranch`.
-    ...(context.ancestorStack !== undefined && { ancestorStack: context.ancestorStack }),
-    runBranch: context.runBranch,
-    title: `Tanren: ${context.specTitle}`,
-    body: context.specDescription,
-    githubCredentialRef: context.githubCredentialRef,
-    ...appTokenSeam(context, input),
-    timeoutMs: input.timeoutMs,
-  });
-  return { pushSource, pullRequest };
+  try {
+    const pullRequest = await publishDraftPullRequest({
+      pool: input.pool,
+      eventStore: ctx.eventStore,
+      ...writerSeam(input),
+      orgId: context.orgId,
+      secrets: input.secrets,
+      githubHttp: input.githubHttp,
+      ssh: input.ssh,
+      target: ctx.target,
+      sourceRef: pushSource.ref,
+      runId: context.runId,
+      specId: context.specId,
+      projectId: context.projectId,
+      workspacePath: ctx.workspacePath,
+      repoUrl: context.repoUrl,
+      targetBranch: context.targetBranch,
+      // WS-A PR-5 (§3.1): the ancestor stack so the draft PR bases on the immediate
+      // ancestor's PR-head branch (flag-gated stacked PR); flag-off ⇒ `targetBranch`.
+      ...(context.ancestorStack !== undefined && { ancestorStack: context.ancestorStack }),
+      runBranch: context.runBranch,
+      title: `Tanren: ${context.specTitle}`,
+      body: context.specDescription,
+      githubCredentialRef: context.githubCredentialRef,
+      ...appTokenSeam(context, input),
+      timeoutMs: input.timeoutMs,
+    });
+    return { kind: "published", pushSource, pullRequest };
+  } catch (error) {
+    if (error instanceof NoCommitsBetweenBaseAndHeadError) {
+      const disposition = discriminateNoCommits(pushSource.headSha, shas.cloneHeadSha);
+      return { kind: "no_commits", pushSource, disposition };
+    }
+    throw error;
+  }
+}
+
+/**
+ * DISCRIMINATE a "No commits between base and head" 422 (the v35 graceful path). The cleaned
+ * PR head is the writer's commits replayed onto the clone base (`cloneHeadSha`, the `--onto`
+ * target the PR diffs against), with the bootstrap commit dropped:
+ *   - head EQUAL to the clone base ⇒ the writer authored NO commit ahead of the base this
+ *     attempt ⇒ `redrive` (a transient empty output; re-drive, never a hard strand).
+ *   - head AHEAD of the base (a real writer commit) but GitHub finds the diff empty ⇒ the
+ *     work is ALREADY PRESENT in the base ⇒ `converged` (the spec is satisfied → done).
+ * On a fake-SSH unit path the head sha is "" (no real workspace) — treat as `redrive` (the
+ * conservative transient), never a spurious converge.
+ */
+export function discriminateNoCommits(cleanedHeadSha: string, cloneHeadSha: string): NoCommitsDisposition {
+  if (cleanedHeadSha === "" || cleanedHeadSha === cloneHeadSha) {
+    return "redrive";
+  }
+  return "converged";
 }
 
 /**
@@ -176,15 +252,23 @@ export function mergeGateSelfHeal(
   return { kind: "rework", rejection: mergeGateRejection(gate) };
 }
 
-/** The merge-gate STAGE result the planner loop maps: merge forward, re-author, or halt. */
-export type PublishGateStageResult = {
-  pullRequest: PublishedDraftPullRequest;
-  mergeGate: GateOutcome;
-  // `merged`: gate passed → proceed to review/merge. `rework`: writer-fixable fail, spec
-  // returned to in_flight, re-enter the writer (caller `continue`s). `halt`: budget spent,
-  // run finalized + spec parked LOUD (caller returns the terminal result).
-  kind: "merged" | "rework" | "halt";
-};
+/** The merge-gate STAGE result the planner loop maps: merge forward, re-author, halt, or no-commits. */
+export type PublishGateStageResult =
+  | {
+      pullRequest: PublishedDraftPullRequest;
+      mergeGate: GateOutcome;
+      // `merged`: gate passed → proceed to review/merge. `rework`: writer-fixable fail, spec
+      // returned to in_flight, re-enter the writer (caller `continue`s). `halt`: budget spent,
+      // run finalized + spec parked LOUD (caller returns the terminal result).
+      kind: "merged" | "rework" | "halt";
+    }
+  // GRACEFUL EMPTY-BRANCH (v35): GitHub rejected the open with "No commits between base and
+  // head" — the branch has NOTHING ahead of the base. NO PR was opened + NO gate ran. The
+  // stage handled it WITHOUT a hard internal error: `converged_empty` means it ALREADY
+  // finalized the run merged (work present in base — the spec is done) and the caller just
+  // returns the terminal result; the writer-produced-nothing case is a transient the stage
+  // THROWS as `EmptyWriterCommitError` (the unified finalize re-drives it, never escalating).
+  | { kind: "converged_empty" };
 
 /**
  * The merge-authority STAGE (apex v34): publish the cleaned draft PR, run the `pre_merge`
@@ -209,10 +293,32 @@ export async function runPublishGateStage(
     budget: MergeGateBudget;
   },
 ): Promise<PublishGateStageResult> {
-  const { pushSource, pullRequest } = await publishCleanedDraftPr(input, ctx, context, {
+  const published = await publishCleanedDraftPr(input, ctx, context, {
     cloneHeadSha: stage.cloneHeadSha,
     bootstrapSha: stage.bootstrapSha,
   });
+  if (published.kind === "no_commits") {
+    // The branch had NOTHING ahead of the base: emit the OBSERVABLE disposition (never a
+    // silent relabel), then converge (work already present) or re-drive (empty writer output)
+    // — NEVER a hard internal strand. `converged` finalizes the run merged HERE (the spec is
+    // satisfied by the base, same terminal-success a normal merge takes — mirrors #586) and
+    // the caller returns; `redrive` THROWS the transient the unified finalize re-drives (#582;
+    // `empty_writer_output`, escalating LOUD only after K), never an escalating `internal`.
+    await stage.appendEvent("github.pr.no_commits", {
+      branch: context.runBranch,
+      targetBranch: context.targetBranch,
+      disposition: published.disposition,
+    });
+    if (published.disposition === "redrive") {
+      throw new EmptyWriterCommitError(context.runBranch, context.targetBranch);
+    }
+    await finalizeMergeOutcome(input, stage.finalizeRunState, context, stage.appendEvent, {
+      outcome: "merged",
+      integration: "direct_merge",
+    });
+    return { kind: "converged_empty" };
+  }
+  const { pushSource, pullRequest } = published;
   const mergeGate = await runMergeGateForRun(input, ctx, pushSource.headSha);
   if (mergeGate.passed) {
     return { pullRequest, mergeGate, kind: "merged" };

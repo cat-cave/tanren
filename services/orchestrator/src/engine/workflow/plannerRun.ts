@@ -297,22 +297,19 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
     projectId: context.projectId,
     runnerImage: context.runnerImage,
     identitySecretRef: context.identitySecretRef,
-    // The run's org. Threaded into the allocate request so a backend that
-    // persists a `runners` row (the sidecar allocator service) writes it under
-    // the org's RLS scope. Undefined for system / null-org jobs (org_id NULL).
+    // The run's org. Threaded so a backend that persists a `runners` row (the sidecar
+    // allocator) writes it under RLS scope. Undefined for system / null-org jobs.
     orgId: context.orgId ?? undefined,
   });
   await appendEvent("runner.allocated", runnerPayload(allocation));
 
-  // The release reason handed to the RELEASE FINALIZER in `finally`; starts
-  // `abandoned` and is promoted to completed/failed as the run resolves.
+  // The release reason handed to the RELEASE FINALIZER in `finally`; starts `abandoned` and
+  // is promoted to completed/failed as the run resolves.
   let releaseReason: ReleaseReason = "abandoned";
   try {
-    // Clone (legacy single-ref OR — WS-A PR-4, flag-gated — the jj-local ancestor-stack
-    // bootstrap) + bootstrap-install + commit + materialize contract files. `baseSha` is the
-    // answerer review base (the contract-files commit when one was made, else the bootstrap
-    // commit); `cloneHeadSha` is the writer's replay base; `bootstrappedBaseRevision` is set
-    // ONLY on the jj-local path (the conflict resolver's merge-time base). See the module.
+    // Clone (single-ref OR — WS-A PR-4, flag-gated — the jj-local ancestor-stack bootstrap) +
+    // bootstrap-install + commit + materialize contract files. `baseSha` = answerer review base;
+    // `cloneHeadSha` = writer's replay base; `bootstrappedBaseRevision` set ONLY on jj-local.
     const { cloneHeadSha, bootstrapSha, baseSha, bootstrappedBaseRevision, prepBootstrapDeferred } =
       await prepareRunWorkspace(input, allocation.target, workspacePath);
     await appendEvent("workspace.prepared", {
@@ -330,25 +327,23 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
       target: allocation.target,
       codexHome: codexHomeForRun(context.runId),
     };
-    // Build adapters + usage probe + the spec-quality validator AND run the
-    // BUDGET-SAFETY (M6) ceiling preflight (fail closed on an unreachable ceiling).
+    // Build adapters + usage probe + the spec-quality validator AND run the BUDGET-SAFETY
+    // (M6) ceiling preflight (fail closed on an unreachable ceiling).
     const adapterResult = await resolveRunAdaptersWithBudgetPreflight(input, adapterCtx, appendEvent);
     const { adapters, usageProbe, specValidator, budgetGate: iterationBudgetGate } = adapterResult;
     // MANAGED real-`usage.cost` capturer; BYOK has no platform metering ref → EXPLICIT narrated skip (apex v30). See helper.
     const captureRealProviderCost = await resolveManagedCapturer(input, appendEvent);
-    // The deterministic gate on the just-bootstrapped workspace: resolve the CI config
-    // once (tanren-ci.yml, else the default) and run the tiers mapped to each lifecycle
-    // point over SSH — exit codes only, no Answerer.
+    // The deterministic gate on the just-bootstrapped workspace: resolve the CI config once
+    // (tanren-ci.yml, else default) + run the tiers mapped to each lifecycle point over SSH.
     const runGate = input.runGate ?? buildDefaultGate(input, allocation.target, workspacePath, eventStore);
-    // The native merge-gate context: the merge authority runs `runGate` at `pre_merge` on
-    // the live runner + publishes `tanren/gate`. Same context feeds the re-gate hook.
+    // The native merge-gate context: the authority runs `runGate` at `pre_merge` on the live
+    // runner + publishes `tanren/gate`. Same context feeds the re-gate hook.
     const mergeGateCtx: MergeGateRunContext = { runGate, target: allocation.target, workspacePath, eventStore };
 
-    // the write→gate→PR→CI→review tail re-enters on a changes-requested review (loop
-    // re-run with reviewer feedback as planner steering, up to maxReviewReworks).
+    // the write→gate→PR→CI→review tail re-enters on a changes-requested review (up to maxReviewReworks).
     const maxReworks = input.maxReviewReworks ?? 1;
-    // SELF-HEAL (apex v34): the dedicated pre_merge-gate→writer budget (see
-    // `mergeGateSelfHeal` in plannerRunCi.ts), never starving/starved by the review budget.
+    // SELF-HEAL (apex v34): the dedicated pre_merge-gate→writer budget (see `mergeGateSelfHeal`
+    // in plannerRunCi.ts), never starving/starved by the review budget.
     const mergeGateBudget: MergeGateBudget = { used: 0, max: input.maxMergeGateReworks ?? 2 };
     const seedRejections: PlannerRejectionFeedback[] = [];
     const entityRiskProducer = buildEntityRiskProducer(input, allocation.target, workspacePath);
@@ -387,20 +382,19 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
       });
 
       if (outcome.kind !== "passed") {
-        // UNIFIED RUN-FINALIZE (apex v35): a non-pass loop exit is TRANSIENT — RE-DRIVE (the
-        // authority bounds it by the consecutive-same-failure cap), never a direct park.
+        // UNIFIED RUN-FINALIZE (apex v35): a non-pass loop exit is TRANSIENT — RE-DRIVE
+        // (bounded by the consecutive-same-failure cap), never a direct park.
         await finalizeNonPassOutcome(input, finalizeRunState, context, appendEvent, nonPassDetailFor(outcome));
         releaseReason = "failed";
         return { runId: context.runId, workspacePath, outcome };
       }
 
-      // Publish the cleaned draft PR, run the merge-authority `pre_merge` gate, and (apex
-      // v34 SELF-HEAL) route a writer-fixable gate failure back to the writer instead of
-      // the old `code:internal` throw + strand — all extracted to `runPublishGateStage` in
-      // plannerRunCi.ts (keeps this file under cap + its branching out of this function).
-      // The stage returns: `rework` (re-enter the writer — `continue`), `halt` (bounded-out:
-      // finalized + parked LOUD, the loop returns), or `merged` (gate passed — fall through
-      // to review). It also surfaces the published PR + gate verdict for the merge tail.
+      // Publish the cleaned draft PR + run the merge-authority `pre_merge` gate (extracted to
+      // `runPublishGateStage`, keeping this file under cap). It returns `rework` (re-enter the
+      // writer — `continue`), `halt` (bounded-out: finalized + parked LOUD), `merged` (gate
+      // passed — fall through to review), or `converged_empty` (v35 graceful empty-branch: the
+      // stage already converged the run merged — work present in base, #586 — or threw the
+      // transient re-drive #582; the spec is done, just return).
       const stage = await runPublishGateStage(input, mergeGateCtx, context, {
         cloneHeadSha,
         bootstrapSha,
@@ -409,6 +403,10 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
         seedRejections,
         budget: mergeGateBudget,
       });
+      if (stage.kind === "converged_empty") {
+        releaseReason = "completed";
+        return { runId: context.runId, workspacePath, outcome };
+      }
       pullRequest = stage.pullRequest;
       mergeGate = stage.mergeGate;
       if (stage.kind === "rework") continue;
@@ -434,9 +432,8 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
         ...simulatedReviewSeam(input, adapterCtx),
       });
 
-      // Map the review verdict (extracted to plannerRunFinalize.ts, mirroring the merge-gate
-      // self-heal): `merge` → proceed; `rework` → re-enter the writer (spec back to
-      // in_flight); `halt` → finalized + parked LOUD, the loop returns. No merge on non-pass.
+      // Map the review verdict (in plannerRunFinalize.ts): `merge` → proceed; `rework` →
+      // re-enter the writer; `halt` → finalized + parked LOUD, the loop returns.
       const reviewMove = await applyReviewVerdict(
         input,
         finalizeRunState,

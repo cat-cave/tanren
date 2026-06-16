@@ -50,6 +50,13 @@
       "when": 1781498739362,
       "tag": "0006_neat_jackpot",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1781604969198,
+      "tag": "0007_github_pr_no_commits_event",
+      "breakpoints": true
     }
   ]
 }

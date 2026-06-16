@@ -71,6 +71,7 @@ import {
   GithubFailedPayload,
   GithubPrCreatedPayload,
   GithubPrMergedPayload,
+  GithubPrNoCommitsPayload,
   GithubPrReadyPayload,
   HelloCompletedPayload,
   HelloSshCompletedPayload,
@@ -175,7 +176,7 @@ import {
 // The EventRegistry is the single source of truth mapping event names to their typed Zod
 // payload schemas. Adding a new event name requires: (1) a Zod schema under events/schemas/,
 // (2) wiring it here, (3) Sensitivity tags for every payload field in sensitivityRules.ts,
-// and (4) regenerating the events.event_type CHECK migration via codegen:events + db:generate.
+// (4) regenerating the events.event_type CHECK migration via codegen:events + db:generate.
 export const EventRegistry = {
   // Run lifecycle
   "run.queued": RunQueuedPayload,
@@ -188,7 +189,6 @@ export const EventRegistry = {
   "task.started": TaskStartedPayload,
   "task.completed": TaskCompletedPayload,
   "task.failed": TaskFailedPayload,
-
   // queue hardening: a job whose retry budget is exhausted is dead-lettered (terminal).
   "job.dead_lettered": JobDeadLetteredPayload,
   // Operator cancel-spec/cancel-run audit (terminal cancel + runner release; schemas/lifecycle.ts).
@@ -279,10 +279,10 @@ export const EventRegistry = {
   "github.pr.created": GithubPrCreatedPayload,
   "github.pr.ready": GithubPrReadyPayload,
   "github.pr.merged": GithubPrMergedPayload,
+  "github.pr.no_commits": GithubPrNoCommitsPayload,
   "github.failed": GithubFailedPayload,
 
-  // Flaky-test detection + auto-quarantine: the detector flags a STEP that toggled outcome on
-  // UNCHANGED code + quarantines it (a consistently-failing step is never flagged — ≠ ignore).
+  // Flaky-test detection + auto-quarantine: the detector flags a STEP that toggled outcome on UNCHANGED code + quarantines it.
   "ci.flaky.detected": CiFlakyDetectedPayload,
   "ci.test.quarantined": CiTestQuarantinedPayload,
   // CI-intelligence per-test grain: the native gate ingested the runner's JUnit report (summary).
