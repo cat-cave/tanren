@@ -96,4 +96,16 @@ describe("run-failure public-error-leak hardening (runExecutor catch → run.fai
     // A known credential error maps to its safe code/stage/summary — never its message.
     expect(classifyRunFailure(new WorkspaceBootstrapError(RAW_LEAK)).summary).toBe("workspace bootstrap failed");
   });
+
+  it("classifies the empty-writer-commit error as the retriable `empty_writer_output` code (v35)", async () => {
+    const { EmptyWriterCommitError } = await import("../src/engine/workflow/plannerRunCi.js");
+    // A "No commits between base and head" 422 whose branch produced nothing this attempt
+    // is a TRANSIENT empty output — classified to its own retriable code (NOT the hard
+    // `internal` strand it used to become), so the unified finalize re-drives it.
+    expect(classifyRunFailure(new EmptyWriterCommitError("tanren/run_1", "main"))).toEqual({
+      code: "empty_writer_output",
+      stage: "agent",
+      summary: "the writer produced no commit ahead of the base this attempt",
+    });
+  });
 });

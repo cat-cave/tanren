@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "branch": {
+      "type": "string"
+    },
+    "disposition": {
+      "enum": [
+        "converged",
+        "redrive"
+      ],
+      "type": "string"
+    },
+    "targetBranch": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "branch",
+    "targetBranch",
+    "disposition"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.github.pr.no_commits"
+}

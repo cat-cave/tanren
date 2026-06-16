@@ -256,6 +256,7 @@ const ORPHAN_PROXY_NAME_BY_CODE: Readonly<Record<ClassifiedRunFailure["code"], s
   usage_limit: "CodexUsageLimitError",
   merge: "__OrphanMergeFault",
   deploy: "__OrphanDeployFault",
+  empty_writer_output: "EmptyWriterCommitError",
   internal: "__OrphanInternalFault",
 };
 

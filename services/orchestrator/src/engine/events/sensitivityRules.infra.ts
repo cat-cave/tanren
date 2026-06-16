@@ -54,7 +54,6 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["result.failure.reason", "redacted"],
     ["result.failure.message", "redacted"],
   ]),
-
   // workspace (workspace.failed.message → see audit in sensitivityRules.ts)
   ...rulesFor("workspace.prepared", [
     ["runnerId", "public"],
@@ -82,7 +81,6 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["timedOut", "public"],
     ["outputTail", "secret"],
   ]),
-
   // credentials — refs are redacted; raw value never appears in payloads
   ...rulesFor("credential.requested", [
     ["credentialKind", "public"],
@@ -118,7 +116,6 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["ttlSeconds", "public"],
     ["numUses", "public"],
   ]),
-
   // cost / cost-safety — extracted to ./sensitivityRules.cost.ts (500-line cap).
   ...costSensitivityRules,
 
@@ -170,7 +167,6 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["model", "public"],
     ["reason", "public"],
   ]),
-
   // github
   ...rulesFor("github.branch.pushed", [
     ["repoUrl", "public"],
@@ -199,6 +195,11 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["branch", "public"],
     ["message", "public"],
   ]),
+  ...rulesFor("github.pr.no_commits", [
+    ["branch", "public"],
+    ["targetBranch", "public"],
+    ["disposition", "public"],
+  ]),
 
   // Flaky detection + quarantine rules live in sensitivityRules.ciIntel.ts
   // (next to ci.tests.reported) to keep this file under the 500-line cap.
@@ -225,7 +226,6 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["reviewer", "public"],
     ["message", "public"],
   ]),
-
   // merge stage — PR identifiers + integration mode + prose, all public
   ...rulesFor("merge.queued", [
     ["prUrl", "public"],

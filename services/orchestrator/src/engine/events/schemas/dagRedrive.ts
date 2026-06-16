@@ -17,7 +17,15 @@ export const DagSpecRedrivenPayload = z
     runId: z.string(),
     // The CLASSIFIED public-safe failure code that triggered the re-drive (the closed run-failure
     // vocabulary, never the raw error string). The same code repeating is what the counter keys off.
-    failureCode: z.enum(["workspace", "credential", "usage_limit", "merge", "deploy", "internal"]),
+    failureCode: z.enum([
+      "workspace",
+      "credential",
+      "usage_limit",
+      "merge",
+      "deploy",
+      "empty_writer_output",
+      "internal",
+    ]),
     // The run STAGE the failure is attributed to (closed vocabulary), for the timeline.
     stage: z.enum(["bootstrap", "credentials", "workspace", "agent", "merge", "deploy", "run"]),
     // CONSECUTIVE prior re-drives with the SAME failure code (this one included) — the stuck-
