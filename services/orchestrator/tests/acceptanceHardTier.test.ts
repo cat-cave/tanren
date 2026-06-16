@@ -81,10 +81,6 @@ describe("acceptance hard tier (dequeue→execute, all hard paths)", () => {
       githubHttp: github,
       identitySecretRef,
       // Budgets generous enough that the scripted loops stay well within them.
-      escapeHatches: {
-        maxWriterIterPerSubtask: 5,
-        maxRetriesPerTransientFailure: 3,
-      },
       runWorkflow: hardTierWorkflowRunner(github, trace),
     });
 

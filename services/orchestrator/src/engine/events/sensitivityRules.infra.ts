@@ -349,8 +349,7 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["speculativeBase", "public"],
     ["unmergedAncestors[]", "public"],
   ]),
-  // §2c step 3: the cleared-hold retarget to default_branch
-  // — PR identifiers + branch refs, all public.
+  // §2c step 3: the cleared-hold retarget to default_branch — PR identifiers + branch refs, all public.
   ...rulesFor("merge.retargeted", [
     ["prUrl", "public"],
     ["prNumber", "public"],
@@ -414,6 +413,7 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["otherSpecId", "public"],
     ["newContext", "public"],
     ["replanStatus", "public"],
+    ["conflictSignature", "public"],
   ]),
   // governance posture block — PR identifiers + posture + external
   // contributor logins (public GitHub handles) + prose, all public.

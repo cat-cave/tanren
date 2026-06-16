@@ -19,17 +19,16 @@
 //      SCRATCH with the CURRENT code (the writer re-authors; the self-healing
 //      bootstrap loop handles deps; etc.). This automates EXACTLY the
 //      `dag.spec.needs_attention` payload's own "requeue after addressing the cause".
-//   3. BOUNDS the recovery — PROGRESS-AWARE. The cap (`maxAttempts`) is NOT a flat
-//      count of all recoveries: it counts only the CONSECUTIVE trailing recoveries
-//      that made NO new forward progress. A build that is genuinely ADVANCING
-//      between recoveries (more specs merged, or the set of terminally-stranded
-//      specs changed) keeps recovering even past a flat K — it is converging, just
-//      slowly. A build STUCK at the EXACT same failure (same merged count, same
-//      stranded set) K consecutive times STILL exhausts: it STOPS and throws a LOUD
+//   3. BOUNDS the recovery — by INTELLIGENT NON-CONVERGENCE DETECTION, NOT a count
+//      (apex v35; the shared `convergenceDetector`). A build that is genuinely
+//      ADVANCING between recoveries (more specs merged, or the set of
+//      terminally-stranded specs changed) keeps recovering UNBOUNDED — it is
+//      converging, however slowly. A build STUCK at the EXACT same failure (same
+//      merged count, same stranded set) — a FIXED POINT — STOPS and throws a LOUD
 //      `TemplateBuildRecoveryExhaustedError` (a genuine "this stack's template
-//      cannot be built autonomously" signal). The bound is preserved (a stuck build
-//      MUST still terminate — never an infinite retry), it just forgives slow
-//      convergence instead of killing it at a blind count.
+//      cannot be built autonomously" signal). There is NO `maxAttempts` cap: the
+//      fixed-point detection IS the loop-breaker, so slow convergence is forgiven
+//      forever while a frozen build terminates the moment it stops changing.
 //   4. EMITS durable events — `template.build.recovered` per requeue (carrying the
 //      PROGRESS SIGNAL: `mergedCount` + `strandedSpecIds`, so the converged-vs-stuck
 //      judgement is reconstructible from the durable log across restarts),
@@ -44,15 +43,9 @@
 import type { EventStore } from "../../eventStore.js";
 import type { DagSnapshot } from "../../contracts/dagWalker.js";
 import { createLogger } from "../../observability/logger.js";
+import { assessStructuralProgress, type AttemptSignature } from "../../workflow/convergenceDetector.js";
 
 const log = createLogger("template-recovery");
-
-// The DEFAULT cap on CONSECUTIVE NO-PROGRESS auto-recoveries per template-build
-// before a loud terminal failure. Bounded so a TRANSIENT/fixable failure self-heals
-// (and a slowly-CONVERGING build keeps recovering — see the progress-aware bound
-// below) while a PERMANENTLY-broken stack stuck at the SAME failure surfaces loudly
-// instead of looping forever.
-export const DEFAULT_MAX_RECOVERY_ATTEMPTS = 3;
 
 // The forward-progress signal a recovery records (and reads back) to decide whether
 // the build ADVANCED since the last recovery. Progress = MORE specs merged, OR the
@@ -68,64 +61,57 @@ export interface RecoveryProgressSignal {
   strandedSpecIds: ReadonlyArray<string>;
 }
 
-// Did the build make forward progress BETWEEN two recovery snapshots? True when more
-// specs merged OR the set of terminally-stranded specs changed. (`prior` is the
-// earlier signal; `current` the later.)
-function madeProgress(prior: RecoveryProgressSignal, current: RecoveryProgressSignal): boolean {
-  if (current.mergedCount !== prior.mergedCount) return true;
-  return !sameSpecSet(prior.strandedSpecIds, current.strandedSpecIds);
-}
-
-// Set equality over two already-sorted-and-deduped id lists.
-function sameSpecSet(a: ReadonlyArray<string>, b: ReadonlyArray<string>): boolean {
-  if (a.length !== b.length) return false;
-  return a.every((id, i) => id === b[i]);
-}
-
 // Normalize an id list to a sorted, deduped array (a stable canonical set for both
 // equality and the durable record).
 function normalizeSpecIds(ids: ReadonlyArray<string>): string[] {
   return [...new Set(ids)].sort((x, y) => (x < y ? -1 : x > y ? 1 : 0));
 }
 
-// The COUNT toward the cap: the number of CONSECUTIVE TRAILING prior recoveries that
-// made NO new progress, measured against the CURRENT snapshot. Walk the prior signals
-// newest→oldest: the current snapshot is compared to the most-recent prior recovery;
-// if it advanced, the streak is 0 (the build is converging — forgive). Otherwise it
-// counts, and we keep walking back while each older recovery ALSO made no progress
-// relative to its successor. The first progressing step stops the count. This is what
-// `maxAttempts` bounds, so a slowly-advancing build keeps recovering while a build
-// frozen at the same failure K consecutive times exhausts.
-export function consecutiveNoProgressCount(
-  priorRecoveries: ReadonlyArray<RecoveryProgressSignal>,
-  current: RecoveryProgressSignal,
-): number {
-  let streak = 0;
-  let next = current;
-  for (let i = priorRecoveries.length - 1; i >= 0; i--) {
-    const prior = priorRecoveries[i];
-    if (prior === undefined) break;
-    if (madeProgress(prior, next)) break;
-    streak += 1;
-    next = prior;
-  }
-  return streak;
+// Map a recovery progress signal onto the shared convergence detector's `AttemptSignature`:
+//   - `failureSignature` = the stranded-spec SET (a changed stranded set is progress — a
+//     different spec is now the blocker), and
+//   - `magnitude` = the count of NOT-yet-merged specs, which SHRINKS as the build converges
+//     (more merged ⇒ smaller magnitude ⇒ progress, even at an unchanged stranded set).
+// So a build merging more specs OR shifting which specs are stranded reads as PROGRESS; only
+// an identical stranded set AND no more merged is a fixed point.
+function toAttemptSignature(signal: RecoveryProgressSignal): AttemptSignature {
+  return {
+    failureSignature: signal.strandedSpecIds.join(","),
+    // Magnitude shrinks as more specs merge. mergedCount grows, so negate it for a
+    // monotonically-shrinking remaining-work proxy (the detector's `<` magnitude rule).
+    magnitude: -signal.mergedCount,
+  };
 }
 
-// Thrown when the bounded auto-recovery hit its cap — the build STILL strands after
-// `maxAttempts` recoveries. A LOUD, durable terminal failure (paired with the
-// `template.build.recovery_exhausted` event): a genuine "this stack's template
-// cannot be built autonomously", never a silent infinite loop. Surfaced by the
-// creation flow exactly like `TemplateBuildFailedError` — the build aborts WITHOUT
-// publishing.
+// Is the recovery loop at a FIXED POINT? Assemble the prior recovery signals (oldest→newest)
+// + the current snapshot into the shared convergence detector and ask whether the latest
+// advanced. A build that merged more specs OR changed its stranded set is PROGRESS (keep
+// recovering, UNBOUNDED); an identical stranded set with no new merges is a fixed point
+// (this stack's template cannot be built autonomously). NO count — the structural fixed
+// point itself is the stop condition.
+export function atRecoveryFixedPoint(
+  priorRecoveries: ReadonlyArray<RecoveryProgressSignal>,
+  current: RecoveryProgressSignal,
+): boolean {
+  const history: AttemptSignature[] = [...priorRecoveries, current].map((signal) => toAttemptSignature(signal));
+  return assessStructuralProgress(history) === "fixed_point";
+}
+
+// Thrown when the auto-recovery reaches a FIXED POINT — the build strands with the IDENTICAL
+// stranded set and no new merges (the shared `convergenceDetector`'s fixed point). A LOUD,
+// durable terminal failure (paired with the `template.build.recovery_exhausted` event): a
+// genuine "this stack's template cannot be built autonomously", never a silent infinite loop
+// AND never a hardcoded attempt cap. Surfaced by the creation flow exactly like
+// `TemplateBuildFailedError` — the build aborts WITHOUT publishing.
 export class TemplateBuildRecoveryExhaustedError extends Error {
   readonly projectId: string;
   readonly attempts: number;
   readonly strandedSpecIds: ReadonlyArray<string>;
   constructor(projectId: string, attempts: number, strandedSpecIds: ReadonlyArray<string>) {
     super(
-      `template build ${projectId} STILL stranded after ${String(attempts)} auto-recovery attempt(s) — ` +
-        `this stack's template cannot be built autonomously (stranded specs: ${strandedSpecIds.join(", ")})`,
+      `template build ${projectId} reached a FIXED POINT after ${String(attempts)} auto-recovery attempt(s) — ` +
+        `the same specs strand with no new progress, so this stack's template cannot be built autonomously ` +
+        `(stranded specs: ${strandedSpecIds.join(", ")})`,
     );
     this.name = "TemplateBuildRecoveryExhaustedError";
     this.projectId = projectId;
@@ -146,10 +132,10 @@ export interface TemplateBuildRecoveryDeps {
   // the spec was no longer blocked — a concurrent recovery / a race).
   resetStrandedSpec: (input: { projectId: string; specId: string }) => Promise<boolean>;
   // The PROGRESS SIGNAL of each prior `template.build.recovered` event for this build
-  // project, in chronological order — the durable record that BOUNDS the recovery
-  // in a PROGRESS-AWARE way (read from the event log, not an in-memory counter, so the bound
-  // survives across derives/restarts). The consecutive-no-progress streak among these
-  // (vs the current snapshot) is what `maxAttempts` caps; a flat count is NOT used.
+  // project, in chronological order — the durable record the shared convergence detector
+  // reasons over (read from the event log, not an in-memory counter, so it survives across
+  // derives/restarts). The build recovers UNBOUNDED while these show progress (more merged,
+  // or a changed stranded set vs the current snapshot); it escalates at a fixed point.
   priorRecoveries: (projectId: string) => Promise<RecoveryProgressSignal[]>;
   // Whether this build already PUBLISHED a validated template — the belt-and-braces
   // "a succeeded build is NEVER re-driven" guard (the fast existing-match path
@@ -157,8 +143,6 @@ export interface TemplateBuildRecoveryDeps {
   hasPublishedValidatedTemplate: (projectId: string) => Promise<boolean>;
   // The durable event sink (`template.build.recovered` / `recovery_exhausted`).
   events: EventStore;
-  // The cap on auto-recoveries before the loud terminal failure.
-  maxAttempts?: number;
 }
 
 // The recovery outcome the creation flow reacts to:
@@ -176,12 +160,12 @@ export type TemplateBuildRecoveryOutcome =
 
 // DETECT → REQUEUE → BOUND the recovery of a bound, resumed template-build project.
 // Called on the resume path before the build driver re-drives. Throws
-// `TemplateBuildRecoveryExhaustedError` (LOUD, bounded) when the cap is exceeded.
+// `TemplateBuildRecoveryExhaustedError` (LOUD) at an intelligently-detected FIXED POINT
+// (no hardcoded cap) — the build recovers UNBOUNDED while it converges.
 export async function recoverStrandedTemplateBuild(
   deps: TemplateBuildRecoveryDeps,
   input: { orgId: string; projectId: string; stack: string },
 ): Promise<TemplateBuildRecoveryOutcome> {
-  const maxAttempts = deps.maxAttempts ?? DEFAULT_MAX_RECOVERY_ATTEMPTS;
   const { orgId, projectId, stack } = input;
 
   // A build that already PUBLISHED a validated template is DONE — never re-driven.
@@ -206,22 +190,19 @@ export async function recoverStrandedTemplateBuild(
   const mergedCount = snapshot.nodes.filter((n) => n.phase === "done").length;
   const current: RecoveryProgressSignal = { mergedCount, strandedSpecIds };
 
-  // BOUND the recovery in a PROGRESS-AWARE way: count only the CONSECUTIVE prior recoveries
-  // that made NO new progress (vs this snapshot). A genuinely-advancing build (more
-  // merged, or a changed stranded set) resets the streak toward 0 and keeps
-  // recovering; a build frozen at the SAME failure K consecutive times exhausts. If
-  // the no-progress streak already MEETS the cap, STOP and surface the loud terminal
-  // failure instead of requeuing again.
+  // BOUND the recovery by INTELLIGENT NON-CONVERGENCE DETECTION (no count): the shared
+  // detector decides progress (more merged, or a changed stranded set vs the last recovery →
+  // keep recovering, UNBOUNDED) vs a FIXED POINT (the identical stranded set with no new
+  // merges → STOP and surface the loud terminal failure). A genuinely-advancing build
+  // recovers forever, however slowly; only a frozen build terminates.
   const priorRecoveries = await deps.priorRecoveries(projectId);
-  const noProgress = consecutiveNoProgressCount(priorRecoveries, current);
-  if (noProgress >= maxAttempts) {
-    await emitRecoveryExhausted(deps.events, { orgId, projectId, stack, strandedSpecIds, mergedCount, maxAttempts });
-    throw new TemplateBuildRecoveryExhaustedError(projectId, noProgress, strandedSpecIds);
+  const totalRecoveries = priorRecoveries.length;
+  if (atRecoveryFixedPoint(priorRecoveries, current)) {
+    await emitRecoveryExhausted(deps.events, { orgId, projectId, stack, strandedSpecIds, mergedCount });
+    throw new TemplateBuildRecoveryExhaustedError(projectId, totalRecoveries + 1, strandedSpecIds);
   }
-  // The visible attempt number is the 1-based position in the consecutive no-progress
-  // streak THIS recovery occupies (so a converging build keeps showing low attempts
-  // even after many total recoveries — the bound it actually races).
-  const attempt = noProgress + 1;
+  // The visible attempt number is this recovery's 1-based position in the durable history.
+  const attempt = totalRecoveries + 1;
 
   // REQUEUE: reset every terminally-blocked spec back to `open` so the DagWalker
   // re-drives them from scratch with the current code. A spec that was no longer
@@ -246,7 +227,6 @@ export async function recoverStrandedTemplateBuild(
     stack,
     requeuedSpecIds,
     attempt,
-    maxAttempts,
     mergedCount,
     strandedSpecIds,
   });
@@ -261,7 +241,6 @@ async function emitRecovered(
     stack: string;
     requeuedSpecIds: string[];
     attempt: number;
-    maxAttempts: number;
     // The PROGRESS SIGNAL — durably recorded so the converged-vs-stuck judgement is
     // reconstructible from the event log across restarts.
     mergedCount: number;
@@ -277,7 +256,6 @@ async function emitRecovered(
         stack: input.stack,
         requeuedSpecIds: input.requeuedSpecIds,
         attempt: input.attempt,
-        maxAttempts: input.maxAttempts,
         mergedCount: input.mergedCount,
         strandedSpecIds: [...input.strandedSpecIds],
       },
@@ -297,7 +275,6 @@ async function emitRecoveryExhausted(
     stack: string;
     strandedSpecIds: string[];
     mergedCount: number;
-    maxAttempts: number;
   },
 ): Promise<void> {
   try {
@@ -308,7 +285,6 @@ async function emitRecoveryExhausted(
         orgId: input.orgId,
         stack: input.stack,
         requeuedSpecIds: input.strandedSpecIds,
-        maxAttempts: input.maxAttempts,
         mergedCount: input.mergedCount,
         strandedSpecIds: input.strandedSpecIds,
       },

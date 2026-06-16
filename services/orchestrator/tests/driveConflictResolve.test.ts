@@ -29,11 +29,11 @@ import {
   buildDriveConflictResolve,
   type DriveConflictResolveDeps,
   type DriveConflictVerdict,
-  MAX_CONFLICT_REPLANS,
   PercolationOwnsSpecError,
 } from "../src/engine/merge/driveConflictResolve.js";
 import type { ConflictContext, ConflictResolverHook } from "../src/engine/workflow/reviewMerge/index.js";
 import {
+  conflictSignatureOf,
   type ReplanEnqueuer,
   SpecStatusReplanRouter,
 } from "../src/engine/workflow/reviewMerge/conflictResolver/replanRouter.js";
@@ -63,7 +63,7 @@ const CONTEXT: ConflictContext = {
  * and the prior-replan event COUNT under an org scope (`connect()` → BEGIN/SET
  * LOCAL/COUNT/COMMIT). Plus the run-context join (only reached when no escalate/yield).
  */
-function fakePool(opts: { percolationPending?: unknown; priorReplans: number }): pg.Pool {
+function fakePool(opts: { percolationPending?: unknown; priorReplanSignatures?: string[] }): pg.Pool {
   const projectConfig = {
     version: 1,
     credentials: {
@@ -78,7 +78,8 @@ function fakePool(opts: { percolationPending?: unknown; priorReplans: number }):
       return { rows: [{ percolation_pending: opts.percolationPending ?? null }], rowCount: 1 };
     }
     if (/event_type = 'merge\.conflict\.replan_routed'/u.test(sql)) {
-      return { rows: [{ count: String(opts.priorReplans) }], rowCount: 1 };
+      const rows = (opts.priorReplanSignatures ?? []).map((conflictSignature) => ({ payload: { conflictSignature } }));
+      return { rows, rowCount: rows.length };
     }
     // loadDriveRunContext: the runs⋈specs⋈projects⋈organizations join.
     if (/FROM runs r/u.test(sql) && /JOIN specs s/u.test(sql)) {
@@ -191,7 +192,7 @@ function replanRoutingResolver(
         runId: FACTS.runId,
         projectId: FACTS.projectId,
         enqueuer,
-        priorReplans: { count: async () => 0 },
+        priorReplans: { signatures: async () => [] },
       });
       await router.routeBackToPlanner({ specId: FACTS.specId, newContext: "re-plan on the new base" });
       return { resolved: false };
@@ -209,7 +210,7 @@ class RecordingSubstrate extends FakeCommandSubstrate {
 
 describe("buildDriveConflictResolve — classify-then-escalate + percolation/cap guards", () => {
   it("RESOLVED: the resolver reconciles → {resolved:true} + verdict 'resolved' (the merge retries + lands)", async () => {
-    const pool = fakePool({ priorReplans: 0 });
+    const pool = fakePool({});
     const allocator = new SpyAllocator();
     const verdict: DriveConflictVerdict = {};
     const hook = buildDriveConflictResolve(makeDeps(pool, allocator, verdict, scriptedResolver(true)));
@@ -224,7 +225,7 @@ describe("buildDriveConflictResolve — classify-then-escalate + percolation/cap
   });
 
   it("allocates the short-lived live-jj resolver with a unique synthetic handle, not the original run id", async () => {
-    const pool = fakePool({ priorReplans: 0 });
+    const pool = fakePool({});
     const allocator = new SpyAllocator();
     const verdict: DriveConflictVerdict = {};
     let workspacePath = "";
@@ -252,7 +253,7 @@ describe("buildDriveConflictResolve — classify-then-escalate + percolation/cap
   });
 
   it("RE-PLANNED (under the cap): an unresolved-but-compatible conflict → {resolved:false} + verdict 'replanned' (recoverable, NOT escalation)", async () => {
-    const pool = fakePool({ priorReplans: MAX_CONFLICT_REPLANS - 1 });
+    const pool = fakePool({});
     const allocator = new SpyAllocator();
     const verdict: DriveConflictVerdict = {};
     const hook = buildDriveConflictResolve(makeDeps(pool, allocator, verdict, scriptedResolver(false)));
@@ -272,7 +273,7 @@ describe("buildDriveConflictResolve — classify-then-escalate + percolation/cap
   // drive routes through the SAME shared `SpecStatusReplanRouter`/enqueuer #585 added, so the
   // resolver's irreconcilable route enqueues + the disposition maps to a recoverable conflict.
   it("RE-PLANNED enqueues a re-plan run + emits recovery.replan_queued (never a bare replan_routed strand)", async () => {
-    const pool = fakePool({ priorReplans: 0 });
+    const pool = fakePool({});
     const allocator = new SpyAllocator();
     const verdict: DriveConflictVerdict = {};
     const eventStore = new FakeEventStore();
@@ -295,8 +296,10 @@ describe("buildDriveConflictResolve — classify-then-escalate + percolation/cap
     expect(eventStore.events.some((e) => e.eventType === "merge.conflict.replan_routed")).toBe(true);
   });
 
-  it("ESCALATE (cap exhausted): once re-planned MAX_CONFLICT_REPLANS times → verdict 'escalate', NO runner provisioned (genuinely incompatible)", async () => {
-    const pool = fakePool({ priorReplans: MAX_CONFLICT_REPLANS });
+  it("ESCALATE (FIXED POINT): re-planning against the SAME conflict again → verdict 'escalate', NO runner provisioned (genuinely incompatible)", async () => {
+    // The spec was already re-planned against THIS exact conflict (the drive keys the signature
+    // off the conflict message) — re-planning would re-conflict identically (a fixed point).
+    const pool = fakePool({ priorReplanSignatures: [conflictSignatureOf(CONTEXT.message)] });
     const allocator = new SpyAllocator();
     const verdict: DriveConflictVerdict = {};
     // The resolver should NOT be invoked at the cap — inject one that fails the test if called.
@@ -310,15 +313,15 @@ describe("buildDriveConflictResolve — classify-then-escalate + percolation/cap
 
     expect(result).toEqual({ resolved: false });
     expect(verdict.disposition).toBe("escalate");
-    // The escalation message reads as a DECISION (a product clash), not "an error occurred".
-    expect(verdict.message).toMatch(/genuinely conflict/u);
+    // The escalation message reads as a DECISION (a product clash at a fixed point), not an error.
+    expect(verdict.message).toMatch(/FIXED POINT/u);
     expect(verdict.message).toMatch(/product\s+decision is needed/u);
     // NO runner provisioned — escalation short-circuits before allocation.
     expect(allocator.allocateCalls).toBe(0);
   });
 
   it("YIELD: a live percolation marker → throws PercolationOwnsSpecError + verdict 'yield', NO runner provisioned (mutual exclusion)", async () => {
-    const pool = fakePool({ percolationPending: { ancestorSpecId: "spec_anc", toSha: "abc" }, priorReplans: 0 });
+    const pool = fakePool({ percolationPending: { ancestorSpecId: "spec_anc", toSha: "abc" } });
     const allocator = new SpyAllocator();
     const verdict: DriveConflictVerdict = {};
     const hook = buildDriveConflictResolve(
@@ -339,7 +342,7 @@ describe("buildDriveConflictResolve — classify-then-escalate + percolation/cap
 // the substrate (never a plain `git clone`).
 describe("buildDriveConflictResolve — the workspace mechanism is the live jj workspace", () => {
   it("provisions the live jj workspace — the clone is `jj git clone`, never `git clone`", async () => {
-    const pool = fakePool({ priorReplans: 0 });
+    const pool = fakePool({});
     const allocator = new SpyAllocator();
     const ssh = new RecordingSubstrate();
     // No buildResolver seam → the real workspace mechanism runs. The fake substrate

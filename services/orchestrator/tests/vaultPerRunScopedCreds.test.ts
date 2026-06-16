@@ -373,7 +373,6 @@ describe("runPlannerLoopWorkflow — per-run credential de-privilege wiring", ()
       },
       githubHttp: passingGitHub(),
       context: ctx,
-      escapeHatches: { maxWriterIterPerSubtask: 5, maxRetriesPerTransientFailure: 3 },
       timeoutMs: 100,
       maxCiPolls: 1,
       sleep: async () => {},

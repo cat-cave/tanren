@@ -50,3 +50,6 @@ export {
   type ReGateCiHook,
 } from "./mergeDispatch.js";
 export { mergeGateRejection, reviewerRejection } from "./steering.js";
+// The shared convergence-signature helpers (apex v35) — re-exported here so the planner-loop
+// modules reach them through this one barrel (keeping their dependency counts under cap).
+export { atReplanFixedPoint, gateErrorSignature } from "./conflictResolver/replanRouter.js";

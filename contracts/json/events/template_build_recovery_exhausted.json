@@ -2,11 +2,6 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
-    "maxAttempts": {
-      "exclusiveMinimum": 0,
-      "maximum": 9007199254740991,
-      "type": "integer"
-    },
     "mergedCount": {
       "maximum": 9007199254740991,
       "minimum": 0,
@@ -35,7 +30,6 @@
     "orgId",
     "stack",
     "requeuedSpecIds",
-    "maxAttempts",
     "mergedCount",
     "strandedSpecIds"
   ],

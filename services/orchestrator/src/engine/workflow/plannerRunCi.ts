@@ -52,7 +52,7 @@ import {
   type FinalizeRunState,
   type MergeGateBudget,
 } from "./plannerRunFinalize.js";
-import { mergeGateRejection, type ReGateCiHook } from "./reviewMerge/index.js";
+import { atReplanFixedPoint, gateErrorSignature, mergeGateRejection, type ReGateCiHook } from "./reviewMerge/index.js";
 import type { PlannerRejectionFeedback } from "./planner/planner.js";
 import type { PlannerRunContext, RunPlannerLoopInput } from "./plannerRun.js";
 import { createLogger } from "../observability/logger.js";
@@ -224,32 +224,41 @@ export async function runMergeGateForRun(
   return outcome;
 }
 
-/** The merge stage's bounded decision for a failed `pre_merge` gate: re-author or halt. */
+/** The merge stage's decision for a failed `pre_merge` gate: re-author (progress) or halt (fixed point). */
 export type MergeGateSelfHealDecision =
   // Re-enter the writer loop, seeding the carried rejection (the failing tier/step/output
-  // as planner steering). Budget is not yet exhausted.
-  | { kind: "rework"; rejection: PlannerRejectionFeedback }
-  // Budget exhausted: the writer could not make the merge gate pass — halt LOUD.
+  // as planner steering). The gate error CHANGED (progress) — keep going, UNBOUNDED. The
+  // `signature` is recorded so the next iteration's detector can tell progress from a fixed point.
+  | { kind: "rework"; rejection: PlannerRejectionFeedback; signature: string }
+  // A FIXED POINT: the same gate error recurs unchanged — the writer is not changing anything; halt LOUD.
   | { kind: "halt" };
 
+/** A stable signature for a failed gate outcome — the same tier/step/output ⇒ the same signature. */
+export function gateOutcomeSignature(gate: Extract<GateOutcome, { passed: false }>): string {
+  const { failure } = gate;
+  const failedStep = failure.steps.find((step) => step.name === failure.failedStep) ?? failure.steps.at(-1);
+  return gateErrorSignature(`${failure.tier}:${failure.failedStep}:${failedStep?.outputTail ?? ""}`);
+}
+
 /**
- * SELF-HEAL (apex v34): decide what a FAILED `pre_merge` ("merge"-tier) gate does, bounded
- * by the merge-gate rework budget. While the budget has room, return a `rework` decision
+ * SELF-HEAL (apex v35 — no count budget): decide what a FAILED `pre_merge` ("merge"-tier)
+ * gate does, via the shared `convergenceDetector`. While the gate error keeps CHANGING (the
+ * writer is fixing one failure and surfacing the next — progress), return a `rework` decision
  * carrying the `mergeGateRejection` steering (the failing tier/step + the failed step's
- * captured OUTPUT) so the merge stage re-enters the writer loop to self-heal — mirroring
- * the review-rework re-entry, NOT the old `code:internal` throw+strand. Once the budget is
- * spent, return `halt` so the run ends LOUD (`needs_attention`) instead of looping forever.
- * Kept here (not inline in plannerRun.ts) so that file stays under the 500-line cap.
+ * captured OUTPUT) so the merge stage re-enters the writer loop — UNBOUNDED. Only at a FIXED
+ * POINT (the SAME gate error recurs unchanged — the writer is not changing anything) return
+ * `halt` so the run ends LOUD (`needs_attention`) instead of looping identically forever.
+ * `priorSignatures` are the gate-error signatures already re-worked against (oldest→newest).
  */
 export function mergeGateSelfHeal(
   gate: Extract<GateOutcome, { passed: false }>,
-  reworksUsed: number,
-  maxReworks: number,
+  priorSignatures: ReadonlyArray<string>,
 ): MergeGateSelfHealDecision {
-  if (reworksUsed >= maxReworks) {
+  const signature = gateOutcomeSignature(gate);
+  if (atReplanFixedPoint(priorSignatures, signature)) {
     return { kind: "halt" };
   }
-  return { kind: "rework", rejection: mergeGateRejection(gate) };
+  return { kind: "rework", rejection: mergeGateRejection(gate), signature };
 }
 
 /** The merge-gate STAGE result the planner loop maps: merge forward, re-author, halt, or no-commits. */
@@ -323,7 +332,7 @@ export async function runPublishGateStage(
   if (mergeGate.passed) {
     return { pullRequest, mergeGate, kind: "merged" };
   }
-  const decision = mergeGateSelfHeal(mergeGate, stage.budget.used, stage.budget.max);
+  const decision = mergeGateSelfHeal(mergeGate, stage.budget.signatures);
   const move = await applyFailedMergeGate(
     input,
     stage.finalizeRunState,

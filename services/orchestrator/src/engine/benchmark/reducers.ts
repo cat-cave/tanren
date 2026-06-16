@@ -183,7 +183,7 @@ export class OneKnobViolationError extends Error {
 
 // The frozen-config dimensions the one-knob invariant checks. Each maps a
 // FrozenConfig to a canonical string so "differs" is a stable equality test.
-const CONFIG_DIMENSIONS = ["routing", "escapeHatches", "ciTiers", "governance", "mergeIntegration"] as const;
+const CONFIG_DIMENSIONS = ["routing", "ciTiers", "governance", "mergeIntegration"] as const;
 
 /**
  * The §3.3 one-knob invariant: two comparable cells may differ in EXACTLY one

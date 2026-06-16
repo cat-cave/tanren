@@ -24,6 +24,17 @@
       ],
       "type": "string"
     },
+    "escalation": {
+      "enum": [
+        "keep_going",
+        "escalate"
+      ],
+      "type": "string"
+    },
+    "escalationReason": {
+      "description": "When escalation=escalate: the specific human-actionable decision/blocker/dead-end (never a bare 'stuck'). Empty when keep_going.",
+      "type": "string"
+    },
     "reasoning": {
       "description": "Cite the BLOCKING root cause + the finding-delta across loops: which root causes were retired, which recurred, and whether the total P-score is decreasing.",
       "minLength": 1,
@@ -34,6 +45,8 @@
     "assessment",
     "blockingRootCauseId",
     "blockingRootCauseProgress",
+    "escalation",
+    "escalationReason",
     "reasoning"
   ],
   "type": "object",

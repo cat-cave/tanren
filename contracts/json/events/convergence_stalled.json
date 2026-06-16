@@ -7,11 +7,6 @@
       "minimum": -9007199254740991,
       "type": "integer"
     },
-    "maxConsecutiveStalls": {
-      "maximum": 9007199254740991,
-      "minimum": -9007199254740991,
-      "type": "integer"
-    },
     "reason": {
       "type": "string"
     },
@@ -22,7 +17,6 @@
   "required": [
     "runId",
     "consecutiveStalls",
-    "maxConsecutiveStalls",
     "reason"
   ],
   "type": "object",

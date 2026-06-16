@@ -51,7 +51,6 @@ const ORG_B = "org_bench_run_b";
 
 const FROZEN = {
   routing: { write: { chain: [{ cli: "codex", model: "premium", authRef: "credential/codex/org/x" }] } },
-  escapeHatches: {},
   ciTiers: {
     tiers: { fast: [{ name: "lint", run: "pnpm lint" }], slow: [{ name: "accept", run: "make accept" }] },
     when: { fast: ["per_iteration"], slow: ["pre_audit", "pre_merge"] },

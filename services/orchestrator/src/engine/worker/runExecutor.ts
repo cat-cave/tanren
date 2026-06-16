@@ -27,7 +27,6 @@ import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { RunCredentialScoping } from "../workflow/plannerRunScopedCreds.js";
 import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
-import type { EscapeHatches } from "../config/index.js";
 import { CostRecorder } from "../costs/recorder.js";
 import type { GitHubHttpClient } from "../providers/github.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
@@ -53,13 +52,6 @@ import {
 import { runPlannerLoopWorkflow, type PlannerRunResult, type RunPlannerLoopInput } from "../workflow/plannerRun.js";
 
 const log = createLogger("run-executor");
-
-/** Escape-hatch + CI-poll defaults the run worker applies to a dequeued plan job. */
-export const DEFAULT_ESCAPE_HATCHES: Pick<EscapeHatches, "maxWriterIterPerSubtask" | "maxRetriesPerTransientFailure"> =
-  {
-    maxWriterIterPerSubtask: 5,
-    maxRetriesPerTransientFailure: 3,
-  };
 
 // Per-stage agent/SSH timeout CAP (a ceiling, not a fixed wait). Bumped 5min→10min
 // for the #273 scaffold-convergence fix: the hardest first spec (a greenfield
@@ -117,7 +109,6 @@ export interface RunExecutorDeps {
   // the CI-poll / merge stages. Optional — the provider mints per-call when absent.
   githubAppMinter?: GithubAppTokenMinter;
   identitySecretRef: string;
-  escapeHatches?: Pick<EscapeHatches, "maxWriterIterPerSubtask" | "maxRetriesPerTransientFailure">;
   timeoutMs?: number;
   maxCiPolls?: number;
   ciPollDelayMs?: number;
@@ -324,7 +315,6 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
         // Plane B: the project's resolved dev+test app env (over the runner,
         // never logged, distinct from Tanren creds). Empty ⇒ field omitted.
         ...(Object.keys(appEnv).length === 0 ? {} : { appEnv }),
-        escapeHatches: deps.escapeHatches ?? DEFAULT_ESCAPE_HATCHES,
         timeoutMs: deps.timeoutMs ?? DEFAULT_TIMEOUT_MS,
         maxCiPolls: deps.maxCiPolls ?? DEFAULT_MAX_CI_POLLS,
         ciPollDelayMs: deps.ciPollDelayMs ?? DEFAULT_CI_POLL_DELAY_MS,

@@ -229,7 +229,6 @@ export interface ConvergenceStageInput extends StageBase {
   currentFindings: ReadonlyArray<Finding>;
   priorFindings: ReadonlyArray<Finding>;
   state: ConvergenceState;
-  maxConsecutiveStalls: number;
   // The configurable velocity-defer strategy + the worst severity among the
   // findings KEPT in-spec this loopback (undefined ⇒ no kept findings). Together
   // they gate whether a `velocity_defer` assessment is honored (→ `pass`).
@@ -241,6 +240,10 @@ export interface ConvergenceStageResult {
   decision: ConvergenceDecision;
   state: ConvergenceState;
   reasoning: string;
+  // The SPECIFIC human-actionable escalation reason when the agent's intelligent verdict
+  // halted the loop (`decision === "halt"`); empty otherwise. Carried to the
+  // `convergence.stalled` event + the `needs_attention` diagnosis (never a bare "stuck").
+  escalationReason: string;
   convergenceTaskId: string;
 }
 
@@ -289,8 +292,8 @@ export async function runConvergenceStage(args: ConvergenceStageInput): Promise<
   const { state, decision } = applyConvergencePolicy(
     answer.assessment,
     answer.blockingRootCauseProgress,
+    answer.escalation,
     args.state,
-    args.maxConsecutiveStalls,
     args.velocityPolicy,
     args.worstLeftoverSeverity,
   );
@@ -305,9 +308,11 @@ export async function runConvergenceStage(args: ConvergenceStageInput): Promise<
       // unchanged) even when peripheral findings moved.
       blockingRootCauseProgress: answer.blockingRootCauseProgress,
       blockingRootCauseId: answer.blockingRootCauseId,
+      // The intelligent escalation verdict — the "would a human add value beyond keep going?"
+      // gate that decides a halt (replacing the old consecutive-stall count).
+      escalation: answer.escalation,
       decision,
       consecutiveStalls: state.consecutiveStalls,
-      maxConsecutiveStalls: args.maxConsecutiveStalls,
       reasoning: answer.reasoning,
     },
     convergenceTaskId,
@@ -323,5 +328,7 @@ export async function runConvergenceStage(args: ConvergenceStageInput): Promise<
   });
   await markTaskDone(args.pool, convergenceTaskId, "passed", args.writer);
   await args.appendEvent("task.completed", { taskKind: "convergence" }, convergenceTaskId);
-  return { decision, state, reasoning: answer.reasoning, convergenceTaskId };
+  // The escalation reason is meaningful only on a halt (the agent's escalate verdict).
+  const escalationReason = decision === "halt" ? answer.escalationReason : "";
+  return { decision, state, reasoning: answer.reasoning, escalationReason, convergenceTaskId };
 }

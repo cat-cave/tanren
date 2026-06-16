@@ -36,10 +36,12 @@
       ],
       "type": "string"
     },
-    "maxConsecutiveStalls": {
-      "maximum": 9007199254740991,
-      "minimum": -9007199254740991,
-      "type": "integer"
+    "escalation": {
+      "enum": [
+        "keep_going",
+        "escalate"
+      ],
+      "type": "string"
     },
     "reasoning": {
       "type": "string"
@@ -57,9 +59,9 @@
     "assessment",
     "blockingRootCauseProgress",
     "blockingRootCauseId",
+    "escalation",
     "decision",
     "consecutiveStalls",
-    "maxConsecutiveStalls",
     "reasoning"
   ],
   "type": "object",

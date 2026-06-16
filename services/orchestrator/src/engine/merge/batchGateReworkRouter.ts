@@ -17,12 +17,14 @@
 // append the gate error as steering, enqueue a fresh re-author run. After the rework
 // produces a new head, the spec re-queues for merge normally.
 //
-// BOUNDED (never a hot-loop): a spec re-worked `MAX_BATCH_GATE_REWORKS` times for the SAME
-// integrated-gate failure that STILL fails is genuinely stuck — instead of re-working
-// again it ESCALATES as a LOUD `needs_attention` (the `persistent_failure` finalize path),
-// never a silent strand. The bound key is the spec's prior `merge.batch.gate_rework_routed`
-// (disposition `reworked`) count — a dedicated budget, SEPARATE from the conflict-replan
-// `MAX_BASE_SHIFT_REPLANS` budget (a gate-fail and a conflict are different failure modes).
+// UNBOUNDED while PROGRESSING; escalate only at a FIXED POINT (apex v35 — intelligent
+// non-convergence detection, replacing the old fixed `MAX_BATCH_GATE_REWORKS` cap). A spec
+// whose integrated-gate error keeps CHANGING across reworks is making PROGRESS (the writer
+// is fixing one failure and surfacing the next — the 1000 → 1 errors trajectory) and the
+// loop re-works UNBOUNDED. It is genuinely stuck only when the SAME integrated-gate error
+// recurs (re-working produced no change to it) — a FIXED POINT the shared
+// `convergenceDetector` detects. There only does it ESCALATE as a LOUD `needs_attention`
+// (the `persistent_failure` path), never a silent strand, never a count.
 
 import { getSystemPool, runWithJobOrgId, runWithOrgScope } from "@tanren/db";
 import type pg from "pg";
@@ -31,30 +33,24 @@ import type { MergeQueueEntry } from "../contracts/mergeCoordinator.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import { resolveProjectOrg } from "../dag/percolationWrites.js";
 import { type EventStore, PgEventStore } from "../eventStore.js";
-import type { ReplanEnqueuer } from "../workflow/reviewMerge/conflictResolver/replanRouter.js";
+import {
+  atReplanFixedPoint,
+  gateErrorSignature,
+  type ReplanEnqueuer,
+} from "../workflow/reviewMerge/conflictResolver/replanRouter.js";
 import { buildReplanEnqueuer } from "../workflow/reviewMerge/conflictResolver/replanEnqueuerPg.js";
 import { SpecNotRunnableError } from "../workflow/projectSpecErrors.js";
 import { createLogger } from "../observability/logger.js";
 
 const log = createLogger("batch-gate-rework");
 
-/**
- * The bounded batch-gate-rework budget: a spec whose integrated-tree GATE failure cannot
- * be fixed by re-authoring is re-worked AT MOST this many times. Once the spec's prior
- * `merge.batch.gate_rework_routed` (disposition `reworked`) count REACHES this (`>=`), the
- * next routing ESCALATES to `needs_attention` instead of enqueuing another rework. Mirrors
- * the conflict-replan `MAX_BASE_SHIFT_REPLANS` convention (same bound, different budget
- * key) so BOTH self-heal routes are bounded the same way.
- */
-export const MAX_BATCH_GATE_REWORKS = 3;
-
 export interface BatchGateReworkRouterDeps {
   pool: pg.Pool;
   runStateWriter?: RunStateWriter;
   /** Enqueues the writer-rework run (re-open + steering + run-create). Production wires `buildReplanEnqueuer`. */
   enqueuer?: ReplanEnqueuer;
-  /** Counts the spec's prior gate-reworks (the bounded budget). Production reads the events table. */
-  priorReworks?: (input: { specId: string; orgId: string }) => Promise<number>;
+  /** Reads the spec's prior gate-rework error signatures (the convergence-detector input). Production reads events. */
+  priorReworks?: (input: { specId: string; orgId: string }) => Promise<string[]>;
   /**
    * TEST SEAM: resolve the project's org. Production OMITS it → the system-scoped
    * `resolveProjectOrg`. A no-DB unit run injects it so the router never touches the
@@ -78,7 +74,7 @@ export interface BatchGateReworkRouterDeps {
  */
 export class PgBatchGateReworkRouter implements BatchGateReworkRouter {
   private readonly enqueuer: ReplanEnqueuer;
-  private readonly priorReworks: (input: { specId: string; orgId: string }) => Promise<number>;
+  private readonly priorReworks: (input: { specId: string; orgId: string }) => Promise<string[]>;
 
   private readonly resolveOrg: (projectId: string) => Promise<string | null>;
 
@@ -103,15 +99,18 @@ export class PgBatchGateReworkRouter implements BatchGateReworkRouter {
       );
     }
 
-    const priorReworks = await this.priorReworks({ specId: input.culprit.specId, orgId });
-    // BOUNDED: a spec re-worked the budget number of times that STILL fails the integrated
-    // gate is genuinely stuck — escalate LOUD instead of re-working forever.
-    if (priorReworks >= MAX_BATCH_GATE_REWORKS) {
-      await this.escalate(orgId, input, priorReworks);
+    const priorSignatures = await this.priorReworks({ specId: input.culprit.specId, orgId });
+    const currentSignature = gateErrorSignature(input.gateError);
+    // FIXED-POINT (no count): a spec whose integrated-gate error keeps CHANGING is making
+    // progress (re-work UNBOUNDED). It is genuinely stuck only when the SAME gate error
+    // recurs (re-working produced no change to it) — escalate LOUD instead of re-working
+    // identically forever. The shared detector decides.
+    if (atReplanFixedPoint(priorSignatures, currentSignature)) {
+      await this.escalate(orgId, input, priorSignatures.length);
       return "escalated";
     }
 
-    const steeringNote = buildGateReworkSteering(input.gateError, priorReworks);
+    const steeringNote = buildGateReworkSteering(input.gateError, priorSignatures.length);
     try {
       // The never-discard re-author: re-open the spec to `open` + append the gate error as
       // steering + enqueue a fresh writer-rework run (the same mechanism the conflict-replan
@@ -124,7 +123,7 @@ export class PgBatchGateReworkRouter implements BatchGateReworkRouter {
         steeringNote,
         reopenStatus: "open",
       });
-      await this.recordReworked(orgId, input, priorReworks, steeringNote, run.replanRunId, run.plannerTaskId);
+      await this.recordReworked(orgId, input, priorSignatures.length, steeringNote, run.replanRunId, run.plannerTaskId);
       return "reworked";
     } catch (error) {
       // BENIGN RACE: a concurrent tick already claimed the re-opened spec — a run IS being
@@ -136,7 +135,7 @@ export class PgBatchGateReworkRouter implements BatchGateReworkRouter {
           { specId: input.culprit.specId },
           error,
         );
-        await this.recordReworked(orgId, input, priorReworks, steeringNote);
+        await this.recordReworked(orgId, input, priorSignatures.length, steeringNote);
         return "reworked";
       }
       // GENUINE FAILURE: the rework run could not be created AND no concurrent tick owns it.
@@ -198,7 +197,8 @@ export class PgBatchGateReworkRouter implements BatchGateReworkRouter {
     });
   }
 
-  /** ESCALATE: the bounded rework budget is exhausted — park `needs_attention` (loud, frees the slot). */
+  /** ESCALATE: the rework loop is at a FIXED POINT (the same gate error recurs) — park
+   * `needs_attention` (loud, frees the slot). No count — the fixed point IS the trigger. */
   private async escalate(
     orgId: string,
     input: { projectId: string; culprit: MergeQueueEntry; gateError: string },
@@ -233,8 +233,9 @@ export class PgBatchGateReworkRouter implements BatchGateReworkRouter {
           terminalRuns: [{ runId: input.culprit.runId, status: "halted" }],
           attempts: priorReworks,
           message:
-            `the autonomous self-heal re-worked this spec ${priorReworks} times to fix an integrated-tree ` +
-            `gate failure and it STILL fails the batch gate — a human must intervene. Latest gate error: ${input.gateError}`,
+            `the autonomous self-heal reached a FIXED POINT re-working this spec for an integrated-tree gate ` +
+            `failure: the SAME batch-gate error recurs after re-authoring (no change to it), so a human must ` +
+            `intervene. Latest gate error: ${input.gateError}`,
         },
       });
     });
@@ -331,21 +332,22 @@ export function buildGateReworkSteering(gateError: string, priorReworks: number)
 }
 
 /**
- * Count the spec's prior `merge.batch.gate_rework_routed` (disposition `reworked`) events —
- * the bounded gate-rework budget key. The `events` table is unreadable to the de-privileged
- * data-plane role (0031 REVOKE), so read on the BYPASSRLS system pool with the org GUC still
- * applied on top (the same hop the replan cap uses).
+ * Read the spec's prior `merge.batch.gate_rework_routed` (disposition `reworked`) gate-error
+ * SIGNATURES, oldest→newest — the shared convergence detector's input. The `events` table is
+ * unreadable to the de-privileged data-plane role (0031 REVOKE), so read on the BYPASSRLS
+ * system pool with the org GUC applied on top (the same hop the replan reader uses).
  */
-async function countPriorGateReworks(pool: pg.Pool, input: { specId: string; orgId: string }): Promise<number> {
+async function countPriorGateReworks(pool: pg.Pool, input: { specId: string; orgId: string }): Promise<string[]> {
   const readPool = getSystemPool() ?? pool;
   return runWithOrgScope(readPool, input.orgId, async (client) => {
-    const result = await client.query<{ count: string }>(
-      `SELECT count(*)::text AS count
+    const result = await client.query<{ payload: { gateError?: string } }>(
+      `SELECT payload
          FROM events
         WHERE spec_id = $1 AND event_type = 'merge.batch.gate_rework_routed'
-          AND payload ->> 'disposition' = 'reworked'`,
+          AND payload ->> 'disposition' = 'reworked'
+        ORDER BY ts ASC, id ASC`,
       [input.specId],
     );
-    return Number(result.rows[0]?.count ?? "0");
+    return result.rows.map((row) => gateErrorSignature(row.payload.gateError ?? ""));
   });
 }

@@ -6,10 +6,13 @@
 //   1. RE-DRIVE (retry) — any RANDOM / TRANSIENT / internal / flaky / writer-mistake /
 //      codex-hiccup / merge-conflict-resolvable / crashed-run / orphaned-slot fault.
 //      The spec returns to a runnable state (`open`) and the walker enqueues a
-//      successor run. Random failures are NEVER tolerable as terminal. Bounded ONLY by
-//      a CONSECUTIVE-SAME-FAILURE counter (the SAME classified failure K times in a row
-//      → escalate as a genuine issue; ANY progress / a DIFFERENT failure resets it) +
-//      backoff — NEVER a wall-clock deadline, NEVER an infinite identical hot-loop.
+//      successor run. Random failures are NEVER tolerable as terminal. UNBOUNDED while
+//      it is making PROGRESS — there is NO attempt cap, NO `K`, NO wall-clock deadline.
+//      A re-drive escalates ONLY at an intelligently-detected FIXED POINT (the SAME
+//      classified failure recurring with no new information — the shared
+//      `convergenceDetector`); ANY progress / a DIFFERENT failure keeps it re-driving,
+//      forever, while it converges. Backoff (grows with the stuck streak) prevents a
+//      hot-loop WITHOUT a counter.
 //
 //   2. GENUINE-HALT — ONLY: budget exhaustion · misconfiguration (missing/unscoped
 //      credential, provider-mode unresolved) · mis-spec (a spec structurally
@@ -42,14 +45,6 @@
 
 import { classifyRunFailure, type RunFailureCode, type RunFailureStage } from "../worker/runFailureClassifier.js";
 
-// The DEFAULT cap K on CONSECUTIVE SAME-classified-failure re-drives before a spec
-// escalates LOUDLY to `needs_attention`. Generous (a random failure resolves on retry;
-// the per-spec/per-step timeouts remain the hang-detector), but BOUNDED so a genuinely
-// STUCK spec (the same bug/mis-spec every time) surfaces as a human-decision rather than
-// hot-looping forever. A DIFFERENT failure code (any progress) resets the count, so a
-// spec that is flapping-but-advancing keeps retrying past this flat K.
-export const DEFAULT_REDRIVE_ESCALATE_AT = 4;
-
 // The base backoff (seconds) between re-drives + the per-attempt growth, so the
 // re-enqueue does not hot-loop. The walker honors `backoffSeconds` (the cooldown before
 // it re-picks the `open` spec). Grows linearly with the consecutive-same-failure count,
@@ -65,8 +60,8 @@ export function redriveBackoffSeconds(consecutiveSameFailure: number): number {
 
 // A GENUINE-TERMINAL failure CODE: a STRUCTURAL cause a human must fix (a
 // misconfiguration / missing-or-unscoped credential / unresolvable provider mode). These
-// never self-heal on retry, so they escalate to `needs_attention` IMMEDIATELY (NOT bounded
-// by the re-drive counter) with a specific diagnostic. `usage_limit` is NOT here (it is the
+// never self-heal on retry, so they escalate to `needs_attention` IMMEDIATELY (NOT subject
+// to the re-drive convergence detector) with a specific diagnostic. `usage_limit` is NOT here (it is the
 // recoverable window-exhausted halt → re-drive); `workspace` is NOT here (a deps-install /
 // bootstrap fault is transient → re-drive). Everything ELSE (`internal`, `merge`, `deploy`,
 // and any unrecognized error → the `internal` default) is RETRIABLE — a random fault.
@@ -124,7 +119,8 @@ export type MergeOutcomeForDisposition =
 export type GenuineHaltReason =
   // A structural misconfiguration a human must fix (credential / provider-mode).
   | "misconfiguration"
-  // The SAME classified failure K consecutive times — a genuinely stuck spec (bug/mis-spec).
+  // The SAME classified failure recurring at a FIXED POINT (identical failure + identical
+  // work, no new information) — a genuinely stuck spec (bug/mis-spec), NOT a flake.
   | "persistent_failure"
   // A genuine human-decision at the merge boundary (HITL hold / changes-requested at land).
   | "human_decision";
@@ -165,23 +161,40 @@ export type RunDisposition =
   | { bucket: "converge" };
 
 /**
- * THE decision. Maps a terminal outcome (+ the consecutive-same-failure count the caller
- * read from the durable event log) to exactly ONE of the three buckets. PURE — no I/O, no
- * clock; the caller applies the verdict's writes. The escalate cap is `escalateAt`.
+ * The CONVERGENCE FACTS the authority reasons over, instead of a hardcoded cap: the count
+ * of CONSECUTIVE prior re-drives at the SAME structural fixed point (the same classified
+ * failure AND — when observable — the same produced work), read from the durable event
+ * log. `0` ⇒ the first attempt / a different failure than last time (progress) ⇒ ALWAYS
+ * re-drive. `>= 1` ⇒ the loop is at a fixed point (this attempt is structurally identical
+ * to the prior) ⇒ the run-finalize escalation rule fires (a PROVEN dead-end — no count).
  *
- * The invariant this enforces: a RANDOM/TRANSIENT/internal/crash/orphan/conflict-resolvable
- * fault ALWAYS re-drives (it is NEVER terminal) UNTIL the same classified failure has
- * recurred K consecutive times; a misconfiguration / a genuine human-decision genuine-halts
- * IMMEDIATELY; success converges. No path silently drops or tolerates a random failure.
+ * `priorSameFixedPoint` is the trailing run length the caller computed via the shared
+ * `convergenceDetector` over the spec's `dag.spec.redriven` history (matching BOTH the
+ * failure code AND, when present, the produced-work signature). A different failure code OR
+ * a different produced-work signature breaks the run (progress), so the loop is UNBOUNDED
+ * while it keeps changing the failure or the work — exactly the binding principle.
  */
-export function decideRunDisposition(
-  outcome: TerminalOutcome,
-  consecutiveSameFailure: number,
-  escalateAt: number = DEFAULT_REDRIVE_ESCALATE_AT,
-): RunDisposition {
+export interface ConvergenceFacts {
+  priorSameFixedPoint: number;
+}
+
+/**
+ * THE decision. Maps a terminal outcome (+ the convergence facts the caller read from the
+ * durable event log via the shared `convergenceDetector`) to exactly ONE of the three
+ * buckets. PURE — no I/O, no clock; the caller applies the verdict's writes.
+ *
+ * The invariant this enforces (NO hardcoded attempt cap — apex v35): a
+ * RANDOM/TRANSIENT/internal/crash/orphan/conflict-resolvable fault ALWAYS re-drives (it is
+ * NEVER terminal) while it is making PROGRESS — a DIFFERENT failure or DIFFERENT produced
+ * work keeps it re-driving UNBOUNDED. It escalates ONLY at an intelligently-detected FIXED
+ * POINT (`priorSameFixedPoint >= 1`: the same classified failure recurring with the same —
+ * or unobservable — work, no new information). A misconfiguration / a genuine human-decision
+ * genuine-halts IMMEDIATELY; success converges. No path silently drops a random failure.
+ */
+export function decideRunDisposition(outcome: TerminalOutcome, facts: ConvergenceFacts): RunDisposition {
   if (outcome.kind === "ancestor_wait") {
     // A benign wait the dependent ran ahead of — a clean, NO-FAULT re-drive (it never
-    // counts toward the consecutive-same-failure cap; the ancestor WILL publish its head).
+    // counts toward the convergence detector; the ancestor WILL publish its head).
     return {
       bucket: "re_drive",
       runOutcome: "halted",
@@ -195,9 +208,9 @@ export function decideRunDisposition(
   }
   if (outcome.kind === "non_pass") {
     // A non-pass planner-loop exit (writer never converged / window exhausted / gate
-    // budget spent / review stalled). ALL transient: the spec re-drives, bounded by the
-    // SAME consecutive-same-failure cap (a spec stalling the SAME way K times is stuck).
-    // The distinct WHY rides the run.outcome so the recovery surface keeps it.
+    // budget spent / review stalled). ALL transient: the spec re-drives, UNBOUNDED while
+    // the failure keeps changing; it escalates only at a fixed point (the SAME non-pass
+    // exit recurring). The distinct WHY rides the run.outcome so recovery keeps it.
     return decideFromCode(
       {
         code: "internal",
@@ -206,15 +219,14 @@ export function decideRunDisposition(
         runOutcome: nonPassRunOutcome(outcome.detail),
       },
       outcome.detail,
-      consecutiveSameFailure,
-      escalateAt,
+      facts,
     );
   }
   // A thrown run-error: classify it through the SAME closed vocabulary the public events
   // use, then decide on the CODE (a credential misconfiguration genuine-halts; everything
-  // else re-drives under the cap).
+  // else re-drives while progressing, escalating only at a fixed point).
   const classified = classifyRunFailure(outcome.error);
-  return decideFromCode({ ...classified, runOutcome: "halted" }, classified.code, consecutiveSameFailure, escalateAt);
+  return decideFromCode({ ...classified, runOutcome: "halted" }, classified.code, facts);
 }
 
 /** The classified failure facts the shared decide-core reasons over (error + non-pass). */
@@ -226,28 +238,30 @@ interface FailureFacts {
 }
 
 /** Decide the disposition for a classified failure (the error + non-pass shared core). */
-function decideFromCode(
-  facts: FailureFacts,
-  subReason: string,
-  consecutiveSameFailure: number,
-  escalateAt: number,
-): RunDisposition {
-  const { code, stage, summary, runOutcome } = facts;
+function decideFromCode(failureFacts: FailureFacts, subReason: string, facts: ConvergenceFacts): RunDisposition {
+  const { code, stage, summary, runOutcome } = failureFacts;
   const failure = { code, stage, summary };
+  const { priorSameFixedPoint } = facts;
   // A STRUCTURAL misconfiguration (credential / provider-mode) — a human must fix it; it
-  // never self-heals, so it genuine-halts IMMEDIATELY (not bounded by the re-drive cap).
+  // never self-heals, so it genuine-halts IMMEDIATELY (not subject to the convergence detector).
   if (GENUINE_TERMINAL_CODES.has(code)) {
     return {
       bucket: "genuine_halt",
       reason: "misconfiguration",
       failure,
       message: `${summary} (${code} @ ${stage}) — a structural cause a human must fix; requeue after addressing it`,
-      consecutiveSameFailure,
+      consecutiveSameFailure: priorSameFixedPoint + 1,
     };
   }
-  // RETRIABLE under the cap ⇒ RE-DRIVE. The SAME classified failure K consecutive times ⇒
-  // a genuinely stuck spec (a bug / mis-spec, not a flake) ⇒ escalate ONCE, never a hot-loop.
-  if (consecutiveSameFailure < escalateAt) {
+  // The shared CONVERGENCE DETECTOR decides — NOT a count. `priorSameFixedPoint === 0`
+  // means this attempt made PROGRESS (the first of its kind, or a DIFFERENT failure /
+  // DIFFERENT produced work than last time) ⇒ RE-DRIVE, UNBOUNDED. `>= 1` means the loop is
+  // at a structural FIXED POINT (the same classified failure recurring with the same — or
+  // unobservable — work, no new information) ⇒ a PROVEN dead-end ⇒ escalate ONCE. There is
+  // no attempt cap: a flapping-but-changing spec re-drives forever; only a genuinely stuck
+  // one (identical failure + identical work) surfaces as a human-decision.
+  const atFixedPoint = priorSameFixedPoint >= 1;
+  if (!atFixedPoint) {
     // A usage-limit fault halts the run `window_exhausted` (the distinct recovery WHY) even
     // when it arrives via the error path, not just a non-pass loop exit.
     const effectiveRunOutcome = code === "usage_limit" ? "window_exhausted" : runOutcome;
@@ -256,8 +270,8 @@ function decideFromCode(
       failure,
       runOutcome: effectiveRunOutcome,
       subReason,
-      backoffSeconds: redriveBackoffSeconds(consecutiveSameFailure),
-      consecutiveSameFailure,
+      backoffSeconds: redriveBackoffSeconds(priorSameFixedPoint),
+      consecutiveSameFailure: priorSameFixedPoint + 1,
     };
   }
   return {
@@ -265,9 +279,10 @@ function decideFromCode(
     reason: "persistent_failure",
     failure,
     message:
-      `the run failed the same way (${code} @ ${stage}: ${summary}) ${consecutiveSameFailure} times in a row — ` +
-      `the spec is genuinely stuck (a bug or mis-spec, not a flake); requeue after addressing the cause`,
-    consecutiveSameFailure,
+      `the run reached a FIXED POINT (${code} @ ${stage}: ${summary}) — it produced the identical failure ` +
+      `(and identical work, where observable) with no new information across re-drives; the spec is ` +
+      `genuinely stuck (a bug or mis-spec, not a flake), so a human must intervene; requeue after addressing the cause`,
+    consecutiveSameFailure: priorSameFixedPoint + 1,
   };
 }
 

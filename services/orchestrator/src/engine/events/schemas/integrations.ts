@@ -326,6 +326,15 @@ export const MergeConflictReplanRoutedPayload = z
     newContext: z.string(),
     /** The status the spec was returned to so it can be re-planned. */
     replanStatus: z.string(),
+    /**
+     * The structural CONFLICT SIGNATURE this re-plan was routed against (a stable hash of
+     * the conflicting change / context) — the fixed-point axis the shared `convergenceDetector`
+     * keys off (apex v35; replacing the old fixed re-plan cap). A re-plan against a DIFFERENT
+     * conflict signature is PROGRESS (the loop moved the problem) and re-planning continues
+     * UNBOUNDED; the loop escalates ONLY at a fixed point (the SAME conflict signature recurring
+     * — re-planning against it again would just re-conflict identically). Absent on legacy rows.
+     */
+    conflictSignature: z.string().optional(),
   })
   .strict();
 

@@ -9,7 +9,6 @@ import type { CiWhen } from "../ci/index.js";
 import type {
   AuditPostureConfig,
   ConvergencePolicyConfig,
-  EscapeHatches,
   GovernancePosture,
   RoutingChainEntry,
   RoutingTable,
@@ -175,7 +174,6 @@ export interface RunPlannerLoopInput {
   // App-first clone-token resolution so a private clone reuses the run's minted/cached token.
   githubAppMinter?: GithubAppTokenMinter;
   context: PlannerRunContext;
-  escapeHatches: Pick<EscapeHatches, "maxWriterIterPerSubtask" | "maxRetriesPerTransientFailure">;
   timeoutMs: number;
   workspacePath?: string;
   // Test seam: a pre-resolved GitHub clone token. Production omits it (prepareRunWorkspace resolves it from secrets + context.githubCredentialRef).
@@ -240,11 +238,10 @@ export interface RunPlannerLoopInput {
   // spec). Built by the worker (`buildRedriveHistoryReader`); absent on a no-DB unit path ⇒ treat as
   // the first failure of its kind (re-drive), so a unit run never spuriously escalates.
   redriveHistoryReader?: RedriveHistoryReader;
-  // Max review→rework re-entries before the run halts pending operator action.
-  maxReviewReworks?: number;
-  // SELF-HEAL (apex v34): max pre_merge-gate→writer self-heal re-entries before a LOUD
-  // halt. See `mergeGateSelfHeal` in plannerRunCi.ts. Absent ⇒ the documented default.
-  maxMergeGateReworks?: number;
+  // (removed — apex v35) `maxReviewReworks` / `maxMergeGateReworks`: the review-rework and
+  // pre_merge-gate self-heal loops are no longer count-bounded. They re-enter the writer
+  // UNBOUNDED while the reviewer feedback / gate error keeps changing (progress), halting
+  // only at a FIXED POINT (the same feedback/error recurs) via the shared convergenceDetector.
   // Plane B: the PROJECT's dev+test app env — env vars + secrets the product Tanren is
   // BUILDING needs to run+test its app. Resolved by the worker from `project_app_env`,
   // materialized over the runner into the building agent's command env (gate + bootstrap),
@@ -340,18 +337,25 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
     // runner + publishes `tanren/gate`. Same context feeds the re-gate hook.
     const mergeGateCtx: MergeGateRunContext = { runGate, target: allocation.target, workspacePath, eventStore };
 
-    // the write→gate→PR→CI→review tail re-enters on a changes-requested review (up to maxReviewReworks).
-    const maxReworks = input.maxReviewReworks ?? 1;
-    // SELF-HEAL (apex v34): the dedicated pre_merge-gate→writer budget (see `mergeGateSelfHeal`
-    // in plannerRunCi.ts), never starving/starved by the review budget.
-    const mergeGateBudget: MergeGateBudget = { used: 0, max: input.maxMergeGateReworks ?? 2 };
+    // The write→gate→PR→CI→review tail re-enters on a changes-requested review. UNBOUNDED
+    // while the reviewer's feedback keeps CHANGING (the writer is addressing it — progress);
+    // it escalates only at a FIXED POINT (the SAME review feedback recurs unchanged) — the
+    // shared `convergenceDetector` over the review-feedback signatures, NOT a count.
+    const reviewReworkSignatures: string[] = [];
+    // SELF-HEAL (apex v35): the pre_merge-gate→writer self-heal state — also UNBOUNDED while
+    // the gate error changes, halting only at a fixed point (see `mergeGateSelfHeal`).
+    const mergeGateBudget: MergeGateBudget = { used: 0, signatures: [] };
     const seedRejections: PlannerRejectionFeedback[] = [];
     const entityRiskProducer = buildEntityRiskProducer(input, allocation.target, workspacePath);
     let outcome: SubtaskLoopOutcome | undefined;
     let pullRequest: PublishedDraftPullRequest | undefined;
     let mergeGate: GateOutcome | undefined, review: PollReviewForRunResult | undefined;
 
-    for (let reworks = 0; ; reworks += 1) {
+    // UNBOUNDED re-entry: each iteration re-authors then re-gates/re-reviews. The loop
+    // continues while it CONVERGES (the gate error / review feedback keeps changing) and exits
+    // only on a terminal outcome (merge, a fixed-point halt, or a non-pass re-drive) — never a
+    // hardcoded rework count. The fixed-point detectors inside the gate/review steps break it.
+    for (;;) {
       outcome = await runSubtaskLoop({
         pool: input.pool,
         eventStore,
@@ -370,7 +374,6 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
           workspacePath,
           baseSha,
         },
-        escapeHatches: input.escapeHatches,
         timeoutMs: input.timeoutMs,
         usageProbe,
         budgetGate: iterationBudgetGate,
@@ -441,7 +444,7 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
         appendEvent,
         { verdict: review.verdict, rejection: reviewerRejection(review, pullRequest.branch) },
         seedRejections,
-        reworks < maxReworks,
+        reviewReworkSignatures,
       );
       if (reviewMove === "merge") break;
       if (reviewMove === "rework") continue;

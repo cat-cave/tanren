@@ -21,72 +21,86 @@ import type { RunFailureCode } from "../worker/runFailureClassifier.js";
 import { createLogger } from "../observability/logger.js";
 import type { EventName, EventPayload } from "../events/index.js";
 import {
+  type ConvergenceFacts,
   decideRunDisposition,
-  DEFAULT_REDRIVE_ESCALATE_AT,
   redriveBackoffSeconds,
   type RunDisposition,
   type TerminalOutcome,
 } from "./runFinalizeAuthority.js";
+import { assessStructuralProgress, type AttemptSignature } from "./convergenceDetector.js";
 
 const log = createLogger("run-redrive");
 
 // Re-exported so the historical import sites (tests, the worker wiring) keep their imports
-// pointed at this module while the decision constants live in the authority core.
-export { DEFAULT_REDRIVE_ESCALATE_AT, redriveBackoffSeconds };
+// pointed at this module while the backoff helper lives in the authority core.
+export { redriveBackoffSeconds };
 
-/** Facts a consecutive-same-failure read needs: the spec + its org + the failure code now seen. */
+/** Facts a fixed-point read needs: the spec + its org + the failure code + the work signature now seen. */
 export interface RedriveHistoryFacts {
   orgId: string;
   specId: string;
-  /** The classified failure code of the CURRENT failure (the one being counted). */
+  /** The classified failure code of the CURRENT failure (one fixed-point axis). */
   code: RunFailureCode;
+  /** The produced-work signature of the CURRENT run (the head/commit sha), when observable. */
+  workSignature?: string;
 }
 
 /**
- * Read the CONSECUTIVE-same-failure count for a spec (this failure included). Walks the
- * spec's prior `dag.spec.redriven` events NEWEST→OLDEST and counts the trailing run of
- * re-drives whose `failureCode` MATCHES the current one — stopping at the first DIFFERENT
- * code (a different failure = progress, which resets the streak). Returns the count
- * INCLUDING the current failure (so the first failure of its kind returns 1). At >= K
- * (`escalateAtAttempts`) the authority escalates instead of re-driving.
+ * Read the FIXED-POINT streak for a spec — the count of CONSECUTIVE prior re-drives that are
+ * structurally INDISTINGUISHABLE from the current one (same failure code AND, when both
+ * observed, the same produced-work signature). Computed via the shared `convergenceDetector`
+ * over the spec's `dag.spec.redriven` history. A DIFFERENT failure code OR DIFFERENT produced
+ * work (PROGRESS) breaks the streak, so the loop is UNBOUNDED while it keeps changing; the
+ * authority escalates ONLY once the streak shows a proven fixed point (the prior attempt was
+ * already identical). Returns the count of PRIOR identical attempts (0 ⇒ progress / first).
  */
 export type RedriveHistoryReader = (facts: RedriveHistoryFacts) => Promise<number>;
 
 /**
  * The Pg-backed {@link RedriveHistoryReader} the run worker wires: an org-scoped read of the
- * spec's prior `dag.spec.redriven` events (newest first), counting the trailing run whose
- * `failureCode` matches the current one. A DIFFERENT code breaks the run (progress reset).
+ * spec's prior `dag.spec.redriven` events (newest first), assembled into the shared
+ * convergence-detector history (failure code + work signature per attempt) with the CURRENT
+ * attempt appended — then `assessStructuralProgress` decides progress vs fixed point.
  *
  * FAIL-CLOSED toward RE-DRIVING (not toward stranding): a read failure logs loudly and
- * returns 1 (treat as the first failure of its kind) — a transient DB hiccup must NOT cause a
- * spurious escalation to `needs_attention`; the bound still bites once the read recovers.
+ * returns 0 (treat as progress / first of its kind) — a transient DB hiccup must NOT cause a
+ * spurious escalation to `needs_attention`; the fixed-point detection still bites once the
+ * read recovers.
  */
 export function buildRedriveHistoryReader(pool: pg.Pool): RedriveHistoryReader {
   return async (facts) => {
     try {
       return await runWithOrgScope(pool, facts.orgId, async (client) => {
-        const result = await client.query<{ payload: { failureCode?: string } }>(
+        const result = await client.query<{ payload: { failureCode?: string; workSignature?: string } }>(
           `SELECT payload FROM events
              WHERE spec_id = $1 AND event_type = 'dag.spec.redriven'
-             ORDER BY ts DESC, id DESC`,
+             ORDER BY ts ASC, id ASC`,
           [facts.specId],
         );
-        // Count the trailing run of SAME-code prior re-drives, then +1 for the current
-        // failure. A different prior code breaks the run (a different failure = progress).
-        let priorSameRun = 0;
-        for (const row of result.rows) {
-          if (row.payload.failureCode !== facts.code) break;
-          priorSameRun += 1;
-        }
-        return priorSameRun + 1;
+        // Assemble the oldest→newest attempt history (each prior re-drive's failure code +
+        // work signature) and append the CURRENT attempt, then ask the shared detector how
+        // long the trailing fixed-point streak is. The streak EXCLUDING the current attempt
+        // is the count of PRIOR identical attempts the authority's escalation rule keys off.
+        const history: AttemptSignature[] = result.rows.map((row) => ({
+          failureSignature: row.payload.failureCode ?? "",
+          ...(row.payload.workSignature !== undefined && { workSignature: row.payload.workSignature }),
+        }));
+        history.push({
+          failureSignature: facts.code,
+          ...(facts.workSignature !== undefined && { workSignature: facts.workSignature }),
+        });
+        // The current attempt is a fixed point iff it did not advance over the immediately
+        // prior one. `priorSameFixedPoint` = 1 when stuck (the prior was identical), 0 when
+        // progressing. The authority escalates only when this is >= 1.
+        return assessStructuralProgress(history) === "fixed_point" ? 1 : 0;
       });
     } catch (error) {
       log.warn(
-        "consecutive-same-failure read failed (fail-closed toward re-drive: treat as first of its kind)",
+        "fixed-point read failed (fail-closed toward re-drive: treat as progress / first of its kind)",
         { specId: facts.specId },
         error,
       );
-      return 1;
+      return 0;
     }
   };
 }
@@ -146,8 +160,8 @@ export async function applyTerminalOutcome(
   ctx: DispositionContext,
   seams: DispositionSeams,
 ): Promise<DispositionBucket> {
-  const consecutive = await readConsecutiveSameFailure(ctx, outcome);
-  const disposition = decideRunDisposition(outcome, consecutive);
+  const facts = await readConvergenceFacts(ctx, outcome);
+  const disposition = decideRunDisposition(outcome, facts);
   if (disposition.bucket === "re_drive") {
     await applyRedrive(ctx, seams, disposition);
     return "re_drive";
@@ -178,7 +192,6 @@ async function applyRedrive(
     failureCode: disposition.failure.code,
     stage: disposition.failure.stage,
     consecutiveSameFailure: disposition.consecutiveSameFailure,
-    escalateAtAttempts: DEFAULT_REDRIVE_ESCALATE_AT,
     backoffSeconds: disposition.backoffSeconds,
   });
 }
@@ -207,15 +220,21 @@ async function applyGenuineHalt(
   });
 }
 
-/** Read the consecutive-same-failure count via the wired reader (1 ⇒ first of its kind / no reader / no fault). */
-async function readConsecutiveSameFailure(ctx: DispositionContext, outcome: TerminalOutcome): Promise<number> {
-  // Only an error / non-pass outcome carries a counted failure code; decide a probe code
-  // up front so the reader (when wired) counts the right streak. A merge / ancestor-wait
-  // outcome never counts toward the cap, so the count is immaterial (return 1).
-  const probe = decideRunDisposition(outcome, 0);
+/**
+ * Read the CONVERGENCE FACTS (the fixed-point streak) via the wired reader. `0` ⇒ progress /
+ * first of its kind / no reader / no fault (⇒ ALWAYS re-drive). The reader returns 1 only at
+ * a proven fixed point (the prior attempt was structurally identical), which is when the
+ * authority escalates — no hardcoded count.
+ */
+async function readConvergenceFacts(ctx: DispositionContext, outcome: TerminalOutcome): Promise<ConvergenceFacts> {
+  // Only an error / non-pass outcome carries a counted failure code; probe a disposition at
+  // progress (0) to recover the code. A merge / ancestor-wait outcome never reaches the
+  // fixed-point rule, so the facts are immaterial (return progress).
+  const probe = decideRunDisposition(outcome, { priorSameFixedPoint: 0 });
   const code = probe.bucket === "converge" ? undefined : probe.failure?.code;
   const reader = ctx.input.redriveHistoryReader;
   const orgId = typeof ctx.context.orgId === "string" ? ctx.context.orgId : undefined;
-  if (reader === undefined || orgId === undefined || code === undefined) return 1;
-  return reader({ orgId, specId: ctx.context.specId, code });
+  if (reader === undefined || orgId === undefined || code === undefined) return { priorSameFixedPoint: 0 };
+  const priorSameFixedPoint = await reader({ orgId, specId: ctx.context.specId, code });
+  return { priorSameFixedPoint };
 }

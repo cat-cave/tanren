@@ -31,7 +31,8 @@ describe("ProjectConfigV1 parser", () => {
     expect(cfg.reviewPolicy).toBe("human");
     expect(cfg.notificationTargets).toEqual([]);
     expect(cfg.forgePersona).toEqual({});
-    expect(cfg.escapeHatches).toEqual({});
+    // The `escapeHatches` config block is GONE (apex v35 — no hardcoded attempt caps).
+    expect((cfg as Record<string, unknown>).escapeHatches).toBeUndefined();
     expect(cfg.allocator).toEqual({});
     // greenfield defaults to false (brownfield) — a legacy row parses to the
     // safe, lockfile-frozen default; no migration.
@@ -178,19 +179,11 @@ describe("ProjectConfigV1 parser", () => {
     ).toThrow(/.+/u);
   });
 
-  it("accepts partial escape hatches that override only one budget", () => {
-    const cfg = migrateProjectConfig({
-      version: 1,
-      escapeHatches: { maxWriterIterPerSubtask: 9 },
-    });
-    expect(cfg.escapeHatches.maxWriterIterPerSubtask).toBe(9);
-    // Other fields remain unspecified (project layer is partial); merge with
-    // org defaults happens at the engine layer.
-    expect(cfg.escapeHatches.maxRetriesPerTransientFailure).toBeUndefined();
-  });
-
-  it("rejects negative numeric escape hatches", () => {
-    expect(() => migrateProjectConfig({ version: 1, escapeHatches: { maxWriterIterPerSubtask: 0 } })).toThrow(/.+/u);
+  it("no longer carries an escapeHatches block (apex v35 — no hardcoded attempt caps)", () => {
+    // The escape-hatch limits are gone; convergence is intelligent non-convergence detection,
+    // not an operator-set count. The parsed config has no `escapeHatches` field.
+    const cfg = migrateProjectConfig({ version: 1 });
+    expect((cfg as Record<string, unknown>).escapeHatches).toBeUndefined();
   });
 
   it("accepts a governance posture and merge integration override", () => {

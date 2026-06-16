@@ -27,11 +27,8 @@ describe("OrgConfigV1 parser", () => {
     expect(cfg.version).toBe(1);
     expect(cfg.auditGateEnabled).toBe(false);
     expect(cfg.notificationTargets).toEqual([]);
-    expect(cfg.escapeHatches).toEqual({
-      maxWriterIterPerSubtask: 5,
-      maxRetriesPerTransientFailure: 3,
-      maxSpecDiscoveryRoundsWithForge: 20,
-    });
+    // The `escapeHatches` config block is GONE (apex v35 — no hardcoded attempt caps).
+    expect((cfg as Record<string, unknown>).escapeHatches).toBeUndefined();
     expect(cfg.allocator).toEqual({
       kind: "local-docker",
       concurrency: 3,

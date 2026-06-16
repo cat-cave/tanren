@@ -158,22 +158,24 @@ DB-free core; the **appliers** (`plannerRunRedrive.ts`, `plannerRunFinalize.ts`,
    writer-mistake / codex-hiccup / merge-conflict-resolvable / crashed-run /
    orphaned-slot** failure. The run halts **recoverable** (work never discarded),
    the spec returns to `open`, the walker enqueues a successor run, and an
-   **observable `dag.spec.redriven`** event records the retry (carrying the
-   classified failure code + the consecutive-same-failure counter + the backoff).
-   A random failure is **never** tolerable as terminal. The **only** bound is a
-   **consecutive-same-failure counter** (the _same_ classified failure K times in a
-   row → escalate; **any progress or a _different_ failure resets it**) plus
-   backoff — **never** a wall-clock deadline, **never** an infinite identical
-   hot-loop. A benign ancestor-wait re-drives with **no** fault (it never counts
-   toward the cap; the ancestor _will_ publish its head).
+   **observable `dag.spec.redriven`** event records the retry. A random failure is
+   **never** tolerable as terminal. The re-drive is **UNBOUNDED while it is making
+   PROGRESS** — there is **NO hardcoded attempt count**, no `K`, no `MAX_*`, no
+   wall-clock deadline. It escalates **only** at an intelligently-detected **FIXED
+   POINT** (the shared `convergenceDetector`, §1c.1): the _same_ classified failure
+   recurring with the _same_ produced work and no new information. A **different**
+   failure, or the **same** failure but **different** produced work, is PROGRESS and
+   keeps re-driving, forever; backoff (grown with the stuck streak) prevents a
+   hot-loop **without** a counter. A benign ancestor-wait re-drives with **no**
+   fault (it never reaches the detector; the ancestor _will_ publish its head).
 
 2. **GENUINE-HALT.** **Only** four structural classes: **budget exhaustion**
    (`dag.budget.paused`), **misconfiguration** (a missing/unscoped credential, an
-   unresolvable provider mode), **mis-spec** / **persistent-same-failure** (the
-   same failure K consecutive times — a genuinely stuck spec), and a **genuine
-   human-decision** (a real product/architecture decision a human must _make_ —
-   e.g. a HITL hold or changes-requested at land time). These → `needs_attention`
-   with a **specific, actionable reason** (`misconfiguration` /
+   unresolvable provider mode), **mis-spec** / **persistent-failure** (a genuine
+   FIXED POINT — the same failure + same work, intelligently detected, NOT a count),
+   and a **genuine human-decision** (a real product/architecture decision a human
+   must _make_ — e.g. a HITL hold or changes-requested at land time). These →
+   `needs_attention` with a **specific, actionable reason** (`misconfiguration` /
    `persistent_failure` / `human_decision`). `needs_attention` is **reserved** for
    these — a transient fault never rests here.
 
@@ -186,7 +188,7 @@ re-throwing into the worker's strand path); a genuine-halt re-throws **wrapped**
 `WorkflowFinalizedError` so the worker skips its safety-net re-finalize; a
 **genuinely orphaned** crash (the workflow finalizer never ran, a _raw_ error
 escapes) is the worker's safety net — and, because a crash is a transient class, it
-too **re-drives** (bounded by the same consecutive-same-failure cap), never the old
+too **re-drives** (bounded by the same fixed-point detector), never the old
 terminal strand. There is **no whole-DAG wall-clock deadline** — a build runs until
 CONVERGE or GENUINE-HALT, re-driving everything else (the build driver's
 converge-or-genuine-deadlock termination uses the shared `specProgress`
@@ -198,6 +200,58 @@ This **collapses** the old fragmentation: the per-path strand reasons
 classes the scattered per-path logic mis-parked (the same transient failure stranding
 under _three_ different reasons run-to-run). They now all RE-DRIVE; their diagnostic
 detail rides `dag.spec.redriven.failureCode`, not a distinct terminal behavior.
+
+### 1c.1 — The intelligent non-convergence detector (no hardcoded attempt caps)
+
+<a id="s1c1"></a>**The binding principle:** there is **NEVER a hardcoded number of
+attempts for ANYTHING.** The only thing that causes escalation is an intelligent
+detection that a loop is **not converging** — which does **not** mean lack of
+advancement (slow / many-tries is fine), it means it is not making **PROGRESS** (the
+same failure repeating with no real change). **Every** convergence loop — the
+run-finalize re-drive (§1c), the base-shift / conflict re-plan (§2b), the
+batch-gate-rework, the template-build recovery, the spec-implementation
+writer/checker/auditor loop, and the review-rework / pre-merge-gate self-heal —
+continues **UNBOUNDED** while it is converging and escalates **only** when
+intelligently detected to be genuinely stuck. No `K`, no `MAX_*`, no fixed budget,
+no operator-tunable count — anywhere. (The old `EscapeHatches` config block — a
+`maxWriterIterPerSubtask` / retry / discovery-round count — is **deleted**; the
+config gate and benchmark dimensions drop it. The in-loop `maxConsecutiveStalls`
+config knob is **deleted** too.)
+
+One shared assessor (`engine/workflow/convergenceDetector.ts`) every loop maps its
+history onto:
+
+- **PROGRESS signal (cheap, structural, the common case).** An attempt made progress
+  over the prior one if **any** axis advanced: its **failure SIGNATURE** changed (a
+  different error / tier / step / root cause), OR the **WORK** it produced changed (a
+  different diff / result-tree / head), OR its **MAGNITUDE** shrank (fewer errors, a
+  smaller defect, more criteria passing — the **1000 → 500 → 100 → 1** type-error
+  trajectory is genuine progress at _every_ step even though each step still fails).
+  While there is progress → **CONTINUE, unbounded.** Advancement / slowness / many
+  tries **NEVER** escalate.
+
+- **Suspected FIXED POINT.** Only when an attempt is indistinguishable from the prior
+  on every observable axis (same failure **and** same work **and** non-shrinking
+  magnitude — no new information) is escalation even _considered_. The fixed-point
+  detection itself is the loop-breaker — it replaces the counters _without_ a count.
+
+- **INTELLIGENT escalation gate (agent-assessed where the answerer infra exists).** At
+  a suspected fixed point the decision is the bar **"would a human do anything other
+  than say 'keep going, you're almost there'?"** If a human would just say keep going
+  (slow / hard / a different approach still worth trying), Tanren **keeps going**.
+  Escalation is **RARE** — reserved for cases where human input would genuinely change
+  the outcome: an ambiguous requirement, a missing resource/credential, a genuine
+  product/architecture decision, or a demonstrably-exhausted dead-end with no new
+  approach. The **spec-implementation loop** makes this gate **agent-assessed**: the
+  convergence answerer emits an `escalation: keep_going | escalate` verdict (+ a
+  human-actionable `escalationReason`) framed as exactly that bar — so even a stuck
+  blocking root cause keeps iterating until the _agent_ judges a human is genuinely
+  needed. The **durable loops** (re-drive / re-plan / rework / recovery), whose
+  escalation point is a bare DB-driven decision with no answerer, use the rigorous
+  **fixed-point rule**: escalate only at a _provable_ fixed point (identical failure +
+  identical work, no new information), with a specific human-actionable diagnosis. The
+  escalation target is always a genuine `needs_attention` (`persistent_failure` /
+  `human_decision`) carrying that diagnosis — never a silent strand, never a hot-loop.
 
 ## 1d. Autonomous intake — webhook-first, poll-fallback
 

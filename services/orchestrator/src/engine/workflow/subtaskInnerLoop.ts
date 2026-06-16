@@ -1,18 +1,27 @@
 // The per-task INNER LOOP of the spec-implementation loop (docs/roadmap/
 // spec-loop-redesign.md): WRITER → FAST GATE (tier-1, BEFORE the checker) → CHECKER,
-// for every subtask in order, bounded by `maxWriterIterPerSubtask` PER TASK. Split out
-// of subtaskLoop.ts so each module stays under the 500-line architecture cap.
+// for every subtask in order. Split out of subtaskLoop.ts so each module stays under
+// the 500-line architecture cap.
 //
-// A gate fail or a checker incompleteness loops back to the WRITER immediately (the
-// fast gate runs BEFORE the checker, so a broken tree never burns a checker call). On
-// budget exhaustion of the per-task writer iterations the residual incompleteness is a
-// P0 FINDING (fed to the spec-level triage/convergence) — NEVER a retry-cap halt.
-import { randomUUID } from "node:crypto";
+// NO ITERATION CAP (apex v35 — intelligent non-convergence detection). The writer
+// iterates UNBOUNDED while it is making PROGRESS — a fast-gate failure or a checker
+// incompleteness loops back to the WRITER (fed the EXACT failing error as steering) for
+// as many rounds as it keeps changing/shrinking the problem. The 1000 → 500 → 100 → 1
+// type-error trajectory is genuine progress at EVERY step even though each step still
+// fails — so a flat `maxWriterIterPerSubtask=5` cap (the old bound) would kill a
+// self-healing writer mid-convergence. Instead the shared `convergenceDetector` decides:
+// the loop continues while the rejection reason OR the produced diff keeps changing, and
+// stops ONLY at a FIXED POINT (the writer produces the IDENTICAL diff AND gets the
+// IDENTICAL rejection with no new information). On a fixed point the residual
+// incompleteness is surfaced as a P0 FINDING (fed to the spec-level triage/convergence,
+// where the intelligent escalation judgment lives) — NEVER a retry-cap halt.
+import { createHash, randomUUID } from "node:crypto";
 import type { PlanAnswer, PlanSubtask } from "../answerers/schemas/index.js";
 import type { Finding } from "../contracts/findings.js";
 import type { GateOutcome } from "./gate/index.js";
 import { runCheckerStage, runWriterStage } from "./subtaskStages.js";
 import { type SubtaskCostContext } from "./subtaskCost.js";
+import { assessStructuralProgress, type AttemptSignature } from "./convergenceDetector.js";
 import type { AppendEvent, SubtaskLoopInput, SubtaskLoopOutcome } from "./subtaskLoop.js";
 
 // The result of walking a plan's subtasks (per-task WRITER → FAST GATE → CHECKER):
@@ -25,9 +34,9 @@ export type SubtaskSequenceResult =
 
 // runSubtaskSequence walks the plan in order. Per subtask: WRITER → FAST GATE (tier-1,
 // BEFORE the checker; a fail loops straight back to the writer) → CHECKER (completeness
-// findings; any finding loops back to the writer) → task done. Bounded by
-// `maxWriterIterPerSubtask` PER TASK — on exhaustion the residual incompleteness becomes
-// a P0 finding (fed to triage/convergence), never a retry-cap halt.
+// findings; any finding loops back to the writer) → task done. UNBOUNDED while making
+// PROGRESS — at a FIXED POINT (identical diff + identical rejection) the residual
+// incompleteness becomes a P0 finding (fed to triage/convergence), never a retry-cap halt.
 export async function runSubtaskSequence(args: {
   input: SubtaskLoopInput;
   costCtx: SubtaskCostContext;
@@ -54,11 +63,15 @@ type OneSubtaskResult =
   | { kind: "incomplete"; finding: Finding }
   | { kind: "window_exhausted"; outcome: Extract<SubtaskLoopOutcome, { kind: "window_exhausted" }> };
 
-// Run a single subtask's WRITER → FAST GATE → CHECKER inner loop, bounded by
-// `maxWriterIterPerSubtask`. A gate fail or a checker incompleteness loops back to the
-// writer IMMEDIATELY (the fast gate runs BEFORE the checker, so a broken tree never
-// burns a checker call). On budget exhaustion of the per-task writer iterations the
-// residual incompleteness is a P0 FINDING (triage/convergence own the loop bound).
+// Run a single subtask's WRITER → FAST GATE → CHECKER inner loop, UNBOUNDED while making
+// PROGRESS. A gate fail or a checker incompleteness loops back to the writer IMMEDIATELY
+// (the fast gate runs BEFORE the checker, so a broken tree never burns a checker call),
+// fed the EXACT failing error as steering. The loop continues for as many rounds as the
+// rejection reason OR the produced diff keeps changing (the writer is still working the
+// problem — 1000 → 1 errors is progress at every step). It stops ONLY at a FIXED POINT
+// (the writer reproduces the IDENTICAL diff AND gets the IDENTICAL rejection — no new
+// information), where the residual incompleteness is surfaced as a P0 FINDING that
+// triage/convergence reason over (the intelligent escalation judgment lives there).
 async function runOneSubtask(args: {
   input: SubtaskLoopInput;
   costCtx: SubtaskCostContext;
@@ -67,9 +80,14 @@ async function runOneSubtask(args: {
   subtask: PlanSubtask;
 }): Promise<OneSubtaskResult> {
   const { input, costCtx, appendEvent, plannerTaskId, subtask } = args;
-  const maxIter = input.escapeHatches.maxWriterIterPerSubtask;
   let lastReason = "";
-  for (let iter = 0; iter < maxIter; iter += 1) {
+  // The attempt history (oldest→newest) the shared convergence detector reasons over: each
+  // iteration's REJECTION reason (the failure signature) + the writer's produced DIFF hash
+  // (the work signature). The loop keeps going while either changes (progress); it stops at
+  // a FIXED POINT (identical rejection + identical diff). NO iteration count gates it.
+  const attempts: AttemptSignature[] = [];
+  let iter = 0;
+  for (;;) {
     const writeTaskId = `task_${randomUUID()}`;
     const writerOutcome = await runWriterStage({
       pool: input.pool,
@@ -102,17 +120,29 @@ async function runOneSubtask(args: {
     }
     if (writerOutcome.kind === "failed") {
       // A hard writer failure (crashed / timed out): retry the writer (the diff is
-      // partial), within the per-task bound.
+      // partial). A crash with no usable diff has no work signature — progress keys off
+      // the rejection reason changing. At a fixed point (the SAME crash repeatedly) the
+      // detector surfaces the residual finding instead of re-driving forever.
       lastReason = `writer ${writerOutcome.failureKind} mid-subtask`;
+      const stuck = recordAttemptAndCheckFixedPoint(attempts, lastReason);
+      if (stuck !== undefined) return stuck(subtask, iter + 1);
+      iter += 1;
       continue;
     }
+    const diffSignature = hashWork(writerOutcome.writer.diff);
 
     // FAST GATE (tier-1: fmt/lint/typecheck) — BEFORE the checker. A fail loops straight
-    // back to the writer (do NOT burn a checker call on a known-broken tree).
+    // back to the writer (do NOT burn a checker call on a known-broken tree), fed the
+    // EXACT failing tier/step/output as steering (`gateReason`) so it fixes the right thing.
     if (input.runGate !== undefined) {
       const gate = await input.runGate({ when: "per_iteration", taskId: writeTaskId });
       if (!gate.passed) {
         lastReason = gateReason(gate);
+        // PROGRESS while the gate failure OR the produced diff keeps changing (a shrinking
+        // error count is a different `outputTail` → progress); STOP at a fixed point.
+        const stuck = recordAttemptAndCheckFixedPoint(attempts, lastReason, diffSignature);
+        if (stuck !== undefined) return stuck(subtask, iter + 1);
+        iter += 1;
         continue;
       }
     }
@@ -147,9 +177,8 @@ async function runOneSubtask(args: {
     }
     // EMPTY-INCREMENTAL-DIFF (v35): a reject over an EMPTY `baselineSha → HEAD` diff is
     // NOT reworkable — re-driving the writer is futile (it correctly adds nothing → the
-    // diff stays empty → the same finding → the infinite rework loop that false-escalated
-    // `persistent_failure` on a re-driven, already-complete scaffold). Surface the
-    // residual finding straight to triage/convergence INSTEAD of re-entering the writer.
+    // diff stays empty → the same finding). Surface the residual finding straight to
+    // triage/convergence INSTEAD of re-entering the writer.
     if (!decision.reworkable) {
       return {
         kind: "incomplete",
@@ -162,18 +191,50 @@ async function runOneSubtask(args: {
       };
     }
     lastReason = decision.reason;
+    // PROGRESS while the checker's incompleteness reason OR the produced diff keeps changing
+    // (the writer is still closing the gaps); STOP only at a FIXED POINT (the identical
+    // checker rejection over the identical diff — the writer has stopped changing anything).
+    const stuck = recordAttemptAndCheckFixedPoint(attempts, lastReason, diffSignature);
+    if (stuck !== undefined) return stuck(subtask, iter + 1);
+    iter += 1;
   }
-  // The per-task writer-iteration bound is spent and the task is still incomplete: NOT
-  // a halt — surface a P0 FINDING that triage/convergence reason over.
-  return {
+}
+
+// Record the latest writer attempt's signature (its rejection reason + produced-diff hash)
+// onto the running history, then ask the shared detector whether the loop is at a FIXED
+// POINT (this attempt indistinguishable from the prior — identical rejection AND identical
+// diff). Returns `undefined` while making PROGRESS (the loop continues, UNBOUNDED), or a
+// builder for the residual P0 `incomplete` result when stuck (no count — the structural
+// fixed point IS the stop condition).
+function recordAttemptAndCheckFixedPoint(
+  attempts: AttemptSignature[],
+  rejectionReason: string,
+  diffSignature?: string,
+): ((subtask: PlanSubtask, rounds: number) => OneSubtaskResult) | undefined {
+  attempts.push({
+    failureSignature: rejectionReason,
+    ...(diffSignature !== undefined && { workSignature: diffSignature }),
+  });
+  if (assessStructuralProgress(attempts) !== "fixed_point") return undefined;
+  return (subtask, rounds) => ({
     kind: "incomplete",
     finding: {
       id: `task-incomplete-${subtask.index}`,
       severity: "P0",
-      title: `Subtask ${subtask.index} still incomplete after ${maxIter} writer iterations`,
-      body: lastReason === "" ? `Subtask "${subtask.title}" did not reach completeness.` : lastReason,
+      title: `Subtask ${subtask.index} reached a fixed point after ${rounds} writer iteration(s) — identical output, identical rejection`,
+      body:
+        rejectionReason === ""
+          ? `Subtask "${subtask.title}" did not reach completeness and stopped changing.`
+          : rejectionReason,
     },
-  };
+  });
+}
+
+// A stable hash of the writer's produced diff — the WORK signature the convergence
+// detector keys "the writer did something different" off. Identical diff text ⇒ identical
+// hash ⇒ no work progress this iteration.
+function hashWork(diff: string): string {
+  return createHash("sha256").update(diff).digest("hex");
 }
 
 // Render a failed gate into the writer-rework steering string: a header naming the

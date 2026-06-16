@@ -43,11 +43,6 @@ function orgConfig(): unknown {
       demo: { chain: [] },
       forge: { chain: [] },
     },
-    escapeHatches: {
-      maxWriterIterPerSubtask: 5,
-      maxRetriesPerTransientFailure: 3,
-      maxSpecDiscoveryRoundsWithForge: 20,
-    },
     auditGateEnabled: gateEnabled,
     ...(gateEnabled
       ? {

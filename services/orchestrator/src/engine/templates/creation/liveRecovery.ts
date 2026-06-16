@@ -45,13 +45,10 @@ async function resolveProjectOrg(pool: pg.Pool, projectId: string): Promise<stri
   });
 }
 
-// Build the LIVE `TemplateBuildRecoveryDeps` from the orchestrator pool + actor. The
-// `maxAttempts` is the recovery cap (defaults inside `recoverStrandedTemplateBuild`).
-export function buildLiveTemplateBuildRecovery(
-  pool: pg.Pool,
-  actor: ActorContext,
-  options?: { maxAttempts?: number },
-): TemplateBuildRecoveryDeps {
+// Build the LIVE `TemplateBuildRecoveryDeps` from the orchestrator pool + actor. The recovery
+// is bounded by intelligent non-convergence detection (the shared `convergenceDetector`), NOT
+// a `maxAttempts` cap — so there is no cap option.
+export function buildLiveTemplateBuildRecovery(pool: pg.Pool, actor: ActorContext): TemplateBuildRecoveryDeps {
   const readModel = new PgDagReadModel(pool);
   return {
     loadSnapshot: (projectId) => readModel.loadSnapshot(projectId),
@@ -59,7 +56,6 @@ export function buildLiveTemplateBuildRecovery(
     priorRecoveries: (projectId) => priorRecoveries(pool, projectId),
     hasPublishedValidatedTemplate: (projectId) => hasPublishedValidatedTemplate(pool, actor, projectId),
     events: new PgEventStore(pool),
-    ...(options?.maxAttempts === undefined ? {} : { maxAttempts: options.maxAttempts }),
   };
 }
 

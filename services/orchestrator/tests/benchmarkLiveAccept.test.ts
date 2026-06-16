@@ -24,7 +24,6 @@ const MERGED_SHA = "0123456789abcdef0123456789abcdef01234567";
 function frozenWithAccept(acceptSteps: { name: string; run: string }[] | undefined): FrozenConfig {
   return FrozenConfig.parse({
     routing: { write: { chain: [{ cli: "codex", model: "m", authRef: "credential/codex/org/x" }] } },
-    escapeHatches: {},
     ciTiers: {
       tiers: {
         fast: [{ name: "lint", run: "pnpm lint" }],

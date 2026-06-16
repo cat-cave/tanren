@@ -167,7 +167,6 @@ describe("runSubtaskLoop — empty-incremental-diff does not false-escalate (v35
     const writer = makeWriter(["only-attempt\n"]);
     const checker = makeChecker([incompleteCheck, incompleteCheck, incompleteCheck]);
     const { input, events } = defaultLoopInput({
-      escapeHatches: { maxWriterIterPerSubtask: 5 },
       adapters: {
         ...defaultLoopInput().input.adapters,
         writer,

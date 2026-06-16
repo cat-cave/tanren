@@ -180,9 +180,9 @@ describe("pre-merge gate self-heal (apex v34)", () => {
     expect(JSON.stringify(events.events)).not.toContain("planner-loop native gate failed");
   });
 
-  it("a repeatedly-failing pre_merge gate is BOUNDED — it halts LOUD via the rework budget, never loops forever / never silently passes", async () => {
+  it("a pre_merge gate failing the IDENTICAL way halts LOUD at a FIXED POINT (no count, never loops / never silently passes)", async () => {
     const { ctx, pool, events, secrets, allocator, ssh } = await setup(directMergeConfig());
-    // pre_merge fails EVERY time — the writer can never make it merge-ready.
+    // pre_merge fails the IDENTICAL way EVERY time — the writer never changes the error.
     const { runGate, preMergeCalls } = scriptedGate([
       failGate("tier-3", "pre_merge", "stryker", "mutation score 41% < 60%"),
     ]);
@@ -196,13 +196,10 @@ describe("pre-merge gate self-heal (apex v34)", () => {
       secrets,
       githubHttp: new ReusablePrGitHubHttp(),
       context: ctx,
-      escapeHatches: { maxWriterIterPerSubtask: 5, maxRetriesPerTransientFailure: 3 },
       timeoutMs: 100,
       maxCiPolls: 1,
       sleep: async () => {},
       runGate,
-      // A SMALL bound so the test is fast — and so we can assert it is FINITE.
-      maxMergeGateReworks: 2,
       buildAdapters: () => adapters,
       buildUsageProbe: () => fakeProbe(healthyWindow(), accounting(0.5)),
       reviewProbe: approvingReview(),
@@ -213,9 +210,10 @@ describe("pre-merge gate self-heal (apex v34)", () => {
     // It HALTED LOUD (a parked, requeueable run) — never merged on an unverified head.
     expect(pool.runStatus).toEqual({ status: "halted", outcome: "halted" });
     expect(result.mergeGate?.passed).toBe(false);
-    // BOUNDED: the initial attempt + exactly `maxMergeGateReworks` re-tries = 3 gate runs,
-    // then the halt. A finite count proves it neither looped forever nor silently passed.
-    expect(preMergeCalls).toHaveLength(3);
+    // FIXED POINT (no count): the initial gate run, then ONE rework that reproduces the
+    // IDENTICAL error ⇒ a fixed point ⇒ halt. A finite count proves it neither looped forever
+    // nor silently passed — and the halt is the detector's, not a budget's.
+    expect(preMergeCalls).toHaveLength(2);
     expect(preMergeCalls.every((o) => !o.passed)).toBe(true);
   });
 });

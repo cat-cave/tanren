@@ -345,18 +345,34 @@ export const convergenceProgress: ConvergenceAnswer = {
   assessment: "progress",
   blockingRootCauseId: "blocker-a",
   blockingRootCauseProgress: "retired",
+  escalation: "keep_going",
+  escalationReason: "",
   reasoning: "fewer findings than last loop; the blocking root cause was retired",
 };
+// A STALLED read where the agent judges a human IS needed (a genuine dead-end) → escalate.
 export const convergenceStalled: ConvergenceAnswer = {
   assessment: "stalled",
   blockingRootCauseId: "blocker-a",
   blockingRootCauseProgress: "unchanged",
+  escalation: "escalate",
+  escalationReason: "the blocking root cause cannot be resolved without a product decision",
   reasoning: "same blocking root cause recurs unchanged",
+};
+// A STALLED read where the agent judges the loop should KEEP GOING (slow/hard, a new approach).
+export const convergenceStalledKeepGoing: ConvergenceAnswer = {
+  assessment: "stalled",
+  blockingRootCauseId: "blocker-a",
+  blockingRootCauseProgress: "unchanged",
+  escalation: "keep_going",
+  escalationReason: "",
+  reasoning: "slow but a different approach is worth trying",
 };
 export const convergenceVelocity: ConvergenceAnswer = {
   assessment: "velocity_defer",
   blockingRootCauseId: "",
   blockingRootCauseProgress: "none",
+  escalation: "keep_going",
+  escalationReason: "",
   reasoning: "only P3 left after several rounds; no blocking finding remains",
 };
 
@@ -399,9 +415,6 @@ export function defaultLoopInput(overrides: Partial<SubtaskLoopInput> = {}): {
       behaviorIds: ["B1"],
       behaviorContext: [{ id: "B1", title: "README mentions ok", description: "the README contains the string ok" }],
       workspacePath: "/workspace/runs/run_test/repo",
-    },
-    escapeHatches: {
-      maxWriterIterPerSubtask: 5,
     },
     timeoutMs: 1_000,
     ...overrides,

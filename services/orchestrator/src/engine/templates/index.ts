@@ -82,12 +82,11 @@ export {
   buildTemplateAuditor,
   type ConvergedProjectFacts,
   type RunLoopBuildDriverDeps,
-  // Template-build SELF-RECOVERY (templating-system.md §2): the bounded auto-requeue
-  // of a stranded, bound template-build so it never needs manual DB clearing.
+  // Template-build SELF-RECOVERY (templating-system.md §2): the UNBOUNDED-while-converging
+  // auto-requeue of a stranded, bound template-build so it never needs manual DB clearing.
   recoverStrandedTemplateBuild,
   TemplateBuildRecoveryExhaustedError,
-  DEFAULT_MAX_RECOVERY_ATTEMPTS,
-  consecutiveNoProgressCount,
+  atRecoveryFixedPoint,
   buildLiveTemplateBuildRecovery,
   type TemplateBuildRecoveryDeps,
   type TemplateBuildRecoveryOutcome,

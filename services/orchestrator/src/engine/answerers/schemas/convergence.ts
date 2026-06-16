@@ -7,6 +7,17 @@
 // It decides PROGRESS vs STALL from the finding-DELTA across loops + the diff. It is
 // the SOLE loop bound — there is NO retry cap / per-spec rerun limit / timeout halt.
 //
+// AGENT-ASSESSED ESCALATION (apex v35 — the intelligent escalation gate). The loop no
+// longer escalates at `maxConsecutiveStalls` CONSECUTIVE stalls (a count). It escalates
+// ONLY when THIS answerer — reviewing the attempt history, the trajectory/magnitude, and
+// the diff — judges that a HUMAN would add value BEYOND "keep going". The bar is exactly
+// that: "would a human do anything other than say 'keep going, you're almost there'?" If a
+// human would just say keep going (the loop is slow/hard but still converging, or merely
+// stuck-but-the-agent-has-a-new-approach), Tanren KEEPS GOING — unbounded. It escalates
+// only for a genuine human-decision/blocker (an ambiguous requirement, a missing
+// resource/credential, a real product/architecture choice, or a demonstrably-exhausted
+// dead-end with no new approach). "Slow" / "hard" / "many attempts" are NEVER reasons.
+//
 // v24 LIVE BUG (the cause-not-symptom fix): the stall read MUST track the BLOCKING
 // root cause, not "did ANYTHING change". On v24 the loop churned 4+ times on the
 // identical blocking `pnpm test fails` P1 while the stall counter kept RESETTING —
@@ -60,6 +71,18 @@ export type ConvergenceAssessment = z.infer<typeof ConvergenceAssessment>;
 export const BlockingRootCauseProgress = z.enum(["retired", "reduced", "unchanged", "regressed", "none"]);
 export type BlockingRootCauseProgress = z.infer<typeof BlockingRootCauseProgress>;
 
+// The INTELLIGENT ESCALATION verdict — the "would a human add value beyond 'keep going'?"
+// judgment, consulted ONLY when the loop is at a suspected stall (so a progressing loop is
+// NEVER escalated):
+//   - `keep_going` — a human would just say "keep going, you're almost there": even at a
+//     stall, the agent should re-attempt (slow/hard is fine; a new approach may break it).
+//   - `escalate`   — human input would genuinely change the outcome: a real
+//     decision/blocker the agent fundamentally cannot resolve (ambiguous requirement,
+//     missing resource/credential, a product/architecture choice, or a demonstrably
+//     exhausted dead-end with NO new approach). RARE.
+export const ConvergenceEscalation = z.enum(["keep_going", "escalate"]);
+export type ConvergenceEscalation = z.infer<typeof ConvergenceEscalation>;
+
 export const ConvergenceAnswer = z
   .object({
     assessment: ConvergenceAssessment,
@@ -75,8 +98,23 @@ export const ConvergenceAnswer = z
         "Stable id/root-cause label of the worst-severity merge-gating finding (NOT surface text), so the same blocker is recognized across loops. Empty when there is no blocking finding.",
       ),
     // Progress on the BLOCKING root cause specifically (NOT 'did anything change') —
-    // the primary signal the deterministic stall counter keys off.
+    // the primary signal the deterministic stall detector keys off.
     blockingRootCauseProgress: BlockingRootCauseProgress,
+    // The INTELLIGENT ESCALATION verdict — consulted by the loop ONLY at a suspected stall
+    // (the blocking root cause unchanged/regressed, or an overall `stalled` read). The bar:
+    // "would a human do anything other than say 'keep going'?" `keep_going` unless human
+    // input would genuinely change the outcome (a real decision/blocker / exhausted
+    // dead-end). Slow/hard/many-attempts is NEVER `escalate`. On a `progress`/`velocity_defer`
+    // loop this is ignored, so default it to `keep_going`.
+    escalation: ConvergenceEscalation,
+    // REQUIRED when `escalation === "escalate"`: the SPECIFIC, human-actionable reason a
+    // human must act (the genuine decision/blocker/dead-end) — never a bare "stuck". Empty
+    // when `keep_going`.
+    escalationReason: z
+      .string()
+      .describe(
+        "When escalation=escalate: the specific human-actionable decision/blocker/dead-end (never a bare 'stuck'). Empty when keep_going.",
+      ),
     // The agent's evidence: cite the finding-delta (which root causes were retired,
     // which recurred) and the change since the prior loop. REQUIRED + non-empty so a
     // stall/defer decision is always justified in the timeline.

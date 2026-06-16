@@ -66,10 +66,7 @@ function ghRound(): GitHubHttpResponse[] {
   ];
 }
 
-const escapeHatches = { maxWriterIterPerSubtask: 5, maxRetriesPerTransientFailure: 3 };
-
 const baseInput = (over: Record<string, unknown>) => ({
-  escapeHatches,
   timeoutMs: 100,
   maxCiPolls: 1,
   sleep: async () => {},
@@ -108,7 +105,6 @@ describe("runPlannerLoopWorkflow — review-rework re-entry", () => {
         reviewProbe: changesThenApproveReview(),
         mergeProbe: noopMerge(),
         mergeAuthority: plannerAuthorityBundle(plannerAuthorityHost()),
-        maxReviewReworks: 1,
       }) as Parameters<typeof runPlannerLoopScoped>[0],
     );
 
@@ -126,11 +122,11 @@ describe("runPlannerLoopWorkflow — review-rework re-entry", () => {
     expect(planner.calls[1]!.prompt).toContain("please rename ok()");
   });
 
-  it("halts (no merge) when changes are requested and the rework budget is exhausted", async () => {
+  it("halts (no merge) when changes are requested at a FIXED POINT — the SAME review feedback recurs (no count)", async () => {
     const { ctx, pool, events, secrets, allocator, ssh } = await setup();
-    // maxReviewReworks = 0 → the first changes-requested verdict exhausts the
-    // budget immediately and halts without re-entering the loop.
-    const github = new ScriptedGitHubHttp([...ghRound()]);
+    // `alwaysChangesReview` returns the IDENTICAL changes-requested feedback every poll. The
+    // first is new feedback (re-work), the second reproduces it (a fixed point) ⇒ halt.
+    const github = new ScriptedGitHubHttp([...ghRound(), ...ghRound()]);
 
     const result = await runPlannerLoopScoped(
       baseInput({
@@ -144,7 +140,6 @@ describe("runPlannerLoopWorkflow — review-rework re-entry", () => {
         buildAdapters: () => twoSubtaskAdapters([completeCheck, completeCheck]),
         reviewProbe: alwaysChangesReview(),
         mergeProbe: noopMerge(),
-        maxReviewReworks: 0,
       }) as Parameters<typeof runPlannerLoopScoped>[0],
     );
 
@@ -175,7 +170,6 @@ describe("runPlannerLoopWorkflow — review-rework re-entry", () => {
         buildAdapters: () => twoSubtaskAdapters([completeCheck, completeCheck]),
         reviewProbe: pendingReview(),
         mergeProbe: noopMerge(),
-        maxReviewReworks: 1,
       }) as Parameters<typeof runPlannerLoopScoped>[0],
     );
 
@@ -284,7 +278,7 @@ describe("runPlannerLoopWorkflow — non-pass loop outcome mapping", () => {
         ssh,
         secrets,
         githubHttp: new ScriptedGitHubHttp([]),
-        context: { ...ctx, convergencePolicy: { maxConsecutiveStalls: 2, demoRunEnabled: false } },
+        context: { ...ctx, convergencePolicy: { demoRunEnabled: false } },
         buildAdapters: () => adapters,
       }) as Parameters<typeof runPlannerLoopScoped>[0],
     );

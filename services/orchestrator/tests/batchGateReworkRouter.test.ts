@@ -7,8 +7,11 @@
 
 import { describe, expect, it } from "vitest";
 import type pg from "pg";
-import { MAX_BATCH_GATE_REWORKS, PgBatchGateReworkRouter } from "../src/engine/merge/batchGateReworkRouter.js";
-import type { ReplanEnqueuer } from "../src/engine/workflow/reviewMerge/conflictResolver/replanRouter.js";
+import { PgBatchGateReworkRouter } from "../src/engine/merge/batchGateReworkRouter.js";
+import {
+  gateErrorSignature,
+  type ReplanEnqueuer,
+} from "../src/engine/workflow/reviewMerge/conflictResolver/replanRouter.js";
 import type { MergeQueueEntry } from "../src/engine/contracts/mergeCoordinator.js";
 
 const ORG = "org_test";
@@ -54,7 +57,8 @@ function makeStatusPool(statusWrites: { specId: string; status: string }[]): pg.
 
 function makeRouter(opts: {
   enqueuer: ReplanEnqueuer;
-  priorReworks: number;
+  /** The spec's prior gate-error SIGNATURES (oldest→newest) the convergence detector reads. */
+  priorReworks: string[];
   appended: Appended[];
   statusWrites: { specId: string; status: string }[];
 }): PgBatchGateReworkRouter {
@@ -82,7 +86,7 @@ describe("PgBatchGateReworkRouter — gate-fail → writer rework, bounded", () 
     };
     const appended: Appended[] = [];
     const statusWrites: { specId: string; status: string }[] = [];
-    const router = makeRouter({ enqueuer, priorReworks: 0, appended, statusWrites });
+    const router = makeRouter({ enqueuer, priorReworks: [], appended, statusWrites });
 
     const gateError = "tier merge / step lint: Parsing error on vitest.stryker.config.ts";
     const disposition = await router.routeGateFailToRework({
@@ -106,7 +110,7 @@ describe("PgBatchGateReworkRouter — gate-fail → writer rework, bounded", () 
     expect(statusWrites.some((w) => w.status === "needs_attention")).toBe(false);
   });
 
-  it("ESCALATES to needs_attention (no further rework) once the bounded budget is exhausted", async () => {
+  it("ESCALATES to needs_attention (no further rework) at a FIXED POINT — the SAME gate error recurs", async () => {
     let enqueueCalls = 0;
     const enqueuer: ReplanEnqueuer = {
       // eslint-disable-next-line @typescript-eslint/require-await
@@ -117,17 +121,19 @@ describe("PgBatchGateReworkRouter — gate-fail → writer rework, bounded", () 
     };
     const appended: Appended[] = [];
     const statusWrites: { specId: string; status: string }[] = [];
-    // The spec has ALREADY been re-worked the budget number of times.
-    const router = makeRouter({ enqueuer, priorReworks: MAX_BATCH_GATE_REWORKS, appended, statusWrites });
+    const stuckError = "still failing the integrated gate";
+    // The spec was ALREADY re-worked against this EXACT gate error — re-working again would
+    // reproduce it identically (a fixed point), so the detector escalates (no count).
+    const router = makeRouter({ enqueuer, priorReworks: [gateErrorSignature(stuckError)], appended, statusWrites });
 
     const disposition = await router.routeGateFailToRework({
       projectId: PROJECT,
       culprit: culprit("spec_stuck"),
-      gateError: "still failing the integrated gate",
+      gateError: stuckError,
     });
 
     expect(disposition).toBe("escalated");
-    // No further rework run was enqueued (bounded — never a hot-loop).
+    // No further rework run was enqueued (fixed point — never a hot-loop).
     expect(enqueueCalls).toBe(0);
     // The spec was parked at needs_attention (loud, frees the slot).
     expect(statusWrites.some((w) => w.status === "needs_attention")).toBe(true);
@@ -135,6 +141,34 @@ describe("PgBatchGateReworkRouter — gate-fail → writer rework, bounded", () 
     expect(routed?.payload.disposition).toBe("escalated");
     const park = appended.find((e) => e.eventType === "dag.spec.needs_attention");
     expect(park?.payload.reason).toBe("persistent_failure");
+  });
+
+  it("re-works UNBOUNDED while the gate error keeps CHANGING — many prior reworks, a NEW error ⇒ rework not escalate", async () => {
+    let enqueueCalls = 0;
+    const enqueuer: ReplanEnqueuer = {
+      // eslint-disable-next-line @typescript-eslint/require-await
+      async enqueue() {
+        enqueueCalls += 1;
+        return { replanRunId: "run_rework_p", plannerTaskId: "task_p" };
+      },
+    };
+    const appended: Appended[] = [];
+    const statusWrites: { specId: string; status: string }[] = [];
+    // Five prior reworks, each a DIFFERENT gate error — the writer is fixing one failure and
+    // surfacing the next (progress). The current error is different again ⇒ keep re-working,
+    // far past any old fixed cap of 3.
+    const priorReworks = ["err-a", "err-b", "err-c", "err-d", "err-e"].map((e) => gateErrorSignature(e));
+    const router = makeRouter({ enqueuer, priorReworks, appended, statusWrites });
+
+    const disposition = await router.routeGateFailToRework({
+      projectId: PROJECT,
+      culprit: culprit("spec_progressing"),
+      gateError: "err-f (a brand new, different failure)",
+    });
+
+    expect(disposition).toBe("reworked");
+    expect(enqueueCalls).toBe(1);
+    expect(statusWrites.some((w) => w.status === "needs_attention")).toBe(false);
   });
 
   it("ESCALATES (never silently strands) when the rework run cannot be enqueued", async () => {
@@ -145,7 +179,7 @@ describe("PgBatchGateReworkRouter — gate-fail → writer rework, bounded", () 
     };
     const appended: Appended[] = [];
     const statusWrites: { specId: string; status: string }[] = [];
-    const router = makeRouter({ enqueuer, priorReworks: 0, appended, statusWrites });
+    const router = makeRouter({ enqueuer, priorReworks: [], appended, statusWrites });
 
     const disposition = await router.routeGateFailToRework({
       projectId: PROJECT,
