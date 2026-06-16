@@ -203,3 +203,29 @@ export const MergeBatchCulpritPayload = z
     message: z.string(),
   })
   .strict();
+
+// merge.batch.gate_rework_routed → the batch check's GATE/CI failed on the prospective
+// MERGED state (an integration-only failure — code that passed its OWN branch gates but
+// breaks integrated, e.g. a config file outside the integrated tsconfig), bisect isolated
+// ONE culprit PR, and the coordinator routed that culprit back to the WRITER for rework
+// (carrying the batch gate's failing output as steering) rather than stranding it. This is
+// DISTINCT from a batch CONFLICT (which routes to the conflict resolver / replan): a
+// gate-fail is fixed by re-authoring the code. It is the bounded-rework budget KEY: a spec
+// re-worked `disposition: "escalated"` has exhausted that budget and was parked
+// `needs_attention` instead of re-worked again (no strand, no hot-loop).
+export const MergeBatchGateReworkRoutedPayload = z
+  .object({
+    integration: MergeIntegrationMode,
+    /** The culprit spec routed back to the writer to fix the integrated-tree gate failure. */
+    specId: z.string(),
+    /** The run id whose work failed the integrated gate (the run being re-authored). */
+    runId: z.string(),
+    prNumber: z.number().int(),
+    /** Whether a fresh rework run was enqueued, or the bounded budget escalated to needs_attention. */
+    disposition: z.enum(["reworked", "escalated"]),
+    /** The batch gate's failing tier/step/output — the steering the writer re-authors against. */
+    gateError: z.string(),
+    /** How many prior gate-reworks this spec had before this routing (the bounded-budget count). */
+    priorReworks: z.number().int().nonnegative(),
+  })
+  .strict();

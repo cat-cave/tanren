@@ -20,6 +20,7 @@ import type { MergeCoordinator } from "../contracts/mergeCoordinator.js";
 import { PgBatchChecker } from "./batchChecker.js";
 import { BatchMergeCoordinator } from "./batchCoordinator.js";
 import { PgBatchMergeEventEmitter } from "./batchCoordinatorPg.js";
+import { PgBatchGateReworkRouter } from "./batchGateReworkRouter.js";
 import { PgSpecEscalator } from "./coordinatorEscalate.js";
 import { type BuildMergeCoordinatorDeps, buildDriveMerge } from "./coordinatorBuild.js";
 import { PgMergeQueueEventEmitter } from "./coordinatorEvents.js";
@@ -87,6 +88,15 @@ export function buildBatchMergeCoordinator(deps: BuildMergeCoordinatorDeps): Mer
     // The §2c non-bricking conflict escalator (parks an irreconcilable spec at
     // needs_attention) — REUSED verbatim from the native queue, plane-split-safe via the writer.
     escalator: new PgSpecEscalator(deps.pool, deps.runStateWriter),
+    // The batch-gate-fail self-heal (v35 — the strand fix): a GATE-fail bisect culprit
+    // (code that passed its own branch gates but breaks integrated) is routed back to the
+    // WRITER for rework carrying the gate error as steering, REUSING the never-discard
+    // re-plan-with-steering enqueuer + bounded by its own budget — DISTINCT from the
+    // conflict-replan route. Plane-split-safe via the writer.
+    gateRework: new PgBatchGateReworkRouter({
+      pool: deps.pool,
+      ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
+    }),
     // Audit RC-7: the DURABLE backing store for both runaway-guard ceilings (per-project
     // consecutive-infra-hold streak + per-entry recoverable-drive attempts), so the counters
     // survive a rolling deploy / crash-loop instead of resetting in a process-local Map.

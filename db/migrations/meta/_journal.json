@@ -57,6 +57,13 @@
       "when": 1781604969198,
       "tag": "0007_github_pr_no_commits_event",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1781634151824,
+      "tag": "0008_merge_batch_gate_rework_event",
+      "breakpoints": true
     }
   ]
 }

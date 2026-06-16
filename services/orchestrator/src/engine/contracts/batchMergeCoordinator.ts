@@ -217,6 +217,47 @@ export async function bisectCulprit(
   return { culpritIndex: lo, culprit, innocentPrefix: batch.slice(0, lo), checks };
 }
 
+// ---- The batch-gate rework router (the integrated-tree gate-fail self-heal) ----
+
+/**
+ * Routes a GATE-FAIL batch-check culprit back to the WRITER for rework (v35 — the
+ * batch-gate-fail-strand fix). When the batch check's GATE/CI fails on the PROSPECTIVE
+ * MERGED state and the bisect isolates ONE culprit PR, that culprit authored work that
+ * passed its OWN per-iteration + pre-merge branch gates but breaks ONLY when integrated
+ * (e.g. a config file not covered by the integrated tsconfig). Dequeuing it without
+ * re-work STRANDS the spec — it can never fix an integration-only failure it cannot see,
+ * and the build can never converge (downstream specs cascade-block on it).
+ *
+ * This seam re-authors the culprit on the SAME never-discard re-plan-with-steering
+ * mechanism a conflict-replan uses, but carrying the BATCH GATE'S failing tier/step/
+ * output as steering so the writer fixes the RIGHT thing (no_silent_fallback — never
+ * rework blind). It is DISTINCT from {@link ReplanRouter}: a batch CONFLICT (spec-vs-spec
+ * or spec-vs-base) still routes to the conflict resolver / replan; a batch GATE-FAIL
+ * routes HERE to writer rework. A culprit is handled by exactly ONE of the two.
+ *
+ * BOUNDED: a spec re-worked the cap number of times for the SAME batch-gate failure that
+ * STILL fails the integrated gate is genuinely stuck — the impl ESCALATES it as a loud
+ * `needs_attention` (persistent_failure) instead of re-working forever (never a strand,
+ * never a hot-loop).
+ */
+export interface BatchGateReworkRouter {
+  /**
+   * Re-author the culprit spec to fix the integrated-tree GATE failure, carrying the
+   * batch gate's failing tier/step/output as steering. Returns the disposition so the
+   * coordinator settles the OLD queue entry correctly:
+   *   - `reworked`  — a fresh writer-rework run was enqueued (the spec re-drives + re-queues);
+   *   - `escalated` — the bounded rework budget is exhausted → parked `needs_attention`.
+   * Either way the old queue entry is retired (the re-authored run produces a fresh one).
+   */
+  routeGateFailToRework(input: {
+    projectId: string;
+    /** The culprit entry bisect isolated (carries the run/spec/PR handles). */
+    culprit: MergeQueueEntry;
+    /** The batch gate's failure detail (tier/step/output) — the steering the writer fixes against. */
+    gateError: string;
+  }): Promise<"reworked" | "escalated">;
+}
+
 // ---- Seams ----------------------------------------------------------------
 
 /** The outcome of speculatively integrating + CI-checking a set of entries. */
