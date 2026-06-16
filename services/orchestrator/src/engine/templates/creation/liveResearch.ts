@@ -28,6 +28,7 @@ import {
   forgeAllocatingAnswererAdapter,
 } from "../../forge/providerFactory.js";
 import type { AnswererAdapter } from "../../providers/types.js";
+import { type AnswererRetryOptions, withAnswererRetry } from "./answererRetry.js";
 import { ResearchOutput } from "./researchSchema.js";
 import type { TemplateCreationRequest, TemplateResearch, TemplateResearcher } from "./research.js";
 
@@ -35,13 +36,23 @@ import type { TemplateCreationRequest, TemplateResearch, TemplateResearcher } fr
 // interview/audit answerer naming convention).
 const RESEARCH_SCHEMA_NAME = "tanren.template_research.v1";
 
-// The default per-call ceiling: template research reads several web sources and
-// reasons over them — the same budget the brownfield recon / audit answerers take.
-const DEFAULT_RESEARCH_TIMEOUT_MS = 180_000;
+// The default per-call HANG bound: template research reads several web sources and
+// reasons over them. This is the hang-detector, NOT a terminal verdict — codex
+// latency is variable and a slow-but-working call legitimately takes minutes (live:
+// 168-282s observed). The prior 180s ceiling fast-killed a healthy-just-slow call;
+// 300s clears that real latency ceiling with headroom while still bounding a genuine
+// hang. A call that exceeds even this is RETRIED (withAnswererRetry), not terminal.
+const DEFAULT_RESEARCH_TIMEOUT_MS = 300_000;
 
 export interface WrapProviderResearcherOptions {
-  // Bounds the one research model call. Defaults to 180s.
+  // Bounds the one research model call (the per-call HANG detector). Defaults to 300s.
   timeoutMs?: number;
+  // Transient-failure retry policy for the (pre-build, synchronous) research answerer
+  // call. A timeout / transient transport / network blip RETRIES (bounded + backoff)
+  // instead of failing the whole derive; only a persistent failure surfaces loud.
+  // Tests inject a no-op `sleep` so the bounded retries run instantly. Defaults to
+  // the 4-attempt recoverable curve (withAnswererRetry).
+  retry?: AnswererRetryOptions;
 }
 
 // Render the research brief the model researches against. Capability-shaped: the
@@ -121,15 +132,24 @@ export function wrapProviderResearcher(
   const jsonSchema = renderAnswererJsonSchema(ResearchOutput);
   return {
     async research(request: TemplateCreationRequest): Promise<TemplateResearch> {
-      const output = await adapter.runAnswerer({
-        prompt: buildResearchPrompt(request),
-        timeoutMs: options.timeoutMs ?? DEFAULT_RESEARCH_TIMEOUT_MS,
-        outputSchema: {
-          name: RESEARCH_SCHEMA_NAME,
-          jsonSchema,
-          parse: (value) => ResearchOutput.parse(value),
-        },
-      });
+      // RETRY the (pre-build, synchronous) research answerer call on a TRANSIENT
+      // failure — a per-call timeout, a 5xx/network blip, a transient transport
+      // error. A slow codex call that trips the hang bound retries (and usually
+      // succeeds, the latency being variable) instead of fast-failing the whole
+      // derive; only a PERSISTENT failure across the bounded retries surfaces loud.
+      const output = await withAnswererRetry(
+        () =>
+          adapter.runAnswerer({
+            prompt: buildResearchPrompt(request),
+            timeoutMs: options.timeoutMs ?? DEFAULT_RESEARCH_TIMEOUT_MS,
+            outputSchema: {
+              name: RESEARCH_SCHEMA_NAME,
+              jsonSchema,
+              parse: (value) => ResearchOutput.parse(value),
+            },
+          }),
+        options.retry,
+      );
       return researchFromOutput(output);
     },
   };

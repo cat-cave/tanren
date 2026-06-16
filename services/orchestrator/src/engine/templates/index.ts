@@ -70,6 +70,13 @@ export {
   // Wave-4 LIVE seam impls (research + build-driver) — the real, mountable capability.
   buildTemplateResearcher,
   wrapProviderResearcher,
+  // Transient-tolerant retry for the pre-build creation answerer calls (research →
+  // author): a timeout / transient transport blip RETRIES (bounded + backoff)
+  // instead of failing the whole derive; a persistent failure fails loud after the bound.
+  withAnswererRetry,
+  isTransientAnswererError,
+  DEFAULT_ANSWERER_MAX_ATTEMPTS,
+  type AnswererRetryOptions,
   buildRunLoopBuildDriver,
   resolveConvergedProjectFacts,
   buildTemplateAuditor,
