@@ -27,6 +27,7 @@ import { PgConflictProvenanceReader } from "./provenance.js";
 import { PgProductVisionReader } from "./productVision.js";
 import { RunPathResolvedTreeReGate } from "./reGate.js";
 import { SpecStatusReplanRouter } from "./replanRouter.js";
+import { buildPriorReplanCounter, buildReplanEnqueuer } from "./replanEnqueuerPg.js";
 import { buildIntentPreservingConflictResolver, type EntityMergeFirstPassHook } from "./resolver.js";
 
 /** A pool or a checked-out (org-scoped) client — the run's already-scoped client. */
@@ -130,6 +131,11 @@ export function buildDefaultConflictResolver(deps: DefaultConflictResolverDeps):
       acceptanceCriteria: deps.acceptanceCriteria,
       baseSha: deps.baseSha,
     }),
+    // v35 NEVER-STALL: the replan router ENQUEUES a fresh re-plan run + emits the
+    // observable `recovery.replan_queued` (carrying the replanRunId) + is BOUNDED by the
+    // prior-replan count — so a routed replan ACTUALLY RUNS, never strands the spec
+    // `in_flight` with no live run. Uniform across BOTH replan routes (this drive/in-loop
+    // path + the base-shift coordinator's `recordReplanContext`).
     replan: new SpecStatusReplanRouter({
       pool: deps.pool,
       ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
@@ -137,6 +143,12 @@ export function buildDefaultConflictResolver(deps: DefaultConflictResolverDeps):
       eventStore: deps.eventStore,
       runId: deps.runId,
       projectId: deps.projectId,
+      // The enqueuer + counter open their OWN connections (the run-create + the
+      // events-count read), so they need a real pool — every call site passes one (the
+      // `QueryClient` static type is for the in-loop query ergonomics; the same cast the
+      // budget gate uses for `deps.pool`).
+      enqueuer: buildReplanEnqueuer(deps.pool as pg.Pool, deps.runStateWriter),
+      priorReplans: buildPriorReplanCounter(deps.pool as pg.Pool),
     }),
     ...(deps.upstreamChange !== undefined && { upstreamChange: deps.upstreamChange }),
   });

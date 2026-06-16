@@ -1,0 +1,84 @@
+// The PRODUCTION wirings of the replan router's never-discard seams (v35 — the
+// replan-routed-but-never-executed stall fix). The `SpecStatusReplanRouter` is the
+// single chokepoint both the base-shift coordinator and the change-percolation settler
+// reach (via `recordReplanContext`) when an in-place rebase cannot be re-gated onto the
+// shifted base. It used to only flip the spec's status + append an event — so the spec
+// sat `in_flight` with NO live run forever. These seams make a routed replan actually
+// RUN: a fresh re-plan run is ENQUEUED (the spec's work re-authored on the new base),
+// and the prior-replan count is read so the routing is BOUNDED (no hot-loop).
+//
+// Both seams reuse the EXACT mechanisms the recovery `replan_with_steering` action and
+// the DagWalker enqueue already use — re-open the spec to `open`, append the replan
+// context as steering, then `createQueuedRunFromSpec` (in-process) or the control-plane
+// `RunStateWriter.createQueuedRun`. The re-open + steering UPDATEs COMMIT in their own
+// short org-scoped txn BEFORE the run-create (which opens its own connection and claims
+// the now-`open` spec) reads them — the same ordering `replanWithSteering` documents.
+
+import { getSystemPool, runWithOrgScope } from "@tanren/db";
+import type pg from "pg";
+import type { ActorContext } from "../../../../auth/schemas.js";
+import type { RunStateWriter } from "../../../contracts/runStateWriter.js";
+import { RecoveryStore } from "../../../repositories/recovery.js";
+import { systemActor } from "../../../state/actor.js";
+import { createQueuedRunFromSpec } from "../../projectSpec.js";
+import type { PriorReplanCounter, ReplanEnqueuer } from "./replanRouter.js";
+
+/**
+ * The production replan enqueuer: re-open the spec to the re-drivable status + append
+ * the replan context as steering (one short org-scoped txn that COMMITS first), then
+ * enqueue a fresh re-plan run. Routes the run-create through the control plane when a
+ * writer is wired, else `createQueuedRunFromSpec` in-process (the same dual path the
+ * DagWalker enqueuer uses). Returns the new run id (the observable `replanRunId`).
+ */
+export function buildReplanEnqueuer(pool: pg.Pool, runStateWriter?: RunStateWriter): ReplanEnqueuer {
+  return {
+    async enqueue(input) {
+      // (1) Re-open + steer in their OWN short org-scoped txn so they COMMIT before the
+      //     run-create's separate-connection claim reads the now-`open` spec.
+      await runWithOrgScope(pool, input.orgId, async (client) => {
+        await RecoveryStore.appendSteeringToSpec(client, input.specId, input.steeringNote, systemActor);
+        await client.query(`UPDATE specs SET status = $2 WHERE spec_id = $1 AND status <> 'merged'`, [
+          input.specId,
+          input.reopenStatus,
+        ]);
+      });
+      // (2) Enqueue the re-plan run — the never-discard re-author on the new base.
+      const actor: ActorContext = {
+        userId: "replan-router",
+        orgId: input.orgId,
+        projectId: input.projectId,
+        scopes: ["platform:admin"],
+        source: "local_dev",
+      };
+      const createInput = { specId: input.specId, trigger: "replan_routed" };
+      const run =
+        runStateWriter === undefined
+          ? await createQueuedRunFromSpec(pool, createInput, actor)
+          : await runStateWriter.createQueuedRun({ input: createInput, actor });
+      return { replanRunId: run.runId, plannerTaskId: run.plannerTaskId };
+    },
+  };
+}
+
+/**
+ * The production prior-replan counter (the bounded-replan budget): count the spec's prior
+ * `merge.conflict.replan_routed` events. The `events` table is unreadable to the
+ * de-privileged data-plane role (0031 REVOKE), so read on the BYPASSRLS system pool with
+ * the org GUC still applied on top (the same hop the drive-path replan cap uses).
+ */
+export function buildPriorReplanCounter(pool: pg.Pool): PriorReplanCounter {
+  return {
+    async count(input) {
+      const readPool = getSystemPool() ?? pool;
+      return runWithOrgScope(readPool, input.orgId, async (client) => {
+        const result = await client.query<{ count: string }>(
+          `SELECT count(*)::text AS count
+             FROM events
+            WHERE spec_id = $1 AND event_type = 'merge.conflict.replan_routed'`,
+          [input.specId],
+        );
+        return Number(result.rows[0]?.count ?? "0");
+      });
+    },
+  };
+}
