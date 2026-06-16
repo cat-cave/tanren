@@ -27,6 +27,10 @@ export const specLoopStageSensitivityRules: SensitivityRule[] = [
     ["findings[].title", "public"],
     ["findings[].body", "public"],
     ["findings[].behaviorId", "public"],
+    // EMPTY-INCREMENTAL-DIFF (v35): the deterministic empty-`baselineSha → HEAD`-diff
+    // fact — product-quality narration (an empty-diff accept / non-reworkable reject is
+    // auditable), never a secret.
+    ["emptyIncrementalDiff", "public"],
   ]),
   // §3.1: the deterministic entity-change risk signal — all structural metadata
   // (class / provenance / counts / rationale), product-quality narration, no secret.

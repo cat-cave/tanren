@@ -145,6 +145,22 @@ async function runOneSubtask(args: {
     if (decision.kind === "pass") {
       return { kind: "complete" };
     }
+    // EMPTY-INCREMENTAL-DIFF (v35): a reject over an EMPTY `baselineSha → HEAD` diff is
+    // NOT reworkable — re-driving the writer is futile (it correctly adds nothing → the
+    // diff stays empty → the same finding → the infinite rework loop that false-escalated
+    // `persistent_failure` on a re-driven, already-complete scaffold). Surface the
+    // residual finding straight to triage/convergence INSTEAD of re-entering the writer.
+    if (!decision.reworkable) {
+      return {
+        kind: "incomplete",
+        finding: {
+          id: `task-incomplete-${subtask.index}`,
+          severity: "P0",
+          title: `Subtask ${subtask.index} reported incomplete with no incremental change to grow`,
+          body: decision.reason,
+        },
+      };
+    }
     lastReason = decision.reason;
   }
   // The per-task writer-iteration bound is spent and the task is still incomplete: NOT

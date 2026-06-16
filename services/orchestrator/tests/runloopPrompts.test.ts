@@ -211,9 +211,11 @@ describe("buildCheckerPrompt — full rendered contract", () => {
 
   it("separates each block with a blank line (separator pins)", () => {
     const prompt = buildCheckerPrompt(ctx);
-    // The self-inspection block now ends with the optional sem-accelerator's
-    // fallback line (entity-analysis-layer §2.2), then the Hard-boundaries block.
-    expect(prompt).toContain("Never block or change your verdict because `sem` is unavailable.\n\nHard boundaries");
+    // The self-inspection block ends with the optional sem-accelerator's fallback
+    // line (entity-analysis-layer §2.2), then the EMPTY-DIFF rule block (v35), then
+    // the Hard-boundaries block.
+    expect(prompt).toContain("Never block or change your verdict because `sem` is unavailable.\n\nEMPTY-DIFF RULE:");
+    expect(prompt).toContain("emit an EMPTY findings list (the task is complete).\n\nHard boundaries");
     expect(prompt).toContain(
       "such a test would exercise.\n\nReturn only the structured JSON required by the provided schema.",
     );

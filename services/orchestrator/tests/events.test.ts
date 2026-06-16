@@ -25,6 +25,7 @@ describe("typed event store", () => {
         reasoning: "criteria satisfied",
         behaviorIdsFailed: [],
         findings: [],
+        emptyIncrementalDiff: false,
       },
     });
     expect(store.events).toHaveLength(2);

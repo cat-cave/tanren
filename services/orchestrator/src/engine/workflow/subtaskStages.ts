@@ -424,10 +424,20 @@ export async function runCheckerStage(args: CheckerStageInput): Promise<CheckerD
     runId: args.runId,
     subtaskIndex: args.subtask.index,
   });
+  // EMPTY-INCREMENTAL-DIFF (v35): the entity-risk oracle is the deterministic host-side
+  // witness of whether `baselineSha → HEAD` actually changed anything. A `classified`
+  // signal (the producer ran) with ZERO changed entities means the incremental diff is
+  // empty — the re-driven-complete-spec / scaffold-is-the-seed case. We DON'T trust a
+  // bare `unknown` (no producer / can't-parse) as "empty": that would let an unwired
+  // oracle silently relabel any diff as empty. Only a real `classified` empty diff
+  // counts. This flag NEVER forces a reject or fabricates an accept — it only stops the
+  // loop from re-driving the writer over a diff that cannot grow (see decideCheckerOutcome).
+  const emptyIncrementalDiff = riskSignal.provenance === "classified" && riskSignal.counts.total === 0;
+
   // SPEC-LOOP REDESIGN: the checker is completeness-FINDINGS-only. `complete` is the
   // deterministic loop's read (no findings ⇒ task-complete for downstream needs); the
   // findings + reasoning are the narration. `decideCheckerOutcome` is the SAME read.
-  const decision = decideCheckerOutcome(result.verdict);
+  const decision = decideCheckerOutcome(result.verdict, emptyIncrementalDiff);
   await args.appendEvent(
     "checker.verdict",
     {
@@ -443,6 +453,7 @@ export async function runCheckerStage(args: CheckerStageInput): Promise<CheckerD
         body: f.body,
         behaviorId: f.behaviorId ?? null,
       })),
+      emptyIncrementalDiff,
     },
     args.checkerTaskId,
   );
