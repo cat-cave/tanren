@@ -26,7 +26,8 @@ import type { RunnerHandle } from "../contracts/allocator.js";
 import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import { runGateForWhen } from "../workflow/gate/runGateForWhen.js";
 import type { GateAppendEvent } from "../workflow/gate/runGateTier.js";
-import { miseProvisionCommand, withMiseActivation } from "../ssh/miseActivate.js";
+import { withMiseActivation } from "../ssh/miseActivate.js";
+import { DEFAULT_BOOTSTRAP_COMMAND, ensureWorkspaceDepsInstalled } from "../workspace/index.js";
 import { type NegativeControlResult, type TemplateValidationProof } from "./manifest.js";
 import { type GateInvocation, type NegativeControl } from "./negativeControls.js";
 import { createScratchCopy, removeScratchCopy, type ScratchCopyDeps, writeDefectFiles } from "./scratchCopy.js";
@@ -110,24 +111,30 @@ export async function runValidationHarness(input: ValidationHarnessInput): Promi
 // any point fails the positive controls (short-circuits — later steps are pointless
 // over a tree that won't bootstrap/gate clean).
 async function runPositiveControls(input: ValidationHarnessInput, appendEvent: GateAppendEvent): Promise<boolean> {
-  // `just bootstrap` (or whatever the config declares) FIRST — the tiers depend on a
-  // bootstrapped tree. A template that declares no bootstrap skips this (the tiers
-  // then carry their own setup), never a silent assumption.
-  const bootstrap = bootstrapCommand(input.config);
-  if (bootstrap !== undefined) {
-    // TOOLCHAIN PROVISION + ACTIVATION (environment-management.md §3): provision the
-    // template's declared toolchain (`mise trust && mise install` when a `mise.toml` is
-    // present, else a no-op) THEN run its bootstrap mise-activated, so a bare
-    // `pnpm`/`node` resolves to the template's declared versions. PROJECT path — the
-    // template's commands, not Tanren's harness.
-    const result = await input.ssh.run(input.target, {
-      command: `set -e; ${miseProvisionCommand()} && { ${withMiseActivation(bootstrap)}; }`,
-      cwd: input.workspacePath,
+  // DEPS-BEFORE-GATE (apex v35): install the template's deps FIRST — the tiers depend on
+  // a bootstrapped tree, and a writer-authored `just tier-2` invokes
+  // `./node_modules/.bin/<tool>` which is `command not found` (exit 127) until
+  // `node_modules` exists. This MUST run unconditionally: when the template's
+  // `.tanren/ci.yml` omits `bootstrap.run`, the OLD `if (bootstrap !== undefined)` skip
+  // left the tiers running over an UNINSTALLED tree. We delegate to the shared
+  // `ensureWorkspaceDepsInstalled` — the SAME deps-install the run-loop gate (#562) and
+  // the batch/fresh-runner re-gates use — so the stack-agnostic `DEFAULT_BOOTSTRAP_COMMAND`
+  // (`just bootstrap` if a justfile is present, else a loud failure) is the fallback when
+  // no explicit `bootstrap.run` is declared, mise toolchain provision runs first, and the
+  // contract-gated guard makes a contract-less tree a cheap no-op. A nonzero exit / timeout
+  // throws `WorkspaceDepsInstallError`, which fails the positive controls (never a silent
+  // green-by-accident gate over a tree that couldn't install).
+  const explicitBootstrap = bootstrapCommand(input.config);
+  try {
+    await ensureWorkspaceDepsInstalled({
+      ssh: input.ssh,
+      target: input.target,
+      workspacePath: input.workspacePath,
+      command: explicitBootstrap ?? DEFAULT_BOOTSTRAP_COMMAND,
       timeoutMs: input.timeoutMs,
     });
-    if (result.failure !== undefined || result.timedOut || result.exitCode !== 0) {
-      return false;
-    }
+  } catch {
+    return false;
   }
   // Every lifecycle point's tiers must pass. We iterate the three points so a tier
   // mapped to any of them is exercised (a template declares tier-1/2/3 across

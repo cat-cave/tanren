@@ -31,7 +31,7 @@ import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import type { GitHubHttpClient } from "../providers/github.js";
-import type { CiWhen } from "../ci/index.js";
+import { bootstrapCommand, type CiWhen } from "../ci/index.js";
 import type { EventStore } from "../eventStore.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
 import {
@@ -46,6 +46,8 @@ import { buildEffectiveRouting } from "../worker/runExecutionContext.js";
 import { orgScopeFromRunOrgId, resolveCredentialsForRun } from "../credentials/resolveCredentials.js";
 import {
   advisoryStepNamesForPosture,
+  DEFAULT_BOOTSTRAP_COMMAND,
+  ensureWorkspaceDepsInstalled,
   type GateOutcome,
   resolveGateConfig,
   runGateForWhen,
@@ -434,6 +436,23 @@ function buildDriveGate(
       });
     }
     const config = await configPromise;
+    // DEPS-BEFORE-GATE (apex v35): install deps on the freshly-cloned drive workspace
+    // BEFORE the tiers run — a re-gate over a clone has no `node_modules`, so a writer's
+    // `./node_modules/.bin/<tool>` tier step is `command not found` (exit 127) until the
+    // project's `just bootstrap` runs. Mirrors the fresh-runner / batch re-gate: the
+    // explicit `.tanren/ci.yml` `bootstrap.run` wins, else the stack-agnostic
+    // `DEFAULT_BOOTSTRAP_COMMAND` LOUD-fallback. A failure throws (no silent skip), which
+    // the resolver surfaces as a re-gate failure (fail-closed, never an unverified pass).
+    await ensureWorkspaceDepsInstalled({
+      ssh: deps.ssh,
+      target,
+      workspacePath,
+      // The bootstrap command from the already-parsed config (no second `.tanren/ci.yml`
+      // read), or — when the config omits `bootstrap.run` — the stack-agnostic
+      // DEFAULT_BOOTSTRAP_COMMAND LOUD-fallback.
+      command: bootstrapCommand(config) ?? DEFAULT_BOOTSTRAP_COMMAND,
+      timeoutMs: deps.timeoutMs,
+    });
     return runGateForWhen({
       ssh: deps.ssh,
       target,

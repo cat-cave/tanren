@@ -13,9 +13,15 @@
 // the runner loudly; the applier owns release on its terminal publish/abort thereafter.
 
 import { runWithJobOrgId } from "@tanren/db";
-import type { CiWhen } from "../ci/index.js";
+import { bootstrapCommand, type CiWhen } from "../ci/index.js";
 import type { GateOutcome } from "../workflow/gate/index.js";
-import { advisoryStepNamesForPosture, resolveGateConfig, runGateForWhen } from "../workflow/gate/index.js";
+import {
+  advisoryStepNamesForPosture,
+  DEFAULT_BOOTSTRAP_COMMAND,
+  ensureWorkspaceDepsInstalled,
+  resolveGateConfig,
+  runGateForWhen,
+} from "../workflow/gate/index.js";
 import type { RunnerHandle } from "../contracts/allocator.js";
 import type { WorkspaceHandle } from "../contracts/workspaceVcsCore.js";
 import { buildAdaptersFromRouting } from "../providers/adapterSelector.js";
@@ -291,6 +297,23 @@ function buildBaseShiftReGate(
       configPromise = resolveGateConfig({ ssh: deps.ssh, target, workspacePath, timeoutMs });
     }
     const config = await configPromise;
+    // DEPS-BEFORE-GATE (apex v35): install deps on the base-shift resolver's live jj
+    // workspace BEFORE the tiers run. The jj-resolved tree has no `node_modules`, so a
+    // writer's `./node_modules/.bin/<tool>` tier step is `command not found` (exit 127)
+    // until the project's `just bootstrap` runs. Mirrors the drive / fresh-runner re-gate:
+    // explicit `.tanren/ci.yml` `bootstrap.run` wins, else the stack-agnostic
+    // `DEFAULT_BOOTSTRAP_COMMAND` LOUD-fallback. A failure throws (no silent skip), which
+    // the resolver surfaces as a fail-closed re-gate failure (never an unverified pass).
+    await ensureWorkspaceDepsInstalled({
+      ssh: deps.ssh,
+      target,
+      workspacePath,
+      // The bootstrap command from the already-parsed config (no second `.tanren/ci.yml`
+      // read), or — when the config omits `bootstrap.run` — the stack-agnostic
+      // DEFAULT_BOOTSTRAP_COMMAND LOUD-fallback.
+      command: bootstrapCommand(config) ?? DEFAULT_BOOTSTRAP_COMMAND,
+      timeoutMs,
+    });
     return runGateForWhen({
       ssh: deps.ssh,
       target,
