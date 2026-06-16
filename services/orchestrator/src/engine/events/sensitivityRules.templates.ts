@@ -62,22 +62,20 @@ export const templatesSensitivityRules: SensitivityRule[] = [
     ["reason", "public"],
   ]),
   // template.build.recovered: the auto-requeue of a stranded build (spec ids + the
-  // bounded attempt number + the progress signal — all non-secret descriptors).
+  // observable attempt number + the progress signal — all non-secret descriptors).
   ...rulesFor("template.build.recovered", [
     ["orgId", "public"],
     ["stack", "public"],
     ["requeuedSpecIds[]", "public"],
     ["attempt", "public"],
-    ["maxAttempts", "public"],
     ["mergedCount", "public"],
     ["strandedSpecIds[]", "public"],
   ]),
-  // template.build.recovery_exhausted: the loud terminal failure after the cap.
+  // template.build.recovery_exhausted: the loud terminal failure at the fixed point.
   ...rulesFor("template.build.recovery_exhausted", [
     ["orgId", "public"],
     ["stack", "public"],
     ["requeuedSpecIds[]", "public"],
-    ["maxAttempts", "public"],
     ["mergedCount", "public"],
     ["strandedSpecIds[]", "public"],
   ]),

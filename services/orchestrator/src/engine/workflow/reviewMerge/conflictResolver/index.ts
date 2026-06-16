@@ -27,7 +27,7 @@ import { PgConflictProvenanceReader } from "./provenance.js";
 import { PgProductVisionReader } from "./productVision.js";
 import { RunPathResolvedTreeReGate } from "./reGate.js";
 import { SpecStatusReplanRouter } from "./replanRouter.js";
-import { buildPriorReplanCounter, buildReplanEnqueuer } from "./replanEnqueuerPg.js";
+import { buildPriorReplanReader, buildReplanEnqueuer } from "./replanEnqueuerPg.js";
 import { buildIntentPreservingConflictResolver, type EntityMergeFirstPassHook } from "./resolver.js";
 
 /** A pool or a checked-out (org-scoped) client — the run's already-scoped client. */
@@ -148,7 +148,7 @@ export function buildDefaultConflictResolver(deps: DefaultConflictResolverDeps):
       // `QueryClient` static type is for the in-loop query ergonomics; the same cast the
       // budget gate uses for `deps.pool`).
       enqueuer: buildReplanEnqueuer(deps.pool as pg.Pool, deps.runStateWriter),
-      priorReplans: buildPriorReplanCounter(deps.pool as pg.Pool),
+      priorReplans: buildPriorReplanReader(deps.pool as pg.Pool),
     }),
     ...(deps.upstreamChange !== undefined && { upstreamChange: deps.upstreamChange }),
   });

@@ -23,15 +23,13 @@ import { RoleId, type RoutingTable } from "./shared.js";
 // Bucket-B detection
 // --------------------------------------------------------------------------
 
-// Bucket-B = the config a routing change touches: per-role fallback chains and
-// the escape-hatch limits. A write that only flips the gate toggle / repo
-// target / notification refs is NOT Bucket-B and is never gated (otherwise you
-// could never turn the gate off without a PR).
+// Bucket-B = the config a routing change touches: per-role fallback chains. A
+// write that only flips the gate toggle / repo target / notification refs is NOT
+// Bucket-B and is never gated (otherwise you could never turn the gate off
+// without a PR). (The escape-hatch limits that once also lived here are gone —
+// apex v35: there are no hardcoded attempt caps to configure.)
 export function isBucketBChange(prev: OrgConfigV1, next: OrgConfigV1): boolean {
-  return (
-    JSON.stringify(next.routing) !== JSON.stringify(prev.routing) ||
-    JSON.stringify(next.escapeHatches) !== JSON.stringify(prev.escapeHatches)
-  );
+  return JSON.stringify(next.routing) !== JSON.stringify(prev.routing);
 }
 
 // --------------------------------------------------------------------------
@@ -65,22 +63,12 @@ function routingLines(routing: RoutingTable): string[] {
   return lines;
 }
 
-function limitLines(hatches: OrgConfigV1["escapeHatches"]): string[] {
-  return [
-    "[limits]",
-    `  max_writer_iter = ${hatches.maxWriterIterPerSubtask}`,
-    `  max_transient_retries = ${hatches.maxRetriesPerTransientFailure}`,
-  ];
-}
-
 /** Render a config as the canonical `tanren.yaml` text the PR commits. */
 export function renderTanrenYaml(config: OrgConfigV1): string {
   return [
     "# tanren.yaml · org config (managed by tanren-config audit gate)",
     "",
     ...routingLines(config.routing),
-    "",
-    ...limitLines(config.escapeHatches),
     "",
   ].join("\n");
 }
@@ -165,17 +153,14 @@ export interface ConfigGateGitHub {
   }): Promise<GateConfigPullRequest>;
 }
 
-export function buildConfigPrTitle(prev: OrgConfigV1, next: OrgConfigV1): string {
-  if (JSON.stringify(next.routing) !== JSON.stringify(prev.routing)) {
-    return "config: update role routing";
-  }
-  return "config: update escape-hatch limits";
+export function buildConfigPrTitle(_prev: OrgConfigV1, _next: OrgConfigV1): string {
+  // Routing is the only Bucket-B (gated) config now that the escape-hatch limits are gone.
+  return "config: update role routing";
 }
 
 /** Slugify a head-branch suffix from the change (stable, lowercase, ascii). */
-function changeSlug(prev: OrgConfigV1, next: OrgConfigV1): string {
-  const base = JSON.stringify(next.routing) === JSON.stringify(prev.routing) ? "limits" : "route";
-  return `${base}-${Date.now().toString(36)}`;
+function changeSlug(_prev: OrgConfigV1, _next: OrgConfigV1): string {
+  return `route-${Date.now().toString(36)}`;
 }
 
 // --------------------------------------------------------------------------

@@ -17,7 +17,7 @@
  *   POST /projects/:projectId/insights/act             subopt callout action
  *   GET  /settings/routing                             routing & limits (active project)
  *   GET  /settings/routing/:projectId                  routing & limits (explicit project)
- *   POST /settings/routing/:projectId/add|remove|reorder|hatches  config mutations
+ *   POST /settings/routing/:projectId/add|remove|reorder          routing mutations
  *   POST /settings/routing/:projectId/credentials                 bind codex+github refs
  */
 
@@ -25,13 +25,7 @@ import type { Context, Hono } from "hono";
 import { formField } from "../formField.js";
 import { OrchestratorClient } from "../../api/orchestrator.js";
 import { getProjectDag } from "../../api/projectDag.js";
-import {
-  ROLE_IDS,
-  type EscapeHatches,
-  type ProjectConfig,
-  type RoleId,
-  type RoutingChainEntry,
-} from "../../api/types.js";
+import { ROLE_IDS, type ProjectConfig, type RoleId, type RoutingChainEntry } from "../../api/types.js";
 import { loadShellContext, renderShell, type ShellDeps } from "../../app/mountShell.js";
 import { ProjectDagBody } from "../../components/project/ProjectDagBody.js";
 import { ProjectViewBody } from "../../components/project/ProjectViewBody.js";
@@ -307,7 +301,7 @@ function mountRoutingSettingsScreens(app: Hono, deps: ShellDeps): void {
       client.listOrgCredentials(ctx.org.id),
       client.getOrg(ctx.org.id),
     ]);
-    const { routing, escapeHatches } = resolveConfig(detail?.config);
+    const { routing } = resolveConfig(detail?.config);
     const boundCredentials = detail?.config?.credentials ?? {};
     const saved = c.req.query("saved") === "1";
     // surface the org audit-gate state so the toggle reflects reality.
@@ -319,7 +313,6 @@ function mountRoutingSettingsScreens(app: Hono, deps: ShellDeps): void {
       <SettingsBody
         project={ctx.project}
         routing={routing}
-        escapeHatches={escapeHatches}
         orgId={ctx.org.id}
         auditGate={auditGate}
         auditGateRepo={org?.config.auditGate?.repo}
@@ -412,30 +405,12 @@ function mountRoutingSettingsScreens(app: Hono, deps: ShellDeps): void {
     });
     return c.redirect(`/settings/routing/${projectId}?saved=1`);
   });
-
-  app.post("/settings/routing/:projectId/hatches", async (c) => {
-    const projectId = c.req.param("projectId");
-    const form = await c.req.parseBody();
-    const orgId = formField(form, "orgId");
-    await mutateConfig(c, deps, orgId, projectId, (config) => {
-      const next: Partial<EscapeHatches> = { ...config.escapeHatches };
-      for (const field of ["maxWriterIterPerSubtask", "maxRetriesPerTransientFailure"] as const) {
-        const raw = form[field];
-        if (raw !== undefined) {
-          const parsed = Number(raw);
-          if (Number.isFinite(parsed) && parsed >= 0) next[field] = Math.floor(parsed);
-        }
-      }
-      config.escapeHatches = next;
-    });
-    return c.redirect(`/settings/routing/${projectId}?saved=1`);
-  });
 }
 
 /**
  * Load the merged config, apply `edit` to a working copy, PATCH it back. The
- * working copy is built from a defaulted routing table + escape hatches so the
- * PATCH always sends a complete, schema-valid config (/).
+ * working copy is built from a defaulted routing table so the PATCH always sends
+ * a complete, schema-valid config.
  */
 async function mutateConfig(
   c: Context,
@@ -452,11 +427,9 @@ async function mutateConfig(
     ...(detail?.config ?? {
       version: 1,
       routing: resolved.routing,
-      escapeHatches: resolved.escapeHatches,
     }),
     version: 1,
     routing: resolved.routing,
-    escapeHatches: resolved.escapeHatches,
   };
   edit(working);
   await client.patchProjectConfig(orgId, projectId, working);

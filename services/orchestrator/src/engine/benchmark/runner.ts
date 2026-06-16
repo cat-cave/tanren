@@ -310,15 +310,14 @@ function acceptGreenFlag(merged: boolean, acceptResult: AcceptResult | null): bo
 
 /** Apply the cell's frozen config as the trial's project config (the §3.1 freeze). */
 export function projectConfigFromFrozen(frozen: FrozenConfig): Record<string, unknown> {
-  // FrozenConfig pins routing × escape-hatches × ci-tier snapshot × governance.
-  // The ci-tier snapshot lives in the seed repo's tanren-ci.yml (read at gate
-  // time), not the project config — so it is part of the substrate, not mapped
-  // here. The other four map directly onto ProjectConfigV1; migrateProjectConfig
-  // parses + validates the result (fail-hard on a bad shape).
+  // FrozenConfig pins routing × ci-tier snapshot × governance. The ci-tier
+  // snapshot lives in the seed repo's tanren-ci.yml (read at gate time), not the
+  // project config — so it is part of the substrate, not mapped here. The other
+  // three map directly onto ProjectConfigV1; migrateProjectConfig parses +
+  // validates the result (fail-hard on a bad shape).
   return migrateProjectConfig({
     version: 1,
     routing: frozen.routing,
-    escapeHatches: frozen.escapeHatches,
     governancePosture: frozen.governance,
     mergeIntegration: frozen.mergeIntegration,
   });

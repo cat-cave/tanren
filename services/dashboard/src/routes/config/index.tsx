@@ -31,14 +31,14 @@ function clientFor(c: Context, deps: ShellDeps): OrchestratorClient {
 const PLACEHOLDER_HISTORY: ConfigHistoryEntry[] = [
   {
     ref: "#6",
-    summary: "raise max writer iter 5 → 8",
+    summary: "add gemini-2.5-pro as write fallback",
     who: "forge",
     when: "3d ago",
     state: "merged",
   },
   {
     ref: "#5",
-    summary: "add gemini-2.5-pro as write fallback",
+    summary: "swap audit primary to opus-4.8",
     who: "forge",
     when: "8d ago",
     state: "merged",
@@ -114,7 +114,6 @@ export function mountConfigScreen(app: Hono, deps: ShellDeps): void {
       const config: OrgConfig = {
         version: 1,
         routing: current?.config.routing ?? emptyRouting(),
-        escapeHatches: current?.config.escapeHatches ?? defaultHatches(),
         ...current?.config,
         auditGateEnabled: enable,
       };
@@ -154,13 +153,5 @@ function emptyRouting(): OrgConfig["routing"] {
     audit: { chain: [] },
     demo: { chain: [] },
     forge: { chain: [] },
-  };
-}
-
-function defaultHatches(): OrgConfig["escapeHatches"] {
-  return {
-    maxWriterIterPerSubtask: 5,
-    maxRetriesPerTransientFailure: 3,
-    maxSpecDiscoveryRoundsWithForge: 20,
   };
 }

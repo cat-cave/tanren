@@ -23,8 +23,8 @@ import { describe, expect, it } from "vitest";
 import type { AppendEventInput, EventStore } from "../src/engine/eventStore.js";
 import { SpecNotRunnableError } from "../src/engine/workflow/projectSpecErrors.js";
 import {
-  MAX_BASE_SHIFT_REPLANS,
-  type PriorReplanCounter,
+  conflictSignatureOf,
+  type PriorReplanReader,
   type ReplanEnqueuer,
   SpecStatusReplanRouter,
 } from "../src/engine/workflow/reviewMerge/conflictResolver/replanRouter.js";
@@ -94,10 +94,13 @@ class FailingEnqueuer implements ReplanEnqueuer {
   }
 }
 
-/** A scripted prior-replan counter (the bounded-replan budget). */
-function counterReturning(n: number): PriorReplanCounter {
-  return { count: async () => n };
+/** A scripted prior-replan reader returning the given conflict signatures (the detector input). */
+function readerReturning(signatures: string[]): PriorReplanReader {
+  return { signatures: async () => signatures };
 }
+
+/** No prior re-plans (the first routing — always PROGRESS, re-drive). */
+const noPriorReplans = readerReturning([]);
 
 /** Find the (asserted-present) event of a type and return its payload as a record. */
 function payloadOf(events: AppendEventInput[], eventType: string): Record<string, unknown> {
@@ -110,7 +113,7 @@ function buildRouter(deps: {
   pool: RecordingPool;
   eventStore: RecordingEventStore;
   enqueuer?: ReplanEnqueuer;
-  priorReplans?: PriorReplanCounter;
+  priorReplans?: PriorReplanReader;
 }): SpecStatusReplanRouter {
   return new SpecStatusReplanRouter({
     pool: deps.pool,
@@ -128,7 +131,7 @@ describe("base-shift / percolation replan routing (v35 — a routed replan ACTUA
     const pool = new RecordingPool();
     const eventStore = new RecordingEventStore();
     const enqueuer = new RecordingEnqueuer("run_replan_xyz");
-    const router = buildRouter({ pool, eventStore, enqueuer, priorReplans: counterReturning(0) });
+    const router = buildRouter({ pool, eventStore, enqueuer, priorReplans: noPriorReplans });
 
     await router.routeBackToPlanner({
       specId: "spec_b",
@@ -164,7 +167,7 @@ describe("base-shift / percolation replan routing (v35 — a routed replan ACTUA
     const pool = new RecordingPool();
     const eventStore = new RecordingEventStore();
     const enqueuer = new RecordingEnqueuer();
-    const router = buildRouter({ pool, eventStore, enqueuer, priorReplans: counterReturning(0) });
+    const router = buildRouter({ pool, eventStore, enqueuer, priorReplans: noPriorReplans });
     const context = "re-plan ON TOP OF spec_a (sha-new): the rebased branch failed its re-gate on the shifted base";
 
     await router.routeBackToPlanner({ specId: "spec_b", newContext: context, otherSpecId: "spec_a" });
@@ -175,18 +178,21 @@ describe("base-shift / percolation replan routing (v35 — a routed replan ACTUA
     expect(payloadOf(eventStore.events, "recovery.replan_queued").steeringNote).toBe(context);
   });
 
-  it("BOUNDED: after MAX_BASE_SHIFT_REPLANS attempts it ESCALATES as needs_attention — no re-plan, no hot-loop", async () => {
+  it("FIXED POINT: re-planning against the SAME conflict again ESCALATES as needs_attention — no re-plan, no hot-loop, no count", async () => {
     const pool = new RecordingPool();
     const eventStore = new RecordingEventStore();
     const enqueuer = new RecordingEnqueuer();
-    // Already routed the cap number of times — the next routing must escalate, not re-plan.
-    const router = buildRouter({ pool, eventStore, enqueuer, priorReplans: counterReturning(MAX_BASE_SHIFT_REPLANS) });
-
-    await router.routeBackToPlanner({
-      specId: "spec_b",
-      newContext: "the rebase conflict could not be resolved (again)",
-      otherSpecId: "spec_a",
+    const sameContext = "the rebase conflict could not be resolved (again)";
+    // The spec was ALREADY re-planned against this EXACT conflict — re-planning again would
+    // re-conflict identically (a fixed point). The detector escalates, regardless of count.
+    const router = buildRouter({
+      pool,
+      eventStore,
+      enqueuer,
+      priorReplans: readerReturning([conflictSignatureOf(sameContext, "spec_a")]),
     });
+
+    await router.routeBackToPlanner({ specId: "spec_b", newContext: sameContext, otherSpecId: "spec_a" });
 
     // It did NOT enqueue yet another doomed re-plan (no hot-loop).
     expect(enqueuer.calls).toHaveLength(0);
@@ -197,7 +203,25 @@ describe("base-shift / percolation replan routing (v35 — a routed replan ACTUA
     const escalation = payloadOf(eventStore.events, "dag.spec.needs_attention");
     expect(escalation.source).toBe("strand");
     expect(escalation.reason).toBe("human_decision");
-    expect(escalation.attempts).toBe(MAX_BASE_SHIFT_REPLANS);
+  });
+
+  it("UNBOUNDED while PROGRESSING: re-planning against DIFFERENT conflicts keeps re-planning (far past any old cap)", async () => {
+    const pool = new RecordingPool();
+    const eventStore = new RecordingEventStore();
+    const enqueuer = new RecordingEnqueuer();
+    // Five prior re-plans, each against a DIFFERENT conflict (the base kept shifting — progress).
+    const priorReplans = readerReturning(["c1", "c2", "c3", "c4", "c5"].map((c) => conflictSignatureOf(c, "spec_a")));
+    const router = buildRouter({ pool, eventStore, enqueuer, priorReplans });
+
+    await router.routeBackToPlanner({
+      specId: "spec_b",
+      newContext: "a brand-new conflict against a freshly-shifted base",
+      otherSpecId: "spec_a",
+    });
+
+    // It re-planned (progress) — never escalated, no matter how many prior re-plans.
+    expect(enqueuer.calls).toHaveLength(1);
+    expect(eventStore.events.some((e) => e.eventType === "dag.spec.needs_attention")).toBe(false);
   });
 
   // THE v35 STRAND BUG (fixed): the enqueue could SWALLOW a genuine failure and STILL emit
@@ -208,7 +232,7 @@ describe("base-shift / percolation replan routing (v35 — a routed replan ACTUA
     const pool = new RecordingPool();
     const eventStore = new RecordingEventStore();
     const enqueuer = new FailingEnqueuer(new Error("run-create connection refused"));
-    const router = buildRouter({ pool, eventStore, enqueuer, priorReplans: counterReturning(0) });
+    const router = buildRouter({ pool, eventStore, enqueuer, priorReplans: noPriorReplans });
 
     await router.routeBackToPlanner({
       specId: "spec_b",
@@ -239,7 +263,7 @@ describe("base-shift / percolation replan routing (v35 — a routed replan ACTUA
     const pool = new RecordingPool();
     const eventStore = new RecordingEventStore();
     const enqueuer = new AlreadyClaimedEnqueuer();
-    const router = buildRouter({ pool, eventStore, enqueuer, priorReplans: counterReturning(0) });
+    const router = buildRouter({ pool, eventStore, enqueuer, priorReplans: noPriorReplans });
 
     await router.routeBackToPlanner({
       specId: "spec_b",

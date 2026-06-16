@@ -180,12 +180,13 @@ describe("routing & limits settings", () => {
     expect(html).toContain("vault://dev/codex/chatgpt");
   });
 
-  it("renders the vault panel, escape hatches, and the audit-gate-OFF caption", async () => {
+  it("renders the vault panel + the audit-gate-OFF caption (no escape-hatches panel — apex v35)", async () => {
     const app = await build();
     const html = await (await app.request("/settings/routing/project_easy")).text();
     expect(html).toContain("per-cred policy");
-    expect(html).toContain("escape hatches");
-    expect(html).toContain("max writer iter per subtask");
+    // The escape-hatches editor is GONE — there are no hardcoded attempt caps to tune.
+    expect(html).not.toContain("escape hatches");
+    expect(html).not.toContain("max writer iter per subtask");
     expect(html).toContain("edits land in the dashboard");
     expect(html).not.toContain("review before merge");
   });
@@ -229,20 +230,6 @@ describe("routing & limits settings", () => {
       config: { routing: Record<string, { chain: unknown[] }> };
     };
     expect(body.config.routing.plan.chain).toHaveLength(0);
-  });
-
-  it("saves escape hatches with changed retry budgets", async () => {
-    const app = await build();
-    const res = await app.request("/settings/routing/project_easy/hatches", {
-      method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({ orgId: "org_acme", maxWriterIterPerSubtask: "8" }),
-    });
-    expect(res.status).toBe(302);
-    const body = patchCalls[0].body as {
-      config: { escapeHatches: { maxWriterIterPerSubtask: number } };
-    };
-    expect(body.config.escapeHatches.maxWriterIterPerSubtask).toBe(8);
   });
 
   it("renders the credentials binding panel with org refs in both dropdowns", async () => {

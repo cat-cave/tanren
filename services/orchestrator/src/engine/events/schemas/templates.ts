@@ -162,17 +162,15 @@ export const TemplateBuildRecoveredPayload = z
     /** The terminally-blocked specs reset to `open` (re-drivable) by this recovery. */
     requeuedSpecIds: z.array(z.string()),
     /**
-     * 1-based position in the CONSECUTIVE NO-PROGRESS streak this recovery occupies
-     * (the bound `maxAttempts` caps the streak, not a flat count — a converging build
-     * keeps showing low attempts even after many total recoveries).
+     * This recovery's 1-based position in the durable recovery history (an OBSERVABLE attempt
+     * counter, NOT a bound — the recovery is UNBOUNDED while converging; the intelligent
+     * non-convergence detector, not a count, decides exhaustion).
      */
     attempt: z.number().int().positive(),
-    /** The configured cap on consecutive no-progress auto-recoveries before a loud terminal failure. */
-    maxAttempts: z.number().int().positive(),
     /**
      * PROGRESS SIGNAL — count of MERGED (`done`) specs at this recovery. With
      * `strandedSpecIds` it makes the converged-vs-stuck judgement reconstructible
-     * from the durable event log across restarts.
+     * from the durable event log across restarts (the shared `convergenceDetector` input).
      */
     mergedCount: z.number().int().nonnegative(),
     /** PROGRESS SIGNAL — the terminally-stranded spec ids at this recovery (sorted, deduped). */
@@ -180,23 +178,20 @@ export const TemplateBuildRecoveredPayload = z
   })
   .strict();
 
-// `template.build.recovery_exhausted` — the bounded auto-recovery hit its cap: the
-// build STILL strands after `maxAttempts` recoveries, so Tanren STOPS recovering
-// and surfaces a LOUD, durable terminal failure (a genuine "this stack's template
-// cannot be built autonomously" signal). NOT papering over a permanently-broken
-// stack: the loud halt is the point. `requeuedSpecIds` are the specs still stranded
-// at exhaustion.
+// `template.build.recovery_exhausted` — the auto-recovery reached a FIXED POINT (the same
+// specs strand with no new progress — the shared `convergenceDetector`), so Tanren STOPS
+// recovering and surfaces a LOUD, durable terminal failure (a genuine "this stack's template
+// cannot be built autonomously" signal). NOT papering over a permanently-broken stack: the
+// loud halt is the point. `requeuedSpecIds` are the specs still stranded at exhaustion.
 export const TemplateBuildRecoveryExhaustedPayload = z
   .object({
     orgId: z.string(),
     stack: z.string(),
-    /** The specs still terminally blocked at the recovery cap. */
+    /** The specs still terminally blocked at the fixed point. */
     requeuedSpecIds: z.array(z.string()),
-    /** The cap that was reached (the number of CONSECUTIVE no-progress recoveries). */
-    maxAttempts: z.number().int().positive(),
-    /** PROGRESS SIGNAL — count of MERGED (`done`) specs at exhaustion. */
+    /** PROGRESS SIGNAL — count of MERGED (`done`) specs at the fixed point. */
     mergedCount: z.number().int().nonnegative(),
-    /** PROGRESS SIGNAL — the terminally-stranded spec ids at exhaustion (sorted, deduped). */
+    /** PROGRESS SIGNAL — the terminally-stranded spec ids at the fixed point (sorted, deduped). */
     strandedSpecIds: z.array(z.string()),
   })
   .strict();

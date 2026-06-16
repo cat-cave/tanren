@@ -1,15 +1,14 @@
 /**
- * projectConfig — pure helpers for normalizing a project's routing/escape-hatch
- * config. Extracted from routes/projects/index.tsx to keep that file under the
- * 500-line architecture cap. resolveConfig fills a defaulted, schema-complete
- * working copy so the settings PATCH always sends a valid config.
+ * projectConfig — pure helpers for normalizing a project's routing config.
+ * Extracted from routes/projects/index.tsx to keep that file under the 500-line
+ * architecture cap. resolveConfig fills a defaulted, schema-complete working copy
+ * so the settings PATCH always sends a valid config. (The escape-hatch limits are
+ * gone — apex v35: no hardcoded attempt caps to normalize.)
  */
-import { ROLE_IDS, type EscapeHatches, type ProjectConfig, type RoutingTable } from "../../api/types.js";
-import { ESCAPE_HATCH_DEFAULTS } from "../../components/project/SettingsBody.js";
+import { ROLE_IDS, type ProjectConfig, type RoutingTable } from "../../api/types.js";
 
 export function resolveConfig(config: ProjectConfig | undefined): {
   routing: RoutingTable;
-  escapeHatches: EscapeHatches;
 } {
   const routing = emptyRoutingTable();
   if (config?.routing !== undefined) {
@@ -18,11 +17,7 @@ export function resolveConfig(config: ProjectConfig | undefined): {
       if (Array.isArray(chain)) routing[role].chain = chain;
     }
   }
-  const escapeHatches: EscapeHatches = {
-    ...ESCAPE_HATCH_DEFAULTS,
-    ...config?.escapeHatches,
-  };
-  return { routing, escapeHatches };
+  return { routing };
 }
 
 export function emptyRoutingTable(): RoutingTable {

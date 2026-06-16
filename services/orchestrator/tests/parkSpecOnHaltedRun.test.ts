@@ -14,7 +14,7 @@ import type { PlannerRunContext, RunPlannerLoopInput } from "../src/engine/workf
 import type { EventName, EventPayload } from "../src/engine/events/index.js";
 import { isAllowedSpecTransition } from "../src/engine/state/spec.js";
 import { MissingCredentialError } from "../src/engine/credentials/resolveCredentials.js";
-import { DEFAULT_REDRIVE_ESCALATE_AT, type RedriveHistoryReader } from "../src/engine/workflow/plannerRunRedrive.js";
+import { type RedriveHistoryReader } from "../src/engine/workflow/plannerRunRedrive.js";
 
 /** Records the spec-status UPDATEs + the run finalize so we can assert the transition. */
 class RecordingPool {
@@ -74,17 +74,15 @@ function harness(pool: RecordingPool, redriveHistoryReader?: RedriveHistoryReade
   return { events, appendEvent, finalizeRunState, input };
 }
 
-/** A fixed consecutive-same-failure reader (the count it reports drives re-drive vs escalate). */
-function readerReturning(count: number): RedriveHistoryReader {
-  return async () => count;
+/** A fixed FIXED-POINT reader (0 ⇒ progress / re-drive; 1 ⇒ a fixed point / escalate — no count). */
+function readerReturning(fixedPointStreak: number): RedriveHistoryReader {
+  return async () => fixedPointStreak;
 }
 
 /** The `dag.spec.redriven` event the re-drive emitted (asserts an OBSERVABLE retry, not a strand). */
 function redriven(
   events: CapturedEvent[],
-):
-  | { specId: string; runId: string; failureCode: string; consecutiveSameFailure: number; escalateAtAttempts: number }
-  | undefined {
+): { specId: string; runId: string; failureCode: string; consecutiveSameFailure: number } | undefined {
   const e = events.find((x) => x.eventType === "dag.spec.redriven");
   return e === undefined
     ? undefined
@@ -93,7 +91,6 @@ function redriven(
         runId: string;
         failureCode: string;
         consecutiveSameFailure: number;
-        escalateAtAttempts: number;
       });
 }
 
@@ -133,7 +130,7 @@ describe("finalizeWorkflowError — a GENUINE-TERMINAL misconfiguration GENUINE-
 
   it("a recoverable usage-limit fault RE-DRIVES (the whack-a-mole park is gone) — not needs_attention", async () => {
     const pool = new RecordingPool();
-    const { events, appendEvent, finalizeRunState, input } = harness(pool, readerReturning(1));
+    const { events, appendEvent, finalizeRunState, input } = harness(pool, readerReturning(0));
     const { CodexUsageLimitError } = await import("../src/engine/providers/codex.js");
 
     const disposition = await finalizeWorkflowError(new CodexUsageLimitError("primary", "out of quota"), {
@@ -155,7 +152,7 @@ describe("finalizeWorkflowError — a GENUINE-TERMINAL misconfiguration GENUINE-
 
   it("a workspace-bootstrap fault RE-DRIVES (transient deps install), surfacing workspace.failed", async () => {
     const pool = new RecordingPool();
-    const { events, appendEvent, finalizeRunState, input } = harness(pool, readerReturning(1));
+    const { events, appendEvent, finalizeRunState, input } = harness(pool, readerReturning(0));
     const { WorkspaceBootstrapError } = await import("../src/engine/workspace/index.js");
 
     const disposition = await finalizeWorkflowError(new WorkspaceBootstrapError("deps install failed"), {
@@ -217,7 +214,7 @@ describe("finalizeWorkflowError — a NON-TERMINAL headless ancestor benign-WAIT
 describe("finalizeWorkflowError — a RANDOM / TRANSIENT failure is RE-DRIVEN, never terminally stranded (apex v35)", () => {
   it("a generic/internal error RE-DRIVES the spec (→ open + dag.spec.redriven), NOT needs_attention", async () => {
     const pool = new RecordingPool();
-    const { events, appendEvent, finalizeRunState, input } = harness(pool, readerReturning(1));
+    const { events, appendEvent, finalizeRunState, input } = harness(pool, readerReturning(0));
 
     const disposition = await finalizeWorkflowError(new Error("the run failed with an internal error"), {
       finalizeRunState,
@@ -235,15 +232,12 @@ describe("finalizeWorkflowError — a RANDOM / TRANSIENT failure is RE-DRIVEN, n
     expect(rd?.specId).toBe("spec_1");
     expect(rd?.failureCode).toBe("internal");
     expect(rd?.consecutiveSameFailure).toBe(1);
-    expect(rd?.escalateAtAttempts).toBe(DEFAULT_REDRIVE_ESCALATE_AT);
   });
 
-  it("the SAME internal failure K times in a row GENUINE-HALTS once to needs_attention (a stuck spec) — never a hot-loop", async () => {
+  it("the SAME internal failure at a FIXED POINT GENUINE-HALTS once to needs_attention (a stuck spec) — never a hot-loop, no count", async () => {
     const pool = new RecordingPool();
-    const { events, appendEvent, finalizeRunState, input } = harness(
-      pool,
-      readerReturning(DEFAULT_REDRIVE_ESCALATE_AT),
-    );
+    // The reader reports a fixed point (the prior attempt was structurally identical) ⇒ escalate.
+    const { events, appendEvent, finalizeRunState, input } = harness(pool, readerReturning(1));
 
     const disposition = await finalizeWorkflowError(new Error("the run failed with an internal error"), {
       finalizeRunState,
@@ -259,10 +253,9 @@ describe("finalizeWorkflowError — a RANDOM / TRANSIENT failure is RE-DRIVEN, n
     expect(redriven(events)).toBeUndefined();
     const na = needsAttention(events);
     expect(na?.source).toBe("strand");
-    expect(na?.message).toContain(`${DEFAULT_REDRIVE_ESCALATE_AT} times in a row`);
+    expect(na?.message).toContain("FIXED POINT");
     expect(na?.message).toContain("genuinely stuck");
     expect((na as { reason: string }).reason).toBe("persistent_failure");
-    expect((na as { attempts: number }).attempts).toBe(DEFAULT_REDRIVE_ESCALATE_AT);
   });
 
   it("without a wired reader (a no-DB unit path) a transient still RE-DRIVES (never a spurious escalation)", async () => {

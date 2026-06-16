@@ -256,12 +256,6 @@ export interface RoutingChain {
 
 export type RoutingTable = Record<RoleId, RoutingChain>;
 
-export interface EscapeHatches {
-  maxWriterIterPerSubtask: number;
-  maxRetriesPerTransientFailure: number;
-  maxSpecDiscoveryRoundsWithForge: number;
-}
-
 // org-config types live in `orgConfigTypes.ts` (split for the line cap).
 export type { OrgAuditGateTarget, OrgConfig, OrgDetail } from "./orgConfigTypes.js";
 
@@ -269,7 +263,6 @@ export type { OrgAuditGateTarget, OrgConfig, OrgDetail } from "./orgConfigTypes.
 export interface ProjectConfig {
   version: 1;
   routing: RoutingTable;
-  escapeHatches: Partial<EscapeHatches>;
   governancePosture?: string;
   /** The per-repo merge integration mode (mirrors the orchestrator `MergeIntegration` enum). */
   mergeIntegration?: "native_queue" | "direct_merge" | "external_reviewer" | "not_configured";

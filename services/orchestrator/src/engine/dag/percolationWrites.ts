@@ -19,7 +19,7 @@ import { type AncestorStack, resolveAncestorStack } from "./ancestorStack.js";
 import { PgEventStore } from "../eventStore.js";
 import { SpecStatusReplanRouter } from "../workflow/reviewMerge/conflictResolver/replanRouter.js";
 import {
-  buildPriorReplanCounter,
+  buildPriorReplanReader,
   buildReplanEnqueuer,
 } from "../workflow/reviewMerge/conflictResolver/replanEnqueuerPg.js";
 
@@ -322,7 +322,7 @@ export async function recordReplanContext(
   // over the RAW pool (the run-create + the events-count read open their own connections),
   // independent of the event-append plane below.
   const enqueuer = buildReplanEnqueuer(pool, runStateWriter);
-  const priorReplans = buildPriorReplanCounter(pool);
+  const priorReplans = buildPriorReplanReader(pool);
   // Plane-split: the writer IS the EventStore + carries the status write; else the
   // in-process org-scoped client backs BOTH the status UPDATE and the event append.
   if (runStateWriter !== undefined) {

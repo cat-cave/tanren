@@ -55,7 +55,7 @@ export const strandSensitivityRules: SensitivityRule[] = [
     ["failureCode", "public"],
     ["stage", "public"],
     ["consecutiveSameFailure", "public"],
-    ["escalateAtAttempts", "public"],
+    ["workSignature", "public"],
     ["backoffSeconds", "public"],
   ]),
   // dag.spec.attention_resolved: an operator resolved a needs_attention escalation

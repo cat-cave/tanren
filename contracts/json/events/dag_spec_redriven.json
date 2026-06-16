@@ -12,11 +12,6 @@
       "maximum": 9007199254740991,
       "type": "integer"
     },
-    "escalateAtAttempts": {
-      "exclusiveMinimum": 0,
-      "maximum": 9007199254740991,
-      "type": "integer"
-    },
     "failureCode": {
       "enum": [
         "workspace",
@@ -46,6 +41,9 @@
         "run"
       ],
       "type": "string"
+    },
+    "workSignature": {
+      "type": "string"
     }
   },
   "required": [
@@ -54,7 +52,6 @@
     "failureCode",
     "stage",
     "consecutiveSameFailure",
-    "escalateAtAttempts",
     "backoffSeconds"
   ],
   "type": "object",

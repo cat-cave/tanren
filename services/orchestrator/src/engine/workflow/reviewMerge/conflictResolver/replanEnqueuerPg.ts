@@ -21,7 +21,7 @@ import type { RunStateWriter } from "../../../contracts/runStateWriter.js";
 import { RecoveryStore } from "../../../repositories/recovery.js";
 import { systemActor } from "../../../state/actor.js";
 import { createQueuedRunFromSpec } from "../../projectSpec.js";
-import type { PriorReplanCounter, ReplanEnqueuer } from "./replanRouter.js";
+import { conflictSignatureOf, type PriorReplanReader, type ReplanEnqueuer } from "./replanRouter.js";
 
 /**
  * The production replan enqueuer: re-open the spec to the re-drivable status + append
@@ -61,23 +61,31 @@ export function buildReplanEnqueuer(pool: pg.Pool, runStateWriter?: RunStateWrit
 }
 
 /**
- * The production prior-replan counter (the bounded-replan budget): count the spec's prior
- * `merge.conflict.replan_routed` events. The `events` table is unreadable to the
- * de-privileged data-plane role (0031 REVOKE), so read on the BYPASSRLS system pool with
- * the org GUC still applied on top (the same hop the drive-path replan cap uses).
+ * The production prior-replan reader (the convergence-detector input): read the spec's prior
+ * `merge.conflict.replan_routed` conflict signatures, oldest→newest. The `events` table is
+ * unreadable to the de-privileged data-plane role (0031 REVOKE), so read on the BYPASSRLS
+ * system pool with the org GUC still applied on top (the same hop the drive-path uses). A
+ * legacy row without a `conflictSignature` falls back to a hash of its `newContext` so the
+ * detector can still tell same-conflict from different-conflict.
  */
-export function buildPriorReplanCounter(pool: pg.Pool): PriorReplanCounter {
+export function buildPriorReplanReader(pool: pg.Pool): PriorReplanReader {
   return {
-    async count(input) {
+    async signatures(input) {
       const readPool = getSystemPool() ?? pool;
       return runWithOrgScope(readPool, input.orgId, async (client) => {
-        const result = await client.query<{ count: string }>(
-          `SELECT count(*)::text AS count
+        const result = await client.query<{
+          payload: { conflictSignature?: string; newContext?: string; otherSpecId?: string };
+        }>(
+          `SELECT payload
              FROM events
-            WHERE spec_id = $1 AND event_type = 'merge.conflict.replan_routed'`,
+            WHERE spec_id = $1 AND event_type = 'merge.conflict.replan_routed'
+            ORDER BY ts ASC, id ASC`,
           [input.specId],
         );
-        return Number(result.rows[0]?.count ?? "0");
+        return result.rows.map(
+          (row) =>
+            row.payload.conflictSignature ?? conflictSignatureOf(row.payload.newContext ?? "", row.payload.otherSpecId),
+        );
       });
     },
   };

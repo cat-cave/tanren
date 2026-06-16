@@ -48,8 +48,7 @@ export { maybeCreateTemplateForNoMatch, type NoMatchDecision } from "./noMatchHo
 export {
   recoverStrandedTemplateBuild,
   TemplateBuildRecoveryExhaustedError,
-  DEFAULT_MAX_RECOVERY_ATTEMPTS,
-  consecutiveNoProgressCount,
+  atRecoveryFixedPoint,
   type TemplateBuildRecoveryDeps,
   type TemplateBuildRecoveryOutcome,
   type RecoveryProgressSignal,

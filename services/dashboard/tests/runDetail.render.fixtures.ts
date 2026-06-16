@@ -306,7 +306,6 @@ export function mockOrchestratorWithProject(previewUrlPattern?: string): void {
           config: {
             version: 1,
             routing: {},
-            escapeHatches: {},
             mergeIntegration: "not_configured",
             ...(previewUrlPattern === undefined ? {} : { previewUrlPattern }),
           },

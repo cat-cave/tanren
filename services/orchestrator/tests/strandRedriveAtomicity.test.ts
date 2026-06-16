@@ -4,16 +4,16 @@
 // GENUINELY orphaned slot: a run that died (a crash bypassing the workflow's own spec-aware
 // finalize) leaving its spec `in_flight` with NO live run. THE REDESIGN: a crash is a
 // TRANSIENT class, so a genuine orphan now RE-DRIVES (spec → `open`, `dag.spec.redriven`) —
-// the walker re-enqueues it — rather than the old terminal `no_live_run` strand. The
-// consecutive-same-failure counter still bounds it: at the cap K (a spec crashing the SAME
-// way K times) it GENUINE-HALTS `needs_attention reason:persistent_failure`.
+// the walker re-enqueues it — rather than the old terminal `no_live_run` strand. The shared
+// convergence detector bounds it WITHOUT a count: at a FIXED POINT (a spec crashing the
+// IDENTICAL way with no new information) it GENUINE-HALTS `needs_attention
+// reason:persistent_failure`. A changing crash re-drives UNBOUNDED.
 //
 // Bug-1 atomicity is preserved: a fresh queued/running SUCCESSOR run (a re-drive in flight)
 // means the spec is TRANSITIONING, not orphaned — the orphan path skips it entirely.
 
 import { describe, expect, it } from "vitest";
 import { parkStrandedSpecInProcess } from "../src/engine/worker/runFinalize.js";
-import { DEFAULT_REDRIVE_ESCALATE_AT } from "../src/engine/workflow/runFinalizeAuthority.js";
 
 type QueryResult = { rows: unknown[]; rowCount: number };
 
@@ -97,17 +97,15 @@ describe("orphan reconciler — a genuine orphan RE-DRIVES (crash = transient), 
     expect(client.emittedEventType("dag.spec.redriven")).toBe(true);
   });
 
-  it("a spec crashing the SAME way K times in a row GENUINE-HALTS `needs_attention` (the bounded escalation)", async () => {
-    // K-1 prior same-failure re-drives + this one ⇒ the cap reached ⇒ persistent_failure.
-    const client = new RecordingClient({
-      hasSuccessor: false,
-      occupying: true,
-      priorSameFailures: DEFAULT_REDRIVE_ESCALATE_AT - 1,
-    });
+  it("a spec crashing the IDENTICAL way again (a FIXED POINT) GENUINE-HALTS `needs_attention` (no count)", async () => {
+    // A prior identical `internal` crash + this identical one ⇒ a fixed point (the crash repeats
+    // with no new information) ⇒ persistent_failure. No hardcoded attempt cap — one identical
+    // repeat is already a proven dead-end for a crash with no observable produced work.
+    const client = new RecordingClient({ hasSuccessor: false, occupying: true, priorSameFailures: 1 });
 
     await parkStrandedSpecInProcess(client.asClient(), "spec_1", "project_1", "run_dead", INTERNAL_FAILURE);
 
-    // At the cap the orphan is genuinely stuck — it parks `needs_attention`, not re-drives again.
+    // At the fixed point the orphan is genuinely stuck — it parks `needs_attention`, not re-drives.
     expect(client.specUpdateTarget()).toBe("needs_attention");
     expect(client.emittedEvent()).toBe(true);
     expect(client.emittedEventType("dag.spec.needs_attention")).toBe(true);

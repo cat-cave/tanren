@@ -55,31 +55,20 @@ export function emptyRoutingTable(): RoutingTable {
   return RoutingTable.parse({});
 }
 
-// ---- Retry budgets / escape hatches --------------------------------------
-
-export const EscapeHatches = z
-  .object({
-    maxWriterIterPerSubtask: z.number().int().min(1).default(5),
-    maxRetriesPerTransientFailure: z.number().int().min(0).default(3),
-    maxSpecDiscoveryRoundsWithForge: z.number().int().min(1).default(20),
-  })
-  .strict();
-export type EscapeHatches = z.infer<typeof EscapeHatches>;
-
-// Project-level overrides may specify only a subset of escape hatches; the
-// org defaults fill the rest at merge time (merge logic lives in the engine
-// loaders that read both layers). Defined as a separate object — rather than
-// `EscapeHatches.partial()` — so that unspecified inner fields stay
-// undefined instead of being filled by their EscapeHatches defaults at parse
-// time. The engine loader merges this partial onto the org-resolved values.
-export const PartialEscapeHatches = z
-  .object({
-    maxWriterIterPerSubtask: z.number().int().min(1).optional(),
-    maxRetriesPerTransientFailure: z.number().int().min(0).optional(),
-    maxSpecDiscoveryRoundsWithForge: z.number().int().min(1).optional(),
-  })
-  .strict();
-export type PartialEscapeHatches = z.infer<typeof PartialEscapeHatches>;
+// ---- (removed) Retry budgets / escape hatches ----------------------------
+//
+// The old `EscapeHatches` config block (`maxWriterIterPerSubtask`,
+// `maxRetriesPerTransientFailure`, `maxSpecDiscoveryRoundsWithForge`) is GONE (apex
+// v35 — intelligent non-convergence detection). They were hardcoded ATTEMPT CAPS: a
+// flat number of iterations/retries/rounds that escalated regardless of whether the
+// loop was making PROGRESS. The binding principle is that NO loop is bounded by a count
+// — a loop continues UNBOUNDED while it is converging (its failure / produced work
+// keeps changing, or its magnitude shrinks) and escalates ONLY at an
+// intelligently-detected FIXED POINT (the shared `engine/workflow/convergenceDetector`).
+// `maxWriterIterPerSubtask` (the writer inner loop) is replaced by that detector;
+// `maxRetriesPerTransientFailure` + `maxSpecDiscoveryRoundsWithForge` were never wired
+// to a convergence loop and are deleted outright. There is no replacement config knob:
+// convergence is intelligence, not a tunable count.
 
 // ---- Allocator settings --------------------------------------------------
 
@@ -388,12 +377,12 @@ export { FindingSeverityConfig };
 
 // ---- Convergence policy (spec-loop-redesign.md) ---------------------------
 
-// The CONVERGENCE policy — the SOLE loop bound for the spec-implementation loop
-// (docs/roadmap/spec-loop-redesign.md). There is NO retry cap / per-spec rerun limit /
-// timeout halt: the loop iterates until it CONVERGES, and halts ONLY when the
-// convergence answerer reports `maxConsecutiveStalls` CONSECUTIVE stalls (a human
-// action — rework the spec / stronger model / fix the env — is then the genuine next
-// step). A `progress`/`velocity_defer` assessment RESETS the consecutive-stall count.
+// The CONVERGENCE policy for the spec-implementation loop (docs/roadmap/spec-loop-redesign.md).
+// There is NO retry cap / per-spec rerun limit / timeout halt AND NO `maxConsecutiveStalls`
+// count (apex v35): the loop iterates UNBOUNDED while it is CONVERGING and halts ONLY when
+// the convergence answerer's INTELLIGENT escalation verdict judges a human would add value
+// beyond "keep going" (a genuine decision/blocker/dead-end). Convergence is intelligence, not
+// a tunable count — so this config holds only the velocity-defer + demo-run STRATEGY knobs.
 //
 // `demoRunEnabled` flags the OPTIONAL demo-run stage (the "does the thing the spec was
 // written for actually work" gate, after the auditor). It is hard for some project
@@ -417,7 +406,6 @@ export { FindingSeverityConfig };
 // emits is honored (enabled, P3-leftovers, from round 0).
 export const ConvergencePolicyConfig = z
   .object({
-    maxConsecutiveStalls: z.number().int().min(1).default(3),
     demoRunEnabled: z.boolean().default(false),
     velocityDeferEnabled: z.boolean().default(true),
     velocityDeferMaxSeverity: FindingSeverityConfig.default("P3"),
@@ -426,11 +414,10 @@ export const ConvergencePolicyConfig = z
   .strict();
 export type ConvergencePolicyConfig = z.infer<typeof ConvergencePolicyConfig>;
 
-// The default convergence policy: halt after 3 consecutive stalls; demo-run off;
-// velocity-defer ON, honoring up to P3-mild leftovers from the first round (so the
-// default reproduces today's "any velocity_defer → pass" behavior byte-for-byte).
+// The default convergence policy: demo-run off; velocity-defer ON, honoring up to
+// P3-mild leftovers from the first round. The halt is the agent's intelligent escalation
+// verdict (no count knob).
 export const DEFAULT_CONVERGENCE_POLICY: ConvergencePolicyConfig = {
-  maxConsecutiveStalls: 3,
   demoRunEnabled: false,
   velocityDeferEnabled: true,
   velocityDeferMaxSeverity: "P3",

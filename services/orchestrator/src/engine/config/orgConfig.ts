@@ -3,7 +3,6 @@ import { ProviderMode } from "./managedProvider.js";
 import {
   AllocatorConfig,
   CreditRates,
-  EscapeHatches,
   ForgePersona,
   NotificationTargetRef,
   ProjectBudget,
@@ -22,7 +21,6 @@ import { DefaultLlmEntry } from "../credentials/defaultLlmEntry.js";
 // so we feed an empty `{}` through each sub-parser to materialize the fully
 // defaulted shape rather than letting the outer object accept a partial
 // literal.
-const defaultEscapeHatches = () => EscapeHatches.parse({});
 const defaultAllocator = () => AllocatorConfig.parse({});
 const defaultForgePersona = () => ForgePersona.parse({});
 
@@ -83,7 +81,6 @@ export const OrgConfigV1 = z
   .object({
     version: z.literal(1),
     routing: RoutingTable.default(emptyRoutingTable()),
-    escapeHatches: EscapeHatches.default(defaultEscapeHatches),
     allocator: AllocatorConfig.default(defaultAllocator),
     notificationTargets: z.array(NotificationTargetRef).default([]),
     forgePersona: ForgePersona.default(defaultForgePersona),

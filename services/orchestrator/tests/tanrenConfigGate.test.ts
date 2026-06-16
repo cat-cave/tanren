@@ -46,11 +46,6 @@ describe("isBucketBChange", () => {
     expect(isBucketBChange(baseConfig(), withAuditPrimary("opus-4.7"))).toBe(true);
   });
 
-  it("is true when an escape-hatch limit changes", () => {
-    const next = migrateOrgConfig({ version: 1, escapeHatches: { maxWriterIterPerSubtask: 8 } });
-    expect(isBucketBChange(baseConfig(), next)).toBe(true);
-  });
-
   it("is false when only the gate toggle / target changes (so you can turn it off)", () => {
     const prev = baseConfig();
     const next = migrateOrgConfig({ ...prev, auditGateEnabled: true, auditGate: { repo: "x/y" } });
@@ -59,11 +54,12 @@ describe("isBucketBChange", () => {
 });
 
 describe("renderTanrenYaml + diff", () => {
-  it("renders routing + limits as tanren.yaml", () => {
+  it("renders routing as tanren.yaml (the escape-hatch limits block is gone — apex v35)", () => {
     const yaml = renderTanrenYaml(baseConfig());
     expect(yaml).toContain("# tanren.yaml");
     expect(yaml).toContain('audit.primary = "codex/gpt-5.5"');
-    expect(yaml).toContain("max_writer_iter = 5");
+    expect(yaml).not.toContain("max_writer_iter");
+    expect(yaml).not.toContain("[limits]");
   });
 
   it("renders a changed value as rem-then-add", () => {

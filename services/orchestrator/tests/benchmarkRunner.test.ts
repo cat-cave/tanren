@@ -96,7 +96,6 @@ function frozen(
 ): FrozenConfig {
   return FrozenConfig.parse({
     routing: { write: { chain: [{ cli: "codex", model, authRef: "credential/codex/org/x" }] } },
-    escapeHatches: {},
     ciTiers: {
       tiers: { fast: [{ name: "lint", run: "pnpm lint" }], slow: [{ name: "test", run: "pnpm test" }] },
       when: { fast: ["per_iteration"], slow: ["pre_audit", "pre_merge"] },

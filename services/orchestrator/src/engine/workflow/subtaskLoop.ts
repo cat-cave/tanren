@@ -104,13 +104,6 @@ export interface SubtaskLoopCostHooks {
   buildAuditorUsage?: (input: { auditorTaskId: string; verdict: AuditAnswer }) => Record<string, unknown>;
 }
 
-// Only the writer-iteration hatch is read by the loop now (the planner-rerun cap is
-// PURGED — there is no retry-cap halt). Kept as a structural type so the field stays
-// nominal without importing the full EscapeHatches surface.
-interface EscapeHatchesShape {
-  maxWriterIterPerSubtask: number;
-}
-
 export interface SubtaskLoopInput {
   pool: LoopQueryClient;
   eventStore: EventStore;
@@ -124,10 +117,6 @@ export interface SubtaskLoopInput {
     workspacePath: string;
     baseSha?: string;
   };
-  // The per-task writer-iteration bound (writer→gate→checker). NOT a HALT trigger: on
-  // exhaustion the residual incompleteness becomes a P0 FINDING fed to triage/
-  // convergence (which own the only loop bound), never a retry-cap halt.
-  escapeHatches: EscapeHatchesShape;
   // The CONVERGENCE policy (the SOLE loop bound) + the audit posture (triage routing).
   // Optional → resolve to the balanced defaults.
   convergencePolicy?: ConvergencePolicyConfig;
@@ -415,7 +404,6 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
       currentFindings: findings,
       priorFindings,
       state: convergenceState,
-      maxConsecutiveStalls: convergencePolicy.maxConsecutiveStalls,
       velocityPolicy: {
         enabled: convergencePolicy.velocityDeferEnabled,
         maxSeverity: convergencePolicy.velocityDeferMaxSeverity,
@@ -430,18 +418,21 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
     convergenceState = convergence.state;
 
     if (convergence.decision === "halt") {
+      // HALT by the agent's INTELLIGENT escalation verdict (a genuine human decision/blocker/
+      // dead-end), NOT a count. The specific human-actionable reason is the agent's
+      // `escalationReason`; the broader `reasoning` is the evidence trail.
+      const haltReason = convergence.escalationReason === "" ? convergence.reasoning : convergence.escalationReason;
       await appendEvent("convergence.stalled", {
         runId: input.context.runId,
         consecutiveStalls: convergence.state.consecutiveStalls,
-        maxConsecutiveStalls: convergencePolicy.maxConsecutiveStalls,
-        reason: convergence.reasoning,
+        reason: haltReason,
       });
       await markTaskDone(input.pool, plannerTaskId, "rejected_by_auditor", input.runStateWriter);
       return await finalize({
         kind: "convergence_stalled",
         loopCount,
         consecutiveStalls: convergence.state.consecutiveStalls,
-        reason: convergence.reasoning,
+        reason: haltReason,
       });
     }
     if (convergence.decision === "pass") {

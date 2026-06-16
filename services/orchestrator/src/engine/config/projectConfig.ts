@@ -12,7 +12,6 @@ import {
   MergeIntegration,
   NotificationTargetRef,
   PartialAllocatorConfig,
-  PartialEscapeHatches,
   PartialForgePersona,
   CreditRates,
   ProjectBudget,
@@ -196,9 +195,6 @@ export const ProjectConfigV1 = z
     // Project-level overrides for the org-level chain. Every role is present
     // with `{ chain: [] }` by default; entries override the org defaults.
     routing: RoutingTable.default(emptyRoutingTable()),
-    // Partial because the project layer should only express the budgets it
-    // actually wants to deviate on; the org defaults fill the rest.
-    escapeHatches: PartialEscapeHatches.default({}),
     allocator: PartialAllocatorConfig.default({}),
     notificationTargets: z.array(NotificationTargetRef).default([]),
     forgePersona: PartialForgePersona.default({}),

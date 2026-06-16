@@ -435,12 +435,13 @@ export const ConvergenceStartedPayload = z
   })
   .strict();
 
-// convergence.assessed: the answerer's progress/stall/velocity read + the loop's
-// applied decision (continue/pass/halt) + the consecutive-stall counter (the SOLE
-// loop bound; NOT a retry counter). The v24 cause-not-symptom fix adds the BLOCKING
-// root cause signal: `blockingRootCauseProgress` (the primary stall driver) keyed to
-// the stable `blockingRootCauseId`, so a loop that churns on a stuck blocker while
-// peripheral findings move is visible as the stall it is.
+// convergence.assessed: the answerer's progress/stall/velocity read + the INTELLIGENT
+// escalation verdict + the loop's applied decision (continue/pass/halt). The HALT is the
+// agent's `escalation` verdict ("would a human add value beyond keep going?"), NOT a count
+// (apex v35 — there is no `maxConsecutiveStalls`). `consecutiveStalls` rides along as an
+// OBSERVABILITY diagnostic only. The v24 cause-not-symptom fix's BLOCKING root cause signal
+// (`blockingRootCauseProgress` keyed to the stable `blockingRootCauseId`) stays so a loop
+// churning on a stuck blocker while peripheral findings move is visible as the stall it is.
 export const ConvergenceAssessedPayload = z
   .object({
     runId: z.string(),
@@ -448,21 +449,23 @@ export const ConvergenceAssessedPayload = z
     assessment: z.enum(["progress", "stalled", "velocity_defer"]),
     blockingRootCauseProgress: z.enum(["retired", "reduced", "unchanged", "regressed", "none"]),
     blockingRootCauseId: z.string(),
+    // The intelligent escalation verdict the halt decision keys off (replacing the count).
+    escalation: z.enum(["keep_going", "escalate"]),
     decision: z.enum(["continue", "pass", "halt"]),
+    // Observability diagnostic — the consecutive-stall run length, NOT a bound.
     consecutiveStalls: z.number().int(),
-    maxConsecutiveStalls: z.number().int(),
     reasoning: z.string(),
   })
   .strict();
 
-// convergence.stalled: the terminal HALT after `maxConsecutiveStalls` consecutive
-// stalls — the SOLE loop halt besides budget. A human action (rework the spec /
-// stronger model / fix the env) is the genuine next step.
+// convergence.stalled: the terminal HALT when the answerer's INTELLIGENT escalation verdict
+// judged a human must act (a genuine decision/blocker/dead-end) — NOT a consecutive-stall
+// count. The SOLE loop halt besides budget. `reason` carries the specific human-actionable
+// diagnosis the agent gave.
 export const ConvergenceStalledPayload = z
   .object({
     runId: z.string(),
     consecutiveStalls: z.number().int(),
-    maxConsecutiveStalls: z.number().int(),
     reason: z.string(),
   })
   .strict();

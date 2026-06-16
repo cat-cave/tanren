@@ -1,22 +1,23 @@
 /**
- * Routing & limits settings. Renders the 6-role fallback-chain
- * editor, the Vault per-cred policy panel (read-only), the escape-hatches
- * editor, and the conditional audit-gate caption — all generated from the
- * routing schema (`RoutingTable` / `EscapeHatches`). v0 ships only
- * functional Codex bindings, but the editor handles 1..N-entry chains for
- * every role and any provider the schema accepts.
+ * Routing settings. Renders the 6-role fallback-chain editor, the Vault per-cred
+ * policy panel (read-only), the credentials binding, and the conditional
+ * audit-gate caption — all generated from the routing schema (`RoutingTable`). v0
+ * ships only functional Codex bindings, but the editor handles 1..N-entry chains
+ * for every role and any provider the schema accepts.
  *
  * Mutations are server-side form POSTs to this spec's own settings routes
- * (add / remove / reorder a chain entry; save escape hatches). Each POST loads
- * the merged config, applies the edit, and PATCHes it back via the product API (which
- * delegates to). No PR is opened — the audit-gate caption defaults to
- * the "edits land in the dashboard" state.
+ * (add / remove / reorder a chain entry). Each POST loads the merged config,
+ * applies the edit, and PATCHes it back via the product API. No PR is opened —
+ * the audit-gate caption defaults to the "edits land in the dashboard" state.
+ *
+ * The escape-hatches editor is GONE (apex v35): there are no hardcoded attempt
+ * caps to tune — convergence is intelligent non-convergence detection (the shared
+ * `convergenceDetector`), not an operator-set count.
  */
 
 import {
   ROLE_IDS,
   type CredentialRecord,
-  type EscapeHatches,
   type ProjectSummary,
   type RoleId,
   type RoutingTable,
@@ -32,13 +33,6 @@ export const ROLE_DESCRIPTIONS: Record<RoleId, string> = {
   audit: "spec-level verdict · strongest reasoning model · no dev bundles",
   demo: "spec-completion narration for review · cheap, optional",
   forge: "read-only narration with operator write-buttons · config edits land via this surface",
-};
-
-/** Default escape-hatch values (schema defaults) shown as the diff cue. */
-export const ESCAPE_HATCH_DEFAULTS: EscapeHatches = {
-  maxWriterIterPerSubtask: 5,
-  maxRetriesPerTransientFailure: 3,
-  maxSpecDiscoveryRoundsWithForge: 20,
 };
 
 interface VaultEntry {
@@ -72,7 +66,6 @@ const VAULT_ENTRIES: VaultEntry[] = [
 export interface SettingsBodyProps {
   project: ProjectSummary;
   routing: RoutingTable;
-  escapeHatches: EscapeHatches;
   orgId: string;
   /** Org audit-gate flag. On → Bucket-B writes route through a PR. */
   auditGate: boolean;
@@ -97,14 +90,14 @@ export function SettingsBody(props: SettingsBodyProps) {
         eyebrow="▮ settings · routing & limits"
         title={
           <>
-            routing, fallbacks, <em>escape hatches</em>
+            routing, <em>fallbacks</em>
           </>
         }
         sub={
           props.auditGate ? (
             <>config committed via pr · forge can edit</>
           ) : (
-            <>{props.project.name} · routing &amp; limits · stored in dashboard</>
+            <>{props.project.name} · routing · stored in dashboard</>
           )
         }
       />
@@ -119,7 +112,6 @@ export function SettingsBody(props: SettingsBodyProps) {
           </div>
         </div>
         <CredentialsPanel {...props} />
-        <EscapeHatchesPanel {...props} />
         <AuditGatePanel {...props} />
       </div>
     </div>
@@ -328,83 +320,6 @@ function CredentialSelect(props: {
   );
 }
 
-interface HatchCard {
-  field: keyof EscapeHatches;
-  label: string;
-  onExceed: string;
-  stub?: boolean;
-}
-
-const HATCH_CARDS: HatchCard[] = [
-  {
-    field: "maxWriterIterPerSubtask",
-    label: "max writer iter per subtask",
-    onExceed: "→ P0 finding (loop back, not a halt)",
-  },
-  {
-    field: "maxRetriesPerTransientFailure",
-    label: "max retries per task on transient fail",
-    onExceed: "→ try next fallback in chain",
-  },
-  {
-    field: "maxSpecDiscoveryRoundsWithForge",
-    label: "max spec-discovery rounds with forge",
-    onExceed: "→ checkpoint · resume later",
-    stub: true,
-  },
-];
-
-function EscapeHatchesPanel(props: SettingsBodyProps) {
-  return (
-    <div class="panel">
-      <div class="panel-head">
-        <h3>
-          escape hatches · <em>not perf budgets</em>
-        </h3>
-        <span class="meta">limits exist to stop runaway loops · save applies to the next run</span>
-      </div>
-      <div class="panel-body">
-        <div class="escape-note">
-          tanren's leverage is parallel dag execution. don't squeeze individual specs for speed — these limits exist to
-          stop runaway loops, nothing else. <b>not configured here:</b> per-task time limits · per-spec wallclock caps.
-          the escape hatch is the count, not the clock.
-        </div>
-        <form method="post" action={`/settings/routing/${props.project.projectId}/hatches`}>
-          <input type="hidden" name="orgId" value={props.orgId} />
-          <div class="hatch-grid">
-            {HATCH_CARDS.map((card) => {
-              const current = props.escapeHatches[card.field];
-              const isDefault = current === ESCAPE_HATCH_DEFAULTS[card.field];
-              return (
-                <div class={`hatch-card${card.stub ? " stub" : ""}`}>
-                  <div class="l">
-                    {card.label}
-                    {card.stub === true && <span class="badge"> not yet enforced</span>}
-                  </div>
-                  <input
-                    type="number"
-                    name={card.field}
-                    value={String(current)}
-                    min="0"
-                    disabled={card.stub === true}
-                  />
-                  <div class="prev">{isDefault ? "default" : `was ${ESCAPE_HATCH_DEFAULTS[card.field]} (default)`}</div>
-                  <div class="t">{card.onExceed}</div>
-                </div>
-              );
-            })}
-          </div>
-          <div class="head-actions" style="margin-top:12px">
-            <button class="btn primary" type="submit">
-              save escape hatches
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
-  );
-}
-
 /**
  * The "tell forge to change config" panel. The caption is conditional on the
  * org audit-gate flag: on → "edits land as a pr in <org>/tanren-config"; off
@@ -417,7 +332,7 @@ function AuditGatePanel(props: SettingsBodyProps) {
     <div class="forge-card" style="margin-top:14px">
       <div class="forge-input" style="border-top:none">
         <span class="stamp">鍛</span>
-        <input placeholder={`"swap audit primary to a different cli" · "raise max writer iter to 8"`} disabled />
+        <input placeholder={`"swap audit primary to a different cli" · "add a claude fallback to write"`} disabled />
         <span class="kbd">↵</span>
       </div>
       <div class="panel-body" style="padding-top:0">

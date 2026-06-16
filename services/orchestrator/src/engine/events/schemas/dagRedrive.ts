@@ -28,14 +28,23 @@ export const DagSpecRedrivenPayload = z
     ]),
     // The run STAGE the failure is attributed to (closed vocabulary), for the timeline.
     stage: z.enum(["bootstrap", "credentials", "workspace", "agent", "merge", "deploy", "run"]),
-    // CONSECUTIVE prior re-drives with the SAME failure code (this one included) — the stuck-
-    // detector. A DIFFERENT code (any progress) resets it to 1. At the cap K the spec escalates.
+    // CONSECUTIVE prior re-drives at the SAME structural FIXED POINT (this one included) — the
+    // intelligent stuck-detector (apex v35; the shared `convergenceDetector`). It counts the
+    // trailing run of re-drives whose failure code AND produced-work signature both match. A
+    // DIFFERENT failure code OR a DIFFERENT produced work (PROGRESS) resets it to 1, so the
+    // loop is UNBOUNDED while it keeps changing the failure or the work. The spec escalates
+    // ONLY once this exceeds 1 (a proven fixed point — identical failure + identical work,
+    // no new information) — NOT at any hardcoded count.
     consecutiveSameFailure: z.number().int().positive(),
-    // The cap K: the consecutive-same-failure count at which the spec escalates loudly (the bound
-    // is visible on the timeline — a stuck spec is never re-driven forever).
-    escalateAtAttempts: z.number().int().positive(),
+    // The WORK signature of the run that just failed (the produced PR-head / commit sha when
+    // observable) — the second fixed-point axis: identical failure but DIFFERENT work is
+    // PROGRESS (the agent did something different). Absent when the run produced no
+    // observable head (it failed before committing), in which case the failure code alone
+    // keys the fixed point.
+    workSignature: z.string().optional(),
     // The backoff (seconds) before the walker should re-enqueue this spec so re-drives do not
-    // hot-loop — grows with the consecutive-same-failure count.
+    // hot-loop — grows with the fixed-point streak. The backoff (NOT a counter) is the hot-loop
+    // guard while the loop is unbounded.
     backoffSeconds: z.number().int().nonnegative(),
   })
   .strict();

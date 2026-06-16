@@ -146,7 +146,6 @@ describe("compareCells — §3.2 verdict", () => {
 describe("compareCells — §3.3 one-knob invariant", () => {
   const baseConfig = {
     routing: { write: "premium" },
-    escapeHatches: { maxWriterIterPerSubtask: 5 },
     ciTiers: { fast: ["lint"] },
     governance: "strict",
     mergeIntegration: "native_queue",

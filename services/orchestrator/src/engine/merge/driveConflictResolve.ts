@@ -54,20 +54,16 @@ import {
 } from "../workflow/gate/index.js";
 import { buildAdaptersFromRouting } from "../providers/adapterSelector.js";
 import { buildDefaultConflictResolver } from "../workflow/reviewMerge/conflictResolver/index.js";
+import { atReplanFixedPoint, conflictSignatureOf } from "../workflow/reviewMerge/conflictResolver/replanRouter.js";
 import { driveResolveOverJj } from "./driveConflictResolveJj.js";
 import type { WorkspaceConflictApplier } from "../contracts/conflictResolution.js";
 import type { ConflictResolverHook } from "../workflow/reviewMerge/index.js";
 
-/**
- * The bounded conflict-RE-PLAN budget: a spec whose conflict could not be
- * mechanically resolved is routed back to the planner AT MOST this many times,
- * carrying the other side's change. Once the count of prior
- * `merge.conflict.replan_routed` events REACHES this (`>=`), the next drive-pass
- * conflict ESCALATES to `needs_attention` instead of re-planning again — so a
- * spec is re-planned at most `MAX_CONFLICT_REPLANS` times, then surfaces a loud
- * "the intents genuinely conflict" product decision (never an infinite re-plan).
- */
-export const MAX_CONFLICT_REPLANS = 3;
+// The drive-path conflict resolver no longer counts re-plans (apex v35 — intelligent
+// non-convergence detection). It escalates ONLY at a FIXED POINT (the SAME conflict
+// signature recurring), via the shared `convergenceDetector` (`atReplanFixedPoint`) —
+// re-planning against a DIFFERENT conflict (e.g. a shifted base) is progress and continues
+// UNBOUNDED. There is no `MAX_CONFLICT_REPLANS` budget.
 
 /** The terminal runner image a runless drive-path resolver allocates against. */
 const DEFAULT_RESOLVER_RUNNER_IMAGE_FALLBACK = CANONICAL_RUNNER_IMAGE;
@@ -177,17 +173,18 @@ export function buildDriveConflictResolve(deps: DriveConflictResolveDeps): Confl
       throw new PercolationOwnsSpecError(deps.facts.runId);
     }
 
-    // CLASSIFY-THEN-ESCALATE — the bounded re-plan budget. Count prior
-    // `merge.conflict.replan_routed` events for this spec (the bounded-cap
-    // convention). At/over the cap the two intents are GENUINELY incompatible:
-    // re-planning again would just re-conflict forever, so escalate WITHOUT
-    // provisioning a runner or routing another re-plan.
-    const priorReplans = await countPriorConflictReplans(deps.pool, deps.facts);
-    if (priorReplans >= MAX_CONFLICT_REPLANS) {
+    // CLASSIFY-THEN-ESCALATE — the FIXED-POINT rule (no count). The current conflict's
+    // signature is the base it is colliding against; read prior re-plan signatures and ask
+    // the shared detector. At a fixed point (the SAME conflict recurring — re-planning would
+    // re-conflict identically) the two intents are GENUINELY incompatible: escalate WITHOUT
+    // provisioning a runner. A DIFFERENT conflict (e.g. a shifted base) is progress → resolve.
+    const currentSignature = conflictSignatureOf(conflictContext.message || conflictContext.baseBranch);
+    const priorSignatures = await priorConflictSignatures(deps.pool, deps.facts);
+    if (atReplanFixedPoint(priorSignatures, currentSignature)) {
       deps.verdict.disposition = "escalate";
       deps.verdict.message =
-        `the resolver judged these specs' intents genuinely conflict: spec ${deps.facts.specId} has been ` +
-        `re-planned ${priorReplans} times against the conflicting change and STILL collides — a product ` +
+        `the resolver reached a FIXED POINT on spec ${deps.facts.specId}: it is re-planning against the SAME ` +
+        `conflicting change it already could not absorb (re-planning would re-conflict identically) — a product ` +
         `decision is needed (which behavior wins, or whether the architecture must change).`;
       return { resolved: false };
     }
@@ -267,21 +264,23 @@ async function percolationOwnsRun(scopedPool: pg.Pool, facts: DriveConflictResol
 }
 
 /**
- * Count prior `merge.conflict.replan_routed` events for the spec — the bounded
- * re-plan budget key. The
- * `events` table is unreadable to the de-privileged data-plane role (0031 REVOKE),
- * so read on the BYPASSRLS system pool with the org GUC still applied on top.
+ * Read prior `merge.conflict.replan_routed` CONFLICT SIGNATURES for the spec (oldest→newest)
+ * — the shared convergence detector's input. The `events` table is unreadable to the
+ * de-privileged data-plane role (0031 REVOKE), so read on the BYPASSRLS system pool with the
+ * org GUC applied on top. Legacy rows without a `conflictSignature` fall back to a hash of
+ * their `newContext` so the detector can still tell same-conflict from different-conflict.
  */
-async function countPriorConflictReplans(pool: pg.Pool, facts: DriveConflictResolveFacts): Promise<number> {
+async function priorConflictSignatures(pool: pg.Pool, facts: DriveConflictResolveFacts): Promise<string[]> {
   const readPool = getSystemPool() ?? pool;
   return runWithOrgScope(readPool, facts.orgId, async (client) => {
-    const result = await client.query<{ count: string }>(
-      `SELECT count(*)::text AS count
+    const result = await client.query<{ payload: { conflictSignature?: string; newContext?: string } }>(
+      `SELECT payload
          FROM events
-        WHERE spec_id = $1 AND event_type = 'merge.conflict.replan_routed'`,
+        WHERE spec_id = $1 AND event_type = 'merge.conflict.replan_routed'
+        ORDER BY ts ASC, id ASC`,
       [facts.specId],
     );
-    return Number(result.rows[0]?.count ?? "0");
+    return result.rows.map((row) => row.payload.conflictSignature ?? conflictSignatureOf(row.payload.newContext ?? ""));
   });
 }
 

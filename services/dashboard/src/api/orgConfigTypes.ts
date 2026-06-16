@@ -5,7 +5,7 @@
  * `OrgConfigV1` shape the gate surface renders — local + minimal, like the rest.
  */
 
-import type { EscapeHatches, RoutingTable } from "./types.js";
+import type { RoutingTable } from "./types.js";
 
 /** The tanren-config audit-gate target stored in org config JSONB. */
 export interface OrgAuditGateTarget {
@@ -19,7 +19,6 @@ export interface OrgAuditGateTarget {
 export interface OrgConfig {
   version: 1;
   routing: RoutingTable;
-  escapeHatches: EscapeHatches;
   /** gate toggle: when true, Bucket-B writes route through a PR. */
   auditGateEnabled?: boolean;
   auditGate?: OrgAuditGateTarget;

@@ -91,15 +91,14 @@ export const specLoopStageSensitivityRules: SensitivityRule[] = [
     ["assessment", "public"],
     ["blockingRootCauseProgress", "public"],
     ["blockingRootCauseId", "public"],
+    ["escalation", "public"],
     ["decision", "public"],
     ["consecutiveStalls", "public"],
-    ["maxConsecutiveStalls", "public"],
     ["reasoning", "public"],
   ]),
   ...rulesFor("convergence.stalled", [
     ["runId", "public"],
     ["consecutiveStalls", "public"],
-    ["maxConsecutiveStalls", "public"],
     ["reason", "public"],
   ]),
   // §3.3 entity-anchored Claims (the Tanren-native defect ledger). All fields are

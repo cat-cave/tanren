@@ -7,7 +7,7 @@
 // real `runs` row (§4.2).
 
 import { z } from "zod";
-import { EscapeHatches, GovernancePosture, MergeIntegration, RoutingTable } from "../config/shared.js";
+import { GovernancePosture, MergeIntegration, RoutingTable } from "../config/shared.js";
 import { CiStep, CiWhenPolicy } from "../ci/schema.js";
 
 // ---- Seed task reference --------------------------------------------------
@@ -32,7 +32,7 @@ export type SeedTaskRef = z.infer<typeof SeedTaskRef>;
 
 // ---- Frozen cell config ---------------------------------------------------
 
-// The `(RoutingTable × EscapeHatches × tanren-ci tier snapshot × governance)`
+// The `(RoutingTable × tanren-ci tier snapshot × governance)`
 // point a cell freezes (§3.1). The whole config lives on the cell row so a
 // trial is reproducible from the row alone. Exactly ONE of these dimensions is
 // the knob the experiment varies (the §3.3 one-knob invariant, enforced by
@@ -66,7 +66,6 @@ export type CiTierSnapshot = z.infer<typeof CiTierSnapshot>;
 export const FrozenConfig = z
   .object({
     routing: RoutingTable,
-    escapeHatches: EscapeHatches,
     ciTiers: CiTierSnapshot,
     governance: GovernancePosture,
     mergeIntegration: MergeIntegration,

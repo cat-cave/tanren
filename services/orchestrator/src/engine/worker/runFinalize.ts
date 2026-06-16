@@ -18,11 +18,8 @@ import { PgEventStore } from "../eventStore.js";
 import type { ClassifiedRunFailure } from "./runFailureClassifier.js";
 import { createLogger } from "../observability/logger.js";
 import { isWorkflowFinalized, rawCauseOf } from "../workflow/workflowErrorDisposition.js";
-import {
-  decideRunDisposition,
-  DEFAULT_REDRIVE_ESCALATE_AT,
-  redriveBackoffSeconds,
-} from "../workflow/runFinalizeAuthority.js";
+import { decideRunDisposition, redriveBackoffSeconds } from "../workflow/runFinalizeAuthority.js";
+import { assessStructuralProgress, type AttemptSignature } from "../workflow/convergenceDetector.js";
 // Re-exported so runExecutor (which already imports finalizeRunRecoverable here)
 // gets the logger factory + the WorkflowFinalizedError unwrap WITHOUT separate imports
 // (its dependency cap is at 12). `rawCauseOf` lets the worker classify the raw cause.
@@ -206,36 +203,50 @@ export async function finalizeRunRecoverable(
 // into RE-DRIVE, and the only worker-orphan path to `needs_attention` is the bounded
 // persistent-failure escalation — the unified 3-bucket model, applied at the worker too.
 
-/** The `dag.spec.redriven` payload a worker-level orphan re-drive emits (the OBSERVABLE retry). */
-function orphanRedrivenPayload(runId: string, specId: string, failure: ClassifiedRunFailure, consecutive: number) {
+/** The `dag.spec.redriven` payload a worker-level orphan re-drive emits (the OBSERVABLE retry).
+ * `priorSameFixedPoint` is the shared detector's fixed-point streak (0 ⇒ progress). */
+function orphanRedrivenPayload(
+  runId: string,
+  specId: string,
+  failure: ClassifiedRunFailure,
+  priorSameFixedPoint: number,
+) {
   return {
     specId,
     runId,
     failureCode: failure.code,
     stage: failure.stage,
-    consecutiveSameFailure: Math.max(1, consecutive),
-    escalateAtAttempts: DEFAULT_REDRIVE_ESCALATE_AT,
-    backoffSeconds: redriveBackoffSeconds(consecutive),
+    consecutiveSameFailure: priorSameFixedPoint + 1,
+    backoffSeconds: redriveBackoffSeconds(priorSameFixedPoint),
   };
 }
 
 /** The `dag.spec.needs_attention` payload a worker-level persistent-failure escalation emits. */
-function orphanPersistentPayload(runId: string, specId: string, failure: ClassifiedRunFailure, consecutive: number) {
+function orphanPersistentPayload(
+  runId: string,
+  specId: string,
+  failure: ClassifiedRunFailure,
+  priorSameFixedPoint: number,
+) {
   return {
     source: "strand" as const,
     specId,
     reason: "persistent_failure" as const,
     terminalRuns: [{ runId, status: "halted" }],
-    attempts: consecutive,
+    attempts: priorSameFixedPoint + 1,
     message:
-      `the run crashed the same way (${failure.code} @ ${failure.stage}: ${failure.summary}) ${consecutive} ` +
-      `times in a row — the spec is genuinely stuck (a bug or mis-spec, not a flake); requeue after addressing the cause`,
+      `the run reached a FIXED POINT (${failure.code} @ ${failure.stage}: ${failure.summary}) — it crashed the ` +
+      `identical way with no new information across re-drives; the spec is genuinely stuck (a bug or mis-spec, not a ` +
+      `flake), so a human must intervene; requeue after addressing the cause`,
   };
 }
 
-/** Decide the orphan disposition (re-drive under the cap, genuine-halt at the cap) from the failure code. */
-function decideOrphan(failure: ClassifiedRunFailure, consecutive: number): "re_drive" | "genuine_halt" {
-  const disposition = decideRunDisposition({ kind: "error", error: new OrphanFailureProxy(failure) }, consecutive);
+/** Decide the orphan disposition (re-drive while progressing, genuine-halt at a fixed point). */
+function decideOrphan(failure: ClassifiedRunFailure, priorSameFixedPoint: number): "re_drive" | "genuine_halt" {
+  const disposition = decideRunDisposition(
+    { kind: "error", error: new OrphanFailureProxy(failure) },
+    { priorSameFixedPoint },
+  );
   return disposition.bucket === "genuine_halt" ? "genuine_halt" : "re_drive";
 }
 
@@ -287,7 +298,7 @@ async function parkStrandedSpecRemote(
     return { occupying, hasSuccessor: (successor.rowCount ?? 0) > 0, consecutive };
   }).catch((error: unknown) => {
     logFinalizeSwallow("occupancy/successor read (remote, fail-closed → re-drive)", { runId, specId }, error);
-    return { occupying: true, hasSuccessor: false, consecutive: 1 };
+    return { occupying: true, hasSuccessor: false, consecutive: 0 };
   });
   if (!slot.occupying) return;
   if (slot.hasSuccessor) {
@@ -382,18 +393,22 @@ export async function parkStrandedSpecInProcess(
  */
 async function readOrphanConsecutive(client: pg.PoolClient, specId: string, code: string): Promise<number> {
   try {
-    const result = await client.query<{ payload: { failureCode?: string } }>(
-      `SELECT payload FROM events WHERE spec_id = $1 AND event_type = 'dag.spec.redriven' ORDER BY ts DESC, id DESC`,
+    const result = await client.query<{ payload: { failureCode?: string; workSignature?: string } }>(
+      `SELECT payload FROM events WHERE spec_id = $1 AND event_type = 'dag.spec.redriven' ORDER BY ts ASC, id ASC`,
       [specId],
     );
-    let priorSameRun = 0;
-    for (const row of result.rows) {
-      if (row.payload.failureCode !== code) break;
-      priorSameRun += 1;
-    }
-    return priorSameRun + 1;
+    // A crashed/orphaned run has no observable produced work, so the fixed point keys on the
+    // failure code alone. Assemble the oldest→newest history + the current crash and ask the
+    // shared detector: 1 ⇒ a fixed point (the prior crash was identical) ⇒ escalate; 0 ⇒
+    // progress (a different crash, or the first of its kind) ⇒ re-drive, UNBOUNDED.
+    const history: AttemptSignature[] = result.rows.map((row) => ({
+      failureSignature: row.payload.failureCode ?? "",
+      ...(row.payload.workSignature !== undefined && { workSignature: row.payload.workSignature }),
+    }));
+    history.push({ failureSignature: code });
+    return assessStructuralProgress(history) === "fixed_point" ? 1 : 0;
   } catch {
-    return 1;
+    return 0;
   }
 }
 

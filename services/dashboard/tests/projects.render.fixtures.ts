@@ -151,10 +151,6 @@ const PROJECT_DETAIL = {
       demo: { chain: [] },
       forge: { chain: [] },
     },
-    escapeHatches: {
-      maxWriterIterPerSubtask: 5,
-      maxRetriesPerTransientFailure: 3,
-    },
   },
 };
 

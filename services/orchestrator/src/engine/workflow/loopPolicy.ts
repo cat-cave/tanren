@@ -5,7 +5,12 @@
 
 import { type AuditPostureConfig } from "../config/shared.js";
 import { type Finding, type FindingSeverity, severityRank } from "../contracts/findings.js";
-import type { BlockingRootCauseProgress, ConvergenceAssessment, TriageWorkItem } from "../answerers/schemas/index.js";
+import type {
+  BlockingRootCauseProgress,
+  ConvergenceAssessment,
+  ConvergenceEscalation,
+  TriageWorkItem,
+} from "../answerers/schemas/index.js";
 
 // A triaged item's resolved ROUTE — the deterministic decision the loop makes over
 // the agent's `kind` HINT + the item severity + the project posture:
@@ -73,19 +78,19 @@ export function summarizeTriageRouting(routed: ReadonlyArray<RoutedWorkItem>): T
 }
 
 // The CONVERGENCE policy decision the loop acts on, derived from the answerer's
-// assessment + the consecutive-stall counter:
-//   - `continue` — keep iterating the loop (progress).
+// assessment + the intelligent escalation verdict:
+//   - `continue` — keep iterating the loop (progress, or the agent said keep_going).
 //   - `pass`     — velocity-defer: allow the spec to pass (mild leftovers as specs).
-//   - `halt`     — N consecutive stalls reached → HALT `convergence_stalled`.
+//   - `halt`     — the agent's INTELLIGENT escalation verdict says a human must act →
+//                  HALT `convergence_stalled`. NOT a count (no `maxConsecutiveStalls`).
 export type ConvergenceDecision = "continue" | "pass" | "halt";
 
 export interface ConvergenceState {
-  // The number of CONSECUTIVE BLOCKING-unchanged stalls observed so far (NOT a retry
-  // counter). The v24 cause-not-symptom fix: this tracks the BLOCKING root cause, not
-  // "did anything change". A blocking `retired`/`reduced` (the blocker made forward
-  // motion) RESETS it to 0; a blocking `unchanged`/`regressed` increments it — EVEN IF
-  // peripheral non-blocking findings changed this loop. When there is NO blocking
-  // finding (`none`), the answerer's overall `assessment` drives the reset/increment.
+  // The number of CONSECUTIVE BLOCKING-unchanged stalls observed so far — an OBSERVABLE
+  // diagnostic (NOT a bound; the loop is UNBOUNDED while the agent says keep_going). A
+  // blocking `retired`/`reduced` (forward motion) RESETS it to 0; a blocking
+  // `unchanged`/`regressed` increments it. Surfaced on the timeline so a slow-but-converging
+  // loop is visible, but the HALT decision is the agent's escalation verdict, not this count.
   consecutiveStalls: number;
 }
 
@@ -119,52 +124,43 @@ function blockingIsStuck(progress: BlockingRootCauseProgress): boolean {
 /**
  * Apply the convergence policy. PURE. Returns the next state + the loop decision.
  *
- * The v24 CAUSE-NOT-SYMPTOM fix: the consecutive-stall counter tracks the BLOCKING
- * root cause (`blockingProgress`), NOT the overall "did anything change" assessment.
- * When a blocking (merge-gating) finding exists this loop, its progress is the SOLE
- * driver of the stall counter — peripheral non-blocking churn can no longer mask a
- * stuck blocker:
- *   - blocking `unchanged`/`regressed` → increment the stall counter (a stall vote),
- *     `halt` once it reaches `maxConsecutiveStalls`, else `continue`. This holds EVEN
- *     IF the answerer's overall `assessment` was `progress`/`velocity_defer` because
- *     unrelated findings moved (the exact v24 churn).
- *   - blocking `retired`/`reduced` → genuine forward motion on the blocker → RESET the
- *     stall counter; then honor the answerer's overall assessment for the decision
- *     (`velocity_defer` may `pass`, otherwise `continue`).
+ * INTELLIGENT NON-CONVERGENCE DETECTION (apex v35) — there is NO `maxConsecutiveStalls`
+ * count. The loop is UNBOUNDED while it is PROGRESSING, and halts ONLY when the answerer's
+ * intelligent escalation verdict (`escalation`) says a human must act:
  *
- * When there is NO blocking finding this loop (`blockingProgress === "none"`), the
- * answerer's overall `assessment` drives the counter (the original behavior, used for
- * loopbacks with only non-blocking leftovers):
- *   - `progress`       → reset the stall counter, `continue`.
- *   - `velocity_defer` → reset the stall counter; `pass` if the velocity policy HONORS
- *                        it (enabled · leftovers ≤ maxSeverity · stalls ≥ afterStalls),
- *                        else `continue` (the defer is refused — keep iterating).
- *   - `stalled`        → increment the stall counter; `halt` at `maxConsecutiveStalls`.
+ *   - PROGRESS (blocking `retired`/`reduced`, or overall `assessment === "progress"`):
+ *     `continue` and RESET the stall diagnostic to 0. A progressing loop is NEVER escalated,
+ *     no matter how many attempts (the v24 trajectory case: 1000 → 1 errors keeps going).
+ *   - velocity_defer: honor it (→ `pass`) when the policy allows, else `continue`.
+ *   - SUSPECTED STALL (blocking `unchanged`/`regressed`, or overall `stalled` with no
+ *     blocker): consult the agent's `escalation` verdict — the "would a human add value
+ *     beyond 'keep going'?" judgment. `escalate` ⇒ `halt` (a genuine human decision/blocker/
+ *     dead-end). `keep_going` ⇒ `continue` (slow/hard/a-new-approach — keep iterating,
+ *     UNBOUNDED). The `consecutiveStalls` diagnostic increments for OBSERVABILITY only — it
+ *     never forces a halt.
  *
- * `maxConsecutiveStalls` is the SOLE halt bound — there is NO retry cap / timeout.
- *
- * `worstLeftoverSeverity` is the worst severity among the findings KEPT in-spec on
- * this loopback (undefined ⇒ no kept findings, so the leftover-severity gate is
- * vacuously satisfied). It is only consulted for a `velocity_defer`.
+ * `worstLeftoverSeverity` is the worst severity among the findings KEPT in-spec on this
+ * loopback (undefined ⇒ no kept findings); it is only consulted for a `velocity_defer`.
  */
 export function applyConvergencePolicy(
   assessment: ConvergenceAssessment,
   blockingProgress: BlockingRootCauseProgress,
+  escalation: ConvergenceEscalation,
   state: ConvergenceState,
-  maxConsecutiveStalls: number,
   velocityPolicy: VelocityDeferPolicy,
   worstLeftoverSeverity?: FindingSeverity,
 ): { state: ConvergenceState; decision: ConvergenceDecision } {
-  // PRIMARY signal: a stuck blocking root cause is a stall regardless of the overall
-  // assessment — peripheral progress NEVER resets the counter (the v24 fix).
+  // PRIMARY signal: a stuck blocking root cause is a suspected stall regardless of the overall
+  // assessment — peripheral progress NEVER masks a stuck blocker (the v24 fix). The agent's
+  // intelligent verdict decides whether to halt; the count is observability only.
   if (blockingIsStuck(blockingProgress)) {
     const consecutiveStalls = state.consecutiveStalls + 1;
-    const decision: ConvergenceDecision = consecutiveStalls >= maxConsecutiveStalls ? "halt" : "continue";
+    const decision: ConvergenceDecision = escalation === "escalate" ? "halt" : "continue";
     return { state: { consecutiveStalls }, decision };
   }
   // The blocking root cause was retired/reduced (forward motion on the blocker), OR
   // there is no blocking finding. Reset on blocker progress, then honor the overall
-  // assessment. (`retired`/`reduced` ⇒ never a `stalled` vote: the blocker advanced.)
+  // assessment. (`retired`/`reduced` ⇒ never a stall: the blocker advanced.)
   const blockerAdvanced = blockingProgress === "retired" || blockingProgress === "reduced";
   if (blockerAdvanced || assessment === "progress") {
     if (assessment === "velocity_defer") {
@@ -177,15 +173,16 @@ export function applyConvergencePolicy(
   }
   // No blocking finding (`none`) + the overall assessment is the driver.
   if (assessment === "velocity_defer") {
-    // A defer RESETS the stall counter (it is not a stall — the remainder is deferred).
+    // A defer RESETS the stall diagnostic (it is not a stall — the remainder is deferred).
     const decision: ConvergenceDecision = honorsVelocityDefer(velocityPolicy, state, worstLeftoverSeverity)
       ? "pass"
       : "continue";
     return { state: { consecutiveStalls: 0 }, decision };
   }
-  // stalled (no blocking finding, overall read is a stall)
+  // overall `stalled` with no blocking finding: the agent's intelligent verdict decides the
+  // halt — `keep_going` re-iterates UNBOUNDED, `escalate` surfaces the human decision.
   const consecutiveStalls = state.consecutiveStalls + 1;
-  const decision: ConvergenceDecision = consecutiveStalls >= maxConsecutiveStalls ? "halt" : "continue";
+  const decision: ConvergenceDecision = escalation === "escalate" ? "halt" : "continue";
   return { state: { consecutiveStalls }, decision };
 }
 
