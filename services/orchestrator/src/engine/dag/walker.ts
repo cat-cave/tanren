@@ -20,13 +20,7 @@
 
 import { getSystemPool, runWithSystemScope } from "@tanren/db";
 import type pg from "pg";
-import {
-  DEFAULT_SPECULATION_THRESHOLD,
-  DEFAULT_SPECULATIVE_INTEGRATION_DEPTH,
-  resolveWorkerConcurrency,
-  type SpeculationThreshold,
-} from "../config/index.js";
-import { isAbsentProjectConfig, migrateProjectConfig } from "../config/projectConfig.js";
+import { resolveWorkerConcurrency, type SpeculationThreshold } from "../config/index.js";
 import {
   type BudgetGate,
   type DagEnqueuer,
@@ -38,11 +32,14 @@ import {
   shouldPauseOnBudget,
   type WalkResult,
 } from "../contracts/dagWalker.js";
-import type { DagLifecycleReadModel } from "../contracts/dagLifecycle.js";
+import type { DagLifecycleReadModel, DagLifecycleSnapshot } from "../contracts/dagLifecycle.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import { SpecDependenciesBlockedError, SpecNotRunnableError } from "../workflow/projectSpecErrors.js";
 import type { AncestorStack } from "./ancestorStack.js";
 import type { SpecReadiness } from "./speculation.js";
+import { decideAncestorWait } from "./ancestorWaitGate.js";
+import { buildSpeculationConfigResolver } from "./speculationConfigResolver.js";
+import { HeldReDriveBackoff } from "./heldReDriveBackoff.js";
 import { PgBudgetGate } from "./budgetGate.js";
 import { PgDagLifecycleReadModel } from "./lifecycle.js";
 import {
@@ -98,6 +95,13 @@ export interface DagWalkerDeps {
    * the walk loop.
    */
   concurrency?: ConcurrencyResolver;
+  /**
+   * ANCESTOR-NOT-READY RE-DRIVE BACKOFF (apex v35 hot-loop fix): the per-spec backoff that
+   * SPACES re-driving a speculative dependent (see `enqueueOne`). Defaults to a wall-clock
+   * `HeldReDriveBackoff`; a test injects a clock-controlled one to assert a notification storm
+   * yields a handful of spaced re-enqueues, never the live ~516-runner hot-loop.
+   */
+  ancestorWaitBackoff?: HeldReDriveBackoff;
 }
 
 /**
@@ -113,9 +117,12 @@ export interface DagWalkerDeps {
  */
 export class EventEmittingDagWalker implements DagWalker {
   private readonly concurrency: ConcurrencyResolver;
+  /** Per-spec ANCESTOR-NOT-READY re-drive backoff (apex v35 hot-loop fix); see `enqueueOne`. */
+  private readonly ancestorWaitBackoff: HeldReDriveBackoff;
 
   constructor(private readonly deps: DagWalkerDeps) {
     this.concurrency = deps.concurrency ?? resolveWorkerConcurrency;
+    this.ancestorWaitBackoff = deps.ancestorWaitBackoff ?? new HeldReDriveBackoff();
   }
 
   async walk(projectId: string): Promise<WalkResult> {
@@ -181,7 +188,15 @@ export class EventEmittingDagWalker implements DagWalker {
         // inside `enqueueOrTolerate`; this catch is the backstop for everything else.)
         let enqueued: { runId: string } | undefined;
         try {
-          enqueued = await this.enqueueOne(projectId, enqueue, config.threshold, inFlightBefore, ceiling, depsBySpec);
+          enqueued = await this.enqueueOne(
+            projectId,
+            enqueue,
+            config.threshold,
+            inFlightBefore,
+            ceiling,
+            depsBySpec,
+            lifecycle,
+          );
         } catch (error) {
           log.error(
             "enqueue of ready spec threw — skipping it this tick so the other ready specs are not starved; the next walk re-attempts it",
@@ -286,6 +301,12 @@ export class EventEmittingDagWalker implements DagWalker {
    * `ancestor_stack`, and emits dag.spec.speculative. NO host integration ref is built
    * — the dependent run jj-assembles its base LOCALLY at bootstrap from those refs (a
    * spec-vs-spec conflict surfaces there, §4a, not here).
+   *
+   * ANCESTOR-NOT-READY HOT-LOOP FIX (apex v35): a speculative attempt is GATED by
+   * `decideAncestorWait` (per-spec backoff + cheap ancestor-published-head pre-check) BEFORE
+   * the expensive provisioning — see `ancestorWaitGate.ts` (the live ~516-runner hot-loop).
+   * `skip` returns silently; `defer` emits the benign `dag.spec.ancestor_not_ready` (runId "")
+   * with NO provisioning; `proceed` enqueues + ARMS the backoff so a re-drive is spaced.
    */
   private async enqueueOne(
     projectId: string,
@@ -294,6 +315,7 @@ export class EventEmittingDagWalker implements DagWalker {
     inFlightBefore: number,
     ceiling: number,
     depsBySpec: Map<string, string[]>,
+    lifecycle: DagLifecycleSnapshot,
   ): Promise<{ runId: string } | undefined> {
     if (!enqueue.speculative) {
       const enqueued = await this.enqueueOrTolerate({ projectId, specId: enqueue.specId });
@@ -307,6 +329,33 @@ export class EventEmittingDagWalker implements DagWalker {
         concurrencyCeiling: ceiling,
       });
       return { runId: enqueued.runId };
+    }
+
+    // ANCESTOR-NOT-READY GATE: decide skip/defer/proceed against the backoff + cheap pre-check.
+    const decision = decideAncestorWait(this.ancestorWaitBackoff, enqueue.specId, enqueue.unmergedAncestors, lifecycle);
+    if (decision.kind === "skip") {
+      log.debug("speculative dependent inside its re-drive backoff window — skipping (spaced)", {
+        projectId,
+        specId: enqueue.specId,
+        remainingMs: decision.remainingMs,
+      });
+      return undefined;
+    }
+    if (decision.kind === "defer") {
+      log.debug("speculative dependent deferred — ancestor has not published its head yet (no runner allocated)", {
+        projectId,
+        specId: enqueue.specId,
+        ancestorSpecId: decision.ancestorSpecId,
+        holds: decision.holds,
+        delayMs: decision.delayMs,
+      });
+      await this.deps.events.emitAncestorNotReady({
+        projectId,
+        specId: enqueue.specId,
+        ancestorSpecId: decision.ancestorSpecId,
+        ancestorPhase: decision.ancestorPhase,
+      });
+      return undefined;
     }
 
     // Resolve the ordered unmerged-ancestor stack — the real PR-head branches the
@@ -326,6 +375,11 @@ export class EventEmittingDagWalker implements DagWalker {
       ancestorStack,
     });
     if (enqueued === undefined) return undefined;
+    // ARM THE BACKOFF on the real enqueue too: a speculative run that re-drives (back to
+    // `pending`) — incl. the bootstrap-time `AncestorNotReadyError` race the cheap pre-check
+    // cannot foresee (lifecycle says published, but `<branch>@origin` transiently vanished
+    // mid-rebase) — is then SPACED on the next walk, bounding the hot-loop. Never caps the wait.
+    this.ancestorWaitBackoff.recordHeld(enqueue.specId);
     await this.deps.events.emitSpecSpeculative({
       projectId,
       specId: enqueue.specId,
@@ -393,51 +447,6 @@ export class EventEmittingDagWalker implements DagWalker {
   }
 }
 
-/**
- * Resolve a project's speculation config (threshold + depth cap) from its
- * versioned project config — the §2c knobs, never an env var. An ABSENT config
- * (`{}` / no `version` — the default a fresh project carries) legitimately uses the
- * schema defaults (moderate / depth 2).
- *
- * no_silent_fallbacks (LOUD-DEFAULT): these knobs gate WORK (speculation eagerness),
- * NOT MERGE — so a corrupt PRESENT config still falls back to the safe schema default
- * rather than failing closed. But the corruption is NEVER silently swallowed: it is
- * logged LOUD and surfaced as a `dag.config.corrupt` observability event, then the
- * default is applied. (Contrast the github-identity / batch-cap resolvers, where a
- * corrupt config yields WRONG behavior and therefore PROPAGATES.)
- */
-export function buildSpeculationConfigResolver(pool: pg.Pool, events?: DagEventEmitter): SpeculationConfigResolver {
-  return async (projectId: string): Promise<SpeculationConfig> => {
-    const config = await runWithSystemScope(pool, async (client) => {
-      const result = await client.query<{ config: unknown }>("SELECT config FROM projects WHERE project_id = $1", [
-        projectId,
-      ]);
-      return result.rows[0]?.config;
-    });
-    // An absent config is not corruption — it simply carries no §2c overrides.
-    if (isAbsentProjectConfig(config)) {
-      return { threshold: DEFAULT_SPECULATION_THRESHOLD, depthCap: DEFAULT_SPECULATIVE_INTEGRATION_DEPTH };
-    }
-    try {
-      const parsed = migrateProjectConfig(config);
-      return { threshold: parsed.speculationThreshold, depthCap: parsed.speculativeIntegrationDepth };
-    } catch (error) {
-      const appliedDefault = {
-        threshold: DEFAULT_SPECULATION_THRESHOLD,
-        depthCap: DEFAULT_SPECULATIVE_INTEGRATION_DEPTH,
-      };
-      const reason = error instanceof Error ? error.message : String(error);
-      log.warn("corrupt project config resolving speculation knobs; applying safe default", {
-        projectId,
-        default: appliedDefault,
-        reason,
-      });
-      await events?.emitConfigCorrupt({ projectId, knob: "speculation_config", appliedDefault, reason });
-      return appliedDefault;
-    }
-  };
-}
-
 export interface BuildDagWalkerDeps {
   /**
    * Plane-split (autonomy loops): the control-plane run-state writer. When present,
@@ -484,7 +493,8 @@ export async function listWalkableProjectIds(pool: pg.Pool): Promise<string[]> {
   });
 }
 
-// Re-exported so existing import sites (and the conformance/tests) keep pulling
-// the pg seam wirings + classifier from `walker.ts` after the §2c split.
+// Re-exported so existing import sites (and the conformance/tests) keep pulling the pg seam
+// wirings + classifier + the (line-cap-split) speculation-config resolver from `walker.ts`.
 export { classifySpecStatus, PgDagReadModel, SpecRunDagEnqueuer, PgDagEventEmitter } from "./walkerPg.js";
+export { buildSpeculationConfigResolver } from "./speculationConfigResolver.js";
 export type { DagEventEmitter };

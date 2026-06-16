@@ -69,18 +69,18 @@ export const DagSpecSpeculativePayload = z
   .strict();
 export type DagSpecSpeculativePayload = z.infer<typeof DagSpecSpeculativePayload>;
 
-// dag.spec.ancestor_not_ready (tanren-owns-the-engine.md §3 never-discard): a dependent
-// was driven SPECULATIVELY and reached its base-shift ASSEMBLY, but an ancestor's PR-head
-// branch was GONE (no `<branch>@origin` ref) and the ancestor had NOT merged — yet the
-// ancestor's SPEC is still NON-TERMINAL (`pending`/`in_flight`): it has simply not published
-// its head yet (the dependent ran ahead of the ancestor reaching `pr_open`). This is BENIGN,
-// NOT a fault: the dependent run finalizes as a recoverable WAIT (the spec returns to `open`,
-// the run halts non-terminal) and the walker RE-DRIVES it once the ancestor publishes its
-// head / merges — the never-discard re-drive, never a terminal strand. This event names the
-// not-yet-ready ancestor + its phase so the timeline shows exactly why the dependent waited.
+// dag.spec.ancestor_not_ready (tanren-owns-the-engine.md §3 never-discard): a dependent could
+// not yet stack on an ancestor because the ancestor has NOT published its PR head (its SPEC is
+// still NON-TERMINAL — `pending`/`in_flight`, ran ahead of `pr_open`). BENIGN: the dependent
+// benign-WAITS and the walker RE-DRIVES once the ancestor publishes / merges (never a strand).
+// TWO emit points (apex v35 hot-loop fix): the WALKER's CHEAP pre-check (`runId: ""`, the common
+// case — DEFERS without allocating a runner, spaced by the per-spec re-drive backoff so a storm
+// yields a handful of events, not the ~512-event live hot-loop), or the bootstrap ASSEMBLY
+// (`runId` set — `<branch>@origin` vanished AFTER provisioning, the rarer race).
 export const DagSpecAncestorNotReadyPayload = z
   .object({
-    // The dependent spec/run that benign-WAITED (it did NOT strand).
+    // The dependent spec/run that benign-WAITED (`runId` "" for the walker's cheap pre-check
+    // defer — no run was created).
     specId: z.string(),
     runId: z.string(),
     // The ancestor whose head branch had not been published yet, and its non-terminal

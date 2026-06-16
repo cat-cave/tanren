@@ -96,6 +96,8 @@ class RecordingEmitter implements DagEventEmitter {
   readonly enqueued: string[] = [];
   readonly speculative: RecordedSpeculative[] = [];
   readonly held: RecordedHeld[] = [];
+  readonly ancestorNotReady: Array<{ specId: string; ancestorSpecId: string; ancestorPhase: "pending" | "in_flight" }> =
+    [];
   readonly drained: DagTickPlan[] = [];
   async emitSpecEnqueued(input: { specId: string }): Promise<void> {
     this.enqueued.push(input.specId);
@@ -105,6 +107,13 @@ class RecordingEmitter implements DagEventEmitter {
   }
   async emitSpeculationHeld(input: RecordedHeld): Promise<void> {
     this.held.push(input);
+  }
+  async emitAncestorNotReady(input: {
+    specId: string;
+    ancestorSpecId: string;
+    ancestorPhase: "pending" | "in_flight";
+  }): Promise<void> {
+    this.ancestorNotReady.push(input);
   }
   async emitDrained(input: { plan: DagTickPlan }): Promise<void> {
     this.drained.push(input.plan);
