@@ -22,6 +22,16 @@ export {
   wrapProviderResearcher,
   type WrapProviderResearcherOptions,
 } from "./liveResearch.js";
+// Transient-tolerant retry for the PRE-BUILD creation answerer calls (research →
+// author): a timeout / transient transport / network blip RETRIES (bounded +
+// backoff) instead of failing the whole derive terminally; a persistent failure
+// fails loud after the bound.
+export {
+  DEFAULT_ANSWERER_MAX_ATTEMPTS,
+  isTransientAnswererError,
+  withAnswererRetry,
+  type AnswererRetryOptions,
+} from "./answererRetry.js";
 export { ResearchOutput } from "./researchSchema.js";
 export { buildRunLoopBuildDriver, type ConvergedProjectFacts, type RunLoopBuildDriverDeps } from "./liveBuildDriver.js";
 export { resolveConvergedProjectFacts } from "./convergedFacts.js";
