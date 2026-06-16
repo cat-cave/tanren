@@ -13,7 +13,7 @@
 // `merged` is handled inline by the caller (it advances rather than settling out), so
 // this maps only the NON-merged outcomes.
 
-import type { BatchCheckVerdict } from "../contracts/batchMergeCoordinator.js";
+import type { BatchCheckVerdict, BatchGateReworkRouter } from "../contracts/batchMergeCoordinator.js";
 import type {
   CoordinateResult,
   MergeDriveOutcome,
@@ -47,9 +47,69 @@ export interface BatchSettleDeps {
   queue: MergeQueueModel;
   events: MergeQueueEventEmitter;
   escalator: SpecEscalator;
+  /** The batch-gate-fail writer-rework router (v35 — the strand fix; see {@link settleBisectCulprit}). */
+  gateRework?: BatchGateReworkRouter;
   /** ATOMICITY (audit RC-4 #3): when wired, the dequeue settle runs event + UPDATE in one transaction. */
   tx?: MergeSettleTransaction;
   recoverableDriveHolds?: RecoverableDriveHoldCeiling;
+}
+
+/**
+ * Settle a bisected culprit by its failure sub-kind (v35 — the gate-fail-strand fix):
+ *
+ *   - GATE-FAIL (`isGateFail`) — the integrated tree's GATE/CI failed (the culprit's work
+ *     passed its OWN branch gates but breaks integrated). Route it to the WRITER for rework
+ *     via the {@link BatchGateReworkRouter}, carrying the batch gate's failing output
+ *     (`gateError`) as steering so the writer fixes the RIGHT thing (no_silent_fallback —
+ *     never rework blind). The router enqueues a fresh re-author run (bounded — it escalates
+ *     to `needs_attention` past the rework budget). EITHER way the OLD queue entry is retired
+ *     as `superseded` (the re-authored run produces a fresh entry, so the old one is no
+ *     longer a live candidate — and `superseded` is NOT routed through
+ *     `recoverDequeuedCandidates`, so it cannot resurrect the dead head). This is the path
+ *     the old code MISSED: it dequeued a gate-fail culprit with `reason: "conflict"`, which
+ *     has NO re-execution consumer (the recovery SQL only re-queues `blocked`), so the spec
+ *     sat `in_flight` forever.
+ *   - CONFLICT — a spec-vs-spec conflict (a base conflict already short-circuited): dequeue
+ *     RECOVERABLY (`reason: "conflict"`) — the conflict resolver / replan owns the re-drive
+ *     (#585/#587). UNCHANGED — the gate-fail route never touches it.
+ *
+ * When no `gateRework` router is wired (a degenerate assembly), a gate-fail falls back to
+ * the recoverable `conflict` dequeue (the prior behavior) — production always wires it.
+ */
+export async function settleBisectCulprit(
+  deps: BatchSettleDeps,
+  projectId: string,
+  culprit: MergeQueueEntry,
+  isGateFail: boolean,
+  gateError: string,
+  failMessage: string,
+): Promise<void> {
+  if (isGateFail && deps.gateRework !== undefined) {
+    // The WRITER rework path: re-author the culprit to fix the integration-only gate
+    // failure, then retire the OLD entry (the re-authored run re-queues a fresh one).
+    await deps.gateRework.routeGateFailToRework({ projectId, culprit, gateError });
+    await markDequeuedAfterEvent({
+      queue: deps.queue,
+      events: deps.events,
+      projectId,
+      entry: culprit,
+      reason: "superseded",
+      message: `routed to writer rework after a failed integrated-tree gate: ${failMessage}`,
+      tx: deps.tx,
+    });
+    return;
+  }
+  // The CONFLICT (or no-router fallback) path: a RECOVERABLE conflict dequeue — the
+  // conflict resolver / replan owns the re-drive (#585/#587).
+  await markDequeuedAfterEvent({
+    queue: deps.queue,
+    events: deps.events,
+    projectId,
+    entry: culprit,
+    reason: "conflict",
+    message: `bisected as the offending PR in a failed batch check: ${failMessage}`,
+    tx: deps.tx,
+  });
 }
 
 /** The slice of deps the base-conflict drive needs (settle deps + the merge runner). */

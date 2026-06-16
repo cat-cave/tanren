@@ -4,7 +4,11 @@ import { BatchMergeCoordinator } from "../src/engine/merge/batchCoordinator.js";
 import { INFRA_HOLD_ALERT_RETRY_AFTER_MS, MAX_BATCH_INFRA_HOLDS } from "../src/engine/merge/batchInfraHoldCeiling.js";
 import { RefResetTransientError } from "../src/engine/providers/githubRefReset.js";
 import type { SpecPriority } from "../src/engine/state/spec.js";
-import { InMemoryBatchChecker, RecordingBatchMergeEventEmitter } from "./conformance/fakes/inMemoryBatchChecker.js";
+import {
+  InMemoryBatchChecker,
+  RecordingBatchGateReworkRouter,
+  RecordingBatchMergeEventEmitter,
+} from "./conformance/fakes/inMemoryBatchChecker.js";
 import {
   InMemoryMergeQueueModel,
   RecordingMergeQueueEventEmitter,
@@ -22,6 +26,7 @@ interface Harness {
   events: RecordingMergeQueueEventEmitter;
   batchEvents: RecordingBatchMergeEventEmitter;
   escalator: RecordingSpecEscalator;
+  gateRework: RecordingBatchGateReworkRouter;
 }
 
 function makeHarness(maxBatchSize = 5): Harness {
@@ -31,6 +36,7 @@ function makeHarness(maxBatchSize = 5): Harness {
   const events = new RecordingMergeQueueEventEmitter();
   const batchEvents = new RecordingBatchMergeEventEmitter();
   const escalator = new RecordingSpecEscalator();
+  const gateRework = new RecordingBatchGateReworkRouter();
   const coordinator = new BatchMergeCoordinator({
     queue,
     runner,
@@ -38,11 +44,12 @@ function makeHarness(maxBatchSize = 5): Harness {
     events,
     batchEvents,
     escalator,
+    gateRework,
     resolveMaxBatchSize: () => Promise.resolve(maxBatchSize),
     // Run the bounded infra-error retries instantly (no real backoff in tests).
     sleep: () => Promise.resolve(),
   });
-  return { coordinator, queue, runner, checker, events, batchEvents, escalator };
+  return { coordinator, queue, runner, checker, events, batchEvents, escalator, gateRework };
 }
 
 function seed(h: Harness, specId: string, dependsOn: string[] = [], priority: SpecPriority = "tbd"): void {
@@ -70,36 +77,8 @@ describe("BatchMergeCoordinator — speculative batch-check + bisect", () => {
     expect(h.batchEvents.events.some((e) => e.type === "bisecting")).toBe(false);
   });
 
-  it("bisects a bad-interaction PR, dequeues it recoverably, and merges the innocents", async () => {
-    const h = makeHarness();
-    seed(h, "spec_a");
-    seed(h, "spec_b");
-    // spec_c is the bad-interaction PR (passes alone, breaks the combined state).
-    seed(h, "spec_c");
-    seed(h, "spec_d");
-    h.checker.failWhenContains("spec_c");
-    const dequeueSpy = vi.spyOn(h.events, "emitDequeued");
-    const culpritSpy = vi.spyOn(h.batchEvents, "emitCulprit");
-
-    await h.coordinator.coordinate(PROJECT);
-
-    // The culprit is isolated to EXACTLY spec_c and dequeued — NOT merged, NOT dropped.
-    expect(h.queue.statusOf("run_spec_c")).toBe("dequeued");
-    const culprit = h.batchEvents.events.find((e) => e.type === "culprit");
-    expect(culprit?.culpritSpecId).toBe("spec_c");
-    // The dequeue is RECOVERABLE (conflict reason → routed to re-execution, not failed).
-    const dq = h.events.events.find((e) => e.type === "merge.dequeued");
-    expect(dq?.specId).toBe("spec_c");
-    expect(dq?.reason).toBe("conflict");
-    expect(culpritSpy.mock.invocationCallOrder[0]).toBeLessThan(dequeueSpy.mock.invocationCallOrder[0] ?? 0);
-    // The culprit's drive was NEVER attempted (a failed-check batch never merges it).
-    expect(h.runner.drives.map((d) => d.runId)).not.toContain("run_spec_c");
-
-    // The innocent PRs merged (the batch was re-formed + re-checked without the culprit).
-    expect(h.queue.statusOf("run_spec_a")).toBe("merged");
-    expect(h.queue.statusOf("run_spec_b")).toBe("merged");
-    expect(h.queue.statusOf("run_spec_d")).toBe("merged");
-  });
+  // The gate-fail → writer-rework bisect routing + the conflict-vs-gate-fail distinction
+  // live in batchMergeCoordinatorGateRework.test.ts (the v35 strand fix).
 
   it("ESCALATES a needs_attention real-merge outcome to needs_attention (non-bricking, NOT the recoverable conflict path)", async () => {
     const h = makeHarness();
@@ -457,12 +436,13 @@ describe("BatchMergeCoordinator — infra-error robustness (a thrown check NEVER
     expect(terminal).toHaveLength(1);
   });
 
-  it("a GENUINE fail STILL bisects → culprit → merge.dequeued(conflict) (no regression)", async () => {
+  it("a GENUINE gate fail STILL bisects → culprit → routes to writer rework (no regression)", async () => {
     const h = makeHarness();
     seed(h, "spec_a");
     seed(h, "spec_b");
     seed(h, "spec_c");
-    // A genuine CI failure (the check RETURNS fail, it does not throw) must still bisect.
+    // A genuine GATE failure (the check RETURNS fail, it does not throw) must still bisect
+    // AND route the culprit to writer rework (the integrated-tree gate-fail self-heal).
     h.checker.failWhenContains("spec_b");
 
     await h.coordinator.coordinate(PROJECT);
@@ -470,7 +450,10 @@ describe("BatchMergeCoordinator — infra-error robustness (a thrown check NEVER
     expect(h.queue.statusOf("run_spec_b")).toBe("dequeued");
     const dq = h.events.events.find((e) => e.type === "merge.dequeued");
     expect(dq?.specId).toBe("spec_b");
-    expect(dq?.reason).toBe("conflict");
+    // A gate-fail culprit retires as `superseded` (the re-authored run re-queues) + is
+    // routed to writer rework — NOT the recoverable-conflict dequeue.
+    expect(dq?.reason).toBe("superseded");
+    expect(h.gateRework.routed.map((r) => r.specId)).toEqual(["spec_b"]);
     expect(h.batchEvents.events.some((e) => e.type === "culprit")).toBe(true);
     // No infra hold on a genuine failure.
     expect(h.batchEvents.events.some((e) => e.type === "infra_blocked")).toBe(false);

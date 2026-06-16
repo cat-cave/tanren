@@ -104,6 +104,7 @@ import {
   MergeBatchBisectingPayload,
   MergeBatchCheckingPayload,
   MergeBatchCulpritPayload,
+  MergeBatchGateReworkRoutedPayload,
   MergeBatchInfraBlockedPayload,
   MergeBatchPassedPayload,
   MergeDequeuedPayload,
@@ -333,17 +334,16 @@ export const EventRegistry = {
   // and the hold can no longer recover — the entry exhausted its re-drive ceiling, or the
   // merge state is unconfirmable. A LOUD operator-visible halt (no silent re-drive forever).
   "merge.queue.infra_blocked": MergeQueueInfraBlockedPayload,
-  // §2d: speculative batch-check + bisect. The coordinator speculatively integrates
-  // `default_branch + batch PRs` + CI-checks that state (merge.batch.checking); a green check
-  // merges the batch in DAG order (merge.batch.passed); a failed check is BISECTED
-  // (merge.batch.bisecting) to isolate the offending PR (merge.batch.culprit), dequeued to a
-  // recoverable re-execution while the innocent remainder merges. No failed batch reaches main.
+  // §2d: speculative batch-check + bisect. Speculatively integrate `default_branch + batch
+  // PRs` + CI-check (checking); a green check merges in DAG order (passed); a failed check
+  // is BISECTED (bisecting) to the offending PR (culprit). No failed batch reaches main.
   "merge.batch.checking": MergeBatchCheckingPayload,
   "merge.batch.passed": MergeBatchPassedPayload,
   "merge.batch.bisecting": MergeBatchBisectingPayload,
   "merge.batch.culprit": MergeBatchCulpritPayload,
-  // A transient/transport INFRA error blocked the batch check (it could not be run) —
-  // the coordinator bounded-retried then HOLDS loudly; NO PR is bisected/dequeued.
+  // A GATE/CI failure (not a conflict) bisected to ONE culprit routes it to WRITER REWORK (steering = gate output) — bounded.
+  "merge.batch.gate_rework_routed": MergeBatchGateReworkRoutedPayload,
+  // A transient/transport INFRA error blocked the batch check: bounded-retry then HOLD loud; no PR blamed.
   "merge.batch.infra_blocked": MergeBatchInfraBlockedPayload,
 
   // Post-merge auto-issue creation (tempering.md dim A): after a run's PR merges

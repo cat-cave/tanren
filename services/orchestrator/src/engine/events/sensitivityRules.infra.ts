@@ -32,15 +32,13 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["target.hostKeyFingerprint", "redacted"],
   ]),
   ...rulesFor("runner.released", [["runnerId", "public"]]),
-  // Sweeper reclaim proof: runner id + (nullable) run id + reason are all NON-SECRET
-  // resource handles / a fixed enum — never a credential value.
+  // Sweeper reclaim proof: runner id + (nullable) run id + reason are NON-SECRET handles / a fixed enum.
   ...rulesFor("runner.swept", [
     ["runnerId", "public"],
     ["runId", "public"],
     ["reason", "public"],
   ]),
-  // Security-baseline cleanup-proof + deploy.triggered artifact ref (the
-  // audit-baseline rules), all public — see ./sensitivityRules.audit.ts.
+  // Security-baseline cleanup-proof + deploy.triggered artifact ref (audit-baseline rules), all public.
   ...auditBaselineSensitivityRules,
   ...rulesFor("runner.failed", [
     ["runnerId", "public"],
@@ -148,9 +146,8 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["costUsd", "public"],
     ["capturedAt", "public"],
   ]),
-  // usage.read_failed (silent-fallback hardening) — tool/target/reason/exitCode are
-  // secret-free, detail is a bounded whitespace-collapsed stderr/stdout tail; all
-  // public operational telemetry (a usage read that could not report).
+  // usage.read_failed (silent-fallback hardening) — tool/target/reason/exitCode secret-free,
+  // detail is a bounded whitespace-collapsed stderr/stdout tail; all public telemetry.
   ...rulesFor("usage.read_failed", [
     ["tool", "public"],
     ["target", "public"],
@@ -159,8 +156,7 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["detail", "public"],
     ["reasonText", "public"],
   ]),
-  // usage.token_accounting_failed (silent-fallback hardening) — role/cli/model are
-  // secret-free identifiers, reason is a fixed diagnosis; all public.
+  // usage.token_accounting_failed (silent-fallback hardening) — role/cli/model secret-free, reason a fixed diagnosis; all public.
   ...rulesFor("usage.token_accounting_failed", [
     ["role", "public"],
     ["cli", "public"],
@@ -201,8 +197,7 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["disposition", "public"],
   ]),
 
-  // Flaky detection + quarantine rules live in sensitivityRules.ciIntel.ts
-  // (next to ci.tests.reported) to keep this file under the 500-line cap.
+  // Flaky detection + quarantine rules live in sensitivityRules.ciIntel.ts (500-line cap).
 
   // reviews
   ...rulesFor("review.requested", [
@@ -238,11 +233,9 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["integration", "public"],
     ["mergeSha", "public"],
   ]),
-  // AUDIT ENVELOPE on the terminal merge: policy version + initiating actor +
-  // approving actor (the human reviewer when a review tier gated it), all public.
+  // AUDIT ENVELOPE on the terminal merge: policy version + initiating + approving actor, all public.
   ...auditEnvelopeRulesFor("merge.completed"),
-  // (§2d) native merge queue — PR identifiers + spec id + queue stats + prose,
-  // all public (queue visibility + queue/stack statistics).
+  // (§2d) native merge queue — PR identifiers + spec id + queue stats + prose, all public.
   ...rulesFor("merge.queue.advanced", [
     ["prUrl", "public"],
     ["prNumber", "public"],
@@ -258,8 +251,7 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["reason", "public"],
     ["message", "public"],
   ]),
-  // GitHub-5xx resilience (GAP #2d): the per-PR coordinator's loud infra-halt — PR
-  // identity + the halt kind + attempt count + the infra message, all public.
+  // GitHub-5xx resilience (GAP #2d): the per-PR coordinator's loud infra-halt — PR identity + halt kind + attempts + message, all public.
   ...rulesFor("merge.queue.infra_blocked", [
     ["prUrl", "public"],
     ["prNumber", "public"],
@@ -269,8 +261,7 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["attempts", "public"],
     ["message", "public"],
   ]),
-  // (§2d) speculative batch-check + bisect — batch composition + cap/ceiling stats
-  // + the integration ref + bisect prose, all public (queue/batch visibility).
+  // (§2d) speculative batch-check + bisect — batch composition + cap/ceiling stats + ref + prose, all public.
   ...rulesFor("merge.batch.checking", [
     ["integration", "public"],
     ["members[].specId", "public"],
@@ -298,6 +289,15 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["prNumber", "public"],
     ["checks", "public"],
     ["message", "public"],
+  ]),
+  ...rulesFor("merge.batch.gate_rework_routed", [
+    ["integration", "public"],
+    ["specId", "public"],
+    ["runId", "public"],
+    ["prNumber", "public"],
+    ["disposition", "public"],
+    ["gateError", "public"],
+    ["priorReworks", "public"],
   ]),
   ...rulesFor("merge.batch.infra_blocked", [
     ["integration", "public"],

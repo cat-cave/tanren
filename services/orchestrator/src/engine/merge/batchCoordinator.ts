@@ -3,6 +3,7 @@ import {
   type BatchCheckVerdict,
   type BatchChecker,
   type BatchFormation,
+  type BatchGateReworkRouter,
   bisectCulprit,
   DEFAULT_MAX_BATCH_SIZE,
   formBatch,
@@ -21,12 +22,13 @@ import {
 } from "../contracts/mergeCoordinator.js";
 import { isRetriableInfraError } from "../providers/githubRefReset.js";
 import { setTimeout as sleepFor } from "node:timers/promises";
-import { markDequeuedAfterEvent, type MergeQueueEventEmitter, type MergeSettleTransaction } from "./coordinator.js";
+import type { MergeQueueEventEmitter, MergeSettleTransaction } from "./coordinator.js";
 import type { SpecEscalator } from "./coordinatorEscalate.js";
 import {
   driveBaseConflict,
   type BatchDriveInfraHold,
   holdOnRetriableDriveThrow,
+  settleBisectCulprit,
   settleDriveOutcome,
 } from "./batchCoordinatorSettle.js";
 import { BatchInfraHoldCeiling, holdOnInfra, terminalInfraBlock } from "./batchInfraHoldCeiling.js";
@@ -106,6 +108,14 @@ export interface BatchMergeCoordinatorDeps {
    * both paths use, so they can never diverge.
    */
   escalator: SpecEscalator;
+  /**
+   * The batch-gate-fail self-heal (v35 — the strand fix): a GATE-fail bisect culprit (code
+   * that passed its OWN branch gates but breaks integrated) is routed to the WRITER for
+   * rework carrying the gate error as steering, instead of being dequeued + stranded.
+   * DISTINCT from a CONFLICT culprit (resolver/replan); bounded inside the router. Absent
+   * (a degenerate assembly) ⇒ the recoverable `conflict` fallback. See `settleBisectCulprit`.
+   */
+  gateRework?: BatchGateReworkRouter;
   /** ATOMICITY (audit RC-4 #3): when wired, the dequeue settle runs its event append + queue UPDATE in ONE transaction (both-or-neither). */
   tx?: MergeSettleTransaction;
   recoverableDriveHolds?: RecoverableDriveHoldCeiling;
@@ -253,14 +263,17 @@ export class BatchMergeCoordinator implements MergeCoordinator {
 
       await this.infraHolds.reset(projectId);
 
+      // The bisect culprit's failure sub-kind (NEVER double-handled — routed once; see
+      // `settleBisectCulprit`): a `fail` is a GATE failure → WRITER REWORK (the v35 fix,
+      // `verdict.message` carries the gate output); a `conflict` → the resolver/replan.
+      const isGateFail = verdict.result === "fail";
       const failMessage = verdict.result === "conflict" ? `integration conflict: ${verdict.message}` : verdict.message;
       await this.deps.batchEvents.emitBisecting({ projectId, batch: current.batch, message: failMessage });
 
       const bisect = await this.bisectBatch(projectId, current.batch);
       if (bisect === "pending") {
-        // A sub-batch's CI was still running — HOLD (no entry dequeued/blamed). Bug B:
-        // back off with a `retryAfterMs` so the subscriber re-drives once rather than
-        // re-checking on every unrelated NOTIFY (same anti-hot-loop guarantee).
+        // A sub-batch's CI was still running — HOLD (no entry blamed). Bug B: back off with a
+        // `retryAfterMs` so the subscriber re-drives once rather than on every unrelated NOTIFY.
         return { projectId, holdReason: "all_blocked", retryAfterMs: PENDING_RECHECK_MS, queueDepth };
       }
       if ("kind" in bisect) {
@@ -273,32 +286,19 @@ export class BatchMergeCoordinator implements MergeCoordinator {
         return this.infraHold(projectId, current.batch, bisect.message, queueDepth);
       }
 
-      const dequeueMessage = `bisected as the offending PR in a failed batch check: ${failMessage}`;
       const { culprit, checks } = bisect;
       await this.deps.batchEvents.emitCulprit({ projectId, culprit, checks, message: failMessage });
-      // Dequeue the culprit to a RECOVERABLE outcome (conflict reason ⇒ routed to the
-      // re-execution path — the run loop re-enqueues it once it re-gates clean; NEVER dropped).
-      await markDequeuedAfterEvent({
-        queue: this.deps.queue,
-        events: this.deps.events,
-        projectId,
-        entry: bisect.culprit,
-        reason: "conflict",
-        message: dequeueMessage,
-        tx: this.deps.tx,
-      });
-      excludedSpecIds.add(bisect.culprit.specId);
+      await settleBisectCulprit(this.deps, projectId, culprit, isGateFail, verdict.message, failMessage);
+      excludedSpecIds.add(culprit.specId);
 
-      // RE-FORM the batch WITHOUT the culprit (reload the snapshot so the dequeued culprit
-      // is gone + a newly-eligible entry can join + the cap re-applies), then re-check next loop.
+      // RE-FORM without the culprit (reload so it is gone + a newly-eligible entry can join), re-check next loop.
       const refreshed = await this.deps.queue.loadSnapshot(projectId);
       const reformed = formBatch(refreshed, maxBatchSize);
       reformed.batch = reformed.batch.filter((e) => !excludedSpecIds.has(e.specId));
       current = reformed;
     }
 
-    // The loop bound was hit (a logic guard — unreachable since each fail removes one
-    // entry). Hold rather than risk an unverified merge. Not an infra error.
+    // The loop bound was hit (a logic guard — unreachable since each fail removes one entry). Hold.
     await this.infraHolds.reset(projectId);
     return { projectId, holdReason: "all_blocked", queueDepth };
   }

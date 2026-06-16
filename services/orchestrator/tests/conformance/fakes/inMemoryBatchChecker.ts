@@ -10,6 +10,7 @@ import type {
   BatchCheckVerdict,
   BatchChecker,
   BatchFormation,
+  BatchGateReworkRouter,
 } from "../../../src/engine/contracts/batchMergeCoordinator.js";
 import type { MergeQueueEntry } from "../../../src/engine/contracts/mergeCoordinator.js";
 import type { BatchMergeEventEmitter } from "../../../src/engine/merge/batchCoordinator.js";
@@ -182,5 +183,34 @@ export class RecordingBatchMergeEventEmitter implements BatchMergeEventEmitter {
       ...(input.consecutiveHolds !== undefined && { consecutiveHolds: input.consecutiveHolds }),
       ...(input.kind !== undefined && { kind: input.kind }),
     });
+  }
+}
+
+/**
+ * A recording BatchGateReworkRouter fake (TEST FIXTURE) — captures each batch-gate-fail
+ * culprit routed back to the WRITER for rework (the v35 strand fix), so the conformance
+ * suite can assert a GATE-fail culprit is RE-WORKED (carrying the gate error) rather than
+ * stranded — distinct from a conflict-replan. Stands in for `PgBatchGateReworkRouter`'s
+ * re-open + steering + run-enqueue + bounded escalation, without a DB. By default every
+ * route returns `reworked`; `escalateFor(specId)` makes a spec's route ESCALATE (the
+ * bounded-budget-exhausted path) so the K-rework escalation is testable.
+ */
+export class RecordingBatchGateReworkRouter implements BatchGateReworkRouter {
+  readonly routed: { specId: string; runId: string; gateError: string }[] = [];
+  private readonly escalateSpecs = new Set<string>();
+
+  /** Make this spec's next route ESCALATE (model the bounded rework budget being exhausted). */
+  escalateFor(specId: string): void {
+    this.escalateSpecs.add(specId);
+  }
+
+  // eslint-disable-next-line @typescript-eslint/require-await
+  async routeGateFailToRework(input: {
+    projectId: string;
+    culprit: MergeQueueEntry;
+    gateError: string;
+  }): Promise<"reworked" | "escalated"> {
+    this.routed.push({ specId: input.culprit.specId, runId: input.culprit.runId, gateError: input.gateError });
+    return this.escalateSpecs.has(input.culprit.specId) ? "escalated" : "reworked";
   }
 }
