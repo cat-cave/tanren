@@ -424,6 +424,32 @@ describe("pure decisions", () => {
     expect(rejected.findings).toHaveLength(1);
   });
 
+  it("decideCheckerOutcome: zero findings ⇒ PASS even on an empty incremental diff (criteria met by the committed tree)", () => {
+    // EMPTY-INCREMENTAL-DIFF (v35): the bug — a re-driven/scaffold spec whose work is
+    // already committed in the base has an EMPTY `baselineSha → HEAD` diff but the
+    // criteria ARE met by the tree. Zero findings ⇒ PASS (accept) regardless of the
+    // empty diff; `emptyIncrementalDiff` NEVER forces a reject or fabricates an accept.
+    expect(decideCheckerOutcome(completeCheck, true)).toEqual({ kind: "pass" });
+  });
+
+  it("decideCheckerOutcome: a reject over an EMPTY diff is non-reworkable (the futile-rework guard); over a non-empty diff it stays reworkable", () => {
+    // An empty-diff reject (criteria genuinely unmet by the tree, OR a stray
+    // empty-diff finding) is NOT reworkable: re-driving the writer cannot grow an
+    // empty diff, so the loop must route to triage instead of looping into
+    // `persistent_failure`. A non-empty diff stays reworkable as before.
+    const emptyDiffReject = decideCheckerOutcome(incompleteCheck, true);
+    expect(emptyDiffReject.kind).toBe("reject");
+    if (emptyDiffReject.kind !== "reject") return;
+    expect(emptyDiffReject.reworkable).toBe(false);
+    const nonEmptyReject = decideCheckerOutcome(incompleteCheck, false);
+    expect(nonEmptyReject.kind).toBe("reject");
+    if (nonEmptyReject.kind !== "reject") return;
+    expect(nonEmptyReject.reworkable).toBe(true);
+    // The default (no flag) is the non-empty-diff behaviour: reworkable.
+    const defaulted = decideCheckerOutcome(incompleteCheck);
+    expect(defaulted.kind === "reject" && defaulted.reworkable).toBe(true);
+  });
+
   it("decideCheckerOutcome: a findings-omitted verdict throws (no `?? []` coalesce)", () => {
     const raw = { reasoning: "ok" } as unknown as typeof completeCheck;
     expect(() => decideCheckerOutcome(raw)).toThrow(/length|findings|undefined/iu);

@@ -108,6 +108,30 @@ function selfInspectionBlock(baselineSha: string): string[] {
   ];
 }
 
+// EMPTY-INCREMENTAL-DIFF (v35): judge the RESULTING STATE, not the diff's size. A
+// spec can be RE-DRIVEN (the unified finalize re-drive) — or a scaffold spec whose
+// whole job is an already-committed template seed — so its prior iteration's work is
+// already committed in the base. Then `git diff <baselineSha> HEAD` is correctly
+// EMPTY even though the criteria ARE satisfied by the committed tree. An empty diff
+// is "no new regression to review", NOT an incompleteness: a checker that emitted a
+// finding here ("no change delivers the intent") would loop the writer (which
+// correctly adds nothing → the diff stays empty → the same finding) into a false
+// `persistent_failure` escalation. So: when the diff is empty, INSPECT THE COMMITTED
+// TREE (read the files the criteria name, e.g. `ls`/`cat`/read the package manifest)
+// and emit findings ONLY for criteria the TREE genuinely fails to satisfy — never a
+// finding whose only basis is "the incremental diff is empty".
+const emptyDiffBlock: string[] = [
+  "",
+  "EMPTY-DIFF RULE: judge the RESULTING STATE against the criteria, not the size of",
+  "the diff. If the diff is EMPTY (the work was already committed in a prior",
+  "iteration, or this is a scaffold spec whose seed is already in the tree), that is",
+  "NOT an incompleteness — it means there is no new regression to review. Inspect the",
+  "COMMITTED TREE directly (read the files the criteria name) and emit a finding ONLY",
+  "for a criterion the TREE genuinely fails to satisfy. NEVER emit a finding whose",
+  "only basis is that the diff is empty / has no changes — if the criteria are met by",
+  "the tree, emit an EMPTY findings list (the task is complete).",
+];
+
 // Render the optional entity-risk posture STEER as a leading-blank-line block, or
 // EMPTY when no signal is supplied or the signal is the `unknown` class (sem
 // absent / can't-parse). Empty ⇒ the prompt is byte-identical to the no-oracle
@@ -129,6 +153,7 @@ export function buildCheckerPrompt(input: CheckerPromptInput): string {
     "",
     ...selfInspectionBlock(input.baselineSha),
     ...riskSteerBlock(input.riskSignal),
+    ...emptyDiffBlock,
     "",
     "Hard boundaries (a separate deterministic gate, not you, owns correctness):",
     "- Do NOT run, simulate, invoke, or shell out to tests, builds, type checks,",

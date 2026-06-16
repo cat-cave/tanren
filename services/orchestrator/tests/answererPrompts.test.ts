@@ -124,6 +124,28 @@ describe("buildCheckerPrompt — shared body", () => {
     });
     expect(prompt).toContain("Subtask behavior ids: (none)");
   });
+
+  it("carries the EMPTY-DIFF rule: judge the resulting tree, never emit a finding whose only basis is an empty diff (v35)", () => {
+    // EMPTY-INCREMENTAL-DIFF (v35): a re-driven / scaffold spec whose work is already
+    // committed in the base produces an EMPTY `baselineSha → HEAD` diff even though the
+    // criteria are met. The prompt must steer the checker to judge the COMMITTED TREE
+    // (not the diff size) so it emits ZERO findings → the loop accepts — never looping
+    // the writer over a diff that cannot grow into a false `persistent_failure`.
+    const prompt = buildCheckerPrompt({
+      specTitle: "S",
+      specDescription: "D",
+      acceptanceCriteria: ["AC1: scaffold files present"],
+      baselineSha,
+      outputInstructions: ["X"],
+    });
+    expect(prompt).toContain("EMPTY-DIFF RULE: judge the RESULTING STATE against the criteria");
+    expect(prompt).toContain("If the diff is EMPTY");
+    expect(prompt).toContain("Inspect the");
+    expect(prompt).toContain("COMMITTED TREE directly");
+    expect(prompt).toContain("NEVER emit a finding whose");
+    expect(prompt).toContain("only basis is that the diff is empty / has no changes");
+    expect(prompt).toContain("emit an EMPTY findings list (the task is complete)");
+  });
 });
 
 describe("buildAuditorPrompt — shared body", () => {

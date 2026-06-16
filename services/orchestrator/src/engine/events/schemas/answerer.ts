@@ -231,6 +231,11 @@ export const CheckerVerdictPayload = z
     reasoning: z.string(),
     behaviorIdsFailed: z.array(z.string()),
     findings: z.array(CheckerFindingPayload),
+    // EMPTY-INCREMENTAL-DIFF (v35): the entity-risk oracle deterministically classified
+    // `baselineSha → HEAD` and found ZERO changed entities — the re-driven-complete /
+    // scaffold-is-the-seed case. Observable so an empty-diff accept (or a non-reworkable
+    // empty-diff reject routed to triage) is auditable, never a silent relabel.
+    emptyIncrementalDiff: z.boolean(),
   })
   .strict();
 

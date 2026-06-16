@@ -95,19 +95,47 @@ export function buildCheckerPrompt(context: CheckerSubtaskContext): string {
 // take. The decision is "pure" — it does not append events or persist rows —
 // so the loop can replay it deterministically in tests. `reject` carries the
 // completeness findings so the writer rework feedback names the concrete gaps.
+//
+// `reworkable` (on a reject) is the EMPTY-INCREMENTAL-DIFF guard (v35): re-driving
+// the writer only helps when there is a diff to grow. When the incremental diff
+// (`baselineSha → HEAD`) is deterministically EMPTY — a re-driven, already-complete
+// spec whose work was committed in a prior iteration, or a scaffold spec whose whole
+// job is the already-committed template seed — re-driving the writer is FUTILE (it
+// correctly adds nothing → the diff stays empty → the same finding → an infinite
+// `rework` loop that false-escalates `persistent_failure`). On an empty diff a reject
+// is therefore `reworkable: false`: it surfaces the residual finding straight to
+// triage/convergence INSTEAD of looping the writer. A non-empty diff is reworkable as
+// before. NOTE: a `pass` (zero findings) on an empty diff is the COMMON case and is
+// the accept the bug demanded — the criteria are met by the committed tree, the empty
+// diff is "no regression to review", not an incompleteness.
 export type CheckerDecision =
   | { kind: "pass" }
-  | { kind: "reject"; reason: string; behaviorIdsFailed: ReadonlyArray<string>; findings: ReadonlyArray<CheckFinding> };
+  | {
+      kind: "reject";
+      reason: string;
+      behaviorIdsFailed: ReadonlyArray<string>;
+      findings: ReadonlyArray<CheckFinding>;
+      // false ⇒ the incremental diff is empty; re-driving the writer cannot help, so
+      // the loop must NOT re-enter the writer — the finding goes to triage directly.
+      reworkable: boolean;
+    };
 
 /**
  * Decide complete-vs-incomplete from the checker's EMITTED completeness findings.
  * NO findings ⇒ the task is complete (`pass`). ANY finding ⇒ incomplete (`reject`):
- * the task routes straight back to the writer. The reject `reason` is built from the
- * finding titles; `behaviorIdsFailed` collects each finding's `behaviorId` (the
- * downstream-blocked behaviors). `findings` is a REQUIRED field — a parsed verdict
- * ALWAYS carries a real, explicitly-emitted array (an omitted one fails to parse).
+ * the task routes back to the writer (when the diff is non-empty) OR straight to triage
+ * (when the diff is empty — re-driving is futile; see `CheckerDecision`). The reject
+ * `reason` is built from the finding titles; `behaviorIdsFailed` collects each finding's
+ * `behaviorId` (the downstream-blocked behaviors). `findings` is a REQUIRED field — a
+ * parsed verdict ALWAYS carries a real, explicitly-emitted array (an omitted one fails
+ * to parse).
+ *
+ * `emptyIncrementalDiff` is the DETERMINISTIC host-side fact (the entity-risk oracle
+ * classified the `baselineSha → HEAD` diff and found ZERO changed entities). It NEVER
+ * forces a reject and NEVER fabricates an accept — `findings: []` already passes; it
+ * only marks an empty-diff reject as non-reworkable so the loop stops futile re-drives.
  */
-export function decideCheckerOutcome(verdict: CheckAnswer): CheckerDecision {
+export function decideCheckerOutcome(verdict: CheckAnswer, emptyIncrementalDiff = false): CheckerDecision {
   if (verdict.findings.length === 0) {
     return { kind: "pass" };
   }
@@ -120,5 +148,6 @@ export function decideCheckerOutcome(verdict: CheckAnswer): CheckerDecision {
     reason,
     behaviorIdsFailed,
     findings: verdict.findings,
+    reworkable: !emptyIncrementalDiff,
   };
 }

@@ -125,6 +125,7 @@ describe("event semantic fields", () => {
       reasoning: "all downstream-relevant behaviors delivered",
       behaviorIdsFailed: [],
       findings: [],
+      emptyIncrementalDiff: false,
     });
     expect(verdict.complete).toBe(true);
 

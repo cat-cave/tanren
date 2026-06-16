@@ -11,6 +11,9 @@
     "complete": {
       "type": "boolean"
     },
+    "emptyIncrementalDiff": {
+      "type": "boolean"
+    },
     "findings": {
       "items": {
         "additionalProperties": false,
@@ -67,7 +70,8 @@
     "complete",
     "reasoning",
     "behaviorIdsFailed",
-    "findings"
+    "findings",
+    "emptyIncrementalDiff"
   ],
   "type": "object",
   "x-tanren-schema-id": "tanren.event.checker.verdict"
