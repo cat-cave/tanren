@@ -28,6 +28,12 @@ export {
   isWorkspaceDepsInstallError,
   workspaceDepsInstallGateOutcome,
 } from "./bootstrapFailure.js";
+// DEPS-BEFORE-GATE: the gate-prep deps install every gate caller pairs with the gate
+// runner (batch / fresh-runner / run-loop / conflict re-gates all install deps before
+// running tiers). Re-exported here so a gate caller imports the runner + its deps-ensure
+// from ONE gate barrel (the workspace barrel is already a transitive dependency of this
+// barrel via bootstrapFailure.js, so this adds no new module-graph edge for callers).
+export { DEFAULT_BOOTSTRAP_COMMAND, ensureWorkspaceDepsInstalled } from "../../workspace/bootstrap.js";
 export { advisoryStepNamesForPosture } from "./advisoryGate.js";
 export { runNativeMergeGate } from "./runMergeGate.js";
 export { publishGateVerdict, type PublishGateVerdictInput } from "./publishGateVerdict.js";

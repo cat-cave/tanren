@@ -6,7 +6,7 @@
 // template FAILS validation), a real typecheck → `proven`, mutation-not-declared →
 // `n/a`, and positive-all-pass → proven.
 import { describe, expect, it } from "vitest";
-import { DEFAULT_CI_CONFIG } from "../src/engine/ci/index.js";
+import { type CiConfigV1, DEFAULT_CI_CONFIG, resolveCiConfig } from "../src/engine/ci/index.js";
 import type { RunnerHandle } from "../src/engine/contracts/allocator.js";
 import type { CommandResult, CommandSubstrate, RunnerCommand } from "../src/engine/contracts/commandSubstrate.js";
 import {
@@ -246,6 +246,114 @@ describe("runValidationHarness — positive-control + auditor failures", () => {
     const proof = await runValidationHarness(harnessInput(ssh, buildNegativeControlPlan(), dirtyAuditor));
     expect(proof.auditorClean).toBe(false);
     expect(templateValidates(proof)).toBe(false);
+  });
+});
+
+// DEPS-BEFORE-GATE (apex v35): the positive-control tiers run `just tier-N`, whose
+// writer-authored recipe invokes `./node_modules/.bin/<tool>` — `command not found`
+// (exit 127) until `node_modules` exists. The harness MUST `ensureWorkspaceDepsInstalled`
+// (the project's `just bootstrap`) BEFORE the tiers, even when the template's
+// `.tanren/ci.yml` declares no explicit `bootstrap.run` (the OLD `if (bootstrap !==
+// undefined)` skip ran the tiers over an UNINSTALLED tree → the live `format + lint gate`
+// tier-2 prettier-not-found failure).
+describe("runValidationHarness — deps installed before the positive-control tiers (apex v35)", () => {
+  // A substrate that models "the tier binary is missing until deps are installed": it
+  // recognizes the deps-ensure guard (the `tanren: deps-ensure installing` sentinel) and
+  // flips `prepared`; a `just tier-N` BEFORE that flips exits 127 (`./node_modules/.bin`
+  // not found), after it exits 0. Bootstrap/build/cp/write all succeed.
+  class DepsGatedSsh implements CommandSubstrate {
+    readonly commands: RunnerCommand[] = [];
+    prepared = false;
+    installRuns = 0;
+
+    async run(_target: RunnerHandle, command: RunnerCommand): Promise<CommandResult> {
+      this.commands.push(command);
+      const cmd = command.command;
+      // The deps-ensure guard (one round-trip) prepares the tree.
+      if (cmd.includes("deps-ensure installing")) {
+        this.prepared = true;
+        this.installRuns += 1;
+        return { exitCode: 0, stdout: "tanren: deps-ensure installing\nPackages: +120", stderr: "", timedOut: false };
+      }
+      // Scratch-copy / defect-write / teardown plumbing always succeeds.
+      if (cmd.startsWith("rm -rf") || cmd.includes("cp -a") || cmd.includes("base64 -d")) {
+        return { exitCode: 0, stdout: "", stderr: "", timedOut: false };
+      }
+      // A `just tier-N` run BEFORE deps are installed: the writer's recipe shells out to
+      // `./node_modules/.bin/<tool>`, which is not found → exit 127 (the live failure).
+      if (cmd.includes("just tier-") && !this.prepared) {
+        return {
+          exitCode: 127,
+          stdout: "",
+          stderr: "sh: 1: ./node_modules/.bin/prettier: not found",
+          timedOut: false,
+        };
+      }
+      return { exitCode: 0, stdout: "", stderr: "", timedOut: false };
+    }
+  }
+
+  // A config that declares NO `bootstrap.run` — the template-contract shape that exposed
+  // the bug (the harness used to SKIP the bootstrap, so the tiers ran with no node_modules).
+  const NO_BOOTSTRAP_CONFIG: CiConfigV1 = resolveCiConfig(
+    [
+      "version: 1",
+      "tiers:",
+      "  fast:",
+      "    - name: tier-1",
+      "      run: just tier-1",
+      "  slow:",
+      "    - name: tier-2",
+      "      run: just tier-2",
+      "  merge:",
+      "    - name: tier-3",
+      "      run: just tier-3",
+      "when:",
+      "  fast:",
+      "    - per_iteration",
+      "  slow:",
+      "    - pre_audit",
+      "  merge:",
+      "    - pre_merge",
+    ].join("\n"),
+  );
+
+  it("installs deps BEFORE the slow/tier-2 gate even when the config declares no bootstrap.run (the bug)", async () => {
+    const ssh = new DepsGatedSsh();
+    const proof = await runValidationHarness({
+      ...harnessInput(ssh, []),
+      config: NO_BOOTSTRAP_CONFIG,
+    });
+
+    // WITHOUT the fix the harness skipped the bootstrap (no declared bootstrap.run), the
+    // tiers ran over an uninstalled tree, the slow/tier-2 step exited 127, and the positive
+    // controls FAILED. With the fix the deps-ensure (stack-agnostic `just bootstrap`
+    // fallback) runs first, so the tiers pass.
+    expect(proof.positiveControlsPassed).toBe(true);
+
+    // The deps-ensure guard ran BEFORE the first `just tier-` (ordering is load-bearing).
+    const ensureIdx = ssh.commands.findIndex((c) => c.command.includes("deps-ensure"));
+    const firstTierIdx = ssh.commands.findIndex((c) => c.command.includes("just tier-"));
+    expect(ensureIdx).toBeGreaterThanOrEqual(0);
+    expect(firstTierIdx).toBeGreaterThan(ensureIdx);
+  });
+
+  it("is idempotent — the deps-ensure runs once, not per-tier (no redundant double-install)", async () => {
+    const ssh = new DepsGatedSsh();
+    await runValidationHarness({ ...harnessInput(ssh, []), config: NO_BOOTSTRAP_CONFIG });
+    // The positive-control deps-ensure is a single round-trip before the three lifecycle
+    // points' tiers — not one install per tier.
+    expect(ssh.installRuns).toBe(1);
+  });
+
+  it("honors an EXPLICIT bootstrap.run (no stack-agnostic fallback when the config declares one)", async () => {
+    const ssh = new DepsGatedSsh();
+    await runValidationHarness({ ...harnessInput(ssh, []), config: DEFAULT_CI_CONFIG });
+    // DEFAULT_CI_CONFIG declares `bootstrap.run: just bootstrap`; the deps-ensure guard
+    // embeds it verbatim (not the `no justfile yet` default-fallback message).
+    const ensure = ssh.commands.find((c) => c.command.includes("deps-ensure installing"));
+    expect(ensure?.command).toContain("just bootstrap");
+    expect(ensure?.command).not.toContain("no justfile yet");
   });
 });
 
