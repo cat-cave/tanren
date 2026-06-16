@@ -35,6 +35,7 @@ import type pg from "pg";
 import type { RunStateWriter } from "../../../contracts/runStateWriter.js";
 import type { EventStore } from "../../../eventStore.js";
 import type { ReplanRouter } from "../../../contracts/conflictResolution.js";
+import { SpecNotRunnableError } from "../../projectSpecErrors.js";
 import { createLogger } from "../../../observability/logger.js";
 
 const log = createLogger("replan-router");
@@ -125,15 +126,33 @@ export class SpecStatusReplanRouter implements ReplanRouter {
     //     the same ordering the recovery `replan_with_steering` action documents). When no
     //     enqueuer is wired (a degenerate/test path) we fall back to a plain status flip.
     const status = this.deps.replanStatus ?? "open";
-    const enqueued = await this.enqueueReplan(input, status);
-    if (enqueued === undefined && this.deps.enqueuer === undefined) {
-      // Legacy/degenerate path (no enqueuer): at least flip the status so the spec is not
-      // stranded — but this path NEVER enqueues a run; production always wires the enqueuer.
+    const enqueue = await this.enqueueReplan(input, status);
+    if (enqueue.outcome === "no-enqueuer") {
+      // Legacy/degenerate path (no enqueuer wired): at least flip the status so the spec is
+      // not stranded — but this path NEVER enqueues a run; production always wires the
+      // enqueuer. The status flip alone keeps the spec re-drivable (it is `open`), but it
+      // does NOT record a routing — so it cannot strand at `replan_routed` with no run.
       await this.setSpecStatus(input.specId, status);
+      return;
+    }
+    if (enqueue.outcome === "failed") {
+      // NEVER-STRAND (the v35 silent-fallback bug): the enqueue genuinely FAILED and NO run
+      // is being driven for the spec. The old code swallowed this and STILL emitted
+      // `merge.conflict.replan_routed` (counting against the bounded cap) with NO
+      // `recovery.replan_queued` and no live run — the exact `replanned`-strand the live
+      // run hit (the spec sat `in_flight`/`open` forever). A routed replan that cannot RUN
+      // is not a recoverable re-plan; it is a genuine failure a human must see. Escalate
+      // LOUDLY (frees the slot, blocks only dependents) instead of recording a bare routing.
+      await this.escalateEnqueueFailure(input, enqueue.error);
+      return;
     }
 
     // (3) Record the new planning context so the next planner pass re-authors the spec ON
-    //     TOP of the other's change — the durable carrier that keeps intent alive.
+    //     TOP of the other's change — the durable carrier that keeps intent alive. Emitted
+    //     ONLY now that a re-drive is CONFIRMED (a fresh run was enqueued, or a concurrent
+    //     tick already claimed the re-opened spec → a run IS in flight) — so a recorded
+    //     `replan_routed` ALWAYS corresponds to a spec that is actually being re-driven,
+    //     never a silent strand. The bounded cap counts these, so it counts only real routings.
     await this.deps.eventStore.append({
       runId: this.deps.runId,
       specId: input.specId,
@@ -148,8 +167,12 @@ export class SpecStatusReplanRouter implements ReplanRouter {
     });
 
     // (4) Emit the OBSERVABLE `recovery.replan_queued` so the routed replan is never a
-    //     silent stall — it names the `replanRunId` the walker/worker will drive.
-    if (enqueued !== undefined) {
+    //     silent stall — it names the `replanRunId` the walker/worker will drive. Only the
+    //     `enqueued` outcome created a NEW run (the observable id); the benign already-claimed
+    //     race did NOT create a run (a concurrent tick owns the live re-drive), so there is no
+    //     new run id to name — the `replan_routed` routing above already marks it observable,
+    //     and the concurrent tick emitted its own `run.queued`. No fabricated run id ever.
+    if (enqueue.outcome === "enqueued") {
       await this.deps.eventStore.append({
         runId: this.deps.runId,
         specId: input.specId,
@@ -160,8 +183,8 @@ export class SpecStatusReplanRouter implements ReplanRouter {
           specId: input.specId,
           action: "replan_with_steering",
           steeringNote: input.newContext,
-          replanRunId: enqueued.replanRunId,
-          plannerTaskId: enqueued.plannerTaskId,
+          replanRunId: enqueue.replanRunId,
+          plannerTaskId: enqueue.plannerTaskId,
         },
       });
     }
@@ -169,31 +192,84 @@ export class SpecStatusReplanRouter implements ReplanRouter {
 
   /**
    * Enqueue the re-plan run — the never-discard re-author of the spec's work on the new
-   * base. Returns the new run id, or `undefined` when no enqueuer is wired (the legacy
-   * status-only path). A re-open race (a concurrent tick already claimed the now-`open`
-   * spec) is benign — the spec IS being re-driven, so we log it and skip the duplicate.
+   * base. The outcome the caller routes on:
+   *   - `enqueued`       — a fresh re-plan run was created (the `replanRunId` is observable);
+   *   - `already-running` — a concurrent tick already claimed the re-opened spec
+   *                         (`SpecNotRunnableError`): a run IS being driven, so this is a
+   *                         BENIGN no-op, NOT a strand (the spec re-drives on the live run);
+   *   - `failed`         — a GENUINE enqueue failure with no run in flight (must escalate,
+   *                         never silently strand the spec at `replan_routed`);
+   *   - `no-enqueuer`    — no enqueuer wired (the degenerate/test status-only path).
    */
   private async enqueueReplan(
     input: { specId: string; newContext: string },
     status: string,
-  ): Promise<{ replanRunId: string; plannerTaskId: string } | undefined> {
-    if (this.deps.enqueuer === undefined || this.deps.orgId === undefined) return undefined;
+  ): Promise<
+    | { outcome: "enqueued"; replanRunId: string; plannerTaskId: string }
+    | { outcome: "already-running" }
+    | { outcome: "failed"; error: unknown }
+    | { outcome: "no-enqueuer" }
+  > {
+    if (this.deps.enqueuer === undefined || this.deps.orgId === undefined) return { outcome: "no-enqueuer" };
     try {
-      return await this.deps.enqueuer.enqueue({
+      const run = await this.deps.enqueuer.enqueue({
         specId: input.specId,
         orgId: this.deps.orgId,
         projectId: this.deps.projectId,
         steeringNote: input.newContext,
         reopenStatus: status,
       });
+      return { outcome: "enqueued", replanRunId: run.replanRunId, plannerTaskId: run.plannerTaskId };
     } catch (error) {
-      log.warn(
-        "re-plan enqueue did not create a new run (a concurrent tick may have already claimed the re-opened spec) — the spec is re-drivable; the next walk re-enqueues it",
+      // BENIGN RACE ONLY: the re-opened spec was already claimed by a concurrent tick (the
+      // run-create's `open`-status claim found it taken). The spec IS being re-driven on
+      // that run, so this is not a strand — log + treat as a confirmed re-drive.
+      if (error instanceof SpecNotRunnableError) {
+        log.warn(
+          "re-plan enqueue found the re-opened spec already claimed by a concurrent tick — the spec is being re-driven on that run; skipping the duplicate enqueue",
+          { specId: input.specId },
+          error,
+        );
+        return { outcome: "already-running" };
+      }
+      // GENUINE FAILURE: the enqueue could not create a run AND no concurrent tick owns it.
+      // Surface it so the caller escalates — NEVER swallow it into a silent strand.
+      log.error(
+        "re-plan enqueue FAILED to create a run for the routed spec — escalating (never a silent replan_routed strand)",
         { specId: input.specId },
         error,
       );
-      return undefined;
+      return { outcome: "failed", error };
     }
+  }
+
+  /**
+   * ESCALATE an enqueue failure: a routed replan whose run could not be created (and no
+   * concurrent tick owns it) is genuinely stuck — park it `needs_attention` (frees the slot,
+   * blocks only dependents) with a LOUD ask. NEVER a bare `replan_routed` strand with no run.
+   */
+  private async escalateEnqueueFailure(input: { specId: string; newContext: string }, error: unknown): Promise<void> {
+    await this.setSpecStatus(input.specId, "needs_attention");
+    const detail = error instanceof Error ? error.message : String(error);
+    await this.deps.eventStore.append({
+      runId: this.deps.runId,
+      specId: input.specId,
+      projectId: this.deps.projectId,
+      eventType: "dag.spec.needs_attention",
+      payload: {
+        source: "strand",
+        specId: input.specId,
+        // The self-heal MECHANISM failed (the re-plan run could not be created) — a
+        // genuinely stuck spec, not a product/merge decision: `persistent_failure`.
+        reason: "persistent_failure",
+        terminalRuns: [{ runId: this.deps.runId, status: "halted" }],
+        attempts: 0,
+        message:
+          `the autonomous self-heal routed this spec back to the planner but could NOT enqueue the ` +
+          `re-plan run (${detail}) — the spec cannot re-drive on its own, so a human must intervene ` +
+          `instead of letting it strand. ${input.newContext}`,
+      },
+    });
   }
 
   /**
