@@ -152,6 +152,7 @@ class RecordingEventEmitter implements DagEventEmitter {
   // Phase-1 contract asserts on — but they must exist to satisfy the seam.
   async emitSpecSpeculative(): Promise<void> {}
   async emitSpeculationHeld(): Promise<void> {}
+  async emitAncestorNotReady(): Promise<void> {}
 
   async emitDrained(input: { projectId: string; plan: DagTickPlan }): Promise<void> {
     this.records.push({

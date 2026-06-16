@@ -169,6 +169,53 @@ function notReady(specId: string, depthCap: number): SpecReadiness {
 }
 
 /**
+ * CHEAP ANCESTOR-READY PRE-CHECK (apex v35, the `ancestor_not_ready` hot-loop fix).
+ *
+ * A speculative dependent jj-assembles its base from its unmerged ancestors' REAL PR-head
+ * branches at bootstrap (the expensive runner-allocation + clone). When an ancestor has not
+ * actually PUBLISHED its head yet — it ran ahead of the ancestor's `pr_open` (its
+ * `<branch>@origin` is gone-but-not-merged) — the assembly throws `AncestorNotReadyError`
+ * (`jjLocalIntegration.ts`), a BENIGN wait the run finalizer re-drives. The live cost was a
+ * hot-loop: a dependent on ~all specs re-drove ~516× over one build, each attempt allocating
+ * a runner + minting a token + cloning, just to re-discover the ancestor still is not ready.
+ *
+ * This is the cheap signal that AVOIDS that provisioning entirely: an ancestor has a
+ * PUBLISHED HEAD iff its projected lifecycle reached `pr_open` (rank ≥ 2) — i.e. a real PR
+ * head branch exists for the dependent to stack on. A `merged` ancestor is already on the
+ * base (not in the unmerged set) and trivially satisfies this. The walker checks this from
+ * the ALREADY-LOADED lifecycle projection BEFORE enqueuing — no runner, no clone — and defers
+ * a dependent whose ancestors lack a published head (it benign-waits, spaced by the backoff).
+ *
+ * Returns the FIRST unmerged ancestor that lacks a published head (`{ ancestorSpecId, phase }`,
+ * `phase` mirroring the `AncestorNotReadyError` non-terminal phase) when one does — else
+ * `undefined` (every unmerged ancestor has a published head; the dependent may proceed).
+ */
+export function firstAncestorWithoutPublishedHead(
+  unmergedAncestorSpecIds: ReadonlyArray<string>,
+  lifecycle: DagLifecycleSnapshot,
+): { ancestorSpecId: string; phase: "pending" | "in_flight" } | undefined {
+  for (const ancestorSpecId of unmergedAncestorSpecIds) {
+    const life = lifecycle.bySpecId.get(ancestorSpecId);
+    // A published head means a real PR-head branch exists to stack on — the ancestor's
+    // lifecycle reached `pr_open` (rank ≥ 2). `merged` is excluded from the unmerged set
+    // upstream, but ranks above pr_open anyway, so it never trips this. An absent/`pending`/
+    // `building`/`blocked` ancestor has NO published head yet (or never will) — defer.
+    if (life !== undefined && lifecycleRank(life.state) >= lifecycleRank("pr_open")) {
+      continue;
+    }
+    // Mirror the `AncestorNotReadyError` non-terminal phase vocabulary: a `building` ancestor
+    // is `in_flight` (a run is live, the head is coming); everything else (no run / `pending`)
+    // is `pending`. A `blocked` ancestor never publishes — but that is the walker's existing
+    // threshold gate's concern (a blocked ancestor never crosses any threshold), so a
+    // speculative dependent is only ever resolved over non-blocked ancestors; we still defer
+    // it here (cheaply) rather than provision against a missing head.
+    const phase = life?.state === "building" ? "in_flight" : "pending";
+    return { ancestorSpecId, phase };
+  }
+  return undefined;
+}
+
+/**
  * The transitive set of UNMERGED ancestors of a spec, in DAG order (ancestors
  * before dependents, ties by creation order then id). These are exactly the specs
  * the speculative integration branch must stack on `main` — every unmerged spec in
