@@ -379,6 +379,14 @@ cite); the merge-engine cutover rationale is
   `docs/roadmap/entity-analysis-layer.md` for the as-built record.
 - **§6 apex-e2e test gaps.** The hermetic apex e2e driver exists (§6); close the
   remaining gaps in its coverage of the post-scaffold loops as v33 exercises them.
+- **Native design subsystem.** Tanren must own design natively (a domain-general,
+  persisted, versioned `DesignContract` injected into the writer + a domain-aware
+  design oracle + a unified design↔code loop with no handoff seam), the same way
+  it owns the engine. Today the design side is ≈nonexistent (a decorative 80-char
+  `designDna` hint that never reaches the writer; the hand-done `tanren-hi-fidelity/`
+  bundle serves only Tanren's own dashboard). Landable plan in WS-D1..D8 —
+  `docs/roadmap/native-design-subsystem.md`. Does not block apex; once testable,
+  design becomes an added apex requirement (WS-D8).
 
 ---
 
