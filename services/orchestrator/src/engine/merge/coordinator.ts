@@ -26,6 +26,16 @@ const log = createLogger("merge-coordinator");
 
 /** How long after a transient merge-drive infra-hold the subscriber re-drives the project. */
 const TRANSIENT_DRIVE_HOLD_RETRY_AFTER_MS = 3000;
+/**
+ * How long after a NOT-YET-TERMINAL native re-gate the subscriber re-drives the project. A
+ * `re_gate_pending` outcome means the post-auto-rebase gate is STILL RUNNING / had an infra
+ * blip ("not done yet") — the entry stays QUEUED and is re-driven on this paced timer until
+ * the gate reaches a terminal verdict. This is NEVER bounded by a fixed attempt cap (a
+ * still-running gate is never "non-convergence" — a human would say "wait for it"); a
+ * genuinely-stuck gate surfaces via the OTHER signals (a thrown ambiguous/credential infra
+ * halt, or a terminal failed/needs_attention verdict), not a count on this hold.
+ */
+const RE_GATE_PENDING_RETRY_AFTER_MS = alertRetryAfterMs;
 /** Longer re-drive delay after a ceiling alert so persistent outages do not hot-loop (single source: retrySchedule). */
 const TRANSIENT_DRIVE_HOLD_ALERT_RETRY_AFTER_MS = alertRetryAfterMs;
 
@@ -282,7 +292,7 @@ export class EventEmittingMergeCoordinator implements MergeCoordinator {
   ): Promise<{
     mergedSpecId?: string;
     dequeuedSpecId?: string;
-    holdReason?: "infra_error" | "merge_retry";
+    holdReason?: "infra_error" | "merge_retry" | "re_gate_pending";
     retryAfterMs?: number;
   }> {
     let outcome: MergeDriveOutcome;
@@ -367,6 +377,25 @@ export class EventEmittingMergeCoordinator implements MergeCoordinator {
         tx: this.deps.tx,
       });
       return { dequeuedSpecId: entry.specId };
+    }
+
+    if (outcome.kind === "re_gate_pending") {
+      // THE NON-BRICKING RE-GATE HOLD: the post-auto-rebase native gate is NOT YET TERMINAL
+      // (still running / infra blip). RELEASE the claim so the entry STAYS QUEUED, then arm a
+      // paced re-drive — the gate just needs to finish, so the next drive re-runs it and lands
+      // the merge once it reaches a terminal verdict. This NEVER dequeues (the old `conflict`
+      // mapping bricked the live DAG) and has NO fixed attempt cap (a still-running gate is not
+      // "non-convergence" — a human would say "wait for it"). A genuinely-stuck gate surfaces
+      // via the thrown-infra halts / a terminal failed/needs_attention verdict, not a count.
+      await this.recoverableDriveHolds.reset(entry.queueId);
+      await this.deps.queue.releaseClaim(entry.queueId);
+      log.warn("native re-gate not yet terminal after auto-rebase; holding + re-driving (entry stays queued)", {
+        projectId,
+        specId: entry.specId,
+        retryAfterMs: RE_GATE_PENDING_RETRY_AFTER_MS,
+        message: outcome.message,
+      });
+      return { holdReason: "re_gate_pending", retryAfterMs: RE_GATE_PENDING_RETRY_AFTER_MS };
     }
 
     if (outcome.kind === "blocked") {

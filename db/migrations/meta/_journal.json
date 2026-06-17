@@ -78,6 +78,13 @@
       "when": 1781710356597,
       "tag": "0010_design_contracts",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1781717650967,
+      "tag": "0011_milky_hawkeye",
+      "breakpoints": true
     }
   ]
 }

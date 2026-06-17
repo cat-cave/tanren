@@ -117,6 +117,7 @@ export const eventTypeNames = [
   "merge.queued",
   "merge.rebased",
   "merge.regate.gate_rework_routed",
+  "merge.regate_pending",
   "merge.retargeted",
   "merge.speculative_held",
   "notification.enqueued",

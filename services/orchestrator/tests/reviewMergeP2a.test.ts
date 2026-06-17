@@ -10,7 +10,10 @@
 // server-side `updateBranch` fallback is GONE: the hook is REQUIRED on the land path.
 //   behind → baseShiftRebase(rebased) → re-gate CI → merge (merge.behind + merge.rebased)
 //   baseShiftRebase(conflict) → conflict hook + merge.conflict, NEVER merge
-//   re-gated CI fails → merge.failed, NEVER merge
+//   re-gated CI FAILS (clean rebase, gate-tier fail) → WRITER REWORK + recoverable conflict,
+//     NEVER a terminal merge.failed (the #594 principle extended to the auto-rebase path)
+//   re-gated CI PENDING (gate not yet terminal) → re_gate_pending RECOVERABLE re-drive,
+//     NEVER the old dequeue-and-abandon conflict that bricked the live run
 //   clean → merge directly, no rebase / re-gate
 import { describe, expect, it } from "vitest";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
@@ -138,7 +141,52 @@ describe("P2a up-to-date enforcement (merge stage)", () => {
     expect(pool.tasks.find((t) => t.kind === "merge")?.status).toBe("running");
   });
 
-  it("re-gated CI FAILS after rebase → merge.failed, NO land", async () => {
+  it("re-gated CI FAILS after a CLEAN rebase → WRITER REWORK + recoverable conflict, NO terminal merge.failed", async () => {
+    // #594 EXTENDED to the auto-rebase path: a clean rebase whose pre_merge gate fails a TIER
+    // is the WRITER's to fix on the new base — route to rework carrying the gate error, then
+    // emit the RECOVERABLE conflict so the reworked spec re-enters the queue. NEVER the old
+    // terminal merge.failed that stranded a fixable spec.
+    const pool = new ReviewMergePool("direct_merge");
+    const events = new FakeEventStore();
+    const probe = recordingMergeProbe({ mergeability: BEHIND });
+    const host = authorityHost();
+    const landed: string[] = [];
+    const reworked: Array<{ specId: string; gateError: string }> = [];
+
+    const result = await mergeForRun({
+      pool: pool.asPgPool(),
+      eventStore: events,
+      secrets: new FakeSecretStore(),
+      resolveConflict: noopConflictResolver,
+      githubHttp: unusedHttp(),
+      runId: "run_1",
+      mergeProbe: probe,
+      mergeAuthority: authorityBundle(host, landed, { events }),
+      baseShiftRebase: async () => ({ outcome: "rebased", rebasedHeadSha: REBASED_PR_HEAD }),
+      reGateCi: async () => ({ status: "failed", gateError: "tier 'tier2' step 'test' exited 1" }),
+      reGateGateRework: {
+        routeGateFailToRework: async (input) => {
+          reworked.push(input);
+        },
+      },
+    });
+
+    // Routed to writer rework with the gate error, then a RECOVERABLE conflict (not a terminal failure).
+    expect(reworked).toEqual([{ specId: "spec_1", gateError: "tier 'tier2' step 'test' exited 1" }]);
+    expect(result.outcome).toBe("conflict");
+    expect(landed).toEqual([]);
+    const types = events.events.map((e) => e.eventType);
+    expect(types).toContain("merge.rebased");
+    expect(types).toContain("merge.conflict");
+    expect(types).not.toContain("merge.failed");
+    expect(types).not.toContain("merge.completed");
+    // Recoverable: the merge task stays running so the reworked spec re-enters the queue.
+    expect(pool.tasks.find((t) => t.kind === "merge")?.status).toBe("running");
+  });
+
+  it("re-gated CI FAILS with NO rework router wired → recoverable conflict (never a terminal merge.failed)", async () => {
+    // An out-of-band / test caller with no rework router: still RECOVERABLE (the recovery
+    // surface re-drives), NEVER the old terminal merge.failed — never a silent merge either.
     const pool = new ReviewMergePool("direct_merge");
     const events = new FakeEventStore();
     const probe = recordingMergeProbe({ mergeability: BEHIND });
@@ -156,14 +204,54 @@ describe("P2a up-to-date enforcement (merge stage)", () => {
       mergeAuthority: authorityBundle(host, landed, { events }),
       baseShiftRebase: async () => ({ outcome: "rebased", rebasedHeadSha: REBASED_PR_HEAD }),
       reGateCi: async () => ({ status: "failed" }),
+      // reGateGateRework intentionally OMITTED.
     });
 
-    expect(result.outcome).toBe("failed");
+    expect(result.outcome).toBe("conflict");
     expect(landed).toEqual([]);
     const types = events.events.map((e) => e.eventType);
     expect(types).toContain("merge.rebased");
-    expect(types).toContain("merge.failed");
+    expect(types).toContain("merge.conflict");
+    expect(types).not.toContain("merge.failed");
     expect(types).not.toContain("merge.completed");
+    expect(pool.tasks.find((t) => t.kind === "merge")?.status).toBe("running");
+  });
+
+  it("re-gated CI PENDING after rebase → re_gate_pending RECOVERABLE re-drive, NEVER dequeue-and-abandon", async () => {
+    // The live brick: a not-yet-terminal native re-gate (gate still running / infra blip) was
+    // emitted as a TERMINAL conflict and DEQUEUED, stranding the PR forever. The fix: a distinct
+    // re_gate_pending RECOVERABLE outcome (the task stays running) the coordinator re-drives
+    // until the gate finishes — never dequeued, never a fixed attempt cap.
+    const pool = new ReviewMergePool("direct_merge");
+    const events = new FakeEventStore();
+    const probe = recordingMergeProbe({ mergeability: BEHIND });
+    const host = authorityHost();
+    const landed: string[] = [];
+
+    const result = await mergeForRun({
+      pool: pool.asPgPool(),
+      eventStore: events,
+      secrets: new FakeSecretStore(),
+      resolveConflict: noopConflictResolver,
+      githubHttp: unusedHttp(),
+      runId: "run_1",
+      mergeProbe: probe,
+      mergeAuthority: authorityBundle(host, landed, { events }),
+      baseShiftRebase: async () => ({ outcome: "rebased", rebasedHeadSha: REBASED_PR_HEAD }),
+      reGateCi: async () => ({ status: "pending" }),
+    });
+
+    expect(result.outcome).toBe("re_gate_pending");
+    expect(landed).toEqual([]);
+    const types = events.events.map((e) => e.eventType);
+    expect(types).toContain("merge.rebased");
+    expect(types).toContain("merge.regate_pending");
+    // NOT a terminal conflict/failure: the entry must stay re-drivable, not be dequeued.
+    expect(types).not.toContain("merge.conflict");
+    expect(types).not.toContain("merge.failed");
+    expect(types).not.toContain("merge.completed");
+    // Recoverable: the merge task stays running so the coordinator re-drives until the gate finishes.
+    expect(pool.tasks.find((t) => t.kind === "merge")?.status).toBe("running");
   });
 
   it("branch REBASED but NO reGateCi hook → HARD-HOLD (merge.conflict), NEVER land on unverified CI", async () => {

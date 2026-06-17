@@ -219,6 +219,21 @@ export const MergeRebasedPayload = z
   })
   .strict();
 
+// The post-auto-rebase native re-gate did not reach a TERMINAL verdict within its budget —
+// the gate is STILL RUNNING / an infra blip ("not done yet"), NOT non-convergence. The merge
+// stage emits this RECOVERABLE signal and holds the entry RE-DRIVABLE (a `blocked` outcome the
+// coordinator re-drives, unbounded while progressing) rather than dequeuing-and-abandoning it
+// as the old terminal `merge.conflict` did (which bricked the queue). The native gate finishing
+// on a subsequent re-drive then lands the merge.
+export const MergeRegatePendingPayload = z
+  .object({
+    prUrl: z.string(),
+    prNumber: z.number().int(),
+    integration: MergeIntegrationMode,
+    message: z.string(),
+  })
+  .strict();
+
 // intent-preserving conflict resolution (autonomy-engine.md §2b). On a real
 // conflict between the merging spec and what is now on the base branch, the
 // resolver makes the resolution INSPECTABLE through three events:

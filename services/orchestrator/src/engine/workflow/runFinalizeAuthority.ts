@@ -107,6 +107,9 @@ export type MergeOutcomeForDisposition =
   | "conflict"
   | "failed"
   | "blocked"
+  // A post-auto-rebase native re-gate not yet terminal (still running / infra blip) — a
+  // recoverable hold the recovery surface re-drives (same bucket as `blocked`/`conflict`).
+  | "re_gate_pending"
   | "needs_attention";
 
 /**
@@ -307,9 +310,10 @@ function decideMergeOutcome(mergeOutcome: MergeOutcomeForDisposition): RunDispos
   }
   // A `queued` native-queue enqueue is the coordinator's continuation (not a halt) — the
   // caller converges the RUN but leaves the spec non-done; a `queued` non-native enqueue,
-  // a `blocked`/`conflict`/`handed_off`/`failed` are transient holds the recovery surface
-  // re-drives. Either way this is a re-drive bucket from the spec's vantage; the caller
-  // distinguishes the native-queue-completed run write from the spec disposition.
+  // a `blocked`/`conflict`/`re_gate_pending`/`handed_off`/`failed` are transient holds the
+  // recovery surface re-drives (a `re_gate_pending` native gate just needs to finish). Either
+  // way this is a re-drive bucket from the spec's vantage; the caller distinguishes the
+  // native-queue-completed run write from the spec disposition.
   return {
     bucket: "re_drive",
     runOutcome: "halted",
