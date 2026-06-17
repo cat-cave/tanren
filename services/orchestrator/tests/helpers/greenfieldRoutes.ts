@@ -159,15 +159,37 @@ export const GREENFIELD_TS_LIFECYCLE = {
   toolchain: [],
 };
 
-// A capture WITH a lifecycle but no deploy — isolates the deploy-guard rejection so it
-// does not trip the (earlier) missing-lifecycle guard.
-export const captureWithLifecycle = () => ({ ...emptyCapture(), lifecycle: GREENFIELD_TS_LIFECYCLE });
+// A minimal, EXPLICIT design contract (native design subsystem, WS-D1). The design
+// contract is REQUIRED at derive (the no-silent-noop guard, mirroring the lifecycle
+// guard) — so a capture that should derive past the early guards carries an explicit
+// design contract. Minimal by design: an explicit, design-light contract is valid; a
+// SILENT absence is not.
+export const GREENFIELD_DESIGN_CONTRACT = {
+  domain: "saas-web",
+  identity: "a clean, trustworthy operations surface",
+  intent: "a calm, information-dense control surface an operator trusts at a glance",
+  principles: [],
+  constraints: [],
+  personas: [],
+  behaviors: [],
+  dimensions: [],
+};
+
+// A capture WITH a lifecycle + an explicit design contract but no deploy — isolates the
+// deploy-guard rejection so it does not trip the (earlier) missing-lifecycle / missing-
+// design-contract guards.
+export const captureWithLifecycle = () => ({
+  ...emptyCapture(),
+  lifecycle: GREENFIELD_TS_LIFECYCLE,
+  designContract: GREENFIELD_DESIGN_CONTRACT,
+});
 
 export function apexCapture() {
   return {
     ...emptyCapture(),
     identity: { slug: "apex-url-shortener-v22", pitch: "A short link service for an operations team.", repoHint: "" },
     lifecycle: GREENFIELD_TS_LIFECYCLE,
+    designContract: GREENFIELD_DESIGN_CONTRACT,
   };
 }
 

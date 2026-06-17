@@ -41,6 +41,16 @@ export function buildInterviewPrompt(context: InterviewAnswererContext): string 
     "  - `dimensions`: the DOMAIN-DERIVED design dimensions — each { key, label, intent } —",
     "      a web app: tokens/components/layout; a game: art-direction/ui/game-feel; a novel:",
     "      typography/voice/layout/cover. Let the domain decide; do NOT force a web schema.",
+    // REQUIRED-TO-COMPLETE (mirrors the lifecycle gate): the design contract is the
+    // durable artifact the writer builds from + the design oracle verifies against, so
+    // it is LOAD-BEARING — the derive FAILS LOUD (MissingDesignContractError) if it is
+    // still null at completion. It must be PRESENT + EXPLICIT, not necessarily web-heavy:
+    // a genuinely design-light project (a headless library) still captures an EXPLICIT
+    // MINIMAL contract (domain + identity + intent, with empty principles/constraints/
+    // dimensions) — never a silent absence.
+    "The DESIGN CONTRACT is REQUIRED before the interview can complete: capture at least its",
+    "`domain`, `identity`, and `intent` (a design-light project may leave principles/constraints/",
+    "dimensions empty, but the contract itself must be EXPLICIT) — never leave `designContract` null.",
     // THE MOAT — bind the design to the project's TYPED persona + behavior graph.
     // Tanren has first-class personas + behaviors; design resolves against them
     // STRICTLY (no 'assume default admin'), and behaviors become design acceptance

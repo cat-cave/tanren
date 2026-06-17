@@ -11,9 +11,11 @@
 // PLACEMENT — the phase persists a NEW VERSION via `DesignContractStore.create`
 // (never-discard versioning, like every design change). Because the writer + oracle
 // read `getLatest`, the elaborated version is consumed downstream with NO further
-// wiring. WS-D1 already persists a thin version-1 from the interview capture; this
-// phase persists the elaborated version on top — so the head a project builds
-// against is the DESIGNED contract, not the thin capture.
+// wiring. In production this phase persists the project's SOLE version (version 1):
+// the derive routes through the design agent and this phase RETURNS before any thin
+// capture is persisted — the thin-capture create runs ONLY on the agent-less
+// engine-graph test seam. So the head a project builds against is the DESIGNED
+// contract authored here, never a thin capture.
 //
 // SCOPE BOUNDARY: the phase authors the CONTRACT only. It never writes product UI —
 // the writer realizes the hi-fi from the contract (Tanren's no-handoff model).

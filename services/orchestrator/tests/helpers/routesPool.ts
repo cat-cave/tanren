@@ -360,6 +360,26 @@ export class RoutesPool {
     if (trimmed.startsWith("DELETE FROM spec_milestones")) return { rows: [], rowCount: 0 };
     if (trimmed.startsWith("INSERT INTO spec_milestones")) return { rows: [], rowCount: 1 };
 
+    // design_contracts (native design subsystem, WS-D1) — the derive persists the
+    // captured design contract as a first-class version-1 row. Params:
+    // [id, org_id, project_id, domain, contract_json]. The version is COALESCE'd in the
+    // real SQL; the stub returns version 1 (the first contract for a fresh project).
+    if (trimmed.startsWith("INSERT INTO design_contracts")) {
+      return {
+        rows: [
+          {
+            id: String(params[0]),
+            org_id: String(params[1]),
+            project_id: String(params[2]),
+            version: 1,
+            domain: String(params[3]),
+            contract: JSON.parse(String(params[4])) as unknown,
+          },
+        ],
+        rowCount: 1,
+      };
+    }
+
     // inbox_sources (the repo-link auto-provisioned `issues` source).
     if (trimmed.includes("FROM inbox_sources WHERE org_id = $1")) {
       const rows = this.inboxSources.filter((s) => s["org_id"] === String(params[0]));

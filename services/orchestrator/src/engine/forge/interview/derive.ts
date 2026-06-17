@@ -36,6 +36,7 @@ import { provisionedGreenfieldProjectConfigProof } from "../../workflow/projectC
 import { createProject, createSpec } from "../../workflow/projectSpec.js";
 import {
   deriveInterfaceMilestones,
+  MissingDesignContractError,
   persistDesignContract,
   productVisionConfig,
   resumeDerivedProject,
@@ -156,8 +157,12 @@ export interface DeriveResult {
   personaIds: string[];
   behaviorIds: string[];
   milestoneIds: string[];
-  // The id of the persisted first-class `DesignContract` entity (WS-D1), when the
-  // interview captured a design contract. Absent ⇒ no design intent surfaced.
+  // The id of the persisted first-class `DesignContract` entity (WS-D1). A FRESH
+  // derive ALWAYS persists one — the derive guards a missing design contract with
+  // `MissingDesignContractError`, so a contract is never silently skipped — and
+  // surfaces its id here. Absent ONLY on the idempotent RESUME shortcut, which (like
+  // every derived-id field here) does not re-enumerate the already-persisted graph;
+  // it is read back through the project-DAG endpoint instead.
   designContractId?: string;
   // TEMPLATING WAVE 3 — the selection OUTCOME (templating-system.md §3), surfaced so
   // the decision is observable on the derive result (strong/partial = seeded;
@@ -232,6 +237,16 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
   // the lifecycle's stack as a fallback signal) so a no-lifecycle capture surfaces the
   // lifecycle error, not a slug error.
   if (capture.lifecycle === null) throw new MissingLifecycleError();
+
+  // The DESIGN CONTRACT is LOAD-BEARING + REQUIRED — it is persisted as the project's
+  // first-class `DesignContract`, injected into the writer (WS-D2), and verified by the
+  // design oracle (WS-D4). FAIL LOUD if absent (the no-silent-fallback doctrine): a null
+  // contract would silently disable the ENTIRE design subsystem (no row, no writer design
+  // block, the oracle no-ops) with no signal. The requirement is PRESENCE + explicitness,
+  // NOT web dimensions — a genuinely design-light project (a headless library) still
+  // declares an EXPLICIT minimal contract; it is never silently absent. Checked alongside
+  // the lifecycle guard so a no-design capture surfaces THIS error, not a downstream no-op.
+  if (capture.designContract === null) throw new MissingDesignContractError();
 
   // Resolve a HOSTNAME-SAFE slug (the repo + deploy-app name). A captured identity
   // slug is used verbatim; an absent identity falls back to a REAL normalized signal
@@ -452,7 +467,9 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
     personaIds: [...personaIdByName.values()],
     behaviorIds,
     milestoneIds,
-    ...(designContractId === undefined ? {} : { designContractId }),
+    // The design contract is REQUIRED (guarded loud above) — always persisted, so its
+    // id is always present on the result.
+    designContractId,
     ...(templateSelection === undefined ? {} : { templateSelection }),
   };
 }

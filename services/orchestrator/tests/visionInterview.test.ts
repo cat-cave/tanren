@@ -43,9 +43,28 @@ const TS_LIFECYCLE: CaptureLifecycle = {
   toolchain: [],
 };
 
-// A capture WITH the lifecycle (so a deploy-guard test isolates the deploy guard,
-// not the earlier missing-lifecycle guard).
-const captureWithLifecycle = (): InterviewCapture => ({ ...emptyCapture(), lifecycle: TS_LIFECYCLE });
+// A minimal, EXPLICIT design contract (native design subsystem, WS-D1) — required at
+// derive (the no-silent-noop guard, mirroring the lifecycle guard). Minimal by design:
+// an explicit, design-light contract is valid; a silent absence is not.
+const MINIMAL_DESIGN_CONTRACT = {
+  domain: "saas-web",
+  identity: "a clean, trustworthy operations surface",
+  intent: "a calm, information-dense control surface an operator trusts at a glance",
+  principles: [],
+  constraints: [],
+  personas: [],
+  behaviors: [],
+  dimensions: [],
+};
+
+// A capture WITH the lifecycle + an explicit design contract (so a deploy-guard test
+// isolates the deploy guard, not the earlier missing-lifecycle / missing-design-contract
+// guards).
+const captureWithLifecycle = (): InterviewCapture => ({
+  ...emptyCapture(),
+  lifecycle: TS_LIFECYCLE,
+  designContract: MINIMAL_DESIGN_CONTRACT,
+});
 
 // TEMPLATING WAVE 3 — a fixed clock + a fixture VALIDATED template (a matching
 // TS/pnpm/next seed). At module scope so it is not recreated per test (lint).

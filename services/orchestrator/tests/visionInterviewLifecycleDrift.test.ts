@@ -71,6 +71,18 @@ const confirmedCapture = (): InterviewCapture => ({
   ...emptyCapture(),
   lifecycle: TS_LIFECYCLE,
   lifecycleConfirmed: true,
+  // The design contract is REQUIRED at derive (the no-silent-noop guard) — a minimal
+  // explicit contract so the full-derive test reaches the lifecycle-persistence path.
+  designContract: {
+    domain: "saas-web",
+    identity: "a clean, trustworthy operations surface",
+    intent: "a calm, information-dense control surface an operator trusts at a glance",
+    principles: [],
+    constraints: [],
+    personas: [],
+    behaviors: [],
+    dimensions: [],
+  },
 });
 
 // A scripted answerer that re-emits a lifecycle delta (optionally flagged as an

@@ -19,7 +19,13 @@ import type { CaptureBehavior, CaptureInterface, InterviewCapture } from "./type
 // through this behavior-derive module so `derive.ts` reaches them without a
 // separate module dependency (the design contract binds the SAME behaviors this
 // module derives — they belong to the same derive concern).
-export { behaviorKey, persistDesignContract, productVisionConfig } from "./deriveDesignContract.js";
+export {
+  behaviorKey,
+  DanglingDesignRefError,
+  MissingDesignContractError,
+  persistDesignContract,
+  productVisionConfig,
+} from "./deriveDesignContract.js";
 
 // Build the BDD acceptance criteria for a behavior spec from its given/when/then.
 function acceptanceFor(behavior: CaptureBehavior): string[] {
