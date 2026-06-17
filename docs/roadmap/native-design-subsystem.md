@@ -1,11 +1,45 @@
 # Tanren owns design — a native, domain-general design subsystem
 
-> Status: **roadmap / not built.** This is the design rationale + the landable
-> plan for a Tanren-NATIVE design subsystem. Nothing here is wired yet; the
-> workstreams (WS-D1..D8 below) are the ordered, CI-gated, PR-sized units of
-> work. It does **not** block or halt the current apex fixture — but once the
-> subsystem is "ready to test," design becomes an added requirement of apex
-> (WS-D8).
+> Status: **subsystem CORE built, merged, and live-wired into the spec loop;
+> remaining work is dogfood + apex + templates (WS-D5..D8).** The foundation
+> workstreams are done on `main`: **WS-D1** (the `DesignContract` entity, #596),
+> **WS-D2** (writer injection, #598), **WS-D3** (design agent + design phase,
+> #599), and **WS-D4** (the domain-aware design oracle, #597) — now **wired
+> end-to-end into the live spec loop** (#602) with the missing-contract loud-fail
+>
+> - dangling-ref consistency hardening (#600). The **design verify→re-drive loop
+>   is closed**: the Forge interview captures the design intent → the design agent
+>   authors the `DesignContract` → the writer injects it on every generation → the
+>   design oracle verifies behavior-coverage + persona-scoped fidelity → its
+>   findings re-drive the writer, all in the **same DAG, no handoff**.
+>
+> **Integration-review outcome (the close-out check on the wiring):** the writer
+> leg is verified **closed** (the contract reaches the writer prompt on every
+> generation); the **moat is real** — persona + behavior coverage is enforced
+> _structurally_ (the design phase asserts exhaustive behavior coverage + strict
+> ref resolution; the oracle resolves typed entity refs strictly, no guessing);
+> and the **domain-generality is sound** (the contract shape, the agent's
+> dimension set, and the oracle's verification mode are all domain-derived, never
+> web-baked, never branched-on in code). The two **P1 gaps** the review found —
+> the oracle being **unwired** (capability complete but not called) and the
+> interview capture being a **silent no-op** when no contract was captured — are
+> both **CLOSED** (#602 wires the oracle into the loop; #600 makes a
+> missing/dangling contract a LOUD halt).
+>
+> **Honest next step — not yet exercised on a live run.** The subsystem is
+> **code-complete + wired**, but it has **NOT yet been exercised end-to-end on a
+> real live run**: the current apex run captured **no** `designContract`, so the
+> design phase + oracle no-op there (the oracle returns `hasContract: false` and
+> the loop skips design verification — `loopStages.ts:164`). Exercising the full
+> loop on a live run with a real captured `designContract` is the **next
+> validation step** (WS-D8).
+>
+> The remaining plan below — **WS-D5..D8** — is what is left. WS-D5 is **assessed
+> as SUBSUMED** by the domain-general D1/D3/D4 implementation (verdict + evidence
+> in its entry); **WS-D7 (dogfood)** and **WS-D8 (apex integration)** are the
+> headline remaining work. It does **not** block or halt the current apex
+> fixture — but once a live run carries a real contract, design becomes an added
+> requirement of apex (WS-D8).
 
 ## The north star (the why)
 
@@ -262,10 +296,53 @@ Ordered, each a CI-gated PR-sized unit. Dependencies noted.
   (every behavior has a designed surface) **and persona-scoped fidelity** (each
   surface is correct for its resolved persona), as a gate tier (the moat).
   _(Depends on WS-D1; pairs with WS-D5.)_
-- **WS-D5 — design as a domain in the oracle taxonomy / entity model.** Wire
-  "design" into the product-entity model (`docs/architecture/product-entities.md`)
-  and the oracle taxonomy so the contract's **shape** and the oracle's **mode** are
-  **domain-derived**. _(Pairs with WS-D1 + WS-D4.)_
+- **WS-D5 — design as a domain in the oracle taxonomy / entity model.** _(Originally
+  specced: wire "design" into the product-entity model
+  (`docs/architecture/product-entities.md`) and the oracle taxonomy so the contract's
+  **shape** and the oracle's **mode** are domain-derived. Pairs with WS-D1 + WS-D4.)_
+
+  **VERDICT: SUBSUMED by the domain-general D1/D3/D4 implementation — recommend
+  closing.** The thing WS-D5 was meant to add (domain-derivation of both the
+  contract shape and the oracle's verification mode, and design wired into the
+  canonical entity model + oracle/answerer registry) is already what D1/D3/D4
+  built, by construction. Grounded:
+  - **Contract shape is domain-derived, never web-baked, never branched on.**
+    `domain` is a descriptive label Tanren explicitly never switches on, and
+    `dimensions` is a project/domain-declared adaptive set, not a fixed web schema
+    (`services/orchestrator/src/engine/design/designContract.ts:21-28`,
+    `:138-143` the `domain` label, `:156-160` the declared `dimensions`). The
+    design agent **derives** the dimension set from the domain at author time
+    (`designAgent.ts:113-118`, `designPhase.ts:188-194`).
+  - **The oracle's verification mode is domain-derived.** `verificationMode` is a
+    free string the oracle answerer **declares** from the contract — there is NO
+    Tanren-side branch and NO registry of "domain → mode" anywhere
+    (`designOracle.ts:11-13` "Tanren NEVER branches on the domain", `:147` the mode
+    is read back off the answer; the event schema carries it as a plain string,
+    `engine/events/schemas/answerer.ts:400-407`). A repo-wide search finds no
+    `verificationMode` registry outside the design path. This IS the
+    domain-derivation WS-D5 asked for — implemented as "the agent chooses," the
+    same posture as the stack-flexible lifecycle's `stack` label.
+  - **Design IS wired into the product-entity model.** The `DesignContract` binds to
+    the canonical `personas` + `behaviors` entities (`product-entities.md`'s
+    Persona→Behavior→Spec model) via TYPED `personaRefs`/`behaviorRefs`, resolved
+    STRICTLY through the same `PersonaStore`/`BehaviorStore` the rest of the system
+    uses (`designContract.ts:145-155`, `designPhase.ts:89-119`,
+    `designOracle.ts:153-198`). It does not need a parallel entity; it rides the
+    existing graph.
+  - **Design IS registered in the canonical oracle/answerer registry.** `designOracle`
+    is a first-class `AnswererRole` in the single-source answerer catalog — the
+    registry that actually drives the system's codegen + drift test
+    (`engine/answerers/schemas/catalog.ts:28`, `:88-93`). (Note: the
+    `engine/oracle/` package is a different thing — the entity-change **RISK**
+    taxonomy, `entityRiskTaxonomy.ts`; the design oracle is an **answerer**, so the
+    answerer catalog is its correct canonical home, and it is already there.)
+
+  **Only residual (doc-only, not a code gap):** `docs/architecture/product-entities.md`
+  still enumerates only Persona / Behavior / Milestone / Spec and does not yet
+  mention the `DesignContract` entity or its persona/behavior binding. That is a
+  one-paragraph doc touch (fold it into a future WS-D7/doc-sweep PR), NOT a scoped
+  WS-D5 implementation PR. **No code work remains for WS-D5.**
+
 - **WS-D6 — design templates via template-creation.** Design capabilities as
   **templates Tanren creates + validates** (open-design's "skills" /
   "plugins-create-plugins"), through the existing template-creation meta-DAG
@@ -273,9 +350,17 @@ Ordered, each a CI-gated PR-sized unit. Dependencies noted.
 - **WS-D7 — dogfood.** Regenerate **Tanren's own `DesignContract` + dashboard
   hi-fi natively**, replacing the hand-done `tanren-hi-fidelity/` bundle. _(Depends
   on WS-D1..D4, ideally WS-D6.)_
-- **WS-D8 — apex integration.** Add the **design dimension** to the apex fixture's
-  requirements — the built product must carry a real `DesignContract` and pass the
-  design oracle. _(Gated on WS-D1..D4 being testable.)_
+- **WS-D8 — apex integration (HEADLINE remaining work — the first LIVE exercise).**
+  Add the **design dimension** to the apex fixture's requirements — the built product
+  must carry a real `DesignContract` and pass the design oracle. D1..D4 are now
+  testable (the gate above), so this is unblocked. **This is also the missing
+  validation:** the subsystem is code-complete + wired but has NOT yet run end-to-end
+  on a live run — the current apex run captured **no** `designContract`, so the design
+  phase + oracle no-op there (`designOracle.ts:101-104` / `loopStages.ts:164` return
+  `hasContract: false`). A future apex run where the interview captures a real design
+  intent — so the design phase authors a contract and the oracle verifies the built
+  product against it — is what first exercises the full verify→re-drive loop on real
+  credentials. _(Gated on WS-D1..D4 being testable — now satisfied.)_
 
 ## Where this fits
 
