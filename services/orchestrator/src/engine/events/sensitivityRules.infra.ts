@@ -329,7 +329,7 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["headBranch", "public"],
     ["message", "public"],
   ]),
-  // up-to-date enforcement — PR identifiers + refs + freshness signal, public.
+  // up-to-date enforcement (behind / rebased / not-yet-terminal re-gate) — PR ids + refs + signal, public.
   ...rulesFor("merge.behind", [
     ["prUrl", "public"],
     ["prNumber", "public"],
@@ -346,7 +346,12 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["headBranch", "public"],
     ["reGatedCi", "public"],
   ]),
-  // §2c: a speculative dependent's merge held for unmerged ancestors — PR ids + ref + ancestor spec ids, all public.
+  ...rulesFor("merge.regate_pending", [
+    ["prUrl", "public"],
+    ["prNumber", "public"],
+    ["integration", "public"],
+    ["message", "public"],
+  ]),
   ...rulesFor("merge.speculative_held", [
     ["prUrl", "public"],
     ["prNumber", "public"],
@@ -354,7 +359,6 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["speculativeBase", "public"],
     ["unmergedAncestors[]", "public"],
   ]),
-  // §2c step 3: the cleared-hold retarget to default_branch — PR identifiers + branch refs, all public.
   ...rulesFor("merge.retargeted", [
     ["prUrl", "public"],
     ["prNumber", "public"],
@@ -362,7 +366,6 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["fromBase", "public"],
     ["toBase", "public"],
   ]),
-  // intent-preserving conflict resolution — PR ids + spec ids + refs + DAG-edge + file paths + reasoning, all public.
   ...rulesFor("merge.conflict.resolving", [
     ["prUrl", "public"],
     ["prNumber", "public"],
@@ -385,7 +388,6 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["resolvedFiles[]", "public"],
     ["reGated", "public"],
   ]),
-  // §3.2 deterministic entity-merge — PR ids + spec id + spliced files + merged entity ids (structural), all public.
   ...rulesFor("merge.conflict.entity_merged", [
     ["prUrl", "public"],
     ["prNumber", "public"],
@@ -410,7 +412,6 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["reason", "public"],
     ["fromFailedReGate", "public"],
   ]),
-  // replan-routed — spec ids + new planning context + status, all public.
   ...rulesFor("merge.conflict.replan_routed", [
     ["specId", "public"],
     ["otherSpecId", "public"],
@@ -418,7 +419,6 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["replanStatus", "public"],
     ["conflictSignature", "public"],
   ]),
-  // governance posture block — PR ids + posture + external contributor logins (public handles) + prose, all public.
   ...rulesFor("merge.blocked", [
     ["prUrl", "public"],
     ["prNumber", "public"],

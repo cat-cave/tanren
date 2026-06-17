@@ -40,6 +40,16 @@ export type MergeDriveOutcome =
   // state is recoverable and re-driven with bounded backoff.
   | { kind: "conflict"; message: string }
   | { kind: "blocked"; message: string }
+  // The post-auto-rebase NATIVE RE-GATE did not reach a TERMINAL verdict within its budget
+  // (the gate is STILL RUNNING / an infra blip) — "not done yet", NOT non-convergence and
+  // NOT a conflict. The entry stays QUEUED and is re-driven on the next tick (the gate just
+  // needs to finish), so when the re-gate reaches a terminal verdict the merge proceeds. It
+  // is NEVER dequeued (the old terminal `conflict` mapping bricked the live run) and is NOT
+  // bounded by a fixed attempt cap (a still-running gate is never "non-convergence" — a human
+  // would say "wait for it"). A genuinely STUCK gate surfaces via the OTHER signals (a thrown
+  // ambiguous/credential infra halt, or a terminal `failed`/`needs_attention` verdict), not a
+  // count on this recoverable hold.
+  | { kind: "re_gate_pending"; message: string }
   // The merge failed terminally — the entry is removed (NOT re-queued).
   | { kind: "failed"; message: string }
   // The LOUD TERMINAL ESCALATION (autonomy-engine.md §2c — the non-bricking conflict
@@ -364,11 +374,22 @@ export interface CoordinateResult {
    *     coordinate result remains retryable so autonomous recovery continues.
    *   - merge_retry — a recoverable blocked merge-drive outcome; the same
    *     candidate stayed queued and will be re-driven after backoff.
+   *   - re_gate_pending — the post-auto-rebase native re-gate is NOT YET TERMINAL (still
+   *     running / infra blip): the same candidate stayed queued and will be re-driven after
+   *     backoff until the gate finishes. NEVER dequeued, NEVER bounded by a fixed cap (a
+   *     still-running gate is not non-convergence).
    *   - infra_blocked — a non-retryable terminal infra halt where autonomous re-drive
    *     would be unsafe or impossible, such as an ambiguous merge state that could
    *     double-merge or a missing required credential waiting on a repair event.
    */
-  holdReason?: "serialized" | "empty" | "all_blocked" | "infra_error" | "merge_retry" | "infra_blocked";
+  holdReason?:
+    | "serialized"
+    | "empty"
+    | "all_blocked"
+    | "infra_error"
+    | "merge_retry"
+    | "re_gate_pending"
+    | "infra_blocked";
   /**
    * When set, the pass held on a TRANSIENT/TIMED condition that no `tanren_run` NOTIFY
    * is guaranteed to clear on its own — the subscriber should re-drive THIS project

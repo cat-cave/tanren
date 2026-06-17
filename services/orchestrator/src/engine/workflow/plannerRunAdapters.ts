@@ -34,7 +34,14 @@ import { buildDefaultGate } from "./plannerRunGate.js";
 export { buildDefaultGate } from "./plannerRunGate.js";
 // Re-exported so plannerRun.ts keeps a single import surface for the run's
 // input-shaping seams (the optional-property folders live in plannerRunSeams).
-export { appTokenSeam, baseShiftRebaseSeam, loopConfigSeam, nativeQueueSeam, writerSeam } from "./plannerRunSeams.js";
+export {
+  appTokenSeam,
+  baseShiftRebaseSeam,
+  loopConfigSeam,
+  nativeQueueSeam,
+  reGateGateReworkSeam,
+  writerSeam,
+} from "./plannerRunSeams.js";
 import type { PlannerRunAdapterContext, RunPlannerLoopInput } from "./plannerRun.js";
 import type { AppendEvent, SubtaskLoopAdapters } from "./subtaskLoop.js";
 import { buildDefaultConflictResolver } from "./reviewMerge/conflictResolver/index.js";

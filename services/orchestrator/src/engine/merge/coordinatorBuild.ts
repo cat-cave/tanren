@@ -38,6 +38,7 @@ import {
 } from "./driveConflictResolve.js";
 import { mergeForRun } from "../workflow/reviewMerge/index.js";
 import type { MergeForRunInput, NativeQueueEnqueuer } from "../workflow/reviewMerge/index.js";
+import { buildDriveReGateGateRework } from "./driveReGateRework.js";
 import type { MergeDriveOutcome } from "../contracts/mergeCoordinator.js";
 import type { DriveMergeForQueuedRun } from "./coordinator.js";
 import { PgMergeQueueModel } from "./coordinatorPg.js";
@@ -95,6 +96,8 @@ interface RunFacts {
   specId: string;
   runId: string;
   githubCredentialRef: string;
+  /** The run's PR number (for the re-gate-rework router's observable event); 0 when unresolvable. */
+  prNumber: number;
 }
 
 /** Resolve the queued run's org/project/spec + its GitHub credential ref (system-scoped). */
@@ -105,9 +108,12 @@ async function resolveRunFacts(pool: pg.Pool, runId: string): Promise<RunFacts> 
       project_id: string | null;
       spec_id: string | null;
       config: unknown;
+      pr_number: string | null;
     }>(
-      `SELECT r.org_id, r.project_id, r.spec_id, p.config
-         FROM runs r JOIN projects p ON p.project_id = r.project_id
+      `SELECT r.org_id, r.project_id, r.spec_id, p.config, mq.pr_number
+         FROM runs r
+         JOIN projects p ON p.project_id = r.project_id
+         LEFT JOIN merge_queue mq ON mq.run_id = r.run_id
         WHERE r.run_id = $1`,
       [runId],
     );
@@ -127,12 +133,14 @@ async function resolveRunFacts(pool: pg.Pool, runId: string): Promise<RunFacts> 
   const credentials = await runWithOrgScope(pool, orgId, (client) =>
     resolveCredentialsForRun(client, { projectConfig, orgScope: orgScopeFromRunOrgId(orgId) }),
   );
+  const prNumber = base.pr_number === null ? 0 : Number(base.pr_number);
   return {
     orgId,
     projectId: base.project_id,
     specId: base.spec_id,
     runId,
     githubCredentialRef: credentials.githubCredentialRef,
+    prNumber: Number.isFinite(prNumber) ? prNumber : 0,
   };
 }
 
@@ -273,6 +281,19 @@ export function buildDriveMerge(deps: BuildMergeCoordinatorDeps): DriveMergeForQ
           // jj through the SAME coordinator the percolation kick-off uses — never a
           // separate server-side update-branch. `held` is a fail-closed recoverable hold.
           baseShiftRebase,
+          // A clean-rebase re-gate that FAILS a gate tier on the drive pass routes to WRITER
+          // REWORK (#594 extended to this auto-rebase path), never a terminal `merge.failed`
+          // that stranded a fixable spec. The router re-opens the spec + enqueues a re-author
+          // run; escalation on a genuine dead-end is the convergence detector's (no count).
+          reGateGateRework: buildDriveReGateGateRework({
+            pool: deps.pool,
+            ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
+            orgId: facts.orgId,
+            eventStore,
+            runId,
+            projectId: facts.projectId,
+            prNumber: facts.prNumber,
+          }),
         }),
       );
     } catch (error) {
@@ -313,6 +334,13 @@ export function buildDriveMerge(deps: BuildMergeCoordinatorDeps): DriveMergeForQ
         // as recoverable `blocked`. Map to the coordinator's recoverable `blocked` — a
         // bounded re-drive hold, NEVER a terminal dequeue.
         return { kind: "blocked", message: merge.message ?? "merge blocked" };
+      case "re_gate_pending":
+        // The post-auto-rebase native re-gate is NOT YET TERMINAL (still running / infra blip):
+        // re-drivable, "not done yet" — NOT non-convergence and NOT a conflict. Map to the
+        // coordinator's `re_gate_pending` so the entry stays queued + re-drives until the gate
+        // finishes, NEVER dequeued (the old `conflict` mapping bricked the live run) and NEVER
+        // bounded by a fixed attempt cap.
+        return { kind: "re_gate_pending", message: merge.message ?? "native re-gate not yet terminal" };
       case "needs_attention":
         // §3.2: the merge AUTHORITY's genuine-human-decision verdict (HITL pending /
         // changes_requested at land time). PARK the spec via the escalator (frees its

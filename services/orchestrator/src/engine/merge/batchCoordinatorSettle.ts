@@ -181,6 +181,18 @@ export async function settleDriveOutcome(
     return "dequeued";
   }
 
+  if (outcome.kind === "re_gate_pending") {
+    // The post-auto-rebase native re-gate is NOT YET TERMINAL (still running / infra blip):
+    // re-drivable, "not done yet" — RELEASE the claim so the entry STAYS QUEUED + arm a paced
+    // re-drive (the gate just needs to finish). NEVER dequeued (the old `conflict` mapping
+    // bricked the live DAG) and NO fixed attempt cap (a still-running gate is not non-
+    // convergence). A genuinely-stuck gate surfaces via the thrown-infra halts / a terminal
+    // failed/needs_attention verdict, not a count on this hold.
+    await deps.recoverableDriveHolds?.reset(entry.queueId);
+    await deps.queue.releaseClaim(entry.queueId);
+    return { kind: "held", retryAfterMs: BATCH_DRIVE_INFRA_RETRY_AFTER_MS };
+  }
+
   if (outcome.kind === "blocked") {
     const ceiling = deps.recoverableDriveHolds;
     if (ceiling !== undefined) {

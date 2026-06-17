@@ -20,6 +20,7 @@ import type { ReviewVerdict } from "../../contracts/dagLifecycle.js";
 import type { RawBudgetScope, RawDemoVerification, RawHitlSignoff } from "../../merge/mergeAuthorityInputs.js";
 import type { LandFinalizer } from "../../merge/mergeAuthorityImpl.js";
 import type { LandFinalizeContext } from "../../merge/mergeAuthorityLandFinalizer.js";
+import type { GateReworkRouter } from "../../contracts/conflictResolution.js";
 
 /** The integration modes the merge stage actually dispatches to. */
 export type DispatchedIntegration = "native_queue" | "direct_merge" | "external_reviewer";
@@ -89,6 +90,11 @@ export type MergeOutcomeKind =
   | "conflict"
   | "failed"
   | "blocked"
+  // The post-auto-rebase native re-gate is not yet terminal (still running / infra blip):
+  // a RECOVERABLE, RE-DRIVABLE hold the coordinator re-drives on the next tick until the
+  // gate finishes — distinct from `blocked` (a transient authority/CAS hold) only so the
+  // coordinator never treats a still-running gate as non-convergence. NEVER dequeued.
+  | "re_gate_pending"
   | "needs_attention";
 
 export interface MergeForRunResult {
@@ -152,6 +158,19 @@ export interface MergeForRunInput {
    * a missing required re-gate is a hold, never "merge anyway".
    */
   reGateCi?: ReGateCiHook;
+  /**
+   * RE-GATE GATE-FAIL → WRITER REWORK (the auto-rebase analog of #594). When the
+   * post-auto-rebase `reGateCi` FAILS a deterministic GATE TIER on a CLEANLY-rebased branch
+   * (no merge conflict — the code just fails lint/test/build on the new base), the rebase
+   * succeeded but the work needs a fix on the new base: route the spec to WRITER REWORK
+   * carrying the gate error as steering (the SAME never-discard re-author #594 wired into the
+   * resolver / base-shift coordinator), then leave the entry RECOVERABLE so the reworked spec
+   * re-enters the queue — NEVER a terminal `merge.failed`. Absent (an out-of-band caller / a
+   * test that does not exercise the failed re-gate) ⇒ the dispatcher falls back to the
+   * recoverable-conflict hold rather than a terminal failure (never a silent merge). Escalation
+   * on a genuine dead-end is owned by the convergence detector inside the router (no count).
+   */
+  reGateGateRework?: GateReworkRouter;
   /**
    * THE ONE BASE-SHIFT HANDLER (§7 / decomposition PR-7 §5h): a `behind` freshness routes its
    * rebase through this unified hook (`BaseShiftCoordinator.rebaseOnto`) — the SOLE rebase
@@ -263,9 +282,16 @@ export interface MergeProbe {
  * holds for the behind path too — not just the clean path. Absent (resolved-tree
  * re-gate, where the workspace IS the head) ⇒ the gate binds to the workspace HEAD.
  */
-export type ReGateCiHook = (input?: {
-  rebasedHeadSha?: string;
-}) => Promise<{ status: "passed" | "failed" | "pending" }>;
+export type ReGateCiHook = (input?: { rebasedHeadSha?: string }) => Promise<{
+  status: "passed" | "failed" | "pending";
+  /**
+   * The failing GATE tier/step/output, surfaced ONLY on `failed`, so a clean-rebase gate
+   * failure can route to WRITER REWORK with actionable steering (never rework blind). Absent
+   * on `passed`/`pending`, and absent on `failed` only for a degenerate hook that cannot
+   * report the failure (then the rework carries a generic post-rebase-gate-fail note).
+   */
+  gateError?: string;
+}>;
 
 /**
  * THE ONE BASE-SHIFT HANDLER on the merge path (tanren-owns-the-engine.md §7 — "the two

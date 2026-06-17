@@ -279,24 +279,88 @@ export class MergeDispatcher implements LandOps {
       },
     });
     if (ci?.status === "failed") {
-      await eventStore.append({
-        ...this.base(),
-        eventType: "merge.failed",
-        payload: { ...this.prFields(), integration: this.mergeLabel(), message: "CI failed after auto-rebase" },
-      });
-      await this.finalize("failed", {
-        taskOutcome: "failed",
-        taskStatus: "failed",
-        failureKind: "merge_failed",
-      });
-      return { kind: "halt", result: this.result("failed", { message: "CI failed after auto-rebase" }) };
+      // A GATE-tier FAILURE on a CLEANLY-rebased branch (#594 extended to the auto-rebase
+      // path the in-loop/base-shift fix missed): the rebase succeeded — the code just fails
+      // lint/test/build on the new base, which the WRITER can fix. Route to writer rework
+      // carrying the gate error as steering (never-discard re-author), then leave the entry
+      // RECOVERABLE so the reworked spec re-enters the queue — NEVER a terminal `merge.failed`
+      // halt (the old behavior stranded a fixable spec). Escalation on a genuine dead-end is
+      // owned by the convergence detector inside the router (a fixed point, no count).
+      return { kind: "halt", result: await this.handlePostRebaseGateFail(ci.gateError) };
     }
     if (ci?.status === "pending") {
-      // CI did not converge within the re-gate budget: hold (recoverable), do not
-      // merge on an unverified rebase.
-      return { kind: "halt", result: await this.emitConflict("CI did not converge after auto-rebase") };
+      // The native re-gate did not reach a TERMINAL verdict within its budget — the gate is
+      // STILL RUNNING / an infra blip, NOT non-convergence (a human would say "wait for it").
+      // Emit the RE-DRIVE-RECOVERABLE hold (a `blocked` outcome), NOT the dequeue-and-abandon
+      // `conflict`: the entry stays queued and the coordinator re-runs the native gate on the
+      // next tick until it reaches a terminal verdict. The coordinator's recoverable-drive hold
+      // re-drives UNBOUNDED while progressing and escalates ONLY via the convergence detector
+      // (the same `pending` recurring with no progress) — never a fixed budget/count.
+      return {
+        kind: "halt",
+        result: await this.emitReGatePending("native re-gate not yet terminal after auto-rebase"),
+      };
     }
     return { kind: "proceed" };
+  }
+
+  /**
+   * A post-auto-rebase re-gate FAILED a GATE tier on a cleanly-rebased branch. Route the spec
+   * to WRITER REWORK with the gate error as steering (the #594 never-discard re-author, extended
+   * to this auto-rebase path), then emit the RECOVERABLE `conflict` outcome so the coordinator
+   * lets the entry leave its slot WHILE the reworked spec re-runs and re-enters the queue — NOT
+   * a terminal `merge.failed` that stranded a fixable spec. Absent a rework router (an
+   * out-of-band/test caller) ⇒ fall back to the recoverable-conflict hold (never a silent merge,
+   * never a terminal failure).
+   */
+  private async handlePostRebaseGateFail(gateError: string | undefined): Promise<MergeForRunResult> {
+    const { input, context, eventStore } = this.deps;
+    const error = gateError ?? "post-rebase pre_merge gate failed (no gate detail reported)";
+    if (input.reGateGateRework !== undefined) {
+      await input.reGateGateRework.routeGateFailToRework({ specId: context.specId, gateError: error });
+      // The spec is now being re-authored on the new base (the router re-opened it + enqueued a
+      // fresh run, OR — at a convergence fixed point — escalated to needs_attention). Emit the
+      // recoverable `conflict` outcome so this stale entry leaves the merge slot; the reworked
+      // run re-enters the queue with a fresh entry. The recovery is REAL (a run is in flight),
+      // unlike the old terminal `merge.failed`.
+      await eventStore.append({
+        ...this.base(),
+        eventType: "merge.conflict",
+        payload: {
+          ...this.prFields(),
+          integration: this.mergeLabel(),
+          baseBranch: context.baseBranch,
+          message: `post-rebase gate failed — routed to writer rework: ${error}`,
+        },
+      });
+      await this.finalize("conflict", { taskOutcome: "pending", taskStatus: "running" });
+      return this.result("conflict", { message: `post-rebase gate failed — routed to writer rework: ${error}` });
+    }
+    // No rework router wired (out-of-band/test caller): hold recoverably (never a silent merge,
+    // never the old terminal failure) so the recovery surface can re-drive.
+    return this.emitConflict(`post-rebase gate failed: ${error}`);
+  }
+
+  /**
+   * The native re-gate did not reach a TERMINAL verdict within its budget (still running / an
+   * infra blip) — "not done yet", NOT non-convergence. Emit a RE-DRIVE-RECOVERABLE `blocked`
+   * outcome (the coordinator re-runs the gate next tick, unbounded while progressing) rather
+   * than the dequeue-and-abandon `conflict` that bricked the live run. Records the recoverable
+   * `merge.regate_pending` signal so the hold is observable.
+   */
+  private async emitReGatePending(message: string): Promise<MergeForRunResult> {
+    const { eventStore } = this.deps;
+    await eventStore.append({
+      ...this.base(),
+      eventType: "merge.regate_pending",
+      payload: { ...this.prFields(), integration: this.mergeLabel(), message },
+    });
+    // RECOVERABLE, RE-DRIVABLE hold (NOT a terminal dequeue): leave the task running so the
+    // coordinator re-drives the SAME queued entry — the native gate just needs to finish. The
+    // distinct `re_gate_pending` outcome (not `blocked`/`conflict`) tells the coordinator this
+    // is a still-running gate to re-poll, never non-convergence to dequeue or cap.
+    await this.finalize("re_gate_pending", { taskOutcome: "pending", taskStatus: "running" });
+    return this.result("re_gate_pending", { message });
   }
 
   /**

@@ -89,6 +89,7 @@ import {
   MergeFailedPayload,
   MergeQueuedPayload,
   MergeRebasedPayload,
+  MergeRegatePendingPayload,
   MergeRetargetedPayload,
   MergeSpeculativeHeldPayload,
   IntegrationProvisionedPayload,
@@ -299,21 +300,20 @@ export const EventRegistry = {
   "gate.quarantine_excluded": GateQuarantineExcludedPayload,
   "gate.publish_failed": GatePublishFailedPayload,
   "gate.verdict": GateVerdictPayload,
-
   // Review lifecycle
   "review.requested": ReviewRequestedPayload,
   "review.approved": ReviewApprovedPayload,
   "review.auto_approved": ReviewAutoApprovedPayload,
   "review.changes_requested": ReviewChangesRequestedPayload,
-
   // merge stage: per-repo integration dispatch + conflict scaffolding
   "merge.queued": MergeQueuedPayload,
   "merge.completed": MergeCompletedPayload,
   "merge.failed": MergeFailedPayload,
   "merge.conflict": MergeConflictPayload,
-  // up-to-date enforcement: branch behind base → auto-rebase + re-gate CI.
+  // up-to-date enforcement: branch behind base → auto-rebase + re-gate CI (re_gate_pending = not yet terminal).
   "merge.behind": MergeBehindPayload,
   "merge.rebased": MergeRebasedPayload,
+  "merge.regate_pending": MergeRegatePendingPayload,
   // intent-preserving conflict resolution: resolver invoked → resolved (re-gated) or irreconcilable (one spec re-planned, intent kept alive); §3.2 entity_merged = the deterministic different-entity-same-file splice (agent SKIPPED).
   "merge.conflict.resolving": MergeConflictResolvingPayload,
   "merge.conflict.resolved": MergeConflictResolvedPayload,
