@@ -71,6 +71,13 @@ describe("subtask loop — writer prompt rendering (writerPromptFor)", () => {
     expect(prompt).toContain("How your change will be graded");
     expect(prompt).toContain("FAST deterministic gate");
     expect(prompt).toContain("RUN it");
+    // apex-v36: a FORMATTING failure is mechanical — the writer is steered to run the
+    // project's DECLARED format-WRITE step (not just the check) and never hand back the
+    // same unformatted output. Stack-agnostic: no baked-in tool name.
+    expect(prompt).toContain("FORMATTING failure is mechanical");
+    expect(prompt).toContain("format-WRITE step");
+    expect(prompt).toContain("never hand back the same");
+    expect(prompt).not.toContain("prettier");
   });
 
   it("falls back to (none) in the writer prompt when the subtask has no behaviors", async () => {
