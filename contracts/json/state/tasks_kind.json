@@ -11,7 +11,8 @@
     "demo",
     "forge",
     "triage",
-    "convergence"
+    "convergence",
+    "designOracle"
   ],
   "type": "string",
   "x-tanren-schema-id": "tanren.state.tasks_kind"

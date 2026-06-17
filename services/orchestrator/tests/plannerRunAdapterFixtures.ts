@@ -12,19 +12,21 @@ import {
   makeChecker,
   makeConvergence,
   makeDemoRun,
+  makeDesignOracle,
   makePlanner,
   makeTriage,
   makeWriter,
   triageAllTasks,
 } from "./helpers/plannerLoopHelpers.js";
 
-// The SPEC-LOOP REDESIGN stage adapters (triage/convergence/demoRun) defaulted to a
-// clean pass, for inline adapter blocks that list only the four core roles.
+// The SPEC-LOOP REDESIGN stage adapters (triage/convergence/demoRun/designOracle)
+// defaulted to a clean pass, for inline adapter blocks that list only the core roles.
 export function loopStageAdapters() {
   return {
     triage: makeTriage([triageAllTasks]),
     convergence: makeConvergence([convergenceProgress]),
     demoRun: makeDemoRun([{ findings: [], summary: "ok" }]),
+    designOracle: makeDesignOracle([]),
   };
 }
 

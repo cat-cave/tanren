@@ -43,7 +43,8 @@ export const stateEnumLists = {
     "demo",
     "forge",
     "triage",
-    "convergence"
+    "convergence",
+    "designOracle"
   ],
   tasks_status: [
     "queued",

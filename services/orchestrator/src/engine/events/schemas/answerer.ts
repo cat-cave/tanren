@@ -384,11 +384,7 @@ const SeverityFindingPayload = z
   })
   .strict();
 
-export const DemoRunStartedPayload = z
-  .object({
-    taskKind: z.string(),
-  })
-  .strict();
+export const DemoRunStartedPayload = z.object({ taskKind: z.string() }).strict();
 
 // demoRun.verdict: the optional "does the thing actually work" gate's findings +
 // the narration of what user-flow steps were exercised.
@@ -400,11 +396,21 @@ export const DemoRunVerdictPayload = z
   })
   .strict();
 
-export const TriageStartedPayload = z
+// designOracle.{started,verdict}: the native design-fidelity ORACLE (WS-D4) stage —
+// mirrors the demo-run gate's event shape; `verificationMode` is the domain-derived
+// posture the oracle declared (web → render/inspect; novel → prose/typography; …).
+export const DesignOracleStartedPayload = z.object({ taskKind: z.string() }).strict();
+export const DesignOracleVerdictPayload = z
   .object({
-    taskKind: z.string(),
+    runId: z.string(),
+    contractVersion: z.number().int(),
+    verificationMode: z.string(),
+    summary: z.string(),
+    findings: z.array(SeverityFindingPayload),
   })
   .strict();
+
+export const TriageStartedPayload = z.object({ taskKind: z.string() }).strict();
 
 const TriageItemPayload = z
   .object({
@@ -429,11 +435,7 @@ export const TriageCompletedPayload = z
   })
   .strict();
 
-export const ConvergenceStartedPayload = z
-  .object({
-    taskKind: z.string(),
-  })
-  .strict();
+export const ConvergenceStartedPayload = z.object({ taskKind: z.string() }).strict();
 
 // convergence.assessed: the answerer's progress/stall/velocity read + the INTELLIGENT
 // escalation verdict + the loop's applied decision (continue/pass/halt). The HALT is the
@@ -477,6 +479,8 @@ export const ConvergenceStalledPayload = z
 export const loopEventRegistry = {
   "demoRun.started": DemoRunStartedPayload,
   "demoRun.verdict": DemoRunVerdictPayload,
+  "designOracle.started": DesignOracleStartedPayload,
+  "designOracle.verdict": DesignOracleVerdictPayload,
   "triage.started": TriageStartedPayload,
   "triage.completed": TriageCompletedPayload,
   "convergence.started": ConvergenceStartedPayload,

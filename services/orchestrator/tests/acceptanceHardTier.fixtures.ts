@@ -33,6 +33,7 @@ import {
   makeChecker,
   makeConvergence,
   makeDemoRun,
+  makeDesignOracle,
   makePlanner,
   makeTriage,
   makeWriter,
@@ -62,6 +63,7 @@ export function fullAdapters(core: {
     triage: core.triage ?? makeTriage([triageAllTasks]),
     convergence: core.convergence ?? makeConvergence([convergenceProgress]),
     demoRun: makeDemoRun([{ findings: [], summary: "ok" }]),
+    designOracle: makeDesignOracle([]),
   };
 }
 

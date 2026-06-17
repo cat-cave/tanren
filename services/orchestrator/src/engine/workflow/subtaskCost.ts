@@ -14,7 +14,15 @@ import type { AppendEvent } from "./subtaskLoop.js";
 
 // The agent role whose real call was found to carry no token telemetry — the
 // `usage.token_accounting_failed` discriminant.
-export type TokenAccountingRole = "planner" | "checker" | "auditor" | "writer" | "triage" | "convergence" | "demoRun";
+export type TokenAccountingRole =
+  | "planner"
+  | "checker"
+  | "auditor"
+  | "writer"
+  | "triage"
+  | "convergence"
+  | "demoRun"
+  | "designOracle";
 
 // A narrow callback that emits the loud `usage.token_accounting_failed` event.
 // Threaded from the loop (which owns the typed AppendEvent) so this helper stays
@@ -98,7 +106,10 @@ export interface AnswererCostInput<TOutput> {
   // The answerer role whose call this records — the loud-event discriminant. Covers
   // the spec-loop redesign stages (triage/convergence/demoRun) alongside the original
   // planner/checker/auditor answerers (the writer records via recordWriterCost).
-  role: Extract<TokenAccountingRole, "planner" | "checker" | "auditor" | "triage" | "convergence" | "demoRun">;
+  role: Extract<
+    TokenAccountingRole,
+    "planner" | "checker" | "auditor" | "triage" | "convergence" | "demoRun" | "designOracle"
+  >;
   taskId: string;
   model: string;
   runtimeSeconds: number;

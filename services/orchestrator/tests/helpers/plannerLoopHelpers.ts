@@ -11,6 +11,7 @@ import type {
   CheckAnswer,
   ConvergenceAnswer,
   DemoRunAnswer,
+  DesignOracleAnswer,
   PlanAnswer,
   TriageAnswer,
 } from "../../src/engine/answerers/schemas/index.js";
@@ -169,6 +170,8 @@ export const makeAuditor = (verdicts: ReadonlyArray<AuditAnswer>) => makeAnswere
 export const makeTriage = (answers: ReadonlyArray<TriageAnswer>) => makeAnswerer<TriageAnswer>(answers);
 export const makeConvergence = (answers: ReadonlyArray<ConvergenceAnswer>) => makeAnswerer<ConvergenceAnswer>(answers);
 export const makeDemoRun = (answers: ReadonlyArray<DemoRunAnswer>) => makeAnswerer<DemoRunAnswer>(answers);
+export const makeDesignOracle = (answers: ReadonlyArray<DesignOracleAnswer>) =>
+  makeAnswerer<DesignOracleAnswer>(answers);
 
 export function makeWriter(
   diffs: ReadonlyArray<string>,
@@ -404,6 +407,7 @@ export function defaultLoopInput(overrides: Partial<SubtaskLoopInput> = {}): {
       triage: makeTriage([triageAllTasks]),
       convergence: makeConvergence([convergenceProgress]),
       demoRun: makeDemoRun([demoClean]),
+      designOracle: makeDesignOracle([]),
     },
     context: {
       runId: "run_test",

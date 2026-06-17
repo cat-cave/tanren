@@ -186,7 +186,7 @@ export function renderDesignContractBlock(context: ResolvedDesignContext): strin
  * org-scoped persona/behavior rows while the underlying client stays RLS-scoped to
  * the org, so a cross-org row is both unreadable AND un-attributable.
  */
-function designResolverActor(orgId: string, projectId: string): ActorContext {
+export function designResolverActor(orgId: string, projectId: string): ActorContext {
   return {
     userId: "design-writer-context",
     orgId,
