@@ -1,53 +1,62 @@
-// The ONE base-shift handler (tanren-owns-the-engine.md §3 never-discard + §7 "the two
-// divergent base-shift handlers → one"). A base shift is NEW CONTEXT, never a reason to
-// throw work away: an ancestor lands, OR an unrelated spec lands and moves a shared base.
-// Both the percolation kick-off (an ancestor changed under an in-flight dependent) and
-// the merge-path `behind` mergeability (the PR branch fell behind its base) route HERE.
+// The ONE base-shift handler (tanren-owns-the-engine.md §3 never-discard + §7 "the two divergent
+// base-shift handlers → one"). A base shift is NEW CONTEXT, never a reason to throw work away: an
+// ancestor lands, OR an unrelated spec lands and moves a shared base. Both the percolation kick-off
+// and the merge-path `behind` mergeability route HERE.
 //
-// THE KEYSTONE — never-discard rebase replaces supersede+regenerate. The deleted
-// `PgPercolationReexecutor` SUPERSEDED the dependent's run (cancelled it, dequeued it,
-// force-pushed a fresh clone) and RE-PLANNED from scratch via `createQueuedRunFromSpec`
-// — discarding every planner/writer/code token. This coordinator instead:
-//   (a) loads the affected `integration_nodes` (S0 read model);
-//   (b) rebases the dependent's EXISTING branch onto the shifted base via
-//       `WorkspaceVcsCore.rebaseOnto` (the jj impl) — KEEPING the same run/branch row
-//       (never cancel+recreate; the run id is returned UNCHANGED as the re-exec id, so
-//       the existing settle pass advances `verified_ancestor_shas` after the re-gate);
-//   (c) re-gates the rebased branch;
-//   (d) re-plans ONLY when the rebase CONFLICTED and the resolver + re-gate say the old
-//       work no longer fits. A clean rebase + passing gate NEVER re-plans.
+// THE KEYSTONE — never-discard rebase replaces supersede+regenerate (the deleted
+// `PgPercolationReexecutor` cancelled+dequeued the run and re-planned from scratch, discarding every
+// token). This coordinator instead: (a) loads the affected `integration_nodes` (S0); (b) rebases the
+// dependent's EXISTING branch onto the shifted base via `WorkspaceVcsCore.rebaseOnto` (jj) — KEEPING
+// the same run/branch row (the run id returns UNCHANGED as the re-exec id, so the settle pass
+// advances `verified_ancestor_shas` after the re-gate); (c) re-gates the rebased/resolved branch;
+// (d) on a re-gate GATE-tier failure (a CLEAN/byte-clean tree — no conflict — that just fails
+// lint/test/build on the new base) routes to WRITER REWORK, NOT replan/escalate-as-irreconcilable;
+// re-plans ONLY on a genuine irreconcilable conflict (or a checker/auditor re-gate rejection). A
+// clean rebase + passing gate NEVER re-plans.
 //
-// FAIL-CLOSED (§0): a rebase/gate/resolver failure HOLDS (the work survives, retried on
-// the next notification) — it NEVER silently merges and NEVER silently discards. jj's
-// first-class conflicts make "a conflict must never brick" true by construction: a
-// conflicting rebase SUCCEEDS and records the conflict IN the commit (`rebaseOnto` never
-// throws), so even an irreconcilable shift keeps the work — it routes back to the planner
-// WITH the shift as context, alive.
+// FAIL-CLOSED (§0): a rebase/gate/resolver INFRA failure HOLDS (the work survives, retried next
+// notification) — never silently merges/discards. jj's first-class conflicts make "a conflict must
+// never brick" true by construction: a conflicting rebase SUCCEEDS and records the conflict IN the
+// commit (`rebaseOnto` never throws), so even an irreconcilable shift keeps the work alive.
 
 import type { PercolationDecision, SpeculativeDependent } from "../contracts/changePercolation.js";
 import type { AncestorStack } from "./ancestorStack.js";
 import type { RebaseResult, WorkspaceVcsCore } from "../contracts/workspaceVcsCore.js";
 import type { PercolationReexecutor } from "./percolationOperation.js";
 import {
+  BaseShiftHeldError,
   type BaseShiftEventEmitter,
+  type BaseShiftGateReworkRouter,
   type BaseShiftNodeReader,
   type BaseShiftPersistence,
   type RebaseDecision,
+  type ReGateResult,
+  type ReGateVerdict,
 } from "./baseShiftPorts.js";
 import { createLogger } from "../observability/logger.js";
 
 const log = createLogger("base-shift");
 
-// Re-export the persistence/node/event ports + the `RebaseDecision` instrumentation type
+// Re-export the persistence/node/event ports + the `RebaseDecision` instrumentation type +
+// the re-gate verdict/result + the gate-rework router + the fail-closed `BaseShiftHeldError`
 // (split into `baseShiftPorts.ts` for the line cap) so existing import sites keep importing
-// them from `./baseShiftCoordinator.js` unchanged.
-export type { BaseShiftEventEmitter, BaseShiftNodeReader, BaseShiftPersistence, RebaseDecision };
+// them from `./baseShiftCoordinator.js`.
+export {
+  BaseShiftHeldError,
+  type BaseShiftEventEmitter,
+  type BaseShiftGateReworkRouter,
+  type BaseShiftNodeReader,
+  type BaseShiftPersistence,
+  type RebaseDecision,
+  type ReGateResult,
+  type ReGateVerdict,
+};
 
 /**
- * Opens the dependent's runner-local workspace for a base-shift rebase. The production
- * impl allocates a runner, clones the repo via the jj `WorkspaceVcsCore`, and resolves
- * the dependent's branch; a test injects an in-memory opener. Returns the workspace
- * handle + the branch to rebase + the resolved new-base sha the rebase lands on.
+ * Opens the dependent's runner-local workspace for a base-shift rebase. The production impl
+ * allocates a runner, clones the repo via the jj `WorkspaceVcsCore`, and resolves the dependent's
+ * branch; a test injects an in-memory opener. Returns the workspace handle + the branch to rebase
+ * + the resolved new-base sha the rebase lands on.
  */
 export interface BaseShiftWorkspaceOpener {
   open(input: {
@@ -56,37 +65,45 @@ export interface BaseShiftWorkspaceOpener {
     /** True when EVERY ancestor merged (the rebase is onto plain `default_branch`). */
     nonSpeculative: boolean;
     /**
-     * §2.2: the RE-RESOLVED ordered ancestor stack (ancestors that merged are dropped; the
-     * rest at their new heads). A non-empty stack ⇒ the live opener ASSEMBLES it LOCALLY
-     * (`main + ordered ancestors`) and the coordinator `rebaseOnto`s the dependent's branch
-     * onto the assembled head — NO synthesized host integration ref. Empty (a non-speculative
-     * shift) ⇒ a plain `default_branch` clone (a REAL ref).
+     * §2.2: the RE-RESOLVED ordered ancestor stack (merged ancestors dropped; the rest at their
+     * new heads). A non-empty stack ⇒ the live opener ASSEMBLES it LOCALLY (`main + ordered
+     * ancestors`) and the coordinator `rebaseOnto`s onto the assembled head — NO synthesized host
+     * ref. Empty (a non-speculative shift) ⇒ a plain `default_branch` clone (a REAL ref).
      */
     ancestorStack?: AncestorStack;
   }): Promise<{ workspaceId: string; path: string; branch: string; newBaseSha: string }>;
 }
 
-/** The outcome of re-gating the rebased branch (the dependent's OWN gate+checker+auditor). */
-export type ReGateVerdict = "passed" | "failed" | "pending";
-
 /**
- * Re-gates the rebased branch — the dependent's OWN gate + checker + auditor over the
- * rebased tree. `passed` ⇒ the existing work FITS the shifted base (no re-plan).
- * `failed` ⇒ the work no longer fits (route back to the planner WITH the shift).
- * `pending` ⇒ inconclusive ⇒ HOLD (fail-closed; never merge on an unverified rebase).
+ * Re-gates the rebased branch — the dependent's OWN deterministic gate over the rebased tree.
+ * `passed` ⇒ the work FITS the shifted base (no re-plan). `failed` ⇒ a GATE TIER failed (the
+ * rebase was CLEAN — the code just fails lint/test/build on the new base) ⇒ route to WRITER
+ * REWORK (not replan/escalate). `pending` ⇒ inconclusive ⇒ HOLD (fail-closed). The verdict may
+ * be a bare string (conformance) or a `ReGateResult` carrying the gate error.
  */
 export interface BaseShiftReGate {
-  reGate(input: { projectId: string; dependent: SpeculativeDependent; rebasedHeadSha: string }): Promise<ReGateVerdict>;
+  reGate(input: {
+    projectId: string;
+    dependent: SpeculativeDependent;
+    rebasedHeadSha: string;
+  }): Promise<ReGateVerdict | ReGateResult>;
 }
 
-/** The intent-preserving resolution of a recorded rebase conflict, or `irreconcilable`. */
-export type ConflictResolution = { resolved: true; headSha: string } | { resolved: false; reason: string };
+/**
+ * The intent-preserving resolution of a recorded rebase conflict, or `irreconcilable`.
+ * `routedToRework` (only on `resolved: false`) means the re-gate failed a GATE TIER on a
+ * cleanly-resolved tree and the resolver ALREADY routed the spec to WRITER REWORK — the
+ * coordinator MUST NOT then replan (the spec is already being re-driven).
+ */
+export type ConflictResolution =
+  | { resolved: true; headSha: string }
+  | { resolved: false; reason: string; routedToRework?: boolean };
 
 /**
- * Resolves a recorded rebase conflict (intent + vision preserving), writing the
- * resolution INTO the conflicted branch commit via `WorkspaceVcsCore.resolveConflict`
- * (the work is NEVER recreated). `irreconcilable` means the shift genuinely broke the
- * old work — the coordinator then re-plans (kept alive), never discards.
+ * Resolves a recorded rebase conflict (intent + vision preserving), writing the resolution INTO
+ * the conflicted branch commit via `WorkspaceVcsCore.resolveConflict` (the work is NEVER
+ * recreated). `irreconcilable` means the shift genuinely broke the old work — the coordinator
+ * then re-plans (kept alive), never discards.
  */
 export interface BaseShiftConflictResolver {
   resolve(input: {
@@ -121,21 +138,12 @@ export interface BaseShiftCoordinatorDeps {
   persistence: BaseShiftPersistence;
   nodes: BaseShiftNodeReader;
   events: BaseShiftEventEmitter;
-}
-
-/**
- * A fail-closed HOLD: the rebase/resolver/gate could not settle. The work SURVIVES (the
- * run row + branch are untouched) and is retried on the next notification — NEVER a
- * silent merge, NEVER a silent discard.
- */
-export class BaseShiftHeldError extends Error {
-  constructor(
-    readonly stage: "rebase" | "regate" | "resolve",
-    reason: string,
-  ) {
-    super(`base shift held at ${stage}: ${reason}`);
-    this.name = "BaseShiftHeldError";
-  }
+  /**
+   * Routes a CLEAN-rebase GATE-tier re-gate failure to writer rework (not replan/escalate).
+   * OPTIONAL: when absent (a degenerate / legacy wiring), a clean-rebase gate failure falls
+   * back to `recordReplan` (the pre-fix behavior) — never a silent merge. Production wires it.
+   */
+  gateRework?: BaseShiftGateReworkRouter;
 }
 
 /**
@@ -184,16 +192,13 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
 
   /**
    * The unified base-shift rebase (the SINGLE point both the percolation kick-off AND the
-   * merge-path `behind` handler flow through). Loads the affected integration node,
-   * rebases the dependent's existing branch onto the shifted base via the jj core,
-   * emits `integration.rebase`, and:
-   *   - clean rebase + passing re-gate  ⇒ KEEP the run (re-point base + stamp the
-   *     in-flight marker on the SAME run) — NO re-plan (tokens reused). `rebased_clean`.
-   *   - conflicted rebase, resolver fits + re-gate passes ⇒ KEEP the run, same as clean.
-   *     `rebased_resolved` (the work survived the conflict + fit after resolve).
-   *   - conflicted + (irreconcilable resolver OR a failed re-gate) ⇒ re-plan (kept
-   *     ALIVE, routed back WITH the shift) on the SAME run. `replanned`.
-   *   - any rebase/gate/resolver failure ⇒ HOLD (fail-closed; the work survives).
+   * merge-path `behind` handler flow through). Loads the node, rebases the dependent's existing
+   * branch onto the shifted base via the jj core, emits `integration.rebase`, and:
+   *   - clean rebase + passing re-gate ⇒ KEEP the run. `rebased_clean`.
+   *   - conflicted, resolver fits + re-gate passes ⇒ KEEP the run. `rebased_resolved`.
+   *   - clean/resolved tree + a GATE-tier re-gate FAILURE ⇒ WRITER REWORK (NOT replan). `replanned`.
+   *   - genuinely irreconcilable resolver (or checker/auditor re-gate rejection) ⇒ re-plan (kept ALIVE).
+   *   - any rebase/gate/resolver INFRA failure ⇒ HOLD (fail-closed; the work survives).
    * Returns the `rebase_vs_rebuild` decision for the caller.
    */
   async rebaseOnto(input: {
@@ -282,15 +287,16 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
     reviewVerdict?: "changes_requested";
     rebase: RebaseResult;
   }): Promise<{ decision: RebaseDecision; headSha: string }> {
-    const verdict = await this.reGateOrHold(input.projectId, input.dependent, input.rebase.headSha);
-    if (verdict === "passed") {
+    const result = await this.reGateOrHold(input.projectId, input.dependent, input.rebase.headSha);
+    if (result.verdict === "passed") {
       await this.keepRun(input);
       await this.emit(input, false, "rebased_clean");
       return { decision: "rebased_clean", headSha: input.rebase.headSha };
     }
-    // A clean rebase whose re-gate FAILED: the work no longer fits the shifted base.
-    // Route back to the planner WITH the shift (kept ALIVE) — NEVER discard, NEVER merge.
-    await this.replan(input, "the rebased branch failed its re-gate on the shifted base");
+    // A CLEAN rebase whose re-gate FAILED a GATE TIER: the tree is byte-clean (no conflict), the
+    // code just fails a deterministic gate on the shifted base — the WRITER's to fix. Route to
+    // WRITER REWORK (kept ALIVE), NEVER replan-as-irreconcilable (the detector owns escalation).
+    await this.routeGateFailOrReplan(input, result.gateError);
     await this.emit(input, false, "replanned");
     return { decision: "replanned", headSha: input.rebase.headSha };
   }
@@ -332,47 +338,86 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
     }
 
     if (!resolution.resolved) {
-      // IRRECONCILABLE: the shift genuinely broke the old work. Route back to the planner
-      // WITH the shift as context (kept ALIVE on the SAME run) — NEVER discard, NEVER merge.
-      await this.replan(input, `the rebase conflict could not be resolved: ${resolution.reason}`);
+      // routedToRework: the resolver's INTERNAL re-gate failed a GATE TIER on the cleanly-
+      // resolved tree and it ALREADY routed the spec to WRITER REWORK — do NOT also replan
+      // (double-route). Otherwise IRRECONCILABLE (the Answerer judged the intents irreconcilable
+      // OR a checker/auditor re-gate rejected the resolved tree): replan, kept ALIVE on the
+      // SAME run — NEVER discard, NEVER merge.
+      if (!resolution.routedToRework) {
+        await this.replan(input, `the rebase conflict could not be resolved: ${resolution.reason}`);
+      }
       await this.emit(input, true, "replanned");
       return { decision: "replanned", headSha: input.rebase.headSha };
     }
 
-    // Resolved IN the commit — re-gate the resolved tree. A fit ⇒ keep the run (NO
-    // re-plan: the existing work fit after the intent-preserving resolve); a failed
-    // re-gate ⇒ re-plan (kept alive); pending ⇒ HOLD (fail-closed).
-    const verdict = await this.reGateOrHold(input.projectId, input.dependent, resolution.headSha);
-    if (verdict === "passed") {
-      // The resolved tree FIT (re-gate passed) — keep the run (NO re-plan). The emitted
-      // head is the RESOLVED head (the conflict was reconciled IN the commit).
+    // Resolved IN the commit — re-gate the resolved tree. A fit ⇒ keep the run (NO re-plan); a
+    // failed GATE-tier re-gate ⇒ WRITER REWORK (the resolved tree is byte-clean, the code just
+    // fails a gate); pending ⇒ HOLD (fail-closed).
+    const result = await this.reGateOrHold(input.projectId, input.dependent, resolution.headSha);
+    if (result.verdict === "passed") {
+      // The resolved tree FIT (re-gate passed) — keep the run. The emitted head is the RESOLVED head.
       const resolved: RebaseResult = { outcome: "clean", headSha: resolution.headSha };
       await this.keepRun(input);
       await this.emit({ ...input, rebase: resolved }, true, "rebased_resolved");
       return { decision: "rebased_resolved", headSha: resolution.headSha };
     }
-    await this.replan(input, "the resolved branch failed its re-gate on the shifted base");
+    // A GATE-tier failure on the cleanly-RESOLVED tree → writer rework (not replan). A
+    // degenerate wiring (no rework router) falls back to the legacy replan.
+    await this.routeGateFailOrReplan(input, result.gateError);
     await this.emit(input, true, "replanned");
     return { decision: "replanned", headSha: input.rebase.headSha };
   }
 
-  /** Re-gate the rebased/resolved branch; a `pending` verdict is a fail-closed HOLD. */
+  /**
+   * Re-gate the rebased/resolved branch; a `pending` verdict is a fail-closed HOLD. Returns
+   * `{ verdict, gateError? }` — the gate error (present on `failed`) is the writer-rework
+   * steering. Accepts both a bare verdict string and a `ReGateResult` from the re-gate seam.
+   */
   private async reGateOrHold(
     projectId: string,
     dependent: SpeculativeDependent,
     rebasedHeadSha: string,
-  ): Promise<"passed" | "failed"> {
-    let verdict: ReGateVerdict;
+  ): Promise<{ verdict: "passed" | "failed"; gateError?: string }> {
+    let result: ReGateVerdict | ReGateResult;
     try {
-      verdict = await this.deps.reGate.reGate({ projectId, dependent, rebasedHeadSha });
+      result = await this.deps.reGate.reGate({ projectId, dependent, rebasedHeadSha });
     } catch (error) {
       throw new BaseShiftHeldError("regate", error instanceof Error ? error.message : String(error));
     }
+    const verdict = typeof result === "string" ? result : result.verdict;
+    const gateError = typeof result === "string" ? undefined : result.gateError;
     if (verdict === "pending") {
       // Inconclusive: NEVER merge on an unverified rebase. Hold (the work survives).
       throw new BaseShiftHeldError("regate", "the re-gate did not converge (held, not merged)");
     }
-    return verdict;
+    return { verdict, ...(gateError !== undefined && { gateError }) };
+  }
+
+  /**
+   * A CLEAN-tree (rebased or resolved) GATE-tier re-gate failure → WRITER REWORK: the tree is
+   * byte-clean (no conflict), the code just fails a deterministic gate on the shifted base, which
+   * the writer can fix. Carries the gate error as steering (no_silent_fallback). A degenerate
+   * wiring with no rework router falls back to `recordReplan` (never a silent merge). Escalation
+   * is owned by the convergence detector inside the router (a fixed point, no count) — this path
+   * NEVER directly escalates to persistent_failure.
+   */
+  private async routeGateFailOrReplan(
+    input: { projectId: string; dependent: SpeculativeDependent; ancestorSpecId: string; toSha: string },
+    gateError: string | undefined,
+  ): Promise<void> {
+    if (this.deps.gateRework !== undefined) {
+      await this.deps.gateRework.routeGateFailToRework({
+        projectId: input.projectId,
+        specId: input.dependent.specId,
+        runId: input.dependent.runId,
+        // no_silent_fallback: carry the REAL gate error; a missing detail is a loud generic note.
+        gateError: gateError ?? "the rebased branch failed its re-gate (gate tier) on the shifted base",
+      });
+      return;
+    }
+    // Degenerate/legacy wiring (no rework router): fall back to replan so the spec is never
+    // stranded — production always wires the rework router.
+    await this.replan(input, "the rebased branch failed its re-gate on the shifted base");
   }
 
   /**
@@ -389,11 +434,10 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
     toSha: string;
     reviewVerdict?: "changes_requested";
   }): Promise<void> {
-    // §2.2 jj-local: the keep-run re-points the EXISTING run onto the RE-RESOLVED ancestor
-    // stack (the one the live opener just assembled `main + ordered ancestors` from) — empty
-    // when every ancestor merged (non-speculative). There is NO synthesized integration ref:
-    // a run is "speculative" iff the stack is non-empty (§2.3). The legacy `speculative_base`
-    // column was dropped (WS-B PR-12) — `ancestor_stack` is the sole base truth.
+    // §2.2 jj-local: the keep-run re-points the EXISTING run onto the RE-RESOLVED ancestor stack
+    // (the one the live opener just assembled `main + ordered ancestors` from) — empty when every
+    // ancestor merged (non-speculative). NO synthesized integration ref: a run is "speculative" iff
+    // the stack is non-empty (§2.3); `ancestor_stack` is the sole base truth (WS-B PR-12 dropped `speculative_base`).
     const ancestorStack: AncestorStack = input.ancestorStack ?? [];
     await this.deps.persistence.repointBase({
       projectId: input.projectId,

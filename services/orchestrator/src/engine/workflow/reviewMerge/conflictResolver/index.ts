@@ -27,7 +27,8 @@ import { PgConflictProvenanceReader } from "./provenance.js";
 import { PgProductVisionReader } from "./productVision.js";
 import { RunPathResolvedTreeReGate } from "./reGate.js";
 import { SpecStatusReplanRouter } from "./replanRouter.js";
-import { buildPriorReplanReader, buildReplanEnqueuer } from "./replanEnqueuerPg.js";
+import { SpecStatusGateReworkRouter } from "./gateReworkRouter.js";
+import { buildPriorGateReworkReader, buildPriorReplanReader, buildReplanEnqueuer } from "./replanEnqueuerPg.js";
 import { buildIntentPreservingConflictResolver, type EntityMergeFirstPassHook } from "./resolver.js";
 
 /** A pool or a checked-out (org-scoped) client — the run's already-scoped client. */
@@ -51,6 +52,13 @@ export interface DefaultConflictResolverDeps {
   specTitle: string;
   specDescription: string;
   acceptanceCriteria: ReadonlyArray<string>;
+  /**
+   * The PR number for the gate-rework routing event (the observable
+   * `merge.regate.gate_rework_routed`). The base-shift dependent has no real PR handle
+   * (the rebase is over a runner-local workspace) — it defaults to 0, like the resolver's
+   * own `prNumber: 0` for that path. The in-loop `direct_merge` path passes the real number.
+   */
+  prNumber?: number;
   endpointBaseUrl?: string;
   // The project routing (the conflict Answerer rides the `audit` chain head) and
   // the run's already-built checker/auditor adapters (the re-gate reuses them).
@@ -149,6 +157,24 @@ export function buildDefaultConflictResolver(deps: DefaultConflictResolverDeps):
       // budget gate uses for `deps.pool`).
       enqueuer: buildReplanEnqueuer(deps.pool as pg.Pool, deps.runStateWriter),
       priorReplans: buildPriorReplanReader(deps.pool as pg.Pool),
+    }),
+    // v35 RE-GATE GATE-FAIL → WRITER REWORK: a re-gate that fails a deterministic GATE TIER
+    // on a CLEANLY-rebased-or-resolved tree (no merge conflict) is the WRITER's to fix on the
+    // new base — route it to rework carrying the gate error as steering (the SAME
+    // never-discard re-author the batch-gate path uses), NEVER `merge.conflict.irreconcilable`
+    // / escalate. Escalation is owned by the convergence detector (a fixed point, no count).
+    // Uniform across BOTH merge paths (this in-loop `direct_merge` path + the base-shift path,
+    // which calls this same factory).
+    gateRework: new SpecStatusGateReworkRouter({
+      pool: deps.pool,
+      ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
+      ...(deps.orgId !== undefined && { orgId: deps.orgId }),
+      eventStore: deps.eventStore,
+      runId: deps.runId,
+      projectId: deps.projectId,
+      prNumber: deps.prNumber ?? 0,
+      enqueuer: buildReplanEnqueuer(deps.pool as pg.Pool, deps.runStateWriter),
+      priorReworks: buildPriorGateReworkReader(deps.pool as pg.Pool),
     }),
     ...(deps.upstreamChange !== undefined && { upstreamChange: deps.upstreamChange }),
   });

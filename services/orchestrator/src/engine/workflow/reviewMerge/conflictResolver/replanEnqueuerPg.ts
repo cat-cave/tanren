@@ -21,7 +21,12 @@ import type { RunStateWriter } from "../../../contracts/runStateWriter.js";
 import { RecoveryStore } from "../../../repositories/recovery.js";
 import { systemActor } from "../../../state/actor.js";
 import { createQueuedRunFromSpec } from "../../projectSpec.js";
-import { conflictSignatureOf, type PriorReplanReader, type ReplanEnqueuer } from "./replanRouter.js";
+import {
+  conflictSignatureOf,
+  gateErrorSignature,
+  type PriorReplanReader,
+  type ReplanEnqueuer,
+} from "./replanRouter.js";
 
 /**
  * The production replan enqueuer: re-open the spec to the re-drivable status + append
@@ -88,5 +93,33 @@ export function buildPriorReplanReader(pool: pg.Pool): PriorReplanReader {
         );
       });
     },
+  };
+}
+
+/**
+ * The production prior-gate-rework reader (the convergence-detector input for the re-gate
+ * gate-fail rework router): read the spec's prior `merge.regate.gate_rework_routed`
+ * (disposition `reworked`) gate-error SIGNATURES, oldest→newest. The `events` table is
+ * unreadable to the de-privileged data-plane role (0031 REVOKE), so read on the BYPASSRLS
+ * system pool with the org GUC applied on top (the same hop the replan reader uses). A spec
+ * whose re-gate error keeps CHANGING is making progress; the SAME signature recurring is the
+ * fixed point that escalates.
+ */
+export function buildPriorGateReworkReader(
+  pool: pg.Pool,
+): (input: { specId: string; orgId: string }) => Promise<string[]> {
+  return async (input) => {
+    const readPool = getSystemPool() ?? pool;
+    return runWithOrgScope(readPool, input.orgId, async (client) => {
+      const result = await client.query<{ payload: { gateError?: string } }>(
+        `SELECT payload
+           FROM events
+          WHERE spec_id = $1 AND event_type = 'merge.regate.gate_rework_routed'
+            AND payload ->> 'disposition' = 'reworked'
+          ORDER BY ts ASC, id ASC`,
+        [input.specId],
+      );
+      return result.rows.map((row) => gateErrorSignature(row.payload.gateError ?? ""));
+    });
   };
 }

@@ -89,10 +89,22 @@ export async function resolveBaseShiftConflict(input: {
       await prepared.live.release();
       throw error;
     });
-    if (!resolved) {
-      // The resolver routed ONE spec back to the planner (bounded re-plan) OR judged the
-      // intents irreconcilable — either way the old work no longer fits as-is. The
-      // coordinator replans (kept ALIVE), never discards.
+    if (!resolved.resolved) {
+      // The resolver did not produce a merged head. Two distinct cases (NEVER conflated):
+      //   • routedToRework — the resolver's re-gate failed a GATE TIER on the cleanly-resolved
+      //     tree and it ALREADY routed the spec to WRITER REWORK (re-opened + a re-author run
+      //     enqueued, carrying the gate error). The coordinator MUST NOT also replan — the
+      //     spec is being re-driven. Propagate the flag.
+      //   • otherwise — the Answerer judged the intents irreconcilable, or a checker/auditor
+      //     re-gate rejected the resolved tree: the old work no longer fits. The coordinator
+      //     replans (kept ALIVE), never discards.
+      if (resolved.routedToRework === true) {
+        return {
+          resolved: false,
+          routedToRework: true,
+          reason: "the base-shift re-gate failed a gate tier — routed to writer rework",
+        };
+      }
       return { resolved: false, reason: "the base-shift conflict could not be reconciled in place" };
     }
     // The resolver force-pushed the resolved head onto the dependent's branch — read it
@@ -209,7 +221,7 @@ async function runResolverOverWorkspace(input: {
   /** Present on the jj-local path: the already-assembled workspace the applier gathers over (no re-clone). */
   preOpenedWorkspace?: WorkspaceHandle;
   timeoutMs: number;
-}): Promise<boolean> {
+}): Promise<{ resolved: boolean; routedToRework?: boolean }> {
   const { deps, ctx, live, applierFacts, reGateBaseSha, timeoutMs } = input;
   const applier = buildJjConflictApplier({
     live,
@@ -275,7 +287,7 @@ async function runResolverOverWorkspace(input: {
     baseBranch: applierFacts.baseBranch,
     message: "base-shift rebase conflict",
   });
-  return result.resolved;
+  return { resolved: result.resolved, ...(result.routedToRework === true && { routedToRework: true }) };
 }
 
 /**

@@ -27,12 +27,14 @@ import {
   BaseShiftHeldError,
   type BaseShiftConflictResolver,
   type BaseShiftEventEmitter,
+  type BaseShiftGateReworkRouter,
   type BaseShiftNodeReader,
   type BaseShiftPersistence,
   type BaseShiftReGate,
   type BaseShiftWorkspaceOpener,
   type ConflictResolution,
   type RebaseDecision,
+  type ReGateResult,
   type ReGateVerdict,
 } from "../src/engine/dag/baseShiftCoordinator.js";
 
@@ -128,15 +130,29 @@ class RecordingOpener implements BaseShiftWorkspaceOpener {
 // Counter-bearing seam fakes built as factories (not classes — the file's class budget
 // is reserved for the richer recording fakes below).
 type ScriptedReGate = BaseShiftReGate & { calls: number };
-function scriptedReGate(verdict: ReGateVerdict): ScriptedReGate {
+function scriptedReGate(verdict: ReGateVerdict, gateError?: string): ScriptedReGate {
   const fake: ScriptedReGate = {
     calls: 0,
-    async reGate(): Promise<ReGateVerdict> {
+    async reGate(): Promise<ReGateResult> {
       fake.calls += 1;
-      return verdict;
+      return { verdict, ...(gateError !== undefined && { gateError }) };
     },
   };
   return fake;
+}
+
+/** Records EXACTLY which clean-rebase GATE-tier failures routed to WRITER REWORK (the fix). */
+type RecordingGateRework = BaseShiftGateReworkRouter & {
+  calls: Array<{ specId: string; runId: string; gateError: string }>;
+};
+function recordingGateRework(): RecordingGateRework {
+  const calls: Array<{ specId: string; runId: string; gateError: string }> = [];
+  return {
+    calls,
+    async routeGateFailToRework(input) {
+      calls.push({ specId: input.specId, runId: input.runId, gateError: input.gateError });
+    },
+  };
 }
 
 type ScriptedResolver = BaseShiftConflictResolver & { calls: number };
@@ -227,22 +243,36 @@ interface Harness {
   persistence: RecordingPersistence;
   nodes: RecordingNodeReader;
   events: RecordingEventEmitter;
+  gateRework: RecordingGateRework;
 }
 
 function harness(opts: {
   conflictOnRebase?: boolean;
   reGate?: ReGateVerdict;
+  reGateError?: string;
   resolution?: ConflictResolution;
+  /** Omit the gate-rework router to exercise the degenerate replan fallback (legacy conformance). */
+  noGateRework?: boolean;
 }): Harness {
   const workspace = new RecordingWorkspaceCore(opts.conflictOnRebase ?? false);
   const opener = new RecordingOpener();
-  const reGate = scriptedReGate(opts.reGate ?? "passed");
+  const reGate = scriptedReGate(opts.reGate ?? "passed", opts.reGateError);
   const resolver = scriptedResolver(opts.resolution ?? { resolved: true, headSha: "sha-resolved" });
   const persistence = new RecordingPersistence();
   const nodes = recordingNodeReader();
   const events = new RecordingEventEmitter();
-  const coord = new BaseShiftCoordinator({ workspace, opener, reGate, resolver, persistence, nodes, events });
-  return { coord, workspace, opener, reGate, resolver, persistence, nodes, events };
+  const gateRework = recordingGateRework();
+  const coord = new BaseShiftCoordinator({
+    workspace,
+    opener,
+    reGate,
+    resolver,
+    persistence,
+    nodes,
+    events,
+    ...(opts.noGateRework === true ? {} : { gateRework }),
+  });
+  return { coord, workspace, opener, reGate, resolver, persistence, nodes, events, gateRework };
 }
 
 // The default re-resolved ancestor stack the kick-off threads (one unmerged ancestor,
@@ -325,19 +355,71 @@ describe("BaseShiftCoordinator — never-discard rebase (NOT supersede+regenerat
     ]);
   });
 
-  it("a CLEAN rebase whose re-gate FAILED ⇒ replanned with rebaseConflicted:false (the work no longer fits the new base)", async () => {
-    // BLOCKING-1: a clean rebase whose fresh re-gate FAILS on the new base is a LEGITIMATE
-    // replan — the old work no longer fits — emitted as `replanned` with `rebaseConflicted:
-    // false` (NOT a pretend-conflict). It must NOT be skipped just because the rebase was clean.
-    const h = harness({ conflictOnRebase: false, reGate: "failed" });
+  it("a CLEAN rebase whose re-gate FAILS a GATE TIER ⇒ WRITER REWORK (carrying the gate error), NOT replan/irreconcilable", async () => {
+    // THE FIX: a clean rebase (jj recorded NO conflict) whose fresh re-gate FAILS a GATE TIER
+    // (lint/test/build) on the new base is the WRITER's to fix — route to WRITER REWORK
+    // carrying the real gate error as steering, NEVER to replan (the old, mis-classified
+    // behavior that conflated a clean-rebase gate-fail with an irreconcilable conflict and
+    // stranded the spec). The convergence detector inside the router owns escalation (no count).
+    const gateError = "base-shift re-gate failed at tier tier-2: step 'test' (exit 1)";
+    const h = harness({ conflictOnRebase: false, reGate: "failed", reGateError: gateError });
     await reexec(h);
+    // Routed to WRITER REWORK with the REAL gate error (no_silent_fallback) — NOT replanned.
+    expect(h.gateRework.calls).toEqual([{ specId: "spec_b", runId: DEP_RUN, gateError }]);
+    expect(h.persistence.replanned).toEqual([]);
+    expect(h.persistence.repointStacks).toEqual([]);
+    // The categorical decision is still emitted (the rebase WAS clean — rebaseConflicted:false).
+    const event = h.events.rawEvents[0];
+    expect(event).toMatchObject({ decision: "replanned", rebaseConflicted: false, sameRunId: true });
+    expect(() => IntegrationRebasePayload.parse(event)).not.toThrow();
+  });
+
+  it("DEGENERATE WIRING (no gate-rework router) ⇒ a clean-rebase gate-fail falls back to replan (never stranded)", async () => {
+    // Back-compat / conformance fallback: with NO gate-rework router wired, a clean-rebase
+    // gate-fail falls back to `recordReplan` (the pre-fix behavior) so the spec is never
+    // stranded — production ALWAYS wires the router (the test above).
+    const h = harness({ conflictOnRebase: false, reGate: "failed", noGateRework: true });
+    await reexec(h);
+    expect(h.gateRework.calls).toEqual([]);
     expect(h.persistence.replanned).toHaveLength(1);
     expect(h.persistence.repointStacks).toEqual([]);
     const event = h.events.rawEvents[0];
     expect(event).toMatchObject({ decision: "replanned", rebaseConflicted: false, sameRunId: true });
-    // CONTRACT-VALID: the emitted payload parses against the frozen IntegrationRebasePayload
-    // schema (a clean-rebase gate-failure replan is a valid `replanned`, rebaseConflicted:false).
     expect(() => IntegrationRebasePayload.parse(event)).not.toThrow();
+  });
+
+  it("a CONFLICTED rebase whose RESOLVED tree fails a GATE TIER ⇒ WRITER REWORK (clean tree, not irreconcilable)", async () => {
+    // The resolver FIT the conflict (a clean resolved tree), but the coordinator's re-gate of
+    // that resolved tree fails a GATE TIER — the tree is byte-clean, the code just fails a
+    // gate on the new base. Route to WRITER REWORK, NOT replan.
+    const gateError = "base-shift re-gate failed at tier tier-1: step 'lint' (exit 1)";
+    const h = harness({
+      conflictOnRebase: true,
+      resolution: { resolved: true, headSha: "sha-resolved" },
+      reGate: "failed",
+      reGateError: gateError,
+    });
+    await reexec(h);
+    expect(h.gateRework.calls).toEqual([{ specId: "spec_b", runId: DEP_RUN, gateError }]);
+    expect(h.persistence.replanned).toEqual([]);
+  });
+
+  it("a CONFLICTED rebase whose resolver routed-to-rework (its own GATE re-gate failed) ⇒ NO double-route (no replan)", async () => {
+    // The LIVE resolver's INTERNAL re-gate failed a GATE TIER and it ALREADY routed the spec
+    // to writer rework (re-opened + enqueued a re-author run) — signalled via routedToRework.
+    // The coordinator MUST NOT also replan (that would double-route the spec).
+    const h = harness({
+      conflictOnRebase: true,
+      resolution: { resolved: false, routedToRework: true, reason: "re-gate gate-tier fail — routed to rework" },
+    });
+    await reexec(h);
+    expect(h.persistence.replanned).toEqual([]);
+    // The coordinator does not re-route (the resolver owned it) — its own gate-rework seam is
+    // untouched on this path.
+    expect(h.gateRework.calls).toEqual([]);
+    expect(h.events.events).toEqual([
+      { runId: DEP_RUN, decision: "replanned", rebaseConflicted: true, sameRunId: true },
+    ]);
   });
 
   it("FAIL-CLOSED: a `pending` (inconclusive) re-gate HOLDS — never merges, never discards", async () => {

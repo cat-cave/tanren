@@ -125,6 +125,7 @@ export const MILESTONE_EVENT_TYPES: ReadonlySet<string> = new Set([
   "merge.conflict.resolved",
   "merge.conflict.irreconcilable",
   "merge.conflict.replan_routed",
+  "merge.regate.gate_rework_routed",
   "merge.batch.infra_blocked",
   "merge.queue.infra_blocked",
   "github.pr.created",

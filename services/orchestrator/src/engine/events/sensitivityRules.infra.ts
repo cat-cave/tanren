@@ -3,10 +3,8 @@ import { costSensitivityRules } from "./sensitivityRules.cost.js";
 import { integrationProvisioningSensitivityRules } from "./sensitivityRules.integrations.js";
 import { auditBaselineSensitivityRules, auditEnvelopeRulesFor } from "./sensitivityRules.audit.js";
 
-// Infrastructure-and-integration sensitivity rules, split out of
-// sensitivityRules.ts to keep each file under the 500-line cap (role rules stay
-// there). Covers the runtime substrate, cost/usage telemetry, and the
-// integration surface (github/ci/phase1/reviews/notifications/onboarding/hello).
+// Infrastructure-and-integration sensitivity rules, split out of sensitivityRules.ts for the 500-line
+// cap (role rules stay there). Runtime substrate + cost/usage telemetry + the integration surface.
 export const infraSensitivityRules: SensitivityRule[] = [
   // runner allocation
   ...rulesFor("allocator.requested", [
@@ -146,8 +144,7 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["costUsd", "public"],
     ["capturedAt", "public"],
   ]),
-  // usage.read_failed (silent-fallback hardening) — tool/target/reason/exitCode secret-free,
-  // detail is a bounded whitespace-collapsed stderr/stdout tail; all public telemetry.
+  // usage.read_failed (silent-fallback hardening) — tool/target/reason/exitCode + bounded stderr tail; all public.
   ...rulesFor("usage.read_failed", [
     ["tool", "public"],
     ["target", "public"],
@@ -299,6 +296,15 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["gateError", "public"],
     ["priorReworks", "public"],
   ]),
+  ...rulesFor("merge.regate.gate_rework_routed", [
+    ["integration", "public"],
+    ["specId", "public"],
+    ["runId", "public"],
+    ["prNumber", "public"],
+    ["disposition", "public"],
+    ["gateError", "public"],
+    ["priorReworks", "public"],
+  ]),
   ...rulesFor("merge.batch.infra_blocked", [
     ["integration", "public"],
     ["members[].specId", "public"],
@@ -340,8 +346,7 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["headBranch", "public"],
     ["reGatedCi", "public"],
   ]),
-  // §2c: a speculative dependent's merge held for unmerged ancestors —
-  // PR identifiers + the integration ref + ancestor spec ids, all public.
+  // §2c: a speculative dependent's merge held for unmerged ancestors — PR ids + ref + ancestor spec ids, all public.
   ...rulesFor("merge.speculative_held", [
     ["prUrl", "public"],
     ["prNumber", "public"],
@@ -357,8 +362,7 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["fromBase", "public"],
     ["toBase", "public"],
   ]),
-  // intent-preserving conflict resolution — PR identifiers + spec ids +
-  // refs + the DAG-edge signal + file paths + reasoning prose, all public.
+  // intent-preserving conflict resolution — PR ids + spec ids + refs + DAG-edge + file paths + reasoning, all public.
   ...rulesFor("merge.conflict.resolving", [
     ["prUrl", "public"],
     ["prNumber", "public"],
@@ -381,8 +385,7 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["resolvedFiles[]", "public"],
     ["reGated", "public"],
   ]),
-  // §3.2 deterministic entity-merge — PR identifiers + spec id + the spliced files +
-  // the merged entity ids (structural identities, not secrets), all public.
+  // §3.2 deterministic entity-merge — PR ids + spec id + spliced files + merged entity ids (structural), all public.
   ...rulesFor("merge.conflict.entity_merged", [
     ["prUrl", "public"],
     ["prNumber", "public"],
@@ -415,8 +418,7 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["replanStatus", "public"],
     ["conflictSignature", "public"],
   ]),
-  // governance posture block — PR identifiers + posture + external
-  // contributor logins (public GitHub handles) + prose, all public.
+  // governance posture block — PR ids + posture + external contributor logins (public handles) + prose, all public.
   ...rulesFor("merge.blocked", [
     ["prUrl", "public"],
     ["prNumber", "public"],
@@ -427,7 +429,6 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["externalLogins[]", "public"],
     ["reason", "public"],
   ]),
-
   // notifications + onboarding (the latter in its own module)
   ...rulesFor("notification.enqueued", [
     ["channel", "public"],
@@ -481,8 +482,7 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["runnerProof.timedOut", "public"],
   ]),
 
-  // redaction.raw_access audit event — these fields are the audit metadata itself,
-  // not redacted payload values. All public so admins can see who accessed what.
+  // redaction.raw_access audit event — the audit metadata itself (not redacted values); all public for admins.
   ...rulesFor("redaction.raw_access", [
     ["actorUserId", "public"],
     ["actorScopes", "public"],

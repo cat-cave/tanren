@@ -229,3 +229,30 @@ export const MergeBatchGateReworkRoutedPayload = z
     priorReworks: z.number().int().nonnegative(),
   })
   .strict();
+
+// merge.regate.gate_rework_routed → a PRE-MERGE re-gate (a base-shift / queued-merge
+// re-gate of a cleanly-rebased-or-resolved tree) FAILED a deterministic GATE TIER
+// (lint/test/build) — the rebase itself was CLEAN (no merge conflict), the code just
+// fails a gate on the new base. The resolver routes the merging spec back to the WRITER
+// for REWORK (carrying the re-gate's failing tier/step/output as steering) instead of
+// mis-classifying it as `merge.conflict.irreconcilable` + escalating. DISTINCT from a
+// genuine merge conflict (which routes to replan): a clean-rebase + failed-gate is fixed
+// by re-authoring the code. `disposition: "escalated"` means the convergence detector
+// proved a FIXED POINT (the SAME gate error recurs after re-authoring) and parked it
+// `needs_attention` instead of re-working identically forever (no strand, no count).
+export const MergeReGateGateReworkRoutedPayload = z
+  .object({
+    integration: MergeIntegrationMode,
+    /** The merging spec routed back to the writer to fix the re-gate's GATE-tier failure. */
+    specId: z.string(),
+    /** The run id whose rebased/resolved tree failed the re-gate (the run being re-authored). */
+    runId: z.string(),
+    prNumber: z.number().int(),
+    /** Whether a fresh rework run was enqueued, or the convergence detector escalated to needs_attention. */
+    disposition: z.enum(["reworked", "escalated"]),
+    /** The re-gate's failing tier/step/output — the steering the writer re-authors against. */
+    gateError: z.string(),
+    /** How many prior gate-reworks this spec had before this routing (a diagnostic, NOT a cap). */
+    priorReworks: z.number().int().nonnegative(),
+  })
+  .strict();

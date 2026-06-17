@@ -31,8 +31,11 @@ import {
   decideConflictResolution,
   isProductVisionEmpty,
   type ConflictAnswererInvoker,
+  type ConflictProvenance,
   type ConflictProvenanceReader,
+  type GateReworkRouter,
   type ProductVisionReader,
+  type ReGateVerdict,
   type ReplanRouter,
   type ResolvedTreeReGate,
   type SpecIntent,
@@ -88,6 +91,17 @@ export interface IntentPreservingResolverDeps {
   /** Route one spec back to the planner with the other's change (intent stays alive). */
   replan: ReplanRouter;
   /**
+   * Route the merging spec to WRITER REWORK when the re-gate fails because a GATE TIER
+   * failed (lint/test/build) on a cleanly-rebased-or-resolved tree — NOT because the
+   * intents are irreconcilable. A clean rebase + a failed gate is the WRITER's to fix on
+   * the new base; it must NOT be conflated with `merge.conflict.irreconcilable` / escalate.
+   * OPTIONAL: when absent (a degenerate / legacy wiring) a GATE-tier re-gate failure falls
+   * back to the existing replan/irreconcilable path (the pre-fix behavior, never a silent
+   * merge). Production always wires it. A checker/auditor re-gate rejection (a genuine
+   * resolved-tree-doesn't-fit verdict) stays on the replan path regardless.
+   */
+  gateRework?: GateReworkRouter;
+  /**
    * change-percolation: present when THIS run is a percolation re-execution
    * — the ancestor whose intentional upstream change must flow IN. It reframes the
    * Answerer into UPSTREAM-CHANGE mode (apply the ancestor's change INTO the
@@ -105,7 +119,7 @@ export interface IntentPreservingResolverDeps {
  * spec's intent alive (the dispatcher then emits the recoverable conflict).
  */
 export function buildIntentPreservingConflictResolver(deps: IntentPreservingResolverDeps): ConflictResolverHook {
-  return async (context: ConflictContext): Promise<{ resolved: boolean }> => {
+  return async (context: ConflictContext): Promise<{ resolved: boolean; routedToRework?: boolean }> => {
     const gathered = await deps.applier.gather();
     // Empty-gather short-circuit (apex pre-run §7.2): a CLEAN rebase records no
     // conflicted files — there is genuinely nothing to resolve. Don't invoke the
@@ -263,18 +277,7 @@ export function buildIntentPreservingConflictResolver(deps: IntentPreservingReso
     const verdict = await deps.reGate.reGate({ resolvedFiles: resolvedPaths });
 
     if (!verdict.passed) {
-      // A resolution that does not survive the re-gate is NOT a resolution — it
-      // is an irreconcilable outcome surfaced by reality (the gate/checker/auditor
-      // judged the resolved tree). Route the merging spec back to the planner with
-      // the conflicting change as context; NEVER merge an unverified tree.
-      const reason = `re-gate failed (${verdict.failedStage ?? "unknown"}): ${verdict.reason}`;
-      const replan = {
-        which: "merging" as const,
-        specId: deps.mergingSpecIntent.specId,
-        newContext: replanContextFromConflict(provenance.conflictingSpecIntent, reason),
-        ...(provenance.conflictingSpecId !== undefined && { otherSpecId: provenance.conflictingSpecId }),
-      };
-      return routeIrreconcilable(deps, context, provenance, reason, replan, true);
+      return handleFailedReGate(deps, context, provenance, verdict);
     }
 
     // Clean re-gate: publish the resolved branch; the dispatcher retries the
@@ -298,6 +301,37 @@ export function buildIntentPreservingConflictResolver(deps: IntentPreservingReso
     });
     return { resolved: true };
   };
+}
+
+/**
+ * The failed-re-gate tail: split a GATE-TIER failure (the resolved tree is byte-clean — it just
+ * fails lint/test/build on the new base, the WRITER's to fix) from a genuine checker/auditor
+ * does-not-fit verdict. A GATE-tier failure with a rework router wired routes to WRITER REWORK
+ * carrying the gate error (the SAME never-discard re-author the batch path uses), NEVER
+ * `merge.conflict.irreconcilable` / escalate (the convergence detector owns escalation, no count),
+ * and returns `routedToRework` so a caller with its own replan path (the base-shift coordinator)
+ * does not double-route. Everything else (a checker/auditor rejection, or a degenerate wiring with
+ * no rework router) stays on the replan / irreconcilable path — never merge an unverified tree.
+ */
+async function handleFailedReGate(
+  deps: IntentPreservingResolverDeps,
+  context: ConflictContext,
+  provenance: ConflictProvenance,
+  verdict: ReGateVerdict,
+): Promise<{ resolved: false; routedToRework?: boolean }> {
+  const reason = `re-gate failed (${verdict.failedStage ?? "unknown"}): ${verdict.reason}`;
+  if (verdict.failedStage === "gate" && deps.gateRework !== undefined) {
+    await deps.applier.abort();
+    await deps.gateRework.routeGateFailToRework({ specId: deps.mergingSpecIntent.specId, gateError: reason });
+    return { resolved: false, routedToRework: true };
+  }
+  const replan = {
+    which: "merging" as const,
+    specId: deps.mergingSpecIntent.specId,
+    newContext: replanContextFromConflict(provenance.conflictingSpecIntent, reason),
+    ...(provenance.conflictingSpecId !== undefined && { otherSpecId: provenance.conflictingSpecId }),
+  };
+  return routeIrreconcilable(deps, context, provenance, reason, replan, true);
 }
 
 /**

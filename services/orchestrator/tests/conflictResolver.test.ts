@@ -20,6 +20,7 @@ import type {
   ConflictAnswererInvoker,
   ConflictProvenance,
   ConflictProvenanceReader,
+  GateReworkRouter,
   GatheredConflict,
   ReGateVerdict,
   ReplanRouter,
@@ -103,6 +104,16 @@ function recordingReplan(): ReplanRouter & {
   return {
     calls,
     routeBackToPlanner: async (input) => {
+      calls.push(input);
+    },
+  };
+}
+
+function recordingGateRework(): GateReworkRouter & { calls: Array<{ specId: string; gateError: string }> } {
+  const calls: Array<{ specId: string; gateError: string }> = [];
+  return {
+    calls,
+    routeGateFailToRework: async (input) => {
       calls.push(input);
     },
   };
@@ -276,6 +287,94 @@ describe("intentPreservingConflictResolver", () => {
     expect(payload?.fromFailedReGate).toBe(true);
     expect(payload?.reason).toContain("re-gate failed (checker)");
     expect(events.events.some((e) => e.eventType === "merge.conflict.resolved")).toBe(false);
+  });
+
+  it("routes a GATE-TIER re-gate failure to WRITER REWORK (NOT merge.conflict.irreconcilable / replan)", async () => {
+    // THE FIX: the resolution applied to a byte-CLEAN tree (no merge conflict), but the re-gate fails
+    // a deterministic GATE TIER on the new base — the WRITER's to fix. Route to WRITER REWORK carrying
+    // the gate error, NOT an IRRECONCILABLE CONFLICT (no `merge.conflict.irreconcilable`) and NOT a
+    // replan; it carries `routedToRework` so a base-shift caller does not double-route.
+    const events = new FakeEventStore();
+    const log: string[] = [];
+    const applier = fakeApplier(conflictedFiles, log);
+    const replan = recordingReplan();
+    const gateRework = recordingGateRework();
+
+    const resolver = buildIntentPreservingConflictResolver({
+      projectId: "proj_1",
+      mergingSpecIntent: MERGING,
+      eventStore: events,
+      provenance: fakeProvenance({ conflictingSpecId: BASE.specId, conflictingSpecIntent: BASE, dagEdge: true }),
+      applier,
+      answerer: fakeAnswerer(
+        {
+          decision: "resolve",
+          reasoning: "merged both",
+          resolvedFiles: [{ path: "src/router.ts", content: "analytics + ratelimit\n" }],
+          replanSpec: null,
+        },
+        {},
+      ),
+      // The resolved tree is clean but a GATE TIER fails on the new base.
+      reGate: fakeReGate({ passed: false, failedStage: "gate", reason: "gate failed at tier tier-2: step 'test'" }),
+      replan,
+      gateRework,
+    });
+    const result = await resolver(CONTEXT);
+    expect(result.resolved).toBe(false);
+    expect(result.routedToRework).toBe(true);
+    // Applied, NEVER published (no merge on an unverified tree); aborted.
+    expect(log).toEqual(["gather", "apply", "abort"]);
+    expect(log).not.toContain("publish");
+    // Routed to WRITER REWORK with the real gate error — NOT to replan, NOT irreconcilable.
+    expect(gateRework.calls).toEqual([
+      { specId: "spec_merging", gateError: "re-gate failed (gate): gate failed at tier tier-2: step 'test'" },
+    ]);
+    expect(replan.calls).toHaveLength(0);
+    const names = events.events.map((e) => e.eventType);
+    expect(names).not.toContain("merge.conflict.irreconcilable");
+    expect(names).not.toContain("merge.conflict.resolved");
+  });
+
+  it("a CHECKER re-gate rejection STILL routes to replan / irreconcilable (a genuine does-not-fit, not a gate-fail)", async () => {
+    // GUARDRAIL: a checker/auditor rejection of the resolved tree is a genuine "does not satisfy the
+    // spec" verdict — it STAYS on the replan / irreconcilable path even with a gate-rework router
+    // wired. Only a deterministic GATE-TIER failure reroutes.
+    const events = new FakeEventStore();
+    const log: string[] = [];
+    const applier = fakeApplier(conflictedFiles, log);
+    const replan = recordingReplan();
+    const gateRework = recordingGateRework();
+
+    const resolver = buildIntentPreservingConflictResolver({
+      projectId: "proj_1",
+      mergingSpecIntent: MERGING,
+      eventStore: events,
+      provenance: fakeProvenance({ conflictingSpecId: BASE.specId, conflictingSpecIntent: BASE, dagEdge: true }),
+      applier,
+      answerer: fakeAnswerer(
+        {
+          decision: "resolve",
+          reasoning: "tried to merge both",
+          resolvedFiles: [{ path: "src/router.ts", content: "broken\n" }],
+          replanSpec: null,
+        },
+        {},
+      ),
+      reGate: fakeReGate({ passed: false, failedStage: "checker", reason: "analytics endpoint missing" }),
+      replan,
+      gateRework,
+    });
+    const result = await resolver(CONTEXT);
+    expect(result.resolved).toBe(false);
+    expect(result.routedToRework).toBeUndefined();
+    // The gate-rework router is NOT engaged; the replan / irreconcilable path runs as before.
+    expect(gateRework.calls).toHaveLength(0);
+    expect(replan.calls).toEqual([expect.objectContaining({ specId: "spec_merging" })]);
+    const irreconcilable = events.events.find((e) => e.eventType === "merge.conflict.irreconcilable");
+    const payload = irreconcilable?.payload as { fromFailedReGate: boolean; reason: string } | undefined;
+    expect(payload?.fromFailedReGate).toBe(true);
+    expect(payload?.reason).toContain("re-gate failed (checker)");
   });
 
   it("routes invalid conflict answers back through replan instead of throwing as infra", async () => {
