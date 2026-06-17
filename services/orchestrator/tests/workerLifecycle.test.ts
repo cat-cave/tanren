@@ -162,7 +162,6 @@ describe("startRunWorker — dep wiring (lifecycle.ts)", () => {
       taskKind: "plan",
       payload: {},
       attempts: 1,
-      maxAttempts: 5,
       orgId: ORG,
     });
 

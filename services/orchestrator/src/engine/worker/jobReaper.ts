@@ -1,15 +1,17 @@
-// queue lease recovery. A crashed worker leaves its claimed job
+// queue lease recovery. A crashed or slow worker leaves its claimed job
 // `running` with a lease it can no longer renew. The reaper periodically sweeps
-// expired leases: jobs with retry budget remaining go back to `queued` (so a
-// healthy worker re-claims them), and jobs that have exhausted their bounded
-// re-claim budget are moved to the terminal `dead_letter` state and surfaced
-// via a `job.dead_lettered` lifecycle event for operator triage.
+// expired leases and requeues EVERY one — unbounded, no attempt-cap dead-letter
+// (a lapsed lease is transient recovery, NOT a strike; the doctrine forbids a
+// fixed attempt cap). Each requeue surfaces a LOUD `job.lease_expired` infra
+// signal carrying the climbing re-claim count as evidence: a worker that keeps
+// crashing on the same job is an infra problem to surface, never a job silently
+// dropped on a count.
 //
-// This file OWNS the recovery side of the queue (the reaper loop + dead-letter
-// event emission); the worker heartbeat that keeps a live job's lease fresh
-// lives alongside the executor. observability stays OUT of here.
+// This file OWNS the recovery side of the queue (the reaper loop + the
+// lease-expiry event emission); the worker heartbeat that keeps a live job's
+// lease fresh lives alongside the executor. observability stays OUT of here.
 
-import { runWithJobOrgId, runWithOrgScope, runWithSystemScope } from "@tanren/db";
+import { runWithJobOrgId, runWithSystemScope } from "@tanren/db";
 import { scalarText, scalarTextOr } from "../data/scalarText.js";
 import type pg from "pg";
 import { orgScopingPool } from "../data/orgScopedDb.js";
@@ -28,122 +30,84 @@ export interface ReapJobsDeps {
 
 export interface ReapJobsResult {
   requeued: number;
-  deadLettered: number;
-  // LOUD-over-swallowed (r6 §1): the dead-letter recovery side-effects — the
-  // operator-visible `job.dead_lettered` event and the spec park that frees the
-  // DAG slot — are best-effort, but a FAILURE of either is the exact condition the
-  // reaper exists to surface, so it is logged (structured) AND counted here. A
-  // non-zero count on a pass means a dead-letter was recovered but its operator
-  // signal (event) or DAG-slot release (park) did not land.
+  // LOUD-over-swallowed (r6 §1): the lease-expiry recovery side-effect — the
+  // operator-visible `job.lease_expired` infra signal — is best-effort, but a
+  // FAILURE to write it is the exact condition the reaper exists to surface, so it
+  // is logged (structured) AND counted here. A non-zero count on a pass means a
+  // job was requeued but its operator signal (event) did not land.
   eventWriteFailed: number;
-  parkFailed: number;
   jobs: ReapedJob[];
 }
 
 /**
- * Run one reaper pass: requeue or dead-letter every `running` job whose lease
- * has lapsed. Emits a `job.dead_lettered` event for each dead-lettered job that
- * is bound to a run and parks its spec at `needs_attention` (freeing the DAG
- * slot). Both side-effects are best-effort but LOUD: a failure of either is
- * logged (structured) and counted on the result (`eventWriteFailed`/`parkFailed`)
- * — never silently swallowed, since the failure is precisely what the reaper
- * exists to surface.
+ * Run one reaper pass: requeue EVERY `running` job whose lease has lapsed
+ * (unbounded — no attempt-cap dead-letter). Emits a LOUD `job.lease_expired`
+ * infra signal for each requeued job that is bound to a run, carrying the
+ * climbing re-claim count as evidence. The event is best-effort but LOUD: a
+ * failure to write it is logged (structured) and counted on the result
+ * (`eventWriteFailed`) — never silently swallowed, since a worker that keeps
+ * crashing is precisely the infra problem the reaper exists to surface.
  */
 export async function reapExpiredJobs(deps: ReapJobsDeps): Promise<ReapJobsResult> {
   const reaped = await deps.jobQueue.reapExpiredLeases(deps.now === undefined ? undefined : { now: deps.now });
   // RLS R3a-worker: the default event store is constructed over an
-  // `orgScopingPool`, so when the dead-letter append runs under a reaped run's
+  // `orgScopingPool`, so when the lease-expiry append runs under a reaped run's
   // per-job org-id (set below), its `events` INSERT opens a short org-scoped txn;
   // with no org-id (system / null-org job) it falls back to the pool (inert). An
   // injected event store (tests) is used verbatim.
   const eventStore = deps.eventStore ?? new PgEventStore(orgScopingPool(deps.pool));
   let requeued = 0;
-  let deadLettered = 0;
   let eventWriteFailed = 0;
-  let parkFailed = 0;
   for (const job of reaped) {
-    if (job.outcome === "requeued") {
-      requeued += 1;
-      continue;
-    }
-    deadLettered += 1;
-    const failures = await emitDeadLetterEvent(deps.pool, eventStore, job);
-    eventWriteFailed += failures.eventWriteFailed ? 1 : 0;
-    parkFailed += failures.parkFailed ? 1 : 0;
+    requeued += 1;
+    const failed = await emitLeaseExpiredEvent(deps.pool, eventStore, job);
+    eventWriteFailed += failed ? 1 : 0;
   }
-  return { requeued, deadLettered, eventWriteFailed, parkFailed, jobs: reaped };
+  return { requeued, eventWriteFailed, jobs: reaped };
 }
 
-interface DeadLetterFailures {
-  eventWriteFailed: boolean;
-  parkFailed: boolean;
-}
-
-async function emitDeadLetterEvent(pool: pg.Pool, eventStore: EventStore, job: ReapedJob): Promise<DeadLetterFailures> {
-  const failures: DeadLetterFailures = { eventWriteFailed: false, parkFailed: false };
+/**
+ * Emit the LOUD `job.lease_expired` infra signal for a requeued job. The job is
+ * NOT terminal — it stays in_flight and keeps its DAG slot (the work continues),
+ * so there is no spec park here (the work was not dropped). Returns true if the
+ * event write failed (LOUD: logged + counted), false otherwise.
+ */
+async function emitLeaseExpiredEvent(pool: pg.Pool, eventStore: EventStore, job: ReapedJob): Promise<boolean> {
   if (job.runId === undefined) {
-    return failures;
+    return false;
   }
   const context = await loadRunLineage(pool, job.runId);
   if (context === undefined) {
-    return failures;
-  }
-  // DEAD-LETTER FINALIZER (audit §3.13c): a dead-lettered job is TERMINAL — its run is
-  // never re-claimed. Without finalizing the spec it stays `in_flight` FOREVER,
-  // occupying its DAG slot (the walker counts it in-flight and never re-enqueues it) and
-  // blocking every dependent permanently. Park the spec at `needs_attention` — the SAME
-  // terminal escalation a genuine merge conflict uses (coordinatorEscalate.ts): it FREES
-  // the slot (the rest of the DAG advances), blocks ONLY its dependents, and is
-  // operator-visible. The `job.dead_lettered` event below names the cause. Best-effort,
-  // org-scoped, ATOMIC-guarded (an already-terminal spec is left untouched) — a park
-  // failure must never mask the dead-letter event, but it is LOUD (logged + counted, r6 §1).
-  if (context.specId !== "" && context.orgId !== null) {
-    try {
-      await parkDeadLetteredSpec(pool, context.orgId, context.specId);
-    } catch (error) {
-      failures.parkFailed = true;
-      // The spec stays in_flight (DAG slot stuck) — surface it loud so an operator can
-      // park it by hand; never a silent loss of the slot-freeing the reaper exists for.
-      log.error(
-        "dead-letter spec park failed (DAG slot not freed)",
-        {
-          jobId: job.id,
-          runId: job.runId,
-          specId: context.specId,
-          orgId: context.orgId,
-          reason: "park_failed",
-        },
-        error,
-      );
-    }
+    return false;
   }
   const append = (): Promise<void> =>
     eventStore.append({
       runId: job.runId!,
       specId: context.specId,
       projectId: context.projectId,
-      eventType: "job.dead_lettered",
+      eventType: "job.lease_expired",
       payload: {
         jobId: job.id,
         taskKind: job.taskKind,
+        // DIAGNOSTIC evidence: how many times this job has been re-claimed. A
+        // climbing count on the same job = a worker repeatedly crashing on it
+        // (an infra problem to triage), NOT a give-up budget.
         attempts: job.attempts,
-        maxAttempts: job.maxAttempts,
         failureKind: "lease_expired",
-        message: "retry budget exhausted after lease expiry",
+        message: "lease expired (worker crashed or stalled); job requeued for recovery",
       },
     });
-  // RLS R3a-worker: scope the dead-letter event to the reaped run's org via the
+  // RLS R3a-worker: scope the lease-expiry event to the reaped run's org via the
   // per-job org-id (the default PgEventStore then opens a short org-scoped txn
   // for the INSERT). A system / null-org job (org_id NULL) appends on the pool —
-  // inert, identical to before this cohort. A failed append is LOUD (logged +
-  // counted, r6 §1): losing this event silently hides the dead-letter from the
-  // operator, the exact condition the reaper exists to surface.
+  // inert. A failed append is LOUD (logged + counted, r6 §1): losing this event
+  // silently hides a crashing worker from the operator.
   try {
     await (context.orgId === null ? append() : runWithJobOrgId(context.orgId, append));
+    return false;
   } catch (error) {
-    failures.eventWriteFailed = true;
     log.error(
-      "dead-letter event write failed (operator signal lost)",
+      "lease-expired event write failed (operator signal lost)",
       {
         jobId: job.id,
         runId: job.runId,
@@ -154,26 +118,8 @@ async function emitDeadLetterEvent(pool: pg.Pool, eventStore: EventStore, job: R
       },
       error,
     );
+    return true;
   }
-  return failures;
-}
-
-/**
- * Park the dead-lettered job's spec at the terminal `needs_attention` status under the
- * run's org scope (audit §3.13c). ATOMIC-guarded: the `status NOT IN (...)` clause means
- * an already-terminal spec (merged / done / halted / cancelled / already needs_attention)
- * is never moved, so a concurrent settle never un-merges or double-parks. Mirrors
- * `PgSpecEscalator.parkSpec` (the merge-queue conflict escalation) — ONE escalation
- * policy across both surfaces. The flip FREES the spec's DAG slot.
- */
-async function parkDeadLetteredSpec(pool: pg.Pool, orgId: string, specId: string): Promise<void> {
-  await runWithOrgScope(pool, orgId, async (client) => {
-    await client.query(
-      `UPDATE specs SET status = 'needs_attention'
-         WHERE spec_id = $1 AND status NOT IN ('merged', 'done', 'halted', 'cancelled', 'needs_attention')`,
-      [specId],
-    );
-  });
 }
 
 async function loadRunLineage(
@@ -181,7 +127,7 @@ async function loadRunLineage(
   runId: string,
 ): Promise<{ specId: string; projectId: string; orgId: string | null } | undefined> {
   // The reaper sweeps lapsed leases across ALL orgs in one pass, so resolving a
-  // reaped run's lineage (incl. its org_id, to scope the dead-letter event) is a
+  // reaped run's lineage (incl. its org_id, to scope the lease-expiry event) is a
   // legitimately cross-org BOOTSTRAP read — it runs under the worker's system
   // context (no org GUC), mirroring the job-queue claim. (R3b fork: under
   // enforced policies this read needs a bypass-role / policy carve-out — the
@@ -269,12 +215,10 @@ export class JobReaper {
 }
 
 function defaultOnPass(result: ReapJobsResult): void {
-  if (result.requeued > 0 || result.deadLettered > 0) {
+  if (result.requeued > 0) {
     log.info("reaper pass", {
       requeued: result.requeued,
-      deadLettered: result.deadLettered,
       eventWriteFailed: result.eventWriteFailed,
-      parkFailed: result.parkFailed,
     });
   }
 }

@@ -33,9 +33,11 @@ export const JobStatus = z.enum([
   "done",
   "failed",
   "cancelled",
-  // terminal state for a job whose bounded re-claim budget is
-  // exhausted. A dead-lettered job is never re-claimed; it surfaces a
-  // `job.dead_lettered` lifecycle event for operator triage.
+  // terminal state for a genuinely-poisoned job (a deterministic, repeating
+  // non-transient failure proving the job itself is unprocessable). NOT reached on
+  // an attempt count: a lease-expired job is requeued indefinitely (transient
+  // recovery), and surfaces a LOUD `job.lease_expired` infra signal — never a
+  // silent drop. Kept in the state machine for a future poison-pill classifier.
   "dead_letter",
 ]);
 export type JobStatus = z.infer<typeof JobStatus>;

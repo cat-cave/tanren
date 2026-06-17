@@ -78,12 +78,11 @@ export const sensitivityRules: SensitivityRule[] = [
     ["reason", "public"],
   ]),
 
-  // dead-letter event — identifiers + a failure summary, all public.
-  ...rulesFor("job.dead_lettered", [
+  // lease-expiry infra signal — identifiers + the re-claim diagnostic, all public.
+  ...rulesFor("job.lease_expired", [
     ["jobId", "public"],
     ["taskKind", "public"],
     ["attempts", "public"],
-    ["maxAttempts", "public"],
     ["failureKind", "public"],
     ["message", "public"],
   ]),

@@ -253,9 +253,9 @@ export const jobQueue = pgTable(
     // worker). `heartbeatAt` records the last renewal for observability.
     leasedUntil: timestamp("leased_until", { withTimezone: true }),
     heartbeatAt: timestamp("heartbeat_at", { withTimezone: true }),
-    // P3-0028 retry budget: bounded re-claim ceiling. When `attempts` reaches it
-    // the reaper dead-letters the job instead of requeueing.
-    maxAttempts: integer("max_attempts").notNull().default(5),
+    // `attempts` is a DIAGNOSTIC re-claim counter, NOT a give-up budget: a
+    // lease-expired job is requeued INDEFINITELY (no `max_attempts` ceiling — the
+    // doctrine forbids a fixed attempt cap; a crashing worker is loud INFRA).
     failureKind: text("failure_kind"),
     failureMessage: text("failure_message"),
     tenantId: text("tenant_id"),
