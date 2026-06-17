@@ -491,10 +491,10 @@ export { workflowInsights, quarantinedTests, ciTestResults } from "./schemaInsig
 export { inboxSources, candidates, webhookEvents } from "./schemaInbox.js";
 export { auditJobs } from "./schemaAudits.js";
 export { experiments, experimentCells, experimentTrials } from "./schemaBenchmark.js";
-// Integration-provisioning foundation (P-INT-0 + P-APP-ENV-0): the org-level integration registry (Plane A) + app-environment store (Plane B; schemaIntegrations.ts).
+// Integration-provisioning (schemaIntegrations.ts): integration registry (Plane A) + app-env (Plane B). Templating REGISTRY (schemaTemplates.ts) + §3.3 entity-anchored CLAIMS ledger (schemaClaims.ts).
 export { orgIntegrations, projectAppEnv } from "./schemaIntegrations.js";
-// Templating REGISTRY (schemaTemplates.ts) + §3.3 entity-anchored CLAIMS ledger (schemaClaims.ts).
 export { templates } from "./schemaTemplates.js";
 export { entityClaims } from "./schemaClaims.js";
-// Environment management (schemaEnvironments.ts, env-management.md §7 P3): the ENVIRONMENT registry — `env_key`-hashed runner-image catalogue, parallel to `templates`.
+// Environment management (schemaEnvironments.ts): the ENVIRONMENT registry — runner-image catalogue. Native design subsystem (schemaDesign.ts, WS-D1): the versioned org-scoped `DesignContract` entity.
 export { environments } from "./schemaEnvironments.js";
+export { designContracts } from "./schemaDesign.js";

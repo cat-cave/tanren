@@ -1,7 +1,7 @@
 /**
  * the live "what forge captured" panel (step 1 right rail). Renders
  * the accumulated interview capture: identity, personas, behaviors, interfaces,
- * design-DNA, architecture, rulesets. Each section shows a done/live/empty
+ * the design contract, architecture, rulesets. Each section shows a done/live/empty
  * glyph so the operator watches the capture fill as the interview progresses
  * (the hi-fi `view-onboard-new` extract panel). Pure render over the capture —
  * no state of its own.
@@ -90,8 +90,17 @@ export function CapturePanel(props: { capture: InterviewCapture }) {
         )}
       </Card>
 
-      <Card ch="design dna" filled={c.designDna !== ""}>
-        {c.designDna === "" ? <div class="empty">pick a starter</div> : <div class="body">{c.designDna}</div>}
+      <Card ch="design" filled={c.designContract !== null}>
+        {c.designContract === null ? (
+          <div class="empty">forge captures the design contract</div>
+        ) : (
+          <div class="body">
+            <div>{c.designContract.identity}</div>
+            {c.designContract.dimensions.length > 0 && (
+              <div style="color:var(--fg-3)">{c.designContract.dimensions.map((d) => d.label).join(" · ")}</div>
+            )}
+          </div>
+        )}
       </Card>
 
       <Card ch="architecture" filled={c.architecture.length > 0}>

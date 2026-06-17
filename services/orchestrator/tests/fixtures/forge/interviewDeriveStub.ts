@@ -22,6 +22,10 @@ export interface StubState {
   milestones: number;
   specMilestones: number;
   specBehaviors: number;
+  // The design-contract jsonb persisted per `design_contracts` INSERT (native
+  // design subsystem, WS-D1) so a test can assert the captured contract is
+  // persisted as a first-class versioned entity.
+  designContracts: Array<Record<string, unknown>>;
 }
 
 // A `prepareDeploy` outcome fixture (a provisioned deploy + the project config it
@@ -62,6 +66,7 @@ export function stubPool(): {
     milestones: 0,
     specMilestones: 0,
     specBehaviors: 0,
+    designContracts: [],
   };
   const configs = new Map<string, Record<string, unknown>>();
   const personaIds = new Set<string>();
@@ -99,6 +104,26 @@ export function stubPool(): {
       const dependsOn = (params[5] as string[]) ?? [];
       state.specs.set(specId, { dependsOn, title, description, acceptanceCriteria });
       return { rows: [], rowCount: 1 };
+    }
+    if (sql.startsWith("INSERT INTO design_contracts")) {
+      // Column params: id, org_id, project_id, domain, contract(json text). The
+      // `version` is computed in-statement (COALESCE(MAX)+1) → stub it as 1.
+      const rawContract = params[4];
+      const contract = typeof rawContract === "string" ? (JSON.parse(rawContract) as Record<string, unknown>) : {};
+      state.designContracts.push(contract);
+      return {
+        rows: [
+          {
+            id: params[0],
+            org_id: params[1],
+            project_id: params[2],
+            version: 1,
+            domain: params[3],
+            contract,
+          },
+        ],
+        rowCount: 1,
+      };
     }
     if (sql.startsWith("INSERT INTO personas")) {
       state.personas += 1;

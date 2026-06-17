@@ -22,6 +22,10 @@ export {
   type RegisterTemplateInput,
   type TemplateCapabilityQuery,
 } from "./templates.js";
+// Native design subsystem (WS-D1, native-design-subsystem.md): the versioned,
+// org-scoped `DesignContract` entity store — the durable design artifact later
+// workstreams inject into the writer (WS-D2) + verify with a design oracle (WS-D4).
+export { DesignContractStore, type DesignContractRecord, type CreateDesignContractInput } from "./designContracts.js";
 // Entity-anchored issue CLAIMS (§3.3): the Tanren-native defect ledger store.
 export {
   EntityClaimStore,

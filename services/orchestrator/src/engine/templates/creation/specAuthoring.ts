@@ -119,10 +119,9 @@ function featureBehaviors(research: TemplateResearch, request: TemplateCreationR
   return behaviors;
 }
 
-// The scaffold/architecture design-DNA + identity slug for the template-build
-// project. The slug seeds the created repo name (Tanren authors the conforming
-// repo off an empty repo, exactly like greenfield). Kept inside the capture's
-// length bounds (slug ≤ 80, designDna ≤ 80).
+// The identity slug for the template-build project. The slug seeds the created
+// repo name (Tanren authors the conforming repo off an empty repo, exactly like
+// greenfield). Kept inside the capture's length bound (slug ≤ 80).
 function slugFor(request: TemplateCreationRequest): string {
   const base = `tmpl-${request.stack}`
     .toLowerCase()
@@ -161,7 +160,26 @@ export function authorTemplateBuildCapture(
     ],
     behaviors: featureBehaviors(research, request),
     interfaces: [{ name: "conforming-repo", note: "the template repo itself (justfile + .tanren/ci.yml)" }],
-    designDna: "full-bar conforming scaffold",
+    // A template build is a CONFORMING-REPO domain — its "design" is the
+    // structural craft of the scaffold, not a visual/UX surface (native design
+    // subsystem, WS-D1: the contract's shape is domain-derived, never web-baked).
+    designContract: {
+      domain: "tanren-template",
+      identity: "a full-bar conforming scaffold",
+      intent:
+        "a clean, idiomatic, full-bar conforming scaffold for the stack — gates that meaningfully check, " +
+        "a justfile that reads as the canonical reference instance of the stack-flexible contract",
+      principles: [
+        "every declared gate must meaningfully check (no green-by-accident scaffold)",
+        "idiomatic for the stack — a developer recognizes it as canonical, not bespoke",
+      ],
+      constraints: [],
+      // THE MOAT — the template build's persona/behavior graph (one consumer persona;
+      // the full-bar feature behaviors). Bound by the natural keys the derive resolves.
+      personas: ["template-consumer"],
+      behaviors: [],
+      dimensions: [],
+    },
     lifecycle: lifecycleFor(request, research),
     rulesets: [
       "every declared gate must MEANINGFULLY check (a planted defect must fail it) — no green-by-accident gate",

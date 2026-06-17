@@ -33,7 +33,7 @@ const CAPTURE_AFTER_ROUND = {
   personas: [{ name: "line worker", description: "barcode + bin moves", surface: "handheld" }],
   behaviors: [{ persona: "line worker", title: "clock in with badge", given: "", when: "", then: "" }],
   interfaces: [],
-  designDna: "",
+  designContract: null,
   architecture: [],
   rulesets: [],
 };
@@ -179,7 +179,16 @@ describe("greenfield · derive → spec dag (step 2)", () => {
       personas: [{ name: "line worker", description: "d", surface: "handheld" }],
       behaviors: [{ persona: "line worker", title: "clock in with badge", given: "", when: "", then: "" }],
       interfaces: [{ name: "handheld", note: "" }],
-      designDna: "industrial",
+      designContract: {
+        domain: "saas-web",
+        identity: "an industrial, dense ops console",
+        intent: "a calm, scannable control surface",
+        principles: [],
+        constraints: [],
+        personas: ["line worker"],
+        behaviors: ["line worker::clock in with badge"],
+        dimensions: [],
+      },
       architecture: [],
       rulesets: ["main protected"],
     });

@@ -119,7 +119,7 @@ export function resolveLifecycle(current: InterviewCapture, delta: InterviewCapt
   return { outcome: "drift", lifecycle: current.lifecycle, attempted: incoming, confirmed: true };
 }
 
-// Merge a partial delta into the running capture. Identity + designDna are
+// Merge a partial delta into the running capture. Identity + designContract are
 // last-write-wins (a later round can refine them); lists union by natural key;
 // rulesets union as a string set preserving order. Every delta field is
 // optional and may arrive as `null` (the OpenAI-strict answerer schema returns
@@ -135,10 +135,12 @@ export function mergeCapture(current: InterviewCapture, delta: InterviewCaptureD
     personas: mergeByKey(current.personas, delta.personas ?? [], personaKey),
     behaviors: mergeByKey(current.behaviors, delta.behaviors ?? [], behaviorKey),
     interfaces: mergeByKey(current.interfaces, delta.interfaces ?? [], interfaceKey),
-    designDna:
-      delta.designDna !== null && delta.designDna !== undefined && delta.designDna !== ""
-        ? delta.designDna
-        : current.designDna,
+    // The design contract is last-write-wins: a later round refines the captured
+    // design intent. `null`/absent = nothing to add this round (keep current).
+    designContract:
+      delta.designContract !== null && delta.designContract !== undefined
+        ? delta.designContract
+        : current.designContract,
     architecture:
       delta.architecture !== null && delta.architecture !== undefined && delta.architecture.length > 0
         ? delta.architecture

@@ -12,10 +12,14 @@
 //                  genuine persona-behavior CONTRADICTION would show up. Each
 //                  behavior is attributed to its persona (so the contradiction is
 //                  attributable in the prompt). De-duped across the two specs.
-//   - DESIGN-DNA : the captured product identity (`pitch`) + design note
-//                  (`designDna`) persisted on `projects.config.productVision` by
-//                  the greenfield interview derive (the interview capture is
-//                  otherwise transient). Read read-only via `ProjectStore.get`.
+//   - DESIGN NOTE: the captured product identity (`pitch`) + a short design note
+//                  persisted on `projects.config.productVision` by the greenfield
+//                  interview derive. The note is the captured design contract's
+//                  one-line `identity` (native design subsystem, WS-D1) — the full
+//                  design intent lives in the first-class `DesignContract` entity;
+//                  this is only the short framing note the conflict resolver reads
+//                  (the writer-side injection of the contract is WS-D2). Read
+//                  read-only via `ProjectStore.get`.
 //
 // A genuinely EMPTY product (no personas, no behaviors, no design-DNA) returns an
 // empty vision — never an error, never a stub. The resolver/prompt then omit the
