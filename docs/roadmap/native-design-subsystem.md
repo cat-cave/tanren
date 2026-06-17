@@ -149,6 +149,60 @@ has:
 The point of the table: the design subsystem is **mostly a re-shaping of existing
 Tanren machinery**, not a new parallel stack.
 
+## The Tanren-native moat — design no other tool can do
+
+Every feature must feel **cohesive** with the platform and **exploit the native
+tooling we have already built.** The goal is **NOT** to clone open-design or Claude
+Design — it is to use everything Tanren uniquely has to build something no one else
+**CAN.** Standalone design tools all **end at "handoff to a coding agent."** Tanren
+**IS the whole pipeline**, so design can tie into **every** native subsystem. This
+is the moat — and it is deliberately ambitious.
+
+- **First-class personas → strict persona resolution.** Claude Design has to
+  **ask** the designer "who is this page for? add a role toggle? assume default
+  admin? which roles matter?" — it has no model of the product's roles, so it
+  guesses. Tanren resolves it **strictly**: products already carry **first-class
+  personas** (`docs/architecture/product-entities.md`), so every design surface is
+  resolved against the **actual persona set** — persona-scoped views, no guessing,
+  no ambiguity. The `DesignContract` **binds to the persona graph** (WS-D1).
+- **First-class behaviors → exhaustive design coverage + closing the
+  designer↔implementor gap.** The given/when/then **behaviors** become design
+  **acceptance criteria**: the design agent gets an **exhaustive checklist** — every
+  behavior must have a designed surface / flow — and the design oracle **verifies the
+  hi-fi covers every behavior**. Crucially, the **implementor builds from the SAME
+  behaviors** the design was designed against — **eliminating the
+  designer↔implementor disconnect** that plagues every handoff tool (where the
+  design and the code are authored against different, drifting understandings of the
+  product).
+- **Native CI gate (`.tanren/ci.yml` over SSH) → design as a real gate tier.**
+  Design / visual fidelity is a **gated check** (the design oracle is a tier in the
+  native gate that feeds `MergeAuthority`), **not an afterthought export**. A
+  product that fails its design contract does not merge.
+- **`MergeAuthority` + never-discard base-shift → design-system changes
+  propagate.** A token / design-system change is a **versioned, gated, merged
+  artifact** that **re-flows through all dependent UI work via jj-rebase**
+  (never-discard — `docs/architecture/tanren-owns-the-engine.md` §3) instead of
+  silently drifting. Change a color token once; every dependent surface is rebased
+  onto it and re-gated, not left stale.
+- **Native bisection → visual / design-regression bisection.** When the design
+  oracle detects fidelity drift, **bisect to the exact commit that broke the design
+  contract** — the same prefix-node proof reuse that powers behavior-regression
+  bisection, applied to design.
+- **Demos → the hi-fi IS a live demo artifact.** The design is not a static export;
+  it is a **runnable, previewable demo tied to the run.** The non-technical operator
+  **watches design progress live** — the dad-test: see the product take shape, not
+  read a spec.
+- **Issue triage loop → design iteration through the native loop.** Operator design
+  feedback and visual bugs become **issues → triaged → spec → design rework**,
+  through the **SAME** issue-ingestion → triage → DAG loop as any other work — not a
+  separate design tool with its own backlog.
+
+**Thesis.** Design woven into **personas + behaviors + the CI gate + the merge
+queue + bisect + demos + triage + the unified no-handoff loop** is a design
+capability **structurally impossible for a standalone design tool** — because a
+standalone tool has none of those subsystems and ends at the handoff Tanren does
+not have. **This is the moat.**
+
 ## Vision guardrails — what NOT to do
 
 - **No Figma-style canvas / GUI.** open-design itself rejects this —
@@ -188,20 +242,26 @@ Ordered, each a CI-gated PR-sized unit. Dependencies noted.
   versioned design-contract entity + schema. Its shape **adapts to domain** — it is
   **NOT** the web nine-sections. Captured / expanded from the Forge interview's
   design intent, **superseding the 80-char `designDna`** hint. This is the durable
-  artifact. _(Foundation — WS-D2..D8 depend on it.)_
+  artifact. **The contract binds to the persona + behavior links** — every design
+  surface resolves against the actual persona set, and the behaviors become the
+  contract's design acceptance criteria (the moat). _(Foundation — WS-D2..D8 depend
+  on it.)_
 - **WS-D2 — inject the contract into the writer.** Thread the `DesignContract` into
   the writer / build prompt (today the writer gets **zero** design context). The
   **smallest immediate fidelity lift** and the proof of the no-handoff loop.
   _(Depends on WS-D1.)_
 - **WS-D3 — design PHASE + design agent.** A native design-agent role that
   **authors the `DesignContract`** (and optional prototype artifacts) from
-  interview intent + domain, as a **DAG phase** before / alongside the build.
-  _(Depends on WS-D1.)_
+  interview intent + domain, as a **DAG phase** before / alongside the build. **The
+  agent works the behavior checklist** — every behavior must end with a designed
+  surface / flow, resolved per persona (the moat). _(Depends on WS-D1.)_
 - **WS-D4 — domain-aware design ORACLE.** A design / visual verification answerer
   that **judges fidelity vs the contract**, domain-aware (render / screenshot for
   web, prose / typography for a novel, etc.), **replacing the static demo** and
-  feeding findings back to **re-drive the writer**. _(Depends on WS-D1; pairs with
-  WS-D5.)_
+  feeding findings back to **re-drive the writer**. **Checks behavior coverage**
+  (every behavior has a designed surface) **and persona-scoped fidelity** (each
+  surface is correct for its resolved persona), as a gate tier (the moat).
+  _(Depends on WS-D1; pairs with WS-D5.)_
 - **WS-D5 — design as a domain in the oracle taxonomy / entity model.** Wire
   "design" into the product-entity model (`docs/architecture/product-entities.md`)
   and the oracle taxonomy so the contract's **shape** and the oracle's **mode** are
