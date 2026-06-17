@@ -346,6 +346,15 @@ cite); the merge-engine cutover rationale is
   now an explicit `OrgScope` discriminated mode (`{ kind: "org" }` vs
   `{ kind: "unscopedPlatform" }`) that fails loud (`UnscopedOrgError`) on a missing
   tenant scope rather than degrading to BYOK.
+- **Timeout / retry-cap eradication (multi-PR program).** Owner-BINDING: Tanren
+  must contain NO arbitrary timeouts, retry caps, or wall-clock deadlines — every
+  safety / hang-detection mechanism must be PROGRESS / SIGN-OF-LIFE based (cheap
+  signals: CPU, commits, mtime, tokens, output), with the convergence agent
+  reserved for goal-progress judgment. The complete 3-auditor inventory (the
+  `DEFAULT_TIMEOUT_MS=600_000` root + family, the `MAX_*` caps, the JUDGE-and-KEEP
+  sets), the two replacement primitives (`ActivityWatchdog` + `retryUntilConverged`),
+  the enforcement lint, and the foundation-first wave plan are the coordinating
+  artifact `docs/roadmap/timeout-eradication.md`.
 - **Type-aware lint strictness ratchet — `no-unsafe-type-assertion` tail (~310
   casts).** The type-aware pass (`oxlint --type-aware`, config
   `oxlintrc.typeaware.json`, powered by oxlint-tsgolint/tsgo) is ratcheted
