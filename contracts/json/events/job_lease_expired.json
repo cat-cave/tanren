@@ -13,11 +13,6 @@
     "jobId": {
       "type": "string"
     },
-    "maxAttempts": {
-      "maximum": 9007199254740991,
-      "minimum": -9007199254740991,
-      "type": "integer"
-    },
     "message": {
       "type": "string"
     },
@@ -29,10 +24,9 @@
     "jobId",
     "taskKind",
     "attempts",
-    "maxAttempts",
     "failureKind",
     "message"
   ],
   "type": "object",
-  "x-tanren-schema-id": "tanren.event.job.dead_lettered"
+  "x-tanren-schema-id": "tanren.event.job.lease_expired"
 }

@@ -95,7 +95,7 @@ export const eventTypeNames = [
   "integration.provisioned",
   "integration.rebase",
   "issue.opened",
-  "job.dead_lettered",
+  "job.lease_expired",
   "merge.batch.bisecting",
   "merge.batch.checking",
   "merge.batch.culprit",

@@ -7,9 +7,13 @@ export interface JobEnvelope<TPayload = unknown> {
   taskId?: string;
   taskKind: string;
   payload: TPayload;
+  /**
+   * DIAGNOSTIC re-claim counter: how many times this job has been claimed (incl.
+   * recoveries after a crashed/slow worker let its lease lapse). NOT a give-up
+   * budget — there is no ceiling and it NEVER terminates the job. The doctrine
+   * forbids a fixed attempt cap; a lease-expired job is requeued indefinitely.
+   */
   attempts: number;
-  /** configured re-claim ceiling for this job. */
-  maxAttempts: number;
   // RLS R3b: the owning run's org, stamped on enqueue (job_queue.org_id). The
   // queue stays OUTSIDE RLS, so this is the worker's tenant BOOTSTRAP source —
   // the claim reads it to scope `loadRunExecutionContext` to the job's org
@@ -18,24 +22,27 @@ export interface JobEnvelope<TPayload = unknown> {
   orgId?: string;
 }
 
-export type EnqueueJob<TPayload = unknown> = Omit<JobEnvelope<TPayload>, "id" | "attempts" | "maxAttempts"> & {
+export type EnqueueJob<TPayload = unknown> = Omit<JobEnvelope<TPayload>, "id" | "attempts"> & {
   attempts?: number;
-  maxAttempts?: number;
 };
 
 /** queue lease default: a claimed job's lease lives this long unless renewed. */
 export const DEFAULT_LEASE_MS = 60_000;
-/** retry-budget default: bounded re-claim attempts before dead-lettering. */
-export const DEFAULT_MAX_ATTEMPTS = 5;
 
-/** A job the reaper recovered: either requeued (lease expired, budget left) or dead-lettered. */
+/**
+ * A job the reaper recovered: ALWAYS requeued. A lease-expired `running` job is a
+ * crashed/slow worker (transient), so it is returned to `queued` indefinitely — a
+ * re-claim is recovery, NOT a strike, and the doctrine forbids a fixed attempt cap.
+ * `attempts` is carried as DIAGNOSTIC evidence (the climbing re-claim count) so the
+ * caller can emit a LOUD `job.lease_expired` infra signal — a worker that keeps
+ * crashing is an infra problem to surface, never a job to silently drop.
+ */
 export interface ReapedJob {
   id: string;
   runId?: string;
   taskKind: string;
   attempts: number;
-  maxAttempts: number;
-  outcome: "requeued" | "dead_lettered";
+  outcome: "requeued";
 }
 
 export interface JobQueue<TPayload = unknown> {
@@ -48,16 +55,18 @@ export interface JobQueue<TPayload = unknown> {
   fail(id: string, failure: { kind: string; message: string }): Promise<void>;
   failQueuedForRun(runId: string, failure: { kind: string; message: string }): Promise<void>;
   /**
-   * lease recovery: requeue `running` jobs whose lease has lapsed
-   * (crashed worker). A job that still has retry budget is returned to
-   * `queued`; one that has exhausted its budget is dead-lettered. Returns the
-   * jobs it acted on so the caller can emit `job.dead_lettered` events.
+   * lease recovery: requeue EVERY `running` job whose lease has lapsed (crashed
+   * or slow worker). A lapsed lease is a transient infra event, so the job is
+   * ALWAYS returned to `queued` — requeued indefinitely, never dead-lettered on a
+   * count (the doctrine forbids a fixed attempt cap). Returns the jobs it
+   * requeued so the caller can emit a LOUD `job.lease_expired` infra signal with
+   * the climbing re-claim count as evidence.
    */
   reapExpiredLeases(options?: { now?: Date }): Promise<ReapedJob[]>;
 }
 
 interface FakeJobRow<TPayload> extends JobEnvelope<TPayload> {
-  status: "queued" | "running" | "done" | "failed" | "dead_letter";
+  status: "queued" | "running" | "done" | "failed";
   leasedUntil?: number;
   failureKind?: string;
   failureMessage?: string;
@@ -70,7 +79,6 @@ export class FakeJobQueue<TPayload = unknown> implements JobQueue<TPayload> {
     const envelope: FakeJobRow<TPayload> = {
       ...job,
       attempts: job.attempts ?? 0,
-      maxAttempts: job.maxAttempts ?? DEFAULT_MAX_ATTEMPTS,
       id: `job_${this.jobs.length + 1}`,
       status: "queued" as const,
     };
@@ -135,15 +143,11 @@ export class FakeJobQueue<TPayload = unknown> implements JobQueue<TPayload> {
       if (job.status !== "running" || job.leasedUntil === undefined || job.leasedUntil > now) {
         continue;
       }
-      if (job.attempts >= job.maxAttempts) {
-        job.status = "dead_letter";
-        job.leasedUntil = undefined;
-        reaped.push(reapedFromRow(job, "dead_lettered"));
-      } else {
-        job.status = "queued";
-        job.leasedUntil = undefined;
-        reaped.push(reapedFromRow(job, "requeued"));
-      }
+      // A lapsed lease is a transient crash/slowness: ALWAYS requeue, unbounded.
+      // No attempt-cap dead-letter — recovery is not a strike.
+      job.status = "queued";
+      job.leasedUntil = undefined;
+      reaped.push(reapedFromRow(job, "requeued"));
     }
     return reaped;
   }
@@ -159,19 +163,18 @@ export class PgJobQueue<TPayload = unknown> implements JobQueue<TPayload> {
     // the org thread. job_queue stays OUTSIDE RLS, so this INSERT is unaffected
     // by policies — it is the worker's bootstrap source, not a tenant read.
     const result = await this.pool.query(
-      `INSERT INTO job_queue (run_id, task_id, task_kind, payload, attempts, max_attempts, org_id)
+      `INSERT INTO job_queue (run_id, task_id, task_kind, payload, attempts, org_id)
        VALUES (
-         $1, $2, $3, $4::jsonb, $5, $6,
-         COALESCE($7, (SELECT org_id FROM runs WHERE run_id = $1))
+         $1, $2, $3, $4::jsonb, $5,
+         COALESCE($6, (SELECT org_id FROM runs WHERE run_id = $1))
        )
-       RETURNING id::text, run_id, task_id, task_kind, payload, attempts, max_attempts, org_id`,
+       RETURNING id::text, run_id, task_id, task_kind, payload, attempts, org_id`,
       [
         job.runId ?? null,
         job.taskId ?? null,
         job.taskKind,
         JSON.stringify(job.payload),
         job.attempts ?? 0,
-        job.maxAttempts ?? DEFAULT_MAX_ATTEMPTS,
         job.orgId ?? null,
       ],
     );
@@ -209,7 +212,7 @@ export class PgJobQueue<TPayload = unknown> implements JobQueue<TPayload> {
              heartbeat_at = now(),
              leased_until = now() + ($3 * interval '1 millisecond')
          WHERE id IN (SELECT id FROM next_job)
-         RETURNING id::text, run_id, task_id, task_kind, payload, attempts, max_attempts, org_id`,
+         RETURNING id::text, run_id, task_id, task_kind, payload, attempts, org_id`,
         [taskKind, options?.runId ?? null, leaseMs],
       );
       await client.query("COMMIT");
@@ -258,26 +261,23 @@ export class PgJobQueue<TPayload = unknown> implements JobQueue<TPayload> {
   }
 
   async reapExpiredLeases(options?: { now?: Date }): Promise<ReapedJob[]> {
-    // Single atomic pass: any `running` job whose lease lapsed is either
-    // requeued (budget remaining) or dead-lettered (budget exhausted). The
-    // CASE keeps the decision server-side so a concurrent claim can't slip
-    // between a read and a write.
+    // Single atomic pass: any `running` job whose lease lapsed is a crashed/slow
+    // worker — ALWAYS requeue it (back to `queued`), unbounded. A lapsed lease is
+    // transient recovery, NOT a strike, so there is NO attempt-cap dead-letter
+    // branch (the doctrine forbids a fixed attempt cap). `attempts` is returned as
+    // DIAGNOSTIC evidence so the reaper can emit a LOUD `job.lease_expired` infra
+    // signal — a worker that keeps crashing is an infra problem to surface, never
+    // a job to silently drop. arch-allow: timeout-class (`leased_until`/`now()` is
+    // the LEASE CADENCE — a kept spacing interval, not a give-up budget).
     const now = options?.now;
     const result = await this.pool.query(
       `UPDATE job_queue
-       SET status = CASE WHEN attempts >= max_attempts THEN 'dead_letter' ELSE 'queued' END,
-           leased_until = NULL,
-           started_at = CASE WHEN attempts >= max_attempts THEN started_at ELSE NULL END,
-           ended_at = CASE WHEN attempts >= max_attempts THEN now() ELSE ended_at END,
-           failure_kind = CASE WHEN attempts >= max_attempts THEN COALESCE(failure_kind, 'lease_expired') ELSE failure_kind END,
-           failure_message = CASE
-             WHEN attempts >= max_attempts THEN COALESCE(failure_message, 'retry budget exhausted after lease expiry')
-             ELSE failure_message
-           END
+       SET status = 'queued',
+           leased_until = NULL
        WHERE status = 'running'
          AND leased_until IS NOT NULL
          AND leased_until < ${now === undefined ? "now()" : "$1"}
-       RETURNING id::text, run_id, task_kind, attempts, max_attempts, status`,
+       RETURNING id::text, run_id, task_kind, attempts, status`,
       now === undefined ? [] : [now],
     );
     return result.rows.map((row: ReapRow) => ({
@@ -285,8 +285,7 @@ export class PgJobQueue<TPayload = unknown> implements JobQueue<TPayload> {
       runId: row.run_id ?? undefined,
       taskKind: row.task_kind,
       attempts: row.attempts ?? 0,
-      maxAttempts: row.max_attempts ?? DEFAULT_MAX_ATTEMPTS,
-      outcome: row.status === "dead_letter" ? "dead_lettered" : "requeued",
+      outcome: "requeued" as const,
     }));
   }
 }
@@ -296,7 +295,6 @@ interface ReapRow {
   run_id?: string | null;
   task_kind: string;
   attempts?: number;
-  max_attempts?: number;
   status: string;
 }
 
@@ -306,7 +304,6 @@ function reapedFromRow<TPayload>(job: JobEnvelope<TPayload>, outcome: ReapedJob[
     runId: job.runId,
     taskKind: job.taskKind,
     attempts: job.attempts,
-    maxAttempts: job.maxAttempts,
     outcome,
   };
 }
@@ -325,8 +322,6 @@ function envelopeFromRow<TPayload>(row: {
   taskKind?: string;
   payload: TPayload;
   attempts?: number;
-  max_attempts?: number;
-  maxAttempts?: number;
   org_id?: string | null;
   orgId?: string | null;
 }): JobEnvelope<TPayload> {
@@ -338,7 +333,6 @@ function envelopeFromRow<TPayload>(row: {
     taskKind: row.task_kind ?? row.taskKind ?? "",
     payload: row.payload,
     attempts: row.attempts ?? 0,
-    maxAttempts: row.max_attempts ?? row.maxAttempts ?? DEFAULT_MAX_ATTEMPTS,
     ...(orgId === undefined || orgId === null ? {} : { orgId }),
   };
 }
