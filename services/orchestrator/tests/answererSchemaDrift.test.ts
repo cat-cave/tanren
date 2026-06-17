@@ -54,6 +54,7 @@ describe("answerer JSON Schema drift", () => {
       "convergence",
       "demo",
       "demoRun",
+      "designOracle",
       "forge",
       "review",
       "conflict",

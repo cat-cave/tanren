@@ -11,6 +11,7 @@ import { CONFLICT_ANSWER_SCHEMA_ID, ConflictAnswer } from "./conflict.js";
 import { CONVERGENCE_ANSWER_SCHEMA_ID, ConvergenceAnswer } from "./convergence.js";
 import { DEMO_ANSWER_SCHEMA_ID, DemoAnswer } from "./demo.js";
 import { DEMO_RUN_ANSWER_SCHEMA_ID, DemoRunAnswer } from "./demoRun.js";
+import { DESIGN_ORACLE_ANSWER_SCHEMA_ID, DesignOracleAnswer } from "./designOracle.js";
 import { FORGE_ANSWER_SCHEMA_ID, ForgeAnswer } from "./forge.js";
 import { PLAN_ANSWER_SCHEMA_ID, PlanAnswer } from "./plan.js";
 import { REVIEW_ANSWER_SCHEMA_ID, ReviewAnswer } from "./review.js";
@@ -24,6 +25,7 @@ export type AnswererRole =
   | "convergence"
   | "demo"
   | "demoRun"
+  | "designOracle"
   | "forge"
   | "review"
   | "conflict";
@@ -82,6 +84,12 @@ export const answererSchemaCatalog: Readonly<Record<AnswererRole, AnswererSchema
     schemaId: DEMO_RUN_ANSWER_SCHEMA_ID,
     generatedFile: "demoRun.json",
     zod: DemoRunAnswer,
+  },
+  designOracle: {
+    role: "designOracle",
+    schemaId: DESIGN_ORACLE_ANSWER_SCHEMA_ID,
+    generatedFile: "designOracle.json",
+    zod: DesignOracleAnswer,
   },
   forge: {
     role: "forge",
