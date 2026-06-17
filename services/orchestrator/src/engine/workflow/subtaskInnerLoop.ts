@@ -66,12 +66,17 @@ type OneSubtaskResult =
 // Run a single subtask's WRITER → FAST GATE → CHECKER inner loop, UNBOUNDED while making
 // PROGRESS. A gate fail or a checker incompleteness loops back to the writer IMMEDIATELY
 // (the fast gate runs BEFORE the checker, so a broken tree never burns a checker call),
-// fed the EXACT failing error as steering. The loop continues for as many rounds as the
-// rejection reason OR the produced diff keeps changing (the writer is still working the
-// problem — 1000 → 1 errors is progress at every step). It stops ONLY at a FIXED POINT
-// (the writer reproduces the IDENTICAL diff AND gets the IDENTICAL rejection — no new
-// information), where the residual incompleteness is surfaced as a P0 FINDING that
-// triage/convergence reason over (the intelligent escalation judgment lives there).
+// fed the EXACT failing error as steering. A hard writer failure (crash / TIMEOUT) loops
+// back too — but never as an IDENTICAL re-run: the next attempt carries change-approach
+// steering (commit the partial progress, do the smallest next increment) and the writer's
+// PARTIAL diff is recorded as the work signature, so the apex-v36 "timed out mid-subtask,
+// identical output" loop now reads as a different (informed) attempt or converges. The
+// loop continues for as many rounds as the rejection reason OR the produced diff keeps
+// changing (the writer is still working the problem — 1000 → 1 errors is progress at every
+// step). It stops ONLY at a FIXED POINT (the writer reproduces the IDENTICAL diff AND gets
+// the IDENTICAL rejection — no new information), where the residual incompleteness is
+// surfaced as a P0 FINDING that triage/convergence reason over (the intelligent escalation
+// judgment lives there).
 async function runOneSubtask(args: {
   input: SubtaskLoopInput;
   costCtx: SubtaskCostContext;
@@ -119,13 +124,24 @@ async function runOneSubtask(args: {
       };
     }
     if (writerOutcome.kind === "failed") {
-      // A hard writer failure (crashed / timed out): retry the writer (the diff is
-      // partial). A crash with no usable diff has no work signature — progress keys off
-      // the rejection reason changing. A 2nd identical crash is NOT an instant fixed point
-      // (it may be a transient flake); only once the SAME crash RECURS as a cycle does the
-      // detector surface the residual finding instead of re-driving forever.
-      lastReason = `writer ${writerOutcome.failureKind} mid-subtask`;
-      const stuck = await recordAttemptAndCheckFixedPoint(attempts, lastReason);
+      // A hard writer failure (crashed / timed out). The next attempt must NOT re-run the
+      // IDENTICAL subtask to the IDENTICAL timeout (the apex-v36 "timed out mid-subtask,
+      // identical output" non-convergence) — it must CHANGE APPROACH. So:
+      //   (1) steer the writer to change strategy (`writerFailureReason`): on a TIMEOUT the
+      //       subtask was too large for one call — commit the partial progress it already
+      //       made, narrow to the smallest next increment, and don't restart from scratch;
+      //   (2) record the PARTIAL diff as the work signature so genuine incremental progress
+      //       (a growing partial diff each attempt) reads as progress, while a byte-identical
+      //       partial (the writer making no headway) converges the fixed-point detector to a
+      //       residual finding instead of re-driving forever. An empty partial diff has no
+      //       work signature — progress then keys off the rejection reason changing.
+      lastReason = writerFailureReason(writerOutcome.failureKind);
+      const partial = writerOutcome.writer.diff;
+      const stuck = await recordAttemptAndCheckFixedPoint(
+        attempts,
+        lastReason,
+        partial === "" ? undefined : hashWork(partial),
+      );
       if (stuck !== undefined) return stuck(subtask, iter + 1);
       iter += 1;
       continue;
@@ -259,13 +275,46 @@ export function gateReason(gate: Extract<GateOutcome, { passed: false }>): strin
   const { failure } = gate;
   const exit = failure.exitCode === null ? "no exit code" : `exit ${failure.exitCode}`;
   const header = `gate tier "${failure.tier}" (${failure.when}) failed at step "${failure.failedStep}" with ${exit}`;
-  // Append the failed step's captured output (apex pre-run §7.4): the gate already
-  // captured up to 4KB of the step's stderr/stdout in `outputTail`. Feeding it to the
-  // writer-rework prompt shows the ACTUAL error (the failing type/lint/test message)
-  // so the writer fixes it directly instead of re-running the gate to rediscover it.
-  const failedStep = failure.steps.find((step) => step.name === failure.failedStep) ?? failure.steps.at(-1);
-  const outputTail = failedStep?.outputTail.trim() ?? "";
+  const outputTail = failedStepOutputTail(failure);
   return outputTail === "" ? header : `${header}\nGate output (last lines):\n${outputTail}`;
+}
+
+// The captured stdout/stderr tail of the step that failed the gate (apex pre-run §7.4):
+// the gate runner already captured up to 4KB of the failing step's combined output in
+// `outputTail`. This is the ACTUAL error message (the failing fmt/lint/type/test output,
+// e.g. prettier naming the unformatted files + "Run Prettier with --write to fix") and
+// is the load-bearing rework context: feeding it to the writer lets it fix the named
+// failure directly instead of re-running the gate to rediscover it (the apex-v36
+// identical-output non-convergence). Shared by `gateReason` (the fast-tier writer
+// steering), `mergeGateRejection` (the merge-tier self-heal), AND `gateFindings` (the
+// spec-tier P0 finding), so EVERY gate-rework path feeds the writer the same actionable
+// failure content. Stack-agnostic — the project DECLARES its gate steps in `.tanren/
+// ci.yml`; this surfaces whatever those steps emitted, never a baked-in tool name.
+export function failedStepOutputTail(failure: Extract<GateOutcome, { passed: false }>["failure"]): string {
+  const failedStep = failure.steps.find((step) => step.name === failure.failedStep) ?? failure.steps.at(-1);
+  return failedStep?.outputTail.trim() ?? "";
+}
+
+// Render a hard writer failure (timeout / crash) into rework steering that makes the NEXT
+// attempt DIFFERENT, never an identical re-run to an identical failure (the apex-v36
+// "writer timed out mid-subtask, identical output" non-convergence). A TIMEOUT means the
+// subtask was too large to finish in one writer call — so steer the writer to CHANGE
+// APPROACH: commit the partial progress it already made (so the diff grows attempt over
+// attempt instead of resetting), then do the SMALLEST next increment rather than
+// re-attempting the whole subtask from scratch. A crash gets a plain note (re-run, the
+// detector converges a recurring identical crash). Stack-agnostic — no tool/scope hints
+// baked in; the writer decides the smaller increment from the subtask intent.
+export function writerFailureReason(failureKind: "crashed" | "timeout"): string {
+  if (failureKind === "timeout") {
+    return (
+      "the previous attempt TIMED OUT mid-subtask — the subtask was too large to finish in " +
+      "one writer call. CHANGE APPROACH this time: COMMIT the partial progress you already " +
+      "made, then do the SMALLEST next increment toward the subtask intent (do NOT restart " +
+      "from scratch and do NOT re-attempt the whole subtask at once). Build it up incrementally " +
+      "across attempts so each attempt commits real forward progress before it can time out."
+    );
+  }
+  return "the previous attempt CRASHED mid-subtask before finishing — re-attempt it, committing progress as you go.";
 }
 
 // A standing toolchain instruction prepended to every writer prompt.
@@ -282,10 +331,13 @@ const WRITER_GRADING_INSTRUCTION =
   "How your change will be graded — satisfy these BEFORE you finish: a FAST " +
   "deterministic gate runs first (formatting, lint, typecheck) — RUN it yourself " +
   "(the project's fmt/lint/typecheck commands) and make it pass before you stop, " +
-  "since a fast-gate failure loops straight back to you before any reviewer. Then a " +
-  "CHECKER judges whether your change COMPLETES the subtask intent + every relevant " +
-  "acceptance criterion (leave it complete and self-contained), and an AUDITOR " +
-  "reviews quality/security/perf (write correct, secure, clean code).";
+  "since a fast-gate failure loops straight back to you before any reviewer. A " +
+  "FORMATTING failure is mechanical: run the project's declared format-WRITE step (the " +
+  "one its lifecycle/justfile defines — e.g. its format/fix recipe, NOT just the " +
+  "check) over EVERY file you touched, then re-run the check — never hand back the same " +
+  "unformatted output. Then a CHECKER judges whether your change COMPLETES the subtask " +
+  "intent + every relevant acceptance criterion (leave it complete and self-contained), " +
+  "and an AUDITOR reviews quality/security/perf (write correct, secure, clean code).";
 
 function writerPromptFor(input: SubtaskLoopInput, subtask: PlanSubtask, iter: number, lastReason: string): string {
   const criteria =

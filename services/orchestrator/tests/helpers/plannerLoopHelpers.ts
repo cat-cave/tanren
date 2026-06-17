@@ -235,6 +235,43 @@ export function makeFailingWriter(
   };
 }
 
+// A writer driven by a per-CALL script of outcomes (diff + exitReason). Lets a test
+// assert the inner loop's behavior ACROSS attempts — e.g. a 1st-call TIMEOUT followed by a
+// 2nd-call completion, checking that the 2nd writer prompt carries CHANGED steering (the
+// apex-v36 "don't re-run the identical subtask to another timeout" fix). An absent entry
+// falls back to the last. Records every prompt so the test inspects the rework steering.
+export function makeScriptedWriter(
+  script: ReadonlyArray<{ diff: string; exitReason: WriterResult["exitReason"] }>,
+): WriterAdapter & { calls: Array<{ prompt: string; workspace: string }> } {
+  let index = 0;
+  const calls: Array<{ prompt: string; workspace: string }> = [];
+  return {
+    kind: "writer",
+    cli: "fake",
+    authRef: fakeAuthRef,
+    calls,
+    async runWriter(opts): Promise<WriterResult> {
+      calls.push({ prompt: opts.prompt, workspace: opts.workspace });
+      const entry = script[index] ?? script.at(-1) ?? { diff: "", exitReason: "completed" };
+      index += 1;
+      return {
+        diff: entry.diff,
+        commits: entry.diff.length === 0 ? [] : [{ sha: `sha_${index}`, message: `subtask ${index}` }],
+        exitReason: entry.exitReason,
+        tokenUsage: {
+          inputTokens: 1,
+          cachedInputTokens: 0,
+          cacheCreationTokens: 0,
+          outputTokens: 1,
+          reasoningOutputTokens: 0,
+          totalTokens: 2,
+        },
+        telemetry: { rawEventCount: 1 },
+      };
+    },
+  };
+}
+
 // A deterministic gate stub. `results` is the per-CALL pass/fail sequence; an absent
 // entry falls back to the last. Records every call so tests assert ordering (the fast
 // gate runs BEFORE the checker).
