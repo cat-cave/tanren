@@ -78,12 +78,11 @@ describe("project budget routes", () => {
     expect(body.remainingUsd).toBeNull();
     expect(body.paused).toBe(false);
     expect(body.spentUsd).toBe(0);
-    // The view always names the gated figure (real spend) + carries notional.
-    expect(body.gatedFigure).toBe("real_spend");
+    // The view carries notional alongside real spend (the gated figure is always real).
     expect(body.notionalUsd).toBe(0);
   });
 
-  it("surfaces notional alongside real spend, and names the gated figure (real spend)", async () => {
+  it("surfaces notional alongside real spend (the ceiling always gates real spend)", async () => {
     const { app, pool } = buildHarness();
     // A subscription-style project: NO real spend but a notional (api-equivalent)
     // value lands on the notional axis.
@@ -97,12 +96,11 @@ describe("project budget routes", () => {
     expect(body.paused).toBe(false);
     // But the notional / equivalent figure is surfaced (never called "spend").
     expect(body.notionalUsd).toBe(20);
-    expect(body.gatedFigure).toBe("real_spend");
     // Headroom is measured against the GATED figure (real spend), not notional.
     expect(body.remainingUsd).toBe(50);
   });
 
-  it("accepts quarterly + annual periods and a gatedFigure label without a migration", async () => {
+  it("accepts quarterly + annual periods without a migration", async () => {
     const { app } = buildHarness();
     const q = await putJson(app, "/orgs/org_acme/projects/proj_1/budget", { ceilingUsd: 200, period: "quarterly" });
     expect(q.status).toBe(200);
@@ -111,11 +109,22 @@ describe("project budget routes", () => {
     const a = await putJson(app, "/orgs/org_acme/projects/proj_1/budget", {
       ceilingUsd: 500,
       period: "annual",
-      gatedFigure: "real_spend",
     });
     expect(a.status).toBe(200);
     expect(a.body.period).toBe("annual");
-    expect(a.body.gatedFigure).toBe("real_spend");
+  });
+
+  it("REJECTS the deleted `gatedFigure` knob loudly (strict schema) — real-spend is the only doctrine", async () => {
+    const { app } = buildHarness();
+    // The gate ALWAYS sums real spend; there is no "which figure" mode to configure.
+    // A request carrying the removed field must fail loud, never silently no-op.
+    const res = await putJson(app, "/orgs/org_acme/projects/proj_1/budget", {
+      ceilingUsd: 500,
+      period: "annual",
+      gatedFigure: "real_spend",
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("invalid_budget");
   });
 
   it("sets a project budget and the read-back reflects it", async () => {

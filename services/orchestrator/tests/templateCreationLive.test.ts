@@ -1,16 +1,12 @@
 // Tests for the LIVE template-creation seams (wave 4) + the selection→creation
 // wiring — the real, mountable capability:
-//   1. LIVE RESEARCH (`wrapProviderResearcher`): model output → TemplateResearch;
-//      grounding flows through; an ungrounded result fails LOUD.
-//   2. LIVE BUILD-DRIVER (`buildRunLoopBuildDriver`): the wiring SHAPE (walk → poll
-//      convergence → resolve → allocate → clone → bootstrap → handle) + the
-//      convergence policy — NO whole-build wall-clock deadline (polls indefinitely).
+//   1. LIVE RESEARCH (`wrapProviderResearcher`): model output → TemplateResearch.
+//   2. LIVE BUILD-DRIVER (`buildRunLoopBuildDriver`): the wiring SHAPE + the convergence
+//      policy — NO whole-build wall-clock deadline (polls indefinitely).
 //   3. LIVE AUDITOR (`buildTemplateAuditor`): counts `fail`-severity findings.
 //   4. SELECTION no-match → CREATION (`selectTemplate` + `createForNoMatch`): no
 //      validated template → creation runs → SEED from the freshly-created one.
-//
-// The model/runner/DB are all SEAMS (a fake adapter, fake sub-seams, an in-memory
-// registry) so the wiring is proven without a live model or runner.
+// The model/runner/DB are all SEAMS so the wiring is proven without a live model.
 
 import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_CI_CONFIG } from "../src/engine/ci/index.js";
@@ -376,42 +372,47 @@ describe("buildCreateForNoMatch — synchronous create-then-seed, owner-threaded
     repoOwner: "cat-cave",
   };
 
-  it("an EXISTING validated match seeds THIS derive synchronously (no creation)", async () => {
-    const { pool } = poolReturning([
-      {
-        id: "template_existing",
-        org_id: "org_acme",
-        repo_ref: "cat-cave/tanren-template-ts-next",
-        status: "validated",
-        channel: "lts",
-        manifest: {
-          version: 1,
-          stack: "ts-pnpm",
-          channel: "lts",
-          templateVersion: "1.0.0",
-          provenance: { researchSources: ["https://nextjs.org"] },
-          capabilities: {
-            runtime: "node",
-            packageManager: "pnpm",
-            gates: ["tier-1"],
-            bdd: true,
-            mutation: false,
-            junit: true,
-          },
-          validationProof: {
-            positiveControlsPassed: true,
-            negativeControls: { typecheck: "proven", lint: "proven", test: "proven", mutation: "n/a" },
-            auditorClean: true,
-            validatedAt: "2026-06-01T00:00:00.000Z",
-            validatedSha: "abc1234",
-          },
-        },
+  // A `validated` row whose proof is `ageDays` old vs real now (the seam re-checks
+  // freshness against Date.now()): fresh seed vs STALE fall-through (Fix 2).
+  const caps = { runtime: "node", packageManager: "pnpm", gates: ["tier-1"], bdd: true, mutation: false, junit: true };
+  const validatedRow = (id: string, repoRef: string, ageDays: number) => ({
+    id,
+    org_id: "org_acme",
+    repo_ref: repoRef,
+    status: "validated",
+    channel: "lts",
+    manifest: {
+      version: 1,
+      stack: "ts-pnpm",
+      channel: "lts",
+      templateVersion: "1.0.0",
+      provenance: { researchSources: ["https://nextjs.org"] },
+      capabilities: caps,
+      validationProof: {
+        positiveControlsPassed: true,
+        negativeControls: { typecheck: "proven", lint: "proven", test: "proven", mutation: "n/a" },
+        auditorClean: true,
+        validatedAt: new Date(Date.now() - ageDays * 24 * 60 * 60 * 1000).toISOString(),
+        validatedSha: "abc1234",
       },
-    ]);
-    const seam = buildCreateForNoMatch({ ...deps, pool }, ctx);
-    const selected = await seam(lifecycle);
+    },
+  });
+
+  it("an EXISTING fresh validated match seeds THIS derive synchronously (no creation)", async () => {
+    const { pool } = poolReturning([validatedRow("template_existing", "cat-cave/tanren-template-ts-next", 1)]);
+    const selected = await buildCreateForNoMatch({ ...deps, pool }, ctx)(lifecycle);
     expect(selected?.templateRef).toBe("template_existing");
     expect(selected?.repoRef).toBe("cat-cave/tanren-template-ts-next");
+  });
+
+  it("PROOF-FRESHNESS: a STALE (60-day) validated match does NOT seed — falls THROUGH to creation (Fix 2)", async () => {
+    // `selectTemplate` rejects a >30-day proof; the no-match seam's existing-match check
+    // must too — falling THROUGH (drives the un-mockable build infra → THROWS) rather
+    // than returning the stale template as a seed (a seed would resolve, not throw).
+    const { pool } = poolReturning([validatedRow("template_stale", "cat-cave/tanren-template-stale", 60)]);
+    await expect(buildCreateForNoMatch({ ...deps, pool }, ctx)(lifecycle)).rejects.toThrow(
+      /is not a function|query|research/u,
+    );
   });
 
   it("NO existing match → runs creation SYNCHRONOUSLY (gates the scaffold; never fire-and-forget)", async () => {
@@ -422,11 +423,9 @@ describe("buildCreateForNoMatch — synchronous create-then-seed, owner-threaded
     // creation drives into the (un-mockable) research/build infra and THROWS — proving
     // the seam awaits creation synchronously and PROPAGATES the failure (so selection
     // halts loud), rather than detaching and resolving undefined.
-    const seam = buildCreateForNoMatch({ ...deps, pool }, ctx);
-    // The loosely-mocked research/build infra throws as soon as creation drives into it
-    // (here: the stub pool has no real `query`) — proving the seam awaited creation
-    // synchronously and propagated, rather than detaching + resolving undefined.
-    await expect(seam(lifecycle)).rejects.toThrow(/is not a function|query|research/u);
+    await expect(buildCreateForNoMatch({ ...deps, pool }, ctx)(lifecycle)).rejects.toThrow(
+      /is not a function|query|research/u,
+    );
   });
 });
 

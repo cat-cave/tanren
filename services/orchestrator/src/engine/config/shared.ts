@@ -183,21 +183,6 @@ export type BudgetPeriod = z.infer<typeof BudgetPeriod>;
 
 export const DEFAULT_BUDGET_PERIOD: BudgetPeriod = "monthly";
 
-// The FIGURE a budget ceiling gates. Vocabulary discipline (FOCUS-aligned):
-//   - `real_spend`  — REAL money out the door (FOCUS BilledCost; `cost_usd`). The
-//                     ONLY figure the DagWalker's gate sums today, and the default.
-//   - `notional`    — the API-equivalent / list-priced ESTIMATE (FOCUS ListCost;
-//                     `notional_cost_usd`). NOT real money — never called "spend".
-//                     Reserved for a future gate mode; the label is surfaced now so
-//                     a read never has to guess which figure the ceiling caps.
-// Additive + defaulted: an absent value resolves to `real_spend` (today's behavior,
-// byte-identical). The gate implementation still sums REAL spend regardless — this
-// names the gated figure honestly; it does not silently change the gate.
-export const BudgetGatedFigure = z.enum(["real_spend", "notional"]);
-export type BudgetGatedFigure = z.infer<typeof BudgetGatedFigure>;
-
-export const DEFAULT_BUDGET_GATED_FIGURE: BudgetGatedFigure = "real_spend";
-
 // The per-project/org DOLLAR BUDGET CEILING — a governed SETTING (lives in
 // project/org config JSON), never an env var. When the project's cumulative
 // spend over `period` reaches `ceilingUsd`, the DagWalker STOPS enqueuing new
@@ -208,14 +193,15 @@ export const DEFAULT_BUDGET_GATED_FIGURE: BudgetGatedFigure = "real_spend";
 //
 // Optional + additive everywhere it is referenced: an absent budget means NO
 // ceiling (unlimited — today's behavior, byte-identical). `ceilingUsd` is a
-// non-negative dollar amount; `period` defaults to `monthly`; `gatedFigure`
-// names which figure the ceiling caps and defaults to `real_spend` (the figure
-// the gate actually sums).
+// non-negative dollar amount; `period` defaults to `monthly`. The gate ALWAYS sums
+// REAL spend (`cost_records.cost_usd`) — that is the doctrine (budgets account for
+// real money out the door, never notional/tokens), so there is no "which figure"
+// knob to configure; the notional figure is SURFACED for observability but never
+// gated.
 export const ProjectBudget = z
   .object({
     ceilingUsd: z.number().nonnegative(),
     period: BudgetPeriod.default(DEFAULT_BUDGET_PERIOD),
-    gatedFigure: BudgetGatedFigure.default(DEFAULT_BUDGET_GATED_FIGURE),
   })
   .strict();
 export type ProjectBudget = z.infer<typeof ProjectBudget>;

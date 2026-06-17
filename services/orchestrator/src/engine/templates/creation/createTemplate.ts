@@ -265,7 +265,7 @@ async function buildValidatePublish(
   // cannot mask a validation result.
   let proof: TemplateValidationProof;
   try {
-    proof = await validateBuilt(deps, request, research, built);
+    proof = await validateBuilt(deps, request, research, built, derived.projectId);
   } finally {
     await built.release();
   }
@@ -352,6 +352,7 @@ async function validateBuilt(
   request: TemplateCreationRequest,
   research: TemplateResearch,
   built: BuiltTemplate,
+  projectId: string,
 ): Promise<TemplateValidationProof> {
   const negativeControls = buildNegativeControlPlan(
     research.tooling.mutation ? { mutationStep: research.tooling.mutationStep ?? "just mutation" } : {},
@@ -368,10 +369,27 @@ async function validateBuilt(
     validatedSha: built.builtSha,
     now: deps.now,
     timeoutMs: deps.timeoutMs,
-    // The harness narrates through the run's event sink; the build driver owns the
-    // run, so positive/negative gate runs land in its timeline. A project-scoped
-    // sink is enough for creation (no per-run wake needed for the harness narration).
-    appendEvent: async () => {},
+    // OBSERVABILITY (Fix 4): the harness runs the REAL gate runner, which emits the
+    // per-gate `gate.*` events (the historically apex-halting "which control failed?"
+    // path). A no-op sink (`async () => {}`) SILENTLY SWALLOWS them — the harness
+    // contract warns against exactly that. Narrate through a PROJECT-SCOPED sink onto
+    // the build project's timeline so the positive/negative gate runs are observable.
+    // Project-scoped (no run id) is correct here: the harness narration needs no
+    // per-run SSE wake, and an append failure must not fail the build, so it is
+    // best-effort (logged, swallowed) — never a thrown event-store error that masks
+    // the validation result.
+    appendEvent: async (eventType, payload, taskId) => {
+      try {
+        await deps.events.append({
+          projectId,
+          eventType,
+          payload,
+          ...(taskId === undefined ? {} : { taskId }),
+        });
+      } catch (error) {
+        log.warn("failed to append harness gate event (validation continues)", { projectId, eventType }, error);
+      }
+    },
   });
 }
 

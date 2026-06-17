@@ -20,7 +20,7 @@
 
 import { runWithOrgScope, runWithSystemScope } from "@tanren/db";
 import type pg from "pg";
-import { DEFAULT_BUDGET_GATED_FIGURE, DEFAULT_BUDGET_PERIOD, type BudgetPeriod } from "../config/index.js";
+import { DEFAULT_BUDGET_PERIOD, type BudgetPeriod } from "../config/index.js";
 import { migrateOrgConfig } from "../config/orgConfig.js";
 import { migrateProjectConfig } from "../config/projectConfig.js";
 import type { ProjectBudget } from "../config/shared.js";
@@ -85,7 +85,6 @@ export class PgBudgetGate implements BudgetGate {
         period: DEFAULT_BUDGET_PERIOD,
         spentUsd: 0,
         notionalUsd: 0,
-        gatedFigure: DEFAULT_BUDGET_GATED_FIGURE,
       };
     }
     const orgConfig = await runWithSystemScope(this.pool, async (client) => {
@@ -104,7 +103,6 @@ export class PgBudgetGate implements BudgetGate {
         period: DEFAULT_BUDGET_PERIOD,
         spentUsd: 0,
         notionalUsd: 0,
-        gatedFigure: DEFAULT_BUDGET_GATED_FIGURE,
         failClosed: "unparseable_config",
       };
     }
@@ -116,7 +114,6 @@ export class PgBudgetGate implements BudgetGate {
         period: DEFAULT_BUDGET_PERIOD,
         spentUsd: 0,
         notionalUsd: 0,
-        gatedFigure: DEFAULT_BUDGET_GATED_FIGURE,
       };
     }
 
@@ -134,7 +131,6 @@ export class PgBudgetGate implements BudgetGate {
         period: budget.period,
         spentUsd,
         notionalUsd,
-        gatedFigure: budget.gatedFigure,
         failClosed: "unpriced_spend",
       };
     }
@@ -143,7 +139,6 @@ export class PgBudgetGate implements BudgetGate {
       period: budget.period,
       spentUsd,
       notionalUsd,
-      gatedFigure: budget.gatedFigure,
     };
   }
 

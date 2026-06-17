@@ -232,6 +232,15 @@ describe("createTemplate — VALID template publishes (the happy path)", () => {
     expect(result.template.manifest.capabilities.gates).toContain("tier-1");
     expect(result.template.manifest.capabilities.gates).toContain("tier-3");
 
+    // OBSERVABILITY (Fix 4): the validation harness runs the REAL gate runner, whose
+    // per-gate `gate.*` events must land on the build project's timeline — NOT be
+    // swallowed by a no-op sink. Assert the harness narrated `gate.*` events through the
+    // real project-scoped sink (the positive-control + negative-control gate runs).
+    const gateEvents = events.appended.filter((e) => e.eventType.startsWith("gate."));
+    expect(gateEvents.length).toBeGreaterThan(0);
+    expect(gateEvents.every((e) => e.projectId === "project_tmpl")).toBe(true);
+    expect(events.appended.some((e) => e.eventType === "gate.started")).toBe(true);
+
     // The template.registered event was emitted with the run/project context.
     const registered = events.appended.find((e) => e.eventType === "template.registered");
     expect(registered).toMatchObject({

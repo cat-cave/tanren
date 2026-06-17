@@ -12,6 +12,7 @@
 // EITHER the query (to seed) OR this hook (to create) without circular wiring.
 
 import { TemplateStore, type Template, type TemplateCapabilityQuery } from "../../repositories/templates.js";
+import { isProofFresh } from "../../forge/interview/templateSelection.js";
 import { createTemplate, type CreateTemplateDeps, type CreateTemplateResult } from "./createTemplate.js";
 import type { TemplateCreationRequest } from "./research.js";
 
@@ -37,10 +38,19 @@ function queryFor(request: TemplateCreationRequest): TemplateCapabilityQuery {
 }
 
 // The no-match auto-trigger. Query the registry for a VALIDATED template matching
-// the request's capabilities; if one exists, return it (selection seeds — no
-// creation). If NONE matches, run the creation meta-flow and return the new
-// template. Org-scoped: the query + the creation both run under `deps.actor`'s
-// org scope (RLS bounds the query to the org's own + the official catalogue).
+// the request's capabilities; if one with a FRESH proof exists, return it (selection
+// seeds — no creation). If NONE matches (or every match is STALE), run the creation
+// meta-flow and return the new template. Org-scoped: the query + the creation both run
+// under `deps.actor`'s org scope (RLS bounds the query to the org's own + the official
+// catalogue).
+//
+// PROOF-FRESHNESS PARITY with `selectTemplate` (templateSelection.ts): the registry
+// `statuses` filter alone does NOT enforce the 30-day freshness re-check, so a
+// `validated`-status template whose proof has gone STALE (>30 days) would otherwise be
+// re-seeded here — exactly the stale seed `selectTemplate` rejects at its decision
+// boundary. We apply `isProofFresh` so a stale match falls THROUGH to creation (which
+// publishes a fresh proof), never seeds. `deps.now()` is the SAME clock the rest of the
+// creation flow uses (deterministic in tests).
 //
 // A creation that FAILS validation propagates LOUD (TemplateValidationFailedError
 // from `createTemplate`) — the no-match path never returns a degraded template.
@@ -48,8 +58,9 @@ export async function maybeCreateTemplateForNoMatch(
   deps: CreateTemplateDeps,
   request: TemplateCreationRequest,
 ): Promise<NoMatchDecision> {
+  const now = deps.now().getTime();
   const matches = await TemplateStore.listByCapabilities(deps.pool, queryFor(request), { kind: "operator" });
-  const existing = matches[0];
+  const existing = matches.find((t) => isProofFresh(t.manifest.validationProof, now));
   if (existing !== undefined) {
     return { created: false, template: existing };
   }

@@ -38,13 +38,15 @@ import { buildLiveTemplateBuildRecovery } from "../../engine/templates/creation/
 import { buildCreationUpgrade } from "../../engine/templates/creation/creationUpgrade.js";
 import { resolveConvergedProjectFacts } from "../../engine/templates/creation/convergedFacts.js";
 import { buildTemplateAuditor } from "../../engine/templates/creation/liveAuditor.js";
-import { maybeCreateTemplateForNoMatch, type CreateTemplateDeps } from "../../engine/templates/index.js";
-import { TemplateStore } from "../../engine/repositories/index.js";
 import {
   createTemplate,
+  isProofFresh,
+  maybeCreateTemplateForNoMatch,
+  type CreateTemplateDeps,
   type TemplateCreationRequest,
   type CreateTemplateResult,
 } from "../../engine/templates/index.js";
+import { TemplateStore } from "../../engine/repositories/index.js";
 import type { SelectedTemplate, TemplateRegistryQuery } from "../../engine/forge/interview/templateSelection.js";
 import type { CaptureLifecycle } from "../../engine/forge/interview/types.js";
 import type { CreateTemplateFlow } from "./index.js";
@@ -218,8 +220,9 @@ export function buildCreateTemplateFlow(deps: CreateTemplateFlowDeps): CreateTem
 //
 // SYNCHRONOUS CREATE-THEN-SEED (the doctrine cutover — replaces the deleted
 // async-fire-and-forget bypass): template creation drives a real build to convergence
-// under a 60-MINUTE budget — and the project scaffold GATES on it. The seam runs to
-// completion and returns a SEED:
+// — and the project scaffold GATES on it. There is NO whole-build wall-clock deadline
+// (a build runs until it converges or genuinely deadlocks; only PER-step timeouts
+// bound a hang). The seam runs to completion and returns a SEED:
 //   1. FAST existing-match check (a query) — a pre-existing validated/official match
 //      seeds THIS derive immediately (the steady-state path, no build).
 //   2. On NO match, run the creation meta-flow SYNCHRONOUSLY
@@ -302,13 +305,22 @@ export function buildCreateForNoMatch(
 // The SYNCHRONOUS existing-match check the no-match seam runs before creation — the
 // SAME capability query the no-match hook uses internally, lifted out so a registry
 // HIT seeds THIS derive without ever triggering a build. Returns the `SelectedTemplate`
-// to seed from, or `undefined` (no existing validated match → just-in-time creation).
-// Org-scoped by `deps.pool` (the request-scoped pool), so RLS bounds the candidates.
+// to seed from, or `undefined` (no existing FRESH validated match → just-in-time
+// creation). Org-scoped by `deps.pool` (the request-scoped pool), so RLS bounds the
+// candidates.
+//
+// PROOF-FRESHNESS PARITY with `selectTemplate` (templateSelection.ts): the registry
+// `statuses` filter does NOT enforce the 30-day freshness re-check, so a `validated`-
+// status template whose proof has gone STALE (>30 days) would otherwise be re-seeded
+// here — the exact stale seed `selectTemplate` rejects at its decision boundary. We
+// apply `isProofFresh` so a stale match falls THROUGH to creation (which publishes a
+// fresh proof), never seeds off a stale template.
 async function findExistingValidatedTemplate(
   deps: CreateTemplateFlowDeps,
   _ctx: { orgId: string; actor: ActorContext },
   request: TemplateCreationRequest,
 ): Promise<SelectedTemplate | undefined> {
+  const now = Date.now();
   const matches = await TemplateStore.listByCapabilities(
     deps.pool,
     {
@@ -320,7 +332,7 @@ async function findExistingValidatedTemplate(
     },
     { kind: "operator" },
   );
-  const template = matches[0];
+  const template = matches.find((t) => isProofFresh(t.manifest.validationProof, now));
   if (template === undefined) return undefined;
   const proof = template.manifest.validationProof;
   if (proof === null) return undefined;
