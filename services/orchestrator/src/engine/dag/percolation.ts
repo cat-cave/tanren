@@ -40,6 +40,7 @@ import {
 import { SpecNotRunnableError } from "../workflow/projectSpecErrors.js";
 import { BaseShiftHeldError } from "./baseShiftCoordinator.js";
 import { HeldReDriveBackoff } from "./heldReDriveBackoff.js";
+import { DeferredPercolationDedup } from "./deferredPercolationDedup.js";
 import { createLogger } from "../observability/logger.js";
 
 const log = createLogger("change-percolation");
@@ -108,6 +109,18 @@ export interface PercolationCoordinatorDeps {
    * (clock control); a default in-memory instance is used when absent.
    */
   heldBackoff?: HeldReDriveBackoff;
+  /**
+   * Per-spec STATE-TRANSITION gate for the `percolation_deferred` emit (the apex-v35
+   * deploy/percolation hot-loop fix). A lazy/deferred dependent re-emitted
+   * `percolation_deferred` (with a `runId`) on EVERY pass — the append fires a `tanren_run`
+   * NOTIFY → re-wakes the walker → re-percolates → re-emits, a self-feeding hot-loop (1030
+   * events in seconds in the live run). This gate emits ONLY on a state transition (the
+   * deferred (ancestor, pending SHA) changed from the last one emitted for the spec); an
+   * unchanged deferred state is already on the timeline, so it is suppressed. A genuine new
+   * lazy change still re-emits. Injectable for tests; a default in-memory instance is used
+   * when absent.
+   */
+  deferredDedup?: DeferredPercolationDedup;
 }
 
 function emptyResult(projectId: string): PercolationPassResult {
@@ -136,9 +149,11 @@ function emptyResult(projectId: string): PercolationPassResult {
  */
 export class PercolatingCoordinator implements ChangePercolationCoordinator {
   private readonly heldBackoff: HeldReDriveBackoff;
+  private readonly deferredDedup: DeferredPercolationDedup;
 
   constructor(private readonly deps: PercolationCoordinatorDeps) {
     this.heldBackoff = deps.heldBackoff ?? new HeldReDriveBackoff();
+    this.deferredDedup = deps.deferredDedup ?? new DeferredPercolationDedup();
   }
 
   async percolate(projectId: string): Promise<PercolationPassResult> {
@@ -170,6 +185,9 @@ export class PercolatingCoordinator implements ChangePercolationCoordinator {
             consecutiveHolds: holds,
             nextReDriveInMs: delayMs,
           });
+          // Held (not lazily deferred) — drop any deferred-emit marker so a later return to
+          // the deferred state re-emits once.
+          this.deferredDedup.clear(dependent.specId);
           result.held.push(dependent.specId);
           continue;
         }
@@ -198,6 +216,9 @@ export class PercolatingCoordinator implements ChangePercolationCoordinator {
     // later genuine hold starts the curve fresh.
     if (dependent.pending !== undefined) {
       this.heldBackoff.clear(dependent.specId);
+      // A spec in SETTLE (mid-absorb) is no longer in the lazy-deferred state — drop any
+      // deferred-emit marker so a later return to deferred re-emits once.
+      this.deferredDedup.clear(dependent.specId);
       await this.settle(projectId, dependent, dependent.pending, result);
       return;
     }
@@ -214,6 +235,9 @@ export class PercolatingCoordinator implements ChangePercolationCoordinator {
         remainingMs: this.heldBackoff.remainingMs(dependent.specId),
       });
       result.held.push(dependent.specId);
+      // Held (not lazily deferred) this pass — drop any deferred-emit marker so a later
+      // RETURN to the deferred state re-emits once (a genuine new transition).
+      this.deferredDedup.clear(dependent.specId);
       return;
     }
     // PHASE 2 — detect a new change.
@@ -324,8 +348,9 @@ export class PercolatingCoordinator implements ChangePercolationCoordinator {
               status: error.status,
             },
           );
-          // Terminal/moot — not held; clear any backoff.
+          // Terminal/moot — not held; clear any backoff + deferred-emit marker.
           this.heldBackoff.clear(dependent.specId);
+          this.deferredDedup.clear(dependent.specId);
           result.skipped.push(dependent.specId);
           return;
         }
@@ -335,7 +360,9 @@ export class PercolatingCoordinator implements ChangePercolationCoordinator {
         // A REAL re-execution is now in flight; it settles (absorbs/replans) on a
         // later pass once its gate+checker+auditor terminate. Not absorbed here. NOT held
         // this pass — clear any backoff so a later genuine hold starts the curve fresh.
+        // Not lazily deferred — drop any deferred-emit marker too.
         this.heldBackoff.clear(dependent.specId);
+        this.deferredDedup.clear(dependent.specId);
         result.reexecuting.push(dependent.specId);
       } else {
         // held: a never-discard base-shift hold surfaced as a structured kick-off result
@@ -349,6 +376,9 @@ export class PercolatingCoordinator implements ChangePercolationCoordinator {
           consecutiveHolds: holds,
           nextReDriveInMs: delayMs,
         });
+        // Held (not lazily deferred) — drop any deferred-emit marker so a later return to
+        // the deferred state re-emits once.
+        this.deferredDedup.clear(dependent.specId);
         result.held.push(dependent.specId);
       }
       return;
@@ -356,14 +386,29 @@ export class PercolatingCoordinator implements ChangePercolationCoordinator {
 
     const lazy = decisions.find((d) => d.promptness === "lazy");
     if (lazy !== undefined && lazy.lazySeverity !== undefined) {
-      await this.deps.events.emitPercolationDeferred({
-        projectId,
-        specId: dependent.specId,
-        runId: dependent.runId,
-        ancestorSpecId: lazy.ancestorSpecId,
-        pendingAncestorSha: lazy.toSha,
-        severity: lazy.lazySeverity,
-      });
+      // STATE-TRANSITION gate (the apex-v35 hot-loop fix): emit `percolation_deferred` ONLY
+      // when the deferred (ancestor, pending SHA) CHANGED from the last one emitted for this
+      // spec. The emit carries a `runId`, so an append fires a `tanren_run` NOTIFY that
+      // re-wakes the walker → re-percolates → would re-emit the SAME deferred state forever
+      // (the 1030-events-in-seconds live hot-loop). An unchanged deferred state is already on
+      // the timeline; suppress the re-emit. A GENUINE new lazy change (different ancestor /
+      // new pending SHA) is a transition and DOES re-emit — the dependent stays in `deferred`
+      // either way (the lazy state is unchanged), the only difference is the redundant emit.
+      if (
+        this.deferredDedup.shouldEmit(dependent.specId, {
+          ancestorSpecId: lazy.ancestorSpecId,
+          pendingAncestorSha: lazy.toSha,
+        })
+      ) {
+        await this.deps.events.emitPercolationDeferred({
+          projectId,
+          specId: dependent.specId,
+          runId: dependent.runId,
+          ancestorSpecId: lazy.ancestorSpecId,
+          pendingAncestorSha: lazy.toSha,
+          severity: lazy.lazySeverity,
+        });
+      }
       // Deferred (lazy) — not held this pass; clear any backoff.
       this.heldBackoff.clear(dependent.specId);
       result.deferred.push(dependent.specId);
@@ -371,8 +416,10 @@ export class PercolatingCoordinator implements ChangePercolationCoordinator {
     }
 
     // No actionable change — every ancestor's live SHA still matches what the
-    // dependent re-gated clean against (the termination key). Not held; clear backoff.
+    // dependent re-gated clean against (the termination key). Not held / not deferred;
+    // clear both the backoff and the deferred-emit marker.
     this.heldBackoff.clear(dependent.specId);
+    this.deferredDedup.clear(dependent.specId);
     result.unchanged.push(dependent.specId);
   }
 }
