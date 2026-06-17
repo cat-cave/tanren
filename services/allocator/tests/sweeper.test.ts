@@ -46,15 +46,26 @@ class NoopDocker implements DockerEngineClient {
 const TERMINAL = new Set(["completed", "failed", "halted", "cancelled"]);
 
 /**
- * In-memory store mirroring the PgRunnerStore stuck-state classification: a runner
- * is stuck iff (a) its owning run is terminal, (b) it is past the TTL threshold, or
- * (c) it is run-less AND past the grace threshold. A healthy in-flight runner (run
- * non-terminal, within TTL, claimed) matches none and is never returned.
+ * In-memory store mirroring the PgRunnerStore SIGN-OF-LIFE stuck-state
+ * classification (NOT wall-clock based): a runner is stuck iff
+ *  (a) `terminal_run`   — its owning run is terminal, or
+ *  (b) `lease_lapsed`   — its owning run is non-terminal but has NO live job lease
+ *      (the worker stopped heartbeating → dead driver) AND the runner is past the
+ *      allocate→first-heartbeat grace window, or
+ *  (c) `unclaimed_grace` — it is run-less AND past the grace window.
+ * A healthy in-flight runner (run non-terminal AND a live job lease) matches none
+ * and is NEVER returned, no matter how long it has been running.
  */
 class MemoryStore implements RunnerStore {
   readonly records: RunnerRecord[] = [];
   /** runId → run status, for the terminal-run classification. */
   readonly runStatus = new Map<string, string>();
+  /**
+   * runId → the run's job lease deadline (a live `running` job's `leased_until`, or a
+   * `queued`/`claimed` job represented as `Infinity`). ABSENT (or in the past at sweep
+   * time) means the worker stopped heartbeating — the dead-driver / lease-lapsed signal.
+   */
+  readonly leaseUntil = new Map<string, number>();
   readonly swept: SweptAudit[] = [];
 
   async insert(record: RunnerRecord): Promise<void> {
@@ -73,20 +84,22 @@ class MemoryStore implements RunnerStore {
   async findActive(runnerId: string): Promise<RunnerRecord | undefined> {
     return this.records.find((r) => r.runnerId === runnerId && !r.released);
   }
-  async listActiveOlderThan(threshold: Date): Promise<RunnerRecord[]> {
-    return this.records.filter((r) => !r.released && r.createdAt < threshold);
-  }
   async listStuck(thresholds: StuckThresholds): Promise<StuckRunner[]> {
+    const nowMs = thresholds.now.getTime();
     const stuck: StuckRunner[] = [];
     for (const r of this.records) {
       if (r.released) continue;
       const runTerminal = r.runId !== null && TERMINAL.has(this.runStatus.get(r.runId) ?? "");
-      const pastTtl = r.createdAt < thresholds.ttlThreshold;
-      const wedged = r.runId === null && r.createdAt < thresholds.graceThreshold;
+      // Sign-of-life: a live lease is one still in the future at the sweep instant.
+      // Absent or already-elapsed = the worker stopped heartbeating (dead driver).
+      const liveLease = r.runId !== null && (this.leaseUntil.get(r.runId) ?? -Infinity) >= nowMs;
+      const pastGrace = r.createdAt < thresholds.graceThreshold;
+      const leaseLapsed = r.runId !== null && !runTerminal && !liveLease && pastGrace;
+      const wedged = r.runId === null && pastGrace;
       if (runTerminal) {
         stuck.push({ record: r, reason: "terminal_run" });
-      } else if (pastTtl) {
-        stuck.push({ record: r, reason: "ttl_exceeded" });
+      } else if (leaseLapsed) {
+        stuck.push({ record: r, reason: "lease_lapsed" });
       } else if (wedged) {
         stuck.push({ record: r, reason: "unclaimed_grace" });
       }
@@ -121,7 +134,6 @@ function buildLifecycle(docker: DockerEngineClient, store: RunnerStore, nowMs: (
     networkName: "tanren_default",
     sshHostnameForOrchestrator: (container) => container,
     sleep: () => Promise.resolve(),
-    hostKeyReadAttempts: 1,
     hostKeyReadDelayMs: 0,
     now: () => new Date(nowMs()),
   });
@@ -139,7 +151,6 @@ describe("RunnerSweeper", () => {
     const sweeper = new RunnerSweeper({
       lifecycle,
       recordSwept: (audit) => store.recordSwept(audit as SweptAudit),
-      maxRunHours: 6,
       unclaimedGraceMs: 900_000,
     });
 
@@ -154,29 +165,56 @@ describe("RunnerSweeper", () => {
     expect(again.reclaimed).toEqual([]);
   });
 
-  it("reclaims a runner past the run-hours TTL ceiling", async () => {
+  it("reclaims a runner whose owning run's worker stopped heartbeating (lease lapsed → dead driver)", async () => {
     let nowMs = 1_700_000_000_000;
     const store = new MemoryStore();
     const lifecycle = buildLifecycle(new NoopDocker(), store, () => nowMs);
-    // Allocated through the real lifecycle, then time advances past the 6h ceiling.
+    // Allocated through the real lifecycle; the run is non-terminal but its worker's
+    // last job lease expired (it crashed/stopped renewing) — abandonment by SIGN OF
+    // LIFE, not by age (the runner is only ~20min old, far under the old 6h cap).
     await lifecycle.allocate({ runId: "run_a", projectId: "proj_a", orgId: "org_test", runnerImage: "img" });
-    // Still non-terminal — only the TTL ceiling reclaims it.
     store.runStatus.set("run_a", "running");
-    nowMs += 7 * 60 * 60 * 1000;
+    // The lease was good for 5 more minutes, but 20min then pass with no renewal —
+    // the worker stopped heartbeating, so the lease has lapsed (dead driver).
+    store.leaseUntil.set("run_a", nowMs + 5 * 60 * 1000);
+    nowMs += 20 * 60 * 1000;
 
     const sweeper = new RunnerSweeper({
       lifecycle,
       recordSwept: (audit) => store.recordSwept(audit as SweptAudit),
-      maxRunHours: 6,
-      unclaimedGraceMs: 900_000,
+      unclaimedGraceMs: 15 * 60 * 1000,
     });
 
     const summary = await sweeper.tick();
-    expect(summary.reclaimed.map((s) => [s.record.runnerId, s.reason])).toEqual([["runner_run_a", "ttl_exceeded"]]);
-    expect(summary.countsByReason).toEqual({ ttl_exceeded: 1 });
+    expect(summary.reclaimed.map((s) => [s.record.runnerId, s.reason])).toEqual([["runner_run_a", "lease_lapsed"]]);
+    expect(summary.countsByReason).toEqual({ lease_lapsed: 1 });
     expect(store.swept).toEqual([
-      expect.objectContaining({ runnerId: "runner_run_a", runId: "run_a", reason: "ttl_exceeded" }),
+      expect.objectContaining({ runnerId: "runner_run_a", runId: "run_a", reason: "lease_lapsed" }),
     ]);
+  });
+
+  it("NEVER reaps a long-but-ALIVE run (fresh heartbeat), no matter how old it is", async () => {
+    let nowMs = 1_700_000_000_000;
+    const store = new MemoryStore();
+    const lifecycle = buildLifecycle(new NoopDocker(), store, () => nowMs);
+    // A run that has been building for 12 HOURS — twice the old 6h wall-clock cap.
+    await lifecycle.allocate({ runId: "run_big", projectId: "proj_big", orgId: "org_test", runnerImage: "img" });
+    store.runStatus.set("run_big", "running");
+    nowMs += 12 * 60 * 60 * 1000;
+    // ...but its worker is still heartbeating: the lease is renewed into the future.
+    store.leaseUntil.set("run_big", nowMs + 60 * 1000);
+
+    const sweeper = new RunnerSweeper({
+      lifecycle,
+      recordSwept: (audit) => store.recordSwept(audit as SweptAudit),
+      unclaimedGraceMs: 15 * 60 * 1000,
+    });
+
+    const summary = await sweeper.tick();
+    expect(summary.reclaimed).toEqual([]);
+    expect(store.swept).toEqual([]);
+    // The 12h-old but ALIVE runner is still LIVE (un-released) — never reaped by age.
+    expect(await store.findActive("runner_run_big")).toBeDefined();
   });
 
   it("reclaims a run-less allocation past the grace window (wedged)", async () => {
@@ -185,13 +223,12 @@ describe("RunnerSweeper", () => {
     const lifecycle = buildLifecycle(new NoopDocker(), store, () => nowMs);
     // A run-LESS (run_id null) allocation that never got tied to a live run.
     store.seed({ runnerId: "runner_forge_x", runId: null, createdAt: new Date(nowMs) });
-    // Past the 15min grace window, well within the 6h TTL.
+    // Past the 15min grace window.
     nowMs += 20 * 60 * 1000;
 
     const sweeper = new RunnerSweeper({
       lifecycle,
       recordSwept: (audit) => store.recordSwept(audit as SweptAudit),
-      maxRunHours: 6,
       unclaimedGraceMs: 15 * 60 * 1000,
     });
 
@@ -205,20 +242,21 @@ describe("RunnerSweeper", () => {
     ]);
   });
 
-  it("never touches a healthy in-flight runner", async () => {
+  it("never reaps a just-allocated runner before its first heartbeat lands (grace window)", async () => {
     let nowMs = 1_700_000_000_000;
     const store = new MemoryStore();
     const lifecycle = buildLifecycle(new NoopDocker(), store, () => nowMs);
-    // A fresh, claimed, non-terminal runner — the live apex run.
+    // A fresh, claimed, non-terminal runner whose worker has NOT yet recorded its
+    // first job lease (the allocate→first-heartbeat handoff window). With no lease
+    // yet, only the grace window protects it from a premature lease_lapsed reap.
     await lifecycle.allocate({ runId: "run_live", projectId: "proj_live", orgId: "org_test", runnerImage: "img" });
     store.runStatus.set("run_live", "running");
-    // 1 minute later: within TTL, within grace, run non-terminal.
+    // 1 minute later: within the 15min grace, run non-terminal, no lease yet.
     nowMs += 60 * 1000;
 
     const sweeper = new RunnerSweeper({
       lifecycle,
       recordSwept: (audit) => store.recordSwept(audit as SweptAudit),
-      maxRunHours: 6,
       unclaimedGraceMs: 15 * 60 * 1000,
     });
 
@@ -239,7 +277,6 @@ describe("RunnerSweeper", () => {
     const sweeper = new RunnerSweeper({
       lifecycle,
       recordSwept: () => Promise.reject(new Error("events db down")),
-      maxRunHours: 6,
       unclaimedGraceMs: 900_000,
     });
 
@@ -269,7 +306,6 @@ describe("RunnerSweeper", () => {
         await gate;
         recorded = true;
       },
-      maxRunHours: 6,
       unclaimedGraceMs: 900_000,
     });
 

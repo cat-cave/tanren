@@ -5,7 +5,6 @@ import { parseAllocatorEnv } from "../src/envSchema.js";
 
 const GOOD_ENV = {
   ALLOCATOR_PORT: "3200",
-  TANREN_MAX_RUN_HOURS: "6",
   TANREN_ALLOCATOR_NETWORK: "tanren_default",
   TANREN_ALLOCATOR_HOST_SSH_PORT: "2222",
   TANREN_ALLOCATOR_SSH_HOSTNAME_TEMPLATE: "{container}",
@@ -18,7 +17,6 @@ describe("allocator envSchema (fail-closed at boot)", () => {
   it("accepts a fully-populated good env and coerces numbers", () => {
     const env = parseAllocatorEnv(GOOD_ENV);
     expect(env.ALLOCATOR_PORT).toBe(3200);
-    expect(env.TANREN_MAX_RUN_HOURS).toBe(6);
     expect(env.TANREN_ALLOCATOR_HOST_SSH_PORT).toBe(2222);
     expect(env.TANREN_ALLOCATOR_SWEEPER_INTERVAL_MS).toBe(60_000);
     expect(env.TANREN_ALLOCATOR_NETWORK).toBe("tanren_default");
@@ -27,7 +25,6 @@ describe("allocator envSchema (fail-closed at boot)", () => {
   it("accepts an empty env via defaults", () => {
     const env = parseAllocatorEnv({});
     expect(env.ALLOCATOR_PORT).toBe(3200);
-    expect(env.TANREN_MAX_RUN_HOURS).toBe(6);
     expect(env.TANREN_ALLOCATOR_SWEEPER_INTERVAL_MS).toBe(60_000);
     expect(env.TANREN_ALLOCATOR_HOST_SSH_PORT).toBeUndefined();
   });
@@ -71,27 +68,5 @@ describe("allocator envSchema (fail-closed at boot)", () => {
     expect(() => parseAllocatorEnv({ ...GOOD_ENV, TANREN_ALLOCATOR_SWEEPER_INTERVAL_MS: "0" })).toThrow(
       /Invalid allocator environment/u,
     );
-  });
-
-  // REAPER-SAFETY + no-silent-fallback (Codex r4 §1): TANREN_MAX_RUN_HOURS is
-  // integrated via `requirePositiveHours`. UNSET → the 6h default; a PRESENT
-  // non-positive / malformed value THROWS at boot — it must NOT silently degrade to
-  // the default (a typo'd reaper-threshold / token-TTL ceiling must fail loud, not
-  // masquerade as a working 6h). The same contract governs the scoped-token TTL.
-  it("FAILS LOUD on a present non-positive TANREN_MAX_RUN_HOURS (no silent default)", () => {
-    expect(() => parseAllocatorEnv({ ...GOOD_ENV, TANREN_MAX_RUN_HOURS: "0" })).toThrow(/is not a positive number/u);
-  });
-
-  it("FAILS LOUD on a present non-numeric TANREN_MAX_RUN_HOURS (no silent default)", () => {
-    expect(() => parseAllocatorEnv({ ...GOOD_ENV, TANREN_MAX_RUN_HOURS: "abc" })).toThrow(/is not a positive number/u);
-  });
-
-  it("the 6h default applies ONLY when TANREN_MAX_RUN_HOURS is genuinely UNSET/blank", () => {
-    expect(parseAllocatorEnv({ ...GOOD_ENV, TANREN_MAX_RUN_HOURS: undefined }).TANREN_MAX_RUN_HOURS).toBe(6);
-    expect(parseAllocatorEnv({ ...GOOD_ENV, TANREN_MAX_RUN_HOURS: "" }).TANREN_MAX_RUN_HOURS).toBe(6);
-  });
-
-  it("uses a PRESENT VALID TANREN_MAX_RUN_HOURS", () => {
-    expect(parseAllocatorEnv({ ...GOOD_ENV, TANREN_MAX_RUN_HOURS: "8" }).TANREN_MAX_RUN_HOURS).toBe(8);
   });
 });
