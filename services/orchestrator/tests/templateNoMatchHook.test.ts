@@ -176,7 +176,15 @@ describe("maybeCreateTemplateForNoMatch", () => {
         channel: "lts",
         templateVersion: "1.0.0",
         provenance: { researchSources: ["seed"] },
-        validationProof: null,
+        // A FRESH proof (validated relative to the deps clock) — a genuine seedable
+        // match, so the hook returns it and runs NO creation.
+        validationProof: {
+          positiveControlsPassed: true,
+          negativeControls: { typecheck: "proven", lint: "proven", test: "proven", mutation: "n/a" },
+          auditorClean: true,
+          validatedAt: "2026-06-08T12:00:00.000Z",
+          validatedSha: "a".repeat(40),
+        },
       },
     });
 
@@ -184,6 +192,52 @@ describe("maybeCreateTemplateForNoMatch", () => {
     expect(decision).toMatchObject({ created: false, template: { id: "template_existing" } });
     // No new row was inserted (the existing one is the only row).
     expect(pool.rows).toHaveLength(1);
+  });
+
+  it("PROOF-FRESHNESS: a STALE validated match falls THROUGH to creation, never seeds", async () => {
+    // A `validated`-status template whose proof is >30 days old (relative to the deps
+    // clock 2026-06-09) — `selectTemplate` rejects it, so the no-match hook must too:
+    // it falls through to creation rather than re-seeding a stale template.
+    const pool = new TemplatesPool();
+    pool.seed({
+      id: "template_stale",
+      org_id: "org_acme",
+      repo_ref: "cat-cave/stale",
+      status: "validated",
+      channel: "lts",
+      manifest: {
+        version: 1,
+        stack: "ts",
+        capabilities: {
+          runtime: "node",
+          packageManager: "pnpm",
+          gates: ["tier-1"],
+          bdd: false,
+          mutation: false,
+          junit: false,
+        },
+        channel: "lts",
+        templateVersion: "1.0.0",
+        provenance: { researchSources: ["seed"] },
+        validationProof: {
+          positiveControlsPassed: true,
+          negativeControls: { typecheck: "proven", lint: "proven", test: "proven", mutation: "n/a" },
+          auditorClean: true,
+          // 60 days before the deps clock — past the 30-day freshness horizon.
+          validatedAt: "2026-04-10T12:00:00.000Z",
+          validatedSha: "a".repeat(40),
+        },
+      },
+    });
+
+    const decision = await maybeCreateTemplateForNoMatch(deps(pool), request);
+    // CREATION ran (the stale match did not seed) and published a fresh template.
+    expect(decision).toMatchObject({
+      created: true,
+      result: { template: { status: "validated", repoRef: "cat-cave/new" } },
+    });
+    // The stale row plus the freshly-created row.
+    expect(pool.rows).toHaveLength(2);
   });
 
   it("no template matches → runs creation, returns the new validated template", async () => {

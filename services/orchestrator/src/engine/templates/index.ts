@@ -26,6 +26,11 @@ export {
 } from "./manifest.js";
 export { runValidationHarness, type TemplateAuditor, type ValidationHarnessInput } from "./validationHarness.js";
 export { NEGATIVE_CONTROL_CAPABILITIES, templateValidates } from "./validationProof.js";
+// The validation-proof FRESHNESS predicate (the 30-day re-check). Physically lives with
+// the Forge SELECTION logic but is a predicate OVER a `TemplateValidationProof`, shared
+// by selection AND the creation no-match seam — surfaced here so creation-path callers
+// read it from the template barrel rather than reaching into forge/interview.
+export { isProofFresh, isTemplateEligible } from "../forge/interview/templateSelection.js";
 export {
   buildNegativeControlPlan,
   failingTestDefect,

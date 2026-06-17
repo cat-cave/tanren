@@ -137,7 +137,7 @@ class RecordingEmitter implements DagEventEmitter {
 
 const unlimitedBudgetGate: BudgetGate = {
   async resolveBudget(): Promise<ProjectBudgetState> {
-    return { ceilingUsd: undefined, period: "monthly", spentUsd: 0, notionalUsd: 0, gatedFigure: "real_spend" };
+    return { ceilingUsd: undefined, period: "monthly", spentUsd: 0, notionalUsd: 0 };
   },
 };
 

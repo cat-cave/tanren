@@ -7,12 +7,9 @@ import type { BudgetPeriod } from "../src/engine/config/index.js";
 import { isBudgetExhausted, type ProjectBudgetState, shouldPauseOnBudget } from "../src/engine/contracts/dagWalker.js";
 import { resolveEffectiveBudget } from "../src/engine/dag/budgetGate.js";
 
-// The notional/gated-figure surfacing fields the pure predicates ignore — filled
-// here so the literals satisfy the (now-wider) ProjectBudgetState type.
-const surfacing = { notionalUsd: 0, gatedFigure: "real_spend" } satisfies Pick<
-  ProjectBudgetState,
-  "notionalUsd" | "gatedFigure"
->;
+// The notional surfacing field the pure predicates ignore — filled here so the
+// literals satisfy the ProjectBudgetState type. The gate always gates REAL spend.
+const surfacing = { notionalUsd: 0 } satisfies Pick<ProjectBudgetState, "notionalUsd">;
 
 const orgConfig = (defaultBudget?: { ceilingUsd: number; period?: BudgetPeriod }) => ({
   version: 1,
@@ -30,8 +27,8 @@ describe("resolveEffectiveBudget (project-over-org)", () => {
 
   it("uses the org default when the project sets none", () => {
     const resolved = resolveEffectiveBudget(projectConfig(), orgConfig({ ceilingUsd: 100 }));
-    // The parsed budget carries the `gatedFigure` default (real spend) added this PR.
-    expect(resolved).toEqual({ kind: "ok", budget: { ceilingUsd: 100, period: "monthly", gatedFigure: "real_spend" } });
+    // The parsed budget defaults the period to monthly; the gate always sums real spend.
+    expect(resolved).toEqual({ kind: "ok", budget: { ceilingUsd: 100, period: "monthly" } });
   });
 
   it("the project budget wins over the org default", () => {
@@ -39,22 +36,22 @@ describe("resolveEffectiveBudget (project-over-org)", () => {
       projectConfig({ ceilingUsd: 10, period: "total" }),
       orgConfig({ ceilingUsd: 100 }),
     );
-    expect(resolved).toEqual({ kind: "ok", budget: { ceilingUsd: 10, period: "total", gatedFigure: "real_spend" } });
+    expect(resolved).toEqual({ kind: "ok", budget: { ceilingUsd: 10, period: "total" } });
   });
 
   it("defaults the period to monthly", () => {
     const resolved = resolveEffectiveBudget(projectConfig({ ceilingUsd: 5 }), orgConfig());
-    expect(resolved).toEqual({ kind: "ok", budget: { ceilingUsd: 5, period: "monthly", gatedFigure: "real_spend" } });
+    expect(resolved).toEqual({ kind: "ok", budget: { ceilingUsd: 5, period: "monthly" } });
   });
 
   it("accepts the quarterly + annual periods added this PR (no migration)", () => {
     expect(resolveEffectiveBudget(projectConfig({ ceilingUsd: 5, period: "quarterly" }), orgConfig())).toEqual({
       kind: "ok",
-      budget: { ceilingUsd: 5, period: "quarterly", gatedFigure: "real_spend" },
+      budget: { ceilingUsd: 5, period: "quarterly" },
     });
     expect(resolveEffectiveBudget(projectConfig({ ceilingUsd: 5, period: "annual" }), orgConfig())).toEqual({
       kind: "ok",
-      budget: { ceilingUsd: 5, period: "annual", gatedFigure: "real_spend" },
+      budget: { ceilingUsd: 5, period: "annual" },
     });
   });
 

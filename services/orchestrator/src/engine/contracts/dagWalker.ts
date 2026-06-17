@@ -26,7 +26,7 @@
 // any database or worker. The pg-backed read model + the createQueuedRunFromSpec
 // enqueuer + the LISTEN/NOTIFY subscriber live in `engine/dag/walker.ts`.
 
-import type { BudgetGatedFigure, BudgetPeriod, SpeculationThreshold } from "../config/shared.js";
+import type { BudgetPeriod, SpeculationThreshold } from "../config/shared.js";
 import type { DagLifecycleSnapshot } from "./dagLifecycle.js";
 import type { AncestorStack } from "../dag/ancestorStack.js";
 import { computeReadiness, type SpecReadiness } from "../dag/speculation.js";
@@ -375,8 +375,6 @@ export interface ProjectBudgetState {
    * called "spend". The gate ignores it.
    */
   notionalUsd: number;
-  /** Which figure the ceiling gates (always `real_spend` today; the gate sums real). */
-  gatedFigure: BudgetGatedFigure;
   failClosed?: BudgetFailClosedReason;
 }
 
