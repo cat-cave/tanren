@@ -2,12 +2,21 @@
 // (GitHub-5xx resilience) helpers, extracted from github.ts so the client stays under
 // its line cap and the classification lives in ONE focused, testable place. Pure
 // functions + constants only; no I/O.
+//
+// TIMEOUT-ERADICATION (feedback_no_timeouts_progress_based, BINDING): there are NO fixed
+// retry/attempt COUNTS here. A transient failure (a rate-limit, a 502/503/504/408, a
+// transport throw) is retried UNBOUNDED while it is making PROGRESS, spaced by the backoff
+// curve below (legitimate cadence, kept). It surfaces LOUDLY — as a genuine GitHub outage —
+// ONLY on intelligent non-convergence: the SAME transient signal recurring at the SATURATED
+// backoff with no new information (a proven fixed point), via the shared convergence
+// detector. A NON-transient error (a real 4xx auth/permission failure) is never a retry case
+// and fails fast + loud (handled by the client, not retried here).
+
+import { assessStructuralProgress, type AttemptSignature } from "../workflow/convergenceDetector.js";
 
 /** rate-limit backoff bounds: never wait less than this, never more. */
 export const MIN_RATE_LIMIT_BACKOFF_MS = 1_000;
 export const MAX_RATE_LIMIT_BACKOFF_MS = 60_000;
-/** Default number of times the client re-tries a rate-limited request before surfacing it. */
-export const DEFAULT_RATE_LIMIT_RETRIES = 2;
 
 /**
  * GitHub-5xx resilience: the SAFE transient HTTP-status set. A GitHub slow window
@@ -24,10 +33,73 @@ export function isTransientStatus(status: number): boolean {
   return status === 502 || status === 503 || status === 504 || status === 408;
 }
 
-/** Default number of transient-5xx/network retries before the raw failure surfaces. */
-export const DEFAULT_TRANSIENT_RETRIES = 3;
-/** Exponential backoff (ms) between transient retries: 500ms → 1s → 2s. */
+/**
+ * Exponential backoff SPACING (ms) between transient retries: 500ms → 1s → 2s, then it
+ * SATURATES at 2s. This is the cadence between unbounded retries, NOT an attempt cap — once
+ * the curve saturates the client keeps retrying at the saturated cadence while the transient
+ * signal keeps CHANGING (progress). `transientBackoffMs(n)` returns the spacing for the n-th
+ * (0-based) consecutive retry; past the curve it returns the saturated value.
+ */
 export const TRANSIENT_BACKOFF_MS = [500, 1_000, 2_000];
+
+/** The saturated (final, steady-state) transient backoff cadence the curve settles on. */
+export const SATURATED_TRANSIENT_BACKOFF_MS = TRANSIENT_BACKOFF_MS.at(-1) ?? 2_000;
+
+/**
+ * The transient backoff SPACING for the n-th (0-based) consecutive transient retry. Ramps the
+ * curve, then holds the saturated cadence indefinitely — the retry loop is unbounded, so the
+ * spacing must be defined for every n, not just the first few. Pure pacing; never terminates.
+ */
+export function transientBackoffMs(retryIndex: number): number {
+  return TRANSIENT_BACKOFF_MS[retryIndex] ?? SATURATED_TRANSIENT_BACKOFF_MS;
+}
+
+/**
+ * A loud, terminal classification of a GitHub transient signal that has been INTELLIGENTLY
+ * detected as non-converging — the SAME transient status / transport error recurring at the
+ * SATURATED backoff with no new information (a proven fixed point). This is NOT a 3-strikes
+ * give-up: it surfaces only when the convergence detector proves the signal is stuck, i.e. a
+ * genuine sustained GitHub outage. It carries the stuck signature so the failure is diagnosable.
+ */
+export class GitHubOutageError extends Error {
+  constructor(
+    readonly transientSignature: string,
+    readonly retriesObserved: number,
+  ) {
+    super(
+      `GitHub transient outage: '${transientSignature}' recurred at the saturated backoff with no progress ` +
+        `over ${retriesObserved} retries — surfacing as a sustained outage, not retrying a fixed point forever`,
+    );
+    this.name = "GitHubOutageError";
+  }
+}
+
+/**
+ * Has the transient-retry loop reached an INTELLIGENT non-convergence fixed point — the SAME
+ * transient signal recurring with no new information, AND only once the backoff has SATURATED
+ * (so we never escalate while the cadence is still ramping)? Progress (a CHANGING transient
+ * signature — 503→504→502, or a status that resolves) NEVER trips this; the loop continues
+ * unbounded. This is the doctrine's "escalate on non-convergence, not a count" for HTTP
+ * transients: a changing signal is forward motion; an identical signal stuck at the saturated
+ * cadence is a proven outage.
+ *
+ * `signatures` is the oldest→newest list of the transient signatures observed so far (one per
+ * transient hit — an HTTP status like `http-503` or a transport identity like `transport`).
+ * Escalation requires the backoff to have saturated, which only happens after the ramp, so by
+ * construction a single transient blip never escalates — only a sustained identical stall does.
+ */
+export function transientFixedPointReached(signatures: ReadonlyArray<string>): boolean {
+  // Backoff must have saturated: until the curve holds its steady-state cadence we are still
+  // ramping, which is legitimate progress-spacing — never an escalation point.
+  if (signatures.length <= TRANSIENT_BACKOFF_MS.length) {
+    return false;
+  }
+  // Map each transient hit onto a convergence AttemptSignature keyed on the signal identity.
+  // A changing signal => structural progress (continue); an identical recurring signal at the
+  // saturated cadence => fixed_point (a proven, loud-surfacing outage).
+  const history: AttemptSignature[] = signatures.map((sig) => ({ failureSignature: sig }));
+  return assessStructuralProgress(history) === "fixed_point";
+}
 
 export type HeaderGetter = (name: string) => string | null;
 

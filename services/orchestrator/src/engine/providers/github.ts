@@ -10,12 +10,12 @@ export { GithubAppTokenMinter } from "./githubAppTokenMinter.js";
 import {
   appendErrorDetail,
   buildErrorDetail,
-  DEFAULT_RATE_LIMIT_RETRIES,
-  DEFAULT_TRANSIENT_RETRIES,
+  GitHubOutageError,
   headerGetter,
   isTransientStatus,
   rateLimitBackoffMs,
-  TRANSIENT_BACKOFF_MS,
+  transientBackoffMs,
+  transientFixedPointReached,
 } from "./githubRetry.js";
 
 export interface GitHubRepository {
@@ -135,10 +135,6 @@ export interface FetchGitHubHttpClientOptions {
   fetchImpl?: typeof fetch;
   /** Test seam: sleep used between rate-limit AND transient-5xx retries. */
   sleep?: (ms: number) => Promise<void>;
-  /** How many times to honor a `Retry-After` / reset before giving up. */
-  maxRateLimitRetries?: number;
-  /** How many times to retry a transient 5xx / network error before giving up. */
-  maxTransientRetries?: number;
   /** Clock seam (epoch ms) for computing the wait from `X-RateLimit-Reset`. */
   now?: () => number;
 }
@@ -147,49 +143,47 @@ export class FetchGitHubHttpClient implements GitHubHttpClient {
   private readonly apiBaseUrl: string;
   private readonly fetchImpl: typeof fetch;
   private readonly sleep: (ms: number) => Promise<void>;
-  private readonly maxRateLimitRetries: number;
-  private readonly maxTransientRetries: number;
   private readonly now: () => number;
 
   constructor(opts: FetchGitHubHttpClientOptions = {}) {
     this.apiBaseUrl = opts.apiBaseUrl ?? "https://api.github.com";
     this.fetchImpl = opts.fetchImpl ?? fetch;
     this.sleep = opts.sleep ?? ((ms) => sleepFor(ms));
-    this.maxRateLimitRetries = opts.maxRateLimitRetries ?? DEFAULT_RATE_LIMIT_RETRIES;
-    this.maxTransientRetries = opts.maxTransientRetries ?? DEFAULT_TRANSIENT_RETRIES;
     this.now = opts.now ?? (() => Date.now());
   }
 
   async request(input: GitHubHttpRequest): Promise<GitHubHttpResponse> {
     let token = input.token;
     let refreshed = false;
-    // Separate counters so a 5x burst and a rate-limit burst each have their OWN
-    // ceiling — and so a request that hits BOTH a 503 then a 429 is handled within
-    // the loop (each path retries up to its own bound). The 401 re-mint is one-shot.
-    // §4 fix: the rate-limit path MUST key off its OWN counter, NOT the shared loop
-    // index — else transient 503 retries consume the loop index first and a later 429
-    // finds `attempt >= maxRateLimitRetries`, so its `Retry-After` is NEVER honored
-    // (we'd hammer GitHub past the limit). `rateLimitRetries` is incremented only on
-    // the 429/secondary-limit path, exactly mirroring `transientRetries`.
-    let transientRetries = 0;
-    let rateLimitRetries = 0;
+    // TIMEOUT-ERADICATION (feedback_no_timeouts_progress_based, BINDING): NO fixed retry COUNT.
+    // A transient signal (a rate-limited 403/429, a 5xx, a transport throw) retries UNBOUNDED
+    // while making PROGRESS, spaced by its backoff; it surfaces LOUDLY only on non-convergence
+    // (the SAME signal stuck at the saturated backoff — a proven fixed point), never a 3-strikes
+    // count. See `githubRetry.ts` for the full rationale + the convergence detector. The two
+    // signature streams below are judged for convergence INDEPENDENTLY (§4: a transient 503 burst
+    // must never deny a later 429 its honored `Retry-After`). The 401 re-mint stays one-shot.
+    const transientSignatures: string[] = [];
+    const rateLimitSignatures: string[] = [];
     const retryTransient = input.retryTransient !== false;
     for (;;) {
       let response: GitHubHttpResponse;
       try {
         response = await this.send(input.path, input.method, token, input.body);
       } catch (error) {
-        // A TRANSPORT failure (fetch threw: connection reset / DNS / timeout). It is
-        // transient by nature (no HTTP status). Retry under the same bounded budget;
-        // on exhaustion (or when the caller opted out) re-throw LOUDLY — never a quiet
-        // degrade. A non-idempotent write (retryTransient=false) never auto-retries a
-        // throw (the request may have applied server-side).
-        if (retryTransient && transientRetries < this.maxTransientRetries) {
-          await this.sleep(TRANSIENT_BACKOFF_MS[transientRetries] ?? 2_000);
-          transientRetries += 1;
-          continue;
+        // A TRANSPORT failure (fetch threw: connection reset / DNS / timeout). It is transient
+        // by nature (no HTTP status) — retry on transient indefinitely while it makes progress,
+        // surfacing the underlying throw LOUDLY only when the transport error is non-converging
+        // (a proven, sustained outage). A non-idempotent write (retryTransient=false) never
+        // auto-retries a throw (the request may have applied server-side).
+        if (!retryTransient) {
+          throw error;
         }
-        throw error;
+        transientSignatures.push("transport");
+        if (transientFixedPointReached(transientSignatures)) {
+          throw error;
+        }
+        await this.sleep(transientBackoffMs(transientSignatures.length - 1));
+        continue;
       }
       // 401 with a token supplier: re-mint once and retry (behavior).
       if (response.status === 401 && input.refreshToken !== undefined && !refreshed) {
@@ -197,35 +191,42 @@ export class FetchGitHubHttpClient implements GitHubHttpClient {
         token = await input.refreshToken();
         continue;
       }
-      // rate-limited — honor Retry-After / X-RateLimit-Reset / a secondary-limit body,
-      // back off, and retry up to the rate-limit ceiling (its OWN counter, independent of
-      // any prior transient 503 retries) rather than hammering GitHub. This is checked
-      // BEFORE the 403 force-mint so a secondary-rate-limit 403 backs off (re-minting the
-      // token would not clear a rate limit, only burn another API call).
-      if (response.retryAfterMs !== undefined && rateLimitRetries < this.maxRateLimitRetries) {
+      // rate-limited — honor Retry-After / X-RateLimit-Reset / a secondary-limit body, back off,
+      // and retry on the rate-limit signal indefinitely (its OWN signature stream, independent
+      // of any prior transient 503 retries) rather than hammering GitHub. Checked BEFORE the 403
+      // force-mint so a secondary-rate-limit 403 backs off (re-minting would not clear a rate
+      // limit). Escalates LOUDLY only when the rate-limit signal is non-converging at the
+      // saturated backoff (a sustained outage — GitHub never clearing the window).
+      if (response.retryAfterMs !== undefined) {
+        rateLimitSignatures.push(`rate-limit-${response.status}`);
+        if (transientFixedPointReached(rateLimitSignatures)) {
+          throw new GitHubOutageError(`rate-limit-${response.status}`, rateLimitSignatures.length - 1);
+        }
         await this.sleep(response.retryAfterMs);
-        rateLimitRetries += 1;
         continue;
       }
-      // 403 with a token supplier, NOT a rate limit: an installation token can edge-case
-      // a 403 (instead of a 401) when revoked/rotated mid-flight. Force-mint ONCE and
-      // retry — mirroring the 401 path, sharing the one-shot `refreshed` flag so we never
-      // loop. A 403 that PERSISTS after the re-mint (or one already classified rate-limit
-      // above) falls through to surface LOUDLY — a genuine permission error is never
-      // silently retried forever.
+      // 403 with a token supplier, NOT a rate limit: an installation token can edge-case a 403
+      // (instead of a 401) when revoked/rotated mid-flight. Force-mint ONCE and retry — mirroring
+      // the 401 path, sharing the one-shot `refreshed` flag so we never loop. A 403 that PERSISTS
+      // after the re-mint (or one already classified rate-limit above) falls through to surface
+      // LOUDLY — a genuine permission error is never silently retried forever.
       if (response.status === 403 && input.refreshToken !== undefined && !refreshed) {
         refreshed = true;
         token = await input.refreshToken();
         continue;
       }
-      // GitHub-5xx resilience: a transient gateway failure (502/503/504/408) self-heals
-      // on an immediate retry. Back off exponentially (500ms→1s→2s) up to the transient
-      // ceiling, then surface the raw 5xx response LOUDLY (the caller's `!== 200` guard
-      // turns it into a thrown error / an infra-hold) — never a silent success. Opt-out
-      // (`retryTransient: false`) lets a non-idempotent write handle its own 5xx.
-      if (retryTransient && isTransientStatus(response.status) && transientRetries < this.maxTransientRetries) {
-        await this.sleep(TRANSIENT_BACKOFF_MS[transientRetries] ?? 2_000);
-        transientRetries += 1;
+      // GitHub-5xx resilience: a transient gateway failure (502/503/504/408) self-heals on an
+      // immediate retry. Back off (500ms→1s→2s, saturating) and retry on the 5xx signal
+      // UNBOUNDED while it is making progress; escalate to a loud `GitHubOutageError` ONLY when
+      // the SAME 5xx is stuck at the saturated backoff (intelligent non-convergence — a proven
+      // outage), never a count. Opt-out (`retryTransient: false`) lets a non-idempotent write
+      // handle its own 5xx. A NON-transient response (a real 4xx) falls through and surfaces.
+      if (retryTransient && isTransientStatus(response.status)) {
+        transientSignatures.push(`http-${response.status}`);
+        if (transientFixedPointReached(transientSignatures)) {
+          throw new GitHubOutageError(`http-${response.status}`, transientSignatures.length - 1);
+        }
+        await this.sleep(transientBackoffMs(transientSignatures.length - 1));
         continue;
       }
       return response;

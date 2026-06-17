@@ -11,10 +11,12 @@ import {
   type GitHubHttpResponse,
 } from "../src/engine/providers/github.js";
 import {
+  GitHubOutageError,
   isSecondaryRateLimitBody,
   MAX_RATE_LIMIT_BACKOFF_MS,
   MIN_RATE_LIMIT_BACKOFF_MS,
   rateLimitBackoffMs,
+  TRANSIENT_BACKOFF_MS,
 } from "../src/engine/providers/githubRetry.js";
 
 function headers(map: Record<string, string>): Headers {
@@ -66,12 +68,11 @@ describe("github rate-limit backoff (P3-0028)", () => {
     expect(response).toMatchObject({ status: 200, body: { ok: true } });
   });
 
-  it("§4: honors a 429 Retry-After even AFTER transient 503s consumed retries", async () => {
-    // The bug: the rate-limit retry once keyed off the SHARED loop index, so prior
-    // transient 503 retries exhausted it and a later 429's Retry-After was NEVER
-    // honored (we'd return the 429 raw). With independent counters the sequence
-    // 503,503,503 → 429 → 200 fully self-heals: each 503 retries on the transient
-    // budget, and the 429 STILL gets its own Retry-After wait.
+  it("§4: honors a 429 Retry-After even AFTER a transient-503 burst", async () => {
+    // The rate-limit path keeps its OWN signature stream, independent of the transient-503
+    // stream, so a prior 503 burst never consumes the 429's honored Retry-After. The sequence
+    // 503,503,503 → 429 → 200 fully self-heals: each 503 retries on the transient cadence, and
+    // the 429 STILL gets its own Retry-After wait (no shared budget to pre-consume).
     const slept: number[] = [];
     let call = 0;
     const fetchImpl = (async () => {
@@ -88,13 +89,13 @@ describe("github rate-limit backoff (P3-0028)", () => {
     const client = new FetchGitHubHttpClient({
       fetchImpl,
       sleep: async (ms) => void slept.push(ms),
-      // The default transient ceiling (3) is fully consumed by the 503s; the rate-limit
-      // ceiling must remain independently available for the later 429.
+      // The transient-503 stream and the rate-limit stream are judged for convergence
+      // INDEPENDENTLY, so the 503 burst never pre-consumes the later 429's honored Retry-After.
     });
     const response = await client.request({ method: "GET", path: "/rate", token: "t" });
 
     // The 429's 7s Retry-After WAS honored (the last sleep), proving the rate-limit
-    // budget was not pre-consumed by the three transient 503 retry waits before it.
+    // stream was not pre-consumed by the three transient 503 retry waits before it.
     expect(slept).toContain(7_000);
     expect(call).toBe(5);
     expect(response).toMatchObject({ status: 200, body: { ok: true } });
@@ -186,22 +187,26 @@ describe("github rate-limit backoff (P3-0028)", () => {
     expect(denied.errorDetail).toMatch(/Resource not accessible by integration/u);
   });
 
-  it("gives up after the retry ceiling instead of looping forever", async () => {
+  it("escalates a PERSISTENT-IDENTICAL rate limit as an outage (non-convergence, not a count)", async () => {
     const slept: number[] = [];
-    const fetchImpl = (async () =>
-      new Response("", {
-        status: 429,
-        headers: headers({ "retry-after": "2" }),
-      })) as unknown as typeof fetch;
-    const client = new FetchGitHubHttpClient({
-      fetchImpl,
-      sleep: async (ms) => void slept.push(ms),
-      maxRateLimitRetries: 2,
-    });
+    let call = 0;
+    const fetchImpl = (async () => {
+      call += 1;
+      // The SAME 429 forever — GitHub never clears the window: a sustained outage, not a blip.
+      return new Response("", { status: 429, headers: headers({ "retry-after": "2" }) });
+    }) as unknown as typeof fetch;
+    const client = new FetchGitHubHttpClient({ fetchImpl, sleep: async (ms) => void slept.push(ms) });
 
-    const response = await client.request({ method: "GET", path: "/rate", token: "t" });
-    expect(slept).toEqual([2_000, 2_000]);
-    expect(response.status).toBe(429);
+    // It honors the Retry-After cadence, retries PAST the old fixed ceiling, and surfaces a loud
+    // GitHubOutageError only once the identical rate-limit signal is a proven fixed point — never
+    // a 3-strikes give-up, and never an infinite silent loop.
+    await expect(client.request({ method: "GET", path: "/rate", token: "t" })).rejects.toBeInstanceOf(
+      GitHubOutageError,
+    );
+    expect(call).toBeGreaterThan(TRANSIENT_BACKOFF_MS.length);
+    // Every honored wait used the Retry-After cadence (2s) — the backoff is legitimate pacing.
+    expect(slept.every((ms) => ms === 2_000)).toBe(true);
+    expect(slept.length).toBeGreaterThanOrEqual(TRANSIENT_BACKOFF_MS.length);
   });
 });
 
@@ -239,12 +244,14 @@ describe("github required-context awareness (P3-0028)", () => {
     ).rejects.toThrow(/branch-protection read failed for main: HTTP 403/u);
   });
 
-  it("retries a transient 5xx then (if persistent) THROWS loudly — not a silent empty", async () => {
+  it("retries a transient 5xx then (if persistent) surfaces a loud OUTAGE — not a silent empty", async () => {
     const slept: number[] = [];
     let call = 0;
     const fetchImpl = (async () => {
       call += 1;
-      // A persistent 504 on the protection read survives the client's transient retry.
+      // A persistent 504 on the protection read is a sustained outage — the client retries it
+      // unbounded while it makes progress, then escalates LOUDLY on non-convergence (a fixed
+      // point), never silently degrading to "no required gating".
       return new Response("", { status: 504 });
     }) as unknown as typeof fetch;
     const client = new FetchGitHubHttpClient({ fetchImpl, sleep: async (ms) => void slept.push(ms) });
@@ -255,9 +262,9 @@ describe("github required-context awareness (P3-0028)", () => {
         token: "t",
         baseBranch: "main",
       }),
-    ).rejects.toThrow(/branch-protection read failed for main: HTTP 504/u);
-    // The client retried the transient 504 before the persistent failure surfaced.
-    expect(call).toBeGreaterThan(1);
+    ).rejects.toBeInstanceOf(GitHubOutageError);
+    // The client retried the transient 504 (past the old fixed cap) before the outage surfaced.
+    expect(call).toBeGreaterThan(TRANSIENT_BACKOFF_MS.length);
     expect(slept.length).toBeGreaterThan(0);
   });
 
