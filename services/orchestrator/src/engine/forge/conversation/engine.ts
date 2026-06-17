@@ -4,10 +4,19 @@
 //   1. Append the operator's question as a turn (authorKind "operator").
 //   2. Load the thread history (audience-filtered by the turn store).
 //   3. Run the answerer loop: ask the injectable answerer for a step; if it
-//      requests READ tools, dispatch them through the authz'd tool layer and
-//      feed results back; repeat until the answerer finalizes (bounded by
-//      maxToolRounds so a misbehaving answerer can't loop forever).
+//      requests NEW READ tools, dispatch them through the authz'd tool layer and
+//      feed results back; repeat until the answerer finalizes OR stops requesting
+//      NEW tools (the progress-based exit — a misbehaving answerer that keeps
+//      asking for tools it has already run makes no progress and is finalized).
 //   4. Append the finalized ForgeAnswer as a turn (authorKind "forge_llm").
+//
+// TIMEOUT-ERADICATION (feedback_no_timeouts_progress_based, BINDING): there is NO
+// fixed `maxToolRounds` count. The loop continues UNBOUNDED while the answerer makes
+// PROGRESS — each round requesting a NEW read tool (a `(tool, args)` identity it has
+// not already run this exchange). The moment it stops requesting new tools (it
+// finalizes, requests none, or requests only tools it already ran — a fixed point),
+// the engine runs ONE terminal `finalize` pass and commits the answer. A runaway
+// answerer cannot loop forever: re-requesting the same tools is not progress.
 //
 // WRITE actions follow the propose→approve→execute pattern (write-
 // action approval): the answerer is still constrained to the READ family for
@@ -43,9 +52,6 @@ export interface ForgeConversationDeps {
   client: QueryClient;
   answerer: ForgeConversationAnswerer;
   dispatchReadTool: ForgeReadToolDispatcher;
-  // Defaults to 3: enough for a read → reason → finalize loop without letting
-  // a runaway answerer spin. Each round may request multiple tools.
-  maxToolRounds?: number;
 }
 
 export interface ForgeAskInput {
@@ -64,8 +70,6 @@ export interface ForgeAskResult {
   // engine never executes these — a human approves them via the approve route.
   proposals: ReadonlyArray<ForgeActionProposalRow>;
 }
-
-const DEFAULT_MAX_TOOL_ROUNDS = 3;
 
 // Runs one operator question through the conversation engine and persists both
 // turns. Throws when the thread is missing or the actor cannot reach it (the
@@ -145,15 +149,22 @@ interface AnswererLoopResult {
   toolResults: ForgeToolResult[];
 }
 
-// Drives the answerer until it finalizes or the round budget is spent. When the
-// budget is exhausted without a final, the loop asks one last time with a
-// `finalize` hint encoded as an empty tool round (the answerer sees no new
-// results and is expected to commit to an answer).
+// Drives the answerer UNBOUNDED while it makes PROGRESS — each round requesting a
+// NEW read tool (a `(tool, args)` identity it has not already run this exchange).
+// The loop ends the moment the answerer stops making progress: it finalizes, or it
+// requests no NEW read tool (none valid, or only tools already dispatched — a fixed
+// point). At that point the engine runs ONE terminal `finalize` pass (the §7.10 hint
+// telling the model it MUST commit now, no more tools) and commits the answer. There
+// is NO round count: a runaway answerer cannot spin, because re-requesting the same
+// tools is not progress and ends the loop.
 async function runAnswererLoop(deps: ForgeConversationDeps, input: AnswererLoopInput): Promise<AnswererLoopResult> {
-  const maxRounds = deps.maxToolRounds ?? DEFAULT_MAX_TOOL_ROUNDS;
   const toolResults: ForgeToolResult[] = [];
+  // The `(tool, args)` identities already dispatched this exchange — the progress
+  // signal: a request for an identity NOT in here is forward motion; a request for
+  // only identities already here (or no valid request) is a fixed point.
+  const dispatched = new Set<string>();
 
-  for (let round = 0; round <= maxRounds; round += 1) {
+  for (;;) {
     const context: ForgeConversationContext = {
       question: input.question,
       history: input.history,
@@ -165,25 +176,24 @@ async function runAnswererLoop(deps: ForgeConversationDeps, input: AnswererLoopI
     if (step.kind === "final") {
       return { answer: step.answer, toolResults };
     }
-    // On the last round we no longer honor tool requests — force a final next
-    // iteration by running zero tools (the loop's terminal pass below).
-    if (round === maxRounds) {
+    // Only NEW read tools are progress — drop write tools (never honored) and any
+    // read tool whose identity was already dispatched (re-asking is not progress).
+    const fresh = step.toolCalls.filter((call) => isReadToolName(call.tool) && !dispatched.has(toolIdentity(call)));
+    if (fresh.length === 0) {
+      // No progress (no new read tool requested) and no final — stop looping and
+      // run the terminal finalize pass below. A misbehaving answerer that keeps
+      // re-asking the same tools lands here on its second identical request.
       break;
     }
-    const requested = step.toolCalls.filter((call) => isReadToolName(call.tool));
-    if (requested.length === 0) {
-      // Answerer asked for no (valid) read tools but did not finalize — treat
-      // the next pass as terminal so we don't spin on an empty request.
-      continue;
-    }
-    for (const call of requested) {
+    for (const call of fresh) {
+      dispatched.add(toolIdentity(call));
       toolResults.push(await runTool(deps, call, input.actor));
     }
   }
 
-  // Round budget spent without a final: ask once more with the TERMINAL `finalize`
+  // Progress stopped without a final: ask once more with the TERMINAL `finalize`
   // hint (§7.10) so the prompt tells the model it MUST commit now + stops offering
-  // tools — no more burning the last call on a tool request it can't run.
+  // tools — no more burning a call on a tool request it can't run.
   const finalStep = await deps.answerer.respond({
     question: input.question,
     history: input.history,
@@ -206,6 +216,26 @@ async function runAnswererLoop(deps: ForgeConversationDeps, input: AnswererLoopI
     },
     toolResults,
   };
+}
+
+// The stable identity of a read-tool call (`tool` + canonicalized args) — the
+// dedup key the progress signal keys off. Two calls with the same tool + same args
+// are the SAME request (re-asking it is not progress); different args are distinct.
+function toolIdentity(call: ForgeReadToolCall): string {
+  return `${call.tool}:${stableStringify(call.args)}`;
+}
+
+// Deterministic JSON stringify (object keys sorted) so arg ordering does not make
+// two equivalent requests look distinct.
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value) ?? "null";
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableStringify(item)).join(",")}]`;
+  }
+  const entries = Object.entries(value as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${stableStringify(v)}`).join(",")}}`;
 }
 
 async function runTool(

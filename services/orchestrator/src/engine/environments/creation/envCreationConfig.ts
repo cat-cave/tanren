@@ -23,8 +23,14 @@ import type { EnvCreationDeps } from "./resolveProjectEnvWithCreation.js";
 
 // The default off-baseline build timeout — a cold toolchain install (an off-baseline
 // node/python/rust) can take a few minutes. Overridable via TANREN_ENV_BUILD_TIMEOUT_MS.
+// This is a PER-COMMAND build-invocation hang bound (the host `execFile` / substrate
+// seam), NOT a whole-op deadline or attempt cap: it bounds one build shell-out; a trip
+// fails LOUD (EnvBuildFailedError) for re-drive. It threads into the substrate/ssh seam
+// (the per-call provider-timeout class) the timeout-eradication Wave 3 owns — left to
+// that wave deliberately (this wave eradicated only the COUNT caps).
 const DEFAULT_ENV_BUILD_TIMEOUT_MS = 15 * 60 * 1000;
-// The validation harness's per-command timeout (a `mise exec --version` probe is fast).
+// The validation harness's per-command ssh-probe timeout (a `mise exec --version` probe
+// is fast) — the same per-call substrate-seam hang-bound class, owned by Wave 3.
 const DEFAULT_ENV_VALIDATE_TIMEOUT_MS = 2 * 60 * 1000;
 
 // Resolve the build script path relative to THIS module — it lives at the repo's
@@ -64,6 +70,8 @@ export function buildEnvCreationFromEnv(input: BuildEnvCreationInput): EnvCreati
   // The live path PUSHES (the validation runner pulls the registry ref); a dry-run
   // operator can set TANREN_ENV_BUILD_PUSH=0 for a local-only build.
   const push = process.env["TANREN_ENV_BUILD_PUSH"] !== "0";
+  // Per-command build-invocation / ssh-probe hang bounds (the substrate-seam per-call
+  // timeout class) — owned by the timeout-eradication Wave 3, not this (count-cap) wave.
   const buildTimeoutMs = parsePositiveInt(process.env["TANREN_ENV_BUILD_TIMEOUT_MS"]) ?? DEFAULT_ENV_BUILD_TIMEOUT_MS;
   const validateTimeoutMs =
     parsePositiveInt(process.env["TANREN_ENV_VALIDATE_TIMEOUT_MS"]) ?? DEFAULT_ENV_VALIDATE_TIMEOUT_MS;

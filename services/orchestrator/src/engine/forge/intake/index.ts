@@ -32,6 +32,5 @@ export {
   processWebhookEvent,
   sweepWebhookEvents,
   sweepStuckCandidates,
-  WEBHOOK_EVENT_MAX_ATTEMPTS,
   type WebhookProcessorDeps,
 } from "./webhookProcessor.js";

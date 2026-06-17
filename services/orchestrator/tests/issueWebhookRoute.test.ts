@@ -4,8 +4,8 @@
 // Proves the run-killer fix end-to-end over a SQL-substring stub pool:
 //   • a signed `issues` event PERSISTS a webhook_event row + returns 202 FAST,
 //     with NO triage/alloc inside the handler (the receiver does ONE durable write).
-//   • a processing failure is RE-DRIVEN by the sweeper (not lost) and eventually
-//     dead-lettered after its attempt budget — never an infinite re-drive.
+//   • a TRANSIENT processing failure is RE-DRIVEN by the sweeper UNBOUNDED (never
+//     lost, never capped); a POISON failure dead-letters at once (no infinite re-drive).
 //   • a missing/bad signature → 401 with nothing persisted.
 //   • the receiver persists UNDER the source's org scope (RLS-admittable).
 //   • a >300-char title is truncated by the mapper (no decode crash).
@@ -23,6 +23,7 @@ import {
   mapGithubIssueWebhook,
   type WebhookProcessorDeps,
 } from "../src/engine/forge/intake/index.js";
+import { PersistentlyInvalidSpecError } from "../src/engine/forge/specQuality/index.js";
 import type {
   CandidateTriage,
   InboxSource,
@@ -131,12 +132,14 @@ function stubPool(): StubState {
       return { rows: [], rowCount: 1 };
     }
     if (sql.startsWith("UPDATE webhook_events SET attempts = attempts + 1")) {
-      const [id, error, maxAttempts] = params as [string, string, number];
+      // Mirror the store: status is set by the failure's NATURE (the `poison` boolean),
+      // NOT a count — transient stays `failed` (re-driven UNBOUNDED), poison dead-letters.
+      const [id, error, poison] = params as [string, string, boolean];
       const e = webhookEvents.get(id);
       if (e === undefined) return { rows: [], rowCount: 0 };
       e["attempts"] = (e["attempts"] as number) + 1;
       e["last_error"] = error;
-      e["status"] = (e["attempts"] as number) >= maxAttempts ? "dead_lettered" : "failed";
+      e["status"] = poison ? "dead_lettered" : "failed";
       return { rows: [{ status: e["status"] }], rowCount: 1 };
     }
     if (sql.startsWith("SELECT spec_id, title, status FROM specs")) return { rows: [], rowCount: 0 };
@@ -243,10 +246,10 @@ describe("issues webhook receiver — persist-then-202 (§3.6)", () => {
     void triageCalls;
   });
 
-  it("a processing failure is RE-DRIVEN by the sweeper, then dead-lettered (never lost)", async () => {
+  it("a TRANSIENT processing failure is RE-DRIVEN by the sweeper UNBOUNDED (never lost, never capped)", async () => {
     const pool = stubPool();
     let attempts = 0;
-    const flakyThenDead: TriageAnswerer = {
+    const flaky: TriageAnswerer = {
       async triage(): Promise<CandidateTriage> {
         attempts += 1;
         throw new Error(`transient blip #${attempts}`);
@@ -264,16 +267,47 @@ describe("issues webhook receiver — persist-then-202 (§3.6)", () => {
         payload: JSON.parse(issuesBody(2, "boom")),
       }),
     );
-    const deps = processorDeps(flakyThenDead, pool.pool);
-    // First process attempt fails → row goes `failed` (recoverable, NOT lost).
+    const deps = processorDeps(flaky, pool.pool);
+    // First process attempt fails → row goes `failed` (transient, NOT lost).
     await processWebhookEvent(deps, event);
     expect(pool.webhookEvents.get(event.id)!["status"]).toBe("failed");
-    // The sweeper re-drives `failed` rows each tick; it stays recoverable until the
-    // attempt budget is exhausted, then dead-letters (a loud terminal, no re-drive).
-    for (let i = 0; i < 10; i++) await sweepWebhookEvents(deps);
+    // The sweeper re-drives `failed` rows each tick; a TRANSIENT failure NEVER
+    // dead-letters on a count — it stays `failed` and re-drivable across many sweeps.
+    for (let i = 0; i < 20; i++) await sweepWebhookEvents(deps);
+    expect(pool.webhookEvents.get(event.id)!["status"]).toBe("failed");
+    expect(await sweepWebhookEvents(deps)).toBeGreaterThan(0);
+    // It was re-driven across every sweep — never silently dropped, never capped.
+    expect(attempts).toBeGreaterThan(20);
+  });
+
+  it("a POISON failure (a persistently-invalid spec) dead-letters at once (no infinite re-drive)", async () => {
+    const pool = stubPool();
+    // A triage that throws the spec-quality gate's loud non-convergence surface —
+    // a genuinely non-recoverable delivery (re-triaging it forever would burn cost).
+    let attempts = 0;
+    const poison: TriageAnswerer = {
+      async triage(): Promise<CandidateTriage> {
+        attempts += 1;
+        throw new PersistentlyInvalidSpecError({ title: "t", description: "d", acceptanceCriteria: [] }, undefined, 3);
+      },
+    };
+    const { WebhookEventStore } = await import("../src/engine/forge/intake/index.js");
+    const { runWithOrgScope } = await import("@tanren/db");
+    const event = await runWithOrgScope(pool.pool, source.orgId, (c) =>
+      WebhookEventStore.persist(c, {
+        sourceId: source.id,
+        orgId: source.orgId,
+        eventType: "issues",
+        deliveryId: "d2",
+        payload: JSON.parse(issuesBody(3, "poison")),
+      }),
+    );
+    const deps = processorDeps(poison, pool.pool);
+    await processWebhookEvent(deps, event);
+    // Dead-lettered on the FIRST failure (poison), never re-driven again.
     expect(pool.webhookEvents.get(event.id)!["status"]).toBe("dead_lettered");
-    // It was re-driven across multiple sweeps — never silently dropped.
-    expect(attempts).toBeGreaterThan(1);
+    for (let i = 0; i < 5; i++) await sweepWebhookEvents(deps);
+    expect(attempts).toBe(1);
   });
 
   it("auto-routes a routable delivery into the DAG (exactly one spec) via the processor", async () => {

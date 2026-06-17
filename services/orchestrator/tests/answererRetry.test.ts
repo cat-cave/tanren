@@ -15,7 +15,12 @@
 
 import { describe, expect, it } from "vitest";
 import type { AnswererAdapter } from "../src/engine/providers/types.js";
-import { isTransientAnswererError, withAnswererRetry, wrapProviderResearcher } from "../src/engine/templates/index.js";
+import {
+  isTransientAnswererError,
+  PersistentAnswererOutageError,
+  withAnswererRetry,
+  wrapProviderResearcher,
+} from "../src/engine/templates/index.js";
 import { ResearchOutput } from "../src/engine/templates/creation/researchSchema.js";
 
 const request = { stack: "ts-pnpm", runtime: "node", packageManager: "pnpm", deployTarget: "vercel" };
@@ -81,14 +86,19 @@ describe("research seam — transient timeout RETRIES, persistent fails loud (v3
     expect(research.researchSources).toEqual(groundedOutput.researchSources);
   });
 
-  it("a PERSISTENT timeout (every bounded attempt) fails LOUD after the bound — never infinite", async () => {
+  it("a PERSISTENT (identical, stuck) timeout surfaces LOUD on non-convergence — never infinite", async () => {
     const { adapter, calls } = scriptedAdapter({
       throwUntil: Number.POSITIVE_INFINITY,
       error: () => new Error("Codex Answerer timed out for schema tanren.template_research.v1"),
     });
-    const researcher = wrapProviderResearcher(adapter, { retry: { maxAttempts: 3, sleep: async () => {} } });
-    await expect(researcher.research(request)).rejects.toThrow(/timed out/u);
-    expect(calls()).toBe(3);
+    // The IDENTICAL "timeout" signal recurring at the saturated backoff is a proven
+    // outage — it surfaces loud as a PersistentAnswererOutageError (no infinite loop,
+    // and no fixed attempt count — it escalates only once the curve has saturated).
+    const researcher = wrapProviderResearcher(adapter, { retry: { sleep: async () => {} } });
+    await expect(researcher.research(request)).rejects.toBeInstanceOf(PersistentAnswererOutageError);
+    // The retries ran past the old 4-attempt cap (the curve saturates at 4 entries,
+    // then the 5th identical signal proves the fixed point) — unbounded-until-stuck.
+    expect(calls()).toBeGreaterThan(4);
   });
 
   it("a PERSISTENT (non-transient) usage-limit fails LOUD immediately — no retry burned", async () => {
@@ -123,7 +133,7 @@ describe("withAnswererRetry — transient classification + bounded backoff", () 
     expect(isTransientAnswererError(new Error("something else entirely"))).toBe(false);
   });
 
-  it("backs off (exponential, bounded) between transient retries", async () => {
+  it("backs off (exponential, saturating) between UNBOUNDED transient retries", async () => {
     const waits: number[] = [];
     let calls = 0;
     const value = await withAnswererRetry(
@@ -135,7 +145,6 @@ describe("withAnswererRetry — transient classification + bounded backoff", () 
         return "ok";
       },
       {
-        maxAttempts: 4,
         sleep: async (ms) => {
           waits.push(ms);
         },
@@ -143,6 +152,37 @@ describe("withAnswererRetry — transient classification + bounded backoff", () 
     );
     expect(value).toBe("ok");
     // 3 backoff waits before the 4th (succeeding) attempt, the recoverable curve: 3s/10s/30s.
+    // A CHANGING / clearing signal keeps retrying — no fixed attempt cap stopped it.
     expect(waits).toEqual([3_000, 10_000, 30_000]);
+  });
+
+  it("a CHANGING transient signal keeps retrying past saturation (progress, not a fixed point)", async () => {
+    // The transient signal changes each attempt (timeout → 503 → reset → 504 → 502 …)
+    // — that is PROGRESS, so the loop keeps retrying well past the saturated curve and
+    // succeeds, never tripping the non-convergence escalation.
+    const signals = [
+      "timed out",
+      "HTTP 503 Service Unavailable",
+      "read ECONNRESET",
+      "HTTP 504 Gateway Timeout",
+      "HTTP 502 Bad Gateway",
+      "socket hang up",
+    ];
+    let calls = 0;
+    const value = await withAnswererRetry(
+      async () => {
+        if (calls < signals.length) {
+          const message = signals[calls]!;
+          calls += 1;
+          throw new Error(message);
+        }
+        return "ok";
+      },
+      { sleep: async () => {} },
+    );
+    expect(value).toBe("ok");
+    // It retried through all 6 distinct signals (past the 4-entry saturation) — a
+    // changing signal is forward motion, so the fixed-point escalation never fired.
+    expect(calls).toBe(signals.length);
   });
 });

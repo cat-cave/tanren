@@ -173,12 +173,14 @@ export function webhookEventSql(
     return { rows: [], rowCount: e ? 1 : 0 };
   }
   if (sql.startsWith("UPDATE webhook_events SET attempts = attempts + 1")) {
-    const [id, error, maxAttempts] = params as [string, string, number];
+    // Mirror the store: status is set by the failure's NATURE (the `poison` boolean),
+    // NOT a count — transient stays `failed` (re-driven UNBOUNDED), poison dead-letters.
+    const [id, error, poison] = params as [string, string, boolean];
     const e = visible().find((x) => x.id === id);
     if (e === undefined) return { rows: [], rowCount: 0 };
     e.attempts += 1;
     e.last_error = error;
-    e.status = e.attempts >= maxAttempts ? "dead_lettered" : "failed";
+    e.status = poison ? "dead_lettered" : "failed";
     return { rows: [{ status: e.status }], rowCount: 1 };
   }
   return undefined;
