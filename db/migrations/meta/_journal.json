@@ -92,6 +92,13 @@
       "when": 1781721122147,
       "tag": "0012_premium_epoch",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1781735956320,
+      "tag": "0013_jobqueue_drop_max_attempts",
+      "breakpoints": true
     }
   ]
 }

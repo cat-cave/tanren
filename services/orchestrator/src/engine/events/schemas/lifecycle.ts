@@ -96,17 +96,17 @@ export const TaskFailedPayload = z
   })
   .strict();
 
-// queue hardening. Emitted when a job's bounded re-claim budget is
-// exhausted and the job is moved to the terminal `dead_letter` state instead
-// of being retried forever. `attempts` is the final attempt count that tripped
-// the budget; `maxAttempts` is the configured ceiling. The failure kind/message
-// echo the last execution failure so operators can triage from the timeline.
-export const JobDeadLetteredPayload = z
+// queue lease recovery. Emitted when a job's lease lapses (a crashed or
+// slow worker) and the reaper requeues it — ALWAYS, unbounded; there is NO
+// attempt-cap dead-letter (a re-claim is recovery, not a strike). `attempts` is
+// the DIAGNOSTIC re-claim count: a value that keeps climbing on the same job is a
+// worker repeatedly crashing on it — an infra problem this LOUD signal surfaces
+// for triage, never a give-up budget.
+export const JobLeaseExpiredPayload = z
   .object({
     jobId: z.string(),
     taskKind: TaskKindLiteral,
     attempts: z.number().int(),
-    maxAttempts: z.number().int(),
     failureKind: z.string(),
     message: z.string(),
   })

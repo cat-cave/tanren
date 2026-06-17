@@ -135,7 +135,7 @@ import {
   GateVerdictPayload,
 } from "./schemas/gate.js";
 import {
-  JobDeadLetteredPayload,
+  JobLeaseExpiredPayload,
   RunCancelledPayload,
   RunCompletedPayload,
   RunFailedPayload,
@@ -192,8 +192,8 @@ export const EventRegistry = {
   "task.started": TaskStartedPayload,
   "task.completed": TaskCompletedPayload,
   "task.failed": TaskFailedPayload,
-  // queue hardening: a job whose retry budget is exhausted is dead-lettered (terminal).
-  "job.dead_lettered": JobDeadLetteredPayload,
+  // queue lease recovery: a lapsed-lease job is requeued (unbounded, no attempt-cap dead-letter); LOUD infra signal (lifecycle.ts).
+  "job.lease_expired": JobLeaseExpiredPayload,
   // Operator cancel-spec/cancel-run audit (terminal cancel + runner release; schemas/lifecycle.ts).
   "spec.cancelled": SpecCancelledPayload,
   "run.cancelled": RunCancelledPayload,

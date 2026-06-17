@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_MAX_ATTEMPTS, FakeJobQueue, PgJobQueue } from "../src/engine/contracts/jobQueue.js";
+import { FakeJobQueue, PgJobQueue } from "../src/engine/contracts/jobQueue.js";
 
 describe("job queue", () => {
   it("enqueues, claims, completes, fails, and does not double-claim fake jobs", async () => {
@@ -66,7 +66,6 @@ describe("job queue", () => {
       taskKind: "write",
       payload: { ok: true },
       attempts: 1,
-      maxAttempts: DEFAULT_MAX_ATTEMPTS,
     });
     expect(client.sql).toContain("BEGIN");
     expect(client.sql[1]).toContain("FOR UPDATE SKIP LOCKED");
@@ -119,17 +118,16 @@ describe("job queue", () => {
   });
 });
 
-describe("job queue lease recovery (P3-0028)", () => {
-  it("requeues a job whose lease expired while it still has retry budget", async () => {
+describe("job queue lease recovery", () => {
+  it("requeues a job whose lease expired (recovery, not a strike)", async () => {
     const queue = new FakeJobQueue<{ ok: boolean }>();
     await queue.enqueue({
       runId: "run_1",
       taskKind: "plan",
       payload: { ok: true },
-      maxAttempts: 3,
     });
     const claimed = await queue.claim("plan", { leaseMs: 10 });
-    expect(claimed).toMatchObject({ attempts: 1, maxAttempts: 3 });
+    expect(claimed).toMatchObject({ attempts: 1 });
 
     // Lease has lapsed (now is past leased_until) and a worker can't be holding it.
     const reaped = await queue.reapExpiredLeases({ now: new Date(Date.now() + 1_000) });
@@ -139,42 +137,30 @@ describe("job queue lease recovery (P3-0028)", () => {
         runId: "run_1",
         taskKind: "plan",
         attempts: 1,
-        maxAttempts: 3,
         outcome: "requeued",
       },
     ]);
-    // Requeued → re-claimable, and the attempt count keeps climbing.
+    // Requeued → re-claimable, and the attempt count keeps climbing (diagnostic).
     const reclaimed = await queue.claim("plan", { leaseMs: 10 });
     expect(reclaimed).toMatchObject({ id: claimed!.id, attempts: 2 });
   });
 
-  it("dead-letters a job once its retry budget is exhausted instead of requeueing", async () => {
+  it("requeues INDEFINITELY — never dead-letters a transient lease-expiry on a count", async () => {
     const queue = new FakeJobQueue<{ ok: boolean }>();
-    await queue.enqueue({
-      runId: "run_1",
-      taskKind: "plan",
-      payload: { ok: true },
-      maxAttempts: 2,
-    });
+    await queue.enqueue({ runId: "run_1", taskKind: "plan", payload: { ok: true } });
 
-    // Burn the budget: claim → lease expire → reap, twice.
-    await queue.claim("plan", { leaseMs: 10 });
-    expect((await queue.reapExpiredLeases({ now: new Date(Date.now() + 1_000) }))[0]?.outcome).toBe("requeued");
-    await queue.claim("plan", { leaseMs: 10 });
-    const final = await queue.reapExpiredLeases({ now: new Date(Date.now() + 1_000) });
+    // Far past any old fixed cap (DEFAULT_MAX_ATTEMPTS was 5): every lease-expiry
+    // requeues, the job is NEVER terminal. A crashing worker is loud infra, not a
+    // job to drop on a count.
+    for (let attempt = 1; attempt <= 20; attempt += 1) {
+      const claimed = await queue.claim("plan", { leaseMs: 10 });
+      expect(claimed).toMatchObject({ attempts: attempt });
+      const reaped = await queue.reapExpiredLeases({ now: new Date(Date.now() + 1_000) });
+      expect(reaped[0]?.outcome).toBe("requeued");
+    }
 
-    expect(final).toEqual([
-      {
-        id: "job_1",
-        runId: "run_1",
-        taskKind: "plan",
-        attempts: 2,
-        maxAttempts: 2,
-        outcome: "dead_lettered",
-      },
-    ]);
-    // Dead-lettered → terminal, never re-claimed.
-    expect(await queue.claim("plan")).toBeUndefined();
+    // Still claimable after 20 re-claims — there is no terminal dead-letter state.
+    expect(await queue.claim("plan")).toMatchObject({ runId: "run_1", attempts: 21 });
   });
 
   it("does not reap a job whose lease is still fresh (heartbeat keeps it alive)", async () => {
@@ -206,8 +192,10 @@ describe("job queue lease recovery (P3-0028)", () => {
     expect(pool.sql[0]).toContain("heartbeat_at = now()");
     expect(pool.sql[0]).toContain("status = 'running'");
     const reapSql = pool.sql[1] ?? "";
-    expect(reapSql).toContain("attempts >= max_attempts THEN 'dead_letter'");
-    expect(reapSql).toContain("ELSE 'queued'");
+    // Always requeue — no attempt-cap dead-letter branch.
+    expect(reapSql).toContain("SET status = 'queued'");
+    expect(reapSql).not.toContain("dead_letter");
+    expect(reapSql).not.toContain("max_attempts");
     expect(reapSql).toContain("leased_until < now()");
   });
 });

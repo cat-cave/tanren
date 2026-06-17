@@ -4,7 +4,7 @@
 // `pg.Pool` substitute that implements the exact SQL statements PgJobQueue
 // emits with real state semantics (so the queue contract — atomic claim,
 // terminal complete/fail — is exercised end to end without a live database).
-import { PgJobQueue, FakeJobQueue, DEFAULT_MAX_ATTEMPTS } from "../../src/engine/contracts/jobQueue.js";
+import { PgJobQueue, FakeJobQueue } from "../../src/engine/contracts/jobQueue.js";
 import type { JobQueue } from "../../src/engine/contracts/jobQueue.js";
 import { describeJobQueueConformance } from "./jobQueueConformance.js";
 
@@ -15,7 +15,6 @@ interface JobRow {
   task_kind: string;
   payload: unknown;
   attempts: number;
-  max_attempts: number;
   status: string;
 }
 
@@ -32,7 +31,6 @@ function envelopeRow(row: JobRow): Record<string, unknown> {
     task_kind: row.task_kind,
     payload: row.payload,
     attempts: row.attempts,
-    max_attempts: row.max_attempts,
   };
 }
 
@@ -87,7 +85,6 @@ class MemoryJobQueuePool {
       task_kind: params[2] as string,
       payload: JSON.parse(params[3] as string),
       attempts: (params[4] as number) ?? 0,
-      max_attempts: (params[5] as number) ?? DEFAULT_MAX_ATTEMPTS,
       status: "queued",
     };
     this.jobs.push(row);
