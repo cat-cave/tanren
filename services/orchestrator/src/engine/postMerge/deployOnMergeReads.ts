@@ -116,6 +116,14 @@ export async function appendDeploySkipped(
  * LEGITIMATE skip, NOT a failure (no `deploy.failed`, no throw). Returns `false` for a
  * normal product (it deploys on merge as before). A project with no org cannot scope the
  * tenant `events` write — the `log.info` is then the observable record.
+ *
+ * IDEMPOTENT (the apex-v35 hot-loop fix): the `deploy.skipped` append carries the `runId`,
+ * so it fires a `tanren_run` NOTIFY → re-wakes the post-merge subscriber → re-drives
+ * `check()` → would re-append the SAME skip on EVERY pass forever (the
+ * 1911-events-in-seconds live hot-loop). So this emits the skip AT MOST ONCE per run: if
+ * the run already carries a `template_build` `deploy.skipped`, it returns `true` (still a
+ * skip — no deploy) WITHOUT re-appending. The `config_incomplete` / `merge_sha_missing`
+ * skips throw, so they cannot self-loop; this matches their once-and-observable intent.
  */
 export async function skipTemplateBuildDeploy(
   pool: pg.Pool,
@@ -130,24 +138,49 @@ export async function skipTemplateBuildDeploy(
     return result.rows[0];
   });
   if (row === undefined || !isTemplateBuildProjectConfig(row.config)) return false;
-  const detail =
-    `project '${args.projectId}' is a template-creation build — it authors a reusable template, not a ` +
-    `running product, so no product deploy is triggered on merge (the template carries a deploy verb for the ` +
-    `PRODUCTS later built from it)`;
   log.info("merged template-creation build — skipping deploy-on-merge (a template is not a deployed product)", {
     runId: args.runId,
     projectId: args.projectId,
   });
-  if (row.org_id !== null) {
-    await appendDeploySkipped(ctx, {
-      runId: args.runId,
-      projectId: args.projectId,
-      orgId: row.org_id,
-      reason: "template_build",
-      detail,
-    });
-  }
+  // A project with no org cannot scope the tenant `events` write — the `log.info` above is
+  // the observable record; nothing to append / dedup.
+  if (row.org_id === null) return true;
+  // IDEMPOTENCY GATE: emit the durable `deploy.skipped` ONCE. A prior `template_build` skip
+  // on this run means the timeline already records it — re-appending would only re-fire the
+  // `tanren_run` NOTIFY and self-loop the subscriber.
+  if (await alreadyTemplateBuildSkipped(pool, args.runId)) return true;
+  const detail =
+    `project '${args.projectId}' is a template-creation build — it authors a reusable template, not a ` +
+    `running product, so no product deploy is triggered on merge (the template carries a deploy verb for the ` +
+    `PRODUCTS later built from it)`;
+  await appendDeploySkipped(ctx, {
+    runId: args.runId,
+    projectId: args.projectId,
+    orgId: row.org_id,
+    reason: "template_build",
+    detail,
+  });
   return true;
+}
+
+/**
+ * Whether this run already carries a `template_build` `deploy.skipped` — the idempotency
+ * gate that stops the skip self-looping the run-activity bus (each append fires a
+ * `tanren_run` NOTIFY that re-wakes the post-merge subscriber). System-scoped so it reads
+ * the run's events regardless of the ambient tenant scope. Matches on the JSONB `reason`
+ * so an unrelated skip reason (there is none for a template build today, but defensively)
+ * never masks a genuine first emit.
+ */
+async function alreadyTemplateBuildSkipped(pool: pg.Pool, runId: string): Promise<boolean> {
+  return runWithSystemScope(pool, async (client) => {
+    const result = await client.query<{ id: string }>(
+      `SELECT id FROM events
+         WHERE run_id = $1 AND event_type = 'deploy.skipped' AND payload->>'reason' = 'template_build'
+         LIMIT 1`,
+      [runId],
+    );
+    return result.rows[0] !== undefined;
+  });
 }
 
 /**
