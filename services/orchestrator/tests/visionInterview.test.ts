@@ -420,19 +420,57 @@ describe("deriveFromCapture · creates the product graph (no migration)", () => 
     expect(state.projects.size).toBe(0);
   });
 
-  it("persists the PRODUCT VISION (design-DNA + identity pitch on config; persona surface on metadata) — no migration", async () => {
+  it("persists the PRODUCT VISION (design note + identity pitch on config; persona surface on metadata) — no migration", async () => {
     const { derived, configs, state } = await runInterviewAndDerive();
 
-    // Design-DNA + identity pitch land on `projects.config.productVision` (the
-    // existing jsonb blob — no new table). The interview captured both.
+    // The design note (the captured design contract's one-line `identity`) +
+    // identity pitch land on `projects.config.productVision` (the existing jsonb
+    // blob — no new table) for the conflict resolver. The interview captured both.
     const config = configs.get(derived.projectId);
     const vision = config?.productVision as { pitch?: string; designDna?: string } | undefined;
     expect(vision).toBeDefined();
-    expect(vision?.designDna).toBe("industrial");
+    expect(vision?.designDna).toBe("an industrial, dense, trustworthy ops console");
     expect(vision?.pitch).toContain("supply chain operations");
     // The persona SURFACE is persisted on the persona `metadata` jsonb (no column).
     const surfaces = state.personaMetadata.map((m) => m["surface"]).filter((s) => s !== undefined);
     expect(surfaces).toContain("desktop");
     expect(surfaces).toContain("handheld");
+  });
+
+  it("persists the captured DESIGN CONTRACT as a first-class versioned entity (native design subsystem, WS-D1)", async () => {
+    const { derived, state } = await runInterviewAndDerive();
+
+    // The interview captured a design contract → derive persists it as a
+    // first-class `design_contracts` row (version 1), and surfaces its id. The
+    // contract is DOMAIN-GENERAL: a typed core + domain-adaptive dimensions.
+    expect(derived.designContractId).toBeDefined();
+    expect(state.designContracts).toHaveLength(1);
+    const contract = state.designContracts[0] as {
+      version?: number;
+      domain?: string;
+      identity?: string;
+      intent?: string;
+      personaRefs?: string[];
+      behaviorRefs?: string[];
+      dimensions?: Array<{ key: string; personaRefs: string[] }>;
+    };
+    expect(contract.version).toBe(1);
+    expect(contract.domain).toBe("saas-web");
+    expect(contract.identity).toBe("an industrial, dense, trustworthy ops console");
+    expect(Array.isArray(contract.dimensions)).toBe(true);
+
+    // THE MOAT — the captured persona NAMES + behavior keys resolved to the
+    // PERSISTED persona/behavior ids (first-class links, not freeform text). The
+    // deterministic interview bound two personas + two behaviors, plus a
+    // persona-scoped layout dimension (the line worker's view).
+    expect(contract.personaRefs).toBeDefined();
+    expect(contract.personaRefs).toHaveLength(2);
+    expect(contract.behaviorRefs).toBeDefined();
+    expect(contract.behaviorRefs).toHaveLength(2);
+    // Every resolved ref is a real persisted id (no dangling refs).
+    for (const ref of contract.personaRefs ?? []) expect(ref).toMatch(/^persona_/u);
+    const layout = (contract.dimensions ?? []).find((d) => d.key === "layout");
+    expect(layout?.personaRefs).toHaveLength(1);
+    expect(layout?.personaRefs[0]).toMatch(/^persona_/u);
   });
 });

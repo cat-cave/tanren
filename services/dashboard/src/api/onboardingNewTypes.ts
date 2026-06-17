@@ -48,12 +48,39 @@ export interface CaptureLifecycle {
   deploy: string;
 }
 
+// One domain-adaptive design dimension (native design subsystem, WS-D1) — the
+// client mirror of the orchestrator's `CaptureDesignDimension`. `personas` are the
+// persona names whose view this dimension describes (persona-scoped design).
+export interface CaptureDesignDimension {
+  key: string;
+  label: string;
+  intent: string;
+  guidance: string;
+  personas: string[];
+}
+
+// The captured DESIGN CONTRACT (native design subsystem, WS-D1) — supersedes the
+// decorative 80-char `designDna` hint. A domain-general design-intent contract:
+// a typed core + a domain-adaptive dimension set + FIRST-CLASS persona/behavior
+// links (`personas` by name, `behaviors` by `persona::title` key — the moat
+// binding design to Tanren's native entity graph). `null` until the design step.
+export interface CaptureDesignContract {
+  domain: string;
+  identity: string;
+  intent: string;
+  principles: string[];
+  constraints: string[];
+  personas: string[];
+  behaviors: string[];
+  dimensions: CaptureDesignDimension[];
+}
+
 export interface InterviewCapture {
   identity: CaptureIdentity | null;
   personas: CapturePersona[];
   behaviors: CaptureBehavior[];
   interfaces: CaptureInterface[];
-  designDna: string;
+  designContract: CaptureDesignContract | null;
   architecture: CaptureArchitectureLine[];
   lifecycle: CaptureLifecycle | null;
   rulesets: string[];
@@ -88,7 +115,7 @@ export function emptyCapture(): InterviewCapture {
     personas: [],
     behaviors: [],
     interfaces: [],
-    designDna: "",
+    designContract: null,
     architecture: [],
     lifecycle: null,
     rulesets: [],

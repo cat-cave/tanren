@@ -163,7 +163,35 @@ const SCRIPT: InterviewRoundOutput[] = [
   },
   {
     say: "Industrial it is. Here's the architecture I'd propose — confirm or override.",
-    captureDelta: { designDna: "industrial" },
+    captureDelta: {
+      designContract: {
+        domain: "saas-web",
+        identity: "an industrial, dense, trustworthy ops console",
+        intent: "a calm, information-dense control surface that an operator trusts at a glance",
+        principles: ["two accent colors max", "no AI-slop gradients"],
+        constraints: ["WCAG AA"],
+        // THE MOAT — bind to the project's typed persona + behavior graph.
+        personas: ["ops manager", "line worker"],
+        behaviors: ["line worker::clock in with badge", "ops manager::place a purchase order"],
+        dimensions: [
+          {
+            key: "tokens",
+            label: "Design tokens",
+            intent: "an industrial palette + a dense type scale",
+            guidance: "",
+            personas: [],
+          },
+          {
+            key: "layout",
+            label: "Layout",
+            intent: "a dense, scannable grid for the line worker's handheld",
+            guidance: "",
+            // Persona-scoped: this dimension is the line worker's view of the surface.
+            personas: ["line worker"],
+          },
+        ],
+      },
+    },
     suggestions: [{ label: "looks right", value: "confirm the proposed architecture" }],
     complete: false,
   },

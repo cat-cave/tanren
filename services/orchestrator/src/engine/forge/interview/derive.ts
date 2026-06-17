@@ -33,7 +33,12 @@ import { MilestoneCreateInput, MilestoneStore } from "../../entities/milestones.
 import { PersonaCreateInput, PersonaStore } from "../../entities/personas.js";
 import { provisionedGreenfieldProjectConfigProof } from "../../workflow/projectConfigWriteGuards.js";
 import { createProject, createSpec } from "../../workflow/projectSpec.js";
-import { deriveBehaviorSpec, resumeDerivedProject } from "./deriveBehaviorSpec.js";
+import {
+  deriveInterfaceMilestones,
+  persistDesignContract,
+  productVisionConfig,
+  resumeDerivedProject,
+} from "./deriveBehaviorSpec.js";
 import {
   DeployNotLinkedError,
   isDeployNotLinked,
@@ -46,13 +51,7 @@ import {
 import { MissingLifecycleError, scaffoldSpecsFor } from "./deriveScaffoldSpecs.js";
 import { assertSeeded, selectSeedTemplate, type ScaffoldOrigin } from "./interviewTemplateGate.js";
 import type { SelectedTemplate, TemplateRegistryQuery, TemplateSelectionDecision } from "./templateSelection.js";
-import {
-  InterviewCapture,
-  safeProjectSlug,
-  type CaptureBehavior,
-  type CaptureInterface,
-  type CaptureLifecycle,
-} from "./types.js";
+import { InterviewCapture, safeProjectSlug, type CaptureLifecycle } from "./types.js";
 
 export interface DeriveInput {
   orgId: string;
@@ -139,20 +138,6 @@ function autonomousConfig(autonomy: "auto" | "simulated"): Record<string, unknow
   };
 }
 
-// The product-vision slice of the project config (the identity `pitch` + the
-// `designDna`), persisted onto `projects.config` so the conflict resolver can
-// frame a resolution against the product vision. Only the captured fields are
-// written — an interview that surfaced neither yields `{}` (no `productVision`
-// key at all = a real empty state, parsed away by the optional schema field).
-function productVisionConfig(capture: InterviewCapture): { productVision?: Record<string, string> } {
-  const vision: Record<string, string> = {};
-  const pitch = capture.identity?.pitch.trim();
-  if (pitch !== undefined && pitch !== "") vision["pitch"] = pitch;
-  const designDna = capture.designDna.trim();
-  if (designDna !== "") vision["designDna"] = designDna;
-  return Object.keys(vision).length > 0 ? { productVision: vision } : {};
-}
-
 export interface DeriveResult {
   projectId: string;
   projectName: string;
@@ -161,6 +146,9 @@ export interface DeriveResult {
   personaIds: string[];
   behaviorIds: string[];
   milestoneIds: string[];
+  // The id of the persisted first-class `DesignContract` entity (WS-D1), when the
+  // interview captured a design contract. Absent ⇒ no design intent surfaced.
+  designContractId?: string;
   // TEMPLATING WAVE 3 — the selection OUTCOME (templating-system.md §3), surfaced so
   // the decision is observable on the derive result (strong/partial = seeded;
   // none/blocked = from-scratch). Absent when selection was skipped (no registry
@@ -184,25 +172,6 @@ function templateRefConfig(decision: TemplateSelectionDecision | undefined): {
       validatedSha: sel.validationProof.validatedSha,
     },
   };
-}
-
-// A behavior belongs to an interface when its persona's surface matches the
-// interface name (best-effort, lowercase substring). Unmatched behaviors fall
-// to the first interface so nothing is dropped from the DAG.
-function interfaceForBehavior(
-  behavior: CaptureBehavior,
-  capture: InterviewCapture,
-  interfaces: CaptureInterface[],
-): CaptureInterface | undefined {
-  const persona = capture.personas.find((p) => p.name.toLowerCase() === behavior.persona.toLowerCase());
-  const surface = (persona?.surface ?? "").toLowerCase();
-  if (surface !== "") {
-    const match = interfaces.find(
-      (i) => i.name.toLowerCase().includes(surface) || surface.includes(i.name.toLowerCase().split(" ")[0] ?? ""),
-    );
-    if (match !== undefined) return match;
-  }
-  return interfaces[0];
 }
 
 // The repo-resolution step (extracted for file-size discipline). REPO-FIRST + IDEMPOTENT
@@ -435,57 +404,31 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
     previousScaffoldSpecId = spec.specId;
   }
 
-  // 3 · one milestone per interface, with a schema spec + a spec per behavior.
-  const interfaces = capture.interfaces.length > 0 ? capture.interfaces : [{ name: "app", note: "" }];
-  const behaviorIds: string[] = [];
-  for (const [index, iface] of interfaces.entries()) {
-    // M1 is the scaffold milestone; interfaces start at M2.
-    const order = index + 1;
-    const milestone = await MilestoneStore.create(
-      pool,
-      MilestoneCreateInput.parse({
-        projectId,
-        label: `M${order + 1}`,
-        name: iface.name,
-        orderIndex: order,
-        status: "planned",
-      }),
-      actor,
-    );
-    milestoneIds.push(milestone.id);
+  // 3 · one milestone per interface, with a schema spec + a spec per behavior
+  // (extracted to `deriveInterfaceMilestones` for the per-file line cap). It also
+  // returns THE MOAT's `behaviorIdByKey` so step 4 binds the contract's behaviors.
+  const ifaceResult = await deriveInterfaceMilestones(pool, {
+    projectId,
+    orgId: input.orgId,
+    capture,
+    scaffoldSpecIds,
+    personaIdByName,
+    actor,
+  });
+  specIds.push(...ifaceResult.specIds);
+  milestoneIds.push(...ifaceResult.milestoneIds);
+  const behaviorIds = ifaceResult.behaviorIds;
 
-    // Per-interface schema spec: depends on the scaffold (critical path).
-    const schemaSpec = await createSpec(
-      pool,
-      {
-        projectId,
-        title: `${iface.name} · schema + scaffold`,
-        description: `Schema + surface scaffold for the ${iface.name}.`,
-        acceptanceCriteria: [`given the ${iface.name}, when scaffolded, then its schema + routing exist`],
-        dependsOn: scaffoldSpecIds,
-      },
-      actor,
-    );
-    await MilestoneStore.setSpecMilestone(pool, { specId: schemaSpec.specId, milestoneId: milestone.id }, actor);
-    specIds.push(schemaSpec.specId);
-
-    const ifaceBehaviors = capture.behaviors.filter(
-      (b) => interfaceForBehavior(b, capture, interfaces)?.name === iface.name,
-    );
-    for (const behavior of ifaceBehaviors) {
-      const behaviorSpec = await deriveBehaviorSpec(pool, {
-        projectId,
-        orgId: input.orgId,
-        behavior,
-        milestoneId: milestone.id,
-        dependsOn: [...scaffoldSpecIds, schemaSpec.specId],
-        personaIdByName,
-        actor,
-      });
-      specIds.push(behaviorSpec.specId);
-      if (behaviorSpec.behaviorId !== undefined) behaviorIds.push(behaviorSpec.behaviorId);
-    }
-  }
+  // 4 · the DESIGN CONTRACT entity (WS-D1) — the captured contract persisted as a
+  // first-class version-1 `DesignContract`. LAST (after personas + behaviors exist)
+  // so THE MOAT links resolve to real persisted ids. No capture ⇒ undefined (no row).
+  const designContractId = await persistDesignContract(pool, {
+    orgId: input.orgId,
+    projectId,
+    capture: capture.designContract,
+    personaIdByName,
+    behaviorIdByKey: ifaceResult.behaviorIdByKey,
+  });
 
   return {
     projectId,
@@ -495,6 +438,7 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
     personaIds: [...personaIdByName.values()],
     behaviorIds,
     milestoneIds,
+    ...(designContractId === undefined ? {} : { designContractId }),
     ...(templateSelection === undefined ? {} : { templateSelection }),
   };
 }

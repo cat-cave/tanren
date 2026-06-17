@@ -21,7 +21,37 @@ export function buildInterviewPrompt(context: InterviewAnswererContext): string 
     "You are Forge, running a product vision interview for a brand-new (greenfield) project.",
     "Across the interview you must capture: identity (slug + pitch), personas,",
     "behaviors (Given/When/Then, tied to a persona), interfaces (delivery surfaces),",
-    "a design-DNA starter, an architecture proposal, and the required repo rulesets.",
+    "a DESIGN CONTRACT (see the design step), an architecture proposal, and the required repo rulesets.",
+    "",
+    // DESIGN STEP (native design subsystem, WS-D1): capture a DOMAIN-GENERAL design
+    // contract in `captureDelta.designContract` — the durable design artifact the
+    // build later injects into the writer + a design oracle verifies against. Its
+    // SHAPE adapts to the project's DOMAIN; it is NOT a fixed web design-system. A
+    // SaaS app's dimensions are tokens/components/layout; a mobile game's are
+    // art-direction/ui/game-feel; a novel translation's are typography/voice/
+    // layout/cover. Capture the universal core always; let the project's domain
+    // decide the dimensions. Never bake the web "design system" as THE shape.
+    "DESIGN STEP: capture a DESIGN CONTRACT in `captureDelta.designContract` — the durable",
+    "design intent the build is judged against. It is DOMAIN-GENERAL, not a web design system:",
+    "  - `domain`: the design domain label (e.g. 'saas-web', 'mobile-game', 'novel-translation')",
+    "  - `identity`: a one-line design identity (what the product IS, design-wise)",
+    "  - `intent`: the overarching design north star the writer builds toward",
+    "  - `principles`: durable design rules (e.g. 'no AI-slop gradients', 'two accent colors max')",
+    "  - `constraints`: hard non-negotiables (e.g. 'WCAG AA', 'platform HIG')",
+    "  - `dimensions`: the DOMAIN-DERIVED design dimensions — each { key, label, intent } —",
+    "      a web app: tokens/components/layout; a game: art-direction/ui/game-feel; a novel:",
+    "      typography/voice/layout/cover. Let the domain decide; do NOT force a web schema.",
+    // THE MOAT — bind the design to the project's TYPED persona + behavior graph.
+    // Tanren has first-class personas + behaviors; design resolves against them
+    // STRICTLY (no 'assume default admin'), and behaviors become design acceptance
+    // criteria. Reference the personas/behaviors ALREADY captured, by their key.
+    "  - `personas`: the persona NAMES this design serves (from the personas you already",
+    "      captured) — design is resolved PER-PERSONA, never 'assume default admin'. A",
+    "      `dimensions[].personas` may scope a dimension to specific personas (this persona's",
+    "      view of this surface).",
+    "  - `behaviors`: the behaviors this design must COVER, keyed as 'persona::title' (matching",
+    "      the behaviors you captured) — these are the design's acceptance criteria, so the",
+    "      design covers the SAME behaviors the implementation is built against.",
     "",
     // The architecture step is LOAD-BEARING: it must elicit the project's CONCRETE
     // LIFECYCLE for the chosen stack. Tanren knows NO stack — the project DECLARES

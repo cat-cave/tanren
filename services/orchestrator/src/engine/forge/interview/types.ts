@@ -205,6 +205,67 @@ export const CaptureLifecycle = z
   .strict();
 export type CaptureLifecycle = z.infer<typeof CaptureLifecycle>;
 
+// One domain-adaptive DESIGN DIMENSION the interview surfaced (native design
+// subsystem, WS-D1, native-design-subsystem.md). The SET of dimensions is
+// DOMAIN-DERIVED — a SaaS app surfaces `[tokens, components, layout]`, a mobile
+// game `[art-direction, ui, game-feel]`, a novel translation `[typography,
+// voice, layout, cover]`. Tanren names NO dimension; it captures whatever the
+// project's design domain declares. Mirrors `DesignDimension`
+// (design/designContract.ts) so derive maps capture → contract 1:1.
+export const CaptureDesignDimension = z
+  .object({
+    key: z.string().min(1).max(80),
+    label: z.string().min(1).max(160),
+    intent: z.string().min(1).max(2000),
+    guidance: z.string().max(2000).default(""),
+    // PERSONA-SCOPED design (the moat): the persona NAMES whose view this
+    // dimension describes. Captured by NAME (the natural key) — derive resolves
+    // them to the persisted persona ids that become `personaRefs` on the contract
+    // dimension. Empty ⇒ the dimension applies to every persona on the contract.
+    personas: z.array(z.string().min(1).max(80)).default([]),
+  })
+  .strict();
+export type CaptureDesignDimension = z.infer<typeof CaptureDesignDimension>;
+
+// The DESIGN-INTENT the interview captures — a domain-general design contract
+// that SUPERSEDES the decorative 80-char `designDna` hint (which never reached
+// the writer). The load-bearing design output of the interview's design step: the
+// derive persists it as a first-class versioned `DesignContract` entity
+// (design_contracts), and later workstreams inject it into the writer (WS-D2) +
+// verify it with a design oracle (WS-D4). DOMAIN-GENERAL by construction: a typed
+// core (identity/intent/principles/constraints) universal across any design
+// domain + a `domain` LABEL (descriptive, never branched on) + a domain-ADAPTIVE
+// `dimensions` set. Maps 1:1 to `DesignContractV1` (the derive adds `version`).
+export const CaptureDesignContract = z
+  .object({
+    // The descriptive design DOMAIN label ("saas-web", "mobile-game",
+    // "novel-translation") — domain-derived; Tanren never branches on it.
+    domain: z.string().min(1).max(120),
+    // The one-line design identity (what the product IS, design-wise).
+    identity: z.string().min(1).max(400),
+    // The overarching design intent / north star the writer builds toward.
+    intent: z.string().min(1).max(4000),
+    // Durable design principles / rules (the design "rulesets"). May be empty.
+    principles: z.array(z.string().min(1).max(400)).default([]),
+    // Hard design constraints / non-negotiables. May be empty.
+    constraints: z.array(z.string().min(1).max(400)).default([]),
+    // THE MOAT — the persona NAMES this design serves (derive resolves them to the
+    // persisted persona ids → `personaRefs`). Captured by name (the natural key);
+    // a name that isn't a real captured persona is dropped at resolve (no dangling
+    // ref) — design binds only to REAL typed personas. Empty ⇒ none bound yet.
+    personas: z.array(z.string().min(1).max(80)).default([]),
+    // THE MOAT — the BEHAVIORS this design must cover (design acceptance criteria),
+    // captured by their natural key `persona::title` (matching how behaviors key in
+    // the capture). Derive resolves them to persisted behavior ids → `behaviorRefs`.
+    // Empty ⇒ none bound yet.
+    behaviors: z.array(z.string().min(1).max(280)).default([]),
+    // The domain-adaptive dimension set — project/domain-declared, not a fixed
+    // web schema. May be empty at first capture (the design phase enriches it).
+    dimensions: z.array(CaptureDesignDimension).default([]),
+  })
+  .strict();
+export type CaptureDesignContract = z.infer<typeof CaptureDesignContract>;
+
 // The full accumulated capture. Every list grows monotonically across rounds;
 // the engine de-dupes by a natural key when merging a round's delta.
 export const InterviewCapture = z
@@ -213,7 +274,12 @@ export const InterviewCapture = z
     personas: z.array(CapturePersona).default([]),
     behaviors: z.array(CaptureBehavior).default([]),
     interfaces: z.array(CaptureInterface).default([]),
-    designDna: z.string().max(80).default(""),
+    // The captured DESIGN CONTRACT (native design subsystem, WS-D1) — supersedes
+    // the decorative 80-char `designDna` hint. `null` until the design step
+    // captures it; the derive persists it as a first-class versioned
+    // `DesignContract` entity. A domain-general design-intent contract (NOT a
+    // web-baked schema). Last-write-wins across rounds (a later round refines it).
+    designContract: CaptureDesignContract.nullable().default(null),
     architecture: z.array(CaptureArchitectureLine).default([]),
     // The load-bearing lifecycle declaration (the architecture step's structured
     // output). `null` until the architecture step captures it; the scaffold
@@ -235,14 +301,14 @@ export const InterviewCapture = z
 export type InterviewCapture = z.infer<typeof InterviewCapture>;
 
 // Thrown when a derive cannot resolve ANY hostname-safe project slug — neither a
-// captured identity slug NOR a usable fallback from the pitch/design-DNA/stack. A
-// LOUD failure: the slug names the repo + deploy app, so a no-slug derive must not
-// silently invent a collision-prone constant (the old `"greenfield-project"`).
+// captured identity slug NOR a usable fallback from the pitch/design-identity/stack.
+// A LOUD failure: the slug names the repo + deploy app, so a no-slug derive must
+// not silently invent a collision-prone constant (the old `"greenfield-project"`).
 export class MissingProjectSlugError extends Error {
   constructor() {
     super(
       "greenfield derive could not resolve a hostname-safe project slug — the interview captured no " +
-        "identity slug and no usable fallback (pitch/design-DNA/stack). Capture a product identity first.",
+        "identity slug and no usable fallback (pitch/design-identity/stack). Capture a product identity first.",
     );
     this.name = "MissingProjectSlugError";
   }
@@ -251,14 +317,18 @@ export class MissingProjectSlugError extends Error {
 // Resolve the project SLUG for a derive — the repo + deploy-app name. When the
 // interview captured an `identity.slug` it is used verbatim (already hostname-safe
 // via the schema). When identity is null (the LLM never surfaced one), derive a REAL
-// fallback from the captured signal (pitch → design-DNA → stack label), normalized to
-// a hostname-safe label — NOT a silent shared `"greenfield-project"` constant that
-// would collide across products. Throws `MissingProjectSlugError` when nothing
-// hostname-safe survives (fail-loud, never a silent default).
+// fallback from the captured signal (pitch → design-identity → stack label),
+// normalized to a hostname-safe label — NOT a silent shared `"greenfield-project"`
+// constant that would collide across products. Throws `MissingProjectSlugError`
+// when nothing hostname-safe survives (fail-loud, never a silent default).
 export function safeProjectSlug(capture: InterviewCapture): string {
   const identitySlug = capture.identity?.slug;
   if (identitySlug !== undefined && identitySlug !== "") return identitySlug;
-  for (const candidate of [capture.identity?.pitch ?? "", capture.designDna, capture.lifecycle?.stack ?? ""]) {
+  for (const candidate of [
+    capture.identity?.pitch ?? "",
+    capture.designContract?.identity ?? "",
+    capture.lifecycle?.stack ?? "",
+  ]) {
     const normalized = normalizeSlug(candidate);
     if (normalized !== "") return normalized;
   }
@@ -271,7 +341,7 @@ export function emptyCapture(): InterviewCapture {
     personas: [],
     behaviors: [],
     interfaces: [],
-    designDna: "",
+    designContract: null,
     architecture: [],
     lifecycle: null,
     lifecycleConfirmed: false,
@@ -304,7 +374,9 @@ export const InterviewCaptureDelta = z
     personas: z.array(CapturePersona).nullish(),
     behaviors: z.array(CaptureBehavior).nullish(),
     interfaces: z.array(CaptureInterface).nullish(),
-    designDna: z.string().max(80).nullish(),
+    // The captured DESIGN CONTRACT (native design subsystem, WS-D1) — supersedes
+    // the decorative 80-char `designDna` hint. Last-write-wins across rounds.
+    designContract: CaptureDesignContract.nullish(),
     architecture: z.array(CaptureArchitectureLine).nullish(),
     lifecycle: CaptureLifecycle.nullish(),
     // LIFECYCLE/STACK DRIFT GUARD: the EXPLICIT operator-visible signal that a
