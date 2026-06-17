@@ -141,7 +141,6 @@ describe("acceptance hard tier (dequeue→execute, all hard paths)", () => {
         runPlannerLoopWorkflow({
           ...input,
           githubHttp: github,
-          maxCiPolls: 1,
           ciPollDelayMs: 0,
           sleep: async () => {},
           runBootstrap: async () => {},
@@ -213,7 +212,6 @@ describe("acceptance hard tier (dequeue→execute, all hard paths)", () => {
         runPlannerLoopWorkflow({
           ...input,
           githubHttp: hardTierGitHub(),
-          maxCiPolls: 1,
           ciPollDelayMs: 0,
           sleep: async () => {},
           runBootstrap: async () => {},

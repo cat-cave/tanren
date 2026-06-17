@@ -184,7 +184,6 @@ describeDb("RLS run lifecycle — a real org-scoped run writes every lifecycle t
       githubHttp: passingGitHub(),
       identitySecretRef: "runner/test/identity",
       heartbeatIntervalMs: 1_000_000,
-      maxCiPolls: 1,
       // Drive the REAL workflow with the deterministic fake harness + stubbed
       // transports. `executeNextPlanJob` wraps this in `runWithJobOrgId(ORG)` and
       // hands it `orgScopingPool(appPool)`, so every workflow tenant write — AND

@@ -374,7 +374,6 @@ describe("runPlannerLoopWorkflow — per-run credential de-privilege wiring", ()
       githubHttp: passingGitHub(),
       context: ctx,
       timeoutMs: 100,
-      maxCiPolls: 1,
       sleep: async () => {},
       buildAdapters: () => twoSubtaskAdapters([completeCheck, completeCheck]),
       buildUsageProbe: () => fakeProbe(healthyWindow(), accounting(0.5)),

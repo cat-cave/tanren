@@ -56,7 +56,6 @@ export interface PollReviewForRunInput {
    * than the project-config JSONB alone.
    */
   resolvedGithubCredentialRef?: string;
-  maxPolls?: number;
   pollDelayMs?: number;
   sleep?: (ms: number) => Promise<void>;
   /**
@@ -188,24 +187,30 @@ export async function pollReviewForRun(input: PollReviewForRunInput): Promise<Po
     return result;
   }
 
-  const maxPolls = input.maxPolls ?? 12;
+  // Human/external review tier: await the review verdict INDEFINITELY
+  // (feedback_no_timeouts_progress_based, BINDING). A review legitimately takes a
+  // long time — a human reviewer may sit on a PR for hours or days — so there is
+  // NO poll cap and NO wall-clock deadline. The ONLY terminal is a REAL verdict
+  // signal: `approved` → proceed to merge, `changes_requested` → rework. A
+  // `pending` verdict (no review yet, or a transient host hiccup the probe folds
+  // into `pending`) is NOT a give-up — the loop keeps polling on its cadence. The
+  // poll `delayMs` is the SPACING between probes (a paced interval), never a budget.
   const delayMs = input.pollDelayMs ?? 10_000;
   const sleep =
     input.sleep ??
     ((ms) =>
       new Promise<void>((resolve) => {
+        // arch-allow: timeout-class — poll SPACING between review-verdict probes (cadence, not a deadline).
         setTimeout(resolve, ms);
       }));
 
   let last: ReviewVerdictResult = { verdict: "pending" };
-  for (let attempt = 0; attempt < maxPolls; attempt += 1) {
+  for (;;) {
     last = await probe.fetchVerdict();
     if (last.verdict !== "pending") {
       break;
     }
-    if (attempt < maxPolls - 1) {
-      await sleep(delayMs);
-    }
+    await sleep(delayMs);
   }
 
   const result: PollReviewForRunResult = {
@@ -327,8 +332,10 @@ async function finalizeReviewTask(
     });
     return;
   }
-  // Pending after the budget: leave the task running (the operator hand-off and
-  // the dashboard surface drive it from here).
+  // Defensive: the poll loop only returns a TERMINAL verdict (approved /
+  // changes_requested) — it awaits `pending` indefinitely and never surfaces it.
+  // Should a `pending` ever reach here, leave the task running rather than
+  // silently closing it (the dashboard surface drives it from here).
   await routeTaskUpdate(
     writer,
     pool,
