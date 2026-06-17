@@ -22,6 +22,7 @@ import type pg from "pg";
 import type { ActorContext } from "../../../auth/schemas.js";
 import { mergeCapture, resolveLifecycle } from "./capture.js";
 import type { CreatedRepository, CreateRepositoryInput } from "../../contracts/codeHostTypes.js";
+import type { DesignAgent } from "../../design/designAgent.js";
 import { deriveProductGraph, type DeriveResult } from "./derive.js";
 import type { DeployPreflightCallback, GreenfieldDeployDependency, PrepareDeployCallback } from "./deployDependency.js";
 import type { SelectedTemplate, TemplateRegistryQuery } from "./templateSelection.js";
@@ -168,6 +169,11 @@ export interface DeriveFromCaptureInput {
   // HALTS LOUD. Threaded into `deriveProductGraph` (consulted only with a registry
   // query). Supplied by the wiring layer — no creation dependency in this engine.
   createTemplateForNoMatch?: (lifecycle: CaptureLifecycle) => Promise<SelectedTemplate | undefined>;
+  // WS-D3 (native-design-subsystem.md): the DESIGN AGENT that elaborates the captured
+  // design intent into the designed HEAD `DesignContract` (the design phase) before
+  // the build nodes run. Production wires a real provider answerer; absent ⇒ the thin
+  // captured contract is persisted verbatim. Threaded into `deriveProductGraph`.
+  designAgent?: DesignAgent;
 }
 
 export async function deriveFromCapture(
@@ -198,6 +204,7 @@ export async function deriveFromCapture(
       : { templateChannelPreference: input.templateChannelPreference }),
     ...(deps.preflightDeploy === undefined ? {} : { preflightDeploy: deps.preflightDeploy }),
     ...(deps.prepareDeploy === undefined ? {} : { prepareDeploy: deps.prepareDeploy }),
+    ...(input.designAgent === undefined ? {} : { designAgent: input.designAgent }),
   });
 }
 

@@ -225,6 +225,9 @@ export function mountFeatureRoutes(app: Hono<ActorContextEnv>, deps: FeatureRout
       pool: scopedPool,
       secrets,
       answererFactory: forgeAnswerers.interview,
+      // WS-D3: the design phase elaborates the captured intent into the designed
+      // HEAD `DesignContract` during derive, before the build nodes run.
+      designAgentFactory: forgeAnswerers.designAgent,
       githubHttp,
       githubAppMinter,
       // Wave 4: selection no-match → CREATION. Onboarding's template selection
