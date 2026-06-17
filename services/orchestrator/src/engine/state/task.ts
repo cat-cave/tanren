@@ -15,6 +15,8 @@ export const TaskKind = z.enum([
   // triage (findings → root-cause work items) + convergence (progress/stall read).
   "triage",
   "convergence",
+  // WS-D4 native design subsystem — the design-fidelity ORACLE stage (verify→re-drive).
+  "designOracle",
 ]);
 export type TaskKind = z.infer<typeof TaskKind>;
 

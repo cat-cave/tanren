@@ -423,7 +423,8 @@
               "demo",
               "forge",
               "triage",
-              "convergence"
+              "convergence",
+              "designOracle"
             ],
             "type": "string"
           },

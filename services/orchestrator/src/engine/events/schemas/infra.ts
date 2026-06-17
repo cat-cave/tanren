@@ -443,7 +443,7 @@ export const UsageTokenAccountingFailedPayload = z
     // The agent role whose real call lacked token telemetry. Includes the spec-loop
     // redesign answerer stages (triage/convergence/demoRun) — they are real CLI calls
     // whose accounting drift must surface as loudly as the planner/checker/auditor's.
-    role: z.enum(["planner", "checker", "auditor", "writer", "triage", "convergence", "demoRun"]),
+    role: z.enum(["planner", "checker", "auditor", "writer", "triage", "convergence", "demoRun", "designOracle"]),
     cli: z.string(),
     model: z.string(),
     reason: z.string(),

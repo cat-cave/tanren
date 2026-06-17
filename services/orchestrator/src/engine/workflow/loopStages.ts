@@ -8,15 +8,19 @@
 // event + task-row accounting is preserved at every stage.
 import { randomUUID } from "node:crypto";
 import type pg from "pg";
+import type { ActorContext } from "../../auth/schemas.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import {
   answererOutputSchemaFor,
   ConvergenceAnswer,
   DemoRunAnswer,
+  type DesignOracleAnswer,
   normalizeFinding,
   TriageAnswer,
 } from "../answerers/schemas/index.js";
 import type { Finding, FindingSeverity } from "../contracts/findings.js";
+import type { ActorRef } from "../state/actor.js";
+import { runDesignOracleStage } from "./designOracle/designOracle.js";
 import type { AuditPostureConfig } from "../config/shared.js";
 import { emitStageTiming } from "../observability/index.js";
 import type { AnswererAdapter } from "../providers/types.js";
@@ -116,6 +120,166 @@ export async function runDemoRunStage(args: DemoRunStageInput): Promise<{ findin
   await markTaskDone(args.pool, demoTaskId, "passed", args.writer);
   await args.appendEvent("task.completed", { taskKind: "demo" }, demoTaskId);
   return { findings, demoTaskId };
+}
+
+// ---- DESIGN ORACLE (WS-D4) ------------------------------------------------
+
+export interface DesignOracleLoopStageInput extends StageBase {
+  adapter: AnswererAdapter<DesignOracleAnswer>;
+  // The query client the oracle reads the contract + entity graph through (the run's
+  // org-scoped pool — RLS-scoped, actor-authorized).
+  client: LoopQueryClient;
+  projectId: string;
+  // The org-scope carrier for the entity-graph reads + the audit/event actor for the
+  // contract store reads (built in plannerRun from the run's org/project).
+  actor: ActorContext;
+  actorRef: ActorRef;
+  baselineSha: string;
+}
+
+/**
+ * Run the native design-fidelity ORACLE stage (WS-D4) — the verify→re-drive half of the
+ * design loop. Mirrors `runDemoRunStage`'s wiring (task row + events + cost), delegating
+ * the contract read + ref resolution + answerer invocation to the reusable
+ * `runDesignOracleStage` oracle module. Returns the normalized fidelity findings for the
+ * loop's ONE triage input. No kill-switch; a project with NO design contract no-ops
+ * cleanly (empty findings, no answerer call, no cost) — never a fabricated default.
+ */
+export async function runDesignOracleLoopStage(
+  args: DesignOracleLoopStageInput,
+): Promise<{ findings: Finding[]; designOracleTaskId: string | undefined }> {
+  // Run the oracle first; only materialize a task row / events / cost when a contract was
+  // genuinely verified. A no-contract project produces no task (the explicit empty state),
+  // mirroring how the demo-run slot is simply skipped when there is nothing to do.
+  const result = await runDesignOracleStage({
+    client: args.client,
+    projectId: args.projectId,
+    actor: args.actor,
+    actorRef: args.actorRef,
+    adapter: args.adapter,
+    baselineSha: args.baselineSha,
+    timeoutMs: args.timeoutMs,
+    workspacePath: args.workspacePath,
+  });
+  if (!result.hasContract) {
+    return { findings: [], designOracleTaskId: undefined };
+  }
+
+  // A contract WAS verified — record the stage as a task with its verdict + cost, exactly
+  // like the demo-run slot. The oracle already invoked the answerer; the cost record below
+  // attributes that real call (token telemetry surfaced by the same adapter instance).
+  const startedAt = Date.now();
+  const designOracleTaskId = `task_${randomUUID()}`;
+  await insertChildTask(
+    args.pool,
+    {
+      taskId: designOracleTaskId,
+      runId: args.runId,
+      kind: "designOracle",
+      title: "design-oracle verify",
+      parentTaskId: args.plannerTaskId,
+      agentKind: "answerer",
+      cli: args.adapter.cli,
+      model: null,
+    },
+    args.writer,
+  );
+  await args.appendEvent("task.started", { taskKind: "designOracle" }, designOracleTaskId);
+  await args.appendEvent("designOracle.started", { taskKind: "designOracle" }, designOracleTaskId);
+  emitStageTiming("audit", Date.now() - startedAt, { runId: args.runId });
+  await args.appendEvent(
+    "designOracle.verdict",
+    {
+      runId: args.runId,
+      contractVersion: result.contractVersion ?? 0,
+      verificationMode: result.verificationMode ?? "",
+      summary: result.summary ?? "",
+      findings: result.findings,
+    },
+    designOracleTaskId,
+  );
+  await recordAnswererCost({
+    ctx: args.costCtx,
+    adapter: args.adapter,
+    role: "designOracle",
+    taskId: designOracleTaskId,
+    model: "tanren-design-oracle",
+    runtimeSeconds: secondsSince(startedAt),
+    rawUsage: { role: "designOracle" },
+  });
+  await markTaskDone(args.pool, designOracleTaskId, "passed", args.writer);
+  await args.appendEvent("task.completed", { taskKind: "designOracle" }, designOracleTaskId);
+  return { findings: result.findings, designOracleTaskId };
+}
+
+// ---- POST-AUDIT FINDING STAGES (demo-run + design-oracle) ------------------
+
+export interface PostAuditFindingStagesInput extends StageBase {
+  specTitle: string;
+  specDescription: string;
+  acceptanceCriteria: ReadonlyArray<string>;
+  baselineSha: string;
+  projectId: string;
+  client: LoopQueryClient;
+  demoRunAdapter: AnswererAdapter<DemoRunAnswer>;
+  designOracleAdapter: AnswererAdapter<DesignOracleAnswer>;
+  // The demo-run slot is GATED by the policy flag (optional "does it work" gate); the
+  // design-oracle slot is GATED by the presence of a design actor (it runs whenever a
+  // contract exists — no kill-switch). Both findings merge into the SAME triage input.
+  demoRunEnabled: boolean;
+  designOracleActor?: { actor: ActorContext; actorRef: ActorRef };
+}
+
+/**
+ * Run the two OPTIONAL post-auditor finding stages — the demo-run gate (when the policy
+ * enables it) and the WS-D4 design-oracle gate (when a design actor is wired) — and return
+ * their merged findings (normalized to the frozen `Finding` currency) for the loop's ONE
+ * triage input. A design-fidelity gap re-drives the writer exactly like the demo/auditor.
+ */
+export async function runPostAuditFindingStages(args: PostAuditFindingStagesInput): Promise<Finding[]> {
+  const findings: Finding[] = [];
+  // OPTIONAL DEMO-RUN slot (after the auditor), gating the pass when enabled.
+  if (args.demoRunEnabled) {
+    const demo = await runDemoRunStage({
+      pool: args.pool,
+      writer: args.writer,
+      costCtx: args.costCtx,
+      adapter: args.demoRunAdapter,
+      runId: args.runId,
+      workspacePath: args.workspacePath,
+      plannerTaskId: args.plannerTaskId,
+      specTitle: args.specTitle,
+      specDescription: args.specDescription,
+      acceptanceCriteria: args.acceptanceCriteria,
+      baselineSha: args.baselineSha,
+      timeoutMs: args.timeoutMs,
+      appendEvent: args.appendEvent,
+    });
+    findings.push(...demo.findings);
+  }
+  // WS-D4 DESIGN-ORACLE slot (after the demo-run): verify the built output against the
+  // project's HEAD `DesignContract`. Runs whenever the design actor is wired AND a
+  // contract exists; self-skips cleanly (empty findings, no task/cost) with no contract.
+  if (args.designOracleActor !== undefined) {
+    const designOracle = await runDesignOracleLoopStage({
+      pool: args.pool,
+      writer: args.writer,
+      costCtx: args.costCtx,
+      adapter: args.designOracleAdapter,
+      client: args.client,
+      runId: args.runId,
+      plannerTaskId: args.plannerTaskId,
+      projectId: args.projectId,
+      workspacePath: args.workspacePath,
+      actor: args.designOracleActor.actor,
+      actorRef: args.designOracleActor.actorRef,
+      baselineSha: args.baselineSha,
+      timeoutMs: args.timeoutMs,
+      appendEvent: args.appendEvent,
+    });
+    findings.push(...designOracle.findings);
+  }
+  return findings;
 }
 
 // ---- TRIAGE ---------------------------------------------------------------

@@ -25,10 +25,13 @@ import type {
   CheckAnswer,
   ConvergenceAnswer,
   DemoRunAnswer,
+  DesignOracleAnswer,
   PlanAnswer,
   PlanSubtask,
   TriageAnswer,
 } from "../answerers/schemas/index.js";
+import type { ActorContext } from "../../auth/schemas.js";
+import type { ActorRef } from "../state/actor.js";
 import type { CiWhen } from "../ci/index.js";
 import {
   type AuditPostureConfig,
@@ -54,9 +57,9 @@ import type { RealProviderCostCapturer } from "../costs/generationCostCapture.js
 import { insertPlannerTask, markTaskDone } from "./subtaskTasks.js";
 import { runAuditorStage, runPlannerStage } from "./subtaskStages.js";
 import { runSubtaskSequence } from "./subtaskInnerLoop.js";
-import { runConvergenceStage, runDemoRunStage, runTriageStage } from "./loopStages.js";
+import { runConvergenceStage, runPostAuditFindingStages, runTriageStage } from "./loopStages.js";
 import { type ConvergenceState, type RoutedWorkItem } from "./loopPolicy.js";
-import { gateFindings, type TriageSpecValidator } from "./loopFindings.js";
+import { gateFindings, routedToNewSpec, triageToRejection, type TriageSpecValidator } from "./loopFindings.js";
 import { createLogger } from "../observability/logger.js";
 const log = createLogger("subtask-loop");
 
@@ -86,6 +89,10 @@ export interface SubtaskLoopAdapters {
   // The OPTIONAL demo-run answerer. Present even when disabled (the policy flag, not
   // the adapter's absence, governs whether the stage runs) so the slot is always wired.
   demoRun: AnswererAdapter<DemoRunAnswer>;
+  // WS-D4 native design subsystem — the design-fidelity ORACLE answerer. Always wired;
+  // the STAGE self-skips when the project has no design contract (the verify→re-drive
+  // half of the design loop runs whenever a contract exists — no kill-switch).
+  designOracle: AnswererAdapter<DesignOracleAnswer>;
 }
 
 export interface SubtaskLoopCostHooks {
@@ -154,6 +161,12 @@ export interface SubtaskLoopInput {
   // Resolved per org/project in plannerRun (a real read-only validator answerer + the
   // re-author loopback). Absent ⇒ the gate is inert (unit paths).
   specValidator?: TriageSpecValidator;
+  // WS-D4 native design subsystem — the actor identity the design ORACLE reads the
+  // project's contract + entity graph under (org-scoped, RLS + actor-authorized). Built
+  // in plannerRun from the run's org/project. Absent ⇒ the design-oracle stage is skipped
+  // (unit paths with no design wiring); present ⇒ the stage runs (and self-skips cleanly
+  // when the project has no contract). NEVER a kill-switch that defaults design off.
+  designOracleActor?: { actor: ActorContext; actorRef: ActorRef };
 }
 
 // A new DAG spec triage routed out of this spec. Emitted through the spec-creating
@@ -339,25 +352,32 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
     });
     findings.push(...audit.findings);
 
-    // OPTIONAL DEMO-RUN slot (after the auditor), gating the pass when enabled.
-    if (convergencePolicy.demoRunEnabled) {
-      const demo = await runDemoRunStage({
+    // OPTIONAL POST-AUDITOR finding stages: the demo-run gate (policy-enabled) + the WS-D4
+    // design-oracle gate (runs whenever a design actor is wired AND a contract exists — no
+    // kill-switch). Both findings merge into the SAME triage input — a genuine
+    // design-fidelity gap re-drives the writer exactly like the demo/auditor.
+    findings.push(
+      ...(await runPostAuditFindingStages({
         pool: input.pool,
         writer: input.runStateWriter,
         costCtx,
-        adapter: input.adapters.demoRun,
         runId: input.context.runId,
         workspacePath: input.context.workspacePath,
         plannerTaskId,
+        client: input.pool,
+        projectId: input.context.projectId,
         specTitle: input.context.specTitle,
         specDescription: input.context.specDescription,
         acceptanceCriteria: input.context.acceptanceCriteria,
         baselineSha: input.context.baseSha ?? "HEAD",
+        demoRunAdapter: input.adapters.demoRun,
+        designOracleAdapter: input.adapters.designOracle,
+        demoRunEnabled: convergencePolicy.demoRunEnabled,
+        ...(input.designOracleActor !== undefined && { designOracleActor: input.designOracleActor }),
         timeoutMs: input.timeoutMs,
         appendEvent,
-      });
-      findings.push(...demo.findings);
-    }
+      })),
+    );
 
     // NO findings ⇒ the spec PASSES (the clean exit).
     if (findings.length === 0) {
@@ -458,38 +478,4 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
     priorFindings = findings;
     loopCount += 1;
   }
-}
-
-function routedToNewSpec(r: {
-  item: {
-    id: string;
-    title: string;
-    body: string;
-    severity: NewSpecRequest["severity"];
-    findingIds: ReadonlyArray<string>;
-  };
-}): NewSpecRequest {
-  return {
-    id: r.item.id,
-    title: r.item.title,
-    body: r.item.body,
-    severity: r.item.severity,
-    findingIds: [...r.item.findingIds],
-  };
-}
-
-// Turn the kept-in-spec triage items into the planner-steering rejection record routed
-// through the SAME planner rejectionHistory the checker/auditor feedback uses, so the
-// re-plan addresses the concrete root causes. `behaviorIdsFailed` carries the work-item
-// ids (the dedup trail).
-function triageToRejection(
-  tasksHere: ReadonlyArray<{ item: { id: string; title: string; body: string } }>,
-  subtasks: ReadonlyArray<PlanSubtask>,
-): PlannerRejectionFeedback {
-  return {
-    producer: "auditor",
-    rejectionReason: tasksHere.map((r) => `${r.item.title}: ${r.item.body}`).join("; "),
-    behaviorIdsFailed: tasksHere.map((r) => r.item.id),
-    previousSubtasks: subtasks,
-  };
 }

@@ -44,6 +44,7 @@ export {
   makeChecker,
   makeConvergence,
   makeDemoRun,
+  makeDesignOracle,
   makePlanner,
   makeTriage,
   makeWriter,

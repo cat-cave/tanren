@@ -19,6 +19,9 @@ import { buildInLoopBaseShiftRebaseHook } from "../merge/inLoopBaseShift.js";
 import { SpecStatusGateReworkRouter } from "./reviewMerge/conflictResolver/gateReworkRouter.js";
 import { buildPriorGateReworkReader, buildReplanEnqueuer } from "./reviewMerge/conflictResolver/replanEnqueuerPg.js";
 import type pg from "pg";
+import type { ActorContext } from "../../auth/schemas.js";
+import type { ActorRef } from "../state/actor.js";
+import { designResolverActor } from "../design/designWriterContext.js";
 
 /**
  * the optional lifecycle-writer seam for a sub-stage input — the
@@ -115,6 +118,21 @@ export function baseShiftRebaseSeam(
       ...writerSeam(input),
     })
   );
+}
+
+// WS-D4 native design subsystem — the actor identity the in-loop design ORACLE reads the
+// contract + entity graph under (the SAME org-scoped seam `loadDesignContextBlock` uses for
+// the writer side). A run with no org cannot resolve the entity graph, so the seam is empty
+// (the stage is then skipped) rather than reading off the wrong scope. Never a kill-switch:
+// when present, the stage runs and self-skips cleanly when the project has no contract.
+export function designOracleSeam(context: PlannerRunContext): {
+  designOracleActor?: { actor: ActorContext; actorRef: ActorRef };
+} {
+  const orgId = context.orgId ?? undefined;
+  if (orgId === undefined) return {};
+  return {
+    designOracleActor: { actor: designResolverActor(orgId, context.projectId), actorRef: { kind: "operator" } },
+  };
 }
 
 // App-first push/PR-create credential seam (clone-path parity): mint the App token when installed, else the static ref.

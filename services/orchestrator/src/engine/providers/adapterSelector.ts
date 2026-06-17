@@ -5,6 +5,7 @@ import type {
   ConvergenceAnswer,
   DemoAnswer,
   DemoRunAnswer,
+  DesignOracleAnswer,
   PlanAnswer,
   ReviewAnswer,
   TriageAnswer,
@@ -166,6 +167,10 @@ export interface RoutingDrivenAdapters {
   triage: AnswererAdapter<TriageAnswer>;
   convergence: AnswererAdapter<ConvergenceAnswer>;
   demoRun: AnswererAdapter<DemoRunAnswer>;
+  // WS-D4 native design subsystem — the design-fidelity ORACLE answerer. Rides the
+  // `audit` chain head like the other judge-shaped stages; the stage self-skips when the
+  // project has no design contract (no kill-switch — design runs when a contract exists).
+  designOracle: AnswererAdapter<DesignOracleAnswer>;
 }
 
 export class EmptyRoutingChainError extends Error {
@@ -198,6 +203,7 @@ export function buildAdaptersFromRouting(
     triage: buildAnswererAdapter<TriageAnswer>(deps, auditHead, "triage"),
     convergence: buildAnswererAdapter<ConvergenceAnswer>(deps, auditHead, "convergence"),
     demoRun: buildAnswererAdapter<DemoRunAnswer>(deps, auditHead, "demoRun"),
+    designOracle: buildAnswererAdapter<DesignOracleAnswer>(deps, auditHead, "designOracle"),
   };
 }
 

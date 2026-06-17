@@ -69,6 +69,8 @@ export const eventTypeNames = [
   "deploy.skipped",
   "deploy.triggered",
   "deploy.verified",
+  "designOracle.started",
+  "designOracle.verdict",
   "forge.claim.anchored",
   "forge.claim.self_resolved",
   "forge.claim.validated",

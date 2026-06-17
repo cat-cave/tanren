@@ -8,7 +8,10 @@ import {
   validateEmittedSpecs,
   type ValidateEmittedSpecsInput,
 } from "../forge/specQuality/index.js";
+import type { PlanSubtask } from "../answerers/schemas/index.js";
+import type { PlannerRejectionFeedback } from "./planner/planner.js";
 import type { RoutedWorkItem } from "./loopPolicy.js";
+import type { NewSpecRequest } from "./subtaskLoop.js";
 import { BOOTSTRAP_GATE_TIER, CI_CONFIG_GATE_TIER, type GateOutcome } from "./gate/index.js";
 
 /**
@@ -102,4 +105,39 @@ export async function gateTriagedSpecs(
     ...(gate.reviseSpec !== undefined && { reviseSpec: gate.reviseSpec }),
     ...(gate.maxRevisions !== undefined && { maxRevisions: gate.maxRevisions }),
   });
+}
+
+/** Map a triaged work item onto the `NewSpecRequest` the caller materializes as a DAG spec. */
+export function routedToNewSpec(r: {
+  item: {
+    id: string;
+    title: string;
+    body: string;
+    severity: NewSpecRequest["severity"];
+    findingIds: ReadonlyArray<string>;
+  };
+}): NewSpecRequest {
+  return {
+    id: r.item.id,
+    title: r.item.title,
+    body: r.item.body,
+    severity: r.item.severity,
+    findingIds: [...r.item.findingIds],
+  };
+}
+
+// Turn the kept-in-spec triage items into the planner-steering rejection record routed
+// through the SAME planner rejectionHistory the checker/auditor feedback uses, so the
+// re-plan addresses the concrete root causes. `behaviorIdsFailed` carries the work-item
+// ids (the dedup trail).
+export function triageToRejection(
+  tasksHere: ReadonlyArray<{ item: { id: string; title: string; body: string } }>,
+  subtasks: ReadonlyArray<PlanSubtask>,
+): PlannerRejectionFeedback {
+  return {
+    producer: "auditor",
+    rejectionReason: tasksHere.map((r) => `${r.item.title}: ${r.item.body}`).join("; "),
+    behaviorIdsFailed: tasksHere.map((r) => r.item.id),
+    previousSubtasks: subtasks,
+  };
 }

@@ -85,6 +85,13 @@
       "when": 1781717650967,
       "tag": "0011_milky_hawkeye",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1781721122147,
+      "tag": "0012_premium_epoch",
+      "breakpoints": true
     }
   ]
 }

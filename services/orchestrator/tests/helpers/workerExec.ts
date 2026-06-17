@@ -38,6 +38,7 @@ import {
   makeChecker,
   makeConvergence,
   makeDemoRun,
+  makeDesignOracle,
   makePlanner,
   makeTriage,
   makeWriter,
@@ -134,6 +135,7 @@ function passingAdapters() {
     triage: makeTriage([triageAllTasks]),
     convergence: makeConvergence([convergenceProgress]),
     demoRun: makeDemoRun([{ findings: [], summary: "ok" }]),
+    designOracle: makeDesignOracle([]),
   };
 }
 

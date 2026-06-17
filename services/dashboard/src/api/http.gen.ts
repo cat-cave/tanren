@@ -123,7 +123,8 @@ export interface RunDetail {
       | "demo"
       | "forge"
       | "triage"
-      | "convergence";
+      | "convergence"
+      | "designOracle";
     model: string | null;
     outcome:
       | "passed"
@@ -283,7 +284,19 @@ export interface TaskTimelineEntry {
   cli: string;
   endedAt: string | null;
   failureKind: string | null;
-  kind: "plan" | "write" | "check" | "audit" | "ci" | "review" | "merge" | "demo" | "forge" | "triage" | "convergence";
+  kind:
+    | "plan"
+    | "write"
+    | "check"
+    | "audit"
+    | "ci"
+    | "review"
+    | "merge"
+    | "demo"
+    | "forge"
+    | "triage"
+    | "convergence"
+    | "designOracle";
   model: string | null;
   outcome:
     | "passed"

@@ -19,7 +19,8 @@
         "writer",
         "triage",
         "convergence",
-        "demoRun"
+        "demoRun",
+        "designOracle"
       ],
       "type": "string"
     }

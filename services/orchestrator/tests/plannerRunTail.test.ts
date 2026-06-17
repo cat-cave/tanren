@@ -30,6 +30,7 @@ import {
   makeChecker,
   makeConvergence,
   makeDemoRun,
+  makeDesignOracle,
   makePlanner,
   makeTriage,
   makeWriter,
@@ -268,6 +269,7 @@ describe("runPlannerLoopWorkflow — non-pass loop outcome mapping", () => {
       triage: makeTriage([triageAllTasks]),
       convergence: makeConvergence([convergenceStalled]),
       demoRun: makeDemoRun([{ findings: [], summary: "ok" }]),
+      designOracle: makeDesignOracle([]),
     };
 
     const result = await runPlannerLoopScoped(

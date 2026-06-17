@@ -37,6 +37,7 @@ export { buildDefaultGate } from "./plannerRunGate.js";
 export {
   appTokenSeam,
   baseShiftRebaseSeam,
+  designOracleSeam,
   loopConfigSeam,
   nativeQueueSeam,
   reGateGateReworkSeam,

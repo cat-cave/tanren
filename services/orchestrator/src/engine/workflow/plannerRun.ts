@@ -38,6 +38,7 @@ import {
   baseShiftRebaseSeam,
   buildDefaultGate,
   buildEntityRiskProducer,
+  designOracleSeam,
   loopConfigSeam,
   nativeQueueSeam,
   reGateGateReworkSeam,
@@ -349,14 +350,12 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
     const mergeGateBudget: MergeGateBudget = { used: 0, signatures: [] };
     const seedRejections: PlannerRejectionFeedback[] = [];
     const entityRiskProducer = buildEntityRiskProducer(input, allocation.target, workspacePath);
-    let outcome: SubtaskLoopOutcome | undefined;
-    let pullRequest: PublishedDraftPullRequest | undefined;
+    let outcome: SubtaskLoopOutcome | undefined, pullRequest: PublishedDraftPullRequest | undefined;
     let mergeGate: GateOutcome | undefined, review: PollReviewForRunResult | undefined;
 
-    // UNBOUNDED re-entry: each iteration re-authors then re-gates/re-reviews. The loop
-    // continues while it CONVERGES (the gate error / review feedback keeps changing) and exits
-    // only on a terminal outcome (merge, a fixed-point halt, or a non-pass re-drive) — never a
-    // hardcoded rework count. The fixed-point detectors inside the gate/review steps break it.
+    // UNBOUNDED re-entry: each iteration re-authors then re-gates/re-reviews, continuing while
+    // it CONVERGES (gate error / review feedback keeps changing) and exiting only on a terminal
+    // outcome (merge / fixed-point halt / non-pass re-drive) — never a hardcoded rework count.
     for (;;) {
       outcome = await runSubtaskLoop({
         pool: input.pool,
@@ -384,6 +383,7 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
         entityRiskProducer,
         seedRejections: [...seedRejections],
         ...(captureRealProviderCost !== undefined && { captureRealProviderCost }),
+        ...designOracleSeam(context),
         ...loopConfigSeam(context, specValidator),
       });
 
