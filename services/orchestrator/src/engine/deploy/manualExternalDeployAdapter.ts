@@ -38,6 +38,7 @@ import type {
 import type { OrgGrant, ProjectContext, ProvisionedArtifact } from "../contracts/integrationProvisioner.js";
 import type { DeployResult, DeploySource } from "../provisioners/deployProvisioner.js";
 import { DeployAdapterConfigError, DeployAdapterOperationError } from "./deployAdapterErrors.js";
+import { pollUntilTerminal } from "./pollUntilTerminal.js";
 
 /** The adapter-class kind this impl registers under. */
 export const MANUAL_EXTERNAL_ADAPTER_KIND = "manual_external";
@@ -97,7 +98,7 @@ export interface ManualExternalDeployAdapterDeps {
   attestations: ManualAttestationStore;
   /** The URL reachability probe verify runs against the attested target. */
   urlProbe: UrlReachabilityProbe;
-  /** The verify poll cadence + bound (the never-reachable guard; sleep injected for tests). */
+  /** The verify poll CADENCE (the spacing between probes; no count — poll-until-reachable). */
   poll: VerifyPollPolicy;
 }
 
@@ -198,7 +199,6 @@ export class ManualExternalDeployAdapter implements DeployAdapter {
 
   async verify(_grant: OrgGrant, ref: DeployRef, deploymentId: string): Promise<DeployVerification> {
     const attestation = await this.loadAttestation(ref, deploymentId);
-    const { maxPolls, intervalMs, sleep } = this.deps.poll;
     if (attestation.url === "") {
       throw new DeployAdapterOperationError(
         MANUAL_EXTERNAL_ADAPTER_KIND,
@@ -207,26 +207,33 @@ export class ManualExternalDeployAdapter implements DeployAdapter {
     }
     // CONFIRM the attestation: poll the attested target until it is HTTP-reachable. An
     // operator's assertion is not enough — the deploy is proven only once the target
-    // actually answers. A target that never becomes reachable within the budget fails
-    // LOUD (the attestation is unconfirmed), never an assumed-success.
-    let pollCount = 0;
+    // actually answers. The probe HTTP status IS the convergence state: an unreachable
+    // target (5xx / connection-not-yet-routing) is non-terminal (it may come up — DNS/CDN
+    // propagation), so the poll continues UNBOUNDED while the status keeps changing and
+    // escalates LOUD only when STUCK on the same unreachable status with no advancement —
+    // never "unconfirmed after N polls", never an assumed-success.
     let lastStatus = 0;
-    while (pollCount < maxPolls) {
-      pollCount += 1;
-      const probeStatus = await this.deps.urlProbe.probe(attestation.url);
-      lastStatus = probeStatus;
-      const reachable = (probeStatus >= 200 && probeStatus < 400) || probeStatus === 401 || probeStatus === 403;
-      if (reachable) {
-        return { ready: true, state: "confirmed", url: attestation.url, pollCount, smokeStatus: probeStatus };
-      }
-      if (pollCount < maxPolls) {
-        await sleep(intervalMs);
-      }
-    }
-    throw new DeployAdapterOperationError(
-      MANUAL_EXTERNAL_ADAPTER_KIND,
-      `attestation '${deploymentId}' target '${attestation.url}' never became reachable after ${String(maxPolls)} polls (last HTTP ${String(lastStatus)})`,
-    );
+    const { poll, pollCount } = await pollUntilTerminal({
+      readState: async () => {
+        const probeStatus = await this.deps.urlProbe.probe(attestation.url);
+        lastStatus = probeStatus;
+        const reachable = (probeStatus >= 200 && probeStatus < 400) || probeStatus === 401 || probeStatus === 403;
+        return { state: String(probeStatus), ready: reachable, failed: false };
+      },
+      onFailureTerminal: (state) =>
+        new DeployAdapterOperationError(
+          MANUAL_EXTERNAL_ADAPTER_KIND,
+          `attestation '${deploymentId}' target '${attestation.url}' reached a FAILURE state '${state}'`,
+        ),
+      onStuck: (_stuckState, polls) =>
+        new DeployAdapterOperationError(
+          MANUAL_EXTERNAL_ADAPTER_KIND,
+          `attestation '${deploymentId}' target '${attestation.url}' is STUCK unreachable (HTTP ${String(lastStatus)}) ` +
+            `with no advancement after ${String(polls)} polls`,
+        ),
+      intervalMs: this.deps.poll.intervalMs,
+    });
+    return { ready: true, state: "confirmed", url: attestation.url, pollCount, smokeStatus: Number(poll.state) };
   }
 
   private async loadAttestation(ref: DeployRef, deploymentId: string): Promise<ManualAttestation> {

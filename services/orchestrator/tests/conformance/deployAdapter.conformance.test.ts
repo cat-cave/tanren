@@ -49,12 +49,12 @@ const ctx = (name: string): ProjectContext => ({ projectId: `proj_${name}`, orgI
 // The Fly arm is NOT merge-reflecting and refuses to trigger unless the operator opts
 // into the static-image semantics. These conformance tests exercise the adapter wiring
 // (not the merge-reflecting property), so opt in via the injected provisioner deps.
-function adapter(transport: ScriptedDeployTransport, urlStatus = 200, maxPolls = 10) {
+function adapter(transport: ScriptedDeployTransport, urlStatus = 200) {
   const probe = scriptedUrlProbe(urlStatus);
   const instance = new DirectApiDeployAdapter({
     provisioner: { transport, secrets: secrets(), allowFlyStaticDeploy: true },
     urlProbe: probe,
-    poll: instantVerifyPollPolicy(maxPolls),
+    poll: instantVerifyPollPolicy(),
   });
   return { instance, probe };
 }
@@ -160,14 +160,32 @@ describe("DirectApiDeployAdapter — verify (proven deploy)", () => {
     expect(probe.probed).toEqual([]);
   });
 
-  it("fails LOUD when the deployment never becomes READY within the poll budget", async () => {
+  it("keeps polling UNBOUNDED while the state advances — succeeds well past the old poll cap", async () => {
     const transport = scriptedDeployTransport("vercel");
-    const { instance } = adapter(transport, 200, 3);
+    const { instance } = adapter(transport);
     const { ref, deploymentId } = await provisionAndDeploy(transport, instance, vercelGrant, "acme-web");
-    // The deployment never advances past BUILDING.
+    // A genuinely SLOW deploy: BUILDING for 20 polls (well past the old maxPolls=10 cap),
+    // each poll a fresh advancing state so the convergence loop reads PROGRESS, then READY.
+    const slowButProgressing = Array.from({ length: 20 }, (_v, i) => `BUILDING-${String(i)}`);
+    transport.scriptDeploymentStates(deploymentId, [...slowButProgressing, "READY"]);
+    const verification = await instance.verify(vercelGrant, ref, deploymentId);
+    expect(verification.ready).toBe(true);
+    expect(verification.state).toBe("READY");
+    // 21 polls — a count that would have FAILED under the old maxPolls=10/3 budget.
+    expect(verification.pollCount).toBe(21);
+    expect(transport.statusPolls(deploymentId)).toBe(21);
+  });
+
+  it("escalates LOUD as STUCK (not on a count) when the state never advances", async () => {
+    const transport = scriptedDeployTransport("vercel");
+    const { instance } = adapter(transport);
+    const { ref, deploymentId } = await provisionAndDeploy(transport, instance, vercelGrant, "acme-web");
+    // The deployment never advances past BUILDING — a PROVEN fixed point (same state, no
+    // advancement), escalated as a stuck-deploy via intelligent non-convergence, NOT a cap.
     transport.scriptDeploymentStates(deploymentId, ["BUILDING"]);
-    await expect(instance.verify(vercelGrant, ref, deploymentId)).rejects.toThrow(/never became READY after 3 polls/u);
-    expect(transport.statusPolls(deploymentId)).toBe(3);
+    await expect(instance.verify(vercelGrant, ref, deploymentId)).rejects.toThrow(
+      /is STUCK in non-terminal state 'BUILDING'/u,
+    );
   });
 
   it("fails LOUD when READY but the URL smoke check is unreachable", async () => {

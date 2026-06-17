@@ -46,7 +46,7 @@ export interface BuildDeployAdapterDeps {
   provisioner: DeployProvisionerDeps;
   /** The URL smoke-check probe verify runs (defaults to the real fetch probe). */
   urlProbe?: UrlReachabilityProbe;
-  /** The verify poll cadence + bound (defaults to the production cadence). */
+  /** The verify poll cadence (the spacing between polls; defaults to the production cadence). */
   poll?: VerifyPollPolicy;
   /**
    * The SecretStore the non-`direct_api` classes resolve their provider token from.
@@ -122,36 +122,39 @@ export function buildDeployAdapter(kind: string, deps: BuildDeployAdapterDeps): 
 }
 
 /**
- * The default URL smoke-probe timeout (ms). Bounds the verify smoke check so a deploy
- * URL that hangs (a half-up server that accepts the connection but never responds)
- * aborts LOUD rather than wedging the verify poll indefinitely.
+ * The default per-request ABORT window (ms) for ONE smoke-probe HTTP GET — the blessed
+ * connect/response-establishment bound (feedback_no_timeouts_progress_based: a single-request
+ * fetch abort is NOT a poll/attempt budget). Bounds the smoke check so a deploy URL that hangs
+ * (a half-up server that accepts the connection but never responds) aborts LOUD rather than
+ * wedging the verify poll. It does NOT cap how many polls verify issues — that loop is
+ * unbounded poll-until-terminal.
  */
-export const DEFAULT_SMOKE_PROBE_TIMEOUT_MS = 15_000;
+export const DEFAULT_SMOKE_PROBE_ABORT_MS = 15_000;
 
 /**
  * The production URL smoke probe: a real `fetch` GET that resolves to the observed
  * HTTP status (a transport-level failure — DNS/connection — propagates as a throw,
  * which verify treats as not-reachable). The request is bounded by
- * {@link DEFAULT_SMOKE_PROBE_TIMEOUT_MS} via an AbortSignal so a hung URL aborts rather
+ * {@link DEFAULT_SMOKE_PROBE_ABORT_MS} via an AbortSignal so a hung URL aborts rather
  * than hanging. No secret material is involved; the URL is the resolved public
  * preview/deploy URL.
  */
 export function fetchUrlReachabilityProbe(
   fetchImpl: typeof fetch = fetch,
-  timeoutMs: number = DEFAULT_SMOKE_PROBE_TIMEOUT_MS,
+  abortMs: number = DEFAULT_SMOKE_PROBE_ABORT_MS,
 ): UrlReachabilityProbe {
   return {
     async probe(url: string): Promise<number> {
       const controller = new AbortController();
       const timer = setTimeout(() => {
         controller.abort();
-      }, timeoutMs);
+      }, abortMs);
       try {
         const response = await fetchImpl(url, { method: "GET", redirect: "manual", signal: controller.signal });
         return response.status;
       } catch (error) {
         if (controller.signal.aborted) {
-          throw new Error(`deploy smoke probe: GET '${url}' timed out after ${String(timeoutMs)}ms`, { cause: error });
+          throw new Error(`deploy smoke probe: GET '${url}' aborted after ${String(abortMs)}ms`, { cause: error });
         }
         throw error;
       } finally {
@@ -162,17 +165,11 @@ export function fetchUrlReachabilityProbe(
 }
 
 /**
- * The production verify poll cadence: bounded polls at a fixed interval with a real
- * `setTimeout` sleep. The bound is the never-ready guard — a deployment that never
- * goes READY fails LOUD after `maxPolls` rather than hanging.
+ * The production verify poll CADENCE: polls spaced at a fixed interval. There is NO poll
+ * COUNT and NO deadline (feedback_no_timeouts_progress_based) — `verify` polls UNBOUNDED
+ * while the provider state advances and fails LOUD only on a provider ERROR terminal or a
+ * PROVEN stuck (non-advancing) state. The interval is the legitimate spacing between polls.
  */
 export function defaultVerifyPollPolicy(): VerifyPollPolicy {
-  return {
-    maxPolls: 60,
-    intervalMs: 5000,
-    sleep: (ms: number) =>
-      new Promise<void>((resolve) => {
-        setTimeout(resolve, ms);
-      }),
-  };
+  return { intervalMs: 5000 };
 }

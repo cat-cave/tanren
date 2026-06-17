@@ -32,11 +32,11 @@ const grant: OrgGrant = {
 
 const ctx = (name: string): ProjectContext => ({ projectId: `proj_${name}`, orgId: "org_1", name });
 
-function adapter(distribution = scriptedMobileDistribution(), maxPolls = 10) {
+function adapter(distribution = scriptedMobileDistribution()) {
   const instance = new MobileReleaseDeployAdapter({
     distribution,
     secrets: secrets(),
-    poll: instantVerifyPollPolicy(maxPolls),
+    poll: instantVerifyPollPolicy(),
   });
   return { instance, distribution };
 }
@@ -83,13 +83,27 @@ describe("MobileReleaseDeployAdapter — verify + surface", () => {
     await expect(instance.verify(grant, ref, deploymentId)).rejects.toThrow(/was REJECTED by the channel/u);
   });
 
-  it("fails LOUD when the build never becomes AVAILABLE within the budget", async () => {
+  it("keeps polling UNBOUNDED while the state advances — becomes AVAILABLE past the old cap", async () => {
     const distribution = scriptedMobileDistribution();
-    const { instance } = adapter(distribution, 3);
+    const { instance } = adapter(distribution);
+    const { deploymentId } = await instance.deploy(grant, ref, { repo: "acme/acme-web", ref: "main" });
+    // A slow review: 20 distinct advancing states (past the old maxPolls=10), then available.
+    const advancing = Array.from({ length: 20 }, (_v, i) => `in_review_${String(i)}`);
+    distribution.scriptStates(deploymentId, [...advancing, "available"]);
+    const verification = await instance.verify(grant, ref, deploymentId);
+    expect(verification.ready).toBe(true);
+    expect(verification.state).toBe("available");
+    expect(verification.pollCount).toBe(21);
+  });
+
+  it("escalates LOUD as STUCK (not on a count) when the state never advances", async () => {
+    const distribution = scriptedMobileDistribution();
+    const { instance } = adapter(distribution);
     const { deploymentId } = await instance.deploy(grant, ref, { repo: "acme/acme-web", ref: "main" });
     distribution.scriptStates(deploymentId, ["processing"]);
-    await expect(instance.verify(grant, ref, deploymentId)).rejects.toThrow(/never became AVAILABLE after 3 polls/u);
-    expect(distribution.statusPolls(deploymentId)).toBe(3);
+    await expect(instance.verify(grant, ref, deploymentId)).rejects.toThrow(
+      /is STUCK in non-terminal state 'processing'/u,
+    );
   });
 
   it("resolves an app_channel demo surface (platform + track + build ref)", async () => {

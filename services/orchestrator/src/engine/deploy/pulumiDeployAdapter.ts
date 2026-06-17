@@ -35,6 +35,7 @@ import type { OrgGrant, ProjectContext, ProvisionedArtifact } from "../contracts
 import type { DeployResult, DeploySource } from "../provisioners/deployProvisioner.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import { DeployAdapterConfigError, DeployAdapterOperationError } from "./deployAdapterErrors.js";
+import { pollUntilTerminal } from "./pollUntilTerminal.js";
 
 /** The adapter-class kind this impl registers under. */
 export const PULUMI_ADAPTER_KIND = "pulumi";
@@ -114,7 +115,7 @@ export interface PulumiDeployAdapterDeps {
   secrets: SecretStore;
   /** The URL smoke-check probe verify runs against the resolved endpoint. */
   urlProbe: UrlReachabilityProbe;
-  /** The verify poll cadence + bound (the never-ready guard; sleep injected for tests). */
+  /** The verify poll CADENCE (the spacing between polls; no count — poll-until-terminal). */
   poll: VerifyPollPolicy;
 }
 
@@ -227,32 +228,25 @@ export class PulumiDeployAdapter implements DeployAdapter {
   }
 
   async verify(grant: OrgGrant, ref: DeployRef, deploymentId: string): Promise<DeployVerification> {
-    const { maxPolls, intervalMs, sleep } = this.deps.poll;
-    let pollCount = 0;
-    let lastResult = "";
-    let endpointUrl = "";
-    while (pollCount < maxPolls) {
-      pollCount += 1;
-      const read = await this.read(grant, ref, deploymentId);
-      lastResult = read.result;
-      endpointUrl = read.endpointUrl;
-      if (read.failed) {
-        throw new DeployAdapterOperationError(
+    const { poll, pollCount } = await pollUntilTerminal({
+      readState: async () => {
+        const read = await this.read(grant, ref, deploymentId);
+        return { state: read.result, ready: read.succeeded, failed: read.failed, endpointUrl: read.endpointUrl };
+      },
+      onFailureTerminal: (state) =>
+        new DeployAdapterOperationError(
           PULUMI_ADAPTER_KIND,
-          `stack '${ref.appId}' update '${deploymentId}' reached a FAILURE result '${read.result}'`,
-        );
-      }
-      if (read.succeeded) {
-        return this.smokeCheck(ref, deploymentId, read.result, endpointUrl, pollCount);
-      }
-      if (pollCount < maxPolls) {
-        await sleep(intervalMs);
-      }
-    }
-    throw new DeployAdapterOperationError(
-      PULUMI_ADAPTER_KIND,
-      `stack '${ref.appId}' update '${deploymentId}' never SUCCEEDED after ${String(maxPolls)} polls (last result '${lastResult}')`,
-    );
+          `stack '${ref.appId}' update '${deploymentId}' reached a FAILURE result '${state}'`,
+        ),
+      onStuck: (stuckState, polls) =>
+        new DeployAdapterOperationError(
+          PULUMI_ADAPTER_KIND,
+          `stack '${ref.appId}' update '${deploymentId}' is STUCK in non-terminal result '${stuckState}' ` +
+            `with no advancement after ${String(polls)} polls`,
+        ),
+      intervalMs: this.deps.poll.intervalMs,
+    });
+    return this.smokeCheck(ref, deploymentId, poll.state, poll.endpointUrl, pollCount);
   }
 
   private async read(grant: OrgGrant, ref: DeployRef, updateId: string): Promise<PulumiUpdateStatus> {

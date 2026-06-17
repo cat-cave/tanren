@@ -33,6 +33,7 @@ import type { OrgGrant, ProjectContext, ProvisionedArtifact } from "../contracts
 import type { DeployResult, DeploySource } from "../provisioners/deployProvisioner.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import { DeployAdapterConfigError, DeployAdapterOperationError } from "./deployAdapterErrors.js";
+import { pollUntilTerminal } from "./pollUntilTerminal.js";
 
 /** The adapter-class kind this impl registers under. */
 export const MOBILE_RELEASE_ADAPTER_KIND = "mobile_release";
@@ -95,7 +96,7 @@ export interface MobileReleaseDeployAdapterDeps {
   distribution: MobileDistributionClient;
   /** The SecretStore the grant's channel API key is resolved from. */
   secrets: SecretStore;
-  /** The verify poll cadence + bound (the never-available guard; sleep injected for tests). */
+  /** The verify poll CADENCE (the spacing between polls; no count — poll-until-available). */
   poll: VerifyPollPolicy;
 }
 
@@ -206,35 +207,28 @@ export class MobileReleaseDeployAdapter implements DeployAdapter {
   }
 
   async verify(grant: OrgGrant, ref: DeployRef, deploymentId: string): Promise<DeployVerification> {
-    const { maxPolls, intervalMs, sleep } = this.deps.poll;
-    let pollCount = 0;
-    let lastState = "";
-    let buildRef = "";
-    while (pollCount < maxPolls) {
-      pollCount += 1;
-      const read = await this.read(grant, ref, deploymentId);
-      lastState = read.state;
-      buildRef = read.buildRef;
-      if (read.rejected) {
-        throw new DeployAdapterOperationError(
+    const { poll, pollCount } = await pollUntilTerminal({
+      readState: async () => {
+        const read = await this.read(grant, ref, deploymentId);
+        return { state: read.state, ready: read.available, failed: read.rejected, buildRef: read.buildRef };
+      },
+      onFailureTerminal: (state) =>
+        new DeployAdapterOperationError(
           MOBILE_RELEASE_ADAPTER_KIND,
-          `app '${ref.appId}' submission '${deploymentId}' was REJECTED by the channel (state '${read.state}')`,
-        );
-      }
-      if (read.available) {
-        // A mobile release is PROVEN once the channel reports the build AVAILABLE on the
-        // track (the "smoke check" is channel availability, not an HTTP probe — there is
-        // no live URL to GET). The build ref is the surface's reach handle.
-        return { ready: true, state: read.state, url: buildRef, pollCount, smokeStatus: 200 };
-      }
-      if (pollCount < maxPolls) {
-        await sleep(intervalMs);
-      }
-    }
-    throw new DeployAdapterOperationError(
-      MOBILE_RELEASE_ADAPTER_KIND,
-      `app '${ref.appId}' submission '${deploymentId}' never became AVAILABLE after ${String(maxPolls)} polls (last state '${lastState}')`,
-    );
+          `app '${ref.appId}' submission '${deploymentId}' was REJECTED by the channel (state '${state}')`,
+        ),
+      onStuck: (stuckState, polls) =>
+        new DeployAdapterOperationError(
+          MOBILE_RELEASE_ADAPTER_KIND,
+          `app '${ref.appId}' submission '${deploymentId}' is STUCK in non-terminal state '${stuckState}' ` +
+            `with no advancement after ${String(polls)} polls`,
+        ),
+      intervalMs: this.deps.poll.intervalMs,
+    });
+    // A mobile release is PROVEN once the channel reports the build AVAILABLE on the track
+    // (the "smoke check" is channel availability, not an HTTP probe — there is no live URL
+    // to GET). The build ref is the surface's reach handle.
+    return { ready: true, state: poll.state, url: poll.buildRef, pollCount, smokeStatus: 200 };
   }
 
   private async read(grant: OrgGrant, ref: DeployRef, deploymentId: string): Promise<MobileSubmissionStatus> {

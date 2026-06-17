@@ -220,7 +220,7 @@ describe("DeployOnMergeWatcher (a deploy happened)", () => {
     expect(events.appends.find((a) => a.eventType === "deploy.skipped")).toBeUndefined();
   });
 
-  it("fails LOUD when the triggered deploy never becomes READY (verify guard)", async () => {
+  it("fails LOUD on a provider ERROR terminal — escalates on non-convergence, not a count", async () => {
     const transport = scriptedDeployTransport("vercel", []);
     await transport.request({
       method: "POST",
@@ -235,10 +235,10 @@ describe("DeployOnMergeWatcher (a deploy happened)", () => {
       transport,
       eventStore: events,
       urlProbe: scriptedUrlProbe(),
-      verifyPoll: instantVerifyPollPolicy(3),
-      verifyMaxAttempts: 2,
+      verifyPoll: instantVerifyPollPolicy(),
     });
-    // ERROR on every attempt — verify exhausts its bounded retry, escalates LOUD, re-throws.
+    // ERROR on every poll — the SAME verify failure recurs with no new information, so the
+    // retry escalates LOUD on INTELLIGENT non-convergence (a fixed point), NOT a hardcoded count.
     transport.scriptDeploymentStates("vercel_deploy_1", ["ERROR"]);
     await expect(watcher.check(RUN_ID)).rejects.toThrow(/FAILURE state 'ERROR'/u);
     expect(events.appends.find((a) => a.eventType === "deploy.verified")).toBeUndefined();
@@ -246,7 +246,9 @@ describe("DeployOnMergeWatcher (a deploy happened)", () => {
     expect(failed).toBeDefined();
     expect(failed!.ambientOrgId).toBe(ORG_ID);
     const fPayload = failed!.payload as Record<string, unknown>;
-    expect(fPayload["attempts"]).toBe(2);
+    // `attempts` is observability (re-drives the non-convergence took), NOT a cap.
+    expect(typeof fPayload["attempts"]).toBe("number");
+    expect(fPayload["attempts"] as number).toBeGreaterThanOrEqual(2);
     // The reason is a FIXED non-secret summary — NOT the raw verify error / provider state.
     expect(fPayload["reason"]).toContain("did not reach a live deployment");
     expect(fPayload["reason"]).not.toMatch(/ERROR/u);
@@ -310,8 +312,7 @@ describe("DeployOnMergeWatcher (a deploy happened)", () => {
       transport,
       eventStore: events,
       urlProbe: scriptedUrlProbe(),
-      verifyPoll: instantVerifyPollPolicy(3),
-      verifyMaxAttempts: 2,
+      verifyPoll: instantVerifyPollPolicy(),
     });
     transport.scriptDeploymentStates("vercel_deploy_1", ["ERROR"]);
     await expect(watcher.check(RUN_ID)).rejects.toThrow(/FAILURE state 'ERROR'/u);
@@ -352,9 +353,8 @@ describe("DeployOnMergeWatcher (a deploy happened)", () => {
       eventStore: events,
       urlProbe: scriptedUrlProbe(),
       verifyPoll: instantVerifyPollPolicy(),
-      verifyMaxAttempts: 2,
     });
-    // Attempt 1 reads ERROR (transient → throws); attempt 2 reads READY → proven live, no fail.
+    // Re-drive 1 reads ERROR (transient → throws); re-drive 2 reads READY → proven live (the verify re-drive recovers a transient WITHOUT a hardcoded attempt cap).
     transport.scriptDeploymentStates("vercel_deploy_1", ["ERROR", "READY"]);
     await watcher.check(RUN_ID);
     expect(events.appends.find((a) => a.eventType === "deploy.verified")).toBeDefined();

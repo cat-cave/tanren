@@ -35,31 +35,33 @@ export interface DeployHttpTransport {
 }
 
 /**
- * The default per-request timeout (ms) for an outbound deploy-provider call. Bounds
- * EVERY Vercel/Fly HTTP call so a hung provider endpoint can never wedge a run
- * indefinitely (a merged run is terminal — there is no later wake to recover a hang).
- * An elapsed timeout aborts the fetch, surfacing as a LOUD throw the caller treats as
- * a request failure (never a silent stall).
+ * The default per-request ABORT window (ms) for ONE outbound deploy-provider HTTP call —
+ * the blessed connect/response-establishment bound (feedback_no_timeouts_progress_based:
+ * a single-request fetch abort is NOT a poll/attempt budget over converging work). Bounds
+ * EVERY Vercel/Fly call so a hung provider socket can never wedge a run indefinitely (a
+ * merged run is terminal — no later wake to recover a hang). The abort surfaces as a LOUD
+ * throw the caller treats as a request failure (never a silent stall). It does NOT cap how
+ * many polls verify issues — that loop is unbounded poll-until-terminal.
  */
-export const DEFAULT_DEPLOY_REQUEST_TIMEOUT_MS = 30_000;
+export const DEFAULT_DEPLOY_REQUEST_ABORT_MS = 30_000;
 
 /**
  * Production transport backed by the global `fetch`. The bearer token is supplied
  * by the caller (resolved from the SecretStore against the org grant's
  * `credentialRef`), never read from the environment here and never logged. Every
- * request is bounded by {@link DEFAULT_DEPLOY_REQUEST_TIMEOUT_MS} via an AbortSignal,
+ * request is bounded by {@link DEFAULT_DEPLOY_REQUEST_ABORT_MS} via an AbortSignal,
  * so a hung provider endpoint aborts LOUD rather than hanging the deploy path.
  */
 export function fetchDeployTransport(
   fetchImpl: typeof fetch = fetch,
-  timeoutMs: number = DEFAULT_DEPLOY_REQUEST_TIMEOUT_MS,
+  abortMs: number = DEFAULT_DEPLOY_REQUEST_ABORT_MS,
 ): DeployHttpTransport {
   return {
     async request(req: DeployHttpRequest): Promise<DeployHttpResponse> {
       const controller = new AbortController();
       const timer = setTimeout(() => {
         controller.abort();
-      }, timeoutMs);
+      }, abortMs);
       try {
         const response = await fetchImpl(req.url, {
           method: req.method,
@@ -76,11 +78,11 @@ export function fetchDeployTransport(
         }
         return { status: response.status, ok: response.ok, json, text };
       } catch (error) {
-        // An abort (timeout) or a transport-level failure surfaces LOUD — the
-        // provisioner treats a thrown request as a hard failure (→ deploy.failed),
-        // never a silent stall. Re-tag an abort so the message names the timeout.
+        // An abort (the per-request window elapsed) or a transport-level failure surfaces
+        // LOUD — the provisioner treats a thrown request as a hard failure (→ deploy.failed),
+        // never a silent stall. Re-tag an abort so the message names the elapsed window.
         if (controller.signal.aborted) {
-          throw new Error(`deploy transport: request to '${req.url}' timed out after ${String(timeoutMs)}ms`, {
+          throw new Error(`deploy transport: request to '${req.url}' aborted after ${String(abortMs)}ms`, {
             cause: error,
           });
         }

@@ -31,6 +31,7 @@ import type { OrgGrant, ProjectContext, ProvisionedArtifact } from "../contracts
 import type { DeployResult, DeploySource } from "../provisioners/deployProvisioner.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import { DeployAdapterConfigError, DeployAdapterOperationError } from "./deployAdapterErrors.js";
+import { pollUntilTerminal } from "./pollUntilTerminal.js";
 
 /** The adapter-class kind this impl registers under. */
 export const PACKAGE_RELEASE_ADAPTER_KIND = "package_release";
@@ -90,7 +91,7 @@ export interface PackageReleaseDeployAdapterDeps {
   registry: PackageRegistryClient;
   /** The SecretStore the grant's publish token is resolved from. */
   secrets: SecretStore;
-  /** The verify poll cadence + bound (the never-resolvable guard; sleep injected for tests). */
+  /** The verify poll CADENCE (the spacing between polls; no count — poll-until-resolvable). */
   poll: VerifyPollPolicy;
 }
 
@@ -201,27 +202,37 @@ export class PackageReleaseDeployAdapter implements DeployAdapter {
   }
 
   async verify(grant: OrgGrant, ref: DeployRef, deploymentId: string): Promise<DeployVerification> {
-    const { maxPolls, intervalMs, sleep } = this.deps.poll;
-    let pollCount = 0;
-    let coordinate = "";
-    while (pollCount < maxPolls) {
-      pollCount += 1;
-      const read = await this.read(grant, ref, deploymentId);
-      coordinate = read.coordinate;
-      if (read.resolvable) {
-        // A package release is PROVEN once the registry resolves the version (the
-        // "smoke check" is registry-resolution, not an HTTP probe — there is no live
-        // URL to GET). The coordinate is the surface's reach handle.
-        return { ready: true, state: "resolvable", url: coordinate, pollCount, smokeStatus: 200 };
-      }
-      if (pollCount < maxPolls) {
-        await sleep(intervalMs);
-      }
-    }
-    throw new DeployAdapterOperationError(
-      PACKAGE_RELEASE_ADAPTER_KIND,
-      `package '${ref.appId}' version '${versionFromDeploymentId(deploymentId)}' never became resolvable on the registry after ${String(maxPolls)} polls`,
-    );
+    // A registry has no FAILURE terminal — a version is either RESOLVABLE (the registry
+    // indexed it) or simply not-yet-resolvable (pending). So the poll succeeds on resolvable
+    // and escalates LOUD only when the version is a PROVEN stuck non-terminal (never indexed,
+    // no advancement) — never "failed after N polls".
+    const { poll, pollCount } = await pollUntilTerminal({
+      readState: async () => {
+        const read = await this.read(grant, ref, deploymentId);
+        return {
+          state: read.resolvable ? "resolvable" : "pending",
+          ready: read.resolvable,
+          failed: false,
+          coordinate: read.coordinate,
+        };
+      },
+      onFailureTerminal: (state) =>
+        new DeployAdapterOperationError(
+          PACKAGE_RELEASE_ADAPTER_KIND,
+          `package '${ref.appId}' version '${versionFromDeploymentId(deploymentId)}' reached a FAILURE state '${state}'`,
+        ),
+      onStuck: (_stuckState, polls) =>
+        new DeployAdapterOperationError(
+          PACKAGE_RELEASE_ADAPTER_KIND,
+          `package '${ref.appId}' version '${versionFromDeploymentId(deploymentId)}' is STUCK unresolvable on the ` +
+            `registry with no advancement after ${String(polls)} polls`,
+        ),
+      intervalMs: this.deps.poll.intervalMs,
+    });
+    // A package release is PROVEN once the registry resolves the version (the "smoke check"
+    // is registry-resolution, not an HTTP probe — there is no live URL to GET). The
+    // coordinate is the surface's reach handle.
+    return { ready: true, state: "resolvable", url: poll.coordinate, pollCount, smokeStatus: 200 };
   }
 
   private async read(grant: OrgGrant, ref: DeployRef, deploymentId: string): Promise<PackageVersionStatus> {

@@ -3,7 +3,7 @@
 // rewriting them. provisionOrBind / deploy / status DELEGATE straight to the
 // provisioner the deployRef provider selects (`deployProvisionerFor`); `verify` is
 // the new capability built ON TOP: poll the provider's deployment status until a
-// READY terminal (or fail LOUD on a failure terminal / never-ready budget), then
+// READY terminal (or fail LOUD on a failure terminal / a proven stuck-deploy), then
 // SMOKE-CHECK the resolved URL is HTTP-reachable. This is what makes deploy-on-merge
 // PROVEN instead of fire-and-forget.
 //
@@ -26,6 +26,7 @@ import type {
 import type { OrgGrant, ProjectContext, ProvisionedArtifact } from "../contracts/integrationProvisioner.js";
 import type { DeployProvisionerDeps, DeployResult, DeploySource } from "../provisioners/deployProvisioner.js";
 import { deployProvisionerFor } from "../workflow/deployProvisionerFor.js";
+import { pollUntilTerminal } from "./pollUntilTerminal.js";
 
 /** The adapter-class kind this impl registers under. */
 export const DIRECT_API_ADAPTER_KIND = "direct_api";
@@ -36,7 +37,7 @@ export interface DirectApiDeployAdapterDeps {
   provisioner: DeployProvisionerDeps;
   /** The URL smoke-check probe verify runs against the resolved URL (scripted in tests). */
   urlProbe: UrlReachabilityProbe;
-  /** The verify poll cadence + bound (the never-ready guard; sleep injected for tests). */
+  /** The verify poll CADENCE (the spacing between polls; no count — poll-until-terminal). */
   poll: VerifyPollPolicy;
 }
 
@@ -91,37 +92,31 @@ export class DirectApiDeployAdapter implements DeployAdapter {
 
   /**
    * Poll the provider until the deployment is READY (then smoke-check its URL), or
-   * throw LOUD: a FAILURE terminal throws immediately; exhausting the poll budget
-   * without a ready terminal throws (never-ready guard); a smoke check that does not
-   * answer 2xx/3xx throws. The success result is the PROOF the deploy is live.
+   * throw LOUD: a FAILURE terminal throws immediately; a PROVEN stuck (non-advancing)
+   * state escalates LOUD via intelligent non-convergence (never "failed after N polls");
+   * a smoke check that does not answer 2xx/3xx throws. The poll is UNBOUNDED while the
+   * provider state advances (BUILDING → QUEUED → …) — a slow-but-progressing deploy is
+   * never declared failed on a count. The success result is the PROOF the deploy is live.
    */
   async verify(grant: OrgGrant, ref: DeployRef, deploymentId: string): Promise<DeployVerification> {
     const provisioner = deployProvisionerFor(ref.provider, this.deps.provisioner);
-    const { maxPolls, intervalMs, sleep } = this.deps.poll;
-    let pollCount = 0;
-    let lastState = "";
-    let url = "";
-    while (pollCount < maxPolls) {
-      pollCount += 1;
-      const read = await provisioner.deploymentStatus(grant, ref.appId, deploymentId);
-      lastState = read.state;
-      url = read.url;
-      if (read.terminalFailed) {
-        throw new Error(
-          `deploy verify: deployment '${deploymentId}' on '${ref.provider}/${ref.appId}' reached a FAILURE state '${read.state}'`,
-        );
-      }
-      if (read.terminalReady) {
-        return this.smokeCheck(ref, deploymentId, read.state, url, pollCount);
-      }
-      if (pollCount < maxPolls) {
-        await sleep(intervalMs);
-      }
-    }
-    throw new Error(
-      `deploy verify: deployment '${deploymentId}' on '${ref.provider}/${ref.appId}' never became READY ` +
-        `after ${String(maxPolls)} polls (last state '${lastState}')`,
-    );
+    const { poll, pollCount } = await pollUntilTerminal({
+      readState: async () => {
+        const read = await provisioner.deploymentStatus(grant, ref.appId, deploymentId);
+        return { state: read.state, ready: read.terminalReady, failed: read.terminalFailed, url: read.url };
+      },
+      onFailureTerminal: (state) =>
+        new Error(
+          `deploy verify: deployment '${deploymentId}' on '${ref.provider}/${ref.appId}' reached a FAILURE state '${state}'`,
+        ),
+      onStuck: (stuckState, polls) =>
+        new Error(
+          `deploy verify: deployment '${deploymentId}' on '${ref.provider}/${ref.appId}' is STUCK in non-terminal ` +
+            `state '${stuckState}' with no advancement after ${String(polls)} polls`,
+        ),
+      intervalMs: this.deps.poll.intervalMs,
+    });
+    return this.smokeCheck(ref, deploymentId, poll.state, poll.url, pollCount);
   }
 
   /**

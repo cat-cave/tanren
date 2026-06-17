@@ -2,8 +2,8 @@
 // `verify` smoke step runs against this instead of a live network call, so the
 // conformance suite proves the URL smoke check WITHOUT real HTTP. It returns a fixed
 // status (default 200) and records every URL it probed so a test can assert verify
-// smoke-checked the RESOLVED deploy URL — and an instant no-op `sleep` so the verify
-// poll loop runs with no real timers.
+// smoke-checked the RESOLVED deploy URL — and an instant (0-ms) poll cadence so the
+// unbounded verify poll loop runs with no real timers.
 
 import type { UrlReachabilityProbe, VerifyPollPolicy } from "../../../src/engine/contracts/deployAdapter.js";
 
@@ -25,14 +25,33 @@ export function scriptedUrlProbe(status = 200): ScriptedUrlProbe {
   };
 }
 
-/** A bounded verify poll policy with an INSTANT (no-real-timer) sleep, for tests. */
-export function instantVerifyPollPolicy(maxPolls = 10): VerifyPollPolicy {
+/**
+ * A probe that returns a SCRIPTED sequence of statuses on successive probes (the last entry
+ * repeats once exhausted), so a test can drive the manual-external verify through a sequence
+ * of UNREACHABLE statuses that finally resolves to reachable — proving the poll-until-reachable
+ * loop is unbounded while the status advances.
+ */
+export function sequencedUrlProbe(statuses: number[]): ScriptedUrlProbe {
+  const probed: string[] = [];
+  let served = 0;
   return {
-    maxPolls,
-    intervalMs: 0,
+    probed,
     // eslint-disable-next-line @typescript-eslint/require-await
-    sleep: async () => {
-      /* no-op: tests advance instantly */
+    async probe(url: string): Promise<number> {
+      probed.push(url);
+      const status = statuses[Math.min(served, statuses.length - 1)] ?? 200;
+      served += 1;
+      return status;
     },
   };
+}
+
+/**
+ * A verify poll policy with an INSTANT (0-ms) cadence — the unbounded poll-until-terminal
+ * loop runs with no real timers in tests. There is NO poll count: the loop succeeds on a
+ * READY terminal, fails on a provider ERROR terminal, and escalates only on a PROVEN stuck
+ * (non-advancing) state. The deployment script's terminal/advancing states drive it.
+ */
+export function instantVerifyPollPolicy(): VerifyPollPolicy {
+  return { intervalMs: 0 };
 }

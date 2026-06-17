@@ -13,7 +13,7 @@ import { mapGithubIssueWebhook } from "../src/engine/forge/intake/index.js";
 import type { CandidateTriage, TriageRoutableSpec } from "../src/engine/forge/inbox/index.js";
 import { InMemoryCodeHost } from "./conformance/fakes/inMemoryCodeHost.js";
 import { scriptedDeployTransport } from "./conformance/fakes/scriptedDeployTransport.js";
-import { instantVerifyPollPolicy, scriptedUrlProbe } from "./conformance/fakes/scriptedUrlProbe.js";
+import { scriptedUrlProbe } from "./conformance/fakes/scriptedUrlProbe.js";
 import {
   APEX_TEMPLATE_SEED,
   type ApexDerivedSpec,
@@ -336,15 +336,10 @@ async function deployMergedCommit(mergeSha: string): Promise<DeployProof> {
   const transport = scriptedDeployTransport("vercel");
   const deployedRef = mergeSha;
   const probe = scriptedUrlProbe(200);
-  const pollPolicy = instantVerifyPollPolicy();
   const url = `https://${APEX_REPO.name}.example.app`;
-  // Run the verify smoke loop against the probe contract (no real timers/network).
-  let status = 0;
-  for (let i = 0; i < pollPolicy.maxPolls; i += 1) {
-    status = await probe.probe(url);
-    if (status === 200) break;
-    await pollPolicy.sleep(pollPolicy.intervalMs);
-  }
+  // Smoke-check the resolved URL through the probe contract (no real timers/network) —
+  // a 200 confirms reachable (the verify poll-until-terminal/reachable property).
+  const status = await probe.probe(url);
   // Touch the transport so the import is load-bearing (the trigger surface exists).
   void transport.appNames();
   return { deployedRef, expectedMergeSha: mergeSha, probedUrl: probe.probed[0] ?? url, probeStatus: status };

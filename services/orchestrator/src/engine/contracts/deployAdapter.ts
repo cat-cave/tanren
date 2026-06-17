@@ -140,18 +140,16 @@ export interface UrlReachabilityProbe {
 }
 
 /**
- * The verify poll cadence: how many times to poll the provider for a terminal state
- * and how long to wait between polls. Bounded so a deployment that never becomes
- * ready fails LOUD after `maxPolls` rather than hanging forever. `sleep` is injected
- * so tests advance instantly (no real timers).
+ * The verify poll CADENCE: how long to wait between status polls. There is NO poll COUNT
+ * and NO deadline (feedback_no_timeouts_progress_based, BINDING) — `verify` polls the
+ * provider UNBOUNDED while its state ADVANCES, succeeds on a READY terminal, and fails
+ * LOUD on a provider ERROR terminal or a PROVEN stuck (non-advancing) state. `intervalMs`
+ * is the legitimate spacing between polls (the convergence loop's backoff), never a budget
+ * that ends the loop; tests pass `0` for an instant loop with no real timers.
  */
 export interface VerifyPollPolicy {
-  /** The maximum status polls before verify gives up and throws (never-ready guard). */
-  maxPolls: number;
-  /** Milliseconds to wait between polls (production cadence; tests inject a no-op sleep). */
+  /** Milliseconds to wait between polls (the poll cadence; tests pass 0 for an instant loop). */
   intervalMs: number;
-  /** The wait primitive between polls (injected; a real `setTimeout` in production). */
-  sleep(ms: number): Promise<void>;
 }
 
 /**

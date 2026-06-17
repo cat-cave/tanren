@@ -32,11 +32,11 @@ const grant: OrgGrant = {
 
 const ctx = (name: string): ProjectContext => ({ projectId: `proj_${name}`, orgId: "org_1", name });
 
-function adapter(registry = scriptedPackageRegistry(), maxPolls = 10) {
+function adapter(registry = scriptedPackageRegistry()) {
   const instance = new PackageReleaseDeployAdapter({
     registry,
     secrets: secrets(),
-    poll: instantVerifyPollPolicy(maxPolls),
+    poll: instantVerifyPollPolicy(),
   });
   return { instance, registry };
 }
@@ -82,15 +82,12 @@ describe("PackageReleaseDeployAdapter — verify + surface", () => {
     expect(verification.pollCount).toBe(3);
   });
 
-  it("fails LOUD when the version never resolves within the poll budget", async () => {
+  it("escalates LOUD as STUCK (not on a count) when the version never resolves", async () => {
     const registry = scriptedPackageRegistry();
-    const { instance } = adapter(registry, 3);
+    const { instance } = adapter(registry);
     const { deploymentId } = await instance.deploy(grant, ref, { repo: "acme/acme-web", ref: "deadbeef0000" });
     registry.scriptResolvable("0.0.0-deadbee", [false]);
-    await expect(instance.verify(grant, ref, deploymentId)).rejects.toThrow(
-      /never became resolvable .* after 3 polls/u,
-    );
-    expect(registry.statusPolls("0.0.0-deadbee")).toBe(3);
+    await expect(instance.verify(grant, ref, deploymentId)).rejects.toThrow(/is STUCK unresolvable on the registry/u);
   });
 
   it("resolves a package demo surface (registry + coordinate)", async () => {
