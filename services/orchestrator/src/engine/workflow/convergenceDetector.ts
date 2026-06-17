@@ -79,23 +79,53 @@ export interface AttemptSignature {
 }
 
 /**
- * The structural read of the latest attempt vs the immediately-prior one:
- *   - `progress`     — the latest attempt advanced (different failure, different work, OR
- *                      smaller magnitude). CONTINUE, unbounded — never escalate.
- *   - `fixed_point`  — the latest attempt is identical to the prior on every observable
- *                      axis (same failure, same work, non-shrinking magnitude): a suspected
- *                      dead-end where the intelligent escalation judgment is consulted.
+ * The structural read of the latest attempt against the prior history:
+ *   - `progress`     — the latest attempt advanced (a different failure, different work, OR
+ *                      a smaller magnitude than the state it would otherwise repeat).
+ *                      CONTINUE, unbounded — never escalate.
+ *   - `fixed_point`  — the latest attempt is a PROVEN dead-end: either it reproduced the
+ *                      IMMEDIATELY-prior attempt's observable work BYTE-IDENTICALLY (no new
+ *                      information at all), or its state RECURS an earlier (non-immediate)
+ *                      attempt in the trailing window with no net magnitude decrease since
+ *                      (an A→B→A→B / A→A→A oscillation — a cycle, not forward motion). The
+ *                      suspected dead-end where the intelligent escalation judgment is consulted.
  *   - `first`        — there is no prior attempt to compare against (always CONTINUE).
  */
 export type StructuralProgress = "progress" | "fixed_point" | "first";
 
 /**
- * Assess STRUCTURAL progress of the latest attempt against the FULL prior history. PURE
- * (no I/O, no clock) so it is reproducible + unit-testable. The history is oldest→newest;
- * the latest attempt is the last element. Progress is judged against the IMMEDIATELY prior
- * attempt — a single advancing step (smaller magnitude, a different failure, or different
- * work) is progress, no matter how many attempts preceded it. Only when the latest is
- * indistinguishable from the prior is it a suspected fixed point.
+ * The trailing window (counting back from the latest attempt) the CYCLE detection scans for
+ * a recurrence of the latest state. This is NOT an attempt cap and NOT a `K`: the loop
+ * re-drives UNBOUNDED while it makes progress regardless of length; the window only bounds
+ * how far back a RECURRENCE counts as evidence of a cycle (so an ancient state visited once,
+ * long before sustained later progress, does not spuriously re-trigger). A monotonically
+ * shrinking-magnitude trajectory (1000 → 500 → 100 → 1) NEVER trips it — every recurrence
+ * has a net magnitude decrease since, so it always reads as progress, no matter the window.
+ */
+const CYCLE_WINDOW = 8;
+
+/**
+ * Assess STRUCTURAL progress of the latest attempt against the prior history. PURE (no I/O,
+ * no clock) so it is reproducible + unit-testable. The history is oldest→newest; the latest
+ * attempt is the last element. The loop is making PROGRESS — and so CONTINUES, UNBOUNDED —
+ * unless the latest attempt is a PROVEN dead-end:
+ *
+ *   - PROVEN-IDENTICAL IMMEDIATE WORK: it reproduced the immediately-prior attempt's
+ *     observable work BYTE-IDENTICALLY (same failure signature, both work signatures observed
+ *     and equal, no magnitude decrease) — the agent produced the identical output and got the
+ *     identical failure, with literally no new information. A single such repeat is already a
+ *     fixed point (there is nothing left to observe).
+ *   - CYCLE / OSCILLATION: the latest state RECURS an EARLIER (non-immediate) attempt within
+ *     the trailing window with NO net magnitude decrease since that earlier occurrence. This
+ *     catches A→B→A→B (alternating signatures) and 5→4→5→4 (oscillating magnitude) — a loop
+ *     that revisits a state it has already been in WITHOUT having gotten closer is cycling,
+ *     not progressing, even though each immediate neighbor differs.
+ *
+ * A different failure, different produced work, OR a strictly smaller magnitude than every
+ * prior occurrence of the same state is PROGRESS — no matter how many attempts preceded it.
+ * Crucially, the 1000 → 500 → 100 → 1 trajectory is PROGRESS at every step (each value is a
+ * NET magnitude decrease since any prior occurrence), so it is NEVER flagged — the windowed
+ * look-back is CYCLE detection, not an attempt cap.
  *
  * Returns `first` for an empty/single-element history (nothing to compare → CONTINUE).
  */
@@ -104,15 +134,120 @@ export function assessStructuralProgress(history: ReadonlyArray<AttemptSignature
   const latest = history.at(-1);
   const prior = history.at(-2);
   if (latest === undefined || prior === undefined) return "first";
-  return madeProgress(prior, latest) ? "progress" : "fixed_point";
+  // (1) Proven-identical IMMEDIATE work: the agent reproduced byte-identical observable output
+  // and got the identical failure with no magnitude reduction — a dead-end on the first repeat.
+  if (reproducedIdenticalWork(prior, latest)) return "fixed_point";
+  // (2) Cycle / oscillation: the latest state recurs an EARLIER (non-immediate) attempt with no
+  // net magnitude decrease since AND no new state explored in between — a loop revisiting states
+  // it has already been in without getting closer. A single immediate repeat alone is NOT this
+  // (so a transient identical failure that recurs once — no observable work — is still progress,
+  // not an instant escalation), and a loop that found a NEW state since is still exploring.
+  if (isCycle(history)) return "fixed_point";
+  return "progress";
 }
 
-/** Did `latest` advance over `prior` on ANY observable axis (failure / work / magnitude)? */
+/**
+ * Did `latest` reproduce `prior`'s observable work BYTE-IDENTICALLY with no forward motion?
+ * Same failure signature, BOTH work signatures observed and equal, and no magnitude decrease
+ * (a non-shrinking magnitude or no magnitude on either). This is the ONLY immediate-neighbor
+ * fixed point: the agent demonstrably produced the identical output, so there is no new
+ * information to act on even on the first repeat. Without an OBSERVED identical work signature,
+ * a single immediate repeat is NOT proof of a dead-end (it may be a transient recurrence) —
+ * that is left to the cycle detection (a recurrence beyond the immediate neighbor).
+ */
+function reproducedIdenticalWork(prior: AttemptSignature, latest: AttemptSignature): boolean {
+  if (latest.failureSignature !== prior.failureSignature) return false;
+  if (latest.workSignature === undefined || prior.workSignature === undefined) return false;
+  if (latest.workSignature !== prior.workSignature) return false;
+  // Identical observed work + identical failure: a magnitude decrease would still be progress
+  // (the same diff somehow retired errors), but identical work cannot — guard it anyway.
+  return !shrankMagnitude(prior, latest);
+}
+
+/** A strict magnitude decrease (trajectory progress) — only when both magnitudes are known. */
+function shrankMagnitude(from: AttemptSignature, to: AttemptSignature): boolean {
+  return from.magnitude !== undefined && to.magnitude !== undefined && to.magnitude < from.magnitude;
+}
+
+/**
+ * Is the LATEST attempt a CYCLE — back in a state it has already been in, with the loop merely
+ * revisiting already-seen states (not exploring) and no net forward motion? The latest is a
+ * cycle iff there is an EARLIER (non-immediate) occurrence `E` of the latest's state within the
+ * trailing `CYCLE_WINDOW` such that BOTH:
+ *
+ *   (a) NO NET MAGNITUDE DECREASE since `E` — `latest.magnitude` is not strictly below `E`'s
+ *       (so a shrinking 1000 → 500 → 100 → 1 trajectory is ALWAYS progress, never a cycle), AND
+ *   (b) NO NEW STATE appeared after `E` — every attempt strictly after `E` is a state already
+ *       seen at-or-before `E`. If a brand-NEW state showed up since the loop was last in this
+ *       state, the loop is still EXPLORING (progress: it found something new and circled back),
+ *       not stuck in an oscillation.
+ *
+ * Requiring a NON-IMMEDIATE recurrence means a single transient repeat (A→A with no observed
+ * work) is NOT yet a cycle — only A→A→A or A→B→A→B (the state recurring across an intervening
+ * attempt) is. Two attempts are the SAME STATE when their failure signatures match AND — when
+ * both observed their work — their work signatures match (an unobserved work signature collapses
+ * the state onto the failure axis). The window bounds how far back a recurrence counts, so it is
+ * cycle detection (a revisited-state structure), NOT an attempt cap.
+ */
+function isCycle(history: ReadonlyArray<AttemptSignature>): boolean {
+  const latest = history.at(-1);
+  if (latest === undefined) return false;
+  const windowFloor = Math.max(0, history.length - CYCLE_WINDOW);
+  // Scan NON-immediate earlier attempts (skip the immediate predecessor at -2 — that is the
+  // single-repeat case handled by the observed-identical-work check), newest first, in-window.
+  for (let earlierIdx = history.length - 3; earlierIdx >= windowFloor; earlierIdx -= 1) {
+    const earlier = history.at(earlierIdx);
+    if (earlier === undefined) continue;
+    if (!sameState(earlier, latest)) continue;
+    // (a) trajectory: the latest must not have net-shrunk its magnitude since `earlier`.
+    if (shrankMagnitude(earlier, latest)) continue;
+    // (b) exploration: no attempt after `earlierIdx` may be a state unseen at-or-before it.
+    if (!newStateAppearedAfter(history, earlierIdx, windowFloor)) return true;
+  }
+  return false;
+}
+
+/**
+ * Did a brand-NEW state (one not seen at any in-window index ≤ `pivot`) appear at any index
+ * strictly after `pivot`? A new state means the loop is still EXPLORING since it was last at the
+ * `pivot` state — so the recurrence is NOT a cycle. (Scanned within the trailing window only.)
+ */
+function newStateAppearedAfter(history: ReadonlyArray<AttemptSignature>, pivot: number, windowFloor: number): boolean {
+  for (let j = pivot + 1; j < history.length; j += 1) {
+    const candidate = history.at(j);
+    if (candidate === undefined) continue;
+    let seenAtOrBeforePivot = false;
+    for (let k = windowFloor; k <= pivot; k += 1) {
+      const earlier = history.at(k);
+      if (earlier !== undefined && sameState(earlier, candidate)) {
+        seenAtOrBeforePivot = true;
+        break;
+      }
+    }
+    if (!seenAtOrBeforePivot) return true;
+  }
+  return false;
+}
+
+/**
+ * Are two attempts the SAME STATE? Same failure signature, and — only when BOTH observed their
+ * work — the same work signature (a missing work signature on either side cannot tell them
+ * apart, so the state is keyed on the failure signature alone). Magnitude is NOT part of state
+ * identity; it is the trajectory the recurrence check measures net progress against.
+ */
+function sameState(a: AttemptSignature, b: AttemptSignature): boolean {
+  if (a.failureSignature !== b.failureSignature) return false;
+  if (a.workSignature !== undefined && b.workSignature !== undefined) {
+    return a.workSignature === b.workSignature;
+  }
+  return true;
+}
+
+/** Did `latest` advance over `prior` on ANY observable axis (failure / work / magnitude)? Used
+ * only by {@link fixedPointStreak} as a per-neighbor diagnostic; the fixed-point DECISION is
+ * {@link assessStructuralProgress} (which also detects cycles, not just neighbor identity). */
 function madeProgress(prior: AttemptSignature, latest: AttemptSignature): boolean {
-  // A different failure signature = the loop moved the problem (progress).
   if (latest.failureSignature !== prior.failureSignature) return true;
-  // Different produced work = the agent did something different (progress), even at the
-  // same failure. Only counts when BOTH attempts observed their work (else inconclusive).
   if (
     latest.workSignature !== undefined &&
     prior.workSignature !== undefined &&
@@ -120,13 +255,7 @@ function madeProgress(prior: AttemptSignature, latest: AttemptSignature): boolea
   ) {
     return true;
   }
-  // SHRINKING magnitude = trajectory progress (the 1000 → 500 → 100 case): still failing
-  // the same way, but genuinely closer to resolved. Only counts when both are known.
-  if (latest.magnitude !== undefined && prior.magnitude !== undefined && latest.magnitude < prior.magnitude) {
-    return true;
-  }
-  // No observable advance on any axis: a suspected fixed point.
-  return false;
+  return shrankMagnitude(prior, latest);
 }
 
 /**

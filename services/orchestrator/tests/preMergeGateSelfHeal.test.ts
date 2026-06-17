@@ -210,10 +210,12 @@ describe("pre-merge gate self-heal (apex v34)", () => {
     // It HALTED LOUD (a parked, requeueable run) — never merged on an unverified head.
     expect(pool.runStatus).toEqual({ status: "halted", outcome: "halted" });
     expect(result.mergeGate?.passed).toBe(false);
-    // FIXED POINT (no count): the initial gate run, then ONE rework that reproduces the
-    // IDENTICAL error ⇒ a fixed point ⇒ halt. A finite count proves it neither looped forever
-    // nor silently passed — and the halt is the detector's, not a budget's.
-    expect(preMergeCalls).toHaveLength(2);
+    // FIXED POINT (no count): the initial gate run, then reworks that reproduce the IDENTICAL
+    // error. A single repeat is NOT yet a fixed point (a transient may recur once); only once
+    // the identical error RECURS as a cycle does the detector halt — so the gate runs three
+    // times (initial + two identical reworks), then halts. A finite count proves it neither
+    // looped forever nor silently passed — and the halt is the detector's, not a budget's.
+    expect(preMergeCalls).toHaveLength(3);
     expect(preMergeCalls.every((o) => !o.passed)).toBe(true);
   });
 });

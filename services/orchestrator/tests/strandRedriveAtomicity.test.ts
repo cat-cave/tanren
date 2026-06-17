@@ -6,8 +6,9 @@
 // TRANSIENT class, so a genuine orphan now RE-DRIVES (spec → `open`, `dag.spec.redriven`) —
 // the walker re-enqueues it — rather than the old terminal `no_live_run` strand. The shared
 // convergence detector bounds it WITHOUT a count: at a FIXED POINT (a spec crashing the
-// IDENTICAL way with no new information) it GENUINE-HALTS `needs_attention
-// reason:persistent_failure`. A changing crash re-drives UNBOUNDED.
+// IDENTICAL way, RECURRING beyond a single transient repeat — a proven cycle with no new
+// information) it GENUINE-HALTS `needs_attention reason:persistent_failure`, routed through the
+// shared convergence judge. A changing crash — OR a single transient repeat — re-drives UNBOUNDED.
 //
 // Bug-1 atomicity is preserved: a fresh queued/running SUCCESSOR run (a re-drive in flight)
 // means the spec is TRANSITIONING, not orphaned — the orphan path skips it entirely.
@@ -37,8 +38,10 @@ class RecordingClient {
       return { rows: this.opts.hasSuccessor ? [{}] : [], rowCount: this.opts.hasSuccessor ? 1 : 0 };
     }
     if (sql.includes("FROM events") && sql.includes("dag.spec.redriven")) {
+      // Each prior re-drive records the ENRICHED signature (code + the stage it failed in), so the
+      // orphan reader keys on `code@stage` exactly as the live path does.
       const rows = Array.from({ length: this.opts.priorSameFailures ?? 0 }, () => ({
-        payload: { failureCode: "internal" },
+        payload: { failureCode: "internal", stage: "run" },
       }));
       return { rows, rowCount: rows.length };
     }
@@ -97,15 +100,27 @@ describe("orphan reconciler — a genuine orphan RE-DRIVES (crash = transient), 
     expect(client.emittedEventType("dag.spec.redriven")).toBe(true);
   });
 
-  it("a spec crashing the IDENTICAL way again (a FIXED POINT) GENUINE-HALTS `needs_attention` (no count)", async () => {
-    // A prior identical `internal` crash + this identical one ⇒ a fixed point (the crash repeats
-    // with no new information) ⇒ persistent_failure. No hardcoded attempt cap — one identical
-    // repeat is already a proven dead-end for a crash with no observable produced work.
+  it("a SECOND identical crash (no observable work) is NOT yet a fixed point — it RE-DRIVES (no disguised K=2)", async () => {
+    // ONE prior identical `internal@run` crash + this identical one is NOT proof of a dead-end:
+    // a crash has no observable produced work, so a single repeat could be a transient flake
+    // recurring once. The corrected doctrine re-drives (the disguised-K=2 the audit flagged is gone).
     const client = new RecordingClient({ hasSuccessor: false, occupying: true, priorSameFailures: 1 });
 
     await parkStrandedSpecInProcess(client.asClient(), "spec_1", "project_1", "run_dead", INTERNAL_FAILURE);
 
-    // At the fixed point the orphan is genuinely stuck — it parks `needs_attention`, not re-drives.
+    expect(client.specUpdateTarget()).toBe("open");
+    expect(client.emittedEventType("dag.spec.redriven")).toBe(true);
+  });
+
+  it("a spec crashing the IDENTICAL way RECURRING (a CYCLE) GENUINE-HALTS `needs_attention` (no count)", async () => {
+    // TWO prior identical `internal@run` crashes + this identical one ⇒ the crash RECURS beyond
+    // the immediate neighbor (a proven cycle, no new information) ⇒ persistent_failure. No
+    // hardcoded attempt cap — the cycle detection itself is the loop-breaker, routed through the judge.
+    const client = new RecordingClient({ hasSuccessor: false, occupying: true, priorSameFailures: 2 });
+
+    await parkStrandedSpecInProcess(client.asClient(), "spec_1", "project_1", "run_dead", INTERNAL_FAILURE);
+
+    // At the proven cycle the orphan is genuinely stuck — it parks `needs_attention`, not re-drives.
     expect(client.specUpdateTarget()).toBe("needs_attention");
     expect(client.emittedEvent()).toBe(true);
     expect(client.emittedEventType("dag.spec.needs_attention")).toBe(true);

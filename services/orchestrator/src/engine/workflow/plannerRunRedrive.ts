@@ -27,7 +27,7 @@ import {
   type RunDisposition,
   type TerminalOutcome,
 } from "./runFinalizeAuthority.js";
-import { assessStructuralProgress, type AttemptSignature } from "./convergenceDetector.js";
+import { type AttemptSignature, decideConvergence, fixedPointRuleJudgment } from "./convergenceDetector.js";
 
 const log = createLogger("run-redrive");
 
@@ -60,7 +60,8 @@ export type RedriveHistoryReader = (facts: RedriveHistoryFacts) => Promise<numbe
  * The Pg-backed {@link RedriveHistoryReader} the run worker wires: an org-scoped read of the
  * spec's prior `dag.spec.redriven` events (newest first), assembled into the shared
  * convergence-detector history (failure code + work signature per attempt) with the CURRENT
- * attempt appended — then `assessStructuralProgress` decides progress vs fixed point.
+ * attempt appended — then `decideConvergence` (routed through the principled fixed-point judge)
+ * decides progress vs a proven fixed point.
  *
  * FAIL-CLOSED toward RE-DRIVING (not toward stranding): a read failure logs loudly and
  * returns 0 (treat as progress / first of its kind) — a transient DB hiccup must NOT cause a
@@ -78,9 +79,9 @@ export function buildRedriveHistoryReader(pool: pg.Pool): RedriveHistoryReader {
           [facts.specId],
         );
         // Assemble the oldest→newest attempt history (each prior re-drive's failure code +
-        // work signature) and append the CURRENT attempt, then ask the shared detector how
-        // long the trailing fixed-point streak is. The streak EXCLUDING the current attempt
-        // is the count of PRIOR identical attempts the authority's escalation rule keys off.
+        // work signature) and append the CURRENT attempt, then route the escalation decision
+        // through the shared convergence judge (below). 1 ⇒ a proven fixed point (the authority
+        // escalates); 0 ⇒ progress (a changing failure / work, or a not-yet-cyclic repeat).
         const history: AttemptSignature[] = result.rows.map((row) => ({
           failureSignature: row.payload.failureCode ?? "",
           ...(row.payload.workSignature !== undefined && { workSignature: row.payload.workSignature }),
@@ -89,10 +90,21 @@ export function buildRedriveHistoryReader(pool: pg.Pool): RedriveHistoryReader {
           failureSignature: facts.code,
           ...(facts.workSignature !== undefined && { workSignature: facts.workSignature }),
         });
-        // The current attempt is a fixed point iff it did not advance over the immediately
-        // prior one. `priorSameFixedPoint` = 1 when stuck (the prior was identical), 0 when
-        // progressing. The authority escalates only when this is >= 1.
-        return assessStructuralProgress(history) === "fixed_point" ? 1 : 0;
+        // Route the escalation decision through the SHARED `decideConvergence` judge — NOT a raw
+        // `=== "fixed_point"` boolean (the disguised-K=2 the audit flagged). There is no answerer
+        // at the durable re-drive point (it is a bare DB-driven decision), so `fixedPointRuleJudgment`
+        // is the principled stand-in: it escalates ONLY at a PROVEN dead-end (a byte-identical
+        // reproduced head, or a cycle with no progress). `priorSameFixedPoint` = 1 when the judge
+        // escalates, 0 while progressing — the authority escalates only when this is >= 1.
+        const decision = await decideConvergence(history, (h) =>
+          fixedPointRuleJudgment(
+            h,
+            () =>
+              `the run reached a FIXED POINT (${facts.code}) — it produced the identical failure and ` +
+              `identical work with no new information across re-drives; the spec is genuinely stuck`,
+          ),
+        );
+        return decision.decision === "escalate" ? 1 : 0;
       });
     } catch (error) {
       log.warn(

@@ -125,8 +125,14 @@ describe("SpecStatusGateReworkRouter — re-gate gate-fail → writer rework, fi
     const events = new FakeEventStore();
     const statusWrites: { specId: string; status: string }[] = [];
     const recurring = "base-shift re-gate failed at tier tier-2: step 'test' (exit 1)";
-    // The prior rework's error signature is the SAME as the current one → a fixed point.
-    const router = makeRouter({ enqueuer, priorReworks: [gateErrorSignature(recurring)], events, statusWrites });
+    // The identical error signature RECURS across multiple prior reworks (a cycle, not a single
+    // transient repeat) → a proven fixed point ⇒ escalate.
+    const router = makeRouter({
+      enqueuer,
+      priorReworks: [gateErrorSignature(recurring), gateErrorSignature(recurring)],
+      events,
+      statusWrites,
+    });
 
     await router.routeGateFailToRework({ specId: SPEC, gateError: recurring });
 

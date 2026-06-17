@@ -61,9 +61,10 @@ function mergedOf(nodes: DagSpecNode[]): number {
 
 interface FakeOptions {
   nodes: DagSpecNode[];
-  // EITHER `"fixed-point"` (synthesize ONE prior recovery IDENTICAL to the current snapshot
-  // — the stuck-build case that exhausts), OR an explicit ordered list of prior progress
-  // signals (to model a converging or stuck history), OR omitted (no prior recoveries).
+  // EITHER `"fixed-point"` (synthesize prior recoveries forming a CYCLE with the current
+  // snapshot — the same stranded set + merged count RECURRING beyond the immediate neighbor,
+  // the stuck-build case that exhausts), OR an explicit ordered list of prior progress signals
+  // (to model a converging or stuck history), OR omitted (no prior recoveries).
   priorRecoveries?: "fixed-point" | RecoveryProgressSignal[];
   published?: boolean;
   // Spec ids the reset should report as NOT reset (a concurrent recovery race).
@@ -74,12 +75,15 @@ function makeDeps(opts: FakeOptions): { deps: TemplateBuildRecoveryDeps; events:
   const events = new RecordingEvents();
   const reset: string[] = [];
   const skips = new Set(opts.resetSkips ?? []);
-  // `"fixed-point"` synthesizes ONE prior recovery identical to the current snapshot (same
-  // merged count + same stranded set) — so the latest attempt is a fixed point and exhausts.
+  // `"fixed-point"` synthesizes TWO prior recoveries identical to the current snapshot (same
+  // merged count + same stranded set) — so the latest attempt RECURS a state it has been in
+  // beyond the immediate neighbor (a CYCLE, not a single transient repeat) and exhausts.
+  const identical: RecoveryProgressSignal = {
+    mergedCount: mergedOf(opts.nodes),
+    strandedSpecIds: strandedOf(opts.nodes),
+  };
   const priorSignals: RecoveryProgressSignal[] =
-    opts.priorRecoveries === "fixed-point"
-      ? [{ mergedCount: mergedOf(opts.nodes), strandedSpecIds: strandedOf(opts.nodes) }]
-      : (opts.priorRecoveries ?? []);
+    opts.priorRecoveries === "fixed-point" ? [identical, identical] : (opts.priorRecoveries ?? []);
   const deps: TemplateBuildRecoveryDeps = {
     loadSnapshot: async (projectId) => snapshot(projectId, opts.nodes),
     resetStrandedSpec: async ({ specId }) => {
@@ -178,11 +182,16 @@ describe("recoverStrandedTemplateBuild — bounded by the fixed-point detector (
     expect((exhausted?.payload as Record<string, unknown> | undefined)?.maxAttempts).toBeUndefined();
   });
 
-  it("a SINGLE identical prior recovery is already a fixed point (no count threshold to reach)", async () => {
-    // ONE prior recovery identical to the current snapshot is enough — there is no K to climb.
+  it("a RECURRING identical state (a cycle, not a single transient repeat) is a fixed point — no count threshold", async () => {
+    // The state RECURS beyond the immediate neighbor (the same merged count + stranded set seen
+    // before) with no net progress ⇒ a cycle ⇒ exhaust. There is no K to climb — a single
+    // transient repeat would NOT escalate (the disguised-K=2 fix), but a genuine cycle does.
     const { deps } = makeDeps({
       nodes: [node("d1", "done"), node("s1", "terminal_blocked")],
-      priorRecoveries: [{ mergedCount: 1, strandedSpecIds: ["s1"] }],
+      priorRecoveries: [
+        { mergedCount: 1, strandedSpecIds: ["s1"] },
+        { mergedCount: 1, strandedSpecIds: ["s1"] },
+      ],
     });
     await expect(recoverStrandedTemplateBuild(deps, ctx)).rejects.toBeInstanceOf(TemplateBuildRecoveryExhaustedError);
   });
@@ -265,15 +274,18 @@ describe("recoverStrandedTemplateBuild — UNBOUNDED while progressing", () => {
     expect(outcome).toMatchObject({ kind: "requeued" });
   });
 
-  it("a build STUCK at the SAME failure (the latest recovery matches the snapshot) exhausts loud", async () => {
-    // The most-recent prior recovery is identical to the current snapshot (no new merges, same
-    // stranded set) ⇒ a fixed point ⇒ exhaust — regardless of earlier progress.
+  it("a build that OSCILLATES between two states with no net progress exhausts loud", async () => {
+    // The build OSCILLATES between the s1/merged-1 and sb/merged-2 states (s1→sb→s1→sb→s1) with
+    // no net forward motion — a sustained cycle (the snapshot recurs a non-immediate prior, and
+    // the only states seen since are already-visited ones) ⇒ a fixed point ⇒ exhaust. (A single
+    // excursion-and-return would still be exploration — it keeps recovering.)
     const { deps, events, reset } = makeDeps({
       nodes: [node("d1", "done"), node("s1", "terminal_blocked")],
       priorRecoveries: [
-        // early progress, then the most-recent prior is identical to the current snapshot (fixed point).
-        { mergedCount: 0, strandedSpecIds: ["sa"] },
         { mergedCount: 1, strandedSpecIds: ["s1"] },
+        { mergedCount: 2, strandedSpecIds: ["sb"] },
+        { mergedCount: 1, strandedSpecIds: ["s1"] },
+        { mergedCount: 2, strandedSpecIds: ["sb"] },
       ],
     });
     await expect(recoverStrandedTemplateBuild(deps, ctx)).rejects.toBeInstanceOf(TemplateBuildRecoveryExhaustedError);
@@ -305,9 +317,10 @@ describe("recoverStrandedTemplateBuild — UNBOUNDED while progressing", () => {
     });
   });
 
-  it("BOUNDED: a forever-stuck build terminates the moment it stops changing (does not infinitely recover)", async () => {
-    // Feed each emitted signal back as a prior. With NO progress (same nodes), the SECOND pass
-    // is already a fixed point (the prior matches the snapshot) ⇒ it terminates fast.
+  it("BOUNDED: a forever-stuck build terminates once the no-progress state RECURS (a cycle, not infinite recovery)", async () => {
+    // Feed each emitted signal back as a prior. With NO progress (same nodes), a single repeat is
+    // NOT yet a fixed point (a transient could recur once); but once the identical state RECURS
+    // beyond the immediate neighbor it is a proven cycle ⇒ it terminates fast (not infinitely).
     const priors: RecoveryProgressSignal[] = [];
     const nodes = [node("d1", "done"), node("s1", "terminal_blocked")];
     let thrown: unknown;
@@ -325,7 +338,9 @@ describe("recoverStrandedTemplateBuild — UNBOUNDED while progressing", () => {
       break;
     }
     expect(thrown).toBeInstanceOf(TemplateBuildRecoveryExhaustedError);
-    // It recovered ONCE (the first pass, no prior to compare), then hit the fixed point.
-    expect(priors.length).toBe(1);
+    // It recovered TWICE (the first pass with no prior, then a single transient-tolerant repeat),
+    // then hit the fixed point the moment the no-progress state RECURRED (the cycle) — bounded,
+    // never infinite. The exact count is incidental; the property is that it terminates fast.
+    expect(priors.length).toBe(2);
   });
 });

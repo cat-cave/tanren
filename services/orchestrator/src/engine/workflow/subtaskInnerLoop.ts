@@ -21,7 +21,7 @@ import type { Finding } from "../contracts/findings.js";
 import type { GateOutcome } from "./gate/index.js";
 import { runCheckerStage, runWriterStage } from "./subtaskStages.js";
 import { type SubtaskCostContext } from "./subtaskCost.js";
-import { assessStructuralProgress, type AttemptSignature } from "./convergenceDetector.js";
+import { type AttemptSignature, decideConvergence, fixedPointRuleJudgment } from "./convergenceDetector.js";
 import type { AppendEvent, SubtaskLoopInput, SubtaskLoopOutcome } from "./subtaskLoop.js";
 
 // The result of walking a plan's subtasks (per-task WRITER → FAST GATE → CHECKER):
@@ -121,10 +121,11 @@ async function runOneSubtask(args: {
     if (writerOutcome.kind === "failed") {
       // A hard writer failure (crashed / timed out): retry the writer (the diff is
       // partial). A crash with no usable diff has no work signature — progress keys off
-      // the rejection reason changing. At a fixed point (the SAME crash repeatedly) the
-      // detector surfaces the residual finding instead of re-driving forever.
+      // the rejection reason changing. A 2nd identical crash is NOT an instant fixed point
+      // (it may be a transient flake); only once the SAME crash RECURS as a cycle does the
+      // detector surface the residual finding instead of re-driving forever.
       lastReason = `writer ${writerOutcome.failureKind} mid-subtask`;
-      const stuck = recordAttemptAndCheckFixedPoint(attempts, lastReason);
+      const stuck = await recordAttemptAndCheckFixedPoint(attempts, lastReason);
       if (stuck !== undefined) return stuck(subtask, iter + 1);
       iter += 1;
       continue;
@@ -140,7 +141,7 @@ async function runOneSubtask(args: {
         lastReason = gateReason(gate);
         // PROGRESS while the gate failure OR the produced diff keeps changing (a shrinking
         // error count is a different `outputTail` → progress); STOP at a fixed point.
-        const stuck = recordAttemptAndCheckFixedPoint(attempts, lastReason, diffSignature);
+        const stuck = await recordAttemptAndCheckFixedPoint(attempts, lastReason, diffSignature);
         if (stuck !== undefined) return stuck(subtask, iter + 1);
         iter += 1;
         continue;
@@ -194,28 +195,39 @@ async function runOneSubtask(args: {
     // PROGRESS while the checker's incompleteness reason OR the produced diff keeps changing
     // (the writer is still closing the gaps); STOP only at a FIXED POINT (the identical
     // checker rejection over the identical diff — the writer has stopped changing anything).
-    const stuck = recordAttemptAndCheckFixedPoint(attempts, lastReason, diffSignature);
+    const stuck = await recordAttemptAndCheckFixedPoint(attempts, lastReason, diffSignature);
     if (stuck !== undefined) return stuck(subtask, iter + 1);
     iter += 1;
   }
 }
 
 // Record the latest writer attempt's signature (its rejection reason + produced-diff hash)
-// onto the running history, then ask the shared detector whether the loop is at a FIXED
-// POINT (this attempt indistinguishable from the prior — identical rejection AND identical
-// diff). Returns `undefined` while making PROGRESS (the loop continues, UNBOUNDED), or a
-// builder for the residual P0 `incomplete` result when stuck (no count — the structural
-// fixed point IS the stop condition).
-function recordAttemptAndCheckFixedPoint(
+// onto the running history, then route the escalation decision through the SHARED
+// `decideConvergence` judge — NOT a raw `=== "fixed_point"` boolean (the disguised-K=2 the
+// audit flagged). The writer's produced work is OBSERVABLE here (the diff hash), so a
+// byte-identical diff + identical rejection is a PROVEN dead-end (no new information); the
+// principled `fixedPointRuleJudgment` stands in (there is no separate "would a human help"
+// answerer at this point — the checker already rendered its completeness verdict). Returns
+// `undefined` while making PROGRESS (the loop continues, UNBOUNDED — a changed rejection OR a
+// changed diff is progress), or a builder for the residual P0 `incomplete` result when the
+// judge escalates (no count — the structural fixed point / cycle IS the stop condition).
+async function recordAttemptAndCheckFixedPoint(
   attempts: AttemptSignature[],
   rejectionReason: string,
   diffSignature?: string,
-): ((subtask: PlanSubtask, rounds: number) => OneSubtaskResult) | undefined {
+): Promise<((subtask: PlanSubtask, rounds: number) => OneSubtaskResult) | undefined> {
   attempts.push({
     failureSignature: rejectionReason,
     ...(diffSignature !== undefined && { workSignature: diffSignature }),
   });
-  if (assessStructuralProgress(attempts) !== "fixed_point") return undefined;
+  const decision = await decideConvergence(attempts, (h) =>
+    fixedPointRuleJudgment(h, () =>
+      rejectionReason === ""
+        ? "the writer stopped changing anything and the subtask did not reach completeness"
+        : rejectionReason,
+    ),
+  );
+  if (decision.decision !== "escalate") return undefined;
   return (subtask, rounds) => ({
     kind: "incomplete",
     finding: {

@@ -117,11 +117,12 @@ describe("run worker — single-finalize: the workflow's own finalize is NOT dou
     expect(pool.events.find((e) => e.eventType === "dag.spec.needs_attention")).toBeUndefined();
   });
 
-  it("an orphan crashing the SAME way K times in a row GENUINE-HALTS needs_attention (the bounded escalation)", async () => {
+  it("an orphan crashing the SAME way RECURRING (a cycle) GENUINE-HALTS needs_attention (the bounded escalation)", async () => {
     const { pool, secrets, run } = await setupSeededRun();
     pool.specStatus = "in_flight";
     pool.successorRunCount = 0;
-    // K-1 prior same-failure re-drives ⇒ this one reaches the cap ⇒ persistent_failure.
+    // The identical `internal@run` crash RECURS across prior re-drives (a proven cycle, not a
+    // single transient repeat) ⇒ this one is a fixed point ⇒ persistent_failure. No count.
     pool.priorRedrivenFailureCodes = Array.from({ length: 3 }, () => "internal");
     const jobQueue = new FakeJobQueue();
     await enqueue(jobQueue, run);

@@ -297,9 +297,12 @@ describe("buildDriveConflictResolve — classify-then-escalate + percolation/cap
   });
 
   it("ESCALATE (FIXED POINT): re-planning against the SAME conflict again → verdict 'escalate', NO runner provisioned (genuinely incompatible)", async () => {
-    // The spec was already re-planned against THIS exact conflict (the drive keys the signature
-    // off the conflict message) — re-planning would re-conflict identically (a fixed point).
-    const pool = fakePool({ priorReplanSignatures: [conflictSignatureOf(CONTEXT.message)] });
+    // The spec was re-planned against THIS exact conflict REPEATEDLY (the drive keys the signature
+    // off the conflict message) — the identical conflict recurring beyond a single transient repeat
+    // is a proven cycle ⇒ re-planning would re-conflict identically (a fixed point).
+    const pool = fakePool({
+      priorReplanSignatures: [conflictSignatureOf(CONTEXT.message), conflictSignatureOf(CONTEXT.message)],
+    });
     const allocator = new SpyAllocator();
     const verdict: DriveConflictVerdict = {};
     // The resolver should NOT be invoked at the cap — inject one that fails the test if called.

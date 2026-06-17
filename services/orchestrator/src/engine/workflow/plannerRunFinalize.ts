@@ -237,7 +237,7 @@ export async function applyReviewVerdict(
     const signature = gateErrorSignature(review.rejection.rejectionReason);
     // PROGRESS while the feedback keeps changing (re-work UNBOUNDED); a FIXED POINT (the SAME
     // feedback recurs) → halt. The detector decides — no count.
-    if (!atReplanFixedPoint(priorSignatures, signature)) {
+    if (!(await atReplanFixedPoint(priorSignatures, signature))) {
       priorSignatures.push(signature);
       seedRejections.push(review.rejection);
       await setSpecStatus(input, context, "in_flight");

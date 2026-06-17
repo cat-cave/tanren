@@ -122,9 +122,15 @@ describe("PgBatchGateReworkRouter — gate-fail → writer rework, bounded", () 
     const appended: Appended[] = [];
     const statusWrites: { specId: string; status: string }[] = [];
     const stuckError = "still failing the integrated gate";
-    // The spec was ALREADY re-worked against this EXACT gate error — re-working again would
-    // reproduce it identically (a fixed point), so the detector escalates (no count).
-    const router = makeRouter({ enqueuer, priorReworks: [gateErrorSignature(stuckError)], appended, statusWrites });
+    // The spec was re-worked against this EXACT gate error REPEATEDLY (a cycle: the identical
+    // error recurring beyond a single transient repeat) — re-working again would reproduce it
+    // identically (a proven fixed point), so the detector escalates (no count).
+    const router = makeRouter({
+      enqueuer,
+      priorReworks: [gateErrorSignature(stuckError), gateErrorSignature(stuckError)],
+      appended,
+      statusWrites,
+    });
 
     const disposition = await router.routeGateFailToRework({
       projectId: PROJECT,

@@ -41,10 +41,18 @@ describe("buildRedriveHistoryReader — the fixed-point read (0 = progress / re-
     expect(await reader({ orgId: "org_1", specId: "spec_1", code: "internal" })).toBe(0);
   });
 
-  it("the SAME failure code recurring (no work signature) ⇒ 1 (a FIXED POINT — escalate)", async () => {
-    // A prior `internal` re-drive + the current `internal` failure, neither with an observable
-    // work signature ⇒ the failure-code axis alone is a fixed point.
+  it("a SINGLE same-code repeat (no work signature) ⇒ 0 (NOT an instant fixed point — a transient may recur once)", async () => {
+    // A 2nd identical `internal` failure with NO observable produced work is NOT proof of a
+    // dead-end (it may be a transient flake recurring once) — the disguised-K=2 fix. The
+    // cycle-aware judge keeps re-driving until the recurrence is evidenced beyond one repeat.
     const reader = buildRedriveHistoryReader(fakePool([{ failureCode: "internal" }]));
+    expect(await reader({ orgId: "org_1", specId: "spec_1", code: "internal" })).toBe(0);
+  });
+
+  it("the SAME no-work failure RECURRING (a cycle: ≥2 priors) ⇒ 1 (a proven FIXED POINT — escalate)", async () => {
+    // Two prior `internal` re-drives + the current `internal` failure, no observable work ⇒
+    // the state has recurred beyond the immediate neighbor ⇒ a cycle ⇒ the judge escalates.
+    const reader = buildRedriveHistoryReader(fakePool([{ failureCode: "internal" }, { failureCode: "internal" }]));
     expect(await reader({ orgId: "org_1", specId: "spec_1", code: "internal" })).toBe(1);
   });
 
@@ -69,21 +77,27 @@ describe("buildRedriveHistoryReader — the fixed-point read (0 = progress / re-
     expect(await reader({ orgId: "org_1", specId: "spec_1", code: "internal", workSignature: "sha-A" })).toBe(1);
   });
 
-  it("a long run of CHANGING failures NEVER reaches a fixed point (UNBOUNDED progress, far past any old K)", async () => {
-    // 8 prior re-drives, each a different code ending in a code different from the current ⇒
-    // the latest advanced ⇒ progress (0), no matter how many attempts precede it.
+  it("a long run of NEW produced work each attempt NEVER reaches a fixed point (UNBOUNDED progress)", async () => {
+    // 8 prior re-drives, each producing a DIFFERENT head sha (the agent kept doing something
+    // different) ⇒ the work axis advances every attempt ⇒ progress (0), no matter how many.
+    const reader = buildRedriveHistoryReader(
+      fakePool(Array.from({ length: 8 }, (_unused, i) => ({ failureCode: "internal", workSignature: `sha-${i}` }))),
+    );
+    expect(await reader({ orgId: "org_1", specId: "spec_1", code: "internal", workSignature: "sha-new" })).toBe(0);
+  });
+
+  it("an OSCILLATION among a FIXED set of failures with no new work reaches a fixed point ⇒ 1 (the soft-brick)", async () => {
+    // The corrected doctrine: a loop rotating among only already-seen failures (no NEW failure
+    // type, no observable produced work, no magnitude trend) is CYCLING, not progressing — the
+    // exact A→B→A→B soft-brick the audit flagged. It escalates instead of re-driving forever.
     const reader = buildRedriveHistoryReader(
       fakePool([
         { failureCode: "internal" },
         { failureCode: "merge" },
         { failureCode: "internal" },
-        { failureCode: "deploy" },
-        { failureCode: "internal" },
-        { failureCode: "merge" },
-        { failureCode: "deploy" },
         { failureCode: "merge" },
       ]),
     );
-    expect(await reader({ orgId: "org_1", specId: "spec_1", code: "internal" })).toBe(0);
+    expect(await reader({ orgId: "org_1", specId: "spec_1", code: "internal" })).toBe(1);
   });
 });

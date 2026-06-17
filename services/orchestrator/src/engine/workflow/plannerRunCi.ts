@@ -250,12 +250,12 @@ export function gateOutcomeSignature(gate: Extract<GateOutcome, { passed: false 
  * `halt` so the run ends LOUD (`needs_attention`) instead of looping identically forever.
  * `priorSignatures` are the gate-error signatures already re-worked against (oldest→newest).
  */
-export function mergeGateSelfHeal(
+export async function mergeGateSelfHeal(
   gate: Extract<GateOutcome, { passed: false }>,
   priorSignatures: ReadonlyArray<string>,
-): MergeGateSelfHealDecision {
+): Promise<MergeGateSelfHealDecision> {
   const signature = gateOutcomeSignature(gate);
-  if (atReplanFixedPoint(priorSignatures, signature)) {
+  if (await atReplanFixedPoint(priorSignatures, signature)) {
     return { kind: "halt" };
   }
   return { kind: "rework", rejection: mergeGateRejection(gate), signature };
@@ -332,7 +332,7 @@ export async function runPublishGateStage(
   if (mergeGate.passed) {
     return { pullRequest, mergeGate, kind: "merged" };
   }
-  const decision = mergeGateSelfHeal(mergeGate, stage.budget.signatures);
+  const decision = await mergeGateSelfHeal(mergeGate, stage.budget.signatures);
   const move = await applyFailedMergeGate(
     input,
     stage.finalizeRunState,
