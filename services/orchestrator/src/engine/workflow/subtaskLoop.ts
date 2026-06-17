@@ -116,6 +116,10 @@ export interface SubtaskLoopInput {
     projectId: string;
     workspacePath: string;
     baseSha?: string;
+    // WS-D2 (native design subsystem): the rendered design block for the project's HEAD
+    // `DesignContract` (persona-scoped, behavior-linked, domain-general). Injected into the
+    // writer prompt so the build honors the design. Absent ⇒ no design contract ⇒ no block.
+    designContextBlock?: string;
   };
   // The CONVERGENCE policy (the SOLE loop bound) + the audit posture (triage routing).
   // Optional → resolve to the balanced defaults.

@@ -284,6 +284,11 @@ function writerPromptFor(input: SubtaskLoopInput, subtask: PlanSubtask, iter: nu
   // writer at the concrete gap before it spends the iteration.
   const rework =
     iter > 0 && lastReason !== "" ? ["", `Previous attempt was rejected: ${lastReason}`, "Address it directly."] : [];
+  // WS-D2 (native design subsystem): the project's rendered design block for its HEAD
+  // `DesignContract` — persona-scoped, behavior-linked, domain-general. Present ⇒ the build
+  // honors the design (the no-handoff loop); ABSENT ⇒ the project has no design contract (a real
+  // empty state) and the writer simply gets no design block — NEVER a fabricated default.
+  const design = input.context.designContextBlock === undefined ? [] : ["", input.context.designContextBlock];
   return [
     `Subtask [${subtask.index}]: ${subtask.title}`,
     `Intent: ${subtask.intent}`,
@@ -292,6 +297,7 @@ function writerPromptFor(input: SubtaskLoopInput, subtask: PlanSubtask, iter: nu
     `Spec: ${input.context.specTitle}`,
     input.context.specDescription,
     ...criteria,
+    ...design,
     ...rework,
     "",
     WRITER_TOOLCHAIN_INSTRUCTION,

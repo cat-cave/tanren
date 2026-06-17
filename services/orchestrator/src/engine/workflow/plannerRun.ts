@@ -104,6 +104,8 @@ export interface PlannerRunContext {
   acceptanceCriteria: string[];
   behaviorIds?: string[];
   behaviorContext?: ReadonlyArray<{ id: string; title: string; description: string }>;
+  // WS-D2: HEAD `DesignContract` rendered for the writer prompt (designWriterContext.ts); absent ⇒ no design contract.
+  designContextBlock?: string;
   runnerImage: string;
   identitySecretRef: string;
   githubCredentialRef: string;
@@ -238,14 +240,11 @@ export interface RunPlannerLoopInput {
   // spec). Built by the worker (`buildRedriveHistoryReader`); absent on a no-DB unit path ⇒ treat as
   // the first failure of its kind (re-drive), so a unit run never spuriously escalates.
   redriveHistoryReader?: RedriveHistoryReader;
-  // (removed — apex v35) `maxReviewReworks` / `maxMergeGateReworks`: the review-rework and
-  // pre_merge-gate self-heal loops are no longer count-bounded. They re-enter the writer
-  // UNBOUNDED while the reviewer feedback / gate error keeps changing (progress), halting
-  // only at a FIXED POINT (the same feedback/error recurs) via the shared convergenceDetector.
-  // Plane B: the PROJECT's dev+test app env — env vars + secrets the product Tanren is
-  // BUILDING needs to run+test its app. Resolved by the worker from `project_app_env`,
-  // materialized over the runner into the building agent's command env (gate + bootstrap),
-  // NEVER logged + DISTINCT from Tanren's own provider creds. Undefined ⇒ no env.
+  // (removed — apex v35) `maxReviewReworks` / `maxMergeGateReworks`: the review-rework + pre_merge-gate
+  // self-heal loops are convergence-gated, not count-bounded (FIXED POINT halt via convergenceDetector).
+  // Plane B: the PROJECT's dev+test app env — env vars + secrets the product Tanren is BUILDING needs to
+  // run+test its app. Resolved by the worker from `project_app_env`, materialized over the runner into the
+  // building agent's command env (gate + bootstrap), NEVER logged + DISTINCT from Tanren's creds. Undefined ⇒ no env.
   appEnv?: Record<string, string>;
 }
 
@@ -373,6 +372,7 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
           projectId: context.projectId,
           workspacePath,
           baseSha,
+          ...(context.designContextBlock !== undefined && { designContextBlock: context.designContextBlock }),
         },
         timeoutMs: input.timeoutMs,
         usageProbe,

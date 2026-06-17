@@ -22,6 +22,10 @@ function rowPool(row: Record<string, unknown> | undefined): pg.Pool {
       if (trimmed.startsWith("SELECT config FROM organizations")) {
         return { rows: [{ config: { version: 1 } }], rowCount: 1 };
       }
+      // WS-D2: the writer-context design read — no design contract in these fixtures.
+      if (trimmed.includes("FROM design_contracts")) {
+        return { rows: [], rowCount: 0 };
+      }
       // The run⋈spec⋈project join.
       return row === undefined ? { rows: [], rowCount: 0 } : { rows: [row], rowCount: 1 };
     },
@@ -227,6 +231,10 @@ function envRowPool(row: Record<string, unknown>, env: { match?: Record<string, 
       }
       if (trimmed.includes("FROM environments")) {
         return env.match === undefined ? { rows: [], rowCount: 0 } : { rows: [env.match], rowCount: 1 };
+      }
+      // WS-D2: the writer-context design read — no design contract in these fixtures.
+      if (trimmed.includes("FROM design_contracts")) {
+        return { rows: [], rowCount: 0 };
       }
       return { rows: [row], rowCount: 1 };
     },

@@ -87,6 +87,48 @@ describe("subtask loop — writer prompt rendering (writerPromptFor)", () => {
     await runSubtaskLoop(input);
     expect(writer.calls[0]!.prompt).toContain("Behaviors: (none)");
   });
+
+  // WS-D2 (native design subsystem): the rendered design block, when present on the
+  // run context, reaches the writer prompt verbatim — the no-handoff injection.
+  it("injects the design context block into the writer prompt when present", async () => {
+    const writer = makeWriter(["diff a\n"]);
+    const base = defaultLoopInput();
+    const { input } = defaultLoopInput({
+      adapters: {
+        ...base.input.adapters,
+        planner: makePlanner([buildPlan([{ title: "T", intent: "i", behaviorIds: [] }])]),
+        writer,
+        checker: makeChecker([completeCheck]),
+        auditor: makeAuditor([cleanAudit]),
+      },
+      context: {
+        ...base.input.context,
+        designContextBlock:
+          "Design contract — build the product to honor this design:\nDesign identity: calm ops console",
+      },
+    });
+    await runSubtaskLoop(input);
+    const prompt = writer.calls[0]!.prompt;
+    expect(prompt).toContain("Design contract — build the product to honor this design:");
+    expect(prompt).toContain("Design identity: calm ops console");
+  });
+
+  // ABSENT design block ⇒ no design section in the prompt (a real empty state — never a
+  // fabricated default).
+  it("omits any design section from the writer prompt when no design block is present", async () => {
+    const writer = makeWriter(["diff a\n"]);
+    const { input } = defaultLoopInput({
+      adapters: {
+        ...defaultLoopInput().input.adapters,
+        planner: makePlanner([buildPlan([{ title: "T", intent: "i", behaviorIds: [] }])]),
+        writer,
+        checker: makeChecker([completeCheck]),
+        auditor: makeAuditor([cleanAudit]),
+      },
+    });
+    await runSubtaskLoop(input);
+    expect(writer.calls[0]!.prompt).not.toContain("Design contract");
+  });
 });
 
 describe("subtask loop — auditor self-inspects the change (no injected diff)", () => {

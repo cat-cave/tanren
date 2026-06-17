@@ -15,6 +15,7 @@ import type { RoutingChainEntry, RoutingTable } from "../config/shared.js";
 import { resolveCreditUsdRate } from "../costs/index.js";
 import type { ResolvedRunCredentials } from "../credentials/resolveCredentials.js";
 import { orgScopeFromRunOrgId, resolveCredentialsForRun } from "../credentials/resolveCredentials.js";
+import { loadDesignContextBlock } from "../design/designWriterContext.js";
 import { materializeContractFiles } from "../forge/scaffold/index.js";
 import { resolveAncestorStack } from "../dag/ancestorStack.js";
 import { resolveProjectEnv } from "../environments/index.js";
@@ -177,9 +178,13 @@ export async function loadRunExecutionContext(
   // org id — a missing tenant scope at a run path is a scoping/RLS-denial BUG, never
   // a license to coerce `?? ""` and silently degrade to project-config-only BYOK
   // (the no_silent_fallbacks doctrine).
+  // A run is ALWAYS tenant-scoped (see above): this resolves to `{ kind: "org", orgId }` or
+  // fails LOUD. The single resolved scope is reused for the credential resolve AND the WS-D2
+  // design-contract read, so neither path re-derives (or silently coerces) the tenant scope.
+  const orgScope = orgScopeFromRunOrgId(decoded.org_id);
   const resolved = await resolveCredentialsForRun(pool, {
     projectConfig,
-    orgScope: orgScopeFromRunOrgId(decoded.org_id),
+    orgScope,
   });
 
   // cost PR-C: resolve the run's CONFIGURED per-credential credit→USD rate, keyed on
@@ -191,6 +196,20 @@ export async function loadRunExecutionContext(
     authRef: resolved.defaultLlm.authRef,
     projectRates: projectConfig.creditRates,
     orgRates: creditRatesFromOrgConfig(decoded.org_config),
+  });
+
+  // WS-D2 (native design subsystem): load + render the project's HEAD `DesignContract`
+  // into the writer-prompt design block — persona-scoped, behavior-linked, domain-general
+  // (designWriterContext.ts). Today the writer gets ZERO design context; this threads the
+  // durable design artifact straight into Tanren's own implementing agent (the no-handoff
+  // loop). `pool` is the run's ORG-SCOPED client (loadRunContextScoped wraps this in
+  // runWithOrgScope), so the read is RLS-scoped + actor-authorized. ABSENT (undefined) ⇒ the
+  // project has no design contract (a real empty state) ⇒ the writer gets no block — NEVER a
+  // fabricated default. A malformed persisted contract fails LOUDLY in the store's re-parse.
+  const designContextBlock = await loadDesignContextBlock({
+    client: pool,
+    orgScope,
+    projectId: decoded.project_id,
   });
 
   const context: PlannerRunContext = {
@@ -244,6 +263,8 @@ export async function loadRunExecutionContext(
     // cost PR-C: the CONFIGURED per-credential credit→USD rate (absent ⇒ no rate
     // configured for this credential's kind; a real drawdown then lands NULL-and-loud).
     ...(creditRate.usdPerCredit !== null && { creditUsdRate: creditRate.usdPerCredit }),
+    // WS-D2: the rendered HEAD `DesignContract` design block (absent ⇒ no design contract ⇒ no block).
+    ...(designContextBlock !== undefined && { designContextBlock }),
     // DETERMINISTIC CONTRACT FILES (v27 fix): when the project captured a lifecycle,
     // project it onto the contract-file manifest (`.tanren/ci.yml` verbatim + the
     // lifecycle-filled `justfile`) the workspace-prep materializes before the writer
