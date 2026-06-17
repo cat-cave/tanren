@@ -27,7 +27,6 @@ const overCeiling: ProjectBudgetState = {
   period: "total",
   spentUsd: 62.5,
   notionalUsd: 62.5,
-  gatedFigure: "real_spend",
 };
 
 const underCeiling: ProjectBudgetState = {
@@ -35,7 +34,6 @@ const underCeiling: ProjectBudgetState = {
   period: "total",
   spentUsd: 4.2,
   notionalUsd: 4.2,
-  gatedFigure: "real_spend",
 };
 
 describe("spec loop — per-iteration budget gate (audit §3.7a)", () => {

@@ -25,8 +25,10 @@ const FIXED_NOW = () => new Date("2026-06-09T12:00:00.000Z");
 
 // A gate's per-capability behavior over a scratch copy: does the planted defect make
 // the gate FAIL? "real" ⇒ the gate catches it (fails) ⇒ proven. "noop" ⇒ the gate
-// passes despite the defect (the v29 failure mode) ⇒ unproven.
-type GateMode = "real" | "noop";
+// passes despite the defect (the v29 failure mode) ⇒ unproven. "timeout" ⇒ the gate
+// could NOT run over the scratch copy (a flaky runner) — INDETERMINATE, never a
+// meaningful catch ⇒ a LOUD unproven (VALIDATION INTEGRITY, Fix 1).
+type GateMode = "real" | "noop" | "timeout";
 
 interface ScriptOptions {
   // Whether the clean-template positive controls (bootstrap/tiers/build) pass.
@@ -88,8 +90,10 @@ class ScriptedSsh implements CommandSubstrate {
             : capability === "mutation"
               ? this.opts.mutation
               : undefined;
-    // "real" ⇒ the gate catches the defect (fails). "noop" / unset ⇒ the gate passes
+    // "real" ⇒ the gate catches the defect (fails). "timeout" ⇒ the gate could NOT run
+    // (a flaky runner) — INDETERMINATE, NOT a catch. "noop" / unset ⇒ the gate passes
     // despite the defect (the no-op gate — proves `unproven`).
+    if (mode === "timeout") return timedOut();
     return mode === "real" ? fail() : ok();
   }
 
@@ -111,6 +115,11 @@ function ok(): CommandResult {
 }
 function fail(): CommandResult {
   return { exitCode: 1, stdout: "", stderr: "gate caught the defect", timedOut: false };
+}
+// A flaky-runner TIMEOUT over the scratch copy: the gate did NOT run to a verdict, so
+// it is INDETERMINATE — never a meaningful negative-control pass (Fix 1).
+function timedOut(): CommandResult {
+  return { exitCode: null, stdout: "", stderr: "", timedOut: true };
 }
 
 const cleanAuditor: TemplateAuditor = {
@@ -188,6 +197,46 @@ describe("runValidationHarness — the v29 no-op-typecheck failure mode (the kil
     const ssh = new ScriptedSsh({ positivePass: true, typecheck: "real", lint: "real", test: "real" });
     const proof = await runValidationHarness(harnessInput(ssh, buildNegativeControlPlan()));
     expect(proof.negativeControls.typecheck).toBe("proven");
+  });
+});
+
+describe("runValidationHarness — negative-control TIMEOUT is never 'proven' (Fix 1 — validation integrity)", () => {
+  it("a TIER negative control whose gate TIMES OUT over the scratch copy → unproven, NOT proven", async () => {
+    // The gate could not RUN to a verdict (a flaky runner timeout) — that is NOT the
+    // gate catching the defect, so it must be a LOUD unproven, never a meaningful pass.
+    // Positive controls are clean (the timeout is ONLY on the planted scratch run).
+    const ssh = new ScriptedSsh({ positivePass: true, typecheck: "timeout", lint: "real", test: "real" });
+    const proof = await runValidationHarness(harnessInput(ssh, buildNegativeControlPlan()));
+
+    expect(proof.negativeControls.typecheck).toBe("unproven");
+    // A declared-but-unproven control FAILS validation — an infra timeout can never
+    // publish a template with a gate that may be a no-op.
+    expect(templateValidates(proof)).toBe(false);
+  });
+
+  it("a STEP negative control (mutation) whose command TIMES OUT → unproven, NOT proven", async () => {
+    const ssh = new ScriptedSsh({
+      positivePass: true,
+      typecheck: "real",
+      lint: "real",
+      test: "real",
+      mutation: "timeout",
+    });
+    const plan = buildNegativeControlPlan({ mutationStep: "just mutation" });
+    const proof = await runValidationHarness(harnessInput(ssh, plan));
+
+    expect(proof.negativeControls.mutation).toBe("unproven");
+    expect(templateValidates(proof)).toBe(false);
+  });
+
+  it("positive controls still pass while a negative-control timeout is unproven (the timeout is the negative-control's, not the build's)", async () => {
+    const ssh = new ScriptedSsh({ positivePass: true, typecheck: "timeout", lint: "real", test: "real" });
+    const proof = await runValidationHarness(harnessInput(ssh, buildNegativeControlPlan()));
+    // The positive controls (clean tree) are unaffected — only the planted scratch run
+    // timed out — yet validation still FAILS on the indeterminate negative control.
+    expect(proof.positiveControlsPassed).toBe(true);
+    expect(proof.negativeControls.typecheck).toBe("unproven");
+    expect(templateValidates(proof)).toBe(false);
   });
 });
 

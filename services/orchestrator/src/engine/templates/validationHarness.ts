@@ -13,7 +13,9 @@
 //   2. NEGATIVE controls (the core) — for each DECLARED gate capability, plant a
 //      temporary defect in a SCRATCH COPY and assert the gate CATCHES it (fails),
 //      then discard the copy. A gate that PASSES despite the defect is `unproven`
-//      (the v29 no-op-typecheck failure mode); a gate that FAILS is `proven`; an
+//      (the v29 no-op-typecheck failure mode); a gate that FAILS is `proven`; a gate
+//      that could NOT run (timed out / substrate error) is INDETERMINATE → a LOUD
+//      `unproven` (an infra timeout is NEVER a meaningful negative-control pass); an
 //      undeclared capability is `n/a`.
 //   3. AUDITOR — run the spec-loop auditor over the template (injected seam) and
 //      assert no open P0/P1 → `auditorClean`.
@@ -31,6 +33,9 @@ import { DEFAULT_BOOTSTRAP_COMMAND, ensureWorkspaceDepsInstalled } from "../work
 import { type NegativeControlResult, type TemplateValidationProof } from "./manifest.js";
 import { type GateInvocation, type NegativeControl } from "./negativeControls.js";
 import { createScratchCopy, removeScratchCopy, type ScratchCopyDeps, writeDefectFiles } from "./scratchCopy.js";
+import { createLogger } from "../observability/logger.js";
+
+const log = createLogger("template-validation-harness");
 
 // The auditor seam: returns the number of OPEN P0/P1 findings over the template (0 ⇒
 // clean). Injected so the harness is testable without a live LLM and so it reuses the
@@ -187,10 +192,22 @@ async function runNegativeControls(
   return verdicts;
 }
 
+// The outcome of running a capability's gate over a scratch copy carrying a planted
+// defect. THREE honestly-different states (VALIDATION INTEGRITY) — collapsing them is
+// the bug this guards: an infra timeout / substrate error is NOT the gate catching the
+// defect, so it must NEVER count as a meaningful negative-control pass.
+//   - "caught"        — the gate RAN and FAILED on the injected defect (it works) ⇒ proven.
+//   - "passed"        — the gate RAN and PASSED despite the defect ⇒ a no-op gate
+//                       (the v29 scenario) ⇒ unproven.
+//   - "could_not_run" — the gate could NOT run (timed out / substrate failure) ⇒ the
+//                       negative control is INDETERMINATE. We did not prove the gate
+//                       catches the defect, so it is a LOUD unproven — never proven.
+type GateInvocationOutcome = "caught" | "passed" | "could_not_run";
+
 // One negative control: copy the template → plant the defect → run the gate over the
-// copy → "proven" iff the gate FAILED (caught the defect), else "unproven" → discard
-// the copy. A scratch-copy error (copy/write) propagates LOUDLY — it cannot be a quiet
-// "proven" or "unproven". The teardown always runs (finally).
+// copy → map the outcome to the verdict → discard the copy. A scratch-copy error
+// (copy/write) propagates LOUDLY — it cannot be a quiet verdict. The teardown always
+// runs (finally).
 async function runOneNegativeControl(
   input: ValidationHarnessInput,
   scratchDeps: ScratchCopyDeps,
@@ -201,24 +218,49 @@ async function runOneNegativeControl(
   await createScratchCopy(scratchDeps, input.workspacePath, scratchPath);
   try {
     await writeDefectFiles(scratchDeps, scratchPath, control.defect.files);
-    const gateFailed = await runGateForInvocation(input, scratchPath, control.invocation);
-    // The gate CAUGHT the defect (failed) ⇒ proven. The gate PASSED despite the defect
-    // ⇒ unproven (the no-op gate — the v29 scenario).
-    return gateFailed ? "proven" : "unproven";
+    const outcome = await runGateForInvocation(input, scratchPath, control.invocation);
+    switch (outcome) {
+      case "caught":
+        // The gate CAUGHT the planted defect (failed as it must) ⇒ proven.
+        return "proven";
+      case "passed":
+        // The gate PASSED despite the defect ⇒ a no-op gate (the v29 scenario) ⇒ unproven.
+        log.warn("negative control UNPROVEN — gate passed despite the planted defect (a no-op gate)", {
+          capability: control.capability,
+        });
+        return "unproven";
+      case "could_not_run":
+        // VALIDATION INTEGRITY: the gate could NOT run (timed out / substrate error) over
+        // the scratch copy — a flaky runner, NOT the gate catching the defect. We have
+        // NOT proven the gate is meaningful, so this is a LOUD unproven; an infra timeout
+        // must never publish a template with a gate that may be a no-op.
+        log.warn(
+          "negative control UNPROVEN — gate could NOT run over the scratch copy (timed out / substrate error); " +
+            "an infra timeout is NEVER a meaningful negative-control pass",
+          { capability: control.capability },
+        );
+        return "unproven";
+      default: {
+        const exhaustive: never = outcome;
+        throw new Error(`runOneNegativeControl: unhandled gate outcome ${String(exhaustive)}`);
+      }
+    }
   } finally {
     await removeScratchCopy(scratchDeps, scratchPath);
   }
 }
 
-// Run a capability's gate over the scratch copy and report whether it FAILED. A tier
+// Run a capability's gate over the scratch copy and classify the outcome. A tier
 // invocation reuses the gate-runner over the copy; a step invocation runs the single
-// declared command (mutation). "Failed" = the gate did not pass (nonzero / timeout /
-// substrate failure all count — a gate that could not run cannot be a clean pass).
+// declared command (mutation). The classification distinguishes a gate that CAUGHT the
+// defect from one that could NOT run (timeout / substrate failure) — the latter is
+// INDETERMINATE, not a pass: a gate that could not run cannot be a clean pass AND a
+// gate that timed out cannot be the gate catching the defect.
 async function runGateForInvocation(
   input: ValidationHarnessInput,
   scratchPath: string,
   invocation: GateInvocation,
-): Promise<boolean> {
+): Promise<GateInvocationOutcome> {
   if (invocation.kind === "tier") {
     const outcome = await runGateForWhen({
       ssh: input.ssh,
@@ -229,13 +271,23 @@ async function runGateForInvocation(
       timeoutMs: input.timeoutMs,
       appendEvent: input.appendEvent,
     });
-    return !outcome.passed;
+    if (outcome.passed) {
+      return "passed";
+    }
+    // The gate FAILED. Distinguish a genuine defect-catch from an infra timeout: if the
+    // failing tier's failing step TIMED OUT, the gate did not run to a verdict — it is
+    // INDETERMINATE, never a meaningful catch.
+    return outcome.failure.steps.some((step) => step.timedOut) ? "could_not_run" : "caught";
   }
   const result = await input.ssh.run(input.target, {
     command: invocation.run,
     cwd: scratchPath,
     timeoutMs: input.timeoutMs,
   });
-  const passed = result.failure === undefined && !result.timedOut && result.exitCode === 0;
-  return !passed;
+  // A timeout or substrate failure means the gate could NOT run to a verdict — it is
+  // INDETERMINATE, never a defect-catch. Only a clean nonzero exit is a genuine catch.
+  if (result.timedOut || result.failure !== undefined) {
+    return "could_not_run";
+  }
+  return result.exitCode === 0 ? "passed" : "caught";
 }

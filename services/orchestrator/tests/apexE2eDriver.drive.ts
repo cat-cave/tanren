@@ -178,7 +178,6 @@ function proveBudget(ceilingUsd: number, spentUsd: number): BudgetProof {
     period: "total",
     spentUsd,
     notionalUsd: spentUsd,
-    gatedFigure: "real_spend",
   };
   // shouldPauseOnBudget is the exact predicate the walker consults; isBudgetExhausted
   // is the genuine ceiling gate (no fail-closed reason here — a priced run).
