@@ -44,9 +44,6 @@ class InMemoryRunnerStore implements RunnerStore {
   async findActive(): Promise<RunnerRecord | undefined> {
     return undefined;
   }
-  async listActiveOlderThan(): Promise<RunnerRecord[]> {
-    return [];
-  }
   async listStuck(): Promise<never[]> {
     return [];
   }
@@ -58,7 +55,6 @@ function lifecycleFor(docker: FakeDocker, store: InMemoryRunnerStore): RunnerLif
     store,
     networkName: "tanren_default",
     sshHostnameForOrchestrator: (container) => container,
-    hostKeyReadAttempts: 4,
     hostKeyReadDelayMs: 1,
     sleep: () => Promise.resolve(),
   });

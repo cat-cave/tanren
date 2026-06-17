@@ -67,9 +67,6 @@ class MemoryStore implements RunnerStore {
   async findActive(runnerId: string): Promise<RunnerRecord | undefined> {
     return this.records.find((r) => r.runnerId === runnerId && !r.released);
   }
-  async listActiveOlderThan(): Promise<RunnerRecord[]> {
-    return [];
-  }
   async listStuck(): Promise<never[]> {
     return [];
   }
@@ -84,7 +81,6 @@ function buildApp() {
     networkName: "tanren_default",
     sshHostnameForOrchestrator: (container) => container,
     sleep: () => Promise.resolve(),
-    hostKeyReadAttempts: 1,
     hostKeyReadDelayMs: 0,
   });
   const app = createAllocatorApi({

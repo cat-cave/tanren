@@ -12,9 +12,7 @@ const log = createLogger("allocator");
 import { parsedEnv } from "./envSchema.js";
 
 // Boot-validated env (Zod, fail-loud at load — see envSchema.ts). These replace
-// the prior per-site `Number(process.env[...] ?? n)` reads. TANREN_MAX_RUN_HOURS
-// is resolved through the reaper-safe `requirePositiveHours` helper inside the
-// schema (fall back loud, never crash on a bad reaper threshold).
+// the prior per-site `Number(process.env[...] ?? n)` reads.
 const port = parsedEnv.ALLOCATOR_PORT;
 // The bearer token gating `/allocate` + `/release` is REQUIRED — no `"dev"`
 // fallback (the surviving sibling of the removed `dev-root-token`). The compose
@@ -25,7 +23,6 @@ const port = parsedEnv.ALLOCATOR_PORT;
 // `docker inspect`; dev sets the plaintext env (`dev`). An empty mounted file
 // fails hard too. Required-missing → loud.
 const authToken = requireSecretEnv("TANREN_ALLOCATOR_TOKEN");
-const maxRunHours = parsedEnv.TANREN_MAX_RUN_HOURS;
 const networkName = parsedEnv.TANREN_ALLOCATOR_NETWORK;
 const hostSshPort = parsedEnv.TANREN_ALLOCATOR_HOST_SSH_PORT;
 const sshHostnameTemplate = parsedEnv.TANREN_ALLOCATOR_SSH_HOSTNAME_TEMPLATE;
@@ -70,13 +67,14 @@ async function main(): Promise<void> {
 
   // The periodic runner SWEEPER (the §4 reconciler): reclaims STUCK/LEAKED runners
   // the normal release path missed — a runner whose owning run went terminal without
-  // a release, a runner past the run-hours TTL ceiling (the apex leak guard), or a
-  // wedged run-less allocation past the grace window. Each reclaim emits a durable,
-  // org-scoped `runner.swept` audit (store.recordSwept) + a structured log + a count.
+  // a release, a runner whose owning run's worker stopped renewing its job lease (the
+  // DRIVER is dead — abandonment by SIGN-OF-LIFE, never by wall-clock age, so a long
+  // live build is never reaped), or a wedged run-less allocation past the grace window.
+  // Each reclaim emits a durable, org-scoped `runner.swept` audit (store.recordSwept)
+  // + a structured log + a count.
   const sweeper = new RunnerSweeper({
     lifecycle,
     recordSwept: (audit) => store.recordSwept(audit),
-    maxRunHours,
     unclaimedGraceMs,
     intervalMs: sweeperIntervalMs,
   });

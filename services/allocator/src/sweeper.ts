@@ -37,9 +37,12 @@ export interface SweeperOptions {
     orgId: string;
     reason: RunnerReclaimReason;
   }) => Promise<void>;
-  /** Maximum wall-clock hours before a runner is past its TTL ceiling (the apex leak guard). */
-  maxRunHours: number;
-  /** Grace window (ms) before a run-LESS (never-claimed) allocation is reclaimed as wedged. */
+  /**
+   * Grace window (ms) absorbing the allocate→first-heartbeat handoff: a run-LESS
+   * (never-claimed) allocation older than this is reclaimed as wedged, and a
+   * lease-lapsed runner is only reaped once past it (so a just-allocated runner whose
+   * first job lease has not landed yet is never reaped). NOT an age cap on a live run.
+   */
   unclaimedGraceMs: number;
   /** How often the sweeper polls. Default 60_000ms. */
   intervalMs?: number;
@@ -52,7 +55,8 @@ export interface SweeperOptions {
  * that path never runs — a crashed run, a past-TTL runner, a wedged allocation).
  *
  * On each tick it asks the lifecycle for every runner in a genuine STUCK state
- * (owning run terminal but unreleased · past the run-hours TTL ceiling · run-less
+ * (owning run terminal but unreleased · owning run's worker stopped renewing its job
+ * lease, i.e. the DRIVER is dead — abandonment by SIGN-OF-LIFE, not by age · run-less
  * allocation past the grace window), releases each through the SINGLE atomic claim
  * (so a healthy in-flight runner is never touched and a /release race tears down
  * once), and for each winning reclaim writes the durable `runner.swept` audit +
@@ -74,14 +78,12 @@ export class RunnerSweeper {
   private inFlightTick: Promise<unknown> | undefined;
   private readonly lifecycle: RunnerLifecycle;
   private readonly recordSwept: SweeperOptions["recordSwept"];
-  private readonly maxRunHours: number;
   private readonly unclaimedGraceMs: number;
   private readonly intervalMs: number;
 
   constructor(options: SweeperOptions) {
     this.lifecycle = options.lifecycle;
     this.recordSwept = options.recordSwept;
-    this.maxRunHours = options.maxRunHours;
     this.unclaimedGraceMs = options.unclaimedGraceMs;
     this.intervalMs = options.intervalMs ?? 60_000;
   }
@@ -137,7 +139,7 @@ export class RunnerSweeper {
     // retries (one bad poll never stops the loop).
     let reclaimed: StuckRunner[];
     try {
-      reclaimed = await this.lifecycle.sweepStuck(this.maxRunHours, this.unclaimedGraceMs);
+      reclaimed = await this.lifecycle.sweepStuck(this.unclaimedGraceMs);
     } catch (error) {
       log.error("runner sweep failed (will retry next tick)", {}, error);
       return emptySummary();
