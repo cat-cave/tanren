@@ -44,7 +44,25 @@ const TS_LIFECYCLE: CaptureLifecycle = {
   deploy: "flyctl deploy",
   toolchain: [],
 };
-const captureWithLifecycle = (): InterviewCapture => ({ ...emptyCapture(), lifecycle: TS_LIFECYCLE });
+// A minimal, EXPLICIT design contract (native design subsystem, WS-D1) — required at
+// derive (the no-silent-noop guard, mirroring the lifecycle guard), so a capture that
+// should reach the template-selection guards carries one. An explicit, design-light
+// contract is valid; a silent absence is not.
+const MINIMAL_DESIGN_CONTRACT = {
+  domain: "saas-web",
+  identity: "a clean, trustworthy operations surface",
+  intent: "a calm, information-dense control surface an operator trusts at a glance",
+  principles: [],
+  constraints: [],
+  personas: [],
+  behaviors: [],
+  dimensions: [],
+};
+const captureWithLifecycle = (): InterviewCapture => ({
+  ...emptyCapture(),
+  lifecycle: TS_LIFECYCLE,
+  designContract: MINIMAL_DESIGN_CONTRACT,
+});
 
 const validatedTsTemplate = (): TemplateForTest => ({
   id: "template_ts_next",

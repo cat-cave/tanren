@@ -251,8 +251,9 @@ export const CaptureDesignContract = z
     constraints: z.array(z.string().min(1).max(400)).default([]),
     // THE MOAT — the persona NAMES this design serves (derive resolves them to the
     // persisted persona ids → `personaRefs`). Captured by name (the natural key);
-    // a name that isn't a real captured persona is dropped at resolve (no dangling
-    // ref) — design binds only to REAL typed personas. Empty ⇒ none bound yet.
+    // a name that isn't a real captured persona is a LOUD failure at resolve
+    // (`DanglingDesignRefError`, consistent with the design phase + oracle) — design
+    // binds only to REAL typed personas, never a silent drop. Empty ⇒ none bound yet.
     personas: z.array(z.string().min(1).max(80)).default([]),
     // THE MOAT — the BEHAVIORS this design must cover (design acceptance criteria),
     // captured by their natural key `persona::title` (matching how behaviors key in
@@ -279,6 +280,9 @@ export const InterviewCapture = z
     // captures it; the derive persists it as a first-class versioned
     // `DesignContract` entity. A domain-general design-intent contract (NOT a
     // web-baked schema). Last-write-wins across rounds (a later round refines it).
+    // REQUIRED before the interview can complete: the derive FAILS LOUD
+    // (`MissingDesignContractError`) if it is still null at derive — never a silent
+    // no-op that disables the design subsystem (mirrors the lifecycle gate).
     designContract: CaptureDesignContract.nullable().default(null),
     architecture: z.array(CaptureArchitectureLine).default([]),
     // The load-bearing lifecycle declaration (the architecture step's structured

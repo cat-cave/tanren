@@ -8,8 +8,10 @@
 // adds the schema `version` AND binds the contract to the project's REAL typed
 // entity graph: captured persona NAMES → persisted persona ids (`personaRefs`),
 // captured behavior keys (`persona::title`) → persisted behavior ids
-// (`behaviorRefs`). A captured name/key with no persisted entity is DROPPED (no
-// dangling ref) — design binds only to real personas/behaviors. The persisted
+// (`behaviorRefs`). A captured name/key with no persisted entity is a LOUD failure
+// (`DanglingDesignRefError`) — design binds only to real personas/behaviors, and a
+// dangling ref is a halt (consistent with the design phase + oracle), never a silent
+// drop that would shrink the coverage obligation. The persisted
 // versioned entity is the durable artifact later workstreams inject into the
 // writer (WS-D2) + verify with a design oracle (WS-D4) — the clean seam left here.
 
@@ -20,6 +22,46 @@ import type { CapturedDesignSeed, DesignAgent } from "../../design/designAgent.j
 import { runDesignPhase } from "../../design/designPhase.js";
 import { DesignContractStore } from "../../repositories/designContracts.js";
 import type { CaptureDesignContract, InterviewCapture } from "./types.js";
+
+// Thrown when a derive reaches the design step with NO captured design contract.
+// FAIL LOUD (no silent no-op) — mirroring `MissingLifecycleError`. The design
+// contract is the durable artifact the writer (WS-D2) builds from and the oracle
+// (WS-D4) verifies against; an absent one would silently disable the ENTIRE design
+// subsystem (no contract persisted, no writer design block, the oracle no-ops). The
+// contract must be PRESENT + EXPLICIT — it need not be web-heavy: a genuinely
+// design-light project (a headless library) still declares an EXPLICIT minimal
+// contract (empty principles/constraints/dimensions), never a silent absence. The
+// no-silent-fallback doctrine: a required-missing input is a LOUD halt, never a
+// quiet degrade.
+export class MissingDesignContractError extends Error {
+  constructor() {
+    super(
+      "greenfield derive requires the design step to capture a design contract " +
+        "(domain + identity + intent, with domain-appropriate principles/constraints/dimensions); " +
+        "none was captured. The design contract is the durable artifact the writer builds from and the " +
+        "design oracle verifies against — it must be declared explicitly (a design-light project declares " +
+        "an explicit minimal contract), never silently absent.",
+    );
+    this.name = "MissingDesignContractError";
+  }
+}
+
+// Thrown when the thin-capture design path (the engine-graph test seam — no design
+// agent wired) encounters a captured persona NAME or behavior KEY that resolves to
+// no persisted entity. FAIL LOUD (consistent with the design PHASE + the design
+// oracle, which both throw on a dangling ref) — a silently-dropped ref shrinks the
+// coverage obligation the oracle assumes EXHAUSTIVE, so a dangling ref is a loud
+// halt here too, never a quiet drop.
+export class DanglingDesignRefError extends Error {
+  constructor(kind: "persona" | "behavior", ref: string) {
+    super(
+      `design contract references unknown ${kind} ${kind === "persona" ? "name" : "key"} '${ref}' ` +
+        `(not a captured project ${kind}) — design binds only to REAL typed ${kind}s; a dangling ref is a ` +
+        "loud failure, never a silent drop (consistent with the design phase + oracle).",
+    );
+    this.name = "DanglingDesignRefError";
+  }
+}
 
 // The product-vision slice of the project config (the identity `pitch` + a short
 // design note) persisted onto `projects.config` so the conflict resolver can frame
@@ -44,14 +86,27 @@ export function behaviorKey(persona: string, title: string): string {
 }
 
 // Map the captured design contract → the persisted `DesignContractV1`, resolving
-// the persona/behavior links against the maps the derive built.
+// the persona/behavior links against the maps the derive built. A captured name/key
+// that resolves to no persisted entity is a LOUD failure (`DanglingDesignRefError`),
+// consistent with the design PHASE + design ORACLE — never a silent drop that would
+// shrink the coverage obligation the oracle assumes exhaustive.
 export function toDesignContract(
   capture: CaptureDesignContract,
   personaIdByName: Map<string, string>,
   behaviorIdByKey: Map<string, string>,
 ): DesignContractV1 {
   const resolvePersonas = (names: readonly string[]): string[] =>
-    names.map((n) => personaIdByName.get(n.trim().toLowerCase())).filter((id): id is string => id !== undefined);
+    names.map((n) => {
+      const id = personaIdByName.get(n.trim().toLowerCase());
+      if (id === undefined) throw new DanglingDesignRefError("persona", n);
+      return id;
+    });
+  const resolveBehaviors = (keys: readonly string[]): string[] =>
+    keys.map((key) => {
+      const id = behaviorIdByKey.get(key.trim().toLowerCase());
+      if (id === undefined) throw new DanglingDesignRefError("behavior", key);
+      return id;
+    });
   return parseDesignContract({
     version: DESIGN_CONTRACT_VERSION,
     domain: capture.domain,
@@ -61,9 +116,7 @@ export function toDesignContract(
     constraints: capture.constraints,
     // THE MOAT: bind to the project's actual persona + behavior entities.
     personaRefs: resolvePersonas(capture.personas),
-    behaviorRefs: capture.behaviors
-      .map((key) => behaviorIdByKey.get(key.trim().toLowerCase()))
-      .filter((id): id is string => id !== undefined),
+    behaviorRefs: resolveBehaviors(capture.behaviors),
     dimensions: capture.dimensions.map((d) => ({
       key: d.key,
       label: d.label,
@@ -89,9 +142,10 @@ function toDesignSeed(capture: CaptureDesignContract): CapturedDesignSeed {
 }
 
 // Persist the project's first-class `DesignContract` entity (WS-D1/WS-D3), returning
-// the HEAD record's id (or undefined when no contract was captured — a real empty
-// state, never a defaulted row). Called LAST in the derive (after personas +
-// behaviors exist) so THE MOAT links resolve to real ids.
+// the HEAD record's id. The captured contract is REQUIRED (the derive guards it with
+// `MissingDesignContractError` before reaching here) — a null capture is a LOUD failure,
+// never a silently-skipped row that would disable the design subsystem. Called LAST in
+// the derive (after personas + behaviors exist) so THE MOAT links resolve to real ids.
 //
 // WS-D3 — the DESIGN PHASE. When a `designAgent` is wired (production via the route
 // factory), the captured intent is ELABORATED by the design agent into a full,
@@ -115,8 +169,11 @@ export async function persistDesignContract(
     // The org-scope carrier for the design phase's persona/behavior entity reads.
     actor?: ActorContext;
   },
-): Promise<string | undefined> {
-  if (input.capture === null) return undefined;
+): Promise<string> {
+  // The contract is REQUIRED — the derive guards null upstream
+  // (`MissingDesignContractError`); this is defence-in-depth on the helper boundary so a
+  // null capture is a LOUD failure here too, never a silently-skipped design row.
+  if (input.capture === null) throw new MissingDesignContractError();
 
   // WS-D3 DESIGN PHASE — elaborate the thin capture into the designed HEAD contract.
   if (input.designAgent !== undefined) {

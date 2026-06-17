@@ -32,6 +32,10 @@ export {
   type PreparedGreenfieldDeploy,
 } from "./deployDependency.js";
 
+// Native design subsystem (WS-D1) — the LOUD guards for a required design contract +
+// dangling moat refs (mirroring `MissingLifecycleError`).
+export { DanglingDesignRefError, MissingDesignContractError } from "./deriveDesignContract.js";
+
 export { wrapProviderInterviewAnswerer, type WrapProviderInterviewAnswererOptions } from "./providerAnswerer.js";
 export { buildInterviewPrompt } from "./prompt.js";
 export { mergeCapture, resolveLifecycle, type LifecycleResolution } from "./capture.js";

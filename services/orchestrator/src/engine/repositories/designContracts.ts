@@ -1,6 +1,7 @@
 // Tanren-native design subsystem (WS-D1) — the `design_contracts` store on the
 // `Repositories` seam. The durable WRITE/READ surface for the first-class,
-// versioned, org-scoped `DesignContract` entity (migration 0018). Pure SQL + row
+// versioned, org-scoped `DesignContract` entity (migration
+// 0010_design_contracts). Pure SQL + row
 // mapping in the seam shape: every method takes the caller's `QueryClient` (the
 // org-scope carrier) + `ActorRef`, so under RLS an org-scoped client sees only
 // that org's contracts and an off-scope client sees ZERO rows.
