@@ -3,10 +3,21 @@ import type { ClientChannel, ServerHostKeyAlgorithm } from "ssh2";
 import type { RunnerHandle, SshRunnerHandle } from "../contracts/allocator.js";
 import { asSshRunnerHandle } from "../contracts/allocator.js";
 import type { SecretStore } from "../contracts/secretStore.js";
-import type { RunnerCommand, CommandResult, CommandSubstrate } from "../contracts/commandSubstrate.js";
+import type {
+  ActivityWatchdog,
+  RunnerCommand,
+  CommandResult,
+  CommandSubstrate,
+} from "../contracts/commandSubstrate.js";
 import { defineFailure } from "../failure.js";
 import { buildSshExecCommand } from "./command.js";
 import { hostKeyFingerprintMatches } from "./fingerprint.js";
+
+// The default cadence at which the activity watchdog consults its `livenessProbe`
+// between output chunks. This is a poll INTERVAL (how often to ask "is it alive?"),
+// NOT a total-duration budget — every tick that finds life RESETS, so it never
+// accumulates toward a kill. (arch-allow: timeout-class — poll cadence, not a deadline.)
+const DEFAULT_PROBE_INTERVAL_MS = 5_000;
 
 type Ssh2Client = Pick<Client, "connect" | "destroy" | "end" | "exec" | "once" | "on">;
 type Ssh2ClientFactory = () => Ssh2Client;
@@ -23,7 +34,16 @@ interface RunState {
   exitCode: number | null;
   signal?: string;
   settled: boolean;
+  // Legacy wall-clock-kill timer (the un-migrated `timeoutMs` path). Present ONLY when
+  // the command supplied no `watchdog`.
   timer?: NodeJS.Timeout;
+  // Activity-watchdog state (the progress-based path). `probeTimer` is the recurring
+  // liveness-probe tick; `lastActivityAt` is the most recent sign of life (output or a
+  // positive probe); `lastProbeTickAt` is when the watchdog last evaluated. None is a
+  // total-duration budget — all reset on activity.
+  probeTimer?: NodeJS.Timeout;
+  lastActivityAt: number;
+  lastProbeTickAt?: number;
 }
 
 export class SshCommandSubstrate implements CommandSubstrate {
@@ -64,7 +84,7 @@ export class SshCommandSubstrate implements CommandSubstrate {
   ): Promise<CommandResult> {
     return await new Promise<CommandResult>((resolve) => {
       const client = this.clientFactory();
-      const state: RunState = { stdout: "", stderr: "", exitCode: null, settled: false };
+      const state: RunState = { stdout: "", stderr: "", exitCode: null, settled: false, lastActivityAt: Date.now() };
       let hostKeyFailure: string | undefined;
 
       const settle = (result: CommandResult, close: "end" | "destroy" = "end"): void => {
@@ -74,6 +94,9 @@ export class SshCommandSubstrate implements CommandSubstrate {
         state.settled = true;
         if (state.timer !== undefined) {
           clearTimeout(state.timer);
+        }
+        if (state.probeTimer !== undefined) {
+          clearInterval(state.probeTimer);
         }
         if (close === "destroy") {
           client.destroy();
@@ -95,10 +118,16 @@ export class SshCommandSubstrate implements CommandSubstrate {
         );
       };
 
-      state.timer = setTimeout(
-        () => fail(`SSH command timed out after ${command.timeoutMs}ms`, true),
-        command.timeoutMs,
-      );
+      // PROGRESS-BASED path: an `ActivityWatchdog` replaces the wall-clock kill. The legacy
+      // `timeoutMs` total-duration timer arms ONLY when no watchdog is supplied (un-migrated
+      // callers). A watched command is never killed for elapsed time — only for an observed
+      // genuine absence of all signs of life (see `armActivityWatchdog`).
+      if (command.watchdog === undefined) {
+        state.timer = setTimeout(
+          () => fail(`SSH command timed out after ${command.timeoutMs}ms`, true),
+          command.timeoutMs,
+        );
+      }
       client.once("ready", () => {
         client.exec(execCommand, (error, stream) => {
           if (error !== undefined) {
@@ -108,6 +137,7 @@ export class SshCommandSubstrate implements CommandSubstrate {
           this.collectStream(
             stream,
             state,
+            command.watchdog,
             (channelError) => fail(messageFromError(channelError)),
             () => {
               settle({
@@ -119,6 +149,9 @@ export class SshCommandSubstrate implements CommandSubstrate {
               });
             },
           );
+          if (command.watchdog !== undefined) {
+            this.armActivityWatchdog(target, state, command.watchdog, client, resolve);
+          }
           if (command.stdin !== undefined) {
             stream.end(command.stdin);
           }
@@ -162,14 +195,25 @@ export class SshCommandSubstrate implements CommandSubstrate {
   private collectStream(
     stream: ClientChannel,
     state: RunState,
+    watchdog: ActivityWatchdog | undefined,
     onError: (error: unknown) => void,
     onClose: () => void,
   ): void {
+    // Every output chunk is a SIGN OF LIFE (the watchdog's primary tick — for a
+    // streaming agent each telemetry line is a token/log). Stamp the activity clock
+    // so the watchdog resets and the work continues UNBOUNDED.
+    const markActivity = (): void => {
+      if (watchdog !== undefined) {
+        state.lastActivityAt = Date.now();
+      }
+    };
     stream.on("data", (chunk: Buffer) => {
       state.stdout += chunk.toString("utf8");
+      markActivity();
     });
     stream.stderr.on("data", (chunk: Buffer) => {
       state.stderr += chunk.toString("utf8");
+      markActivity();
     });
     stream.on("error", onError);
     stream.stderr.on("error", onError);
@@ -178,6 +222,114 @@ export class SshCommandSubstrate implements CommandSubstrate {
       state.signal = signal;
     });
     stream.once("close", onClose);
+  }
+
+  // Arm the PROGRESS-BASED activity watchdog (the doctrine's wall-clock-kill replacement).
+  // It does NOT count toward any total-duration budget. On a recurring poll cadence it asks
+  // the `livenessProbe` "does the work show ANY sign of life?" — for SILENT ops (e.g. a long
+  // `jj rebase` that emits no output) the probe is the PRIMARY mechanism (remote process
+  // alive + CPU-time advanced and/or workspace mtime changed). A positive probe RESETS the
+  // activity clock; output chunks reset it too (see collectStream). The watchdog fires ONLY
+  // when BOTH there has been no output AND the probe reports no life — a genuine
+  // dead/zombied/deadlocked absence of all signals — and even then it SURFACES a recoverable
+  // `stalled` result by default (never destroying possibly-recoverable work) unless
+  // `onQuiet: "kill"`. A working process is never killed regardless of elapsed time.
+  private armActivityWatchdog(
+    target: SshRunnerHandle,
+    state: RunState,
+    watchdog: ActivityWatchdog,
+    client: Ssh2Client,
+    resolve: (result: CommandResult) => void,
+  ): void {
+    const onQuiet = watchdog.onQuiet ?? "surface";
+    // Baseline the tick window at arm time so the first tick can tell whether output arrived since.
+    state.lastProbeTickAt = Date.now();
+    // The probe poll cadence (an INTERVAL, not a deadline — it resets on every sign of life).
+    const intervalMs = watchdog.probeIntervalMs ?? DEFAULT_PROBE_INTERVAL_MS;
+    state.probeTimer = setInterval(() => {
+      void this.tickWatchdog(target, state, watchdog, onQuiet, client, resolve);
+    }, intervalMs);
+    // Do not hold the event loop open on the probe tick alone.
+    state.probeTimer.unref?.();
+  }
+
+  private async tickWatchdog(
+    target: SshRunnerHandle,
+    state: RunState,
+    watchdog: ActivityWatchdog,
+    onQuiet: "surface" | "kill",
+    client: Ssh2Client,
+    resolve: (result: CommandResult) => void,
+  ): Promise<void> {
+    if (state.settled) {
+      return;
+    }
+    // OUTPUT is a sign of life and short-circuits everything: if any output arrived since the
+    // last tick (the activity clock advanced past the prior tick), the work is demonstrably
+    // alive — RESET the tick window and return WITHOUT even consulting the probe. A streaming
+    // process (codex tokens, build logs) is never killed regardless of the probe's verdict.
+    const lastTick = state.lastProbeTickAt;
+    state.lastProbeTickAt = Date.now();
+    if (lastTick !== undefined && state.lastActivityAt > lastTick) {
+      return;
+    }
+    // PRIMARY mechanism for SILENT ops: ask the probe whether the work shows any liveness. Any
+    // positive signal (process alive + CPU advanced / workspace touched) RESETS — continue UNBOUNDED.
+    if (watchdog.livenessProbe !== undefined) {
+      const alive = await watchdog.livenessProbe().catch(() => false);
+      if (state.settled) {
+        return;
+      }
+      if (alive) {
+        state.lastActivityAt = Date.now();
+        return;
+      }
+    }
+    // No output since the last tick AND no probe-reported life: a genuine absence of ALL
+    // signs of life. `quietForMs` is EVIDENCE of how long since the last sign — diagnostic
+    // only; the trigger is the probe verdict, never a fixed quiet duration on its own.
+    const quietForMs = Date.now() - state.lastActivityAt;
+    this.fireWatchdog(target, state, onQuiet, quietForMs, client, resolve);
+  }
+
+  // The watchdog fired on a genuine absence of all signals. SURFACE a recoverable `stalled`
+  // result (default — the caller re-drives) or KILL the transport (`onQuiet: "kill"`).
+  private fireWatchdog(
+    target: SshRunnerHandle,
+    state: RunState,
+    onQuiet: "surface" | "kill",
+    quietForMs: number,
+    client: Ssh2Client,
+    resolve: (result: CommandResult) => void,
+  ): void {
+    if (state.settled) {
+      return;
+    }
+    state.settled = true;
+    if (state.probeTimer !== undefined) {
+      clearInterval(state.probeTimer);
+    }
+    client.destroy();
+    if (onQuiet === "surface") {
+      resolve({
+        exitCode: null,
+        stdout: state.stdout,
+        stderr: state.stderr,
+        signal: state.signal,
+        timedOut: false,
+        stalled: true,
+        quietForMs,
+      });
+      return;
+    }
+    resolve({
+      ...this.failureResult(target, "SSH command showed no sign of life (dead/zombied/deadlocked) and was terminated"),
+      stdout: state.stdout,
+      stderr: state.stderr,
+      timedOut: false,
+      stalled: true,
+      quietForMs,
+    });
   }
 
   private failureResult(target: SshRunnerHandle, message: string): CommandResult {

@@ -4,6 +4,7 @@ import { relative, resolve } from "node:path";
 import { exit } from "node:process";
 import { checkNoProductionStubs } from "./check-architecture-stubs.mjs";
 import { runStructureChecks } from "./check-architecture-structure.mjs";
+import { checkNoArbitraryTimeouts } from "./check-architecture-timeouts.mjs";
 import {
   checkDockerApiAllocatorOnly,
   checkNoDockerExec,
@@ -409,54 +410,17 @@ function checkContractSchemaDriftWiring(projectFiles) {
   });
 }
 
+// The DB/RLS schema-drift wiring — same shape as the codegen-drift gates, so it reuses
+// `checkCodegenDriftWiring` (script present, `check:schema-drift` runs it, root check wired
+// directly or via `just ci`). The script is the bash `check-schema-drift.sh` (a `.includes`
+// match works for `bash scripts/...` exactly as it does for `node scripts/...`).
 function checkSchemaDriftWiring(projectFiles) {
-  const packageFile = projectFiles.find((item) => item.file === "package.json");
-  const justfile = projectFiles.find((item) => item.file === "justfile");
-  const hasDriftScript = projectFiles.some((item) => item.file === "scripts/check-schema-drift.sh");
-  if (!hasDriftScript) {
-    return [
-      diagnostic("schema-drift-check-wired", "scripts/check-schema-drift.sh", "schema drift check script is missing"),
-    ];
-  }
-
-  if (!packageFile) {
-    return [
-      diagnostic("schema-drift-check-wired", "package.json", "root package.json is required for schema drift wiring"),
-    ];
-  }
-
-  try {
-    const pkg = JSON.parse(packageFile.text);
-    const scripts = pkg.scripts ?? {};
-    const checkScript = String(scripts.check ?? "");
-    const driftScript = String(scripts["check:schema-drift"] ?? "");
-
-    if (!driftScript.includes("scripts/check-schema-drift.sh")) {
-      return [
-        diagnostic(
-          "schema-drift-check-wired",
-          "package.json",
-          "check:schema-drift must run scripts/check-schema-drift.sh",
-        ),
-      ];
-    }
-    const rootCheckRunsSchemaDrift =
-      checkScript.includes("check:schema-drift") ||
-      (checkScript.includes("just ci") && justfile?.text.includes("ci:") && justfile.text.includes("schema-drift"));
-    if (!rootCheckRunsSchemaDrift) {
-      return [
-        diagnostic(
-          "schema-drift-check-wired",
-          "package.json",
-          "root check must include check:schema-drift or delegate to just ci",
-        ),
-      ];
-    }
-  } catch {
-    return [diagnostic("schema-drift-check-wired", "package.json", "root package.json must be valid JSON")];
-  }
-
-  return [];
+  return checkCodegenDriftWiring(projectFiles, {
+    rule: "schema-drift-check-wired",
+    key: "schema-drift",
+    script: "scripts/check-schema-drift.sh",
+    label: "schema",
+  });
 }
 
 export async function runArchitectureChecks({ root = process.cwd() } = {}) {
@@ -484,6 +448,14 @@ export async function runArchitectureChecks({ root = process.cwd() } = {}) {
   ];
 }
 
+// REPORT-MODE pass for the timeout-class eradication (feedback_no_timeouts_progress_based).
+// SEPARATE from `runArchitectureChecks` (which exits 1) so it ships in REPORT mode: the CLI
+// prints the violation list as a migration checklist but does NOT fail CI yet. The final
+// eradication PR folds this into the enforced set once every site has migrated.
+export async function runTimeoutReport({ root = process.cwd() } = {}) {
+  return checkNoArbitraryTimeouts(await readProjectFiles(resolve(root)));
+}
+
 export function formatDiagnostics(diagnostics, root = process.cwd()) {
   return diagnostics
     .map((item) => `${relative(root, resolve(root, item.file))}:${item.line}: ${item.rule}: ${item.message}`)
@@ -491,6 +463,13 @@ export function formatDiagnostics(diagnostics, root = process.cwd()) {
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
+  // REPORT-MODE (not yet enforced): print the timeout-class migration checklist, exit 0 for it.
+  const timeoutReport = await runTimeoutReport();
+  if (timeoutReport.length > 0) {
+    console.log(`no-arbitrary-timeouts (REPORT mode — ${timeoutReport.length} sites to migrate, not failing CI):`);
+    console.log(formatDiagnostics(timeoutReport));
+  }
+
   const diagnostics = await runArchitectureChecks();
   if (diagnostics.length > 0) {
     console.error(formatDiagnostics(diagnostics));
