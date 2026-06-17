@@ -43,10 +43,10 @@ function handleFromRunnerId(runnerId: string): string {
  * the per-run INSERT runs under the run's org scope on a RESTRICTED app-role
  * pool (`runWithOrgScope`), so the row is written WITHIN RLS — not off-RLS via
  * the BYPASSRLS `tanren_system` role. The allocator is also a genuinely
- * cross-org SYSTEM service: the abandoned-run sweeper reaps idle runners across
- * ALL tenants and the API `/release` is keyed only by runner_id (no org
- * context), so findActive / markReleased / listActiveOlderThan stay on the
- * system pool where they can see every tenant's rows.
+ * cross-org SYSTEM service: the abandoned-run sweeper reaps DEAD-DRIVER runners
+ * across ALL tenants (sign-of-life, not age) and the API `/release` is keyed only
+ * by runner_id (no org context), so findActive / markReleased / listStuck stay on
+ * the system pool where they can see every tenant's rows.
  *
  * The volume names are derived from the naming handle (not persisted as columns)
  * so the abandoned sweeper can wipe them even after the allocator process
@@ -181,49 +181,61 @@ export class PgRunnerStore implements RunnerStore {
     return materialize(row);
   }
 
-  async listActiveOlderThan(threshold: Date): Promise<RunnerRecord[]> {
-    const result = await this.systemPool.query<RunnerRow>(
-      `SELECT runner_id, run_id, project_id, org_id, container_id, ssh_host, ssh_port, host_key_fingerprint, image_sha, created_at
-       FROM runners
-       WHERE released_at IS NULL AND created_at < $1`,
-      [threshold],
-    );
-    return result.rows.map(materialize);
-  }
-
   async listStuck(thresholds: StuckThresholds): Promise<StuckRunner[]> {
     // Cross-org SYSTEM read (the sweeper reconciles across ALL tenants), so this
     // runs on the BYPASSRLS system pool — same scope rationale as the abandoned
     // sweep / runner_id-keyed release.
     //
-    // The query returns ONLY runners in a genuine STUCK state, each tagged with the
-    // discriminated reason; a HEALTHY in-flight runner (owning run still
-    // non-terminal AND within TTL AND not a wedged run-less allocation) matches none
-    // of the predicates and is NEVER returned. The LEFT JOIN keeps a runner whose
-    // run row is absent (the run-less / wedged path).
+    // ABANDONMENT IS SIGN-OF-LIFE BASED, NOT WALL-CLOCK BASED. The query returns
+    // ONLY runners in a genuine STUCK state, each tagged with the discriminated
+    // reason; a HEALTHY in-flight runner — owning run non-terminal AND its worker
+    // still holding a LIVE job lease — matches none of the predicates and is NEVER
+    // returned, no matter how long the build has been running. A 6h (or 60h) live
+    // build is left alone; only a DEAD driver is reaped.
+    //
+    //   - `live_job` (the CTE): per run, is there ANY live sign of life — a
+    //     queued/claimed job (about to run / mid-handoff) OR a `running` job whose
+    //     `leased_until` is still in the future (the worker is heartbeating). A run
+    //     with a live job is ALIVE.
+    //   - LEFT JOINs keep a runner whose run row / job row is absent (the run-less /
+    //     wedged path, and the pre-first-heartbeat handoff window).
     //
     // Reason precedence (the CASE picks the FIRST matching, mirroring the WHERE):
-    //   1. terminal_run   — run_id set AND the joined run is in a TERMINAL status.
-    //   2. ttl_exceeded   — created before the TTL ceiling (the apex leak guard).
-    //   3. unclaimed_grace — run_id IS NULL (never tied to a live run) AND older
-    //                        than the grace window (a wedged allocation).
+    //   1. terminal_run  — run_id set AND the joined run is in a TERMINAL status.
+    //   2. lease_lapsed  — run_id set, NOT terminal, NO live job (the worker stopped
+    //                      heartbeating → dead driver), AND the runner is past the
+    //                      allocate→first-heartbeat handoff window (so a just-allocated
+    //                      runner whose first lease has not landed yet is not reaped).
+    //   3. unclaimed_grace — run_id IS NULL (never tied to a live run) AND older than
+    //                        the grace window (a wedged allocation).
     const result = await this.systemPool.query<RunnerRow & { reason: RunnerReclaimReason }>(
-      `SELECT r.runner_id, r.run_id, r.project_id, r.org_id, r.container_id, r.ssh_host, r.ssh_port,
+      `WITH live_job AS (
+         SELECT run_id
+         FROM job_queue
+         WHERE run_id IS NOT NULL
+           AND (
+             status IN ('queued','claimed')
+             OR (status = 'running' AND leased_until IS NOT NULL AND leased_until >= $1)
+           )
+         GROUP BY run_id
+       )
+       SELECT r.runner_id, r.run_id, r.project_id, r.org_id, r.container_id, r.ssh_host, r.ssh_port,
               r.host_key_fingerprint, r.image_sha, r.created_at,
               CASE
                 WHEN run.status IN ('completed','failed','halted','cancelled') THEN 'terminal_run'
-                WHEN r.created_at < $1 THEN 'ttl_exceeded'
+                WHEN r.run_id IS NOT NULL THEN 'lease_lapsed'
                 ELSE 'unclaimed_grace'
               END AS reason
        FROM runners r
        LEFT JOIN runs run ON run.run_id = r.run_id
+       LEFT JOIN live_job lj ON lj.run_id = r.run_id
        WHERE r.released_at IS NULL
          AND (
            run.status IN ('completed','failed','halted','cancelled')
-           OR r.created_at < $1
+           OR (r.run_id IS NOT NULL AND lj.run_id IS NULL AND r.created_at < $2)
            OR (r.run_id IS NULL AND r.created_at < $2)
          )`,
-      [thresholds.ttlThreshold, thresholds.graceThreshold],
+      [thresholds.now, thresholds.graceThreshold],
     );
     return result.rows.map((row) => ({ record: materialize(row), reason: row.reason }));
   }
@@ -260,7 +272,7 @@ function materialize(row: RunnerRow): RunnerRecord {
 }
 
 function releaseStatusFor(reason: string): string {
-  // Every sweeper reclaim path (ttl/wedged/terminal-run) lands the `abandoned`
+  // Every sweeper reclaim path (lease-lapsed/wedged/terminal-run) lands the `abandoned`
   // status — a swept runner is an abandoned one regardless of the discriminated
   // cause carried in the reason string.
   if (reason.startsWith("abandoned")) {

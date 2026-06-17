@@ -13,17 +13,14 @@
  * `MIGRATION_DATABASE_URL` — keep their `requireEnv` guards (resolved at use, so a
  * unit test can import the schema without the production secret env).
  *
- * REAPER-SAFETY (`TANREN_MAX_RUN_HOURS`): this knob is integrated via the
- * `requirePositiveHours` helper. UNSET → the documented 6h default; a PRESENT
- * non-positive / malformed run-hour cap THROWS loud at boot (no-silent-fallback
- * doctrine, Codex r4 §1) — because a `<= now` reaper threshold would reap EVERY
- * active runner (incl. a live apex run), so a typo'd operator value must fail the
- * boot rather than masquerade as a working default. The helper is reused here so
- * the same UNSET-defaults / PRESENT-malformed-throws contract governs both the
- * allocator schema AND the scoped-token TTL resolver (plannerRunScopedCreds).
+ * NO WALL-CLOCK REAP KNOB: the abandoned-runner sweeper reaps on SIGN-OF-LIFE
+ * (the owning run's job lease lapsing — a dead driver), never on a wall-clock age
+ * ceiling, so there is no `TANREN_MAX_RUN_HOURS` here. A long-but-alive build is
+ * never reaped. (`TANREN_MAX_RUN_HOURS` still exists as the orchestrator's
+ * scoped-credential token TTL — a separate security bound — resolved in
+ * plannerRunScopedCreds, not the allocator.)
  */
 import { z } from "zod";
-import { requirePositiveHours } from "./requirePositiveHours.js";
 
 /**
  * Treat an EMPTY env string as UNSET (`undefined`) before validation — see the
@@ -47,14 +44,6 @@ const positiveIntervalMsSchema = z.coerce.number().int().finite().positive();
 const envObjectSchema = z.object({
   // Allocator API HTTP port. Default 3200.
   ALLOCATOR_PORT: emptyToUndefined(portSchema.default(3200)),
-  // Max wall-clock hours before the abandoned-run sweeper reclaims a runner.
-  // Resolved through `requirePositiveHours` (reaper-safety: fall back loud, never
-  // crash, never accept <= 0). Carried through the schema as the raw string and
-  // transformed to the safe positive number; default applied by the helper.
-  TANREN_MAX_RUN_HOURS: z
-    .string()
-    .optional()
-    .transform((raw) => requirePositiveHours(raw, 6, "TANREN_MAX_RUN_HOURS")),
   // Docker network the per-run runner containers join.
   TANREN_ALLOCATOR_NETWORK: emptyToUndefined(z.string().min(1).default("tanren_default")),
   // Optional host SSH port to publish a runner on (dev/local). When unset the

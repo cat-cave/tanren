@@ -37,14 +37,21 @@ export interface RunnerRecord {
  * missed — the discriminated stuck-state. Carried on the reclaimed record and
  * stamped onto the durable `runner.swept` audit event.
  *
+ * ABANDONMENT IS SIGN-OF-LIFE BASED, NOT WALL-CLOCK BASED. A long-but-ALIVE run
+ * (its worker still renewing the job's lease) is NEVER reaped, no matter its age —
+ * "10 minutes, or 6 hours, is nothing to an AI agent on a big build". A runner is
+ * reaped only when there is genuinely NO sign of life:
+ *
  *  - `terminal_run`: the owning run is terminal (completed/failed/halted/cancelled)
  *    yet the runner was never released (the run crashed before its release `finally`).
- *  - `ttl_exceeded`: the runner outlived the run-hours TTL ceiling
- *    (`TANREN_MAX_RUN_HOURS`) — the apex-relevant leak guard.
+ *  - `lease_lapsed`: the owning run's worker stopped renewing its `job_queue` lease
+ *    — the run has a `running` job whose `leased_until` is in the PAST and no other
+ *    live job (queued/claimed/fresh-lease running). The DRIVER is dead, so its
+ *    runner is leaked. This replaces the old wall-clock `ttl_exceeded` age cap.
  *  - `unclaimed_grace`: a wedged allocation never tied to a live `runs` row
  *    (run_id IS NULL), older than the grace window.
  */
-export type RunnerReclaimReason = "terminal_run" | "ttl_exceeded" | "unclaimed_grace";
+export type RunnerReclaimReason = "terminal_run" | "lease_lapsed" | "unclaimed_grace";
 
 /** A reclaimable runner: its full record plus the stuck-state the sweeper found it in. */
 export interface StuckRunner {
@@ -52,11 +59,25 @@ export interface StuckRunner {
   reason: RunnerReclaimReason;
 }
 
-/** The two age thresholds the stuck-state query needs (absolute instants). */
+/**
+ * The instants the stuck-state query compares against (resolved from the live clock
+ * in `sweepStuck`). All are SIGN-OF-LIFE boundaries, never a wall-clock kill of a
+ * live run.
+ */
 export interface StuckThresholds {
-  /** A runner created before this (now − maxRunHours) is past its TTL ceiling. */
-  ttlThreshold: Date;
-  /** A run-less runner created before this (now − graceMs) is a wedged allocation. */
+  /**
+   * Now (the sweep instant). The lease-lapse predicate compares each run's
+   * `job_queue.leased_until` against this — a lease expiring BEFORE now means the
+   * worker stopped heartbeating (dead driver), regardless of how old the runner is.
+   */
+  now: Date;
+  /**
+   * A runner created before this (now − graceMs) is past the allocate→first-heartbeat
+   * handoff window. Used to (a) reclaim a run-LESS wedged allocation and (b) absorb
+   * the brief window after allocate before the run's first lease lands, so a healthy
+   * just-allocated runner is never reaped before its worker has had a chance to
+   * record a lease. NOT an age cap on a live run.
+   */
   graceThreshold: Date;
 }
 
@@ -85,13 +106,13 @@ export interface RunnerStore {
   insert(record: RunnerRecord): Promise<void>;
   markReleased(runnerId: string, reason: string): Promise<RunnerRecord | undefined>;
   findActive(runnerId: string): Promise<RunnerRecord | undefined>;
-  listActiveOlderThan(threshold: Date): Promise<RunnerRecord[]>;
   /**
    * List every active (un-released) runner in a STUCK state the normal release
    * path missed, each tagged with WHY. A genuine reconciler — a healthy in-flight
-   * runner (its owning run still non-terminal, within TTL, claimed) is NEVER
-   * returned. Cross-org SYSTEM read (the sweeper reaps across all tenants), so
-   * the live impl runs on the BYPASSRLS system pool. See {@link StuckRunner}.
+   * runner (its owning run still non-terminal AND its worker still renewing the
+   * job lease) is NEVER returned, regardless of how long it has been running.
+   * Cross-org SYSTEM read (the sweeper reaps across all tenants), so the live impl
+   * runs on the BYPASSRLS system pool. See {@link StuckRunner}.
    */
   listStuck(thresholds: StuckThresholds): Promise<StuckRunner[]>;
   /**
@@ -146,8 +167,12 @@ export interface RunnerLifecycleConfig {
   hostSshPort?: number;
   /** Host the orchestrator should SSH to. In prod this is the container DNS name. */
   sshHostnameForOrchestrator: (containerName: string) => string;
-  /** Max number of polls when waiting for sshd host key. */
-  hostKeyReadAttempts?: number;
+  /**
+   * Poll delay between host-key readiness probes while a freshly-started container
+   * boots sshd. NOT a cap — see {@link readHostKeyFingerprint}: the boot probe
+   * polls until the host key appears (readiness) or the container is observed DEAD
+   * (genuine failure), with no fixed attempt ceiling.
+   */
   hostKeyReadDelayMs?: number;
   /** Backoff utility (overridable for tests). */
   sleep?: (ms: number) => Promise<void>;
@@ -164,7 +189,6 @@ export class RunnerLifecycle {
   private readonly networkName: string;
   private readonly hostSshPort: number | undefined;
   private readonly hostnameForOrchestrator: (containerName: string) => string;
-  private readonly hostKeyReadAttempts: number;
   private readonly hostKeyReadDelayMs: number;
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly capAdd: string[];
@@ -177,7 +201,6 @@ export class RunnerLifecycle {
     this.networkName = config.networkName;
     this.hostSshPort = config.hostSshPort;
     this.hostnameForOrchestrator = config.sshHostnameForOrchestrator;
-    this.hostKeyReadAttempts = config.hostKeyReadAttempts ?? 30;
     this.hostKeyReadDelayMs = config.hostKeyReadDelayMs ?? 500;
     this.sleep =
       config.sleep ??
@@ -220,9 +243,9 @@ export class RunnerLifecycle {
 
     // Side-effect chain (fix #1): every step below is a Docker/DB side effect
     // that can throw — createContainer, startContainer, inspectContainer,
-    // readHostKeyFingerprint (throws on retry-exhaustion), store.insert (throws
-    // on a DB outage). A throw after the first createVolume would orphan the two
-    // volumes + the container, INVISIBLE to release/sweepAbandoned (which key off
+    // readHostKeyFingerprint (throws when the container dies on boot), store.insert
+    // (throws on a DB outage). A throw after the first createVolume would orphan the
+    // two volumes + the container, INVISIBLE to release/sweepStuck (which key off
     // the DB row that was never written). Wrap the whole chain and tear the
     // partial state down best-effort by deterministic name before re-throwing.
     await this.docker.createVolume(workspaceVolume, allocatorLabels(input.runId));
@@ -340,45 +363,34 @@ export class RunnerLifecycle {
     return { released: true };
   }
 
-  async sweepAbandoned(maxAgeMs: number): Promise<RunnerRecord[]> {
-    const threshold = new Date(this.clock().getTime() - maxAgeMs);
-    const candidates = await this.store.listActiveOlderThan(threshold);
-    const reclaimed: RunnerRecord[] = [];
-    for (const candidate of candidates) {
-      const result = await this.release(candidate.runnerId, "abandoned");
-      if (result.released) {
-        reclaimed.push(candidate);
-      }
-    }
-    return reclaimed;
-  }
-
   /**
    * Reconcile STUCK/LEAKED runners the normal release path missed: a runner whose
-   * owning run is terminal but unreleased, a runner past the run-hours TTL ceiling,
-   * or a wedged allocation never tied to a live run. Each stuck candidate is
-   * released through the SINGLE atomic claim (`release` → `markReleased`), so a
-   * healthy in-flight runner is never touched (the query already excludes it) and a
-   * concurrent /release race tears down exactly once. The release reason carries the
-   * stuck-state. On a winning claim the reclaimed record is returned WITH its reason
-   * so the caller can emit the durable `runner.swept` audit. A release that THROWS is
-   * re-thrown to the caller (the sweeper logs + counts it loud — never swallowed).
+   * owning run is terminal but unreleased, a runner whose owning run's worker stopped
+   * renewing its job lease (the DRIVER is dead — abandonment by SIGN-OF-LIFE, not by
+   * age), or a wedged allocation never tied to a live run. A long-but-ALIVE run (lease
+   * fresh) is never touched no matter its age. Each stuck candidate is released through
+   * the SINGLE atomic claim (`release` → `markReleased`), so a healthy in-flight runner
+   * is never touched (the query already excludes it) and a concurrent /release race
+   * tears down exactly once. The release reason carries the stuck-state. On a winning
+   * claim the reclaimed record is returned WITH its reason so the caller can emit the
+   * durable `runner.swept` audit. A release that THROWS is re-thrown to the caller (the
+   * sweeper logs + counts it loud — never swallowed).
    *
    * Idempotent: a second sweep over the same DB state reclaims nothing new (the
    * first sweep already flipped released_at; the still-active healthy runners stay
    * excluded by the stuck query).
    */
-  async sweepStuck(maxRunHours: number, unclaimedGraceMs: number): Promise<StuckRunner[]> {
-    const nowMs = this.clock().getTime();
+  async sweepStuck(unclaimedGraceMs: number): Promise<StuckRunner[]> {
+    const now = this.clock();
     const thresholds: StuckThresholds = {
-      ttlThreshold: new Date(nowMs - maxRunHours * 3_600_000),
-      graceThreshold: new Date(nowMs - unclaimedGraceMs),
+      now,
+      graceThreshold: new Date(now.getTime() - unclaimedGraceMs),
     };
     const candidates = await this.store.listStuck(thresholds);
     const reclaimed: StuckRunner[] = [];
     for (const candidate of candidates) {
       // The release reason mirrors the stuck-state so the existing release-status
-      // vocabulary stays meaningful (`abandoned` for ttl/wedged, terminal otherwise).
+      // vocabulary stays meaningful (`abandoned` for lease-lapsed/wedged, terminal otherwise).
       const result = await this.release(candidate.record.runnerId, releaseReasonFor(candidate.reason));
       // A LIVE→released claim we won; the loser (already released by a concurrent
       // path) returns released:false and is skipped — never double-counted.
@@ -389,9 +401,20 @@ export class RunnerLifecycle {
     return reclaimed;
   }
 
+  /**
+   * Wait for a FRESHLY-STARTED container's sshd to publish its host key, then
+   * fingerprint it.
+   *
+   * Boot-readiness probe, NOT a wall-clock timeout. We poll until the key appears
+   * (readiness reached) — a container that is simply slow to boot is NEVER given
+   * up on by an attempt count. The ONLY give-up condition is genuine FAILURE: the
+   * container is observed no longer RUNNING (it crashed/exited on boot), so the
+   * host key will never appear. We inspect liveness on each miss; a dead container
+   * fails LOUD with its state, a live-but-not-yet-ready one keeps being polled.
+   */
   private async readHostKeyFingerprint(containerId: string): Promise<string> {
     let lastError: unknown;
-    for (let attempt = 0; attempt < this.hostKeyReadAttempts; attempt += 1) {
+    for (;;) {
       try {
         const publicKey = await this.docker.readContainerFile(containerId, "/etc/ssh/ssh_host_ed25519_key.pub");
         const fingerprint = fingerprintOpenSshPublicKey(publicKey);
@@ -401,19 +424,32 @@ export class RunnerLifecycle {
       } catch (error) {
         lastError = error;
       }
+      // Sign-of-life gate: only give up when the container is genuinely DEAD — a
+      // crashed/exited boot can never expose a host key. A still-running container
+      // is just mid-boot, so we keep polling (no attempt cap). A transient inspect
+      // failure is itself NOT a give-up signal — we keep polling on the next tick.
+      let running = true;
+      try {
+        running = (await this.docker.inspectContainer(containerId)).running;
+      } catch {
+        running = true;
+      }
+      if (!running) {
+        throw new Error(
+          `runner container ${containerId} exited before exposing an SSH host key (sshd boot failed)${lastError instanceof Error ? `: ${lastError.message}` : ""}`,
+        );
+      }
       await this.sleep(this.hostKeyReadDelayMs);
     }
-    throw new Error(
-      `runner container ${containerId} did not expose an SSH host key in time${lastError instanceof Error ? `: ${lastError.message}` : ""}`,
-    );
   }
 }
 
 /**
  * Map a sweeper stuck-reason to the `release()` reason string. All three reclaim
- * paths resolve to the `abandoned` release STATUS (see pgRunnerStore.releaseStatusFor)
- * — a swept runner is an abandoned one regardless of WHY — but the reason string
- * carries the discriminated cause into the release path for observability.
+ * paths (lease-lapsed / wedged / terminal-run) resolve to the `abandoned` release
+ * STATUS (see pgRunnerStore.releaseStatusFor) — a swept runner is an abandoned one
+ * regardless of WHY — but the reason string carries the discriminated cause into
+ * the release path for observability.
  */
 export function releaseReasonFor(reason: RunnerReclaimReason): string {
   return reason === "terminal_run" ? "abandoned-terminal-run" : "abandoned";

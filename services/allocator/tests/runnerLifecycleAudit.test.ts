@@ -30,9 +30,6 @@ class AuditStore implements RunnerStore {
   async findActive(): Promise<RunnerRecord | undefined> {
     return undefined;
   }
-  async listActiveOlderThan(): Promise<RunnerRecord[]> {
-    return [];
-  }
   async listStuck(): Promise<never[]> {
     return [];
   }
@@ -61,7 +58,6 @@ function lifecycleFor(store: RunnerStore): RunnerLifecycle {
     store,
     networkName: "tanren_default",
     sshHostnameForOrchestrator: (container) => container,
-    hostKeyReadAttempts: 1,
     hostKeyReadDelayMs: 0,
     sleep: async () => {},
   });

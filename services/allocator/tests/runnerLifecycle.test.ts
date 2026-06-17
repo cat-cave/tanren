@@ -28,6 +28,9 @@ class FakeDocker implements DockerEngineClient {
   }> = [];
   hostKeyContent: Buffer = Buffer.from("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIRunnerHostKey runner\n");
   failingHostKeyReads = 0;
+  // When true, a started container is reported as NOT running (a crashed/exited boot):
+  // the boot-readiness probe gives up LOUD only on this genuine death, never on a count.
+  containerDeadOnBoot = false;
   private hostKeyReads = 0;
 
   async createVolume(name: string): Promise<void> {
@@ -56,7 +59,7 @@ class FakeDocker implements DockerEngineClient {
     return {
       id,
       imageSha: `sha256:${entry?.spec.image ?? "unknown"}`,
-      running: entry?.started === true,
+      running: entry?.started === true && !this.containerDeadOnBoot,
     };
   }
 
@@ -101,9 +104,6 @@ class InMemoryRunnerStore implements RunnerStore {
   async findActive(runnerId: string): Promise<RunnerRecord | undefined> {
     return this.records.find((r) => r.runnerId === runnerId && !r.released);
   }
-  async listActiveOlderThan(threshold: Date): Promise<RunnerRecord[]> {
-    return this.records.filter((r) => !r.released && r.createdAt < threshold);
-  }
 
   // The stuck-sweep is exercised in sweeper.test.ts; this store stubs it out.
   async listStuck(): Promise<never[]> {
@@ -117,7 +117,6 @@ const baseLifecycle = (docker: FakeDocker, store: InMemoryRunnerStore, now?: () 
     store,
     networkName: "tanren_default",
     sshHostnameForOrchestrator: (container) => container,
-    hostKeyReadAttempts: 4,
     hostKeyReadDelayMs: 1,
     sleep: () => Promise.resolve(),
     now,
@@ -298,54 +297,6 @@ describe("RunnerLifecycle.release", () => {
   });
 });
 
-describe("RunnerLifecycle.sweepAbandoned", () => {
-  it("reclaims runners older than the TTL with reason 'abandoned'", async () => {
-    const docker = new FakeDocker();
-    const store = new InMemoryRunnerStore();
-    let nowMs = 1_000_000_000_000;
-    const lifecycle = baseLifecycle(docker, store, () => new Date(nowMs));
-
-    await lifecycle.allocate({
-      runId: "run_stale",
-      projectId: "proj_a",
-      orgId: "org_test",
-      runnerImage: "ghcr.io/cat-cave/tanren-runner:v0",
-    });
-
-    // Advance the simulated clock by 7 hours; TTL is 6h.
-    nowMs += 7 * 60 * 60 * 1000;
-
-    const reclaimed = await lifecycle.sweepAbandoned(6 * 60 * 60 * 1000);
-
-    expect(reclaimed.map((r) => r.runnerId)).toEqual(["runner_run_stale"]);
-    expect(docker.containers[0]?.removed).toBe(true);
-    expect(docker.volumeRemoves).toEqual(
-      expect.arrayContaining(["tanren-runner-run_stale-workspace", "tanren-runner-run_stale-codex-home"]),
-    );
-  });
-
-  it("leaves recent runners alone", async () => {
-    const docker = new FakeDocker();
-    const store = new InMemoryRunnerStore();
-    let nowMs = 1_000_000_000_000;
-    const lifecycle = baseLifecycle(docker, store, () => new Date(nowMs));
-
-    await lifecycle.allocate({
-      runId: "run_fresh",
-      projectId: "proj_a",
-      orgId: "org_test",
-      runnerImage: "ghcr.io/cat-cave/tanren-runner:v0",
-    });
-
-    // 1h
-    nowMs += 60 * 60 * 1000;
-    const reclaimed = await lifecycle.sweepAbandoned(6 * 60 * 60 * 1000);
-
-    expect(reclaimed).toEqual([]);
-    expect(docker.containers[0]?.removed).toBe(false);
-  });
-});
-
 describe("RunnerLifecycle.allocate partial-failure teardown (no-orphan guard)", () => {
   it("(a) throws after createContainer → BOTH volumes + the container are removed", async () => {
     const docker = new FakeDocker();
@@ -381,10 +332,12 @@ describe("RunnerLifecycle.allocate partial-failure teardown (no-orphan guard)", 
     );
   });
 
-  it("(b) readHostKeyFingerprint exhaustion → container + both volumes are gone", async () => {
+  it("(b) host-key boot fails on a DEAD container → container + both volumes are gone", async () => {
     const docker = new FakeDocker();
-    // Every host-key read fails; with hostKeyReadAttempts=4 this exhausts and throws.
+    // The host key never appears AND the container is observed DEAD (a crashed boot):
+    // the readiness probe gives up LOUD only on this genuine death (no attempt cap).
     docker.failingHostKeyReads = 1_000;
+    docker.containerDeadOnBoot = true;
     const store = new InMemoryRunnerStore();
     const lifecycle = baseLifecycle(docker, store);
 
@@ -395,7 +348,7 @@ describe("RunnerLifecycle.allocate partial-failure teardown (no-orphan guard)", 
         orgId: "org_test",
         runnerImage: "img",
       }),
-    ).rejects.toThrow(/did not expose an SSH host key/u);
+    ).rejects.toThrow(/exited before exposing an SSH host key/u);
 
     expect(store.records).toHaveLength(0);
     expect(docker.containers[0]?.removed).toBe(true);
@@ -404,9 +357,30 @@ describe("RunnerLifecycle.allocate partial-failure teardown (no-orphan guard)", 
     );
   });
 
+  it("a still-booting (live) container is polled until the host key appears — never an attempt cap", async () => {
+    const docker = new FakeDocker();
+    // sshd is slow: the first reads fail while the container stays RUNNING. The probe
+    // must keep polling (no give-up) and succeed once the key lands — a long boot is
+    // never abandoned by a fixed count.
+    docker.failingHostKeyReads = 50;
+    const store = new InMemoryRunnerStore();
+    const lifecycle = baseLifecycle(docker, store);
+
+    const result = await lifecycle.allocate({
+      runId: "run_slow_boot",
+      projectId: "proj_a",
+      orgId: "org_test",
+      runnerImage: "img",
+    });
+
+    expect(result.runnerId).toBe("runner_run_slow_boot");
+    expect(store.records).toHaveLength(1);
+  });
+
   it("teardown is best-effort: a removeVolume failure does NOT mask the original error", async () => {
     const docker = new FakeDocker();
     docker.failingHostKeyReads = 1_000;
+    docker.containerDeadOnBoot = true;
     // Teardown itself fails — the ORIGINAL error must still surface.
     docker.removeVolume = async () => {
       throw new Error("removeVolume also exploded");
@@ -416,7 +390,7 @@ describe("RunnerLifecycle.allocate partial-failure teardown (no-orphan guard)", 
 
     await expect(
       lifecycle.allocate({ runId: "run_mask", projectId: "proj_a", orgId: "org_test", runnerImage: "img" }),
-    ).rejects.toThrow(/did not expose an SSH host key/u);
+    ).rejects.toThrow(/exited before exposing an SSH host key/u);
   });
 
   it("(d-lifecycle) a retried allocate on a LIVE runner returns the existing target, no second container", async () => {
