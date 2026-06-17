@@ -43,7 +43,11 @@
 import type { EventStore } from "../../eventStore.js";
 import type { DagSnapshot } from "../../contracts/dagWalker.js";
 import { createLogger } from "../../observability/logger.js";
-import { assessStructuralProgress, type AttemptSignature } from "../../workflow/convergenceDetector.js";
+import {
+  type AttemptSignature,
+  decideConvergence,
+  fixedPointRuleJudgment,
+} from "../../workflow/convergenceDetector.js";
 
 const log = createLogger("template-recovery");
 
@@ -89,12 +93,26 @@ function toAttemptSignature(signal: RecoveryProgressSignal): AttemptSignature {
 // recovering, UNBOUNDED); an identical stranded set with no new merges is a fixed point
 // (this stack's template cannot be built autonomously). NO count — the structural fixed
 // point itself is the stop condition.
-export function atRecoveryFixedPoint(
+export async function atRecoveryFixedPoint(
   priorRecoveries: ReadonlyArray<RecoveryProgressSignal>,
   current: RecoveryProgressSignal,
-): boolean {
+): Promise<boolean> {
   const history: AttemptSignature[] = [...priorRecoveries, current].map((signal) => toAttemptSignature(signal));
-  return assessStructuralProgress(history) === "fixed_point";
+  // Route through the SHARED `decideConvergence` judge — NOT a raw `=== "fixed_point"` boolean
+  // (the disguised-K=2 the audit flagged). There is no answerer at the build-recovery point (it
+  // is a snapshot-driven decision), so `fixedPointRuleJudgment` is the principled stand-in: it
+  // escalates ONLY at a PROVEN dead-end (the identical stranded set with no new merges, recurring
+  // — a cycle, not slow convergence). A build merging more specs OR shifting its stranded set is
+  // progress (the magnitude shrinks / the failure signature changes) ⇒ keep recovering, UNBOUNDED.
+  const decision = await decideConvergence(history, (h) =>
+    fixedPointRuleJudgment(
+      h,
+      () =>
+        `the build reached a FIXED POINT — the identical specs strand with no new progress across ` +
+        `recoveries; this stack's template cannot be built autonomously`,
+    ),
+  );
+  return decision.decision === "escalate";
 }
 
 // Thrown when the auto-recovery reaches a FIXED POINT — the build strands with the IDENTICAL
@@ -197,7 +215,7 @@ export async function recoverStrandedTemplateBuild(
   // recovers forever, however slowly; only a frozen build terminates.
   const priorRecoveries = await deps.priorRecoveries(projectId);
   const totalRecoveries = priorRecoveries.length;
-  if (atRecoveryFixedPoint(priorRecoveries, current)) {
+  if (await atRecoveryFixedPoint(priorRecoveries, current)) {
     await emitRecoveryExhausted(deps.events, { orgId, projectId, stack, strandedSpecIds, mergedCount });
     throw new TemplateBuildRecoveryExhaustedError(projectId, totalRecoveries + 1, strandedSpecIds);
   }

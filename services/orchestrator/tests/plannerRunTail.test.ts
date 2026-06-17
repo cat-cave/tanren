@@ -126,8 +126,10 @@ describe("runPlannerLoopWorkflow — review-rework re-entry", () => {
   it("halts (no merge) when changes are requested at a FIXED POINT — the SAME review feedback recurs (no count)", async () => {
     const { ctx, pool, events, secrets, allocator, ssh } = await setup();
     // `alwaysChangesReview` returns the IDENTICAL changes-requested feedback every poll. The
-    // first is new feedback (re-work), the second reproduces it (a fixed point) ⇒ halt.
-    const github = new ScriptedGitHubHttp([...ghRound(), ...ghRound()]);
+    // first is new feedback (re-work); a single repeat is still re-work (a transient may recur
+    // once); only once the identical feedback RECURS as a cycle (the third pass) is it a proven
+    // fixed point ⇒ halt. Three PR rounds let the loop reach that cycle.
+    const github = new ScriptedGitHubHttp([...ghRound(), ...ghRound(), ...ghRound()]);
 
     const result = await runPlannerLoopScoped(
       baseInput({

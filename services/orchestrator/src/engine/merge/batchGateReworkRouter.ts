@@ -105,7 +105,7 @@ export class PgBatchGateReworkRouter implements BatchGateReworkRouter {
     // progress (re-work UNBOUNDED). It is genuinely stuck only when the SAME gate error
     // recurs (re-working produced no change to it) — escalate LOUD instead of re-working
     // identically forever. The shared detector decides.
-    if (atReplanFixedPoint(priorSignatures, currentSignature)) {
+    if (await atReplanFixedPoint(priorSignatures, currentSignature)) {
       await this.escalate(orgId, input, priorSignatures.length);
       return "escalated";
     }

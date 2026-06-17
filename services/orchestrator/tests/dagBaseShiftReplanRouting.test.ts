@@ -183,13 +183,17 @@ describe("base-shift / percolation replan routing (v35 — a routed replan ACTUA
     const eventStore = new RecordingEventStore();
     const enqueuer = new RecordingEnqueuer();
     const sameContext = "the rebase conflict could not be resolved (again)";
-    // The spec was ALREADY re-planned against this EXACT conflict — re-planning again would
+    // The spec was re-planned against this EXACT conflict REPEATEDLY (the identical conflict
+    // recurring beyond a single transient repeat = a proven cycle) — re-planning again would
     // re-conflict identically (a fixed point). The detector escalates, regardless of count.
     const router = buildRouter({
       pool,
       eventStore,
       enqueuer,
-      priorReplans: readerReturning([conflictSignatureOf(sameContext, "spec_a")]),
+      priorReplans: readerReturning([
+        conflictSignatureOf(sameContext, "spec_a"),
+        conflictSignatureOf(sameContext, "spec_a"),
+      ]),
     });
 
     await router.routeBackToPlanner({ specId: "spec_b", newContext: sameContext, otherSpecId: "spec_a" });

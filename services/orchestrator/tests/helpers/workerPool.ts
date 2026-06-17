@@ -218,7 +218,9 @@ export class WorkerPool {
     // (newest→oldest) the authority's cap keys off.
     if (trimmed.startsWith("SELECT payload FROM events") && trimmed.includes("dag.spec.redriven")) {
       return {
-        rows: this.priorRedrivenFailureCodes.map((c) => ({ payload: { failureCode: c } })),
+        // Each prior re-drive records the ENRICHED signature (code + the `run` stage it failed
+        // in), matching the live orphan path so the detector keys on `code@stage`.
+        rows: this.priorRedrivenFailureCodes.map((c) => ({ payload: { failureCode: c, stage: "run" } })),
         rowCount: this.priorRedrivenFailureCodes.length,
       };
     }

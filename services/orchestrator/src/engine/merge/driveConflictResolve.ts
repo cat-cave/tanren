@@ -180,7 +180,7 @@ export function buildDriveConflictResolve(deps: DriveConflictResolveDeps): Confl
     // provisioning a runner. A DIFFERENT conflict (e.g. a shifted base) is progress → resolve.
     const currentSignature = conflictSignatureOf(conflictContext.message || conflictContext.baseBranch);
     const priorSignatures = await priorConflictSignatures(deps.pool, deps.facts);
-    if (atReplanFixedPoint(priorSignatures, currentSignature)) {
+    if (await atReplanFixedPoint(priorSignatures, currentSignature)) {
       deps.verdict.disposition = "escalate";
       deps.verdict.message =
         `the resolver reached a FIXED POINT on spec ${deps.facts.specId}: it is re-planning against the SAME ` +

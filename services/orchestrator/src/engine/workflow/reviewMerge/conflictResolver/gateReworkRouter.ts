@@ -75,7 +75,7 @@ export class SpecStatusGateReworkRouter implements GateReworkRouter {
     // (re-work UNBOUNDED). It is genuinely stuck only when the SAME gate error recurs
     // (re-authoring produced no change to it) — escalate LOUD instead of re-working
     // identically forever. The shared detector decides.
-    if (atReplanFixedPoint(priorSignatures, currentSignature)) {
+    if (await atReplanFixedPoint(priorSignatures, currentSignature)) {
       await this.escalate(input, priorSignatures.length);
       return;
     }

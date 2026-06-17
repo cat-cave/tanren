@@ -19,7 +19,7 @@ import type { ClassifiedRunFailure } from "./runFailureClassifier.js";
 import { createLogger } from "../observability/logger.js";
 import { isWorkflowFinalized, rawCauseOf } from "../workflow/workflowErrorDisposition.js";
 import { decideRunDisposition, redriveBackoffSeconds } from "../workflow/runFinalizeAuthority.js";
-import { assessStructuralProgress, type AttemptSignature } from "../workflow/convergenceDetector.js";
+import { type AttemptSignature, decideConvergence, fixedPointRuleJudgment } from "../workflow/convergenceDetector.js";
 // Re-exported so runExecutor (which already imports finalizeRunRecoverable here)
 // gets the logger factory + the WorkflowFinalizedError unwrap WITHOUT separate imports
 // (its dependency cap is at 12). `rawCauseOf` lets the worker classify the raw cause.
@@ -294,7 +294,7 @@ async function parkStrandedSpecRemote(
     const specStatus = await client.query<{ status: string }>("SELECT status FROM specs WHERE spec_id = $1", [specId]);
     const occupying = specStatus.rows[0]?.status === "in_flight" || specStatus.rows[0]?.status === "review";
     const successor = await client.query(SUCCESSOR_RUN_SQL, [specId, runId]);
-    const consecutive = await readOrphanConsecutive(client, specId, failure.code);
+    const consecutive = await readOrphanConsecutive(client, specId, failure);
     return { occupying, hasSuccessor: (successor.rowCount ?? 0) > 0, consecutive };
   }).catch((error: unknown) => {
     logFinalizeSwallow("occupancy/successor read (remote, fail-closed → re-drive)", { runId, specId }, error);
@@ -363,7 +363,7 @@ export async function parkStrandedSpecInProcess(
     logStrandSkippedForSuccessor(runId, specId);
     return;
   }
-  const consecutive = await readOrphanConsecutive(client, specId, failure.code);
+  const consecutive = await readOrphanConsecutive(client, specId, failure);
   const redrive = decideOrphan(failure, consecutive) === "re_drive";
   // Guard ONLY an occupying spec (`in_flight`/`review`) — a flip that RETURNS the row only
   // when it moved (idempotent with the workflow's own finalize, no duplicate event).
@@ -386,30 +386,59 @@ export async function parkStrandedSpecInProcess(
 }
 
 /**
- * Read the CONSECUTIVE-same-failure count for the orphan path (this failure included),
- * over an already-org-scoped client: count the trailing run of prior `dag.spec.redriven`
- * events whose `failureCode` matches the current one (a different code resets the streak).
- * FAIL-CLOSED toward re-driving: an unreadable history returns 1 (the first of its kind).
+ * Read the fixed-point disposition for the orphan/crash path (this failure included), over an
+ * already-org-scoped client, and route it through the SHARED `decideConvergence` judge — NOT a
+ * raw `=== "fixed_point"` boolean (the disguised-K=2 the audit flagged). Returns the authority's
+ * `priorSameFixedPoint`: 1 ⇒ a PROVEN dead-end (the convergence judge escalated) ⇒ genuine-halt;
+ * 0 ⇒ progress (a different crash, the first of its kind, OR a single transient recurrence not
+ * yet a cycle) ⇒ re-drive, UNBOUNDED.
+ *
+ * The crash/orphan signature is ENRICHED beyond the bare crash code with the failure STAGE
+ * (`code@stage`), so `internal@bootstrap` and `internal@run` are DIFFERENT failures (progress),
+ * and a 2nd identical transient crash with no observable work is NOT an instant fixed point — the
+ * cycle-aware detector requires a recurrence beyond the immediate neighbor before it bites.
+ *
+ * There is NO agent at the orphan path (a crashed run produced nothing to assess), so the
+ * principled `fixedPointRuleJudgment` is the stand-in: it escalates ONLY at a proven cycle, with
+ * a specific human-actionable diagnosis. FAIL-CLOSED toward re-driving: an unreadable history
+ * returns 0 (treat as progress — a transient DB hiccup must never strand a genuine orphan).
  */
-async function readOrphanConsecutive(client: pg.PoolClient, specId: string, code: string): Promise<number> {
+async function readOrphanConsecutive(
+  client: pg.PoolClient,
+  specId: string,
+  failure: ClassifiedRunFailure,
+): Promise<number> {
   try {
-    const result = await client.query<{ payload: { failureCode?: string; workSignature?: string } }>(
-      `SELECT payload FROM events WHERE spec_id = $1 AND event_type = 'dag.spec.redriven' ORDER BY ts ASC, id ASC`,
-      [specId],
-    );
-    // A crashed/orphaned run has no observable produced work, so the fixed point keys on the
-    // failure code alone. Assemble the oldest→newest history + the current crash and ask the
-    // shared detector: 1 ⇒ a fixed point (the prior crash was identical) ⇒ escalate; 0 ⇒
-    // progress (a different crash, or the first of its kind) ⇒ re-drive, UNBOUNDED.
+    const result = await client.query<{
+      payload: { failureCode?: string; stage?: string; workSignature?: string };
+    }>(`SELECT payload FROM events WHERE spec_id = $1 AND event_type = 'dag.spec.redriven' ORDER BY ts ASC, id ASC`, [
+      specId,
+    ]);
+    // Assemble the oldest→newest history (each prior re-drive's ENRICHED signature) + the current
+    // crash, then ask the shared convergence judge whether this is a proven cycle or progress.
     const history: AttemptSignature[] = result.rows.map((row) => ({
-      failureSignature: row.payload.failureCode ?? "",
+      failureSignature: orphanFailureSignature(row.payload.failureCode ?? "", row.payload.stage),
       ...(row.payload.workSignature !== undefined && { workSignature: row.payload.workSignature }),
     }));
-    history.push({ failureSignature: code });
-    return assessStructuralProgress(history) === "fixed_point" ? 1 : 0;
+    history.push({ failureSignature: orphanFailureSignature(failure.code, failure.stage) });
+    const decision = await decideConvergence(history, (h) =>
+      fixedPointRuleJudgment(
+        h,
+        () =>
+          `the run reached a FIXED POINT (${failure.code} @ ${failure.stage}) — it crashed the identical way ` +
+          `with no new information across re-drives; the spec is genuinely stuck (a bug or mis-spec, not a flake)`,
+      ),
+    );
+    return decision.decision === "escalate" ? 1 : 0;
   } catch {
     return 0;
   }
+}
+
+/** The ENRICHED orphan/crash failure signature: the crash code QUALIFIED by the stage it failed
+ * in, so the SAME code in a DIFFERENT stage reads as a different failure (progress). */
+function orphanFailureSignature(code: string, stage: string | undefined): string {
+  return stage === undefined || stage === "" ? code : `${code}@${stage}`;
 }
 
 /**
