@@ -18,6 +18,7 @@ export {
 } from "./convergence.js";
 export { DemoAnswer, DemoLink, DEMO_ANSWER_SCHEMA_ID } from "./demo.js";
 export { DemoRunAnswer, DemoRunFinding, DEMO_RUN_ANSWER_SCHEMA_ID } from "./demoRun.js";
+export { DesignOracleAnswer, DesignOracleFinding, DESIGN_ORACLE_ANSWER_SCHEMA_ID } from "./designOracle.js";
 export {
   ForgeAnswer,
   ForgeToolCall,
