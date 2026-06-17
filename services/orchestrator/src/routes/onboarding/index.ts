@@ -44,6 +44,7 @@ import {
   type PrepareDeployCallback,
 } from "../../engine/forge/interview/index.js";
 import type { ForgeAnswererTarget } from "../../engine/forge/providerFactory.js";
+import type { DesignAgent } from "../../engine/design/designAgent.js";
 import {
   TemplateRequiredError,
   type SelectedTemplate,
@@ -75,6 +76,13 @@ export interface OnboardingRoutesOptions {
   // no project exists yet). Production passes `buildForgeInterviewAnswererFactory`
   // (a real provider answerer); tests pass a fake. REQUIRED — no fallback.
   answererFactory: (target: ForgeAnswererTarget) => InterviewAnswerer;
+  // WS-D3 (native-design-subsystem.md): the DESIGN-AGENT factory, called per-request
+  // with the request's org so the agent resolves the org's default LLM credential
+  // (greenfield — no project yet). When wired, the derive's design PHASE elaborates
+  // the captured intent into the designed HEAD `DesignContract` before the build
+  // nodes run; production passes `buildForgeDesignAgentFactory`. Absent ⇒ the thin
+  // captured contract is persisted verbatim (the injected-seam path).
+  designAgentFactory?: (target: ForgeAnswererTarget) => DesignAgent;
   githubHttp?: GitHubHttpClient;
   githubAppMinter?: GithubAppTokenMinter;
   preflightDeploy?: DeployPreflightCallback;
@@ -203,6 +211,9 @@ export function createOnboardingRoutes(options: OnboardingRoutesOptions) {
             }),
           ...(parsed.data.autonomy === undefined ? {} : { autonomy: parsed.data.autonomy }),
           ...(parsed.data.deploy === undefined ? {} : { deploy: parsed.data.deploy }),
+          // WS-D3: resolve the design agent for THIS org so the derive's design phase
+          // elaborates the captured intent into the designed HEAD `DesignContract`.
+          ...(options.designAgentFactory === undefined ? {} : { designAgent: options.designAgentFactory({ orgId }) }),
           // TEMPLATING WAVE 3 (templating-system.md §3): the ORG-SCOPED template
           // registry query. Each call opens a short `runWithOrgScope` so RLS bounds
           // the candidates to THIS org's own templates PLUS the cross-org `official`

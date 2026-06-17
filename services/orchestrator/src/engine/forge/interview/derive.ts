@@ -25,6 +25,7 @@
 
 import type pg from "pg";
 import type { ActorContext } from "../../../auth/schemas.js";
+import type { DesignAgent } from "../../design/designAgent.js";
 import type { CreatedRepository, CreateRepositoryInput } from "../../contracts/codeHostTypes.js";
 import { RepositoryAlreadyExistsError } from "../../contracts/codeHostTypes.js";
 import { githubHttpsRemote } from "../../providers/github.js";
@@ -107,6 +108,15 @@ export interface DeriveInput {
   // dependency). Absent on a no-match ⇒ a LOUD `TemplateRequiredError` halt — never a
   // project-direct from-scratch scaffold (the deleted bypass).
   createTemplateForNoMatch?: (lifecycle: CaptureLifecycle) => Promise<SelectedTemplate | undefined>;
+  // WS-D3 (native-design-subsystem.md) — the DESIGN AGENT that ELABORATES the thin
+  // captured design intent into a full, persona-scoped, behavior-covering,
+  // domain-appropriate `DesignContract` (the design PHASE), persisted as the HEAD
+  // version BEFORE the build nodes run — so the writer (WS-D2) builds from a real
+  // designed contract and the oracle (WS-D4) verifies against it. Production wires a
+  // real provider answerer (the route factory); absent on engine-graph test paths,
+  // where the thin captured contract is persisted verbatim (the injected-seam path,
+  // exactly like `templateRegistryQuery`/`createTemplateForNoMatch`).
+  designAgent?: DesignAgent;
 }
 
 // Re-exported from the gate module so callers can keep importing it from `derive.js`
@@ -428,6 +438,10 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
     capture: capture.designContract,
     personaIdByName,
     behaviorIdByKey: ifaceResult.behaviorIdByKey,
+    // WS-D3: when wired, the design agent elaborates the capture into the designed
+    // HEAD contract; `actor` is the project-scoped org carrier for the persona/
+    // behavior graph reads the design phase performs.
+    ...(input.designAgent === undefined ? {} : { designAgent: input.designAgent, actor }),
   });
 
   return {

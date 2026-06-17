@@ -14,7 +14,10 @@
 // writer (WS-D2) + verify with a design oracle (WS-D4) — the clean seam left here.
 
 import type pg from "pg";
+import type { ActorContext } from "../../../auth/schemas.js";
 import { DESIGN_CONTRACT_VERSION, parseDesignContract, type DesignContractV1 } from "../../design/designContract.js";
+import type { CapturedDesignSeed, DesignAgent } from "../../design/designAgent.js";
+import { runDesignPhase } from "../../design/designPhase.js";
 import { DesignContractStore } from "../../repositories/designContracts.js";
 import type { CaptureDesignContract, InterviewCapture } from "./types.js";
 
@@ -71,10 +74,32 @@ export function toDesignContract(
   });
 }
 
-// Persist the captured design contract as version 1 of the project's first-class
-// `DesignContract` entity, returning its id (or undefined when no contract was
-// captured — a real empty state, never a defaulted row). Called LAST in the derive
-// (after personas + behaviors exist) so THE MOAT links resolve to real ids.
+// The thin captured contract → the design AGENT's seed shape (WS-D3). Drops the
+// captured refs/dimensions: the design PHASE resolves the project's FULL persona +
+// behavior set as the coverage obligation (the design is responsible for ALL of it)
+// and the agent DERIVES the domain-appropriate dimensions itself.
+function toDesignSeed(capture: CaptureDesignContract): CapturedDesignSeed {
+  return {
+    domain: capture.domain,
+    identity: capture.identity,
+    intent: capture.intent,
+    principles: capture.principles,
+    constraints: capture.constraints,
+  };
+}
+
+// Persist the project's first-class `DesignContract` entity (WS-D1/WS-D3), returning
+// the HEAD record's id (or undefined when no contract was captured — a real empty
+// state, never a defaulted row). Called LAST in the derive (after personas +
+// behaviors exist) so THE MOAT links resolve to real ids.
+//
+// WS-D3 — the DESIGN PHASE. When a `designAgent` is wired (production via the route
+// factory), the captured intent is ELABORATED by the design agent into a full,
+// persona-scoped, behavior-COVERING, domain-appropriate contract (the durable
+// designed artifact the writer builds from + the oracle verifies), persisted as the
+// HEAD version. Absent an agent (engine-level graph tests — the injected-seam path,
+// exactly like the optional `templateRegistryQuery`/`createTemplateForNoMatch`
+// seams), the thin captured contract is persisted verbatim as version 1.
 export async function persistDesignContract(
   pool: pg.Pool,
   input: {
@@ -83,9 +108,34 @@ export async function persistDesignContract(
     capture: CaptureDesignContract | null;
     personaIdByName: Map<string, string>;
     behaviorIdByKey: Map<string, string>;
+    // WS-D3: the design agent that elaborates the captured intent into the designed
+    // contract. Production wires a real provider answerer; absent on engine-graph
+    // test paths (the thin-capture-only seam).
+    designAgent?: DesignAgent;
+    // The org-scope carrier for the design phase's persona/behavior entity reads.
+    actor?: ActorContext;
   },
 ): Promise<string | undefined> {
   if (input.capture === null) return undefined;
+
+  // WS-D3 DESIGN PHASE — elaborate the thin capture into the designed HEAD contract.
+  if (input.designAgent !== undefined) {
+    if (input.actor === undefined) {
+      throw new Error("design phase: an actor is required to resolve the project's persona/behavior graph");
+    }
+    const result = await runDesignPhase({
+      client: pool,
+      orgId: input.orgId,
+      projectId: input.projectId,
+      agent: input.designAgent,
+      actor: input.actor,
+      actorRef: { kind: "operator" },
+      seed: toDesignSeed(input.capture),
+    });
+    return result.record.id;
+  }
+
+  // No agent wired (engine-graph test seam) — persist the thin captured contract.
   const record = await DesignContractStore.create(
     pool,
     {

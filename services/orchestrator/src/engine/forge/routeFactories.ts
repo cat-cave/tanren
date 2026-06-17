@@ -16,6 +16,8 @@ import {
   type ForgeAnswererInfra,
   type ForgeAnswererTarget,
 } from "./providerFactory.js";
+import { buildForgeDesignAgentFactory } from "./designAgentFactory.js";
+import type { DesignAgent } from "../design/designAgent.js";
 import type { InterviewAnswerer } from "./interview/index.js";
 import type { DiscoveryAnswerer } from "./discovery/index.js";
 import type { TriageAnswerer } from "./inbox/index.js";
@@ -27,6 +29,9 @@ import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js"
 
 export interface ForgeRouteAnswererFactories {
   interview: (target: ForgeAnswererTarget) => InterviewAnswerer;
+  // WS-D3: the design AGENT factory — the derive's design phase elaborates the
+  // captured intent into the designed HEAD `DesignContract` (org-scoped, greenfield).
+  designAgent: (target: ForgeAnswererTarget) => DesignAgent;
   discovery: (target: ForgeAnswererTarget) => DiscoveryAnswerer;
   triage: (target: ForgeAnswererTarget) => TriageAnswerer;
   recon: (target: ForgeAnswererTarget) => ReconAnswerer;
@@ -49,6 +54,7 @@ export function buildForgeRouteAnswererFactories(infra: ForgeAnswererInfra): For
   const audit = buildForgeAuditAnswererFactory(infra);
   return {
     interview: buildForgeInterviewAnswererFactory(infra),
+    designAgent: buildForgeDesignAgentFactory(infra),
     discovery: buildForgeDiscoveryAnswererFactory(infra),
     triage: buildForgeTriageAnswererFactory(infra),
     recon: buildForgeReconAnswererFactory(infra),
