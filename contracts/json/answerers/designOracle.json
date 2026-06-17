@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "findings": {
+      "description": "Design fidelity findings (explicit P0–P3): one per behavior-coverage gap, persona-scoped fidelity miss, or violated contract dimension. Empty = the output is design-faithful.",
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "body": {
+            "maxLength": 6000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "fixHint": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "maxLength": 120,
+            "minLength": 1,
+            "type": "string"
+          },
+          "severity": {
+            "enum": [
+              "P0",
+              "P1",
+              "P2",
+              "P3"
+            ],
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 200,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "severity",
+          "title",
+          "body"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "summary": {
+      "description": "What the oracle inspected against the contract: the surfaces/artifacts read and which behaviors/personas/dimensions were verified.",
+      "minLength": 1,
+      "type": "string"
+    },
+    "verificationMode": {
+      "description": "The domain-derived verification mode the oracle used (e.g. web-render, prose-typography, art-direction-review). Chosen from the contract's domain + dimensions, never a Tanren-fixed enum.",
+      "maxLength": 200,
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "verificationMode",
+    "findings",
+    "summary"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.design_oracle_answer.v1"
+}
