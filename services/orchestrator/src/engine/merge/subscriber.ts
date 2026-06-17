@@ -321,13 +321,18 @@ export class MergeCoordinatorSubscriber {
         // to re-trigger this project on its own (a fresh serialized claim, a clean
         // single-PR queue, or a no-checks settle can expire on wall time). Arm a bounded, idempotent
         // one-shot re-drive so the held batch is re-checked once it clears.
-        if (result.retryAfterMs !== undefined && (!triggeredMidPass || result.holdReason === "merge_retry")) {
+        if (
+          result.retryAfterMs !== undefined &&
+          (!triggeredMidPass || result.holdReason === "merge_retry" || result.holdReason === "re_gate_pending")
+        ) {
           // Bug B: a PENDING hold and a merge_retry backoff open a NOTIFY-suppression
           // window so unrelated run activity does not hot-loop the integration or burn
           // retry attempts early. The window (consulted in `onRunActivity`) is the
           // throttle — NOT a mid-flight mutation of `rePending`, which would drop a
           // real mid-pass trigger. Infra-error holds still allow prompt clearing signals.
-          if (result.holdReason === "merge_retry") {
+          // A `re_gate_pending` hold (native gate still running) uses the SAME debounce so
+          // unrelated run activity does not hot-loop the re-gate while it finishes.
+          if (result.holdReason === "merge_retry" || result.holdReason === "re_gate_pending") {
             this.pendingHoldUntil.set(projectId, this.now() + Math.max(PENDING_DEBOUNCE_MS, result.retryAfterMs));
           } else if (result.holdReason === "all_blocked") {
             this.pendingHoldUntil.set(projectId, this.now() + PENDING_DEBOUNCE_MS);
@@ -339,10 +344,10 @@ export class MergeCoordinatorSubscriber {
           // NOTIFY re-checks immediately — the debounce only ever spans a live hold.
           this.pendingHoldUntil.delete(projectId);
         }
-        // A merge_retry hold relies on its armed timer (not an immediate re-loop) to
-        // re-check after the backoff, so a mid-pass trigger does NOT spin the loop
+        // A merge_retry / re_gate_pending hold relies on its armed timer (not an immediate
+        // re-loop) to re-check after the backoff, so a mid-pass trigger does NOT spin the loop
         // and burn the backoff early; every other outcome re-loops on a real trigger.
-        rerun = triggeredMidPass && result.holdReason !== "merge_retry";
+        rerun = triggeredMidPass && result.holdReason !== "merge_retry" && result.holdReason !== "re_gate_pending";
       } catch (error) {
         log.error("coordinate pass failed", { projectId }, error);
         const triggeredMidPass = this.rePending.has(projectId);

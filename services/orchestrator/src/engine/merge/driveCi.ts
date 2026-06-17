@@ -99,7 +99,16 @@ export function buildReGateCiForQueuedRun(deps: BuildReGateCiForQueuedRunDeps): 
         },
       );
       await publishReGateVerdict(deps, ctx, eventStore, headSha, outcome.passed);
-      return { status: outcome.passed ? "passed" : "failed" };
+      if (outcome.passed) {
+        return { status: "passed" };
+      }
+      // Surface the failing GATE tier/step/exit so the dispatcher can route a clean-rebase
+      // gate failure to WRITER REWORK with actionable steering (never rework blind).
+      const { tier, failedStep, exitCode } = outcome.failure;
+      return {
+        status: "failed",
+        gateError: `pre_merge gate failed on the rebased branch: tier '${tier}' step '${failedStep}' exited ${exitCode ?? "non-zero"}`,
+      };
     } catch (error) {
       // An infra error during the re-gate (allocate/clone/bootstrap) is NOT a verdict —
       // hold the merge (recoverable) rather than merging an unverified ref or failing it.

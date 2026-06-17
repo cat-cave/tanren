@@ -13,7 +13,12 @@ import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js"
 import type { PlannerRunContext, RunPlannerLoopInput } from "./plannerRun.js";
 import type { TriageSpecValidator } from "./loopFindings.js";
 import type { MergeForRunInput, NativeQueueEnqueuer } from "./reviewMerge/index.js";
+import type { EventStore } from "../eventStore.js";
+import type { GateReworkRouter } from "../contracts/conflictResolution.js";
 import { buildInLoopBaseShiftRebaseHook } from "../merge/inLoopBaseShift.js";
+import { SpecStatusGateReworkRouter } from "./reviewMerge/conflictResolver/gateReworkRouter.js";
+import { buildPriorGateReworkReader, buildReplanEnqueuer } from "./reviewMerge/conflictResolver/replanEnqueuerPg.js";
+import type pg from "pg";
 
 /**
  * the optional lifecycle-writer seam for a sub-stage input — the
@@ -27,6 +32,39 @@ export function writerSeam(input: RunPlannerLoopInput): { runStateWriter?: RunSt
 
 export function nativeQueueSeam(input: RunPlannerLoopInput): { enqueueNativeQueue?: NativeQueueEnqueuer } {
   return input.nativeQueueEnqueuer === undefined ? {} : { enqueueNativeQueue: input.nativeQueueEnqueuer };
+}
+
+/**
+ * The AUTO-REBASE re-gate gate-fail → WRITER REWORK seam (#594 extended to the merge dispatcher's
+ * clean-rebase re-gate path). A post-auto-rebase `pre_merge` gate that FAILS a deterministic tier
+ * on a CLEANLY-rebased branch (no conflict) is the WRITER's to fix on the new base — route it to
+ * rework carrying the gate error as steering (the SAME never-discard re-author the resolver /
+ * base-shift coordinator use), NEVER a terminal `merge.failed`. Escalation on a genuine dead-end
+ * is owned by the convergence detector inside the router (a fixed point, no count). Tests inject
+ * `input.reGateGateRework`; production builds the default router (mirrors `conflictResolver/index`).
+ */
+export function reGateGateReworkSeam(
+  input: RunPlannerLoopInput,
+  deps: { eventStore: EventStore; prNumber: number },
+): { reGateGateRework: GateReworkRouter } {
+  if (input.reGateGateRework !== undefined) {
+    return { reGateGateRework: input.reGateGateRework };
+  }
+  const context = input.context;
+  const orgId = typeof context.orgId === "string" ? context.orgId : undefined;
+  return {
+    reGateGateRework: new SpecStatusGateReworkRouter({
+      pool: input.pool,
+      ...(input.runStateWriter !== undefined && { runStateWriter: input.runStateWriter }),
+      ...(orgId !== undefined && { orgId }),
+      eventStore: deps.eventStore,
+      runId: context.runId,
+      projectId: context.projectId,
+      prNumber: deps.prNumber,
+      enqueuer: buildReplanEnqueuer(input.pool as pg.Pool, input.runStateWriter),
+      priorReworks: buildPriorGateReworkReader(input.pool as pg.Pool),
+    }),
+  };
 }
 
 // The SPEC-LOOP REDESIGN loop-config seam: folds the optional triage/convergence

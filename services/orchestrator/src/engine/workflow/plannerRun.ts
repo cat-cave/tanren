@@ -40,6 +40,7 @@ import {
   buildEntityRiskProducer,
   loopConfigSeam,
   nativeQueueSeam,
+  reGateGateReworkSeam,
   resolveConflictResolverHook,
   resolveManagedCapturer,
   resolveRunAdaptersWithBudgetPreflight,
@@ -221,6 +222,8 @@ export interface RunPlannerLoopInput {
   // TEST SEAM: a pre-built bundle (a no-DB unit run injects it; production builds it).
   mergeAuthority?: MergeAuthorityBundle;
   resolveConflict?: ConflictResolverHook;
+  // TEST SEAM: the auto-rebase re-gate gate-fail → writer-rework router (production → seam).
+  reGateGateRework?: MergeForRunInput["reGateGateRework"];
   // native_queue: enters a ready run into the native merge queue (→ mergeForRun).
   nativeQueueEnqueuer?: NativeQueueEnqueuer;
   // WS-A PR-8 (walker-jj-local-integration-design.md §2.3, fork F4): OBSERVE-ONLY — the port
@@ -393,11 +396,10 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
       }
 
       // Publish the cleaned draft PR + run the merge-authority `pre_merge` gate (extracted to
-      // `runPublishGateStage`, keeping this file under cap). It returns `rework` (re-enter the
-      // writer — `continue`), `halt` (bounded-out: finalized + parked LOUD), `merged` (gate
-      // passed — fall through to review), or `converged_empty` (v35 graceful empty-branch: the
-      // stage already converged the run merged — work present in base, #586 — or threw the
-      // transient re-drive #582; the spec is done, just return).
+      // `runPublishGateStage`, keeping this file under cap). Returns `rework` (re-author —
+      // `continue`), `halt` (bounded-out: finalized + parked LOUD), `merged` (gate passed —
+      // fall through to review), or `converged_empty` (v35 graceful empty-branch: the stage
+      // already converged the run merged — base work #586 — or threw the transient re-drive #582).
       const stage = await runPublishGateStage(input, mergeGateCtx, context, {
         cloneHeadSha,
         bootstrapSha,
@@ -435,8 +437,7 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
         ...simulatedReviewSeam(input, adapterCtx),
       });
 
-      // Map the review verdict (in plannerRunFinalize.ts): `merge` → proceed; `rework` →
-      // re-enter the writer; `halt` → finalized + parked LOUD, the loop returns.
+      // Map the review verdict (plannerRunFinalize): merge → proceed; rework → re-author; halt → parked LOUD.
       const reviewMove = await applyReviewVerdict(
         input,
         finalizeRunState,
@@ -463,7 +464,6 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
       resolvedGithubCredentialRef: context.githubCredentialRef,
       mergeProbe: input.mergeProbe,
       ...(input.mergeAuthority !== undefined && { mergeAuthority: input.mergeAuthority }),
-      // The intent-preserving conflict resolver — the PRODUCTION DEFAULT (tests inject input.resolveConflict).
       resolveConflict: resolveConflictResolverHook(input, {
         eventStore,
         target: allocation.target,
@@ -472,14 +472,14 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
         runGate,
         checker: adapters.checker,
         auditor: adapters.auditor,
-        // WS-A PR-4: the jj-local-assembled base → the resolver's merge-time base (absent ⇒ unchanged).
+        // WS-A PR-4: the jj-local-assembled base → the resolver's merge-time base.
         ...(bootstrappedBaseRevision !== undefined && { bootstrappedBaseRevision }),
       }),
       // After an auto-rebase the prior verdict is stale → re-run the native `pre_merge` gate.
       reGateCi: buildReGateCi(input, mergeGateCtx),
+      ...reGateGateReworkSeam(input, { eventStore, prNumber: pullRequest.prNumber }),
       // THE ONE BASE-SHIFT HANDLER (§7 / §5h): the unified jj rebase, no server update-branch.
       baseShiftRebase: baseShiftRebaseSeam(context, input),
-      // §5: the authority RE-READS the gate + review verdicts FRESH at land time (post-resolution).
       ...nativeQueueSeam(input),
     });
 
