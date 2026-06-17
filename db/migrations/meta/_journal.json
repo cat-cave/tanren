@@ -64,6 +64,13 @@
       "when": 1781634151824,
       "tag": "0008_merge_batch_gate_rework_event",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1781704437755,
+      "tag": "0009_merge_regate_gate_rework_event",
+      "breakpoints": true
     }
   ]
 }

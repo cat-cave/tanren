@@ -116,6 +116,7 @@ export const eventTypeNames = [
   "merge.queue.infra_blocked",
   "merge.queued",
   "merge.rebased",
+  "merge.regate.gate_rework_routed",
   "merge.retargeted",
   "merge.speculative_held",
   "notification.enqueued",

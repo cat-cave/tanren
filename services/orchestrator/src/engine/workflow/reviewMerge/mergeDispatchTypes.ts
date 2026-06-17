@@ -299,4 +299,15 @@ export interface ConflictContext {
   message: string;
 }
 
-export type ConflictResolverHook = (context: ConflictContext) => Promise<{ resolved: boolean }>;
+export type ConflictResolverHook = (context: ConflictContext) => Promise<{
+  resolved: boolean;
+  /**
+   * Set when `resolved: false` because the re-gate failed a deterministic GATE TIER on a
+   * cleanly-rebased-or-resolved tree and the resolver ALREADY routed the spec to WRITER
+   * REWORK (re-opened + enqueued a re-author run, carrying the gate error as steering). A
+   * caller that also has a replan/recovery path (the base-shift coordinator) MUST NOT then
+   * replan — the spec is already being re-driven. Absent ⇒ a genuine unresolved conflict
+   * (the caller routes to replan / emits the recoverable conflict as before).
+   */
+  routedToRework?: boolean;
+}>;

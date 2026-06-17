@@ -235,6 +235,32 @@ export interface ReplanRouter {
   }): Promise<void>;
 }
 
+// ---- The gate-rework router (a re-gate GATE-tier failure → writer rework) ----
+
+/**
+ * Routes the merging spec to WRITER REWORK when a pre-merge / base-shift re-gate fails
+ * because a GATE TIER failed (lint/test/build) on a cleanly-rebased-or-resolved tree —
+ * NOT because the intents are irreconcilable. The rebase/resolution succeeded; the code
+ * just fails a deterministic gate on the new base, which the writer can fix. This is the
+ * SAME never-discard re-author the batch path (`BatchGateReworkRouter`) and a conflict
+ * replan use, carrying the re-gate's failing tier/step/output as steering so the writer
+ * fixes the RIGHT thing (no_silent_fallback — never rework blind).
+ *
+ * DISTINCT from {@link ReplanRouter}: a genuine merge conflict (irreconcilable intents, OR
+ * a checker/auditor rejection of the resolved tree) routes to replan; a GATE-tier re-gate
+ * failure routes HERE. It must NOT be conflated with `merge.conflict.irreconcilable` and
+ * must NOT directly escalate — escalation is owned by the convergence detector (a genuine
+ * dead-end fixed point, never a count).
+ */
+export interface GateReworkRouter {
+  routeGateFailToRework(input: {
+    /** The merging spec whose rebased/resolved tree failed a GATE tier — to re-author. */
+    specId: string;
+    /** The re-gate's failing tier/step/output — the steering the writer re-authors against. */
+    gateError: string;
+  }): Promise<void>;
+}
+
 // ---- The pure decision core -----------------------------------------------
 
 /** Which spec the irreconcilable verdict routes back to the planner. */

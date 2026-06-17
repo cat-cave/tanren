@@ -110,6 +110,7 @@ import {
   MergeDequeuedPayload,
   MergeQueueAdvancedPayload,
   MergeQueueInfraBlockedPayload,
+  MergeReGateGateReworkRoutedPayload,
 } from "./schemas/mergeQueue.js";
 import {
   CiFlakyDetectedPayload,
@@ -321,28 +322,27 @@ export const EventRegistry = {
   "merge.conflict.replan_routed": MergeConflictReplanRoutedPayload,
   // external-push governance posture block (strict / audit_only)
   "merge.blocked": MergeBlockedPayload,
-  // §2c: a speculative dependent's MERGE held until its ancestors merge, then re-targeted
-  // from the integration ref to default_branch.
+  // §2c: a speculative dependent's MERGE held until its ancestors merge, then re-targeted to default_branch.
   "merge.speculative_held": MergeSpeculativeHeldPayload,
   "merge.retargeted": MergeRetargetedPayload,
-  // §2d: the native intelligent merge queue. A ready run ENTERS the queue (merge.queued w/
-  // native_queue), the coordinator selects the DAG-ordered head (merge.queue.advanced), and an
-  // entry that left without merging records merge.dequeued. Serialized: one merge at a time.
+  // §2d: the native intelligent merge queue. A ready run ENTERS (merge.queued w/ native_queue), the
+  // coordinator selects the DAG-ordered head (merge.queue.advanced), a leaver records merge.dequeued.
   "merge.queue.advanced": MergeQueueAdvancedPayload,
   "merge.dequeued": MergeDequeuedPayload,
-  // GitHub-5xx resilience (GAP #2d): a transient infra error blocked the per-PR merge DRIVE
-  // and the hold can no longer recover — the entry exhausted its re-drive ceiling, or the
-  // merge state is unconfirmable. A LOUD operator-visible halt (no silent re-drive forever).
+  // GitHub-5xx resilience (GAP #2d): a transient infra error blocked the per-PR merge DRIVE and
+  // the hold can no longer recover (re-drive ceiling exhausted / state unconfirmable) — LOUD halt.
   "merge.queue.infra_blocked": MergeQueueInfraBlockedPayload,
-  // §2d: speculative batch-check + bisect. Speculatively integrate `default_branch + batch
-  // PRs` + CI-check (checking); a green check merges in DAG order (passed); a failed check
-  // is BISECTED (bisecting) to the offending PR (culprit). No failed batch reaches main.
+  // §2d: speculative batch-check + bisect. Integrate `default_branch + batch PRs` + CI-check
+  // (checking); a green check merges in DAG order (passed); a failed check is BISECTED to the
+  // offending PR (bisecting → culprit). No failed batch reaches main.
   "merge.batch.checking": MergeBatchCheckingPayload,
   "merge.batch.passed": MergeBatchPassedPayload,
   "merge.batch.bisecting": MergeBatchBisectingPayload,
   "merge.batch.culprit": MergeBatchCulpritPayload,
-  // A GATE/CI failure (not a conflict) bisected to ONE culprit routes it to WRITER REWORK (steering = gate output) — bounded.
+  // A GATE/CI failure (not a conflict) bisected to ONE culprit → WRITER REWORK (steering = gate output).
   "merge.batch.gate_rework_routed": MergeBatchGateReworkRoutedPayload,
+  // A pre-merge / base-shift re-gate FAILED a GATE TIER on a CLEANLY-rebased tree (no conflict) → WRITER REWORK (not irreconcilable escalate); convergence detector owns escalation.
+  "merge.regate.gate_rework_routed": MergeReGateGateReworkRoutedPayload,
   // A transient/transport INFRA error blocked the batch check: bounded-retry then HOLD loud; no PR blamed.
   "merge.batch.infra_blocked": MergeBatchInfraBlockedPayload,
 

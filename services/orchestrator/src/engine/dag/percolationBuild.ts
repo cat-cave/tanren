@@ -32,6 +32,7 @@ import { orgScopingPool } from "../data/orgScopedDb.js";
 import { PgEventStore } from "../eventStore.js";
 import {
   type BaseShiftConflictResolver,
+  type BaseShiftGateReworkRouter,
   type BaseShiftPersistence,
   type BaseShiftReGate,
   type BaseShiftWorkspaceOpener,
@@ -40,6 +41,7 @@ import {
 import { PgBaseShiftEventEmitter, PgBaseShiftNodeReader, PgBaseShiftPersistence } from "./baseShiftCoordinatorPg.js";
 import {
   LiveBaseShiftConflictResolver,
+  LiveBaseShiftGateReworkRouter,
   LiveBaseShiftReGate,
   LiveBaseShiftWorkspaceProvider,
   type LiveBaseShiftDeps,
@@ -194,6 +196,7 @@ export function buildBaseShiftCoordinator(
     opener: seams.opener,
     reGate: seams.reGate,
     resolver: seams.resolver,
+    gateRework: seams.gateRework,
     persistence,
     nodes: new PgBaseShiftNodeReader(deps.pool),
     events: new PgBaseShiftEventEmitter(deps.pool, deps.runStateWriter),
@@ -238,6 +241,8 @@ interface BaseShiftSeams {
   opener: BaseShiftWorkspaceOpener;
   reGate: BaseShiftReGate;
   resolver: BaseShiftConflictResolver;
+  /** Routes a CLEAN-rebase GATE-tier re-gate failure to writer rework (not replan/escalate). */
+  gateRework: BaseShiftGateReworkRouter;
 }
 
 /**
@@ -267,6 +272,7 @@ function selectBaseShiftSeams(deps: BuildPercolationCoordinatorDeps): BaseShiftS
     opener: provider,
     reGate: new LiveBaseShiftReGate(liveDeps),
     resolver: new LiveBaseShiftConflictResolver(liveDeps),
+    gateRework: new LiveBaseShiftGateReworkRouter(liveDeps),
   };
 }
 

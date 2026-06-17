@@ -31,11 +31,17 @@ import type { GitHubHttpClient } from "../providers/github.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
 import {
   type BaseShiftConflictResolver,
+  type BaseShiftGateReworkRouter,
   type BaseShiftReGate,
   type BaseShiftWorkspaceOpener,
   type ConflictResolution,
-  type ReGateVerdict,
+  type ReGateResult,
 } from "./baseShiftCoordinator.js";
+import { SpecStatusGateReworkRouter } from "../workflow/reviewMerge/conflictResolver/gateReworkRouter.js";
+import {
+  buildPriorGateReworkReader,
+  buildReplanEnqueuer,
+} from "../workflow/reviewMerge/conflictResolver/replanEnqueuerPg.js";
 import type { AncestorStack } from "./ancestorStack.js";
 import { loadBaseShiftRunContext, type BaseShiftRunContext } from "./baseShiftLiveContext.js";
 import { openLiveBaseShiftWorkspace, type LiveBaseShiftWorkspaceCore } from "./baseShiftLiveRebase.js";
@@ -249,7 +255,7 @@ export class LiveBaseShiftReGate implements BaseShiftReGate {
     projectId: string;
     dependent: SpeculativeDependent;
     rebasedHeadSha: string;
-  }): Promise<ReGateVerdict> {
+  }): Promise<ReGateResult> {
     const ctx = await loadBaseShiftRunContext(this.deps.pool, input.dependent.runId);
     const result = await runFreshRunnerMergeGate(
       {
@@ -290,8 +296,56 @@ export class LiveBaseShiftReGate implements BaseShiftReGate {
     }
     // The fresh-runner gate is synchronous over SSH: it either passed every tier or a tier
     // failed — there is no async "pending". An inconclusive state would surface as a throw
-    // (mapped to HOLD by the coordinator), so a completed gate is `passed`/`failed`.
-    return result.outcome.passed ? "passed" : "failed";
+    // (mapped to HOLD by the coordinator), so a completed gate is `passed`/`failed`. A
+    // FAILURE is a GATE-TIER failure (the fresh-runner merge gate runs deterministic CI
+    // tiers only — no checker/auditor): the rebased tree is byte-clean, the code just fails
+    // a gate on the shifted base, which the WRITER can fix. Carry the failing tier/step/exit
+    // as steering (no_silent_fallback — never rework blind) so the coordinator routes it to
+    // writer rework rather than replan/escalate-as-irreconcilable.
+    if (result.outcome.passed) {
+      return { verdict: "passed" };
+    }
+    const failure = result.outcome.failure;
+    return {
+      verdict: "failed",
+      gateError: `base-shift re-gate failed at tier ${failure.tier}: step '${failure.failedStep}' (exit ${failure.exitCode ?? "unknown"})`,
+    };
+  }
+}
+
+/**
+ * The LIVE base-shift gate-rework router: routes a CLEAN-rebase GATE-tier re-gate failure to
+ * WRITER REWORK (the SAME never-discard re-author the conflict-resolver gate-rework path uses
+ * — `buildReplanEnqueuer` + the `SpecStatusGateReworkRouter`, escalation owned by the
+ * convergence detector at a fixed point). The coordinator's seam is per-call (the run/spec/org
+ * vary per shift), so this builds a fresh `SpecStatusGateReworkRouter` per routing from the
+ * shift's run context. NEVER `recordReplan` for a clean-rebase gate-fail; NEVER directly
+ * escalate (the detector decides, no count).
+ */
+export class LiveBaseShiftGateReworkRouter implements BaseShiftGateReworkRouter {
+  constructor(private readonly deps: LiveBaseShiftDeps) {}
+
+  async routeGateFailToRework(input: {
+    projectId: string;
+    specId: string;
+    runId: string;
+    gateError: string;
+  }): Promise<void> {
+    const ctx = await loadBaseShiftRunContext(this.deps.pool, input.runId);
+    const router = new SpecStatusGateReworkRouter({
+      pool: this.deps.scopedPool,
+      ...(this.deps.runStateWriter !== undefined && { runStateWriter: this.deps.runStateWriter }),
+      orgId: ctx.orgId,
+      eventStore: this.deps.eventStore,
+      runId: input.runId,
+      projectId: input.projectId,
+      // The base-shift dependent has no real PR handle (the rebase is over a runner-local
+      // workspace) — 0, like the resolver's own `prNumber: 0` for this path.
+      prNumber: 0,
+      enqueuer: buildReplanEnqueuer(this.deps.scopedPool, this.deps.runStateWriter),
+      priorReworks: buildPriorGateReworkReader(this.deps.scopedPool),
+    });
+    await router.routeGateFailToRework({ specId: input.specId, gateError: input.gateError });
   }
 }
 

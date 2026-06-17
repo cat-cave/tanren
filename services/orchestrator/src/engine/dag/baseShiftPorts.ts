@@ -13,6 +13,55 @@ import type { AncestorStack } from "./ancestorStack.js";
 export type RebaseDecision = "rebased_clean" | "rebased_resolved" | "replanned" | "held";
 
 /**
+ * A fail-closed HOLD: the rebase/resolver/gate could not settle. The work SURVIVES (the run
+ * row + branch are untouched) and is retried on the next notification — NEVER a silent merge,
+ * NEVER a silent discard.
+ */
+export class BaseShiftHeldError extends Error {
+  constructor(
+    readonly stage: "rebase" | "regate" | "resolve",
+    reason: string,
+  ) {
+    super(`base shift held at ${stage}: ${reason}`);
+    this.name = "BaseShiftHeldError";
+  }
+}
+
+/** The re-gate verdict over the rebased/resolved branch (the dependent's OWN deterministic gate). */
+export type ReGateVerdict = "passed" | "failed" | "pending";
+
+/**
+ * The re-gate result: the verdict plus — on `failed` — the failing tier/step/output, so a
+ * CLEAN-rebase gate failure can route to WRITER REWORK carrying the real gate error as
+ * steering (no_silent_fallback — never rework blind). A bare verdict string is still accepted
+ * by the coordinator (back-mapped to `{ verdict, gateError: undefined }`) for the conformance fakes.
+ */
+export interface ReGateResult {
+  verdict: ReGateVerdict;
+  /** The failing tier/step/output, present only when `verdict === "failed"`. */
+  gateError?: string;
+}
+
+/**
+ * Routes the dependent spec to WRITER REWORK when a CLEAN rebase's re-gate fails a GATE TIER
+ * (lint/test/build) on the shifted base — the rebase recorded NO conflict, the code simply
+ * fails a gate, which the writer can fix on the new base. The SAME never-discard re-author
+ * the conflict-resolver's gate-rework path uses (re-open + steering + a fresh run). DISTINCT
+ * from `recordReplan` (a genuine conflict / does-not-fit): a clean-rebase gate-fail is NOT a
+ * conflict and must NOT route to replan/escalate. Escalation is owned by the convergence
+ * detector (a fixed point, no count).
+ */
+export interface BaseShiftGateReworkRouter {
+  routeGateFailToRework(input: {
+    projectId: string;
+    specId: string;
+    runId: string;
+    /** The re-gate's failing tier/step/output — the steering the writer re-authors against. */
+    gateError: string;
+  }): Promise<void>;
+}
+
+/**
  * The KEEP-RUN-ROW persistence (never-discard). A base shift NEVER creates a run: it
  * re-points the EXISTING run's dynamic base, stamps the in-flight marker pointing at
  * THAT SAME run (so the existing settle pass advances `verified_ancestor_shas` once the
