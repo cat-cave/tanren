@@ -1,22 +1,27 @@
 // The SHARED ActivityWatchdog factory — the doctrine's wall-clock-kill replacement
 // (feedback_no_timeouts_progress_based, BINDING). Tanren has ZERO arbitrary
-// wall-clock kills: a process showing ANY sign of life is NEVER terminated, no
+// wall-clock kills: a process making genuine PROGRESS is NEVER terminated, no
 // matter the total elapsed time ("10 minutes is nothing to an AI agent"). Every
 // `ssh.run` call constructs its watchdog here — per CALL CLASS — instead of
 // hand-rolling one at ~30 sites.
 //
 // The watchdog's PRIMARY signal is the command's streamed output (the substrate
-// resets the activity clock on every stdout/stderr chunk — a `codex --json` line,
-// a build log line). For SILENT stretches a `livenessProbe` is consulted between
-// output: it asks the runner whether the work is still ALIVE (the workspace is
-// being touched / the runner is doing compute), and ANY positive answer resets the
-// clock and the work continues UNBOUNDED. The watchdog FIRES only on a GENUINE
-// absence of ALL signs of life — and even then SURFACES a recoverable stall (the
+// folds every stdout/stderr chunk into a WORK SIGNATURE — a `codex --json` line, a
+// build log line is new distinct content = progress). For SILENT stretches a
+// `livenessProbe` is consulted between output: it returns a SIGNATURE of the
+// remote work state (the newest workspace mtime — a build/jj writes files as it
+// advances). The substrate feeds the SEQUENCE of work signatures into the shared
+// convergence detector: a CHANGING signature (new output OR an advancing workspace)
+// is genuine progress → the work continues UNBOUNDED. The watchdog FIRES only when
+// the work signature is at a FIXED POINT (no new output AND no workspace advance
+// across successive checks) — which covers BOTH a dead/zombied/deadlocked process
+// AND a WEDGED-BUT-BUSY one (an infinite loop emitting byte-identical output, a
+// CPU-burn touching nothing) — and even then SURFACES a recoverable stall (the
 // caller re-drives) by default rather than destroying possibly-recoverable work.
 //
 // There is NO time budget here: `probeIntervalMs` is a poll CADENCE (how often to
-// consult the probe between output), never a deadline — it resets on every sign of
-// life and never accumulates toward a kill.
+// snapshot the work signature between output), never a deadline — the trigger is
+// signature IDENTITY (non-advancement), never an elapsed duration.
 import type { RunnerHandle } from "../contracts/allocator.js";
 import type { ActivityWatchdog, CommandSubstrate } from "../contracts/commandSubstrate.js";
 import { quoteSshShellArg } from "./command.js";
@@ -47,56 +52,48 @@ const PROBE_CONNECT_MS = 20_000;
 //     no probe; surfaces a stall rather than killing.
 export type WatchdogClass = "agent" | "vcs" | "infra";
 
-// What the liveness probe watches for a silent op: the WORKSPACE being touched (a
-// build/jj writes files as it works) is the most robust no-PID-tracking signal. The
-// probe stamps the newest mtime under the workspace each tick and reports "alive"
-// when it advanced since the previous tick — genuine progress. A first tick with no
-// prior baseline reads alive (give the work a tick to produce a signal). A
-// deadlocked/zombied process touches nothing: its mtime holds flat → "no life".
-interface WorkspaceLivenessState {
-  lastMaxMtime?: number;
-}
+// What the liveness probe reads for a silent op: a SIGNATURE of the WORKSPACE state (a
+// build/jj writes files as it works) is the most robust no-PID-tracking signal. Each tick
+// the probe reads the newest mtime under the workspace and RETURNS it as the work-state
+// signature string; the substrate compares the SEQUENCE for genuine advancement (a changing
+// mtime = forward motion, a flat mtime = no new work). A deadlocked/zombied process touches
+// nothing, so its mtime holds flat → an unchanging signature → eventually a fixed point.
 
 // Build the `livenessProbe` for a workspace-bound op: each tick runs a trivial
 // `find <ws> -printf '%T@\n' | sort | tail` over the substrate to read the newest
-// mtime under the workspace, and reports liveness when it advanced. The probe's own
+// mtime under the workspace and returns it as the work-state SIGNATURE. The probe's own
 // command runs under a short connect-establishment bound (PROBE_CONNECT_MS) so a
 // wedged side-channel can't stall the tick — a probe that cannot reach the runner
-// reads "no life" (and the watchdog surfaces a recoverable stall, never a silent
-// hang). Returns undefined when there is no workspace to watch (output-only class).
+// returns `undefined` (no signal; the substrate folds that into a non-advancing work
+// signature and surfaces a recoverable stall, never a silent hang). Returns undefined
+// when there is no workspace to watch (output-only class).
 function buildWorkspaceLivenessProbe(
   substrate: CommandSubstrate,
   target: RunnerHandle,
   workspace: string,
-): () => Promise<boolean> {
-  const state: WorkspaceLivenessState = {};
-  return async (): Promise<boolean> => {
+): () => Promise<string | undefined> {
+  return async (): Promise<string | undefined> => {
     // Newest mtime (epoch seconds, float) anywhere under the workspace. `-printf` is
     // GNU find (the runner image); the `2>/dev/null` swallows races where a file is
     // removed mid-walk (itself a sign of life). An empty read (workspace gone) yields
-    // no number → treated as no advance.
+    // no number → no signal.
     const ws = quoteSshShellArg(workspace);
     const result = await substrate.run(target, {
       command: `find ${ws} -printf '%T@\\n' 2>/dev/null | sort -n | tail -1`,
       connectTimeoutMs: PROBE_CONNECT_MS,
     });
     if (result.failure !== undefined || result.stalled === true || result.exitCode !== 0) {
-      // The probe could not reach the runner / the runner is wedged: NOT a liveness
-      // signal. Report no-life so the watchdog can surface a recoverable stall.
-      return false;
+      // The probe could not reach the runner / the runner is wedged: NO signal. Return
+      // undefined so the substrate treats it as a non-advancing work signature.
+      return undefined;
     }
     const maxMtime = Number.parseFloat(result.stdout.trim());
     if (!Number.isFinite(maxMtime)) {
-      return false;
+      return undefined;
     }
-    const prev = state.lastMaxMtime;
-    state.lastMaxMtime = maxMtime;
-    // First tick (no baseline yet) reads alive: give the work a cadence window to
-    // produce a touch before any verdict. After that, advance = genuine progress.
-    if (prev === undefined) {
-      return true;
-    }
-    return maxMtime > prev;
+    // The workspace signature IS the newest mtime: a strictly newer value across checks is
+    // an advancing workspace (genuine progress); an unchanged value is no new work.
+    return `ws:${maxMtime}`;
   };
 }
 

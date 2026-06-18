@@ -7,11 +7,13 @@ import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
 import { SshCommandSubstrate } from "../src/engine/ssh/index.js";
 
 // The ActivityWatchdog is the doctrine's progress-based replacement for the wall-clock
-// kill (feedback_no_timeouts_progress_based): a working process is NEVER killed regardless
-// of elapsed time; the watchdog fires ONLY on a genuine absence of ALL signs of life
-// (no output AND a negative livenessProbe), and SURFACES a recoverable stall by default.
-// These tests drive the real SshCommandSubstrate against a controllable fake ssh2 client
-// with fake timers so we control the probe ticks deterministically.
+// kill (feedback_no_timeouts_progress_based): a process making genuine PROGRESS is NEVER
+// killed regardless of elapsed time; the watchdog fires ONLY when the WORK SIGNATURE is at
+// a fixed point (no new output AND no workspace advance across successive checks — a wedge,
+// whether dead OR busy-but-not-advancing), and SURFACES a recoverable stall by default.
+// The `livenessProbe` returns the remote WORK SIGNATURE (the workspace mtime), `undefined`
+// when unreachable. These tests drive the real SshCommandSubstrate against a controllable
+// fake ssh2 client with fake timers so we control the probe ticks deterministically.
 
 const target: RunnerHandle = {
   backend: "ssh",
@@ -77,12 +79,17 @@ describe("SSH activity watchdog (progress-based hang detection)", () => {
     vi.useRealTimers();
   });
 
-  it("NEVER kills for elapsed time: a long-but-active op runs unbounded (no wall-clock kill)", async () => {
+  it("NEVER kills for elapsed time: a long-but-ADVANCING op runs unbounded (no wall-clock kill)", async () => {
     vi.useFakeTimers();
     const c = createControllableClient();
     const substrate = await makeSubstrate(c.client);
-    // A probe that always reports life — the work is alive, must never be killed.
-    const watchdog: ActivityWatchdog = { livenessProbe: () => Promise.resolve(true), probeIntervalMs: 1_000 };
+    // A probe whose workspace signature keeps ADVANCING (a build writing files) — genuine
+    // progress, must never be killed no matter the elapsed time.
+    let mtime = 1_000;
+    const watchdog: ActivityWatchdog = {
+      livenessProbe: () => Promise.resolve(`ws:${(mtime += 1)}`),
+      probeIntervalMs: 1_000,
+    };
 
     const runPromise = substrate.run(target, { command: "jj rebase", watchdog });
     // Advance FAR beyond any prior wall-clock budget — there is NO time-based kill now.
@@ -96,17 +103,21 @@ describe("SSH activity watchdog (progress-based hang detection)", () => {
     expect(c.state.destroyCount).toBe(0);
   });
 
-  it("RESETS on output: a streaming process is never killed while it emits (any signal)", async () => {
+  it("RESETS on new output: a streaming process is never killed while it emits NEW content", async () => {
     vi.useFakeTimers();
     const c = createControllableClient();
     const substrate = await makeSubstrate(c.client);
-    // A probe that reports NO life — but output alone must keep the watchdog reset.
-    const watchdog: ActivityWatchdog = { livenessProbe: () => Promise.resolve(false), probeIntervalMs: 1_000 };
+    // A probe whose workspace signature NEVER advances (a fixed mtime) — output alone, as long
+    // as it is genuinely NEW content, must keep the watchdog reset (the streaming-agent case).
+    const watchdog: ActivityWatchdog = {
+      livenessProbe: () => Promise.resolve("ws:1000"),
+      probeIntervalMs: 1_000,
+    };
 
     const runPromise = substrate.run(target, { command: "codex --json", watchdog });
     // Let exec/arm settle.
     await vi.advanceTimersByTimeAsync(0);
-    // Emit a token line every 500ms for several probe windows; each output is a sign of life.
+    // Emit a token line every 500ms for several probe windows; each is genuinely-new content.
     for (let i = 0; i < 10; i += 1) {
       c.emitStdout(`{"token":${i}}\n`);
       await vi.advanceTimersByTimeAsync(500);
@@ -120,22 +131,24 @@ describe("SSH activity watchdog (progress-based hang detection)", () => {
     expect(c.state.destroyCount).toBe(0);
   });
 
-  it("RESETS on a positive livenessProbe for a SILENT op (no output, but alive)", async () => {
+  it("RESETS on an ADVANCING workspace signature for a SILENT op (no output, workspace moving)", async () => {
     vi.useFakeTimers();
     const c = createControllableClient();
     const substrate = await makeSubstrate(c.client);
     let aliveChecks = 0;
+    let mtime = 1_000;
     const watchdog: ActivityWatchdog = {
-      // Silent op: alive for the first few probe windows, then completes.
+      // Silent op (a jj rebase) whose workspace keeps advancing (mtime climbs) — genuine
+      // progress with no output. Must never be flagged.
       livenessProbe: () => {
         aliveChecks += 1;
-        return Promise.resolve(true);
+        return Promise.resolve(`ws:${(mtime += 1)}`);
       },
       probeIntervalMs: 1_000,
     };
 
     const runPromise = substrate.run(target, { command: "jj rebase -r all()", watchdog });
-    // Five silent probe windows, all reporting alive.
+    // Five silent probe windows, the workspace advancing each time.
     await vi.advanceTimersByTimeAsync(5_000);
     c.emitClose(0);
     const result = await runPromise;
@@ -146,16 +159,18 @@ describe("SSH activity watchdog (progress-based hang detection)", () => {
     expect(c.state.destroyCount).toBe(0);
   });
 
-  it("SURFACES a recoverable stall on a genuine absence of all signals (default onQuiet)", async () => {
+  it("SURFACES a recoverable stall on a DEAD process: no output, probe unreachable (default onQuiet)", async () => {
     vi.useFakeTimers();
     const c = createControllableClient();
     const substrate = await makeSubstrate(c.client);
-    // No output AND the probe reports no life — a dead/zombied/deadlocked process.
-    const watchdog: ActivityWatchdog = { livenessProbe: () => Promise.resolve(false), probeIntervalMs: 1_000 };
+    // No output AND the probe reports NO signal (undefined = unreachable/gone) — a
+    // dead/zombied/deadlocked process. The work signature is fixed across checks.
+    const watchdog: ActivityWatchdog = { livenessProbe: () => Promise.resolve(), probeIntervalMs: 1_000 };
 
     const runPromise = substrate.run(target, { command: "jj rebase", watchdog });
-    // One probe tick → no output, no life → fire.
-    await vi.advanceTimersByTimeAsync(1_000);
+    // The work signature is established on the first check and proven non-advancing on the
+    // second — signature IDENTITY, not a duration → fire.
+    await vi.advanceTimersByTimeAsync(2_000);
     const result = await runPromise;
 
     expect(result.stalled).toBe(true);
@@ -165,18 +180,48 @@ describe("SSH activity watchdog (progress-based hang detection)", () => {
     expect(c.state.destroyCount).toBe(1);
   });
 
-  it("KILLS with an in-band failure when onQuiet is 'kill' and all signals are absent", async () => {
+  it("SURFACES a stall on a WEDGED-BUT-BUSY process: byte-identical output forever, workspace flat", async () => {
+    vi.useFakeTimers();
+    const c = createControllableClient();
+    const substrate = await makeSubstrate(c.client);
+    // The genuine-hang gap: the process is ALIVE (its probe reaches the runner, returns a
+    // signature) and BUSY (it keeps spewing output) — but it emits BYTE-IDENTICAL lines and
+    // its workspace mtime never advances. No NEW distinct work. The fixed-point read over the
+    // work signature must SURFACE a stall (it would otherwise run truly forever).
+    const watchdog: ActivityWatchdog = {
+      livenessProbe: () => Promise.resolve("ws:1000"),
+      probeIntervalMs: 1_000,
+    };
+
+    const runPromise = substrate.run(target, { command: "./infinite-loop.sh", watchdog });
+    await vi.advanceTimersByTimeAsync(0);
+    // Spew the SAME line continuously across many probe windows — alive + busy, zero progress.
+    // Without the work-signature backstop this would run TRULY FOREVER. Each chunk re-stamps
+    // lastActivityAt (so a bare liveness watchdog reads "alive"), but the output TAIL never
+    // changes and the workspace signature is flat → the work signature is a fixed point.
+    for (let i = 0; i < 12; i += 1) {
+      c.emitStdout("Retrying... still working\n");
+      await vi.advanceTimersByTimeAsync(1_000);
+    }
+    const result = await runPromise;
+
+    expect(result.stalled).toBe(true);
+    expect(result.failure).toBeUndefined();
+    expect(c.state.destroyCount).toBe(1);
+  });
+
+  it("KILLS with an in-band failure when onQuiet is 'kill' and the work signature is fixed", async () => {
     vi.useFakeTimers();
     const c = createControllableClient();
     const substrate = await makeSubstrate(c.client);
     const watchdog: ActivityWatchdog = {
-      livenessProbe: () => Promise.resolve(false),
+      livenessProbe: () => Promise.resolve(),
       probeIntervalMs: 1_000,
       onQuiet: "kill",
     };
 
     const runPromise = substrate.run(target, { command: "jj rebase", watchdog });
-    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.advanceTimersByTimeAsync(2_000);
     const result = await runPromise;
 
     expect(result.stalled).toBe(true);

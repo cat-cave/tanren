@@ -1,0 +1,165 @@
+import { describe, expect, it } from "vitest";
+import {
+  WORK_SIGNATURE_WINDOW,
+  appendWorkSignature,
+  distinctRecentOutput,
+  isWedgedNonAdvancing,
+  workSignature,
+} from "../src/engine/ssh/watchdogProgress.js";
+
+// The watchdog WORK-SIGNATURE progress backstop (feedback_no_timeouts_progress_based, BINDING):
+// the ActivityWatchdog's liveness signal correctly never kills working work, but on its own
+// cannot tell an ALIVE-AND-ADVANCING process from an ALIVE-BUT-WEDGED one (an infinite loop
+// spewing byte-identical output, a CPU-burn touching nothing). This layer feeds the SEQUENCE of
+// work signatures (output tail folded with the workspace signature) into the shared convergence
+// detector: a CHANGING signature = progress (continue UNBOUNDED), a FIXED POINT = a wedge
+// (surface a stall). The trigger is signature IDENTITY, never elapsed time.
+
+describe("workSignature — folds the output tail with the workspace signature", () => {
+  it("is STABLE for identical inputs and DISTINCT when either axis changes", () => {
+    expect(workSignature("out", "ws:1")).toBe(workSignature("out", "ws:1"));
+    // New output content → a different signature (a streaming process advancing).
+    expect(workSignature("out-a", "ws:1")).not.toBe(workSignature("out-b", "ws:1"));
+    // Advancing workspace → a different signature (a silent build writing files).
+    expect(workSignature("out", "ws:1")).not.toBe(workSignature("out", "ws:2"));
+  });
+
+  it("an UNREACHABLE workspace (undefined) is a fixed sentinel — new output alone still advances", () => {
+    // Two unreachable reads with the SAME output collapse to the SAME signature (the
+    // dead/zombied case: no new work). But NEW output with an unreachable workspace still
+    // advances the signature (a streaming process whose probe momentarily can't reach).
+    const unreachable: string | undefined = undefined;
+    expect(workSignature("same", unreachable)).toBe(workSignature("same", unreachable));
+    expect(workSignature("a", unreachable)).not.toBe(workSignature("b", unreachable));
+  });
+});
+
+describe("distinctRecentOutput — RATE-INDEPENDENT new-distinct-work over the output increment", () => {
+  it("fingerprints only the increment since priorLen and reports the new length", () => {
+    const out = distinctRecentOutput("aaa\nbbb", 4);
+    expect(out.content).toBe("bbb");
+    expect(out.length).toBe(7);
+  });
+
+  it("DEDUPS repeated lines so the rate of repetition does not matter (the wedge case)", () => {
+    // The SAME line 1 time and 1000 times collapse to the SAME distinct content.
+    const once = distinctRecentOutput("Retrying...\n", 0).content;
+    const flood = distinctRecentOutput("Retrying...\n".repeat(1000), 0).content;
+    expect(once).toBe(flood);
+  });
+
+  it("a NEW distinct line changes the content (genuine forward motion)", () => {
+    expect(distinctRecentOutput("a\nb\n", 0).content).not.toBe(distinctRecentOutput("a\nc\n", 0).content);
+  });
+
+  it("no new output (priorLen at end) yields empty content — relies on the workspace signal", () => {
+    expect(distinctRecentOutput("done", 4).content).toBe("");
+  });
+});
+
+describe("appendWorkSignature — bounded trailing history (a cycle window, NOT an attempt cap)", () => {
+  it("clamps to WORK_SIGNATURE_WINDOW, keeping the most recent signatures", () => {
+    let history: string[] = [];
+    for (let i = 0; i < WORK_SIGNATURE_WINDOW + 5; i += 1) {
+      history = appendWorkSignature(history, `s${i}`);
+    }
+    expect(history.length).toBe(WORK_SIGNATURE_WINDOW);
+    expect(history.at(-1)).toBe(`s${WORK_SIGNATURE_WINDOW + 4}`);
+  });
+});
+
+describe("isWedgedNonAdvancing — the progress verdict over the work-signature sequence", () => {
+  it("a single snapshot is NEVER wedged (nothing to compare → continue)", () => {
+    expect(isWedgedNonAdvancing([])).toBe(false);
+    expect(isWedgedNonAdvancing(["s1"])).toBe(false);
+  });
+
+  it("a streaming process emitting genuinely-NEW output is NEVER wedged (the common case)", () => {
+    const history: string[] = [];
+    let h: string[] = history;
+    // 200 ticks of distinct, advancing work signatures — never flagged regardless of length.
+    for (let i = 0; i < 200; i += 1) {
+      h = appendWorkSignature(h, workSignature(`token-${i}`, "ws:flat"));
+      expect(isWedgedNonAdvancing(h)).toBe(false);
+    }
+  });
+
+  it("a process advancing the WORKSPACE (mtime climbing) with no output is NEVER wedged", () => {
+    let h: string[] = [];
+    for (let i = 0; i < 200; i += 1) {
+      // No output (constant empty tail), but the workspace mtime climbs each tick → advancing.
+      h = appendWorkSignature(h, workSignature("", `ws:${1000 + i}`));
+      expect(isWedgedNonAdvancing(h)).toBe(false);
+    }
+  });
+
+  it("a WEDGED-BUT-BUSY process — BYTE-IDENTICAL output forever, workspace flat — SURFACES a wedge", () => {
+    let h: string[] = [];
+    // The same output line + the same workspace signature each tick = no NEW distinct work.
+    h = appendWorkSignature(h, workSignature("Retrying...\n", "ws:1000"));
+    // First snapshot: nothing to compare yet.
+    expect(isWedgedNonAdvancing(h)).toBe(false);
+    h = appendWorkSignature(h, workSignature("Retrying...\n", "ws:1000"));
+    // Proven non-advancing on the repeat.
+    expect(isWedgedNonAdvancing(h)).toBe(true);
+  });
+
+  it("a genuinely-DEAD process — no output, workspace unreachable — SURFACES a wedge", () => {
+    const unreachable: string | undefined = undefined;
+    let h: string[] = [];
+    h = appendWorkSignature(h, workSignature("", unreachable));
+    h = appendWorkSignature(h, workSignature("", unreachable));
+    expect(isWedgedNonAdvancing(h)).toBe(true);
+  });
+
+  it("advancement RESETS forever: any new distinct work after a stuck stretch is progress again", () => {
+    let h: string[] = [];
+    h = appendWorkSignature(h, workSignature("same\n", "ws:1"));
+    h = appendWorkSignature(h, workSignature("same\n", "ws:1"));
+    expect(isWedgedNonAdvancing(h)).toBe(true);
+    // Then the process produces NEW output → advancing again → not wedged.
+    h = appendWorkSignature(h, workSignature("NEW LINE\n", "ws:1"));
+    expect(isWedgedNonAdvancing(h)).toBe(false);
+  });
+});
+
+// A small deterministic PRNG so the properties are reproducible in CI (no flake).
+function makeRng(seed: number): () => number {
+  let state = Math.trunc(seed);
+  return () => {
+    state = Math.trunc(state * 1_664_525 + 1_013_904_223) % 0x100_000_000;
+    return Math.abs(state) / 0x100_000_000;
+  };
+}
+
+describe("PROPERTY: progress => never wedged; a fixed point => wedged (signature identity, not time)", () => {
+  it("ANY sequence of strictly-advancing work signatures is NEVER wedged, regardless of length", () => {
+    const rng = makeRng(12_345);
+    for (let trial = 0; trial < 500; trial += 1) {
+      const len = 2 + Math.floor(rng() * 30);
+      let h: string[] = [];
+      for (let i = 0; i < len; i += 1) {
+        // Every tick has genuinely-new output content: a distinct, advancing signature.
+        h = appendWorkSignature(h, workSignature(`work-${trial}-${i}-${rng()}`, `ws:${i}`));
+      }
+      expect(isWedgedNonAdvancing(h)).toBe(false);
+    }
+  });
+
+  it("ANY sequence ending in the SAME repeated signature with no advance since SURFACES a wedge", () => {
+    const rng = makeRng(98_765);
+    for (let trial = 0; trial < 500; trial += 1) {
+      // Some genuine progress first, then a wedge.
+      const lead = Math.floor(rng() * 5);
+      let h: string[] = [];
+      for (let i = 0; i < lead; i += 1) {
+        h = appendWorkSignature(h, workSignature(`lead-${trial}-${i}`, `ws:${i}`));
+      }
+      // Then the SAME byte-identical signature twice (a wedge sets in, no new work).
+      const stuck = workSignature(`stuck-${trial}`, "ws:stuck");
+      h = appendWorkSignature(h, stuck);
+      h = appendWorkSignature(h, stuck);
+      expect(isWedgedNonAdvancing(h)).toBe(true);
+    }
+  });
+});
