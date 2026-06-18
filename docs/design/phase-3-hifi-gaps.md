@@ -2,10 +2,17 @@
 
 This is the current hi-fi ↔ implementation gap audit (the doc CLAUDE.md points
 to): an evidence-grounded audit of the locally-installed hi-fidelity design
-bundle (`tanren-hi-fidelity/`) against the codebase on `main`. It is the single
-home for vision-delta tracking; the earlier running-log of vision changes has
-been folded in (its "open" deltas were all already applied to the hi-fi — see the
-chat3 transcript).
+bundle (`tanren-hi-fidelity/`) — the hand-done **reference for Tanren's own
+dashboard** — against the codebase on `main`. It is the single home for
+vision-delta tracking; the earlier running-log of vision changes has been folded in
+(its "open" deltas were all already applied to the hi-fi — see the chat3
+transcript).
+
+> **Scope:** this audits the hi-fi bundle vs. the built dashboard. It is **not**
+> about the native design subsystem (how Tanren designs the apps it _builds_) —
+> that is built and lives in `docs/roadmap/native-design-subsystem.md`. The two are
+> separate design pipelines; do not read a "design" gap here as a gap in that
+> subsystem.
 
 It contains two sets:
 
