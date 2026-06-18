@@ -43,6 +43,48 @@ stable opaque strings.
 | `spec_milestones`   | spec → milestone join                              | composite PK plus `UNIQUE (spec_id)` enforcing one-milestone-per-spec                                                   |
 | `spec_dependencies` | directed edges with no self-loop                   | composite PK, `from <> to` CHECK; cycle detection in application code                                                   |
 
+## Design Contract — the design-intent layer over the graph
+
+The **`DesignContract`** (`design_contracts` table, `db/src/schemaDesign.ts`;
+schema `services/orchestrator/src/engine/design/designContract.ts`) is the
+first-class, **versioned**, org-scoped, project-anchored design-intent entity that
+sits over the Persona → Behavior graph. It is the durable design artifact the build
+loop authors, injects into the writer, and verifies with a design oracle (the
+no-handoff moat — see `autonomy-engine.md` §1e). It supersedes the decorative
+80-char `designDna` interview hint, which never reached the writer.
+
+It is **domain-general by construction** — Tanren builds anything, so the contract
+shape adapts to the project domain rather than encoding a web design system:
+
+- a universal **core** every domain shares: `identity` (the one-line design
+  identity), `intent` (the north-star vision the writer builds toward and the oracle
+  verifies against), `principles`, and `constraints`;
+- a descriptive **`domain`** label ("saas-web", "mobile-game", "novel-translation")
+  Tanren never branches on (the same posture as the lifecycle's `stack` label),
+  mirrored into its own column for filtering without parsing the jsonb;
+- a domain-declared **`dimensions`** set whose membership the project/domain chooses
+  (a SaaS app's `tokens/components/layout`; a game's `art-direction/ui/game-feel`; a
+  novel's `typography/voice/cover`) — each dimension carries its own `intent` and
+  optional persona scoping; and
+- **the moat — first-class links into this entity graph**: `personaRefs` and
+  `behaviorRefs` bind the contract to the project's _actual_ `personas` and
+  `behaviors` rows. Design is resolved **per-persona** (no "assume default admin"),
+  and the bound behaviors are **design acceptance criteria** the design agent must
+  cover and the oracle verifies coverage of — one entity graph, no
+  designer↔implementor disconnect.
+
+| Table              | Purpose                                     | Key constraints                                                                                     |
+| ------------------ | ------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `design_contracts` | versioned, org-scoped project design intent | `UNIQUE (project_id, version)`, `version >= 1` CHECK; `contract` jsonb NOT NULL with **no default** |
+
+A design change **mints the next version** (the store computes `max+1`; never
+overwrites — the never-discard posture), and the build reads `getLatest`. The
+`contract` column is NOT-NULL with **no default**: a `DesignContractV1` has no
+empty-but-valid shape (`version` / `domain` / `identity` / `intent` are required),
+so a `{}`-defaulted insert would poison reads with a loud parse throw. Every row is
+re-parsed through `DesignContractV1` on read — a malformed/legacy-shaped contract
+fails loudly (no silent degrade), exactly like the template-manifest parser.
+
 ## Visibility rules
 
 - **Persona reads.** Org-scoped personas are visible to any actor with

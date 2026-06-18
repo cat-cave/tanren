@@ -1,9 +1,26 @@
 # Environment management — toolchains as project-declared, never platform-baked
 
-**Status: design, pending sign-off. Not yet built.** This doc defines how Tanren
-provisions the **toolchain/runtime environment** a project builds in. It is the
-environment-layer counterpart to the command-layer stack-agnosticism Tanren already
-has, and it closes the gap apex-v33 surfaced.
+> **Status: BUILT — the phased plan (§7 P0–P6) is landed on `main`.** This doc was
+> the design that gated the build; the build is now done and the model below is the
+> as-built record. Verified on `main`: the neutral runner + `mise` (P0 —
+> `runner/Dockerfile` bakes NO project toolchain, only the harness; node 24 LTS for
+> the harness itself); the `upgrade` verb + version-change-as-DAG-node generator (P1
+> — `engine/ci/schema.ts` `upgrade.run`, `engine/forge/upgrade/generator.ts`, the
+> `handleProjectUpgrade` route); the golden-image content-digest `base_digest` +
+> `env_key` (P2/P3 — `engine/environments/goldenBase.ts` + `envKey.ts`,
+> `scripts/dev/build-golden-image.sh`); the `environments` registry table/store +
+> per-project resolution (P3 — `db/src/schemaEnvironments.ts`,
+> `engine/environments/resolveProjectEnv.ts`); JIT environment creation + validation
+> with positive + negative controls (P4 — `engine/environments/creation/**`); the
+> Nix escape-hatch references (P5); and the code-template ↔ environment pairing (P6).
+> The remaining open item is the same as the rest of the engine: the live paths are
+> not yet exercised end-to-end by an apex run that reaches a deploy. The §8
+> "decisions to confirm" are resolved as built (mise primary + Nix escape hatch;
+> `upgrade` required; self-hosted registry; per-project binding).
+
+This doc defines how Tanren provisions the **toolchain/runtime environment** a
+project builds in. It is the environment-layer counterpart to the command-layer
+stack-agnosticism Tanren already has, and it closed the gap apex-v33 surfaced.
 
 ## 1. The gap (why this exists)
 
@@ -15,13 +32,13 @@ and a project-declared test-report path — "Tanren names no tech stack itself"
 `stack` _label_). Tanren never parses those commands; a Rust project's `cargo clippy`
 and a TS project's `pnpm lint` are identical from the engine's view.
 
-But the **runner _image_ is stack-_specific_**. `runner/Dockerfile` bakes one
-project toolchain — `nodejs` + `npm install -g pnpm@10` + `corepack` — alongside
-Tanren's own harness (jj, just, codex). It is referenced as a single hardcoded
-default `ghcr.io/cat-cave/tanren-runner:v0` (`workflow/projectSpec.ts:23`,
-`config/shared.ts:94`); the `projects.runner_image` per-project override exists but
-**nothing populates it**. So the contract invites any stack, while the runner can
-only satisfy node/pnpm.
+The gap this doc closed: the **runner _image_ used to be stack-_specific_**.
+`runner/Dockerfile` baked one project toolchain — `nodejs` + `npm install -g
+pnpm@10` + `corepack` — alongside Tanren's own harness (jj, just, codex), and the
+`projects.runner_image` per-project override existed but nothing populated it. So
+the contract invited any stack while the runner could only satisfy node/pnpm. That
+is fixed (see the status header): the runner now bakes only the harness + `mise`,
+and the project provisions its own declared toolchain at runtime.
 
 apex-v33 hit this concretely: a ts/pnpm scaffold's `just bootstrap`
 (`corepack enable pnpm && pnpm install`) failed because `corepack enable` can't write
@@ -292,9 +309,12 @@ capability-keyed selection + negative-control publish gate.
 Constraint preserved: `.tanren/ci.yml` stays a **deterministic skeleton** (never
 LLM-authored); only the `justfile` + the new `mise.toml`/`flake.nix` are lifecycle-filled.
 
-## 7. Phased build plan (multi-PR)
+## 7. Phased build plan (multi-PR) — as built
 
-- **P0 — Neutral runner + mise (unblocks apex).** Strip the project toolchain from
+All phases below **landed** (see the status header for the per-phase code anchors);
+the plan is retained as the as-built sequence and rationale.
+
+- **P0 — Neutral runner + mise (unblocked apex).** Strip the project toolchain from
   `runner/Dockerfile`; add `mise` + a warm common baseline; keep the harness. Scaffold
   materializes a `mise.toml` from the lifecycle; bootstrap becomes `mise install &&
 <project install>` in user space (kills the corepack/`/usr/bin` EACCES). _This alone

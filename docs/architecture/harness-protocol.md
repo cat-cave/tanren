@@ -92,7 +92,6 @@ protocol guarantees:
 | `workspace?`   | `answer` | Optional read-only context dir for the reasoning task      |
 | `role`         | both     | The protocol role (`write` / `answer`) being requested     |
 | `outputSchema` | `answer` | The structured-output schema (name + JSON Schema + parser) |
-| `timeoutMs`    | both     | Hard wall-clock budget for the invocation                  |
 | `model?`       | both     | Optional model id pin (else the harness default)           |
 | `authRef`      | both     | Credential reference the harness materializes at call time |
 
@@ -105,6 +104,15 @@ with `parse`.
 
 A `write` task is delivered to a read-write workspace; an `answer` task runs
 read-only against its optional context workspace and never produces a diff.
+
+There is **no `timeoutMs` / hard wall-clock budget** on the invocation. A harness
+run is bounded by an output-driven **`ActivityWatchdog`** (`engine/ssh/`), which
+surfaces a recoverable stall only on a genuine **absence of all signs of life** —
+no progress, not mere slowness. A long-but-advancing agent run is never killed
+(see §5 `timeout`). This is the same progress-based, no-counter, no-deadline model
+the autonomy engine uses everywhere (`autonomy-engine.md` §1c.1); a CI lint
+(`scripts/check-architecture-timeouts.mjs`) forbids reintroducing a wall-clock
+invocation budget.
 
 ## 4. Results OUT
 
@@ -173,13 +181,20 @@ stream as a first-class protocol output is a candidate for a later version.)
 `exitReason` is the single classification the orchestrator routes on for the
 `write` role; the `answer` role raises the analogous typed errors.
 
-| `exitReason`       | Meaning                                                          | Orchestrator treatment      |
-| ------------------ | ---------------------------------------------------------------- | --------------------------- |
-| `completed`        | The task ran to completion                                       | Use the result              |
-| `timeout`          | The `timeoutMs` budget was exceeded                              | Recoverable / retriable     |
-| `crashed`          | Non-zero exit, transport failure, or unparseable output          | Hard failure                |
-| `token_limit`      | The model's context/output token limit was hit mid-task          | Recoverable                 |
-| `window_exhausted` | Authenticated but the subscription window / usage quota is spent | Escalate as window pressure |
+| `exitReason`       | Meaning                                                             | Orchestrator treatment      |
+| ------------------ | ------------------------------------------------------------------- | --------------------------- |
+| `completed`        | The task ran to completion                                          | Use the result              |
+| `timeout`          | The activity watchdog surfaced a no-sign-of-life stall (not a kill) | Recoverable / retriable     |
+| `crashed`          | Non-zero exit, transport failure, or unparseable output             | Hard failure                |
+| `token_limit`      | The model's context/output token limit was hit mid-task             | Recoverable                 |
+| `window_exhausted` | Authenticated but the subscription window / usage quota is spent    | Escalate as window pressure |
+
+The `timeout` exitReason keeps its name as the **durable workflow/event
+classification** for "the run did not complete," but it is no longer a wall-clock
+kill: it is raised when the output-driven activity watchdog observes a genuine
+absence of all signs of life (the substrate-level no-progress flag is
+`CommandResult.stalled`). It is recoverable — the run re-drives, never discarding
+work — per the progress-based model in `autonomy-engine.md` §1c.
 
 `window_exhausted` is **distinct from `crashed`**: the harness authenticated
 successfully but the account is out of quota (PROJECT_BRIEF §4.3). A harness
