@@ -268,6 +268,79 @@ dimension** — the deployed product is no longer judged on behavior alone, but 
 design fidelity against its own contract. This is a gated future requirement, not
 a current gate (WS-D8).
 
+## v37 e2e readiness — the design loop is wired + closes (verdict: READY for scoped exercise)
+
+**Verdict: READY for a scoped exercise on apex v37.** WS-D1..D4 are merged and the
+full loop **closes end-to-end** with no live LLM, proven by a durable, CI-gated eval
+harness (`services/orchestrator/tests/designLoopE2E.test.ts`). The harness drives the
+WHOLE loop over **one stateful in-memory entity graph**, so the contract literally
+flows through the persistence seam — the design **phase**'s `DesignContractStore.create`
+persists the version that the **writer-context** and the **oracle** then read via
+`getLatest` (not three disconnected fakes handed pre-baked rows). The only fakes are the
+two LLM seams (the design **agent** and the oracle **answerer**), which return canned
+`DesignAgentAnswer` / `DesignOracleAnswer`.
+
+**What WORKS end-to-end (proven by the harness, no live run):**
+
+- **Authoring → persistence.** `runDesignPhase` (WS-D3) elaborates the captured
+  design-intent seed into a versioned `DesignContract` covering the **full** behavior
+  set (exhaustive-coverage assertion — a dropped behavior throws, never a silently
+  incomplete contract; a dangling persona/behavior/dimension ref throws). The contract
+  lands as HEAD version 1 and round-trips back through the schema.
+- **Injection (the no-handoff half).** `resolveDesignContext` / `renderDesignContractBlock`
+  / `loadDesignContextBlock` (WS-D2) load the SAME head contract and render a writer
+  block carrying the contract identity / intent / domain, the **resolved personas by
+  NAME** (the no-"assume admin" moat), the **behavior acceptance-criteria** (given/when/
+  then), and every domain-derived, persona-scoped **dimension**.
+- **Verification → re-drive currency.** `runDesignOracleStage` / `runDesignOracleLoopStage`
+  (WS-D4) read the SAME head contract, **strictly resolve** its refs (an unresolvable ref
+  throws — malformed graph state), drive the answerer, and normalize a coverage gap + a
+  fidelity finding into the **frozen `Finding`** currency (P0–P3 + stable id, `fixHint:null`
+  → absent key) — the SAME triage input as auditor/demo findings, so a genuine fidelity
+  gap re-drives the writer like any other gate finding. (The live loop wiring is separately
+  covered by `designOracleWiring.test.ts`: a `designOracle` task + verdict event, findings
+  reaching triage, and clean no-op when no contract / no design actor.)
+- **Re-elaboration gap (#619).** A behavior added AFTER derive surfaces a loud **P2**
+  finding (`design-re-elaboration:<project>:<behavior>`); the already-designed behaviors
+  are not double-flagged.
+- **No-op paths are clean, not silently wrong.** No-contract → `hasContract: false`,
+  empty findings, the oracle answerer is **never invoked**, and the writer loader yields
+  `undefined` (the writer simply gets no design block). An `unscopedPlatform` (no-org)
+  run yields no writer block **even when a contract exists** — it never reads off the
+  wrong scope.
+
+**What is SCOPED OUT for v37 (accepted, the follow-on):**
+
+- **True VISUAL fidelity → WS-D4a live-render.** The oracle is **static** (read-only
+  sandbox): it verifies behavior-**coverage** + static / source-readable fidelity
+  (tokens / principles present in the code), and emits `design-not-verifiable` (info) for
+  genuine visual fidelity (rendered pixels / screenshots). That needs the unbuilt
+  **WS-D4a live-render** path and is **accepted as out-of-scope for v37**. v37 exercises
+  design fidelity at the **contract-coverage + static-readability** bar, not the
+  rendered-pixel bar.
+- **Automatic re-elaboration trigger.** Re-running the design phase to mint a new
+  contract version on a behavior-graph change is the durable follow-up; v37 ships the
+  **loud-gap detection** (#619) floor, which surfaces + re-drives the gap, not the
+  silent auto-re-author.
+
+**Exact preconditions for v37 to exercise design meaningfully:**
+
+1. **Capture a COMPLETE persona/behavior set up front.** The design phase runs **once at
+   derive**, so its `behaviorRefs` are the derive-time behavior set. Behaviors added later
+   are surfaced as P2 re-elaboration findings (not auto-covered) — so a thin up-front
+   capture means most design surfaces start as gaps. Capture the real persona + behavior
+   set in the interview before derive.
+2. **The run must carry `context.orgId`.** `designOracleSeam` (`plannerRunSeams.ts`)
+   only wires the oracle when the run has an org — a no-org run silently **skips** design
+   verification (it cannot resolve the entity graph). Confirm apex runs carry `orgId`
+   (they do: apex runs are org-scoped). Same scope gate governs the writer-injection side
+   (`loadDesignContextBlock` returns `undefined` for `unscopedPlatform`).
+3. **A real `DesignContract` MUST be captured, or derive fails loud.** Greenfield derive
+   requires the design step to capture a contract; an absent one is a loud
+   `MissingDesignContractError` (#600), never a silent no-op that would disable the whole
+   subsystem. A genuinely design-light project still declares an explicit minimal
+   contract. So v37's intake must capture a design contract (even a minimal one).
+
 ## Actionable workstreams (the landable plan)
 
 Ordered, each a CI-gated PR-sized unit. Dependencies noted.
