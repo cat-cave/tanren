@@ -1,9 +1,13 @@
 # Architecture Notes
 
 This directory documents the **shipped** architecture of Tanren — the durable
-seams and the substrate behind them. Phases 0–3 and the autonomy engine
-(Phases 1 + 2) are built and merged; these notes describe the system as it runs
-on `main`, not a plan. For the phase history and the forward roadmap, see
+seams and the substrate behind them. Phases 0–2 and the autonomy engine
+(Phases 1 + 2) are built and merged, and the jj/`MergeAuthority`/`CodeHost`
+cutover, the design subsystem, and environment management are all on `main`; these
+notes describe the system as it runs on `main`, not a plan. **Phase 3 (`apex`) is
+not yet closed** — no apex run has yet driven rough notes → merged PRs → a deployed
+product end-to-end (see `autonomy-engine.md` §3 for the honest proof state). For
+the phase history and the forward roadmap, see
 [`ROADMAP.md`](../../ROADMAP.md); for the durable vision and invariants, see
 [`PROJECT_BRIEF.md`](../../PROJECT_BRIEF.md).
 
@@ -88,7 +92,8 @@ an ancestor lands, rather than superseding-and-regenerating it.
 - [`insights.md`](./insights.md) — typed operator-facing workflow insights and
   the DORA / queue / CI analytics families.
 - [`product-entities.md`](./product-entities.md) — the Persona → Behavior → Spec
-  product model with milestones and DAG dependency edges.
+  product model with milestones and DAG dependency edges, plus the versioned
+  `DesignContract` design-intent entity layered over it.
 - [`portability-and-longevity.md`](./portability-and-longevity.md) — the
   contracts-as-durable-asset north star (JSON-Schema export, conformance suites,
   mutation testing) and the OSS↔hosting billing seam (budget gate +
