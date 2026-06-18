@@ -5,6 +5,7 @@
 import type { Finding } from "../contracts/findings.js";
 import {
   type CandidateSpec,
+  type SpecAudience,
   validateEmittedSpecs,
   type ValidateEmittedSpecsInput,
 } from "../forge/specQuality/index.js";
@@ -93,14 +94,26 @@ export function gateFindings(gate: Extract<GateOutcome, { passed: false }>): Fin
 // persistently-invalid spec raises `PersistentlyInvalidSpecError` (the loud
 // needs_attention surface) — never a silent commit into the DAG. Absent ⇒ the gate is
 // inert (unit/test paths that do not wire a provider validator).
-export type TriageSpecValidator = Pick<ValidateEmittedSpecsInput, "validator" | "reviseSpec">;
+export type TriageSpecValidator = Pick<ValidateEmittedSpecsInput, "validator" | "reviseSpec"> & {
+  // The LEGIBILITY audience the triaged specs are judged against (specQuality
+  // `SpecAudience`). A TEMPLATE-CREATION build sets `technical` so its internal
+  // (scaffold / gate / mutation / manifest) specs are NOT rejected for legitimate
+  // domain vocabulary. Absent ⇒ `product` (the strict bar for a normal product).
+  audience?: SpecAudience;
+};
 
 // Map one triaged `kind: spec` work item onto the validator's `CandidateSpec` shape.
 // The item carries no separate acceptance criteria (the body is the authored unit),
 // so the contract judges title + body; criteria are left empty for the validator to
-// flag if the unit is not demonstrable.
-function triagedSpecToCandidate(routed: RoutedWorkItem): CandidateSpec {
-  return { title: routed.item.title, description: routed.item.body, acceptanceCriteria: [] };
+// flag if the unit is not demonstrable. `audience` scopes the LEGIBILITY bar (a
+// template-build's technical specs vs. a product spec).
+function triagedSpecToCandidate(routed: RoutedWorkItem, audience: SpecAudience | undefined): CandidateSpec {
+  return {
+    title: routed.item.title,
+    description: routed.item.body,
+    acceptanceCriteria: [],
+    ...(audience !== undefined && { audience }),
+  };
 }
 
 /**
@@ -115,7 +128,7 @@ export async function gateTriagedSpecs(
 ): Promise<void> {
   if (gate === undefined || newSpecs.length === 0) return;
   await validateEmittedSpecs({
-    specs: newSpecs.map((routed) => triagedSpecToCandidate(routed)),
+    specs: newSpecs.map((routed) => triagedSpecToCandidate(routed, gate.audience)),
     validator: gate.validator,
     ...(gate.reviseSpec !== undefined && { reviseSpec: gate.reviseSpec }),
   });

@@ -260,6 +260,12 @@ export async function loadRunExecutionContext(
     // the frozen, lockfile-safe default so an existing committed lockfile is never
     // silently mutated. Legacy rows parse to `false` (brownfield) — main's behavior.
     greenfield: projectConfig.greenfield,
+    // TEMPLATE-BUILD MARKER from the resolved project config. A template-creation
+    // build's INTERNAL specs are technical (scaffold / gates / mutation / manifest),
+    // so the spec-quality gate judges their LEGIBILITY on the `technical` bar — never
+    // rejecting legitimate domain vocabulary as "not plain product language" (the
+    // category error that stranded the v38 template DAG). False = a normal product.
+    templateBuild: projectConfig.templateBuild,
     // cost PR-C: the CONFIGURED per-credential credit→USD rate (absent ⇒ no rate
     // configured for this credential's kind; a real drawdown then lands NULL-and-loud).
     ...(creditRate.usdPerCredit !== null && { creditUsdRate: creditRate.usdPerCredit }),

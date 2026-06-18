@@ -39,7 +39,7 @@ import { wrapProviderDiscoveryAnswerer, type DiscoveryAnswerer, type DiscoveryRe
 import { wrapProviderTriageAnswerer, type TriageAnswerer, type CandidateTriage } from "./inbox/index.js";
 import { wrapProviderReconAnswerer, type ReconAnswerer, type ReconReport } from "./brownfield/index.js";
 import { wrapProviderSpecQualityAnswerer, type SpecQualityAnswerer } from "./specQuality/index.js";
-import type { SpecQualityAnswer } from "../answerers/schemas/specQuality.js";
+import type { SpecQualityAnswer, SpecRevisionAnswer } from "../answerers/schemas/specQuality.js";
 import { wrapProviderAuditAnswerer, type AuditAnswerer, type AuditPassReport } from "./audits/index.js";
 import {
   wrapProviderAnswerer,
@@ -272,7 +272,14 @@ export function buildForgeTriageAnswererFactory(
 export function buildForgeSpecQualityAnswererFactory(
   infra: ForgeAnswererInfra,
 ): (target: ForgeAnswererTarget) => SpecQualityAnswerer {
-  return (target) => wrapProviderSpecQualityAnswerer(forgeAllocatingAnswererAdapter<SpecQualityAnswer>(infra, target));
+  return (target) =>
+    wrapProviderSpecQualityAnswerer(
+      forgeAllocatingAnswererAdapter<SpecQualityAnswer>(infra, target),
+      // The built-in re-author runs over the SAME forge routing (a second per-call
+      // allocation) so the gate genuinely re-authors a failing spec from its guidance
+      // before any escalation — never a give-up "after 0 revision(s)".
+      forgeAllocatingAnswererAdapter<SpecRevisionAnswer>(infra, target),
+    );
 }
 
 /** Build a production brownfield-recon answerer factory (project/org-scoped). */

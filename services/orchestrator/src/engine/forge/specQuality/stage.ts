@@ -126,15 +126,37 @@ async function atRejectionFixedPoint(
   return decision.decision === "escalate";
 }
 
-// Validate one candidate spec, looping back to the emitter UNBOUNDED while the
+// Resolve the effective re-author callback. The emitter's own `reviseSpec` takes
+// precedence (it re-triages / re-classifies in the emitter's own terms). When NONE
+// is wired, fall back to the validator's BUILT-IN re-author (`reAuthor`) so the gate
+// STILL genuinely attempts guided re-authoring before any escalation — this is the
+// fix for the "escalated after 0 revision(s)" strand: a failing spec is re-authored
+// from the validator's guidance, never abandoned on the first rejection. Returns
+// `undefined` only when there is literally NO way to re-author (no emitter callback
+// AND a validate-only fake with no `reAuthor`) — the genuine strict-gate case.
+function resolveReviseSpec(
+  validator: SpecQualityAnswerer,
+  emitterRevise: ReviseSpec | undefined,
+): ReviseSpec | undefined {
+  if (emitterRevise !== undefined) return emitterRevise;
+  const reAuthor = validator.reAuthor?.bind(validator);
+  if (reAuthor === undefined) return undefined;
+  return ({ spec, guidance }) => reAuthor(spec, guidance);
+}
+
+// Validate one candidate spec, looping back to the re-author UNBOUNDED while the
 // validator verdict is IMPROVING (progress), escalating only at a genuine
-// non-convergence fixed point. Fail-closed: a thrown validator/emitter call
+// non-convergence fixed point. Fail-closed: a thrown validator/re-author call
 // escalates as `PersistentlyInvalidSpecError`, never a silent accept.
 async function validateOne(
   spec: CandidateSpec,
   validator: SpecQualityAnswerer,
-  reviseSpec: ReviseSpec | undefined,
+  emitterRevise: ReviseSpec | undefined,
 ): Promise<ValidatedSpec> {
+  // The emitter's callback, else the validator's built-in re-author — so a failing
+  // spec is genuinely re-authored before escalation (never given up "after 0
+  // revision(s)"). `undefined` only when neither exists (the genuine strict gate).
+  const reviseSpec = resolveReviseSpec(validator, emitterRevise);
   let current = spec;
   let lastAnswer: SpecQualityAnswer | undefined;
   // The oldest→newest rejection signatures the convergence detector reasons over.
@@ -154,14 +176,17 @@ async function validateOne(
     if (answer.overall === "pass") {
       return { spec: current, answer, revisions: round };
     }
-    // Failed. Without an emitter re-author callback there is no loopback — escalate
-    // loud immediately (the strict-gate case).
+    // Failed with NO way to re-author at all (no emitter callback AND no built-in
+    // re-author) — escalate loud immediately (the genuine strict-gate case).
     if (reviseSpec === undefined) {
       throw new PersistentlyInvalidSpecError(current, answer, round);
     }
     // Record this rejection and ask the shared detector whether the re-author loop is
     // CONVERGING (a changed/shrinking failing set → keep revising) or at a genuine
-    // FIXED POINT (the identical failing set with no progress → escalate loud).
+    // FIXED POINT (the identical failing set with no progress → escalate loud). A
+    // single rejection (history length 1) is `first` → CONTINUE, so the loop ALWAYS
+    // re-authors at least once before it can escalate — non-convergence needs ≥2 data
+    // points to detect, so escalation is never possible "after 0 revision(s)".
     history.push(toAttemptSignature(answer));
     if (await atRejectionFixedPoint(history, current.title, answer)) {
       throw new PersistentlyInvalidSpecError(current, answer, round);

@@ -10,11 +10,17 @@ export {
   SPEC_QUALITY_ANSWER_SCHEMA_ID,
   SPEC_QUALITY_CONTRACT_PROMPT,
   SPEC_QUALITY_OUTPUT_INSTRUCTIONS,
+  SPEC_REVISION_ANSWER_SCHEMA_ID,
+  SPEC_REVISION_OUTPUT_INSTRUCTIONS,
+  type SpecAudience,
   SpecQualityAnswer,
+  specQualityContractPrompt,
+  SpecRevisionAnswer,
 } from "../../answerers/schemas/specQuality.js";
 
 export {
   buildSpecQualityPrompt,
+  buildSpecRevisionPrompt,
   wrapProviderSpecQualityAnswerer,
   type CandidateSpec,
   type SpecQualityAnswerer,
