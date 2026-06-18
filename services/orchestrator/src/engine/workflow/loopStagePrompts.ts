@@ -71,6 +71,11 @@ export interface ConvergencePromptInput {
   priorFindings: ReadonlyArray<Finding>;
   baselineSha: string;
   loopIndex: number;
+  // The stable blocking-root-cause ids the answerer assigned on EARLIER loops, oldest→newest
+  // (excluding this loop). The answerer reuses the SAME id when the same underlying blocker
+  // recurs (even reworded) so a return to a previously-seen root cause reads as an
+  // OSCILLATION, not progress. Empty on the first convergence check.
+  priorBlockingRootCauseIds: ReadonlyArray<string>;
 }
 
 // The CONVERGENCE prompt: decide progress vs stall vs velocity-defer from the
@@ -98,6 +103,26 @@ export function buildConvergencePrompt(input: ConvergencePromptInput): string {
     "blocker is recognized as recurring across loops. If the prior loop's worst finding",
     "shares this root cause, it IS the same blocker even if the wording/line changed.",
     'If there is NO blocking finding this loop, set `blockingRootCauseId` to "".',
+    "",
+    // OSCILLATION (v40 scaffold finding): a loop that retires blocker A, then a NEW",
+    // blocker B appears, then A RETURNS is NOT making progress — it is OSCILLATING
+    // between the same unresolved root causes (A↔B), even if each individual loop
+    // 'retired the old one'. The answerer must recognize a RETURN to a previously-seen
+    // root cause as a STALL, not progress. Two levers, BOTH mandatory:
+    //   (1) STABLE ids: reuse the SAME id for the same underlying blocker even when it is
+    //       reworded (`justfile-redefined` ≈ `justfile-contract-mismatch` ⇒ one id).
+    //   (2) RETURN-detection: if THIS loop's blocking root cause id appears among the
+    //       earlier-loop ids below, the loop has RETURNED to a blocker it was already
+    //       blocked on with no net resolution — treat `blockingRootCauseProgress` as
+    //       `regressed` (a stall), NOT `retired`/`reduced`, even if a different blocker
+    //       moved this round.
+    "OSCILLATION CHECK — assign STABLE root-cause ids (reuse the SAME id for the same",
+    "underlying blocker even when reworded: `justfile-redefined` and",
+    "`justfile-contract-mismatch` are ONE id). If your `blockingRootCauseId` this loop",
+    "matches a root cause this loop's history was ALREADY blocked on before (see the",
+    "prior blocking root-cause ids below), the loop has RETURNED to an unresolved blocker",
+    "(an A→B→A oscillation) — that is a STALL: set `blockingRootCauseProgress` to",
+    "`regressed` and assess `stalled`, NOT progress, even if a DIFFERENT finding moved.",
     "",
     "Then emit `blockingRootCauseProgress` — progress on THAT blocker ONLY (this is the",
     "primary stall signal; peripheral non-blocking findings changing does NOT count):",
@@ -145,6 +170,13 @@ export function buildConvergencePrompt(input: ConvergencePromptInput): string {
     // clearest progress signal the policy weighs.
     `Total P-score this loop: ${totalPScore(input.currentFindings)} (prior loop: ${totalPScore(input.priorFindings)})`,
     `Worst (merge-gating) severity this loop: ${worstThis ?? "(none)"}`,
+    "",
+    // The earlier-loop blocking root-cause ids (oldest→newest): the answerer cross-checks
+    // THIS loop's id against them to detect a RETURN to a prior unresolved blocker (the v40
+    // oscillation). Empty on the first convergence check.
+    input.priorBlockingRootCauseIds.length === 0
+      ? "Prior blocking root-cause ids (earlier loops): (none — first convergence check)"
+      : `Prior blocking root-cause ids (earlier loops, oldest→newest): ${input.priorBlockingRootCauseIds.join(", ")}`,
     "",
     "Findings kept in-spec THIS loop (worst severity = the blocking root cause):",
     ...renderFindings(input.currentFindings),
