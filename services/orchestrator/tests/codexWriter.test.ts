@@ -45,7 +45,6 @@ describe("Codex writer adapter", () => {
     const result = await writer.runWriter({
       prompt: "make a tiny edit",
       workspace: "/workspace/repo",
-      timeoutMs: 1000,
     });
 
     expect(ssh.commands[0]?.command.command).toContain("/run_codex_1/codex-home");
@@ -83,7 +82,7 @@ describe("Codex writer adapter", () => {
 
   it("returns timeout and crashed results without treating stdout as completion", async () => {
     const timeout = await runWithCodexResult(
-      { exitCode: null, stdout: '{"type":"done"}\n', stderr: "", timedOut: true },
+      { exitCode: null, stdout: '{"type":"done"}\n', stderr: "", stalled: true },
       {
         diff: "diff --git a/PARTIAL.md b/PARTIAL.md\n+partial\n",
         log: `${commitSha("d")}\tcodex writer\n`,
@@ -93,7 +92,6 @@ describe("Codex writer adapter", () => {
       exitCode: 2,
       stdout: '{"type":"done"}\n',
       stderr: "bad",
-      timedOut: false,
     });
 
     expect(timeout).toMatchObject({
@@ -155,7 +153,6 @@ describe("Codex writer adapter", () => {
     const result = await writer.runWriter({
       prompt: "make a managed edit",
       workspace: "/workspace/repo",
-      timeoutMs: 1000,
       baseSha,
     });
 
@@ -237,7 +234,6 @@ describe("Codex writer adapter", () => {
     const result = await writer.runWriter({
       prompt: "do work",
       workspace: "/workspace/repo",
-      timeoutMs: 1000,
     });
     const commandText = ssh.commands.map((item) => item.command.command).join("\n");
 
@@ -273,7 +269,6 @@ describe("Codex writer adapter", () => {
     const result = await writer.runWriter({
       prompt: "do work",
       workspace: "/workspace/repo",
-      timeoutMs: 1000,
     });
 
     expect(result.exitReason).toBe("completed");
@@ -350,7 +345,6 @@ describe("Codex writer adapter", () => {
       exitCode: 0,
       stdout: usageLimitStdout,
       stderr: "",
-      timedOut: false,
     });
     expect(result.exitReason).toBe("window_exhausted");
     expect(result.telemetry?.usageLimit?.message).toContain("usage limit");
@@ -386,7 +380,6 @@ describe("Codex writer adapter", () => {
     const result = await writer.runWriter({
       prompt: "create GREETING.md",
       workspace: "/workspace/repo",
-      timeoutMs: 1000,
       baseSha,
     });
 
@@ -433,7 +426,6 @@ describe("Codex writer adapter", () => {
     const result = await writer.runWriter({
       prompt: "create GREETING.md",
       workspace: "/workspace/repo",
-      timeoutMs: 1000,
       baseSha,
     });
 
@@ -450,7 +442,7 @@ function commitSha(char: string): string {
 }
 
 function ok(stdout: string): CommandResult {
-  return { exitCode: 0, stdout, stderr: "", timedOut: false };
+  return { exitCode: 0, stdout, stderr: "" };
 }
 
 function refreshedAuthJson(): string {
@@ -481,7 +473,7 @@ async function runWithCodexResult(
     credentialRef: "credential/codex/dev",
     runId: "run_codex_2",
   });
-  return await writer.runWriter({ prompt: "write", workspace: "/workspace/repo", timeoutMs: 1000 });
+  return await writer.runWriter({ prompt: "write", workspace: "/workspace/repo" });
 }
 
 class ScriptedSsh implements CommandSubstrate {

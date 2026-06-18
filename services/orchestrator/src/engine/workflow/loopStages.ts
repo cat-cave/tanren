@@ -56,7 +56,6 @@ interface StageBase {
   runId: string;
   workspacePath: string;
   plannerTaskId: string;
-  timeoutMs: number;
   appendEvent: StageAppendEvent;
 }
 
@@ -100,7 +99,6 @@ export async function runDemoRunStage(args: DemoRunStageInput): Promise<{ findin
   const startedAt = Date.now();
   const verdict = await args.adapter.runAnswerer({
     prompt,
-    timeoutMs: args.timeoutMs,
     workspace: args.workspacePath,
     outputSchema,
   });
@@ -158,7 +156,6 @@ export async function runDesignOracleLoopStage(
     actorRef: args.actorRef,
     adapter: args.adapter,
     baselineSha: args.baselineSha,
-    timeoutMs: args.timeoutMs,
     workspacePath: args.workspacePath,
   });
   if (!result.hasContract) {
@@ -252,7 +249,6 @@ export async function runPostAuditFindingStages(args: PostAuditFindingStagesInpu
       specDescription: args.specDescription,
       acceptanceCriteria: args.acceptanceCriteria,
       baselineSha: args.baselineSha,
-      timeoutMs: args.timeoutMs,
       appendEvent: args.appendEvent,
     });
     findings.push(...demo.findings);
@@ -274,7 +270,6 @@ export async function runPostAuditFindingStages(args: PostAuditFindingStagesInpu
       actor: args.designOracleActor.actor,
       actorRef: args.designOracleActor.actorRef,
       baselineSha: args.baselineSha,
-      timeoutMs: args.timeoutMs,
       appendEvent: args.appendEvent,
     });
     findings.push(...designOracle.findings);
@@ -339,7 +334,6 @@ export async function runTriageStage(args: TriageStageInput): Promise<TriageStag
   const startedAt = Date.now();
   const answer = await args.adapter.runAnswerer({
     prompt,
-    timeoutMs: args.timeoutMs,
     workspace: args.workspacePath,
     outputSchema,
   });
@@ -447,7 +441,6 @@ export async function runConvergenceStage(args: ConvergenceStageInput): Promise<
   const startedAt = Date.now();
   const answer = await args.adapter.runAnswerer({
     prompt,
-    timeoutMs: args.timeoutMs,
     workspace: args.workspacePath,
     outputSchema,
   });

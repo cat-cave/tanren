@@ -39,19 +39,11 @@ const RESEARCH_SCHEMA_NAME = "tanren.template_research.v1";
 // The default per-call HANG bound: template research reads several web sources and
 // reasons over them. This is the hang-detector, NOT a terminal verdict — codex
 // latency is variable and a slow-but-working call legitimately takes minutes (live:
-// 168-282s observed). The prior 180s ceiling fast-killed a healthy-just-slow call;
-// 300s clears that real latency ceiling with headroom while still bounding a genuine
-// hang. A call that exceeds even this is RETRIED (withAnswererRetry), not terminal.
-// This is the answerer `timeoutMs` PER-CALL provider hang bound (NOT a whole-op
-// deadline or attempt cap): a call that trips it is RETRIED unbounded-until-converged
-// by withAnswererRetry, never terminally given up. The per-call provider-timeout class
-// is owned by the timeout-eradication Wave 3 — left to that wave deliberately (this
-// wave eradicated only the COUNT caps; the retry loop around it is already unbounded).
-const DEFAULT_RESEARCH_TIMEOUT_MS = 300_000;
+// The research call is a single agent answerer exec: it is governed by the agent
+// ActivityWatchdog (output-driven, never a wall-clock kill), and a genuine stall is
+// RETRIED unbounded-until-converged by withAnswererRetry — never terminally given up.
 
 export interface WrapProviderResearcherOptions {
-  // Bounds the one research model call (the per-call HANG detector). Defaults to 300s.
-  timeoutMs?: number;
   // Transient-failure retry policy for the (pre-build, synchronous) research answerer
   // call. A timeout / transient transport / network blip RETRIES (bounded + backoff)
   // instead of failing the whole derive; only a persistent failure surfaces loud.
@@ -146,8 +138,6 @@ export function wrapProviderResearcher(
         () =>
           adapter.runAnswerer({
             prompt: buildResearchPrompt(request),
-            // The per-call provider hang bound (Wave-3 class); a trip is RETRIED by withAnswererRetry, not terminal.
-            timeoutMs: options.timeoutMs ?? DEFAULT_RESEARCH_TIMEOUT_MS,
             outputSchema: {
               name: RESEARCH_SCHEMA_NAME,
               jsonSchema,

@@ -3,6 +3,7 @@ import type { SecretStore } from "../contracts/secretStore.js";
 import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import { CommandFileSubstrate } from "../ssh/commandFileSubstrate.js";
 import { quoteSshShellArg } from "../ssh/command.js";
+import { outputOnlyWatchdog } from "../ssh/activityWatchdog.js";
 import { validateCodexAuthBundle, validateCodexCredentialRef, validateCredentialRef } from "./codexAuth.js";
 import { resolveRawProviderKey } from "./managedKey.js";
 import { credentialTypeForRef, providerSlugForRef } from "./credentialType.js";
@@ -15,7 +16,6 @@ export interface MaterializeCodexAuthInput {
   ref: string;
   runId: string;
   baseDir?: string;
-  timeoutMs?: number;
   // SaaS Tier-B #5: MANAGED mode. When true, the run resolved the platform
   // OpenRouter shell and `ref` is a plain API-KEY credential
   // (credential/openrouter/…) whose stored secret is the raw key string `sk-…`,
@@ -87,7 +87,6 @@ export async function materializeCodexAuthBundle(input: MaterializeCodexAuthInpu
     path: `${codexHome}/auth.json`,
     content: authJson,
     mode: 0o600,
-    timeoutMs: input.timeoutMs ?? 30_000,
   });
   assertFileWriteOk(result, "Codex");
   return { CODEX_HOME: codexHome, ref, managed: false, bundleAuth: true, redacted: true };
@@ -184,7 +183,8 @@ async function materializeManagedOpenRouterCodexConfig(
     // The secret key is fed on stdin and the command writes it into the chmod-600
     // env file — it is never interpolated into the command string.
     stdin: `export OPENROUTER_API_KEY=${shellSingleQuote(apiKey)}\n`,
-    timeoutMs: input.timeoutMs ?? 30_000,
+    // INFRA credential write: output-driven watchdog, no wall-clock kill.
+    watchdog: outputOnlyWatchdog(),
   });
   assertMaterializationOk(result);
 }
@@ -201,7 +201,8 @@ async function materializeNativeOpenAiCodexEnv(input: MaterializeCodexAuthInput,
     command: buildNativeOpenAiCodexEnvCommand(codexHome),
     // The secret key rides stdin into the chmod-600 env file — never the command.
     stdin: `export OPENAI_API_KEY=${shellSingleQuote(apiKey)}\n`,
-    timeoutMs: input.timeoutMs ?? 30_000,
+    // INFRA credential write: output-driven watchdog, no wall-clock kill.
+    watchdog: outputOnlyWatchdog(),
   });
   assertMaterializationOk(result);
 }

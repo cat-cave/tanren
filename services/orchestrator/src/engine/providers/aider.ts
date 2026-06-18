@@ -5,6 +5,7 @@ import { validateCredentialRef } from "../credentials/codexAuth.js";
 import { quoteSshShellArg } from "../ssh/command.js";
 import type { TokenUsage, UsageLimitSignal, WriterAdapter, WriterResult } from "./types.js";
 import { captureBaselineSha, captureGitStateAfterWriter } from "./writerGit.js";
+import { buildActivityWatchdog } from "../ssh/activityWatchdog.js";
 
 // aider harness adapter — a Writer-only CLI harness conforming to the v1
 // harness protocol (docs/architecture/harness-protocol.md). aider has NO
@@ -75,12 +76,7 @@ export function createAiderWriter(dependencies: AiderWriterDependencies): Writer
     async runWriter(opts): Promise<WriterResult> {
       const model = dependencies.model ?? DEFAULT_AIDER_MODEL;
       const apiKey = await resolveAiderApiKey(dependencies.secrets, dependencies.credentialRef);
-      const baselineSha = await captureBaselineSha(
-        dependencies.ssh,
-        dependencies.target,
-        opts.workspace,
-        opts.timeoutMs,
-      );
+      const baselineSha = await captureBaselineSha(dependencies.ssh, dependencies.target, opts.workspace);
       const aider = await dependencies.ssh.run(dependencies.target, {
         command: buildAiderWriterCommand({
           // Managed (endpoint override present) → the platform key is an
@@ -93,7 +89,15 @@ export function createAiderWriter(dependencies: AiderWriterDependencies): Writer
           openaiApiBase: dependencies.endpointBaseUrl,
         }),
         cwd: opts.workspace,
-        timeoutMs: opts.timeoutMs,
+        // AGENT exec: aider streams its edit/telemetry output continuously (every line
+        // is a sign of life → the watchdog resets), with the workspace as the
+        // silent-stretch liveness probe. NEVER killed for elapsed time.
+        watchdog: buildActivityWatchdog({
+          substrate: dependencies.ssh,
+          target: dependencies.target,
+          cls: "agent",
+          workspace: opts.workspace,
+        }),
       });
       const telemetry = parseAiderTelemetry(aider.stdout + "\n" + aider.stderr);
       const gitState = await captureGitStateAfterWriter(
@@ -102,9 +106,8 @@ export function createAiderWriter(dependencies: AiderWriterDependencies): Writer
         opts.workspace,
         baselineSha,
         "aider writer",
-        opts.timeoutMs,
       );
-      if (aider.timedOut) {
+      if (aider.stalled === true) {
         return failedResult("timeout", telemetry, gitState);
       }
       if (telemetry.usageLimit !== undefined) {

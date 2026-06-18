@@ -119,7 +119,6 @@ export interface DriveConflictResolveDeps {
   eventStore: EventStore;
   /** The runner identity key ref (same value the worker boot seeds). */
   identitySecretRef: string;
-  timeoutMs: number;
   /** The capture cell the drive reads after `mergeForRun` returns. */
   verdict: DriveConflictVerdict;
   /**
@@ -236,7 +235,6 @@ async function driveResolveViaJj(
       secrets: deps.secrets,
       githubHttp: deps.githubHttp,
       ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
-      timeoutMs: deps.timeoutMs,
       buildResolver: ({ target, workspacePath, baseSha, applier }) =>
         deps.buildResolver === undefined
           ? buildResolverForDrive(deps, ctx, target, workspacePath, baseSha, applier)
@@ -395,7 +393,6 @@ function buildResolverForDrive(
     target,
     workspacePath,
     baseSha,
-    timeoutMs: deps.timeoutMs,
     runId: deps.facts.runId,
     projectId: deps.facts.projectId,
     orgId: deps.facts.orgId,
@@ -431,7 +428,6 @@ function buildDriveGate(
         ssh: deps.ssh,
         target,
         workspacePath,
-        timeoutMs: deps.timeoutMs,
       });
     }
     const config = await configPromise;
@@ -450,7 +446,6 @@ function buildDriveGate(
       // read), or — when the config omits `bootstrap.run` — the stack-agnostic
       // DEFAULT_BOOTSTRAP_COMMAND LOUD-fallback.
       command: bootstrapCommand(config) ?? DEFAULT_BOOTSTRAP_COMMAND,
-      timeoutMs: deps.timeoutMs,
     });
     return runGateForWhen({
       ssh: deps.ssh,
@@ -458,7 +453,6 @@ function buildDriveGate(
       workspacePath,
       config,
       when,
-      timeoutMs: deps.timeoutMs,
       appendEvent: async (eventType, payload, eventTaskId) => {
         await deps.eventStore.append({
           runId: deps.facts.runId,

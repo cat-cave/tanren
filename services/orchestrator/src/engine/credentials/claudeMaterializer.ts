@@ -3,6 +3,7 @@ import type { SecretStore } from "../contracts/secretStore.js";
 import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import { CommandFileSubstrate } from "../ssh/commandFileSubstrate.js";
 import { quoteSshShellArg } from "../ssh/command.js";
+import { outputOnlyWatchdog } from "../ssh/activityWatchdog.js";
 import { validateClaudeAuthBundle, validateClaudeCredentialRef } from "./claudeAuth.js";
 import { validateCredentialRef } from "./codexAuth.js";
 import { resolveRawProviderKey } from "./managedKey.js";
@@ -19,7 +20,6 @@ export interface MaterializeClaudeAuthInput {
   ref: string;
   runId: string;
   baseDir?: string;
-  timeoutMs?: number;
   // SaaS Tier-B #5: MANAGED mode. When true, the run resolved the platform
   // OpenRouter shell and `ref` is a plain API-KEY credential
   // (credential/openrouter/…) whose stored secret is the raw OpenRouter key, NOT
@@ -89,7 +89,6 @@ export async function materializeClaudeAuthBundle(input: MaterializeClaudeAuthIn
     path: `${configDir}/.credentials.json`,
     content: bundle.authJson,
     mode: 0o600,
-    timeoutMs: input.timeoutMs ?? 30_000,
   });
   assertFileWriteOk(result, "Claude");
   return { CLAUDE_CONFIG_DIR: configDir, ref, managed: false, redacted: true };
@@ -128,7 +127,8 @@ async function materializeManagedClaudeSettings(input: MaterializeClaudeAuthInpu
   const result = await input.ssh.run(input.target, {
     command: buildManagedClaudeSettingsCommand(configDir),
     stdin: settingsJson,
-    timeoutMs: input.timeoutMs ?? 30_000,
+    // INFRA credential write: output-driven watchdog, no wall-clock kill.
+    watchdog: outputOnlyWatchdog(),
   });
   assertMaterializationOk(result);
   return anthropicBaseUrl;
@@ -153,7 +153,8 @@ async function materializeNativeAnthropicClaudeSettings(
   const result = await input.ssh.run(input.target, {
     command: buildManagedClaudeSettingsCommand(configDir),
     stdin: settingsJson,
-    timeoutMs: input.timeoutMs ?? 30_000,
+    // INFRA credential write: output-driven watchdog, no wall-clock kill.
+    watchdog: outputOnlyWatchdog(),
   });
   assertMaterializationOk(result);
   return { CLAUDE_CONFIG_DIR: configDir, ref, managed: false, redacted: true };

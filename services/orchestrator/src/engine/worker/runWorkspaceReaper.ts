@@ -28,12 +28,10 @@ import type { RunnerHandle } from "../contracts/allocator.js";
 import type { CommandResult, CommandSubstrate } from "../contracts/commandSubstrate.js";
 import { quoteSshShellArg } from "../ssh/command.js";
 import { removeRunWorkspaceDir, safeRunIdPattern, WORKSPACE_RUNS_ROOT } from "../workspace/index.js";
+import { outputOnlyWatchdog } from "../ssh/activityWatchdog.js";
 import { createLogger } from "../observability/logger.js";
 
 const log = createLogger("run-workspace-reaper");
-
-/** Time budget for the directory listing command (a cheap `find`). */
-const LIST_TIMEOUT_MS = 30_000;
 
 /** One `/workspace/runs/*` entry: its run-id basename + its mtime (epoch ms). */
 export interface RunWorkspaceDirEntry {
@@ -218,9 +216,10 @@ export class RunWorkspaceReaper {
       // -mindepth/-maxdepth 1 → only the direct children; -type d → dirs only;
       // %f = basename, %T@ = mtime as epoch seconds (with a fractional part).
       command: `find ${root} -mindepth 1 -maxdepth 1 -type d -printf '%f\\t%T@\\n' 2>/dev/null || true`,
-      timeoutMs: LIST_TIMEOUT_MS,
+      // INFRA op (a cheap `find` listing): output-driven watchdog, no wall-clock kill.
+      watchdog: outputOnlyWatchdog(),
     });
-    if (result.failure !== undefined || result.timedOut || result.exitCode !== 0) {
+    if (result.failure !== undefined || result.stalled === true || result.exitCode !== 0) {
       throw new Error(`run-dir listing failed: ${listFailureDetail(result)}`);
     }
     return parseRunDirListing(result.stdout);
@@ -233,8 +232,8 @@ function listFailureDetail(result: CommandResult): string {
     // The Failure union carries `message` everywhere except `cancelled` (which carries `reason`).
     return "message" in result.failure ? result.failure.message : result.failure.reason;
   }
-  if (result.timedOut) {
-    return "timed out";
+  if (result.stalled === true) {
+    return "stalled (no sign of life)";
   }
   return `exit ${result.exitCode ?? "unknown"}`;
 }

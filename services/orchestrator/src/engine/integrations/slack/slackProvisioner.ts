@@ -155,21 +155,28 @@ export class SlackProvisioner implements IntegrationProvisioner {
     channel.isMember = true;
   }
 
-  // Page through `conversations.list` until the cursor is exhausted. A bounded
-  // page cap guards against an unterminated cursor loop.
+  // Page through `conversations.list` until the cursor is exhausted (progress-based:
+  // each page MUST yield a NEW cursor; a cursor that repeats is a non-advancing API
+  // and a LOUD failure, never a silent count-bounded truncation that drops channels).
   private async listAllChannels(transport: SlackApiTransport): Promise<SlackConversation[]> {
     const out: SlackConversation[] = [];
+    const seenCursors = new Set<string>();
     let cursor: string | undefined;
-    const maxPages = 50;
-    for (let page = 0; page < maxPages; page += 1) {
+    for (;;) {
       const result = await transport.listConversations({ cursor });
       out.push(...result.channels);
-      cursor = result.nextCursor;
-      if (cursor === undefined || cursor.length === 0) {
-        break;
+      const nextCursor = result.nextCursor;
+      if (nextCursor === undefined || nextCursor.length === 0) {
+        return out;
       }
+      if (seenCursors.has(nextCursor)) {
+        // A repeated cursor means the API stopped ADVANCING — surface it loudly rather
+        // than loop forever OR silently truncate (which would drop real channels).
+        throw new Error(`Slack conversations.list returned a non-advancing cursor (${nextCursor}) — refusing to loop`);
+      }
+      seenCursors.add(nextCursor);
+      cursor = nextCursor;
     }
-    return out;
   }
 
   // The bot-token model: the notification target is the CHANNEL ID; the org bot

@@ -29,6 +29,7 @@ import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import { runGateForWhen } from "../workflow/gate/runGateForWhen.js";
 import type { GateAppendEvent } from "../workflow/gate/runGateTier.js";
 import { withMiseActivation } from "../ssh/miseActivate.js";
+import { buildActivityWatchdog } from "../ssh/activityWatchdog.js";
 import { DEFAULT_BOOTSTRAP_COMMAND, ensureWorkspaceDepsInstalled } from "../workspace/index.js";
 import { type NegativeControlResult, type TemplateValidationProof } from "./manifest.js";
 import { type GateInvocation, type NegativeControl } from "./negativeControls.js";
@@ -70,7 +71,6 @@ export interface ValidationHarnessInput {
   validatedSha: string;
   // The clock — Date.now() is unavailable in some contexts, so the caller passes it.
   now: () => Date;
-  timeoutMs: number;
   // The event sink the harness narrates through — the SAME store the gate runner uses,
   // so the positive/negative gate runs land in the run's timeline. Required: the
   // harness runs the real gate runner (which emits gate.* events), so an absent sink
@@ -136,7 +136,6 @@ async function runPositiveControls(input: ValidationHarnessInput, appendEvent: G
       target: input.target,
       workspacePath: input.workspacePath,
       command: explicitBootstrap ?? DEFAULT_BOOTSTRAP_COMMAND,
-      timeoutMs: input.timeoutMs,
     });
   } catch {
     return false;
@@ -154,7 +153,6 @@ async function runPositiveControls(input: ValidationHarnessInput, appendEvent: G
       workspacePath: input.workspacePath,
       config: input.config,
       when,
-      timeoutMs: input.timeoutMs,
       appendEvent,
     });
     if (!outcome.passed) {
@@ -167,9 +165,15 @@ async function runPositiveControls(input: ValidationHarnessInput, appendEvent: G
   const result = await input.ssh.run(input.target, {
     command: withMiseActivation(build.run),
     cwd: input.workspacePath,
-    timeoutMs: input.timeoutMs,
+    // VCS/build op: output-driven + the workspace as the silent-stretch liveness probe.
+    watchdog: buildActivityWatchdog({
+      substrate: input.ssh,
+      target: input.target,
+      cls: "vcs",
+      workspace: input.workspacePath,
+    }),
   });
-  return result.failure === undefined && !result.timedOut && result.exitCode === 0;
+  return result.failure === undefined && result.stalled !== true && result.exitCode === 0;
 }
 
 // Stage 2: run every declared negative control over its own scratch copy, returning the
@@ -183,7 +187,7 @@ async function runNegativeControls(
     test: "n/a",
     mutation: "n/a",
   };
-  const scratchDeps: ScratchCopyDeps = { ssh: input.ssh, target: input.target, timeoutMs: input.timeoutMs };
+  const scratchDeps: ScratchCopyDeps = { ssh: input.ssh, target: input.target };
   let index = 0;
   for (const control of input.negativeControls) {
     verdicts[control.capability] = await runOneNegativeControl(input, scratchDeps, control, index);
@@ -268,7 +272,6 @@ async function runGateForInvocation(
       workspacePath: scratchPath,
       config: input.config,
       when: invocation.when,
-      timeoutMs: input.timeoutMs,
       appendEvent: input.appendEvent,
     });
     if (outcome.passed) {
@@ -282,11 +285,12 @@ async function runGateForInvocation(
   const result = await input.ssh.run(input.target, {
     command: invocation.run,
     cwd: scratchPath,
-    timeoutMs: input.timeoutMs,
+    // VCS/build op over the scratch copy: output-driven + the scratch dir as the probe.
+    watchdog: buildActivityWatchdog({ substrate: input.ssh, target: input.target, cls: "vcs", workspace: scratchPath }),
   });
-  // A timeout or substrate failure means the gate could NOT run to a verdict — it is
+  // A stall or substrate failure means the gate could NOT run to a verdict — it is
   // INDETERMINATE, never a defect-catch. Only a clean nonzero exit is a genuine catch.
-  if (result.timedOut || result.failure !== undefined) {
+  if (result.stalled === true || result.failure !== undefined) {
     return "could_not_run";
   }
   return result.exitCode === 0 ? "passed" : "caught";

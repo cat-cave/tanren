@@ -52,7 +52,6 @@ export interface SshUsageProbeConfig {
   cli: string;
   codexHome: string;
   target: RunnerHandle;
-  timeoutMs: number;
   // 100 = escalate only when a window is fully consumed; lower to escalate
   // earlier (e.g. 90). Defaults to the shared pressure constant.
   pressureThresholdPercent?: number;
@@ -71,7 +70,6 @@ export class SshUsageProbe implements UsageProbe {
       provider: this.config.provider,
       codexHome: this.config.codexHome,
       target: this.config.target,
-      timeoutMs: this.config.timeoutMs,
     });
     // A read FAILURE is loud + distinct: no usage, no pressure, but `failure` set.
     if ("failed" in read) {
@@ -99,7 +97,6 @@ export class SshUsageProbe implements UsageProbe {
       cli: this.config.cli,
       codexHome: this.config.codexHome,
       target: this.config.target,
-      timeoutMs: this.config.timeoutMs,
     });
   }
 }

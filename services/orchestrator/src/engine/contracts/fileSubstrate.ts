@@ -25,7 +25,6 @@ export interface FileWrite {
   content: string;
   // Octal POSIX mode (default 0o600 — files this seam writes are usually secrets).
   mode?: number;
-  timeoutMs: number;
 }
 
 // The outcome of a file transfer. Like {@link CommandResult}, a transport failure
@@ -39,7 +38,6 @@ export interface FileTransferResult {
 // A file read out of a runner.
 export interface FileRead {
   path: string;
-  timeoutMs: number;
 }
 
 export interface FileReadResult {

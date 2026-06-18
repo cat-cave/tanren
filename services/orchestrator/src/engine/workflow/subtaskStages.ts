@@ -46,7 +46,6 @@ export interface PlannerStageInput {
   appendEvent: StageAppendEvent;
   attempt: number;
   rejectionHistory: ReadonlyArray<PlannerRejectionFeedback>;
-  timeoutMs: number;
   buildUsage?: (input: { plannerTaskId: string; attempt: number }) => Record<string, unknown>;
 }
 
@@ -54,7 +53,6 @@ export async function runPlannerStage(args: PlannerStageInput): Promise<PlanAnsw
   const startedAt = Date.now();
   const result = await invokePlanner(args.adapter, {
     spec: args.spec,
-    timeoutMs: args.timeoutMs,
     workspace: args.workspacePath,
     rejectionHistory: args.rejectionHistory,
   });
@@ -104,7 +102,6 @@ export interface WriterStageInput {
   subtask: PlanSubtask;
   writeTaskId: string;
   prompt: string;
-  timeoutMs: number;
   // The run's BASE sha (clone point), captured once after the workspace clone.
   // Threaded to the writer so it diffs the workspace against the run base —
   // judging each subtask on the CUMULATIVE state, not the per-subtask HEAD
@@ -166,7 +163,6 @@ export async function runWriterStage(args: WriterStageInput): Promise<WriterStag
   const writerResult = await args.adapter.runWriter({
     prompt: args.prompt,
     workspace: args.workspacePath,
-    timeoutMs: args.timeoutMs,
     baseSha: args.baseSha,
   });
   const runtimeSeconds = secondsSince(startedAt);
@@ -278,7 +274,6 @@ export interface CheckerStageInput {
   specTitle: string;
   specDescription: string;
   acceptanceCriteria: ReadonlyArray<string>;
-  timeoutMs: number;
   appendEvent: StageAppendEvent;
   buildUsage?: (input: {
     checkerTaskId: string;
@@ -416,7 +411,6 @@ export async function runCheckerStage(args: CheckerStageInput): Promise<CheckerD
   const startedAt = Date.now();
   const result = await invokeChecker(args.adapter, {
     context: checkerContext,
-    timeoutMs: args.timeoutMs,
     workspace: args.workspacePath,
   });
   const runtimeSeconds = secondsSince(startedAt);

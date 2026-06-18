@@ -21,6 +21,7 @@ import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import type { RunnerHandle } from "../contracts/allocator.js";
 import { defineFailure } from "../failure.js";
 import { quoteSshShellArg } from "./command.js";
+import { outputOnlyWatchdog } from "./activityWatchdog.js";
 
 const DEFAULT_MODE = 0o600;
 
@@ -41,7 +42,9 @@ export class CommandFileSubstrate implements FileSubstrate {
     const result = await this.commands.run(handle, {
       command,
       stdin: file.content,
-      timeoutMs: file.timeoutMs,
+      // INFRA file write (a chmod-600 heredoc): output-driven only. No wall-clock
+      // kill — a genuine silent death surfaces a recoverable stall.
+      watchdog: outputOnlyWatchdog(),
     });
     if (result.failure !== undefined) {
       return { ok: false, failure: result.failure };
@@ -67,7 +70,8 @@ export class CommandFileSubstrate implements FileSubstrate {
   async get(handle: RunnerHandle, file: FileRead): Promise<FileReadResult> {
     const result = await this.commands.run(handle, {
       command: `cat ${quoteSshShellArg(file.path)}`,
-      timeoutMs: file.timeoutMs,
+      // INFRA file read: output-driven only; a silent death surfaces a stall.
+      watchdog: outputOnlyWatchdog(),
     });
     if (result.failure !== undefined) {
       return { ok: false, failure: result.failure };

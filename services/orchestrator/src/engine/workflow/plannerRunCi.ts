@@ -135,7 +135,6 @@ export async function publishCleanedDraftPr(
     workspacePath: ctx.workspacePath,
     cloneHeadSha: shas.cloneHeadSha,
     bootstrapSha: shas.bootstrapSha,
-    timeoutMs: input.timeoutMs,
   });
   try {
     const pullRequest = await publishDraftPullRequest({
@@ -162,7 +161,6 @@ export async function publishCleanedDraftPr(
       body: context.specDescription,
       githubCredentialRef: context.githubCredentialRef,
       ...appTokenSeam(context, input),
-      timeoutMs: input.timeoutMs,
     });
     return { kind: "published", pushSource, pullRequest };
   } catch (error) {
@@ -416,7 +414,6 @@ async function doPublishMergeVerdict(
           ssh: input.ssh,
           target: ctx.target,
           workspacePath: ctx.workspacePath,
-          timeoutMs: input.timeoutMs,
         });
   if (headSha === "") {
     return;

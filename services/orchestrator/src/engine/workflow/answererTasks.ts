@@ -28,7 +28,6 @@ export async function executeStructuredCheckTask(
     specDescription: string;
     acceptanceCriteria: string[];
     baselineSha: string;
-    timeoutMs: number;
     workspace?: string;
   },
 ): Promise<CheckAnswer> {
@@ -40,7 +39,6 @@ export async function executeStructuredCheckTask(
       baselineSha: input.baselineSha,
       outputInstructions: STRUCTURED_CHECK_OUTPUT_INSTRUCTIONS,
     }),
-    timeoutMs: input.timeoutMs,
     workspace: input.workspace,
     outputSchema: checkAnswerSchema,
   });
@@ -53,7 +51,6 @@ export async function executeStructuredAuditTask(
     acceptanceCriteria: string[];
     checkAnswer: CheckAnswer;
     baselineSha: string;
-    timeoutMs: number;
     workspace?: string;
   },
 ): Promise<AuditAnswer> {
@@ -65,7 +62,6 @@ export async function executeStructuredAuditTask(
       checkAnswer: input.checkAnswer,
       outputInstructions: STRUCTURED_AUDIT_OUTPUT_INSTRUCTIONS,
     }),
-    timeoutMs: input.timeoutMs,
     workspace: input.workspace,
     outputSchema: auditAnswerSchema,
   });

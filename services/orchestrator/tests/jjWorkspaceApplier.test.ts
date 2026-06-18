@@ -44,8 +44,6 @@ const emptySecrets: SecretStore = {
   list: () => Promise.resolve([]),
 };
 
-const TIMEOUT_MS = 60_000;
-
 // jj at ~/.local/bin/jj; the conformance suite proves it is present. Each test owns its
 // own fixture temp dir + workspace, released by the fixture's mkdtemp (no shared state).
 function buildApplier(opts: { conflicting: boolean; releaseLog: string[] }): {
@@ -63,7 +61,6 @@ function applierOver(repoUrl: string, workspacePath: string, releaseLog: string[
   const core = new JjWorkspaceVcsCore({
     substrate: new LocalCommandSubstrate(),
     target: LOCAL_HANDLE,
-    timeoutMs: TIMEOUT_MS,
     // identity resolver: the test passes the real fixture origin + `main@origin` verbatim.
   });
   const deps: JjConflictApplierDeps = {
@@ -80,7 +77,6 @@ function applierOver(repoUrl: string, workspacePath: string, releaseLog: string[
       headBranch: "feature",
       githubCredentialRef: "",
     },
-    timeoutMs: TIMEOUT_MS,
     release: async () => {
       releaseLog.push("released");
     },

@@ -4,7 +4,7 @@ import type { SecretStore } from "../contracts/secretStore.js";
 import type { CommandResult, CommandSubstrate } from "../contracts/commandSubstrate.js";
 import { storeCodexAuthBundle } from "../credentials/codexAuth.js";
 import { materializeCodexAuthBundle } from "../credentials/codexMaterializer.js";
-import { quoteSshShellArg } from "../ssh/command.js";
+import { buildActivityWatchdog, outputOnlyWatchdog, quoteSshShellArg } from "../ssh/index.js";
 import type { AnswererAdapter, TokenUsage, UsageLimitSignal, WriterAdapter, WriterResult } from "./types.js";
 import { findOpenRouterGenerationId, foldGenerationId } from "./openRouterGenerationId.js";
 import { findTokenUsageBounded } from "./findTokenUsage.js";
@@ -96,7 +96,6 @@ export function createCodexWriter(dependencies: CodexWriterDependencies): Writer
         ref: dependencies.credentialRef,
         runId: dependencies.runId,
         baseDir: dependencies.codexHomeBaseDir,
-        timeoutMs: Math.min(opts.timeoutMs, 30_000),
         managed,
         endpointBaseUrl: dependencies.endpointBaseUrl,
       });
@@ -109,8 +108,7 @@ export function createCodexWriter(dependencies: CodexWriterDependencies): Writer
       // an empty per-iteration delta. When no baseSha is threaded (no production
       // caller; only a non-threaded/unit caller) we fall back to HEAD-at-start.
       const baselineSha =
-        opts.baseSha ??
-        (await captureBaselineSha(dependencies.ssh, dependencies.target, opts.workspace, opts.timeoutMs));
+        opts.baseSha ?? (await captureBaselineSha(dependencies.ssh, dependencies.target, opts.workspace));
       const codex = await dependencies.ssh.run(dependencies.target, {
         command: buildCodexExecCommand({
           codexHome: auth.CODEX_HOME,
@@ -119,7 +117,15 @@ export function createCodexWriter(dependencies: CodexWriterDependencies): Writer
           nativeApiKeyEnvFile: auth.nativeApiKeyEnvFile,
         }),
         stdin: opts.prompt,
-        timeoutMs: opts.timeoutMs,
+        // AGENT exec: codex `--json` streams telemetry continuously (every line is a
+        // sign of life → the watchdog resets), with a workspace liveness probe as the
+        // backstop for a long silent tool call. NEVER killed for elapsed time.
+        watchdog: buildActivityWatchdog({
+          substrate: dependencies.ssh,
+          target: dependencies.target,
+          cls: "agent",
+          workspace: opts.workspace,
+        }),
       });
       const telemetry = parseCodexJsonlTelemetry(codex.stdout);
       // Auth write-back is a ChatGPT-bundle refresh: codex rotates its
@@ -135,7 +141,6 @@ export function createCodexWriter(dependencies: CodexWriterDependencies): Writer
           target: dependencies.target,
           ref: dependencies.credentialRef,
           codexHome: auth.CODEX_HOME,
-          timeoutMs: Math.min(opts.timeoutMs, 30_000),
         });
       }
 
@@ -144,9 +149,8 @@ export function createCodexWriter(dependencies: CodexWriterDependencies): Writer
         dependencies.target,
         opts.workspace,
         baselineSha,
-        opts.timeoutMs,
       );
-      if (codex.timedOut) {
+      if (codex.stalled === true) {
         return failedResult("timeout", telemetry, gitState);
       }
       // Usage-limit exhaustion is an authenticated-but-out-of-quota state, not
@@ -191,7 +195,6 @@ export function createCodexAnswerer<TOutput>(dependencies: CodexAnswererDependen
         ref: dependencies.credentialRef,
         runId: dependencies.runId,
         baseDir: dependencies.codexHomeBaseDir,
-        timeoutMs: Math.min(opts.timeoutMs, 30_000),
         managed,
         endpointBaseUrl: dependencies.endpointBaseUrl,
       });
@@ -205,13 +208,7 @@ export function createCodexAnswerer<TOutput>(dependencies: CodexAnswererDependen
         opts.workspace ?? answererWorkspacePath(dependencies.runId, fileBase, dependencies.answererWorkspaceBaseDir);
       const schemaPath = `${auth.CODEX_HOME}/${fileBase}.schema.json`;
       const outputPath = `${auth.CODEX_HOME}/${fileBase}.response.json`;
-      await prepareCodexAnswererWorkspace(
-        dependencies,
-        workspace,
-        schemaPath,
-        opts.outputSchema.jsonSchema,
-        opts.timeoutMs,
-      );
+      await prepareCodexAnswererWorkspace(dependencies, workspace, schemaPath, opts.outputSchema.jsonSchema);
       // Run one codex answerer exec for `prompt` and return the captured response
       // file text — closed over so the schema-repair pass can re-run it once with a
       // repair prompt. Each invocation refreshes lastTokenUsage + auth write-back.
@@ -226,7 +223,14 @@ export function createCodexAnswerer<TOutput>(dependencies: CodexAnswererDependen
             nativeApiKeyEnvFile: auth.nativeApiKeyEnvFile,
           }),
           stdin: prompt,
-          timeoutMs: opts.timeoutMs,
+          // AGENT answerer exec (codex `--json` streaming) — output-driven, with the
+          // answerer workspace as the silent-stretch liveness probe. Unbounded in time.
+          watchdog: buildActivityWatchdog({
+            substrate: dependencies.ssh,
+            target: dependencies.target,
+            cls: "agent",
+            workspace,
+          }),
         });
         const telemetry = parseCodexJsonlTelemetry(result.stdout);
         // Surface this call's per-call token usage for the cost path (lastTokenUsage).
@@ -240,11 +244,10 @@ export function createCodexAnswerer<TOutput>(dependencies: CodexAnswererDependen
             target: dependencies.target,
             ref: dependencies.credentialRef,
             codexHome: auth.CODEX_HOME,
-            timeoutMs: Math.min(opts.timeoutMs, 30_000),
           });
         }
-        if (result.timedOut) {
-          throw new Error(`Codex Answerer timed out for schema ${opts.outputSchema.name}`);
+        if (result.stalled === true) {
+          throw new Error(`Codex Answerer stalled (no sign of life) for schema ${opts.outputSchema.name}`);
         }
         if (telemetry.usageLimit !== undefined) {
           throw new CodexUsageLimitError(opts.outputSchema.name, telemetry.usageLimit.message);
@@ -258,9 +261,9 @@ export function createCodexAnswerer<TOutput>(dependencies: CodexAnswererDependen
         }
         const response = await dependencies.ssh.run(dependencies.target, {
           command: `cat ${quoteSshShellArg(outputPath)}`,
-          timeoutMs: Math.min(opts.timeoutMs, 30_000),
+          watchdog: outputOnlyWatchdog(),
         });
-        if (response.exitCode !== 0 || response.failure !== undefined || response.timedOut) {
+        if (response.exitCode !== 0 || response.failure !== undefined || response.stalled === true) {
           throw new Error(`Codex Answerer response capture failed for schema ${opts.outputSchema.name}`);
         }
         return response.stdout;
@@ -287,13 +290,13 @@ export async function persistRefreshedCodexAuth(input: {
   target: RunnerHandle;
   ref: string;
   codexHome: string;
-  timeoutMs: number;
 }): Promise<void> {
   const result = await input.ssh.run(input.target, {
     command: `cat ${quoteSshShellArg(`${input.codexHome}/auth.json`)}`,
-    timeoutMs: input.timeoutMs,
+    // INFRA auth-bundle read: output-driven watchdog, no wall-clock kill.
+    watchdog: outputOnlyWatchdog(),
   });
-  if (result.exitCode !== 0 || result.timedOut || result.failure !== undefined) {
+  if (result.exitCode !== 0 || result.stalled === true || result.failure !== undefined) {
     return;
   }
   // no_silent_fallbacks: a failed auth-bundle store is NOT benign. Codex rotated its
@@ -393,17 +396,17 @@ async function prepareCodexAnswererWorkspace(
   workspace: string,
   schemaPath: string,
   jsonSchema: Record<string, unknown>,
-  timeoutMs: number,
 ): Promise<void> {
   const made = await dependencies.ssh.run(dependencies.target, {
     command: `mkdir -p ${quoteSshShellArg(workspace)}`,
-    timeoutMs: Math.min(timeoutMs, 30_000),
+    // INFRA workspace prep: output-driven watchdog, no wall-clock kill.
+    watchdog: outputOnlyWatchdog(),
   });
   assertAnswererWorkspaceStep(made, `mkdir -p ${workspace}`);
   const wrote = await dependencies.ssh.run(dependencies.target, {
     command: `cat > ${quoteSshShellArg(schemaPath)}`,
     stdin: JSON.stringify(jsonSchema),
-    timeoutMs: Math.min(timeoutMs, 30_000),
+    watchdog: outputOnlyWatchdog(),
   });
   assertAnswererWorkspaceStep(wrote, `write ${schemaPath}`);
 }
@@ -412,10 +415,10 @@ async function prepareCodexAnswererWorkspace(
 // be LOUD: otherwise codex `--cd`s into a dir that was never created and surfaces a
 // cryptic `os error 2`, masking the real cause. (no-silent-fallbacks doctrine.)
 function assertAnswererWorkspaceStep(result: CommandResult, step: string): void {
-  if (result.exitCode !== 0 || result.failure !== undefined || result.timedOut) {
+  if (result.exitCode !== 0 || result.failure !== undefined || result.stalled === true) {
     throw new Error(
       `Codex Answerer workspace prep failed (${step}): exit ${result.exitCode ?? "unknown"}` +
-        `${result.timedOut ? " (timed out)" : ""} | stderr: ${harnessOutputTail(result.stderr)}`,
+        `${result.stalled === true ? " (stalled — no sign of life)" : ""} | stderr: ${harnessOutputTail(result.stderr)}`,
     );
   }
 }

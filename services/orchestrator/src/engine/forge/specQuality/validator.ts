@@ -66,23 +66,21 @@ export function buildSpecQualityPrompt(spec: CandidateSpec): string {
   ].join("\n");
 }
 
-export interface WrapProviderSpecQualityAnswererOptions {
-  // Bounds each provider call. Defaults to 120s — validation is interactive.
-  timeoutMs?: number;
-}
+// No bounding option remains: each provider answerer call is governed by the agent
+// ActivityWatchdog (output-driven, never a wall-clock kill) the adapter constructs.
+export type WrapProviderSpecQualityAnswererOptions = Record<never, never>;
 
 // Adapt an `AnswererAdapter` into the `SpecQualityAnswerer` seam. The strict
 // `SpecQualityAnswer` parse on the output makes a malformed answer THROW (loud).
 export function wrapProviderSpecQualityAnswerer(
   adapter: AnswererAdapter<SpecQualityAnswer>,
-  options: WrapProviderSpecQualityAnswererOptions = {},
+  _options: WrapProviderSpecQualityAnswererOptions = {},
 ): SpecQualityAnswerer {
   const jsonSchema = renderAnswererJsonSchema(SpecQualityAnswer);
   return {
     async validate(spec: CandidateSpec): Promise<SpecQualityAnswer> {
       return adapter.runAnswerer({
         prompt: buildSpecQualityPrompt(spec),
-        timeoutMs: options.timeoutMs ?? 120_000,
         outputSchema: {
           name: SPEC_QUALITY_ANSWER_SCHEMA_ID,
           jsonSchema,

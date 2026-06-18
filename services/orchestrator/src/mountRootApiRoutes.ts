@@ -153,7 +153,6 @@ export function mountRootApiRoutes(app: Hono<ActorContextEnv>, deps: RootApiDeps
           ssh: deps.ssh,
           runId: c.req.param("runId"),
           identitySecretRef,
-          timeoutMs: parsed.data.timeoutMs ?? 30_000,
           githubAppMinter,
           ...parsed.data,
         }),

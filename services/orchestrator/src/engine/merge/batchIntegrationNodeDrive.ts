@@ -100,7 +100,6 @@ export interface BatchNodeDriveDeps {
   gate: GateBatchWorkspace;
   /** The jj-local integration runner (defaults to the real A1-backed `withJjLocalIntegration`). */
   integrate?: JjIntegratePort;
-  timeoutMs: number;
 }
 
 /**
@@ -127,7 +126,6 @@ export async function driveBatchThroughNode(
     repoUrl: facts.repoUrl,
     members: facts.members,
     localRef,
-    timeoutMs: deps.timeoutMs,
   };
   const result = await integrate(deps.jjWorkspaceDeps, input, (live, integrated) =>
     verdictForIntegrated(facts, deps, live, integrated),

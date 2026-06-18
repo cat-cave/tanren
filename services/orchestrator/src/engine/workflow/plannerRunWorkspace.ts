@@ -25,6 +25,7 @@ import {
   type ProvisionMiseToolchainInput,
 } from "../workspace/index.js";
 import { gitAuthedCommand, gitTokenAuthPrelude } from "../workspace/githubPush.js";
+import { buildActivityWatchdog } from "../ssh/activityWatchdog.js";
 import { resolveVcsActorIdentity, resolveVcsToken } from "../credentials/vcsCredentials.js";
 import { resolveBootstrapCommand } from "./gate/index.js";
 import type { RunPlannerLoopInput } from "./plannerRun.js";
@@ -43,14 +44,12 @@ export interface BootstrapStepInput {
   // (never folded into `command`, so a bootstrap failure can't leak it into the
   // error message / events). See bootstrap.ts. Undefined ⇒ no app env.
   appEnv?: Record<string, string>;
-  timeoutMs: number;
 }
 
 export interface CommitBootstrapStepInput {
   ssh: CommandSubstrate;
   target: RunnerHandle;
   workspacePath: string;
-  timeoutMs: number;
 }
 
 export interface PreparedRunWorkspace {
@@ -114,7 +113,7 @@ export async function prepareRunWorkspace(
   // later `git add -A` (the bootstrap commit or any writer commit) can sweep a
   // node_modules/dist tree into the repo — which previously ballooned the writer
   // diff (and the checker/auditor prompt) past the model's input limit.
-  await seedWorkspaceLocalIgnore({ ssh: input.ssh, target, workspacePath, timeoutMs: input.timeoutMs });
+  await seedWorkspaceLocalIgnore({ ssh: input.ssh, target, workspacePath });
 
   // Command precedence: an explicit input.bootstrapCommand override wins;
   // otherwise resolve the repo's .tanren/ci.yml `bootstrap.run` (conventionally
@@ -122,8 +121,7 @@ export async function prepareRunWorkspace(
   // undefined and the bootstrap step falls back to the stack-agnostic
   // DEFAULT_BOOTSTRAP_COMMAND LOUD-fallback (just bootstrap, else a loud failure).
   const resolvedBootstrapCommand =
-    input.bootstrapCommand ??
-    (await resolveBootstrapCommand({ ssh: input.ssh, target, workspacePath, timeoutMs: input.timeoutMs }));
+    input.bootstrapCommand ?? (await resolveBootstrapCommand({ ssh: input.ssh, target, workspacePath }));
   // TOOLCHAIN PROVISION (environment-management.md §3 Layer 2): BEFORE the project's
   // `just bootstrap`, provision the declared toolchain. When the workspace already ships
   // a `mise.toml` at clone time (a brownfield/template-seeded repo) `mise trust && mise
@@ -137,7 +135,7 @@ export async function prepareRunWorkspace(
   // un-globally-activated). Test seam: an injected `provisionMise` overrides it.
   const provisionMise =
     input.provisionMise ?? ((stepInput: ProvisionMiseToolchainInput) => provisionMiseToolchain(stepInput));
-  await provisionMise({ ssh: input.ssh, target, workspacePath, timeoutMs: input.timeoutMs });
+  await provisionMise({ ssh: input.ssh, target, workspacePath });
   const runBootstrap =
     input.runBootstrap ?? ((stepInput: BootstrapStepInput) => bootstrapWorkspace(stepInput).then(() => {}));
   // Plane B: the building agent runs install/build under the
@@ -161,12 +159,13 @@ export async function prepareRunWorkspace(
       workspacePath,
       command: resolvedBootstrapCommand,
       ...(input.appEnv === undefined ? {} : { appEnv: input.appEnv }),
-      timeoutMs: input.timeoutMs,
     });
   } catch (error: unknown) {
     if (!(error instanceof WorkspaceBootstrapError)) throw error;
-    const { command, exitCode, timedOut, outputTail } = error;
-    prepBootstrapDeferred = { command, exitCode, timedOut, outputTail };
+    const { command, exitCode, stalled, outputTail } = error;
+    // The deferred-bootstrap event's `timedOut` field records "did not complete";
+    // the progress-based no-life flag (`stalled`) feeds it.
+    prepBootstrapDeferred = { command, exitCode, timedOut: stalled, outputTail };
   }
 
   // Commit the bootstrap-generated tree as ONE synthetic commit on top of the
@@ -175,7 +174,7 @@ export async function prepareRunWorkspace(
   // yields "" and baseSha falls back to cloneHeadSha.
   const commitBootstrap =
     input.commitBootstrap ?? ((stepInput: CommitBootstrapStepInput) => commitBootstrapState(stepInput));
-  const bootstrapSha = await commitBootstrap({ ssh: input.ssh, target, workspacePath, timeoutMs: input.timeoutMs });
+  const bootstrapSha = await commitBootstrap({ ssh: input.ssh, target, workspacePath });
   const bootstrapBase = bootstrapSha === "" ? cloneHeadSha : bootstrapSha;
 
   // TEMPLATE SEED (templating-system.md §3): when a validated template was SELECTED at
@@ -244,14 +243,13 @@ async function materializeTemplateSeedCommit(
     workspacePath,
     repoRef: seed.repoRef,
     token,
-    timeoutMs: input.timeoutMs,
   });
   // Nothing newly seeded (fake SSH / empty tree / fully shadowed) ⇒ no commit.
   if (!result.seeded) return "";
   const committed = await runWorkspaceSshCommand(input.ssh, target, {
     label: "commit template seed",
     cwd: workspacePath,
-    timeoutMs: input.timeoutMs,
+    watchdog: buildActivityWatchdog({ substrate: input.ssh, target, cls: "vcs", workspace: workspacePath }),
     command: [
       "set -eu",
       // Stage everything the seed copied (-A) — the bootstrap commit already absorbed
@@ -286,14 +284,13 @@ async function materializeContractFilesCommit(
     target,
     files,
     workspacePath,
-    timeoutMs: input.timeoutMs,
   });
   // Nothing newly written (every file already present) ⇒ no commit, no base shift.
   if (result.written.length === 0) return "";
   const committed = await runWorkspaceSshCommand(input.ssh, target, {
     label: "commit deterministic contract files",
     cwd: workspacePath,
-    timeoutMs: input.timeoutMs,
+    watchdog: buildActivityWatchdog({ substrate: input.ssh, target, cls: "vcs", workspace: workspacePath }),
     command: [
       "set -eu",
       // Stage ONLY the contract files (not -A) so this commit carries the contract
@@ -343,7 +340,8 @@ async function cloneWorkspace(
   }
   const result = await runWorkspaceSshCommand(input.ssh, target, {
     label: "prepare planner-loop workspace",
-    timeoutMs: input.timeoutMs,
+    // VCS op (a clone): output-driven + workspace liveness probe; never a wall-clock kill.
+    watchdog: buildActivityWatchdog({ substrate: input.ssh, target, cls: "vcs", workspace: workspacePath }),
     command: buildCloneCommand(input.context.repoUrl, input.context.targetBranch, resolved, workspacePath),
     ...(resolved.token === undefined ? {} : { stdin: resolved.token }),
   });
@@ -373,7 +371,8 @@ export async function configureWorkspaceGitIdentity(
   await runWorkspaceSshCommand(input.ssh, target, {
     label: "configure workspace git identity",
     cwd: workspacePath,
-    timeoutMs: input.timeoutMs,
+    // VCS op (git config): output-driven + workspace liveness probe; no kill.
+    watchdog: buildActivityWatchdog({ substrate: input.ssh, target, cls: "vcs", workspace: workspacePath }),
     command: ["set -eu", ...gitIdentityConfig(identity)].join(" && "),
   });
 }

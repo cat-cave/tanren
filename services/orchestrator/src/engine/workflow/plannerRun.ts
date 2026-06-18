@@ -178,7 +178,6 @@ export interface RunPlannerLoopInput {
   // App-first clone-token resolution so a private clone reuses the run's minted/cached token.
   githubAppMinter?: GithubAppTokenMinter;
   context: PlannerRunContext;
-  timeoutMs: number;
   workspacePath?: string;
   // Test seam: a pre-resolved GitHub clone token. Production omits it (prepareRunWorkspace resolves it from secrets + context.githubCredentialRef).
   githubToken?: string;
@@ -375,7 +374,6 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
           baseSha,
           ...(context.designContextBlock !== undefined && { designContextBlock: context.designContextBlock }),
         },
-        timeoutMs: input.timeoutMs,
         usageProbe,
         budgetGate: iterationBudgetGate,
         runGate,

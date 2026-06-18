@@ -96,23 +96,20 @@ export class OrchestratorClient extends OrchestratorOrgConfigClient {
   }
 
   /**
-   * All cost records for a run (`GET .../runs/:runId/costs`), walking
-   * the cursor pages so the costs dashboard sees the full set. Capped at
-   * `maxPages` so a runaway cursor can never spin forever. Empty on failure.
+   * All cost records for a run (`GET .../runs/:runId/costs`), walking the cursor pages
+   * until the cursor is exhausted so the costs dashboard sees the FULL set. Progress-
+   * based: each page MUST yield a NEW cursor — a repeated cursor means the API stopped
+   * advancing, so the walk STOPS on that (returning what it has) rather than looping
+   * forever. Empty on failure.
    */
-  async listRunCosts(
-    orgId: string,
-    projectId: string,
-    runId: string,
-    opts: { maxPages?: number } = {},
-  ): Promise<CostRecord[]> {
-    const maxPages = opts.maxPages ?? 20;
+  async listRunCosts(orgId: string, projectId: string, runId: string): Promise<CostRecord[]> {
     const base = `${this.orchestratorUrl}/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(
       projectId,
     )}/runs/${encodeURIComponent(runId)}/costs`;
     const all: CostRecord[] = [];
+    const seenCursors = new Set<string>();
     let cursor: string | null = null;
-    for (let page = 0; page < maxPages; page += 1) {
+    for (;;) {
       const url = cursor === null ? base : `${base}?cursor=${encodeURIComponent(cursor)}`;
       const response = await this.fetchImpl(url, { headers: this.headers() }).catch(() => {});
       if (response === undefined || !response.ok) {
@@ -122,10 +119,15 @@ export class OrchestratorClient extends OrchestratorOrgConfigClient {
       for (const item of json.items ?? []) {
         all.push(item);
       }
-      cursor = json.nextCursor ?? null;
-      if (cursor === null) {
+      const nextCursor = json.nextCursor ?? null;
+      // Stop on an exhausted OR non-advancing cursor (a repeated cursor would loop
+      // forever). The dashboard read is best-effort, so a non-advancing API stops the
+      // walk with what it has rather than throwing.
+      if (nextCursor === null || seenCursors.has(nextCursor)) {
         break;
       }
+      seenCursors.add(nextCursor);
+      cursor = nextCursor;
     }
     return all;
   }

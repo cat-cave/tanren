@@ -33,6 +33,7 @@ import type { Allocator, RunnerHandle } from "../../contracts/allocator.js";
 import type { CommandSubstrate } from "../../contracts/commandSubstrate.js";
 import { workspaceRepoPathForRun } from "../../workspace/index.js";
 import { quoteSshShellArg } from "../../ssh/command.js";
+import { outputOnlyWatchdog } from "../../ssh/activityWatchdog.js";
 import type { ProjectToolchain } from "../../config/projectConfig.js";
 import { renderMiseToml } from "../../forge/scaffold/skeleton.js";
 import type { ActorRef } from "../../state/actor.js";
@@ -73,8 +74,6 @@ export interface CreateEnvironmentDeps {
   identitySecretRef: string;
   // The clock — passed so the proof's validatedAt is deterministic in tests.
   now: () => Date;
-  // Per-command validation timeout.
-  timeoutMs: number;
 }
 
 // The inputs the creation flow takes: the owning org + the project (for naming) + its
@@ -215,14 +214,13 @@ async function validateBuiltEnv(
     // Materialize the project's mise.toml into the validation workspace so `mise`
     // resolves the env's toolchain there (the image bakes the install; the toml in the
     // cwd is what `mise exec`/`mise which` read to know what to resolve).
-    await materializeMiseToml(deps.ssh, target, workspacePath, renderMiseToml(request.toolchain), deps.timeoutMs);
+    await materializeMiseToml(deps.ssh, target, workspacePath, renderMiseToml(request.toolchain));
     return await runEnvValidationHarness({
       ssh: deps.ssh,
       target,
       workspacePath,
       toolchain: request.toolchain,
       now: deps.now,
-      timeoutMs: deps.timeoutMs,
     });
   } finally {
     // RELEASE the validation runner (pass OR fail) — never leaked. Best-effort: a
@@ -242,17 +240,17 @@ async function materializeMiseToml(
   target: RunnerHandle,
   workspacePath: string,
   miseToml: string,
-  timeoutMs: number,
 ): Promise<void> {
   await ssh.run(target, {
     command: `set -eu; mkdir -p ${quoteSshShellArg(workspacePath)}`,
-    timeoutMs,
+    // INFRA file prep: output-driven watchdog, no wall-clock kill.
+    watchdog: outputOnlyWatchdog(),
   });
   await ssh.run(target, {
     command: `cat > ${quoteSshShellArg(`${workspacePath}/mise.toml`)}`,
     cwd: workspacePath,
     stdin: miseToml,
-    timeoutMs,
+    watchdog: outputOnlyWatchdog(),
   });
 }
 

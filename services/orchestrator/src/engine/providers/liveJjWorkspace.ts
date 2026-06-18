@@ -52,9 +52,6 @@ const log = createLogger("live-jj-workspace");
 /** The terminal runner image a live jj workspace allocates against when none is given. */
 const DEFAULT_LIVE_JJ_RUNNER_IMAGE = CANONICAL_RUNNER_IMAGE;
 
-/** The default per-jj-command timeout (ms) the live workspace runs SSH ops under. */
-const DEFAULT_LIVE_JJ_TIMEOUT_MS = 600_000;
-
 /**
  * The repo + tenancy facts the factory clones + allocates against. These are exactly
  * what a run already knows (mirrors `DriveConflictResolveFacts` + the run context the
@@ -90,8 +87,6 @@ export interface LiveJjWorkspaceDeps {
   githubHttp: GitHubHttpClient;
   /** The shared installation-token minter (its cache lives here). */
   githubAppMinter?: GithubAppTokenMinter;
-  /** Per-jj-command timeout (ms); defaults to {@link DEFAULT_LIVE_JJ_TIMEOUT_MS}. */
-  timeoutMs?: number;
 }
 
 /**
@@ -129,7 +124,6 @@ export interface LiveJjWorkspace {
  */
 export async function buildLiveJjWorkspace(deps: LiveJjWorkspaceDeps): Promise<LiveJjWorkspace> {
   const { facts } = deps;
-  const timeoutMs = deps.timeoutMs ?? DEFAULT_LIVE_JJ_TIMEOUT_MS;
   // RUNLESS: a synthetic `run_*` naming handle (satisfies `workspaceRepoPathForRun`'s
   // safe-id gate) so retained `runner_<runId>` rows from a real run can't collide with
   // this short-lived workspace, and the persisted FK columns stay NULL (no `runs` row).
@@ -220,7 +214,6 @@ export async function buildLiveJjWorkspace(deps: LiveJjWorkspaceDeps): Promise<L
     const core = new JjWorkspaceVcsCore({
       substrate: deps.ssh,
       target: allocation.target,
-      timeoutMs,
       refResolver: identityJjRefResolver,
       workingEdit: autoSnapshotWorkingEdit,
       ...(commitIdentity !== undefined && { commitIdentity }),

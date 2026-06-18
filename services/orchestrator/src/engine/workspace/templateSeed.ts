@@ -26,6 +26,7 @@ import type { RunnerHandle } from "../contracts/allocator.js";
 import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import { githubHttpsRemote, parseGitHubRepository } from "../providers/github.js";
 import { quoteSshShellArg } from "../ssh/command.js";
+import { buildActivityWatchdog } from "../ssh/activityWatchdog.js";
 import { gitAuthedCommand, gitTokenAuthPrelude } from "./githubPush.js";
 import { runWorkspaceSshCommand } from "./ssh.js";
 
@@ -39,7 +40,6 @@ export interface MaterializeTemplateSeedInput {
   // The run's resolved GitHub token (App-first or static). Required to clone a PRIVATE
   // template repo. Absent ⇒ an unauthenticated clone of a public template repo.
   token: string | undefined;
-  timeoutMs: number;
 }
 
 export interface MaterializeTemplateSeedResult {
@@ -121,7 +121,14 @@ export async function materializeTemplateSeedInWorkspace(
   const result = await runWorkspaceSshCommand(input.ssh, input.target, {
     label: "materialize template seed",
     cwd: input.workspacePath,
-    timeoutMs: input.timeoutMs,
+    // VCS op (a template clone + copy): output-driven + the workspace as the
+    // silent-stretch liveness probe. NEVER killed for elapsed time.
+    watchdog: buildActivityWatchdog({
+      substrate: input.ssh,
+      target: input.target,
+      cls: "vcs",
+      workspace: input.workspacePath,
+    }),
     command: `bash -c ${quoteSshShellArg(command)}`,
     ...(input.token === undefined ? {} : { stdin: input.token }),
   });

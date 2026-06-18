@@ -13,21 +13,19 @@ import { CandidateTriage, type TriageAnswerer, type TriageAnswererContext } from
 
 const SCHEMA_NAME = "tanren.candidate_triage.v1";
 
-export interface WrapProviderTriageAnswererOptions {
-  // Bounds each provider call. Defaults to 120s — triage is interactive.
-  timeoutMs?: number;
-}
+// No bounding option remains: each provider answerer call is governed by the agent
+// ActivityWatchdog (output-driven, never a wall-clock kill) the adapter constructs.
+export type WrapProviderTriageAnswererOptions = Record<never, never>;
 
 export function wrapProviderTriageAnswerer(
   adapter: AnswererAdapter<CandidateTriage>,
-  options: WrapProviderTriageAnswererOptions = {},
+  _options: WrapProviderTriageAnswererOptions = {},
 ): TriageAnswerer {
   const jsonSchema = renderAnswererJsonSchema(CandidateTriage);
   return {
     async triage(context: TriageAnswererContext): Promise<CandidateTriage> {
       return adapter.runAnswerer({
         prompt: buildTriagePrompt(context),
-        timeoutMs: options.timeoutMs ?? 120_000,
         outputSchema: {
           name: SCHEMA_NAME,
           jsonSchema,

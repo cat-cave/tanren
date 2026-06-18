@@ -93,7 +93,6 @@ export function defaultUsageProbe(input: RunPlannerLoopInput, ctx: PlannerRunAda
     cli: "codex",
     codexHome: ctx.codexHome,
     target: ctx.target,
-    timeoutMs: input.timeoutMs,
     pressureThresholdPercent: input.pressureThresholdPercent,
   });
 }

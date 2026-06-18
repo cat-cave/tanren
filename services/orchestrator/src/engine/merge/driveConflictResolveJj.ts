@@ -35,7 +35,6 @@ export interface DriveJjResolveDeps {
   secrets: Parameters<typeof buildLiveJjWorkspace>[0]["secrets"];
   githubHttp: Parameters<typeof buildLiveJjWorkspace>[0]["githubHttp"];
   githubAppMinter?: Parameters<typeof buildLiveJjWorkspace>[0]["githubAppMinter"];
-  timeoutMs: number;
   /**
    * Assemble the intent-preserving resolver over the live workspace's runner + path +
    * the jj applier. The caller (driveConflictResolve) owns building the adapters + the
@@ -80,7 +79,6 @@ export async function driveResolveOverJj(
     secrets: deps.secrets,
     githubHttp: deps.githubHttp,
     ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
-    timeoutMs: deps.timeoutMs,
   });
   const applier = buildJjConflictApplier({
     live,
@@ -89,7 +87,6 @@ export async function driveResolveOverJj(
     githubHttp: deps.githubHttp,
     ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
     facts: jjApplierFacts(facts),
-    timeoutMs: deps.timeoutMs,
   });
   try {
     // The re-gate baseline is the merge-time base branch tip (the resolved tree sits on

@@ -93,7 +93,7 @@ class ScriptedSsh implements CommandSubstrate {
     // "real" ⇒ the gate catches the defect (fails). "timeout" ⇒ the gate could NOT run
     // (a flaky runner) — INDETERMINATE, NOT a catch. "noop" / unset ⇒ the gate passes
     // despite the defect (the no-op gate — proves `unproven`).
-    if (mode === "timeout") return timedOut();
+    if (mode === "timeout") return stalledResult();
     return mode === "real" ? fail() : ok();
   }
 
@@ -111,15 +111,15 @@ function capabilityOfScratchDir(dir: string): string {
 }
 
 function ok(): CommandResult {
-  return { exitCode: 0, stdout: "", stderr: "", timedOut: false };
+  return { exitCode: 0, stdout: "", stderr: "" };
 }
 function fail(): CommandResult {
-  return { exitCode: 1, stdout: "", stderr: "gate caught the defect", timedOut: false };
+  return { exitCode: 1, stdout: "", stderr: "gate caught the defect" };
 }
 // A flaky-runner TIMEOUT over the scratch copy: the gate did NOT run to a verdict, so
 // it is INDETERMINATE — never a meaningful negative-control pass (Fix 1).
-function timedOut(): CommandResult {
-  return { exitCode: null, stdout: "", stderr: "", timedOut: true };
+function stalledResult(): CommandResult {
+  return { exitCode: null, stdout: "", stderr: "", stalled: true };
 }
 
 const cleanAuditor: TemplateAuditor = {
@@ -143,7 +143,6 @@ function harnessInput(
     auditor,
     validatedSha: "f".repeat(40),
     now: FIXED_NOW,
-    timeoutMs: 1000,
     appendEvent: async () => {},
   };
 }
@@ -322,11 +321,11 @@ describe("runValidationHarness — deps installed before the positive-control ti
       if (cmd.includes("deps-ensure installing")) {
         this.prepared = true;
         this.installRuns += 1;
-        return { exitCode: 0, stdout: "tanren: deps-ensure installing\nPackages: +120", stderr: "", timedOut: false };
+        return { exitCode: 0, stdout: "tanren: deps-ensure installing\nPackages: +120", stderr: "" };
       }
       // Scratch-copy / defect-write / teardown plumbing always succeeds.
       if (cmd.startsWith("rm -rf") || cmd.includes("cp -a") || cmd.includes("base64 -d")) {
-        return { exitCode: 0, stdout: "", stderr: "", timedOut: false };
+        return { exitCode: 0, stdout: "", stderr: "" };
       }
       // A `just tier-N` run BEFORE deps are installed: the writer's recipe shells out to
       // `./node_modules/.bin/<tool>`, which is not found → exit 127 (the live failure).
@@ -335,10 +334,9 @@ describe("runValidationHarness — deps installed before the positive-control ti
           exitCode: 127,
           stdout: "",
           stderr: "sh: 1: ./node_modules/.bin/prettier: not found",
-          timedOut: false,
         };
       }
-      return { exitCode: 0, stdout: "", stderr: "", timedOut: false };
+      return { exitCode: 0, stdout: "", stderr: "" };
     }
   }
 

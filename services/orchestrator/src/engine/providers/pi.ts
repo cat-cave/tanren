@@ -6,6 +6,7 @@ import { quoteSshShellArg } from "../ssh/command.js";
 import { apiKeyEnvVarForModel } from "./aider.js";
 import type { TokenUsage, UsageLimitSignal, WriterAdapter, WriterResult } from "./types.js";
 import { captureBaselineSha, captureGitStateAfterWriter } from "./writerGit.js";
+import { buildActivityWatchdog } from "../ssh/activityWatchdog.js";
 
 // pi harness adapter (`@earendil-works/pi-coding-agent`) — a Writer-only CLI
 // harness conforming to the v1 harness protocol
@@ -71,12 +72,7 @@ export function createPiWriter(dependencies: PiWriterDependencies): WriterAdapte
     async runWriter(opts): Promise<WriterResult> {
       const model = dependencies.model ?? DEFAULT_PI_MODEL;
       const apiKey = await resolvePiApiKey(dependencies.secrets, dependencies.credentialRef);
-      const baselineSha = await captureBaselineSha(
-        dependencies.ssh,
-        dependencies.target,
-        opts.workspace,
-        opts.timeoutMs,
-      );
+      const baselineSha = await captureBaselineSha(dependencies.ssh, dependencies.target, opts.workspace);
       const pi = await dependencies.ssh.run(dependencies.target, {
         command: buildPiWriterCommand({
           // Managed (endpoint override present) → the platform key is an
@@ -88,7 +84,15 @@ export function createPiWriter(dependencies: PiWriterDependencies): WriterAdapte
           endpointBaseUrl: dependencies.endpointBaseUrl,
         }),
         cwd: opts.workspace,
-        timeoutMs: opts.timeoutMs,
+        // AGENT exec: pi streams its output continuously (every line is a sign of life
+        // → the watchdog resets), with the workspace as the silent-stretch liveness
+        // probe. NEVER killed for elapsed time.
+        watchdog: buildActivityWatchdog({
+          substrate: dependencies.ssh,
+          target: dependencies.target,
+          cls: "agent",
+          workspace: opts.workspace,
+        }),
       });
       const telemetry = parsePiTelemetry(pi.stdout + "\n" + pi.stderr);
       const gitState = await captureGitStateAfterWriter(
@@ -97,9 +101,8 @@ export function createPiWriter(dependencies: PiWriterDependencies): WriterAdapte
         opts.workspace,
         baselineSha,
         "pi writer",
-        opts.timeoutMs,
       );
-      if (pi.timedOut) {
+      if (pi.stalled === true) {
         return failedResult("timeout", telemetry, gitState);
       }
       if (telemetry.usageLimit !== undefined) {

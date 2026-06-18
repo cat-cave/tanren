@@ -70,7 +70,6 @@ export interface BootstrapDependentBaseInput {
   baseBranch: string;
   /** The dependent's run branch (`runs.branch`) — created AT the assembled head. */
   runBranch: string;
-  timeoutMs: number;
 }
 
 /**
@@ -180,7 +179,6 @@ export async function bootstrapDependentBase(
     repoUrl: input.repoUrl,
     members: membersForStack(stack, phaseBySpecId),
     localRef,
-    timeoutMs: input.timeoutMs,
   };
 
   const live = await buildWorkspace(workspaceDeps);

@@ -77,15 +77,15 @@ describe("SSH activity watchdog (progress-based hang detection)", () => {
     vi.useRealTimers();
   });
 
-  it("does NOT arm the legacy wall-clock kill when a watchdog is supplied (no time-based kill)", async () => {
+  it("NEVER kills for elapsed time: a long-but-active op runs unbounded (no wall-clock kill)", async () => {
     vi.useFakeTimers();
     const c = createControllableClient();
     const substrate = await makeSubstrate(c.client);
     // A probe that always reports life — the work is alive, must never be killed.
     const watchdog: ActivityWatchdog = { livenessProbe: () => Promise.resolve(true), probeIntervalMs: 1_000 };
 
-    const runPromise = substrate.run(target, { command: "jj rebase", timeoutMs: 50, watchdog });
-    // Advance FAR beyond the legacy timeoutMs (50ms) — with the old path this would kill.
+    const runPromise = substrate.run(target, { command: "jj rebase", watchdog });
+    // Advance FAR beyond any prior wall-clock budget — there is NO time-based kill now.
     await vi.advanceTimersByTimeAsync(10_000);
     // Still alive: the run has not settled. Now let it finish cleanly.
     c.emitClose(0);
@@ -93,7 +93,6 @@ describe("SSH activity watchdog (progress-based hang detection)", () => {
 
     expect(result.exitCode).toBe(0);
     expect(result.stalled).toBeFalsy();
-    expect(result.timedOut).toBe(false);
     expect(c.state.destroyCount).toBe(0);
   });
 
@@ -104,7 +103,7 @@ describe("SSH activity watchdog (progress-based hang detection)", () => {
     // A probe that reports NO life — but output alone must keep the watchdog reset.
     const watchdog: ActivityWatchdog = { livenessProbe: () => Promise.resolve(false), probeIntervalMs: 1_000 };
 
-    const runPromise = substrate.run(target, { command: "codex --json", timeoutMs: 50, watchdog });
+    const runPromise = substrate.run(target, { command: "codex --json", watchdog });
     // Let exec/arm settle.
     await vi.advanceTimersByTimeAsync(0);
     // Emit a token line every 500ms for several probe windows; each output is a sign of life.
@@ -135,7 +134,7 @@ describe("SSH activity watchdog (progress-based hang detection)", () => {
       probeIntervalMs: 1_000,
     };
 
-    const runPromise = substrate.run(target, { command: "jj rebase -r all()", timeoutMs: 50, watchdog });
+    const runPromise = substrate.run(target, { command: "jj rebase -r all()", watchdog });
     // Five silent probe windows, all reporting alive.
     await vi.advanceTimersByTimeAsync(5_000);
     c.emitClose(0);
@@ -154,13 +153,12 @@ describe("SSH activity watchdog (progress-based hang detection)", () => {
     // No output AND the probe reports no life — a dead/zombied/deadlocked process.
     const watchdog: ActivityWatchdog = { livenessProbe: () => Promise.resolve(false), probeIntervalMs: 1_000 };
 
-    const runPromise = substrate.run(target, { command: "jj rebase", timeoutMs: 999_999, watchdog });
+    const runPromise = substrate.run(target, { command: "jj rebase", watchdog });
     // One probe tick → no output, no life → fire.
     await vi.advanceTimersByTimeAsync(1_000);
     const result = await runPromise;
 
     expect(result.stalled).toBe(true);
-    expect(result.timedOut).toBe(false);
     // SURFACED, not a hard transport failure.
     expect(result.failure).toBeUndefined();
     expect(typeof result.quietForMs).toBe("number");
@@ -177,7 +175,7 @@ describe("SSH activity watchdog (progress-based hang detection)", () => {
       onQuiet: "kill",
     };
 
-    const runPromise = substrate.run(target, { command: "jj rebase", timeoutMs: 999_999, watchdog });
+    const runPromise = substrate.run(target, { command: "jj rebase", watchdog });
     await vi.advanceTimersByTimeAsync(1_000);
     const result = await runPromise;
 

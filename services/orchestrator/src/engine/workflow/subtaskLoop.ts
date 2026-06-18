@@ -132,7 +132,6 @@ export interface SubtaskLoopInput {
   // Optional → resolve to the balanced defaults.
   convergencePolicy?: ConvergencePolicyConfig;
   auditPosture?: AuditPostureConfig;
-  timeoutMs: number;
   onEvent?: (event: { eventType: EventName; taskId?: string }) => void;
   costHooks?: SubtaskLoopCostHooks;
   usageProbe?: UsageProbe;
@@ -311,7 +310,6 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
       appendEvent,
       attempt: loopCount + 1,
       rejectionHistory,
-      timeoutMs: input.timeoutMs,
       buildUsage: input.costHooks?.buildPlannerUsage,
     });
 
@@ -346,7 +344,6 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
       specTitle: input.context.specTitle,
       specDescription: input.context.specDescription,
       acceptanceCriteria: input.context.acceptanceCriteria,
-      timeoutMs: input.timeoutMs,
       appendEvent,
       buildUsage: input.costHooks?.buildAuditorUsage,
     });
@@ -374,7 +371,6 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
         designOracleAdapter: input.adapters.designOracle,
         demoRunEnabled: convergencePolicy.demoRunEnabled,
         ...(input.designOracleActor !== undefined && { designOracleActor: input.designOracleActor }),
-        timeoutMs: input.timeoutMs,
         appendEvent,
       })),
     );
@@ -400,7 +396,6 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
       findings,
       posture,
       ...(input.specValidator !== undefined && { specValidator: input.specValidator }),
-      timeoutMs: input.timeoutMs,
       appendEvent,
     });
     const newSpecs: NewSpecRequest[] = triage.routing.newSpecs.map(routedToNewSpec);
@@ -436,7 +431,6 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
       ...(worstKeptSeverity(triage.routing.tasksHere) !== undefined && {
         worstLeftoverSeverity: worstKeptSeverity(triage.routing.tasksHere),
       }),
-      timeoutMs: input.timeoutMs,
       appendEvent,
     });
     convergenceState = convergence.state;

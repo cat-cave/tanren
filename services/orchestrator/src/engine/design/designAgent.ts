@@ -160,23 +160,21 @@ export function buildDesignAgentPrompt(input: DesignAgentInput): string {
   ].join("\n");
 }
 
-export interface WrapProviderDesignAgentOptions {
-  // Bounds each provider call. Defaults to 120s — authoring is interactive.
-  timeoutMs?: number;
-}
+// No bounding option remains: each provider answerer call is governed by the agent
+// ActivityWatchdog (output-driven, never a wall-clock kill) the adapter constructs.
+export type WrapProviderDesignAgentOptions = Record<never, never>;
 
 // Adapt an `AnswererAdapter` into the `DesignAgent` seam. The strict
 // `DesignAgentAnswer` parse on the output makes a malformed answer THROW (loud).
 export function wrapProviderDesignAgent(
   adapter: AnswererAdapter<DesignAgentAnswer>,
-  options: WrapProviderDesignAgentOptions = {},
+  _options: WrapProviderDesignAgentOptions = {},
 ): DesignAgent {
   const jsonSchema = renderAnswererJsonSchema(DesignAgentAnswer);
   return {
     async elaborate(input: DesignAgentInput): Promise<DesignAgentAnswer> {
       return adapter.runAnswerer({
         prompt: buildDesignAgentPrompt(input),
-        timeoutMs: options.timeoutMs ?? 120_000,
         outputSchema: {
           name: DESIGN_AGENT_ANSWER_SCHEMA_ID,
           jsonSchema,

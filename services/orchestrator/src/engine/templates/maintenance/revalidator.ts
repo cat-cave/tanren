@@ -67,7 +67,6 @@ export interface TemplateWorkspaceProvisioner {
 export function harnessRevalidator(deps: {
   provisioner: TemplateWorkspaceProvisioner;
   now: () => Date;
-  timeoutMs: number;
 }): TemplateRevalidator {
   return {
     async revalidate({ template }): Promise<TemplateValidationProof> {
@@ -87,7 +86,6 @@ export function harnessRevalidator(deps: {
           auditor: ctx.auditor,
           validatedSha: ctx.checkedOutSha,
           now: deps.now,
-          timeoutMs: deps.timeoutMs,
           appendEvent: ctx.appendEvent,
         });
       } finally {

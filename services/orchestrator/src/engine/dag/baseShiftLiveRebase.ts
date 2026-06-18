@@ -16,6 +16,7 @@ import type { OrgGithubAppInstallation } from "../config/orgConfig.js";
 import type { WorkspaceHandle, WorkspaceVcsCore } from "../contracts/workspaceVcsCore.js";
 import { buildLiveJjWorkspace } from "../providers/liveJjWorkspace.js";
 import { quoteSshShellArg } from "../ssh/command.js";
+import { buildActivityWatchdog } from "../ssh/activityWatchdog.js";
 import { runWorkspaceSshCommand } from "../workspace/ssh.js";
 import type { BaseShiftRunContext } from "./baseShiftLiveContext.js";
 import type { LiveBaseShiftDeps } from "./baseShiftLiveSeams.js";
@@ -63,9 +64,8 @@ export async function openLiveBaseShiftWorkspace(input: {
   deps: LiveBaseShiftDeps;
   ctx: BaseShiftRunContext;
   baseRef: string;
-  timeoutMs: number;
 }): Promise<LiveBaseShiftWorkspaceCore> {
-  const { deps, ctx, baseRef, timeoutMs } = input;
+  const { deps, ctx, baseRef } = input;
   const live = await buildLiveJjWorkspace({
     facts: {
       orgId: ctx.orgId,
@@ -81,7 +81,6 @@ export async function openLiveBaseShiftWorkspace(input: {
     secrets: deps.secrets,
     githubHttp: deps.githubHttp,
     ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
-    timeoutMs,
   });
   try {
     const handle = await live.core.openWorkspace({
@@ -97,7 +96,12 @@ export async function openLiveBaseShiftWorkspace(input: {
     await runWorkspaceSshCommand(deps.ssh, live.target, {
       label: "base-shift rebase: track the published head + allow rewriting it",
       cwd: live.workspacePath,
-      timeoutMs,
+      watchdog: buildActivityWatchdog({
+        substrate: deps.ssh,
+        target: live.target,
+        cls: "vcs",
+        workspace: live.workspacePath,
+      }),
       command: [
         "set -eu",
         `jj bookmark track ${quoteSshShellArg(ctx.headBranch)} --remote origin`,
@@ -109,7 +113,7 @@ export async function openLiveBaseShiftWorkspace(input: {
     // `<baseRef>@origin` jj revision TOKEN). `jj rebase -d <token>` accepts the token AND a
     // sha; we keep `baseRevision` (the token) as the rebase target but surface `newBaseSha`
     // as the resolved sha for the event. A non-40-hex read is fail-closed (LOUD throw).
-    const newBaseSha = await readJjRevSha(deps.ssh, live.target, live.workspacePath, `${baseRef}@origin`, timeoutMs);
+    const newBaseSha = await readJjRevSha(deps.ssh, live.target, live.workspacePath, `${baseRef}@origin`);
     return {
       core: live.core,
       handle,
@@ -138,12 +142,11 @@ async function readJjRevSha(
   target: RunnerHandle,
   workspacePath: string,
   rev: string,
-  timeoutMs: number,
 ): Promise<string> {
   const out = await runWorkspaceSshCommand(ssh, target, {
     label: "base-shift rebase: resolve base sha",
     cwd: workspacePath,
-    timeoutMs,
+    watchdog: buildActivityWatchdog({ substrate: ssh, target, cls: "vcs", workspace: workspacePath }),
     command: `jj log -r ${quoteSshShellArg(rev)} --no-graph -T 'commit_id'`,
   });
   const sha = out.stdout.trim();

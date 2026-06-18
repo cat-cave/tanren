@@ -47,7 +47,6 @@ export interface CheckerSubtaskContext {
 
 export interface CheckerInvokeInput {
   context: CheckerSubtaskContext;
-  timeoutMs: number;
   workspace?: string;
 }
 
@@ -64,7 +63,6 @@ export async function invokeChecker(
   const prompt = buildCheckerPrompt(input.context);
   const verdict = await checker.runAnswerer({
     prompt,
-    timeoutMs: input.timeoutMs,
     workspace: input.workspace,
     outputSchema,
   });

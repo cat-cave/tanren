@@ -13,6 +13,7 @@ import { resolveVcsToken } from "../../../credentials/vcsCredentials.js";
 import { githubHttpsRemote, parseGitHubRepository, type GitHubHttpClient } from "../../../providers/github.js";
 import { gitAuthedCommand, gitTokenAuthPrelude } from "../../../workspace/githubPush.js";
 import { quoteSshShellArg } from "../../../ssh/command.js";
+import { buildActivityWatchdog } from "../../../ssh/activityWatchdog.js";
 import { runWorkspaceSshCommand } from "../../../workspace/ssh.js";
 
 /** The repo + branch + credential facts an authed jj head push needs. */
@@ -32,7 +33,6 @@ export interface JjAuthedPushInput {
   installation?: OrgGithubAppInstallation;
   /** The static fallback push credential ref. */
   githubCredentialRef: string;
-  timeoutMs: number;
 }
 
 /**
@@ -61,7 +61,12 @@ export async function pushJjHead(input: JjAuthedPushInput): Promise<void> {
     await runWorkspaceSshCommand(input.ssh, input.target, {
       label: "jj publish: push head",
       cwd: input.workspacePath,
-      timeoutMs: input.timeoutMs,
+      watchdog: buildActivityWatchdog({
+        substrate: input.ssh,
+        target: input.target,
+        cls: "vcs",
+        workspace: input.workspacePath,
+      }),
       command: ["set -eu", `git push --force origin ${refspec}`].join(" && "),
     });
     return;
@@ -70,7 +75,12 @@ export async function pushJjHead(input: JjAuthedPushInput): Promise<void> {
   await runWorkspaceSshCommand(input.ssh, input.target, {
     label: "jj publish: push head (authed)",
     cwd: input.workspacePath,
-    timeoutMs: input.timeoutMs,
+    watchdog: buildActivityWatchdog({
+      substrate: input.ssh,
+      target: input.target,
+      cls: "vcs",
+      workspace: input.workspacePath,
+    }),
     command: ["set -eu", ...gitTokenAuthPrelude(), gitAuthedCommand(["push", "--force", remote, refspec])].join(" && "),
     stdin: token,
   });

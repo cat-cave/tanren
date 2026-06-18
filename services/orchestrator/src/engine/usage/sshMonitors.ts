@@ -3,6 +3,7 @@ import type { CommandResult, CommandSubstrate } from "../contracts/commandSubstr
 import type { CostResolver } from "../contracts/costResolver.js";
 import type { Failure } from "../failure.js";
 import { quoteSshShellArg } from "../ssh/command.js";
+import { outputOnlyWatchdog } from "../ssh/activityWatchdog.js";
 import { parseCcusageAccounting } from "./ccusageParser.js";
 import { parseCodexbarUsageResult } from "./codexbarParser.js";
 import type {
@@ -36,17 +37,13 @@ export class SshCodexbarUsageMonitor implements UsageMonitor {
     private readonly note: UsageNote = defaultNote,
   ) {}
 
-  async readWindowState(input: {
-    provider: string;
-    codexHome: string;
-    target: RunnerHandle;
-    timeoutMs: number;
-  }): Promise<WindowRead> {
+  async readWindowState(input: { provider: string; codexHome: string; target: RunnerHandle }): Promise<WindowRead> {
     const command = buildCodexbarUsageCommand({
       provider: input.provider,
       codexHome: input.codexHome,
     });
-    const result = await this.ssh.run(input.target, { command, timeoutMs: input.timeoutMs });
+    // INFRA usage read: output-driven watchdog, no wall-clock kill.
+    const result = await this.ssh.run(input.target, { command, watchdog: outputOnlyWatchdog() });
     const transport = transportFailure(result, "codexbar", input.provider);
     if (transport !== null) {
       this.note(noteFor(transport));
@@ -78,14 +75,10 @@ export class SshCcusageAccountant implements UsageAccountant {
     private readonly note: UsageNote = defaultNote,
   ) {}
 
-  async readAccounting(input: {
-    cli: string;
-    codexHome: string;
-    target: RunnerHandle;
-    timeoutMs: number;
-  }): Promise<AccountingRead> {
+  async readAccounting(input: { cli: string; codexHome: string; target: RunnerHandle }): Promise<AccountingRead> {
     const command = buildCcusageCommand({ cli: input.cli, codexHome: input.codexHome });
-    const result = await this.ssh.run(input.target, { command, timeoutMs: input.timeoutMs });
+    // INFRA usage read: output-driven watchdog, no wall-clock kill.
+    const result = await this.ssh.run(input.target, { command, watchdog: outputOnlyWatchdog() });
     const transport = transportFailure(result, "ccusage", input.cli);
     if (transport !== null) {
       this.note(noteFor(transport));
@@ -154,7 +147,7 @@ function transportFailure(
   tool: UsageReadFailure["tool"],
   target: string,
 ): UsageReadFailure | null {
-  if (result.timedOut) {
+  if (result.stalled === true) {
     return { tool, target, reason: "timeout", exitCode: result.exitCode, detail: stderrTail(result.stderr) };
   }
   if (result.failure !== undefined) {

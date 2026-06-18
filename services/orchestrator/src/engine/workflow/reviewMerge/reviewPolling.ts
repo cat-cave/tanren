@@ -262,7 +262,6 @@ async function runSimulatedReview(
   };
   const { verdict } = await runSimulatedReviewer(reviewer, {
     context: reviewContext,
-    timeoutMs: input.pollDelayMs ?? 60_000,
   });
   // Post the REAL GitHub review as a COMMENT (self-PR-safe: the bot pushes AND
   // reviews with the same identity, and GitHub forbids self-APPROVE/REQUEST_

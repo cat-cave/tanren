@@ -61,7 +61,6 @@ export interface DemoNarrationInput {
   // Workspace path passed through to the Answerer adapter. Codex needs a
   // workspace mount even for a read-only answerer call.
   workspace?: string;
-  timeoutMs: number;
 }
 
 export type DemoNarrationProvenance = "answerer" | "template";
@@ -217,7 +216,6 @@ export async function generateDemoNarration(
   try {
     const answer = await answerer.runAnswerer({
       prompt: buildDemoPrompt(input),
-      timeoutMs: input.timeoutMs,
       workspace: input.workspace,
       outputSchema,
     });

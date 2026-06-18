@@ -54,7 +54,7 @@ export class TimedCommandSubstrate implements CommandSubstrate {
             operation: "ssh.run.failed",
             durationMs: 0,
             outcome: "error",
-            attributes: { ...handleAttrs, timedOut: result.timedOut },
+            attributes: { ...handleAttrs, stalled: result.stalled === true },
             timestamp: new Date().toISOString(),
           });
         }

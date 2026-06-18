@@ -43,7 +43,6 @@ export interface DefaultConflictResolverDeps {
   target: RunnerHandle;
   workspacePath: string;
   baseSha: string;
-  timeoutMs: number;
   runId: string;
   // The run's spec + project + org + intent (the MERGING spec).
   projectId: string;
@@ -125,12 +124,10 @@ export function buildDefaultConflictResolver(deps: DefaultConflictResolverDeps):
     ...(deps.entityFirstPass !== undefined && { entityFirstPass: deps.entityFirstPass }),
     answerer: new AnswererBackedConflictInvoker({
       adapter: conflictAdapter,
-      timeoutMs: deps.timeoutMs,
       workspace: deps.workspacePath,
     }),
     reGate: new RunPathResolvedTreeReGate({
       workspacePath: deps.workspacePath,
-      timeoutMs: deps.timeoutMs,
       runGate: deps.runGate,
       checker: deps.checker,
       auditor: deps.auditor,

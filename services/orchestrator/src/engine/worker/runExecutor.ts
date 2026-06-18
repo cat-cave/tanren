@@ -53,16 +53,12 @@ import { runPlannerLoopWorkflow, type PlannerRunResult, type RunPlannerLoopInput
 
 const log = createLogger("run-executor");
 
-// Per-stage agent/SSH timeout CAP (a ceiling, not a fixed wait). Bumped 5min→10min
-// for the #273 scaffold-convergence fix: the hardest first spec (a greenfield
-// monorepo scaffold) had 4/5 of its writer reruns TIME OUT at the old 5-min cap —
-// the spec was simply too large to author in one pass. This is a uniform cap
-// threaded into every stage (planner/writer/checker/auditor) and the gate/SSH
-// commands; raising the ceiling only affects a stage that ACTUALLY needs the extra
-// time (the slow writer pass) — the fast answerers/gate finish well inside it and
-// are unaffected. Kept a code constant (NOT an env var): it's an internal timeout,
-// not a budget/config knob.
-export const DEFAULT_TIMEOUT_MS = 600_000;
+// TIMEOUT-ERADICATION (feedback_no_timeouts_progress_based): there is NO per-stage
+// wall-clock kill anymore. Every agent/SSH command is governed by an ActivityWatchdog
+// (output/telemetry + a workspace liveness probe) — a process showing ANY sign of life
+// runs UNBOUNDED, never killed for elapsed time ("10 minutes is nothing to an AI
+// agent"). The old `DEFAULT_TIMEOUT_MS` ceiling is gone; the only legitimate time bound
+// left in the SSH path is the connect-ESTABLISHMENT handshake (engine/ssh/ssh2Substrate.ts).
 export const DEFAULT_CI_POLL_DELAY_MS = 10_000;
 
 // queue lease recovery. While a claimed job executes, the worker
@@ -108,7 +104,6 @@ export interface RunExecutorDeps {
   // the CI-poll / merge stages. Optional — the provider mints per-call when absent.
   githubAppMinter?: GithubAppTokenMinter;
   identitySecretRef: string;
-  timeoutMs?: number;
   ciPollDelayMs?: number;
   // lease tuning. `leaseMs` is the lease window stamped on claim and on
   // each heartbeat; `heartbeatIntervalMs` is how often the worker renews it
@@ -313,7 +308,6 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
         // Plane B: the project's resolved dev+test app env (over the runner,
         // never logged, distinct from Tanren creds). Empty ⇒ field omitted.
         ...(Object.keys(appEnv).length === 0 ? {} : { appEnv }),
-        timeoutMs: deps.timeoutMs ?? DEFAULT_TIMEOUT_MS,
         ciPollDelayMs: deps.ciPollDelayMs ?? DEFAULT_CI_POLL_DELAY_MS,
         // under `native_queue` the merge stage enters the ready run into the native merge queue (the
         // coordinator drives the actual merge). Built from the worker's real pool so the write is RLS-scoped.

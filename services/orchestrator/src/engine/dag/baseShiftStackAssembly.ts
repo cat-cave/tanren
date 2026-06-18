@@ -22,6 +22,7 @@
 // in `baseShiftLiveSeams.ts`; this module is the assembly itself.)
 
 import { quoteSshShellArg } from "../ssh/command.js";
+import { buildActivityWatchdog } from "../ssh/activityWatchdog.js";
 import { runWorkspaceSshCommand } from "../workspace/ssh.js";
 import { buildLiveJjWorkspace, type LiveJjWorkspace } from "../providers/liveJjWorkspace.js";
 import type { WorkspaceHandle } from "../contracts/workspaceVcsCore.js";
@@ -79,7 +80,6 @@ export async function assembleBaseShiftStackWorkspace(input: {
   ctx: BaseShiftRunContext;
   /** The re-resolved ordered ancestor stack (non-empty — DAG order, ancestors first). */
   stack: AncestorStack;
-  timeoutMs: number;
 }): Promise<LiveBaseShiftWorkspaceCore> {
   const { ctx } = input;
   const assembled = await assembleBaseShiftStackLive(input);
@@ -131,9 +131,8 @@ export async function assembleBaseShiftStackLive(input: {
   ctx: BaseShiftRunContext;
   /** The re-resolved ordered ancestor stack (non-empty — DAG order, ancestors first). */
   stack: AncestorStack;
-  timeoutMs: number;
 }): Promise<AssembledBaseShiftStack> {
-  const { deps, ctx, stack, timeoutMs } = input;
+  const { deps, ctx, stack } = input;
   const live = await buildLiveJjWorkspace({
     facts: {
       orgId: ctx.orgId,
@@ -149,7 +148,6 @@ export async function assembleBaseShiftStackLive(input: {
     secrets: deps.secrets,
     githubHttp: deps.githubHttp,
     ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
-    timeoutMs,
   });
   try {
     const localRef = baseShiftStackLocalRef(ctx.headBranch);
@@ -162,7 +160,6 @@ export async function assembleBaseShiftStackLive(input: {
       repoUrl: ctx.repoUrl,
       members: membersForStack(stack),
       localRef,
-      timeoutMs,
     });
     if (integration.outcome === "conflict") {
       throw new BaseShiftStackAssemblyConflictError(
@@ -187,7 +184,12 @@ export async function assembleBaseShiftStackLive(input: {
     await runWorkspaceSshCommand(deps.ssh, live.target, {
       label: "base-shift stack assembly: track the dependent's published head + allow rewriting it",
       cwd: live.workspacePath,
-      timeoutMs,
+      watchdog: buildActivityWatchdog({
+        substrate: deps.ssh,
+        target: live.target,
+        cls: "vcs",
+        workspace: live.workspacePath,
+      }),
       command: [
         "set -eu",
         `jj bookmark track ${quoteSshShellArg(ctx.headBranch)} --remote origin`,

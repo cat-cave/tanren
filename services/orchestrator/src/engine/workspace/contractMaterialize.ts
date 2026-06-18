@@ -19,6 +19,7 @@ import type { RunnerHandle } from "../contracts/allocator.js";
 import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import type { ContractFile } from "../forge/scaffold/index.js";
 import { quoteSshShellArg } from "../ssh/command.js";
+import { outputOnlyWatchdog } from "../ssh/activityWatchdog.js";
 import { runWorkspaceSshCommand } from "./ssh.js";
 
 export interface MaterializeContractFilesInput {
@@ -27,7 +28,6 @@ export interface MaterializeContractFilesInput {
   workspacePath: string;
   // The deterministic contract-file manifest (from `materializeContractFiles`).
   files: ReadonlyArray<ContractFile>;
-  timeoutMs: number;
 }
 
 // The outcome of a materialization pass: the paths that were actually written (were
@@ -60,7 +60,7 @@ export async function materializeContractFilesInWorkspace(
 // file was written (true) or already existed (false). Idempotency authority: the
 // `[ -f ]` guard, so a re-clone of a repo that already ships the file is a no-op.
 async function writeIfAbsent(
-  input: Pick<MaterializeContractFilesInput, "ssh" | "target" | "workspacePath" | "timeoutMs">,
+  input: Pick<MaterializeContractFilesInput, "ssh" | "target" | "workspacePath">,
   file: ContractFile,
 ): Promise<boolean> {
   // A marker echoed on the SKIP branch so the caller can tell "written" from
@@ -75,7 +75,8 @@ async function writeIfAbsent(
   const result = await runWorkspaceSshCommand(input.ssh, input.target, {
     label: `materialize contract file ${file.path}`,
     cwd: input.workspacePath,
-    timeoutMs: input.timeoutMs,
+    // INFRA file write (a write-iff-absent heredoc): output-driven watchdog, no kill.
+    watchdog: outputOnlyWatchdog(),
     command,
     // The exact file bytes. On the skip branch `cat` never runs, so the stdin is
     // simply not consumed — harmless.

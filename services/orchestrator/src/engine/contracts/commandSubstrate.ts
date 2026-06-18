@@ -24,24 +24,26 @@ import type { RunnerHandle } from "./allocator.js";
 // HANG DETECTION — the doctrine (feedback_no_timeouts_progress_based, BINDING):
 // Tanren has ZERO arbitrary wall-clock kills. A working process is NEVER killed,
 // regardless of total elapsed time ("10 minutes is nothing to an AI agent"). A
-// command bounds itself on SIGNS OF LIFE, not duration, via the optional
-// `watchdog`. The legacy `timeoutMs` is the TRANSITIONAL hard-kill path for
-// un-migrated callers; the final eradication PR removes it once every site carries
-// a `watchdog`. New code must pass a `watchdog`, never rely on `timeoutMs` as a
-// safety budget.
+// command bounds itself on SIGNS OF LIFE, not duration, via the `watchdog` — the
+// SOLE hang detector. There is NO wall-clock kill of the running command: the only
+// time bound in this contract is `connectTimeoutMs`, the legitimate TCP/SSH
+// HANDSHAKE bound (a dead handshake has no work to lose).
 export interface RunnerCommand {
   command: string;
   cwd?: string;
   stdin?: string;
-  // TRANSITIONAL hard-kill budget (legacy). When no `watchdog` is supplied the SSH
-  // substrate enforces this as a wall-clock `client.destroy()` — the very thing the
-  // doctrine forbids for real work. Retained ONLY so un-migrated callers keep their
-  // current behavior; do NOT add new reliance on it. (Also feeds the connect/handshake
-  // timeout fallback, which IS legitimate — a dead handshake has no work to lose.)
-  timeoutMs: number;
-  // The progress-based replacement for `timeoutMs`. When present, the substrate
-  // bounds the command on the ABSENCE of all signs of life (see ActivityWatchdog),
-  // never on elapsed time, and NEVER kills a process that shows any activity.
+  // The legitimate connect-ESTABLISHMENT bound: how long to wait for the SSH
+  // transport to come up (TCP connect + handshake/auth) before giving up on a
+  // connection that never established. This is NOT a kill budget on the running
+  // command — once the channel is up the command runs UNBOUNDED, governed only by
+  // the `watchdog`. Optional; the substrate applies a sane default handshake bound.
+  connectTimeoutMs?: number;
+  // The PROGRESS-BASED hang detector (the doctrine's only safety mechanism for a
+  // running command). The substrate bounds the command on the ABSENCE of all signs
+  // of life (see ActivityWatchdog), never on elapsed time, and NEVER kills a process
+  // that shows any activity. Construct it via the shared `buildActivityWatchdog`
+  // factory (engine/ssh/activityWatchdog.ts) per call class. When omitted, the
+  // substrate runs a default output-driven watchdog (no probe) — still no time kill.
   watchdog?: ActivityWatchdog;
 }
 
@@ -93,18 +95,17 @@ export interface ActivityWatchdog {
 // shape uniformly across backends. `exitCode` is the runner process's code
 // (null when the command never produced one — e.g. a connection failure).
 //
-// `timedOut` is the LEGACY wall-clock-kill flag (the un-migrated `timeoutMs` path).
-// `stalled` is the NEW progress-based flag: the watchdog observed a genuine absence of
-// all signs of life and SURFACED a recoverable stall (rather than a time-based kill).
-// `quietForMs` is evidence — how long since the last observed sign of life when the
-// watchdog fired (diagnostic only; NOT the trigger, which is the probe verdict). The
-// final eradication PR unifies `timedOut` into `stalled` once every site migrates.
+// `stalled` is the SOLE no-progress flag (the wall-clock `timedOut` is gone): the
+// watchdog observed a genuine absence of all signs of life — a dead/zombied/
+// deadlocked process or a dead connection — and SURFACED a recoverable stall (the
+// caller re-drives). It is NEVER a time-based kill of working work. `quietForMs` is
+// evidence — how long since the last observed sign of life when the watchdog fired
+// (diagnostic only; NOT the trigger, which is the probe verdict).
 export interface CommandResult {
   exitCode: number | null;
   stdout: string;
   stderr: string;
   signal?: string;
-  timedOut: boolean;
   stalled?: boolean;
   quietForMs?: number;
   failure?: Failure;
@@ -126,7 +127,6 @@ export class FakeCommandSubstrate implements CommandSubstrate {
       exitCode: 0,
       stdout: `fake command: ${command.command}`,
       stderr: "",
-      timedOut: false,
     };
   }
 }

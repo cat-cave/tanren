@@ -66,7 +66,7 @@ class ScriptedSsh implements CommandSubstrate {
 }
 
 function ok(stdout: string): CommandResult {
-  return { exitCode: 0, stdout, stderr: "", timedOut: false };
+  return { exitCode: 0, stdout, stderr: "" };
 }
 
 describe("command builders", () => {
@@ -98,7 +98,6 @@ describe("SshCodexbarUsageMonitor", () => {
       provider: "codex",
       codexHome,
       target,
-      timeoutMs: 5000,
     });
     expect(ssh.commands[0]?.command).toContain("codexbar usage --provider 'codex'");
     expect(ssh.commands[0]?.command).toContain(`CODEX_HOME='${codexHome}'`);
@@ -109,9 +108,9 @@ describe("SshCodexbarUsageMonitor", () => {
 
   it("returns a LOUD `{ failed }` read on a non-zero exit + a note (never throws)", async () => {
     const notes: string[] = [];
-    const ssh = new ScriptedSsh({ exitCode: 1, stdout: "", stderr: "boom", timedOut: false });
+    const ssh = new ScriptedSsh({ exitCode: 1, stdout: "", stderr: "boom" });
     const monitor = new SshCodexbarUsageMonitor(ssh, (message) => notes.push(message));
-    const read = await monitor.readWindowState({ provider: "codex", codexHome, target, timeoutMs: 5000 });
+    const read = await monitor.readWindowState({ provider: "codex", codexHome, target });
     expect(read).toEqual({
       failed: { tool: "codexbar", target: "codex", reason: "nonzero_exit", exitCode: 1, detail: "boom" },
     });
@@ -120,9 +119,9 @@ describe("SshCodexbarUsageMonitor", () => {
   });
 
   it("returns a LOUD `{ failed }` read on timeout", async () => {
-    const ssh = new ScriptedSsh({ exitCode: null, stdout: "", stderr: "", timedOut: true });
+    const ssh = new ScriptedSsh({ exitCode: null, stdout: "", stderr: "", stalled: true });
     const monitor = new SshCodexbarUsageMonitor(ssh, () => {});
-    const read = await monitor.readWindowState({ provider: "codex", codexHome, target, timeoutMs: 5000 });
+    const read = await monitor.readWindowState({ provider: "codex", codexHome, target });
     expect(read).toEqual({
       failed: { tool: "codexbar", target: "codex", reason: "timeout", exitCode: null, detail: "" },
     });
@@ -132,7 +131,7 @@ describe("SshCodexbarUsageMonitor", () => {
     const notes: string[] = [];
     const ssh = new ScriptedSsh(ok("not json at all"));
     const monitor = new SshCodexbarUsageMonitor(ssh, (m) => notes.push(m));
-    const read = await monitor.readWindowState({ provider: "codex", codexHome, target, timeoutMs: 5000 });
+    const read = await monitor.readWindowState({ provider: "codex", codexHome, target });
     expect(read).toMatchObject({ failed: { reason: "malformed_output", exitCode: 0 } });
     expect(notes[0]).toContain("usage.read_failed");
   });
@@ -141,7 +140,7 @@ describe("SshCodexbarUsageMonitor", () => {
     const notes: string[] = [];
     const ssh = new ScriptedSsh(ok("[]"));
     const monitor = new SshCodexbarUsageMonitor(ssh, (m) => notes.push(m));
-    const read = await monitor.readWindowState({ provider: "codex", codexHome, target, timeoutMs: 5000 });
+    const read = await monitor.readWindowState({ provider: "codex", codexHome, target });
     expect(read).toEqual({ ok: null });
     // legitimate-empty stays QUIET — no read-failed note.
     expect(notes).toEqual([]);
@@ -156,7 +155,6 @@ describe("SshCcusageAccountant", () => {
       cli: "codex",
       codexHome,
       target,
-      timeoutMs: 5000,
     });
     expect(ssh.commands[0]?.command).toContain("ccusage 'codex' --json");
     const accounting = okRead(read);
@@ -170,11 +168,10 @@ describe("SshCcusageAccountant", () => {
       exitCode: 0,
       stdout: "",
       stderr: "",
-      timedOut: false,
       failure: { kind: "ssh_failed", target: "runner", message: "down" },
     });
     const accountant = new SshCcusageAccountant(ssh, () => {});
-    const read = await accountant.readAccounting({ cli: "codex", codexHome, target, timeoutMs: 5000 });
+    const read = await accountant.readAccounting({ cli: "codex", codexHome, target });
     expect(read).toEqual({
       failed: { tool: "ccusage", target: "codex", reason: "ssh_failure", exitCode: 0, detail: "down" },
     });
@@ -184,7 +181,7 @@ describe("SshCcusageAccountant", () => {
     const notes: string[] = [];
     const ssh = new ScriptedSsh(ok(JSON.stringify({ unexpected: true })));
     const accountant = new SshCcusageAccountant(ssh, (m) => notes.push(m));
-    const read = await accountant.readAccounting({ cli: "codex", codexHome, target, timeoutMs: 5000 });
+    const read = await accountant.readAccounting({ cli: "codex", codexHome, target });
     expect(read).toMatchObject({ failed: { reason: "malformed_output" } });
     expect(notes[0]).toContain("usage.read_failed");
   });
@@ -193,7 +190,7 @@ describe("SshCcusageAccountant", () => {
     const notes: string[] = [];
     const ssh = new ScriptedSsh(ok("   "));
     const accountant = new SshCcusageAccountant(ssh, (m) => notes.push(m));
-    const read = await accountant.readAccounting({ cli: "codex", codexHome, target, timeoutMs: 5000 });
+    const read = await accountant.readAccounting({ cli: "codex", codexHome, target });
     expect(read).toEqual({ ok: null });
     expect(notes).toEqual([]);
   });

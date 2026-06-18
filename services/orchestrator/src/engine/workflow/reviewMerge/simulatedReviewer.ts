@@ -25,7 +25,6 @@ export interface SimulatedReviewContext {
 
 export interface SimulatedReviewInput {
   context: SimulatedReviewContext;
-  timeoutMs: number;
   workspace?: string;
 }
 
@@ -48,7 +47,6 @@ export async function runSimulatedReviewer(
   const prompt = buildSimulatedReviewerPrompt(input.context);
   const verdict = await reviewer.runAnswerer({
     prompt,
-    timeoutMs: input.timeoutMs,
     workspace: input.workspace,
     outputSchema,
   });

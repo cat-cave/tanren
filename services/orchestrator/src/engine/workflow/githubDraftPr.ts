@@ -53,7 +53,6 @@ export interface PublishDraftPullRequestInput {
   body?: string;
   githubCredentialRef?: string;
   projectConfig?: Record<string, unknown>;
-  timeoutMs: number;
   /** org App installation; when set, prefer minting an App token. */
   installation?: OrgGithubAppInstallation;
   githubAppMinter?: GithubAppTokenMinter;
@@ -84,7 +83,6 @@ export interface PublishDraftPullRequestForRunInput {
   workspacePath?: string;
   title?: string;
   body?: string;
-  timeoutMs: number;
   /** shared installation-token minter (cache lives here). */
   githubAppMinter?: GithubAppTokenMinter;
 }
@@ -169,7 +167,6 @@ export async function publishDraftPullRequest(input: PublishDraftPullRequestInpu
       repoUrl: input.repoUrl,
       branch,
       token: resolved.token,
-      timeoutMs: input.timeoutMs,
       sourceRef: input.sourceRef,
     });
     await eventStore.append({
@@ -264,7 +261,6 @@ export async function publishDraftPullRequestForRun(
     body: input.body ?? context.specDescription,
     githubCredentialRef: input.githubCredentialRef,
     projectConfig: context.projectConfig,
-    timeoutMs: input.timeoutMs,
     installation: context.installation,
     githubAppMinter: input.githubAppMinter,
   });

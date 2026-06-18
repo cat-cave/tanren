@@ -24,6 +24,7 @@
 import type { RunnerHandle } from "../../contracts/allocator.js";
 import type { CommandSubstrate } from "../../contracts/commandSubstrate.js";
 import { quoteSshShellArg } from "../../ssh/command.js";
+import { buildActivityWatchdog } from "../../ssh/activityWatchdog.js";
 import type { ProjectToolchain } from "../../config/projectConfig.js";
 import type { EnvironmentValidationProof, EnvNegativeControlResult } from "../manifest.js";
 import { buildEnvNegativeControlPlan, type EnvNegativeControl } from "./envNegativeControls.js";
@@ -42,8 +43,6 @@ export interface EnvValidationHarnessInput {
   toolchain: ProjectToolchain;
   // The clock — passed so the proof's validatedAt is deterministic in tests.
   now: () => Date;
-  // Per-command timeout.
-  timeoutMs: number;
 }
 
 // Run the full env validation harness → the proof. Stages run in order; even when the
@@ -95,9 +94,14 @@ async function toolResolvesToLockedVersion(
   const exec = await input.ssh.run(input.target, {
     command: `set -e; export MISE_YES=1; mise exec -- ${quoteSshShellArg(tool)} --version`,
     cwd: input.workspacePath,
-    timeoutMs: input.timeoutMs,
+    watchdog: buildActivityWatchdog({
+      substrate: input.ssh,
+      target: input.target,
+      cls: "vcs",
+      workspace: input.workspacePath,
+    }),
   });
-  if (exec.failure !== undefined || exec.timedOut || exec.exitCode !== 0) {
+  if (exec.failure !== undefined || exec.stalled === true || exec.exitCode !== 0) {
     return false;
   }
   // The tool ran — now assert mise RESOLVED the LOCKED version (the env baked what was
@@ -108,9 +112,14 @@ async function toolResolvesToLockedVersion(
   const ls = await input.ssh.run(input.target, {
     command: `export MISE_YES=1; mise ls --installed ${quoteSshShellArg(tool)} 2>/dev/null || mise ls --installed 2>/dev/null`,
     cwd: input.workspacePath,
-    timeoutMs: input.timeoutMs,
+    watchdog: buildActivityWatchdog({
+      substrate: input.ssh,
+      target: input.target,
+      cls: "vcs",
+      workspace: input.workspacePath,
+    }),
   });
-  if (ls.failure !== undefined || ls.timedOut || ls.exitCode !== 0) {
+  if (ls.failure !== undefined || ls.stalled === true || ls.exitCode !== 0) {
     return false;
   }
   return resolvedVersionMatchesSpec(ls.stdout, tool, declaredSpec);
@@ -177,9 +186,14 @@ async function runUndeclaredToolControl(
       `elif mise exec -- ${quoteSshShellArg(control.tool)} --version >/dev/null 2>&1; then echo RESOLVED; ` +
       `else echo ABSENT; fi`,
     cwd: input.workspacePath,
-    timeoutMs: input.timeoutMs,
+    watchdog: buildActivityWatchdog({
+      substrate: input.ssh,
+      target: input.target,
+      cls: "vcs",
+      workspace: input.workspacePath,
+    }),
   });
-  if (result.failure !== undefined || result.timedOut || result.exitCode !== 0) {
+  if (result.failure !== undefined || result.stalled === true || result.exitCode !== 0) {
     // The probe itself could not run — we cannot PROVE isolation, so it is unproven
     // (never a silent pass).
     return "unproven";
@@ -205,9 +219,14 @@ async function runForbiddenVersionControl(
       `if mise exec ${quoteSshShellArg(`${control.tool}@${forbidden}`)} -- ${quoteSshShellArg(control.tool)} --version >/dev/null 2>&1; then ` +
       `echo RESOLVED; else echo ABSENT; fi`,
     cwd: input.workspacePath,
-    timeoutMs: input.timeoutMs,
+    watchdog: buildActivityWatchdog({
+      substrate: input.ssh,
+      target: input.target,
+      cls: "vcs",
+      workspace: input.workspacePath,
+    }),
   });
-  if (result.failure !== undefined || result.timedOut || result.exitCode !== 0) {
+  if (result.failure !== undefined || result.stalled === true || result.exitCode !== 0) {
     return "unproven";
   }
   return result.stdout.includes("ABSENT") && !result.stdout.includes("RESOLVED") ? "proven" : "unproven";

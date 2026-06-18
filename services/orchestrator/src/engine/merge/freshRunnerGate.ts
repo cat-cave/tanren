@@ -29,6 +29,7 @@ import { githubHttpsRemote, parseGitHubRepository, type GitHubHttpClient } from 
 import { resolveVcsToken } from "../credentials/vcsCredentials.js";
 import { gitAuthedCommand, gitTokenAuthPrelude } from "../workspace/githubPush.js";
 import { quoteSshShellArg } from "../ssh/command.js";
+import { buildActivityWatchdog } from "../ssh/activityWatchdog.js";
 import {
   DEFAULT_BOOTSTRAP_COMMAND,
   ensureWorkspaceDepsInstalled,
@@ -75,7 +76,6 @@ export interface FreshRunnerGateDeps {
   eventStore: EventStore;
   /** The runner identity key ref (same value the worker boot seeds). */
   identitySecretRef: string;
-  timeoutMs: number;
 }
 
 /** The verdict of a fresh-runner gate run: the combined outcome + the gated head sha. */
@@ -129,7 +129,6 @@ export async function runFreshRunnerMergeGate(
       ssh: deps.ssh,
       target: allocation.target,
       workspacePath,
-      timeoutMs: deps.timeoutMs,
     });
     await installDepsForGate(deps, allocation.target, workspacePath);
     const outcome = await gateClonedRef(deps, ctx, allocation.target, workspacePath, headSha);
@@ -175,7 +174,9 @@ async function cloneRefForGate(
         ).token;
   const result = await runWorkspaceSshCommand(deps.ssh, target, {
     label: "clone ref for native re-gate",
-    timeoutMs: deps.timeoutMs,
+    // VCS op (a clone): output-driven + the clone target as the silent-stretch
+    // liveness probe (the clone writes the tree as it works). Never killed for time.
+    watchdog: buildActivityWatchdog({ substrate: deps.ssh, target, cls: "vcs", workspace: workspacePath }),
     command: buildCloneRefCommand(ctx.repoUrl, ctx.ref, token, workspacePath),
     ...(token === undefined ? {} : { stdin: token }),
   });
@@ -226,14 +227,12 @@ async function installDepsForGate(
     ssh: deps.ssh,
     target,
     workspacePath,
-    timeoutMs: deps.timeoutMs,
   });
   await ensureWorkspaceDepsInstalled({
     ssh: deps.ssh,
     target,
     workspacePath,
     command: bootstrapCommand ?? DEFAULT_BOOTSTRAP_COMMAND,
-    timeoutMs: deps.timeoutMs,
   });
 }
 
@@ -249,14 +248,13 @@ async function gateClonedRef(
   workspacePath: string,
   headSha: string,
 ): Promise<GateOutcome> {
-  const config = await resolveGateConfig({ ssh: deps.ssh, target, workspacePath, timeoutMs: deps.timeoutMs });
+  const config = await resolveGateConfig({ ssh: deps.ssh, target, workspacePath });
   return runGateForWhen({
     ssh: deps.ssh,
     target,
     workspacePath,
     config,
     when: "pre_merge",
-    timeoutMs: deps.timeoutMs,
     appendEvent: gateEventAppender(deps, ctx),
     advisoryStepNames: advisoryStepNamesForPosture(ctx.governancePosture),
     headSha,

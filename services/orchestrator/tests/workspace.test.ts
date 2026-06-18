@@ -33,30 +33,27 @@ describe("workspace git contract", () => {
   });
 
   it("turns nonzero, timeout, and substrate failures into workspace command errors", async () => {
-    const nonzero = new ScriptedSsh([{ exitCode: 7, stdout: "", stderr: "bad", timedOut: false }]);
+    const nonzero = new ScriptedSsh([{ exitCode: 7, stdout: "", stderr: "bad" }]);
     await expect(
       runWorkspaceSshCommand(nonzero, target, {
         label: "git step",
         command: "git status",
-        timeoutMs: 50,
       }),
     ).rejects.toThrow(WorkspaceCommandError);
 
-    const timedOut = new ScriptedSsh([{ exitCode: null, stdout: "", stderr: "", timedOut: true }]);
+    const timedOut = new ScriptedSsh([{ exitCode: null, stdout: "", stderr: "", stalled: true }]);
     await expect(
       runWorkspaceSshCommand(timedOut, target, {
         label: "slow step",
         command: "sleep 10",
-        timeoutMs: 50,
       }),
-    ).rejects.toThrow("slow step failed: timed out");
+    ).rejects.toThrow("slow step failed: stalled (no sign of life)");
 
     const failed = new ScriptedSsh([
       {
         exitCode: null,
         stdout: "",
         stderr: "",
-        timedOut: false,
         failure: defineFailure({
           kind: "ssh_failed",
           target: "tanren@runner:22",
@@ -64,9 +61,9 @@ describe("workspace git contract", () => {
         }),
       },
     ]);
-    await expect(
-      runWorkspaceSshCommand(failed, target, { label: "ssh step", command: "true", timeoutMs: 50 }),
-    ).rejects.toThrow("ssh step failed: connection failed");
+    await expect(runWorkspaceSshCommand(failed, target, { label: "ssh step", command: "true" })).rejects.toThrow(
+      "ssh step failed: connection failed",
+    );
   });
 
   it("surfaces the FAILED COMMAND + stderr tail on a workspace command failure (no opaque `failed: exit 1`)", async () => {
@@ -74,13 +71,12 @@ describe("workspace git contract", () => {
     // auto-detect-email error on stderr. The loud message must name the command
     // that failed AND carry its stderr — not just `… failed: exit 1`.
     const stderr = "fatal: unable to auto-detect email address (got 'tanren@host.(none)')";
-    const ssh = new ScriptedSsh([{ exitCode: 1, stdout: "", stderr, timedOut: false }]);
+    const ssh = new ScriptedSsh([{ exitCode: 1, stdout: "", stderr }]);
     let error: unknown;
     try {
       await runWorkspaceSshCommand(ssh, target, {
         label: "commit bootstrap state",
         command: "git add -A && git commit -m bootstrap",
-        timeoutMs: 50,
       });
     } catch (caught) {
       error = caught;
@@ -107,19 +103,18 @@ describe("workspace git contract", () => {
     const sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const diff = "diff --git a/HELLO.md b/HELLO.md\nnew file mode 100644\n+hello world\n";
     const ssh = new ScriptedSsh([
-      { exitCode: 0, stdout: "", stderr: "", timedOut: false },
-      { exitCode: 0, stdout: "", stderr: "", timedOut: false },
-      { exitCode: 0, stdout: diff, stderr: "", timedOut: false },
-      { exitCode: 0, stdout: `${sha}\thello world\n`, stderr: "", timedOut: false },
+      { exitCode: 0, stdout: "", stderr: "" },
+      { exitCode: 0, stdout: "", stderr: "" },
+      { exitCode: 0, stdout: diff, stderr: "" },
+      { exitCode: 0, stdout: `${sha}\thello world\n`, stderr: "" },
     ]);
     const workspacePath = workspaceRepoPathForRun("run_git_contract");
 
-    await prepareGitWorkspace({ ssh, target, workspacePath, timeoutMs: 100 });
+    await prepareGitWorkspace({ ssh, target, workspacePath });
     const writer = createFakeWriter({ ssh, target });
     const result = await writer.runWriter({
       prompt: "write",
       workspace: workspacePath,
-      timeoutMs: 100,
     });
 
     expect(result.diff).toBe(diff);
@@ -141,13 +136,12 @@ describe("workspace bootstrap (P3-0006)", () => {
   const workspacePath = workspaceRepoPathForRun("run_bootstrap");
 
   it("runs the install command in the workspace dir and returns success", async () => {
-    const ssh = new ScriptedSsh([{ exitCode: 0, stdout: "Packages: +120", stderr: "", timedOut: false }]);
+    const ssh = new ScriptedSsh([{ exitCode: 0, stdout: "Packages: +120", stderr: "" }]);
     const result = await bootstrapWorkspace({
       ssh,
       target,
       workspacePath,
       command: "pnpm install",
-      timeoutMs: 100,
     });
 
     expect(result.exitCode).toBe(0);
@@ -160,8 +154,8 @@ describe("workspace bootstrap (P3-0006)", () => {
   });
 
   it("falls back to the stack-agnostic `just bootstrap` LOUD-fallback when none is given", async () => {
-    const ssh = new ScriptedSsh([{ exitCode: 0, stdout: "", stderr: "", timedOut: false }]);
-    await bootstrapWorkspace({ ssh, target, workspacePath, timeoutMs: 100 });
+    const ssh = new ScriptedSsh([{ exitCode: 0, stdout: "", stderr: "" }]);
+    await bootstrapWorkspace({ ssh, target, workspacePath });
 
     expect(ssh.commands[0]?.command.command.endsWith(DEFAULT_BOOTSTRAP_COMMAND)).toBe(true);
     // `just bootstrap` when a justfile is present — and NO baked-in stack command.
@@ -188,7 +182,6 @@ describe("workspace bootstrap (P3-0006)", () => {
         exitCode: 1,
         stdout: "resolving",
         stderr: "ERR_PNPM_NO_LOCKFILE\nvitest: not found",
-        timedOut: false,
       },
     ]);
 
@@ -197,7 +190,6 @@ describe("workspace bootstrap (P3-0006)", () => {
       target,
       workspacePath,
       command: "pnpm install",
-      timeoutMs: 100,
     }).catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(WorkspaceBootstrapError);
     const typed = error as WorkspaceBootstrapError;
@@ -208,22 +200,20 @@ describe("workspace bootstrap (P3-0006)", () => {
   });
 
   it("treats a timeout and a substrate failure as bootstrap errors", async () => {
-    const timedOut = new ScriptedSsh([{ exitCode: null, stdout: "", stderr: "", timedOut: true }]);
+    const timedOut = new ScriptedSsh([{ exitCode: null, stdout: "", stderr: "", stalled: true }]);
     const timeoutError = await bootstrapWorkspace({
       ssh: timedOut,
       target,
       workspacePath,
-      timeoutMs: 50,
     }).catch((caught: unknown) => caught);
     expect(timeoutError).toBeInstanceOf(WorkspaceBootstrapError);
-    expect((timeoutError as WorkspaceBootstrapError).message).toContain("timed out");
+    expect((timeoutError as WorkspaceBootstrapError).message).toContain("stalled (no sign of life)");
 
     const failed = new ScriptedSsh([
       {
         exitCode: null,
         stdout: "",
         stderr: "",
-        timedOut: false,
         failure: defineFailure({
           kind: "ssh_failed",
           target: "tanren@runner:22",
@@ -235,7 +225,6 @@ describe("workspace bootstrap (P3-0006)", () => {
       ssh: failed,
       target,
       workspacePath,
-      timeoutMs: 50,
     }).catch((caught: unknown) => caught);
     expect(substrateError).toBeInstanceOf(WorkspaceBootstrapError);
     expect((substrateError as WorkspaceBootstrapError).outputTail).toContain("connection reset");
@@ -272,10 +261,9 @@ describe("ensureWorkspaceDepsInstalled (greenfield deps-ensure)", () => {
           exitCode: this.installExit,
           stdout: `tanren: deps-ensure installing\n${failed ? "" : "Packages: +120"}`,
           stderr: failed ? "vitest: not found" : "",
-          timedOut: false,
         };
       }
-      return { exitCode: 0, stdout: "tanren: deps-ensure no-op", stderr: "", timedOut: false };
+      return { exitCode: 0, stdout: "tanren: deps-ensure no-op", stderr: "" };
     }
   }
 
@@ -286,7 +274,6 @@ describe("ensureWorkspaceDepsInstalled (greenfield deps-ensure)", () => {
       target,
       workspacePath,
       command: "just bootstrap",
-      timeoutMs: 100,
     });
     expect(result.installed).toBe(true);
     expect(ssh.installRan).toBe(true);
@@ -300,7 +287,7 @@ describe("ensureWorkspaceDepsInstalled (greenfield deps-ensure)", () => {
   // earlier iteration's install is actually present at the gate.
   it("re-runs when the contract exists even though the tree was already prepared", async () => {
     const ssh = new FsAwareSsh({ contract: true, prepared: true });
-    const result = await ensureWorkspaceDepsInstalled({ ssh, target, workspacePath, timeoutMs: 100 });
+    const result = await ensureWorkspaceDepsInstalled({ ssh, target, workspacePath });
     expect(result.installed).toBe(true);
     expect(ssh.installRan).toBe(true);
     // The guard probes for the project CONTRACT (justfile / .tanren/ci.yml), NO stack
@@ -311,14 +298,14 @@ describe("ensureWorkspaceDepsInstalled (greenfield deps-ensure)", () => {
 
   it("no-ops when no contract exists yet (greenfield clone HEAD, pre-writer)", async () => {
     const ssh = new FsAwareSsh({ contract: false, prepared: false });
-    const result = await ensureWorkspaceDepsInstalled({ ssh, target, workspacePath, timeoutMs: 100 });
+    const result = await ensureWorkspaceDepsInstalled({ ssh, target, workspacePath });
     expect(result.installed).toBe(false);
     expect(ssh.installRan).toBe(false);
   });
 
   it("defaults to the stack-agnostic `just bootstrap` LOUD-fallback", async () => {
     const ssh = new FsAwareSsh({ contract: true, prepared: false });
-    await ensureWorkspaceDepsInstalled({ ssh, target, workspacePath, timeoutMs: 100 });
+    await ensureWorkspaceDepsInstalled({ ssh, target, workspacePath });
     expect(ssh.commands[0]?.command).toContain(DEFAULT_BOOTSTRAP_COMMAND);
     // No baked-in stack command — the project's `just bootstrap` owns the install.
     expect(ssh.commands[0]?.command).not.toMatch(/pnpm|npm|corepack/u);
@@ -335,7 +322,6 @@ describe("ensureWorkspaceDepsInstalled (greenfield deps-ensure)", () => {
       workspacePath,
       command: "just bootstrap",
       appEnv: { API_TOKEN: "super-secret-value" },
-      timeoutMs: 100,
     }).catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(WorkspaceDepsInstallError);
     const typed = error as WorkspaceDepsInstallError;
@@ -351,15 +337,14 @@ describe("ensureWorkspaceDepsInstalled (greenfield deps-ensure)", () => {
   });
 
   it("throws a typed error on a timeout / substrate failure", async () => {
-    const timedOut = new ScriptedSsh([{ exitCode: null, stdout: "", stderr: "", timedOut: true }]);
+    const timedOut = new ScriptedSsh([{ exitCode: null, stdout: "", stderr: "", stalled: true }]);
     const timeoutError = await ensureWorkspaceDepsInstalled({
       ssh: timedOut,
       target,
       workspacePath,
-      timeoutMs: 50,
     }).catch((caught: unknown) => caught);
     expect(timeoutError).toBeInstanceOf(WorkspaceDepsInstallError);
-    expect((timeoutError as WorkspaceDepsInstallError).message).toContain("timed out");
+    expect((timeoutError as WorkspaceDepsInstallError).message).toContain("stalled (no sign of life)");
   });
 });
 
