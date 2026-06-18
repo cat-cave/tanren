@@ -7,9 +7,16 @@
 // (GitHub, seeing a 2xx, never re-delivers). This store is the persist-then-202
 // seam: the receiver writes the VERIFIED raw delivery here and returns 202 FAST;
 // a background processor (see `forge/intake/webhookProcessor.ts`) drains `received`/`failed`
-// rows OUT of band — re-driven idempotently by the poller's sweeper. A row that
-// exhausts its attempt budget is parked `dead_lettered` (a loud, human-visible
-// terminal), never re-driven forever.
+// rows OUT of band — re-driven idempotently by the poller's sweeper.
+//
+// TIMEOUT-ERADICATION (feedback_no_timeouts_progress_based, BINDING): there is NO
+// attempt-count dead-letter budget. A TRANSIENT processing failure (an LLM blip, a
+// DB wobble) stays `failed` and the sweeper re-drives it UNBOUNDED — a self-healing
+// transient is never lost to a count. Only a POISON failure (a genuinely
+// non-recoverable delivery — the source vanished, an unsupported mapping, a
+// persistently-invalid spec the quality gate cannot make valid) is parked
+// `dead_lettered` (a loud, human-visible terminal). `attempts` survives as an
+// OBSERVABILITY counter (how many re-drives a row has seen), NOT a give-up trigger.
 //
 // A seam member like `InboxStore`: pure SQL on the caller's client (the org-scope
 // carrier), so under RLS an org-scoped client sees only that org's rows and an
@@ -110,25 +117,23 @@ export const WebhookEventStore = {
     );
   },
 
-  // Record a processing failure: bump `attempts`, capture the error. When the
-  // bumped count reaches `maxAttempts` the row is parked `dead_lettered` (loud
-  // terminal — the sweeper no longer re-drives it); otherwise it stays `failed`
-  // and the sweeper re-drives it next interval. Returns the resulting status.
-  async recordFailure(
-    client: QueryClient,
-    id: string,
-    error: string,
-    maxAttempts: number,
-  ): Promise<WebhookEventStatus> {
+  // Record a processing failure: bump the `attempts` OBSERVABILITY counter, capture
+  // the error, and set the terminal status by the failure's NATURE — NOT a count. A
+  // POISON failure (`poison: true` — a genuinely non-recoverable delivery the caller
+  // classified) parks the row `dead_lettered` (loud terminal — the sweeper no longer
+  // re-drives it). A TRANSIENT failure (`poison: false`) stays `failed` so the
+  // sweeper re-drives it next interval, UNBOUNDED — a self-healing blip is never lost
+  // to an attempt cap. Returns the resulting status.
+  async recordFailure(client: QueryClient, id: string, error: string, poison: boolean): Promise<WebhookEventStatus> {
     const result = await client.query<{ status: string }>(
       `UPDATE webhook_events
          SET attempts = attempts + 1,
              last_error = $2,
-             status = CASE WHEN attempts + 1 >= $3 THEN 'dead_lettered' ELSE 'failed' END,
+             status = CASE WHEN $3 THEN 'dead_lettered' ELSE 'failed' END,
              updated_at = now()
        WHERE id = $1
        RETURNING status`,
-      [id, error.slice(0, 4000), maxAttempts],
+      [id, error.slice(0, 4000), poison],
     );
     return WebhookEventStatus.parse(result.rows[0]?.status ?? "failed");
   },

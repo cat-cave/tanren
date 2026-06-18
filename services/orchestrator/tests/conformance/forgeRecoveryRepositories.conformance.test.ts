@@ -412,14 +412,21 @@ describe("Repositories conformance: forge/recovery (in-memory pg)", () => {
       expect(await repos.webhookEvents.listUndriven(clientA(d), 10)).toHaveLength(0);
     });
 
-    it("records failures with attempt budget: stays failed, then dead-letters at the cap", async () => {
+    it("records failures by NATURE not a count: transient stays failed UNBOUNDED, poison dead-letters", async () => {
       const d = db();
       const ev = await persist(clientA(d), "d1");
-      // First failure (attempts 1 < cap 2) → stays `failed` (sweeper re-drives it).
-      expect(await repos.webhookEvents.recordFailure(clientA(d), ev.id, "boom", 2)).toBe("failed");
-      expect(await repos.webhookEvents.listUndriven(clientA(d), 10)).toHaveLength(1);
-      // Second failure (attempts 2 >= cap 2) → parked `dead_lettered` (no re-drive).
-      expect(await repos.webhookEvents.recordFailure(clientA(d), ev.id, "boom again", 2)).toBe("dead_lettered");
+      // A TRANSIENT failure (poison=false) stays `failed` so the sweeper re-drives it —
+      // and STAYS failed across many re-drives (no attempt-cap dead-letter).
+      expect(await repos.webhookEvents.recordFailure(clientA(d), ev.id, "blip 1", false)).toBe("failed");
+      expect(await repos.webhookEvents.recordFailure(clientA(d), ev.id, "blip 2", false)).toBe("failed");
+      expect(await repos.webhookEvents.recordFailure(clientA(d), ev.id, "blip 3", false)).toBe("failed");
+      // Still re-drivable after 3 transient failures — never lost to a count.
+      const undriven = await repos.webhookEvents.listUndriven(clientA(d), 10);
+      expect(undriven).toHaveLength(1);
+      // The `attempts` counter still ticks (observability), it just never gates anything.
+      expect(undriven[0]?.attempts).toBe(3);
+      // A POISON failure (poison=true) parks it `dead_lettered` at once (no re-drive).
+      expect(await repos.webhookEvents.recordFailure(clientA(d), ev.id, "poison", true)).toBe("dead_lettered");
       expect(await repos.webhookEvents.listUndriven(clientA(d), 10)).toHaveLength(0);
     });
 
@@ -431,7 +438,7 @@ describe("Repositories conformance: forge/recovery (in-memory pg)", () => {
       // An off-scope mark/record matches no visible row → no mutation.
       await repos.webhookEvents.markProcessed(clientB(d), ev.id);
       expect((await repos.webhookEvents.listUndriven(clientA(d), 10))[0]?.status).toBe("received");
-      expect(await repos.webhookEvents.recordFailure(clientB(d), ev.id, "x", 2)).toBe("failed");
+      expect(await repos.webhookEvents.recordFailure(clientB(d), ev.id, "x", false)).toBe("failed");
       expect((await repos.webhookEvents.listUndriven(clientA(d), 10))[0]?.attempts).toBe(0);
     });
   });

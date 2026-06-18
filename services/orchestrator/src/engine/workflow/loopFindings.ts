@@ -93,7 +93,7 @@ export function gateFindings(gate: Extract<GateOutcome, { passed: false }>): Fin
 // persistently-invalid spec raises `PersistentlyInvalidSpecError` (the loud
 // needs_attention surface) — never a silent commit into the DAG. Absent ⇒ the gate is
 // inert (unit/test paths that do not wire a provider validator).
-export type TriageSpecValidator = Pick<ValidateEmittedSpecsInput, "validator" | "reviseSpec" | "maxRevisions">;
+export type TriageSpecValidator = Pick<ValidateEmittedSpecsInput, "validator" | "reviseSpec">;
 
 // Map one triaged `kind: spec` work item onto the validator's `CandidateSpec` shape.
 // The item carries no separate acceptance criteria (the body is the authored unit),
@@ -118,7 +118,6 @@ export async function gateTriagedSpecs(
     specs: newSpecs.map((routed) => triagedSpecToCandidate(routed)),
     validator: gate.validator,
     ...(gate.reviseSpec !== undefined && { reviseSpec: gate.reviseSpec }),
-    ...(gate.maxRevisions !== undefined && { maxRevisions: gate.maxRevisions }),
   });
 }
 
