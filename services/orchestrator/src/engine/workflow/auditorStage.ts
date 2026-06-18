@@ -20,6 +20,7 @@ import { emitStageTiming } from "../observability/index.js";
 import type { AnswererAdapter } from "../providers/types.js";
 import { AnswererSchemaValidationError } from "../providers/codex.js";
 import { auditorFindings, invokeAuditor, type AuditorSpecContext } from "./auditor/auditor.js";
+import { runAnswererStageWithRecovery } from "./loopStageRecovery.js";
 import { recordAnswererCost, secondsSince, type SubtaskCostContext } from "./subtaskCost.js";
 import { insertChildTask, markTaskDone, markTaskFailed } from "./subtaskTasks.js";
 import type { StageAppendEvent } from "./subtaskStages.js";
@@ -86,10 +87,17 @@ export async function runAuditorStage(args: AuditorStageInput): Promise<AuditorS
   const startedAt = Date.now();
   let result: Awaited<ReturnType<typeof invokeAuditor>>;
   try {
-    result = await invokeAuditor(args.adapter, {
-      context: auditorContext,
-      workspace: args.workspacePath,
-    });
+    // STAGE-LOCAL stall recovery: a TRANSIENT answerer stall re-drives the auditor IN PLACE
+    // (the spec loop's sibling progress preserved, never a whole-spec restart); a genuinely-
+    // wedged auditor escalates loudly via the convergence judgment. The SCHEMA-miss recovery
+    // below is distinct — a non-deterministic stall re-drives, a deterministic parse miss
+    // becomes the synthetic P0 — exactly the finding/stall split the doctrine requires.
+    result = await runAnswererStageWithRecovery("auditor", () =>
+      invokeAuditor(args.adapter, {
+        context: auditorContext,
+        workspace: args.workspacePath,
+      }),
+    );
   } catch (error) {
     // RECOVERABLE prompt-repair: the auditor's model emitted output that failed the
     // AuditAnswer schema parse. No `auditor.verdict` is written, so the durable record

@@ -5,7 +5,7 @@ import { storeClaudeAuthBundle } from "../credentials/claudeAuth.js";
 import { materializeClaudeAuthBundle } from "../credentials/claudeMaterializer.js";
 import { quoteSshShellArg } from "../ssh/command.js";
 import { buildActivityWatchdog, outputOnlyWatchdog } from "../ssh/activityWatchdog.js";
-import { AnswererSchemaValidationError } from "./codex.js";
+import { AnswererSchemaValidationError, AnswererStalledError } from "./codex.js";
 import { parseWithOneSchemaRepair } from "./answererRepair.js";
 import type { AnswererAdapter, TokenUsage, UsageLimitSignal, WriterAdapter, WriterResult } from "./types.js";
 import { findOpenRouterGenerationId, foldGenerationId } from "./openRouterGenerationId.js";
@@ -175,9 +175,9 @@ export function createClaudeAnswerer<TOutput>(dependencies: ClaudeAnswererDepend
         });
         const telemetry = parseClaudeStreamTelemetry(result.stdout);
         lastTokenUsage = telemetry.tokenUsage;
-        if (result.stalled === true) {
-          throw new Error(`Claude Answerer stalled (no sign of life) for schema ${opts.outputSchema.name}`);
-        }
+        // A TRANSIENT stall (no sign of life), NOT a deterministic failure — the typed error
+        // lets the loop-stage recovery wrapper RE-DRIVE this stage, not discard the spec loop.
+        if (result.stalled === true) throw new AnswererStalledError(opts.outputSchema.name);
         if (telemetry.usageLimit !== undefined) {
           throw new ClaudeUsageLimitError(opts.outputSchema.name, telemetry.usageLimit.message);
         }
