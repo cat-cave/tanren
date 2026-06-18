@@ -5,9 +5,10 @@ import { buildActivityWatchdog, outputOnlyWatchdog } from "../src/engine/ssh/act
 
 // The shared `buildActivityWatchdog` factory is the SOLE constructor of the per-call
 // ActivityWatchdog (feedback_no_timeouts_progress_based): every class is UNBOUNDED in
-// time and resets on any sign of life. The agent/vcs classes attach a workspace-mtime
-// liveness probe (a build/jj writes files as it works → the newest mtime advancing is
-// genuine progress); the infra class is output-driven only. None is a wall-clock kill.
+// time and continues while it makes genuine PROGRESS. The agent/vcs classes attach a
+// workspace-mtime liveness probe that returns the workspace SIGNATURE (the newest mtime);
+// the substrate compares the SEQUENCE for advancement (a changing signature = a build/jj
+// writing files = progress). The infra class is output-driven only. None is a wall-clock kill.
 
 const target: RunnerHandle = {
   backend: "ssh",
@@ -62,36 +63,41 @@ describe("buildActivityWatchdog (the shared per-call-class factory)", () => {
     expect(buildActivityWatchdog({ substrate, target, cls: "vcs" }).livenessProbe).toBeUndefined();
   });
 
-  it("liveness probe reports ALIVE while the workspace mtime ADVANCES (a build/jj writing files)", async () => {
-    // First tick: baseline (always alive — give the work a window to produce a touch).
-    // Second tick: a LATER mtime → genuine progress → alive. Third: same again → alive.
+  it("liveness probe returns a CHANGING workspace signature as the mtime ADVANCES (a build/jj writing files)", async () => {
+    // Each read reports a LATER mtime → the probe returns a DISTINCT signature each tick. The
+    // substrate reads a changing signature as genuine progress (a workspace being written).
     const { substrate } = scriptedSubstrate([probeRead("1000.0"), probeRead("1001.5"), probeRead("1003.0")]);
     const wd = buildActivityWatchdog({ substrate, target, cls: "vcs", workspace: "/ws" });
     const probe = wd.livenessProbe!;
-    // Tick 1 = baseline (alive); tick 2 = mtime advanced 1000→1001.5; tick 3 = 1001.5→1003.0.
-    expect(await probe()).toBe(true);
-    expect(await probe()).toBe(true);
-    expect(await probe()).toBe(true);
+    const a = await probe();
+    const b = await probe();
+    const c = await probe();
+    expect(a).toBe("ws:1000");
+    expect(b).toBe("ws:1001.5");
+    expect(c).toBe("ws:1003");
+    // Distinct signatures across ticks = advancement.
+    expect(new Set([a, b, c]).size).toBe(3);
   });
 
-  it("liveness probe reports NO LIFE when the workspace mtime is FLAT (a deadlocked/zombied op)", async () => {
-    // Baseline, then the SAME mtime twice — nothing is being written → not alive.
+  it("liveness probe returns the SAME signature when the workspace mtime is FLAT (a deadlocked/zombied op)", async () => {
+    // The SAME mtime each read — nothing is being written → an UNCHANGING signature, which
+    // the substrate's work-signature read eventually flags as a non-advancing fixed point.
     const { substrate } = scriptedSubstrate([probeRead("2000.0"), probeRead("2000.0"), probeRead("2000.0")]);
     const wd = buildActivityWatchdog({ substrate, target, cls: "vcs", workspace: "/ws" });
     const probe = wd.livenessProbe!;
-    // Tick 1 = baseline (alive); ticks 2 and 3 = mtime flat → no life.
-    expect(await probe()).toBe(true);
-    expect(await probe()).toBe(false);
-    expect(await probe()).toBe(false);
+    expect(await probe()).toBe("ws:2000");
+    expect(await probe()).toBe("ws:2000");
+    expect(await probe()).toBe("ws:2000");
   });
 
-  it("liveness probe reports NO LIFE when the probe itself cannot reach the runner (wedged side-channel)", async () => {
-    // A probe whose OWN little command failed (exit !=0 / stalled) is NOT a liveness
-    // signal — it reads no-life so the watchdog can surface a recoverable stall.
+  it("liveness probe returns UNDEFINED when the probe itself cannot reach the runner (wedged side-channel)", async () => {
+    // A probe whose OWN little command failed (exit !=0 / stalled) is NOT a signal — it
+    // returns undefined so the substrate folds in a fixed sentinel (a non-advancing signature)
+    // and can surface a recoverable stall.
     const failed: CommandResult = { exitCode: 1, stdout: "", stderr: "find: cannot access" };
     const { substrate } = scriptedSubstrate([failed]);
     const wd = buildActivityWatchdog({ substrate, target, cls: "agent", workspace: "/ws" });
-    expect(await wd.livenessProbe!()).toBe(false);
+    expect(await wd.livenessProbe!()).toBeUndefined();
   });
 
   it("the probe's own side-channel command runs under a connect-ESTABLISHMENT bound (not a kill budget)", async () => {

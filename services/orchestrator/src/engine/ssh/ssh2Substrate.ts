@@ -12,6 +12,7 @@ import type {
 import { defineFailure } from "../failure.js";
 import { buildSshExecCommand } from "./command.js";
 import { hostKeyFingerprintMatches } from "./fingerprint.js";
+import { appendWorkSignature, distinctRecentOutput, isWedgedNonAdvancing, workSignature } from "./watchdogProgress.js";
 
 // The default cadence at which the activity watchdog consults its `livenessProbe`
 // between output chunks. A poll INTERVAL (how often to ask "is it alive?"), NOT a
@@ -42,13 +43,22 @@ interface RunState {
   signal?: string;
   settled: boolean;
   // Activity-watchdog state (the SOLE hang-detection path — there is no wall-clock
-  // kill timer). `probeTimer` is the recurring liveness-probe tick; `lastActivityAt`
-  // is the most recent sign of life (output or a positive probe); `lastProbeTickAt`
-  // is when the watchdog last evaluated. None is a total-duration budget — all reset
-  // on activity, so the command runs UNBOUNDED while it shows any life.
+  // kill timer). `probeTimer` is the recurring work-signature poll tick. `lastActivityAt`
+  // marks the most recent OUTPUT chunk (diagnostic only — feeds the `quietForMs` evidence);
+  // `lastProbeTickAt` is when the watchdog last evaluated. `workSignatures` is the trailing
+  // sequence of WORK SIGNATURES (output tail folded with the workspace signature) the
+  // PROGRESS backstop reasons over via the shared convergence detector — a CHANGING signature
+  // is genuine advancement (continue UNBOUNDED), a FIXED POINT is a wedge (dead OR busy-but-
+  // not-advancing). None is a total-duration budget — the trigger is signature identity, not
+  // elapsed time, so the command runs UNBOUNDED while its work signature advances.
   probeTimer?: NodeJS.Timeout;
   lastActivityAt: number;
   lastProbeTickAt?: number;
+  workSignatures: string[];
+  // How many chars of the combined stdout+stderr the LAST work-signature snapshot consumed, so
+  // each tick fingerprints only the NEW distinct output since (rate-independent — see
+  // distinctRecentOutput). Advances every tick the snapshot is taken.
+  lastSnapshotOutputLen: number;
 }
 
 export class SshCommandSubstrate implements CommandSubstrate {
@@ -89,7 +99,15 @@ export class SshCommandSubstrate implements CommandSubstrate {
   ): Promise<CommandResult> {
     return await new Promise<CommandResult>((resolve) => {
       const client = this.clientFactory();
-      const state: RunState = { stdout: "", stderr: "", exitCode: null, settled: false, lastActivityAt: Date.now() };
+      const state: RunState = {
+        stdout: "",
+        stderr: "",
+        exitCode: null,
+        settled: false,
+        lastActivityAt: Date.now(),
+        workSignatures: [],
+        lastSnapshotOutputLen: 0,
+      };
       let hostKeyFailure: string | undefined;
 
       // The watchdog is the SOLE hang detector — every command runs one. When the
@@ -198,9 +216,10 @@ export class SshCommandSubstrate implements CommandSubstrate {
     onError: (error: unknown) => void,
     onClose: () => void,
   ): void {
-    // Every output chunk is a SIGN OF LIFE (the watchdog's primary tick — for a
-    // streaming agent each telemetry line is a token/log). Stamp the activity clock
-    // so the watchdog resets and the work continues UNBOUNDED.
+    // Accumulate output into the state (the watchdog folds the recent output TAIL into its
+    // WORK SIGNATURE each tick — NEW distinct output advances the signature = progress). Stamp
+    // `lastActivityAt` as the last-output time: diagnostic evidence for `quietForMs`, not the
+    // progress trigger (which is the work-signature advancement read in tickWatchdog).
     const markActivity = (): void => {
       state.lastActivityAt = Date.now();
     };
@@ -222,15 +241,19 @@ export class SshCommandSubstrate implements CommandSubstrate {
   }
 
   // Arm the PROGRESS-BASED activity watchdog (the doctrine's wall-clock-kill replacement).
-  // It does NOT count toward any total-duration budget. On a recurring poll cadence it asks
-  // the `livenessProbe` "does the work show ANY sign of life?" — for SILENT ops (e.g. a long
-  // `jj rebase` that emits no output) the probe is the PRIMARY mechanism (remote process
-  // alive + CPU-time advanced and/or workspace mtime changed). A positive probe RESETS the
-  // activity clock; output chunks reset it too (see collectStream). The watchdog fires ONLY
-  // when BOTH there has been no output AND the probe reports no life — a genuine
-  // dead/zombied/deadlocked absence of all signals — and even then it SURFACES a recoverable
+  // It does NOT count toward any total-duration budget. On a recurring poll CADENCE it
+  // snapshots a WORK SIGNATURE of the exec — the recent OUTPUT TAIL folded with the remote
+  // WORKSPACE signature the `livenessProbe` reads (for SILENT ops like a long `jj rebase` the
+  // probe IS the signal: the newest workspace mtime, which advances as files are written) —
+  // and feeds the SEQUENCE into the shared convergence detector. A CHANGING signature (new
+  // distinct output OR an advancing workspace) is genuine progress → RESET → continue
+  // UNBOUNDED. Output chunks ALSO short-circuit a tick (see collectStream + the fast path
+  // below). The watchdog fires ONLY when the work signature is at a FIXED POINT across
+  // successive checks — no new output AND no workspace advance — which covers BOTH a
+  // dead/zombied/deadlocked process AND a WEDGED-BUT-BUSY one (an infinite loop emitting
+  // byte-identical output, a CPU-burn touching nothing). Even then it SURFACES a recoverable
   // `stalled` result by default (never destroying possibly-recoverable work) unless
-  // `onQuiet: "kill"`. A working process is never killed regardless of elapsed time.
+  // `onQuiet: "kill"`. A genuinely-advancing process is never killed regardless of elapsed time.
   private armActivityWatchdog(
     target: SshRunnerHandle,
     state: RunState,
@@ -261,30 +284,43 @@ export class SshCommandSubstrate implements CommandSubstrate {
     if (state.settled) {
       return;
     }
-    // OUTPUT is a sign of life and short-circuits everything: if any output arrived since the
-    // last tick (the activity clock advanced past the prior tick), the work is demonstrably
-    // alive — RESET the tick window and return WITHOUT even consulting the probe. A streaming
-    // process (codex tokens, build logs) is never killed regardless of the probe's verdict.
-    const lastTick = state.lastProbeTickAt;
     state.lastProbeTickAt = Date.now();
-    if (lastTick !== undefined && state.lastActivityAt > lastTick) {
-      return;
-    }
-    // PRIMARY mechanism for SILENT ops: ask the probe whether the work shows any liveness. Any
-    // positive signal (process alive + CPU advanced / workspace touched) RESETS — continue UNBOUNDED.
+    // PROGRESS backstop: snapshot a WORK SIGNATURE — the NEW DISTINCT OUTPUT since the prior
+    // snapshot (rate-independent — see distinctRecentOutput) folded with the remote WORKSPACE
+    // signature the probe reads — and feed the SEQUENCE into the shared convergence detector.
+    // The output content folded INTO the signature is what distinguishes a streaming process
+    // (new distinct lines = an advancing signature) from a wedged-busy one (byte-identical
+    // output = a fixed signature, however fast it repeats); for SILENT ops the probe IS the
+    // signal (the newest workspace mtime). The probe returns `undefined` when the runner is
+    // UNREACHABLE (no signal — folded as a fixed sentinel, so a dead process reads non-advancing).
+    let workspaceSig: string | undefined;
     if (watchdog.livenessProbe !== undefined) {
-      const alive = await watchdog.livenessProbe().catch(() => false);
+      try {
+        workspaceSig = await watchdog.livenessProbe();
+      } catch {
+        // A probe that THREW reached no signal — workspaceSig stays its declared default (the
+        // unreachable sentinel), exactly as a probe that returned undefined: non-advancing.
+      }
       if (state.settled) {
         return;
       }
-      if (alive) {
-        state.lastActivityAt = Date.now();
-        return;
-      }
     }
-    // No output since the last tick AND no probe-reported life: a genuine absence of ALL
-    // signs of life. `quietForMs` is EVIDENCE of how long since the last sign — diagnostic
-    // only; the trigger is the probe verdict, never a fixed quiet duration on its own.
+    const recent = distinctRecentOutput(state.stdout + state.stderr, state.lastSnapshotOutputLen);
+    state.lastSnapshotOutputLen = recent.length;
+    const signature = workSignature(recent.content, workspaceSig);
+    state.workSignatures = appendWorkSignature(state.workSignatures, signature);
+    // The verdict turns ENTIRELY on whether the WORK SIGNATURE is ADVANCING. A CHANGING
+    // signature (new distinct output OR an advancing workspace) is genuine progress → continue
+    // UNBOUNDED, no matter the elapsed time. A FIXED POINT (no new distinct output AND no
+    // workspace advance across successive checks) is a WEDGE — dead/zombied OR busy-but-not-
+    // advancing (an infinite loop spewing identical lines / a CPU-burn touching nothing) — and
+    // surfaces a stall. The decision is signature IDENTITY, never a duration.
+    if (!isWedgedNonAdvancing(state.workSignatures)) {
+      return;
+    }
+    // The work signature is at a fixed point: no NEW distinct work across the checks.
+    // `quietForMs` is EVIDENCE of how long since the last output — diagnostic only; the trigger
+    // is the non-advancing work signature, never a fixed quiet duration on its own.
     const quietForMs = Date.now() - state.lastActivityAt;
     this.fireWatchdog(target, state, onQuiet, quietForMs, client, resolve);
   }
