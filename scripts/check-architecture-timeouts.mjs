@@ -7,9 +7,10 @@
 // can never silently reintroduce. Same heuristic line-scanner style as the sibling
 // check-architecture-*.mjs modules; extracted to keep each file under the 500-line cap.
 //
-// REPORT MODE (this PR): the scanner returns its diagnostics, but the orchestrator runs
-// it in REPORT mode — it PRINTS the full violation list (our migration checklist) and
-// exits 0, so it does NOT fail CI yet. The final eradication PR flips it to ENFORCE.
+// ENFORCED (Phase-1 SEAL): the scanner is folded into `runArchitectureChecks` (the exit-1
+// set), so a NEW arbitrary timeout / retry-cap / disguised quiet-window / banned identifier
+// FAILS `just ci`'s `check:architecture`. Every pre-existing site has migrated to a
+// progress/sign-of-life primitive; the report-mode migration checklist is retired.
 //
 // What it flags in **/src/** non-test files:
 //   (a) total-duration KILL timers — `setTimeout(() => { … kill/fail/throw/reject/destroy/

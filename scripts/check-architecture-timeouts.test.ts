@@ -1,10 +1,16 @@
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { checkNoArbitraryTimeouts } from "./check-architecture-timeouts.mjs";
+import { runArchitectureChecks } from "./check-architecture.mjs";
 
 // The timeout-class eradication lint (feedback_no_timeouts_progress_based). Sibling spec in
 // the mold of check-architecture.test.ts: it asserts each flagged form + each bless mechanism.
-// The lint ships in REPORT mode (the orchestrator prints, does not fail CI yet); these tests
-// exercise the SCANNER directly, independent of report/enforce wiring.
+// The lint is ENFORCED (Phase-1 SEAL): folded into `runArchitectureChecks` (the exit-1 set),
+// so a violation FAILS CI. These tests exercise the SCANNER directly + assert the enforcement
+// wiring (the gate now exits NON-ZERO on a synthetic violation, was report-only before).
 describe("no-arbitrary-timeouts (timeout-class eradication lint)", () => {
   const srcFile = "services/orchestrator/src/engine/sample.ts";
 
@@ -82,5 +88,44 @@ describe("no-arbitrary-timeouts (timeout-class eradication lint)", () => {
     expect(checkNoArbitraryTimeouts([{ file: testFile, text: kill }])).toEqual([]);
     const prose = "// We never use a DEFAULT_TIMEOUT_MS kill timer here.\nexport const x = 1;\n";
     expect(checkNoArbitraryTimeouts([{ file: srcFile, text: prose }])).toEqual([]);
+  });
+});
+
+// ENFORCEMENT wiring (Phase-1 SEAL): the lint is no longer report-only — it is part of
+// `runArchitectureChecks` (the exit-1 aggregator), so a synthetic timeout-class violation now
+// surfaces as a diagnostic AND makes the CLI exit NON-ZERO (it used to print + exit 0).
+describe("no-arbitrary-timeouts is CI-GATING (folded into the exit-1 set)", () => {
+  const scriptPath = resolve(import.meta.dirname, "check-architecture.mjs");
+
+  it("runArchitectureChecks SURFACES a synthetic timeout violation (it is in the enforced set)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "arch-timeout-enforce-"));
+    try {
+      mkdirSync(join(root, "services/orchestrator/src/engine"), { recursive: true });
+      // A banned give-up cap in a production src file — the violation the lint must now gate on.
+      writeFileSync(
+        join(root, "services/orchestrator/src/engine/violating.ts"),
+        "const MAX_DRIVE_ATTEMPTS = 4;\nexport const drive = MAX_DRIVE_ATTEMPTS;\n",
+      );
+      const diagnostics = await runArchitectureChecks({ root });
+      expect(diagnostics.some((d) => d.rule === "no-arbitrary-timeouts")).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("the CLI EXITS NON-ZERO on a synthetic timeout violation (was report-only / exit 0)", () => {
+    const root = mkdtempSync(join(tmpdir(), "arch-timeout-cli-"));
+    try {
+      mkdirSync(join(root, "services/orchestrator/src/engine"), { recursive: true });
+      writeFileSync(
+        join(root, "services/orchestrator/src/engine/violating.ts"),
+        "const MAX_DRIVE_ATTEMPTS = 4;\nexport const drive = MAX_DRIVE_ATTEMPTS;\n",
+      );
+      const run = spawnSync(process.execPath, [scriptPath], { cwd: root, encoding: "utf8" });
+      expect(run.status).not.toBe(0);
+      expect(run.stderr).toContain("no-arbitrary-timeouts");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

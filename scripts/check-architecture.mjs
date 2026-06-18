@@ -444,16 +444,13 @@ export async function runArchitectureChecks({ root = process.cwd() } = {}) {
     ...checkContractSchemaDriftWiring(projectFiles),
     ...checkNoRowCastsInWorkflow(projectFiles),
     ...checkNoProductionStubs(projectFiles),
+    // ENFORCED (Phase-1 SEAL, feedback_no_timeouts_progress_based): the no-arbitrary-timeouts
+    // gate is now part of the exit-1 set — every timeout-class site has migrated to a
+    // progress/sign-of-life primitive, so a NEWLY-introduced arbitrary timeout / retry-cap /
+    // disguised quiet-window / banned identifier FAILS CI. No longer a report-only checklist.
+    ...checkNoArbitraryTimeouts(projectFiles),
     ...runStructureChecks(projectFiles),
   ];
-}
-
-// REPORT-MODE pass for the timeout-class eradication (feedback_no_timeouts_progress_based).
-// SEPARATE from `runArchitectureChecks` (which exits 1) so it ships in REPORT mode: the CLI
-// prints the violation list as a migration checklist but does NOT fail CI yet. The final
-// eradication PR folds this into the enforced set once every site has migrated.
-export async function runTimeoutReport({ root = process.cwd() } = {}) {
-  return checkNoArbitraryTimeouts(await readProjectFiles(resolve(root)));
 }
 
 export function formatDiagnostics(diagnostics, root = process.cwd()) {
@@ -463,13 +460,6 @@ export function formatDiagnostics(diagnostics, root = process.cwd()) {
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  // REPORT-MODE (not yet enforced): print the timeout-class migration checklist, exit 0 for it.
-  const timeoutReport = await runTimeoutReport();
-  if (timeoutReport.length > 0) {
-    console.log(`no-arbitrary-timeouts (REPORT mode — ${timeoutReport.length} sites to migrate, not failing CI):`);
-    console.log(formatDiagnostics(timeoutReport));
-  }
-
   const diagnostics = await runArchitectureChecks();
   if (diagnostics.length > 0) {
     console.error(formatDiagnostics(diagnostics));
