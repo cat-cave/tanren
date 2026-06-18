@@ -214,7 +214,6 @@ export function hardTierWorkflowRunner(github: GitHubHttpClient, trace: HardTier
     runPlannerLoopWorkflow({
       ...input,
       githubHttp: github,
-      maxCiPolls: 1,
       ciPollDelayMs: 0,
       sleep: async () => {},
       runBootstrap: async () => {},
