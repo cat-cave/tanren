@@ -310,8 +310,10 @@ export const mergeQueueHolds = pgTable(
     orgId: text("org_id")
       .notNull()
       .references(() => organizations.id),
-    /** The persisted consecutive-hold/attempt count — the runaway-guard counter. */
+    /** The persisted consecutive-hold/attempt count — TELEMETRY ONLY (the emitted `attempts` diagnostic), NOT a control-flow trigger. The non-recovery alert keys off the SIGNATURE history below (the fixed-point read), never this count — see `infraNonRecovery.ts`. */
     attempts: text("attempts").notNull().default("0"),
+    /** The trailing infra-failure SIGNATURE history (oldest→newest JSON of stable error-identity strings), bounded to the cycle window. The sustained-non-recovery read (`assessStructuralProgress`) reasons over THIS — the alert fires when the SAME signature persists with no progress across the backoff-spaced re-drives, never on a count. `'[]'` keeps it NOT NULL for a fresh scope. */
+    signatures: text("signatures").notNull().default("[]"),
     /** When the counter was last incremented (observability + a future lease/expiry). */
     lastAttemptAt: timestamp("last_attempt_at", { withTimezone: true }).notNull().defaultNow(),
   },

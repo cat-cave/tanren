@@ -39,6 +39,8 @@ export class InMemoryBatchChecker implements BatchChecker {
   private throwAlways: unknown;
   private throwRemaining = 0;
   private throwOnce: unknown;
+  /** A factory that builds a FRESH infra error per call (a SHIFTING / recovering outage). */
+  private throwFactory: (() => unknown) | undefined;
   /** When set, a pending verdict carries this `settleAfterMs` (the no-checks settle). */
   private pendingSettleAfterMs: number | undefined;
 
@@ -78,6 +80,10 @@ export class InMemoryBatchChecker implements BatchChecker {
     this.throwOnce = error;
     this.throwRemaining = count;
   }
+  /** Throw a FRESHLY-built infra error on every call (a SHIFTING / recovering outage = progress). */
+  throwInfraFactory(factory: () => unknown): void {
+    this.throwFactory = factory;
+  }
 
   // eslint-disable-next-line @typescript-eslint/require-await
   async checkBatch(input: { projectId: string; entries: ReadonlyArray<MergeQueueEntry> }): Promise<BatchCheckVerdict> {
@@ -85,6 +91,9 @@ export class InMemoryBatchChecker implements BatchChecker {
     this.checked.push([...specIds]);
     if (this.throwAlways !== undefined) {
       throw this.throwAlways;
+    }
+    if (this.throwFactory !== undefined) {
+      throw this.throwFactory();
     }
     if (this.throwRemaining > 0) {
       this.throwRemaining -= 1;

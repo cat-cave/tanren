@@ -16,6 +16,7 @@ import { isRetriableInfraError } from "../providers/githubRefReset.js";
 import { isAmbiguousMergeError } from "../providers/mergeOutcomeErrors.js";
 import type { SpecEscalator } from "./coordinatorEscalate.js";
 import { holdOrHaltRecoverableDrive, RecoverableDriveHoldCeiling } from "./recoverableDriveHold.js";
+import { infraThrowSignature } from "./infraNonRecovery.js";
 import { serializedRetryAfterMs } from "./mergeSerializedRetry.js";
 import { isMissingRequiredCredentialError, missingRequiredCredentialMessage } from "./missingRequiredCredential.js";
 import type { HoldCeilingStore } from "./holdCeilingStore.js";
@@ -24,8 +25,6 @@ import { createLogger } from "../observability/logger.js";
 
 const log = createLogger("merge-coordinator");
 
-/** How long after a transient merge-drive infra-hold the subscriber re-drives the project. */
-const TRANSIENT_DRIVE_HOLD_RETRY_AFTER_MS = 3000;
 /**
  * How long after a NOT-YET-TERMINAL native re-gate the subscriber re-drives the project. A
  * `re_gate_pending` outcome means the post-auto-rebase gate is STILL RUNNING / had an infra
@@ -36,19 +35,8 @@ const TRANSIENT_DRIVE_HOLD_RETRY_AFTER_MS = 3000;
  * halt, or a terminal failed/needs_attention verdict), not a count on this hold.
  */
 const RE_GATE_PENDING_RETRY_AFTER_MS = alertRetryAfterMs;
-/** Longer re-drive delay after a ceiling alert so persistent outages do not hot-loop (single source: retrySchedule). */
+/** Longer re-drive delay after a non-recovery alert so persistent outages do not hot-loop (single source: retrySchedule). */
 const TRANSIENT_DRIVE_HOLD_ALERT_RETRY_AFTER_MS = alertRetryAfterMs;
-
-/**
- * GAP #2c: the hold-attempt CEILING — how many CONSECUTIVE transient infra re-drives one
- * entry may take before the coordinator stops re-arming the 3s timer and emits a LOUD
- * ceiling alert. Bounds the recover-on-transient loop so a persistent outage (or a
- * logic-bug masquerading as infra) surfaces loudly instead of re-driving forever on the
- * short timer. The entry stays queued and retries with a longer backoff so recovery
- * remains autonomous. The common case (a GitHub blip) recovers in 1–2 re-drives, well
- * under this.
- */
-const MAX_INFRA_HOLD_ATTEMPTS = 5;
 
 /**
  * Drives ONE queued run's merge through the existing per-run merge path. The
@@ -210,15 +198,6 @@ export async function markInfraBlockedAfterEvent(input: {
  * so independent later items proceed (liveness) and the head never deadlocks.
  */
 export class EventEmittingMergeCoordinator implements MergeCoordinator {
-  /**
-   * GAP #2c: per-entry CONSECUTIVE transient-infra-hold counter (queueId → count). In
-   * memory by design — the coordinator+subscriber are a single long-lived per-worker
-   * singleton, so the count survives across `coordinate` passes (each re-drive is a
-   * fresh pass). A crash resets it, which is correct: `recoverStaleClaims` re-queues the
-   * entry, and re-driving an idempotent merge is safe. Reset on any non-infra-hold
-   * settle (merged / dequeued / ceiling-alert) so a recovered entry starts fresh.
-   */
-  private readonly infraHoldAttempts = new Map<string, number>();
   private readonly recoverableDriveHolds: RecoverableDriveHoldCeiling;
 
   constructor(private readonly deps: MergeCoordinatorDeps) {
@@ -279,9 +258,11 @@ export class EventEmittingMergeCoordinator implements MergeCoordinator {
    *     typed `MergeTransientError` the persistent merge-PUT throws once it confirms the
    *     PR is still open+unmerged) → RELEASE the claim (entry stays queued) + HOLD with
    *     `holdReason: "infra_error"` + `retryAfterMs` so the subscriber re-drives once the
-   *     gateway recovers — BOUNDED by `MAX_INFRA_HOLD_ATTEMPTS`: at the ceiling it emits
-   *     a LOUD `merge.queue.infra_blocked` alert, keeps the entry queued, and re-drives
-   *     with longer backoff so it cannot hot-loop or permanently strand.
+   *     gateway recovers — guarded by SUSTAINED-NON-RECOVERY (a PROGRESS signal, not a
+   *     count): once the SAME infra failure signature persists with no progress across the
+   *     backoff-spaced re-drives it emits a LOUD `merge.queue.infra_blocked` alert, keeps
+   *     the entry queued, and re-drives with longer backoff so it cannot hot-loop or
+   *     permanently strand. A SHIFTING failure keeps recovering quietly (no alert).
    *   - a typed PERMANENT infra error → the recoverable `blocked` hold path.
    * A GENUINE returned block holds with bounded backoff; a returned conflict/failed
    * still dequeues.
@@ -305,32 +286,27 @@ export class EventEmittingMergeCoordinator implements MergeCoordinator {
         return this.haltInfraBlocked(projectId, entry, "ambiguous", error.message);
       }
       if (isRetriableInfraError(error)) {
-        // Transient/infra throw: do NOT dequeue (that would strand a clean PR). Bounded by
-        // the hold-attempt ceiling so it cannot recover-loop forever on a persistent outage.
-        const attempts = (this.infraHoldAttempts.get(entry.queueId) ?? 0) + 1;
-        if (attempts >= MAX_INFRA_HOLD_ATTEMPTS) {
-          return this.holdInfraBlockedAfterCeiling(
+        // Transient/infra throw: do NOT dequeue (that would strand a clean PR). Guarded by
+        // SUSTAINED-NON-RECOVERY (a progress signal, not a count) so it cannot recover-loop
+        // forever on a persistent outage: record the thrown failure's signature and, once it
+        // persists with no progress across the re-drives, alert loudly while staying queued.
+        const hold = await this.recoverableDriveHolds.next(entry.queueId, infraThrowSignature(error));
+        if (hold.sustainedNonRecovery) {
+          return this.holdInfraBlockedAfterNonRecovery(
             projectId,
             entry,
-            `merge drive kept throwing a transient infra error after ${attempts} re-drives: ${String(error)}`,
-            attempts,
+            `merge drive transient infra error is not recovering (same failure across ${hold.attempts} re-drives): ${String(error)}`,
+            hold.attempts,
           );
         }
-        await this.recoverableDriveHolds.reset(entry.queueId);
-        this.infraHoldAttempts.set(entry.queueId, attempts);
-        // Release the claim so the entry stays queued, then HOLD loudly + arm a re-drive.
+        // Release the claim so the entry stays queued, then HOLD + arm the backoff re-drive.
         await this.deps.queue.releaseClaim(entry.queueId);
         log.warn(
           "merge drive threw a transient infra error; holding + re-driving (entry stays queued)",
-          {
-            projectId,
-            specId: entry.specId,
-            attempt: attempts,
-            maxAttempts: MAX_INFRA_HOLD_ATTEMPTS,
-          },
+          { projectId, specId: entry.specId, attempt: hold.attempts },
           error,
         );
-        return { holdReason: "infra_error", retryAfterMs: TRANSIENT_DRIVE_HOLD_RETRY_AFTER_MS };
+        return { holdReason: "infra_error", retryAfterMs: hold.retryAfterMs };
       }
       if (isMissingRequiredCredentialError(error)) {
         return this.haltInfraBlocked(
@@ -341,13 +317,10 @@ export class EventEmittingMergeCoordinator implements MergeCoordinator {
         );
       }
       // A non-retriable thrown error is a genuine (typed-permanent) infra block: route
-      // through the recoverable `blocked` hold path, which alerts at its ceiling without
-      // permanently removing the candidate.
+      // through the recoverable `blocked` hold path, which alerts on sustained non-recovery
+      // without permanently removing the candidate.
       outcome = { kind: "blocked", message: `merge drive threw: ${String(error)}` };
     }
-
-    // Any settled (non-held) outcome ends this entry's infra-hold streak.
-    this.infraHoldAttempts.delete(entry.queueId);
 
     if (outcome.kind === "merged") {
       await this.recoverableDriveHolds.reset(entry.queueId);
@@ -427,20 +400,21 @@ export class EventEmittingMergeCoordinator implements MergeCoordinator {
   }
 
   /**
-   * GAP #2d/#2c: the LOUD operator-visible infra HALT for ambiguous merge state only.
-   * The merge state is unconfirmable after a 5xx, so auto-retry could double-merge. It
-   * dequeues the entry + emits `merge.queue.infra_blocked`, and crucially returns NO
-   * `retryAfterMs` so the subscriber arms no further timer. Retriable ceiling alerts use
-   * `holdInfraBlockedAfterCeiling` instead and keep the candidate active.
+   * GAP #2d/#2c: the LOUD operator-visible infra HALT for a genuinely non-retriable
+   * condition (ambiguous merge state / missing required credential) — NOT a count/time
+   * give-up. The merge state is unconfirmable after a 5xx, so auto-retry could double-merge;
+   * a missing credential cannot self-heal. It dequeues the entry + emits
+   * `merge.queue.infra_blocked`, and crucially returns NO `retryAfterMs` so the subscriber
+   * arms no further timer. Sustained-non-recovery alerts use `holdInfraBlockedAfterNonRecovery`
+   * instead and keep the candidate active.
    */
   private async haltInfraBlocked(
     projectId: string,
     entry: MergeQueueEntry,
     kind: "ceiling" | "ambiguous" | "missing_required_credential",
     message: string,
-    attempts = this.infraHoldAttempts.get(entry.queueId) ?? 0,
+    attempts = 0,
   ): Promise<{ dequeuedSpecId: string }> {
-    this.infraHoldAttempts.delete(entry.queueId);
     await this.recoverableDriveHolds.reset(entry.queueId);
     await markInfraBlockedAfterEvent({
       queue: this.deps.queue,
@@ -452,7 +426,7 @@ export class EventEmittingMergeCoordinator implements MergeCoordinator {
       message,
       tx: this.deps.tx,
     });
-    log.error("merge drive HALTED after infra re-drives; operator attention required", {
+    log.error("merge drive HALTED on a non-retriable infra condition; operator attention required", {
       projectId,
       specId: entry.specId,
       kind,
@@ -463,19 +437,21 @@ export class EventEmittingMergeCoordinator implements MergeCoordinator {
   }
 
   /**
-   * GAP #2d root fix: a retriable single-entry ceiling is an alert, not a permanent
-   * queue removal. Emit the same observable `merge.queue.infra_blocked` ceiling signal,
-   * reset the short-streak counter, release the claim, and keep autonomous re-drive alive
-   * with a longer backoff. If the event append fails, the fresh `merging` claim remains
-   * active and normal lease recovery re-queues it instead of silently losing the alert.
+   * GAP #2d root fix, no-timeouts reframe: a sustained-non-recovering transient infra hold
+   * is an ALERT, not a permanent queue removal. The trigger is the PROGRESS signal (the SAME
+   * infra failure signature persisting across re-drives — see `RecoverableDriveHoldCeiling`),
+   * not a count. Emit the observable `merge.queue.infra_blocked` ceiling signal (the persisted
+   * attempt count rides along as telemetry), reset the per-entry streak, release the claim, and
+   * keep autonomous re-drive alive with a longer backoff. If the event append fails, the fresh
+   * `merging` claim remains active and normal lease recovery re-queues it instead of silently
+   * losing the alert.
    */
-  private async holdInfraBlockedAfterCeiling(
+  private async holdInfraBlockedAfterNonRecovery(
     projectId: string,
     entry: MergeQueueEntry,
     message: string,
     attempts: number,
   ): Promise<{ holdReason: "infra_error"; retryAfterMs: number }> {
-    this.infraHoldAttempts.delete(entry.queueId);
     await this.recoverableDriveHolds.reset(entry.queueId);
     await this.deps.events.emitInfraBlocked({
       projectId,
@@ -485,7 +461,7 @@ export class EventEmittingMergeCoordinator implements MergeCoordinator {
       message,
     });
     await this.deps.queue.releaseClaim(entry.queueId);
-    log.error("merge drive ALERTED after infra re-drives; continuing autonomous re-drive after backoff", {
+    log.error("merge drive ALERTED on sustained infra non-recovery; continuing autonomous re-drive after backoff", {
       projectId,
       specId: entry.specId,
       attempts,

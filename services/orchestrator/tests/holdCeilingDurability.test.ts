@@ -1,101 +1,126 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { BatchInfraHoldCeiling, MAX_BATCH_INFRA_HOLDS } from "../src/engine/merge/batchInfraHoldCeiling.js";
+import { BatchInfraHoldCeiling } from "../src/engine/merge/batchInfraHoldCeiling.js";
 import { type HoldCeilingStore, InMemoryHoldCeilingStore } from "../src/engine/merge/holdCeilingStore.js";
 import { RecoverableDriveHoldCeiling } from "../src/engine/merge/recoverableDriveHold.js";
 import { alertRetryAfterMs, RECOVERABLE_RETRY_DELAYS_MS } from "../src/engine/merge/retrySchedule.js";
 
-// Audit RC-7 (in-memory hold-ceiling durability gap): the two merge runaway-guard
-// counters used to live in process-local Maps, so a rolling deploy / crash-loop LOST
-// them and a flapping candidate re-earned its full attempt budget every restart. These
-// tests prove the counter is now PERSISTED to a backing store that SURVIVES a restart:
-// a counter incremented, then the ceiling RE-CONSTRUCTED (simulating a restart) against
-// the SAME durable store, reads the persisted value (not zero) → the cap still fires.
+// Audit RC-7 (in-memory hold-ceiling durability gap) + the no-timeouts reframe: the two
+// merge runaway guards used to live in process-local Maps AND fire on a fixed attempt COUNT.
+// They now (a) PERSIST to a backing store that survives a restart, and (b) fire the loud
+// non-recovery alert on a PROGRESS signal — the SAME infra-failure SIGNATURE persisting with
+// no progress across the re-drives — never on a count. These tests prove BOTH: the persisted
+// signature history survives a re-construction (≈ a restart), so the non-recovery decision is
+// not forgotten; an identical-signature streak alerts; a SHIFTING signature keeps re-driving
+// quietly; and a store failure propagates loudly (never a silent reset).
 //
-// The store is the durable layer (the DB in production, an in-memory store here); the
-// ceiling object is the process-local wrapper. Sharing ONE store instance across two
-// freshly-constructed ceilings is exactly "two process lifetimes against the same DB".
+// The store is the durable layer (the DB in production, an in-memory store here); the ceiling
+// object is the process-local wrapper. Sharing ONE store across two freshly-constructed
+// ceilings is exactly "two process lifetimes against the same DB".
 
-describe("RecoverableDriveHoldCeiling — restart survival (audit RC-7)", () => {
-  it("re-reads the persisted attempt count after a restart, so the cap fires", async () => {
-    // The store is the durable backing layer (≈ the DB); the ceiling is process-local.
+describe("RecoverableDriveHoldCeiling — restart survival + progress signal (audit RC-7 / no-timeouts)", () => {
+  it("re-reads the persisted signature history after a restart, so sustained non-recovery still fires", async () => {
     const store = new InMemoryHoldCeilingStore();
     const queueId = "queue_flapping";
+    const sig = "MergeTransientError:gateway 504";
 
-    // Pre-restart process: burn attempts up to one below the cap (cap = 5).
+    // Pre-restart process: a couple of IDENTICAL infra holds (no progress) — but not yet a
+    // proven fixed point under the immediate-repeat read until the signature recurs.
     const before = new RecoverableDriveHoldCeiling(store);
-    let last = await before.next(queueId);
-    for (let i = 2; i <= 4; i += 1) {
-      last = await before.next(queueId);
-    }
-    expect(last.attempts).toBe(4);
-    // Still under the cap — a recoverable hold (a retryAfterMs is returned).
-    expect(last.retryAfterMs).toBeDefined();
+    const first = await before.next(queueId, sig);
+    expect(first.sustainedNonRecovery).toBe(false);
+    expect(first.retryAfterMs).toBeDefined();
 
-    // RESTART: a brand-new ceiling object (the process restarted) over the SAME store.
+    // RESTART: a brand-new ceiling over the SAME store. The persisted signature history is NOT
+    // forgotten — the identical signature recurs → a fixed point → the loud non-recovery alert.
     const after = new RecoverableDriveHoldCeiling(store);
-    const next = await after.next(queueId);
-
-    // The counter did NOT reset to 1 — it continued from the persisted 4 → 5 = the cap,
-    // so the loud ceiling alert fires (no retryAfterMs) instead of re-granting the budget.
-    expect(next.attempts).toBe(5);
-    expect(next.retryAfterMs).toBeUndefined();
+    const next = await after.next(queueId, sig);
+    expect(next.sustainedNonRecovery).toBe(true);
+    // The alert keeps re-driving (never abandons): it still returns the longer alert backoff.
+    expect(next.retryAfterMs).toBe(alertRetryAfterMs);
+    // The attempt count rides along as TELEMETRY only (it survived the restart: 1 → 2).
+    expect(next.attempts).toBe(2);
   });
 
-  it("reset clears the persisted counter so a recovered candidate starts fresh", async () => {
+  it("a SHIFTING infra signature keeps re-driving quietly (a recovering blip never alerts)", async () => {
     const store = new InMemoryHoldCeilingStore();
     const ceiling = new RecoverableDriveHoldCeiling(store);
-    await ceiling.next("queue_a");
-    await ceiling.next("queue_a");
+    const queueId = "queue_recovering";
+    // Every re-drive sees a DIFFERENT infra failure (504 → 502 → reset): genuine progress.
+    let last = await ceiling.next(queueId, "MergeTransientError:504");
+    expect(last.sustainedNonRecovery).toBe(false);
+    last = await ceiling.next(queueId, "MergeTransientError:502");
+    expect(last.sustainedNonRecovery).toBe(false);
+    last = await ceiling.next(queueId, "RefResetTransientError:connection reset");
+    expect(last.sustainedNonRecovery).toBe(false);
+    // Each keeps the recoverable (shorter) curve, never the alert backoff.
+    expect(last.retryAfterMs).not.toBe(alertRetryAfterMs);
+  });
+
+  it("reset clears the persisted history so a recovered candidate starts fresh", async () => {
+    const store = new InMemoryHoldCeilingStore();
+    const ceiling = new RecoverableDriveHoldCeiling(store);
+    const sig = "MergeTransientError:504";
+    await ceiling.next("queue_a", sig);
+    await ceiling.next("queue_a", sig);
     await ceiling.reset("queue_a");
-    // A fresh ceiling (restart) over the same store sees a cleared counter → back to 1.
+    // A fresh ceiling (restart) over the same store sees a cleared history → no alert, count 1.
     const fresh = new RecoverableDriveHoldCeiling(store);
-    expect((await fresh.next("queue_a")).attempts).toBe(1);
+    const after = await fresh.next("queue_a", sig);
+    expect(after.attempts).toBe(1);
+    expect(after.sustainedNonRecovery).toBe(false);
   });
 
   it("defaults to an in-memory store when none is injected (Pg-free fakes)", async () => {
     const ceiling = new RecoverableDriveHoldCeiling();
-    expect((await ceiling.next("q")).attempts).toBe(1);
+    expect((await ceiling.next("q", "sig")).attempts).toBe(1);
   });
 });
 
-describe("BatchInfraHoldCeiling — restart survival (audit RC-7)", () => {
-  it("re-reads the persisted consecutive-hold count after a restart, so the cap fires", async () => {
+describe("BatchInfraHoldCeiling — restart survival + progress signal (audit RC-7 / no-timeouts)", () => {
+  it("re-reads the persisted signature history after a restart, so sustained non-recovery still fires", async () => {
     const store = new InMemoryHoldCeilingStore();
     const projectId = "project_outage";
+    const sig = "batch check threw: secondary rate limit (403)";
 
-    // Pre-restart: record up to one below the cap.
-    const before = new BatchInfraHoldCeiling(MAX_BATCH_INFRA_HOLDS, store);
-    let recorded = await before.record(projectId);
-    for (let i = 2; i < MAX_BATCH_INFRA_HOLDS; i += 1) {
-      recorded = await before.record(projectId);
-    }
-    expect(recorded.reached).toBe(false);
-    expect(recorded.holds).toBe(MAX_BATCH_INFRA_HOLDS - 1);
+    // Pre-restart: one identical infra hold (not yet a proven fixed point).
+    const before = new BatchInfraHoldCeiling(store);
+    const recorded = await before.record(projectId, sig);
+    expect(recorded.sustainedNonRecovery).toBe(false);
+    expect(recorded.holds).toBe(1);
 
-    // RESTART: a fresh ceiling over the SAME store reaches the cap on the next hold,
-    // instead of restarting the streak at 1 and never escalating.
-    const after = new BatchInfraHoldCeiling(MAX_BATCH_INFRA_HOLDS, store);
-    const terminal = await after.record(projectId);
-    expect(terminal.reached).toBe(true);
-    expect(terminal.holds).toBe(MAX_BATCH_INFRA_HOLDS);
+    // RESTART: a fresh ceiling over the SAME store sees the identical signature recur → the
+    // terminal non-recovery alert, instead of forgetting the streak and never escalating.
+    const after = new BatchInfraHoldCeiling(store);
+    const terminal = await after.record(projectId, sig);
+    expect(terminal.sustainedNonRecovery).toBe(true);
+    expect(terminal.holds).toBe(2);
+  });
+
+  it("a SHIFTING infra signature never escalates (the outage is genuinely changing)", async () => {
+    const ceiling = new BatchInfraHoldCeiling(new InMemoryHoldCeilingStore());
+    const projectId = "project_recovering";
+    expect((await ceiling.record(projectId, "batch check threw: 504")).sustainedNonRecovery).toBe(false);
+    expect((await ceiling.record(projectId, "batch check threw: 502")).sustainedNonRecovery).toBe(false);
+    expect((await ceiling.record(projectId, "batch check threw: reset")).sustainedNonRecovery).toBe(false);
   });
 });
 
 describe("HoldCeilingStore fail-closed contract (audit RC-7)", () => {
   it("propagates a store read failure loudly rather than silently resetting to zero", async () => {
-    // A store whose increment throws (≈ a DB read failure). The ceiling must NOT swallow
-    // it into a reset-to-zero count (which would defeat the ceiling); it must propagate.
+    // A store whose increment throws (≈ a DB read failure). The ceiling must NOT swallow it
+    // into a reset-to-zero count (which would defeat the guard); it must propagate.
     const failing: HoldCeilingStore = {
       increment: () => Promise.reject(new Error("db read failed")),
+      recordSignature: () => Promise.reject(new Error("db read failed")),
       clear: () => Promise.resolve(),
     };
     const ceiling = new RecoverableDriveHoldCeiling(failing);
-    await expect(ceiling.next("q")).rejects.toThrow(/db read failed/u);
+    await expect(ceiling.next("q", "sig")).rejects.toThrow(/db read failed/u);
 
-    const batch = new BatchInfraHoldCeiling(MAX_BATCH_INFRA_HOLDS, failing);
-    await expect(batch.record("p")).rejects.toThrow(/db read failed/u);
+    const batch = new BatchInfraHoldCeiling(failing);
+    await expect(batch.record("p", "sig")).rejects.toThrow(/db read failed/u);
   });
 });
 

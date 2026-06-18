@@ -115,9 +115,9 @@ describe("EventEmittingMergeCoordinator — re_gate_pending native re-gate → r
   it("UNBOUNDED while the gate is still running: many re_gate_pending passes NEVER dequeue, NEVER hit a fixed cap", async () => {
     const { queue, runner, events, coordinator } = harness();
     seed(queue, "run_u", "spec_u");
-    // A long-running gate: every drive returns re_gate_pending. Drive far past the recoverable
-    // ceiling (MAX_RECOVERABLE_DRIVE_ATTEMPTS = 5) that bounds the `blocked` path — a still-
-    // running gate must NEVER be capped (it is "not done yet", not non-convergence).
+    // A long-running gate: every drive returns re_gate_pending. Drive far past the point a
+    // SUSTAINED-non-recovery would alert on the `blocked` path — a still-running gate is NOT a
+    // non-recovering infra failure (it is "not done yet", not non-convergence), so it never alerts.
     runner.script("run_u", [{ kind: "re_gate_pending", message: "gate still running" }]);
 
     for (let i = 0; i < 12; i += 1) {
