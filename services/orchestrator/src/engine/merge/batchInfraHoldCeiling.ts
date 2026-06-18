@@ -1,30 +1,30 @@
-// GAP #1 (merge hardening — runaway guard): the per-project CROSS-PASS consecutive
-// infra-hold ALERT threshold for the BatchMergeCoordinator. The batch coordinator already
-// bounds the IN-PASS re-checks of one batch (`MAX_INFRA_RETRIES`) — but on exhaustion
-// it HOLDS with a 3s `INFRA_HOLD_RETRY_AFTER_MS` re-drive and (before this) NO loud
-// cross-pass signal. A PERSISTENT outage therefore re-drove every 3s FOREVER without
-// surfacing operator-visible context. The alert threshold emits a terminal
-// `merge.batch.infra_blocked` event but keeps the entries active and backs off; a
-// retriable infra outage must never turn into a permanent dequeued queue state.
+// GAP #1 (merge hardening — runaway guard): the per-project CROSS-PASS infra-hold ALERT
+// for the BatchMergeCoordinator. The batch coordinator already re-checks one batch IN-PASS
+// while the infra error keeps shifting — but on a sustained-identical in-pass failure it
+// HOLDS with a backoff re-drive and (before this) NO loud cross-pass signal. A PERSISTENT
+// outage therefore re-drove FOREVER without surfacing operator-visible context. The alert
+// emits a terminal `merge.batch.infra_blocked` event but keeps the entries active and backs
+// off; a retriable infra outage must never turn into a permanent dequeued queue state.
 //
-// Audit RC-7: the per-project counter is now PERSISTED (a HoldCeilingStore) rather than
-// a process-local Map. The count survives across `coordinate` passes (each delayed
-// re-drive is a fresh pass) AND across a rolling deploy / crash-loop — so a persistent
-// outage cannot re-earn its full hold budget every restart and the terminal alert
-// always fires. Reset on ANY non-infra-hold settle (a pass that merged / dequeued /
+// no-timeouts reframe (feedback_no_timeouts_progress_based): the terminal alert no longer
+// fires on a fixed consecutive-hold COUNT — it fires on a PROGRESS signal. Each cross-pass
+// hold records the infra failure's stable SIGNATURE; the alert fires only once that signature
+// is SUSTAINED-non-recovering (the same failure persisting with no progress across the
+// backoff-spaced re-drives — the fixed-point read in `infraNonRecovery.ts`). A CHANGING
+// failure (a recovering / shifting outage) keeps re-driving quietly. Behavior is otherwise
+// unchanged: at the alert the entries STAY queued + re-drive on the longer backoff.
+//
+// Audit RC-7: the signature history (and the telemetry hold count) is PERSISTED (a
+// HoldCeilingStore) rather than a process-local Map. It survives across `coordinate` passes
+// (each delayed re-drive is a fresh pass) AND across a rolling deploy / crash-loop — so a
+// persistent outage cannot forget its non-recovery streak every restart and the terminal
+// alert always fires. Reset on ANY non-infra-hold settle (a pass that merged / dequeued /
 // pended) so a recovered batch starts fresh.
-
-/**
- * How many CONSECUTIVE cross-pass infra holds one project's batch may take before the
- * coordinator emits a TERMINAL loud alert. The entries remain queued and the subscriber
- * still receives a delayed re-drive, just with a longer backoff after the alert. The
- * common case (a GitHub blip) clears in 1–2 holds, well under this.
- */
-export const MAX_BATCH_INFRA_HOLDS = 5;
 
 import type { CoordinateResult, MergeQueueEntry, MergeQueueModel } from "../contracts/mergeCoordinator.js";
 import type { BatchMergeEventEmitter } from "./batchCoordinator.js";
 import { type HoldCeilingStore, InMemoryHoldCeilingStore } from "./holdCeilingStore.js";
+import { isSustainedInfraNonRecovery } from "./infraNonRecovery.js";
 import { alertRetryAfterMs, recoverableRetryDelayMs } from "./retrySchedule.js";
 import { createLogger } from "../observability/logger.js";
 
@@ -37,15 +37,17 @@ export const INFRA_HOLD_ALERT_RETRY_AFTER_MS = alertRetryAfterMs;
 
 /**
  * GAP #1 (runaway guard): hold the batch on an infra error that could not recover
- * in-pass, BOUNDED by the per-project CROSS-PASS consecutive-infra-hold ceiling. Each
- * delayed re-drive is a fresh `coordinate` pass; without this counter a persistent
- * outage (or a permanent error mis-routed to the hold) re-drove the 3s timer FOREVER.
- * Records the hold, then:
- *   - below the cap → emit a RECOVERABLE merge.batch.infra_blocked + return an
- *     `infra_error` hold WITH `retryAfterMs` (the subscriber re-drives once more);
- *   - at the cap → emit a TERMINAL merge.batch.infra_blocked (`terminal: true`) but
- *     keep every affected entry queued + return an `infra_error` hold WITH a longer
- *     `retryAfterMs`. The alert is loud, but recovery remains autonomous.
+ * in-pass, guarded by SUSTAINED-NON-RECOVERY (a PROGRESS signal, not a count). Each
+ * delayed re-drive is a fresh `coordinate` pass; without this guard a persistent outage
+ * (or a permanent error mis-routed to the hold) re-drove the timer FOREVER. Records the
+ * hold under the infra failure's stable SIGNATURE, then:
+ *   - while the signature keeps SHIFTING (recovering) → emit a RECOVERABLE
+ *     merge.batch.infra_blocked + return an `infra_error` hold WITH `retryAfterMs` (the
+ *     subscriber re-drives once more);
+ *   - once the SAME signature is sustained-non-recovering → emit a TERMINAL
+ *     merge.batch.infra_blocked (`terminal: true`) but keep every affected entry queued +
+ *     return an `infra_error` hold WITH a longer `retryAfterMs`. The alert is loud, but
+ *     recovery remains autonomous.
  */
 export async function holdOnInfra(args: {
   ceiling: BatchInfraHoldCeiling;
@@ -58,17 +60,17 @@ export async function holdOnInfra(args: {
   kind?: "missing_required_credential";
 }): Promise<CoordinateResult> {
   const { ceiling, events, projectId, batch, message, queueDepth } = args;
-  const recorded = await ceiling.record(projectId);
-  if (recorded.reached) {
+  const recorded = await ceiling.record(projectId, message);
+  if (recorded.sustainedNonRecovery) {
     await events.emitInfraBlocked({
       projectId,
       batch,
-      message: `batch check kept hitting an infra error across ${recorded.holds} consecutive holds; alerting and continuing autonomous re-drive: ${message}`,
+      message: `batch check infra error is not recovering (same failure across ${recorded.holds} re-drives); alerting and continuing autonomous re-drive: ${message}`,
       attempts: HELD_AFTER_ATTEMPTS,
       terminal: true,
       consecutiveHolds: recorded.holds,
     });
-    log.error("batch check ALERT after consecutive infra holds; continuing autonomous re-drive after backoff", {
+    log.error("batch check ALERT on sustained infra non-recovery; continuing autonomous re-drive after backoff", {
       projectId,
       consecutiveHolds: recorded.holds,
       message,
@@ -133,35 +135,37 @@ async function markBatchInfraBlockedAfterEvent(input: {
 }
 
 /**
- * The bounded per-project consecutive-infra-hold counter (a runaway guard). Audit RC-7:
- * the streak is PERSISTED (a HoldCeilingStore) so it survives a restart; inject the
- * {@link PgHoldCeilingStore} in production, the default in-memory store keeps the
- * in-process fakes/unit tests Pg-free. The `record`/`reset` API shape is unchanged
- * (callers `await` it).
+ * The progress-guarded per-project infra-hold tracker (a runaway guard). Audit RC-7: the
+ * signature history (+ telemetry hold count) is PERSISTED (a HoldCeilingStore) so it
+ * survives a restart; inject the {@link PgHoldCeilingStore} in production, the default
+ * in-memory store keeps the in-process fakes/unit tests Pg-free. The `record`/`reset` API
+ * shape is unchanged (callers `await` it).
  */
 export class BatchInfraHoldCeiling {
-  private readonly cap: number;
   private readonly store: HoldCeilingStore;
 
-  constructor(cap: number = MAX_BATCH_INFRA_HOLDS, store?: HoldCeilingStore) {
-    this.cap = cap;
+  constructor(store?: HoldCeilingStore) {
     this.store = store ?? new InMemoryHoldCeilingStore();
   }
 
   /**
-   * Record one infra hold for a project and report whether the CEILING is now reached.
-   * Returns `{ reached, holds }`: `reached === true` means this hold hit the cap (a
-   * TERMINAL escalation — the caller emits the loud halt + arms NO further timer);
-   * otherwise the caller arms the bounded re-drive as before.
+   * Record one infra hold for a project under the failure's stable `signature` and report
+   * whether it is SUSTAINED-NON-RECOVERING (a PROGRESS signal, not a count). Returns
+   * `{ sustainedNonRecovery, holds }`: `sustainedNonRecovery === true` means the SAME
+   * failure has persisted with no progress across the re-drives (a TERMINAL alert — the
+   * caller emits the loud halt but keeps the entries queued + re-drives on the longer
+   * backoff); otherwise (a still-shifting / recovering failure) the caller arms the
+   * recoverable re-drive as before. `holds` is the persisted telemetry count, never the
+   * trigger. On a sustained-non-recovery verdict the streak is CLEARED (like the prior
+   * cap-then-clear) so the alert is loud once-per-streak, not re-spammed every pass — recovery
+   * keeps re-driving and only re-alerts if non-recovery persists across a fresh streak.
    */
-  async record(projectId: string): Promise<{ reached: boolean; holds: number }> {
-    const next = await this.store.increment("batch_infra", projectId);
-    if (next >= this.cap) {
-      // The ceiling fired: clear the streak so a later recovered batch starts fresh.
-      await this.store.clear("batch_infra", projectId);
-      return { reached: true, holds: next };
-    }
-    return { reached: false, holds: next };
+  async record(projectId: string, signature: string): Promise<{ sustainedNonRecovery: boolean; holds: number }> {
+    const holds = await this.store.increment("batch_infra", projectId);
+    const history = await this.store.recordSignature("batch_infra", projectId, signature);
+    const sustainedNonRecovery = isSustainedInfraNonRecovery(history);
+    if (sustainedNonRecovery) await this.store.clear("batch_infra", projectId);
+    return { sustainedNonRecovery, holds };
   }
 
   /** Reset a project's streak — called on ANY settled (non-infra-hold) pass. */

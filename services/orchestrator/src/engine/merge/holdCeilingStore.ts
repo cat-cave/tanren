@@ -10,6 +10,13 @@
 // restart. Held candidates are off the hot path, so the extra org-scoped round-trip is
 // fine.
 //
+// no-timeouts reframe: the loud `infra_blocked` alert no longer fires on the COUNT — it
+// fires on a PROGRESS signal (the same infra failure SIGNATURE persisting with no recovery,
+// the fixed-point read in `infraNonRecovery.ts`). So this store ALSO persists the trailing
+// failure-SIGNATURE history (`recordSignature` / `clear`) durably, exactly as it persisted
+// the count, so the sustained-non-recovery decision survives a restart. The `attempts` count
+// is retained as TELEMETRY ONLY (the emitted diagnostic), never a control-flow trigger.
+//
 // FAIL-CLOSED: a DB read/write failure PROPAGATES (loud) — it must NEVER silently
 // reset the counter to zero, which would defeat the very ceiling it backs and re-grant
 // a flapping candidate its full attempt budget. ORG-SCOPED: the row is tenant-scoped,
@@ -18,6 +25,7 @@
 
 import { runWithOrgScope, runWithSystemScope } from "@tanren/db";
 import type pg from "pg";
+import { appendInfraSignature } from "./infraNonRecovery.js";
 
 /** Which ceiling a row belongs to (the `merge_queue_holds.kind` discriminant). */
 export type HoldCeilingKind = "recoverable_drive" | "batch_infra";
@@ -29,12 +37,21 @@ export type HoldCeilingKind = "recoverable_drive" | "batch_infra";
  */
 export interface HoldCeilingStore {
   /**
-   * Atomically increment the counter for `(scopeId, kind)` and return the new total.
-   * The first increment for a fresh scope creates the row at 1. FAIL-CLOSED: a DB
-   * failure throws rather than returning a reset-to-one count.
+   * Atomically increment the TELEMETRY counter for `(scopeId, kind)` and return the new
+   * total. The first increment for a fresh scope creates the row at 1. FAIL-CLOSED: a DB
+   * failure throws rather than returning a reset-to-one count. The count is observability
+   * only (the emitted `attempts` diagnostic) — the alert keys off {@link recordSignature}.
    */
   increment(kind: HoldCeilingKind, scopeId: string): Promise<number>;
-  /** Remove the counter for `(scopeId, kind)` so a recovered candidate starts fresh. */
+  /**
+   * Append the infra-failure `signature` to the durable trailing signature history for
+   * `(scopeId, kind)` and return the NEW bounded history (oldest→newest). This is the
+   * PROGRESS signal the loud alert keys off: the caller feeds the returned history to
+   * `isSustainedInfraNonRecovery`. FAIL-CLOSED like `increment`: a DB failure throws
+   * (never a silent reset that would forget the non-recovery streak).
+   */
+  recordSignature(kind: HoldCeilingKind, scopeId: string, signature: string): Promise<string[]>;
+  /** Remove the counter + signature history for `(scopeId, kind)` so a recovered candidate starts fresh. */
   clear(kind: HoldCeilingKind, scopeId: string): Promise<void>;
 }
 
@@ -45,6 +62,7 @@ export interface HoldCeilingStore {
  */
 export class InMemoryHoldCeilingStore implements HoldCeilingStore {
   private readonly counts = new Map<string, number>();
+  private readonly signatures = new Map<string, string[]>();
 
   private key(kind: HoldCeilingKind, scopeId: string): string {
     return `${kind}:${scopeId}`;
@@ -56,8 +74,15 @@ export class InMemoryHoldCeilingStore implements HoldCeilingStore {
     return Promise.resolve(next);
   }
 
+  recordSignature(kind: HoldCeilingKind, scopeId: string, signature: string): Promise<string[]> {
+    const next = appendInfraSignature(this.signatures.get(this.key(kind, scopeId)) ?? [], signature);
+    this.signatures.set(this.key(kind, scopeId), next);
+    return Promise.resolve(next);
+  }
+
   clear(kind: HoldCeilingKind, scopeId: string): Promise<void> {
     this.counts.delete(this.key(kind, scopeId));
+    this.signatures.delete(this.key(kind, scopeId));
     return Promise.resolve();
   }
 }
@@ -93,6 +118,31 @@ export class PgHoldCeilingStore implements HoldCeilingStore {
         throw new Error(`merge_queue_holds upsert returned no row for ${kind}:${scopeId}`);
       }
       return Number(attempts);
+    });
+  }
+
+  async recordSignature(kind: HoldCeilingKind, scopeId: string, signature: string): Promise<string[]> {
+    const orgId = await this.resolveOrg(kind, scopeId);
+    return runWithOrgScope(this.pool, orgId, async (client) => {
+      // Read-modify-write the bounded signature history in ONE statement: read the prior
+      // JSON history (default '[]'), append+clamp in JS, and upsert it back, RETURNING the
+      // persisted value so a concurrent writer's row still round-trips. Held candidates are
+      // off the hot path, so this extra round-trip is fine.
+      const prior = await client.query<{ signatures: string }>(
+        "SELECT signatures FROM merge_queue_holds WHERE scope_id = $1 AND kind = $2",
+        [scopeId, kind],
+      );
+      const history = parseSignatures(prior.rows[0]?.signatures, kind, scopeId);
+      const next = appendInfraSignature(history, signature);
+      const written = await client.query<{ signatures: string }>(
+        `INSERT INTO merge_queue_holds (scope_id, kind, org_id, signatures, last_attempt_at)
+           VALUES ($1, $2, $3, $4, now())
+         ON CONFLICT (org_id, scope_id, kind)
+           DO UPDATE SET signatures = $4, last_attempt_at = now()
+         RETURNING signatures`,
+        [scopeId, kind, orgId, JSON.stringify(next)],
+      );
+      return parseSignatures(written.rows[0]?.signatures, kind, scopeId);
     });
   }
 
@@ -135,4 +185,23 @@ export class PgHoldCeilingStore implements HoldCeilingStore {
       return result.rows[0]?.org_id ?? null;
     });
   }
+}
+
+/**
+ * Parse the persisted `signatures` JSON into a string history. FAIL-CLOSED: a present-but-
+ * unparseable value is a genuine corruption (never a silent reset that would forget the
+ * non-recovery streak), so it throws loudly; an absent row is a legitimately-empty history.
+ */
+function parseSignatures(raw: string | undefined, kind: HoldCeilingKind, scopeId: string): string[] {
+  if (raw === undefined) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    throw new Error(`merge_queue_holds: corrupt signatures JSON for ${kind}:${scopeId}`, { cause: error });
+  }
+  if (!Array.isArray(parsed) || parsed.some((s) => typeof s !== "string")) {
+    throw new Error(`merge_queue_holds: signatures for ${kind}:${scopeId} is not a string[]`);
+  }
+  return parsed as string[];
 }

@@ -38,8 +38,11 @@ import { serializedRetryAfterMs } from "./mergeSerializedRetry.js";
 import { createLogger } from "../observability/logger.js";
 const log = createLogger("batch-coordinator");
 
-const MAX_INFRA_RETRIES = 2;
-const INFRA_RETRY_BACKOFF_MS = [250, 500];
+// The IN-PASS re-poll spacing (NOT a cap). The in-pass loop is the IMMEDIATE retry of ONE
+// transient: it re-polls the SAME infra condition once (it may clear on a spaced re-read), then
+// hands off any recurrence to the cross-pass sustained-non-recovery hold (which owns recovery
+// across passes). Spin-free — any second infra-error breaks the loop.
+const INFRA_RETRY_BACKOFF_MS = 500;
 
 const PENDING_RECHECK_MS = 15_000;
 
@@ -103,9 +106,8 @@ export interface BatchMergeCoordinatorDeps {
   batchEvents: BatchMergeEventEmitter;
   /**
    * The NON-BRICKING conflict-escalation seam (§2c), reused VERBATIM from the native queue
-   * coordinator: parks a GENUINELY irreconcilable spec at `needs_attention` (frees its
-   * slot) when the real drive returns the `needs_attention` outcome. The same helper
-   * both paths use, so they can never diverge.
+   * coordinator: parks a GENUINELY irreconcilable spec at `needs_attention` (frees its slot)
+   * when the real drive returns the `needs_attention` outcome — one helper, never diverges.
    */
   escalator: SpecEscalator;
   /**
@@ -122,25 +124,22 @@ export interface BatchMergeCoordinatorDeps {
   /** Audit RC-7: the DURABLE backing store for BOTH runaway-guard ceilings, so the counters survive a restart (absent → in-memory, for fakes). */
   holdCeilingStore?: HoldCeilingStore;
   /**
-   * Resolve the per-project max batch size (the config knob). Defaults to a constant
-   * `DEFAULT_MAX_BATCH_SIZE` resolver when omitted (tests inject a fixed value). The
-   * production assembly resolves `projects.config.maxBatchSize` under RLS.
+   * Resolve the per-project max batch size (the config knob). Defaults to a `DEFAULT_MAX_BATCH_SIZE`
+   * resolver when omitted (tests inject a fixed value); production resolves
+   * `projects.config.maxBatchSize` under RLS.
    */
   resolveMaxBatchSize?: (projectId: string) => Promise<number>;
-  /**
-   * Test seam: the sleep between infra-error re-checks. Defaults to a real timer; a
-   * test injects a no-op/recording sleep so the bounded retries run instantly.
-   */
+  /** Test seam: the sleep between infra-error re-polls. Defaults to a real timer; a test injects a no-op/recording sleep so re-polls run instantly. */
   sleep?: (ms: number) => Promise<void>;
 }
 
 /**
- * The production BatchMergeCoordinator. Adds the speculative batch-check + bisect on
- * top of the native queue's one-at-a-time drive. It reloads the queue every pass (DAG state is
- * the source of truth, never cached). It performs the REAL merges through the SAME
- * runner/model, so the native queue's ordering + serialization + lease/recovery guarantees
- * hold unchanged; the only addition is that the batch is PROVEN green as a combined
- * unit before any of it merges, and a bad interaction is isolated to one PR via bisect.
+ * The production BatchMergeCoordinator. Adds the speculative batch-check + bisect on top of
+ * the native queue's one-at-a-time drive. It reloads the queue every pass (DAG state is the
+ * source of truth, never cached) and performs the REAL merges through the SAME runner/model,
+ * so the native queue's ordering + serialization + lease/recovery guarantees hold unchanged;
+ * the only addition is that the batch is PROVEN green as a combined unit before any of it
+ * merges, and a bad interaction is isolated to one PR via bisect.
  */
 export class BatchMergeCoordinator implements MergeCoordinator {
   private readonly resolveMaxBatchSize: (projectId: string) => Promise<number>;
@@ -152,7 +151,7 @@ export class BatchMergeCoordinator implements MergeCoordinator {
     this.resolveMaxBatchSize = deps.resolveMaxBatchSize ?? (() => Promise.resolve(DEFAULT_MAX_BATCH_SIZE));
     this.sleep = deps.sleep ?? ((ms) => sleepFor(ms));
     // Audit RC-7: back both runaway-guard ceilings with the injected durable store (survives a restart).
-    this.infraHolds = new BatchInfraHoldCeiling(undefined, deps.holdCeilingStore);
+    this.infraHolds = new BatchInfraHoldCeiling(deps.holdCeilingStore);
     this.deps.recoverableDriveHolds ??= new RecoverableDriveHoldCeiling(deps.holdCeilingStore);
   }
 
@@ -187,12 +186,11 @@ export class BatchMergeCoordinator implements MergeCoordinator {
   }
 
   /**
-   * Speculatively check the formed batch, then either drive every entry's real merge
-   * (on pass) or isolate + dequeue the offending PR and re-check the remainder (on
-   * fail). `formation` is the already-formed batch for THIS attempt; on a fail we
-   * re-FORM (reload the snapshot) without the culprit so a newly-eligible entry can
-   * join and the cap is re-applied. Bounded: each fail removes exactly one entry, so
-   * the loop runs at most `batch.length` times.
+   * Speculatively check the formed batch, then either drive every entry's real merge (on
+   * pass) or isolate + dequeue the offending PR and re-check the remainder (on fail).
+   * `formation` is the already-formed batch for THIS attempt; on a fail we re-FORM (reload
+   * the snapshot) without the culprit so a newly-eligible entry can join and the cap is
+   * re-applied. Each fail removes exactly one entry, so the loop runs at most `batch.length`.
    */
   private async processBatch(
     projectId: string,
@@ -314,10 +312,11 @@ export class BatchMergeCoordinator implements MergeCoordinator {
     | { kind: "infra-terminal"; message: string; cause?: "missing_required_credential" }
   > {
     let lastMessage = "batch check could not run (infra error)";
-    for (let attempt = 0; attempt <= MAX_INFRA_RETRIES; attempt += 1) {
-      if (attempt > 0) {
-        await this.sleep(INFRA_RETRY_BACKOFF_MS[attempt - 1] ?? 500);
-      }
+    // `sawInfra` is the PROGRESS gate (NOT a count): re-poll the SAME transient once, then hand
+    // off ANY recurrence to the cross-pass sustained-non-recovery hold (spin-free).
+    let sawInfra = false;
+    for (;;) {
+      if (sawInfra) await this.sleep(INFRA_RETRY_BACKOFF_MS);
       await this.deps.batchEvents.emitChecking({ projectId, batch: formation.batch, formation, maxBatchSize });
       const verdict = await this.checkEntries(projectId, formation.batch);
       if (verdict.result !== "infra-error") {
@@ -326,20 +325,22 @@ export class BatchMergeCoordinator implements MergeCoordinator {
       lastMessage = verdict.message;
       // Required config cannot self-heal via timed re-drive.
       if (!verdict.retriable) return { kind: "infra-terminal", message: lastMessage, cause: verdict.kind };
+      // A second infra-error (identical = fixed point, shifted = evolving) is no longer
+      // clear-progress → hand off to the cross-pass sustained-non-recovery hold.
+      if (sawInfra) return { kind: "infra-exhausted", message: lastMessage };
+      sawInfra = true;
     }
-    return { kind: "infra-exhausted", message: lastMessage };
   }
 
-  /** GAP #1: hold the batch on an infra error, bounded by the cross-pass ceiling. */
+  /** GAP #1: hold the batch on an infra error, guarded by cross-pass sustained-non-recovery. */
   private infraHold(
     projectId: string,
     batch: ReadonlyArray<MergeQueueEntry>,
     message: string,
     queueDepth: number,
   ): Promise<CoordinateResult> {
-    const ceiling = this.infraHolds;
     return holdOnInfra({
-      ceiling,
+      ceiling: this.infraHolds,
       queue: this.deps.queue,
       events: this.deps.batchEvents,
       projectId,
@@ -351,12 +352,12 @@ export class BatchMergeCoordinator implements MergeCoordinator {
 
   /**
    * Speculatively integrate + CI-check the given entry set (the BatchChecker assembles
-   * `default_branch + the entries` and runs CI on the ephemeral integration ref — NEVER
-   * touching default_branch). An empty set checks the base alone (passes — the bisect
-   * lower-bound). A THROWN checker means the check could not be RUN (a transport/ref
-   * infra error) — NOT a CI failure and NEVER a PR's fault, so we return the
-   * `infra-error` verdict (NOT `fail`); the caller bounded-retries then HOLDS loudly,
-   * never dequeuing a clean PR. `retriable` derives from the typed provider error.
+   * `default_branch + the entries` on an ephemeral integration ref — NEVER touching
+   * default_branch). An empty set checks the base alone (the bisect lower-bound). A THROWN
+   * checker means the check could not be RUN (a transport/ref infra error) — NOT a CI
+   * failure and NEVER a PR's fault, so we return the `infra-error` verdict (NOT `fail`);
+   * the caller re-polls then HOLDS loudly, never dequeuing a clean PR. `retriable` derives
+   * from the typed provider error.
    */
   private async checkEntries(projectId: string, entries: ReadonlyArray<MergeQueueEntry>): Promise<BatchCheckVerdict> {
     try {
@@ -373,12 +374,11 @@ export class BatchMergeCoordinator implements MergeCoordinator {
 
   /**
    * Binary-search the failed batch to isolate the single offending PR (the pure
-   * `bisectCulprit` driver over `checkEntries`). Returns the bisect result on a
-   * definitive pass→fail boundary; `"pending"` when a sub-batch's CI was still running
-   * (HOLD, never guess); `{kind:"infra", message}` when a sub-batch check could NOT be
-   * RUN — bisect MUST NOT name a culprit from a check that never ran, so the pass aborts
-   * the bisect + HOLDS loudly. Each sub-batch check is a speculative integration +
-   * CI-check on a PREFIX; the pure driver terminates + names exactly the boundary.
+   * `bisectCulprit` driver over `checkEntries`). Returns the bisect result on a definitive
+   * pass→fail boundary; `"pending"` when a sub-batch's CI was still running (HOLD, never
+   * guess); `{kind:"infra", message}` when a sub-batch check could NOT be RUN — bisect MUST
+   * NOT name a culprit from a check that never ran, so the pass aborts the bisect + HOLDS
+   * loudly. Each sub-batch check is a speculative PREFIX integration + CI-check.
    */
   private async bisectBatch(
     projectId: string,
