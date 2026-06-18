@@ -23,11 +23,14 @@ no-Actions doctrine governs the delivery path for the apps Tanren _builds_.)
 
 ## Current state (read this first)
 
-**Tanren delivers merged, deployed PRs from natural-language specs, live-validated
-across three tiers with real Codex and real credentials.** The full loop —
-`spec → plan → write → check → audit → native gate → merge → deploy → demo` —
-runs end-to-end through the background **run worker**, driven from the dashboard
-or the `tanren` CLI, with no fake adapters anywhere in the runtime path.
+**Tanren delivers merged PRs from natural-language specs, live-validated across
+three governance tiers with real Codex and real credentials.** The loop —
+`spec → plan → write → check → audit → native gate → merge → deploy → demo` — runs
+through the background **run worker**, driven from the dashboard or the `tanren`
+CLI, with no fake adapters anywhere in the runtime path. The single-spec → merged-PR
+path is live-proven across all three tiers (including a private repo); the
+**autonomous, multi-PR, deploy-the-whole-product** close is built and merged but not
+yet proven on a live run — see the honest proof state further down.
 
 Live-proven acceptance (the §14 gate — see `docs/operator-guide/acceptance.md`):
 
@@ -43,6 +46,15 @@ it merge. **Private repositories work** (the workspace clone authenticates with
 the org's GitHub token over HTTPS). The merge is admitted by Tanren's own
 `pre_merge` gate — not an Actions check. All three of the project's cost models,
 the event log, and full run/task provenance are persisted and inspectable.
+
+**What is _not_ yet proven.** The full **autonomous** loop — rough operator notes →
+DAG → many merged PRs → a live deploy → a working product, closed end-to-end without
+a human in the inner loop — has **not** yet closed on a live run. That is the open
+edge `apex` (below) drives. The three-tier acceptance above is a single spec → a
+single merged PR per tier; the autonomy engine that strings many of those together
+into a whole product is built and merged, but its end-to-end close is still the
+live-validation target. Read the state below honestly: the engine is the single
+live path; the proof that it carries a product over the finish line is pending.
 
 ### What's built and merged on `main`
 
@@ -122,8 +134,30 @@ the event log, and full run/task provenance are persisted and inspectable.
   worker, a post-merge hidden-`accept` step, and `tanren experiments` / `tanren
 cells` CRUD + `report` / `compare`. See `docs/roadmap/tanren-method-benchmark.md`.
 - **A data-access layer** behind a conformance-covered `Repositories` seam
-  (`engine/repositories/**`, `engine/contracts/repositories.ts`); the HTTP routes
-  and the run-lifecycle writes are migrated off raw SQL.
+  (`engine/repositories/**`, `engine/contracts/repositories.ts`); the HTTP routes,
+  the run-lifecycle writes, and the former raw-SQL forge stores (audits + inbox →
+  `engine/repositories/{audits,inbox}.ts`) are migrated off raw SQL.
+- **No arbitrary timeouts, retry caps, or wall-clock deadlines — anywhere.** The
+  timeout/retry-cap eradication is **complete and CI-gated**. Every hang-detection
+  mechanism is **progress / sign-of-life** based: an `ActivityWatchdog`
+  (`engine/ssh/activityWatchdog.ts`) kills only on evidence of death (no advance in
+  output / tokens / CPU / workspace-mtime, with a progress backstop), and
+  `retryUntilConverged` (`engine/workflow/retryUntilConverged.ts`, wrapping
+  `convergenceDetector`) replaces every `MAX_*` / `maxPolls` give-up with intelligent
+  non-convergence detection (same failure + no progress → escalate, never a counter).
+  A working agent runs **unbounded**. The `scripts/check-architecture-timeouts.mjs`
+  lint is CI-gating, so the class cannot reintroduce. See
+  `docs/roadmap/timeout-eradication.md`.
+- **A native DESIGN subsystem — Tanren owns design the way it owns the engine.** A
+  domain-general, persisted, versioned `DesignContract` (`engine/design/`) is
+  authored by a native design agent + design phase, **injected into the writer on
+  every generation** (no decorative `designDna` hint), and verified by a domain-aware
+  **design oracle** (`engine/workflow/designOracle/`) whose findings re-drive the
+  writer in the **same DAG, no handoff seam**. The moat: design binds to first-class
+  personas (strict resolution, no guessing) + behaviors (exhaustive coverage). It is
+  built + wired end-to-end (WS-D1..D4) but **not yet exercised on a live run with a
+  captured contract** — that is a scoped exercise for the next apex run (visual
+  pixel-fidelity is the WS-D4a follow-on). See `docs/roadmap/native-design-subsystem.md`.
 - **Cost as fact, with a budget gate.** Token accounting is mandatory; dollar cost
   is sourced — **notional** figures rate from LiteLLM `model_prices`, **metered
   real spend** comes from the provider's metering backend, and the figure is
@@ -173,10 +207,10 @@ jj-assembles its base from the **real ancestor PR-head refs** (`runs.ancestor_st
 — true stacked PRs); there is **no synthesized `tanren/integ` host ref**, and the
 legacy `speculative_base` + `integrated_ancestor_shas` columns are dropped. The
 `integration.*` metrics read-side (`rebase_vs_rebuild`) is **built** (route +
-compute + insights). apex remains the live-validation vehicle — a real merge through
-the live jj/`MergeAuthority` path is the open item (apex v32 halted at
-scaffold-bootstrap before reaching one) — but the engine is the single path
-regardless. Full rationale: **`docs/architecture/tanren-owns-the-engine.md`**.
+compute + insights). apex remains the live-validation vehicle — a whole-product loop
+merging through the live jj/`MergeAuthority` path is the open item — but the engine is
+the single path regardless. Full rationale:
+**`docs/architecture/tanren-owns-the-engine.md`**.
 
 **The only remaining major effort is Phase 3 — `apex`**: a max-difficulty fixture
 that takes a one-paragraph brief to a deployed product (URL shortener + Slack bot +
@@ -187,15 +221,23 @@ and the **templating doctrine** (every project DAG seeds from a validated templa
 no from-scratch-into-a-project) is `docs/roadmap/templating-system.md`. The Tier-1
 credentials (GitHub App + Slack + a deploy target — see
 `docs/operator-guide/validation-credentials.md`) are provisioned, and it spends real
-credits under the $50 budget ceiling (BYOK Codex runs at $0). **apex v32 ran live
-and halted at scaffold-bootstrap** — flushing three real bugs now fixed on `main`
-(bootstrap frozen-lockfile #496, runner-sweeper #497, templating re-architecture
-#498); **v33 drives the refined platform and should reach the loops past scaffold.**
+credits under the $50 budget ceiling (BYOK Codex runs at $0).
 
-Smaller near-term items: the **benchmark seed corpus** and the **remaining DAL
-clusters** (`forge/audits/store.ts` + `forge/inbox/store.ts` still raw SQL),
-`typify→serde` codegen, and the first whole-repo mutation baseline; long-horizon:
-a second `CodeHost` backend (GitLab) and the Rust rewrite / native harness.
+**Honest proof state.** Successive apex trials have driven Tanren harder each time
+and each flushed real engine bugs now fixed on `main`. The most recent, **v36**,
+proved the **#601 re-gate / stall-recovery** behaviour — it reached **10/11** on a
+template-creation DAG and **recovered from stalls without bricking** the graph —
+which is the autonomy-engine robustness the no-timeouts doctrine exists to buy. But
+**v36 did NOT close the product loop** (issue → triage → fix → merge → deploy → a
+working product). **apex v37 has not yet run**; the design subsystem's v37
+e2e-readiness verdict (`docs/roadmap/native-design-subsystem.md`) and the
+timeout-free engine are baked in for it. **No live run has yet closed the full
+autonomous loop with a deploy** — that is precisely what apex still has to prove.
+
+Smaller near-term items: the **benchmark seed corpus**, `typify→serde` codegen, and
+the first whole-repo mutation baseline; long-horizon: a second `CodeHost` backend
+(GitLab) and the Rust rewrite / native harness. (The forge audits/inbox DAL clusters
+are now migrated onto the `Repositories` seam — that item is done.)
 (Vault per-run scoped credentials — the last big data-plane de-privilege — is now
 **done**.) None of these block the core promise above.
 
