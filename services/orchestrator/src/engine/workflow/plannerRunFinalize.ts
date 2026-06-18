@@ -21,9 +21,8 @@ import { AncestorNotReadyError } from "../dag/jjLocalIntegration.js";
 import { applyTerminalOutcome, type DispositionSeams } from "./plannerRunRedrive.js";
 import type { NonPassDetail, TerminalOutcome } from "./runFinalizeAuthority.js";
 import { resolveWorkflowThrow, type WorkflowErrorDisposition } from "./workflowErrorDisposition.js";
-import type { PlannerRejectionFeedback } from "./planner/planner.js";
 import type { PreparedRunWorkspace } from "./plannerRunWorkspace.js";
-import { atReplanFixedPoint, gateErrorSignature, type MergeForRunResult } from "./reviewMerge/index.js";
+import type { MergeForRunResult } from "./reviewMerge/index.js";
 import type { PlannerRunContext, PlannerRunResult, RunPlannerLoopInput } from "./plannerRun.js";
 import type { SubtaskLoopOutcome } from "./subtaskLoop.js";
 import { createLogger } from "../observability/logger.js";
@@ -170,86 +169,6 @@ export function nonPassDetailFor(outcome: SubtaskLoopOutcome): NonPassDetail {
   if (outcome.kind === "window_exhausted") return "window_exhausted";
   if (outcome.kind === "convergence_stalled") return "convergence_stalled";
   return "halted";
-}
-
-/**
- * Mutable self-heal STATE for the pre_merge gate (apex v35 — no count budget). Records the
- * SIGNATURE of each gate failure the writer was sent back to fix, so the shared
- * `convergenceDetector` distinguishes a changing gate error (keep re-working, UNBOUNDED) from
- * a FIXED POINT (the SAME error recurs — escalate). `used` is observability, not a bound.
- */
-export interface MergeGateBudget {
-  used: number;
-  /** The gate-error signatures the writer has already been re-worked against (oldest→newest). */
-  signatures: string[];
-}
-
-/**
- * SELF-HEAL (apex v34): apply the BOUNDED merge stage's decision for a FAILED `pre_merge` gate (the
- * bound is `mergeGateSelfHeal` in plannerRunCi.ts). With budget left: seed the carried steering (the
- * failing tier/step/OUTPUT), bump the counter, return the spec to `in_flight` and signal `"rework"`
- * (re-enter the writer). Budget spent: finalize the run halted + park the spec `needs_attention` and
- * signal `"halt"`. Owns the budget + lifecycle writes so the loop branches on the single returned signal.
- */
-export async function applyFailedMergeGate(
-  input: RunPlannerLoopInput,
-  finalizeRunState: FinalizeRunState,
-  context: PlannerRunContext,
-  appendEvent: <N extends EventName>(eventType: N, payload: EventPayload<N>, taskId?: string) => Promise<void>,
-  decision: { kind: "rework"; rejection: PlannerRejectionFeedback; signature: string } | { kind: "halt" },
-  seedRejections: PlannerRejectionFeedback[],
-  budget: MergeGateBudget,
-): Promise<"rework" | "halt"> {
-  if (decision.kind === "halt") {
-    // The pre-merge gate reached a FIXED POINT (the same gate error recurs unchanged) — a
-    // TRANSIENT failure (the writer's own scaffold/tests), so the spec RE-DRIVES (not parks).
-    await finalizeNonPassOutcome(input, finalizeRunState, context, appendEvent, "merge_gate_unsatisfied");
-    return "halt";
-  }
-  // Record this gate-error signature so the next iteration's detector sees the progression
-  // (a CHANGED error ⇒ keep re-working; the SAME error recurring ⇒ a fixed point ⇒ halt).
-  budget.used += 1;
-  budget.signatures.push(decision.signature);
-  seedRejections.push(decision.rejection);
-  await setSpecStatus(input, context, "in_flight");
-  return "rework";
-}
-
-/**
- * Apply a PR review verdict to the planner loop (apex v35 — no count budget): `approved` →
- * `merge`; `changes_requested` whose feedback is DIFFERENT → re-enter the writer (`rework`),
- * UNBOUNDED while feedback keeps changing; changes-requested at a FIXED POINT (the SAME
- * feedback recurs) → `halt`. The review stage awaits its verdict INDEFINITELY (no poll budget,
- * feedback_no_timeouts_progress_based), so `pending` never reaches here. Mutates
- * `priorSignatures` on a `rework`.
- */
-export async function applyReviewVerdict(
-  input: RunPlannerLoopInput,
-  finalizeRunState: FinalizeRunState,
-  context: PlannerRunContext,
-  appendEvent: <N extends EventName>(eventType: N, payload: EventPayload<N>, taskId?: string) => Promise<void>,
-  review: { verdict: string; rejection: PlannerRejectionFeedback },
-  seedRejections: PlannerRejectionFeedback[],
-  priorSignatures: string[],
-): Promise<"merge" | "rework" | "halt"> {
-  if (review.verdict === "approved") {
-    return "merge";
-  }
-  if (review.verdict === "changes_requested") {
-    const signature = gateErrorSignature(review.rejection.rejectionReason);
-    // PROGRESS while the feedback keeps changing (re-work UNBOUNDED); a FIXED POINT (the SAME
-    // feedback recurs) → halt. The detector decides — no count.
-    if (!(await atReplanFixedPoint(priorSignatures, signature))) {
-      priorSignatures.push(signature);
-      seedRejections.push(review.rejection);
-      await setSpecStatus(input, context, "in_flight");
-      return "rework";
-    }
-  }
-  // Changes-requested at a review-feedback FIXED POINT (the SAME feedback recurs) — a
-  // TRANSIENT stall, so the spec RE-DRIVES (the walker re-attempts), not parks.
-  await finalizeNonPassOutcome(input, finalizeRunState, context, appendEvent, "review_stalled");
-  return "halt";
 }
 
 /**

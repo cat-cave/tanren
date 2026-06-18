@@ -61,11 +61,18 @@ describe("subtask loop — writer prompt rendering (writerPromptFor)", () => {
     // The acceptance criteria (the same bar the checker judges) reach the writer.
     expect(prompt).toContain("Acceptance criteria:");
     expect(prompt).toContain("- README mentions ok");
-    // The standing toolchain instruction steers the writer away from `workspace:*`
-    // stub packages BEFORE it spends the iteration (the #273 scaffold failure mode).
-    expect(prompt).toContain("NEVER create local");
-    expect(prompt).toContain("workspace:*");
-    expect(prompt).toContain("real published packages");
+    // The standing toolchain instruction steers the writer to use the project's OWN
+    // declared toolchain + real published deps and never stub/fake a binary BEFORE it
+    // spends the iteration (the #273 scaffold failure mode) — STACK-AGNOSTIC: it names
+    // no specific tool (no typescript/eslint/vitest/`workspace:*`), so it does not
+    // misdirect a Rust/Python/novel-translation project.
+    expect(prompt).toContain("project's OWN declared dependencies and toolchain");
+    expect(prompt).toContain("NEVER stub, fake, vendor, or shim");
+    expect(prompt).toContain("real published");
+    expect(prompt).not.toContain("workspace:*");
+    expect(prompt).not.toContain("typescript/eslint/vitest");
+    expect(prompt).not.toContain("eslint");
+    expect(prompt).not.toContain("vitest");
     // Spec-loop redesign §WRITER: the writer is told HOW it is graded — run the
     // fast deterministic gate before finishing, then the checker + auditor.
     expect(prompt).toContain("How your change will be graded");

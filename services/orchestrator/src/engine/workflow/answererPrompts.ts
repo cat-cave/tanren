@@ -144,6 +144,18 @@ function riskSteerBlock(riskSignal: EntityRiskSignal | undefined): string[] {
   return lines.length === 0 ? [] : ["", ...lines];
 }
 
+// Render the acceptance-criteria block under `header`. When the criteria list is EMPTY,
+// emit an explicit "(none ...)" guard line instead of a dangling header followed by
+// nothing — otherwise the prompt reads as "judge each one:" then silence, which misleads
+// the agent into hunting for criteria that do not exist. With no explicit criteria the
+// agent judges against the subtask INTENT alone.
+function criteriaBlock(header: string, criteria: ReadonlyArray<string>): string[] {
+  if (criteria.length === 0) {
+    return [header, "- (none — judge against the subtask intent only)"];
+  }
+  return [header, ...criteria.map((criterion) => `- ${criterion}`)];
+}
+
 export function buildCheckerPrompt(input: CheckerPromptInput): string {
   return [
     "You are the Tanren Checker Answerer. Your ONLY job is to judge COMPLETENESS for",
@@ -178,8 +190,7 @@ export function buildCheckerPrompt(input: CheckerPromptInput): string {
     "",
     `Spec title: ${input.specTitle}`,
     `Spec description: ${input.specDescription}`,
-    "Explicit acceptance criteria (judge each one):",
-    ...input.acceptanceCriteria.map((criterion) => `- ${criterion}`),
+    ...criteriaBlock("Explicit acceptance criteria (judge each one):", input.acceptanceCriteria),
     ...(input.subtask === undefined
       ? []
       : [
@@ -203,8 +214,7 @@ export function buildAuditorPrompt(input: AuditorPromptInput): string {
     "",
     `Spec title: ${input.specTitle}`,
     ...(input.specDescription === undefined ? [] : [`Spec description: ${input.specDescription}`]),
-    "Acceptance criteria:",
-    ...input.acceptanceCriteria.map((criterion) => `- ${criterion}`),
+    ...criteriaBlock("Acceptance criteria:", input.acceptanceCriteria),
     ...(input.subtasks === undefined
       ? []
       : [

@@ -9,18 +9,13 @@
 // RETURNS its failed `GateOutcome` (it does NOT throw) — the verdict comes from
 // Tanren's own gate over SSH, never from reading GitHub Actions.
 //
-// SELF-HEAL (apex v34): a failing `pre_merge` gate is almost always WRITER-FIXABLE —
-// the writer's own scaffold/tests (e.g. a `merge`-tier `tier-3` of cucumber+stryker
-// that exits 1). It used to THROW here → the run failed `code:internal` and the spec
-// terminally STRANDED, even though the writer could fix it. That stranded a
-// writer-fixable failure while the FAST tier (per_iteration) and the SLOW tier
-// (pre_audit) both already self-heal back to the writer (the fast tier loops straight
-// back; the slow tier becomes a P0 finding → triage → writer). Now the merge tier
-// joins them: a failed `pre_merge` gate is RETURNED to the merge stage, which re-enters
-// the writer loop with the failing tier/step/output as planner steering
-// (`mergeGateRejection`, mirroring the review-rework re-entry), BOUNDED by a dedicated
-// rework budget so a spec the writer genuinely cannot make merge-ready halts LOUD
-// (`needs_attention`) rather than looping forever or stranding on the first failure.
+// SELF-HEAL (apex v34): a failing `pre_merge` gate is almost always WRITER-FIXABLE (the
+// writer's own scaffold/tests). It used to THROW here (the run failed `code:internal`, the
+// spec STRANDED) even though the writer could fix it, while the FAST + SLOW tiers already
+// self-heal back to the writer. Now the merge tier joins them: a failed `pre_merge` gate
+// RE-ENTERS the writer loop with the failing tier/step/output as steering
+// (`mergeGateRejection`), UNBOUNDED while it CONVERGES (the error changes OR its count shrinks)
+// and halting LOUD only at a genuine fixed point (`mergeGateSelfHeal`). NO count.
 //
 // The forge publication is BEST-EFFORT: it only mirrors the (already-decided) verdict
 // onto the PR, so a publish failure (e.g. a token credential 403, a transient 5xx) is
@@ -46,13 +41,9 @@ import type { EventName, EventPayload } from "../events/index.js";
 import { publishDraftPullRequest, type PublishedDraftPullRequest } from "./githubDraftPr.js";
 import { NoCommitsBetweenBaseAndHeadError } from "../providers/githubPullRequestReuse.js";
 import { appTokenSeam, writerSeam } from "./plannerRunSeams.js";
-import {
-  applyFailedMergeGate,
-  finalizeMergeOutcome,
-  type FinalizeRunState,
-  type MergeGateBudget,
-} from "./plannerRunFinalize.js";
-import { atReplanFixedPoint, gateErrorSignature, mergeGateRejection, type ReGateCiHook } from "./reviewMerge/index.js";
+import { finalizeMergeOutcome, type FinalizeRunState } from "./plannerRunFinalize.js";
+import { applyFailedMergeGate, mergeGateSelfHeal, type MergeGateBudget } from "./plannerRunSelfHeal.js";
+import type { ReGateCiHook } from "./reviewMerge/index.js";
 import type { PlannerRejectionFeedback } from "./planner/planner.js";
 import type { PlannerRunContext, RunPlannerLoopInput } from "./plannerRun.js";
 import { createLogger } from "../observability/logger.js";
@@ -193,12 +184,11 @@ export function discriminateNoCommits(cleanedHeadSha: string, cloneHeadSha: stri
 /**
  * Run the native `pre_merge` gate on the run's live runner (the merge authority) and
  * BEST-EFFORT publish the verdict to the forge as a `tanren/gate` commit status. A
- * passing gate RETURNS its `passed: true` outcome (the caller proceeds to merge); a
- * failing gate RETURNS its `passed: false` outcome (it does NOT throw) so the merge
- * stage can route the writer-fixable failure back to the writer to self-heal (the
- * SELF-HEAL note above), BOUNDED by the merge-gate rework budget. A failed forge
- * PUBLISH of a passing verdict is NON-fatal (it never aborts the run): the publish is
- * informational; the internal verdict decides the merge.
+ * passing gate RETURNS its `passed: true` outcome (the caller proceeds to merge); a failing
+ * gate RETURNS its `passed: false` outcome (it does NOT throw) so the merge stage can route the
+ * writer-fixable failure back to the writer to self-heal (the SELF-HEAL note above). A failed
+ * forge PUBLISH of a passing verdict is NON-fatal: the publish is informational; the internal
+ * verdict decides the merge.
  */
 export async function runMergeGateForRun(
   input: RunPlannerLoopInput,
@@ -216,47 +206,10 @@ export async function runMergeGateForRun(
     ...(prHeadSha !== "" && { headShaOverride: prHeadSha }),
   });
   await publishMergeVerdict(input, ctx, outcome, prHeadSha);
-  // A failing gate is NOT a throw: the merge stage inspects `outcome.passed` and routes
-  // a failure back to the writer (self-heal), bounded by the rework budget. The verdict
-  // is fail-closed (`passed: false`) so the run never merges an unverified head.
+  // A failing gate is NOT a throw: the merge stage inspects `outcome.passed` and routes a
+  // failure back to the writer (self-heal). The verdict is fail-closed (`passed: false`) so
+  // the run never merges an unverified head.
   return outcome;
-}
-
-/** The merge stage's decision for a failed `pre_merge` gate: re-author (progress) or halt (fixed point). */
-export type MergeGateSelfHealDecision =
-  // Re-enter the writer loop, seeding the carried rejection (the failing tier/step/output
-  // as planner steering). The gate error CHANGED (progress) — keep going, UNBOUNDED. The
-  // `signature` is recorded so the next iteration's detector can tell progress from a fixed point.
-  | { kind: "rework"; rejection: PlannerRejectionFeedback; signature: string }
-  // A FIXED POINT: the same gate error recurs unchanged — the writer is not changing anything; halt LOUD.
-  | { kind: "halt" };
-
-/** A stable signature for a failed gate outcome — the same tier/step/output ⇒ the same signature. */
-export function gateOutcomeSignature(gate: Extract<GateOutcome, { passed: false }>): string {
-  const { failure } = gate;
-  const failedStep = failure.steps.find((step) => step.name === failure.failedStep) ?? failure.steps.at(-1);
-  return gateErrorSignature(`${failure.tier}:${failure.failedStep}:${failedStep?.outputTail ?? ""}`);
-}
-
-/**
- * SELF-HEAL (apex v35 — no count budget): decide what a FAILED `pre_merge` ("merge"-tier)
- * gate does, via the shared `convergenceDetector`. While the gate error keeps CHANGING (the
- * writer is fixing one failure and surfacing the next — progress), return a `rework` decision
- * carrying the `mergeGateRejection` steering (the failing tier/step + the failed step's
- * captured OUTPUT) so the merge stage re-enters the writer loop — UNBOUNDED. Only at a FIXED
- * POINT (the SAME gate error recurs unchanged — the writer is not changing anything) return
- * `halt` so the run ends LOUD (`needs_attention`) instead of looping identically forever.
- * `priorSignatures` are the gate-error signatures already re-worked against (oldest→newest).
- */
-export async function mergeGateSelfHeal(
-  gate: Extract<GateOutcome, { passed: false }>,
-  priorSignatures: ReadonlyArray<string>,
-): Promise<MergeGateSelfHealDecision> {
-  const signature = gateOutcomeSignature(gate);
-  if (await atReplanFixedPoint(priorSignatures, signature)) {
-    return { kind: "halt" };
-  }
-  return { kind: "rework", rejection: mergeGateRejection(gate), signature };
 }
 
 /** The merge-gate STAGE result the planner loop maps: merge forward, re-author, halt, or no-commits. */
@@ -265,27 +218,26 @@ export type PublishGateStageResult =
       pullRequest: PublishedDraftPullRequest;
       mergeGate: GateOutcome;
       // `merged`: gate passed → proceed to review/merge. `rework`: writer-fixable fail, spec
-      // returned to in_flight, re-enter the writer (caller `continue`s). `halt`: budget spent,
+      // returned to in_flight, re-enter the writer (caller `continue`s). `halt`: a fixed point,
       // run finalized + spec parked LOUD (caller returns the terminal result).
       kind: "merged" | "rework" | "halt";
     }
   // GRACEFUL EMPTY-BRANCH (v35): GitHub rejected the open with "No commits between base and
-  // head" — the branch has NOTHING ahead of the base. NO PR was opened + NO gate ran. The
-  // stage handled it WITHOUT a hard internal error: `converged_empty` means it ALREADY
-  // finalized the run merged (work present in base — the spec is done) and the caller just
-  // returns the terminal result; the writer-produced-nothing case is a transient the stage
-  // THROWS as `EmptyWriterCommitError` (the unified finalize re-drives it, never escalating).
+  // head" — the branch has NOTHING ahead of the base. NO PR was opened + NO gate ran. The stage
+  // handled it WITHOUT a hard internal error: `converged_empty` means it ALREADY finalized the
+  // run merged (work present in base — the spec is done) and the caller just returns the terminal
+  // result; the writer-produced-nothing case is a transient the stage THROWS as
+  // `EmptyWriterCommitError` (the unified finalize re-drives it, never escalating).
   | { kind: "converged_empty" };
 
 /**
  * The merge-authority STAGE (apex v34): publish the cleaned draft PR, run the `pre_merge`
- * gate, and route its verdict. A PASSING gate ⇒ `merged` (proceed to review/merge). A
- * FAILING gate is WRITER-FIXABLE (the writer's own scaffold/tests), so — instead of the old
- * `code:internal` throw+strand — apply the BOUNDED self-heal (`mergeGateSelfHeal` +
- * `applyFailedMergeGate`): `rework` (seed the failing tier/step/OUTPUT as steering, return
- * the spec to in_flight, re-enter the writer) until the budget is spent, then `halt`
- * (finalize the run halted + park the spec `needs_attention`, LOUD). Owns the stage's
- * branching here so `runPlannerLoopWorkflow` stays under the cyclomatic + line caps.
+ * gate, and route its verdict. A PASSING gate ⇒ `merged`. A FAILING gate is WRITER-FIXABLE,
+ * so — instead of the old `code:internal` throw+strand — apply the self-heal
+ * (`mergeGateSelfHeal` + `applyFailedMergeGate`): `rework` (seed the failing tier/step/OUTPUT
+ * as steering, re-enter the writer) while it CONVERGES, then `halt` (finalize halted + park
+ * `needs_attention`, LOUD) at a fixed point. Owns the branching here so `runPlannerLoopWorkflow`
+ * stays under the cyclomatic + line caps.
  */
 export async function runPublishGateStage(
   input: RunPlannerLoopInput,
@@ -330,7 +282,7 @@ export async function runPublishGateStage(
   if (mergeGate.passed) {
     return { pullRequest, mergeGate, kind: "merged" };
   }
-  const decision = await mergeGateSelfHeal(mergeGate, stage.budget.signatures);
+  const decision = await mergeGateSelfHeal(mergeGate, stage.budget.attempts);
   const move = await applyFailedMergeGate(
     input,
     stage.finalizeRunState,
