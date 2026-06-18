@@ -89,8 +89,20 @@ async function runOneSubtask(args: {
   // The attempt history (oldest→newest) the shared convergence detector reasons over: each
   // iteration's REJECTION reason (the failure signature) + the writer's produced DIFF hash
   // (the work signature). The loop keeps going while either changes (progress); it stops at
-  // a FIXED POINT (identical rejection + identical diff). NO iteration count gates it.
+  // a FIXED POINT (identical rejection + identical diff). NO iteration count gates it. ONLY
+  // genuine WORK signals (a checker reject, a gate fail, a timeout that produced a partial
+  // diff) feed this — a writer CRASH (a non-deterministic process death with no clean output)
+  // does NOT (it carries no "the work is wrong" information; it is re-driven as transient).
   const attempts: AttemptSignature[] = [];
+  // A writer CRASH is TRANSIENT, exactly like an answerer stall (loopStageRecovery.ts): the
+  // process died with no usable output, so the next attempt simply re-runs. Crashes are
+  // tracked in their OWN streak history — NOT mixed into the work-convergence `attempts` —
+  // so a crash (or two) never trips the work fixed-point. The streak escalates ONLY when the
+  // writer crashes on EVERY consecutive re-drive with no clean run in between (a genuinely
+  // wedged writer/runner), and RESETS the moment the writer completes a run (any non-crash
+  // outcome). This is the crash analogue of the stall recovery: a crash-then-succeed reads
+  // as progress and never escalates; a crash-on-every-attempt converges to a loud fixed point.
+  const crashAttempts: AttemptSignature[] = [];
   let iter = 0;
   for (;;) {
     const writeTaskId = `task_${randomUUID()}`;
@@ -122,19 +134,40 @@ async function runOneSubtask(args: {
         },
       };
     }
+    if (writerOutcome.kind === "failed" && writerOutcome.failureKind === "crashed") {
+      // A writer CRASH is TRANSIENT (the codex exec died with a nonzero exit / a transient
+      // SSH-connect blip / no parseable output) — it carries NO "the work is wrong" signal,
+      // so it must NEVER feed the WORK convergence (`attempts`): 2 identical crashes are not a
+      // proven dead-end, they are 2 transient failures to RE-DRIVE (the v39 finding — a crash
+      // mis-read as a work fixed-point → spurious needs_attention). It is the writer analogue
+      // of an answerer stall: re-run the SAME subtask. The crash is recorded into its OWN
+      // streak (`crashAttempts`) keyed on the STABLE crash signature, so a writer that crashes
+      // on EVERY consecutive re-drive (a genuinely wedged writer/runner — no clean run ever)
+      // still converges to a LOUD fixed point and escalates; a crash-then-succeed never does.
+      lastReason = writerFailureReason("crashed");
+      const wedged = await recordCrashAndCheckWedged(crashAttempts, input.adapters.writer.cli);
+      if (wedged !== undefined) return wedged(subtask);
+      iter += 1;
+      continue;
+    }
+    // Any non-crash writer outcome means the writer ran cleanly enough to produce a result —
+    // reset the consecutive-crash streak (a crash-then-clean-run is progress, never a wedge).
+    crashAttempts.length = 0;
     if (writerOutcome.kind === "failed") {
-      // A hard writer failure (crashed / timed out). The next attempt must NOT re-run the
-      // IDENTICAL subtask to the IDENTICAL timeout (the apex-v36 "timed out mid-subtask,
-      // identical output" non-convergence) — it must CHANGE APPROACH. So:
-      //   (1) steer the writer to change strategy (`writerFailureReason`): on a TIMEOUT the
-      //       subtask was too large for one call — commit the partial progress it already
-      //       made, narrow to the smallest next increment, and don't restart from scratch;
+      // A writer TIMEOUT (the only remaining hard-failure kind here). Unlike a crash, a timeout
+      // CARRIES progress information — the writer ran and produced a PARTIAL diff that grows
+      // attempt over attempt — so it stays in the WORK convergence. The next attempt must NOT
+      // re-run the IDENTICAL subtask to the IDENTICAL timeout (the apex-v36 "timed out
+      // mid-subtask, identical output" non-convergence) — it must CHANGE APPROACH. So:
+      //   (1) steer the writer to change strategy (`writerFailureReason`): the subtask was too
+      //       large for one call — commit the partial progress it already made, narrow to the
+      //       smallest next increment, and don't restart from scratch;
       //   (2) record the PARTIAL diff as the work signature so genuine incremental progress
       //       (a growing partial diff each attempt) reads as progress, while a byte-identical
       //       partial (the writer making no headway) converges the fixed-point detector to a
       //       residual finding instead of re-driving forever. An empty partial diff has no
       //       work signature — progress then keys off the rejection reason changing.
-      lastReason = writerFailureReason(writerOutcome.failureKind);
+      lastReason = writerFailureReason("timeout");
       const partial = writerOutcome.writer.diff;
       const stuck = await recordAttemptAndCheckFixedPoint(
         attempts,
@@ -252,6 +285,41 @@ async function recordAttemptAndCheckFixedPoint(
         rejectionReason === ""
           ? `Subtask "${subtask.title}" did not reach completeness and stopped changing.`
           : rejectionReason,
+    },
+  });
+}
+
+// Record a writer CRASH onto the consecutive-crash streak, then route the escalation decision
+// through the SAME shared convergence judge — but on the SEPARATE crash history, NOT the work
+// history. A crash is the writer analogue of an answerer stall (loopStageRecovery.ts): it is a
+// non-deterministic process death with no clean output, so it RE-DRIVES the subtask in place
+// (`undefined` ⇒ keep going) and only a writer that crashes on EVERY consecutive re-drive — a
+// genuinely wedged writer/runner, the IDENTICAL crash signature with no clean run in between —
+// converges to a PROVEN fixed point and escalates LOUDLY (NOT a count: the streak is the
+// signal, not a cap). The signature is STABLE (the writer cli's crash identity) so an
+// uninterrupted run of crashes reads as a cycle while a crash-then-clean-run resets the streak
+// (the caller clears `crashAttempts` on any non-crash outcome) and never escalates.
+async function recordCrashAndCheckWedged(
+  crashAttempts: AttemptSignature[],
+  writerCli: string,
+): Promise<((subtask: PlanSubtask) => OneSubtaskResult) | undefined> {
+  crashAttempts.push({ failureSignature: `writer:${writerCli}:crashed` });
+  const decision = await decideConvergence(crashAttempts, (h) =>
+    fixedPointRuleJudgment(
+      h,
+      () =>
+        `the ${writerCli} writer CRASHED (no clean output) on every consecutive re-drive of this subtask — ` +
+        "the writer or runner is wedged (not a flake), so a human must intervene",
+    ),
+  );
+  if (decision.decision !== "escalate") return undefined;
+  return (subtask) => ({
+    kind: "incomplete",
+    finding: {
+      id: `task-incomplete-${subtask.index}`,
+      severity: "P0",
+      title: `Subtask ${subtask.index} writer crashed on every consecutive re-drive — wedged, no clean output`,
+      body: decision.reason,
     },
   });
 }
