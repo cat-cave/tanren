@@ -13,6 +13,7 @@ import {
   cleanAudit,
   completeCheck,
   defaultLoopInput,
+  incompleteCheck,
   makeAuditor,
   makeChecker,
   makePlanner,
@@ -85,6 +86,99 @@ describe("subtask loop — writer prompt rendering (writerPromptFor)", () => {
     expect(prompt).toContain("format-WRITE step");
     expect(prompt).toContain("never hand back the same");
     expect(prompt).not.toContain("prettier");
+  });
+
+  // v40 scaffold finding: the project's DECLARED CONTRACT files (the `justfile` lifecycle +
+  // `.tanren/ci.yml` gate) are IMMUTABLE — the writer scaffolds the rest of the tree to SATISFY
+  // the declared lifecycle commands WITHOUT editing them. The standing instruction names that
+  // contract-file set up front (stack-agnostic — it is Tanren's OWN contract surface, not a
+  // baked-in stack tool) so the writer never reaches for them.
+  it("threads the IMMUTABLE-CONTRACT instruction (justfile + .tanren/ci.yml are fixed) into the writer prompt", async () => {
+    const writer = makeWriter(["diff a\n"]);
+    const { input } = defaultLoopInput({
+      adapters: {
+        ...defaultLoopInput().input.adapters,
+        planner: makePlanner([buildPlan([{ title: "Scaffold", intent: "make the lifecycle pass", behaviorIds: [] }])]),
+        writer,
+        checker: makeChecker([completeCheck]),
+        auditor: makeAuditor([cleanAudit]),
+      },
+    });
+    await runSubtaskLoop(input);
+    const prompt = writer.calls[0]!.prompt;
+    expect(prompt).toContain("DECLARED CONTRACT files are FIXED");
+    expect(prompt).toContain("justfile");
+    expect(prompt).toContain(".tanren/ci.yml");
+    expect(prompt).toContain("the contract your work SATISFIES, not changes");
+    expect(prompt).toContain("NEVER change the contract file to match your");
+  });
+
+  // v40 scaffold finding (the PRECISE rework steering): when a rejection is a CONTRACT-FILE
+  // violation (the writer edited the justfile / .tanren/ci.yml), the rework steering must be
+  // precise — revert ONLY the change to the contract file, KEEP the rest of the scaffold — so
+  // the writer stops oscillating between violate-everything and revert-the-whole-scaffold
+  // (no net change), which is itself rejected. Here the checker rejects iteration 1 with a
+  // contract-violation reasoning, then passes once the writer reworks; the iteration-2 prompt
+  // must carry the precise steering.
+  it("steers a CONTRACT-FILE violation to revert-only-the-contract-change + keep the scaffold (no oscillation)", async () => {
+    const writer = makeWriter(["diff a\n", "diff b\n"]);
+    const { input } = defaultLoopInput({
+      adapters: {
+        ...defaultLoopInput().input.adapters,
+        planner: makePlanner([buildPlan([{ title: "Scaffold", intent: "make the lifecycle pass", behaviorIds: [] }])]),
+        writer,
+        // Iteration 1: reject with a CONTRACT-FILE violation (names the justfile). Iteration 2:
+        // pass (the writer reverted only the contract change + kept the scaffold) — converges.
+        checker: makeChecker([
+          {
+            findings: [
+              {
+                id: "contract-justfile-redefined",
+                title: "the writer redefined the justfile (a fixed contract file)",
+                body: "leave the justfile unchanged",
+                behaviorId: "B1",
+              },
+            ],
+            reasoning: "you redefined the justfile — a FIXED contract file you must not edit",
+          },
+          completeCheck,
+        ]),
+        auditor: makeAuditor([cleanAudit, cleanAudit]),
+      },
+    });
+    const outcome = await runSubtaskLoop(input);
+    expect(outcome.kind).toBe("passed");
+    // The writer re-iterated once (the loop converged on the rework, not an oscillation).
+    expect(writer.calls).toHaveLength(2);
+    const reworkPrompt = writer.calls[1]!.prompt;
+    // The prior rejection is surfaced, AND the precise contract-violation steering follows it.
+    expect(reworkPrompt).toContain("Previous attempt was rejected:");
+    expect(reworkPrompt).toContain("CONTRACT-FILE violation");
+    expect(reworkPrompt).toContain("revert ONLY the change to the contract file");
+    expect(reworkPrompt).toContain("KEEP the");
+    expect(reworkPrompt).toContain("Reverting the whole scaffold to no net change is NOT a fix");
+  });
+
+  // The precise contract steering is ONLY for a contract-file violation: an ordinary
+  // completeness rejection (no contract file named) reworks WITHOUT the contract steering — it
+  // would misdirect a writer whose change never touched a contract file.
+  it("does NOT add the contract-revert steering when the rejection is not a contract-file violation", async () => {
+    const writer = makeWriter(["diff a\n", "diff b\n"]);
+    const { input } = defaultLoopInput({
+      adapters: {
+        ...defaultLoopInput().input.adapters,
+        planner: makePlanner([buildPlan([{ title: "T", intent: "i", behaviorIds: ["B1"] }])]),
+        writer,
+        checker: makeChecker([incompleteCheck, completeCheck]),
+        auditor: makeAuditor([cleanAudit, cleanAudit]),
+      },
+    });
+    const outcome = await runSubtaskLoop(input);
+    expect(outcome.kind).toBe("passed");
+    const reworkPrompt = writer.calls[1]!.prompt;
+    expect(reworkPrompt).toContain("Previous attempt was rejected:");
+    expect(reworkPrompt).not.toContain("CONTRACT-FILE violation");
+    expect(reworkPrompt).not.toContain("revert ONLY the change to the contract file");
   });
 
   it("falls back to (none) in the writer prompt when the subtask has no behaviors", async () => {

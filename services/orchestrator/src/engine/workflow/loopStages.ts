@@ -28,9 +28,11 @@ import {
   applyConvergencePolicy,
   type ConvergenceDecision,
   type ConvergenceState,
+  effectiveBlockingProgress,
   routeTriageItems,
   type RoutedWorkItem,
   summarizeTriageRouting,
+  totalPScore,
   type TriageRoutingResult,
   type VelocityDeferPolicy,
 } from "./loopPolicy.js";
@@ -358,6 +360,9 @@ export async function runConvergenceStage(args: ConvergenceStageInput): Promise<
     priorFindings: args.priorFindings,
     baselineSha: args.baselineSha,
     loopIndex: args.loopIndex,
+    // The earlier-loop blocking root-cause ids, so the answerer can recognize a RETURN to a
+    // prior unresolved blocker (the v40 oscillation) — the qualitative half of the backstop.
+    priorBlockingRootCauseIds: args.state.blockingHistory.map((a) => a.failureSignature),
   });
   const startedAt = Date.now();
   // STAGE-LOCAL stall recovery (see runDemoRunStage): re-drive a transient convergence stall
@@ -372,14 +377,20 @@ export async function runConvergenceStage(args: ConvergenceStageInput): Promise<
   );
   const runtimeSeconds = secondsSince(startedAt);
   emitStageTiming("audit", Date.now() - startedAt, { runId: args.runId });
-  const { state, decision } = applyConvergencePolicy(
-    answer.assessment,
-    answer.blockingRootCauseProgress,
-    answer.escalation,
-    args.state,
-    args.velocityPolicy,
-    args.worstLeftoverSeverity,
-  );
+  const loopPScore = totalPScore(args.currentFindings);
+  const { state, decision } = applyConvergencePolicy({
+    assessment: answer.assessment,
+    blockingProgress: answer.blockingRootCauseProgress,
+    escalation: answer.escalation,
+    state: args.state,
+    velocityPolicy: args.velocityPolicy,
+    loopBlocking: { id: answer.blockingRootCauseId, pScore: loopPScore },
+    ...(args.worstLeftoverSeverity !== undefined && { worstLeftoverSeverity: args.worstLeftoverSeverity }),
+  });
+  // The blocking progress the policy ACTED on — the answerer's report, OVERRIDDEN to a stall
+  // (`regressed`) when the deterministic oscillation backstop fired (a return to a prior
+  // unresolved blocker). Surfaced on the event so the timeline shows the structural override.
+  const effectiveProgress = effectiveBlockingProgress(answer.blockingRootCauseProgress, state.blockingHistory);
   await args.appendEvent(
     "convergence.assessed",
     {
@@ -388,8 +399,10 @@ export async function runConvergenceStage(args: ConvergenceStageInput): Promise<
       assessment: answer.assessment,
       // The v24 cause-not-symptom signal: progress on the BLOCKING root cause + its
       // stable identity, so the timeline shows WHY a loop stalled (the blocker recurred
-      // unchanged) even when peripheral findings moved.
-      blockingRootCauseProgress: answer.blockingRootCauseProgress,
+      // unchanged) even when peripheral findings moved. The EFFECTIVE progress reflects the
+      // v40 oscillation backstop — a proven structural A→B→A→B cycle is surfaced as `regressed` even
+      // when the answerer narrated `retired`, so the timeline shows the deterministic override.
+      blockingRootCauseProgress: effectiveProgress,
       blockingRootCauseId: answer.blockingRootCauseId,
       // The intelligent escalation verdict — the "would a human add value beyond keep going?"
       // gate that decides a halt (replacing the old consecutive-stall count).

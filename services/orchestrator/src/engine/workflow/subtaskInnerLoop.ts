@@ -22,6 +22,7 @@ import type { GateOutcome } from "./gate/index.js";
 import { runCheckerStage, runWriterStage } from "./subtaskStages.js";
 import { type SubtaskCostContext } from "./subtaskCost.js";
 import { type AttemptSignature, decideConvergence, fixedPointRuleJudgment } from "./convergenceDetector.js";
+import { writerPromptFor } from "./subtaskWriterPrompt.js";
 import type { AppendEvent, SubtaskLoopInput, SubtaskLoopOutcome } from "./subtaskLoop.js";
 
 // The result of walking a plan's subtasks (per-task WRITER → FAST GATE → CHECKER):
@@ -381,61 +382,4 @@ export function writerFailureReason(failureKind: "crashed" | "timeout"): string 
     );
   }
   return "the previous attempt CRASHED mid-subtask before finishing — re-attempt it, committing progress as you go.";
-}
-
-// A standing toolchain instruction prepended to every writer prompt. Stack-agnostic (the
-// project DECLARES its own dependencies + toolchain — JS/TS, Rust, Python, a translation
-// project, anything): name no specific tool here. The rule is about REALNESS, not a stack.
-const WRITER_TOOLCHAIN_INSTRUCTION =
-  "Use the project's OWN declared dependencies and toolchain (whatever the project actually " +
-  "declares — its real manifest + lockfile / pinned versions). Declare real, published, " +
-  "resolvable dependencies. NEVER stub, fake, vendor, or shim a toolchain binary or " +
-  "dependency, and never invent placeholder versions — use the real published artifacts the " +
-  "project's declared toolchain resolves.";
-
-// How the writer's change will be GRADED (spec-loop redesign §WRITER, workstream 1).
-// Steers the writer to satisfy the gate on the first pass: run the fast deterministic
-// gate (fmt/lint/typecheck) BEFORE finishing — a fast-gate failure loops straight back
-// to it — then names the CHECKER (completeness) + AUDITOR (quality) bars it is judged on.
-const WRITER_GRADING_INSTRUCTION =
-  "How your change will be graded — satisfy these BEFORE you finish: a FAST " +
-  "deterministic gate runs first (formatting, lint, typecheck) — RUN it yourself " +
-  "(the project's fmt/lint/typecheck commands) and make it pass before you stop, " +
-  "since a fast-gate failure loops straight back to you before any reviewer. A " +
-  "FORMATTING failure is mechanical: run the project's declared format-WRITE step (the " +
-  "one its lifecycle/justfile defines — e.g. its format/fix recipe, NOT just the " +
-  "check) over EVERY file you touched, then re-run the check — never hand back the same " +
-  "unformatted output. Then a CHECKER judges whether your change COMPLETES the subtask " +
-  "intent + every relevant acceptance criterion (leave it complete and self-contained), " +
-  "and an AUDITOR reviews quality/security/perf (write correct, secure, clean code).";
-
-function writerPromptFor(input: SubtaskLoopInput, subtask: PlanSubtask, iter: number, lastReason: string): string {
-  const criteria =
-    input.context.acceptanceCriteria.length > 0
-      ? ["", "Acceptance criteria:", ...input.context.acceptanceCriteria.map((criterion) => `- ${criterion}`)]
-      : [];
-  // On a re-iteration (gate fail / checker incompleteness) the prior reason steers the
-  // writer at the concrete gap before it spends the iteration.
-  const rework =
-    iter > 0 && lastReason !== "" ? ["", `Previous attempt was rejected: ${lastReason}`, "Address it directly."] : [];
-  // WS-D2 (native design subsystem): the project's rendered design block for its HEAD
-  // `DesignContract` — persona-scoped, behavior-linked, domain-general. Present ⇒ the build
-  // honors the design (the no-handoff loop); ABSENT ⇒ the project has no design contract (a real
-  // empty state) and the writer simply gets no design block — NEVER a fabricated default.
-  const design = input.context.designContextBlock === undefined ? [] : ["", input.context.designContextBlock];
-  return [
-    `Subtask [${subtask.index}]: ${subtask.title}`,
-    `Intent: ${subtask.intent}`,
-    `Behaviors: ${subtask.behaviorIds.join(", ") || "(none)"}`,
-    "",
-    `Spec: ${input.context.specTitle}`,
-    input.context.specDescription,
-    ...criteria,
-    ...design,
-    ...rework,
-    "",
-    WRITER_TOOLCHAIN_INSTRUCTION,
-    "",
-    WRITER_GRADING_INSTRUCTION,
-  ].join("\n");
 }

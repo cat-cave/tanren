@@ -6,8 +6,20 @@
 // verdict ("would a human add value beyond 'keep going'?") says `escalate`. The
 // `consecutiveStalls` field is an OBSERVABILITY diagnostic, never a bound.
 import { describe, expect, it } from "vitest";
-import { applyConvergencePolicy, type VelocityDeferPolicy } from "../src/engine/workflow/loopPolicy.js";
+import {
+  applyConvergencePolicy,
+  type ConvergenceState,
+  effectiveBlockingProgress,
+  type VelocityDeferPolicy,
+} from "../src/engine/workflow/loopPolicy.js";
+import type { AttemptSignature } from "../src/engine/workflow/convergenceDetector.js";
+import type {
+  BlockingRootCauseProgress,
+  ConvergenceAssessment,
+  ConvergenceEscalation,
+} from "../src/engine/answerers/schemas/index.js";
 import { DEFAULT_CONVERGENCE_POLICY } from "../src/engine/config/shared.js";
+import type { FindingSeverity } from "../src/engine/contracts/findings.js";
 
 // The velocity-defer policy the redesign's DEFAULT reproduces (enabled · honor up to
 // P3-mild leftovers · from round 0).
@@ -17,59 +29,80 @@ const DEFAULT_VELOCITY_POLICY: VelocityDeferPolicy = {
   afterStalls: DEFAULT_CONVERGENCE_POLICY.velocityDeferAfterStalls,
 };
 
+// An adapter that keeps the existing positional assertions legible while exercising the
+// options-object signature. It supplies a UNIQUE non-oscillating `loopBlocking` id per call
+// (so the v40 oscillation backstop never fires here — these tests cover the answerer-driven
+// progress/stall semantics, NOT oscillation), starts from an empty `blockingHistory` unless
+// `state` carries one, and strips `blockingHistory` from the returned state so the
+// `consecutiveStalls`/`decision` assertions stay focused.
+let runSeq = 0;
+function run(
+  assessment: ConvergenceAssessment,
+  blockingProgress: BlockingRootCauseProgress,
+  escalation: ConvergenceEscalation,
+  state: Pick<ConvergenceState, "consecutiveStalls"> & Partial<ConvergenceState>,
+  velocityPolicy: VelocityDeferPolicy,
+  worstLeftoverSeverity?: FindingSeverity,
+): { state: { consecutiveStalls: number }; decision: "continue" | "pass" | "halt" } {
+  runSeq += 1;
+  const result = applyConvergencePolicy({
+    assessment,
+    blockingProgress,
+    escalation,
+    state: { consecutiveStalls: state.consecutiveStalls, blockingHistory: state.blockingHistory ?? [] },
+    velocityPolicy,
+    loopBlocking: { id: `unique-blocker-${runSeq}`, pScore: 1 },
+    ...(worstLeftoverSeverity !== undefined && { worstLeftoverSeverity }),
+  });
+  return { state: { consecutiveStalls: result.state.consecutiveStalls }, decision: result.decision };
+}
+
 describe("applyConvergencePolicy — intelligent escalation, no count bound", () => {
   it("PROGRESS continues + resets the stall diagnostic; a velocity_defer passes; the escalation verdict is ignored while progressing", () => {
     // No blocking finding (`none`) ⇒ the overall assessment drives. PROGRESS continues even if
     // the agent (irrelevantly) said escalate — a progressing loop is NEVER halted.
-    expect(
-      applyConvergencePolicy("progress", "none", "escalate", { consecutiveStalls: 5 }, DEFAULT_VELOCITY_POLICY),
-    ).toEqual({ state: { consecutiveStalls: 0 }, decision: "continue" });
+    expect(run("progress", "none", "escalate", { consecutiveStalls: 5 }, DEFAULT_VELOCITY_POLICY)).toEqual({
+      state: { consecutiveStalls: 0 },
+      decision: "continue",
+    });
     // The DEFAULT velocity policy honors any velocity_defer (today's behavior).
     expect(
-      applyConvergencePolicy(
-        "velocity_defer",
-        "none",
-        "keep_going",
-        { consecutiveStalls: 2 },
-        DEFAULT_VELOCITY_POLICY,
-        "P3",
-      ),
+      run("velocity_defer", "none", "keep_going", { consecutiveStalls: 2 }, DEFAULT_VELOCITY_POLICY, "P3"),
     ).toEqual({ state: { consecutiveStalls: 0 }, decision: "pass" });
   });
 
   it("a STALL with `keep_going` CONTINUES (UNBOUNDED) — slow/hard is never a halt", () => {
     // Many stalls deep, but the agent says keep going ⇒ the loop continues, no count flips it.
-    expect(
-      applyConvergencePolicy("stalled", "none", "keep_going", { consecutiveStalls: 99 }, DEFAULT_VELOCITY_POLICY),
-    ).toEqual({ state: { consecutiveStalls: 100 }, decision: "continue" });
+    expect(run("stalled", "none", "keep_going", { consecutiveStalls: 99 }, DEFAULT_VELOCITY_POLICY)).toEqual({
+      state: { consecutiveStalls: 100 },
+      decision: "continue",
+    });
   });
 
   it("a STALL with `escalate` HALTS (the genuine human-decision) — the diagnostic increments", () => {
-    expect(
-      applyConvergencePolicy("stalled", "none", "escalate", { consecutiveStalls: 0 }, DEFAULT_VELOCITY_POLICY),
-    ).toEqual({ state: { consecutiveStalls: 1 }, decision: "halt" });
+    expect(run("stalled", "none", "escalate", { consecutiveStalls: 0 }, DEFAULT_VELOCITY_POLICY)).toEqual({
+      state: { consecutiveStalls: 1 },
+      decision: "halt",
+    });
   });
 
   it("the velocity policy honors the configured max-severity (leftovers ≤ maxSeverity)", () => {
     const policy: VelocityDeferPolicy = { enabled: true, maxSeverity: "P3", afterStalls: 0 };
-    expect(
-      applyConvergencePolicy("velocity_defer", "none", "keep_going", { consecutiveStalls: 0 }, policy, "P3"),
-    ).toEqual({
+    expect(run("velocity_defer", "none", "keep_going", { consecutiveStalls: 0 }, policy, "P3")).toEqual({
       state: { consecutiveStalls: 0 },
       decision: "pass",
     });
     // A P2 leftover is ABOVE the P3 max ⇒ the defer is REFUSED (continue, fail-closed).
-    expect(
-      applyConvergencePolicy("velocity_defer", "none", "keep_going", { consecutiveStalls: 0 }, policy, "P2"),
-    ).toEqual({
+    expect(run("velocity_defer", "none", "keep_going", { consecutiveStalls: 0 }, policy, "P2")).toEqual({
       state: { consecutiveStalls: 0 },
       decision: "continue",
     });
     const p2Policy: VelocityDeferPolicy = { enabled: true, maxSeverity: "P2", afterStalls: 0 };
-    expect(
-      applyConvergencePolicy("velocity_defer", "none", "keep_going", { consecutiveStalls: 0 }, p2Policy, "P2"),
-    ).toEqual({ state: { consecutiveStalls: 0 }, decision: "pass" });
-    expect(applyConvergencePolicy("velocity_defer", "none", "keep_going", { consecutiveStalls: 0 }, policy)).toEqual({
+    expect(run("velocity_defer", "none", "keep_going", { consecutiveStalls: 0 }, p2Policy, "P2")).toEqual({
+      state: { consecutiveStalls: 0 },
+      decision: "pass",
+    });
+    expect(run("velocity_defer", "none", "keep_going", { consecutiveStalls: 0 }, policy)).toEqual({
       state: { consecutiveStalls: 0 },
       decision: "pass",
     });
@@ -77,25 +110,19 @@ describe("applyConvergencePolicy — intelligent escalation, no count bound", ()
 
   it("the velocity policy honors after-stalls + the enabled switch", () => {
     const afterTwo: VelocityDeferPolicy = { enabled: true, maxSeverity: "P3", afterStalls: 2 };
-    expect(
-      applyConvergencePolicy("velocity_defer", "none", "keep_going", { consecutiveStalls: 1 }, afterTwo, "P3"),
-    ).toEqual({
+    expect(run("velocity_defer", "none", "keep_going", { consecutiveStalls: 1 }, afterTwo, "P3")).toEqual({
       state: { consecutiveStalls: 0 },
       decision: "continue",
     });
-    expect(
-      applyConvergencePolicy("velocity_defer", "none", "keep_going", { consecutiveStalls: 2 }, afterTwo, "P3"),
-    ).toEqual({
+    expect(run("velocity_defer", "none", "keep_going", { consecutiveStalls: 2 }, afterTwo, "P3")).toEqual({
       state: { consecutiveStalls: 0 },
       decision: "pass",
     });
     const off: VelocityDeferPolicy = { enabled: false, maxSeverity: "P3", afterStalls: 0 };
-    expect(applyConvergencePolicy("velocity_defer", "none", "keep_going", { consecutiveStalls: 5 }, off, "P3")).toEqual(
-      {
-        state: { consecutiveStalls: 0 },
-        decision: "continue",
-      },
-    );
+    expect(run("velocity_defer", "none", "keep_going", { consecutiveStalls: 5 }, off, "P3")).toEqual({
+      state: { consecutiveStalls: 0 },
+      decision: "continue",
+    });
   });
 
   // ---- v24 CAUSE-NOT-SYMPTOM regression -----------------------------------
@@ -108,46 +135,25 @@ describe("applyConvergencePolicy — intelligent escalation, no count bound", ()
       // The exact v24 scenario: overall `progress` (peripheral findings moved), but the
       // blocking root cause is `unchanged`. The blocker drives the read — and when the agent
       // judges it a genuine dead-end, it halts (it would have churned forever pre-fix).
-      const r = applyConvergencePolicy(
-        "progress",
-        "unchanged",
-        "escalate",
-        { consecutiveStalls: 0 },
-        DEFAULT_VELOCITY_POLICY,
-        "P1",
-      );
+      const r = run("progress", "unchanged", "escalate", { consecutiveStalls: 0 }, DEFAULT_VELOCITY_POLICY, "P1");
       expect(r).toEqual({ state: { consecutiveStalls: 1 }, decision: "halt" });
     });
 
     it("a stuck blocker the agent still wants to keep_going CONTINUES (the blocker drives the read, not a count)", () => {
       // The blocker is unchanged but the agent has a new approach ⇒ keep going, UNBOUNDED.
-      const r = applyConvergencePolicy(
-        "progress",
-        "unchanged",
-        "keep_going",
-        { consecutiveStalls: 7 },
-        DEFAULT_VELOCITY_POLICY,
-        "P1",
-      );
+      const r = run("progress", "unchanged", "keep_going", { consecutiveStalls: 7 }, DEFAULT_VELOCITY_POLICY, "P1");
       expect(r).toEqual({ state: { consecutiveStalls: 8 }, decision: "continue" });
     });
 
     it("a blocking `regressed` with keep_going still continues (the agent decides, not a count)", () => {
       expect(
-        applyConvergencePolicy(
-          "progress",
-          "regressed",
-          "keep_going",
-          { consecutiveStalls: 1 },
-          DEFAULT_VELOCITY_POLICY,
-          "P0",
-        ),
+        run("progress", "regressed", "keep_going", { consecutiveStalls: 1 }, DEFAULT_VELOCITY_POLICY, "P0"),
       ).toEqual({ state: { consecutiveStalls: 2 }, decision: "continue" });
     });
 
     it("velocity_defer is REFUSED while the blocking root cause is stuck (fail-closed, no pass on a stuck blocker)", () => {
       // A stuck blocker is a stall — the loop must NOT pass; the agent's keep_going continues it.
-      const r = applyConvergencePolicy(
+      const r = run(
         "velocity_defer",
         "unchanged",
         "keep_going",
@@ -159,42 +165,102 @@ describe("applyConvergencePolicy — intelligent escalation, no count bound", ()
     });
 
     it("a blocking root cause being RETIRED resets the diagnostic and continues (real progress, escalation ignored)", () => {
-      expect(
-        applyConvergencePolicy(
-          "progress",
-          "retired",
-          "escalate",
-          { consecutiveStalls: 2 },
-          DEFAULT_VELOCITY_POLICY,
-          "P1",
-        ),
-      ).toEqual({ state: { consecutiveStalls: 0 }, decision: "continue" });
+      expect(run("progress", "retired", "escalate", { consecutiveStalls: 2 }, DEFAULT_VELOCITY_POLICY, "P1")).toEqual({
+        state: { consecutiveStalls: 0 },
+        decision: "continue",
+      });
     });
 
     it("a blocking root cause REDUCED (lower severity) resets the diagnostic and continues", () => {
-      expect(
-        applyConvergencePolicy(
-          "stalled",
-          "reduced",
-          "escalate",
-          { consecutiveStalls: 2 },
-          DEFAULT_VELOCITY_POLICY,
-          "P2",
-        ),
-      ).toEqual({ state: { consecutiveStalls: 0 }, decision: "continue" });
+      expect(run("stalled", "reduced", "escalate", { consecutiveStalls: 2 }, DEFAULT_VELOCITY_POLICY, "P2")).toEqual({
+        state: { consecutiveStalls: 0 },
+        decision: "continue",
+      });
     });
 
     it("a blocker retired WITH a mild remaining leftover honors velocity_defer (pass)", () => {
       expect(
-        applyConvergencePolicy(
-          "velocity_defer",
-          "retired",
-          "keep_going",
-          { consecutiveStalls: 1 },
-          DEFAULT_VELOCITY_POLICY,
-          "P3",
-        ),
+        run("velocity_defer", "retired", "keep_going", { consecutiveStalls: 1 }, DEFAULT_VELOCITY_POLICY, "P3"),
       ).toEqual({ state: { consecutiveStalls: 0 }, decision: "pass" });
+    });
+  });
+
+  // ---- v40 OSCILLATION backstop -------------------------------------------
+  // The v40 scaffold finding: the answerer kept reading "old blocker A retired + a NEW blocker
+  // B appeared" as PROGRESS, never noticing B was a RETURN to an earlier blocker — an A→B→A→B
+  // oscillation that ground forever. The deterministic backstop routes the per-loop
+  // blocking-root-cause-id history through the shared structural cycle detector and OVERRIDES a
+  // claimed-`retired` to a stall (`regressed`) when the loop has cycled back with no net P-score
+  // reduction. It is NOT a count: a genuinely shrinking trajectory never trips it.
+  describe("v40: a returning (oscillating) blocking root cause is detected as non-convergence", () => {
+    it("forces a claimed-`retired` to `regressed` when the blocker OSCILLATES (A→B→A→B) with no net P-score drop", () => {
+      // A PROVEN oscillation: A (pScore 4) → B (4) → A (4) → B (4) — the cycle has repeated, not
+      // a single transient revisit (which the shared detector intentionally treats as still
+      // exploring). The answerer (mis)reports `retired` this loop; the backstop's effective
+      // progress is `regressed`. This is the v40 grind (it ran 13 iterations), not a one-off.
+      const history: AttemptSignature[] = [
+        { failureSignature: "blocker-a", magnitude: 4 },
+        { failureSignature: "blocker-b", magnitude: 4 },
+        { failureSignature: "blocker-a", magnitude: 4 },
+        { failureSignature: "blocker-b", magnitude: 4 },
+      ];
+      expect(effectiveBlockingProgress("retired", history)).toBe("regressed");
+      // A SINGLE return (A→B→A) is NOT yet a proven cycle — the loop may still be exploring (B
+      // was new since the last A), so the reported progress is left untouched (no false stall).
+      const singleReturn: AttemptSignature[] = [
+        { failureSignature: "blocker-a", magnitude: 4 },
+        { failureSignature: "blocker-b", magnitude: 4 },
+        { failureSignature: "blocker-a", magnitude: 4 },
+      ];
+      expect(effectiveBlockingProgress("retired", singleReturn)).toBe("retired");
+    });
+
+    it("the oscillating loop STALLS (escalate ⇒ halt) even though the answerer narrated progress", () => {
+      // Loops 1-3 establish an A→B→A history (still exploration ⇒ each `continue`); loop 4 RETURNS
+      // to B, completing a PROVEN A→B→A→B cycle (the v40 grind). The answerer claims overall
+      // `progress` + blocking `retired` throughout. On loop 4 the backstop converts it to a
+      // stall, and the agent's escalate verdict halts (a genuine non-converging oscillation).
+      let state: ConvergenceState = { consecutiveStalls: 0, blockingHistory: [] };
+      const cont = (id: string, escalation: ConvergenceEscalation): { state: ConvergenceState; decision: string } =>
+        applyConvergencePolicy({
+          assessment: "progress",
+          blockingProgress: "retired",
+          escalation,
+          state,
+          velocityPolicy: DEFAULT_VELOCITY_POLICY,
+          loopBlocking: { id, pScore: 4 },
+        });
+      // Loop 1: blocker A. Loop 2: B appears (A "retired"). Loop 3: A RETURNS — a single return,
+      // still possibly exploration ⇒ continue. The answerer's `retired` is honored each loop.
+      state = cont("justfile-redefined", "keep_going").state;
+      state = cont("no-scaffold-net-change", "keep_going").state;
+      const loop3 = cont("justfile-redefined", "keep_going");
+      expect(loop3.decision).toBe("continue");
+      state = loop3.state;
+      // Loop 4: B RETURNS — the A→B→A→B cycle is now PROVEN. The backstop overrides the answerer's
+      // `retired` to a stall; with the agent's escalate verdict at this oscillation, the loop HALTS.
+      const loop4 = cont("no-scaffold-net-change", "escalate");
+      expect(loop4.decision).toBe("halt");
+    });
+
+    it("a genuinely SHRINKING trajectory at a recurring blocker is NEVER flagged (keeps the reported progress)", () => {
+      // The same blocker id recurs but the P-score strictly shrinks each loop (4 → 3 → 2): real
+      // convergence, not a cycle. The backstop must NOT override the reported `reduced`.
+      const history: AttemptSignature[] = [
+        { failureSignature: "blocker-a", magnitude: 4 },
+        { failureSignature: "blocker-a", magnitude: 3 },
+        { failureSignature: "blocker-a", magnitude: 2 },
+      ];
+      expect(effectiveBlockingProgress("reduced", history)).toBe("reduced");
+    });
+
+    it("a loop exploring all-NEW blockers each round keeps the reported progress (no recurrence = no cycle)", () => {
+      const history: AttemptSignature[] = [
+        { failureSignature: "blocker-a", magnitude: 4 },
+        { failureSignature: "blocker-b", magnitude: 4 },
+        { failureSignature: "blocker-c", magnitude: 4 },
+      ];
+      expect(effectiveBlockingProgress("retired", history)).toBe("retired");
     });
   });
 });

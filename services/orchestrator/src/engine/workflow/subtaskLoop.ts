@@ -279,7 +279,7 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
   const rejectionHistory: PlannerRejectionFeedback[] = [...(input.seedRejections ?? [])];
   // The cross-loop convergence state — the SOLE loop bound (NOT a retry counter). A
   // `progress`/`velocity_defer` resets it; a `stalled` increments; N consecutive halts.
-  let convergenceState: ConvergenceState = { consecutiveStalls: 0 };
+  let convergenceState: ConvergenceState = { consecutiveStalls: 0, blockingHistory: [] };
   let priorFindings: Finding[] = [];
   let loopCount = 0;
 

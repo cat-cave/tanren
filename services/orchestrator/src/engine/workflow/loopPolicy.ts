@@ -11,6 +11,7 @@ import type {
   ConvergenceEscalation,
   TriageWorkItem,
 } from "../answerers/schemas/index.js";
+import { type AttemptSignature, assessStructuralProgress } from "./convergenceDetector.js";
 
 // A triaged item's resolved ROUTE — the deterministic decision the loop makes over
 // the agent's `kind` HINT + the item severity + the project posture:
@@ -92,6 +93,14 @@ export interface ConvergenceState {
   // `unchanged`/`regressed` increments it. Surfaced on the timeline so a slow-but-converging
   // loop is visible, but the HALT decision is the agent's escalation verdict, not this count.
   consecutiveStalls: number;
+  // The per-loop BLOCKING root-cause history (oldest→newest), one `AttemptSignature` per
+  // convergence check: `failureSignature` = the answerer's stable `blockingRootCauseId`,
+  // `magnitude` = the loop's total kept P-score (so a shrinking trajectory reads as progress).
+  // This is what the deterministic oscillation backstop (`effectiveBlockingProgress`) runs the
+  // shared cycle detector over to catch a proven A→B→A→B oscillation the answerer narrated as
+  // progress. NOT a counter — it is the state-trajectory the structural cycle detection reasons
+  // over (a single A→B→A revisit is still treated as exploration, not yet a cycle).
+  blockingHistory: ReadonlyArray<AttemptSignature>;
 }
 
 // The VELOCITY-DEFER policy the loop applies OVER a `velocity_defer` assessment —
@@ -122,6 +131,42 @@ function blockingIsStuck(progress: BlockingRootCauseProgress): boolean {
 }
 
 /**
+ * The DETERMINISTIC oscillation backstop (v40 scaffold finding) — does THIS loop's blocking
+ * root cause RETURN to a state the loop was already blocked on, with no net forward motion?
+ *
+ * The answerer is told to assign stable ids + flag a return as a stall, but the answerer's
+ * judgment is non-deterministic: on v40 it kept reading "old P1 retired + a NEW P1 appeared"
+ * as PROGRESS, never noticing the NEW P1 was a RETURN to an earlier blocker (an A→B→A→B
+ * oscillation). This backstop closes that gap structurally — independent of the answerer's
+ * narration — by routing the blocking-root-cause-id HISTORY through THE shared
+ * `assessStructuralProgress` cycle detector (the same one the writer inner loop uses): each
+ * loop's blocking id is a failure signature, the total kept P-score its magnitude (so a
+ * genuinely shrinking trajectory is never flagged). A structural `fixed_point` means the
+ * blocker has cycled back with no net P-score reduction since — a true oscillation, NOT
+ * progress. It is NOT a count: a monotone 1000→1 trajectory never trips it (every recurrence
+ * net-shrinks), and a loop exploring NEW blockers stays progress.
+ *
+ * `history` is oldest→newest INCLUDING this loop's signature as the last element.
+ */
+export function blockingRootCauseOscillates(history: ReadonlyArray<AttemptSignature>): boolean {
+  return assessStructuralProgress(history) === "fixed_point";
+}
+
+/**
+ * The blocking-root-cause progress the policy ACTS on — the answerer's reported progress,
+ * OVERRIDDEN to `regressed` (a stall) when the deterministic oscillation backstop fires (the
+ * blocking root cause cycled back to a prior unresolved state). A non-oscillating loop keeps
+ * the answerer's reported progress untouched. This makes a proven A→B→A→B oscillation a stall
+ * even when the answerer (mis)read the individual step as `retired`.
+ */
+export function effectiveBlockingProgress(
+  reported: BlockingRootCauseProgress,
+  history: ReadonlyArray<AttemptSignature>,
+): BlockingRootCauseProgress {
+  return blockingRootCauseOscillates(history) ? "regressed" : reported;
+}
+
+/**
  * Apply the convergence policy. PURE. Returns the next state + the loop decision.
  *
  * INTELLIGENT NON-CONVERGENCE DETECTION (apex v35) — there is NO `maxConsecutiveStalls`
@@ -141,35 +186,63 @@ function blockingIsStuck(progress: BlockingRootCauseProgress): boolean {
  *
  * `worstLeftoverSeverity` is the worst severity among the findings KEPT in-spec on this
  * loopback (undefined ⇒ no kept findings); it is only consulted for a `velocity_defer`.
+ *
+ * `loopBlocking` is THIS loop's blocking root cause for the deterministic oscillation backstop:
+ * its stable id (the answerer's `blockingRootCauseId`, "" when no blocker) + the loop's total
+ * kept P-score. It is appended to `state.blockingHistory`, and a structural CYCLE in that
+ * history (a proven A→B→A→B oscillation with no net P-score reduction) OVERRIDES the answerer's reported
+ * `blockingProgress` to `regressed` — catching an oscillation the answerer narrated as progress
+ * (the v40 scaffold finding). The next state always carries the extended `blockingHistory`.
  */
-export function applyConvergencePolicy(
-  assessment: ConvergenceAssessment,
-  blockingProgress: BlockingRootCauseProgress,
-  escalation: ConvergenceEscalation,
-  state: ConvergenceState,
-  velocityPolicy: VelocityDeferPolicy,
-  worstLeftoverSeverity?: FindingSeverity,
-): { state: ConvergenceState; decision: ConvergenceDecision } {
+export interface ConvergencePolicyInput {
+  assessment: ConvergenceAssessment;
+  blockingProgress: BlockingRootCauseProgress;
+  escalation: ConvergenceEscalation;
+  state: ConvergenceState;
+  velocityPolicy: VelocityDeferPolicy;
+  // THIS loop's blocking root cause for the oscillation backstop: its stable id ("" when no
+  // blocker) + the loop's total kept P-score (the cycle-detector magnitude).
+  loopBlocking: { id: string; pScore: number };
+  // The worst severity among the findings KEPT in-spec this loopback (undefined ⇒ none kept);
+  // consulted only for a `velocity_defer`.
+  worstLeftoverSeverity?: FindingSeverity;
+}
+
+export function applyConvergencePolicy(input: ConvergencePolicyInput): {
+  state: ConvergenceState;
+  decision: ConvergenceDecision;
+} {
+  const { assessment, blockingProgress, escalation, state, velocityPolicy, loopBlocking, worstLeftoverSeverity } =
+    input;
+  // Extend the per-loop blocking-root-cause trajectory, then run the shared structural cycle
+  // detector over it: a RETURN to a prior blocker with no net P-score reduction overrides the
+  // answerer's reported progress to a stall (`regressed`). A non-oscillating loop is untouched.
+  const blockingHistory: AttemptSignature[] = [
+    ...state.blockingHistory,
+    { failureSignature: loopBlocking.id, magnitude: loopBlocking.pScore },
+  ];
+  const effectiveProgress = effectiveBlockingProgress(blockingProgress, blockingHistory);
   // PRIMARY signal: a stuck blocking root cause is a suspected stall regardless of the overall
-  // assessment — peripheral progress NEVER masks a stuck blocker (the v24 fix). The agent's
-  // intelligent verdict decides whether to halt; the count is observability only.
-  if (blockingIsStuck(blockingProgress)) {
+  // assessment — peripheral progress NEVER masks a stuck blocker (the v24 fix), and a structural
+  // oscillation NEVER masks as progress (the v40 fix). The agent's intelligent verdict decides
+  // whether to halt; the count is observability only.
+  if (blockingIsStuck(effectiveProgress)) {
     const consecutiveStalls = state.consecutiveStalls + 1;
     const decision: ConvergenceDecision = escalation === "escalate" ? "halt" : "continue";
-    return { state: { consecutiveStalls }, decision };
+    return { state: { consecutiveStalls, blockingHistory }, decision };
   }
   // The blocking root cause was retired/reduced (forward motion on the blocker), OR
   // there is no blocking finding. Reset on blocker progress, then honor the overall
   // assessment. (`retired`/`reduced` ⇒ never a stall: the blocker advanced.)
-  const blockerAdvanced = blockingProgress === "retired" || blockingProgress === "reduced";
+  const blockerAdvanced = effectiveProgress === "retired" || effectiveProgress === "reduced";
   if (blockerAdvanced || assessment === "progress") {
     if (assessment === "velocity_defer") {
       const decision: ConvergenceDecision = honorsVelocityDefer(velocityPolicy, state, worstLeftoverSeverity)
         ? "pass"
         : "continue";
-      return { state: { consecutiveStalls: 0 }, decision };
+      return { state: { consecutiveStalls: 0, blockingHistory }, decision };
     }
-    return { state: { consecutiveStalls: 0 }, decision: "continue" };
+    return { state: { consecutiveStalls: 0, blockingHistory }, decision: "continue" };
   }
   // No blocking finding (`none`) + the overall assessment is the driver.
   if (assessment === "velocity_defer") {
@@ -177,13 +250,13 @@ export function applyConvergencePolicy(
     const decision: ConvergenceDecision = honorsVelocityDefer(velocityPolicy, state, worstLeftoverSeverity)
       ? "pass"
       : "continue";
-    return { state: { consecutiveStalls: 0 }, decision };
+    return { state: { consecutiveStalls: 0, blockingHistory }, decision };
   }
   // overall `stalled` with no blocking finding: the agent's intelligent verdict decides the
   // halt — `keep_going` re-iterates UNBOUNDED, `escalate` surfaces the human decision.
   const consecutiveStalls = state.consecutiveStalls + 1;
   const decision: ConvergenceDecision = escalation === "escalate" ? "halt" : "continue";
-  return { state: { consecutiveStalls }, decision };
+  return { state: { consecutiveStalls, blockingHistory }, decision };
 }
 
 // True iff the velocity policy HONORS a `velocity_defer` for the given state +
