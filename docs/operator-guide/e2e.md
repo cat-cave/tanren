@@ -11,10 +11,10 @@ external surfaces, and the `e2e-no-mock-imports` architecture check fails any
 `tests/e2e/**` file that imports a fixture/mock or a non-public internal seam.
 
 It is **not on the per-PR fast path**. It spends **real credits and real
-wall-clock** and needs credentials the public PR CI does not have — exactly the
-`just acceptance` discipline (no secrets in public CI). It runs **locally / in a
-credentialed nightly / pre-release**, and its result (the run IDs and PR URLs) is
-the **release evidence**.
+wall-clock** and needs credentials the public PR CI does not have — the same
+no-secrets-in-public-CI discipline as the live component smokes. It runs
+**locally / in a credentialed nightly / pre-release**, and its result (the run IDs
+and PR URLs) is the **release evidence**.
 
 ## What runs where
 
