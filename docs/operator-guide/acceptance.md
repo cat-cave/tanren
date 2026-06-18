@@ -66,10 +66,12 @@ The test
 - **Coherent terminal state:** the run lands `completed` and the spec
   `merged` — not halted.
 - **Bounded loops:** a companion case proves a never-converging loop
-  halts as `convergence_stalled` after the convergence answerer reports
-  `maxConsecutiveStalls` CONSECUTIVE stalls — the SOLE in-loop halt (besides
-  budget), so the loop never runs away yet is bounded by a real "no forward
-  progress" signal, not a blind per-spec rerun cap.
+  halts as `convergence_stalled` once the loop is **provably at a fixed point**
+  — the intelligent non-convergence detector observes an identical failure +
+  identical work repeated, or a revisited-state cycle (A→A→A / A→B→A→B), with no
+  forward progress. This is the SOLE in-loop halt (besides budget): there is **no**
+  attempt cap, no `K`, and no wall-clock deadline — a loop still changing approach
+  re-drives indefinitely; only a genuinely stuck one halts.
 
 ## Live fixture-hard scenario (operator, through the dashboard)
 

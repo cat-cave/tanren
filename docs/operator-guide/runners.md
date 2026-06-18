@@ -27,11 +27,20 @@ The allocator exposes three HTTP endpoints. Only the orchestrator container
 reaches them (internal docker network). The endpoints are authenticated with
 the shared bearer token `TANREN_ALLOCATOR_TOKEN`.
 
-| Method | Path        | Body                                                           | Response                                                                                      |
-| ------ | ----------- | -------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| POST   | `/allocate` | `{ runId, projectId, runnerImage, vaultRefs: string[] }`       | `{ runnerId, sshHost, sshPort, hostKeyFingerprint, imageSha }`                                |
-| POST   | `/release`  | `{ runnerId, reason: "completed" \| "failed" \| "abandoned" }` | `{ released: boolean }`                                                                       |
-| GET    | `/healthz`  | _none_                                                         | `{ service: "allocator", ok }` — `ok` flips to `false` when the docker socket is unreachable. |
+| Method | Path        | Body                                                                      | Response                                                                                      |
+| ------ | ----------- | ------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| POST   | `/allocate` | `{ runId, projectId, runnerImage, orgId, runless?, persistedProjectId? }` | `{ runnerId, sshHost, sshPort, hostKeyFingerprint, imageSha }` (HTTP 201)                     |
+| POST   | `/release`  | `{ runnerId, reason: "completed" \| "failed" \| "abandoned" }`            | `{ released: boolean }`                                                                       |
+| GET    | `/healthz`  | _none_                                                                    | `{ service: "allocator", ok }` — `ok` flips to `false` when the docker socket is unreachable. |
+
+The allocator runs on `ALLOCATOR_PORT` (default `3200`). `runnerImage` is supplied
+**per allocation** in the request body (the orchestrator threads the project's
+configured runner image) — it is _not_ an allocator env knob. `orgId` is required:
+the allocator writes the `runners` row under that org's RLS scope. The runner's
+model/codex credentials are **not** part of this request — they are delivered over
+the SSH file substrate _after_ allocation, so the allocator never resolves a secret
+value (there is no `vaultRefs` and no CODEX_HOME env bundle). `runless` marks a
+Forge ideation allocation whose persisted `run_id` is NULL.
 
 `/release` is idempotent: releasing an already-released runner returns
 `{ released: false }`.
@@ -40,16 +49,28 @@ the shared bearer token `TANREN_ALLOCATOR_TOKEN`.
 
 On `/allocate` the allocator:
 
-1. Creates per-run named volumes for `/workspace` and `/tanren-runtime/codex-home`.
-2. Materializes the supplied vault refs into a base64 bundle the runner reads
-   from `TANREN_CODEX_HOME_BUNDLE`.
-3. Creates a fresh container with the per-run volumes mounted, attaches it to
-   the internal docker network, and starts it.
-4. Polls for the regenerated SSH host key inside the container, hashes it, and
-   returns the fingerprint to the orchestrator.
+1. Resolves the public `TANREN_RUNNER_AUTHORIZED_KEY` (fail-closed: a blank/unset
+   key throws before any side effect, so a misconfigured allocator never spends a
+   container on a runner the orchestrator could never SSH into).
+2. Creates per-run named volumes for `/workspace` and `/tanren-runtime/codex-home`.
+3. Creates a fresh container with the per-run volumes mounted and only the public
+   authorized-key line + the ephemeral marker in its env (no secret value is ever
+   delivered via Docker env), attaches it to the internal docker network, and
+   starts it.
+4. Polls for the regenerated SSH host key inside the container until it appears
+   (a sign-of-life probe, _not_ an attempt-capped timeout — see below), hashes it,
+   and returns the fingerprint to the orchestrator.
+5. Writes a durable `allocator.allocated` audit event under the run's org scope.
 
-The runner image regenerates `/etc/ssh/ssh_host_*` keys on every container
-start (see `runner/entrypoint.sh`); the image never carries keys across runs.
+Run-scoped runner credentials (the tenant's model / codex auth) are written into
+CODEX*HOME over the **SSH file substrate** \_after* allocation by the orchestrator's
+materializer — so `docker inspect` on a runner can carry no secret. The runner
+image regenerates `/etc/ssh/ssh_host_*` keys on every container start (see
+`runner/entrypoint.sh`); the image never carries keys across runs.
+
+The host-key readiness poll has **no attempt ceiling**: a slow-booting container
+is never given up on by a counter. The only give-up condition is genuine failure —
+the container observed no longer running (sshd boot crashed), which fails loud.
 
 On `/release` the allocator:
 
@@ -63,23 +84,36 @@ Nothing from a previous run survives a release on either the success or
 failure path. The runner image's entrypoint asserts this invariant on
 container start (refuses to start if `/workspace` is non-empty).
 
-## TTL sweeper
+## Abandoned-runner sweeper (sign-of-life, not wall-clock)
 
-The allocator runs a background sweeper that polls the `runners` table for
-rows still `claimed` past `TANREN_MAX_RUN_HOURS` (default 6) and releases them
-with `reason: "abandoned"`. This handles the case where the orchestrator
-crashes mid-run and never calls `/release`. The sweeper goes through the same
-finalizer path as `/release`, so the workspace and CODEX_HOME volumes are
-still wiped.
+The allocator runs a background sweeper (interval `TANREN_ALLOCATOR_SWEEPER_INTERVAL_MS`,
+default 60s) that reconciles **stuck/leaked** runners the normal `/release` path
+missed. It is **not** an age-based reaper: a long-but-_alive_ run is never reaped,
+no matter how many hours it has been running — "10 minutes, or 6 hours, is nothing
+to an AI agent on a big build". There is no `TANREN_MAX_RUN_HOURS` age cap on a
+live runner anymore. A runner is reclaimed only when there is genuinely **no sign
+of life**, in one of three discriminated states (`RunnerReclaimReason`):
+
+| Reason            | What it detects                                                                                                                                                                      |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `terminal_run`    | The owning run is terminal (completed/failed/halted/cancelled) yet the runner was never released — the run crashed before its release `finally`.                                     |
+| `lease_lapsed`    | The owning run's worker stopped renewing its `job_queue` lease (a `running` job whose `leased_until` is in the past, with no other live job) — the **driver is dead**.               |
+| `unclaimed_grace` | A wedged allocation never tied to a live `runs` row (`run_id IS NULL`), older than `TANREN_ALLOCATOR_UNCLAIMED_GRACE_MS` (default 15min — absorbs the allocate→first-lease handoff). |
+
+Each reclaim goes through the same single-atomic-claim `/release` finalizer (so a
+healthy in-flight runner is never touched and a concurrent `/release` race tears
+down exactly once), wipes the workspace + CODEX_HOME volumes, and writes a durable
+`runner.swept` audit event tagged with the reason. An audit-write failure is logged
+and counted, never swallowed.
 
 ## Dev vs prod profile
 
-| Concern                   | `compose.dev.yml`                                                              | `compose.prod.yml`                                            |
-| ------------------------- | ------------------------------------------------------------------------------ | ------------------------------------------------------------- |
-| Allocator host port       | `3200` exposed for opt-in host-side live tests                                 | not exposed                                                   |
-| Static `runner` service   | Yes, on host port `2222` (backward-compat for `just smoke`'s direct SSH proof) | Removed entirely; runners are ephemeral and have no host port |
-| Per-run runners published | No (internal-only; orchestrator reaches them via docker DNS)                   | No (internal-only)                                            |
-| Allocator bearer token    | Hard-coded `dev`                                                               | Required via `TANREN_ALLOCATOR_TOKEN` env                     |
+| Concern                   | `compose.dev.yml`                                                                                    | `compose.prod.yml`                                            |
+| ------------------------- | ---------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| Allocator host port       | `3200` exposed for opt-in host-side live tests                                                       | not exposed                                                   |
+| Static `runner` service   | Yes, on host port `2222` (host-side direct SSH proof for `just smoke-connectivity` / the live tests) | Removed entirely; runners are ephemeral and have no host port |
+| Per-run runners published | No (internal-only; orchestrator reaches them via docker DNS)                                         | No (internal-only)                                            |
+| Allocator bearer token    | Hard-coded `dev`                                                                                     | Mounted secret file (`TANREN_ALLOCATOR_TOKEN_FILE`)           |
 
 In dev, opt-in live tests that run on the host (`just live-phase1-fixture`,
 `just smoke-ssh-integration`, etc.) continue to target the static `runner`
@@ -88,14 +122,31 @@ go through the sidecar and use ephemeral runners on the internal network.
 
 ## Required env
 
-| Env var                                | Default                             | Required in prod | Notes                                                                 |
-| -------------------------------------- | ----------------------------------- | ---------------- | --------------------------------------------------------------------- |
-| `TANREN_ALLOCATOR_TOKEN`               | `"dev"`                             | Yes              | Shared bearer token between orchestrator and allocator                |
-| `TANREN_MAX_RUN_HOURS`                 | `6`                                 | No               | Max wall-clock hours before the sweeper reclaims an active runner row |
-| `TANREN_RUNNER_IMAGE`                  | `ghcr.io/cat-cave/tanren-runner:v0` | No               | Image the allocator pulls / uses for per-run runner containers        |
-| `TANREN_ALLOCATOR_URL`                 | `http://allocator:3200`             | No               | Orchestrator-side allocator base URL                                  |
-| `TANREN_ALLOCATOR_NETWORK`             | derived                             | No               | Docker network name the per-run containers attach to                  |
-| `TANREN_ALLOCATOR_SWEEPER_INTERVAL_MS` | `60000`                             | No               | How often the sweeper polls                                           |
+**Allocator service env** (read by `services/allocator/src/envSchema.ts`):
+
+| Env var                                  | Default                                  | Required in prod | Notes                                                                                                             |
+| ---------------------------------------- | ---------------------------------------- | ---------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `TANREN_ALLOCATOR_TOKEN`                 | `"dev"`                                  | Yes              | Bearer token gating `/allocate` + `/release`. In prod delivered as a mounted secret file (`*_TOKEN_FILE`).        |
+| `TANREN_RUNNER_AUTHORIZED_KEY`           | _(unset)_                                | Yes              | Public SSH authorized-key line baked into each runner; allocation fails closed if blank.                          |
+| `ALLOCATOR_PORT`                         | `3200`                                   | No               | Allocator HTTP port.                                                                                              |
+| `TANREN_ALLOCATOR_NETWORK`               | `tanren_default`                         | No               | Docker network name the per-run containers attach to.                                                             |
+| `TANREN_ALLOCATOR_SSH_HOSTNAME_TEMPLATE` | `{container}`                            | No               | Template for the orchestrator-facing SSH hostname.                                                                |
+| `TANREN_ALLOCATOR_SWEEPER_INTERVAL_MS`   | `60000`                                  | No               | How often the abandoned-runner sweeper polls.                                                                     |
+| `TANREN_ALLOCATOR_UNCLAIMED_GRACE_MS`    | `900000` (15min)                         | No               | Grace window before a never-claimed (run-less) allocation is reclaimed as wedged. _Not_ an age cap on a live run. |
+| `TANREN_RUNNER_CAP_ADD`                  | `SYS_ADMIN`                              | No               | Linux capabilities the runner container is launched with (comma-separated).                                       |
+| `TANREN_RUNNER_SECURITY_OPT`             | `apparmor=unconfined,seccomp=unconfined` | No               | security-opt the runner container is launched with.                                                               |
+
+There is **no** `TANREN_MAX_RUN_HOURS` allocator knob — the sweeper reaps on
+sign-of-life, not age. (`TANREN_MAX_RUN_HOURS` still exists, but only as the
+_orchestrator's_ scoped-credential token TTL ceiling, resolved in
+`plannerRunScopedCreds`; it does not bound runner lifetime.)
+
+**Orchestrator-side allocator client env** (read by `services/orchestrator`):
+
+| Env var                 | Default                 | Notes                                                                         |
+| ----------------------- | ----------------------- | ----------------------------------------------------------------------------- |
+| `TANREN_ALLOCATOR_URL`  | `http://allocator:3200` | Allocator base URL the orchestrator calls.                                    |
+| `TANREN_ALLOCATOR_KIND` | `sidecar`               | Which allocator backend to build (see below); `router` enables label routing. |
 
 ## Architecture-check invariants
 
