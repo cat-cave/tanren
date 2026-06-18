@@ -10,6 +10,7 @@
 // is one cohesive module without duplicating those helpers.
 
 import { runAuthorityLand } from "../../merge/mergeAuthorityGate.js";
+import { appendInfraSignature, isSustainedInfraNonRecovery } from "../../merge/infraNonRecovery.js";
 import { evaluatePostureGate } from "../../forge/audits/postureGate.js";
 import type { AuditEnvelope } from "../../events/schemas/audit.js";
 import type { PullRequestMergeability } from "../../contracts/codeHostTypes.js";
@@ -90,19 +91,22 @@ export async function landViaAuthority(
   ops: LandOps,
   bundle: MergeAuthorityBundle,
 ): Promise<MergeForRunResult> {
-  return landViaAuthorityAttempt(deps, ops, bundle, 0);
+  return landViaAuthorityAttempt(deps, ops, bundle, []);
 }
 
 /**
- * One authority-land attempt. `casRetries` bounds the native rebase-on-CAS re-drive
- * (§3.3) so a persistently-racing main can never loop forever: after the bound it holds
- * recoverably rather than re-rebasing without end.
+ * One authority-land attempt. `casHistory` is the trailing history of CAS-rejection
+ * SIGNATURES (oldest→newest) the native rebase-on-CAS re-drive (§3.3) reasons over: a CAS
+ * rejection whose observed-main signature keeps CHANGING is genuine PROGRESS (main is live
+ * + advancing under the run — contention, not failure), so the re-drive continues
+ * UNBOUNDED; an IDENTICAL non-advancing rejection signature is genuine non-convergence
+ * (`isSustainedInfraNonRecovery`), and only THEN does it hold recoverably. No count.
  */
 async function landViaAuthorityAttempt(
   deps: DispatcherDeps,
   ops: LandOps,
   bundle: MergeAuthorityBundle,
-  casRetries: number,
+  casHistory: ReadonlyArray<string>,
 ): Promise<MergeForRunResult> {
   const { context, pr } = deps;
   // §5h: the freshness signal the authority gates on is the `CodeHost`-derived ancestry
@@ -163,7 +167,7 @@ async function landViaAuthorityAttempt(
       // (an unprotected repo never reports `behind`, so the old `emitConflict` terminally
       // dequeued the 2nd batch member). Bounded by `casRetries`; the fallback is a
       // recoverable hold, never a terminal dequeue.
-      return rebaseOnCasAndRetry(deps, ops, bundle, mergeability, disposition.reason, casRetries);
+      return rebaseOnCasAndRetry(deps, ops, bundle, mergeability, disposition.reason, casHistory);
     case "merge_state_unknown": {
       // The host advanced `main` but the durable record FAILED — NEVER a silent
       // inconsistency: hold loudly for reconciliation.
@@ -186,18 +190,23 @@ async function landViaAuthorityAttempt(
   }
 }
 
-/** The max native rebase-on-CAS re-drives before a benign race falls back to a recoverable hold. */
-const MAX_CAS_REBASE_RETRIES = 2;
-
 /**
  * §3.3 NATIVE REBASE-ON-CAS: a CAS rejection means a batch sibling landed onto main first,
  * so this head's authorized commit is no longer a fast-forward. Rebase the head onto the
  * advanced base through the unified `baseShiftRebase` hook (the SAME never-discard rebase
  * the `behind` path uses), re-gate the rebased tree (anchored on the pushed rebased head —
  * NEVER-MERGE-UNVERIFIED), and re-attempt the land. This replaces the GitHub-`behind`-only
- * rebase trigger that never fired on an unprotected repo. Bounded by `MAX_CAS_REBASE_RETRIES`;
- * an absent base-shift hook / a held rebase / a failed re-gate / the bound all hold
- * RECOVERABLY (the recovery surface re-drives) — never a terminal `merge.conflict` dequeue.
+ * rebase trigger that never fired on an unprotected repo.
+ *
+ * PROGRESS-BASED, NOT COUNTED (feedback_no_timeouts_progress_based, BINDING): a CAS rejection
+ * because main KEEPS ADVANCING is PROGRESS (the system is live + contended), never a failure —
+ * so this re-drive is UNBOUNDED while the rejection's observed-main signature keeps CHANGING
+ * (each rejection embeds the actual advanced main sha, so a moving main yields a different
+ * signature every attempt). It holds RECOVERABLY only on genuine NON-CONVERGENCE — the SAME
+ * non-advancing rejection signature persisting across re-drives (`isSustainedInfraNonRecovery`,
+ * the convergence detector's fixed-point read — a real stuck, not contention). An absent
+ * base-shift hook / a held rebase / a failed re-gate likewise hold RECOVERABLY — never a
+ * terminal `merge.conflict` dequeue. `casHistory` is the trailing signature history.
  */
 async function rebaseOnCasAndRetry(
   deps: DispatcherDeps,
@@ -205,15 +214,20 @@ async function rebaseOnCasAndRetry(
   bundle: MergeAuthorityBundle,
   mergeability: PullRequestMergeability,
   casReason: string,
-  casRetries: number,
+  casHistory: ReadonlyArray<string>,
 ): Promise<MergeForRunResult> {
   const recoverableHold = async (message: string): Promise<MergeForRunResult> => {
     await ops.finalize("blocked", { taskOutcome: "pending", taskStatus: "running" });
     return ops.result("blocked", { message });
   };
-  if (casRetries >= MAX_CAS_REBASE_RETRIES) {
+  // Record THIS rejection's signature (the host CAS error embeds the observed actual main sha,
+  // so a genuinely-advancing main yields a CHANGING signature = progress; an identical
+  // non-advancing rejection recurs byte-identically = a fixed point). Hold recoverably ONLY at
+  // a sustained-non-recovery fixed point — never on a count, never while main is still moving.
+  const history = appendInfraSignature(casHistory, casReason);
+  if (isSustainedInfraNonRecovery(history)) {
     return recoverableHold(
-      `land CAS rejected ${casRetries}x (main keeps advancing); holding for re-drive: ${casReason}`,
+      `land CAS rejected on an identical non-advancing main (no progress); holding for re-drive: ${casReason}`,
     );
   }
   if (deps.input.baseShiftRebase === undefined) {
@@ -276,7 +290,7 @@ async function rebaseOnCasAndRetry(
   // (NEVER-MERGE-UNVERIFIED). Absent a rebuild thunk (a pre-supplied bundle / test seam) we
   // reuse the bundle — those callers re-gate against the same head, so it is not stale.
   const rebuilt = deps.input.buildMergeAuthority === undefined ? bundle : await deps.input.buildMergeAuthority();
-  return landViaAuthorityAttempt(deps, ops, rebuilt, casRetries + 1);
+  return landViaAuthorityAttempt(deps, ops, rebuilt, history);
 }
 
 /**

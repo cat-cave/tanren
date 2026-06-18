@@ -34,6 +34,39 @@ class RaceOnceCodeHost extends InMemoryCodeHost {
     return super.landAuthorizedRef(input);
   }
 }
+
+/**
+ * A host that CAS-rejects the first `rejectCount` lands with an ADVANCING observed main sha
+ * each time (`sha-main-1`, `sha-main-2`, … — main genuinely moving under the run = contention
+ * = progress), then lands. Models a live, heavily-contended main that keeps advancing past the
+ * OLD fixed 2-cap; the progress-based re-drive must keep rebasing+re-landing until it lands.
+ */
+class AdvancingRaceCodeHost extends InMemoryCodeHost {
+  private rejections = 0;
+  constructor(private readonly rejectCount: number) {
+    super();
+  }
+  override async landAuthorizedRef(input: LandAuthorizedRefInput): ReturnType<InMemoryCodeHost["landAuthorizedRef"]> {
+    if (this.rejections < this.rejectCount) {
+      this.rejections += 1;
+      // The observed actual main sha ADVANCES every rejection → a CHANGING signature = progress.
+      throw new LandCasRejectedError(input.intoMain, input.expectedMainSha, `sha-main-${this.rejections}`);
+    }
+    return super.landAuthorizedRef(input);
+  }
+}
+
+/**
+ * A host that CAS-rejects EVERY land with the SAME non-advancing observed main sha — an
+ * identical rejection signature recurring with no advancement. This is genuine non-convergence
+ * (a real stuck, NOT contention): the progress-based guard must recoverable-hold, never loop.
+ */
+class StuckRaceCodeHost extends InMemoryCodeHost {
+  override async landAuthorizedRef(input: LandAuthorizedRefInput): ReturnType<InMemoryCodeHost["landAuthorizedRef"]> {
+    // The observed actual main sha NEVER advances → the same rejection signature every attempt.
+    throw new LandCasRejectedError(input.intoMain, input.expectedMainSha, "sha-stuck");
+  }
+}
 import {
   REPO,
   bundle,
@@ -194,5 +227,78 @@ describe("§3.3 native rebase-on-CAS (unprotected repo, no GitHub `behind`)", ()
     expect(result.outcome).toBe("blocked");
     expect(events.events).not.toContain("merge.conflict");
     expect(landed).toEqual([]);
+  });
+});
+
+describe("§3.3 native rebase-on-CAS is PROGRESS-based, not a fixed count", () => {
+  it("a CAS that keeps losing to an ADVANCING main keeps rebasing past the old 2-cap and lands", async () => {
+    // Main advances under the run FOUR times (well past the old MAX_CAS_REBASE_RETRIES=2):
+    // a different observed-main signature each rejection = genuine progress (live contention),
+    // so the re-drive must continue UNBOUNDED and eventually land — never give up on a count.
+    const REJECTS = 4;
+    const host = new AdvancingRaceCodeHost(REJECTS);
+    host.seed(REPO, "main", "sha-main");
+    await host.pushRef({ repo: REPO, localRef: "feat", remoteBranch: "feat", sha: "sha-feat" });
+
+    // Each rebase advances feat onto the newly-advanced main → a fresh head per attempt.
+    let rebaseCalls = 0;
+    const baseShiftRebase: MergeForRunInput["baseShiftRebase"] = async () => {
+      rebaseCalls += 1;
+      const head = `sha-feat-r${rebaseCalls}`;
+      await host.pushRef({ repo: REPO, localRef: "feat", remoteBranch: "feat", sha: head });
+      return { outcome: "rebased", rebasedHeadSha: head };
+    };
+    // The bundle is rebuilt per re-attempt; its gatedHeadSha tracks the latest rebased head so
+    // the authority's commit-binding (gatedHeadSha === landing head) re-validates each round.
+    let builds = 0;
+    const buildBundle = async (): Promise<ReturnType<typeof bundle>> => {
+      builds += 1;
+      return bundle(host, { landed, gatedHeadSha: builds === 1 ? "sha-feat" : `sha-feat-r${builds - 1}` });
+    };
+
+    const events = recordingEventStore();
+    const landed: string[] = [];
+    const { dispatcher } = landDispatcher({ host, events, landed, buildBundle, baseShiftRebase });
+    const result = await dispatcher.directMerge();
+
+    // It rebased once PER advancing rejection (4 > the old 2-cap) and finally landed — no give-up.
+    expect(rebaseCalls).toBe(REJECTS);
+    expect(result.outcome).toBe("merged");
+    expect(landed).toEqual([`sha-feat-r${REJECTS}`]);
+    expect(events.events).not.toContain("merge.conflict");
+  });
+
+  it("a CAS stuck on an IDENTICAL non-advancing rejection recoverable-holds (non-convergence, not a count)", async () => {
+    // Main NEVER advances: the same rejection signature recurs → a fixed point (genuine stuck,
+    // not contention). The progress guard holds RECOVERABLY rather than re-rebasing forever.
+    const host = new StuckRaceCodeHost();
+    host.seed(REPO, "main", "sha-main");
+    await host.pushRef({ repo: REPO, localRef: "feat", remoteBranch: "feat", sha: "sha-feat" });
+
+    let rebaseCalls = 0;
+    const baseShiftRebase: MergeForRunInput["baseShiftRebase"] = async () => {
+      rebaseCalls += 1;
+      const head = `sha-feat-r${rebaseCalls}`;
+      await host.pushRef({ repo: REPO, localRef: "feat", remoteBranch: "feat", sha: head });
+      return { outcome: "rebased", rebasedHeadSha: head };
+    };
+    let builds = 0;
+    const buildBundle = async (): Promise<ReturnType<typeof bundle>> => {
+      builds += 1;
+      return bundle(host, { landed, gatedHeadSha: builds === 1 ? "sha-feat" : `sha-feat-r${builds - 1}` });
+    };
+
+    const events = recordingEventStore();
+    const landed: string[] = [];
+    const { dispatcher } = landDispatcher({ host, events, landed, buildBundle, baseShiftRebase });
+    const result = await dispatcher.directMerge();
+
+    // Recoverable hold (the recovery surface re-drives), never a terminal dequeue, never landed.
+    expect(result.outcome).toBe("blocked");
+    expect(events.events).not.toContain("merge.conflict");
+    expect(landed).toEqual([]);
+    // It did NOT loop forever: the first rejection is progress (history of 1), it rebased once,
+    // then the second identical rejection is the fixed point that holds — a bounded, finite path.
+    expect(rebaseCalls).toBe(1);
   });
 });
