@@ -20,6 +20,7 @@
 //     resolved head sha back from the forge, else `irreconcilable` → the coordinator
 //     replans (keeping the work alive).
 
+import { runWithJobOrgId } from "@tanren/db";
 import type pg from "pg";
 import type { Allocator } from "../contracts/allocator.js";
 import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
@@ -90,7 +91,14 @@ export class LiveBaseShiftWorkspaceProvider implements BaseShiftWorkspaceOpener 
     ancestorStack?: AncestorStack;
   }): Promise<{ workspaceId: string; path: string; branch: string; newBaseSha: string }> {
     const ctx = await loadBaseShiftRunContext(this.deps.pool, input.dependent.runId);
-    const live = await this.openShiftedBaseWorkspace(input, ctx);
+    // ORG-SCOPE THE ALLOCATION: the base-shift runs from the walk-chain subscriber, NOT a
+    // worker job, so there is NO ambient `runWithJobOrgId`. Allocating the live workspace
+    // claims a `runners` row through `withJobOrgScope`, which FAILS LOUDLY (deny-by-default
+    // RLS) with no ambient org scope — `tenant-table access with no ambient org scope`,
+    // mapped by the coordinator to `base shift held at rebase` and re-driven forever. The
+    // dependent run HAS an org (`ctx.orgId`); establish its per-job scope around the
+    // allocation, exactly as the worker drive path does (`runWithJobOrgId(facts.orgId, …)`).
+    const live = await runWithJobOrgId(ctx.orgId, () => this.openShiftedBaseWorkspace(input, ctx));
     this.openWorkspaces.set(live.handle.workspaceId, live);
     return {
       workspaceId: live.handle.workspaceId,
@@ -247,31 +255,37 @@ export class LiveBaseShiftReGate implements BaseShiftReGate {
     rebasedHeadSha: string;
   }): Promise<ReGateResult> {
     const ctx = await loadBaseShiftRunContext(this.deps.pool, input.dependent.runId);
-    const result = await runFreshRunnerMergeGate(
-      {
-        allocator: this.deps.allocator,
-        ssh: this.deps.ssh,
-        secrets: this.deps.secrets,
-        githubHttp: this.deps.githubHttp,
-        ...(this.deps.githubAppMinter !== undefined && { githubAppMinter: this.deps.githubAppMinter }),
-        eventStore: this.deps.eventStore,
-        identitySecretRef: this.deps.identitySecretRef,
-      },
-      {
-        repoUrl: ctx.repoUrl,
-        // §3.1: re-gate the dependent's OWN head branch — the clean rebase PUSHED the rebased
-        // head here (so the forge branch IS the rebased tree), and the gate.verdict anchors
-        // on the cloned head (the pushed `rebasedHeadSha`), not the un-rebased tree.
-        ref: ctx.headBranch,
-        runnerImage: ctx.runnerImage,
-        governancePosture: ctx.governancePosture,
-        ...(ctx.installation !== undefined && { installation: ctx.installation }),
-        githubCredentialRef: ctx.githubCredentialRef,
-        orgId: ctx.orgId,
-        projectId: ctx.projectId,
-        runId: ctx.runId,
-        specId: ctx.specId,
-      },
+    // ORG-SCOPE THE RE-GATE ALLOCATION (same reason as the opener): the fresh-runner re-gate
+    // claims a `runners` row through `withJobOrgScope`, and the base-shift runs outside any
+    // worker per-job scope — establish the dependent run's org scope around the gate so its
+    // tenant accesses (runner claim/release, gate event writes) are admitted by RLS.
+    const result = await runWithJobOrgId(ctx.orgId, () =>
+      runFreshRunnerMergeGate(
+        {
+          allocator: this.deps.allocator,
+          ssh: this.deps.ssh,
+          secrets: this.deps.secrets,
+          githubHttp: this.deps.githubHttp,
+          ...(this.deps.githubAppMinter !== undefined && { githubAppMinter: this.deps.githubAppMinter }),
+          eventStore: this.deps.eventStore,
+          identitySecretRef: this.deps.identitySecretRef,
+        },
+        {
+          repoUrl: ctx.repoUrl,
+          // §3.1: re-gate the dependent's OWN head branch — the clean rebase PUSHED the rebased
+          // head here (so the forge branch IS the rebased tree), and the gate.verdict anchors
+          // on the cloned head (the pushed `rebasedHeadSha`), not the un-rebased tree.
+          ref: ctx.headBranch,
+          runnerImage: ctx.runnerImage,
+          governancePosture: ctx.governancePosture,
+          ...(ctx.installation !== undefined && { installation: ctx.installation }),
+          githubCredentialRef: ctx.githubCredentialRef,
+          orgId: ctx.orgId,
+          projectId: ctx.projectId,
+          runId: ctx.runId,
+          specId: ctx.specId,
+        },
+      ),
     );
     // NEVER-MERGE-UNVERIFIED: the gate must have verified the EXACT pushed rebased head. A
     // mismatch means the forge branch moved off `rebasedHeadSha` between the push and this
