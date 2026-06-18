@@ -312,6 +312,26 @@ RUN set -eu; \
 RUN sed -i 's/#PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config \
   && sed -i 's/#PubkeyAuthentication yes/PubkeyAuthentication yes/' /etc/ssh/sshd_config
 
+# SSH SERVER capacity for a single-tenant build runner. Tanren's per-spec loop opens
+# MANY concurrent SSH/codex sessions to one runner (writer + checker + auditor +
+# designOracle + triage + convergence + planner + the design-phase codex calls). The
+# stock sshd ships `#MaxSessions 10` and `#MaxStartups 10:30:100` (the commented
+# defaults), which throttle that fan-out and surface as transient `ssh.run.failed`
+# connect failures (SSH connection failed to establish). This is the runner image
+# (a trusted, ephemeral, per-run sandbox), so the limits are raised generously to
+# absorb the concurrent fan-out at the source rather than crash+re-drive against it.
+# These are SERVER concurrency limits, NOT a client-side timeout/retry cap. The
+# ClientAlive* keepalive only detects a DEAD connection (a generous CountMax never
+# kills a live, busy session on a timer).
+RUN { \
+    echo 'MaxSessions 200'; \
+    echo 'MaxStartups 200:30:400'; \
+    echo 'MaxAuthTries 6'; \
+    echo 'ClientAliveInterval 60'; \
+    echo 'ClientAliveCountMax 1440'; \
+  } >> /etc/ssh/sshd_config \
+  && /usr/sbin/sshd -t -f /etc/ssh/sshd_config
+
 COPY runner/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
