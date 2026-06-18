@@ -129,16 +129,53 @@ describe("validateEmittedSpecs", () => {
     expect(validator.seen[1]).toEqual(revisedSpec);
   });
 
-  it("escalates LOUD (PersistentlyInvalidSpecError) when the spec never passes within the budget", async () => {
+  it("escalates LOUD (PersistentlyInvalidSpecError) at a genuine FIXED POINT — identical rejection, no progress", async () => {
+    // The validator rejects the spec the IDENTICAL way every round (same failing
+    // dimensions) — a fixed point with no progress, so it escalates loud (no count).
     const validator = scriptedValidator([reviseAnswer("g1"), reviseAnswer("g2"), reviseAnswer("g3")]);
     await expect(
       validateEmittedSpecs({
         specs: [{ ...goodSpec, title: "Build the entire app" }],
         validator,
         reviseSpec: async () => ({ ...goodSpec, title: "still too big" }),
-        maxRevisions: 2,
       }),
     ).rejects.toBeInstanceOf(PersistentlyInvalidSpecError);
+  });
+
+  it("keeps revising UNBOUNDED while the verdict IMPROVES (the failing set shrinks), then passes", async () => {
+    // Round 0: three dimensions fail. Round 1: only one fails (progress — the set
+    // shrank). Round 2: passes. A fixed 2-round cap would have escalated at round 2;
+    // the convergence model keeps going because each round made progress.
+    const threeBad: SpecQualityAnswer = {
+      accomplishable: { pass: false, reason: "too big" },
+      demoable: { pass: false, reason: "no observable behavior" },
+      nonTrivial: { pass: true, reason: "large enough" },
+      legible: { pass: false, reason: "jargon" },
+      overall: "revise",
+      revisionGuidance: "split + add criteria + plain language",
+    };
+    const oneBad: SpecQualityAnswer = {
+      accomplishable: { pass: true, reason: "bounded now" },
+      demoable: { pass: false, reason: "still no observable behavior" },
+      nonTrivial: { pass: true, reason: "ok" },
+      legible: { pass: true, reason: "ok" },
+      overall: "revise",
+      revisionGuidance: "add an observable acceptance criterion",
+    };
+    const validator = scriptedValidator([threeBad, oneBad, passAnswer]);
+    let rounds = 0;
+    const { specs } = await validateEmittedSpecs({
+      specs: [{ ...goodSpec, title: "Build the entire app" }],
+      validator,
+      reviseSpec: async () => {
+        rounds += 1;
+        return { ...goodSpec, title: `revision ${rounds}` };
+      },
+    });
+    expect(specs).toHaveLength(1);
+    expect(specs[0]!.revisions).toBe(2);
+    expect(specs[0]!.answer.overall).toBe("pass");
+    expect(rounds).toBe(2);
   });
 
   it("with NO reviseSpec, a first-pass failure escalates immediately (never silently accepted)", async () => {

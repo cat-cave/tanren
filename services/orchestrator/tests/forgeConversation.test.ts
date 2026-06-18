@@ -137,11 +137,14 @@ describe("askForge (thick-Forge conversation engine)", () => {
     expect(calls).toHaveLength(0);
   });
 
-  it("terminates with a fallback answer when the answerer never finalizes", async () => {
+  it("terminates with a fallback answer when the answerer never finalizes (no new tools = no progress)", async () => {
     const client = new ForgeMemoryClient();
     const threadId = await seedProjectThread(client);
 
-    // Always asks for the same read tool, never finalizes.
+    // Always asks for the SAME read tool, never finalizes. The first request is
+    // progress (a new tool); the second identical request is NOT progress (already
+    // dispatched) → the loop ends and the terminal finalize pass returns a fallback.
+    let dispatchCount = 0;
     const answerer = createFakeForgeAnswerer({
       script: [
         {
@@ -154,12 +157,16 @@ describe("askForge (thick-Forge conversation engine)", () => {
       {
         client: client as never,
         answerer,
-        dispatchReadTool: (): Promise<unknown> => Promise.resolve({ insights: [] }),
-        maxToolRounds: 2,
+        dispatchReadTool: (): Promise<unknown> => {
+          dispatchCount += 1;
+          return Promise.resolve({ insights: [] });
+        },
       },
       { threadId, question: "loop forever", audience: "project:member", actor },
     );
 
+    // The same tool was dispatched exactly ONCE (the re-request was not progress).
+    expect(dispatchCount).toBe(1);
     const answer = ForgeAnswer.parse(result.forgeTurn.render);
     expect(answer.body.length).toBeGreaterThan(0);
   });
@@ -237,15 +244,16 @@ describe("askForge (thick-Forge conversation engine)", () => {
     expect(seen[1]?.toolResults[0]?.error).toBe("run not found: run_x");
   });
 
-  it("with maxToolRounds=0 the answerer's first step is its only honored chance to finalize", async () => {
+  it("a re-requested (already-run) tool is not progress — the terminal pass finalizes", async () => {
     const client = new ForgeMemoryClient();
     const threadId = await seedProjectThread(client);
 
     const dispatched: string[] = [];
-    // First step requests a tool; with a 0-round budget no tool may be dispatched
-    // (round===maxRounds breaks immediately), then one terminal respond finalizes.
+    // Round 1 requests a tool (progress → dispatched). Round 2 re-requests the SAME
+    // tool (no progress) → the loop ends and the terminal respond finalizes.
     const answerer = createFakeForgeAnswerer({
       script: [
+        { kind: "tools", toolCalls: [{ tool: "tanren.read_insights", args: { projectId: "project_a" } }] },
         { kind: "tools", toolCalls: [{ tool: "tanren.read_insights", args: { projectId: "project_a" } }] },
         { kind: "final", answer: { body: "committed", attentionItems: [], insights: [], prompts: [] } },
       ],
@@ -259,13 +267,13 @@ describe("askForge (thick-Forge conversation engine)", () => {
           dispatched.push(call.tool);
           return Promise.resolve({});
         },
-        maxToolRounds: 0,
       },
-      { threadId, question: "no budget", audience: "project:member", actor },
+      { threadId, question: "no progress", audience: "project:member", actor },
     );
 
-    // No read tool ran (budget was zero); the terminal respond produced the answer.
-    expect(dispatched).toHaveLength(0);
+    // The tool ran exactly once (the re-request was not progress); the terminal
+    // respond produced the answer.
+    expect(dispatched).toEqual(["tanren.read_insights"]);
     const answer = ForgeAnswer.parse(result.forgeTurn.render);
     expect(answer.body).toBe("committed");
   });
@@ -297,7 +305,6 @@ describe("askForge (thick-Forge conversation engine)", () => {
           dispatched.push(call.tool);
           return Promise.resolve({});
         },
-        maxToolRounds: 3,
       },
       { threadId, question: "empty request", audience: "project:member", actor },
     );
@@ -307,19 +314,19 @@ describe("askForge (thick-Forge conversation engine)", () => {
     expect(answer.body).toBe("moved on");
   });
 
-  it("honors a final returned on the terminal post-budget respond (not the fallback)", async () => {
+  it("honors a final returned on the terminal post-progress respond (not the fallback)", async () => {
     const client = new ForgeMemoryClient();
     const threadId = await seedProjectThread(client);
 
-    // Requests a read tool on every budgeted round, then finalizes on the extra
-    // terminal respond the loop makes after the budget is spent. The returned
-    // answer must be this one, NOT the synthesized "could not complete" fallback.
+    // Re-requests the SAME read tool, then finalizes on the terminal respond the
+    // loop makes once progress stops (the 2nd identical request is not progress).
+    // The returned answer must be this one, NOT the "could not complete" fallback.
     let calls = 0;
     const answerer: ForgeConversationAnswerer = {
       respond: () => {
         calls += 1;
-        // maxToolRounds=1 -> rounds 0,1 are budgeted; the loop then makes ONE
-        // terminal respond. Finalize only on that terminal (3rd) call.
+        // call#1 requests a new tool (progress → dispatched); call#2 re-requests the
+        // SAME tool (no progress → loop ends); call#3 is the terminal respond — finalize.
         if (calls >= 3) {
           return Promise.resolve({
             kind: "final",
@@ -338,7 +345,6 @@ describe("askForge (thick-Forge conversation engine)", () => {
         client: client as never,
         answerer,
         dispatchReadTool: () => Promise.resolve({ insights: [] }),
-        maxToolRounds: 1,
       },
       { threadId, question: "buzzer beater", audience: "project:member", actor },
     );

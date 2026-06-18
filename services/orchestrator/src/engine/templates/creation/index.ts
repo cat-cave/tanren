@@ -27,8 +27,9 @@ export {
 // backoff) instead of failing the whole derive terminally; a persistent failure
 // fails loud after the bound.
 export {
-  DEFAULT_ANSWERER_MAX_ATTEMPTS,
   isTransientAnswererError,
+  PersistentAnswererOutageError,
+  transientSignature,
   withAnswererRetry,
   type AnswererRetryOptions,
 } from "./answererRetry.js";

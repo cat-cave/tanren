@@ -80,7 +80,8 @@ export {
   // instead of failing the whole derive; a persistent failure fails loud after the bound.
   withAnswererRetry,
   isTransientAnswererError,
-  DEFAULT_ANSWERER_MAX_ATTEMPTS,
+  PersistentAnswererOutageError,
+  transientSignature,
   type AnswererRetryOptions,
   buildRunLoopBuildDriver,
   resolveConvergedProjectFacts,

@@ -9,6 +9,12 @@
 import { describe, expect, it } from "vitest";
 import { decideRunDisposition } from "../src/engine/workflow/runFinalizeAuthority.js";
 import { MissingCredentialError, UnscopedOrgError } from "../src/engine/credentials/resolveCredentials.js";
+// Hoisted to static imports (was a per-test `await import(...)`): the cold dynamic load
+// under full-suite parallel load could exceed the default per-test timeout — a flake, not
+// a real failure. These are pure error classes; a static import is behavior-identical.
+import { WorkspaceBootstrapError } from "../src/engine/workspace/index.js";
+import { CodexUsageLimitError } from "../src/engine/providers/codex.js";
+import { EmptyWriterCommitError } from "../src/engine/workflow/plannerRunCi.js";
 
 // PROGRESS facts (a different/first failure → re-drive, UNBOUNDED) vs a FIXED POINT (the same
 // failure recurring with no new work → escalate). NO attempt count.
@@ -26,15 +32,13 @@ describe("decideRunDisposition — RE-DRIVE: every random/transient/internal/cra
     expect(decideRunDisposition({ kind: "error", error: null }, PROGRESS).bucket).toBe("re_drive");
   });
 
-  it("a workspace-bootstrap fault (transient deps install) RE-DRIVES, not parks", async () => {
-    const { WorkspaceBootstrapError } = await import("../src/engine/workspace/index.js");
+  it("a workspace-bootstrap fault (transient deps install) RE-DRIVES, not parks", () => {
     expect(decideRunDisposition({ kind: "error", error: new WorkspaceBootstrapError("deps") }, PROGRESS).bucket).toBe(
       "re_drive",
     );
   });
 
-  it("a usage-limit window-exhausted fault RE-DRIVES (the walker re-attempts after the window)", async () => {
-    const { CodexUsageLimitError } = await import("../src/engine/providers/codex.js");
+  it("a usage-limit window-exhausted fault RE-DRIVES (the walker re-attempts after the window)", () => {
     expect(
       decideRunDisposition({ kind: "error", error: new CodexUsageLimitError("primary", "out") }, PROGRESS).bucket,
     ).toBe("re_drive");
@@ -77,8 +81,7 @@ describe("decideRunDisposition — RE-DRIVE: every random/transient/internal/cra
     }
   });
 
-  it("an empty-writer-commit fault (no commits between base and head) RE-DRIVES, never a hard internal strand (v35)", async () => {
-    const { EmptyWriterCommitError } = await import("../src/engine/workflow/plannerRunCi.js");
+  it("an empty-writer-commit fault (no commits between base and head) RE-DRIVES, never a hard internal strand (v35)", () => {
     const d = decideRunDisposition(
       { kind: "error", error: new EmptyWriterCommitError("tanren/run_1", "main") },
       PROGRESS,
@@ -123,8 +126,7 @@ describe("decideRunDisposition — GENUINE-HALT: only the four structural classe
     expect(d).toMatchObject({ bucket: "genuine_halt", reason: "human_decision" });
   });
 
-  it("an empty-writer-commit fault at a FIXED POINT GENUINE-HALTS as a persistent_failure (no silent stall)", async () => {
-    const { EmptyWriterCommitError } = await import("../src/engine/workflow/plannerRunCi.js");
+  it("an empty-writer-commit fault at a FIXED POINT GENUINE-HALTS as a persistent_failure (no silent stall)", () => {
     const err = new EmptyWriterCommitError("tanren/run_1", "main");
     expect(decideRunDisposition({ kind: "error", error: err }, PROGRESS).bucket).toBe("re_drive");
     const at = decideRunDisposition({ kind: "error", error: err }, FIXED_POINT);
