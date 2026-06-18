@@ -306,6 +306,31 @@ describe("WS-D3 design phase — elaboration", () => {
     expect(client.inserted).toHaveLength(0);
   });
 
+  it("(a') ACCEPTS a behavior covered by MULTIPLE surfaces (cardinality matches enforcement: appears ≥1, not exactly 1)", async () => {
+    const client = new FakeGraphClient(saasGraph);
+    // b_view is covered by TWO surfaces — a real flow spans surfaces. The phase enforces
+    // every behavior APPEARS (≥1), never exactly-one; the relaxed prompt matches this.
+    const multi: DesignAgentAnswer = {
+      ...saasAnswer,
+      coverage: [
+        ...saasAnswer.coverage,
+        { behaviorId: "b_view", personaId: "persona_operator", dimensionKey: "tokens", surface: "a run-detail drawer" },
+      ],
+    };
+    const result = await runDesignPhase({
+      client: client as never,
+      orgId: ORG,
+      projectId: PROJECT,
+      agent: fakeAgent(multi),
+      actor: ACTOR,
+      actorRef: { kind: "operator" },
+      seed: SEED,
+    });
+    // Both behaviors covered; the duplicate b_view coverage dedupes to ONE behaviorRef.
+    expect([...result.record.contract.behaviorRefs].sort()).toEqual(["b_config", "b_view"]);
+    expect(client.inserted).toHaveLength(1);
+  });
+
   it("(b) throws LOUDLY when coverage references an UNKNOWN persona id (no dangling ref)", async () => {
     const client = new FakeGraphClient(saasGraph);
     const bogus: DesignAgentAnswer = {

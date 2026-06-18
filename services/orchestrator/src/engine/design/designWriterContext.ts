@@ -21,7 +21,11 @@
 // "here's some default tokens" stub). A malformed persisted contract fails LOUDLY
 // upstream in the store's `mapRow` (re-parse through the schema) before it ever
 // reaches this render — a half-described contract is a loud failure, not a quiet
-// degrade.
+// degrade. And a contract ref that does NOT resolve against the entity graph (a
+// persona/behavior with no row, or off-scope under RLS) THROWS in
+// `resolveDesignContext` — the SAME loud posture the design oracle takes, so writer
+// and oracle resolve the identical contract or both fail loud (never a silent drop
+// that would build a thinner design than the oracle then bricks on).
 //
 // This module is the LOAD + RENDER seam only. The writer prompt assembly
 // (subtaskInnerLoop.ts) consumes the rendered block; the design ORACLE that
@@ -82,13 +86,22 @@ function bulletList(lines: readonly string[]): string[] {
 }
 
 // Render the personas a surface serves, resolved to names. `refs` is the ordered
-// persona-ref list (contract-level or a dimension's). Unresolved refs are SKIPPED
-// (the derive already drops dangling refs; this is belt-and-suspenders so a stale
-// ref never leaks an opaque id into the prompt). Empty ⇒ undefined (the caller
-// omits the line — for a dimension that means "applies to every persona on the
+// persona-ref list (contract-level or a dimension's). Every ref MUST be resolved in
+// `personasById` (the loader threw loud on a dangling ref before this render — the
+// SAME posture as the oracle's `resolvePersonas`); a missing entry is a programming
+// error and throws here too, never silently dropped. Empty `refs` ⇒ undefined (the
+// caller omits the line — for a dimension that means "applies to every persona on the
 // contract", a real all-personas state).
 function renderPersonaScope(refs: readonly string[], personasById: Map<string, ResolvedPersona>): string | undefined {
-  const names = refs.map((id) => personasById.get(id)?.name).filter((name): name is string => name !== undefined);
+  const names = refs.map((id) => {
+    const persona = personasById.get(id);
+    if (persona === undefined) {
+      throw new Error(
+        `design writer-context: personaRef '${id}' is not resolved (should have thrown in resolveDesignContext) — invariant violated`,
+      );
+    }
+    return persona.name;
+  });
   return names.length > 0 ? names.join(", ") : undefined;
 }
 
@@ -113,9 +126,15 @@ function renderDimension(dimension: DesignDimension, personasById: Map<string, R
 // description so the writer designs the surface for the ACTUAL role, not a guessed
 // one.
 function renderPersonas(context: ResolvedDesignContext): string[] {
-  const personas = context.contract.personaRefs
-    .map((id) => context.personasById.get(id))
-    .filter((p): p is ResolvedPersona => p !== undefined);
+  const personas = context.contract.personaRefs.map((id) => {
+    const persona = context.personasById.get(id);
+    if (persona === undefined) {
+      throw new Error(
+        `design writer-context: contract personaRef '${id}' is not resolved (should have thrown in resolveDesignContext) — invariant violated`,
+      );
+    }
+    return persona;
+  });
   if (personas.length === 0) return [];
   return [
     "Personas this design serves (build each surface for its resolved persona, never assume a default role):",
@@ -128,9 +147,15 @@ function renderPersonas(context: ResolvedDesignContext): string[] {
 // the SAME behaviors the implementation is driven by (the designer↔implementor
 // gap closed). Each is attributed to its persona and rendered given/when/then.
 function renderBehaviors(context: ResolvedDesignContext): string[] {
-  const behaviors = context.contract.behaviorRefs
-    .map((id) => context.behaviorsById.get(id))
-    .filter((b): b is ResolvedBehavior => b !== undefined);
+  const behaviors = context.contract.behaviorRefs.map((id) => {
+    const behavior = context.behaviorsById.get(id);
+    if (behavior === undefined) {
+      throw new Error(
+        `design writer-context: contract behaviorRef '${id}' is not resolved (should have thrown in resolveDesignContext) — invariant violated`,
+      );
+    }
+    return behavior;
+  });
   if (behaviors.length === 0) return [];
   return [
     "Behaviors this design must cover (every one needs a designed surface/flow):",
@@ -199,8 +224,12 @@ export function designResolverActor(orgId: string, projectId: string): ActorCont
 /**
  * Resolve a persisted design contract's first-class `personaRefs`/`behaviorRefs`
  * against the project's REAL entity graph (the moat — strict resolution, no
- * guessing). A ref with no live row is DROPPED (no dangling ref leaks into the
- * prompt); the underlying reads are org-scoped (RLS) AND actor-authorized.
+ * guessing). A ref that does NOT resolve to a live row (missing or off-scope under
+ * RLS) is malformed graph state and throws LOUDLY — the SAME posture as the design
+ * oracle's `resolvePersonas`/`resolveBehaviors`. This keeps writer and oracle
+ * SYMMETRIC: both resolve the identical contract or both fail loud; the writer never
+ * silently builds a thinner design off a contract the oracle would brick on. The
+ * underlying reads are org-scoped (RLS) AND actor-authorized.
  */
 export async function resolveDesignContext(
   client: QueryClient,
@@ -216,23 +245,31 @@ export async function resolveDesignContext(
   const personasById = new Map<string, ResolvedPersona>();
   for (const id of personaRefIds) {
     const persona = await PersonaStore.get(client, id, actor);
-    if (persona !== undefined) {
-      personasById.set(id, { id: persona.id, name: persona.name, description: persona.description });
+    if (persona === undefined) {
+      throw new Error(
+        `design writer-context: contract personaRef '${id}' does not resolve to a persona (missing or off-scope) — ` +
+          "malformed graph state (parity with the design oracle; never a silent drop)",
+      );
     }
+    personasById.set(id, { id: persona.id, name: persona.name, description: persona.description });
   }
   const behaviorsById = new Map<string, ResolvedBehavior>();
   for (const id of contract.behaviorRefs) {
     const behavior = await BehaviorStore.get(client, id, actor);
-    if (behavior !== undefined) {
-      behaviorsById.set(id, {
-        id: behavior.id,
-        persona: personasById.get(behavior.personaId)?.name ?? behavior.personaId,
-        title: behavior.title,
-        given: behavior.given,
-        when: behavior.when,
-        thenOutcome: behavior.then,
-      });
+    if (behavior === undefined) {
+      throw new Error(
+        `design writer-context: contract behaviorRef '${id}' does not resolve to a behavior (missing or off-scope) — ` +
+          "malformed graph state (parity with the design oracle; never a silent drop)",
+      );
     }
+    behaviorsById.set(id, {
+      id: behavior.id,
+      persona: personasById.get(behavior.personaId)?.name ?? behavior.personaId,
+      title: behavior.title,
+      given: behavior.given,
+      when: behavior.when,
+      thenOutcome: behavior.then,
+    });
   }
   return { contract, personasById, behaviorsById };
 }
