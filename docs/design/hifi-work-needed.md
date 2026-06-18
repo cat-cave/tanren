@@ -1,12 +1,20 @@
 # Hi-fi work-needed catalog
 
 A standing, code-grounded work-list **for the in-repo hi-fi prototype**
-(`tanren-hi-fidelity/`). It catalogs everywhere the frozen hi-fi is either
-**missing** a feature the built product now has, has **drifted** from built
-reality, or carries a **hi-fi-only** vision that has no code counterpart (so the
-revision should keep, not "build", it). The intended consumer is **a design tool**
-(Claude Design / claude.ai/design): this doc is taken into that tool to revise the
-hi-fi bundle and produce its next version.
+(`tanren-hi-fidelity/`) — the hand-done design reference for **Tanren's OWN
+dashboard**. It catalogs everywhere the frozen hi-fi is either **missing** a feature
+the built product now has, has **drifted** from built reality, or carries a
+**hi-fi-only** vision that has no code counterpart (so the revision should keep, not
+"build", it). The intended consumer is **a design tool** (Claude Design /
+claude.ai/design): this doc is taken into that tool to revise the hi-fi bundle and
+produce its next version.
+
+> **Not to be confused with the native design subsystem.** This catalog is about
+> revising the human reference for Tanren's dashboard. The way Tanren designs the
+> apps it _builds_ — the native, in-DAG design pipeline (`DesignContract` → design
+> agent/phase → writer injection → design oracle) — is a separate, now-built
+> concern; see `docs/roadmap/native-design-subsystem.md`. Items below are hi-fi
+> bundle edits, not specs for that subsystem.
 
 ## Relationship to the two existing design docs
 

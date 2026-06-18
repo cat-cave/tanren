@@ -1,6 +1,13 @@
 # Architecture Checks Contract
 
-`scripts/check-architecture.mjs` enforces project-specific rules that span TypeScript, SQL, YAML, Dockerfiles, shell, and docs. Use oxlint for standard TypeScript linting; keep Tanren-specific invariants here.
+`scripts/check-architecture.mjs` enforces project-specific rules that span TypeScript, SQL, YAML, Dockerfiles, shell, and docs. Use oxlint for standard TypeScript linting; keep Tanren-specific invariants here. The whole family runs as `check:architecture` (wired into root `check` / `just ci` and surfaced via `just architecture`); every diagnostic exits non-zero, so a new violation fails CI.
+
+`check-architecture.mjs` stays the orchestrator and the 500-line cap keeps it lean, so the heavier scanner families live in sibling modules it imports and folds into the single exit-1 result set:
+
+- `scripts/check-architecture-substrate.mjs` — the host-isolation substrate rules (process-spawn, docker-exec, host bind mounts, Docker-API-allocator-only).
+- `scripts/check-architecture-stubs.mjs` — `no-production-stubs` (the stub-ban + its one-entry allowlist).
+- `scripts/check-architecture-structure.mjs` — the structural ratchets (complexity / params / deep-import caps), `no-mock-only-tests`, and `e2e-no-mock-imports`.
+- `scripts/check-architecture-timeouts.mjs` — `no-arbitrary-timeouts` (the progress-based-only gate; see below).
 
 ## Checks
 
@@ -20,6 +27,7 @@
 - `contract-schema-drift-check-wired`: root `package.json` must keep `check:contract-schema-drift` wired to `scripts/contract-schema-export.mjs`, and root `check` must run it (directly or via `just ci`). This pins the unified JSON-Schema export (Track C §3) — `contracts/json/**` — against drift from its Zod sources.
 - `required-docs-present`: `AGENTS.md`, core playbooks, and this contract must exist.
 - `no-production-stubs`: in any `**/src/**` non-test file, a stub / mock / deterministic-stand-in / no-op-policy identifier (`createDeterministic*Answerer`, a CamelCase-delimited `stub`/`noop`/`fake`/`mock` word — both casings, e.g. `StubChannel` and `noopConflictResolver` — and `templated*` generators) may not be **constructed** (`new …(`) or **default-assigned** (`?? …` / `|| …` / `= …(`). A bare type definition is not a construction and is not flagged. Lives in the sibling module `scripts/check-architecture-stubs.mjs` (keeps `check-architecture.mjs` under the 500-line cap). See the allowlist below.
+- `no-arbitrary-timeouts`: in any `**/src/**` non-test file, an arbitrary timeout / retry-cap / attempt-cap / wall-clock deadline is forbidden — every hang-detection / robustness mechanism must be **progress / sign-of-life based** (the `ActivityWatchdog` / `LivenessProbe` / `retryUntilConverged` model), never time-based. "Ten minutes is nothing to an AI agent," so even a no-output-for-N-minutes watchdog is a disguised timeout and is flagged. The scanner catches: (a) total-duration KILL timers (`setTimeout(() => { … kill/throw/reject/abort … }, …)`); (b) fixed LOOP CAPS (`max*Attempts/Polls/Iter/Retries/Tries/Stall`); (c) whole-op DEADLINES (`Date.now() + … (deadline|budget)`); (d) fixed QUIET-WINDOW watchdogs; (e) banned identifiers (`DEFAULT_TIMEOUT_MS`, `*_TIMEOUT_MS`, `MAX_*_ATTEMPTS`, `maxRunHours`, …). **Blessed** (not violations): poll intervals, backoff spacing, heartbeat cadence, connect-establishment timeouts, lease windows, token TTLs, debounce, the progress-based primitives, and the finite identifier allowlist (`KEYGEN_MAX_ATTEMPTS`, `MAX_NODE_TIMER_DELAY_MS`, the structural `maxIterations = batchSize + 1`). Two bless mechanisms: a per-line `// arch-allow: timeout-class <reason>` annotation and the enumerated identifier allowlist in `check-architecture-timeouts.mjs`. The gate is fully **enforced** (exit-1) — every pre-existing site has migrated to a progress-based primitive, so it is now a pure non-regression gate, not a migration checklist.
 
 ## no-production-stubs allowlist
 
@@ -35,7 +43,7 @@ Note: a **hard-throw** unconfigured seam (`UnconfiguredAllocator`, `Unconfigured
 
 ## Structural ratchets (Track B wave 3)
 
-These three live in the sibling module `scripts/check-architecture-structure.mjs` (kept separate so `check-architecture.mjs` stays under the 500-line cap). They are heuristic, regex/brace-matching scanners — not a real AST — and each is a **non-regressing ratchet**: the threshold is pinned at or just above the current repo maximum so existing code passes today, and is meant to be tightened in a later wave as the flagged hotspot is refactored. Tightening a cap is the deliverable, not an exception.
+The structural ratchets live in the sibling module `scripts/check-architecture-structure.mjs` alongside the two test-quality checks documented in the next two sections (`no-mock-only-tests` and `e2e-no-mock-imports`) — kept separate so `check-architecture.mjs` stays under the 500-line cap. The three ratchets are heuristic, regex/brace-matching scanners — not a real AST — and each is a **non-regressing ratchet**: the threshold is pinned at or just above the current repo maximum so existing code passes today, and is meant to be tightened in a later wave as the flagged hotspot is refactored. Tightening a cap is the deliverable, not an exception.
 
 - `cyclomatic-complexity-cap`: per-function heuristic complexity (1 + one per `if`/`case`/`&&`/`||`/ternary `?`/`catch`/`for`/`while`; `??`, `?.`, and `?:` are not branches) on `services/orchestrator/src/engine/workflow/**` and `services/orchestrator/src/engine/answerers/**`. **Measured current max: 23** (`runPlannerLoopWorkflow` in `engine/workflow/plannerRun.ts`). **Cap: 25.** Ratchet target: decompose `plannerRun` and lower the cap toward ~15.
 - `max-params-cap`: per-function positional parameter count on the same critical directories. **Measured current max: 6** (a step helper in `engine/workflow/helloRun.ts`). **Cap: 6** (pinned at current max). New functions that would exceed it must thread an options object.
