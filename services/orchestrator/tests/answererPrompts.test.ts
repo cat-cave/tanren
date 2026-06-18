@@ -146,6 +146,21 @@ describe("buildCheckerPrompt — shared body", () => {
     expect(prompt).toContain("only basis is that the diff is empty / has no changes");
     expect(prompt).toContain("emit an EMPTY findings list (the task is complete)");
   });
+
+  it("guards an EMPTY acceptance-criteria list with an explicit (none) line — never a dangling 'judge each one:' header", () => {
+    const prompt = buildCheckerPrompt({
+      specTitle: "S",
+      specDescription: "D",
+      acceptanceCriteria: [],
+      baselineSha,
+      outputInstructions: ["X"],
+    });
+    expect(prompt).toContain("Explicit acceptance criteria (judge each one):");
+    expect(prompt).toContain("- (none — judge against the subtask intent only)");
+    // The header is never followed immediately by the subtask/closing block (the misleading
+    // "judge each one:" then silence) — the guard line always sits between them.
+    expect(prompt).not.toContain("(judge each one):\n\n");
+  });
 });
 
 describe("buildAuditorPrompt — shared body", () => {
@@ -213,5 +228,16 @@ describe("buildAuditorPrompt — shared body", () => {
     expect(withCheckAnswer).not.toContain("Executed subtasks:");
     // specDescription omitted (structured path) → no Spec description line.
     expect(withCheckAnswer).not.toContain("Spec description:");
+  });
+
+  it("guards an EMPTY acceptance-criteria list with an explicit (none) line", () => {
+    const prompt = buildAuditorPrompt({
+      specTitle: "S",
+      acceptanceCriteria: [],
+      baselineSha,
+      outputInstructions: ["X"],
+    });
+    expect(prompt).toContain("Acceptance criteria:");
+    expect(prompt).toContain("- (none — judge against the subtask intent only)");
   });
 });

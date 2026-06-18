@@ -56,7 +56,6 @@ import type {
   EagerBaseNodeUpsert,
 } from "./plannerRunJjLocalBootstrap.js";
 import {
-  applyReviewVerdict,
   applyScopedRunCredentials,
   buildFinalizeRunState,
   emitPrepBootstrapDeferred,
@@ -64,17 +63,18 @@ import {
   finalizeNonPassOutcome,
   finalizeWorkflowThrow,
   markRunRunning,
-  type MergeGateBudget,
   nonPassDetailFor,
   releaseRunnerWithCleanupProof,
   type RunCredentialScoping,
   runnerPayload,
   supersedeQueuedPlannerTask,
 } from "./plannerRunFinalize.js";
+import { applyReviewVerdict, type MergeGateBudget } from "./plannerRunSelfHeal.js";
 import type { RedriveHistoryReader } from "./plannerRunRedrive.js";
 import type { PublishedDraftPullRequest } from "./githubDraftPr.js";
 import type { PlannerRejectionFeedback } from "./planner/planner.js";
 import {
+  type GateAttempt,
   mergeForRun,
   pollReviewForRun,
   reviewerRejection,
@@ -342,10 +342,11 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
     // while the reviewer's feedback keeps CHANGING (the writer is addressing it — progress);
     // it escalates only at a FIXED POINT (the SAME review feedback recurs unchanged) — the
     // shared `convergenceDetector` over the review-feedback signatures, NOT a count.
-    const reviewReworkSignatures: string[] = [];
+    const reviewReworkAttempts: GateAttempt[] = [];
     // SELF-HEAL (apex v35): the pre_merge-gate→writer self-heal state — also UNBOUNDED while
-    // the gate error changes, halting only at a fixed point (see `mergeGateSelfHeal`).
-    const mergeGateBudget: MergeGateBudget = { used: 0, signatures: [] };
+    // the gate error changes OR its error count shrinks, halting only at a genuine fixed point
+    // (see `mergeGateSelfHeal`).
+    const mergeGateBudget: MergeGateBudget = { used: 0, attempts: [] };
     const seedRejections: PlannerRejectionFeedback[] = [];
     const entityRiskProducer = buildEntityRiskProducer(input, allocation.target, workspacePath);
     let outcome: SubtaskLoopOutcome | undefined, pullRequest: PublishedDraftPullRequest | undefined;
@@ -443,7 +444,7 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
         appendEvent,
         { verdict: review.verdict, rejection: reviewerRejection(review, pullRequest.branch) },
         seedRejections,
-        reviewReworkSignatures,
+        reviewReworkAttempts,
       );
       if (reviewMove === "merge") break;
       if (reviewMove === "rework") continue;

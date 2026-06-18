@@ -315,11 +315,15 @@ export function writerFailureReason(failureKind: "crashed" | "timeout"): string 
   return "the previous attempt CRASHED mid-subtask before finishing — re-attempt it, committing progress as you go.";
 }
 
-// A standing toolchain instruction prepended to every writer prompt.
+// A standing toolchain instruction prepended to every writer prompt. Stack-agnostic (the
+// project DECLARES its own dependencies + toolchain — JS/TS, Rust, Python, a translation
+// project, anything): name no specific tool here. The rule is about REALNESS, not a stack.
 const WRITER_TOOLCHAIN_INSTRUCTION =
-  "Declare real, published devDependencies and a real lockfile. NEVER create local " +
-  "workspace stub packages, `workspace:*` placeholders, or fake binaries for typescript/eslint/vitest " +
-  "or any toolchain — use the real published packages.";
+  "Use the project's OWN declared dependencies and toolchain (whatever the project actually " +
+  "declares — its real manifest + lockfile / pinned versions). Declare real, published, " +
+  "resolvable dependencies. NEVER stub, fake, vendor, or shim a toolchain binary or " +
+  "dependency, and never invent placeholder versions — use the real published artifacts the " +
+  "project's declared toolchain resolves.";
 
 // How the writer's change will be GRADED (spec-loop redesign §WRITER, workstream 1).
 // Steers the writer to satisfy the gate on the first pass: run the fast deterministic
