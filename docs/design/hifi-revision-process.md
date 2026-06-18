@@ -1,10 +1,20 @@
 # Hi-fi revision process
 
 How an incoming hi-fidelity design revision becomes work. The full-product
-vision is mocked in **Claude Design** (claude.ai/design), exported as a handoff
-bundle, and lands in `tanren-hi-fidelity/`. This document is the SOP for turning
-the _next_ revision into tracked changes — it is the process; the bundle is the
-artifact and the audit (`phase-3-hifi-gaps.md`) is the output.
+vision **for Tanren's own dashboard** is mocked in **Claude Design**
+(claude.ai/design), exported as a handoff bundle, and lands in
+`tanren-hi-fidelity/`. This document is the SOP for turning the _next_ revision
+into tracked changes — it is the process; the bundle is the artifact and the audit
+(`phase-3-hifi-gaps.md`) is the output.
+
+> **Scope — this is about Tanren's dashboard, not the products Tanren builds.** The
+> hi-fi bundle is a **human reference** so the build recreates Tanren's _own_ UI; the
+> build engine never reads it. Designing the apps Tanren _ships_ is a separate,
+> now-built concern: the **native design subsystem** (`DesignContract` → design
+> agent/phase → writer injection → design oracle, all in one DAG, no handoff). Its
+> canonical doc is `docs/roadmap/native-design-subsystem.md`. Do not route hi-fi
+> revisions through that subsystem, and do not treat this SOP as the way Tanren
+> designs customer products — these are two different design pipelines.
 
 ## Inputs and where they live
 
