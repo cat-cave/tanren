@@ -14,6 +14,7 @@
 import { answererOutputSchemaFor, ReviewAnswer } from "../../answerers/schemas/index.js";
 import { fenceAsData } from "../../answerers/promptData.js";
 import type { AnswererAdapter } from "../../providers/types.js";
+import { runAnswererStageWithRecovery } from "../loopStageRecovery.js";
 
 export interface SimulatedReviewContext {
   specTitle: string;
@@ -45,11 +46,17 @@ export async function runSimulatedReviewer(
 ): Promise<SimulatedReviewResult> {
   const outputSchema = answererOutputSchemaFor("review", ReviewAnswer);
   const prompt = buildSimulatedReviewerPrompt(input.context);
-  const verdict = await reviewer.runAnswerer({
-    prompt,
-    workspace: input.workspace,
-    outputSchema,
-  });
+  // Transient-stall recovery on the MERGE path (v39 finding): the simulated-reviewer answerer
+  // is the other model call the review→merge path makes. A transient stall here used to
+  // propagate up and abort the review stage; re-drive it IN PLACE via the SAME shared primitive
+  // the spec-loop + conflict-resolver use, escalating LOUDLY only at a proven fixed point.
+  const verdict = await runAnswererStageWithRecovery(outputSchema.name, () =>
+    reviewer.runAnswerer({
+      prompt,
+      workspace: input.workspace,
+      outputSchema,
+    }),
+  );
   return { verdict, schemaId: outputSchema.name };
 }
 
