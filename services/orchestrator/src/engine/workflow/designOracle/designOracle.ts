@@ -24,6 +24,19 @@
 //     behaviorRef with no row, or off-scope under RLS) is MALFORMED graph state and
 //     throws LOUDLY — the oracle never silently drops an obligation it cannot resolve.
 //
+// RE-ELABORATION GAP (loud, not silent): the design phase runs ONCE at derive, so the
+// contract's `behaviorRefs` are the derive-time behavior set. A multi-spec build that
+// adds NEW behaviors downstream leaves them OUTSIDE the contract — the design was never
+// re-elaborated to cover them, and the moat ("exhaustive behavior coverage") silently
+// degrades to "exhaustive as of the first interview". The oracle detects this: it
+// compares the contract's `behaviorRefs` against the project's FULL CURRENT behavior
+// set and emits an explicit P2 Finding per behavior added after design (rather than
+// silently verifying only the stale set). The finding flows into the SAME triage as
+// every other oracle finding, surfacing the gap (and re-driving) until the design is
+// re-elaborated. The full automatic re-elaboration trigger (re-running the design phase
+// to mint a new contract version on a behavior-graph change) is the durable follow-up;
+// this loud-gap detection is the no-silent-fallback floor it builds on.
+//
 // WIRING SEAM (minimal by design — WS-D2 owns the writer-injection side): this module
 // exposes `runDesignOracleStage`, which returns the normalized findings + the declared
 // verification mode + summary. The live gate / re-drive integration (appending the
@@ -139,13 +152,71 @@ export async function runDesignOracleStage(input: DesignOracleStageInput): Promi
     outputSchema,
   });
 
+  // RE-ELABORATION GAP — loud-surface behaviors added to the project AFTER the design
+  // phase ran (the contract's `behaviorRefs` are the derive-time set). Each such
+  // behavior is un-designed: the contract was never re-elaborated to cover it. Emit an
+  // explicit Finding per uncovered behavior so the gap is surfaced + re-driven, never
+  // silently passed (the moat would otherwise degrade to "exhaustive as of derive").
+  const reElaborationFindings = await detectReElaborationGap(input, contract.behaviorRefs);
+
   return {
     hasContract: true,
     contractVersion: record.version,
     verificationMode: verdict.verificationMode,
     summary: verdict.summary,
-    findings: verdict.findings.map((finding) => normalizeFinding(finding)),
+    findings: [...reElaborationFindings, ...verdict.findings.map((finding) => normalizeFinding(finding))],
   };
+}
+
+/**
+ * Detect behaviors added to the project AFTER the design phase: the project's FULL
+ * current behavior set minus the contract's `behaviorRefs`. Each leftover is a behavior
+ * the design has never covered (the phase runs ONCE at derive) — surfaced as an explicit
+ * P2 Finding ("behavior X added after design; design not re-elaborated") so it enters
+ * triage and re-drives, rather than the oracle silently verifying only the stale set.
+ *
+ * Domain-general: it reasons over first-class behavior entities, never any product
+ * specifics. Reads are org-scoped (RLS) + actor-authorized, exactly like the resolution
+ * above. A behavior that resolves above is necessarily in the project set, so this
+ * never double-flags a covered ref.
+ */
+async function detectReElaborationGap(
+  input: DesignOracleStageInput,
+  behaviorRefs: ReadonlyArray<string>,
+): Promise<Finding[]> {
+  const covered = new Set(behaviorRefs);
+  // The project's behavior set is enumerated org-scoped; an actor with no org has no
+  // tenant to enumerate against (mirrors the writer-context's no-org guard) — there is
+  // no project behavior set to diff, so no re-elaboration gap to surface.
+  if (input.actor.orgId === null) return [];
+  const personaRows = await PersonaStore.listForProject(
+    input.client,
+    { orgId: input.actor.orgId, projectId: input.projectId },
+    input.actor,
+  );
+  const findings: Finding[] = [];
+  for (const persona of personaRows) {
+    const rows = await BehaviorStore.listForPersona(input.client, persona.id, input.actor);
+    for (const row of rows) {
+      if (covered.has(row.id)) continue;
+      findings.push({
+        // Stable per (project, behavior) so a re-audit dedupes the same gap.
+        id: `design-re-elaboration:${input.projectId}:${row.id}`,
+        severity: "P2",
+        title: `behavior '${row.title}' added after design; design not re-elaborated`,
+        body:
+          `Behavior '${row.id}' ("${row.title}") exists in the project but is NOT in the HEAD design ` +
+          "contract's behaviorRefs — it was added after the design phase ran (the phase runs once at " +
+          "derive). The design has never covered this behavior, so its persona-scoped surface/flow is " +
+          "undesigned. Re-elaborate the design contract to cover the FULL current behavior set " +
+          "(DesignContractStore mints a new version — never-discard).",
+        fixHint:
+          "Re-run the design phase to author a new DesignContract version covering this behavior " +
+          `(behaviorId '${row.id}', persona '${persona.id}').`,
+      });
+    }
+  }
+  return findings;
 }
 
 async function resolvePersonas(

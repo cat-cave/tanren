@@ -302,6 +302,98 @@ describe("runDesignOracleStage", () => {
     expect(prompts[0]).toContain("[behavior_chapter] (persona persona_reader) Read a chapter");
   });
 
+  // RE-ELABORATION GAP — a behavior added to the project AFTER the design phase ran is
+  // NOT in the contract's behaviorRefs. The oracle must surface it as a LOUD finding
+  // (the design was never re-elaborated to cover it), not silently verify the stale set.
+  it("surfaces a behavior added after design as a P2 re-elaboration finding (loud, not silent)", async () => {
+    const { adapter } = fakeAdapter({ verificationMode: "static", findings: [], summary: "ok" });
+    // A client that ALSO routes the project-wide list queries the gap-detection issues:
+    // listForProject (personas WHERE org_id) + listForPersona (behaviors WHERE persona_id).
+    const now = new Date("2026-01-01T00:00:00Z");
+    const personaRow = {
+      id: "persona_admin",
+      scope: "org",
+      org_id: ORG,
+      project_id: null,
+      name: "Admin",
+      description: "runs the org",
+      metadata: {},
+      created_at: now,
+      updated_at: now,
+    };
+    const behaviorRow = (id: string, title: string) => ({
+      id,
+      persona_id: "persona_admin",
+      title,
+      given: "g",
+      when: "w",
+      then: "t",
+      description: null,
+      metadata: {},
+      created_at: now,
+      updated_at: now,
+    });
+    const client = {
+      async query(text: string, params?: unknown[]) {
+        if (text.includes("FROM design_contracts")) {
+          return {
+            rows: [
+              {
+                id: "design_1",
+                org_id: ORG,
+                project_id: "project_1",
+                version: 1,
+                domain: "saas-web",
+                contract: webContract(),
+              },
+            ],
+          };
+        }
+        // PersonaStore.listForProject — enumerate the project's personas.
+        if (text.includes("FROM personas") && text.includes("org_id = $1")) {
+          return { rows: [personaRow] };
+        }
+        // PersonaStore.get — by id (authorization + ref resolution).
+        if (text.includes("FROM personas")) {
+          return (params?.[0] as string) === "persona_admin" ? { rows: [personaRow] } : { rows: [] };
+        }
+        // BehaviorStore.listForPersona — the project's CURRENT behavior set: the designed
+        // one (behavior_invite) PLUS one added after design (behavior_export).
+        if (text.includes("FROM behaviors") && text.includes("persona_id = $1")) {
+          return {
+            rows: [behaviorRow("behavior_invite", "Invite a teammate"), behaviorRow("behavior_export", "Export data")],
+          };
+        }
+        // BehaviorStore.get — by id (ref resolution of the contract's behaviorRefs).
+        if (text.includes("FROM behaviors")) {
+          const id = (params?.[0] as string) ?? "";
+          return id === "behavior_invite"
+            ? { rows: [behaviorRow("behavior_invite", "Invite a teammate")] }
+            : { rows: [] };
+        }
+        throw new Error(`unexpected query: ${text}`);
+      },
+    };
+    const result = await runDesignOracleStage({
+      client,
+      projectId: "project_1",
+      actor,
+      actorRef,
+      adapter,
+      baselineSha,
+      timeoutMs: 1000,
+      workspacePath: "/tmp/ws",
+    });
+    expect(result.hasContract).toBe(true);
+    // behavior_export is in the project but NOT in the contract's behaviorRefs ⇒ a loud
+    // P2 re-elaboration finding; behavior_invite (designed) is NOT flagged.
+    const gap = result.findings.find((f) => f.id === "design-re-elaboration:project_1:behavior_export");
+    expect(gap).toBeDefined();
+    expect(gap?.severity).toBe("P2");
+    expect(gap?.title).toContain("added after design");
+    expect(result.findings.some((f) => f.id.includes("behavior_invite"))).toBe(false);
+  });
+
   it("fails LOUDLY when the answerer returns a malformed verdict (omitted findings)", async () => {
     const adapter: AnswererAdapter<DesignOracleAnswer> = {
       kind: "answerer",
