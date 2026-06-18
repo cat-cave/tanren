@@ -8,10 +8,13 @@
 //
 // BINDING (no_silent_fallbacks + transient-not-tolerated): a TRANSIENT failure — a
 // per-call timeout (the hang-detector firing on a slow-but-working call), a 5xx /
-// network blip, or a transient codex/transport error — must NEVER fail the whole
-// operation terminally. It RETRIES (UNBOUNDED + exponential backoff). A PERSISTENT
-// failure (a usage-limit / window-exhausted error, an auth/permission error) is NOT
-// retried — those do not self-heal in seconds — and fails LOUD at once.
+// network blip, a transient codex/transport error, or a transient SSH-CONNECT failure
+// (the runner momentarily saturated so a new SSH connection could not ESTABLISH within
+// the connect window; apex v37 — `ssh_failed` / "SSH connection failed to establish …",
+// it recovers in seconds) — must NEVER fail the whole operation terminally. It RETRIES
+// (UNBOUNDED + exponential backoff). A PERSISTENT failure (a usage-limit / window-
+// exhausted error, an auth/permission error, a host-key mismatch) is NOT retried —
+// those do not self-heal in seconds — and fails LOUD at once.
 //
 // TIMEOUT-ERADICATION (feedback_no_timeouts_progress_based, BINDING): there is NO
 // fixed attempt COUNT. A transient failure retries UNBOUNDED while it is making
@@ -28,6 +31,7 @@
 
 import { assessStructuralProgress, type AttemptSignature } from "../../workflow/convergenceDetector.js";
 import { recoverableRetryDelayMs, RECOVERABLE_RETRY_DELAYS_MS } from "../../merge/retrySchedule.js";
+import { isTransientSshConnectError } from "../../ssh/transientRetry.js";
 
 export interface AnswererRetryOptions {
   /** Injectable backoff sleep (tests pass a no-op so the retries run instantly). */
@@ -52,6 +56,13 @@ export function isTransientAnswererError(error: unknown): boolean {
   if (name === "CodexUsageLimitError" || name === "ClaudeUsageLimitError") {
     return false;
   }
+  // A typed transient surfaced by the answerer adapter — a provider STALL (no sign of life)
+  // or a transient SSH-CONNECT failure (the provider now throws the typed transient for an
+  // `ssh_failed` connect blip). Both self-heal on a re-drive, so they RETRY here just as the
+  // spec-loop's `loopStageRecovery` re-drives them — never terminal.
+  if (name === "AnswererStalledError") {
+    return true;
+  }
   const message = errorMessage(error).toLowerCase();
   if (message === "") {
     return false;
@@ -68,6 +79,16 @@ export function isTransientAnswererError(error: unknown): boolean {
   // A transient transport / gateway status (5xx-ish) or a network blip — the answerer
   // ran but the call hit an upstream wobble that self-heals on a re-attempt.
   if (/\b(502|503|504|408|429)\b|bad gateway|service unavailable|gateway timeout/u.test(message)) {
+    return true;
+  }
+  // A transient SSH/transport CONNECT failure — the runner was momentarily saturated and a
+  // new SSH connection could not be ESTABLISHED within the connect window (`ssh_failed` /
+  // "SSH connection failed to establish …"), or a connection-level reset/refused/closed
+  // blip. The runner recovers in seconds, so this RETRIES — it is NEVER terminal (apex
+  // v37: a 30s connect-establish timeout fired mid-94s codex run, then recovered). The
+  // shared SSH classifier OWNS this (it also excludes a non-self-healing host-key
+  // mismatch), so EVERY consumer of an SSH/transport failure classifies it uniformly.
+  if (isTransientSshConnectError(error)) {
     return true;
   }
   if (
@@ -100,7 +121,17 @@ function errorMessage(error: unknown): string {
  * 03:01" and "timed out at 03:02" are the SAME signal, not spuriously different).
  */
 export function transientSignature(error: unknown): string {
+  // The typed transient (a provider stall, incl. the SSH-connect blip the adapter now
+  // surfaces as a stall) keys to its OWN stable class — an identical stall recurring at the
+  // saturated backoff converges to a fixed point (a wedged runner, escalated loud).
+  if (errorName(error) === "AnswererStalledError") return "stalled";
   const message = errorMessage(error).toLowerCase();
+  // An SSH/transport CONNECT failure keys to its OWN stable class — so a sustained,
+  // IDENTICAL ssh-connect failure converges to a fixed point (a real runner outage,
+  // escalated loud), distinct from a generic transport blip. Checked before the
+  // connect-establishment "timeout" wording so an `ssh_failed` connect-timeout reads as
+  // the ssh-transport class, not the generic timeout class.
+  if (/ssh_failed|ssh connection failed to establish/u.test(message)) return "ssh-connect";
   if (/timed out|timeout|etimedout/u.test(message)) return "timeout";
   const status = /\b(502|503|504|408|429)\b/u.exec(message);
   if (status !== null) return `http-${status[1]}`;
