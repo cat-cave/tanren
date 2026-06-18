@@ -44,9 +44,11 @@
 > base + PR-base retarget walk (`walker-jj-local-integration-design.md` §3.2/§3.3),
 > a net-keep mechanism whose only open question is a possible rename off the
 > "speculative" vocabulary. The live cutover paths are **first exercised
-> end-to-end by the next apex run** — apex v32 halted at scaffold-bootstrap before
-> reaching a merge, so a real merge through the jj/`MergeAuthority` path is the open
-> live-validation item (the engine is the single path regardless).
+> end-to-end by an apex run that reaches a merge** — none has yet (apex v32 halted
+> at scaffold-bootstrap before a merge; v36 recovered to 10/11 on template creation
+> but did not close the product→deploy loop; v37 has an e2e-readiness verdict but
+> has not run live), so a real merge through the jj/`MergeAuthority` path is the open
+> live-validation item (the engine is the single path on `main` regardless).
 
 ## 0. The governing principle — guaranteed-internal vs best-effort-external
 
@@ -257,9 +259,11 @@ events through an explicit compatibility read-model, not silent abandonment.
 The waves below are **merged**; the per-wave status is inline. The kill-switch flags
 have since been **deleted** (the WS-A/WS-B series) — each live path is unconditional,
 so "(flag-on)" below means "merged then made the single path." A real merge through
-the live jj/`MergeAuthority` path is the open live-validation item (apex v32 halted at
-scaffold-bootstrap before reaching a merge), but the engine is the single path
-regardless (see the status header).
+the live jj/`MergeAuthority` path is the open live-validation item (no apex run has
+reached a merge — v32 halted at scaffold-bootstrap, v36 recovered to 10/11 on
+template creation without closing the product→deploy loop, v37 has only an
+e2e-readiness verdict), but the engine is the single path regardless (see the status
+header).
 
 **Wave 0 — lock the design (this doc). DONE.** The four seam contracts +
 `integration_nodes` schema + `auditPosture` policy shape + the guaranteed/best-effort
@@ -309,8 +313,10 @@ model), and `CLAUDE.md`. Code must embody the doctrine (the former doc/reality m
 
 **Back to apex (the live-validation vehicle):** rebuild the stack on the cutover
 `main` → re-provision (codex/github/vercel over the API) → fresh derive (v+1) →
-drive the autonomy loops. apex is the single path's first end-to-end exercise:
-**apex v32 halted at scaffold-bootstrap and never reached a merge**, so a real merge
-through the live jj/`MergeAuthority` path is still the open validation item. The
-cutover itself is complete — the engine is the single path whether or not a given
-apex run reaches a merge.
+drive the autonomy loops. apex is the single path's first end-to-end exercise, and
+**no apex run has reached a merge yet**: v32 halted at scaffold-bootstrap; v36
+recovered to 10/11 on template creation but did not close the product→deploy loop;
+v37 has an e2e-readiness verdict but has not run live. So a real merge through the
+live jj/`MergeAuthority` path is still the open validation item. The cutover itself
+is complete — the engine is the single path whether or not a given apex run reaches
+a merge.

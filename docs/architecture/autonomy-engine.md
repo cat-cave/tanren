@@ -27,10 +27,14 @@ comments reference them, so the anchored sections survive at this path.
 > path is unconditional, the dependent run jj-assembles its base from the real
 > ancestor PR-head refs (no synthesized `tanren/integ` ref), and the legacy
 > `speculative_base` + `integrated_ancestor_shas` columns are dropped. These live
-> paths are **first exercised end-to-end by the next apex run** — apex v32 halted at
-> scaffold-bootstrap before reaching a merge, so a real merge through the
-> jj/`MergeAuthority` path is the open live-validation item (the engine is the single
-> path regardless). §2b/§2c below are rewritten to the never-discard reality; the
+> paths are **first exercised end-to-end by an apex run that closes the
+> product→merge→deploy loop** — no such run has landed yet (apex v32 halted at
+> scaffold-bootstrap before a merge; v36 proved the #601 recovery to 10/11 on
+> template creation but did not close the product→deploy loop; v37 has an
+> e2e-readiness verdict but has not run live). A real merge through the
+> jj/`MergeAuthority` path is therefore the open live-validation item — the engine
+> is the single path on `main` regardless. §2b/§2c below are rewritten to the
+> never-discard reality; the
 > full rationale, the unified `integration_nodes` run model, and the residual §7
 > simplification are in `docs/architecture/tanren-owns-the-engine.md`.
 
@@ -75,8 +79,8 @@ comments reference them, so the anchored sections survive at this path.
    adds webhooks — §1d.)
 6. **Contracts-as-durable-asset.** Each new capability is a seam with a
    conformance suite (like `Allocator` / `JobQueue` / `Repositories`), so the
-   `VcsProvider` adapter (GitHub/GitLab), an optional external-queue adapter, and
-   the eventual Rust rewrite all slot in.
+   `CodeHost` adapter (GitHub now, GitLab/others later), an optional external-queue
+   adapter, and the eventual Rust rewrite all slot in.
 7. <a id="s17"></a>**§1.7 — DAG state is the source of truth.** Priority,
    readiness, and stacking are derived from persisted spec/dependency rows under
    RLS — not held in memory. **Milestones are a human-readability grouping, not an
@@ -269,6 +273,49 @@ history onto:
 Both honor rate limits + budget. This closes the issue-driven loop autonomously,
 preferring real-time push over polling where the integration allows.
 
+## 1e. Design is a first-class engine concern (the no-handoff moat)
+
+<a id="s1e"></a>Tanren **owns design natively** — it does not hand a brief to an
+external design tool and import the result. The durable artifact is a
+**`DesignContract`** (`engine/design/designContract.ts`), a typed, persisted,
+versioned design-intent contract with a **domain-general** shape: a universal core
+(`identity` / `intent` / `principles` / `constraints`), a descriptive `domain`
+label Tanren never branches on, and a **domain-declared `dimensions` set** (a SaaS
+app's `tokens/components/layout`; a game's `art-direction/ui/game-feel`; a novel
+translation's `typography/voice/cover`). This is the same generality posture as the
+project-declared lifecycle (stack-flexible) and the template manifest — the web
+"design system" is one instance of the contract, not the model.
+
+The **moat** is the first-class link into Tanren's own entity graph: a
+`DesignContract` carries `personaRefs` + `behaviorRefs` resolved against the real
+`personas` / `behaviors` tables. An external design tool must _ask_ "who is this
+for? assume admin?" and throw a freeform `DESIGN.md` over a wall; Tanren resolves
+design **per-persona** and binds **behavior coverage as design acceptance
+criteria**, so the design agent, the writer, and the oracle all reason over the
+same typed entities — no designer↔implementor disconnect.
+
+Design threads through the build loop as first-class stages, not an afterthought:
+
+1. **Author** — a project-level **design phase** (`engine/design/designPhase.ts`)
+   runs the **design agent** once in the derive flow, after personas + behaviors
+   exist (so the moat refs resolve) and before build nodes run, elaborating the thin
+   captured intent into the project's HEAD `DesignContract` version. It fails closed:
+   exhaustive behavior coverage is asserted and every persona/behavior ref must
+   resolve to a real id (a dangling ref throws — never a silent drop).
+2. **Inject** — the writer-context builder (`engine/design/designWriterContext.ts`)
+   threads the HEAD contract straight into Tanren's _own_ implementing agent in the
+   same loop, rendering a persona-scoped, behavior-linked design block. A project
+   with no contract yields no block (a real empty state, never a fabricated default).
+3. **Verify** — a **design oracle** (`engine/workflow/designOracleLoopStage.ts`)
+   runs as a post-audit finding stage in the spec loop (gated by a wired design
+   actor, alongside the demo-run gate), judging the built output's fidelity against
+   the contract's dimensions and emitting findings into the same P0–P3 stream the
+   auditor uses. Design regressions re-drive like any other finding.
+
+The contract follows the same fail-closed, no-silent-default discipline as the
+template manifest and the `ci.yml` parser: a malformed contract throws; an absent
+contract is an explicit no-contract state, never a defaulted one.
+
 ## 2. Native merge coordination
 
 Once specs run in parallel, they go stale and collide. A `MergeCoordinator`
@@ -409,6 +456,14 @@ queue's own events). These are things Tanren _acts on_, not delegates.
 capability above and proves the end-to-end claim — a clean repo becoming a
 finished, tested, deployed product **with no human in the per-spec loop**.
 
+**Proof state (honest):** the end-to-end claim is **not yet closed**. apex v32
+halted at scaffold-bootstrap before a merge; v36 proved the #601 recovery to 10/11
+on template creation but did not reach the product→deploy loop; v37 has an
+e2e-readiness verdict but has not run live. So while every capability below is
+**built and on `main`**, a single apex launch closing rough-notes → merged PRs →
+deployed product has not yet landed. This section describes the workload apex
+_forces_ and the bar it _must_ clear, not a cleared bar.
+
 > **Operating contract:** `docs/operator-guide/apex.md`. It is binding and
 > counterintuitive: apex tests **Tanren**, not the fixture (a disposable URL
 > shortener) and not efficiency (the target is "functional but weak", not a
@@ -450,7 +505,9 @@ parallel, governed concurrency, eager dependent unblock, no milestone pauses, ze
 per-spec triggers); merge coordination (never-discard in-place rebase,
 intent-preserving conflict resolution, stacked dependents, the native queue +
 `MergeAuthority`); the issue loop (planted
-deficiency → real issue → triage → spec → DAG-insert → execute → merge); and
+deficiency → real issue → triage → spec → DAG-insert → execute → merge); **native
+design** (a `DesignContract` authored from the interview, injected into the writer,
+and verified by the design oracle against the deployed web UI — §1e); and
 **observability** — the **budget ceiling enforced** (run pauses on exhaustion via
 `dag.budget.paused`), live token usage per role, 4-source cost incl. the
 managed-mode transparent margin line, and **DORA accumulating across the many
@@ -483,8 +540,8 @@ Enforced by the `no-production-stubs` architecture lint in
   matching the stub taxonomy (`createDeterministic*Answerer`, `*Stub`,
   `Noop*`/`*Noop`, `Fake*`, `Mock*`, `templated*` generators).
 - The default of an injectable seam in production must be the **real** impl — or a
-  **hard failure** when unconfigured (`UnconfiguredAllocator`'s throw, or
-  `UnconfiguredVcsProvider`). A seam whose real impl exists but is unwired fails
+  **hard failure** when unconfigured (e.g. `UnconfiguredAllocator`'s throw for an
+  unrouted allocator kind). A seam whose real impl exists but is unwired fails
   the lint until wired.
 - A small, **annotated, enumerated allowlist** covers the genuinely-correct
   "absence is the right behavior" cases. It now holds exactly one entry —
