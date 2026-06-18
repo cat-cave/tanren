@@ -12,7 +12,7 @@ import { captureBaselineSha, captureGitStateAfterCodex } from "./codexGit.js";
 import { buildCodexAnswererExecCommand, buildCodexExecCommand } from "./codexExecCommand.js";
 import { createLogger } from "../observability/logger.js";
 import { parseWithOneSchemaRepair } from "./answererRepair.js";
-import { AnswererSchemaValidationError } from "./answererSchemaError.js";
+import { AnswererSchemaValidationError, AnswererStalledError } from "./answererSchemaError.js";
 import { answererWorkspacePath, safeSchemaFileName } from "./codexAnswererPaths.js";
 
 const log = createLogger("codex");
@@ -75,7 +75,7 @@ export interface CodexAnswererTelemetry extends CodexEventTelemetry {
 
 // Re-exported from answererSchemaError.ts (split out to break the import cycle with
 // answererRepair.ts) so existing `from "./codex.js"` importers stay stable.
-export { AnswererSchemaValidationError };
+export { AnswererSchemaValidationError, AnswererStalledError };
 
 export function createCodexWriter(dependencies: CodexWriterDependencies): WriterAdapter {
   return {
@@ -246,9 +246,9 @@ export function createCodexAnswerer<TOutput>(dependencies: CodexAnswererDependen
             codexHome: auth.CODEX_HOME,
           });
         }
-        if (result.stalled === true) {
-          throw new Error(`Codex Answerer stalled (no sign of life) for schema ${opts.outputSchema.name}`);
-        }
+        // A TRANSIENT stall (no sign of life), NOT a deterministic failure — the typed error
+        // lets the loop-stage recovery wrapper RE-DRIVE this stage, not discard the spec loop.
+        if (result.stalled === true) throw new AnswererStalledError(opts.outputSchema.name);
         if (telemetry.usageLimit !== undefined) {
           throw new CodexUsageLimitError(opts.outputSchema.name, telemetry.usageLimit.message);
         }

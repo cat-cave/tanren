@@ -20,7 +20,7 @@ import {
 } from "../answerers/schemas/index.js";
 import type { Finding, FindingSeverity } from "../contracts/findings.js";
 import type { ActorRef } from "../state/actor.js";
-import { runDesignOracleStage } from "./designOracle/designOracle.js";
+import { runDesignOracleLoopStage } from "./designOracleLoopStage.js";
 import type { AuditPostureConfig } from "../config/shared.js";
 import { emitStageTiming } from "../observability/index.js";
 import type { AnswererAdapter } from "../providers/types.js";
@@ -36,11 +36,12 @@ import {
 } from "./loopPolicy.js";
 import { buildConvergencePrompt, buildDemoRunPrompt, buildTriagePrompt } from "./loopStagePrompts.js";
 import { recordAnswererCost, secondsSince, type SubtaskCostContext } from "./subtaskCost.js";
+import { runAnswererStageWithRecovery } from "./loopStageRecovery.js";
 import { insertChildTask, markTaskDone } from "./subtaskTasks.js";
 import type { StageAppendEvent } from "./subtaskStages.js";
 import { gateTriagedSpecs, type TriageSpecValidator } from "./loopFindings.js";
 
-type LoopQueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
+export type LoopQueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
 interface SpecContext {
   specTitle: string;
@@ -49,7 +50,7 @@ interface SpecContext {
   baselineSha: string;
 }
 
-interface StageBase {
+export interface StageBase {
   pool: LoopQueryClient;
   writer?: RunStateWriter;
   costCtx: SubtaskCostContext;
@@ -97,11 +98,16 @@ export async function runDemoRunStage(args: DemoRunStageInput): Promise<{ findin
     baselineSha: args.baselineSha,
   });
   const startedAt = Date.now();
-  const verdict = await args.adapter.runAnswerer({
-    prompt,
-    workspace: args.workspacePath,
-    outputSchema,
-  });
+  // STAGE-LOCAL stall recovery: a transient answerer stall re-drives THIS stage in place
+  // (sibling progress preserved, never a whole-spec restart); a wedged stage escalates loudly
+  // via the convergence judgment. A deterministic error still propagates. (Shared by all stages.)
+  const verdict = await runAnswererStageWithRecovery("demoRun", () =>
+    args.adapter.runAnswerer({
+      prompt,
+      workspace: args.workspacePath,
+      outputSchema,
+    }),
+  );
   const runtimeSeconds = secondsSince(startedAt);
   emitStageTiming("demo", Date.now() - startedAt, { runId: args.runId });
   const findings = verdict.findings.map((f) => normalizeFinding(f));
@@ -118,95 +124,6 @@ export async function runDemoRunStage(args: DemoRunStageInput): Promise<{ findin
   await markTaskDone(args.pool, demoTaskId, "passed", args.writer);
   await args.appendEvent("task.completed", { taskKind: "demo" }, demoTaskId);
   return { findings, demoTaskId };
-}
-
-// ---- DESIGN ORACLE (WS-D4) ------------------------------------------------
-
-export interface DesignOracleLoopStageInput extends StageBase {
-  adapter: AnswererAdapter<DesignOracleAnswer>;
-  // The query client the oracle reads the contract + entity graph through (the run's
-  // org-scoped pool — RLS-scoped, actor-authorized).
-  client: LoopQueryClient;
-  projectId: string;
-  // The org-scope carrier for the entity-graph reads + the audit/event actor for the
-  // contract store reads (built in plannerRun from the run's org/project).
-  actor: ActorContext;
-  actorRef: ActorRef;
-  baselineSha: string;
-}
-
-/**
- * Run the native design-fidelity ORACLE stage (WS-D4) — the verify→re-drive half of the
- * design loop. Mirrors `runDemoRunStage`'s wiring (task row + events + cost), delegating
- * the contract read + ref resolution + answerer invocation to the reusable
- * `runDesignOracleStage` oracle module. Returns the normalized fidelity findings for the
- * loop's ONE triage input. No kill-switch; a project with NO design contract no-ops
- * cleanly (empty findings, no answerer call, no cost) — never a fabricated default.
- */
-export async function runDesignOracleLoopStage(
-  args: DesignOracleLoopStageInput,
-): Promise<{ findings: Finding[]; designOracleTaskId: string | undefined }> {
-  // Run the oracle first; only materialize a task row / events / cost when a contract was
-  // genuinely verified. A no-contract project produces no task (the explicit empty state),
-  // mirroring how the demo-run slot is simply skipped when there is nothing to do.
-  const result = await runDesignOracleStage({
-    client: args.client,
-    projectId: args.projectId,
-    actor: args.actor,
-    actorRef: args.actorRef,
-    adapter: args.adapter,
-    baselineSha: args.baselineSha,
-    workspacePath: args.workspacePath,
-  });
-  if (!result.hasContract) {
-    return { findings: [], designOracleTaskId: undefined };
-  }
-
-  // A contract WAS verified — record the stage as a task with its verdict + cost, exactly
-  // like the demo-run slot. The oracle already invoked the answerer; the cost record below
-  // attributes that real call (token telemetry surfaced by the same adapter instance).
-  const startedAt = Date.now();
-  const designOracleTaskId = `task_${randomUUID()}`;
-  await insertChildTask(
-    args.pool,
-    {
-      taskId: designOracleTaskId,
-      runId: args.runId,
-      kind: "designOracle",
-      title: "design-oracle verify",
-      parentTaskId: args.plannerTaskId,
-      agentKind: "answerer",
-      cli: args.adapter.cli,
-      model: null,
-    },
-    args.writer,
-  );
-  await args.appendEvent("task.started", { taskKind: "designOracle" }, designOracleTaskId);
-  await args.appendEvent("designOracle.started", { taskKind: "designOracle" }, designOracleTaskId);
-  emitStageTiming("audit", Date.now() - startedAt, { runId: args.runId });
-  await args.appendEvent(
-    "designOracle.verdict",
-    {
-      runId: args.runId,
-      contractVersion: result.contractVersion ?? 0,
-      verificationMode: result.verificationMode ?? "",
-      summary: result.summary ?? "",
-      findings: result.findings,
-    },
-    designOracleTaskId,
-  );
-  await recordAnswererCost({
-    ctx: args.costCtx,
-    adapter: args.adapter,
-    role: "designOracle",
-    taskId: designOracleTaskId,
-    model: "tanren-design-oracle",
-    runtimeSeconds: secondsSince(startedAt),
-    rawUsage: { role: "designOracle" },
-  });
-  await markTaskDone(args.pool, designOracleTaskId, "passed", args.writer);
-  await args.appendEvent("task.completed", { taskKind: "designOracle" }, designOracleTaskId);
-  return { findings: result.findings, designOracleTaskId };
 }
 
 // ---- POST-AUDIT FINDING STAGES (demo-run + design-oracle) ------------------
@@ -332,11 +249,15 @@ export async function runTriageStage(args: TriageStageInput): Promise<TriageStag
     baselineSha: args.baselineSha,
   });
   const startedAt = Date.now();
-  const answer = await args.adapter.runAnswerer({
-    prompt,
-    workspace: args.workspacePath,
-    outputSchema,
-  });
+  // STAGE-LOCAL stall recovery (see runDemoRunStage): re-drive a transient triage stall in
+  // place, preserving the spec loop's collected findings.
+  const answer = await runAnswererStageWithRecovery("triage", () =>
+    args.adapter.runAnswerer({
+      prompt,
+      workspace: args.workspacePath,
+      outputSchema,
+    }),
+  );
   const runtimeSeconds = secondsSince(startedAt);
   emitStageTiming("audit", Date.now() - startedAt, { runId: args.runId });
   const routed: RoutedWorkItem[] = routeTriageItems(answer.workItems, args.posture);
@@ -439,11 +360,16 @@ export async function runConvergenceStage(args: ConvergenceStageInput): Promise<
     loopIndex: args.loopIndex,
   });
   const startedAt = Date.now();
-  const answer = await args.adapter.runAnswerer({
-    prompt,
-    workspace: args.workspacePath,
-    outputSchema,
-  });
+  // STAGE-LOCAL stall recovery (see runDemoRunStage): re-drive a transient convergence stall
+  // in place — the cross-loop `consecutiveStalls` state (the spec-level convergence-stall
+  // semantics) is UNTOUCHED; only the per-CALL transient stall recovers here.
+  const answer = await runAnswererStageWithRecovery("convergence", () =>
+    args.adapter.runAnswerer({
+      prompt,
+      workspace: args.workspacePath,
+      outputSchema,
+    }),
+  );
   const runtimeSeconds = secondsSince(startedAt);
   emitStageTiming("audit", Date.now() - startedAt, { runId: args.runId });
   const { state, decision } = applyConvergencePolicy(

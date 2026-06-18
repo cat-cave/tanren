@@ -11,7 +11,9 @@
 //       /cover) — never assuming web;
 //   (d) NO CONTRACT ⇒ undefined (no block — a real empty state, never a fabricated
 //       default); an `unscopedPlatform` scope likewise yields no block;
-//   (e) MALFORMED ⇒ LOUD: a malformed persisted contract throws (the store re-parse).
+//   (e) MALFORMED ⇒ LOUD: a malformed persisted contract throws (the store re-parse);
+//   (f) DANGLING REF ⇒ LOUD: an unresolved persona/behavior ref throws (parity with the
+//       design oracle's `resolvePersonas`/`resolveBehaviors` — never a silent drop).
 
 import { describe, expect, it } from "vitest";
 import { parseDesignContract, type DesignContractV1 } from "../src/engine/design/designContract.js";
@@ -245,24 +247,38 @@ describe("WS-D2 design writer context — resolve + render (persona-scoped, beha
     expect(block).toBeUndefined();
   });
 
-  it("DROPS a dangling persona/behavior ref rather than leaking an opaque id into the prompt", async () => {
-    const danglingContract = parseDesignContract({
+  it("THROWS LOUD on a dangling persona ref (parity with the design oracle — no silent drop)", async () => {
+    const danglingPersona = parseDesignContract({
       version: 1,
       domain: "saas-web",
       identity: "x",
       intent: "y",
       personaRefs: ["persona_operator", "persona_gone"],
+      behaviorRefs: [],
+      dimensions: [],
+    });
+    const client = fakeClient({ contract: danglingPersona, personas, behaviors });
+    // The writer-context now resolves identically to the oracle: an unresolved ref is
+    // malformed graph state and fails loud, never a thinner silently-built design.
+    await expect(
+      loadDesignContextBlock({ client, orgScope: { kind: "org", orgId: ORG }, projectId: PROJECT }),
+    ).rejects.toThrow(/personaRef 'persona_gone' does not resolve/u);
+  });
+
+  it("THROWS LOUD on a dangling behavior ref (parity with the design oracle — no silent drop)", async () => {
+    const danglingBehavior = parseDesignContract({
+      version: 1,
+      domain: "saas-web",
+      identity: "x",
+      intent: "y",
+      personaRefs: ["persona_operator"],
       behaviorRefs: ["behavior_gone"],
       dimensions: [],
     });
-    const client = fakeClient({ contract: danglingContract, personas, behaviors });
-    const block = await loadDesignContextBlock({ client, orgScope: { kind: "org", orgId: ORG }, projectId: PROJECT });
-    expect(block).toBeDefined();
-    expect(block).toContain("Operator");
-    expect(block).not.toContain("persona_gone");
-    expect(block).not.toContain("behavior_gone");
-    // The dangling behavior ref resolved to nothing ⇒ no behavior section at all.
-    expect(block).not.toContain("Behaviors this design must cover");
+    const client = fakeClient({ contract: danglingBehavior, personas, behaviors });
+    await expect(
+      loadDesignContextBlock({ client, orgScope: { kind: "org", orgId: ORG }, projectId: PROJECT }),
+    ).rejects.toThrow(/behaviorRef 'behavior_gone' does not resolve/u);
   });
 
   it("fails LOUD on a malformed persisted contract (store re-parse throws — no silent degrade)", async () => {

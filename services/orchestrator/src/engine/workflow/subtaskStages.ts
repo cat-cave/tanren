@@ -26,6 +26,7 @@ import {
   type CheckerSubtaskContext,
 } from "./checker/checker.js";
 import { invokePlanner, type PlannerRejectionFeedback, type PlannerSpecContext } from "./planner/planner.js";
+import { runAnswererStageWithRecovery } from "./loopStageRecovery.js";
 import { recordAnswererCost, recordWriterCost, secondsSince, type SubtaskCostContext } from "./subtaskCost.js";
 import { insertChildTask, markTaskDone, markTaskFailed } from "./subtaskTasks.js";
 
@@ -409,10 +410,15 @@ export async function runCheckerStage(args: CheckerStageInput): Promise<CheckerD
     riskSignal: riskSignal.riskClass === "unknown" ? undefined : riskSignal,
   };
   const startedAt = Date.now();
-  const result = await invokeChecker(args.adapter, {
-    context: checkerContext,
-    workspace: args.workspacePath,
-  });
+  // STAGE-LOCAL stall recovery: a transient checker stall re-drives THIS checker call in
+  // place (the writer's diff + prior subtasks preserved, never a whole-spec restart); a
+  // wedged checker escalates loudly via the convergence judgment. Deterministic errors propagate.
+  const result = await runAnswererStageWithRecovery("checker", () =>
+    invokeChecker(args.adapter, {
+      context: checkerContext,
+      workspace: args.workspacePath,
+    }),
+  );
   const runtimeSeconds = secondsSince(startedAt);
   emitStageTiming("check", Date.now() - startedAt, {
     runId: args.runId,

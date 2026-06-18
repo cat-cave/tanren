@@ -47,15 +47,22 @@ export interface RunnerCommand {
   watchdog?: ActivityWatchdog;
 }
 
-// An OUT-OF-BAND liveness probe: between bursts of output, the watchdog ticks this
-// to ask "is the remote work still ALIVE?" for SILENT ops (a `jj rebase` that emits
-// nothing for minutes is still legitimately working). It returns `true` for ANY sign
-// of life — the remote process exists AND its CPU-time advanced (read /proc/<pid>/stat
-// utime+stime), and/or the workspace mtime changed. A deadlocked / zombied process
-// holds CPU flat and touches nothing: that (and ONLY that) reads `false`. The probe is
-// the PRIMARY liveness mechanism for silent ops; it must check actual progress signals,
-// not merely "did a timer elapse".
-export type LivenessProbe = () => Promise<boolean>;
+// An OUT-OF-BAND WORK-SIGNATURE probe: between bursts of output, the watchdog ticks
+// this to read the remote work's current SIGNATURE for SILENT ops (a `jj rebase` that
+// emits nothing for minutes is still legitimately working). It returns a STABLE STRING
+// fingerprint of the work's observable state — the newest workspace mtime (a build/jj
+// writes files as it advances), optionally folded with a tree/size summary. The
+// substrate compares the SEQUENCE of these signatures (folded with the output tail) for
+// genuine ADVANCEMENT via the convergence detector, NOT merely "did a timer elapse":
+//   - a CHANGING signature (mtime advanced / new output) = real progress → continue UNBOUNDED;
+//   - a FIXED signature across successive checks (no new output AND no workspace advance)
+//     = a wedged process — busy-but-not-advancing (an infinite loop spewing identical
+//     lines, a CPU-burn) OR dead/zombied — and SURFACES a recoverable stall.
+// It returns `undefined` when the runner is UNREACHABLE (the side-channel itself could
+// not run / the workspace is gone): no signal at all, which the substrate treats as an
+// absence of life. This is the PRIMARY progress mechanism for silent ops — it reads an
+// actual work signal, never a clock.
+export type LivenessProbe = () => Promise<string | undefined>;
 
 // How the watchdog reacts when it observes a GENUINE absence of all signs of life
 // (no output, the probe reports no liveness): SURFACE a recoverable `stalled` result
@@ -65,22 +72,29 @@ export type LivenessProbe = () => Promise<boolean>;
 export type OnQuiet = "surface" | "kill";
 
 // The PROGRESS-BASED hang detector for one command — the doctrine's replacement for a
-// wall-clock kill. It is driven by SIGNS OF LIFE, never by elapsed time:
+// wall-clock kill. It is driven by ADVANCEMENT of a WORK SIGNATURE, never by elapsed time:
 //
-//   - It RESETS on ANY activity: every stdout/stderr output chunk (the primary tick —
-//     for a streaming agent like `codex --json` every telemetry line is a token/log =
-//     a sign of life), AND every positive `livenessProbe` result (the primary mechanism
-//     for SILENT ops). Any positive signal → reset → continue UNBOUNDED, no matter the
-//     total elapsed time.
-//   - It FIRES only on the GENUINE absence of ALL signals — a dead / zombied / deadlocked
-//     process or a dead connection. A working process (any activity at all) is never killed.
+//   - It RESETS on genuine PROGRESS: every stdout/stderr output chunk that adds NEW content
+//     (the primary tick — for a streaming agent like `codex --json` every telemetry line is
+//     a token/log = forward motion), AND every workspace-signature ADVANCE the `livenessProbe`
+//     reports (the primary mechanism for SILENT ops — mtime advanced, files written). Any
+//     genuine advance → reset → continue UNBOUNDED, no matter the total elapsed time.
+//   - It FIRES only when the WORK SIGNATURE is at a FIXED POINT across successive checks: no
+//     new output AND no workspace advance. That covers BOTH a dead / zombied / deadlocked
+//     process (no signal) AND a WEDGED-BUT-BUSY process (alive — an infinite loop emitting
+//     BYTE-IDENTICAL output forever, or burning CPU touching nothing — but making NO new
+//     work). The fixed-point verdict comes from the SHARED convergence detector
+//     (assessStructuralProgress over the work-signature sequence) — signature IDENTITY, not
+//     a duration. A process producing genuinely-new output / advancing the workspace is
+//     NEVER flagged.
 //
-// `livenessProbe` is the PRIMARY mechanism, not an afterthought: the interface takes a
-// PROBE (does the work show any liveness?), NOT a duration. A bare "no output for N ms"
-// gauge alone is a DISGUISED timeout (forbidden + lint-flagged). The watchdog ticks the
-// probe between output; `probeIntervalMs` is the cadence of those checks (a poll INTERVAL,
-// not a budget — it never accumulates toward a kill), and the kill/surface decision is made
-// only when the probe ALSO reports no life. `onQuiet` defaults to `"surface"`.
+// `livenessProbe` is the PRIMARY mechanism, not an afterthought: the interface returns a
+// WORK SIGNATURE (a fingerprint of the remote work state), NOT a duration. A bare "no output
+// for N ms" gauge alone is a DISGUISED timeout (forbidden + lint-flagged). The watchdog ticks
+// the probe between output; `probeIntervalMs` is the cadence of those checks (a poll INTERVAL,
+// not a budget — it never accumulates toward a kill), and the surface/kill decision is made
+// only when the convergence detector reads the work signature as a fixed point (non-advancing).
+// `onQuiet` defaults to `"surface"`.
 export interface ActivityWatchdog {
   livenessProbe?: LivenessProbe;
   // How often to consult `livenessProbe` between output chunks (poll cadence, NOT a
