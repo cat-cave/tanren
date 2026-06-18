@@ -6,7 +6,7 @@
 // failure). Driven over an injected fetch — NO live Vercel/Fly/network calls.
 
 import { describe, expect, it } from "vitest";
-import { fetchDeployTransport, DEFAULT_DEPLOY_REQUEST_TIMEOUT_MS } from "../src/engine/provisioners/deployTransport.js";
+import { fetchDeployTransport, DEFAULT_DEPLOY_REQUEST_ABORT_MS } from "../src/engine/provisioners/deployTransport.js";
 import { fetchUrlReachabilityProbe } from "../src/engine/deploy/buildDeployAdapter.js";
 import { VercelDeployProvisioner } from "../src/engine/provisioners/vercelDeployProvisioner.js";
 import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
@@ -26,22 +26,22 @@ function hangingFetch(): typeof fetch {
     })) as unknown as typeof fetch;
 }
 
-describe("deploy transport robustness — fetch timeouts (§3.9e)", () => {
-  it("the deploy transport times out a hung request (it does not hang forever)", async () => {
-    // A 5ms timeout so the test resolves instantly; the default is much larger.
+describe("deploy transport robustness — per-request fetch abort (§3.9e)", () => {
+  it("the deploy transport aborts a hung request (it does not hang forever)", async () => {
+    // A 5ms per-request abort window so the test resolves instantly; the default is larger.
     const transport = fetchDeployTransport(hangingFetch(), 5);
     await expect(
       transport.request({ method: "GET", url: "https://api.vercel.com/v9/projects", headers: {} }),
-    ).rejects.toThrow(/timed out after 5ms/u);
+    ).rejects.toThrow(/aborted after 5ms/u);
   });
 
-  it("the URL smoke probe times out a hung GET (it does not hang forever)", async () => {
+  it("the URL smoke probe aborts a hung GET (it does not hang forever)", async () => {
     const probe = fetchUrlReachabilityProbe(hangingFetch(), 5);
-    await expect(probe.probe("https://app.example")).rejects.toThrow(/timed out after 5ms/u);
+    await expect(probe.probe("https://app.example")).rejects.toThrow(/aborted after 5ms/u);
   });
 
-  it("exposes a non-zero default request timeout (a real bound, not unbounded)", () => {
-    expect(DEFAULT_DEPLOY_REQUEST_TIMEOUT_MS).toBeGreaterThan(0);
+  it("exposes a non-zero default per-request abort window (a real bound, not unbounded)", () => {
+    expect(DEFAULT_DEPLOY_REQUEST_ABORT_MS).toBeGreaterThan(0);
   });
 });
 

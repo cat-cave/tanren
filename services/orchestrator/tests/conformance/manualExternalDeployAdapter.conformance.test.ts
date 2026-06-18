@@ -13,7 +13,7 @@ import {
   ManualExternalDeployAdapter,
   MANUAL_EXTERNAL_PROVIDER_KIND,
 } from "../../src/engine/deploy/manualExternalDeployAdapter.js";
-import { scriptedUrlProbe, instantVerifyPollPolicy } from "./fakes/scriptedUrlProbe.js";
+import { scriptedUrlProbe, sequencedUrlProbe, instantVerifyPollPolicy } from "./fakes/scriptedUrlProbe.js";
 
 const grant = (extra: Record<string, unknown> = {}): OrgGrant => ({
   providerKind: MANUAL_EXTERNAL_PROVIDER_KIND,
@@ -23,12 +23,12 @@ const grant = (extra: Record<string, unknown> = {}): OrgGrant => ({
 
 const ctx = (id: string): ProjectContext => ({ projectId: id, orgId: "org_1" });
 
-function adapter(urlStatus = 200, maxPolls = 10) {
+function adapter(urlStatus = 200) {
   const probe = scriptedUrlProbe(urlStatus);
   const instance = new ManualExternalDeployAdapter({
     attestations: new InMemoryManualAttestationStore(),
     urlProbe: probe,
-    poll: instantVerifyPollPolicy(maxPolls),
+    poll: instantVerifyPollPolicy(),
   });
   return { instance, probe };
 }
@@ -86,10 +86,27 @@ describe("ManualExternalDeployAdapter — verify (confirms the attestation)", ()
     expect(verification.smokeStatus).toBe(403);
   });
 
-  it("fails LOUD when the attested target never becomes reachable", async () => {
-    const { instance } = adapter(503, 3);
+  it("keeps probing UNBOUNDED while the status advances — confirms past the old poll cap", async () => {
+    // The attested target answers with DIFFERENT unreachable statuses (each poll a new state =
+    // progress) for many polls past the old maxPolls=10 cap, then finally serves 200.
+    const advancing = Array.from({ length: 15 }, (_v, i) => 500 + (i % 50));
+    const probe = sequencedUrlProbe([...advancing.map((s, i) => s + i), 200]);
+    const instance = new ManualExternalDeployAdapter({
+      attestations: new InMemoryManualAttestationStore(),
+      urlProbe: probe,
+      poll: instantVerifyPollPolicy(),
+    });
     const { deploymentId } = await instance.deploy(grant(), ref, { repo: "acme/acme-web", ref: "main" });
-    await expect(instance.verify(grant(), ref, deploymentId)).rejects.toThrow(/never became reachable after 3 polls/u);
+    const verification = await instance.verify(grant(), ref, deploymentId);
+    expect(verification.ready).toBe(true);
+    expect(verification.smokeStatus).toBe(200);
+    expect(verification.pollCount).toBe(16);
+  });
+
+  it("escalates LOUD as STUCK (not on a count) when the target stays unreachable", async () => {
+    const { instance } = adapter(503);
+    const { deploymentId } = await instance.deploy(grant(), ref, { repo: "acme/acme-web", ref: "main" });
+    await expect(instance.verify(grant(), ref, deploymentId)).rejects.toThrow(/is STUCK unreachable \(HTTP 503\)/u);
   });
 
   it("fails LOUD when verify is called for an unrecorded deployment (deploy not run)", async () => {

@@ -36,7 +36,7 @@ import {
   mergeShaFromPayload,
   repoSlugFromPrUrl,
   skipTemplateBuildDeploy,
-  verifyDeploy,
+  verifyDeployUntilConverged,
 } from "./deployOnMergeReads.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import {
@@ -52,12 +52,6 @@ import { deployProvisionerFor } from "../workflow/deployProvisionerFor.js";
 import type { UrlReachabilityProbe, VerifyPollPolicy } from "../contracts/deployAdapter.js";
 import { createLogger } from "../observability/logger.js";
 const log = createLogger("deploy-on-merge");
-
-// How many times verification is (re-)run before escalating to `deploy.failed`. Each
-// attempt re-polls the deployment (the verify poll budget provides the per-attempt
-// wait), so a transient failure recovers in-process. Bounded so a genuinely-failed
-// deploy escalates LOUD rather than retrying forever.
-const DEFAULT_VERIFY_MAX_ATTEMPTS = 3;
 
 /** The deploy artifact a project carries in its config once a deploy capability was provisioned. */
 export interface ProjectDeployTarget {
@@ -113,14 +107,8 @@ export interface DeployOnMergeWatcherDeps {
    * deploy URL. Injectable for tests; defaults to the production fetch probe.
    */
   urlProbe?: UrlReachabilityProbe;
-  /** The verify poll cadence + bound; defaults to the production policy when absent. */
+  /** The verify poll cadence (the spacing between polls); defaults to the production policy when absent. */
   verifyPoll?: VerifyPollPolicy;
-  /**
-   * How many times to (re-)run verification before escalating to `deploy.failed`.
-   * Each attempt re-polls the deployment, so a TRANSIENT verify failure recovers
-   * in-process rather than dead-ending. Defaults to {@link DEFAULT_VERIFY_MAX_ATTEMPTS}.
-   */
-  verifyMaxAttempts?: number;
   /**
    * SECURITY-BASELINE deploy-target allowlist (egressPolicy.ts). Consulted BEFORE a
    * deploy fires so the target is governed by policy, not assumed allowed. Defaults
@@ -326,11 +314,14 @@ export class DeployOnMergeWatcher {
   }
 
   /**
-   * Verify with a BOUNDED IN-PROCESS RETRY, then escalate LOUD if it never proves
-   * live. Each attempt re-runs `verifyDeploy` (re-polls to READY + re-smoke-checks),
-   * so a TRANSIENT failure recovers within this one `check()` call (a merged run is
-   * terminal — no later wake to rely on). On the FINAL failure it appends the LOUD
-   * `deploy.failed` and re-throws, never leaving the run silently triggered-but-unverified.
+   * Verify with a PROGRESS-BASED in-process RETRY (feedback_no_timeouts_progress_based) — NO
+   * 3-strikes, NO attempt cap. Delegates to {@link verifyDeployUntilConverged}, which re-drives
+   * `verifyDeploy` (itself an UNBOUNDED poll-to-READY that fails LOUD on a provider ERROR
+   * terminal / proven stuck-deploy) while the verify error keeps CHANGING (progress) and
+   * escalates ONLY at an intelligent non-convergence fixed point (the SAME verify error
+   * recurring). On escalation it records the LOUD verify-phase `deploy.failed`, sets
+   * `recorded.verifyPhase` (so the outer guard skips a duplicate trigger-phase append), and
+   * re-throws — never leaving the run silently triggered-but-unverified.
    */
   private async verifyWithRetry(
     runId: string,
@@ -340,29 +331,11 @@ export class DeployOnMergeWatcher {
     deploymentId: string,
     recorded: { verifyPhase: boolean },
   ): Promise<void> {
-    const maxAttempts = this.deps.verifyMaxAttempts ?? DEFAULT_VERIFY_MAX_ATTEMPTS;
-    let lastError: unknown;
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      try {
-        const grant = await this.loadGrant(target);
-        await verifyDeploy(this.verifyCtx, { runId, projectId, target, providerKind, deploymentId, grant });
-        return;
-      } catch (error) {
-        lastError = error;
-      }
-    }
-    await appendDeployFailed(this.verifyCtx, {
-      runId,
-      projectId,
-      target,
-      phase: "verify",
-      deploymentId,
-      attempts: maxAttempts,
-    });
-    // Signal the outer `check()` guard that a verify-phase `deploy.failed` is already
-    // recorded, so it does not append a duplicate trigger-phase one for this same throw.
-    recorded.verifyPhase = true;
-    throw lastError instanceof Error ? lastError : new Error(String(lastError));
+    await verifyDeployUntilConverged(
+      this.verifyCtx,
+      { runId, projectId, target, providerKind, deploymentId, recorded },
+      () => this.loadGrant(target),
+    );
   }
 
   /** The verify/append-failed collaborators' deps subset (built once off `this.deps`). */

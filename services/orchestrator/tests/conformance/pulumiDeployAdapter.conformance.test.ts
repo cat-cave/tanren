@@ -30,13 +30,13 @@ const grant: OrgGrant = {
 
 const ctx = (name: string): ProjectContext => ({ projectId: `proj_${name}`, orgId: "org_1", stack: "node", name });
 
-function adapter(runner = scriptedPulumiRunner(), urlStatus = 200, maxPolls = 10) {
+function adapter(runner = scriptedPulumiRunner(), urlStatus = 200) {
   const probe = scriptedUrlProbe(urlStatus);
   const instance = new PulumiDeployAdapter({
     runner,
     secrets: secrets(),
     urlProbe: probe,
-    poll: instantVerifyPollPolicy(maxPolls),
+    poll: instantVerifyPollPolicy(),
   });
   return { instance, probe, runner };
 }
@@ -95,13 +95,26 @@ describe("PulumiDeployAdapter — verify (proven deploy)", () => {
     expect(probe.probed).toEqual([]);
   });
 
-  it("fails LOUD when the update never SUCCEEDS within the poll budget", async () => {
+  it("keeps polling UNBOUNDED while the result advances — succeeds past the old poll cap", async () => {
     const runner = scriptedPulumiRunner();
-    const { instance } = adapter(runner, 200, 3);
+    const { instance } = adapter(runner);
+    const { deploymentId } = await instance.deploy(grant, ref, { repo: "acme/acme-web", ref: "main" });
+    // A slow stack update: 20 distinct advancing results (past the old maxPolls=10), then succeeded.
+    const advancing = Array.from({ length: 20 }, (_v, i) => `in-progress-${String(i)}`);
+    runner.scriptUpdateResults(deploymentId, [...advancing, "succeeded"]);
+    const verification = await instance.verify(grant, ref, deploymentId);
+    expect(verification.ready).toBe(true);
+    expect(verification.pollCount).toBe(21);
+  });
+
+  it("escalates LOUD as STUCK (not on a count) when the result never advances", async () => {
+    const runner = scriptedPulumiRunner();
+    const { instance } = adapter(runner);
     const { deploymentId } = await instance.deploy(grant, ref, { repo: "acme/acme-web", ref: "main" });
     runner.scriptUpdateResults(deploymentId, ["in-progress"]);
-    await expect(instance.verify(grant, ref, deploymentId)).rejects.toThrow(/never SUCCEEDED after 3 polls/u);
-    expect(runner.statusPolls(deploymentId)).toBe(3);
+    await expect(instance.verify(grant, ref, deploymentId)).rejects.toThrow(
+      /is STUCK in non-terminal result 'in-progress'/u,
+    );
   });
 
   it("fails LOUD when SUCCEEDED but the endpoint is unreachable", async () => {

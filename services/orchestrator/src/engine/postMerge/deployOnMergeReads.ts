@@ -16,6 +16,8 @@ import { buildDeployAdapter } from "../deploy/buildDeployAdapter.js";
 import { DIRECT_API_ADAPTER_KIND } from "../deploy/directApiDeployAdapter.js";
 import type { UrlReachabilityProbe, VerifyPollPolicy } from "../contracts/deployAdapter.js";
 import type { ProjectDeployTarget } from "./deployOnMerge.js";
+import { retryUntilConverged } from "../workflow/retryUntilConverged.js";
+import { fixedPointRuleJudgment } from "../workflow/convergenceDetector.js";
 import { createLogger } from "../observability/logger.js";
 
 const log = createLogger("deploy-on-merge");
@@ -230,6 +232,84 @@ export async function verifyDeploy(
       },
     });
   });
+}
+
+/**
+ * Verify with a PROGRESS-BASED in-process RETRY (feedback_no_timeouts_progress_based) — NO
+ * 3-strikes, NO attempt cap. Each attempt re-runs {@link verifyDeploy} (itself an UNBOUNDED
+ * poll-to-READY that throws LOUD on a provider ERROR terminal / a proven stuck-deploy). This
+ * outer loop recovers a TRANSIENT verify failure: while the verify error's identity keeps
+ * CHANGING (a transient resolving into a different failure) that is PROGRESS → retry,
+ * unbounded; it escalates ONLY at an intelligent non-convergence fixed point (the SAME verify
+ * error recurring with no new information — a genuine provider failure). On escalation it
+ * records the LOUD verify-phase `deploy.failed`, sets `recorded.verifyPhase` (so the watcher's
+ * outer guard skips a duplicate trigger-phase append), and re-throws — never leaving the run
+ * silently triggered-but-unverified. A merged run is terminal (no later wake), so this
+ * resolves within the one `check()` call. `loadGrant` re-resolves the org grant per attempt.
+ */
+export async function verifyDeployUntilConverged(
+  ctx: DeployVerifyContext,
+  args: {
+    runId: string;
+    projectId: string;
+    target: ProjectDeployTarget;
+    providerKind: string;
+    deploymentId: string;
+    recorded: { verifyPhase: boolean };
+  },
+  loadGrant: () => Promise<OrgGrant | undefined>,
+): Promise<void> {
+  const { runId, projectId, target, providerKind, deploymentId, recorded } = args;
+  let attempts = 0;
+  let lastError: unknown;
+  const outcome = await retryUntilConverged<boolean>({
+    attempt: async () => {
+      attempts += 1;
+      try {
+        const grant = await loadGrant();
+        await verifyDeploy(ctx, { runId, projectId, target, providerKind, deploymentId, grant });
+        return { result: true, signature: { failureSignature: "verified" }, done: true };
+      } catch (error) {
+        lastError = error;
+        // The verify error's stable identity IS the convergence signature: a CHANGING error
+        // (a transient resolving into a different failure) is progress → retry, unbounded;
+        // the SAME error recurring is the fixed point that escalates.
+        return { result: false, signature: { failureSignature: verifyErrorSignature(error) }, done: false };
+      }
+    },
+    // No agent at this DB-driven escalation point — the rigorous fixed-point rule stands in:
+    // escalate ONLY at a proven identical-error recurrence, with a human-actionable diagnosis.
+    judge: (history) =>
+      fixedPointRuleJudgment(
+        history,
+        () =>
+          `deploy verify did not converge for '${target.provider}/${target.appId}' deployment ` +
+          `'${deploymentId}': the same verify failure recurred with no new information after ` +
+          `${String(attempts)} attempts — ${lastError instanceof Error ? lastError.message : String(lastError)}`,
+      ),
+  });
+  if (outcome.kind === "done") return;
+  await appendDeployFailed(ctx, { runId, projectId, target, phase: "verify", deploymentId, attempts });
+  // Signal the watcher's outer `check()` guard that a verify-phase `deploy.failed` is already
+  // recorded, so it does not append a duplicate trigger-phase one for this same throw.
+  recorded.verifyPhase = true;
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
+
+/**
+ * Distill a verify error into a STABLE convergence signature — the error's identity, NOT its
+ * incidental wording. Keyed on the error class + the message stem (quoted ids + digit runs that
+ * vary attempt-to-attempt are stripped), so the SAME underlying verify failure reads as
+ * identical across re-drives (→ a fixed point), while a genuinely DIFFERENT failure reads as
+ * progress (→ retry, unbounded). A non-Error throw keys on its stringification.
+ */
+function verifyErrorSignature(error: unknown): string {
+  if (!(error instanceof Error)) return `non-error:${String(error)}`;
+  const stem = error.message
+    .replaceAll(/'[^']*'/gu, "''")
+    .replaceAll(/\d+/gu, "N")
+    .trim();
+  return `${error.name}:${stem}`;
 }
 
 /**
