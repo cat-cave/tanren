@@ -12,9 +12,14 @@
 
 import { describe, expect, it } from "vitest";
 
-import { SpecQualityAnswer, SPEC_QUALITY_CONTRACT_PROMPT } from "../src/engine/answerers/schemas/specQuality.js";
+import {
+  SpecQualityAnswer,
+  SPEC_QUALITY_CONTRACT_PROMPT,
+  specQualityContractPrompt,
+} from "../src/engine/answerers/schemas/specQuality.js";
 import {
   buildSpecQualityPrompt,
+  buildSpecRevisionPrompt,
   validateEmittedSpecs,
   PersistentlyInvalidSpecError,
   type CandidateSpec,
@@ -61,16 +66,33 @@ function reviseAnswer(guidance: string): SpecQualityAnswer {
 }
 
 // A scripted validator: returns answers from a queue, recording the specs it saw.
-function scriptedValidator(answers: SpecQualityAnswer[]): SpecQualityAnswerer & { seen: CandidateSpec[] } {
+// `reAuthor` (the gate's BUILT-IN default re-author): when `reAuthorImpl` is supplied,
+// it is the loopback the gate uses absent an emitter `reviseSpec` — proving the gate
+// genuinely re-authors before escalating. Absent ⇒ no `reAuthor` (the genuine strict
+// gate: no way to re-author at all).
+function scriptedValidator(
+  answers: SpecQualityAnswer[],
+  reAuthorImpl?: (spec: CandidateSpec, guidance: string) => Promise<CandidateSpec>,
+): SpecQualityAnswerer & { seen: CandidateSpec[]; reAuthorGuidance: string[] } {
   const seen: CandidateSpec[] = [];
+  const reAuthorGuidance: string[] = [];
   let i = 0;
-  return {
+  const base = {
     seen,
+    reAuthorGuidance,
     async validate(spec: CandidateSpec): Promise<SpecQualityAnswer> {
       seen.push(spec);
       const answer = answers[i++];
       if (answer === undefined) throw new Error("scriptedValidator ran out of answers");
       return answer;
+    },
+  };
+  if (reAuthorImpl === undefined) return base;
+  return {
+    ...base,
+    async reAuthor(spec: CandidateSpec, guidance: string): Promise<CandidateSpec> {
+      reAuthorGuidance.push(guidance);
+      return reAuthorImpl(spec, guidance);
     },
   };
 }
@@ -178,11 +200,71 @@ describe("validateEmittedSpecs", () => {
     expect(rounds).toBe(2);
   });
 
-  it("with NO reviseSpec, a first-pass failure escalates immediately (never silently accepted)", async () => {
+  it("with NO emitter reviseSpec but a validator BUILT-IN re-author, it re-authors the failing spec (no escalate-after-0), then passes", async () => {
+    // The v38 strand: a spec failing validation escalated "after 0 revision(s)" because
+    // the planner/triage gate wired no emitter `reviseSpec`. The fix: the validator's
+    // BUILT-IN re-author is the default loopback — so the gate GENUINELY attempts guided
+    // re-authoring (feeding the validator's guidance back) BEFORE any escalation.
+    const revised: CandidateSpec = { ...goodSpec, title: "Re-authored — copy link button" };
+    const validator = scriptedValidator(
+      [reviseAnswer("define the jargon + add criteria"), passAnswer],
+      async () => revised,
+    );
+    const { specs } = await validateEmittedSpecs({ specs: [{ ...goodSpec, title: "opaque jargon" }], validator });
+    // It re-authored with the validator's guidance (never escalated after 0) and passed.
+    expect(validator.reAuthorGuidance).toEqual(["define the jargon + add criteria"]);
+    expect(specs[0]!.revisions).toBe(1);
+    expect(specs[0]!.spec).toEqual(revised);
+    expect(specs[0]!.answer.overall).toBe("pass");
+  });
+
+  it("escalates only after REAL guided re-authoring (non-convergence), never after 0 revisions", async () => {
+    // A genuinely-unfixable spec: the built-in re-author keeps producing a spec the
+    // validator rejects the IDENTICAL way. It escalates LOUD — but only at a genuine
+    // fixed point (≥2 data points proving no progress), NEVER "after 0 revision(s)".
+    const validator = scriptedValidator([reviseAnswer("g1"), reviseAnswer("g2"), reviseAnswer("g3")], async () => ({
+      ...goodSpec,
+      title: "still opaque",
+    }));
+    await expect(validateEmittedSpecs({ specs: [{ ...goodSpec, title: "opaque" }], validator })).rejects.toSatisfy(
+      (error: unknown) =>
+        error instanceof PersistentlyInvalidSpecError &&
+        error.revisions >= 1 &&
+        // A real guided re-author was attempted (at least one round) before escalation.
+        validator.reAuthorGuidance.length > 0,
+    );
+  });
+
+  it("with NO reviseSpec AND no built-in re-author (a validate-only fake), a first-pass failure escalates (genuine strict gate)", async () => {
     const validator = scriptedValidator([reviseAnswer("needs work")]);
     await expect(validateEmittedSpecs({ specs: [goodSpec], validator })).rejects.toBeInstanceOf(
       PersistentlyInvalidSpecError,
     );
+  });
+
+  it("a TEMPLATE-CREATION technical spec is NOT rejected for legitimate technical vocabulary (audience-scoped LEGIBLE bar)", async () => {
+    // A template-build's internal spec ("scaffold / merge-tier / mutation testing /
+    // template manifest") carries `audience: technical`. The validator prompt rendered
+    // for it judges LEGIBILITY on the engineer bar — legitimate domain vocabulary is
+    // correct, never "not plain product language" (the category error that stranded the
+    // v38 template DAG). Here it passes; we assert the prompt carries the technical bar.
+    const technicalSpec: CandidateSpec = {
+      title: "Update the scaffold design for the complete quality workflow",
+      description:
+        "Wire the merge-tier checks, mutation testing gate, and the .tanren/template.yml manifest into the scaffold.",
+      acceptanceCriteria: ["given the scaffold, when `just tier-3` runs, then the merge-tier checks pass"],
+      audience: "technical",
+    };
+    const prompt = buildSpecQualityPrompt(technicalSpec);
+    expect(prompt).toContain("LEGIBLE to an ENGINEER");
+    expect(prompt).toContain("legitimate domain vocabulary");
+    expect(prompt).not.toContain("LEGIBLE to a NON-TECHNICAL reader");
+    // And the gate accepts it (the validator, judging on the technical bar, passes it).
+    const validator = scriptedValidator([passAnswer]);
+    const { specs } = await validateEmittedSpecs({ specs: [technicalSpec], validator });
+    expect(specs[0]!.revisions).toBe(0);
+    // The audience was preserved onto the validated spec (so re-validation is consistent).
+    expect(specs[0]!.spec.audience).toBe("technical");
   });
 
   it("is fail-closed: a thrown (malformed) validator answer escalates, not a silent pass", async () => {
@@ -226,6 +308,28 @@ describe("spec-quality prompt contract presence", () => {
     expect(prompt).toContain(goodSpec.title);
     expect(prompt).toContain("Spec-Quality Validator");
     expect(prompt).toContain("Return exactly one SpecQualityAnswer");
+  });
+
+  it("the re-author prompt renders the contract, the failing spec, and the validator guidance", () => {
+    const prompt = buildSpecRevisionPrompt(goodSpec, "define the jargon + add an observable criterion");
+    expect(prompt).toContain("Spec Re-Author");
+    expect(prompt).toContain(SPEC_QUALITY_CONTRACT_PROMPT);
+    expect(prompt).toContain(goodSpec.title);
+    expect(prompt).toContain("Validator guidance to address: define the jargon + add an observable criterion");
+    expect(prompt).toContain("Return exactly one SpecRevisionAnswer");
+  });
+
+  it("the contract LEGIBLE bar is audience-scoped: product demands plain language, technical accepts domain vocab", () => {
+    const product = specQualityContractPrompt("product");
+    const technical = specQualityContractPrompt("technical");
+    expect(product).toContain("LEGIBLE to a NON-TECHNICAL reader");
+    expect(product).not.toContain("LEGIBLE to an ENGINEER");
+    expect(technical).toContain("LEGIBLE to an ENGINEER");
+    expect(technical).toContain("legitimate domain vocabulary");
+    expect(technical).not.toContain("LEGIBLE to a NON-TECHNICAL reader");
+    // The audience-independent dimensions are identical across both renders.
+    expect(technical).toContain("ACCOMPLISHABLE");
+    expect(technical).toContain("DEMO-ABLE");
   });
 
   it("the issue-triage emitter prompt injects the contract", () => {

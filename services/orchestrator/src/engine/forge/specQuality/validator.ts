@@ -19,9 +19,13 @@
 import { renderAnswererJsonSchema } from "../../answerers/schemas/index.js";
 import {
   SPEC_QUALITY_ANSWER_SCHEMA_ID,
-  SPEC_QUALITY_CONTRACT_PROMPT,
   SPEC_QUALITY_OUTPUT_INSTRUCTIONS,
+  SPEC_REVISION_ANSWER_SCHEMA_ID,
+  SPEC_REVISION_OUTPUT_INSTRUCTIONS,
+  type SpecAudience,
   SpecQualityAnswer,
+  specQualityContractPrompt,
+  SpecRevisionAnswer,
 } from "../../answerers/schemas/specQuality.js";
 import type { AnswererAdapter } from "../../providers/types.js";
 
@@ -33,17 +37,34 @@ export interface CandidateSpec {
   title: string;
   description: string;
   acceptanceCriteria: ReadonlyArray<string>;
+  // The LEGIBILITY audience the spec is judged against (specQuality.ts `SpecAudience`).
+  // Absent ⇒ `product` (the strict plain-product-language bar for a user-facing spec).
+  // A TEMPLATE-CREATION build's internal/infrastructure specs carry `technical`, so
+  // legitimate domain vocabulary (scaffold / gates / mutation / manifest) is NOT
+  // rejected as jargon — a category error no revision could satisfy.
+  audience?: SpecAudience;
+}
+
+// Resolve the spec's effective audience — `product` is the default (the strict bar).
+function audienceOf(spec: CandidateSpec): SpecAudience {
+  return spec.audience ?? "product";
 }
 
 // The validator seam — mirrors the discovery/triage answerer shape so the route
-// wires a real provider answerer and tests inject a fake.
+// wires a real provider answerer and tests inject a fake. `reAuthor` is the gate's
+// BUILT-IN re-author: when no emitter-specific revise callback is wired, the stage
+// uses this to genuinely ATTEMPT guided re-authoring (the validator's own provider
+// rewrites the spec from its guidance) BEFORE any escalation — so a spec is never
+// abandoned "after 0 revision(s)". Optional so a pure-validate test fake need not
+// implement it (then the gate falls back to the emitter callback, else strict).
 export interface SpecQualityAnswerer {
   validate(spec: CandidateSpec): Promise<SpecQualityAnswer>;
+  reAuthor?(spec: CandidateSpec, guidance: string): Promise<CandidateSpec>;
 }
 
 // buildSpecQualityPrompt renders the read-only validation prompt: the contract
-// (single-sourced from specQuality.ts), the candidate spec, and the strict output
-// instruction. Exported for the prompt-shape test.
+// (single-sourced from specQuality.ts, rendered for the spec's audience), the
+// candidate spec, and the strict output instruction. Exported for the prompt-shape test.
 export function buildSpecQualityPrompt(spec: CandidateSpec): string {
   const criteria =
     spec.acceptanceCriteria.length === 0
@@ -54,7 +75,7 @@ export function buildSpecQualityPrompt(spec: CandidateSpec): string {
     "to enter the build DAG. You are READ-ONLY: do not edit files, run commands, or",
     "write anything — only judge and explain.",
     "",
-    SPEC_QUALITY_CONTRACT_PROMPT,
+    specQualityContractPrompt(audienceOf(spec)),
     "",
     "The spec to judge:",
     `Title: ${spec.title}`,
@@ -66,17 +87,49 @@ export function buildSpecQualityPrompt(spec: CandidateSpec): string {
   ].join("\n");
 }
 
+// buildSpecRevisionPrompt renders the RE-AUTHOR prompt: the contract (for the spec's
+// audience), the failing spec, the validator's guidance, and the strict output
+// instruction. The model returns a revised spec addressing the guidance. Exported for
+// the prompt-shape test.
+export function buildSpecRevisionPrompt(spec: CandidateSpec, guidance: string): string {
+  const criteria =
+    spec.acceptanceCriteria.length === 0
+      ? ["(none provided)"]
+      : spec.acceptanceCriteria.map((criterion) => `- ${criterion}`);
+  return [
+    "You are the Tanren Spec Re-Author. The spec below FAILED the spec-quality gate.",
+    "Re-author it so it satisfies the contract, addressing the validator's guidance",
+    "while preserving the spec's original intent and scope.",
+    "",
+    specQualityContractPrompt(audienceOf(spec)),
+    "",
+    "The spec to re-author:",
+    `Title: ${spec.title}`,
+    `Description: ${spec.description}`,
+    "Acceptance criteria:",
+    ...criteria,
+    "",
+    `Validator guidance to address: ${guidance}`,
+    "",
+    ...SPEC_REVISION_OUTPUT_INSTRUCTIONS,
+  ].join("\n");
+}
+
 // No bounding option remains: each provider answerer call is governed by the agent
 // ActivityWatchdog (output-driven, never a wall-clock kill) the adapter constructs.
 export type WrapProviderSpecQualityAnswererOptions = Record<never, never>;
 
 // Adapt an `AnswererAdapter` into the `SpecQualityAnswerer` seam. The strict
-// `SpecQualityAnswer` parse on the output makes a malformed answer THROW (loud).
+// `SpecQualityAnswer` parse on the output makes a malformed answer THROW (loud). The
+// SAME adapter (one provider call per invocation) backs both the validate and the
+// built-in re-author, so the gate genuinely re-authors before any escalation.
 export function wrapProviderSpecQualityAnswerer(
   adapter: AnswererAdapter<SpecQualityAnswer>,
+  reAuthorAdapter: AnswererAdapter<SpecRevisionAnswer>,
   _options: WrapProviderSpecQualityAnswererOptions = {},
 ): SpecQualityAnswerer {
   const jsonSchema = renderAnswererJsonSchema(SpecQualityAnswer);
+  const revisionJsonSchema = renderAnswererJsonSchema(SpecRevisionAnswer);
   return {
     async validate(spec: CandidateSpec): Promise<SpecQualityAnswer> {
       return adapter.runAnswerer({
@@ -87,6 +140,24 @@ export function wrapProviderSpecQualityAnswerer(
           parse: (value) => SpecQualityAnswer.parse(value),
         },
       });
+    },
+    async reAuthor(spec: CandidateSpec, guidance: string): Promise<CandidateSpec> {
+      const revised = await reAuthorAdapter.runAnswerer({
+        prompt: buildSpecRevisionPrompt(spec, guidance),
+        outputSchema: {
+          name: SPEC_REVISION_ANSWER_SCHEMA_ID,
+          jsonSchema: revisionJsonSchema,
+          parse: (value) => SpecRevisionAnswer.parse(value),
+        },
+      });
+      // Carry the original audience onto the revised spec so re-validation judges it
+      // against the SAME (audience-correct) bar.
+      return {
+        title: revised.title,
+        description: revised.description,
+        acceptanceCriteria: revised.acceptanceCriteria,
+        ...(spec.audience !== undefined && { audience: spec.audience }),
+      };
     },
   };
 }

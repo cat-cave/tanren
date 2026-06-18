@@ -10,7 +10,7 @@ import type {
   ReviewAnswer,
   TriageAnswer,
 } from "../answerers/schemas/index.js";
-import type { SpecQualityAnswer } from "../answerers/schemas/specQuality.js";
+import type { SpecQualityAnswer, SpecRevisionAnswer } from "../answerers/schemas/specQuality.js";
 import { type SpecQualityAnswerer, wrapProviderSpecQualityAnswerer } from "../forge/specQuality/index.js";
 import type { RoutingChainEntry, RoutingTable } from "../config/shared.js";
 import type { RunnerHandle } from "../contracts/allocator.js";
@@ -239,7 +239,11 @@ export function buildSpecQualityValidator(
   routing: RoutingTable,
 ): SpecQualityAnswerer {
   const adapter = buildAnswererAdapter<SpecQualityAnswer>(deps, chainHead(routing, "audit"), "specQuality");
-  return wrapProviderSpecQualityAnswerer(adapter);
+  // The built-in re-author (the gate's default `reviseSpec`) rides the SAME `audit`
+  // chain head, so a failing spec is genuinely re-authored from its guidance before
+  // any escalation — the loop never gives up "after 0 revision(s)".
+  const reAuthorAdapter = buildAnswererAdapter<SpecRevisionAnswer>(deps, chainHead(routing, "audit"), "specQuality");
+  return wrapProviderSpecQualityAnswerer(adapter, reAuthorAdapter);
 }
 
 // Resolves the intent-preserving conflict-resolution Answerer (

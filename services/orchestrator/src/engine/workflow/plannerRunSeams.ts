@@ -89,7 +89,13 @@ export function loopConfigSeam(
     ...(context.auditPosture !== undefined && { auditPosture: context.auditPosture }),
     ...(context.convergencePolicy !== undefined && { convergencePolicy: context.convergencePolicy }),
     ...(context.creditUsdRate !== undefined && { creditUsdRate: context.creditUsdRate }),
-    specValidator: { validator: specValidator },
+    // The validator carries NO emitter `reviseSpec` — but the gate now uses the
+    // validator's BUILT-IN re-author as the default, so a failing triaged spec is
+    // genuinely re-authored from its guidance before any escalation (never the
+    // give-up "after 0 revision(s)"). A TEMPLATE-CREATION build judges its internal
+    // specs on the `technical` LEGIBILITY bar so legitimate domain vocabulary
+    // (scaffold / gates / mutation / manifest) is not rejected as jargon.
+    specValidator: { validator: specValidator, ...(context.templateBuild === true && { audience: "technical" }) },
   };
 }
 
