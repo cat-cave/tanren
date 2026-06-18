@@ -1,16 +1,29 @@
-# Design Notes
+# Design docs
 
-Design notes that refine `PROJECT_BRIEF.md` live here.
+This directory holds two distinct things — keep them separate:
 
-Phase 2 is the right time to pull the external beta design system into this repository, because Phase 1 now has real workflow states that need an operator-visible surface. Import the design system first as source artifacts under `docs/design/**`; apply it to runtime UI only when a spec owns the relevant dashboard paths.
+1. **The hi-fi reference for Tanren's OWN dashboard.** The full-product vision is
+   mocked in the `tanren-hi-fidelity/` bundle (exported from Claude Design) and its
+   design tokens live under `tokens/`. These are a **human reference** so the build
+   recreates Tanren's dashboard faithfully; the engine never reads them. The docs
+   that track the hi-fi ↔ implementation gap and the revision SOP live here:
+   - `phase-3-hifi-gaps.md` — the code-grounded hi-fi ↔ implementation gap audit.
+   - `hifi-work-needed.md` — the inverse-direction work-list for the hi-fi bundle.
+   - `hifi-revision-process.md` — the SOP for turning a new hi-fi revision into work.
+   - `acceptance-criteria/` — per-screen acceptance specs for the dashboard surfaces.
+   - `tokens/` — the source-of-truth design tokens + the `tanren-design` brand skill.
 
-Good trigger points:
+2. **The native design subsystem** (design as a first-class phase of the products
+   Tanren _builds_) is **built and wired into the spec loop** — it is NOT in this
+   directory. Its canonical doc is `docs/roadmap/native-design-subsystem.md`. The
+   subsystem (`DesignContract` entity → design agent/phase → writer injection →
+   design oracle, all in one DAG, no handoff) is e2e-wired and proven-to-close via a
+   canned-model fixture harness, but has **not yet been exercised on a live run**
+   (visual fidelity / live-render is the WS-D4a follow-on). Do not conflate the
+   hand-done hi-fi bundle (a human reference for Tanren's dashboard) with the native
+   subsystem (how Tanren designs the apps it ships).
 
-- project/spec creation UI
-- run detail views with durable task state
-- PR/CI/review status surfaces
-- credential onboarding flows
-
-Until one of those specs owns UI paths, keep backend and workflow changes visually generic and avoid applying early design-system churn across the app.
-
-Before dashboard implementation, the workflow design inventory should include onboarding, credential setup, project setup, spec creation, run detail, review handoff, failure recovery, settings, and history/cost views.
+The notes here refine `PROJECT_BRIEF.md`. When implementing a dashboard surface,
+lift tokens from `tokens/colors_and_type.css` (consumed through
+`services/dashboard/src/design/`, drift-checked) and follow `tokens/SKILL.md` as the
+engineering contract.
