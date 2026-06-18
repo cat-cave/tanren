@@ -16,6 +16,7 @@ import type {
   TriageAnswer,
 } from "../../src/engine/answerers/schemas/index.js";
 import type { CiWhen } from "../../src/engine/ci/index.js";
+import { AnswererStalledError } from "../../src/engine/providers/answererSchemaError.js";
 import { CostRecorder } from "../../src/engine/costs/index.js";
 import type { GateOutcome } from "../../src/engine/workflow/gate/index.js";
 import { FakeEventStore } from "./fakeEventStore.js";
@@ -160,6 +161,31 @@ function makeAnswerer<T>(answers: ReadonlyArray<T>): AnswererAdapter<T> & { call
       const answer = answers[index] ?? answers.at(-1);
       index += 1;
       return answer as T;
+    },
+  };
+}
+
+// An answerer that STALLS (throws `AnswererStalledError`) for its first `stallsBefore`
+// calls, then returns `answer` — the transient-stall shape the loop-stage recovery wrapper
+// re-drives through. `stallsBefore: Infinity` makes it a GENUINELY-WEDGED stage (stalls on
+// every call) so the convergence judgment escalates. Records its calls like makeAnswerer.
+export function makeStallingThenAnswer<T>(
+  answer: T,
+  stallsBefore: number,
+): AnswererAdapter<T> & { calls: AnswererRunOptions<T>[] } {
+  let index = 0;
+  const calls: AnswererRunOptions<T>[] = [];
+  return {
+    kind: "answerer",
+    cli: "fake",
+    authRef: fakeAuthRef,
+    calls,
+    async runAnswerer(opts) {
+      calls.push(opts);
+      const stalling = index < stallsBefore;
+      index += 1;
+      if (stalling) throw new AnswererStalledError("FakeAnswer");
+      return answer;
     },
   };
 }
