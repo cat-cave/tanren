@@ -14,6 +14,7 @@
 
 import { answererOutputSchemaFor, ConflictAnswer } from "../../../answerers/schemas/index.js";
 import type { AnswererAdapter } from "../../../providers/types.js";
+import { runAnswererStageWithRecovery } from "../../loopStageRecovery.js";
 import {
   isProductVisionEmpty,
   type ConflictAnswererInvoker,
@@ -53,7 +54,19 @@ export class AnswererBackedConflictInvoker implements ConflictAnswererInvoker {
       outputSchema,
       ...(this.deps.workspace !== undefined && { workspace: this.deps.workspace }),
     };
-    return this.deps.adapter.runAnswerer(answerOpts);
+    // Transient-stall recovery on the MERGE/base-shift path (v39 finding): the
+    // conflict-resolver answerer is the model call that, when it STALLED mid-resolve, used to
+    // propagate `AnswererStalledError` straight up to the base-shift coordinator's catch →
+    // `BaseShiftHeldError("resolve", …)` → `merge.conflict` → `merge.dequeued {reason:"conflict"}`
+    // — bricking the spec on a NON-deterministic blip that the next identical call would have
+    // resolved. The spec-loop stages already recover via this exact primitive (loopStageRecovery);
+    // the merge path did NOT. Wrapping the SINGLE answerer call (not the empty-files short-circuit
+    // above, which makes no model call) re-drives a transient stall IN PLACE — the base shift /
+    // recorded conflict survives — and escalates LOUDLY (StageStallEscalationError) ONLY at a
+    // proven fixed point (the resolver stalls on EVERY re-drive). A genuine `irreconcilable`
+    // verdict is an ANSWER, not a stall, so it is returned and routed by the existing
+    // conflict-handling unchanged.
+    return runAnswererStageWithRecovery(outputSchema.name, () => this.deps.adapter.runAnswerer(answerOpts));
   }
 }
 
