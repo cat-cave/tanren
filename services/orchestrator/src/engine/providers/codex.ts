@@ -12,7 +12,11 @@ import { captureBaselineSha, captureGitStateAfterCodex } from "./codexGit.js";
 import { buildCodexAnswererExecCommand, buildCodexExecCommand } from "./codexExecCommand.js";
 import { createLogger } from "../observability/logger.js";
 import { parseWithOneSchemaRepair } from "./answererRepair.js";
-import { AnswererSchemaValidationError, AnswererStalledError } from "./answererSchemaError.js";
+import {
+  AnswererSchemaValidationError,
+  AnswererStalledError,
+  throwIfTransientSshFailure,
+} from "./answererSchemaError.js";
 import { answererWorkspacePath, safeSchemaFileName } from "./codexAnswererPaths.js";
 
 const log = createLogger("codex");
@@ -75,7 +79,7 @@ export interface CodexAnswererTelemetry extends CodexEventTelemetry {
 
 // Re-exported from answererSchemaError.ts (split out to break the import cycle with
 // answererRepair.ts) so existing `from "./codex.js"` importers stay stable.
-export { AnswererSchemaValidationError, AnswererStalledError };
+export { AnswererSchemaValidationError, AnswererStalledError, throwIfTransientSshFailure };
 
 export function createCodexWriter(dependencies: CodexWriterDependencies): WriterAdapter {
   return {
@@ -246,9 +250,9 @@ export function createCodexAnswerer<TOutput>(dependencies: CodexAnswererDependen
             codexHome: auth.CODEX_HOME,
           });
         }
-        // A TRANSIENT stall (no sign of life), NOT a deterministic failure — the typed error
-        // lets the loop-stage recovery wrapper RE-DRIVE this stage, not discard the spec loop.
+        // A TRANSIENT stall or SSH-connect failure → the typed transient the loop-stage recovery RE-DRIVES (not terminal).
         if (result.stalled === true) throw new AnswererStalledError(opts.outputSchema.name);
+        throwIfTransientSshFailure(result.failure, opts.outputSchema.name);
         if (telemetry.usageLimit !== undefined) {
           throw new CodexUsageLimitError(opts.outputSchema.name, telemetry.usageLimit.message);
         }

@@ -18,6 +18,7 @@ import type { AnswererAdapter } from "../src/engine/providers/types.js";
 import {
   isTransientAnswererError,
   PersistentAnswererOutageError,
+  transientSignature,
   withAnswererRetry,
   wrapProviderResearcher,
 } from "../src/engine/templates/index.js";
@@ -101,6 +102,38 @@ describe("research seam — transient timeout RETRIES, persistent fails loud (v3
     expect(calls()).toBeGreaterThan(4);
   });
 
+  it("RETRIES a transient SSH-CONNECT failure then succeeds (apex v37 — never terminal)", async () => {
+    // The live v37 finding: the FIRST template-research answerer failed with an
+    // `ssh_failed` connect-establishment blip while the runner was momentarily saturated;
+    // it must RETRY (the runner recovers in seconds), not halt template-creation fail-closed.
+    const { adapter, calls } = scriptedAdapter({
+      throwUntil: 2,
+      error: () =>
+        new Error(
+          'Codex Answerer failed for schema tanren.template_research.v1: exit unknown failure={"kind":"ssh_failed","target":"tanren@runner:22","message":"SSH connection failed to establish within 30000ms"}',
+        ),
+    });
+    const researcher = wrapProviderResearcher(adapter, { retry: { sleep: async () => {} } });
+    const research = await researcher.research(request);
+    expect(calls()).toBe(2);
+    expect(research.researchSources).toEqual(groundedOutput.researchSources);
+  });
+
+  it("a SUSTAINED identical SSH-connect failure escalates LOUD as an outage (not on a count)", async () => {
+    const { adapter, calls } = scriptedAdapter({
+      throwUntil: Number.POSITIVE_INFINITY,
+      error: () =>
+        new Error(
+          'Codex Answerer failed for schema tanren.template_research.v1: exit unknown failure={"kind":"ssh_failed","message":"SSH connection failed to establish within 30000ms"}',
+        ),
+    });
+    const researcher = wrapProviderResearcher(adapter, { retry: { sleep: async () => {} } });
+    await expect(researcher.research(request)).rejects.toBeInstanceOf(PersistentAnswererOutageError);
+    // It retried past the saturation curve before the identical signal proved a fixed point —
+    // an outage surfaces only on intelligent NON-convergence, never a hardcoded attempt cap.
+    expect(calls()).toBeGreaterThan(4);
+  });
+
   it("a PERSISTENT (non-transient) usage-limit fails LOUD immediately — no retry burned", async () => {
     const { adapter, calls } = scriptedAdapter({
       throwUntil: Number.POSITIVE_INFINITY,
@@ -125,12 +158,40 @@ describe("withAnswererRetry — transient classification + bounded backoff", () 
     expect(isTransientAnswererError(new Error("socket hang up"))).toBe(true);
   });
 
-  it("classifies usage-limit / unknown errors as PERSISTENT (not retried)", () => {
+  it("classifies an SSH-CONNECT / ssh_failed transport failure as transient (apex v37)", () => {
+    expect(
+      isTransientAnswererError(
+        new Error(
+          'Codex Answerer failed: exit unknown failure={"kind":"ssh_failed","message":"SSH connection failed to establish within 30000ms"}',
+        ),
+      ),
+    ).toBe(true);
+    // It keys to its OWN stable signature class (so a sustained-identical ssh-connect
+    // failure converges to a fixed point, distinct from a generic timeout/transport blip).
+    expect(transientSignature(new Error("SSH connection failed to establish within 30000ms"))).toBe("ssh-connect");
+    expect(transientSignature(new Error('failure={"kind":"ssh_failed","message":"something"}'))).toBe("ssh-connect");
+  });
+
+  it("classifies a typed provider stall (AnswererStalledError) as transient", () => {
+    const stalled = new Error("Answerer stalled (no sign of life) for schema x");
+    stalled.name = "AnswererStalledError";
+    expect(isTransientAnswererError(stalled)).toBe(true);
+    expect(transientSignature(stalled)).toBe("stalled");
+  });
+
+  it("classifies usage-limit / auth / host-key / unknown errors as PERSISTENT (not retried)", () => {
     const usage = new Error("usage limit reached");
     usage.name = "CodexUsageLimitError";
     expect(isTransientAnswererError(usage)).toBe(false);
     expect(isTransientAnswererError(new Error("HTTP 401 Unauthorized"))).toBe(false);
     expect(isTransientAnswererError(new Error("something else entirely"))).toBe(false);
+    // A host-key fingerprint mismatch rides an `ssh_failed` but is a GENUINE, non-self-healing
+    // security/config failure — it must stay terminal, never retried as a transient blip.
+    expect(
+      isTransientAnswererError(
+        new Error('failure={"kind":"ssh_failed","message":"SSH host key fingerprint mismatch for tanren@runner:22"}'),
+      ),
+    ).toBe(false);
   });
 
   it("backs off (exponential, saturating) between UNBOUNDED transient retries", async () => {

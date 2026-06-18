@@ -24,20 +24,61 @@
  *   - ECONNREFUSED — the runner was momentarily not listening (mid-restart);
  *   - ETIMEDOUT    — the connect/handshake timed out at the socket layer;
  *   - EPIPE        — the socket closed under a pending write;
- *   - EHOSTUNREACH — a transient unreachable-route blip to the runner host.
+ *   - EHOSTUNREACH — a transient unreachable-route blip to the runner host;
+ *   - ENETUNREACH  — a transient unreachable-network blip.
  * Matched by errno code OR by the substring in the error message (ssh2 surfaces the
  * socket error as e.g. "read ECONNRESET" in the message, not always a `.code`).
  */
-const TRANSIENT_NETWORK_CODES: readonly string[] = ["ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "EPIPE", "EHOSTUNREACH"];
+const TRANSIENT_NETWORK_CODES: readonly string[] = [
+  "ECONNRESET",
+  "ECONNREFUSED",
+  "ETIMEDOUT",
+  "EPIPE",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+];
 
-/** True iff `error` is a transient network blip that should be retried (see the set above). */
+// The CONNECT-ESTABLISHMENT transport-failure wording that is ALSO a transient blip but
+// carries no errno code/substring: the ssh2 substrate surfaces a handshake that never
+// came up as `ssh_failed` with "SSH connection failed to establish within <N>ms" (the
+// connect-establishment timeout firing while the runner is momentarily saturated — it
+// recovers seconds later; apex v37). The `ssh_failed` failure-kind keyword (serialized
+// into the answerer error as `failure={"kind":"ssh_failed",...}`) and the generic
+// connection reset/refused/closed wording are likewise transport-establishment blips.
+// CONSERVATIVE by construction: this matches transport-ESTABLISHMENT failures only — it
+// deliberately does NOT match a host-key fingerprint mismatch (a real security/config
+// failure that never self-heals), which is handled as non-transient below.
+const TRANSIENT_TRANSPORT_PATTERN =
+  /ssh_failed|ssh connection failed to establish|connection (?:reset|refused|closed)|socket hang up|connection lost before handshake/u;
+
+// A host-key fingerprint MISMATCH / verification failure is a GENUINE, non-self-healing
+// failure (a real config or security problem) even though it surfaces as an `ssh_failed`. It
+// must NEVER be retried as a transient blip — recognized by the specific FAILURE phrasing so
+// it short-circuits the transport-blip match. (Deliberately NOT a bare "host key" substring:
+// the benign TOFU "host key discovery" path also contains it and IS a transient connect.)
+const NON_TRANSIENT_SSH_PATTERN = /host key fingerprint mismatch|host key verification failed/u;
+
+/**
+ * True iff `error` is a transient network/transport blip that should be retried — a
+ * connection-level reset/refusal/timeout/unreachable errno, OR a transport-ESTABLISHMENT
+ * failure (an `ssh_failed` whose connect handshake never came up: "SSH connection failed to
+ * establish …", a reset/refused/closed connection). A host-key fingerprint mismatch is
+ * explicitly EXCLUDED — it is a genuine config/security failure that never self-heals.
+ */
 export function isTransientSshConnectError(error: unknown): boolean {
   const code = typeof (error as { code?: unknown })?.code === "string" ? (error as { code: string }).code : undefined;
   if (code !== undefined && TRANSIENT_NETWORK_CODES.includes(code)) {
     return true;
   }
-  const message = error instanceof Error ? error.message : String(error);
-  return TRANSIENT_NETWORK_CODES.some((c) => message.includes(c));
+  const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
+  // A host-key mismatch is NOT a transient blip even though it rides an `ssh_failed`.
+  if (NON_TRANSIENT_SSH_PATTERN.test(message)) {
+    return false;
+  }
+  if (TRANSIENT_NETWORK_CODES.some((c) => message.includes(c.toLowerCase()))) {
+    return true;
+  }
+  return TRANSIENT_TRANSPORT_PATTERN.test(message);
 }
 
 /**

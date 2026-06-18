@@ -17,10 +17,33 @@ describe("isTransientSshConnectError", () => {
     }
   });
 
+  it("classifies a CONNECT-ESTABLISHMENT / ssh_failed transport blip as transient (apex v37)", () => {
+    // The live v37 finding: a new SSH connection could not establish within the connect
+    // window while the runner was momentarily saturated — it recovered seconds later.
+    expect(isTransientSshConnectError(new Error("SSH connection failed to establish within 30000ms"))).toBe(true);
+    // The `ssh_failed` failure-kind keyword (serialized into the answerer error message).
+    expect(
+      isTransientSshConnectError(
+        new Error(
+          'failure={"kind":"ssh_failed","target":"tanren@runner:22","message":"SSH connection failed to establish within 30000ms"}',
+        ),
+      ),
+    ).toBe(true);
+    expect(isTransientSshConnectError(new Error("Connection lost before handshake"))).toBe(true);
+    expect(isTransientSshConnectError(new Error("connection refused"))).toBe(true);
+  });
+
   it("does NOT classify auth / host-key / generic errors as transient", () => {
     expect(isTransientSshConnectError(new Error("Handshake failed: host key verification failed"))).toBe(false);
     expect(isTransientSshConnectError(new Error("All configured authentication methods failed"))).toBe(false);
     expect(isTransientSshConnectError(new Error("unparseable fingerprint"))).toBe(false);
+    // A host-key fingerprint mismatch rides an `ssh_failed` but is a GENUINE security/config
+    // failure that never self-heals — it must stay terminal even with the ssh_failed keyword.
+    expect(
+      isTransientSshConnectError(
+        new Error('failure={"kind":"ssh_failed","message":"SSH host key fingerprint mismatch for tanren@runner:22"}'),
+      ),
+    ).toBe(false);
   });
 });
 
