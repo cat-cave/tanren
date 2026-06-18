@@ -3,6 +3,7 @@ import type { SecretStore } from "../contracts/secretStore.js";
 import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import { CommandFileSubstrate } from "../ssh/commandFileSubstrate.js";
 import { quoteSshShellArg } from "../ssh/command.js";
+import { outputOnlyWatchdog } from "../ssh/activityWatchdog.js";
 import { validateOpencodeAuthBundle, validateOpencodeCredentialRef } from "./opencodeAuth.js";
 import { validateCredentialRef } from "./codexAuth.js";
 import { resolveRawProviderKey } from "./managedKey.js";
@@ -19,7 +20,6 @@ export interface MaterializeOpencodeAuthInput {
   ref: string;
   runId: string;
   baseDir?: string;
-  timeoutMs?: number;
   // SaaS Tier-B #5: MANAGED mode. When true, the run resolved the platform
   // OpenRouter shell and `ref` is a plain API-KEY credential
   // (credential/openrouter/…) whose stored secret is the raw OpenRouter key, NOT
@@ -71,7 +71,6 @@ export async function materializeOpencodeAuthBundle(
     path: opencodeAuthJsonPath(dataHome),
     content: bundle.authJson,
     mode: 0o600,
-    timeoutMs: input.timeoutMs ?? 30_000,
   });
   assertFileWriteOk(result, "opencode");
   return { XDG_DATA_HOME: dataHome, ref, managed: false, redacted: true };
@@ -106,13 +105,13 @@ async function materializeManagedOpencode(input: MaterializeOpencodeAuthInput, d
     path: opencodeAuthJsonPath(dataHome),
     content: authJson,
     mode: 0o600,
-    timeoutMs: input.timeoutMs ?? 30_000,
   });
   assertFileWriteOk(authResult, "opencode");
   // The opencode.json carries no secret, so it is interpolated into the command.
   const configResult = await input.ssh.run(input.target, {
     command: buildManagedOpencodeConfigCommand(configHome),
-    timeoutMs: input.timeoutMs ?? 30_000,
+    // INFRA config write: output-driven watchdog, no wall-clock kill.
+    watchdog: outputOnlyWatchdog(),
   });
   assertMaterializationOk(configResult);
   return configHome;

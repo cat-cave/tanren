@@ -25,7 +25,6 @@ import {
 
 export interface AnswererBackedConflictInvokerDeps {
   adapter: AnswererAdapter<ConflictAnswer>;
-  timeoutMs: number;
   workspace?: string;
 }
 
@@ -51,7 +50,6 @@ export class AnswererBackedConflictInvoker implements ConflictAnswererInvoker {
     const prompt = buildConflictResolverPrompt(input);
     const answerOpts: Parameters<typeof this.deps.adapter.runAnswerer>[0] = {
       prompt,
-      timeoutMs: this.deps.timeoutMs,
       outputSchema,
       ...(this.deps.workspace !== undefined && { workspace: this.deps.workspace }),
     };

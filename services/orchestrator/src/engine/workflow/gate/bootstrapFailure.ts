@@ -92,7 +92,9 @@ export async function workspaceDepsInstallGateOutcome(
         run: error.command,
         exitCode: error.exitCode,
         passed: false,
-        timedOut: error.timedOut,
+        // The gate-step schema's `timedOut` field records "did not complete"; the
+        // bootstrap error's progress-based no-life flag (`stalled`) feeds it.
+        timedOut: error.stalled,
         // The bootstrap stdout/stderr tail (the `ERR_PNPM_…` detail) so the writer
         // sees exactly what to fix in its scaffold.
         outputTail: error.outputTail,

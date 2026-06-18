@@ -63,7 +63,6 @@ export interface DesignOracleStageInput {
   actorRef: ActorRef;
   adapter: AnswererAdapter<DesignOracleAnswer>;
   baselineSha: string;
-  timeoutMs: number;
   // The read-only workspace the oracle self-inspects (the built output).
   workspacePath: string;
 }
@@ -136,7 +135,6 @@ export async function runDesignOracleStage(input: DesignOracleStageInput): Promi
   const outputSchema = answererOutputSchemaFor("designOracle", DesignOracleAnswerSchema);
   const verdict = await input.adapter.runAnswerer({
     prompt,
-    timeoutMs: input.timeoutMs,
     workspace: input.workspacePath,
     outputSchema,
   });

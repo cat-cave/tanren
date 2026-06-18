@@ -14,10 +14,17 @@ import { buildSshExecCommand } from "./command.js";
 import { hostKeyFingerprintMatches } from "./fingerprint.js";
 
 // The default cadence at which the activity watchdog consults its `livenessProbe`
-// between output chunks. This is a poll INTERVAL (how often to ask "is it alive?"),
-// NOT a total-duration budget — every tick that finds life RESETS, so it never
-// accumulates toward a kill. (arch-allow: timeout-class — poll cadence, not a deadline.)
+// between output chunks. A poll INTERVAL (how often to ask "is it alive?"), NOT a
+// total-duration budget — every tick that finds life RESETS, so it never accumulates
+// toward a kill.
 const DEFAULT_PROBE_INTERVAL_MS = 5_000;
+
+// The default connect-ESTABLISHMENT bound (TCP connect + SSH handshake/auth) applied
+// when a command supplies no `connectTimeoutMs`. This is the ONE legitimate time
+// bound the substrate keeps: a connection that never establishes has no running work
+// to lose. It bounds ONLY the handshake — once the channel is up the command runs
+// UNBOUNDED, governed solely by the activity watchdog.
+const DEFAULT_CONNECT_ESTABLISH_MS = 30_000;
 
 type Ssh2Client = Pick<Client, "connect" | "destroy" | "end" | "exec" | "once" | "on">;
 type Ssh2ClientFactory = () => Ssh2Client;
@@ -34,13 +41,11 @@ interface RunState {
   exitCode: number | null;
   signal?: string;
   settled: boolean;
-  // Legacy wall-clock-kill timer (the un-migrated `timeoutMs` path). Present ONLY when
-  // the command supplied no `watchdog`.
-  timer?: NodeJS.Timeout;
-  // Activity-watchdog state (the progress-based path). `probeTimer` is the recurring
-  // liveness-probe tick; `lastActivityAt` is the most recent sign of life (output or a
-  // positive probe); `lastProbeTickAt` is when the watchdog last evaluated. None is a
-  // total-duration budget — all reset on activity.
+  // Activity-watchdog state (the SOLE hang-detection path — there is no wall-clock
+  // kill timer). `probeTimer` is the recurring liveness-probe tick; `lastActivityAt`
+  // is the most recent sign of life (output or a positive probe); `lastProbeTickAt`
+  // is when the watchdog last evaluated. None is a total-duration budget — all reset
+  // on activity, so the command runs UNBOUNDED while it shows any life.
   probeTimer?: NodeJS.Timeout;
   lastActivityAt: number;
   lastProbeTickAt?: number;
@@ -87,14 +92,18 @@ export class SshCommandSubstrate implements CommandSubstrate {
       const state: RunState = { stdout: "", stderr: "", exitCode: null, settled: false, lastActivityAt: Date.now() };
       let hostKeyFailure: string | undefined;
 
+      // The watchdog is the SOLE hang detector — every command runs one. When the
+      // caller supplies none, a default OUTPUT-DRIVEN watchdog (no probe) governs: it
+      // still never kills for elapsed time, only surfaces a recoverable stall on a
+      // genuine silent death. Callers wanting a silent-op liveness probe build their
+      // watchdog via the shared `buildActivityWatchdog` factory.
+      const watchdog: ActivityWatchdog = command.watchdog ?? { onQuiet: "surface" };
+
       const settle = (result: CommandResult, close: "end" | "destroy" = "end"): void => {
         if (state.settled) {
           return;
         }
         state.settled = true;
-        if (state.timer !== undefined) {
-          clearTimeout(state.timer);
-        }
         if (state.probeTimer !== undefined) {
           clearInterval(state.probeTimer);
         }
@@ -106,28 +115,17 @@ export class SshCommandSubstrate implements CommandSubstrate {
         resolve(result);
       };
 
-      const fail = (message: string, timedOut = false): void => {
+      const fail = (message: string): void => {
         settle(
           {
             ...this.failureResult(target, message),
             stdout: state.stdout,
             stderr: state.stderr,
-            timedOut,
           },
           "destroy",
         );
       };
 
-      // PROGRESS-BASED path: an `ActivityWatchdog` replaces the wall-clock kill. The legacy
-      // `timeoutMs` total-duration timer arms ONLY when no watchdog is supplied (un-migrated
-      // callers). A watched command is never killed for elapsed time — only for an observed
-      // genuine absence of all signs of life (see `armActivityWatchdog`).
-      if (command.watchdog === undefined) {
-        state.timer = setTimeout(
-          () => fail(`SSH command timed out after ${command.timeoutMs}ms`, true),
-          command.timeoutMs,
-        );
-      }
       client.once("ready", () => {
         client.exec(execCommand, (error, stream) => {
           if (error !== undefined) {
@@ -137,7 +135,6 @@ export class SshCommandSubstrate implements CommandSubstrate {
           this.collectStream(
             stream,
             state,
-            command.watchdog,
             (channelError) => fail(messageFromError(channelError)),
             () => {
               settle({
@@ -145,13 +142,12 @@ export class SshCommandSubstrate implements CommandSubstrate {
                 stdout: state.stdout,
                 stderr: state.stderr,
                 signal: state.signal,
-                timedOut: false,
               });
             },
           );
-          if (command.watchdog !== undefined) {
-            this.armActivityWatchdog(target, state, command.watchdog, client, resolve);
-          }
+          // The watchdog arms only AFTER the channel is up (the connect-establishment
+          // bound governs the handshake; the watchdog governs the running command).
+          this.armActivityWatchdog(target, state, watchdog, client, resolve);
           if (command.stdin !== undefined) {
             stream.end(command.stdin);
           }
@@ -167,7 +163,11 @@ export class SshCommandSubstrate implements CommandSubstrate {
       // A long-lived listener on a destroyed client is fine — it is GC'd with the
       // client when this run's promise settles.
       client.on("error", (error: Error) => fail(hostKeyFailure ?? messageFromError(error)));
-      client.once("timeout", () => fail(`SSH connection timed out after ${command.timeoutMs}ms`, true));
+      const connectMs = this.options.connectTimeoutMs ?? command.connectTimeoutMs ?? DEFAULT_CONNECT_ESTABLISH_MS;
+      // The connect-ESTABLISHMENT timeout (handshake only): a connection that never
+      // comes up has no running work to lose. This is the ONE legitimate time bound;
+      // it governs the handshake, never the running command (the watchdog owns that).
+      client.once("timeout", () => fail(`SSH connection failed to establish within ${connectMs}ms`));
       client.connect({
         host: target.host,
         port: target.port,
@@ -182,8 +182,8 @@ export class SshCommandSubstrate implements CommandSubstrate {
           }
           return matches;
         },
-        readyTimeout: this.options.connectTimeoutMs ?? command.timeoutMs,
-        timeout: this.options.connectTimeoutMs ?? command.timeoutMs,
+        readyTimeout: connectMs,
+        timeout: connectMs,
         algorithms:
           this.options.serverHostKeyAlgorithms === undefined
             ? undefined
@@ -195,7 +195,6 @@ export class SshCommandSubstrate implements CommandSubstrate {
   private collectStream(
     stream: ClientChannel,
     state: RunState,
-    watchdog: ActivityWatchdog | undefined,
     onError: (error: unknown) => void,
     onClose: () => void,
   ): void {
@@ -203,9 +202,7 @@ export class SshCommandSubstrate implements CommandSubstrate {
     // streaming agent each telemetry line is a token/log). Stamp the activity clock
     // so the watchdog resets and the work continues UNBOUNDED.
     const markActivity = (): void => {
-      if (watchdog !== undefined) {
-        state.lastActivityAt = Date.now();
-      }
+      state.lastActivityAt = Date.now();
     };
     stream.on("data", (chunk: Buffer) => {
       state.stdout += chunk.toString("utf8");
@@ -316,7 +313,6 @@ export class SshCommandSubstrate implements CommandSubstrate {
         stdout: state.stdout,
         stderr: state.stderr,
         signal: state.signal,
-        timedOut: false,
         stalled: true,
         quietForMs,
       });
@@ -326,7 +322,6 @@ export class SshCommandSubstrate implements CommandSubstrate {
       ...this.failureResult(target, "SSH command showed no sign of life (dead/zombied/deadlocked) and was terminated"),
       stdout: state.stdout,
       stderr: state.stderr,
-      timedOut: false,
       stalled: true,
       quietForMs,
     });
@@ -337,7 +332,6 @@ export class SshCommandSubstrate implements CommandSubstrate {
       exitCode: null,
       stdout: "",
       stderr: "",
-      timedOut: false,
       failure: defineFailure({ kind: "ssh_failed", target: formatTarget(target), message }),
     };
   }

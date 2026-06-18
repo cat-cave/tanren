@@ -56,7 +56,6 @@ describe("opencode writer adapter", () => {
     const result = await writer.runWriter({
       prompt: "make a tiny edit",
       workspace: "/workspace/repo",
-      timeoutMs: 1000,
     });
 
     expect(ssh.commands[0]?.command.command).toContain("/run_oc_1/opencode-home");
@@ -156,7 +155,7 @@ describe("opencode writer adapter", () => {
       model: "anthropic/claude-sonnet-latest",
       endpointBaseUrl: "https://openrouter.ai/api/v1",
     });
-    const result = await writer.runWriter({ prompt: "managed edit", workspace: "/workspace/repo", timeoutMs: 1000 });
+    const result = await writer.runWriter({ prompt: "managed edit", workspace: "/workspace/repo" });
 
     // auth.json: the openrouter provider entry, key on stdin (not in the command).
     expect(ssh.commands[0]?.command.command).toContain("opencode/auth.json");
@@ -175,13 +174,12 @@ describe("opencode writer adapter", () => {
   });
 
   it("returns timeout, crashed, and window_exhausted distinctly", async () => {
-    const timeout = await runWith({ exitCode: null, stdout: "{}\n", stderr: "", timedOut: true });
-    const crashed = await runWith({ exitCode: 3, stdout: "{}\n", stderr: "boom", timedOut: false });
+    const timeout = await runWith({ exitCode: null, stdout: "{}\n", stderr: "", stalled: true });
+    const crashed = await runWith({ exitCode: 3, stdout: "{}\n", stderr: "boom" });
     const limit = await runWith({
       exitCode: 0,
       stdout: '{"type":"error","error":{"message":"You have hit your rate limit."}}\n',
       stderr: "",
-      timedOut: false,
     });
     expect(timeout.exitReason).toBe("timeout");
     expect(crashed.exitReason).toBe("crashed");
@@ -189,7 +187,7 @@ describe("opencode writer adapter", () => {
   });
 
   it("does not leak the Zai key through commands or results", async () => {
-    const result = await runWith({ exitCode: 0, stdout: "{}\n", stderr: "", timedOut: false });
+    const result = await runWith({ exitCode: 0, stdout: "{}\n", stderr: "" });
     expect(JSON.stringify(result)).not.toContain("secret-zai-key");
   });
 
@@ -221,7 +219,7 @@ describe("opencode writer adapter", () => {
 });
 
 function ok(stdout: string): CommandResult {
-  return { exitCode: 0, stdout, stderr: "", timedOut: false };
+  return { exitCode: 0, stdout, stderr: "" };
 }
 
 async function runWith(opencodeResult: CommandResult) {
@@ -235,7 +233,7 @@ async function runWith(opencodeResult: CommandResult) {
     credentialRef: "credential/opencode/dev",
     runId: "run_oc_2",
   });
-  return await writer.runWriter({ prompt: "write", workspace: "/workspace/repo", timeoutMs: 1000 });
+  return await writer.runWriter({ prompt: "write", workspace: "/workspace/repo" });
 }
 
 class ScriptedSsh implements CommandSubstrate {

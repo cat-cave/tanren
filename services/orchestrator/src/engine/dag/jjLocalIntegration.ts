@@ -26,6 +26,7 @@ import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import type { RunnerHandle } from "../contracts/allocator.js";
 import type { WorkspaceHandle } from "../contracts/workspaceVcsCore.js";
 import { quoteSshShellArg } from "../ssh/command.js";
+import { buildActivityWatchdog } from "../ssh/activityWatchdog.js";
 import { runWorkspaceSshCommand } from "../workspace/ssh.js";
 import { buildLiveJjWorkspace, type LiveJjWorkspaceDeps, type LiveJjWorkspace } from "../providers/liveJjWorkspace.js";
 
@@ -94,7 +95,6 @@ export interface JjLocalIntegrationInput {
   members: ReadonlyArray<JjIntegrationMember>;
   /** A stable, safe local bookmark name for the integrated head (NEVER pushed to the host). */
   localRef: string;
-  timeoutMs: number;
 }
 
 /**
@@ -183,26 +183,19 @@ export async function integrateOverWorkspace(
   // coordinator's "ancestors that merged are dropped"); a branch gone for ANY OTHER reason is
   // still a LOUD throw (no silent masking of a real missing ref). The surviving members keep
   // the caller's DAG order.
-  const members = await resolveLiveMembers(
-    ssh,
-    target,
-    workspacePath,
-    input.baseBranch,
-    input.members,
-    input.timeoutMs,
-  );
+  const members = await resolveLiveMembers(ssh, target, workspacePath, input.baseBranch, input.members);
   // §3.5 PREP (SAME as the jj applier's gather() / the base-shift rebase): `jj git clone`
   // imports each member's NON-default branch only as a REMOTE-tracking bookmark
   // (`<branch>@origin`), which jj treats as IMMUTABLE — rebasing it refuses with "would
   // rewrite immutable commits". So track each member's remote bookmark as a LOCAL `<branch>`
   // bookmark (the mutable name we rebase + read back), and empty the immutable set for THIS
   // short-lived workspace. Without this every member rebase refuses → the whole batch wedges.
-  await prepareMemberBookmarks(ssh, target, workspacePath, members, input.timeoutMs);
+  await prepareMemberBookmarks(ssh, target, workspacePath, members);
   // Create the local integration bookmark at the base head (NEVER a host ref). After this,
   // the accumulated integration head is tracked purely from each rebase result — no
   // intermediate host writes, no re-reads.
   await core.branch(ws, input.localRef, input.baseBranch);
-  let accumulatedHead = await readBookmarkSha(ssh, target, workspacePath, input.localRef, input.timeoutMs);
+  let accumulatedHead = await readBookmarkSha(ssh, target, workspacePath, input.localRef);
 
   const memberHeadShas: Record<string, string> = {};
   const merged: string[] = [];
@@ -210,13 +203,7 @@ export async function integrateOverWorkspace(
     // The member's remote bookmark head AT integration time (the divergence key) — read
     // from the REMOTE-tracking ref, which a LOCAL rebase below never advances (it stays the
     // pristine pre-integration head).
-    memberHeadShas[member.specId] = await readBookmarkSha(
-      ssh,
-      target,
-      workspacePath,
-      `${member.branch}@origin`,
-      input.timeoutMs,
-    );
+    memberHeadShas[member.specId] = await readBookmarkSha(ssh, target, workspacePath, `${member.branch}@origin`);
     // Rebase the member's segment (the tracked LOCAL bookmark, NOT the immutable remote one)
     // onto the accumulated integration head. jj first-class conflicts: a conflicting rebase
     // SUCCEEDS + records the conflict IN the commit. `rebaseOnto` reads the post-rebase head
@@ -225,7 +212,7 @@ export async function integrateOverWorkspace(
     const rebase = await core.rebaseOnto(ws, member.branch, accumulatedHead);
     accumulatedHead = rebase.headSha;
     // Fast-forward the integration bookmark to the rebased member head (the new top).
-    await setBookmark(ssh, target, workspacePath, input.localRef, accumulatedHead, input.timeoutMs);
+    await setBookmark(ssh, target, workspacePath, input.localRef, accumulatedHead);
     if (rebase.outcome === "conflicted") {
       // The other side is the prior stacked member (or the base) — the spec-vs-spec
       // conflict the coordinator routes to the resolver (early, on the integration, not
@@ -263,7 +250,7 @@ export async function integrateOverWorkspace(
   // materialize the node's head + tree. The export wrote the git ref into the colocated
   // .git, so the tree is read from git off the exported head sha.
   const exported = await core.exportCleanGitRef(ws, input.localRef);
-  const treeHash = await readTreeHash(ssh, target, workspacePath, exported.headSha, input.timeoutMs);
+  const treeHash = await readTreeHash(ssh, target, workspacePath, exported.headSha);
   // Surface the open `ws` handle so the bootstrap consumer can create the dependent's
   // run branch at the integrated head ON THIS workspace (the batch consumer ignores it).
   return {
@@ -287,7 +274,6 @@ async function prepareMemberBookmarks(
   target: RunnerHandle,
   workspacePath: string,
   members: ReadonlyArray<JjIntegrationMember>,
-  timeoutMs: number,
 ): Promise<void> {
   // jj 0.42 `bookmark track` takes the bare bookmark NAME (not `<name>@origin`) plus
   // `--remote`; it imports `<name>@origin` as the LOCAL `<name>` bookmark.
@@ -295,7 +281,7 @@ async function prepareMemberBookmarks(
   await runWorkspaceSshCommand(ssh, target, {
     label: "jj-local integration: track member bookmarks + allow rewriting them",
     cwd: workspacePath,
-    timeoutMs,
+    watchdog: buildActivityWatchdog({ substrate: ssh, target, cls: "vcs", workspace: workspacePath }),
     command: [
       "set -eu",
       ...trackCommands,
@@ -330,11 +316,10 @@ async function resolveLiveMembers(
   workspacePath: string,
   baseBranch: string,
   members: ReadonlyArray<JjIntegrationMember>,
-  timeoutMs: number,
 ): Promise<JjIntegrationMember[]> {
   const live: JjIntegrationMember[] = [];
   for (const member of members) {
-    if (await revisionExists(ssh, target, workspacePath, `${member.branch}@origin`, timeoutMs)) {
+    if (await revisionExists(ssh, target, workspacePath, `${member.branch}@origin`)) {
       live.push(member);
       continue;
     }
@@ -344,7 +329,7 @@ async function resolveLiveMembers(
     const merged =
       knownHeadSha !== undefined &&
       /^[0-9a-f]{40}$/u.test(knownHeadSha) &&
-      (await commitContainedInBase(ssh, target, workspacePath, knownHeadSha, baseBranch, timeoutMs));
+      (await commitContainedInBase(ssh, target, workspacePath, knownHeadSha, baseBranch));
     if (merged) {
       // Its content is already in `baseBranch` — drop it (never-discard: nothing is lost).
       continue;
@@ -371,7 +356,6 @@ async function revisionExists(
   target: RunnerHandle,
   workspacePath: string,
   rev: string,
-  timeoutMs: number,
 ): Promise<boolean> {
   // `jj log -r <rev>` exits non-zero when the revision does not resolve; probe the exit code
   // directly (NOT `runWorkspaceSshCommand`, which throws) so a legitimately-absent ref is a
@@ -380,14 +364,14 @@ async function revisionExists(
   // legitimately-absent ref reads as a clean non-zero exit rather than an error.
   const result = await ssh.run(target, {
     cwd: workspacePath,
-    timeoutMs,
+    watchdog: buildActivityWatchdog({ substrate: ssh, target, cls: "vcs", workspace: workspacePath }),
     command: `jj log -r ${quoteSshShellArg(rev)} --no-graph -T 'commit_id'`,
   });
   // A clean exit with a 40-hex sha ⇒ present. A non-zero exit (or a substrate failure/timeout,
   // which a real connectivity fault would raise) ⇒ absent — the caller then PROVES merge-or-not
   // via the base-containment check, so a connectivity blip cannot masquerade as a benign drop
   // (it has no merged commit in the base, so it stays a loud failure).
-  if (result.failure !== undefined || result.timedOut || result.exitCode !== 0) {
+  if (result.failure !== undefined || result.stalled === true || result.exitCode !== 0) {
     return false;
   }
   return /^[0-9a-f]{40}$/u.test(result.stdout.trim());
@@ -406,7 +390,6 @@ async function commitContainedInBase(
   workspacePath: string,
   headSha: string,
   baseBranch: string,
-  timeoutMs: number,
 ): Promise<boolean> {
   // Resolve the base branch's current remote sha (the merge lands here); jj imported it as
   // the `<baseBranch>@origin` remote-tracking bookmark. If even the base is gone the assembly
@@ -414,7 +397,7 @@ async function commitContainedInBase(
   const baseSha = (
     await ssh.run(target, {
       cwd: workspacePath,
-      timeoutMs,
+      watchdog: buildActivityWatchdog({ substrate: ssh, target, cls: "vcs", workspace: workspacePath }),
       command: `jj log -r ${quoteSshShellArg(`${baseBranch}@origin`)} --no-graph -T 'commit_id'`,
     })
   ).stdout.trim();
@@ -423,13 +406,13 @@ async function commitContainedInBase(
   }
   const result = await ssh.run(target, {
     cwd: workspacePath,
-    timeoutMs,
+    watchdog: buildActivityWatchdog({ substrate: ssh, target, cls: "vcs", workspace: workspacePath }),
     command: `git merge-base --is-ancestor ${quoteSshShellArg(headSha)} ${quoteSshShellArg(baseSha)}`,
   });
   // `--is-ancestor` exits 0 when `headSha` is an ancestor of `baseSha` (contained ⇒ merged), 1
   // when not, and >1 / a substrate failure on a bad arg (e.g. an unknown `headSha`). Only a
   // clean exit-0 is a proven merge; everything else stays NOT-contained (a loud failure).
-  return result.failure === undefined && !result.timedOut && result.exitCode === 0;
+  return result.failure === undefined && result.stalled !== true && result.exitCode === 0;
 }
 
 /** Read a bookmark's commit sha via jj's `commit_id` template (the value `jj git export` writes). */
@@ -438,12 +421,11 @@ async function readBookmarkSha(
   target: RunnerHandle,
   workspacePath: string,
   rev: string,
-  timeoutMs: number,
 ): Promise<string> {
   const out = await runWorkspaceSshCommand(ssh, target, {
     label: "jj read bookmark sha",
     cwd: workspacePath,
-    timeoutMs,
+    watchdog: buildActivityWatchdog({ substrate: ssh, target, cls: "vcs", workspace: workspacePath }),
     command: `jj log -r ${quoteSshShellArg(rev)} --no-graph -T 'commit_id'`,
   });
   const sha = out.stdout.trim();
@@ -460,12 +442,11 @@ async function setBookmark(
   workspacePath: string,
   bookmark: string,
   sha: string,
-  timeoutMs: number,
 ): Promise<void> {
   await runWorkspaceSshCommand(ssh, target, {
     label: "jj set integration bookmark",
     cwd: workspacePath,
-    timeoutMs,
+    watchdog: buildActivityWatchdog({ substrate: ssh, target, cls: "vcs", workspace: workspacePath }),
     command: [
       "set -eu",
       `jj bookmark set ${quoteSshShellArg(bookmark)} -r ${quoteSshShellArg(sha)} --allow-backwards`,
@@ -484,12 +465,11 @@ async function readTreeHash(
   target: RunnerHandle,
   workspacePath: string,
   headSha: string,
-  timeoutMs: number,
 ): Promise<string> {
   const out = await runWorkspaceSshCommand(ssh, target, {
     label: "jj-local integration: read tree hash",
     cwd: workspacePath,
-    timeoutMs,
+    watchdog: buildActivityWatchdog({ substrate: ssh, target, cls: "vcs", workspace: workspacePath }),
     command: `git rev-parse ${quoteSshShellArg(`${headSha}^{tree}`)}`,
   });
   const treeId = out.stdout.trim();

@@ -39,7 +39,6 @@ export interface PlannerRejectionFeedback {
 
 export interface PlannerInvokeInput {
   spec: PlannerSpecContext;
-  timeoutMs: number;
   // Empty on the first plan, populated on re-runs. The planner is expected
   // to inspect every prior rejection so the new decomposition addresses the
   // outstanding behavior ids.
@@ -68,7 +67,6 @@ export async function invokePlanner(
   const prompt = buildPlannerPrompt(input);
   const plan = await planner.runAnswerer({
     prompt,
-    timeoutMs: input.timeoutMs,
     workspace: input.workspace,
     outputSchema,
   });

@@ -36,9 +36,8 @@ export interface BootTemplateMaintenanceDeps {
   // Plane-split: when wired, the regression finding's spec INSERT routes through the
   // control plane (else direct on the pool, byte-identical) — mirrors bootIntake.
   runStateWriter?: RunStateWriter;
-  // The clock + the harness per-step timeout (injected; no Date.now in the loop).
+  // The clock (injected; no Date.now in the loop).
   now?: () => Date;
-  timeoutMs: number;
   // Optional overrides for the maintenance horizons (default in freshness/graduation).
   freshnessHorizonMs?: number;
   graduationAgingMs?: number;
@@ -74,7 +73,7 @@ export function startTemplateMaintenance(deps: BootTemplateMaintenanceDeps): Boo
 
   const loop = new TemplateMaintenanceLoop({
     pool: deps.pool,
-    revalidator: harnessRevalidator({ provisioner: deps.provisioner, now, timeoutMs: deps.timeoutMs }),
+    revalidator: harnessRevalidator({ provisioner: deps.provisioner, now }),
     answererFactory: (target: { orgId: string; projectId?: string }): TriageAnswerer => triageFactory(target),
     autoRoute,
     ...(deps.freshnessHorizonMs !== undefined && { freshnessHorizonMs: deps.freshnessHorizonMs }),

@@ -25,6 +25,7 @@ import { PgEventStore } from "../eventStore.js";
 import type { EventName, EventPayload } from "../events/index.js";
 import { quoteSshShellArg } from "../ssh/command.js";
 import { bootstrapWorkspace, runWorkspaceSshCommand, workspaceRepoPathForRun } from "../workspace/index.js";
+import { buildActivityWatchdog } from "../ssh/activityWatchdog.js";
 import { resolveBootstrapCommand } from "../workflow/gate/index.js";
 import { runAcceptStep } from "./accept.js";
 import type { AcceptResult } from "./entities.js";
@@ -40,8 +41,6 @@ export interface LiveAcceptDeps {
   ssh: CommandSubstrate;
   /** The runner identity key ref (mirrors the worker's `identitySecretRef`). */
   identitySecretRef: string;
-  /** Per-step SSH timeout for the clone/bootstrap/accept commands. */
-  timeoutMs?: number;
 }
 
 /** A run's repo/spec/project facts + the merged commit the accept tier runs on. */
@@ -52,17 +51,15 @@ const RunAcceptFacts = z.object({
   runner_image: z.string(),
 });
 
-const DEFAULT_ACCEPT_TIMEOUT_MS = 600_000;
-
 /**
  * Build the production `runAccept` seam injected into the BenchmarkRunner. The
  * returned fn is called by the scheduler ONLY for a trial whose run merged; it
  * allocates → clones@mergedSHA → bootstraps → runs the frozen accept tier →
  * releases → returns the verdict. A merged run with NO resolvable merge sha, or
- * an empty accept tier, yields a FAILED accept (never a silent pass).
+ * an empty accept tier, yields a FAILED accept (never a silent pass). Every SSH op
+ * is governed by an ActivityWatchdog (never a wall-clock kill).
  */
 export function buildLiveRunAccept(deps: LiveAcceptDeps): (input: TrialAcceptInput) => Promise<AcceptResult | null> {
-  const timeoutMs = deps.timeoutMs ?? DEFAULT_ACCEPT_TIMEOUT_MS;
   return async (input) => {
     const { orgId, cell, runId, trialIndex, taskId } = input;
 
@@ -123,20 +120,17 @@ export function buildLiveRunAccept(deps: LiveAcceptDeps): (input: TrialAcceptInp
         workspacePath,
         repoUrl: facts.repo_url,
         mergedSha,
-        timeoutMs,
       });
       const bootstrapCommand = await resolveBootstrapCommand({
         ssh: deps.ssh,
         target: allocation.target,
         workspacePath,
-        timeoutMs,
       });
       await bootstrapWorkspace({
         ssh: deps.ssh,
         target: allocation.target,
         workspacePath,
         ...(bootstrapCommand === undefined ? {} : { command: bootstrapCommand }),
-        timeoutMs,
       });
 
       // 5. Run the frozen accept tier over SSH via the existing executor.
@@ -148,7 +142,6 @@ export function buildLiveRunAccept(deps: LiveAcceptDeps): (input: TrialAcceptInp
         acceptTierHash,
         cellId: cell.cell.cellId,
         trialIndex,
-        timeoutMs,
         appendEvent,
         ...(taskId === undefined ? {} : { taskId }),
       });
@@ -257,11 +250,12 @@ function buildAcceptAppendEvent(
 async function cloneAtMergedSha(
   ssh: CommandSubstrate,
   target: RunnerHandle,
-  input: { workspacePath: string; repoUrl: string; mergedSha: string; timeoutMs: number },
+  input: { workspacePath: string; repoUrl: string; mergedSha: string },
 ): Promise<void> {
   await runWorkspaceSshCommand(ssh, target, {
     label: "clone accept workspace at merged sha",
-    timeoutMs: input.timeoutMs,
+    // VCS op (a clone): output-driven + the workspace as the silent-stretch liveness probe.
+    watchdog: buildActivityWatchdog({ substrate: ssh, target, cls: "vcs", workspace: input.workspacePath }),
     command: [
       "set -eu",
       `rm -rf ${quoteSshShellArg(input.workspacePath)}`,

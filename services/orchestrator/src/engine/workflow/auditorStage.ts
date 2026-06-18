@@ -46,7 +46,6 @@ export interface AuditorStageInput {
   specTitle: string;
   specDescription: string;
   acceptanceCriteria: ReadonlyArray<string>;
-  timeoutMs: number;
   appendEvent: StageAppendEvent;
   buildUsage?: (input: { auditorTaskId: string; verdict: AuditAnswer }) => Record<string, unknown>;
 }
@@ -89,7 +88,6 @@ export async function runAuditorStage(args: AuditorStageInput): Promise<AuditorS
   try {
     result = await invokeAuditor(args.adapter, {
       context: auditorContext,
-      timeoutMs: args.timeoutMs,
       workspace: args.workspacePath,
     });
   } catch (error) {

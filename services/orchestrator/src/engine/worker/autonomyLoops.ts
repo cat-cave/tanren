@@ -66,10 +66,9 @@ export interface AutonomyLoopsDeps {
    * green / mark degraded + file a regression finding red · the nightly→lts
    * graduation gate). ABSENT ⇒ the loop is honestly NOT started (no stub provisioner)
    * — the live allocate/clone/bootstrap plumbing is supplied by the worker boot when
-   * available. The harness per-step timeout rides alongside it.
+   * available. Every SSH op is governed by an ActivityWatchdog (no wall-clock kill).
    */
   templateProvisioner?: TemplateWorkspaceProvisioner;
-  templateMaintenanceTimeoutMs?: number;
 }
 
 export interface AutonomyLoops {
@@ -271,7 +270,6 @@ export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<Auton
           ssh: deps.ssh,
           identitySecretRef: deps.identitySecretRef,
           provisioner: deps.templateProvisioner,
-          timeoutMs: deps.templateMaintenanceTimeoutMs ?? 10 * 60_000,
           ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
         });
   if (templateMaintenance !== undefined) {

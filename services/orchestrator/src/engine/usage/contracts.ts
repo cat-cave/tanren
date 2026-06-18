@@ -76,12 +76,7 @@ export interface UsageMonitor {
   // DISCRIMINATED {@link WindowRead}: `{ ok }` (parsed state, or null for a
   // clean-but-empty read) vs `{ failed }` for a timeout / SSH / nonzero-exit /
   // malformed-output read failure — the failure is loud, never a silent "no data".
-  readWindowState(input: {
-    provider: string;
-    codexHome: string;
-    target: RunnerHandle;
-    timeoutMs: number;
-  }): Promise<WindowRead>;
+  readWindowState(input: { provider: string; codexHome: string; target: RunnerHandle }): Promise<WindowRead>;
 }
 
 export interface CcusageModelUsage {
@@ -103,12 +98,7 @@ export interface UsageAccountant {
   // Runs `ccusage <cli> --json` in the runner over SSH against codexHome.
   // Returns a DISCRIMINATED {@link AccountingRead}: `{ ok }` (parsed, or null
   // for a clean-but-empty read) vs `{ failed }` for a loud read failure.
-  readAccounting(input: {
-    cli: string;
-    codexHome: string;
-    target: RunnerHandle;
-    timeoutMs: number;
-  }): Promise<AccountingRead>;
+  readAccounting(input: { cli: string; codexHome: string; target: RunnerHandle }): Promise<AccountingRead>;
 }
 
 // THE USAGE METER seam — the single named contract over the three usage reads a

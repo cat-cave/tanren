@@ -27,9 +27,6 @@ import { PgMergeQueueEventEmitter } from "./coordinatorEvents.js";
 import { PgMergeQueueModel, PgMergeRunner, PgMergeSettleTransaction } from "./coordinatorPg.js";
 import { PgHoldCeilingStore } from "./holdCeilingStore.js";
 
-/** The timeout (ms) the native batch gate's clone/install/gate ops run under (mirrors the drive resolver). */
-const BATCH_GATE_TIMEOUT_MS = 600_000;
-
 /**
  * Resolve a project's configured `maxBatchSize` (the batch cap) under the system
  * scope — the single config source of truth.
@@ -77,7 +74,6 @@ export function buildBatchMergeCoordinator(deps: BuildMergeCoordinatorDeps): Mer
       allocator: deps.allocator,
       ssh: deps.ssh,
       identitySecretRef: deps.identitySecretRef,
-      timeoutMs: BATCH_GATE_TIMEOUT_MS,
       ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
       ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
     }),

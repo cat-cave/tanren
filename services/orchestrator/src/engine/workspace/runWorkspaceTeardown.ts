@@ -22,10 +22,8 @@
 import type { RunnerHandle } from "../contracts/allocator.js";
 import type { CommandResult, CommandSubstrate } from "../contracts/commandSubstrate.js";
 import { quoteSshShellArg } from "../ssh/command.js";
+import { outputOnlyWatchdog } from "../ssh/activityWatchdog.js";
 import { workspaceRunDirForRun } from "./paths.js";
-
-/** Time budget for a single `rm -rf` of a run dir — a clone+node_modules tree. */
-const REMOVE_RUN_DIR_TIMEOUT_MS = 60_000;
 
 /**
  * Remove one `/workspace/runs/<runId>` dir on the runner. Returns whether the
@@ -52,10 +50,13 @@ export async function removeRunWorkspaceDir(
   }
   try {
     const result = await ssh.run(target, {
+      // INFRA op (`rm -rf` of a run dir): output-driven watchdog, no wall-clock kill.
+      // A dead connection surfaces via the connect-establishment bound / a recoverable
+      // stall — never a time-based kill of a legitimately long large-tree removal.
       command: `rm -rf ${quoteSshShellArg(runDir)}`,
-      timeoutMs: REMOVE_RUN_DIR_TIMEOUT_MS,
+      watchdog: outputOnlyWatchdog(),
     });
-    if (result.failure !== undefined || result.timedOut || result.exitCode !== 0) {
+    if (result.failure !== undefined || result.stalled === true || result.exitCode !== 0) {
       return { removed: false, reason: removeFailureSummary(result) };
     }
     return { removed: true };
@@ -74,8 +75,8 @@ function removeFailureSummary(result: CommandResult): string {
     // detail is dropped.
     return "message" in result.failure ? result.failure.message : result.failure.reason;
   }
-  if (result.timedOut) {
-    return "rm timed out";
+  if (result.stalled === true) {
+    return "rm stalled (no sign of life)";
   }
   const stderr = result.stderr.split("\n")[0]?.slice(0, 200);
   return `rm exited ${result.exitCode ?? "unknown"}${stderr !== undefined && stderr !== "" ? `: ${stderr}` : ""}`;

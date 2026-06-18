@@ -34,5 +34,4 @@ export const draftPrInputSchema = z.object({
   workspacePath: z.string().min(1).optional(),
   title: z.string().min(1).optional(),
   body: z.string().optional(),
-  timeoutMs: z.number().int().positive().optional(),
 });

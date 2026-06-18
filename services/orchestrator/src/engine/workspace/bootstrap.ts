@@ -10,6 +10,7 @@ import type { CommandResult, CommandSubstrate } from "../contracts/commandSubstr
 import { quoteSshShellArg } from "../ssh/command.js";
 import { withAppEnv } from "../ssh/appEnvPrelude.js";
 import { miseProvisionCommand, withMiseActivation } from "../ssh/miseActivate.js";
+import { buildActivityWatchdog } from "../ssh/activityWatchdog.js";
 import { runWorkspaceSshCommand } from "./ssh.js";
 
 // The commit message used for the synthetic post-bootstrap commit. Install
@@ -68,12 +69,13 @@ export interface BootstrapWorkspaceInput {
   // `workspace.failed` / `run.failed` event payloads. Distinct from Tanren's own
   // provider creds. Undefined ⇒ no app env (command unchanged).
   appEnv?: Record<string, string>;
-  timeoutMs: number;
 }
 
 // A typed, observable bootstrap failure. Carries the exit code and a bounded
 // tail of the combined install output so the halting run outcome and the
-// recovery surface have a concrete diagnostic to show.
+// recovery surface have a concrete diagnostic to show. `stalled` is the
+// progress-based no-life signal (the activity watchdog surfaced a recoverable
+// stall), NOT a wall-clock kill.
 export class WorkspaceBootstrapError extends Error {
   override readonly name = "WorkspaceBootstrapError";
 
@@ -82,9 +84,9 @@ export class WorkspaceBootstrapError extends Error {
     readonly command: string,
     readonly exitCode: number | null,
     readonly outputTail: string,
-    readonly timedOut: boolean,
+    readonly stalled: boolean,
   ) {
-    super(bootstrapFailureMessage(command, exitCode, outputTail, timedOut));
+    super(bootstrapFailureMessage(command, exitCode, outputTail, stalled));
   }
 }
 
@@ -107,17 +109,24 @@ export async function bootstrapWorkspace(input: BootstrapWorkspaceInput): Promis
     // harness path never runs through here, so it keeps the runner's isolated node.
     command: withMiseActivation(withAppEnv(command, input.appEnv)),
     cwd: input.workspacePath,
-    timeoutMs: input.timeoutMs,
+    // VCS/build op: output-driven + the workspace as the silent-stretch liveness
+    // probe (a build/install writes files as it works). NEVER killed for elapsed time.
+    watchdog: buildActivityWatchdog({
+      substrate: input.ssh,
+      target: input.target,
+      cls: "vcs",
+      workspace: input.workspacePath,
+    }),
   });
 
-  const succeeded = result.failure === undefined && !result.timedOut && result.exitCode === 0;
+  const succeeded = result.failure === undefined && result.stalled !== true && result.exitCode === 0;
   if (!succeeded) {
     throw new WorkspaceBootstrapError(
       input.workspacePath,
       command,
       result.exitCode,
       tailOf(combinedOutput(result)),
-      result.timedOut,
+      result.stalled === true,
     );
   }
   return result;
@@ -134,9 +143,9 @@ export class WorkspaceMiseProvisionError extends Error {
     readonly workspacePath: string,
     readonly exitCode: number | null,
     readonly outputTail: string,
-    readonly timedOut: boolean,
+    readonly stalled: boolean,
   ) {
-    super(miseProvisionFailureMessage(exitCode, outputTail, timedOut));
+    super(miseProvisionFailureMessage(exitCode, outputTail, stalled));
   }
 }
 
@@ -144,7 +153,6 @@ export interface ProvisionMiseToolchainInput {
   ssh: CommandSubstrate;
   target: RunnerHandle;
   workspacePath: string;
-  timeoutMs: number;
 }
 
 // Provision the project's DECLARED toolchain at workspace-prep, BEFORE the project's
@@ -163,15 +171,22 @@ export async function provisionMiseToolchain(input: ProvisionMiseToolchainInput)
     // guard's `&&` chain already aborts on the first failure within the present branch).
     command: `set -e; ${miseProvisionCommand()}`,
     cwd: input.workspacePath,
-    timeoutMs: input.timeoutMs,
+    // VCS/provision op: output-driven + the workspace as the silent-stretch liveness
+    // probe (mise install writes the toolchain as it works). Never killed for elapsed time.
+    watchdog: buildActivityWatchdog({
+      substrate: input.ssh,
+      target: input.target,
+      cls: "vcs",
+      workspace: input.workspacePath,
+    }),
   });
-  const succeeded = result.failure === undefined && !result.timedOut && result.exitCode === 0;
+  const succeeded = result.failure === undefined && result.stalled !== true && result.exitCode === 0;
   if (!succeeded) {
     throw new WorkspaceMiseProvisionError(
       input.workspacePath,
       result.exitCode,
       tailOf(combinedOutput(result)),
-      result.timedOut,
+      result.stalled === true,
     );
   }
 }
@@ -204,7 +219,6 @@ export interface EnsureWorkspaceDepsInput {
   // to `command`, so a failure surfaces the ORIGINAL command (prelude-free) and no
   // app-secret value can reach the error message / events. Undefined ⇒ no app env.
   appEnv?: Record<string, string>;
-  timeoutMs: number;
 }
 
 // The outcome of an ensure call: whether the guarded install actually RAN the
@@ -233,9 +247,9 @@ export class WorkspaceDepsInstallError extends Error {
     readonly command: string,
     readonly exitCode: number | null,
     readonly outputTail: string,
-    readonly timedOut: boolean,
+    readonly stalled: boolean,
   ) {
-    super(depsInstallFailureMessage(command, exitCode, outputTail, timedOut));
+    super(depsInstallFailureMessage(command, exitCode, outputTail, stalled));
   }
 }
 
@@ -294,17 +308,24 @@ export async function ensureWorkspaceDepsInstalled(
     // command stays the ORIGINAL (prelude-free). Codex never runs through this path.
     command: withMiseActivation(withAppEnv(guarded, input.appEnv)),
     cwd: input.workspacePath,
-    timeoutMs: input.timeoutMs,
+    // VCS/build op: output-driven + the workspace as the silent-stretch liveness
+    // probe (the install writes files as it works). NEVER killed for elapsed time.
+    watchdog: buildActivityWatchdog({
+      substrate: input.ssh,
+      target: input.target,
+      cls: "vcs",
+      workspace: input.workspacePath,
+    }),
   });
 
-  const succeeded = result.failure === undefined && !result.timedOut && result.exitCode === 0;
+  const succeeded = result.failure === undefined && result.stalled !== true && result.exitCode === 0;
   if (!succeeded) {
     throw new WorkspaceDepsInstallError(
       input.workspacePath,
       command,
       result.exitCode,
       tailOf(combinedOutput(result)),
-      result.timedOut,
+      result.stalled === true,
     );
   }
   // The install branch echoes DEPS_INSTALL_SENTINEL before running; its presence
@@ -313,8 +334,8 @@ export async function ensureWorkspaceDepsInstalled(
   return { installed: result.stdout.includes(DEPS_INSTALL_SENTINEL) };
 }
 
-function miseProvisionFailureMessage(exitCode: number | null, outputTail: string, timedOut: boolean): string {
-  const reason = timedOut ? "timed out" : `exited ${exitCode ?? "unknown"}`;
+function miseProvisionFailureMessage(exitCode: number | null, outputTail: string, stalled: boolean): string {
+  const reason = stalled ? "stalled (no sign of life)" : `exited ${exitCode ?? "unknown"}`;
   const tail = outputTail === "" ? "" : `: ${outputTail}`;
   return `workspace mise toolchain provision (mise trust && mise install) ${reason}${tail}`;
 }
@@ -323,9 +344,9 @@ function depsInstallFailureMessage(
   command: string,
   exitCode: number | null,
   outputTail: string,
-  timedOut: boolean,
+  stalled: boolean,
 ): string {
-  const reason = timedOut ? "timed out" : `exited ${exitCode ?? "unknown"}`;
+  const reason = stalled ? "stalled (no sign of life)" : `exited ${exitCode ?? "unknown"}`;
   const tail = outputTail === "" ? "" : `: ${outputTail}`;
   return `workspace deps install (${command}) ${reason}${tail}`;
 }
@@ -345,7 +366,6 @@ export interface SeedWorkspaceLocalIgnoreInput {
   ssh: CommandSubstrate;
   target: RunnerHandle;
   workspacePath: string;
-  timeoutMs: number;
 }
 
 // Appends WORKSPACE_LOCAL_IGNORE_PATHS to the cloned repo's `.git/info/exclude`
@@ -357,7 +377,12 @@ export async function seedWorkspaceLocalIgnore(input: SeedWorkspaceLocalIgnoreIn
   await runWorkspaceSshCommand(input.ssh, input.target, {
     label: "seed workspace local git ignore",
     cwd: input.workspacePath,
-    timeoutMs: input.timeoutMs,
+    watchdog: buildActivityWatchdog({
+      substrate: input.ssh,
+      target: input.target,
+      cls: "vcs",
+      workspace: input.workspacePath,
+    }),
     // `git rev-parse --git-path info/exclude` resolves the exclude file for the
     // checkout (worktree-safe) and `mkdir -p` ensures its dir exists before we
     // append. printf one path per line.
@@ -374,7 +399,6 @@ export interface CommitBootstrapStateInput {
   ssh: CommandSubstrate;
   target: RunnerHandle;
   workspacePath: string;
-  timeoutMs: number;
 }
 
 // Commits whatever the bootstrap step produced (lockfiles, node_modules, any
@@ -390,7 +414,12 @@ export async function commitBootstrapState(input: CommitBootstrapStateInput): Pr
   const result = await runWorkspaceSshCommand(input.ssh, input.target, {
     label: "commit bootstrap state",
     cwd: input.workspacePath,
-    timeoutMs: input.timeoutMs,
+    watchdog: buildActivityWatchdog({
+      substrate: input.ssh,
+      target: input.target,
+      cls: "vcs",
+      workspace: input.workspacePath,
+    }),
     command: [
       "set -eu",
       "git add -A",
@@ -420,12 +449,16 @@ export async function resolveWorkspaceHeadSha(input: {
   ssh: CommandSubstrate;
   target: RunnerHandle;
   workspacePath: string;
-  timeoutMs: number;
 }): Promise<string> {
   const result = await runWorkspaceSshCommand(input.ssh, input.target, {
     label: "resolve workspace head sha",
     cwd: input.workspacePath,
-    timeoutMs: input.timeoutMs,
+    watchdog: buildActivityWatchdog({
+      substrate: input.ssh,
+      target: input.target,
+      cls: "vcs",
+      workspace: input.workspacePath,
+    }),
     command: "git rev-parse HEAD",
   });
   const sha = result.stdout.trim();
@@ -454,9 +487,9 @@ function bootstrapFailureMessage(
   command: string,
   exitCode: number | null,
   outputTail: string,
-  timedOut: boolean,
+  stalled: boolean,
 ): string {
-  const reason = timedOut ? "timed out" : `exited ${exitCode ?? "unknown"}`;
+  const reason = stalled ? "stalled (no sign of life)" : `exited ${exitCode ?? "unknown"}`;
   const tail = outputTail === "" ? "" : `: ${outputTail}`;
   return `workspace bootstrap (${command}) ${reason}${tail}`;
 }

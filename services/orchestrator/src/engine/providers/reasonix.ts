@@ -5,6 +5,7 @@ import { validateCredentialRef } from "../credentials/codexAuth.js";
 import { quoteSshShellArg } from "../ssh/command.js";
 import type { TokenUsage, UsageLimitSignal, WriterAdapter, WriterResult } from "./types.js";
 import { captureBaselineSha, captureGitStateAfterWriter } from "./writerGit.js";
+import { buildActivityWatchdog } from "../ssh/activityWatchdog.js";
 import { findTokenUsageBounded } from "./findTokenUsage.js";
 
 // reasonix harness adapter (DeepSeek-native, npm `reasonix`) — a Writer-only
@@ -64,12 +65,7 @@ export function createReasonixWriter(dependencies: ReasonixWriterDependencies): 
     authRef: dependencies.credentialRef,
     async runWriter(opts): Promise<WriterResult> {
       const apiKey = await resolveReasonixApiKey(dependencies.secrets, dependencies.credentialRef);
-      const baselineSha = await captureBaselineSha(
-        dependencies.ssh,
-        dependencies.target,
-        opts.workspace,
-        opts.timeoutMs,
-      );
+      const baselineSha = await captureBaselineSha(dependencies.ssh, dependencies.target, opts.workspace);
       const reasonix = await dependencies.ssh.run(dependencies.target, {
         command: buildReasonixWriterCommand({
           apiKey,
@@ -77,7 +73,15 @@ export function createReasonixWriter(dependencies: ReasonixWriterDependencies): 
           model: dependencies.model,
         }),
         cwd: opts.workspace,
-        timeoutMs: opts.timeoutMs,
+        // AGENT exec: reasonix streams its output continuously (every line is a sign of
+        // life → the watchdog resets), with the workspace as the silent-stretch
+        // liveness probe. NEVER killed for elapsed time.
+        watchdog: buildActivityWatchdog({
+          substrate: dependencies.ssh,
+          target: dependencies.target,
+          cls: "agent",
+          workspace: opts.workspace,
+        }),
       });
       const telemetry = parseReasonixStreamTelemetry(reasonix.stdout);
       const gitState = await captureGitStateAfterWriter(
@@ -86,9 +90,8 @@ export function createReasonixWriter(dependencies: ReasonixWriterDependencies): 
         opts.workspace,
         baselineSha,
         "reasonix writer",
-        opts.timeoutMs,
       );
-      if (reasonix.timedOut) {
+      if (reasonix.stalled === true) {
         return failedResult("timeout", telemetry, gitState);
       }
       if (telemetry.usageLimit !== undefined) {

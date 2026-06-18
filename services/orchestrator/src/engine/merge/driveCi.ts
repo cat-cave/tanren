@@ -51,7 +51,6 @@ export interface BuildReGateCiForQueuedRunDeps {
   runId: string;
   githubCredentialRef: string;
   githubAppMinter?: GithubAppTokenMinter;
-  timeoutMs: number;
 }
 
 /** The repo + ref + posture context a queued-run re-gate clones and gates. */
@@ -83,7 +82,6 @@ export function buildReGateCiForQueuedRun(deps: BuildReGateCiForQueuedRunDeps): 
           ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
           eventStore,
           identitySecretRef: deps.identitySecretRef,
-          timeoutMs: deps.timeoutMs,
         },
         {
           repoUrl: ctx.repoUrl,

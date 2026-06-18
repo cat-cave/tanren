@@ -94,8 +94,6 @@ export interface CreateTemplateDeps {
   creationUpgrade?: CreationUpgrade;
   // The clock — passed so the proof's validatedAt is deterministic in tests.
   now: () => Date;
-  // The harness/positive-control timeout.
-  timeoutMs: number;
 }
 
 // The outcome of a successful creation: the registered template + the run/project
@@ -368,7 +366,6 @@ async function validateBuilt(
     auditor: built.auditor,
     validatedSha: built.builtSha,
     now: deps.now,
-    timeoutMs: deps.timeoutMs,
     // OBSERVABILITY (Fix 4): the harness runs the REAL gate runner, which emits the
     // per-gate `gate.*` events (the historically apex-halting "which control failed?"
     // path). A no-op sink (`async () => {}`) SILENTLY SWALLOWS them — the harness

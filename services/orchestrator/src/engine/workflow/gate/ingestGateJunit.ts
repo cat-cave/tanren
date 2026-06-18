@@ -32,6 +32,7 @@ import type { RunnerHandle } from "../../contracts/allocator.js";
 import type { CommandSubstrate } from "../../contracts/commandSubstrate.js";
 import type { EventStore } from "../../eventStore.js";
 import { quoteSshShellArg } from "../../ssh/command.js";
+import { outputOnlyWatchdog } from "../../ssh/activityWatchdog.js";
 
 export interface IngestGateJunitInput {
   ssh: CommandSubstrate;
@@ -51,7 +52,6 @@ export interface IngestGateJunitInput {
   orgId: string;
   /** The commit the gate verified (the JUnit report is about this sha). */
   headSha: string;
-  timeoutMs: number;
   /** The gate's combined pass/fail — recorded as the test-step exit-code guard. */
   gatePassed: boolean;
   /**
@@ -144,9 +144,10 @@ async function readJunitReport(input: IngestGateJunitInput, reportPath: string):
   // but empty" (body is whitespace) — both off a single successful SSH read.
   const result = await input.ssh.run(input.target, {
     command: `if [ -f ${quoteSshShellArg(path)} ]; then cat ${quoteSshShellArg(path)}; else echo __TANREN_JUNIT_ABSENT__; fi`,
-    timeoutMs: input.timeoutMs,
+    // INFRA report read: output-driven watchdog, no wall-clock kill.
+    watchdog: outputOnlyWatchdog(),
   });
-  if (result.failure !== undefined || result.timedOut || result.exitCode !== 0) {
+  if (result.failure !== undefined || result.stalled === true || result.exitCode !== 0) {
     // The read itself failed — a transport/runner problem, NOT a known-absent file.
     return { present: false, reason: "read_failed" };
   }

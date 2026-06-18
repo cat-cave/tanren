@@ -33,24 +33,21 @@ export type ForgeAnswererStepOutput = z.infer<typeof ForgeAnswererStepSchema>;
 
 const STEP_SCHEMA_NAME = "tanren.forge_conversation_step.v1";
 
-export interface WrapProviderAnswererOptions {
-  // Bounds each provider call. Defaults to 120s — Forge conversation answers
-  // are interactive, so we keep the ceiling tighter than a writer/auditor.
-  timeoutMs?: number;
-}
+// No bounding option remains: each provider answerer call is governed by the agent
+// ActivityWatchdog (output-driven, never a wall-clock kill) the adapter constructs.
+export type WrapProviderAnswererOptions = Record<never, never>;
 
 // Adapts a provider AnswererAdapter into the conversation seam. Each `respond`
 // is one structured provider call returning a ForgeAnswererStep.
 export function wrapProviderAnswerer(
   adapter: AnswererAdapter<ForgeAnswererStepOutput>,
-  options: WrapProviderAnswererOptions = {},
+  _options: WrapProviderAnswererOptions = {},
 ): ForgeConversationAnswerer {
   const jsonSchema = renderAnswererJsonSchema(ForgeAnswererStepSchema);
   return {
     async respond(context: ForgeConversationContext): Promise<ForgeAnswererStep> {
       const output = await adapter.runAnswerer({
         prompt: buildForgePrompt(context),
-        timeoutMs: options.timeoutMs ?? 120_000,
         outputSchema: {
           name: STEP_SCHEMA_NAME,
           jsonSchema,

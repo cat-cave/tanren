@@ -45,6 +45,10 @@ export interface WriterResult {
   // subscription window / usage quota is spent (PROJECT_BRIEF §4.3). This is
   // an expected, recoverable condition — distinct from `crashed` — so the
   // workflow can escalate it as window pressure rather than a hard failure.
+  // `timeout`: the agent exec did not finish — the activity watchdog surfaced a
+  // genuine absence of all signs of life (a recoverable stall), NOT a wall-clock
+  // kill. (The name is the durable workflow/event classification for "did not
+  // complete"; the SUBSTRATE-level no-progress flag is `CommandResult.stalled`.)
   exitReason: "completed" | "timeout" | "crashed" | "token_limit" | "window_exhausted";
   tokenUsage?: TokenUsage;
   telemetry?: {
@@ -79,12 +83,11 @@ export interface WriterAdapter {
   // work a prior subtask already committed) still show the file in its diff, so
   // the checker passes instead of false-rejecting an empty per-iteration delta.
   // The production run path always threads it; fake test adapters ignore it.
-  runWriter(opts: { prompt: string; workspace: string; timeoutMs: number; baseSha?: string }): Promise<WriterResult>;
+  runWriter(opts: { prompt: string; workspace: string; baseSha?: string }): Promise<WriterResult>;
 }
 
 export interface AnswererRunOptions<TOutput> {
   prompt: string;
-  timeoutMs: number;
   workspace?: string;
   outputSchema: {
     name: string;

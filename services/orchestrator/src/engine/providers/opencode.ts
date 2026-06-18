@@ -4,6 +4,7 @@ import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import { storeOpencodeAuthBundle } from "../credentials/opencodeAuth.js";
 import { materializeOpencodeAuthBundle } from "../credentials/opencodeMaterializer.js";
 import { quoteSshShellArg } from "../ssh/command.js";
+import { buildActivityWatchdog } from "../ssh/activityWatchdog.js";
 import type { TokenUsage, UsageLimitSignal, WriterAdapter, WriterResult } from "./types.js";
 import { findOpenRouterGenerationId, foldGenerationId } from "./openRouterGenerationId.js";
 import { findTokenUsageBounded } from "./findTokenUsage.js";
@@ -70,15 +71,9 @@ export function createOpencodeWriter(dependencies: OpencodeWriterDependencies): 
         ref: dependencies.credentialRef,
         runId: dependencies.runId,
         baseDir: dependencies.opencodeDataBaseDir,
-        timeoutMs: Math.min(opts.timeoutMs, 30_000),
         managed: dependencies.endpointBaseUrl !== undefined,
       });
-      const baselineSha = await captureBaselineSha(
-        dependencies.ssh,
-        dependencies.target,
-        opts.workspace,
-        opts.timeoutMs,
-      );
+      const baselineSha = await captureBaselineSha(dependencies.ssh, dependencies.target, opts.workspace);
       const opencode = await dependencies.ssh.run(dependencies.target, {
         command: buildOpencodeWriterCommand({
           dataHome: auth.XDG_DATA_HOME,
@@ -87,7 +82,15 @@ export function createOpencodeWriter(dependencies: OpencodeWriterDependencies): 
           configHome: auth.XDG_CONFIG_HOME,
         }),
         stdin: opts.prompt,
-        timeoutMs: opts.timeoutMs,
+        // AGENT exec: opencode streams telemetry continuously (every line is a sign of
+        // life → the watchdog resets), with the workspace as the silent-stretch
+        // liveness probe. NEVER killed for elapsed time.
+        watchdog: buildActivityWatchdog({
+          substrate: dependencies.ssh,
+          target: dependencies.target,
+          cls: "agent",
+          workspace: opts.workspace,
+        }),
       });
       const telemetry = parseOpencodeStreamTelemetry(opencode.stdout);
       const gitState = await captureGitStateAfterWriter(
@@ -96,9 +99,8 @@ export function createOpencodeWriter(dependencies: OpencodeWriterDependencies): 
         opts.workspace,
         baselineSha,
         "opencode writer",
-        opts.timeoutMs,
       );
-      if (opencode.timedOut) {
+      if (opencode.stalled === true) {
         return failedResult("timeout", telemetry, gitState);
       }
       if (telemetry.usageLimit !== undefined) {

@@ -30,7 +30,6 @@ export interface MaterializeCredentialInput {
   ref: string;
   runId: string;
   baseDir?: string;
-  timeoutMs?: number;
   managed?: boolean;
   endpointBaseUrl?: string;
 }

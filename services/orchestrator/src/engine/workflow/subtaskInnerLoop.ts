@@ -105,7 +105,6 @@ async function runOneSubtask(args: {
       subtask,
       writeTaskId,
       prompt: writerPromptFor(input, subtask, iter, lastReason),
-      timeoutMs: input.timeoutMs,
       baseSha: input.context.baseSha,
       appendEvent,
       buildUsage: input.costHooks?.buildWriterUsage,
@@ -182,7 +181,6 @@ async function runOneSubtask(args: {
       specTitle: input.context.specTitle,
       specDescription: input.context.specDescription,
       acceptanceCriteria: input.context.acceptanceCriteria,
-      timeoutMs: input.timeoutMs,
       appendEvent,
       buildUsage: input.costHooks?.buildCheckerUsage,
       // §3.1: the host-side entity-risk producer (shells `sem` read-only on the

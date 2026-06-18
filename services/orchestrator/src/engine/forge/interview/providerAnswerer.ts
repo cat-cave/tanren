@@ -18,22 +18,19 @@ import {
 
 const STEP_SCHEMA_NAME = "tanren.vision_interview_round.v1";
 
-export interface WrapProviderInterviewAnswererOptions {
-  // Bounds each provider call. Defaults to 120s — interview rounds are
-  // interactive, matching the conversation answerer ceiling.
-  timeoutMs?: number;
-}
+// No bounding option remains: each provider answerer call is governed by the agent
+// ActivityWatchdog (output-driven, never a wall-clock kill) the adapter constructs.
+export type WrapProviderInterviewAnswererOptions = Record<never, never>;
 
 export function wrapProviderInterviewAnswerer(
   adapter: AnswererAdapter<InterviewRoundOutputType>,
-  options: WrapProviderInterviewAnswererOptions = {},
+  _options: WrapProviderInterviewAnswererOptions = {},
 ): InterviewAnswerer {
   const jsonSchema = renderAnswererJsonSchema(InterviewRoundOutput);
   return {
     async ask(context: InterviewAnswererContext): Promise<InterviewRoundOutputType> {
       return adapter.runAnswerer({
         prompt: buildInterviewPrompt(context),
-        timeoutMs: options.timeoutMs ?? 120_000,
         outputSchema: {
           name: STEP_SCHEMA_NAME,
           jsonSchema,

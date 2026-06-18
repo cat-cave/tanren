@@ -41,8 +41,6 @@ export interface LiveEnvBuildDriverDeps {
   // validation harness allocates a runner FROM the registry ref); a local-only build
   // (PUSH=0) is for an operator dry-run.
   push: boolean;
-  // The build timeout (a cold off-baseline toolchain install can take minutes).
-  timeoutMs: number;
 }
 
 // Build the production `EnvImageBuildDriver`. The returned driver materializes the
@@ -68,15 +66,18 @@ export function buildLiveEnvBuildDriver(deps: LiveEnvBuildDriverDeps): EnvImageB
         };
         let stdout: string;
         try {
+          // NO wall-clock build timeout (feedback_no_timeouts_progress_based): a cold
+          // off-baseline toolchain install can legitimately take many minutes while it
+          // streams progress — it is NEVER killed for elapsed time. The build runs to its
+          // own terminal exit; a genuine non-zero exit / spawn error surfaces LOUD below.
           const result = await execFileAsync("bash", [deps.scriptPath], {
             env,
-            timeout: deps.timeoutMs,
             maxBuffer: 32 * 1024 * 1024,
           });
           stdout = result.stdout;
         } catch (error) {
-          // A non-zero exit / timeout / spawn error — LOUD, never a silent degrade to
-          // the golden base for an off-baseline toolchain that demanded a real env.
+          // A non-zero exit / spawn error — LOUD, never a silent degrade to the golden
+          // base for an off-baseline toolchain that demanded a real env.
           throw new EnvBuildFailedError(
             request.envKey,
             error instanceof Error ? `${error.name}: ${error.message}` : String(error),

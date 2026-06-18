@@ -35,6 +35,7 @@ import type { DagSnapshot, DagWalker } from "../../contracts/dagWalker.js";
 import { isConverged, isDeadlocked, tallyBuildProgress } from "../../contracts/specProgress.js";
 import { resolveBootstrapCommand, resolveGateConfig } from "../../workflow/gate/index.js";
 import { bootstrapWorkspace, runWorkspaceSshCommand, workspaceRepoPathForRun } from "../../workspace/index.js";
+import { buildActivityWatchdog } from "../../ssh/activityWatchdog.js";
 import { quoteSshShellArg } from "../../ssh/command.js";
 import type { TemplateAuditor } from "../validationHarness.js";
 import { type BuiltTemplate, TemplateBuildFailedError, type TemplateBuildDriver } from "./buildDriver.js";
@@ -73,8 +74,6 @@ export interface RunLoopBuildDriverDeps {
   // The auditor seam over the built template (stage 3 of validation). The
   // production audit-answerer adapter at the call site; a stub in tests.
   auditorFor: (input: { orgId: string; projectId: string }) => TemplateAuditor;
-  // Per-SSH-command timeout for the clone/bootstrap/gate-config reads.
-  timeoutMs: number;
   // The convergence poll cadence (the DAG drives asynchronously). The driver polls
   // the snapshot until convergence or a genuine deadlock — there is NO whole-build
   // wall-clock deadline, so a build that is still progressing polls indefinitely.
@@ -240,26 +239,22 @@ async function assembleBuiltTemplate(
     workspacePath,
     repoUrl: facts.repoRef,
     sha: facts.builtSha,
-    timeoutMs: deps.timeoutMs,
   });
   const bootstrapCommand = await resolveBootstrapCommand({
     ssh: deps.ssh,
     target,
     workspacePath,
-    timeoutMs: deps.timeoutMs,
   });
   await bootstrapWorkspace({
     ssh: deps.ssh,
     target,
     workspacePath,
     ...(bootstrapCommand === undefined ? {} : { command: bootstrapCommand }),
-    timeoutMs: deps.timeoutMs,
   });
   const config: CiConfigV1 = await resolveGateConfig({
     ssh: deps.ssh,
     target,
     workspacePath,
-    timeoutMs: deps.timeoutMs,
   });
 
   // Scratch copies for the negative controls live under the workspace (the same
@@ -303,11 +298,12 @@ async function assembleBuiltTemplate(
 async function cloneAtSha(
   ssh: CommandSubstrate,
   target: RunnerHandle,
-  input: { workspacePath: string; repoUrl: string; sha: string; timeoutMs: number },
+  input: { workspacePath: string; repoUrl: string; sha: string },
 ): Promise<void> {
   await runWorkspaceSshCommand(ssh, target, {
     label: "clone template validation workspace at converged sha",
-    timeoutMs: input.timeoutMs,
+    // VCS op (a clone): output-driven + the workspace as the silent-stretch liveness probe.
+    watchdog: buildActivityWatchdog({ substrate: ssh, target, cls: "vcs", workspace: input.workspacePath }),
     command: [
       "set -eu",
       `rm -rf ${quoteSshShellArg(input.workspacePath)}`,

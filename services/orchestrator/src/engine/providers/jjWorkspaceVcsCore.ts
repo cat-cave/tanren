@@ -34,6 +34,7 @@ import type {
   WorkspaceVcsCore,
 } from "../contracts/workspaceVcsCore.js";
 import { quoteSshShellArg } from "../ssh/command.js";
+import { buildActivityWatchdog } from "../ssh/activityWatchdog.js";
 import { runWorkspaceSshCommand } from "../workspace/ssh.js";
 import { buildJjCloneCommand, type JjCloneCredential } from "./jjCloneAuth.js";
 import { toTomlString } from "./jjConfigValue.js";
@@ -93,8 +94,6 @@ export interface JjWorkspaceVcsCoreDeps {
   substrate: CommandSubstrate;
   /** The runner the jj commands execute on. */
   target: RunnerHandle;
-  /** Per-command timeout (ms). */
-  timeoutMs: number;
   /** Caller-id → concrete-ref resolution (default: identity / production). */
   refResolver?: JjRefResolver;
   /** Working-tree edit applied on each `commit` (default: auto-snapshot / production). */
@@ -165,7 +164,6 @@ function stableConflictId(changeId: string, paths: ReadonlyArray<string>): strin
 export class JjWorkspaceVcsCore implements WorkspaceVcsCore {
   private readonly substrate: CommandSubstrate;
   private readonly target: RunnerHandle;
-  private readonly timeoutMs: number;
   private readonly refResolver: JjRefResolver;
   private readonly workingEdit: JjWorkingEdit;
   private readonly commitIdentity: JjCommitIdentity;
@@ -176,7 +174,6 @@ export class JjWorkspaceVcsCore implements WorkspaceVcsCore {
   constructor(deps: JjWorkspaceVcsCoreDeps) {
     this.substrate = deps.substrate;
     this.target = deps.target;
-    this.timeoutMs = deps.timeoutMs;
     this.refResolver = deps.refResolver ?? identityJjRefResolver;
     this.workingEdit = deps.workingEdit ?? autoSnapshotWorkingEdit;
     this.commitIdentity = deps.commitIdentity ?? DEFAULT_JJ_COMMIT_IDENTITY;
@@ -384,10 +381,10 @@ export class JjWorkspaceVcsCore implements WorkspaceVcsCore {
   //   - exit 0 ⇒ parse the path lines.
   private async conflictedPaths(path: string, branch: string): Promise<string[]> {
     const result = await this.runJjRaw(path, [`jj resolve --list -r ${quoteSshShellArg(branch)}`]);
-    if (result.failure !== undefined || result.timedOut) {
+    if (result.failure !== undefined || result.stalled === true) {
       const detail =
         result.failure === undefined
-          ? "timed out"
+          ? "stalled (no sign of life)"
           : "message" in result.failure
             ? result.failure.message
             : result.failure.reason;
@@ -450,7 +447,9 @@ export class JjWorkspaceVcsCore implements WorkspaceVcsCore {
     await runWorkspaceSshCommand(this.substrate, this.target, {
       label: `jj ${jjCommands[0] ?? ""}`,
       cwd: path,
-      timeoutMs: this.timeoutMs,
+      // VCS op (jj): output-driven + the workspace as the silent-stretch liveness
+      // probe (a rebase/restack touches files as it works). Never killed for elapsed time.
+      watchdog: buildActivityWatchdog({ substrate: this.substrate, target: this.target, cls: "vcs", workspace: path }),
       command: ["set -eu", ...jjCommands].join(" && "),
     });
   }
@@ -462,7 +461,9 @@ export class JjWorkspaceVcsCore implements WorkspaceVcsCore {
     const clone = buildJjCloneCommand(path, source, this.cloneCredential);
     await runWorkspaceSshCommand(this.substrate, this.target, {
       label: "jj git clone",
-      timeoutMs: this.timeoutMs,
+      // VCS op (jj clone): output-driven + the clone target as the silent-stretch
+      // liveness probe (the clone writes the tree as it works). Never killed for time.
+      watchdog: buildActivityWatchdog({ substrate: this.substrate, target: this.target, cls: "vcs", workspace: path }),
       command: clone.command,
       ...(clone.stdin !== undefined && { stdin: clone.stdin }),
     });
@@ -473,7 +474,7 @@ export class JjWorkspaceVcsCore implements WorkspaceVcsCore {
     const result = await runWorkspaceSshCommand(this.substrate, this.target, {
       label: `jj ${jjCommands[0] ?? ""}`,
       cwd: path,
-      timeoutMs: this.timeoutMs,
+      watchdog: buildActivityWatchdog({ substrate: this.substrate, target: this.target, cls: "vcs", workspace: path }),
       command: ["set -eu", ...jjCommands].join(" && "),
     });
     return result.stdout;
@@ -485,7 +486,7 @@ export class JjWorkspaceVcsCore implements WorkspaceVcsCore {
     return this.substrate.run(this.target, {
       command: commands.join("\n"),
       cwd: path,
-      timeoutMs: this.timeoutMs,
+      watchdog: buildActivityWatchdog({ substrate: this.substrate, target: this.target, cls: "vcs", workspace: path }),
     });
   }
 

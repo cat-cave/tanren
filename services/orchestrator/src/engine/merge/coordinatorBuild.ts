@@ -45,9 +45,6 @@ import { PgMergeQueueModel } from "./coordinatorPg.js";
 import { buildBaseShiftCoordinator } from "../dag/percolationBuild.js";
 import { buildBaseShiftRebaseHook } from "../dag/baseShiftRebaseHook.js";
 
-/** The default timeout (ms) the drive-path resolver's SSH/git/model ops run under. */
-const DRIVE_RESOLVER_TIMEOUT_MS = 600_000;
-
 export interface BuildMergeCoordinatorDeps {
   pool: pg.Pool;
   secrets: SecretStore;
@@ -252,7 +249,6 @@ export function buildDriveMerge(deps: BuildMergeCoordinatorDeps): DriveMergeForQ
             ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
             eventStore,
             identitySecretRef: deps.identitySecretRef,
-            timeoutMs: DRIVE_RESOLVER_TIMEOUT_MS,
             verdict,
           }),
           // NATIVE re-gate (no-Actions): after an auto-rebase the prior verdict is
@@ -275,7 +271,6 @@ export function buildDriveMerge(deps: BuildMergeCoordinatorDeps): DriveMergeForQ
             runId,
             githubCredentialRef: facts.githubCredentialRef,
             ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
-            timeoutMs: DRIVE_RESOLVER_TIMEOUT_MS,
           }),
           // THE ONE BASE-SHIFT HANDLER (§7): a `behind` PR branch rebases in place over
           // jj through the SAME coordinator the percolation kick-off uses — never a

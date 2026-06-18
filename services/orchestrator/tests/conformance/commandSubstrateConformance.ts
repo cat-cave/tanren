@@ -24,7 +24,7 @@ export interface CommandSubstrateFailureHarness {
   makeFailing(): { substrate: CommandSubstrate; handle: RunnerHandle };
 }
 
-const ECHO: RunnerCommand = { command: "echo conformance", timeoutMs: 1_000 };
+const ECHO: RunnerCommand = { command: "echo conformance" };
 
 export function describeCommandSubstrateConformance(label: string, harness: CommandSubstrateConformanceHarness): void {
   describe(`CommandSubstrate conformance: ${label}`, () => {
@@ -34,7 +34,9 @@ export function describeCommandSubstrateConformance(label: string, harness: Comm
       expect(result.exitCode === null || typeof result.exitCode === "number").toBe(true);
       expect(typeof result.stdout).toBe("string");
       expect(typeof result.stderr).toBe("string");
-      expect(typeof result.timedOut).toBe("boolean");
+      // `stalled` is the progress-based no-life flag (the wall-clock `timedOut` is gone):
+      // optional, so a clean result either omits it or carries a boolean — never a kill flag.
+      expect(result.stalled === undefined || typeof result.stalled === "boolean").toBe(true);
     });
 
     it("run() accepts the handle the seam's allocator hands it", async () => {

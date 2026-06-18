@@ -21,18 +21,6 @@ import type { CommandSubstrate } from "../../contracts/commandSubstrate.js";
 import { buildLiveEnvBuildDriver } from "./liveEnvBuildDriver.js";
 import type { EnvCreationDeps } from "./resolveProjectEnvWithCreation.js";
 
-// The default off-baseline build timeout — a cold toolchain install (an off-baseline
-// node/python/rust) can take a few minutes. Overridable via TANREN_ENV_BUILD_TIMEOUT_MS.
-// This is a PER-COMMAND build-invocation hang bound (the host `execFile` / substrate
-// seam), NOT a whole-op deadline or attempt cap: it bounds one build shell-out; a trip
-// fails LOUD (EnvBuildFailedError) for re-drive. It threads into the substrate/ssh seam
-// (the per-call provider-timeout class) the timeout-eradication Wave 3 owns — left to
-// that wave deliberately (this wave eradicated only the COUNT caps).
-const DEFAULT_ENV_BUILD_TIMEOUT_MS = 15 * 60 * 1000;
-// The validation harness's per-command ssh-probe timeout (a `mise exec --version` probe
-// is fast) — the same per-call substrate-seam hang-bound class, owned by Wave 3.
-const DEFAULT_ENV_VALIDATE_TIMEOUT_MS = 2 * 60 * 1000;
-
 // Resolve the build script path relative to THIS module — it lives at the repo's
 // scripts/dev/build-env-image.sh. The orchestrator src tree is
 // services/orchestrator/src/engine/environments/creation; the repo root is six levels
@@ -70,19 +58,17 @@ export function buildEnvCreationFromEnv(input: BuildEnvCreationInput): EnvCreati
   // The live path PUSHES (the validation runner pulls the registry ref); a dry-run
   // operator can set TANREN_ENV_BUILD_PUSH=0 for a local-only build.
   const push = process.env["TANREN_ENV_BUILD_PUSH"] !== "0";
-  // Per-command build-invocation / ssh-probe hang bounds (the substrate-seam per-call
-  // timeout class) — owned by the timeout-eradication Wave 3, not this (count-cap) wave.
-  const buildTimeoutMs = parsePositiveInt(process.env["TANREN_ENV_BUILD_TIMEOUT_MS"]) ?? DEFAULT_ENV_BUILD_TIMEOUT_MS;
-  const validateTimeoutMs =
-    parsePositiveInt(process.env["TANREN_ENV_VALIDATE_TIMEOUT_MS"]) ?? DEFAULT_ENV_VALIDATE_TIMEOUT_MS;
   const scriptPath = process.env["TANREN_ENV_BUILD_SCRIPT"]?.trim() ?? defaultScriptPath();
 
+  // NO build/validate wall-clock timeouts (feedback_no_timeouts_progress_based): the
+  // off-baseline image build runs to its own terminal exit (a cold toolchain install
+  // streams progress for as long as it needs), and the validation harness's per-command
+  // probes are governed by the ActivityWatchdog, never a duration kill.
   const buildDriver = buildLiveEnvBuildDriver({
     scriptPath,
     registry,
     ...(imageName === undefined || imageName === "" ? {} : { imageName }),
     push,
-    timeoutMs: buildTimeoutMs,
   });
 
   return {
@@ -91,14 +77,5 @@ export function buildEnvCreationFromEnv(input: BuildEnvCreationInput): EnvCreati
     ssh: input.ssh,
     identitySecretRef: input.identitySecretRef,
     now: input.now ?? ((): Date => new Date()),
-    timeoutMs: validateTimeoutMs,
   };
-}
-
-// Parse a positive-integer env var, or undefined when absent/invalid (the caller then
-// applies the default — never a silent 0/NaN).
-function parsePositiveInt(value: string | undefined): number | undefined {
-  if (value === undefined || value.trim() === "") return undefined;
-  const parsed = Number.parseInt(value, 10);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
 }

@@ -25,14 +25,12 @@ export interface WorkspaceGitInput {
   ssh: CommandSubstrate;
   target: RunnerHandle;
   workspacePath: string;
-  timeoutMs: number;
 }
 
 export async function prepareGitWorkspace(input: WorkspaceGitInput): Promise<void> {
   const path = quoteSshShellArg(input.workspacePath);
   await runWorkspaceSshCommand(input.ssh, input.target, {
     label: "prepare workspace",
-    timeoutMs: input.timeoutMs,
     command: [
       "set -eu",
       `rm -rf ${path}`,
@@ -51,7 +49,6 @@ export async function prepareGitWorkspace(input: WorkspaceGitInput): Promise<voi
 export async function runFakeWriterMutation(input: WorkspaceGitInput): Promise<void> {
   await runWorkspaceSshCommand(input.ssh, input.target, {
     label: "fake writer mutation",
-    timeoutMs: input.timeoutMs,
     cwd: input.workspacePath,
     command: [
       "set -eu",
@@ -65,13 +62,11 @@ export async function runFakeWriterMutation(input: WorkspaceGitInput): Promise<v
 export async function captureGitMutation(input: WorkspaceGitInput): Promise<WriterResult> {
   const diff = await runWorkspaceSshCommand(input.ssh, input.target, {
     label: "capture git diff",
-    timeoutMs: input.timeoutMs,
     cwd: input.workspacePath,
     command: "git diff --no-color HEAD~1..HEAD",
   });
   const log = await runWorkspaceSshCommand(input.ssh, input.target, {
     label: "capture git commit",
-    timeoutMs: input.timeoutMs,
     cwd: input.workspacePath,
     command: "git log -1 --format='%H%x09%s' HEAD",
   });

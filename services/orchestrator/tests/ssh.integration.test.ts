@@ -30,22 +30,23 @@ describeIntegration("SSH substrate live runner integration", () => {
       identitySecretRef: "runner/integration/identity",
     };
 
-    const success = await substrate.run(target, { command: "printf 'ok'", timeoutMs: 10_000 });
+    const success = await substrate.run(target, { command: "printf 'ok'" });
     const nonzero = await substrate.run(target, {
       command: "printf 'err' >&2; exit 7",
-      timeoutMs: 10_000,
     });
     const cwd = await substrate.run(target, {
       command: "pwd",
       cwd: "/workspace",
-      timeoutMs: 10_000,
     });
 
-    expect(success).toMatchObject({ exitCode: 0, stdout: "ok", stderr: "", timedOut: false });
+    expect(success).toMatchObject({ exitCode: 0, stdout: "ok", stderr: "" });
+    expect(success.stalled).toBeFalsy();
     expect(success.failure).toBeUndefined();
-    expect(nonzero).toMatchObject({ exitCode: 7, stdout: "", stderr: "err", timedOut: false });
+    expect(nonzero).toMatchObject({ exitCode: 7, stdout: "", stderr: "err" });
+    expect(nonzero.stalled).toBeFalsy();
     expect(nonzero.failure).toBeUndefined();
-    expect(cwd).toMatchObject({ exitCode: 0, stdout: "/workspace\n", stderr: "", timedOut: false });
+    expect(cwd).toMatchObject({ exitCode: 0, stdout: "/workspace\n", stderr: "" });
+    expect(cwd.stalled).toBeFalsy();
     expect(cwd.failure).toBeUndefined();
   });
 });

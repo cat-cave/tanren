@@ -37,7 +37,6 @@ export interface BatchNodeGateClosureDeps {
   integrationRef: string;
   projectId: string;
   tailSpecId: string;
-  timeoutMs: number;
 }
 
 /**
@@ -52,7 +51,6 @@ export function batchNodeResolveConfig(deps: BatchNodeGateClosureDeps): ResolveB
         ssh: deps.ssh,
         target: live.target,
         workspacePath: live.workspacePath,
-        timeoutMs: deps.timeoutMs,
       });
     } catch {
       return undefined;
@@ -83,7 +81,6 @@ export function batchNodeGate(deps: BatchNodeGateClosureDeps): GateBatchWorkspac
         ssh: deps.ssh,
         target: live.target,
         workspacePath: live.workspacePath,
-        timeoutMs: deps.timeoutMs,
       });
     } catch (error) {
       if (isInvalidCiConfigError(error)) {
@@ -101,7 +98,6 @@ export function batchNodeGate(deps: BatchNodeGateClosureDeps): GateBatchWorkspac
       ssh: deps.ssh,
       target: live.target,
       workspacePath: live.workspacePath,
-      timeoutMs: deps.timeoutMs,
     });
     await ensureWorkspaceDepsInstalled({
       ssh: deps.ssh,
@@ -111,7 +107,6 @@ export function batchNodeGate(deps: BatchNodeGateClosureDeps): GateBatchWorkspac
       // could re-throw the same validation error), or — when the config omits
       // `bootstrap.run` — the stack-agnostic DEFAULT_BOOTSTRAP_COMMAND LOUD-fallback.
       command: bootstrapCommand(config) ?? DEFAULT_BOOTSTRAP_COMMAND,
-      timeoutMs: deps.timeoutMs,
     });
     const outcome = await runGateForWhen({
       ssh: deps.ssh,
@@ -119,7 +114,6 @@ export function batchNodeGate(deps: BatchNodeGateClosureDeps): GateBatchWorkspac
       workspacePath: live.workspacePath,
       config,
       when: "pre_merge",
-      timeoutMs: deps.timeoutMs,
       appendEvent: async <N extends EventName>(eventType: N, payload: EventPayload<N>, taskId?: string) => {
         await deps.eventStore.append({
           projectId: deps.projectId,

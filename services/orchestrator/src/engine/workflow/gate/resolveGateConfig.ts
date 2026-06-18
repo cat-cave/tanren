@@ -11,6 +11,7 @@ import { bootstrapCommand, type CiConfigV1, resolveCiConfig } from "../../ci/ind
 import type { RunnerHandle } from "../../contracts/allocator.js";
 import type { CommandSubstrate } from "../../contracts/commandSubstrate.js";
 import { quoteSshShellArg } from "../../ssh/command.js";
+import { outputOnlyWatchdog } from "../../ssh/activityWatchdog.js";
 
 // The native gate-definition path, relative to the workspace root.
 const CI_CONFIG_FILENAME = ".tanren/ci.yml";
@@ -19,7 +20,6 @@ export interface ResolveGateConfigInput {
   ssh: CommandSubstrate;
   target: RunnerHandle;
   workspacePath: string;
-  timeoutMs: number;
 }
 
 /**
@@ -47,14 +47,15 @@ async function readCiConfigText(input: ResolveGateConfigInput): Promise<string |
   const path = `${input.workspacePath.replace(/\/+$/u, "")}/${CI_CONFIG_FILENAME}`;
   const result = await input.ssh.run(input.target, {
     command: `if [ -f ${quoteSshShellArg(path)} ]; then cat ${quoteSshShellArg(path)}; fi`,
-    timeoutMs: input.timeoutMs,
+    // INFRA config read: output-driven watchdog, no wall-clock kill.
+    watchdog: outputOnlyWatchdog(),
   });
   if (result.failure !== undefined) {
     const detail = "message" in result.failure ? result.failure.message : result.failure.reason;
     throw new GateConfigReadError(`substrate ${result.failure.kind}: ${detail}`);
   }
-  if (result.timedOut) {
-    throw new GateConfigReadError(`timed out after ${input.timeoutMs}ms`);
+  if (result.stalled === true) {
+    throw new GateConfigReadError("stalled (no sign of life)");
   }
   if (result.exitCode !== 0) {
     throw new GateConfigReadError(`nonzero exit ${String(result.exitCode)}`);

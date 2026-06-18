@@ -100,12 +100,9 @@ export interface CreateTemplateFlowDeps {
   // whole-build wall-clock deadline — a build that is still progressing polls
   // indefinitely; it fails LOUD only on a genuine deadlock (blocked + no progress).
   convergence?: { pollIntervalMs: number };
-  // Per-SSH-command timeout for the validation clone/bootstrap.
-  timeoutMs?: number;
 }
 
 const DEFAULT_CONVERGENCE = { pollIntervalMs: 15_000 };
-const DEFAULT_TIMEOUT_MS = 600_000;
 
 // Assemble the full `CreateTemplateDeps` the creation meta-flow runs on, for one
 // (org, actor, request). The SINGLE place the live collaborators are wired — reused
@@ -116,7 +113,6 @@ export function buildCreateTemplateDeps(
   input: { orgId: string; actor: ActorContext; request: TemplateCreationRequest },
 ): CreateTemplateDeps {
   const convergence = deps.convergence ?? DEFAULT_CONVERGENCE;
-  const timeoutMs = deps.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const { orgId, actor, request } = input;
 
   // STEP 1 seam — the LIVE researcher (org-scoped target; no project yet, so
@@ -138,7 +134,6 @@ export function buildCreateTemplateDeps(
     resolveConverged: (facts) => resolveConvergedProjectFacts(deps.pool, facts),
     auditorFor: (target) =>
       buildTemplateAuditor({ passRunner: deps.auditPassRunner, orgId: target.orgId, projectId: target.projectId }),
-    timeoutMs,
     convergence,
   });
 
@@ -199,7 +194,6 @@ export function buildCreateTemplateDeps(
         }),
     },
     now: () => new Date(),
-    timeoutMs,
   };
 }
 

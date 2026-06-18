@@ -170,7 +170,6 @@ export function buildDefaultGate(
         ssh: input.ssh,
         target,
         workspacePath,
-        timeoutMs: input.timeoutMs,
       })
         .then((ok) => ({ ok }) as { ok: CiConfigV1 })
         .catch((error: unknown) => {
@@ -195,7 +194,7 @@ export function buildDefaultGate(
       // baked in here, so an explicit command always wins verbatim in both cases.
       installCommandPromise =
         input.bootstrapCommand === undefined
-          ? resolveBootstrapCommand({ ssh: input.ssh, target, workspacePath, timeoutMs: input.timeoutMs })
+          ? resolveBootstrapCommand({ ssh: input.ssh, target, workspacePath })
           : Promise.resolve(input.bootstrapCommand);
     }
     // Bootstrap before the gate runs, EVERY gate (no latch). The project's `just
@@ -233,7 +232,6 @@ export function buildDefaultGate(
         workspacePath,
         ...(resolvedInstallCommand === undefined ? {} : { command: resolvedInstallCommand }),
         ...(input.appEnv === undefined ? {} : { appEnv: input.appEnv }),
-        timeoutMs: input.timeoutMs,
       });
     } catch (error: unknown) {
       // WRITER-FIXABLE scaffold: route the deps-install failure back to the writer loop
@@ -257,7 +255,7 @@ export function buildDefaultGate(
     // landing head` hold. The override is validated + FAIL-CLOSED at this boundary (no
     // silent fallback to a wrong commit): see {@link resolveVerdictAnchorSha}.
     const headSha = await resolveVerdictAnchorSha(when, headShaOverride, () =>
-      resolveWorkspaceHeadSha({ ssh: input.ssh, target, workspacePath, timeoutMs: input.timeoutMs }),
+      resolveWorkspaceHeadSha({ ssh: input.ssh, target, workspacePath }),
     );
     // CI-INTELLIGENCE ACTUATION: resolve the project's ACTIVE quarantine (memoized) +
     // fold it into the gate's app-env (the stack-agnostic `TANREN_QUARANTINE` test
@@ -271,7 +269,6 @@ export function buildDefaultGate(
       workspacePath,
       config,
       when,
-      timeoutMs: input.timeoutMs,
       appendEvent,
       taskId,
       advisoryStepNames,
@@ -395,7 +392,6 @@ async function ingestGateJunitBestEffort(
       projectId: input.context.projectId,
       orgId,
       headSha,
-      timeoutMs: input.timeoutMs,
       gatePassed: outcome.passed,
       expectReport,
       ...(declared === undefined ? {} : { tier: declared.tier, reportPath: declared.path }),

@@ -3,23 +3,27 @@
  * Extracted from codex.ts to keep that file under the 500-line architecture
  * cap. These run over the runner SSH substrate to capture the baseline sha,
  * commit the writer's changes, and diff/log the result into a WriterResult.
+ *
+ * These are workspace-bound VCS commands: each builds its `vcs` ActivityWatchdog
+ * (output-driven, with the workspace as the silent-stretch liveness probe) via the
+ * shared factory — never a wall-clock kill (feedback_no_timeouts_progress_based).
  */
 import type { RunnerHandle } from "../contracts/allocator.js";
 import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import { runWorkspaceSshCommand } from "../workspace/index.js";
+import { buildActivityWatchdog } from "../ssh/activityWatchdog.js";
 import type { Commit, WriterResult } from "./types.js";
 
 export async function captureBaselineSha(
   ssh: CommandSubstrate,
   target: RunnerHandle,
   workspace: string,
-  timeoutMs: number,
 ): Promise<string> {
   const result = await runWorkspaceSshCommand(ssh, target, {
     label: "capture baseline git sha",
     cwd: workspace,
     command: "git rev-parse HEAD",
-    timeoutMs,
+    watchdog: buildActivityWatchdog({ substrate: ssh, target, cls: "vcs", workspace }),
   });
   const sha = result.stdout.trim();
   if (!/^[0-9a-f]{40}$/u.test(sha)) {
@@ -32,7 +36,6 @@ async function commitWorkspaceChangesAfterCodex(
   ssh: CommandSubstrate,
   target: RunnerHandle,
   workspace: string,
-  timeoutMs: number,
 ): Promise<void> {
   await runWorkspaceSshCommand(ssh, target, {
     label: "commit codex workspace changes",
@@ -44,7 +47,7 @@ async function commitWorkspaceChangesAfterCodex(
       "GIT_AUTHOR_DATE='2026-01-01T00:00:00Z' GIT_COMMITTER_DATE='2026-01-01T00:00:00Z' git commit -m 'codex writer'",
       "fi",
     ].join("\n"),
-    timeoutMs,
+    watchdog: buildActivityWatchdog({ substrate: ssh, target, cls: "vcs", workspace }),
   });
 }
 
@@ -53,10 +56,9 @@ export async function captureGitStateAfterCodex(
   target: RunnerHandle,
   workspace: string,
   baselineSha: string,
-  timeoutMs: number,
 ): Promise<Pick<WriterResult, "diff" | "commits">> {
-  await commitWorkspaceChangesAfterCodex(ssh, target, workspace, timeoutMs);
-  return await captureGitStateAfterBaseline(ssh, target, workspace, baselineSha, timeoutMs);
+  await commitWorkspaceChangesAfterCodex(ssh, target, workspace);
+  return await captureGitStateAfterBaseline(ssh, target, workspace, baselineSha);
 }
 
 async function captureGitStateAfterBaseline(
@@ -64,19 +66,18 @@ async function captureGitStateAfterBaseline(
   target: RunnerHandle,
   workspace: string,
   baselineSha: string,
-  timeoutMs: number,
 ): Promise<Pick<WriterResult, "diff" | "commits">> {
   const diff = await runWorkspaceSshCommand(ssh, target, {
     label: "capture codex git diff",
     cwd: workspace,
     command: `git diff --no-color ${baselineSha}`,
-    timeoutMs,
+    watchdog: buildActivityWatchdog({ substrate: ssh, target, cls: "vcs", workspace }),
   });
   const log = await runWorkspaceSshCommand(ssh, target, {
     label: "capture codex git commits",
     cwd: workspace,
     command: `git log --format='%H%x09%s' --reverse ${baselineSha}..HEAD`,
-    timeoutMs,
+    watchdog: buildActivityWatchdog({ substrate: ssh, target, cls: "vcs", workspace }),
   });
   return { diff: diff.stdout, commits: parseGitLogCommits(log.stdout) };
 }

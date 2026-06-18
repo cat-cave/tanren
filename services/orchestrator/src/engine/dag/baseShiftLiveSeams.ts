@@ -50,9 +50,6 @@ import { resolveBaseShiftConflict } from "./baseShiftLiveResolve.js";
 import { runFreshRunnerMergeGate } from "../merge/freshRunnerGate.js";
 import { pushJjHead } from "../workflow/reviewMerge/conflictResolver/jjAuthedPush.js";
 
-/** The per-base-shift timeout (ms) the live seams run their SSH ops + the re-gate under. */
-const BASE_SHIFT_TIMEOUT_MS = 600_000;
-
 /** Everything the live base-shift seams need to allocate runners + clone + re-gate + resolve. */
 export interface LiveBaseShiftDeps {
   /** The raw pool (the system/credential bootstrap context read runs on it). */
@@ -70,7 +67,6 @@ export interface LiveBaseShiftDeps {
   scopedPool: pg.Pool;
   /** The runner identity key ref (same value the worker boot seeds). */
   identitySecretRef: string;
-  timeoutMs?: number;
 }
 
 /**
@@ -127,7 +123,7 @@ export class LiveBaseShiftWorkspaceProvider implements BaseShiftWorkspaceOpener 
   ): Promise<LiveBaseShiftWorkspaceCore> {
     const stack = input.ancestorStack;
     if (stack !== undefined && stack.length > 0) {
-      return assembleBaseShiftStackWorkspace({ deps: this.deps, ctx, stack, timeoutMs: this.timeoutMs() });
+      return assembleBaseShiftStackWorkspace({ deps: this.deps, ctx, stack });
     }
     // A non-speculative shift (every ancestor merged) rebases onto plain `default_branch` —
     // a REAL ref the clone imports (never a synthesized integration ref).
@@ -135,7 +131,6 @@ export class LiveBaseShiftWorkspaceProvider implements BaseShiftWorkspaceOpener 
       deps: this.deps,
       ctx,
       baseRef: ctx.defaultBranch,
-      timeoutMs: this.timeoutMs(),
     });
   }
 
@@ -196,7 +191,6 @@ export class LiveBaseShiftWorkspaceProvider implements BaseShiftWorkspaceOpener 
       headBranch: live.pushFacts.headBranch,
       ...(live.pushFacts.installation !== undefined && { installation: live.pushFacts.installation }),
       githubCredentialRef: live.pushFacts.githubCredentialRef,
-      timeoutMs: this.timeoutMs(),
     });
   }
 
@@ -231,10 +225,6 @@ export class LiveBaseShiftWorkspaceProvider implements BaseShiftWorkspaceOpener 
   private unreachable(op: string): never {
     throw new Error(`live base-shift workspace: ${op} is unreachable (the coordinator only rebaseOnto's)`);
   }
-
-  private timeoutMs(): number {
-    return this.deps.timeoutMs ?? BASE_SHIFT_TIMEOUT_MS;
-  }
 }
 
 /**
@@ -266,7 +256,6 @@ export class LiveBaseShiftReGate implements BaseShiftReGate {
         ...(this.deps.githubAppMinter !== undefined && { githubAppMinter: this.deps.githubAppMinter }),
         eventStore: this.deps.eventStore,
         identitySecretRef: this.deps.identitySecretRef,
-        timeoutMs: this.deps.timeoutMs ?? BASE_SHIFT_TIMEOUT_MS,
       },
       {
         repoUrl: ctx.repoUrl,
@@ -383,7 +372,6 @@ export class LiveBaseShiftConflictResolver implements BaseShiftConflictResolver 
       // Absent/empty (the non-speculative path passes no stack) ⇒ a plain `default_branch`
       // single-ref clone (a REAL ref, never a synthesized one).
       ...(input.ancestorStack !== undefined && !input.nonSpeculative && { ancestorStack: input.ancestorStack }),
-      timeoutMs: this.deps.timeoutMs ?? BASE_SHIFT_TIMEOUT_MS,
     });
   }
 }

@@ -15,6 +15,7 @@
 import type { RunnerHandle } from "../../../contracts/allocator.js";
 import type { CommandSubstrate } from "../../../contracts/commandSubstrate.js";
 import { quoteSshShellArg } from "../../../ssh/command.js";
+import { buildActivityWatchdog } from "../../../ssh/activityWatchdog.js";
 import { entityMergeFirstPass } from "./entityMergeFirstPass.js";
 import type {
   ConflictFileSides,
@@ -31,7 +32,6 @@ export interface RunnerEntityMergeContext {
   ssh: CommandSubstrate;
   target: RunnerHandle;
   workspacePath: string;
-  timeoutMs: number;
 }
 
 // ── The `sem`-backed entity differ ───────────────────────────────────────────
@@ -87,7 +87,12 @@ export function buildSemEntityDiffer(ctx: RunnerEntityMergeContext): EntityDiffe
         // case (`producer-unsupported`), distinct from a present-but-erroring `sem`.
         result = await ctx.ssh.run(ctx.target, {
           cwd: ctx.workspacePath,
-          timeoutMs: ctx.timeoutMs,
+          watchdog: buildActivityWatchdog({
+            substrate: ctx.ssh,
+            target: ctx.target,
+            cls: "vcs",
+            workspace: ctx.workspacePath,
+          }),
           stdin: JSON.stringify(payload),
           command: "command -v sem >/dev/null 2>&1 || { echo __SEM_ABSENT__ >&2; exit 127; }; sem diff --stdin --json",
         });
@@ -96,7 +101,7 @@ export function buildSemEntityDiffer(ctx: RunnerEntityMergeContext): EntityDiffe
         // producer failure; defer loudly via the reason, never brick.
         return { ok: false, reason: "producer-errored" };
       }
-      if (result.failure !== undefined || result.timedOut) {
+      if (result.failure !== undefined || result.stalled === true) {
         return { ok: false, reason: "producer-errored" };
       }
       if (result.exitCode === 127 || result.stderr.includes("__SEM_ABSENT__")) {
@@ -231,13 +236,18 @@ async function fileShow(ctx: RunnerEntityMergeContext, rev: string, path: string
   try {
     result = await ctx.ssh.run(ctx.target, {
       cwd: ctx.workspacePath,
-      timeoutMs: ctx.timeoutMs,
+      watchdog: buildActivityWatchdog({
+        substrate: ctx.ssh,
+        target: ctx.target,
+        cls: "vcs",
+        workspace: ctx.workspacePath,
+      }),
       command: `jj file show -r ${quoteSshShellArg(rev)} -- ${quoteSshShellArg(path)}`,
     });
   } catch {
     return undefined;
   }
-  if (result.failure !== undefined || result.timedOut || result.exitCode !== 0) {
+  if (result.failure !== undefined || result.stalled === true || result.exitCode !== 0) {
     return undefined;
   }
   return result.stdout;

@@ -25,7 +25,6 @@ const subtask = (over: Partial<{ index: number; title: string; intent: string; b
 
 describe("buildPlannerPrompt — full rendered contract", () => {
   const base = {
-    timeoutMs: 1_000,
     rejectionHistory: [],
     spec: {
       specTitle: "Add status helpers",
@@ -307,8 +306,8 @@ function recordingChecker(): AnswererAdapter<CheckAnswer> & { last?: AnswererRun
   return adapter;
 }
 
-describe("invoke* forwards prompt, timeout, workspace, and the canonical schema", () => {
-  it("invokeChecker forwards the built prompt + timeout + workspace and reports the check schema id", async () => {
+describe("invoke* forwards prompt, workspace, and the canonical schema", () => {
+  it("invokeChecker forwards the built prompt + workspace and reports the check schema id", async () => {
     const adapter = recordingChecker();
     const result = await invokeChecker(adapter, {
       context: {
@@ -318,17 +317,15 @@ describe("invoke* forwards prompt, timeout, workspace, and the canonical schema"
         subtask: subtask(),
         baselineSha: "0".repeat(40),
       },
-      timeoutMs: 4_242,
       workspace: "/ws/repo",
     });
-    expect(adapter.last?.timeoutMs).toBe(4_242);
     expect(adapter.last?.workspace).toBe("/ws/repo");
     expect(adapter.last?.prompt).toContain("You are the Tanren Checker Answerer");
     expect(adapter.last?.outputSchema.name).toBe(result.schemaId);
     expect(result.schemaId).toContain("check");
   });
 
-  it("invokePlanner forwards prompt + timeout + workspace and returns the plan + schema id", async () => {
+  it("invokePlanner forwards prompt + workspace and returns the plan + schema id", async () => {
     let seen: AnswererRunOptions<PlanAnswer> | undefined;
     const plan: PlanAnswer = { rationale: "r", subtasks: [subtask()] };
     const adapter: AnswererAdapter<PlanAnswer> = {
@@ -348,18 +345,16 @@ describe("invoke* forwards prompt, timeout, workspace, and the canonical schema"
         behaviorIds: [],
         behaviorContext: [],
       },
-      timeoutMs: 9_001,
       rejectionHistory: [],
       workspace: "/ws/plan",
     });
-    expect(seen?.timeoutMs).toBe(9_001);
     expect(seen?.workspace).toBe("/ws/plan");
     expect(seen?.prompt).toContain("You are the Tanren Planner Answerer");
     expect(result.plan).toBe(plan);
     expect(result.schemaId).toContain("plan");
   });
 
-  it("invokeAuditor forwards prompt + timeout + workspace and reports the audit schema id", async () => {
+  it("invokeAuditor forwards prompt + workspace and reports the audit schema id", async () => {
     let seen: AnswererRunOptions<typeof cleanAudit> | undefined;
     const adapter: AnswererAdapter<typeof cleanAudit> = {
       kind: "answerer",
@@ -378,10 +373,8 @@ describe("invoke* forwards prompt, timeout, workspace, and the canonical schema"
         subtasks: [subtask()],
         baselineSha: "0".repeat(40),
       },
-      timeoutMs: 7_777,
       workspace: "/ws/audit",
     });
-    expect(seen?.timeoutMs).toBe(7_777);
     expect(seen?.workspace).toBe("/ws/audit");
     expect(seen?.prompt).toContain("You are the Tanren Auditor Answerer");
     expect(result.schemaId).toContain("audit");

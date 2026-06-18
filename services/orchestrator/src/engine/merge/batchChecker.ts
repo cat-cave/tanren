@@ -83,7 +83,6 @@ export interface PgBatchCheckerDeps {
   identitySecretRef: string;
   githubAppMinter?: GithubAppTokenMinter;
   runStateWriter?: RunStateWriter;
-  timeoutMs: number;
 }
 
 export class PgBatchChecker implements BatchChecker {
@@ -218,7 +217,6 @@ export class PgBatchChecker implements BatchChecker {
       integrationRef,
       projectId,
       tailSpecId,
-      timeoutMs: this.deps.timeoutMs,
     } as const;
     return runWithJobOrgId(orgId, () =>
       driveBatchThroughNode(
@@ -255,11 +253,9 @@ export class PgBatchChecker implements BatchChecker {
             secrets: this.deps.secrets,
             githubHttp: this.deps.githubHttp,
             ...(this.deps.githubAppMinter !== undefined && { githubAppMinter: this.deps.githubAppMinter }),
-            timeoutMs: this.deps.timeoutMs,
           },
           resolveConfig: batchNodeResolveConfig(gateDeps),
           gate: batchNodeGate(gateDeps),
-          timeoutMs: this.deps.timeoutMs,
         },
       ),
     );

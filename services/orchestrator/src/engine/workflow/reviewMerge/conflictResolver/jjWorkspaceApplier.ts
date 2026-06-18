@@ -41,6 +41,7 @@ import type { OrgGithubAppInstallation } from "../../../config/orgConfig.js";
 import type { GithubAppTokenMinter } from "../../../providers/githubAppTokenMinter.js";
 import type { LiveJjWorkspace } from "../../../providers/liveJjWorkspace.js";
 import { quoteSshShellArg } from "../../../ssh/command.js";
+import { buildActivityWatchdog } from "../../../ssh/activityWatchdog.js";
 import { runWorkspaceSshCommand } from "../../../workspace/ssh.js";
 import { pushJjHead } from "./jjAuthedPush.js";
 
@@ -82,7 +83,6 @@ export interface JjConflictApplierDeps {
   /** The shared installation-token minter (its cache lives here). */
   githubAppMinter?: GithubAppTokenMinter;
   facts: JjConflictApplierFacts;
-  timeoutMs: number;
   /**
    * An ALREADY-open workspace handle to gather over INSTEAD of cloning a fresh one
    * (WS-A PR-6b, walker-jj-local-integration-design.md §2.2). The base-shift resolver's
@@ -150,7 +150,12 @@ export class JjWorkspaceConflictApplier implements WorkspaceConflictApplier {
     await runWorkspaceSshCommand(this.deps.ssh, this.deps.target, {
       label: "jj conflict-resolve: track the published head + allow rewriting it",
       cwd: this.deps.workspacePath,
-      timeoutMs: this.deps.timeoutMs,
+      watchdog: buildActivityWatchdog({
+        substrate: this.deps.ssh,
+        target: this.deps.target,
+        cls: "vcs",
+        workspace: this.deps.workspacePath,
+      }),
       command: [
         "set -eu",
         // jj 0.42 `bookmark track` takes the bare NAME (not `<name>@origin`) + `--remote`.
@@ -223,7 +228,12 @@ export class JjWorkspaceConflictApplier implements WorkspaceConflictApplier {
     await runWorkspaceSshCommand(this.deps.ssh, this.deps.target, {
       label: "jj conflict gather: materialize markers",
       cwd: this.deps.workspacePath,
-      timeoutMs: this.deps.timeoutMs,
+      watchdog: buildActivityWatchdog({
+        substrate: this.deps.ssh,
+        target: this.deps.target,
+        cls: "vcs",
+        workspace: this.deps.workspacePath,
+      }),
       command: ["set -eu", `jj edit ${quoteSshShellArg(this.deps.facts.headBranch)}`].join(" && "),
     });
     const files: ConflictedFile[] = [];
@@ -231,7 +241,12 @@ export class JjWorkspaceConflictApplier implements WorkspaceConflictApplier {
       const read = await runWorkspaceSshCommand(this.deps.ssh, this.deps.target, {
         label: `jj conflict gather: read ${path}`,
         cwd: this.deps.workspacePath,
-        timeoutMs: this.deps.timeoutMs,
+        watchdog: buildActivityWatchdog({
+          substrate: this.deps.ssh,
+          target: this.deps.target,
+          cls: "vcs",
+          workspace: this.deps.workspacePath,
+        }),
         command: `cat -- ${quoteSshShellArg(path)}`,
       });
       files.push({ path, conflictedContent: read.stdout });
@@ -256,7 +271,6 @@ export class JjWorkspaceConflictApplier implements WorkspaceConflictApplier {
       headBranch: facts.headBranch,
       ...(facts.installation !== undefined && { installation: facts.installation }),
       githubCredentialRef: facts.githubCredentialRef,
-      timeoutMs: this.deps.timeoutMs,
     });
   }
 
@@ -289,7 +303,6 @@ export interface BuildJjConflictApplierDeps {
   githubHttp: GitHubHttpClient;
   githubAppMinter?: GithubAppTokenMinter;
   facts: JjConflictApplierFacts;
-  timeoutMs: number;
   /**
    * WS-A PR-6b (§2.2): an already-open workspace handle the applier gathers over instead of
    * cloning a fresh one — the base-shift jj-local resolver's locally-assembled stack workspace.
@@ -318,7 +331,6 @@ export function buildJjConflictApplier(deps: BuildJjConflictApplierDeps): JjWork
     githubHttp: deps.githubHttp,
     ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
     facts: deps.facts,
-    timeoutMs: deps.timeoutMs,
     ...(deps.preOpenedWorkspace !== undefined && { preOpenedWorkspace: deps.preOpenedWorkspace }),
     release: deps.live.release,
   });

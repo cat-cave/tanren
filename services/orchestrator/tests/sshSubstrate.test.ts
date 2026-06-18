@@ -29,19 +29,18 @@ describe("SSH substrate contract", () => {
   });
 
   it("preserves the fake command substrate", async () => {
-    const result = await new FakeCommandSubstrate().run(target, { command: "echo ok", timeoutMs: 100 });
+    const result = await new FakeCommandSubstrate().run(target, { command: "echo ok" });
 
     expect(result).toEqual({
       exitCode: 0,
       stdout: "fake command: echo ok",
       stderr: "",
-      timedOut: false,
     });
   });
 
   it("wraps commands with safely quoted cwd", () => {
     // A cwd-LESS command runs verbatim (no cwd to anchor a TMPDIR to).
-    expect(buildSshExecCommand({ command: "pwd", timeoutMs: 100 })).toBe("pwd");
+    expect(buildSshExecCommand({ command: "pwd" })).toBe("pwd");
     // A cwd-scoped command cd's into the safely-quoted workspace, then exports a
     // workspace-local TMPDIR (the scaffold-vitest ENOENT root-cause fix) before the
     // command. The TMPDIR is `$PWD/<rel-path>` so it resolves to the workspace tree.
@@ -49,13 +48,12 @@ describe("SSH substrate contract", () => {
       buildSshExecCommand({
         command: "pwd",
         cwd: "/work/path with spaces/it's fine",
-        timeoutMs: 100,
       }),
     ).toBe(
       `cd '/work/path with spaces/it'\\''s fine' && ` +
         `export TMPDIR="$PWD/${WORKSPACE_TMPDIR_REL_PATH}" && mkdir -p "$TMPDIR" && pwd`,
     );
-    expect(() => buildSshExecCommand({ command: "pwd", cwd: "bad\0path", timeoutMs: 100 })).toThrow("null byte");
+    expect(() => buildSshExecCommand({ command: "pwd", cwd: "bad\0path" })).toThrow("null byte");
   });
 
   it("chains cd+TMPDIR+mkdir+command with && so a failed cd aborts (never wrong-cwd)", () => {
@@ -63,7 +61,7 @@ describe("SSH substrate contract", () => {
     // failed `cd` (or `mkdir`) short-circuits the ENTIRE line — the real command must
     // never run in the original cwd or with an unwritable TMPDIR. A stray `;` would
     // break that (the command would run after a failed cd), so assert there is none.
-    const wrapped = buildSshExecCommand({ command: "pnpm test", cwd: "/workspace/runs/run_x/repo", timeoutMs: 100 });
+    const wrapped = buildSshExecCommand({ command: "pnpm test", cwd: "/workspace/runs/run_x/repo" });
     expect(wrapped).not.toContain(";");
     expect(wrapped).toBe(
       `cd '/workspace/runs/run_x/repo' && export TMPDIR="$PWD/${WORKSPACE_TMPDIR_REL_PATH}" && mkdir -p "$TMPDIR" && pnpm test`,
@@ -76,7 +74,7 @@ describe("SSH substrate contract", () => {
     // churning /tmp ENOENTs the trivial test ("temp ssr directory" failure v23 + v24
     // hit). TMPDIR is the only lever — it must point INSIDE the workspace, never /tmp,
     // and under .git/ so a `git add -A` never stages the scratch tree.
-    const wrapped = buildSshExecCommand({ command: "pnpm test", cwd: "/workspace/runs/run_x/repo", timeoutMs: 100 });
+    const wrapped = buildSshExecCommand({ command: "pnpm test", cwd: "/workspace/runs/run_x/repo" });
     expect(wrapped).toContain(`export TMPDIR="$PWD/${WORKSPACE_TMPDIR_REL_PATH}"`);
     expect(wrapped).toContain('mkdir -p "$TMPDIR"');
     // Workspace-anchored ($PWD), NOT the shared /tmp; and under .git/ (inherently untracked).
@@ -102,11 +100,10 @@ describe("SSH substrate contract", () => {
   it("returns ssh_failed when the identity secret is missing", async () => {
     const result = await new SshCommandSubstrate(new FakeSecretStore()).run(target, {
       command: "echo ok",
-      timeoutMs: 100,
     });
 
     expect(result.exitCode).toBeNull();
-    expect(result.timedOut).toBe(false);
+    expect(result.stalled).toBeFalsy();
     expect(result.failure).toEqual({
       kind: "ssh_failed",
       target: "tanren@runner:22",
@@ -142,7 +139,7 @@ describe("SSH substrate contract", () => {
     const pinnedTarget: RunnerHandle = { ...target, hostKeyFingerprint: pinned };
 
     // Drive a run; the substrate calls client.connect with a hostVerifier we capture.
-    const runPromise = substrate.run(pinnedTarget, { command: "echo ok", timeoutMs: 100 });
+    const runPromise = substrate.run(pinnedTarget, { command: "echo ok" });
     const verifier = await capture;
 
     // The verifier receives the bare base64 (no SHA256: prefix); both forms are
@@ -174,12 +171,12 @@ describe("SSH substrate contract", () => {
 
     // The fake's connect() emits the pre-handshake error, which drives
     // settle() → destroy() → a SECOND "error" emission during teardown.
-    const result = await substrate.run(target, { command: "echo ok", timeoutMs: 100 });
+    const result = await substrate.run(target, { command: "echo ok" });
 
     // Settles exactly once, to a single ssh_failed CommandResult — the first
     // error's message wins; the teardown re-emit is a no-op.
     expect(result.exitCode).toBeNull();
-    expect(result.timedOut).toBe(false);
+    expect(result.stalled).toBeFalsy();
     expect(result.failure?.kind).toBe("ssh_failed");
     expect(result.failure?.message).toBe("Connection lost before handshake");
     // settle() ran exactly once → exactly one destroy(); the teardown re-emit it
@@ -200,10 +197,10 @@ describe("SSH substrate contract", () => {
     const { client, state } = createSyncErrorOnConnectClient();
     const substrate = new SshCommandSubstrate(secrets, { clientFactory: () => client });
 
-    const result = await substrate.run(target, { command: "echo ok", timeoutMs: 100 });
+    const result = await substrate.run(target, { command: "echo ok" });
 
     expect(result.exitCode).toBeNull();
-    expect(result.timedOut).toBe(false);
+    expect(result.stalled).toBeFalsy();
     expect(result.failure?.kind).toBe("ssh_failed");
     expect(result.failure?.message).toBe("connect ECONNREFUSED 10.0.0.1:22");
     // The synchronous error drove exactly one settle() → one destroy().
@@ -219,13 +216,12 @@ describe("SSH substrate contract", () => {
     const result = await substrate.run(target, {
       command: "cat",
       stdin: "input",
-      timeoutMs: 100,
     });
 
     expect(result.exitCode).toBeNull();
     expect(result.stdout).toBe("stdout before error");
     expect(result.stderr).toBe("stderr before error");
-    expect(result.timedOut).toBe(false);
+    expect(result.stalled).toBeFalsy();
     expect(result.failure).toEqual({
       kind: "ssh_failed",
       target: "tanren@runner:22",
@@ -235,25 +231,32 @@ describe("SSH substrate contract", () => {
     expect(state.stdinWritten).toBe("input");
   });
 
-  it("returns ssh_failed with timedOut when the SSH operation exceeds the command timeout", async () => {
+  it("fails ssh_failed on the connect-ESTABLISHMENT bound when the handshake never comes up", async () => {
+    // The ONE legitimate time bound the substrate keeps (feedback_no_timeouts_progress_based):
+    // a connection that never ESTABLISHES has no running work to lose. There is NO wall-clock
+    // kill of a running command — only this handshake bound. A never-ready client emits the
+    // ssh2 'timeout' event, which the substrate maps to a connect-establishment failure.
     vi.useFakeTimers();
     const secrets = new FakeSecretStore();
     await secrets.put({ ref: target.identitySecretRef, value: "private-key" });
     const client = createNeverReadyClient();
     const substrate = new SshCommandSubstrate(secrets, { clientFactory: () => client });
 
-    const resultPromise = substrate.run(target, { command: "sleep 10", timeoutMs: 25 });
-    await vi.advanceTimersByTimeAsync(25);
+    const resultPromise = substrate.run(target, { command: "sleep 10", connectTimeoutMs: 25 });
+    // Let the substrate register its connect-establishment listeners first, then the fake
+    // client emits 'timeout' (the handshake never established) → connect failure.
+    await Promise.resolve();
+    client.emit("timeout");
     const result = await resultPromise;
 
     expect(result.exitCode).toBeNull();
-    expect(result.timedOut).toBe(true);
+    expect(result.stalled).toBeFalsy();
     expect(result.failure?.kind).toBe("ssh_failed");
-    expect(result.failure?.message).toBe("SSH command timed out after 25ms");
+    expect(result.failure?.message).toBe("SSH connection failed to establish within 25ms");
   });
 });
 
-function createNeverReadyClient(): Client {
+function createNeverReadyClient(): Client & EventEmitter {
   const emitter = new EventEmitter();
   const client = Object.assign(emitter, {
     connect: () => client,
@@ -261,7 +264,7 @@ function createNeverReadyClient(): Client {
     end: () => client,
     exec: () => client,
   });
-  return client as unknown as Client;
+  return client as unknown as Client & EventEmitter;
 }
 
 function createChannelErrorClient(): {

@@ -414,7 +414,6 @@ export async function bootstrapDependentWorkspace(
     core: new JjWorkspaceVcsCore({
       substrate: input.ssh,
       target,
-      timeoutMs: input.timeoutMs,
       refResolver: identityJjRefResolver,
       workingEdit: autoSnapshotWorkingEdit,
       ...(commitIdentity !== undefined && { commitIdentity }),
@@ -442,7 +441,6 @@ export async function bootstrapDependentWorkspace(
       // jj-local model this is `default_branch`, NOT a synthesized integration ref).
       baseBranch: context.targetBranch,
       runBranch: context.runBranch,
-      timeoutMs: input.timeoutMs,
     },
     phaseBySpecId,
     buildWorkspace,

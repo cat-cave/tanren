@@ -14,22 +14,19 @@ import { DiscoveryResult, type DiscoveryAnswerer, type DiscoveryAnswererContext 
 
 const SCHEMA_NAME = "tanren.discovery_classification.v1";
 
-export interface WrapProviderDiscoveryAnswererOptions {
-  // Bounds each provider call. Defaults to 120s — discovery is interactive,
-  // matching the conversation/interview answerer ceiling.
-  timeoutMs?: number;
-}
+// No bounding option remains: each provider answerer call is governed by the agent
+// ActivityWatchdog (output-driven, never a wall-clock kill) the adapter constructs.
+export type WrapProviderDiscoveryAnswererOptions = Record<never, never>;
 
 export function wrapProviderDiscoveryAnswerer(
   adapter: AnswererAdapter<DiscoveryResult>,
-  options: WrapProviderDiscoveryAnswererOptions = {},
+  _options: WrapProviderDiscoveryAnswererOptions = {},
 ): DiscoveryAnswerer {
   const jsonSchema = renderAnswererJsonSchema(DiscoveryResult);
   return {
     async classify(context: DiscoveryAnswererContext): Promise<DiscoveryResult> {
       return adapter.runAnswerer({
         prompt: buildDiscoveryPrompt(context),
-        timeoutMs: options.timeoutMs ?? 120_000,
         outputSchema: {
           name: SCHEMA_NAME,
           jsonSchema,

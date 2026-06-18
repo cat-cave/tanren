@@ -64,7 +64,6 @@ describe("Claude writer adapter", () => {
     const result = await writer.runWriter({
       prompt: "make a tiny edit",
       workspace: "/workspace/repo",
-      timeoutMs: 1000,
     });
 
     expect(ssh.commands[0]?.command.command).toContain("/run_claude_1/claude-home");
@@ -95,13 +94,12 @@ describe("Claude writer adapter", () => {
       exitCode: null,
       stdout: "{}\n",
       stderr: "",
-      timedOut: true,
+      stalled: true,
     });
     const crashed = await runWithClaudeResult({
       exitCode: 1,
       stdout: "{}\n",
       stderr: "bad",
-      timedOut: false,
     });
     expect(timeout.exitReason).toBe("timeout");
     expect(crashed.exitReason).toBe("crashed");
@@ -113,7 +111,6 @@ describe("Claude writer adapter", () => {
       exitCode: 0,
       stdout: `${usageLimit}\n`,
       stderr: "",
-      timedOut: false,
     });
     expect(result.exitReason).toBe("window_exhausted");
     expect(result.telemetry?.usageLimit?.message).toContain("usage limit");
@@ -124,7 +121,6 @@ describe("Claude writer adapter", () => {
       exitCode: 0,
       stdout: "{}\n",
       stderr: "",
-      timedOut: false,
     });
     expect(JSON.stringify(result)).not.toContain("secret-access-token");
   });
@@ -194,7 +190,7 @@ describe("Claude writer adapter", () => {
       runId: "run_claude_managed",
       endpointBaseUrl: "https://openrouter.ai/api/v1",
     });
-    const result = await writer.runWriter({ prompt: "managed edit", workspace: "/workspace/repo", timeoutMs: 1000 });
+    const result = await writer.runWriter({ prompt: "managed edit", workspace: "/workspace/repo" });
 
     // settings.json is materialized (the secret AUTH_TOKEN arrives on stdin, not
     // in the command string).
@@ -242,7 +238,7 @@ describe("Claude writer adapter", () => {
 });
 
 function ok(stdout: string): CommandResult {
-  return { exitCode: 0, stdout, stderr: "", timedOut: false };
+  return { exitCode: 0, stdout, stderr: "" };
 }
 
 async function runWithClaudeResult(claudeResult: CommandResult) {
@@ -256,7 +252,7 @@ async function runWithClaudeResult(claudeResult: CommandResult) {
     credentialRef: "credential/claude/dev",
     runId: "run_claude_2",
   });
-  return await writer.runWriter({ prompt: "write", workspace: "/workspace/repo", timeoutMs: 1000 });
+  return await writer.runWriter({ prompt: "write", workspace: "/workspace/repo" });
 }
 
 class ScriptedSsh implements CommandSubstrate {

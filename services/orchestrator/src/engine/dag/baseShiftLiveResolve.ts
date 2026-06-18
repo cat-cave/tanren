@@ -69,11 +69,10 @@ export async function resolveBaseShiftConflict(input: {
    * single-ref clone.
    */
   ancestorStack?: AncestorStack;
-  timeoutMs: number;
 }): Promise<ConflictResolution> {
-  const { deps, ctx, shiftedBase, ancestorStack, timeoutMs } = input;
+  const { deps, ctx, shiftedBase, ancestorStack } = input;
   return runWithJobOrgId(ctx.orgId, async () => {
-    const prepared = await prepareResolveWorkspace({ deps, ctx, shiftedBase, ancestorStack, timeoutMs });
+    const prepared = await prepareResolveWorkspace({ deps, ctx, shiftedBase, ancestorStack });
     const resolved = await runResolverOverWorkspace({
       deps,
       ctx,
@@ -81,7 +80,6 @@ export async function resolveBaseShiftConflict(input: {
       reGateBaseSha: prepared.reGateBaseSha,
       applierFacts: prepared.applierFacts,
       ...(prepared.preOpenedWorkspace !== undefined && { preOpenedWorkspace: prepared.preOpenedWorkspace }),
-      timeoutMs,
     }).catch(async (error: unknown) => {
       // FAIL-CLOSED: a failure BEFORE the applier's gather() took ownership would leak the
       // runner — release it loudly. (Once gather() runs, the applier's terminal step owns
@@ -143,14 +141,13 @@ async function prepareResolveWorkspace(input: {
   ctx: BaseShiftRunContext;
   shiftedBase: string;
   ancestorStack?: AncestorStack;
-  timeoutMs: number;
 }): Promise<PreparedResolveWorkspace> {
-  const { deps, ctx, shiftedBase, ancestorStack, timeoutMs } = input;
+  const { deps, ctx, shiftedBase, ancestorStack } = input;
   if (ancestorStack !== undefined && ancestorStack.length > 0) {
     // ASSEMBLE the re-resolved stack LOCALLY on the dependent's own runner (the SAME assembly
     // the opener runs). The applier then gathers over THIS open workspace and rebases the
     // dependent's head onto the assembled head SHA — never a synthesized host ref.
-    const assembled = await assembleBaseShiftStackLive({ deps, ctx, stack: ancestorStack, timeoutMs });
+    const assembled = await assembleBaseShiftStackLive({ deps, ctx, stack: ancestorStack });
     return {
       live: assembled.live,
       // The applier skips the re-clone (`preOpenedWorkspace`) + rebases onto the LOCAL assembled
@@ -184,7 +181,6 @@ async function prepareResolveWorkspace(input: {
     secrets: deps.secrets,
     githubHttp: deps.githubHttp,
     ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
-    timeoutMs,
   });
   return { live, applierFacts: baseShiftApplierFacts(ctx, shiftedBase), reGateBaseSha: shiftedBase };
 }
@@ -220,9 +216,8 @@ async function runResolverOverWorkspace(input: {
   reGateBaseSha: string;
   /** Present on the jj-local path: the already-assembled workspace the applier gathers over (no re-clone). */
   preOpenedWorkspace?: WorkspaceHandle;
-  timeoutMs: number;
 }): Promise<{ resolved: boolean; routedToRework?: boolean }> {
-  const { deps, ctx, live, applierFacts, reGateBaseSha, timeoutMs } = input;
+  const { deps, ctx, live, applierFacts, reGateBaseSha } = input;
   const applier = buildJjConflictApplier({
     live,
     ssh: deps.ssh,
@@ -231,7 +226,6 @@ async function runResolverOverWorkspace(input: {
     ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
     facts: applierFacts,
     ...(input.preOpenedWorkspace !== undefined && { preOpenedWorkspace: input.preOpenedWorkspace }),
-    timeoutMs,
   });
   const adapters = buildAdaptersFromRouting(
     {
@@ -252,7 +246,7 @@ async function runResolverOverWorkspace(input: {
     // conflict splices deterministically (skipping the agent); anything not provably disjoint
     // (or sem-absent / a same-entity edit) defers to the agent resolver below, exactly as today.
     entityFirstPass: buildSemEntityMergeFirstPass(
-      { ssh: deps.ssh, target: live.target, workspacePath: live.workspacePath, timeoutMs },
+      { ssh: deps.ssh, target: live.target, workspacePath: live.workspacePath },
       { oursRev: `${ctx.headBranch}@origin`, theirsRev: applierFacts.baseRevision },
     ),
     pool: deps.scopedPool,
@@ -266,7 +260,6 @@ async function runResolverOverWorkspace(input: {
     // proven against the base it lands on, not the project default): the LOCALLY-assembled
     // stack head sha on the jj-local path, or the single-ref `shiftedBase` on the legacy path.
     baseSha: reGateBaseSha,
-    timeoutMs,
     runId: ctx.runId,
     projectId: ctx.projectId,
     orgId: ctx.orgId,
@@ -278,7 +271,7 @@ async function runResolverOverWorkspace(input: {
     routing: ctx.routing,
     checker: adapters.checker,
     auditor: adapters.auditor,
-    runGate: buildBaseShiftReGate(deps, ctx, live.target, live.workspacePath, timeoutMs),
+    runGate: buildBaseShiftReGate(deps, ctx, live.target, live.workspacePath),
   });
   const result = await resolver({
     runId: ctx.runId,
@@ -300,13 +293,12 @@ function buildBaseShiftReGate(
   ctx: BaseShiftRunContext,
   target: RunnerHandle,
   workspacePath: string,
-  timeoutMs: number,
 ): (gate: { when: CiWhen; taskId?: string }) => Promise<GateOutcome> {
   let configPromise: ReturnType<typeof resolveGateConfig> | undefined;
   const advisoryStepNames = advisoryStepNamesForPosture(ctx.governancePosture);
   return async ({ when, taskId }) => {
     if (configPromise === undefined) {
-      configPromise = resolveGateConfig({ ssh: deps.ssh, target, workspacePath, timeoutMs });
+      configPromise = resolveGateConfig({ ssh: deps.ssh, target, workspacePath });
     }
     const config = await configPromise;
     // DEPS-BEFORE-GATE (apex v35): install deps on the base-shift resolver's live jj
@@ -324,7 +316,6 @@ function buildBaseShiftReGate(
       // read), or — when the config omits `bootstrap.run` — the stack-agnostic
       // DEFAULT_BOOTSTRAP_COMMAND LOUD-fallback.
       command: bootstrapCommand(config) ?? DEFAULT_BOOTSTRAP_COMMAND,
-      timeoutMs,
     });
     return runGateForWhen({
       ssh: deps.ssh,
@@ -332,7 +323,6 @@ function buildBaseShiftReGate(
       workspacePath,
       config,
       when,
-      timeoutMs,
       appendEvent: async (eventType, payload, eventTaskId) => {
         await deps.eventStore.append({
           runId: ctx.runId,

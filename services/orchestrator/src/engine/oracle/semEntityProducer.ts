@@ -27,6 +27,7 @@
 // unexpected case loudly while the legitimate ones stay quiet.
 import type { RunnerHandle } from "../contracts/allocator.js";
 import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
+import { buildActivityWatchdog } from "../ssh/activityWatchdog.js";
 import type { EntityChange, EntityChangeMap, UnavailableReason } from "./entityRiskTaxonomy.js";
 
 // What the producer resolved: either a real map to classify, or a reason the map
@@ -46,7 +47,6 @@ export interface SemEntityProducerInput {
   // The diff base the checker already diffs against (the run base / baselineSha).
   // `sem diff --from <baselineSha> --to HEAD` mirrors the agent's own self-inspect.
   baselineSha: string;
-  timeoutMs: number;
 }
 
 // The exact `sem diff` invocation. READ-ONLY (a diff over two refs; no write, no
@@ -206,10 +206,16 @@ export async function produceEntityChangeMap(input: SemEntityProducerInput): Pro
   const result = await input.ssh.run(input.target, {
     command: semDiffCommand(input.baselineSha),
     cwd: input.workspacePath,
-    timeoutMs: input.timeoutMs,
+    // VCS op (`sem diff` over the workspace): output-driven + workspace liveness probe.
+    watchdog: buildActivityWatchdog({
+      substrate: input.ssh,
+      target: input.target,
+      cls: "vcs",
+      workspace: input.workspacePath,
+    }),
   });
 
-  if (result.failure !== undefined || result.timedOut) {
+  if (result.failure !== undefined || result.stalled === true) {
     // The substrate could not run the command (transport fault / timeout). The
     // runner is otherwise live (the gate runs on it), so this is unexpected.
     return { unavailable: "producer-errored" };

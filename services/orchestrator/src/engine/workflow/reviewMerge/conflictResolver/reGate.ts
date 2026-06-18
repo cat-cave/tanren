@@ -19,7 +19,6 @@ import { auditorReGateDecision, invokeAuditor } from "../../auditor/auditor.js";
 
 export interface ResolvedTreeReGateDeps {
   workspacePath: string;
-  timeoutMs: number;
   /** The deterministic gate the writer loop uses (per-iteration / pre-audit tiers). */
   runGate: (input: { when: CiWhen; taskId?: string }) => Promise<GateOutcome>;
   checker: AnswererAdapter<CheckAnswer>;
@@ -62,7 +61,6 @@ export class RunPathResolvedTreeReGate implements ResolvedTreeReGate {
         subtask,
         baselineSha: this.deps.baseSha,
       },
-      timeoutMs: this.deps.timeoutMs,
       workspace: this.deps.workspacePath,
     });
     const checkDecision = decideCheckerOutcome(check.verdict);
@@ -79,7 +77,6 @@ export class RunPathResolvedTreeReGate implements ResolvedTreeReGate {
         subtasks: [subtask],
         baselineSha: this.deps.baseSha,
       },
-      timeoutMs: this.deps.timeoutMs,
       workspace: this.deps.workspacePath,
     });
     const auditDecision = auditorReGateDecision(audit.verdict);

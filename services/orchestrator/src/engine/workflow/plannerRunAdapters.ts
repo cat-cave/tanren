@@ -260,7 +260,6 @@ async function resolveOverLiveJj(
     secrets: input.secrets,
     githubHttp: input.githubHttp,
     ...(input.githubAppMinter !== undefined && { githubAppMinter: input.githubAppMinter }),
-    timeoutMs: input.timeoutMs,
   });
   const applier = buildJjConflictApplier({
     live,
@@ -282,7 +281,6 @@ async function resolveOverLiveJj(
       ...(context.installation !== undefined && { installation: context.installation }),
       githubCredentialRef: context.githubCredentialRef,
     },
-    timeoutMs: input.timeoutMs,
   });
   try {
     // The adapters + re-gate run over the jj workspace's runner + path; the re-gate
@@ -372,7 +370,6 @@ function buildResolver(
     target: deps.target,
     workspacePath: deps.workspacePath,
     baseSha: deps.baseSha,
-    timeoutMs: input.timeoutMs,
     runId: context.runId,
     projectId: context.projectId,
     ...(orgId !== undefined && { orgId }),
@@ -471,6 +468,5 @@ export function buildEntityRiskProducer(
   target: RunnerHandle,
   workspacePath: string,
 ): (baselineSha: string) => Promise<EntityMapProduction> {
-  return (baselineSha) =>
-    produceEntityChangeMap({ ssh: input.ssh, target, workspacePath, baselineSha, timeoutMs: input.timeoutMs });
+  return (baselineSha) => produceEntityChangeMap({ ssh: input.ssh, target, workspacePath, baselineSha });
 }

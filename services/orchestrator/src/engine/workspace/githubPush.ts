@@ -2,6 +2,7 @@ import type { RunnerHandle } from "../contracts/allocator.js";
 import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import { githubHttpsRemote, parseGitHubRepository } from "../providers/github.js";
 import { quoteSshShellArg } from "../ssh/command.js";
+import { buildActivityWatchdog } from "../ssh/activityWatchdog.js";
 import { runWorkspaceSshCommand } from "./ssh.js";
 
 export interface DraftPrBranchInput {
@@ -15,7 +16,6 @@ export interface GitHubWorkspacePushInput {
   workspacePath: string;
   repoUrl: string;
   branch: string;
-  timeoutMs: number;
   /**
    * the pre-resolved push token. The caller (the VcsProvider) mints an
    * App installation token (or reads the static secret) via the token resolver
@@ -45,7 +45,6 @@ export interface PrepareCleanPrBranchInput {
   cloneHeadSha: string;
   // The synthetic bootstrap commit (the writer's diff base) to drop.
   bootstrapSha: string;
-  timeoutMs: number;
 }
 
 /**
@@ -95,7 +94,12 @@ export async function prepareCleanPrBranch(input: PrepareCleanPrBranchInput): Pr
     const head = await runWorkspaceSshCommand(input.ssh, input.target, {
       label: "resolve clean PR head sha",
       cwd: input.workspacePath,
-      timeoutMs: input.timeoutMs,
+      watchdog: buildActivityWatchdog({
+        substrate: input.ssh,
+        target: input.target,
+        cls: "vcs",
+        workspace: input.workspacePath,
+      }),
       command: "git rev-parse HEAD",
     });
     return { ref: "HEAD", headSha: validateResolvedSha(head.stdout.trim()) };
@@ -103,7 +107,12 @@ export async function prepareCleanPrBranch(input: PrepareCleanPrBranchInput): Pr
   const result = await runWorkspaceSshCommand(input.ssh, input.target, {
     label: "prepare clean PR branch",
     cwd: input.workspacePath,
-    timeoutMs: input.timeoutMs,
+    watchdog: buildActivityWatchdog({
+      substrate: input.ssh,
+      target: input.target,
+      cls: "vcs",
+      workspace: input.workspacePath,
+    }),
     command: [
       "set -eu",
       // Remember where the working HEAD sits so we can restore it after rebasing
@@ -140,7 +149,12 @@ export async function pushWorkspaceBranchToGitHub(input: GitHubWorkspacePushInpu
   await runWorkspaceSshCommand(input.ssh, input.target, {
     label: "push workspace branch to GitHub",
     cwd: input.workspacePath,
-    timeoutMs: input.timeoutMs,
+    watchdog: buildActivityWatchdog({
+      substrate: input.ssh,
+      target: input.target,
+      cls: "vcs",
+      workspace: input.workspacePath,
+    }),
     command: buildGitHubPushCommand({ repoUrl: input.repoUrl, branch: input.branch, sourceRef: input.sourceRef }),
     stdin: input.token,
   });

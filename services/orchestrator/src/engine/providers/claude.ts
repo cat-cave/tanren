@@ -4,6 +4,7 @@ import type { CommandResult, CommandSubstrate } from "../contracts/commandSubstr
 import { storeClaudeAuthBundle } from "../credentials/claudeAuth.js";
 import { materializeClaudeAuthBundle } from "../credentials/claudeMaterializer.js";
 import { quoteSshShellArg } from "../ssh/command.js";
+import { buildActivityWatchdog, outputOnlyWatchdog } from "../ssh/activityWatchdog.js";
 import { AnswererSchemaValidationError } from "./codex.js";
 import { parseWithOneSchemaRepair } from "./answererRepair.js";
 import type { AnswererAdapter, TokenUsage, UsageLimitSignal, WriterAdapter, WriterResult } from "./types.js";
@@ -79,16 +80,10 @@ export function createClaudeWriter(dependencies: ClaudeWriterDependencies): Writ
         ref: dependencies.credentialRef,
         runId: dependencies.runId,
         baseDir: dependencies.claudeHomeBaseDir,
-        timeoutMs: Math.min(opts.timeoutMs, 30_000),
         managed: dependencies.endpointBaseUrl !== undefined,
         endpointBaseUrl: dependencies.endpointBaseUrl,
       });
-      const baselineSha = await captureBaselineSha(
-        dependencies.ssh,
-        dependencies.target,
-        opts.workspace,
-        opts.timeoutMs,
-      );
+      const baselineSha = await captureBaselineSha(dependencies.ssh, dependencies.target, opts.workspace);
       const claude = await dependencies.ssh.run(dependencies.target, {
         command: buildClaudeWriterCommand({
           configDir: auth.CLAUDE_CONFIG_DIR,
@@ -98,7 +93,13 @@ export function createClaudeWriter(dependencies: ClaudeWriterDependencies): Writ
           anthropicBaseUrl: auth.anthropicBaseUrl,
         }),
         stdin: opts.prompt,
-        timeoutMs: opts.timeoutMs,
+        // AGENT exec (claude `stream-json` streaming): output-driven + workspace liveness probe; never a time kill.
+        watchdog: buildActivityWatchdog({
+          substrate: dependencies.ssh,
+          target: dependencies.target,
+          cls: "agent",
+          workspace: opts.workspace,
+        }),
       });
       const telemetry = parseClaudeStreamTelemetry(claude.stdout);
       const gitState = await captureGitStateAfterWriter(
@@ -107,9 +108,8 @@ export function createClaudeWriter(dependencies: ClaudeWriterDependencies): Writ
         opts.workspace,
         baselineSha,
         "claude writer",
-        opts.timeoutMs,
       );
-      if (claude.timedOut) {
+      if (claude.stalled === true) {
         return failedResult("timeout", telemetry, gitState);
       }
       if (telemetry.usageLimit !== undefined) {
@@ -140,14 +140,14 @@ export function createClaudeAnswerer<TOutput>(dependencies: ClaudeAnswererDepend
         ref: dependencies.credentialRef,
         runId: dependencies.runId,
         baseDir: dependencies.claudeHomeBaseDir,
-        timeoutMs: Math.min(opts.timeoutMs, 30_000),
         managed: dependencies.endpointBaseUrl !== undefined,
         endpointBaseUrl: dependencies.endpointBaseUrl,
       });
       const workspace = opts.workspace ?? answererWorkspacePath(dependencies, opts.outputSchema.name);
       const made = await dependencies.ssh.run(dependencies.target, {
         command: `mkdir -p ${quoteSshShellArg(workspace)}`,
-        timeoutMs: Math.min(opts.timeoutMs, 30_000),
+        // INFRA workspace prep: output-driven watchdog, no wall-clock kill.
+        watchdog: outputOnlyWatchdog(),
       });
       assertAnswererWorkspaceStep(made, `mkdir -p ${workspace}`);
       // Run one claude answerer call for `prompt` and return its final text — closed
@@ -165,12 +165,18 @@ export function createClaudeAnswerer<TOutput>(dependencies: ClaudeAnswererDepend
             anthropicBaseUrl: auth.anthropicBaseUrl,
           }),
           stdin: buildAnswererPrompt(prompt, opts.outputSchema.name, opts.outputSchema.jsonSchema),
-          timeoutMs: opts.timeoutMs,
+          // AGENT answerer exec (claude `stream-json`): output-driven + workspace liveness probe; unbounded in time.
+          watchdog: buildActivityWatchdog({
+            substrate: dependencies.ssh,
+            target: dependencies.target,
+            cls: "agent",
+            workspace,
+          }),
         });
         const telemetry = parseClaudeStreamTelemetry(result.stdout);
         lastTokenUsage = telemetry.tokenUsage;
-        if (result.timedOut) {
-          throw new Error(`Claude Answerer timed out for schema ${opts.outputSchema.name}`);
+        if (result.stalled === true) {
+          throw new Error(`Claude Answerer stalled (no sign of life) for schema ${opts.outputSchema.name}`);
         }
         if (telemetry.usageLimit !== undefined) {
           throw new ClaudeUsageLimitError(opts.outputSchema.name, telemetry.usageLimit.message);
@@ -472,10 +478,10 @@ function messageFromUnknown(error: unknown): string {
 // be LOUD — otherwise the harness `--cd`s into a dir that was never created and the
 // real cause is masked by a cryptic downstream error. (no-silent-fallbacks doctrine.)
 function assertAnswererWorkspaceStep(result: CommandResult, step: string): void {
-  if (result.exitCode !== 0 || result.failure !== undefined || result.timedOut) {
+  if (result.exitCode !== 0 || result.failure !== undefined || result.stalled === true) {
     throw new Error(
       `Claude Answerer workspace prep failed (${step}): exit ${result.exitCode ?? "unknown"}` +
-        `${result.timedOut ? " (timed out)" : ""} | stderr: ${result.stderr.slice(-500)}`,
+        `${result.stalled === true ? " (stalled — no sign of life)" : ""} | stderr: ${result.stderr.slice(-500)}`,
     );
   }
 }

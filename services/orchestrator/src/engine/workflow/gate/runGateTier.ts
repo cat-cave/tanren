@@ -11,6 +11,7 @@ import type { CommandResult, CommandSubstrate } from "../../contracts/commandSub
 import type { EventName, EventPayload } from "../../events/index.js";
 import { withAppEnv } from "../../ssh/appEnvPrelude.js";
 import { withMiseActivation } from "../../ssh/miseActivate.js";
+import { buildActivityWatchdog } from "../../ssh/activityWatchdog.js";
 
 // Captured command output can be large; we keep only the last N characters so
 // the emitted gate.* events and the typed result carry a useful, bounded
@@ -54,7 +55,6 @@ export interface RunGateTierInput {
   tier: string;
   when: CiWhen;
   steps: ReadonlyArray<CiStep>;
-  timeoutMs: number;
   appendEvent: GateAppendEvent;
   // Correlates the gate.* events with the loop task that triggered them (the
   // writer task for per_iteration, the planner task for pre_audit).
@@ -108,15 +108,25 @@ export async function runGateTier(input: RunGateTierInput): Promise<GateTierResu
       // the runner's isolated node.
       command: withMiseActivation(withAppEnv(step.run, input.appEnv)),
       cwd: input.workspacePath,
-      timeoutMs: input.timeoutMs,
+      // VCS/build op (the project's gate step): output-driven + the workspace as the
+      // silent-stretch liveness probe. NEVER killed for elapsed time — a long test
+      // suite that keeps producing output/touching files runs unbounded.
+      watchdog: buildActivityWatchdog({
+        substrate: input.ssh,
+        target: input.target,
+        cls: "vcs",
+        workspace: input.workspacePath,
+      }),
     });
-    const passed = result.failure === undefined && !result.timedOut && result.exitCode === 0;
+    const passed = result.failure === undefined && result.stalled !== true && result.exitCode === 0;
     const outcome: GateStepOutcome = {
       name: step.name,
       run: step.run,
       exitCode: result.exitCode,
       passed,
-      timedOut: result.timedOut,
+      // The gate-step domain field records "did not complete"; sourced from the
+      // progress-based no-life flag (`stalled`).
+      timedOut: result.stalled === true,
       outputTail: tailOf(combinedOutput(result)),
     };
     outcomes.push(outcome);

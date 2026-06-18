@@ -48,7 +48,6 @@ describe("aider writer adapter", () => {
     const result = await writer.runWriter({
       prompt: "make a tiny edit",
       workspace: "/workspace/repo",
-      timeoutMs: 1000,
     });
 
     const aiderCommand = ssh.commands[1]?.command;
@@ -86,7 +85,7 @@ describe("aider writer adapter", () => {
       credentialRef: "credential/aider/dev",
       runId: "run_aider_2",
     });
-    await writer.runWriter({ prompt: "edit", workspace: "/workspace/repo", timeoutMs: 1000 });
+    await writer.runWriter({ prompt: "edit", workspace: "/workspace/repo" });
     expect(ssh.commands[1]?.command.command).toContain(`ANTHROPIC_API_KEY='${apiKey}'`);
   });
 
@@ -99,19 +98,18 @@ describe("aider writer adapter", () => {
       credentialRef: "credential/aider/absent",
       runId: "run_aider_3",
     });
-    await expect(writer.runWriter({ prompt: "edit", workspace: "/workspace/repo", timeoutMs: 1000 })).rejects.toThrow(
+    await expect(writer.runWriter({ prompt: "edit", workspace: "/workspace/repo" })).rejects.toThrow(
       /missing aider credential ref/u,
     );
   });
 
   it("returns timeout, crashed, and window_exhausted distinctly", async () => {
-    const timeout = await runWith({ exitCode: null, stdout: "", stderr: "", timedOut: true });
-    const crashed = await runWith({ exitCode: 2, stdout: "", stderr: "boom", timedOut: false });
+    const timeout = await runWith({ exitCode: null, stdout: "", stderr: "", stalled: true });
+    const crashed = await runWith({ exitCode: 2, stdout: "", stderr: "boom" });
     const limit = await runWith({
       exitCode: 0,
       stdout: "Error: You have hit your rate limit, try again later.",
       stderr: "",
-      timedOut: false,
     });
     expect(timeout.exitReason).toBe("timeout");
     expect(crashed.exitReason).toBe("crashed");
@@ -119,7 +117,7 @@ describe("aider writer adapter", () => {
   });
 
   it("does not leak the API key through commands or results", async () => {
-    const result = await runWith({ exitCode: 0, stdout: "ok", stderr: "", timedOut: false });
+    const result = await runWith({ exitCode: 0, stdout: "ok", stderr: "" });
     expect(JSON.stringify(result)).not.toContain(apiKey);
   });
 
@@ -158,7 +156,7 @@ describe("aider writer adapter", () => {
       runId: "run_aider_managed",
       endpointBaseUrl: "https://openrouter.ai/api/v1",
     });
-    await writer.runWriter({ prompt: "edit", workspace: "/workspace/repo", timeoutMs: 1000 });
+    await writer.runWriter({ prompt: "edit", workspace: "/workspace/repo" });
     const aiderCommand = ssh.commands[1]?.command.command ?? "";
     expect(aiderCommand).toContain("--openai-api-base 'https://openrouter.ai/api/v1'");
     expect(aiderCommand).toContain("OPENAI_API_KEY='or-platform-key'");
@@ -204,7 +202,7 @@ describe("aider writer adapter", () => {
 });
 
 function ok(stdout: string): CommandResult {
-  return { exitCode: 0, stdout, stderr: "", timedOut: false };
+  return { exitCode: 0, stdout, stderr: "" };
 }
 
 async function runWith(aiderResult: CommandResult) {
@@ -218,7 +216,7 @@ async function runWith(aiderResult: CommandResult) {
     credentialRef: "credential/aider/dev",
     runId: "run_aider_x",
   });
-  return await writer.runWriter({ prompt: "write", workspace: "/workspace/repo", timeoutMs: 1000 });
+  return await writer.runWriter({ prompt: "write", workspace: "/workspace/repo" });
 }
 
 class ScriptedSsh implements CommandSubstrate {

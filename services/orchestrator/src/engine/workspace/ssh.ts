@@ -1,12 +1,17 @@
 import type { RunnerHandle } from "../contracts/allocator.js";
-import type { CommandResult, CommandSubstrate } from "../contracts/commandSubstrate.js";
+import type { ActivityWatchdog, CommandResult, CommandSubstrate } from "../contracts/commandSubstrate.js";
 
 export interface WorkspaceSshCommand {
   command: string;
   cwd?: string;
   label: string;
   stdin?: string;
-  timeoutMs: number;
+  // The legitimate connect-establishment bound (handshake only). Optional — the
+  // substrate defaults it. There is NO wall-clock kill of the running command.
+  connectTimeoutMs?: number;
+  // The progress-based hang detector (the doctrine's sole running-command safety
+  // mechanism). Build via `buildActivityWatchdog` per call class.
+  watchdog?: ActivityWatchdog;
 }
 
 // The stderr tail surfaced on a failed workspace command. A failed runner
@@ -32,7 +37,7 @@ export async function runWorkspaceSshCommand(
   command: WorkspaceSshCommand,
 ): Promise<CommandResult> {
   const result = await ssh.run(target, command);
-  if (result.failure !== undefined || result.timedOut || result.exitCode !== 0) {
+  if (result.failure !== undefined || result.stalled === true || result.exitCode !== 0) {
     throw new WorkspaceCommandError(workspaceFailureMessage(command, result), command.label, result);
   }
   return result;
@@ -51,8 +56,8 @@ function failureReason(result: CommandResult): string {
   if (result.failure !== undefined) {
     return "message" in result.failure ? result.failure.message : result.failure.reason;
   }
-  if (result.timedOut) {
-    return "timed out";
+  if (result.stalled === true) {
+    return "stalled (no sign of life)";
   }
   return `exit ${result.exitCode ?? "unknown"}`;
 }

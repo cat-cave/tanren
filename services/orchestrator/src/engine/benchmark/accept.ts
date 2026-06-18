@@ -19,6 +19,7 @@
 import type { CiStep } from "../ci/index.js";
 import type { RunnerHandle } from "../contracts/allocator.js";
 import type { CommandResult, CommandSubstrate } from "../contracts/commandSubstrate.js";
+import { buildActivityWatchdog } from "../ssh/activityWatchdog.js";
 import type { EventName, EventPayload } from "../events/index.js";
 import type { AcceptResult } from "./entities.js";
 import type { BenchmarkAcceptStepResult } from "../events/schemas/benchmark.js";
@@ -44,7 +45,6 @@ export interface RunAcceptStepInput {
   trialIndex: number;
   /** The tier name (defaults to `accept`); carried verbatim onto the events. */
   tier?: string;
-  timeoutMs: number;
   appendEvent: AcceptAppendEvent;
   /** Correlates the accept events with the trial's run task, when known. */
   taskId?: string;
@@ -90,15 +90,23 @@ export async function runAcceptStep(input: RunAcceptStepInput): Promise<AcceptSt
     const result = await input.ssh.run(input.target, {
       command: step.run,
       cwd: input.workspacePath,
-      timeoutMs: input.timeoutMs,
+      // VCS/build op (a benchmark accept step): output-driven + the workspace probe.
+      watchdog: buildActivityWatchdog({
+        substrate: input.ssh,
+        target: input.target,
+        cls: "vcs",
+        workspace: input.workspacePath,
+      }),
     });
-    const passed = result.failure === undefined && !result.timedOut && result.exitCode === 0;
+    const passed = result.failure === undefined && result.stalled !== true && result.exitCode === 0;
     steps.push({
       name: step.name,
       run: step.run,
       exitCode: result.exitCode,
       passed,
-      timedOut: result.timedOut,
+      // The benchmark step's `timedOut` domain field records "did not complete";
+      // sourced from the progress-based no-life flag (`stalled`).
+      timedOut: result.stalled === true,
       outputTail: tailOf(combinedOutput(result)),
     });
     if (!passed) {

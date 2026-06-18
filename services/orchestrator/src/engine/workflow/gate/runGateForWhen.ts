@@ -17,7 +17,6 @@ export interface RunGateForWhenInput {
   workspacePath: string;
   config: CiConfigV1;
   when: CiWhen;
-  timeoutMs: number;
   appendEvent: GateAppendEvent;
   taskId?: string;
   // Plane B: the project's dev+test app env, threaded to each tier
@@ -70,7 +69,6 @@ export async function runGateForWhen(input: RunGateForWhenInput): Promise<GateOu
       tier,
       when: input.when,
       steps,
-      timeoutMs: input.timeoutMs,
       appendEvent: input.appendEvent,
       taskId: input.taskId,
       ...(input.appEnv === undefined ? {} : { appEnv: input.appEnv }),

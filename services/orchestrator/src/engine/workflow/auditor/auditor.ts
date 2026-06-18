@@ -45,7 +45,6 @@ export interface AuditorSpecContext {
 
 export interface AuditorInvokeInput {
   context: AuditorSpecContext;
-  timeoutMs: number;
   workspace?: string;
 }
 
@@ -62,7 +61,6 @@ export async function invokeAuditor(
   const prompt = buildAuditorPrompt(input.context);
   const verdict = await auditor.runAnswerer({
     prompt,
-    timeoutMs: input.timeoutMs,
     workspace: input.workspace,
     outputSchema,
   });

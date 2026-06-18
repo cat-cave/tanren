@@ -50,7 +50,6 @@ describe("reasonix writer adapter", () => {
     const result = await writer.runWriter({
       prompt: "make a tiny edit",
       workspace: "/workspace/repo",
-      timeoutMs: 1000,
     });
 
     const reasonixCommand = ssh.commands[1]?.command;
@@ -88,7 +87,7 @@ describe("reasonix writer adapter", () => {
       credentialRef: "credential/reasonix/dev",
       runId: "run_reasonix_2",
     });
-    await writer.runWriter({ prompt: "edit", workspace: "/workspace/repo", timeoutMs: 1000 });
+    await writer.runWriter({ prompt: "edit", workspace: "/workspace/repo" });
     expect(ssh.commands[1]?.command.command).toContain(`DEEPSEEK_API_KEY='${apiKey}'`);
   });
 
@@ -101,19 +100,18 @@ describe("reasonix writer adapter", () => {
       credentialRef: "credential/reasonix/absent",
       runId: "run_reasonix_3",
     });
-    await expect(writer.runWriter({ prompt: "edit", workspace: "/workspace/repo", timeoutMs: 1000 })).rejects.toThrow(
+    await expect(writer.runWriter({ prompt: "edit", workspace: "/workspace/repo" })).rejects.toThrow(
       /missing reasonix credential ref/u,
     );
   });
 
   it("returns timeout, crashed, and window_exhausted distinctly", async () => {
-    const timeout = await runWith({ exitCode: null, stdout: "", stderr: "", timedOut: true });
-    const crashed = await runWith({ exitCode: 2, stdout: "", stderr: "boom", timedOut: false });
+    const timeout = await runWith({ exitCode: null, stdout: "", stderr: "", stalled: true });
+    const crashed = await runWith({ exitCode: 2, stdout: "", stderr: "boom" });
     const limit = await runWith({
       exitCode: 0,
       stdout: '{"type":"error","error":{"message":"You have hit your usage limit, try again later."}}',
       stderr: "",
-      timedOut: false,
     });
     expect(timeout.exitReason).toBe("timeout");
     expect(crashed.exitReason).toBe("crashed");
@@ -121,7 +119,7 @@ describe("reasonix writer adapter", () => {
   });
 
   it("does not leak the API key through commands or results", async () => {
-    const result = await runWith({ exitCode: 0, stdout: '{"type":"done"}', stderr: "", timedOut: false });
+    const result = await runWith({ exitCode: 0, stdout: '{"type":"done"}', stderr: "" });
     expect(JSON.stringify(result)).not.toContain(apiKey);
   });
 
@@ -154,7 +152,7 @@ describe("reasonix writer adapter", () => {
 });
 
 function ok(stdout: string): CommandResult {
-  return { exitCode: 0, stdout, stderr: "", timedOut: false };
+  return { exitCode: 0, stdout, stderr: "" };
 }
 
 async function runWith(reasonixResult: CommandResult) {
@@ -168,7 +166,7 @@ async function runWith(reasonixResult: CommandResult) {
     credentialRef: "credential/reasonix/dev",
     runId: "run_reasonix_x",
   });
-  return await writer.runWriter({ prompt: "write", workspace: "/workspace/repo", timeoutMs: 1000 });
+  return await writer.runWriter({ prompt: "write", workspace: "/workspace/repo" });
 }
 
 class ScriptedSsh implements CommandSubstrate {

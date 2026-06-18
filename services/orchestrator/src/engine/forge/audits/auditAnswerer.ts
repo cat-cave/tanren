@@ -17,22 +17,19 @@ import { AuditPassReport, type AuditAnswerer, type AuditAnswererContext } from "
 
 const SCHEMA_NAME = "tanren.scheduled_audit.v1";
 
-export interface WrapProviderAuditAnswererOptions {
-  // Bounds each provider call. Defaults to 180s — an audit reads a whole repo
-  // index and reasons over it, the same budget the recon answerer takes.
-  timeoutMs?: number;
-}
+// No bounding option remains: each provider answerer call is governed by the agent
+// ActivityWatchdog (output-driven, never a wall-clock kill) the adapter constructs.
+export type WrapProviderAuditAnswererOptions = Record<never, never>;
 
 export function wrapProviderAuditAnswerer(
   adapter: AnswererAdapter<AuditPassReport>,
-  options: WrapProviderAuditAnswererOptions = {},
+  _options: WrapProviderAuditAnswererOptions = {},
 ): AuditAnswerer {
   const jsonSchema = renderAnswererJsonSchema(AuditPassReport);
   return {
     async audit(context: AuditAnswererContext): Promise<AuditPassReport> {
       return adapter.runAnswerer({
         prompt: buildAuditPrompt(context),
-        timeoutMs: options.timeoutMs ?? 180_000,
         outputSchema: {
           name: SCHEMA_NAME,
           jsonSchema,
