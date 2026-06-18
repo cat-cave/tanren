@@ -31,11 +31,12 @@ const queueStub = { markDequeued: async () => {} } as unknown as MergeQueueModel
 const batch: ReadonlyArray<MergeQueueEntry> = [];
 
 describe("batch infra-hold exponential backoff (apex-v35)", () => {
-  it("grows the re-drive delay across consecutive holds (3s → 10s → 30s → 60s), bounded", async () => {
+  it("grows the recoverable re-drive delay across SHIFTING holds (3s → 10s → 30s → 60s)", async () => {
     const ceiling = new BatchInfraHoldCeiling();
     const events = recordingEmitter();
     const delays: number[] = [];
-    // MAX_BATCH_INFRA_HOLDS = 5 → holds 1..4 are recoverable; the 5th hits the ceiling.
+    // A SHIFTING outage (each hold a different failure) stays on the RECOVERABLE curve — it
+    // is progress, never sustained-non-recovery, so it exercises the exponential backoff.
     for (let i = 0; i < 4; i += 1) {
       const result = await holdOnInfra({
         ceiling,
@@ -43,7 +44,7 @@ describe("batch infra-hold exponential backoff (apex-v35)", () => {
         events,
         projectId: "p",
         batch,
-        message: "GitHub ref read for main failed: HTTP 403 (secondary-rate-limit)",
+        message: `GitHub ref read for main failed: HTTP 403 variant ${i} (secondary-rate-limit)`,
         queueDepth: 1,
       });
       expect(result.holdReason).toBe("infra_error");
@@ -55,26 +56,40 @@ describe("batch infra-hold exponential backoff (apex-v35)", () => {
     for (let i = 1; i < delays.length; i += 1) {
       expect(delays[i]).toBeGreaterThan(delays[i - 1] ?? 0);
     }
+    // A shifting failure is progress — it must NEVER emit the terminal non-recovery alert.
     expect(events.blocked.every((e) => e.terminal !== true)).toBe(true);
   });
 
-  it("at the ceiling emits a TERMINAL alert + a longer backoff (still autonomous, never hot-loop)", async () => {
+  it("on SUSTAINED non-recovery emits a TERMINAL alert + a longer backoff (still autonomous, never hot-loop)", async () => {
     const ceiling = new BatchInfraHoldCeiling();
     const events = recordingEmitter();
-    let last;
-    for (let i = 0; i < 5; i += 1) {
-      last = await holdOnInfra({
-        ceiling,
-        queue: queueStub,
-        events,
-        projectId: "p",
-        batch,
-        message: "persistent 403",
-        queueDepth: 1,
-      });
-    }
-    expect(last?.holdReason).toBe("infra_error");
-    expect(last?.retryAfterMs).toBe(INFRA_HOLD_ALERT_RETRY_AFTER_MS);
+    // The IDENTICAL failure persisting (no progress) → a fixed point → the terminal alert.
+    const first = await holdOnInfra({
+      ceiling,
+      queue: queueStub,
+      events,
+      projectId: "p",
+      batch,
+      message: "persistent 403",
+      queueDepth: 1,
+    });
+    // The first hold is recoverable — one failure is not yet proof of non-recovery.
+    expect(first.holdReason).toBe("infra_error");
+    expect(events.blocked.some((e) => e.terminal === true)).toBe(false);
+
+    // The re-drive hits the IDENTICAL failure with no progress → the terminal alert + the
+    // longer backoff, but the entries stay queued (autonomous recovery, never hot-loop).
+    const last = await holdOnInfra({
+      ceiling,
+      queue: queueStub,
+      events,
+      projectId: "p",
+      batch,
+      message: "persistent 403",
+      queueDepth: 1,
+    });
+    expect(last.holdReason).toBe("infra_error");
+    expect(last.retryAfterMs).toBe(INFRA_HOLD_ALERT_RETRY_AFTER_MS);
     expect(events.blocked.some((e) => e.terminal === true)).toBe(true);
   });
 });
