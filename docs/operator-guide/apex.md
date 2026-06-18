@@ -11,17 +11,25 @@ contract for the human/orchestrator driving the run.**
 > **[apex-run-playbook.md](./apex-run-playbook.md)**. Read THIS doc first (the role
 > and the rhythm below), then drive from the playbook.
 
-> **Where the trials stand (v32 → v33).** The most recent trial, **v32**, was
-> driven live (BYOK Codex, $0): it proved DAG-build from a real Forge interview
-> (rough notes → a 15-spec DAG), walker auto-execution, the writer authoring a
-> scaffold, cost-discipline (loud NULL costs), and `needs_attention` escalation +
-> clean runner release. It **halted at scaffold-bootstrap** and flushed three real
-> bugs — all now fixed on `main`: bootstrap frozen-lockfile (#496), runner-sweeper
-> (#497), and the templating re-architecture (#498). **v32 did NOT reach a merge**,
-> so the flag-on live jj / `MergeAuthority` / `integration_nodes` merge paths are
-> still apex-unproven. **v33 = drive the refined platform and expect the next halt
-> past scaffold** (deploy → issue-loop → audits → CI-intelligence → notifications
-> remain to demonstrate live).
+> **Where the trials stand (through v36; v37 not yet run).** The trials have run
+> through **v36** and surfaced a long chain of real bugs — all fixed on `main` (the
+> `(v35)` / `apex-v3x` commits): the never-discard re-drive paths (#585–#594), the
+> intelligent non-convergence detection that replaced hardcoded attempt caps
+> (#593), merge re-gating that routes a gate failure to writer rework instead of
+> bricking the DAG (#601), and the timeout/retry-cap eradication (#608/#609 — a run
+> is never killed by elapsed time; recovery is progress/sign-of-life based). **v36
+> proved #601 recovery on the template-creation loop (reaching ~10/11) but did NOT
+> close the product → live-deploy loop.** The full autonomy loop with a live deploy
+> is therefore **still apex-unproven** — deploy → issue-loop → audits →
+> CI-intelligence → notifications remain to demonstrate live.
+>
+> The **native design subsystem** is now part of the build: WS-D1..D4 are merged
+> and the design loop (author → inject → verify → re-drive) **closes end-to-end** in
+> a CI-gated eval harness (no live LLM). The v37 readiness verdict
+> (`docs/roadmap/native-design-subsystem.md`) is **READY for a scoped exercise** —
+> so a real v37 run captures a `DesignContract` at derive and exercises design
+> fidelity at the contract-coverage + static-readability bar (rendered-pixel
+> fidelity / WS-D4a live-render is scoped out). **v37 has NOT been run.**
 
 ## What is under test — and what is NOT
 
@@ -115,9 +123,10 @@ from-scratch authoring survives only as the BUILD step of template-creation:
 
 **Do NOT pre-create a template before an apex run.** apex MUST exercise
 template-creation-from-scratch; if it breaks, that is the bug apex exists to flush
-(it is how #498 was found — v32 surfaced that the templating system had never been
-exercised). Let the no-match fire and watch `template.selection.no_match` +
-`template.creation.*` in the event stream.
+(it is how #498 was found — an early run surfaced that the templating system had
+never been exercised; subsequent runs through v36 hardened creation/budget
+integrity, e.g. #592/#605). Let the no-match fire and watch
+`template.selection.no_match` + `template.creation.*` in the event stream.
 
 ## The run rhythm (drive → halt → fix-on-`main` → drain → rebuild → v(N+1))
 
@@ -155,14 +164,13 @@ autonomous software org**. The proofs:
 - **run-discipline** — the clean tear-down → fix-on-`main` → fresh-v(N+1) rhythm
   above, exercised repeatably.
 - **critic-arc** — independent adversarial Codex refute-rounds over the code come
-  back clean (a 6-round critic-arc converged pre-v32; treat a clean multi-round
-  refutation as the bar).
+  back clean (treat a clean multi-round refutation as the bar).
 - **cleanroom** — a fresh agent with no memory drives the whole run via the API
-  only (the v32 kickoff already exemplified this; the playbook is written to make
-  it reproducible).
+  only (the playbook is written to make it reproducible).
 - **standing code-integrity** — the adversarial Codex audit over the platform code.
 
-**v32 advanced** the autonomy-loop (up to scaffold), run-discipline, and
-code-integrity proofs. The loops **past scaffold** (CI-green PRs → deploy →
-issue-loop → audits → CI-intelligence → notifications) remain to demonstrate live
-in **v33+**.
+The runs **through v36** advanced the autonomy-loop (DAG-build, walker
+auto-execution, template-creation, the never-discard re-drive + recovery paths),
+run-discipline, and code-integrity proofs. The loops **past a CI-green PR**
+(deploy → issue-loop → audits → CI-intelligence → notifications) remain to
+demonstrate live in **v37+**.

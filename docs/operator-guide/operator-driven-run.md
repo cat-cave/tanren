@@ -37,10 +37,11 @@ stays 3000.
 > reading before you start — `tanren orgs config-set` **replaces the whole org
 > config** (it is not a deep merge; always send the complete config), org-scoped
 > credentials are namespaced `credential/<slug>/org/<orgId>/<name>` and must be
-> imported through the org-scoped surface (the legacy top-level routes do not
-> populate the credential list), and the default credential registry is
-> in-memory (creds vanish on orchestrator restart). The full set of findings +
-> exactly where the live demo stands is in
+> imported through the org-scoped surface (the legacy top-level routes have been
+> removed and were the only ones that did not populate the credential list). The
+> credential registry is now **durable** (Vault-backed), so an imported credential
+> survives an orchestrator restart and appears in the credential list. The full
+> set of findings + exactly where the live demo stands is in
 > [live-validation-findings.md](./live-validation-findings.md).
 
 ## 2. Sign in
@@ -119,8 +120,9 @@ real time without reloading.
 ## 7. When a run halts → reach the recovery surface
 
 If the run forces a halt — `outcome ∈ {halted, escape_hatch_hit,
-retry_budget_exhausted, window_exhausted}` — the run-detail view reflects the
-halted state, and the run is routed to the failure-recovery surface (P2B-0008).
+retry_budget_exhausted, convergence_stalled, window_exhausted}` — the run-detail
+view reflects the halted state, and the run is routed to the failure-recovery
+surface (P2B-0008).
 Reach it from the sidenav **halted runs** row (`/runs/halted`), which lists
 every halted run; each links to its per-run recovery surface at
 `/runs/:runId/recover`.
@@ -133,21 +135,23 @@ job is only to make the halt observable and get you to that surface.
 
 ## 7b. Resolve a `needs_attention` escalation (requeue a stuck spec)
 
-When a spec exhausts its bounded retry budget — the NEVER-STRAND reconciler
-re-enqueued it the capped number of times with no progress, or the merge queue
-judged its conflict genuinely irreconcilable — it parks at the terminal
-`needs_attention` status. That frees the DAG slot but **blocks its dependents**:
-the autonomous walker will not route past it on its own, because a human must
-DECIDE how to unblock it (the escalation discipline). Once you have **addressed
-the underlying blocker** (fixed a platform bug, re-scoped a dependency, etc.),
-tell Tanren to proceed:
+When a spec **genuinely stops converging** — the intelligent non-convergence
+detector judges it is no longer making progress (the same failure state recurs,
+not merely slow), or the merge queue judged its conflict genuinely irreconcilable
+— it parks at the terminal `needs_attention` status. (There is **no** hardcoded
+attempt cap: a spec that is still changing approach re-drives indefinitely; only a
+truly stuck one parks.) That frees the DAG slot but **blocks its dependents**: the
+autonomous walker will not route past it on its own, because a human must DECIDE
+how to unblock it (the escalation discipline). Once you have **addressed the
+underlying blocker** (fixed a platform bug, re-scoped a dependency, etc.), tell
+Tanren to proceed:
 
 - **`POST /orgs/:orgId/projects/:projectId/specs/:specId/requeue`** (org-admin).
   It flips the spec `needs_attention → open` so the DagWalker re-picks it up,
-  **resets its bounded re-enqueue budget** (so it genuinely re-runs the full
-  retry budget rather than immediately re-escalating off the old halt history),
-  and emits an actor-stamped `dag.spec.attention_resolved` audit event. The
-  response carries the spec's new `open` status and which subsystem had parked it.
+  marks the resolution boundary (so the merge-conflict re-plan path counts only
+  events after this point, rather than immediately re-escalating off the old halt
+  history), and emits an actor-stamped `dag.spec.attention_resolved` audit event.
+  The response carries the spec's new `open` status and which subsystem had parked it.
 - A spec **not** parked at `needs_attention` is a clean `409 spec_not_in_attention`
   — the action never silently re-transitions a running/merged/open spec.
 

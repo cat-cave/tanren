@@ -12,10 +12,10 @@ alone. The run **rhythm** (drive → halt → fix-on-`main` → drain the backlo
 rebuild → fresh `v(N+1)`) and **what each run proves** live in `apex.md`; this doc
 is the mechanical "how to drive a single run" half.
 
-> **Run naming.** Each trial is `vN` (v32 was the most recent — it reached the
-> scaffold-bootstrap step, flushed three real bugs, and halted before any merge).
-> The next trial is `v33`. Runs are **disposable** — `main` only moves forward; you
-> never patch a run or its generated repo (see `apex.md`).
+> **Run naming.** Each trial is `vN` (the trials have run through **v36**; **v37 has
+> not yet run** — see `apex.md` for the honest proof state). Runs are **disposable**
+> — `main` only moves forward; you never patch a run or its generated repo (see
+> `apex.md`).
 
 ---
 
@@ -57,13 +57,9 @@ secret — the runner identity key is a **mounted secret file**
 (`/run/secrets/tanren_runner_identity_key`), never a plaintext env value; only the
 PUBLIC `TANREN_RUNNER_AUTHORIZED_KEY` line is passed via env.
 
-> **KNOWN GAP — thread `TANREN_APEX_MODE` to the orchestrator.** Today the compose
-> file wires `TANREN_APEX_MODE` only onto the **`worker`** service, but
-> `engine/config/apexMode.ts` reads `process.env` in the **orchestrator** too
-> (audit-posture/self-config). Until this is threaded onto the `orchestrator`
-> compose service, export `TANREN_APEX_MODE=1` on the host so both pick it up — and
-> consider this a one-line compose fix to land (it is a tracked v33-prep item in
-> `ROADMAP.md` §4).
+`compose.dev.yml` wires `TANREN_APEX_MODE` (via `${TANREN_APEX_MODE:-}`) onto BOTH
+the `orchestrator` and `worker` services, so exporting it on the host before
+`just up-dev` propagates to both (`engine/config/apexMode.ts` reads it in each).
 
 Verify health before driving anything:
 
@@ -168,6 +164,18 @@ template-creation-from-scratch; if that path breaks, that is exactly the bug ape
 exists to flush. Watch for the durable events `template.selection.no_match` and
 `template.creation.{started,published,failed}` in the run event stream.
 
+### 5c. Derive also captures a design contract
+
+Greenfield derive runs the **design phase**: it elaborates the captured
+design-intent into a versioned `DesignContract` (personas, behaviors with
+acceptance criteria, persona-scoped dimensions) that the writer reads and the
+design oracle later verifies the built product against. A greenfield derive with an
+absent contract fails loud (`MissingDesignContractError`), so the interview must
+capture a real persona/behavior set up front — a thin capture means most design
+surfaces start as gaps (surfaced as P2 re-elaboration findings). The v37 design bar
+is contract-coverage + static-readability (rendered-pixel fidelity is scoped out);
+see `docs/roadmap/native-design-subsystem.md`.
+
 ---
 
 ## 6. Monitor over the API + recognize a halt
@@ -204,25 +212,23 @@ lift the platform a quality tier, then rebuild from fresh `origin/main` and star
 
 ---
 
-## What v32 proved + flushed (the most recent trial)
+## What the trials have proven so far (through v36)
 
-v32 was driven over this exact playbook (BYOK Codex, $0). It **proved live**:
-DAG-build from a real Forge interview (rough notes → a 15-spec DAG), walker
-auto-execution, the writer authoring a scaffold, cost-discipline (loud NULL costs),
-and `needs_attention` escalation + a clean runner release. It **halted at
-scaffold-bootstrap** and flushed three bugs — all now FIXED on `main`:
+The trials (driven over this exact playbook, BYOK Codex, $0) have proven **live**:
+DAG-build from a real Forge interview (rough notes → a multi-spec DAG), walker
+auto-execution, the writer authoring a scaffold, just-in-time template creation,
+cost-discipline (loud NULL costs), `needs_attention` escalation + clean runner
+release, and the never-discard re-drive + recovery paths. Each halt root-caused a
+real bug fixed on `main` — early ones (bootstrap frozen-lockfile #496,
+runner-sweeper #497, templating re-architecture #498) and the later
+non-convergence / merge-re-gate / timeout-eradication chain (#585–#609).
 
-1. **bootstrap frozen-lockfile** (#496) — a from-scratch scaffold cannot
-   `pnpm install --frozen-lockfile` with no lockfile; greenfield bootstrap is now
-   non-frozen and commits the lockfile.
-2. **runner-sweeper** (#497) — a periodic sweeper reclaims STUCK/LEAKED runners.
-3. **templating never exercised + the from-scratch path was wrong** (#498) —
-   re-architected to the doctrine in step 5b (every project DAG seeds from a
-   validated template; no from-scratch-into-a-project bypass).
-
-v33 = drive the refined platform; **expect the next halt past scaffold** (the
-loops past scaffold — CI-green PRs → deploy → issue-loop → audits → CI-intelligence
-→ notifications — remain to demonstrate live).
+**What is NOT yet proven:** the full autonomy loop **with a live deploy**. v36
+proved #601 recovery on the template-creation loop (~10/11) but did **not** close
+the product → live-deploy loop. The loops past a CI-green PR — deploy → issue-loop
+→ audits → CI-intelligence → notifications — **remain to demonstrate live in v37+**.
+The native **design subsystem** is now wired into derive (a `DesignContract` is
+captured and verified against the build); see `apex.md` for the v37 readiness state.
 
 ## Where this fits
 

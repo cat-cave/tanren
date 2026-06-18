@@ -122,7 +122,7 @@ Only the dashboard publishes a host port. Postgres, Vault, the orchestrator HTTP
 
 ## Allocator sidecar (P2A-0010)
 
-The Docker socket is mounted only into the `allocator` service. The orchestrator container no longer has any Docker access; it calls the allocator over HTTP on the internal docker network. Per-run runner containers are created and destroyed by the allocator; workspaces and `CODEX_HOME` are wiped on every release (success, failure, or TTL-driven abandoned reclaim). See `docs/operator-guide/runners.md`.
+The Docker socket is mounted only into the `allocator` service. The orchestrator container no longer has any Docker access; it calls the allocator over HTTP on the internal docker network. Per-run runner containers are created and destroyed by the allocator; workspaces and `CODEX_HOME` are wiped on every release (success, failure, or a sweeper reclaim of a stuck/abandoned runner — abandonment is sign-of-life based, not a wall-clock TTL). See `docs/operator-guide/runners.md`.
 
 ## Vault init flow
 
