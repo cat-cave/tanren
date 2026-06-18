@@ -63,7 +63,6 @@ const log = createLogger("run-executor");
 // are unaffected. Kept a code constant (NOT an env var): it's an internal timeout,
 // not a budget/config knob.
 export const DEFAULT_TIMEOUT_MS = 600_000;
-export const DEFAULT_MAX_CI_POLLS = 18;
 export const DEFAULT_CI_POLL_DELAY_MS = 10_000;
 
 // queue lease recovery. While a claimed job executes, the worker
@@ -110,7 +109,6 @@ export interface RunExecutorDeps {
   githubAppMinter?: GithubAppTokenMinter;
   identitySecretRef: string;
   timeoutMs?: number;
-  maxCiPolls?: number;
   ciPollDelayMs?: number;
   // lease tuning. `leaseMs` is the lease window stamped on claim and on
   // each heartbeat; `heartbeatIntervalMs` is how often the worker renews it
@@ -316,7 +314,6 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
         // never logged, distinct from Tanren creds). Empty ⇒ field omitted.
         ...(Object.keys(appEnv).length === 0 ? {} : { appEnv }),
         timeoutMs: deps.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-        maxCiPolls: deps.maxCiPolls ?? DEFAULT_MAX_CI_POLLS,
         ciPollDelayMs: deps.ciPollDelayMs ?? DEFAULT_CI_POLL_DELAY_MS,
         // under `native_queue` the merge stage enters the ready run into the native merge queue (the
         // coordinator drives the actual merge). Built from the worker's real pool so the write is RLS-scoped.

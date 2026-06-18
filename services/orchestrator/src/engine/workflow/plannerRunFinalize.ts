@@ -218,8 +218,10 @@ export async function applyFailedMergeGate(
 /**
  * Apply a PR review verdict to the planner loop (apex v35 — no count budget): `approved` →
  * `merge`; `changes_requested` whose feedback is DIFFERENT → re-enter the writer (`rework`),
- * UNBOUNDED while feedback keeps changing; pending-after-poll OR changes-requested at a FIXED
- * POINT (the SAME feedback recurs) → `halt`. Mutates `priorSignatures` on a `rework`.
+ * UNBOUNDED while feedback keeps changing; changes-requested at a FIXED POINT (the SAME
+ * feedback recurs) → `halt`. The review stage awaits its verdict INDEFINITELY (no poll budget,
+ * feedback_no_timeouts_progress_based), so `pending` never reaches here. Mutates
+ * `priorSignatures` on a `rework`.
  */
 export async function applyReviewVerdict(
   input: RunPlannerLoopInput,
@@ -244,8 +246,8 @@ export async function applyReviewVerdict(
       return "rework";
     }
   }
-  // Pending after the poll budget, or changes-requested at a review-feedback FIXED POINT —
-  // a TRANSIENT stall, so the spec RE-DRIVES (the walker re-attempts), not parks.
+  // Changes-requested at a review-feedback FIXED POINT (the SAME feedback recurs) — a
+  // TRANSIENT stall, so the spec RE-DRIVES (the walker re-attempts), not parks.
   await finalizeNonPassOutcome(input, finalizeRunState, context, appendEvent, "review_stalled");
   return "halt";
 }

@@ -147,7 +147,6 @@ export function fakeWorkflowRunner(github: GitHubHttpClient) {
     runPlannerLoopWorkflow({
       ...input,
       githubHttp: github,
-      maxCiPolls: 1,
       ciPollDelayMs: 0,
       sleep: async () => {},
       buildAdapters: () => passingAdapters(),
