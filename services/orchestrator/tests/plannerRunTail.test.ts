@@ -2,8 +2,10 @@
 // re-entry + merge-outcome→run-state mapping (plannerRun.ts lines ~284-335) and
 // the runOutcomeFor non-pass mapping. The existing plannerRun.test.ts pins only
 // the approved+handed-off happy path, leaving the changes-requested re-entry,
-// the rework-budget halt, the pending-after-budget halt, and the
-// merged / conflict / failed merge branches unpinned. These tests drive the
+// the changes-requested fixed-point halt, and the merged / conflict / failed
+// merge branches unpinned. (There is no pending-after-budget halt: the review
+// stage awaits its verdict indefinitely — feedback_no_timeouts_progress_based.)
+// These tests drive the
 // real workflow with the fake adapters + scripted review/merge probes and assert
 // the OBSERVABLE outcomes: the persisted run + spec status, the planner.rerequested
 // producer, and the events — never adapter internals.
@@ -40,7 +42,6 @@ import {
   plannerAuthorityHost,
   cleanAudit,
   completeCheck,
-  pendingReview,
   runPlannerLoopScoped,
   ScriptedGitHubHttp,
   setup,
@@ -69,7 +70,6 @@ function ghRound(): GitHubHttpResponse[] {
 
 const baseInput = (over: Record<string, unknown>) => ({
   timeoutMs: 100,
-  maxCiPolls: 1,
   sleep: async () => {},
   buildUsageProbe: () => fakeProbe(healthyWindow(), accounting(null)),
   ...over,
@@ -155,30 +155,6 @@ describe("runPlannerLoopWorkflow — review-rework re-entry", () => {
     expect(pool.specStatuses.at(-1)).toBe("open");
     expect(events.events.some((e) => e.eventType === "dag.spec.redriven")).toBe(true);
     expect(events.events.some((e) => e.eventType === "dag.spec.needs_attention")).toBe(false);
-  });
-
-  it("halts when the review stays pending after the poll budget", async () => {
-    const { ctx, pool, events, secrets, allocator, ssh } = await setup();
-    const github = new ScriptedGitHubHttp([...ghRound()]);
-
-    const result = await runPlannerLoopScoped(
-      baseInput({
-        pool: pool.asPgPool(),
-        eventStore: events,
-        allocator,
-        ssh,
-        secrets,
-        githubHttp: github,
-        context: ctx,
-        buildAdapters: () => twoSubtaskAdapters([completeCheck, completeCheck]),
-        reviewProbe: pendingReview(),
-        mergeProbe: noopMerge(),
-      }) as Parameters<typeof runPlannerLoopScoped>[0],
-    );
-
-    expect(result.review?.verdict).toBe("pending");
-    expect(result.merge).toBeUndefined();
-    expect(pool.runStatus).toEqual({ status: "halted", outcome: "halted" });
   });
 });
 

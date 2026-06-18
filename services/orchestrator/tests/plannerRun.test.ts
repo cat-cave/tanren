@@ -47,7 +47,6 @@ describe("runPlannerLoopWorkflow", () => {
       githubHttp: github,
       context: ctx,
       timeoutMs: 100,
-      maxCiPolls: 1,
       sleep: async () => {},
       buildAdapters: () => twoSubtaskAdapters([completeCheck, completeCheck]),
       buildUsageProbe: () => fakeProbe(healthyWindow(), accounting(0.5)),
@@ -102,7 +101,6 @@ describe("runPlannerLoopWorkflow", () => {
       githubHttp: passingGitHub(),
       context: ctx,
       timeoutMs: 100,
-      maxCiPolls: 1,
       sleep: async () => {},
       buildAdapters: () => adapters,
       buildUsageProbe: () => fakeProbe(healthyWindow(), accounting(null)),
@@ -158,7 +156,6 @@ describe("runPlannerLoopWorkflow", () => {
       githubHttp: passingGitHub(),
       context: ctx,
       timeoutMs: 100,
-      maxCiPolls: 1,
       sleep: async () => {},
       bootstrapCommand: "just bootstrap",
       runBootstrap: async (input) => {
@@ -188,7 +185,6 @@ describe("runPlannerLoopWorkflow", () => {
       githubHttp: passingGitHub(),
       context: ctx,
       timeoutMs: 100,
-      maxCiPolls: 1,
       sleep: async () => {},
       runBootstrap: async () => {
         order.push("bootstrap");
@@ -250,7 +246,6 @@ describe("runPlannerLoopWorkflow", () => {
       githubHttp: passingGitHub(),
       context: ctx,
       timeoutMs: 100,
-      maxCiPolls: 1,
       sleep: async () => {},
       runBootstrap: async () => {},
       // The post-bootstrap commit sha — what the writer must diff against.
@@ -312,7 +307,6 @@ describe("runPlannerLoopWorkflow", () => {
       githubHttp: passingGitHub(),
       context: ctx,
       timeoutMs: 100,
-      maxCiPolls: 1,
       sleep: async () => {},
       runBootstrap: async (input) => {
         bootstrapCalls.push(input.command);
@@ -343,7 +337,6 @@ describe("runPlannerLoopWorkflow", () => {
       githubHttp: passingGitHub(),
       context: ctx,
       timeoutMs: 100,
-      maxCiPolls: 1,
       sleep: async () => {},
       runBootstrap: async (input) => {
         bootstrapCalls.push(input.command);
@@ -373,7 +366,6 @@ describe("runPlannerLoopWorkflow", () => {
       githubHttp: passingGitHub(),
       context: ctx,
       timeoutMs: 100,
-      maxCiPolls: 1,
       sleep: async () => {},
       runBootstrap: async (input) => {
         throw new WorkspaceBootstrapError(input.workspacePath, "just bootstrap", 1, "tier-1 tool: not found", false);

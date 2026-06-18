@@ -2,8 +2,9 @@
 // (docs/roadmap/tanren-method-benchmark.md §4.2 item 2). They prove the
 // production `awaitTerminal` injection resolves when a run reaches a terminal
 // state, WAKES on a `tanren_run` NOTIFY (via a fake PgNotifyListener) rather than
-// hot-polling, and times out safely when the run never terminates — all over a
-// fake pool + fake listener (no Postgres).
+// hot-polling, and AWAITS INDEFINITELY (no wall-clock deadline) until the run's
+// real terminal state — even past the old 30-min trial timeout — all over a fake
+// pool + fake listener (no Postgres).
 import type pg from "pg";
 import { RUN_ACTIVITY_CHANNEL } from "@tanren/db";
 import { describe, expect, it } from "vitest";
@@ -67,7 +68,6 @@ describe("buildLiveAwaitTerminal", () => {
     const awaitTerminal = buildLiveAwaitTerminal({
       pool,
       notifyListener: listener as unknown as Parameters<typeof buildLiveAwaitTerminal>[0]["notifyListener"],
-      trialTimeoutMs: 5_000,
     });
     const snapshot = await awaitTerminal({ orgId: ORG, runId: RUN });
     expect(snapshot?.status).toBe("completed");
@@ -86,7 +86,6 @@ describe("buildLiveAwaitTerminal", () => {
       notifyListener: listener as unknown as Parameters<typeof buildLiveAwaitTerminal>[0]["notifyListener"],
       // A long safety-net so the wake — NOT the backstop — is what advances the loop.
       safetyNetPollMs: 60_000,
-      trialTimeoutMs: 60_000,
     });
     const pending = awaitTerminal({ orgId: ORG, runId: RUN });
     // Let the first (running) read + park happen, then fire the run's NOTIFY.
@@ -106,7 +105,6 @@ describe("buildLiveAwaitTerminal", () => {
       pool,
       notifyListener: listener as unknown as Parameters<typeof buildLiveAwaitTerminal>[0]["notifyListener"],
       safetyNetPollMs: 8,
-      trialTimeoutMs: 60_000,
     });
     const pending = awaitTerminal({ orgId: ORG, runId: RUN });
     await new Promise((r) => {
@@ -119,18 +117,24 @@ describe("buildLiveAwaitTerminal", () => {
     expect(snapshot?.status).toBe("completed");
   });
 
-  it("times out safely (returns the last non-terminal snapshot) when the run never terminates", async () => {
-    const pool = fakePool(["running"]);
+  it("awaits INDEFINITELY (no deadline) — a run still running long past the old 30m timeout resolves on its eventual terminal state", async () => {
+    // Many consecutive `running` reads stand in for a trial that runs far longer
+    // than the eradicated 30-min wall-clock deadline; the seam must NOT give up
+    // (no undefined-at-deadline) and must resolve once the run finally terminates.
+    const pool = fakePool([...Array.from({ length: 50 }, () => "running"), "completed"]);
     const listener = new FakeNotifyListener();
     const awaitTerminal = buildLiveAwaitTerminal({
       pool,
       notifyListener: listener as unknown as Parameters<typeof buildLiveAwaitTerminal>[0]["notifyListener"],
-      safetyNetPollMs: 5,
-      trialTimeoutMs: 30,
+      // Tiny safety-net cadence so the backstop drives the many reads quickly in
+      // the test (it is a poll INTERVAL, not a deadline).
+      safetyNetPollMs: 1,
     });
     const snapshot = await awaitTerminal({ orgId: ORG, runId: RUN });
-    expect(snapshot?.status).toBe("running");
-    // The subscription is torn down even on the timeout path.
+    // It resolved on the REAL terminal state — never returned undefined-at-deadline.
+    expect(snapshot?.status).toBe("completed");
+    expect(snapshot?.merged).toBe(true);
+    // The subscription is torn down on the success path.
     expect(listener.unsubscribeCount).toBe(1);
   });
 });

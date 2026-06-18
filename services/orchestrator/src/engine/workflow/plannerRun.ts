@@ -182,7 +182,6 @@ export interface RunPlannerLoopInput {
   workspacePath?: string;
   // Test seam: a pre-resolved GitHub clone token. Production omits it (prepareRunWorkspace resolves it from secrets + context.githubCredentialRef).
   githubToken?: string;
-  maxCiPolls?: number;
   ciPollDelayMs?: number;
   sleep?: (ms: number) => Promise<void>;
   pressureThresholdPercent?: number;
@@ -429,7 +428,8 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
         runId: context.runId,
         // Same token ref as PR-creation + CI-poll (project record → org default).
         resolvedGithubCredentialRef: context.githubCredentialRef,
-        maxPolls: input.maxCiPolls,
+        // The review stage awaits its verdict INDEFINITELY (no poll cap); the poll
+        // SPACING reuses the CI poll cadence (an interval, not a budget).
         pollDelayMs: input.ciPollDelayMs,
         sleep: input.sleep,
         reviewProbe: input.reviewProbe,

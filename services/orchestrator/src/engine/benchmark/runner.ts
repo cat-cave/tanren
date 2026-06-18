@@ -72,8 +72,9 @@ export interface BenchmarkRunnerDeps {
   }) => Promise<ProvisionedTrial>;
   /**
    * Await a run to a terminal state (the worker executes it). Defaults to polling
-   * `runs.status` under org scope until terminal or the deadline. Returns the
-   * terminal snapshot, or undefined if the deadline passed without terminating.
+   * `runs.status` under org scope until terminal — INDEFINITELY, on a poll cadence,
+   * with NO wall-clock deadline (feedback_no_timeouts_progress_based). A trial ends
+   * on its real terminal state, never a clock. Returns the terminal snapshot.
    */
   awaitTerminal?: (input: {
     orgId: string;
@@ -111,10 +112,8 @@ export interface BenchmarkRunnerDeps {
     acceptResult: AcceptResult | null;
     scorecard: TrialScorecard;
   }) => Promise<void>;
-  /** Poll interval for the default `awaitTerminal` (ms). */
+  /** Poll interval (cadence) for the default `awaitTerminal` (ms) — spacing, not a deadline. */
   pollIntervalMs?: number;
-  /** Max wall-clock to await a single trial's terminal state (ms). */
-  trialTimeoutMs?: number;
   /**
    * §3.3 spacing: how the scheduler waits between trials. Defaults to a policy
    * that delays a fixed gap, extended to `retry_after_s` when a recent provider
@@ -137,8 +136,6 @@ const defaultProvisionWorkflowDeps: BenchmarkProvisionWorkflowDeps = {
 };
 
 const DEFAULT_POLL_INTERVAL_MS = 1_000;
-// 30m — a real trial is a full run (plan→write→check→audit→PR→CI→merge).
-const DEFAULT_TRIAL_TIMEOUT_MS = 1_800_000;
 const DEFAULT_INTER_TRIAL_GAP_MS = 2_000;
 
 // ---- Per-trial + per-cell results -----------------------------------------
@@ -146,7 +143,7 @@ const DEFAULT_INTER_TRIAL_GAP_MS = 2_000;
 export interface TrialResult {
   trialIndex: number;
   runId: string;
-  /** True when the run reached a terminal state within the deadline. */
+  /** True when the run reached a terminal state (the await resolves only on terminal). */
   terminated: boolean;
   terminalStatus: string | null;
   acceptResult: AcceptResult | null;
@@ -376,7 +373,15 @@ function gitHubRepoUrl(repo: string): string {
   return repo.startsWith("http") ? repo : `https://github.com/${repo}`;
 }
 
-/** Default await: poll `runs.status` under org scope until terminal or deadline. */
+/**
+ * Default await: poll `runs.status` under org scope until terminal — INDEFINITELY
+ * (feedback_no_timeouts_progress_based, BINDING). A trial is a full run that can
+ * legitimately take a very long time, so it resolves ONLY on its real terminal
+ * state; there is NO wall-clock deadline and no undefined-at-deadline degrade. The
+ * poll interval is the SPACING between reads (a cadence), never a budget. (The
+ * production boot injects the NOTIFY-driven `buildLiveAwaitTerminal`; this poll-only
+ * default is the pure fallback.)
+ */
 function defaultAwaitTerminal(
   deps: BenchmarkRunnerDeps,
 ): (input: {
@@ -385,13 +390,10 @@ function defaultAwaitTerminal(
 }) => Promise<{ status: string; outcome: string | null; merged: boolean } | undefined> {
   const pool = deps.pool;
   const pollIntervalMs = deps.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
-  const timeoutMs = deps.trialTimeoutMs ?? DEFAULT_TRIAL_TIMEOUT_MS;
   return async ({ orgId, runId }) => {
-    const deadline = Date.now() + timeoutMs;
     for (;;) {
       const snapshot = await readRunStatus(pool, orgId, runId);
       if (snapshot !== undefined && isTerminalStatus(snapshot.status)) return snapshot;
-      if (Date.now() >= deadline) return snapshot;
       await sleep(pollIntervalMs);
     }
   };
