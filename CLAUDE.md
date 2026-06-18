@@ -32,10 +32,22 @@ synthesized `tanren/integ` host ref**, and the legacy `speculative_base` +
 `integrated_ancestor_shas` columns are dropped. The never-discard base-shift rebase
 and the `MergeAuthority` + `CodeHost` CAS land are the only paths. The
 `integration.*` metrics read-side (`rebase_vs_rebuild`) is **built**. apex remains
-the live-validation vehicle (a real merge through the jj/`MergeAuthority` path is the
-open validation item — apex v32 halted at scaffold-bootstrap before reaching a
-merge), but the engine is the single path regardless. Rationale:
-`docs/architecture/tanren-owns-the-engine.md`.
+the live-validation vehicle (a whole-product loop merging through the
+jj/`MergeAuthority` path is the open validation item), but the engine is the single
+path regardless. Rationale: `docs/architecture/tanren-owns-the-engine.md`.
+
+**Two doctrine programs have since landed in full.** (1) **Timeout/retry-cap
+eradication is DONE + CI-gated** (#609–#622): NO arbitrary timeouts, retry caps, or
+wall-clock deadlines anywhere — the engine is PROGRESS / SIGN-OF-LIFE based
+(`ActivityWatchdog` + `retryUntilConverged` wrapping `convergenceDetector`; the
+`scripts/check-architecture-timeouts.mjs` lint is CI-gating). A working agent runs
+**unbounded**; kill only on evidence of death. See
+`docs/roadmap/timeout-eradication.md`. (2) **The native DESIGN subsystem is BUILT +
+wired** (WS-D1..D4): a domain-general persisted `DesignContract` injected into the
+writer + a domain-aware design oracle re-driving the writer in the same DAG (no
+handoff seam), bound to first-class personas + behaviors. It is **not yet exercised
+on a live run** — a scoped exercise for the next apex run (visual pixel-fidelity is
+the WS-D4a follow-on). See `docs/roadmap/native-design-subsystem.md`.
 
 ## Read order for a fresh session
 
@@ -71,7 +83,16 @@ credentials (GitHub App + Slack + a deploy target;
 `docs/operator-guide/validation-credentials.md`) are provisioned, and it spends
 real credits under the $50 ceiling.
 
-**To drive the next apex run (v33), a fresh agent reads, in order:**
+**Be honest about the proof state — do NOT overclaim.** Successive apex trials each
+flushed real engine bugs now fixed on `main`. The most recent live trial, **v36**,
+proved the **#601 re-gate / stall-recovery** behaviour (reached **10/11** on a
+template-creation DAG; recovered from stalls without bricking) but **did NOT close
+the product loop** (issue → triage → fix → merge → deploy → a working product).
+**apex v37 has not yet run** — it is the first run on the timeout-free engine + the
+wired design subsystem. **No live run has yet closed the full autonomous loop with a
+live deploy.** That close is exactly what apex still has to prove.
+
+**To drive the next apex run (v37), a fresh agent reads, in order:**
 
 1. **`docs/operator-guide/apex.md`** — the operator role (non-technical end user;
    never hand-fix the generated repo), the **run rhythm** (drive → halt →
@@ -87,9 +108,7 @@ real credits under the $50 ceiling.
    template-creation just-in-time or halts loud — there is **no from-scratch into a
    project**. DO NOT pre-create a template; apex must exercise creation-from-scratch.
 
-**v33 = drive the refined platform; expect the next halt PAST scaffold** (v32
-halted at scaffold-bootstrap and flushed #496/#497/#498). The rest of the forward
-to-do (`ROADMAP.md` §4):
+The rest of the forward to-do (`ROADMAP.md` §4):
 
 - **tanren-owns-the-engine — cutover COMPLETE, §7 decomposition LANDED.** The
   walker/percolation → jj-local cutover landed, the kill-switch flags are deleted
@@ -104,21 +123,17 @@ to-do (`ROADMAP.md` §4):
   doc-comments. The one thing still on disk is **not** dead code:
   `resolveSpeculativeState` / the stacked-PR retarget — the live jj-local
   `ancestor_stack` base + retarget walk (only a possible rename off the "speculative"
-  vocabulary remains). A real merge through the live jj/`MergeAuthority` path is the
-  open live-validation item (apex v32 halted at scaffold-bootstrap before reaching
-  one). See `docs/architecture/tanren-owns-the-engine.md` §7–§8 plus
+  vocabulary remains). A whole-product loop merging through the live
+  jj/`MergeAuthority` path is the open live-validation item. See
+  `docs/architecture/tanren-owns-the-engine.md` §7–§8 plus
   `docs/architecture/vcsprovider-codehost-decomposition.md`.
-- **Thread `TANREN_APEX_MODE` to the orchestrator compose service** (v33-prep).
-  Today it is wired only on the `worker` service, but the orchestrator reads it too
-  (`engine/config/apexMode.ts`) — until threaded, export it on the host. One-line
-  compose fix.
 - **Benchmark seed corpus.** The tanren-method toolkit is code-complete; what
   remains is the **content** — tiered seed repos + hidden accept tiers + running
   the experiments. See `docs/roadmap/tanren-method-benchmark.md`.
-- **Remaining DAL clusters.** Two forge stores still issue raw SQL
-  (`forge/audits/store.ts` + `forge/inbox/store.ts`) — move them onto the
-  `Repositories` seam; plus `typify→serde` codegen and the first whole-repo
-  mutation baseline.
+- **DAL + neutral-schema tail.** The forge audits + inbox stores are now migrated
+  onto the `Repositories` seam (`engine/repositories/{audits,inbox}.ts`) — that item
+  is done. What remains is `typify→serde` codegen and the first whole-repo mutation
+  baseline.
 - **Residual hardening.** The `schemaCore.ts` `.default('{}'::jsonb)` defaults
   (a latent-500 source) survive on this zero-users, single-baseline codebase. The
   old `resolveCredentials.ts` `orgId === ''` silent-BYOK branch is already FIXED —
