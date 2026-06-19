@@ -16,6 +16,25 @@
 // state is per-spec and cleared the moment the spec stops being held (it absorbs / re-execs
 // / replans / is unchanged), so a recovered spec starts fresh. Bounded: it always re-drives
 // (clamped to the longest delay), never a wall-clock give-up, never an infinite hot-loop.
+//
+// APEX v45 EXTENSION — ancestor-progress gating (the run-cycle hot-loop fix):
+// The time-based window above defends against NOTIFICATION STORMS (rapid re-walks while the
+// ancestor has not changed). It does NOT defend against the RUN-CYCLE HOT-LOOP: a speculative
+// dependent's run takes 30-65s (runner alloc + jj clone) and terminates with
+// `AncestorNotReadyError`. By the time the run terminates and the walker re-walks, the 3s
+// (or even 10s/30s) backoff window has already EXPIRED — so every re-walk re-enqueues the
+// dependent and triggers a new 30-65s runner cycle, forever.
+//
+// The fix: track the ANCESTOR LIFECYCLE STATE KEY at each attempt. A speculative dependent
+// should only be re-attempted when its unmerged ancestors have MADE PROGRESS (their lifecycle
+// states changed). If the ancestor state is unchanged since the last attempt, the dependent
+// is skipped regardless of the time window — the skip is event-driven on ancestor progress,
+// never time-capped. The per-spec `ancestorStateKey` is a stable string encoding the relevant
+// unmerged-ancestor lifecycle states. When ANY ancestor advances (CI passes, PR merges, etc.)
+// the key changes → the dependent is re-eligible.
+//
+// Together: (1) time-based window guards rapid notification storms; (2) ancestor-state-key
+// guards run-cycle hot-loops where each cycle takes longer than the time window.
 
 import { recoverableRetryDelayMs } from "../merge/retrySchedule.js";
 
@@ -24,6 +43,12 @@ interface HeldEntry {
   holds: number;
   /** Wall-clock ms before which a re-drive of this spec must be SKIPPED (spaced). */
   nextEligibleAtMs: number;
+  /**
+   * The ancestor lifecycle state key at the LAST attempt (the stable string the gate compared
+   * on the prior walk). A re-drive is suppressed until this key CHANGES (ancestor progressed)
+   * OR the time window elapses AND the key changes. Set on `recordHeld` and cleared on `clear`.
+   */
+  ancestorStateKey: string | undefined;
 }
 
 /**
@@ -57,16 +82,56 @@ export class HeldReDriveBackoff {
   }
 
   /**
-   * Record that `specId` was HELD this pass: bump its consecutive-hold count and set the
-   * next-eligible timestamp the recoverable backoff curve dictates (3s → 10s → 30s → 60s,
-   * clamped). Returns the chosen delay (for logging/observability).
+   * True iff the ancestors have made PROGRESS since the last attempt for `specId`.
+   * "Progress" means the `currentAncestorStateKey` differs from the key recorded at the
+   * last attempt (the ancestor lifecycle states changed — CI passed, PR merged, etc.).
+   *
+   * Returns true (allow re-drive) when:
+   *   - there is no prior attempt record for this spec (first attempt);
+   *   - the ancestor state key changed (ancestor progressed — re-drive warranted);
+   * Returns false (suppress re-drive) when the key is unchanged (ancestor has not moved).
    */
-  recordHeld(specId: string): { holds: number; delayMs: number } {
+  ancestorProgressed(specId: string, currentAncestorStateKey: string): boolean {
+    const entry = this.entries.get(specId);
+    if (entry === undefined || entry.ancestorStateKey === undefined) {
+      return true;
+    }
+    return entry.ancestorStateKey !== currentAncestorStateKey;
+  }
+
+  /**
+   * Record that `specId` was HELD or attempted this pass: bump its consecutive-hold count,
+   * set the next-eligible timestamp the recoverable backoff curve dictates (3s → 10s → 30s
+   * → 60s, clamped), and record the ancestor state key so the ancestor-progress gate can
+   * detect when the ancestor advances. Returns the chosen delay (for logging/observability).
+   */
+  recordHeld(specId: string, ancestorStateKey?: string): { holds: number; delayMs: number } {
     const prior = this.entries.get(specId);
     const holds = (prior?.holds ?? 0) + 1;
     const delayMs = recoverableRetryDelayMs(holds);
-    this.entries.set(specId, { holds, nextEligibleAtMs: this.now() + delayMs });
+    this.entries.set(specId, {
+      holds,
+      nextEligibleAtMs: this.now() + delayMs,
+      ancestorStateKey: ancestorStateKey ?? prior?.ancestorStateKey,
+    });
     return { holds, delayMs };
+  }
+
+  /**
+   * Re-arm the backoff window from NOW with the current ancestor state key — called when
+   * the time window elapsed but the ancestor has NOT progressed. This resets the window
+   * FROM NOW (not from the original enqueue time), so the dependent stays suppressed until
+   * the ancestor actually advances or the new window elapses.
+   */
+  rearmWindow(specId: string, ancestorStateKey: string): void {
+    const prior = this.entries.get(specId);
+    const holds = prior?.holds ?? 1;
+    const delayMs = recoverableRetryDelayMs(holds);
+    this.entries.set(specId, {
+      holds,
+      nextEligibleAtMs: this.now() + delayMs,
+      ancestorStateKey,
+    });
   }
 
   /**
@@ -77,4 +142,22 @@ export class HeldReDriveBackoff {
   clear(specId: string): void {
     this.entries.delete(specId);
   }
+}
+
+/**
+ * Compute a stable string key encoding the lifecycle states of a set of unmerged ancestor
+ * specs. The key changes whenever ANY ancestor advances (CI passes, PR merges, state changes).
+ * Used by the ancestor-progress gate to distinguish "ancestor made progress" from "no change".
+ *
+ * The key is the sorted `specId:state` pairs joined by `|` — stable regardless of iteration
+ * order, and unique per combination of (specId, lifecycleState) pairs.
+ */
+export function ancestorLifecycleKey(
+  unmergedAncestorSpecIds: ReadonlyArray<string>,
+  lifecycleBySpecId: ReadonlyMap<string, { state: string }>,
+): string {
+  return unmergedAncestorSpecIds
+    .map((id) => `${id}:${lifecycleBySpecId.get(id)?.state ?? "absent"}`)
+    .sort()
+    .join("|");
 }
