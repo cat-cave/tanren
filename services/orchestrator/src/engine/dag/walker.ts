@@ -39,7 +39,7 @@ import type { AncestorStack } from "./ancestorStack.js";
 import type { SpecReadiness } from "./speculation.js";
 import { decideAncestorWait } from "./ancestorWaitGate.js";
 import { buildSpeculationConfigResolver } from "./speculationConfigResolver.js";
-import { HeldReDriveBackoff } from "./heldReDriveBackoff.js";
+import { ancestorLifecycleKey, HeldReDriveBackoff } from "./heldReDriveBackoff.js";
 import { PgBudgetGate } from "./budgetGate.js";
 import { PgDagLifecycleReadModel } from "./lifecycle.js";
 import {
@@ -96,10 +96,9 @@ export interface DagWalkerDeps {
    */
   concurrency?: ConcurrencyResolver;
   /**
-   * ANCESTOR-NOT-READY RE-DRIVE BACKOFF (apex v35 hot-loop fix): the per-spec backoff that
-   * SPACES re-driving a speculative dependent (see `enqueueOne`). Defaults to a wall-clock
-   * `HeldReDriveBackoff`; a test injects a clock-controlled one to assert a notification storm
-   * yields a handful of spaced re-enqueues, never the live ~516-runner hot-loop.
+   * ANCESTOR-NOT-READY RE-DRIVE BACKOFF + PROGRESS GATE (apex v35 + v45 hot-loop fix): the
+   * per-spec backoff that gates re-driving a speculative dependent by time AND ancestor progress
+   * (see `enqueueOne` + `ancestorWaitGate.ts`). A test injects a clock-controlled one.
    */
   ancestorWaitBackoff?: HeldReDriveBackoff;
 }
@@ -302,11 +301,10 @@ export class EventEmittingDagWalker implements DagWalker {
    * — the dependent run jj-assembles its base LOCALLY at bootstrap from those refs (a
    * spec-vs-spec conflict surfaces there, §4a, not here).
    *
-   * ANCESTOR-NOT-READY HOT-LOOP FIX (apex v35): a speculative attempt is GATED by
-   * `decideAncestorWait` (per-spec backoff + cheap ancestor-published-head pre-check) BEFORE
-   * the expensive provisioning — see `ancestorWaitGate.ts` (the live ~516-runner hot-loop).
-   * `skip` returns silently; `defer` emits the benign `dag.spec.ancestor_not_ready` (runId "")
-   * with NO provisioning; `proceed` enqueues + ARMS the backoff so a re-drive is spaced.
+   * ANCESTOR-NOT-READY HOT-LOOP FIX (apex v35 + v45): a speculative attempt is GATED by
+   * `decideAncestorWait` (per-spec backoff + ancestor-progress check + cheap pre-check) BEFORE
+   * the expensive provisioning — see `ancestorWaitGate.ts`. `skip` is silent; `defer` emits the
+   * benign `dag.spec.ancestor_not_ready` (no provisioning); `proceed` enqueues + arms the gate.
    */
   private async enqueueOne(
     projectId: string,
@@ -375,11 +373,13 @@ export class EventEmittingDagWalker implements DagWalker {
       ancestorStack,
     });
     if (enqueued === undefined) return undefined;
-    // ARM THE BACKOFF on the real enqueue too: a speculative run that re-drives (back to
-    // `pending`) — incl. the bootstrap-time `AncestorNotReadyError` race the cheap pre-check
-    // cannot foresee (lifecycle says published, but `<branch>@origin` transiently vanished
-    // mid-rebase) — is then SPACED on the next walk, bounding the hot-loop. Never caps the wait.
-    this.ancestorWaitBackoff.recordHeld(enqueue.specId);
+    // ARM BACKOFF + ANCESTOR KEY: a re-driven speculative spec is gated on BOTH the time window
+    // AND ancestor progress — the next walk only re-proceeds when the ancestor's lifecycle changes
+    // (ancestor advanced). See `ancestorWaitGate.ts` (apex v35 + v45 hot-loop fix).
+    this.ancestorWaitBackoff.recordHeld(
+      enqueue.specId,
+      ancestorLifecycleKey(enqueue.unmergedAncestors, lifecycle.bySpecId),
+    );
     await this.deps.events.emitSpecSpeculative({
       projectId,
       specId: enqueue.specId,

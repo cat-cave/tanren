@@ -6,18 +6,24 @@
 // to `open` on a benign `AncestorNotReadyError` and re-firing on the NEXT notification with NO
 // spacing (`dag.spec.ancestor_not_ready`: 512; runner.allocated / scoped_token_minted: ~516).
 //
-// The fix mirrors #584's base-shift HELD backoff (`HeldReDriveBackoff`):
-//   (1) BACKOFF (the bound): the SAME speculative dependent is not re-enqueued until its
-//       per-spec backoff window elapses (3s→10s→30s→60s) — so a notification STORM yields a
-//       HANDFUL of spaced speculative enqueues, NOT hundreds. This is the operative fix: it
-//       bounds the loop even when the bootstrap-time `AncestorNotReadyError` race is invisible
-//       to the walker's cheap lifecycle view.
-//   (2) CHEAP PRE-CHECK (defense): when the lifecycle projection itself shows an unmerged
-//       ancestor below `pr_open` (no published head), the walker DEFERS without allocating a
-//       runner / resolving the stack — emitting the benign `dag.spec.ancestor_not_ready`.
-// A dependent still re-drives once spaced (the backoff never caps the wait), so it is never
-// starved. Driven through the in-memory walker seams (TEST FIXTURES) + a clock-injected
-// HeldReDriveBackoff, asserted deterministically with no DB.
+// apex-v45 EXTENSION (the run-CYCLE hot-loop fix): the v35 time-based backoff alone is
+// insufficient when each run cycle takes 30-65 seconds (runner alloc + jj clone +
+// AncestorNotReadyError). The backoff windows (3s→10s→30s→60s) may EXPIRE during the run,
+// so by the time the run terminates and the next walk fires, the window has elapsed and the
+// dependent is re-enqueued again — 368 times in the apex-v45 live run, same as v35's 516×.
+//
+// The additional gate: track the ANCESTOR LIFECYCLE STATE KEY at each attempt. A speculative
+// dependent is only re-driven when its unmerged ancestors have MADE PROGRESS (their lifecycle
+// states changed). If the ancestor is at the same lifecycle state as the last attempt, skip —
+// re-arm the window from NOW and wait for a genuine ancestor advance. This is purely
+// event-driven on ancestor progress, not time-capped.
+//
+// Together: (1) time-based window guards rapid notification storms; (2) ancestor-state-key
+// guards run-cycle hot-loops where each cycle takes longer than the time window. A dependent
+// re-drives ONLY when the ancestor actually advances (CI passes, PR merges, etc.).
+//
+// Driven through the in-memory walker seams (TEST FIXTURES) + a clock-injected HeldReDriveBackoff,
+// asserted deterministically with no DB.
 
 import { describe, expect, it } from "vitest";
 import { EventEmittingDagWalker } from "../src/engine/dag/walker.js";
@@ -166,12 +172,13 @@ function makeWalker(opts: { readModel: MutableReadModel; lifecycle: MutableLifec
   return { walker, enqueuer, emitter, stackResolver };
 }
 
-describe("DagWalker ancestor-not-ready re-drive backoff (apex-v35 hot-loop fix)", () => {
-  it("a NOTIFICATION STORM over a re-driving speculative dependent yields a HANDFUL of spaced enqueues, NOT ~516 (the no-backoff hot-loop FAILS here)", async () => {
+describe("DagWalker ancestor-not-ready re-drive backoff (apex-v35 + apex-v45 hot-loop fix)", () => {
+  it("NOTIFICATION STORM with UNCHANGED ancestor: exactly 1 enqueue, then all subsequent walks are gated on ancestor progress", async () => {
     let clock = 0;
     // spec_a at pr_open (a published head); spec_b a pending dependent that KEEPS re-driving
     // (it stays `pending` every walk — modelling the benign `ancestor_not_ready` re-drive that
     // returned it to `open` on every percolation notification in the live run).
+    // ANCESTOR STATE IS UNCHANGED throughout the storm (spec_a stays at pr_open).
     const readModel = new MutableReadModel([
       node("spec_a", "in_flight", [], 0),
       node("spec_b", "pending", ["spec_a"], 1),
@@ -179,22 +186,63 @@ describe("DagWalker ancestor-not-ready re-drive backoff (apex-v35 hot-loop fix)"
     const lifecycle = new MutableLifecycle({ spec_a: "pr_open", spec_b: "pending" });
     const { walker, enqueuer } = makeWalker({ readModel, lifecycle, clock: () => clock });
 
-    // The live storm: a percolation notification every 100ms for 60s. WITHOUT the backoff each
-    // walk re-enqueued spec_b — ~600 runner allocations. WITH it, re-enqueues are SPACED on the
-    // 3s→10s→30s→60s curve, so only a handful fire over the window.
+    // The live storm: a percolation notification every 100ms for 60s.
+    // Walk 1 (t=0): spec_b enqueues speculatively; ancestor key recorded (spec_a:pr_open).
+    // All subsequent walks: ancestor key UNCHANGED → skip (progress-gated), re-arm window.
+    // WITHOUT the ancestor-progress check: ~600 runner allocations over 60s.
+    // WITH it: exactly 1 enqueue — zero progress = zero re-drives.
     for (let t = 0; t < 60_000; t += 100) {
       clock = t;
       await walker.walk(PROJECT);
     }
 
-    // BOUNDED: enqueues at t=0, ~3s, ~13s, ~43s (next at ~103s is past the 60s window) → 4,
-    // NOT ~600. This assertion makes the no-backoff hot-loop FAIL loudly.
-    expect(enqueuer.records.length).toBeGreaterThanOrEqual(1);
-    expect(enqueuer.records.length).toBeLessThan(10);
+    // BOUNDED to exactly 1: the ancestor never progressed so no re-drive was warranted.
+    expect(enqueuer.records.length).toBe(1);
+    expect(enqueuer.records[0]?.specId).toBe("spec_b");
+  });
+
+  it("RUN-CYCLE HOT-LOOP: a dependent blocked on a slow ancestor (each run takes 60s) is NOT re-enqueued until the ancestor ADVANCES", async () => {
+    // This is the apex-v45 repro: run cycles take 30-65 seconds (runner alloc + jj clone +
+    // AncestorNotReadyError). The time-based backoff (3s window) expires DURING the run, so
+    // each run termination triggers a fresh re-drive. 368 cycles in the live run.
+    // The fix: gate on ancestor progress, not just time.
+    let clock = 0;
+    const readModel = new MutableReadModel([
+      node("spec_a", "in_flight", [], 0),
+      node("spec_b", "pending", ["spec_a"], 1),
+    ]);
+    const lifecycle = new MutableLifecycle({ spec_a: "pr_open", spec_b: "pending" });
+    const { walker, enqueuer } = makeWalker({ readModel, lifecycle, clock: () => clock });
+
+    // Walk 1 (t=0): spec_b enqueues (ancestor key = spec_a:pr_open). Run starts.
+    await walker.walk(PROJECT);
+    expect(enqueuer.records.length).toBe(1);
+
+    // Each simulated run takes 60s (runner alloc + clone + AncestorNotReadyError → re-drive).
+    // Run 1 terminates at t=60s. Walk fires. Ancestor UNCHANGED (still pr_open).
+    // → ancestor-progress gate BLOCKS the re-drive (no runner allocation).
+    // Simulate each run-terminal walk: ancestor still unchanged.
+    for (let t = 60_000; t < 60_000 * 10; t += 60_000) {
+      clock = t;
+      await walker.walk(PROJECT);
+    }
+
+    // After 9 more walks (9 simulated run cycles), still exactly 1 enqueue.
+    // The ancestor never progressed, so no re-drive was warranted.
+    expect(enqueuer.records.length).toBe(1);
+
+    // NOW the ancestor advances: spec_a goes from pr_open → ci_green (CI passed).
+    // The ancestor state key changes → spec_b is re-eligible for a fresh attempt.
+    lifecycle.entries["spec_a"] = "ci_green";
+    clock += 60_000;
+    await walker.walk(PROJECT);
+
+    // Exactly 1 fresh enqueue after ancestor advanced.
+    expect(enqueuer.records.length).toBe(2);
     expect(enqueuer.records.every((r) => r.specId === "spec_b")).toBe(true);
   });
 
-  it("two walks within the backoff window do NOT both re-enqueue the dependent (the re-drive is spaced)", async () => {
+  it("NOTIFICATION STORM defense still works: rapid walks within the backoff window do NOT both re-enqueue", async () => {
     let clock = 1_000;
     const readModel = new MutableReadModel([
       node("spec_a", "in_flight", [], 0),
@@ -203,21 +251,39 @@ describe("DagWalker ancestor-not-ready re-drive backoff (apex-v35 hot-loop fix)"
     const lifecycle = new MutableLifecycle({ spec_a: "pr_open", spec_b: "pending" });
     const { walker, enqueuer, emitter } = makeWalker({ readModel, lifecycle, clock: () => clock });
 
-    // Walk 1: enqueues spec_b speculatively (arms the backoff window).
+    // Walk 1: enqueues spec_b speculatively (arms the backoff window + records ancestor key).
     await walker.walk(PROJECT);
     expect(enqueuer.records.length).toBe(1);
     expect(emitter.speculative).toEqual(["spec_b"]);
 
-    // Walk 2 a few ms later (the storm) — spec_b still pending (re-drove), but SKIPPED inside
-    // the first 3s window: no second enqueue, no runner allocation.
+    // Walk 2 a few ms later (the storm) — spec_b still pending (re-drove), SKIPPED inside
+    // the first 3s window (time gate fires before ancestor-progress check): no second enqueue.
     clock += 5;
     await walker.walk(PROJECT);
     expect(enqueuer.records.length).toBe(1);
+  });
 
-    // Walk 3 past the window: re-eligible, so it re-enqueues once (it never gives up).
-    clock += 4_000;
+  it("a re-drive DOES proceed when the ancestor's lifecycle advances past its last-recorded state", async () => {
+    let clock = 1_000;
+    const readModel = new MutableReadModel([
+      node("spec_a", "in_flight", [], 0),
+      node("spec_b", "pending", ["spec_a"], 1),
+    ]);
+    const lifecycle = new MutableLifecycle({ spec_a: "pr_open", spec_b: "pending" });
+    const { walker, enqueuer } = makeWalker({ readModel, lifecycle, clock: () => clock });
+
+    // Walk 1: enqueues spec_b (ancestor key = spec_a:pr_open).
+    await walker.walk(PROJECT);
+    expect(enqueuer.records.length).toBe(1);
+
+    // spec_a advances to ci_green (CI passed). Ancestor state key changes.
+    lifecycle.entries["spec_a"] = "ci_green";
+
+    // Walk 2 past the backoff window: ancestor PROGRESSED → re-eligible → re-enqueues spec_b.
+    clock += 60_000;
     await walker.walk(PROJECT);
     expect(enqueuer.records.length).toBe(2);
+    expect(enqueuer.records.every((r) => r.specId === "spec_b")).toBe(true);
   });
 
   it("CHEAP PRE-CHECK helper: an unmerged ancestor below `pr_open` has no published head; one at/above `pr_open` does", () => {
@@ -276,7 +342,7 @@ describe("DagWalker ancestor-not-ready re-drive backoff (apex-v35 hot-loop fix)"
     const lifecycle = new MutableLifecycle({ spec_a: "pr_open", spec_b: "pending" });
     const { walker, enqueuer } = makeWalker({ readModel, lifecycle, clock: () => clock });
 
-    // Walk 1: spec_b enqueues speculatively (arms the backoff).
+    // Walk 1: spec_b enqueues speculatively (arms the backoff + records ancestor key).
     await walker.walk(PROJECT);
     expect(enqueuer.records.length).toBe(1);
 
@@ -286,5 +352,20 @@ describe("DagWalker ancestor-not-ready re-drive backoff (apex-v35 hot-loop fix)"
     clock += 60_000;
     await walker.walk(PROJECT);
     expect(enqueuer.records.length).toBe(1);
+  });
+
+  it("a first-time speculative dependent with no prior attempt record always gets a chance (no phantom gating)", async () => {
+    const clock = 0;
+    // No prior attempt — first walk should always proceed regardless of ancestor-progress check.
+    const readModel = new MutableReadModel([
+      node("spec_a", "in_flight", [], 0),
+      node("spec_b", "pending", ["spec_a"], 1),
+    ]);
+    const lifecycle = new MutableLifecycle({ spec_a: "pr_open", spec_b: "pending" });
+    const { walker, enqueuer } = makeWalker({ readModel, lifecycle, clock: () => clock });
+
+    await walker.walk(PROJECT);
+    expect(enqueuer.records.length).toBe(1);
+    expect(enqueuer.records[0]?.specId).toBe("spec_b");
   });
 });
