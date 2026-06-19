@@ -39,7 +39,8 @@ import {
 } from "./runWorkflowPorts.js";
 import { createLogger, finalizeRunRecoverable, rawCauseOf } from "./runFinalize.js";
 import { classifyRunFailure } from "./runFailureClassifier.js";
-import { startHeartbeat, type HeartbeatMiss } from "./runHeartbeat.js";
+import { JobProgressSignal, instrumentSubstrateProgress, startHeartbeat } from "./runHeartbeat.js";
+import type { HeartbeatMiss, JobStall } from "./runHeartbeat.js";
 import { systemActor } from "../state/actor.js";
 import { resolveAppEnvForScope } from "../workflow/resolveAppEnv.js";
 import type { AppEnvScope } from "../repositories/appEnvironment.js";
@@ -116,6 +117,10 @@ export interface RunExecutorDeps {
   // (the reaper may now requeue this still-running job → duplicate execution). The
   // default sink logs loudly; tests inject to assert the loud accounting.
   onHeartbeatMiss?: (miss: HeartbeatMiss) => void;
+  // Observability seam for PROGRESS-BASED STALL DETECTION (apex-v45): invoked ONCE if the job
+  // heartbeats but makes NO forward progress for the whole lease window (the heartbeat then
+  // releases the lease so the reaper requeues the run). Default sink logs loudly; tests inject.
+  onJobStall?: (stall: JobStall) => void;
   // Test seam: defaults to the real planner-loop workflow. Tests inject a
   // wrapper that calls the real workflow with fake adapters / usage probe so
   // the dequeue→execute seam is proven without real Codex/SSH.
@@ -179,15 +184,27 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
     return { kind: "failed", jobId: job.id, runId, failure };
   }
 
+  // PROGRESS-BASED STALL DETECTION (apex-v45): the in-process forward-motion signal, ticked on
+  // every `ssh.run` BOUNDARY by the instrumented substrate. The heartbeat watches it so a job
+  // that heartbeats but makes NO forward progress for the whole lease window (a wedge on a
+  // non-resolving await — the apex-v45 hang) releases its lease for the reaper, instead of the
+  // heartbeat keeping a stalled job alive forever. Every workflow SSH op AND every
+  // ActivityWatchdog probe `ssh.run` ticks the signal, so a working job always advances it.
+  const progressSignal = new JobProgressSignal();
+  const ssh = instrumentSubstrateProgress(deps.ssh, progressSignal);
+
   // renew the lease on an interval so a healthy worker holds its claim
   // while the (potentially long) workflow runs. The reaper only recovers a job
-  // whose lease has lapsed — i.e. a crashed worker that stopped heartbeating.
+  // whose lease has lapsed — i.e. a crashed worker that stopped heartbeating, OR a wedged
+  // worker whose progress signal stopped advancing (the heartbeat then releases the lease).
   const stopHeartbeat = startHeartbeat({
     heartbeat: (jobId, lease) => deps.jobQueue.heartbeat(jobId, lease),
     jobId: job.id,
     leaseMs,
     intervalMs: deps.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS,
+    progressSignal,
     ...(deps.onHeartbeatMiss !== undefined && { onMiss: deps.onHeartbeatMiss }),
+    ...(deps.onJobStall !== undefined && { onStall: deps.onJobStall }),
   });
   // RLS: the catch-path recoverable finalize must org-scope its UPDATE runs, or
   // the enforced `tanren_app` policy denies the unscoped write and the run sticks
@@ -296,7 +313,8 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
         pool: orgScopingPool(deps.pool),
         ...remoteWorkflowSeams,
         allocator: deps.allocator,
-        ssh: deps.ssh,
+        // The PROGRESS-instrumented substrate (every SSH boundary ticks the job-progress signal).
+        ssh,
         secrets: deps.secrets,
         // Dimension D: thread the credential-scoping seam so the workflow
         // de-privileges the run's credential reads behind a per-run child token.

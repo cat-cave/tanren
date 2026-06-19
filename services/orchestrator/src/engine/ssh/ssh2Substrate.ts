@@ -195,9 +195,19 @@ export class SshCommandSubstrate implements CommandSubstrate {
       // is the correct handshake-only bound and is all we need here.
       // Keepalive detects a genuinely DEAD TCP connection (the legitimate concern the
       // socket idle-timeout was crudely serving) without killing a working-but-silent
-      // command. The runner sshd sets ClientAliveInterval 60 / ClientAliveCountMax
-      // 1440; we mirror that posture — probes every 15s, declare dead only after 1440
-      // unanswered probes (~6 hours of silence on a dead socket, never a live one).
+      // command. CRUCIAL DISTINCTION: a keepalive probe is a TRANSPORT-level SSH ping the
+      // peer answers from its protocol stack — INDEPENDENT of whether the running command
+      // emits output — so a quiet-but-alive command (a long silent `jj rebase`, a stalled-
+      // but-connected download) keeps ANSWERING the probes and is NEVER killed. The probe
+      // ERRORS only on UNANSWERED pings = a truly dead socket (peer gone / network
+      // partition). So `keepaliveCountMax` is a DEAD-SOCKET detector, not a wall-clock budget
+      // on working code. #638 set it to 1440 (15s × 1440 ≈ 6 HOURS) mirroring the runner
+      // sshd's ClientAliveCountMax — far too long: a job whose runner connection genuinely
+      // died sat undetected for hours (the apex-v45 wedge class — the ActivityWatchdog is the
+      // primary catch, but this is the transport backstop and it must not lag by 6h). We
+      // declare a dead socket after 40 unanswered probes — 15s × 40 = 10 MINUTES — long
+      // enough to ride out a transient network blip, short enough to surface a dead socket
+      // promptly. It never touches a live command (which answers every probe).
       client.once("timeout", () => fail(`SSH connection failed to establish within ${connectMs}ms`));
       client.connect({
         host: target.host,
@@ -215,7 +225,7 @@ export class SshCommandSubstrate implements CommandSubstrate {
         },
         readyTimeout: connectMs,
         keepaliveInterval: 15_000,
-        keepaliveCountMax: 1440,
+        keepaliveCountMax: 40,
         algorithms:
           this.options.serverHostKeyAlgorithms === undefined
             ? undefined
@@ -258,7 +268,8 @@ export class SshCommandSubstrate implements CommandSubstrate {
   // It does NOT count toward any total-duration budget. On a recurring poll CADENCE it
   // snapshots a WORK SIGNATURE of the exec — the recent OUTPUT TAIL folded with the remote
   // WORKSPACE signature the `livenessProbe` reads (for SILENT ops like a long `jj rebase` the
-  // probe IS the signal: the newest workspace mtime, which advances as files are written) —
+  // probe IS the signal: the workspace tree GROWING — file count + byte total, which advance as files
+  // are written, and which a single heartbeat-touched lock file canNOT advance — apex-v45) —
   // and feeds the SEQUENCE into the shared convergence detector. A CHANGING signature (new
   // distinct output OR an advancing workspace) is genuine progress → RESET → continue
   // UNBOUNDED. Output chunks ALSO short-circuit a tick (see collectStream + the fast path
@@ -305,7 +316,7 @@ export class SshCommandSubstrate implements CommandSubstrate {
     // The output content folded INTO the signature is what distinguishes a streaming process
     // (new distinct lines = an advancing signature) from a wedged-busy one (byte-identical
     // output = a fixed signature, however fast it repeats); for SILENT ops the probe IS the
-    // signal (the newest workspace mtime). The probe returns `undefined` when the runner is
+    // signal (the workspace tree growing — count + bytes). The probe returns `undefined` when the runner is
     // UNREACHABLE (no signal — folded as a fixed sentinel, so a dead process reads non-advancing).
     let workspaceSig: string | undefined;
     if (watchdog.livenessProbe !== undefined) {
