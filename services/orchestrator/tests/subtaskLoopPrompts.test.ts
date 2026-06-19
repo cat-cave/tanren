@@ -86,6 +86,24 @@ describe("subtask loop — writer prompt rendering (writerPromptFor)", () => {
     expect(prompt).toContain("format-WRITE step");
     expect(prompt).toContain("never hand back the same");
     expect(prompt).not.toContain("prettier");
+    // apex-v43: the DERIVED-ARTIFACT reconciliation principle — a manifest edit without its
+    // matching regenerated lockfile is rejected by a frozen-lockfile gate. The instruction
+    // is framed around the project's DECLARED install/bootstrap step, stack-agnostic (no
+    // pnpm/npm/cargo/pip literals). Also steers away from range-syntax churn being
+    // mislabeled as an "upgrade".
+    expect(prompt).toContain("RECONCILE generated companions");
+    expect(prompt).toContain("generated or derived companion");
+    expect(prompt).toContain("project's DECLARED command that regenerates");
+    expect(prompt).toContain("frozen-lockfile gate");
+    expect(prompt).toContain("project's declared install or bootstrap step");
+    expect(prompt).toContain("bump to newer PUBLISHED versions");
+    expect(prompt).toContain("rewriting version-range syntax");
+    expect(prompt).toContain("NOT an upgrade");
+    // Stack-agnostic: no package-manager names baked in.
+    expect(prompt).not.toContain("pnpm");
+    expect(prompt).not.toContain("npm");
+    expect(prompt).not.toContain("cargo");
+    expect(prompt).not.toContain("pip");
   });
 
   // v40 scaffold finding: the project's DECLARED CONTRACT files (the `justfile` lifecycle +
