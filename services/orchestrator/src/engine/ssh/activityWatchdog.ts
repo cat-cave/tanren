@@ -9,8 +9,10 @@
 // folds every stdout/stderr chunk into a WORK SIGNATURE — a `codex --json` line, a
 // build log line is new distinct content = progress). For SILENT stretches a
 // `livenessProbe` is consulted between output: it returns a SIGNATURE of the
-// remote work state (the newest workspace mtime — a build/jj writes files as it
-// advances). The substrate feeds the SEQUENCE of work signatures into the shared
+// remote work state (the workspace's total file COUNT + total BYTES — a build/jj
+// grows the tree as it advances; deliberately NOT a single file's mtime, which a
+// heartbeat-touched lock file would advance forever with no real work — apex-v45).
+// The substrate feeds the SEQUENCE of work signatures into the shared
 // convergence detector: a CHANGING signature (new output OR an advancing workspace)
 // is genuine progress → the work continues UNBOUNDED. The watchdog FIRES only when
 // the work signature is at a FIXED POINT (no new output AND no workspace advance
@@ -46,40 +48,57 @@ const PROBE_CONNECT_MS = 20_000;
 //     `--json`/stream output is continuous, so output IS the primary tick; the probe
 //     is a backstop for a long silent tool call. Surfaces a recoverable stall.
 //   - "vcs": a git/jj/gate SSH command that can run silently for minutes (a big
-//     rebase, a clone, a gate suite). The probe (workspace touched) is the PRIMARY
-//     liveness signal. Surfaces a recoverable stall.
+//     rebase, a clone, a gate suite). The probe (workspace tree GROWING — file count
+//     + byte total, not a single mtime) is the PRIMARY liveness signal. Surfaces a
+//     recoverable stall.
 //   - "infra": a side/IO op (read of usage, a small capture). Output-driven only,
 //     no probe; surfaces a stall rather than killing.
 export type WatchdogClass = "agent" | "vcs" | "infra";
 
-// What the liveness probe reads for a silent op: a SIGNATURE of the WORKSPACE state (a
-// build/jj writes files as it works) is the most robust no-PID-tracking signal. Each tick
-// the probe reads the newest mtime under the workspace and RETURNS it as the work-state
-// signature string; the substrate compares the SEQUENCE for genuine advancement (a changing
-// mtime = forward motion, a flat mtime = no new work). A deadlocked/zombied process touches
-// nothing, so its mtime holds flat → an unchanging signature → eventually a fixed point.
+// What the liveness probe reads for a silent op: a STRUCTURAL SIGNATURE of the WORKSPACE
+// state (a build/install/test extracts packages, downloads artifacts, writes output — the
+// file COUNT and total BYTES grow as it works) is the most robust no-PID-tracking signal.
+// Each tick the probe reads the workspace's total file count + total byte size and RETURNS
+// the pair as the work-state signature; the substrate compares the SEQUENCE for genuine
+// advancement (a growing count/bytes = forward motion, a flat count+bytes = no new work).
+// A deadlocked/zombied process writes nothing new, so the pair holds flat → an unchanging
+// signature → eventually a fixed point.
+//
+// WHY NOT THE NEWEST mtime (apex-v45 wedge): the probe USED to return the single newest
+// mtime under the workspace. That conflates "a file was TOUCHED" with "the build ADVANCED"
+// — and a stalled tool that holds a HEARTBEAT LOCK FILE (e.g. playwright's browser-download
+// `.cache/ms-playwright/__dirlock`, re-touched every few seconds while a download is wedged)
+// keeps the newest mtime advancing FOREVER with zero real progress. The probe read that as
+// genuine forward motion, so the watchdog never fired and the job wedged for hours
+// (run_a81f3424, the gate's `just bootstrap` → `playwright install` stalled with a constant
+// 15591-file / 805552244-byte tree while one lock file's mtime ticked). The count+bytes
+// signature is IMMUNE: re-touching one file changes neither, so a lock-heartbeat reads as a
+// fixed point, while genuine work (a download landing, a package unpacking, an artifact
+// written) grows the tree. The trigger remains signature IDENTITY, never elapsed time.
 
 // Build the `livenessProbe` for a workspace-bound op: each tick runs a trivial
-// `find <ws> -printf '%T@\n' | sort | tail` over the substrate to read the newest
-// mtime under the workspace and returns it as the work-state SIGNATURE. The probe's own
-// command runs under a short connect-establishment bound (PROBE_CONNECT_MS) so a
-// wedged side-channel can't stall the tick — a probe that cannot reach the runner
-// returns `undefined` (no signal; the substrate folds that into a non-advancing work
-// signature and surfaces a recoverable stall, never a silent hang). Returns undefined
-// when there is no workspace to watch (output-only class).
+// `find <ws> -type f -printf '%s\n' | awk '{c++; s+=$1} END {print c" "s}'` over the
+// substrate to read the workspace's total file count + total byte size and returns the pair
+// as the work-state SIGNATURE. The probe's own command runs under a short
+// connect-establishment bound (PROBE_CONNECT_MS) so a wedged side-channel can't stall the
+// tick — a probe that cannot reach the runner returns `undefined` (no signal; the substrate
+// folds that into a non-advancing work signature and surfaces a recoverable stall, never a
+// silent hang). Returns undefined when there is no workspace to watch (output-only class).
 function buildWorkspaceLivenessProbe(
   substrate: CommandSubstrate,
   target: RunnerHandle,
   workspace: string,
 ): () => Promise<string | undefined> {
   return async (): Promise<string | undefined> => {
-    // Newest mtime (epoch seconds, float) anywhere under the workspace. `-printf` is
-    // GNU find (the runner image); the `2>/dev/null` swallows races where a file is
-    // removed mid-walk (itself a sign of life). An empty read (workspace gone) yields
-    // no number → no signal.
+    // Total file count + total byte size anywhere under the workspace. `-printf` is GNU
+    // find (the runner image); `awk` folds the per-file sizes into "<count> <bytes>" (the
+    // `BEGIN` init makes an empty tree print "0 0", a valid flat signature). The
+    // `2>/dev/null` swallows races where a file is removed mid-walk (itself a sign of life).
+    // Deliberately NOT the newest mtime — a single heartbeat-touched lock file advances mtime
+    // forever with no real work (apex-v45), but cannot grow the count or the byte total.
     const ws = quoteSshShellArg(workspace);
     const result = await substrate.run(target, {
-      command: `find ${ws} -printf '%T@\\n' 2>/dev/null | sort -n | tail -1`,
+      command: `find ${ws} -type f -printf '%s\\n' 2>/dev/null | awk 'BEGIN{c=0;s=0} {c++; s+=$1} END {print c" "s}'`,
       connectTimeoutMs: PROBE_CONNECT_MS,
     });
     if (result.failure !== undefined || result.stalled === true || result.exitCode !== 0) {
@@ -87,13 +106,21 @@ function buildWorkspaceLivenessProbe(
       // undefined so the substrate treats it as a non-advancing work signature.
       return undefined;
     }
-    const maxMtime = Number.parseFloat(result.stdout.trim());
-    if (!Number.isFinite(maxMtime)) {
+    // `awk` prints "<count> <bytes>"; an unreachable/garbled read yields no two-number
+    // line → no signal.
+    const parts = result.stdout.trim().split(/\s+/u);
+    if (parts.length !== 2) {
       return undefined;
     }
-    // The workspace signature IS the newest mtime: a strictly newer value across checks is
-    // an advancing workspace (genuine progress); an unchanged value is no new work.
-    return `ws:${maxMtime}`;
+    const count = Number.parseInt(parts[0] as string, 10);
+    const bytes = Number.parseInt(parts[1] as string, 10);
+    if (!Number.isFinite(count) || !Number.isFinite(bytes)) {
+      return undefined;
+    }
+    // The workspace signature IS the (count, bytes) pair: a strictly larger count OR byte
+    // total across checks is an advancing workspace (genuine progress — new/growing files);
+    // an unchanged pair is no new work (even if a lock file's mtime keeps ticking).
+    return `ws:${count}:${bytes}`;
   };
 }
 
