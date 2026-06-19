@@ -74,6 +74,104 @@ export interface LandOps {
   ): Promise<void>;
   result(outcome: MergeOutcomeKind, extra?: { mergeSha?: string; message?: string }): MergeForRunResult;
   emitConflict(message: string, headBranch?: string): Promise<MergeForRunResult>;
+  /** Route a clean-tree GATE-tier re-gate FAILURE to writer rework (#594; recoverable). */
+  handlePostRebaseGateFail(gateError: string | undefined): Promise<MergeForRunResult>;
+  /** Emit the recoverable, re-drivable `re_gate_pending` hold (a still-running re-gate; #601). */
+  emitReGatePending(message: string): Promise<MergeForRunResult>;
+}
+
+/**
+ * COMMIT-BINDING RE-GATE on a gated-vs-current HEAD MISMATCH (§5; the v42 strand-the-dependents
+ * finding). The authority lands ONLY when `gatedHeadSha` EQUALS the live head (the §5 "never land
+ * an un-gated commit" guarantee). A never-discard base-shift (jj-rebasing a dependent onto a merged
+ * ancestor) ADVANCES the head but leaves the branch CURRENT with main — so the `behind` auto-rebase
+ * never fires — while the verdict is still for the PRE-base-shift commit; absent a re-gate trigger
+ * the authority fail-closes FOREVER, stranding the dependent + every descendant.
+ *
+ * This is the THIRD re-gate trigger (alongside the `behind` auto-rebase + the CAS-rejection rebase):
+ * when the live head differs from the gated head (for ANY reason), re-gate the CURRENT head REUSING
+ * #601's machinery — `reGateCi` binds a fresh `pre_merge` verdict to the head, a FAILED re-gate
+ * routes to writer rework (#594), a non-terminal one emits the recoverable `re_gate_pending` re-drive
+ * — then REBUILD the bundle so it re-reads the fresh verdict (gatedHeadSha === landingHead). The §5
+ * guarantee is PRESERVED, never weakened: the head is RE-GATED, not bypassed. PROGRESS-based, no cap.
+ *
+ * Fail-closed: a non-passing verdict / absent `gatedHeadSha` already blocks at the authority's gate
+ * input — proceed without a needless re-gate. An unresolvable head, or an absent re-gate hook, HOLDS
+ * recoverably — never a stale-verdict land.
+ */
+export async function reGateOnGatedHeadMismatch(
+  deps: DispatcherDeps,
+  ops: LandOps,
+  bundle: MergeAuthorityBundle,
+  mergeability: PullRequestMergeability,
+): Promise<{ kind: "proceed"; bundle: MergeAuthorityBundle } | { kind: "halt"; result: MergeForRunResult }> {
+  const { input, eventStore, context } = deps;
+  // No PASSING verdict / no recorded gated sha ⇒ the authority's gate input already blocks on
+  // its own; there is no stale-verdict-vs-fresh-head mismatch to repair. Proceed (the authority
+  // fail-closes on the gate input — the correct outcome, never a re-gate that would launder a
+  // not-yet-gated head into a pass).
+  if (bundle.gateOutcome?.passed !== true || bundle.gatedHeadSha === undefined) {
+    return { kind: "proceed", bundle };
+  }
+  // The head branch is the one the attempt already resolved (the SAME `mergeability` the
+  // authority judges — no extra probe read).
+  const headBranch = mergeability.headBranch;
+  if (headBranch === "") {
+    // No resolvable head branch ⇒ cannot bind/verify — HOLD recoverably (never land blind).
+    return { kind: "halt", result: await ops.emitConflict("cannot resolve PR head branch to re-gate — held") };
+  }
+  const currentHead = await bundle.codeHost.fetchRef({ repo: deps.pr.repo, remoteBranch: headBranch });
+  if (currentHead === undefined) {
+    const result = await ops.emitConflict(`cannot resolve current head sha for '${headBranch}' to re-gate — held`);
+    return { kind: "halt", result };
+  }
+  if (currentHead === bundle.gatedHeadSha) {
+    // The verdict IS for the live head (the common case) — no re-gate needed; land it.
+    return { kind: "proceed", bundle };
+  }
+  // The head advanced past the gated commit (a base-shift / concurrent push). Re-gate the
+  // CURRENT head before the authority decides — the verdict must bind to the landing commit.
+  const reGate = input.reGateCi;
+  if (reGate === undefined) {
+    // No re-gate hook wired ⇒ cannot verify the advanced head — HOLD recoverably (the recovery
+    // surface re-drives once the hook is present), never a stale-verdict land.
+    const result = await ops.emitConflict(
+      `gated head '${bundle.gatedHeadSha}' != current head '${currentHead}' but no re-gate hook is wired — held`,
+    );
+    return { kind: "halt", result };
+  }
+  const ci = await reGate({ rebasedHeadSha: currentHead });
+  await eventStore.append({
+    ...ops.base(),
+    eventType: "merge.rebased",
+    payload: {
+      ...ops.prFields(),
+      integration: ops.mergeLabel(),
+      baseBranch: context.baseBranch,
+      headBranch,
+      reGatedCi: ci !== undefined,
+    },
+  });
+  if (ci?.status === "failed") {
+    // The current head fails a GATE tier — the WRITER can fix it on the advanced base. Route to
+    // writer rework (#594 never-discard re-author), recoverable — never a stale-verdict land.
+    return { kind: "halt", result: await ops.handlePostRebaseGateFail(ci.gateError) };
+  }
+  if (ci?.status === "pending") {
+    // The re-gate has not reached a terminal verdict — still running / infra blip, NOT
+    // non-convergence. Emit the recoverable `re_gate_pending` re-drive (the coordinator re-runs
+    // the gate next tick), never a busy hold or a dequeue.
+    return {
+      kind: "halt",
+      result: await ops.emitReGatePending("re-gate not yet terminal on the base-shift-advanced head"),
+    };
+  }
+  // The current head PASSED the fresh re-gate. REBUILD the bundle so it re-reads the fresh
+  // `pre_merge` verdict — now anchored to `currentHead` — making `gatedHeadSha === landingHead`
+  // hold at the authority. Absent a rebuild thunk (a pre-supplied bundle / test seam that
+  // re-gates against the same head) we reuse the bundle (it is not stale for that caller).
+  const rebuilt = input.buildMergeAuthority === undefined ? bundle : await input.buildMergeAuthority();
+  return { kind: "proceed", bundle: rebuilt };
 }
 
 /**
@@ -112,8 +210,18 @@ async function landViaAuthorityAttempt(
   // §5h: the freshness signal the authority gates on is the `CodeHost`-derived ancestry
   // (`clean`/`behind`/`unknown`) — never the GitHub `mergeable_state`. Only `clean` clears.
   const mergeability = await deps.probe.readFreshness();
+  // COMMIT-BINDING RE-GATE (§5; v42): before the authority judges, ensure the verdict binds to the
+  // LIVE head — a base-shift / concurrent push advances the head WITHOUT a `behind` state, so the
+  // stale verdict would fail-close the authority forever with no re-gate trigger. Detect the
+  // mismatch HERE (reusing this attempt's `mergeability` — no extra probe) and re-gate the current
+  // head (#601 machinery); a passing re-gate REBUILDS the bundle (fresh verdict for the live head).
+  const reGated = await reGateOnGatedHeadMismatch(deps, ops, bundle, mergeability);
+  if (reGated.kind === "halt") {
+    return reGated.result;
+  }
+  const landBundle = reGated.bundle;
   const disposition = await runAuthorityLand({
-    bundle,
+    bundle: landBundle,
     mergeability,
     context: {
       repo: { owner: pr.repo.owner, name: pr.repo.name },
@@ -136,7 +244,7 @@ async function landViaAuthorityAttempt(
       // findings are handled per the project posture (§4): route-to-dag emits
       // them as new DAG specs; fix-if-idle carries them forward (the land just merged,
       // so the spec is no longer idle-awaiting-review). Record the disposition.
-      await recordPostureRouting(deps, ops, bundle);
+      await recordPostureRouting(deps, ops, landBundle);
       return ops.result("merged", { mergeSha: disposition.mainSha });
     }
     case "needs_attention": {
@@ -167,7 +275,7 @@ async function landViaAuthorityAttempt(
       // (an unprotected repo never reports `behind`, so the old `emitConflict` terminally
       // dequeued the 2nd batch member). Bounded by `casRetries`; the fallback is a
       // recoverable hold, never a terminal dequeue.
-      return rebaseOnCasAndRetry(deps, ops, bundle, mergeability, disposition.reason, casHistory);
+      return rebaseOnCasAndRetry(deps, ops, landBundle, mergeability, disposition.reason, casHistory);
     case "merge_state_unknown": {
       // The host advanced `main` but the durable record FAILED — NEVER a silent
       // inconsistency: hold loudly for reconciliation.

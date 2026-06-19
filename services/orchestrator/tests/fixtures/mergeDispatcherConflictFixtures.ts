@@ -100,6 +100,7 @@ export function context(): ReviewMergeRunContext {
     projectId: "proj_1",
     prUrl: "https://github.com/o/r/pull/1",
     baseBranch: "main",
+    headBranch: "feat",
     mergeIntegration: "direct_merge",
     governancePosture: "open",
     policyVersion: 1,

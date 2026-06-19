@@ -64,10 +64,9 @@ export class MergeDispatcher implements LandOps {
   }
 
   /**
-   * The integration label the directMerge path stamps on its events. `direct_merge`
-   * for the immediate-merge mode; `native_queue` when the coordinator DRIVES the
-   * SAME path for a queued head — so the events read `native_queue` without a
-   * second merge implementation. Only these two modes reach directMerge.
+   * The integration label the directMerge path stamps on its events. `direct_merge` for the
+   * immediate-merge mode; `native_queue` when the coordinator DRIVES the SAME path for a queued
+   * head — so the events read `native_queue` without a second merge impl. Only these reach here.
    */
   mergeLabel(): "direct_merge" | "native_queue" {
     return this.deps.integration === "native_queue" ? "native_queue" : "direct_merge";
@@ -289,13 +288,8 @@ export class MergeDispatcher implements LandOps {
       return { kind: "halt", result: await this.handlePostRebaseGateFail(ci.gateError) };
     }
     if (ci?.status === "pending") {
-      // The native re-gate did not reach a TERMINAL verdict within its budget — the gate is
-      // STILL RUNNING / an infra blip, NOT non-convergence (a human would say "wait for it").
-      // Emit the RE-DRIVE-RECOVERABLE hold (a `blocked` outcome), NOT the dequeue-and-abandon
-      // `conflict`: the entry stays queued and the coordinator re-runs the native gate on the
-      // next tick until it reaches a terminal verdict. The coordinator's recoverable-drive hold
-      // re-drives UNBOUNDED while progressing and escalates ONLY via the convergence detector
-      // (the same `pending` recurring with no progress) — never a fixed budget/count.
+      // The native re-gate is not yet TERMINAL (still running / infra blip), NOT non-convergence:
+      // emit the recoverable, re-drivable `re_gate_pending` hold (see `emitReGatePending`).
       return {
         kind: "halt",
         result: await this.emitReGatePending("native re-gate not yet terminal after auto-rebase"),
@@ -305,24 +299,21 @@ export class MergeDispatcher implements LandOps {
   }
 
   /**
-   * A post-auto-rebase re-gate FAILED a GATE tier on a cleanly-rebased branch. Route the spec
-   * to WRITER REWORK with the gate error as steering (the #594 never-discard re-author, extended
-   * to this auto-rebase path), then emit the RECOVERABLE `conflict` outcome so the coordinator
-   * lets the entry leave its slot WHILE the reworked spec re-runs and re-enters the queue — NOT
-   * a terminal `merge.failed` that stranded a fixable spec. Absent a rework router (an
-   * out-of-band/test caller) ⇒ fall back to the recoverable-conflict hold (never a silent merge,
-   * never a terminal failure).
+   * A re-gate FAILED a GATE tier on a cleanly-rebased/advanced branch. Route the spec to WRITER
+   * REWORK with the gate error as steering (the #594 never-discard re-author), then emit the
+   * RECOVERABLE `conflict` outcome so the entry leaves its slot WHILE the reworked spec re-runs
+   * and re-enters the queue — NOT a terminal `merge.failed` that stranded a fixable spec. Absent
+   * a rework router (an out-of-band/test caller) ⇒ the recoverable-conflict hold (never a silent
+   * merge, never a terminal failure).
    */
-  private async handlePostRebaseGateFail(gateError: string | undefined): Promise<MergeForRunResult> {
+  async handlePostRebaseGateFail(gateError: string | undefined): Promise<MergeForRunResult> {
     const { input, context, eventStore } = this.deps;
     const error = gateError ?? "post-rebase pre_merge gate failed (no gate detail reported)";
     if (input.reGateGateRework !== undefined) {
       await input.reGateGateRework.routeGateFailToRework({ specId: context.specId, gateError: error });
-      // The spec is now being re-authored on the new base (the router re-opened it + enqueued a
-      // fresh run, OR — at a convergence fixed point — escalated to needs_attention). Emit the
-      // recoverable `conflict` outcome so this stale entry leaves the merge slot; the reworked
-      // run re-enters the queue with a fresh entry. The recovery is REAL (a run is in flight),
-      // unlike the old terminal `merge.failed`.
+      // The spec is now being re-authored on the new base (re-opened + enqueued, OR — at a
+      // convergence fixed point — escalated). Emit the recoverable `conflict` so this stale entry
+      // leaves the merge slot; the reworked run re-enters the queue (a REAL in-flight recovery).
       await eventStore.append({
         ...this.base(),
         eventType: "merge.conflict",
@@ -336,19 +327,18 @@ export class MergeDispatcher implements LandOps {
       await this.finalize("conflict", { taskOutcome: "pending", taskStatus: "running" });
       return this.result("conflict", { message: `post-rebase gate failed — routed to writer rework: ${error}` });
     }
-    // No rework router wired (out-of-band/test caller): hold recoverably (never a silent merge,
-    // never the old terminal failure) so the recovery surface can re-drive.
+    // No rework router wired (out-of-band/test caller): hold recoverably so the recovery surface
+    // can re-drive (never a silent merge, never the old terminal failure).
     return this.emitConflict(`post-rebase gate failed: ${error}`);
   }
 
   /**
-   * The native re-gate did not reach a TERMINAL verdict within its budget (still running / an
-   * infra blip) — "not done yet", NOT non-convergence. Emit a RE-DRIVE-RECOVERABLE `blocked`
-   * outcome (the coordinator re-runs the gate next tick, unbounded while progressing) rather
-   * than the dequeue-and-abandon `conflict` that bricked the live run. Records the recoverable
-   * `merge.regate_pending` signal so the hold is observable.
+   * The re-gate did not reach a TERMINAL verdict (still running / an infra blip) — "not done
+   * yet", NOT non-convergence. Emit a RE-DRIVE-RECOVERABLE hold (the coordinator re-runs the gate
+   * next tick, unbounded while progressing) rather than the dequeue-and-abandon `conflict` that
+   * bricked the live run. Records the recoverable `merge.regate_pending` signal (observable).
    */
-  private async emitReGatePending(message: string): Promise<MergeForRunResult> {
+  async emitReGatePending(message: string): Promise<MergeForRunResult> {
     const { eventStore } = this.deps;
     await eventStore.append({
       ...this.base(),
