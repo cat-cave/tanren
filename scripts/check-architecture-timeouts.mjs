@@ -90,6 +90,17 @@ const deadlinePattern = /(?:Date\.now\(\)|performance\.now\(\))\s*\+[^;\n]*(dead
 const quietWindowPattern =
   /\b(quiet|idle|noOutput|lastOutput|sinceOutput|stallMs|inactivity)[A-Za-z0-9_$]*\s*(?:[<>]=?|=)\s*[A-Za-z0-9_$]*(?:Ms|MS|Millis|Timeout)\b/gu;
 
+// (f) ssh2 connect-config socket idle-timeout — a DISGUISED wall-clock deadline on the
+// running command. In ssh2 1.17.0, the `timeout` field in the connect config is forwarded
+// to the underlying socket as socket.setTimeout (a connection-LIFETIME idle timeout), NOT
+// a handshake-only bound. A `timeout:` in what looks like an object literal is therefore a
+// banned wall-clock timer on a running command (apex v44 root cause, fixed in this PR).
+// The pattern catches `timeout:` as an object-property assignment (with optional leading
+// whitespace, a bare word `timeout` followed by `:`) — the shape of the ssh2 connect config
+// field. The ONLY allowed option is `readyTimeout:` (handshake bound); use `keepaliveInterval`
+// + `keepaliveCountMax` to detect a dead connection without killing a quiet-but-alive command.
+const ssh2SocketIdleTimeoutPattern = /^\s*timeout\s*:/u;
+
 // (e) banned identifier DECLARATIONS — the 600_000 timeout family + the attempt-cap family.
 // Matches a const/let/field declaration of a name in the banned taxonomy.
 const bannedIdentifierPatterns = [
@@ -175,6 +186,13 @@ function violationsInLine(code) {
   }
   for (let i = [...code.matchAll(quietWindowPattern)].length; i > 0; i -= 1) {
     found.push("fixed quiet-window / no-output-for-N watchdog (a DISGUISED timeout) — use a LivenessProbe");
+  }
+  if (ssh2SocketIdleTimeoutPattern.test(code)) {
+    found.push(
+      "ssh2 connect-config `timeout:` is a socket-LIFETIME idle timeout (NOT a handshake bound) — a DISGUISED" +
+        " wall-clock deadline on the running command (apex v44 root cause); remove it and use `keepaliveInterval`" +
+        " + `keepaliveCountMax` to detect a dead connection without killing a quiet-but-alive command",
+    );
   }
   // Identifier families (banned declarations + give-up counters). Dedupe by the captured
   // identifier; a banned-family hit wins over a give-up hit for the same identifier; skip

@@ -206,8 +206,13 @@ export class StaticRunnerAllocator implements Allocator {
           // successful finish.
           return false;
         },
+        // `readyTimeout` bounds the handshake — the ONE legitimate time bound here.
+        // We omit ssh2's `timeout` option: in ssh2 1.17.0 it is forwarded to the
+        // socket as a connection-LIFETIME idle timeout (socket.setTimeout), NOT a
+        // handshake-only bound. The separate `setTimeout` above already guards the
+        // whole discovery op; adding a socket idle timeout here is redundant and
+        // follows the same disguised-wall-clock-deadline anti-pattern (apex v44).
         readyTimeout: timeoutMs,
-        timeout: timeoutMs,
       });
     });
   }

@@ -184,7 +184,20 @@ export class SshCommandSubstrate implements CommandSubstrate {
       const connectMs = this.options.connectTimeoutMs ?? command.connectTimeoutMs ?? DEFAULT_CONNECT_ESTABLISH_MS;
       // The connect-ESTABLISHMENT timeout (handshake only): a connection that never
       // comes up has no running work to lose. This is the ONE legitimate time bound;
-      // it governs the handshake, never the running command (the watchdog owns that).
+      // it governs ONLY the handshake — once the channel is up the command runs
+      // UNBOUNDED, governed solely by the ActivityWatchdog (progress-based).
+      // NOTE: we deliberately omit ssh2's `timeout` connect-config option. In ssh2
+      // 1.17.0, `timeout` is forwarded to the underlying socket as a connection-
+      // LIFETIME idle timeout (socket.setTimeout) — NOT a handshake-only bound. A
+      // codex command with >30s reasoning gaps (no stdout) would fire the ssh2
+      // 'timeout' event mid-run and kill a still-alive command, which is a disguised
+      // wall-clock deadline (the whole class eradicated in #609–#622). `readyTimeout`
+      // is the correct handshake-only bound and is all we need here.
+      // Keepalive detects a genuinely DEAD TCP connection (the legitimate concern the
+      // socket idle-timeout was crudely serving) without killing a working-but-silent
+      // command. The runner sshd sets ClientAliveInterval 60 / ClientAliveCountMax
+      // 1440; we mirror that posture — probes every 15s, declare dead only after 1440
+      // unanswered probes (~6 hours of silence on a dead socket, never a live one).
       client.once("timeout", () => fail(`SSH connection failed to establish within ${connectMs}ms`));
       client.connect({
         host: target.host,
@@ -201,7 +214,8 @@ export class SshCommandSubstrate implements CommandSubstrate {
           return matches;
         },
         readyTimeout: connectMs,
-        timeout: connectMs,
+        keepaliveInterval: 15_000,
+        keepaliveCountMax: 1440,
         algorithms:
           this.options.serverHostKeyAlgorithms === undefined
             ? undefined
