@@ -45,6 +45,7 @@ import { resolveVcsToken } from "../credentials/vcsCredentials.js";
 import type { GitHubHttpClient } from "./github.js";
 import { githubHttpsRemote, parseGitHubRepository } from "./github.js";
 import type { GithubAppTokenMinter } from "./githubAppTokenMinter.js";
+import { runWithJobOrgId } from "@tanren/db";
 import { createLogger } from "../observability/logger.js";
 
 const log = createLogger("live-jj-workspace");
@@ -154,10 +155,18 @@ export async function buildLiveJjWorkspace(deps: LiveJjWorkspaceDeps): Promise<L
       return;
     }
     released = true;
-    await deps.allocator.release(allocation.runnerId, "completed").catch((error: unknown) => {
-      log.error("FAILED to release runner — leaked runner", { runnerId: allocation.runnerId, handle }, error);
-      throw error;
-    });
+    // ORG-SCOPE THE RELEASE: `release()` is invoked LATER (on terminal publish/abort or
+    // fail-closed catch) from a different async context where the build-time ambient org
+    // scope (`runWithJobOrgId`) is gone. `allocator.release()` writes the tenant `runners`
+    // table through `withJobOrgScope`, which FAILS LOUDLY with no ambient org scope. Re-
+    // establish `facts.orgId` around the release so the write is admitted by RLS regardless
+    // of when or from where the finalizer fires — identical to the base-shift seam fix (PR #634).
+    await runWithJobOrgId(facts.orgId, () => deps.allocator.release(allocation.runnerId, "completed")).catch(
+      (error: unknown) => {
+        log.error("FAILED to release runner — leaked runner", { runnerId: allocation.runnerId, handle }, error);
+        throw error;
+      },
+    );
   };
 
   try {

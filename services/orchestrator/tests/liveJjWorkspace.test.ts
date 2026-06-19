@@ -2,12 +2,17 @@
 // (engine/providers/liveJjWorkspace.ts). Not gated — drives the factory with fakes (no
 // live runner), so it runs in `just fast-check`.
 //
-// The BLOCKING guarantee under test: when the build fails AFTER a runner is allocated
-// (here: the clone-token resolution throws) AND the cleanup `release()` ALSO fails (the
-// runner ACTUALLY leaks), the thrown error must surface BOTH faults and NAME the leaked
-// runnerId — a leaked runner is NEVER swallowed, even during error cleanup.
+// Guarantees under test:
+//   1. FAIL-CLOSED / NO-LEAK: when the build fails AFTER a runner is allocated (here: the
+//      clone-token resolution throws) AND the cleanup `release()` ALSO fails (the runner
+//      ACTUALLY leaks), the thrown error must surface BOTH faults and NAME the leaked
+//      runnerId — a leaked runner is NEVER swallowed, even during error cleanup.
+//   2. ORG-SCOPE: `release()` establishes the run's `facts.orgId` via `runWithJobOrgId`
+//      before calling `allocator.release`, so the tenant-table write is admitted by RLS
+//      regardless of which async context the finalizer fires from (apex v43 P0 fix).
 
 import { describe, expect, it, vi } from "vitest";
+import { getJobOrgId } from "@tanren/db";
 import {
   sshRunnerHandle,
   type AllocationRequest,
@@ -158,6 +163,46 @@ describe("buildLiveJjWorkspace — fail-closed / no-leak error path", () => {
     // Exactly one allocator.release — the second call short-circuited (idempotent).
     expect(allocator.releasedRunnerIds).toHaveLength(1);
     expect(allocator.releasedRunnerIds[0]).toMatch(/^runner_run_live_jj_/u);
+  });
+
+  it("release() establishes facts.orgId via runWithJobOrgId before calling allocator.release", async () => {
+    // P0 ORG-SCOPE FIX (apex v43): `release()` is called from a terminal async context
+    // that may have NO ambient org scope (the build-time `runWithJobOrgId` is gone).
+    // The allocator's `release()` writes the tenant `runners` table through
+    // `withJobOrgScope`, which FAILS with no ambient scope → leaked runner (58 leaked
+    // in apex v43 run). This test proves the fix: `getJobOrgId()` returns `facts.orgId`
+    // INSIDE the allocator's `release`, even when `release()` itself is called from a
+    // scope with NO ambient org id.
+    let capturedOrgId: string | undefined;
+    const orgCapturingAllocator: Allocator = {
+      async allocate(request: AllocationRequest): Promise<RunnerAllocation> {
+        return {
+          runnerId: `runner_${request.runId}`,
+          target: TARGET,
+          imageSha: `${request.runnerImage}@sha256:fake`,
+        };
+      },
+      async release(_runnerId: string): Promise<void> {
+        // Read the ambient org id INSIDE the release call — the fix wraps this in
+        // `runWithJobOrgId(facts.orgId, …)` so `getJobOrgId()` returns the run's org.
+        capturedOrgId = getJobOrgId();
+      },
+    };
+    const okSecrets = new FakeSecretStore();
+    await okSecrets.put({ ref: "github/static/token", value: "ghp_fake" });
+    const ws = await buildLiveJjWorkspace({
+      ...deps(orgCapturingAllocator),
+      secrets: okSecrets,
+      githubHttp: staticTokenGitHubHttp(),
+    });
+
+    // Call release() from a context with NO ambient org scope (simulates the deferred
+    // terminal/abort context where the fix is required — no surrounding runWithJobOrgId).
+    expect(getJobOrgId()).toBeUndefined();
+    await ws.release();
+
+    // The allocator's release ran with the run's orgId in scope (RLS admitted).
+    expect(capturedOrgId).toBe("org_test");
   });
 });
 

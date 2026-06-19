@@ -17,6 +17,7 @@
 // logged. The runner is ALWAYS released (loud-on-leak in the finally).
 
 import { randomUUID } from "node:crypto";
+import { runWithJobOrgId } from "@tanren/db";
 import type { Allocator, RunnerHandle } from "../contracts/allocator.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
@@ -135,17 +136,26 @@ export async function runFreshRunnerMergeGate(
     return { outcome, headSha };
   } finally {
     // LOUD on release error: a leaked runner is a real fault (cost + capacity).
-    await deps.allocator.release(allocation.runnerId, "completed").catch((error: unknown) => {
-      log.error(
-        "FAILED to release fresh-runner re-gate runner — leaked runner",
-        {
-          runnerId: allocation.runnerId,
-          runId: ctx.runId,
-        },
-        error,
-      );
-      throw error;
-    });
+    // ORG-SCOPE THE RELEASE: the `finally` fires after the gate completes, in the same
+    // async context — but the caller (driveCi.ts `buildReGateCiForQueuedRun`) does NOT
+    // wrap `runFreshRunnerMergeGate` in `runWithJobOrgId`, so there is NO ambient org
+    // scope here. `allocator.release()` writes the tenant `runners` table through
+    // `withJobOrgScope`, which FAILS LOUDLY with no ambient scope → leaked runner. Re-
+    // establish `ctx.orgId` around the release so the write is admitted by RLS regardless
+    // of which caller invokes this gate — identical to the liveJjWorkspace fix.
+    await runWithJobOrgId(ctx.orgId, () => deps.allocator.release(allocation.runnerId, "completed")).catch(
+      (error: unknown) => {
+        log.error(
+          "FAILED to release fresh-runner re-gate runner — leaked runner",
+          {
+            runnerId: allocation.runnerId,
+            runId: ctx.runId,
+          },
+          error,
+        );
+        throw error;
+      },
+    );
   }
 }
 
