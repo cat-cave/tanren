@@ -44,6 +44,12 @@ const WRITER_CONTRACT_INSTRUCTION =
 // Steers the writer to satisfy the gate on the first pass: run the fast deterministic
 // gate (fmt/lint/typecheck) BEFORE finishing — a fast-gate failure loops straight back
 // to it — then names the CHECKER (completeness) + AUDITOR (quality) bars it is judged on.
+// Also covers DERIVED-ARTIFACT reconciliation (the apex-v43 lockfile-staleness finding):
+// any change to a source that has a generated companion must regenerate that companion
+// and commit it, because the gate may run a strict/frozen check against it (e.g. a
+// frozen-lockfile install that fails instantly on a stale lockfile). Stack-agnostic —
+// this is framed in terms of the project's DECLARED lifecycle commands (whatever the
+// stack), never specific tools or package managers.
 const WRITER_GRADING_INSTRUCTION =
   "How your change will be graded — satisfy these BEFORE you finish: a FAST " +
   "deterministic gate runs first (formatting, lint, typecheck) — RUN it yourself " +
@@ -52,9 +58,21 @@ const WRITER_GRADING_INSTRUCTION =
   "FORMATTING failure is mechanical: run the project's declared format-WRITE step (the " +
   "one its lifecycle/justfile defines — e.g. its format/fix recipe, NOT just the " +
   "check) over EVERY file you touched, then re-run the check — never hand back the same " +
-  "unformatted output. Then a CHECKER judges whether your change COMPLETES the subtask " +
-  "intent + every relevant acceptance criterion (leave it complete and self-contained), " +
-  "and an AUDITOR reviews quality/security/perf (write correct, secure, clean code).";
+  "unformatted output. RECONCILE generated companions: when your change modifies a " +
+  "source that has a generated or derived companion — a dependency lockfile derived " +
+  "from a manifest, generated code, formatted output, snapshots — run the project's " +
+  "DECLARED command that regenerates that companion and COMMIT the result alongside " +
+  "your change. The gate may run a strict frozen check (e.g. a frozen-lockfile install) " +
+  "that fails instantly if the companion is stale, so a manifest edit without a " +
+  "matching regenerated lockfile will be rejected before any reviewer sees it. " +
+  "Specifically for dependency changes: after editing a package manifest, run the " +
+  "project's declared install or bootstrap step so the lockfile is regenerated to match, " +
+  "and commit both together. 'Upgrade to latest' means bump to newer PUBLISHED versions " +
+  "(then regenerate the lockfile) — rewriting version-range syntax to an equivalent " +
+  "range is NOT an upgrade and will break a frozen-lockfile gate. Then a CHECKER " +
+  "judges whether your change COMPLETES the subtask intent + every relevant acceptance " +
+  "criterion (leave it complete and self-contained), and an AUDITOR reviews " +
+  "quality/security/perf (write correct, secure, clean code).";
 
 // Does a rejection reason indicate the writer EDITED an immutable contract file? Detected by
 // the contract-file PATH appearing in the reason (the checker/auditor/gate name the offending
