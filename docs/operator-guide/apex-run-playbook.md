@@ -12,10 +12,10 @@ alone. The run **rhythm** (drive → halt → fix-on-`main` → drain the backlo
 rebuild → fresh `v(N+1)`) and **what each run proves** live in `apex.md`; this doc
 is the mechanical "how to drive a single run" half.
 
-> **Run naming.** Each trial is `vN` (the trials have run through **v36**; **v37 has
-> not yet run** — see `apex.md` for the honest proof state). Runs are **disposable**
-> — `main` only moves forward; you never patch a run or its generated repo (see
-> `apex.md`).
+> **Run naming.** Each trial is `vN` (the trials have run through **v46** as of
+> 2026-06-19 — see `apex.md` for the honest proof state; the full autonomy loop
+> has not yet closed end-to-end). Runs are **disposable** — `main` only moves
+> forward; you never patch a run or its generated repo (see `apex.md`).
 
 ---
 
@@ -212,7 +212,7 @@ lift the platform a quality tier, then rebuild from fresh `origin/main` and star
 
 ---
 
-## What the trials have proven so far (through v36)
+## What the trials have proven so far (through v46)
 
 The trials (driven over this exact playbook, BYOK Codex, $0) have proven **live**:
 DAG-build from a real Forge interview (rough notes → a multi-spec DAG), walker
@@ -220,15 +220,21 @@ auto-execution, the writer authoring a scaffold, just-in-time template creation,
 cost-discipline (loud NULL costs), `needs_attention` escalation + clean runner
 release, and the never-discard re-drive + recovery paths. Each halt root-caused a
 real bug fixed on `main` — early ones (bootstrap frozen-lockfile #496,
-runner-sweeper #497, templating re-architecture #498) and the later
-non-convergence / merge-re-gate / timeout-eradication chain (#585–#609).
+runner-sweeper #497, templating re-architecture #498), the non-convergence /
+merge-re-gate / timeout-eradication chain (#585–#609), and the v37–v46 cluster:
+runner-release org-scope leak (#636), writer must regenerate+commit derived
+companions before the frozen gate (#637), ssh2 socket idle-timeout killing long
+codex runs (#638), descendant `ancestor_not_ready` hot-loop (#639), and the
+job-stall watchdog gap where a lock-heartbeat fooled a mtime-only liveness probe
+(#640). v46 was the healthiest and furthest run — gates passing, scaffold flowing
+writer→gate→checker, 0 leaks — interrupted by a planned reboot before a merge.
 
-**What is NOT yet proven:** the full autonomy loop **with a live deploy**. v36
-proved #601 recovery on the template-creation loop (~10/11) but did **not** close
-the product → live-deploy loop. The loops past a CI-green PR — deploy → issue-loop
-→ audits → CI-intelligence → notifications — **remain to demonstrate live in v37+**.
-The native **design subsystem** is now wired into derive (a `DesignContract` is
-captured and verified against the build); see `apex.md` for the v37 readiness state.
+**What is NOT yet proven:** the full autonomy loop **with a live deploy**. No run
+has yet produced a merged spec, a product build, an issue→triage→fix cycle, or a
+deploy. The loops past a CI-green merged PR — deploy → issue-loop → audits →
+CI-intelligence → notifications — **remain to demonstrate live**. The native
+**design subsystem** is wired into derive (a `DesignContract` is captured and
+verified against the build); see `apex.md` for the full honest proof state.
 
 ## Where this fits
 

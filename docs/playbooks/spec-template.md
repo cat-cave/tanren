@@ -34,4 +34,4 @@ SPEC-B
   -> SPEC-D
 ```
 
-Only fan out with parallel worktrees or Mergify stacks after the shared contracts at the top of the graph are stable enough for downstream specs to consume.
+Only fan out with parallel worktrees after the shared contracts at the top of the graph are stable enough for downstream specs to consume.

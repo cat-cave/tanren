@@ -11,25 +11,30 @@ contract for the human/orchestrator driving the run.**
 > **[apex-run-playbook.md](./apex-run-playbook.md)**. Read THIS doc first (the role
 > and the rhythm below), then drive from the playbook.
 
-> **Where the trials stand (through v36; v37 not yet run).** The trials have run
-> through **v36** and surfaced a long chain of real bugs — all fixed on `main` (the
-> `(v35)` / `apex-v3x` commits): the never-discard re-drive paths (#585–#594), the
-> intelligent non-convergence detection that replaced hardcoded attempt caps
-> (#593), merge re-gating that routes a gate failure to writer rework instead of
-> bricking the DAG (#601), and the timeout/retry-cap eradication (#608/#609 — a run
-> is never killed by elapsed time; recovery is progress/sign-of-life based). **v36
-> proved #601 recovery on the template-creation loop (reaching ~10/11) but did NOT
-> close the product → live-deploy loop.** The full autonomy loop with a live deploy
-> is therefore **still apex-unproven** — deploy → issue-loop → audits →
-> CI-intelligence → notifications remain to demonstrate live.
+> **Where the trials stand (through v46, as of 2026-06-19).** The trials have run
+> through **v46** and surfaced a long chain of real bugs — all fixed on `main`:
+> the never-discard re-drive paths (#585–#594), the intelligent non-convergence
+> detection that replaced hardcoded attempt caps (#593), merge re-gating that
+> routes a gate failure to writer rework instead of bricking the DAG (#601), the
+> timeout/retry-cap eradication (#608/#609 — a run is never killed by elapsed
+> time; recovery is progress/sign-of-life based), and a cluster of v37–v46 fixes:
+> runner-release org-scope leak (#636), writer must regenerate+commit derived
+> companions (lockfile) before the frozen gate (#637), ssh2 connect-config
+> socket idle-timeout killing long codex runs (#638), descendant
+> `ancestor_not_ready` hot-loop (#639), and the job-stall watchdog gap where a
+> lock-heartbeat fooled a mtime-only probe (#640 — structural file-count+bytes
+> probe + progress-based backstop). **v46 was the healthiest and furthest run yet
+> (gates passing, scaffold flowing writer→gate→checker, 0 leaks) and was
+> interrupted by a planned reboot before a merge.** The full autonomy loop has
+> **STILL NOT closed end-to-end** — no merged spec, no product build, no
+> issue→triage→fix, no deploy yet; those remain to demonstrate live.
 >
-> The **native design subsystem** is now part of the build: WS-D1..D4 are merged
-> and the design loop (author → inject → verify → re-drive) **closes end-to-end** in
-> a CI-gated eval harness (no live LLM). The v37 readiness verdict
-> (`docs/roadmap/native-design-subsystem.md`) is **READY for a scoped exercise** —
-> so a real v37 run captures a `DesignContract` at derive and exercises design
-> fidelity at the contract-coverage + static-readability bar (rendered-pixel
-> fidelity / WS-D4a live-render is scoped out). **v37 has NOT been run.**
+> The **native design subsystem** is part of the build: WS-D1..D4 are merged
+> and the design loop (author → inject → verify → re-drive) closes end-to-end
+> in a CI-gated eval harness (no live LLM). A real run now captures a
+> `DesignContract` at derive and exercises design fidelity at the
+> contract-coverage + static-readability bar (rendered-pixel fidelity / WS-D4a
+> live-render is scoped out).
 
 ## What is under test — and what is NOT
 
@@ -169,8 +174,8 @@ autonomous software org**. The proofs:
   only (the playbook is written to make it reproducible).
 - **standing code-integrity** — the adversarial Codex audit over the platform code.
 
-The runs **through v36** advanced the autonomy-loop (DAG-build, walker
+The runs **through v46** advanced the autonomy-loop (DAG-build, walker
 auto-execution, template-creation, the never-discard re-drive + recovery paths),
-run-discipline, and code-integrity proofs. The loops **past a CI-green PR**
+run-discipline, and code-integrity proofs. The loops **past a CI-green merged PR**
 (deploy → issue-loop → audits → CI-intelligence → notifications) remain to
-demonstrate live in **v37+**.
+demonstrate live in the next run.
