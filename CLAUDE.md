@@ -36,18 +36,23 @@ the live-validation vehicle (a whole-product loop merging through the
 jj/`MergeAuthority` path is the open validation item), but the engine is the single
 path regardless. Rationale: `docs/architecture/tanren-owns-the-engine.md`.
 
-**Two doctrine programs have since landed in full.** (1) **Timeout/retry-cap
-eradication is DONE + CI-gated** (#609–#622): NO arbitrary timeouts, retry caps, or
-wall-clock deadlines anywhere — the engine is PROGRESS / SIGN-OF-LIFE based
-(`ActivityWatchdog` + `retryUntilConverged` wrapping `convergenceDetector`; the
-`scripts/check-architecture-timeouts.mjs` lint is CI-gating). A working agent runs
-**unbounded**; kill only on evidence of death. See
-`docs/roadmap/timeout-eradication.md`. (2) **The native DESIGN subsystem is BUILT +
-wired** (WS-D1..D4): a domain-general persisted `DesignContract` injected into the
-writer + a domain-aware design oracle re-driving the writer in the same DAG (no
-handoff seam), bound to first-class personas + behaviors. It is **not yet exercised
-on a live run** — a scoped exercise for the next apex run (visual pixel-fidelity is
-the WS-D4a follow-on). See `docs/roadmap/native-design-subsystem.md`.
+**Two doctrine programs have since landed.** (1) **Timeout/retry-cap eradication —
+the explicit family is eradicated + CI-gated** (#609–#622): the engine is PROGRESS /
+SIGN-OF-LIFE based (`ActivityWatchdog` + `retryUntilConverged` wrapping
+`convergenceDetector`; the `scripts/check-architecture-timeouts.mjs` lint is
+CI-gating). A working agent runs **unbounded**; kill only on evidence of death.
+**However the eradication was NOT 100% complete at ship**: apex v44/v45 surfaced two
+_disguised_ survivors the initial lint missed — (a) the ssh2 connect-config `timeout:`
+socket idle-timeout (#638), (b) the `ActivityWatchdog` liveness probe reading
+newest-mtime, which a lock-file heartbeat defeated (#640). Both are now fixed and the
+lint extended to flag ssh2 `timeout:`. The doctrine stands; disguised survivors are
+caught and fixed as found. See `docs/roadmap/timeout-eradication.md`. (2) **The
+native DESIGN subsystem is BUILT + wired** (WS-D1..D4): a domain-general persisted
+`DesignContract` injected into the writer + a domain-aware design oracle re-driving
+the writer in the same DAG (no handoff seam), bound to first-class personas +
+behaviors. It is **not yet exercised on a live run with a captured contract** — the
+full autonomous loop has not yet closed end-to-end. See
+`docs/roadmap/native-design-subsystem.md`.
 
 ## Read order for a fresh session
 
@@ -83,16 +88,15 @@ credentials (GitHub App + Slack + a deploy target;
 `docs/operator-guide/validation-credentials.md`) are provisioned, and it spends
 real credits under the $50 ceiling.
 
-**Be honest about the proof state — do NOT overclaim.** Successive apex trials each
-flushed real engine bugs now fixed on `main`. The most recent live trial, **v36**,
-proved the **#601 re-gate / stall-recovery** behaviour (reached **10/11** on a
-template-creation DAG; recovered from stalls without bricking) but **did NOT close
-the product loop** (issue → triage → fix → merge → deploy → a working product).
-**apex v37 has not yet run** — it is the first run on the timeout-free engine + the
-wired design subsystem. **No live run has yet closed the full autonomous loop with a
-live deploy.** That close is exactly what apex still has to prove.
+**Be honest about the proof state — do NOT overclaim.** Successive apex trials (v37
+through v46, 2026-06-19) each flushed real engine bugs now fixed on `main`. The most
+recent was **v46** — the healthiest run yet (gates passing, scaffold flowing
+writer→gate→checker, 0 runner leaks), but a planned reboot interrupted it before a
+merge. **No run has yet closed the full autonomous loop** (issue → triage → fix →
+merge → deploy → a working product, no human in the inner loop). That close is exactly
+what apex still has to prove.
 
-**To drive the next apex run (v37), a fresh agent reads, in order:**
+**To drive the next apex run, a fresh agent reads, in order:**
 
 1. **`docs/operator-guide/apex.md`** — the operator role (non-technical end user;
    never hand-fix the generated repo), the **run rhythm** (drive → halt →

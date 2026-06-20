@@ -138,15 +138,18 @@ cells` CRUD + `report` / `compare`. See `docs/roadmap/tanren-method-benchmark.md
   the run-lifecycle writes, and the former raw-SQL forge stores (audits + inbox →
   `engine/repositories/{audits,inbox}.ts`) are migrated off raw SQL.
 - **No arbitrary timeouts, retry caps, or wall-clock deadlines — anywhere.** The
-  timeout/retry-cap eradication is **complete and CI-gated**. Every hang-detection
-  mechanism is **progress / sign-of-life** based: an `ActivityWatchdog`
+  explicit timeout/retry-cap family is **eradicated and CI-gated**. Every
+  hang-detection mechanism is **progress / sign-of-life** based: an `ActivityWatchdog`
   (`engine/ssh/activityWatchdog.ts`) kills only on evidence of death (no advance in
-  output / tokens / CPU / workspace-mtime, with a progress backstop), and
+  output / tokens / CPU / workspace-mtime, with a structural probe backstop), and
   `retryUntilConverged` (`engine/workflow/retryUntilConverged.ts`, wrapping
   `convergenceDetector`) replaces every `MAX_*` / `maxPolls` give-up with intelligent
   non-convergence detection (same failure + no progress → escalate, never a counter).
   A working agent runs **unbounded**. The `scripts/check-architecture-timeouts.mjs`
-  lint is CI-gating, so the class cannot reintroduce. See
+  lint is CI-gating. **Note:** apex v44/v45 surfaced two disguised survivors the
+  initial lint missed — the ssh2 `timeout:` socket idle-timeout (#638) and a
+  newest-mtime liveness probe a lock-heartbeat defeated (#640); both are fixed and the
+  lint extended. Disguised survivors are caught and fixed as found. See
   `docs/roadmap/timeout-eradication.md`.
 - **A native DESIGN subsystem — Tanren owns design the way it owns the engine.** A
   domain-general, persisted, versioned `DesignContract` (`engine/design/`) is
@@ -223,16 +226,16 @@ credentials (GitHub App + Slack + a deploy target — see
 `docs/operator-guide/validation-credentials.md`) are provisioned, and it spends real
 credits under the $50 budget ceiling (BYOK Codex runs at $0).
 
-**Honest proof state.** Successive apex trials have driven Tanren harder each time
-and each flushed real engine bugs now fixed on `main`. The most recent, **v36**,
-proved the **#601 re-gate / stall-recovery** behaviour — it reached **10/11** on a
-template-creation DAG and **recovered from stalls without bricking** the graph —
-which is the autonomy-engine robustness the no-timeouts doctrine exists to buy. But
-**v36 did NOT close the product loop** (issue → triage → fix → merge → deploy → a
-working product). **apex v37 has not yet run**; the design subsystem's v37
-e2e-readiness verdict (`docs/roadmap/native-design-subsystem.md`) and the
-timeout-free engine are baked in for it. **No live run has yet closed the full
-autonomous loop with a deploy** — that is precisely what apex still has to prove.
+**Honest proof state.** Successive apex trials (v37 through v46, 2026-06-19) have
+driven Tanren harder each time and each flushed real engine bugs now fixed on `main`.
+The most recent, **v46**, was the healthiest run yet — gates passing, the scaffold
+flowing writer→gate→checker, 0 runner leaks — but a planned reboot interrupted it
+before a merge. **No live run has yet closed the full autonomous loop** (issue →
+triage → fix → merge → deploy → a working product) — that is precisely what apex
+still has to prove. Bugs fixed this session: #636 (runner-release org-scope RLS leak),
+#637 (writer must regenerate derived companions before gate), #638 (ssh2 socket
+idle-timeout disguised as a hang), #639 (descendant ancestor_not_ready hot-loop),
+#640 (job-stall watchdog gap — lock-file heartbeat defeating newest-mtime probe).
 
 Smaller near-term items: the **benchmark seed corpus**, `typify→serde` codegen, and
 the first whole-repo mutation baseline; long-horizon: a second `CodeHost` backend

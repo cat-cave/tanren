@@ -28,17 +28,18 @@ autonomously.
 **Honest proof state — what apex has and has NOT proven.** Each apex trial drives
 Tanren harder and flushes real engine bugs now fixed on `main` (the run rhythm:
 drive → halt on a real bug → fix-on-`main` → drain the backlog → rebuild → fresh
-`v(N+1)`). The most recent live trial, **v36**, proved the **#601 re-gate /
-stall-recovery** behaviour — it reached **10/11** on a template-creation DAG and
-**recovered from stalls without bricking** the graph (exactly the autonomy-engine
-robustness the no-timeouts doctrine exists to buy). But **v36 did NOT close the
-product loop** (issue → triage → fix → merge → deploy → a working product).
-**apex v37 has not yet run.** A design-subsystem **v37 e2e-readiness verdict**
-(`docs/roadmap/native-design-subsystem.md`) and the timeout-free engine are baked in
-for it. **No live run has yet closed the full autonomous loop with a live deploy** —
-that is exactly what apex still has to prove; do not describe it as done. The drive
-playbook is `docs/operator-guide/apex-run-playbook.md`; the operator role + run
-rhythm is `docs/operator-guide/apex.md`; the templating doctrine is
+`v(N+1)`). Runs **v37 through v46** have now completed (2026-06-19). The most recent,
+**v46**, was the healthiest run yet — gates passing, the scaffold flowing
+writer→gate→checker, 0 runner leaks — but a planned reboot interrupted it before a
+merge. **No run has yet closed the product loop** (issue → triage → fix → merge →
+deploy → a working product, no human in the inner loop). That is exactly what apex
+still has to prove; do not describe it as done. Bugs fixed by this wave: #636
+(runner-release org-scope RLS leak), #637 (writer must regenerate derived companions
+before gate), #638 (ssh2 socket idle-timeout — a DISGUISED wall-clock deadline),
+#639 (descendant ancestor_not_ready hot-loop), #640 (job-stall watchdog gap —
+lock-file heartbeat defeating newest-mtime probe). The drive playbook is
+`docs/operator-guide/apex-run-playbook.md`; the operator role + run rhythm is
+`docs/operator-guide/apex.md`; the templating doctrine is
 `docs/roadmap/templating-system.md`.
 
 ### v21 native delivery (the current doctrine)
@@ -292,23 +293,21 @@ cite); the merge-engine cutover rationale is
 
 ## 4. What is next (the live to-do)
 
-- **Phase 3 — `apex` (drive v37; close the full autonomous loop).** The
-  max-difficulty live-e2e fixture: a single paragraph of rough operator notes → a
-  deployed product (URL shortener + per-link analytics + a Slack bot + a web UI),
-  built autonomously over real surfaces, every change a merged PR with full
-  provenance. apex tests **Tanren**, not the fixture: the driver acts as a
-  non-technical end user over the HTTP API only, files real issues into Tanren for
-  every defect, and never hand-fixes the generated repo. **The honest state (§1):**
-  successive trials each flushed real engine bugs now fixed on `main`; the most
-  recent, **v36**, proved the **#601 re-gate / stall-recovery** behaviour (reached
-  **10/11** on a template-creation DAG; recovered from stalls without bricking) but
-  **did NOT close the product loop**. **v37 has not yet run** — it is the first run
-  on the timeout-free engine + the wired design subsystem; closing the full loop
-  (issue → triage → fix → merge → deploy → a working product, no human in the inner
-  loop) is the open proof. To drive it: the operator role + run rhythm + proof
-  portfolio is `docs/operator-guide/apex.md`; the **concrete drive-from-zero
-  playbook** is `docs/operator-guide/apex-run-playbook.md`; the **templating
-  doctrine** (no from-scratch-into-a-project; do NOT pre-create a template) is
+- **Phase 3 — `apex` (close the full autonomous loop).** The max-difficulty
+  live-e2e fixture: a single paragraph of rough operator notes → a deployed product
+  (URL shortener + per-link analytics + a Slack bot + a web UI), built autonomously
+  over real surfaces, every change a merged PR with full provenance. apex tests
+  **Tanren**, not the fixture: the driver acts as a non-technical end user over the
+  HTTP API only, files real issues into Tanren for every defect, and never hand-fixes
+  the generated repo. **The honest state (§1):** runs v37–v46 have now completed;
+  each flushed real engine bugs now fixed on `main`; the most recent, **v46**,
+  reached gates passing + scaffold flowing, but was interrupted before a merge; **no
+  run has yet closed the product loop** (issue → triage → fix → merge → deploy → a
+  working product, no human in the inner loop). That close is the open proof. To
+  drive the next run: the operator role + run rhythm + proof portfolio is
+  `docs/operator-guide/apex.md`; the **concrete drive-from-zero playbook** is
+  `docs/operator-guide/apex-run-playbook.md`; the **templating doctrine** (no
+  from-scratch-into-a-project; do NOT pre-create a template) is
   `docs/roadmap/templating-system.md`. It spends real credits under the $50 ceiling
   on already-provisioned Tier-1 creds (BYOK Codex runs at $0).
 - **tanren-owns-the-engine — cutover COMPLETE, §7 decomposition LANDED; one
@@ -351,19 +350,23 @@ cite); the merge-engine cutover rationale is
   branch is already FIXED — it is now an explicit `OrgScope` discriminated mode
   (`{ kind: "org" }` vs `{ kind: "unscopedPlatform" }`) that fails loud
   (`UnscopedOrgError`) on a missing tenant scope rather than degrading to BYOK.)
-- **Timeout / retry-cap eradication — DONE (CI-gated).** Owner-BINDING and now
-  fully landed: Tanren contains NO arbitrary timeouts, retry caps, or wall-clock
-  deadlines — every safety / hang-detection mechanism is PROGRESS / SIGN-OF-LIFE
-  based (cheap signals: CPU, commits, mtime, tokens, output), with the convergence
-  agent reserved for goal-progress judgment. The whole multi-PR program shipped
-  (#609–#622): the `ActivityWatchdog` (`engine/ssh/activityWatchdog.ts`) replaced
-  every `DEFAULT_TIMEOUT_MS`-threaded kill-timeout; `retryUntilConverged`
-  (`engine/workflow/retryUntilConverged.ts`, wrapping `convergenceDetector`)
-  replaced every `MAX_*` / `maxPolls` give-up; the infra-hold ceilings were reframed
-  off fixed counts onto sustained-non-recovery; and the enforcement lint
-  `scripts/check-architecture-timeouts.mjs` is **CI-gating** so the class cannot
-  reintroduce. The as-built inventory + doctrine of record is
-  `docs/roadmap/timeout-eradication.md`.
+- **Timeout / retry-cap eradication — explicit family DONE + CI-gated; disguised
+  survivors caught as found.** The whole multi-PR program shipped (#609–#622): the
+  `ActivityWatchdog` (`engine/ssh/activityWatchdog.ts`) replaced every
+  `DEFAULT_TIMEOUT_MS`-threaded kill-timeout; `retryUntilConverged`
+  (`engine/workflow/retryUntilConverged.ts`, wrapping `convergenceDetector`) replaced
+  every `MAX_*` / `maxPolls` give-up; the infra-hold ceilings were reframed off fixed
+  counts onto sustained-non-recovery; and the enforcement lint
+  `scripts/check-architecture-timeouts.mjs` is **CI-gating**. **However the
+  eradication was not 100% at ship**: apex v44/v45 surfaced two _disguised_ survivors
+  the initial lint missed — (a) the ssh2 `timeout:` socket idle-timeout, which kills
+  a running command on any quiet gap (root cause of #638; the lint now flags this
+  pattern), and (b) the `ActivityWatchdog` liveness probe reading newest-mtime, which
+  a lock-file heartbeat defeated, allowing a stalled job to run forever (#640; fixed
+  with a structural probe: file count + total bytes + a progress-based backstop). The
+  doctrine stands: every safety / hang-detection mechanism must be PROGRESS /
+  SIGN-OF-LIFE based; disguised survivors are caught and fixed as found. The as-built
+  inventory + doctrine of record is `docs/roadmap/timeout-eradication.md`.
 - **Type-aware lint strictness ratchet — `no-unsafe-type-assertion` tail (~310
   casts).** The type-aware pass (`oxlint --type-aware`, config
   `oxlintrc.typeaware.json`, powered by oxlint-tsgolint/tsgo) is ratcheted
