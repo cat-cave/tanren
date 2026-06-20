@@ -8,9 +8,35 @@ record is the memory `feedback_no_timeouts_progress_based` (Trevor, 2026-06-17,
 emphatic that this class keeps recurring); the existing models it generalizes are
 `workflow/convergenceDetector.ts` and `worker/runHeartbeat.ts`.
 
-> **Status (program kickoff).** This doc is the inventory + wave plan. The two
-> replacement primitives are being built in parallel on
-> `feat/liveness-watchdog-foundation`. Nothing here is merged yet except this plan.
+> **Status (program COMPLETE — with two disguised survivors caught post-program by
+> apex).** The full eradication wave landed: #609 (foundation — `ActivityWatchdog`,
+> `retryUntilConverged`, timeout-eradication lint in REPORT mode), #612–#618
+> (M1..Reframe waves), #621 (progress backstop — watchdog surfaces a recoverable
+> stall when work signature stops advancing), and the final wave CI-gated the lint
+> so the class can never reintroduce. The doctrine stands: progress/sign-of-life
+> based; `ActivityWatchdog` is the sole running-command hang detector.
+>
+> **Two DISGUISED survivors the lint missed, found by apex v44/v45 and since
+> fixed:**
+>
+> - **#638 — ssh2 `timeout:` connect-config socket option.** In ssh2, the `timeout`
+>   field in the connect config is NOT a handshake bound — it is a socket-lifetime
+>   IDLE timeout that fires whenever the socket has no TCP traffic (regardless of
+>   whether a command is running). A long codex reasoning gap (>30 s, no stdout)
+>   would kill the connection. Removed; the lint was extended to flag
+>   `ssh2 connect-config timeout:` explicitly
+>   (`scripts/check-architecture-timeouts.mjs`).
+> - **#640 — `ActivityWatchdog` liveness probe fooled by a lock-file heartbeat.** The
+>   probe used to return the single newest mtime under the workspace. A stalled tool
+>   holding a heartbeat lock file (playwright `__dirlock`, re-touched every few
+>   seconds while a download was wedged) advanced the newest mtime forever with zero
+>   real work, so the watchdog never fired and the job hung for hours. Fixed with a
+>   STRUCTURAL probe — total workspace file count + total bytes — which a
+>   re-touched lock file cannot advance. Also added a progress-based
+>   job-liveness backstop and reduced `keepaliveCountMax` from 1440 → 40 (≈ 6 h →
+>   10 min of transport-level dead-socket detection; the keepalive is a TCP-layer
+>   ping, not a work-budget).
+>
 > The inventory below was produced by a 3-auditor sweep and **re-verified
 > file:line against `origin/main` while writing** — drift corrections are flagged
 > inline (the auditors' paths predated the `services/orchestrator/src/engine/`

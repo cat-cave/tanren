@@ -26,13 +26,15 @@
 > both **CLOSED** (#602 wires the oracle into the loop; #600 makes a
 > missing/dangling contract a LOUD halt).
 >
-> **Honest next step — not yet exercised on a live run.** The subsystem is
-> **code-complete + wired**, but it has **NOT yet been exercised end-to-end on a
-> real live run**: the current apex run captured **no** `designContract`, so the
-> design phase + oracle no-op there (the oracle returns `hasContract: false` and
-> the loop skips design verification — `loopStages.ts:164`). Exercising the full
-> loop on a live run with a real captured `designContract` is the **next
-> validation step** (WS-D8).
+> **Live exercise state (updated 2026-06-19).** The subsystem is
+> **code-complete + wired**. The **first live design-phase elaboration ran in apex
+> v45/v46**: the interview captured a real `designContract` and `runDesignPhase`
+> elaborated it live on real credentials. The run was interrupted by a planned
+> reboot before the product build + design-oracle verification completed, so the
+> **full verify→re-drive loop has not yet closed** (no deployed product verified
+> against its contract). The remaining validation step is a complete apex run that
+> carries a real `designContract` through to deployment and oracle verification
+> (WS-D8).
 >
 > The remaining plan below — **WS-D5..D8** — is what is left. WS-D5 is **assessed
 > as SUBSUMED** by the domain-general D1/D3/D4 implementation (verdict + evidence
@@ -256,23 +258,24 @@ hand-done `tanren-hi-fidelity/` bundle. Until Tanren can design itself through i
 own subsystem, the subsystem is not done (the same dogfooding bar the rest of the
 platform is held to — see `docs/roadmap/dogfooding.md`).
 
-## Apex integration (a gated future requirement)
+## Apex integration (unblocked — close the live loop)
 
-The design subsystem does **NOT** block or halt the current apex fixture. apex
-continues on its current bar.
+WS-D1..D4 are testable; the gate (WS-D8) is satisfied. The design-phase
+elaboration first ran live in apex v45/v46. **Design is an added requirement of
+the apex fixture**: the built product must carry a real `DesignContract` and pass
+the design oracle. The apex bar **gains a design dimension** — the deployed product
+is judged on behavior AND design fidelity against its own contract. The remaining
+validation step is a complete apex run where the oracle verifies the built product
+(see WS-D8).
 
-**Once the subsystem is "ready to test"** (WS-D1..D4 testable), **design becomes
-an added requirement of the apex fixture**: the built product must carry a real
-`DesignContract` and pass the design oracle. The apex bar **gains a design
-dimension** — the deployed product is no longer judged on behavior alone, but on
-design fidelity against its own contract. This is a gated future requirement, not
-a current gate (WS-D8).
+## e2e readiness — the design loop is wired + closes (first live elaboration exercised in apex v45/v46)
 
-## v37 e2e readiness — the design loop is wired + closes (verdict: READY for scoped exercise)
-
-**Verdict: READY for a scoped exercise on apex v37.** WS-D1..D4 are merged and the
-full loop **closes end-to-end** with no live LLM, proven by a durable, CI-gated eval
-harness (`services/orchestrator/tests/designLoopE2E.test.ts`). The harness drives the
+**Verdict: code-complete + wired, first live elaboration exercised.** WS-D1..D4 are
+merged and the full loop **closes end-to-end** with no live LLM, proven by a durable,
+CI-gated eval harness (`services/orchestrator/tests/designLoopE2E.test.ts`). In apex
+v45/v46 the design-phase elaboration ran live for the first time (interview captured a
+real contract; `runDesignPhase` elaborated it on real credentials). The verify→re-drive
+loop has not yet closed on a completed run. The harness drives the
 WHOLE loop over **one stateful in-memory entity graph**, so the contract literally
 flows through the persistence seam — the design **phase**'s `DesignContractStore.create`
 persists the version that the **writer-context** and the **oracle** then read via
@@ -309,21 +312,21 @@ two LLM seams (the design **agent** and the oracle **answerer**), which return c
   run yields no writer block **even when a contract exists** — it never reads off the
   wrong scope.
 
-**What is SCOPED OUT for v37 (accepted, the follow-on):**
+**What is SCOPED OUT (accepted, the follow-on):**
 
 - **True VISUAL fidelity → WS-D4a live-render.** The oracle is **static** (read-only
   sandbox): it verifies behavior-**coverage** + static / source-readable fidelity
   (tokens / principles present in the code), and emits `design-not-verifiable` (info) for
   genuine visual fidelity (rendered pixels / screenshots). That needs the unbuilt
-  **WS-D4a live-render** path and is **accepted as out-of-scope for v37**. v37 exercises
-  design fidelity at the **contract-coverage + static-readability** bar, not the
+  **WS-D4a live-render** path and is **accepted as out-of-scope**. The oracle currently
+  exercises design fidelity at the **contract-coverage + static-readability** bar, not the
   rendered-pixel bar.
 - **Automatic re-elaboration trigger.** Re-running the design phase to mint a new
-  contract version on a behavior-graph change is the durable follow-up; v37 ships the
-  **loud-gap detection** (#619) floor, which surfaces + re-drives the gap, not the
-  silent auto-re-author.
+  contract version on a behavior-graph change is the durable follow-up; #619 ships the
+  **loud-gap detection** floor, which surfaces + re-drives the gap, not the silent
+  auto-re-author.
 
-**Exact preconditions for v37 to exercise design meaningfully:**
+**Exact preconditions for an apex run to exercise design meaningfully:**
 
 1. **Capture a COMPLETE persona/behavior set up front.** The design phase runs **once at
    derive**, so its `behaviorRefs` are the derive-time behavior set. Behaviors added later
@@ -339,7 +342,7 @@ two LLM seams (the design **agent** and the oracle **answerer**), which return c
    requires the design step to capture a contract; an absent one is a loud
    `MissingDesignContractError` (#600), never a silent no-op that would disable the whole
    subsystem. A genuinely design-light project still declares an explicit minimal
-   contract. So v37's intake must capture a design contract (even a minimal one).
+   contract. The apex intake must capture a design contract (even a minimal one).
 
 ## Actionable workstreams (the landable plan)
 
@@ -423,17 +426,16 @@ Ordered, each a CI-gated PR-sized unit. Dependencies noted.
 - **WS-D7 — dogfood.** Regenerate **Tanren's own `DesignContract` + dashboard
   hi-fi natively**, replacing the hand-done `tanren-hi-fidelity/` bundle. _(Depends
   on WS-D1..D4, ideally WS-D6.)_
-- **WS-D8 — apex integration (HEADLINE remaining work — the first LIVE exercise).**
+- **WS-D8 — apex integration (HEADLINE remaining work — close the live loop).**
   Add the **design dimension** to the apex fixture's requirements — the built product
-  must carry a real `DesignContract` and pass the design oracle. D1..D4 are now
-  testable (the gate above), so this is unblocked. **This is also the missing
-  validation:** the subsystem is code-complete + wired but has NOT yet run end-to-end
-  on a live run — the current apex run captured **no** `designContract`, so the design
-  phase + oracle no-op there (`designOracle.ts:101-104` / `loopStages.ts:164` return
-  `hasContract: false`). A future apex run where the interview captures a real design
-  intent — so the design phase authors a contract and the oracle verifies the built
-  product against it — is what first exercises the full verify→re-drive loop on real
-  credentials. _(Gated on WS-D1..D4 being testable — now satisfied.)_
+  must carry a real `DesignContract` and pass the design oracle. D1..D4 are testable
+  (the gate above), so this is unblocked. **Live state (2026-06-19):** the design-phase
+  elaboration first ran live in apex v45/v46 (interview captured a real contract;
+  `runDesignPhase` elaborated it on real credentials). The run was interrupted before
+  the product build + oracle verification completed, so the **full verify→re-drive loop
+  has not yet closed** on a real deployed product. The remaining validation step is a
+  complete apex run that carries a real `designContract` through to deployment and
+  oracle verification. _(Gated on WS-D1..D4 being testable — satisfied.)_
 
 ## Where this fits
 
