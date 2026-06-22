@@ -105,6 +105,25 @@ secret source, priority, cadence, and exactly what each proves — is the
 
 ## How to use it
 
+### Canonical secrets layout
+
+Three operator-local files hold the bootstrap + per-org tier-1 inventory:
+
+| File                              | Holds                                                                  |
+| --------------------------------- | ---------------------------------------------------------------------- |
+| `.env`                            | Infra bootstrap (DATABASE_URL, VAULT_TOKEN, TANREN_SECRET_STORE, …)    |
+| `.env.validation.local`           | Tier-1 live secrets (Hetzner token, OAuth secrets, managed-router key) |
+| `connections.manifest.local.yaml` | Apex credential manifest (refs only)                                   |
+
+All three are gitignored. They live canonically in
+`${TANREN_SECRETS_DIR:-~/.config/tanren/secrets}/` (0700 dir, 0600 files); every
+worktree symlinks them in via `just secrets-link`, which `just up-dev` calls
+automatically. **One-time setup** (if your secrets currently sit inline in your
+main checkout): `just secrets-migrate` moves them to the canonical location and
+symlinks them back, keeping the main checkout working while letting fresh
+worktrees see the same set. `just doctor` verifies the layout is intact and
+`.env` has the required keys; run it before `just up-dev` from a fresh worktree.
+
 **Real-world setup (an operator):** configure each connector in the dashboard;
 your live manifest entries are all `value_source: secret_manager_ref`. Nothing in
 env except the infra bootstrap in `.env`.
