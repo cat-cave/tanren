@@ -251,6 +251,16 @@ export async function loadRunExecutionContext(
     // from the resolved project config so a greenfield `lenient` project lands
     // functional-but-weak code instead of stalling the gate.
     governancePosture: projectConfig.governancePosture,
+    // The project's audit posture (blockReviewAt / p2p3Handling / autonomousRemediation).
+    // Threaded so `assertAuditPostureReentersFindings` at the planner-run boundary
+    // sees what the operator PUT via the governance API — an autonomous run on the
+    // BALANCED default would strand findings and the preflight FAILS LOUD; an
+    // autonomous project that PUT AUTONOMOUS_AUDIT_POSTURE passes the preflight.
+    auditPosture: projectConfig.auditPosture,
+    // The project's convergence policy (sustained-non-recovery thresholds, etc.).
+    // Threaded so the in-loop hold/escape-hatch logic reads the operator's choice
+    // rather than the absent-config default.
+    convergencePolicy: projectConfig.convergencePolicy,
     // AUDIT-EVIDENCE BASELINE: the governance policy version (the project config
     // version), threaded onto the gate.verdict roll-up the run emits.
     policyVersion: projectConfig.version,
