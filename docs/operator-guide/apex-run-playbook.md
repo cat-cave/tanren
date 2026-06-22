@@ -17,6 +17,8 @@ is the mechanical "how to drive a single run" half.
 > 2026-06-19 — see `apex.md` for the honest proof state; the full autonomy loop
 > has not yet closed end-to-end). Runs are **disposable** — `main` only moves
 > forward; you never patch a run or its generated repo (see `apex.md`).
+>
+> **Picking `<N>`:** look at `ls /scratch/worktrees/tanren/` and pick the next integer after the highest existing trial. The compose project name follows the worktree directory name automatically (e.g. `v47`), so no `-p` override is needed.
 
 ---
 
@@ -71,6 +73,11 @@ export TANREN_REQUIRE_AUTH=1   # auth is enforced (apex drives the real auth sur
 just up-dev
 ```
 
+**What's normal on a fresh `up-dev`.** This box's podman GCs daily; if your last
+run was >24 h ago, expect `up-dev` to re-pull base images and re-build the
+orchestrator+worker images. A re-pull/re-build there is **not** a finding; it's
+the GC contract.
+
 `just up-dev` (recipe `runner-key gen-mtls-certs` → `up-dev`) generates
 `/tmp/tanren_runner_key` and mounts it as the `tanren_runner_identity_key` compose
 secret — the runner identity key is a **mounted secret file**
@@ -86,7 +93,14 @@ product, not an apex-flavored variant. (historical: previously `TANREN_APEX_MODE
 Verify health before driving anything:
 
 ```sh
-curl -s localhost:3100/healthz   # expect database+vault ok
+curl -s localhost:3100/healthz | jq .
+# expected:
+# {
+#   "service": "orchestrator",
+#   "ok": true,
+#   "database": "ok",
+#   "vault": { "ok": true, "status": 200 }
+# }
 ```
 
 (The orchestrator API is on `:3100`; the dashboard, if you want it, is on `:3000`.)
@@ -115,17 +129,25 @@ apex drives the **real** auth surface (no internal seams). With
 following the login→callback redirect:
 
 ```sh
-# FOLLOW the redirect (-L): /auth/login 302s to /auth/callback, which mints the
-# tanren_session cookie AND creates the `tanren-dev` org on first login.
-curl -s -L -c jar -b jar "http://localhost:3100/auth/login?provider=local_dev"
+# FOLLOW the redirect (-L): /auth/login 302s to /auth/callback. The callback
+# MINTS the tanren_session cookie (captured into the jar by -c) AND returns the
+# identity JSON we need — capture both the cookie AND the body in one shot.
+LOGIN_BODY=$(curl -s -L -c jar -b jar "http://localhost:3100/auth/login?provider=local_dev")
 
-# GET /auth/me returns your identity + the csrfToken. Capture the csrfToken —
-# send it as `X-CSRF-Token` on EVERY mutating request (POST/PUT/PATCH/DELETE).
-curl -s -b jar "http://localhost:3100/auth/me"
+# /auth/callback returns: { ok, user, orgs:[{id,login,displayName}], primaryOrgId, csrfToken }.
+# Bind ORG + CSRF as shell vars — every §3+ snippet uses them as-is.
+ORG=$(jq -r '.primaryOrgId' <<<"$LOGIN_BODY")
+CSRF=$(jq -r '.csrfToken'   <<<"$LOGIN_BODY")
+echo "ORG=$ORG"
+echo "CSRF=$CSRF"   # send as X-CSRF-Token on EVERY mutating request (POST/PUT/PATCH/DELETE).
+
+# Optional session-liveness probe. /auth/me returns ONLY { userId, csrfToken, expiresAt }
+# — it does NOT carry orgId (that came from /auth/callback above). Useful to confirm
+# the cookie still authenticates; not a source of $ORG.
+curl -s -b jar "http://localhost:3100/auth/me" | jq .
 ```
 
-From here, resolve your `orgId` from `/auth/me` and use `-b jar` (the session
-cookie) + `-H "X-CSRF-Token: <token>"` on every write below.
+From here every write below uses `-b jar` (the session cookie) + `-H "X-CSRF-Token: $CSRF"`, and every org-scoped path interpolates `$ORG`.
 
 ---
 
@@ -169,6 +191,8 @@ and proves the bar is real.
 
 apex runs at $0 by bringing your own Codex auth (BYOK replaces the managed router):
 
+Using `$ORG` and `$CSRF` as bound in §2:
+
 ```sh
 curl -s -b jar -H "X-CSRF-Token: $CSRF" -H 'content-type: application/json' \
   -X POST "http://localhost:3100/orgs/$ORG/ai-provider" \
@@ -181,22 +205,65 @@ curl -s -b jar -H "X-CSRF-Token: $CSRF" -H 'content-type: application/json' \
 
 ## 4. Import org Tier-1 credentials
 
-The provisioned credentials live in `connections.manifest.local.yaml` + the
-secrets in `.env.validation.local` (inventory:
-`docs/operator-guide/validation-credentials.md`). Import the three apex needs over
-the org-scoped surface:
+The three Tier-1 imports apex needs over the org-scoped surface — GitHub App,
+Vercel deploy, Slack. Each shows the body shape the API actually validates; the
+operator sets the `$VAR` placeholders from whatever local secret source they keep
+(e.g. their `connections.manifest.local.yaml` + `.env.validation.local`). Real
+secret values NEVER appear in this doc, in the request URL, or in any response or
+event payload — only refs.
 
-- **GitHub App** — `POST /orgs/:orgId/credentials?kind=github_app` (store the
-  credential ref) then `POST /orgs/:orgId/github` (bind it as the org's GitHub
-  connection).
-- **Vercel deploy** — `POST /orgs/:orgId/integrations/deploy.vercel` (apex's deploy
-  target — deploy is a creation dependency, see `apex.md`).
-- **Slack** — `POST /orgs/:orgId/integrations/slack` (the apex domain posts to
-  Slack on the 100-click threshold).
+**Skip** the managed-router (BYOK in §3 replaces it) and Hetzner (the dev stack
+uses the local sidecar runner).
 
-**Skip** the managed-router (BYOK replaces it) and Hetzner (the dev stack uses the
-local sidecar runner). Credentials are stored by reference; their values never
-appear in responses or event payloads.
+### 4.a. GitHub App (store + bind)
+
+```sh
+# 4.a-i — Store the github_app credential (appId + private-key PEM).
+#   $GH_APP_ID         the App ID (an integer string, e.g. "12345").
+#   $GH_APP_PEM        the App private key PEM contents (multi-line).
+GH_REF=$(curl -s -b jar -H "X-CSRF-Token: $CSRF" -H 'content-type: application/json' \
+  -X POST "http://localhost:3100/orgs/$ORG/credentials?kind=github_app" \
+  -d "$(jq -n --arg id "$GH_APP_ID" --arg pem "$GH_APP_PEM" \
+        '{ref:"default", appId:$id, privateKeyPem:$pem}')" \
+  | jq -r '.ref')
+echo "GH_REF=$GH_REF"   # the server-derived credential ref — no PEM ever returns.
+
+# 4.a-ii — Bind it as the org's GitHub connection.
+#   $GH_INSTALLATION_ID  the App installation id on the GitHub side (numeric string).
+curl -s -b jar -H "X-CSRF-Token: $CSRF" -H 'content-type: application/json' \
+  -X POST "http://localhost:3100/orgs/$ORG/github" \
+  -d "$(jq -n --arg iid "$GH_INSTALLATION_ID" --arg id "$GH_APP_ID" --arg ref "$GH_REF" \
+        '{installationId:$iid, appId:$id, credentialRef:$ref}')" | jq .
+# expect: { ok:true, mode:"app", installation:{installationId, appId, installedAt} }
+```
+
+### 4.b. Vercel deploy
+
+```sh
+#   $VERCEL_TOKEN    a Vercel access token.
+#   $VERCEL_TEAM_ID  the Vercel team id the project deploys under (optional, in metadata).
+curl -s -b jar -H "X-CSRF-Token: $CSRF" -H 'content-type: application/json' \
+  -X POST "http://localhost:3100/orgs/$ORG/integrations/deploy.vercel" \
+  -d "$(jq -n --arg t "$VERCEL_TOKEN" --arg team "$VERCEL_TEAM_ID" \
+        '{token:$t, metadata:{teamId:$team}}')" | jq .
+# expect: { status:"linked", providerKind:"deploy.vercel", credentialRef, capabilities:["deploy"], metadataKeys }
+```
+
+### 4.c. Slack
+
+```sh
+#   $SLACK_BOT_TOKEN  a Slack bot token (xoxb-…); used by the notify provisioner.
+curl -s -b jar -H "X-CSRF-Token: $CSRF" -H 'content-type: application/json' \
+  -X POST "http://localhost:3100/orgs/$ORG/integrations/slack" \
+  -d "$(jq -n --arg t "$SLACK_BOT_TOKEN" '{token:$t, metadata:{}}')" | jq .
+# expect: { status:"linked", providerKind:"slack", credentialRef, capabilities:["notify"], metadataKeys }
+```
+
+Credentials are stored by REFERENCE — values never appear in responses, event
+payloads, or logs (only the derived `credentialRef` does). **A `just
+import-manifest` recipe is a planned follow-up automation lane** that reads
+`connections.manifest.local.yaml` and drives this same three-call loop without
+hand-curls; until it lands, run the three curls above.
 
 ---
 
@@ -206,19 +273,68 @@ Drive the Forge interview as a **non-technical end user** (do NOT write specs or
 give technical answers — see the role rules in `apex.md`):
 
 ```sh
-# Iterate interview rounds with rough, non-technical notes — the apex domain is a
-# link shortener: shorten a URL + track clicks + post to Slack when a link passes
-# 100 clicks + a live deployed URL.
-curl -s -b jar -H "X-CSRF-Token: $CSRF" -H 'content-type: application/json' \
+# Round 1 — rough first description. Start with an EMPTY capture; the server
+# defaults the missing keys. The response carries `say` (next question),
+# `captureDelta` (what this round merged), and `complete` (false until the
+# answerer says the interview is done).
+R1=$(curl -s -b jar -H "X-CSRF-Token: $CSRF" -H 'content-type: application/json' \
   -X POST "http://localhost:3100/orgs/$ORG/onboarding/interview/round" \
-  -d '{"message":"i want a link shortener that ..."}'
-# ...iterate rounds as a non-technical user...
+  -d '{
+        "round": 1,
+        "answer": "i want a link shortener. people paste a long URL, get a short one back, and i can see how many times each short link was clicked.",
+        "capture": {}
+      }')
+echo "$R1" | jq '{say, complete}'
+CAP=$(jq '.capture' <<<"$R1")   # carry the merged capture into the next round.
 
-# Derive the spec DAG (this ALSO creates the greenfield repo + triggers template
-# selection/creation — see step 5b).
+# Round 2 — adds the Slack notification + the deploy ask. Note: still talking like
+# a product owner, not an engineer; do NOT name frameworks/databases/CI tools.
+R2=$(curl -s -b jar -H "X-CSRF-Token: $CSRF" -H 'content-type: application/json' \
+  -X POST "http://localhost:3100/orgs/$ORG/onboarding/interview/round" \
+  -d "$(jq -n --argjson cap "$CAP" '{
+        round: 2,
+        answer: "when any short link crosses 100 clicks, post a celebratory message to our slack channel. and the whole thing should be live at a real URL — somewhere on the internet, not just on my laptop.",
+        capture: $cap
+      }')")
+echo "$R2" | jq '{say, complete}'
+CAP=$(jq '.capture' <<<"$R2")
+
+# Round 3 — fills in personas / who-uses-it / what good looks like. Iterate
+# more rounds the same way until `.complete == true`.
+R3=$(curl -s -b jar -H "X-CSRF-Token: $CSRF" -H 'content-type: application/json' \
+  -X POST "http://localhost:3100/orgs/$ORG/onboarding/interview/round" \
+  -d "$(jq -n --argjson cap "$CAP" '{
+        round: 3,
+        answer: "two kinds of users: a regular person who just wants a short link, and me/marketing who wants to see which links are popular. success is: shortening takes one click, the click counts update within a minute or two, and the slack ping is reliable enough that we trust it.",
+        capture: $cap
+      }')")
+echo "$R3" | jq '{say, complete}'
+CAP=$(jq '.capture' <<<"$R3")
+
+# ...keep iterating rounds (each one re-submits $CAP) until the answerer returns
+# complete=true. The final $CAP is the input to derive.
+```
+
+```sh
+# Derive: the final $CAP from the rounds above + the GitHub owner the new
+# greenfield repo lands under + the deploy provider you linked in §4.b. The
+# autonomy knob lands the project ALREADY autonomous so the DagWalker can
+# advance off the empty repo with no follow-up PATCH.
+#   $GH_OWNER         the GitHub org/user login the App is installed on (the
+#                     owner of the new greenfield repo).
 curl -s -b jar -H "X-CSRF-Token: $CSRF" -H 'content-type: application/json' \
   -X POST "http://localhost:3100/orgs/$ORG/onboarding/interview/derive" \
-  -d '{...}'
+  -d "$(jq -n --argjson cap "$CAP" --arg owner "$GH_OWNER" '{
+        capture: $cap,
+        owner: $owner,
+        private: true,
+        description: "apex trial: link shortener with click counts + Slack-on-100 + live deploy",
+        autonomy: "auto",
+        deploy: { providerKind: "deploy.vercel", mode: "greenfield" }
+      }')" | jq '{projectId, projectKey, repository, bootstrap, inboxSource}'
+
+# Capture $PROJ from the response for §2.5 (governance flip) and §6 (monitor).
+PROJ=<projectId from the response above>
 ```
 
 ### 5b. The template gate fires here — DO NOT pre-create a template
