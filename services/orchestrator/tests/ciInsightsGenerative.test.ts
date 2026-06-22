@@ -250,26 +250,6 @@ describe("flaky CI insight → generative candidate + spec", () => {
     expect(specInserts).toHaveLength(0);
   });
 
-  it("APEX MODE: a single-run flake (< the 2-SHA default) is spec-eligible (the bar drops to 1)", async () => {
-    // Loop 4 self-config: an apex / autonomous run has no operator to notice a
-    // quarantine awaiting a second-SHA recurrence, so `resolveInsightThresholds()`
-    // lowers `ciInsightFlakyMinShas` to 1 — the SAME single-SHA flake the anti-spam
-    // test above proves yields NO candidate in normal mode now ships a fix-spec.
-    const prior = process.env["TANREN_APEX_MODE"];
-    process.env["TANREN_APEX_MODE"] = "1";
-    try {
-      const { pool, candidates, specInserts } = stubPool(flakyRows("suite.flaky", "unit", 1));
-      const { candidates: out } = await emit(pool, fixedTriage("auto_routable", fixSpec));
-      expect(out).toHaveLength(1);
-      expect(out[0]!.externalId).toBe("ci-flaky:suite.flaky");
-      expect(candidates.size).toBe(1);
-      expect(specInserts).toHaveLength(1);
-    } finally {
-      if (prior === undefined) delete process.env["TANREN_APEX_MODE"];
-      else process.env["TANREN_APEX_MODE"] = prior;
-    }
-  });
-
   it("idempotent: a re-run does not duplicate the candidate or the spec", async () => {
     const { pool, candidates, specInserts } = stubPool(flakyRows("suite.flaky", "unit", 2));
     const answerer = fixedTriage("auto_routable", fixSpec);

@@ -12,6 +12,14 @@ import {
   loadRunExecutionContext,
   RunExecutionContextNotFoundError,
 } from "../src/engine/worker/runExecutionContext.js";
+import { AUTONOMOUS_AUDIT_POSTURE, DEFAULT_AUDIT_POSTURE } from "../src/engine/config/auditPostureConfig.js";
+import {
+  assertAuditPostureReentersFindings,
+  AuditPostureStrandsFindingsError,
+} from "../src/engine/workflow/auditPosturePreflight.js";
+import type { AppendEvent } from "../src/engine/workflow/subtaskLoop.js";
+
+const noopAppend: AppendEvent = async () => {};
 
 // A minimal query stub returning a crafted run⋈spec⋈project row + the org-config
 // read resolveCredentialsForRun issues. Drives the real loader without a DB.
@@ -84,6 +92,53 @@ describe("loadRunExecutionContext", () => {
     });
     expect(projectConfig.version).toBe(1);
     expect(orgId).toBe("org_42");
+  });
+
+  // Regression guard for the auditPosture-eradication wire-up: the governance API
+  // accepts `auditPosture` on the project config, and the run-execution context MUST
+  // thread it onto the `PlannerRunContext` so `assertAuditPostureReentersFindings`
+  // (the preflight at the planner-run boundary) sees what the operator PUT. A previous
+  // change deleted the env-driven default but forgot this wire, so every autonomous
+  // run failed the preflight regardless of what the operator configured.
+  it("threads projectConfig.auditPosture + convergencePolicy onto the PlannerRunContext", async () => {
+    const projectConfigWithAutonomous = {
+      version: 1,
+      credentials: {
+        defaultLlm: { cli: "codex", model: "default", authRef: "credential/codex/dev" },
+        githubCredentialRef: "cred/gh",
+      },
+      auditPosture: AUTONOMOUS_AUDIT_POSTURE,
+      convergencePolicy: {
+        demoRunEnabled: true,
+        velocityDeferEnabled: false,
+        velocityDeferMaxSeverity: "P2" as const,
+        velocityDeferAfterStalls: 2,
+      },
+    };
+    const { context } = await loadRunExecutionContext(rowPool(fullRow({ config: projectConfigWithAutonomous })), {
+      runId: "run_1",
+      identitySecretRef: "id",
+    });
+    expect(context.auditPosture).toEqual(AUTONOMOUS_AUDIT_POSTURE);
+    expect(context.convergencePolicy).toEqual(projectConfigWithAutonomous.convergencePolicy);
+    // The preflight that gates an autonomous run sees the threaded posture and PASSES.
+    await expect(
+      assertAuditPostureReentersFindings({ autonomous: true, posture: context.auditPosture! }, noopAppend),
+    ).resolves.toBeUndefined();
+  });
+
+  it("an autonomous run whose project did NOT set auditPosture trips the preflight on the BALANCED default", async () => {
+    // A project that did not PUT `auditPosture` resolves to the BALANCED default (the
+    // safe human-stop). The preflight FAILS LOUD if such a project tries to run
+    // autonomously — exactly the fail-closed bar the eradication doctrine demands.
+    const { context } = await loadRunExecutionContext(rowPool(fullRow()), {
+      runId: "run_1",
+      identitySecretRef: "id",
+    });
+    expect(context.auditPosture).toEqual(DEFAULT_AUDIT_POSTURE);
+    await expect(
+      assertAuditPostureReentersFindings({ autonomous: true, posture: context.auditPosture! }, noopAppend),
+    ).rejects.toBeInstanceOf(AuditPostureStrandsFindingsError);
   });
 
   it("FAILS LOUD (UnscopedOrgError) when the run row carries a null/empty org id — never a silent BYOK degrade", async () => {

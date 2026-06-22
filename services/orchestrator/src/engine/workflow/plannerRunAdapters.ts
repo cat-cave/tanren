@@ -26,7 +26,7 @@ import type { BudgetGate } from "../contracts/dagWalker.js";
 import { PgBudgetGate } from "../dag/budgetGate.js";
 import { runBudgetCeilingPreflight } from "./budgetPreflight.js";
 import { assertAuditPostureReentersFindings } from "./auditPosturePreflight.js";
-import { resolveDefaultAuditPosture } from "../config/index.js";
+import { DEFAULT_AUDIT_POSTURE } from "../config/index.js";
 import type { GateOutcome } from "./gate/index.js";
 import { buildDefaultGate } from "./plannerRunGate.js";
 // Re-exported so plannerRun.ts keeps a single import surface for the run's
@@ -446,11 +446,10 @@ export async function resolveRunAdaptersWithBudgetPreflight(
   await assertAuditPostureReentersFindings(
     {
       autonomous: input.context.governancePosture === "lenient",
-      // The absent-posture default is APEX-MODE-AWARE: under apex mode an autonomous run
-      // whose context carries no explicit `auditPosture` resolves to the AUTONOMOUS
-      // posture (findings re-enter the DAG) so THIS preflight PASSES without manual
-      // per-run config; a non-autonomous run keeps the conservative BALANCED default.
-      posture: input.context.auditPosture ?? resolveDefaultAuditPosture(),
+      // The absent-posture default is the BALANCED posture; an autonomous run whose
+      // project did not set `auditPosture: AUTONOMOUS_AUDIT_POSTURE` via the
+      // governance API will FAIL THIS PREFLIGHT — that is the intended fail-closed bar.
+      posture: input.context.auditPosture ?? DEFAULT_AUDIT_POSTURE,
     },
     appendEvent,
   );

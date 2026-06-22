@@ -22,7 +22,7 @@ import { ProjectStore } from "../../repositories/projects.js";
 import { systemActor } from "../../state/actor.js";
 import { type AuditPosture, decideFromFindings } from "../../contracts/auditPosture.js";
 import { findingToRoutableSpec } from "./postureGate.js";
-import { resolveDefaultAuditPosture, isAbsentProjectConfig, migrateProjectConfig } from "../../config/index.js";
+import { DEFAULT_AUDIT_POSTURE, isAbsentProjectConfig, migrateProjectConfig } from "../../config/index.js";
 import type { Finding } from "../../contracts/findings.js";
 import { PersistentlyInvalidSpecError } from "../specQuality/index.js";
 import { autoRouteCandidate, type AutoRouteDeps } from "../inbox/engine.js";
@@ -132,15 +132,20 @@ export function summarizeFindings(findings: ReadonlyArray<AuditFinding>): Summar
 // default posture (which still blocks on P0/P1 — never a silent "block on nothing"). A
 // PRESENT-but-CORRUPT config is NOT masked — `migrateProjectConfig` throws loudly
 // (no-silent-fallback). System-scoped read: the loop already runs under the job's org scope.
-async function resolveAuditPosture(client: QueryClient, projectId: string | null): Promise<AuditPosture> {
-  // The absent-config default is APEX-MODE-AWARE: under an apex / autonomous run a
-  // project that never set its own posture resolves to the AUTONOMOUS posture (residual
-  // findings route to the DAG + a blocking finding becomes a remediation spec) so the
-  // scheduled-audit loop CLOSES with no operator; a non-autonomous run keeps the
-  // conservative BALANCED default (block on P0/P1, park for a human).
-  if (projectId === null) return resolveDefaultAuditPosture();
+export async function resolveAuditPostureForProject(
+  client: QueryClient,
+  projectId: string | null,
+): Promise<AuditPosture> {
+  // The absent-config / project-less default is the BALANCED posture (block on P0/P1,
+  // park for a human). A project that needs the autonomous posture (residual routes to
+  // the DAG + a blocking finding becomes a remediation spec) sets `auditPosture:
+  // AUTONOMOUS_AUDIT_POSTURE` via the project governance API (`PUT
+  // /:orgId/projects/:projectId/governance`); the run preflight FAILS LOUD if an
+  // autonomous run uses a posture that strands findings, so a misconfigured project
+  // cannot silently no-op.
+  if (projectId === null) return DEFAULT_AUDIT_POSTURE;
   const raw = await ProjectStore.getConfig(client, projectId, systemActor);
-  if (isAbsentProjectConfig(raw)) return resolveDefaultAuditPosture();
+  if (isAbsentProjectConfig(raw)) return DEFAULT_AUDIT_POSTURE;
   return migrateProjectConfig(raw).auditPosture;
 }
 
@@ -172,7 +177,7 @@ export async function runAuditJob(deps: AuditSchedulerDeps, job: AuditJob): Prom
     //     independently mark it `auto_routable` (the posture is the authority; a P2/P3 must
     //     never silently strand under route-to-dag). Under the default `fix-if-idle`
     //     posture a residual still parks unless triage independently auto-routes it.
-    const posture = await resolveAuditPosture(deps.pool, job.projectId);
+    const posture = await resolveAuditPostureForProject(deps.pool, job.projectId);
     const remediateAutonomously = posture.autonomousRemediation === true;
     const decision = decideFromFindings(
       findings.map((f) => toFinding(f)),

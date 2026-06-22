@@ -22,7 +22,6 @@
 
 import type pg from "pg";
 import { orgScopingPool } from "../data/orgScopedDb.js";
-import { isApexMode } from "../config/apexMode.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
 import { NotificationDispatcher, type DefaultRoute } from "./dispatcher.js";
@@ -77,21 +76,6 @@ export function buildNotificationDispatcher(deps: BuildNotificationDispatcherDep
     },
   });
   const defaultRoute = resolveDefaultRouteFromEnv();
-  // Apex-mode readiness (no-silent doctrine): on a live apex run a `warn`+ event
-  // that matched NO per-org route AND has NO code-level default would silently
-  // log-and-return — no human ever sees a budget/deploy milestone. That gap must
-  // be LOUD, not discovered post-run. In apex mode the env default is the
-  // process-wide safety net under EVERY org (the onboarding seed handles the
-  // per-tenant route); its absence is a startup readiness FAILURE, not a warning
-  // buried in logs. Outside apex mode the env default stays optional (per-org
-  // routes + the seeded default carry delivery).
-  if (isApexMode() && defaultRoute === undefined) {
-    throw new Error(
-      "apex mode requires a code-level default notification route: set TANREN_NOTIFICATION_DEFAULT_CHANNEL + " +
-        "TANREN_NOTIFICATION_DEFAULT_DESTINATION so a warn+ milestone (budget / deploy.verified / needs_attention) " +
-        "with no per-org route still reaches a human (no silent log-and-return)",
-    );
-  }
   return new NotificationDispatcher({
     // org-scoping wrapper: each tenant-table read/write self-routes under the
     // per-event org scope the subscriber establishes via `runWithJobOrgId`.

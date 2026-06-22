@@ -20,6 +20,9 @@ import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import { detectAndQuarantineFlaky, loadCiObservations } from "../insights/ciFlaky.js";
 import { emitCiInsightCandidates } from "../insights/ciInsightsCandidates.js";
 import type { InsightThresholds } from "../insights/thresholds.js";
+import { isAbsentProjectConfig, migrateProjectConfig } from "../config/index.js";
+import { ProjectStore } from "../repositories/projects.js";
+import { systemActor } from "../state/actor.js";
 import type { AutoRouteDeps, TriageAnswerer } from "../forge/inbox/index.js";
 import type { ForgeAnswererTarget } from "../forge/providerFactory.js";
 import { createLogger } from "../observability/logger.js";
@@ -37,7 +40,14 @@ export interface CiInsightsLoopDeps {
    * privileged pool), exactly as `DeployOnMergeWatcher` does it.
    */
   runStateWriter?: RunStateWriter;
-  /** Per-org/project threshold overrides. */
+  /**
+   * Process-wide threshold overrides (the SAME shape `emitCiInsightCandidates`
+   * layers on top of `DEFAULT_THRESHOLDS`). The per-project `insightThresholds`
+   * field on `projects.config` is resolved per-tick and stacked ON TOP of this
+   * (project-wins-over-process); a project that did not set its own keeps the
+   * defaults / the process-wide override here. Tests use this seam to drive
+   * thresholds without persisting a project config.
+   */
   thresholds?: Partial<InsightThresholds>;
   /**
    * The GENERATIVE arm (PR3). When BOTH are wired the loop also emits one
@@ -153,6 +163,13 @@ export class CiInsightsLoop {
   private async emitForProject(project: ProjectOrgRow, nowDate: Date): Promise<void> {
     const { answererFactory, autoRoute } = this.deps;
     if (answererFactory === undefined || autoRoute === undefined) return;
+    // PER-PROJECT THRESHOLDS: a project flips itself onto the autonomous CI-intelligence
+    // bar by setting `insightThresholds.ciInsightFlakyMinShas: 1` via the governance
+    // API (`PUT /:orgId/projects/:projectId/governance`); the persisted overrides
+    // stack ON TOP of any process-wide `deps.thresholds`, so the per-project knob
+    // wins. An absent/empty project map leaves the process-wide / built-in defaults.
+    const perProject = await this.resolveProjectThresholds(project.project_id);
+    const merged: Partial<InsightThresholds> = { ...this.deps.thresholds, ...perProject };
     await runWithJobOrgId(project.org_id, () =>
       emitCiInsightCandidates({
         pool: this.deps.pool,
@@ -161,9 +178,20 @@ export class CiInsightsLoop {
         answerer: answererFactory({ orgId: project.org_id, projectId: project.project_id }),
         autoRoute,
         now: nowDate,
-        ...(this.deps.thresholds !== undefined && { thresholds: this.deps.thresholds }),
+        ...(Object.keys(merged).length > 0 && { thresholds: merged }),
       }),
     );
+  }
+
+  // Resolve the project's persisted `insightThresholds` map (a
+  // `Partial<InsightThresholds>`; an absent/empty config → empty map). System-scoped
+  // read mirroring `runExecutionContext`'s config read.
+  private async resolveProjectThresholds(projectId: string): Promise<Partial<InsightThresholds>> {
+    return runWithSystemScope(this.deps.pool, async (client) => {
+      const raw = await ProjectStore.getConfig(client, projectId, systemActor);
+      if (isAbsentProjectConfig(raw)) return {};
+      return migrateProjectConfig(raw).insightThresholds;
+    });
   }
 
   private async listProjects(): Promise<ProjectOrgRow[]> {

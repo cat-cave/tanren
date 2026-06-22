@@ -22,6 +22,7 @@ import {
   emptyRoutingTable,
   readObservedVersion,
 } from "./shared.js";
+import { InsightThresholdsConfig } from "../insights/thresholds.js";
 import { DefaultLlmEntry } from "../credentials/defaultLlmEntry.js";
 
 // Top-level versioned Zod schema for project-level config. Persisted as a
@@ -206,6 +207,16 @@ export const ProjectConfigV1 = z
     // zero-defect shop blocks on even P3, a velocity shop routes everything into the
     // DAG. A governed SETTING (like `governancePosture`/`reviewPolicy`), never an env var.
     auditPosture: AuditPostureConfig.default(DEFAULT_AUDIT_POSTURE),
+    // Per-project INSIGHT THRESHOLDS — a governed SETTING, like `auditPosture`/
+    // `reviewPolicy` (never an env var). Every field is optional; a present value
+    // overrides the corresponding `DEFAULT_THRESHOLDS` entry, an absent field
+    // inherits the default. The autonomous-project pattern is `{
+    // ciInsightFlakyMinShas: 1 }` so a single-run flake is spec-eligible (the
+    // CI-intelligence loop closes without waiting for a second-SHA recurrence that
+    // may never arrive within an autonomous run). The run-time `emitCiInsightCandidates`
+    // layers this map on top of `DEFAULT_THRESHOLDS`. Defaults to an EMPTY object
+    // (no overrides — the conservative defaults apply).
+    insightThresholds: InsightThresholdsConfig.default({}),
     // SPEC-LOOP REDESIGN (docs/roadmap/spec-loop-redesign.md): the CONVERGENCE policy
     // — the SOLE loop bound (no retry cap / timeout). `maxConsecutiveStalls` halts the
     // spec loop only after N consecutive convergence-answerer stalls; `demoRunEnabled`
