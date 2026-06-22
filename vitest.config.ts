@@ -118,6 +118,14 @@ export default defineConfig({
       "**/dist/**",
       "fixtures/**",
       ".claude/**",
+      // direnv's `use flake` integration mirrors the source tree under
+      // `.direnv/flake-inputs/<hash>-source/` as part of evaluating the flake
+      // input. Without this exclude, vitest discovers every *.test.ts inside
+      // the mirror — re-runs the full suite a second time, and the snapshot's
+      // relative paths (e.g. `./test/setup/systemPool.ts`) resolve wrong from
+      // its location, failing every file. Excluding the cache directory
+      // restores single-tree discovery.
+      "**/.direnv/**",
       "**/tests/e2e/**/*.spec.ts",
       "**/tests/e2e/cases/**",
       "reports/**",
