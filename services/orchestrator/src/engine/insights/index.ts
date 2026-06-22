@@ -14,7 +14,7 @@ export {
   StuckPayload,
 } from "./types.js";
 
-export { APEX_THRESHOLDS, DEFAULT_THRESHOLDS, type InsightThresholds, resolveInsightThresholds } from "./thresholds.js";
+export { DEFAULT_THRESHOLDS, InsightThresholdsConfig, type InsightThresholds } from "./thresholds.js";
 
 export {
   computeInsight,

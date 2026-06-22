@@ -1,10 +1,12 @@
-// thresholds. Each constant is the documented v0 default. Per-org
-// configurability is a later option; the contract for it
-// is: `Thresholds` becomes a function of `orgId` and the call sites already
-// receive the resolved bag so no compute-function signature changes. See
+// thresholds. Each constant is the documented v0 default. Per-PROJECT
+// overrides ride the project-config `insightThresholds` field (a governed
+// SETTING, exactly like `auditPosture`/`reviewPolicy`/`governancePosture` —
+// never an env var); call sites already receive the resolved bag through
+// `deps.thresholds`, so the per-project shape that arrives here is a
+// `Partial<InsightThresholds>` layered on top of `DEFAULT_THRESHOLDS`. See
 // docs/architecture/insights.md.
 
-import { isApexMode } from "../config/apexMode.js";
+import { z } from "zod";
 
 export interface InsightThresholds {
   // retry_hotspot
@@ -37,6 +39,10 @@ export interface InsightThresholds {
   // generated only for a PROVEN problem, never per flaky run.
   // `ciInsightFlakyMinShas`: a flaky test must be proven on at least this many
   //   distinct toggled SHAs before a fix-spec is generated (>= the quarantine bar).
+  //   An autonomous project may set this to 1 via the project-config
+  //   `insightThresholds` field so a single-run flake is spec-eligible (the
+  //   autonomy doctrine: an autonomous run has no operator to notice a
+  //   quarantine awaiting a second-SHA recurrence).
   // `ciInsightSlowMinSuiteTests`: a suite needs at least this many slow tests before
   //   a "split/parallelize the suite" candidate is worth a spec (a single slow test
   //   is a test-level fix, not a suite split).
@@ -67,24 +73,31 @@ export const DEFAULT_THRESHOLDS: InsightThresholds = {
   cacheFreshnessMs: 60 * 60 * 1000,
 };
 
-// The APEX-MODE recurrence bar for the CI-intelligence root-cause loop (Loop 4). An
-// apex / autonomous run has NO operator to notice a quarantine that sits awaiting a
-// SECOND-SHA recurrence that may never come within the run, so a single-run flake would
-// be quarantined-but-never-specced — the flaky→root-cause→ship loop would silently fail
-// to close. Lowering `ciInsightFlakyMinShas` to 1 makes intra-run flaky evidence
-// SPEC-ELIGIBLE (a single proven non-determinism earns a durable fix-spec), so the loop
-// closes on a live apex run. This is the ONLY field apex mode overrides; everything else
-// stays the conservative default.
-export const APEX_THRESHOLDS: InsightThresholds = {
-  ...DEFAULT_THRESHOLDS,
-  ciInsightFlakyMinShas: 1,
-};
-
-// Resolve the BASE insight thresholds for this run — APEX-MODE-AWARE (Loop 4
-// self-config). Under apex mode the base is `APEX_THRESHOLDS` (a single-run flake is
-// spec-eligible — `ciInsightFlakyMinShas: 1`); otherwise the conservative
-// `DEFAULT_THRESHOLDS` (the 2-SHA recurrence bar). Per-org/project overrides still
-// layer ON TOP of this base — apex only moves the DEFAULT, never the explicit override.
-export function resolveInsightThresholds(): InsightThresholds {
-  return isApexMode() ? APEX_THRESHOLDS : DEFAULT_THRESHOLDS;
-}
+// The per-project INSIGHT-THRESHOLDS config — a governed SETTING (lives in the
+// project config jsonb), exactly like `auditPosture`/`reviewPolicy`. Every field
+// is optional: a present value overrides the corresponding `DEFAULT_THRESHOLDS`
+// entry; an absent field inherits the default. The autonomous-project pattern is
+// to set `ciInsightFlakyMinShas: 1` so a single-run flake is spec-eligible (the
+// audit→fix→ship loop closes without waiting for a second-SHA recurrence that may
+// never arrive within an autonomous run). Stored as `Partial<InsightThresholds>`;
+// the run-time emitter layers the persisted overrides on top of `DEFAULT_THRESHOLDS`.
+export const InsightThresholdsConfig = z
+  .object({
+    retryHotspotMinAttempts: z.number().int().min(1).optional(),
+    retryHotspotWindowDays: z.number().int().min(1).optional(),
+    modelMismatchWindowDays: z.number().int().min(1).optional(),
+    modelMismatchMinMergedPerModel: z.number().int().min(1).optional(),
+    modelMismatchCostRatio: z.number().positive().optional(),
+    paceAnomalyMultiplier: z.number().positive().optional(),
+    paceAnomalyWindowDays: z.number().int().min(1).optional(),
+    paceAnomalyMinSamples: z.number().int().min(1).optional(),
+    reviewStallHours: z.number().positive().optional(),
+    reviewStallWindowDays: z.number().int().min(1).optional(),
+    flakyMinToggledShas: z.number().int().min(1).optional(),
+    flakyWindowDays: z.number().int().min(1).optional(),
+    ciInsightFlakyMinShas: z.number().int().min(1).optional(),
+    ciInsightSlowMinSuiteTests: z.number().int().min(1).optional(),
+    cacheFreshnessMs: z.number().int().min(0).optional(),
+  })
+  .strict();
+export type InsightThresholdsConfig = z.infer<typeof InsightThresholdsConfig>;

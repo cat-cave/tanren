@@ -4,7 +4,6 @@
 // shared.ts + config/index.ts so the import surface is unchanged.
 
 import { z } from "zod";
-import { isApexMode } from "./apexMode.js";
 
 // The explicit P0–P3 severity ladder (mirrors `contracts/findings.ts` +
 // `contracts/auditPosture.ts`). Zod here so the per-project `auditPosture` config
@@ -63,17 +62,3 @@ export const AUTONOMOUS_AUDIT_POSTURE: AuditPostureConfig = {
   p2p3Handling: "route-to-dag",
   autonomousRemediation: true,
 };
-
-// The DEFAULT posture an ABSENT project `auditPosture` resolves to — APEX-MODE-AWARE
-// (Loop 3 self-config). An apex / autonomous run has NO operator to act on a parked
-// finding, so a posture that strands findings would FAIL the audit-posture preflight
-// (`assertAuditPostureReentersFindings`) and silently no-op the audit→fix→merge proof.
-// Under apex mode a project that did NOT explicitly set a posture therefore resolves
-// to the AUTONOMOUS posture (residual P2/P3 route to the DAG + a blocking finding
-// becomes a remediation spec — the preflight PASSES and scheduled-audit findings
-// re-enter the DAG). A NON-autonomous run keeps the conservative BALANCED default (a
-// blocking finding parks for a human — the intended human-stop). This is a DEFAULT
-// only: a project that PRESENTLY sets its own `auditPosture` always wins (no override).
-export function resolveDefaultAuditPosture(): AuditPostureConfig {
-  return isApexMode() ? AUTONOMOUS_AUDIT_POSTURE : DEFAULT_AUDIT_POSTURE;
-}

@@ -99,10 +99,6 @@ services:
       TANREN_INTERNAL_TLS_CERT: /etc/tanren/mtls/server.crt
       TANREN_INTERNAL_TLS_KEY: /etc/tanren/mtls/server.key
       TANREN_INTERNAL_TLS_CA: /etc/tanren/mtls/ca.crt
-      # Apex mode (off by default): engine/config/apexMode.ts reads this in the
-      # orchestrator too (audit-posture self-config / LOUD readiness failures).
-      # Mirror the worker passthrough so it is threaded onto both planes.
-      TANREN_APEX_MODE: ${TANREN_APEX_MODE:-}
     volumes:
       - /tmp/tanren-mtls:/etc/tanren/mtls:ro
     secrets:
@@ -219,9 +215,6 @@ services:
       TANREN_NTFY_BASE_URL: ${TANREN_NTFY_BASE_URL:-http://ntfy:80}
       TANREN_NOTIFICATION_DEFAULT_CHANNEL: ${TANREN_NOTIFICATION_DEFAULT_CHANNEL:-ntfy}
       TANREN_NOTIFICATION_DEFAULT_DESTINATION: ${TANREN_NOTIFICATION_DEFAULT_DESTINATION:-tanren-default-alerts}
-      # Apex mode (off by default): when 1, a missing default route is a LOUD startup
-      # readiness FAILURE, not a buried log. Set on the live apex stack.
-      TANREN_APEX_MODE: ${TANREN_APEX_MODE:-}
     volumes:
       - /tmp/tanren-mtls:/etc/tanren/mtls:ro
     secrets:
