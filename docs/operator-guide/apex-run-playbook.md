@@ -82,9 +82,11 @@ bulk-shift `TANREN_PORT_OFFSET=<N>` that adds N to every default at once. Export
 `:3200`/`:5532`/`:2322`/`:18300`/`:3100`/`:18180`/`:5100` (so a second apex trial
 can coexist with the first, or to dodge an existing process on a default port).
 Per-port overrides win over the offset. `just up-dev` echoes the effective set
-on bring-up; `just ports` prints the same set without bringing the stack up. The
-curl examples below assume the defaults — substitute your chosen port if you
-shifted them.
+on bring-up; `just ports` prints the same set without bringing the stack up.
+**`TANREN_PUBLIC_BASE_URL` auto-tracks** the resolved orchestrator host port
+(unless you export your own — operator wins), so OAuth callback URLs and the
+webhook callback base are correct even when ports shift. The curl examples
+below assume the defaults — substitute your chosen port if you shifted them.
 
 ---
 

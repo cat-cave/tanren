@@ -192,8 +192,10 @@ up-dev: runner-key gen-mtls-certs
   : "${DASHBOARD_HOST_PORT:=$((3000 + offset))}"; \
   : "${TANREN_NTFY_HOST_PORT:=$((18080 + offset))}"; \
   : "${TANREN_REGISTRY_HOST_PORT:=$((5000 + offset))}"; \
-  export TANREN_ORCHESTRATOR_HOST_PORT TANREN_POSTGRES_HOST_PORT TANREN_RUNNER_SSH_HOST_PORT TANREN_VAULT_HOST_PORT DASHBOARD_HOST_PORT TANREN_NTFY_HOST_PORT TANREN_REGISTRY_HOST_PORT; \
+  : "${TANREN_PUBLIC_BASE_URL:=http://localhost:${TANREN_ORCHESTRATOR_HOST_PORT}}"; \
+  export TANREN_ORCHESTRATOR_HOST_PORT TANREN_POSTGRES_HOST_PORT TANREN_RUNNER_SSH_HOST_PORT TANREN_VAULT_HOST_PORT DASHBOARD_HOST_PORT TANREN_NTFY_HOST_PORT TANREN_REGISTRY_HOST_PORT TANREN_PUBLIC_BASE_URL; \
   echo "up-dev: host ports — orchestrator=$TANREN_ORCHESTRATOR_HOST_PORT postgres=$TANREN_POSTGRES_HOST_PORT runner-ssh=$TANREN_RUNNER_SSH_HOST_PORT vault=$TANREN_VAULT_HOST_PORT dashboard=$DASHBOARD_HOST_PORT ntfy=$TANREN_NTFY_HOST_PORT registry=$TANREN_REGISTRY_HOST_PORT (override per-port via TANREN_<X>_HOST_PORT or bulk-shift via TANREN_PORT_OFFSET)"; \
+  echo "up-dev: TANREN_PUBLIC_BASE_URL=$TANREN_PUBLIC_BASE_URL (used by OAuth callbacks + webhook URLs; tracks the orchestrator host port automatically)"; \
   TANREN_RUNNER_AUTHORIZED_KEY="$(cat /tmp/tanren_runner_key.pub)" docker compose -f compose.dev.yml up -d postgres vault orchestrator worker allocator dashboard runner ntfy registry
   # Seed PLATFORM-scoped secret-store refs (managed-LLM router key) so a fresh
   # stack can resolve `providerMode: managed`. Skipped (with a notice) when the
@@ -217,7 +219,8 @@ ports:
   : "${DASHBOARD_HOST_PORT:=$((3000 + offset))}"; \
   : "${TANREN_NTFY_HOST_PORT:=$((18080 + offset))}"; \
   : "${TANREN_REGISTRY_HOST_PORT:=$((5000 + offset))}"; \
-  echo "orchestrator=$TANREN_ORCHESTRATOR_HOST_PORT postgres=$TANREN_POSTGRES_HOST_PORT runner-ssh=$TANREN_RUNNER_SSH_HOST_PORT vault=$TANREN_VAULT_HOST_PORT dashboard=$DASHBOARD_HOST_PORT ntfy=$TANREN_NTFY_HOST_PORT registry=$TANREN_REGISTRY_HOST_PORT"
+  : "${TANREN_PUBLIC_BASE_URL:=http://localhost:${TANREN_ORCHESTRATOR_HOST_PORT}}"; \
+  echo "orchestrator=$TANREN_ORCHESTRATOR_HOST_PORT postgres=$TANREN_POSTGRES_HOST_PORT runner-ssh=$TANREN_RUNNER_SSH_HOST_PORT vault=$TANREN_VAULT_HOST_PORT dashboard=$DASHBOARD_HOST_PORT ntfy=$TANREN_NTFY_HOST_PORT registry=$TANREN_REGISTRY_HOST_PORT public_base_url=$TANREN_PUBLIC_BASE_URL"
 
 down-dev:
   docker compose -f compose.dev.yml down -v
