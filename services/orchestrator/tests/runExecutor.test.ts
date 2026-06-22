@@ -185,6 +185,7 @@ describe("run worker — failure classification + heartbeat (runExecutor)", () =
     const result = await executeNextPlanJob({
       ...deps(pool, secrets, jobQueue, passingGitHub()),
       runWorkflow: async () => {
+        // eslint-disable-next-line no-throw-literal -- INTENTIONAL: this test pins the SUT's contract for non-Error throws (paired with the `bare Error` test above); wrapping in `new Error` would defeat the assertion at line 192.
         throw "string failure";
       },
     });

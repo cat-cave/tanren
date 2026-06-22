@@ -26,6 +26,7 @@ export interface RedactionAuditInput {
   // A known event name (autocomplete-friendly) OR any string — the read event
   // type may be an unrecognized name. `string & {}` keeps the `EventName`
   // suggestions without collapsing the union to a bare `string`.
+  // eslint-disable-next-line typescript/ban-types -- `string & {}` is the canonical idiom to keep `EventName` autocomplete on the union; see the 3-line rationale above.
   eventReadType: EventName | (string & {});
   paths: ReadonlyArray<string>;
   // Optional: override timestamp (defaults to now). Tests pin this.

@@ -61,6 +61,7 @@ export function classifySpecStatus(status: string): DagSpecPhase {
     // NEVER-STRAND escalation: a spec the strand-reconciler gave up re-enqueuing
     // (bounded escalation) is terminal — it FREES its slot and blocks ONLY its
     // dependents (never the whole DAG), exactly like a halted/cancelled spec.
+    // falls through
     case "needs_attention":
       return "terminal_blocked";
     default:
