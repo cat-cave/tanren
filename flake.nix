@@ -13,6 +13,7 @@
           nodejs_24
           just
           git
+          lefthook
           # tanren's dev stack (postgres etc.) runs via compose -> rootless podman,
           # not from this shell; these are the host-side tools the repo scripts call.
         ];
