@@ -266,7 +266,12 @@ services:
       # the allocator never reads TANREN_RUNNER_IMAGE (see compose.prod.yml note).
       TANREN_RUNNER_AUTHORIZED_KEY: ${TANREN_RUNNER_AUTHORIZED_KEY:-}
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
+      # Container-runtime socket the allocator drives to create runner containers.
+      # Docker hosts default to `/var/run/docker.sock`; rootless podman exposes
+      # the socket at `/run/user/$UID/podman/podman.sock`. Override via
+      # TANREN_DOCKER_SOCK; `just up-dev` auto-detects podman if no docker
+      # socket is present.
+      - ${TANREN_DOCKER_SOCK:-/var/run/docker.sock}:/var/run/docker.sock
     ports:
       - "3200:3200"
     depends_on:
