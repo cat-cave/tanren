@@ -266,7 +266,11 @@ services:
       # the allocator never reads TANREN_RUNNER_IMAGE (see compose.prod.yml note).
       TANREN_RUNNER_AUTHORIZED_KEY: ${TANREN_RUNNER_AUTHORIZED_KEY:-}
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
+      # Container-runtime socket the allocator drives to create runner containers.
+      # Docker hosts get the default; rootless podman operators override via
+      # TANREN_DOCKER_SOCK (pointed at the per-user podman socket). `just up-dev`
+      # auto-detects between the two. See justfile + apex-run-playbook §1.
+      - ${TANREN_DOCKER_SOCK:-/var/run/docker.sock}:/var/run/docker.sock
     ports:
       - "3200:3200"
     depends_on:

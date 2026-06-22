@@ -128,8 +128,19 @@ function isComposeFile(file) {
   return file === "compose.yml" || file === "compose.dev.yml" || file === "compose.prod.yml";
 }
 
+// The allocator service binds the container-runtime socket. Docker hosts use the
+// literal `/var/run/docker.sock`; rootless podman uses
+// `/run/user/$UID/podman/podman.sock` (selected via TANREN_DOCKER_SOCK and
+// auto-detected by `just up-dev`). Both shapes are allowed on the SAME mount
+// line inside the allocator service; the lint's job is to keep the socket out
+// of every OTHER service + every runtime code path.
 function isAllowedDockerSocketMount(file, line) {
-  return isComposeFile(file) && line.trim() === "- /var/run/docker.sock:/var/run/docker.sock";
+  if (!isComposeFile(file)) return false;
+  const trimmed = line.trim();
+  return (
+    trimmed === "- /var/run/docker.sock:/var/run/docker.sock" ||
+    trimmed === "- ${TANREN_DOCKER_SOCK:-/var/run/docker.sock}:/var/run/docker.sock"
+  );
 }
 
 // A read-only mount of the dev mTLS cert dir into the control /
@@ -178,6 +189,11 @@ export function checkDockerApiAllocatorOnly(projectFiles) {
       invariantDocExclusions.has(file) ||
       file === "scripts/check-architecture.mjs" ||
       file === "scripts/check-architecture-substrate.mjs" ||
+      // justfile resolves TANREN_DOCKER_SOCK (docker default + rootless-podman
+      // fallback) and passes it into compose as an env var. This is operator-side
+      // path detection, not runtime data-plane socket access; the lint's "confined
+      // to allocator code" rule guards the latter and tolerates the former.
+      file === "justfile" ||
       file.startsWith("docs/operator-guide/") ||
       file.startsWith("services/allocator/") ||
       file.startsWith("services/orchestrator/src/engine/allocators/") ||

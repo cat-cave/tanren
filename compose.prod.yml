@@ -352,7 +352,9 @@ services:
       # absent.
       TANREN_RUNNER_AUTHORIZED_KEY: ${TANREN_RUNNER_AUTHORIZED_KEY:?TANREN_RUNNER_AUTHORIZED_KEY must be set for the prod profile}
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
+      # Container-runtime socket (same shape as compose.dev.yml). Operators on
+      # rootless podman set TANREN_DOCKER_SOCK=/run/user/$UID/podman/podman.sock.
+      - ${TANREN_DOCKER_SOCK:-/var/run/docker.sock}:/var/run/docker.sock
     depends_on:
       postgres:
         condition: service_healthy

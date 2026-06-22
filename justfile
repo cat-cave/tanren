@@ -347,9 +347,20 @@ up-dev: secrets-link runner-key gen-mtls-certs
   : "${TANREN_NTFY_HOST_PORT:=$((18080 + offset))}"; \
   : "${TANREN_REGISTRY_HOST_PORT:=$((5000 + offset))}"; \
   : "${TANREN_PUBLIC_BASE_URL:=http://localhost:${TANREN_ORCHESTRATOR_HOST_PORT}}"; \
-  export TANREN_ORCHESTRATOR_HOST_PORT TANREN_POSTGRES_HOST_PORT TANREN_RUNNER_SSH_HOST_PORT TANREN_VAULT_HOST_PORT DASHBOARD_HOST_PORT TANREN_NTFY_HOST_PORT TANREN_REGISTRY_HOST_PORT TANREN_PUBLIC_BASE_URL; \
+  if [ -z "${TANREN_DOCKER_SOCK:-}" ]; then \
+    if [ -S /var/run/docker.sock ]; then \
+      TANREN_DOCKER_SOCK=/var/run/docker.sock; \
+    elif [ -S "/run/user/$(id -u)/podman/podman.sock" ]; then \
+      TANREN_DOCKER_SOCK="/run/user/$(id -u)/podman/podman.sock"; \
+    else \
+      echo "up-dev: no container-runtime socket found at /var/run/docker.sock or /run/user/$(id -u)/podman/podman.sock — export TANREN_DOCKER_SOCK explicitly" >&2; \
+      exit 1; \
+    fi; \
+  fi; \
+  export TANREN_ORCHESTRATOR_HOST_PORT TANREN_POSTGRES_HOST_PORT TANREN_RUNNER_SSH_HOST_PORT TANREN_VAULT_HOST_PORT DASHBOARD_HOST_PORT TANREN_NTFY_HOST_PORT TANREN_REGISTRY_HOST_PORT TANREN_PUBLIC_BASE_URL TANREN_DOCKER_SOCK; \
   echo "up-dev: host ports — orchestrator=$TANREN_ORCHESTRATOR_HOST_PORT postgres=$TANREN_POSTGRES_HOST_PORT runner-ssh=$TANREN_RUNNER_SSH_HOST_PORT vault=$TANREN_VAULT_HOST_PORT dashboard=$DASHBOARD_HOST_PORT ntfy=$TANREN_NTFY_HOST_PORT registry=$TANREN_REGISTRY_HOST_PORT (override per-port via TANREN_<X>_HOST_PORT or bulk-shift via TANREN_PORT_OFFSET)"; \
   echo "up-dev: TANREN_PUBLIC_BASE_URL=$TANREN_PUBLIC_BASE_URL (used by OAuth callbacks + webhook URLs; tracks the orchestrator host port automatically)"; \
+  echo "up-dev: TANREN_DOCKER_SOCK=$TANREN_DOCKER_SOCK (allocator runtime socket; auto-detected — docker first, then rootless podman)"; \
   TANREN_RUNNER_AUTHORIZED_KEY="$(cat /tmp/tanren_runner_key.pub)" docker compose -f compose.dev.yml up -d postgres vault orchestrator worker allocator dashboard runner ntfy registry
   # Seed PLATFORM-scoped secret-store refs (managed-LLM router key) so a fresh
   # stack can resolve `providerMode: managed`. Skipped (with a notice) when the
@@ -386,8 +397,14 @@ down-dev:
 # stack is already down: we probe for containers in the compose project first and
 # skip the `down -v` when there's nothing to remove (podman-compose otherwise emits
 # ~5 "no container/no pod" stderr lines that look like failures but aren't).
+#
+# NOTE on `ps -q` (not `-aq`): podman-compose 1.5.0 rejects the `-a` flag on `ps`
+# (Docker syntax; podman-compose ps lists running containers by default). `-q`
+# alone returns running-container IDs — sufficient for "is anything live to tear
+# down." If only stopped containers remain (rare; usually the prior `down` already
+# cleaned them), the next `up-dev` will recreate over them.
 stack-reset:
-  if [ -n "$(docker compose -f compose.dev.yml ps -aq 2>/dev/null)" ]; then \
+  if [ -n "$(docker compose -f compose.dev.yml ps -q 2>/dev/null)" ]; then \
     docker compose -f compose.dev.yml down -v --remove-orphans; \
   else \
     echo "stack-reset: no containers for this compose project — nothing to remove."; \
