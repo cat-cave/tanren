@@ -27,6 +27,24 @@ standing scratch-NVMe mount (8TB RAID0, faster than the boot drive). Do NOT use
 `/tmp` — slower, and `/tmp` typically lives on the boot drive. Always build from a
 fresh detached checkout of `origin/main`, never reuse a prior worktree.
 
+**One-time secrets setup.** Apex needs three files in the worktree at boot:
+`.env`, `.env.validation.local`, `connections.manifest.local.yaml`. They live
+canonically in `${TANREN_SECRETS_DIR:-~/.config/tanren/secrets}/` (gitignored,
+0700 dir, 0600 files); each worktree symlinks them in via `just secrets-link`
+(auto-called by `just up-dev`). If your secrets currently live inline in your
+main checkout, run `just secrets-migrate` once from that checkout — it moves the
+three files to the canonical location and symlinks them back, so the main
+checkout keeps working and every fresh worktree sees the same set. See
+`validation-credentials.md` § "Canonical secrets layout".
+
+**Apex must run in the default `canonical` secrets mode** — never set
+`TANREN_SECRETS_MODE=dev-defaults`. That mode links `.env -> .env.example`
+(compose-friendly defaults, no real Hetzner/Slack/GitHub-App credentials) and
+exists only for CI / smoke runs where the canonical secrets dir is absent. If
+you set it for apex, the run will boot but cred resolution will fail loud the
+moment it needs a real GitHub App or Vercel token. The default is correct;
+leave it unset.
+
 ```sh
 # A worktree session leaks GIT_DIR/GIT_WORK_TREE into git commands run elsewhere —
 # unset them or every git call below silently targets the wrong repo.

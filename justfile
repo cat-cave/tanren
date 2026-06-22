@@ -151,6 +151,156 @@ compose-build:
 build-golden-image:
   ./scripts/dev/build-golden-image.sh
 
+# Secrets layout for fresh worktrees. Apex playbook §1 says "operate from a fresh
+# detached worktree" — but `.env` / `.env.validation.local` /
+# `connections.manifest.local.yaml` are gitignored and don't follow a worktree
+# checkout, so a fresh worktree's `just up-dev` boots infra-only (orchestrator
+# never starts). Canonical home is `${TANREN_SECRETS_DIR:-~/.config/tanren/secrets}`
+# (XDG-compliant). Operator places the three files there ONCE (`just
+# secrets-migrate` migrates an existing inline setup); this recipe symlinks them
+# into cwd. Idempotent. Fail-loud on missing `.env` (the BLOCKER); optional files
+# skip silently with a notice. Folded into `up-dev` so a fresh worktree boots cleanly.
+secrets-link:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  mode="${TANREN_SECRETS_MODE:-canonical}"
+  src="${TANREN_SECRETS_DIR:-$HOME/.config/tanren/secrets}"
+  # Explicit secrets mode — no silent fallbacks. The operator (or CI) must
+  # declare which mode applies; the default is the strict path so a fresh
+  # apex run fails closed on a missing canonical .env rather than silently
+  # using dev defaults.
+  case "$mode" in
+    canonical)
+      # The real path: canonical .env at $src is the only valid source. Used by
+      # apex and any real-validation run.
+      if [ ! -d "$src" ]; then
+        echo "secrets-link: canonical secrets dir not found: $src" >&2
+        echo "  Either: (1) run 'just secrets-migrate' from your main checkout to" >&2
+        echo "  move existing .env/.env.validation.local/connections.manifest.local.yaml" >&2
+        echo "  into the canonical location, OR (2) for CI / smoke runs that don't" >&2
+        echo "  need real apex secrets, export TANREN_SECRETS_MODE=dev-defaults to" >&2
+        echo "  declare the dev-defaults intent explicitly." >&2
+        exit 1
+      fi
+      if [ ! -f "$src/.env" ]; then
+        echo "secrets-link: required file missing: $src/.env" >&2
+        echo "  .env holds infra bootstrap (DATABASE_URL, VAULT_TOKEN, TANREN_SECRET_STORE)." >&2
+        echo "  Run 'just secrets-migrate' (from your main checkout, with secrets inline)" >&2
+        echo "  OR for CI/smoke runs, export TANREN_SECRETS_MODE=dev-defaults explicitly." >&2
+        exit 1
+      fi
+      ;;
+    dev-defaults)
+      # The explicit dev-defaults path: link `.env -> .env.example` so the
+      # infra stack boots with compose-friendly defaults. NOT a real apex
+      # path — there are no Hetzner/Slack/GitHub-App credentials. The
+      # operator (or CI) must have set TANREN_SECRETS_MODE=dev-defaults
+      # deliberately; this branch never auto-engages.
+      if [ ! -f "./.env.example" ]; then
+        echo "secrets-link: TANREN_SECRETS_MODE=dev-defaults but ./.env.example is absent." >&2
+        echo "  This mode requires a checked-in .env.example template." >&2
+        exit 1
+      fi
+      example_abs="$(pwd)/.env.example"
+      # Idempotent re-run.
+      if [ -L "./.env" ] && [ "$(readlink "./.env")" = "$example_abs" ]; then
+        echo "secrets-link: mode=dev-defaults — .env already linked to .env.example."
+        exit 0
+      fi
+      if [ -L "./.env" ]; then
+        rm "./.env"  # stale symlink — safe to replace
+      elif [ -e "./.env" ]; then
+        echo "secrets-link: mode=dev-defaults but ./.env exists as a real file." >&2
+        echo "  Refusing to clobber. Remove ./.env or run 'just secrets-migrate' first." >&2
+        exit 1
+      fi
+      ln -s "$example_abs" "./.env"
+      echo "secrets-link: mode=dev-defaults — .env linked to .env.example (compose-friendly dev defaults)."
+      echo "  This is NOT a real apex secret set (no Hetzner/Slack/GitHub-App creds)."
+      echo "  Use only for CI/smoke; apex runs unset TANREN_SECRETS_MODE and require real secrets."
+      exit 0
+      ;;
+    *)
+      echo "secrets-link: invalid TANREN_SECRETS_MODE=$mode (valid: canonical, dev-defaults)" >&2
+      exit 1
+      ;;
+  esac
+  linked=()
+  for name in .env .env.validation.local connections.manifest.local.yaml; do
+    s="$src/$name"
+    t="./$name"
+    if [ ! -e "$s" ] && [ ! -L "$s" ]; then
+      continue  # optional file absent at source — skip silently
+    fi
+    if [ -L "$t" ]; then
+      cur="$(readlink "$t")"
+      if [ "$cur" = "$s" ]; then
+        continue  # already linked correctly
+      fi
+      rm "$t"  # stale symlink — safe to replace
+    elif [ -e "$t" ]; then
+      echo "secrets-link: $t exists as a real file (not a symlink)." >&2
+      echo "  Refusing to overwrite. Run 'just secrets-migrate' to move it to $src." >&2
+      exit 1
+    fi
+    ln -s "$s" "$t"
+    linked+=("$name")
+  done
+  if [ ${#linked[@]} -eq 0 ]; then
+    echo "secrets-link: all files already linked from $src"
+  else
+    echo "secrets-link: linked from $src:"
+    for n in "${linked[@]}"; do echo "  $n"; done
+  fi
+
+# One-time migration: move existing inline `.env` / `.env.validation.local` /
+# `connections.manifest.local.yaml` from cwd to the canonical secrets dir, then
+# symlink them back. Idempotent — files already symlinked are skipped; missing
+# files are skipped. Creates the canonical dir at 0700 with each file at 0600.
+# Run ONCE from your main checkout if you currently keep secrets inline there;
+# subsequent worktrees only need 'just secrets-link' (which up-dev calls).
+secrets-migrate:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  dst="${TANREN_SECRETS_DIR:-$HOME/.config/tanren/secrets}"
+  mkdir -p "$dst"
+  chmod 700 "$dst"
+  echo "secrets-migrate: canonical dir = $dst"
+  moved=()
+  skipped=()
+  for name in .env .env.validation.local connections.manifest.local.yaml; do
+    s="./$name"
+    d="$dst/$name"
+    if [ -L "$s" ]; then
+      skipped+=("$name (already a symlink)")
+      continue
+    fi
+    if [ ! -f "$s" ]; then
+      skipped+=("$name (not present in cwd)")
+      continue
+    fi
+    if [ -e "$d" ]; then
+      echo "secrets-migrate: $d already exists at canonical location." >&2
+      echo "  Refusing to overwrite. Remove the older copy or pick a side, then re-run." >&2
+      echo "  (Diff first: diff $s $d)" >&2
+      exit 1
+    fi
+    mv "$s" "$d"
+    chmod 600 "$d"
+    ln -s "$d" "$s"
+    moved+=("$name")
+  done
+  if [ ${#moved[@]} -gt 0 ]; then
+    echo "secrets-migrate: moved to $dst and symlinked back:"
+    for n in "${moved[@]}"; do echo "  $n"; done
+  fi
+  if [ ${#skipped[@]} -gt 0 ]; then
+    echo "secrets-migrate: skipped:"
+    for n in "${skipped[@]}"; do echo "  $n"; done
+  fi
+  echo ""
+  echo "Done. Other worktrees can now run 'just secrets-link' (or just 'just up-dev')."
+
 runner-key:
   test -f /tmp/tanren_runner_key || ssh-keygen -t ed25519 -N "" -f /tmp/tanren_runner_key
 
@@ -179,7 +329,11 @@ usage provider="codex" cli="codex" codex_home="":
 # N to every default at once. Per-port overrides win over the offset, so
 # multiple apex trials can coexist on one box (e.g. `TANREN_PORT_OFFSET=100`
 # for the second stack). The effective port set is echoed before bring-up.
-up-dev: runner-key gen-mtls-certs
+#
+# Secrets: `secrets-link` (first dep) symlinks the operator-local secret files
+# into cwd from ${TANREN_SECRETS_DIR:-~/.config/tanren/secrets}/, so a fresh
+# worktree boots cleanly without copying secrets into it.
+up-dev: secrets-link runner-key gen-mtls-certs
   # Compute effective host ports: per-port env override wins; otherwise
   # default + TANREN_PORT_OFFSET. `:=` only assigns when the var is unset/empty,
   # so an operator-exported per-port var passes through untouched. Posix-sh
@@ -261,6 +415,93 @@ seed-platform-creds:
     VAULT_ADDR="${TANREN_SEED_VAULT_ADDR:-http://127.0.0.1:18200}" \
     VAULT_TOKEN="${TANREN_SEED_VAULT_TOKEN:-dev-root-token}" \
     corepack pnpm exec tsx scripts/dev/seed-platform-creds.ts
+
+# Preflight for an apex (or any dev-stack) run from this cwd. Verifies the
+# canonical secrets layout is intact, required keys are present in `.env`,
+# `.env.validation.local` exists if any TANREN_*_LIVE / TANREN_E2E_* flag is set
+# in the current shell env, and the BYOK Codex `~/.codex/auth.json` is in place.
+# Returns a clean go/no-go summary — fail-loud on any missing piece so an
+# operator never starts an apex trial that will only halt mid-run for a
+# missing secret. Read-only: doesn't mutate anything.
+doctor:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  src="${TANREN_SECRETS_DIR:-$HOME/.config/tanren/secrets}"
+  fail=0
+  ok()  { echo "  ok   $1"; }
+  bad() { echo "  FAIL $1" >&2; fail=1; }
+  echo "doctor: canonical secrets dir = $src"
+  if [ ! -d "$src" ]; then
+    bad "secrets dir does not exist: $src (run 'just secrets-migrate' or create it)"
+  else
+    ok "secrets dir exists"
+    perm="$(stat -c '%a' "$src")"
+    if [ "$perm" != "700" ]; then
+      bad "secrets dir perms are $perm; should be 700 (chmod 700 $src)"
+    else
+      ok "secrets dir perms 700"
+    fi
+  fi
+  if [ ! -f "$src/.env" ]; then
+    bad ".env missing at $src/.env"
+  else
+    ok ".env present"
+    for k in DATABASE_URL VAULT_TOKEN TANREN_SECRET_STORE; do
+      if ! grep -qE "^${k}=" "$src/.env"; then
+        bad ".env missing required key: $k"
+      else
+        ok ".env has $k"
+      fi
+    done
+    perm="$(stat -c '%a' "$src/.env")"
+    if [ "$perm" != "600" ]; then
+      bad ".env perms are $perm; should be 600 (chmod 600 $src/.env)"
+    else
+      ok ".env perms 600"
+    fi
+  fi
+  if [ ! -L "./.env" ]; then
+    if [ -f "./.env" ]; then
+      bad "./.env is a real file, not a symlink — run 'just secrets-migrate' (from main checkout) then 'just secrets-link' here"
+    else
+      bad "./.env missing in cwd — run 'just secrets-link'"
+    fi
+  else
+    ok "cwd ./.env is a symlink"
+  fi
+  needs_validation=0
+  while IFS= read -r v; do
+    case "$v" in
+      TANREN_E2E_*|TANREN_*_LIVE|TANREN_CODEX_AUTH_JSON_FILE|TANREN_GITHUB_TOKEN_FILE)
+        needs_validation=1; break;;
+    esac
+  done < <(env | cut -d= -f1)
+  if [ "$needs_validation" -eq 1 ]; then
+    if [ ! -f "$src/.env.validation.local" ]; then
+      bad ".env.validation.local missing at $src (live/E2E flag set in shell env)"
+    else
+      ok ".env.validation.local present"
+    fi
+  else
+    echo "  skip .env.validation.local (no TANREN_E2E_* / TANREN_*_LIVE in env)"
+  fi
+  if [ -f "$src/connections.manifest.local.yaml" ]; then
+    ok "connections.manifest.local.yaml present"
+  else
+    echo "  note connections.manifest.local.yaml not in $src (needed for apex §4)"
+  fi
+  if [ -f "$HOME/.codex/auth.json" ]; then
+    ok "~/.codex/auth.json present (BYOK Codex)"
+  else
+    echo "  note ~/.codex/auth.json missing (apex §3 BYOK will fail until you run 'codex login')"
+  fi
+  if [ "$fail" -ne 0 ]; then
+    echo "" >&2
+    echo "doctor: $fail check(s) FAILED. Fix and re-run." >&2
+    exit 1
+  fi
+  echo ""
+  echo "doctor: all checks passed."
 
 # Prod profile: fails fast if required env is missing. Operator must run
 # `just vault-init-prod` once before `just up-prod`. See
