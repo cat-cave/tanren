@@ -98,8 +98,10 @@ async function main(): Promise<void> {
 // Run as a script (not when imported by a test). `import.meta.url` ends with this
 // file's path when invoked directly via tsx.
 if (import.meta.url === `file://${process.argv[1]}`) {
-  main().catch((error: unknown) => {
+  try {
+    await main();
+  } catch (error: unknown) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;
-  });
+  }
 }

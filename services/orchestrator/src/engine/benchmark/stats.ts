@@ -18,14 +18,18 @@ export type Rng = () => number;
 export function seededRng(seed: number): Rng {
   // The `>>> 0` / `| 0` here are intentional 32-bit wraparound (the mulberry32
   // contract), NOT integer truncation — Math.trunc would not wrap and would
-  // break the generator. (The lint heuristic that suggests Math.trunc here is a
-  // non-blocking warning; the bitwise form is required.)
+  // break the generator. The per-line `unicorn/prefer-math-trunc` disables
+  // below say so locally; this block-level comment is the rationale.
+  // eslint-disable-next-line unicorn/prefer-math-trunc -- mulberry32 needs unsigned-32-bit wrap, not trunc.
   let state = seed >>> 0;
   return () => {
+    // eslint-disable-next-line unicorn/prefer-math-trunc -- mulberry32 needs signed-32-bit wrap, not trunc.
     state |= 0;
+    // eslint-disable-next-line unicorn/prefer-math-trunc -- mulberry32 needs signed-32-bit wrap on the +0x6D2B79F5 step.
     state = (state + 0x6d_2b_79_f5) | 0;
     let t = Math.imul(state ^ (state >>> 15), 1 | state);
     t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    // eslint-disable-next-line unicorn/prefer-math-trunc -- mulberry32 output requires unsigned-32-bit wrap before scaling to [0,1).
     return ((t ^ (t >>> 14)) >>> 0) / 4_294_967_296;
   };
 }

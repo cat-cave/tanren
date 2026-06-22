@@ -314,8 +314,10 @@ function parseJsonObject(raw: string, flag: string): Record<string, unknown> {
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  main(process.argv.slice(2)).catch((error: unknown) => {
+  try {
+    await main(process.argv.slice(2));
+  } catch (error: unknown) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exit(1);
-  });
+  }
 }
