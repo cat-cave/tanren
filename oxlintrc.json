@@ -98,7 +98,25 @@
     "vitest/no-disabled-tests": "error",
     "vitest/no-focused-tests": "error",
     "import/no-cycle": "error",
-    "import/no-self-import": "error"
+    "import/no-self-import": "error",
+    // Lane D ratchet (final 4): warn→error pins for the last one-off oxlint
+    // warnings after lanes A/B/C drove the count 35 → 0. Each surfaced site is
+    // either fixed in source (no-fallthrough at walkerPg.ts: a `// falls through`
+    // marker was added; the fallthrough is INTENTIONAL — three terminal statuses
+    // collapse to one return) or blessed at the source with an inline disable +
+    // rationale (ban-types at audit.ts: `string & {}` autocomplete brand;
+    // no-throw-literal at runExecutor.test.ts: a test pinning the SUT's non-Error
+    // throw contract). max-depth is tuned to 5 (vs. default 4) — the env-read
+    // whitelist scanner is a genuine 3-axis traversal (files × regexes × matches)
+    // plus a 2-arm classifier, the only depth-5 site in the codebase; the
+    // threshold pattern mirrors the other structural max-* tunings above
+    // (max-lines 500, max-lines-per-function 220, max-classes-per-file 5,
+    // import/max-dependencies 12). ROADMAP §3 doctrine: every cleaned rule
+    // pinned at error so it can't regress.
+    "typescript/ban-types": "error",
+    "no-fallthrough": "error",
+    "no-throw-literal": "error",
+    "max-depth": ["error", { "max": 5 }]
   },
   "overrides": [
     {
