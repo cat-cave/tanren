@@ -6,7 +6,9 @@ services:
       POSTGRES_USER: tanren
       POSTGRES_PASSWORD: tanren
     ports:
-      - "5432:5432"
+      # Host port is remappable (default 5432) via TANREN_POSTGRES_HOST_PORT or
+      # the bulk-shift TANREN_PORT_OFFSET (see `just up-dev`). In-container 5432.
+      - "${TANREN_POSTGRES_HOST_PORT:-5432}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U tanren -d tanren"]
       interval: 5s
@@ -25,7 +27,9 @@ services:
       VAULT_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
     command: ["server", "-dev"]
     ports:
-      - "18200:8200"
+      # Host port is remappable (default 18200) via TANREN_VAULT_HOST_PORT or
+      # the bulk-shift TANREN_PORT_OFFSET (see `just up-dev`). In-container 8200.
+      - "${TANREN_VAULT_HOST_PORT:-18200}:8200"
     healthcheck:
       test: ["CMD", "vault", "status"]
       interval: 5s
@@ -104,7 +108,9 @@ services:
     secrets:
       - tanren_runner_identity_key
     ports:
-      - "3100:3100"
+      # Host port is remappable (default 3100) via TANREN_ORCHESTRATOR_HOST_PORT
+      # or the bulk-shift TANREN_PORT_OFFSET (see `just up-dev`). In-container 3100.
+      - "${TANREN_ORCHESTRATOR_HOST_PORT:-3100}:3100"
       # Plane-split P2: publish the internal mTLS claim listener so the
       # cross-process smoke can act as a data-plane client against it from the
       # host. In a real deployment this stays on the private control↔data network
@@ -306,7 +312,9 @@ services:
     environment:
       TANREN_RUNNER_AUTHORIZED_KEY: ${TANREN_RUNNER_AUTHORIZED_KEY:-}
     ports:
-      - "2222:22"
+      # Host port is remappable (default 2222) via TANREN_RUNNER_SSH_HOST_PORT or
+      # the bulk-shift TANREN_PORT_OFFSET (see `just up-dev`). In-container sshd 22.
+      - "${TANREN_RUNNER_SSH_HOST_PORT:-2222}:22"
     security_opt:
       - apparmor=unconfined
       - seccomp=unconfined
