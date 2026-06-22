@@ -267,10 +267,9 @@ services:
       TANREN_RUNNER_AUTHORIZED_KEY: ${TANREN_RUNNER_AUTHORIZED_KEY:-}
     volumes:
       # Container-runtime socket the allocator drives to create runner containers.
-      # Docker hosts default to `/var/run/docker.sock`; rootless podman exposes
-      # the socket at `/run/user/$UID/podman/podman.sock`. Override via
-      # TANREN_DOCKER_SOCK; `just up-dev` auto-detects podman if no docker
-      # socket is present.
+      # Docker hosts get the default; rootless podman operators override via
+      # TANREN_DOCKER_SOCK (pointed at the per-user podman socket). `just up-dev`
+      # auto-detects between the two. See justfile + apex-run-playbook §1.
       - ${TANREN_DOCKER_SOCK:-/var/run/docker.sock}:/var/run/docker.sock
     ports:
       - "3200:3200"
