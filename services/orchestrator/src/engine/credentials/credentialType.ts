@@ -42,7 +42,7 @@ const BUNDLE_SLUG_TYPES: Record<string, CredentialType> = {
 
 // The api_key provider slugs (the per-token cost-classified LLM providers). A
 // ref under one of these prefixes delivers a raw key, not a bundle.
-const API_KEY_SLUGS: readonly string[] = ["openrouter", "anthropic", "openai-api"];
+const API_KEY_SLUGS: ReadonlySet<string> = new Set(["openrouter", "anthropic", "openai-api"]);
 
 /**
  * The `credential/<slug>/…` PROVIDER SLUG of a ref (e.g. `openrouter`,
@@ -75,7 +75,7 @@ export function credentialTypeForRef(ref: string): CredentialType | null {
   if (bundleType !== undefined) {
     return bundleType;
   }
-  if (API_KEY_SLUGS.includes(slug)) {
+  if (API_KEY_SLUGS.has(slug)) {
     return "api_key";
   }
   return null;

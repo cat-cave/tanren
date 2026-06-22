@@ -112,7 +112,11 @@ describeDb("MergeAuthority — writer-backed LandFinalizer over real Postgres", 
     // The failing variant wraps the real finalizer in a throw-after-land — a faithful
     // "the durable write failed AFTER the external land fired" (the reconcile case).
     const finalizer: LandFinalizer = failFinalize
-      ? { finalizeLanded: async () => Promise.reject(new Error("durable finalize failed")) }
+      ? {
+          finalizeLanded: async () => {
+            throw new Error("durable finalize failed");
+          },
+        }
       : real;
     return new MergeAuthorityImpl(host, finalizer);
   }

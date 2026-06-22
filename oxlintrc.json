@@ -77,6 +77,23 @@
     "unicorn/prefer-dom-node-dataset": "error",
     "unicorn/prefer-code-point": "error",
     "unicorn/no-unnecessary-array-splice-count": "error",
+    // prefer-event-target: ratcheted warn→error now that the remaining hits are
+    // all under tests/**, which is exempted in the test-glob override below.
+    // Production source carries ZERO EventEmitter use today; this gate keeps it
+    // that way. Test files legitimately `new EventEmitter()` to mock ssh2's
+    // Client (and pg's PoolClient) — both Node-only EventEmitters; the SUT
+    // subscribes via `.on(...)`, so rewriting mocks to EventTarget would mean
+    // wrapping ssh2/pg in a translator (much bigger than a style lint warrants).
+    // The test-glob override below is the seam.
+    "unicorn/prefer-event-target": "error",
+    // Mechanical-cleanup ratchets from the same warn→error wave (ROADMAP §3
+    // doctrine: oxlint warnings driven down + every cleaned rule pinned at error
+    // so it can't regress).
+    "unicorn/explicit-length-check": "error",
+    "unicorn/prefer-math-trunc": "error",
+    "unicorn/prefer-set-has": "error",
+    "unicorn/prefer-top-level-await": "error",
+    "unicorn/no-useless-promise-resolve-reject": "error",
     "typescript/consistent-type-imports": "error",
     "vitest/no-disabled-tests": "error",
     "vitest/no-focused-tests": "error",
@@ -92,7 +109,18 @@
       // sources would produce "split your describe" noise with no behavior value.
       "files": ["**/*.test.ts", "**/*.test.tsx", "**/*.spec.ts", "**/tests/**", "**/*.fixtures.ts"],
       "rules": {
-        "max-lines-per-function": "off"
+        "max-lines-per-function": "off",
+        // unicorn/prefer-event-target OFF for tests (lane C). The orchestrator
+        // tests mock ssh2's `Client` and pg's `PoolClient` — both of which are
+        // Node-only EventEmitters — by `new EventEmitter()` + `.emit("ready"|
+        // "error"|"close"|"notification", ...)`. The SUT (production code)
+        // subscribes via `.on(...)`, so the test fakes MUST match that API.
+        // Rewriting the mocks to EventTarget would require wrapping ssh2/pg in
+        // a translator on the production side, which is a much larger change
+        // than this style lint warrants. Production-source EventEmitter use is
+        // still gated `error` (above), so this exemption is scoped to test
+        // doubles of Node-only library surfaces.
+        "unicorn/prefer-event-target": "off"
       }
     },
     {
