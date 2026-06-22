@@ -106,8 +106,8 @@ what apex still has to prove.
    steps**: rebuild the stack from a FRESH `origin/main` checkout
    (`TANREN_DEV_LOGIN=1`/`TANREN_REQUIRE_AUTH=1`), headless dev-login, BYOK Codex,
    import Tier-1 creds, configure the project's autonomy posture via the
-   governance API (apex-mode is no longer a flag — see §2.5 of the playbook), kick
-   off from rough notes, monitor for the next halt.
+   governance API (see the playbook's §2.5 — a single PUT), kick off from rough
+   notes, monitor for the next halt.
 3. **`docs/roadmap/templating-system.md`** — the **templating doctrine**: every
    project DAG seeds from a VALIDATED template; a no-match triggers
    template-creation just-in-time or halts loud — there is **no from-scratch into a

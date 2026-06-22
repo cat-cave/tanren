@@ -12,7 +12,8 @@ alone. The run **rhythm** (drive → halt → fix-on-`main` → drain the backlo
 rebuild → fresh `v(N+1)`) and **what each run proves** live in `apex.md`; this doc
 is the mechanical "how to drive a single run" half.
 
-> **Run naming.** Each trial is `vN` (the trials have run through **v46** as of
+> **Run naming.** Each trial is `vN`, with its worktree at
+> `/scratch/worktrees/tanren/v<N>` (the trials have run through **v46** as of
 > 2026-06-19 — see `apex.md` for the honest proof state; the full autonomy loop
 > has not yet closed end-to-end). Runs are **disposable** — `main` only moves
 > forward; you never patch a run or its generated repo (see `apex.md`).
@@ -21,21 +22,25 @@ is the mechanical "how to drive a single run" half.
 
 ## 1. Rebuild the stack from a fresh `origin/main` checkout
 
-The repository at `/home/trevor/github/tanren-2` is a **bare** git repo and its
-`[main]` worktree **drifts stale**. Always build from a fresh detached checkout of
-`origin/main`, never from the existing `[main]` worktree.
+Operate from a fresh detached worktree at `/scratch/worktrees/tanren/v<N>` — the
+standing scratch-NVMe mount (8TB RAID0, faster than the boot drive). Do NOT use
+`/tmp` — slower, and `/tmp` typically lives on the boot drive. Always build from a
+fresh detached checkout of `origin/main`, never reuse a prior worktree.
 
 ```sh
 # A worktree session leaks GIT_DIR/GIT_WORK_TREE into git commands run elsewhere —
 # unset them or every git call below silently targets the wrong repo.
 unset GIT_DIR GIT_WORK_TREE
 
-# Fresh detached checkout of origin/main (NOT the stale [main] worktree).
-git -C /home/trevor/github/tanren-2 worktree add --detach /tmp/tanren-vNN origin/main
-cd /tmp/tanren-vNN
+# Fresh detached checkout of origin/main. The `git worktree add` invocation works
+# from any clone of the repo (no hardcoded source path).
+git worktree add --detach /scratch/worktrees/tanren/v<N> origin/main
+cd /scratch/worktrees/tanren/v<N>
 
 # Tear down any prior stack + its volumes (a stale DB volume will not run).
-docker compose -p tanren-2 -f compose.dev.yml down -v
+# compose's project name follows the worktree directory (`v<N>`) by default, so
+# each trial is naturally isolated — no `-p` override needed.
+just stack-reset
 
 corepack enable && corepack pnpm install
 ```
@@ -54,11 +59,11 @@ secret — the runner identity key is a **mounted secret file**
 (`/run/secrets/tanren_runner_identity_key`), never a plaintext env value; only the
 PUBLIC `TANREN_RUNNER_AUTHORIZED_KEY` line is passed via env.
 
-**There is no `TANREN_APEX_MODE` env var.** Tanren has no apex branch — the autonomy
-posture (autonomous audit posture + lowered CI-intelligence flaky bar) is a per-project
-governed setting, configured via the same governance API any operator would use (see
-**§2.5** below, after derive). The doctrine: apex tests Tanren the product, not an
-apex-flavored variant.
+The autonomy posture (autonomous audit posture + lowered CI-intelligence flaky bar)
+is a per-project governed setting, configured via the same governance API any
+operator would use (see **§2.5** below, after derive). Apex tests Tanren the
+product, not an apex-flavored variant. (historical: previously `TANREN_APEX_MODE`
+— eradicated in #646.)
 
 Verify health before driving anything:
 
@@ -93,9 +98,8 @@ cookie) + `-H "X-CSRF-Token: <token>"` on every write below.
 
 ## 2.5. Flip the project into the autonomous posture (post-derive)
 
-There is no apex mode. Apex is just **a project configured with the autonomous
-posture** via the same governance API any customer-shaped operator would use. The
-two knobs:
+Apex is a project configured with the **autonomous posture** via the same
+governance API any customer-shaped operator would use. The two knobs:
 
 - `auditPosture: AUTONOMOUS_AUDIT_POSTURE` — residual P2/P3 findings route into
   the DAG and a blocking finding becomes a remediation spec, so the
@@ -247,12 +251,13 @@ curl -s -b jar "http://localhost:3100/orgs/$ORG/projects/$PROJ/dora"
 - no forward progress for a sustained window (a stall).
 
 On a halt, read **`/runs/:runId/events`** + **`/runs/:runId/recovery`** + the
-**worker and orchestrator docker logs** (`docker compose -p tanren-2 -f
-compose.dev.yml logs worker orchestrator`) for the root cause. Then follow the
-**rhythm in `apex.md`**: fix the root cause cleanly on `main` (zero compat
-residue), drain the backlog of deferrals/side-quests via parallel agent waves to
-lift the platform a quality tier, then rebuild from fresh `origin/main` and start
-`v(N+1)`.
+**worker and orchestrator docker logs** (`docker compose -f compose.dev.yml logs
+worker orchestrator` — compose's project name defaults to the worktree directory,
+e.g. `v<N>`, so no `-p` override needed when running from inside the worktree) for
+the root cause. Then follow the **rhythm in `apex.md`**: fix the root cause cleanly
+on `main` (zero compat residue), drain the backlog of deferrals/side-quests via
+parallel agent waves to lift the platform a quality tier, then rebuild from fresh
+`origin/main` and start `v(N+1)`.
 
 ---
 

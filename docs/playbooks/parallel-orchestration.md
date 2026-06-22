@@ -51,6 +51,10 @@ These are learned the hard way; violating them costs more than the work itself.
    - _Claude-specific:_ spawn subagents with `isolation: "worktree"`.
    - _Generic fallback:_ `git worktree add ../wt-<task> -b <branch>` per agent;
      each runs in its own directory.
+   - _Local convention (this box):_ worktrees live under
+     `/scratch/worktrees/tanren/<name>` — the 8TB RAID0 NVMe scratch mount is
+     faster than the boot drive, and `/tmp` is explicitly NOT used (slower,
+     boot-drive-bound). On other boxes, any fast-disk path is fine.
 
 3. **Fan out only over DISJOINT file sets.** Two agents that touch the same file
    produce merge conflicts and lost work. Before fanning out, partition the work
