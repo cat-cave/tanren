@@ -197,8 +197,9 @@ Using `$ORG` and `$CSRF` as bound in §2:
 curl -s -b jar -H "X-CSRF-Token: $CSRF" -H 'content-type: application/json' \
   -X POST "http://localhost:3100/orgs/$ORG/ai-provider" \
   -d "$(jq -n --arg a "$(cat ~/.codex/auth.json)" \
-        '{provider:"codex", authJson:$a, makeDefault:true}')"
-# expect providerMode: "byok"
+        '{provider:"codex", authJson:$a, makeDefault:true}')" | jq .
+# expect: { provider:"codex", ref:"credential/codex/org/<orgId>/default",
+#           classifiedAs:"subscription/openai", isDefault:true }
 ```
 
 ---
@@ -275,8 +276,9 @@ give technical answers — see the role rules in `apex.md`):
 ```sh
 # Round 1 — rough first description. Start with an EMPTY capture; the server
 # defaults the missing keys. The response carries `say` (next question),
-# `captureDelta` (what this round merged), and `complete` (false until the
-# answerer says the interview is done).
+# `suggestions` (operator-facing prompts), `capture` (the merged-so-far state to
+# carry into the next round), and `complete` (false until the answerer says
+# the interview is done).
 R1=$(curl -s -b jar -H "X-CSRF-Token: $CSRF" -H 'content-type: application/json' \
   -X POST "http://localhost:3100/orgs/$ORG/onboarding/interview/round" \
   -d '{
@@ -318,11 +320,13 @@ CAP=$(jq '.capture' <<<"$R3")
 ```sh
 # Derive: the final $CAP from the rounds above + the GitHub owner the new
 # greenfield repo lands under + the deploy provider you linked in §4.b. The
-# autonomy knob lands the project ALREADY autonomous so the DagWalker can
-# advance off the empty repo with no follow-up PATCH.
+# autonomy knob sets the project's reviewPolicy + mergeIntegration + governance
+# posture (the review/merge axes); it does NOT set auditPosture or
+# insightThresholds — those still need the §2.5 governance PUT below before the
+# first autonomous run.
 #   $GH_OWNER         the GitHub org/user login the App is installed on (the
 #                     owner of the new greenfield repo).
-curl -s -b jar -H "X-CSRF-Token: $CSRF" -H 'content-type: application/json' \
+DERIVE=$(curl -s -b jar -H "X-CSRF-Token: $CSRF" -H 'content-type: application/json' \
   -X POST "http://localhost:3100/orgs/$ORG/onboarding/interview/derive" \
   -d "$(jq -n --argjson cap "$CAP" --arg owner "$GH_OWNER" '{
         capture: $cap,
@@ -331,10 +335,12 @@ curl -s -b jar -H "X-CSRF-Token: $CSRF" -H 'content-type: application/json' \
         description: "apex trial: link shortener with click counts + Slack-on-100 + live deploy",
         autonomy: "auto",
         deploy: { providerKind: "deploy.vercel", mode: "greenfield" }
-      }')" | jq '{projectId, projectKey, repository, bootstrap, inboxSource}'
+      }')")
+echo "$DERIVE" | jq '{projectId, projectName, repository, bootstrap, inboxSource}'
 
-# Capture $PROJ from the response for §2.5 (governance flip) and §6 (monitor).
-PROJ=<projectId from the response above>
+# Capture $PROJ for §2.5 (governance flip) and §6 (monitor).
+PROJ=$(jq -r '.projectId' <<<"$DERIVE")
+echo "PROJ=$PROJ"
 ```
 
 ### 5b. The template gate fires here — DO NOT pre-create a template
@@ -384,7 +390,9 @@ scoped:
 # Spec status counts (watch specs flow open → ... → merged, or park needs_attention).
 curl -s -b jar "http://localhost:3100/orgs/$ORG/projects/$PROJ/specs"
 
-# Runs + a single run's event stream + recovery context + DORA.
+# Runs + a single run's event stream + recovery context + DORA. Pick a $RUN id
+# from the /runs list response (e.g. the latest active one):
+#   RUN=$(curl -s -b jar "http://localhost:3100/orgs/$ORG/projects/$PROJ/runs" | jq -r '.runs[0].id')
 curl -s -b jar "http://localhost:3100/orgs/$ORG/projects/$PROJ/runs"
 curl -s -b jar "http://localhost:3100/orgs/$ORG/projects/$PROJ/runs/$RUN/events"
 curl -s -b jar "http://localhost:3100/orgs/$ORG/projects/$PROJ/runs/$RUN/recovery"
