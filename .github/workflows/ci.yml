@@ -16,6 +16,12 @@ jobs:
       # the cache step below persists it across runs so unchanged packages are
       # restored, not rebuilt. Telemetry off in CI.
       TURBO_TELEMETRY_DISABLED: "1"
+      # Secrets mode (just secrets-link): CI has no canonical secrets dir and
+      # doesn't need real apex credentials — declare the dev-defaults intent
+      # explicitly so `just up-dev` (called via `just smoke`) symlinks .env to
+      # .env.example. The default `canonical` mode would (correctly) fail loud
+      # on the missing $HOME/.config/tanren/secrets/.env.
+      TANREN_SECRETS_MODE: dev-defaults
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6

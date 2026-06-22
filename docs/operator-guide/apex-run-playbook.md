@@ -37,6 +37,14 @@ three files to the canonical location and symlinks them back, so the main
 checkout keeps working and every fresh worktree sees the same set. See
 `validation-credentials.md` § "Canonical secrets layout".
 
+**Apex must run in the default `canonical` secrets mode** — never set
+`TANREN_SECRETS_MODE=dev-defaults`. That mode links `.env -> .env.example`
+(compose-friendly defaults, no real Hetzner/Slack/GitHub-App credentials) and
+exists only for CI / smoke runs where the canonical secrets dir is absent. If
+you set it for apex, the run will boot but cred resolution will fail loud the
+moment it needs a real GitHub App or Vercel token. The default is correct;
+leave it unset.
+
 ```sh
 # A worktree session leaks GIT_DIR/GIT_WORK_TREE into git commands run elsewhere —
 # unset them or every git call below silently targets the wrong repo.

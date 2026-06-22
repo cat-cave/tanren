@@ -124,6 +124,19 @@ symlinks them back, keeping the main checkout working while letting fresh
 worktrees see the same set. `just doctor` verifies the layout is intact and
 `.env` has the required keys; run it before `just up-dev` from a fresh worktree.
 
+**Secrets mode is explicit, never implicit.** `secrets-link` reads
+`TANREN_SECRETS_MODE` (default: `canonical`):
+
+| Mode | Behavior | Used by |
+| --- | --- | --- |
+| `canonical` (default) | Requires the canonical `.env` at `$TANREN_SECRETS_DIR`. Fails loud if absent. | Real apex / validation runs |
+| `dev-defaults` | Links `.env -> .env.example` (compose-friendly defaults, no real creds). | CI / smoke (declared in `.github/workflows/ci.yml`) |
+
+The default is the strict path so a fresh apex run fails closed rather than
+silently using dev defaults. CI declares `TANREN_SECRETS_MODE=dev-defaults`
+explicitly. **Never set `dev-defaults` for an apex run** — credential
+resolution will fail the moment a real GitHub App or Vercel token is needed.
+
 **Real-world setup (an operator):** configure each connector in the dashboard;
 your live manifest entries are all `value_source: secret_manager_ref`. Nothing in
 env except the infra bootstrap in `.env`.
