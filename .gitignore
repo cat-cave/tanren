@@ -10,6 +10,8 @@ reports/
 *.log
 .pnpm-store/
 .turbo/
+.corepack/
+.direnv/
 secrets/
 connections.manifest.local.yaml
 
