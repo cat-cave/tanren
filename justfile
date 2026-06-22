@@ -186,6 +186,14 @@ up-dev: runner-key gen-mtls-certs
 down-dev:
   docker compose -f compose.dev.yml down -v
 
+# Tear down the dev stack and wipe its named volumes (postgres data, registry data,
+# anonymous compose volumes). The complement to `just up-dev` — use when the schema /
+# baseline migration is out of sync, when you need a fresh state for an e2e or apex
+# run, or when an aborted `up-dev` left a stale container set. Safe to run when the
+# stack is already down (down -v on no containers is a no-op).
+stack-reset:
+  docker compose -f compose.dev.yml down -v --remove-orphans
+
 # Hosting/boot seeder for PLATFORM-scoped secret-store refs (deploy-layer config,
 # NOT a tenant/userland credential route). Seeds the managed-LLM router key at
 # `credential/openrouter/platform/default` so `providerMode: managed` runs can
