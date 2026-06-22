@@ -111,7 +111,7 @@ function parseAttributes(raw: string): Record<string, string> {
   for (match = re.exec(raw); match !== null; match = re.exec(raw)) {
     // Reject stray non-whitespace between attributes (malformed tag).
     const gap = raw.slice(consumed, match.index);
-    if (gap.trim().length !== 0) {
+    if (gap.trim().length > 0) {
       throw new JunitParseError(`malformed attributes near ${JSON.stringify(gap.trim())}`);
     }
     const key = match[1] as string;
@@ -119,7 +119,7 @@ function parseAttributes(raw: string): Record<string, string> {
     attrs[key] = decodeEntities(value);
     consumed = match.index + match[0].length;
   }
-  if (raw.slice(consumed).trim().length !== 0) {
+  if (raw.slice(consumed).trim().length > 0) {
     throw new JunitParseError(`malformed attributes near ${JSON.stringify(raw.slice(consumed).trim())}`);
   }
   return attrs;
@@ -160,7 +160,7 @@ function tokenize(xml: string): Token[] {
     if (!NAME_RE.test(name)) throw new JunitParseError(`invalid element name ${JSON.stringify(name)}`);
     const attrText = spaceIdx === -1 ? "" : body.slice(spaceIdx + 1);
     const attrs = isClose ? {} : parseAttributes(attrText);
-    if (isClose && attrText.trim().length !== 0) {
+    if (isClose && attrText.trim().length > 0) {
       throw new JunitParseError(`closing tag ${JSON.stringify(name)} must not carry attributes`);
     }
     tokens.push({ kind: isClose ? "close" : isSelfClose ? "selfclose" : "open", name, attrs });
@@ -191,7 +191,7 @@ function buildTree(tokens: Token[]): XmlNode {
     else parent.children.push(node);
     if (token.kind === "open") stack.push(node);
   }
-  if (stack.length !== 0) throw new JunitParseError(`unclosed tag ${JSON.stringify(stack.at(-1)?.name)}`);
+  if (stack.length > 0) throw new JunitParseError(`unclosed tag ${JSON.stringify(stack.at(-1)?.name)}`);
   if (roots.length !== 1) throw new JunitParseError(`expected exactly one root element, found ${roots.length}`);
   return roots[0] as XmlNode;
 }
@@ -253,7 +253,7 @@ function parseTestcase(testcase: XmlNode, suiteName: string | null): JunitTestRe
   const flakyFailure = testcase.children.some((c) => FLAKY_CHILDREN.has(c.name));
   return {
     testId: buildTestId(testcase.attrs["classname"], name),
-    file: fileAttr !== undefined && fileAttr.trim().length !== 0 ? fileAttr : null,
+    file: fileAttr !== undefined && fileAttr.trim().length > 0 ? fileAttr : null,
     suite: suiteName,
     outcome: outcomeFromChildren(testcase),
     durationMs: parseDurationMs(testcase.attrs["time"]),
@@ -276,7 +276,7 @@ export function parseJunitReport(xml: string): JunitReport {
   const results: JunitTestResult[] = [];
   for (const suite of suites) {
     const suiteNameAttr = suite.attrs["name"];
-    const suiteName = suiteNameAttr !== undefined && suiteNameAttr.trim().length !== 0 ? suiteNameAttr : null;
+    const suiteName = suiteNameAttr !== undefined && suiteNameAttr.trim().length > 0 ? suiteNameAttr : null;
     for (const child of suite.children) {
       if (child.name !== "testcase") continue;
       results.push(parseTestcase(child, suiteName));

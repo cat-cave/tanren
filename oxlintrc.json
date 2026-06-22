@@ -77,16 +77,23 @@
     "unicorn/prefer-dom-node-dataset": "error",
     "unicorn/prefer-code-point": "error",
     "unicorn/no-unnecessary-array-splice-count": "error",
-    // unicorn/prefer-event-target (lane C): ratcheted warn→error now that the
-    // remaining hits are all under tests/**, which is exempted in the test-glob
-    // override below. The rule is the right default for portable code, and
-    // production source carries ZERO EventEmitter use today; this gate keeps it
+    // prefer-event-target: ratcheted warn→error now that the remaining hits are
+    // all under tests/**, which is exempted in the test-glob override below.
+    // Production source carries ZERO EventEmitter use today; this gate keeps it
     // that way. Test files legitimately `new EventEmitter()` to mock ssh2's
-    // Client (and pg's PoolClient) — both are Node-only EventEmitters in the
-    // wild and the SUT subscribes via `.on(...)`, so rewriting the mocks to
-    // EventTarget would mean wrapping ssh2/pg in a translator (a much bigger
-    // change than a style lint warrants). The override below is the seam.
+    // Client (and pg's PoolClient) — both Node-only EventEmitters; the SUT
+    // subscribes via `.on(...)`, so rewriting mocks to EventTarget would mean
+    // wrapping ssh2/pg in a translator (much bigger than a style lint warrants).
+    // The test-glob override below is the seam.
     "unicorn/prefer-event-target": "error",
+    // Mechanical-cleanup ratchets from the same warn→error wave (ROADMAP §3
+    // doctrine: oxlint warnings driven down + every cleaned rule pinned at error
+    // so it can't regress).
+    "unicorn/explicit-length-check": "error",
+    "unicorn/prefer-math-trunc": "error",
+    "unicorn/prefer-set-has": "error",
+    "unicorn/prefer-top-level-await": "error",
+    "unicorn/no-useless-promise-resolve-reject": "error",
     "typescript/consistent-type-imports": "error",
     "vitest/no-disabled-tests": "error",
     "vitest/no-focused-tests": "error",
