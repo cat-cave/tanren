@@ -164,14 +164,42 @@ secrets-link:
   #!/usr/bin/env bash
   set -euo pipefail
   src="${TANREN_SECRETS_DIR:-$HOME/.config/tanren/secrets}"
-  if [ ! -d "$src" ]; then
-    echo "secrets-link: canonical secrets dir not found: $src" >&2
-    echo "  Run 'just secrets-migrate' from your main checkout if your secrets" >&2
-    echo "  live there inline, OR create $src and populate it." >&2
-    exit 1
-  fi
-  if [ ! -f "$src/.env" ]; then
-    echo "secrets-link: required file missing: $src/.env" >&2
+  # Fallback: no canonical secrets → use .env.example as .env (dev defaults).
+  # This is correct for CI / smoke / fresh dev boxes that don't need real apex
+  # secrets — `.env.example` ships compose-friendly defaults (postgres on tanren/
+  # tanren, dev-root-token vault, etc.). NOT a substitute for a real apex run
+  # (no Hetzner/Slack/GitHub-App credentials), but lets infra boot. The apex
+  # playbook §1 calls out `just secrets-migrate` for the real path.
+  if [ ! -d "$src" ] || [ ! -f "$src/.env" ]; then
+    if [ -f "./.env.example" ]; then
+      example_abs="$(pwd)/.env.example"
+      # Idempotent: if .env already points at .env.example, we're in the
+      # fallback steady state. Done.
+      if [ -L "./.env" ] && [ "$(readlink "./.env")" = "$example_abs" ]; then
+        echo "secrets-link: .env already linked to .env.example (dev-defaults fallback)."
+        exit 0
+      fi
+      # Otherwise: create the fallback link if .env is absent / a stale symlink.
+      if [ -L "./.env" ]; then
+        rm "./.env"  # stale symlink — safe to replace
+      elif [ -e "./.env" ]; then
+        echo "secrets-link: ./.env exists as a real file and no canonical $src." >&2
+        echo "  Run 'just secrets-migrate' to move it to the canonical location." >&2
+        exit 1
+      fi
+      ln -s "$example_abs" "./.env"
+      echo "secrets-link: no canonical secrets at $src — using .env.example as .env (dev defaults)."
+      echo "  This is fine for CI/smoke. For apex / real validation, run 'just secrets-migrate'"
+      echo "  to populate $src and re-run."
+      exit 0
+    fi
+    if [ ! -d "$src" ]; then
+      echo "secrets-link: canonical secrets dir not found: $src (and no .env.example to fall back to)" >&2
+      echo "  Run 'just secrets-migrate' from your main checkout if your secrets" >&2
+      echo "  live there inline, OR create $src and populate it." >&2
+      exit 1
+    fi
+    echo "secrets-link: required file missing: $src/.env (and no .env.example to fall back to)" >&2
     echo "  .env holds infra bootstrap (DATABASE_URL, VAULT_TOKEN, TANREN_SECRET_STORE)." >&2
     echo "  Run 'just secrets-migrate' or copy .env.example to $src/.env." >&2
     exit 1
