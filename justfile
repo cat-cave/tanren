@@ -365,10 +365,10 @@ up-dev: secrets-link runner-key gen-mtls-certs
   # Seed PLATFORM-scoped secret-store refs (managed-LLM router key) so a fresh
   # stack can resolve `providerMode: managed`. Skipped (with a notice) when the
   # key env var is absent, so a BYOK-only dev stack still comes up cleanly.
-  if set -a; [ -f .env.validation.local ] && . ./.env.validation.local; set +a; [ -n "${TANREN_E2E_MANAGED_ROUTER_KEY:-}" ]; then \
+  if [ -n "$(node scripts/dev/dotenv-extract.mjs .env.validation.local TANREN_E2E_MANAGED_ROUTER_KEY 2>/dev/null)" ]; then \
     just seed-platform-creds; \
   else \
-    echo "up-dev: TANREN_E2E_MANAGED_ROUTER_KEY unset — skipping platform-cred seed (managed mode will be unavailable until you run 'just seed-platform-creds')"; \
+    echo "up-dev: TANREN_E2E_MANAGED_ROUTER_KEY unset in .env.validation.local — skipping platform-cred seed (managed mode unavailable until you run 'just seed-platform-creds')"; \
   fi
 
 # Print the effective host-port set without bringing the stack up (the same
@@ -427,8 +427,8 @@ stack-reset:
 # `TANREN_SEED_VAULT_ADDR`/`TANREN_SEED_VAULT_TOKEN` (override to point at a
 # different Vault). Folded into `up-dev`; also runnable on demand after a rebuild.
 seed-platform-creds:
-  set -a; [ -f .env.validation.local ] && . ./.env.validation.local; set +a; \
-  TANREN_SECRET_STORE=vault \
+  TANREN_E2E_MANAGED_ROUTER_KEY="$(node scripts/dev/dotenv-extract.mjs .env.validation.local TANREN_E2E_MANAGED_ROUTER_KEY 2>/dev/null)" \
+    TANREN_SECRET_STORE=vault \
     VAULT_ADDR="${TANREN_SEED_VAULT_ADDR:-http://127.0.0.1:18200}" \
     VAULT_TOKEN="${TANREN_SEED_VAULT_TOKEN:-dev-root-token}" \
     corepack pnpm exec tsx scripts/dev/seed-platform-creds.ts
