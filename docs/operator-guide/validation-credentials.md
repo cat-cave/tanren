@@ -127,10 +127,10 @@ worktrees see the same set. `just doctor` verifies the layout is intact and
 **Secrets mode is explicit, never implicit.** `secrets-link` reads
 `TANREN_SECRETS_MODE` (default: `canonical`):
 
-| Mode | Behavior | Used by |
-| --- | --- | --- |
-| `canonical` (default) | Requires the canonical `.env` at `$TANREN_SECRETS_DIR`. Fails loud if absent. | Real apex / validation runs |
-| `dev-defaults` | Links `.env -> .env.example` (compose-friendly defaults, no real creds). | CI / smoke (declared in `.github/workflows/ci.yml`) |
+| Mode                  | Behavior                                                                      | Used by                                             |
+| --------------------- | ----------------------------------------------------------------------------- | --------------------------------------------------- |
+| `canonical` (default) | Requires the canonical `.env` at `$TANREN_SECRETS_DIR`. Fails loud if absent. | Real apex / validation runs                         |
+| `dev-defaults`        | Links `.env -> .env.example` (compose-friendly defaults, no real creds).      | CI / smoke (declared in `.github/workflows/ci.yml`) |
 
 The default is the strict path so a fresh apex run fails closed rather than
 silently using dev defaults. CI declares `TANREN_SECRETS_MODE=dev-defaults`
