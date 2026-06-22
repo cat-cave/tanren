@@ -40,12 +40,9 @@ docker compose -p tanren-2 -f compose.dev.yml down -v
 corepack enable && corepack pnpm install
 ```
 
-Bring the stack up with the apex host env vars exported:
+Bring the stack up with the dev host env vars exported:
 
 ```sh
-export TANREN_APEX_MODE=1      # self-configures the autonomous audit-posture + flaky
-                               # threshold; REQUIRED or the audit-posture preflight
-                               # fails the run.
 export TANREN_DEV_LOGIN=1      # enables the headless local_dev login (step 2).
 export TANREN_REQUIRE_AUTH=1   # auth is enforced (apex drives the real auth surface).
 just up-dev
@@ -57,9 +54,11 @@ secret — the runner identity key is a **mounted secret file**
 (`/run/secrets/tanren_runner_identity_key`), never a plaintext env value; only the
 PUBLIC `TANREN_RUNNER_AUTHORIZED_KEY` line is passed via env.
 
-`compose.dev.yml` wires `TANREN_APEX_MODE` (via `${TANREN_APEX_MODE:-}`) onto BOTH
-the `orchestrator` and `worker` services, so exporting it on the host before
-`just up-dev` propagates to both (`engine/config/apexMode.ts` reads it in each).
+**There is no `TANREN_APEX_MODE` env var.** Tanren has no apex branch — the autonomy
+posture (autonomous audit posture + lowered CI-intelligence flaky bar) is a per-project
+governed setting, configured via the same governance API any operator would use (see
+**§2.5** below, after derive). The doctrine: apex tests Tanren the product, not an
+apex-flavored variant.
 
 Verify health before driving anything:
 
@@ -89,6 +88,43 @@ curl -s -b jar "http://localhost:3100/auth/me"
 
 From here, resolve your `orgId` from `/auth/me` and use `-b jar` (the session
 cookie) + `-H "X-CSRF-Token: <token>"` on every write below.
+
+---
+
+## 2.5. Flip the project into the autonomous posture (post-derive)
+
+There is no apex mode. Apex is just **a project configured with the autonomous
+posture** via the same governance API any customer-shaped operator would use. The
+two knobs:
+
+- `auditPosture: AUTONOMOUS_AUDIT_POSTURE` — residual P2/P3 findings route into
+  the DAG and a blocking finding becomes a remediation spec, so the
+  audit→finding→fix→merge loop closes with no operator. The audit-posture
+  preflight FAILS LOUD on an autonomous run that did not configure this — that
+  fail-closed bar is the design.
+- `insightThresholds.ciInsightFlakyMinShas: 1` — a single-run flake is
+  spec-eligible (the autonomous-run pattern: no operator to notice a quarantine
+  awaiting a second-SHA recurrence that may never come within the run).
+
+Both flip in ONE PUT (read-modify-write — omitted keys are untouched):
+
+```sh
+curl -s -b jar -H "X-CSRF-Token: $CSRF" -H 'content-type: application/json' \
+  -X PUT "http://localhost:3100/orgs/$ORG/projects/$PROJ/governance" \
+  -d '{
+        "governancePosture": "lenient",
+        "auditPosture": {
+          "blockReviewAt": "P1",
+          "p2p3Handling": "route-to-dag",
+          "autonomousRemediation": true
+        },
+        "insightThresholds": { "ciInsightFlakyMinShas": 1 }
+      }'
+```
+
+`$PROJ` materializes during derive (step 5), so run this PUT **AFTER step 5**.
+Without it the audit-posture preflight blocks the run loudly — that is intended
+and proves the bar is real.
 
 ---
 
@@ -163,6 +199,14 @@ no-match either creates a validated template or **halts loud**
 template-creation-from-scratch; if that path breaks, that is exactly the bug apex
 exists to flush. Watch for the durable events `template.selection.no_match` and
 `template.creation.{started,published,failed}` in the run event stream.
+
+### 5b-postlude. Now run §2.5 to flip the project into autonomous posture
+
+Once derive succeeds you have `$PROJ`. **Go back to §2.5** and PUT
+`auditPosture: AUTONOMOUS_AUDIT_POSTURE` + `insightThresholds.ciInsightFlakyMinShas: 1`
+on this project. Without it the audit-posture preflight will block the first
+autonomous run with `audit.posture_strands_findings` — that fail-closed bar is
+the design.
 
 ### 5c. Derive also captures a design contract
 
