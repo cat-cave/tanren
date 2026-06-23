@@ -37,6 +37,42 @@ export interface ClaimRunnerInput {
   containerId: string;
 }
 
+/**
+ * Thrown by {@link PgRunnerStore.claim} when the INSERT…ON CONFLICT matches a
+ * LIVE `runners` row (one whose `released_at IS NULL`) — the conditional UPDATE
+ * branch excludes it, the INSERT branch collides on the unique runner_id, so
+ * zero rows are affected. This is a WIRING bug surface — the lifecycle is
+ * meant to pre-check and short-circuit before reaching here, or two paths are
+ * double-claiming the same deterministic handle (e.g. a job-reaper requeue
+ * racing the original worker, or the template-build deterministic
+ * `run_template_build_<projectId>` being re-derived while the prior runner is
+ * still LIVE). It is NEVER a transient — re-trying the same INSERT will hit the
+ * same LIVE row on the next pass and fail-loop forever (apex v49: the bare
+ * INSERT threw an untyped `runners_pkey`, which `isRetriableInfraError`
+ * defaults to RETRIABLE, and the merge coordinator's hold-loop re-drove
+ * forever → an 8-hour curl hang).
+ *
+ * Carrying `retriable: false` opts INTO the typed-permanent path: the per-PR
+ * coordinator wraps the throw as `{ kind: "blocked" }` → the recoverable
+ * sustained-non-recovery hold (`holdOrHaltRecoverableDrive`) emits a LOUD
+ * `merge.queue.infra_blocked` alert keyed off the unchanging signature and
+ * keeps the entry queued; the batch coordinator routes the same way
+ * (`holdOnRetriableDriveThrow` returns `undefined`, the catch wraps as
+ * `blocked`, `settleDriveOutcome` reaches the same hold). Recovery stays
+ * autonomous (the entry is never abandoned) but the hot-loop is broken — the
+ * doctrine line from `docs/roadmap/timeout-eradication.md` §1: a structural
+ * fixed-point is NOT a transient.
+ */
+export class RunnerClaimLiveRowError extends Error {
+  readonly retriable = false as const;
+  readonly runnerId: string;
+  constructor(runnerId: string) {
+    super(`runner ${runnerId} already has a LIVE row (released_at IS NULL); refusing to re-claim`);
+    this.name = "RunnerClaimLiveRowError";
+    this.runnerId = runnerId;
+  }
+}
+
 export interface RunnerStore {
   claim(input: ClaimRunnerInput): Promise<void>;
   release(runnerId: string): Promise<void>;
@@ -58,8 +94,30 @@ export class PgRunnerStore implements RunnerStore {
     // runner row. A system / null-org job (org_id NULL) runs under the worker's
     // per-job SYSTEM scope, so this routes through a short `runWithSystemScope`
     // (BYPASSRLS) instead — never an implicit unscoped bare-pool write.
-    await withJobOrgScope(this.pool, (client) =>
-      client.query(
+    //
+    // Idempotent claim (apex v49 / task #21A): the runner id is the
+    // deterministic `runner_<handle>`, so a RETRIED claim for the same handle
+    // — the job-reaper requeue of a lapsed-lease running job (lease expires,
+    // a new worker claims the same `run_id` → derives the same `runner_<runId>`
+    // → INSERTs the same `runner_id`), or the template-build re-derive on
+    // recovery (`liveBuildDriver.ts`'s deterministic
+    // `runId = "run_template_build_${projectId}"`) — collides on the unique
+    // runner_id. A bare INSERT threw `runners_pkey` raw, which the merge
+    // coordinator's hold-loop classified RETRIABLE-by-default
+    // (`isRetriableInfraError` defaults untyped errors to retriable —
+    // `engine/providers/githubRefReset.ts`); apex v49 looped on this for 8 hours.
+    //
+    // A bare `ON CONFLICT DO UPDATE` would overwrite a still-LIVE container_id
+    // and orphan the prior container (the 204GB-leak class the sidecar's
+    // `insert` already guards). The `WHERE runners.released_at IS NOT NULL`
+    // predicate restricts the UPDATE to RE-allocating an already-RELEASED
+    // runner id; a genuine LIVE conflict updates zero rows AND inserts zero
+    // rows (the conditional UPDATE excludes the live row, the INSERT collides),
+    // which we detect (rowCount===0) and reject LOUD as a typed-non-retryable
+    // {@link RunnerClaimLiveRowError}. Mirrors the sidecar's identical pattern
+    // in `services/allocator/src/pgRunnerStore.ts`.
+    await withJobOrgScope(this.pool, async (client) => {
+      const result = await client.query(
         // org_id is mandatory (tanren tenancy hardening) and is the CALLER's org,
         // passed EXPLICITLY ($4) — NOT derived from a `(SELECT org_id FROM runs
         // …)` subquery. A RUNLESS Forge allocation has a synthetic `runId` with no
@@ -76,7 +134,20 @@ export class PgRunnerStore implements RunnerStore {
            runner_id, run_id, project_id, org_id, allocator, status, ssh_host, ssh_port,
            host_key_fingerprint, image_sha, container_id
          )
-         VALUES ($1, $2, $3, $4, $5, 'claimed', $6, $7, $8, $9, $10)`,
+         VALUES ($1, $2, $3, $4, $5, 'claimed', $6, $7, $8, $9, $10)
+         ON CONFLICT (runner_id) DO UPDATE SET
+           status = EXCLUDED.status,
+           run_id = EXCLUDED.run_id,
+           project_id = EXCLUDED.project_id,
+           org_id = EXCLUDED.org_id,
+           allocator = EXCLUDED.allocator,
+           ssh_host = EXCLUDED.ssh_host,
+           ssh_port = EXCLUDED.ssh_port,
+           host_key_fingerprint = EXCLUDED.host_key_fingerprint,
+           image_sha = EXCLUDED.image_sha,
+           container_id = EXCLUDED.container_id,
+           released_at = NULL
+         WHERE runners.released_at IS NOT NULL`,
         [
           input.runnerId,
           input.runId,
@@ -89,8 +160,11 @@ export class PgRunnerStore implements RunnerStore {
           input.imageSha,
           input.containerId,
         ],
-      ),
-    );
+      );
+      if (result.rowCount === 0) {
+        throw new RunnerClaimLiveRowError(input.runnerId);
+      }
+    });
   }
 
   async release(runnerId: string): Promise<void> {
