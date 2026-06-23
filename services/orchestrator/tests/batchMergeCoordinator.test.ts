@@ -422,6 +422,9 @@ describe("BatchMergeCoordinator — infra-error robustness (a thrown check NEVER
     expect(h.events.events.some((e) => e.type === "merge.dequeued")).toBe(false);
   });
 
+  // task #21A's `RunnerClaimLiveRowError` doctrine-alignment proof (typed
+  // `retriable: false` routes to `merge_retry`, not the apex-v49 `infra_error`
+  // hot-loop) lives in `batchMergeCoordinatorRunnerClaimLiveRow.test.ts`.
   it("a SUSTAINED-identical real-merge drive throw alerts terminally but keeps the entry queued", async () => {
     const h = makeHarness();
     seed(h, "spec_a");

@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type pg from "pg";
 import { runWithSystemJobScope } from "@tanren/db";
-import { PgRunnerStore, type ClaimRunnerInput } from "../src/engine/allocators/runnerStore.js";
+import { PgRunnerStore, RunnerClaimLiveRowError, type ClaimRunnerInput } from "../src/engine/allocators/runnerStore.js";
+import { isRetriableInfraError } from "../src/engine/providers/githubRefReset.js";
 
 // PgRunnerStore is the orchestrator-side mirror of the runners table. The
 // mutation survivors here were all "no coverage": the exact SQL (INSERT vs
@@ -29,19 +30,34 @@ interface RecordedQuery {
 
 class RecordingPool {
   readonly queries: RecordedQuery[] = [];
-  private record(text: string, params: unknown[]): { rows: unknown[] } {
+  /**
+   * The scripted `rowCount` returned for the BUSINESS INSERT/UPDATE statement
+   * (transaction-control statements are inert). Defaults to 1 — the happy path
+   * (fresh insert OR re-adopt of a RELEASED row, both rowCount===1) so the
+   * pre-existing tests continue to assert what they always asserted. The new
+   * idempotency tests script 0 to drive the typed-throw branch.
+   */
+  insertRowCount = 1;
+  private record(text: string, params: unknown[]): { rows: unknown[]; rowCount: number } {
     const trimmed = text.trim();
-    if (!["BEGIN", "COMMIT", "ROLLBACK"].includes(trimmed) && !trimmed.startsWith("SET LOCAL")) {
+    const isTxControl = ["BEGIN", "COMMIT", "ROLLBACK"].includes(trimmed) || trimmed.startsWith("SET LOCAL");
+    if (!isTxControl) {
       this.queries.push({ text, params });
+      return { rows: [], rowCount: this.insertRowCount };
     }
-    return { rows: [] };
+    return { rows: [], rowCount: 0 };
   }
-  async query(text: string, params: unknown[] = []): Promise<{ rows: unknown[] }> {
+  async query(text: string, params: unknown[] = []): Promise<{ rows: unknown[]; rowCount: number }> {
     return this.record(text, params);
   }
   async connect(): Promise<pg.PoolClient> {
+    // `query` MUST return a thenable so `runWithSystemScope`'s rollback path can do
+    // `client.query("ROLLBACK").catch(...)` on the error branch — a plain object
+    // breaks the chain (`.catch is not a function`) and obscures the real throw.
+    const record = (text: string, params: unknown[]): Promise<{ rows: unknown[]; rowCount: number }> =>
+      Promise.resolve(this.record(text, params));
     return {
-      query: (text: string, params: unknown[] = []) => this.record(text, params),
+      query: (text: string, params: unknown[] = []) => record(text, params),
       release: () => {},
     } as unknown as pg.PoolClient;
   }
@@ -126,6 +142,62 @@ describe("PgRunnerStore.claim", () => {
     expect(pool.queries[0]!.params[1]).toBeNull();
     expect(pool.queries[0]!.params[2]).toBeNull();
     expect(pool.queries[0]!.params[3]).toBe("org_a");
+  });
+});
+
+describe("PgRunnerStore.claim idempotency (task #21A)", () => {
+  // apex v49 looped on `runners_pkey` because the orchestrator-side `claim()` did
+  // a bare INSERT with no ON CONFLICT — a retried deterministic-handle claim
+  // (job-reaper requeue / template-build re-derive) threw raw, `isRetriableInfraError`
+  // defaulted it to RETRIABLE, and the merge coordinator's hold-loop re-drove
+  // forever (8-hour curl hang). The fix mirrors the sidecar's `WHERE released_at
+  // IS NOT NULL` re-adopt pattern and throws a typed `RunnerClaimLiveRowError`
+  // (`retriable: false`) on a LIVE conflict so the doctrine path catches it.
+  it("the INSERT carries the released_at-gated ON CONFLICT clause", async () => {
+    const pool = new RecordingPool();
+    await runWithSystemJobScope(() => new PgRunnerStore(poolAs(pool)).claim(claimInput));
+
+    const { text } = pool.queries[0]!;
+    // Idempotent re-adopt shape: collide on runner_id, ONLY update a RELEASED row,
+    // clear released_at on the re-adopt branch so the row is LIVE again.
+    expect(text).toMatch(/ON CONFLICT \(runner_id\) DO UPDATE/u);
+    expect(text).toMatch(/WHERE runners\.released_at IS NOT NULL/u);
+    expect(text).toMatch(/released_at = NULL/u);
+  });
+
+  it("rowCount===0 (a LIVE conflict matched nothing) throws a non-retryable RunnerClaimLiveRowError", async () => {
+    const pool = new RecordingPool();
+    // The INSERT collided on the unique runner_id AND the conditional UPDATE
+    // excluded the LIVE row (released_at IS NULL): zero rows affected. The store
+    // must throw the typed error rather than silently no-op or surface a raw
+    // pg error the coordinator would default to retriable.
+    pool.insertRowCount = 0;
+
+    let caught: unknown;
+    try {
+      await runWithSystemJobScope(() => new PgRunnerStore(poolAs(pool)).claim(claimInput));
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(RunnerClaimLiveRowError);
+    expect((caught as RunnerClaimLiveRowError).runnerId).toBe("runner_run_1");
+    // The doctrine-critical bit: the typed `retriable: false` makes
+    // `isRetriableInfraError` route this to the typed-permanent path (recoverable
+    // sustained-non-recovery hold), NOT the hot-loop apex v49 saw.
+    expect((caught as RunnerClaimLiveRowError).retriable).toBe(false);
+    expect(isRetriableInfraError(caught)).toBe(false);
+  });
+
+  it("re-claiming a RELEASED row succeeds (rowCount===1 via the ON CONFLICT update branch)", async () => {
+    const pool = new RecordingPool();
+    // A re-allocate of a RELEASED runner id: the conditional UPDATE matches
+    // (released_at IS NOT NULL), affects exactly one row, clears released_at,
+    // and resolves cleanly.
+    pool.insertRowCount = 1;
+
+    await expect(
+      runWithSystemJobScope(() => new PgRunnerStore(poolAs(pool)).claim(claimInput)),
+    ).resolves.toBeUndefined();
   });
 });
 
