@@ -174,6 +174,7 @@ const stubAuditor = {
 function buildDriverDeps(overrides: { loadSnapshot: (p: string) => Promise<DagSnapshot> }) {
   const ssh = new RecordingSsh();
   const walker = new RecordingWalker();
+  let probeId = 0;
   return {
     ssh,
     walker,
@@ -186,7 +187,7 @@ function buildDriverDeps(overrides: { loadSnapshot: (p: string) => Promise<DagSn
       loadSnapshot: overrides.loadSnapshot,
       resolveConverged: async () => convergedFacts,
       auditorFor: () => stubAuditor,
-      timeoutMs: 1000,
+      childRunProgressSignal: { probe: async () => BigInt(++probeId) },
       convergence: { pollIntervalMs: 1 },
       sleep: async () => {},
     },

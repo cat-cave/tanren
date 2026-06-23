@@ -36,18 +36,24 @@ emphatic that this class keeps recurring); the existing models it generalizes ar
 >   job-liveness backstop and reduced `keepaliveCountMax` from 1440 → 40 (≈ 6 h →
 >   10 min of transport-level dead-socket detection; the keepalive is a TCP-layer
 >   ping, not a work-budget).
-> - **Task #21 (apex v49) — derive's synchronous wait has no inner-failure circuit
->   breaker.** v49 drove past this session's env + code cleanups into the live
->   writer-checker-auditor LLM loop running real scaffold work and halted on a
->   legitimate pre-session tanren-code finding: a runner-INSERT retry loop
->   (`duplicate key value violates unique constraint "runners_pkey"`) between the
->   run-executor and the job-reaper, compounded by derive's synchronous wait having
->   no inner-failure circuit breaker (8-hour curl hang). This is the doctrine's
->   next extension: derive's synchronous-wait surface needs a progress /
->   sign-of-life-based circuit breaker (no wall-clock kill; loud halt on a
->   downstream stall) alongside the runner-INSERT idempotency fix. Task #21 tracks
->   both. The doctrine stands; the synchronous-wait surface is the latest disguised
->   survivor caught and being fixed as found.
+> - **Task #21B (apex v49) — derive's synchronous wait has a progress-based
+>   circuit breaker [RESOLVED].** v49 drove past this session's env + code
+>   cleanups into the live writer-checker-auditor LLM loop running real scaffold
+>   work and halted on a legitimate pre-session tanren-code finding: a
+>   runner-INSERT retry loop (`duplicate key value violates unique constraint
+"runners_pkey"`) between the run-executor and the job-reaper, compounded by
+>   derive's synchronous wait having no inner-failure circuit breaker (8-hour
+>   curl hang). The doctrine extension landed in
+>   `services/orchestrator/src/engine/templates/creation/childRunProgressProbe.ts`:
+>   a PROGRESS / SIGN-OF-LIFE based circuit breaker over the child template-build
+>   project's append-only `MAX(events.id)` signature, identity-based, never
+>   elapsed-time-based. A flat signature across `NON_ADVANCE_PROBES_BEFORE_STALL`
+>   consecutive probes halts LOUD as `ChildRunStalledError`, wrapped through
+>   `TemplateBuildFailedError` and surfaced at the derive HTTP boundary as a
+>   distinct 504 `template_build_stalled` naming the stalled child project id.
+>   The doctrine stands; the synchronous-wait surface is no longer a disguised
+>   survivor. The sister lane (task #21A — runner-INSERT idempotency in
+>   `services/allocator/**`) ships separately.
 >
 > The inventory below was produced by a 3-auditor sweep and **re-verified
 > file:line against `origin/main` while writing** — drift corrections are flagged
@@ -187,6 +193,8 @@ so no count appears in the code or the docstring.
 | `ssh/keygen.ts:56` `KEYGEN_MAX_ATTEMPTS = 8`                                                                                    | pure-CPU keygen retry               | regenerates a malformed ed25519 key; pure-CPU, failure probability < 1e-21 — never gates real work.                                                                   |
 | `db/src/client.ts`                                                                                                              | **NO statement / lock timeouts**    | must **STAY ABSENT** — adding a `statement_timeout` / `lock_timeout` here would be a disguised kill-timeout on legitimate long queries. Warn against ever adding one. |
 | `services/allocator/src/dockerEngine.ts:105` `stopContainer(timeoutSeconds = 5)`                                                | docker stop grace                   | a 5s SIGTERM→SIGKILL teardown grace on a container we are _already_ destroying — not a work budget.                                                                   |
+| `engine/templates/creation/childRunProgressProbe.ts CHILD_PROGRESS_PROBE_CADENCE_MS`                                            | probe cadence                       | how often to read the child project's audit signature; trigger is signal IDENTITY across probes, never elapsed time.                                                  |
+| `engine/templates/creation/childRunProgressProbe.ts NON_ADVANCE_PROBES_BEFORE_STALL`                                            | non-advance streak ceiling          | identity ceiling; a working child resets every probe — same class as `runHeartbeat.ts atRiskThreshold` non-advancing-beats.                                           |
 
 ---
 

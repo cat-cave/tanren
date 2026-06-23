@@ -35,6 +35,18 @@ export {
 } from "./answererRetry.js";
 export { ResearchOutput } from "./researchSchema.js";
 export { buildRunLoopBuildDriver, type ConvergedProjectFacts, type RunLoopBuildDriverDeps } from "./liveBuildDriver.js";
+// CHILD-RUN PROGRESS PROBE (task #21B; doctrine extension of timeout-eradication):
+// a SIGN-OF-LIFE circuit breaker over the child template-build project's append-only
+// event-stream identity. The build driver default-constructs the live probe when
+// the deps omit one; tests inject a fake.
+export {
+  buildChildRunProgressSignal,
+  CHILD_PROGRESS_PROBE_CADENCE_MS,
+  ChildRunStalledError,
+  NON_ADVANCE_PROBES_BEFORE_STALL,
+  WORKER_PROGRESS_EVENT_PREFIXES,
+  type ChildRunStallSignal,
+} from "./childRunProgressProbe.js";
 export { resolveConvergedProjectFacts } from "./convergedFacts.js";
 export { buildTemplateAuditor } from "./liveAuditor.js";
 export {

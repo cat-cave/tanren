@@ -69,9 +69,18 @@ export interface TemplateBuildDriver {
 // LOUD failure surfaced by the creation flow — never a quiet "publish anyway".
 export class TemplateBuildFailedError extends Error {
   readonly projectId: string;
-  constructor(projectId: string, cause: string) {
+  // The optional structured `cause` carries the SPECIFIC failure object (e.g. a
+  // `ChildRunStalledError` from the sign-of-life circuit breaker — task #21B) so
+  // the route layer can walk the cause chain and surface the right HTTP status +
+  // diagnostic without the boundary having to string-match the message. The `cause`
+  // is the standard Error.cause channel (ES2022); a string-only call site is
+  // unchanged.
+  constructor(projectId: string, cause: string, options?: { cause: unknown }) {
     super(`template build did not converge for project ${projectId}: ${cause}`);
     this.name = "TemplateBuildFailedError";
     this.projectId = projectId;
+    if (options !== undefined && options.cause !== undefined) {
+      this.cause = options.cause;
+    }
   }
 }
