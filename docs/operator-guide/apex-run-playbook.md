@@ -245,10 +245,10 @@ provider-specific keys out of `metadata` at provision time, so **the link
 succeeds without them but the deploy phase will fail-loud later**. Pick your
 provider's row:
 
-| Provider | URL path | Required metadata keys | Provisioner source |
-| --- | --- | --- | --- |
-| Vercel | `/integrations/deploy.vercel` | `teamId` | (vercel provisioner) |
-| Fly | `/integrations/deploy.flyio` | `orgSlug` | `engine/provisioners/flyDeployProvisioner.ts:62` |
+| Provider | URL path                      | Required metadata keys | Provisioner source                               |
+| -------- | ----------------------------- | ---------------------- | ------------------------------------------------ |
+| Vercel   | `/integrations/deploy.vercel` | `teamId`               | (vercel provisioner)                             |
+| Fly      | `/integrations/deploy.flyio`  | `orgSlug`              | `engine/provisioners/flyDeployProvisioner.ts:62` |
 
 **Vercel:**
 
