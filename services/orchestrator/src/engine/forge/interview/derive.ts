@@ -25,13 +25,16 @@
 
 import type pg from "pg";
 import type { ActorContext } from "../../../auth/schemas.js";
+import { AUTONOMOUS_AUDIT_POSTURE } from "../../config/index.js";
 import type { DesignAgent } from "../../design/designAgent.js";
-import type { CreatedRepository, CreateRepositoryInput } from "../../contracts/codeHostTypes.js";
-import { RepositoryAlreadyExistsError } from "../../contracts/codeHostTypes.js";
+import {
+  RepositoryAlreadyExistsError,
+  type CreatedRepository,
+  type CreateRepositoryInput,
+} from "../../contracts/codeHostTypes.js";
 import { githubHttpsRemote } from "../../providers/github.js";
 import { ProjectStore } from "../../repositories/projects.js";
-import { MilestoneCreateInput, MilestoneStore } from "../../entities/milestones.js";
-import { PersonaCreateInput, PersonaStore } from "../../entities/personas.js";
+import { MilestoneCreateInput, MilestoneStore, PersonaCreateInput, PersonaStore } from "../../entities/index.js";
 import { provisionedGreenfieldProjectConfigProof } from "../../workflow/projectConfigWriteGuards.js";
 import { createProject, createSpec } from "../../workflow/projectSpec.js";
 import {
@@ -51,8 +54,14 @@ import {
   type PrepareDeployCallback,
 } from "./deployDependency.js";
 import { MissingLifecycleError, scaffoldSpecsFor } from "./deriveScaffoldSpecs.js";
-import { assertSeeded, selectSeedTemplate, type ScaffoldOrigin } from "./interviewTemplateGate.js";
-import type { SelectedTemplate, TemplateRegistryQuery, TemplateSelectionDecision } from "./templateSelection.js";
+import {
+  assertSeeded,
+  selectSeedTemplate,
+  type ScaffoldOrigin,
+  type SelectedTemplate,
+  type TemplateRegistryQuery,
+  type TemplateSelectionDecision,
+} from "./interviewTemplateGate.js";
 import { InterviewCapture, safeProjectSlug, type CaptureLifecycle } from "./types.js";
 
 export interface DeriveInput {
@@ -339,6 +348,21 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
     // TEMPLATE-BUILD MARKER (config/projectConfig.ts): the real provenance the deploy-on-merge
     // watcher reads to SKIP a template build (a template is not a deployed product).
     ...(scaffoldOrigin === "template_build" ? { templateBuild: true } : {}),
+    // TEMPLATE-BUILD AUTONOMOUS-RUN KNOBS (Lane T1 fix — pairs with the §2.5 governance
+    // PUT for user-facing projects). The template-build child project is a SYNTHETIC
+    // autonomous run inside derive — it has NO operator in the loop to §2.5-PUT the
+    // autonomous posture AFTER the fact (the child lives entirely inside this derive
+    // call). The audit-posture preflight (engine/workflow/auditPosturePreflight.ts)
+    // fails LOUD on an autonomous run carrying the BALANCED default, stranding the
+    // first scaffold spec. Bind the AUTONOMOUS audit posture + the autonomous-pattern
+    // single-SHA flaky bar at creation so the synthetic build's autonomous DAG closes
+    // cleanly (auditPostureConfig.ts:60-64, insights/thresholds.ts:79-83).
+    ...(scaffoldOrigin === "template_build"
+      ? {
+          auditPosture: AUTONOMOUS_AUDIT_POSTURE,
+          insightThresholds: { ciInsightFlakyMinShas: 1 },
+        }
+      : {}),
     ...productVisionConfig(capture),
     // DETERMINISTIC CONTRACT FILES (v27 fix): PERSIST the captured lifecycle so the RUN path
     // materializes the contract files (`.tanren/ci.yml` + `justfile`) — never LLM-authored.
