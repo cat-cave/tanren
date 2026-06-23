@@ -28,19 +28,28 @@ autonomously.
 **Honest proof state — what apex has and has NOT proven.** Each apex trial drives
 Tanren harder and flushes real engine bugs now fixed on `main` (the run rhythm:
 drive → halt on a real bug → fix-on-`main` → drain the backlog → rebuild → fresh
-`v(N+1)`). Runs **v37 through v46** have now completed (2026-06-19). The most recent,
-**v46**, was the healthiest run yet — gates passing, the scaffold flowing
-writer→gate→checker, 0 runner leaks — but a planned reboot interrupted it before a
-merge. **No run has yet closed the product loop** (issue → triage → fix → merge →
-deploy → a working product, no human in the inner loop). That is exactly what apex
-still has to prove; do not describe it as done. Bugs fixed by this wave: #636
+`v(N+1)`). Successive apex trials — v37–v46 ran on the previous WSL host through
+2026-06-19; v47–v49 ran on the new NixOS host in 2026-06-23. **No run has yet
+closed the product loop** (issue → triage → fix → merge → deploy → a working
+product, no human in the inner loop). That is exactly what apex still has to
+prove; do not describe it as done. v49 drove past this session's env + code
+cleanups into the live writer-checker-auditor LLM loop running real scaffold work
+and halted on a **legitimate pre-session tanren-code finding**: a runner-INSERT
+retry loop (`duplicate key value violates unique constraint "runners_pkey"`)
+between the run-executor and the job-reaper, compounded by derive's synchronous
+wait having no inner-failure circuit breaker (8-hour curl hang). Task #21 tracks
+both fixes — runner-INSERT idempotency + a progress/sign-of-life-based circuit
+breaker for derive's synchronous wait. Bugs fixed by this wave: #636
 (runner-release org-scope RLS leak), #637 (writer must regenerate derived companions
 before gate), #638 (ssh2 socket idle-timeout — a DISGUISED wall-clock deadline),
 #639 (descendant ancestor_not_ready hot-loop), #640 (job-stall watchdog gap —
-lock-file heartbeat defeating newest-mtime probe). The drive playbook is
-`docs/operator-guide/apex-run-playbook.md`; the operator role + run rhythm is
-`docs/operator-guide/apex.md`; the templating doctrine is
-`docs/roadmap/templating-system.md`.
+lock-file heartbeat defeating newest-mtime probe), #646 (apex-mode env-var
+eradicated — apex configures its autonomous posture via the same governance API
+any operator uses), #659 (Lane T1 — the template-build child project is born with
+`auditPosture: AUTONOMOUS_AUDIT_POSTURE` + `insightThresholds.ciInsightFlakyMinShas: 1`).
+The drive playbook is `docs/operator-guide/apex-run-playbook.md`; the operator
+role and run rhythm live in `docs/operator-guide/apex.md`; the templating
+doctrine is `docs/roadmap/templating-system.md`.
 
 ### v21 native delivery (the current doctrine)
 
@@ -299,17 +308,29 @@ cite); the merge-engine cutover rationale is
   over real surfaces, every change a merged PR with full provenance. apex tests
   **Tanren**, not the fixture: the driver acts as a non-technical end user over the
   HTTP API only, files real issues into Tanren for every defect, and never hand-fixes
-  the generated repo. **The honest state (§1):** runs v37–v46 have now completed;
-  each flushed real engine bugs now fixed on `main`; the most recent, **v46**,
-  reached gates passing + scaffold flowing, but was interrupted before a merge; **no
-  run has yet closed the product loop** (issue → triage → fix → merge → deploy → a
-  working product, no human in the inner loop). That close is the open proof. To
-  drive the next run: the operator role + run rhythm + proof portfolio is
+  the generated repo. **The honest state (§1):** successive apex trials — v37–v46
+  ran on the previous WSL host through 2026-06-19; v47–v49 ran on the new NixOS host
+  in 2026-06-23 — each flushed real engine bugs now fixed on `main`; **no run has
+  yet closed the product loop** (issue → triage → fix → merge → deploy → a working
+  product, no human in the inner loop). That close is the open proof. To drive the
+  next run: the operator role + run rhythm + proof portfolio is
   `docs/operator-guide/apex.md`; the **concrete drive-from-zero playbook** is
   `docs/operator-guide/apex-run-playbook.md`; the **templating doctrine** (no
   from-scratch-into-a-project; do NOT pre-create a template) is
   `docs/roadmap/templating-system.md`. It spends real credits under the $50 ceiling
   on already-provisioned Tier-1 creds (BYOK Codex runs at $0).
+- **The next tanren-code layer to fix on `main` (apex-v49 finding, task #21).** v49
+  drove past this session's env + code cleanups into the live writer-checker-auditor
+  LLM loop running real scaffold work and halted on a legitimate pre-session
+  tanren-code finding: a runner-INSERT retry loop
+  (`duplicate key value violates unique constraint "runners_pkey"`) between the
+  run-executor and the job-reaper, compounded by derive's synchronous wait having no
+  inner-failure circuit breaker (8-hour curl hang). Task #21 tracks both fixes: (a)
+  make runner-INSERT idempotent so the reaper and the executor cannot race the same
+  primary key, (b) extend the timeout-eradication doctrine into derive's
+  synchronous-wait surface with a progress / sign-of-life-based circuit breaker (no
+  wall-clock kill; loud halt on a downstream stall). The doctrine extension lands in
+  `docs/roadmap/timeout-eradication.md`.
 - **tanren-owns-the-engine — cutover COMPLETE, §7 decomposition LANDED; one
   net-keep residual.** The cutover is the single live path (§1): the
   walker/percolation → jj-local cutover landed (the dependent run jj-assembles its
@@ -363,8 +384,13 @@ cite); the merge-engine cutover rationale is
   a running command on any quiet gap (root cause of #638; the lint now flags this
   pattern), and (b) the `ActivityWatchdog` liveness probe reading newest-mtime, which
   a lock-file heartbeat defeated, allowing a stalled job to run forever (#640; fixed
-  with a structural probe: file count + total bytes + a progress-based backstop). The
-  doctrine stands: every safety / hang-detection mechanism must be PROGRESS /
+  with a structural probe: file count + total bytes + a progress-based backstop).
+  **apex v49 surfaced the doctrine's next extension — task #21**: derive's
+  synchronous wait on the template-build child run had no inner-failure circuit
+  breaker, so a downstream runner-INSERT retry loop presented as an 8-hour curl
+  hang. Task #21 extends the progress / sign-of-life model into the derive
+  synchronous-wait surface (no wall-clock kill; loud halt on a downstream stall).
+  The doctrine stands: every safety / hang-detection mechanism must be PROGRESS /
   SIGN-OF-LIFE based; disguised survivors are caught and fixed as found. The as-built
   inventory + doctrine of record is `docs/roadmap/timeout-eradication.md`.
 - **Type-aware lint strictness ratchet — `no-unsafe-type-assertion` tail (~310

@@ -45,7 +45,10 @@ CI-gating). A working agent runs **unbounded**; kill only on evidence of death.
 _disguised_ survivors the initial lint missed — (a) the ssh2 connect-config `timeout:`
 socket idle-timeout (#638), (b) the `ActivityWatchdog` liveness probe reading
 newest-mtime, which a lock-file heartbeat defeated (#640). Both are now fixed and the
-lint extended to flag ssh2 `timeout:`. The doctrine stands; disguised survivors are
+lint extended to flag ssh2 `timeout:`. **apex v49 surfaced the doctrine's next
+extension — task #21**: derive's synchronous wait on the template-build child run
+had no inner-failure circuit breaker, so a downstream runner-INSERT retry loop
+presented as an 8-hour curl hang. The doctrine stands; disguised survivors are
 caught and fixed as found. See `docs/roadmap/timeout-eradication.md`. (2) **The
 native DESIGN subsystem is BUILT + wired** (WS-D1..D4): a domain-general persisted
 `DesignContract` injected into the writer + a domain-aware design oracle re-driving
@@ -88,13 +91,19 @@ credentials (GitHub App + Slack + a deploy target;
 `docs/operator-guide/validation-credentials.md`) are provisioned, and it spends
 real credits under the $50 ceiling.
 
-**Be honest about the proof state — do NOT overclaim.** Successive apex trials (v37
-through v46, 2026-06-19) each flushed real engine bugs now fixed on `main`. The most
-recent was **v46** — the healthiest run yet (gates passing, scaffold flowing
-writer→gate→checker, 0 runner leaks), but a planned reboot interrupted it before a
-merge. **No run has yet closed the full autonomous loop** (issue → triage → fix →
-merge → deploy → a working product, no human in the inner loop). That close is exactly
-what apex still has to prove.
+**Be honest about the proof state — do NOT overclaim.** Successive apex trials —
+v37–v46 ran on the previous WSL host through 2026-06-19; v47–v49 ran on the new
+NixOS host in 2026-06-23 — each flushed real engine bugs now fixed on `main`. **No
+run has yet closed the full autonomous loop** (issue → triage → fix → merge →
+deploy → a working product, no human in the inner loop). v49 drove past this
+session's env + code cleanups into the live writer-checker-auditor LLM loop running
+real scaffold work and halted on a **legitimate pre-session tanren-code finding**:
+a runner-INSERT retry loop
+(`duplicate key value violates unique constraint "runners_pkey"`) between the
+run-executor and the job-reaper, compounded by derive's synchronous wait having no
+inner-failure circuit breaker (8-hour curl hang). Task #21 tracks both fixes —
+runner-INSERT idempotency + a progress/sign-of-life-based circuit breaker for
+derive's synchronous wait. That close is exactly what apex still has to prove.
 
 **To drive the next apex run, a fresh agent reads, in order:**
 

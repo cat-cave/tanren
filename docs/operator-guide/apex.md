@@ -11,23 +11,37 @@ contract for the human/orchestrator driving the run.**
 > **[apex-run-playbook.md](./apex-run-playbook.md)**. Read THIS doc first (the role
 > and the rhythm below), then drive from the playbook.
 
-> **Where the trials stand (through v46, as of 2026-06-19).** The trials have run
-> through **v46** and surfaced a long chain of real bugs — all fixed on `main`:
-> the never-discard re-drive paths (#585–#594), the intelligent non-convergence
-> detection that replaced hardcoded attempt caps (#593), merge re-gating that
-> routes a gate failure to writer rework instead of bricking the DAG (#601), the
-> timeout/retry-cap eradication (#608/#609 — a run is never killed by elapsed
-> time; recovery is progress/sign-of-life based), and a cluster of v37–v46 fixes:
+> **Where the trials stand (through v49).** Successive apex trials — v37–v46 ran
+> on the previous WSL host through 2026-06-19; v47–v49 ran on the new NixOS host
+> in 2026-06-23. The chain has surfaced a long list of real bugs — all fixed on
+> `main`: the never-discard re-drive paths (#585–#594), the intelligent
+> non-convergence detection that replaced hardcoded attempt caps (#593), merge
+> re-gating that routes a gate failure to writer rework instead of bricking the
+> DAG (#601), the timeout/retry-cap eradication (#608/#609 — a run is never killed
+> by elapsed time; recovery is progress/sign-of-life based), the v37–v46 cluster:
 > runner-release org-scope leak (#636), writer must regenerate+commit derived
 > companions (lockfile) before the frozen gate (#637), ssh2 connect-config
 > socket idle-timeout killing long codex runs (#638), descendant
 > `ancestor_not_ready` hot-loop (#639), and the job-stall watchdog gap where a
 > lock-heartbeat fooled a mtime-only probe (#640 — structural file-count+bytes
-> probe + progress-based backstop). **v46 was the healthiest and furthest run yet
-> (gates passing, scaffold flowing writer→gate→checker, 0 leaks) and was
-> interrupted by a planned reboot before a merge.** The full autonomy loop has
-> **STILL NOT closed end-to-end** — no merged spec, no product build, no
-> issue→triage→fix, no deploy yet; those remain to demonstrate live.
+> probe + progress-based backstop), and the v47–v49 cluster: the apex-mode
+> env-var eradicated so apex now configures its autonomous posture via the same
+> governance API any operator uses (#646), `.env.validation.local` bash-source
+> breaking on unquoted commas (#656), Fly link route required-`orgSlug` (#658),
+> and the template-build child project born without the autonomous audit posture
+> (Lane T1, #659 — synthetic child now gets `AUTONOMOUS_AUDIT_POSTURE` +
+> `insightThresholds.ciInsightFlakyMinShas: 1`). **v47** (dry run, 2026-06-23)
+> drove §1-§4 cleanly on the new env; **v48** (real run, 2026-06-23) drove
+> §1-§5; **v49** drove past this session's env + code cleanups into the live
+> writer-checker-auditor LLM loop running real scaffold work and halted on a
+> **legitimate pre-session tanren-code finding**: a runner-INSERT retry loop
+> (`duplicate key value violates unique constraint "runners_pkey"`) between the
+> run-executor and the job-reaper, compounded by derive's synchronous wait having
+> no inner-failure circuit breaker (8-hour curl hang). Task #21 tracks both fixes
+> — runner-INSERT idempotency + a progress/sign-of-life-based circuit breaker for
+> derive's synchronous wait. The full autonomy loop has **STILL NOT closed
+> end-to-end** — no merged spec, no product build, no issue→triage→fix, no deploy
+> yet; those remain to demonstrate live.
 >
 > The **native design subsystem** is part of the build: WS-D1..D4 are merged
 > and the design loop (author → inject → verify → re-drive) closes end-to-end
@@ -174,7 +188,7 @@ autonomous software org**. The proofs:
   only (the playbook is written to make it reproducible).
 - **standing code-integrity** — the adversarial Codex audit over the platform code.
 
-The runs **through v46** advanced the autonomy-loop (DAG-build, walker
+The runs **through v49** advanced the autonomy-loop (DAG-build, walker
 auto-execution, template-creation, the never-discard re-drive + recovery paths),
 run-discipline, and code-integrity proofs. The loops **past a CI-green merged PR**
 (deploy → issue-loop → audits → CI-intelligence → notifications) remain to

@@ -42,6 +42,14 @@ invariant guard (`assertSeeded` / `assertNoFromScratchProjectScaffold`,
 the from-scratch scaffold branch is reachable **only** on the `template_build`
 scaffoldOrigin (where the derive authors the TEMPLATE itself).
 
+**Lane T1 (#659).** The synthetic child project the template-build authors is
+born with the autonomous audit posture + the autonomous-pattern flaky bar
+(`auditPosture: AUTONOMOUS_AUDIT_POSTURE` +
+`insightThresholds: { ciInsightFlakyMinShas: 1 }`) — without that, the
+audit-posture preflight blocks the synthetic child loud, since no operator is
+present to flip the governance on a derived-by-derive project. See
+`engine/forge/interview/derive.ts`.
+
 ---
 
 ## §2 — the template-creation meta-flow

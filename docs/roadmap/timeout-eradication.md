@@ -36,6 +36,18 @@ emphatic that this class keeps recurring); the existing models it generalizes ar
 >   job-liveness backstop and reduced `keepaliveCountMax` from 1440 → 40 (≈ 6 h →
 >   10 min of transport-level dead-socket detection; the keepalive is a TCP-layer
 >   ping, not a work-budget).
+> - **Task #21 (apex v49) — derive's synchronous wait has no inner-failure circuit
+>   breaker.** v49 drove past this session's env + code cleanups into the live
+>   writer-checker-auditor LLM loop running real scaffold work and halted on a
+>   legitimate pre-session tanren-code finding: a runner-INSERT retry loop
+>   (`duplicate key value violates unique constraint "runners_pkey"`) between the
+>   run-executor and the job-reaper, compounded by derive's synchronous wait having
+>   no inner-failure circuit breaker (8-hour curl hang). This is the doctrine's
+>   next extension: derive's synchronous-wait surface needs a progress /
+>   sign-of-life-based circuit breaker (no wall-clock kill; loud halt on a
+>   downstream stall) alongside the runner-INSERT idempotency fix. Task #21 tracks
+>   both. The doctrine stands; the synchronous-wait surface is the latest disguised
+>   survivor caught and being fixed as found.
 >
 > The inventory below was produced by a 3-auditor sweep and **re-verified
 > file:line against `origin/main` while writing** — drift corrections are flagged

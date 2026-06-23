@@ -149,7 +149,11 @@ cells` CRUD + `report` / `compare`. See `docs/roadmap/tanren-method-benchmark.md
   lint is CI-gating. **Note:** apex v44/v45 surfaced two disguised survivors the
   initial lint missed — the ssh2 `timeout:` socket idle-timeout (#638) and a
   newest-mtime liveness probe a lock-heartbeat defeated (#640); both are fixed and the
-  lint extended. Disguised survivors are caught and fixed as found. See
+  lint extended. **apex v49 surfaced a third doctrine extension**: derive's
+  synchronous wait on the template-build child run had no inner-failure circuit
+  breaker, so a downstream stall presented as an 8-hour curl hang — task #21 extends
+  the progress / sign-of-life model into the derive synchronous-wait surface. The
+  doctrine stands; disguised survivors are caught and fixed as found. See
   `docs/roadmap/timeout-eradication.md`.
 - **A native DESIGN subsystem — Tanren owns design the way it owns the engine.** A
   domain-general, persisted, versioned `DesignContract` (`engine/design/`) is
@@ -226,16 +230,26 @@ credentials (GitHub App + Slack + a deploy target — see
 `docs/operator-guide/validation-credentials.md`) are provisioned, and it spends real
 credits under the $50 budget ceiling (BYOK Codex runs at $0).
 
-**Honest proof state.** Successive apex trials (v37 through v46, 2026-06-19) have
+**Honest proof state.** Successive apex trials — v37–v46 ran on the previous WSL
+host through 2026-06-19; v47–v49 ran on the new NixOS host in 2026-06-23 — have
 driven Tanren harder each time and each flushed real engine bugs now fixed on `main`.
-The most recent, **v46**, was the healthiest run yet — gates passing, the scaffold
-flowing writer→gate→checker, 0 runner leaks — but a planned reboot interrupted it
-before a merge. **No live run has yet closed the full autonomous loop** (issue →
-triage → fix → merge → deploy → a working product) — that is precisely what apex
-still has to prove. Bugs fixed this session: #636 (runner-release org-scope RLS leak),
-#637 (writer must regenerate derived companions before gate), #638 (ssh2 socket
-idle-timeout disguised as a hang), #639 (descendant ancestor_not_ready hot-loop),
-#640 (job-stall watchdog gap — lock-file heartbeat defeating newest-mtime probe).
+**No live run has yet closed the full autonomous loop** (issue → triage → fix →
+merge → deploy → a working product) — that is precisely what apex still has to prove.
+v49 drove past this session's env + code cleanups into the live writer-checker-auditor
+LLM loop running real scaffold work and halted on a **legitimate pre-session
+tanren-code finding**: a runner-INSERT retry loop
+(`duplicate key value violates unique constraint "runners_pkey"`) between the
+run-executor and the job-reaper, compounded by derive's synchronous wait having no
+inner-failure circuit breaker (8-hour curl hang). Task #21 tracks both fixes —
+runner-INSERT idempotency + a progress/sign-of-life-based circuit breaker for
+derive's synchronous wait. Bugs fixed this session: #636 (runner-release org-scope
+RLS leak), #637 (writer must regenerate derived companions before gate), #638
+(ssh2 socket idle-timeout disguised as a hang), #639 (descendant
+ancestor_not_ready hot-loop), #640 (job-stall watchdog gap — lock-file heartbeat
+defeating newest-mtime probe), #646 (apex-mode env-var eradicated — apex now
+configures the autonomous posture via the same governance API any operator uses),
+#659 (Lane T1 — template-build child project is born with
+`auditPosture: AUTONOMOUS_AUDIT_POSTURE` + `insightThresholds.ciInsightFlakyMinShas: 1`).
 
 Smaller near-term items: the **benchmark seed corpus**, `typify→serde` codegen, and
 the first whole-repo mutation baseline; long-horizon: a second `CodeHost` backend
@@ -247,6 +261,8 @@ are now migrated onto the `Repositories` seam — that item is done.)
 ## Quickstart for a real run (operator flow)
 
 ```sh
+direnv allow                      # nix-direnv enters the devshell (toolchain pinned via flake.nix)
+just secrets-migrate              # one-time: move .env / .env.validation.local / connections.manifest.local.yaml to the canonical secrets dir (see docs/operator-guide/validation-credentials.md)
 corepack enable
 pnpm install
 just up-dev                       # brings up Postgres, Vault, orchestrator, worker, allocator, runner, dashboard, ntfy
