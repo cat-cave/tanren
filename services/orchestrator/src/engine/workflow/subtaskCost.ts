@@ -9,8 +9,21 @@
 // unknown), so recording never fails the task for missing cost.
 import type { CostRecorder } from "../costs/index.js";
 import type { RealProviderCostCapturer } from "../costs/generationCostCapture.js";
-import { emptyTokenUsage, type AnswererAdapter, type TokenUsage, type WriterAdapter } from "../providers/types.js";
+import {
+  emptyTokenUsage,
+  type AnswererAdapter,
+  type TokenUsage,
+  type WriterAdapter,
+  type WriterResult,
+} from "../providers/types.js";
 import type { AppendEvent } from "./subtaskLoop.js";
+
+// The classified exit reason of the writer call whose cost is being recorded.
+// Re-export of WriterResult["exitReason"] so callers can name the type without
+// importing WriterResult directly. apex v50 surfaced that this discriminant
+// MUST gate the loud `usage.token_accounting_failed` emission — see
+// recordWriterCost below for the doctrine.
+export type WriterExitReason = WriterResult["exitReason"];
 
 // The agent role whose real call was found to carry no token telemetry — the
 // `usage.token_accounting_failed` discriminant.
@@ -123,6 +136,18 @@ export interface WriterCostInput {
   runtimeSeconds: number;
   tokenUsage: TokenUsage | undefined;
   rawUsage: Record<string, unknown>;
+  // The writer call's classified exit reason — gates the loud
+  // `usage.token_accounting_failed` emission in recordWriterCost. A writer
+  // TERMINATED mid-call (`timeout` / `crashed` / `window_exhausted`) was killed
+  // before `turn.completed` could carry usage, so the missing telemetry is the
+  // EXPECTED consequence of the termination (already loud via
+  // `writer.subtask.failed`) — double-emit would double-classify the same
+  // underlying failure. Only `completed` / `token_limit` (a turn that DID
+  // complete) warrants the loud event for genuine parser/adapter drift.
+  // Threaded by runWriterStage from `writerResult.exitReason`. (apex v50
+  // surfaced the double-emit: 8 zero-token rows all `exitReason="timeout"`
+  // each accompanied by the duplicate loud event.)
+  exitReason: WriterExitReason;
 }
 
 // recordAnswererCost wraps the CostRecorder for the planner/checker/auditor (+
@@ -193,9 +218,31 @@ export async function recordWriterCost(input: WriterCostInput): Promise<void> {
     tokens,
     input.rawUsage,
   );
-  // A REAL writer call missing token telemetry (parser drift) looks like a
-  // zero-token call — surface it LOUDLY, distinct from a genuine zero-token call.
-  if (isRealMissingTelemetry(input.adapter.cli, input.tokenUsage)) {
+  // A REAL writer call missing token telemetry looks like a zero-token call —
+  // surface it LOUDLY, distinct from a genuine zero-token call. The discriminant
+  // is exitReason:
+  //
+  //   - `completed` / `token_limit` (a turn that ACTUALLY FINISHED) with no
+  //     usage on the row is genuine parser/adapter drift — codex's
+  //     `turn.completed` arrived but carried no usage, or a future provider's
+  //     stream did the same. That is the mandatory-accounting drift this loud
+  //     event exists for; surface it.
+  //
+  //   - `timeout` / `crashed` / `window_exhausted` (TERMINATED mid-call — the
+  //     watchdog stall, a crash, or the §4.3 window) was killed BEFORE
+  //     `turn.completed` could carry usage. The call is already loud via
+  //     `writer.subtask.failed` with the discriminated failureKind (emitted by
+  //     runWriterStage). Emitting `usage.token_accounting_failed` here would
+  //     double-classify the same underlying failure — pollution apex v50
+  //     surfaced as 8 zero-token rows all `exitReason="timeout"` each
+  //     accompanied by the duplicate loud event. The row itself stays
+  //     NULL-loud (cost_basis='unknown' / billing_mode='unattributed' — the
+  //     existing recorder path for an unattributable real call, unchanged);
+  //     `writer.subtask.failed` is the sole loud signal for the terminated case.
+  if (
+    isRealMissingTelemetry(input.adapter.cli, input.tokenUsage) &&
+    (input.exitReason === "completed" || input.exitReason === "token_limit")
+  ) {
     await input.ctx.emitTokenAccountingFailed?.({
       role: "writer",
       cli: input.adapter.cli,

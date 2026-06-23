@@ -259,6 +259,7 @@ describe("recordWriterCost", () => {
       runtimeSeconds: 12,
       tokenUsage,
       rawUsage: { role: "writer" },
+      exitReason: "completed",
     });
 
     const call = calls[0]!;
@@ -272,7 +273,7 @@ describe("recordWriterCost", () => {
     expect(call.tokens).toBe(tokenUsage);
   });
 
-  it("falls back to the empty token usage AND emits a LOUD token_accounting_failed when the writer reports none", async () => {
+  it("falls back to the empty token usage AND emits a LOUD token_accounting_failed when a COMPLETED writer reports none", async () => {
     const { recorder, calls } = recordingRecorder();
     const failures: AccountingFailure[] = [];
     await recordWriterCost({
@@ -282,6 +283,9 @@ describe("recordWriterCost", () => {
       runtimeSeconds: 1,
       tokenUsage: undefined,
       rawUsage: {},
+      // exitReason="completed": the turn FINISHED but carried no usage — genuine
+      // parser/adapter drift, the case the loud event exists for.
+      exitReason: "completed",
     });
     expect(calls[0]!.tokens).toEqual(emptyTokenUsage);
     // A REAL writer call missing telemetry is surfaced loudly, NOT a silent zero-token row.
@@ -305,6 +309,7 @@ describe("recordWriterCost", () => {
       runtimeSeconds: 1,
       tokenUsage: { ...emptyTokenUsage, inputTokens: 1, totalTokens: 1, openRouterGenerationId: "gen-abc123" },
       rawUsage: {},
+      exitReason: "completed",
     });
     expect(captured).toEqual(["gen-abc123"]);
     expect(calls[0]!.context).toMatchObject({ realProviderCostUsd: 0.0321 });
@@ -328,6 +333,7 @@ describe("recordWriterCost", () => {
       runtimeSeconds: 1,
       tokenUsage: { ...emptyTokenUsage, inputTokens: 1, totalTokens: 1, openRouterGenerationId: "gen-fail" },
       rawUsage: {},
+      exitReason: "completed",
     });
     // Authoritative platform spend could not be captured → surfaced loudly, cost null.
     expect(captureFailures).toEqual([{ generationId: "gen-fail", detail: "boom 500", taskId: "task_write" }]);
@@ -344,6 +350,7 @@ describe("recordWriterCost", () => {
       runtimeSeconds: 1,
       tokenUsage: { ...emptyTokenUsage, inputTokens: 1, totalTokens: 1 },
       rawUsage: {},
+      exitReason: "completed",
     });
     expect(capturer).not.toHaveBeenCalled();
     expect(calls[0]!.context).toMatchObject({ realProviderCostUsd: null });
@@ -358,8 +365,73 @@ describe("recordWriterCost", () => {
       runtimeSeconds: 1,
       tokenUsage: { ...emptyTokenUsage, inputTokens: 1, totalTokens: 1, openRouterGenerationId: "gen-xyz" },
       rawUsage: {},
+      exitReason: "completed",
     });
     expect(calls[0]!.context).toMatchObject({ realProviderCostUsd: null });
+  });
+});
+
+describe("recordWriterCost - apex v50 exit-reason gating (task #14)", () => {
+  // The doctrine: `usage.token_accounting_failed` is for parser/adapter drift on
+  // a COMPLETED writer call that surfaced no usage. A writer TERMINATED mid-call
+  // (watchdog stall / crash / window) was killed BEFORE turn.completed could
+  // carry usage — already loud via `writer.subtask.failed`. Double-emit
+  // double-classifies the same failure (apex v50: 8 zero-token rows all
+  // exitReason="timeout" each accompanied by the duplicate loud event). The
+  // row itself is still recorded NULL-loud (unattributable downstream).
+  async function runCase(exitReason: "completed" | "token_limit" | "timeout" | "crashed" | "window_exhausted") {
+    const { recorder, calls } = recordingRecorder();
+    const failures: AccountingFailure[] = [];
+    await recordWriterCost({
+      ctx: ctx(recorder, failures),
+      // codex is a REAL CLI; isRealMissingTelemetry trips on the undefined usage.
+      adapter: { ...writerAdapter, cli: "codex" },
+      taskId: "task_write",
+      runtimeSeconds: 1,
+      tokenUsage: undefined,
+      rawUsage: {},
+      exitReason,
+    });
+    return { calls, failures };
+  }
+
+  it.each<"completed" | "token_limit">(["completed", "token_limit"])(
+    "LOUD-FAILED: %s writer with no telemetry STILL emits token_accounting_failed (genuine parser/adapter drift)",
+    async (exitReason) => {
+      const { calls, failures } = await runCase(exitReason);
+      expect(failures).toEqual([{ role: "writer", cli: "codex", model: "tanren-writer", taskId: "task_write" }]);
+      // The row is still recorded (empty usage → NULL-loud downstream).
+      expect(calls).toHaveLength(1);
+      expect(calls[0]!.tokens).toEqual(emptyTokenUsage);
+    },
+  );
+
+  it.each<"timeout" | "crashed" | "window_exhausted">(["timeout", "crashed", "window_exhausted"])(
+    "QUIET-FAILED: a %s writer with no telemetry does NOT emit token_accounting_failed (already loud via writer.subtask.failed)",
+    async (exitReason) => {
+      const { calls, failures } = await runCase(exitReason);
+      // No double-emit (apex v50 fix B1).
+      expect(failures).toEqual([]);
+      // The cost row IS still recorded — work consumed real tokens regardless;
+      // the row lands NULL-loud (empty usage → unattributable). Cost is fact.
+      expect(calls).toHaveLength(1);
+      expect(calls[0]!.tokens).toEqual(emptyTokenUsage);
+    },
+  );
+
+  it("QUIET: a FAKE-fixture writer (legitimate zero) stays quiet regardless of exitReason (isRealCli gate unchanged)", async () => {
+    const { recorder } = recordingRecorder();
+    const failures: AccountingFailure[] = [];
+    await recordWriterCost({
+      ctx: ctx(recorder, failures),
+      adapter: { ...writerAdapter, cli: "fake" },
+      taskId: "task_write",
+      runtimeSeconds: 1,
+      tokenUsage: undefined,
+      rawUsage: {},
+      exitReason: "completed",
+    });
+    expect(failures).toEqual([]);
   });
 });
 
