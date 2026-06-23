@@ -85,6 +85,62 @@ describe("assessStructuralProgress — progress (continue) vs fixed point (consi
   });
 });
 
+describe("assessStructuralProgress — `minNonAdvancingRepeats` widens the immediate-neighbor floor (apex v50)", () => {
+  // The activity-watchdog call site (`isWedgedNonAdvancing`) opts into a 2-neighbor floor so a
+  // single mid-IO-burst identical work-signature probe (apex v50: a legitimate writer running
+  // `pnpm install` whose stdout was silent while the bash subprocess ran) is not yet a wedge.
+  // The writer-spec rework-loop callers (`decideConvergence` from `subtaskInnerLoop` /
+  // `runFinalize` / `plannerRunRedrive` / `recovery`) keep the default (1) where a single
+  // byte-identical observable-work repeat is correctly a fixed point.
+  it("the default (no options) preserves the 1-neighbor floor — a single identical OBSERVED-work repeat is a fixed point", () => {
+    const a = sig("err", { workSignature: "w", magnitude: 7 });
+    const b = sig("err", { workSignature: "w", magnitude: 7 });
+    expect(assessStructuralProgress([a, b])).toBe("fixed_point");
+    expect(assessStructuralProgress([a, b], {})).toBe("fixed_point");
+    expect(assessStructuralProgress([a, b], { minNonAdvancingRepeats: 1 })).toBe("fixed_point");
+  });
+
+  it("a 2-NEIGHBOR floor demotes a SINGLE identical-neighbor pair to progress (continue UNBOUNDED)", () => {
+    // The apex v50 case: a single tick of identical work-signature is not yet proof of a wedge
+    // — it could be one batched IO flush, one silent codex reasoning gap during a tool call.
+    const a = sig("err", { workSignature: "w", magnitude: 7 });
+    const b = sig("err", { workSignature: "w", magnitude: 7 });
+    expect(assessStructuralProgress([a, b], { minNonAdvancingRepeats: 2 })).toBe("progress");
+  });
+
+  it("a 2-NEIGHBOR floor still fires at 2 CONSECUTIVE identical pairs (3 identical attempts in a row)", () => {
+    const a = sig("err", { workSignature: "w", magnitude: 7 });
+    expect(assessStructuralProgress([a, a, a], { minNonAdvancingRepeats: 2 })).toBe("fixed_point");
+  });
+
+  it("a 2-NEIGHBOR floor is NOT met when an advancing step BROKE the streak before the trailing repeat", () => {
+    // [a, b, a, a]: only the last pair is identical (streak=1 at the trailing edge) — the
+    // pair (b, a) genuinely changed the failure axis. So the immediate-neighbor branch must
+    // NOT fire under a 2-neighbor floor (cycle detection may still catch it independently —
+    // but here `a` recurs an earlier `a` with no intervening cycle, so it stays progress).
+    const a = sig("a", { workSignature: "wa" });
+    const b = sig("b", { workSignature: "wb" });
+    expect(assessStructuralProgress([a, b, a, a], { minNonAdvancingRepeats: 2 })).toBe("progress");
+  });
+
+  it("the CYCLE branch is UNAFFECTED by `minNonAdvancingRepeats` — an A→B→A→B oscillation still surfaces a fixed point", () => {
+    // The cycle detector reads a recurrence across an intervening attempt, independent of the
+    // immediate-neighbor streak floor. The watchdog still catches genuine cycles even at a
+    // widened floor (and the writer-spec loop is unchanged either way).
+    expect(assessStructuralProgress([sig("a"), sig("b"), sig("a"), sig("b")], { minNonAdvancingRepeats: 2 })).toBe(
+      "fixed_point",
+    );
+  });
+
+  it("a fractional / non-integer `minNonAdvancingRepeats` is floored to 1 (default behavior preserved)", () => {
+    // Defensive: 0 / negative values are meaningless (a streak can't be < 1 on the only branch
+    // they gate). They MUST NOT silently disable the watchdog by always reading "progress".
+    const a = sig("err", { workSignature: "w", magnitude: 7 });
+    expect(assessStructuralProgress([a, a], { minNonAdvancingRepeats: 0 })).toBe("fixed_point");
+    expect(assessStructuralProgress([a, a], { minNonAdvancingRepeats: -1 })).toBe("fixed_point");
+  });
+});
+
 describe("PROPERTY — cycles eventually escalate; shrinking magnitude NEVER escalates", () => {
   it("alternating A,B,A,B,… with non-decreasing magnitude reaches a fixed point (no unbounded re-drive)", () => {
     // Generate the oscillation at increasing lengths; once the recurrence is visible it is a

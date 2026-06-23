@@ -82,13 +82,35 @@ function toAttemptHistory(signatures: ReadonlyArray<string>): AttemptSignature[]
   return signatures.map((signature) => ({ failureSignature: signature, workSignature: signature }));
 }
 
+// The MINIMUM trailing run of CONSECUTIVE identical work-signature probes the watchdog
+// requires before declaring a fixed point. NOT an elapsed-time budget and NOT an attempt cap
+// — it is a STREAK ceiling on the SHARED convergence detector's immediate-neighbor identity
+// branch (apex v50): a 1-neighbor floor killed legitimate writers running `pnpm install`
+// because codex is silent while the bash subprocess runs (its stdout captured by codex, not
+// streamed) AND the workspace count+bytes probe can read identical signature across a single
+// 15s probe tick mid-IO-burst (the filesystem batches flushes, the install resolves before
+// extracting). The 2-neighbor floor requires TWO consecutive identical probes (≈30s of
+// signature identity) before declaring a wedge — still progress / sign-of-life-based (a
+// genuinely-advancing process resets it forever regardless of length), just a more honest
+// floor for tool-invoking agent execs whose work signature legitimately holds flat across a
+// single tick. The cycle-detection branch of the convergence detector is unaffected (it
+// already requires a recurrence ACROSS an intervening attempt — a 3+ element pattern).
+// arch-allow: timeout-class — STREAK ceiling on signature identity, not elapsed time.
+export const MIN_NON_ADVANCING_NEIGHBOR_REPEATS = 2;
+
 // Is the exec WEDGED — its work signature at a FIXED POINT (non-advancing) across the trailing
 // checks? Given the work-signature history (oldest->newest, the latest snapshot included),
 // returns `true` iff the SHARED convergence detector reads a fixed point: the identical work
-// signature persisting / cycling with no new distinct work. A first snapshot, or a CHANGING
-// (advancing) signature, reads as progress -> `false` (continue UNBOUNDED). PURE (no I/O, no
-// clock) so it is reproducible + property-testable — the decision is signature identity, never
-// elapsed time.
+// signature persisting / cycling with no new distinct work, AND the trailing identical-neighbor
+// streak has reached MIN_NON_ADVANCING_NEIGHBOR_REPEATS (the watchdog's streak floor — a
+// single mid-IO-burst identical probe is not yet a wedge; see the constant above). A first
+// snapshot, or a CHANGING (advancing) signature, reads as progress -> `false` (continue
+// UNBOUNDED). PURE (no I/O, no clock) so it is reproducible + property-testable — the
+// decision is signature identity, never elapsed time.
 export function isWedgedNonAdvancing(history: ReadonlyArray<string>): boolean {
-  return assessStructuralProgress(toAttemptHistory(history)) === "fixed_point";
+  return (
+    assessStructuralProgress(toAttemptHistory(history), {
+      minNonAdvancingRepeats: MIN_NON_ADVANCING_NEIGHBOR_REPEATS,
+    }) === "fixed_point"
+  );
 }

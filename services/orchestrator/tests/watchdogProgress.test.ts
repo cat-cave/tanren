@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  MIN_NON_ADVANCING_NEIGHBOR_REPEATS,
   WORK_SIGNATURE_WINDOW,
   appendWorkSignature,
   distinctRecentOutput,
@@ -100,26 +101,68 @@ describe("isWedgedNonAdvancing — the progress verdict over the work-signature 
     // First snapshot: nothing to compare yet.
     expect(isWedgedNonAdvancing(h)).toBe(false);
     h = appendWorkSignature(h, workSignature("Retrying...\n", "ws:1000"));
-    // Proven non-advancing on the repeat.
+    // A single identical-neighbor pair (streak=1) is BELOW the MIN_NON_ADVANCING_NEIGHBOR_REPEATS
+    // floor (apex v50): a `pnpm install` mid-IO-burst can legitimately read identical
+    // signature across one 15s tick. The watchdog requires the streak to reach the floor
+    // before firing — still progress/sign-of-life, just an honest floor for tool-invoking execs.
+    expect(isWedgedNonAdvancing(h)).toBe(false);
+    // Now the trailing identical-neighbor streak has grown to MIN_NON_ADVANCING_NEIGHBOR_REPEATS
+    // consecutive identical pairs (≈30s of signature identity) — proven non-advancing.
+    for (let i = 0; i < MIN_NON_ADVANCING_NEIGHBOR_REPEATS - 1; i += 1) {
+      h = appendWorkSignature(h, workSignature("Retrying...\n", "ws:1000"));
+    }
     expect(isWedgedNonAdvancing(h)).toBe(true);
   });
 
-  it("a genuinely-DEAD process — no output, workspace unreachable — SURFACES a wedge", () => {
+  it("a genuinely-DEAD process — no output, workspace unreachable — SURFACES a wedge once the streak floor is reached", () => {
     const unreachable: string | undefined = undefined;
     let h: string[] = [];
     h = appendWorkSignature(h, workSignature("", unreachable));
     h = appendWorkSignature(h, workSignature("", unreachable));
+    // 1 identical-neighbor pair (streak=1) — below the floor; the substrate keeps polling.
+    expect(isWedgedNonAdvancing(h)).toBe(false);
+    // Append until the trailing identical-neighbor streak reaches the floor.
+    for (let i = 0; i < MIN_NON_ADVANCING_NEIGHBOR_REPEATS - 1; i += 1) {
+      h = appendWorkSignature(h, workSignature("", unreachable));
+    }
     expect(isWedgedNonAdvancing(h)).toBe(true);
   });
 
   it("advancement RESETS forever: any new distinct work after a stuck stretch is progress again", () => {
     let h: string[] = [];
-    h = appendWorkSignature(h, workSignature("same\n", "ws:1"));
-    h = appendWorkSignature(h, workSignature("same\n", "ws:1"));
+    // Build a stuck stretch long enough to fire the watchdog.
+    for (let i = 0; i < MIN_NON_ADVANCING_NEIGHBOR_REPEATS + 1; i += 1) {
+      h = appendWorkSignature(h, workSignature("same\n", "ws:1"));
+    }
     expect(isWedgedNonAdvancing(h)).toBe(true);
     // Then the process produces NEW output → advancing again → not wedged.
     h = appendWorkSignature(h, workSignature("NEW LINE\n", "ws:1"));
     expect(isWedgedNonAdvancing(h)).toBe(false);
+  });
+
+  it("the STREAK FLOOR (apex v50): a SINGLE identical-neighbor pair is NEVER yet a wedge", () => {
+    // The apex-v50 disguised survivor: a 1-neighbor floor killed legitimate writers running
+    // `pnpm install` whose stdout was silent (captured BY codex) while the workspace probe
+    // momentarily read identical count+bytes across a single 15s tick mid-IO-burst.
+    let h: string[] = [];
+    h = appendWorkSignature(h, workSignature("step 1\n", "ws:flat"));
+    h = appendWorkSignature(h, workSignature("step 1\n", "ws:flat"));
+    expect(isWedgedNonAdvancing(h)).toBe(false);
+    // 2 consecutive identical-neighbor pairs (3 identical signatures in a row) IS a wedge.
+    h = appendWorkSignature(h, workSignature("step 1\n", "ws:flat"));
+    expect(isWedgedNonAdvancing(h)).toBe(true);
+  });
+
+  it("the STREAK FLOOR is met by EXACTLY MIN_NON_ADVANCING_NEIGHBOR_REPEATS consecutive identical pairs", () => {
+    // Build the history one signature at a time and verify the watchdog only fires once the
+    // trailing identical-neighbor streak reaches the floor.
+    let h: string[] = [];
+    h = appendWorkSignature(h, workSignature("x", "ws:1"));
+    for (let pairs = 1; pairs <= MIN_NON_ADVANCING_NEIGHBOR_REPEATS + 2; pairs += 1) {
+      h = appendWorkSignature(h, workSignature("x", "ws:1"));
+      const expectedWedged = pairs >= MIN_NON_ADVANCING_NEIGHBOR_REPEATS;
+      expect(isWedgedNonAdvancing(h)).toBe(expectedWedged);
+    }
   });
 });
 
@@ -146,7 +189,7 @@ describe("PROPERTY: progress => never wedged; a fixed point => wedged (signature
     }
   });
 
-  it("ANY sequence ending in the SAME repeated signature with no advance since SURFACES a wedge", () => {
+  it("ANY sequence ending in the SAME repeated signature with no advance since SURFACES a wedge once the floor is met", () => {
     const rng = makeRng(98_765);
     for (let trial = 0; trial < 500; trial += 1) {
       // Some genuine progress first, then a wedge.
@@ -155,10 +198,12 @@ describe("PROPERTY: progress => never wedged; a fixed point => wedged (signature
       for (let i = 0; i < lead; i += 1) {
         h = appendWorkSignature(h, workSignature(`lead-${trial}-${i}`, `ws:${i}`));
       }
-      // Then the SAME byte-identical signature twice (a wedge sets in, no new work).
+      // Then the SAME byte-identical signature enough times that the trailing identical-
+      // neighbor streak reaches MIN_NON_ADVANCING_NEIGHBOR_REPEATS — a wedge sets in.
       const stuck = workSignature(`stuck-${trial}`, "ws:stuck");
-      h = appendWorkSignature(h, stuck);
-      h = appendWorkSignature(h, stuck);
+      for (let i = 0; i < MIN_NON_ADVANCING_NEIGHBOR_REPEATS + 1; i += 1) {
+        h = appendWorkSignature(h, stuck);
+      }
       expect(isWedgedNonAdvancing(h)).toBe(true);
     }
   });
