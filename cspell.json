@@ -128,6 +128,7 @@
     "deserialize",
     "destpath",
     "devcontainer",
+    "devshell",
     "diegetic",
     "direnv",
     "disjoint",

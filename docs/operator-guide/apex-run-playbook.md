@@ -13,9 +13,10 @@ rebuild → fresh `v(N+1)`) and **what each run proves** live in `apex.md`; this
 is the mechanical "how to drive a single run" half.
 
 > **Run naming.** Each trial is `vN`, with its worktree at
-> `/scratch/worktrees/tanren/v<N>` (the trials have run through **v46** as of
-> 2026-06-19 — see `apex.md` for the honest proof state; the full autonomy loop
-> has not yet closed end-to-end). Runs are **disposable** — `main` only moves
+> `/scratch/worktrees/tanren/v<N>`. Successive apex trials — v37–v46 ran on the
+> previous WSL host through 2026-06-19; v47–v49 ran on the new NixOS host in
+> 2026-06-23 — see `apex.md` for the honest proof state; the full autonomy loop
+> has not yet closed end-to-end. Runs are **disposable** — `main` only moves
 > forward; you never patch a run or its generated repo (see `apex.md`).
 >
 > **Picking `<N>`:** look at `ls /scratch/worktrees/tanren/` and pick the next integer after the highest existing trial. The compose project name follows the worktree directory name automatically (e.g. `v47`), so no `-p` override is needed.
@@ -444,7 +445,7 @@ parallel agent waves to lift the platform a quality tier, then rebuild from fres
 
 ---
 
-## What the trials have proven so far (through v46)
+## What the trials have proven so far (through v49)
 
 The trials (driven over this exact playbook, BYOK Codex, $0) have proven **live**:
 DAG-build from a real Forge interview (rough notes → a multi-spec DAG), walker
@@ -458,8 +459,23 @@ runner-release org-scope leak (#636), writer must regenerate+commit derived
 companions before the frozen gate (#637), ssh2 socket idle-timeout killing long
 codex runs (#638), descendant `ancestor_not_ready` hot-loop (#639), and the
 job-stall watchdog gap where a lock-heartbeat fooled a mtime-only liveness probe
-(#640). v46 was the healthiest and furthest run — gates passing, scaffold flowing
-writer→gate→checker, 0 leaks — interrupted by a planned reboot before a merge.
+(#640).
+
+The v47–v49 cluster (2026-06-23, on the new NixOS host) extended the run rhythm
+across an env migration: **v47** (dry run) drove §1-§4 cleanly on the new env and
+surfaced #656 (`.env.validation.local` bash-source breaking on unquoted commas).
+**v48** (real run) drove §1-§5, surfaced #658 (Fly `orgSlug`) plus operator-side
+Fly billing + GitHub repo-conflicts pruning, and halted on the audit-posture
+preflight on the template-build child project (→ Lane T1, #659 — the synthetic
+child is now born with `auditPosture: AUTONOMOUS_AUDIT_POSTURE` +
+`insightThresholds.ciInsightFlakyMinShas: 1`). **v49** drove past those cleanups
+into the live writer-checker-auditor LLM loop running real scaffold work and
+halted on a **legitimate pre-session tanren-code finding**: a runner-INSERT retry
+loop (`duplicate key value violates unique constraint "runners_pkey"`) between
+the run-executor and the job-reaper, compounded by derive's synchronous wait
+having no inner-failure circuit breaker (8-hour curl hang). Task #21 tracks both
+fixes — runner-INSERT idempotency + a progress/sign-of-life-based circuit breaker
+for derive's synchronous wait.
 
 **What is NOT yet proven:** the full autonomy loop **with a live deploy**. No run
 has yet produced a merged spec, a product build, an issue→triage→fix cycle, or a

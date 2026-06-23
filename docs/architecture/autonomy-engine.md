@@ -30,8 +30,9 @@ comments reference them, so the anchored sections survive at this path.
 > paths are **first exercised end-to-end by an apex run that closes the
 > product→merge→deploy loop** — no such run has landed yet (apex v32 halted at
 > scaffold-bootstrap before a merge; v36 proved the #601 recovery to 10/11 on
-> template creation but did not close the product→deploy loop; runs v37–v46 ran
-> through 2026-06-19 and surfaced real engine issues — each fixed and baked in —
+> template creation but did not close the product→deploy loop; successive trials —
+> v37–v46 ran on the previous WSL host through 2026-06-19; v47–v49 ran on the new
+> NixOS host on 2026-06-23 — surfaced real engine issues each fixed and baked in,
 > but the full product→merge→deploy loop has not yet closed). A real merge through
 > the jj/`MergeAuthority` path is therefore the open live-validation item — the engine
 > is the single path on `main` regardless. §2b/§2c below are rewritten to the
@@ -459,12 +460,22 @@ finished, tested, deployed product **with no human in the per-spec loop**.
 
 **Proof state (honest):** the end-to-end claim is **not yet closed**. apex v32
 halted at scaffold-bootstrap before a merge; v36 proved the #601 recovery to 10/11
-on template creation but did not reach the product→deploy loop; runs v37–v46 (through
-2026-06-19) surfaced and fixed real engine issues (timeout-eradication survivors,
-watchdog probe gap, ancestor backoff) but the full rough-notes → merged PRs →
-deployed product loop has not yet closed. Every capability is **built and on `main`**;
-the bar is clear; it has not yet been cleared. This section describes the workload apex
-_forces_ and the bar it _must_ clear, not a cleared bar.
+on template creation but did not reach the product→deploy loop; successive trials —
+v37–v46 ran on the previous WSL host through 2026-06-19; v47–v49 ran on the new
+NixOS host on 2026-06-23 — surfaced and fixed real engine issues (timeout-eradication
+survivors, watchdog probe gap, ancestor backoff, apex-mode env-var eradicated #646,
+Lane T1 autonomous audit posture on the synthetic child #659) but the full rough-notes →
+merged PRs → deployed product loop has not yet closed. v49 drove past this session's
+env + code cleanups into the live writer-checker-auditor LLM loop running real
+scaffold work and halted on a legitimate pre-session tanren-code finding: a
+runner-INSERT retry loop (`duplicate key value violates unique constraint
+"runners_pkey"`) between the run-executor and the job-reaper, compounded by
+derive's synchronous wait having no inner-failure circuit breaker (8-hour curl
+hang). Task #21 tracks both fixes — runner-INSERT idempotency + a
+progress/sign-of-life-based circuit breaker for derive's synchronous wait. Every
+capability is **built and on `main`**; the bar is clear; it has not yet been
+cleared. This section describes the workload apex _forces_ and the bar it _must_
+clear, not a cleared bar.
 
 > **Operating contract:** `docs/operator-guide/apex.md`. It is binding and
 > counterintuitive: apex tests **Tanren**, not the fixture (a disposable URL

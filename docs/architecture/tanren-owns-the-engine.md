@@ -46,10 +46,13 @@
 > "speculative" vocabulary. The live cutover paths are **first exercised
 > end-to-end by an apex run that reaches a merge** — none has yet (apex v32 halted
 > at scaffold-bootstrap before a merge; v36 recovered to 10/11 on template creation
-> but did not close the product→deploy loop; runs v37–v46, through 2026-06-19,
-> surfaced and fixed real engine issues but the full loop has not yet closed), so
-> a real merge through the jj/`MergeAuthority` path is the open live-validation
-> item (the engine is the single path on `main` regardless).
+> but did not close the product→deploy loop; successive trials — v37–v46 ran on
+> the previous WSL host through 2026-06-19; v47–v49 ran on the new NixOS host in
+> 2026-06-23 — surfaced and fixed real engine issues, with v49 halting on the
+> task-#21 runner-INSERT retry loop + derive synchronous-wait circuit-breaker
+> finding, but the full loop has not yet closed), so a real merge through the
+> jj/`MergeAuthority` path is the open live-validation item (the engine is the
+> single path on `main` regardless).
 
 ## 0. The governing principle — guaranteed-internal vs best-effort-external
 
@@ -262,9 +265,12 @@ have since been **deleted** (the WS-A/WS-B series) — each live path is uncondi
 so "(flag-on)" below means "merged then made the single path." A real merge through
 the live jj/`MergeAuthority` path is the open live-validation item (no apex run has
 reached a merge — v32 halted at scaffold-bootstrap, v36 recovered to 10/11 on
-template creation without closing the product→deploy loop, runs v37–v46 through
-2026-06-19 surfaced and fixed real engine issues but the full loop has not yet
-closed), but the engine is the single path regardless (see the status header).
+template creation without closing the product→deploy loop, successive trials —
+v37–v46 ran on the previous WSL host through 2026-06-19; v47–v49 ran on the new
+NixOS host on 2026-06-23 — surfaced and fixed real engine issues but the full loop
+has not yet closed, with v49 halting on the task-#21 runner-INSERT retry loop +
+derive synchronous-wait circuit-breaker finding), but the engine is the single
+path regardless (see the status header).
 
 **Wave 0 — lock the design (this doc). DONE.** The four seam contracts +
 `integration_nodes` schema + `auditPosture` policy shape + the guaranteed/best-effort
@@ -317,8 +323,14 @@ model), and `CLAUDE.md`. Code must embody the doctrine (the former doc/reality m
 drive the autonomy loops. apex is the single path's first end-to-end exercise, and
 **no apex run has reached a merge yet**: v32 halted at scaffold-bootstrap; v36
 recovered to 10/11 on template creation but did not close the product→deploy loop;
-runs v37–v46 (through 2026-06-19) surfaced and fixed real engine issues — the
-timeout-eradication survivors (#638, #640), the ancestor-backoff gap — but the full
-loop has not yet closed. So a real merge through the live jj/`MergeAuthority` path
-is still the open validation item. The cutover itself is complete — the engine is
-the single path whether or not a given apex run reaches a merge.
+successive trials — v37–v46 ran on the previous WSL host through 2026-06-19;
+v47–v49 ran on the new NixOS host on 2026-06-23 — surfaced and fixed real engine
+issues (timeout-eradication survivors #638, #640, ancestor-backoff #639,
+apex-mode env-var eradicated #646, Lane T1 #659), with v49 halting on a
+legitimate pre-session tanren-code finding — a runner-INSERT retry loop
+(`duplicate key value violates unique constraint "runners_pkey"`) compounded by
+derive's synchronous wait having no inner-failure circuit breaker (8-hour curl
+hang); task #21 tracks both fixes. The full loop has not yet closed. So a real
+merge through the live jj/`MergeAuthority` path is still the open validation
+item. The cutover itself is complete — the engine is the single path whether or
+not a given apex run reaches a merge.
