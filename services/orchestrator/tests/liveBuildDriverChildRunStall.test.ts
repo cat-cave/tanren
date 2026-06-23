@@ -15,11 +15,13 @@ import { describe, expect, it } from "vitest";
 import type { RunnerHandle } from "../src/engine/contracts/allocator.js";
 import type { CommandResult, CommandSubstrate, RunnerCommand } from "../src/engine/contracts/commandSubstrate.js";
 import type { DagSnapshot, DagWalker, WalkResult } from "../src/engine/contracts/dagWalker.js";
+import { EventEmittingDagWalker } from "../src/engine/dag/walker.js";
 import {
   buildRunLoopBuildDriver,
   CHILD_PROGRESS_PROBE_CADENCE_MS,
   ChildRunStalledError,
   NON_ADVANCE_PROBES_BEFORE_STALL,
+  WORKER_PROGRESS_EVENT_PREFIXES,
   type ChildRunStallSignal,
   type ConvergedProjectFacts,
 } from "../src/engine/templates/index.js";
@@ -210,4 +212,197 @@ describe("task #21B — driveToConvergence HALTS LOUD on a stalled child templat
       /STALLED/u,
     );
   });
+
+  // -------------------------------------------------------------------
+  // CONFORMANCE TESTS — the audit-blocker repro (the tests that should have
+  // caught the original bug). The earlier cases above use a `RecordingWalker`
+  // fake + a synthetic `childRunProgressSignal` returning a constant `BigInt(42)`
+  // — that bypassed the real signal source and so could not detect the defect.
+  //
+  // These wire the REAL `EventEmittingDagWalker` (the production class) against a
+  // focused in-memory event log, and use a `ChildRunStallSignal` whose `probe()`
+  // applies the EXACT allowlist (`WORKER_PROGRESS_EVENT_PREFIXES`) the production
+  // SQL `LIKE ANY` filter encodes — the exported constant is the SAME source the
+  // production probe uses, so a drift between docs and the lived filter surfaces
+  // as a test failure. We use a focused in-memory fake (not a real pg pool)
+  // because the defect is the SQL filter; a real pg+RLS+`runWithOrgScope`
+  // integration is materially heavier than this test needs to be.
+  it("CONFORMANCE — breaker fires under the apex v49 shape even with the REAL walker emitting dag.drained on every poll", async () => {
+    const { log, walker } = buildRealWalkerOnInMemoryLog();
+    const probeSignal = buildAllowlistedProbe(log);
+    const deps = buildRealWalkerDeps({ walker, loadSnapshot: async () => inFlightSnapshot(), probeSignal });
+
+    let caught: unknown;
+    try {
+      await buildRunLoopBuildDriver(deps).build({ orgId: "org_acme", projectId: "project_tmpl" });
+    } catch (error) {
+      caught = error;
+    }
+    // The breaker fired — without the allowlist filter the signal would advance
+    // on every probe (the walker writes dag.drained each poll cycle) and this
+    // would hang forever instead of throwing.
+    expect(caught).toBeInstanceOf(Error);
+    expect((caught as Error).message).toMatch(/STALLED/u);
+    expect((caught as Error).cause).toBeInstanceOf(ChildRunStalledError);
+
+    // Sanity: the walker DID write dag.* events into the log (proving the test
+    // exercised the bug shape, not a vacuous pass against an empty log), AND the
+    // log contains ZERO worker-progress events (the breaker fired purely because
+    // the filter excluded the orchestrator's own emissions).
+    expect(log.filter((e) => e.eventType.startsWith("dag.")).length).toBeGreaterThanOrEqual(
+      NON_ADVANCE_PROBES_BEFORE_STALL,
+    );
+    const allowedPrefixes = WORKER_PROGRESS_EVENT_PREFIXES.map((p) => p.replace(/%$/u, ""));
+    expect(log.filter((e) => allowedPrefixes.some((p) => e.eventType.startsWith(p)))).toHaveLength(0);
+  });
+
+  // Pairs with the test above: when the worker IS genuinely advancing (it emits
+  // `task.*` events between probes), the breaker stays silent regardless of how
+  // many `dag.drained` rows the walker writes alongside. Together the two pin
+  // the filter in BOTH directions — the dag.* exclusion is mandatory, the
+  // worker-progress inclusion works.
+  it("CONFORMANCE — breaker stays silent when worker.* events advance alongside the walker's dag.* self-emissions", async () => {
+    const { log, walker } = buildRealWalkerOnInMemoryLog();
+    let snapshotPolls = 0;
+    const synthDoneAfterPolls = NON_ADVANCE_PROBES_BEFORE_STALL * 3;
+    // Inject a worker-progress emission per probe — the breaker MUST stay silent.
+    const probeSignal = buildAllowlistedProbe(log, "task.completed");
+    const deps = buildRealWalkerDeps({
+      walker,
+      probeSignal,
+      loadSnapshot: async () => {
+        snapshotPolls += 1;
+        if (snapshotPolls <= synthDoneAfterPolls) return inFlightSnapshot();
+        return {
+          projectId: "project_tmpl",
+          archived: false,
+          nodes: [{ specId: "spec_running", phase: "done", dependsOn: [], priority: "p1", orderKey: 0 }] as const,
+        } as DagSnapshot;
+      },
+    });
+
+    // No throw — the build converges via the `done` transition. The breaker
+    // stayed silent because every probe observed a NEW task.* id even though the
+    // walker also kept appending dag.drained beside it.
+    await buildRunLoopBuildDriver(deps).build({ orgId: "org_acme", projectId: "project_tmpl" });
+    expect(log.filter((e) => e.eventType.startsWith("dag.")).length).toBeGreaterThan(0);
+    expect(log.filter((e) => e.eventType.startsWith("task.")).length).toBeGreaterThan(NON_ADVANCE_PROBES_BEFORE_STALL);
+  });
 });
+
+// ------------------------- Conformance-test helpers --------------------------
+
+type InMemoryEvent = { id: bigint; eventType: string };
+
+/** A `DagEventEmitter` that captures every dag.* emission into the supplied log. */
+function buildInMemoryDagEventEmitter(log: InMemoryEvent[]): unknown {
+  let nextId = log.reduce((m, e) => (e.id > m ? e.id : m), 0n);
+  const append = (eventType: string): void => {
+    nextId += 1n;
+    log.push({ id: nextId, eventType });
+  };
+  return {
+    async emitSpecEnqueued() {
+      append("dag.spec.enqueued");
+    },
+    async emitSpecSpeculative() {
+      append("dag.spec.speculative");
+    },
+    async emitSpeculationHeld() {
+      append("dag.spec.speculation_held");
+    },
+    async emitAncestorNotReady() {
+      append("dag.spec.ancestor_not_ready");
+    },
+    async emitDrained() {
+      append("dag.drained");
+    },
+    async emitBudgetPaused() {
+      append("dag.budget.paused");
+    },
+    async emitBudgetMilestone() {
+      append("dag.budget.milestone");
+      return false;
+    },
+    async emitConcurrencySaturated() {
+      append("dag.concurrency.saturated");
+    },
+    async emitConfigCorrupt() {
+      append("dag.config.corrupt");
+    },
+  };
+}
+
+/**
+ * Build a real `EventEmittingDagWalker` wired against in-memory fakes for the
+ * in_flight-only apex v49 snapshot. Returns the shared log alongside the walker
+ * so the test can probe + assert against it.
+ */
+function buildRealWalkerOnInMemoryLog(): { log: InMemoryEvent[]; walker: EventEmittingDagWalker } {
+  const log: InMemoryEvent[] = [];
+  const events = buildInMemoryDagEventEmitter(log) as ConstructorParameters<typeof EventEmittingDagWalker>[0]["events"];
+  const walker = new EventEmittingDagWalker({
+    readModel: { loadSnapshot: async () => inFlightSnapshot() },
+    lifecycleReadModel: {
+      loadLifecycle: async () => ({ projectId: "project_tmpl", bySpecId: new Map() }),
+    },
+    enqueuer: {
+      enqueueSpecRun: async () => {
+        throw new Error("enqueueSpecRun should not run — the in_flight-only snapshot has no pending specs");
+      },
+    },
+    events,
+    budgetGate: {
+      resolveBudget: async () => ({ ceilingUsd: undefined, period: "monthly", spentUsd: 0, notionalUsd: 0 }),
+    },
+    ancestorStackResolver: { resolveStack: async () => [] },
+    speculationConfig: async () => ({ threshold: "moderate", depthCap: 3 }),
+    concurrency: () => 4,
+  });
+  return { log, walker };
+}
+
+/**
+ * A probe that mirrors the production `LIKE ANY` filter in JS using the SAME
+ * `WORKER_PROGRESS_EVENT_PREFIXES` the production SQL uses (drift = test
+ * failure). When `injectOnProbe` is set, each probe call appends one event of
+ * that type to the log first — the second conformance test uses this to
+ * synthesize worker forward motion alongside the walker's dag.* writes.
+ */
+function buildAllowlistedProbe(log: InMemoryEvent[], injectOnProbe?: string): ChildRunStallSignal {
+  const allowedPrefixes = WORKER_PROGRESS_EVENT_PREFIXES.map((p) => p.replace(/%$/u, ""));
+  let nextId = log.reduce((m, e) => (e.id > m ? e.id : m), 0n);
+  return {
+    probe: async () => {
+      if (injectOnProbe !== undefined) {
+        nextId += 1n;
+        log.push({ id: nextId, eventType: injectOnProbe });
+      }
+      const matches = log.filter((e) => allowedPrefixes.some((p) => e.eventType.startsWith(p)));
+      if (matches.length === 0) return;
+      return matches.reduce((max, e) => (e.id > max ? e.id : max), matches[0]!.id);
+    },
+  };
+}
+
+/** Compose the build-driver deps wiring the real walker + the probe + an inert ssh/allocator. */
+function buildRealWalkerDeps(input: {
+  walker: EventEmittingDagWalker;
+  loadSnapshot: (p: string) => Promise<DagSnapshot>;
+  probeSignal: ChildRunStallSignal;
+}) {
+  const ssh = new RecordingSsh();
+  return {
+    pool: {} as never,
+    allocator: fakeAllocator,
+    ssh,
+    identitySecretRef: "id/ref",
+    walker: input.walker,
+    loadSnapshot: input.loadSnapshot,
+    resolveConverged: async () => convergedFacts,
+    auditorFor: () => stubAuditor,
+    convergence: { pollIntervalMs: CHILD_PROGRESS_PROBE_CADENCE_MS },
+    childRunProgressSignal: input.probeSignal,
+    sleep: async () => {},
+  };
+}

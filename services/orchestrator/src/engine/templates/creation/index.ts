@@ -44,6 +44,7 @@ export {
   CHILD_PROGRESS_PROBE_CADENCE_MS,
   ChildRunStalledError,
   NON_ADVANCE_PROBES_BEFORE_STALL,
+  WORKER_PROGRESS_EVENT_PREFIXES,
   type ChildRunStallSignal,
 } from "./childRunProgressProbe.js";
 export { resolveConvergedProjectFacts } from "./convergedFacts.js";
