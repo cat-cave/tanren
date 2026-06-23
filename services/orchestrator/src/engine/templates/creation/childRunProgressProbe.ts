@@ -101,11 +101,21 @@ import { runWithOrgScope } from "@tanren/db";
 export const CHILD_PROGRESS_PROBE_CADENCE_MS = 30_000;
 
 // CONSECUTIVE non-advancing probes that constitute a STALL. The signature must
-// hold IDENTICAL across this many successive probes (~5 min wall-clock floor, but
-// the trigger is identity, not duration — a still-flat signature at probe N+1 is
-// still flat). Not flagged by the timeout-eradication lint (same reasoning as
-// the cadence above); no `arch-allow` annotation needed.
-export const NON_ADVANCE_PROBES_BEFORE_STALL = 10;
+// hold IDENTICAL across this many successive probes (~15 min wall-clock floor at
+// the 30s cadence, but the trigger is identity, not duration — a still-flat
+// signature at probe N+1 is still flat). Apex v50/v51/v52 evidence: a single
+// real Codex writer turn can take 4-8 minutes (multi-step plan + tool calls +
+// pnpm install + verification), and even with #21B's `dag.*` exclusion the
+// breaker fires before a normal slow turn emits its terminal `task.completed` /
+// `task.failed`. v52 specifically: a writer turn ran 6.4 min (21:52:03 →
+// 21:58:34) and the breaker fired at 5min flat — premature, while the worker
+// was still legitimately working. Bumping 10 → 30 probes pushes the floor to
+// ~15 min, well past the empirical p99 for a single Codex writer turn while
+// still cleanly catching a genuine "no audit-event ever" stall.
+//
+// Not flagged by the timeout-eradication lint (same reasoning as the cadence
+// above); no `arch-allow` annotation needed.
+export const NON_ADVANCE_PROBES_BEFORE_STALL = 30;
 
 // The child-run progress signal: a single `probe()` call returns the current
 // IDENTITY of the child project's append-only event stream. `undefined` means
