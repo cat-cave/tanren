@@ -29,7 +29,7 @@ autonomously.
 Tanren harder and flushes real engine bugs now fixed on `main` (the run rhythm:
 drive → halt on a real bug → fix-on-`main` → drain the backlog → rebuild → fresh
 `v(N+1)`). Successive apex trials — v37–v46 ran on the previous WSL host through
-2026-06-19; v47–v49 ran on the new NixOS host in 2026-06-23. **No run has yet
+2026-06-19; v47–v49 ran on the new NixOS host on 2026-06-23. **No run has yet
 closed the product loop** (issue → triage → fix → merge → deploy → a working
 product, no human in the inner loop). That is exactly what apex still has to
 prove; do not describe it as done. v49 drove past this session's env + code
@@ -310,7 +310,7 @@ cite); the merge-engine cutover rationale is
   HTTP API only, files real issues into Tanren for every defect, and never hand-fixes
   the generated repo. **The honest state (§1):** successive apex trials — v37–v46
   ran on the previous WSL host through 2026-06-19; v47–v49 ran on the new NixOS host
-  in 2026-06-23 — each flushed real engine bugs now fixed on `main`; **no run has
+  on 2026-06-23 — each flushed real engine bugs now fixed on `main`; **no run has
   yet closed the product loop** (issue → triage → fix → merge → deploy → a working
   product, no human in the inner loop). That close is the open proof. To drive the
   next run: the operator role + run rhythm + proof portfolio is

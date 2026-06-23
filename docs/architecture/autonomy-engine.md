@@ -32,7 +32,7 @@ comments reference them, so the anchored sections survive at this path.
 > scaffold-bootstrap before a merge; v36 proved the #601 recovery to 10/11 on
 > template creation but did not close the product→deploy loop; successive trials —
 > v37–v46 ran on the previous WSL host through 2026-06-19; v47–v49 ran on the new
-> NixOS host in 2026-06-23 — surfaced real engine issues each fixed and baked in,
+> NixOS host on 2026-06-23 — surfaced real engine issues each fixed and baked in,
 > but the full product→merge→deploy loop has not yet closed). A real merge through
 > the jj/`MergeAuthority` path is therefore the open live-validation item — the engine
 > is the single path on `main` regardless. §2b/§2c below are rewritten to the
@@ -462,7 +462,7 @@ finished, tested, deployed product **with no human in the per-spec loop**.
 halted at scaffold-bootstrap before a merge; v36 proved the #601 recovery to 10/11
 on template creation but did not reach the product→deploy loop; successive trials —
 v37–v46 ran on the previous WSL host through 2026-06-19; v47–v49 ran on the new
-NixOS host in 2026-06-23 — surfaced and fixed real engine issues (timeout-eradication
+NixOS host on 2026-06-23 — surfaced and fixed real engine issues (timeout-eradication
 survivors, watchdog probe gap, ancestor backoff, apex-mode env-var eradicated #646,
 Lane T1 autonomous audit posture on the synthetic child #659) but the full rough-notes →
 merged PRs → deployed product loop has not yet closed. v49 drove past this session's

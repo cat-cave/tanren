@@ -267,7 +267,7 @@ the live jj/`MergeAuthority` path is the open live-validation item (no apex run 
 reached a merge — v32 halted at scaffold-bootstrap, v36 recovered to 10/11 on
 template creation without closing the product→deploy loop, successive trials —
 v37–v46 ran on the previous WSL host through 2026-06-19; v47–v49 ran on the new
-NixOS host in 2026-06-23 — surfaced and fixed real engine issues but the full loop
+NixOS host on 2026-06-23 — surfaced and fixed real engine issues but the full loop
 has not yet closed, with v49 halting on the task-#21 runner-INSERT retry loop +
 derive synchronous-wait circuit-breaker finding), but the engine is the single
 path regardless (see the status header).
@@ -324,7 +324,7 @@ drive the autonomy loops. apex is the single path's first end-to-end exercise, a
 **no apex run has reached a merge yet**: v32 halted at scaffold-bootstrap; v36
 recovered to 10/11 on template creation but did not close the product→deploy loop;
 successive trials — v37–v46 ran on the previous WSL host through 2026-06-19;
-v47–v49 ran on the new NixOS host in 2026-06-23 — surfaced and fixed real engine
+v47–v49 ran on the new NixOS host on 2026-06-23 — surfaced and fixed real engine
 issues (timeout-eradication survivors #638, #640, ancestor-backoff #639,
 apex-mode env-var eradicated #646, Lane T1 #659), with v49 halting on a
 legitimate pre-session tanren-code finding — a runner-INSERT retry loop

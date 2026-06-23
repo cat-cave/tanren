@@ -93,7 +93,7 @@ real credits under the $50 ceiling.
 
 **Be honest about the proof state — do NOT overclaim.** Successive apex trials —
 v37–v46 ran on the previous WSL host through 2026-06-19; v47–v49 ran on the new
-NixOS host in 2026-06-23 — each flushed real engine bugs now fixed on `main`. **No
+NixOS host on 2026-06-23 — each flushed real engine bugs now fixed on `main`. **No
 run has yet closed the full autonomous loop** (issue → triage → fix → merge →
 deploy → a working product, no human in the inner loop). v49 drove past this
 session's env + code cleanups into the live writer-checker-auditor LLM loop running

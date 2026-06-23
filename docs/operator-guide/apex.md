@@ -13,7 +13,7 @@ contract for the human/orchestrator driving the run.**
 
 > **Where the trials stand (through v49).** Successive apex trials — v37–v46 ran
 > on the previous WSL host through 2026-06-19; v47–v49 ran on the new NixOS host
-> in 2026-06-23. The chain has surfaced a long list of real bugs — all fixed on
+> on 2026-06-23. The chain has surfaced a long list of real bugs — all fixed on
 > `main`: the never-discard re-drive paths (#585–#594), the intelligent
 > non-convergence detection that replaced hardcoded attempt caps (#593), merge
 > re-gating that routes a gate failure to writer rework instead of bricking the

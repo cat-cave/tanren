@@ -231,7 +231,7 @@ credentials (GitHub App + Slack + a deploy target — see
 credits under the $50 budget ceiling (BYOK Codex runs at $0).
 
 **Honest proof state.** Successive apex trials — v37–v46 ran on the previous WSL
-host through 2026-06-19; v47–v49 ran on the new NixOS host in 2026-06-23 — have
+host through 2026-06-19; v47–v49 ran on the new NixOS host on 2026-06-23 — have
 driven Tanren harder each time and each flushed real engine bugs now fixed on `main`.
 **No live run has yet closed the full autonomous loop** (issue → triage → fix →
 merge → deploy → a working product) — that is precisely what apex still has to prove.
