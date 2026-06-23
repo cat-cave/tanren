@@ -168,9 +168,11 @@ describe("SSH activity watchdog (progress-based hang detection)", () => {
     const watchdog: ActivityWatchdog = { livenessProbe: () => Promise.resolve(), probeIntervalMs: 1_000 };
 
     const runPromise = substrate.run(target, { command: "jj rebase", watchdog });
-    // The work signature is established on the first check and proven non-advancing on the
-    // second — signature IDENTITY, not a duration → fire.
-    await vi.advanceTimersByTimeAsync(2_000);
+    // The work signature is established on the first check and proven non-advancing across
+    // enough consecutive identical-neighbor pairs to meet MIN_NON_ADVANCING_NEIGHBOR_REPEATS
+    // (apex v50: a single mid-IO-burst identical probe is not yet a wedge; the watchdog
+    // requires the streak floor). Signature IDENTITY, not elapsed time → fire.
+    await vi.advanceTimersByTimeAsync(4_000);
     const result = await runPromise;
 
     expect(result.stalled).toBe(true);
@@ -221,7 +223,9 @@ describe("SSH activity watchdog (progress-based hang detection)", () => {
     };
 
     const runPromise = substrate.run(target, { command: "jj rebase", watchdog });
-    await vi.advanceTimersByTimeAsync(2_000);
+    // Advance enough probe ticks for the trailing identical-neighbor streak to reach the
+    // watchdog's floor (MIN_NON_ADVANCING_NEIGHBOR_REPEATS).
+    await vi.advanceTimersByTimeAsync(4_000);
     const result = await runPromise;
 
     expect(result.stalled).toBe(true);

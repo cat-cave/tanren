@@ -54,6 +54,33 @@ emphatic that this class keeps recurring); the existing models it generalizes ar
 >   The doctrine stands; the synchronous-wait surface is no longer a disguised
 >   survivor. The sister lane (task #21A — runner-INSERT idempotency in
 >   `services/allocator/**`) ships separately.
+> - **Task #21C (apex v50) — the ActivityWatchdog `fixed_point` floor was too
+>   tight for tool-invoking agent execs [RESOLVED].** v50 surfaced the THIRD
+>   #640-class disguised survivor in the watchdog family: the
+>   `assessStructuralProgress` immediate-neighbor identity branch fired on a
+>   SINGLE byte-identical work-signature pair (one 15s probe of identical
+>   output + workspace signature), killing legitimate writers running
+>   `pnpm install`. Codex's stdout is silent while the bash subprocess runs
+>   (its output captured BY codex, not streamed), and concurrently the
+>   workspace `find … | awk` count+bytes probe can read identical signature
+>   mid-IO-burst across a single 15s tick (filesystem batched flushes; an
+>   install resolves before extracting). DB evidence: 8 zero-token writer
+>   rows all `exitReason="timeout"` coexist with 1 successful 2.7M-token
+>   writer that happened to advance stdout / workspace every tick. Fix:
+>   thread `minNonAdvancingRepeats?: number` through `assessStructuralProgress`
+>   (default 1 — the writer-spec rework-loop semantics, where a single
+>   byte-identical observable-work repeat IS the fixed point); the watchdog's
+>   call site `isWedgedNonAdvancing` passes 2 via the new
+>   `MIN_NON_ADVANCING_NEIGHBOR_REPEATS` constant: the streak floor requires
+>   TWO consecutive identical immediate-neighbor pairs (≈30s of signature
+>   identity) before declaring a wedge. The doctrine stands — a STREAK
+>   CEILING on signature identity, NOT elapsed time; a genuinely-advancing
+>   process resets it forever no matter the length. The cycle-detection
+>   branch (recurrence across an intervening attempt) is unaffected — it
+>   still catches A→B→A→B oscillations and works at any streak floor. The
+>   companion accounting lane (task #14 / v50-B1 — gate
+>   `usage.token_accounting_failed` on writer `exitReason=completed` so the
+>   now-rarer mid-call kills don't double-emit) ships separately.
 >
 > The inventory below was produced by a 3-auditor sweep and **re-verified
 > file:line against `origin/main` while writing** — drift corrections are flagged

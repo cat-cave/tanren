@@ -105,6 +105,32 @@ export type StructuralProgress = "progress" | "fixed_point" | "first";
 const CYCLE_WINDOW = 8;
 
 /**
+ * Optional tuning the watchdog call site uses to WIDEN the immediate-neighbor identity check
+ * (`reproducedIdenticalWork`). The default semantics — a single byte-identical repeat is
+ * already a fixed point — are correct for the writer-spec rework loop (the agent demonstrably
+ * produced identical observable work, no new information). They are TOO TIGHT for the
+ * activity-watchdog use, where the "work signature" is a fold of the recent output tail + a
+ * workspace probe sampled on a poll cadence (apex v50: a legitimate writer running
+ * `pnpm install` is silent at the codex layer while the bash subprocess runs, AND the
+ * workspace count+bytes probe can read identical mid-IO-burst across a single 15s tick).
+ * Raising the streak floor at THAT call site (the only one that opts in) requires N
+ * consecutive identical immediate neighbors before declaring a wedge — still progress /
+ * sign-of-life, just a more honest floor for tool-invoking agent execs. The cycle-detection
+ * branch is independent (and unaffected): it already requires a recurrence across an
+ * intervening attempt.
+ */
+export interface StructuralProgressOptions {
+  /**
+   * Minimum count of CONSECUTIVE identical immediate-neighbor pairs at the trailing edge of
+   * the history required to fire the `reproducedIdenticalWork` (immediate-neighbor identity)
+   * branch of {@link assessStructuralProgress}. Default `1` — the existing semantics, where a
+   * single byte-identical repeat is a fixed point. The activity watchdog passes `2` so a
+   * single mid-IO-burst identical probe is not enough to declare a wedge.
+   */
+  minNonAdvancingRepeats?: number;
+}
+
+/**
  * Assess STRUCTURAL progress of the latest attempt against the prior history. PURE (no I/O,
  * no clock) so it is reproducible + unit-testable. The history is oldest→newest; the latest
  * attempt is the last element. The loop is making PROGRESS — and so CONTINUES, UNBOUNDED —
@@ -114,7 +140,8 @@ const CYCLE_WINDOW = 8;
  *     observable work BYTE-IDENTICALLY (same failure signature, both work signatures observed
  *     and equal, no magnitude decrease) — the agent produced the identical output and got the
  *     identical failure, with literally no new information. A single such repeat is already a
- *     fixed point (there is nothing left to observe).
+ *     fixed point (there is nothing left to observe). The activity-watchdog call site widens
+ *     this to N consecutive identical neighbors via `minNonAdvancingRepeats` (default 1).
  *   - CYCLE / OSCILLATION: the latest state RECURS an EARLIER (non-immediate) attempt within
  *     the trailing window with NO net magnitude decrease since that earlier occurrence. This
  *     catches A→B→A→B (alternating signatures) and 5→4→5→4 (oscillating magnitude) — a loop
@@ -129,14 +156,27 @@ const CYCLE_WINDOW = 8;
  *
  * Returns `first` for an empty/single-element history (nothing to compare → CONTINUE).
  */
-export function assessStructuralProgress(history: ReadonlyArray<AttemptSignature>): StructuralProgress {
+export function assessStructuralProgress(
+  history: ReadonlyArray<AttemptSignature>,
+  options: StructuralProgressOptions = {},
+): StructuralProgress {
   if (history.length < 2) return "first";
   const latest = history.at(-1);
   const prior = history.at(-2);
   if (latest === undefined || prior === undefined) return "first";
+  // The minimum trailing identical-neighbor streak the immediate-neighbor identity branch
+  // requires. Default 1 preserves the writer-spec rework-loop semantics; the activity
+  // watchdog passes 2 (so a single 15s probe of identical signature mid-IO-burst is not yet
+  // a wedge). A value < 1 is meaningless (no streak threshold can fire on 0 neighbors); we
+  // floor it to 1 so the default behavior is preserved.
+  const minRepeats = Math.max(1, options.minNonAdvancingRepeats ?? 1);
   // (1) Proven-identical IMMEDIATE work: the agent reproduced byte-identical observable output
-  // and got the identical failure with no magnitude reduction — a dead-end on the first repeat.
-  if (reproducedIdenticalWork(prior, latest)) return "fixed_point";
+  // and got the identical failure with no magnitude reduction — a dead-end on the first repeat
+  // (default) or once the trailing streak reaches `minRepeats` consecutive identical neighbors
+  // (the activity-watchdog call site). The streak is read backwards from the latest pair.
+  if (reproducedIdenticalWork(prior, latest) && nonAdvancingNeighborStreak(history) >= minRepeats) {
+    return "fixed_point";
+  }
   // (2) Cycle / oscillation: the latest state recurs an EARLIER (non-immediate) attempt with no
   // net magnitude decrease since AND no new state explored in between — a loop revisiting states
   // it has already been in without getting closer. A single immediate repeat alone is NOT this
@@ -144,6 +184,26 @@ export function assessStructuralProgress(history: ReadonlyArray<AttemptSignature
   // not an instant escalation), and a loop that found a NEW state since is still exploring.
   if (isCycle(history)) return "fixed_point";
   return "progress";
+}
+
+/**
+ * The length of the trailing run of CONSECUTIVE identical immediate-neighbor pairs ending at
+ * the latest attempt — i.e. how many of the most recent pairs satisfy
+ * `reproducedIdenticalWork`. A pair that genuinely advances (a different failure / different
+ * observed work / a magnitude decrease) breaks the run. Used ONLY by the streak-floor branch
+ * of {@link assessStructuralProgress}; PURE (no I/O, no clock). Returns 0 when the trailing
+ * neighbor pair is itself advancing.
+ */
+function nonAdvancingNeighborStreak(history: ReadonlyArray<AttemptSignature>): number {
+  let streak = 0;
+  for (let i = history.length - 1; i >= 1; i -= 1) {
+    const latest = history.at(i);
+    const prior = history.at(i - 1);
+    if (latest === undefined || prior === undefined) break;
+    if (!reproducedIdenticalWork(prior, latest)) break;
+    streak += 1;
+  }
+  return streak;
 }
 
 /**
