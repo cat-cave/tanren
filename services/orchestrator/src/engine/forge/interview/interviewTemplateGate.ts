@@ -24,6 +24,12 @@ import type { CaptureLifecycle } from "./types.js";
 
 export type ScaffoldOrigin = "project" | "template_build";
 
+// Convenience re-exports for the derive — the gate is already its single "templating"
+// import surface (it re-exports `TemplateRegistryQueryRequiredError` for the same
+// reason). Lets derive.ts stay under the per-file import-dependency cap without an
+// extra `templateSelection.js` import line.
+export type { SelectedTemplate, TemplateRegistryQuery, TemplateSelectionDecision } from "./templateSelection.js";
+
 // Thrown when a "project" scaffoldOrigin derive was wired WITHOUT a template registry
 // query — the bug that would let a project skip selection and scaffold from-scratch
 // (the deleted bypass). The project path ALWAYS runs selection; the registry query is

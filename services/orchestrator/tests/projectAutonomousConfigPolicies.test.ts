@@ -18,8 +18,16 @@
 import type pg from "pg";
 import { describe, expect, it } from "vitest";
 import { runWithJobOrgId } from "@tanren/db";
+import type { ActorContext } from "../src/auth/schemas.js";
 import { AUTONOMOUS_AUDIT_POSTURE, DEFAULT_AUDIT_POSTURE, migrateProjectConfig } from "../src/engine/config/index.js";
 import { resolveAuditPostureForProject } from "../src/engine/forge/audits/scheduler.js";
+import {
+  deriveFromCapture,
+  emptyCapture,
+  type CaptureLifecycle,
+  type InterviewCapture,
+} from "../src/engine/forge/interview/index.js";
+import type { Template as TemplateForTest } from "../src/engine/repositories/templates.js";
 import {
   assertAuditPostureReentersFindings,
   AuditPostureStrandsFindingsError,
@@ -29,6 +37,7 @@ import { emitCiInsightCandidates } from "../src/engine/insights/ciInsightsCandid
 import { intakeAutoRouteDeps } from "../src/engine/forge/intake/index.js";
 import type { AppendEvent } from "../src/engine/workflow/subtaskLoop.js";
 import type { CandidateTriage, TriageAnswerer, TriageRoutableSpec } from "../src/engine/forge/inbox/index.js";
+import { preparedDeploy, stubPool as deriveStubPool } from "./fixtures/forge/interviewDeriveStub.js";
 
 const ORG = "org_a";
 const PROJECT = "proj_a";
@@ -223,6 +232,90 @@ function flakyRowsOnOneSha(): TestRowSeed[] {
   ];
 }
 
+// ── Lane T1 fixtures (module-scope so the function-scoping lint is satisfied) ──
+
+const T1_ACTOR: ActorContext = {
+  userId: "user_a",
+  orgId: "org_a",
+  projectId: null,
+  scopes: ["platform:admin"],
+  source: "session",
+};
+const T1_REPO_URL = "https://github.com/cat-cave/lane-t1-fixture";
+// The capture-merge boundary timestamp the visionInterview tests use — keeps the
+// template-selection freshness check satisfied for the `project`-path fixture.
+const T1_NOW = Date.parse("2026-06-09T00:00:00.000Z");
+
+const T1_LIFECYCLE: CaptureLifecycle = {
+  stack: "ts/pnpm",
+  bootstrap: "pnpm install",
+  tier1: "pnpm lint && pnpm typecheck",
+  tier2: "pnpm build && pnpm test -- --reporter=junit --outputFile=reports/junit.xml",
+  tier3: "pnpm lint && pnpm typecheck && pnpm build && pnpm test",
+  build: "pnpm build",
+  deploy: "flyctl deploy",
+  toolchain: [],
+};
+
+// A minimal EXPLICIT design contract (the no-silent-noop guard in derive requires
+// PRESENCE, not richness; design-light is valid, silent absence is not).
+const T1_DESIGN_CONTRACT = {
+  domain: "saas-web",
+  identity: "a clean, trustworthy operations surface",
+  intent: "a calm, information-dense control surface an operator trusts at a glance",
+  principles: [],
+  constraints: [],
+  personas: [],
+  behaviors: [],
+  dimensions: [],
+};
+
+function t1Capture(): InterviewCapture {
+  return {
+    ...emptyCapture(),
+    lifecycle: T1_LIFECYCLE,
+    lifecycleConfirmed: true,
+    designContract: T1_DESIGN_CONTRACT,
+  };
+}
+
+// A matching fixture template the project-path selection seeds from — the
+// doctrine: a project DAG ALWAYS seeds from a validated template (never
+// from-scratch). Mirrors visionInterview.test.ts:validatedTsTemplate.
+function validatedTsTemplate(): TemplateForTest {
+  return {
+    id: "template_ts_next",
+    orgId: "org_a",
+    repoRef: "cat-cave/tanren-template-ts-next",
+    status: "validated",
+    channel: "lts",
+    manifest: {
+      version: 1,
+      stack: "ts-pnpm-next",
+      channel: "lts",
+      templateVersion: "1.0.0",
+      provenance: { researchSources: ["https://nextjs.org"] },
+      capabilities: {
+        runtime: "ts",
+        packageManager: "pnpm",
+        framework: "next",
+        deployTarget: "flyctl",
+        gates: ["tier-1", "tier-2", "tier-3"],
+        bdd: true,
+        mutation: true,
+        junit: true,
+      },
+      validationProof: {
+        positiveControlsPassed: true,
+        negativeControls: { typecheck: "proven", lint: "proven", test: "proven", mutation: "proven" },
+        auditorClean: true,
+        validatedAt: "2026-06-01T00:00:00.000Z",
+        validatedSha: "abc1234",
+      },
+    },
+  };
+}
+
 describe("project-config is the source of truth (apex-mode eradication)", () => {
   describe("(1) GovernancePutSchema accepts auditPosture + insightThresholds and round-trips", () => {
     it("a PUT body carrying both fields parses + the migrated config persists both", () => {
@@ -312,6 +405,92 @@ describe("project-config is the source of truth (apex-mode eradication)", () => 
       expect(candidates).toHaveLength(1);
       expect(candidates[0]!.externalId).toBe("ci-flaky:suite.flaky");
       expect(specInserts).toHaveLength(1);
+    });
+  });
+
+  // ── (5) Lane T1 — template-build derive binds the autonomous knobs at creation ──
+  //
+  // The template-build child project is a SYNTHETIC autonomous run inside derive: it
+  // has NO operator in the loop to §2.5-PUT `auditPosture: AUTONOMOUS` AFTER the fact
+  // (the child lives entirely inside this derive call). The audit-posture preflight
+  // (engine/workflow/auditPosturePreflight.ts) fails LOUD on the BALANCED default,
+  // stranding the first scaffold spec — exactly what apex v48 surfaced. The fix
+  // lives in `engine/forge/interview/derive.ts`: the existing
+  // `scaffoldOrigin === "template_build"` discriminator now also writes
+  // `auditPosture: AUTONOMOUS_AUDIT_POSTURE` + `insightThresholds: { ciInsightFlakyMinShas: 1 }`
+  // onto the persisted project config. These two tests assert the discriminator binds
+  // the keys on `template_build` AND leaves the user-facing `project` path unchanged
+  // (operator still §2.5-PUTs).
+  describe("(5) template-build child project carries the AUTONOMOUS posture + autonomous-pattern flaky bar (Lane T1)", () => {
+    it("(5a) template-build + autonomy:auto → child config carries auditPosture: AUTONOMOUS + insightThresholds: { ciInsightFlakyMinShas: 1 }", async () => {
+      const { pool, configs } = deriveStubPool();
+      const derived = await deriveFromCapture(
+        {
+          pool,
+          async prepareDeploy(request) {
+            return preparedDeploy(request.providerKind as "deploy.vercel" | "deploy.flyio");
+          },
+        },
+        {
+          orgId: "org_a",
+          capture: t1Capture(),
+          actor: T1_ACTOR,
+          repoUrl: T1_REPO_URL,
+          deploy: { providerKind: "deploy.vercel" },
+          autonomy: "auto",
+          // template_build is the legitimate from-scratch authoring origin — selection
+          // is skipped + no registry query is needed.
+          scaffoldOrigin: "template_build",
+        },
+      );
+      const config = configs.get(derived.projectId) as Record<string, unknown> | undefined;
+      expect(config).toBeDefined();
+      // The Lane T1 invariant: the synthetic child carries both autonomous-run knobs.
+      expect(config?.auditPosture).toEqual(AUTONOMOUS_AUDIT_POSTURE);
+      expect(config?.insightThresholds).toEqual({ ciInsightFlakyMinShas: 1 });
+      // Existing template-build marker preserved (the deploy-on-merge watcher reads it
+      // to SKIP a template build — never regress the marker while landing the new keys).
+      expect(config?.templateBuild).toBe(true);
+    });
+
+    it("(5b) project + autonomy:auto → child config carries NEITHER key (operator still §2.5-PUTs)", async () => {
+      const { pool, configs } = deriveStubPool();
+      const derived = await deriveFromCapture(
+        {
+          pool,
+          async prepareDeploy(request) {
+            return preparedDeploy(request.providerKind as "deploy.vercel" | "deploy.flyio");
+          },
+        },
+        {
+          orgId: "org_a",
+          capture: t1Capture(),
+          actor: T1_ACTOR,
+          repoUrl: T1_REPO_URL,
+          deploy: { providerKind: "deploy.vercel" },
+          autonomy: "auto",
+          scaffoldOrigin: "project",
+          // The project DAG ALWAYS seeds from a validated template (the templating
+          // doctrine); a matching fixture template is injected so selection succeeds.
+          selectionNow: T1_NOW,
+          templateRegistryQuery: async () => [validatedTsTemplate()],
+        },
+      );
+      const config = configs.get(derived.projectId) as Record<string, unknown> | undefined;
+      expect(config).toBeDefined();
+      // The user-facing path is UNCHANGED — derive does NOT bind the autonomous knobs
+      // (the operator still has to §2.5-PUT after derive returns). `migrateProjectConfig`
+      // materializes the BALANCED default into the persisted blob, so the assertion is
+      // that what landed is the BALANCED default (NOT the AUTONOMOUS posture) — i.e. the
+      // template-build branch did not leak across the discriminator.
+      expect(config?.auditPosture).toEqual(DEFAULT_AUDIT_POSTURE);
+      expect(config?.auditPosture).not.toEqual(AUTONOMOUS_AUDIT_POSTURE);
+      // No autonomous-pattern flaky bar written either — `insightThresholds` either
+      // absent from the persisted blob or never the `{ ciInsightFlakyMinShas: 1 }` override.
+      expect(config?.insightThresholds).not.toEqual({ ciInsightFlakyMinShas: 1 });
+      // And the template-build marker is NOT set on the project path (the migrate
+      // shim defaults the boolean to `false`).
+      expect(config?.templateBuild).toBe(false);
     });
   });
 });
