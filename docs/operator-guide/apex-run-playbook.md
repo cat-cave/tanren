@@ -238,16 +238,42 @@ curl -s -b jar -H "X-CSRF-Token: $CSRF" -H 'content-type: application/json' \
 # expect: { ok:true, mode:"app", installation:{installationId, appId, installedAt} }
 ```
 
-### 4.b. Vercel deploy
+### 4.b. Deploy provider (Vercel or Fly)
+
+The link route accepts `{token, metadata}` per provider; the provisioner reads
+provider-specific keys out of `metadata` at provision time, so **the link
+succeeds without them but the deploy phase will fail-loud later**. Pick your
+provider's row:
+
+| Provider | URL path | Required metadata keys | Provisioner source |
+| --- | --- | --- | --- |
+| Vercel | `/integrations/deploy.vercel` | `teamId` | (vercel provisioner) |
+| Fly | `/integrations/deploy.flyio` | `orgSlug` | `engine/provisioners/flyDeployProvisioner.ts:62` |
+
+**Vercel:**
 
 ```sh
 #   $VERCEL_TOKEN    a Vercel access token.
-#   $VERCEL_TEAM_ID  the Vercel team id the project deploys under (optional, in metadata).
+#   $VERCEL_TEAM_ID  the Vercel team id the project deploys under.
 curl -s -b jar -H "X-CSRF-Token: $CSRF" -H 'content-type: application/json' \
   -X POST "http://localhost:3100/orgs/$ORG/integrations/deploy.vercel" \
   -d "$(jq -n --arg t "$VERCEL_TOKEN" --arg team "$VERCEL_TEAM_ID" \
         '{token:$t, metadata:{teamId:$team}}')" | jq .
-# expect: { status:"linked", providerKind:"deploy.vercel", credentialRef, capabilities:["deploy"], metadataKeys }
+# expect: { status:"linked", providerKind:"deploy.vercel", credentialRef, capabilities:["deploy"], metadataKeys:["teamId"] }
+```
+
+**Fly:**
+
+```sh
+#   $FLY_TOKEN      a Fly API token (a Fly macaroon bundle).
+#   $FLY_ORG_SLUG   the Fly org slug the app deploys under (REQUIRED — the
+#                   flyDeployProvisioner reads metadata.orgSlug at provision
+#                   time). Find it via `fly orgs list` or the Fly dashboard.
+curl -s -b jar -H "X-CSRF-Token: $CSRF" -H 'content-type: application/json' \
+  -X POST "http://localhost:3100/orgs/$ORG/integrations/deploy.flyio" \
+  -d "$(jq -n --arg t "$FLY_TOKEN" --arg slug "$FLY_ORG_SLUG" \
+        '{token:$t, metadata:{orgSlug:$slug}}')" | jq .
+# expect: { status:"linked", providerKind:"deploy.flyio", credentialRef, capabilities:["deploy"], metadataKeys:["orgSlug"] }
 ```
 
 ### 4.c. Slack

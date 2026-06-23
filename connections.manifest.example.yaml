@@ -365,7 +365,12 @@ connections:
     home: managed
     scope: org
     ref: deploy-default
-    config: { platform: flyio, region: iad }
+    # `orgSlug` is REQUIRED for deploy.flyio (the provisioner reads it from the
+    # org grant metadata at provision time — see flyDeployProvisioner.ts:62-68).
+    # `platform` + `region` are operator hints; not consumed by the provisioner
+    # but recorded for human reference. Other providers carry equivalents:
+    # deploy.vercel → `teamId`; sentry → `org`. See integrations/index.ts:58-59.
+    config: { platform: flyio, region: iad, orgSlug: <fly-org-slug> }
     secret: { value_source: env, env: TANREN_E2E_DEPLOY_TOKEN } # WISHLIST (P0 for apex)
     validation:
       {
