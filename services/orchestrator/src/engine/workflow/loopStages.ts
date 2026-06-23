@@ -39,6 +39,7 @@ import {
 import { buildConvergencePrompt, buildDemoRunPrompt, buildTriagePrompt } from "./loopStagePrompts.js";
 import { recordAnswererCost, secondsSince, type SubtaskCostContext } from "./subtaskCost.js";
 import { runAnswererStageWithRecovery } from "./loopStageRecovery.js";
+import { runStageWithEmitOnThrow } from "./stageFailureKind.js";
 import { insertChildTask, markTaskDone } from "./subtaskTasks.js";
 import type { StageAppendEvent } from "./subtaskStages.js";
 import { gateTriagedSpecs, type TriageSpecValidator } from "./loopFindings.js";
@@ -100,16 +101,20 @@ export async function runDemoRunStage(args: DemoRunStageInput): Promise<{ findin
     baselineSha: args.baselineSha,
   });
   const startedAt = Date.now();
-  // STAGE-LOCAL stall recovery: a transient answerer stall re-drives THIS stage in place
-  // (sibling progress preserved, never a whole-spec restart); a wedged stage escalates loudly
-  // via the convergence judgment. A deterministic error still propagates. (Shared by all stages.)
-  const verdict = await runAnswererStageWithRecovery("demoRun", () =>
-    args.adapter.runAnswerer({
-      prompt,
-      workspace: args.workspacePath,
-      outputSchema,
-    }),
-  );
+  // STAGE-LOCAL stall recovery: a transient stall re-drives THIS stage in place; a wedged stage
+  // escalates loudly. A deterministic throw re-throws OUT of `runAnswererStageWithRecovery`;
+  // `runStageWithEmitOnThrow` (apex v51 doctrine sweep) emits `task.failed` then re-throws.
+  const verdict = await runStageWithEmitOnThrow({
+    pool: args.pool,
+    writer: args.writer,
+    appendEvent: args.appendEvent,
+    taskId: demoTaskId,
+    taskKind: "demo",
+    body: () =>
+      runAnswererStageWithRecovery("demoRun", () =>
+        args.adapter.runAnswerer({ prompt, workspace: args.workspacePath, outputSchema }),
+      ),
+  });
   const runtimeSeconds = secondsSince(startedAt);
   emitStageTiming("demo", Date.now() - startedAt, { runId: args.runId });
   const findings = verdict.findings.map((f) => normalizeFinding(f));
@@ -251,15 +256,19 @@ export async function runTriageStage(args: TriageStageInput): Promise<TriageStag
     baselineSha: args.baselineSha,
   });
   const startedAt = Date.now();
-  // STAGE-LOCAL stall recovery (see runDemoRunStage): re-drive a transient triage stall in
-  // place, preserving the spec loop's collected findings.
-  const answer = await runAnswererStageWithRecovery("triage", () =>
-    args.adapter.runAnswerer({
-      prompt,
-      workspace: args.workspacePath,
-      outputSchema,
-    }),
-  );
+  // STAGE-LOCAL stall recovery (see runDemoRunStage). `runStageWithEmitOnThrow` emits
+  // `task.failed` on a deterministic non-stall throw (apex v51 doctrine sweep).
+  const answer = await runStageWithEmitOnThrow({
+    pool: args.pool,
+    writer: args.writer,
+    appendEvent: args.appendEvent,
+    taskId: triageTaskId,
+    taskKind: "triage",
+    body: () =>
+      runAnswererStageWithRecovery("triage", () =>
+        args.adapter.runAnswerer({ prompt, workspace: args.workspacePath, outputSchema }),
+      ),
+  });
   const runtimeSeconds = secondsSince(startedAt);
   emitStageTiming("audit", Date.now() - startedAt, { runId: args.runId });
   const routed: RoutedWorkItem[] = routeTriageItems(answer.workItems, args.posture);
@@ -365,16 +374,21 @@ export async function runConvergenceStage(args: ConvergenceStageInput): Promise<
     priorBlockingRootCauseIds: args.state.blockingHistory.map((a) => a.failureSignature),
   });
   const startedAt = Date.now();
-  // STAGE-LOCAL stall recovery (see runDemoRunStage): re-drive a transient convergence stall
-  // in place — the cross-loop `consecutiveStalls` state (the spec-level convergence-stall
-  // semantics) is UNTOUCHED; only the per-CALL transient stall recovers here.
-  const answer = await runAnswererStageWithRecovery("convergence", () =>
-    args.adapter.runAnswerer({
-      prompt,
-      workspace: args.workspacePath,
-      outputSchema,
-    }),
-  );
+  // STAGE-LOCAL stall recovery (see runDemoRunStage): the cross-loop `consecutiveStalls` state
+  // (the spec-level convergence-stall semantics) is UNTOUCHED; only the per-CALL transient
+  // stall recovers here. `runStageWithEmitOnThrow` emits `task.failed` on a deterministic
+  // non-stall throw (apex v51 doctrine sweep).
+  const answer = await runStageWithEmitOnThrow({
+    pool: args.pool,
+    writer: args.writer,
+    appendEvent: args.appendEvent,
+    taskId: convergenceTaskId,
+    taskKind: "convergence",
+    body: () =>
+      runAnswererStageWithRecovery("convergence", () =>
+        args.adapter.runAnswerer({ prompt, workspace: args.workspacePath, outputSchema }),
+      ),
+  });
   const runtimeSeconds = secondsSince(startedAt);
   emitStageTiming("audit", Date.now() - startedAt, { runId: args.runId });
   const loopPScore = totalPScore(args.currentFindings);

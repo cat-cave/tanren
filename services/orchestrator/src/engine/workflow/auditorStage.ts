@@ -21,6 +21,7 @@ import type { AnswererAdapter } from "../providers/types.js";
 import { AnswererSchemaValidationError } from "../providers/codex.js";
 import { auditorFindings, invokeAuditor, type AuditorSpecContext } from "./auditor/auditor.js";
 import { runAnswererStageWithRecovery } from "./loopStageRecovery.js";
+import { classifyStageFailureKind, stageFailureMessage } from "./stageFailureKind.js";
 import { recordAnswererCost, secondsSince, type SubtaskCostContext } from "./subtaskCost.js";
 import { insertChildTask, markTaskDone, markTaskFailed } from "./subtaskTasks.js";
 import type { StageAppendEvent } from "./subtaskStages.js";
@@ -87,27 +88,28 @@ export async function runAuditorStage(args: AuditorStageInput): Promise<AuditorS
   const startedAt = Date.now();
   let result: Awaited<ReturnType<typeof invokeAuditor>>;
   try {
-    // STAGE-LOCAL stall recovery: a TRANSIENT answerer stall re-drives the auditor IN PLACE
-    // (the spec loop's sibling progress preserved, never a whole-spec restart); a genuinely-
-    // wedged auditor escalates loudly via the convergence judgment. The SCHEMA-miss recovery
-    // below is distinct — a non-deterministic stall re-drives, a deterministic parse miss
-    // becomes the synthetic P0 — exactly the finding/stall split the doctrine requires.
+    // STAGE-LOCAL stall recovery: a TRANSIENT stall re-drives the auditor IN PLACE
+    // (sibling progress preserved); a wedged auditor escalates loudly. Schema-miss
+    // recovery + the apex v51 per-stage emit-on-throw are split in the catch below.
     result = await runAnswererStageWithRecovery("auditor", () =>
-      invokeAuditor(args.adapter, {
-        context: auditorContext,
-        workspace: args.workspacePath,
-      }),
+      invokeAuditor(args.adapter, { context: auditorContext, workspace: args.workspacePath }),
     );
   } catch (error) {
-    // RECOVERABLE prompt-repair: the auditor's model emitted output that failed the
-    // AuditAnswer schema parse. No `auditor.verdict` is written, so the durable record
-    // stays UN-AUDITED — the land gate's fail-closed synthetic-P0 still BLOCKS a merge.
-    // Here, rather than dead-ending the run on a single model schema miss, we surface a
-    // synthetic P0 FINDING so the loop's triage routes a fix-in-spec task (a re-plan +
-    // re-audit can recover). A non-schema error (timeout / usage-limit / infra) still
-    // propagates to its own handling.
-    if (!(error instanceof AnswererSchemaValidationError)) throw error;
-    return await failClosedForSchemaMiss(args, auditorTaskId, error);
+    // SCHEMA-MISS PATH: a parse miss becomes the synthetic P0 (fail-closed) so the loop's
+    // triage routes a fix-in-spec task instead of dead-ending. NON-schema throws get the
+    // apex v51 per-stage `task.failed` emit-on-throw treatment so the auditor task row
+    // never strands `running` on a real throw — same shape as the planner gap.
+    if (error instanceof AnswererSchemaValidationError) {
+      return await failClosedForSchemaMiss(args, auditorTaskId, error);
+    }
+    const failureKind = classifyStageFailureKind(error);
+    await markTaskFailed(args.pool, auditorTaskId, failureKind, args.writer);
+    await args.appendEvent(
+      "task.failed",
+      { taskKind: "audit", failureKind, message: stageFailureMessage(error) },
+      auditorTaskId,
+    );
+    throw error;
   }
   const runtimeSeconds = secondsSince(startedAt);
   emitStageTiming("audit", Date.now() - startedAt, { runId: args.runId });

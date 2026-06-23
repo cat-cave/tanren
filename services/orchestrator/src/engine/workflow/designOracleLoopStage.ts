@@ -47,6 +47,15 @@ export async function runDesignOracleLoopStage(
   // Run the oracle first; only materialize a task row / events / cost when a contract was
   // genuinely verified. A no-contract project produces no task (the explicit empty state),
   // mirroring how the demo-run slot is simply skipped when there is nothing to do.
+  //
+  // apex v51 per-stage `task.failed` emit-on-throw doctrine sweep — INTENTIONALLY ABSENT
+  // HERE: the design-oracle answerer fires BEFORE any task row materializes (the
+  // hasContract gate runs the oracle then maybe inserts a task), so a throw from the
+  // answerer leaves NO `task` row to strand `running` — there is nothing to mark failed
+  // or to emit `task.failed` against. The throw still propagates to the workflow catch
+  // for run-level disposition. If a future refactor inserts the design-oracle task BEFORE
+  // the answerer fires, add the emit-on-throw pattern then (the conformance test in
+  // subtaskLoopStages.test.ts will fail loud if any stage with a task row omits it).
   const result = await runAnswererStageWithRecovery("designOracle", () =>
     runDesignOracleStage({
       client: args.client,

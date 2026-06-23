@@ -18,7 +18,7 @@ import {
   type EntityRiskSignal,
   type UnavailableReason,
 } from "../oracle/index.js";
-import type { AnswererAdapter, WriterAdapter, WriterResult } from "../providers/types.js";
+import type { AnswererAdapter, WriterResult } from "../providers/types.js";
 import {
   decideCheckerOutcome,
   invokeChecker,
@@ -27,8 +27,9 @@ import {
 } from "./checker/checker.js";
 import { invokePlanner, type PlannerRejectionFeedback, type PlannerSpecContext } from "./planner/planner.js";
 import { runAnswererStageWithRecovery } from "./loopStageRecovery.js";
-import { recordAnswererCost, recordWriterCost, secondsSince, type SubtaskCostContext } from "./subtaskCost.js";
-import { insertChildTask, markTaskDone, markTaskFailed } from "./subtaskTasks.js";
+import { runStageWithEmitOnThrow } from "./stageFailureKind.js";
+import { recordAnswererCost, secondsSince, type SubtaskCostContext } from "./subtaskCost.js";
+import { insertChildTask, markTaskDone } from "./subtaskTasks.js";
 
 type LoopQueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
@@ -52,10 +53,18 @@ export interface PlannerStageInput {
 
 export async function runPlannerStage(args: PlannerStageInput): Promise<PlanAnswer> {
   const startedAt = Date.now();
-  const result = await invokePlanner(args.adapter, {
-    spec: args.spec,
-    workspace: args.workspacePath,
-    rejectionHistory: args.rejectionHistory,
+  // apex v51 per-stage `task.failed` emit-on-throw — see runStageWithEmitOnThrow.
+  const result = await runStageWithEmitOnThrow({
+    pool: args.pool,
+    appendEvent: args.appendEvent,
+    taskId: args.plannerTaskId,
+    taskKind: "plan",
+    body: () =>
+      invokePlanner(args.adapter, {
+        spec: args.spec,
+        workspace: args.workspacePath,
+        rejectionHistory: args.rejectionHistory,
+      }),
   });
   const runtimeSeconds = secondsSince(startedAt);
   // stage-transition latency as a structured timing log (no schema).
@@ -91,172 +100,11 @@ export async function runPlannerStage(args: PlannerStageInput): Promise<PlanAnsw
   return result.plan;
 }
 
-export interface WriterStageInput {
-  pool: LoopQueryClient;
-  /** route the writer task INSERT/UPDATE remote when wired. */
-  writer?: RunStateWriter;
-  costCtx: SubtaskCostContext;
-  adapter: WriterAdapter;
-  runId: string;
-  workspacePath: string;
-  plannerTaskId: string;
-  subtask: PlanSubtask;
-  writeTaskId: string;
-  prompt: string;
-  // The run's BASE sha (clone point), captured once after the workspace clone.
-  // Threaded to the writer so it diffs the workspace against the run base —
-  // judging each subtask on the CUMULATIVE state, not the per-subtask HEAD
-  // delta (so replanned already-done work isn't false-rejected as an empty
-  // diff). Omitted by unit callers that drive the stage without a base sha.
-  baseSha?: string;
-  appendEvent: StageAppendEvent;
-  buildUsage?: (input: {
-    subtaskTaskId: string;
-    subtaskIndex: number;
-    attempt: number;
-    writer: WriterResult;
-  }) => Record<string, unknown>;
-}
-
-// The classified result of a writer subtask call. The provider adapters carefully
-// classify each run via `WriterResult.exitReason`; this is where that signal is
-// READ and routed. A non-`completed` writer must NEVER be laundered into a passed
-// task whose partial/empty diff flows downstream as a success:
-//   - `completed` / `token_limit` → the task passes; the diff is consumed (the
-//     existing semantics — `token_limit` is a clean stop with usable output).
-//   - `window_exhausted` → the subscription window is spent mid-call (an expected,
-//     RECOVERABLE §4.3 condition); the loop halts the run as window pressure.
-//   - `crashed` / `timeout` → a hard, typed failure routed back through the
-//     planner-rework/retry-budget path; the task row lands `failed`, not `passed`.
-export type WriterStageOutcome =
-  | { kind: "completed"; writer: WriterResult }
-  | { kind: "window_exhausted"; writer: WriterResult }
-  | { kind: "failed"; writer: WriterResult; failureKind: "crashed" | "timeout" };
-
-export async function runWriterStage(args: WriterStageInput): Promise<WriterStageOutcome> {
-  await insertChildTask(
-    args.pool,
-    {
-      taskId: args.writeTaskId,
-      runId: args.runId,
-      kind: "write",
-      title: `write subtask ${args.subtask.index}: ${args.subtask.title}`,
-      parentTaskId: args.plannerTaskId,
-      agentKind: "writer",
-      cli: args.adapter.cli,
-      model: null,
-    },
-    args.writer,
-  );
-  await args.appendEvent("task.started", { taskKind: "write" }, args.writeTaskId);
-  await args.appendEvent(
-    "writer.subtask.started",
-    {
-      runId: args.runId,
-      taskId: args.writeTaskId,
-      subtaskIndex: args.subtask.index,
-      intent: args.subtask.intent,
-      behaviorIds: [...args.subtask.behaviorIds],
-    },
-    args.writeTaskId,
-  );
-  const startedAt = Date.now();
-  const writerResult = await args.adapter.runWriter({
-    prompt: args.prompt,
-    workspace: args.workspacePath,
-    baseSha: args.baseSha,
-  });
-  const runtimeSeconds = secondsSince(startedAt);
-  emitStageTiming("write", Date.now() - startedAt, {
-    runId: args.runId,
-    subtaskIndex: args.subtask.index,
-  });
-  // The cost is recorded for EVERY outcome — a crashed / timed-out / window-
-  // exhausted writer still consumed real tokens. The success event
-  // (`writer.subtask.completed`) is emitted ONLY on the success branch below, so
-  // a non-completing writer never claims completion.
-  await recordWriterCost({
-    ctx: args.costCtx,
-    adapter: args.adapter,
-    taskId: args.writeTaskId,
-    runtimeSeconds,
-    tokenUsage: writerResult.tokenUsage,
-    rawUsage: args.buildUsage?.({
-      subtaskTaskId: args.writeTaskId,
-      subtaskIndex: args.subtask.index,
-      attempt: 1,
-      writer: writerResult,
-    }) ?? { role: "writer", attempt: 1, subtaskIndex: args.subtask.index },
-    // Gates `usage.token_accounting_failed` in recordWriterCost — a TERMINATED
-    // writer is already loud via `writer.subtask.failed` (apex v50 fix B1).
-    exitReason: writerResult.exitReason,
-  });
-
-  // Branch on how the writer actually exited (provider adapters classify this
-  // via `exitReason`; read it HERE so a non-`completed` run never reaches the
-  // checker as a passed task with a partial/empty diff). The cost above is
-  // recorded for every outcome — the work consumed real tokens regardless.
-  const exitReason = writerResult.exitReason;
-  if (exitReason === "window_exhausted") {
-    // §4.3 window pressure surfaced MID-CALL (not just by the pre-flight probe):
-    // the task did NOT complete its subtask. Mark it failed (window_exhausted)
-    // and emit the failed event; the loop halts the run as recoverable window
-    // pressure. Never `passed`.
-    await markTaskFailed(args.pool, args.writeTaskId, "window_exhausted", args.writer);
-    await emitWriterSubtaskFailed(args, "window_exhausted", "writer usage window exhausted mid-subtask");
-    await args.appendEvent("task.failed", { taskKind: "write", failureKind: "window_exhausted" }, args.writeTaskId);
-    return { kind: "window_exhausted", writer: writerResult };
-  }
-  if (exitReason === "crashed" || exitReason === "timeout") {
-    // The writer crashed or timed out before finishing: its diff is partial or
-    // empty and must NOT be handed to the checker as a success. Fail the task
-    // with the typed kind; the loop routes it through the planner-rework path
-    // (or exhausts the retry budget) — a loud, recoverable halt.
-    const message =
-      exitReason === "timeout" ? "writer timed out before completing the subtask" : "writer crashed mid-subtask";
-    await markTaskFailed(args.pool, args.writeTaskId, exitReason, args.writer);
-    await emitWriterSubtaskFailed(args, exitReason, message);
-    await args.appendEvent("task.failed", { taskKind: "write", failureKind: exitReason }, args.writeTaskId);
-    return { kind: "failed", writer: writerResult, failureKind: exitReason };
-  }
-  // `completed` / `token_limit`: the diff is usable, mark the task passed and
-  // emit the success event (the writer genuinely produced its subtask output).
-  await args.appendEvent(
-    "writer.subtask.completed",
-    {
-      runId: args.runId,
-      taskId: args.writeTaskId,
-      subtaskIndex: args.subtask.index,
-      intent: args.subtask.intent,
-      decisions: [],
-      toolCalls: [],
-      diffBytes: Buffer.byteLength(writerResult.diff, "utf8"),
-      commitSha: writerResult.commits[0]?.sha ?? null,
-    },
-    args.writeTaskId,
-  );
-  await markTaskDone(args.pool, args.writeTaskId, "passed", args.writer);
-  await args.appendEvent("task.completed", { taskKind: "write" }, args.writeTaskId);
-  return { kind: "completed", writer: writerResult };
-}
-
-// Emit the (previously latent) `writer.subtask.failed` timeline event so a
-// crashed / timed-out / window-exhausted writer is recorded loudly with its
-// failure kind + message, never silently swallowed.
-async function emitWriterSubtaskFailed(args: WriterStageInput, failureKind: string, message: string): Promise<void> {
-  await args.appendEvent(
-    "writer.subtask.failed",
-    {
-      runId: args.runId,
-      taskId: args.writeTaskId,
-      subtaskIndex: args.subtask.index,
-      intent: args.subtask.intent,
-      failureKind,
-      message,
-    },
-    args.writeTaskId,
-  );
-}
+// The WRITER stage lives in `writerStage.ts` (split out to keep both modules under the
+// 500-line architecture cap); re-exported here so the subtask loop's single import site is
+// unchanged. It owns the writer task INSERT, the exitReason-branched FAILED/PASSED routing,
+// and the apex v51 per-stage `task.failed` emit-on-throw for the setup-path throw surface.
+export { runWriterStage, type WriterStageInput, type WriterStageOutcome } from "./writerStage.js";
 
 export interface CheckerStageInput {
   pool: LoopQueryClient;
@@ -413,15 +261,20 @@ export async function runCheckerStage(args: CheckerStageInput): Promise<CheckerD
     riskSignal: riskSignal.riskClass === "unknown" ? undefined : riskSignal,
   };
   const startedAt = Date.now();
-  // STAGE-LOCAL stall recovery: a transient checker stall re-drives THIS checker call in
-  // place (the writer's diff + prior subtasks preserved, never a whole-spec restart); a
-  // wedged checker escalates loudly via the convergence judgment. Deterministic errors propagate.
-  const result = await runAnswererStageWithRecovery("checker", () =>
-    invokeChecker(args.adapter, {
-      context: checkerContext,
-      workspace: args.workspacePath,
-    }),
-  );
+  // STAGE-LOCAL stall recovery: a transient checker stall re-drives THIS call in place; a
+  // wedged checker escalates loudly. apex v51 per-stage `task.failed` emit-on-throw wraps
+  // the re-throw so the checker task never strands `running`.
+  const result = await runStageWithEmitOnThrow({
+    pool: args.pool,
+    writer: args.writer,
+    appendEvent: args.appendEvent,
+    taskId: args.checkerTaskId,
+    taskKind: "check",
+    body: () =>
+      runAnswererStageWithRecovery("checker", () =>
+        invokeChecker(args.adapter, { context: checkerContext, workspace: args.workspacePath }),
+      ),
+  });
   const runtimeSeconds = secondsSince(startedAt);
   emitStageTiming("check", Date.now() - startedAt, {
     runId: args.runId,

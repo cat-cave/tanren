@@ -8,16 +8,16 @@ record is the memory `feedback_no_timeouts_progress_based` (Trevor, 2026-06-17,
 emphatic that this class keeps recurring); the existing models it generalizes are
 `workflow/convergenceDetector.ts` and `worker/runHeartbeat.ts`.
 
-> **Status (program COMPLETE — with two disguised survivors caught post-program by
-> apex).** The full eradication wave landed: #609 (foundation — `ActivityWatchdog`,
+> **Status (program COMPLETE — with FIVE disguised survivors caught post-program by
+> apex, all fixed).** The full eradication wave landed: #609 (foundation — `ActivityWatchdog`,
 > `retryUntilConverged`, timeout-eradication lint in REPORT mode), #612–#618
 > (M1..Reframe waves), #621 (progress backstop — watchdog surfaces a recoverable
 > stall when work signature stops advancing), and the final wave CI-gated the lint
 > so the class can never reintroduce. The doctrine stands: progress/sign-of-life
 > based; `ActivityWatchdog` is the sole running-command hang detector.
 >
-> **Two DISGUISED survivors the lint missed, found by apex v44/v45 and since
-> fixed:**
+> **FIVE DISGUISED survivors the lint missed, found by successive apex trials and
+> since fixed:**
 >
 > - **#638 — ssh2 `timeout:` connect-config socket option.** In ssh2, the `timeout`
 >   field in the connect config is NOT a handshake bound — it is a socket-lifetime
@@ -54,6 +54,36 @@ emphatic that this class keeps recurring); the existing models it generalizes ar
 >   The doctrine stands; the synchronous-wait surface is no longer a disguised
 >   survivor. The sister lane (task #21A — runner-INSERT idempotency in
 >   `services/allocator/**`) ships separately.
+> - **v51 — per-stage `task.failed` emit-on-throw across the subtask-loop stages
+>   [RESOLVED].** v51 surfaced the FIFTH disguised survivor in this family (after
+>   #638 ssh2 socket-idle, #640 lock-file mtime-probe, #21B initial dag-noise
+>   signal, #21C single-neighbor watchdog floor): `runPlannerStage`
+>   (`services/orchestrator/src/engine/workflow/subtaskStages.ts`) had NO
+>   try/catch around `invokePlanner` and emitted NO per-task terminal event.
+>   When `invokePlanner` threw (e.g. `CodexUsageLimitError` when the Codex
+>   5-hour subscription window exhausted), the throw escaped to the workflow
+>   catch in `plannerRun.ts:489`. Run / spec / runner events rode loud at the
+>   RUN granularity (`dag.spec.redriven` / `dag.spec.needs_attention` /
+>   `runner.released` / `release.finalized`), but the planner's `task` row
+>   stayed `running` forever with no `task.failed` event — loud at one
+>   granularity, silent at another (the same shape as #640). Apex v51 DB
+>   evidence: 3 planner task rows stranded `running` with NULL `outcome` and
+>   NULL `ended_at`. Fix follows the writer-stage pattern: wrap the
+>   answerer/writer call in try/catch, classify the throwable via the new
+>   `engine/workflow/stageFailureKind.ts` helper (`window_exhausted` /
+>   `timeout` / `answerer_schema_invalid` / `crashed`), `markTaskFailed` +
+>   `appendEvent('task.failed', {taskKind, failureKind, message}, taskId)`,
+>   re-throw so the existing workflow disposition still runs. The same sweep
+>   covers `runAuditorStage`, `runCheckerStage`, `runWriterStage`,
+>   `runDemoRunStage`, `runTriageStage`, `runConvergenceStage` — every stage
+>   in the subtask loop that owns a per-stage `task` row. The design-oracle
+>   stage is INTENTIONALLY EXEMPT: its answerer fires BEFORE the task row
+>   materializes (the `hasContract` gate), so there is nothing to strand. A
+>   per-stage conformance test
+>   (`services/orchestrator/tests/conformance/subtaskLoopStages.test.ts`)
+>   pins the contract as a standing ratchet — a future PR adding a new stage
+>   without the emit-on-throw pattern fails CI. The doctrine extends:
+>   "every terminal exit emits a terminal event" — at the RIGHT granularity.
 > - **Task #21C (apex v50) — the ActivityWatchdog `fixed_point` floor was too
 >   tight for tool-invoking agent execs [RESOLVED].** v50 surfaced the THIRD
 >   #640-class disguised survivor in the watchdog family: the
