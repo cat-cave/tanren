@@ -187,6 +187,9 @@ export async function runWriterStage(args: WriterStageInput): Promise<WriterStag
       attempt: 1,
       writer: writerResult,
     }) ?? { role: "writer", attempt: 1, subtaskIndex: args.subtask.index },
+    // Gates `usage.token_accounting_failed` in recordWriterCost — a TERMINATED
+    // writer is already loud via `writer.subtask.failed` (apex v50 fix B1).
+    exitReason: writerResult.exitReason,
   });
 
   // Branch on how the writer actually exited (provider adapters classify this
