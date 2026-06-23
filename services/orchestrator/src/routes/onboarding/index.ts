@@ -50,6 +50,7 @@ import {
   type SelectedTemplate,
   type TemplateRegistryQuery,
 } from "../../engine/forge/interview/templateSelection.js";
+import { ChildRunStalledError } from "../../engine/templates/index.js";
 import type { CaptureLifecycle } from "../../engine/forge/interview/types.js";
 import {
   ProjectAccessDeniedError,
@@ -324,6 +325,29 @@ export function createOnboardingRoutes(options: OnboardingRoutesOptions) {
       // (an operator resolves the template-creation failure + retries), NOT a silent
       // degrade to a from-scratch project scaffold (the deleted bypass).
       if (error instanceof TemplateRequiredError) {
+        // CHILD-RUN STALL (task #21B): the just-in-time template build raised a
+        // sign-of-life circuit-breaker stall (the child template-build project's
+        // append-only event stream has held flat across the streak ceiling — a
+        // retry-looping worker, the apex v49 root cause). Surface a DISTINCT 504
+        // naming the stalled child project id so the operator can pull the audit log
+        // directly, rather than the generic 409 template_required. The stall is the
+        // INNER cause threaded through `TemplateBuildFailedError` → `TemplateRequiredError`;
+        // walk the standard `cause` chain to recognize it.
+        const stall = findChildRunStallCause(error);
+        if (stall !== undefined) {
+          return c.json(
+            {
+              error: "template_build_stalled",
+              capability: "template",
+              stack: error.requestedStack,
+              childProjectId: stall.childProjectId,
+              lastSignatureValue: String(stall.lastSignatureValue ?? "none"),
+              nonAdvancingProbes: stall.nonAdvancingProbes,
+              message: stall.message,
+            },
+            504,
+          );
+        }
         return c.json(
           { error: "template_required", capability: "template", stack: error.requestedStack, message: error.message },
           409,
@@ -348,4 +372,19 @@ function requireActor(c: { var: { actor?: ActorContext } }): ActorContext {
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+// Walk the standard `Error.cause` chain looking for a `ChildRunStalledError`
+// (task #21B). `TemplateRequiredError` carries `TemplateBuildFailedError` as its
+// cause (templateSelection.ts), which in turn carries the `ChildRunStalledError`
+// when the sign-of-life circuit breaker fired. A bounded walk (10 hops) defends
+// against a pathological self-referencing cause chain.
+function findChildRunStallCause(error: Error): ChildRunStalledError | undefined {
+  let cur: unknown = error;
+  for (let hop = 0; hop < 10; hop += 1) {
+    if (cur instanceof ChildRunStalledError) return cur;
+    if (!(cur instanceof Error)) return undefined;
+    cur = cur.cause;
+  }
+  return undefined;
 }

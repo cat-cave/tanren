@@ -74,6 +74,14 @@ const stubAuditor = {
 function buildDriverDeps(overrides: { loadSnapshot: (p: string) => Promise<DagSnapshot> }) {
   const ssh = new RecordingSsh();
   const walker = new RecordingWalker();
+  // The deadlock cases fire BEFORE any progress probe — the genuine-deadlock
+  // predicate halts on the first or second poll. We still inject a non-stalling
+  // stub `childRunProgressSignal` so the build driver does not default-construct
+  // the live `MAX(events.id)` probe over the test's `{} as never` pool (which
+  // would throw on the first probe). The stub returns a monotonically advancing
+  // identity, so even if the breaker IS consulted it would never fire — the
+  // deadlock outcome must be the deadlock path's, not the breaker's.
+  let probeId = 0;
   return {
     ssh,
     walker,
@@ -86,7 +94,12 @@ function buildDriverDeps(overrides: { loadSnapshot: (p: string) => Promise<DagSn
       loadSnapshot: overrides.loadSnapshot,
       resolveConverged: async () => convergedFacts,
       auditorFor: () => stubAuditor,
-      timeoutMs: 1000,
+      childRunProgressSignal: {
+        probe: async () => {
+          probeId += 1;
+          return BigInt(probeId);
+        },
+      },
       convergence: { pollIntervalMs: 1 },
       sleep: async () => {},
     },

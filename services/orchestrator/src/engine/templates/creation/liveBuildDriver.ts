@@ -39,6 +39,13 @@ import { buildActivityWatchdog } from "../../ssh/activityWatchdog.js";
 import { quoteSshShellArg } from "../../ssh/command.js";
 import type { TemplateAuditor } from "../validationHarness.js";
 import { type BuiltTemplate, TemplateBuildFailedError, type TemplateBuildDriver } from "./buildDriver.js";
+import {
+  buildChildRunProgressSignal,
+  CHILD_PROGRESS_PROBE_CADENCE_MS,
+  ChildRunStalledError,
+  NON_ADVANCE_PROBES_BEFORE_STALL,
+  type ChildRunStallSignal,
+} from "./childRunProgressProbe.js";
 import { createLogger } from "../../observability/logger.js";
 
 const log = createLogger("template-build");
@@ -80,6 +87,14 @@ export interface RunLoopBuildDriverDeps {
   convergence: {
     pollIntervalMs: number;
   };
+  // The progress-based circuit breaker over the child template-build project's
+  // append-only event-stream identity (task #21B — extends the timeout-eradication
+  // doctrine: kill on EVIDENCE OF DEATH, never on the passage of time). Defaults to
+  // a live `MAX(events.id)` probe over `pool`; tests inject a fake. Optional only so
+  // existing test deps that omit it default-construct the live probe; production
+  // wiring (`createFlow.ts buildCreateTemplateDeps`) supplies it implicitly via the
+  // default.
+  childRunProgressSignal?: ChildRunStallSignal;
   // Injectable sleep (defaults to a real timer) so the poll loop is fast in tests.
   sleep?: (ms: number) => Promise<void>;
 }
@@ -99,8 +114,14 @@ export function buildRunLoopBuildDriver(deps: RunLoopBuildDriverDeps): TemplateB
       // 1. DRIVE the DAG to convergence (the worker + the walker advance it; we
       //    kick + poll). Throws TemplateBuildFailedError ONLY on a genuine deadlock
       //    (blocked + nothing can progress) — never a silent "built anyway", and
-      //    never a wall-clock kill of a build still making progress.
-      await driveToConvergence(deps, input.projectId, sleep);
+      //    never a wall-clock kill of a build still making progress. The child-run
+      //    progress probe is a SIGN-OF-LIFE circuit breaker over the project's
+      //    append-only events stream identity (task #21B): a flat signature across
+      //    `NON_ADVANCE_PROBES_BEFORE_STALL` consecutive probes halts LOUD —
+      //    identity-based, never elapsed-time-based.
+      const stallSignal =
+        deps.childRunProgressSignal ?? buildChildRunProgressSignal(deps.pool, input.orgId, input.projectId);
+      await driveToConvergence(deps, input.projectId, sleep, stallSignal);
 
       // 2. Resolve the converged conforming repo + commit + runner image. A
       //    converged project with no resolvable repo/commit cannot be validated.
@@ -169,7 +190,25 @@ async function driveToConvergence(
   deps: RunLoopBuildDriverDeps,
   projectId: string,
   sleep: (ms: number) => Promise<void>,
+  stallSignal: ChildRunStallSignal,
 ): Promise<void> {
+  // Probe the child-run progress signal once every N poll cycles (so the breaker
+  // cadence is INDEPENDENT of the DAG poll cadence — the probe is its own clock).
+  // `probeTicksPerProbe` rounds up so an unusually-large pollIntervalMs still
+  // triggers a probe each loop (we never probe MORE often than the loop runs).
+  const probeTicksPerProbe = Math.max(
+    1,
+    Math.ceil(CHILD_PROGRESS_PROBE_CADENCE_MS / Math.max(1, deps.convergence.pollIntervalMs)),
+  );
+
+  // Identity tracking for the breaker: the last signature observed + the streak of
+  // consecutive probes that returned the SAME identity. Advancement RESETS the
+  // streak (a working child run is unbounded); identity stasis across the ceiling
+  // raises a `ChildRunStalledError` (wrapped as `TemplateBuildFailedError`).
+  let lastSignature: bigint | undefined;
+  let nonAdvancingProbes = 0;
+  let pollTick = 0;
+
   for (;;) {
     // Kick the walker (advances any newly-ready spec); idempotent with the worker.
     await deps.walker.walk(projectId);
@@ -190,6 +229,43 @@ async function driveToConvergence(
       // — never a silent hang, never a partial-template validate.
       throw new TemplateBuildFailedError(projectId, deadlockMessage(tally));
     }
+
+    // SIGN-OF-LIFE CIRCUIT BREAKER. The deadlock predicate fires when the DAG's
+    // OWN classification says progress is impossible — but a worker bug can keep a
+    // spec perpetually `in_flight` (`progressing >= 1`) while doing zero real work
+    // (apex v49: a runner-INSERT retry loop). The progress probe catches that case
+    // by reading the child project's append-only event-stream identity: a working
+    // child emits a steady stream; a retry-looping worker emits NONE. Identity
+    // stasis across `NON_ADVANCE_PROBES_BEFORE_STALL` consecutive probes = STALL.
+    // The probe runs once every `probeTicksPerProbe` poll cycles so the breaker
+    // cadence is the constant `CHILD_PROGRESS_PROBE_CADENCE_MS`, not the (possibly
+    // tiny) DAG poll interval.
+    if (pollTick % probeTicksPerProbe === 0) {
+      const current = await stallSignal.probe();
+      if (current !== undefined && (lastSignature === undefined || current > lastSignature)) {
+        // ADVANCEMENT — reset the non-advancing streak. A working child run is
+        // unbounded; identity advancement is the sign-of-life signal.
+        lastSignature = current;
+        nonAdvancingProbes = 0;
+      } else {
+        // FLAT — identical signature (or still no events) as last probe. Count it.
+        nonAdvancingProbes += 1;
+        if (nonAdvancingProbes >= NON_ADVANCE_PROBES_BEFORE_STALL) {
+          // The child's event-stream identity has held flat across the streak
+          // ceiling — halt LOUD. Wrap in `TemplateBuildFailedError` (the existing
+          // creation-flow boundary error) with the stall as `cause` so the derive
+          // HTTP route's `cause` walk surfaces it as a 504 naming the stalled
+          // child project id.
+          throw new TemplateBuildFailedError(
+            projectId,
+            `template build STALLED — child project ${projectId} emitted no audit-event progress across ` +
+              `${String(nonAdvancingProbes)} consecutive probes (last events.id=${String(lastSignature ?? "none")})`,
+            { cause: new ChildRunStalledError(projectId, lastSignature, nonAdvancingProbes) },
+          );
+        }
+      }
+    }
+    pollTick += 1;
 
     // Otherwise some spec is still progressing (in-flight or runnable-pending) —
     // forward progress is still possible. Keep polling INDEFINITELY (this is a poll
