@@ -286,38 +286,34 @@ describe("BatchMergeCoordinator — infra-error robustness (a thrown check NEVER
     expect(h.checker.checked.length).toBe(2);
   });
 
-  it("GAP #1: a SUSTAINED-identical retriable infra hold alerts terminally but remains queued and re-drivable", async () => {
+  it("v54 #56: a SUSTAINED-identical retriable infra hold ESCALATES the batch to writer rework + dequeues superseded", async () => {
     const h = makeHarness();
     seed(h, "spec_a");
     seed(h, "spec_b");
     h.checker.throwInfraAlways(new RefResetTransientError("HTTP 504 (persistent gateway outage)"));
-    const dequeueSpy = vi.spyOn(h.queue, "markDequeued");
 
     // First cross-pass hold: recoverable (one hold is not yet proof of non-recovery).
     const firstHold = await h.coordinator.coordinate(PROJECT);
     expect(firstHold.holdReason).toBe("infra_error");
     expect(firstHold.retryAfterMs).toBeGreaterThan(0);
     expect(h.batchEvents.events.some((e) => e.type === "infra_blocked" && e.terminal === true)).toBe(false);
+    expect(h.gateRework.routed).toHaveLength(0);
 
-    // The re-drive hits the IDENTICAL failure with no progress → the terminal alert. The
-    // entries STAY queued; recovery is autonomous on the longer backoff.
+    // The re-drive hits the IDENTICAL failure with no progress → ESCALATE: every batch
+    // member routes to writer rework + the queue entry is dequeued `superseded`. The
+    // re-authored run re-queues a fresh entry; recovery remains autonomous through the
+    // writer path, not the queue's soft-loop.
     const last = await h.coordinator.coordinate(PROJECT);
-    expect(last.holdReason).toBe("infra_error");
-    expect(last.retryAfterMs).toBe(INFRA_HOLD_ALERT_RETRY_AFTER_MS);
-    expect(dequeueSpy).not.toHaveBeenCalled();
-    expect(h.queue.statusOf("run_spec_a")).toBe("queued");
-    expect(h.queue.statusOf("run_spec_b")).toBe("queued");
-    let terminal = h.batchEvents.events.filter((e) => e.type === "infra_blocked" && e.terminal === true);
+    expect(last.holdReason).toBe("all_blocked");
+    expect(h.queue.statusOf("run_spec_a")).toBe("dequeued");
+    expect(h.queue.statusOf("run_spec_b")).toBe("dequeued");
+    const terminal = h.batchEvents.events.filter((e) => e.type === "infra_blocked" && e.terminal === true);
     expect(terminal).toHaveLength(1);
-
-    // It KEEPS re-driving after the alert (never terminally abandons the entries).
-    const afterAlert = await h.coordinator.coordinate(PROJECT);
-    expect(afterAlert.holdReason).toBe("infra_error");
-    expect(afterAlert.retryAfterMs).toBeGreaterThan(0);
-    expect(h.queue.statusOf("run_spec_a")).toBe("queued");
-    expect(h.queue.statusOf("run_spec_b")).toBe("queued");
-    terminal = h.batchEvents.events.filter((e) => e.type === "infra_blocked" && e.terminal === true);
-    expect(terminal.length).toBeGreaterThanOrEqual(1);
+    // The writer rework primitive received one routing call per member, each carrying the
+    // batch's bootstrap/infra failure as steering.
+    expect(h.gateRework.routed).toHaveLength(2);
+    expect(h.gateRework.routed[0]?.gateError).toContain("MERGE QUEUE WORKSPACE/INFRA FAILURE");
+    expect(h.gateRework.routed[1]?.gateError).toContain("MERGE QUEUE WORKSPACE/INFRA FAILURE");
   });
 
   it("GAP #1: a SHIFTING infra hold keeps re-driving quietly — it never alerts terminally", async () => {
@@ -425,10 +421,9 @@ describe("BatchMergeCoordinator — infra-error robustness (a thrown check NEVER
   // task #21A's `RunnerClaimLiveRowError` doctrine-alignment proof (typed
   // `retriable: false` routes to `merge_retry`, not the apex-v49 `infra_error`
   // hot-loop) lives in `batchMergeCoordinatorRunnerClaimLiveRow.test.ts`.
-  it("a SUSTAINED-identical real-merge drive throw alerts terminally but keeps the entry queued", async () => {
+  it("v54 #56: a SUSTAINED-identical real-merge drive throw ALSO escalates to writer rework (deterministic = spec defect)", async () => {
     const h = makeHarness();
     seed(h, "spec_a");
-    const dequeueSpy = vi.spyOn(h.queue, "markDequeued");
     h.runner.driveMerge = async (input) => {
       h.runner.drives.push({ runId: input.runId });
       throw new RefResetTransientError("persistent resolver runner allocation outage");
@@ -440,23 +435,16 @@ describe("BatchMergeCoordinator — infra-error robustness (a thrown check NEVER
     expect(firstHold.retryAfterMs).toBeGreaterThan(0);
     expect(h.queue.statusOf("run_spec_a")).toBe("queued");
     expect(h.events.events.some((e) => e.type === "merge.dequeued")).toBe(false);
-    expect(h.batchEvents.events.some((e) => e.type === "infra_blocked" && e.terminal === true)).toBe(false);
 
-    // The re-drive hits the IDENTICAL throw with no progress → the terminal alert + longer
-    // backoff, but the entry STAYS queued (autonomous recovery, never abandoned).
+    // The re-drive hits the IDENTICAL throw with no progress → escalate to writer rework.
+    // A sustained-identical drive throw IS deterministic and is treated as a spec defect
+    // (the same primitive as a gate-fail bisect culprit), not as transient infra.
     const last = await h.coordinator.coordinate(PROJECT);
-    expect(last.holdReason).toBe("infra_error");
-    expect(last.retryAfterMs).toBe(INFRA_HOLD_ALERT_RETRY_AFTER_MS);
-    expect(h.queue.statusOf("run_spec_a")).toBe("queued");
-    expect(dequeueSpy).not.toHaveBeenCalled();
-    expect(h.events.events.some((e) => e.type === "merge.dequeued")).toBe(false);
-    let terminal = h.batchEvents.events.filter((e) => e.type === "infra_blocked" && e.terminal === true);
-    expect(terminal).toHaveLength(1);
-    const afterAlert = await h.coordinator.coordinate(PROJECT);
-    expect(afterAlert.holdReason).toBe("infra_error");
-    expect(h.queue.statusOf("run_spec_a")).toBe("queued");
-    terminal = h.batchEvents.events.filter((e) => e.type === "infra_blocked" && e.terminal === true);
-    expect(terminal).toHaveLength(1);
+    expect(last.holdReason).toBe("all_blocked");
+    expect(h.queue.statusOf("run_spec_a")).toBe("dequeued");
+    expect(h.gateRework.routed).toHaveLength(1);
+    expect(h.gateRework.routed[0]?.gateError).toContain("MERGE QUEUE WORKSPACE/INFRA FAILURE");
+    expect(INFRA_HOLD_ALERT_RETRY_AFTER_MS).toBeGreaterThan(0);
   });
 
   it("a GENUINE gate fail STILL bisects → culprit → routes to writer rework (no regression)", async () => {

@@ -32,6 +32,7 @@ import {
   settleDriveOutcome,
 } from "./batchCoordinatorSettle.js";
 import { BatchInfraHoldCeiling, holdOnInfra, terminalInfraBlock } from "./batchInfraHoldCeiling.js";
+import { escalateInfraHoldToWriter } from "./batchInfraEscalate.js";
 import type { HoldCeilingStore } from "./holdCeilingStore.js";
 import { RecoverableDriveHoldCeiling } from "./recoverableDriveHold.js";
 import { serializedRetryAfterMs } from "./mergeSerializedRetry.js";
@@ -104,18 +105,13 @@ export interface BatchMergeCoordinatorDeps {
   events: MergeQueueEventEmitter;
   /** The batch-level event emitter (merge.batch.*). */
   batchEvents: BatchMergeEventEmitter;
-  /**
-   * The NON-BRICKING conflict-escalation seam (§2c), reused VERBATIM from the native queue
-   * coordinator: parks a GENUINELY irreconcilable spec at `needs_attention` (frees its slot)
-   * when the real drive returns the `needs_attention` outcome — one helper, never diverges.
-   */
+  /** §2c spec-escalator: parks irreconcilable specs at `needs_attention` (shared with native queue). */
   escalator: SpecEscalator;
   /**
-   * The batch-gate-fail self-heal (v35 — the strand fix): a GATE-fail bisect culprit (code
-   * that passed its OWN branch gates but breaks integrated) is routed to the WRITER for
-   * rework carrying the gate error as steering, instead of being dequeued + stranded.
-   * DISTINCT from a CONFLICT culprit (resolver/replan); bounded inside the router. Absent
-   * (a degenerate assembly) ⇒ the recoverable `conflict` fallback. See `settleBisectCulprit`.
+   * Writer-rework router (v35 strand fix + v54 #56): a GATE-fail bisect culprit AND a
+   * sustained-non-recovering merge-queue infra hold both route to the WRITER carrying the
+   * failure as steering (`settleBisectCulprit` / `escalateInfraHoldToWriter`). Absent ⇒ both
+   * fall back to a dequeue (`conflict` / `blocked`); production always wires it.
    */
   gateRework?: BatchGateReworkRouter;
   /** ATOMICITY (audit RC-4 #3): when wired, the dequeue settle runs its event append + queue UPDATE in ONE transaction (both-or-neither). */
@@ -123,23 +119,16 @@ export interface BatchMergeCoordinatorDeps {
   recoverableDriveHolds?: RecoverableDriveHoldCeiling;
   /** Audit RC-7: the DURABLE backing store for BOTH runaway-guard ceilings, so the counters survive a restart (absent → in-memory, for fakes). */
   holdCeilingStore?: HoldCeilingStore;
-  /**
-   * Resolve the per-project max batch size (the config knob). Defaults to a `DEFAULT_MAX_BATCH_SIZE`
-   * resolver when omitted (tests inject a fixed value); production resolves
-   * `projects.config.maxBatchSize` under RLS.
-   */
+  /** Per-project max batch size resolver. Default → `DEFAULT_MAX_BATCH_SIZE`; prod reads `projects.config.maxBatchSize`. */
   resolveMaxBatchSize?: (projectId: string) => Promise<number>;
   /** Test seam: the sleep between infra-error re-polls. Defaults to a real timer; a test injects a no-op/recording sleep so re-polls run instantly. */
   sleep?: (ms: number) => Promise<void>;
 }
 
 /**
- * The production BatchMergeCoordinator. Adds the speculative batch-check + bisect on top of
- * the native queue's one-at-a-time drive. It reloads the queue every pass (DAG state is the
- * source of truth, never cached) and performs the REAL merges through the SAME runner/model,
- * so the native queue's ordering + serialization + lease/recovery guarantees hold unchanged;
- * the only addition is that the batch is PROVEN green as a combined unit before any of it
- * merges, and a bad interaction is isolated to one PR via bisect.
+ * Production BatchMergeCoordinator: speculative batch-check + bisect over the native queue.
+ * Reloads the queue per pass (DAG is the source of truth); REAL merges use the same
+ * runner/model so the native queue's ordering + lease/recovery guarantees hold unchanged.
  */
 export class BatchMergeCoordinator implements MergeCoordinator {
   private readonly resolveMaxBatchSize: (projectId: string) => Promise<number>;
@@ -332,21 +321,30 @@ export class BatchMergeCoordinator implements MergeCoordinator {
     }
   }
 
-  /** GAP #1: hold the batch on an infra error, guarded by cross-pass sustained-non-recovery. */
-  private infraHold(
+  /** GAP #1 + v54 #56: hold (signature shifting) or ESCALATE to writer rework (signature non-recovering). */
+  private async infraHold(
     projectId: string,
     batch: ReadonlyArray<MergeQueueEntry>,
     message: string,
     queueDepth: number,
   ): Promise<CoordinateResult> {
-    return holdOnInfra({
-      ceiling: this.infraHolds,
-      queue: this.deps.queue,
-      events: this.deps.batchEvents,
+    const ceiling = this.infraHolds;
+    const { queue, events, batchEvents, gateRework, tx } = this.deps;
+    const verdict = await holdOnInfra({ ceiling, queue, events: batchEvents, projectId, batch, message, queueDepth });
+    if (verdict.kind === "hold") return verdict.result;
+    if (gateRework === undefined) return this.terminalInfraBlock(projectId, batch, message, queueDepth);
+    return escalateInfraHoldToWriter({
+      queue,
+      events,
+      batchEvents,
+      gateRework,
+      ceiling,
       projectId,
       batch,
       message,
+      holds: verdict.holds,
       queueDepth,
+      ...(tx === undefined ? {} : { tx }),
     });
   }
 
