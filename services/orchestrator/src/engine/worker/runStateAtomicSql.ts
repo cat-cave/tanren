@@ -90,10 +90,24 @@ export async function applyFinalizeRunWithEvent(
   const rowSpecId = scalarTextOr(row.spec_id, "");
   const rowProjectId = scalarTextOr(row.project_id, "");
   // SOURCE event.specId/projectId from the row when the caller passed empty
-  // strings (worker failure-path defers to the row).
-  const eventSpecId = input.event.specId === undefined || input.event.specId === "" ? rowSpecId : input.event.specId;
-  const eventProjectId =
-    input.event.projectId === undefined || input.event.projectId === "" ? rowProjectId : input.event.projectId;
+  // strings (worker failure-path defers to the row). When the caller DID pass
+  // a non-empty value, it MUST match the row — fail loud on disagreement
+  // (Plan §8 doctrine: never silently emit an event with a wrong specId).
+  const callerSpecId = input.event.specId === undefined || input.event.specId === "" ? "" : input.event.specId;
+  if (callerSpecId !== "" && rowSpecId !== "" && callerSpecId !== rowSpecId) {
+    throw new Error(
+      `applyFinalizeRunWithEvent: event.specId='${callerSpecId}' disagrees with the run row's spec_id='${rowSpecId}'; refusing to emit an event with a wrong specId`,
+    );
+  }
+  const eventSpecId = callerSpecId === "" ? rowSpecId : callerSpecId;
+  const callerProjectId =
+    input.event.projectId === undefined || input.event.projectId === "" ? "" : input.event.projectId;
+  if (callerProjectId !== "" && rowProjectId !== "" && callerProjectId !== rowProjectId) {
+    throw new Error(
+      `applyFinalizeRunWithEvent: event.projectId='${callerProjectId}' disagrees with the run row's project_id='${rowProjectId}'; refusing to emit an event with a wrong projectId`,
+    );
+  }
+  const eventProjectId = callerProjectId === "" ? rowProjectId : callerProjectId;
   const inserted = await new PgEventStore(client).appendIfAbsent({
     ...input.event,
     specId: eventSpecId,

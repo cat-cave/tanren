@@ -197,22 +197,15 @@ export class HttpRunStateWriter implements RunStateWriter {
     // the RUN-LEVEL mirror of `updateTaskWithEvent`). Carries the org
     // explicitly (the worker failure-path holds the run context); the
     // server runs the row UPDATE + event INSERT in ONE org-scoped
-    // transaction. The route returns:
-    //   - 204 No Content                       — fresh apply (this call wrote it).
-    //   - 200 { ...FinalizeRunWithEventOutcome } — full outcome (no-row-moved /
-    //     deduped retry / fresh write whose row+spec/project are returned).
+    // transaction. The route ALWAYS returns 200 with the full outcome JSON
+    // (including specId/projectId from the UPDATE's RETURNING) — the prior
+    // 204-on-fresh-apply path dropped specId/projectId and silently disabled
+    // Site C's parkStrandedSpecRemote never-strand safety net. See route
+    // handler at `/internal/finalize-run-with-event` for the doctrine.
     return this.postWithStatus<FinalizeRunWithEventOutcome>(
       "/internal/finalize-run-with-event",
       input,
-      (status, body) => {
-        if (status === 200) {
-          return body as FinalizeRunWithEventOutcome;
-        }
-        // 204 (or any other 2xx) means this call wrote the pair fresh; the
-        // route only sends a body when the row didn't move OR the event
-        // deduped, so a 204 means a clean fresh apply.
-        return { updated: true, alreadyTerminal: false };
-      },
+      (_status, body) => body as FinalizeRunWithEventOutcome,
     );
   }
 

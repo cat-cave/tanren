@@ -113,9 +113,12 @@ export function registerRunStateAtomicRoutes(app: Hono, deps: RunStateWriteRoute
       }
       throw error;
     }
-    if (outcome.updated && !outcome.alreadyTerminal) {
-      return c.body(null, 204);
-    }
+    // Always return 200 with the full outcome JSON — the 204 fresh-apply path
+    // would drop specId/projectId, silently disabling the Site C parkStrandedSpecRemote
+    // never-strand safety net (`result.specId !== undefined && result.specId !== ""`
+    // is false on every 204 body). PR #676 audit caught this regression on the
+    // default-remote-writes deployment path; the fix is to always include the
+    // outcome's specId/projectId so the caller can drive the spec-park follow-on.
     return c.json(outcome, 200);
   });
 
