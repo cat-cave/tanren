@@ -1,53 +1,36 @@
 // Cross-process plane-split smoke. Proves the run-executor worker is a
-// STANDALONE deployable that claims over the mTLS CONTROL-PLANE endpoint: a
-// run enqueued against the shared Postgres (the same `job_queue` insert the
-// control-plane API does) is CLAIMED and EXECUTED by the separate `worker`
-// compose container — across the API↔worker process boundary — and finalized,
-// all under the RLS-enforced `tanren_app` runtime role.
+// STANDALONE deployable that claims over the mTLS CONTROL-PLANE endpoint: a run
+// enqueued against the shared Postgres (same `job_queue` insert as the
+// control-plane API) is CLAIMED + EXECUTED by the separate `worker` compose
+// container — across the API↔worker process boundary — and finalized under the
+// RLS-enforced `tanren_app` runtime role.
 //
-// A DIRECT proof of the control-plane claim channel: the
-// smoke itself acts as a data-plane client and hits the live orchestrator's
-// `/internal/claim-job` endpoint (a) over mTLS with the worker's client cert →
-// it claims a seeded job + returns its org_id, and (b) without a client cert →
-// the TLS handshake is rejected (authn closed). The worker container is itself
-// configured to claim over this endpoint (TANREN_CLAIM_ENDPOINT_URL), so the
-// cross-process boundary crossing below ALSO exercises the mTLS claim path — if
-// mTLS were broken the worker could not claim and the smoke would time out.
+// Direct claim-channel proof: the smoke hits the live orchestrator's
+// `/internal/claim-job` (a) with the worker's client cert → claims + returns
+// org_id, (b) without a cert → TLS handshake rejected. The worker is itself
+// configured to claim through this endpoint (TANREN_CLAIM_ENDPOINT_URL), so the
+// cross-process boundary below also exercises that mTLS path.
 //
-// This script does NOT run any worker in-process. It only seeds + enqueues, then
-// observes the live DB until the OTHER process (the `worker` container) claims
-// the job and writes the run's terminal state. If the worker container were not
-// running, the job would stay queued and this smoke would time out → fail.
+// This script runs NO worker in-process — it only seeds + enqueues, then
+// observes the live DB until the OTHER process claims + finalizes the job.
 //
-// Credential-free: the seeded run has no Codex/GitHub creds, so the worker's
-// real claim→execute loop throws while resolving the run's credential and fails
-// the job. The deterministic, durable cross-process signal is the `job_queue`
-// row: the SEPARATE worker process claims it out of `queued` and writes a
-// terminal queue state (`failed`, with the org stamped + a `failure_kind`) — a
-// row only the OTHER process could have written. The run row ALSO finalizes to a
-// terminal `halted` state: the worker's early-failure finalize org-scopes its
-// `UPDATE runs` from the CLAIMED org (carried on the queue row, known the moment
-// the job is claimed), so the enforced RLS policy admits the write even though
-// the credential threw BEFORE the run's context (and thus its resolved org) was
-// loaded. Before fix/rls-early-failure-finalize-scope this finalize ran unscoped
-// and RLS denied it, leaving the run stuck `queued` forever — worse than a
-// cleanly-failed run. The proof here is the boundary crossing AND that the run
-// reaches a terminal state under enforced RLS, not a green run.
+// Credential-free run: no Codex/GitHub creds, so the worker's real
+// claim→execute loop throws on credential resolve + fails the job. The durable
+// cross-process signal is the `job_queue` row — only the worker process could
+// have written its terminal state (`failed`, org stamped, `failure_kind` set).
+// The run row also finalizes to terminal `halted`: the worker's early-failure
+// finalize org-scopes its UPDATE from the CLAIMED org (carried on the queue
+// row, known at claim-time), so RLS admits the write even though credential
+// threw before the run's context loaded. Pre-fix this finalize ran unscoped
+// and RLS denied it, leaving the run stuck `queued`. We confirm the data
+// plane is RLS-gated: run row readable under run's org scope on `tanren_app`,
+// DENIED under empty scope (deny-by-default).
 //
-// We ALSO confirm the data plane is RLS-gated: the run row is readable under the
-// run's org scope on the `tanren_app` role but DENIED under an empty scope
-// (deny-by-default) — proving the worker container runs under enforced RLS.
-//
-// A DIRECT proof of the control-plane WRITE endpoints
-// `proveMtlsWriteEndpoints`: the smoke acts as a data-plane client and (a)
-// without a cert is rejected at TLS on a write endpoint, and (b) with the worker
-// cert finalizes a seeded run + appends its event over mTLS — the rows landing
-// server-side under enforced RLS, with a retried finalize a no-op (exactly-once).
-// When the `worker` container is run with TANREN_DATA_PLANE_REMOTE_WRITES=1, the
-// cross-process run below ALSO finalizes via these endpoints (the worker writes
-// no tenant tables directly); its terminal-state assertion then proves the
-// remote-write path end-to-end. See ROADMAP.md
-//.
+// Direct WRITE-endpoint proof `proveMtlsWriteEndpoints`: (a) without cert →
+// TLS reject on a write endpoint; (b) with worker cert → finalize + event
+// append land server-side under RLS, retry no-op (exactly-once). When the
+// worker is run with TANREN_DATA_PLANE_REMOTE_WRITES=1, the cross-process run
+// below also finalizes via these endpoints. See ROADMAP.md.
 
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -126,6 +109,10 @@ interface JobObservation {
   attempts: number;
   failureKind: string | null;
   jobOrgId: string | null;
+  // PgJobQueue.heartbeat ticks heartbeat_at each cycle while it holds the claim;
+  // advancement = alive. Combined with status-identity below, stall predicate is
+  // "status frozen AND heartbeat frozen" — a true sign-of-life check.
+  heartbeatAtMs: number | null;
 }
 
 // The cross-process signal: the job_queue row (OUTSIDE RLS, read on the owner
@@ -137,13 +124,15 @@ async function observeJob(owner: ReturnType<typeof createDbPool>): Promise<JobOb
     attempts: number;
     failure_kind: string | null;
     org_id: string | null;
-  }>("SELECT status, attempts, failure_kind, org_id FROM job_queue WHERE task_id = $1", [plannerTaskId]);
+    heartbeat_at: Date | null;
+  }>("SELECT status, attempts, failure_kind, org_id, heartbeat_at FROM job_queue WHERE task_id = $1", [plannerTaskId]);
   const job = row.rows[0];
   return {
     status: job?.status,
     attempts: job?.attempts ?? 0,
     failureKind: job?.failure_kind ?? null,
     jobOrgId: job?.org_id ?? null,
+    heartbeatAtMs: job?.heartbeat_at instanceof Date ? job.heartbeat_at.getTime() : null,
   };
 }
 
@@ -437,9 +426,12 @@ async function main(): Promise<void> {
   }
 
   const owner = createDbPool(OWNER_URL);
-  // task #47: halt when last STALL_WINDOW polls held identical status.
+  // Halt when both (a) status held identical across STALL_WINDOW polls AND
+  // (b) heartbeat_at did not tick across that same window. Both signals flat
+  // = the worker is truly dead. Either signal advancing = alive, keep waiting.
   const STALL_WINDOW = 20;
   const statusHistory: string[] = [];
+  const heartbeatHistory: (number | null)[] = [];
   try {
     let claimed = false;
     for (;;) {
@@ -479,14 +471,18 @@ async function main(): Promise<void> {
         );
         return;
       }
-      // Stall detection: identical status across STALL_WINDOW polls → halt loud.
       statusHistory.push(job.status ?? "<undefined>");
       if (statusHistory.length > STALL_WINDOW) statusHistory.shift();
+      heartbeatHistory.push(job.heartbeatAtMs);
+      if (heartbeatHistory.length > STALL_WINDOW) heartbeatHistory.shift();
       if (statusHistory.length === STALL_WINDOW && new Set(statusHistory).size === 1) {
-        throw new Error(
-          `STALL: job_queue status held identical at '${statusHistory[0]}' for ${STALL_WINDOW} polls ` +
-            `(~${(STALL_WINDOW * POLL_MS) / 1000}s) without terminal for run ${runId} — halt loud.`,
-        );
+        const heartbeatAdvanced = new Set(heartbeatHistory).size > 1;
+        if (!heartbeatAdvanced) {
+          throw new Error(
+            `STALL: job_queue status held identical at '${statusHistory[0]}' AND heartbeat_at did not advance ` +
+              `across ${STALL_WINDOW} polls (~${(STALL_WINDOW * POLL_MS) / 1000}s) for run ${runId} — worker dead, halt loud.`,
+          );
+        }
       }
       await new Promise((resolve) => {
         setTimeout(resolve, POLL_MS);
