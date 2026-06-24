@@ -157,6 +157,11 @@ async function failClosedForSchemaMiss(
 ): Promise<AuditorStageResult> {
   log.warn("schema-parse miss — synthesizing a P0 finding to re-audit", { runId: args.runId }, error);
   await markTaskFailed(args.pool, auditorTaskId, "auditor_schema_invalid", args.writer);
-  await args.appendEvent("task.completed", { taskKind: "audit" }, auditorTaskId);
+  // Audit-trail integrity (critic-arc R1 #5): markTaskFailed flipped the row to
+  // `failed` with failureKind="auditor_schema_invalid"; the EVENT must match the
+  // ROW state — emit task.failed, NOT task.completed. The prior task.completed
+  // emit here directly contradicted the task table and produced a self-inconsistent
+  // audit trail.
+  await args.appendEvent("task.failed", { taskKind: "audit", failureKind: "auditor_schema_invalid" }, auditorTaskId);
   return { findings: [AUDITOR_SCHEMA_MISS_FINDING], auditorTaskId };
 }

@@ -168,16 +168,17 @@ describe("subtaskLoop per-stage `task.failed` emit-on-throw (apex v51 doctrine s
     const outcome = await runSubtaskLoop(input);
     expect(outcome.kind).toBe("passed");
     expect(events.events.some((e) => e.eventType === "task.failed")).toBe(false);
-    // The write + check + audit all close cleanly via their per-stage `task.completed`. The
-    // planner task is marked done by the loop AFTER the whole sequence (not by the per-stage
-    // emit), so it does not appear among these per-stage task.completed events on the success
-    // path — the planner's per-task `task.completed` is intentionally absent on success exactly
-    // as it is in the existing subtaskStages.test.ts contract.
+    // Audit-trail integrity (critic-arc R1 #4 fix): the planner task ALSO emits
+    // `task.completed` at the loop's terminal exit (clean pass / triage-passed /
+    // velocity-pass) — see subtaskLoop.ts's markTaskDone sites for the planner.
+    // PR #665 (A1+A2) covered the THROW path; this covers the SUCCESS terminations
+    // that previously marked the row done but emitted nothing.
     const completedKinds = events.events
       .filter((e) => e.eventType === "task.completed")
       .map((e) => (e.payload as { taskKind?: string }).taskKind ?? "<no-kind>");
     expect(completedKinds).toContain("write");
     expect(completedKinds).toContain("check");
     expect(completedKinds).toContain("audit");
+    expect(completedKinds).toContain("plan");
   });
 });

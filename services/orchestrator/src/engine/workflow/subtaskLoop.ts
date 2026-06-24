@@ -378,9 +378,12 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
       })),
     );
 
-    // NO findings ⇒ the spec PASSES (the clean exit).
+    // critic-arc R1 #4 fix: every markTaskDone planner site below ALSO emits the
+    // matching `task.completed` (or `task.failed`) so the SUCCESS terminations don't
+    // leave the planner task row silent in the audit trail.
     if (findings.length === 0) {
       await markTaskDone(input.pool, plannerTaskId, "passed", input.runStateWriter);
+      await appendEvent("task.completed", { taskKind: "plan" }, plannerTaskId);
       return await finalize({ kind: "passed", plannerTaskId, subtasks: plan.subtasks, newSpecs: [], loopCount });
     }
 
@@ -406,6 +409,7 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
     // TRIAGE → PASSED: every finding became a NEW spec (none kept here).
     if (triage.routing.outcome === "passed") {
       await markTaskDone(input.pool, plannerTaskId, "passed", input.runStateWriter);
+      await appendEvent("task.completed", { taskKind: "plan" }, plannerTaskId);
       return await finalize({ kind: "passed", plannerTaskId, subtasks: plan.subtasks, newSpecs, loopCount });
     }
 
@@ -449,6 +453,8 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
         reason: haltReason,
       });
       await markTaskDone(input.pool, plannerTaskId, "rejected_by_auditor", input.runStateWriter);
+      const failedPayload = { taskKind: "plan" as const, failureKind: "convergence_stalled", reason: haltReason };
+      await appendEvent("task.failed", failedPayload, plannerTaskId);
       return await finalize({
         kind: "convergence_stalled",
         loopCount,
@@ -460,6 +466,7 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
       // Velocity policy: defer the mild kept leftovers as specs and ALLOW the pass.
       const deferred: NewSpecRequest[] = triage.routing.tasksHere.map(routedToNewSpec);
       await markTaskDone(input.pool, plannerTaskId, "passed", input.runStateWriter);
+      await appendEvent("task.completed", { taskKind: "plan" }, plannerTaskId);
       return await finalize({
         kind: "passed",
         plannerTaskId,
