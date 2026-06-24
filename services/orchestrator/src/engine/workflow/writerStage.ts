@@ -104,6 +104,33 @@ export async function runWriterStage(args: WriterStageInput): Promise<WriterStag
         prompt: args.prompt,
         workspace: args.workspacePath,
         baseSha: args.baseSha,
+        // CROSS-LAYER sign-of-life bridge (task #24, apex v52/v53). On every probe
+        // tick the SSH ActivityWatchdog reads the work signature as advancing, emit a
+        // `writer.subtask.progress` row — the #21B child-run progress breaker's
+        // allowlist includes `writer.%` so this keeps the breaker streak alive on a
+        // legitimately slow writer turn whose work signature briefly plateaus mid-
+        // IO-burst (a `pnpm install` window). Fire-and-forget `void` because
+        // `onProgress` is synchronous (the substrate already catches any throw, but
+        // we double-defend here — a rejected appendEvent must not bubble back into
+        // the watchdog tick).
+        onWatchdogProgress: (signal) => {
+          void args
+            .appendEvent(
+              "writer.subtask.progress",
+              {
+                runId: args.runId,
+                taskId: args.writeTaskId,
+                subtaskIndex: args.subtask.index,
+                intent: args.subtask.intent,
+                outputBytesAdvanced: signal.outputBytesAdvanced,
+                ...(signal.workspaceSignature === undefined ? {} : { workspaceSignature: signal.workspaceSignature }),
+              },
+              args.writeTaskId,
+            )
+            .catch(() => {
+              // appendEvent failure must not bubble into the watchdog tick.
+            });
+        },
       }),
   });
   const runtimeSeconds = secondsSince(startedAt);

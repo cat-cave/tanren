@@ -333,7 +333,28 @@ export class SshCommandSubstrate implements CommandSubstrate {
     const recent = distinctRecentOutput(state.stdout + state.stderr, state.lastSnapshotOutputLen);
     state.lastSnapshotOutputLen = recent.length;
     const signature = workSignature(recent.content, workspaceSig);
+    const priorSignature = state.workSignatures.at(-1);
     state.workSignatures = appendWorkSignature(state.workSignatures, signature);
+    // CROSS-LAYER sign-of-life bridge (task #24, apex v52/v53). The watchdog already
+    // detects work-signature advancement on every probe tick (the negation of the
+    // fixed-point read below). On ticks where the signature ADVANCED — either the FIRST
+    // ever (no prior) or the new one differs from the previous — invoke `onProgress` so
+    // the writer pipeline can bridge the signal to the #21B child-run progress breaker.
+    // A throw from `onProgress` MUST NOT bubble into the tick (it would crash the probe
+    // loop and look like a stall) — swallow it. The breaker's allowlist gains `writer.%`
+    // so the bridged events keep its streak alive on legitimately slow writer turns.
+    const signatureAdvanced = priorSignature === undefined || priorSignature !== signature;
+    if (signatureAdvanced && watchdog.onProgress !== undefined) {
+      try {
+        watchdog.onProgress({
+          outputBytesAdvanced: recent.content.length,
+          workspaceSignature: workspaceSig,
+          workSignatureAdvanced: true,
+        });
+      } catch {
+        // event-emit failure must not bubble into the watchdog tick
+      }
+    }
     // The verdict turns ENTIRELY on whether the WORK SIGNATURE is ADVANCING. A CHANGING
     // signature (new distinct output OR an advancing workspace) is genuine progress → continue
     // UNBOUNDED, no matter the elapsed time. A FIXED POINT (no new distinct output AND no

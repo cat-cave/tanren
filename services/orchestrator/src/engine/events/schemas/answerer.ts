@@ -2,11 +2,7 @@ import { z } from "zod";
 import { oracleEventRegistry } from "./oracle.js";
 import { claimEventRegistry } from "./claims.js";
 
-// Semantic-rich planner/writer/checker/auditor event payloads. These fields
-// are what the Forge narration substrate renders directly. The
-// shapes are intentionally a superset of the single-pass emits so the
-// fixture run replays without re-derivation.
-
+// Semantic-rich planner/writer/checker/auditor event payloads. These fields are what the Forge narration substrate renders directly. The shapes are intentionally a superset of the single-pass emits so the fixture run replays without re-derivation.
 const SubtaskSummary = z
   .object({
     title: z.string(),
@@ -177,6 +173,18 @@ export const WriterSubtaskFailedPayload = z
     intent: z.string(),
     failureKind: z.string(),
     message: z.string(),
+  })
+  .strict();
+
+// writer.subtask.progress — task #24 (apex v52/v53) cross-layer sign-of-life bridge. SSH ActivityWatchdog emits on every tick the WORK SIGNATURE advances; the #21B child-run breaker counts this as worker progress (allowlist `writer.%`). Composes with `MIN_NON_ADVANCING_NEIGHBOR_REPEATS=2` (substrate-internal streak floor) — fix at two layers.
+export const WriterSubtaskProgressPayload = z
+  .object({
+    runId: z.string(),
+    taskId: z.string(),
+    subtaskIndex: z.number().int(),
+    intent: z.string(),
+    outputBytesAdvanced: z.number().int(),
+    workspaceSignature: z.string().optional(),
   })
   .strict();
 
@@ -472,10 +480,7 @@ export const ConvergenceStalledPayload = z
   })
   .strict();
 
-// The SPEC-LOOP REDESIGN stage events (demo-run/triage/convergence), grouped here so
-// the EventRegistry spreads them in with ONE import (keeping registry.ts under both
-// its line cap and its max-dependencies cap as the loop adds events). The validation /
-// decoding path is unchanged — one source-of-truth registry object.
+// SPEC-LOOP REDESIGN stage events (demo-run/triage/convergence) — grouped so EventRegistry spreads them with ONE import (keeps registry.ts under its line + max-dependencies caps). Validation/decoding unchanged.
 export const loopEventRegistry = {
   "demoRun.started": DemoRunStartedPayload,
   "demoRun.verdict": DemoRunVerdictPayload,
@@ -486,14 +491,10 @@ export const loopEventRegistry = {
   "convergence.started": ConvergenceStartedPayload,
   "convergence.assessed": ConvergenceAssessedPayload,
   "convergence.stalled": ConvergenceStalledPayload,
-  // §3.1 entity-risk oracle: the deterministic pre-LLM risk signal (schemas/oracle.ts).
+  // §3.1 entity-risk oracle (schemas/oracle.ts) + §3.3 entity-anchored Claims (schemas/claims.ts).
   ...oracleEventRegistry,
-  // §3.3 entity-anchored Claims: the defect-ledger lifecycle events (schemas/claims.ts).
   ...claimEventRegistry,
 } as const;
 
-// Re-export the Tanren-native templating registry-lifecycle sub-registry through
-// this module so the EventRegistry spreads it in WITHOUT adding a separate import
-// (keeping registry.ts under its max-dependencies cap), exactly like the loop
-// sub-registry above. Source of truth is schemas/templates.ts.
+// Re-export the Tanren-native templating registry-lifecycle sub-registry so EventRegistry spreads it WITHOUT adding a separate import (keeps registry.ts under its max-dependencies cap). Source of truth: schemas/templates.ts.
 export { templateEventRegistry } from "./templates.js";

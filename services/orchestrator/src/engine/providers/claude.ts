@@ -93,12 +93,13 @@ export function createClaudeWriter(dependencies: ClaudeWriterDependencies): Writ
           anthropicBaseUrl: auth.anthropicBaseUrl,
         }),
         stdin: opts.prompt,
-        // AGENT exec (claude `stream-json` streaming): output-driven + workspace liveness probe; never a time kill.
+        // AGENT exec (claude `stream-json`): output-driven + workspace liveness probe; never a time kill. `onWatchdogProgress` bridges advancing ticks into the #21B child-run breaker (task #24).
         watchdog: buildActivityWatchdog({
           substrate: dependencies.ssh,
           target: dependencies.target,
           cls: "agent",
           workspace: opts.workspace,
+          onProgress: opts.onWatchdogProgress,
         }),
       });
       const telemetry = parseClaudeStreamTelemetry(claude.stdout);
@@ -495,6 +496,5 @@ function failedResult(
   return { ...gitState, exitReason, tokenUsage: telemetry.tokenUsage, telemetry };
 }
 
-// Re-export so callers can persist a refreshed Claude auth bundle the same way
-// the Codex path does (best-effort write-back lives in the registry/workflow).
+// Re-export so callers can persist a refreshed Claude auth bundle the same way the Codex path does (best-effort write-back lives in the registry/workflow).
 export { storeClaudeAuthBundle };

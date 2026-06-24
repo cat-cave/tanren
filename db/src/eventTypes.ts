@@ -180,6 +180,7 @@ export const eventTypeNames = [
   "writer.started",
   "writer.subtask.completed",
   "writer.subtask.failed",
+  "writer.subtask.progress",
   "writer.subtask.started"
 ] as const;
 

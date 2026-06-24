@@ -111,6 +111,36 @@ emphatic that this class keeps recurring); the existing models it generalizes ar
 >   companion accounting lane (task #14 / v50-B1 — gate
 >   `usage.token_accounting_failed` on writer `exitReason=completed` so the
 >   now-rarer mid-call kills don't double-emit) ships separately.
+> - **Task #24 (apex v52/v53) — cross-layer sign-of-life bridge between the SSH
+>   ActivityWatchdog and the #21B child-run progress breaker [RESOLVED].** v52
+>   surfaced the SIXTH disguised survivor in this family: the watchdog
+>   correctly TOLERATES a single mid-IO-burst identical probe (the v50/#21C
+>   `MIN_NON_ADVANCING_NEIGHBOR_REPEATS=2` floor), BUT the breaker's
+>   worker-progress signature (`MAX(events.id)` over the worker-progress
+>   allowlist) was DEAF to the watchdog's tolerance — a legitimately slow
+>   writer turn (6.4 min in v52, the same shape in v53) emitted NO allowed
+>   event between `writer.subtask.started` and `writer.subtask.completed`,
+>   the breaker fired at the streak ceiling (5 min flat at the apex-v52
+>   `NON_ADVANCE_PROBES_BEFORE_STALL=10` setting, ~15 min at the v52
+>   bump-to-30). #663/B2 raised the floor; this fix solves the OTHER layer.
+>   The two fixes compose — the watchdog's
+>   `MIN_NON_ADVANCING_NEIGHBOR_REPEATS=2` protects against substrate-internal
+>   false-fire on a single ambiguous probe, and this bridge protects against
+>   breaker-side compound false-fire on a writer turn the watchdog correctly
+>   tolerates. The doctrine extends: SIGN-OF-LIFE PRIMITIVES MUST FLOW
+>   CROSS-LAYER — the activity watchdog (the sign-of-life primitive in the
+>   substrate) emits an event on every probe tick its multi-signal
+>   work-signature advances, and the upstream worker-progress breaker counts
+>   it. Fix: a new optional `onProgress` callback on the `ActivityWatchdog`
+>   contract (`services/orchestrator/src/engine/contracts/commandSubstrate.ts`)
+>   invoked from `tickWatchdog` on every advancement; threaded through
+>   `buildActivityWatchdog` and every writer adapter (`codex`, `claude`,
+>   `opencode`, `aider`, `pi`, `reasonix`); bound in `writerStage` to an
+>   `appendEvent('writer.subtask.progress', …)` closure; `writer.%` joins
+>   `WORKER_PROGRESS_EVENT_PREFIXES` so the breaker's `MAX(events.id)` filter
+>   counts the bridged emissions. The doctrine stands — signature IDENTITY,
+>   never elapsed time; a genuinely-advancing process resets it forever no
+>   matter the length, at BOTH layers.
 >
 > The inventory below was produced by a 3-auditor sweep and **re-verified
 > file:line against `origin/main` while writing** — drift corrections are flagged

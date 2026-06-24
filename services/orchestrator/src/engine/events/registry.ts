@@ -24,6 +24,7 @@ import {
   loopEventRegistry,
   templateEventRegistry,
   WriterSubtaskFailedPayload,
+  WriterSubtaskProgressPayload,
   WriterSubtaskStartedPayload,
 } from "./schemas/answerer.js";
 import {
@@ -211,6 +212,7 @@ export const EventRegistry = {
   "writer.subtask.started": WriterSubtaskStartedPayload,
   "writer.subtask.completed": WriterSubtaskCompletedPayload,
   "writer.subtask.failed": WriterSubtaskFailedPayload,
+  "writer.subtask.progress": WriterSubtaskProgressPayload,
 
   // Checker role
   "checker.started": CheckerStartedPayload,
@@ -231,7 +233,6 @@ export const EventRegistry = {
   // Sub-registries split into their schema modules for the 500-line cap: spec-loop stages + entity-risk oracle (schemas/answerer.ts) + templating registry lifecycle (schemas/templates.ts).
   ...loopEventRegistry,
   ...templateEventRegistry,
-
   // Runner allocation (+ periodic-sweeper reclaim of a STUCK/LEAKED runner)
   "runner.allocated": RunnerAllocatedPayload,
   "runner.released": RunnerReleasedPayload,
@@ -345,7 +346,6 @@ export const EventRegistry = {
   "merge.regate.gate_rework_routed": MergeReGateGateReworkRoutedPayload,
   // A transient/transport INFRA error blocked the batch check: bounded-retry then HOLD loud; no PR blamed.
   "merge.batch.infra_blocked": MergeBatchInfraBlockedPayload,
-
   // Post-merge auto-issue creation (tempering.md dim A): after a run's PR merges
   // onto default_branch, the watcher reads the post-merge CI on the base branch;
   // a FAILURE records merge.post_merge_failed + auto-opens ONE tracking issue
