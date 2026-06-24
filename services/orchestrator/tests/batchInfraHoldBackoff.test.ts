@@ -47,8 +47,11 @@ describe("batch infra-hold exponential backoff (apex-v35)", () => {
         message: `GitHub ref read for main failed: HTTP 403 variant ${i} (secondary-rate-limit)`,
         queueDepth: 1,
       });
-      expect(result.holdReason).toBe("infra_error");
-      delays.push(result.retryAfterMs ?? -1);
+      // A shifting outage keeps recovering — every hold stays on the recoverable branch.
+      expect(result.kind).toBe("hold");
+      if (result.kind !== "hold") throw new Error("unreachable");
+      expect(result.result.holdReason).toBe("infra_error");
+      delays.push(result.result.retryAfterMs ?? -1);
     }
     // EXPONENTIAL, not a fixed 3s hammer — exactly the single-source recoverable curve.
     expect(delays).toEqual([...RECOVERABLE_RETRY_DELAYS_MS]);
@@ -60,10 +63,10 @@ describe("batch infra-hold exponential backoff (apex-v35)", () => {
     expect(events.blocked.every((e) => e.terminal !== true)).toBe(true);
   });
 
-  it("on SUSTAINED non-recovery emits a TERMINAL alert + a longer backoff (still autonomous, never hot-loop)", async () => {
+  it("on SUSTAINED non-recovery returns the ESCALATE verdict (v54 #56 — caller routes to writer rework)", async () => {
     const ceiling = new BatchInfraHoldCeiling();
     const events = recordingEmitter();
-    // The IDENTICAL failure persisting (no progress) → a fixed point → the terminal alert.
+    // The IDENTICAL failure persisting (no progress) → a fixed point.
     const first = await holdOnInfra({
       ceiling,
       queue: queueStub,
@@ -74,11 +77,13 @@ describe("batch infra-hold exponential backoff (apex-v35)", () => {
       queueDepth: 1,
     });
     // The first hold is recoverable — one failure is not yet proof of non-recovery.
-    expect(first.holdReason).toBe("infra_error");
-    expect(events.blocked.some((e) => e.terminal === true)).toBe(false);
+    expect(first.kind).toBe("hold");
+    if (first.kind !== "hold") throw new Error("unreachable");
+    expect(first.result.holdReason).toBe("infra_error");
 
-    // The re-drive hits the IDENTICAL failure with no progress → the terminal alert + the
-    // longer backoff, but the entries stay queued (autonomous recovery, never hot-loop).
+    // The re-drive hits the IDENTICAL failure with no progress → escalate verdict. No
+    // terminal event emitted from `holdOnInfra` itself — the escalator (the caller) emits
+    // the loud `disposition: escalated_to_writer` event and routes the dequeue cascade.
     const last = await holdOnInfra({
       ceiling,
       queue: queueStub,
@@ -88,8 +93,10 @@ describe("batch infra-hold exponential backoff (apex-v35)", () => {
       message: "persistent 403",
       queueDepth: 1,
     });
-    expect(last.holdReason).toBe("infra_error");
-    expect(last.retryAfterMs).toBe(INFRA_HOLD_ALERT_RETRY_AFTER_MS);
-    expect(events.blocked.some((e) => e.terminal === true)).toBe(true);
+    expect(last.kind).toBe("escalate");
+    if (last.kind !== "escalate") throw new Error("unreachable");
+    expect(last.holds).toBeGreaterThan(1);
+    // INFRA_HOLD_ALERT_RETRY_AFTER_MS no longer flows through this branch (no backoff loop).
+    expect(INFRA_HOLD_ALERT_RETRY_AFTER_MS).toBeGreaterThan(0);
   });
 });

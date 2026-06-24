@@ -11,8 +11,15 @@
 // hold records the infra failure's stable SIGNATURE; the alert fires only once that signature
 // is SUSTAINED-non-recovering (the same failure persisting with no progress across the
 // backoff-spaced re-drives — the fixed-point read in `infraNonRecovery.ts`). A CHANGING
-// failure (a recovering / shifting outage) keeps re-driving quietly. Behavior is otherwise
-// unchanged: at the alert the entries STAY queued + re-drive on the longer backoff.
+// failure (a recovering / shifting outage) keeps re-driving quietly.
+//
+// v54 finding #56: on sustained-non-recovery `holdOnInfra` returns the ESCALATE verdict
+// (`{ kind: "escalate" }`) rather than a longer-backoff hold. The caller (`infraHold` in
+// `batchCoordinator.ts`) routes the batch back to the WRITER via `escalateInfraHoldToWriter`,
+// identical in shape to the gate-fail-strand fix. A deterministic scaffold defect (e.g. a
+// `just bootstrap` that fails in a fresh workspace) is no longer wedged in the queue
+// forever; the writer iterates with the bootstrap failure as steering. The recoverable
+// (signature-shifting) branch is unchanged.
 //
 // Audit RC-7: the signature history (and the telemetry hold count) is PERSISTED (a
 // HoldCeilingStore) rather than a process-local Map. It survives across `coordinate` passes
@@ -32,8 +39,21 @@ const log = createLogger("batch-coordinator");
 
 /** The in-pass retry budget already burned before a hold (for the emitted attempt count). */
 const HELD_AFTER_ATTEMPTS = 3;
-/** Longer re-drive delay after a terminal alert so persistent outages do not hot-loop. */
+/**
+ * Re-exported alert backoff constant. The batch-infra-hold path itself no longer uses this
+ * (sustained-non-recovery now escalates to writer rework via `escalateInfraHoldToWriter`,
+ * not a longer-backoff loop). Kept exported because the sibling real-merge-drive hold path
+ * (`recoverableDriveHold.ts`) still uses the same alert backoff for its own sustained
+ * non-recovery, and tests assert against this same identity.
+ */
 export const INFRA_HOLD_ALERT_RETRY_AFTER_MS = alertRetryAfterMs;
+
+/**
+ * The discriminated verdict `holdOnInfra` returns. `hold` is the signature-shifting
+ * (recovering) branch the caller honors as-is. `escalate` is the sustained-non-recovery
+ * (v54 #56) branch the caller routes through `escalateInfraHoldToWriter` for writer rework.
+ */
+export type HoldOnInfraVerdict = { kind: "hold"; result: CoordinateResult } | { kind: "escalate"; holds: number };
 
 /**
  * GAP #1 (runaway guard): hold the batch on an infra error that could not recover
@@ -42,12 +62,12 @@ export const INFRA_HOLD_ALERT_RETRY_AFTER_MS = alertRetryAfterMs;
  * (or a permanent error mis-routed to the hold) re-drove the timer FOREVER. Records the
  * hold under the infra failure's stable SIGNATURE, then:
  *   - while the signature keeps SHIFTING (recovering) → emit a RECOVERABLE
- *     merge.batch.infra_blocked + return an `infra_error` hold WITH `retryAfterMs` (the
- *     subscriber re-drives once more);
- *   - once the SAME signature is sustained-non-recovering → emit a TERMINAL
- *     merge.batch.infra_blocked (`terminal: true`) but keep every affected entry queued +
- *     return an `infra_error` hold WITH a longer `retryAfterMs`. The alert is loud, but
- *     recovery remains autonomous.
+ *     merge.batch.infra_blocked + return `{ kind: "hold" }` carrying the `infra_error`
+ *     hold WITH `retryAfterMs` (the subscriber re-drives once more);
+ *   - once the SAME signature is sustained-non-recovering → return `{ kind: "escalate" }`
+ *     so the caller routes the batch to the WRITER via `escalateInfraHoldToWriter`
+ *     (v54 #56). No terminal event is emitted here — the escalator owns the loud
+ *     emission (with `disposition: "escalated_to_writer"`) and the dequeue cascade.
  */
 export async function holdOnInfra(args: {
   ceiling: BatchInfraHoldCeiling;
@@ -58,24 +78,16 @@ export async function holdOnInfra(args: {
   message: string;
   queueDepth: number;
   kind?: "missing_required_credential";
-}): Promise<CoordinateResult> {
+}): Promise<HoldOnInfraVerdict> {
   const { ceiling, events, projectId, batch, message, queueDepth } = args;
   const recorded = await ceiling.record(projectId, message);
   if (recorded.sustainedNonRecovery) {
-    await events.emitInfraBlocked({
-      projectId,
-      batch,
-      message: `batch check infra error is not recovering (same failure across ${recorded.holds} re-drives); alerting and continuing autonomous re-drive: ${message}`,
-      attempts: HELD_AFTER_ATTEMPTS,
-      terminal: true,
-      consecutiveHolds: recorded.holds,
-    });
-    log.error("batch check ALERT on sustained infra non-recovery; continuing autonomous re-drive after backoff", {
+    log.warn("batch check ESCALATING to writer rework on sustained merge-queue infra non-recovery", {
       projectId,
       consecutiveHolds: recorded.holds,
       message,
     });
-    return { projectId, holdReason: "infra_error", retryAfterMs: INFRA_HOLD_ALERT_RETRY_AFTER_MS, queueDepth };
+    return { kind: "escalate", holds: recorded.holds };
   }
   await events.emitInfraBlocked({ projectId, batch, message, attempts: HELD_AFTER_ATTEMPTS });
   // apex-v35 VOLUME guard: back off the re-drive EXPONENTIALLY across consecutive holds
@@ -84,10 +96,13 @@ export async function holdOnInfra(args: {
   // re-check is a hot-loop that re-provokes the limit. Reusing the single-source recoverable
   // curve keeps every merge backoff consistent; the streak count drives the index.
   return {
-    projectId,
-    holdReason: "infra_error",
-    retryAfterMs: recoverableRetryDelayMs(recorded.holds),
-    queueDepth,
+    kind: "hold",
+    result: {
+      projectId,
+      holdReason: "infra_error",
+      retryAfterMs: recoverableRetryDelayMs(recorded.holds),
+      queueDepth,
+    },
   };
 }
 
