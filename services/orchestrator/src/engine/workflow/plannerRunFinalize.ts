@@ -24,6 +24,7 @@ import { resolveWorkflowThrow, type WorkflowErrorDisposition } from "./workflowE
 import type { PreparedRunWorkspace } from "./plannerRunWorkspace.js";
 import type { MergeForRunResult } from "./reviewMerge/index.js";
 import type { PlannerRunContext, PlannerRunResult, RunPlannerLoopInput } from "./plannerRun.js";
+import { finalizeRunCompletedAtomic } from "./runCompletedAtomic.js";
 import type { SubtaskLoopOutcome } from "./subtaskLoop.js";
 import { createLogger } from "../observability/logger.js";
 
@@ -261,13 +262,9 @@ export async function finalizeMergeOutcome(
   // explicitly here; every OTHER merge outcome routes through the unified authority.
   if (outcome === "merged" || (outcome === "queued" && integration === "native_queue")) {
     if (outcome === "merged") await setSpecStatus(input, context, "merged");
-    await finalizeRunState(
-      "completed",
-      "ok",
-      ["running", "queued"],
-      "UPDATE runs SET status = 'completed', outcome = 'ok', ended_at = now() WHERE run_id = $1",
-      [context.runId],
-    );
+    // Atomic run-completed (R5 #1 / task #49) — row + run.completed event in
+    // ONE tx via the new seam; same writer/org fallback as `finalizeGenuineHaltAtomic`.
+    await finalizeRunCompletedAtomic(input, finalizeRunState, context, appendEvent);
     return;
   }
   // `needs_attention` (genuine human-decision) → genuine-halt; every other hold/conflict/
