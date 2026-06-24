@@ -215,6 +215,36 @@ signature, or terminal-arm wiring fails CI uniformly. The doctrine extends:
 >   Fixed with a small fixed-size lookahead window (4 lines) over following
 >   source lines after a `setTimeout(` opener whose same-line window has no kill
 >   verb, with a paired multi-line fixture in the lint's test suite.
+> - **Task #40 (critic-arc R2 NEW#2 / R3 lossy bridge) — RPC phantom-write
+>   creates contradictory terminal events [RESOLVED].** Even with task #39's
+>   atomic seam, a server-side commit whose HTTP response was DROPPED en route
+>   (`HttpRunStateWriter` → `RunStateWriteTransportError`) bubbled into the
+>   finalize-guard catch, which fired `markTaskFailedIfRunningWithEvent` as
+>   recovery. The row UPDATE was already idempotent (`WHERE status='running'`
+>   excludes already-terminal rows), but the event INSERT was NOT — a second
+>   same-type `task.completed` / `task.failed` landed on top of the committed
+>   original, so the timeline carried duplicate (or contradictory, if a
+>   `task.completed` followed by a recovery `task.failed`) terminal events.
+>   Fix (Class B): a partial unique index `events_task_terminal_unique
+(task_id, event_type) WHERE event_type IN ('task.completed','task.failed','task.cancelled')`
+>   plus a new `PgEventStore.appendIfAbsent` that issues `ON CONFLICT DO NOTHING`
+>   against it. `applyUpdateTaskWithEvent` now returns
+>   `{ alreadyTerminal: boolean }` — `true` when the index deduped the retry's
+>   INSERT (the original landed; the retry is a no-op). The HTTP route surfaces
+>   the distinction as `200 { alreadyTerminal: true }` (deduped retry) vs.
+>   `204 No Content` (fresh write); `HttpRunStateWriter` decodes both. The
+>   wrapping helpers (`markTaskDoneWithEvent` / `markTaskFailedWithEvent` /
+>   `markTaskFailedIfRunningWithEvent`) swallow `alreadyTerminal: true` silently
+>   — the work is durably done; the finalize-guard catch path sees no error.
+>   The partial unique index covers `(task_id, event_type)` not `(task_id)`
+>   alone, so the `stageFailureKind.ts` §IDEMPOTENCY doctrine still holds for
+>   the cross-type case: a `task.failed` from the guard's recovery STILL lands
+>   loudly alongside an earlier `task.completed` (different event_type → no
+>   conflict); the row state machine + the `WHERE status='running'` guard
+>   make the row's actual state the truth. Migration: `db/migrations/0016_events_task_terminal_unique.sql`.
+>   The Class A half (PR #674, task #39) is unchanged — the row + event still
+>   commit on ONE transaction; this PR adds the at-most-once-per-(task,type)
+>   guard so a transport-loss retry doesn't contradict the original.
 > - **Task #39 (critic-arc R2 NEW#1 / R3 BLOCKING) — terminal row + terminal
 >   `task.*` event were not atomic [RESOLVED].** The single-finalize invariant
 >   (`autonomy-engine.md` §1c) required the terminal `tasks` row UPDATE and the

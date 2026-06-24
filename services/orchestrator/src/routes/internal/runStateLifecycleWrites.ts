@@ -381,12 +381,13 @@ export function registerRunStateLifecycleRoutes(app: Hono, deps: RunStateWriteRo
     if (!pairParsed.success) {
       return c.json({ error: "invalid_terminal_pair", issues: pairParsed.error.issues }, 422);
     }
+    let outcome: Awaited<ReturnType<typeof applyUpdateTaskWithEvent>>;
     try {
       // The pairing-validated body is the seam's `UpdateTaskWithEventInput` —
       // the row-update shape matches; `event.payload` is the registry-typed
       // payload after the event store's downstream Zod parse (the cast at the
       // seam crosses the generic-payload boundary; the parse is the ground truth).
-      await runWithOrgScope(deps.pool, routeParsed.data.task.orgId, (client) =>
+      outcome = await runWithOrgScope(deps.pool, routeParsed.data.task.orgId, (client) =>
         applyUpdateTaskWithEvent(client, routeParsed.data as Parameters<typeof applyUpdateTaskWithEvent>[1]),
       );
     } catch (error) {
@@ -394,6 +395,19 @@ export function registerRunStateLifecycleRoutes(app: Hono, deps: RunStateWriteRo
         return c.json({ error: "invalid_event_payload", issues: error.issues }, 422);
       }
       throw error;
+    }
+    // Task #40 Class B — RPC phantom-write idempotency. The applier's outcome
+    // distinguishes a FRESH apply from an IDEMPOTENT retry (the partial unique
+    // index `events_task_terminal_unique` deduped the event INSERT because the
+    // original COMMIT already landed but its HTTP response was DROPPED en route).
+    // The data plane uses 200 vs 204 to tell whether the original landed:
+    //   - 204 No Content                      — this call wrote the row + event.
+    //   - 200 { alreadyTerminal: true }       — original already landed; this is a retry.
+    // Either way, the row + event are durable in their original/fresh form; the
+    // data plane's `HttpRunStateWriter` returns the typed outcome to its caller
+    // (the helpers swallow `alreadyTerminal: true` silently).
+    if (outcome.alreadyTerminal) {
+      return c.json({ alreadyTerminal: true }, 200);
     }
     return c.body(null, 204);
   });

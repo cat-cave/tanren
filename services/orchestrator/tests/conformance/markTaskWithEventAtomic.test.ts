@@ -238,6 +238,161 @@ describeDb("markTaskWithEvent atomic terminal-pair (task #39) — real PG, enfor
     const row = await ownerPool().query<{ status: string }>("SELECT status FROM tasks WHERE task_id = $1", [taskId]);
     expect(row.rows[0]?.status).toBe("running");
   });
+
+  // (5) RPC PHANTOM-WRITE IDEMPOTENCY (task #40 Class B) — DIRECT writer path.
+  //
+  // The canonical scenario: a writer call commits its row + terminal event on
+  // the server, but the HTTP response is dropped en route to the data plane;
+  // the data plane retries through the finalize-guard catch (the writer
+  // surfaces a `RunStateWriteTransportError` → bubbles into the guard) which
+  // fires `markTaskFailedIfRunningWithEvent`. Before task #40 Class B, the
+  // retry's event INSERT landed ON TOP of the committed original — the
+  // timeline carried TWO same-type terminal events. With the partial unique
+  // index `events_task_terminal_unique` + `ON CONFLICT DO NOTHING`, the retry
+  // returns `alreadyTerminal: true` and the timeline stays clean (exactly ONE
+  // row of that terminal type).
+  it("(5a) DirectRunStateWriter: second call with same (taskId, terminal type) returns alreadyTerminal=true and does NOT duplicate the event", async () => {
+    const runId = "run_idem_direct_completed";
+    const taskId = "task_idem_direct_completed";
+    await seedRun(ownerPool(), runId);
+    await seedChildTask(ownerPool(), runId, taskId);
+
+    const writer = new DirectRunStateWriter(runtimePool());
+    const input = {
+      task: { taskId, orgId: ORG, transition: "done" as const, outcome: "passed" },
+      event: {
+        runId,
+        taskId,
+        specId: SPEC,
+        projectId: PROJECT,
+        eventType: "task.completed" as const,
+        payload: { taskKind: "write" } as never,
+      },
+    };
+
+    const first = await runWithJobOrgId(ORG, () => writer.updateTaskWithEvent(input));
+    expect(first).toEqual({ alreadyTerminal: false });
+
+    const second = await runWithJobOrgId(ORG, () => writer.updateTaskWithEvent(input));
+    expect(second).toEqual({ alreadyTerminal: true });
+
+    // EXACTLY ONE `task.completed` event for this taskId — the timeline does
+    // not carry a duplicate, and the row stays terminal-`done` (the second
+    // UPDATE was a no-op against the row state machine + the guarded WHERE).
+    const events = await ownerPool().query<{ count: string }>(
+      "SELECT COUNT(*)::text AS count FROM events WHERE task_id = $1 AND event_type = 'task.completed'",
+      [taskId],
+    );
+    expect(events.rows[0]?.count).toBe("1");
+    const row = await ownerPool().query<{ status: string; outcome: string | null }>(
+      "SELECT status, outcome FROM tasks WHERE task_id = $1",
+      [taskId],
+    );
+    expect(row.rows[0]).toMatchObject({ status: "done", outcome: "passed" });
+  });
+
+  // (5b) HTTP route surfaces the SAME idempotency: first call returns 204
+  // (the typed writer outcome `alreadyTerminal: false`); second call returns
+  // 200 `{ alreadyTerminal: true }` (the typed writer outcome surfaces).
+  it("(5b) HttpRunStateWriter: first call returns alreadyTerminal=false, retry returns alreadyTerminal=true (200 vs 204)", async () => {
+    const runId = "run_idem_http_failed";
+    const taskId = "task_idem_http_failed";
+    await seedRun(ownerPool(), runId);
+    await seedChildTask(ownerPool(), runId, taskId);
+
+    const app = createInternalRunStateWriteRoutes({ pool: runtimePool(), verifier: new AllowAllPeerVerifier() });
+    const writer = new HttpRunStateWriter("https://control.internal:3110", fetchInto(app));
+    const input = {
+      task: { taskId, orgId: ORG, transition: "failed_with_kind" as const, failureKind: "crashed" },
+      event: {
+        runId,
+        taskId,
+        specId: SPEC,
+        projectId: PROJECT,
+        eventType: "task.failed" as const,
+        payload: { taskKind: "write", failureKind: "crashed", message: "boom" } as never,
+      },
+    };
+
+    const first = await runWithJobOrgId(ORG, () => writer.updateTaskWithEvent(input));
+    expect(first).toEqual({ alreadyTerminal: false });
+
+    const second = await runWithJobOrgId(ORG, () => writer.updateTaskWithEvent(input));
+    expect(second).toEqual({ alreadyTerminal: true });
+
+    const events = await ownerPool().query<{ count: string }>(
+      "SELECT COUNT(*)::text AS count FROM events WHERE task_id = $1 AND event_type = 'task.failed'",
+      [taskId],
+    );
+    expect(events.rows[0]?.count).toBe("1");
+  });
+
+  // (5c) Cross-type stays UNBLOCKED: the partial unique index is
+  // `(task_id, event_type)`, so a `task.failed` from the finalize-guard
+  // recovery path lands cleanly alongside an earlier `task.completed` (the
+  // row state machine is the truth; the timeline carries both as the loud
+  // signal — preserving `stageFailureKind.ts` §IDEMPOTENCY's intent).
+  //
+  // This case is uncommon in production (the row state machine + the
+  // `WHERE status='running'` guard usually prevents a clean `done` followed
+  // by a guarded `failed_with_kind_if_running`), but the index MUST allow it
+  // — and the second call's failed-if-running UPDATE is a no-op against the
+  // terminal row, so the row stays `done` while the event timeline carries
+  // both the success + the loud `task.failed` signal.
+  it("(5c) different terminal types for the same taskId both land (task.completed then task.failed)", async () => {
+    const runId = "run_idem_cross_type";
+    const taskId = "task_idem_cross_type";
+    await seedRun(ownerPool(), runId);
+    await seedChildTask(ownerPool(), runId, taskId);
+
+    const writer = new DirectRunStateWriter(runtimePool());
+    const completed = await runWithJobOrgId(ORG, () =>
+      writer.updateTaskWithEvent({
+        task: { taskId, orgId: ORG, transition: "done", outcome: "passed" },
+        event: {
+          runId,
+          taskId,
+          specId: SPEC,
+          projectId: PROJECT,
+          eventType: "task.completed",
+          payload: { taskKind: "write" } as never,
+        },
+      }),
+    );
+    expect(completed).toEqual({ alreadyTerminal: false });
+
+    const failed = await runWithJobOrgId(ORG, () =>
+      writer.updateTaskWithEvent({
+        task: { taskId, orgId: ORG, transition: "failed_with_kind_if_running", failureKind: "crashed" },
+        event: {
+          runId,
+          taskId,
+          specId: SPEC,
+          projectId: PROJECT,
+          eventType: "task.failed",
+          payload: { taskKind: "write", failureKind: "crashed", message: "loud" } as never,
+        },
+      }),
+    );
+    // Different terminal event_type for the same task_id — the partial
+    // unique index leaves it untouched, so the loud `task.failed` lands.
+    expect(failed).toEqual({ alreadyTerminal: false });
+
+    const completedEvents = await ownerPool().query<{ count: string }>(
+      "SELECT COUNT(*)::text AS count FROM events WHERE task_id = $1 AND event_type = 'task.completed'",
+      [taskId],
+    );
+    expect(completedEvents.rows[0]?.count).toBe("1");
+    const failedEvents = await ownerPool().query<{ count: string }>(
+      "SELECT COUNT(*)::text AS count FROM events WHERE task_id = $1 AND event_type = 'task.failed'",
+      [taskId],
+    );
+    expect(failedEvents.rows[0]?.count).toBe("1");
+    // Row stays `done` — the `WHERE status='running'` guard on
+    // `failed_with_kind_if_running` is a no-op against a terminal row.
+    const row = await ownerPool().query<{ status: string }>("SELECT status FROM tasks WHERE task_id = $1", [taskId]);
+    expect(row.rows[0]?.status).toBe("done");
+  });
 });
 
 // (5) Pure schema test — exercises the TYPED pairing matrix without a DB.

@@ -35,6 +35,7 @@ import type {
   SetSpecStatusInput,
   UpdateTaskInput,
   UpdateTaskWithEventInput,
+  UpdateTaskWithEventOutcome,
 } from "../contracts/runStateWriter.js";
 import { CostRecorder, type RecordedCost } from "../costs/recorder.js";
 import type { EventName } from "../events/index.js";
@@ -182,7 +183,7 @@ export class DirectRunStateWriter implements RunStateWriter {
     await this.inTaskScope(input.orgId, (client) => applyUpdateTask(client, input));
   }
 
-  async updateTaskWithEvent(input: UpdateTaskWithEventInput): Promise<void> {
+  async updateTaskWithEvent(input: UpdateTaskWithEventInput): Promise<UpdateTaskWithEventOutcome> {
     // Validate the pairing constraint at the SEAM (terminal transition + matching
     // terminal event), so a misuse is rejected BEFORE any DB I/O. The atomic
     // primitive REQUIRES a terminal + matching shape — a non-terminal transition
@@ -197,7 +198,10 @@ export class DirectRunStateWriter implements RunStateWriter {
     // UPDATE + the event INSERT each on their own connection), defeating the whole
     // point of this seam. Other `inTaskScope` callers stay unchanged; THIS method
     // is the only one that fails loud on an unresolved org (mirrors `withJobOrgScope`).
-    await this.inTaskScopeOrThrow(input.task.orgId, (client) => applyUpdateTaskWithEvent(client, input));
+    // Returns the IDEMPOTENT-retry outcome the applier surfaces — `alreadyTerminal:
+    // true` when the partial unique index `events_task_terminal_unique` deduped
+    // the event INSERT (the original landed, this is a retry; task #40 Class B).
+    return this.inTaskScopeOrThrowResult(input.task.orgId, (client) => applyUpdateTaskWithEvent(client, input));
   }
 
   // --- Autonomy loops: the run/spec CREATE writes (explicit-actor, multi-table). ---
@@ -249,5 +253,23 @@ export class DirectRunStateWriter implements RunStateWriter {
       throw new MissingOrgScopeError("DirectRunStateWriter.updateTaskWithEvent");
     }
     await runWithOrgScope(this.pool, resolved, (client) => op(client));
+  }
+
+  /**
+   * Value-returning variant of {@link inTaskScopeOrThrow} (task #40 Class B):
+   * the idempotent-retry outcome (`alreadyTerminal: true/false`) flows out of
+   * the applier inside the org-scoped transaction. Same arm-4 LOUD throw on a
+   * missing org as the void variant — atomicity is the contract, not a
+   * silent degrade.
+   */
+  private async inTaskScopeOrThrowResult<T>(
+    orgId: string | undefined,
+    op: (client: pg.PoolClient) => Promise<T>,
+  ): Promise<T> {
+    const resolved = orgId ?? getJobOrgId();
+    if (resolved === undefined) {
+      throw new MissingOrgScopeError("DirectRunStateWriter.updateTaskWithEvent");
+    }
+    return runWithOrgScope(this.pool, resolved, (client) => op(client));
   }
 }

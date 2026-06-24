@@ -239,6 +239,20 @@ export async function applyUpdateTask(client: QueryClient, input: UpdateTaskInpu
 }
 
 /**
+ * The outcome of an atomic terminal-row + terminal-event apply (task #40 Class B):
+ * tells the caller WHETHER this call's event INSERT landed (`false`) or was
+ * deduped against the partial unique index `events_task_terminal_unique` because
+ * the original write already landed and was retried after a dropped HTTP
+ * response (`true`). Callers that wrap the seam (e.g.
+ * `markTaskDoneWithEvent`) treat `alreadyTerminal: true` as a SILENT success
+ * (the work is durably done) rather than a throwable error.
+ */
+export interface UpdateTaskWithEventOutcome {
+  /** True when the event was already terminal (this call deduped); false when this call wrote it. */
+  alreadyTerminal: boolean;
+}
+
+/**
  * The ATOMIC terminal task row + terminal `task.*` event applier (task #39 —
  * critic-arc R2 NEW#1 / R3 BLOCKING: the prior split issued two separate writes,
  * so a crash/DB failure between them stranded the row terminal-`done` with no
@@ -255,13 +269,28 @@ export async function applyUpdateTask(client: QueryClient, input: UpdateTaskInpu
  * (`task.completed` / `task.failed`), so a misuse cannot route a non-terminal
  * transition through the atomic seam (and a `running` row update + a
  * `task.completed` event is rejected before any DB I/O).
+ *
+ * IDEMPOTENT TERMINAL EVENT INSERT (task #40 Class B — RPC phantom-write
+ * idempotency): the row UPDATE has always been idempotent (the guarded
+ * `WHERE status='running'` transitions are no-op on an already-terminal row);
+ * the event INSERT now is too. The terminal `task.*` event INSERTs through
+ * `PgEventStore.appendIfAbsent`, which is `ON CONFLICT DO NOTHING` against the
+ * partial unique index `events_task_terminal_unique` (task_id, event_type) —
+ * so a server-side COMMIT whose HTTP response was DROPPED + a data-plane
+ * retry (the writer call throws `RunStateWriteTransportError` → bubbles into
+ * the finalize-guard catch → fires `markTaskFailedIfRunningWithEvent`) sees
+ * the original event already landed, returns `alreadyTerminal: true`, and
+ * does NOT contradict the timeline with a second same-type terminal event.
+ * Returns the outcome so the caller (the HTTP route + the wrapping helpers)
+ * surfaces the distinction (HTTP route: 200 vs 204; helpers: silent swallow).
  */
 export async function applyUpdateTaskWithEvent(
   client: TaskLifecycleClient,
   input: UpdateTaskWithEventInput,
-): Promise<void> {
+): Promise<UpdateTaskWithEventOutcome> {
   await applyUpdateTask(client, input.task);
-  await new PgEventStore(client).append(input.event);
+  const inserted = await new PgEventStore(client).appendIfAbsent(input.event);
+  return { alreadyTerminal: !inserted };
 }
 
 // --- Terminal row + event PAIRING schema (task #39) -------------------------

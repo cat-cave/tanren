@@ -226,6 +226,14 @@ export interface MarkTaskTerminalOpts {
  * append its `task.completed` event in ONE org-scoped transaction. Replaces the
  * split `markTaskDone(...)` + a separate `appendEvent("task.completed", ...)`
  * call — see the per-call-site migration notes in PR #674 (task #39).
+ *
+ * IDEMPOTENT RETRY (task #40 Class B): the writer's `updateTaskWithEvent`
+ * returns `{ alreadyTerminal }` — `true` when the server-side commit landed
+ * but its HTTP response was DROPPED en route, and this is a retry whose event
+ * INSERT deduped against the partial unique index `events_task_terminal_unique`.
+ * The original row + event are durable in their original form; we SWALLOW the
+ * `alreadyTerminal: true` outcome silently (the work is durably done — there
+ * is nothing to escalate). This helper returns `void` either way.
  */
 export async function markTaskDoneWithEvent(
   opts: MarkTaskTerminalOpts & {
@@ -234,6 +242,10 @@ export async function markTaskDoneWithEvent(
 ): Promise<void> {
   const { pool, writer, taskId, envelope, appendEventFallback, outcome } = opts;
   if (writer !== undefined) {
+    // The outcome is consumed silently — the seam's idempotency-retry signal
+    // (task #40 Class B) is bookkeeping the helper does NOT propagate; the
+    // caller's view is "the work is done", regardless of whether THIS call or
+    // an earlier dropped-response call actually wrote the row + event.
     await writer.updateTaskWithEvent({
       task: { taskId, transition: "done", outcome },
       event: {
@@ -264,6 +276,11 @@ export async function markTaskDoneWithEvent(
  * `message` carries the safe failure message the writer-failed branches
  * (`window_exhausted` / `crashed` / `timeout`) already emit on the event
  * payload — kept here so the migrated call site is a single combined call.
+ *
+ * IDEMPOTENT RETRY (task #40 Class B): like {@link markTaskDoneWithEvent},
+ * a `{ alreadyTerminal: true }` outcome from the writer is SWALLOWED — the
+ * original `task.failed` already landed and was retried after a dropped HTTP
+ * response. The helper returns `void` either way.
  */
 export async function markTaskFailedWithEvent(
   opts: MarkTaskTerminalOpts & { failureKind: string; message?: string },
@@ -299,9 +316,23 @@ export async function markTaskFailedWithEvent(
  * idempotency primitive — move the task row to `failed` ONLY when it is still
  * `status='running'` AND append `task.failed` in ONE org-scoped transaction. The
  * row UPDATE is no-op when the row is already terminal (a clean branch beat us
- * to `done`); the `task.failed` event ALWAYS lands (the loud timeline signal,
- * per `stageFailureKind.ts` §IDEMPOTENCY). The `message` carries the safe
- * stage-failure message the guard already passes.
+ * to `done`); the `task.failed` event lands the FIRST TIME for this taskId as the
+ * loud timeline signal (per `stageFailureKind.ts` §IDEMPOTENCY). The `message`
+ * carries the safe stage-failure message the guard already passes.
+ *
+ * IDEMPOTENT RETRY (task #40 Class B): this helper is the data plane's recovery
+ * after a dropped HTTP response from a PRIOR `updateTaskWithEvent` — the
+ * canonical phantom-write scenario. The writer's outcome (`alreadyTerminal:
+ * true` when the partial unique index `events_task_terminal_unique` deduped
+ * the SAME-type re-INSERT) is SWALLOWED: the original `task.failed` already
+ * landed at the original commit time, the row + event are durable, and the
+ * caller's view is "the work is done". Returning `void` keeps the
+ * finalize-guard catch path's contract: the recovery call doesn't surface as
+ * a fresh error after the original write already landed. A DIFFERENT-type
+ * cross-terminal case (an earlier `task.completed` already landed) stays
+ * UNBLOCKED by the partial unique index `(task_id, event_type)` — the
+ * `task.failed` lands cleanly alongside it as the loud outage signal (the
+ * row state machine is the truth; the event timeline carries both).
  */
 export async function markTaskFailedIfRunningWithEvent(
   opts: MarkTaskTerminalOpts & { failureKind: string; message: string },
