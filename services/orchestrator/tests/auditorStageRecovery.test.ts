@@ -92,8 +92,14 @@ describe("runAuditorStage — auditor schema-miss recovery", () => {
     expect(h.names()).not.toContain("auditor.verdict");
     // The audit task is marked failed with a distinct kind (not dangling, not passed).
     expect(h.taskOutcomes.get(auditorTaskId)).toBe("auditor_schema_invalid");
-    // The stage still closes the audit task cleanly (the "audit" kind).
-    expect(h.find("task.completed")!.payload.taskKind).toBe("audit");
+    // Audit-trail integrity (critic-arc R1 #5 fix): the EVENT must match the ROW
+    // state. markTaskFailed flipped the row to `failed`; the loud event is now
+    // `task.failed`, NOT `task.completed`. The prior contract emitted
+    // `task.completed` here, which directly contradicted the task table.
+    expect(h.find("task.completed")).toBeUndefined();
+    const taskFailed = h.find("task.failed")!;
+    expect(taskFailed.payload.taskKind).toBe("audit");
+    expect((taskFailed.payload as { failureKind?: string }).failureKind).toBe("auditor_schema_invalid");
   });
 
   it("does NOT swallow a non-schema auditor error (a real infra/timeout throw still propagates)", async () => {
