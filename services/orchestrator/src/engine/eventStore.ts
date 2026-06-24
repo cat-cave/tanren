@@ -28,14 +28,22 @@ export interface EventStore {
 }
 
 /**
- * The set of TERMINAL `task.*` event types the `events_task_terminal_unique`
- * partial unique index covers (task #40 Class B). A re-insert of the SAME
- * terminal type for the same `task_id` conflicts cleanly under
+ * The set of TERMINAL `task.*` + `run.*` event types the partial unique
+ * indexes (`events_task_terminal_unique` for tasks, `events_run_terminal_unique`
+ * for runs — task #40 Class B + task #48) cover. A re-insert of the SAME
+ * terminal type for the same `task_id` / `run_id` conflicts cleanly under
  * `ON CONFLICT DO NOTHING`; any OTHER event type uses {@link PgEventStore.append}
  * — the non-terminal stream still needs every append landing (the timeline
  * carries every transition, not just the last).
  */
-const TERMINAL_TASK_EVENT_TYPES_FOR_INDEX = new Set<string>(["task.completed", "task.failed", "task.cancelled"]);
+const TERMINAL_DEDUPED_EVENT_TYPES = new Set<string>([
+  "task.completed",
+  "task.failed",
+  "task.cancelled",
+  "run.completed",
+  "run.failed",
+  "run.cancelled",
+]);
 
 function parseEventPayload<N extends EventName>(eventType: N, payload: unknown): EventPayload<N> {
   const schema = EventRegistry[eventType];
@@ -125,9 +133,9 @@ export class PgEventStore implements EventStore {
    */
   async appendIfAbsent<N extends EventName>(input: AppendEventInput<N>): Promise<boolean> {
     assertEventName(input.eventType);
-    if (!TERMINAL_TASK_EVENT_TYPES_FOR_INDEX.has(input.eventType)) {
+    if (!TERMINAL_DEDUPED_EVENT_TYPES.has(input.eventType)) {
       throw new Error(
-        `PgEventStore.appendIfAbsent: event type ${input.eventType} is not covered by the events_task_terminal_unique partial index — use append() for non-terminal events`,
+        `PgEventStore.appendIfAbsent: event type ${input.eventType} is not covered by a terminal partial unique index (events_task_terminal_unique / events_run_terminal_unique) — use append() for non-deduped events`,
       );
     }
     const parsed = parseEventPayload(input.eventType, input.payload);

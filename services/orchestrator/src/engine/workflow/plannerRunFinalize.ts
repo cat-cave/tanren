@@ -127,16 +127,79 @@ export async function finalizeNonPass(
  * SINGLE place a terminal outcome's lifecycle writes are applied (re-drive: run halted +
  * spec → `open`; genuine-halt: run failed + spec → `needs_attention`). Reused by every
  * terminal site so the disposition is applied identically.
+ *
+ * Task #48 (run/spec atomicity sweep): the new `updateSpecAtomic` /
+ * `finalizeGenuineHaltAtomic` seams route the spec flip + dag event AND the
+ * genuine-halt run finalize + `run.failed` event through ONE atomic
+ * transaction each (the `RunStateWriter.updateSpecWithEvent` /
+ * `finalizeRunWithEvent` seams — Plan §4 Site A/B). The legacy
+ * `finalizeNonPass` / `setSpecStatus` / `finalizeRunState` seams remain for
+ * the non-terminal-pair paths (the re-drive's run halt is unpaired today;
+ * the merge-stage `merged` flip + `run.completed` are owned by
+ * `finalizeMergeOutcome`).
  */
 function dispositionSeams(
   input: RunPlannerLoopInput,
   finalizeRunState: FinalizeRunState,
   context: PlannerRunContext,
+  appendEvent: <N extends EventName>(eventType: N, payload: EventPayload<N>, taskId?: string) => Promise<void>,
 ): DispositionSeams {
+  const orgId = typeof context.orgId === "string" ? context.orgId : undefined;
   return {
     finalizeRunState,
     finalizeNonPass: (outcome) => finalizeNonPass(finalizeRunState, context.runId, outcome),
     setSpecStatus: (status) => setSpecStatus(input, context, status),
+    updateSpecAtomic: async (spec, event) => {
+      // Atomic path — REQUIRES both the writer + a known org so the row UPDATE
+      // + event INSERT share ONE org-scoped transaction server-side. When
+      // either is missing fall back to the legacy split (the same shape the
+      // pre-#48 code used) so the unit-test harness — which wires neither —
+      // keeps working unchanged.
+      if (input.runStateWriter !== undefined && orgId !== undefined) {
+        await input.runStateWriter.updateSpecWithEvent({
+          spec: {
+            specId: context.specId,
+            orgId,
+            status: spec.status,
+            ...(spec.notFromStatuses !== undefined && { notFromStatuses: spec.notFromStatuses }),
+          },
+          event,
+        });
+        return;
+      }
+      await setSpecStatus(input, context, spec.status);
+      // The fallback emits via the existing event recorder so the
+      // unit-test path captures it identically.
+      await appendEvent(event.eventType, event.payload, event.taskId);
+    },
+    finalizeGenuineHaltAtomic: async (event) => {
+      // Genuine-halt run finalize + `run.failed` event in ONE org-scoped
+      // transaction. Same writer/org fallback rule as `updateSpecAtomic`.
+      if (input.runStateWriter !== undefined && orgId !== undefined) {
+        await input.runStateWriter.finalizeRunWithEvent({
+          finalize: {
+            runId: context.runId,
+            orgId,
+            status: "failed",
+            outcome: "failed",
+            fromStatuses: ["running", "queued"],
+          },
+          event,
+        });
+        return;
+      }
+      // Fallback: the legacy seam writes the row, then the existing
+      // event recorder writes the event — split but byte-identical to
+      // the pre-#48 path.
+      await finalizeRunState(
+        "failed",
+        "failed",
+        ["running", "queued"],
+        "UPDATE runs SET status = 'failed', outcome = 'failed', ended_at = now() WHERE run_id = $1",
+        [context.runId],
+      );
+      await appendEvent(event.eventType, event.payload, event.taskId);
+    },
   };
 }
 
@@ -160,7 +223,7 @@ export async function finalizeNonPassOutcome(
   await applyTerminalOutcome(
     { kind: "non_pass", detail },
     { appendEvent, input, context },
-    dispositionSeams(input, finalizeRunState, context),
+    dispositionSeams(input, finalizeRunState, context, appendEvent),
   );
 }
 
@@ -213,7 +276,7 @@ export async function finalizeMergeOutcome(
   await applyTerminalOutcome(
     { kind: "merge", mergeOutcome: outcome },
     { appendEvent, input, context },
-    dispositionSeams(input, finalizeRunState, context),
+    dispositionSeams(input, finalizeRunState, context, appendEvent),
   );
 }
 
@@ -282,7 +345,7 @@ export async function finalizeWorkflowError(
   const bucket = await applyTerminalOutcome(
     outcome,
     ctx,
-    dispositionSeams(ctx.input, ctx.finalizeRunState, ctx.context),
+    dispositionSeams(ctx.input, ctx.finalizeRunState, ctx.context, ctx.appendEvent),
   );
   return bucket === "genuine_halt" ? "genuine_halt" : "re_drive";
 }

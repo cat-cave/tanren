@@ -54,10 +54,20 @@ class RecordingClient {
   asClient() {
     return this as never;
   }
-  /** The status the guarded `UPDATE specs SET status = '<x>'` targeted, or undefined. */
+  /** The status the guarded `UPDATE specs SET status = ...` targeted, or undefined.
+   * The atomic seam (task #48) uses a PARAMETERIZED `SET status = $2` — the target
+   * status rides $2; the spec_id rides $1; the `notFromStatuses` guard rides $3.
+   * Pre-#48 the orphan path used a LITERAL `SET status = '<x>'` — that shape is
+   * gone now that `parkStrandedSpecInProcess` routes through the shared applier. */
   specUpdateTarget(): string | undefined {
     const q = this.queries.find((x) => x.sql.startsWith("UPDATE specs SET status"));
     if (q === undefined) return undefined;
+    // Parameterized shape (atomic seam): the target status is param $2.
+    if (/SET status = \$2/u.test(q.sql)) {
+      const target = q.params[1];
+      return typeof target === "string" ? target : undefined;
+    }
+    // Legacy literal shape (preserved as a fallback in case any caller still uses it).
     const m = /SET status = '([a-z_]+)'/u.exec(q.sql);
     return m?.[1];
   }

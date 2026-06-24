@@ -21,6 +21,8 @@ import type {
   FinalizeLandInput,
   FinalizeRunInput,
   FinalizeRunResult,
+  FinalizeRunWithEventInput,
+  FinalizeRunWithEventOutcome,
   InsertTaskInput,
   MergeRunVerifiedAncestorShaInput,
   RecordCostInput,
@@ -33,6 +35,8 @@ import type {
   SetRunStatusInput,
   SetSpecMetadataInput,
   SetSpecStatusInput,
+  UpdateSpecWithEventInput,
+  UpdateSpecWithEventOutcome,
   UpdateTaskInput,
   UpdateTaskWithEventInput,
   UpdateTaskWithEventOutcome,
@@ -184,6 +188,41 @@ export class HttpRunStateWriter implements RunStateWriter {
         }
         // 204 (or any other 2xx) means this call wrote the pair fresh.
         return { alreadyTerminal: false };
+      },
+    );
+  }
+
+  async finalizeRunWithEvent(input: FinalizeRunWithEventInput): Promise<FinalizeRunWithEventOutcome> {
+    // The atomic terminal-run finalize + terminal-event seam (task #48 —
+    // the RUN-LEVEL mirror of `updateTaskWithEvent`). Carries the org
+    // explicitly (the worker failure-path holds the run context); the
+    // server runs the row UPDATE + event INSERT in ONE org-scoped
+    // transaction. The route ALWAYS returns 200 with the full outcome JSON
+    // (including specId/projectId from the UPDATE's RETURNING) — the prior
+    // 204-on-fresh-apply path dropped specId/projectId and silently disabled
+    // Site C's parkStrandedSpecRemote never-strand safety net. See route
+    // handler at `/internal/finalize-run-with-event` for the doctrine.
+    return this.postWithStatus<FinalizeRunWithEventOutcome>(
+      "/internal/finalize-run-with-event",
+      input,
+      (_status, body) => body as FinalizeRunWithEventOutcome,
+    );
+  }
+
+  async updateSpecWithEvent(input: UpdateSpecWithEventInput): Promise<UpdateSpecWithEventOutcome> {
+    // The atomic spec-status flip + spec-disposition event seam (task #48 —
+    // the SPEC-LEVEL mirror of `updateTaskWithEvent`). The route returns
+    // 204 on a fresh flip and 200 `{ flipped: false }` when the guard bit
+    // (the spec was already terminal); on the false path the caller suppresses
+    // its event emit (no double-announce).
+    return this.postWithStatus<UpdateSpecWithEventOutcome>(
+      "/internal/update-spec-with-event",
+      input,
+      (status, body) => {
+        if (status === 200) {
+          return body as UpdateSpecWithEventOutcome;
+        }
+        return { flipped: true, alreadyTerminal: false };
       },
     );
   }

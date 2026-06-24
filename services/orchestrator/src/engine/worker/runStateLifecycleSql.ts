@@ -370,3 +370,13 @@ export const terminalPairSchema = z
       "terminal-pair mismatch: transition must pair with the matching task event type (done → task.completed; failed* → task.failed)",
     path: ["event", "eventType"],
   });
+
+// Task #48 atomic seams: `applyFinalizeRunWithEvent` / `applyUpdateSpecWithEvent`
+// + their `runPairSchema` / `specPairSchema` live in `./runStateAtomicSql.ts`
+// (the 500-line cap keeps this file lean; re-exported here so callers see one namespace).
+export {
+  applyFinalizeRunWithEvent,
+  applyUpdateSpecWithEvent,
+  runPairSchema,
+  specPairSchema,
+} from "./runStateAtomicSql.js";

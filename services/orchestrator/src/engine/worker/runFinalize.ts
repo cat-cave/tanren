@@ -10,11 +10,10 @@
 // finalize guard (`status IN (...)`) is applied either way, so a retry is a
 // no-op — exactly-once preserved.
 
-import { runWithJobOrgId, runWithOrgScope, runWithSystemScope } from "@tanren/db";
-import { scalarTextOr } from "../data/scalarText.js";
+import { runWithOrgScope, runWithSystemScope } from "@tanren/db";
 import type pg from "pg";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
-import { PgEventStore } from "../eventStore.js";
+import { applyFinalizeRunWithEvent, applyUpdateSpecWithEvent } from "./runStateLifecycleSql.js";
 import type { ClassifiedRunFailure } from "./runFailureClassifier.js";
 import { createLogger } from "../observability/logger.js";
 import { isWorkflowFinalized, rawCauseOf } from "../workflow/workflowErrorDisposition.js";
@@ -105,33 +104,37 @@ export async function finalizeRunRecoverable(
     });
     return;
   }
+  // Build the `run.failed` event payload ONCE so both paths use the SAME shape.
+  // Task #48 Site C/D: the finalize UPDATE + the `run.failed` event INSERT are
+  // now ATOMIC (one org-scoped transaction) — the prior split was vulnerable to
+  // a crash/DB failure between them stranding the row `halted` with no
+  // `run.failed` event. The `.catch(logFinalizeSwallow)` for the event-append
+  // is REMOVED: atomicity replaces best-effort. A throw inside the seam now
+  // rolls back the row UPDATE too, so a transient hiccup is naturally idempotent
+  // (the next attempt re-tries the whole pair); the partial unique index
+  // `events_run_terminal_unique` + `appendIfAbsent` dedup any retried commit.
+  const runFailedEvent = (specId: string, projectId: string) => ({
+    runId,
+    specId,
+    projectId,
+    eventType: "run.failed" as const,
+    payload: { status: "halted", failureCode: failure.code, stage: failure.stage, message: failure.summary },
+  });
+
   // When a remote writer is wired AND the run has an org, route
   // the finalize (UPDATE runs → halted) + the run.failed event through the
-  // control-plane endpoints. The finalize endpoint applies the SAME
+  // control-plane endpoints atomically. The finalize endpoint applies the SAME
   // `status IN ('running','queued','failed')` guard server-side (exactly-once),
-  // and emits the event only when a row moved — identical to the direct path.
+  // and atomically appends the event when a row moved — identical to the direct path.
   if (writer !== undefined && orgId !== null) {
-    const result = await writer.finalizeRun({
-      runId,
-      orgId,
-      status: "halted",
-      outcome: "halted",
-      fromStatuses: ["running", "queued", "failed"],
+    // Site C: REMOTE atomic finalize. The atomic seam returns the row's
+    // spec/project from RETURNING when the caller passes empty strings on the
+    // event (the worker failure-path does not know them ahead of the finalize).
+    const result = await writer.finalizeRunWithEvent({
+      finalize: { runId, orgId, status: "halted", outcome: "halted", fromStatuses: ["running", "queued", "failed"] },
+      event: runFailedEvent("", ""),
     });
-    if (result.updated) {
-      // The event append carries the run's org via the per-job org-id scope (the
-      // remote writer reads `getJobOrgId()` to scope the server-side INSERT).
-      await runWithJobOrgId(orgId, () =>
-        writer
-          .append({
-            runId,
-            specId: result.specId ?? "",
-            projectId: result.projectId ?? "",
-            eventType: "run.failed",
-            payload: { status: "halted", failureCode: failure.code, stage: failure.stage, message: failure.summary },
-          })
-          .catch((error: unknown) => logFinalizeSwallow("run.failed append (remote)", { runId }, error)),
-      );
+    if (result.updated && result.specId !== undefined && result.specId !== "") {
       // NEVER-STRAND (apex v35): a worker-level force-halt (a crash the workflow's own
       // spec-aware finalize never reached) must not leave the spec at `in_flight` with a
       // dead run. RE-DRIVE it (spec → `open`, `dag.spec.redriven`, guarded so the
@@ -139,12 +142,9 @@ export async function finalizeRunRecoverable(
       // — or, at the consecutive-same-failure cap, genuine-halt `needs_attention`. The
       // crash is TRANSIENT, never a human-decision. A park FAILURE is LOGGED LOUDLY (a stranded
       // spec must never vanish silently), not swallowed.
-      if (result.specId !== undefined && result.specId !== "") {
-        await parkStrandedSpecRemote(pool, writer, orgId, result.specId, result.projectId ?? "", runId, failure).catch(
-          (error: unknown) =>
-            logFinalizeSwallow("stranded-spec park (remote)", { runId, specId: result.specId }, error),
-        );
-      }
+      await parkStrandedSpecRemote(pool, writer, orgId, result.specId, result.projectId ?? "", runId, failure).catch(
+        (error: unknown) => logFinalizeSwallow("stranded-spec park (remote)", { runId, specId: result.specId }, error),
+      );
     }
     return;
   }
@@ -155,39 +155,44 @@ export async function finalizeRunRecoverable(
   // ran with NO ambient scope; this establishes one. A system / null-org job
   // (org_id NULL) — or a context load that itself failed — falls back to the pool,
   // the pre-cohort-3 behavior. Inert in R1; RLS-correct in R3.
+  //
+  // Site D: IN-PROCESS atomic finalize. The applier sources spec/project from
+  // the runs row's RETURNING when the caller passes empty strings; on a row
+  // moved it appends the `run.failed` event in the SAME transaction. No
+  // `.catch(logFinalizeSwallow)` — a throw rolls back the whole pair, so the
+  // row is never stranded `halted` without its event.
+  //
+  // The `applyFinalizeRunWithEvent` input carries `orgId` only as a passthrough
+  // (it is not used by the applier's row UPDATE — the caller's already-opened
+  // org/system scope owns the GUC). The runs row's `org_id` is the truth the
+  // event INSERT reads via `(SELECT org_id FROM projects WHERE project_id = $4)`.
   await withRunFinalizeScope(pool, orgId, async (client) => {
-    const updated = await client.query(
-      "UPDATE runs SET status = 'halted', outcome = 'halted', ended_at = now() WHERE run_id = $1 AND status IN ('running', 'queued', 'failed') RETURNING run_id, spec_id, project_id",
-      [runId],
-    );
-    const row = updated.rows[0] as { spec_id?: unknown; project_id?: unknown } | undefined;
-    if (row !== undefined) {
-      const specId = scalarTextOr(row.spec_id, "");
-      const projectId = scalarTextOr(row.project_id, "");
-      // Mirror the workflow's recoverable-finalize: emit run.failed so the
-      // timeline/notifications surface the worker-level failure. Best-effort —
-      // never let an event write mask the original error path. PgEventStore is
-      // handed the in-scope client so its INSERT joins this transaction.
-      await new PgEventStore(client)
-        .append({
-          runId,
-          specId,
-          projectId,
-          eventType: "run.failed",
-          payload: { status: "halted", failureCode: failure.code, stage: failure.stage, message: failure.summary },
-        })
-        .catch((error: unknown) => logFinalizeSwallow("run.failed append (in-process)", { runId }, error));
-      // NEVER-STRAND (apex v35): RE-DRIVE the orphaned spec (→ `open` + `dag.spec.redriven`,
-      // guarded so a merged spec or the workflow's earlier finalize is a no-op) so the walker
-      // re-attempts — or genuine-halt at the consecutive-same-failure cap. The spec is never
-      // left `in_flight` with a dead run, and a crash is TRANSIENT (re-driven, not parked). A
-      // park FAILURE is LOGGED LOUDLY (a stranded spec must never vanish silently), not swallowed.
-      if (specId !== "") {
-        await parkStrandedSpecInProcess(client, specId, projectId, runId, failure).catch((error: unknown) =>
-          logFinalizeSwallow("stranded-spec park (in-process)", { runId, specId }, error),
-        );
-      }
+    const outcome = await applyFinalizeRunWithEvent(client, {
+      finalize: {
+        runId,
+        // The applier ignores `orgId` (the caller owns the GUC scope above);
+        // pass the run's org through verbatim for HTTP-parity, else a sentinel
+        // for the system-scope path (the null-org / context-load-failed case).
+        orgId: orgId ?? "system",
+        status: "halted",
+        outcome: "halted",
+        fromStatuses: ["running", "queued", "failed"],
+      },
+      event: runFailedEvent("", ""),
+    });
+    if (!outcome.updated || outcome.specId === undefined || outcome.specId === "") {
+      return;
     }
+    const specId = outcome.specId;
+    const projectId = outcome.projectId ?? "";
+    // NEVER-STRAND (apex v35): RE-DRIVE the orphaned spec (→ `open` + `dag.spec.redriven`,
+    // guarded so a merged spec or the workflow's earlier finalize is a no-op) so the walker
+    // re-attempts — or genuine-halt at the consecutive-same-failure cap. The spec is never
+    // left `in_flight` with a dead run, and a crash is TRANSIENT (re-driven, not parked). A
+    // park FAILURE is LOGGED LOUDLY (a stranded spec must never vanish silently), not swallowed.
+    await parkStrandedSpecInProcess(client, specId, projectId, runId, failure).catch((error: unknown) =>
+      logFinalizeSwallow("stranded-spec park (in-process)", { runId, specId }, error),
+    );
   });
 }
 
@@ -305,42 +310,37 @@ async function parkStrandedSpecRemote(
     logStrandSkippedForSuccessor(runId, specId);
     return;
   }
+  // Task #48 Site E / F: the spec flip + the matching event (`dag.spec.redriven`
+  // or `dag.spec.needs_attention`) are now ATOMIC via the writer's
+  // `updateSpecWithEvent` seam (one org-scoped transaction server-side). The
+  // prior split (`setSpecStatus` + `append`) issued two separate writes; the
+  // partial-event landing was a `.catch(logFinalizeSwallow)` best-effort.
+  // Atomicity replaces best-effort.
   if (decideOrphan(failure, slot.consecutive) === "re_drive") {
     // RE-DRIVE: return the spec to `open` (the walker re-enqueues) — never a terminal strand.
-    await writer.setSpecStatus({ specId, orgId, status: "open", notFromStatuses: ["merged", "needs_attention"] });
-    await runWithJobOrgId(orgId, () =>
-      writer
-        .append({
-          runId,
-          specId,
-          projectId,
-          eventType: "dag.spec.redriven",
-          payload: orphanRedrivenPayload(runId, specId, failure, slot.consecutive),
-        })
-        .catch((error: unknown) => logFinalizeSwallow("dag.spec.redriven append (remote)", { runId, specId }, error)),
-    );
-    return;
-  }
-  // GENUINE-HALT (the cap K reached — a persistently-crashing spec): park `needs_attention`.
-  await writer.setSpecStatus({
-    specId,
-    orgId,
-    status: "needs_attention",
-    notFromStatuses: ["merged", "needs_attention"],
-  });
-  await runWithJobOrgId(orgId, () =>
-    writer
-      .append({
+    await writer.updateSpecWithEvent({
+      spec: { specId, orgId, status: "open", notFromStatuses: ["merged", "needs_attention"] },
+      event: {
         runId,
         specId,
         projectId,
-        eventType: "dag.spec.needs_attention",
-        payload: orphanPersistentPayload(runId, specId, failure, slot.consecutive),
-      })
-      .catch((error: unknown) =>
-        logFinalizeSwallow("dag.spec.needs_attention append (remote)", { runId, specId }, error),
-      ),
-  );
+        eventType: "dag.spec.redriven",
+        payload: orphanRedrivenPayload(runId, specId, failure, slot.consecutive),
+      },
+    });
+    return;
+  }
+  // GENUINE-HALT (the cap K reached — a persistently-crashing spec): park `needs_attention`.
+  await writer.updateSpecWithEvent({
+    spec: { specId, orgId, status: "needs_attention", notFromStatuses: ["merged", "needs_attention"] },
+    event: {
+      runId,
+      specId,
+      projectId,
+      eventType: "dag.spec.needs_attention",
+      payload: orphanPersistentPayload(runId, specId, failure, slot.consecutive),
+    },
+  });
 }
 
 /**
@@ -365,24 +365,36 @@ export async function parkStrandedSpecInProcess(
   }
   const consecutive = await readOrphanConsecutive(client, specId, failure);
   const redrive = decideOrphan(failure, consecutive) === "re_drive";
-  // Guard ONLY an occupying spec (`in_flight`/`review`) — a flip that RETURNS the row only
-  // when it moved (idempotent with the workflow's own finalize, no duplicate event).
+  // Task #48 Site G: the guarded spec flip + the matching event are now ATOMIC
+  // via `applyUpdateSpecWithEvent` (the in-process mirror of the writer's
+  // `updateSpecWithEvent`). The prior split (`UPDATE … RETURNING` + a
+  // `.catch(logFinalizeSwallow)` event append) is replaced by ONE applier call
+  // that runs the row UPDATE + event INSERT on the SAME caller client —
+  // atomicity replaces best-effort.
+  //
+  // The applier's spec-status guard is `<> ALL`, mirroring `notFromStatuses`.
+  // Site G's original guard was POSITIVE (`status IN ('in_flight','review')`) —
+  // a spec OUTSIDE the occupying set (open / merged / needs_attention /
+  // cancelled) was skipped. Convert to the equivalent NEGATIVE form: a spec
+  // NOT in those four states is occupying + writable; both target statuses
+  // share the same exclusion list (the same set the original positive
+  // `in_flight,review` guard implied).
   const targetStatus = redrive ? "open" : "needs_attention";
-  const flipped = await client.query(
-    `UPDATE specs SET status = '${targetStatus}'
-       WHERE spec_id = $1 AND status IN ('in_flight', 'review') RETURNING spec_id`,
-    [specId],
-  );
-  if (flipped.rowCount === 0) return;
+  const notFromStatuses = ["open", "merged", "needs_attention", "cancelled"];
   const event = redrive
     ? { eventType: "dag.spec.redriven" as const, payload: orphanRedrivenPayload(runId, specId, failure, consecutive) }
     : {
         eventType: "dag.spec.needs_attention" as const,
         payload: orphanPersistentPayload(runId, specId, failure, consecutive),
       };
-  await new PgEventStore(client)
-    .append({ runId, specId, projectId, ...event })
-    .catch((error: unknown) => logFinalizeSwallow(`${event.eventType} append (in-process)`, { runId, specId }, error));
+  // Use a sentinel `orgId` for the in-process direct applier path — the caller
+  // (`finalizeRunRecoverable`'s `withRunFinalizeScope`) already owns the GUC
+  // scope; the applier's input field is unused by the row UPDATE (the runs row
+  // is the truth) and the event INSERT scopes off the project row's `org_id`.
+  await applyUpdateSpecWithEvent(client, {
+    spec: { specId, orgId: "in-process", status: targetStatus, notFromStatuses },
+    event: { runId, specId, projectId, ...event },
+  });
 }
 
 /**
