@@ -15,6 +15,7 @@
 import { getJobOrgId } from "@tanren/db";
 import type { MtlsFetch } from "../contracts/mtlsChannel.js";
 import type {
+  AppendSpecSteeringInput,
   ClearRunPercolationPendingInput,
   CreateQueuedRunInput,
   CreateSpecRemoteInput,
@@ -130,6 +131,10 @@ export class HttpRunStateWriter implements RunStateWriter {
 
   async setSpecMetadata(input: SetSpecMetadataInput): Promise<void> {
     await this.post<void>("/internal/set-spec-metadata", input);
+  }
+
+  async appendSpecSteering(input: AppendSpecSteeringInput): Promise<void> {
+    await this.post<void>("/internal/append-spec-steering", input);
   }
 
   async setRunSpeculativeBase(input: SetRunSpeculativeBaseInput): Promise<void> {

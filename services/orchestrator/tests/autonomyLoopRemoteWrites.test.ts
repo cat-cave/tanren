@@ -107,6 +107,7 @@ function recordingWriter(): {
     setRunStatus: () => Promise.reject(new Error("unexpected setRunStatus")),
     setRunPrUrl: () => Promise.reject(new Error("unexpected setRunPrUrl")),
     setSpecMetadata: () => Promise.reject(new Error("unexpected setSpecMetadata")),
+    appendSpecSteering: () => Promise.reject(new Error("unexpected appendSpecSteering")),
     supersedeQueuedPlannerTask: () => Promise.reject(new Error("unexpected supersede")),
     insertTask: () => Promise.reject(new Error("unexpected insertTask")),
     updateTask: () => Promise.reject(new Error("unexpected updateTask")),

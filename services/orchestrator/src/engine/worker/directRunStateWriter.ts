@@ -15,6 +15,7 @@ import { MissingOrgScopeError } from "../data/orgScopedDb.js";
 import { scalarTextOr } from "../data/scalarText.js";
 import type pg from "pg";
 import type {
+  AppendSpecSteeringInput,
   ClearRunPercolationPendingInput,
   CreateQueuedRunInput,
   CreateSpecRemoteInput,
@@ -51,6 +52,7 @@ import {
   type SpecRunContract,
 } from "../workflow/projectSpec.js";
 import {
+  applyAppendSpecSteering,
   applyClearRunPercolationPending,
   applyFinalizeRunWithEvent,
   applyInsertTask,
@@ -161,6 +163,10 @@ export class DirectRunStateWriter implements RunStateWriter {
 
   async setSpecMetadata(input: SetSpecMetadataInput): Promise<void> {
     await runWithOrgScope(this.pool, input.orgId, (client) => applySetSpecMetadata(client, input));
+  }
+
+  async appendSpecSteering(input: AppendSpecSteeringInput): Promise<void> {
+    await runWithOrgScope(this.pool, input.orgId, (client) => applyAppendSpecSteering(client, input));
   }
 
   async setRunSpeculativeBase(input: SetRunSpeculativeBaseInput): Promise<void> {
