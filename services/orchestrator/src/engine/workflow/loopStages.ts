@@ -39,7 +39,7 @@ import {
 import { buildConvergencePrompt, buildDemoRunPrompt, buildTriagePrompt } from "./loopStagePrompts.js";
 import { recordAnswererCost, secondsSince, type SubtaskCostContext } from "./subtaskCost.js";
 import { runAnswererStageWithRecovery } from "./loopStageRecovery.js";
-import { runStageWithEmitOnThrow } from "./stageFailureKind.js";
+import { runStageBodyWithFinalizeGuard, wrapEventAppend } from "./stageFailureKind.js";
 import { insertChildTask, markTaskDone } from "./subtaskTasks.js";
 import type { StageAppendEvent } from "./subtaskStages.js";
 import { gateTriagedSpecs, type TriageSpecValidator } from "./loopFindings.js";
@@ -93,6 +93,22 @@ export async function runDemoRunStage(args: DemoRunStageInput): Promise<{ findin
   );
   await args.appendEvent("task.started", { taskKind: "demo" }, demoTaskId);
   await args.appendEvent("demoRun.started", { taskKind: "demo" }, demoTaskId);
+  // WIDER FINALIZE GUARD (task #35): wrap the WHOLE post-row body so a recorder
+  // / event-append throw closes the row loud + emits `task.failed`.
+  return await runStageBodyWithFinalizeGuard({
+    pool: args.pool,
+    writer: args.writer,
+    appendEvent: args.appendEvent,
+    taskId: demoTaskId,
+    taskKind: "demo",
+    body: () => runDemoRunStageBody(args, demoTaskId),
+  });
+}
+
+async function runDemoRunStageBody(
+  args: DemoRunStageInput,
+  demoTaskId: string,
+): Promise<{ findings: Finding[]; demoTaskId: string }> {
   const outputSchema = answererOutputSchemaFor("demoRun", DemoRunAnswer);
   const prompt = buildDemoRunPrompt({
     specTitle: args.specTitle,
@@ -102,23 +118,17 @@ export async function runDemoRunStage(args: DemoRunStageInput): Promise<{ findin
   });
   const startedAt = Date.now();
   // STAGE-LOCAL stall recovery: a transient stall re-drives THIS stage in place; a wedged stage
-  // escalates loudly. A deterministic throw re-throws OUT of `runAnswererStageWithRecovery`;
-  // `runStageWithEmitOnThrow` (apex v51 doctrine sweep) emits `task.failed` then re-throws.
-  const verdict = await runStageWithEmitOnThrow({
-    pool: args.pool,
-    writer: args.writer,
-    appendEvent: args.appendEvent,
-    taskId: demoTaskId,
-    taskKind: "demo",
-    body: () =>
-      runAnswererStageWithRecovery("demoRun", () =>
-        args.adapter.runAnswerer({ prompt, workspace: args.workspacePath, outputSchema }),
-      ),
-  });
+  // escalates loudly. A deterministic throw re-throws OUT of `runAnswererStageWithRecovery`
+  // into the outer finalize guard, which emits `task.failed` + closes the row.
+  const verdict = await runAnswererStageWithRecovery("demoRun", () =>
+    args.adapter.runAnswerer({ prompt, workspace: args.workspacePath, outputSchema }),
+  );
   const runtimeSeconds = secondsSince(startedAt);
   emitStageTiming("demo", Date.now() - startedAt, { runId: args.runId });
   const findings = verdict.findings.map((f) => normalizeFinding(f));
-  await args.appendEvent("demoRun.verdict", { runId: args.runId, summary: verdict.summary, findings }, demoTaskId);
+  await wrapEventAppend(() =>
+    args.appendEvent("demoRun.verdict", { runId: args.runId, summary: verdict.summary, findings }, demoTaskId),
+  );
   await recordAnswererCost({
     ctx: args.costCtx,
     adapter: args.adapter,
@@ -248,6 +258,20 @@ export async function runTriageStage(args: TriageStageInput): Promise<TriageStag
   );
   await args.appendEvent("task.started", { taskKind: "triage" }, triageTaskId);
   await args.appendEvent("triage.started", { taskKind: "triage" }, triageTaskId);
+  // WIDER FINALIZE GUARD (task #35): same shape as demoRun. `gateTriagedSpecs`'s
+  // `PersistentlyInvalidSpecError` is INTENTIONAL — the guard classifies it as
+  // `crashed`, emits `task.failed{crashed}`, re-throws to the run-level catch.
+  return await runStageBodyWithFinalizeGuard({
+    pool: args.pool,
+    writer: args.writer,
+    appendEvent: args.appendEvent,
+    taskId: triageTaskId,
+    taskKind: "triage",
+    body: () => runTriageStageBody(args, triageTaskId),
+  });
+}
+
+async function runTriageStageBody(args: TriageStageInput, triageTaskId: string): Promise<TriageStageResult> {
   const outputSchema = answererOutputSchemaFor("triage", TriageAnswer);
   const prompt = buildTriagePrompt({
     specTitle: args.specTitle,
@@ -256,44 +280,37 @@ export async function runTriageStage(args: TriageStageInput): Promise<TriageStag
     baselineSha: args.baselineSha,
   });
   const startedAt = Date.now();
-  // STAGE-LOCAL stall recovery (see runDemoRunStage). `runStageWithEmitOnThrow` emits
-  // `task.failed` on a deterministic non-stall throw (apex v51 doctrine sweep).
-  const answer = await runStageWithEmitOnThrow({
-    pool: args.pool,
-    writer: args.writer,
-    appendEvent: args.appendEvent,
-    taskId: triageTaskId,
-    taskKind: "triage",
-    body: () =>
-      runAnswererStageWithRecovery("triage", () =>
-        args.adapter.runAnswerer({ prompt, workspace: args.workspacePath, outputSchema }),
-      ),
-  });
+  // STAGE-LOCAL stall recovery (see runDemoRunStage).
+  const answer = await runAnswererStageWithRecovery("triage", () =>
+    args.adapter.runAnswerer({ prompt, workspace: args.workspacePath, outputSchema }),
+  );
   const runtimeSeconds = secondsSince(startedAt);
   emitStageTiming("audit", Date.now() - startedAt, { runId: args.runId });
   const routed: RoutedWorkItem[] = routeTriageItems(answer.workItems, args.posture);
   const routing = summarizeTriageRouting(routed);
   // WORKSTREAM 1 ↔ 2 SEAM — gate every NEW-spec routed item against the spec-quality
   // contract before it materializes. A persistently-invalid spec throws loud
-  // (PersistentlyInvalidSpecError → the run halts → needs_attention), never a silent
-  // commit. Inert when no validator is wired (unit paths).
+  // (PersistentlyInvalidSpecError → the outer guard classifies + the run halts →
+  // needs_attention), never a silent commit. Inert when no validator is wired (unit paths).
   await gateTriagedSpecs(routing.newSpecs, args.specValidator);
-  await args.appendEvent(
-    "triage.completed",
-    {
-      runId: args.runId,
-      taskId: triageTaskId,
-      outcome: routing.outcome,
-      items: routed.map((r) => ({
-        id: r.item.id,
-        kind: r.item.kind,
-        route: r.route,
-        severity: r.item.severity,
-        title: r.item.title,
-        findingIds: [...r.item.findingIds],
-      })),
-    },
-    triageTaskId,
+  await wrapEventAppend(() =>
+    args.appendEvent(
+      "triage.completed",
+      {
+        runId: args.runId,
+        taskId: triageTaskId,
+        outcome: routing.outcome,
+        items: routed.map((r) => ({
+          id: r.item.id,
+          kind: r.item.kind,
+          route: r.route,
+          severity: r.item.severity,
+          title: r.item.title,
+          findingIds: [...r.item.findingIds],
+        })),
+      },
+      triageTaskId,
+    ),
   );
   await recordAnswererCost({
     ctx: args.costCtx,
@@ -362,6 +379,21 @@ export async function runConvergenceStage(args: ConvergenceStageInput): Promise<
   );
   await args.appendEvent("task.started", { taskKind: "convergence" }, convergenceTaskId);
   await args.appendEvent("convergence.started", { taskKind: "convergence" }, convergenceTaskId);
+  // WIDER FINALIZE GUARD (task #35): same shape as demoRun.
+  return await runStageBodyWithFinalizeGuard({
+    pool: args.pool,
+    writer: args.writer,
+    appendEvent: args.appendEvent,
+    taskId: convergenceTaskId,
+    taskKind: "convergence",
+    body: () => runConvergenceStageBody(args, convergenceTaskId),
+  });
+}
+
+async function runConvergenceStageBody(
+  args: ConvergenceStageInput,
+  convergenceTaskId: string,
+): Promise<ConvergenceStageResult> {
   const outputSchema = answererOutputSchemaFor("convergence", ConvergenceAnswer);
   const prompt = buildConvergencePrompt({
     specTitle: args.specTitle,
@@ -376,19 +408,10 @@ export async function runConvergenceStage(args: ConvergenceStageInput): Promise<
   const startedAt = Date.now();
   // STAGE-LOCAL stall recovery (see runDemoRunStage): the cross-loop `consecutiveStalls` state
   // (the spec-level convergence-stall semantics) is UNTOUCHED; only the per-CALL transient
-  // stall recovers here. `runStageWithEmitOnThrow` emits `task.failed` on a deterministic
-  // non-stall throw (apex v51 doctrine sweep).
-  const answer = await runStageWithEmitOnThrow({
-    pool: args.pool,
-    writer: args.writer,
-    appendEvent: args.appendEvent,
-    taskId: convergenceTaskId,
-    taskKind: "convergence",
-    body: () =>
-      runAnswererStageWithRecovery("convergence", () =>
-        args.adapter.runAnswerer({ prompt, workspace: args.workspacePath, outputSchema }),
-      ),
-  });
+  // stall recovers here.
+  const answer = await runAnswererStageWithRecovery("convergence", () =>
+    args.adapter.runAnswerer({ prompt, workspace: args.workspacePath, outputSchema }),
+  );
   const runtimeSeconds = secondsSince(startedAt);
   emitStageTiming("audit", Date.now() - startedAt, { runId: args.runId });
   const loopPScore = totalPScore(args.currentFindings);
@@ -405,27 +428,29 @@ export async function runConvergenceStage(args: ConvergenceStageInput): Promise<
   // (`regressed`) when the deterministic oscillation backstop fired (a return to a prior
   // unresolved blocker). Surfaced on the event so the timeline shows the structural override.
   const effectiveProgress = effectiveBlockingProgress(answer.blockingRootCauseProgress, state.blockingHistory);
-  await args.appendEvent(
-    "convergence.assessed",
-    {
-      runId: args.runId,
-      taskId: convergenceTaskId,
-      assessment: answer.assessment,
-      // The v24 cause-not-symptom signal: progress on the BLOCKING root cause + its
-      // stable identity, so the timeline shows WHY a loop stalled (the blocker recurred
-      // unchanged) even when peripheral findings moved. The EFFECTIVE progress reflects the
-      // v40 oscillation backstop — a proven structural A→B→A→B cycle is surfaced as `regressed` even
-      // when the answerer narrated `retired`, so the timeline shows the deterministic override.
-      blockingRootCauseProgress: effectiveProgress,
-      blockingRootCauseId: answer.blockingRootCauseId,
-      // The intelligent escalation verdict — the "would a human add value beyond keep going?"
-      // gate that decides a halt (replacing the old consecutive-stall count).
-      escalation: answer.escalation,
-      decision,
-      consecutiveStalls: state.consecutiveStalls,
-      reasoning: answer.reasoning,
-    },
-    convergenceTaskId,
+  await wrapEventAppend(() =>
+    args.appendEvent(
+      "convergence.assessed",
+      {
+        runId: args.runId,
+        taskId: convergenceTaskId,
+        assessment: answer.assessment,
+        // The v24 cause-not-symptom signal: progress on the BLOCKING root cause + its
+        // stable identity, so the timeline shows WHY a loop stalled (the blocker recurred
+        // unchanged) even when peripheral findings moved. The EFFECTIVE progress reflects the
+        // v40 oscillation backstop — a proven structural A→B→A→B cycle is surfaced as `regressed` even
+        // when the answerer narrated `retired`, so the timeline shows the deterministic override.
+        blockingRootCauseProgress: effectiveProgress,
+        blockingRootCauseId: answer.blockingRootCauseId,
+        // The intelligent escalation verdict — the "would a human add value beyond keep going?"
+        // gate that decides a halt (replacing the old consecutive-stall count).
+        escalation: answer.escalation,
+        decision,
+        consecutiveStalls: state.consecutiveStalls,
+        reasoning: answer.reasoning,
+      },
+      convergenceTaskId,
+    ),
   );
   await recordAnswererCost({
     ctx: args.costCtx,

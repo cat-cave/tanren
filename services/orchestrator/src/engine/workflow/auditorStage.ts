@@ -21,7 +21,12 @@ import type { AnswererAdapter } from "../providers/types.js";
 import { AnswererSchemaValidationError } from "../providers/codex.js";
 import { auditorFindings, invokeAuditor, type AuditorSpecContext } from "./auditor/auditor.js";
 import { runAnswererStageWithRecovery } from "./loopStageRecovery.js";
-import { classifyStageFailureKind, stageFailureMessage } from "./stageFailureKind.js";
+import {
+  classifyStageFailureKind,
+  runStageBodyWithFinalizeGuard,
+  stageFailureMessage,
+  wrapEventAppend,
+} from "./stageFailureKind.js";
 import { recordAnswererCost, secondsSince, type SubtaskCostContext } from "./subtaskCost.js";
 import { insertChildTask, markTaskDone, markTaskFailed } from "./subtaskTasks.js";
 import type { StageAppendEvent } from "./subtaskStages.js";
@@ -85,32 +90,48 @@ export async function runAuditorStage(args: AuditorStageInput): Promise<AuditorS
     subtasks: args.plan.subtasks,
     baselineSha: args.baseSha ?? "HEAD",
   };
+  // SCHEMA-MISS PATH (KEPT OUTSIDE THE GUARD): a parse miss is an IN-STAGE RECOVERY,
+  // not a failure — it becomes the synthetic P0 (fail-closed) so the loop's triage
+  // routes a fix-in-spec task instead of dead-ending. The guard's `task.failed` emit
+  // would conflict with the schema-miss path's own `task.failed` emit, so the
+  // schema-miss try/catch lives at this outer layer and returns early.
   const startedAt = Date.now();
   let result: Awaited<ReturnType<typeof invokeAuditor>>;
   try {
     // STAGE-LOCAL stall recovery: a TRANSIENT stall re-drives the auditor IN PLACE
-    // (sibling progress preserved); a wedged auditor escalates loudly. Schema-miss
-    // recovery + the apex v51 per-stage emit-on-throw are split in the catch below.
+    // (sibling progress preserved); a wedged auditor escalates loudly.
     result = await runAnswererStageWithRecovery("auditor", () =>
       invokeAuditor(args.adapter, { context: auditorContext, workspace: args.workspacePath }),
     );
   } catch (error) {
-    // SCHEMA-MISS PATH: a parse miss becomes the synthetic P0 (fail-closed) so the loop's
-    // triage routes a fix-in-spec task instead of dead-ending. NON-schema throws get the
-    // apex v51 per-stage `task.failed` emit-on-throw treatment so the auditor task row
-    // never strands `running` on a real throw — same shape as the planner gap.
     if (error instanceof AnswererSchemaValidationError) {
       return await failClosedForSchemaMiss(args, auditorTaskId, error);
     }
-    const failureKind = classifyStageFailureKind(error);
-    await markTaskFailed(args.pool, auditorTaskId, failureKind, args.writer);
-    await args.appendEvent(
-      "task.failed",
-      { taskKind: "audit", failureKind, message: stageFailureMessage(error) },
-      auditorTaskId,
-    );
-    throw error;
+    // NON-schema throw from the answerer: route through the wider finalize guard
+    // semantics by re-throwing into a guard wrapper. We emit the failure here
+    // directly (mirroring runStageBodyWithFinalizeGuard) since the schema-miss
+    // try/catch already owns this layer's catch — keep the audit-trail integrity.
+    return await emitAuditorAnswererThrow(args, auditorTaskId, error);
   }
+  // WIDER FINALIZE GUARD (task #35): wrap the cost-record + verdict-event + terminal
+  // row + terminal-event block so a recorder / event-append throw closes the row
+  // loud + emits `task.failed` (rather than stranding the row in `running`).
+  return await runStageBodyWithFinalizeGuard({
+    pool: args.pool,
+    writer: args.writer,
+    appendEvent: args.appendEvent,
+    taskId: auditorTaskId,
+    taskKind: "audit",
+    body: () => runAuditorTerminalBlock(args, auditorTaskId, result, startedAt),
+  });
+}
+
+async function runAuditorTerminalBlock(
+  args: AuditorStageInput,
+  auditorTaskId: string,
+  result: Awaited<ReturnType<typeof invokeAuditor>>,
+  startedAt: number,
+): Promise<AuditorStageResult> {
   const runtimeSeconds = secondsSince(startedAt);
   emitStageTiming("audit", Date.now() - startedAt, { runId: args.runId });
   // SPEC-LOOP REDESIGN: the auditor emits FINDINGS as its sole currency. `findings` is
@@ -119,7 +140,9 @@ export async function runAuditorStage(args: AuditorStageInput): Promise<AuditorS
   // `?? []`): a clean `[]` here can ONLY mean the auditor explicitly emitted an empty
   // list, never a missing/omitted one (that would have failed to parse upstream).
   const findings = auditorFindings(result.verdict);
-  await args.appendEvent("auditor.verdict", { runId: args.runId, findings }, auditorTaskId);
+  // PRE-TERMINAL `auditor.verdict` wrapped: a throw here lands as
+  // `event_append_failed` rather than the fail-closed `crashed`.
+  await wrapEventAppend(() => args.appendEvent("auditor.verdict", { runId: args.runId, findings }, auditorTaskId));
   await recordAnswererCost({
     ctx: args.costCtx,
     adapter: args.adapter,
@@ -132,6 +155,25 @@ export async function runAuditorStage(args: AuditorStageInput): Promise<AuditorS
   await markTaskDone(args.pool, auditorTaskId, "passed", args.writer);
   await args.appendEvent("task.completed", { taskKind: "audit" }, auditorTaskId);
   return { findings, auditorTaskId };
+}
+
+// Replay the prior apex v51 emit-on-throw shape for a non-schema auditor-answerer
+// throw, kept HERE (outside the finalize guard) because the schema-miss branch
+// shares this catch layer — the wider task #35 guard wraps only the post-answerer
+// terminal block to avoid colliding with the schema-miss path's own emits.
+async function emitAuditorAnswererThrow(
+  args: AuditorStageInput,
+  auditorTaskId: string,
+  error: unknown,
+): Promise<never> {
+  const failureKind = classifyStageFailureKind(error);
+  await markTaskFailed(args.pool, auditorTaskId, failureKind, args.writer);
+  await args.appendEvent(
+    "task.failed",
+    { taskKind: "audit", failureKind, message: stageFailureMessage(error) },
+    auditorTaskId,
+  );
+  throw error;
 }
 
 // The synthetic P0 a schema-parse miss yields so the loop's triage routes a fix-in-spec

@@ -16,6 +16,7 @@ import {
   type WriterAdapter,
   type WriterResult,
 } from "../providers/types.js";
+import { CostRecordError } from "./stageFailureKind.js";
 import type { AppendEvent } from "./subtaskLoop.js";
 
 // The classified exit reason of the writer call whose cost is being recorded.
@@ -169,21 +170,30 @@ export async function recordAnswererCost<TOutput>(input: AnswererCostInput<TOutp
   // the budget gate's fail-closed `unpriced_spend` pause trips on permanently when
   // ccusage cannot price the window. null on BYOK / no generation id (no estimate).
   const realProviderCostUsd = await captureRealProviderCostUsd(input.ctx, tokenUsage, input.taskId);
-  await input.ctx.recorder.record(
-    {
-      runId: input.ctx.runId,
-      taskId: input.taskId,
-      specId: input.ctx.specId,
-      projectId: input.ctx.projectId,
-      cli: input.adapter.cli,
-      model: input.model,
-      authRef: input.adapter.authRef,
-      runtimeSeconds: input.runtimeSeconds,
-      realProviderCostUsd,
-    },
-    tokenUsage ?? emptyTokenUsage,
-    input.rawUsage,
-  );
+  // FINALIZE GUARD (task #35): a throw from `recorder.record` (DB INSERT / RLS /
+  // schema drift) is RE-RAISED as `CostRecordError` so the outer
+  // `runStageBodyWithFinalizeGuard` classifies it deterministically as
+  // `failureKind: "cost_record_failed"` — rather than landing in the fail-closed
+  // `crashed` default and stranding the task row in `status='running'` forever.
+  try {
+    await input.ctx.recorder.record(
+      {
+        runId: input.ctx.runId,
+        taskId: input.taskId,
+        specId: input.ctx.specId,
+        projectId: input.ctx.projectId,
+        cli: input.adapter.cli,
+        model: input.model,
+        authRef: input.adapter.authRef,
+        runtimeSeconds: input.runtimeSeconds,
+        realProviderCostUsd,
+      },
+      tokenUsage ?? emptyTokenUsage,
+      input.rawUsage,
+    );
+  } catch (error) {
+    throw new CostRecordError(error);
+  }
   // A REAL answerer call missing token telemetry (undefined / all-zero) is
   // mandatory-accounting drift — surface it LOUDLY, distinct from a genuine
   // zero-token call. A real call that DID surface tokens stays quiet (the working
@@ -203,21 +213,27 @@ export async function recordWriterCost(input: WriterCostInput): Promise<void> {
   // MANAGED OpenRouter run: query the REAL `usage.cost` for this call's generation
   // id so cost_usd is a metered FACT (`provider_response`). null on BYOK / no id.
   const realProviderCostUsd = await captureRealProviderCostUsd(input.ctx, input.tokenUsage, input.taskId);
-  await input.ctx.recorder.record(
-    {
-      runId: input.ctx.runId,
-      taskId: input.taskId,
-      specId: input.ctx.specId,
-      projectId: input.ctx.projectId,
-      cli: input.adapter.cli,
-      model: "tanren-writer",
-      authRef: input.adapter.authRef,
-      runtimeSeconds: input.runtimeSeconds,
-      realProviderCostUsd,
-    },
-    tokens,
-    input.rawUsage,
-  );
+  // FINALIZE GUARD (task #35): see recordAnswererCost above — re-raise as
+  // `CostRecordError` so the outer guard classifies as `cost_record_failed`.
+  try {
+    await input.ctx.recorder.record(
+      {
+        runId: input.ctx.runId,
+        taskId: input.taskId,
+        specId: input.ctx.specId,
+        projectId: input.ctx.projectId,
+        cli: input.adapter.cli,
+        model: "tanren-writer",
+        authRef: input.adapter.authRef,
+        runtimeSeconds: input.runtimeSeconds,
+        realProviderCostUsd,
+      },
+      tokens,
+      input.rawUsage,
+    );
+  } catch (error) {
+    throw new CostRecordError(error);
+  }
   // A REAL writer call missing token telemetry looks like a zero-token call —
   // surface it LOUDLY, distinct from a genuine zero-token call. The discriminant
   // is exitReason:

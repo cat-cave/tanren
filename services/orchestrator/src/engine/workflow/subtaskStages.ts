@@ -27,7 +27,7 @@ import {
 } from "./checker/checker.js";
 import { invokePlanner, type PlannerRejectionFeedback, type PlannerSpecContext } from "./planner/planner.js";
 import { runAnswererStageWithRecovery } from "./loopStageRecovery.js";
-import { runStageWithEmitOnThrow } from "./stageFailureKind.js";
+import { runStageBodyWithFinalizeGuard, wrapEventAppend } from "./stageFailureKind.js";
 import { recordAnswererCost, secondsSince, type SubtaskCostContext } from "./subtaskCost.js";
 import { insertChildTask, markTaskDone } from "./subtaskTasks.js";
 
@@ -52,38 +52,52 @@ export interface PlannerStageInput {
 }
 
 export async function runPlannerStage(args: PlannerStageInput): Promise<PlanAnswer> {
-  const startedAt = Date.now();
-  // apex v51 per-stage `task.failed` emit-on-throw — see runStageWithEmitOnThrow.
-  const result = await runStageWithEmitOnThrow({
+  // WIDER FINALIZE GUARD (task #35): wrap the WHOLE post-row body — invokePlanner +
+  // the `planner.subtasks.emitted` event + recordAnswererCost — so a throw ANYWHERE
+  // (including the cost recorder firing mid-stage) closes the row loud + emits
+  // exactly one `task.failed`. The planner row's TERMINAL close happens externally
+  // in `subtaskLoop.ts` (the orchestration owns the planner's done/failed state);
+  // `markTaskFailedIfRunning` in the guard is the idempotency primitive — a row a
+  // clean branch already moved to `done` is left alone, the loud signal is the
+  // `task.failed` event on the timeline.
+  return await runStageBodyWithFinalizeGuard({
     pool: args.pool,
     appendEvent: args.appendEvent,
     taskId: args.plannerTaskId,
     taskKind: "plan",
-    body: () =>
-      invokePlanner(args.adapter, {
-        spec: args.spec,
-        workspace: args.workspacePath,
-        rejectionHistory: args.rejectionHistory,
-      }),
+    body: () => runPlannerStageBody(args),
+  });
+}
+
+async function runPlannerStageBody(args: PlannerStageInput): Promise<PlanAnswer> {
+  const startedAt = Date.now();
+  const result = await invokePlanner(args.adapter, {
+    spec: args.spec,
+    workspace: args.workspacePath,
+    rejectionHistory: args.rejectionHistory,
   });
   const runtimeSeconds = secondsSince(startedAt);
   // stage-transition latency as a structured timing log (no schema).
   emitStageTiming("plan", Date.now() - startedAt, { runId: args.runId, attempt: args.attempt });
-  await args.appendEvent(
-    "planner.subtasks.emitted",
-    {
-      runId: args.runId,
-      taskId: args.plannerTaskId,
-      subtasks: result.plan.subtasks.map((subtask) => ({
-        index: subtask.index,
-        title: subtask.title,
-        intent: subtask.intent,
-        estimatedTokens: subtask.estimatedTokens,
-        behaviorIds: [...subtask.behaviorIds],
-      })),
-      rationale: result.plan.rationale,
-    },
-    args.plannerTaskId,
+  // PRE-TERMINAL event append wrapped so a transport throw lands as
+  // `event_append_failed` rather than the fail-closed `crashed` default.
+  await wrapEventAppend(() =>
+    args.appendEvent(
+      "planner.subtasks.emitted",
+      {
+        runId: args.runId,
+        taskId: args.plannerTaskId,
+        subtasks: result.plan.subtasks.map((subtask) => ({
+          index: subtask.index,
+          title: subtask.title,
+          intent: subtask.intent,
+          estimatedTokens: subtask.estimatedTokens,
+          behaviorIds: [...subtask.behaviorIds],
+        })),
+        rationale: result.plan.rationale,
+      },
+      args.plannerTaskId,
+    ),
   );
   await recordAnswererCost({
     ctx: args.costCtx,
@@ -217,6 +231,22 @@ export async function runCheckerStage(args: CheckerStageInput): Promise<CheckerD
   await args.appendEvent("task.started", { taskKind: "check" }, args.checkerTaskId);
   await args.appendEvent("checker.started", { taskKind: "check" }, args.checkerTaskId);
 
+  // WIDER FINALIZE GUARD (task #35): wrap the WHOLE post-row body — entity-risk
+  // derivation + invokeChecker (via recovery) + the `checker.verdict` event + cost
+  // + the reject/pass terminal branch — so a throw ANYWHERE closes the row loud +
+  // emits exactly one `task.failed`. Supersedes the prior inner
+  // `runStageWithEmitOnThrow` (which only covered the answerer call).
+  return await runStageBodyWithFinalizeGuard({
+    pool: args.pool,
+    writer: args.writer,
+    appendEvent: args.appendEvent,
+    taskId: args.checkerTaskId,
+    taskKind: "check",
+    body: () => runCheckerStageBody(args),
+  });
+}
+
+async function runCheckerStageBody(args: CheckerStageInput): Promise<CheckerDecision> {
   // §3.1: derive the deterministic entity-risk signal BEFORE the LLM judgement,
   // emit it as the observable pre-LLM classification, and use it to steer the
   // checker posture. The signal is produced HOST-SIDE (the wired producer shells
@@ -235,20 +265,22 @@ export async function runCheckerStage(args: CheckerStageInput): Promise<CheckerD
       { subtaskIndex: args.subtask.index, provenance: riskSignal.provenance, rationale: riskSignal.rationale },
     );
   }
-  await args.appendEvent(
-    "checker.entity_risk",
-    {
-      runId: args.runId,
-      taskId: args.checkerTaskId,
-      subtaskIndex: args.subtask.index,
-      riskClass: riskSignal.riskClass,
-      provenance: riskSignal.provenance,
-      unexpectedFailure: isUnexpectedRiskFailure(riskSignal.provenance),
-      scrutiny: riskPosture.scrutiny,
-      rationale: riskSignal.rationale,
-      counts: riskSignal.counts,
-    },
-    args.checkerTaskId,
+  await wrapEventAppend(() =>
+    args.appendEvent(
+      "checker.entity_risk",
+      {
+        runId: args.runId,
+        taskId: args.checkerTaskId,
+        subtaskIndex: args.subtask.index,
+        riskClass: riskSignal.riskClass,
+        provenance: riskSignal.provenance,
+        unexpectedFailure: isUnexpectedRiskFailure(riskSignal.provenance),
+        scrutiny: riskPosture.scrutiny,
+        rationale: riskSignal.rationale,
+        counts: riskSignal.counts,
+      },
+      args.checkerTaskId,
+    ),
   );
 
   const checkerContext: CheckerSubtaskContext = {
@@ -262,19 +294,10 @@ export async function runCheckerStage(args: CheckerStageInput): Promise<CheckerD
   };
   const startedAt = Date.now();
   // STAGE-LOCAL stall recovery: a transient checker stall re-drives THIS call in place; a
-  // wedged checker escalates loudly. apex v51 per-stage `task.failed` emit-on-throw wraps
-  // the re-throw so the checker task never strands `running`.
-  const result = await runStageWithEmitOnThrow({
-    pool: args.pool,
-    writer: args.writer,
-    appendEvent: args.appendEvent,
-    taskId: args.checkerTaskId,
-    taskKind: "check",
-    body: () =>
-      runAnswererStageWithRecovery("checker", () =>
-        invokeChecker(args.adapter, { context: checkerContext, workspace: args.workspacePath }),
-      ),
-  });
+  // wedged checker escalates loudly.
+  const result = await runAnswererStageWithRecovery("checker", () =>
+    invokeChecker(args.adapter, { context: checkerContext, workspace: args.workspacePath }),
+  );
   const runtimeSeconds = secondsSince(startedAt);
   emitStageTiming("check", Date.now() - startedAt, {
     runId: args.runId,
@@ -294,24 +317,28 @@ export async function runCheckerStage(args: CheckerStageInput): Promise<CheckerD
   // deterministic loop's read (no findings ⇒ task-complete for downstream needs); the
   // findings + reasoning are the narration. `decideCheckerOutcome` is the SAME read.
   const decision = decideCheckerOutcome(result.verdict, emptyIncrementalDiff);
-  await args.appendEvent(
-    "checker.verdict",
-    {
-      runId: args.runId,
-      taskId: args.checkerTaskId,
-      subtaskIndex: args.subtask.index,
-      complete: decision.kind === "pass",
-      reasoning: result.verdict.reasoning,
-      behaviorIdsFailed: decision.kind === "reject" ? [...decision.behaviorIdsFailed] : [],
-      findings: result.verdict.findings.map((f) => ({
-        id: f.id,
-        title: f.title,
-        body: f.body,
-        behaviorId: f.behaviorId ?? null,
-      })),
-      emptyIncrementalDiff,
-    },
-    args.checkerTaskId,
+  // PRE-TERMINAL `checker.verdict` wrapped: a throw here lands as
+  // `event_append_failed` (rather than the fail-closed `crashed`).
+  await wrapEventAppend(() =>
+    args.appendEvent(
+      "checker.verdict",
+      {
+        runId: args.runId,
+        taskId: args.checkerTaskId,
+        subtaskIndex: args.subtask.index,
+        complete: decision.kind === "pass",
+        reasoning: result.verdict.reasoning,
+        behaviorIdsFailed: decision.kind === "reject" ? [...decision.behaviorIdsFailed] : [],
+        findings: result.verdict.findings.map((f) => ({
+          id: f.id,
+          title: f.title,
+          body: f.body,
+          behaviorId: f.behaviorId ?? null,
+        })),
+        emptyIncrementalDiff,
+      },
+      args.checkerTaskId,
+    ),
   );
   await recordAnswererCost({
     ctx: args.costCtx,
@@ -328,16 +355,19 @@ export async function runCheckerStage(args: CheckerStageInput): Promise<CheckerD
   });
   if (decision.kind === "reject") {
     await markTaskDone(args.pool, args.checkerTaskId, "rejected_by_checker", args.writer);
-    await args.appendEvent(
-      "checker.rejected",
-      {
-        runId: args.runId,
-        taskId: args.checkerTaskId,
-        subtaskIndex: args.subtask.index,
-        reason: decision.reason,
-        behaviorIdsFailed: [...decision.behaviorIdsFailed],
-      },
-      args.checkerTaskId,
+    // PRE-TERMINAL `checker.rejected` wrapped for the same reason.
+    await wrapEventAppend(() =>
+      args.appendEvent(
+        "checker.rejected",
+        {
+          runId: args.runId,
+          taskId: args.checkerTaskId,
+          subtaskIndex: args.subtask.index,
+          reason: decision.reason,
+          behaviorIdsFailed: [...decision.behaviorIdsFailed],
+        },
+        args.checkerTaskId,
+      ),
     );
     await args.appendEvent("task.completed", { taskKind: "check" }, args.checkerTaskId);
     return decision;

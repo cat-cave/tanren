@@ -193,6 +193,9 @@ export interface SetSpecStatusInput {
  *   - `done`                          → status='done', outcome=$outcome, ended_at=now()
  *   - `failed`                        → status='failed', outcome='failed', ended_at=now()
  *   - `failed_with_kind`              → + failure_kind=$failureKind
+ *   - `failed_with_kind_if_running`   → + failure_kind=$failureKind, guarded by `WHERE status='running'`
+ *                                       (the finalize-guard idempotency primitive: a post-success
+ *                                       throw leaves an already-`done` row alone)
  *   - `cancelled`                     → status='cancelled', outcome='cancelled', ended_at=now()
  */
 export type TaskTransition =
@@ -204,6 +207,7 @@ export type TaskTransition =
   | "done"
   | "failed"
   | "failed_with_kind"
+  | "failed_with_kind_if_running"
   | "cancelled";
 
 /** A single task-row status move by `task_id`. */

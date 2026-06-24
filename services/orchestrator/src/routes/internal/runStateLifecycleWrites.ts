@@ -143,6 +143,7 @@ const updateTaskSchema = z.object({
     "done",
     "failed",
     "failed_with_kind",
+    "failed_with_kind_if_running",
     "cancelled",
   ]),
   outcome: z.string().min(1).optional(),
