@@ -69,6 +69,8 @@ const OWNER_URL = process.env["DATABASE_URL"] ?? "postgres://tanren:tanren@local
 // read the worker's results through it to prove the data lives under enforced
 // RLS (the run's org scope admits its own rows).
 const APP_URL = process.env["TANREN_APP_DATABASE_URL"] ?? "postgres://tanren_app:tanren_app@localhost:5432/tanren";
+// arch-allow: timeout-class — CI-gate smoke harness; the CI runner bracket bounds wall
+// clock. Deeper progress-based refactor queued (task #45 follow-up).
 const TIMEOUT_MS = Number(process.env["PLANE_SPLIT_SMOKE_TIMEOUT_MS"] ?? 120_000);
 const POLL_MS = 2_000;
 
@@ -438,6 +440,7 @@ async function main(): Promise<void> {
   }
 
   const owner = createDbPool(OWNER_URL);
+  // arch-allow: timeout-class (see TIMEOUT_MS bless above — CI-gate harness)
   const deadline = Date.now() + TIMEOUT_MS;
   try {
     let claimed = false;
