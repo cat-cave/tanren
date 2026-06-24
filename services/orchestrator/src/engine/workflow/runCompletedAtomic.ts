@@ -1,12 +1,13 @@
 // Success-path run finalize: row → completed/ok + `run.completed` event in ONE
-// org-scoped transaction via the new `finalizeRunWithEvent` seam (#676's
-// primitive). Critic-arc R5 #1 fix / task #49 — pre-fix the success path was
-// row-only, leaving `runs.status='completed'` rows with no audit-trail
-// terminal event. Mirrors `finalizeGenuineHaltAtomic` (failure path); same
-// writer/org fallback rule for the unit-test harnesses that wire neither.
+// org-scoped transaction. Three-arm dispatch (R5 #1 + #2 fixes / tasks #49+#50):
+// (1) writer+orgId → remote atomic; (2) orgId, no writer → in-process direct
+// atomic via runWithOrgScope; (3) no orgId → unit-test legacy split.
+import { runWithOrgScope } from "@tanren/db";
+import type pg from "pg";
 import type { EventName, EventPayload } from "../events/index.js";
 import type { FinalizeRunState } from "./plannerRunFinalize.js";
 import type { PlannerRunContext, RunPlannerLoopInput } from "./plannerRun.js";
+import { applyFinalizeRunWithEvent } from "../worker/runStateAtomicSql.js";
 
 export async function finalizeRunCompletedAtomic(
   input: RunPlannerLoopInput,
@@ -35,7 +36,19 @@ export async function finalizeRunCompletedAtomic(
     });
     return;
   }
-  // Fallback for unit-test harnesses that wire neither writer nor org.
+  if (orgId !== undefined && typeof (input.pool as { connect?: unknown }).connect === "function") {
+    const finalizeInput = {
+      runId: context.runId,
+      orgId,
+      status: "completed",
+      outcome: "ok",
+      fromStatuses: ["running", "queued"],
+    };
+    await runWithOrgScope(input.pool as unknown as pg.Pool, orgId, async (client) => {
+      await applyFinalizeRunWithEvent(client, { finalize: finalizeInput, event: evt });
+    });
+    return;
+  }
   await finalizeRunState(
     "completed",
     "ok",

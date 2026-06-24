@@ -23,12 +23,18 @@ import type { NonPassDetail, TerminalOutcome } from "./runFinalizeAuthority.js";
 import { resolveWorkflowThrow, type WorkflowErrorDisposition } from "./workflowErrorDisposition.js";
 import type { PreparedRunWorkspace } from "./plannerRunWorkspace.js";
 import type { MergeForRunResult } from "./reviewMerge/index.js";
+import { runWithOrgScope } from "@tanren/db";
+import type pg from "pg";
 import type { PlannerRunContext, PlannerRunResult, RunPlannerLoopInput } from "./plannerRun.js";
 import { finalizeRunCompletedAtomic } from "./runCompletedAtomic.js";
+import { applyFinalizeRunWithEvent, applyUpdateSpecWithEvent } from "../worker/runStateAtomicSql.js";
 import type { SubtaskLoopOutcome } from "./subtaskLoop.js";
 import { createLogger } from "../observability/logger.js";
 
 const log = createLogger("run-workspace");
+
+// Probe a real pg.Pool vs a fake unit-test stub (needs `.connect()` for runWithOrgScope).
+const isRealPool = (p: unknown): boolean => typeof (p as { connect?: unknown }).connect === "function";
 
 // Dimension D per-run credential-scoping seam: re-exported here (alongside the
 // other lifecycle-write helpers) so `plannerRun.ts` imports it from a module it
@@ -124,20 +130,10 @@ export async function finalizeNonPass(
 }
 
 /**
- * Build the {@link DispositionSeams} from the workflow's run/spec write closures — the
- * SINGLE place a terminal outcome's lifecycle writes are applied (re-drive: run halted +
- * spec → `open`; genuine-halt: run failed + spec → `needs_attention`). Reused by every
- * terminal site so the disposition is applied identically.
- *
- * Task #48 (run/spec atomicity sweep): the new `updateSpecAtomic` /
- * `finalizeGenuineHaltAtomic` seams route the spec flip + dag event AND the
- * genuine-halt run finalize + `run.failed` event through ONE atomic
- * transaction each (the `RunStateWriter.updateSpecWithEvent` /
- * `finalizeRunWithEvent` seams — Plan §4 Site A/B). The legacy
- * `finalizeNonPass` / `setSpecStatus` / `finalizeRunState` seams remain for
- * the non-terminal-pair paths (the re-drive's run halt is unpaired today;
- * the merge-stage `merged` flip + `run.completed` are owned by
- * `finalizeMergeOutcome`).
+ * Build the {@link DispositionSeams} — the SINGLE place a terminal outcome's lifecycle
+ * writes are applied. Task #48 routes the terminal-pair sites (`updateSpecAtomic` /
+ * `finalizeGenuineHaltAtomic`) through atomic seams; the legacy non-terminal-pair
+ * seams remain for the re-drive run halt and (via `finalizeMergeOutcome`) the merge.
  */
 function dispositionSeams(
   input: RunPlannerLoopInput,
@@ -150,12 +146,13 @@ function dispositionSeams(
     finalizeRunState,
     finalizeNonPass: (outcome) => finalizeNonPass(finalizeRunState, context.runId, outcome),
     setSpecStatus: (status) => setSpecStatus(input, context, status),
+    // Three-arm dispatch (R5 #2 / task #50): writer+orgId → remote atomic;
+    // orgId, no writer → in-process direct atomic via runWithOrgScope's
+    // BEGIN/COMMIT around applyXxxWithEvent (the previously-missing arm —
+    // pre-fix the in-process-without-writer mode fell through to the legacy
+    // split, silently reintroducing the audit-trail gap #674/#676 closed for
+    // the remote-writes path); no orgId → unit-test legacy split.
     updateSpecAtomic: async (spec, event) => {
-      // Atomic path — REQUIRES both the writer + a known org so the row UPDATE
-      // + event INSERT share ONE org-scoped transaction server-side. When
-      // either is missing fall back to the legacy split (the same shape the
-      // pre-#48 code used) so the unit-test harness — which wires neither —
-      // keeps working unchanged.
       if (input.runStateWriter !== undefined && orgId !== undefined) {
         await input.runStateWriter.updateSpecWithEvent({
           spec: {
@@ -168,14 +165,22 @@ function dispositionSeams(
         });
         return;
       }
+      if (orgId !== undefined && isRealPool(input.pool)) {
+        const specInput = {
+          specId: context.specId,
+          orgId,
+          status: spec.status,
+          ...(spec.notFromStatuses !== undefined && { notFromStatuses: spec.notFromStatuses }),
+        };
+        await runWithOrgScope(input.pool as unknown as pg.Pool, orgId, async (client) => {
+          await applyUpdateSpecWithEvent(client, { spec: specInput, event });
+        });
+        return;
+      }
       await setSpecStatus(input, context, spec.status);
-      // The fallback emits via the existing event recorder so the
-      // unit-test path captures it identically.
       await appendEvent(event.eventType, event.payload, event.taskId);
     },
     finalizeGenuineHaltAtomic: async (event) => {
-      // Genuine-halt run finalize + `run.failed` event in ONE org-scoped
-      // transaction. Same writer/org fallback rule as `updateSpecAtomic`.
       if (input.runStateWriter !== undefined && orgId !== undefined) {
         await input.runStateWriter.finalizeRunWithEvent({
           finalize: {
@@ -189,9 +194,19 @@ function dispositionSeams(
         });
         return;
       }
-      // Fallback: the legacy seam writes the row, then the existing
-      // event recorder writes the event — split but byte-identical to
-      // the pre-#48 path.
+      if (orgId !== undefined && isRealPool(input.pool)) {
+        const finalizeInput = {
+          runId: context.runId,
+          orgId,
+          status: "failed",
+          outcome: "failed",
+          fromStatuses: ["running", "queued"],
+        };
+        await runWithOrgScope(input.pool as unknown as pg.Pool, orgId, async (client) => {
+          await applyFinalizeRunWithEvent(client, { finalize: finalizeInput, event });
+        });
+        return;
+      }
       await finalizeRunState(
         "failed",
         "failed",
