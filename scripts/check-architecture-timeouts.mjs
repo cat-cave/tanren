@@ -139,12 +139,25 @@ const bannedIdentifierPatterns = [
   /\b([A-Z][A-Z0-9_]*_TIMEOUT_MS|DEFAULT_TIMEOUT_MS)\b/gu,
   // MAX_*_ATTEMPTS / *_MAX_ATTEMPTS screaming-case attempt caps.
   /\b(MAX_[A-Z0-9_]*_ATTEMPTS|[A-Z0-9_]*_MAX_ATTEMPTS)\b/gu,
+  // Suffix-only attempt/retry caps the prior taxonomy missed (critic-arc R3 #3 caught
+  // `TURN_INDEX_RETRY_ATTEMPTS` slipping through because it ends in `_RETRY_ATTEMPTS`,
+  // not `_MAX_ATTEMPTS`). Also catch `*_RETRIES` for symmetry with the Slack/SSH families.
+  /\b([A-Z][A-Z0-9_]*_RETRY_ATTEMPTS|[A-Z][A-Z0-9_]*_RETRIES)\b/gu,
   // camelCase max-iteration / retries-per / run-hours give-up knobs.
   /\b(maxWriterIter[A-Za-z0-9_$]*|maxRetriesPerTransient[A-Za-z0-9_$]*|maxRunHours[A-Za-z0-9_$]*|DEFAULT_[A-Z0-9_]*_MAX_ATTEMPTS)\b/gu,
 ];
 
 function isProductionSource(file) {
-  return file.includes("/src/") && !file.includes("/tests/") && !/\.test\.[tj]sx?$/u.test(file);
+  // Production source under any service's src/, plus the smoke/acceptance harnesses
+  // under scripts/ (critic-arc R3 #4 caught a wall-clock deadline in
+  // `scripts/smoke/plane-split-worker.ts` that the prior `/src/` filter excluded;
+  // `just smoke` IS a required handoff gate so its timing primitives are doctrine
+  // territory, not test-only fixture territory). Tests under either tree are still
+  // excluded.
+  const isUnderSrc = file.includes("/src/");
+  const isHarness = file.includes("/scripts/smoke/") || file.includes("/scripts/acceptance/");
+  if (!isUnderSrc && !isHarness) return false;
+  return !file.includes("/tests/") && !/\.test\.[tj]sx?$/u.test(file);
 }
 
 // Strip `//` line comments and `*`-prefixed block-comment bodies so a taxonomy word in
