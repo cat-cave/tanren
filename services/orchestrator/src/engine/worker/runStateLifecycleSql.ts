@@ -204,6 +204,18 @@ export async function applyUpdateTask(client: QueryClient, input: UpdateTaskInpu
         [input.taskId, input.failureKind],
       );
       return;
+    case "failed_with_kind_if_running":
+      // The finalize-guard idempotency primitive: a POST-success throw (e.g. the
+      // cost recorder fails AFTER the provider call already wrote its result) must
+      // not clobber a row a clean branch already moved to `done`. The
+      // `WHERE status='running'` guard makes a re-run a no-op when the row is
+      // already terminal — same fixed UPDATE shape as `failed_with_kind`, plus the
+      // single AND clause. See `subtaskTasks.ts:markTaskFailedIfRunning`.
+      await client.query(
+        "UPDATE tasks SET status = 'failed', outcome = 'failed', failure_kind = $2, ended_at = now() WHERE task_id = $1 AND status = 'running'",
+        [input.taskId, input.failureKind],
+      );
+      return;
     case "cancelled":
       await client.query(
         "UPDATE tasks SET status = 'cancelled', outcome = 'cancelled', ended_at = now() WHERE task_id = $1",

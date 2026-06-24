@@ -23,15 +23,60 @@ import { AnswererSchemaValidationError, AnswererStalledError } from "../provider
 import { CodexUsageLimitError } from "../providers/codex.js";
 import { ClaudeUsageLimitError } from "../providers/claude.js";
 import { StageStallEscalationError } from "./loopStageRecovery.js";
-import { markTaskFailed } from "./subtaskTasks.js";
+import { markTaskFailedIfRunning } from "./subtaskTasks.js";
 
 type LoopQueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
 /** Shape of the per-stage `appendEvent` callback the loop threads through every stage. */
-type StageAppendEvent = <N extends EventName>(eventType: N, payload: EventPayload<N>, taskId?: string) => Promise<void>;
+export type StageAppendEvent = <N extends EventName>(
+  eventType: N,
+  payload: EventPayload<N>,
+  taskId?: string,
+) => Promise<void>;
 
 /** The closed vocabulary the per-stage `task.failed.failureKind` carries. */
-export type StageFailureKind = "window_exhausted" | "timeout" | "answerer_schema_invalid" | "crashed";
+export type StageFailureKind =
+  | "window_exhausted"
+  | "timeout"
+  | "answerer_schema_invalid"
+  | "cost_record_failed"
+  | "event_append_failed"
+  | "crashed";
+
+/**
+ * The cost-recorder THROW wrapper (task #35 — critic-arc R1 #6 / R2). When
+ * `recordWriterCost` / `recordAnswererCost` re-throws an error surfacing from the
+ * underlying `CostRecorder.record(...)` INSERT (DB transport / RLS / schema), the
+ * subtaskCost helpers RE-RAISE it as this typed wrapper class so the finalize
+ * guard's classifier maps it deterministically to `failureKind: "cost_record_failed"`
+ * — rather than landing in the fail-closed `crashed` default that swallows the
+ * mid-stage cost-recorder family in apex tier-1.
+ */
+export class CostRecordError extends Error {
+  override readonly cause?: unknown;
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : "cost record write failed");
+    this.name = "CostRecordError";
+    this.cause = cause;
+  }
+}
+
+/**
+ * The event-append THROW wrapper (task #35 — critic-arc R1 #6 / R2). When the
+ * finalize guard catches an unclassified throw from a stage's PRE-TERMINAL event
+ * append (e.g. `checker.verdict`, `writer.subtask.completed`), it would otherwise
+ * be classified as `crashed`. Stages that wrap their pre-terminal appends in
+ * `wrapEventAppend` re-throw as this wrapper so the guard surfaces
+ * `failureKind: "event_append_failed"` — distinct + searchable on the timeline.
+ */
+export class EventAppendError extends Error {
+  override readonly cause?: unknown;
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : "event append failed");
+    this.name = "EventAppendError";
+    this.cause = cause;
+  }
+}
 
 /**
  * Classify a caught stage error into the `task.failed.failureKind` vocabulary
@@ -46,6 +91,11 @@ export type StageFailureKind = "window_exhausted" | "timeout" | "answerer_schema
  *   (a transient or proven-wedged sign-of-life stall)
  * - `AnswererSchemaValidationError` → `answerer_schema_invalid`
  *   (mirrors the auditor's `auditor_schema_invalid` naming)
+ * - `CostRecordError` → `cost_record_failed`
+ *   (task #35 — the recorder's DB INSERT failed mid-stage; without this it
+ *   would land as `crashed` and the row would strand `running`)
+ * - `EventAppendError` → `event_append_failed`
+ *   (task #35 — a pre-terminal event append failed mid-stage)
  * - default → `crashed` (the writer-stage's existing default for an unclassified throw)
  */
 export function classifyStageFailureKind(error: unknown): StageFailureKind {
@@ -57,6 +107,12 @@ export function classifyStageFailureKind(error: unknown): StageFailureKind {
   }
   if (error instanceof AnswererSchemaValidationError) {
     return "answerer_schema_invalid";
+  }
+  if (error instanceof CostRecordError) {
+    return "cost_record_failed";
+  }
+  if (error instanceof EventAppendError) {
+    return "event_append_failed";
   }
   return "crashed";
 }
@@ -74,18 +130,31 @@ export function stageFailureMessage(error: unknown): string {
 }
 
 /**
- * Run a stage's answerer/writer body with the apex v51 per-stage emit-on-throw
- * contract. On a throw: classify via {@link classifyStageFailureKind}, mark the
- * stage's task row failed, append `task.failed` against the task id, RE-THROW so
- * the workflow's outer catch (`plannerRun.ts`'s `finalizeWorkflowThrow`) still
- * routes the run-level disposition unchanged. On success, returns the body's
- * value verbatim — the helper adds no other side effects, so every stage's
- * existing `task.completed` / success-event emit stays exactly where it was.
+ * The WIDER finalize guard (task #35 — critic-arc R1 #6 / R2). Wraps the WHOLE
+ * post-insert stage body — provider call + cost record + terminal row update + the
+ * terminal `task.*` event — so a throw ANYWHERE in that chain closes the task row
+ * loud + emits exactly one `task.failed` event. The PR #665 apex v51 helper
+ * `runStageWithEmitOnThrow` only covered the provider body; a recorder throw
+ * mid-stage still stranded the row in `status='running'` forever with no
+ * `task.failed` event. This helper SUPERSEDES the v51 wrapper and is now the
+ * sole call site for the per-stage finalize-on-throw contract. The classifier
+ * distinguishes the new mid-stage failure shapes:
  *
- * This wraps the boilerplate every stage in the subtask loop now carries, so a
- * single try/catch lives here rather than copy-pasted across each stage.
+ *   - `CostRecordError` → `failureKind: "cost_record_failed"` (the recorder's
+ *     DB INSERT failed AFTER a successful provider call)
+ *   - `EventAppendError` → `failureKind: "event_append_failed"` (a pre-terminal
+ *     event append failed)
+ *
+ * IDEMPOTENCY (the single-finalize invariant — `autonomy-engine.md` §1c): the row
+ * UPDATE is `markTaskFailedIfRunning`, a guarded `WHERE status='running'`. A
+ * clean branch that already moved the row to `done` then threw on the `task.completed`
+ * event append leaves the existing `done` row alone — the loud signal is the
+ * emitted `task.failed` event, not a clobbered terminal row. A re-run of the
+ * guard's catch on a row already moved to `failed` is also a no-op for the same
+ * reason. The `task.failed` event lands EVERY time (the timeline carries the
+ * outage signal even when the row was already terminal).
  */
-export async function runStageWithEmitOnThrow<T>(opts: {
+export async function runStageBodyWithFinalizeGuard<T>(opts: {
   pool: LoopQueryClient;
   writer?: RunStateWriter;
   appendEvent: StageAppendEvent;
@@ -97,12 +166,28 @@ export async function runStageWithEmitOnThrow<T>(opts: {
     return await opts.body();
   } catch (error) {
     const failureKind = classifyStageFailureKind(error);
-    await markTaskFailed(opts.pool, opts.taskId, failureKind, opts.writer);
+    await markTaskFailedIfRunning(opts.pool, opts.taskId, failureKind, opts.writer);
     await opts.appendEvent(
       "task.failed",
       { taskKind: opts.taskKind, failureKind, message: stageFailureMessage(error) },
       opts.taskId,
     );
     throw error;
+  }
+}
+
+/**
+ * Wrap a pre-terminal event-append in `EventAppendError` so a throw lands as the
+ * deterministic `failureKind: "event_append_failed"` rather than the fail-closed
+ * `crashed` default. Use INSIDE a `runStageBodyWithFinalizeGuard` body for any
+ * pre-terminal append (e.g. `checker.verdict`, `writer.subtask.completed`,
+ * `auditor.verdict`); the matching post-terminal append (`task.completed`) is the
+ * guard's responsibility to surface, not a wrapped pre-terminal step.
+ */
+export async function wrapEventAppend(append: () => Promise<void>): Promise<void> {
+  try {
+    await append();
+  } catch (error) {
+    throw new EventAppendError(error);
   }
 }

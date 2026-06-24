@@ -129,3 +129,29 @@ export async function markTaskFailed(
     [taskId, failureKind],
   );
 }
+
+// Idempotent FAILED-terminal transition: move a task row to `failed` ONLY when it
+// is still `status='running'`. Used by the finalize guard
+// (`runStageBodyWithFinalizeGuard`) so a POST-success throw — the cost-recorder
+// fails after a successful provider call, or appendEvent fails after the row was
+// already moved to `done` by a clean branch — leaves the existing terminal row
+// alone (a `done`/`passed` row a clean branch already wrote is not clobbered to
+// `failed`; that case is a missing-event problem, not a missing-failure-row
+// problem). The `WHERE status='running'` guard is the idempotency primitive: a
+// re-run sees no `running` row and is a no-op. Mirrors `markTaskFailed` shape but
+// adds the guard; both routes (in-process direct UPDATE + `RunStateWriter`) honor it.
+export async function markTaskFailedIfRunning(
+  pool: LoopQueryClient,
+  taskId: string,
+  failureKind: string,
+  writer?: RunStateWriter,
+): Promise<void> {
+  if (writer !== undefined) {
+    await writer.updateTask({ taskId, transition: "failed_with_kind_if_running", failureKind });
+    return;
+  }
+  await resolveWritableClient(pool).query(
+    `UPDATE tasks SET status = 'failed', outcome = 'failed', failure_kind = $2, ended_at = now() WHERE task_id = $1 AND status = 'running'`,
+    [taskId, failureKind],
+  );
+}
