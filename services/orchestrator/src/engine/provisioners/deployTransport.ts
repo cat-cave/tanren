@@ -59,7 +59,12 @@ export function fetchDeployTransport(
   return {
     async request(req: DeployHttpRequest): Promise<DeployHttpResponse> {
       const controller = new AbortController();
+      // Blessed connect/response-establishment bound on ONE outbound deploy-provider
+      // HTTP call (per the DEFAULT_DEPLOY_REQUEST_ABORT_MS docstring above): not a
+      // poll/attempt budget over converging work — a discrete one-shot request whose
+      // only outcomes are (response | abort), so the abort cannot truncate legitimate work.
       const timer = setTimeout(() => {
+        // arch-allow: timeout-class — see comment above
         controller.abort();
       }, abortMs);
       try {

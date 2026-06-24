@@ -32,19 +32,20 @@ export interface StaticRunnerAllocatorOptions {
   hostKeyFingerprint?: string;
   /** Orchestrator mirror of the runners table. */
   runners: RunnerStore;
-  /** Timeout for the TOFU discovery handshake. */
-  discoverTimeoutMs?: number;
   /**
-   * Number of transient-retry ATTEMPTS for the TOFU discovery handshake (the first
-   * try + transient retries). A momentary `ECONNRESET`/`ECONNREFUSED` while the runner
-   * is briefly unavailable is RETRIED with backoff before failing; a genuine
-   * non-transient error (auth, bad fingerprint) still fails on the first attempt.
-   * Defaults to the shared `DEFAULT_SSH_TRANSIENT_ATTEMPTS`.
+   * The ssh2 `readyTimeout` (handshake-establishment bound) for the TOFU discovery
+   * handshake. This is doctrine-blessed (per `timeout-eradication.md` KEEP set): a
+   * connect-establishment bound on a discrete one-shot handshake whose API gives only
+   * `ready` / `error` outcomes — it cannot truncate legitimate running work because
+   * there IS no running work after `ready`. Defaults to 10s.
    */
-  discoverTransientAttempts?: number;
+  readyTimeoutMs?: number;
   /** Override for tests. */
   clientFactory?: () => Pick<Client, "connect" | "destroy" | "end" | "once" | "on">;
-  /** Override the transient-retry sleep (tests inject a no-wait sleep). */
+  /**
+   * Override the transient-retry sleep (tests inject a no-wait sleep). Plumbed straight
+   * into `withSshTransientRetry`'s convergence-based retry helper as `sleep`.
+   */
   retrySleep?: (ms: number) => Promise<void>;
 }
 
@@ -126,7 +127,6 @@ export class StaticRunnerAllocator implements Allocator {
    */
   private async discoverHostKeyFingerprint(host: string, port: number): Promise<string> {
     return await withSshTransientRetry(() => this.discoverHostKeyFingerprintOnce(host, port), {
-      ...(this.options.discoverTransientAttempts !== undefined && { attempts: this.options.discoverTransientAttempts }),
       ...(this.options.retrySleep !== undefined && { sleep: this.options.retrySleep }),
       onRetry: ({ attempt, delayMs, error }) => {
         log.warn("static runner host key discovery hit a transient network error; retrying with backoff", {
@@ -141,7 +141,7 @@ export class StaticRunnerAllocator implements Allocator {
   }
 
   private async discoverHostKeyFingerprintOnce(host: string, port: number): Promise<string> {
-    const timeoutMs = this.options.discoverTimeoutMs ?? 10_000;
+    const readyTimeoutMs = this.options.readyTimeoutMs ?? 10_000;
     return await new Promise<string>((resolve, reject) => {
       const client = this.clientFactory();
       let captured: string | undefined;
@@ -151,7 +151,6 @@ export class StaticRunnerAllocator implements Allocator {
           return;
         }
         settled = true;
-        clearTimeout(timer);
         try {
           client.destroy();
         } catch {
@@ -172,10 +171,6 @@ export class StaticRunnerAllocator implements Allocator {
         const sha256Base64 = Buffer.from(normalized, "hex").toString("base64").replace(/=+$/u, "");
         settle(() => resolve(`SHA256:${sha256Base64}`));
       };
-      const timer = setTimeout(
-        () => settle(() => reject(new Error(`static runner host key discovery timed out after ${timeoutMs}ms`))),
-        timeoutMs,
-      );
       // PERSISTENT listener (`.on`, not `.once`): the discovery handshake
       // intentionally aborts after the host key is captured (we have no identity
       // to authenticate with), and ssh2 emits "error" both for that intended
@@ -193,6 +188,14 @@ export class StaticRunnerAllocator implements Allocator {
         }
         settle(() => reject(new Error(`static runner host key discovery failed: ${error.message}`)));
       });
+      // A clean `end` / `close` without an intervening `error` is the "the connection
+      // tore down before the host key landed" case — settle via finishWithCapture so the
+      // promise never wedges (with the outer wall-clock timer deleted per task #32, this
+      // is the SOLE no-fingerprint terminal path that would otherwise leave the loop
+      // hanging waiting for an `error` that never fires).
+      client.on("end", () => {
+        finishWithCapture();
+      });
       client.connect({
         host,
         port,
@@ -206,13 +209,16 @@ export class StaticRunnerAllocator implements Allocator {
           // successful finish.
           return false;
         },
-        // `readyTimeout` bounds the handshake — the ONE legitimate time bound here.
-        // We omit ssh2's `timeout` option: in ssh2 1.17.0 it is forwarded to the
-        // socket as a connection-LIFETIME idle timeout (socket.setTimeout), NOT a
-        // handshake-only bound. The separate `setTimeout` above already guards the
-        // whole discovery op; adding a socket idle timeout here is redundant and
-        // follows the same disguised-wall-clock-deadline anti-pattern (apex v44).
-        readyTimeout: timeoutMs,
+        // The ssh2 `readyTimeout` is the SOLE bound on this discovery op (a
+        // connect-establishment bound on this one-shot TOFU handshake — doctrine-blessed
+        // per `timeout-eradication.md` KEEP set: a discrete handshake whose API gives
+        // only `ready` / `error` outcomes, so a connect-establishment bound cannot
+        // truncate legitimate running work — there IS no running work after `ready`).
+        // The outer `setTimeout` wall-clock guard that used to wrap this was a
+        // redundant disguised-deadline (task #32, critic-arc R1 #3 / R2) and is gone.
+        // We omit ssh2's `timeout` option (a socket-LIFETIME idle timeout — banned by
+        // the eradication lint after #638).
+        readyTimeout: readyTimeoutMs,
       });
     });
   }

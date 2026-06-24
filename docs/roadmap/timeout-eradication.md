@@ -8,16 +8,16 @@ record is the memory `feedback_no_timeouts_progress_based` (Trevor, 2026-06-17,
 emphatic that this class keeps recurring); the existing models it generalizes are
 `workflow/convergenceDetector.ts` and `worker/runHeartbeat.ts`.
 
-> **Status (program COMPLETE — with FIVE disguised survivors caught post-program by
-> apex, all fixed).** The full eradication wave landed: #609 (foundation — `ActivityWatchdog`,
+> **Status (program COMPLETE — with SEVEN disguised survivors caught post-program by
+> apex + critic-arc, all fixed).** The full eradication wave landed: #609 (foundation — `ActivityWatchdog`,
 > `retryUntilConverged`, timeout-eradication lint in REPORT mode), #612–#618
 > (M1..Reframe waves), #621 (progress backstop — watchdog surfaces a recoverable
 > stall when work signature stops advancing), and the final wave CI-gated the lint
 > so the class can never reintroduce. The doctrine stands: progress/sign-of-life
 > based; `ActivityWatchdog` is the sole running-command hang detector.
 >
-> **FIVE DISGUISED survivors the lint missed, found by successive apex trials and
-> since fixed:**
+> **SEVEN DISGUISED survivors the lint missed, found by successive apex trials +
+> critic-arc audits and since fixed:**
 >
 > - **#638 — ssh2 `timeout:` connect-config socket option.** In ssh2, the `timeout`
 >   field in the connect config is NOT a handshake bound — it is a socket-lifetime
@@ -141,6 +141,36 @@ emphatic that this class keeps recurring); the existing models it generalizes ar
 >   counts the bridged emissions. The doctrine stands — signature IDENTITY,
 >   never elapsed time; a genuinely-advancing process resets it forever no
 >   matter the length, at BOTH layers.
+> - **Task #32 (critic-arc R1 #3 / R2) — three production retry caps + a multi-line
+>   `setTimeout` lint blind spot [RESOLVED].** A critic-arc audit surfaced the
+>   SEVENTH disguised survivor cluster: three live retry-cap survivors the
+>   eradication wave left in place, plus a lint blind-spot that explains why one
+>   of them was not caught earlier. (a) `ssh/transientRetry.ts` —
+>   `DEFAULT_SSH_TRANSIENT_ATTEMPTS = 4` was a bounded attempt budget on the
+>   transient SSH-connect retry; rewritten convergence-based (mirrors
+>   `templates/creation/answererRetry.ts`): unbounded while the signature CHANGES,
+>   surfaces `PersistentSshOutageError` only at the saturated identical-signal
+>   fixed point. (b) `integrations/slack/slackApiTransport.ts` —
+>   `SLACK_MAX_RATE_LIMIT_RETRIES = 3` AND `SLACK_MAX_RETRY_AFTER_MS = 60_000`
+>   were a bounded retry budget + a clamp on the server-supplied `Retry-After`;
+>   rewritten convergence-based with the clamp DROPPED entirely — Slack's
+>   Retry-After IS the authoritative external constraint, so clamping it just
+>   generates more 429s, and a typed `SlackRateLimited` carries the verbatim
+>   wait into a `withSlack429Retry` wrapper that surfaces
+>   `PersistentSlackRateLimitError` on the saturated identical-signal fixed point.
+>   (c) `allocators/staticRunnerAllocator.ts` — a MULTI-LINE outer `setTimeout`
+>   wall-clock guard around the TOFU host-key discovery (the ssh2 `readyTimeout`
+>   was already the legitimate connect-establishment bound; the outer guard was
+>   redundant + a disguised wall-clock kill on a discrete handshake). DELETED;
+>   the connection's `end` event grew a listener so the no-fingerprint path
+>   settles loudly without the wall-clock guard. **Lint blind-spot extension:**
+>   `scripts/check-architecture-timeouts.mjs`'s single-line `timerBodyKills`
+>   scanner missed the multi-line `setTimeout(\n  () => reject(...),\n  ms,\n)`
+>   shape (same blind-spot class as #638 — a legitimate-looking opener line on
+>   its own, but the kill verb on a continuation line the scanner never read).
+>   Fixed with a small fixed-size lookahead window (4 lines) over following
+>   source lines after a `setTimeout(` opener whose same-line window has no kill
+>   verb, with a paired multi-line fixture in the lint's test suite.
 >
 > The inventory below was produced by a 3-auditor sweep and **re-verified
 > file:line against `origin/main` while writing** — drift corrections are flagged

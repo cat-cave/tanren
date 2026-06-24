@@ -146,7 +146,12 @@ export function fetchUrlReachabilityProbe(
   return {
     async probe(url: string): Promise<number> {
       const controller = new AbortController();
+      // Blessed connect/response-establishment bound on ONE smoke-probe HTTP GET (per the
+      // DEFAULT_SMOKE_PROBE_ABORT_MS docstring above): not a poll/attempt budget over
+      // converging work — a discrete one-shot probe whose only outcomes are (response |
+      // abort), so the abort cannot truncate legitimate work.
       const timer = setTimeout(() => {
+        // arch-allow: timeout-class — see comment above
         controller.abort();
       }, abortMs);
       try {

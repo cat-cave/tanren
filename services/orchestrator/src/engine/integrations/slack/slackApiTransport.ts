@@ -9,6 +9,16 @@
 // Plane A ONLY: this is the transport for Tanren's OWN Slack notification
 // provisioning (the Forge interaction plane). The apex product's own Slack bot is
 // Plane B (the built product's app environment) and is provisioned separately.
+//
+// TIMEOUT-ERADICATION (feedback_no_timeouts_progress_based, BINDING — task #32,
+// critic-arc R1 #3 / R2): the 429 (rate-limit) retry path is UNBOUNDED and waits the
+// SERVER-supplied `Retry-After`. There is NO attempt count and NO header CLAMP — Slack's
+// `Retry-After` IS the authoritative external constraint; clamping it just generates more
+// 429s. The convergence detector escalates to a {@link PersistentSlackRateLimitError} only
+// on intelligent NON-CONVERGENCE — the IDENTICAL 429 signal recurring at the saturated
+// backoff with no new information (a sustained rate-limit outage at the right layer).
+
+import { assessStructuralProgress, type AttemptSignature } from "../../workflow/convergenceDetector.js";
 
 const SLACK_API_BASE = "https://slack.com/api";
 
@@ -83,19 +93,112 @@ function toConversation(channel: SlackChannelObject): SlackConversation {
 }
 
 /**
- * Production Slack transport over `fetch`. The bot token is passed as a resolved
- * value (the caller resolves the grant's credential ref against the SecretStore);
- * it is sent only as the `Authorization: Bearer` header and is never returned to
- * the provisioner or embedded in any artifact.
+ * A typed 429 surfaced by {@link FetchSlackApiTransport.call} that the convergence-based
+ * retry helper recognizes as transient. Carries the server-supplied wait so the retry
+ * wrapper honors Slack's `Retry-After` verbatim (no clamp — Slack IS the authority).
  */
-// How many times a 429 (Slack rate-limit) is retried before surfacing the error.
-// Slack returns a `Retry-After` (seconds) header on a 429; we honor it (bounded) so a
-// burst of channel calls rides out a transient rate-limit rather than failing the
-// provision. Bounded so a persistent 429 still fails LOUD rather than retrying forever.
-const SLACK_MAX_RATE_LIMIT_RETRIES = 3;
-// A defensive cap on the honored `Retry-After` so a hostile/huge header cannot wedge a
-// run; Slack's real values are single-digit seconds.
-const SLACK_MAX_RETRY_AFTER_MS = 60_000;
+export class SlackRateLimited extends Error {
+  readonly retryAfterMs: number;
+
+  constructor(waitMs: number) {
+    super(`slack rate-limited: server requested ${waitMs}ms wait before retry`);
+    this.name = "SlackRateLimited";
+    this.retryAfterMs = waitMs;
+  }
+}
+
+/**
+ * A loud, terminal classification of a SUSTAINED Slack 429 outage — the SAME 429 signal
+ * recurring at the SATURATED retry cadence with no new information (a proven fixed point).
+ * NOT an attempt cap: surfaces only when the convergence detector proves the signal is
+ * stuck (a genuine sustained rate-limit at the right layer).
+ */
+export class PersistentSlackRateLimitError extends Error {
+  readonly stuckSignature: string;
+  readonly retriesObserved: number;
+
+  constructor(input: { stuckSignature: string; retriesObserved: number; cause?: unknown }) {
+    super(
+      `slack rate-limit outage: '${input.stuckSignature}' recurred at the saturated backoff with no progress ` +
+        `over ${input.retriesObserved} retries — surfacing as a sustained 429 outage, not retrying a fixed point forever`,
+    );
+    this.name = "PersistentSlackRateLimitError";
+    this.stuckSignature = input.stuckSignature;
+    this.retriesObserved = input.retriesObserved;
+    if (input.cause !== undefined) {
+      this.cause = input.cause;
+    }
+  }
+}
+
+// The 429 retry's saturation threshold: how many consecutive 429s the convergence
+// detector considers "still ramping" before treating an IDENTICAL recurring signal as a
+// proven fixed point. Mirrors `templates/creation/answererRetry.ts` (the curve-length
+// threshold there). Small because the Slack signature is identity-based — a real 429
+// repeats verbatim, and we want the convergence loop to surface a sustained outage
+// promptly, not wait through a long curve.
+const SLACK_429_SATURATION_THRESHOLD = 4;
+
+// Has the 429 retry loop reached a NON-CONVERGENCE fixed point — the SAME 429 signal
+// recurring with no new information, AND only once the convergence loop has SATURATED
+// (so a still-ramping cadence never escalates)? Mirrors
+// `templates/creation/answererRetry.ts#transientFixedPointReached`.
+function slack429FixedPointReached(signatures: ReadonlyArray<string>): boolean {
+  if (signatures.length <= SLACK_429_SATURATION_THRESHOLD) {
+    return false;
+  }
+  const history: AttemptSignature[] = signatures.map((sig) => ({ failureSignature: sig }));
+  return assessStructuralProgress(history) === "fixed_point";
+}
+
+export interface Slack429RetryOptions {
+  /** Override the sleep (tests inject a no-wait sleep). */
+  sleep?: (ms: number) => Promise<void>;
+}
+
+/**
+ * Run `operation`, retrying ONLY a typed {@link SlackRateLimited} (a 429) UNBOUNDED while
+ * the 429 cadence is RAMPING — escalates to a {@link PersistentSlackRateLimitError} only
+ * when the convergence detector proves the signal is stuck. Backoff = the server-supplied
+ * `retryAfterMs` (NOT a fixed curve — Slack tells us when to come back, verbatim, no
+ * clamp). Any other thrown error is re-thrown immediately — never treated as transient.
+ */
+export async function withSlack429Retry<T>(
+  operation: () => Promise<T>,
+  options: Slack429RetryOptions = {},
+): Promise<T> {
+  const sleep = options.sleep ?? defaultSleep429Sleep;
+  const signatures: string[] = [];
+  for (;;) {
+    try {
+      return await operation();
+    } catch (error) {
+      if (!(error instanceof SlackRateLimited)) {
+        throw error;
+      }
+      // A 429 is identity-based — every Slack rate-limit is the SAME signal, distinguished
+      // only by the server's Retry-After. The convergence history records one entry per 429.
+      signatures.push("slack-429");
+      if (slack429FixedPointReached(signatures)) {
+        throw new PersistentSlackRateLimitError({
+          stuckSignature: signatures.at(-1) ?? "slack-429",
+          retriesObserved: signatures.length,
+          cause: error,
+        });
+      }
+      // Honor the server-supplied wait verbatim — no clamp. Slack's Retry-After IS the
+      // authoritative external constraint; clamping just generates more 429s.
+      await sleep(error.retryAfterMs);
+    }
+  }
+}
+
+function defaultSleep429Sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    // arch-allow: timeout-class — server-directed Retry-After SPACING (cadence, not a deadline).
+    setTimeout(resolve, ms);
+  });
+}
 
 export class FetchSlackApiTransport implements SlackApiTransport {
   private readonly fetchImpl: typeof fetch;
@@ -157,41 +260,46 @@ export class FetchSlackApiTransport implements SlackApiTransport {
   // Every Slack Web API call returns 200 with an `{ ok, error }` envelope; a
   // non-ok envelope is a real failure we surface as a thrown Error (the provider
   // never silently swallows a Slack error). A 429 (rate-limit) is the one retryable
-  // status: Slack supplies a `Retry-After` (seconds) header we honor (bounded) before
-  // retrying, up to {@link SLACK_MAX_RATE_LIMIT_RETRIES}; a persistent 429 then fails LOUD.
+  // status: this layer throws a typed {@link SlackRateLimited} carrying the server-supplied
+  // `Retry-After`, and the surrounding {@link withSlack429Retry} wrapper retries UNBOUNDED
+  // (no count) on the server-directed cadence, surfacing a
+  // {@link PersistentSlackRateLimitError} only on intelligent NON-CONVERGENCE (a sustained
+  // 429 outage at the right layer).
   private async call<T extends SlackApiEnvelope>(method: string, params: Record<string, string>): Promise<T> {
-    for (let attempt = 0; ; attempt++) {
-      const response = await this.fetchImpl(`${SLACK_API_BASE}/${method}`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
-          Authorization: `Bearer ${this.botToken}`,
-        },
-        body: new URLSearchParams(params).toString(),
-      });
-      if (response.status === 429 && attempt < SLACK_MAX_RATE_LIMIT_RETRIES) {
-        await this.sleep(retryAfterMs(response.headers.get("retry-after")));
-        continue;
-      }
-      if (!response.ok) {
-        throw new Error(`slack ${method} HTTP ${response.status} ${response.statusText}`);
-      }
-      const body = (await response.json()) as T;
-      if (!body.ok) {
-        throw new Error(`slack ${method} failed: ${body.error ?? "unknown_error"}`);
-      }
-      return body;
-    }
+    return await withSlack429Retry(
+      async () => {
+        const response = await this.fetchImpl(`${SLACK_API_BASE}/${method}`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded",
+            Authorization: `Bearer ${this.botToken}`,
+          },
+          body: new URLSearchParams(params).toString(),
+        });
+        if (response.status === 429) {
+          throw new SlackRateLimited(retryAfterMs(response.headers.get("retry-after")));
+        }
+        if (!response.ok) {
+          throw new Error(`slack ${method} HTTP ${response.status} ${response.statusText}`);
+        }
+        const body = (await response.json()) as T;
+        if (!body.ok) {
+          throw new Error(`slack ${method} failed: ${body.error ?? "unknown_error"}`);
+        }
+        return body;
+      },
+      { sleep: this.sleep },
+    );
   }
 }
 
 /**
- * Parse a Slack `Retry-After` header (seconds) into a bounded millisecond wait. A
- * missing/unparseable header falls back to 1s; the value is capped at
- * {@link SLACK_MAX_RETRY_AFTER_MS} so a hostile/huge header cannot wedge a run.
+ * Parse a Slack `Retry-After` header (seconds) into a millisecond wait. A missing or
+ * unparseable header falls back to 1s. The value is honored VERBATIM — there is NO clamp
+ * (task #32: Slack's Retry-After IS the authoritative external constraint; a clamp at this
+ * layer just generates more 429s).
  */
 function retryAfterMs(header: string | null): number {
   const seconds = header === null ? Number.NaN : Number.parseInt(header, 10);
-  const ms = Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 1000;
-  return Math.min(ms, SLACK_MAX_RETRY_AFTER_MS);
+  return Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 1000;
 }

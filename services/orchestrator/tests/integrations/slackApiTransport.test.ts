@@ -4,7 +4,10 @@
 // header, and cursor mapping.
 
 import { describe, expect, it } from "vitest";
-import { FetchSlackApiTransport } from "../../src/engine/integrations/slack/slackApiTransport.js";
+import {
+  FetchSlackApiTransport,
+  PersistentSlackRateLimitError,
+} from "../../src/engine/integrations/slack/slackApiTransport.js";
 
 interface Recorded {
   url: string;
@@ -94,15 +97,82 @@ describe("FetchSlackApiTransport", () => {
     expect(waited).toEqual([2000]);
   });
 
-  it("fails LOUD when a 429 persists past the bounded retry budget", async () => {
+  it("retries UNBOUNDED while the 429 cadence is RAMPING (no attempt cap)", async () => {
+    // Task #32 (convergence-based): the 429 retry path is UNBOUNDED. The convergence
+    // detector treats consecutive 429s as the "ramping" phase until the saturation
+    // threshold is crossed — only THEN does an IDENTICAL recurring signal become a proven
+    // fixed point. With a finite RAMP-LENGTH of 429s followed by a 200, the retry helper
+    // never escalates and the underlying call eventually succeeds; the observed call count
+    // is ramp-length + 1 (the final success).
+    const rampLength = 4;
+    let calls = 0;
+    const fetchImpl = (async () => {
+      calls += 1;
+      if (calls <= rampLength) {
+        return new Response("", { status: 429, headers: { "Retry-After": "1" } });
+      }
+      return new Response(JSON.stringify({ ok: true, user_id: "U_BOT" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+    const transport = new FetchSlackApiTransport("xoxb-token", fetchImpl, async () => {});
+    expect(await transport.authTest()).toEqual({ botUserId: "U_BOT" });
+    // Ramp + 1 success — strictly more than the legacy bounded budget of 4, so this proves
+    // the cap is gone (the call would have failed LOUD at the old bounded budget).
+    expect(calls).toBe(rampLength + 1);
+  });
+
+  it("surfaces PersistentSlackRateLimitError LOUD at a saturated identical-signal fixed point", async () => {
     let calls = 0;
     const fetchImpl = (async () => {
       calls += 1;
       return new Response("", { status: 429, statusText: "Too Many Requests", headers: { "Retry-After": "1" } });
     }) as unknown as typeof fetch;
     const transport = new FetchSlackApiTransport("xoxb-token", fetchImpl, async () => {});
-    await expect(transport.joinConversation("C1")).rejects.toThrow(/HTTP 429/u);
-    // The initial attempt + 3 bounded retries = 4 calls, then it fails loud.
-    expect(calls).toBe(4);
+    let captured: PersistentSlackRateLimitError | undefined;
+    try {
+      await transport.joinConversation("C1");
+    } catch (error) {
+      if (error instanceof PersistentSlackRateLimitError) {
+        captured = error;
+      } else {
+        throw error;
+      }
+    }
+    expect(captured).toBeDefined();
+    expect(captured?.stuckSignature).toBe("slack-429");
+    // The loop ran past the saturation threshold before the convergence detector
+    // surfaced the proven fixed point — strictly more than a single-shot give-up.
+    expect(captured?.retriesObserved).toBeGreaterThan(1);
+    expect(calls).toBe(captured?.retriesObserved);
+  });
+
+  it("honors a long Retry-After verbatim (NO clamp on the server-supplied wait)", async () => {
+    // Task #32 DOCTRINE: Slack's Retry-After IS the authoritative external constraint.
+    // The legacy 60s clamp (SLACK_MAX_RETRY_AFTER_MS) is GONE — clamping just generates
+    // more 429s. A 429 with a 120-second Retry-After (past the old clamp) must be honored
+    // verbatim: the injected sleep records exactly 120000ms before the retry, and the
+    // second call returns 200. This is the load-bearing assertion the clamp-drop is
+    // doctrine-correct.
+    let calls = 0;
+    const waited: number[] = [];
+    const fetchImpl = (async () => {
+      calls += 1;
+      if (calls === 1) {
+        return new Response("", { status: 429, headers: { "Retry-After": "120" } });
+      }
+      return new Response(JSON.stringify({ ok: true, user_id: "U_BOT" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+    const transport = new FetchSlackApiTransport("xoxb-token", fetchImpl, async (ms) => {
+      waited.push(ms);
+    });
+    expect(await transport.authTest()).toEqual({ botUserId: "U_BOT" });
+    expect(calls).toBe(2);
+    // The full 120s wait was honored verbatim — no clamp.
+    expect(waited).toEqual([120_000]);
   });
 });
