@@ -35,6 +35,7 @@ import type {
   SetSpecStatusInput,
   UpdateTaskInput,
   UpdateTaskWithEventInput,
+  UpdateTaskWithEventOutcome,
 } from "../contracts/runStateWriter.js";
 import type { RecordedCost } from "../costs/recorder.js";
 import type { EventName } from "../events/index.js";
@@ -158,16 +159,33 @@ export class HttpRunStateWriter implements RunStateWriter {
     await this.post<void>("/internal/update-task", { ...input, orgId: input.orgId ?? this.requireOrgId() });
   }
 
-  async updateTaskWithEvent(input: UpdateTaskWithEventInput): Promise<void> {
+  async updateTaskWithEvent(input: UpdateTaskWithEventInput): Promise<UpdateTaskWithEventOutcome> {
     // The atomic terminal-row + terminal-event seam (task #39). Resolve the
     // task's org explicitly (the row UPDATE + event INSERT run on ONE
     // org-scoped transaction server-side); a missing org throws loud rather
     // than posting an unscoped write the server would deny under enforced RLS.
+    //
+    // Task #40 Class B — RPC phantom-write idempotency. The route returns 204
+    // (no body) on a FRESH apply and `200 { alreadyTerminal: true }` when the
+    // server-side `ON CONFLICT DO NOTHING` deduped the event INSERT because
+    // the ORIGINAL apply already committed and only its HTTP response was
+    // DROPPED en route. The 200 path is NOT a partial / failed write — the
+    // ORIGINAL row + event are durable; the wrapping helpers
+    // (`markTaskDoneWithEvent` etc.) treat `alreadyTerminal: true` as a
+    // SILENT success so the finalize-guard's recovery call doesn't surface as
+    // a fresh error after the original work already landed.
     const orgId = input.task.orgId ?? this.requireOrgId();
-    await this.post<void>("/internal/update-task-with-event", {
-      task: { ...input.task, orgId },
-      event: input.event,
-    });
+    return this.postWithStatus<UpdateTaskWithEventOutcome>(
+      "/internal/update-task-with-event",
+      { task: { ...input.task, orgId }, event: input.event },
+      (status, body) => {
+        if (status === 200) {
+          return body as UpdateTaskWithEventOutcome;
+        }
+        // 204 (or any other 2xx) means this call wrote the pair fresh.
+        return { alreadyTerminal: false };
+      },
+    );
   }
 
   // --- Autonomy loops: the run/spec CREATE writes (explicit-actor, multi-table). ---
@@ -234,6 +252,34 @@ export class HttpRunStateWriter implements RunStateWriter {
     }
     const text = await response.text();
     return (text === "" ? undefined : JSON.parse(text)) as T;
+  }
+
+  /**
+   * Status-aware POST (task #40 Class B): identical to {@link post} on the
+   * non-2xx error path (a genuine infra fault still surfaces as
+   * RunStateWriteTransportError), but on success hands the caller BOTH the
+   * status code AND the parsed body so the route's 200-vs-204 distinction
+   * (`alreadyTerminal: true` vs the fresh write) can be surfaced typed at the
+   * seam. The `mapSuccess` callback owns the success-side mapping — the same
+   * shape `post` uses for `mapError` on the failure side.
+   */
+  private async postWithStatus<T>(
+    endpoint: string,
+    body: unknown,
+    mapSuccess: (status: number, parsedBody: unknown) => T,
+  ): Promise<T> {
+    const response = await this.mtlsFetch(`${this.baseUrl.replace(/\/$/u, "")}${endpoint}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!response.ok) {
+      const responseBody = await response.text().catch(() => "");
+      throw new RunStateWriteTransportError(response.status, endpoint, responseBody);
+    }
+    const text = await response.text();
+    const parsed: unknown = text === "" ? undefined : JSON.parse(text);
+    return mapSuccess(response.status, parsed);
   }
 }
 

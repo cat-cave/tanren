@@ -238,6 +238,24 @@ export interface UpdateTaskWithEventInput {
   event: AppendEventInput;
 }
 
+/**
+ * The outcome of an atomic terminal-row + terminal-event apply (task #40 Class B —
+ * RPC phantom-write idempotency). The event INSERT inside
+ * `applyUpdateTaskWithEvent` is `ON CONFLICT DO NOTHING` against the partial
+ * unique index `events_task_terminal_unique (task_id, event_type)`, so a
+ * server-side COMMIT whose HTTP response was DROPPED + a data-plane retry
+ * does NOT write a contradictory second same-type terminal event. The
+ * `alreadyTerminal` flag tells the caller whether THIS call's INSERT landed
+ * (`false`) or was deduped because the original landed (`true`); the wrapping
+ * helpers (`markTaskDoneWithEvent` / `markTaskFailedWithEvent` /
+ * `markTaskFailedIfRunningWithEvent`) treat `true` as a SILENT success (the
+ * work is durably done) rather than a throwable error.
+ */
+export interface UpdateTaskWithEventOutcome {
+  /** True when the event was already terminal (this call deduped); false when this call wrote it. */
+  alreadyTerminal: boolean;
+}
+
 /** The shape of a `tasks` INSERT the workflow drives (subtask / CI / review / merge). */
 export interface InsertTaskInput {
   taskId: string;
@@ -433,8 +451,17 @@ export interface RunStateWriter extends EventStore {
    * row terminal-`done` with NO `task.completed` event. The {@link terminalPairSchema}
    * refinement enforces the pairing — a non-terminal transition or a mismatched
    * (e.g. `done` ↔ `task.failed`) misuse is rejected at the seam before any DB I/O.
+   *
+   * Returns the {@link UpdateTaskWithEventOutcome} so the caller distinguishes a
+   * FRESH terminal apply (`alreadyTerminal: false`) from an IDEMPOTENT retry
+   * whose original committed but whose HTTP response was DROPPED en route
+   * (`alreadyTerminal: true` — task #40 Class B; the event INSERT was deduped
+   * against the partial unique index `events_task_terminal_unique`). The
+   * wrapping helpers (`markTaskDoneWithEvent` etc.) swallow `true` silently
+   * (the work is durably done); the HTTP route surfaces it as a typed
+   * `200 { alreadyTerminal: true }` (vs. `204 No Content` on a fresh write).
    */
-  updateTaskWithEvent(input: UpdateTaskWithEventInput): Promise<void>;
+  updateTaskWithEvent(input: UpdateTaskWithEventInput): Promise<UpdateTaskWithEventOutcome>;
 
   // --- Autonomy loops: the run/spec CREATE writes (explicit-actor, multi-table). ---
 

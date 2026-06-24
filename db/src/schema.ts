@@ -169,6 +169,11 @@ export const events = pgTable(
     index("events_org_id").on(table.orgId),
     index("events_org_run_ts").on(table.orgId, table.runId, table.ts),
     index("events_org_project_ts").on(table.orgId, table.projectId, table.ts),
+    // Terminal events per task are AT MOST ONCE per type (task #40 Class B —
+    // the atomic seam uses ON CONFLICT DO NOTHING against this partial index).
+    uniqueIndex("events_task_terminal_unique")
+      .on(table.taskId, table.eventType)
+      .where(sql`${table.eventType} IN ('task.completed', 'task.failed', 'task.cancelled')`),
   ],
 );
 
@@ -346,11 +351,8 @@ export const apiTokens = pgTable(
   (table) => [index("api_tokens_user_id").on(table.userId), uniqueIndex("api_tokens_hash_unique").on(table.tokenHash)],
 );
 
-// ---------------------------------------------------------------------------
 // P2A-0018 product entities: personas, behaviors, milestones, spec links,
 // directed spec dependency edges. See docs/architecture/product-entities.md.
-// ---------------------------------------------------------------------------
-
 export const personas = pgTable(
   "personas",
   {
@@ -480,21 +482,18 @@ export const specDependencies = pgTable(
   ],
 );
 
-// Sub-schema files are kept separate to respect the file-line-max-500
-// architecture rule; consumers + the migration generator see one `schema.*`
-// namespace via these re-exports. Owners: schemaNotifications (P2A-0017),
-// schemaForge (P2A-0019), schemaInsights (P2A-0020), schemaInbox (P3-0022),
-// schemaAudits (P3-0021), schemaBenchmark (tanren-method benchmark).
+// Sub-schema files split out for the file-line-max-500 architecture rule;
+// re-exported so consumers + the migration generator see one `schema.*`.
+// Owners: schemaNotifications/Forge/Insights/Inbox/Audits/Benchmark/
+// Integrations/Templates/Claims/Environments/Design.
 export { notificationTargets, notificationRoutes } from "./schemaNotifications.js";
 export { forgeThreads, forgeTurns, forgeActionProposals } from "./schemaForge.js";
 export { workflowInsights, quarantinedTests, ciTestResults } from "./schemaInsights.js";
 export { inboxSources, candidates, webhookEvents } from "./schemaInbox.js";
 export { auditJobs } from "./schemaAudits.js";
 export { experiments, experimentCells, experimentTrials } from "./schemaBenchmark.js";
-// Integration-provisioning (schemaIntegrations.ts): integration registry (Plane A) + app-env (Plane B). Templating REGISTRY (schemaTemplates.ts) + §3.3 entity-anchored CLAIMS ledger (schemaClaims.ts).
 export { orgIntegrations, projectAppEnv } from "./schemaIntegrations.js";
 export { templates } from "./schemaTemplates.js";
 export { entityClaims } from "./schemaClaims.js";
-// Environment management (schemaEnvironments.ts): the ENVIRONMENT registry — runner-image catalogue. Native design subsystem (schemaDesign.ts, WS-D1): the versioned org-scoped `DesignContract` entity.
 export { environments } from "./schemaEnvironments.js";
 export { designContracts } from "./schemaDesign.js";
