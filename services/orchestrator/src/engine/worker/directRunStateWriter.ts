@@ -21,6 +21,8 @@ import type {
   FinalizeLandInput,
   FinalizeRunInput,
   FinalizeRunResult,
+  FinalizeRunWithEventInput,
+  FinalizeRunWithEventOutcome,
   InsertTaskInput,
   MergeRunVerifiedAncestorShaInput,
   RecordCostInput,
@@ -33,6 +35,8 @@ import type {
   SetRunStatusInput,
   SetSpecMetadataInput,
   SetSpecStatusInput,
+  UpdateSpecWithEventInput,
+  UpdateSpecWithEventOutcome,
   UpdateTaskInput,
   UpdateTaskWithEventInput,
   UpdateTaskWithEventOutcome,
@@ -48,6 +52,7 @@ import {
 } from "../workflow/projectSpec.js";
 import {
   applyClearRunPercolationPending,
+  applyFinalizeRunWithEvent,
   applyInsertTask,
   applyMergeRunVerifiedAncestorSha,
   applySetRunAuthRef,
@@ -58,8 +63,11 @@ import {
   applySetSpecMetadata,
   applySetSpecStatus,
   applySupersedeQueuedPlannerTask,
+  applyUpdateSpecWithEvent,
   applyUpdateTask,
   applyUpdateTaskWithEvent,
+  runPairSchema,
+  specPairSchema,
   terminalPairSchema,
 } from "./runStateLifecycleSql.js";
 import { applyFinalizeLand } from "../merge/mergeAuthorityLandFinalizer.js";
@@ -202,6 +210,23 @@ export class DirectRunStateWriter implements RunStateWriter {
     // true` when the partial unique index `events_task_terminal_unique` deduped
     // the event INSERT (the original landed, this is a retry; task #40 Class B).
     return this.inTaskScopeOrThrowResult(input.task.orgId, (client) => applyUpdateTaskWithEvent(client, input));
+  }
+
+  async finalizeRunWithEvent(input: FinalizeRunWithEventInput): Promise<FinalizeRunWithEventOutcome> {
+    // Validate the pairing constraint (terminal run outcome + matching terminal event)
+    // BEFORE any DB I/O — a misuse is rejected at the seam (task #48).
+    runPairSchema.parse(input);
+    // Mirrors `finalizeRun`'s `runWithOrgScope(this.pool, input.finalize.orgId, ...)`
+    // — explicit org from the caller, ONE org-scoped transaction so the row +
+    // event live or die together.
+    return runWithOrgScope(this.pool, input.finalize.orgId, (client) => applyFinalizeRunWithEvent(client, input));
+  }
+
+  async updateSpecWithEvent(input: UpdateSpecWithEventInput): Promise<UpdateSpecWithEventOutcome> {
+    // Validate the spec-pair constraint at the SEAM (paired status flip +
+    // matching disposition event), so a misuse is rejected BEFORE any DB I/O.
+    specPairSchema.parse(input);
+    return runWithOrgScope(this.pool, input.spec.orgId, (client) => applyUpdateSpecWithEvent(client, input));
   }
 
   // --- Autonomy loops: the run/spec CREATE writes (explicit-actor, multi-table). ---

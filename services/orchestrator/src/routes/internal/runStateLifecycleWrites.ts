@@ -40,6 +40,7 @@ import { applyFinalizeLand } from "../../engine/merge/mergeAuthorityLandFinalize
 import { verifyInternalPeer, type RunStateWriteRouteDeps } from "./internalWriteShared.js";
 import { ancestorStackSchema } from "../../engine/dag/ancestorStack.js";
 import { AuditEnvelope } from "../../engine/events/schemas/audit.js";
+import { registerRunStateAtomicRoutes } from "./runStateAtomicWrites.js";
 
 const setRunStatusSchema = z.object({
   runId: z.string().min(1),
@@ -411,4 +412,9 @@ export function registerRunStateLifecycleRoutes(app: Hono, deps: RunStateWriteRo
     }
     return c.body(null, 204);
   });
+
+  // Task #48 atomic-seam endpoints (RUN-LEVEL + SPEC-LEVEL mirrors) live in
+  // `./runStateAtomicWrites.ts` to keep this function under the per-function
+  // line cap; same `deps` thread through so the registration is uniform.
+  registerRunStateAtomicRoutes(app, deps);
 }

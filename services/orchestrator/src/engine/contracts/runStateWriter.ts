@@ -27,6 +27,12 @@ import type { ActorContext } from "../../auth/schemas.js";
 import type { CreateSpecInput, CreateSpecRunInput, SpecContract, SpecRunContract } from "../workflow/projectSpec.js";
 import type { AncestorStack } from "../dag/ancestorStack.js";
 import type { AuditEnvelope } from "../events/schemas/audit.js";
+import type {
+  FinalizeRunWithEventInput,
+  FinalizeRunWithEventOutcome,
+  UpdateSpecWithEventInput,
+  UpdateSpecWithEventOutcome,
+} from "./runStateAtomicSeam.js";
 
 /** A run-finalize transition the worker drives at run end / failure. */
 export interface FinalizeRunInput {
@@ -238,6 +244,15 @@ export interface UpdateTaskWithEventInput {
   event: AppendEventInput;
 }
 
+// Task #48 atomic-seam types live in `./runStateAtomicSeam.ts` (the 500-line cap
+// keeps this file lean; re-exported from `./index.ts` so callers see one namespace).
+export type {
+  FinalizeRunWithEventInput,
+  FinalizeRunWithEventOutcome,
+  UpdateSpecWithEventInput,
+  UpdateSpecWithEventOutcome,
+} from "./runStateAtomicSeam.js";
+
 /**
  * The outcome of an atomic terminal-row + terminal-event apply (task #40 Class B —
  * RPC phantom-write idempotency). The event INSERT inside
@@ -443,25 +458,21 @@ export interface RunStateWriter extends EventStore {
   /** Move one `tasks` row through a named lifecycle transition by `task_id`. */
   updateTask(input: UpdateTaskInput): Promise<void>;
 
-  /**
-   * Move one `tasks` row to a TERMINAL state AND append the matching `task.*`
-   * event in ONE org-scoped transaction (task #39 — the autonomy-engine.md §1c
-   * single-finalize invariant). The prior pair (`updateTask` + a separate
-   * `append`) issued two writes; a crash/DB failure between them stranded the
-   * row terminal-`done` with NO `task.completed` event. The {@link terminalPairSchema}
-   * refinement enforces the pairing — a non-terminal transition or a mismatched
-   * (e.g. `done` ↔ `task.failed`) misuse is rejected at the seam before any DB I/O.
-   *
-   * Returns the {@link UpdateTaskWithEventOutcome} so the caller distinguishes a
-   * FRESH terminal apply (`alreadyTerminal: false`) from an IDEMPOTENT retry
-   * whose original committed but whose HTTP response was DROPPED en route
-   * (`alreadyTerminal: true` — task #40 Class B; the event INSERT was deduped
-   * against the partial unique index `events_task_terminal_unique`). The
-   * wrapping helpers (`markTaskDoneWithEvent` etc.) swallow `true` silently
-   * (the work is durably done); the HTTP route surfaces it as a typed
-   * `200 { alreadyTerminal: true }` (vs. `204 No Content` on a fresh write).
-   */
+  /** Move one `tasks` row to TERMINAL + append the matching `task.*` event in
+   * ONE org-scoped tx (task #39). Pairing via `terminalPairSchema`; idempotent
+   * via `events_task_terminal_unique` (task #40 Class B — `alreadyTerminal: true`
+   * on a dropped-HTTP-response retry; helpers swallow silently). */
   updateTaskWithEvent(input: UpdateTaskWithEventInput): Promise<UpdateTaskWithEventOutcome>;
+
+  /** Finalize a run + matching terminal `run.*` event in ONE org-scoped tx
+   * (task #48 — RUN-LEVEL mirror of {@link updateTaskWithEvent}). Pairing
+   * via `runPairSchema`; idempotent via `events_run_terminal_unique`. */
+  finalizeRunWithEvent(input: FinalizeRunWithEventInput): Promise<FinalizeRunWithEventOutcome>;
+
+  /** Flip a spec's status + matching `dag.spec.*` event in ONE org-scoped tx
+   * (task #48 — SPEC-LEVEL mirror). Recurring events on the spec side (no
+   * partial unique index — Plan §3); `flipped: false` ⇒ caller skips event. */
+  updateSpecWithEvent(input: UpdateSpecWithEventInput): Promise<UpdateSpecWithEventOutcome>;
 
   // --- Autonomy loops: the run/spec CREATE writes (explicit-actor, multi-table). ---
 

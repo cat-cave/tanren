@@ -33,6 +33,8 @@ import type { MergeQueueEntry } from "../contracts/mergeCoordinator.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import { resolveProjectOrg } from "../dag/percolationWrites.js";
 import { type EventStore, PgEventStore } from "../eventStore.js";
+import { applyUpdateSpecWithEvent } from "../worker/runStateLifecycleSql.js";
+import type { AppendEventInput } from "../eventStore.js";
 import {
   atReplanFixedPoint,
   gateErrorSignature,
@@ -198,15 +200,21 @@ export class PgBatchGateReworkRouter implements BatchGateReworkRouter {
   }
 
   /** ESCALATE: the rework loop is at a FIXED POINT (the same gate error recurs) — park
-   * `needs_attention` (loud, frees the slot). No count — the fixed point IS the trigger. */
+   * `needs_attention` (loud, frees the slot). No count — the fixed point IS the trigger.
+   *
+   * Task #48 Site I: the aux `merge.batch.gate_rework_routed` event is emitted
+   * BEFORE the load-bearing atomic pair (spec `needs_attention` flip +
+   * `dag.spec.needs_attention` event) — per Plan §4 trade-off note. The aux
+   * event is observable lineage; the load-bearing pair is the actual park.
+   * Atomicity replaces best-effort on the pair. */
   private async escalate(
     orgId: string,
     input: { projectId: string; culprit: MergeQueueEntry; gateError: string },
     priorReworks: number,
   ): Promise<void> {
-    await this.parkSpec(orgId, input.culprit.specId);
-    await this.withScopedStore(orgId, async (store) => {
-      await store.append({
+    // Aux event first (observable lineage of the routing decision).
+    await this.withScopedStore(orgId, (store) =>
+      store.append({
         runId: input.culprit.runId,
         specId: input.culprit.specId,
         projectId: input.projectId,
@@ -220,37 +228,39 @@ export class PgBatchGateReworkRouter implements BatchGateReworkRouter {
           gateError: input.gateError,
           priorReworks,
         },
-      });
-      await store.append({
-        runId: input.culprit.runId,
+      }),
+    );
+    // Load-bearing atomic pair: spec park + the loud `dag.spec.needs_attention` event.
+    await this.parkSpecAtomic(orgId, input.culprit.specId, {
+      runId: input.culprit.runId,
+      specId: input.culprit.specId,
+      projectId: input.projectId,
+      eventType: "dag.spec.needs_attention",
+      payload: {
+        source: "strand",
         specId: input.culprit.specId,
-        projectId: input.projectId,
-        eventType: "dag.spec.needs_attention",
-        payload: {
-          source: "strand",
-          specId: input.culprit.specId,
-          reason: "persistent_failure",
-          terminalRuns: [{ runId: input.culprit.runId, status: "halted" }],
-          attempts: priorReworks,
-          message:
-            `the autonomous self-heal reached a FIXED POINT re-working this spec for an integrated-tree gate ` +
-            `failure: the SAME batch-gate error recurs after re-authoring (no change to it), so a human must ` +
-            `intervene. Latest gate error: ${input.gateError}`,
-        },
-      });
+        reason: "persistent_failure",
+        terminalRuns: [{ runId: input.culprit.runId, status: "halted" }],
+        attempts: priorReworks,
+        message:
+          `the autonomous self-heal reached a FIXED POINT re-working this spec for an integrated-tree gate ` +
+          `failure: the SAME batch-gate error recurs after re-authoring (no change to it), so a human must ` +
+          `intervene. Latest gate error: ${input.gateError}`,
+      },
     });
   }
 
-  /** ESCALATE an enqueue failure: a rework whose run could not be created is genuinely stuck. */
+  /** ESCALATE an enqueue failure: a rework whose run could not be created is genuinely stuck.
+   *
+   * Task #48 Site I (variant): same aux-then-atomic-pair shape as `escalate`. */
   private async escalateEnqueueFailure(
     orgId: string,
     input: { projectId: string; culprit: MergeQueueEntry; gateError: string },
     error: unknown,
   ): Promise<void> {
     const detail = error instanceof Error ? error.message : String(error);
-    await this.parkSpec(orgId, input.culprit.specId);
-    await this.withScopedStore(orgId, async (store) => {
-      await store.append({
+    await this.withScopedStore(orgId, (store) =>
+      store.append({
         runId: input.culprit.runId,
         specId: input.culprit.specId,
         projectId: input.projectId,
@@ -264,43 +274,56 @@ export class PgBatchGateReworkRouter implements BatchGateReworkRouter {
           gateError: input.gateError,
           priorReworks: 0,
         },
-      });
-      await store.append({
-        runId: input.culprit.runId,
+      }),
+    );
+    await this.parkSpecAtomic(orgId, input.culprit.specId, {
+      runId: input.culprit.runId,
+      specId: input.culprit.specId,
+      projectId: input.projectId,
+      eventType: "dag.spec.needs_attention",
+      payload: {
+        source: "strand",
         specId: input.culprit.specId,
-        projectId: input.projectId,
-        eventType: "dag.spec.needs_attention",
-        payload: {
-          source: "strand",
-          specId: input.culprit.specId,
-          reason: "persistent_failure",
-          terminalRuns: [{ runId: input.culprit.runId, status: "halted" }],
-          attempts: 0,
-          message:
-            `the autonomous self-heal routed this spec back to the writer to fix an integrated-tree gate ` +
-            `failure but could NOT enqueue the rework run (${detail}) — a human must intervene. Gate error: ${input.gateError}`,
-        },
-      });
+        reason: "persistent_failure",
+        terminalRuns: [{ runId: input.culprit.runId, status: "halted" }],
+        attempts: 0,
+        message:
+          `the autonomous self-heal routed this spec back to the writer to fix an integrated-tree gate ` +
+          `failure but could NOT enqueue the rework run (${detail}) — a human must intervene. Gate error: ${input.gateError}`,
+      },
     });
   }
 
-  /** Guarded, plane-split-safe spec park to `needs_attention` (mirrors PgSpecEscalator). */
-  private async parkSpec(orgId: string, specId: string): Promise<void> {
+  /** Task #48 Site I: ATOMIC spec park + `dag.spec.needs_attention` event in
+   * ONE org-scoped transaction (control plane when wired, else in-process via
+   * the same shared applier). Replaces the prior `parkSpec()` + separate
+   * append — the load-bearing pair is no longer split.
+   *
+   * TEST SEAM: when `deps.appendEvent` is injected (no-DB unit run), fall back
+   * to the legacy split (a guarded spec UPDATE on the test pool + the
+   * injected event recorder) so test assertions still capture the event
+   * without needing a real Postgres + RLS. The production paths always wire
+   * a real writer OR a real pool, so the seam-bound atomicity is preserved
+   * where it matters; the unit-test fallback is an explicit narrow concession
+   * (the contract is exercised end-to-end in the conformance suite). */
+  private async parkSpecAtomic(orgId: string, specId: string, event: AppendEventInput): Promise<void> {
+    const spec = { specId, orgId, status: "needs_attention", notFromStatuses: ["merged", "needs_attention"] };
     if (this.deps.runStateWriter !== undefined) {
-      await this.deps.runStateWriter.setSpecStatus({
-        specId,
-        orgId,
-        status: "needs_attention",
-        notFromStatuses: ["merged", "needs_attention"],
-      });
+      await this.deps.runStateWriter.updateSpecWithEvent({ spec, event });
       return;
     }
-    await runWithOrgScope(this.deps.pool, orgId, async (client) => {
-      await client.query(
-        `UPDATE specs SET status = 'needs_attention' WHERE spec_id = $1 AND status NOT IN ('merged', 'needs_attention')`,
-        [specId],
-      );
-    });
+    if (this.deps.appendEvent !== undefined) {
+      // TEST SEAM split fallback (no DB / no real writer).
+      await runWithOrgScope(this.deps.pool, orgId, async (client) => {
+        await client.query(
+          `UPDATE specs SET status = 'needs_attention' WHERE spec_id = $1 AND status NOT IN ('merged', 'needs_attention')`,
+          [specId],
+        );
+      });
+      await this.deps.appendEvent(orgId, event);
+      return;
+    }
+    await runWithOrgScope(this.deps.pool, orgId, (client) => applyUpdateSpecWithEvent(client, { spec, event }));
   }
 
   private async withScopedStore(orgId: string, work: (store: EventStore) => Promise<void>): Promise<void> {

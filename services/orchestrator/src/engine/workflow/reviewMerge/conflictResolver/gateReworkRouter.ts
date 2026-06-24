@@ -29,7 +29,7 @@
 
 import type pg from "pg";
 import type { GateReworkRouter } from "../../../contracts/conflictResolution.js";
-import type { EventStore } from "../../../eventStore.js";
+import type { AppendEventInput, EventStore } from "../../../eventStore.js";
 import type { RunStateWriter } from "../../../contracts/runStateWriter.js";
 import { buildGateReworkSteering } from "../../../merge/batchGateReworkRouter.js";
 import { SpecNotRunnableError } from "../../projectSpecErrors.js";
@@ -163,9 +163,12 @@ export class SpecStatusGateReworkRouter implements GateReworkRouter {
   }
 
   /** ESCALATE: the rework loop is at a FIXED POINT (the same re-gate error recurs) — park
-   * `needs_attention` (loud, frees the slot). No count — the fixed point IS the trigger. */
+   * `needs_attention` (loud, frees the slot). No count — the fixed point IS the trigger.
+   *
+   * Task #48 Site J: the aux `merge.regate.gate_rework_routed` event is emitted
+   * BEFORE the load-bearing atomic pair (spec `needs_attention` flip +
+   * `dag.spec.needs_attention` event) — per Plan §4 trade-off note. */
   private async escalate(input: { specId: string; gateError: string }, priorReworks: number): Promise<void> {
-    await this.setSpecStatus(input.specId, "needs_attention");
     await this.deps.eventStore.append({
       runId: this.deps.runId,
       specId: input.specId,
@@ -181,7 +184,7 @@ export class SpecStatusGateReworkRouter implements GateReworkRouter {
         priorReworks,
       },
     });
-    await this.deps.eventStore.append({
+    await this.parkSpecAtomic(input.specId, {
       runId: this.deps.runId,
       specId: input.specId,
       projectId: this.deps.projectId,
@@ -200,10 +203,11 @@ export class SpecStatusGateReworkRouter implements GateReworkRouter {
     });
   }
 
-  /** ESCALATE an enqueue failure: a rework whose run could not be created is genuinely stuck. */
+  /** ESCALATE an enqueue failure: a rework whose run could not be created is genuinely stuck.
+   *
+   * Task #48 Site J (variant): same aux-then-atomic-pair shape as `escalate`. */
   private async escalateEnqueueFailure(input: { specId: string; gateError: string }, error: unknown): Promise<void> {
     const detail = error instanceof Error ? error.message : String(error);
-    await this.setSpecStatus(input.specId, "needs_attention");
     await this.deps.eventStore.append({
       runId: this.deps.runId,
       specId: input.specId,
@@ -219,7 +223,7 @@ export class SpecStatusGateReworkRouter implements GateReworkRouter {
         priorReworks: 0,
       },
     });
-    await this.deps.eventStore.append({
+    await this.parkSpecAtomic(input.specId, {
       runId: this.deps.runId,
       specId: input.specId,
       projectId: this.deps.projectId,
@@ -237,7 +241,9 @@ export class SpecStatusGateReworkRouter implements GateReworkRouter {
     });
   }
 
-  /** Set the spec status through the control plane when wired, else the in-process UPDATE. */
+  /** Set the spec status through the control plane when wired, else the in-process UPDATE.
+   * Retained for the degenerate/test branch in `routeGateFailToRework` that
+   * needs only a bare status flip (no paired event), not the atomic seam. */
   private async setSpecStatus(specId: string, status: string): Promise<void> {
     if (this.deps.runStateWriter !== undefined && this.deps.orgId !== undefined) {
       await this.deps.runStateWriter.setSpecStatus({ specId, orgId: this.deps.orgId, status });
@@ -247,5 +253,30 @@ export class SpecStatusGateReworkRouter implements GateReworkRouter {
         status,
       ]);
     }
+  }
+
+  /** Task #48 Site J: ATOMIC spec park to `needs_attention` + the matching
+   * `dag.spec.needs_attention` event in ONE org-scoped transaction (control
+   * plane when wired, else the in-process UPDATE + a separate event-store
+   * append, mirroring the original split-write fallback when no writer/org is
+   * wired — the unit/degenerate path retains the prior shape). */
+  private async parkSpecAtomic(specId: string, event: AppendEventInput): Promise<void> {
+    if (this.deps.runStateWriter !== undefined && this.deps.orgId !== undefined) {
+      await this.deps.runStateWriter.updateSpecWithEvent({
+        spec: {
+          specId,
+          orgId: this.deps.orgId,
+          status: "needs_attention",
+          notFromStatuses: ["merged", "needs_attention"],
+        },
+        event,
+      });
+      return;
+    }
+    // No writer / no org (the degenerate/test path) — fall back to the legacy
+    // split (the in-process UPDATE + the event store), exactly mirroring the
+    // pre-task-#48 shape; production always wires the writer.
+    await this.setSpecStatus(specId, "needs_attention");
+    await this.deps.eventStore.append(event);
   }
 }

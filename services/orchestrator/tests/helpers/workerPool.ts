@@ -230,14 +230,35 @@ export class WorkerPool {
     // for a genuinely-occupying spec). Observed so a test can assert the worker re-drove /
     // escalated — or, for the single-finalize invariant, that it did NOT (a
     // `WorkflowFinalizedError` skips `finalizeRunRecoverable` entirely).
-    const orphanFlip =
+    //
+    // Task #48 (run/spec atomicity sweep): the in-process orphan path now uses the
+    // shared `applyUpdateSpecWithEvent` applier which writes a PARAMETERIZED
+    // `UPDATE specs SET status = $2 ... <> ALL($3::text[]) RETURNING spec_id` (the
+    // negative-form guard, equivalent to the prior `status IN ('in_flight','review')`
+    // positive form for the four-states-of-the-spec model). Match BOTH shapes so the
+    // fake is stable across the migration.
+    const orphanFlipLegacy =
       /^UPDATE specs SET status = '(open|needs_attention)'\s+WHERE spec_id = \$1 AND status IN \('in_flight', 'review'\)/u.exec(
         trimmed,
       );
-    if (orphanFlip !== null) {
+    if (orphanFlipLegacy !== null) {
       const occupying = this.specStatus === "in_flight" || this.specStatus === "review";
       if (!occupying) return { rows: [], rowCount: 0 };
-      this.specStatus = orphanFlip[1] ?? "needs_attention";
+      this.specStatus = orphanFlipLegacy[1] ?? "needs_attention";
+      return { rows: [{ spec_id: String(params[0]) }], rowCount: 1 };
+    }
+    // Task #48 parameterized variant — the atomic seam's shape. `notFromStatuses`
+    // (param $3 — a text array) carries the negative-form guard; the target status
+    // rides $2 (the applier accepts `open` for re-drive, `needs_attention` for halt).
+    if (
+      trimmed.startsWith(
+        "UPDATE specs SET status = $2 WHERE spec_id = $1 AND status <> ALL($3::text[]) RETURNING spec_id",
+      )
+    ) {
+      const occupying = this.specStatus === "in_flight" || this.specStatus === "review";
+      if (!occupying) return { rows: [], rowCount: 0 };
+      const target = String(params[1]);
+      this.specStatus = target;
       return { rows: [{ spec_id: String(params[0]) }], rowCount: 1 };
     }
     // spec status transitions (claim 'in_flight', finalize 'merged')
@@ -359,6 +380,31 @@ export class WorkerPool {
       }
       this.runStatus = { status: "halted", outcome: String(params[1]) };
       return { rows: [], rowCount: 1 };
+    }
+    // Task #48: the atomic `applyFinalizeRunWithEvent` writes a fully PARAMETERIZED
+    // shape: `UPDATE runs SET status = $2, outcome = $3, ended_at = now() WHERE run_id = $1
+    // AND status = ANY($4::text[]) RETURNING spec_id, project_id` (multi-line in the
+    // applier source — `\s+` admits the inline newline/indentation). The status
+    // target rides $2, the outcome rides $3, the allowed-from-statuses array rides $4.
+    // Honors the SAME guard semantics as the literal shape above so the finalizer's
+    // effect is observable identically across the seam migration.
+    if (
+      /^UPDATE runs SET status = \$2, outcome = \$3, ended_at = now\(\)\s+WHERE run_id = \$1 AND status = ANY\(\$4::text\[\]\)\s+RETURNING spec_id, project_id/u.test(
+        trimmed,
+      )
+    ) {
+      const allowed = (params[3] as string[] | undefined) ?? [];
+      if (allowed.includes(this.runStatus.status)) {
+        const targetStatus = String(params[1]);
+        const targetOutcome = String(params[2]);
+        this.runStatus = { status: targetStatus, outcome: targetOutcome };
+        const run = this.runs.get(String(params[0]));
+        return {
+          rows: [{ spec_id: run?.spec_id ?? "", project_id: run?.project_id ?? "" }],
+          rowCount: 1,
+        };
+      }
+      return { rows: [], rowCount: 0 };
     }
     if (trimmed.startsWith("UPDATE runs SET status = 'failed'")) {
       this.runStatus = { status: "failed", outcome: "failed" };

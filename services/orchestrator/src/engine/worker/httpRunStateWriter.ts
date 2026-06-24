@@ -21,6 +21,8 @@ import type {
   FinalizeLandInput,
   FinalizeRunInput,
   FinalizeRunResult,
+  FinalizeRunWithEventInput,
+  FinalizeRunWithEventOutcome,
   InsertTaskInput,
   MergeRunVerifiedAncestorShaInput,
   RecordCostInput,
@@ -33,6 +35,8 @@ import type {
   SetRunStatusInput,
   SetSpecMetadataInput,
   SetSpecStatusInput,
+  UpdateSpecWithEventInput,
+  UpdateSpecWithEventOutcome,
   UpdateTaskInput,
   UpdateTaskWithEventInput,
   UpdateTaskWithEventOutcome,
@@ -184,6 +188,48 @@ export class HttpRunStateWriter implements RunStateWriter {
         }
         // 204 (or any other 2xx) means this call wrote the pair fresh.
         return { alreadyTerminal: false };
+      },
+    );
+  }
+
+  async finalizeRunWithEvent(input: FinalizeRunWithEventInput): Promise<FinalizeRunWithEventOutcome> {
+    // The atomic terminal-run finalize + terminal-event seam (task #48 —
+    // the RUN-LEVEL mirror of `updateTaskWithEvent`). Carries the org
+    // explicitly (the worker failure-path holds the run context); the
+    // server runs the row UPDATE + event INSERT in ONE org-scoped
+    // transaction. The route returns:
+    //   - 204 No Content                       — fresh apply (this call wrote it).
+    //   - 200 { ...FinalizeRunWithEventOutcome } — full outcome (no-row-moved /
+    //     deduped retry / fresh write whose row+spec/project are returned).
+    return this.postWithStatus<FinalizeRunWithEventOutcome>(
+      "/internal/finalize-run-with-event",
+      input,
+      (status, body) => {
+        if (status === 200) {
+          return body as FinalizeRunWithEventOutcome;
+        }
+        // 204 (or any other 2xx) means this call wrote the pair fresh; the
+        // route only sends a body when the row didn't move OR the event
+        // deduped, so a 204 means a clean fresh apply.
+        return { updated: true, alreadyTerminal: false };
+      },
+    );
+  }
+
+  async updateSpecWithEvent(input: UpdateSpecWithEventInput): Promise<UpdateSpecWithEventOutcome> {
+    // The atomic spec-status flip + spec-disposition event seam (task #48 —
+    // the SPEC-LEVEL mirror of `updateTaskWithEvent`). The route returns
+    // 204 on a fresh flip and 200 `{ flipped: false }` when the guard bit
+    // (the spec was already terminal); on the false path the caller suppresses
+    // its event emit (no double-announce).
+    return this.postWithStatus<UpdateSpecWithEventOutcome>(
+      "/internal/update-spec-with-event",
+      input,
+      (status, body) => {
+        if (status === 200) {
+          return body as UpdateSpecWithEventOutcome;
+        }
+        return { flipped: true, alreadyTerminal: false };
       },
     );
   }

@@ -169,11 +169,14 @@ export const events = pgTable(
     index("events_org_id").on(table.orgId),
     index("events_org_run_ts").on(table.orgId, table.runId, table.ts),
     index("events_org_project_ts").on(table.orgId, table.projectId, table.ts),
-    // Terminal events per task are AT MOST ONCE per type (task #40 Class B —
-    // the atomic seam uses ON CONFLICT DO NOTHING against this partial index).
+    // Terminal events per task/run are AT MOST ONCE per type (#40 Class B + #48 —
+    // ON CONFLICT DO NOTHING dedupes dropped-HTTP-response retries).
     uniqueIndex("events_task_terminal_unique")
       .on(table.taskId, table.eventType)
       .where(sql`${table.eventType} IN ('task.completed', 'task.failed', 'task.cancelled')`),
+    uniqueIndex("events_run_terminal_unique")
+      .on(table.runId, table.eventType)
+      .where(sql`${table.eventType} IN ('run.completed', 'run.failed', 'run.cancelled')`),
   ],
 );
 
@@ -482,10 +485,7 @@ export const specDependencies = pgTable(
   ],
 );
 
-// Sub-schema files split out for the file-line-max-500 architecture rule;
-// re-exported so consumers + the migration generator see one `schema.*`.
-// Owners: schemaNotifications/Forge/Insights/Inbox/Audits/Benchmark/
-// Integrations/Templates/Claims/Environments/Design.
+// Sub-schema files split for file-line-max-500; re-exported as `schema.*`.
 export { notificationTargets, notificationRoutes } from "./schemaNotifications.js";
 export { forgeThreads, forgeTurns, forgeActionProposals } from "./schemaForge.js";
 export { workflowInsights, quarantinedTests, ciTestResults } from "./schemaInsights.js";

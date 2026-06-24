@@ -13,12 +13,12 @@
 // There is NO producer of the escalation yet (the drive resolver still returns the
 // recoverable `conflict`) — this is the foundation the later resolver RETURNS into.
 
-import { runWithJobOrgId, runWithOrgScope } from "@tanren/db";
+import { runWithOrgScope } from "@tanren/db";
 import type pg from "pg";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { MergeQueueEntry } from "../contracts/mergeCoordinator.js";
 import { resolveProjectOrg } from "../dag/percolationWrites.js";
-import { type EventStore, PgEventStore } from "../eventStore.js";
+import { applyUpdateSpecWithEvent } from "../worker/runStateLifecycleSql.js";
 
 /**
  * The seam both coordinators reuse to escalate a genuinely-irreconcilable spec. ONE
@@ -60,60 +60,35 @@ export class PgSpecEscalator implements SpecEscalator {
       throw new Error(`cannot escalate spec ${input.entry.specId}: project ${input.projectId} has no org`);
     }
 
-    // Park the spec at `needs_attention` (the guarded, plane-split-safe flip).
-    await this.parkSpec(orgId, input.entry.specId);
-
-    // Emit the loud parked-state event through the same plane-split seam the queue
-    // events use: control plane when wired (the writer resolves the run's org from the
-    // ambient per-job org id), else in-process under a short org scope.
-    await this.withScopedStore(orgId, (store) =>
-      store.append({
-        runId: input.entry.runId,
+    // Task #48 Site H: the spec `needs_attention` flip + the matching
+    // `dag.spec.needs_attention` event are now ATOMIC. The prior split
+    // (`parkSpec(...)` + `withScopedStore.append(...)`) issued two separate
+    // writes; the partial-event landing was a silent strand surface. The
+    // atomic seam (`updateSpecWithEvent` / `applyUpdateSpecWithEvent`)
+    // bundles them into ONE org-scoped transaction.
+    const event = {
+      runId: input.entry.runId,
+      specId: input.entry.specId,
+      projectId: input.projectId,
+      eventType: "dag.spec.needs_attention" as const,
+      payload: {
+        source: "merge_conflict",
         specId: input.entry.specId,
-        projectId: input.projectId,
-        eventType: "dag.spec.needs_attention",
-        payload: {
-          source: "merge_conflict",
-          specId: input.entry.specId,
-          prUrl: input.entry.prUrl,
-          prNumber: input.entry.prNumber,
-          message: input.message,
-        },
-      }),
-    );
-  }
-
-  /**
-   * The guarded, plane-split-safe spec-status flip to `needs_attention` (mirrors
-   * `markSpecMerged`): route through the control-plane `runStateWriter` when wired,
-   * else an org-scoped `UPDATE`. `notFromStatuses` makes it ATOMIC — an already
-   * merged/done/needs_attention spec is never moved (no double-escalate / un-merge).
-   */
-  private async parkSpec(orgId: string, specId: string): Promise<void> {
+        prUrl: input.entry.prUrl,
+        prNumber: input.entry.prNumber,
+        message: input.message,
+      },
+    };
+    const spec = {
+      specId: input.entry.specId,
+      orgId,
+      status: "needs_attention",
+      notFromStatuses: ["merged", "needs_attention"],
+    };
     if (this.runStateWriter !== undefined) {
-      await this.runStateWriter.setSpecStatus({
-        specId,
-        orgId,
-        status: "needs_attention",
-        notFromStatuses: ["merged", "needs_attention"],
-      });
+      await this.runStateWriter.updateSpecWithEvent({ spec, event });
       return;
     }
-    await runWithOrgScope(this.pool, orgId, async (client) => {
-      await client.query(
-        `UPDATE specs SET status = 'needs_attention'
-           WHERE spec_id = $1 AND status NOT IN ('merged', 'needs_attention')`,
-        [specId],
-      );
-    });
-  }
-
-  private async withScopedStore(orgId: string, work: (store: EventStore) => Promise<void>): Promise<void> {
-    if (this.runStateWriter !== undefined) {
-      const writer = this.runStateWriter;
-      await runWithJobOrgId(orgId, () => work(writer));
-      return;
-    }
-    await runWithOrgScope(this.pool, orgId, (client) => work(new PgEventStore(client)));
+    await runWithOrgScope(this.pool, orgId, (client) => applyUpdateSpecWithEvent(client, { spec, event }));
   }
 }

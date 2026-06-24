@@ -1,0 +1,13 @@
+-- Terminal events per run are AT MOST ONCE (task #48 — the run/spec
+-- atomicity sweep, the run-level mirror of `events_task_terminal_unique`).
+-- The atomic `applyFinalizeRunWithEvent` helper uses `ON CONFLICT DO NOTHING`
+-- against this partial unique index, so a server-side COMMIT whose HTTP
+-- response was dropped + a data-plane retry does NOT write a contradictory
+-- second terminal `run.*` event of the same type. (run_id, event_type) is
+-- the pair so a future row-state cycle that lands a different terminal type
+-- (e.g. `run.failed` from a worker-orphan path alongside a `run.completed`)
+-- stays unblocked; same-type re-inserts dedupe.
+--
+-- NO spec-level mirror per Plan §3: `dag.spec.redriven` is RECURRING per
+-- attempt and `dag.spec.needs_attention` can re-fire per incident.
+CREATE UNIQUE INDEX "events_run_terminal_unique" ON "events" USING btree ("run_id","event_type") WHERE "events"."event_type" IN ('run.completed', 'run.failed', 'run.cancelled');
