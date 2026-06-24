@@ -139,9 +139,33 @@ function isAllowlistedIdentifier(captured) {
 // remainder of the line(s) up to the next `;` or newline-after-delay heuristically: the
 // common forms are single-line `setTimeout(() => fail(...), ms)` and the multi-line
 // `setTimeout(\n () => fail(...),\n ms,\n)`. We take a bounded window after the opener.
-function timerBodyKills(code, openerIndex) {
-  const window = code.slice(openerIndex, openerIndex + 240);
-  return killVerb.test(window);
+//
+// MULTI-LINE EXTENSION (task #32 — the disguised survivor `staticRunnerAllocator.ts`
+// scanned past): when the opener's same-line window has NO kill verb, fall back to a
+// SECOND scan over a small window of FOLLOWING source lines (the multi-line shape
+// `setTimeout(\n () => reject(new Error(...)),\n timeoutMs,\n)`). Same blind spot as
+// #638 (ssh2 connect-config `timeout:`) — a benign opener line on its own, but the kill
+// verb landed on a continuation line the original single-line scan never read.
+//
+// MULTI-LINE BLESS: if the following-lines window itself carries the per-line
+// `arch-allow: timeout-class` annotation, the multi-line kill-timer is treated as blessed
+// (the annotation is reviewable in-source on a line the formatter respects). This lets a
+// legitimate single-request fetch abort (a discrete one-shot whose only outcomes are
+// `response | abort`) document its bless inside the callback body where oxfmt won't move it.
+function timerBodyKills(code, openerIndex, rawFollowingLines = "", followingLines = "") {
+  const sameLineWindow = code.slice(openerIndex, openerIndex + 240);
+  if (killVerb.test(sameLineWindow)) {
+    return true;
+  }
+  // Cap the multi-line window: a setTimeout callback that spans more than a handful of
+  // following lines is exotic enough that we'd rather miss it than spuriously flag a
+  // benign deferred tick whose callback unrelated text mentions one of the kill verbs.
+  if (!killVerb.test(followingLines)) {
+    return false;
+  }
+  // A multi-line kill timer carrying the per-line bless annotation on a body line is
+  // blessed (the multi-line equivalent of the same-line `// arch-allow: timeout-class`).
+  return !rawFollowingLines.includes(ARCH_ALLOW);
 }
 
 // The character spans (start..end) of every loop-cap head on a line. A give-up identifier
@@ -168,11 +192,13 @@ function withinAnySpan(index, spans) {
 // Collect every timeout-class violation in one production-source line. A line may trip
 // several; each DISTINCT construct is reported once (identifier-family matches dedupe by the
 // captured identifier so overlapping patterns don't double-count). The per-line bless is
-// applied by the caller.
-function violationsInLine(code) {
+// applied by the caller. `followingLines` is the small look-ahead window the multi-line
+// `setTimeout(\n …\n)` scan reads — passed through from the file scanner; `rawFollowingLines`
+// is the same window UNSTRIPPED so the multi-line bless annotation is honored.
+function violationsInLine(code, rawFollowingLines = "", followingLines = "") {
   const found = [];
   for (const match of code.matchAll(killTimerOpener)) {
-    if (timerBodyKills(code, match.index)) {
+    if (timerBodyKills(code, match.index, rawFollowingLines, followingLines)) {
       found.push("total-duration kill timer (setTimeout that kills/fails/destroys/aborts) — use an ActivityWatchdog");
     }
   }
@@ -220,6 +246,13 @@ function identifierViolations(code, loopSpans) {
   return [...seen.values()];
 }
 
+// How many lines after a `setTimeout(` opener the multi-line kill-body scan reads. Small
+// enough that we don't false-flag on a benign deferred tick whose distant continuation
+// happens to mention a kill verb, large enough to catch the realistic multi-line shape
+// (the disguised survivor in `staticRunnerAllocator.ts` had the reject on the line
+// IMMEDIATELY after the opener; 4 is comfortable headroom).
+const MULTI_LINE_TIMER_LOOKAHEAD = 4;
+
 // The scanner. Returns one diagnostic per (line, violation). A line carrying the
 // `// arch-allow: timeout-class …` annotation is exempt (its exemption is reviewable
 // in-source — the annotation must justify why the construct is a legitimate
@@ -236,7 +269,15 @@ export function checkNoArbitraryTimeouts(projectFiles) {
         continue;
       }
       const code = stripCommentary(rawLine);
-      for (const detail of violationsInLine(code)) {
+      // The small lookahead window the multi-line setTimeout kill-body scan reads.
+      // We strip commentary on each window line so a kill verb in prose (a JSDoc on a
+      // following line) cannot trip the multi-line fallback. We also keep the RAW window
+      // so the multi-line bless annotation (an `// arch-allow: timeout-class` on a body
+      // line the formatter respects) is honored.
+      const rawWindow = lines.slice(index + 1, index + 1 + MULTI_LINE_TIMER_LOOKAHEAD);
+      const rawFollowingLines = rawWindow.join("\n");
+      const followingLines = rawWindow.map((nextLine) => stripCommentary(nextLine)).join("\n");
+      for (const detail of violationsInLine(code, rawFollowingLines, followingLines)) {
         diagnostics.push(diagnostic(RULE, file, detail, index + 1));
       }
     }

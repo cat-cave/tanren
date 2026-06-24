@@ -26,6 +26,42 @@ describe("no-arbitrary-timeouts (timeout-class eradication lint)", () => {
     expect(checkNoArbitraryTimeouts([{ file: srcFile, text }])).toEqual([]);
   });
 
+  // Task #32 — disguised survivor: a multi-LINE setTimeout whose opener line is bare
+  // (no kill verb on the opener line) but whose callback body on a FOLLOWING line
+  // rejects/throws/destroys. The original single-line scan missed `staticRunnerAllocator.ts`'s
+  // outer discovery timer for exactly this reason (same blind-spot class as ssh2 #638).
+  it("flags a MULTI-LINE total-duration kill timer (callback body on a following line)", () => {
+    const text =
+      "const timer = setTimeout(\n" +
+      "  () => settle(() => reject(new Error(`discovery timed out after ${timeoutMs}ms`))),\n" +
+      "  timeoutMs,\n" +
+      ");\n";
+    const flagged = checkNoArbitraryTimeouts([{ file: srcFile, text }]);
+    expect(flagged.map((item) => item.rule)).toEqual(["no-arbitrary-timeouts"]);
+    expect(flagged[0]?.message).toContain("ActivityWatchdog");
+    // The diagnostic points at the OPENER line (the `setTimeout(`), not the kill-verb line.
+    expect(flagged[0]?.line).toBe(1);
+  });
+
+  it("does NOT flag a multi-line setTimeout whose body merely resolves (no kill verb)", () => {
+    const text = "setTimeout(\n  () => resolve(),\n  ms,\n);\n";
+    expect(checkNoArbitraryTimeouts([{ file: srcFile, text }])).toEqual([]);
+  });
+
+  it("honors `// arch-allow: timeout-class` on a multi-line setTimeout BODY line (oxfmt-stable bless)", () => {
+    // The single-line `// arch-allow` annotation can ride the opener line only when the
+    // formatter doesn't split the construct across lines. For a multi-line setTimeout the
+    // opener line ends in `(` and oxfmt moves a trailing annotation onto the callback body.
+    // The lint honors the annotation when it lands on a body line within the lookahead
+    // window, so the bless stays attached to the kill timer the formatter chose to shape.
+    const text =
+      "const timer = setTimeout(() => {\n" +
+      "  // arch-allow: timeout-class — discrete one-shot fetch abort, no work to lose\n" +
+      "  controller.abort();\n" +
+      "}, abortMs);\n";
+    expect(checkNoArbitraryTimeouts([{ file: srcFile, text }])).toEqual([]);
+  });
+
   it("flags a fixed loop cap (attempt/poll/iteration max), for and while forms", () => {
     const forCap = "for (let i = 0; i < maxAttempts; i += 1) {\n";
     const whileCap = "while (attempt < limit) {\n";

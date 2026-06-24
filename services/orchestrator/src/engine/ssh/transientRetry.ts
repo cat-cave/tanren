@@ -1,4 +1,4 @@
-// Transient-network retry for SSH connects (the host-key discovery + allocate path).
+// Transient-tolerant retry for SSH connects (the host-key discovery + allocate path).
 //
 // THE BUG (apex v35, live): a template-build's `deploy` spec failed its base-shift
 // rebase with `static runner host key discovery failed: read ECONNRESET`. The static
@@ -13,8 +13,19 @@
 // tolerated as terminal. This helper treats the transient network errno set as RETRIABLE
 // and re-drives the connect with short exponential backoff before surfacing. A genuine
 // non-transient failure (auth, a bad/unparseable fingerprint) is NEVER retried — it
-// fails loud immediately. Exhausting the retries also fails loud, carrying the real
-// underlying cause (no silent fallback).
+// fails loud immediately.
+//
+// TIMEOUT-ERADICATION (feedback_no_timeouts_progress_based, BINDING — task #32, critic-arc
+// R1 #3 / R2): there is NO fixed attempt COUNT. A transient failure retries UNBOUNDED
+// while it is making PROGRESS — the transient signal keeps CHANGING (an ECONNRESET, then
+// an ECONNREFUSED, then a connect-establishment blip = forward motion; the connect is
+// hitting different wobbles, not stuck). It surfaces LOUD only on intelligent
+// NON-CONVERGENCE: the SAME transient signal recurring at the SATURATED backoff with no
+// new information (a proven fixed point — a sustained outage), via the shared
+// `convergenceDetector`. This mirrors `templates/creation/answererRetry.ts` (and the
+// GitHub HTTP transient retry in `providers/githubRetry.ts`).
+
+import { assessStructuralProgress, type AttemptSignature } from "../workflow/convergenceDetector.js";
 
 /**
  * The transient network errno set: a momentary connection blip that self-heals on an
@@ -82,23 +93,25 @@ export function isTransientSshConnectError(error: unknown): boolean {
 }
 
 /**
- * Bounded exponential backoff for a transient SSH connect retry: ~250ms → 500ms → 1s → 2s.
- * Indexed by `attempt - 1` (1-based), clamped to the final element. A genuine outage hits
- * the attempt ceiling and surfaces loud — it never hot-loops and never gives up silently.
+ * Bounded exponential backoff CADENCE for the transient SSH connect retry: ~250ms → 500ms
+ * → 1s → 2s. Indexed by `historyLen - 1` (1-based), clamped to the final element. This is
+ * SPACING between attempts (cadence, not a deadline / not an attempt cap) — the loop is
+ * UNBOUNDED; saturation is what the convergence detector reads to escalate a STUCK signal.
  */
 export const SSH_TRANSIENT_BACKOFF_MS: readonly number[] = [250, 500, 1_000, 2_000];
 
-/** Default number of transient-retry ATTEMPTS (the first try + retries) before surfacing. */
-export const DEFAULT_SSH_TRANSIENT_ATTEMPTS = 4;
-
-function backoffForAttempt(attempt: number): number {
-  const index = Math.min(Math.max(attempt - 1, 0), SSH_TRANSIENT_BACKOFF_MS.length - 1);
+/**
+ * The next-attempt backoff for a transient retry, clamped to the saturated final element.
+ * `historyLen` is 1-based (1 = first retry's wait, 2 = second, …). Once the curve is
+ * saturated every further retry waits the same SPACING — only then does the convergence
+ * detector consider a recurring identical signal a proven fixed point.
+ */
+export function sshTransientBackoffMs(historyLen: number): number {
+  const index = Math.min(Math.max(historyLen - 1, 0), SSH_TRANSIENT_BACKOFF_MS.length - 1);
   return SSH_TRANSIENT_BACKOFF_MS.at(index) ?? SSH_TRANSIENT_BACKOFF_MS.at(-1) ?? 2_000;
 }
 
 export interface SshTransientRetryOptions {
-  /** Total attempts (first try + retries). Defaults to {@link DEFAULT_SSH_TRANSIENT_ATTEMPTS}. */
-  attempts?: number;
   /** Override the sleep (tests inject a no-wait sleep). */
   sleep?: (ms: number) => Promise<void>;
   /** Observe each retry decision (tests assert the retry happened; prod can log). */
@@ -107,24 +120,103 @@ export interface SshTransientRetryOptions {
 
 const defaultSleep = (ms: number): Promise<void> =>
   new Promise((resolve) => {
+    // arch-allow: timeout-class — backoff SPACING between retries (cadence, not a deadline).
     setTimeout(resolve, ms);
   });
 
 /**
+ * The STABLE identity of a transient SSH-connect failure — the signal the convergence
+ * detector reasons over. A CHANGING signature (an ECONNRESET, then an ECONNREFUSED, then
+ * a connect-establishment blip) is PROGRESS (the connect is hitting different wobbles,
+ * still moving); the IDENTICAL signature recurring at the saturated backoff is a fixed
+ * point (a sustained outage). Keyed on the recognized transient CLASS, NOT the raw
+ * message (so two ECONNRESETs are the SAME signal, not spuriously different).
+ *
+ * Mirrors `templates/creation/answererRetry.ts#transientSignature`.
+ */
+export function sshTransientSignature(error: unknown): string {
+  const code = typeof (error as { code?: unknown })?.code === "string" ? (error as { code: string }).code : undefined;
+  if (code !== undefined && TRANSIENT_NETWORK_CODES.includes(code)) {
+    return code.toLowerCase();
+  }
+  const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
+  for (const networkCode of TRANSIENT_NETWORK_CODES) {
+    if (message.includes(networkCode.toLowerCase())) {
+      return networkCode.toLowerCase();
+    }
+  }
+  if (/ssh_failed|ssh connection failed to establish/u.test(message)) {
+    return "ssh-connect";
+  }
+  if (/connection (?:reset|refused|closed)/u.test(message)) {
+    return "connection-reset";
+  }
+  if (/socket hang up/u.test(message)) {
+    return "socket-hang-up";
+  }
+  if (/connection lost before handshake/u.test(message)) {
+    return "handshake-lost";
+  }
+  return "transport";
+}
+
+// Has the transient-retry loop reached a NON-CONVERGENCE fixed point — the SAME
+// transient signal recurring with no new information, AND only once the backoff has
+// SATURATED (so a still-ramping curve never escalates)? A CHANGING signal (different
+// transient class) is progress; an identical signal stuck at the saturated cadence is
+// a proven outage. Mirrors `templates/creation/answererRetry.ts#transientFixedPointReached`.
+function transientFixedPointReached(signatures: ReadonlyArray<string>): boolean {
+  // Until the curve holds its steady-state cadence we are still ramping — legitimate
+  // progress-spacing, never an escalation point.
+  if (signatures.length <= SSH_TRANSIENT_BACKOFF_MS.length) {
+    return false;
+  }
+  const history: AttemptSignature[] = signatures.map((sig) => ({ failureSignature: sig }));
+  return assessStructuralProgress(history) === "fixed_point";
+}
+
+/**
+ * A loud, terminal classification of a transient SSH-connect signal INTELLIGENTLY
+ * detected as non-converging — the SAME transient signal recurring at the SATURATED
+ * backoff with no new information (a proven fixed point). NOT an attempt cap: it
+ * surfaces only when the convergence detector proves the signal is stuck (a genuine
+ * sustained transport outage). Carries the stuck signature so the failure is diagnosable.
+ */
+export class PersistentSshOutageError extends Error {
+  readonly stuckSignature: string;
+  readonly retriesObserved: number;
+
+  constructor(input: { stuckSignature: string; retriesObserved: number; cause?: unknown }) {
+    super(
+      `ssh transient outage: '${input.stuckSignature}' recurred at the saturated backoff with no progress ` +
+        `over ${input.retriesObserved} retries — surfacing as a sustained outage, not retrying a fixed point forever`,
+    );
+    this.name = "PersistentSshOutageError";
+    this.stuckSignature = input.stuckSignature;
+    this.retriesObserved = input.retriesObserved;
+    if (input.cause !== undefined) {
+      this.cause = input.cause;
+    }
+  }
+}
+
+/**
  * Run `operation`, retrying ONLY transient network errors (see {@link isTransientSshConnectError})
- * with bounded exponential backoff. A non-transient error (auth, bad fingerprint, an
- * application failure) is re-thrown IMMEDIATELY — never retried. After the attempt ceiling
- * the LAST transient error is re-thrown loud (its real cause preserved); the helper never
- * degrades to a default and never loops unboundedly.
+ * with bounded exponential-backoff SPACING. A non-transient error (auth, bad fingerprint,
+ * an application failure) is re-thrown IMMEDIATELY — never retried. The loop is UNBOUNDED
+ * while it is making PROGRESS (the transient signal keeps changing); it surfaces LOUD only
+ * on intelligent NON-CONVERGENCE — the IDENTICAL transient signal recurring at the
+ * SATURATED backoff (a {@link PersistentSshOutageError}, a proven sustained outage). There
+ * is NO attempt count.
  */
 export async function withSshTransientRetry<T>(
   operation: () => Promise<T>,
   options: SshTransientRetryOptions = {},
 ): Promise<T> {
-  const attempts = Math.max(1, options.attempts ?? DEFAULT_SSH_TRANSIENT_ATTEMPTS);
   const sleep = options.sleep ?? defaultSleep;
-  let lastError: unknown;
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+  // The oldest→newest transient signal signatures observed — the convergence history.
+  const signatures: string[] = [];
+  for (;;) {
     try {
       return await operation();
     } catch (error) {
@@ -133,17 +225,21 @@ export async function withSshTransientRetry<T>(
       if (!isTransientSshConnectError(error)) {
         throw error;
       }
-      lastError = error;
-      if (attempt >= attempts) {
-        // Exhausted the bounded retries on a persistent transient — surface LOUD with
-        // the real underlying cause (no silent fallback, no swallow).
-        throw error;
+      const signature = sshTransientSignature(error);
+      signatures.push(signature);
+      // Intelligent non-convergence: the IDENTICAL transient signal stuck at the
+      // saturated backoff with no new information — a proven outage, surface it loud
+      // (never an infinite loop on a dead provider, and never a fixed attempt cap).
+      if (transientFixedPointReached(signatures)) {
+        throw new PersistentSshOutageError({
+          stuckSignature: signature,
+          retriesObserved: signatures.length,
+          cause: error,
+        });
       }
-      const delayMs = backoffForAttempt(attempt);
-      options.onRetry?.({ attempt, delayMs, error });
+      const delayMs = sshTransientBackoffMs(signatures.length);
+      options.onRetry?.({ attempt: signatures.length, delayMs, error });
       await sleep(delayMs);
     }
   }
-  // Unreachable (the loop either returns or throws), but keeps the type honest.
-  throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }

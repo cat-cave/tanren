@@ -1,11 +1,15 @@
-// Unit proof for the shared SSH transient-retry helper (apex-v35 Part A). A transient
-// network blip (ECONNRESET et al.) is RETRIED with bounded backoff; a non-transient error
-// (auth) fails immediately; an exhausted transient surfaces LOUD with the real cause.
+// Unit proof for the shared SSH transient-retry helper (task #32 — convergence-based,
+// UNBOUNDED). A transient network blip (ECONNRESET et al.) is RETRIED unbounded while the
+// signal keeps changing (progress); a non-transient error (auth) fails immediately; an
+// IDENTICAL signal recurring at the saturated backoff surfaces a
+// {@link PersistentSshOutageError} via the convergence detector (intelligent
+// non-convergence, never an attempt count).
 
 import { describe, expect, it } from "vitest";
 import {
-  DEFAULT_SSH_TRANSIENT_ATTEMPTS,
   isTransientSshConnectError,
+  PersistentSshOutageError,
+  SSH_TRANSIENT_BACKOFF_MS,
   withSshTransientRetry,
 } from "../src/engine/ssh/transientRetry.js";
 
@@ -64,18 +68,63 @@ describe("withSshTransientRetry", () => {
     expect(calls).toBe(3);
   });
 
-  it("fails loud after the bounded attempts on a persistent transient (real cause preserved)", async () => {
+  it("retries UNBOUNDED while the transient signature CHANGES (progress)", async () => {
+    // A CHANGING signature is forward motion (the connect is hitting different wobbles, not
+    // stuck). The convergence detector treats it as `progress` and the loop continues —
+    // there is NO attempt count to exhaust. After 5 mixed transient failures the operation
+    // succeeds on the 6th call.
+    const transientErrors: ReadonlyArray<Error> = [
+      new Error("read ECONNRESET"),
+      new Error("connect ECONNREFUSED 127.0.0.1:22"),
+      new Error("connect ETIMEDOUT"),
+      new Error("SSH connection failed to establish within 30000ms"),
+      new Error("EHOSTUNREACH"),
+    ];
     let calls = 0;
-    await expect(
-      withSshTransientRetry(
+    const result = await withSshTransientRetry(
+      async () => {
+        const error = transientErrors[calls];
+        calls += 1;
+        if (error !== undefined) {
+          throw error;
+        }
+        return "ok";
+      },
+      { sleep: async () => {} },
+    );
+    expect(result).toBe("ok");
+    expect(calls).toBe(transientErrors.length + 1);
+  });
+
+  it("surfaces PersistentSshOutageError LOUD at a SATURATED identical-signal fixed point", async () => {
+    // The IDENTICAL transient signal recurring at the saturated backoff with no new
+    // information IS the intelligent non-convergence signal — a proven sustained outage.
+    // Every call throws the same ECONNRESET (identical signature 'econnreset'); after the
+    // curve has saturated the convergence detector classifies the loop as `fixed_point` and
+    // the helper surfaces a PersistentSshOutageError carrying the stuck signature.
+    let calls = 0;
+    let captured: PersistentSshOutageError | undefined;
+    try {
+      await withSshTransientRetry(
         async () => {
           calls += 1;
           throw Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" });
         },
-        { attempts: 3, sleep: async () => {} },
-      ),
-    ).rejects.toThrow(/ECONNRESET/u);
-    expect(calls).toBe(3);
+        { sleep: async () => {} },
+      );
+    } catch (error) {
+      if (error instanceof PersistentSshOutageError) {
+        captured = error;
+      } else {
+        throw error;
+      }
+    }
+    expect(captured).toBeDefined();
+    expect(captured?.stuckSignature).toBe("econnreset");
+    // The convergence loop ran past the saturated curve before surfacing — not at attempt 1
+    // (still ramping) but at the saturation threshold + the cycle confirmation.
+    expect(captured?.retriesObserved).toBeGreaterThan(SSH_TRANSIENT_BACKOFF_MS.length);
+    expect(calls).toBe(captured?.retriesObserved);
   });
 
   it("does NOT retry a non-transient error — fails on the first attempt", async () => {
@@ -92,8 +141,10 @@ describe("withSshTransientRetry", () => {
     expect(calls).toBe(1);
   });
 
-  it("defaults to a bounded attempt budget", () => {
-    expect(DEFAULT_SSH_TRANSIENT_ATTEMPTS).toBeGreaterThanOrEqual(2);
-    expect(DEFAULT_SSH_TRANSIENT_ATTEMPTS).toBeLessThanOrEqual(6);
+  it("DEFAULT_SSH_TRANSIENT_ATTEMPTS is gone (the attempt cap is eradicated)", async () => {
+    // Compile-time + module-shape check: the attempt-cap constant must NOT be exported.
+    // If it ever returns, the retry path has regressed into the bounded-cap doctrine.
+    const moduleExports = (await import("../src/engine/ssh/transientRetry.js")) as Record<string, unknown>;
+    expect(moduleExports["DEFAULT_SSH_TRANSIENT_ATTEMPTS"]).toBeUndefined();
   });
 });

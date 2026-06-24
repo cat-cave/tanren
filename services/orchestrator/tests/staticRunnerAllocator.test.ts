@@ -30,6 +30,14 @@ interface FakeClientOptions {
    * transient-retry path (a momentary network blip mid-handshake).
    */
   transientReset?: boolean;
+  /**
+   * Emit a clean `end` (no preceding `error`, no `hostVerifier` call) — the
+   * "connection torn down before the host key landed" path. Used to exercise the
+   * "completed without a fingerprint" branch (task #32: the outer wall-clock timer
+   * was deleted; the `end`-without-fingerprint path is now the sole way that branch
+   * fires, and the implementation grew an `end` listener to settle it loudly).
+   */
+  emitEndWithoutFingerprint?: boolean;
 }
 
 // The exact ssh2 connect config the discovery handshake builds. Captured so a
@@ -68,6 +76,13 @@ function fakeClientFactory(opts: FakeClientOptions, captured?: CapturedConnect) 
         // Simulate ssh2: hostVerifier is invoked, then connection is aborted
         // (since we return false) and an "error" event follows.
         queueMicrotask(() => {
+          if (opts.emitEndWithoutFingerprint === true) {
+            // Emit `end` without ever invoking hostVerifier and without an `error`
+            // event — the "connection torn down before the host key landed" path
+            // the implementation's new `end` listener catches and settles loud.
+            emitter.emit("end");
+            return;
+          }
           if (opts.fingerprint !== undefined) {
             config.hostVerifier?.(opts.fingerprint);
           }
@@ -188,17 +203,19 @@ describe("StaticRunnerAllocator", () => {
     expect(captured.config?.hostVerifier?.("b".repeat(64))).toBe(false);
   });
 
-  it("rejects when discovery completes without ever capturing a fingerprint", async () => {
+  it("rejects when discovery `end`s cleanly without ever capturing a fingerprint", async () => {
+    // Task #32: the outer wall-clock setTimeout that used to guard this op was DELETED
+    // (disguised survivor — multi-line setTimeout the original lint missed). The ssh2
+    // `readyTimeout` is now the SOLE bound (a connect-establishment bound on the one-shot
+    // TOFU handshake). The "completed without a fingerprint" branch now fires when the
+    // connection tears down via `end` before the host key lands — the implementation's
+    // new `end` listener catches it and settles loud, no work to lose.
     const runners = new FakeRunnerStore();
     const allocator = new StaticRunnerAllocator({
       host: "runner",
       port: 22,
       runners,
-      // No fingerprint captured, but also no error emitted by connect: force
-      // the discovery timeout path so the "completed without a fingerprint" /
-      // timeout rejection fires instead of resolving.
-      discoverTimeoutMs: 5,
-      clientFactory: fakeClientFactory({ fingerprint: undefined, emitError: false }),
+      clientFactory: fakeClientFactory({ emitEndWithoutFingerprint: true }),
     });
 
     await expect(
@@ -208,7 +225,7 @@ describe("StaticRunnerAllocator", () => {
         runnerImage: "img",
         identitySecretRef: "runner/dev/identity",
       }),
-    ).rejects.toThrow(/timed out/u);
+    ).rejects.toThrow(/completed without a fingerprint/u);
     expect(runners.claims).toEqual([]);
   });
 
@@ -288,9 +305,11 @@ describe("StaticRunnerAllocator", () => {
   });
 
   it("retries a transient ECONNRESET during host-key discovery, then succeeds", async () => {
-    // Part A (apex-v35): a momentary `read ECONNRESET` while the runner is briefly
-    // unavailable mid-handshake is TRANSIENT — it must NOT fail the allocate. The first
-    // attempt errors with ECONNRESET; the retry succeeds and the fingerprint is captured.
+    // A momentary `read ECONNRESET` while the runner is briefly unavailable mid-handshake
+    // is TRANSIENT — the convergence-based retry helper re-drives the connect while the
+    // signal is making PROGRESS (the loop is UNBOUNDED; there is no attempt cap to spend).
+    // The first attempt errors with ECONNRESET; a subsequent attempt succeeds and the
+    // fingerprint is captured.
     const runners = new FakeRunnerStore();
     let attempt = 0;
     const factory = () => {
@@ -328,9 +347,12 @@ describe("StaticRunnerAllocator", () => {
     expect(runners.claims).toHaveLength(1);
   });
 
-  it("fails loud after the bounded retries when EVERY attempt is a transient ECONNRESET", async () => {
-    // A persistent transient (the runner stays down): retry the bounded number of times,
-    // then surface LOUD with the real cause — never a silent fallback, never an infinite loop.
+  it("surfaces a PersistentSshOutageError when EVERY discovery attempt is an IDENTICAL ECONNRESET", async () => {
+    // Task #32 (convergence-based): a persistent transient (the runner stays down with the
+    // SAME ECONNRESET) is NOT capped by a count — the loop retries UNBOUNDED until the
+    // convergence detector classifies the identical signal at the SATURATED backoff as a
+    // proven fixed point, then surfaces a PersistentSshOutageError LOUD. The error name
+    // is the load-bearing signal (the message carries the stuck signature for diagnosis).
     const runners = new FakeRunnerStore();
     let attempt = 0;
     const factory = () => {
@@ -342,7 +364,6 @@ describe("StaticRunnerAllocator", () => {
       port: 22,
       runners,
       clientFactory: factory,
-      discoverTransientAttempts: 3,
       retrySleep: async () => {},
     });
 
@@ -353,9 +374,9 @@ describe("StaticRunnerAllocator", () => {
         runnerImage: "img",
         identitySecretRef: "runner/dev/identity",
       }),
-    ).rejects.toThrow(/ECONNRESET/u);
-    // All bounded attempts were exhausted before failing loud.
-    expect(attempt).toBe(3);
+    ).rejects.toThrow(/ssh transient outage/u);
+    // The loop ran past the saturated curve before surfacing — not a single-shot give-up.
+    expect(attempt).toBeGreaterThan(1);
     expect(runners.claims).toEqual([]);
   });
 
@@ -373,7 +394,6 @@ describe("StaticRunnerAllocator", () => {
       port: 22,
       runners,
       clientFactory: factory,
-      discoverTransientAttempts: 4,
       retrySleep: async () => {},
     });
 
