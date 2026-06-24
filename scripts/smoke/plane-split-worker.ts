@@ -109,9 +109,8 @@ interface JobObservation {
   attempts: number;
   failureKind: string | null;
   jobOrgId: string | null;
-  // PgJobQueue.heartbeat ticks heartbeat_at each cycle while it holds the claim;
-  // advancement = alive. Combined with status-identity below, stall predicate is
-  // "status frozen AND heartbeat frozen" — a true sign-of-life check.
+  // PgJobQueue.heartbeat ticks heartbeat_at each cycle while claim is held —
+  // pair with status-identity below for a true sign-of-life stall check.
   heartbeatAtMs: number | null;
 }
 
@@ -471,17 +470,22 @@ async function main(): Promise<void> {
         );
         return;
       }
-      statusHistory.push(job.status ?? "<undefined>");
-      if (statusHistory.length > STALL_WINDOW) statusHistory.shift();
-      heartbeatHistory.push(job.heartbeatAtMs);
-      if (heartbeatHistory.length > STALL_WINDOW) heartbeatHistory.shift();
-      if (statusHistory.length === STALL_WINDOW && new Set(statusHistory).size === 1) {
-        const heartbeatAdvanced = new Set(heartbeatHistory).size > 1;
-        if (!heartbeatAdvanced) {
-          throw new Error(
-            `STALL: job_queue status held identical at '${statusHistory[0]}' AND heartbeat_at did not advance ` +
-              `across ${STALL_WINDOW} polls (~${(STALL_WINDOW * POLL_MS) / 1000}s) for run ${runId} — worker dead, halt loud.`,
-          );
+      // Only meaningful AFTER claim — pre-claim, heartbeat_at is NULL and
+      // status is 'queued' (both frozen), so this would kill a slow-to-start
+      // worker (wall-clock in disguise). Wait unbounded for claim itself.
+      if (claimed) {
+        statusHistory.push(job.status ?? "<undefined>");
+        if (statusHistory.length > STALL_WINDOW) statusHistory.shift();
+        heartbeatHistory.push(job.heartbeatAtMs);
+        if (heartbeatHistory.length > STALL_WINDOW) heartbeatHistory.shift();
+        if (statusHistory.length === STALL_WINDOW && new Set(statusHistory).size === 1) {
+          const heartbeatAdvanced = new Set(heartbeatHistory).size > 1;
+          if (!heartbeatAdvanced) {
+            throw new Error(
+              `STALL: post-claim job_queue status held identical at '${statusHistory[0]}' AND heartbeat_at did not advance ` +
+                `across ${STALL_WINDOW} polls (~${(STALL_WINDOW * POLL_MS) / 1000}s) for run ${runId} — worker dead, halt loud.`,
+            );
+          }
         }
       }
       await new Promise((resolve) => {
