@@ -34,6 +34,20 @@ function signature(observation: FakeObservation): string {
   return `${observation.status}|${observation.ip !== undefined && observation.ip !== "" ? "ip" : "no-ip"}`;
 }
 
+// Used by the "loops UNBOUNDED while the structural signature keeps ADVANCING"
+// test, which threads an `intermediate-*` IP token through every probe. Defined
+// at module scope (the eslint `consistent-function-scoping` rule flags closures
+// that don't capture parent scope when they could live at the top level).
+function classifyAdvancingForReadinessTest(o: FakeObservation): ReadinessClassification<FakeObservation> {
+  if (o.status === "running" && o.ip !== undefined && !o.ip.startsWith("intermediate-")) {
+    return { kind: "ready", observation: o };
+  }
+  return { kind: "advancing", observation: o };
+}
+function signatureForReadinessTest(o: FakeObservation): string {
+  return `${o.status}|${o.ip ?? "no-ip"}`;
+}
+
 const noSleep = async (): Promise<void> => undefined;
 
 describe("pollUntilReady", () => {
@@ -70,20 +84,11 @@ describe("pollUntilReady", () => {
     }
     probes.push({ status: "running", ip: "203.0.113.99" });
 
-    // We need a custom classify that treats every probe with an `intermediate-*`
-    // IP as `advancing`, and only the final `running` + real IP as ready.
-    const classifyAdv = (o: FakeObservation): ReadinessClassification<FakeObservation> => {
-      if (o.status === "running" && o.ip !== undefined && !o.ip.startsWith("intermediate-")) {
-        return { kind: "ready", observation: o };
-      }
-      return { kind: "advancing", observation: o };
-    };
-    const sigAdv = (o: FakeObservation): string => `${o.status}|${o.ip ?? "no-ip"}`;
     let i = 0;
     const observedProbes: number[] = [];
     const ready = await pollUntilReady(async () => probes[i++]!, {
-      classify: classifyAdv,
-      signature: sigAdv,
+      classify: classifyAdvancingForReadinessTest,
+      signature: signatureForReadinessTest,
       pollIntervalMs: 1,
       sleep: noSleep,
       onProbe: (info) => observedProbes.push(info.probe),
@@ -111,22 +116,18 @@ describe("pollUntilReady", () => {
   });
 
   it("PersistentProvisioningOutageError carries the stuck signature for diagnosability", async () => {
-    try {
-      await pollUntilReady(async () => ({ status: "pending", ip: undefined }), {
-        classify,
-        signature,
-        pollIntervalMs: 1,
-        sleep: noSleep,
-      });
-      expect.fail("expected loud throw");
-    } catch (error) {
-      expect(error).toBeInstanceOf(PersistentProvisioningOutageError);
-      const outage = error as PersistentProvisioningOutageError;
-      expect(outage.stuckSignature).toBe("pending|no-ip");
-      expect(outage.lastObservedState).toBe("pending|no-ip");
-      expect(outage.probesObserved).toBeGreaterThan(STABLE_CADENCE_FLOOR);
-      expect(outage.name).toBe("PersistentProvisioningOutageError");
-    }
+    const error = await pollUntilReady(async () => ({ status: "pending", ip: undefined }), {
+      classify,
+      signature,
+      pollIntervalMs: 1,
+      sleep: noSleep,
+    }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(PersistentProvisioningOutageError);
+    const outage = error as PersistentProvisioningOutageError;
+    expect(outage.stuckSignature).toBe("pending|no-ip");
+    expect(outage.lastObservedState).toBe("pending|no-ip");
+    expect(outage.probesObserved).toBeGreaterThan(STABLE_CADENCE_FLOOR);
+    expect(outage.name).toBe("PersistentProvisioningOutageError");
   });
 
   it("fires terminal_error IMMEDIATELY (never via the fixed-point gate)", async () => {
@@ -160,34 +161,26 @@ describe("pollUntilReady", () => {
   });
 
   it("UnknownProvisioningStateError names the observed state in its message", async () => {
-    try {
-      await pollUntilReady(async () => ({ status: "frozen-pending", ip: undefined }), {
-        classify,
-        signature,
-        pollIntervalMs: 1,
-        sleep: noSleep,
-      });
-      expect.fail("expected loud throw");
-    } catch (error) {
-      expect(error).toBeInstanceOf(UnknownProvisioningStateError);
-      expect((error as UnknownProvisioningStateError).observedState).toBe("frozen-pending");
-      expect((error as Error).message).toContain("frozen-pending");
-    }
+    const error = await pollUntilReady(async () => ({ status: "frozen-pending", ip: undefined }), {
+      classify,
+      signature,
+      pollIntervalMs: 1,
+      sleep: noSleep,
+    }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(UnknownProvisioningStateError);
+    expect((error as UnknownProvisioningStateError).observedState).toBe("frozen-pending");
+    expect((error as Error).message).toContain("frozen-pending");
   });
 
   it("ProvisioningTerminalStateError carries the reason verbatim", async () => {
-    try {
-      await pollUntilReady(async () => ({ status: "terminated", ip: undefined }), {
-        classify,
-        signature,
-        pollIntervalMs: 1,
-        sleep: noSleep,
-      });
-      expect.fail("expected loud throw");
-    } catch (error) {
-      expect(error).toBeInstanceOf(ProvisioningTerminalStateError);
-      expect((error as ProvisioningTerminalStateError).reason).toBe("provider terminated the resource");
-    }
+    const error = await pollUntilReady(async () => ({ status: "terminated", ip: undefined }), {
+      classify,
+      signature,
+      pollIntervalMs: 1,
+      sleep: noSleep,
+    }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ProvisioningTerminalStateError);
+    expect((error as ProvisioningTerminalStateError).reason).toBe("provider terminated the resource");
   });
 
   it("does NOT escalate when an advancing signature persists for EXACTLY the saturation floor", async () => {

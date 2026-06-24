@@ -164,32 +164,27 @@ emphatic that this class keeps recurring); the existing models it generalizes ar
 >   (`(?:Date|performance).now() <=/>=/</> X`); both honor the per-line
 >   `// arch-allow: timeout-class` annotation so KEEP-list shapes (token-TTL
 >   refresh windows) bless themselves at the call site. Each allocator's
->   `waitFor*` body is replaced with a call to the new shared primitive
->   `engine/allocators/readinessConvergence.ts#pollUntilReady` (mirrors
->   `withAnswererRetry` + `withSshTransientRetry`): the loop runs UNBOUNDED while
->   the per-allocator STRUCTURAL signature (`${status}|${ip-presence}`, K8s also
->   folds sorted conditions + container states) keeps advancing, and surfaces
->   LOUD as `PersistentProvisioningOutageError` only on intelligent
->   non-convergence (an IDENTICAL signature past the saturation gate
->   `STABLE_CADENCE_FLOOR = 5`). The fail-closed `UnknownProvisioningStateError`
->   ratchet — a brand-new provider state the per-allocator allowlist
->   (`DO_PROVISIONING_STATUSES` / `AWS_EC2_PROVISIONING_STATES` /
->   `GCP_INSTANCE_PROVISIONING_STATUSES` / `K8S_PROVISIONING_PHASES` /
->   `HETZNER_PROVISIONING_STATUSES`) does NOT recognize MUST throw rather than
->   silently treat the unknown state as `advancing` forever (adding a new
->   provider value forces a code change). Existing per-allocator terminal arms
->   (AWS `terminated`/`shutting-down`/`stopping`/`stopped`, K8s
->   `Failed`/`Succeeded`/`Unknown`, GCP operation `error` + the documented
->   instance terminal statuses, Hetzner `off`/`deleting`/`stopping`/`unknown`,
->   DO `off`/`archive`) fire `ProvisioningTerminalStateError` IMMEDIATELY (never
->   via the fixed-point gate). A shared conformance harness
->   (`tests/conformance/readinessConvergenceConformance.ts`) pins the 4-scenario
->   contract (advancing-unbounded / stuck-fixed-point / unknown-state /
->   terminal-arms) so a future regression on any allocator's classifier,
->   signature, or terminal-arm wiring fails CI uniformly. The doctrine extends:
->   **the LHS-name deadline shape (`const deadline = Date.now() + X`) is now a
+>   `waitFor*`body is replaced with a call to the new shared primitive`engine/allocators/readinessConvergence.ts#pollUntilReady`(mirrors`withAnswererRetry`+`withSshTransientRetry`): the loop runs UNBOUNDED while
+the per-allocator STRUCTURAL signature (`${status}|${ip-presence}`, K8s also
+folds sorted conditions + container states) keeps advancing, and surfaces
+LOUD as `PersistentProvisioningOutageError`only on intelligent
+non-convergence (an IDENTICAL signature past the saturation gate`STABLE_CADENCE_FLOOR = 5`). The fail-closed `UnknownProvisioningStateError`
+ratchet — a brand-new provider state the per-allocator allowlist
+(`DO_PROVISIONING_STATUSES`/`AWS_EC2_PROVISIONING_STATES`/`GCP_INSTANCE_PROVISIONING_STATUSES`/`K8S_PROVISIONING_PHASES`/`HETZNER_PROVISIONING_STATUSES`) does NOT recognize MUST throw rather than
+silently treat the unknown state as `advancing`forever (adding a new
+provider value forces a code change). Existing per-allocator terminal arms
+(AWS`terminated`/`shutting-down`/`stopping`/`stopped`, K8s
+`Failed`/`Succeeded`/`Unknown`, GCP operation `error`+ the documented
+instance terminal statuses, Hetzner`off`/`deleting`/`stopping`/`unknown`,
+DO `off`/`archive`) fire `ProvisioningTerminalStateError` IMMEDIATELY (never
+via the fixed-point gate). A shared conformance harness
+(`tests/conformance/readinessConvergenceConformance.ts`) pins the 4-scenario
+contract (advancing-unbounded / stuck-fixed-point / unknown-state /
+terminal-arms) so a future regression on any allocator's classifier,
+signature, or terminal-arm wiring fails CI uniformly. The doctrine extends:
+**the LHS-name deadline shape (`const deadline = Date.now() + X`) is now a
 >   first-class lint pattern**, and **every per-allocator status allowlist is a
->   fail-closed ratchet** — a new provider value cannot silently loop forever.
+>   fail-closed ratchet\*\* — a new provider value cannot silently loop forever.
 > - **Task #32 (critic-arc R1 #3 / R2) — three production retry caps + a multi-line
 >   `setTimeout` lint blind spot [RESOLVED].** A critic-arc audit surfaced the
 >   SEVENTH disguised survivor cluster: three live retry-cap survivors the

@@ -8,12 +8,7 @@ import {
   type HetznerServer,
   type HetznerSshKey,
 } from "../src/engine/allocators/hetznerAllocator.js";
-import {
-  PersistentProvisioningOutageError,
-  ProvisioningTerminalStateError,
-  UnknownProvisioningStateError,
-} from "../src/engine/allocators/readinessConvergence.js";
-import type { Allocator } from "../src/engine/contracts/allocator.js";
+import { PersistentProvisioningOutageError } from "../src/engine/allocators/readinessConvergence.js";
 import type { ClaimRunnerInput, RunnerStore } from "../src/engine/allocators/runnerStore.js";
 import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
 import {
@@ -21,7 +16,6 @@ import {
   hostKeyFingerprintFromPublicKey,
   type EphemeralKeyPair,
 } from "../src/engine/ssh/keygen.js";
-import { describeReadinessConvergence } from "./conformance/readinessConvergenceConformance.js";
 
 class FakeRunnerStore implements RunnerStore {
   readonly claims: ClaimRunnerInput[] = [];
@@ -235,7 +229,7 @@ describe("HetznerAllocator", () => {
     }
     expect((caught as Error).message).toMatch(/did not become running/u);
     expect((caught as { cause?: unknown }).cause).toBeInstanceOf(PersistentProvisioningOutageError);
-    expect(((caught as { cause: PersistentProvisioningOutageError }).cause).stuckSignature).toBe("initializing|no-ip");
+    expect((caught as { cause: PersistentProvisioningOutageError }).cause.stuckSignature).toBe("initializing|no-ip");
     expect(client.deleted).toEqual([42]);
     expect(client.deletedKeys).toEqual([555]);
     expect(await secrets.list("hetzner/")).toEqual([]);
@@ -474,162 +468,6 @@ describe("HetznerAllocator", () => {
   });
 });
 
-// Task #31: shared readiness-convergence conformance suite.
-//
-// The advancing harness threads CHANGING server statuses across probes
-// (`initializing|no-ip` → `starting|no-ip` → `running|no-ip` → `running|ip`).
-// The stuck harness pins `initializing|no-ip`.
-
-/** Each probe yields a NEW structural signature → loop runs unbounded → ready hit. */
-class AdvancingFakeHetznerClient implements HetznerClient {
-  private getCalls = 0;
-  async createSshKey(): Promise<HetznerSshKey> {
-    return { id: 555 };
-  }
-  async deleteSshKey(): Promise<void> {}
-  async createServer(): Promise<HetznerServer> {
-    return { id: 42, status: "initializing", publicIpv4: undefined };
-  }
-  async getServer(serverId: number): Promise<HetznerServer> {
-    this.getCalls += 1;
-    if (this.getCalls >= 8) {
-      return { id: serverId, status: "running", publicIpv4: "203.0.113.10" };
-    }
-    // Cycle through initializing → starting → running with distinct IP slugs so
-    // each probe's signature is unique (advancing forward).
-    const status = this.getCalls < 3 ? "initializing" : this.getCalls < 5 ? "starting" : "running";
-    const publicIpv4 = this.getCalls % 2 === 0 ? undefined : `intermediate-${this.getCalls}`;
-    return { id: serverId, status, publicIpv4 };
-  }
-  async deleteServer(): Promise<void> {}
-}
-
-function deterministicKeySeq(): { gen: () => EphemeralKeyPair } {
-  const hostKey = generateEd25519KeyPair();
-  const seq = [
-    { privateKey: "CLIENT-CONF-FAKE", publicKey: "ssh-ed25519 AAAAClient tanren" } as EphemeralKeyPair,
-    hostKey,
-  ];
-  let i = 0;
-  return { gen: (): EphemeralKeyPair => seq[i++ % seq.length] as EphemeralKeyPair };
-}
-
-const hetznerHarness = {
-  buildAdvancing() {
-    const client = new AdvancingFakeHetznerClient();
-    const runners = new FakeRunnerStore();
-    const secrets = new InMemorySecretStore();
-    const allocator = new HetznerAllocator({
-      ...baseOpts(client, runners, secrets),
-      generateKeyPair: deterministicKeySeq().gen,
-      pollIntervalMs: 1,
-    });
-    return { allocator, request: req("run_adv"), expectedAdvancingProbes: 7 };
-  },
-  buildStuck() {
-    const client = new FakeHetznerClient({ neverRuns: true });
-    const runners = new FakeRunnerStore();
-    const secrets = new InMemorySecretStore();
-    const allocator = new HetznerAllocator({
-      ...baseOpts(client, runners, secrets),
-      generateKeyPair: deterministicKeySeq().gen,
-      pollIntervalMs: 1,
-    });
-    return { allocator, request: req("run_stuck"), expectedStuckSignature: "initializing|no-ip" };
-  },
-  buildUnknownState() {
-    const client = new FakeHetznerClient({ unknownStatus: "performing-magic" });
-    const runners = new FakeRunnerStore();
-    const secrets = new InMemorySecretStore();
-    const allocator = new HetznerAllocator({
-      ...baseOpts(client, runners, secrets),
-      generateKeyPair: deterministicKeySeq().gen,
-      pollIntervalMs: 1,
-    });
-    return { allocator, request: req("run_unk"), expectedUnknownState: "performing-magic" };
-  },
-  buildTerminalArm(terminalState: string) {
-    const client = new FakeHetznerClient({ terminalStatus: terminalState });
-    const runners = new FakeRunnerStore();
-    const secrets = new InMemorySecretStore();
-    const allocator = new HetznerAllocator({
-      ...baseOpts(client, runners, secrets),
-      generateKeyPair: deterministicKeySeq().gen,
-      pollIntervalMs: 1,
-    });
-    return { allocator, request: req("run_term") };
-  },
-  // Hetzner `HETZNER_TERMINAL_STATUSES` allowlist — each fires the terminal arm IMMEDIATELY.
-  expectedTerminalArms: ["stopping", "off", "deleting", "unknown"] as const,
-};
-
-describe("HetznerAllocator — readiness convergence inner contract", () => {
-  it("wraps PersistentProvisioningOutageError as Error with cause", async () => {
-    const { allocator, request } = hetznerHarness.buildStuck();
-    let caught: unknown;
-    try {
-      await allocator.allocate(request);
-    } catch (error) {
-      caught = error;
-    }
-    expect((caught as { cause?: unknown }).cause).toBeInstanceOf(PersistentProvisioningOutageError);
-  });
-
-  it("wraps UnknownProvisioningStateError as Error with cause", async () => {
-    const { allocator, request } = hetznerHarness.buildUnknownState();
-    let caught: unknown;
-    try {
-      await allocator.allocate(request);
-    } catch (error) {
-      caught = error;
-    }
-    expect((caught as { cause?: unknown }).cause).toBeInstanceOf(UnknownProvisioningStateError);
-  });
-
-  it("wraps ProvisioningTerminalStateError as Error with cause", async () => {
-    const { allocator, request } = hetznerHarness.buildTerminalArm("off");
-    let caught: unknown;
-    try {
-      await allocator.allocate(request);
-    } catch (error) {
-      caught = error;
-    }
-    expect((caught as { cause?: unknown }).cause).toBeInstanceOf(ProvisioningTerminalStateError);
-  });
-});
-
-function unwrapHetzner(allocator: Allocator): Allocator {
-  return {
-    async allocate(request) {
-      try {
-        return await allocator.allocate(request);
-      } catch (error) {
-        if (error instanceof Error && (error as { cause?: unknown }).cause !== undefined) {
-          throw (error as { cause: unknown }).cause;
-        }
-        throw error;
-      }
-    },
-    release: allocator.release.bind(allocator),
-  };
-}
-
-describeReadinessConvergence("Hetzner", {
-  buildAdvancing: () => {
-    const inner = hetznerHarness.buildAdvancing();
-    return { ...inner, allocator: unwrapHetzner(inner.allocator) };
-  },
-  buildStuck: () => {
-    const inner = hetznerHarness.buildStuck();
-    return { ...inner, allocator: unwrapHetzner(inner.allocator) };
-  },
-  buildUnknownState: () => {
-    const inner = hetznerHarness.buildUnknownState();
-    return { ...inner, allocator: unwrapHetzner(inner.allocator) };
-  },
-  buildTerminalArm: (terminalState) => {
-    const inner = hetznerHarness.buildTerminalArm(terminalState);
-    return { ...inner, allocator: unwrapHetzner(inner.allocator) };
-  },
-  expectedTerminalArms: hetznerHarness.expectedTerminalArms,
-});
+// Task #31: the shared readiness-convergence conformance suite for Hetzner
+// lives in `hetznerAllocator.readinessConformance.test.ts` (split to keep
+// each test file under the line cap).

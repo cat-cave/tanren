@@ -286,10 +286,9 @@ function digitalOceanDropletSignature(droplet: DigitalOceanDroplet): string {
 /** Wrap a convergence-class throw into the per-allocator typed error (with cause). */
 function wrapDigitalOceanProvisioningError(dropletId: number, error: unknown): Error {
   if (error instanceof PersistentProvisioningOutageError) {
-    return new DigitalOceanAllocatorError(
-      `digitalocean droplet ${dropletId} did not become active: ${error.message}`,
-      { cause: error },
-    );
+    return new DigitalOceanAllocatorError(`digitalocean droplet ${dropletId} did not become active: ${error.message}`, {
+      cause: error,
+    });
   }
   if (error instanceof ProvisioningTerminalStateError) {
     return new DigitalOceanAllocatorError(error.reason, { cause: error });

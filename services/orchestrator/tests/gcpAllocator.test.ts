@@ -11,11 +11,8 @@ import {
 import {
   PersistentProvisioningOutageError,
   ProvisioningTerminalStateError,
-  UnknownProvisioningStateError,
 } from "../src/engine/allocators/readinessConvergence.js";
-import type { Allocator } from "../src/engine/contracts/allocator.js";
 import type { ClaimRunnerInput, RunnerStore } from "../src/engine/allocators/runnerStore.js";
-import { describeReadinessConvergence } from "./conformance/readinessConvergenceConformance.js";
 
 class FakeRunnerStore implements RunnerStore {
   readonly claims: ClaimRunnerInput[] = [];
@@ -187,7 +184,7 @@ describe("GcpAllocator", () => {
     expect(caught).toBeInstanceOf(GcpAllocatorError);
     expect((caught as Error).message).toMatch(/did not become RUNNING/u);
     expect((caught as { cause?: unknown }).cause).toBeInstanceOf(PersistentProvisioningOutageError);
-    expect(((caught as { cause: PersistentProvisioningOutageError }).cause).stuckSignature).toBe("PROVISIONING|no-ip");
+    expect((caught as { cause: PersistentProvisioningOutageError }).cause.stuckSignature).toBe("PROVISIONING|no-ip");
     expect(client.deleted).toContain("tanren-run-3");
   });
 
@@ -480,135 +477,6 @@ describe("GcpAllocator", () => {
   });
 });
 
-// Task #31: shared readiness-convergence conformance suite.
-//
-// The advancing harness threads CHANGING instance statuses across probes
-// (PROVISIONING → STAGING → RUNNING|no-ip → RUNNING|ip). The stuck harness pins
-// `PROVISIONING|no-ip`. The conformance suite asserts the contract at the SAME
-// seam every other allocator is held to.
-
-/** Each probe yields a NEW structural signature → loop runs unbounded → ready hit. */
-class AdvancingFakeGcpComputeClient implements GcpComputeClient {
-  private getCalls = 0;
-  async insertInstance(): Promise<GcpOperation> {
-    return { name: "op-adv", status: "DONE" };
-  }
-  async getZoneOperation(): Promise<GcpOperation> {
-    return { name: "op-adv", status: "DONE" };
-  }
-  async getInstance(instanceName: string): Promise<GcpInstance> {
-    this.getCalls += 1;
-    if (this.getCalls >= 8) {
-      return { name: instanceName, status: "RUNNING", externalIp: "203.0.113.50" };
-    }
-    // Cycle PROVISIONING → STAGING → RUNNING|no-ip with distinct IP slugs so the
-    // signature advances forward across every intermediate probe.
-    const status = this.getCalls < 3 ? "PROVISIONING" : this.getCalls < 5 ? "STAGING" : "RUNNING";
-    const externalIp = this.getCalls % 2 === 0 ? undefined : `intermediate-${this.getCalls}`;
-    return { name: instanceName, status, externalIp };
-  }
-  async deleteInstance(): Promise<void> {}
-}
-
-const gcpHarness = {
-  buildAdvancing() {
-    const client = new AdvancingFakeGcpComputeClient();
-    const runners = new FakeRunnerStore();
-    const allocator = new GcpAllocator({ ...baseOpts(client, runners), pollIntervalMs: 1 });
-    return { allocator, request: req("run_adv"), expectedAdvancingProbes: 7 };
-  },
-  buildStuck() {
-    const client = new FakeGcpComputeClient({ neverRunning: true });
-    const runners = new FakeRunnerStore();
-    const allocator = new GcpAllocator({ ...baseOpts(client, runners), pollIntervalMs: 1 });
-    return { allocator, request: req("run_stuck"), expectedStuckSignature: "PROVISIONING|no-ip" };
-  },
-  buildUnknownState() {
-    const client = new FakeGcpComputeClient({ unknownStatus: "RECONCILING-NEW-FEATURE" });
-    const runners = new FakeRunnerStore();
-    const allocator = new GcpAllocator({ ...baseOpts(client, runners), pollIntervalMs: 1 });
-    return { allocator, request: req("run_unk"), expectedUnknownState: "RECONCILING-NEW-FEATURE" };
-  },
-  buildTerminalArm(terminalState: string) {
-    const client = new FakeGcpComputeClient({ terminalStatus: terminalState });
-    const runners = new FakeRunnerStore();
-    const allocator = new GcpAllocator({ ...baseOpts(client, runners), pollIntervalMs: 1 });
-    return { allocator, request: req("run_term") };
-  },
-  // GCP `GCP_INSTANCE_TERMINAL_STATUSES` allowlist — each fires the terminal arm IMMEDIATELY.
-  expectedTerminalArms: ["STOPPING", "STOPPED", "SUSPENDING", "SUSPENDED", "TERMINATED"] as const,
-};
-
-describe("GcpAllocator — readiness convergence inner contract", () => {
-  it("wraps PersistentProvisioningOutageError as GcpAllocatorError with cause", async () => {
-    const { allocator, request } = gcpHarness.buildStuck();
-    let caught: unknown;
-    try {
-      await allocator.allocate(request);
-    } catch (error) {
-      caught = error;
-    }
-    expect(caught).toBeInstanceOf(GcpAllocatorError);
-    expect((caught as { cause?: unknown }).cause).toBeInstanceOf(PersistentProvisioningOutageError);
-  });
-
-  it("wraps UnknownProvisioningStateError as GcpAllocatorError with cause", async () => {
-    const { allocator, request } = gcpHarness.buildUnknownState();
-    let caught: unknown;
-    try {
-      await allocator.allocate(request);
-    } catch (error) {
-      caught = error;
-    }
-    expect(caught).toBeInstanceOf(GcpAllocatorError);
-    expect((caught as { cause?: unknown }).cause).toBeInstanceOf(UnknownProvisioningStateError);
-  });
-
-  it("wraps ProvisioningTerminalStateError as GcpAllocatorError with cause", async () => {
-    const { allocator, request } = gcpHarness.buildTerminalArm("TERMINATED");
-    let caught: unknown;
-    try {
-      await allocator.allocate(request);
-    } catch (error) {
-      caught = error;
-    }
-    expect(caught).toBeInstanceOf(GcpAllocatorError);
-    expect((caught as { cause?: unknown }).cause).toBeInstanceOf(ProvisioningTerminalStateError);
-  });
-});
-
-function unwrapGcp(allocator: Allocator): Allocator {
-  return {
-    async allocate(request) {
-      try {
-        return await allocator.allocate(request);
-      } catch (error) {
-        if (error instanceof GcpAllocatorError && error.cause !== undefined) {
-          throw error.cause;
-        }
-        throw error;
-      }
-    },
-    release: allocator.release.bind(allocator),
-  };
-}
-
-describeReadinessConvergence("Gcp", {
-  buildAdvancing: () => {
-    const inner = gcpHarness.buildAdvancing();
-    return { ...inner, allocator: unwrapGcp(inner.allocator) };
-  },
-  buildStuck: () => {
-    const inner = gcpHarness.buildStuck();
-    return { ...inner, allocator: unwrapGcp(inner.allocator) };
-  },
-  buildUnknownState: () => {
-    const inner = gcpHarness.buildUnknownState();
-    return { ...inner, allocator: unwrapGcp(inner.allocator) };
-  },
-  buildTerminalArm: (terminalState) => {
-    const inner = gcpHarness.buildTerminalArm(terminalState);
-    return { ...inner, allocator: unwrapGcp(inner.allocator) };
-  },
-  expectedTerminalArms: gcpHarness.expectedTerminalArms,
-});
+// Task #31: the shared readiness-convergence conformance suite for GCP
+// lives in `gcpAllocator.readinessConformance.test.ts` (split to keep
+// each test file under the line cap).

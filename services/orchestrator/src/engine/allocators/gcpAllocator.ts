@@ -6,6 +6,8 @@ import {
   type ReleaseReason,
   type RunnerAllocation,
 } from "../contracts/allocator.js";
+import { fetchGcpComputeClient } from "./gcpFetchClient.js";
+import { GcpAllocatorError, type GcpComputeClient, type GcpInstance, type GcpOperation } from "./gcpShared.js";
 import {
   PersistentProvisioningOutageError,
   ProvisioningTerminalStateError,
@@ -16,7 +18,6 @@ import {
 import type { RunnerStore } from "./runnerStore.js";
 
 const allocatorName = "gcp";
-const gcpComputeApiBase = "https://compute.googleapis.com/compute/v1";
 
 /**
  * GCP documented zone operation statuses. `DONE` is the ready terminus for the
@@ -51,65 +52,16 @@ const GCP_INSTANCE_TERMINAL_STATUSES: ReadonlySet<string> = new Set([
   "TERMINATED",
 ]);
 
-/**
- * Typed error for GCP Compute Engine provisioning failures, so callers (and
- * tests) can distinguish allocator faults from generic errors. Optionally
- * carries a `cause` so a convergence-class throw wrapped into this allocator's
- * error keeps the inner stuck-signature / probe-count diagnostic accessible.
- */
-export class GcpAllocatorError extends Error {
-  constructor(message: string, options?: { cause?: unknown }) {
-    super(message, options);
-    this.name = "GcpAllocatorError";
-  }
-}
-
-/**
- * Minimal injectable HTTP client over the GCP Compute Engine v1 API. Only the
- * shapes the allocator needs are modeled. Tests inject a fake; production uses
- * {@link fetchGcpComputeClient}.
- *
- * GCP provisioning is asynchronous: `insertInstance` returns a zone Operation
- * that must be polled to completion via `getZoneOperation`, after which
- * `getInstance` exposes the RUNNING state and external IP.
- */
-export interface GcpComputeClient {
-  insertInstance(input: GcpInsertInstanceInput): Promise<GcpOperation>;
-  getZoneOperation(operationName: string): Promise<GcpOperation>;
-  getInstance(instanceName: string): Promise<GcpInstance>;
-  deleteInstance(instanceName: string): Promise<void>;
-}
-
-export interface GcpInsertInstanceInput {
-  /** Instance name, DNS-1035 safe (lowercase, digits, dashes). */
-  name: string;
-  /** Machine type short name, e.g. `e2-small`. */
-  machineType: string;
-  /** Source image, e.g. `projects/cos-cloud/global/images/family/cos-stable`. */
-  sourceImage: string;
-  /** SSH username authorized on the instance. */
-  sshUsername: string;
-  /** Runner SSH public key, injected via instance metadata. */
-  sshPublicKey: string;
-  /** GCE labels applied to the instance (used to trace it back to a run). */
-  labels?: Record<string, string>;
-}
-
-/** A GCP long-running zone operation. */
-export interface GcpOperation {
-  name: string;
-  /** PENDING | RUNNING | DONE */
-  status: string;
-  /** Present when the operation failed. */
-  error?: string;
-}
-
-export interface GcpInstance {
-  name: string;
-  /** PROVISIONING | STAGING | RUNNING | STOPPING | TERMINATED */
-  status: string;
-  externalIp?: string;
-}
+// The typed error class + minimal-client + types live in `./gcpShared.ts` so the
+// production fetch-client and the allocator can both import them without a circular
+// dependency. Re-exported here for back-compat with existing imports.
+export {
+  GcpAllocatorError,
+  type GcpComputeClient,
+  type GcpInsertInstanceInput,
+  type GcpInstance,
+  type GcpOperation,
+} from "./gcpShared.js";
 
 export interface GcpAllocatorOptions {
   /**
@@ -408,138 +360,7 @@ function labelValue(value: string): string {
     .slice(0, 63);
 }
 
-interface GcpOperationResponse {
-  name: string;
-  status: string;
-  error?: { errors?: ReadonlyArray<{ message?: string }> | null } | null;
-}
-
-interface GcpAccessConfigResponse {
-  natIP?: string;
-}
-
-interface GcpNetworkInterfaceResponse {
-  accessConfigs?: ReadonlyArray<GcpAccessConfigResponse> | null;
-}
-
-interface GcpInstanceResponse {
-  name: string;
-  status: string;
-  networkInterfaces?: ReadonlyArray<GcpNetworkInterfaceResponse> | null;
-}
-
-function operationErrorOf(error: GcpOperationResponse["error"]): string | undefined {
-  if (error === null || error === undefined) {
-    return undefined;
-  }
-  const errors = error.errors;
-  if (errors === null || errors === undefined || errors.length === 0) {
-    return undefined;
-  }
-  return errors.map((e) => e.message ?? "unknown error").join("; ");
-}
-
-function toOperation(body: GcpOperationResponse): GcpOperation {
-  return { name: body.name, status: body.status, error: operationErrorOf(body.error) };
-}
-
-function externalIpOf(interfaces: ReadonlyArray<GcpNetworkInterfaceResponse> | null | undefined): string | undefined {
-  if (interfaces === null || interfaces === undefined) {
-    return undefined;
-  }
-  for (const iface of interfaces) {
-    for (const config of iface.accessConfigs ?? []) {
-      if (config.natIP !== undefined && config.natIP !== "") {
-        return config.natIP;
-      }
-    }
-  }
-  return undefined;
-}
-
-function toInstance(body: GcpInstanceResponse): GcpInstance {
-  return {
-    name: body.name,
-    status: body.status,
-    externalIp: externalIpOf(body.networkInterfaces),
-  };
-}
-
-/**
- * Production {@link GcpComputeClient} backed by `fetch` against the Compute
- * Engine v1 API. The access token is supplied by the caller (minted from a
- * Vault-resolved service-account ref), never read from the environment here.
- */
-export function fetchGcpComputeClient(
-  options: Pick<GcpAllocatorOptions, "accessToken" | "project" | "zone">,
-  fetchImpl: typeof fetch = fetch,
-): GcpComputeClient {
-  const { accessToken, project, zone } = options;
-  const authHeaders = {
-    authorization: `Bearer ${accessToken}`,
-    "Content-Type": "application/json",
-  } as const;
-  const zoneBase = `${gcpComputeApiBase}/projects/${project}/zones/${zone}`;
-
-  return {
-    async insertInstance(input: GcpInsertInstanceInput): Promise<GcpOperation> {
-      const response = await fetchImpl(`${zoneBase}/instances`, {
-        method: "POST",
-        headers: authHeaders,
-        body: JSON.stringify({
-          name: input.name,
-          machineType: `zones/${zone}/machineTypes/${input.machineType}`,
-          labels: input.labels,
-          disks: [
-            {
-              boot: true,
-              autoDelete: true,
-              initializeParams: { sourceImage: input.sourceImage },
-            },
-          ],
-          networkInterfaces: [{ accessConfigs: [{ type: "ONE_TO_ONE_NAT", name: "External NAT" }] }],
-          metadata: {
-            items: [{ key: "ssh-keys", value: `${input.sshUsername}:${input.sshPublicKey}` }],
-          },
-        }),
-      });
-      if (!response.ok) {
-        throw new GcpAllocatorError(`gcp insertInstance failed: ${response.status} ${await response.text()}`);
-      }
-      return toOperation((await response.json()) as GcpOperationResponse);
-    },
-
-    async getZoneOperation(operationName: string): Promise<GcpOperation> {
-      const response = await fetchImpl(`${zoneBase}/operations/${operationName}`, {
-        method: "GET",
-        headers: authHeaders,
-      });
-      if (!response.ok) {
-        throw new GcpAllocatorError(`gcp getZoneOperation failed: ${response.status} ${await response.text()}`);
-      }
-      return toOperation((await response.json()) as GcpOperationResponse);
-    },
-
-    async getInstance(instanceName: string): Promise<GcpInstance> {
-      const response = await fetchImpl(`${zoneBase}/instances/${instanceName}`, {
-        method: "GET",
-        headers: authHeaders,
-      });
-      if (!response.ok) {
-        throw new GcpAllocatorError(`gcp getInstance failed: ${response.status} ${await response.text()}`);
-      }
-      return toInstance((await response.json()) as GcpInstanceResponse);
-    },
-
-    async deleteInstance(instanceName: string): Promise<void> {
-      const response = await fetchImpl(`${zoneBase}/instances/${instanceName}`, {
-        method: "DELETE",
-        headers: authHeaders,
-      });
-      // 404 means already gone — treat as success (idempotent destroy).
-      if (!response.ok && response.status !== 404) {
-        throw new GcpAllocatorError(`gcp deleteInstance failed: ${response.status} ${await response.text()}`);
-      }
-    },
-  };
-}
+// `fetchGcpComputeClient` (the production fetch-backed client + the response
+// mapping helpers) lives in `./gcpFetchClient.ts` to keep this file under the
+// line cap. Re-exported here so existing call sites keep their existing import.
+export { fetchGcpComputeClient } from "./gcpFetchClient.js";
