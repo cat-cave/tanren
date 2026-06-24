@@ -6,17 +6,43 @@ import {
   type ReleaseReason,
   type RunnerAllocation,
 } from "../contracts/allocator.js";
+import {
+  PersistentProvisioningOutageError,
+  ProvisioningTerminalStateError,
+  UnknownProvisioningStateError,
+  pollUntilReady,
+  type ReadinessClassification,
+} from "./readinessConvergence.js";
 import type { RunnerStore } from "./runnerStore.js";
 
 const allocatorName = "kubernetes";
 
 /**
+ * Kubernetes documented Pod phases the allocator EXPECTS to see as an intermediate
+ * state on the path to `Running`. Anything outside this set OR {@link K8S_TERMINAL_PHASES}
+ * is treated as `unknown_state` — fail-closed ratchet (a new k8s phase forces a code
+ * change here, never a silent infinite loop). The Pod lifecycle documents:
+ * `Pending`, `Running`, `Succeeded`, `Failed`, `Unknown`.
+ */
+const K8S_PROVISIONING_PHASES: ReadonlySet<string> = new Set(["Pending", "Running"]);
+
+/**
+ * Kubernetes documented terminal phases — a Pod in these phases cannot recover by
+ * waiting (it already completed, succeeded, or failed; `Unknown` means kubelet
+ * cannot reach the Pod, which doesn't self-heal as `Running`). Fires the
+ * `terminal_error` arm immediately, never via the fixed-point gate.
+ */
+const K8S_TERMINAL_PHASES: ReadonlySet<string> = new Set(["Failed", "Succeeded", "Unknown"]);
+
+/**
  * Typed error for Kubernetes provisioning failures, so callers (and tests) can
- * distinguish allocator faults from generic errors.
+ * distinguish allocator faults from generic errors. Optionally carries a `cause`
+ * so a convergence-class throw wrapped into this allocator's error keeps the
+ * inner stuck-signature / probe-count diagnostic accessible.
  */
 export class KubernetesAllocatorError extends Error {
-  constructor(message: string) {
-    super(message);
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
     this.name = "KubernetesAllocatorError";
   }
 }
@@ -62,12 +88,57 @@ export interface KubernetesPodInput {
   labels: Readonly<Record<string, string>>;
 }
 
+/**
+ * Kubernetes Pod Condition (per the API). Each is a `type`/`status` pair the
+ * scheduler/kubelet evolves through the Pod lifecycle (`PodScheduled` /
+ * `Initialized` / `ContainersReady` / `Ready`). The structural signature folds
+ * SORTED `type=status` pairs so the kubelet flipping any condition shows as
+ * forward motion to the convergence detector.
+ */
+export interface KubernetesPodCondition {
+  type: string;
+  /** True | False | Unknown */
+  status: string;
+  /** Optional human-readable reason for the condition's current status. */
+  reason?: string;
+}
+
+/**
+ * Kubernetes container status as surfaced by the API. The structural signature
+ * reads `state.waiting.reason` so distinct waiting reasons (`ImagePullBackOff`
+ * vs `ContainerCreating` vs `CrashLoopBackOff`) advance the signature; a
+ * kubelet retrying `ImagePullBackOff` keeps the loop running while the cluster
+ * is genuinely retrying, and an identical reason stuck past the saturation gate
+ * surfaces loud.
+ */
+export interface KubernetesContainerStatus {
+  name: string;
+  /** Stable identity of the container's current state: e.g. `waiting:ImagePullBackOff`. */
+  state: string;
+  /** Optional reason (e.g. `ImagePullBackOff`, `ContainerCreating`). */
+  reason?: string;
+}
+
 export interface KubernetesPod {
   name: string;
   /** Pending | Running | Succeeded | Failed | Unknown */
   phase: string;
   /** Scheduled Pod IP; empty until the Pod is Running on a node. */
   podIp?: string;
+  /**
+   * Pod conditions (PodScheduled / Initialized / ContainersReady / Ready). When
+   * absent, the structural signature is just `phase|ip-presence`; when present,
+   * the signature also folds SORTED `type=status` pairs so the kubelet flipping
+   * any condition counts as forward motion.
+   */
+  conditions?: ReadonlyArray<KubernetesPodCondition>;
+  /**
+   * Container statuses surfaced by the kubelet. When present, the signature
+   * folds SORTED `name:state` pairs so an `ImagePullBackOff` is distinct from
+   * a `ContainerCreating` (different state strings = the loop sees forward
+   * motion); identical-state recurrence past the saturation gate surfaces loud.
+   */
+  containerStatuses?: ReadonlyArray<KubernetesContainerStatus>;
 }
 
 export interface KubernetesAllocatorOptions {
@@ -103,8 +174,6 @@ export interface KubernetesAllocatorOptions {
   client?: KubernetesClient;
   /** Poll interval while waiting for the Pod to become Running. */
   pollIntervalMs?: number;
-  /** Max time to wait for the Pod to become Running + get a Pod IP. */
-  readyTimeoutMs?: number;
   /** Injectable sleep (tests pass a no-op). */
   sleep?: (ms: number) => Promise<void>;
 }
@@ -254,28 +323,107 @@ export class KubernetesAllocator implements Allocator {
     await this.client.deleteSecret(secretName).catch(() => {});
   }
 
+  /**
+   * Wait for the Pod to become `Running` with a Pod IP. CONVERGENCE-BASED: the
+   * loop runs UNBOUNDED while the structural signature
+   * (`${phase}|${ip-presence}|<sorted conditions>|<sorted container states>`)
+   * keeps advancing — so `Pending|no-ip|<no conditions>` → `Pending|no-ip|
+   * PodScheduled=True` → `Pending|no-ip|PodScheduled=True,Initialized=True` →
+   * `Running|ip|…|ContainersReady=True` is genuine forward motion (the kubelet is
+   * making progress). It surfaces LOUD on intelligent non-convergence (the SAME
+   * signature past the saturation gate = a wedged Pod, e.g. `ImagePullBackOff`
+   * stuck on the same `back-off N restarting failed container` text), a
+   * documented terminal phase (`Failed`/`Succeeded`/`Unknown`,
+   * `ProvisioningTerminalStateError`), or a brand-new k8s phase the allowlist does
+   * not recognize (`UnknownProvisioningStateError`, fail-closed ratchet). NO
+   * wall-clock deadline.
+   */
   private async waitForRunning(name: string): Promise<KubernetesPod> {
     const pollIntervalMs = this.options.pollIntervalMs ?? 3_000;
-    const readyTimeoutMs = this.options.readyTimeoutMs ?? 120_000;
-    const deadline = Date.now() + readyTimeoutMs;
-    for (;;) {
-      const pod = await this.client.getPod(name);
-      if (pod.phase === "Running" && pod.podIp !== undefined && pod.podIp !== "") {
-        return pod;
-      }
-      if (pod.phase === "Failed" || pod.phase === "Succeeded") {
-        throw new KubernetesAllocatorError(
-          `kubernetes pod ${name} entered terminal phase '${pod.phase}' before becoming reachable`,
-        );
-      }
-      if (Date.now() >= deadline) {
-        throw new KubernetesAllocatorError(
-          `kubernetes pod ${name} did not become Running within ${readyTimeoutMs}ms (last phase: ${pod.phase})`,
-        );
-      }
-      await this.sleep(pollIntervalMs);
+    try {
+      return await pollUntilReady(() => this.client.getPod(name), {
+        classify: (pod) => classifyKubernetesPod(pod),
+        signature: (pod) => kubernetesPodSignature(pod),
+        pollIntervalMs,
+        sleep: this.sleep,
+      });
+    } catch (error) {
+      throw wrapKubernetesProvisioningError(name, error);
     }
   }
+}
+
+/**
+ * Classify a Kubernetes Pod observation. Terminal phases fire IMMEDIATELY; the
+ * provisioning phases drive the convergence loop. The structural signature
+ * folds conditions + container statuses so a kubelet retrying `ImagePullBackOff`
+ * (which advances `back-off N restarting failed container`) reads as forward
+ * motion AS LONG AS the kubelet keeps moving, and converges to a fixed point
+ * only when the same condition/container state recurs past the saturation gate.
+ */
+function classifyKubernetesPod(pod: KubernetesPod): ReadinessClassification<KubernetesPod> {
+  if (pod.phase === "Running" && pod.podIp !== undefined && pod.podIp !== "") {
+    return { kind: "ready", observation: pod };
+  }
+  if (K8S_TERMINAL_PHASES.has(pod.phase)) {
+    return {
+      kind: "terminal_error",
+      reason: `kubernetes pod ${pod.name} entered terminal phase '${pod.phase}' before becoming reachable`,
+    };
+  }
+  if (K8S_PROVISIONING_PHASES.has(pod.phase)) {
+    return { kind: "advancing", observation: pod };
+  }
+  return { kind: "unknown_state", state: pod.phase };
+}
+
+/**
+ * The STRUCTURAL signature the convergence detector reads: Pod phase +
+ * IP-presence + SORTED conditions + SORTED container states. Folding the
+ * conditions + container-status arrays into a deterministic textual signature
+ * lets the convergence detector distinguish a kubelet making real progress
+ * (e.g. flipping `PodScheduled=True` then `Initialized=True`) from a wedged
+ * Pod (same `ImagePullBackOff` reason across consecutive probes).
+ *
+ * SORTED so a non-deterministic order from the API (k8s does not guarantee the
+ * conditions array ordering across reads) is not spuriously detected as
+ * "advancing" forever.
+ */
+function kubernetesPodSignature(pod: KubernetesPod): string {
+  const ipPart = pod.podIp !== undefined && pod.podIp !== "" ? "ip" : "no-ip";
+  const conditionsPart =
+    pod.conditions === undefined || pod.conditions.length === 0
+      ? "no-conds"
+      : [...pod.conditions]
+          .map((c) => `${c.type}=${c.status}`)
+          .sort((a, b) => a.localeCompare(b))
+          .join(",");
+  const containersPart =
+    pod.containerStatuses === undefined || pod.containerStatuses.length === 0
+      ? "no-cstats"
+      : [...pod.containerStatuses]
+          .map((c) => `${c.name}:${c.state}`)
+          .sort((a, b) => a.localeCompare(b))
+          .join(",");
+  return `${pod.phase}|${ipPart}|${conditionsPart}|${containersPart}`;
+}
+
+function wrapKubernetesProvisioningError(podName: string, error: unknown): Error {
+  if (error instanceof PersistentProvisioningOutageError) {
+    return new KubernetesAllocatorError(`kubernetes pod ${podName} did not become Running: ${error.message}`, {
+      cause: error,
+    });
+  }
+  if (error instanceof ProvisioningTerminalStateError) {
+    return new KubernetesAllocatorError(error.reason, { cause: error });
+  }
+  if (error instanceof UnknownProvisioningStateError) {
+    return new KubernetesAllocatorError(
+      `kubernetes pod ${podName} reported an UNKNOWN phase '${error.observedState}' the allocator's allowlist does not recognize`,
+      { cause: error },
+    );
+  }
+  return error instanceof Error ? error : new KubernetesAllocatorError(String(error));
 }
 
 /** Pod / Secret names must be DNS-1123 labels: lowercase, digits, dashes, <=63. */
@@ -296,9 +444,28 @@ function labelValue(value: string): string {
 
 // --- response mapping --------------------------------------------------------
 
+interface PodConditionResponse {
+  type?: string;
+  status?: string;
+  reason?: string;
+}
+
+interface ContainerStateResponse {
+  waiting?: { reason?: string };
+  running?: unknown;
+  terminated?: { reason?: string };
+}
+
+interface ContainerStatusResponse {
+  name?: string;
+  state?: ContainerStateResponse;
+}
+
 interface PodStatusResponse {
   phase?: string;
   podIP?: string;
+  conditions?: ReadonlyArray<PodConditionResponse> | null;
+  containerStatuses?: ReadonlyArray<ContainerStatusResponse> | null;
 }
 
 interface PodResponse {
@@ -306,11 +473,79 @@ interface PodResponse {
   status?: PodStatusResponse;
 }
 
+function toConditions(
+  conditions: ReadonlyArray<PodConditionResponse> | null | undefined,
+): ReadonlyArray<KubernetesPodCondition> | undefined {
+  if (conditions === null || conditions === undefined || conditions.length === 0) {
+    return undefined;
+  }
+  return conditions
+    .filter((c): c is PodConditionResponse & { type: string; status: string } =>
+      typeof c.type === "string" && typeof c.status === "string",
+    )
+    .map((c) => ({
+      type: c.type,
+      status: c.status,
+      ...(c.reason !== undefined ? { reason: c.reason } : {}),
+    }));
+}
+
+/**
+ * Reduce a container's state object to a STABLE one-line identifier the
+ * structural signature can fold. `waiting:ImagePullBackOff` is distinct from
+ * `waiting:ContainerCreating` is distinct from `running` is distinct from
+ * `terminated:Error` — so the kubelet stepping through `ContainerCreating` →
+ * `Running` reads as forward motion, but a stuck `ImagePullBackOff` does not.
+ */
+function summarizeContainerState(state: ContainerStateResponse | undefined): { state: string; reason?: string } {
+  if (state === undefined) {
+    return { state: "unknown" };
+  }
+  if (state.waiting !== undefined) {
+    return {
+      state: state.waiting.reason !== undefined ? `waiting:${state.waiting.reason}` : "waiting",
+      ...(state.waiting.reason !== undefined ? { reason: state.waiting.reason } : {}),
+    };
+  }
+  if (state.running !== undefined) {
+    return { state: "running" };
+  }
+  if (state.terminated !== undefined) {
+    return {
+      state: state.terminated.reason !== undefined ? `terminated:${state.terminated.reason}` : "terminated",
+      ...(state.terminated.reason !== undefined ? { reason: state.terminated.reason } : {}),
+    };
+  }
+  return { state: "unknown" };
+}
+
+function toContainerStatuses(
+  statuses: ReadonlyArray<ContainerStatusResponse> | null | undefined,
+): ReadonlyArray<KubernetesContainerStatus> | undefined {
+  if (statuses === null || statuses === undefined || statuses.length === 0) {
+    return undefined;
+  }
+  return statuses
+    .filter((c): c is ContainerStatusResponse & { name: string } => typeof c.name === "string")
+    .map((c) => {
+      const summary = summarizeContainerState(c.state);
+      return {
+        name: c.name,
+        state: summary.state,
+        ...(summary.reason !== undefined ? { reason: summary.reason } : {}),
+      };
+    });
+}
+
 function toPod(body: PodResponse, fallbackName: string): KubernetesPod {
+  const conditions = toConditions(body.status?.conditions);
+  const containerStatuses = toContainerStatuses(body.status?.containerStatuses);
   return {
     name: body.metadata?.name ?? fallbackName,
     phase: body.status?.phase ?? "Unknown",
     podIp: body.status?.podIP,
+    ...(conditions !== undefined ? { conditions } : {}),
+    ...(containerStatuses !== undefined ? { containerStatuses } : {}),
   };
 }
 

@@ -8,7 +8,7 @@ record is the memory `feedback_no_timeouts_progress_based` (Trevor, 2026-06-17,
 emphatic that this class keeps recurring); the existing models it generalizes are
 `workflow/convergenceDetector.ts` and `worker/runHeartbeat.ts`.
 
-> **Status (program COMPLETE — with SEVEN disguised survivors caught post-program by
+> **Status (program COMPLETE — with EIGHT disguised survivors caught post-program by
 > apex + critic-arc, all fixed).** The full eradication wave landed: #609 (foundation — `ActivityWatchdog`,
 > `retryUntilConverged`, timeout-eradication lint in REPORT mode), #612–#618
 > (M1..Reframe waves), #621 (progress backstop — watchdog surfaces a recoverable
@@ -16,7 +16,7 @@ emphatic that this class keeps recurring); the existing models it generalizes ar
 > so the class can never reintroduce. The doctrine stands: progress/sign-of-life
 > based; `ActivityWatchdog` is the sole running-command hang detector.
 >
-> **SEVEN DISGUISED survivors the lint missed, found by successive apex trials +
+> **EIGHT DISGUISED survivors the lint missed, found by successive apex trials +
 > critic-arc audits and since fixed:**
 >
 > - **#638 — ssh2 `timeout:` connect-config socket option.** In ssh2, the `timeout`
@@ -141,6 +141,55 @@ emphatic that this class keeps recurring); the existing models it generalizes ar
 >   counts the bridged emissions. The doctrine stands — signature IDENTITY,
 >   never elapsed time; a genuinely-advancing process resets it forever no
 >   matter the length, at BOTH layers.
+> - **Task #31 (critic-arc R1 #2 / R2) — 5 cloud allocators with LHS-name deadline
+>   bindings the lint scanned past [RESOLVED].** A critic-arc audit surfaced the
+>   EIGHTH disguised survivor cluster: all 5 cloud allocators
+>   (`digitalOceanAllocator.ts`, `awsEc2Allocator.ts`, `gcpAllocator.ts` ×2 sites,
+>   `kubernetesAllocator.ts`, `hetznerAllocator.ts`) carried
+>   `const deadline = Date.now() + readyTimeoutMs; ... if (Date.now() >= deadline) throw`
+>   — a pure wall-clock kill on slow-but-genuinely-progressing cloud provisioning. A
+>   droplet/instance/pod/server the cloud was actively bringing up
+>   (`new` → `active`, `pending|no-ip` → `running|no-ip` → `running|ip`) past the
+>   120s default was killed mid-flight, the orchestrator destroyed the resource,
+>   and the upstream run failed even though the cloud was working. **Lint
+>   blind-spot extension:** the original (c) `Date.now() + … (deadline|budget)`
+>   heuristic only matched when the deadline word was on the SAME line as the
+>   `Date.now()` RHS — the LHS-name form (keyword before `=`) and the bare
+>   comparison line (`if (Date.now() >= deadline) throw`) both scanned past it
+>   (same blind-spot class as #638 ssh2 `timeout:` and #32 multi-line setTimeout).
+>   Fixed with two new patterns in `scripts/check-architecture-timeouts.mjs` —
+>   `(c2)` deadline-shape ASSIGNMENT (`const/let/var <name> = (?:Date|performance).now() + …`)
+>   matching any deadline-class LHS (deadline / budget / expir* / expiresAt /
+>   deadlineMs), and `(c3)` wall-clock kill COMPARISON
+>   (`(?:Date|performance).now() <=/>=/</> X`); both honor the per-line
+>   `// arch-allow: timeout-class` annotation so KEEP-list shapes (token-TTL
+>   refresh windows) bless themselves at the call site. Each allocator's
+>   `waitFor*` body is replaced with a call to the new shared primitive
+>   `engine/allocators/readinessConvergence.ts#pollUntilReady` (mirrors
+>   `withAnswererRetry` + `withSshTransientRetry`): the loop runs UNBOUNDED while
+>   the per-allocator STRUCTURAL signature (`${status}|${ip-presence}`, K8s also
+>   folds sorted conditions + container states) keeps advancing, and surfaces
+>   LOUD as `PersistentProvisioningOutageError` only on intelligent
+>   non-convergence (an IDENTICAL signature past the saturation gate
+>   `STABLE_CADENCE_FLOOR = 5`). The fail-closed `UnknownProvisioningStateError`
+>   ratchet — a brand-new provider state the per-allocator allowlist
+>   (`DO_PROVISIONING_STATUSES` / `AWS_EC2_PROVISIONING_STATES` /
+>   `GCP_INSTANCE_PROVISIONING_STATUSES` / `K8S_PROVISIONING_PHASES` /
+>   `HETZNER_PROVISIONING_STATUSES`) does NOT recognize MUST throw rather than
+>   silently treat the unknown state as `advancing` forever (adding a new
+>   provider value forces a code change). Existing per-allocator terminal arms
+>   (AWS `terminated`/`shutting-down`/`stopping`/`stopped`, K8s
+>   `Failed`/`Succeeded`/`Unknown`, GCP operation `error` + the documented
+>   instance terminal statuses, Hetzner `off`/`deleting`/`stopping`/`unknown`,
+>   DO `off`/`archive`) fire `ProvisioningTerminalStateError` IMMEDIATELY (never
+>   via the fixed-point gate). A shared conformance harness
+>   (`tests/conformance/readinessConvergenceConformance.ts`) pins the 4-scenario
+>   contract (advancing-unbounded / stuck-fixed-point / unknown-state /
+>   terminal-arms) so a future regression on any allocator's classifier,
+>   signature, or terminal-arm wiring fails CI uniformly. The doctrine extends:
+>   **the LHS-name deadline shape (`const deadline = Date.now() + X`) is now a
+>   first-class lint pattern**, and **every per-allocator status allowlist is a
+>   fail-closed ratchet** — a new provider value cannot silently loop forever.
 > - **Task #32 (critic-arc R1 #3 / R2) — three production retry caps + a multi-line
 >   `setTimeout` lint blind spot [RESOLVED].** A critic-arc audit surfaced the
 >   SEVENTH disguised survivor cluster: three live retry-cap survivors the

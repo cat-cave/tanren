@@ -6,18 +6,44 @@ import {
   type ReleaseReason,
   type RunnerAllocation,
 } from "../contracts/allocator.js";
+import {
+  PersistentProvisioningOutageError,
+  ProvisioningTerminalStateError,
+  UnknownProvisioningStateError,
+  pollUntilReady,
+  type ReadinessClassification,
+} from "./readinessConvergence.js";
 import type { RunnerStore } from "./runnerStore.js";
 
 const allocatorName = "digitalocean";
 const digitalOceanApiBase = "https://api.digitalocean.com/v2";
 
 /**
+ * DigitalOcean documented droplet lifecycle statuses the allocator EXPECTS to see
+ * as an intermediate state on the path to `active`. Anything outside this set OR
+ * {@link DO_TERMINAL_STATUSES} is treated as `unknown_state` — fail-closed ratchet
+ * (a new DO status forces a code change here, never a silent infinite loop).
+ */
+const DO_PROVISIONING_STATUSES: ReadonlySet<string> = new Set(["new", "active"]);
+
+/**
+ * DigitalOcean documented terminal statuses — a droplet in these states cannot
+ * recover by waiting (powered down / archived). Fires the `terminal_error` arm
+ * immediately, never via the fixed-point gate.
+ */
+const DO_TERMINAL_STATUSES: ReadonlySet<string> = new Set(["off", "archive"]);
+
+/**
  * Typed error for DigitalOcean provisioning failures, so callers (and tests)
- * can distinguish allocator faults from generic errors.
+ * can distinguish allocator faults from generic errors. Optionally carries a
+ * `cause` so a convergence-class throw (`PersistentProvisioningOutageError` /
+ * `ProvisioningTerminalStateError` / `UnknownProvisioningStateError`) wrapped
+ * into this allocator's error keeps the inner stuck-signature / probe-count
+ * diagnostic accessible to callers + the debugger.
  */
 export class DigitalOceanAllocatorError extends Error {
-  constructor(message: string) {
-    super(message);
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
     this.name = "DigitalOceanAllocatorError";
   }
 }
@@ -80,8 +106,6 @@ export interface DigitalOceanAllocatorOptions {
   client?: DigitalOceanClient;
   /** Poll interval while waiting for the droplet to become active. */
   pollIntervalMs?: number;
-  /** Max time to wait for the droplet to become active + get an IP. */
-  readyTimeoutMs?: number;
   /** Injectable sleep (tests pass a no-op). */
   sleep?: (ms: number) => Promise<void>;
 }
@@ -199,24 +223,84 @@ export class DigitalOceanAllocator implements Allocator {
     await this.options.runners.release(runnerId);
   }
 
+  /**
+   * Wait for the droplet to become `active` with a public IPv4. CONVERGENCE-BASED:
+   * the loop runs UNBOUNDED while the structural signature (`${status}|${ip-presence}`)
+   * keeps advancing — `new|no-ip` → `new|ip` → `active|no-ip` → `active|ip` (ready).
+   * It surfaces LOUD only on intelligent non-convergence (an IDENTICAL signature past
+   * the saturation gate = a stuck droplet, `PersistentProvisioningOutageError`), a
+   * documented terminal status (`off`/`archive`, `ProvisioningTerminalStateError`),
+   * or a brand-new DO status the allowlist does not recognize
+   * (`UnknownProvisioningStateError`, fail-closed ratchet). NO wall-clock deadline.
+   */
   private async waitForActive(dropletId: number): Promise<DigitalOceanDroplet> {
     const pollIntervalMs = this.options.pollIntervalMs ?? 3_000;
-    const readyTimeoutMs = this.options.readyTimeoutMs ?? 120_000;
-    const deadline = Date.now() + readyTimeoutMs;
-    for (;;) {
-      const droplet = await this.client.getDroplet(dropletId);
-      if (droplet.status === "active" && droplet.publicIpv4 !== undefined && droplet.publicIpv4 !== "") {
-        return droplet;
-      }
-      if (Date.now() >= deadline) {
-        throw new DigitalOceanAllocatorError(
-          `digitalocean droplet ${dropletId} did not become active within ${readyTimeoutMs}ms ` +
-            `(last status: ${droplet.status})`,
-        );
-      }
-      await this.sleep(pollIntervalMs);
+    try {
+      return await pollUntilReady(() => this.client.getDroplet(dropletId), {
+        classify: (droplet) => classifyDigitalOceanDroplet(droplet),
+        signature: (droplet) => digitalOceanDropletSignature(droplet),
+        pollIntervalMs,
+        sleep: this.sleep,
+      });
+    } catch (error) {
+      // Wrap each convergence-class surface into the per-allocator typed error so
+      // existing callers (and the surface tests) keep their `instanceof
+      // DigitalOceanAllocatorError` discriminator. Carries the cause so the inner
+      // signature / state / probe count remain diagnosable.
+      throw wrapDigitalOceanProvisioningError(dropletId, error);
     }
   }
+}
+
+/**
+ * Classify a DigitalOcean droplet observation. Each allowlisted status maps to a
+ * deliberate convergence outcome — `ready` (active + IPv4), `advancing` (still on the
+ * documented `new`/`active` path), `terminal_error` (a documented terminal status),
+ * or `unknown_state` (a NEW provider status the allowlist does NOT recognize, fail
+ * closed). The signature is the STRUCTURAL pair `${status}|${ip-presence}` — so
+ * `new|no-ip` → `new|ip` → `active|no-ip` → `active|ip` traces the genuine lifecycle
+ * advance, never identical when the droplet is actually progressing.
+ */
+function classifyDigitalOceanDroplet(droplet: DigitalOceanDroplet): ReadinessClassification<DigitalOceanDroplet> {
+  if (droplet.status === "active" && droplet.publicIpv4 !== undefined && droplet.publicIpv4 !== "") {
+    return { kind: "ready", observation: droplet };
+  }
+  if (DO_TERMINAL_STATUSES.has(droplet.status)) {
+    return {
+      kind: "terminal_error",
+      reason: `digitalocean droplet ${droplet.id} entered terminal status '${droplet.status}'`,
+    };
+  }
+  if (DO_PROVISIONING_STATUSES.has(droplet.status)) {
+    return { kind: "advancing", observation: droplet };
+  }
+  return { kind: "unknown_state", state: droplet.status };
+}
+
+/** The STRUCTURAL signature the convergence detector reads — droplet status + IP-presence. */
+function digitalOceanDropletSignature(droplet: DigitalOceanDroplet): string {
+  const ipPart = droplet.publicIpv4 !== undefined && droplet.publicIpv4 !== "" ? "ip" : "no-ip";
+  return `${droplet.status}|${ipPart}`;
+}
+
+/** Wrap a convergence-class throw into the per-allocator typed error (with cause). */
+function wrapDigitalOceanProvisioningError(dropletId: number, error: unknown): Error {
+  if (error instanceof PersistentProvisioningOutageError) {
+    return new DigitalOceanAllocatorError(
+      `digitalocean droplet ${dropletId} did not become active: ${error.message}`,
+      { cause: error },
+    );
+  }
+  if (error instanceof ProvisioningTerminalStateError) {
+    return new DigitalOceanAllocatorError(error.reason, { cause: error });
+  }
+  if (error instanceof UnknownProvisioningStateError) {
+    return new DigitalOceanAllocatorError(
+      `digitalocean droplet ${dropletId} reported an UNKNOWN status '${error.observedState}' the allocator's allowlist does not recognize`,
+      { cause: error },
+    );
+  }
+  return error instanceof Error ? error : new DigitalOceanAllocatorError(String(error));
 }
 
 interface DigitalOceanNetworkV4 {

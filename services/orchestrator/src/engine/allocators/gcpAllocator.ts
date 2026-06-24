@@ -6,18 +6,60 @@ import {
   type ReleaseReason,
   type RunnerAllocation,
 } from "../contracts/allocator.js";
+import {
+  PersistentProvisioningOutageError,
+  ProvisioningTerminalStateError,
+  UnknownProvisioningStateError,
+  pollUntilReady,
+  type ReadinessClassification,
+} from "./readinessConvergence.js";
 import type { RunnerStore } from "./runnerStore.js";
 
 const allocatorName = "gcp";
 const gcpComputeApiBase = "https://compute.googleapis.com/compute/v1";
 
 /**
+ * GCP documented zone operation statuses. `DONE` is the ready terminus for the
+ * operation poll; `PENDING` and `RUNNING` are intermediate. An operation `error`
+ * field surfaces as a terminal_error arm immediately.
+ */
+const GCP_OPERATION_STATUSES: ReadonlySet<string> = new Set(["PENDING", "RUNNING", "DONE"]);
+
+/**
+ * GCP documented instance lifecycle statuses the allocator EXPECTS to see as an
+ * intermediate state on the path to `RUNNING`. Anything outside this set OR
+ * {@link GCP_INSTANCE_TERMINAL_STATUSES} is `unknown_state` — fail-closed ratchet.
+ * Compute Engine documents: PROVISIONING, STAGING, RUNNING, STOPPING, STOPPED,
+ * SUSPENDING, SUSPENDED, TERMINATED, REPAIRING.
+ */
+const GCP_INSTANCE_PROVISIONING_STATUSES: ReadonlySet<string> = new Set([
+  "PROVISIONING",
+  "STAGING",
+  "RUNNING",
+  "REPAIRING",
+]);
+
+/**
+ * GCP documented instance terminal statuses — an instance in these states cannot
+ * recover by waiting (it has been torn down or is being torn down).
+ */
+const GCP_INSTANCE_TERMINAL_STATUSES: ReadonlySet<string> = new Set([
+  "STOPPING",
+  "STOPPED",
+  "SUSPENDING",
+  "SUSPENDED",
+  "TERMINATED",
+]);
+
+/**
  * Typed error for GCP Compute Engine provisioning failures, so callers (and
- * tests) can distinguish allocator faults from generic errors.
+ * tests) can distinguish allocator faults from generic errors. Optionally
+ * carries a `cause` so a convergence-class throw wrapped into this allocator's
+ * error keeps the inner stuck-signature / probe-count diagnostic accessible.
  */
 export class GcpAllocatorError extends Error {
-  constructor(message: string) {
-    super(message);
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
     this.name = "GcpAllocatorError";
   }
 }
@@ -101,8 +143,6 @@ export interface GcpAllocatorOptions {
   client?: GcpComputeClient;
   /** Poll interval while waiting for the operation + instance to become ready. */
   pollIntervalMs?: number;
-  /** Max time to wait for the instance to become RUNNING + get an external IP. */
-  readyTimeoutMs?: number;
   /** Injectable sleep (tests pass a no-op). */
   sleep?: (ms: number) => Promise<void>;
 }
@@ -227,47 +267,137 @@ export class GcpAllocator implements Allocator {
     await this.options.runners.release(runnerId);
   }
 
+  /**
+   * Wait for the GCP zone insert operation to complete. CONVERGENCE-BASED: the
+   * loop runs UNBOUNDED while the operation status signature changes
+   * (`PENDING` → `RUNNING` → `DONE` = ready). An operation's `error` field fires
+   * the `terminal_error` arm IMMEDIATELY. The first probe uses the operation
+   * handle the caller already has; subsequent probes refetch.
+   */
   private async waitForOperation(operation: GcpOperation): Promise<void> {
     const pollIntervalMs = this.options.pollIntervalMs ?? 3_000;
-    const readyTimeoutMs = this.options.readyTimeoutMs ?? 120_000;
-    const deadline = Date.now() + readyTimeoutMs;
-    let current = operation;
-    for (;;) {
-      if (current.error !== undefined && current.error !== "") {
-        throw new GcpAllocatorError(`gcp insert operation ${current.name} failed: ${current.error}`);
-      }
-      if (current.status === "DONE") {
-        return;
-      }
-      if (Date.now() >= deadline) {
-        throw new GcpAllocatorError(
-          `gcp insert operation ${current.name} did not complete within ${readyTimeoutMs}ms ` +
-            `(last status: ${current.status})`,
-        );
-      }
-      await this.sleep(pollIntervalMs);
-      current = await this.client.getZoneOperation(current.name);
+    let isFirst = true;
+    try {
+      await pollUntilReady(
+        async () => {
+          if (isFirst) {
+            isFirst = false;
+            return operation;
+          }
+          return this.client.getZoneOperation(operation.name);
+        },
+        {
+          classify: (op) => classifyGcpOperation(op),
+          signature: (op) => gcpOperationSignature(op),
+          pollIntervalMs,
+          sleep: this.sleep,
+        },
+      );
+    } catch (error) {
+      throw wrapGcpProvisioningError(`insert operation ${operation.name}`, error);
     }
   }
 
+  /**
+   * Wait for the GCP instance to reach `RUNNING` with an external IP.
+   * CONVERGENCE-BASED: the loop runs UNBOUNDED while the structural signature
+   * (`${status}|${ip-presence}`) keeps advancing — `PROVISIONING|no-ip` →
+   * `STAGING|no-ip` → `RUNNING|no-ip` → `RUNNING|ip` (ready). Terminal arms
+   * fire IMMEDIATELY; a brand-new GCP status surfaces as `unknown_state`
+   * (fail-closed ratchet). NO wall-clock deadline.
+   */
   private async waitForRunning(instanceName: string): Promise<GcpInstance> {
     const pollIntervalMs = this.options.pollIntervalMs ?? 3_000;
-    const readyTimeoutMs = this.options.readyTimeoutMs ?? 120_000;
-    const deadline = Date.now() + readyTimeoutMs;
-    for (;;) {
-      const instance = await this.client.getInstance(instanceName);
-      if (instance.status === "RUNNING" && instance.externalIp !== undefined && instance.externalIp !== "") {
-        return instance;
-      }
-      if (Date.now() >= deadline) {
-        throw new GcpAllocatorError(
-          `gcp instance ${instanceName} did not become RUNNING within ${readyTimeoutMs}ms ` +
-            `(last status: ${instance.status})`,
-        );
-      }
-      await this.sleep(pollIntervalMs);
+    try {
+      return await pollUntilReady(() => this.client.getInstance(instanceName), {
+        classify: (instance) => classifyGcpInstance(instance),
+        signature: (instance) => gcpInstanceSignature(instance),
+        pollIntervalMs,
+        sleep: this.sleep,
+      });
+    } catch (error) {
+      throw wrapGcpProvisioningError(`instance ${instanceName}`, error);
     }
   }
+}
+
+/**
+ * Classify a GCP zone operation. `DONE` is `ready` (the operation completed
+ * successfully). A non-empty `error` field is a `terminal_error` IMMEDIATELY
+ * (the operation failed at the cloud — it cannot recover by waiting). `PENDING`
+ * / `RUNNING` are `advancing`; anything else is `unknown_state` (fail-closed).
+ */
+function classifyGcpOperation(operation: GcpOperation): ReadinessClassification<GcpOperation> {
+  if (operation.error !== undefined && operation.error !== "") {
+    return {
+      kind: "terminal_error",
+      reason: `gcp insert operation ${operation.name} failed: ${operation.error}`,
+    };
+  }
+  if (operation.status === "DONE") {
+    return { kind: "ready", observation: operation };
+  }
+  if (GCP_OPERATION_STATUSES.has(operation.status)) {
+    return { kind: "advancing", observation: operation };
+  }
+  return { kind: "unknown_state", state: operation.status };
+}
+
+/**
+ * The STRUCTURAL signature of a GCP zone operation — just the status token
+ * (`PENDING` / `RUNNING`). `DONE` resolves as ready before the signature is
+ * read, and an error fires terminal IMMEDIATELY, so this is only ever read on
+ * `advancing` observations.
+ */
+function gcpOperationSignature(operation: GcpOperation): string {
+  return operation.status;
+}
+
+/**
+ * Classify a GCP instance observation. Terminal statuses
+ * (`STOPPING`/`STOPPED`/`SUSPENDING`/`SUSPENDED`/`TERMINATED`) fire IMMEDIATELY.
+ * `PROVISIONING`/`STAGING`/`RUNNING`/`REPAIRING` are `advancing`; only
+ * `RUNNING` + external IP is `ready`. A brand-new GCP status string is
+ * `unknown_state` (fail-closed).
+ */
+function classifyGcpInstance(instance: GcpInstance): ReadinessClassification<GcpInstance> {
+  if (instance.status === "RUNNING" && instance.externalIp !== undefined && instance.externalIp !== "") {
+    return { kind: "ready", observation: instance };
+  }
+  if (GCP_INSTANCE_TERMINAL_STATUSES.has(instance.status)) {
+    return {
+      kind: "terminal_error",
+      reason: `gcp instance ${instance.name} entered terminal status '${instance.status}' before RUNNING`,
+    };
+  }
+  if (GCP_INSTANCE_PROVISIONING_STATUSES.has(instance.status)) {
+    return { kind: "advancing", observation: instance };
+  }
+  return { kind: "unknown_state", state: instance.status };
+}
+
+/** The STRUCTURAL signature the convergence detector reads — instance status + IP-presence. */
+function gcpInstanceSignature(instance: GcpInstance): string {
+  const ipPart = instance.externalIp !== undefined && instance.externalIp !== "" ? "ip" : "no-ip";
+  return `${instance.status}|${ipPart}`;
+}
+
+function wrapGcpProvisioningError(resourceDescription: string, error: unknown): Error {
+  if (error instanceof PersistentProvisioningOutageError) {
+    return new GcpAllocatorError(`gcp ${resourceDescription} did not become RUNNING: ${error.message}`, {
+      cause: error,
+    });
+  }
+  if (error instanceof ProvisioningTerminalStateError) {
+    return new GcpAllocatorError(error.reason, { cause: error });
+  }
+  if (error instanceof UnknownProvisioningStateError) {
+    return new GcpAllocatorError(
+      `gcp ${resourceDescription} reported an UNKNOWN status '${error.observedState}' the allocator's allowlist does not recognize`,
+      { cause: error },
+    );
+  }
+  return error instanceof Error ? error : new GcpAllocatorError(String(error));
 }
 
 /** GCE labels must be lowercase, <=63 chars, [a-z0-9_-]. */

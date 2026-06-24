@@ -8,7 +8,14 @@ import {
   type KubernetesPodInput,
   type KubernetesSecretInput,
 } from "../src/engine/allocators/kubernetesAllocator.js";
+import {
+  PersistentProvisioningOutageError,
+  ProvisioningTerminalStateError,
+  UnknownProvisioningStateError,
+} from "../src/engine/allocators/readinessConvergence.js";
+import type { Allocator } from "../src/engine/contracts/allocator.js";
 import type { ClaimRunnerInput, RunnerStore } from "../src/engine/allocators/runnerStore.js";
+import { describeReadinessConvergence } from "./conformance/readinessConvergenceConformance.js";
 
 class FakeRunnerStore implements RunnerStore {
   readonly claims: ClaimRunnerInput[] = [];
@@ -38,6 +45,8 @@ class FakeKubernetesClient implements KubernetesClient {
       emptyIp?: boolean;
       terminal?: boolean;
       terminalPhase?: string;
+      /** Pin a brand-new unrecognized phase string the allowlist doesn't know. */
+      unknownPhase?: string;
     } = {},
   ) {}
 
@@ -50,6 +59,9 @@ class FakeKubernetesClient implements KubernetesClient {
   }
   async getPod(name: string): Promise<KubernetesPod> {
     this.getCalls += 1;
+    if (this.opts.unknownPhase !== undefined) {
+      return { name, phase: this.opts.unknownPhase };
+    }
     if (this.opts.terminal) {
       return { name, phase: this.opts.terminalPhase ?? "Failed" };
     }
@@ -182,15 +194,23 @@ describe("KubernetesAllocator", () => {
     expect(client.deletedSecrets).toEqual([]);
   });
 
-  it("surfaces a typed error and cleans up if the pod never becomes Running", async () => {
+  // Task #31: the wait now polls on STRUCTURAL signature progress (no wall-clock
+  // deadline). A pod stuck at `Pending|no-ip|no-conds|no-cstats` returns the SAME
+  // signature every probe, so the loop crosses the saturation gate and surfaces
+  // `PersistentProvisioningOutageError` LOUD (wrapped with `cause` preserved).
+  it("surfaces a typed error and cleans up on a stuck-signature fixed point (pod never Running)", async () => {
     const client = new FakeKubernetesClient({ neverRunning: true });
     const runners = new FakeRunnerStore();
-    const allocator = new KubernetesAllocator({
-      ...baseOpts(client, runners),
-      readyTimeoutMs: 5,
-      pollIntervalMs: 1,
-    });
-    await expect(allocator.allocate(req("run_3"))).rejects.toThrow(/did not become Running/u);
+    const allocator = new KubernetesAllocator({ ...baseOpts(client, runners), pollIntervalMs: 1 });
+    let caught: unknown;
+    try {
+      await allocator.allocate(req("run_3"));
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(KubernetesAllocatorError);
+    expect((caught as Error).message).toMatch(/did not become Running/u);
+    expect((caught as { cause?: unknown }).cause).toBeInstanceOf(PersistentProvisioningOutageError);
     expect(client.deletedPods).toContain("tanren-run-3");
     expect(client.deletedSecrets).toContain("tanren-run-3-ssh");
   });
@@ -203,15 +223,18 @@ describe("KubernetesAllocator", () => {
     expect(client.deletedPods).toContain("tanren-run-t");
   });
 
-  it("surfaces a typed error and cleans up if it has no pod IP", async () => {
+  it("surfaces a typed error and cleans up on a stuck-signature fixed point (no pod IP)", async () => {
     const client = new FakeKubernetesClient({ noIp: true });
     const runners = new FakeRunnerStore();
-    const allocator = new KubernetesAllocator({
-      ...baseOpts(client, runners),
-      readyTimeoutMs: 5,
-      pollIntervalMs: 1,
-    });
-    await expect(allocator.allocate(req("run_4"))).rejects.toBeInstanceOf(KubernetesAllocatorError);
+    const allocator = new KubernetesAllocator({ ...baseOpts(client, runners), pollIntervalMs: 1 });
+    let caught: unknown;
+    try {
+      await allocator.allocate(req("run_4"));
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(KubernetesAllocatorError);
+    expect((caught as { cause?: unknown }).cause).toBeInstanceOf(PersistentProvisioningOutageError);
     expect(client.deletedPods).toContain("tanren-run-4");
   });
 
@@ -248,15 +271,12 @@ describe("KubernetesAllocator", () => {
   // waitForRunning requires Running AND a non-empty pod IP. An empty-string
   // podIP must NOT satisfy the ready condition: a mutant dropping the `ip === ""`
   // arm would return immediately with a bogus empty host. Here the empty IP
-  // keeps the wait polling to the deadline, and the pod+secret are cleaned up.
-  it("treats an empty-string pod IP as not-yet-ready and cleans up on timeout", async () => {
+  // keeps the wait polling and ultimately surfaces the stuck-signature fixed
+  // point (`Running|no-ip|no-conds|no-cstats`), and the pod+secret are cleaned up.
+  it("treats an empty-string pod IP as not-yet-ready and cleans up on stuck-signature fixed point", async () => {
     const client = new FakeKubernetesClient({ emptyIp: true });
     const runners = new FakeRunnerStore();
-    const allocator = new KubernetesAllocator({
-      ...baseOpts(client, runners),
-      readyTimeoutMs: 5,
-      pollIntervalMs: 1,
-    });
+    const allocator = new KubernetesAllocator({ ...baseOpts(client, runners), pollIntervalMs: 1 });
     await expect(allocator.allocate(req("run_empty"))).rejects.toThrow(/did not become Running/u);
     expect(client.deletedPods).toContain("tanren-run-empty");
     expect(client.deletedSecrets).toContain("tanren-run-empty-ssh");
@@ -466,4 +486,223 @@ describe("fetchKubernetesClient", () => {
     await client.getPod("p");
     expect(url).toBe("https://h:6443/api/v1/namespaces/ns/pods/p");
   });
+
+  // Task #31: the toPod mapper now surfaces conditions + container statuses so the
+  // structural signature folds them. A stuck `ImagePullBackOff` recurring across
+  // probes yields an IDENTICAL signature; the kubelet flipping `PodScheduled=True`
+  // → `Initialized=True` advances the signature. Pin the round-trip through the
+  // real fetch client.
+  it("toPod surfaces conditions + container statuses from the Pod status API response", async () => {
+    const fetchImpl = (async (): Promise<Response> =>
+      new Response(
+        JSON.stringify({
+          metadata: { name: "p" },
+          status: {
+            phase: "Pending",
+            podIP: undefined,
+            conditions: [
+              { type: "PodScheduled", status: "True" },
+              { type: "Initialized", status: "False", reason: "ContainersNotInitialized" },
+            ],
+            containerStatuses: [
+              { name: "runner", state: { waiting: { reason: "ContainerCreating" } } },
+            ],
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      )) as typeof fetch;
+    const client = fetchKubernetesClient({ apiServer: "https://h:6443", token: "t", namespace: "ns" }, fetchImpl);
+    const pod = await client.getPod("p");
+    expect(pod.conditions).toEqual([
+      { type: "PodScheduled", status: "True" },
+      { type: "Initialized", status: "False", reason: "ContainersNotInitialized" },
+    ]);
+    expect(pod.containerStatuses).toEqual([
+      { name: "runner", state: "waiting:ContainerCreating", reason: "ContainerCreating" },
+    ]);
+  });
+
+  it("toPod summarizes a running container state and a terminated container with reason", async () => {
+    const fetchImpl = (async (): Promise<Response> =>
+      new Response(
+        JSON.stringify({
+          metadata: { name: "p" },
+          status: {
+            phase: "Running",
+            podIP: "10.1.2.3",
+            containerStatuses: [
+              { name: "runner", state: { running: { startedAt: "2026-01-01T00:00:00Z" } } },
+              { name: "sidecar", state: { terminated: { reason: "Error" } } },
+            ],
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      )) as typeof fetch;
+    const client = fetchKubernetesClient({ apiServer: "https://h:6443", token: "t", namespace: "ns" }, fetchImpl);
+    const pod = await client.getPod("p");
+    expect(pod.containerStatuses).toEqual([
+      { name: "runner", state: "running" },
+      { name: "sidecar", state: "terminated:Error", reason: "Error" },
+    ]);
+  });
+
+  it("toPod omits conditions + containerStatuses when the API response carries neither", async () => {
+    const fetchImpl = (async (): Promise<Response> =>
+      new Response(JSON.stringify({ metadata: { name: "p" }, status: { phase: "Pending" } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })) as typeof fetch;
+    const client = fetchKubernetesClient({ apiServer: "https://h:6443", token: "t", namespace: "ns" }, fetchImpl);
+    const pod = await client.getPod("p");
+    expect(pod.conditions).toBeUndefined();
+    expect(pod.containerStatuses).toBeUndefined();
+  });
+});
+
+// Task #31: shared readiness-convergence conformance suite.
+//
+// K8s structural signature = `${phase}|${ip-presence}|<sorted conditions>|<sorted
+// container states>`. The advancing harness threads CHANGING conditions /
+// containerStatuses across probes so the loop sees forward motion (the kubelet
+// is genuinely scheduling). The stuck harness pins identical signatures.
+
+/** Each probe yields a NEW structural signature → loop runs unbounded → ready hit. */
+class AdvancingFakeKubernetesClient implements KubernetesClient {
+  private getCalls = 0;
+  async createSecret(): Promise<void> {}
+  async createPod(input: KubernetesPodInput): Promise<KubernetesPod> {
+    return { name: input.name, phase: "Pending" };
+  }
+  async getPod(name: string): Promise<KubernetesPod> {
+    this.getCalls += 1;
+    if (this.getCalls >= 8) {
+      return {
+        name,
+        phase: "Running",
+        podIp: "10.1.2.3",
+        conditions: [{ type: "Ready", status: "True" }],
+        containerStatuses: [{ name: "runner", state: "running" }],
+      };
+    }
+    // Each intermediate probe surfaces a different condition / container state
+    // so the structural signature ADVANCES forward.
+    return {
+      name,
+      phase: this.getCalls < 4 ? "Pending" : "Running",
+      podIp: undefined,
+      conditions: [
+        { type: "PodScheduled", status: this.getCalls % 2 === 0 ? "True" : "False" },
+        // The added probe-index in `Initialized` keeps every signature distinct.
+        { type: `Initialized-step-${this.getCalls}`, status: "False" },
+      ],
+      containerStatuses: [{ name: "runner", state: `waiting:Step-${this.getCalls}` }],
+    };
+  }
+  async deletePod(): Promise<void> {}
+  async deleteSecret(): Promise<void> {}
+}
+
+const k8sHarness = {
+  buildAdvancing() {
+    const client = new AdvancingFakeKubernetesClient();
+    const runners = new FakeRunnerStore();
+    const allocator = new KubernetesAllocator({ ...baseOpts(client, runners), pollIntervalMs: 1 });
+    return { allocator, request: req("run_adv"), expectedAdvancingProbes: 7 };
+  },
+  buildStuck() {
+    const client = new FakeKubernetesClient({ neverRunning: true });
+    const runners = new FakeRunnerStore();
+    const allocator = new KubernetesAllocator({ ...baseOpts(client, runners), pollIntervalMs: 1 });
+    // The fake client returns `Pending` (no IP, no conditions, no containers) every
+    // probe — the structural signature folds the no-conds / no-cstats sentinels.
+    return { allocator, request: req("run_stuck"), expectedStuckSignature: "Pending|no-ip|no-conds|no-cstats" };
+  },
+  buildUnknownState() {
+    const client = new FakeKubernetesClient({ unknownPhase: "Quiescing" });
+    const runners = new FakeRunnerStore();
+    const allocator = new KubernetesAllocator({ ...baseOpts(client, runners), pollIntervalMs: 1 });
+    return { allocator, request: req("run_unk"), expectedUnknownState: "Quiescing" };
+  },
+  buildTerminalArm(terminalState: string) {
+    const client = new FakeKubernetesClient({ terminal: true, terminalPhase: terminalState });
+    const runners = new FakeRunnerStore();
+    const allocator = new KubernetesAllocator({ ...baseOpts(client, runners), pollIntervalMs: 1 });
+    return { allocator, request: req("run_term") };
+  },
+  // K8s `K8S_TERMINAL_PHASES` allowlist — each fires the terminal arm IMMEDIATELY.
+  expectedTerminalArms: ["Failed", "Succeeded", "Unknown"] as const,
+};
+
+describe("KubernetesAllocator — readiness convergence inner contract", () => {
+  it("wraps PersistentProvisioningOutageError as KubernetesAllocatorError with cause", async () => {
+    const { allocator, request } = k8sHarness.buildStuck();
+    let caught: unknown;
+    try {
+      await allocator.allocate(request);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(KubernetesAllocatorError);
+    expect((caught as { cause?: unknown }).cause).toBeInstanceOf(PersistentProvisioningOutageError);
+  });
+
+  it("wraps UnknownProvisioningStateError as KubernetesAllocatorError with cause", async () => {
+    const { allocator, request } = k8sHarness.buildUnknownState();
+    let caught: unknown;
+    try {
+      await allocator.allocate(request);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(KubernetesAllocatorError);
+    expect((caught as { cause?: unknown }).cause).toBeInstanceOf(UnknownProvisioningStateError);
+  });
+
+  it("wraps ProvisioningTerminalStateError as KubernetesAllocatorError with cause", async () => {
+    const { allocator, request } = k8sHarness.buildTerminalArm("Failed");
+    let caught: unknown;
+    try {
+      await allocator.allocate(request);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(KubernetesAllocatorError);
+    expect((caught as { cause?: unknown }).cause).toBeInstanceOf(ProvisioningTerminalStateError);
+  });
+});
+
+function unwrapK8s(allocator: Allocator): Allocator {
+  return {
+    async allocate(request) {
+      try {
+        return await allocator.allocate(request);
+      } catch (error) {
+        if (error instanceof KubernetesAllocatorError && error.cause !== undefined) {
+          throw error.cause;
+        }
+        throw error;
+      }
+    },
+    release: allocator.release.bind(allocator),
+  };
+}
+
+describeReadinessConvergence("Kubernetes", {
+  buildAdvancing: () => {
+    const inner = k8sHarness.buildAdvancing();
+    return { ...inner, allocator: unwrapK8s(inner.allocator) };
+  },
+  buildStuck: () => {
+    const inner = k8sHarness.buildStuck();
+    return { ...inner, allocator: unwrapK8s(inner.allocator) };
+  },
+  buildUnknownState: () => {
+    const inner = k8sHarness.buildUnknownState();
+    return { ...inner, allocator: unwrapK8s(inner.allocator) };
+  },
+  buildTerminalArm: (terminalState) => {
+    const inner = k8sHarness.buildTerminalArm(terminalState);
+    return { ...inner, allocator: unwrapK8s(inner.allocator) };
+  },
+  expectedTerminalArms: k8sHarness.expectedTerminalArms,
 });

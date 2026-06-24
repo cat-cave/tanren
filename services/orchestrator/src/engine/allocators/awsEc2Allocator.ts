@@ -7,18 +7,46 @@ import {
   type ReleaseReason,
   type RunnerAllocation,
 } from "../contracts/allocator.js";
+import {
+  PersistentProvisioningOutageError,
+  ProvisioningTerminalStateError,
+  UnknownProvisioningStateError,
+  pollUntilReady,
+  type ReadinessClassification,
+} from "./readinessConvergence.js";
 import type { RunnerStore } from "./runnerStore.js";
 
 const allocatorName = "aws_ec2";
 const ec2ApiVersion = "2016-11-15";
 
 /**
+ * EC2 documented instance lifecycle states the allocator EXPECTS to see as an
+ * intermediate state on the path to `running` (and `running` itself). Anything
+ * outside this set OR {@link AWS_EC2_TERMINAL_STATES} is treated as
+ * `unknown_state` — fail-closed ratchet (a new EC2 state forces a code change
+ * here, never a silent infinite loop). EC2 documents: `pending`, `running`,
+ * `shutting-down`, `terminated`, `stopping`, `stopped`.
+ */
+const AWS_EC2_PROVISIONING_STATES: ReadonlySet<string> = new Set(["pending", "running"]);
+
+/**
+ * EC2 documented terminal states — an instance in these states cannot recover
+ * by waiting (the instance is being torn down or already stopped). Fires the
+ * `terminal_error` arm immediately, never via the fixed-point gate.
+ */
+const AWS_EC2_TERMINAL_STATES: ReadonlySet<string> = new Set(["terminated", "shutting-down", "stopping", "stopped"]);
+
+/**
  * Typed error for AWS EC2 provisioning failures, so callers (and tests) can
- * distinguish allocator faults from generic errors.
+ * distinguish allocator faults from generic errors. Optionally carries a `cause`
+ * so a convergence-class throw (`PersistentProvisioningOutageError` /
+ * `ProvisioningTerminalStateError` / `UnknownProvisioningStateError`) wrapped
+ * into this allocator's error keeps the inner stuck-signature / probe-count
+ * diagnostic accessible to callers + the debugger.
  */
 export class AwsEc2AllocatorError extends Error {
-  constructor(message: string) {
-    super(message);
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
     this.name = "AwsEc2AllocatorError";
   }
 }
@@ -98,8 +126,6 @@ export interface AwsEc2AllocatorOptions {
   client?: AwsEc2Client;
   /** Poll interval while waiting for the instance to become running. */
   pollIntervalMs?: number;
-  /** Max time to wait for the instance to become running + get a public IP. */
-  readyTimeoutMs?: number;
   /** Injectable sleep (tests pass a no-op). */
   sleep?: (ms: number) => Promise<void>;
 }
@@ -222,29 +248,77 @@ export class AwsEc2Allocator implements Allocator {
     await this.options.runners.release(runnerId);
   }
 
+  /**
+   * Wait for the instance to become `running` with a public IP. CONVERGENCE-BASED:
+   * the loop runs UNBOUNDED while the structural signature (`${state}|${ip-presence}`)
+   * keeps advancing — `pending|no-ip` → `running|no-ip` → `running|ip` (ready). It
+   * surfaces LOUD only on intelligent non-convergence (an IDENTICAL signature past
+   * the saturation gate = a stuck instance, `PersistentProvisioningOutageError`), a
+   * documented EC2 terminal state (`terminated`/`shutting-down`/`stopping`/`stopped`,
+   * `ProvisioningTerminalStateError`), or a brand-new EC2 state the allowlist does
+   * not recognize (`UnknownProvisioningStateError`, fail-closed ratchet). NO
+   * wall-clock deadline.
+   */
   private async waitForRunning(instanceId: string): Promise<AwsEc2Instance> {
     const pollIntervalMs = this.options.pollIntervalMs ?? 3_000;
-    const readyTimeoutMs = this.options.readyTimeoutMs ?? 120_000;
-    const deadline = Date.now() + readyTimeoutMs;
-    for (;;) {
-      const instance = await this.client.describeInstance(instanceId);
-      if (instance.state === "running" && instance.publicIp !== undefined && instance.publicIp !== "") {
-        return instance;
-      }
-      if (instance.state === "terminated" || instance.state === "shutting-down") {
-        throw new AwsEc2AllocatorError(
-          `aws ec2 instance ${instanceId} entered terminal state '${instance.state}' before running`,
-        );
-      }
-      if (Date.now() >= deadline) {
-        throw new AwsEc2AllocatorError(
-          `aws ec2 instance ${instanceId} did not become running within ${readyTimeoutMs}ms ` +
-            `(last state: ${instance.state})`,
-        );
-      }
-      await this.sleep(pollIntervalMs);
+    try {
+      return await pollUntilReady(() => this.client.describeInstance(instanceId), {
+        classify: (instance) => classifyAwsEc2Instance(instance),
+        signature: (instance) => awsEc2InstanceSignature(instance),
+        pollIntervalMs,
+        sleep: this.sleep,
+      });
+    } catch (error) {
+      throw wrapAwsEc2ProvisioningError(instanceId, error);
     }
   }
+}
+
+/**
+ * Classify an EC2 instance observation. The terminal arms
+ * (`terminated`/`shutting-down`/`stopping`/`stopped`) fire IMMEDIATELY without
+ * waiting for the saturation gate — the instance is being torn down. `pending`
+ * + `running|no-ip` are `advancing`; only `running|ip` is `ready`. A state the
+ * allowlist does not know is `unknown_state` (fail-closed).
+ */
+function classifyAwsEc2Instance(instance: AwsEc2Instance): ReadinessClassification<AwsEc2Instance> {
+  if (instance.state === "running" && instance.publicIp !== undefined && instance.publicIp !== "") {
+    return { kind: "ready", observation: instance };
+  }
+  if (AWS_EC2_TERMINAL_STATES.has(instance.state)) {
+    return {
+      kind: "terminal_error",
+      reason: `aws ec2 instance ${instance.instanceId} entered terminal state '${instance.state}' before running`,
+    };
+  }
+  if (AWS_EC2_PROVISIONING_STATES.has(instance.state)) {
+    return { kind: "advancing", observation: instance };
+  }
+  return { kind: "unknown_state", state: instance.state };
+}
+
+/** The STRUCTURAL signature the convergence detector reads — instance state + IP-presence. */
+function awsEc2InstanceSignature(instance: AwsEc2Instance): string {
+  const ipPart = instance.publicIp !== undefined && instance.publicIp !== "" ? "ip" : "no-ip";
+  return `${instance.state}|${ipPart}`;
+}
+
+function wrapAwsEc2ProvisioningError(instanceId: string, error: unknown): Error {
+  if (error instanceof PersistentProvisioningOutageError) {
+    return new AwsEc2AllocatorError(`aws ec2 instance ${instanceId} did not become running: ${error.message}`, {
+      cause: error,
+    });
+  }
+  if (error instanceof ProvisioningTerminalStateError) {
+    return new AwsEc2AllocatorError(error.reason, { cause: error });
+  }
+  if (error instanceof UnknownProvisioningStateError) {
+    return new AwsEc2AllocatorError(
+      `aws ec2 instance ${instanceId} reported an UNKNOWN state '${error.observedState}' the allocator's allowlist does not recognize`,
+      { cause: error },
+    );
+  }
+  return error instanceof Error ? error : new AwsEc2AllocatorError(String(error));
 }
 
 // --- response mapping --------------------------------------------------------

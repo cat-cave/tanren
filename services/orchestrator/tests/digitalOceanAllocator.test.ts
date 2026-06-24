@@ -7,7 +7,14 @@ import {
   type DigitalOceanCreateDropletInput,
   type DigitalOceanDroplet,
 } from "../src/engine/allocators/digitalOceanAllocator.js";
+import {
+  PersistentProvisioningOutageError,
+  ProvisioningTerminalStateError,
+  UnknownProvisioningStateError,
+} from "../src/engine/allocators/readinessConvergence.js";
+import type { Allocator } from "../src/engine/contracts/allocator.js";
 import type { ClaimRunnerInput, RunnerStore } from "../src/engine/allocators/runnerStore.js";
+import { describeReadinessConvergence } from "./conformance/readinessConvergenceConformance.js";
 
 class FakeRunnerStore implements RunnerStore {
   readonly claims: ClaimRunnerInput[] = [];
@@ -25,7 +32,17 @@ class FakeDigitalOceanClient implements DigitalOceanClient {
   readonly created: DigitalOceanCreateDropletInput[] = [];
   readonly deleted: number[] = [];
   private getCalls = 0;
-  constructor(private readonly opts: { neverActive?: boolean; noIp?: boolean; emptyIp?: boolean } = {}) {}
+  constructor(
+    private readonly opts: {
+      neverActive?: boolean;
+      noIp?: boolean;
+      emptyIp?: boolean;
+      /** Returned on every poll — pins a documented terminal status (off/archive). */
+      terminalStatus?: string;
+      /** Returned on every poll — pins a brand-new unrecognized status string. */
+      unknownStatus?: string;
+    } = {},
+  ) {}
 
   async createDroplet(input: DigitalOceanCreateDropletInput): Promise<DigitalOceanDroplet> {
     this.created.push(input);
@@ -33,6 +50,12 @@ class FakeDigitalOceanClient implements DigitalOceanClient {
   }
   async getDroplet(dropletId: number): Promise<DigitalOceanDroplet> {
     this.getCalls += 1;
+    if (this.opts.terminalStatus !== undefined) {
+      return { id: dropletId, status: this.opts.terminalStatus };
+    }
+    if (this.opts.unknownStatus !== undefined) {
+      return { id: dropletId, status: this.opts.unknownStatus };
+    }
     if (this.opts.neverActive) {
       return { id: dropletId, status: "new" };
     }
@@ -109,28 +132,42 @@ describe("DigitalOceanAllocator", () => {
     expect(client.deleted).toEqual([99]);
   });
 
-  it("surfaces a typed error and destroys the droplet if it never becomes active", async () => {
+  // Task #31: the wait now polls on STRUCTURAL signature progress (no wall-clock
+  // deadline). A droplet stuck at `new|no-ip` returns the SAME signature every probe,
+  // so the loop crosses the saturation gate and surfaces
+  // `PersistentProvisioningOutageError` LOUD (wrapped in the per-allocator typed error
+  // with `cause` preserved so the inner stuck-signature + probe-count remain accessible).
+  it("surfaces a typed error and destroys the droplet on a stuck-signature fixed point (never becomes active)", async () => {
     const client = new FakeDigitalOceanClient({ neverActive: true });
     const runners = new FakeRunnerStore();
-    const allocator = new DigitalOceanAllocator({
-      ...baseOpts(client, runners),
-      readyTimeoutMs: 5,
-      pollIntervalMs: 1,
-    });
-    await expect(allocator.allocate(req("run_3"))).rejects.toBeInstanceOf(DigitalOceanAllocatorError);
-    await expect(allocator.allocate(req("run_3"))).rejects.toThrow(/did not become active/u);
+    const allocator = new DigitalOceanAllocator({ ...baseOpts(client, runners), pollIntervalMs: 1 });
+    let caught: unknown;
+    try {
+      await allocator.allocate(req("run_3"));
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(DigitalOceanAllocatorError);
+    expect((caught as Error).message).toMatch(/did not become active/u);
+    // The cause chain carries the inner convergence-class outage so the stuck
+    // signature + probe count remain diagnosable to callers.
+    expect((caught as { cause?: unknown }).cause).toBeInstanceOf(PersistentProvisioningOutageError);
+    expect(((caught as { cause: PersistentProvisioningOutageError }).cause).stuckSignature).toBe("new|no-ip");
     expect(client.deleted).toContain(99);
   });
 
-  it("surfaces a typed error and destroys the droplet if it has no public IP", async () => {
+  it("surfaces a typed error and destroys the droplet on a stuck-signature fixed point (no public IP)", async () => {
     const client = new FakeDigitalOceanClient({ noIp: true });
     const runners = new FakeRunnerStore();
-    const allocator = new DigitalOceanAllocator({
-      ...baseOpts(client, runners),
-      readyTimeoutMs: 5,
-      pollIntervalMs: 1,
-    });
-    await expect(allocator.allocate(req("run_4"))).rejects.toBeInstanceOf(DigitalOceanAllocatorError);
+    const allocator = new DigitalOceanAllocator({ ...baseOpts(client, runners), pollIntervalMs: 1 });
+    let caught: unknown;
+    try {
+      await allocator.allocate(req("run_4"));
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(DigitalOceanAllocatorError);
+    expect((caught as { cause?: unknown }).cause).toBeInstanceOf(PersistentProvisioningOutageError);
     expect(client.deleted).toContain(99);
   });
 
@@ -162,16 +199,13 @@ describe("DigitalOceanAllocator", () => {
 
   // waitForActive requires "active" AND a non-empty IPv4. An empty-string IPv4
   // must NOT satisfy the ready condition: a mutant dropping the `ip === ""` arm
-  // would return immediately with a bogus empty host. Here it keeps polling to
-  // the deadline and the droplet is destroyed.
-  it("treats an empty-string IPv4 as not-yet-active and destroys on timeout", async () => {
+  // would return immediately with a bogus empty host. Here it keeps polling and
+  // ultimately surfaces the stuck-signature fixed point (active|no-ip), and the
+  // droplet is destroyed.
+  it("treats an empty-string IPv4 as not-yet-active and destroys on stuck-signature fixed point", async () => {
     const client = new FakeDigitalOceanClient({ emptyIp: true });
     const runners = new FakeRunnerStore();
-    const allocator = new DigitalOceanAllocator({
-      ...baseOpts(client, runners),
-      readyTimeoutMs: 5,
-      pollIntervalMs: 1,
-    });
+    const allocator = new DigitalOceanAllocator({ ...baseOpts(client, runners), pollIntervalMs: 1 });
     await expect(allocator.allocate(req("run_empty"))).rejects.toThrow(/did not become active/u);
     expect(client.deleted).toContain(99);
     expect(runners.claims).toEqual([]);
@@ -330,3 +364,180 @@ describe("DigitalOceanAllocator", () => {
     expect(captured.method).toBe("DELETE");
   });
 });
+
+// Task #31: the shared readiness-convergence conformance suite. Pins the 4 scenarios
+// (advancing-unbounded / stuck-fixed-point / unknown-state-fail-closed / terminal-arms)
+// at the per-allocator wiring so a future regression on the classifier, signature, or
+// terminal-arm wiring fails CI at the SAME contract every other allocator is held to.
+//
+// Each per-poll observation `getDroplet` returns is wired into the allocator's
+// `pollUntilReady` call. The harness builds an allocator + request whose poll stream
+// exercises a single scenario at a time; the allocator-side wrapping converts the
+// convergence-class throws into the per-allocator typed `DigitalOceanAllocatorError`
+// with the cause preserved, so the conformance checks read the inner discriminator
+// off the `.cause` chain.
+
+// Advancing harness: a sequence of CHANGING structural signatures (drives the
+// convergence detector forward; the loop must NOT escalate). `getDroplet` walks
+// through `new|no-ip` → `new|ip-A` → `new|ip-B` → … → `active|ip` (ready).
+class AdvancingFakeDigitalOceanClient implements DigitalOceanClient {
+  private getCalls = 0;
+  async createDroplet(): Promise<DigitalOceanDroplet> {
+    return { id: 99, status: "new", publicIpv4: undefined };
+  }
+  async getDroplet(dropletId: number): Promise<DigitalOceanDroplet> {
+    this.getCalls += 1;
+    if (this.getCalls >= 8) {
+      return { id: dropletId, status: "active", publicIpv4: "203.0.113.20" };
+    }
+    // Each probe must yield a DIFFERENT structural signature so the convergence
+    // detector sees forward motion. The signature is `${status}|${ip-presence}`
+    // — so alternating between IP and no-IP under `new` produces distinct ones,
+    // and we toggle to `active` for the last few intermediate steps.
+    if (this.getCalls % 2 === 0) {
+      return { id: dropletId, status: this.getCalls < 4 ? "new" : "active", publicIpv4: undefined };
+    }
+    return { id: dropletId, status: this.getCalls < 4 ? "new" : "active", publicIpv4: `intermediate-${this.getCalls}` };
+  }
+  async deleteDroplet(): Promise<void> {}
+}
+
+// The conformance suite hard-asserts that every PROVIDER terminal arm in
+// `DO_TERMINAL_STATUSES` fires `ProvisioningTerminalStateError` IMMEDIATELY rather
+// than via the fixed-point gate. For DO the documented terminal arms are `off` and
+// `archive` (the allocator's `DO_TERMINAL_STATUSES` allowlist).
+const harness = {
+  buildAdvancing() {
+    const client = new AdvancingFakeDigitalOceanClient();
+    const runners = new FakeRunnerStore();
+    const allocator = new DigitalOceanAllocator({ ...baseOpts(client, runners), pollIntervalMs: 1 });
+    return { allocator, request: req("run_adv"), expectedAdvancingProbes: 7 };
+  },
+  buildStuck() {
+    const client = new FakeDigitalOceanClient({ neverActive: true });
+    const runners = new FakeRunnerStore();
+    const allocator = new DigitalOceanAllocator({ ...baseOpts(client, runners), pollIntervalMs: 1 });
+    // The createDroplet returns `new|no-ip`; the getDroplet then returns
+    // `new|no-ip` forever — that's the stuck signature the loop surfaces.
+    return { allocator, request: req("run_stuck"), expectedStuckSignature: "new|no-ip" };
+  },
+  buildUnknownState() {
+    const client = new FakeDigitalOceanClient({ unknownStatus: "rebuilding-from-snapshot-2030" });
+    const runners = new FakeRunnerStore();
+    const allocator = new DigitalOceanAllocator({ ...baseOpts(client, runners), pollIntervalMs: 1 });
+    return { allocator, request: req("run_unk"), expectedUnknownState: "rebuilding-from-snapshot-2030" };
+  },
+  buildTerminalArm(terminalState: string) {
+    const client = new FakeDigitalOceanClient({ terminalStatus: terminalState });
+    const runners = new FakeRunnerStore();
+    const allocator = new DigitalOceanAllocator({ ...baseOpts(client, runners), pollIntervalMs: 1 });
+    return { allocator, request: req("run_term") };
+  },
+  // DO's documented terminal statuses — the allocator's `DO_TERMINAL_STATUSES`
+  // allowlist. Each fires `ProvisioningTerminalStateError` IMMEDIATELY.
+  expectedTerminalArms: ["off", "archive"] as const,
+};
+
+// Adapter: the readiness-convergence conformance harness asserts the INNER
+// convergence-class error directly, but DigitalOceanAllocator wraps it into the
+// per-allocator typed `DigitalOceanAllocatorError` (so callers see a uniform
+// allocator error). The conformance suite's `instanceof` checks read the inner
+// surface off `.cause`, but for DO we also re-pin the inner contract here, since
+// the wrapper has its own per-allocator phrasing the suite does not assert.
+describe("DigitalOceanAllocator — readiness convergence inner contract", () => {
+  it("wraps PersistentProvisioningOutageError as DigitalOceanAllocatorError with cause", async () => {
+    const { allocator, request } = harness.buildStuck();
+    let caught: unknown;
+    try {
+      await allocator.allocate(request);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(DigitalOceanAllocatorError);
+    expect((caught as { cause?: unknown }).cause).toBeInstanceOf(PersistentProvisioningOutageError);
+  });
+
+  it("wraps UnknownProvisioningStateError as DigitalOceanAllocatorError with cause", async () => {
+    const { allocator, request } = harness.buildUnknownState();
+    let caught: unknown;
+    try {
+      await allocator.allocate(request);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(DigitalOceanAllocatorError);
+    expect((caught as { cause?: unknown }).cause).toBeInstanceOf(UnknownProvisioningStateError);
+  });
+
+  it("wraps ProvisioningTerminalStateError as DigitalOceanAllocatorError with cause", async () => {
+    const { allocator, request } = harness.buildTerminalArm("off");
+    let caught: unknown;
+    try {
+      await allocator.allocate(request);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(DigitalOceanAllocatorError);
+    expect((caught as { cause?: unknown }).cause).toBeInstanceOf(ProvisioningTerminalStateError);
+  });
+});
+
+// The shared 4-scenario conformance contract. The cause-chain adapter above
+// translates the wrapped DigitalOceanAllocatorError into the inner convergence
+// types this conformance harness reads, so the suite asserts the contract at
+// the same seam every other allocator is held to.
+describeReadinessConvergence("DigitalOcean", {
+  buildAdvancing: () => {
+    const inner = harness.buildAdvancing();
+    return {
+      allocator: wrapAllocatorErrorAsConvergence(inner.allocator),
+      request: inner.request,
+      expectedAdvancingProbes: inner.expectedAdvancingProbes,
+    };
+  },
+  buildStuck: () => {
+    const inner = harness.buildStuck();
+    return {
+      allocator: wrapAllocatorErrorAsConvergence(inner.allocator),
+      request: inner.request,
+      expectedStuckSignature: inner.expectedStuckSignature,
+    };
+  },
+  buildUnknownState: () => {
+    const inner = harness.buildUnknownState();
+    return {
+      allocator: wrapAllocatorErrorAsConvergence(inner.allocator),
+      request: inner.request,
+      expectedUnknownState: inner.expectedUnknownState,
+    };
+  },
+  buildTerminalArm: (terminalState: string) => {
+    const inner = harness.buildTerminalArm(terminalState);
+    return { allocator: wrapAllocatorErrorAsConvergence(inner.allocator), request: inner.request };
+  },
+  expectedTerminalArms: harness.expectedTerminalArms,
+});
+
+/**
+ * Adapter: unwrap the per-allocator `DigitalOceanAllocatorError` back to its
+ * `cause` (the original convergence-class error from `pollUntilReady`) so the
+ * shared conformance harness's `instanceof` checks read the inner surface.
+ * This preserves both contracts: existing callers see the typed allocator error,
+ * and the conformance suite asserts the same convergence-class behavior across
+ * every allocator at the SAME seam.
+ */
+function wrapAllocatorErrorAsConvergence(allocator: Allocator): Allocator {
+  return {
+    async allocate(request) {
+      try {
+        return await allocator.allocate(request);
+      } catch (error) {
+        if (error instanceof DigitalOceanAllocatorError && error.cause !== undefined) {
+          throw error.cause;
+        }
+        throw error;
+      }
+    },
+    release: allocator.release.bind(allocator),
+  };
+}

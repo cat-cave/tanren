@@ -7,7 +7,14 @@ import {
   type AwsEc2Instance,
   type AwsRunInstancesInput,
 } from "../src/engine/allocators/awsEc2Allocator.js";
+import {
+  PersistentProvisioningOutageError,
+  ProvisioningTerminalStateError,
+  UnknownProvisioningStateError,
+} from "../src/engine/allocators/readinessConvergence.js";
+import type { Allocator } from "../src/engine/contracts/allocator.js";
 import type { ClaimRunnerInput, RunnerStore } from "../src/engine/allocators/runnerStore.js";
+import { describeReadinessConvergence } from "./conformance/readinessConvergenceConformance.js";
 
 class FakeRunnerStore implements RunnerStore {
   readonly claims: ClaimRunnerInput[] = [];
@@ -36,6 +43,8 @@ class FakeAwsEc2Client implements AwsEc2Client {
       emptyIp?: boolean;
       terminal?: boolean;
       terminalState?: string;
+      /** Pin a brand-new unrecognized state string the allowlist doesn't know. */
+      unknownState?: string;
     } = {},
   ) {}
 
@@ -46,6 +55,9 @@ class FakeAwsEc2Client implements AwsEc2Client {
   }
   async describeInstance(instanceId: string): Promise<AwsEc2Instance> {
     this.getCalls += 1;
+    if (this.opts.unknownState !== undefined) {
+      return { instanceId, state: this.opts.unknownState };
+    }
     if (this.opts.terminal) {
       return { instanceId, state: this.opts.terminalState ?? "terminated" };
     }
@@ -156,15 +168,25 @@ describe("AwsEc2Allocator", () => {
     expect(client.terminated).toEqual([]);
   });
 
-  it("surfaces a typed error and terminates if the instance never runs", async () => {
+  // Task #31: the wait now polls on STRUCTURAL signature progress (no wall-clock
+  // deadline). An instance stuck at `pending|no-ip` returns the SAME signature every
+  // probe, so the loop crosses the saturation gate and surfaces
+  // `PersistentProvisioningOutageError` LOUD (wrapped in the per-allocator typed
+  // error with `cause` preserved so the inner stuck-signature is accessible).
+  it("surfaces a typed error and terminates on a stuck-signature fixed point (instance never runs)", async () => {
     const client = new FakeAwsEc2Client({ neverRunning: true });
     const runners = new FakeRunnerStore();
-    const allocator = new AwsEc2Allocator({
-      ...baseOpts(client, runners),
-      readyTimeoutMs: 5,
-      pollIntervalMs: 1,
-    });
-    await expect(allocator.allocate(req("run_3"))).rejects.toThrow(/did not become running/u);
+    const allocator = new AwsEc2Allocator({ ...baseOpts(client, runners), pollIntervalMs: 1 });
+    let caught: unknown;
+    try {
+      await allocator.allocate(req("run_3"));
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(AwsEc2AllocatorError);
+    expect((caught as Error).message).toMatch(/did not become running/u);
+    expect((caught as { cause?: unknown }).cause).toBeInstanceOf(PersistentProvisioningOutageError);
+    expect(((caught as { cause: PersistentProvisioningOutageError }).cause).stuckSignature).toBe("pending|no-ip");
     expect(client.terminated).toContain("i-1");
   });
 
@@ -176,15 +198,18 @@ describe("AwsEc2Allocator", () => {
     expect(client.terminated).toContain("i-1");
   });
 
-  it("surfaces a typed error and terminates if it has no public IP", async () => {
+  it("surfaces a typed error and terminates on a stuck-signature fixed point (no public IP)", async () => {
     const client = new FakeAwsEc2Client({ noIp: true });
     const runners = new FakeRunnerStore();
-    const allocator = new AwsEc2Allocator({
-      ...baseOpts(client, runners),
-      readyTimeoutMs: 5,
-      pollIntervalMs: 1,
-    });
-    await expect(allocator.allocate(req("run_4"))).rejects.toBeInstanceOf(AwsEc2AllocatorError);
+    const allocator = new AwsEc2Allocator({ ...baseOpts(client, runners), pollIntervalMs: 1 });
+    let caught: unknown;
+    try {
+      await allocator.allocate(req("run_4"));
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(AwsEc2AllocatorError);
+    expect((caught as { cause?: unknown }).cause).toBeInstanceOf(PersistentProvisioningOutageError);
     expect(client.terminated).toContain("i-1");
   });
 
@@ -219,15 +244,12 @@ describe("AwsEc2Allocator", () => {
   // waitForRunning requires `running` AND a non-empty public IP. An empty-string
   // IP must NOT satisfy the ready condition: a mutant dropping the `ip === ""`
   // arm would return immediately with a bogus empty host. Here the empty IP
-  // keeps the wait polling to the deadline, and the instance is terminated.
-  it("treats an empty-string public IP as not-yet-ready and terminates on timeout", async () => {
+  // keeps the wait polling and ultimately surfaces the stuck-signature fixed
+  // point (`running|no-ip`), and the instance is terminated.
+  it("treats an empty-string public IP as not-yet-ready and terminates on stuck-signature fixed point", async () => {
     const client = new FakeAwsEc2Client({ emptyIp: true });
     const runners = new FakeRunnerStore();
-    const allocator = new AwsEc2Allocator({
-      ...baseOpts(client, runners),
-      readyTimeoutMs: 5,
-      pollIntervalMs: 1,
-    });
+    const allocator = new AwsEc2Allocator({ ...baseOpts(client, runners), pollIntervalMs: 1 });
     await expect(allocator.allocate(req("run_empty"))).rejects.toThrow(/did not become running/u);
     expect(client.terminated).toContain("i-1");
     expect(runners.claims).toEqual([]);
@@ -480,4 +502,133 @@ describe("fetchAwsEc2Client", () => {
     expect(url).toMatch(/^https:\/\/ec2\.ap-southeast-2\.amazonaws\.com\//u);
     expect(url).toMatch(/Version=2016-11-15/u);
   });
+});
+
+// Task #31: shared readiness-convergence conformance suite. Pins the 4 scenarios
+// (advancing-unbounded / stuck-fixed-point / unknown-state / terminal-arms) at
+// the per-allocator wiring. EC2's documented terminal arms (`terminated`,
+// `shutting-down`, `stopping`, `stopped`) each fire `ProvisioningTerminalStateError`
+// IMMEDIATELY; the conformance suite holds every one to the same contract.
+
+/** Each probe yields a NEW structural signature → loop runs unbounded → ready hit. */
+class AdvancingFakeAwsEc2Client implements AwsEc2Client {
+  private getCalls = 0;
+  async runInstances(): Promise<AwsEc2Instance> {
+    return { instanceId: "i-1", state: "pending" };
+  }
+  async describeInstance(instanceId: string): Promise<AwsEc2Instance> {
+    this.getCalls += 1;
+    if (this.getCalls >= 8) {
+      return { instanceId, state: "running", publicIp: "203.0.113.7" };
+    }
+    // Alternate IP / no-IP under `pending` / `running` so each probe's signature
+    // is distinct (advancing forward, never identical neighbors).
+    const state = this.getCalls < 4 ? "pending" : "running";
+    const publicIp = this.getCalls % 2 === 0 ? undefined : `intermediate-${this.getCalls}`;
+    return { instanceId, state, publicIp };
+  }
+  async terminateInstance(): Promise<void> {}
+}
+
+const awsHarness = {
+  buildAdvancing() {
+    const client = new AdvancingFakeAwsEc2Client();
+    const runners = new FakeRunnerStore();
+    const allocator = new AwsEc2Allocator({ ...baseOpts(client, runners), pollIntervalMs: 1 });
+    return { allocator, request: req("run_adv"), expectedAdvancingProbes: 7 };
+  },
+  buildStuck() {
+    const client = new FakeAwsEc2Client({ neverRunning: true });
+    const runners = new FakeRunnerStore();
+    const allocator = new AwsEc2Allocator({ ...baseOpts(client, runners), pollIntervalMs: 1 });
+    return { allocator, request: req("run_stuck"), expectedStuckSignature: "pending|no-ip" };
+  },
+  buildUnknownState() {
+    const client = new FakeAwsEc2Client({ unknownState: "hibernating-saving-state" });
+    const runners = new FakeRunnerStore();
+    const allocator = new AwsEc2Allocator({ ...baseOpts(client, runners), pollIntervalMs: 1 });
+    return { allocator, request: req("run_unk"), expectedUnknownState: "hibernating-saving-state" };
+  },
+  buildTerminalArm(terminalState: string) {
+    const client = new FakeAwsEc2Client({ terminal: true, terminalState });
+    const runners = new FakeRunnerStore();
+    const allocator = new AwsEc2Allocator({ ...baseOpts(client, runners), pollIntervalMs: 1 });
+    return { allocator, request: req("run_term") };
+  },
+  // EC2's `AWS_EC2_TERMINAL_STATES` allowlist — each fires the terminal arm IMMEDIATELY.
+  expectedTerminalArms: ["terminated", "shutting-down", "stopping", "stopped"] as const,
+};
+
+describe("AwsEc2Allocator — readiness convergence inner contract", () => {
+  it("wraps PersistentProvisioningOutageError as AwsEc2AllocatorError with cause", async () => {
+    const { allocator, request } = awsHarness.buildStuck();
+    let caught: unknown;
+    try {
+      await allocator.allocate(request);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(AwsEc2AllocatorError);
+    expect((caught as { cause?: unknown }).cause).toBeInstanceOf(PersistentProvisioningOutageError);
+  });
+
+  it("wraps UnknownProvisioningStateError as AwsEc2AllocatorError with cause", async () => {
+    const { allocator, request } = awsHarness.buildUnknownState();
+    let caught: unknown;
+    try {
+      await allocator.allocate(request);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(AwsEc2AllocatorError);
+    expect((caught as { cause?: unknown }).cause).toBeInstanceOf(UnknownProvisioningStateError);
+  });
+
+  it("wraps ProvisioningTerminalStateError as AwsEc2AllocatorError with cause", async () => {
+    const { allocator, request } = awsHarness.buildTerminalArm("terminated");
+    let caught: unknown;
+    try {
+      await allocator.allocate(request);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(AwsEc2AllocatorError);
+    expect((caught as { cause?: unknown }).cause).toBeInstanceOf(ProvisioningTerminalStateError);
+  });
+});
+
+function unwrapAwsEc2(allocator: Allocator): Allocator {
+  return {
+    async allocate(request) {
+      try {
+        return await allocator.allocate(request);
+      } catch (error) {
+        if (error instanceof AwsEc2AllocatorError && error.cause !== undefined) {
+          throw error.cause;
+        }
+        throw error;
+      }
+    },
+    release: allocator.release.bind(allocator),
+  };
+}
+
+describeReadinessConvergence("AwsEc2", {
+  buildAdvancing: () => {
+    const inner = awsHarness.buildAdvancing();
+    return { ...inner, allocator: unwrapAwsEc2(inner.allocator) };
+  },
+  buildStuck: () => {
+    const inner = awsHarness.buildStuck();
+    return { ...inner, allocator: unwrapAwsEc2(inner.allocator) };
+  },
+  buildUnknownState: () => {
+    const inner = awsHarness.buildUnknownState();
+    return { ...inner, allocator: unwrapAwsEc2(inner.allocator) };
+  },
+  buildTerminalArm: (terminalState) => {
+    const inner = awsHarness.buildTerminalArm(terminalState);
+    return { ...inner, allocator: unwrapAwsEc2(inner.allocator) };
+  },
+  expectedTerminalArms: awsHarness.expectedTerminalArms,
 });
