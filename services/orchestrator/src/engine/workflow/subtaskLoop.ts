@@ -300,6 +300,7 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
     const windowOutcome = await checkWindowPreflight(input, appendEvent, plannerTaskId, loopCount, creditState);
     if (windowOutcome !== null) {
       await markTaskDone(input.pool, plannerTaskId, "window_exhausted", input.runStateWriter);
+      await appendEvent("task.failed", { taskKind: "plan", failureKind: "window_exhausted" }, plannerTaskId);
       return await finalize({ ...windowOutcome, loopCount });
     }
     const plan = await runPlannerStage({
@@ -320,6 +321,7 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
     const sequence = await runSubtaskSequence({ input, costCtx, appendEvent, plan, plannerTaskId });
     if (sequence.kind === "window_exhausted") {
       await markTaskDone(input.pool, plannerTaskId, "window_exhausted", input.runStateWriter);
+      await appendEvent("task.failed", { taskKind: "plan", failureKind: "window_exhausted" }, plannerTaskId);
       return await finalize({ ...sequence.outcome, loopCount });
     }
 
