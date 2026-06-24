@@ -23,7 +23,7 @@ import { AnswererSchemaValidationError, AnswererStalledError } from "../provider
 import { CodexUsageLimitError } from "../providers/codex.js";
 import { ClaudeUsageLimitError } from "../providers/claude.js";
 import { StageStallEscalationError } from "./loopStageRecovery.js";
-import { markTaskFailedIfRunning } from "./subtaskTasks.js";
+import { markTaskFailedIfRunningWithEvent, type TerminalTaskEventEnvelope } from "./subtaskTasks.js";
 
 type LoopQueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
@@ -146,13 +146,15 @@ export function stageFailureMessage(error: unknown): string {
  *     event append failed)
  *
  * IDEMPOTENCY (the single-finalize invariant — `autonomy-engine.md` §1c): the row
- * UPDATE is `markTaskFailedIfRunning`, a guarded `WHERE status='running'`. A
- * clean branch that already moved the row to `done` then threw on the `task.completed`
- * event append leaves the existing `done` row alone — the loud signal is the
- * emitted `task.failed` event, not a clobbered terminal row. A re-run of the
- * guard's catch on a row already moved to `failed` is also a no-op for the same
- * reason. The `task.failed` event lands EVERY time (the timeline carries the
- * outage signal even when the row was already terminal).
+ * UPDATE is `markTaskFailedIfRunningWithEvent`, a guarded `WHERE status='running'`
+ * paired with the `task.failed` event in ONE org-scoped transaction (task #39 —
+ * the atomic terminal-pair seam). A clean branch that already moved the row to
+ * `done` (via `markTaskDoneWithEvent`) cannot be partially terminal anymore: the
+ * row + the `task.completed` event committed together, so the guard's catch on
+ * a subsequent throw sees a fully-terminal row, the guarded UPDATE is a no-op,
+ * and the `task.failed` event lands as the loud signal (the timeline carries
+ * the outage even when the row was already terminal). The prior split that
+ * could strand the row terminal-`done` with no `task.completed` is gone.
  */
 export async function runStageBodyWithFinalizeGuard<T>(opts: {
   pool: LoopQueryClient;
@@ -160,18 +162,47 @@ export async function runStageBodyWithFinalizeGuard<T>(opts: {
   appendEvent: StageAppendEvent;
   taskId: string;
   taskKind: string;
+  // Lineage for the ATOMIC terminal-row + `task.failed` pair (task #39): the
+  // event's projectId is mandatory for `PgEventStore.append`'s org-derivation;
+  // runId + specId are the run-lineage columns. The eventEnvelope groups them
+  // so adding new fields to the atomic terminal pair only touches ONE place.
+  eventLineage: { runId: string; specId: string; projectId: string };
   body: () => Promise<T>;
 }): Promise<T> {
   try {
     return await opts.body();
   } catch (error) {
     const failureKind = classifyStageFailureKind(error);
-    await markTaskFailedIfRunning(opts.pool, opts.taskId, failureKind, opts.writer);
-    await opts.appendEvent(
-      "task.failed",
-      { taskKind: opts.taskKind, failureKind, message: stageFailureMessage(error) },
-      opts.taskId,
-    );
+    const envelope: TerminalTaskEventEnvelope = {
+      runId: opts.eventLineage.runId,
+      specId: opts.eventLineage.specId,
+      projectId: opts.eventLineage.projectId,
+      taskKind: opts.taskKind,
+    };
+    // ATOMIC terminal-row + terminal-event pair (task #39): the
+    // markTaskFailedIfRunning UPDATE + the `task.failed` event INSERT ride ONE
+    // org-scoped transaction so the loud `task.failed` lands iff the row does.
+    // The guard's IDEMPOTENCY contract is unchanged — the `WHERE status='running'`
+    // on the row UPDATE leaves an already-`done` row alone (the `task.failed`
+    // event still lands EVERY time as the loud signal — that semantics is
+    // preserved here because the event INSERT runs unconditionally after the
+    // guarded UPDATE on the SAME transaction).
+    //
+    // The `appendEvent` fallback is the no-writer test path's append sink (the
+    // production writer path bypasses it via `updateTaskWithEvent`). Re-routed
+    // through `appendEvent` here so the unit-test harnesses keep observing the
+    // terminal `task.failed` event through their recorder (the atomicity
+    // contract is proven via the dedicated conformance test).
+    await markTaskFailedIfRunningWithEvent({
+      pool: opts.pool,
+      writer: opts.writer,
+      taskId: opts.taskId,
+      envelope,
+      failureKind,
+      message: stageFailureMessage(error),
+      appendEventFallback: (eventType, payload, taskId) =>
+        opts.appendEvent(eventType, payload as EventPayload<typeof eventType>, taskId),
+    });
     throw error;
   }
 }

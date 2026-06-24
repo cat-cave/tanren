@@ -28,7 +28,7 @@ import {
   wrapEventAppend,
 } from "./stageFailureKind.js";
 import { recordAnswererCost, secondsSince, type SubtaskCostContext } from "./subtaskCost.js";
-import { insertChildTask, markTaskDone, markTaskFailed } from "./subtaskTasks.js";
+import { insertChildTask, markTaskDoneWithEvent, markTaskFailedWithEvent } from "./subtaskTasks.js";
 import type { StageAppendEvent } from "./subtaskStages.js";
 import { createLogger } from "../observability/logger.js";
 
@@ -122,6 +122,7 @@ export async function runAuditorStage(args: AuditorStageInput): Promise<AuditorS
     appendEvent: args.appendEvent,
     taskId: auditorTaskId,
     taskKind: "audit",
+    eventLineage: { runId: args.runId, specId: args.costCtx.specId, projectId: args.costCtx.projectId },
     body: () => runAuditorTerminalBlock(args, auditorTaskId, result, startedAt),
   });
 }
@@ -152,9 +153,35 @@ async function runAuditorTerminalBlock(
     runtimeSeconds,
     rawUsage: args.buildUsage?.({ auditorTaskId, verdict: result.verdict }) ?? { role: "auditor" },
   });
-  await markTaskDone(args.pool, auditorTaskId, "passed", args.writer);
-  await args.appendEvent("task.completed", { taskKind: "audit" }, auditorTaskId);
+  // ATOMIC terminal-row + terminal-event pair (task #39): one org-scoped
+  // transaction so the row UPDATE + `task.completed` COMMIT together — replaces
+  // the prior split that stranded `done` rows with no `task.completed` event.
+  await markTaskDoneWithEvent({
+    pool: args.pool,
+    writer: args.writer,
+    taskId: auditorTaskId,
+    envelope: auditorEventEnvelope(args),
+    outcome: "passed",
+    appendEventFallback: stageFallbackAppend(args),
+  });
   return { findings, auditorTaskId };
+}
+
+/** Lineage for the auditor stage's atomic terminal-pair events (task #39). */
+function auditorEventEnvelope(args: AuditorStageInput) {
+  return {
+    runId: args.runId,
+    specId: args.costCtx.specId,
+    projectId: args.costCtx.projectId,
+    taskKind: "audit",
+  };
+}
+
+/** No-writer test fallback append sink for the auditor stage (task #39). */
+function stageFallbackAppend(
+  args: AuditorStageInput,
+): (eventType: "task.completed" | "task.failed", payload: Record<string, unknown>, taskId: string) => Promise<void> {
+  return (eventType, payload, taskId) => args.appendEvent(eventType, payload as never, taskId);
 }
 
 // Replay the prior apex v51 emit-on-throw shape for a non-schema auditor-answerer
@@ -167,12 +194,19 @@ async function emitAuditorAnswererThrow(
   error: unknown,
 ): Promise<never> {
   const failureKind = classifyStageFailureKind(error);
-  await markTaskFailed(args.pool, auditorTaskId, failureKind, args.writer);
-  await args.appendEvent(
-    "task.failed",
-    { taskKind: "audit", failureKind, message: stageFailureMessage(error) },
-    auditorTaskId,
-  );
+  // ATOMIC terminal-row + terminal-event pair (task #39): the row UPDATE +
+  // `task.failed` event ride ONE org-scoped transaction so a crash between them
+  // never strands a `failed` row with no event (or vice-versa) — the loud
+  // timeline signal lands iff the row does.
+  await markTaskFailedWithEvent({
+    pool: args.pool,
+    writer: args.writer,
+    taskId: auditorTaskId,
+    envelope: auditorEventEnvelope(args),
+    failureKind,
+    message: stageFailureMessage(error),
+    appendEventFallback: stageFallbackAppend(args),
+  });
   throw error;
 }
 
@@ -198,12 +232,19 @@ async function failClosedForSchemaMiss(
   error: AnswererSchemaValidationError,
 ): Promise<AuditorStageResult> {
   log.warn("schema-parse miss — synthesizing a P0 finding to re-audit", { runId: args.runId }, error);
-  await markTaskFailed(args.pool, auditorTaskId, "auditor_schema_invalid", args.writer);
-  // Audit-trail integrity (critic-arc R1 #5): markTaskFailed flipped the row to
-  // `failed` with failureKind="auditor_schema_invalid"; the EVENT must match the
-  // ROW state — emit task.failed, NOT task.completed. The prior task.completed
-  // emit here directly contradicted the task table and produced a self-inconsistent
-  // audit trail.
-  await args.appendEvent("task.failed", { taskKind: "audit", failureKind: "auditor_schema_invalid" }, auditorTaskId);
+  // Audit-trail integrity (critic-arc R1 #5 + task #39): row UPDATE +
+  // `task.failed` ride ONE org-scoped transaction — the row flip to `failed`
+  // with `failureKind="auditor_schema_invalid"` and the matching event commit
+  // together, so a crash between them cannot self-inconsistency the audit trail
+  // (the prior split that emitted `task.completed` against a `failed` row is
+  // also gone — the EVENT here is correctly `task.failed`).
+  await markTaskFailedWithEvent({
+    pool: args.pool,
+    writer: args.writer,
+    taskId: auditorTaskId,
+    envelope: auditorEventEnvelope(args),
+    failureKind: "auditor_schema_invalid",
+    appendEventFallback: stageFallbackAppend(args),
+  });
   return { findings: [AUDITOR_SCHEMA_MISS_FINDING], auditorTaskId };
 }

@@ -7,6 +7,8 @@
 // the workflow drove before, so the direct path + its mutation suite are
 // unchanged.
 
+import type pg from "pg";
+import { z } from "zod";
 import type {
   ClearRunPercolationPendingInput,
   InsertTaskInput,
@@ -19,10 +21,22 @@ import type {
   SetSpecMetadataInput,
   SetSpecStatusInput,
   UpdateTaskInput,
+  UpdateTaskWithEventInput,
 } from "../contracts/runStateWriter.js";
+import { PgEventStore } from "../eventStore.js";
 
 /** Anything that can run a parameterized query — the pool or a checked-out client. */
 type QueryClient = { query: (text: string, params?: unknown[]) => Promise<{ rowCount?: number | null }> };
+
+/**
+ * The TASK-LIFECYCLE atomicity client (task #39): a pg-pool/PoolClient compatible
+ * shape so the row-UPDATE applier above + `PgEventStore.append` can share the
+ * SAME in-transaction client. `PgEventStore` constructs over this shape, and
+ * `applyUpdateTask` only needs `.query`, so both run on the caller's `runWithOrgScope`
+ * client and COMMIT atomically — terminal row + terminal `task.*` event live or die
+ * together.
+ */
+type TaskLifecycleClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
 /** The non-finalize `UPDATE runs` (the `running` transition). */
 export async function applySetRunStatus(client: QueryClient, input: SetRunStatusInput): Promise<void> {
@@ -223,3 +237,107 @@ export async function applyUpdateTask(client: QueryClient, input: UpdateTaskInpu
       );
   }
 }
+
+/**
+ * The ATOMIC terminal task row + terminal `task.*` event applier (task #39 —
+ * critic-arc R2 NEW#1 / R3 BLOCKING: the prior split issued two separate writes,
+ * so a crash/DB failure between them stranded the row terminal-`done` with no
+ * `task.completed` event — autonomy-engine.md §1c single-finalize invariant
+ * violation). Mirrors `applyFinalizeLand` (merge-land's row + `merge.completed`
+ * pair): runs ONE row UPDATE + ONE event INSERT on the SAME caller-supplied
+ * client, so both COMMIT together. The notify wake (`tanren_run`, `tanren_event`)
+ * fires at COMMIT — exactly when the row + event are durable. The caller owns
+ * the org scope (`runWithOrgScope`).
+ *
+ * The pairing constraint is enforced at the seam by `terminalPairSchema`
+ * (in `contracts/runStateWriter.ts`): only the terminal task transitions
+ * (`done` / `failed*`) pair with the matching terminal event types
+ * (`task.completed` / `task.failed`), so a misuse cannot route a non-terminal
+ * transition through the atomic seam (and a `running` row update + a
+ * `task.completed` event is rejected before any DB I/O).
+ */
+export async function applyUpdateTaskWithEvent(
+  client: TaskLifecycleClient,
+  input: UpdateTaskWithEventInput,
+): Promise<void> {
+  await applyUpdateTask(client, input.task);
+  await new PgEventStore(client).append(input.event);
+}
+
+// --- Terminal row + event PAIRING schema (task #39) -------------------------
+//
+// The atomic seam (`applyUpdateTaskWithEvent` + the internal HTTP endpoint + the
+// `RunStateWriter.updateTaskWithEvent` impls) is RESTRICTED to TERMINAL
+// transitions paired with their matching `task.*` event. A non-terminal
+// transition (e.g. `running`, `running_pending`) MUST NOT route through this
+// seam — only the row + the terminal event are durable together; a non-terminal
+// pair would imply a phantom `task.completed` against a still-running row.
+// Similarly, a mismatched pair (e.g. `done` ↔ `task.failed`) is a wiring bug
+// the seam rejects BEFORE any DB I/O, so a misuse is caught loud at the boundary.
+
+/** The closed set of TERMINAL task transitions the atomic seam admits. */
+const TERMINAL_TASK_TRANSITIONS = ["done", "failed", "failed_with_kind", "failed_with_kind_if_running"] as const;
+type TerminalTaskTransition = (typeof TERMINAL_TASK_TRANSITIONS)[number];
+
+/** The closed set of TERMINAL task events the atomic seam admits. */
+const TERMINAL_TASK_EVENT_TYPES = ["task.completed", "task.failed"] as const;
+type TerminalTaskEventType = (typeof TERMINAL_TASK_EVENT_TYPES)[number];
+
+/** Map a terminal transition to the matching event type (the pairing constraint). */
+function expectedEventTypeFor(transition: TerminalTaskTransition): TerminalTaskEventType {
+  // `done` is the success terminal → `task.completed`. Every `failed*` variant
+  // (hard failure / failed-with-kind / the guarded failed-if-running) is the
+  // failure terminal → `task.failed`.
+  return transition === "done" ? "task.completed" : "task.failed";
+}
+
+/**
+ * Zod refinement for {@link UpdateTaskWithEventInput}: only terminal transitions
+ * + matching terminal event types pass. A non-terminal transition or a
+ * mismatched (e.g. `done` ↔ `task.failed`) pair is rejected at the seam BEFORE
+ * any DB I/O — the atomic primitive REQUIRES a terminal-+-matching shape, and
+ * a misuse must fail loud rather than persist a half-baked write. The internal
+ * write endpoint runs this on the parsed body; the in-process direct writer
+ * runs it inside `updateTaskWithEvent` so both planes share the same guard.
+ *
+ * The two task-input fields (`taskId`, `transition`) are validated explicitly,
+ * the rest of the row UPDATE shape (`outcome`, `failureKind`, `attempt`,
+ * `orgId`) is passed through as-is to {@link applyUpdateTask}, which itself
+ * branches on the transition. The event side validates the type vocabulary
+ * (the pairing constraint); the event payload is parsed by `PgEventStore.append`
+ * against the {@link EventRegistry}, so a malformed payload throws at the
+ * append (the existing event-validation contract is unchanged).
+ */
+export const terminalPairSchema = z
+  .object({
+    task: z
+      .object({
+        taskId: z.string().min(1),
+        // The row UPDATE accepts only the four terminal transitions on this seam.
+        transition: z.enum(TERMINAL_TASK_TRANSITIONS),
+        orgId: z.string().min(1).optional(),
+        outcome: z.string().min(1).optional(),
+        failureKind: z.string().min(1).optional(),
+        attempt: z.number().int().optional(),
+      })
+      .strict(),
+    event: z
+      .object({
+        runId: z.string().min(1).optional(),
+        taskId: z.string().min(1).optional(),
+        specId: z.string().min(1).optional(),
+        projectId: z.string().min(1),
+        eventType: z.enum(TERMINAL_TASK_EVENT_TYPES),
+        // The payload is parsed downstream by `PgEventStore.append` against the
+        // event-registry schema for the named type — keep it permissive here
+        // so the type-specific decode lives in ONE place (the event store).
+        payload: z.record(z.string(), z.unknown()),
+      })
+      .strict(),
+  })
+  .strict()
+  .refine((value) => expectedEventTypeFor(value.task.transition) === value.event.eventType, {
+    error:
+      "terminal-pair mismatch: transition must pair with the matching task event type (done → task.completed; failed* → task.failed)",
+    path: ["event", "eventType"],
+  });

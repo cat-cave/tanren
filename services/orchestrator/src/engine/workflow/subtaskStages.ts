@@ -29,7 +29,7 @@ import { invokePlanner, type PlannerRejectionFeedback, type PlannerSpecContext }
 import { runAnswererStageWithRecovery } from "./loopStageRecovery.js";
 import { runStageBodyWithFinalizeGuard, wrapEventAppend } from "./stageFailureKind.js";
 import { recordAnswererCost, secondsSince, type SubtaskCostContext } from "./subtaskCost.js";
-import { insertChildTask, markTaskDone } from "./subtaskTasks.js";
+import { insertChildTask, markTaskDoneWithEvent } from "./subtaskTasks.js";
 
 type LoopQueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
@@ -65,6 +65,7 @@ export async function runPlannerStage(args: PlannerStageInput): Promise<PlanAnsw
     appendEvent: args.appendEvent,
     taskId: args.plannerTaskId,
     taskKind: "plan",
+    eventLineage: { runId: args.runId, specId: args.costCtx.specId, projectId: args.costCtx.projectId },
     body: () => runPlannerStageBody(args),
   });
 }
@@ -242,6 +243,7 @@ export async function runCheckerStage(args: CheckerStageInput): Promise<CheckerD
     appendEvent: args.appendEvent,
     taskId: args.checkerTaskId,
     taskKind: "check",
+    eventLineage: { runId: args.runId, specId: args.costCtx.specId, projectId: args.costCtx.projectId },
     body: () => runCheckerStageBody(args),
   });
 }
@@ -353,9 +355,25 @@ async function runCheckerStageBody(args: CheckerStageInput): Promise<CheckerDeci
       verdict: result.verdict,
     }) ?? { role: "checker", subtaskIndex: args.subtask.index },
   });
+  // Lineage for the checker's atomic terminal-pair events (task #39): the
+  // costCtx already carries the run lineage at this stage.
+  const eventEnvelope = {
+    runId: args.runId,
+    specId: args.costCtx.specId,
+    projectId: args.costCtx.projectId,
+    taskKind: "check",
+  };
+  // No-writer test fallback append sink (task #39).
+  const fallbackAppend = (
+    eventType: "task.completed" | "task.failed",
+    payload: Record<string, unknown>,
+    taskId: string,
+  ): Promise<void> => args.appendEvent(eventType, payload as never, taskId);
   if (decision.kind === "reject") {
-    await markTaskDone(args.pool, args.checkerTaskId, "rejected_by_checker", args.writer);
-    // PRE-TERMINAL `checker.rejected` wrapped for the same reason.
+    // PRE-TERMINAL `checker.rejected` rides FIRST (wrapped — a transport throw
+    // lands as `event_append_failed` rather than the fail-closed `crashed`),
+    // then the atomic terminal pair (row UPDATE + `task.completed`) — task #39
+    // single-finalize invariant.
     await wrapEventAppend(() =>
       args.appendEvent(
         "checker.rejected",
@@ -369,11 +387,24 @@ async function runCheckerStageBody(args: CheckerStageInput): Promise<CheckerDeci
         args.checkerTaskId,
       ),
     );
-    await args.appendEvent("task.completed", { taskKind: "check" }, args.checkerTaskId);
+    await markTaskDoneWithEvent({
+      pool: args.pool,
+      writer: args.writer,
+      taskId: args.checkerTaskId,
+      envelope: eventEnvelope,
+      outcome: "rejected_by_checker",
+      appendEventFallback: fallbackAppend,
+    });
     return decision;
   }
-  await markTaskDone(args.pool, args.checkerTaskId, "passed", args.writer);
-  await args.appendEvent("task.completed", { taskKind: "check" }, args.checkerTaskId);
+  await markTaskDoneWithEvent({
+    pool: args.pool,
+    writer: args.writer,
+    taskId: args.checkerTaskId,
+    envelope: eventEnvelope,
+    outcome: "passed",
+    appendEventFallback: fallbackAppend,
+  });
   return decision;
 }
 

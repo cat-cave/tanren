@@ -15,7 +15,7 @@ import { emitStageTiming } from "../observability/index.js";
 import type { WriterAdapter, WriterResult } from "../providers/types.js";
 import { recordWriterCost, secondsSince, type SubtaskCostContext } from "./subtaskCost.js";
 import { runStageBodyWithFinalizeGuard, wrapEventAppend } from "./stageFailureKind.js";
-import { insertChildTask, markTaskDone, markTaskFailed } from "./subtaskTasks.js";
+import { insertChildTask, markTaskDoneWithEvent, markTaskFailedWithEvent } from "./subtaskTasks.js";
 import type { StageAppendEvent } from "./subtaskStages.js";
 
 type LoopQueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
@@ -101,6 +101,7 @@ export async function runWriterStage(args: WriterStageInput): Promise<WriterStag
     appendEvent: args.appendEvent,
     taskId: args.writeTaskId,
     taskKind: "write",
+    eventLineage: { runId: args.runId, specId: args.costCtx.specId, projectId: args.costCtx.projectId },
     body: () => runWriterStageBody(args),
   });
 }
@@ -177,9 +178,21 @@ async function runWriterStageBody(args: WriterStageInput): Promise<WriterStageOu
     // the task did NOT complete its subtask. Mark it failed (window_exhausted)
     // and emit the failed event; the loop halts the run as recoverable window
     // pressure. Never `passed`.
-    await markTaskFailed(args.pool, args.writeTaskId, "window_exhausted", args.writer);
-    await emitWriterSubtaskFailed(args, "window_exhausted", "writer usage window exhausted mid-subtask");
-    await args.appendEvent("task.failed", { taskKind: "write", failureKind: "window_exhausted" }, args.writeTaskId);
+    //
+    // The PRE-TERMINAL `writer.subtask.failed` rides FIRST (wrapped — a transport
+    // throw lands as `event_append_failed`), then the atomic terminal pair (row
+    // UPDATE + `task.failed`) — task #39.
+    await wrapEventAppend(() =>
+      emitWriterSubtaskFailed(args, "window_exhausted", "writer usage window exhausted mid-subtask"),
+    );
+    await markTaskFailedWithEvent({
+      pool: args.pool,
+      writer: args.writer,
+      taskId: args.writeTaskId,
+      envelope: writerEventEnvelope(args),
+      failureKind: "window_exhausted",
+      appendEventFallback: stageFallbackAppend(args),
+    });
     return { kind: "window_exhausted", writer: writerResult };
   }
   if (exitReason === "crashed" || exitReason === "timeout") {
@@ -189,18 +202,26 @@ async function runWriterStageBody(args: WriterStageInput): Promise<WriterStageOu
     // (or exhausts the retry budget) — a loud, recoverable halt.
     const message =
       exitReason === "timeout" ? "writer timed out before completing the subtask" : "writer crashed mid-subtask";
-    await markTaskFailed(args.pool, args.writeTaskId, exitReason, args.writer);
-    await emitWriterSubtaskFailed(args, exitReason, message);
-    await args.appendEvent("task.failed", { taskKind: "write", failureKind: exitReason }, args.writeTaskId);
+    await wrapEventAppend(() => emitWriterSubtaskFailed(args, exitReason, message));
+    await markTaskFailedWithEvent({
+      pool: args.pool,
+      writer: args.writer,
+      taskId: args.writeTaskId,
+      envelope: writerEventEnvelope(args),
+      failureKind: exitReason,
+      appendEventFallback: stageFallbackAppend(args),
+    });
     return { kind: "failed", writer: writerResult, failureKind: exitReason };
   }
   // `completed` / `token_limit`: the diff is usable, mark the task passed and
   // emit the success event (the writer genuinely produced its subtask output).
   // The PRE-TERMINAL `writer.subtask.completed` append is wrapped so a transport
   // throw lands as `event_append_failed` rather than the fail-closed `crashed`.
-  // The post-terminal `task.completed` is left bare: a throw there is the guard's
-  // domain (markTaskFailedIfRunning leaves the already-`done` row alone, the
-  // `task.failed` event is the loud signal — single-finalize invariant).
+  // The terminal row + `task.completed` event are an ATOMIC pair (task #39):
+  // ONE org-scoped transaction so the row UPDATE + the timeline event live or
+  // die together — replaces the prior split that stranded the row terminal-`done`
+  // with no `task.completed` on a crash/DB failure between them
+  // (autonomy-engine.md §1c single-finalize invariant).
   await wrapEventAppend(() =>
     args.appendEvent(
       "writer.subtask.completed",
@@ -217,9 +238,45 @@ async function runWriterStageBody(args: WriterStageInput): Promise<WriterStageOu
       args.writeTaskId,
     ),
   );
-  await markTaskDone(args.pool, args.writeTaskId, "passed", args.writer);
-  await args.appendEvent("task.completed", { taskKind: "write" }, args.writeTaskId);
+  await markTaskDoneWithEvent({
+    pool: args.pool,
+    writer: args.writer,
+    taskId: args.writeTaskId,
+    envelope: writerEventEnvelope(args),
+    outcome: "passed",
+    appendEventFallback: stageFallbackAppend(args),
+  });
   return { kind: "completed", writer: writerResult };
+}
+
+/** Lineage for the writer stage's atomic terminal-pair events (task #39). */
+function writerEventEnvelope(args: WriterStageInput) {
+  return {
+    runId: args.runId,
+    specId: args.costCtx.specId,
+    projectId: args.costCtx.projectId,
+    taskKind: "write",
+  };
+}
+
+/**
+ * No-writer test path's append sink (task #39). The production writer path
+ * commits the terminal event atomically with the row inside
+ * `RunStateWriter.updateTaskWithEvent`; the unit-test harnesses pass no writer
+ * + a recording `args.appendEvent`, so this re-routes the terminal event back
+ * through their recorder so existing per-stage emit-on-throw conformance
+ * assertions stay green. The atomicity contract itself is exercised in the
+ * dedicated `markTaskWithEventAtomic.test.ts` conformance suite.
+ */
+function stageFallbackAppend(
+  args: WriterStageInput,
+): (eventType: "task.completed" | "task.failed", payload: Record<string, unknown>, taskId: string) => Promise<void> {
+  // Adapt the typed `appendEvent` (`EventPayload<N>` per name) to the helper's
+  // name-agnostic payload shape: the payload was constructed in `markTask*WithEvent`
+  // from the literal `{ taskKind, failureKind?, message? }` shape, which is
+  // byte-identical to the registered `task.completed` / `task.failed` Zod
+  // payload schema (the runtime Zod parse downstream is the source of truth).
+  return (eventType, payload, taskId) => args.appendEvent(eventType, payload as never, taskId);
 }
 
 // Emit the (previously latent) `writer.subtask.failed` timeline event so a

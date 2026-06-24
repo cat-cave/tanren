@@ -40,7 +40,7 @@ import { buildConvergencePrompt, buildDemoRunPrompt, buildTriagePrompt } from ".
 import { recordAnswererCost, secondsSince, type SubtaskCostContext } from "./subtaskCost.js";
 import { runAnswererStageWithRecovery } from "./loopStageRecovery.js";
 import { runStageBodyWithFinalizeGuard, wrapEventAppend } from "./stageFailureKind.js";
-import { insertChildTask, markTaskDone } from "./subtaskTasks.js";
+import { insertChildTask, markTaskDoneWithEvent } from "./subtaskTasks.js";
 import type { StageAppendEvent } from "./subtaskStages.js";
 import { gateTriagedSpecs, type TriageSpecValidator } from "./loopFindings.js";
 
@@ -101,6 +101,7 @@ export async function runDemoRunStage(args: DemoRunStageInput): Promise<{ findin
     appendEvent: args.appendEvent,
     taskId: demoTaskId,
     taskKind: "demo",
+    eventLineage: { runId: args.runId, specId: args.costCtx.specId, projectId: args.costCtx.projectId },
     body: () => runDemoRunStageBody(args, demoTaskId),
   });
 }
@@ -138,8 +139,9 @@ async function runDemoRunStageBody(
     runtimeSeconds,
     rawUsage: { role: "demoRun" },
   });
-  await markTaskDone(args.pool, demoTaskId, "passed", args.writer);
-  await args.appendEvent("task.completed", { taskKind: "demo" }, demoTaskId);
+  // ATOMIC terminal-row + terminal-event pair (task #39): row UPDATE +
+  // `task.completed` in ONE org-scoped tx (autonomy-engine.md §1c).
+  await loopStageTaskDone(args, demoTaskId, "demo");
   return { findings, demoTaskId };
 }
 
@@ -267,6 +269,7 @@ export async function runTriageStage(args: TriageStageInput): Promise<TriageStag
     appendEvent: args.appendEvent,
     taskId: triageTaskId,
     taskKind: "triage",
+    eventLineage: { runId: args.runId, specId: args.costCtx.specId, projectId: args.costCtx.projectId },
     body: () => runTriageStageBody(args, triageTaskId),
   });
 }
@@ -321,8 +324,8 @@ async function runTriageStageBody(args: TriageStageInput, triageTaskId: string):
     runtimeSeconds,
     rawUsage: { role: "triage" },
   });
-  await markTaskDone(args.pool, triageTaskId, "passed", args.writer);
-  await args.appendEvent("task.completed", { taskKind: "triage" }, triageTaskId);
+  // ATOMIC terminal-row + terminal-event pair (task #39).
+  await loopStageTaskDone(args, triageTaskId, "triage");
   return { routing, triageTaskId };
 }
 
@@ -386,6 +389,7 @@ export async function runConvergenceStage(args: ConvergenceStageInput): Promise<
     appendEvent: args.appendEvent,
     taskId: convergenceTaskId,
     taskKind: "convergence",
+    eventLineage: { runId: args.runId, specId: args.costCtx.specId, projectId: args.costCtx.projectId },
     body: () => runConvergenceStageBody(args, convergenceTaskId),
   });
 }
@@ -461,9 +465,30 @@ async function runConvergenceStageBody(
     runtimeSeconds,
     rawUsage: { role: "convergence" },
   });
-  await markTaskDone(args.pool, convergenceTaskId, "passed", args.writer);
-  await args.appendEvent("task.completed", { taskKind: "convergence" }, convergenceTaskId);
+  // ATOMIC terminal-row + terminal-event pair (task #39).
+  await loopStageTaskDone(args, convergenceTaskId, "convergence");
   // The escalation reason is meaningful only on a halt (the agent's escalate verdict).
   const escalationReason = decision === "halt" ? answer.escalationReason : "";
   return { decision, state, reasoning: answer.reasoning, escalationReason, convergenceTaskId };
+}
+
+/**
+ * Shared loopStages terminal-pair invoker (task #39): the row UPDATE +
+ * `task.completed` event in ONE org-scoped tx. The no-writer test fallback
+ * routes the terminal event back through the stage's `appendEvent` recorder so
+ * the existing recorder-based test invariants keep observing the terminal event.
+ */
+async function loopStageTaskDone(
+  args: StageBase,
+  taskId: string,
+  taskKind: "demo" | "triage" | "convergence",
+): Promise<void> {
+  await markTaskDoneWithEvent({
+    pool: args.pool,
+    writer: args.writer,
+    taskId,
+    envelope: { runId: args.runId, specId: args.costCtx.specId, projectId: args.costCtx.projectId, taskKind },
+    outcome: "passed",
+    appendEventFallback: (eventType, payload, t) => args.appendEvent(eventType, payload as never, t),
+  });
 }

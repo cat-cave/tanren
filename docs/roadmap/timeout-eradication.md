@@ -8,7 +8,7 @@ record is the memory `feedback_no_timeouts_progress_based` (Trevor, 2026-06-17,
 emphatic that this class keeps recurring); the existing models it generalizes are
 `workflow/convergenceDetector.ts` and `worker/runHeartbeat.ts`.
 
-> **Status (program COMPLETE — with EIGHT disguised survivors caught post-program by
+> **Status (program COMPLETE — with NINE disguised survivors caught post-program by
 > apex + critic-arc, all fixed).** The full eradication wave landed: #609 (foundation — `ActivityWatchdog`,
 > `retryUntilConverged`, timeout-eradication lint in REPORT mode), #612–#618
 > (M1..Reframe waves), #621 (progress backstop — watchdog surfaces a recoverable
@@ -16,7 +16,7 @@ emphatic that this class keeps recurring); the existing models it generalizes ar
 > so the class can never reintroduce. The doctrine stands: progress/sign-of-life
 > based; `ActivityWatchdog` is the sole running-command hang detector.
 >
-> **EIGHT DISGUISED survivors the lint missed, found by successive apex trials +
+> **NINE DISGUISED survivors the lint missed, found by successive apex trials +
 > critic-arc audits and since fixed:**
 >
 > - **#638 — ssh2 `timeout:` connect-config socket option.** In ssh2, the `timeout`
@@ -215,6 +215,40 @@ signature, or terminal-arm wiring fails CI uniformly. The doctrine extends:
 >   Fixed with a small fixed-size lookahead window (4 lines) over following
 >   source lines after a `setTimeout(` opener whose same-line window has no kill
 >   verb, with a paired multi-line fixture in the lint's test suite.
+> - **Task #39 (critic-arc R2 NEW#1 / R3 BLOCKING) — terminal row + terminal
+>   `task.*` event were not atomic [RESOLVED].** The single-finalize invariant
+>   (`autonomy-engine.md` §1c) required the terminal `tasks` row UPDATE and the
+>   matching `task.completed` / `task.failed` event to land or fail together,
+>   but every call site issued TWO writes: `markTaskDone` / `markTaskFailed` ran
+>   ONE DB write, then `appendEvent('task.completed' | 'task.failed', …)` ran a
+>   SECOND. A crash or DB failure between them stranded the row terminal-`done`
+>   with no `task.completed` event (or terminal-`failed` with no `task.failed`)
+>   — loud at the row, silent on the timeline — the same shape as the #640
+>   loud-at-one-granularity-silent-at-another family that started this doctrine.
+>   Fix: a new atomic seam (`RunStateWriter.updateTaskWithEvent` →
+>   `/internal/update-task-with-event` HTTP endpoint → `applyUpdateTaskWithEvent`
+>   applier) runs the row UPDATE + the event INSERT on the SAME caller-supplied
+>   in-transaction client, mirroring `applyFinalizeLand` (merge-land's `merge.completed`
+>   - spec `merged` flip). The pairing constraint (`done` ↔ `task.completed`,
+>     `failed*` ↔ `task.failed`) is enforced by a shared `terminalPairSchema` Zod
+>     refinement BEFORE any DB I/O — a non-terminal transition or a mismatched
+>     pair is rejected at the seam (the route returns 422; the direct writer
+>     throws). The `DirectRunStateWriter` opens a dedicated `inTaskScopeOrThrow`
+>     that fails loud on a missing org scope rather than degrading silently to
+>     the bare pool (a bare-pool fallback would split the writes onto separate
+>     connections — defeating atomicity). All twelve call sites in the subtask
+>     loop (writer/checker/auditor/demo/triage/convergence/design-oracle +
+>     `runStageBodyWithFinalizeGuard`) route through three new wrappers
+>     (`markTaskDoneWithEvent` / `markTaskFailedWithEvent` /
+>     `markTaskFailedIfRunningWithEvent`), so every terminal exit on a per-stage
+>     task row is atomic. The conformance test
+>     (`services/orchestrator/tests/conformance/markTaskWithEventAtomic.test.ts`)
+>     proves the contract against a real Postgres under the enforced `tanren_app`
+>     RLS role: happy-path (row + event commit together), atomicity (an invalid
+>     event payload rolls the whole tx back — the row stays `running`), pairing
+>     refinement (mismatched + non-terminal pairs rejected at the seam), and the
+>     typed pairing matrix. The doctrine extends: **every terminal exit is an
+>     ATOMIC pair — row + event live or die together, never half-baked.**
 >
 > The inventory below was produced by a 3-auditor sweep and **re-verified
 > file:line against `origin/main` while writing** — drift corrections are flagged

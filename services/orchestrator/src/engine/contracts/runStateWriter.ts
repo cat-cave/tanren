@@ -224,6 +224,20 @@ export interface UpdateTaskInput {
   attempt?: number;
 }
 
+/**
+ * The atomic terminal-task input (task #39): a TERMINAL `tasks` UPDATE paired
+ * with the matching terminal `task.*` event, applied together in ONE
+ * org-scoped transaction so the row + event live or die together. The pairing
+ * constraint (`done` ↔ `task.completed`, `failed*` ↔ `task.failed`) is enforced
+ * by `terminalPairSchema` in `engine/worker/runStateLifecycleSql.ts`, so a
+ * non-terminal transition or a mismatched type is rejected at the seam before
+ * any DB I/O.
+ */
+export interface UpdateTaskWithEventInput {
+  task: UpdateTaskInput;
+  event: AppendEventInput;
+}
+
 /** The shape of a `tasks` INSERT the workflow drives (subtask / CI / review / merge). */
 export interface InsertTaskInput {
   taskId: string;
@@ -410,6 +424,17 @@ export interface RunStateWriter extends EventStore {
 
   /** Move one `tasks` row through a named lifecycle transition by `task_id`. */
   updateTask(input: UpdateTaskInput): Promise<void>;
+
+  /**
+   * Move one `tasks` row to a TERMINAL state AND append the matching `task.*`
+   * event in ONE org-scoped transaction (task #39 — the autonomy-engine.md §1c
+   * single-finalize invariant). The prior pair (`updateTask` + a separate
+   * `append`) issued two writes; a crash/DB failure between them stranded the
+   * row terminal-`done` with NO `task.completed` event. The {@link terminalPairSchema}
+   * refinement enforces the pairing — a non-terminal transition or a mismatched
+   * (e.g. `done` ↔ `task.failed`) misuse is rejected at the seam before any DB I/O.
+   */
+  updateTaskWithEvent(input: UpdateTaskWithEventInput): Promise<void>;
 
   // --- Autonomy loops: the run/spec CREATE writes (explicit-actor, multi-table). ---
 
