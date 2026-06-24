@@ -256,6 +256,58 @@ describe("task #21B — driveToConvergence HALTS LOUD on a stalled child templat
     expect(log.filter((e) => allowedPrefixes.some((p) => e.eventType.startsWith(p)))).toHaveLength(0);
   });
 
+  // Task #24 (apex v52/v53) — INVARIANT: the cross-layer sign-of-life bridge needs
+  // `writer.%` on the allowlist so the SSH ActivityWatchdog's `writer.subtask.progress`
+  // emissions bridge into the breaker streak. The watchdog's
+  // `MIN_NON_ADVANCING_NEIGHBOR_REPEATS=2` floor protects against substrate-internal
+  // false-fire; this allowlist entry protects against breaker-side compound false-fire
+  // on a legitimately slow writer turn whose only life signal is a workspace advance.
+  it("INVARIANT (task #24) — `writer.%` is on the worker-progress allowlist", () => {
+    expect(WORKER_PROGRESS_EVENT_PREFIXES).toContain("writer.%");
+  });
+
+  // Task #24 (apex v52/v53) — INTEGRATION SHAPE: a child project that emits ONLY
+  // `writer.subtask.progress` rows (the watchdog's cross-layer sign-of-life bridge) over
+  // many probe windows must NOT trip the breaker. This is the v52/v53 shape: codex is
+  // silent for minutes during a `pnpm install`, the workspace count+bytes signature
+  // briefly plateaus mid-IO-burst, but the watchdog still emits progress every tick the
+  // signature advances. Without the `writer.%` allowlist this hangs forever (no allowed
+  // event ever lands) or the breaker fires — both wrong; the bridge fixes both.
+  it("CONFORMANCE (task #24) — a child run posting ONLY `writer.subtask.progress` keeps the breaker quiet", async () => {
+    const { log, walker } = buildRealWalkerOnInMemoryLog();
+    let snapshotPolls = 0;
+    const synthDoneAfterPolls = NON_ADVANCE_PROBES_BEFORE_STALL * 3;
+    // Inject a writer.subtask.progress per probe — the breaker MUST stay silent because
+    // `writer.%` is on the allowlist. Without that entry the signal would be flat and
+    // the breaker would fire across the streak ceiling.
+    const probeSignal = buildAllowlistedProbe(log, "writer.subtask.progress");
+    const deps = buildRealWalkerDeps({
+      walker,
+      probeSignal,
+      loadSnapshot: async () => {
+        snapshotPolls += 1;
+        if (snapshotPolls <= synthDoneAfterPolls) return inFlightSnapshot();
+        return {
+          projectId: "project_tmpl",
+          archived: false,
+          nodes: [{ specId: "spec_running", phase: "done", dependsOn: [], priority: "p1", orderKey: 0 }] as const,
+        } as DagSnapshot;
+      },
+    });
+
+    // No throw — the build converges via the `done` transition. The breaker stayed
+    // silent because every probe observed a NEW writer.subtask.progress id (the
+    // watchdog bridge keeping the streak alive on a slow writer turn).
+    await buildRunLoopBuildDriver(deps).build({ orgId: "org_acme", projectId: "project_tmpl" });
+    expect(log.filter((e) => e.eventType === "writer.subtask.progress").length).toBeGreaterThan(
+      NON_ADVANCE_PROBES_BEFORE_STALL,
+    );
+    // Sanity: the log contains NO worker events outside the bridge — the only signal that
+    // kept the breaker quiet was `writer.subtask.progress`.
+    const allowedExclWriter = ["task.", "run.", "gate.", "auditor.", "audit.", "merge."];
+    expect(log.filter((e) => allowedExclWriter.some((p) => e.eventType.startsWith(p)))).toHaveLength(0);
+  });
+
   // Pairs with the test above: when the worker IS genuinely advancing (it emits
   // `task.*` events between probes), the breaker stays silent regardless of how
   // many `dag.drained` rows the walker writes alongside. Together the two pin

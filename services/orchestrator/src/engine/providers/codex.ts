@@ -121,14 +121,13 @@ export function createCodexWriter(dependencies: CodexWriterDependencies): Writer
           nativeApiKeyEnvFile: auth.nativeApiKeyEnvFile,
         }),
         stdin: opts.prompt,
-        // AGENT exec: codex `--json` streams telemetry continuously (every line is a
-        // sign of life → the watchdog resets), with a workspace liveness probe as the
-        // backstop for a long silent tool call. NEVER killed for elapsed time.
+        // AGENT exec: codex `--json` streams telemetry continuously (every line is a sign of life → the watchdog resets), with a workspace liveness probe as the backstop for a long silent tool call. NEVER killed for elapsed time. `onWatchdogProgress` bridges every advancing tick into the #21B child-run breaker (task #24, apex v52/v53).
         watchdog: buildActivityWatchdog({
           substrate: dependencies.ssh,
           target: dependencies.target,
           cls: "agent",
           workspace: opts.workspace,
+          onProgress: opts.onWatchdogProgress,
         }),
       });
       const telemetry = parseCodexJsonlTelemetry(codex.stdout);

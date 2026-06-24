@@ -212,6 +212,111 @@ describe("SSH activity watchdog (progress-based hang detection)", () => {
     expect(c.state.destroyCount).toBe(1);
   });
 
+  // Task #24 (apex v52/v53) — CROSS-LAYER sign-of-life bridge between the SSH activity
+  // watchdog and the #21B child-run progress breaker. On every probe tick the watchdog
+  // reads the work signature as ADVANCING (new distinct output OR an advancing workspace),
+  // it MUST invoke `onProgress` so the writer pipeline can emit a `writer.subtask.progress`
+  // event the breaker counts. The watchdog already correctly TOLERATES a single mid-IO-burst
+  // identical probe (the `MIN_NON_ADVANCING_NEIGHBOR_REPEATS=2` floor); without this bridge
+  // the breaker would still age out — these tests pin that the bridge fires only on real
+  // advancement, never on a fixed-point plateau.
+  it("EMITS onProgress on every tick the work signature ADVANCES (output advancing)", async () => {
+    vi.useFakeTimers();
+    const c = createControllableClient();
+    const substrate = await makeSubstrate(c.client);
+    const progressEvents: Array<{ outputBytesAdvanced: number; workspaceSignature?: string }> = [];
+    // A probe whose workspace signature stays flat — the output stream alone advances each tick.
+    const watchdog: ActivityWatchdog = {
+      livenessProbe: () => Promise.resolve("ws:1000"),
+      probeIntervalMs: 1_000,
+      onProgress: (signal) => {
+        progressEvents.push({
+          outputBytesAdvanced: signal.outputBytesAdvanced,
+          workspaceSignature: signal.workspaceSignature,
+        });
+      },
+    };
+
+    const runPromise = substrate.run(target, { command: "codex --json", watchdog });
+    await vi.advanceTimersByTimeAsync(0);
+    // Emit a NEW distinct line every probe window; each is genuine advancement.
+    for (let i = 0; i < 5; i += 1) {
+      c.emitStdout(`{"token":${i}}\n`);
+      await vi.advanceTimersByTimeAsync(1_000);
+    }
+    c.emitClose(0);
+    const result = await runPromise;
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stalled).toBeFalsy();
+    // The first probe tick observes a non-empty signature (prior is undefined → advance);
+    // every subsequent tick that observed new distinct output also advanced. >= 2 events
+    // proves the bridge is firing per genuine work-signature advancement, NOT once at arm.
+    expect(progressEvents.length).toBeGreaterThanOrEqual(2);
+    // Every event MUST carry the workspaceSignature the probe returned this tick (the
+    // bridge surfaces the count+bytes pair the #21B breaker downstream can index on).
+    for (const event of progressEvents) {
+      expect(event.workspaceSignature).toBe("ws:1000");
+    }
+  });
+
+  it("DOES NOT emit onProgress on a fixed-point tick (no new output, flat workspace)", async () => {
+    vi.useFakeTimers();
+    const c = createControllableClient();
+    const substrate = await makeSubstrate(c.client);
+    const progressEvents: Array<{ outputBytesAdvanced: number; workspaceSignature?: string }> = [];
+    // The genuine-hang shape: zero output + flat workspace signature across probe ticks.
+    // The first tick sets the signature (counts as advancement from undefined → defined),
+    // every subsequent tick is signature-IDENTICAL → MUST NOT emit onProgress.
+    const watchdog: ActivityWatchdog = {
+      livenessProbe: () => Promise.resolve("ws:1000"),
+      probeIntervalMs: 1_000,
+      onProgress: (signal) => {
+        progressEvents.push({
+          outputBytesAdvanced: signal.outputBytesAdvanced,
+          workspaceSignature: signal.workspaceSignature,
+        });
+      },
+    };
+
+    const runPromise = substrate.run(target, { command: "./silent", watchdog });
+    // Advance enough ticks to reach the streak floor — the watchdog will surface a stall.
+    await vi.advanceTimersByTimeAsync(4_000);
+    const result = await runPromise;
+
+    // First tick advanced (undefined → "ws:1000"); ALL subsequent identical ticks did not.
+    expect(progressEvents.length).toBe(1);
+    expect(result.stalled).toBe(true);
+  });
+
+  it("SWALLOWS a throw from onProgress so an emit failure cannot bubble into the watchdog tick", async () => {
+    vi.useFakeTimers();
+    const c = createControllableClient();
+    const substrate = await makeSubstrate(c.client);
+    let invocations = 0;
+    const watchdog: ActivityWatchdog = {
+      livenessProbe: () => Promise.resolve("ws:1000"),
+      probeIntervalMs: 1_000,
+      onProgress: () => {
+        invocations += 1;
+        throw new Error("synthetic append-event failure");
+      },
+    };
+
+    const runPromise = substrate.run(target, { command: "codex --json", watchdog });
+    await vi.advanceTimersByTimeAsync(0);
+    c.emitStdout(`{"token":1}\n`);
+    await vi.advanceTimersByTimeAsync(1_000);
+    c.emitClose(0);
+    const result = await runPromise;
+
+    expect(invocations).toBeGreaterThan(0);
+    // The thrown emit MUST NOT have killed the run — exit 0, no stall, no destroy.
+    expect(result.exitCode).toBe(0);
+    expect(result.stalled).toBeFalsy();
+    expect(c.state.destroyCount).toBe(0);
+  });
+
   it("KILLS with an in-band failure when onQuiet is 'kill' and the work signature is fixed", async () => {
     vi.useFakeTimers();
     const c = createControllableClient();

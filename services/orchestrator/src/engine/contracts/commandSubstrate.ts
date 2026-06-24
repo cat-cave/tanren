@@ -102,6 +102,32 @@ export interface ActivityWatchdog {
   // cadence in the substrate. Bless this as an interval, never a deadline.
   probeIntervalMs?: number;
   onQuiet?: OnQuiet;
+  // CROSS-LAYER sign-of-life bridge (task #24, apex v52/v53). On every probe tick the
+  // watchdog reads the work signature as ADVANCING (new distinct output OR an advancing
+  // workspace count+bytes), it invokes `onProgress`. The writer pipeline binds this to a
+  // `writer.subtask.progress` event the #21B child-run progress breaker counts as worker
+  // progress — so a legitimately slow writer turn whose work signature plateaus across a
+  // single mid-IO-burst probe (the `pnpm install` case) cannot age out the breaker while
+  // the watchdog itself correctly tolerates the plateau (via the substrate-internal
+  // `MIN_NON_ADVANCING_NEIGHBOR_REPEATS=2` streak floor). The two fixes solve different
+  // layers — neither alone is sufficient. The callback is FIRE-AND-FORGET (sync); a throw
+  // is caught by the substrate so an event-emit failure cannot bubble into the tick.
+  onProgress?: (signal: WatchdogProgressSignal) => void;
+}
+
+// The sign-of-life signal the substrate emits to `onProgress` on every probe tick the
+// WORK SIGNATURE advances. `outputBytesAdvanced` is the byte length of the new-distinct
+// output snapshotted into the tick's work signature (zero on a probe-only advance — a
+// silent op whose workspace signature alone moved). `workspaceSignature` is the workspace
+// count+bytes pair the liveness probe returned this tick (undefined on an output-only
+// watchdog with no probe attached, or when the probe was unreachable this tick).
+// `workSignatureAdvanced` is a literal `true` — the substrate only invokes `onProgress`
+// when the signature genuinely advanced; the field is the type-level proof of that
+// invariant for downstream readers.
+export interface WatchdogProgressSignal {
+  outputBytesAdvanced: number;
+  workspaceSignature?: string;
+  workSignatureAdvanced: true;
 }
 
 // The outcome of one command. A substrate (transport) failure is reported

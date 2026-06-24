@@ -92,11 +92,14 @@ export function createAiderWriter(dependencies: AiderWriterDependencies): Writer
         // AGENT exec: aider streams its edit/telemetry output continuously (every line
         // is a sign of life → the watchdog resets), with the workspace as the
         // silent-stretch liveness probe. NEVER killed for elapsed time.
+        // `onWatchdogProgress` bridges every advancing tick into the #21B child-run
+        // progress breaker (task #24, apex v52/v53).
         watchdog: buildActivityWatchdog({
           substrate: dependencies.ssh,
           target: dependencies.target,
           cls: "agent",
           workspace: opts.workspace,
+          onProgress: opts.onWatchdogProgress,
         }),
       });
       const telemetry = parseAiderTelemetry(aider.stdout + "\n" + aider.stderr);

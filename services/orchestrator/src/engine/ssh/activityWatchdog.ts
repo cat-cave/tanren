@@ -25,7 +25,7 @@
 // snapshot the work signature between output), never a deadline — the trigger is
 // signature IDENTITY (non-advancement), never an elapsed duration.
 import type { RunnerHandle } from "../contracts/allocator.js";
-import type { ActivityWatchdog, CommandSubstrate } from "../contracts/commandSubstrate.js";
+import type { ActivityWatchdog, CommandSubstrate, WatchdogProgressSignal } from "../contracts/commandSubstrate.js";
 import { quoteSshShellArg } from "./command.js";
 
 // How often a watchdog consults its `livenessProbe` between output chunks. A poll
@@ -127,11 +127,20 @@ function buildWorkspaceLivenessProbe(
 // Inputs a call site threads to build its watchdog. `workspace` is the runner-local
 // path whose touches mean "still working" (a git/jj/build/gate op); omit it for an
 // output-only class with no workspace to watch.
+//
+// `onProgress` is the optional CROSS-LAYER sign-of-life bridge (task #24, apex v52/v53):
+// on every probe tick the substrate reads the work signature as ADVANCING, it invokes
+// this callback. Writers thread a closure that emits `writer.subtask.progress` so the
+// #21B child-run progress breaker counts the watchdog's tolerance signal as worker
+// progress — see contracts/commandSubstrate.ts WatchdogProgressSignal for the doctrine.
+// No-op when omitted (the default for non-writer call sites — vcs/infra ops do not
+// need the bridge because their start/end is already a meaningful events emission).
 export interface WatchdogInput {
   substrate: CommandSubstrate;
   target: RunnerHandle;
   cls: WatchdogClass;
   workspace?: string;
+  onProgress?: (signal: WatchdogProgressSignal) => void;
 }
 
 // THE shared constructor. Returns the right `ActivityWatchdog` for the call class —
@@ -147,6 +156,12 @@ export function buildActivityWatchdog(input: WatchdogInput): ActivityWatchdog {
   };
   if (wantsProbe) {
     watchdog.livenessProbe = buildWorkspaceLivenessProbe(input.substrate, input.target, input.workspace as string);
+  }
+  // Forward the optional cross-layer sign-of-life bridge (task #24). When the caller
+  // (a writer adapter) supplies one, the substrate's tickWatchdog invokes it on every
+  // tick the work signature advanced — see WatchdogProgressSignal in commandSubstrate.ts.
+  if (input.onProgress !== undefined) {
+    watchdog.onProgress = input.onProgress;
   }
   return watchdog;
 }

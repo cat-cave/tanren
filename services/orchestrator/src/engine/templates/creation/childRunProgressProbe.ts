@@ -55,10 +55,19 @@
 //   - `merge.*` — merge queue / merge outcomes (queued/completed/failed/conflict/
 //     rebased/retargeted/batch.* etc.; each emitted on a real merge-queue state
 //     change, never on poll).
+//   - `writer.*` (apex v52/v53, task #24) — writer subtask lifecycle PLUS the new
+//     `writer.subtask.progress` events the SSH ActivityWatchdog emits on every
+//     probe tick its multi-signal work-signature advances (the cross-layer sign-
+//     of-life bridge between the watchdog and this breaker). This is what keeps the
+//     breaker streak alive on a legitimately slow writer turn whose only life
+//     signal is a workspace count+bytes advance (a `pnpm install` window where
+//     codex is silent for minutes while the bash subprocess runs). Each event is
+//     emitted from the writer worker, never on a poll/scheduler tick — the
+//     watchdog's tick cadence IS the writer's sign-of-life cadence.
 //
 // EXCLUDED: `dag.*` (the orchestrator's OWN scheduler emissions — the defeat
 // class above); `convergence.*` / `triage.*` / `demoRun.*` / `designOracle.*` /
-// `checker.*` / `planner.*` / `writer.*` / `template.*` / `recovery.*` / `cost.*`
+// `checker.*` / `planner.*` / `template.*` / `recovery.*` / `cost.*`
 // / `usage.*` / `credential.*` / `workspace.*` / `runner.*` / `allocator.*` /
 // `release.*` / `notification.*` / `review.*` / `github.*` / `deploy.*` /
 // `demo.*` / `hello.*` / `redaction.*` / `benchmark.*` / `ci.*` / `forge.*` /
@@ -67,7 +76,7 @@
 // recoverable (the breaker fires false-positive on a quiet-but-working child,
 // surfaced by a follow-up test); over-exclusion is the bug this fix repairs (a
 // stalled child is mis-classified as making progress and the breaker never fires).
-// The five prefixes above are the
+// The six prefixes above are the
 // confirmed-meaningful set; any future signal-class addition is an explicit
 // whitelist decision (`docs/roadmap/timeout-eradication.md`), never a regex
 // loosening.
@@ -229,4 +238,9 @@ export const WORKER_PROGRESS_EVENT_PREFIXES: readonly string[] = [
   "auditor.%",
   "audit.%",
   "merge.%",
+  // apex v52/v53 fix #24: writer.* (incl. writer.subtask.progress emitted by the SSH activity
+  // watchdog on every tick its multi-signal work-signature advances) bridges the
+  // sign-of-life primitive to the breaker signature, so a slow writer turn whose only
+  // life signal is a pnpm-install workspace advance still keeps the breaker streak alive.
+  "writer.%",
 ] as const;

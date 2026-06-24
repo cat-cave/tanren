@@ -1,3 +1,5 @@
+import type { WatchdogProgressSignal } from "../contracts/commandSubstrate.js";
+
 // Token consumption by TYPE. Disjoint buckets — never fold into one number.
 // All buckets are mutually exclusive and sum to totalTokens.
 export interface TokenUsage {
@@ -83,7 +85,21 @@ export interface WriterAdapter {
   // work a prior subtask already committed) still show the file in its diff, so
   // the checker passes instead of false-rejecting an empty per-iteration delta.
   // The production run path always threads it; fake test adapters ignore it.
-  runWriter(opts: { prompt: string; workspace: string; baseSha?: string }): Promise<WriterResult>;
+  //
+  // `onWatchdogProgress` is the CROSS-LAYER sign-of-life bridge (task #24, apex
+  // v52/v53): each writer adapter forwards it to `buildActivityWatchdog` so the
+  // substrate invokes it on every probe tick the work signature advances. The
+  // writerStage binds a closure that emits `writer.subtask.progress` — counted by
+  // the #21B child-run progress breaker as worker progress. Without this bridge a
+  // legitimately slow writer (a `pnpm install` window) ages out the breaker while
+  // the watchdog itself correctly tolerates the brief signature plateau. Optional;
+  // fake test adapters ignore it.
+  runWriter(opts: {
+    prompt: string;
+    workspace: string;
+    baseSha?: string;
+    onWatchdogProgress?: (signal: WatchdogProgressSignal) => void;
+  }): Promise<WriterResult>;
 }
 
 export interface AnswererRunOptions<TOutput> {

@@ -11,13 +11,7 @@ import {
 import { specLoopStageSensitivityRules } from "./sensitivityRules.loop.js";
 import { templatesSensitivityRules } from "./sensitivityRules.templates.js";
 
-// Sensitivity rule table. Every payload field reachable from an event must have a
-// registered tag (the eventRegistryFieldCoverage test enforces this as a hard CI
-// failure). Tag taxonomy: `public` = any project member; `redacted` = project:admin
-// to view raw; `secret` = platform:admin to view raw. Heuristics: identifiers
-// (runIds/taskIds/sha/paths) + human-authored prose are public; host fingerprints /
-// credential refs / SSH host:port are redacted; secrets / raw tokens / command
-// stdout/stderr are secret. A "[]" path suffix applies to every array element.
+// Sensitivity rule table. Every payload field reachable from an event must have a registered tag (the eventRegistryFieldCoverage test enforces this as a hard CI failure). Tag taxonomy: `public` = any project member; `redacted` = project:admin to view raw; `secret` = platform:admin to view raw. Heuristics: identifiers (runIds/taskIds/sha/paths) + human-authored prose are public; host fingerprints / credential refs / SSH host:port are redacted; secrets / raw tokens / command stdout/stderr are secret. A "[]" path suffix applies to every array element.
 
 export const sensitivityRules: SensitivityRule[] = [
   // run.queued
@@ -41,11 +35,7 @@ export const sensitivityRules: SensitivityRule[] = [
     ["status", "public"],
     ["outcome", "public"],
   ]),
-  // run.failed is PUBLIC, and the worker-level catch wraps a WHOLE run, so the raw
-  // caught error (URLs / refs / command fragments / secret-adjacent text) is NEVER
-  // put here: the worker classifies it into a closed-vocab `failureCode` + `stage` +
-  // a FIXED safe `message` summary (worker/runFailureClassifier); the raw detail goes
-  // to the INTERNAL job_queue.failure_message + a redacted log. All three are safe.
+  // run.failed is PUBLIC, and the worker-level catch wraps a WHOLE run, so the raw caught error (URLs / refs / command fragments / secret-adjacent text) is NEVER put here: the worker classifies it into a closed-vocab `failureCode` + `stage` + a FIXED safe `message` summary (worker/runFailureClassifier); the raw detail goes to the INTERNAL job_queue.failure_message + a redacted log. All three are safe.
   ...rulesFor("run.failed", [
     ["status", "public"],
     ["failureCode", "public"],
@@ -121,9 +111,7 @@ export const sensitivityRules: SensitivityRule[] = [
     ["rationale", "public"],
   ]),
 
-  // writer role — note: tool-call args and decision code snippets are
-  // redacted because they may reference credentials embedded in writer-led
-  // edits.
+  // writer role — note: tool-call args and decision code snippets are redacted because they may reference credentials embedded in writer-led edits.
   ...rulesFor("writer.started", [
     ["taskKind", "public"],
     ["intent", "public"],
@@ -193,6 +181,15 @@ export const sensitivityRules: SensitivityRule[] = [
     ["intent", "public"],
     ["failureKind", "public"],
     ["message", "public"],
+  ]),
+  // task #24 (apex v52/v53) cross-layer sign-of-life bridge — all fields non-secret observability.
+  ...rulesFor("writer.subtask.progress", [
+    ["runId", "public"],
+    ["taskId", "public"],
+    ["subtaskIndex", "public"],
+    ["intent", "public"],
+    ["outputBytesAdvanced", "public"],
+    ["workspaceSignature", "public"],
   ]),
 
   // planner rejection-loop event
@@ -494,6 +491,5 @@ export function ensureSensitivityRulesRegistered(): void {
   registered = true;
 }
 
-// Side-effect import: registers rules at module load. Importing the barrel
-// guarantees rules are live before any decoder or registry consumer runs.
+// Side-effect import: registers rules at module load. Importing the barrel guarantees rules are live before any decoder or registry consumer runs.
 ensureSensitivityRulesRegistered();
