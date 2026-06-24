@@ -13,10 +13,39 @@ import {
   hostKeyFingerprintFromPublicKey,
   type KeyPairGenerator,
 } from "../ssh/keygen.js";
+import {
+  PersistentProvisioningOutageError,
+  ProvisioningTerminalStateError,
+  UnknownProvisioningStateError,
+  pollUntilReady,
+  type ReadinessClassification,
+} from "./readinessConvergence.js";
 import type { RunnerStore } from "./runnerStore.js";
 
 const allocatorName = "hetzner";
 const hetznerApiBase = "https://api.hetzner.cloud/v1";
+
+/**
+ * Hetzner Cloud documented server lifecycle statuses the allocator EXPECTS to
+ * see as an intermediate state on the path to `running`. Anything outside this
+ * set OR {@link HETZNER_TERMINAL_STATUSES} is `unknown_state` (fail-closed
+ * ratchet). Hetzner documents: `initializing`, `starting`, `running`, `stopping`,
+ * `off`, `deleting`, `rebuilding`, `migrating`, `unknown`.
+ */
+const HETZNER_PROVISIONING_STATUSES: ReadonlySet<string> = new Set([
+  "initializing",
+  "starting",
+  "running",
+  "rebuilding",
+  "migrating",
+]);
+
+/**
+ * Hetzner Cloud documented terminal statuses — a server in these states cannot
+ * recover by waiting (it is being torn down, already stopped, or the API has
+ * lost visibility into it). Fires `terminal_error` IMMEDIATELY.
+ */
+const HETZNER_TERMINAL_STATUSES: ReadonlySet<string> = new Set(["stopping", "off", "deleting", "unknown"]);
 
 /**
  * Minimal injectable HTTP client over the Hetzner Cloud API. Only the shapes
@@ -93,8 +122,6 @@ export interface HetznerAllocatorOptions {
   generateKeyPair?: KeyPairGenerator;
   /** Poll interval while waiting for the server to become running. */
   pollIntervalMs?: number;
-  /** Max time to wait for the server to become running + get an IP. */
-  readyTimeoutMs?: number;
   /** Injectable sleep (tests pass a no-op). */
   sleep?: (ms: number) => Promise<void>;
 }
@@ -276,23 +303,76 @@ export class HetznerAllocator implements Allocator {
     }
   }
 
+  /**
+   * Wait for the server to reach `running` with a public IPv4. CONVERGENCE-BASED:
+   * the loop runs UNBOUNDED while the structural signature
+   * (`${status}|${ip-presence}`) keeps advancing — `initializing|no-ip` →
+   * `starting|no-ip` → `running|no-ip` → `running|ip` (ready). It surfaces LOUD
+   * on intelligent non-convergence (an IDENTICAL signature past the saturation
+   * gate = a stuck server, `PersistentProvisioningOutageError`), a documented
+   * Hetzner terminal status (`off`/`deleting`/`stopping`/`unknown`,
+   * `ProvisioningTerminalStateError`), or a brand-new Hetzner status the
+   * allowlist does not recognize (`UnknownProvisioningStateError`, fail-closed
+   * ratchet). NO wall-clock deadline.
+   */
   private async waitForRunning(serverId: number): Promise<HetznerServer> {
     const pollIntervalMs = this.options.pollIntervalMs ?? 3_000;
-    const readyTimeoutMs = this.options.readyTimeoutMs ?? 120_000;
-    const deadline = Date.now() + readyTimeoutMs;
-    for (;;) {
-      const server = await this.client.getServer(serverId);
-      if (server.status === "running" && server.publicIpv4 !== undefined && server.publicIpv4 !== "") {
-        return server;
-      }
-      if (Date.now() >= deadline) {
-        throw new Error(
-          `hetzner server ${serverId} did not become running within ${readyTimeoutMs}ms (last status: ${server.status})`,
-        );
-      }
-      await this.sleep(pollIntervalMs);
+    try {
+      return await pollUntilReady(() => this.client.getServer(serverId), {
+        classify: (server) => classifyHetznerServer(server),
+        signature: (server) => hetznerServerSignature(server),
+        pollIntervalMs,
+        sleep: this.sleep,
+      });
+    } catch (error) {
+      throw wrapHetznerProvisioningError(serverId, error);
     }
   }
+}
+
+/**
+ * Classify a Hetzner server observation. Terminal statuses
+ * (`off`/`deleting`/`stopping`/`unknown`) fire IMMEDIATELY without waiting for
+ * the saturation gate; `initializing`/`starting`/`running`/`rebuilding`/`migrating`
+ * are `advancing`; only `running` + IPv4 is `ready`. A brand-new Hetzner status
+ * is `unknown_state` (fail-closed).
+ */
+function classifyHetznerServer(server: HetznerServer): ReadinessClassification<HetznerServer> {
+  if (server.status === "running" && server.publicIpv4 !== undefined && server.publicIpv4 !== "") {
+    return { kind: "ready", observation: server };
+  }
+  if (HETZNER_TERMINAL_STATUSES.has(server.status)) {
+    return {
+      kind: "terminal_error",
+      reason: `hetzner server ${server.id} entered terminal status '${server.status}' before running`,
+    };
+  }
+  if (HETZNER_PROVISIONING_STATUSES.has(server.status)) {
+    return { kind: "advancing", observation: server };
+  }
+  return { kind: "unknown_state", state: server.status };
+}
+
+/** The STRUCTURAL signature the convergence detector reads — server status + IP-presence. */
+function hetznerServerSignature(server: HetznerServer): string {
+  const ipPart = server.publicIpv4 !== undefined && server.publicIpv4 !== "" ? "ip" : "no-ip";
+  return `${server.status}|${ipPart}`;
+}
+
+function wrapHetznerProvisioningError(serverId: number, error: unknown): Error {
+  if (error instanceof PersistentProvisioningOutageError) {
+    return new Error(`hetzner server ${serverId} did not become running: ${error.message}`, { cause: error });
+  }
+  if (error instanceof ProvisioningTerminalStateError) {
+    return new Error(error.reason, { cause: error });
+  }
+  if (error instanceof UnknownProvisioningStateError) {
+    return new Error(
+      `hetzner server ${serverId} reported an UNKNOWN status '${error.observedState}' the allocator's allowlist does not recognize`,
+      { cause: error },
+    );
+  }
+  return error instanceof Error ? error : new Error(String(error));
 }
 
 interface HetznerServerResponse {

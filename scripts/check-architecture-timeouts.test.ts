@@ -89,7 +89,58 @@ describe("no-arbitrary-timeouts (timeout-class eradication lint)", () => {
   it("flags a whole-op wall-clock deadline (Date.now() + budget)", () => {
     const text = "const deadline = Date.now() + maxBudgetMs;\n";
     const flagged = checkNoArbitraryTimeouts([{ file: srcFile, text }]);
-    expect(flagged.map((item) => item.message)).toEqual([expect.stringContaining("bound on progress")]);
+    // The same line satisfies BOTH the original (c) (`Date.now() + … budget` same-line)
+    // AND the new (c2) (LHS-name deadline assignment). Both fire — that's intentional;
+    // the diagnostic surface is informational, not de-duped across overlapping rules.
+    expect(flagged.map((item) => item.message)).toEqual(
+      expect.arrayContaining([expect.stringContaining("bound on progress")]),
+    );
+    expect(flagged.length).toBeGreaterThanOrEqual(1);
+  });
+
+  // Task #31 (critic-arc R1 #2 / R2): the cloud-allocator disguised survivor. Its
+  // `const deadline = Date.now() + readyTimeoutMs;` has the deadline word as the LHS NAME
+  // (keyword before `=`), and the kill-verb companion `if (Date.now() >= deadline) throw …`
+  // rides a SEPARATE line. The original `Date.now() + … (deadline|budget)` pattern only
+  // matches when the deadline word is on the SAME line as the `Date.now()` RHS — so it
+  // scanned past the LHS-name form for 7 months across 5 cloud allocators. Pin the two
+  // shapes so the survivor cannot reintroduce itself.
+  it("flags a deadline-shape ASSIGNMENT — `const deadline = Date.now() + readyTimeoutMs;` (LHS-name form)", () => {
+    // No `(deadline|budget|expir)` word on the RHS — the original (c) pattern does NOT
+    // fire here; only the new (c2) deadline-assignment pattern catches it.
+    const text = "const deadline = Date.now() + readyTimeoutMs;\n";
+    const flagged = checkNoArbitraryTimeouts([{ file: srcFile, text }]);
+    expect(flagged.map((item) => item.message)).toEqual(
+      expect.arrayContaining([expect.stringContaining("deadline-shape assignment")]),
+    );
+  });
+
+  it("flags a wall-clock kill COMPARISON on its own line — `if (Date.now() >= deadline) throw …`", () => {
+    const text = "if (Date.now() >= deadline) { throw new Error('timeout'); }\n";
+    const flagged = checkNoArbitraryTimeouts([{ file: srcFile, text }]);
+    expect(flagged.map((item) => item.message)).toEqual(
+      expect.arrayContaining([expect.stringContaining("wall-clock kill comparison")]),
+    );
+  });
+
+  it("does NOT flag a non-Date.now() expiry computed from a TTL (the legitimate KEEP-list shape)", () => {
+    // `nowSeconds() + APP_JWT_TTL_SECONDS` is a token-TTL safety-window calc against a
+    // REAL external constraint (the forge expires the token); it is not a wall-clock
+    // kill on legitimate work. Distinct from `Date.now() + readyTimeoutMs`, so the lint
+    // must not fire on this shape.
+    const text = "const expiry = nowSeconds() + APP_JWT_TTL_SECONDS;\n";
+    expect(checkNoArbitraryTimeouts([{ file: srcFile, text }])).toEqual([]);
+  });
+
+  it("honors `// arch-allow: timeout-class` on a deadline-assignment line", () => {
+    const text =
+      "const deadline = Date.now() + readyTimeoutMs; // arch-allow: timeout-class — lease external bound, not a kill\n";
+    expect(checkNoArbitraryTimeouts([{ file: srcFile, text }])).toEqual([]);
+  });
+
+  it("honors `// arch-allow: timeout-class` on a wall-clock kill-comparison line", () => {
+    const text = "if (Date.now() >= deadline) refresh(); // arch-allow: timeout-class — token-TTL refresh window\n";
+    expect(checkNoArbitraryTimeouts([{ file: srcFile, text }])).toEqual([]);
   });
 
   it("flags a fixed quiet-window / no-output-for-N watchdog (a disguised timeout)", () => {

@@ -6,69 +6,50 @@ import {
   type ReleaseReason,
   type RunnerAllocation,
 } from "../contracts/allocator.js";
+import { fetchKubernetesClient } from "./kubernetesFetchClient.js";
+import { KubernetesAllocatorError, type KubernetesClient, type KubernetesPod } from "./kubernetesShared.js";
+import {
+  PersistentProvisioningOutageError,
+  ProvisioningTerminalStateError,
+  UnknownProvisioningStateError,
+  pollUntilReady,
+  type ReadinessClassification,
+} from "./readinessConvergence.js";
 import type { RunnerStore } from "./runnerStore.js";
 
 const allocatorName = "kubernetes";
 
 /**
- * Typed error for Kubernetes provisioning failures, so callers (and tests) can
- * distinguish allocator faults from generic errors.
+ * Kubernetes documented Pod phases the allocator EXPECTS to see as an intermediate
+ * state on the path to `Running`. Anything outside this set OR {@link K8S_TERMINAL_PHASES}
+ * is treated as `unknown_state` — fail-closed ratchet (a new k8s phase forces a code
+ * change here, never a silent infinite loop). The Pod lifecycle documents:
+ * `Pending`, `Running`, `Succeeded`, `Failed`, `Unknown`.
  */
-export class KubernetesAllocatorError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "KubernetesAllocatorError";
-  }
-}
+const K8S_PROVISIONING_PHASES: ReadonlySet<string> = new Set(["Pending", "Running"]);
 
 /**
- * Minimal injectable client over the Kubernetes API. Only the shapes the
- * allocator needs are modeled. Tests inject a fake; production uses
- * {@link fetchKubernetesClient}, a thin bearer-token `fetch` client against the
- * API server (no `@kubernetes/client-node` dependency, matching the AWS
- * thin-client approach).
- *
- * Pod scheduling is asynchronous: `createPod` returns immediately with the Pod
- * in the `Pending` phase; `getPod` must be polled until the phase is `Running`
- * with a non-empty `podIP`. The SSH public key is delivered to the Pod via a
- * per-run Secret created with {@link KubernetesClient.createSecret} (referenced
- * as an env var), so no key material is baked into the Pod spec or image.
+ * Kubernetes documented terminal phases — a Pod in these phases cannot recover by
+ * waiting (it already completed, succeeded, or failed; `Unknown` means kubelet
+ * cannot reach the Pod, which doesn't self-heal as `Running`). Fires the
+ * `terminal_error` arm immediately, never via the fixed-point gate.
  */
-export interface KubernetesClient {
-  createSecret(input: KubernetesSecretInput): Promise<void>;
-  createPod(input: KubernetesPodInput): Promise<KubernetesPod>;
-  getPod(name: string): Promise<KubernetesPod>;
-  deletePod(name: string): Promise<void>;
-  deleteSecret(name: string): Promise<void>;
-}
+const K8S_TERMINAL_PHASES: ReadonlySet<string> = new Set(["Failed", "Succeeded", "Unknown"]);
 
-export interface KubernetesSecretInput {
-  /** Secret name (DNS-1123 safe). */
-  name: string;
-  /** SSH public key authorized for the runner, surfaced to the Pod via env. */
-  sshPublicKey: string;
-  /** Labels applied to the Secret (used to trace it back to a run). */
-  labels: Readonly<Record<string, string>>;
-}
-
-export interface KubernetesPodInput {
-  /** Pod name (DNS-1123 safe). */
-  name: string;
-  /** Runner container image, e.g. `ghcr.io/cat-cave/tanren-runner:v0`. */
-  image: string;
-  /** Name of the Secret holding the SSH public key (mapped to an env var). */
-  sshKeySecretName: string;
-  /** Labels applied to the Pod (used to trace it back to a run). */
-  labels: Readonly<Record<string, string>>;
-}
-
-export interface KubernetesPod {
-  name: string;
-  /** Pending | Running | Succeeded | Failed | Unknown */
-  phase: string;
-  /** Scheduled Pod IP; empty until the Pod is Running on a node. */
-  podIp?: string;
-}
+// The typed error class + minimal-client + pod/condition/container types live in
+// `./kubernetesShared.ts` so the production fetch-client and the allocator can
+// both import them without a circular dependency. Re-exported here for back-compat
+// with existing `import { KubernetesAllocatorError, KubernetesClient, ... } from
+// "./kubernetesAllocator.js"` call sites.
+export {
+  KubernetesAllocatorError,
+  type KubernetesClient,
+  type KubernetesContainerStatus,
+  type KubernetesPod,
+  type KubernetesPodCondition,
+  type KubernetesPodInput,
+  type KubernetesSecretInput,
+} from "./kubernetesShared.js";
 
 export interface KubernetesAllocatorOptions {
   /** API server base URL, e.g. `https://10.0.0.1:6443`. */
@@ -103,8 +84,6 @@ export interface KubernetesAllocatorOptions {
   client?: KubernetesClient;
   /** Poll interval while waiting for the Pod to become Running. */
   pollIntervalMs?: number;
-  /** Max time to wait for the Pod to become Running + get a Pod IP. */
-  readyTimeoutMs?: number;
   /** Injectable sleep (tests pass a no-op). */
   sleep?: (ms: number) => Promise<void>;
 }
@@ -254,28 +233,107 @@ export class KubernetesAllocator implements Allocator {
     await this.client.deleteSecret(secretName).catch(() => {});
   }
 
+  /**
+   * Wait for the Pod to become `Running` with a Pod IP. CONVERGENCE-BASED: the
+   * loop runs UNBOUNDED while the structural signature
+   * (`${phase}|${ip-presence}|<sorted conditions>|<sorted container states>`)
+   * keeps advancing — so `Pending|no-ip|<no conditions>` → `Pending|no-ip|
+   * PodScheduled=True` → `Pending|no-ip|PodScheduled=True,Initialized=True` →
+   * `Running|ip|…|ContainersReady=True` is genuine forward motion (the kubelet is
+   * making progress). It surfaces LOUD on intelligent non-convergence (the SAME
+   * signature past the saturation gate = a wedged Pod, e.g. `ImagePullBackOff`
+   * stuck on the same `back-off N restarting failed container` text), a
+   * documented terminal phase (`Failed`/`Succeeded`/`Unknown`,
+   * `ProvisioningTerminalStateError`), or a brand-new k8s phase the allowlist does
+   * not recognize (`UnknownProvisioningStateError`, fail-closed ratchet). NO
+   * wall-clock deadline.
+   */
   private async waitForRunning(name: string): Promise<KubernetesPod> {
     const pollIntervalMs = this.options.pollIntervalMs ?? 3_000;
-    const readyTimeoutMs = this.options.readyTimeoutMs ?? 120_000;
-    const deadline = Date.now() + readyTimeoutMs;
-    for (;;) {
-      const pod = await this.client.getPod(name);
-      if (pod.phase === "Running" && pod.podIp !== undefined && pod.podIp !== "") {
-        return pod;
-      }
-      if (pod.phase === "Failed" || pod.phase === "Succeeded") {
-        throw new KubernetesAllocatorError(
-          `kubernetes pod ${name} entered terminal phase '${pod.phase}' before becoming reachable`,
-        );
-      }
-      if (Date.now() >= deadline) {
-        throw new KubernetesAllocatorError(
-          `kubernetes pod ${name} did not become Running within ${readyTimeoutMs}ms (last phase: ${pod.phase})`,
-        );
-      }
-      await this.sleep(pollIntervalMs);
+    try {
+      return await pollUntilReady(() => this.client.getPod(name), {
+        classify: (pod) => classifyKubernetesPod(pod),
+        signature: (pod) => kubernetesPodSignature(pod),
+        pollIntervalMs,
+        sleep: this.sleep,
+      });
+    } catch (error) {
+      throw wrapKubernetesProvisioningError(name, error);
     }
   }
+}
+
+/**
+ * Classify a Kubernetes Pod observation. Terminal phases fire IMMEDIATELY; the
+ * provisioning phases drive the convergence loop. The structural signature
+ * folds conditions + container statuses so a kubelet retrying `ImagePullBackOff`
+ * (which advances `back-off N restarting failed container`) reads as forward
+ * motion AS LONG AS the kubelet keeps moving, and converges to a fixed point
+ * only when the same condition/container state recurs past the saturation gate.
+ */
+function classifyKubernetesPod(pod: KubernetesPod): ReadinessClassification<KubernetesPod> {
+  if (pod.phase === "Running" && pod.podIp !== undefined && pod.podIp !== "") {
+    return { kind: "ready", observation: pod };
+  }
+  if (K8S_TERMINAL_PHASES.has(pod.phase)) {
+    return {
+      kind: "terminal_error",
+      reason: `kubernetes pod ${pod.name} entered terminal phase '${pod.phase}' before becoming reachable`,
+    };
+  }
+  if (K8S_PROVISIONING_PHASES.has(pod.phase)) {
+    return { kind: "advancing", observation: pod };
+  }
+  return { kind: "unknown_state", state: pod.phase };
+}
+
+/**
+ * The STRUCTURAL signature the convergence detector reads: Pod phase +
+ * IP-presence + SORTED conditions + SORTED container states. Folding the
+ * conditions + container-status arrays into a deterministic textual signature
+ * lets the convergence detector distinguish a kubelet making real progress
+ * (e.g. flipping `PodScheduled=True` then `Initialized=True`) from a wedged
+ * Pod (same `ImagePullBackOff` reason across consecutive probes).
+ *
+ * SORTED so a non-deterministic order from the API (k8s does not guarantee the
+ * conditions array ordering across reads) is not spuriously detected as
+ * "advancing" forever.
+ */
+function kubernetesPodSignature(pod: KubernetesPod): string {
+  const ipPart = pod.podIp !== undefined && pod.podIp !== "" ? "ip" : "no-ip";
+  const conditionsPart =
+    pod.conditions === undefined || pod.conditions.length === 0
+      ? "no-conds"
+      : [...pod.conditions]
+          .map((c) => `${c.type}=${c.status}`)
+          .sort((a, b) => a.localeCompare(b))
+          .join(",");
+  const containersPart =
+    pod.containerStatuses === undefined || pod.containerStatuses.length === 0
+      ? "no-cstats"
+      : [...pod.containerStatuses]
+          .map((c) => `${c.name}:${c.state}`)
+          .sort((a, b) => a.localeCompare(b))
+          .join(",");
+  return `${pod.phase}|${ipPart}|${conditionsPart}|${containersPart}`;
+}
+
+function wrapKubernetesProvisioningError(podName: string, error: unknown): Error {
+  if (error instanceof PersistentProvisioningOutageError) {
+    return new KubernetesAllocatorError(`kubernetes pod ${podName} did not become Running: ${error.message}`, {
+      cause: error,
+    });
+  }
+  if (error instanceof ProvisioningTerminalStateError) {
+    return new KubernetesAllocatorError(error.reason, { cause: error });
+  }
+  if (error instanceof UnknownProvisioningStateError) {
+    return new KubernetesAllocatorError(
+      `kubernetes pod ${podName} reported an UNKNOWN phase '${error.observedState}' the allocator's allowlist does not recognize`,
+      { cause: error },
+    );
+  }
+  return error instanceof Error ? error : new KubernetesAllocatorError(String(error));
 }
 
 /** Pod / Secret names must be DNS-1123 labels: lowercase, digits, dashes, <=63. */
@@ -296,141 +354,13 @@ function labelValue(value: string): string {
 
 // --- response mapping --------------------------------------------------------
 
-interface PodStatusResponse {
-  phase?: string;
-  podIP?: string;
-}
-
-interface PodResponse {
-  metadata?: { name?: string };
-  status?: PodStatusResponse;
-}
-
-function toPod(body: PodResponse, fallbackName: string): KubernetesPod {
-  return {
-    name: body.metadata?.name ?? fallbackName,
-    phase: body.status?.phase ?? "Unknown",
-    podIp: body.status?.podIP,
-  };
-}
-
-// --- spec builders -----------------------------------------------------------
-
-function secretManifest(input: KubernetesSecretInput, namespace: string): unknown {
-  return {
-    apiVersion: "v1",
-    kind: "Secret",
-    metadata: { name: input.name, namespace, labels: input.labels },
-    type: "Opaque",
-    stringData: { "ssh-authorized-key": input.sshPublicKey },
-  };
-}
-
-function podManifest(input: KubernetesPodInput, namespace: string): unknown {
-  return {
-    apiVersion: "v1",
-    kind: "Pod",
-    metadata: { name: input.name, namespace, labels: input.labels },
-    spec: {
-      restartPolicy: "Never",
-      containers: [
-        {
-          name: "runner",
-          image: input.image,
-          ports: [{ containerPort: 22, name: "ssh" }],
-          env: [
-            {
-              // Must match the env name the runner entrypoint reads
-              // (`runner/entrypoint.sh`: TANREN_RUNNER_AUTHORIZED_KEY) — a
-              // mismatch silently leaves the Pod with no authorized_keys and the
-              // orchestrator can never SSH in. The PUBLIC authorized_keys line is
-              // safe to deliver via a per-run Secret env; the orchestrator's
-              // PRIVATE key never transits here.
-              name: "TANREN_RUNNER_AUTHORIZED_KEY",
-              valueFrom: {
-                secretKeyRef: { name: input.sshKeySecretName, key: "ssh-authorized-key" },
-              },
-            },
-          ],
-        },
-      ],
-    },
-  };
-}
+// Pod API response mapping lives in `./kubernetesPodResponse.ts` (the toPod + the
+// conditions/containerStatuses summarizers) to keep this file under the line cap.
+// Pod + Secret manifests live in `./kubernetesManifests.ts` for the same reason.
 
 // --- production client -------------------------------------------------------
 
-/**
- * Production {@link KubernetesClient} backed by `fetch` against the API server,
- * authenticated with a bearer token. The token + CA are supplied by the caller
- * (resolved from a Vault ref), never read from the environment here. A thin
- * client is used instead of `@kubernetes/client-node` to keep the allocator
- * small, dependency-free, and injectable/mockable like the AWS allocator.
- *
- * The `caPem` option is accepted for parity with in-cluster config; Node's
- * global fetch validates against the system trust store, so pinning a private
- * CA is an operator concern (e.g. NODE_EXTRA_CA_CERTS) rather than something
- * this thin client wires into each request.
- */
-export function fetchKubernetesClient(
-  options: Pick<KubernetesAllocatorOptions, "apiServer" | "token" | "namespace" | "caPem">,
-  fetchImpl: typeof fetch = fetch,
-): KubernetesClient {
-  const base = `${options.apiServer.replace(/\/+$/u, "")}/api/v1/namespaces/${options.namespace}`;
-  const authHeaders = {
-    authorization: `Bearer ${options.token}`,
-    "Content-Type": "application/json",
-  } as const;
-
-  async function create(resource: string, manifest: unknown, action: string): Promise<PodResponse> {
-    const response = await fetchImpl(`${base}/${resource}`, {
-      method: "POST",
-      headers: authHeaders,
-      body: JSON.stringify(manifest),
-    });
-    if (!response.ok) {
-      throw new KubernetesAllocatorError(`kubernetes ${action} failed: ${response.status} ${await response.text()}`);
-    }
-    return (await response.json()) as PodResponse;
-  }
-
-  async function remove(resource: string, name: string, action: string): Promise<void> {
-    const response = await fetchImpl(`${base}/${resource}/${name}`, {
-      method: "DELETE",
-      headers: authHeaders,
-    });
-    // 404 means already gone — treat as success (idempotent destroy).
-    if (!response.ok && response.status !== 404) {
-      throw new KubernetesAllocatorError(`kubernetes ${action} failed: ${response.status} ${await response.text()}`);
-    }
-  }
-
-  return {
-    async createSecret(input: KubernetesSecretInput): Promise<void> {
-      await create("secrets", secretManifest(input, options.namespace), "createSecret");
-    },
-
-    async createPod(input: KubernetesPodInput): Promise<KubernetesPod> {
-      return toPod(await create("pods", podManifest(input, options.namespace), "createPod"), input.name);
-    },
-
-    async getPod(name: string): Promise<KubernetesPod> {
-      const response = await fetchImpl(`${base}/pods/${name}`, {
-        method: "GET",
-        headers: authHeaders,
-      });
-      if (!response.ok) {
-        throw new KubernetesAllocatorError(`kubernetes getPod failed: ${response.status} ${await response.text()}`);
-      }
-      return toPod((await response.json()) as PodResponse, name);
-    },
-
-    async deletePod(name: string): Promise<void> {
-      await remove("pods", name, "deletePod");
-    },
-
-    async deleteSecret(name: string): Promise<void> {
-      await remove("secrets", name, "deleteSecret");
-    },
-  };
-}
+// `fetchKubernetesClient` lives in `./kubernetesFetchClient.ts` to keep this file
+// under the 500-line cap. Re-exported here so existing call sites keep their
+// `import { fetchKubernetesClient } from "./kubernetesAllocator.js"` working.
+export { fetchKubernetesClient } from "./kubernetesFetchClient.js";

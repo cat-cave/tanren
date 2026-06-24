@@ -6,68 +6,62 @@ import {
   type ReleaseReason,
   type RunnerAllocation,
 } from "../contracts/allocator.js";
+import { fetchGcpComputeClient } from "./gcpFetchClient.js";
+import { GcpAllocatorError, type GcpComputeClient, type GcpInstance, type GcpOperation } from "./gcpShared.js";
+import {
+  PersistentProvisioningOutageError,
+  ProvisioningTerminalStateError,
+  UnknownProvisioningStateError,
+  pollUntilReady,
+  type ReadinessClassification,
+} from "./readinessConvergence.js";
 import type { RunnerStore } from "./runnerStore.js";
 
 const allocatorName = "gcp";
-const gcpComputeApiBase = "https://compute.googleapis.com/compute/v1";
 
 /**
- * Typed error for GCP Compute Engine provisioning failures, so callers (and
- * tests) can distinguish allocator faults from generic errors.
+ * GCP documented zone operation statuses. `DONE` is the ready terminus for the
+ * operation poll; `PENDING` and `RUNNING` are intermediate. An operation `error`
+ * field surfaces as a terminal_error arm immediately.
  */
-export class GcpAllocatorError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "GcpAllocatorError";
-  }
-}
+const GCP_OPERATION_STATUSES: ReadonlySet<string> = new Set(["PENDING", "RUNNING", "DONE"]);
 
 /**
- * Minimal injectable HTTP client over the GCP Compute Engine v1 API. Only the
- * shapes the allocator needs are modeled. Tests inject a fake; production uses
- * {@link fetchGcpComputeClient}.
- *
- * GCP provisioning is asynchronous: `insertInstance` returns a zone Operation
- * that must be polled to completion via `getZoneOperation`, after which
- * `getInstance` exposes the RUNNING state and external IP.
+ * GCP documented instance lifecycle statuses the allocator EXPECTS to see as an
+ * intermediate state on the path to `RUNNING`. Anything outside this set OR
+ * {@link GCP_INSTANCE_TERMINAL_STATUSES} is `unknown_state` — fail-closed ratchet.
+ * Compute Engine documents: PROVISIONING, STAGING, RUNNING, STOPPING, STOPPED,
+ * SUSPENDING, SUSPENDED, TERMINATED, REPAIRING.
  */
-export interface GcpComputeClient {
-  insertInstance(input: GcpInsertInstanceInput): Promise<GcpOperation>;
-  getZoneOperation(operationName: string): Promise<GcpOperation>;
-  getInstance(instanceName: string): Promise<GcpInstance>;
-  deleteInstance(instanceName: string): Promise<void>;
-}
+const GCP_INSTANCE_PROVISIONING_STATUSES: ReadonlySet<string> = new Set([
+  "PROVISIONING",
+  "STAGING",
+  "RUNNING",
+  "REPAIRING",
+]);
 
-export interface GcpInsertInstanceInput {
-  /** Instance name, DNS-1035 safe (lowercase, digits, dashes). */
-  name: string;
-  /** Machine type short name, e.g. `e2-small`. */
-  machineType: string;
-  /** Source image, e.g. `projects/cos-cloud/global/images/family/cos-stable`. */
-  sourceImage: string;
-  /** SSH username authorized on the instance. */
-  sshUsername: string;
-  /** Runner SSH public key, injected via instance metadata. */
-  sshPublicKey: string;
-  /** GCE labels applied to the instance (used to trace it back to a run). */
-  labels?: Record<string, string>;
-}
+/**
+ * GCP documented instance terminal statuses — an instance in these states cannot
+ * recover by waiting (it has been torn down or is being torn down).
+ */
+const GCP_INSTANCE_TERMINAL_STATUSES: ReadonlySet<string> = new Set([
+  "STOPPING",
+  "STOPPED",
+  "SUSPENDING",
+  "SUSPENDED",
+  "TERMINATED",
+]);
 
-/** A GCP long-running zone operation. */
-export interface GcpOperation {
-  name: string;
-  /** PENDING | RUNNING | DONE */
-  status: string;
-  /** Present when the operation failed. */
-  error?: string;
-}
-
-export interface GcpInstance {
-  name: string;
-  /** PROVISIONING | STAGING | RUNNING | STOPPING | TERMINATED */
-  status: string;
-  externalIp?: string;
-}
+// The typed error class + minimal-client + types live in `./gcpShared.ts` so the
+// production fetch-client and the allocator can both import them without a circular
+// dependency. Re-exported here for back-compat with existing imports.
+export {
+  GcpAllocatorError,
+  type GcpComputeClient,
+  type GcpInsertInstanceInput,
+  type GcpInstance,
+  type GcpOperation,
+} from "./gcpShared.js";
 
 export interface GcpAllocatorOptions {
   /**
@@ -101,8 +95,6 @@ export interface GcpAllocatorOptions {
   client?: GcpComputeClient;
   /** Poll interval while waiting for the operation + instance to become ready. */
   pollIntervalMs?: number;
-  /** Max time to wait for the instance to become RUNNING + get an external IP. */
-  readyTimeoutMs?: number;
   /** Injectable sleep (tests pass a no-op). */
   sleep?: (ms: number) => Promise<void>;
 }
@@ -227,47 +219,137 @@ export class GcpAllocator implements Allocator {
     await this.options.runners.release(runnerId);
   }
 
+  /**
+   * Wait for the GCP zone insert operation to complete. CONVERGENCE-BASED: the
+   * loop runs UNBOUNDED while the operation status signature changes
+   * (`PENDING` → `RUNNING` → `DONE` = ready). An operation's `error` field fires
+   * the `terminal_error` arm IMMEDIATELY. The first probe uses the operation
+   * handle the caller already has; subsequent probes refetch.
+   */
   private async waitForOperation(operation: GcpOperation): Promise<void> {
     const pollIntervalMs = this.options.pollIntervalMs ?? 3_000;
-    const readyTimeoutMs = this.options.readyTimeoutMs ?? 120_000;
-    const deadline = Date.now() + readyTimeoutMs;
-    let current = operation;
-    for (;;) {
-      if (current.error !== undefined && current.error !== "") {
-        throw new GcpAllocatorError(`gcp insert operation ${current.name} failed: ${current.error}`);
-      }
-      if (current.status === "DONE") {
-        return;
-      }
-      if (Date.now() >= deadline) {
-        throw new GcpAllocatorError(
-          `gcp insert operation ${current.name} did not complete within ${readyTimeoutMs}ms ` +
-            `(last status: ${current.status})`,
-        );
-      }
-      await this.sleep(pollIntervalMs);
-      current = await this.client.getZoneOperation(current.name);
+    let isFirst = true;
+    try {
+      await pollUntilReady(
+        async () => {
+          if (isFirst) {
+            isFirst = false;
+            return operation;
+          }
+          return this.client.getZoneOperation(operation.name);
+        },
+        {
+          classify: (op) => classifyGcpOperation(op),
+          signature: (op) => gcpOperationSignature(op),
+          pollIntervalMs,
+          sleep: this.sleep,
+        },
+      );
+    } catch (error) {
+      throw wrapGcpProvisioningError(`insert operation ${operation.name}`, error);
     }
   }
 
+  /**
+   * Wait for the GCP instance to reach `RUNNING` with an external IP.
+   * CONVERGENCE-BASED: the loop runs UNBOUNDED while the structural signature
+   * (`${status}|${ip-presence}`) keeps advancing — `PROVISIONING|no-ip` →
+   * `STAGING|no-ip` → `RUNNING|no-ip` → `RUNNING|ip` (ready). Terminal arms
+   * fire IMMEDIATELY; a brand-new GCP status surfaces as `unknown_state`
+   * (fail-closed ratchet). NO wall-clock deadline.
+   */
   private async waitForRunning(instanceName: string): Promise<GcpInstance> {
     const pollIntervalMs = this.options.pollIntervalMs ?? 3_000;
-    const readyTimeoutMs = this.options.readyTimeoutMs ?? 120_000;
-    const deadline = Date.now() + readyTimeoutMs;
-    for (;;) {
-      const instance = await this.client.getInstance(instanceName);
-      if (instance.status === "RUNNING" && instance.externalIp !== undefined && instance.externalIp !== "") {
-        return instance;
-      }
-      if (Date.now() >= deadline) {
-        throw new GcpAllocatorError(
-          `gcp instance ${instanceName} did not become RUNNING within ${readyTimeoutMs}ms ` +
-            `(last status: ${instance.status})`,
-        );
-      }
-      await this.sleep(pollIntervalMs);
+    try {
+      return await pollUntilReady(() => this.client.getInstance(instanceName), {
+        classify: (instance) => classifyGcpInstance(instance),
+        signature: (instance) => gcpInstanceSignature(instance),
+        pollIntervalMs,
+        sleep: this.sleep,
+      });
+    } catch (error) {
+      throw wrapGcpProvisioningError(`instance ${instanceName}`, error);
     }
   }
+}
+
+/**
+ * Classify a GCP zone operation. `DONE` is `ready` (the operation completed
+ * successfully). A non-empty `error` field is a `terminal_error` IMMEDIATELY
+ * (the operation failed at the cloud — it cannot recover by waiting). `PENDING`
+ * / `RUNNING` are `advancing`; anything else is `unknown_state` (fail-closed).
+ */
+function classifyGcpOperation(operation: GcpOperation): ReadinessClassification<GcpOperation> {
+  if (operation.error !== undefined && operation.error !== "") {
+    return {
+      kind: "terminal_error",
+      reason: `gcp insert operation ${operation.name} failed: ${operation.error}`,
+    };
+  }
+  if (operation.status === "DONE") {
+    return { kind: "ready", observation: operation };
+  }
+  if (GCP_OPERATION_STATUSES.has(operation.status)) {
+    return { kind: "advancing", observation: operation };
+  }
+  return { kind: "unknown_state", state: operation.status };
+}
+
+/**
+ * The STRUCTURAL signature of a GCP zone operation — just the status token
+ * (`PENDING` / `RUNNING`). `DONE` resolves as ready before the signature is
+ * read, and an error fires terminal IMMEDIATELY, so this is only ever read on
+ * `advancing` observations.
+ */
+function gcpOperationSignature(operation: GcpOperation): string {
+  return operation.status;
+}
+
+/**
+ * Classify a GCP instance observation. Terminal statuses
+ * (`STOPPING`/`STOPPED`/`SUSPENDING`/`SUSPENDED`/`TERMINATED`) fire IMMEDIATELY.
+ * `PROVISIONING`/`STAGING`/`RUNNING`/`REPAIRING` are `advancing`; only
+ * `RUNNING` + external IP is `ready`. A brand-new GCP status string is
+ * `unknown_state` (fail-closed).
+ */
+function classifyGcpInstance(instance: GcpInstance): ReadinessClassification<GcpInstance> {
+  if (instance.status === "RUNNING" && instance.externalIp !== undefined && instance.externalIp !== "") {
+    return { kind: "ready", observation: instance };
+  }
+  if (GCP_INSTANCE_TERMINAL_STATUSES.has(instance.status)) {
+    return {
+      kind: "terminal_error",
+      reason: `gcp instance ${instance.name} entered terminal status '${instance.status}' before RUNNING`,
+    };
+  }
+  if (GCP_INSTANCE_PROVISIONING_STATUSES.has(instance.status)) {
+    return { kind: "advancing", observation: instance };
+  }
+  return { kind: "unknown_state", state: instance.status };
+}
+
+/** The STRUCTURAL signature the convergence detector reads — instance status + IP-presence. */
+function gcpInstanceSignature(instance: GcpInstance): string {
+  const ipPart = instance.externalIp !== undefined && instance.externalIp !== "" ? "ip" : "no-ip";
+  return `${instance.status}|${ipPart}`;
+}
+
+function wrapGcpProvisioningError(resourceDescription: string, error: unknown): Error {
+  if (error instanceof PersistentProvisioningOutageError) {
+    return new GcpAllocatorError(`gcp ${resourceDescription} did not become RUNNING: ${error.message}`, {
+      cause: error,
+    });
+  }
+  if (error instanceof ProvisioningTerminalStateError) {
+    return new GcpAllocatorError(error.reason, { cause: error });
+  }
+  if (error instanceof UnknownProvisioningStateError) {
+    return new GcpAllocatorError(
+      `gcp ${resourceDescription} reported an UNKNOWN status '${error.observedState}' the allocator's allowlist does not recognize`,
+      { cause: error },
+    );
+  }
+  return error instanceof Error ? error : new GcpAllocatorError(String(error));
 }
 
 /** GCE labels must be lowercase, <=63 chars, [a-z0-9_-]. */
@@ -278,138 +360,7 @@ function labelValue(value: string): string {
     .slice(0, 63);
 }
 
-interface GcpOperationResponse {
-  name: string;
-  status: string;
-  error?: { errors?: ReadonlyArray<{ message?: string }> | null } | null;
-}
-
-interface GcpAccessConfigResponse {
-  natIP?: string;
-}
-
-interface GcpNetworkInterfaceResponse {
-  accessConfigs?: ReadonlyArray<GcpAccessConfigResponse> | null;
-}
-
-interface GcpInstanceResponse {
-  name: string;
-  status: string;
-  networkInterfaces?: ReadonlyArray<GcpNetworkInterfaceResponse> | null;
-}
-
-function operationErrorOf(error: GcpOperationResponse["error"]): string | undefined {
-  if (error === null || error === undefined) {
-    return undefined;
-  }
-  const errors = error.errors;
-  if (errors === null || errors === undefined || errors.length === 0) {
-    return undefined;
-  }
-  return errors.map((e) => e.message ?? "unknown error").join("; ");
-}
-
-function toOperation(body: GcpOperationResponse): GcpOperation {
-  return { name: body.name, status: body.status, error: operationErrorOf(body.error) };
-}
-
-function externalIpOf(interfaces: ReadonlyArray<GcpNetworkInterfaceResponse> | null | undefined): string | undefined {
-  if (interfaces === null || interfaces === undefined) {
-    return undefined;
-  }
-  for (const iface of interfaces) {
-    for (const config of iface.accessConfigs ?? []) {
-      if (config.natIP !== undefined && config.natIP !== "") {
-        return config.natIP;
-      }
-    }
-  }
-  return undefined;
-}
-
-function toInstance(body: GcpInstanceResponse): GcpInstance {
-  return {
-    name: body.name,
-    status: body.status,
-    externalIp: externalIpOf(body.networkInterfaces),
-  };
-}
-
-/**
- * Production {@link GcpComputeClient} backed by `fetch` against the Compute
- * Engine v1 API. The access token is supplied by the caller (minted from a
- * Vault-resolved service-account ref), never read from the environment here.
- */
-export function fetchGcpComputeClient(
-  options: Pick<GcpAllocatorOptions, "accessToken" | "project" | "zone">,
-  fetchImpl: typeof fetch = fetch,
-): GcpComputeClient {
-  const { accessToken, project, zone } = options;
-  const authHeaders = {
-    authorization: `Bearer ${accessToken}`,
-    "Content-Type": "application/json",
-  } as const;
-  const zoneBase = `${gcpComputeApiBase}/projects/${project}/zones/${zone}`;
-
-  return {
-    async insertInstance(input: GcpInsertInstanceInput): Promise<GcpOperation> {
-      const response = await fetchImpl(`${zoneBase}/instances`, {
-        method: "POST",
-        headers: authHeaders,
-        body: JSON.stringify({
-          name: input.name,
-          machineType: `zones/${zone}/machineTypes/${input.machineType}`,
-          labels: input.labels,
-          disks: [
-            {
-              boot: true,
-              autoDelete: true,
-              initializeParams: { sourceImage: input.sourceImage },
-            },
-          ],
-          networkInterfaces: [{ accessConfigs: [{ type: "ONE_TO_ONE_NAT", name: "External NAT" }] }],
-          metadata: {
-            items: [{ key: "ssh-keys", value: `${input.sshUsername}:${input.sshPublicKey}` }],
-          },
-        }),
-      });
-      if (!response.ok) {
-        throw new GcpAllocatorError(`gcp insertInstance failed: ${response.status} ${await response.text()}`);
-      }
-      return toOperation((await response.json()) as GcpOperationResponse);
-    },
-
-    async getZoneOperation(operationName: string): Promise<GcpOperation> {
-      const response = await fetchImpl(`${zoneBase}/operations/${operationName}`, {
-        method: "GET",
-        headers: authHeaders,
-      });
-      if (!response.ok) {
-        throw new GcpAllocatorError(`gcp getZoneOperation failed: ${response.status} ${await response.text()}`);
-      }
-      return toOperation((await response.json()) as GcpOperationResponse);
-    },
-
-    async getInstance(instanceName: string): Promise<GcpInstance> {
-      const response = await fetchImpl(`${zoneBase}/instances/${instanceName}`, {
-        method: "GET",
-        headers: authHeaders,
-      });
-      if (!response.ok) {
-        throw new GcpAllocatorError(`gcp getInstance failed: ${response.status} ${await response.text()}`);
-      }
-      return toInstance((await response.json()) as GcpInstanceResponse);
-    },
-
-    async deleteInstance(instanceName: string): Promise<void> {
-      const response = await fetchImpl(`${zoneBase}/instances/${instanceName}`, {
-        method: "DELETE",
-        headers: authHeaders,
-      });
-      // 404 means already gone — treat as success (idempotent destroy).
-      if (!response.ok && response.status !== 404) {
-        throw new GcpAllocatorError(`gcp deleteInstance failed: ${response.status} ${await response.text()}`);
-      }
-    },
-  };
-}
+// `fetchGcpComputeClient` (the production fetch-backed client + the response
+// mapping helpers) lives in `./gcpFetchClient.ts` to keep this file under the
+// line cap. Re-exported here so existing call sites keep their existing import.
+export { fetchGcpComputeClient } from "./gcpFetchClient.js";

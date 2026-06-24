@@ -7,6 +7,7 @@ import {
   type DigitalOceanCreateDropletInput,
   type DigitalOceanDroplet,
 } from "../src/engine/allocators/digitalOceanAllocator.js";
+import { PersistentProvisioningOutageError } from "../src/engine/allocators/readinessConvergence.js";
 import type { ClaimRunnerInput, RunnerStore } from "../src/engine/allocators/runnerStore.js";
 
 class FakeRunnerStore implements RunnerStore {
@@ -25,7 +26,17 @@ class FakeDigitalOceanClient implements DigitalOceanClient {
   readonly created: DigitalOceanCreateDropletInput[] = [];
   readonly deleted: number[] = [];
   private getCalls = 0;
-  constructor(private readonly opts: { neverActive?: boolean; noIp?: boolean; emptyIp?: boolean } = {}) {}
+  constructor(
+    private readonly opts: {
+      neverActive?: boolean;
+      noIp?: boolean;
+      emptyIp?: boolean;
+      /** Returned on every poll — pins a documented terminal status (off/archive). */
+      terminalStatus?: string;
+      /** Returned on every poll — pins a brand-new unrecognized status string. */
+      unknownStatus?: string;
+    } = {},
+  ) {}
 
   async createDroplet(input: DigitalOceanCreateDropletInput): Promise<DigitalOceanDroplet> {
     this.created.push(input);
@@ -33,6 +44,12 @@ class FakeDigitalOceanClient implements DigitalOceanClient {
   }
   async getDroplet(dropletId: number): Promise<DigitalOceanDroplet> {
     this.getCalls += 1;
+    if (this.opts.terminalStatus !== undefined) {
+      return { id: dropletId, status: this.opts.terminalStatus };
+    }
+    if (this.opts.unknownStatus !== undefined) {
+      return { id: dropletId, status: this.opts.unknownStatus };
+    }
     if (this.opts.neverActive) {
       return { id: dropletId, status: "new" };
     }
@@ -109,28 +126,42 @@ describe("DigitalOceanAllocator", () => {
     expect(client.deleted).toEqual([99]);
   });
 
-  it("surfaces a typed error and destroys the droplet if it never becomes active", async () => {
+  // Task #31: the wait now polls on STRUCTURAL signature progress (no wall-clock
+  // deadline). A droplet stuck at `new|no-ip` returns the SAME signature every probe,
+  // so the loop crosses the saturation gate and surfaces
+  // `PersistentProvisioningOutageError` LOUD (wrapped in the per-allocator typed error
+  // with `cause` preserved so the inner stuck-signature + probe-count remain accessible).
+  it("surfaces a typed error and destroys the droplet on a stuck-signature fixed point (never becomes active)", async () => {
     const client = new FakeDigitalOceanClient({ neverActive: true });
     const runners = new FakeRunnerStore();
-    const allocator = new DigitalOceanAllocator({
-      ...baseOpts(client, runners),
-      readyTimeoutMs: 5,
-      pollIntervalMs: 1,
-    });
-    await expect(allocator.allocate(req("run_3"))).rejects.toBeInstanceOf(DigitalOceanAllocatorError);
-    await expect(allocator.allocate(req("run_3"))).rejects.toThrow(/did not become active/u);
+    const allocator = new DigitalOceanAllocator({ ...baseOpts(client, runners), pollIntervalMs: 1 });
+    let caught: unknown;
+    try {
+      await allocator.allocate(req("run_3"));
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(DigitalOceanAllocatorError);
+    expect((caught as Error).message).toMatch(/did not become active/u);
+    // The cause chain carries the inner convergence-class outage so the stuck
+    // signature + probe count remain diagnosable to callers.
+    expect((caught as { cause?: unknown }).cause).toBeInstanceOf(PersistentProvisioningOutageError);
+    expect((caught as { cause: PersistentProvisioningOutageError }).cause.stuckSignature).toBe("new|no-ip");
     expect(client.deleted).toContain(99);
   });
 
-  it("surfaces a typed error and destroys the droplet if it has no public IP", async () => {
+  it("surfaces a typed error and destroys the droplet on a stuck-signature fixed point (no public IP)", async () => {
     const client = new FakeDigitalOceanClient({ noIp: true });
     const runners = new FakeRunnerStore();
-    const allocator = new DigitalOceanAllocator({
-      ...baseOpts(client, runners),
-      readyTimeoutMs: 5,
-      pollIntervalMs: 1,
-    });
-    await expect(allocator.allocate(req("run_4"))).rejects.toBeInstanceOf(DigitalOceanAllocatorError);
+    const allocator = new DigitalOceanAllocator({ ...baseOpts(client, runners), pollIntervalMs: 1 });
+    let caught: unknown;
+    try {
+      await allocator.allocate(req("run_4"));
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(DigitalOceanAllocatorError);
+    expect((caught as { cause?: unknown }).cause).toBeInstanceOf(PersistentProvisioningOutageError);
     expect(client.deleted).toContain(99);
   });
 
@@ -162,16 +193,13 @@ describe("DigitalOceanAllocator", () => {
 
   // waitForActive requires "active" AND a non-empty IPv4. An empty-string IPv4
   // must NOT satisfy the ready condition: a mutant dropping the `ip === ""` arm
-  // would return immediately with a bogus empty host. Here it keeps polling to
-  // the deadline and the droplet is destroyed.
-  it("treats an empty-string IPv4 as not-yet-active and destroys on timeout", async () => {
+  // would return immediately with a bogus empty host. Here it keeps polling and
+  // ultimately surfaces the stuck-signature fixed point (active|no-ip), and the
+  // droplet is destroyed.
+  it("treats an empty-string IPv4 as not-yet-active and destroys on stuck-signature fixed point", async () => {
     const client = new FakeDigitalOceanClient({ emptyIp: true });
     const runners = new FakeRunnerStore();
-    const allocator = new DigitalOceanAllocator({
-      ...baseOpts(client, runners),
-      readyTimeoutMs: 5,
-      pollIntervalMs: 1,
-    });
+    const allocator = new DigitalOceanAllocator({ ...baseOpts(client, runners), pollIntervalMs: 1 });
     await expect(allocator.allocate(req("run_empty"))).rejects.toThrow(/did not become active/u);
     expect(client.deleted).toContain(99);
     expect(runners.claims).toEqual([]);
@@ -330,3 +358,7 @@ describe("DigitalOceanAllocator", () => {
     expect(captured.method).toBe("DELETE");
   });
 });
+
+// Task #31: the shared readiness-convergence conformance suite for DigitalOcean
+// lives in `digitalOceanAllocator.readinessConformance.test.ts` (split to keep
+// each test file under the line cap).

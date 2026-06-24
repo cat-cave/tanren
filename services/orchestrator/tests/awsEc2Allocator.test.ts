@@ -7,6 +7,7 @@ import {
   type AwsEc2Instance,
   type AwsRunInstancesInput,
 } from "../src/engine/allocators/awsEc2Allocator.js";
+import { PersistentProvisioningOutageError } from "../src/engine/allocators/readinessConvergence.js";
 import type { ClaimRunnerInput, RunnerStore } from "../src/engine/allocators/runnerStore.js";
 
 class FakeRunnerStore implements RunnerStore {
@@ -36,6 +37,8 @@ class FakeAwsEc2Client implements AwsEc2Client {
       emptyIp?: boolean;
       terminal?: boolean;
       terminalState?: string;
+      /** Pin a brand-new unrecognized state string the allowlist doesn't know. */
+      unknownState?: string;
     } = {},
   ) {}
 
@@ -46,6 +49,9 @@ class FakeAwsEc2Client implements AwsEc2Client {
   }
   async describeInstance(instanceId: string): Promise<AwsEc2Instance> {
     this.getCalls += 1;
+    if (this.opts.unknownState !== undefined) {
+      return { instanceId, state: this.opts.unknownState };
+    }
     if (this.opts.terminal) {
       return { instanceId, state: this.opts.terminalState ?? "terminated" };
     }
@@ -156,15 +162,22 @@ describe("AwsEc2Allocator", () => {
     expect(client.terminated).toEqual([]);
   });
 
-  it("surfaces a typed error and terminates if the instance never runs", async () => {
+  // Task #31: the wait now polls on STRUCTURAL signature progress (no wall-clock
+  // deadline). An instance stuck at `pending|no-ip` returns the SAME signature every
+  // probe, so the loop crosses the saturation gate and surfaces
+  // `PersistentProvisioningOutageError` LOUD (wrapped in the per-allocator typed
+  // error with `cause` preserved so the inner stuck-signature is accessible).
+  it("surfaces a typed error and terminates on a stuck-signature fixed point (instance never runs)", async () => {
     const client = new FakeAwsEc2Client({ neverRunning: true });
     const runners = new FakeRunnerStore();
-    const allocator = new AwsEc2Allocator({
-      ...baseOpts(client, runners),
-      readyTimeoutMs: 5,
-      pollIntervalMs: 1,
-    });
-    await expect(allocator.allocate(req("run_3"))).rejects.toThrow(/did not become running/u);
+    const allocator = new AwsEc2Allocator({ ...baseOpts(client, runners), pollIntervalMs: 1 });
+    const caught = (await allocator.allocate(req("run_3")).catch((error: unknown) => error)) as Error & {
+      cause?: PersistentProvisioningOutageError;
+    };
+    expect(caught).toBeInstanceOf(AwsEc2AllocatorError);
+    expect(caught.message).toMatch(/did not become running/u);
+    expect(caught.cause).toBeInstanceOf(PersistentProvisioningOutageError);
+    expect(caught.cause?.stuckSignature).toBe("pending|no-ip");
     expect(client.terminated).toContain("i-1");
   });
 
@@ -176,15 +189,15 @@ describe("AwsEc2Allocator", () => {
     expect(client.terminated).toContain("i-1");
   });
 
-  it("surfaces a typed error and terminates if it has no public IP", async () => {
+  it("surfaces a typed error and terminates on a stuck-signature fixed point (no public IP)", async () => {
     const client = new FakeAwsEc2Client({ noIp: true });
     const runners = new FakeRunnerStore();
-    const allocator = new AwsEc2Allocator({
-      ...baseOpts(client, runners),
-      readyTimeoutMs: 5,
-      pollIntervalMs: 1,
-    });
-    await expect(allocator.allocate(req("run_4"))).rejects.toBeInstanceOf(AwsEc2AllocatorError);
+    const allocator = new AwsEc2Allocator({ ...baseOpts(client, runners), pollIntervalMs: 1 });
+    const caught = (await allocator.allocate(req("run_4")).catch((error: unknown) => error)) as Error & {
+      cause?: PersistentProvisioningOutageError;
+    };
+    expect(caught).toBeInstanceOf(AwsEc2AllocatorError);
+    expect(caught.cause).toBeInstanceOf(PersistentProvisioningOutageError);
     expect(client.terminated).toContain("i-1");
   });
 
@@ -219,15 +232,12 @@ describe("AwsEc2Allocator", () => {
   // waitForRunning requires `running` AND a non-empty public IP. An empty-string
   // IP must NOT satisfy the ready condition: a mutant dropping the `ip === ""`
   // arm would return immediately with a bogus empty host. Here the empty IP
-  // keeps the wait polling to the deadline, and the instance is terminated.
-  it("treats an empty-string public IP as not-yet-ready and terminates on timeout", async () => {
+  // keeps the wait polling and ultimately surfaces the stuck-signature fixed
+  // point (`running|no-ip`), and the instance is terminated.
+  it("treats an empty-string public IP as not-yet-ready and terminates on stuck-signature fixed point", async () => {
     const client = new FakeAwsEc2Client({ emptyIp: true });
     const runners = new FakeRunnerStore();
-    const allocator = new AwsEc2Allocator({
-      ...baseOpts(client, runners),
-      readyTimeoutMs: 5,
-      pollIntervalMs: 1,
-    });
+    const allocator = new AwsEc2Allocator({ ...baseOpts(client, runners), pollIntervalMs: 1 });
     await expect(allocator.allocate(req("run_empty"))).rejects.toThrow(/did not become running/u);
     expect(client.terminated).toContain("i-1");
     expect(runners.claims).toEqual([]);
@@ -481,3 +491,7 @@ describe("fetchAwsEc2Client", () => {
     expect(url).toMatch(/Version=2016-11-15/u);
   });
 });
+
+// Task #31: the shared readiness-convergence conformance suite for AWS EC2
+// lives in `awsEc2Allocator.readinessConformance.test.ts` (split to keep
+// each test file under the line cap).

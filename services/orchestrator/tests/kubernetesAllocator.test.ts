@@ -8,6 +8,7 @@ import {
   type KubernetesPodInput,
   type KubernetesSecretInput,
 } from "../src/engine/allocators/kubernetesAllocator.js";
+import { PersistentProvisioningOutageError } from "../src/engine/allocators/readinessConvergence.js";
 import type { ClaimRunnerInput, RunnerStore } from "../src/engine/allocators/runnerStore.js";
 
 class FakeRunnerStore implements RunnerStore {
@@ -38,6 +39,8 @@ class FakeKubernetesClient implements KubernetesClient {
       emptyIp?: boolean;
       terminal?: boolean;
       terminalPhase?: string;
+      /** Pin a brand-new unrecognized phase string the allowlist doesn't know. */
+      unknownPhase?: string;
     } = {},
   ) {}
 
@@ -50,6 +53,9 @@ class FakeKubernetesClient implements KubernetesClient {
   }
   async getPod(name: string): Promise<KubernetesPod> {
     this.getCalls += 1;
+    if (this.opts.unknownPhase !== undefined) {
+      return { name, phase: this.opts.unknownPhase };
+    }
     if (this.opts.terminal) {
       return { name, phase: this.opts.terminalPhase ?? "Failed" };
     }
@@ -182,15 +188,20 @@ describe("KubernetesAllocator", () => {
     expect(client.deletedSecrets).toEqual([]);
   });
 
-  it("surfaces a typed error and cleans up if the pod never becomes Running", async () => {
+  // Task #31: the wait now polls on STRUCTURAL signature progress (no wall-clock
+  // deadline). A pod stuck at `Pending|no-ip|no-conds|no-cstats` returns the SAME
+  // signature every probe, so the loop crosses the saturation gate and surfaces
+  // `PersistentProvisioningOutageError` LOUD (wrapped with `cause` preserved).
+  it("surfaces a typed error and cleans up on a stuck-signature fixed point (pod never Running)", async () => {
     const client = new FakeKubernetesClient({ neverRunning: true });
     const runners = new FakeRunnerStore();
-    const allocator = new KubernetesAllocator({
-      ...baseOpts(client, runners),
-      readyTimeoutMs: 5,
-      pollIntervalMs: 1,
-    });
-    await expect(allocator.allocate(req("run_3"))).rejects.toThrow(/did not become Running/u);
+    const allocator = new KubernetesAllocator({ ...baseOpts(client, runners), pollIntervalMs: 1 });
+    const caught = (await allocator.allocate(req("run_3")).catch((error: unknown) => error)) as Error & {
+      cause?: unknown;
+    };
+    expect(caught).toBeInstanceOf(KubernetesAllocatorError);
+    expect(caught.message).toMatch(/did not become Running/u);
+    expect(caught.cause).toBeInstanceOf(PersistentProvisioningOutageError);
     expect(client.deletedPods).toContain("tanren-run-3");
     expect(client.deletedSecrets).toContain("tanren-run-3-ssh");
   });
@@ -203,15 +214,15 @@ describe("KubernetesAllocator", () => {
     expect(client.deletedPods).toContain("tanren-run-t");
   });
 
-  it("surfaces a typed error and cleans up if it has no pod IP", async () => {
+  it("surfaces a typed error and cleans up on a stuck-signature fixed point (no pod IP)", async () => {
     const client = new FakeKubernetesClient({ noIp: true });
     const runners = new FakeRunnerStore();
-    const allocator = new KubernetesAllocator({
-      ...baseOpts(client, runners),
-      readyTimeoutMs: 5,
-      pollIntervalMs: 1,
-    });
-    await expect(allocator.allocate(req("run_4"))).rejects.toBeInstanceOf(KubernetesAllocatorError);
+    const allocator = new KubernetesAllocator({ ...baseOpts(client, runners), pollIntervalMs: 1 });
+    const caught = (await allocator.allocate(req("run_4")).catch((error: unknown) => error)) as Error & {
+      cause?: unknown;
+    };
+    expect(caught).toBeInstanceOf(KubernetesAllocatorError);
+    expect(caught.cause).toBeInstanceOf(PersistentProvisioningOutageError);
     expect(client.deletedPods).toContain("tanren-run-4");
   });
 
@@ -248,15 +259,12 @@ describe("KubernetesAllocator", () => {
   // waitForRunning requires Running AND a non-empty pod IP. An empty-string
   // podIP must NOT satisfy the ready condition: a mutant dropping the `ip === ""`
   // arm would return immediately with a bogus empty host. Here the empty IP
-  // keeps the wait polling to the deadline, and the pod+secret are cleaned up.
-  it("treats an empty-string pod IP as not-yet-ready and cleans up on timeout", async () => {
+  // keeps the wait polling and ultimately surfaces the stuck-signature fixed
+  // point (`Running|no-ip|no-conds|no-cstats`), and the pod+secret are cleaned up.
+  it("treats an empty-string pod IP as not-yet-ready and cleans up on stuck-signature fixed point", async () => {
     const client = new FakeKubernetesClient({ emptyIp: true });
     const runners = new FakeRunnerStore();
-    const allocator = new KubernetesAllocator({
-      ...baseOpts(client, runners),
-      readyTimeoutMs: 5,
-      pollIntervalMs: 1,
-    });
+    const allocator = new KubernetesAllocator({ ...baseOpts(client, runners), pollIntervalMs: 1 });
     await expect(allocator.allocate(req("run_empty"))).rejects.toThrow(/did not become Running/u);
     expect(client.deletedPods).toContain("tanren-run-empty");
     expect(client.deletedSecrets).toContain("tanren-run-empty-ssh");
@@ -466,4 +474,11 @@ describe("fetchKubernetesClient", () => {
     await client.getPod("p");
     expect(url).toBe("https://h:6443/api/v1/namespaces/ns/pods/p");
   });
+
+  // Task #31: the toPod mapper round-trip tests live in
+  // `kubernetesPodResponse.test.ts` (split to keep this file under the line cap).
 });
+
+// Task #31: the shared readiness-convergence conformance suite for Kubernetes
+// lives in `kubernetesAllocator.readinessConformance.test.ts` (split to keep
+// each test file under the line cap).

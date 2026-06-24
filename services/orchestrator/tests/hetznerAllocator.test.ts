@@ -8,6 +8,7 @@ import {
   type HetznerServer,
   type HetznerSshKey,
 } from "../src/engine/allocators/hetznerAllocator.js";
+import { PersistentProvisioningOutageError } from "../src/engine/allocators/readinessConvergence.js";
 import type { ClaimRunnerInput, RunnerStore } from "../src/engine/allocators/runnerStore.js";
 import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
 import {
@@ -40,7 +41,16 @@ class FakeHetznerClient implements HetznerClient {
   private getCalls = 0;
   private nextKeyId = 555;
   constructor(
-    private readonly opts: { neverRuns?: boolean; noIp?: boolean; emptyIp?: boolean; failCreateServer?: boolean } = {},
+    private readonly opts: {
+      neverRuns?: boolean;
+      noIp?: boolean;
+      emptyIp?: boolean;
+      failCreateServer?: boolean;
+      /** Pin a brand-new unrecognized Hetzner status the allowlist doesn't know. */
+      unknownStatus?: string;
+      /** Pin a documented Hetzner terminal status (off / deleting / stopping / unknown). */
+      terminalStatus?: string;
+    } = {},
   ) {}
 
   async createSshKey(input: HetznerCreateSshKeyInput): Promise<HetznerSshKey> {
@@ -59,6 +69,12 @@ class FakeHetznerClient implements HetznerClient {
   }
   async getServer(serverId: number): Promise<HetznerServer> {
     this.getCalls += 1;
+    if (this.opts.unknownStatus !== undefined) {
+      return { id: serverId, status: this.opts.unknownStatus };
+    }
+    if (this.opts.terminalStatus !== undefined) {
+      return { id: serverId, status: this.opts.terminalStatus };
+    }
     if (this.opts.neverRuns) {
       return { id: serverId, status: "initializing" };
     }
@@ -194,16 +210,26 @@ describe("HetznerAllocator", () => {
     expect(await secrets.list("hetzner/")).toEqual([]);
   });
 
-  it("destroys the server + key and wipes the secret if it never becomes running", async () => {
+  // Task #31: the wait now polls on STRUCTURAL signature progress (no wall-clock
+  // deadline). A server stuck at `initializing|no-ip` returns the SAME signature
+  // every probe, so the loop crosses the saturation gate and surfaces
+  // `PersistentProvisioningOutageError` LOUD (wrapped in plain Error with the
+  // convergence-class cause preserved). Cleanup still funnels through the
+  // allocate() try-block so the ssh_key + secret never dangle.
+  it("destroys the server + key and wipes the secret on a stuck-signature fixed point (never becomes running)", async () => {
     const client = new FakeHetznerClient({ neverRuns: true });
     const runners = new FakeRunnerStore();
     const secrets = new InMemorySecretStore();
-    const alloc = new HetznerAllocator({
-      ...baseOpts(client, runners, secrets),
-      readyTimeoutMs: 5,
-      pollIntervalMs: 1,
-    });
-    await expect(alloc.allocate(req("run_3"))).rejects.toThrow(/did not become running/u);
+    const alloc = new HetznerAllocator({ ...baseOpts(client, runners, secrets), pollIntervalMs: 1 });
+    let caught: unknown;
+    try {
+      await alloc.allocate(req("run_3"));
+    } catch (error) {
+      caught = error;
+    }
+    expect((caught as Error).message).toMatch(/did not become running/u);
+    expect((caught as { cause?: unknown }).cause).toBeInstanceOf(PersistentProvisioningOutageError);
+    expect((caught as { cause: PersistentProvisioningOutageError }).cause.stuckSignature).toBe("initializing|no-ip");
     expect(client.deleted).toEqual([42]);
     expect(client.deletedKeys).toEqual([555]);
     expect(await secrets.list("hetzner/")).toEqual([]);
@@ -306,30 +332,29 @@ describe("HetznerAllocator", () => {
     expect(client.createdKeys[0]?.name).toBe("tanren-run-abc-123");
   });
 
-  it("destroys everything and rejects when it becomes running without an IP", async () => {
+  it("destroys everything and rejects on a stuck-signature fixed point when it becomes running without an IP", async () => {
     const client = new FakeHetznerClient({ noIp: true });
     const runners = new FakeRunnerStore();
     const secrets = new InMemorySecretStore();
-    const alloc = new HetznerAllocator({
-      ...baseOpts(client, runners, secrets),
-      readyTimeoutMs: 5,
-      pollIntervalMs: 1,
-    });
-    await expect(alloc.allocate(req("run_no_ip"))).rejects.toThrow(/did not become running/u);
+    const alloc = new HetznerAllocator({ ...baseOpts(client, runners, secrets), pollIntervalMs: 1 });
+    let caught: unknown;
+    try {
+      await alloc.allocate(req("run_no_ip"));
+    } catch (error) {
+      caught = error;
+    }
+    expect((caught as Error).message).toMatch(/did not become running/u);
+    expect((caught as { cause?: unknown }).cause).toBeInstanceOf(PersistentProvisioningOutageError);
     expect(client.deleted).toEqual([42]);
     expect(client.deletedKeys).toEqual([555]);
     expect(runners.claims).toEqual([]);
   });
 
-  it("treats an empty-string IPv4 as not-yet-ready and destroys on timeout", async () => {
+  it("treats an empty-string IPv4 as not-yet-ready and destroys on stuck-signature fixed point", async () => {
     const client = new FakeHetznerClient({ emptyIp: true });
     const runners = new FakeRunnerStore();
     const secrets = new InMemorySecretStore();
-    const alloc = new HetznerAllocator({
-      ...baseOpts(client, runners, secrets),
-      readyTimeoutMs: 5,
-      pollIntervalMs: 1,
-    });
+    const alloc = new HetznerAllocator({ ...baseOpts(client, runners, secrets), pollIntervalMs: 1 });
     await expect(alloc.allocate(req("run_empty"))).rejects.toThrow(/did not become running/u);
     expect(client.deleted).toEqual([42]);
     expect(runners.claims).toEqual([]);
@@ -442,3 +467,7 @@ describe("HetznerAllocator", () => {
     expect(auth).toBe("Bearer secret-token");
   });
 });
+
+// Task #31: the shared readiness-convergence conformance suite for Hetzner
+// lives in `hetznerAllocator.readinessConformance.test.ts` (split to keep
+// each test file under the line cap).

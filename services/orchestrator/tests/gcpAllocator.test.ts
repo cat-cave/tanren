@@ -8,6 +8,10 @@ import {
   type GcpInstance,
   type GcpOperation,
 } from "../src/engine/allocators/gcpAllocator.js";
+import {
+  PersistentProvisioningOutageError,
+  ProvisioningTerminalStateError,
+} from "../src/engine/allocators/readinessConvergence.js";
 import type { ClaimRunnerInput, RunnerStore } from "../src/engine/allocators/runnerStore.js";
 
 class FakeRunnerStore implements RunnerStore {
@@ -30,7 +34,16 @@ class FakeGcpComputeClient implements GcpComputeClient {
   readonly deleted: string[] = [];
   private getCalls = 0;
   constructor(
-    private readonly opts: { opError?: string; neverRunning?: boolean; noIp?: boolean; emptyIp?: boolean } = {},
+    private readonly opts: {
+      opError?: string;
+      neverRunning?: boolean;
+      noIp?: boolean;
+      emptyIp?: boolean;
+      /** Pin a brand-new unrecognized instance status the allowlist doesn't know. */
+      unknownStatus?: string;
+      /** Pin a documented instance terminal status (TERMINATED / STOPPED / …). */
+      terminalStatus?: string;
+    } = {},
   ) {}
 
   async insertInstance(input: GcpInsertInstanceInput): Promise<GcpOperation> {
@@ -45,6 +58,12 @@ class FakeGcpComputeClient implements GcpComputeClient {
   }
   async getInstance(instanceName: string): Promise<GcpInstance> {
     this.getCalls += 1;
+    if (this.opts.unknownStatus !== undefined) {
+      return { name: instanceName, status: this.opts.unknownStatus };
+    }
+    if (this.opts.terminalStatus !== undefined) {
+      return { name: instanceName, status: this.opts.terminalStatus };
+    }
     if (this.opts.neverRunning) {
       return { name: instanceName, status: "PROVISIONING" };
     }
@@ -132,39 +151,55 @@ describe("GcpAllocator", () => {
     expect(client.deleted).toEqual([]);
   });
 
-  it("surfaces a typed error and deletes the instance if the op reports an error", async () => {
+  // Task #31: the wait now polls on STRUCTURAL signature progress (no wall-clock
+  // deadline). The GCP operation's `error` field fires the `terminal_error` arm
+  // IMMEDIATELY (the cloud reported the failure once the operation poll surfaces
+  // the error string); the wrapping preserves the `cause`.
+  it("surfaces a typed error and deletes the instance when the op reports an error", async () => {
     const client = new FakeGcpComputeClient({ opError: "QUOTA_EXCEEDED" });
     const runners = new FakeRunnerStore();
-    const allocator = new GcpAllocator({
-      ...baseOpts(client, runners),
-      readyTimeoutMs: 5,
-      pollIntervalMs: 1,
-    });
-    await expect(allocator.allocate(req("run_e"))).rejects.toBeInstanceOf(GcpAllocatorError);
+    const allocator = new GcpAllocator({ ...baseOpts(client, runners), pollIntervalMs: 1 });
+    let caught: unknown;
+    try {
+      await allocator.allocate(req("run_e"));
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(GcpAllocatorError);
+    expect((caught as { cause?: unknown }).cause).toBeInstanceOf(ProvisioningTerminalStateError);
+    expect((caught as Error).message).toContain("QUOTA_EXCEEDED");
     expect(client.deleted).toContain("tanren-run-e");
   });
 
-  it("surfaces a typed error and deletes the instance if it never becomes RUNNING", async () => {
+  it("surfaces a typed error and deletes the instance on a stuck-signature fixed point (never becomes RUNNING)", async () => {
     const client = new FakeGcpComputeClient({ neverRunning: true });
     const runners = new FakeRunnerStore();
-    const allocator = new GcpAllocator({
-      ...baseOpts(client, runners),
-      readyTimeoutMs: 5,
-      pollIntervalMs: 1,
-    });
-    await expect(allocator.allocate(req("run_3"))).rejects.toThrow(/did not become RUNNING/u);
+    const allocator = new GcpAllocator({ ...baseOpts(client, runners), pollIntervalMs: 1 });
+    let caught: unknown;
+    try {
+      await allocator.allocate(req("run_3"));
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(GcpAllocatorError);
+    expect((caught as Error).message).toMatch(/did not become RUNNING/u);
+    expect((caught as { cause?: unknown }).cause).toBeInstanceOf(PersistentProvisioningOutageError);
+    expect((caught as { cause: PersistentProvisioningOutageError }).cause.stuckSignature).toBe("PROVISIONING|no-ip");
     expect(client.deleted).toContain("tanren-run-3");
   });
 
-  it("surfaces a typed error and deletes the instance if it has no external IP", async () => {
+  it("surfaces a typed error and deletes the instance on a stuck-signature fixed point (no external IP)", async () => {
     const client = new FakeGcpComputeClient({ noIp: true });
     const runners = new FakeRunnerStore();
-    const allocator = new GcpAllocator({
-      ...baseOpts(client, runners),
-      readyTimeoutMs: 5,
-      pollIntervalMs: 1,
-    });
-    await expect(allocator.allocate(req("run_4"))).rejects.toBeInstanceOf(GcpAllocatorError);
+    const allocator = new GcpAllocator({ ...baseOpts(client, runners), pollIntervalMs: 1 });
+    let caught: unknown;
+    try {
+      await allocator.allocate(req("run_4"));
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(GcpAllocatorError);
+    expect((caught as { cause?: unknown }).cause).toBeInstanceOf(PersistentProvisioningOutageError);
     expect(client.deleted).toContain("tanren-run-4");
   });
 
@@ -218,15 +253,12 @@ describe("GcpAllocator", () => {
   // waitForRunning requires RUNNING AND a non-empty external IP. An empty-string
   // IP must NOT satisfy the ready condition: a mutant dropping the `ip === ""`
   // arm would return immediately with a bogus empty host. Here the empty IP
-  // keeps the wait polling to the deadline, and the instance is deleted.
-  it("treats an empty-string external IP as not-yet-ready and deletes on timeout", async () => {
+  // keeps the wait polling and ultimately surfaces the stuck-signature fixed
+  // point (`RUNNING|no-ip`), and the instance is deleted.
+  it("treats an empty-string external IP as not-yet-ready and deletes on stuck-signature fixed point", async () => {
     const client = new FakeGcpComputeClient({ emptyIp: true });
     const runners = new FakeRunnerStore();
-    const allocator = new GcpAllocator({
-      ...baseOpts(client, runners),
-      readyTimeoutMs: 5,
-      pollIntervalMs: 1,
-    });
+    const allocator = new GcpAllocator({ ...baseOpts(client, runners), pollIntervalMs: 1 });
     await expect(allocator.allocate(req("run_empty"))).rejects.toThrow(/did not become RUNNING/u);
     expect(client.deleted).toContain("tanren-run-empty");
     expect(runners.claims).toEqual([]);
@@ -444,3 +476,7 @@ describe("GcpAllocator", () => {
     expect(captured.method).toBe("DELETE");
   });
 });
+
+// Task #31: the shared readiness-convergence conformance suite for GCP
+// lives in `gcpAllocator.readinessConformance.test.ts` (split to keep
+// each test file under the line cap).
