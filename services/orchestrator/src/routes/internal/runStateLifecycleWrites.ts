@@ -19,7 +19,7 @@
 
 import { runWithOrgScope } from "@tanren/db";
 import type { Context, Hono } from "hono";
-import { z } from "zod";
+import { z, ZodError } from "zod";
 import {
   applyClearRunPercolationPending,
   applyInsertTask,
@@ -33,6 +33,8 @@ import {
   applySetSpecStatus,
   applySupersedeQueuedPlannerTask,
   applyUpdateTask,
+  applyUpdateTaskWithEvent,
+  terminalPairSchema,
 } from "../../engine/worker/runStateLifecycleSql.js";
 import { applyFinalizeLand } from "../../engine/merge/mergeAuthorityLandFinalizer.js";
 import { verifyInternalPeer, type RunStateWriteRouteDeps } from "./internalWriteShared.js";
@@ -150,6 +152,36 @@ const updateTaskSchema = z.object({
   failureKind: z.string().min(1).optional(),
   attempt: z.number().int().optional(),
 });
+
+// Route shape for the ATOMIC terminal row + terminal event endpoint (task #39).
+// The route enforces an EXPLICIT `task.orgId` (so the server can open
+// `runWithOrgScope` deterministically — the worker resolved its org from the
+// ambient per-job scope before posting). The pairing constraint itself is
+// enforced by the shared `terminalPairSchema` (matched transition + event type).
+const updateTaskWithEventRouteShape = z
+  .object({
+    task: z
+      .object({
+        taskId: z.string().min(1),
+        orgId: z.string().min(1),
+        transition: z.string().min(1),
+        outcome: z.string().min(1).optional(),
+        failureKind: z.string().min(1).optional(),
+        attempt: z.number().int().optional(),
+      })
+      .strict(),
+    event: z
+      .object({
+        runId: z.string().min(1).optional(),
+        taskId: z.string().min(1).optional(),
+        specId: z.string().min(1).optional(),
+        projectId: z.string().min(1),
+        eventType: z.string().min(1),
+        payload: z.record(z.string(), z.unknown()),
+      })
+      .strict(),
+  })
+  .strict();
 
 /**
  * Register the lifecycle write endpoints on the internal write-routes app.
@@ -324,6 +356,45 @@ export function registerRunStateLifecycleRoutes(app: Hono, deps: RunStateWriteRo
       return c.json({ error: "invalid_update_task", issues: parsed.error.issues }, 400);
     }
     await runWithOrgScope(deps.pool, parsed.data.orgId, (client) => applyUpdateTask(client, parsed.data));
+    return c.body(null, 204);
+  });
+
+  // The ATOMIC terminal row + terminal `task.*` event endpoint (task #39 —
+  // critic-arc R2 NEW#1 / R3 BLOCKING). Mirrors `/internal/finalize-land`: the
+  // row UPDATE + the event INSERT run in ONE org-scoped transaction so they
+  // COMMIT (or rollback) TOGETHER, eliminating the row-`done`/no-`task.completed`
+  // strand (autonomy-engine.md §1c single-finalize invariant). The pairing
+  // constraint (`done` ↔ `task.completed`, `failed*` ↔ `task.failed`) is enforced
+  // by `terminalPairSchema` BEFORE any DB I/O — a misuse 422s loudly. The event
+  // PAYLOAD is parsed downstream by `PgEventStore.append` against the registry;
+  // an invalid payload there throws a `ZodError` we surface as a 422 (mirrors
+  // the pairing-misuse response).
+  app.post("/internal/update-task-with-event", async (c) => {
+    if (!authnPeer(c)) {
+      return c.json({ error: "untrusted_peer" }, 401);
+    }
+    const routeParsed = updateTaskWithEventRouteShape.safeParse(await c.req.json().catch(() => {}));
+    if (!routeParsed.success) {
+      return c.json({ error: "invalid_update_task_with_event", issues: routeParsed.error.issues }, 400);
+    }
+    const pairParsed = terminalPairSchema.safeParse(routeParsed.data);
+    if (!pairParsed.success) {
+      return c.json({ error: "invalid_terminal_pair", issues: pairParsed.error.issues }, 422);
+    }
+    try {
+      // The pairing-validated body is the seam's `UpdateTaskWithEventInput` —
+      // the row-update shape matches; `event.payload` is the registry-typed
+      // payload after the event store's downstream Zod parse (the cast at the
+      // seam crosses the generic-payload boundary; the parse is the ground truth).
+      await runWithOrgScope(deps.pool, routeParsed.data.task.orgId, (client) =>
+        applyUpdateTaskWithEvent(client, routeParsed.data as Parameters<typeof applyUpdateTaskWithEvent>[1]),
+      );
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return c.json({ error: "invalid_event_payload", issues: error.issues }, 422);
+      }
+      throw error;
+    }
     return c.body(null, 204);
   });
 }

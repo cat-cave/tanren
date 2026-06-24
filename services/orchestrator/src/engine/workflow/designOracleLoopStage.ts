@@ -13,7 +13,7 @@ import { runDesignOracleStage } from "./designOracle/designOracle.js";
 import type { LoopQueryClient, StageBase } from "./loopStages.js";
 import { runAnswererStageWithRecovery } from "./loopStageRecovery.js";
 import { recordAnswererCost, secondsSince } from "./subtaskCost.js";
-import { insertChildTask, markTaskDone } from "./subtaskTasks.js";
+import { insertChildTask, markTaskDoneWithEvent } from "./subtaskTasks.js";
 
 export interface DesignOracleLoopStageInput extends StageBase {
   adapter: AnswererAdapter<DesignOracleAnswer>;
@@ -113,7 +113,20 @@ export async function runDesignOracleLoopStage(
     runtimeSeconds: secondsSince(startedAt),
     rawUsage: { role: "designOracle" },
   });
-  await markTaskDone(args.pool, designOracleTaskId, "passed", args.writer);
-  await args.appendEvent("task.completed", { taskKind: "designOracle" }, designOracleTaskId);
+  // ATOMIC terminal-row + terminal-event pair (task #39): row UPDATE +
+  // `task.completed` ride ONE org-scoped transaction.
+  await markTaskDoneWithEvent({
+    pool: args.pool,
+    writer: args.writer,
+    taskId: designOracleTaskId,
+    envelope: {
+      runId: args.runId,
+      specId: args.costCtx.specId,
+      projectId: args.costCtx.projectId,
+      taskKind: "designOracle",
+    },
+    outcome: "passed",
+    appendEventFallback: (eventType, payload, t) => args.appendEvent(eventType, payload as never, t),
+  });
   return { findings: result.findings, designOracleTaskId };
 }

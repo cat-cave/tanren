@@ -11,6 +11,7 @@
 // is fully REVERSIBLE: flipping the flag off restores the direct write path.
 
 import { getJobOrgId, runWithOrgScope } from "@tanren/db";
+import { MissingOrgScopeError } from "../data/orgScopedDb.js";
 import { scalarTextOr } from "../data/scalarText.js";
 import type pg from "pg";
 import type {
@@ -33,6 +34,7 @@ import type {
   SetSpecMetadataInput,
   SetSpecStatusInput,
   UpdateTaskInput,
+  UpdateTaskWithEventInput,
 } from "../contracts/runStateWriter.js";
 import { CostRecorder, type RecordedCost } from "../costs/recorder.js";
 import type { EventName } from "../events/index.js";
@@ -56,6 +58,8 @@ import {
   applySetSpecStatus,
   applySupersedeQueuedPlannerTask,
   applyUpdateTask,
+  applyUpdateTaskWithEvent,
+  terminalPairSchema,
 } from "./runStateLifecycleSql.js";
 import { applyFinalizeLand } from "../merge/mergeAuthorityLandFinalizer.js";
 
@@ -178,6 +182,24 @@ export class DirectRunStateWriter implements RunStateWriter {
     await this.inTaskScope(input.orgId, (client) => applyUpdateTask(client, input));
   }
 
+  async updateTaskWithEvent(input: UpdateTaskWithEventInput): Promise<void> {
+    // Validate the pairing constraint at the SEAM (terminal transition + matching
+    // terminal event), so a misuse is rejected BEFORE any DB I/O. The atomic
+    // primitive REQUIRES a terminal + matching shape — a non-terminal transition
+    // or a mismatched (e.g. `done` ↔ `task.failed`) pair is a wiring bug, not a
+    // degraded recovery to swallow. The event PAYLOAD is parsed downstream by
+    // `PgEventStore.append` against the registry schema for the named type
+    // (the type-specific decode lives in ONE place); the refinement here only
+    // pins the pairing shape.
+    terminalPairSchema.parse(input);
+    // The atomic primitive REQUIRES a transactional scope — the bare-pool fallback
+    // in `inTaskScope` would degrade silently to two separate statements (the row
+    // UPDATE + the event INSERT each on their own connection), defeating the whole
+    // point of this seam. Other `inTaskScope` callers stay unchanged; THIS method
+    // is the only one that fails loud on an unresolved org (mirrors `withJobOrgScope`).
+    await this.inTaskScopeOrThrow(input.task.orgId, (client) => applyUpdateTaskWithEvent(client, input));
+  }
+
   // --- Autonomy loops: the run/spec CREATE writes (explicit-actor, multi-table). ---
   //
   // `createQueuedRunFromSpec` / `createSpec` already open their OWN
@@ -206,6 +228,25 @@ export class DirectRunStateWriter implements RunStateWriter {
     if (resolved === undefined) {
       await op(this.pool);
       return;
+    }
+    await runWithOrgScope(this.pool, resolved, (client) => op(client));
+  }
+
+  /**
+   * Same as {@link inTaskScope} but FAILS LOUDLY when no org can be resolved
+   * (task #39): the atomic terminal-row + terminal-event seam REQUIRES a single
+   * `runWithOrgScope` transaction so the row UPDATE + event INSERT COMMIT
+   * together. Falling back to the bare pool would silently split them into two
+   * separate statements (each on its own pool connection) — defeating the whole
+   * point of `updateTaskWithEvent`. Mirrors `withJobOrgScope`'s arm-4 throw.
+   */
+  private async inTaskScopeOrThrow(
+    orgId: string | undefined,
+    op: (client: pg.PoolClient) => Promise<void>,
+  ): Promise<void> {
+    const resolved = orgId ?? getJobOrgId();
+    if (resolved === undefined) {
+      throw new MissingOrgScopeError("DirectRunStateWriter.updateTaskWithEvent");
     }
     await runWithOrgScope(this.pool, resolved, (client) => op(client));
   }

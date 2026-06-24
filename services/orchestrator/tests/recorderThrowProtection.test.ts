@@ -353,6 +353,44 @@ describe("subtask-loop stages: WIDER finalize-guard contract for mid-stage failu
         await expect(driver.runSuccess(h)).rejects.toBeInstanceOf(Error);
         assertGuardCaught(h, driver, "event_append_failed");
       });
+
+      // task #39 — EVENT-STORE-THROW VARIANT: a throw on the TERMINAL
+      // `task.completed` event itself. With the atomic seam in production the
+      // terminal event rides ONE tx with the row UPDATE (`updateTaskWithEvent`),
+      // so a throw here rolls back the row too — there is no half-baked
+      // terminal row. In the test harness (no writer; the fallback runs the row
+      // UPDATE + a separate `appendEvent`), a throw on `task.completed` is
+      // caught by the wider finalize guard, which emits `task.failed` with
+      // `failureKind: crashed` (a generic throw classifies as `crashed`) and
+      // the row is left as the guard's `markTaskFailedIfRunning` finds it (no
+      // longer `running` since the success path already moved it to `done` —
+      // the guarded UPDATE is a no-op, the loud `task.failed` lands). This
+      // pins the test-fallback semantics so a regression on the fallback path
+      // surfaces loud.
+      //
+      // The planner stage is the ONE exception — the planner row's TERMINAL
+      // close happens externally in `subtaskLoop.ts` (not inside
+      // `runPlannerStage`), so the stage never emits `task.completed`/
+      // `task.failed` for its own row; the test is a no-op there (asserted via
+      // `it.skipIf(...)` rather than a conditional `if (...) it(...)` block,
+      // which the no-conditional-tests lint rejects).
+      it.skipIf(driver.taskKind === "plan")(
+        "a throw on the terminal 'task.completed' event ⇒ the wider finalize guard catches + emits one task.failed{crashed} + re-throws",
+        async () => {
+          const h = new GuardHarness();
+          h.throwOnEventTypes = new Set<EventName>(["task.completed"]);
+          await expect(driver.runSuccess(h)).rejects.toBeInstanceOf(Error);
+          // The guard's emit-on-throw lands a single `task.failed`; the row
+          // UPDATE in the guarded path is a no-op (the success branch already
+          // moved it to `done`), so we assert ONLY the loud event invariant.
+          const failedEvents = h.events.filter((e) => e.eventType === "task.failed");
+          expect(failedEvents.length).toBeGreaterThanOrEqual(1);
+          const observedTaskId = driver.taskId ?? failedEvents[0]!.taskId!;
+          const forTask = failedEvents.filter((e) => e.taskId === observedTaskId);
+          expect(forTask).toHaveLength(1);
+          expect(forTask[0]!.payload).toMatchObject({ taskKind: driver.taskKind, failureKind: "crashed" });
+        },
+      );
     });
   }
 });

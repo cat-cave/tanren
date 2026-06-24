@@ -34,6 +34,7 @@ import type {
   SetSpecMetadataInput,
   SetSpecStatusInput,
   UpdateTaskInput,
+  UpdateTaskWithEventInput,
 } from "../contracts/runStateWriter.js";
 import type { RecordedCost } from "../costs/recorder.js";
 import type { EventName } from "../events/index.js";
@@ -155,6 +156,18 @@ export class HttpRunStateWriter implements RunStateWriter {
 
   async updateTask(input: UpdateTaskInput): Promise<void> {
     await this.post<void>("/internal/update-task", { ...input, orgId: input.orgId ?? this.requireOrgId() });
+  }
+
+  async updateTaskWithEvent(input: UpdateTaskWithEventInput): Promise<void> {
+    // The atomic terminal-row + terminal-event seam (task #39). Resolve the
+    // task's org explicitly (the row UPDATE + event INSERT run on ONE
+    // org-scoped transaction server-side); a missing org throws loud rather
+    // than posting an unscoped write the server would deny under enforced RLS.
+    const orgId = input.task.orgId ?? this.requireOrgId();
+    await this.post<void>("/internal/update-task-with-event", {
+      task: { ...input.task, orgId },
+      event: input.event,
+    });
   }
 
   // --- Autonomy loops: the run/spec CREATE writes (explicit-actor, multi-table). ---

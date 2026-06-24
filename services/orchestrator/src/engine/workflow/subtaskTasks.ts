@@ -155,3 +155,176 @@ export async function markTaskFailedIfRunning(
     [taskId, failureKind],
   );
 }
+
+// --- ATOMIC terminal row + terminal `task.*` event helpers (task #39) -------
+//
+// The single-finalize invariant (autonomy-engine.md §1c) requires the terminal
+// row UPDATE and its matching `task.*` event to live or die TOGETHER — a
+// crash/DB failure between the two strands the row terminal-`done` with no
+// `task.completed`, which the live timeline + the gate downstream both
+// mis-interpret. These three wrappers combine the row + event into ONE atomic
+// op through the writer seam (`updateTaskWithEvent`) — its direct impl opens
+// `runWithOrgScope` and runs both writes on the SAME in-transaction client (the
+// pattern `applyFinalizeLand` already uses for the merge-land transaction).
+//
+// `eventEnvelope` carries the durable lineage the `task.*` event needs (`runId`
+// / `specId` / `projectId` for the events row + the org-derivation in SQL, plus
+// `taskKind` for the payload). The call sites already have these in scope —
+// they were already passing them to the separate `appendEvent` call.
+//
+// THE WRITER IS THE ATOMIC SEAM. Production wires a `RunStateWriter` (either
+// `Direct`-in-process, which itself opens `runWithOrgScope`, or `Http`-remote,
+// which posts to `/internal/update-task-with-event`); the seam is the SOLE
+// guarantor of atomicity. The no-writer fallback paths below are TEST-ONLY:
+// they run the row UPDATE + a separate `appendEvent` call (the same shape the
+// pre-#39 split issued) so unit-test harnesses that hand a fake `{ query }`
+// pool + a recording appendEvent (e.g. `subtaskLoopStages.test.ts`) keep
+// observing terminal events through the recorder. The atomicity contract is
+// asserted in the conformance test (`markTaskWithEventAtomic.test.ts`)
+// against a real Postgres + the `DirectRunStateWriter`.
+
+/** The durable lineage a terminal `task.*` event always carries (task #39). */
+export interface TerminalTaskEventEnvelope {
+  runId: string;
+  specId: string;
+  projectId: string;
+  taskKind: string;
+}
+
+/**
+ * A narrow event-append callback for the no-writer test fallback (task #39):
+ * appends ONE terminal `task.*` event with the plain payload shape these
+ * helpers construct internally (`{ taskKind, failureKind?, message? }`). The
+ * call site adapts its own typed `appendEvent` to this shape — the
+ * registry-typed payload schema is byte-identical (the `task.completed` /
+ * `task.failed` payloads are exactly `{ taskKind, ... }` records). Production
+ * NEVER hits this seam (the writer path commits the event atomically with the
+ * row inside `RunStateWriter.updateTaskWithEvent`).
+ */
+type TerminalTaskEventAppend = (
+  eventType: "task.completed" | "task.failed",
+  payload: Record<string, unknown>,
+  taskId: string,
+) => Promise<void>;
+
+/** Shared option shape for the atomic terminal-pair helpers (task #39). */
+export interface MarkTaskTerminalOpts {
+  pool: LoopQueryClient;
+  writer?: RunStateWriter;
+  taskId: string;
+  envelope: TerminalTaskEventEnvelope;
+  /**
+   * No-writer test fallback's appendEvent sink (the stage's recorder); absent
+   * ⇒ the no-writer path runs an unwrapped row UPDATE via the pool + emits no
+   * event (matches the pre-#39 direct-path behavior).
+   */
+  appendEventFallback?: TerminalTaskEventAppend;
+}
+
+/**
+ * The atomic SUCCESS-terminal pair (task #39): move the task row to `done` AND
+ * append its `task.completed` event in ONE org-scoped transaction. Replaces the
+ * split `markTaskDone(...)` + a separate `appendEvent("task.completed", ...)`
+ * call — see the per-call-site migration notes in PR #674 (task #39).
+ */
+export async function markTaskDoneWithEvent(
+  opts: MarkTaskTerminalOpts & {
+    outcome: "passed" | "rejected_by_checker" | "rejected_by_auditor" | "window_exhausted";
+  },
+): Promise<void> {
+  const { pool, writer, taskId, envelope, appendEventFallback, outcome } = opts;
+  if (writer !== undefined) {
+    await writer.updateTaskWithEvent({
+      task: { taskId, transition: "done", outcome },
+      event: {
+        runId: envelope.runId,
+        taskId,
+        specId: envelope.specId,
+        projectId: envelope.projectId,
+        eventType: "task.completed",
+        // Payload is registry-typed downstream by `PgEventStore.append`'s Zod
+        // parse; the cast crosses the generic-payload seam (the runtime decode
+        // is the ground truth).
+        payload: { taskKind: envelope.taskKind } as never,
+      },
+    });
+    return;
+  }
+  // No-writer test fallback: row UPDATE → event append (matches the pre-#39
+  // split — atomicity is proven via the writer seam, not this path).
+  await markTaskDone(pool, taskId, outcome);
+  if (appendEventFallback !== undefined) {
+    await appendEventFallback("task.completed", { taskKind: envelope.taskKind }, taskId);
+  }
+}
+
+/**
+ * The atomic HARD-FAILED-terminal pair (task #39): move the task row to
+ * `failed` AND append `task.failed` in ONE org-scoped transaction. The optional
+ * `message` carries the safe failure message the writer-failed branches
+ * (`window_exhausted` / `crashed` / `timeout`) already emit on the event
+ * payload — kept here so the migrated call site is a single combined call.
+ */
+export async function markTaskFailedWithEvent(
+  opts: MarkTaskTerminalOpts & { failureKind: string; message?: string },
+): Promise<void> {
+  const { pool, writer, taskId, envelope, appendEventFallback, failureKind, message } = opts;
+  const payload: Record<string, unknown> = { taskKind: envelope.taskKind, failureKind };
+  if (message !== undefined) {
+    payload["message"] = message;
+  }
+  if (writer !== undefined) {
+    await writer.updateTaskWithEvent({
+      task: { taskId, transition: "failed_with_kind", failureKind },
+      event: {
+        runId: envelope.runId,
+        taskId,
+        specId: envelope.specId,
+        projectId: envelope.projectId,
+        eventType: "task.failed",
+        // Payload is registry-typed downstream (see `markTaskDoneWithEvent`).
+        payload: payload as never,
+      },
+    });
+    return;
+  }
+  await markTaskFailed(pool, taskId, failureKind);
+  if (appendEventFallback !== undefined) {
+    await appendEventFallback("task.failed", payload, taskId);
+  }
+}
+
+/**
+ * The atomic GUARDED-FAILED-terminal pair (task #39): the finalize-guard's
+ * idempotency primitive — move the task row to `failed` ONLY when it is still
+ * `status='running'` AND append `task.failed` in ONE org-scoped transaction. The
+ * row UPDATE is no-op when the row is already terminal (a clean branch beat us
+ * to `done`); the `task.failed` event ALWAYS lands (the loud timeline signal,
+ * per `stageFailureKind.ts` §IDEMPOTENCY). The `message` carries the safe
+ * stage-failure message the guard already passes.
+ */
+export async function markTaskFailedIfRunningWithEvent(
+  opts: MarkTaskTerminalOpts & { failureKind: string; message: string },
+): Promise<void> {
+  const { pool, writer, taskId, envelope, appendEventFallback, failureKind, message } = opts;
+  const payload = { taskKind: envelope.taskKind, failureKind, message };
+  if (writer !== undefined) {
+    await writer.updateTaskWithEvent({
+      task: { taskId, transition: "failed_with_kind_if_running", failureKind },
+      event: {
+        runId: envelope.runId,
+        taskId,
+        specId: envelope.specId,
+        projectId: envelope.projectId,
+        eventType: "task.failed",
+        // Payload is registry-typed downstream (see `markTaskDoneWithEvent`).
+        payload: payload as never,
+      },
+    });
+    return;
+  }
+  await markTaskFailedIfRunning(pool, taskId, failureKind);
+  if (appendEventFallback !== undefined) {
+    await appendEventFallback("task.failed", payload, taskId);
+  }
+}
