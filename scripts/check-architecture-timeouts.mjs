@@ -18,7 +18,13 @@
 //   (b) fixed LOOP CAPS — `for (… < maxAttempts/maxPolls/maxIter …)`, `while (attempt < N)`,
 //       and identifiers matching /max.*(attempt|iter|poll|retr|tries|stall)/i used to
 //       terminally give up.
-//   (c) whole-op DEADLINES — `Date.now() + … (deadline|budget)` style expiries.
+//   (c) whole-op DEADLINES — `Date.now() + … (deadline|budget)` style expiries; also
+//       LHS-name deadline ASSIGNMENTS (`const deadline = Date.now() + readyTimeoutMs;`)
+//       and wall-clock kill COMPARISONS (`Date.now() >= deadline`) on their own lines.
+//       The LHS-name binding + the comparison-only line are the disguised survivor task #31
+//       (critic-arc R1 #2 / R2): the 5 cloud allocators wore the shape for 7 months
+//       because the original same-line `Date.now()+…(deadline|budget)` heuristic scanned
+//       past the keyword-before-`=` form.
 //   (d) fixed QUIET-WINDOW / no-output-for-N watchdogs (disguised timeouts).
 //   (e) banned IDENTIFIERS — DEFAULT_TIMEOUT_MS, *_TIMEOUT_MS = 600_000, maxWriterIter*,
 //       maxRetriesPerTransient*, MAX_*_ATTEMPTS, maxRunHours, DEFAULT_TRIAL_TIMEOUT_MS, etc.
@@ -84,6 +90,31 @@ const giveUpIdentifier = /\b(max[A-Za-z0-9_$]*(?:attempt|iter|poll|retr|tries|st
 // with a deadline/budget/expiry word anywhere on the same line (the word may be the LHS
 // variable `const deadline = …` or a `…Budget…` term, so no leading word boundary).
 const deadlinePattern = /(?:Date\.now\(\)|performance\.now\(\))\s*\+[^;\n]*(deadline|budget|expir)/giu;
+
+// (c2) Deadline-shape ASSIGNMENT (task #31, critic-arc R1 #2 / R2 — the survivor the
+// 5 cloud allocators wore for 7 months): a `const deadline = Date.now() + readyTimeoutMs;`
+// where the deadline-class identifier is the LHS NAME of the assignment and the kill-verb
+// comparison rides on a SEPARATE line `if (Date.now() >= deadline) throw …`. The original
+// `deadlinePattern` above only matched when the deadline word was on the same line as the
+// `Date.now() +` RHS — and the LHS-name form (`const deadline = ` keyword + name) scanned
+// past it. Same blind-spot class as #638 (ssh2 `timeout:`) and #32 (multi-line setTimeout):
+// a legitimate-looking opener line on its own, but the doctrine violation is the deadline
+// binding itself. Catches any deadline-class LHS (deadline, budget, expir*, expiresAt,
+// deadlineMs) bound to a `Date.now()`/`performance.now()` + ms expression — the construct
+// itself is the violation, regardless of whether the kill verb is same-line or on a
+// continuation line the scanner never reaches.
+const deadlineAssignmentPattern =
+  /\b(?:const|let|var)\s+(?:[A-Za-z_$][A-Za-z0-9_$]*)?(deadline|budget|expir|expiresAt|deadlineMs)[A-Za-z0-9_$]*\s*=\s*(?:Date\.now\(\)|performance\.now\(\))\s*\+/giu;
+
+// (c3) `Date.now() >= X` (or `<=` / `<` / `>`) COMPARISON — the kill-verb companion to
+// the deadline binding (the `if (Date.now() >= deadline) throw …` line). This catches
+// the comparison even on its own line, so a stripped-down deadline construct cannot
+// reintroduce itself just by separating the binding from the check. The KEEP-list bless
+// (`// arch-allow: timeout-class …`) is honored on the comparison line — a handful of
+// legitimate comparisons exist (token-TTL refresh-before-expiry windows where the wall
+// clock IS the authoritative external bound, lease-expiry windows) and bless themselves
+// at the call site via the per-line annotation.
+const deadlineComparisonPattern = /(?:Date\.now\(\)|performance\.now\(\))\s*[<>]=?\s*[A-Za-z_$]/gu;
 
 // (d) fixed quiet-window / no-output-for-N watchdog — a disguised timeout. Catches the
 // "quiet"/"idle"/"noOutput"/"lastOutput" + a duration-ms identifier on one line.
@@ -209,6 +240,25 @@ function violationsInLine(code, rawFollowingLines = "", followingLines = "") {
   }
   for (let i = [...code.matchAll(deadlinePattern)].length; i > 0; i -= 1) {
     found.push("whole-op wall-clock deadline (Date.now()+budget/deadline) — bound on progress, not elapsed time");
+  }
+  // (c2) LHS-name deadline ASSIGNMENT — `const deadline = Date.now() + readyTimeoutMs;`
+  // (task #31, critic-arc R1 #2 / R2). The original (c) above misses the keyword-before-`=`
+  // form because the deadline word is the LHS NAME, not on the RHS of `Date.now() +`.
+  for (let i = [...code.matchAll(deadlineAssignmentPattern)].length; i > 0; i -= 1) {
+    found.push(
+      "deadline-shape assignment (const/let deadline|budget|expir* = Date.now()+ms) — " +
+        "bind on progress (a STRUCTURAL signature that ADVANCES while work is happening), not on elapsed time",
+    );
+  }
+  // (c3) `Date.now() >= X` style COMPARISON — the kill-verb companion to the deadline
+  // binding, often on its own line `if (Date.now() >= deadline) throw …`. A separate
+  // pattern so a stripped-down deadline construct cannot reintroduce itself by separating
+  // the binding from the check.
+  for (let i = [...code.matchAll(deadlineComparisonPattern)].length; i > 0; i -= 1) {
+    found.push(
+      "wall-clock kill comparison (Date.now() >=/</> X) — the kill-verb companion to a deadline " +
+        "binding; bound on progress (a STRUCTURAL signature) rather than the wall clock",
+    );
   }
   for (let i = [...code.matchAll(quietWindowPattern)].length; i > 0; i -= 1) {
     found.push("fixed quiet-window / no-output-for-N watchdog (a DISGUISED timeout) — use a LivenessProbe");
