@@ -273,6 +273,7 @@ const ORPHAN_PROXY_NAME_BY_CODE: Readonly<Record<ClassifiedRunFailure["code"], s
   merge: "__OrphanMergeFault",
   deploy: "__OrphanDeployFault",
   empty_writer_output: "EmptyWriterCommitError",
+  speculative_assembly: "SpeculativeAssemblyError",
   internal: "__OrphanInternalFault",
 };
 

@@ -23,6 +23,14 @@ export type RunFailureCode =
   | "merge"
   | "deploy"
   | "empty_writer_output"
+  // apex v56 #61: a fail-closed throw on the dependent-run base-assembly path (jj-local
+  // bootstrap + integration over the run's allocated runner — missing ancestor ref /
+  // bootstrap conflict / phantom workspace / unattributable identity / unresolved
+  // head-or-tree sha). Distinguishes from the catch-all `internal` so the operator sees a
+  // SPECIFIC actionable class on `dag.spec.needs_attention` instead of the muddled internal
+  // error (apex v56 stranded with no actionable class), and so the convergence detector keys
+  // a real fix-point on this class — not every unknown throw aliased together.
+  | "speculative_assembly"
   | "internal";
 
 /** Closed vocabulary of the run STAGE a failure is attributed to. */
@@ -66,6 +74,16 @@ const BY_ERROR_NAME: Readonly<Record<string, ClassifiedRunFailure>> = {
     code: "empty_writer_output",
     stage: "agent",
     summary: "the writer produced no commit ahead of the base this attempt",
+  },
+  // apex v56 #61: every fail-closed throw on the dependent-run speculative base-assembly
+  // path normalizes to this CLASS (the `phase` discriminator stays internal-only for log
+  // triage). The summary is the same fixed safe sentence regardless of phase — the public
+  // event surfaces WHAT failed (the assembly), and the operator pulls the per-phase detail
+  // from the INTERNAL `job_queue.failure_message` + the redacted log line.
+  SpeculativeAssemblyError: {
+    code: "speculative_assembly",
+    stage: "workspace",
+    summary: "the dependent run's speculative base assembly failed",
   },
 };
 

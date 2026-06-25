@@ -40,6 +40,7 @@
 
 import type { AncestorStack } from "./ancestorStack.js";
 import { buildLiveJjWorkspace, type LiveJjWorkspace, type LiveJjWorkspaceDeps } from "../providers/liveJjWorkspace.js";
+import { SpeculativeAssemblyError } from "./speculativeAssemblyError.js";
 import {
   type AncestorSpecPhase,
   type JjIntegrationMember,
@@ -195,7 +196,8 @@ export async function bootstrapDependentBase(
     // against a phantom workspace.
     const workspace = integration.workspace;
     if (workspace === undefined) {
-      throw new Error(
+      throw new SpeculativeAssemblyError(
+        "phantom_workspace",
         `jj-local bootstrap: assembly of ${input.runBranch} on ${input.baseBranch} did not surface an open workspace handle`,
       );
     }
