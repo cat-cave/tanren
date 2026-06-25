@@ -110,11 +110,9 @@ export interface SetRunAuthRefInput {
   authRef: string;
 }
 
-// --- Change-percolation (the DagWalker loop's §2c run-column writes). ---
-//
-// The change-percolation coordinator (part of the DagWalker subscriber loop) drives
-// a handful of bespoke `UPDATE runs SET <jsonb column>` writes the de-privileged data
-// plane can no longer run directly (migration 0035). Each carries the run's explicit
+// --- Change-percolation (DagWalker loop's §2c run-column writes). The change-percolation
+// coordinator drives bespoke `UPDATE runs SET <jsonb column>` writes the de-privileged
+// data plane can no longer run directly (migration 0035). Each carries the run's explicit
 // org (the coordinator resolves it system-scoped) so the control-plane write is
 // org-scoped server-side. WHAT GETS WRITTEN is byte-identical to the in-process SQL.
 
@@ -157,19 +155,26 @@ export interface MergeRunVerifiedAncestorShaInput {
   entryJson: string;
 }
 
-/**
- * The `UPDATE specs SET metadata` the autonomous INTAKE drives when it stamps
+/** The `UPDATE specs SET metadata` the autonomous INTAKE drives when it stamps
  * discovery provenance onto an auto-routed spec (`writeProvenance`). A direct
  * `UPDATE specs` from the de-privileged data plane is rejected (migration 0035),
  * so the intake routes this through the control plane. The caller has already
- * merged + serialized the full metadata blob (the existing `writeProvenance`
- * read-merge-write), so this carries the final JSON to write verbatim.
- */
+ * merged + serialized the full metadata blob, so this carries the final JSON verbatim. */
 export interface SetSpecMetadataInput {
   specId: string;
   orgId: string;
   /** The fully-merged metadata JSON to write (`::jsonb`). */
   metadataJson: string;
+}
+
+/** Append a steering note to the spec's `description` (v55 #59 plane-split fix: the
+ * merge-queue gate-fail-rework router's raw `UPDATE specs` previously crashed on the
+ * de-privileged `tanren_dataplane` pool — routing through the writer tunnels to the
+ * privileged control plane, matching {@link SetSpecStatusInput}'s plane-split). */
+export interface AppendSpecSteeringInput {
+  specId: string;
+  orgId: string;
+  steeringNote: string;
 }
 
 /** The `UPDATE specs SET status` the workflow drives (`in_flight` / merge-outcome). */
@@ -424,6 +429,9 @@ export interface RunStateWriter extends EventStore {
 
   /** The `UPDATE specs SET metadata` (the intake's discovery-provenance stamp). */
   setSpecMetadata(input: SetSpecMetadataInput): Promise<void>;
+
+  /** Append a steering note to the spec's description (gate-fail rework + recovery replan; v55 #59). */
+  appendSpecSteering(input: AppendSpecSteeringInput): Promise<void>;
 
   // --- Change-percolation (the DagWalker loop's §2c run-column writes). ---
 

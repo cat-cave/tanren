@@ -10,6 +10,7 @@
 import type pg from "pg";
 import { z } from "zod";
 import type {
+  AppendSpecSteeringInput,
   ClearRunPercolationPendingInput,
   InsertTaskInput,
   MergeRunVerifiedAncestorShaInput,
@@ -82,6 +83,17 @@ export async function applySetSpecStatus(client: QueryClient, input: SetSpecStat
 /** The `UPDATE specs SET metadata` (the intake's discovery-provenance stamp). */
 export async function applySetSpecMetadata(client: QueryClient, input: SetSpecMetadataInput): Promise<void> {
   await client.query("UPDATE specs SET metadata = $2::jsonb WHERE spec_id = $1", [input.specId, input.metadataJson]);
+}
+
+/**
+ * Append the steering note to the spec's description (v55 #59 plane-split fix —
+ * mirrors the prior raw UPDATE in `RecoveryStore.appendSteeringToSpec`).
+ */
+export async function applyAppendSpecSteering(client: QueryClient, input: AppendSpecSteeringInput): Promise<void> {
+  await client.query(
+    `UPDATE specs SET description = description || E'\n\n[operator steering] ' || $2 WHERE spec_id = $1`,
+    [input.specId, input.steeringNote],
+  );
 }
 
 // --- Change-percolation (§2c) run-column writes — byte-identical to the inline SQL. ---

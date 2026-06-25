@@ -174,6 +174,14 @@ export async function replanWithSteering(
   // mirrors the prior autocommit-per-statement ordering — wrapping the whole
   // action in one outer txn would hide the UPDATE from the nested claim and
   // break replan. Inert in R1.
+  // v55 #59 plane-split note: this `appendSteeringToSpec` / `reopenSpecForReplan` pair
+  // runs raw `UPDATE specs` on `pool` — which here is the orchestrator's PRIVILEGED
+  // `tanren_app` pool (the dashboard route hands `scopedPool` from `mountFeatureRoutes`,
+  // a scoping proxy over the same role; baseline migration 0000:870 grants
+  // INSERT/UPDATE/DELETE on `specs` to `tanren_app`). Unlike the gate-fail rework router
+  // (which runs from a data-plane worker on the de-privileged `tanren_dataplane` pool —
+  // baseline 0000:919 REVOKEs `specs` writes on that role and is the v55 #59 fix site),
+  // this dashboard-triggered path lands on the right role and needs no writer routing.
   await runWithOrgScope(pool, orgId, async (client) => {
     await appendSteeringToSpec(client, ctx.specId, steeringNote);
     await reopenSpecForReplan(client, ctx.specId);

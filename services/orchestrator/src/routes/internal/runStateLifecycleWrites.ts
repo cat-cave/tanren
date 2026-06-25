@@ -6,6 +6,8 @@
 //   - POST /internal/set-run-status               — the non-finalize `UPDATE runs`
 //   - POST /internal/set-run-pr-url               — `UPDATE runs SET pr_url`
 //   - POST /internal/set-spec-status              — `UPDATE specs SET status`
+//   - POST /internal/set-spec-metadata            — `UPDATE specs SET metadata` (intake provenance)
+//   - POST /internal/append-spec-steering         — append steering note to spec description (v55 #59)
 //   - POST /internal/supersede-queued-planner-task — cancel the vestigial plan task
 //   - POST /internal/insert-task                  — INSERT one tasks row
 //   - POST /internal/update-task                  — one named task transition
@@ -21,6 +23,7 @@ import { runWithOrgScope } from "@tanren/db";
 import type { Context, Hono } from "hono";
 import { z, ZodError } from "zod";
 import {
+  applyAppendSpecSteering,
   applyClearRunPercolationPending,
   applyInsertTask,
   applyMergeRunVerifiedAncestorSha,
@@ -85,6 +88,12 @@ const setSpecMetadataSchema = z.object({
   specId: z.string().min(1),
   orgId: z.string().min(1),
   metadataJson: z.string(),
+});
+
+const appendSpecSteeringSchema = z.object({
+  specId: z.string().min(1),
+  orgId: z.string().min(1),
+  steeringNote: z.string().min(1),
 });
 
 const setRunSpeculativeBaseSchema = z.object({
@@ -265,6 +274,23 @@ export function registerRunStateLifecycleRoutes(app: Hono, deps: RunStateWriteRo
       return c.json({ error: "invalid_set_spec_metadata", issues: parsed.error.issues }, 400);
     }
     await runWithOrgScope(deps.pool, parsed.data.orgId, (client) => applySetSpecMetadata(client, parsed.data));
+    return c.body(null, 204);
+  });
+
+  // v55 #59 plane-split fix: the merge-queue gate-fail-rework router previously ran a raw
+  // `UPDATE specs SET description = ...` on the de-privileged data-plane pool, which
+  // lacks `UPDATE ON specs` (migration 0000:919) and stranded reworked specs at
+  // `needs_attention`. Routing the steering append through this control-plane endpoint
+  // (mirrors `/internal/set-spec-status`'s plane-split) restores the writer path.
+  app.post("/internal/append-spec-steering", async (c) => {
+    if (!authnPeer(c)) {
+      return c.json({ error: "untrusted_peer" }, 401);
+    }
+    const parsed = appendSpecSteeringSchema.safeParse(await c.req.json().catch(() => {}));
+    if (!parsed.success) {
+      return c.json({ error: "invalid_append_spec_steering", issues: parsed.error.issues }, 400);
+    }
+    await runWithOrgScope(deps.pool, parsed.data.orgId, (client) => applyAppendSpecSteering(client, parsed.data));
     return c.body(null, 204);
   });
 

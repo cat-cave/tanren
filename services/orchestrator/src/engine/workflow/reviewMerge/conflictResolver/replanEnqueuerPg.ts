@@ -40,13 +40,37 @@ export function buildReplanEnqueuer(pool: pg.Pool, runStateWriter?: RunStateWrit
     async enqueue(input) {
       // (1) Re-open + steer in their OWN short org-scoped txn so they COMMIT before the
       //     run-create's separate-connection claim reads the now-`open` spec.
-      await runWithOrgScope(pool, input.orgId, async (client) => {
-        await RecoveryStore.appendSteeringToSpec(client, input.specId, input.steeringNote, systemActor);
-        await client.query(`UPDATE specs SET status = $2 WHERE spec_id = $1 AND status <> 'merged'`, [
-          input.specId,
-          input.reopenStatus,
-        ]);
-      });
+      //
+      // v55 #59 plane-split fix: a raw `UPDATE specs` from this router runs on the
+      // de-privileged `tanren_dataplane` pool (migration 0000:919 REVOKEs INSERT/UPDATE/
+      // DELETE on `specs`), which strands a reworked spec at `needs_attention` with a
+      // "permission denied for table specs" error. When a `RunStateWriter` is wired
+      // (the production path), route BOTH writes through it so they tunnel to the
+      // privileged control-plane pool over mTLS — same plane-split shape as
+      // `setSpecStatus` / `setSpecMetadata` / `finalizeLand`. The in-process raw-SQL
+      // fallback is kept for dev wirings where no writer is configured (`pool` is
+      // already privileged there, so the same UPDATEs land directly).
+      if (runStateWriter === undefined) {
+        await runWithOrgScope(pool, input.orgId, async (client) => {
+          await RecoveryStore.appendSteeringToSpec(client, input.specId, input.steeringNote, systemActor);
+          await client.query(`UPDATE specs SET status = $2 WHERE spec_id = $1 AND status <> 'merged'`, [
+            input.specId,
+            input.reopenStatus,
+          ]);
+        });
+      } else {
+        await runStateWriter.appendSpecSteering({
+          specId: input.specId,
+          orgId: input.orgId,
+          steeringNote: input.steeringNote,
+        });
+        await runStateWriter.setSpecStatus({
+          specId: input.specId,
+          orgId: input.orgId,
+          status: input.reopenStatus,
+          notFromStatuses: ["merged"],
+        });
+      }
       // (2) Enqueue the re-plan run — the never-discard re-author on the new base.
       const actor: ActorContext = {
         userId: "replan-router",
