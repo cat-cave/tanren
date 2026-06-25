@@ -20,6 +20,7 @@ import {
   type BuildBootstrapWorkspacePort,
 } from "../dag/jjLocalBootstrap.js";
 import type { AncestorStack } from "../dag/ancestorStack.js";
+import { SpeculativeAssemblyError } from "../dag/speculativeAssemblyError.js";
 import { classifySpecStatus } from "../dag/walkerPg.js";
 import type { AncestorSpecPhase } from "../dag/jjLocalIntegration.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
@@ -398,7 +399,8 @@ export async function bootstrapDependentWorkspace(
   // back to `tanren@local`. The genuinely UNAUTHENTICATED public path (no token) has no
   // identity and uses the core's non-attributable default (it never pushes as Tanren).
   if (resolved.token !== undefined && resolved.identity === undefined) {
-    throw new Error(
+    throw new SpeculativeAssemblyError(
+      "missing_clone_identity",
       `jj-local bootstrap: authenticated clone of ${context.runBranch} resolved a token but NO bot ` +
         `identity — refusing to author the assembled run branch as the unattributable tanren@local ` +
         `default (it would block the PR as an <unknown> external change)`,
@@ -449,7 +451,8 @@ export async function bootstrapDependentWorkspace(
     // FAIL-CLOSED: a spec-vs-spec assembly conflict at bootstrap is a hard fault. The walker
     // pre-checks the stack at enqueue (§2.1.4) + HOLDS a conflicting dependent, so a clean
     // dependent reaching here is the invariant; a conflict is never a silent degrade.
-    throw new Error(
+    throw new SpeculativeAssemblyError(
+      "bootstrap_conflict",
       `jj-local bootstrap: ancestor stack for ${context.runBranch} conflicts ` +
         `(${result.conflictBetween.specId} vs ${result.conflictBetween.otherSpecId}): ${result.message}`,
     );

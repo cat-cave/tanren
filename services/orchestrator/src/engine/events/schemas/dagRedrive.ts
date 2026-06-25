@@ -24,6 +24,8 @@ export const DagSpecRedrivenPayload = z
       "merge",
       "deploy",
       "empty_writer_output",
+      // apex v56 #61: a fail-closed throw on the dependent-run speculative base-assembly path.
+      "speculative_assembly",
       "internal",
     ]),
     // The run STAGE the failure is attributed to (closed vocabulary), for the timeline.

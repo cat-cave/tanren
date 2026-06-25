@@ -20,6 +20,7 @@
         "merge",
         "deploy",
         "empty_writer_output",
+        "speculative_assembly",
         "internal"
       ],
       "type": "string"

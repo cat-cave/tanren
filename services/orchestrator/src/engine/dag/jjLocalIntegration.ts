@@ -29,6 +29,7 @@ import { quoteSshShellArg } from "../ssh/command.js";
 import { buildActivityWatchdog } from "../ssh/activityWatchdog.js";
 import { runWorkspaceSshCommand } from "../workspace/ssh.js";
 import { buildLiveJjWorkspace, type LiveJjWorkspaceDeps, type LiveJjWorkspace } from "../providers/liveJjWorkspace.js";
+import { SpeculativeAssemblyError } from "./speculativeAssemblyError.js";
 
 /**
  * A member's SPEC lifecycle bucket (mirrors the walker's `classifySpecStatus`), used to
@@ -341,7 +342,8 @@ async function resolveLiveMembers(
     if (member.ancestorPhase === "pending" || member.ancestorPhase === "in_flight") {
       throw new AncestorNotReadyError(member.specId, member.branch, member.ancestorPhase, baseBranch);
     }
-    throw new Error(
+    throw new SpeculativeAssemblyError(
+      "missing_ancestor_ref",
       `jj-local integration: member ${member.specId} (${member.branch}) has no ${member.branch}@origin ref ` +
         `and did NOT merge into ${baseBranch} (knownHeadSha=${knownHeadSha ?? "<none>"}, ancestorPhase=` +
         `${member.ancestorPhase ?? "<unknown>"}) — refusing to silently drop a genuinely missing ancestor branch`,
@@ -430,7 +432,10 @@ async function readBookmarkSha(
   });
   const sha = out.stdout.trim();
   if (!/^[0-9a-f]{40}$/u.test(sha)) {
-    throw new Error(`jj-local integration: revision ${rev} did not resolve a head sha`);
+    throw new SpeculativeAssemblyError(
+      "head_sha_unresolved",
+      `jj-local integration: revision ${rev} did not resolve a head sha`,
+    );
   }
   return sha;
 }
@@ -474,7 +479,10 @@ async function readTreeHash(
   });
   const treeId = out.stdout.trim();
   if (!/^[0-9a-f]{40}$/u.test(treeId)) {
-    throw new Error(`jj-local integration: ${headSha} did not resolve a git tree hash`);
+    throw new SpeculativeAssemblyError(
+      "tree_hash_unresolved",
+      `jj-local integration: ${headSha} did not resolve a git tree hash`,
+    );
   }
   return treeId;
 }
