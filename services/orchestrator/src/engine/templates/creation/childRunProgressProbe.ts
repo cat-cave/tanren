@@ -65,21 +65,50 @@
 //     emitted from the writer worker, never on a poll/scheduler tick — the
 //     watchdog's tick cadence IS the writer's sign-of-life cadence.
 //
+// SUBTASK-STAGE PROGRESS (apex v56 fix #62) — the writer is NOT the only worker
+// emitting genuine forward motion inside a single spec iteration. A spec on the
+// `checker.rejected` → triage → `writer.subtask.started/completed` → checker
+// → triage → convergence-assess cycle (the standard recovery loop on a hard
+// spec like `format-lint-gate`) goes minutes between consecutive `task.*` or
+// `writer.*` events, but the per-stage emissions land on every iteration:
+//
+//   - `checker.*` — checker stage lifecycle (started/completed/failed/verdict/
+//     rejected/entity_risk). Emitted from `engine/workflow/subtaskStages.ts` per
+//     real subtask check, never on a poll/scheduler tick.
+//   - `planner.*` — planner stage lifecycle (started/completed/failed/rerequested/
+//     subtasks.emitted). Emitted from `engine/workflow/subtaskLoop.ts` per real
+//     planning round.
+//   - `triage.*` — triage stage (started/completed/json). Emitted from
+//     `engine/workflow/loopStages.ts` per real routing of checker/auditor/demo
+//     findings, never on a poll.
+//   - `convergence.*` — convergence-assessment stage (started/assessed/stalled/
+//     json). Emitted from `engine/workflow/loopStages.ts` per real loop
+//     iteration's converge-or-continue decision, never on a poll.
+//   - `designOracle.*` — design-oracle stage (started/verdict/json). Emitted from
+//     `engine/workflow/designOracleLoopStage.ts` per real oracle invocation.
+//
+// All five are confirmed ABSENT from `engine/dag/` (the scheduler poll path)
+// — they fire only from `engine/workflow/` worker stages, so they cannot be
+// faked by the build driver's poll loop. The apex v56 trial halted with a
+// false-positive STALL while `format-lint-gate` was actively iterating
+// writer→checker→triage rounds — none of those checker/triage hits counted
+// as progress without this widening.
+//
 // EXCLUDED: `dag.*` (the orchestrator's OWN scheduler emissions — the defeat
-// class above); `convergence.*` / `triage.*` / `demoRun.*` / `designOracle.*` /
-// `checker.*` / `planner.*` / `template.*` / `recovery.*` / `cost.*`
-// / `usage.*` / `credential.*` / `workspace.*` / `runner.*` / `allocator.*` /
+// class above); `demoRun.*` / `template.*` / `recovery.*` / `cost.*` /
+// `usage.*` / `credential.*` / `workspace.*` / `runner.*` / `allocator.*` /
 // `release.*` / `notification.*` / `review.*` / `github.*` / `deploy.*` /
 // `demo.*` / `hello.*` / `redaction.*` / `benchmark.*` / `ci.*` / `forge.*` /
-// `integration.*` / `issue.*` / `spec.*` / `job.*` / `app_env.*` are not on the
-// whitelist by default — under-exclusion (admitting a non-progress family) is
-// recoverable (the breaker fires false-positive on a quiet-but-working child,
-// surfaced by a follow-up test); over-exclusion is the bug this fix repairs (a
-// stalled child is mis-classified as making progress and the breaker never fires).
-// The six prefixes above are the
-// confirmed-meaningful set; any future signal-class addition is an explicit
-// whitelist decision (`docs/roadmap/timeout-eradication.md`), never a regex
-// loosening.
+// `integration.*` / `issue.*` / `spec.*` / `job.*` / `app_env.*` remain off the
+// whitelist — under-exclusion (admitting a non-progress family) is recoverable
+// (the breaker fires false-positive on a quiet-but-working child, surfaced by
+// a follow-up test); over-exclusion is the bug this fix repairs (a stalled
+// child is mis-classified as making progress and the breaker never fires, OR
+// a working child whose stages don't emit one of the watched prefixes is
+// mis-classified as stalled — apex v56 case #62). The 11 prefixes above are
+// the confirmed-meaningful set; any future signal-class addition is an
+// explicit whitelist decision (`docs/roadmap/timeout-eradication.md`), never
+// a regex loosening.
 //
 // WHY THIS SIGNAL beats the obvious alternatives (each verified against the actual
 // code path, NOT picked from memory):
@@ -169,7 +198,10 @@ export class ChildRunStalledError extends Error {
  *
  * The signal is `MAX(events.id)` for the child project, RESTRICTED to event-type
  * prefixes that represent genuine worker / agent FORWARD MOTION:
- * `task.*`, `run.*`, `gate.*`, `auditor.*` + `audit.*`, `merge.*`.
+ * `task.*`, `run.*`, `gate.*`, `auditor.*` + `audit.*`, `merge.*`, `writer.*`,
+ * and the subtask-stage families `checker.*`, `planner.*`, `triage.*`,
+ * `convergence.*`, `designOracle.*` (apex v56 fix #62 — see the module-header
+ * comment for the SUBTASK-STAGE PROGRESS rationale).
  *
  * The `dag.*` family is EXCLUDED — the build driver's own poll loop
  * (`driveToConvergence` calls `walker.walk(projectId)` every poll cycle) writes
@@ -243,4 +275,16 @@ export const WORKER_PROGRESS_EVENT_PREFIXES: readonly string[] = [
   // sign-of-life primitive to the breaker signature, so a slow writer turn whose only
   // life signal is a pnpm-install workspace advance still keeps the breaker streak alive.
   "writer.%",
+  // apex v56 fix #62: subtask-stage lifecycle families. A spec iterating on the
+  // checker.rejected → triage → writer.subtask → convergence-assess loop (e.g. the
+  // format-lint-gate spec on the v56 trial) emits these per real subtask round but
+  // can go minutes between consecutive `task.*`/`writer.*` hits. All five are
+  // emitted only from `engine/workflow/` stages, never from the orchestrator's
+  // poll loop (`engine/dag/` is the defeat surface for the dag.* exclusion);
+  // see the module-header SUBTASK-STAGE PROGRESS block for the audit.
+  "checker.%",
+  "planner.%",
+  "triage.%",
+  "convergence.%",
+  "designOracle.%",
 ] as const;

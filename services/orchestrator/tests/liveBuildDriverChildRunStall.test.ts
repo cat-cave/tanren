@@ -256,14 +256,54 @@ describe("task #21B — driveToConvergence HALTS LOUD on a stalled child templat
     expect(log.filter((e) => allowedPrefixes.some((p) => e.eventType.startsWith(p)))).toHaveLength(0);
   });
 
-  // Task #24 (apex v52/v53) — INVARIANT: the cross-layer sign-of-life bridge needs
-  // `writer.%` on the allowlist so the SSH ActivityWatchdog's `writer.subtask.progress`
-  // emissions bridge into the breaker streak. The watchdog's
-  // `MIN_NON_ADVANCING_NEIGHBOR_REPEATS=2` floor protects against substrate-internal
-  // false-fire; this allowlist entry protects against breaker-side compound false-fire
-  // on a legitimately slow writer turn whose only life signal is a workspace advance.
-  it("INVARIANT (task #24) — `writer.%` is on the worker-progress allowlist", () => {
-    expect(WORKER_PROGRESS_EVENT_PREFIXES).toContain("writer.%");
+  // Task #24 (apex v52/v53) + task #62 (apex v56) — INVARIANT on the const: the
+  // cross-layer sign-of-life bridge `writer.%` (task #24) and the subtask-stage
+  // families `checker.%`/`planner.%`/`triage.%`/`convergence.%`/`designOracle.%`
+  // (task #62 — without them the v56 format-lint-gate iteration counted as zero
+  // progress and the breaker false-fired) MUST stay on the allowlist; drift
+  // between the documented surface and the lived filter is the defect class.
+  it.each(["writer.%", "checker.%", "planner.%", "triage.%", "convergence.%", "designOracle.%"])(
+    "INVARIANT (tasks #24/#62) — `%s` is on the worker-progress allowlist",
+    (prefix) => {
+      expect(WORKER_PROGRESS_EVENT_PREFIXES).toContain(prefix);
+    },
+  );
+
+  // Task #62 (apex v56) — INTEGRATION SHAPE: a child project iterating purely
+  // on a subtask-stage family (e.g. format-lint-gate emitting only checker /
+  // triage / convergence rounds) must NOT trip the breaker.
+  it.each([
+    ["checker.rejected"],
+    ["planner.subtasks.emitted"],
+    ["triage.completed"],
+    ["convergence.assessed"],
+    ["designOracle.verdict"],
+  ])("CONFORMANCE (task #62) — a child run posting ONLY `%s` keeps the breaker quiet", async (injectedEventType) => {
+    const { log, walker } = buildRealWalkerOnInMemoryLog();
+    let snapshotPolls = 0;
+    const synthDoneAfterPolls = NON_ADVANCE_PROBES_BEFORE_STALL * 3;
+    const probeSignal = buildAllowlistedProbe(log, injectedEventType);
+    const deps = buildRealWalkerDeps({
+      walker,
+      probeSignal,
+      loadSnapshot: async () => {
+        snapshotPolls += 1;
+        if (snapshotPolls <= synthDoneAfterPolls) return inFlightSnapshot();
+        return {
+          projectId: "project_tmpl",
+          archived: false,
+          nodes: [{ specId: "spec_running", phase: "done", dependsOn: [], priority: "p1", orderKey: 0 }] as const,
+        } as DagSnapshot;
+      },
+    });
+    await buildRunLoopBuildDriver(deps).build({ orgId: "org_acme", projectId: "project_tmpl" });
+    expect(log.filter((e) => e.eventType === injectedEventType).length).toBeGreaterThan(
+      NON_ADVANCE_PROBES_BEFORE_STALL,
+    );
+    // ZERO previously-allowlisted progress events landed — the only signal
+    // keeping the breaker quiet was the v56-added subtask-stage prefix.
+    const v56Excluded = ["task.", "run.", "gate.", "auditor.", "audit.", "merge.", "writer."];
+    expect(log.filter((e) => v56Excluded.some((p) => e.eventType.startsWith(p)))).toHaveLength(0);
   });
 
   // Task #24 (apex v52/v53) — INTEGRATION SHAPE: a child project that emits ONLY
