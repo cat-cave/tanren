@@ -143,3 +143,7 @@ export { createTemplateRoutes } from "../templates/index.js";
 // mountFeatureRoutes spreads them in without a new top-level import (the
 // max-dependencies cap). Source of truth is routes/templates/createFlow.ts.
 export { buildCreateForNoMatch, buildCreateTemplateFlow } from "../templates/createFlow.js";
+// PR-C — the LIVE matrix-hit materializer wiring, surfaced through the SAME barrel so
+// mountFeatureRoutes does not need a new top-level import (max-dependencies cap).
+// Source of truth is routes/templates/materializeFlow.ts.
+export { buildLiveMaterializeCuratedTemplate } from "../templates/materializeFlow.js";

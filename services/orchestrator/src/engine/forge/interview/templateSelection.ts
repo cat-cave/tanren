@@ -26,6 +26,7 @@
 
 import type { ActorRef } from "../../state/actor.js";
 import type { Template, TemplateCapabilityQuery, TemplateStatus } from "../../repositories/templates.js";
+import type { CuratedTemplate } from "../../templates/fragments/registry/index.js";
 import type { TemplateValidationProof } from "../../templates/manifest.js";
 import type { CaptureLifecycle } from "./types.js";
 import { createLogger } from "../../observability/logger.js";
@@ -280,26 +281,41 @@ export interface SelectedTemplate {
 
 // The selection OUTCOME (templating-system.md §3 decision tree). Recorded on the
 // derive so the decision is OBSERVABLE. EVERY successful project-init selection now
-// resolves to a SEED (a pre-existing match, or a just-in-time-CREATED template) —
-// there is NO from-scratch project outcome. A no-match that cannot create a
-// validated template is NOT a kind here: it is a LOUD HALT (`TemplateRequiredError`).
+// resolves to a SEED (a pre-existing match, a just-in-time-CREATED template, or a
+// MATRIX-HIT compose-from-fragments) — there is NO from-scratch project outcome. A
+// no-match that cannot create a validated template is NOT a kind here: it is a LOUD
+// HALT (`TemplateRequiredError`).
 //   - "strong"  → SEED + the scaffold spec SHRINKS to "instantiate + adapt names".
 //                 Also the just-in-time-CREATED case (a freshly-published template
 //                 is a strong match by construction).
 //   - "partial" → SEED + emit adaptation specs (the scaffold spec adapts more).
-export type SelectionKind = "strong" | "partial";
+//   - "compose-from-fragments" → MATRIX-HIT (PR-C): the operator's stack matches a
+//                 CURATED entry; the deterministic 9-phase composer assembles the
+//                 template from typed fragments — the agent template-build path is
+//                 SKIPPED entirely. The derive (which holds the GitHub plumbing)
+//                 materializes the composed VFS into a template repo + converts this
+//                 decision into a `strong` seed BEFORE the scaffold spec runs.
+export type SelectionKind = "strong" | "partial" | "compose-from-fragments";
 
 export interface TemplateSelectionDecision {
   kind: SelectionKind;
   // Present iff `kind` is "strong" | "partial" — the chosen template + its proof.
+  // ABSENT on `compose-from-fragments` (the curated entry has not been materialized
+  // into a repo yet; the derive materializer fills `selected` after compose+push).
   selected?: SelectedTemplate;
-  // The capability query that was run (recorded for observability).
+  // Present iff `kind` is "compose-from-fragments" — the curated entry that hit. The
+  // derive materializer reads this to drive `composeTemplate`.
+  curated?: CuratedTemplate;
+  // The capability query that was run (recorded for observability). For
+  // `compose-from-fragments` this is the seedable-statuses base (the curated lookup
+  // does not derive a registry query — it short-circuits).
   query: TemplateCapabilityQuery;
   // The score of the chosen candidate (strong/partial), or the best ineligible/
   // sub-threshold score considered (none), for observability.
   topScore?: number;
   // Human reasons the decision landed where it did (the scorer reasons for a
-  // selected template, or a "no eligible candidate"/"would-create" note).
+  // selected template, a "matrix-hit:<id>" tag for compose-from-fragments, or a
+  // "no eligible candidate"/"would-create" note).
   reasons: string[];
 }
 

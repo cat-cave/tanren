@@ -42,3 +42,16 @@ export {
   mapDesignContractToTemplateConfig,
   type SchemaMappingResult,
 } from "./agentSchemaMapper.js";
+export {
+  canonicalizeStack,
+  CURATED_TEMPLATES,
+  type CuratedTemplate,
+  listCurated,
+  lookupCurated,
+} from "./registry/index.js";
+export {
+  buildMaterializeCuratedTemplate,
+  type MaterializeCuratedDeps,
+  type MaterializeCuratedInput,
+  type MaterializeCuratedTemplate,
+} from "./materialize.js";

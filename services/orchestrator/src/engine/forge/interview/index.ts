@@ -67,6 +67,17 @@ export {
   type TemplateSelectionDecision,
 } from "./templateSelection.js";
 
+// PR-C — the PROJECT-vs-TEMPLATE-BUILD scaffold gate (the matrix-hit + selection
+// dispatcher). Surfaced so tests can call `selectSeedTemplate` directly without
+// reaching into the gate internals.
+export {
+  assertSeeded,
+  selectSeedTemplate,
+  TemplateRegistryQueryRequiredError,
+  type ScaffoldOrigin,
+  type SelectSeedInput,
+} from "./interviewTemplateGate.js";
+
 export {
   InterviewCapture,
   InterviewRoundOutput,
