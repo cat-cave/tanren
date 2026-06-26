@@ -32,6 +32,7 @@ export { NEGATIVE_CONTROL_CAPABILITIES, templateValidates } from "./validationPr
 // read it from the template barrel rather than reaching into forge/interview.
 export { isProofFresh, isTemplateEligible } from "../forge/interview/templateSelection.js";
 export {
+  assertComposedTemplateEvidenceDeclared,
   buildNegativeControlPlan,
   failingTestDefect,
   lintViolationDefect,
@@ -115,6 +116,48 @@ export {
   type CreationUpgradeInput,
   type CreationUpgradeOutcome,
 } from "./creation/index.js";
+// PR-A FRAGMENT-COMPOSITION foundation (docs/roadmap/templating-system.md §FRAGMENTS):
+// the matrix-hit alternative to the agent template-build path. AGENT FALLBACK
+// UNCHANGED in PR-A — fragments are additive.
+export {
+  ADDON_BIOME_ID,
+  ADDON_DOCKER_ID,
+  AddonId,
+  AuthId,
+  BackendId,
+  BASE_FRAGMENT_ID,
+  BASE_FRAGMENT_VERSION,
+  BASE_JUSTFILE_TARGETS,
+  BASE_PROTECTED_FILES,
+  composeTemplate,
+  DB_POSTGRES_PRISMA_ID,
+  DbId,
+  DEPLOY_FLY_ID,
+  DEPLOY_NONE_ID,
+  deployFragmentId,
+  DeployId,
+  ExampleId,
+  type Fragment,
+  type FragmentContract,
+  type FragmentId,
+  FragmentKind,
+  FragmentLibrary,
+  FRONTEND_REACT_ROUTER_ID,
+  FrontendId,
+  loadFragmentLibrary,
+  loadFragmentLibraryForTests,
+  mapDesignContractToTemplateConfig,
+  RUNTIME_NODE_PNPM_ID,
+  RUNTIME_RUBY_BUNDLER_ID,
+  runtimeFragmentId,
+  RuntimeId,
+  type SchemaMappingResult,
+  TemplateComposeError,
+  type TemplateComposePhase,
+  TemplateConfig,
+  VfsCollisionError,
+  VirtualFileSystem,
+} from "./fragments/index.js";
 // WAVE 5 — the MAINTENANCE flow (templating-system.md §4): the re-validation loop,
 // the lts/nightly channel policy, the nightly→lts graduation gate (the canary), and
 // the freshness/degraded-marking. Re-exported from the maintenance barrel.
