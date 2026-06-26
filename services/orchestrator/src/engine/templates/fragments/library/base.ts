@@ -35,8 +35,18 @@ export const BASE_FRAGMENT_ID = "base" as const;
 export const BASE_FRAGMENT_VERSION = "1.0.0" as const;
 
 /** The set of justfile targets the base fragment declares. `processJustfile` rejects
- * a fragment fill against an unknown target name. */
-export const BASE_JUSTFILE_TARGETS: ReadonlySet<string> = new Set(["bootstrap", "tier-1", "tier-2", "tier-3", "build"]);
+ * a fragment fill against an unknown target name. The `mutation` target was added in
+ * PR-B (NB-2): mutation testing is a first-class tier the runtime fragment must wire
+ * (node-pnpm → stryker, ruby-bundler → mutant) — a runtime that ships an empty
+ * mutation hook is caught by `assertRuntimeFillsMutationHook` in the dogfood test. */
+export const BASE_JUSTFILE_TARGETS: ReadonlySet<string> = new Set([
+  "bootstrap",
+  "tier-1",
+  "tier-2",
+  "tier-3",
+  "build",
+  "mutation",
+]);
 
 /** Files the base writes that EVERY composed template MUST still carry — re-asserted
  * post-compose. A fragment that silently dropped these is rejected as a hook bypass. */
@@ -71,6 +81,13 @@ tier-3:
 
 build:
 # TANREN-HOOK: build
+
+# Mutation testing — PR-B made this a first-class tier (NB-2). The runtime fragment
+# fills the body (node-pnpm → stryker run + json report; ruby-bundler → mutant run).
+# The composer rejects a runtime that leaves this empty via the dogfood-test
+# assertion (see assertRuntimeFillsMutationHook).
+mutation:
+# TANREN-HOOK: mutation
 `;
 
 // The base ci.yml — evidence declarations are on tier-2 + tier-3 with a placeholder
@@ -97,6 +114,11 @@ tiers:
       evidence:
         kind: "artifact"
         path: "dist"
+    - name: "mutation"
+      run: "just mutation"
+      evidence:
+        kind: "artifact"
+        path: "reports/mutation"
 when:
   tier-1:
     - "per_iteration"
