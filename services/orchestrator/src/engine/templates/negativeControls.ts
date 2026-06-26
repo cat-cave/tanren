@@ -278,3 +278,17 @@ export function assertEvidenceDeclared(config: CiConfigV1): void {
       `(an \`evidence\` block or the legacy \`junitReport\`) on at least one step. Violations: ${summary}.`,
   );
 }
+
+/**
+ * Composed-template variant of `assertEvidenceDeclared` (PR-A wiring): a composer-
+ * built template is just a `VirtualFileSystem`; its `.tanren/ci.yml` parses through
+ * the same `resolveCiConfig`, so the assertion logic is identical. This helper is the
+ * named SEAM so callers do not have to reach into the composer's VFS internals.
+ *
+ * Pass the parsed `CiConfigV1` (the caller runs `resolveCiConfig` over the VFS's
+ * `.tanren/ci.yml`) — keeps this module free of a transitive YAML/parser dependency
+ * on the composer subtree.
+ */
+export function assertComposedTemplateEvidenceDeclared(config: CiConfigV1): void {
+  assertEvidenceDeclared(config);
+}
