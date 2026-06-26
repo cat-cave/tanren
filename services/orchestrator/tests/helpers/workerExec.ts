@@ -286,10 +286,39 @@ export class RecordingAllocator implements Allocator {
   async release(): Promise<void> {}
 }
 
+// A passing-everything SSH fake. The default returns `exitCode: 0` with empty output for
+// every command — sufficient for tests that drive the worker through the planner-loop with
+// fake adapters. EXCEPTION (apex v57 task #64): the runtime gate (runGateTier) now harvests
+// POSITIVE EVIDENCE after exit-0 — a pre_audit/pre_merge step that declared `evidence`
+// (or the legacy `junitReport` that promotes) demands a parsed JUnit report with at least
+// one test, OR the gate fails with `failedReason: "evidence_insufficient"` (the v57
+// green-by-accident class). The DEFAULT CI config the runtime gate resolves wires
+// junit evidence on tier-2 + tier-3, and the harvester's read command (an `if [ -f X ];
+// then cat X; ...` script) lands here. We detect that command pattern and return a
+// MINIMAL valid one-test JUnit XML so the workflow's pre_audit/pre_merge gates pass
+// instead of looping the writer forever on evidence_insufficient. This preserves the
+// no-silent-fallback doctrine: a test that wants to exercise the evidence-insufficient
+// path scripts its own SSH (see evidenceBasedGates.test.ts's `ScriptedSsh`).
 export class RecordingSsh implements CommandSubstrate {
-  async run(_target: RunnerHandle, _command: RunnerCommand): Promise<CommandResult> {
+  async run(_target: RunnerHandle, command: RunnerCommand): Promise<CommandResult> {
+    if (isJunitHarvestRead(command.command)) {
+      return { exitCode: 0, stdout: PASSING_JUNIT_XML, stderr: "", timedOut: false };
+    }
     return { exitCode: 0, stdout: "", stderr: "", timedOut: false };
   }
+}
+
+// One-test JUnit XML the harvester parses as `total: 1, failures: 0` — passes the
+// default `minTests: 1` evidence contract.
+const PASSING_JUNIT_XML =
+  '<?xml version="1.0"?><testsuites><testsuite name="t"><testcase name="ok"/></testsuite></testsuites>';
+
+// The harvester's workspace-file read script (engine/workflow/gate/harvestStepEvidence.ts):
+// `if [ -f <path> ]; then cat <path>; else echo __TANREN_FILE_ABSENT__; fi`. We detect it
+// by the marker sentinel — both the absent branch and the harvester reuse this exact
+// marker, so a non-harvest command never matches.
+function isJunitHarvestRead(command: string): boolean {
+  return command.includes("__TANREN_FILE_ABSENT__");
 }
 
 export function passingGitHub(): ScriptedGitHubHttp {
