@@ -186,8 +186,8 @@ describe("buildEnvNegativeControlPlan — derives isolation probes from the tool
   it("probes an undeclared BASELINE tool when the project declares fewer baseline tools", () => {
     const plan = buildEnvNegativeControlPlan([{ name: "node", version: "18" }]);
     // node is declared, so the undeclared probe picks a baseline tool the project did
-    // NOT declare (pnpm/python/go) — a real golden-base-leak risk.
-    expect(["pnpm", "python", "go"]).toContain(plan.undeclaredTool.tool);
+    // NOT declare (pnpm/python/go/ruby) — a real golden-base-leak risk.
+    expect(["pnpm", "python", "go", "ruby"]).toContain(plan.undeclaredTool.tool);
     expect(plan.forbiddenVersion.tool).toBe("node");
     expect(plan.forbiddenVersion.forbiddenVersion).toBe("0.18");
   });
@@ -198,6 +198,7 @@ describe("buildEnvNegativeControlPlan — derives isolation probes from the tool
       { name: "pnpm", version: "11" },
       { name: "python", version: "3.14" },
       { name: "go", version: "1.26" },
+      { name: "ruby", version: "3.4" },
       { name: "rust", version: "1.80" },
     ]);
     // No baseline tool is left undeclared → the sentinel (a tool no env should resolve).

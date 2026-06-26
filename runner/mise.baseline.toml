@@ -4,16 +4,26 @@
 # environment-management.md §3 Layer 3 + §7 P2.
 #
 # TRIM DISCIPLINE (GitHub `runner-images` rule: bake what is slow-to-install AND
-# common; omit the rare). This set is deliberately LEAN — the four toolchains the
+# common; omit the rare). This set is deliberately LEAN — the five toolchains the
 # common project actually declares, nothing else:
 #   - node 24   — current LTS (Krypton). The dominant JS/TS runtime. KEPT on the
 #                 LTS line on purpose — NOT bumped to a non-LTS 25.
 #   - pnpm 11   — current latest (11.6.x); the package manager the TS scaffolds use.
 #   - python 3.14 — current latest stable (3.14.x); the common Python runtime.
 #   - go 1.26   — current latest stable; the common Go toolchain.
+#   - ruby 3.4  — current stable; the common Ruby runtime (apex v58 picked Rails 8
+#                 and re-downloaded ruby-3.4 on every iteration — added so a Ruby
+#                 project gets the same warm hit as a Node/Python one).
 # A project declaring something OFF this baseline (node 20, python 3.11, rust,
 # bun, …) is NOT a failure — it cold-installs into the SAME user-space data dir
 # at workspace-prep. The baseline only makes the COMMON case near-instant.
+#
+# POSTGRES (and other DAEMON dependencies) are NOT baked here. mise's vfox-postgres
+# compiles PostgreSQL from source (slow, heavyweight) and Postgres is canonically a
+# SIDECAR container in dev/CI (compose/docker), not a per-project mise install — so
+# baking it here would bloat every image for no project's actual workflow. The
+# stack-agnostic OS build-deps the Dockerfile baked (bison/flex/libicu-dev/…) cover
+# the case a project still chooses to compile it from source via mise.
 #
 # VERSIONS ARE INTENTIONALLY LOOSE MAJORS (never a stale exact pin): mise resolves
 # `node = "24"` → the latest 24.x at BUILD time, so every golden-image refresh
@@ -25,3 +35,4 @@ node = "24"
 pnpm = "11"
 python = "3.14"
 go = "1.26"
+ruby = "3.4"
