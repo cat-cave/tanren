@@ -7,11 +7,13 @@ export {
   CiConfigV1,
   CiDeploy,
   CiStep,
+  CiStepEvidence,
   CiTiers,
   CiUpgrade,
   CiWhen,
   CiWhenPolicy,
   SUPPORTED_CI_CONFIG_VERSIONS,
+  evidenceForStep,
 } from "./schema.js";
 
 export {

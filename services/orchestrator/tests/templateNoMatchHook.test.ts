@@ -36,6 +36,17 @@ class CleanSsh implements CommandSubstrate {
       return ok();
     }
     if (cmd.startsWith("rm -rf") || cmd.includes("cp -a")) return ok();
+    // EVIDENCE harvester (task #64): the default config's slow/merge tiers declare
+    // junitReport → junit evidence. Return a minimal valid JUnit XML for clean-template
+    // reads so the evidence assertion passes.
+    if (cmd.includes("reports/junit.xml") && !this.planted.has(command.cwd ?? "")) {
+      return {
+        exitCode: 0,
+        stdout: '<?xml version="1.0"?><testsuites><testsuite name="t"><testcase name="ok"/></testsuite></testsuites>',
+        stderr: "",
+        timedOut: false,
+      };
+    }
     return this.planted.has(command.cwd ?? "") ? fail() : ok();
   }
 }

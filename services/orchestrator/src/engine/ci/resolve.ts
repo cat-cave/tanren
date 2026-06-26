@@ -42,10 +42,14 @@ export const JUNIT_REPORT_PATH = "reports/junit.xml";
 //     lint + typecheck). NO tests here — tests arrive with features, so a scaffold
 //     pass is never blocked by a test tier.
 //   - slow   (pre_audit)     — `just tier-2`: build + tests, the tier that DECLARES its
-//     JUnit report (`junitReport: JUNIT_REPORT_PATH`) for the CI-intelligence per-test
-//     grain — the EXPLICIT contract field, so Tanren reads back exactly that path.
+//     JUnit report + a POSITIVE EVIDENCE contract (`evidence: { kind: "junit", ... }`,
+//     `minTests: 1`) for the v57 task #64 green-by-accident class — exit-0 with zero
+//     tests run no longer passes the gate; the harvester demands at least one test in
+//     the parsed report. `junitReport` stays declared for the per-test ingest contract
+//     (CI-intelligence reads back EXACTLY that path).
 //   - merge  (pre_merge)     — `just tier-3`: the heaviest thorough gate, the
-//     merge-queue authority.
+//     merge-queue authority. ALSO declares JUnit evidence with `minTests: 1` so the
+//     merge gate cannot ship green-by-accident (the v57 merge-gate-not-full-bar class).
 // `bootstrap.run` is `just bootstrap`. This default mirrors the skeleton's ci.yml
 // (engine/forge/scaffold/skeleton.ts) — both are the same lifecycle map.
 // `upgrade.run` is `just upgrade` (environment-management.md §4.5/§7 P1): the
@@ -62,8 +66,22 @@ export const DEFAULT_CI_CONFIG: CiConfigV1 = Object.freeze(
     deploy: { run: "just deploy" },
     tiers: {
       fast: [{ name: "tier-1", run: "just tier-1" }],
-      slow: [{ name: "tier-2", run: "just tier-2", junitReport: JUNIT_REPORT_PATH }],
-      merge: [{ name: "tier-3", run: "just tier-3" }],
+      slow: [
+        {
+          name: "tier-2",
+          run: "just tier-2",
+          junitReport: JUNIT_REPORT_PATH,
+          evidence: { kind: "junit", reportPath: JUNIT_REPORT_PATH, minTests: 1 },
+        },
+      ],
+      merge: [
+        {
+          name: "tier-3",
+          run: "just tier-3",
+          junitReport: JUNIT_REPORT_PATH,
+          evidence: { kind: "junit", reportPath: JUNIT_REPORT_PATH, minTests: 1 },
+        },
+      ],
     },
     when: {
       fast: ["per_iteration"],

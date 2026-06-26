@@ -21,7 +21,7 @@
 // its own per-capability `inject` via `NegativeControlPlan.overrides`, keeping the
 // harness itself stack-free.
 
-import type { CiWhen } from "../ci/index.js";
+import type { CiConfigV1, CiWhen } from "../ci/index.js";
 
 // The negative-control capabilities the doc names (templating-system.md §1 / §2.4).
 // `typecheck` / `lint` / `test` are the required-gate trio; `mutation` is optional
@@ -226,4 +226,55 @@ export function buildNegativeControlPlan(input: NegativeControlPlanInput = {}): 
     });
   }
   return controls;
+}
+
+// ---- Evidence-declaration check (apex v57 task #64) ------------------------
+
+/**
+ * The list of evidence-declaration violations a CI config carries — one entry per
+ * merge-gating tier (`pre_audit` / `pre_merge`) whose every step is judged on exit
+ * code alone (no `evidence` block, no legacy `junitReport`). Empty ⇒ every merge-
+ * gating tier declares positive evidence.
+ *
+ * Defense-in-depth for template-validation: the `CiConfigV1` schema already rejects
+ * a config that ships vacuous merge-gating at parse time (see schema.ts §EVIDENCE-
+ * GATED TIERS), so a valid `CiConfigV1` returned by `resolveCiConfig` will always
+ * yield an empty list here. This helper exists so template-creation can ALSO assert
+ * the negative-control plan's promise (the gate ACTUALLY proves something) without
+ * having to re-run the schema; the apex doctrine (`templating-system.md` §1.5) demands
+ * a template ship NO vacuous merge gate, and this is the explicit assertion.
+ */
+export interface VacuousMergeGate {
+  tier: string;
+  when: CiWhen;
+}
+
+export function findVacuousMergeGates(config: CiConfigV1): VacuousMergeGate[] {
+  const violations: VacuousMergeGate[] = [];
+  for (const [tierName, points] of Object.entries(config.when)) {
+    const evidenceGated = points.find((p) => p === "pre_audit" || p === "pre_merge");
+    if (evidenceGated === undefined) continue;
+    const steps = config.tiers[tierName] ?? [];
+    const hasEvidence = steps.some((step) => step.evidence !== undefined || step.junitReport !== undefined);
+    if (!hasEvidence) violations.push({ tier: tierName, when: evidenceGated });
+  }
+  return violations;
+}
+
+/**
+ * Assert every merge-gating tier in `config` declares POSITIVE EVIDENCE — throw loudly
+ * if any tier ships vacuous defaults. Intended as a template-validation assertion: a
+ * template that ships a `pre_audit`/`pre_merge` tier judged on exit code alone is the
+ * v57 green-by-accident class (the writer can ship merged code with zero tests run).
+ * The error message names the tier + the lifecycle point so the operator (or the
+ * template-build self-heal) sees WHICH tier to fix.
+ */
+export function assertEvidenceDeclared(config: CiConfigV1): void {
+  const violations = findVacuousMergeGates(config);
+  if (violations.length === 0) return;
+  const summary = violations.map((v) => `tier "${v.tier}" maps to "${v.when}"`).join("; ");
+  throw new Error(
+    `template ships VACUOUS merge gate(s) — every merge-gating tier MUST declare positive evidence ` +
+      `(an \`evidence\` block or the legacy \`junitReport\`) on at least one step. Violations: ${summary}.`,
+  );
 }

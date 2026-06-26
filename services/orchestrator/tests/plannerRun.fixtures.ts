@@ -336,11 +336,17 @@ export class FailingReleaseAllocator extends RecordingAllocator {
   }
 }
 
+// Passing SSH fake: exit-0 + empty stdout by default. The evidence harvester's read script
+// (uniquely identified by the `__TANREN_FILE_ABSENT__` marker) returns a one-test XML so
+// the default-config's pre_audit/pre_merge junit-evidence gate passes (apex v57 task #64).
 export class RecordingSsh implements CommandSubstrate {
   readonly commands: Array<{ target: RunnerHandle; command: RunnerCommand }> = [];
   async run(sshTarget: RunnerHandle, command: RunnerCommand): Promise<CommandResult> {
     this.commands.push({ target: sshTarget, command });
-    return { exitCode: 0, stdout: "", stderr: "", timedOut: false };
+    const stdout = command.command.includes("__TANREN_FILE_ABSENT__")
+      ? '<?xml version="1.0"?><testsuites><testsuite name="t"><testcase name="ok"/></testsuite></testsuites>'
+      : "";
+    return { exitCode: 0, stdout, stderr: "", timedOut: false };
   }
 }
 

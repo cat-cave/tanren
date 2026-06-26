@@ -26,6 +26,7 @@ tiers:
   slow:
     - name: build
       run: "pnpm build"
+      junitReport: "reports/junit.xml"
 when:
   fast:
     - per_iteration
@@ -102,7 +103,9 @@ describe("resolveCiConfig — valid", () => {
     const cfg = resolveCiConfig(VALID);
     expect(cfg.version).toBe(1);
     expect(cfg.tiers.fast).toHaveLength(2);
-    expect(cfg.tiers.slow[0]).toEqual({ name: "build", run: "pnpm build" });
+    // Task #64: the slow tier carries the legacy `junitReport` (back-compat) which the
+    // schema promotes to junit evidence; the raw step shape preserves the declared field.
+    expect(cfg.tiers.slow[0]).toEqual({ name: "build", run: "pnpm build", junitReport: "reports/junit.xml" });
     expect(bootstrapCommand(cfg)).toBe("pnpm install --frozen-lockfile");
   });
 
@@ -128,12 +131,15 @@ tiers:
   slow:
     - name: build
       run: pnpm build
+      junitReport: reports/junit.xml
   zeta:
     - name: z
       run: run-z
+      junitReport: reports/junit.xml
   alpha:
     - name: a
       run: run-a
+      junitReport: reports/junit.xml
 when:
   fast:
     - per_iteration
@@ -186,6 +192,7 @@ tiers:
   slow:
     - name: build
       run: pnpm build
+      junitReport: reports/junit.xml
 when:
   fast:
     - per_iteration
@@ -208,6 +215,7 @@ tiers:
   slow:
     - name: build
       run: cargo build
+      junitReport: reports/junit.xml
 when:
   fast:
     - per_iteration
@@ -226,6 +234,7 @@ tiers:
   slow:
     - name: build
       run: pnpm build
+      junitReport: reports/junit.xml
 when:
   fast:
     - per_iteration
@@ -270,6 +279,7 @@ tiers:
   slow:
     - name: build
       run: cargo build
+      junitReport: reports/junit.xml
 when:
   fast:
     - per_iteration
@@ -292,6 +302,7 @@ tiers:
   slow:
     - name: tier-2
       run: just tier-2
+      junitReport: reports/junit.xml
 when:
   fast:
     - per_iteration
@@ -310,6 +321,7 @@ tiers:
   slow:
     - name: build
       run: pnpm build
+      junitReport: reports/junit.xml
 when:
   fast:
     - per_iteration

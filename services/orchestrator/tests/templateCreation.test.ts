@@ -57,6 +57,17 @@ class ScriptedSsh implements CommandSubstrate {
       return ok();
     }
     if (cmd.startsWith("rm -rf") || cmd.includes("cp -a")) return ok();
+    // EVIDENCE harvester (task #64): the default config's slow/merge tiers declare
+    // junitReport → junit evidence. Return a minimal well-formed JUnit XML with 1
+    // test for any clean-template junit read so the evidence assertion passes.
+    if (cmd.includes("reports/junit.xml") && this.planted.get(cwd) === undefined) {
+      return {
+        exitCode: 0,
+        stdout: '<?xml version="1.0"?><testsuites><testsuite name="t"><testcase name="ok"/></testsuite></testsuites>',
+        stderr: "",
+        timedOut: false,
+      };
+    }
     const planted = this.planted.get(cwd);
     if (planted !== undefined) {
       const mode = planted === "typecheck" ? this.opts.typecheck : planted === "lint" ? this.opts.lint : this.opts.test;

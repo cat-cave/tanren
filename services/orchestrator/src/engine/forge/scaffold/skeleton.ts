@@ -110,15 +110,29 @@ tiers:
     - name: tier-1
       run: just tier-1
   # tier-2 (pre_audit) — build + tests at spec completion. It DECLARES its JUnit report
-  # (junitReport) so Tanren ingests the per-test grain; have \`just tier-2\` write that path.
+  # (junitReport) so Tanren ingests the per-test grain AND a POSITIVE EVIDENCE contract
+  # (apex v57 task #64): the gate rejects exit-0 with zero tests run (the green-by-accident
+  # class). Have \`just tier-2\` write a JUnit report to the declared path containing at
+  # least one test.
   slow:
     - name: tier-2
       run: just tier-2
       junitReport: ${JUNIT_REPORT_PATH}
-  # tier-3 (pre_merge) — the heaviest thorough gate (the merge authority).
+      evidence:
+        kind: junit
+        reportPath: ${JUNIT_REPORT_PATH}
+        minTests: 1
+  # tier-3 (pre_merge) — the heaviest thorough gate (the merge authority). Also declares
+  # JUnit evidence (minTests: 1) so the merge gate cannot ship green-by-accident — a
+  # tier-3 that runs only lint cannot be the merge authority.
   merge:
     - name: tier-3
       run: just tier-3
+      junitReport: ${JUNIT_REPORT_PATH}
+      evidence:
+        kind: junit
+        reportPath: ${JUNIT_REPORT_PATH}
+        minTests: 1
 when:
   fast:
     - per_iteration

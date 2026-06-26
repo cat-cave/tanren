@@ -289,6 +289,11 @@ describe("runPlannerLoopWorkflow", () => {
         "  slow:",
         "    - name: build",
         "      run: make build",
+        // apex v57 task #64: a tier mapped to pre_merge MUST declare positive evidence
+        // (the schema validator rejects a vacuous merge gate). `junitReport` is the legacy
+        // back-compat path → promotes to a junit-evidence contract with `minTests: 1`; the
+        // ConfigReadingSsh returns a one-test JUnit XML on the harvester's read so the gate passes.
+        "      junitReport: reports/junit.xml",
         "when:",
         "  fast:",
         "    - per_iteration",
@@ -435,13 +440,29 @@ describe("runPlannerLoopWorkflow", () => {
   });
 });
 
+// Minimal valid one-test JUnit XML the runtime gate's evidence harvester accepts as
+// `total: 1` — passes the default-config's `minTests: 1` evidence contract on
+// pre_audit/pre_merge (apex v57 task #64). The harvester's workspace-file read script
+// (`if [ -f X ]; then cat X; else echo __TANREN_FILE_ABSENT__; fi`) is uniquely
+// identifiable by the marker sentinel, so non-harvest commands never match.
+const PASSING_JUNIT_XML =
+  '<?xml version="1.0"?><testsuites><testsuite name="t"><testcase name="ok"/></testsuite></testsuites>';
+function isJunitHarvestRead(command: string): boolean {
+  return command.includes("__TANREN_FILE_ABSENT__");
+}
+
 // SSH fake that returns the given .tanren/ci.yml text when the bootstrap-command resolver cats the repo
-// config, and an empty success for every other command (clone, etc.). An empty `configYaml` models a repo
+// config, an empty success for every other command (clone, etc.), and a valid one-test JUnit XML when
+// the runtime gate's evidence harvester reads the JUnit report path (so the v57 evidence gate passes
+// instead of the writer looping forever on evidence_insufficient). An empty `configYaml` models a repo
 // with no .tanren/ci.yml — the `cat`-if-present command simply prints nothing.
 class ConfigReadingSsh implements CommandSubstrate {
   constructor(private readonly configYaml: string) {}
 
   async run(_target: RunnerHandle, command: RunnerCommand): Promise<CommandResult> {
+    if (isJunitHarvestRead(command.command)) {
+      return { exitCode: 0, stdout: PASSING_JUNIT_XML, stderr: "", timedOut: false };
+    }
     const stdout = command.command.includes(".tanren/ci.yml") ? this.configYaml : "";
     return { exitCode: 0, stdout, stderr: "", timedOut: false };
   }
@@ -449,7 +470,9 @@ class ConfigReadingSsh implements CommandSubstrate {
 
 // SSH fake that returns the clone HEAD sha on the workspace-prep `git rev-parse`
 // (so the run captures a real cloneHeadSha and the PR-branch cleanup actually
-// runs), empty for everything else, and records every command issued.
+// runs), a valid one-test JUnit XML when the runtime gate's evidence harvester reads
+// the JUnit report path (apex v57 task #64), empty for everything else, and records
+// every command issued.
 class CloneHeadSsh implements CommandSubstrate {
   readonly commands: string[] = [];
 
@@ -457,6 +480,9 @@ class CloneHeadSsh implements CommandSubstrate {
 
   async run(_target: RunnerHandle, command: RunnerCommand): Promise<CommandResult> {
     this.commands.push(command.command);
+    if (isJunitHarvestRead(command.command)) {
+      return { exitCode: 0, stdout: PASSING_JUNIT_XML, stderr: "", timedOut: false };
+    }
     const isClonePrep = command.command.includes("git clone") && command.command.includes("git rev-parse HEAD");
     return { exitCode: 0, stdout: isClonePrep ? `${this.cloneHead}\n` : "", stderr: "", timedOut: false };
   }

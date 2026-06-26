@@ -98,11 +98,23 @@ const RUNNER_FINGERPRINT = "SHA256:lifecycle-runner-host";
 // `tanren/gate` verdict publishes. The allocator's host-key fingerprint is provided so
 // it skips the live TOFU discovery handshake.
 const FAKE_HEAD_SHA = "a".repeat(40);
+// v57 task #64: the runtime gate harvester reads the declared JUnit report over SSH
+// (via a `cat`-with-absent-marker script). Without this fake returning a minimal
+// 1-test JUnit XML, the gate would mark every tier-2 PASS as evidence_insufficient,
+// the writer-rework loop would never converge, and this 5s integration test would
+// time out (the failure mode the prior agent fixed in 3 sibling SSH fakes).
+const ONE_TEST_JUNIT_XML =
+  '<?xml version="1.0" encoding="UTF-8"?><testsuites tests="1" failures="0" errors="0"><testsuite name="evidence-stub" tests="1" failures="0" errors="0"><testcase name="ok"/></testsuite></testsuites>';
 class NoopSsh implements CommandSubstrate {
   readonly commands: Array<{ target: RunnerHandle; command: RunnerCommand }> = [];
   async run(target: RunnerHandle, command: RunnerCommand): Promise<CommandResult> {
     this.commands.push({ target, command });
-    const stdout = command.command.includes("git rev-parse HEAD") ? FAKE_HEAD_SHA : "";
+    const cmd = command.command;
+    const stdout = cmd.includes("git rev-parse HEAD")
+      ? FAKE_HEAD_SHA
+      : cmd.includes("__TANREN_FILE_ABSENT__")
+        ? ONE_TEST_JUNIT_XML
+        : "";
     return { exitCode: 0, stdout, stderr: "", timedOut: false };
   }
 }
