@@ -11,6 +11,11 @@
 
 import { describe, expect, it } from "vitest";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
+import type {
+  InsertTaskInput,
+  RunStateWriter,
+  UpdateTaskWithEventInput,
+} from "../src/engine/contracts/runStateWriter.js";
 import { FakeEventStore } from "./helpers/fakeEventStore.js";
 import { mergeForRun } from "../src/engine/workflow/reviewMerge/index.js";
 import { noopConflictResolver } from "./fixtures/noopConflictResolver.js";
@@ -31,6 +36,55 @@ const STACK_ON_AB = [
   { specId: "spec_a", runId: "run_a", branch: "tanren/spec_a", headSha: "sha_a" },
   { specId: "spec_b", runId: "run_b", branch: "tanren/spec_b", headSha: "sha_b" },
 ];
+
+function mergeTaskWriter(pool: ReviewMergePool): {
+  writer: RunStateWriter;
+  terminalUpdates: UpdateTaskWithEventInput[];
+} {
+  const terminalUpdates: UpdateTaskWithEventInput[] = [];
+  return {
+    terminalUpdates,
+    writer: {
+      async insertTask(input: InsertTaskInput): Promise<void> {
+        pool.tasks.push({
+          task_id: input.taskId,
+          run_id: input.runId,
+          kind: input.kind,
+          status: input.status,
+          outcome: null,
+        });
+      },
+      async updateTaskWithEvent(input: UpdateTaskWithEventInput): Promise<{ alreadyTerminal: boolean }> {
+        terminalUpdates.push(input);
+        const task = pool.tasks.find((candidate) => candidate.task_id === input.task.taskId);
+        if (task === undefined) throw new Error(`missing task: ${input.task.taskId}`);
+        Object.assign(task, { status: "done", outcome: input.task.outcome });
+        return { alreadyTerminal: false };
+      },
+      append: () => Promise.reject(new Error("unexpected append")),
+      recordCost: () => Promise.reject(new Error("unexpected recordCost")),
+      reconcileCost: () => Promise.reject(new Error("unexpected reconcileCost")),
+      finalizeRun: () => Promise.reject(new Error("unexpected finalizeRun")),
+      setRunStatus: () => Promise.reject(new Error("unexpected setRunStatus")),
+      setRunPrUrl: () => Promise.reject(new Error("unexpected setRunPrUrl")),
+      setRunAuthRef: () => Promise.reject(new Error("unexpected setRunAuthRef")),
+      setSpecStatus: () => Promise.reject(new Error("unexpected setSpecStatus")),
+      setSpecMetadata: () => Promise.reject(new Error("unexpected setSpecMetadata")),
+      setRunSpeculativeBase: () => Promise.reject(new Error("unexpected setRunSpeculativeBase")),
+      setRunPercolationReexecId: () => Promise.reject(new Error("unexpected setRunPercolationReexecId")),
+      clearRunPercolationPending: () => Promise.reject(new Error("unexpected clearRunPercolationPending")),
+      mergeRunVerifiedAncestorSha: () => Promise.reject(new Error("unexpected mergeRunVerifiedAncestorSha")),
+      supersedeQueuedPlannerTask: () => Promise.reject(new Error("unexpected supersedeQueuedPlannerTask")),
+      finalizeLand: () => Promise.reject(new Error("unexpected finalizeLand")),
+      updateTask: () => Promise.reject(new Error("unexpected updateTask")),
+      finalizeRunWithEvent: () => Promise.reject(new Error("unexpected finalizeRunWithEvent")),
+      updateSpecWithEvent: () => Promise.reject(new Error("unexpected updateSpecWithEvent")),
+      createSpec: () => Promise.reject(new Error("unexpected createSpec")),
+      createQueuedRun: () => Promise.reject(new Error("unexpected createQueuedRun")),
+      appendSpecSteering: () => Promise.reject(new Error("unexpected appendSpecSteering")),
+    } as unknown as RunStateWriter,
+  };
+}
 
 describe("P2c-1 speculative-merge-hold (merge stage)", () => {
   it("HOLDS a speculative dependent's merge while an ancestor is unmerged (no land)", async () => {
@@ -145,6 +199,48 @@ describe("P2c-1 speculative-merge-hold (merge stage)", () => {
     expect(result.outcome).toBe("blocked");
     expect(landed).toEqual([]);
     expect(events.events.map((e) => e.eventType)).toEqual(["task.started", "merge.speculative_held", "task.completed"]);
+    expect(pool.tasks).toEqual([expect.objectContaining({ kind: "merge", status: "done", outcome: "ok" })]);
+  });
+
+  it("routes queue-drive held completion through updateTaskWithEvent when a writer is wired", async () => {
+    const pool = new ReviewMergePool("native_queue");
+    pool.ancestorStack = STACK_ON_A;
+    pool.specDependsOn = ["spec_a"];
+    const events = new FakeEventStore();
+    const writer = mergeTaskWriter(pool);
+    const probe = recordingMergeProbe({
+      mergeability: { state: "clean", behind: false, baseBranch: "tanren/spec_a", headBranch: "tanren/run_1" },
+    });
+    const host = authorityHost();
+
+    const result = await mergeForRun({
+      pool: pool.asPgPool(),
+      eventStore: events,
+      secrets: new FakeSecretStore(),
+      resolveConflict: noopConflictResolver,
+      githubHttp: unusedHttp(),
+      runId: "run_1",
+      mergeProbe: probe,
+      mergeAuthority: authorityBundle(host, [], { events }),
+      queueDrive: true,
+      runStateWriter: writer.writer,
+    });
+
+    expect(result.outcome).toBe("blocked");
+    expect(events.events.map((e) => e.eventType)).toEqual(["task.started", "merge.speculative_held"]);
+    expect(writer.terminalUpdates).toEqual([
+      {
+        task: { taskId: expect.any(String), transition: "done", outcome: "ok" },
+        event: {
+          runId: "run_1",
+          specId: "spec_1",
+          projectId: "project_1",
+          taskId: expect.any(String),
+          eventType: "task.completed",
+          payload: { taskKind: "merge", status: "native_queue" },
+        },
+      },
+    ]);
     expect(pool.tasks).toEqual([expect.objectContaining({ kind: "merge", status: "done", outcome: "ok" })]);
   });
 

@@ -382,8 +382,22 @@ async function completeHeldMergeTask(
   integration: DispatchedIntegration,
   writer?: RunStateWriter,
 ): Promise<void> {
+  if (writer !== undefined) {
+    await writer.updateTaskWithEvent({
+      task: { taskId, transition: "done", outcome: "ok" },
+      event: {
+        runId: context.runId,
+        specId: context.specId,
+        projectId: context.projectId,
+        taskId,
+        eventType: "task.completed",
+        payload: { taskKind: "merge", status: integration } as never,
+      },
+    });
+    return;
+  }
   await routeTaskUpdate(
-    writer,
+    undefined,
     pool,
     { taskId, transition: "done", outcome: "ok" },
     "UPDATE tasks SET status = 'done', outcome = $2, ended_at = now() WHERE task_id = $1",
