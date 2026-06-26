@@ -26,6 +26,7 @@ import type { DesignAgent } from "../../design/designAgent.js";
 import { deriveProductGraph, type DeriveResult } from "./derive.js";
 import type { DeployPreflightCallback, GreenfieldDeployDependency, PrepareDeployCallback } from "./deployDependency.js";
 import type { SelectedTemplate, TemplateRegistryQuery } from "./templateSelection.js";
+import type { MaterializeCuratedTemplate } from "../../templates/fragments/index.js";
 import {
   DEFAULT_TOTAL_ROUNDS,
   InterviewCapture,
@@ -169,6 +170,11 @@ export interface DeriveFromCaptureInput {
   // HALTS LOUD. Threaded into `deriveProductGraph` (consulted only with a registry
   // query). Supplied by the wiring layer — no creation dependency in this engine.
   createTemplateForNoMatch?: (lifecycle: CaptureLifecycle) => Promise<SelectedTemplate | undefined>;
+  // PR-C — the MATRIX-HIT MATERIALIZER (docs/roadmap/templating-system.md §FRAGMENTS).
+  // When the curated registry hits, this seam composes + creates a template repo +
+  // pushes the VFS, returning a `SelectedTemplate` the rest of the derive seeds from.
+  // Supplied by the route wiring; absent only on the template_build origin path.
+  materializeCuratedTemplate?: MaterializeCuratedTemplate;
   // WS-D3 (native-design-subsystem.md): the DESIGN AGENT that elaborates the captured
   // design intent into the designed HEAD `DesignContract` (the design phase) before
   // the build nodes run. Production wires a real provider answerer; absent ⇒ the thin
@@ -199,6 +205,9 @@ export async function deriveFromCapture(
     ...(input.createTemplateForNoMatch === undefined
       ? {}
       : { createTemplateForNoMatch: input.createTemplateForNoMatch }),
+    ...(input.materializeCuratedTemplate === undefined
+      ? {}
+      : { materializeCuratedTemplate: input.materializeCuratedTemplate }),
     ...(input.templateChannelPreference === undefined
       ? {}
       : { templateChannelPreference: input.templateChannelPreference }),

@@ -50,7 +50,7 @@ import {
   type SelectedTemplate,
   type TemplateRegistryQuery,
 } from "../../engine/forge/interview/templateSelection.js";
-import { ChildRunStalledError } from "../../engine/templates/index.js";
+import { ChildRunStalledError, type MaterializeCuratedTemplate } from "../../engine/templates/index.js";
 import type { CaptureLifecycle } from "../../engine/forge/interview/types.js";
 import {
   ProjectAccessDeniedError,
@@ -112,6 +112,15 @@ export interface OnboardingRoutesOptions {
     // defaults to an unlinked `deploy.flyio` and halts the run with `template_required`.
     deployProviderKind?: "deploy.vercel" | "deploy.flyio";
   }) => (lifecycle: CaptureLifecycle) => Promise<SelectedTemplate | undefined>;
+  // PR-C — the MATRIX-HIT MATERIALIZER FACTORY (docs/roadmap/templating-system.md
+  // §FRAGMENTS). Onboarding's template selection checks the curated registry FIRST;
+  // on a hit, the deterministic composer assembles the template + this seam pushes
+  // the VFS to a fresh template repo. Returns the same `SelectedTemplate` shape the
+  // agent path would have produced, so the rest of the derive seeds the SAME way.
+  // Per-request builder (given org/actor) so the route layer keeps NO direct compose
+  // dependency — production wires `buildLiveMaterializeCuratedTemplate`; tests pass
+  // a stub.
+  materializeCuratedTemplate?: (ctx: { orgId: string; actor: ActorContext }) => MaterializeCuratedTemplate;
 }
 
 const RoundBody = z
@@ -240,6 +249,18 @@ export function createOnboardingRoutes(options: OnboardingRoutesOptions) {
                   // provider re-guessed from the lifecycle string that defaults to an
                   // unlinked `deploy.flyio` and halts the derive with `template_required`.
                   ...(parsed.data.deploy === undefined ? {} : { deployProviderKind: parsed.data.deploy.providerKind }),
+                }),
+              }),
+          // PR-C — the MATRIX-HIT MATERIALIZER seam. On a curated stack match,
+          // `selectSeedTemplate` returns `compose-from-fragments`; the derive calls
+          // this seam to assemble the VFS + push it to a fresh template repo, then
+          // proceeds with the SAME seed path the agent template-build produces.
+          ...(options.materializeCuratedTemplate === undefined
+            ? {}
+            : {
+                materializeCuratedTemplate: options.materializeCuratedTemplate({
+                  orgId,
+                  actor: { ...actor, orgId },
                 }),
               }),
         },

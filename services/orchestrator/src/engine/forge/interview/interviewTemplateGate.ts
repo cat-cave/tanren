@@ -15,11 +15,13 @@
 //     the result is VALIDATED (negative controls) before any project seeds from it.
 
 import {
+  SEEDABLE_STATUSES,
   selectTemplate,
   type SelectedTemplate,
   type TemplateRegistryQuery,
   type TemplateSelectionDecision,
 } from "./templateSelection.js";
+import { lookupCurated } from "../../templates/fragments/registry/index.js";
 import type { CaptureLifecycle } from "./types.js";
 
 export type ScaffoldOrigin = "project" | "template_build";
@@ -29,6 +31,14 @@ export type ScaffoldOrigin = "project" | "template_build";
 // reason). Lets derive.ts stay under the per-file import-dependency cap without an
 // extra `templateSelection.js` import line.
 export type { SelectedTemplate, TemplateRegistryQuery, TemplateSelectionDecision } from "./templateSelection.js";
+// PR-C — the matrix-hit materializer helpers re-exported through the gate so derive.ts
+// imports them on the SAME line it imports the gate's own seeds (one fewer dependency
+// line; the gate is already derive's single templating import surface).
+export {
+  materializeIfComposeFromFragments,
+  templateRefConfig,
+  type MaterializeCuratedTemplate,
+} from "./deriveMatrixHit.js";
 
 // Thrown when a "project" scaffoldOrigin derive was wired WITHOUT a template registry
 // query — the bug that would let a project skip selection and scaffold from-scratch
@@ -56,11 +66,36 @@ export interface SelectSeedInput {
 }
 
 // Run the scaffold-origin guards + (for the project path) the template SELECTION. On
-// "project" the result is ALWAYS a strong/partial seed decision — a no-match has
-// already thrown `TemplateRequiredError` inside `selectTemplate` (fail-closed halt, no
-// from-scratch). On "template_build" no selection runs (returns `undefined`) — that
-// derive IS the from-scratch authoring of the template itself.
+// "project" the result is ALWAYS a seed decision — a no-match has already thrown
+// `TemplateRequiredError` inside `selectTemplate` (fail-closed halt, no from-scratch).
+// On "template_build" no selection runs (returns `undefined`) — that derive IS the
+// from-scratch authoring of the template itself.
+//
+// MATRIX-HIT ROUTING (PR-C). The CURATED-template registry is consulted FIRST (a pure,
+// in-process lookup over the operator's `lifecycle.stack` label, canonicalized). A hit
+// short-circuits with a `compose-from-fragments` decision (the new variant) — the
+// derive's materializer assembles the template from typed fragments deterministically
+// and skips the agent template-build path. A miss falls through to the existing
+// registry-driven `selectTemplate`. On the template_build origin (which authors a
+// template from scratch — there is nothing to select) the matrix check is skipped too
+// (a curated hit there would wrongly recurse into composition).
 export async function selectSeedTemplate(input: SelectSeedInput): Promise<TemplateSelectionDecision | undefined> {
+  // MATRIX-HIT first (PR-C) — cheap, in-process, no IO. Only on the "project" origin
+  // (the template_build origin is itself the from-scratch authoring of a template).
+  if (input.scaffoldOrigin === "project") {
+    const curated = lookupCurated(input.lifecycle.stack);
+    if (curated !== undefined) {
+      return {
+        kind: "compose-from-fragments",
+        curated,
+        // No registry query was needed — record the seedable-statuses base for
+        // observability so the decision row keeps the same shape as the strong/partial
+        // path (a downstream consumer that reads `query` expects an object).
+        query: { statuses: SEEDABLE_STATUSES },
+        reasons: [`matrix-hit:${curated.id}`],
+      };
+    }
+  }
   if (input.scaffoldOrigin === "project" && input.templateRegistryQuery === undefined) {
     // A project that did not run selection would scaffold from-scratch — the exact
     // bypass this doctrine deletes. The registry query is ALWAYS provided on the

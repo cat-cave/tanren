@@ -56,7 +56,10 @@ import {
 import { MissingLifecycleError, scaffoldSpecsFor } from "./deriveScaffoldSpecs.js";
 import {
   assertSeeded,
+  materializeIfComposeFromFragments,
   selectSeedTemplate,
+  templateRefConfig,
+  type MaterializeCuratedTemplate,
   type ScaffoldOrigin,
   type SelectedTemplate,
   type TemplateRegistryQuery,
@@ -118,6 +121,12 @@ export interface DeriveInput {
   // dependency). Absent on a no-match ⇒ a LOUD `TemplateRequiredError` halt — never a
   // project-direct from-scratch scaffold (the deleted bypass).
   createTemplateForNoMatch?: (lifecycle: CaptureLifecycle) => Promise<SelectedTemplate | undefined>;
+  // PR-C — the MATRIX-HIT MATERIALIZER seam (templating-system.md §FRAGMENTS). On a
+  // `compose-from-fragments` decision, this composes the curated entry, creates the
+  // template repo, pushes every composed file, and returns a `SelectedTemplate`.
+  // Wired by `buildLiveMaterializeCuratedTemplate`; absent on a project-origin
+  // `compose-from-fragments` is a wiring bug + HALTS LOUD. See `deriveMatrixHit.ts`.
+  materializeCuratedTemplate?: MaterializeCuratedTemplate;
   // WS-D3 (native-design-subsystem.md) — the DESIGN AGENT that ELABORATES the thin
   // captured design intent into a full, persona-scoped, behavior-covering,
   // domain-appropriate `DesignContract` (the design PHASE), persisted as the HEAD
@@ -178,24 +187,6 @@ export interface DeriveResult {
   // none/blocked = from-scratch). Absent when selection was skipped (no registry
   // query injected — the current live default).
   templateSelection?: TemplateSelectionDecision;
-}
-
-// The seed reference persisted onto the project config when a template was selected
-// (strong/partial). `null` when none/blocked/skipped — the from-scratch path.
-function templateRefConfig(decision: TemplateSelectionDecision | undefined): {
-  templateRef?: Record<string, string>;
-} {
-  if (decision?.selected === undefined) return {};
-  if (decision.kind !== "strong" && decision.kind !== "partial") return {};
-  const sel = decision.selected;
-  return {
-    templateRef: {
-      templateRef: sel.templateRef,
-      repoRef: sel.repoRef,
-      validatedAt: sel.validationProof.validatedAt,
-      validatedSha: sel.validationProof.validatedSha,
-    },
-  };
 }
 
 // The repo-resolution step (extracted for file-size discipline). REPO-FIRST + IDEMPOTENT
@@ -285,7 +276,7 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
   // validated template just-in-time + seeds from it; an un-creatable no-match THROWS
   // `TemplateRequiredError` (a LOUD fail-closed halt — no project-direct from-scratch).
   // On "template_build" selection is skipped — that derive IS the from-scratch authoring.
-  const templateSelection = await selectSeedTemplate({
+  const initialSelection = await selectSeedTemplate({
     scaffoldOrigin,
     lifecycle: capture.lifecycle,
     ...(input.templateRegistryQuery === undefined ? {} : { templateRegistryQuery: input.templateRegistryQuery }),
@@ -297,6 +288,15 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
       ? {}
       : { createTemplateForNoMatch: input.createTemplateForNoMatch }),
   });
+
+  // PR-C — MATRIX-HIT MATERIALIZATION (`deriveMatrixHit.ts`): a `compose-from-fragments`
+  // decision substitutes a `strong` seed after the materializer composes + pushes.
+  const templateSelection = await materializeIfComposeFromFragments(
+    initialSelection,
+    capture.lifecycle,
+    input,
+    scaffoldOrigin,
+  );
 
   // The scaffold spec SHRINKS to template-instantiation on a strong/partial match. The
   // from-scratch authoring (`scaffoldSpecsFor` with no decision) is reachable ONLY on

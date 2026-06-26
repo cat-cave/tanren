@@ -25,6 +25,7 @@ import { createInboxRoutes } from "./routes/inbox/index.js";
 import {
   buildCreateForNoMatch,
   buildCreateTemplateFlow,
+  buildLiveMaterializeCuratedTemplate,
   createAuditRoutes,
   createTemplateRoutes,
 } from "./routes/audits/index.js";
@@ -233,6 +234,20 @@ export function mountFeatureRoutes(app: Hono<ActorContextEnv>, deps: FeatureRout
       // Wave 4: selection no-match → CREATION. Onboarding's template selection
       // creates + seeds a template when none matches (else from-scratch).
       createTemplateForNoMatch: (ctx) => buildCreateForNoMatch(createTemplateFlowDeps, ctx),
+      // PR-C — matrix-hit MATERIALIZER. Onboarding's template selection consults the
+      // curated registry FIRST; a hit invokes this seam to compose the template from
+      // typed fragments + push the VFS to a fresh template repo. The agent
+      // template-build path (`createTemplateForNoMatch`) runs ONLY on a true miss.
+      materializeCuratedTemplate: (ctx) =>
+        buildLiveMaterializeCuratedTemplate(
+          {
+            pool: scopedPool,
+            secrets,
+            githubHttp,
+            ...(githubAppMinter === undefined ? {} : { githubAppMinter }),
+          },
+          ctx,
+        ),
     }),
   );
   // candidate inbox — issue sources → Forge triage → discovery accept;
