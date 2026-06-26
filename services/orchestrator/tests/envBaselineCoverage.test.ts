@@ -21,7 +21,13 @@ describe("toolchainCoveredByGoldenBaseline — the golden-base short-circuit", (
   });
 
   it("the FULL baseline is covered (every tool at its baseline spec)", () => {
-    expect(toolchainCoveredByGoldenBaseline(tc({ node: "24", pnpm: "11", python: "3.14", go: "1.26" }))).toBe(true);
+    expect(
+      toolchainCoveredByGoldenBaseline(tc({ node: "24", pnpm: "11", python: "3.14", go: "1.26", ruby: "3.4" })),
+    ).toBe(true);
+  });
+
+  it("a Ruby-only project on the baseline spec is COVERED (apex v58 #65 — Rails stack warm hit)", () => {
+    expect(toolchainCoveredByGoldenBaseline(tc({ ruby: "3.4" }))).toBe(true);
   });
 
   it("an EMPTY toolchain is trivially covered (asks for nothing off-baseline)", () => {

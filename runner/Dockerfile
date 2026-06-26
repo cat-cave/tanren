@@ -7,6 +7,43 @@ FROM debian:trixie-slim
 # `nodejs`/`npm`/`pnpm`. The project provisions its own node/python/rust/etc at
 # its declared versions at runtime via `mise` (installed below) in user space —
 # Tanren core hardcodes ZERO project toolchain (environment-management.md §2).
+#
+# ===== STACK-AGNOSTIC OS BUILD DEPS (apex v58 #65) =====
+# `mise` provisions project TOOLCHAINS in user space, but a toolchain that
+# COMPILES FROM SOURCE (mise's vfox plugins, ruby-build, python-build, …) needs
+# C-level library + tool DEPS that only root can `apt install`. The non-root
+# `tanren` user that runs the gate cannot apt-install at runtime, so any
+# missing OS dep dead-ends the writer (apex v58: vfox-postgres failed with
+# `configure: error: bison not found` and the writer iterated 78× over 6.5h
+# without ever passing bootstrap). This block bundles the SUPERSET of common
+# language ecosystems' build-deps so the writer's stack choice never fails on
+# a missing OS package. STACK-AGNOSTIC by construction: no language-specific
+# toolchain is baked here — only the C-level deps every common toolchain's
+# source-compile needs. Each entry is justified below:
+#   - bison           parser generator     (postgres, ruby's ripper, others)
+#   - flex            lexer generator      (postgres)
+#   - pkg-config      C build glue         (most every native extension)
+#   - libicu-dev      i18n (ICU)           (postgres, node-icu, ruby Unicode)
+#   - libssl-dev      TLS/crypto headers   (ruby, python, openssl bindings)
+#   - libreadline-dev REPL line editing    (ruby, python, postgres psql)
+#   - zlib1g-dev      compression          (nearly every toolchain)
+#   - libffi-dev      foreign-function     (ruby, python ctypes/cffi)
+#   - libyaml-dev     YAML parsing         (ruby's psych — Gemfile parser)
+#   - libsqlite3-dev  sqlite headers       (python sqlite3, ruby sqlite3)
+#   - libbz2-dev      bzip2 compression    (python)
+#   - liblzma-dev     xz compression       (python lzma module)
+#   - libpq-dev       postgres client      (ruby's pg gem, python psycopg2)
+#   - libxml2-dev     XML                  (ruby nokogiri, python lxml)
+#   - libxslt1-dev    XSLT                 (ruby nokogiri, python lxml)
+#   - libgdbm-dev     ruby dbm             (ruby — full build)
+#   - libncurses-dev  TUI + readline pair  (python curses, ruby curses)
+#   - uuid-dev        OSSP uuid            (postgres uuid-ossp extension)
+#   - tcl-dev         tcl (pl/tcl)         (postgres optional)
+#   - autoconf        autotools            (some vfox/mise plugins re-autoconf)
+# Adding to this list is a doctrine call: a NEW C-level dep that a common
+# toolchain's source-compile depends on belongs here; a project-specific
+# library does NOT (the project's own `apt`/`mise install`/`bundle` provisions
+# it inside its container/dev-shell, not in the runner image).
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
     build-essential \
@@ -17,6 +54,26 @@ RUN apt-get update \
     python3 \
     tini \
     xz-utils \
+    autoconf \
+    bison \
+    flex \
+    libbz2-dev \
+    libffi-dev \
+    libgdbm-dev \
+    libicu-dev \
+    liblzma-dev \
+    libncurses-dev \
+    libpq-dev \
+    libreadline-dev \
+    libsqlite3-dev \
+    libssl-dev \
+    libxml2-dev \
+    libxslt1-dev \
+    libyaml-dev \
+    pkg-config \
+    tcl-dev \
+    uuid-dev \
+    zlib1g-dev \
   && rm -rf /var/lib/apt/lists/*
 
 # Harness node — Tanren's OWN infrastructure node, NOT the project's stack. The
@@ -281,10 +338,19 @@ RUN set -eu; \
   # Tanren-baked baseline config; `mise install` resolves each loose major to the
   # latest patch at BUILD time (freshness — never a stale exact pin) and downloads
   # it once into the shared dir.
+  # MISE_RUBY_COMPILE=false: use mise's PRECOMPILED ruby tarball instead of the
+  # ruby-build source compile (mise's `core:ruby` plugin defaults to source-build
+  # via a cloned ruby-build, which fails in the build container with the
+  # `/tmp/mise-ruby-build` permission/clone race + leaves a torn `ruby-build/bin`
+  # tree). The precompiled path resolves to a single sha-verified tarball (the
+  # same upstream artifact `mise settings ruby.compile=false` recommends), is
+  # MUCH faster, and works in the rootless tanren user-space install. Set as an
+  # ENV the `mise install` inherits — narrower than a global mise setting.
   su -s /bin/sh tanren -c '\
     set -eu; \
     export MISE_DATA_DIR='"${TANREN_MISE_DATA_DIR}"' MISE_CACHE_DIR='"${TANREN_MISE_CACHE_DIR}"' MISE_YES=1; \
     export MISE_GLOBAL_CONFIG_FILE=/opt/tanren/mise.baseline.toml; \
+    export MISE_RUBY_COMPILE=false; \
     mise trust /opt/tanren/mise.baseline.toml; \
     mise install; \
     echo "=== golden-image warm baseline (resolved patches) ==="; \
