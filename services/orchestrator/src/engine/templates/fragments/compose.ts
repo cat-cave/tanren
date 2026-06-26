@@ -143,6 +143,7 @@ export async function composeTemplate(config: TemplateConfig, library: FragmentL
     processCiYml(vfs, applied);
     processReadme(vfs, config);
     assertBaseInvariantsHeld(vfs);
+    assertRuntimeAddedFunctionalTest(vfs);
   } catch (cause) {
     if (cause instanceof TemplateComposeError) throw cause;
     throw new TemplateComposeError("post_process", `post-process failed: ${String(cause)}`, undefined, { cause });
@@ -332,4 +333,105 @@ function assertBaseInvariantsHeld(vfs: VirtualFileSystem): void {
       );
     }
   }
+}
+
+// ---- The NB-1 hardening (PR-B): a non-skeleton functional test must be present.
+//
+// The user's load-bearing constraint is "strong behavior tie-ins to tests, and
+// functional demos" — not just file existence. base/'s skeleton tests
+// (`tests/mutation-baseline.test.ts` and `tests/functional-demo.test.ts`) only
+// assert config files exist; a runtime fragment that ships ONLY those leaves the
+// gate satisfiable by structural surface alone. This assertion requires the runtime
+// (or any later fragment) to add at LEAST ONE non-skeleton test with a meaningful
+// assertion, OR a BDD feature with a `Scenario:` block. A composition without one
+// fails LOUD at compose time — the structural commitment becomes a behavioral one.
+
+const BASE_SKELETON_TEST_PATHS: ReadonlySet<string> = new Set([
+  "tests/.gitkeep",
+  "tests/mutation-baseline.test.ts",
+  "tests/functional-demo.test.ts",
+]);
+
+// A meaningful assertion regex: requires an `expect(...)` followed by a matcher
+// that takes a concrete value (`.toBe(<x>)`, `.toEqual(...)`, `.toContain(...)`,
+// `.toMatch(...)`, `.toHaveLength(...)`, `.toThrow(...)`, etc.) — rejects the
+// truthy-only matchers (`.toBe(true)`, `.toBeDefined()`, `.toBeTruthy()`) when
+// they stand alone, since they are structural-only stubs a writer can satisfy
+// without exercising behavior. `hasNonTruthyOnlyMatcher` does the actual stripping.
+const MEANINGFUL_MATCHER =
+  /\.(?:toBe|toEqual|toStrictEqual|toContain|toContainEqual|toMatch|toMatchObject|toHaveLength|toHaveProperty|toThrow|toThrowError|toBeGreaterThan|toBeGreaterThanOrEqual|toBeLessThan|toBeLessThanOrEqual|toBeCloseTo|toBeInstanceOf|toHaveBeenCalled|toHaveBeenCalledWith|toHaveBeenCalledTimes|resolves|rejects)\b/u;
+const EXPECT_CALL = /\bexpect\s*\(/u;
+const RSPEC_EXPECT = /\bexpect\([\s\S]*?\)\.to(?:_not)?\s+/u;
+const SCENARIO_HEADER = /^\s*Scenario(?:\s+Outline)?\s*:\s*\S/mu;
+
+/**
+ * A runtime/feature fragment must add at least one non-skeleton test with a
+ * meaningful assertion (or a BDD feature with a `Scenario:`). The base/ skeleton
+ * tests are EXCLUDED from the count — a fragment that ships only those is rejected.
+ *
+ * The check is intentionally lenient on file location: any `tests/**.test.ts` or
+ * any `spec/**` ruby file or any `features/**.feature` counts. A ruby runtime
+ * therefore satisfies it via spec/*.rb files; a node runtime via tests/*.ts files.
+ */
+function assertRuntimeAddedFunctionalTest(vfs: VirtualFileSystem): void {
+  const flat = vfs.toFlatMap();
+  const paths = Object.keys(flat);
+
+  // Pass A: any BDD feature with at least one Scenario block — strongest signal,
+  // the user explicitly named "functional demos" + BDD as the load-bearing surface.
+  const featureFiles = paths.filter((p) => p.startsWith("features/") && p.endsWith(".feature"));
+  for (const path of featureFiles) {
+    const content = flat[path] ?? "";
+    if (SCENARIO_HEADER.test(content)) return;
+  }
+
+  // Pass B: any non-skeleton test under tests/ (typescript) or spec/ (ruby) with
+  // a meaningful assertion. Skeleton tests under tests/ are excluded by name.
+  const candidatePaths = paths.filter((p) => isCandidateTestPath(p));
+  for (const path of candidatePaths) {
+    const content = flat[path] ?? "";
+    if (hasMeaningfulAssertion(content)) return;
+  }
+
+  throw new TemplateComposeError(
+    "post_process",
+    "assertRuntimeAddedFunctionalTest: no runtime added a meaningful functional test or BDD scenario " +
+      "(skeleton tests under tests/ that only assert file presence do NOT count — the user's " +
+      "load-bearing constraint is strong behavior tie-ins, not structural surface). Add a test " +
+      "with a meaningful matcher (.toBe(<value>), .toContain(...), .toEqual({...}), etc.) under " +
+      "tests/ or spec/, or a features/*.feature with a Scenario: block.",
+  );
+}
+
+function isCandidateTestPath(path: string): boolean {
+  if (BASE_SKELETON_TEST_PATHS.has(path)) return false;
+  if (path.startsWith("tests/") && (path.endsWith(".test.ts") || path.endsWith(".test.tsx"))) return true;
+  if (path.startsWith("spec/") && path.endsWith("_spec.rb")) return true;
+  return false;
+}
+
+function hasMeaningfulAssertion(content: string): boolean {
+  // Ruby (RSpec) flavor: `expect(...).to ...`. The `.to ...` form already requires
+  // a matcher (a bare `.to` parses as `.to_eq`, `.to include`, etc.), so we accept
+  // any `expect(...).to(_not)?` followed by whitespace + a matcher token.
+  if (RSPEC_EXPECT.test(content)) return true;
+  // TS/JS flavor: `expect(...)<matcher>`. Require at least one meaningful matcher
+  // that is NOT a truthy-only stand-alone (the .toBe(true)/.toBeTruthy()/etc.
+  // pattern the skeleton uses to satisfy structural-only writers).
+  if (!EXPECT_CALL.test(content)) return false;
+  if (!MEANINGFUL_MATCHER.test(content)) return false;
+  // Reject the all-truthy-only-matcher case: every meaningful match also matches
+  // TRUTHY_ONLY (`.toBe(true)`), so we additionally require at least one matcher
+  // that is NOT a truthy-only one. Find every `.toBe(...)` etc. and check if at
+  // least one is non-truthy.
+  return hasNonTruthyOnlyMatcher(content);
+}
+
+function hasNonTruthyOnlyMatcher(content: string): boolean {
+  // Strip every truthy-only matcher, then re-check for the meaningful pattern. A
+  // file whose ONLY matchers are `.toBe(true)`/`.toBeTruthy()`/etc. yields an empty
+  // residue post-strip; a file with even one real matcher leaves a residue match.
+  const stripper = /\.(?:toBe\(true\)|toBeTruthy\(\)|toBeDefined\(\)|toBeFalsy\(\)|toBeNull\(\))/gu;
+  const residue = content.replaceAll(stripper, "");
+  return MEANINGFUL_MATCHER.test(residue);
 }

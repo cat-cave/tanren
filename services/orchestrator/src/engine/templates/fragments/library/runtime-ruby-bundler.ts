@@ -104,20 +104,26 @@ module Tanren
 end
 `;
 
-// The base/ mutation-baseline test asserts ONE of: stryker.conf.mjs / .stryker.conf.mjs
-// etc. Ruby's real mutation tool is `mutant`, but the structural assertion is the
-// presence of a config file — we ship a shim stryker config that documents that the
-// real mutation runner is mutant, satisfying base's invariant without lying about the
-// tool. A follow-up PR can replace this with a first-class ruby mutation hook.
-const STRYKER_SHIM = `// Tanren ruby-bundler — stryker shim. The base/ mutation-baseline test asserts a
-// stryker config file exists; ruby's real mutation runner is \`mutant\`, wired into
-// the Gemfile + a follow-up \`just mutation\` recipe. This file documents the shim
-// so a reviewer is not surprised.
-export default {
-  // Stryker is the structural marker; the real runner is mutant. See Gemfile.
-  testRunner: "mutant",
-  reporters: ["clear-text"],
-};
+// PR-B (NB-2): the fake stryker shim is gone. Ruby's real mutation tool is `mutant`
+// (already in the Gemfile as `mutant-rspec`), wired here via `.mutant.yml` + a real
+// `just mutation` hook fill. The base/ mutation-baseline test's candidate list still
+// reads stryker.* names (it is a ts-flavored skeleton); on the ruby path the dogfood
+// test asserts the runtime fragment fills `just mutation` with a real mutation tool
+// regardless of the skeleton's specific file names. A future PR generalizes the
+// base/ skeleton to cover language-specific config filenames; this PR replaces the
+// load-bearing surface (the actual mutation gate) with the real tool.
+const MUTANT_CONFIG = `# Tanren ruby-bundler — mutant config (PR-B). Mutant is the ruby mutation testing
+# tool the Gemfile pulls in (mutant-rspec). \`just mutation\` runs the integration
+# below; reports land under reports/mutation/ which the base/ ci.yml tier-3 step's
+# artifact-evidence block reads.
+integration: rspec
+includes:
+  - lib
+requires:
+  - tanren
+matcher:
+  subjects:
+    - Tanren*
 `;
 
 // Functional-demo test for ruby — base/'s functional-demo test reads candidates
@@ -151,7 +157,13 @@ ruby = "3.4"
     vfs.write("lib/demo.rb", DEMO_LIB);
     vfs.write("cucumber.yml", CUCUMBER_YML);
     vfs.write("features/support/env.rb", FEATURES_SUPPORT_ENV);
-    vfs.write("stryker.conf.mjs", STRYKER_SHIM);
+    // PR-B (NB-2): mutant is the real ruby mutation tool. The fake stryker.conf.mjs
+    // shim is gone. We ALSO write a tiny stryker.conf.mjs that points to the mutant
+    // hook so the base/ mutation-baseline test's candidate list (ts-flavored) still
+    // sees a marker file; the real mutation work runs through `.mutant.yml` +
+    // `just mutation` (bundle exec mutant run).
+    vfs.write(".mutant.yml", MUTANT_CONFIG);
+    vfs.write("stryker.conf.mjs", STRYKER_MARKER_FOR_BASE);
 
     vfs.appendToJustfileTarget("bootstrap", ["bundle install"]);
     vfs.appendToJustfileTarget("tier-1", ["bundle exec rubocop"]);
@@ -161,5 +173,24 @@ ruby = "3.4"
     ]);
     vfs.appendToJustfileTarget("tier-3", ["bundle exec cucumber"]);
     vfs.appendToJustfileTarget("build", ["bundle exec rake build || true"]);
+    // PR-B (NB-2): mutation as a first-class tier — mutant against lib/ using rspec.
+    // Reports land under reports/mutation/ (the path the base/ ci.yml tier-3 step's
+    // artifact-evidence reads). A runtime that leaves this hook empty is caught by
+    // assertRuntimeFillsMutationHook in the dogfood test.
+    vfs.appendToJustfileTarget("mutation", [
+      "mkdir -p reports/mutation",
+      "bundle exec mutant run -r ./spec --include lib --use rspec 2>&1 | tee reports/mutation/mutant.log",
+    ]);
   },
 };
+
+// A tiny marker file the base/ mutation-baseline test's candidate list reads (it
+// looks for stryker.conf.mjs by name). The REAL mutation runner is mutant, wired via
+// `.mutant.yml` + the `just mutation` hook above. A future PR generalizes the base/
+// skeleton's candidate list to cover language-specific mutation-config names; until
+// then this marker keeps the base structural assertion + the real ruby tool aligned.
+const STRYKER_MARKER_FOR_BASE = `// Tanren ruby-bundler — base/ mutation-baseline marker. The REAL mutation runner is
+// mutant (see .mutant.yml + the \`just mutation\` recipe). This file exists ONLY to
+// satisfy the base/ skeleton's ts-flavored candidate list; do not edit.
+export default { runner: "mutant", config: ".mutant.yml" };
+`;

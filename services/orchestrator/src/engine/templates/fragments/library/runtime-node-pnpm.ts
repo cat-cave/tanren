@@ -63,15 +63,21 @@ module.exports = {
 };
 `;
 
-const STRYKER_CONFIG = `// Mutation testing — the base/ mutation-baseline test asserts THIS file exists; a
-// writer cannot ship a template structurally without it. Tune mutators/ignore as the
-// project grows; the baseline only asserts presence.
+const STRYKER_CONFIG = `// Mutation testing — PR-B made this a first-class tier. The base/ mutation-baseline
+// test asserts THIS file exists; the dogfood test additionally asserts the
+// configuration is real (mutate src, exclude tests, reports written to a path the
+// .tanren/ci.yml's tier-3 mutation step reads). \`just mutation\` runs stryker with
+// json + clear-text reporters; the gate's evidence block reads the json artifact.
 export default {
   packageManager: "pnpm",
   testRunner: "vitest",
-  reporters: ["clear-text", "html"],
+  reporters: ["clear-text", "json"],
+  jsonReporter: { fileName: "reports/mutation/mutation.json" },
   coverageAnalysis: "perTest",
-  mutate: ["src/**/*.ts", "!src/**/*.test.ts"],
+  mutate: ["src/**/*.ts", "!src/**/*.test.ts", "!src/**/*.spec.ts"],
+  thresholds: { high: 80, low: 60, break: 0 },
+  timeoutMS: 60000,
+  concurrency: 2,
 };
 `;
 
@@ -168,5 +174,13 @@ pnpm = "11"
     ]);
     vfs.appendToJustfileTarget("tier-3", ["pnpm build"]);
     vfs.appendToJustfileTarget("build", ["pnpm build"]);
+    // PR-B (NB-2): mutation testing as a first-class tier — stryker run that writes a
+    // json report at reports/mutation/mutation.json (the path the base/ ci.yml's
+    // tier-3 mutation step's artifact-evidence reads). A runtime fragment that leaves
+    // this hook empty is caught by assertRuntimeFillsMutationHook in the dogfood test.
+    vfs.appendToJustfileTarget("mutation", [
+      "mkdir -p reports/mutation",
+      "pnpm stryker run --reporters json,clear-text",
+    ]);
   },
 };

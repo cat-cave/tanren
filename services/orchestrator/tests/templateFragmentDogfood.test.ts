@@ -130,6 +130,138 @@ describe("template-fragment library — curated matrix compose", () => {
   }
 });
 
+describe("template-fragment library — runtime mutation contract (PR-B NB-2)", () => {
+  // Every runtime fragment MUST fill the `just mutation` hook with a real mutation
+  // tool AND write a meaningful mutation config. A runtime that ships an empty
+  // mutation hook (or only the structural marker stryker.conf.mjs without a real
+  // runner wiring) is a hook-bypass; this test catches it before snapshot review.
+  for (const fragment of loadFragmentLibrary().ofKind("runtime")) {
+    it(`runtime "${fragment.id}" fills the just-mutation hook with a real mutation tool`, async () => {
+      const vfs = new VirtualFileSystem();
+      const library = loadFragmentLibrary();
+      await library.require(BASE_FRAGMENT_ID).apply(vfs, sampleConfig(fragment));
+      for (const depId of fragment.dependsOn ?? []) {
+        await library.require(depId).apply(vfs, sampleConfig(fragment));
+      }
+      await fragment.apply(vfs, sampleConfig(fragment));
+      const mutationLines = vfs.justHookLines("mutation");
+      expect(mutationLines.length, `${fragment.id} did not fill the just-mutation hook`).toBeGreaterThan(0);
+      // A real mutation tool — stryker (node) or mutant (ruby). A runtime that
+      // appends only `echo "todo"` is a structural-only fill and must be rejected.
+      const joined = mutationLines.join("\n");
+      expect(joined, `${fragment.id}'s just-mutation hook is not a real mutation tool`).toMatch(
+        /(stryker\s+run|mutant\s+run)/u,
+      );
+    });
+
+    it(`runtime "${fragment.id}" writes a meaningful mutation config`, async () => {
+      const vfs = new VirtualFileSystem();
+      const library = loadFragmentLibrary();
+      await library.require(BASE_FRAGMENT_ID).apply(vfs, sampleConfig(fragment));
+      for (const depId of fragment.dependsOn ?? []) {
+        await library.require(depId).apply(vfs, sampleConfig(fragment));
+      }
+      await fragment.apply(vfs, sampleConfig(fragment));
+      // node-pnpm writes stryker.conf.mjs that targets src/; ruby-bundler writes
+      // .mutant.yml with an integration + matcher. The marker shim alone (object
+      // with `runner: "mutant"`) doesn't qualify on its own — we additionally
+      // require the .mutant.yml on the ruby path.
+      const hasNodeMutation = vfs.has("stryker.conf.mjs") && /mutate:\s*\[/u.test(vfs.read("stryker.conf.mjs"));
+      const hasRubyMutation = vfs.has(".mutant.yml") && /integration:\s*rspec/u.test(vfs.read(".mutant.yml"));
+      expect(
+        hasNodeMutation || hasRubyMutation,
+        `${fragment.id} did not write a meaningful mutation config (stryker mutate:[] or .mutant.yml)`,
+      ).toBe(true);
+    });
+  }
+});
+
+describe("template-fragment library — functional-test contract (PR-B NB-1)", () => {
+  it("rejects a runtime that ships only the skeleton tests (no meaningful assertions)", async () => {
+    // A runtime that satisfies the base/ presence checks structurally (writes a
+    // stryker.conf.mjs + demo entry) but ships NO meaningful test must be rejected.
+    const structuralOnly: Fragment = {
+      id: RUNTIME_NODE_PNPM_ID,
+      version: "0.0.0-structural",
+      kind: "runtime",
+      contract: {
+        testRunner: "vitest",
+        reportPath: "reports/junit.xml",
+      },
+      async apply(vfs) {
+        vfs.write("package.json", `{\n  "name": "structural"\n}\n`);
+        vfs.write("src/demo.ts", "export {};\n");
+        vfs.write("stryker.conf.mjs", "export default {};\n");
+        vfs.appendToJustfileTarget("bootstrap", ["echo bootstrap"]);
+        vfs.appendToJustfileTarget("tier-1", ["echo tier1"]);
+        vfs.appendToJustfileTarget("tier-2", ["echo tier2"]);
+        vfs.appendToJustfileTarget("tier-3", ["echo tier3"]);
+        vfs.appendToJustfileTarget("build", ["echo build"]);
+        vfs.appendToJustfileTarget("mutation", ["pnpm stryker run"]);
+      },
+    };
+    const library = loadFragmentLibrary();
+    library.replaceForTests(structuralOnly);
+    await expect(
+      composeTemplate(
+        {
+          slug: "structural-only",
+          runtime: "node-pnpm",
+          deploy: "none",
+          addons: [],
+          examples: [],
+        } as TemplateConfig,
+        library,
+      ),
+    ).rejects.toThrow(/no runtime added a meaningful functional test or BDD scenario/u);
+  });
+
+  it("accepts a runtime that adds a BDD feature with a Scenario block", async () => {
+    // A runtime that ships ONLY truthy-only ts tests AND a real BDD feature satisfies
+    // the assertion via Pass A (the feature). Proves the BDD-only path is honored.
+    const bddRuntime: Fragment = {
+      id: RUNTIME_NODE_PNPM_ID,
+      version: "0.0.0-bdd",
+      kind: "runtime",
+      contract: {
+        testRunner: "vitest",
+        reportPath: "reports/junit.xml",
+      },
+      async apply(vfs) {
+        vfs.write("package.json", `{\n  "name": "bdd"\n}\n`);
+        vfs.write("src/demo.ts", "export {};\n");
+        vfs.write("stryker.conf.mjs", "export default {};\n");
+        // Only a structural-only ts test — would fail Pass B alone.
+        vfs.write(
+          "tests/structural.test.ts",
+          "import { it, expect } from 'vitest';\nit('runs', () => { expect(true).toBe(true); });\n",
+        );
+        vfs.write("features/demo.feature", "Feature: demo\n  Scenario: a real scenario\n    Given a step\n");
+        vfs.appendToJustfileTarget("bootstrap", ["echo bootstrap"]);
+        vfs.appendToJustfileTarget("tier-1", ["echo tier1"]);
+        vfs.appendToJustfileTarget("tier-2", ["echo tier2"]);
+        vfs.appendToJustfileTarget("tier-3", ["echo tier3"]);
+        vfs.appendToJustfileTarget("build", ["echo build"]);
+        vfs.appendToJustfileTarget("mutation", ["pnpm stryker run"]);
+      },
+    };
+    const library = loadFragmentLibrary();
+    library.replaceForTests(bddRuntime);
+    await expect(
+      composeTemplate(
+        {
+          slug: "bdd-only",
+          runtime: "node-pnpm",
+          deploy: "none",
+          addons: [],
+          examples: [],
+        } as TemplateConfig,
+        library,
+      ),
+    ).resolves.toBeDefined();
+  });
+});
+
 describe("template-fragment library — enforcement (the load-bearing constraint)", () => {
   it("rejects a fragment that fills an unknown justfile target", async () => {
     // Override the biome addon with a deliberately-evil variant that fills a hook
@@ -240,8 +372,15 @@ describe("template-fragment library — enforcement (the load-bearing constraint
     ).rejects.toThrow(/no fragment declared a test runner/u);
   });
 
-  it("BASE_JUSTFILE_TARGETS exposes exactly the base-declared targets", () => {
-    expect(Array.from(BASE_JUSTFILE_TARGETS).sort()).toEqual(["bootstrap", "build", "tier-1", "tier-2", "tier-3"]);
+  it("BASE_JUSTFILE_TARGETS exposes exactly the base-declared targets (includes PR-B mutation)", () => {
+    expect(Array.from(BASE_JUSTFILE_TARGETS).sort()).toEqual([
+      "bootstrap",
+      "build",
+      "mutation",
+      "tier-1",
+      "tier-2",
+      "tier-3",
+    ]);
   });
 
   it("BASE_PROTECTED_FILES names the non-negotiable base invariants", () => {
