@@ -57,7 +57,9 @@ class InterpretingSsh implements CommandSubstrate {
     const ok = { exitCode: 0, stdout: "", stderr: "", timedOut: false };
     if (cmd.includes(".tanren/ci.yml") && cmd.includes("cat ")) return { ...ok, stdout: this.ciConfigYaml };
     // The native JUnit read — always absent (the virtual workspace writes no report).
-    if (cmd.includes("__TANREN_JUNIT_ABSENT__")) return { ...ok, stdout: "__TANREN_JUNIT_ABSENT__\n" };
+    // After task #64 the marker is the shared `__TANREN_FILE_ABSENT__` (the harvester +
+    // ingest share one file-read primitive).
+    if (cmd.includes("__TANREN_FILE_ABSENT__")) return { ...ok, stdout: "__TANREN_FILE_ABSENT__\n" };
     if (cmd === "git rev-parse HEAD") return { ...ok, stdout: `${"c".repeat(40)}\n` };
     if (cmd.includes("deps-ensure")) return { ...ok, stdout: "tanren: deps-ensure no-op" };
     if (cmd.startsWith("just tier-")) return ok;
@@ -102,8 +104,9 @@ describe("buildDefaultGate — native JUnit ingest (declared-but-missing is LOUD
 
   it("pre_audit (a tier DECLARED a junitReport) + absent report → a LOUD structured log.error + durable ci.junit_missing", async () => {
     // The H10 structured logger emits one JSON line via console.error for an error level —
-    // so the loud breadcrumb is the structured sink, named by its message + fields.
-    const errs = vi.spyOn(console, "error").mockImplementation(() => {});
+    // so the loud breadcrumb is the structured sink, named by its message + fields. Silenced
+    // here so the test output stays clean (the diagnosis is asserted off the failed outcome).
+    vi.spyOn(console, "error").mockImplementation(() => {});
     const events = new FakeEventStore();
     const gate = buildDefaultGate(
       ingestInput(new InterpretingSsh(JUNIT_WRITING_CONFIG)),
@@ -114,18 +117,23 @@ describe("buildDefaultGate — native JUnit ingest (declared-but-missing is LOUD
 
     const outcome = await gate({ when: "pre_audit" });
 
-    expect(outcome.passed).toBe(true);
-    const loud = errs.mock.calls.map((c) => String(c[0])).find((m) => m.includes("native JUnit report EXPECTED"));
-    expect(loud).toBeDefined();
-    // The structured signal names the reason (absent) + the tier + the declared path as
-    // discrete JSON fields — no silent degrade.
-    expect(loud).toContain('"reason":"absent"');
-    expect(loud).toContain('"tier":"slow"');
-    expect(loud).toContain('"reportPath":"reports/junit.xml"');
-    // DURABLE: a `ci.junit_missing` event is persisted carrying the tier/path/reason.
-    const missing = events.events.find((e) => e.eventType === "ci.junit_missing");
-    expect(missing).toBeDefined();
-    expect(missing!.payload).toMatchObject({ tier: "slow", reportPath: "reports/junit.xml", reason: "absent" });
+    // Task #64: a tier that DECLARED a junitReport (which promotes to junit evidence
+    // with minTests: 1) but produced NO report now FAILS the gate with
+    // failedReason: "evidence_insufficient" — the v57 fix promotes "expected but
+    // missing" from a best-effort post-verdict warning into a first-class gate
+    // failure (a writer-actionable contract violation).
+    expect(outcome.passed).toBe(false);
+    if (outcome.passed) return;
+    expect(outcome.failure.failedReason).toBe("evidence_insufficient");
+    expect(outcome.failure.evidence?.kind).toBe("junit");
+    expect(outcome.failure.evidence?.reason).toBe("junit_missing");
+    // DURABLE: the persisted `gate.failed` event carries the same diagnosis. (The
+    // legacy `ci.junit_missing` no longer fires when the harvester catches it first,
+    // because the verdict already failed — the per-test best-effort ingest is gated
+    // on a passing tier or is invoked only when the harvester wasn't reached.)
+    const gateFailed = events.events.find((e) => e.eventType === "gate.failed");
+    expect(gateFailed).toBeDefined();
+    expect((gateFailed!.payload as { failedReason?: string }).failedReason).toBe("evidence_insufficient");
   });
 
   it("per_iteration (no tier declared a junitReport) + absent report → QUIET (no loud signal, no event)", async () => {
@@ -152,7 +160,12 @@ describe("buildDefaultGate — native JUnit ingest (declared-but-missing is LOUD
   it("a config with NO junitReport declaration → clean skip even when a report-path string appears in a `run`", async () => {
     // STACK-AGNOSTIC + no command sniff: a step whose `run` happens to mention the path string
     // but does NOT set `junitReport` is NOT treated as junit-producing — the DECLARED field is
-    // the sole signal. So pre_audit here is a clean QUIET skip.
+    // the sole signal. So the per-test ingest is a clean QUIET skip even at pre_audit.
+    //
+    // Task #64: pre_audit/pre_merge tiers MUST declare positive evidence. To exercise the
+    // "no junitReport declared" path while still satisfying the evidence contract, the
+    // slow tier here declares a stdout-count evidence (a non-junit kind) — no junit
+    // declaration, no junit evidence, no per-test ingest.
     const NO_DECLARATION_CONFIG = `version: 1
 bootstrap:
   run: just bootstrap
@@ -163,6 +176,10 @@ tiers:
   slow:
     - name: tier-2
       run: just tier-2 --note reports/junit.xml
+      evidence:
+        kind: stdout-count
+        pattern: "."
+        min: 1
 when:
   fast:
     - per_iteration
@@ -172,12 +189,20 @@ when:
 `;
     const errs = vi.spyOn(console, "error").mockImplementation(() => {});
     const events = new FakeEventStore();
-    const gate = buildDefaultGate(
-      ingestInput(new InterpretingSsh(NO_DECLARATION_CONFIG)),
-      target,
-      workspacePath,
-      events,
-    );
+    const ssh = new InterpretingSsh(NO_DECLARATION_CONFIG);
+    // The tier-2 step's stdout must satisfy `stdout-count` (≥1 match of `.`). Patch
+    // the runner: a `just tier-` invocation returns ANY stdout content so the regex hits.
+    // The actual command is mise-activated (a prelude precedes the project command), so
+    // we look for `just tier-` as a substring, not at the start of the command.
+    const origRun = ssh.run.bind(ssh);
+    ssh.run = async (t, c) => {
+      const res = await origRun(t, c);
+      if (c.command.includes("just tier-")) {
+        return { ...res, stdout: "tier-2 ran" };
+      }
+      return res;
+    };
+    const gate = buildDefaultGate(ingestInput(ssh), target, workspacePath, events);
 
     const outcome = await gate({ when: "pre_audit" });
 

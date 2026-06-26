@@ -6,6 +6,54 @@
       "items": {
         "additionalProperties": false,
         "properties": {
+          "evidence": {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "enum": [
+                  "junit",
+                  "artifact",
+                  "stdout-count"
+                ],
+                "type": "string"
+              },
+              "observed": {
+                "additionalProperties": {},
+                "propertyNames": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              "reason": {
+                "enum": [
+                  "junit_missing",
+                  "junit_zero_tests",
+                  "junit_below_threshold",
+                  "artifact_absent",
+                  "artifact_too_small",
+                  "stdout_count_below_threshold"
+                ],
+                "type": "string"
+              },
+              "required": {
+                "additionalProperties": {},
+                "propertyNames": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              "sufficient": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "kind",
+              "sufficient",
+              "observed",
+              "required"
+            ],
+            "type": "object"
+          },
           "exitCode": {
             "anyOf": [
               {

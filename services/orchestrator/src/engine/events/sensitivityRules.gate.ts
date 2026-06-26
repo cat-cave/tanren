@@ -24,18 +24,39 @@ export const gateSensitivityRules: SensitivityRule[] = [
     ["steps[].passed", "public"],
     ["steps[].timedOut", "public"],
     ["steps[].outputTail", "secret"],
+    // Evidence verdict (task #64) is a metric: counts / required thresholds, no secret
+    // surface — observed/required carry numeric totals + the declared path/pattern (a
+    // public CI-config field), not stdout/stderr (which is already in `outputTail`).
+    ["steps[].evidence.kind", "public"],
+    ["steps[].evidence.sufficient", "public"],
+    ["steps[].evidence.reason", "public"],
+    ["steps[].evidence.observed", "public"],
+    ["steps[].evidence.required", "public"],
   ]),
   ...rulesFor("gate.failed", [
     ["tier", "public"],
     ["when", "public"],
     ["failedStep", "public"],
     ["exitCode", "public"],
+    ["failedReason", "public"],
     ["steps[].name", "public"],
     ["steps[].run", "public"],
     ["steps[].exitCode", "public"],
     ["steps[].passed", "public"],
     ["steps[].timedOut", "public"],
     ["steps[].outputTail", "secret"],
+    ["steps[].evidence.kind", "public"],
+    ["steps[].evidence.sufficient", "public"],
+    ["steps[].evidence.reason", "public"],
+    ["steps[].evidence.observed", "public"],
+    ["steps[].evidence.required", "public"],
+    // Top-level evidence on the gate.failed payload: the harvested verdict for the
+    // failing step (the diagnosis the writer's rework directive consumes).
+    ["evidence.kind", "public"],
+    ["evidence.sufficient", "public"],
+    ["evidence.reason", "public"],
+    ["evidence.observed", "public"],
+    ["evidence.required", "public"],
   ]),
   // Lenient-posture advisory step failure (lint/typecheck): names + exit code are
   // public identifiers; the captured output tail is secret (may surface env/paths).

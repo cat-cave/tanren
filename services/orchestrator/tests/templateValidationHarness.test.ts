@@ -68,6 +68,18 @@ class ScriptedSsh implements CommandSubstrate {
     if (cmd.startsWith("rm -rf") || cmd.includes("cp -a")) {
       return ok();
     }
+    // EVIDENCE harvester (task #64): the default config's slow/merge tiers declare
+    // junitReport → junit evidence. The harvester reads back the report; return a
+    // minimal well-formed JUnit XML with 1 test so the assertion is satisfied for
+    // every "clean-template" gate run (planted/defect gates still go through
+    // scriptPlantedGate below, which always fails before evidence is checked).
+    if (cmd.includes("reports/junit.xml") && this.planted.get(cwd) === undefined) {
+      return {
+        exitCode: 0,
+        stdout: '<?xml version="1.0"?><testsuites><testsuite name="t"><testcase name="ok"/></testsuite></testsuites>',
+        stderr: "",
+      };
+    }
 
     // A gate/step command run over a PLANTED scratch dir: behavior per the GateMode.
     const plantedCapability = this.planted.get(cwd);
@@ -336,6 +348,16 @@ describe("runValidationHarness — deps installed before the positive-control ti
           stderr: "sh: 1: ./node_modules/.bin/prettier: not found",
         };
       }
+      // EVIDENCE harvester (task #64): the slow/merge tiers declare junitReport →
+      // junit evidence; the harvester reads back the report. Return a minimal
+      // well-formed JUnit XML with 1 test so the evidence assertion passes.
+      if (cmd.includes("reports/junit.xml")) {
+        return {
+          exitCode: 0,
+          stdout: '<?xml version="1.0"?><testsuites><testsuite name="t"><testcase name="ok"/></testsuite></testsuites>',
+          stderr: "",
+        };
+      }
       return { exitCode: 0, stdout: "", stderr: "" };
     }
   }
@@ -352,9 +374,13 @@ describe("runValidationHarness — deps installed before the positive-control ti
       "  slow:",
       "    - name: tier-2",
       "      run: just tier-2",
+      // Task #64: a pre_audit/pre_merge tier MUST declare positive evidence; legacy
+      // junitReport promotes to junit evidence with minTests: 1.
+      "      junitReport: reports/junit.xml",
       "  merge:",
       "    - name: tier-3",
       "      run: just tier-3",
+      "      junitReport: reports/junit.xml",
       "when:",
       "  fast:",
       "    - per_iteration",

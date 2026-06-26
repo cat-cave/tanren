@@ -338,12 +338,87 @@ function hashWork(diff: string): string {
 // gate to rediscover it. Shared by the fast-tier (per_iteration) writer steering here
 // AND the merge-tier (pre_merge) self-heal re-entry (`mergeGateRejection`), so every
 // gate point feeds the writer the same actionable failure content.
+//
+// EVIDENCE-INSUFFICIENT (apex v57 task #64): when the gate failed because the step
+// exited 0 but produced no positive proof of its declared contract (the v57 green-by-
+// accident class — `tsc` over empty files, `vitest` with no tests, `playwright`
+// with no browsers), prepend a SPECIFIC diagnosis NAMING the contract violation
+// (e.g. "your test command exited 0 but produced 0 of 1 required tests"). This is
+// what converts a v57-style 8-hour convergence loop into a 1-iteration fix: the
+// writer is told the contract, not just "the gate failed".
 export function gateReason(gate: Extract<GateOutcome, { passed: false }>): string {
   const { failure } = gate;
   const exit = failure.exitCode === null ? "no exit code" : `exit ${failure.exitCode}`;
   const header = `gate tier "${failure.tier}" (${failure.when}) failed at step "${failure.failedStep}" with ${exit}`;
+  const evidenceDirective = evidenceInsufficientDirective(failure);
   const outputTail = failedStepOutputTail(failure);
-  return outputTail === "" ? header : `${header}\nGate output (last lines):\n${outputTail}`;
+  const parts: string[] = [header];
+  if (evidenceDirective !== undefined) parts.push(evidenceDirective);
+  if (outputTail !== "") parts.push(`Gate output (last lines):\n${outputTail}`);
+  return parts.join("\n");
+}
+
+// The writer-steering line built from a gate failure's evidence verdict (apex v57 task
+// #64). Returns undefined when the failure is the historical exit-code class (no
+// evidence verdict, or the verdict is sufficient). When the failure is evidence-
+// insufficient, names the contract violation precisely:
+//   - junit_zero_tests        → "your test command exited 0 but produced 0 of N required tests"
+//   - junit_below_threshold   → "your test command produced K of N required tests"
+//   - junit_missing           → "your test command exited 0 but wrote no JUnit report to <path>"
+//   - artifact_absent         → "your step exited 0 but wrote no artifact to <path>"
+//   - artifact_too_small      → "your step's artifact at <path> is below the minBytes threshold"
+//   - stdout_count_below_threshold → "your step's stdout did not match the required pattern K of N times"
+// STACK-AGNOSTIC: the directive names the project's own declared contract; Tanren
+// names no runner / tool. The class name (`gate-evidence-insufficient-<reason>`) is
+// the stable id the spec-level convergence detector can dedupe across iterations.
+export function evidenceInsufficientDirective(
+  failure: Extract<GateOutcome, { passed: false }>["failure"],
+): string | undefined {
+  if (failure.failedReason !== "evidence_insufficient") return undefined;
+  const ev = failure.evidence;
+  if (ev === undefined || ev.sufficient) return undefined;
+  const className = `gate-evidence-insufficient-${ev.reason}`;
+  const reasonText = describeEvidenceReason(ev);
+  return `EVIDENCE INSUFFICIENT [${className}]: ${reasonText} The step's process exited 0, but the gate requires POSITIVE proof the declared contract actually ran. Fix the test/build command so it produces the required evidence — do not patch the gate config to weaken the threshold.`;
+}
+
+// Stringify a record value safely: primitives stringify naturally, objects fall back
+// to JSON so the directive never emits `[object Object]`. The harvester always writes
+// primitives, but the open record type allows `unknown` — this is defense in depth.
+function stringifyEvidenceValue(value: unknown): string {
+  if (value === undefined || value === null) return "?";
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return String(value);
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return "?";
+  }
+}
+
+function describeEvidenceReason(
+  ev: Extract<NonNullable<Extract<GateOutcome, { passed: false }>["failure"]["evidence"]>, { sufficient: false }>,
+): string {
+  const observedOf = (key: string): string => stringifyEvidenceValue(ev.observed[key]);
+  const requiredOf = (key: string): string => stringifyEvidenceValue(ev.required[key]);
+  switch (ev.reason) {
+    case "junit_zero_tests":
+      return `your test command exited 0 but ran ZERO tests (required ${requiredOf("minTests")}). The runner discovered no test files, OR the suite was filtered out — invoke your test runner so it actually executes the suite.`;
+    case "junit_below_threshold":
+      return `your test command ran ${observedOf("total")} of ${requiredOf("minTests")} required tests — below the contract threshold.`;
+    case "junit_missing":
+      return `your test command exited 0 but wrote NO JUnit report to "${requiredOf("reportPath")}" (read reason: ${observedOf("readReason")}). Configure your test runner to emit a JUnit report at that path (e.g. vitest --reporter=junit --outputFile=...).`;
+    case "artifact_absent":
+      return `your step exited 0 but wrote NO artifact to "${requiredOf("path")}" (read reason: ${observedOf("readReason")}). The step's contract is to produce that artifact — do so.`;
+    case "artifact_too_small":
+      return `your step's artifact at "${requiredOf("path")}" is ${observedOf("bytes")} bytes — below the ${requiredOf("minBytes")} byte threshold.`;
+    case "stdout_count_below_threshold":
+      return `your step's stdout matched "${requiredOf("pattern")}" ${observedOf("matches")} times — below the required ${requiredOf("min")} times.`;
+    default:
+      // Defense-in-depth fallback: the schema marks `reason` optional even on the
+      // failure branch, so a malformed event payload could land here. Stringify the
+      // reason (or "unknown") so the directive still names something.
+      return `evidence insufficient (${stringifyEvidenceValue(ev.reason ?? "unknown")})`;
+  }
 }
 
 // The captured stdout/stderr tail of the step that failed the gate (apex pre-run §7.4):

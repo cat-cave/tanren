@@ -26,13 +26,12 @@
 // `ci.tests.reported` event routes through the caller's `EventStore` (the control-plane
 // writer when remote-writes is on — the data plane can't INSERT `events` directly).
 import type pg from "pg";
-import { parseJunitReport } from "../../ci/junit.js";
+import { type JunitReport, parseJunitReport } from "../../ci/junit.js";
 import { ingestJunitResults } from "../../ci/junitIngest.js";
 import type { RunnerHandle } from "../../contracts/allocator.js";
 import type { CommandSubstrate } from "../../contracts/commandSubstrate.js";
 import type { EventStore } from "../../eventStore.js";
-import { quoteSshShellArg } from "../../ssh/command.js";
-import { outputOnlyWatchdog } from "../../ssh/activityWatchdog.js";
+import { readWorkspaceFile, type FileAbsence } from "./harvestStepEvidence.js";
 
 export interface IngestGateJunitInput {
   ssh: CommandSubstrate;
@@ -74,14 +73,22 @@ export interface IngestGateJunitInput {
    * declared a report (`expectReport=false`) and the read is skipped entirely.
    */
   reportPath?: string;
+  /**
+   * A pre-parsed JUnit report produced earlier in the same gate evaluation (the
+   * evidence harvester reads + parses the report BEFORE the verdict so it can fail
+   * the step on insufficient evidence). When present, the ingest skips its own SSH
+   * read + parse and reuses this report — no double-read over SSH. When absent (the
+   * pre-evidence call sites: tests, future call sites), the ingest reads + parses
+   * itself. Optional; back-compat preserved.
+   */
+  preParsedReport?: JunitReport;
 }
 
 // Why the runner produced no usable JUnit report. Discriminated so the loud signal
-// names the actual cause instead of collapsing them to "no report".
-type ReportAbsence = "absent" | "read_failed" | "empty";
-
-// The read outcome: either the report XML, or a typed reason it was unavailable.
-type ReadResult = { present: true; xml: string } | { present: false; reason: ReportAbsence };
+// names the actual cause instead of collapsing them to "no report". Aliased to the
+// shared `FileAbsence` from {@link readWorkspaceFile} so the absent/read_failed/empty
+// vocabulary is the single SSH-read primitive both the harvester + ingest agree on.
+type ReportAbsence = FileAbsence;
 
 /** The discriminated ingest outcome — never a bare 0 that hides "expected but missing". */
 export type IngestGateJunitResult =
@@ -109,12 +116,24 @@ export async function ingestGateJunit(input: IngestGateJunitInput): Promise<Inge
   if (!input.expectReport || input.reportPath === undefined) {
     return { kind: "skipped_no_test_step" };
   }
-  const read = await readJunitReport(input, input.reportPath);
-  if (!read.present) {
-    // A report WAS declared but is missing/unreadable/empty — the LOUD durable case.
-    return { kind: "missing_expected", reason: read.reason };
+  // EVIDENCE-REUSE (apex v57 task #64): when the gate's evidence harvester already
+  // read + parsed the JUnit report in this same gate evaluation, reuse it (no
+  // double-read over SSH). Otherwise the ingest reads + parses itself — preserving
+  // the back-compat path for callers / tests that bypass the harvester.
+  let report: JunitReport;
+  if (input.preParsedReport === undefined) {
+    const read = await readWorkspaceFile(
+      { ssh: input.ssh, target: input.target, workspacePath: input.workspacePath },
+      input.reportPath,
+    );
+    if (!read.present) {
+      // A report WAS declared but is missing/unreadable/empty — the LOUD durable case.
+      return { kind: "missing_expected", reason: read.reason };
+    }
+    report = parseJunitReport(read.contents);
+  } else {
+    report = input.preParsedReport;
   }
-  const report = parseJunitReport(read.xml);
   const result = await ingestJunitResults({
     client: input.client,
     eventStore: input.eventStore,
@@ -127,33 +146,4 @@ export async function ingestGateJunit(input: IngestGateJunitInput): Promise<Inge
     testExitCode: input.gatePassed ? 0 : 1,
   });
   return { kind: "ingested", inserted: result.inserted };
-}
-
-/**
- * `cat` the JUnit report over SSH, returning a DISCRIMINATED read result. The cause of
- * an absent report is preserved (never flattened to one `undefined`) so the caller can
- * report WHY when the report was expected:
- *   - `read_failed` — the SSH read itself failed/timed out/exited nonzero (a transport
- *     hiccup or a broken runner), distinct from a genuinely-missing file.
- *   - `absent`      — the read succeeded but the file does not exist (no `<...>` body).
- *   - `empty`       — the file exists but is whitespace-only (a degenerate report).
- */
-async function readJunitReport(input: IngestGateJunitInput, reportPath: string): Promise<ReadResult> {
-  const path = `${input.workspacePath.replace(/\/+$/u, "")}/${reportPath.replace(/^\/+/u, "")}`;
-  // The marker lets us distinguish "file absent" (marker, no body) from "file present
-  // but empty" (body is whitespace) — both off a single successful SSH read.
-  const result = await input.ssh.run(input.target, {
-    command: `if [ -f ${quoteSshShellArg(path)} ]; then cat ${quoteSshShellArg(path)}; else echo __TANREN_JUNIT_ABSENT__; fi`,
-    // INFRA report read: output-driven watchdog, no wall-clock kill.
-    watchdog: outputOnlyWatchdog(),
-  });
-  if (result.failure !== undefined || result.stalled === true || result.exitCode !== 0) {
-    // The read itself failed — a transport/runner problem, NOT a known-absent file.
-    return { present: false, reason: "read_failed" };
-  }
-  const body = result.stdout.trim();
-  if (body === "" || body === "__TANREN_JUNIT_ABSENT__") {
-    return { present: false, reason: body === "" ? "empty" : "absent" };
-  }
-  return { present: true, xml: result.stdout };
 }

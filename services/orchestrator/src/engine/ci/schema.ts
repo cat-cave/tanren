@@ -17,28 +17,94 @@ export type CiWhen = z.infer<typeof CiWhen>;
 
 // ---- Steps -----------------------------------------------------------------
 
+// EVIDENCE CONTRACT (apex v57 task #64) — the POSITIVE PROOF a step must produce to
+// be judged successful. The runtime gate (workflow/gate/runGateTier) checks for this
+// evidence AFTER the step exits; a step that exits 0 with insufficient evidence FAILS
+// the tier with `failedReason: "evidence_insufficient"`. This eradicates the v57
+// green-by-accident class: `tsc --noEmit` over an empty `files` array passes while
+// checking zero files; `vitest run` with no test files passes while running zero
+// tests; `playwright test` with no browsers installed passes while running nothing.
+// The negative-control doctrine (templates/negativeControls.ts §v29) is now ALSO
+// enforced at every runtime gate, not just template-validation. Discriminated:
+//   - `kind: "junit"`         — the step writes a JUnit report at `reportPath`; the
+//                               gate parses it and asserts `total >= minTests`.
+//                               `minTests` MUST be ≥ 1 (a 0 threshold is vacuous).
+//                               `reportPath` MUST be a non-empty workspace path.
+//   - `kind: "artifact"`      — the step writes an artifact at `path`; the gate stats
+//                               it and asserts presence (+ `minBytes` when given).
+//   - `kind: "stdout-count"`  — the step's stdout must contain `pattern` (a regex
+//                               source) at least `min` times. `min` MUST be ≥ 1.
+export const CiStepEvidence = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("junit"),
+      reportPath: z.string().min(1),
+      minTests: z.number().int().min(1),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("artifact"),
+      path: z.string().min(1),
+      minBytes: z.number().int().min(0).optional(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("stdout-count"),
+      pattern: z.string().min(1),
+      min: z.number().int().min(1),
+    })
+    .strict(),
+]);
+export type CiStepEvidence = z.infer<typeof CiStepEvidence>;
+
 // A single named shell command within a tier. `run` is an opaque shell string
 // executed verbatim by the consumer; this module does not parse or validate
 // shell syntax.
 //
-// `junitReport` is the EXPLICIT CI-config contract for the CI-intelligence per-test
-// grain: a step that runs tests DECLARES the workspace-relative path it writes its
-// JUnit report to (e.g. `reports/junit.xml`). Tanren's native gate reads back EXACTLY
-// that declared path after the step runs and ingests the per-test rows
+// `junitReport` is the LEGACY explicit CI-config contract for the CI-intelligence
+// per-test grain: a step that runs tests DECLARES the workspace-relative path it
+// writes its JUnit report to (e.g. `reports/junit.xml`). Tanren's native gate reads
+// back EXACTLY that declared path after the step runs and ingests the per-test rows
 // (flaky→quarantine→root-cause). This is a DECLARED field, never a command-string
 // sniff: a step is "junit-producing" iff it sets `junitReport`, so the writer's
 // actual test command (`just tier-2`, which does NOT mention the path) is recognized.
 // STACK-AGNOSTIC: the path is the project's declaration — Tanren names no test runner,
 // only honors the path the project says it emits. Absent ⇒ the step produces no grain
 // (the clean no-op skip); present-but-absent-after-run ⇒ a LOUD `ci.junit_missing`.
+//
+// EVIDENCE BACK-COMPAT: a step that sets `junitReport: X` and OMITS `evidence` is
+// promoted to `evidence: { kind: "junit", reportPath: X, minTests: 1 }` at the
+// runtime gate (see {@link evidenceForStep} below). A step MAY also declare an
+// explicit `evidence` block (e.g. a higher `minTests`); the explicit declaration
+// always wins. A `junitReport` PLUS a non-junit `evidence` declaration is permitted
+// (artifact + junit), but the junit promotion only applies when no `evidence` is set.
 export const CiStep = z
   .object({
     name: z.string().min(1),
     run: z.string().min(1),
     junitReport: z.string().min(1).optional(),
+    evidence: CiStepEvidence.optional(),
   })
   .strict();
 export type CiStep = z.infer<typeof CiStep>;
+
+/**
+ * Resolve the EFFECTIVE evidence contract for a step — the runtime gate's positive-
+ * proof requirement. An explicit `evidence` declaration always wins. Otherwise, a
+ * legacy `junitReport: X` promotes to `{ kind: "junit", reportPath: X, minTests: 1 }`
+ * so the back-compat path enforces "at least one test must run" without ceremony.
+ * Returns `undefined` when the step declares neither — the step is judged on exit
+ * code alone (the per-iteration cheap tiers: lint, typecheck).
+ */
+export function evidenceForStep(step: CiStep): CiStepEvidence | undefined {
+  if (step.evidence !== undefined) return step.evidence;
+  if (step.junitReport !== undefined) {
+    return { kind: "junit", reportPath: step.junitReport, minTests: 1 };
+  }
+  return undefined;
+}
 
 // ---- Bootstrap -------------------------------------------------------------
 
@@ -178,6 +244,30 @@ export const CiConfigV1 = z
         message:
           "no tier maps to `pre_merge` — the pre_merge gate is the merge authority; an uncovered pre_merge is a vacuous pass (fail-closed)",
       });
+    }
+    // EVIDENCE-GATED TIERS (apex v57 task #64): every tier mapped to `pre_audit` or
+    // `pre_merge` MUST declare at least one step that produces POSITIVE evidence (either
+    // an explicit `evidence` block or the legacy `junitReport`, which promotes). A
+    // pre-merge tier that is only lint/typecheck cannot be the merge authority — it
+    // exits 0 even when no real verification ran (the v57 green-by-accident class).
+    // Fail-closed at config-resolve time so a writer-authored ci.yml that ships a
+    // vacuous merge gate dies loud, not silently authorizing un-tested merges.
+    for (const [tierName, points] of Object.entries(cfg.when)) {
+      const evidenceGatedPoint = points.find((p) => p === "pre_audit" || p === "pre_merge");
+      if (evidenceGatedPoint === undefined) continue;
+      const steps = cfg.tiers[tierName] ?? [];
+      const hasEvidence = steps.some((step) => step.evidence !== undefined || step.junitReport !== undefined);
+      if (!hasEvidence) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["tiers", tierName],
+          message:
+            `tier "${tierName}" maps to "${evidenceGatedPoint}" but declares no step with positive evidence ` +
+            "(every step is judged on exit code alone — the green-by-accident class). " +
+            "Declare an `evidence` block (junit / artifact / stdout-count) on at least one step, " +
+            "or set `junitReport` on the test step (back-compat: promotes to junit evidence with minTests: 1).",
+        });
+      }
     }
   });
 export type CiConfigV1 = z.infer<typeof CiConfigV1>;

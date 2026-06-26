@@ -35,8 +35,10 @@ const JUNIT_XML = `<?xml version="1.0"?>
 </testsuites>`;
 
 // The marker the read command echoes when the report file does not exist (so the
-// ingest distinguishes a genuinely-absent file from an empty/unreadable one).
-const ABSENT_MARKER = "__TANREN_JUNIT_ABSENT__";
+// ingest distinguishes a genuinely-absent file from an empty/unreadable one). After
+// task #64 the file read primitive is shared with the evidence harvester, so the
+// marker is the generic `__TANREN_FILE_ABSENT__` from `readWorkspaceFile`.
+const ABSENT_MARKER = "__TANREN_FILE_ABSENT__";
 
 // `absent` = file not found (the read command echoes the marker); `empty` = file
 // exists but whitespace-only; `read_failed` = the SSH read itself failed (transport).

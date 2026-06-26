@@ -14,7 +14,7 @@ import type { PlannerRejectionFeedback } from "./planner/planner.js";
 import type { RoutedWorkItem } from "./loopPolicy.js";
 import type { NewSpecRequest } from "./subtaskLoop.js";
 import { BOOTSTRAP_GATE_TIER, CI_CONFIG_GATE_TIER, type GateOutcome } from "./gate/index.js";
-import { failedStepOutputTail } from "./subtaskInnerLoop.js";
+import { evidenceInsufficientDirective, failedStepOutputTail } from "./subtaskInnerLoop.js";
 
 /**
  * Turn a failed SPEC GATE (tier-2: tests + full checks) into a P0 FINDING. A CI failure
@@ -74,12 +74,20 @@ export function gateFindings(gate: Extract<GateOutcome, { passed: false }>): Fin
   // (`gateReason`) and merge-tier (`mergeGateRejection`) gate steering, which already feed it.
   const output = failedStepOutputTail(failure);
   const detail = output === "" ? "" : `\nGate output (last lines):\n${output}`;
+  // EVIDENCE-INSUFFICIENT (apex v57 task #64): when the gate failed because the step
+  // exited 0 but produced no positive proof of its declared contract, prepend the
+  // SPECIFIC contract-violation diagnosis. The class name (`gate-evidence-insufficient-<reason>`)
+  // is the stable dedup key the spec-level convergence detector keys off. The finding
+  // id stays stable (`gate-<tier>-<step>`) so a recurring failure of the same step
+  // still dedupes — the v57 fix turns an 8h convergence loop into a 1-iteration fix.
+  const evidenceDirective = evidenceInsufficientDirective(failure);
+  const evidencePrefix = evidenceDirective === undefined ? "" : `${evidenceDirective}\n`;
   return {
     id: `gate-${failure.tier}-${failure.failedStep}`,
     severity: "P0",
     title: `Spec gate tier "${failure.tier}" failed at step "${failure.failedStep}"`,
     body:
-      `The deterministic spec gate (${failure.when}) failed at step "${failure.failedStep}" with ${exit}. ` +
+      `${evidencePrefix}The deterministic spec gate (${failure.when}) failed at step "${failure.failedStep}" with ${exit}. ` +
       `Fix it in this spec — if it is a deterministic formatting/lint failure, run the project's declared ` +
       `format/fix step (the one its lifecycle/justfile defines) so the gate passes; do NOT re-emit the same ` +
       `output unchanged.${detail}`,

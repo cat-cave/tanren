@@ -62,6 +62,10 @@ interface WorkspaceState {
   // gate uses ABSENT a headShaOverride. Absent ⇒ "" ⇒ no verdict event (the existing
   // tests don't assert on the verdict; only the commit-binding test sets it).
   workspaceHead?: string;
+  // When set, junit-evidence reads return this XML; absent ⇒ the file is ABSENT (the
+  // original behavior). Tests that want pre_audit/pre_merge to PASS the new evidence
+  // gate (task #64) set this to a minimal valid JUnit document with ≥ 1 test.
+  junitReportXml?: string;
 }
 
 // Interprets the small command vocabulary buildDefaultGate issues over SSH:
@@ -85,12 +89,17 @@ class InterpretingSsh implements CommandSubstrate {
     if (cmd.includes(".tanren/ci.yml") && cmd.includes("cat ")) {
       return this.ciConfigYaml === undefined ? ok : { ...ok, stdout: this.ciConfigYaml };
     }
-    // The native JUnit ingest read (`if [ -f .../reports/junit.xml ]; then cat ...; else
-    // echo __TANREN_JUNIT_ABSENT__; fi`) — keyed on the absent-marker so a gate STEP
-    // whose `run` references reports/junit.xml is NOT mistaken for the read. The virtual
-    // workspace writes no report ⇒ ABSENT ⇒ a tier whose step `run` references the path
-    // surfaces the LOUD `missing_expected`.
-    if (cmd.includes("__TANREN_JUNIT_ABSENT__")) return { ...ok, stdout: "__TANREN_JUNIT_ABSENT__\n" };
+    // The native JUnit ingest + evidence-harvester read (`if [ -f .../reports/junit.xml ];
+    // then cat ...; else echo __TANREN_FILE_ABSENT__; fi`) — keyed on the absent-marker so
+    // a gate STEP whose `run` references reports/junit.xml is NOT mistaken for the read.
+    // After task #64 the marker is the shared `__TANREN_FILE_ABSENT__` (the harvester +
+    // ingest share one file-read primitive). When the workspace declares a virtual report
+    // (`junitReportXml`), return it; absent ⇒ the file is ABSENT (the LOUD missing case).
+    if (cmd.includes("__TANREN_FILE_ABSENT__")) {
+      return this.state.junitReportXml === undefined
+        ? { ...ok, stdout: "__TANREN_FILE_ABSENT__\n" }
+        : { ...ok, stdout: this.state.junitReportXml };
+    }
     // The verdict-anchor read: the workspace HEAD the gate binds gate.verdict to
     // when no headShaOverride is given. A configured `workspaceHead` lets the
     // commit-binding test prove the override is preferred over THIS sha.
@@ -294,6 +303,10 @@ describe("buildDefaultGate — gate.verdict commit-binding (headShaOverride)", (
       tier1Exit: 0,
       installRuns: 0,
       workspaceHead: WORKSPACE_HEAD,
+      // Task #64: the default merge tier declares junit evidence (minTests: 1) — the
+      // virtual workspace must produce a valid JUnit report or the gate fails.
+      junitReportXml:
+        '<?xml version="1.0"?><testsuites><testsuite name="t"><testcase name="ok"/></testsuite></testsuites>',
     };
     const ssh = new InterpretingSsh(state);
     const events = new FakeEventStore();
@@ -391,7 +404,15 @@ describe("buildDefaultGate — gate.verdict commit-binding (headShaOverride)", (
     // workspaceHead omitted ⇒ `git rev-parse HEAD` yields "" (the fake-SSH unit path).
     // pre_merge + empty override + empty workspace HEAD is the ONLY tolerated no-override
     // case: there is no real commit to bind, so the gate emits no verdict (not a throw).
-    const state: WorkspaceState = { contract: true, prepared: false, tier1Exit: 0, installRuns: 0 };
+    const state: WorkspaceState = {
+      contract: true,
+      prepared: false,
+      tier1Exit: 0,
+      installRuns: 0,
+      // Task #64: provide a valid junit report so the merge tier's evidence assertion passes.
+      junitReportXml:
+        '<?xml version="1.0"?><testsuites><testsuite name="t"><testcase name="ok"/></testsuite></testsuites>',
+    };
     const ssh = new InterpretingSsh(state);
     const events = new FakeEventStore();
     const gate = buildDefaultGate(gateInput(ssh, context({ greenfield: true })), target, workspacePath, events);

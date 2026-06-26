@@ -74,9 +74,14 @@ describe("batchNodeGate — invalid .tanren/ci.yml is a fail VERDICT (not a thro
       "  fast:",
       "    - name: lint",
       "      run: pnpm lint",
+      // Task #64: EVERY pre_merge-mapped tier must declare positive evidence —
+      // legacy junitReport promotes to junit evidence (minTests: 1). Apply to BOTH
+      // fast and slow since both map to pre_merge here.
+      "      junitReport: reports/junit.xml",
       "  slow:",
       "    - name: build",
       "      run: pnpm build",
+      "      junitReport: reports/junit.xml",
       "when:",
       "  fast:",
       "    - pre_merge",
@@ -84,7 +89,26 @@ describe("batchNodeGate — invalid .tanren/ci.yml is a fail VERDICT (not a thro
       "    - pre_merge",
       "",
     ].join("\n");
-    const gate = batchNodeGate(gateDeps(new Ssh(validYaml)));
+    // The harvester reads reports/junit.xml — return a valid JUnit document so evidence passes.
+    const junitSsh: CommandSubstrate = {
+      async run(_t: RunnerHandle, c: RunnerCommand): Promise<CommandResult> {
+        const ok = { exitCode: 0, stdout: "", stderr: "", timedOut: false };
+        if (c.command.includes("__TANREN_FILE_ABSENT__") || c.command.includes("reports/junit.xml")) {
+          return {
+            exitCode: 0,
+            stdout:
+              '<?xml version="1.0"?><testsuites><testsuite name="t"><testcase name="ok"/></testsuite></testsuites>',
+            stderr: "",
+            timedOut: false,
+          };
+        }
+        if (c.command.includes(".tanren/ci.yml")) {
+          return { ...ok, stdout: validYaml };
+        }
+        return ok;
+      },
+    };
+    const gate = batchNodeGate(gateDeps(junitSsh));
 
     const { verdict, passed } = await gate(live());
 

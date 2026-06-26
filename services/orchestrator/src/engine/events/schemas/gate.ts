@@ -8,10 +8,41 @@ import { AuditEnvelope } from "./audit.js";
 // timeline shows exactly which steps ran, at which lifecycle point, and why a
 // tier passed or failed.
 
+// EVIDENCE VERDICT (apex v57 task #64): the discriminated POSITIVE-PROOF read the
+// runtime gate captured for a step that declared an `evidence` contract (or whose
+// legacy `junitReport` promoted to one). Carried on the step result on BOTH the pass
+// AND fail branches so the timeline records the observed-vs-required counts even on
+// a pass (visibility), and so the writer's rework directive can name the diagnosis
+// precisely on a fail ("0 of 1 required tests ran" instead of "evidence missing").
+// `observed`/`required` are open records (kind-shape-dependent) — the consumer reads
+// them positionally.
+export const GateStepEvidence = z
+  .object({
+    kind: z.enum(["junit", "artifact", "stdout-count"]),
+    sufficient: z.boolean(),
+    // The specific insufficiency cause when `sufficient: false`; omitted on a pass.
+    reason: z
+      .enum([
+        "junit_missing",
+        "junit_zero_tests",
+        "junit_below_threshold",
+        "artifact_absent",
+        "artifact_too_small",
+        "stdout_count_below_threshold",
+      ])
+      .optional(),
+    observed: z.record(z.string(), z.unknown()),
+    required: z.record(z.string(), z.unknown()),
+  })
+  .strict();
+export type GateStepEvidence = z.infer<typeof GateStepEvidence>;
+
 // One executed step within a tier: the named shell command plus its captured
 // outcome. `outputTail` is a bounded tail of combined stdout/stderr (the gate
 // runner truncates to keep events small) so the failing command's diagnostic
-// rides along without the whole log.
+// rides along without the whole log. `evidence` is the optional positive-proof
+// verdict the gate harvested when the step declared an evidence contract — absent
+// when the step is judged on exit code alone (the cheap per-iteration tiers).
 export const GateStepResult = z
   .object({
     name: z.string(),
@@ -20,6 +51,7 @@ export const GateStepResult = z
     passed: z.boolean(),
     timedOut: z.boolean(),
     outputTail: z.string(),
+    evidence: GateStepEvidence.optional(),
   })
   .strict();
 export type GateStepResult = z.infer<typeof GateStepResult>;
@@ -50,9 +82,15 @@ export const GatePassedPayload = z
   })
   .strict();
 
-// gate.failed: a step exited nonzero (or timed out / the substrate failed).
-// `failedStep` names the first failing step so consumers do not re-scan the
-// array; `steps` carries every result run up to and including the failure.
+// gate.failed: a step exited nonzero, OR (apex v57 task #64) it exited 0 but produced
+// insufficient evidence to prove its declared contract ran. `failedStep` names the first
+// failing step so consumers do not re-scan the array; `steps` carries every result run
+// up to and including the failure. `failedReason` discriminates the cause so the writer
+// rework directive (loopFindings.gateFindings / subtaskInnerLoop.gateReason) can steer
+// precisely: `"exit_code"` (the historical case, default for back-compat) vs.
+// `"evidence_insufficient"` (the v57 green-by-accident class — exit was 0 but the
+// declared evidence was missing/zero-tests/below-threshold). `evidence` carries the
+// observed-vs-required diff so the writer's iteration-1 directive names the diagnosis.
 export const GateFailedPayload = z
   .object({
     tier: z.string(),
@@ -60,6 +98,8 @@ export const GateFailedPayload = z
     failedStep: z.string(),
     exitCode: z.number().int().nullable(),
     steps: z.array(GateStepResult),
+    failedReason: z.enum(["exit_code", "evidence_insufficient"]).optional(),
+    evidence: GateStepEvidence.optional(),
   })
   .strict();
 

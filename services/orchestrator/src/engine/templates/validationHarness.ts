@@ -32,7 +32,7 @@ import { withMiseActivation } from "../ssh/miseActivate.js";
 import { buildActivityWatchdog } from "../ssh/activityWatchdog.js";
 import { DEFAULT_BOOTSTRAP_COMMAND, ensureWorkspaceDepsInstalled } from "../workspace/index.js";
 import { type NegativeControlResult, type TemplateValidationProof } from "./manifest.js";
-import { type GateInvocation, type NegativeControl } from "./negativeControls.js";
+import { assertEvidenceDeclared, type GateInvocation, type NegativeControl } from "./negativeControls.js";
 import { createScratchCopy, removeScratchCopy, type ScratchCopyDeps, writeDefectFiles } from "./scratchCopy.js";
 import { createLogger } from "../observability/logger.js";
 
@@ -86,6 +86,15 @@ const DEFAULT_BUILD_STEP = { name: "build", run: "just build" } as const;
 // the auditor throwing surfaces as auditorClean=false with the error rethrown), never
 // a quiet pass.
 export async function runValidationHarness(input: ValidationHarnessInput): Promise<TemplateValidationProof> {
+  // Stage 0: EVIDENCE-DECLARATION (apex v57 task #64). A template whose merge-gating
+  // tiers (`pre_audit`/`pre_merge`) are judged on exit code alone is the v57 green-by-
+  // accident class — the writer can ship merged code with zero tests run. The schema
+  // already rejects this at parse time (schema.ts §EVIDENCE-GATED TIERS), so a config
+  // that survived `resolveCiConfig` is normally compliant; this defense-in-depth
+  // assertion catches any back door (a manually-constructed CiConfigV1 in tests, a
+  // future schema relaxation) so a vacuous merge gate can NEVER reach the gate-runner.
+  assertEvidenceDeclared(input.config);
+
   // Stage 1: POSITIVE controls.
   const positiveControlsPassed = await runPositiveControls(input, input.appendEvent);
 

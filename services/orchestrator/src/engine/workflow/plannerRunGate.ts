@@ -23,6 +23,7 @@ import {
   workspaceDepsInstallGateOutcome,
 } from "./gate/index.js";
 import type { CiConfigV1, CiConfigValidationError, CiYamlParseError } from "../ci/index.js";
+import type { JunitReport } from "../ci/junit.js";
 import { ensureWorkspaceDepsInstalled, resolveWorkspaceHeadSha } from "../workspace/index.js";
 import { type ActiveQuarantine, loadActiveQuarantine, quarantineEnv } from "./ciQuarantine.js";
 import type { RunPlannerLoopInput } from "./plannerRun.js";
@@ -381,6 +382,12 @@ async function ingestGateJunitBestEffort(
   // expectReport=false ⇒ a clean QUIET skip.
   const declared = junitReportFor(config, when);
   const expectReport = declared !== undefined;
+  // EVIDENCE-REUSE (apex v57 task #64): if the gate's evidence harvester already
+  // read + parsed the JUnit report for this lifecycle's declared tier, pass it
+  // through so the per-test ingest reuses it (no double-read over SSH). The harvester
+  // keys parsed reports by step name; the FIRST step that wrote one in the declared
+  // tier wins (matching `junitReportFor`'s tier-then-step ordering).
+  const preParsedReport = declared === undefined ? undefined : findParsedJunitReport(outcome, declared.tier);
   try {
     const result = await ingestGateJunit({
       ssh: input.ssh,
@@ -395,6 +402,7 @@ async function ingestGateJunitBestEffort(
       gatePassed: outcome.passed,
       expectReport,
       ...(declared === undefined ? {} : { tier: declared.tier, reportPath: declared.path }),
+      ...(preParsedReport === undefined ? {} : { preParsedReport }),
     });
     if (result.kind === "missing_expected") {
       // LOUD + DURABLE: a tier DECLARED a junit report but the runner produced none — the
@@ -428,4 +436,25 @@ async function ingestGateJunitBestEffort(
   } catch (error) {
     log.error("native JUnit ingest failed (non-blocking)", { runId: input.context.runId }, error);
   }
+}
+
+/**
+ * Find the parsed JUnit report the evidence harvester already produced for the
+ * declared lifecycle tier, if any. Walks the outcome's tier results, looks up the
+ * `parsedJunitReports` side channel on the matching tier, and returns the FIRST
+ * parsed report — matching `junitReportFor`'s tier-then-step ordering. Returns
+ * undefined when the harvester did not parse a report (the legacy / pre-evidence
+ * path), the tier was not run, or the report was junit_missing (the read failed).
+ */
+function findParsedJunitReport(outcome: GateOutcome, tierName: string): JunitReport | undefined {
+  for (const tierResult of outcome.results) {
+    if (tierResult.tier !== tierName) continue;
+    const parsed = tierResult.parsedJunitReports;
+    if (parsed === undefined) continue;
+    for (const step of tierResult.steps) {
+      const report = parsed.get(step.name);
+      if (report !== undefined) return report;
+    }
+  }
+  return undefined;
 }

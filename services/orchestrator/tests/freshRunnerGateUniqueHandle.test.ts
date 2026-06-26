@@ -75,6 +75,17 @@ class GatePassingSsh implements CommandSubstrate {
     if (cmd.includes("git rev-parse HEAD") || cmd.includes("git clone")) {
       return { exitCode: 0, stdout: "a".repeat(40), stderr: "", timedOut: false };
     }
+    // Task #64: the default merge tier declares junit evidence (minTests: 1) — the
+    // harvester reads back the report via the shared `__TANREN_FILE_ABSENT__`-marked
+    // `cat` script. Return a minimal valid JUnit document so the gate passes evidence.
+    if (cmd.includes("__TANREN_FILE_ABSENT__") || cmd.includes("reports/junit.xml")) {
+      return {
+        exitCode: 0,
+        stdout: '<?xml version="1.0"?><testsuites><testsuite name="t"><testcase name="ok"/></testsuite></testsuites>',
+        stderr: "",
+        timedOut: false,
+      };
+    }
     // Every infra + gate step succeeds (default pre_merge tiers pass).
     return { exitCode: 0, stdout: "", stderr: "", timedOut: false };
   }
