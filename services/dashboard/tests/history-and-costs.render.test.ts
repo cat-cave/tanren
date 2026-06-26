@@ -228,7 +228,11 @@ describe("costs dashboard (/costs)", () => {
 
   it("shows every provider row's REAL cost source, no fabricated placeholder", async () => {
     const app = await build();
-    const html = await (await app.request("/costs")).text();
+    // ?range=all so the assertion covers every fixture row regardless of how
+    // long ago the fixture's recordedAt is vs the wall clock. The default 30d
+    // pill is a UI affordance, not a test concern — this test's intent is
+    // "every provider row shows its real source", not "the 30d pill works".
+    const html = await (await app.request("/costs?range=all")).text();
     expect(html).toContain("provider response · real charge");
     expect(html).toContain("ccusage · real billed");
     // Unknown basis is honestly labelled + shows no invented dollar.
@@ -240,7 +244,9 @@ describe("costs dashboard (/costs)", () => {
 
   it("renders burn projection, headroom, and observed panels with numbers", async () => {
     const app = await build();
-    const html = await (await app.request("/costs")).text();
+    // ?range=all so the led $13.00 headline (sum of both runs' real spend)
+    // is wall-clock-independent. See the sibling test for the rationale.
+    const html = await (await app.request("/costs?range=all")).text();
     expect(html).toContain("burn + forecast");
     // The forecast surfaces a run-rate month-end ESTIMATE over BOTH figures.
     expect(html).toContain("est. month-end · real");
