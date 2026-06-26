@@ -20,6 +20,7 @@ import {
   type MergeProbe,
 } from "./mergeDispatchTypes.js";
 import { landViaAuthority, rebaseBehindBranch, reGateResolvedTree, type LandOps } from "./mergeLandPaths.js";
+import { markMergeTaskDoneWithEvent, markMergeTaskFailedWithEvent } from "./mergeTaskTerminal.js";
 
 export interface DispatcherDeps {
   input: MergeForRunInput;
@@ -431,33 +432,23 @@ export class MergeDispatcher implements LandOps {
     const { input, taskId, eventStore, integration } = this.deps;
     const writer = input.runStateWriter;
     if (state.taskStatus === "done") {
-      await routeTaskUpdate(
+      await markMergeTaskDoneWithEvent({
         writer,
-        input.pool,
-        { taskId, transition: "done", outcome: "ok" },
-        "UPDATE tasks SET status = 'done', outcome = $2, ended_at = now() WHERE task_id = $1",
-        [taskId, "ok"],
-      );
-      await eventStore.append({
-        ...this.base(),
-        eventType: "task.completed",
-        payload: { taskKind: "merge", status: integration },
+        pool: input.pool,
+        eventStore,
+        base: this.base(),
+        integration,
       });
       return;
     }
     if (state.taskStatus === "failed") {
       const failureKind = state.failureKind ?? "merge_failed";
-      await routeTaskUpdate(
+      await markMergeTaskFailedWithEvent({
         writer,
-        input.pool,
-        { taskId, transition: "failed_with_kind", failureKind },
-        "UPDATE tasks SET status = 'failed', outcome = 'failed', failure_kind = $2, ended_at = now() WHERE task_id = $1",
-        [taskId, failureKind],
-      );
-      await eventStore.append({
-        ...this.base(),
-        eventType: "task.failed",
-        payload: { taskKind: "merge", failureKind },
+        pool: input.pool,
+        eventStore,
+        base: this.base(),
+        failureKind,
       });
       return;
     }
