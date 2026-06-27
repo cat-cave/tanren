@@ -1,33 +1,29 @@
 // FRAGMENT MATRIX-COVERAGE HARNESS (PR-D — `docs/roadmap/templating-system.md
-// §FRAGMENTS). Complements `templateFragmentIsolation.test.ts` (per-fragment
-// composition) by composing the CROSS-PRODUCT — every plausible
-// (runtime × frontend × backend × db × auth × addons × deploy) combination the
-// library carries — and asserting the same invariants on every output. A "valid"
-// registry entry that fails on one combination cannot ship; the matrix is the catch.
+// §FRAGMENTS). Complements `templateFragmentIsolation.test.ts` by composing the
+// CROSS-PRODUCT — every plausible (runtime × frontend × backend × db × auth ×
+// addons × deploy) combination the library carries — and asserting the same
+// invariants on every output. A registry entry that fails on one combination
+// cannot ship; the matrix is the catch.
 //
-// THE MATRIX IS DERIVED FROM THE LIBRARY, NOT HARDCODED — `loadFragmentLibrary()`
-// enumerates the actual registered fragments per kind, the cross-product is the
-// test surface. A new fragment is picked up automatically; a stack-incompatible
-// fragment must be documented in `INCOMPATIBLE_COMBINATIONS` (never silently).
+// THE MATRIX IS DERIVED FROM THE LIBRARY — `loadFragmentLibrary()` enumerates the
+// registered fragments per kind, the cross-product is the test surface. A new
+// fragment is picked up automatically; a stack-incompatible pair must be documented
+// in `INCOMPATIBLE_COMBINATIONS` (never silently).
 //
 // PER-COMBINATION ASSERTIONS:
-//   1. `composeTemplate` returns a `VirtualFileSystem` (no `TemplateComposeError`).
+//   1. `composeTemplate` returns a `VirtualFileSystem` (no throw).
 //   2. Every path in `BASE_PROTECTED_FILES` survives.
-//   3. `.tanren/ci.yml` had its `__TANREN_REPORT_PATH__` token substituted to the
-//      runtime's declared reportPath (no leftover placeholder).
-//   4. A mutation-testing config is present (`stryker.conf.mjs` for node-pnpm,
-//      `.mutant.yml` for ruby — the dogfood-test's NB-2 contract; PR-D verifies it
-//      across the full matrix, not only the curated snapshots).
-//   5. `package.json` (node-pnpm path only) parses cleanly + no name lives in both
-//      dependencies + devDependencies (the composer's `mergeMapInto` already throws
-//      on within-bucket conflicts; this catches the cross-bucket leak).
-//   6. The composed `.env.example` carries every env var any applied fragment
-//      declared.
+//   3. `.tanren/ci.yml` had its `__TANREN_REPORT_PATH__` token substituted.
+//   4. A mutation-testing config is present (stryker.conf.mjs on node, .mutant.yml on ruby).
+//   5. `package.json` coherence on the node-pnpm path (or principled absence on ruby).
+//   6. Every declared env var landed in `.env.example`.
+//   7. The composed `.tanren/ci.yml` PARSES against the `CiConfigV1` zod schema —
+//      added for task #80 (apex v62 halt) so a malformed shape fails the test
+//      instead of escaping to the live writer-checker-auditor loop.
 //
-// FAIL-LOUD STYLE — assertions throw `Error` (rather than `expect(cond, msg).toBe(...)`)
-// because the lint forbids 2-arg `expect` + `expect` inside conditionals. A thrown
-// error fails the it() with the full message naming the combo + the specific
-// broken assertion — the per-combo readability goal is preserved.
+// FAIL-LOUD STYLE: assertions throw `Error` (rather than `expect(cond, msg).toBe`)
+// because the lint forbids 2-arg `expect`. A thrown error fails the it() with the
+// full message naming the combo + the broken assertion.
 
 import { describe, expect, it } from "vitest";
 import {
@@ -39,6 +35,7 @@ import {
   type TemplateConfig,
   VirtualFileSystem,
 } from "../src/engine/templates/index.js";
+import { assertComposedCiYmlParsesAsCiConfigV1 } from "./helpers/templateCiYmlSchemaCheck.js";
 
 // ---- Incompatible combinations --------------------------------------------
 // Each (predicate, reason) pair excludes one cross-stack combo with documentation.
@@ -222,13 +219,9 @@ function* iterateTailHeads(
   }
 }
 
-/**
- * Enumerate every combination the library can produce — the matrix-coverage surface.
- * Each axis is sourced from `library.ofKind(...)` so the matrix automatically grows
- * when a new fragment is registered. Combinations matching any
- * `INCOMPATIBLE_COMBINATIONS` predicate are filtered out + counted separately so
- * the test summary can report the excluded total.
- */
+/** Enumerate every combination the library can produce — the matrix-coverage
+ * surface. Axes come from `library.ofKind(...)` so the matrix grows when a new
+ * fragment is registered. INCOMPATIBLE_COMBINATIONS hits are filtered + counted. */
 function enumerateMatrix(library: FragmentLibrary): {
   readonly included: readonly NormalizedCombo[];
   readonly excluded: readonly { readonly combo: NormalizedCombo; readonly reason: string }[];
@@ -261,10 +254,9 @@ function enumerateMatrix(library: FragmentLibrary): {
   return { included, excluded };
 }
 
-/** Re-apply the fragments selected by a config against a fresh VFS (the SAME order
- * compose runs) so we can capture every env var any fragment declared — used by
- * assertion #6 (every declared env var lands in .env.example). Mirrors the isolation
- * harness's pre-flight capture, scaled to the full fragment set of one matrix point. */
+/** Re-apply the fragments in compose order against a fresh VFS so we can capture
+ * every env var any fragment declared — backs assertion #6 (every declared env var
+ * lands in .env.example). */
 async function captureAllFragmentEnvVars(
   config: TemplateConfig,
   library: FragmentLibrary,
@@ -389,11 +381,9 @@ function assertPackageJsonCoherent(slug: string, combo: NormalizedCombo, vfs: Vi
       }
     }
   } else if (vfs.has("package.json")) {
-    // ruby-bundler runtime — package.json MUST NOT exist (otherwise some fragment
-    // leaked a node-only file). The composer's processDeps gates on
-    // `vfs.has("package.json")` so a ruby template that accidentally carried one
-    // would silently merge node deps into a ruby project — exactly the failure
-    // mode this pins.
+    // ruby-bundler — package.json MUST NOT exist (a fragment leaked a node-only
+    // file). processDeps gates on `vfs.has("package.json")` so a ruby template that
+    // accidentally carried one would silently merge node deps into a ruby project.
     fail(
       `combo "${slug}" (ruby-bundler runtime) composed with a package.json — a node-only ` +
         `artifact leaked into a ruby template.`,
@@ -453,10 +443,8 @@ describe("template-fragment matrix coverage — every supported stack composes",
   });
 
   it(`reports the matrix shape (included=${MATRIX.included.length}, excluded=${MATRIX.excluded.length})`, () => {
-    // This test is intentionally trivial — its value is the test NAME, which the
-    // suite output prints. A reviewer reading CI logs sees the matrix counts
-    // without needing to instrument the test or dig into the source. The
-    // assertion below pins the invariant that excluded combos are explained.
+    // Trivial; the value is the test NAME, which prints in CI logs. Pins the
+    // invariant that excluded combos are documented.
     for (const entry of MATRIX.excluded) {
       if (entry.reason.length === 0) {
         fail(`excluded combo ${comboSlug(entry.combo)} has an empty reason — every exclusion must be documented.`);
@@ -491,6 +479,9 @@ describe("template-fragment matrix coverage — every supported stack composes",
       assertPackageJsonCoherent(slug, combo, vfs);
       // (6) every declared env var landed in .env.example.
       await assertDeclaredEnvVarsLanded(slug, config, library, vfs);
+      // (7) ci.yml parses against the CiConfigV1 schema (task #80 — the apex v62
+      // halt class: a base ci.yml emitted with non-schema tier vocabulary).
+      assertComposedCiYmlParsesAsCiConfigV1(slug, vfs);
 
       // Pin the test as assertion-bearing (vitest's no-standalone-expectations
       // rule). Every meaningful assertion above throws on failure.
