@@ -18,14 +18,12 @@
 // (a REAL provider answerer that derives personas/behaviors/milestones with a
 // model); tests inject a fake. Greenfield onboarding has no project yet, so the
 // answerer resolves the ORG's default LLM credential. There is no deterministic
-// fallback (§8a). Mounted on the same `/orgs` base as the other product routes.
+// fallback (§8a).
 
 import { Hono } from "hono";
 import type pg from "pg";
 import { z } from "zod";
-import { runWithOrgScope } from "@tanren/db";
 import type { ActorContext } from "../../auth/schemas.js";
-import { TemplateStore } from "../../engine/repositories/index.js";
 import type { SecretStore } from "../../engine/contracts/secretStore.js";
 import type { GitHubHttpClient } from "../../engine/providers/github.js";
 import { provisionAutonomousProject } from "../../engine/workflow/provisionAutonomousProject.js";
@@ -35,23 +33,22 @@ import {
   DeployProviderMissingError,
   DeployProvisioningUnavailableError,
   deriveFromCapture,
+  FragmentAuthoringFailedError,
   InterviewCapture,
   MissingLifecycleError,
   MissingProjectSlugError,
   runRound,
+  UnresolvableLifecycleError,
   type DeployPreflightCallback,
   type InterviewAnswerer,
   type PrepareDeployCallback,
 } from "../../engine/forge/interview/index.js";
 import type { ForgeAnswererTarget } from "../../engine/forge/providerFactory.js";
 import type { DesignAgent } from "../../engine/design/designAgent.js";
-import {
-  TemplateRequiredError,
-  type SelectedTemplate,
-  type TemplateRegistryQuery,
-} from "../../engine/forge/interview/templateSelection.js";
-import { ChildRunStalledError, type MaterializeCuratedTemplate } from "../../engine/templates/index.js";
-import type { CaptureLifecycle } from "../../engine/forge/interview/types.js";
+import type { MaterializeTemplate } from "../../engine/templates/fragments/materialize.js";
+import type { FragmentAuthoring, FragmentLibrary } from "../../engine/templates/index.js";
+export { buildLiveMaterializeTemplate } from "./materializeTemplate.js";
+export { buildLiveRunFragmentAuthoring, buildLiveLoadFragmentLibrary } from "./fragmentAuthoring.js";
 import {
   ProjectAccessDeniedError,
   ProjectNotFoundError,
@@ -88,39 +85,18 @@ export interface OnboardingRoutesOptions {
   githubAppMinter?: GithubAppTokenMinter;
   preflightDeploy?: DeployPreflightCallback;
   prepareDeploy?: PrepareDeployCallback;
-  // The SELECTION no-match → JUST-IN-TIME CREATION wiring (templating-system.md §3).
-  // Onboarding's template selection ALWAYS runs; on a no-match it CREATES a validated
-  // template (research → author → build → validate → publish) and SEEDS from it — the
-  // project scaffold GATES on the published template. A per-request BUILDER (given the
-  // org/actor/registry query) of the `createForNoMatch` seam — so the onboarding route
-  // keeps NO direct creation dependency (wired at the mount layer via
-  // `buildCreateForNoMatch`). REQUIRED in production: the mount ALWAYS wires it. Absent
-  // would mean a no-match HALTS LOUD (`TemplateRequiredError`) — never a from-scratch
-  // project scaffold (the deleted bypass).
-  createTemplateForNoMatch?: (ctx: {
-    orgId: string;
-    actor: ActorContext;
-    templateRegistryQuery: TemplateRegistryQuery;
-    // The REAL GitHub repo owner the new template repo lands under — threaded from the
-    // derive request's `owner` so `maybeCreateTemplateForNoMatch` can actually create
-    // (without it the create path had no owner and silently no-op'd; audit §3.11/2).
-    repoOwner: string;
-    // The operator's EXPLICIT, already-linked deploy provider from THIS derive request
-    // (`deploy.providerKind`). Threaded so the no-match template build provisions deploy
-    // against the SAME provider the operator named (guaranteed linked by the derive's
-    // deploy preflight) — never a provider re-guessed from the lifecycle string that
-    // defaults to an unlinked `deploy.flyio` and halts the run with `template_required`.
-    deployProviderKind?: "deploy.vercel" | "deploy.flyio";
-  }) => (lifecycle: CaptureLifecycle) => Promise<SelectedTemplate | undefined>;
-  // PR-C — the MATRIX-HIT MATERIALIZER FACTORY (docs/roadmap/templating-system.md
-  // §FRAGMENTS). Onboarding's template selection checks the curated registry FIRST;
-  // on a hit, the deterministic composer assembles the template + this seam pushes
-  // the VFS to a fresh template repo. Returns the same `SelectedTemplate` shape the
-  // agent path would have produced, so the rest of the derive seeds the SAME way.
-  // Per-request builder (given org/actor) so the route layer keeps NO direct compose
-  // dependency — production wires `buildLiveMaterializeCuratedTemplate`; tests pass
-  // a stub.
-  materializeCuratedTemplate?: (ctx: { orgId: string; actor: ActorContext }) => MaterializeCuratedTemplate;
+  // The COMPOSE+MATERIALIZE seam (docs/roadmap/templating-system.md). Every
+  // greenfield derive composes a fragment-based template from the captured
+  // lifecycle and materializes it into a fresh seed repo — this seam does the
+  // create-repo + push-files work.
+  materializeTemplate?: (ctx: { orgId: string; actor: ActorContext }) => MaterializeTemplate;
+  /** PER-FRAGMENT AUTHORING seam (F2): the derive calls this on a
+   * missing-fragments decision to author the missing fragments, persist them,
+   * and retry. */
+  runFragmentAuthoring?: (ctx: { orgId: string; actor: ActorContext }) => FragmentAuthoring;
+  /** UNIFIED LIBRARY LOADER (F2): combines bundled core + org-authored
+   * fragments (the per-org `fragments` table). */
+  loadFragmentLibrary?: (orgId: string) => Promise<FragmentLibrary>;
 }
 
 const RoundBody = z
@@ -199,8 +175,6 @@ export function createOnboardingRoutes(options: OnboardingRoutesOptions) {
         return c.json({ error: "vcs_provider_missing" }, 500);
       }
       const githubHttp = options.githubHttp;
-      const templateRegistryQuery: TemplateRegistryQuery = (query, queryActor) =>
-        runWithOrgScope(options.pool, orgId, (client) => TemplateStore.listByCapabilities(client, query, queryActor));
       const result = await deriveFromCapture(
         { pool: options.pool, preflightDeploy, prepareDeploy },
         {
@@ -224,63 +198,33 @@ export function createOnboardingRoutes(options: OnboardingRoutesOptions) {
           // WS-D3: resolve the design agent for THIS org so the derive's design phase
           // elaborates the captured intent into the designed HEAD `DesignContract`.
           ...(options.designAgentFactory === undefined ? {} : { designAgent: options.designAgentFactory({ orgId }) }),
-          // TEMPLATING WAVE 3 (templating-system.md §3): the ORG-SCOPED template
-          // registry query. Each call opens a short `runWithOrgScope` so RLS bounds
-          // the candidates to THIS org's own templates PLUS the cross-org `official`
-          // catalogue — an off-scope template is never even a candidate.
-          templateRegistryQuery,
-          // The no-match → JUST-IN-TIME CREATION seam (templating-system.md §3). The
-          // mount ALWAYS wires the builder; selection CREATES + SEEDS on no match (via
-          // the SAME org-scoped registry query). An absent builder would HALT loud
-          // (`TemplateRequiredError`) — never a from-scratch project scaffold.
-          ...(options.createTemplateForNoMatch === undefined
+          // The compose+materialize seam (docs/roadmap/templating-system.md).
+          ...(options.materializeTemplate === undefined
             ? {}
             : {
-                createTemplateForNoMatch: options.createTemplateForNoMatch({
-                  orgId,
-                  actor: { ...actor, orgId },
-                  templateRegistryQuery,
-                  // Thread the REAL repo owner from the derive request so the no-match
-                  // CREATE path lands the template repo under it (audit §3.11/2).
-                  repoOwner: parsed.data.owner,
-                  // Thread the operator's EXPLICIT, already-linked deploy provider so the
-                  // no-match template BUILD provisions deploy against the SAME provider the
-                  // operator named (guaranteed linked by the deploy preflight) — never a
-                  // provider re-guessed from the lifecycle string that defaults to an
-                  // unlinked `deploy.flyio` and halts the derive with `template_required`.
-                  ...(parsed.data.deploy === undefined ? {} : { deployProviderKind: parsed.data.deploy.providerKind }),
-                }),
-              }),
-          // PR-C — the MATRIX-HIT MATERIALIZER seam. On a curated stack match,
-          // `selectSeedTemplate` returns `compose-from-fragments`; the derive calls
-          // this seam to assemble the VFS + push it to a fresh template repo, then
-          // proceeds with the SAME seed path the agent template-build produces.
-          ...(options.materializeCuratedTemplate === undefined
-            ? {}
-            : {
-                materializeCuratedTemplate: options.materializeCuratedTemplate({
+                materializeTemplate: options.materializeTemplate({
                   orgId,
                   actor: { ...actor, orgId },
                 }),
               }),
+          // F2 — per-fragment authoring DAG (runs on missing-fragments decisions).
+          ...(options.runFragmentAuthoring === undefined
+            ? {}
+            : {
+                runFragmentAuthoring: options.runFragmentAuthoring({
+                  orgId,
+                  actor: { ...actor, orgId },
+                }),
+              }),
+          // F2 — unified library (bundled + org-authored fragments).
+          ...(options.loadFragmentLibrary === undefined
+            ? {}
+            : { fragmentLibrary: await options.loadFragmentLibrary(orgId) }),
         },
       );
       if (result.repository === undefined) {
         throw new Error("greenfield repository missing after derive");
       }
-      // SHARED bootstrap (Codex round-4): seed the COMPLETE autonomous-project set
-      // via the single `provisionAutonomousProject` seam — the issues inbox, the
-      // per-org DEFAULT ntfy notification route (apex-critical milestone events:
-      // budget / deploy.verified / needs_attention reach a human BY DEFAULT, the
-      // operator-drivable path a real user would otherwise hand-configure), AND the
-      // scheduled-audit catalog. Idempotent + org-scoped + failure-isolated.
-      //
-      // The repo + project are already COMMITTED at this point, so a seed failure must
-      // NOT 500-after-side-effects (the create would otherwise be irreversibly
-      // half-done). The seam isolates each seed + records failures in `bootstrap.errors`
-      // (LOUD, never silent): the env-default route still guarantees milestone delivery
-      // and the operator can add the per-org route from the dashboard. Returned so the
-      // caller surface sees exactly which seeds landed.
       const bootstrap = await provisionAutonomousProject({
         pool: options.pool,
         orgId,
@@ -340,37 +284,23 @@ export function createOnboardingRoutes(options: OnboardingRoutesOptions) {
       if (error instanceof DeployProvisioningUnavailableError) {
         return c.json({ error: "deploy_provisioning_unavailable", message: error.message }, 500);
       }
-      // No validated template matched AND just-in-time creation could not produce one
-      // (creation failed / no creation seam). A LOUD fail-closed HALT — the project DAG
-      // NEVER scaffolds against a non-template base. Surfaced as a 409 needs_attention
-      // (an operator resolves the template-creation failure + retries), NOT a silent
-      // degrade to a from-scratch project scaffold (the deleted bypass).
-      if (error instanceof TemplateRequiredError) {
-        // CHILD-RUN STALL (task #21B): the just-in-time template build raised a
-        // sign-of-life circuit-breaker stall (the child template-build project's
-        // append-only event stream has held flat across the streak ceiling — a
-        // retry-looping worker, the apex v49 root cause). Surface a DISTINCT 504
-        // naming the stalled child project id so the operator can pull the audit log
-        // directly, rather than the generic 409 template_required. The stall is the
-        // INNER cause threaded through `TemplateBuildFailedError` → `TemplateRequiredError`;
-        // walk the standard `cause` chain to recognize it.
-        const stall = findChildRunStallCause(error);
-        if (stall !== undefined) {
-          return c.json(
-            {
-              error: "template_build_stalled",
-              capability: "template",
-              stack: error.requestedStack,
-              childProjectId: stall.childProjectId,
-              lastSignatureValue: String(stall.lastSignatureValue ?? "none"),
-              nonAdvancingProbes: stall.nonAdvancingProbes,
-              message: stall.message,
-            },
-            504,
-          );
-        }
+      // Lifecycle so malformed we can't even synthesize a template config (empty
+      // stack, no derivable runtime). A bad/incomplete capture (400).
+      if (error instanceof UnresolvableLifecycleError) {
+        return c.json({ error: "lifecycle_unresolvable", message: error.message }, 400);
+      }
+      // One or more per-fragment authoring runs failed at their fixed point. The
+      // derive halts loud per doctrine (no silent skip). Surfaced as 409
+      // needs_attention — an operator inspects the `fragment.authoring.failed`
+      // events, fixes the writer / validator, and retries.
+      if (error instanceof FragmentAuthoringFailedError) {
         return c.json(
-          { error: "template_required", capability: "template", stack: error.requestedStack, message: error.message },
+          {
+            error: "fragment_authoring_failed",
+            capability: "fragments",
+            failedIds: error.failedIds,
+            message: error.message,
+          },
           409,
         );
       }
@@ -393,19 +323,4 @@ function requireActor(c: { var: { actor?: ActorContext } }): ActorContext {
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-// Walk the standard `Error.cause` chain looking for a `ChildRunStalledError`
-// (task #21B). `TemplateRequiredError` carries `TemplateBuildFailedError` as its
-// cause (templateSelection.ts), which in turn carries the `ChildRunStalledError`
-// when the sign-of-life circuit breaker fired. A bounded walk (10 hops) defends
-// against a pathological self-referencing cause chain.
-function findChildRunStallCause(error: Error): ChildRunStalledError | undefined {
-  let cur: unknown = error;
-  for (let hop = 0; hop < 10; hop += 1) {
-    if (cur instanceof ChildRunStalledError) return cur;
-    if (!(cur instanceof Error)) return undefined;
-    cur = cur.cause;
-  }
-  return undefined;
 }

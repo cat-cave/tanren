@@ -17,6 +17,7 @@ import {
   type ForgeAnswererTarget,
 } from "./providerFactory.js";
 import { buildForgeDesignAgentFactory } from "./designAgentFactory.js";
+import { buildForgeFragmentAuthorerFactory } from "./fragmentAuthorerFactory.js";
 import type { DesignAgent } from "../design/designAgent.js";
 import type { InterviewAnswerer } from "./interview/index.js";
 import type { DiscoveryAnswerer } from "./discovery/index.js";
@@ -26,6 +27,7 @@ import { createAnswererPassRunner, type AuditAnswerer, type AuditPassRunner } fr
 import type { ForgeConversationAnswerer } from "./conversation/index.js";
 import type { GitHubHttpClient } from "../providers/github.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
+import type { FragmentAuthorer } from "../templates/index.js";
 
 export interface ForgeRouteAnswererFactories {
   interview: (target: ForgeAnswererTarget) => InterviewAnswerer;
@@ -37,6 +39,9 @@ export interface ForgeRouteAnswererFactories {
   recon: (target: ForgeAnswererTarget) => ReconAnswerer;
   audit: (target: ForgeAnswererTarget) => AuditAnswerer;
   conversation: (target: ForgeAnswererTarget) => ForgeConversationAnswerer;
+  /** F2 — per-fragment authoring (docs/roadmap/templating-system.md): a real
+   * LLM-backed authorer that produces a Fragment body for a missing slot. */
+  fragmentAuthorer: (target: ForgeAnswererTarget) => FragmentAuthorer;
   /**
    * Build the REAL scheduled-audit pass runner (the audit route's production
    * runner: it indexes the project's repo READ-ONLY and has the audit answerer
@@ -60,6 +65,7 @@ export function buildForgeRouteAnswererFactories(infra: ForgeAnswererInfra): For
     recon: buildForgeReconAnswererFactory(infra),
     audit,
     conversation: buildForgeConversationAnswererFactory(infra),
+    fragmentAuthorer: buildForgeFragmentAuthorerFactory(infra),
     auditPassRunnerFor: (github) =>
       createAnswererPassRunner({
         pool: infra.pool,

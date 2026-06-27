@@ -27,7 +27,15 @@ import {
   type InterviewAnswerer,
   type InterviewCapture,
 } from "../src/engine/forge/interview/index.js";
+import type { MaterializeTemplate } from "../src/engine/templates/index.js";
 import { preparedDeploy, stubPool } from "./fixtures/forge/interviewDeriveStub.js";
+
+const stubMaterialize = (): MaterializeTemplate => async (input) => ({
+  templateRef: `tanren://composed/${input.config.slug}@deadbeef`,
+  repoRef: `cat-cave/tanren-tmpl-${input.config.slug}`,
+  validatedAt: "2026-06-09T00:00:00.000Z",
+  validatedSha: "deadbeef",
+});
 
 const actor: ActorContext = {
   userId: "user_a",
@@ -206,11 +214,9 @@ describe("deriveProductGraph · emits EXACTLY the captured lifecycle (no re-deri
         capture: captured,
         actor,
         repoUrl: TEST_REPO_URL,
+        owner: "cat-cave",
         deploy: { providerKind: "deploy.vercel" },
-        // This test asserts lifecycle persistence (identical seed-or-scratch). Run it as
-        // the template-BUILD origin (the legitimate from-scratch authoring) so it does
-        // not require a template registry query to exercise the verbatim projection.
-        scaffoldOrigin: "template_build",
+        materializeTemplate: stubMaterialize(),
       },
     );
     const config = configs.get(derived.projectId) as { lifecycle?: CaptureLifecycle } | undefined;

@@ -55,6 +55,7 @@ import { BASE_FRAGMENT_ID, BASE_JUSTFILE_TARGETS, BASE_PROTECTED_FILES } from ".
 import {
   type Fragment,
   type FragmentContract,
+  type FragmentKind,
   type FragmentLibrary,
   type TemplateConfig,
   VirtualFileSystem,
@@ -71,28 +72,69 @@ export function runtimeFragmentId(runtime: TemplateConfig["runtime"]): string {
   return `runtime-${runtime}`;
 }
 
-function frontendFragmentId(frontend: NonNullable<TemplateConfig["frontend"]>): string {
+export function frontendFragmentId(frontend: NonNullable<TemplateConfig["frontend"]>): string {
   return `frontend-${frontend}`;
 }
 
-function backendFragmentId(backend: NonNullable<TemplateConfig["backend"]>): string {
+export function backendFragmentId(backend: NonNullable<TemplateConfig["backend"]>): string {
   return `backend-${backend}`;
 }
 
-function dbFragmentId(db: NonNullable<TemplateConfig["db"]>): string {
+export function dbFragmentId(db: NonNullable<TemplateConfig["db"]>): string {
   return `db-${db}`;
 }
 
-function authFragmentId(auth: NonNullable<TemplateConfig["auth"]>): string {
+export function authFragmentId(auth: NonNullable<TemplateConfig["auth"]>): string {
   return `auth-${auth}`;
 }
 
-function addonFragmentId(addon: TemplateConfig["addons"][number]): string {
+export function addonFragmentId(addon: TemplateConfig["addons"][number]): string {
   return `addon-${addon}`;
 }
 
-function exampleFragmentId(example: TemplateConfig["examples"][number]): string {
+export function exampleFragmentId(example: TemplateConfig["examples"][number]): string {
   return `example-${example}`;
+}
+
+/** The (kind, label, id) tuple a fragment slot resolves to. Used by
+ * `selectFragmentConfig` so the missing-fragments enumeration walks the EXACT
+ * id sequence `composeTemplate` will require — single source of truth. */
+export interface PhaseFragmentRef {
+  kind: FragmentKind;
+  label: string;
+  id: string;
+}
+
+/** Walk the same phase sequence `composeTemplate` will require for `config`, returning
+ * the (kind, label, id) tuple for each slot — without applying any fragment. The
+ * caller (`selectFragmentConfig`) uses this to decide whether the library covers the
+ * config or whether the per-fragment authoring DAG must fill missing slots. */
+export function compose(config: TemplateConfig): PhaseFragmentRef[] {
+  const baseLabel = BASE_FRAGMENT_ID.replace(/^base-?/u, "") || "base";
+  const out: PhaseFragmentRef[] = [
+    { kind: "base", label: baseLabel, id: BASE_FRAGMENT_ID },
+    { kind: "runtime", label: config.runtime, id: runtimeFragmentId(config.runtime) },
+  ];
+  if (config.frontend !== undefined) {
+    out.push({ kind: "frontend", label: config.frontend, id: frontendFragmentId(config.frontend) });
+  }
+  if (config.backend !== undefined) {
+    out.push({ kind: "backend", label: config.backend, id: backendFragmentId(config.backend) });
+  }
+  if (config.db !== undefined) {
+    out.push({ kind: "db", label: config.db, id: dbFragmentId(config.db) });
+  }
+  if (config.auth !== undefined) {
+    out.push({ kind: "auth", label: config.auth, id: authFragmentId(config.auth) });
+  }
+  for (const addon of config.addons) {
+    out.push({ kind: "addon", label: addon, id: addonFragmentId(addon) });
+  }
+  for (const example of config.examples) {
+    out.push({ kind: "example", label: example, id: exampleFragmentId(example) });
+  }
+  out.push({ kind: "deploy", label: config.deploy, id: deployFragmentId(config.deploy) });
+  return out;
 }
 
 /**

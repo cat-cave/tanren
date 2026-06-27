@@ -12,6 +12,7 @@ import { dbPostgresPrismaFragment } from "./db-postgres-prisma.js";
 import { deployFlyFragment } from "./deploy-fly.js";
 import { deployNoneFragment } from "./deploy-none.js";
 import { frontendReactRouterFragment } from "./frontend-react-router.js";
+import { frontendRemixFragment } from "./frontend-remix.js";
 import { runtimeNodePnpmFragment } from "./runtime-node-pnpm.js";
 import { runtimeRubyBundlerFragment } from "./runtime-ruby-bundler.js";
 import { type Fragment, FragmentLibrary } from "../types.js";
@@ -21,6 +22,7 @@ const ALL_FRAGMENTS: readonly Fragment[] = [
   runtimeNodePnpmFragment,
   runtimeRubyBundlerFragment,
   frontendReactRouterFragment,
+  frontendRemixFragment,
   dbPostgresPrismaFragment,
   deployFlyFragment,
   deployNoneFragment,
@@ -55,6 +57,7 @@ export { BASE_FRAGMENT_ID, BASE_FRAGMENT_VERSION, BASE_JUSTFILE_TARGETS, BASE_PR
 export { RUNTIME_NODE_PNPM_ID } from "./runtime-node-pnpm.js";
 export { RUNTIME_RUBY_BUNDLER_ID } from "./runtime-ruby-bundler.js";
 export { FRONTEND_REACT_ROUTER_ID } from "./frontend-react-router.js";
+export { FRONTEND_REMIX_ID } from "./frontend-remix.js";
 export { DB_POSTGRES_PRISMA_ID } from "./db-postgres-prisma.js";
 export { DEPLOY_FLY_ID } from "./deploy-fly.js";
 export { DEPLOY_NONE_ID } from "./deploy-none.js";

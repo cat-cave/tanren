@@ -25,8 +25,7 @@ import type { CreatedRepository, CreateRepositoryInput } from "../../contracts/c
 import type { DesignAgent } from "../../design/designAgent.js";
 import { deriveProductGraph, type DeriveResult } from "./derive.js";
 import type { DeployPreflightCallback, GreenfieldDeployDependency, PrepareDeployCallback } from "./deployDependency.js";
-import type { SelectedTemplate, TemplateRegistryQuery } from "./templateSelection.js";
-import type { MaterializeCuratedTemplate } from "../../templates/fragments/index.js";
+import type { FragmentAuthoring, FragmentLibrary, MaterializeTemplate } from "../../templates/fragments/index.js";
 import {
   DEFAULT_TOTAL_ROUNDS,
   InterviewCapture,
@@ -105,15 +104,11 @@ export async function runRound(deps: InterviewEngineDeps, input: RunRoundInput):
   // provider that drifts from the schema is normalized/rejected here).
   const output: InterviewRoundOutputType = InterviewRoundOutput.parse(rawOutput);
 
-  // LIFECYCLE/STACK DRIFT GUARD: resolve the lifecycle BEFORE the merge so a
-  // rejected silent drift (or an accepted explicit change) is surfaced + logged
-  // loudly — never swallowed. The merge itself preserves the confirmed lifecycle.
+  // LIFECYCLE/STACK DRIFT GUARD.
   const lifecycle = resolveLifecycle(priorCapture, output.captureDelta);
   const nextCapture = mergeCapture(priorCapture, output.captureDelta);
   let lifecycleDrift: LifecycleDriftNotice | undefined;
   if (lifecycle.outcome === "drift") {
-    // LOUD: an answerer tried to drift the operator's confirmed stack. The
-    // confirmed lifecycle is preserved verbatim; the attempt is reported.
     log.warn(
       "REJECTED lifecycle drift — the answerer tried to overwrite the operator-confirmed stack without an " +
         "explicit change. Preserving the confirmed lifecycle.",
@@ -152,33 +147,18 @@ export interface DeriveFromCaptureInput {
   // `human` keeps the schema's safe defaults. Threaded into `deriveProductGraph`.
   autonomy?: "auto" | "simulated" | "human";
   deploy?: GreenfieldDeployDependency;
-  // The scaffold ORIGIN (templating-system.md §3). "project" (default) ALWAYS runs
-  // template selection (a registry query is required); "template_build" is the
-  // creation BUILD step that authors the template from scratch. Threaded into
-  // `deriveProductGraph` so the doctrine invariant (no project DAG scaffolds against a
-  // non-template base) is enforced there.
-  scaffoldOrigin?: "project" | "template_build";
-  // The org-scoped template-registry query (templating-system.md §3). REQUIRED on the
-  // "project" origin (a project ALWAYS selects a validated template to seed from);
-  // absent only on the "template_build" origin (which authors the template itself).
-  templateRegistryQuery?: TemplateRegistryQuery;
-  templateChannelPreference?: "lts" | "nightly";
-  // Injectable clock for deterministic selection-freshness (threaded to selection).
-  selectionNow?: number;
-  // The no-match → JUST-IN-TIME CREATION seam (templating-system.md §3). On a no-match
-  // selection CREATES a validated template + seeds from it; an un-creatable no-match
-  // HALTS LOUD. Threaded into `deriveProductGraph` (consulted only with a registry
-  // query). Supplied by the wiring layer — no creation dependency in this engine.
-  createTemplateForNoMatch?: (lifecycle: CaptureLifecycle) => Promise<SelectedTemplate | undefined>;
-  // PR-C — the MATRIX-HIT MATERIALIZER (docs/roadmap/templating-system.md §FRAGMENTS).
-  // When the curated registry hits, this seam composes + creates a template repo +
-  // pushes the VFS, returning a `SelectedTemplate` the rest of the derive seeds from.
-  // Supplied by the route wiring; absent only on the template_build origin path.
-  materializeCuratedTemplate?: MaterializeCuratedTemplate;
+  // The COMPOSE+MATERIALIZE seam (docs/roadmap/templating-system.md). Every
+  // greenfield derive composes a fragment-based template from the captured
+  // lifecycle and materializes it into a fresh seed repo via this seam.
+  materializeTemplate?: MaterializeTemplate;
+  // Override the fragment library (unified bundled + org-scoped). When omitted,
+  // the bundled library is used.
+  fragmentLibrary?: FragmentLibrary;
+  // Per-fragment authoring seam (F2). On a missing-fragments decision the derive
+  // calls this to author the missing fragments, persist them, and retry.
+  runFragmentAuthoring?: FragmentAuthoring;
   // WS-D3 (native-design-subsystem.md): the DESIGN AGENT that elaborates the captured
-  // design intent into the designed HEAD `DesignContract` (the design phase) before
-  // the build nodes run. Production wires a real provider answerer; absent ⇒ the thin
-  // captured contract is persisted verbatim. Threaded into `deriveProductGraph`.
+  // design intent into the designed HEAD `DesignContract`.
   designAgent?: DesignAgent;
 }
 
@@ -199,18 +179,9 @@ export async function deriveFromCapture(
     ...(input.createRepository === undefined ? {} : { createRepository: input.createRepository }),
     ...(input.autonomy === undefined ? {} : { autonomy: input.autonomy }),
     ...(input.deploy === undefined ? {} : { deploy: input.deploy }),
-    ...(input.scaffoldOrigin === undefined ? {} : { scaffoldOrigin: input.scaffoldOrigin }),
-    ...(input.selectionNow === undefined ? {} : { selectionNow: input.selectionNow }),
-    ...(input.templateRegistryQuery === undefined ? {} : { templateRegistryQuery: input.templateRegistryQuery }),
-    ...(input.createTemplateForNoMatch === undefined
-      ? {}
-      : { createTemplateForNoMatch: input.createTemplateForNoMatch }),
-    ...(input.materializeCuratedTemplate === undefined
-      ? {}
-      : { materializeCuratedTemplate: input.materializeCuratedTemplate }),
-    ...(input.templateChannelPreference === undefined
-      ? {}
-      : { templateChannelPreference: input.templateChannelPreference }),
+    ...(input.materializeTemplate === undefined ? {} : { materializeTemplate: input.materializeTemplate }),
+    ...(input.fragmentLibrary === undefined ? {} : { fragmentLibrary: input.fragmentLibrary }),
+    ...(input.runFragmentAuthoring === undefined ? {} : { runFragmentAuthoring: input.runFragmentAuthoring }),
     ...(deps.preflightDeploy === undefined ? {} : { preflightDeploy: deps.preflightDeploy }),
     ...(deps.prepareDeploy === undefined ? {} : { prepareDeploy: deps.prepareDeploy }),
     ...(input.designAgent === undefined ? {} : { designAgent: input.designAgent }),

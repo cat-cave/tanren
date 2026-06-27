@@ -62,24 +62,24 @@ export const ProjectProductVision = z
   .strict();
 export type ProjectProductVision = z.infer<typeof ProjectProductVision>;
 
-// Tanren-native templating (wave 3) — the SEED REFERENCE recorded on a project
-// whose greenfield scaffold SEEDED from a validated template (templating-system.md
-// §3). Persisted here (not a new table), so the decision is OBSERVABLE on the
-// project config and the run path can clone the template repo's conforming files as
-// the scaffold base. Present ONLY when a template was selected (strong/partial
-// match); ABSENT on the from-scratch path (no match / blocked — the apex default).
-// `validatedAt`/`validatedSha` capture the proof the template was selected on
-// (durable evidence the seed came from a PROVEN template, not a hand-waved one).
+// Tanren-native templating (doctrine collapse) — the SEED REFERENCE recorded on a
+// project whose greenfield scaffold seeded from a fragment-composed template
+// (docs/roadmap/templating-system.md). Persisted here (not a new table) so the
+// decision is OBSERVABLE on the project config and the run path can clone the
+// composed seed's files as the scaffold base. ALWAYS present on a greenfield
+// project — the doctrine collapse removed the from-scratch project path; every
+// project DAG seeds from a composed template. `validatedAt`/`validatedSha`
+// capture the compose+materialize moment (durable evidence the seed came from a
+// real composed-by-construction template, not a hand-waved one).
 export const ProjectTemplateRef = z
   .object({
-    // The selected template's registry id (the `templates.id`).
+    // The composed seed's opaque identifier (form: `tanren://composed/<slug>@<sha>`).
     templateRef: z.string().min(1),
-    // The template repo the seed cloned its conforming files from.
+    // The seed repo the project's workspace cloned its conforming files from.
     repoRef: z.string().min(1),
-    // When the template's validationProof was last produced (ISO-8601) — the proof
-    // the seed was selected on.
+    // When the seed was composed + materialized (ISO-8601).
     validatedAt: z.string().min(1),
-    // The exact template-repo commit the proof was produced against.
+    // The exact seed-repo commit the materialize push left at HEAD.
     validatedSha: z.string().min(1),
   })
   .strict();
@@ -323,15 +323,6 @@ export const ProjectConfigV1 = z
     // `/projects/greenfield` + the interview `deriveProductGraph`); absent ⇒ `false`
     // = brownfield.
     greenfield: z.boolean().default(false),
-    // TEMPLATE-BUILD MARKER (templating-system.md): whether this project is a
-    // TEMPLATE-CREATION build — the meta-flow project that AUTHORS a reusable
-    // template (a scaffold/contract-instance), NOT a running product. Set by the
-    // template-creation derive (`scaffoldOrigin: "template_build"`) and read so the
-    // post-merge deploy-on-merge watcher SKIPS it: a template carries a `deploy` verb
-    // in its `.tanren/ci.yml` so PRODUCTS built FROM it can later deploy, but the
-    // template BUILD itself must never trigger a product deploy. Absent ⇒ `false` =
-    // a normal product project (deploys on merge as before).
-    templateBuild: z.boolean().default(false),
     // The captured product identity + design-DNA from the greenfield vision
     // interview (see `ProjectProductVision`). Persisted here (not a new table) so
     // the conflict resolver can frame a resolution against the product vision.
@@ -408,23 +399,4 @@ export function isAbsentProjectConfig(raw: unknown): boolean {
 
 export function projectConfigJsonSchema(): Record<string, unknown> {
   return z.toJSONSchema(ProjectConfigV1) as Record<string, unknown>;
-}
-
-/**
- * Whether a (raw, already-read) project config marks the project as a
- * TEMPLATE-CREATION build (the `templateBuild` provenance marker the
- * template-creation derive sets — see {@link ProjectConfigV1}). A real,
- * config-driven signal (never a repo-name heuristic): a template-build project
- * authors a reusable TEMPLATE, not a running product, so the post-merge
- * deploy-on-merge watcher SKIPS it. Reads the marker WITHOUT a strict full-config
- * parse so an unrelated config-shape concern can never mask the template-build
- * signal — only the boolean marker is consulted. Absent/false ⇒ a normal product.
- */
-export function isTemplateBuildProjectConfig(raw: unknown): boolean {
-  return (
-    raw !== null &&
-    typeof raw === "object" &&
-    !Array.isArray(raw) &&
-    (raw as Record<string, unknown>)["templateBuild"] === true
-  );
 }

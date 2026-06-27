@@ -17,24 +17,10 @@
       "breakpoints": true
     },
     {
-      "idx": 2,
-      "version": "7",
-      "when": 1781398836520,
-      "tag": "0002_template_build_recovery_events",
-      "breakpoints": true
-    },
-    {
       "idx": 3,
       "version": "7",
       "when": 1781446434997,
       "tag": "0003_ambiguous_silver_surfer",
-      "breakpoints": true
-    },
-    {
-      "idx": 4,
-      "version": "7",
-      "when": 1781463665460,
-      "tag": "0004_template_creation_upgrade_events",
       "breakpoints": true
     },
     {
@@ -126,6 +112,13 @@
       "version": "7",
       "when": 1782281647506,
       "tag": "0017_events_run_terminal_unique",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1782530000000,
+      "tag": "0018_fragments_doctrine_collapse",
       "breakpoints": true
     }
   ]

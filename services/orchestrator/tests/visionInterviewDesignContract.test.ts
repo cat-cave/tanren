@@ -15,8 +15,16 @@ import {
   type CaptureLifecycle,
   type InterviewCapture,
 } from "../src/engine/forge/interview/index.js";
+import type { MaterializeTemplate } from "../src/engine/templates/index.js";
 import { createDeterministicInterviewAnswerer } from "./fixtures/forge/deterministicInterviewAnswerer.js";
 import { preparedDeploy, stubPool } from "./fixtures/forge/interviewDeriveStub.js";
+
+const stubMaterialize = (): MaterializeTemplate => async (input) => ({
+  templateRef: `tanren://composed/${input.config.slug}@deadbeef`,
+  repoRef: `cat-cave/tanren-tmpl-${input.config.slug}`,
+  validatedAt: "2026-06-09T00:00:00.000Z",
+  validatedSha: "deadbeef",
+});
 
 const TS_LIFECYCLE: CaptureLifecycle = {
   stack: "ts/pnpm",
@@ -80,10 +88,9 @@ describe("deriveProductGraph · the required design contract (no silent no-op)",
           capture: lifecycleOnlyCapture(),
           actor,
           repoUrl: TEST_REPO_URL,
+          owner: "cat-cave",
           deploy: { providerKind: "deploy.vercel" },
-          // template_build skips template selection — so the rejection is unambiguously
-          // the missing-design-contract guard (which runs before any selection anyway).
-          scaffoldOrigin: "template_build",
+          materializeTemplate: stubMaterialize(),
         },
       ),
     ).rejects.toBeInstanceOf(MissingDesignContractError);
@@ -109,8 +116,9 @@ describe("deriveProductGraph · the required design contract (no silent no-op)",
         capture: { ...emptyCapture(), lifecycle: TS_LIFECYCLE, designContract: MINIMAL_DESIGN_CONTRACT },
         actor,
         repoUrl: TEST_REPO_URL,
+        owner: "cat-cave",
         deploy: { providerKind: "deploy.vercel" },
-        scaffoldOrigin: "template_build",
+        materializeTemplate: stubMaterialize(),
       },
     );
     expect(derived.designContractId).toBeDefined();
@@ -153,10 +161,9 @@ describe("deriveProductGraph · the required design contract (no silent no-op)",
           capture: tampered,
           actor,
           repoUrl: TEST_REPO_URL,
+          owner: "cat-cave",
           deploy: { providerKind: "deploy.vercel" },
-          // template_build skips selection so the derive reaches step 4 (the design
-          // contract authoring) where the thin-capture ref binding throws.
-          scaffoldOrigin: "template_build",
+          materializeTemplate: stubMaterialize(),
         },
       ),
     ).rejects.toBeInstanceOf(DanglingDesignRefError);

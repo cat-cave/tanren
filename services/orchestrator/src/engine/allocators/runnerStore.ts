@@ -43,12 +43,10 @@ export interface ClaimRunnerInput {
  * branch excludes it, the INSERT branch collides on the unique runner_id, so
  * zero rows are affected. This is a WIRING bug surface — the lifecycle is
  * meant to pre-check and short-circuit before reaching here, or two paths are
- * double-claiming the same deterministic handle (e.g. a job-reaper requeue
- * racing the original worker, or the template-build deterministic
- * `run_template_build_<projectId>` being re-derived while the prior runner is
- * still LIVE). It is NEVER a transient — re-trying the same INSERT will hit the
- * same LIVE row on the next pass and fail-loop forever (apex v49: the bare
- * INSERT threw an untyped `runners_pkey`, which `isRetriableInfraError`
+ * double-claiming the same deterministic handle (a job-reaper requeue racing
+ * the original worker). It is NEVER a transient — re-trying the same INSERT
+ * will hit the same LIVE row on the next pass and fail-loop forever (apex v49:
+ * the bare INSERT threw an untyped `runners_pkey`, which `isRetriableInfraError`
  * defaults to RETRIABLE, and the merge coordinator's hold-loop re-drove
  * forever → an 8-hour curl hang).
  *
@@ -96,15 +94,13 @@ export class PgRunnerStore implements RunnerStore {
     // (BYPASSRLS) instead — never an implicit unscoped bare-pool write.
     //
     // Idempotent claim (apex v49 / task #21A): the runner id is the
-    // deterministic `runner_<handle>`, so a RETRIED claim for the same handle
-    // — the job-reaper requeue of a lapsed-lease running job (lease expires,
-    // a new worker claims the same `run_id` → derives the same `runner_<runId>`
-    // → INSERTs the same `runner_id`), or the template-build re-derive on
-    // recovery (`liveBuildDriver.ts`'s deterministic
-    // `runId = "run_template_build_${projectId}"`) — collides on the unique
-    // runner_id. A bare INSERT threw `runners_pkey` raw, which the merge
-    // coordinator's hold-loop classified RETRIABLE-by-default
-    // (`isRetriableInfraError` defaults untyped errors to retriable —
+    // deterministic `runner_<handle>`, so a RETRIED claim for the same handle —
+    // the job-reaper requeue of a lapsed-lease running job (lease expires, a
+    // new worker claims the same `run_id` → derives the same `runner_<runId>`
+    // → INSERTs the same `runner_id`) — collides on the unique runner_id. A
+    // bare INSERT threw `runners_pkey` raw, which the merge coordinator's
+    // hold-loop classified RETRIABLE-by-default (`isRetriableInfraError`
+    // defaults untyped errors to retriable —
     // `engine/providers/githubRefReset.ts`); apex v49 looped on this for 8 hours.
     //
     // A bare `ON CONFLICT DO UPDATE` would overwrite a still-LIVE container_id

@@ -1,40 +1,25 @@
-// MATERIALIZE-CURATED-TEMPLATE (PR-C wiring).
+// MATERIALIZE-COMPOSED-TEMPLATE — the single seam that turns a fragment-composed
+// VFS into a real seed repo a project can be cloned/seeded from
+// (docs/roadmap/templating-system.md).
 //
-// The matrix-hit decision (`compose-from-fragments`) produced by `selectSeedTemplate`
-// carries a `CuratedTemplate` but NO repo yet. This module is the SEAM that:
+// THE ONE PATH. `selectFragmentConfig` resolves a `TemplateConfig` from the
+// captured lifecycle; `composeTemplate(config, library)` assembles the VFS; this
+// module CREATES the seed repo + PUSHES every composed file. The returned
+// `SeededTemplate` is the durable evidence the project will seed from.
 //
-//   1. Runs `composeTemplate(curated.config, library)` to assemble the VFS.
-//   2. Creates a fresh template repo on the forge via the caller-supplied
-//      `createRepository` primitive (`CodeHost.createRepo` — the SAME plumbing the
-//      greenfield route + the agent template-build path use).
-//   3. Pushes every VFS file to the template repo's default branch via the
-//      caller-supplied `pushFile` primitive (a small wrapper over the GitHub
-//      contents PUT — see `buildLiveMaterializeCuratedTemplate` for the live wiring).
-//   4. Returns a `SelectedTemplate` whose `repoRef` points to the freshly-pushed
-//      repo — the rest of the derive seeds from it via the normal seed path.
-//
-// PR-C ships this as a SEAM the derive layer holds (the same pattern as
-// `createTemplateForNoMatch`): the production wiring lives in the route layer (it
-// has the GitHub HTTP client + the App-token resolver in scope); tests inject an
-// in-memory fake. No new dependency reaches the selection layer.
-//
-// THE VALIDATION POSTURE. A composed template is "validated by construction" — the
+// VALIDATION POSTURE. A composed template is "validated by construction" — the
 // composer's `assertBaseInvariantsHeld` post-process re-checks every
 // `BASE_PROTECTED_FILES` path, `processCiYml` throws when no fragment declared a
 // test runner, and the dogfood snapshot test in CI catches a fragment regression
-// at PR time. We therefore mint a `TemplateValidationProof` at materialize time with
-// the same positiveControlsPassed/auditorClean/negative-controls shape the agent
-// path's `runValidationHarness` produces — keyed to the compose-time clock so the
-// freshness gate keeps the same 30-day re-check semantics. The proof's
-// `validatedSha` is the freshly-created repo's initial HEAD SHA.
+// at PR time. Per-fragment authoring runs (F2 — `selectFragmentConfig` returning a
+// `missing-fragments` decision) validate each new fragment in isolation via PR-D's
+// harness BEFORE it lands in the org store, so an authored fragment is provably
+// valid by the time the compose runs over it.
 
 import { composeTemplate } from "./compose.js";
-import { type VirtualFileSystem } from "./types.js";
+import { type FragmentLibrary, type TemplateConfig, type VirtualFileSystem } from "./types.js";
 import { loadFragmentLibrary } from "./library/index.js";
-import type { CuratedTemplate } from "./registry/index.js";
 import type { CaptureLifecycle } from "../../forge/interview/types.js";
-import type { SelectedTemplate } from "../../forge/interview/templateSelection.js";
-import type { TemplateValidationProof } from "../manifest.js";
 import { createLogger } from "../../observability/logger.js";
 
 const log = createLogger("template-fragments-materialize");
@@ -42,12 +27,12 @@ const log = createLogger("template-fragments-materialize");
 // The plumbing the materializer needs to actually CREATE + PUSH. Both are injected
 // by the route layer (the GitHub HTTP client + App-token resolver live there); the
 // engine layer (and tests) only sees the typed shapes.
-export interface MaterializeCuratedDeps {
+export interface MaterializeDeps {
   /**
    * Create a fresh template repo on the forge. Reuses the SAME `createRepository`
-   * primitive the greenfield route + the agent template-build path call (the
-   * `CodeHost.createRepo` seam). The returned `repoUrl` is the HTTPS clone URL +
-   * `defaultBranch` is the branch `auto_init` seeded.
+   * primitive the greenfield route calls (the `CodeHost.createRepo` seam). The
+   * returned `repoUrl` is the HTTPS clone URL + `defaultBranch` is the branch
+   * `auto_init` seeded.
    */
   createTemplateRepo: (input: {
     owner: string;
@@ -57,10 +42,10 @@ export interface MaterializeCuratedDeps {
   }) => Promise<{ repoUrl: string; defaultBranch: string; fullName: string }>;
   /**
    * Push ONE file to the template repo's default branch. Production wires this to a
-   * contents-API PUT (see `buildLiveMaterializeCuratedTemplate` — the same shape
+   * contents-API PUT (see `buildLiveMaterializeTemplate` — the same shape
    * `FetchConfigInjectionGitHub.commitFile` already uses for the brownfield config
    * injector). Returns the resulting commit SHA so the FINAL SHA of the push set
-   * can ride on the validation proof's `validatedSha`.
+   * can ride on the seeded-template record as `validatedSha`.
    */
   pushFile: (input: {
     repoUrl: string;
@@ -71,70 +56,93 @@ export interface MaterializeCuratedDeps {
   }) => Promise<{ commitSha: string }>;
 }
 
-// The matrix-hit materializer input — what derive.ts gives the seam per call. The
-// derive supplies the curated entry + the org/owner context so the materializer can
-// create the repo with the right owner + record the right org on the seed.
-export interface MaterializeCuratedInput {
-  curated: CuratedTemplate;
+/**
+ * What materialize returns — the durable evidence a project is seeded from a
+ * composed template. Persisted onto `projects.config.templateRef` so the run path
+ * clones from `repoRef` (workspace/templateSeed.ts) before the writer starts.
+ *
+ * Replaces the previous `SelectedTemplate` shape from the now-deleted
+ * `templateSelection.ts`. The doctrine-collapse removed the registry-of-templates
+ * concept entirely — there are only fragments + composed seeds — so the proof
+ * narrative collapses too: a seed is provably valid by COMPOSITION (the composer's
+ * post-process invariants) + by ANCESTRY (every fragment was validated in
+ * isolation before reaching the library), not by a runtime negative-control sweep.
+ */
+export interface SeededTemplate {
+  /** Stable identifier the project records on its config. Form:
+   * `tanren://composed/<slug>@<sha>` so two seeds of the same config at different
+   * times are distinguishable. */
+  templateRef: string;
+  /** GitHub `<owner>/<name>` of the seed repo the run path clones from. */
+  repoRef: string;
+  /** ISO timestamp at which the seed was composed + pushed. */
+  validatedAt: string;
+  /** The final commit SHA on the seed repo's default branch (the deterministic
+   * head of the materialize push set). */
+  validatedSha: string;
+}
+
+/** The materializer input — what derive.ts gives the seam per call. */
+export interface MaterializeInput {
+  /** The composer config the seed will be built from (curated lookup or
+   * lifecycle-derived synthesis — `selectFragmentConfig` produced it). */
+  config: TemplateConfig;
+  /** The captured lifecycle that produced `config`. Carried through for the repo
+   * description + observability. */
   lifecycle: CaptureLifecycle;
-  // The GitHub owner the template repo will be created under (the derive request's
-  // owner — `mountFeatureRoutes` threads it from the auth context).
+  /** The GitHub owner the seed repo will be created under (the derive request's
+   * owner — `mountFeatureRoutes` threads it from the auth context). */
   owner: string;
-  // The compose-time clock (injectable for deterministic tests).
+  /** Override the production bundled library (e.g. inject a unified library that
+   * combines bundled + org-scoped fragments per F2's `loadFragmentLibrary(orgId)`).
+   * When omitted, the bundled library is used. */
+  library?: FragmentLibrary;
+  /** Compose-time clock (injectable for deterministic tests). */
   now?: () => Date;
 }
 
-// The seam shape the derive layer holds — a callback the route wiring fills.
-export type MaterializeCuratedTemplate = (input: MaterializeCuratedInput) => Promise<SelectedTemplate>;
+/** The seam shape the derive layer holds — a callback the route wiring fills. */
+export type MaterializeTemplate = (input: MaterializeInput) => Promise<SeededTemplate>;
 
 /**
- * Build the LIVE matrix-hit materializer. Production wires this in
+ * Build the LIVE compose+materialize seam. Production wires this in
  * `mountFeatureRoutes` with the App-token-scoped `createTemplateRepo` + a
  * contents-API `pushFile`. Tests construct it with in-memory fakes.
  *
- * The returned function:
- *   1. Composes the curated template's `TemplateConfig` through `composeTemplate`.
- *      A compose failure THROWS LOUD (the curated entry is broken — a code change
- *      regressed it; the dogfood snapshot test should have caught it pre-merge).
- *   2. Creates the template repo via `deps.createTemplateRepo`.
- *   3. Pushes every composed file to the default branch in stable path order.
- *   4. Returns a `SelectedTemplate` with a fresh `TemplateValidationProof`.
+ * Flow:
+ *   1. `composeTemplate(input.config, library)` — assemble the VFS. A compose
+ *      failure throws loud (the config references a broken fragment + the
+ *      validation gate should have caught it).
+ *   2. Create the seed repo via `deps.createTemplateRepo`.
+ *   3. Push every composed file to the default branch in stable path order.
+ *   4. Return a `SeededTemplate` with the head SHA + the ISO timestamp.
  */
-export function buildMaterializeCuratedTemplate(deps: MaterializeCuratedDeps): MaterializeCuratedTemplate {
-  return async (input: MaterializeCuratedInput): Promise<SelectedTemplate> => {
-    const { curated, owner } = input;
+export function buildMaterializeTemplate(deps: MaterializeDeps): MaterializeTemplate {
+  return async (input: MaterializeInput): Promise<SeededTemplate> => {
+    const { config, owner } = input;
     const clock = input.now ?? (() => new Date());
 
     // STEP 1 — COMPOSE.
-    const library = loadFragmentLibrary();
+    const library = input.library ?? loadFragmentLibrary();
     let vfs: VirtualFileSystem;
     try {
-      vfs = await composeTemplate(curated.config, library);
+      vfs = await composeTemplate(config, library);
     } catch (cause) {
-      // A compose failure on a CURATED entry is a code regression — re-throw with
-      // the curated id so the operator/CI can locate the broken entry quickly.
-      const err = new Error(`composeTemplate failed for curated entry "${curated.id}": ${String(cause)}`);
+      const err = new Error(`composeTemplate failed for config "${config.slug}": ${String(cause)}`);
       if (cause instanceof Error) err.cause = cause;
       throw err;
     }
 
-    // STEP 2 — CREATE REPO. Name: `<slug>-template-<short-id>` (the curated id is
-    // already stack-derived; keep it short for the GitHub 100-char repo-name cap).
-    const repoName = templateRepoName(curated.id);
+    // STEP 2 — CREATE REPO.
+    const repoName = templateRepoName(config.slug);
     const created = await deps.createTemplateRepo({
       owner,
       name: repoName,
-      description: `Tanren composed template (${curated.stack}) — generated by the matrix-hit composer`,
-      // Templates are PRIVATE by default — they are author-org assets. A separate
-      // catalogue-graduation flow promotes a vetted template to a public/official
-      // visibility; the matrix-hit materializer never publishes one publicly.
+      description: `Tanren composed template (${input.lifecycle.stack}) — generated by the fragment composer`,
       private: true,
     });
 
-    // STEP 3 — PUSH every composed file. The composer's `toFlatMap` returns entries
-    // in stable path order so two materialize runs commit the same sequence (the
-    // last commit SHA is the deterministic head — modulo GitHub's per-commit tree
-    // SHA, which depends on parent + author timestamp, never byte-identical).
+    // STEP 3 — PUSH every composed file.
     const flat = vfs.toFlatMap();
     const paths = Object.keys(flat);
     let lastCommitSha = "";
@@ -150,47 +158,28 @@ export function buildMaterializeCuratedTemplate(deps: MaterializeCuratedDeps): M
       lastCommitSha = result.commitSha;
     }
 
-    // STEP 4 — MINT THE PROOF. Composed-by-construction: every base invariant was
-    // re-checked post-compose; `processCiYml` proved a test runner was declared;
-    // the dogfood snapshot in CI catches a fragment regression. The negative-control
-    // result is `proven` for every capability the composed template declares.
     const validatedAt = clock().toISOString();
-    const validationProof: TemplateValidationProof = {
-      positiveControlsPassed: true,
-      // The composed template's structural guarantees correspond to the same
-      // negative-control capabilities the agent path proves at validation time —
-      // they are "proven by construction" rather than by a runner-driven negative
-      // injection (which the maintenance loop's re-validation pass exercises).
-      negativeControls: {
-        typecheck: "proven",
-        lint: "proven",
-        test: "proven",
-        mutation: "proven",
-      },
-      auditorClean: true,
-      validatedAt,
-      validatedSha: lastCommitSha === "" ? "compose" : lastCommitSha,
-    };
-
-    log.info("matrix-hit: composed + materialized curated template", {
-      curatedId: curated.id,
-      stack: curated.stack,
+    const validatedSha = lastCommitSha === "" ? "compose" : lastCommitSha;
+    log.info("composed + materialized template", {
+      configSlug: config.slug,
+      stack: input.lifecycle.stack,
       repoFullName: created.fullName,
       files: paths.length,
-      validatedSha: validationProof.validatedSha,
+      validatedSha,
     });
 
     return {
-      templateRef: `tanren://fragments/${curated.id}`,
+      templateRef: `tanren://composed/${config.slug}@${validatedSha}`,
       repoRef: created.fullName,
-      validationProof,
+      validatedAt,
+      validatedSha,
     };
   };
 }
 
-// Project the curated id onto a forge-safe repo name, hard-capping at 80 chars
+// Project the config slug onto a forge-safe repo name, hard-capping at 80 chars
 // (GitHub's repo-name cap is 100; we leave headroom for any future suffixes).
-function templateRepoName(curatedId: string): string {
-  const base = `tanren-tmpl-${curatedId}`.toLowerCase().replaceAll(/[^a-z0-9-]+/gu, "-");
+function templateRepoName(slug: string): string {
+  const base = `tanren-tmpl-${slug}`.toLowerCase().replaceAll(/[^a-z0-9-]+/gu, "-");
   return base.slice(0, 80);
 }

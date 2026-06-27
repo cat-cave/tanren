@@ -1,7 +1,7 @@
 // Single import surface for the template-fragment composition path
-// (docs/roadmap/templating-system.md §FRAGMENTS / PR-A).
+// (docs/roadmap/templating-system.md).
 
-export { composeTemplate, deployFragmentId, runtimeFragmentId } from "./compose.js";
+export { composeTemplate, deployFragmentId, runtimeFragmentId, compose, type PhaseFragmentRef } from "./compose.js";
 export { TemplateComposeError, type TemplateComposePhase } from "./composeError.js";
 export {
   AddonId,
@@ -32,6 +32,7 @@ export {
   DEPLOY_FLY_ID,
   DEPLOY_NONE_ID,
   FRONTEND_REACT_ROUTER_ID,
+  FRONTEND_REMIX_ID,
   loadFragmentLibrary,
   loadFragmentLibraryForTests,
   RUNTIME_NODE_PNPM_ID,
@@ -50,8 +51,38 @@ export {
   lookupCurated,
 } from "./registry/index.js";
 export {
-  buildMaterializeCuratedTemplate,
-  type MaterializeCuratedDeps,
-  type MaterializeCuratedInput,
-  type MaterializeCuratedTemplate,
+  buildMaterializeTemplate,
+  type MaterializeDeps,
+  type MaterializeInput,
+  type MaterializeTemplate,
+  type SeededTemplate,
 } from "./materialize.js";
+export {
+  deriveTemplateConfigFromLifecycle,
+  type DeriveTemplateConfigResult,
+  FragmentAuthoringFailedError,
+  type FragmentSpec,
+  selectFragmentConfig,
+  type SelectFragmentConfigResult,
+  UnresolvableLifecycleError,
+} from "./selectFragmentConfig.js";
+export {
+  buildFragmentAuthoring,
+  type FragmentAuthoring,
+  type FragmentAuthoringDeps,
+  type FragmentAuthoringEvents,
+  type FragmentAuthoringInput,
+  type FragmentAuthoringResult,
+  type FragmentAuthorer,
+  type FragmentAuthorerInput,
+  type FragmentAuthorerOutput,
+  type FragmentPersistence,
+} from "./fragmentAuthoringRun.js";
+export { buildFragmentAuthorerPrompt, wrapProviderFragmentAuthorer } from "./providerFragmentAuthorer.js";
+export {
+  FragmentBodyParseError,
+  interpretOrgFragment,
+  loadUnifiedFragmentLibrary,
+  type LoadOrgFragments,
+  type OrgFragmentSource,
+} from "./unifiedLibrary.js";

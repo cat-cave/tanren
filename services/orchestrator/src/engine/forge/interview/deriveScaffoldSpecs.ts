@@ -2,39 +2,28 @@
 //
 // Split out of `derive.ts` (file-size discipline): the foundation specs the derive
 // creates first, derived FROM THE CAPTURED LIFECYCLE (the stack-flexible contract,
-// docs/operator-guide/ci-config.md) — Tanren bakes in NO stack. The
-// architecture step captures the project's concrete lifecycle; the lifecycle is
-// PERSISTED onto the project config (in `derive.ts`) so the RUN path MATERIALIZES
-// the contract files (`justfile` + `.tanren/ci.yml`) DETERMINISTICALLY from it
-// (engine/forge/scaffold/contractFiles.ts) — they are NEVER LLM-authored (the v27
-// fix: the LLM writer reliably mangled the ci.yml YAML shape; the hardcoded-pnpm
-// `scaffoldCiConfig.ts` example is GONE — the apex v25/v26 bug).
+// docs/operator-guide/ci-config.md) — Tanren bakes in NO stack. The architecture
+// step captures the project's concrete lifecycle; the lifecycle is PERSISTED onto
+// the project config (in `derive.ts`) so the RUN path MATERIALIZES the contract
+// files (`justfile` + `.tanren/ci.yml`) DETERMINISTICALLY from it — they are NEVER
+// LLM-authored.
 //
-// TEMPLATING DOCTRINE (templating-system.md §3) — when a template was SELECTED, the
-// `scaffold` spec SHRINKS to template instantiation. The from-scratch authoring (no
-// decision) is RELOCATED: it is reachable ONLY as the BUILD step of template-creation
-// (the "template_build" scaffoldOrigin, where this derive authors the TEMPLATE itself
-// from scratch — validated with negative controls before any project seeds from it).
-// A PROJECT DAG never reaches the from-scratch branch — a project no-match creates a
-// validated template just-in-time or HALTS loud (`TemplateRequiredError`); the derive
-// invariant guard (`assertNoFromScratchProjectScaffold`) asserts it. See
-// `scaffoldSpecsFor`.
+// THE ONE-PATH DOCTRINE (docs/roadmap/templating-system.md). Every project DAG's
+// `scaffold` spec instantiates a SEED — the fragment composer + the materializer
+// produced a real seed repo before this derive runs. The writer specializes the
+// seed; it never authors the project from scratch. There is no dual scaffoldOrigin
+// (the project-vs-template_build branching is gone), no agent template-build path.
 //
 // Fixes preserved here (DOMAIN knowledge — not a walker-wide rule):
 //   1. `dependsOnPrev` SERIALIZES the foundation into a chain (`scaffold` is the
-//      sole root; `build` then `deploy` chain off it), so one branch establishes
-//      the authoritative justfile/toolchain on `main` before the next builds on it
-//      (no incompatible-stack races off an empty repo).
-//   2. The `scaffold` spec's WRITER authors the project CODE (the contract files
-//      are materialized deterministically — it never touches them); the
-//      `build`/`deploy` specs route through the conventional `just build` /
-//      `just deploy` targets — never a hardcoded build/deploy command.
+//      sole root; `build` then `deploy` chain off it).
+//   2. The `scaffold` spec's WRITER specializes the seed (the contract files came
+//      from the seed); the `build`/`deploy` specs route through the conventional
+//      `just build` / `just deploy` targets — never a hardcoded command.
 //   3. The SCAFFOLD BAR is structure + bootstrap/tier-1/build passing — a thorough
 //      test SUITE is NOT required at scaffold (tests arrive with the feature specs).
 
 import {
-  buildScaffoldAcceptanceCriteria,
-  buildScaffoldDescription,
   buildSeedScaffoldAcceptanceCriteria,
   buildSeedScaffoldDescription,
   MissingLifecycleError,
@@ -42,71 +31,38 @@ import {
 // Re-exported so `derive.ts` sources the scaffold-derivation surface from one
 // module (the lifecycle guard travels with the scaffold authoring it gates).
 export { MissingLifecycleError };
-import type { TemplateSelectionDecision } from "./templateSelection.js";
+import type { SeededTemplate } from "../../templates/fragments/materialize.js";
 import type { CaptureLifecycle } from "./types.js";
 
 export interface ScaffoldSpecDef {
   title: string;
   description: string;
-  // The acceptance criteria the writer must satisfy. When absent, a generic
-  // "pipeline is green" criterion is synthesized in the create loop.
+  // The acceptance criteria the writer must satisfy.
   acceptanceCriteria?: string[];
   // When true, this spec `dependsOn` the PREVIOUS scaffold spec in the list — the
   // wiring that serializes the foundation into a chain instead of parallel roots.
   dependsOnPrev?: boolean;
 }
 
-// The adaptation work a PARTIAL match leaves for the writer: the build + deploy
-// lifecycle commands the project declared, which a partial-match template may not
-// fully wire. Expressed as adaptation criteria the seed scaffold spec carries (so a
-// partial seed still ends with the project's own build/deploy lifecycle satisfied).
-// STACK-AGNOSTIC: the commands come from the captured lifecycle, never a literal.
-function partialMatchAdaptations(lifecycle: CaptureLifecycle): string[] {
-  return [
-    `the project's \`just build\` runs its declared build (\`${lifecycle.build.trim()}\`) and exits 0`,
-    `the project's \`just deploy\` runs its declared deploy (\`${lifecycle.deploy.trim()}\`) to the chosen target`,
-  ];
-}
-
-// Build the foundation scaffold specs from the captured lifecycle. The `scaffold`
-// spec's writer authors the project CODE (the contract files are MATERIALIZED
-// deterministically by the run, not by the writer); `build` and `deploy` route
-// through the conventional `just build` / `just deploy` targets the materialized
-// contract established — so the deploy/build paths invoke the PROJECT's declared
-// command, never a hardcoded assumption.
-//
-// When a template was SELECTED (`decision.kind` strong/partial), the `scaffold` spec
-// SHRINKS: the writer INSTANTIATES the template seed (adapt product names/deploy/env,
-// plus the partial-match adaptations) instead of authoring from scratch
-// (templating-system.md §3). When NO decision is passed, the `scaffold` spec is the
-// from-scratch authoring — RELOCATED to be reachable ONLY on the "template_build"
-// scaffoldOrigin (it authors the TEMPLATE itself; a project path always passes a
-// strong/partial decision or has already halted). The `build`/`deploy` specs are
-// identical either way (they always route through `just build`/`just deploy`).
-export function scaffoldSpecsFor(lifecycle: CaptureLifecycle, decision?: TemplateSelectionDecision): ScaffoldSpecDef[] {
-  const seeded = decision?.selected !== undefined && (decision.kind === "strong" || decision.kind === "partial");
-  // The partial-match adaptation work: the lifecycle capabilities the template's
-  // deploy/framework did NOT cover (a strong match needs none — pure instantiation).
-  const adaptations = seeded && decision?.kind === "partial" ? partialMatchAdaptations(lifecycle) : [];
-  const scaffoldSpec: ScaffoldSpecDef =
-    seeded && decision?.selected !== undefined
-      ? {
-          title: "scaffold",
-          description: buildSeedScaffoldDescription(lifecycle, decision.selected, adaptations),
-          acceptanceCriteria: buildSeedScaffoldAcceptanceCriteria(decision.selected, adaptations),
-        }
-      : {
-          title: "scaffold",
-          description: buildScaffoldDescription(lifecycle),
-          acceptanceCriteria: buildScaffoldAcceptanceCriteria(lifecycle),
-        };
+/**
+ * Build the foundation scaffold specs from the captured lifecycle + the
+ * fragment-composed seed. The `scaffold` spec INSTANTIATES the seed (the writer
+ * specializes the seed for THIS product); `build` and `deploy` route through the
+ * conventional `just build` / `just deploy` targets the seed established.
+ */
+export function scaffoldSpecsFor(lifecycle: CaptureLifecycle, seed: SeededTemplate): ScaffoldSpecDef[] {
+  const scaffoldSpec: ScaffoldSpecDef = {
+    title: "scaffold",
+    description: buildSeedScaffoldDescription(lifecycle, seed),
+    acceptanceCriteria: buildSeedScaffoldAcceptanceCriteria(seed),
+  };
   return [
     scaffoldSpec,
     {
       title: "build",
       description:
         `Wire the project's build so the deployable artifact is produced via the conventional ` +
-        `\`just build\` target the scaffold established (for ${lifecycle.stack}: \`${lifecycle.build.trim()}\`). ` +
+        `\`just build\` target the seed established (for ${lifecycle.stack}: \`${lifecycle.build.trim()}\`). ` +
         "Build on the EXISTING justfile/toolchain on `main` — do NOT re-invent the stack or bypass `just build`.",
       acceptanceCriteria: [
         "given the scaffolded repo, when `just build` runs, then it produces the deployable artifact and exits 0",
@@ -116,7 +72,7 @@ export function scaffoldSpecsFor(lifecycle: CaptureLifecycle, decision?: Templat
     {
       title: "deploy",
       description:
-        `Wire the project's deploy so it ships via the conventional \`just deploy\` target the scaffold ` +
+        `Wire the project's deploy so it ships via the conventional \`just deploy\` target the seed ` +
         `established (for ${lifecycle.stack}: \`${lifecycle.deploy.trim()}\`). Route deploy ONLY through ` +
         "`just deploy` — never a hardcoded deploy command or a Node/platform assumption.",
       acceptanceCriteria: [

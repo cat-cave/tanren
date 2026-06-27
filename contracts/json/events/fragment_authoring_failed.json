@@ -2,26 +2,27 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
-    "detail": {
+    "attempts": {
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991,
+      "type": "integer"
+    },
+    "fragmentId": {
       "type": "string"
     },
-    "projectId": {
-      "minLength": 1,
+    "orgId": {
       "type": "string"
     },
     "reason": {
-      "enum": [
-        "config_incomplete",
-        "merge_sha_missing"
-      ],
       "type": "string"
     }
   },
   "required": [
-    "projectId",
+    "orgId",
+    "fragmentId",
     "reason",
-    "detail"
+    "attempts"
   ],
   "type": "object",
-  "x-tanren-schema-id": "tanren.event.deploy.skipped"
+  "x-tanren-schema-id": "tanren.event.fragment.authoring.failed"
 }

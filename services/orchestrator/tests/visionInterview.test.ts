@@ -12,7 +12,6 @@
 
 import { describe, expect, it } from "vitest";
 import type { ActorContext } from "../src/auth/schemas.js";
-import type { Template as TemplateForTest } from "../src/engine/repositories/templates.js";
 import {
   DeployProviderMissingError,
   deriveFromCapture,
@@ -24,6 +23,7 @@ import {
   type InterviewAnswerer,
   type InterviewCapture,
 } from "../src/engine/forge/interview/index.js";
+import type { MaterializeTemplate, SeededTemplate } from "../src/engine/templates/index.js";
 import { createDeterministicInterviewAnswerer } from "./fixtures/forge/deterministicInterviewAnswerer.js";
 import { preparedDeploy, stubPool, type StubState } from "./fixtures/forge/interviewDeriveStub.js";
 
@@ -66,40 +66,21 @@ const captureWithLifecycle = (): InterviewCapture => ({
   designContract: MINIMAL_DESIGN_CONTRACT,
 });
 
-// TEMPLATING WAVE 3 — a fixed clock + a fixture VALIDATED template (a matching
-// TS/pnpm/next seed). At module scope so it is not recreated per test (lint).
-const WAVE3_NOW = Date.parse("2026-06-09T00:00:00.000Z");
-const validatedTsTemplate = (): TemplateForTest => ({
-  id: "template_ts_next",
-  orgId: "org_a",
-  repoRef: "cat-cave/tanren-template-ts-next",
-  status: "validated",
-  channel: "lts",
-  manifest: {
-    version: 1,
-    stack: "ts-pnpm-next",
-    channel: "lts",
-    templateVersion: "1.0.0",
-    provenance: { researchSources: ["https://nextjs.org"] },
-    capabilities: {
-      runtime: "ts",
-      packageManager: "pnpm",
-      framework: "next",
-      deployTarget: "flyctl",
-      gates: ["tier-1", "tier-2", "tier-3"],
-      bdd: true,
-      mutation: true,
-      junit: true,
-    },
-    validationProof: {
-      positiveControlsPassed: true,
-      negativeControls: { typecheck: "proven", lint: "proven", test: "proven", mutation: "proven" },
-      auditorClean: true,
-      validatedAt: "2026-06-01T00:00:00.000Z",
-      validatedSha: "abc1234",
-    },
-  },
-});
+// Doctrine-collapse seed: a fixed clock + a stub materialize seam. Every derive
+// composes a fragment-based template; the test stub records each compose call +
+// returns a deterministic SeededTemplate the derive persists onto the project.
+const SEED_NOW = "2026-06-09T00:00:00.000Z";
+function fixtureSeed(slug: string): SeededTemplate {
+  return {
+    templateRef: `tanren://composed/${slug}@deadbeef`,
+    repoRef: `cat-cave/tanren-tmpl-${slug}`,
+    validatedAt: SEED_NOW,
+    validatedSha: "deadbeef",
+  };
+}
+function stubMaterialize(): MaterializeTemplate {
+  return async (input) => fixtureSeed(input.config.slug);
+}
 
 const actor: ActorContext = {
   userId: "user_a",
@@ -114,11 +95,9 @@ const TEST_REPO_URL = "https://github.com/cat-cave/supply-chain-os";
 // Drive the full deterministic interview to completion, then derive the product
 // graph — the boilerplate every derive test shares. Returns the derive result + the
 // in-memory state so callers can assert on the created specs/configs.
-// DOCTRINE (templating-system.md §3): a PROJECT DAG ALWAYS seeds from a validated
-// template — never a from-scratch scaffold. So the shared derive helper defaults to
-// the SEED path (a matching validated template injected via the registry query). A
-// test that needs the from-scratch AUTHORING (the legitimate one — the template-build
-// step) passes `scaffoldOrigin: "template_build"` + omits the registry query.
+// DOCTRINE (docs/roadmap/templating-system.md): every project DAG seeds from a
+// fragment-composed template; the shared helper wires the stub materializer so
+// derive lands a deterministic seed onto the project config.
 async function runInterviewAndDerive(overrides: Partial<Parameters<typeof deriveFromCapture>[1]> = {}): Promise<{
   derived: Awaited<ReturnType<typeof deriveFromCapture>>;
   state: StubState;
@@ -133,15 +112,9 @@ async function runInterviewAndDerive(overrides: Partial<Parameters<typeof derive
     capture = result.capture;
     complete = result.complete;
   }
-  // Default project-path seed inputs (a matching template + a fixed clock) unless the
-  // caller overrides them (e.g. a template_build run, or a no-match-creates run).
-  const defaults: Partial<Parameters<typeof deriveFromCapture>[1]> =
-    overrides.scaffoldOrigin === "template_build"
-      ? {}
-      : {
-          selectionNow: WAVE3_NOW,
-          templateRegistryQuery: async () => [validatedTsTemplate()],
-        };
+  const defaults: Partial<Parameters<typeof deriveFromCapture>[1]> = {
+    materializeTemplate: stubMaterialize(),
+  };
   const derived = await deriveFromCapture(
     {
       pool,
@@ -154,6 +127,10 @@ async function runInterviewAndDerive(overrides: Partial<Parameters<typeof derive
       capture,
       actor,
       repoUrl: TEST_REPO_URL,
+      // The fragment-composed seed materializer needs an `owner` to create the
+      // template seed repo; the test stub `stubMaterialize` returns a fixture
+      // seed without touching GitHub.
+      owner: "cat-cave",
       deploy: { providerKind: "deploy.vercel" },
       ...defaults,
       ...overrides,
@@ -263,47 +240,32 @@ describe("deriveFromCapture · creates the product graph (no migration)", () => 
   });
 
   it("derives scaffold/build/deploy FROM the captured lifecycle + PERSISTS the lifecycle for deterministic contract materialization", async () => {
-    // v27 fix: the deterministic answerer captures a TS/pnpm lifecycle; the lifecycle
-    // is PERSISTED on the project config so the RUN materializes the contract files
-    // deterministically (no LLM authoring), and the scaffold spec's WRITER authors the
-    // project CODE. build/deploy route through the conventional targets FROM the
-    // captured lifecycle. (Multi-stack authoring is unit-tested in
-    // scaffoldAuthoring.test.ts; the contract projection in contractFiles.test.ts.)
-    //
-    // The from-scratch AUTHORING is the template-BUILD step (the ONE legitimate
-    // from-scratch path) — so this runs `scaffoldOrigin: "template_build"`.
-    const { derived, state, configs } = await runInterviewAndDerive({
-      scaffoldOrigin: "template_build",
-    } as Partial<Parameters<typeof deriveFromCapture>[1]>);
+    // The deterministic answerer captures a TS/pnpm lifecycle; the lifecycle is
+    // PERSISTED on the project config so the RUN materializes the contract files
+    // deterministically (no LLM authoring), and the scaffold spec's WRITER
+    // specializes the composed seed for THIS product. build/deploy route through
+    // the conventional targets FROM the captured lifecycle.
+    const { derived, state, configs } = await runInterviewAndDerive();
     const [scaffold, build, deploy] = derived.specIds.map((id) => state.specs.get(id));
 
-    // The lifecycle is persisted onto the project config (the run materializes from it).
     const config = configs.get(derived.projectId) as
-      | { lifecycle?: { stack?: string; bootstrap?: string }; templateBuild?: boolean }
+      | { lifecycle?: { stack?: string; bootstrap?: string }; templateRef?: { repoRef?: string } }
       | undefined;
     expect(config?.lifecycle?.stack).toBe("ts/pnpm");
     expect(config?.lifecycle?.bootstrap).toBe("pnpm install");
-    // TEMPLATE-BUILD MARKER: a `scaffoldOrigin: "template_build"` derive persists
-    // `templateBuild: true` onto the project config — the REAL signal the deploy-on-merge
-    // watcher reads to SKIP deploying a template-creation build (a template is not a product).
-    expect(config?.templateBuild).toBe(true);
+    // The fragment-composed seed reference is persisted onto the project config
+    // (the run path clones the seed repo at workspace-prep).
+    expect(config?.templateRef?.repoRef).toMatch(/^cat-cave\/tanren-tmpl-/u);
 
     const desc = scaffold?.description ?? "";
-    // The writer is told the contract files are pre-committed (materialized).
-    expect(desc.toLowerCase()).toMatch(/already committed|pre-committed|materialized/u);
+    expect(desc.toLowerCase()).toMatch(/seed from template|already committed|pre-committed|materialized/u);
     expect(desc).toContain("justfile");
     expect(desc).toContain(".tanren/ci.yml");
-    // The captured TS/pnpm commands surface as CONTEXT; the ci.yml body is NEVER inlined.
-    // The greenfield bootstrap is a fresh-repo-safe non-frozen install (apex v32).
-    expect(desc).toContain("pnpm install");
-    expect(desc).not.toContain("--frozen-lockfile");
-    expect(desc).not.toContain("version: 1\nbootstrap:");
     // The green bar is bootstrap/tier-1/build — NOT the test tier.
     const criteria = scaffold?.acceptanceCriteria ?? [];
     expect(criteria.find((c) => /each exits 0|are green/u.test(c))).toContain("just bootstrap");
     expect(criteria.some((c) => /(just tier-2|just tier-3).*exits 0/u.test(c))).toBe(false);
 
-    // build + deploy route through the conventional `just build` / `just deploy`.
     expect(build?.description).toContain("just build");
     expect(deploy?.description).toContain("just deploy");
     expect(deploy?.acceptanceCriteria.join("\n")).toContain("just deploy");
@@ -352,10 +314,10 @@ describe("deriveFromCapture · creates the product graph (no migration)", () => 
         capture,
         actor,
         repoUrl: TEST_REPO_URL,
+        owner: "cat-cave",
         autonomy: "auto",
         deploy: { providerKind: "deploy.vercel" },
-        selectionNow: WAVE3_NOW,
-        templateRegistryQuery: async () => [validatedTsTemplate()],
+        materializeTemplate: stubMaterialize(),
       },
     );
 
@@ -387,8 +349,9 @@ describe("deriveFromCapture · creates the product graph (no migration)", () => 
 
   it("FINDING deploy: autonomous greenfield rejects missing deploy before project creation", async () => {
     const { pool, state } = stubPool();
-    // A registry query is provided (a match) so the deploy guard — not the template
-    // selection guard — is the rejection under test.
+    // The deploy guard is hoisted BEFORE template resolution so a missing deploy
+    // fails fast (without spending compose+materialize work on a project that
+    // cannot deploy anyway).
     await expect(
       deriveFromCapture(
         { pool },
@@ -397,8 +360,7 @@ describe("deriveFromCapture · creates the product graph (no migration)", () => 
           capture: captureWithLifecycle(),
           actor,
           autonomy: "auto",
-          selectionNow: WAVE3_NOW,
-          templateRegistryQuery: async () => [validatedTsTemplate()],
+          materializeTemplate: stubMaterialize(),
         },
       ),
     ).rejects.toBeInstanceOf(DeployProviderMissingError);
@@ -416,10 +378,9 @@ describe("deriveFromCapture · creates the product graph (no migration)", () => 
     // safe review/merge defaults hold, but greenfield drives the non-frozen ensure.
     expect(config?.greenfield).toBe(true);
     expect(config?.deployProvider).toBe("deploy.vercel");
-    // A NORMAL product derive (default `scaffoldOrigin: "project"`) does NOT mark
-    // `templateBuild` — the persisted config parses it to the `false` default, so it
-    // deploys on merge as before (only a template-build derive sets it true).
-    expect(config?.["templateBuild"]).toBe(false);
+    // The doctrine collapse removed the templateBuild config marker entirely:
+    // there is no template_build mode any more, so the field is absent.
+    expect((config as { templateBuild?: unknown })?.templateBuild).toBeUndefined();
   });
 
   it("FINDING deploy: omitting autonomy does not bypass required deploy", async () => {
@@ -431,8 +392,7 @@ describe("deriveFromCapture · creates the product graph (no migration)", () => 
           orgId: "org_a",
           capture: captureWithLifecycle(),
           actor,
-          selectionNow: WAVE3_NOW,
-          templateRegistryQuery: async () => [validatedTsTemplate()],
+          materializeTemplate: stubMaterialize(),
         },
       ),
     ).rejects.toBeInstanceOf(DeployProviderMissingError);

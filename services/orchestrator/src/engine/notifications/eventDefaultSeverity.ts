@@ -219,14 +219,13 @@ const SEVERITY_OVERRIDES: Partial<Record<EventName, Severity>> = {
   "benchmark.accept.passed": "ok",
   "benchmark.accept.failed": "warn",
 
-  // Template-build SELF-RECOVERY: Tanren auto-requeued a stranded template-build
-  // (instead of resuming-and-re-stranding or needing a human DB clear). The recovery
-  // is a degraded-but-handled signal an operator wants visible (Tanren healed itself,
-  // not silently) → `warn`. Exhaustion is the LOUD terminal failure after the bounded
-  // cap (a genuine "this stack cannot be built autonomously") → `fail`, so it clears
-  // the matrix warn floor AND the code-level default route, reaching the operator.
-  "template.build.recovered": "warn",
-  "template.build.recovery_exhausted": "fail",
+  // Per-fragment authoring (F2 — docs/roadmap/templating-system.md). started +
+  // succeeded are routine `ok`; a failed authoring run is a LOUD terminal signal
+  // (the derive halts) → `fail`, so it clears the matrix warn floor and the
+  // code-level default route, reaching the operator.
+  "fragment.authoring.started": "ok",
+  "fragment.authoring.succeeded": "ok",
+  "fragment.authoring.failed": "fail",
 };
 
 // Sealed: every EventName must have a default severity. Missing keys would

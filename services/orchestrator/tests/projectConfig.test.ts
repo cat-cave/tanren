@@ -5,7 +5,6 @@ import {
   SUPPORTED_PROJECT_CONFIG_VERSIONS,
   UnknownConfigVersionError,
   defaultProjectConfigV1,
-  isTemplateBuildProjectConfig,
   migrateProjectConfig,
   projectConfigJsonSchema,
 } from "../src/engine/config/index.js";
@@ -42,29 +41,6 @@ describe("ProjectConfigV1 parser", () => {
   it("defaults greenfield to false and accepts a true override", () => {
     expect(migrateProjectConfig({ version: 1 }).greenfield).toBe(false);
     expect(migrateProjectConfig({ version: 1, greenfield: true }).greenfield).toBe(true);
-  });
-
-  it("defaults templateBuild to false (a normal product) and accepts a true override", () => {
-    // The TEMPLATE-BUILD provenance marker: absent ⇒ false (a normal product that
-    // deploys on merge); the template-creation derive sets it true so the deploy-on-merge
-    // watcher skips it (a template is not a deployed product).
-    expect(migrateProjectConfig({ version: 1 }).templateBuild).toBe(false);
-    expect(migrateProjectConfig({ version: 1, templateBuild: true }).templateBuild).toBe(true);
-  });
-
-  it("isTemplateBuildProjectConfig reads the marker WITHOUT a strict full-config parse", () => {
-    // The deploy-on-merge guard reads ONLY the marker, so an unrelated config-shape
-    // concern can never mask the template-build signal.
-    expect(isTemplateBuildProjectConfig({ version: 1, templateBuild: true })).toBe(true);
-    // A bare/un-versioned blob carrying the marker still reads true (no strict parse).
-    expect(isTemplateBuildProjectConfig({ templateBuild: true })).toBe(true);
-    // A normal product (absent / false marker) reads false.
-    expect(isTemplateBuildProjectConfig({ version: 1 })).toBe(false);
-    expect(isTemplateBuildProjectConfig({ version: 1, templateBuild: false })).toBe(false);
-    // Non-object / null inputs are false (never a template build).
-    expect(isTemplateBuildProjectConfig(null)).toBe(false);
-    expect(isTemplateBuildProjectConfig([])).toBe(false);
-    expect(isTemplateBuildProjectConfig("x")).toBe(false);
   });
 
   it("defaults auditPosture to balanced (P0/P1 block, fix-if-idle) and accepts a velocity override", () => {

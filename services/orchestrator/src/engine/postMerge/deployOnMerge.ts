@@ -5,11 +5,10 @@
 // runtime secrets — so the live product reflects the merge. It reacts on the SAME
 // `merge.completed` run-activity bus the post-merge issue-watcher uses — no new poller.
 //
-// A TEMPLATE-CREATION build is SKIPPED up front (`deploy.skipped` reason `template_build` —
-// it authors a template, not a product). Otherwise GATED via a THREE-WAY intent resolution —
-// NONE (legitimate no-op, LOGGED) / INCOMPLETE-but-expected (LOUD fail-closed) / CONFIGURED
-// (fires) — so a misconfigured-but-expected deploy can NEVER silently skip and make a run
-// (apex) look "done" without a live deployment. Full rationale in `deployTargetResolution.ts`.
+// GATED via a THREE-WAY intent resolution — NONE (legitimate no-op, LOGGED) /
+// INCOMPLETE-but-expected (LOUD fail-closed) / CONFIGURED (fires) — so a
+// misconfigured-but-expected deploy can NEVER silently skip and make a run (apex) look
+// "done" without a live deployment. Full rationale in `deployTargetResolution.ts`.
 //
 // DURABLE FAILURE: once a target resolves (a deploy is EXPECTED), ANY throw — verify
 // exhaustion OR a trigger/attach failure — records a durable `deploy.failed` (→ a `warn`)
@@ -35,7 +34,6 @@ import {
   type DeployVerifyContext,
   mergeShaFromPayload,
   repoSlugFromPrUrl,
-  skipTemplateBuildDeploy,
   verifyDeployUntilConverged,
 } from "./deployOnMergeReads.js";
 import type { SecretStore } from "../contracts/secretStore.js";
@@ -131,9 +129,9 @@ export class DeployOnMergeWatcher {
 
   /**
    * Attach runtime env + trigger the project's deploy for a merged run. A no-op when not
-   * merged / no deploy configured (LOGGED) / a template-creation build (`deploy.skipped`) /
-   * already deployed; a durable `deploy.skipped` + LOUD throw on a pre-resolution failure
-   * (incomplete config / missing mergeSha); LOUD throw when a configured deploy fails.
+   * merged / no deploy configured (LOGGED) / already deployed; a durable `deploy.skipped`
+   * + LOUD throw on a pre-resolution failure (incomplete config / missing mergeSha);
+   * LOUD throw when a configured deploy fails.
    */
   async check(runId: string): Promise<void> {
     if (runId === "") return;
@@ -141,11 +139,6 @@ export class DeployOnMergeWatcher {
     if (merged.kind === "not_merged") return;
 
     const projectId = merged.kind === "ok" ? merged.info.projectId : merged.projectId;
-
-    // TEMPLATE-CREATION BUILD SKIP: a template-build project authors a template, NOT a
-    // product — short-circuit BEFORE resolving a target, recording a DURABLE OBSERVABLE
-    // `deploy.skipped` (reason `template_build`); a LEGITIMATE skip, no `deploy.failed`/throw.
-    if (await skipTemplateBuildDeploy(this.deps.pool, this.verifyCtx, { runId, projectId })) return;
 
     const resolved = await this.loadDeployTarget(projectId);
     if (resolved.kind === "none") {

@@ -20,12 +20,25 @@
 //   - Each behavior spec `dependsOn` the scaffold + its interface's schema spec,
 //     so the dependency math the DAG renders is real, not cosmetic.
 //
-// No migration: every row lands in an existing table. The capture itself is
-// transient (carried on the request), so there is no interview-session table.
+// THE ONE-PATH TEMPLATING DOCTRINE (docs/roadmap/templating-system.md). Every
+// project DAG seeds from a FRAGMENT-COMPOSED template. The flow:
+//
+//   1. `selectFragmentConfig(lifecycle, library)` resolves a `TemplateConfig` +
+//      reports which fragment ids are missing from the library (unified bundled +
+//      org-scoped per F2).
+//   2. If missing-fragments: spawn per-fragment authoring runs (F2 — one run per
+//      missing fragment, each producing a validated `Fragment` persisted into the
+//      org's `fragments` table). Wait, retry step 1. If authoring fails, halt loud
+//      with `FragmentAuthoringFailedError` (no silent skip).
+//   3. `composeTemplate(config, library)` assembles the VFS, then materialize it
+//      into a fresh seed repo. The seed reference rides on `projects.config` so the
+//      run path clones it into the project workspace.
+//
+// There is NO dual scaffoldOrigin, NO `template_build` mode, NO agent template-build
+// DAG, NO template registry to query. Every project derive is the same path.
 
 import type pg from "pg";
 import type { ActorContext } from "../../../auth/schemas.js";
-import { AUTONOMOUS_AUDIT_POSTURE } from "../../config/index.js";
 import type { DesignAgent } from "../../design/designAgent.js";
 import {
   RepositoryAlreadyExistsError,
@@ -55,17 +68,21 @@ import {
 } from "./deployDependency.js";
 import { MissingLifecycleError, scaffoldSpecsFor } from "./deriveScaffoldSpecs.js";
 import {
-  assertSeeded,
-  materializeIfComposeFromFragments,
-  selectSeedTemplate,
-  templateRefConfig,
-  type MaterializeCuratedTemplate,
-  type ScaffoldOrigin,
-  type SelectedTemplate,
-  type TemplateRegistryQuery,
-  type TemplateSelectionDecision,
-} from "./interviewTemplateGate.js";
+  FragmentAuthoringFailedError,
+  type FragmentAuthoring,
+  type FragmentLibrary,
+  type FragmentSpec,
+  type MaterializeTemplate,
+  type SeededTemplate,
+  selectFragmentConfig,
+  type TemplateConfig,
+  loadFragmentLibrary,
+} from "../../templates/index.js";
 import { InterviewCapture, safeProjectSlug, type CaptureLifecycle } from "./types.js";
+
+// Re-export so callers keep importing them from `derive.js` (the public derive
+// surface) without reaching into the inner modules.
+export { FragmentAuthoringFailedError, UnresolvableLifecycleError } from "../../templates/index.js";
 
 export interface DeriveInput {
   orgId: string;
@@ -89,80 +106,40 @@ export interface DeriveInput {
   deploy?: GreenfieldDeployDependency;
   preflightDeploy?: DeployPreflightCallback;
   prepareDeploy?: PrepareDeployCallback;
-  // The SCAFFOLD ORIGIN — the DOCTRINE discriminator (templating-system.md §3). It
-  // is the single invariant that enforces "every PROJECT DAG executes against a
-  // validated template, never a from-scratch scaffold":
-  //   - "project" (DEFAULT — greenfield onboarding + greenfield create): template
-  //     selection ALWAYS runs (`templateRegistryQuery` is REQUIRED). A match SEEDS;
-  //     a no-match CREATES a validated template JUST-IN-TIME and seeds from it; an
-  //     un-creatable no-match HALTS LOUD (`TemplateRequiredError`). The from-scratch
-  //     authoring is UNREACHABLE on this path (the invariant guard asserts it).
-  //   - "template_build": this derive IS the BUILD step of template-creation — it
-  //     authors the TEMPLATE itself FROM SCRATCH (the only place the from-scratch
-  //     authoring lives). No selection runs; the from-scratch authoring is the job.
-  //     The result is VALIDATED (negative controls) before any project seeds from it.
-  scaffoldOrigin?: "project" | "template_build";
-  // TEMPLATING WAVE 3 (templating-system.md §3): the ORG-SCOPED template-registry
-  // query, injected so the derive SELECTS a validated template to SEED from BEFORE
-  // authoring the scaffold spec. Org-scoped in prod (RLS bounds candidates to the
-  // org's own + the cross-org `official` catalogue); a fixture in tests. REQUIRED on
-  // the "project" origin (a project ALWAYS runs selection); MUST be absent on
-  // "template_build" (the template authors itself from scratch — there is nothing to
-  // select). The `scaffoldOrigin` invariant guard enforces this pairing.
-  templateRegistryQuery?: TemplateRegistryQuery;
-  // Optional seed channel preference (defaults to "lts" — conservative greenfield).
-  templateChannelPreference?: "lts" | "nightly";
-  // Injectable clock for deterministic selection-freshness tests.
-  selectionNow?: number;
-  // The no-match → JUST-IN-TIME CREATION seam (templating-system.md §3). On a no-match,
-  // selection runs this to CREATE a template (research → author → build → validate →
-  // publish) + SEEDS from the published result — the project scaffold GATES on it. Wired
-  // by `buildCreateForNoMatch` (so the derive/selection layers keep NO creation
-  // dependency). Absent on a no-match ⇒ a LOUD `TemplateRequiredError` halt — never a
-  // project-direct from-scratch scaffold (the deleted bypass).
-  createTemplateForNoMatch?: (lifecycle: CaptureLifecycle) => Promise<SelectedTemplate | undefined>;
-  // PR-C — the MATRIX-HIT MATERIALIZER seam (templating-system.md §FRAGMENTS). On a
-  // `compose-from-fragments` decision, this composes the curated entry, creates the
-  // template repo, pushes every composed file, and returns a `SelectedTemplate`.
-  // Wired by `buildLiveMaterializeCuratedTemplate`; absent on a project-origin
-  // `compose-from-fragments` is a wiring bug + HALTS LOUD. See `deriveMatrixHit.ts`.
-  materializeCuratedTemplate?: MaterializeCuratedTemplate;
-  // WS-D3 (native-design-subsystem.md) — the DESIGN AGENT that ELABORATES the thin
-  // captured design intent into a full, persona-scoped, behavior-covering,
-  // domain-appropriate `DesignContract` (the design PHASE), persisted as the HEAD
-  // version BEFORE the build nodes run — so the writer (WS-D2) builds from a real
-  // designed contract and the oracle (WS-D4) verifies against it. Production wires a
-  // real provider answerer (the route factory); absent on engine-graph test paths,
-  // where the thin captured contract is persisted verbatim (the injected-seam path,
-  // exactly like `templateRegistryQuery`/`createTemplateForNoMatch`).
+  /**
+   * THE COMPOSE+MATERIALIZE SEAM (docs/roadmap/templating-system.md). The derive
+   * composes a fragment-based template from the captured lifecycle and materializes
+   * it into a fresh seed repo via this seam. REQUIRED on the production path; tests
+   * may inject a stub. Absent in production is a wiring bug.
+   */
+  materializeTemplate?: MaterializeTemplate;
+  /**
+   * Override the fragment library (e.g. inject a unified bundled+org-scoped library
+   * per F2's `loadFragmentLibrary(orgId)`). When omitted, the bundled library is
+   * used — useful for tests that don't exercise org-scoped fragments.
+   */
+  fragmentLibrary?: FragmentLibrary;
+  /**
+   * Run per-fragment authoring for the given missing fragment specs (F2). Returns
+   * the augmented library that includes the freshly-authored fragments. Wired
+   * by the route layer; tests inject a deterministic fake. Absent ⇒ a
+   * missing-fragments decision halts loud (`FragmentAuthoringFailedError`).
+   */
+  runFragmentAuthoring?: FragmentAuthoring;
+  // WS-D3 (native-design-subsystem.md) — the DESIGN AGENT.
   designAgent?: DesignAgent;
 }
-
-// Re-exported from the gate module so callers can keep importing it from `derive.js`
-// (the public derive surface) without reaching into the gate internals.
-export { TemplateRegistryQueryRequiredError } from "./interviewTemplateGate.js";
 
 // FINDING #1: the autonomous greenfield config. When the operator opts into
 // `auto`/`simulated`, the project is created with the matching review policy + the
 // `native_queue` merge engine (so derived PRs enter a merge engine instead of
-// stalling on `not_configured`), AND the `lenient` governance posture. Lenient
-// makes the in-loop gate's `lint`/`typecheck` ADVISORY (warn, non-blocking) while
-// `build`/`test` stay blocking — the functional-but-weak apex doctrine
-// docs/operator-guide/apex.md: a functional-but-weak first pass lands imperfect
-// code and improves it via the issue loop instead of stalling the gate on
-// first-pass lint/type issues. This config is the ONLY deviation from the schema
-// defaults — and only on explicit opt-in. A `human`/absent autonomy keeps the safe
-// strict default. `createProject` threads this through `migrateProjectConfig` (no
-// new plumbing).
+// stalling on `not_configured`), AND the `lenient` governance posture.
 function autonomousConfig(autonomy: "auto" | "simulated"): Record<string, unknown> {
   return {
     version: 1,
     reviewPolicy: autonomy,
     mergeIntegration: "native_queue",
     governancePosture: "lenient",
-    // The interview path always builds off an EMPTY repo — Tanren authors the
-    // toolchain live — so it is greenfield regardless of the autonomy tier (this
-    // drives the non-frozen in-loop deps-ensure; see ProjectConfigV1.greenfield).
     greenfield: true,
   };
 }
@@ -175,23 +152,27 @@ export interface DeriveResult {
   personaIds: string[];
   behaviorIds: string[];
   milestoneIds: string[];
-  // The id of the persisted first-class `DesignContract` entity (WS-D1). A FRESH
-  // derive ALWAYS persists one — the derive guards a missing design contract with
-  // `MissingDesignContractError`, so a contract is never silently skipped — and
-  // surfaces its id here. Absent ONLY on the idempotent RESUME shortcut, which (like
-  // every derived-id field here) does not re-enumerate the already-persisted graph;
-  // it is read back through the project-DAG endpoint instead.
   designContractId?: string;
-  // TEMPLATING WAVE 3 — the selection OUTCOME (templating-system.md §3), surfaced so
-  // the decision is observable on the derive result (strong/partial = seeded;
-  // none/blocked = from-scratch). Absent when selection was skipped (no registry
-  // query injected — the current live default).
-  templateSelection?: TemplateSelectionDecision;
+  /** The fragment-composed seed the project was materialized from
+   * (docs/roadmap/templating-system.md). Always present on a fresh derive. */
+  templateSeed?: SeededTemplate;
 }
 
-// The repo-resolution step (extracted for file-size discipline). REPO-FIRST + IDEMPOTENT
-// (audit §3.10): an explicit `repoUrl` skips it; else the deterministic URL is the
-// idempotency key (a bound project ⇒ resume; a `RepositoryAlreadyExistsError` re-attaches).
+// Project the seed reference onto the `projects.config.templateRef` shape the run
+// path reads at workspace-prep.
+function templateRefConfig(seed: SeededTemplate): {
+  templateRef: { templateRef: string; repoRef: string; validatedAt: string; validatedSha: string };
+} {
+  return {
+    templateRef: {
+      templateRef: seed.templateRef,
+      repoRef: seed.repoRef,
+      validatedAt: seed.validatedAt,
+      validatedSha: seed.validatedSha,
+    },
+  };
+}
+
 type RepoResolution =
   | { kind: "resume"; result: DeriveResult }
   | { kind: "created"; repository?: CreatedRepository; repoUrl: string };
@@ -214,8 +195,6 @@ async function resolveOrCreateGreenfieldRepo(pool: pg.Pool, input: DeriveInput, 
       ...(input.description === undefined ? {} : { description: input.description }),
     });
   } catch (error) {
-    // RE-ATTACH on a repo created by a prior stranded attempt (no project bound — the
-    // probe above proved that): continue with the deterministic URL + default branch.
     if (error instanceof RepositoryAlreadyExistsError) {
       repository = { fullName: `${owner}/${slug}`, repoUrl: deterministicRepoUrl, defaultBranch: "main" };
     } else {
@@ -225,110 +204,98 @@ async function resolveOrCreateGreenfieldRepo(pool: pg.Pool, input: DeriveInput, 
   return { kind: "created", repository, repoUrl: repository.repoUrl };
 }
 
+// Resolve a `TemplateConfig` ready to compose. Calls `selectFragmentConfig`; on a
+// missing-fragments decision spawns per-fragment authoring runs via the wired seam,
+// re-loads the library (now augmented with the freshly-authored org fragments), and
+// re-selects.
+async function resolveFragmentConfig(
+  orgId: string,
+  input: DeriveInput,
+  lifecycle: CaptureLifecycle,
+): Promise<{ config: TemplateConfig; library: FragmentLibrary }> {
+  let library = input.fragmentLibrary ?? loadFragmentLibrary();
+  let decision = selectFragmentConfig(lifecycle, library);
+  if (decision.kind === "ready") return { config: decision.config, library };
+
+  if (input.runFragmentAuthoring === undefined) {
+    throw new FragmentAuthoringFailedError(
+      decision.missing.map((m: FragmentSpec) => m.id),
+      new Error("no runFragmentAuthoring seam wired; cannot author missing fragments"),
+    );
+  }
+  const authoringResult = await input.runFragmentAuthoring({
+    orgId,
+    actor: input.actor,
+    missing: decision.missing,
+    lifecycle,
+  });
+  if (authoringResult.failedIds.length > 0) {
+    throw new FragmentAuthoringFailedError(authoringResult.failedIds);
+  }
+  library = authoringResult.library;
+  decision = selectFragmentConfig(lifecycle, library);
+  if (decision.kind === "ready") return { config: decision.config, library };
+  // Authoring reported success but the retry still has missing fragments — wiring bug.
+  throw new FragmentAuthoringFailedError(decision.missing.map((m: FragmentSpec) => m.id));
+}
+
+async function composeAndMaterialize(
+  input: DeriveInput,
+  lifecycle: CaptureLifecycle,
+  config: TemplateConfig,
+  library: FragmentLibrary,
+): Promise<SeededTemplate> {
+  if (input.materializeTemplate === undefined) {
+    throw new Error(
+      "greenfield derive requires `materializeTemplate` (the compose + materialize seam); production wires it via " +
+        "the onboarding route. An absent seam is a wiring bug, not a degrade path.",
+    );
+  }
+  if (input.owner === undefined) {
+    throw new Error("greenfield derive requires `owner` to materialize the seed repo");
+  }
+  return input.materializeTemplate({ config, lifecycle, owner: input.owner, library });
+}
+
+export type {
+  FragmentAuthoring,
+  FragmentAuthoringInput,
+  FragmentAuthoringResult,
+} from "../../templates/fragments/fragmentAuthoringRun.js";
+
 export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Promise<DeriveResult> {
-  // Validate the capture at the derive boundary (defence in depth; the round
-  // engine also validates) so a malformed capture never reaches the create path.
   const capture = InterviewCapture.parse(input.capture);
 
-  // The architecture step's lifecycle is LOAD-BEARING + REQUIRED — it is persisted
-  // onto the project config and the run MATERIALIZES the justfile + ci.yml from it.
-  // FAIL LOUD if it is missing (the stack-flexible contract's core invariant: never
-  // silently default to Node). Checked FIRST (before slug resolution, which may use
-  // the lifecycle's stack as a fallback signal) so a no-lifecycle capture surfaces the
-  // lifecycle error, not a slug error.
   if (capture.lifecycle === null) throw new MissingLifecycleError();
-
-  // The DESIGN CONTRACT is LOAD-BEARING + REQUIRED — it is persisted as the project's
-  // first-class `DesignContract`, injected into the writer (WS-D2), and verified by the
-  // design oracle (WS-D4). FAIL LOUD if absent (the no-silent-fallback doctrine): a null
-  // contract would silently disable the ENTIRE design subsystem (no row, no writer design
-  // block, the oracle no-ops) with no signal. The requirement is PRESENCE + explicitness,
-  // NOT web dimensions — a genuinely design-light project (a headless library) still
-  // declares an EXPLICIT minimal contract; it is never silently absent. Checked alongside
-  // the lifecycle guard so a no-design capture surfaces THIS error, not a downstream no-op.
   if (capture.designContract === null) throw new MissingDesignContractError();
 
-  // Resolve a HOSTNAME-SAFE slug (the repo + deploy-app name). A captured identity
-  // slug is used verbatim; an absent identity falls back to a REAL normalized signal
-  // (pitch/design-DNA/stack), never a silent shared "greenfield-project" constant —
-  // `safeProjectSlug` throws `MissingProjectSlugError` when nothing safe survives.
   const slug = safeProjectSlug(capture);
 
-  // THE DOCTRINE INVARIANT (templating-system.md §3): every PROJECT DAG executes
-  // against a VALIDATED TEMPLATE — never a from-scratch scaffold. `scaffoldOrigin` is
-  // the single enforcement point (the gate machinery lives in interviewTemplateGate.ts).
-  const scaffoldOrigin: ScaffoldOrigin = input.scaffoldOrigin ?? "project";
-
-  // DEPLOY-REQUIRED guard, hoisted BEFORE template selection. The deploy dependency is
-  // mandatory (the greenfield/apex contract); resolving it is a CHEAP presence check
-  // that throws `DeployProviderMissingError` when absent. Doing it before selection
-  // means a project missing its deploy config fails FAST — we never trigger an
-  // expensive just-in-time template build for a project that cannot deploy anyway. The
-  // preflight (a not-linked probe) likewise gates before creation.
+  // DEPLOY-REQUIRED guard hoisted BEFORE template resolution. A project missing its
+  // deploy config fails FAST — we never spend authoring cost on a project that
+  // cannot deploy anyway.
   const deploy = resolveGreenfieldDeployDependency(input.deploy, { required: true });
   if (deploy !== undefined && input.preflightDeploy !== undefined) {
     const notLinked = await input.preflightDeploy({ orgId: input.orgId, providerKind: deploy.providerKind });
     if (notLinked !== undefined) throw new DeployNotLinkedError(notLinked);
   }
 
-  // SELECT a validated template to SEED from, BEFORE deriving the scaffold spec. On the
-  // "project" origin selection ALWAYS runs: a match SEEDS; a no-match CREATES a
-  // validated template just-in-time + seeds from it; an un-creatable no-match THROWS
-  // `TemplateRequiredError` (a LOUD fail-closed halt — no project-direct from-scratch).
-  // On "template_build" selection is skipped — that derive IS the from-scratch authoring.
-  const initialSelection = await selectSeedTemplate({
-    scaffoldOrigin,
-    lifecycle: capture.lifecycle,
-    ...(input.templateRegistryQuery === undefined ? {} : { templateRegistryQuery: input.templateRegistryQuery }),
-    ...(input.templateChannelPreference === undefined
-      ? {}
-      : { templateChannelPreference: input.templateChannelPreference }),
-    ...(input.selectionNow === undefined ? {} : { selectionNow: input.selectionNow }),
-    ...(input.createTemplateForNoMatch === undefined
-      ? {}
-      : { createTemplateForNoMatch: input.createTemplateForNoMatch }),
-  });
+  const { config, library } = await resolveFragmentConfig(input.orgId, input, capture.lifecycle);
 
-  // PR-C — MATRIX-HIT MATERIALIZATION (`deriveMatrixHit.ts`): a `compose-from-fragments`
-  // decision substitutes a `strong` seed after the materializer composes + pushes.
-  const templateSelection = await materializeIfComposeFromFragments(
-    initialSelection,
-    capture.lifecycle,
-    input,
-    scaffoldOrigin,
-  );
+  const seed = await composeAndMaterialize(input, capture.lifecycle, config, library);
 
-  // The scaffold spec SHRINKS to template-instantiation on a strong/partial match. The
-  // from-scratch authoring (`scaffoldSpecsFor` with no decision) is reachable ONLY on
-  // the "template_build" origin — a "project" origin ALWAYS has a seed by here (else
-  // selection threw), enforced by the invariant guard.
-  const scaffoldSpecs = scaffoldSpecsFor(capture.lifecycle, templateSelection);
-  assertSeeded(scaffoldOrigin, templateSelection);
+  const scaffoldSpecs = scaffoldSpecsFor(capture.lifecycle, seed);
 
-  // FINDING #1: opt-in autonomous config. `auto`/`simulated` ⇒ create the project
-  // already autonomous (`native_queue` + matching review policy) so the DagWalker
-  // can advance it off an empty repo with no follow-up PATCH. Absent/`human` ⇒ the
-  // safe strict defaults — but STILL greenfield (the interview always builds off an
-  // empty repo), so even the human tier persists `{ version: 1, greenfield: true }`
-  // for the non-frozen in-loop deps-ensure. An unversioned `{}` blob is rejected
-  // (no migration shim); `createProject` threads `config` through
-  // `migrateProjectConfig` — no new plumbing.
   const autonomousOptIn = input.autonomy === "auto" || input.autonomy === "simulated";
   const baseConfig = autonomousOptIn
     ? autonomousConfig(input.autonomy as "auto" | "simulated")
     : { version: 1, greenfield: true };
   if (deploy === undefined || input.prepareDeploy === undefined) throw missingDeployProvisionerError();
 
-  // IDEMPOTENT + ATOMIC ORDER (audit §3.10): repo-first, then deploy (extracted to
-  // `resolveOrCreateGreenfieldRepo`). A pre-existing project bound to the deterministic
-  // URL is a completed prior derive → resume it (no repo-create, no deploy-provision).
   const repoResolution = await resolveOrCreateGreenfieldRepo(pool, input, slug);
   if (repoResolution.kind === "resume") return repoResolution.result;
   const { repository, repoUrl } = repoResolution;
 
-  // Provision deploy ONLY after the repo exists (the reorder above), so it is the LAST
-  // external resource before the durable project row. PERSIST THE PRODUCT VISION too
-  // (no migration) — the captured IDENTITY (`pitch`) + DESIGN-DNA onto `projects.config`.
   const preparedDeploy = await input.prepareDeploy({
     orgId: input.orgId,
     capability: "deploy",
@@ -343,33 +310,11 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
   if (isDeployNotLinked(preparedDeploy)) {
     throw new DeployNotLinkedError(preparedDeploy);
   }
-  const config = {
+  const persistedConfig = {
     ...baseConfig,
-    // TEMPLATE-BUILD MARKER (config/projectConfig.ts): the real provenance the deploy-on-merge
-    // watcher reads to SKIP a template build (a template is not a deployed product).
-    ...(scaffoldOrigin === "template_build" ? { templateBuild: true } : {}),
-    // TEMPLATE-BUILD AUTONOMOUS-RUN KNOBS (Lane T1 fix — pairs with the §2.5 governance
-    // PUT for user-facing projects). The template-build child project is a SYNTHETIC
-    // autonomous run inside derive — it has NO operator in the loop to §2.5-PUT the
-    // autonomous posture AFTER the fact (the child lives entirely inside this derive
-    // call). The audit-posture preflight (engine/workflow/auditPosturePreflight.ts)
-    // fails LOUD on an autonomous run carrying the BALANCED default, stranding the
-    // first scaffold spec. Bind the AUTONOMOUS audit posture + the autonomous-pattern
-    // single-SHA flaky bar at creation so the synthetic build's autonomous DAG closes
-    // cleanly (auditPostureConfig.ts:60-64, insights/thresholds.ts:79-83).
-    ...(scaffoldOrigin === "template_build"
-      ? {
-          auditPosture: AUTONOMOUS_AUDIT_POSTURE,
-          insightThresholds: { ciInsightFlakyMinShas: 1 },
-        }
-      : {}),
     ...productVisionConfig(capture),
-    // DETERMINISTIC CONTRACT FILES (v27 fix): PERSIST the captured lifecycle so the RUN path
-    // materializes the contract files (`.tanren/ci.yml` + `justfile`) — never LLM-authored.
     lifecycle: capture.lifecycle,
-    // TEMPLATING WAVE 3 — persist the seed reference when a template was selected
-    // (strong/partial); absent from-scratch. OBSERVABLE + the run seeds from the template repo.
-    ...templateRefConfig(templateSelection),
+    ...templateRefConfig(seed),
     ...preparedDeploy.projectConfig,
   };
   const project = await createProject(
@@ -377,7 +322,7 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
     {
       name: slug,
       repoUrl,
-      config,
+      config: persistedConfig,
       ...(repository === undefined ? {} : { defaultBranch: repository.defaultBranch }),
     },
     { ...input.actor, orgId: input.orgId },
@@ -397,10 +342,6 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
         projectId,
         name: persona.name,
         description: persona.description,
-        // The persona's delivery SURFACE (handheld / ops dashboard / …) is part of
-        // the product vision the conflict resolver reads back, but the personas
-        // table has no `surface` column — persist it on the existing `metadata`
-        // jsonb (no migration). Omit it when the interview captured none.
         ...(persona.surface.trim() !== "" && { metadata: { surface: persona.surface } }),
       }),
       actor,
@@ -408,7 +349,7 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
     personaIdByName.set(persona.name.toLowerCase(), row.id);
   }
 
-  // 2 · foundation milestone (M1 · scaffold) + scaffold specs (critical path).
+  // 2 · foundation milestone + scaffold specs.
   const milestoneIds: string[] = [];
   const scaffold = await MilestoneStore.create(
     pool,
@@ -425,11 +366,6 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
 
   const specIds: string[] = [];
   const scaffoldSpecIds: string[] = [];
-  // Serialize the foundation into a CHAIN, not parallel roots. Each spec with
-  // `dependsOnPrev` depends on the spec created immediately before it, so
-  // `scaffold` is the sole root, `build` depends on it, and `deploy` depends on
-  // build — one authoritative justfile/toolchain lands on `main` before the next
-  // builds on it (no incompatible-stack races off an empty repo).
   let previousScaffoldSpecId: string | undefined;
   for (const def of scaffoldSpecs) {
     const dependsOn =
@@ -453,9 +389,7 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
     previousScaffoldSpecId = spec.specId;
   }
 
-  // 3 · one milestone per interface, with a schema spec + a spec per behavior
-  // (extracted to `deriveInterfaceMilestones` for the per-file line cap). It also
-  // returns THE MOAT's `behaviorIdByKey` so step 4 binds the contract's behaviors.
+  // 3 · interface milestones.
   const ifaceResult = await deriveInterfaceMilestones(pool, {
     projectId,
     orgId: input.orgId,
@@ -468,18 +402,13 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
   milestoneIds.push(...ifaceResult.milestoneIds);
   const behaviorIds = ifaceResult.behaviorIds;
 
-  // 4 · the DESIGN CONTRACT entity (WS-D1) — the captured contract persisted as a
-  // first-class version-1 `DesignContract`. LAST (after personas + behaviors exist)
-  // so THE MOAT links resolve to real persisted ids. No capture ⇒ undefined (no row).
+  // 4 · design contract.
   const designContractId = await persistDesignContract(pool, {
     orgId: input.orgId,
     projectId,
     capture: capture.designContract,
     personaIdByName,
     behaviorIdByKey: ifaceResult.behaviorIdByKey,
-    // WS-D3: when wired, the design agent elaborates the capture into the designed
-    // HEAD contract; `actor` is the project-scoped org carrier for the persona/
-    // behavior graph reads the design phase performs.
     ...(input.designAgent === undefined ? {} : { designAgent: input.designAgent, actor }),
   });
 
@@ -491,9 +420,7 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
     personaIds: [...personaIdByName.values()],
     behaviorIds,
     milestoneIds,
-    // The design contract is REQUIRED (guarded loud above) — always persisted, so its
-    // id is always present on the result.
     designContractId,
-    ...(templateSelection === undefined ? {} : { templateSelection }),
+    templateSeed: seed,
   };
 }

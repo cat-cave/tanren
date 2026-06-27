@@ -4,10 +4,8 @@
 // mappings (deploy audit envelope, repo slug from a PR URL, merged SHA from a
 // `merge.completed` payload).
 
-import { runWithJobOrgId, runWithSystemScope } from "@tanren/db";
-import type pg from "pg";
+import { runWithJobOrgId } from "@tanren/db";
 import { serviceAuditActor, type AuditEnvelope } from "../events/schemas/audit.js";
-import { isTemplateBuildProjectConfig } from "../config/index.js";
 import type { EventStore } from "../eventStore.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { DeployHttpTransport } from "../provisioners/deployTransport.js";
@@ -18,9 +16,6 @@ import type { UrlReachabilityProbe, VerifyPollPolicy } from "../contracts/deploy
 import type { ProjectDeployTarget } from "./deployOnMerge.js";
 import { retryUntilConverged } from "../workflow/retryUntilConverged.js";
 import { fixedPointRuleJudgment } from "../workflow/convergenceDetector.js";
-import { createLogger } from "../observability/logger.js";
-
-const log = createLogger("deploy-on-merge");
 
 // FIXED, non-secret `deploy.failed.reason`s. Deliberately NOT the raw error: it can
 // embed provider-supplied HTTP response text (a potential secret), and this reason is
@@ -83,10 +78,8 @@ export async function appendDeployFailed(
  * Append the DURABLE `deploy.skipped` under the org scope — so the operator + run
  * timeline SEE the skip instead of a console-only log line. The `reason` is a fixed
  * code; `detail` is a bounded, non-secret string (the resolution reason / wiring
- * detail). Two reasons (config_incomplete / merge_sha_missing) are emitted BEFORE the
- * watcher fails LOUD; `template_build` is a LEGITIMATE skip (a template-creation build
- * authors a template, not a product, so no product deploy fires) — recorded here so the
- * skip is observable, but the watcher returns WITHOUT throwing on it.
+ * detail). Both reasons (config_incomplete / merge_sha_missing) are emitted BEFORE
+ * the watcher fails LOUD — recorded here so the skip is observable.
  */
 export async function appendDeploySkipped(
   ctx: Pick<DeployVerifyContext, "eventStore">,
@@ -94,7 +87,7 @@ export async function appendDeploySkipped(
     runId: string;
     projectId: string;
     orgId: string;
-    reason: "config_incomplete" | "merge_sha_missing" | "template_build";
+    reason: "config_incomplete" | "merge_sha_missing";
     detail: string;
   },
 ): Promise<void> {
@@ -105,83 +98,6 @@ export async function appendDeploySkipped(
       eventType: "deploy.skipped",
       payload: { projectId: args.projectId, reason: args.reason, detail: args.detail },
     });
-  });
-}
-
-/**
- * Skip deploy-on-merge for a TEMPLATE-CREATION build. Reads the REAL config-driven
- * `templateBuild` marker (never a repo-name heuristic) off the same `projects` row the
- * deploy-target resolver consults, WITHOUT a strict full-config parse so an unrelated
- * config-shape concern can never mask the signal. A template-build project authors a
- * reusable template, not a running product, so no product deploy fires. Returns `true`
- * after recording a DURABLE OBSERVABLE `deploy.skipped` (reason `template_build`) — a
- * LEGITIMATE skip, NOT a failure (no `deploy.failed`, no throw). Returns `false` for a
- * normal product (it deploys on merge as before). A project with no org cannot scope the
- * tenant `events` write — the `log.info` is then the observable record.
- *
- * IDEMPOTENT (the apex-v35 hot-loop fix): the `deploy.skipped` append carries the `runId`,
- * so it fires a `tanren_run` NOTIFY → re-wakes the post-merge subscriber → re-drives
- * `check()` → would re-append the SAME skip on EVERY pass forever (the
- * 1911-events-in-seconds live hot-loop). So this emits the skip AT MOST ONCE per run: if
- * the run already carries a `template_build` `deploy.skipped`, it returns `true` (still a
- * skip — no deploy) WITHOUT re-appending. The `config_incomplete` / `merge_sha_missing`
- * skips throw, so they cannot self-loop; this matches their once-and-observable intent.
- */
-export async function skipTemplateBuildDeploy(
-  pool: pg.Pool,
-  ctx: Pick<DeployVerifyContext, "eventStore">,
-  args: { runId: string; projectId: string },
-): Promise<boolean> {
-  const row = await runWithSystemScope(pool, async (client) => {
-    const result = await client.query<{ config: unknown; org_id: string | null }>(
-      "SELECT config, org_id FROM projects WHERE project_id = $1",
-      [args.projectId],
-    );
-    return result.rows[0];
-  });
-  if (row === undefined || !isTemplateBuildProjectConfig(row.config)) return false;
-  log.info("merged template-creation build — skipping deploy-on-merge (a template is not a deployed product)", {
-    runId: args.runId,
-    projectId: args.projectId,
-  });
-  // A project with no org cannot scope the tenant `events` write — the `log.info` above is
-  // the observable record; nothing to append / dedup.
-  if (row.org_id === null) return true;
-  // IDEMPOTENCY GATE: emit the durable `deploy.skipped` ONCE. A prior `template_build` skip
-  // on this run means the timeline already records it — re-appending would only re-fire the
-  // `tanren_run` NOTIFY and self-loop the subscriber.
-  if (await alreadyTemplateBuildSkipped(pool, args.runId)) return true;
-  const detail =
-    `project '${args.projectId}' is a template-creation build — it authors a reusable template, not a ` +
-    `running product, so no product deploy is triggered on merge (the template carries a deploy verb for the ` +
-    `PRODUCTS later built from it)`;
-  await appendDeploySkipped(ctx, {
-    runId: args.runId,
-    projectId: args.projectId,
-    orgId: row.org_id,
-    reason: "template_build",
-    detail,
-  });
-  return true;
-}
-
-/**
- * Whether this run already carries a `template_build` `deploy.skipped` — the idempotency
- * gate that stops the skip self-looping the run-activity bus (each append fires a
- * `tanren_run` NOTIFY that re-wakes the post-merge subscriber). System-scoped so it reads
- * the run's events regardless of the ambient tenant scope. Matches on the JSONB `reason`
- * so an unrelated skip reason (there is none for a template build today, but defensively)
- * never masks a genuine first emit.
- */
-async function alreadyTemplateBuildSkipped(pool: pg.Pool, runId: string): Promise<boolean> {
-  return runWithSystemScope(pool, async (client) => {
-    const result = await client.query<{ id: string }>(
-      `SELECT id FROM events
-         WHERE run_id = $1 AND event_type = 'deploy.skipped' AND payload->>'reason' = 'template_build'
-         LIMIT 1`,
-      [runId],
-    );
-    return result.rows[0] !== undefined;
   });
 }
 
