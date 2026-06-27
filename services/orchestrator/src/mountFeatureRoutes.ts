@@ -227,9 +227,18 @@ export function mountFeatureRoutes(app: Hono<ActorContextEnv>, deps: FeatureRout
           },
           ctx,
         ),
-      // F2 — per-fragment authoring DAG (writer-validate convergence + persist
-      // into the org `fragments` table on success).
-      runFragmentAuthoring: (ctx) => buildLiveRunFragmentAuthoring({ pool: scopedPool }, ctx),
+      // F2 — per-fragment authoring DAG: a REAL LLM-backed authorer (the
+      // allocating Forge answerer adapter — same infra as planner/checker/
+      // auditor) drives a writer-validate convergence loop; the validated
+      // fragment lands in the org `fragments` table. No stub fallback.
+      runFragmentAuthoring: (ctx) =>
+        buildLiveRunFragmentAuthoring(
+          {
+            pool: scopedPool,
+            authorer: forgeAnswerers.fragmentAuthorer({ orgId: ctx.orgId }),
+          },
+          ctx,
+        ),
       // F2 — unified library (bundled core + org-authored fragments). Shadowing:
       // an org fragment with the same (kind, label) wins over the bundled.
       loadFragmentLibrary: buildLiveLoadFragmentLibrary(scopedPool),

@@ -68,7 +68,6 @@ export {
 } from "./selectFragmentConfig.js";
 export {
   buildFragmentAuthoring,
-  buildInMemoryFragmentAuthorer,
   type FragmentAuthoring,
   type FragmentAuthoringDeps,
   type FragmentAuthoringEvents,
@@ -79,6 +78,7 @@ export {
   type FragmentAuthorerOutput,
   type FragmentPersistence,
 } from "./fragmentAuthoringRun.js";
+export { buildFragmentAuthorerPrompt, wrapProviderFragmentAuthorer } from "./providerFragmentAuthorer.js";
 export {
   FragmentBodyParseError,
   interpretOrgFragment,

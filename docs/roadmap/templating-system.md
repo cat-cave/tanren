@@ -1,187 +1,261 @@
-# Templating system — every project DAG seeds from a validated template
+# Templating system — one fragment-only scaffold path, missing fragments AUTHORED
 
 This is the doctrine-of-record for Tanren's project templating, and it is
 **load-bearing**: the orchestrator code cites this file by section
-(`§2` = the creation meta-flow, `§3` = the no-match auto-trigger + the
-seed/from-scratch relocation). The doctrine is **owner-stated and enforced in
-code** — it is not aspirational.
+(§1 = the one rule, §2 = the per-fragment authoring DAG, §3 = the unified
+library). The doctrine is **owner-stated and enforced in code** — it is not
+aspirational.
 
-> **Status (merged on `main`, #462 + #498).** The from-scratch-into-a-project
-> bypass is **deleted**. The template gate, just-in-time creation, the
-> `assertSeeded` invariant, the `TemplateRequiredError` → `409` halt, and the
-> durable `template.selection.*` / `template.creation.*` events are live (#498).
-> **Wave 5 — the maintenance dimension (#462) — is also merged**: the
-> template-maintenance scheduler, `lts`/`nightly` channels, nightly→lts
-> graduation, and freshness/revalidation (`engine/templates/maintenance/**`; see
-> §4). The system is first exercised end-to-end by the next apex run — DO NOT
-> pre-create a template; apex MUST flush the creation-from-scratch path (see below).
-
----
-
-## The doctrine (the one rule)
-
-**There is NO "from-scratch into a project" path.** EVERY project DAG executes
-against a known-solid, **validated** template. The from-scratch authoring still
-exists, but it is **only the BUILD step of template-creation** — not a project
-path. Stated as the owner did:
-
-> **"the from-scratch flow IS the create-a-new-template flow."**
-
-So when a project's architecture step finds no matching validated template, project
-init does exactly one of two things — never a third:
-
-1. **Create a template just-in-time** (§2) — research → author-from-scratch →
-   build → validate-with-negative-controls → publish — then the project scaffold
-   **seeds FROM** the freshly-created, validated template, OR
-2. **Halt loud** (`TemplateRequiredError` → HTTP `409`) if creation cannot produce
-   a validated template.
-
-A project DAG **never** proceeds from-scratch into an empty repo. The derive
-invariant guard (`assertSeeded` / `assertNoFromScratchProjectScaffold`,
-`engine/forge/interview/interviewTemplateGate.ts`) asserts this after selection:
-the from-scratch scaffold branch is reachable **only** on the `template_build`
-scaffoldOrigin (where the derive authors the TEMPLATE itself).
-
-**Lane T1 (#659).** The synthetic child project the template-build authors is
-born with the autonomous audit posture + the autonomous-pattern flaky bar
-(`auditPosture: AUTONOMOUS_AUDIT_POSTURE` +
-`insightThresholds: { ciInsightFlakyMinShas: 1 }`) — without that, the
-audit-posture preflight blocks the synthetic child loud, since no operator is
-present to flip the governance on a derived-by-derive project. See
-`engine/forge/interview/derive.ts`.
+> **Status (PR-F, in flight).** The doctrine collapse to a single
+> fragment-only scaffold path is built: the dual `scaffoldOrigin` (project /
+> template_build) is gone, the agent-driven template-build DAG is gone, the
+> `templates` registry table is gone, the template-creation meta-flow is gone,
+> the template-maintenance scheduler is gone, the `template.*` event
+> vocabulary is gone, and the `templateBuild` config marker is gone.
+> Replacing them: the fragment composer is the SOLE materialization path; a
+> missing fragment triggers the **per-fragment authoring DAG (F2)** that
+> AUTHORS the fragment via a real LLM and persists it into the org's
+> `fragments` table. The next `selectFragmentConfig` call then resolves
+> `ready` against the augmented library and the project derive proceeds.
 
 ---
 
-## §2 — the template-creation meta-flow
+## The one rule (the user's directive)
 
-`createTemplate(request)`
-(`engine/templates/creation/createTemplate.ts`) runs a five-step meta-DAG and
-either registers a **validated** template or fails LOUD without publishing. It
-REUSES live infra at every step (research/build are seams; authoring feeds the
-existing `deriveProductGraph`; validation is `runValidationHarness`):
+> _"Let's make there be only exactly one way, the right way, for tanren to
+> get repos scaffolded. Since fragments are the way we're going, this should
+> be the way to act. If someone is using tanren to translate russian
+> fanfiction, then they need to make a lot of custom fragments, but maybe
+> they share some spellchecking linter fragments with someone using tanren to
+> craft their D&D campaign lore book. Similarly, someone wanting to take
+> their existing app and simply switch from gcp to AWS may want to reuse
+> nearly all fragments, subbing out only one or needing to create a new one,
+> etc. We should NEVER have fallback paths or legacy workarounds. Everything
+> in tanren should feel like the single intended way to do things."_
 
-1. **RESEARCH** — web-research current best practice + tooling for the stack.
-2. **AUTHOR** — emit the template-build spec set as an `InterviewCapture`, then
-   materialize the project graph via the existing greenfield `deriveProductGraph`.
-   _This is the from-scratch authoring — relocated here, reachable ONLY as the
-   build step of template-creation._
-3. **BUILD** — drive that project through the existing spec-loop / DagWalker to the
-   conforming template repo.
-4. **VALIDATE** — run `runValidationHarness` (positive + **negative** controls +
-   auditor) over the built repo → a `TemplateValidationProof`.
-5. **PUBLISH** — **only if** the proof validates: register it in the
-   `TemplateStore` (status `validated`, manifest carrying the proof + provenance +
-   channel) + emit `template.registered`. An invalid template is **never**
-   registered — a loud finding, not a publish.
+There is exactly ONE path from a captured lifecycle to a seeded project repo:
 
----
+```
+capture
+   → assert lifecycle + design contract present (else MissingLifecycleError /
+     MissingDesignContractError)
+   → preflight deploy
+   → selectFragmentConfig(lifecycle, library):
+       - try curated lookup; on miss, synthesize from lifecycle tokens
+       - walk every fragment id the config references against the library
+       - return { kind: "ready", config } OR { kind: "missing-fragments", missing }
+   → if missing-fragments:
+       - runFragmentAuthoring(missing) — F2; see §2
+       - if any authoring fails (fixed point), throw FragmentAuthoringFailedError
+         → 409 fragment_authoring_failed (loud halt; no silent skip)
+       - else retry selectFragmentConfig against the augmented library
+   → composeTemplate(config, library) + materializeTemplate
+       - assembles the VFS, creates a fresh seed repo, pushes every composed file
+       - returns SeededTemplate { templateRef, repoRef, validatedAt, validatedSha }
+   → createProject + scaffold/build/deploy specs (the writer specializes the seed)
+```
 
-## §3 — the no-match auto-trigger + the seed/from-scratch relocation
-
-The architecture step queries the registry by capabilities for a **validated**
-template (`validated` / `official` tiers only — a `draft`/`degraded` template is
-not a usable match) BEFORE deriving the scaffold specs
-(`engine/templates/creation/noMatchHook.ts`):
-
-- **A validated match exists** → the `scaffold` spec **shrinks** to template
-  instantiation (adapt product names / deploy target / env; plus partial-match
-  adaptation criteria for a partial match). The writer instantiates the seed; it
-  does not author from scratch.
-- **No validated match** → the no-match auto-trigger runs the creation meta-flow
-  (§2). On success the scaffold seeds from the new template; on failure the project
-  init halts loud (`TemplateRequiredError`).
-
-The `build` and `deploy` scaffold specs are identical either way — they always
-route through the conventional `just build` / `just deploy` targets the materialized
-**stack-flexible contract** established (now embodied in code — the `justfile` +
-`.tanren/ci.yml` contract; see `docs/operator-guide/ci-config.md`):
-Tanren bakes in no stack; the contract files are materialized deterministically
-from the captured lifecycle, never LLM-authored.
-
-### Durable events
-
-The whole path is observable through durable events (schemas in
-`engine/events/schemas/templates.ts`):
-
-- `template.selection.no_match` — selection found no eligible validated template.
-- `template.creation.started` / `template.creation.published` /
-  `template.creation.failed` — the just-in-time meta-flow lifecycle.
-- `template.registered` / `template.status_changed` — registry lifecycle.
+There is **no fallback path**: no `scaffoldOrigin: "template_build"` mode, no
+agent-template-build DAG, no `templates` registry, no template-maintenance
+scheduler, no "skip selection" wiring. Every project derive runs the same
+code; an unrecognized stack triggers authoring, never silent degradation.
 
 ---
 
-## §4 — the maintenance dimension (a template is a first-class Tanren project)
+## §1 — fragments are the primitive
 
-Creating a validated template is not the end of its life. A template tracks an
-upstream stack that **moves**, and its "meaningful, not green-by-accident" proof
-goes **stale**. Wave 5 (merged, #462; code at `engine/templates/maintenance/**`)
-makes every registered template a **first-class project Tanren maintains on a
-schedule**, reusing the scheduled-audit machinery rather than reinventing it.
+The bundled core library (`services/orchestrator/src/engine/templates/fragments/library/`)
+ships the canonical fragments: `base`, `runtime-node-pnpm`,
+`runtime-ruby-bundler`, `frontend-react-router`, `frontend-remix`,
+`db-postgres-prisma`, `deploy-fly`, `deploy-none`, `addon-biome`, `addon-docker`.
+Each declares an `id`, `kind` (one of the 9 compose phases:
+`base|runtime|frontend|backend|db|auth|addon|example|deploy`), a `contract`
+(testRunner / reportPath / dbMigrationsDir / ciTier2 — what downstream
+post-processors read), optional `dependsOn`, and an `apply(vfs, config)`
+function that mutates a `VirtualFileSystem` via the typed surface
+(`vfs.write`, `vfs.addPackageJsonDep`, `vfs.appendToJustfileTarget`, etc).
 
-- **The maintenance scheduler (`maintenance/loop.ts`, booted by `boot.ts`).**
-  A long-lived per-process loop (the same `start`/`stop`/`tick` shape + cross-org
-  system-scoped fan-out as `AuditSchedulerLoop`). Each tick re-validates due
-  templates by re-running the **same** validation harness the creation flow proved
-  them with (`maintenancePass.ts` → `revalidator.ts` → `runValidationHarness`) —
-  it does not reinvent validation; it provisions the registered repo onto a runner
-  and re-proves it.
+The composer (`engine/templates/fragments/compose.ts`) walks the 9 phases in
+order, applies each fragment, then runs the post-processors:
+`processDeps`/`processEnvVars`/`processJustfile`/`processCiYml`/`processReadme`/
+`assertBaseInvariantsHeld`/`assertRuntimeAddedFunctionalTest`. The output is
+a `VirtualFileSystem` — composed deterministically, validated by construction.
 
-- **`lts` / `nightly` channels (`channelPolicy.ts`).** A template's channel decides
-  **which** upstream versions it accepts and **how often** it bumps, stack-agnostic
-  by construction (stable-vs-pre-release is a generic marker, never an ecosystem's
-  semver rules):
-  - **`lts`** — conservative: accepts only a stable release, rejects pre-releases,
-    slow (monthly) cadence — the proven floor real projects seed from.
-  - **`nightly`** — aggressive: accepts the latest including pre-releases, fast
-    (daily) cadence. It is the **canary** — a breaking upstream release fails the
-    nightly validation **first**, before it can reach an LTS template or a real
-    project.
+**Selection** (`engine/templates/fragments/selectFragmentConfig.ts`):
 
-- **nightly→lts graduation (`graduation.ts`).** Because nightly re-validates the
-  full harness on every aggressive bump, the maintenance loop (a) keeps `lts`
-  pinned safe (never auto-takes the cutting-edge bump), (b) files any breakage as a
-  finding/spec, and (c) graduates a version nightly→lts **only** once its nightly
-  validation has stayed **green continuously for an aging window** — a pure,
-  clock-injected predicate.
+- a curated stack label (`registry/curated.ts` — e.g. _"ts/pnpm + Remix +
+  Prisma + PostgreSQL on Fly.io"_) short-circuits to a known `TemplateConfig`.
+- a no-match synthesizes a config from the captured lifecycle's stack +
+  deploy tokens (open-world: any token maps to a fragment label, no closed
+  enum gates it).
+- the returned `TemplateConfig` is walked: every referenced fragment id is
+  either present in the library (→ `ready`) or absent (→ `missing-fragments`
+  with `FragmentSpec[]`).
 
-- **Freshness + revalidation (`freshness.ts` + `revalidator.ts`).** A template's
-  registry status drops to **`degraded`** (so selection, which already filters
-  degraded, stops choosing it) on two triggers: its `validationProof` is older than
-  the freshness horizon, or a maintenance pass surfaced an unresolved **P0/P1**
-  finding. **Fail-closed:** a proof that cannot be dated reads as expired, never as
-  fresh, so an unparseable/stale proof degrades rather than silently seeding
-  projects.
+**Materialization** (`engine/templates/fragments/materialize.ts`):
+
+- `buildMaterializeTemplate({ createTemplateRepo, pushFile })` returns the
+  seam `derive.ts` calls. It composes the chosen config, creates a fresh
+  template seed repo on the forge, pushes every composed file, returns a
+  `SeededTemplate { templateRef, repoRef, validatedAt, validatedSha }`.
+- The seed reference rides on `projects.config.templateRef` so workspace-prep
+  (`engine/workspace/templateSeed.ts`) clones the seed into the project's
+  workspace BEFORE the writer runs.
 
 ---
 
-## apex interaction — do NOT pre-create a template
+## §2 — the per-fragment authoring DAG (F2)
 
-apex MUST exercise **template-creation-from-scratch** end-to-end. **Do not
-pre-create or pre-seed a template before an apex run** to "help it along" — if the
-creation-from-scratch path breaks, that is precisely the bug apex exists to flush
-(this was the #498 finding: v32 surfaced that the templating system had never been
-exercised and the from-scratch path was wrong). Let the no-match fire, watch the
-`template.creation.*` events, and if it halts, root-cause and fix on `main` per the
-apex rhythm (`docs/operator-guide/apex.md`). The drive steps are in
-`docs/operator-guide/apex-run-playbook.md` §5b.
+When `selectFragmentConfig` returns `missing-fragments`, the derive calls
+`runFragmentAuthoring(missing)` — the F2 seam wired by
+`buildLiveRunFragmentAuthoring` (`routes/onboarding/fragmentAuthoring.ts`).
+Each missing FragmentSpec drives one authoring run with three logical stages:
+
+1. **Plan** — the FragmentSpec IS the plan (kind + label + required
+   contract). The lifecycle requires this specific slot to be filled.
+2. **Write** — the `FragmentAuthorer` seam produces a TypeScript body for the
+   spec. Production wires `wrapProviderFragmentAuthorer` over the allocating
+   Forge answerer adapter (`fragmentAuthorerFactory.ts`) — the SAME structured-
+   output infra the planner/checker/auditor use: real LLM call, real cost
+   record, real per-run scoped credentials. The writer-rework loop iterates
+   the body — each rejection from VALIDATE feeds back as `previousAttempt`
+   carrying the failing body + the rejection reason. UNBOUNDED while making
+   PROGRESS (the body or the rejection keeps changing); stops at a FIXED
+   POINT (identical body + identical rejection — per the timeout-eradication
+   doctrine, no flat iteration cap).
+3. **Validate** — `interpretOrgFragment` parses the body against the
+   constrained-subset BNF (`vfs.write/overwrite/addPackageJsonDep/
+addPackageJsonDevDep/addEnvVar/appendToJustfileTarget`); then a SMOKE
+   COMPOSITION runs the production composer with the candidate fragment
+   slotted in (PR-D's isolation harness pattern, inlined). A pass proves the
+   body's structure + that the Fragment composes cleanly. Failure carries
+   the rejection text back to the writer.
+
+**On success**: insert into `fragments` (`status='draft'`), flip to
+`status='validated'`, emit `fragment.authoring.succeeded`. The derive's
+retry sees the fragment in the unified library and `selectFragmentConfig`
+returns `ready`.
+
+**On fixed-point failure**: emit `fragment.authoring.failed` with the latest
+rejection text + attempt count. `failedIds` is non-empty → derive throws
+`FragmentAuthoringFailedError` → route returns 409 `fragment_authoring_failed`.
+The derive halts loud; an operator inspects the events, fixes the writer /
+validator gate, and retries. **Never a silent skip.**
+
+**Why the answerer (not the writer) seam.** A fragment body is a constrained-
+subset DECLARATIVE artifact, interpreted by `interpretOrgFragment` — never
+executed as raw TS in a workspace. The answerer pattern (single-call,
+structured-output, in-process, uniform cost+usage path) is the right fit; the
+writer pattern (workspace + diff capture + runner allocation) is overkill for
+the "produce one structured artifact" shape. The fragment-authoring run STILL
+emits durable `fragment.authoring.{started,succeeded,failed}` events through
+the standard event store, so the run is observable in the same dashboard
+timeline as writer events.
+
+**Why no stub fallback.** The no-production-stubs lint
+(`scripts/check-architecture-stubs.mjs`) catches any attempt to wire a
+`fake`/`stub`/`noop`/`mock`-stem identifier as a production default. The test
+fixture (`tests/fixtures/fragmentAuthoring.ts:buildFakeFragmentAuthorer`)
+carries the `fake` stem deliberately, so it cannot accidentally land as a
+production default — production must inject a real LLM-backed authorer via
+`buildForgeFragmentAuthorerFactory` or fail loud at wiring time.
+
+---
+
+## §3 — the unified fragment library
+
+`loadUnifiedFragmentLibrary(orgId, loadOrgFragments)`
+(`engine/templates/fragments/unifiedLibrary.ts`) returns a SINGLE
+`FragmentLibrary` that combines:
+
+1. The bundled core fragments from `library/index.ts` (always present;
+   evolved via tanren-monorepo PRs).
+2. The org-scoped fragments persisted by the per-fragment authoring DAG into
+   the `fragments` table (RLS-scoped to the org).
+
+**Shadowing**: when an org-scoped fragment has the SAME `(kind, label)` as a
+bundled core fragment, the org-scoped fragment WINS. This is the doctrine:
+organizations may override Tanren's defaults; if they don't, they get the
+core. The bundled fragment is replaced via the existing `replaceForTests`
+seam (re-purposed; the override is a first-class behavior, not a test-only
+path).
+
+The `fragments` table schema (baseline migration `0018_fragments_doctrine_collapse.sql`):
+
+```sql
+CREATE TABLE fragments (
+  fragment_id    text PRIMARY KEY,        -- "<orgId>:<kind>-<label>:<version>"
+  org_id         text NOT NULL REFERENCES organizations(id),
+  kind           text NOT NULL,
+  label          text NOT NULL,
+  version        text NOT NULL,           -- semver
+  body_ts        text NOT NULL,           -- the default-exported Fragment source
+  contract       jsonb NOT NULL,          -- mirrored from body for query
+  depends_on     jsonb NOT NULL DEFAULT '[]'::jsonb,
+  status         text NOT NULL CHECK IN ('draft','validated'),
+  created_at     timestamptz NOT NULL DEFAULT now(),
+  validated_at   timestamptz,
+  UNIQUE (org_id, kind, label, version)
+);
+-- RLS: strictly org-scoped (no cross-org `official` tier — bundled core IS
+-- the defaults; org fragments are always private).
+```
+
+The org-authored fragment BODY is interpreted (not executed) via the
+constrained-subset parser, so an authored fragment cannot execute arbitrary
+code at compose time even if the writer produces hostile output. The parser
+rejects anything outside the allowed vfs operations at registration time.
+
+---
+
+## §4 — durable observability
+
+Three events make the F2 path inspectable in the run/audit feed
+(`engine/events/schemas/templates.ts`):
+
+- `fragment.authoring.started` — one authoring run began for a missing slot
+- `fragment.authoring.succeeded` — the writer's body validated + persisted
+- `fragment.authoring.failed` — the writer hit a fixed point (loud terminal)
+
+The corresponding sensitivity rules + default severities are in
+`engine/events/sensitivityRules.templates.ts` and
+`engine/notifications/eventDefaultSeverity.ts` (`failed` → severity `fail`
+so it clears the matrix warn floor and reaches the operator).
+
+---
+
+## apex interaction — the next live-validation vehicle
+
+apex will exercise the F2 path end-to-end the next time a captured lifecycle
+references a fragment the bundled library doesn't have — the russian-
+fanfiction case, the gcp→AWS deploy swap, etc. The first such run halts on
+the authoring writer's output; the operator inspects the
+`fragment.authoring.failed` event, refines the spec or the writer's prompt,
+and retries. Each authored fragment lands in the org's `fragments` table and
+is reusable across the org's projects.
+
+DO NOT pre-seed the org `fragments` table — let apex flush the path
+end-to-end so the writer's prompt + the validator's smoke composition are
+proven on real cases.
 
 ---
 
 ## Relationship to the stack-flexible contract
 
-The templating system sits **above** the stack-flexible contract (now embodied in
-code — the `justfile` + `.tanren/ci.yml` contract; see
+The templating system sits **above** the stack-flexible contract (the
+`justfile` + `.tanren/ci.yml` contract; see
 `docs/operator-guide/ci-config.md`):
 
-- The **contract** is the generality mechanism — Tanren knows no stack; a project
-  declares its lifecycle in a `justfile` + `.tanren/ci.yml` and Tanren runs it
-  uniformly.
-- The **template** is the validated, pre-built seed a project starts from instead
-  of authoring the contract-conforming repo cold. A template is a real conforming
-  repo (added as a REPO, never as TypeScript) that already satisfies the contract.
+- The **contract** is the generality mechanism — Tanren knows no stack; a
+  project declares its lifecycle in a `justfile` + `.tanren/ci.yml` and
+  Tanren runs it uniformly.
+- The **composed seed** is the validated, fragment-built repo a project
+  starts from. The fragment composer produces a real conforming repo (pushed
+  via the materializer) that already satisfies the contract.
 
-> **Superseded line.** Earlier stack-flexible prose said the architecture step
-> "may seed from a template if it matches; otherwise the agent authors from-scratch
-> against the contract." That from-scratch **fallback no longer exists** for a
-> project path — a no-match creates a validated template just-in-time or halts. The
-> from-scratch authoring survives only as the BUILD step of template-creation.
+> **Superseded line.** Earlier prose said "every project DAG seeds from a
+> validated _template_ selected from a registry, or just-in-time-created via
+> a meta-flow." The registry + meta-flow are GONE. Every seed is now a
+> fragment composition; what was "create a whole template repo via an
+> agent-driven DAG" is now "author each missing fragment via the F2 DAG, then
+> compose."

@@ -348,31 +348,9 @@ function hashish(s: string): string {
   return h.toString(16);
 }
 
-// ── In-memory authorer (test seam + simple production stub) ────────────────
-
-/** A deterministic in-memory authorer that produces a minimal body for the spec.
- * Useful for tests + as a deterministic floor for production until an LLM-backed
- * authorer is wired. Produces a body that calls only the constrained-subset
- * operations — guaranteed to parse + smoke-compose for any spec the runtime can
- * satisfy with `node-pnpm` defaults. */
-export function buildInMemoryFragmentAuthorer(): FragmentAuthorer {
-  return async (input) => {
-    const { spec } = input;
-    const lines: string[] = [
-      `import { type Fragment, type TemplateConfig, type VirtualFileSystem } from "../types.js";`,
-      ``,
-      `export const fragment: Fragment = {`,
-      `  id: "${spec.id}",`,
-      `  version: "1.0.0",`,
-      `  kind: "${spec.kind}",`,
-      `  contract: ${JSON.stringify(spec.requiredContract)},`,
-      `  async apply(vfs: VirtualFileSystem, _config: TemplateConfig): Promise<void> {`,
-      // Author a minimal file the fragment owns + a marker README contribution.
-      `    vfs.write("docs/${spec.id}.md", "Tanren ${spec.id} fragment\\n");`,
-      `  },`,
-      `};`,
-      `export default fragment;`,
-    ];
-    return { bodyTs: lines.join("\n") };
-  };
-}
+// NOTE: the in-memory deterministic fragment authorer is a TEST-FIXTURES path.
+// It lives under `tests/fixtures/fragmentAuthoring.ts` as `buildFakeFragmentAuthorer`
+// — `fake` triggers the `no-production-stubs` lint stem-list so any attempt to
+// wire it as a production default is mechanically caught. Production wires the
+// real LLM-backed `wrapProviderFragmentAuthorer` via
+// `buildForgeFragmentAuthorerFactory` (engine/forge/providerFactory.ts).

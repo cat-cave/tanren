@@ -7,15 +7,17 @@
 // fragment into the org's `fragments` table, and emits durable
 // `fragment.authoring.*` events so the run is observable.
 //
-// The `FragmentAuthorer` itself is the seam to an LLM-backed writer; production
-// can wire a provider answerer, while the deterministic
-// `buildInMemoryFragmentAuthorer` is the test seam + a sane default.
+// The `FragmentAuthorer` is REQUIRED — there is no stub/in-memory default. The
+// route layer wires it via `buildForgeFragmentAuthorerFactory` (the same
+// allocating Forge answerer infra the planner/checker/auditor use); tests use
+// the `buildFakeFragmentAuthorer` fixture from `tests/fixtures/`. A missing
+// authorer is a wiring bug, not a degrade — `buildLiveRunFragmentAuthoring`
+// throws if `deps.authorer` is omitted.
 
 import type pg from "pg";
 import { runWithOrgScope } from "@tanren/db";
 import {
   buildFragmentAuthoring,
-  buildInMemoryFragmentAuthorer,
   type FragmentAuthoring,
   type FragmentAuthorer,
   type FragmentAuthoringEvents,
@@ -31,7 +33,8 @@ import type { EventStore } from "../../engine/eventStore.js";
 export interface FragmentAuthoringFlowDeps {
   pool: pg.Pool;
   eventStore?: EventStore;
-  authorer?: FragmentAuthorer;
+  /** The LLM-backed fragment authorer — REQUIRED. There is no default. */
+  authorer: FragmentAuthorer;
 }
 
 /** Build the live per-fragment authoring seam for ONE (orgId) context. */
@@ -39,9 +42,8 @@ export function buildLiveRunFragmentAuthoring(
   deps: FragmentAuthoringFlowDeps,
   ctx: { orgId: string },
 ): FragmentAuthoring {
-  const { pool, eventStore } = deps;
+  const { pool, eventStore, authorer } = deps;
   const { orgId } = ctx;
-  const authorer = deps.authorer ?? buildInMemoryFragmentAuthorer();
 
   const persistence: FragmentPersistence = {
     async create(input) {

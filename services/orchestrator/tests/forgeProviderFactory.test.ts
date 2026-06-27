@@ -21,6 +21,7 @@ import { wrapProviderDiscoveryAnswerer } from "../src/engine/forge/discovery/ind
 import { wrapProviderTriageAnswerer } from "../src/engine/forge/inbox/index.js";
 import { wrapProviderReconAnswerer } from "../src/engine/forge/brownfield/index.js";
 import { wrapProviderInterviewAnswerer } from "../src/engine/forge/interview/index.js";
+import { wrapProviderFragmentAuthorer, type FragmentAuthorerOutput } from "../src/engine/templates/index.js";
 import { wrapProviderAnswerer } from "../src/engine/forge/conversation/index.js";
 import {
   buildForgeDiscoveryAnswererFactory,
@@ -131,6 +132,75 @@ describe("Forge provider wrappers (dual-mode structured answerers)", () => {
         existingSpecs: [],
       }),
     ).rejects.toThrow(/dedupe|match|placement|Required|Invalid/u);
+  });
+
+  it("fragment authorer: a conforming { bodyTs } is returned; non-conforming is rejected; prompt carries the rejection on a rework attempt", async () => {
+    const lifecycle = {
+      stack: "ts/pnpm",
+      bootstrap: "pnpm install",
+      tier1: "pnpm test",
+      tier2: "pnpm test",
+      tier3: "pnpm test",
+      build: "pnpm build",
+      deploy: "fly deploy",
+      upgrade: "",
+      toolchain: [],
+    };
+    // The capturing adapter records the prompt + returns a canned body, so the
+    // test asserts the prompt CARRIES the rejection on a rework attempt (the
+    // writer-rework loop's steering contract).
+    let lastPrompt = "";
+    const adapter: AnswererAdapter<FragmentAuthorerOutput> = {
+      kind: "answerer",
+      cli: "fake",
+      authRef: "credential/self-hosted/fake",
+      async runAnswerer(opts) {
+        lastPrompt = opts.prompt;
+        return opts.outputSchema.parse({
+          bodyTs:
+            `import { type Fragment } from "../types.js";\n` +
+            `export const fragment: Fragment = {\n` +
+            `  id: "addon-foo", version: "1.0.0", kind: "addon", contract: {},\n` +
+            `  async apply(vfs, _c) { vfs.write("docs/foo.md", "x"); }\n` +
+            `};\nexport default fragment;\n`,
+        });
+      },
+    };
+    const authorer = wrapProviderFragmentAuthorer(adapter);
+    const out = await authorer({
+      spec: { kind: "addon", label: "foo", id: "addon-foo", requiredContract: {} },
+      lifecycle,
+    });
+    expect(out.bodyTs).toContain("export default fragment");
+    // The prompt names the slot the LLM is filling.
+    expect(lastPrompt).toContain("kind:   addon");
+    expect(lastPrompt).toContain("label:  foo");
+
+    // Rework attempt — the prompt carries the prior rejection verbatim.
+    await authorer({
+      spec: { kind: "addon", label: "foo", id: "addon-foo", requiredContract: {} },
+      lifecycle,
+      previousAttempt: { bodyTs: "bad body", rejection: "body parse rejected: vfs operation missing" },
+    });
+    expect(lastPrompt).toContain("Previous attempt — rejected");
+    expect(lastPrompt).toContain("body parse rejected: vfs operation missing");
+
+    // A non-conforming model output is rejected by the wrapper's schema parse.
+    const broken: AnswererAdapter<FragmentAuthorerOutput> = {
+      kind: "answerer",
+      cli: "fake",
+      authRef: "credential/self-hosted/fake",
+      async runAnswerer(opts) {
+        return opts.outputSchema.parse({ wrong: "shape" });
+      },
+    };
+    const badAuthorer = wrapProviderFragmentAuthorer(broken);
+    await expect(
+      badAuthorer({
+        spec: { kind: "addon", label: "foo", id: "addon-foo", requiredContract: {} },
+        lifecycle,
+      }),
+    ).rejects.toThrow(/bodyTs|Required|Invalid/u);
   });
 
   it("recon / interview / conversation wrappers are real provider answerers", async () => {

@@ -10,7 +10,6 @@
 import { describe, expect, it } from "vitest";
 import {
   buildFragmentAuthoring,
-  buildInMemoryFragmentAuthorer,
   type FragmentAuthoringEvents,
   type FragmentAuthorer,
   type FragmentPersistence,
@@ -19,6 +18,7 @@ import {
   type OrgFragmentSource,
 } from "../src/engine/templates/index.js";
 import type { CaptureLifecycle } from "../src/engine/forge/interview/index.js";
+import { buildFakeFragmentAuthorer } from "./fixtures/fragmentAuthoring.js";
 
 function lifecycle(): CaptureLifecycle {
   return {
@@ -68,7 +68,7 @@ describe("buildFragmentAuthoring — happy path", () => {
     const { events, calls } = recordingEvents();
     const { persistence, created, validated } = inMemoryPersistence();
     const runner = buildFragmentAuthoring({
-      authorer: buildInMemoryFragmentAuthorer(),
+      authorer: buildFakeFragmentAuthorer(),
       persistence,
       events,
     });
