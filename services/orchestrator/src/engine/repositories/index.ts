@@ -11,6 +11,9 @@ export { ProjectSpecStore, type ProjectSpecRow, type SpecPatch } from "./project
 // integration registry (Plane A) + the built product's app-environment store
 // (Plane B).
 export { OrgIntegrationsStore, type OrgIntegration, type OrgIntegrationStatus } from "./orgIntegrations.js";
+// Org-row reads on the seam: `getLogin(orgId)` for deploy-app namespacing
+// (the global-namespace collision fix; see `flyDeployProvisioner.ts`).
+export { OrganizationsStore, OrganizationNotFoundError } from "./organizations.js";
 export { AppEnvironmentStore, type AppEnvEntry, type AppEnvScope, type AppEnvSource } from "./appEnvironment.js";
 // Tanren-native templating (fragment doctrine, docs/roadmap/templating-system.md):
 // the org-scoped fragment store — bundled core fragments shadowed/extended by

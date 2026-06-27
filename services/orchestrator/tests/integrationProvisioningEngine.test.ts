@@ -47,6 +47,13 @@ interface StubState {
 function stubPool(state: StubState): pg.Pool {
   let seq = 0;
   const query = async (text: string, params: unknown[] = []): Promise<{ rows: unknown[]; rowCount: number }> => {
+    // OrganizationsStore.getLogin (task #27 — deploy-app namespacing).
+    if (text.includes("SELECT login FROM organizations")) {
+      const orgId = String(params[0]);
+      // Stub a deterministic test-org login so the deploy-namespacing rule has a
+      // valid prefix; the SENTRY/SLACK provisioners in this file ignore it.
+      return { rows: [{ login: orgId === ORG ? "test-tanren" : "unknown" }], rowCount: 1 };
+    }
     // getGrant → OrgIntegrationsStore.get
     if (text.includes("FROM org_integrations") && text.includes("provider_kind = $2")) {
       const match = state.integrations.find((r) => r.org_id === params[0] && r.provider_kind === params[1]);

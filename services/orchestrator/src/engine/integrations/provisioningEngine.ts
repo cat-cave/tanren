@@ -37,6 +37,7 @@
 import type pg from "pg";
 import { randomUUID } from "node:crypto";
 import { OrgIntegrationsStore } from "../repositories/orgIntegrations.js";
+import { OrganizationsStore } from "../repositories/organizations.js";
 import { ProjectStore } from "../repositories/projects.js";
 import { ChannelKind } from "../notifications/schemas.js";
 import type { EventStore } from "../eventStore.js";
@@ -229,9 +230,17 @@ export async function provisionCapability(
       ? buildIntegrationProvisioner(providerKind, productionProvisionerDeps(deps.secrets))
       : deps.buildProvisioner(providerKind);
 
+  // Resolve the Tanren org slug (organizations.login) — REQUIRED on the project
+  // context for the deploy-app namespacing rule (task #27): every Fly/Vercel app
+  // Tanren creates is named `<orgSlug>-<projectName>` so a project named `linkly`
+  // cannot collide on Fly's global app-name namespace. Sentry/Slack ignore it,
+  // but resolving it unconditionally keeps the construction site mechanical.
+  const orgSlug = await OrganizationsStore.getLogin(deps.client, request.orgId, deps.actor);
+
   const projectCtx = {
     projectId: request.projectId,
     orgId: request.orgId,
+    orgSlug,
     ...(request.stack === undefined ? {} : { stack: request.stack }),
     ...(request.name === undefined ? {} : { name: request.name }),
   };

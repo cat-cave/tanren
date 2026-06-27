@@ -5,6 +5,16 @@
 // the full lifecycle is unit-tested against a scripted fake with NO live Vercel
 // calls or credentials in CI.
 //
+// NAMESPACING (task #27): every project this provisioner creates is named
+// `<tanrenOrgSlug>-<projectName>` (see `deployAppName` in `deployProvisioner.ts`).
+// Vercel project names are scoped to a team, but we still namespace here so the
+// same single rule applies to BOTH supported deploy backends — and the rule is
+// load-bearing on Fly (its global namespace). A duplicate-name reject (409/422)
+// AFTER prefixing FAILS LOUD here — there is no automatic suffix-retry. The
+// Tanren org slug is required on `ProjectContext.orgSlug` (resolved by
+// `provisioningEngine` via `OrganizationsStore.getLogin` before this provisioner
+// is called).
+//
 // API surface used (Vercel REST):
 //   - GET  /v9/projects[?teamId=…]    → list the team's projects (discover)
 //   - POST /v9/projects[?teamId=…]    → create a project under the team (provision)
@@ -160,6 +170,19 @@ class VercelDeployApi implements DeployProviderApi {
       body: { name },
     });
     if (!response.ok) {
+      // 409 "project already exists" on an ALREADY-NAMESPACED name (task #27) means
+      // the same Tanren org tried to provision the same projectName twice — itself
+      // a derive-side idempotency/race bug. HALT LOUD (no silent suffix-retry) —
+      // see the mirror comment in `flyDeployProvisioner.createApp`.
+      if (response.status === 409 || response.status === 422) {
+        throw new Error(
+          `vercel create project '${name}' failed (${String(response.status)}): ${response.text}. ` +
+            `The deploy-app namespacing rule (task #27) already prefixed this name with the org slug, ` +
+            `so a duplicate-name reject here means a re-derive race within the SAME org under the SAME ` +
+            `project name (re-derive with a distinct project name) OR a stale Vercel project the discover ` +
+            `step missed. NOT a fallback: there is no automatic suffix-retry.`,
+        );
+      }
       throw new Error(`vercel create project failed: ${response.status} ${response.text}`);
     }
     const project = response.json as VercelProject | undefined;

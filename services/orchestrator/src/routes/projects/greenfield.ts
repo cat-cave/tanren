@@ -31,7 +31,7 @@ import {
   type GreenfieldRepositoryCreateDeps,
 } from "./greenfieldRepoCreate.js";
 import type { GitHubHttpClient } from "../../engine/providers/github.js";
-import { OrgIntegrationsStore } from "../../engine/repositories/orgIntegrations.js";
+import { OrganizationsStore, OrgIntegrationsStore } from "../../engine/repositories/index.js";
 import {
   productionProvisionerDeps,
   type NotLinkedResult,
@@ -380,9 +380,15 @@ export async function prepareGreenfieldDeploy(input: {
   if (grant === undefined) return deployNotLinkedOutcome(input.orgId, providerKind);
 
   const provisioner = buildIntegrationProvisioner(providerKind, productionProvisionerDeps(input.secrets));
+  // task #27: every Tanren-created deploy app is namespaced `<orgSlug>-<projectName>`
+  // so a bare `linkly` cannot collide on Fly's GLOBAL app-name namespace. Resolve
+  // the Tanren org slug (`organizations.login`) up front and thread it through the
+  // project context — the provisioner's `deployAppName` reads it.
+  const orgSlug = await OrganizationsStore.getLogin(input.pool, input.orgId, { kind: "operator", id: input.actorId });
   const projectCtx = {
     projectId: `pending:${input.projectKey}`,
     orgId: input.orgId,
+    orgSlug,
     ...(input.deploy.stack === undefined ? {} : { stack: input.deploy.stack }),
     name: input.deploy.name ?? input.projectName,
   };

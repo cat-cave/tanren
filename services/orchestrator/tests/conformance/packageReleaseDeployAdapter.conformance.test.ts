@@ -30,7 +30,12 @@ const grant: OrgGrant = {
   metadata: { packageRegistry: "npm", packageName: "@acme/web" },
 };
 
-const ctx = (name: string): ProjectContext => ({ projectId: `proj_${name}`, orgId: "org_1", name });
+const ctx = (name: string): ProjectContext => ({
+  projectId: `proj_${name}`,
+  orgId: "org_1",
+  orgSlug: "tanren",
+  name,
+});
 
 function adapter(registry = scriptedPackageRegistry()) {
   const instance = new PackageReleaseDeployAdapter({

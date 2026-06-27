@@ -20,7 +20,7 @@ const grant: OrgGrant = {
   metadata: { workspaceId: "T123" },
 };
 
-const ctx = (projectId: string): ProjectContext => ({ projectId, orgId: "org_1", name: projectId });
+const ctx = (projectId: string): ProjectContext => ({ projectId, orgId: "org_1", orgSlug: "tanren", name: projectId });
 
 function provisionerOver(transport: ScriptedSlackTransport): SlackProvisioner {
   // eslint-disable-next-line @typescript-eslint/require-await
