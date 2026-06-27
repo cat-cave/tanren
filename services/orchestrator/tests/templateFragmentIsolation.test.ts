@@ -28,6 +28,10 @@
 //   d) every justfile target the fragment FILLED via `appendToJustfileTarget` is
 //      reflected in the assembled `justfile` (each fill line appears in the body).
 //   e) every `addEnvVar` call lands as a `KEY=VALUE` line in `.env.example`.
+//   f) the composed `.tanren/ci.yml` PARSES against the `CiConfigV1` zod schema —
+//      added for task #80 (apex v62 halt) so a fragment that mutates ci.yml into
+//      an unparseable shape fails the isolation test instead of escaping into the
+//      live writer-checker loop. The same parse runs in the matrix-coverage harness.
 //
 // THE "SMALLEST VALID CONFIG" — for a fragment of `kind: K`, the config is built so
 // the composer runs `base` + the runtime appropriate to the fragment's runtime-side
@@ -59,6 +63,7 @@ import {
   type TemplateConfig,
   VirtualFileSystem,
 } from "../src/engine/templates/index.js";
+import { assertComposedCiYmlParsesAsCiConfigV1 } from "./helpers/templateCiYmlSchemaCheck.js";
 
 const RUBY_RUNTIME_ID = "runtime-ruby-bundler";
 
@@ -388,6 +393,10 @@ describe("template-fragment isolation — every registered fragment composes aga
 
       // (e) every env var the fragment declared lands in `.env.example`.
       assertEnvVarsLanded(fragment, vfs, declarations);
+
+      // (f) the composed .tanren/ci.yml parses against the CiConfigV1 schema —
+      // closes the harness gap that let task #80's malformed base ci.yml ship.
+      assertComposedCiYmlParsesAsCiConfigV1(fragment.id, vfs);
 
       // Pin the test as assertion-bearing (vitest's no-standalone-expectations
       // rule + the suite's `--passWithNoTests`-style guard). Every meaningful
