@@ -43,7 +43,7 @@ import {
   WebhookEventStore,
   OrgIntegrationsStore,
   AppEnvironmentStore,
-  TemplateStore,
+  FragmentsStore,
   EntityClaimStore,
 } from "../repositories/index.js";
 
@@ -99,8 +99,10 @@ export interface Repositories {
   readonly orgIntegrations: typeof OrgIntegrationsStore;
   /** Plane B: the built product's `project_app_env` store (upsert/list/get/delete). */
   readonly appEnvironment: typeof AppEnvironmentStore;
-  /** Tanren-native templating (wave 1): the `templates` registry (CRUD + capability query + status). */
-  readonly templates: typeof TemplateStore;
+  /** Tanren-native templating (docs/roadmap/templating-system.md): the org-scoped
+   * fragment store the per-fragment authoring DAG persists into; the unified
+   * library loader combines bundled core + these. */
+  readonly fragments: typeof FragmentsStore;
   /** §3.3 entity-anchored issue CLAIMS: the Tanren-native defect ledger (`entity_claims`). */
   readonly entityClaims: typeof EntityClaimStore;
 }
@@ -136,7 +138,7 @@ export const pgRepositories: Repositories = {
   forgeTools: ForgeToolsStore,
   orgIntegrations: OrgIntegrationsStore,
   appEnvironment: AppEnvironmentStore,
-  templates: TemplateStore,
+  fragments: FragmentsStore,
   entityClaims: EntityClaimStore,
 } as const;
 

@@ -12,16 +12,10 @@ export { ProjectSpecStore, type ProjectSpecRow, type SpecPatch } from "./project
 // (Plane B).
 export { OrgIntegrationsStore, type OrgIntegration, type OrgIntegrationStatus } from "./orgIntegrations.js";
 export { AppEnvironmentStore, type AppEnvEntry, type AppEnvScope, type AppEnvSource } from "./appEnvironment.js";
-// Tanren-native templating (wave 1): the template REGISTRY store — CRUD +
-// capability query + status transitions, org-scoped with the cross-org official
-// tier (migration 0015).
-export {
-  TemplateStore,
-  type Template,
-  type TemplateStatus,
-  type RegisterTemplateInput,
-  type TemplateCapabilityQuery,
-} from "./templates.js";
+// Tanren-native templating (fragment doctrine, docs/roadmap/templating-system.md):
+// the org-scoped fragment store — bundled core fragments shadowed/extended by
+// org-authored fragments produced by the per-fragment authoring DAG (F2).
+export { FragmentsStore, type FragmentRow, type FragmentStatus, type RegisterFragmentInput } from "./fragments.js";
 // Native design subsystem (WS-D1, native-design-subsystem.md): the versioned,
 // org-scoped `DesignContract` entity store — the durable design artifact later
 // workstreams inject into the writer (WS-D2) + verify with a design oracle (WS-D4).

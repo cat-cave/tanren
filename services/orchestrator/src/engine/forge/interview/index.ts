@@ -40,43 +40,20 @@ export { wrapProviderInterviewAnswerer, type WrapProviderInterviewAnswererOption
 export { buildInterviewPrompt } from "./prompt.js";
 export { mergeCapture, resolveLifecycle, type LifecycleResolution } from "./capture.js";
 export {
-  buildScaffoldDescription,
-  buildScaffoldAcceptanceCriteria,
   buildSeedScaffoldDescription,
   buildSeedScaffoldAcceptanceCriteria,
   MissingLifecycleError,
 } from "./scaffoldAuthoring.js";
 
-// TEMPLATING WAVE 3 — the Forge SELECTION integration (templating-system.md §3): the
-// capability-query derivation + scorer + the seed/from-scratch decision.
+// Doctrine-collapse re-exports (docs/roadmap/templating-system.md): the new
+// fragment-based scaffold-selection + authoring surface.
 export {
-  deriveCapabilityQuery,
-  isProofFresh,
-  isTemplateEligible,
-  rankTemplates,
-  scoreTemplate,
-  selectTemplate,
-  TemplateRequiredError,
-  PROOF_FRESHNESS_MS,
-  SEEDABLE_STATUSES,
-  type ChannelPreference,
-  type ScoredTemplate,
-  type SelectedTemplate,
-  type SelectionKind,
-  type TemplateRegistryQuery,
-  type TemplateSelectionDecision,
-} from "./templateSelection.js";
-
-// PR-C — the PROJECT-vs-TEMPLATE-BUILD scaffold gate (the matrix-hit + selection
-// dispatcher). Surfaced so tests can call `selectSeedTemplate` directly without
-// reaching into the gate internals.
-export {
-  assertSeeded,
-  selectSeedTemplate,
-  TemplateRegistryQueryRequiredError,
-  type ScaffoldOrigin,
-  type SelectSeedInput,
-} from "./interviewTemplateGate.js";
+  FragmentAuthoringFailedError,
+  selectFragmentConfig,
+  UnresolvableLifecycleError,
+  type FragmentSpec,
+  type SelectFragmentConfigResult,
+} from "../../templates/fragments/index.js";
 
 export {
   InterviewCapture,

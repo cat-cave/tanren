@@ -130,8 +130,6 @@ export interface PlannerRunContext {
   policyVersion?: number;
   // GREENFIELD MARKER (ProjectConfigV1.greenfield): drives buildDefaultGate's in-loop deps-ensure MODE — greenfield ⇒ NON-FROZEN install; absent/false ⇒ FROZEN brownfield.
   greenfield?: boolean;
-  // TEMPLATE-BUILD MARKER (ProjectConfigV1.templateBuild): a project that AUTHORS a reusable template (not a product) — so the spec-quality gate judges its INTERNAL specs on the `technical` LEGIBILITY bar (legitimate domain vocab is correct, not jargon). Absent/false ⇒ product (`product` bar).
-  templateBuild?: boolean;
   // cost PR-C: CONFIGURED per-credential credit→USD rate (from project/org `creditRates`). Absent ⇒ a real drawdown is NULL-and-loud.
   creditUsdRate?: number;
   // DETERMINISTIC CONTRACT FILES (v27 fix): the `.tanren/ci.yml` + `justfile` workspace-prep materializes VERBATIM (write-iff-absent) from the captured lifecycle BEFORE the writer runs — so they are NEVER LLM-authored (the writer mangled the ci.yml shape on v27). Absent ⇒ no lifecycle (brownfield ships its own) ⇒ no-op.

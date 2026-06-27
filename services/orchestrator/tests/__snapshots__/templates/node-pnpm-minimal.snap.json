@@ -28,6 +28,7 @@
     "deploy-fly": "1.0.0",
     "deploy-none": "1.0.0",
     "frontend-react-router": "1.0.0",
+    "frontend-remix": "1.0.0",
     "runtime-node-pnpm": "1.0.0",
     "runtime-ruby-bundler": "1.0.0"
   }

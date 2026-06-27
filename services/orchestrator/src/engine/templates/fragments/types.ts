@@ -30,35 +30,29 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 
-// ---- Matrix point enums ----------------------------------------------------
+// ---- Matrix point labels ---------------------------------------------------
+//
+// Each field of `TemplateConfig` is an OPEN string naming the fragment to apply
+// for that phase slot (`runtime: "node-pnpm"` → fragment id `runtime-node-pnpm`).
+// Open, not closed, because org-authored fragments (F2) extend the library at
+// runtime: `selectFragmentConfig` reports any unresolvable id as missing-fragments,
+// and the composer's `library.require(id)` is the final fail-loud line.
 
-// Each field of `TemplateConfig` is a CLOSED zod enum: a matrix point is a tuple of
-// these values, and a typo at the call site is a parse error, not a silent miss.
-// Adding a new point is an enum addition + a new fragment under `library/` + a snapshot
-// update — the dogfood test FORCES the snapshot update PR (the review unit).
-
-export const RuntimeId = z.enum(["node-pnpm", "ruby-bundler"]);
+export const RuntimeId = z.string().min(1);
 export type RuntimeId = z.infer<typeof RuntimeId>;
-
-export const FrontendId = z.enum(["react-router"]);
+export const FrontendId = z.string().min(1);
 export type FrontendId = z.infer<typeof FrontendId>;
-
-export const BackendId = z.enum(["hono"]);
+export const BackendId = z.string().min(1);
 export type BackendId = z.infer<typeof BackendId>;
-
-export const DbId = z.enum(["postgres-prisma"]);
+export const DbId = z.string().min(1);
 export type DbId = z.infer<typeof DbId>;
-
-export const AuthId = z.enum(["better-auth"]);
+export const AuthId = z.string().min(1);
 export type AuthId = z.infer<typeof AuthId>;
-
-export const DeployId = z.enum(["fly", "vercel", "none"]);
+export const DeployId = z.string().min(1);
 export type DeployId = z.infer<typeof DeployId>;
-
-export const AddonId = z.enum(["biome", "docker"]);
+export const AddonId = z.string().min(1);
 export type AddonId = z.infer<typeof AddonId>;
-
-export const ExampleId = z.enum(["todo", "ai"]);
+export const ExampleId = z.string().min(1);
 export type ExampleId = z.infer<typeof ExampleId>;
 
 // ---- TemplateConfig --------------------------------------------------------

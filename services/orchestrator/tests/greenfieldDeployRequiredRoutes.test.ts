@@ -338,10 +338,12 @@ describe("greenfield/apex deploy dependency routes", () => {
     expect(githubHttp.createdRepositories).toEqual([]);
   });
 
-  it("HALTS LOUD (template_required 409) on a no-match when no just-in-time creation is possible — never a from-scratch project scaffold", async () => {
-    // The deleted bypass would have scaffolded the project from-scratch on an empty
-    // template registry. The doctrine instead HALTS: with the creation seam disabled
-    // and an empty fixture registry, the no-match is a fail-closed needs_attention.
+  it("HALTS LOUD (fragment_authoring_failed 409) on a missing fragment when no authoring seam is wired — never a from-scratch scaffold", async () => {
+    // Doctrine collapse (docs/roadmap/templating-system.md): when
+    // `selectFragmentConfig` returns a missing-fragments decision and there is
+    // NO `runFragmentAuthoring` seam wired, the derive halts loud with
+    // `fragment_authoring_failed`. There is no silent fall-through to
+    // from-scratch authoring.
     const pool = new RoutesPool();
     seedGithubAppOrg(pool);
     pool.seedMembership("org_acme", "user_alice", "admin");
@@ -350,24 +352,29 @@ describe("greenfield/apex deploy dependency routes", () => {
       async prepareDeploy() {
         return preparedDeploy();
       },
-      // Disable the just-in-time creation seam → a no-match cannot create a template.
-      createTemplateForNoMatch: undefined,
+      // No runFragmentAuthoring seam wired → a missing-fragments decision halts loud.
     });
 
     const res = await app.request("/orgs/org_acme/onboarding/interview/derive", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        capture: apexCapture(),
+        // A stack the bundled library has no runtime for (the open-world
+        // tokenization derives `runtime-russian-fanfiction-tools` which has no
+        // bundled fragment).
+        capture: {
+          ...apexCapture(),
+          lifecycle: { ...apexCapture().lifecycle, stack: "russian-fanfiction-tools + fly" },
+        },
         owner: "cat-cave",
         deploy: { providerKind: "deploy.vercel" },
       }),
     });
 
     expect(res.status).toBe(409);
-    const body = (await res.json()) as { error: string; stack: string };
-    expect(body.error).toBe("template_required");
-    expect(body.stack).toBe("ts/pnpm");
+    const body = (await res.json()) as { error: string; failedIds: string[] };
+    expect(body.error).toBe("fragment_authoring_failed");
+    expect(body.failedIds.length).toBeGreaterThan(0);
     // No project / repo leaked through the fail-closed halt (it preceded creation).
     expect(pool.projects.size).toBe(0);
     expect(pool.specs.size).toBe(0);

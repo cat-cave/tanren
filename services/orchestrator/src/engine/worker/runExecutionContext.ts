@@ -270,12 +270,6 @@ export async function loadRunExecutionContext(
     // the frozen, lockfile-safe default so an existing committed lockfile is never
     // silently mutated. Legacy rows parse to `false` (brownfield) — main's behavior.
     greenfield: projectConfig.greenfield,
-    // TEMPLATE-BUILD MARKER from the resolved project config. A template-creation
-    // build's INTERNAL specs are technical (scaffold / gates / mutation / manifest),
-    // so the spec-quality gate judges their LEGIBILITY on the `technical` bar — never
-    // rejecting legitimate domain vocabulary as "not plain product language" (the
-    // category error that stranded the v38 template DAG). False = a normal product.
-    templateBuild: projectConfig.templateBuild,
     // cost PR-C: the CONFIGURED per-credential credit→USD rate (absent ⇒ no rate
     // configured for this credential's kind; a real drawdown then lands NULL-and-loud).
     ...(creditRate.usdPerCredit !== null && { creditUsdRate: creditRate.usdPerCredit }),
@@ -289,11 +283,12 @@ export async function loadRunExecutionContext(
     ...(projectConfig.lifecycle !== undefined && {
       contractFiles: materializeContractFiles(projectConfig.lifecycle),
     }),
-    // TEMPLATING WAVE 3 (templating-system.md §3): when a validated template was
-    // SELECTED at derive, its repo ref is persisted on the project config — thread it
-    // so the workspace-prep SEEDS the template's conforming files into the repo BEFORE
-    // the writer runs (the writer's "seed already committed" assertion then holds, and
-    // it specializes instead of authoring from scratch). Absent ⇒ from-scratch path.
+    // FRAGMENT-COMPOSED SEED (docs/roadmap/templating-system.md): every greenfield
+    // project DAG seeds from a composed template — its repo ref is persisted on the
+    // project config; thread it so workspace-prep SEEDS the template's conforming
+    // files into the repo BEFORE the writer runs. The writer's "seed already
+    // committed" assertion then holds; it specializes the seed instead of authoring
+    // from scratch.
     ...(projectConfig.templateRef !== undefined && {
       templateSeed: { repoRef: projectConfig.templateRef.repoRef },
     }),

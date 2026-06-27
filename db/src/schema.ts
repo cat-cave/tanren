@@ -493,7 +493,7 @@ export { inboxSources, candidates, webhookEvents } from "./schemaInbox.js";
 export { auditJobs } from "./schemaAudits.js";
 export { experiments, experimentCells, experimentTrials } from "./schemaBenchmark.js";
 export { orgIntegrations, projectAppEnv } from "./schemaIntegrations.js";
-export { templates } from "./schemaTemplates.js";
+export { fragments } from "./schemaFragments.js";
 export { entityClaims } from "./schemaClaims.js";
 export { environments } from "./schemaEnvironments.js";
 export { designContracts } from "./schemaDesign.js";

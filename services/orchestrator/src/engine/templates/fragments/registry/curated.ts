@@ -46,10 +46,10 @@ const TS_NODE_REACT_PRISMA_FLY: CuratedTemplate = {
 /**
  * The Ruby / Bundler + Fly.io entry. The runtime-ruby-bundler fragment ships the
  * RSpec + Cucumber + Stryker-shim structural surface base/ asserts; a first-class
- * Rails frontend fragment is FUTURE WORK (see KNOWN_FUTURE_WORK below) — the current
- * curated entry composes the proven ruby-bundler runtime + Fly deploy + no frontend
- * yet. The composer still produces a valid, base-invariant-passing template (a Ruby
- * library / API skeleton with the full Tanren contract surface).
+ * Rails frontend fragment is a future authoring run away — the current curated entry
+ * composes the proven ruby-bundler runtime + Fly deploy + no frontend yet. The
+ * composer still produces a valid, base-invariant-passing template (a Ruby library /
+ * API skeleton with the full Tanren contract surface).
  */
 const RUBY_BUNDLER_FLY: CuratedTemplate = {
   id: "ruby-bundler-fly",
@@ -64,6 +64,25 @@ const RUBY_BUNDLER_FLY: CuratedTemplate = {
 };
 
 /**
+ * The TypeScript / pnpm + Remix + Prisma + PostgreSQL + Fly.io entry — apex's most
+ * commonly captured "ts/pnpm + Remix + Postgres + Fly" lifecycle. Wires the
+ * frontend-remix fragment with the postgres-prisma DB fragment.
+ */
+const TS_NODE_REMIX_PRISMA_FLY: CuratedTemplate = {
+  id: "ts-node-pnpm-remix-prisma-postgres-fly",
+  stack: "ts/pnpm + Remix + Prisma + PostgreSQL on Fly.io",
+  config: {
+    slug: "ts-node-pnpm-remix-prisma-postgres-fly",
+    runtime: "node-pnpm",
+    frontend: "remix",
+    db: "postgres-prisma",
+    deploy: "fly",
+    addons: [],
+    examples: [],
+  },
+};
+
+/**
  * The curated matrix-hit catalog. Add entries above + register them here.
  *
  * Each entry MUST:
@@ -71,7 +90,11 @@ const RUBY_BUNDLER_FLY: CuratedTemplate = {
  *   - declare a `TemplateConfig` that parses through the zod schema (the strict shape);
  *   - canonicalize to a UNIQUE stack key (the registry loader throws on a collision).
  */
-export const CURATED_TEMPLATES: readonly CuratedTemplate[] = [TS_NODE_REACT_PRISMA_FLY, RUBY_BUNDLER_FLY];
+export const CURATED_TEMPLATES: readonly CuratedTemplate[] = [
+  TS_NODE_REACT_PRISMA_FLY,
+  TS_NODE_REMIX_PRISMA_FLY,
+  RUBY_BUNDLER_FLY,
+];
 
 // KNOWN FUTURE WORK — entries this PR does not yet ship, documented here so the next
 // PR-author has the canonical names + the gap they're filling. NOT exported as a

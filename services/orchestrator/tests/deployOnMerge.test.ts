@@ -1,5 +1,5 @@
 // Deploy-on-merge ("a deploy happened") coverage: env-before-trigger ordering; no-config +
-// no-intent no-op; a template-creation build is SKIPPED (`deploy.skipped` template_build); a
+// no-intent no-op; a
 // PRE-resolution failure records a DURABLE `deploy.skipped` BEFORE failing LOUD; idempotency +
 // a missing grant fails LOUD. Driven over a fake pool + the scripted transport (no Postgres).
 
@@ -22,7 +22,7 @@ const PRIOR_DEPLOYMENT_ID = "vercel_dep_prior";
 
 interface PoolState {
   merged: boolean;
-  /** The project config (carries the deploy target + the `templateBuild` skip marker). */
+  /** The project config (carries the deploy target). */
   config: Record<string, unknown>;
   grant?: { provider_kind: string; credential_ref: string; metadata: Record<string, unknown>; status?: string };
   /** The deploy-intent grant LIST (OrgIntegrationsStore.list); [] = no deploy intent. */
@@ -216,7 +216,7 @@ describe("DeployOnMergeWatcher (a deploy happened)", () => {
     expect(JSON.stringify(verified)).not.toContain("deploy_token");
     expect(vPayload["policyVersion"]).toBe(1);
     expect(vPayload["initiatingActor"]).toEqual({ kind: "service", id: "tanren-engine" });
-    // NEGATIVE CONTROL: a NORMAL product (no `templateBuild` marker) deploys on merge as before — the guard never skips it.
+    // NEGATIVE CONTROL: a normal product deploys on merge as before — no guard skips it.
     expect(events.appends.find((a) => a.eventType === "deploy.skipped")).toBeUndefined();
   });
 
@@ -411,31 +411,6 @@ describe("DeployOnMergeWatcher (a deploy happened)", () => {
     expect(transport.deploysTriggered()).toEqual([]);
     // The same durable pre-resolution record (config_incomplete) before the loud throw.
     expectSkipped(events, "config_incomplete", "no complete deploy target");
-  });
-
-  it("SKIPS a template-creation build (a template is not a deployed product): deploy.skipped, no deploy", async () => {
-    // A TEMPLATE-BUILD project legitimately carries a COMPLETE deploy target + a linked grant (so
-    // PRODUCTS built FROM it deploy later), but the build itself must NEVER deploy: the watcher reads
-    // the REAL `templateBuild` marker, short-circuits BEFORE resolving a target, records `deploy.skipped`.
-    const transport = scriptedDeployTransport("vercel", []);
-    const events = new RecordingEventStore();
-    await run(
-      {
-        merged: true,
-        config: { ...VERCEL_TARGET, templateBuild: true },
-        grant: VERCEL_GRANT,
-        linkedGrants: [{ provider_kind: "deploy.vercel" }],
-      },
-      transport,
-      events,
-    );
-    // NO product deploy fired, and NO deploy.failed (this is a legitimate skip).
-    expect(transport.deploysTriggered()).toEqual([]);
-    expect(events.appends.find((a) => a.eventType === "deploy.triggered")).toBeUndefined();
-    expect(events.appends.find((a) => a.eventType === "deploy.failed")).toBeUndefined();
-    expect(events.appends.find((a) => a.eventType === "deploy.verified")).toBeUndefined();
-    // The OBSERVABLE skip: a DURABLE org-scoped deploy.skipped, reason template_build.
-    expectSkipped(events, "template_build", "template-creation build");
   });
 
   it("is a no-op when the run has not merged", async () => {

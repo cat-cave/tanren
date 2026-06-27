@@ -22,19 +22,18 @@ import { createDoctorRoutes } from "./routes/doctor/index.js";
 import { mountReportRoutes, type MountReportRoutesDeps } from "./routes/experiments/mount.js";
 import { createForgeAskRoutes, createForgeProposalRoutes, createForgeRoutes } from "./routes/forge/mount.js";
 import { createInboxRoutes } from "./routes/inbox/index.js";
-import {
-  buildCreateForNoMatch,
-  buildCreateTemplateFlow,
-  buildLiveMaterializeCuratedTemplate,
-  createAuditRoutes,
-  createTemplateRoutes,
-} from "./routes/audits/index.js";
+import { createAuditRoutes } from "./routes/audits/index.js";
 import { createIssueWebhookRoutes } from "./routes/githubWebhooks/index.js";
 import { createInsightRoutes } from "./routes/insights/index.js";
 import { createIntegrationRoutes } from "./routes/integrations/index.js";
 import { createMilestoneRoutes } from "./routes/milestones/index.js";
 import { createNotificationRoutes } from "./routes/notifications/index.js";
-import { createOnboardingRoutes } from "./routes/onboarding/index.js";
+import {
+  buildLiveLoadFragmentLibrary,
+  buildLiveMaterializeTemplate,
+  buildLiveRunFragmentAuthoring,
+  createOnboardingRoutes,
+} from "./routes/onboarding/index.js";
 import {
   createAiProviderRoutes,
   type ConfigGateGithubFactory,
@@ -116,22 +115,6 @@ export function mountFeatureRoutes(app: Hono<ActorContextEnv>, deps: FeatureRout
     identitySecretRef: deps.identitySecretRef,
   };
   const forgeAnswerers = buildForgeRouteAnswererFactories(forgeInfra);
-  // Tanren-native templating (wave 4): the LIVE creation-flow deps, assembled ONCE
-  // and shared by BOTH the template-create route (operator trigger) AND the
-  // onboarding selection no-match → creation wiring — so creation behaves
-  // identically on either trigger. Reuses the run infra (allocator/ssh), the
-  // greenfield repo+deploy plumbing, the audit pass runner, and the Forge infra.
-  const createTemplateFlowDeps = {
-    pool: scopedPool,
-    secrets,
-    allocator: deps.allocator,
-    ssh: deps.ssh,
-    identitySecretRef: deps.identitySecretRef,
-    githubHttp,
-    githubAppMinter,
-    forgeInfra,
-    auditPassRunner: forgeAnswerers.auditPassRunnerFor({ githubHttp, githubAppMinter }),
-  };
   app.route("/orgs", createOrgRoutes({ pool: scopedPool, configGateGithub }));
   // Wave-2 operator API: the "Connect AI provider" + billing-mode settings surface.
   // Mounted on the org-scoping pool (reads/writes `organizations.config` under RLS)
@@ -231,15 +214,11 @@ export function mountFeatureRoutes(app: Hono<ActorContextEnv>, deps: FeatureRout
       designAgentFactory: forgeAnswerers.designAgent,
       githubHttp,
       githubAppMinter,
-      // Wave 4: selection no-match → CREATION. Onboarding's template selection
-      // creates + seeds a template when none matches (else from-scratch).
-      createTemplateForNoMatch: (ctx) => buildCreateForNoMatch(createTemplateFlowDeps, ctx),
-      // PR-C — matrix-hit MATERIALIZER. Onboarding's template selection consults the
-      // curated registry FIRST; a hit invokes this seam to compose the template from
-      // typed fragments + push the VFS to a fresh template repo. The agent
-      // template-build path (`createTemplateForNoMatch`) runs ONLY on a true miss.
-      materializeCuratedTemplate: (ctx) =>
-        buildLiveMaterializeCuratedTemplate(
+      // COMPOSE+MATERIALIZE seam (docs/roadmap/templating-system.md): every
+      // greenfield derive composes a fragment template + materializes it into a
+      // fresh seed repo.
+      materializeTemplate: (ctx) =>
+        buildLiveMaterializeTemplate(
           {
             pool: scopedPool,
             secrets,
@@ -248,6 +227,12 @@ export function mountFeatureRoutes(app: Hono<ActorContextEnv>, deps: FeatureRout
           },
           ctx,
         ),
+      // F2 — per-fragment authoring DAG (writer-validate convergence + persist
+      // into the org `fragments` table on success).
+      runFragmentAuthoring: (ctx) => buildLiveRunFragmentAuthoring({ pool: scopedPool }, ctx),
+      // F2 — unified library (bundled core + org-authored fragments). Shadowing:
+      // an org fragment with the same (kind, label) wins over the bundled.
+      loadFragmentLibrary: buildLiveLoadFragmentLibrary(scopedPool),
     }),
   );
   // candidate inbox — issue sources → Forge triage → discovery accept;
@@ -282,21 +267,6 @@ export function mountFeatureRoutes(app: Hono<ActorContextEnv>, deps: FeatureRout
   // templates + transition lifecycle status, org-scoped on the scoped pool (RLS
   // bounds each query to the org's own templates plus the cross-org official tier).
   //
-  // Tanren-native templating (wave 4): the LIVE creation meta-flow is WIRED in here
-  // (POST .../templates/create), so the create endpoint is mounted as a real
-  // capability — research (live model + web) → author → build (the real walker +
-  // run worker drive the derived template-build project to convergence) → validate
-  // (positive + NEGATIVE controls + auditor) → publish (fail-closed: only a proof
-  // that validates registers). Reuses the SAME run infra (allocator/ssh/walker),
-  // greenfield repo-creation + deploy provisioning, audit pass runner, and Forge
-  // answerer infra assembled above — no duplication.
-  app.route(
-    "/orgs",
-    createTemplateRoutes({
-      pool: scopedPool,
-      createTemplateFlow: buildCreateTemplateFlow(createTemplateFlowDeps),
-    }),
-  );
   // DORA delivery metrics + the benchmark experiment/cell report+CRUD surface.
   // The benchmark scheduler runs on the scoped pool; its live accept/await seams
   // carry their own infra (allocator/ssh/identity/notify) when the boot wired it.

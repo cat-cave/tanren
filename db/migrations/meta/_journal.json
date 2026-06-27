@@ -127,6 +127,13 @@
       "when": 1782281647506,
       "tag": "0017_events_run_terminal_unique",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1782530000000,
+      "tag": "0018_fragments_doctrine_collapse",
+      "breakpoints": true
     }
   ]
 }
