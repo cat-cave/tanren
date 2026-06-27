@@ -21,7 +21,7 @@ const grant = (extra: Record<string, unknown> = {}): OrgGrant => ({
   metadata: { manualExternalUrl: "https://acme-web.example.com", ...extra },
 });
 
-const ctx = (id: string): ProjectContext => ({ projectId: id, orgId: "org_1" });
+const ctx = (id: string): ProjectContext => ({ projectId: id, orgId: "org_1", orgSlug: "org-1" });
 
 function adapter(urlStatus = 200) {
   const probe = scriptedUrlProbe(urlStatus);

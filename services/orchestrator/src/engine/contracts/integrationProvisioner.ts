@@ -75,10 +75,21 @@ export interface OrgGrant {
  * The Tanren project a leaf resource is being provisioned/bound FOR, plus the
  * discovered stack/platform (so the provisioner can pick the right Sentry
  * platform, Fly region, etc.).
+ *
+ * `orgSlug` is REQUIRED — it carries the Tanren ORG's hostname-safe slug (the
+ * `organizations.login` column, resolved by `OrganizationsStore.getLogin`).
+ * Deploy provisioners (Fly + Vercel) namespace every created app as
+ * `<orgSlug>-<projectName>` so a project named `linkly` cannot collide on
+ * Fly's GLOBAL app-name namespace. The field is mandatory at the type level
+ * (the `provisioningEngine.ts` call site resolves it before constructing the
+ * context) so a fresh provisioner call cannot accidentally skip the
+ * namespacing — no silent un-prefixed fallback.
  */
 export interface ProjectContext {
   projectId: string;
   orgId: string;
+  /** The Tanren org's hostname-safe slug (`organizations.login`). REQUIRED — see above. */
+  orgSlug: string;
   /** The discovered stack/platform (e.g. "node", "next", "python"), when known. */
   stack?: string;
   /** A human label for the project (used to name the created leaf resource). */

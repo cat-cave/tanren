@@ -34,6 +34,7 @@ const grant = (): OrgGrant => ({
 const projectCtx = (projectId: string): ProjectContext => ({
   projectId,
   orgId: "org_conf",
+  orgSlug: "acme",
   stack: "node",
   name: projectId,
 });

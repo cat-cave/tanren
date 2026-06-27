@@ -5,6 +5,18 @@
 // lifecycle is unit-tested against a scripted fake with NO live Fly calls or
 // credentials in CI.
 //
+// NAMESPACING (task #27): every app this provisioner creates is named
+// `<tanrenOrgSlug>-<projectName>` (see `deployAppName` in `deployProvisioner.ts`).
+// Fly app names live in a GLOBAL namespace across all Fly customers, so a bare
+// `linkly` collides on common words → HTTP 422 "Name has already been taken",
+// halting onboarding loud. The prefix makes collisions within an org structurally
+// impossible, and reduces them to "two different orgs reusing the same name"
+// (both succeed — each under its own prefix). A 422 AFTER prefixing is a real
+// conflict (re-derive race within the same org) and FAILS LOUD here — there is
+// no automatic suffix-retry, no "try without prefix" fallback. The Tanren org
+// slug is required on `ProjectContext.orgSlug` (resolved by `provisioningEngine`
+// via `OrganizationsStore.getLogin` before this provisioner is called).
+//
 // API surface used (Fly Machines REST API):
 //   - GET  /v1/apps?org_slug=<org>      → list the org's apps (discover)
 //   - POST /v1/apps                     → create an app under the org (provision)
@@ -124,6 +136,21 @@ class FlyDeployApi implements DeployProviderApi {
       body: { app_name: name, org_slug: org },
     });
     if (!response.ok) {
+      // 422 "Name has already been taken" on an ALREADY-NAMESPACED name (task #27)
+      // means the same Tanren org tried to provision the same projectName twice —
+      // itself an idempotency/race bug on the derive side (the engine also
+      // list-then-create-keyed-on-name; see `DeployProvisioner.provision`). DO NOT
+      // silently suffix-retry: that hides the real conflict and lets two races each
+      // create a not-quite-the-same app. HALT LOUD instead — the action is to re-
+      // derive with a distinct project name OR fix the upstream race.
+      if (response.status === 422) {
+        throw new Error(
+          `fly create app '${name}' failed (422): ${response.text}. The deploy-app namespacing rule ` +
+            `(task #27) already prefixed this name with the org slug, so a 422 here means a re-derive ` +
+            `race within the SAME org under the SAME project name (re-derive with a distinct project name) ` +
+            `OR a stale Fly app the discover step missed. NOT a fallback: there is no automatic suffix-retry.`,
+        );
+      }
       throw new Error(`fly create app failed: ${response.status} ${response.text}`);
     }
     // Fly's create-app returns 201 with little/no body; the app is keyed by the

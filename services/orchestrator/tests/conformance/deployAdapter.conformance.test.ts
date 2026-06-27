@@ -44,7 +44,17 @@ const flyGrant: OrgGrant = {
   metadata: { orgSlug: "acme", image: "registry.fly.io/acme-web:deployment-1" },
 };
 
-const ctx = (name: string): ProjectContext => ({ projectId: `proj_${name}`, orgId: "org_1", stack: "node", name });
+// task #27: every Tanren-created deploy app is namespaced `<orgSlug>-<projectName>`.
+// These adapter tests are about the verify/deploy LIFECYCLE (not the naming), but
+// the provisioner now ALWAYS prefixes — so a `ctx("acme-web")` reaches the provider
+// as `tanren-acme-web` (and the resolved URLs use that prefixed name).
+const ctx = (name: string): ProjectContext => ({
+  projectId: `proj_${name}`,
+  orgId: "org_1",
+  orgSlug: "tanren",
+  stack: "node",
+  name,
+});
 
 // The Fly arm is NOT merge-reflecting and refuses to trigger unless the operator opts
 // into the static-image semantics. These conformance tests exercise the adapter wiring
@@ -65,7 +75,8 @@ describe("DirectApiDeployAdapter — delegation", () => {
     const { instance } = adapter(transport);
     const artifact = await instance.provisionOrBind(vercelGrant, ctx("acme-web"), { mode: "provision" });
     expect(artifact.deployRef?.provider).toBe("deploy.vercel");
-    expect(transport.appNames()).toEqual(["acme-web"]);
+    // task #27: every deploy app is namespaced with the tanren org slug.
+    expect(transport.appNames()).toEqual(["tanren-acme-web"]);
     expect(JSON.stringify(artifact)).not.toContain(TOKEN_VALUE);
   });
 
@@ -207,8 +218,9 @@ describe("DirectApiDeployAdapter — verify (proven deploy)", () => {
     const verification = await instance.verify(flyGrant, ref, deploymentId);
     expect(verification.ready).toBe(true);
     expect(verification.state).toBe("started");
-    expect(verification.url).toBe("https://acme-web.fly.dev");
-    expect(probe.probed).toEqual(["https://acme-web.fly.dev"]);
+    // task #27: the Fly URL uses the namespaced app name (`tanren-acme-web`).
+    expect(verification.url).toBe("https://tanren-acme-web.fly.dev");
+    expect(probe.probed).toEqual(["https://tanren-acme-web.fly.dev"]);
   });
 
   it("treats a 401 (deployment protection) as REACHABLE, not an unhealthy deploy", async () => {

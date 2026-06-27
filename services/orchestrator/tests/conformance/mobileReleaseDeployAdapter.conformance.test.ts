@@ -30,7 +30,12 @@ const grant: OrgGrant = {
   metadata: { mobilePlatform: "ios", mobileTrack: "testflight", mobileBundleId: "com.acme.web" },
 };
 
-const ctx = (name: string): ProjectContext => ({ projectId: `proj_${name}`, orgId: "org_1", name });
+const ctx = (name: string): ProjectContext => ({
+  projectId: `proj_${name}`,
+  orgId: "org_1",
+  orgSlug: "tanren",
+  name,
+});
 
 function adapter(distribution = scriptedMobileDistribution()) {
   const instance = new MobileReleaseDeployAdapter({

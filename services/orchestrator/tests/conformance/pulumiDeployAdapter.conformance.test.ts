@@ -28,7 +28,13 @@ const grant: OrgGrant = {
   metadata: { pulumiBackend: "https://api.pulumi.com", pulumiProject: "acme-infra" },
 };
 
-const ctx = (name: string): ProjectContext => ({ projectId: `proj_${name}`, orgId: "org_1", stack: "node", name });
+const ctx = (name: string): ProjectContext => ({
+  projectId: `proj_${name}`,
+  orgId: "org_1",
+  orgSlug: "tanren",
+  stack: "node",
+  name,
+});
 
 function adapter(runner = scriptedPulumiRunner(), urlStatus = 200) {
   const probe = scriptedUrlProbe(urlStatus);

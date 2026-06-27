@@ -170,3 +170,50 @@ Sentry's API supports the required pieces: create project under a team, create a
 project client key/DSN, list organization projects, and register service hooks.
 Those operations need project write/admin style scopes for provisioning, not
 just `event:read`/`project:read` intake scopes.
+
+## Deploy-app naming (task #27)
+
+Every Fly/Vercel app Tanren creates is named **`<orgSlug>-<projectName>`**.
+This is the **single intended way** Tanren creates deploy apps — not a
+fallback, not a try-then-retry, not an opt-in. Applies to both Fly + Vercel
+through the shared `deployAppName` helper
+(`services/orchestrator/src/engine/provisioners/deployProvisioner.ts`).
+
+**Why.** Fly app names live in a **global namespace across all Fly customers** —
+a bare project name like `linkly` collides on common words and returns HTTP 422
+`Validation failed: Name has already been taken`, halting onboarding. Prefixing
+with the Tanren org's hostname-safe slug (`organizations.login`) makes
+collisions within an org structurally impossible and reduces them to "two
+different orgs reusing the same name" (both succeed — each lands under its own
+prefix). The same rule applies to Vercel for consistency even though Vercel
+project names are team-scoped.
+
+**Rules.**
+
+- The deploy-app slug is **always** `<orgSlug>-<projectName>` (lowercase,
+  hyphens, digits, no leading/trailing hyphen, **≤ 30 chars** — Fly's app-name
+  cap is the lowest common denominator across providers).
+- If the joined length exceeds 30 chars, the **project-name component** is
+  truncated and a deterministic 6-char hash of the original full name is
+  appended (`<orgSlug>-<truncatedName>-<6charHash>`). The **org prefix is
+  load-bearing** (it's the namespacing) and is never truncated.
+- The full deploy slug is **persisted** on `projects.config.deployAppName` so
+  subsequent operations (status checks, deploys, deletions) reference it
+  correctly. The operator-facing project name in the UI is unchanged.
+- The `previewUrlPattern` (`https://<deploySlug>.fly.dev` or
+  `https://<deploySlug>-git-{branch}-<vercelTeamSlug>.vercel.app`) uses the
+  prefixed slug — what the dashboard surfaces.
+- A 422/409 from the provider **after** prefixing is a **real conflict** (two
+  derive runs racing within the same org under the same project name — itself
+  an upstream idempotency bug). The provisioner **halts loud** with an
+  actionable error; there is **no automatic suffix-retry / try-then-retry
+  fallback**.
+- An org slug too long to fit the cap (`>22 chars`) is a hard error at provision
+  time — the operator-facing fix is to rename the org to a shorter login. We
+  never silently drop the prefix.
+
+**Wiring.** The provisioning engine (`engine/integrations/provisioningEngine.ts`)
+resolves the Tanren org slug via `OrganizationsStore.getLogin` and threads it
+through `ProjectContext.orgSlug` before constructing any provisioner call. The
+field is `required` on the type, so a fresh provisioner call cannot accidentally
+skip the namespacing.
