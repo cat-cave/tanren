@@ -25,6 +25,7 @@ import type { CreatedRepository, CreateRepositoryInput } from "../../contracts/c
 import type { DesignAgent } from "../../design/designAgent.js";
 import { deriveProductGraph, type DeriveResult } from "./derive.js";
 import type { DeployPreflightCallback, GreenfieldDeployDependency, PrepareDeployCallback } from "./deployDependency.js";
+import type { DeleteRepositoryCallback, DestroyDeployAppCallback } from "./deriveCompensation.js";
 import type { FragmentAuthoring, FragmentLibrary, MaterializeTemplate } from "../../templates/fragments/index.js";
 import {
   DEFAULT_TOTAL_ROUNDS,
@@ -142,11 +143,21 @@ export interface DeriveFromCaptureInput {
   private?: boolean;
   description?: string;
   createRepository?: (input: CreateRepositoryInput) => Promise<CreatedRepository>;
+  // COMPENSATION (task #78 — derive atomic rollback). Threaded into
+  // `deriveProductGraph` so the derive registers a rollback for each just-created
+  // repo + walks them all back if a later step throws. Required in production
+  // whenever `createRepository`/`materializeTemplate` are wired.
+  deleteRepository?: DeleteRepositoryCallback;
   // GREENFIELD AUTONOMY: when `auto`/`simulated`, the derived project is created
   // already autonomous (`native_queue` + the matching review policy); absent or
   // `human` keeps the schema's safe defaults. Threaded into `deriveProductGraph`.
   autonomy?: "auto" | "simulated" | "human";
   deploy?: GreenfieldDeployDependency;
+  // COMPENSATION (task #78 — derive atomic rollback). Threaded into
+  // `deriveProductGraph` so the derive registers a rollback for the provisioned
+  // deploy app + destroys it if a later step throws. Required in production
+  // whenever `prepareDeploy` is wired.
+  destroyDeployApp?: DestroyDeployAppCallback;
   // The COMPOSE+MATERIALIZE seam (docs/roadmap/templating-system.md). Every
   // greenfield derive composes a fragment-based template from the captured
   // lifecycle and materializes it into a fresh seed repo via this seam.
@@ -177,8 +188,10 @@ export async function deriveFromCapture(
     ...(input.private === undefined ? {} : { private: input.private }),
     ...(input.description === undefined ? {} : { description: input.description }),
     ...(input.createRepository === undefined ? {} : { createRepository: input.createRepository }),
+    ...(input.deleteRepository === undefined ? {} : { deleteRepository: input.deleteRepository }),
     ...(input.autonomy === undefined ? {} : { autonomy: input.autonomy }),
     ...(input.deploy === undefined ? {} : { deploy: input.deploy }),
+    ...(input.destroyDeployApp === undefined ? {} : { destroyDeployApp: input.destroyDeployApp }),
     ...(input.materializeTemplate === undefined ? {} : { materializeTemplate: input.materializeTemplate }),
     ...(input.fragmentLibrary === undefined ? {} : { fragmentLibrary: input.fragmentLibrary }),
     ...(input.runFragmentAuthoring === undefined ? {} : { runFragmentAuthoring: input.runFragmentAuthoring }),

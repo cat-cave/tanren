@@ -1,4 +1,5 @@
-// GREENFIELD: the GitHub repository-CREATE flow (`POST /orgs/{owner}/repos`),
+// GREENFIELD: the GitHub repository-CREATE flow (`POST /orgs/{owner}/repos`)
+// + the DERIVE-ROLLBACK repository-DELETE flow (`DELETE /repos/{owner}/{name}`),
 // extracted so the GitHub repo-create surface stays under the per-file
 // line cap. It mirrors the shape of the other GitHub side-effect helpers
 // (`actionsSecretSeal.ts`): a single function over the injected `GitHubHttpClient`
@@ -76,4 +77,59 @@ export async function createGitHubRepository(
     throw new TypeError("GitHub repository create returned no full_name/html_url/default_branch");
   }
   return { fullName: body.full_name, repoUrl: body.html_url, defaultBranch: body.default_branch };
+}
+
+/**
+ * DELETE a repository on GitHub (`DELETE /repos/{owner}/{name}`) — the COMPENSATION
+ * primitive the derive transactional rollback uses (task #78). IDEMPOTENT — a 404
+ * is treated as a successful no-op (the rollback semantic is "ensure this is
+ * gone"); other failure statuses (403, 5xx) propagate LOUD so the caller can
+ * record + surface the rollback gap. The plaintext token travels only in the
+ * request auth header (never echoed into the thrown message). The App
+ * installation needs `administration: write` scope (the same scope that grants
+ * repo-create), so a 403 here means the credential cannot delete what it
+ * created — surfaced as a typed `RepositoryDeletionForbiddenError`.
+ *
+ * NEVER call from the regular run path. Repo deletion is irreversible — this
+ * primitive exists ONLY to compensate for a derive that partially created
+ * external resources and must walk them all back atomically.
+ */
+export async function deleteGitHubRepository(
+  http: GitHubHttpClient,
+  repo: { owner: string; name: string },
+  token: RepoCreateToken,
+): Promise<void> {
+  const response = await http.request({
+    method: "DELETE",
+    path: `/repos/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}`,
+    token: token.token,
+    refreshToken: token.refresh,
+  });
+  // 204 No Content ⇒ deleted; 404 ⇒ already gone (the rollback is satisfied).
+  if (response.status === 204 || response.status === 404) {
+    return;
+  }
+  if (response.status === 403) {
+    throw new RepositoryDeletionForbiddenError(repo.owner, repo.name);
+  }
+  throw new Error(`GitHub repository delete failed for ${repo.owner}/${repo.name}: HTTP ${response.status}`);
+}
+
+/**
+ * The credential lacks `administration: write` (the App installation was not
+ * granted repo-deletion). TYPED so the compensation walker can record + surface
+ * a rollback gap LOUD — never silently leaving an orphan in place. Mirrors
+ * `RepositoryCreationForbiddenError`.
+ */
+export class RepositoryDeletionForbiddenError extends Error {
+  constructor(
+    readonly owner: string,
+    readonly repoName: string,
+  ) {
+    super(
+      `GitHub repository delete forbidden for ${owner}/${repoName} — the credential lacks ` +
+        `administration:write (cannot delete the repo it created).`,
+    );
+    this.name = "RepositoryDeletionForbiddenError";
+  }
 }

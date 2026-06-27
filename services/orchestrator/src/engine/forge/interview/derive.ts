@@ -47,16 +47,10 @@ import {
 } from "../../contracts/codeHostTypes.js";
 import { githubHttpsRemote } from "../../providers/github.js";
 import { ProjectStore } from "../../repositories/projects.js";
-import { MilestoneCreateInput, MilestoneStore, PersonaCreateInput, PersonaStore } from "../../entities/index.js";
 import { provisionedGreenfieldProjectConfigProof } from "../../workflow/projectConfigWriteGuards.js";
-import { createProject, createSpec } from "../../workflow/projectSpec.js";
-import {
-  deriveInterfaceMilestones,
-  MissingDesignContractError,
-  persistDesignContract,
-  productVisionConfig,
-  resumeDerivedProject,
-} from "./deriveBehaviorSpec.js";
+import { createProject } from "../../workflow/projectSpec.js";
+import { MissingDesignContractError, productVisionConfig, resumeDerivedProject } from "./deriveBehaviorSpec.js";
+import { buildEntityGraph } from "./deriveEntityGraph.js";
 import {
   DeployNotLinkedError,
   isDeployNotLinked,
@@ -66,6 +60,13 @@ import {
   type GreenfieldDeployDependency,
   type PrepareDeployCallback,
 } from "./deployDependency.js";
+import {
+  DeriveRollbackError,
+  newDeriveCompensation,
+  type DeleteRepositoryCallback,
+  type DestroyDeployAppCallback,
+  type DeriveCompensation,
+} from "./deriveCompensation.js";
 import { MissingLifecycleError, scaffoldSpecsFor } from "./deriveScaffoldSpecs.js";
 import {
   FragmentAuthoringFailedError,
@@ -128,6 +129,25 @@ export interface DeriveInput {
   runFragmentAuthoring?: FragmentAuthoring;
   // WS-D3 (native-design-subsystem.md) — the DESIGN AGENT.
   designAgent?: DesignAgent;
+  /**
+   * COMPENSATION (task #78 — derive atomic rollback). The route layer wires this
+   * against `CodeHost.deleteRepo` so each repo created during the derive
+   * (the template seed repo + the project repo) can be undone if a LATER step in
+   * the derive throws. REQUIRED whenever `createRepository` and/or
+   * `materializeTemplate` are wired (i.e. the production path) — an absent
+   * `deleteRepository` while creates are wired is a wiring bug (the derive
+   * would create resources it cannot roll back). Tests that don't exercise
+   * external resource creation may omit it.
+   */
+  deleteRepository?: DeleteRepositoryCallback;
+  /**
+   * COMPENSATION (task #78 — derive atomic rollback). The route layer wires this
+   * against `DeployProvisioner.destroyApp` so the provisioned deploy app can be
+   * undone if a LATER step in the derive throws. REQUIRED whenever
+   * `prepareDeploy` is wired (i.e. the production path) — an absent
+   * `destroyDeployApp` while `prepareDeploy` is wired is a wiring bug.
+   */
+  destroyDeployApp?: DestroyDeployAppCallback;
 }
 
 // FINDING #1: the autonomous greenfield config. When the operator opts into
@@ -176,7 +196,12 @@ function templateRefConfig(seed: SeededTemplate): {
 type RepoResolution =
   | { kind: "resume"; result: DeriveResult }
   | { kind: "created"; repository?: CreatedRepository; repoUrl: string };
-async function resolveOrCreateGreenfieldRepo(pool: pg.Pool, input: DeriveInput, slug: string): Promise<RepoResolution> {
+async function resolveOrCreateGreenfieldRepo(
+  pool: pg.Pool,
+  input: DeriveInput,
+  slug: string,
+  compensation: DeriveCompensation,
+): Promise<RepoResolution> {
   if (input.repoUrl !== undefined) return { kind: "created", repoUrl: input.repoUrl };
   if (input.owner === undefined || input.createRepository === undefined) {
     throw new Error("greenfield repository owner and creator are required");
@@ -186,6 +211,7 @@ async function resolveOrCreateGreenfieldRepo(pool: pg.Pool, input: DeriveInput, 
   const existingProject = await ProjectStore.findByRepoUrl(pool, deterministicRepoUrl, { kind: "operator" });
   if (existingProject !== undefined) return { kind: "resume", result: resumeDerivedProject(existingProject) };
   let repository: CreatedRepository;
+  let weCreatedIt = false;
   try {
     repository = await input.createRepository({
       owner,
@@ -194,12 +220,28 @@ async function resolveOrCreateGreenfieldRepo(pool: pg.Pool, input: DeriveInput, 
       autoInit: true,
       ...(input.description === undefined ? {} : { description: input.description }),
     });
+    weCreatedIt = true;
   } catch (error) {
     if (error instanceof RepositoryAlreadyExistsError) {
+      // RE-ATTACH (existing idempotency, audit §3.10): the repo exists from a prior
+      // stranded attempt + no project is bound. We do NOT register a compensation —
+      // a downstream failure must not delete a repo we did not create on THIS run
+      // (Tanren would silently delete a repo the operator just re-ran into).
       repository = { fullName: `${owner}/${slug}`, repoUrl: deterministicRepoUrl, defaultBranch: "main" };
     } else {
       throw error;
     }
+  }
+  // TRANSACTIONAL ROLLBACK (task #78): register the compensation IMMEDIATELY after a
+  // SUCCESSFUL create (never on the re-attach path). The compensation idempotently
+  // deletes the repo if a later step in this derive throws.
+  if (weCreatedIt && input.deleteRepository !== undefined) {
+    const repoForCompensation = repository;
+    compensation.register({
+      kind: "github.repo",
+      label: repoForCompensation.fullName,
+      rollback: () => input.deleteRepository!({ owner, name: slug }),
+    });
   }
   return { kind: "created", repository, repoUrl: repository.repoUrl };
 }
@@ -244,6 +286,7 @@ async function composeAndMaterialize(
   lifecycle: CaptureLifecycle,
   config: TemplateConfig,
   library: FragmentLibrary,
+  compensation: DeriveCompensation,
 ): Promise<SeededTemplate> {
   if (input.materializeTemplate === undefined) {
     throw new Error(
@@ -254,7 +297,26 @@ async function composeAndMaterialize(
   if (input.owner === undefined) {
     throw new Error("greenfield derive requires `owner` to materialize the seed repo");
   }
-  return input.materializeTemplate({ config, lifecycle, owner: input.owner, library });
+  const seed = await input.materializeTemplate({ config, lifecycle, owner: input.owner, library });
+  // TRANSACTIONAL ROLLBACK (task #78): register a compensation to delete the
+  // freshly-materialized seed repo if a later step in this derive throws. The
+  // `repoRef` is the GitHub `<owner>/<name>` slug `materializeTemplate` minted.
+  // The materializer ALWAYS creates a fresh repo (no resume/re-attach path), so
+  // the compensation always fires on a partial-failure rollback. Absent
+  // `deleteRepository` callback ⇒ skip registration (test-only path; production
+  // wires it via the onboarding route).
+  if (input.deleteRepository !== undefined) {
+    const [seedOwner, seedName] = seed.repoRef.split("/", 2);
+    if (seedOwner !== undefined && seedName !== undefined && seedOwner !== "" && seedName !== "") {
+      const deleteRepository = input.deleteRepository;
+      compensation.register({
+        kind: "github.repo",
+        label: seed.repoRef,
+        rollback: () => deleteRepository({ owner: seedOwner, name: seedName }),
+      });
+    }
+  }
+  return seed;
 }
 
 export type {
@@ -280,147 +342,92 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
     if (notLinked !== undefined) throw new DeployNotLinkedError(notLinked);
   }
 
-  const { config, library } = await resolveFragmentConfig(input.orgId, input, capture.lifecycle);
+  // TASK #78 — TRANSACTIONAL ROLLBACK. Build a compensation stack covering every
+  // external resource derive creates (the materialized seed repo, the project
+  // repo, the deploy app). If ANY step from here to a durable project row throws,
+  // the stack walks in LIFO order + every resource is deleted before the original
+  // error re-raises — so the operator's next retry never collides on an orphan.
+  // The compensation is INTERNAL to this derive call (a recursive derive would
+  // build its own atomic unit). The compensation does NOT cover entity-graph
+  // creates after `createProject` succeeds: the project row is then the durable
+  // anchor + the existing `resumeDerivedProject` returns it idempotently.
+  const compensation = newDeriveCompensation();
+  try {
+    const { config, library } = await resolveFragmentConfig(input.orgId, input, capture.lifecycle);
 
-  const seed = await composeAndMaterialize(input, capture.lifecycle, config, library);
+    const seed = await composeAndMaterialize(input, capture.lifecycle, config, library, compensation);
 
-  const scaffoldSpecs = scaffoldSpecsFor(capture.lifecycle, seed);
+    const scaffoldSpecs = scaffoldSpecsFor(capture.lifecycle, seed);
 
-  const autonomousOptIn = input.autonomy === "auto" || input.autonomy === "simulated";
-  const baseConfig = autonomousOptIn
-    ? autonomousConfig(input.autonomy as "auto" | "simulated")
-    : { version: 1, greenfield: true };
-  if (deploy === undefined || input.prepareDeploy === undefined) throw missingDeployProvisionerError();
+    const autonomousOptIn = input.autonomy === "auto" || input.autonomy === "simulated";
+    const baseConfig = autonomousOptIn
+      ? autonomousConfig(input.autonomy as "auto" | "simulated")
+      : { version: 1, greenfield: true };
+    if (deploy === undefined || input.prepareDeploy === undefined) throw missingDeployProvisionerError();
 
-  const repoResolution = await resolveOrCreateGreenfieldRepo(pool, input, slug);
-  if (repoResolution.kind === "resume") return repoResolution.result;
-  const { repository, repoUrl } = repoResolution;
+    const repoResolution = await resolveOrCreateGreenfieldRepo(pool, input, slug, compensation);
+    if (repoResolution.kind === "resume") return repoResolution.result;
+    const { repository, repoUrl } = repoResolution;
 
-  const preparedDeploy = await input.prepareDeploy({
-    orgId: input.orgId,
-    capability: "deploy",
-    providerKind: deploy.providerKind,
-    mode: deploy.mode,
-    projectKey: slug,
-    projectName: slug,
-    ...(deploy.chosenResourceId === undefined ? {} : { chosenResourceId: deploy.chosenResourceId }),
-    ...(deploy.stack === undefined ? {} : { stack: deploy.stack }),
-    name: deploy.name ?? slug,
-  });
-  if (isDeployNotLinked(preparedDeploy)) {
-    throw new DeployNotLinkedError(preparedDeploy);
-  }
-  const persistedConfig = {
-    ...baseConfig,
-    ...productVisionConfig(capture),
-    lifecycle: capture.lifecycle,
-    ...templateRefConfig(seed),
-    ...preparedDeploy.projectConfig,
-  };
-  const project = await createProject(
-    pool,
-    {
-      name: slug,
-      repoUrl,
-      config: persistedConfig,
-      ...(repository === undefined ? {} : { defaultBranch: repository.defaultBranch }),
-    },
-    { ...input.actor, orgId: input.orgId },
-    { configWriteProof: provisionedGreenfieldProjectConfigProof },
-  );
-  const projectId = project.projectId;
-  const actor: ActorContext = { ...input.actor, orgId: input.orgId, projectId };
-
-  // 1 · personas (project-scoped).
-  const personaIdByName = new Map<string, string>();
-  for (const persona of capture.personas) {
-    const row = await PersonaStore.create(
-      pool,
-      PersonaCreateInput.parse({
-        scope: "project",
-        orgId: input.orgId,
-        projectId,
-        name: persona.name,
-        description: persona.description,
-        ...(persona.surface.trim() !== "" && { metadata: { surface: persona.surface } }),
-      }),
-      actor,
-    );
-    personaIdByName.set(persona.name.toLowerCase(), row.id);
-  }
-
-  // 2 · foundation milestone + scaffold specs.
-  const milestoneIds: string[] = [];
-  const scaffold = await MilestoneStore.create(
-    pool,
-    MilestoneCreateInput.parse({
-      projectId,
-      label: "M1",
-      name: "scaffold",
-      orderIndex: 0,
-      status: "planned",
-    }),
-    actor,
-  );
-  milestoneIds.push(scaffold.id);
-
-  const specIds: string[] = [];
-  const scaffoldSpecIds: string[] = [];
-  let previousScaffoldSpecId: string | undefined;
-  for (const def of scaffoldSpecs) {
-    const dependsOn =
-      def.dependsOnPrev === true && previousScaffoldSpecId !== undefined ? [previousScaffoldSpecId] : [];
-    const spec = await createSpec(
+    const preparedDeploy = await input.prepareDeploy({
+      orgId: input.orgId,
+      capability: "deploy",
+      providerKind: deploy.providerKind,
+      mode: deploy.mode,
+      projectKey: slug,
+      projectName: slug,
+      ...(deploy.chosenResourceId === undefined ? {} : { chosenResourceId: deploy.chosenResourceId }),
+      ...(deploy.stack === undefined ? {} : { stack: deploy.stack }),
+      name: deploy.name ?? slug,
+    });
+    if (isDeployNotLinked(preparedDeploy)) {
+      throw new DeployNotLinkedError(preparedDeploy);
+    }
+    // TRANSACTIONAL ROLLBACK (task #78): register the deploy app compensation
+    // IMMEDIATELY after a successful provision. The `deployAppId` lives on the
+    // project-config keyset the prepareDeploy callback populated; the provider
+    // kind is the same `deploy` resolved above. Absent `destroyDeployApp` ⇒
+    // skip registration (test-only path; production wires it via the route).
+    const appId = preparedDeploy.projectConfig["deployAppId"];
+    if (input.destroyDeployApp !== undefined && typeof appId === "string" && appId !== "") {
+      const destroyDeployApp = input.destroyDeployApp;
+      const providerKind = deploy.providerKind;
+      compensation.register({
+        kind: "deploy.app",
+        label: `${providerKind}:${appId}`,
+        rollback: () => destroyDeployApp({ providerKind, appId }),
+      });
+    }
+    const persistedConfig = {
+      ...baseConfig,
+      ...productVisionConfig(capture),
+      lifecycle: capture.lifecycle,
+      ...templateRefConfig(seed),
+      ...preparedDeploy.projectConfig,
+    };
+    const project = await createProject(
       pool,
       {
-        projectId,
-        title: def.title,
-        description: def.description,
-        acceptanceCriteria: def.acceptanceCriteria ?? [
-          `given the repo, when ${def.title} lands, then the pipeline is green`,
-        ],
-        ...(dependsOn.length > 0 ? { dependsOn } : {}),
+        name: slug,
+        repoUrl,
+        config: persistedConfig,
+        ...(repository === undefined ? {} : { defaultBranch: repository.defaultBranch }),
       },
-      actor,
+      { ...input.actor, orgId: input.orgId },
+      { configWriteProof: provisionedGreenfieldProjectConfigProof },
     );
-    await MilestoneStore.setSpecMilestone(pool, { specId: spec.specId, milestoneId: scaffold.id }, actor);
-    scaffoldSpecIds.push(spec.specId);
-    specIds.push(spec.specId);
-    previousScaffoldSpecId = spec.specId;
+    const projectId = project.projectId;
+    const actor: ActorContext = { ...input.actor, orgId: input.orgId, projectId };
+    return await buildEntityGraph(pool, input, capture, slug, seed, repository, projectId, actor, scaffoldSpecs);
+  } catch (error) {
+    // TRANSACTIONAL ROLLBACK (task #78): a failure ANYWHERE in the external-resource
+    // window walks every registered compensation in LIFO order. If a compensation
+    // ALSO fails, the rollback gap rides on a `DeriveRollbackError` so the operator
+    // sees both the original failure + which resources may be orphaned. The original
+    // error is preserved verbatim when every compensation succeeded.
+    if (compensation.pendingCount() === 0) throw error;
+    const failures = await compensation.rollback();
+    if (failures.length === 0) throw error;
+    throw new DeriveRollbackError(error, failures);
   }
-
-  // 3 · interface milestones.
-  const ifaceResult = await deriveInterfaceMilestones(pool, {
-    projectId,
-    orgId: input.orgId,
-    capture,
-    scaffoldSpecIds,
-    personaIdByName,
-    actor,
-  });
-  specIds.push(...ifaceResult.specIds);
-  milestoneIds.push(...ifaceResult.milestoneIds);
-  const behaviorIds = ifaceResult.behaviorIds;
-
-  // 4 · design contract.
-  const designContractId = await persistDesignContract(pool, {
-    orgId: input.orgId,
-    projectId,
-    capture: capture.designContract,
-    personaIdByName,
-    behaviorIdByKey: ifaceResult.behaviorIdByKey,
-    ...(input.designAgent === undefined ? {} : { designAgent: input.designAgent, actor }),
-  });
-
-  return {
-    projectId,
-    projectName: slug,
-    ...(repository === undefined ? {} : { repository }),
-    specIds,
-    personaIds: [...personaIdByName.values()],
-    behaviorIds,
-    milestoneIds,
-    designContractId,
-    templateSeed: seed,
-  };
 }

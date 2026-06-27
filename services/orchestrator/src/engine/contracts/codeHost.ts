@@ -101,6 +101,19 @@ export interface CodeHost {
   /** Create a brand-new repository (greenfield) on the host. */
   createRepo(input: CreateHostRepoInput): Promise<CreatedHostRepo>;
 
+  /**
+   * DELETE a repository on the host (task #78 — derive atomic rollback). The
+   * COMPENSATION primitive every host MUST expose: the greenfield derive registers
+   * a rollback for each newly-created repo so a partial-create failure later in the
+   * derive walks back every external resource it produced. IDEMPOTENT — a repo
+   * that no longer exists (404) is a successful no-op (the rollback semantic is
+   * "ensure this is gone", not "delete an existing one"); other failures (403,
+   * 5xx) propagate LOUD. A future GitLab/Bitbucket impl maps it from its own delete
+   * endpoint. NEVER called from the regular run path — repo deletion is irreversible
+   * and is ONLY the derive's rollback compensation.
+   */
+  deleteRepo(repo: CodeHostRepoRef): Promise<void>;
+
   /** Read the repo's default branch name (e.g. `main`). */
   readDefaultBranch(repo: CodeHostRepoRef): Promise<string>;
 
