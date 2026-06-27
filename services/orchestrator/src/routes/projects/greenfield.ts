@@ -105,21 +105,39 @@ export interface GreenfieldCreateDeps {
 export { createGreenfieldRepository, GithubCredentialMissingError };
 export type { GreenfieldRepositoryCreateDeps };
 
-export function greenfieldRepositoryErrorResponse(c: Context<ActorContextEnv>, error: unknown): Response | undefined {
+export interface OrphanedResource {
+  kind: string;
+  resource: string;
+  reason: string;
+}
+
+export function greenfieldRepositoryErrorResponse(
+  c: Context<ActorContextEnv>,
+  error: unknown,
+  // TASK #78 — derive transactional rollback gap. When the original failure was
+  // wrapped in a `DeriveRollbackError`, the route's normalize step lifts the
+  // cause + the compensation-failures list, and threads the list through here so
+  // every mapped error body carries the `orphanedResources` rider — the operator
+  // sees exactly which resources the rollback could not undo. Absent ⇒ no
+  // rollback walked (the original error re-raised verbatim); body unchanged.
+  orphans?: OrphanedResource[],
+): Response | undefined {
+  const withOrphans = <T extends Record<string, unknown>>(body: T): T & { orphanedResources?: OrphanedResource[] } =>
+    orphans === undefined ? body : { ...body, orphanedResources: orphans };
   if (error instanceof GithubCredentialMissingError) {
-    return c.json({ error: "github_credential_missing" }, 400);
+    return c.json(withOrphans({ error: "github_credential_missing" }), 400);
   }
   if (error instanceof RepositoryAlreadyExistsError) {
-    return c.json({ error: "repository_already_exists", owner: error.owner, name: error.repoName }, 409);
+    return c.json(withOrphans({ error: "repository_already_exists", owner: error.owner, name: error.repoName }), 409);
   }
   if (error instanceof RepositoryCreationForbiddenError) {
     return c.json(
-      {
+      withOrphans({
         error: "repository_creation_forbidden",
         owner: error.owner,
         message: error.message,
         requiredPermission: "administration:write",
-      },
+      }),
       403,
     );
   }

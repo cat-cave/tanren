@@ -134,6 +134,15 @@ class StatefulGitHubHttp implements GitHubHttpClient {
       return { status: 201, body: { ref, object: { sha } } };
     }
 
+    // deleteRepo (task #78 derive-rollback compensation): DELETE /repos/:o/:r — 204
+    // on success; 404 ⇒ already-gone (idempotent no-op handled by the impl).
+    if (input.method === "DELETE" && suffix === "") {
+      if (!this.repos.delete(`${owner}/${name}`)) {
+        return { status: 404, body: { message: "Not Found" } };
+      }
+      return { status: 204, body: null };
+    }
+
     // pushRef force-update OR landAuthorizedRef swap: PATCH /git/refs/heads/:branch
     const updateMatch = /^\/git\/refs\/heads\/(.+)$/u.exec(suffix);
     if (input.method === "PATCH" && updateMatch !== null) {

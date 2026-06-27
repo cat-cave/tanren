@@ -219,6 +219,22 @@ class FlyDeployApi implements DeployProviderApi {
     return { deploymentId: body.id, url: previewUrlPattern(app.name), state: body.state ?? "started" };
   }
 
+  async destroyApp(_grant: OrgGrant, token: string, app: DeployApp): Promise<void> {
+    // DELETE /v1/apps/{name} — Fly's app-destroy. IDEMPOTENT per the task #78
+    // compensation contract: 404 ⇒ the app is already gone (success). Other
+    // failures propagate LOUD so the compensation walker records the rollback
+    // gap. Fly keys an app by its globally-unique NAME in the path.
+    const response = await this.transport.request({
+      method: "DELETE",
+      url: `${FLY_API_BASE}/v1/apps/${encodeURIComponent(app.name)}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    if (response.ok || response.status === 404) {
+      return;
+    }
+    throw new Error(`fly destroy app '${app.name}' failed: ${response.status} ${response.text}`);
+  }
+
   async getDeployment(
     _grant: OrgGrant,
     token: string,

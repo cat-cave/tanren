@@ -158,6 +158,19 @@ export interface DeployProviderApi {
    * deployment whose status cannot be read is a hard error, never an assumed-ready.
    */
   getDeployment(grant: OrgGrant, token: string, app: DeployApp, deploymentId: string): Promise<DeploymentStatus>;
+  /**
+   * DESTROY a deploy app on the provider (task #78 — derive atomic rollback). The
+   * COMPENSATION primitive every deploy provider MUST expose: the greenfield derive
+   * registers a rollback for each newly-provisioned deploy app so a partial-create
+   * failure later in the derive walks back every external resource it produced.
+   * IDEMPOTENT — an app that no longer exists (404) is a successful no-op (the
+   * rollback semantic is "ensure this is gone"); other failures propagate LOUD so
+   * the compensation walker records + surfaces the rollback gap. Vercel:
+   * `DELETE /v9/projects/{id}`; Fly: `DELETE /v1/apps/{name}`. NEVER call from the
+   * regular run path — deploy-app destruction is irreversible and exists only to
+   * compensate a partially-failed derive.
+   */
+  destroyApp(grant: OrgGrant, token: string, app: DeployApp): Promise<void>;
 }
 
 /**
@@ -335,6 +348,27 @@ export abstract class DeployProvisioner implements IntegrationProvisioner {
       throw new Error(`${this.api.providerKind}: cannot deploy unknown app '${appId}' (not found under the org grant)`);
     }
     return this.api.triggerDeploy(grant, token, app, source);
+  }
+
+  /**
+   * DESTROY a deploy app (task #78 — derive atomic rollback). The high-level
+   * COMPENSATION primitive: resolves the org grant token, finds the app under the
+   * grant by its stable id, hands it to the provider's
+   * {@link DeployProviderApi.destroyApp}. IDEMPOTENT: an app that no longer exists
+   * (listApps reports nothing for the id) is a successful no-op (the rollback
+   * semantic is "ensure this is gone"). A provider DELETE failure propagates LOUD
+   * so the compensation walker records + surfaces the rollback gap. NEVER call
+   * from the regular run path — exists only to compensate a partially-failed derive.
+   */
+  async destroyApp(grant: OrgGrant, appId: string): Promise<void> {
+    const token = await this.resolveToken(grant);
+    const app = (await this.api.listApps(grant, token)).find((candidate) => candidate.appId === appId);
+    if (app === undefined) {
+      // The app is already gone — rollback satisfied. The compensation walker is
+      // free to call destroyApp a second time and have it be a clean no-op.
+      return;
+    }
+    await this.api.destroyApp(grant, token, app);
   }
 
   /**
