@@ -216,7 +216,10 @@ describe("costs dashboard (/costs)", () => {
 
   it("renders all three pricing-model source cards", async () => {
     const app = await build();
-    const html = await (await app.request("/costs")).text();
+    // ?range=all so the source cards render regardless of how long ago the
+    // fixture recordedAt is vs the wall clock (same pattern as the sibling
+    // assertions below).
+    const html = await (await app.request("/costs?range=all")).text();
     expect(html).toContain("per-token · llm api");
     expect(html).toContain("subscription window");
     expect(html).toContain("self-hosted · opportunity");
