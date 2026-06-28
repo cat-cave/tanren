@@ -149,8 +149,11 @@ export interface DeriveFromCaptureInput {
   // whenever `createRepository`/`materializeTemplate` are wired.
   deleteRepository?: DeleteRepositoryCallback;
   // GREENFIELD AUTONOMY: when `auto`/`simulated`, the derived project is created
-  // already autonomous (`native_queue` + the matching review policy); absent or
-  // `human` keeps the schema's safe defaults. Threaded into `deriveProductGraph`.
+  // already autonomous — atomically with `native_queue` + the matching review
+  // policy + `AUTONOMOUS_AUDIT_POSTURE` + `insightThresholds.ciInsightFlakyMinShas:1`
+  // (task #79: every knob autonomous operation requires lands at project insert, so
+  // the DagWalker auto-claim cannot observe a partially-configured project). Absent
+  // or `human` keeps the schema's safe defaults. Threaded into `deriveProductGraph`.
   autonomy?: "auto" | "simulated" | "human";
   deploy?: GreenfieldDeployDependency;
   // COMPENSATION (task #78 — derive atomic rollback). Threaded into
