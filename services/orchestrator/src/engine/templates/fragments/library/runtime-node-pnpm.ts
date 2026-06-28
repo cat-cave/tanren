@@ -166,7 +166,21 @@ pnpm = "11"
 
     // Justfile hook fills — the base owns the recipe shell; the runtime fills the
     // recipe BODY via this surface.
-    vfs.appendToJustfileTarget("bootstrap", ["pnpm install --frozen-lockfile"]);
+    //
+    // FRESH-CHECKOUT BOOTSTRAP (task #84 / apex v63): the FIRST `just bootstrap`
+    // runs against a freshly composed scaffold that ships a `package.json` but NO
+    // `pnpm-lock.yaml` — `--frozen-lockfile` would `ERR_PNPM_NO_LOCKFILE` and halt
+    // the per-iteration `tanren-bootstrap` tier before the writer can do anything.
+    // `--no-frozen-lockfile` makes the contract EXPLICIT: pnpm generates the
+    // lockfile on first run (it is then committed by the writer), updates it when
+    // package.json gains a dep, and on later runs with the committed lockfile pnpm
+    // still respects it — pnpm only regenerates when the package.json diverges.
+    // This matches the interview-prompt doctrine in forge/interview/prompt.ts which
+    // already mandates that the FIRST bootstrap must GENERATE the lockfile (never a
+    // frozen/locked install). A scaffold that does not bootstrap from a fresh
+    // checkout is a doctrine violation — see docs/roadmap/templating-system.md
+    // §"every composed scaffold bootstraps from a fresh checkout".
+    vfs.appendToJustfileTarget("bootstrap", ["pnpm install --no-frozen-lockfile"]);
     vfs.appendToJustfileTarget("tier-1", ["pnpm lint", "pnpm typecheck"]);
     vfs.appendToJustfileTarget("tier-2", [
       "mkdir -p reports",

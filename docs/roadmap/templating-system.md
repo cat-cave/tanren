@@ -98,6 +98,24 @@ order, applies each fragment, then runs the post-processors:
 `assertBaseInvariantsHeld`/`assertRuntimeAddedFunctionalTest`. The output is
 a `VirtualFileSystem` — composed deterministically, validated by construction.
 
+**Every composed scaffold bootstraps from a FRESH checkout** (task #84 — apex
+v63 ERR_PNPM_NO_LOCKFILE halt class). The per-iteration `tanren-bootstrap`
+gate runs `just bootstrap` against a freshly-pushed scaffold that ships a
+`package.json` / `Gemfile` / `Cargo.toml` but NO committed lockfile yet — the
+first bootstrap MUST GENERATE the lockfile. A runtime fragment whose
+`bootstrap` recipe uses a frozen/locked install (`pnpm install
+--frozen-lockfile`, `npm ci`, `yarn install --immutable`, `cargo build
+--locked`, `bundle install --frozen`, `uv sync --frozen`) without a matching
+committed lockfile fails the cold gate before the writer can do anything; the
+doctrine-compliant primitive is the lockfile-GENERATING install (`pnpm
+install --no-frozen-lockfile`, plain `bundle install`, `cargo fetch`). This
+is mechanically enforced by `tests/helpers/templateFreshBootstrapCheck.ts`,
+wired into both the per-fragment isolation harness and the matrix-coverage
+harness — a fragment that violates the rule is rejected at the test gate
+named per-fragment + per-combo. The same doctrine governs the interview-prompt
+guidance in `forge/interview/prompt.ts`: an LLM-captured lifecycle must steer
+the operator to a fresh-repo-safe bootstrap, never a frozen/locked install.
+
 **Selection** (`engine/templates/fragments/selectFragmentConfig.ts`):
 
 - a curated stack label (`registry/curated.ts` — e.g. _"ts/pnpm + Remix +

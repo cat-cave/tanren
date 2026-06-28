@@ -64,6 +64,7 @@ import {
   VirtualFileSystem,
 } from "../src/engine/templates/index.js";
 import { assertComposedCiYmlParsesAsCiConfigV1 } from "./helpers/templateCiYmlSchemaCheck.js";
+import { assertJustfileBootstrapsFromFreshCheckout } from "./helpers/templateFreshBootstrapCheck.js";
 
 const RUBY_RUNTIME_ID = "runtime-ruby-bundler";
 
@@ -397,6 +398,12 @@ describe("template-fragment isolation — every registered fragment composes aga
       // (f) the composed .tanren/ci.yml parses against the CiConfigV1 schema —
       // closes the harness gap that let task #80's malformed base ci.yml ship.
       assertComposedCiYmlParsesAsCiConfigV1(fragment.id, vfs);
+
+      // (g) the composed scaffold bootstraps from a FRESH checkout (task #84 —
+      // apex v63 ERR_PNPM_NO_LOCKFILE halt class). Per-fragment isolation
+      // surfaces a single-fragment regression (e.g. a future runtime that ships
+      // an unflagged `npm ci`) here with the fragment id in the failure message.
+      assertJustfileBootstrapsFromFreshCheckout(fragment.id, vfs);
 
       // Pin the test as assertion-bearing (vitest's no-standalone-expectations
       // rule + the suite's `--passWithNoTests`-style guard). Every meaningful
