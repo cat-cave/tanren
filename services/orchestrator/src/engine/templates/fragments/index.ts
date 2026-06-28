@@ -2,7 +2,11 @@
 // (docs/roadmap/templating-system.md).
 
 export { composeTemplate, deployFragmentId, runtimeFragmentId, compose, type PhaseFragmentRef } from "./compose.js";
-export { TemplateComposeError, type TemplateComposePhase } from "./composeError.js";
+export {
+  type DependencyRuntimeMismatchPayload,
+  TemplateComposeError,
+  type TemplateComposePhase,
+} from "./composeError.js";
 export {
   AddonId,
   AuthId,
