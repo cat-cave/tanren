@@ -128,8 +128,9 @@ export interface PlannerRunContext {
   policyVersion?: number;
   greenfield?: boolean;
   creditUsdRate?: number;
+  // DETERMINISTIC CONTRACT FILES (v27 fix): the `.tanren/ci.yml` + `justfile` workspace-prep materializes VERBATIM (write-iff-absent) from the captured lifecycle BEFORE the writer runs — so they are NEVER LLM-authored (the writer mangled the ci.yml shape on v27). Absent ⇒ no lifecycle (brownfield ships its own) ⇒ no-op. On the greenfield path PR-G's composed-VFS push already landed these files on the default branch, so this materialization is a no-op write-iff-absent guard.
   contractFiles?: ReadonlyArray<ContractFile>;
-  templateSeed?: { repoRef: string };
+  // WS-A PR-4: the ordered ancestor stack this dependent speculative run is stacked on (from `runs.ancestor_stack`). With `WALKER_JJ_LOCAL_BASE` on + non-empty, the workspace bootstrap jj-assembles the base from these ancestor refs vs the legacy single-ref clone.
   ancestorStack?: AncestorStack;
 }
 

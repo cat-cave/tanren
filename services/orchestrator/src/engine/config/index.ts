@@ -79,7 +79,6 @@ export {
   ProjectCredentialRefs,
   ProjectEnvironmentRef,
   ProjectLifecycle,
-  ProjectTemplateRef,
   ProjectUpgradePolicy,
   SUPPORTED_PROJECT_CONFIG_VERSIONS,
   defaultProjectConfigV1,

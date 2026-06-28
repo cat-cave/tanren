@@ -4,12 +4,18 @@
 // On every greenfield derive the seam:
 //   1. Resolves an org-scoped GitHub credential (App installation token, else the
 //      org-default static PAT — the SAME resolver greenfield repo-create uses).
-//   2. Creates a fresh TEMPLATE seed repo via the minimal `CodeHost.createRepo`
-//      seam under a deterministic `tanren-tmpl-<slug>` name.
-//   3. PUTs every composed VFS file to the new repo's default branch via the
-//      GitHub contents API (the same shape `FetchConfigInjectionGitHub.commitFile`
-//      uses for the brownfield config injector).
-//   4. Returns a `SeededTemplate` the rest of derive seeds from.
+//   2. PUTs every composed VFS file to the JUST-CREATED PROJECT repo's default
+//      branch via the GitHub contents API (the same shape
+//      `FetchConfigInjectionGitHub.commitFile` uses for the brownfield config
+//      injector). The push is idempotent on a re-attach (it reads the existing
+//      blob SHA and updates).
+//   3. Returns a `SeededTemplate` the rest of derive persists onto the project
+//      config for observability.
+//
+// PR-G (task #77) — the per-stack `tanren-tmpl-<slug>` template seed repo is GONE.
+// The composed VFS lands directly in the project repo as its initial content;
+// the run path's separate seed-repo clone step is gone too. The only forge op
+// in this module is the per-file contents-API PUT against the project repo.
 //
 // NO new transport: the GitHub HTTP client + the standalone token resolver are
 // reused as-is — this module only assembles them onto the typed materializer seam
@@ -25,7 +31,6 @@ import {
 } from "../../engine/credentials/orgGithubApp.js";
 import { parseGitHubRepository, type GitHubHttpClient, type GitHubRepository } from "../../engine/providers/github.js";
 import type { GithubAppTokenMinter } from "../../engine/providers/githubAppTokenMinter.js";
-import { buildProjectHostSeams } from "../../engine/providers/hostFactory.js";
 import { GithubCredentialMissingError } from "../projects/greenfieldRepoCreate.js";
 
 export interface MaterializeTemplateFlowDeps {
@@ -46,32 +51,6 @@ export function buildLiveMaterializeTemplate(
   const { orgId } = ctx;
 
   return buildMaterializeTemplate({
-    async createTemplateRepo(input) {
-      const installation = await loadOrgGithubAppInstallation(pool, orgId);
-      const staticRef = await loadOrgDefaultGithubCredentialRef(pool, orgId);
-      if (installation === undefined && staticRef === undefined) {
-        throw new GithubCredentialMissingError();
-      }
-      const creds = {
-        secrets,
-        ...(installation !== undefined && { installation }),
-        ...(staticRef !== undefined && { staticRef }),
-        ...(githubAppMinter === undefined ? {} : { minter: githubAppMinter }),
-      };
-      const { codeHost } = buildProjectHostSeams(githubHttp, () => resolveVcsToken(githubHttp, creds));
-      const created = await codeHost.createRepo({
-        owner: input.owner,
-        name: input.name,
-        private: input.private,
-        autoInit: true,
-        description: input.description,
-      });
-      return {
-        fullName: `${created.repo.owner}/${created.repo.name}`,
-        repoUrl: created.repoUrl,
-        defaultBranch: created.defaultBranch,
-      };
-    },
     async pushFile(input) {
       const installation = await loadOrgGithubAppInstallation(pool, orgId);
       const staticRef = await loadOrgDefaultGithubCredentialRef(pool, orgId);
@@ -87,7 +66,8 @@ export function buildLiveMaterializeTemplate(
       const resolved = await resolveVcsToken(githubHttp, creds);
       const repo = parseGitHubRepository(input.repoUrl);
       // GET the existing blob SHA (if any) so an idempotent overwrite carries the
-      // expected `sha` (GitHub's contents API requires it to update a file).
+      // expected `sha` (GitHub's contents API requires it to update a file —
+      // auto-init seeded a README.md; subsequent re-pushes target existing files).
       const existing = await githubHttp.request({
         method: "GET",
         path: contentsPath(repo, input.path, input.defaultBranch),
