@@ -20,7 +20,7 @@
 // a thrown message.
 
 import { decodeBase64Content } from "../contracts/repoHostErrors.js";
-import { createGitHubRepository } from "./githubRepoCreate.js";
+import { createGitHubRepository, deleteGitHubRepository } from "./githubRepoCreate.js";
 import {
   GitHubStatusService,
   repoPath,
@@ -154,6 +154,17 @@ export class GitHubCodeHost implements CodeHost {
       repoUrl: created.repoUrl,
       defaultBranch: created.defaultBranch,
     };
+  }
+
+  /** DELETE a repo — derive-rollback compensation (task #78). See `deleteGitHubRepository`. */
+  async deleteRepo(repo: CodeHostRepoRef): Promise<void> {
+    const token = await this.resolveToken();
+    await deleteGitHubRepository(
+      this.http,
+      { owner: repo.owner, name: repo.name },
+      { token: token.token, ...(token.refresh !== undefined && { refresh: token.refresh }) },
+    );
+    this.mainHeadCache.invalidate(mainHeadCacheKey(repo.owner, repo.name, "main"));
   }
 
   async readDefaultBranch(repo: CodeHostRepoRef): Promise<string> {

@@ -106,6 +106,38 @@ export function scriptedDeployTransport(flavor: DeployFlavor, seedNames: string[
     async request(req: DeployHttpRequest): Promise<DeployHttpResponse> {
       bearersSeen.push(req.headers["authorization"] ?? "");
 
+      if (req.method === "DELETE") {
+        // App destroy (task #78 derive-rollback compensation): Vercel
+        // `DELETE /v9/projects/{id}`, Fly `DELETE /v1/apps/{name}`. The contract is
+        // IDEMPOTENT — a 404 (already-gone) is a successful no-op. We resolve the
+        // target either by id (Vercel) or name (Fly), remove it from the in-memory
+        // app set, and return 204; an unknown id returns 404.
+        const path = req.url.split("?")[0] ?? "";
+        if (flavor === "vercel") {
+          const match = /\/v9\/projects\/([^/]+)$/u.exec(path);
+          if (match === null) {
+            return { status: 405, ok: false, json: undefined, text: "method not allowed" };
+          }
+          const targetId = decodeURIComponent(match[1] ?? "");
+          for (const [name, app] of apps) {
+            if (app.id === targetId) {
+              apps.delete(name);
+              return { status: 204, ok: true, json: undefined, text: "" };
+            }
+          }
+          return { status: 404, ok: false, json: undefined, text: "not found" };
+        }
+        const match = /\/v1\/apps\/([^/]+)$/u.exec(path);
+        if (match === null) {
+          return { status: 405, ok: false, json: undefined, text: "method not allowed" };
+        }
+        const targetName = decodeURIComponent(match[1] ?? "");
+        if (apps.delete(targetName)) {
+          return { status: 202, ok: true, json: undefined, text: "" };
+        }
+        return { status: 404, ok: false, json: undefined, text: "not found" };
+      }
+
       if (req.method === "GET") {
         // A deployment-status GET (the verify poll): Vercel `/v13/deployments/{id}`,
         // Fly `/v1/apps/{name}/machines/{id}`. Served from the scripted state

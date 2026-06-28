@@ -7,6 +7,7 @@
 
 import type pg from "pg";
 import type { ActorContext } from "../../../auth/schemas.js";
+import { AUTONOMOUS_AUDIT_POSTURE } from "../../config/index.js";
 import { BehaviorCreateInput, BehaviorStore } from "../../entities/behaviors.js";
 import { MilestoneCreateInput, MilestoneStore } from "../../entities/milestones.js";
 import { parseGitHubRepository } from "../../providers/github.js";
@@ -26,6 +27,34 @@ export {
   persistDesignContract,
   productVisionConfig,
 } from "./deriveDesignContract.js";
+
+// FINDING #1 + task #79: the autonomous greenfield config. When the operator opts
+// into `auto`/`simulated`, the project is created ATOMICALLY with EVERY knob
+// autonomous operation requires — no second governance PUT, no operator race-window.
+// The DagWalker auto-claims within seconds of project insert; a project that landed
+// without the autonomous audit posture + CI-intelligence threshold would halt the
+// first scaffold run on `audit.posture_strands_findings`. The four axes:
+//   - `reviewPolicy` + `mergeIntegration` — derived PRs enter the native merge queue.
+//   - `governancePosture: "lenient"` — functional-but-weak in-loop gate.
+//   - `auditPosture: AUTONOMOUS_AUDIT_POSTURE` — P2/P3 route into DAG; blockers
+//     remediate. Without it the audit-posture preflight FAILS LOUD.
+//   - `insightThresholds: { ciInsightFlakyMinShas: 1 }` — single-run flake spec.
+// `autonomy: "auto"` is the operator saying "configure this project for fully
+// autonomous operation"; doctrine demands every knob, atomically. Absent or
+// `human` ⇒ no overrides ⇒ the safe defaults (the §2.5 PUT remains the operator
+// surface for adjusting posture later). Lives here (not in derive.ts) to stay
+// under derive.ts's max-imports cap; derive.ts already imports from this module.
+export function autonomousConfig(autonomy: "auto" | "simulated"): Record<string, unknown> {
+  return {
+    version: 1,
+    reviewPolicy: autonomy,
+    mergeIntegration: "native_queue",
+    governancePosture: "lenient",
+    auditPosture: AUTONOMOUS_AUDIT_POSTURE,
+    insightThresholds: { ciInsightFlakyMinShas: 1 },
+    greenfield: true,
+  };
+}
 
 // Build the BDD acceptance criteria for a behavior spec from its given/when/then.
 function acceptanceFor(behavior: CaptureBehavior): string[] {

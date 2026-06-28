@@ -61,6 +61,18 @@ export class InMemoryCodeHost implements CodeHost {
     return { repo, repoUrl: `https://example.com/${key(repo)}.git`, defaultBranch };
   }
 
+  /** Has the test fixture seen this repo (used by tests to assert post-rollback state). */
+  has(repo: CodeHostRepoRef): boolean {
+    return this.repos.has(key(repo));
+  }
+
+  async deleteRepo(repo: CodeHostRepoRef): Promise<void> {
+    // IDEMPOTENT: a repo that no longer exists is a successful no-op (mirrors the
+    // GitHub impl's 404-treated-as-success contract). The compensation walker
+    // relies on this to safely retry rollbacks.
+    this.repos.delete(key(repo));
+  }
+
   async readDefaultBranch(repo: CodeHostRepoRef): Promise<string> {
     return this.require(repo).defaultBranch;
   }

@@ -32,7 +32,7 @@
 import type { Fragment, TemplateConfig, VirtualFileSystem } from "../types.js";
 
 export const BASE_FRAGMENT_ID = "base" as const;
-export const BASE_FRAGMENT_VERSION = "1.0.0" as const;
+export const BASE_FRAGMENT_VERSION = "1.1.0" as const;
 
 /** The set of justfile targets the base fragment declares. `processJustfile` rejects
  * a fragment fill against an unknown target name. The `mutation` target was added in
@@ -90,26 +90,36 @@ mutation:
 # TANREN-HOOK: mutation
 `;
 
-// The base ci.yml — evidence declarations are on tier-2 + tier-3 with a placeholder
-// `__TANREN_REPORT_PATH__` token that `processCiYml` replaces with the runtime
-// fragment's declared `reportPath`. minTests=1 enforces "at least one test ran"
-// (the v57 lesson — exit-0 alone is not a proof; see ci/schema.ts).
+// The base ci.yml — evidence declarations are on the slow + merge tiers with a
+// placeholder `__TANREN_REPORT_PATH__` token that `processCiYml` replaces with the
+// runtime fragment's declared `reportPath`. minTests=1 enforces "at least one test
+// ran" (the v57 lesson — exit-0 alone is not a proof; see ci/schema.ts).
+//
+// TIER VOCABULARY: the keys MUST be the CiConfigV1 schema vocabulary
+// (`fast`/`slow`/`merge`) — the schema (services/orchestrator/src/engine/ci/schema.ts)
+// REQUIRES `fast` + `slow`, and any tier mapped to `pre_merge` must declare positive
+// evidence. The step `name` inside each tier names the just target it runs (tier-1
+// / tier-2 / tier-3), matching the justfile targets the base declares. A prior
+// shape (`tiers.tier-1`/`tier-2`/`tier-3`) failed CiConfigV1.safeParse with
+// `tiers.fast: expected array` and surfaced as the apex v62 halt (task #80); the
+// matrix-coverage + isolation harnesses now parse every composed ci.yml against
+// CiConfigV1 so that class of bug never escapes the test surface again.
 const CI_YML = `version: 1
 bootstrap:
   run: "just bootstrap"
 tiers:
-  tier-1:
-    - name: "lint+typecheck"
+  fast:
+    - name: "tier-1"
       run: "just tier-1"
-  tier-2:
-    - name: "test"
+  slow:
+    - name: "tier-2"
       run: "just tier-2"
       evidence:
         kind: "junit"
         reportPath: "__TANREN_REPORT_PATH__"
         minTests: 1
-  tier-3:
-    - name: "build"
+  merge:
+    - name: "tier-3"
       run: "just tier-3"
       evidence:
         kind: "artifact"
@@ -120,11 +130,11 @@ tiers:
         kind: "artifact"
         path: "reports/mutation"
 when:
-  tier-1:
+  fast:
     - "per_iteration"
-  tier-2:
+  slow:
     - "pre_audit"
-  tier-3:
+  merge:
     - "pre_merge"
 deploy:
   run: "just build"

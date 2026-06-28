@@ -116,5 +116,20 @@ export function describeCodeHostConformance(label: string, harness: CodeHostConf
         }),
       ).rejects.toThrow(/reject|stale|expect|conflict|cas/iu);
     });
+
+    it("deleteRepo REMOVES a repo (derive-rollback compensation, task #78) + is IDEMPOTENT on absent", async () => {
+      const host = harness.make();
+      await harness.seed(host, REPO, "main", "sha-main-0");
+      // The repo exists — readDefaultBranch succeeds.
+      await expect(host.readDefaultBranch(REPO)).resolves.toBe("main");
+      // COMPENSATION: delete the repo.
+      await host.deleteRepo(REPO);
+      // Now absent — readDefaultBranch fails LOUD (the repo is gone).
+      await expect(host.readDefaultBranch(REPO)).rejects.toThrow(/.+/u);
+      // IDEMPOTENT: a second delete on the same (now-absent) repo is a successful
+      // no-op (the rollback semantic is "ensure this is gone"; the GitHub impl maps
+      // 404 → success). The compensation walker relies on this.
+      await expect(host.deleteRepo(REPO)).resolves.toBeUndefined();
+    });
   });
 }

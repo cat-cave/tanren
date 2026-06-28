@@ -32,6 +32,19 @@ export {
   type PreparedGreenfieldDeploy,
 } from "./deployDependency.js";
 
+// TRANSACTIONAL ROLLBACK (task #78) — the compensation primitives the derive uses
+// to atomically delete every external resource it created when a later step fails.
+export {
+  DeriveRollbackError,
+  newDeriveCompensation,
+  type CompensationFailure,
+  type CompensationKind,
+  type DeleteRepositoryCallback,
+  type DeriveCompensation,
+  type DeriveCompensationStep,
+  type DestroyDeployAppCallback,
+} from "./deriveCompensation.js";
+
 // Native design subsystem (WS-D1) — the LOUD guards for a required design contract +
 // dangling moat refs (mirroring `MissingLifecycleError`).
 export { DanglingDesignRefError, MissingDesignContractError } from "./deriveDesignContract.js";

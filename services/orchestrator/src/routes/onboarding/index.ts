@@ -33,6 +33,7 @@ import {
   DeployProviderMissingError,
   DeployProvisioningUnavailableError,
   deriveFromCapture,
+  DeriveRollbackError,
   FragmentAuthoringFailedError,
   InterviewCapture,
   MissingLifecycleError,
@@ -65,6 +66,8 @@ import {
   prepareGreenfieldDeploy,
   preflightGreenfieldDeploy,
 } from "../projects/greenfield.js";
+import { deleteGreenfieldRepository } from "../projects/greenfieldRepoDelete.js";
+import { destroyGreenfieldDeployApp } from "../projects/greenfieldDeployDestroy.js";
 
 export interface OnboardingRoutesOptions {
   pool: pg.Pool;
@@ -193,8 +196,33 @@ export function createOnboardingRoutes(options: OnboardingRoutesOptions) {
               ...(options.githubAppMinter === undefined ? {} : { githubAppMinter: options.githubAppMinter }),
               input,
             }),
+          // TASK #78 — derive transactional rollback. Threads the repo-DELETE
+          // compensation through the same credential context the create uses,
+          // so a derive that creates a repo + then fails later in the call
+          // walks back and deletes it before re-raising.
+          deleteRepository: (target) =>
+            deleteGreenfieldRepository({
+              pool: options.pool,
+              secrets: options.secrets,
+              githubHttp,
+              orgId,
+              ...(options.githubAppMinter === undefined ? {} : { githubAppMinter: options.githubAppMinter }),
+              target,
+            }),
           ...(parsed.data.autonomy === undefined ? {} : { autonomy: parsed.data.autonomy }),
           ...(parsed.data.deploy === undefined ? {} : { deploy: parsed.data.deploy }),
+          // TASK #78 — derive transactional rollback. Threads the deploy-DESTROY
+          // compensation through the same org grant + provisioner registry the
+          // prepareDeploy uses, so a derive that provisions a deploy app + then
+          // fails later in the call destroys it before re-raising.
+          destroyDeployApp: (target) =>
+            destroyGreenfieldDeployApp({
+              pool: options.pool,
+              secrets: options.secrets,
+              orgId,
+              actorId: actor.userId,
+              target,
+            }),
           // WS-D3: resolve the design agent for THIS org so the derive's design phase
           // elaborates the captured intent into the designed HEAD `DesignContract`.
           ...(options.designAgentFactory === undefined ? {} : { designAgent: options.designAgentFactory({ orgId }) }),
@@ -232,32 +260,53 @@ export function createOnboardingRoutes(options: OnboardingRoutesOptions) {
         repoUrl: result.repository.repoUrl,
       });
       return c.json({ ...result, inboxSource: bootstrap.inboxSource, bootstrap }, 201);
-    } catch (error) {
-      const repoError = greenfieldRepositoryErrorResponse(c, error);
+    } catch (caught) {
+      // TASK #78 — derive transactional rollback. A `DeriveRollbackError` wraps the
+      // ORIGINAL failure (as `cause`) + the list of compensations that FAILED
+      // during rollback. NORMALIZE here so the typed-error dispatch below fires on
+      // the ORIGINAL cause (a `GithubCredentialMissingError` should still map to
+      // 400, not be buried as a generic 500); the `orphanedResources` rider is
+      // attached to the response so the operator sees BOTH the original failure +
+      // any resource the rollback could not undo. On a successful rollback (no
+      // compensation gap), derive throws the original error verbatim — no wrap.
+      const error = caught instanceof DeriveRollbackError ? (caught.cause ?? caught) : caught;
+      const orphans =
+        caught instanceof DeriveRollbackError
+          ? caught.compensationFailures.map((f) => ({
+              kind: f.kind,
+              resource: f.label,
+              reason: f.error instanceof Error ? f.error.message : String(f.error),
+            }))
+          : undefined;
+      // Attach the orphan rider onto the eventual JSON response. Returns a wrapper
+      // around `c.json` that merges `{ orphanedResources: [...] }` when present.
+      const respond = (body: Record<string, unknown>, status: number): Response =>
+        c.json(orphans === undefined ? body : { ...body, orphanedResources: orphans }, status as never);
+      const repoError = greenfieldRepositoryErrorResponse(c, error, orphans);
       if (repoError !== undefined) return repoError;
       if (error instanceof ProjectNotFoundError) {
-        return c.json({ error: "project_not_found", message: error.message }, 404);
+        return respond({ error: "project_not_found", message: error.message }, 404);
       }
       if (error instanceof ProjectAccessDeniedError) {
-        return c.json({ error: "project_access_denied", message: error.message }, 403);
+        return respond({ error: "project_access_denied", message: error.message }, 403);
       }
       if (error instanceof SpecNotFoundError) {
-        return c.json({ error: "spec_dependency_not_found", message: error.message }, 404);
+        return respond({ error: "spec_dependency_not_found", message: error.message }, 404);
       }
       // The architecture step never captured a project lifecycle — the scaffold
       // can't author a justfile without it. A bad/incomplete capture (400), NOT a
       // silent Node default (stack-flexible contract).
       if (error instanceof MissingLifecycleError) {
-        return c.json({ error: "lifecycle_missing", message: error.message }, 400);
+        return respond({ error: "lifecycle_missing", message: error.message }, 400);
       }
       // The capture surfaced no hostname-safe project slug (no identity + no usable
       // pitch/design-DNA/stack fallback). A bad/incomplete capture (400), NOT a silent
       // shared default repo name.
       if (error instanceof MissingProjectSlugError) {
-        return c.json({ error: "project_slug_missing", message: error.message }, 400);
+        return respond({ error: "project_slug_missing", message: error.message }, 400);
       }
       if (error instanceof DeployProviderMissingError) {
-        return c.json(
+        return respond(
           {
             error: "deploy_provider_missing",
             capability: "deploy",
@@ -268,7 +317,7 @@ export function createOnboardingRoutes(options: OnboardingRoutesOptions) {
         );
       }
       if (error instanceof DeployProviderInvalidError) {
-        return c.json(
+        return respond(
           {
             error: "deploy_provider_invalid",
             capability: "deploy",
@@ -279,22 +328,22 @@ export function createOnboardingRoutes(options: OnboardingRoutesOptions) {
         );
       }
       if (error instanceof DeployNotLinkedError) {
-        return c.json({ error: "deploy_not_linked", ...error.outcome }, 409);
+        return respond({ error: "deploy_not_linked", ...error.outcome }, 409);
       }
       if (error instanceof DeployProvisioningUnavailableError) {
-        return c.json({ error: "deploy_provisioning_unavailable", message: error.message }, 500);
+        return respond({ error: "deploy_provisioning_unavailable", message: error.message }, 500);
       }
       // Lifecycle so malformed we can't even synthesize a template config (empty
       // stack, no derivable runtime). A bad/incomplete capture (400).
       if (error instanceof UnresolvableLifecycleError) {
-        return c.json({ error: "lifecycle_unresolvable", message: error.message }, 400);
+        return respond({ error: "lifecycle_unresolvable", message: error.message }, 400);
       }
       // One or more per-fragment authoring runs failed at their fixed point. The
       // derive halts loud per doctrine (no silent skip). Surfaced as 409
       // needs_attention — an operator inspects the `fragment.authoring.failed`
       // events, fixes the writer / validator, and retries.
       if (error instanceof FragmentAuthoringFailedError) {
-        return c.json(
+        return respond(
           {
             error: "fragment_authoring_failed",
             capability: "fragments",
@@ -305,9 +354,9 @@ export function createOnboardingRoutes(options: OnboardingRoutesOptions) {
         );
       }
       if (error instanceof Error && error.message.startsWith("deploy provision failed:")) {
-        return c.json({ error: "deploy_provision_failed", message: error.message }, 502);
+        return respond({ error: "deploy_provision_failed", message: error.message }, 502);
       }
-      return c.json({ error: "interview_derive_failed", message: messageOf(error) }, 500);
+      return respond({ error: "interview_derive_failed", message: messageOf(error) }, 500);
     }
   });
 
