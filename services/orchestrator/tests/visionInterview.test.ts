@@ -329,6 +329,18 @@ describe("deriveFromCapture · creates the product graph (no migration)", () => 
     // doctrine): the in-loop gate's lint/typecheck are advisory so an imperfect
     // first pass lands + improves via the issue loop instead of stalling.
     expect(config?.governancePosture).toBe("lenient");
+    // TASK #79: derive(autonomy:"auto") lands the AUTONOMOUS audit posture +
+    // CI-intelligence threshold ATOMICALLY with project creation — the
+    // DagWalker auto-claims within seconds and cannot observe a partially
+    // configured project. The §2.5 governance PUT is no longer required for
+    // autonomous runs; without these the audit-posture preflight would halt the
+    // first scaffold run on `audit.posture_strands_findings`.
+    expect(config?.auditPosture).toEqual({
+      blockReviewAt: "P1",
+      p2p3Handling: "route-to-dag",
+      autonomousRemediation: true,
+    });
+    expect(config?.insightThresholds).toEqual({ ciInsightFlakyMinShas: 1 });
     // The interview path always builds off an empty repo ⇒ greenfield (drives the
     // non-frozen in-loop deps-ensure).
     expect(config?.greenfield).toBe(true);
@@ -381,6 +393,19 @@ describe("deriveFromCapture · creates the product graph (no migration)", () => 
     // The doctrine collapse removed the templateBuild config marker entirely:
     // there is no template_build mode any more, so the field is absent.
     expect((config as { templateBuild?: unknown })?.templateBuild).toBeUndefined();
+    // TASK #79: the inverse of the autonomy:"auto" atomicity — a non-autonomous
+    // project lands with the BALANCED audit posture default (P0/P1 block + park
+    // for a human, residual fix-if-idle) and EMPTY insight-threshold overrides.
+    // The conservative posture remains; an operator may flip the project to
+    // autonomous later via the §2.5 governance PUT (the operator-controllable
+    // surface remains intact). This is the inverse of the autonomous derive that
+    // pre-applies AUTONOMOUS_AUDIT_POSTURE + ciInsightFlakyMinShas:1 atomically.
+    expect(config?.auditPosture).toEqual({
+      blockReviewAt: "P1",
+      p2p3Handling: "fix-if-idle",
+      autonomousRemediation: false,
+    });
+    expect(config?.insightThresholds).toEqual({});
   });
 
   it("FINDING deploy: omitting autonomy does not bypass required deploy", async () => {

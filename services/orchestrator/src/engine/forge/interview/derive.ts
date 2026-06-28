@@ -54,7 +54,12 @@ import { githubHttpsRemote } from "../../providers/github.js";
 import { ProjectStore } from "../../repositories/projects.js";
 import { provisionedGreenfieldProjectConfigProof } from "../../workflow/projectConfigWriteGuards.js";
 import { createProject } from "../../workflow/projectSpec.js";
-import { MissingDesignContractError, productVisionConfig, resumeDerivedProject } from "./deriveBehaviorSpec.js";
+import {
+  autonomousConfig,
+  MissingDesignContractError,
+  productVisionConfig,
+  resumeDerivedProject,
+} from "./deriveBehaviorSpec.js";
 import { buildEntityGraph } from "./deriveEntityGraph.js";
 import {
   DeployNotLinkedError,
@@ -101,13 +106,18 @@ export interface DeriveInput {
   private?: boolean;
   description?: string;
   createRepository?: (input: CreateRepositoryInput) => Promise<CreatedRepository>;
-  // GREENFIELD AUTONOMY (FINDING #1): how the derived project is governed at
-  // creation. `createProject`'s schema DEFAULTS (`reviewPolicy: "human"` +
+  // GREENFIELD AUTONOMY (FINDING #1 + task #79): how the derived project is governed
+  // at creation. `createProject`'s schema DEFAULTS (`reviewPolicy: "human"` +
   // `mergeIntegration: "not_configured"`) are the SAFE brownfield/managed default,
   // but they leave a greenfield project unable to advance itself (PRs await a human
   // + never enter a merge engine). When the caller asks for `auto`/`simulated`, we
-  // create the project ALREADY autonomous so the DagWalker drives it off an empty
-  // repo with no follow-up PATCH. Absent or `human` ⇒ no config ⇒ the safe defaults.
+  // create the project ALREADY autonomous — atomically, with EVERY knob autonomous
+  // operation requires (review/merge axes + `auditPosture: AUTONOMOUS_AUDIT_POSTURE`
+  // + `insightThresholds.ciInsightFlakyMinShas: 1`) — so the DagWalker drives it
+  // off an empty repo with NO follow-up PATCH. The DagWalker auto-claims within
+  // seconds of project insert; a partially-configured project would halt the first
+  // run on `audit.posture_strands_findings`. Absent or `human` ⇒ no overrides ⇒
+  // the safe defaults.
   autonomy?: "auto" | "simulated" | "human";
   deploy?: GreenfieldDeployDependency;
   preflightDeploy?: DeployPreflightCallback;
@@ -156,19 +166,11 @@ export interface DeriveInput {
   destroyDeployApp?: DestroyDeployAppCallback;
 }
 
-// FINDING #1: the autonomous greenfield config. When the operator opts into
-// `auto`/`simulated`, the project is created with the matching review policy + the
-// `native_queue` merge engine (so derived PRs enter a merge engine instead of
-// stalling on `not_configured`), AND the `lenient` governance posture.
-function autonomousConfig(autonomy: "auto" | "simulated"): Record<string, unknown> {
-  return {
-    version: 1,
-    reviewPolicy: autonomy,
-    mergeIntegration: "native_queue",
-    governancePosture: "lenient",
-    greenfield: true,
-  };
-}
+// `autonomousConfig` (task #79) is re-exported from `./deriveBehaviorSpec.js` —
+// the autonomous greenfield project-config builder that atomically applies every
+// knob a fully-autonomous run requires (review/merge + governance + audit posture
+// + CI-intelligence threshold). Imported via the existing deriveBehaviorSpec
+// import line so derive.ts stays under the max-imports cap.
 
 export interface DeriveResult {
   projectId: string;

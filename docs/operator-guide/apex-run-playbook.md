@@ -86,10 +86,15 @@ secret — the runner identity key is a **mounted secret file**
 PUBLIC `TANREN_RUNNER_AUTHORIZED_KEY` line is passed via env.
 
 The autonomy posture (autonomous audit posture + lowered CI-intelligence flaky bar)
-is a per-project governed setting, configured via the same governance API any
-operator would use (see **§2.5** below, after derive). Apex tests Tanren the
-product, not an apex-flavored variant. (historical: previously `TANREN_APEX_MODE`
-— eradicated in #646.)
+is a per-project governed setting. Under `autonomy: "auto"` (apex's derive call)
+it is **applied atomically with project creation** (task #79) — derive lands the
+review/merge axes, `AUTONOMOUS_AUDIT_POSTURE`, and
+`insightThresholds.ciInsightFlakyMinShas: 1` in the same project insert, so the
+DagWalker (which auto-claims within seconds) cannot observe a partially-configured
+project. The §2.5 governance PUT remains the operator surface for **non-auto**
+projects or for **adjusting posture later**; apex no longer needs to run it. Apex
+tests Tanren the product, not an apex-flavored variant. (historical: previously
+`TANREN_APEX_MODE` — eradicated in #646.)
 
 Verify health before driving anything:
 
@@ -152,21 +157,23 @@ From here every write below uses `-b jar` (the session cookie) + `-H "X-CSRF-Tok
 
 ---
 
-## 2.5. Flip the project into the autonomous posture (post-derive)
+## 2.5. Project governance posture — operator surface (apex skips this)
 
-Apex is a project configured with the **autonomous posture** via the same
-governance API any customer-shaped operator would use. The two knobs:
+Apex's derive (`autonomy: "auto"`, §5) atomically pre-applies the autonomous
+posture at project insert — review/merge axes, `AUTONOMOUS_AUDIT_POSTURE`,
+and `insightThresholds.ciInsightFlakyMinShas: 1` — so the DagWalker (which
+auto-claims within seconds) never sees a partially-configured project (task
+#79). **Apex skips this section.** The two knobs the autonomous posture sets:
 
-- `auditPosture: AUTONOMOUS_AUDIT_POSTURE` — residual P2/P3 findings route into
-  the DAG and a blocking finding becomes a remediation spec, so the
-  audit→finding→fix→merge loop closes with no operator. The audit-posture
-  preflight FAILS LOUD on an autonomous run that did not configure this — that
-  fail-closed bar is the design.
+- `auditPosture: AUTONOMOUS_AUDIT_POSTURE` — P2/P3 findings route into the
+  DAG, blocking findings become remediation specs, so audit→fix→merge closes
+  with no operator. The audit-posture preflight FAILS LOUD when an autonomous
+  run lacks this — fail-closed by design.
 - `insightThresholds.ciInsightFlakyMinShas: 1` — a single-run flake is
-  spec-eligible (the autonomous-run pattern: no operator to notice a quarantine
-  awaiting a second-SHA recurrence that may never come within the run).
+  spec-eligible (no operator to notice a quarantine awaiting recurrence).
 
-Both flip in ONE PUT (read-modify-write — omitted keys are untouched):
+For non-auto projects (`human`/`simulated`) or to flip an existing project,
+PUT (read-modify-write — omitted keys untouched):
 
 ```sh
 curl -s -b jar -H "X-CSRF-Token: $CSRF" -H 'content-type: application/json' \
@@ -181,10 +188,6 @@ curl -s -b jar -H "X-CSRF-Token: $CSRF" -H 'content-type: application/json' \
         "insightThresholds": { "ciInsightFlakyMinShas": 1 }
       }'
 ```
-
-`$PROJ` materializes during derive (step 5), so run this PUT **AFTER step 5**.
-Without it the audit-posture preflight blocks the run loudly — that is intended
-and proves the bar is real.
 
 ---
 
@@ -347,10 +350,11 @@ CAP=$(jq '.capture' <<<"$R3")
 ```sh
 # Derive: the final $CAP from the rounds above + the GitHub owner the new
 # greenfield repo lands under + the deploy provider you linked in §4.b. The
-# autonomy knob sets the project's reviewPolicy + mergeIntegration + governance
-# posture (the review/merge axes); it does NOT set auditPosture or
-# insightThresholds — those still need the §2.5 governance PUT below before the
-# first autonomous run.
+# autonomy knob (`"auto"`) atomically configures the project for fully autonomous
+# operation: reviewPolicy + mergeIntegration + governancePosture + auditPosture
+# (AUTONOMOUS_AUDIT_POSTURE) + insightThresholds.ciInsightFlakyMinShas:1 all
+# land in the same project insert (task #79). No follow-up §2.5 governance PUT
+# is needed for an autonomy:"auto" derive.
 #   $GH_OWNER         the GitHub org/user login the App is installed on (the
 #                     owner of the new greenfield repo).
 DERIVE=$(curl -s -b jar -H "X-CSRF-Token: $CSRF" -H 'content-type: application/json' \
@@ -365,7 +369,8 @@ DERIVE=$(curl -s -b jar -H "X-CSRF-Token: $CSRF" -H 'content-type: application/j
       }')")
 echo "$DERIVE" | jq '{projectId, projectName, repository, bootstrap, inboxSource}'
 
-# Capture $PROJ for §2.5 (governance flip) and §6 (monitor).
+# Capture $PROJ for §6 (monitor). For apex (autonomy:"auto") no §2.5 PUT is
+# needed — derive already applied the autonomous posture atomically.
 PROJ=$(jq -r '.projectId' <<<"$DERIVE")
 echo "PROJ=$PROJ"
 ```
@@ -386,13 +391,15 @@ template-creation-from-scratch; if that path breaks, that is exactly the bug ape
 exists to flush. Watch for the durable events `template.selection.no_match` and
 `template.creation.{started,published,failed}` in the run event stream.
 
-### 5b-postlude. Now run §2.5 to flip the project into autonomous posture
+### 5b-postlude. The autonomous posture is already on the project (no §2.5 PUT needed)
 
-Once derive succeeds you have `$PROJ`. **Go back to §2.5** and PUT
+Once derive succeeds you have `$PROJ`. Because `autonomy: "auto"` derive lands
 `auditPosture: AUTONOMOUS_AUDIT_POSTURE` + `insightThresholds.ciInsightFlakyMinShas: 1`
-on this project. Without it the audit-posture preflight will block the first
-autonomous run with `audit.posture_strands_findings` — that fail-closed bar is
-the design.
+atomically with project creation (task #79), the audit-posture preflight passes
+on the very first scaffold run with no operator intervention. **Skip §2.5 for an
+apex run** — it remains the operator surface for non-auto projects or for
+adjusting posture later. If you ever drive derive with a non-auto autonomy and
+later want to flip it, that is when §2.5 is the right tool.
 
 ### 5c. Derive also captures a design contract
 
