@@ -43,6 +43,15 @@
 // base scaffolding):
 //   - the composer ASSERTS the `base` fragment is in the library; absent → throws
 //     `TemplateComposeError("base", "BaseFragmentMissingError")`.
+//   - the composer PRE-FLIGHTS the cross-runtime dependsOn check (task #72): every
+//     non-runtime fragment whose `dependsOn` lists a runtime fragment other than the
+//     active `config.runtime` throws `TemplateComposeError("dependency_runtime_mismatch")`
+//     BEFORE any phase runs. The previous failure mode was silent acceptance: a
+//     `runtime: ruby-bundler` + `frontend-react-router` config composed without
+//     throwing because the frontend's `addPackageJsonDep` calls land in an internal
+//     map and `processDeps` early-returns when `!vfs.has("package.json")` — node-only
+//     deps were silently dropped. The pre-flight catches the mismatch deterministically
+//     with a payload naming the conflicting fragment + required vs. active runtime.
 //   - `processJustfile` throws on an unknown target (a fragment tried to use a hook
 //     the base does not declare).
 //   - `processCiYml` throws if NO runtime declared a `testRunner` (the evidence block
@@ -51,6 +60,7 @@
 //     re-asserted PRESENT after every phase; a fragment that deleted them is rejected.
 
 import { TemplateComposeError, type TemplateComposePhase } from "./composeError.js";
+import { assertDependsOnRuntimeMatchesConfig } from "./dependencyRuntimeCheck.js";
 import { BASE_FRAGMENT_ID, BASE_JUSTFILE_TARGETS, BASE_PROTECTED_FILES } from "./library/base.js";
 import {
   type Fragment,
@@ -145,6 +155,17 @@ export async function composeTemplate(config: TemplateConfig, library: FragmentL
   if (!library.has(BASE_FRAGMENT_ID)) {
     throw new TemplateComposeError("base", "BaseFragmentMissingError", BASE_FRAGMENT_ID);
   }
+
+  // PRE-FLIGHT (task #72): gather every fragment that compose() will require for
+  // this config + walk the dependsOn graph. Any non-runtime fragment whose
+  // dependsOn lists a `kind === "runtime"` fragment OTHER than the active runtime
+  // is a cross-runtime mismatch — throw BEFORE the first phase runs so the error
+  // fires deterministically and never inside a partially-composed VFS. (`compose`
+  // already calls `library.require` per slot, so a missing-fragment slot still
+  // throws here with its FragmentLibrary.require message — matrix-miss routing
+  // is unchanged.)
+  const plannedFragments = compose(config).map((ref) => library.require(ref.id));
+  assertDependsOnRuntimeMatchesConfig(plannedFragments, library, runtimeFragmentId(config.runtime));
 
   const vfs = new VirtualFileSystem();
   const applied: Fragment[] = [];

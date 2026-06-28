@@ -36,42 +36,19 @@ import {
   VirtualFileSystem,
 } from "../src/engine/templates/index.js";
 import { assertComposedCiYmlParsesAsCiConfigV1 } from "./helpers/templateCiYmlSchemaCheck.js";
+import {
+  isIncompatibleCombination,
+  type NormalizedCombo,
+  pickFirstMatchingRule,
+} from "./helpers/templateFragmentIncompatibles.js";
 
-// ---- Incompatible combinations --------------------------------------------
-// Each (predicate, reason) pair excludes one cross-stack combo with documentation.
-// Doctrine: a fragment declaring `dependsOn: [<runtime-*>]` cannot pair with a
-// different runtime — today react-router, postgres-prisma, and biome are the three.
-// `addon-docker` is stack-agnostic (inspects `config.runtime`) so has no entry.
-// Steady state: `INCOMPATIBLE_COMBINATIONS.length === 0`. An entry here is a
-// contract debt; prefer making a fragment stack-agnostic over adding an exclusion.
-const INCOMPATIBLE_COMBINATIONS: readonly {
-  readonly predicate: (combo: NormalizedCombo) => boolean;
-  readonly reason: string;
-}[] = [
-  {
-    predicate: (c) => c.runtime === "ruby-bundler" && c.frontend === "react-router",
-    reason: "frontend-react-router declares dependsOn: [runtime-node-pnpm] — react is a node tool.",
-  },
-  {
-    predicate: (c) => c.runtime === "ruby-bundler" && c.db === "postgres-prisma",
-    reason: "db-postgres-prisma declares dependsOn: [runtime-node-pnpm] — prisma is a node tool.",
-  },
-  {
-    predicate: (c) => c.runtime === "ruby-bundler" && c.addons.includes("biome"),
-    reason: "addon-biome declares dependsOn: [runtime-node-pnpm] — biome is a node tool.",
-  },
-];
-
-interface NormalizedCombo {
-  readonly runtime: TemplateConfig["runtime"];
-  readonly frontend?: NonNullable<TemplateConfig["frontend"]>;
-  readonly backend?: NonNullable<TemplateConfig["backend"]>;
-  readonly db?: NonNullable<TemplateConfig["db"]>;
-  readonly auth?: NonNullable<TemplateConfig["auth"]>;
-  readonly deploy: TemplateConfig["deploy"];
-  readonly addons: readonly TemplateConfig["addons"][number][];
-  readonly examples: readonly TemplateConfig["examples"][number][];
-}
+// ---- Incompatible combinations (task #72) ---------------------------------
+// The shared `INCOMPATIBLE_COMBINATIONS` list lives in
+// `tests/helpers/templateFragmentIncompatibles.ts`; this harness filters it OUT
+// of the "compose cleanly" loop. The corresponding "MUST throw" assertions live
+// in `tests/templateFragmentDependsOnRuntimeMismatch.test.ts` — both harnesses
+// read the same list so a new runtime-dependent fragment registers ONE entry and
+// both pick it up automatically.
 
 /** Throw a descriptive error so the failing test names the combo + broken
  * invariant. Centralized so every failure message in this file uses the same shape. */
@@ -221,7 +198,11 @@ function* iterateTailHeads(
 
 /** Enumerate every combination the library can produce — the matrix-coverage
  * surface. Axes come from `library.ofKind(...)` so the matrix grows when a new
- * fragment is registered. INCOMPATIBLE_COMBINATIONS hits are filtered + counted. */
+ * fragment is registered. INCOMPATIBLE_COMBINATIONS hits are pulled into the
+ * `excluded` bucket — the included bucket gets the structural assertions; the
+ * excluded bucket gets the MUST-throw assertion in the second describe() block
+ * (task #72: previously these were silently filtered + skipped, now they are
+ * positively asserted to throw `TemplateComposeError("dependency_runtime_mismatch")`). */
 function enumerateMatrix(library: FragmentLibrary): {
   readonly included: readonly NormalizedCombo[];
   readonly excluded: readonly { readonly combo: NormalizedCombo; readonly reason: string }[];
@@ -241,9 +222,9 @@ function enumerateMatrix(library: FragmentLibrary): {
         // constraint, not a registry-dependency mismatch.
         if (head.auth !== undefined && head.db === undefined) continue;
         const combo: NormalizedCombo = { ...head, addons, examples };
-        const block = INCOMPATIBLE_COMBINATIONS.find((rule) => rule.predicate(combo));
-        if (block !== undefined) {
-          excluded.push({ combo, reason: block.reason });
+        if (isIncompatibleCombination(combo)) {
+          const rule = pickFirstMatchingRule(combo);
+          excluded.push({ combo, reason: rule?.reason ?? "" });
           continue;
         }
         included.push(combo);
@@ -489,3 +470,8 @@ describe("template-fragment matrix coverage — every supported stack composes",
     });
   }
 });
+
+// The MUST-throw assertions for every excluded combo live in
+// `tests/templateFragmentDependsOnRuntimeMismatch.test.ts` — same INCOMPATIBLE_COMBINATIONS
+// list, flipped from "skip these" (pre-task-#72) to "compose MUST throw
+// dependency_runtime_mismatch" (post-task-#72).
