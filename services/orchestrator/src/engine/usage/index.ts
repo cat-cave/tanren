@@ -27,3 +27,9 @@ export {
 } from "./sshMonitors.js";
 export { SshUsageProbe, type SshUsageProbeConfig, type UsageProbe, type WindowObservation } from "./probe.js";
 export { USAGE_READ_FAILED_REASON, usageReadFailedPayload, type UsageReadFailedPayload } from "./readFailure.js";
+export {
+  DEFAULT_PROBE_INTERVAL_MS,
+  startPausedRunResumeProber,
+  type PausedRunResumeProber,
+  type PausedRunResumeProberDeps,
+} from "./pausedRunResumeProber.js";

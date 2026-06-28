@@ -89,6 +89,8 @@ export interface RunDetail {
       | "retry_budget_exhausted"
       | "convergence_stalled"
       | "window_exhausted"
+      | "window_paused"
+      | "provider_unhealthy"
       | "cancelled"
       | "failed"
       | null;
@@ -97,7 +99,7 @@ export interface RunDetail {
     runId: string;
     specId: string;
     startedAt: string;
-    status: "queued" | "running" | "halted" | "completed" | "failed" | "cancelled";
+    status: "queued" | "running" | "paused" | "halted" | "completed" | "failed" | "cancelled";
     trigger: string;
   };
   spec: {
@@ -174,6 +176,8 @@ export interface RunListItem {
     | "retry_budget_exhausted"
     | "convergence_stalled"
     | "window_exhausted"
+    | "window_paused"
+    | "provider_unhealthy"
     | "cancelled"
     | "failed"
     | null;
@@ -183,7 +187,7 @@ export interface RunListItem {
   specId: string;
   specTitle: string;
   startedAt: string;
-  status: "queued" | "running" | "halted" | "completed" | "failed" | "cancelled";
+  status: "queued" | "running" | "paused" | "halted" | "completed" | "failed" | "cancelled";
   trigger: string;
 }
 
@@ -207,6 +211,8 @@ export interface RunSummary {
     | "retry_budget_exhausted"
     | "convergence_stalled"
     | "window_exhausted"
+    | "window_paused"
+    | "provider_unhealthy"
     | "cancelled"
     | "failed"
     | null;
@@ -215,7 +221,7 @@ export interface RunSummary {
   runId: string;
   specId: string;
   startedAt: string;
-  status: "queued" | "running" | "halted" | "completed" | "failed" | "cancelled";
+  status: "queued" | "running" | "paused" | "halted" | "completed" | "failed" | "cancelled";
   trigger: string;
 }
 
@@ -271,11 +277,13 @@ export interface SseStatusFrame {
     | "retry_budget_exhausted"
     | "convergence_stalled"
     | "window_exhausted"
+    | "window_paused"
+    | "provider_unhealthy"
     | "cancelled"
     | "failed"
     | null;
   runId: string;
-  status: "queued" | "running" | "halted" | "completed" | "failed" | "cancelled";
+  status: "queued" | "running" | "paused" | "halted" | "completed" | "failed" | "cancelled";
 }
 
 /** Generated from `tanren.http.TaskTimelineEntry` (contracts/json/http/TaskTimelineEntry.json). */

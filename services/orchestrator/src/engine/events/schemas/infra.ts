@@ -392,6 +392,8 @@ export const UsageWindowPressurePayload = z
   })
   .strict();
 
+// task #82 — usage.window.refreshed lives in schemas/windowPause.ts.
+
 // usage.accounting.observed — token-consumption accounting from ccusage. The
 // token buckets are disjoint (same convention as the cost schema); costUsd is
 // best-effort and null unless ccusage reports a positive figure.

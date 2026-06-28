@@ -7,7 +7,17 @@ import { z } from "zod";
 // The single, canonical run-status vocabulary (v21). A successful run ends at
 // `completed` — there is NO second `done` value, so every producer/consumer reads
 // one vocabulary.
-export const RunStatus = z.enum(["queued", "running", "halted", "completed", "failed", "cancelled"]);
+//
+// `paused` (task #82 — window-pause auto-resume): a NON-TERMINAL "alive but
+// not actively executing, waiting for capacity to refresh" state, distinct from
+// `halted`. A `window_exhausted` writer outcome (or a `CodexUsageLimitError`
+// from the answerer path) routes the run here — the spec stays `in_flight`
+// (no successor enqueue) and the background prober transitions the run BACK
+// to `halted` (recoverable) when capacity returns, at which point the walker
+// re-drives the spec. This extends the timeout-eradication doctrine
+// (sign-of-life, not wall-clock) to provider usage windows: a provider whose
+// window is currently exhausted is NOT dead, it is gated on a refresh signal.
+export const RunStatus = z.enum(["queued", "running", "paused", "halted", "completed", "failed", "cancelled"]);
 export type RunStatus = z.infer<typeof RunStatus>;
 
 // The run-outcome vocabulary. `ok` is the generic success outcome a completed run
@@ -16,6 +26,18 @@ export type RunStatus = z.infer<typeof RunStatus>;
 // `phase1_fixture_complete`, `phase2_easy_complete`, `phase2_medium_complete`, plus
 // the older `hello_world_complete` + `pending` — were pruned: nothing on the live
 // run path ever wrote them; only the old hello/phase validation fixtures did.)
+//
+// `window_paused` (task #82): the outcome stamped on a run that paused on a
+// usage-window exhaustion — distinct from the legacy `window_exhausted` (which
+// halted recoverable but kept escalating through the convergence detector). A
+// `paused` run carries `window_paused` while waiting on the prober's resume;
+// the resume flips the run to `halted` with the SAME `window_paused` outcome
+// so the recovery surface keeps the distinct WHY without re-classifying.
+//
+// `provider_unhealthy` (task #82): the outcome a `paused` run terminates with
+// when the prober detects the provider's probe ITSELF is broken (auth revoked,
+// account suspended, CLI binary missing) — distinct from a recoverable
+// capacity gap; escalates the spec to `needs_attention` so an operator can act.
 export const RunOutcome = z.enum([
   "ok",
   "halted",
@@ -26,6 +48,8 @@ export const RunOutcome = z.enum([
   // retry-cap halt as the in-loop "a human action is the genuine next step" outcome.
   "convergence_stalled",
   "window_exhausted",
+  "window_paused",
+  "provider_unhealthy",
   "cancelled",
   "failed",
 ]);
@@ -35,9 +59,17 @@ export type RunOutcome = z.infer<typeof RunOutcome>;
 // The operator cancel-spec/cancel-run action (workflow/cancelSpec) can cancel a run
 // from ANY non-terminal status — including a still-`queued` run that never started —
 // so `queued → cancelled` is legal (the operator decided the work should not proceed).
+//
+// task #82: `paused` is a non-terminal "awaiting capacity" state. A `running`
+// run that hits `window_exhausted` flips to `paused`; the background prober
+// resumes it by flipping to `halted` (re-drive, walker re-enqueues) once
+// capacity returns, or terminates it `failed` when the provider is
+// structurally unhealthy. A `queued` run that the preflight catches at
+// window pressure can flip straight to `paused` without ever `running`.
 const allowedRunTransitions: Record<RunStatus, ReadonlyArray<RunStatus>> = {
-  queued: ["running", "cancelled"],
-  running: ["halted", "completed", "failed", "cancelled"],
+  queued: ["running", "paused", "cancelled"],
+  running: ["paused", "halted", "completed", "failed", "cancelled"],
+  paused: ["halted", "failed", "cancelled"],
   halted: ["running", "cancelled"],
   completed: [],
   failed: [],

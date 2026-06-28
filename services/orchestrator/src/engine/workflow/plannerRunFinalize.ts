@@ -1,14 +1,9 @@
 // The planner-loop workflow's run-FINALIZE helpers, extracted from
 // `plannerRun.ts` (file-size + complexity caps). All terminal `UPDATE runs`
-// transitions the workflow drives go through {@link FinalizeRunState}.
-//
-// `buildFinalizeRunState` returns a closure that — when the
-// worker injects a remote finalizer (`input.finalizeRun`, remote-writes on) —
-// routes the terminal UPDATE through the control-plane endpoint; otherwise it
-// runs the SAME in-process UPDATE the workflow always has (the
-// `directSql`/`directParams` are byte-identical to the prior write, so the
-// default path + its mutation suite are unchanged). The `fromStatuses` guard is
-// what the remote endpoint applies for exactly-once.
+// transitions go through {@link FinalizeRunState}: when the worker injects
+// a remote finalizer, routes through the control-plane; else runs the SAME
+// in-process UPDATE byte-identical. The `fromStatuses` guard is what the
+// remote endpoint applies for exactly-once.
 
 import type { Allocator, ReleaseReason, RunnerAllocation, RunnerHandle } from "../contracts/allocator.js";
 import { asSshRunnerHandle } from "../contracts/allocator.js";
@@ -19,6 +14,7 @@ import type { EventName, EventPayload } from "../events/index.js";
 import { removeRunWorkspaceDir, WorkspaceBootstrapError } from "../workspace/index.js";
 import { AncestorNotReadyError } from "../dag/jjLocalIntegration.js";
 import { applyTerminalOutcome, type DispositionSeams } from "./plannerRunRedrive.js";
+import { finalizePauseAtomicSeam } from "./plannerRunPauseSeam.js";
 import type { NonPassDetail, TerminalOutcome } from "./runFinalizeAuthority.js";
 import { resolveWorkflowThrow, type WorkflowErrorDisposition } from "./workflowErrorDisposition.js";
 import type { PreparedRunWorkspace } from "./plannerRunWorkspace.js";
@@ -111,30 +107,24 @@ export async function setSpecStatus(
   await input.pool.query("UPDATE specs SET status = $2 WHERE spec_id = $1", [context.specId, status]);
 }
 
-/** Finalize a non-pass loop outcome to a halted run (distinct outcome preserves WHY). */
+/** Finalize a non-pass loop outcome to a halted run; task #82: window_exhausted
+ * routes through {@link finalizePauseAtomicSeam} instead. */
 export async function finalizeNonPass(
   finalizeRunState: FinalizeRunState,
   runId: string,
-  outcome: "window_exhausted" | "convergence_stalled" | "halted",
+  outcome: "convergence_stalled" | "halted",
 ): Promise<void> {
   await finalizeRunState(
     "halted",
     outcome,
-    // A non-pass finalize moves a still-running/queued run to halted; the direct
-    // SQL is byte-identical to the prior unguarded UPDATE (the guard only bites
-    // server-side on the remote path, for exactly-once).
     ["running", "queued"],
     "UPDATE runs SET status = 'halted', outcome = $2, ended_at = now() WHERE run_id = $1",
     [runId, outcome],
   );
 }
 
-/**
- * Build the {@link DispositionSeams} — the SINGLE place a terminal outcome's lifecycle
- * writes are applied. Task #48 routes the terminal-pair sites (`updateSpecAtomic` /
- * `finalizeGenuineHaltAtomic`) through atomic seams; the legacy non-terminal-pair
- * seams remain for the re-drive run halt and (via `finalizeMergeOutcome`) the merge.
- */
+/** Build the {@link DispositionSeams} — the SINGLE place a terminal outcome's
+ * lifecycle writes are applied. */
 function dispositionSeams(
   input: RunPlannerLoopInput,
   finalizeRunState: FinalizeRunState,
@@ -147,11 +137,8 @@ function dispositionSeams(
     finalizeNonPass: (outcome) => finalizeNonPass(finalizeRunState, context.runId, outcome),
     setSpecStatus: (status) => setSpecStatus(input, context, status),
     // Three-arm dispatch (R5 #2 / task #50): writer+orgId → remote atomic;
-    // orgId, no writer → in-process direct atomic via runWithOrgScope's
-    // BEGIN/COMMIT around applyXxxWithEvent (the previously-missing arm —
-    // pre-fix the in-process-without-writer mode fell through to the legacy
-    // split, silently reintroducing the audit-trail gap #674/#676 closed for
-    // the remote-writes path); no orgId → unit-test legacy split.
+    // orgId-only → in-process direct atomic via runWithOrgScope's BEGIN/COMMIT
+    // around applyXxxWithEvent; no orgId → unit-test legacy split.
     updateSpecAtomic: async (spec, event) => {
       if (input.runStateWriter !== undefined && orgId !== undefined) {
         await input.runStateWriter.updateSpecWithEvent({
@@ -216,6 +203,9 @@ function dispositionSeams(
       );
       await appendEvent(event.eventType, event.payload, event.taskId);
     },
+    // task #82 — window-pause auto-resume: see `plannerRunPauseSeam.ts`.
+    finalizePauseForCapacityAtomic: (event) =>
+      finalizePauseAtomicSeam({ input, finalizeRunState, context, appendEvent, orgId }, event),
   };
 }
 
@@ -235,19 +225,29 @@ export async function finalizeNonPassOutcome(
   context: PlannerRunContext,
   appendEvent: <N extends EventName>(eventType: N, payload: EventPayload<N>, taskId?: string) => Promise<void>,
   detail: NonPassDetail,
+  // task #82: OPTIONAL window snapshot the subtask loop captured at pause time
+  // — threaded so the `pause_for_capacity` applier stamps `run.paused`.
+  window?: { provider: string; slot: string; usedPercent: number; resetsAt: string },
 ): Promise<void> {
   await applyTerminalOutcome(
-    { kind: "non_pass", detail },
+    { kind: "non_pass", detail, ...(window !== undefined && { window }) },
     { appendEvent, input, context },
     dispositionSeams(input, finalizeRunState, context, appendEvent),
   );
 }
 
-/** The non-pass loop outcome → the authority's public-safe sub-reason (the diagnostic detail). */
+/** The non-pass loop outcome → the authority's public-safe sub-reason. task
+ * #82's window snapshot rides as a separate optional through
+ * {@link nonPassWindow} (the snapshot the `run.paused` event carries). */
 export function nonPassDetailFor(outcome: SubtaskLoopOutcome): NonPassDetail {
   if (outcome.kind === "window_exhausted") return "window_exhausted";
   if (outcome.kind === "convergence_stalled") return "convergence_stalled";
   return "halted";
+}
+export function nonPassWindow(o: SubtaskLoopOutcome) {
+  return o.kind === "window_exhausted"
+    ? { provider: o.provider, slot: o.slot, usedPercent: o.usedPercent, resetsAt: o.resetsAt }
+    : undefined;
 }
 
 /**
@@ -359,6 +359,9 @@ export async function finalizeWorkflowError(
     ctx,
     dispositionSeams(ctx.input, ctx.finalizeRunState, ctx.context, ctx.appendEvent),
   );
+  // task #82: `pause_for_capacity` is the 4th disposition — non-terminal,
+  // treated like `re_drive` by the workflow `catch`.
+  if (bucket === "pause_for_capacity") return "pause_for_capacity";
   return bucket === "genuine_halt" ? "genuine_halt" : "re_drive";
 }
 

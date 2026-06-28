@@ -116,7 +116,7 @@ describe("runPlannerLoopWorkflow", () => {
     expect(pool.runStatus.outcome).toBe("ok");
   });
 
-  it("halts on window pressure without publishing a PR", async () => {
+  it("PAUSES on window pressure (task #82 — NEW non-terminal status, not halted) without publishing a PR", async () => {
     const { ctx, pool, events, secrets, allocator, ssh } = await setup();
     // any request would throw
     const github = new ScriptedGitHubHttp([]);
@@ -136,9 +136,12 @@ describe("runPlannerLoopWorkflow", () => {
 
     expect(result.outcome.kind).toBe("window_exhausted");
     expect(result.pullRequest).toBeUndefined();
-    expect(pool.runStatus).toEqual({ status: "halted", outcome: "window_exhausted" });
+    // task #82: window pressure flips the run to the NEW non-terminal `paused`
+    // status (outcome `window_paused`) instead of `halted` — the background
+    // prober owns the resume (spec stays `in_flight`, no successor enqueue).
+    expect(pool.runStatus).toEqual({ status: "paused", outcome: "window_paused" });
     // No PR/CI/merge request was made. The ONLY GitHub call is the authenticated clone's MERGE-SAFETY
-    // identity read (`GET /user`), during clone before the window-pressure halt; everything else skipped.
+    // identity read (`GET /user`), during clone before the window-pressure pause; everything else skipped.
     expect(github.requests.filter((r) => !(r.method === "GET" && r.path.startsWith("/user")))).toHaveLength(0);
     expect(allocator.releases).toEqual(["runner_planner"]);
   });
@@ -397,7 +400,7 @@ describe("runPlannerLoopWorkflow", () => {
     expect(allocator.releases).toEqual(["runner_planner"]);
   });
 
-  it("RE-DRIVES a Codex usage-limit thrown mid-loop (a transient window) — run halts, spec re-driven, no throw", async () => {
+  it("PAUSES a Codex usage-limit thrown mid-loop (task #82 — pause_for_capacity bucket, NOT a re-drive; spec stays in_flight)", async () => {
     const { ctx, pool, events, secrets, allocator, ssh } = await setup();
     const throwingPlanner: AnswererAdapter<PlanAnswer> = {
       kind: "answerer",
@@ -408,9 +411,11 @@ describe("runPlannerLoopWorkflow", () => {
       },
     };
 
-    // UNIFIED RUN-FINALIZE (apex v35): a usage-limit is TRANSIENT (a recoverable window) ⇒ RE-DRIVE.
-    // The run halts `window_exhausted` (WHY preserved), the spec returns to `open` + `dag.spec.redriven`,
-    // and the workflow RETURNS NORMALLY (never re-throws into the worker's strand path).
+    // task #82 — window-pause auto-resume: a usage-limit is TRANSIENT WINDOW PRESSURE ⇒
+    // route to the NEW `pause_for_capacity` bucket, NOT re-drive. The run flips to the
+    // non-terminal `paused` status (outcome `window_paused`), the spec stays `in_flight`
+    // (no `dag.spec.redriven`), and the workflow returns NORMALLY (no throw). The
+    // background prober owns the resume when capacity returns.
     const run = runPlannerLoopScoped({
       pool: pool.asPgPool(),
       eventStore: events,
@@ -429,13 +434,15 @@ describe("runPlannerLoopWorkflow", () => {
       }),
       buildUsageProbe: () => fakeProbe(healthyWindow(), accounting(null)),
     });
-    // RE-DRIVE returns NORMALLY (no throw).
+    // PAUSE-FOR-CAPACITY returns NORMALLY (no throw, treated like re-drive).
     const result = await run;
     expect(result.reDriven).toBe(true);
-    expect(pool.runStatus).toEqual({ status: "halted", outcome: "window_exhausted" });
-    expect(pool.specStatuses.at(-1)).toBe("open");
-    const redriven = events.events.find((e) => e.eventType === "dag.spec.redriven");
-    expect(redriven?.payload).toMatchObject({ failureCode: "usage_limit" });
+    expect(pool.runStatus).toEqual({ status: "paused", outcome: "window_paused" });
+    // Spec stays `in_flight` (no `open` flip, no `dag.spec.redriven`) — the prober owns resume.
+    expect(pool.specStatuses.at(-1)).not.toBe("open");
+    expect(events.events.find((e) => e.eventType === "dag.spec.redriven")).toBeUndefined();
+    const paused = events.events.find((e) => e.eventType === "run.paused");
+    expect(paused?.payload).toMatchObject({ usedPercent: 100 });
     expect(allocator.releases).toEqual(["runner_planner"]);
   });
 });

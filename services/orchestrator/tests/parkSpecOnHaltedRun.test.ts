@@ -128,7 +128,7 @@ describe("finalizeWorkflowError — a GENUINE-TERMINAL misconfiguration GENUINE-
     expect(redriven(events)).toBeUndefined();
   });
 
-  it("a recoverable usage-limit fault RE-DRIVES (the whack-a-mole park is gone) — not needs_attention", async () => {
+  it("a recoverable usage-limit fault PAUSES (task #82 — pause_for_capacity bucket, spec stays in_flight, NOT needs_attention)", async () => {
     const pool = new RecordingPool();
     const { events, appendEvent, finalizeRunState, input } = harness(pool, readerReturning(0));
     const { CodexUsageLimitError } = await import("../src/engine/providers/codex.js");
@@ -141,13 +141,18 @@ describe("finalizeWorkflowError — a GENUINE-TERMINAL misconfiguration GENUINE-
       context: ctx(),
     });
 
-    // A usage window is TRANSIENT — the spec re-drives (the walker re-attempts after the window).
-    expect(disposition).toBe("re_drive");
-    expect(pool.specStatusWritten()).toBe("open");
+    // task #82: a usage window is TRANSIENT WINDOW PRESSURE — routes to the
+    // NEW `pause_for_capacity` bucket (NOT re-drive). The spec is intentionally
+    // untouched (NO `open` flip, NO `dag.spec.redriven`); the background
+    // prober owns the resume. Window pressure is UNBOUNDED — never escalates.
+    expect(disposition).toBe("pause_for_capacity");
+    expect(pool.specStatusWritten()).toBeUndefined();
     expect(needsAttention(events)).toBeUndefined();
-    // The usage pressure is still surfaced loudly (the diagnostic event), and the re-drive is observable.
+    expect(redriven(events)).toBeUndefined();
+    // The usage pressure is still surfaced loudly + `run.paused` rides the
+    // atomic seam (provider/slot/usedPercent/resetsAt diagnostic for the prober).
     expect(events.find((e) => e.eventType === "usage.window.pressure")).toBeDefined();
-    expect(redriven(events)?.failureCode).toBe("usage_limit");
+    expect(events.find((e) => e.eventType === "run.paused")).toBeDefined();
   });
 
   it("a workspace-bootstrap fault RE-DRIVES (transient deps install), surfacing workspace.failed", async () => {

@@ -140,8 +140,8 @@ type AppendEvent = <N extends EventName>(eventType: N, payload: EventPayload<N>,
  */
 export interface DispositionSeams {
   /** Halt the run RECOVERABLE (work not discarded) — the re-drive's run finalize. The
-   * distinct `window_exhausted` / `convergence_stalled` outcome preserves WHY for recovery. */
-  finalizeNonPass: (outcome: "halted" | "window_exhausted" | "convergence_stalled") => Promise<void>;
+   * distinct `convergence_stalled` outcome preserves WHY for recovery. */
+  finalizeNonPass: (outcome: "halted" | "convergence_stalled") => Promise<void>;
   /** Set the spec status (→ `open` to re-drive, → `needs_attention` to genuine-halt). */
   setSpecStatus: (status: string) => Promise<void>;
   /** The remote/in-process terminal-run finalizer (the genuine-halt `failed` write). */
@@ -168,6 +168,15 @@ export interface DispositionSeams {
    * pairing data. Suppresses the event on a no-row-moved outcome.
    */
   finalizeGenuineHaltAtomic: (event: AppendEventInput) => Promise<void>;
+  /**
+   * task #82 — window-pause auto-resume. Flip the run to the NEW non-terminal
+   * `paused` status (outcome `window_paused`) — distinct from `halted` — so
+   * the SPEC stays `in_flight` (no successor enqueue from the walker) and the
+   * background prober owns the resume. Carries the `run.paused` event payload
+   * so the row UPDATE + the event INSERT land or fail together (same
+   * atomicity invariant as `finalizeGenuineHaltAtomic`).
+   */
+  finalizePauseForCapacityAtomic: (event: AppendEventInput) => Promise<void>;
 }
 
 /** The run/spec facts the applier reads (the subset of the workflow error context it uses). */
@@ -205,6 +214,10 @@ export async function applyTerminalOutcome(
   if (disposition.bucket === "re_drive") {
     await applyRedrive(ctx, seams, disposition);
     return "re_drive";
+  }
+  if (disposition.bucket === "pause_for_capacity") {
+    await applyPauseForCapacity(ctx, seams, disposition, outcome);
+    return "pause_for_capacity";
   }
   if (disposition.bucket === "genuine_halt") {
     await applyGenuineHalt(ctx, seams, disposition);
@@ -322,6 +335,71 @@ async function applyGenuineHalt(
 }
 
 /**
+ * task #82 — apply a `pause_for_capacity` disposition. The run hit a provider
+ * usage-window exhaustion (writer's `window_exhausted` exit / answerer's
+ * `CodexUsageLimitError` / preflight pressure escalation). The applier flips
+ * the run to the NEW non-terminal `paused` status (outcome `window_paused`)
+ * via the atomic seam, paired with a `run.paused` event carrying the snapshot
+ * the background prober reads to schedule its capacity re-probe. The SPEC
+ * stays `in_flight` (no spec-status flip, no `dag.spec.redriven` event) so
+ * the walker does NOT enqueue a successor run — the same paused run is the
+ * spec's continuation; the prober owns the resume.
+ *
+ * Extracting `provider` / `slot` / `usedPercent` / `resetsAt` from the
+ * upstream outcome: the non-pass `window_exhausted` carries these directly
+ * (the subtask loop builds them from the writer's `window_exhausted` exit or
+ * the preflight pressure). The error path's `CodexUsageLimitError` does NOT
+ * (the answerer throw carries only a schema name + message), so the pause
+ * event falls back to a generic snapshot — the prober's cadence-based probe
+ * resumes regardless; the diagnostic detail is degraded, not the function.
+ */
+async function applyPauseForCapacity(
+  ctx: DispositionContext,
+  seams: DispositionSeams,
+  disposition: Extract<RunDisposition, { bucket: "pause_for_capacity" }>,
+  outcome: TerminalOutcome,
+): Promise<void> {
+  const snapshot = extractPauseSnapshot(outcome);
+  await seams.finalizePauseForCapacityAtomic({
+    runId: ctx.context.runId,
+    specId: ctx.context.specId,
+    projectId: resolveProjectId(ctx),
+    eventType: "run.paused",
+    payload: {
+      provider: snapshot.provider,
+      slot: snapshot.slot,
+      usedPercent: snapshot.usedPercent,
+      resetsAt: snapshot.resetsAt,
+      reason: disposition.summary,
+    },
+  });
+}
+
+/**
+ * Pull the pause snapshot (provider / slot / usedPercent / resetsAt) out of
+ * the upstream {@link TerminalOutcome}. A `non_pass` `window_exhausted`
+ * carries the rich snapshot on its detail (the subtask loop's preflight or
+ * mid-call detection); an `error` path's `CodexUsageLimitError` carries only
+ * an opaque message — the snapshot degrades to a generic now-timestamp with
+ * `usedPercent: 100`. Either way the prober's cadence-based probe resumes
+ * when capacity returns; the snapshot is diagnostic, not load-bearing.
+ */
+interface PauseSnapshot {
+  provider: string;
+  slot: string;
+  usedPercent: number;
+  resetsAt: string;
+}
+
+function extractPauseSnapshot(outcome: TerminalOutcome): PauseSnapshot {
+  if (outcome.kind === "non_pass" && outcome.detail === "window_exhausted") {
+    const w = (outcome as { window?: PauseSnapshot }).window;
+    if (w !== undefined) return w;
+  }
+  return { provider: "agent", slot: "primary", usedPercent: 100, resetsAt: new Date().toISOString() };
+}
+
+/**
  * Read the CONVERGENCE FACTS (the fixed-point streak) via the wired reader. `0` ⇒ progress /
  * first of its kind / no reader / no fault (⇒ ALWAYS re-drive). The reader returns 1 only at
  * a proven fixed point (the prior attempt was structurally identical), which is when the
@@ -329,10 +407,11 @@ async function applyGenuineHalt(
  */
 async function readConvergenceFacts(ctx: DispositionContext, outcome: TerminalOutcome): Promise<ConvergenceFacts> {
   // Only an error / non-pass outcome carries a counted failure code; probe a disposition at
-  // progress (0) to recover the code. A merge / ancestor-wait outcome never reaches the
+  // progress (0) to recover the code. A merge / ancestor-wait / pause_for_capacity (task
+  // #82 — window pressure is UNBOUNDED, never escalates) outcome never reaches the
   // fixed-point rule, so the facts are immaterial (return progress).
   const probe = decideRunDisposition(outcome, { priorSameFixedPoint: 0 });
-  const code = probe.bucket === "converge" ? undefined : probe.failure?.code;
+  const code = probe.bucket === "re_drive" || probe.bucket === "genuine_halt" ? probe.failure?.code : undefined;
   const reader = ctx.input.redriveHistoryReader;
   const orgId = typeof ctx.context.orgId === "string" ? ctx.context.orgId : undefined;
   if (reader === undefined || orgId === undefined || code === undefined) return { priorSameFixedPoint: 0 };

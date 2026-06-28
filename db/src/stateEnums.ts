@@ -8,6 +8,7 @@ export const stateEnumLists = {
   runs_status: [
     "queued",
     "running",
+    "paused",
     "halted",
     "completed",
     "failed",
@@ -20,6 +21,8 @@ export const stateEnumLists = {
     "retry_budget_exhausted",
     "convergence_stalled",
     "window_exhausted",
+    "window_paused",
+    "provider_unhealthy",
     "cancelled",
     "failed"
   ],

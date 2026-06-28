@@ -1,9 +1,8 @@
-// The real planner-loop run-trigger: drives runSubtaskLoop with real Codex adapters
-// (injectable factories default to real Codex/SSH; tests inject fakes). On a passing loop it
-// publishes a draft PR, runs the NATIVE pre-merge gate (the merge authority, in-loop over the
-// command substrate — no forge CI poll) + publishes the `tanren/gate` verdict, then drives
-// review→merge. Non-pass outcomes (window_exhausted / convergence_stalled / halted) map to a
-// halted run without a PR; a mid-loop Codex usage-limit is window_exhausted (PROJECT_BRIEF §4.3).
+// The real planner-loop run-trigger: drives runSubtaskLoop with real Codex
+// adapters; on a passing loop publishes a draft PR, runs the native pre-merge
+// gate, then drives review→merge. Non-pass outcomes map per-disposition:
+// task #82's `window_exhausted` → pause_for_capacity (run → paused, spec
+// stays in_flight, prober resumes); other non-pass → re-drive (run → halted).
 import type pg from "pg";
 import type { CiWhen } from "../ci/index.js";
 import type {
@@ -64,6 +63,7 @@ import {
   finalizeWorkflowThrow,
   markRunRunning,
   nonPassDetailFor,
+  nonPassWindow,
   releaseRunnerWithCleanupProof,
   type RunCredentialScoping,
   runnerPayload,
@@ -121,22 +121,15 @@ export interface PlannerRunContext {
   endpointBaseUrl?: string;
   // Governance posture (run worker): drives the gate's advisory policy (`lenient` ⇒ lint/typecheck advisory; absent ⇒ strict).
   governancePosture?: GovernancePosture;
-  // SPEC-LOOP REDESIGN (docs/roadmap/spec-loop-redesign.md): the per-project audit posture (triage
-  // P1–P3 → tasks-here vs new specs) + the convergence policy (the SOLE loop bound). Absent on unit
-  // paths ⇒ DEFAULT_AUDIT_POSTURE / DEFAULT_CONVERGENCE_POLICY.
+  // SPEC-LOOP REDESIGN: per-project audit posture + convergence policy (the SOLE loop bound).
   auditPosture?: AuditPostureConfig;
   convergencePolicy?: ConvergencePolicyConfig;
   // AUDIT-EVIDENCE BASELINE: governance policy version (project config version), stamped onto the `gate.verdict` roll-up. Absent on unit paths with no config.
   policyVersion?: number;
-  // GREENFIELD MARKER (ProjectConfigV1.greenfield): drives buildDefaultGate's in-loop deps-ensure MODE — greenfield ⇒ NON-FROZEN install; absent/false ⇒ FROZEN brownfield.
   greenfield?: boolean;
-  // cost PR-C: CONFIGURED per-credential credit→USD rate (from project/org `creditRates`). Absent ⇒ a real drawdown is NULL-and-loud.
   creditUsdRate?: number;
-  // DETERMINISTIC CONTRACT FILES (v27 fix): the `.tanren/ci.yml` + `justfile` workspace-prep materializes VERBATIM (write-iff-absent) from the captured lifecycle BEFORE the writer runs — so they are NEVER LLM-authored (the writer mangled the ci.yml shape on v27). Absent ⇒ no lifecycle (brownfield ships its own) ⇒ no-op.
   contractFiles?: ReadonlyArray<ContractFile>;
-  // TEMPLATING WAVE 3 (templating-system.md §3): the SELECTED template's repo ref to SEED from (from `projectConfig.templateRef`). When set, the run clones the template's conforming files into the workspace BEFORE the writer — so the scaffold writer's "seed already committed" assertion holds and it specializes the seed instead of authoring from scratch. Absent ⇒ no match ⇒ the from-scratch contract-file path runs.
   templateSeed?: { repoRef: string };
-  // WS-A PR-4: the ordered ancestor stack this dependent speculative run is stacked on (from `runs.ancestor_stack`). With `WALKER_JJ_LOCAL_BASE` on + non-empty, the workspace bootstrap jj-assembles the base from these ancestor refs vs the legacy single-ref clone.
   ancestorStack?: AncestorStack;
 }
 
@@ -385,9 +378,15 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
       });
 
       if (outcome.kind !== "passed") {
-        // UNIFIED RUN-FINALIZE (apex v35): a non-pass loop exit is TRANSIENT — RE-DRIVE
-        // (bounded by the consecutive-same-failure cap), never a direct park.
-        await finalizeNonPassOutcome(input, finalizeRunState, context, appendEvent, nonPassDetailFor(outcome));
+        // task #82: window_exhausted → pause_for_capacity (snapshot rides run.paused); other non-pass → re-drive.
+        await finalizeNonPassOutcome(
+          input,
+          finalizeRunState,
+          context,
+          appendEvent,
+          nonPassDetailFor(outcome),
+          nonPassWindow(outcome),
+        );
         releaseReason = "failed";
         return { runId: context.runId, workspacePath, outcome };
       }

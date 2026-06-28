@@ -120,6 +120,13 @@
       "when": 1782530000000,
       "tag": "0018_fragments_doctrine_collapse",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1782660355198,
+      "tag": "0019_window_pause_auto_resume",
+      "breakpoints": true
     }
   ]
 }

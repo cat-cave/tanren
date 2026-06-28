@@ -369,15 +369,13 @@ export class ScriptedGitHubHttp implements GitHubHttpClient {
   }
 }
 
-// Fake pool covering: run-state updates, the loop's task/cost rows (incl. the
-// ccusage reconcile SELECT/UPDATE), the planner-task supersede, and the CI
-// poll queries.
+// Fake pool covering: run-state updates, the loop's task/cost rows, the
+// planner-task supersede, and the CI poll queries.
 export class PlannerRunPool {
   runStatus: { status: string; outcome: string | null } = { status: "queued", outcome: null };
   prUrl: string | null = null;
   readonly taskKinds: string[] = [];
-  // Every `UPDATE specs SET status = ...` in spec-write order. The review-rework
-  // re-entry writes 'in_flight'; the merged/handed-off tail writes merged/done.
+  /** Every `UPDATE specs SET status = ...` in spec-write order. */
   readonly specStatuses: string[] = [];
   private readonly costRows: Array<{ id: string; total_tokens: number; billing_mode: string }> = [];
   private nextCostId = 1;
@@ -478,6 +476,11 @@ export class PlannerRunPool {
       this.runStatus = { status: "halted", outcome: String(params[1]) };
       return { rows: [], rowCount: 1 };
     }
+    // task #82.
+    if (trimmed.startsWith("UPDATE runs SET status = 'paused'")) {
+      this.runStatus = { status: "paused", outcome: "window_paused" };
+      return { rows: [], rowCount: 1 };
+    }
     if (trimmed.startsWith("UPDATE runs SET status = 'failed'")) {
       this.runStatus = { status: "failed", outcome: "failed" };
       return { rows: [], rowCount: 1 };
@@ -485,10 +488,7 @@ export class PlannerRunPool {
     return { rows: [], rowCount: 1 };
   }
 
-  // A minimal `connect()` so seams that open a `runWithOrgScope` /
-  // `runWithSystemScope` transaction (e.g. the BUDGET-SAFETY M6 PgBudgetGate
-  // preflight) work over this fake: the client routes `query` back here, `release()`
-  // is a no-op, and the budget read hits the catch-all (empty → unlimited no-op).
+  // Minimal `connect()` so `runWithOrgScope`/`runWithSystemScope` transactions work.
   async connect(): Promise<{ query: PlannerRunPool["query"]; release: () => void }> {
     return { query: this.query.bind(this), release: () => {} };
   }

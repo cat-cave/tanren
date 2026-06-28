@@ -3,6 +3,7 @@
   "enum": [
     "queued",
     "running",
+    "paused",
     "halted",
     "completed",
     "failed",

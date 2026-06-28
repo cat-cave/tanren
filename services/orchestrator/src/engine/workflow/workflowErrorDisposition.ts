@@ -21,19 +21,23 @@
 // successor run is the continuation), so the workflow returns normally.
 
 /**
- * How the workflow's own error finalizer disposed of a thrown run-error — one of the THREE
+ * How the workflow's own error finalizer disposed of a thrown run-error — one of the FOUR
  * buckets of the unified authority. EVERY bucket has already finalized BOTH the run's
- * terminal status AND the spec's status, so the worker must NOT re-finalize (strand) any.
+ * terminal status AND the spec's status (or, for `pause_for_capacity`, left it intentionally
+ * `in_flight`), so the worker must NOT re-finalize (strand) any.
  *
  *  - `re_drive` — a retriable random/transient fault: run → `halted`, spec → `open`,
  *    `dag.spec.redriven`. The attempt is terminally disposed of; the walker's successor run
  *    is the continuation. The workflow returns normally (does NOT throw).
+ *  - `pause_for_capacity` (task #82) — a provider usage-window exhaustion: run → `paused`
+ *    (NEW non-terminal status), spec stays `in_flight`, emit `run.paused`. The background
+ *    prober owns the resume; the workflow returns normally (does NOT throw).
  *  - `genuine_halt` — a structural misconfiguration / persistent same-failure / human-decision:
  *    run → `failed`, spec → `needs_attention`. The job still fails (re-thrown wrapped).
  *
  * (`converge` is not a thrown-error disposition — a merged run finalizes on the happy path.)
  */
-export type WorkflowErrorDisposition = "re_drive" | "genuine_halt";
+export type WorkflowErrorDisposition = "re_drive" | "pause_for_capacity" | "genuine_halt";
 
 /**
  * The EXPLICIT "the workflow already finalized this run attempt" signal. The workflow
@@ -84,6 +88,9 @@ export function rawCauseOf(error: unknown): unknown {
  * type so the disposition module stays decoupled from `PlannerRunResult`.
  */
 export function resolveWorkflowThrow<R>(disposition: WorkflowErrorDisposition, error: unknown, reDriven: () => R): R {
-  if (disposition === "re_drive") return reDriven();
+  // task #82: `pause_for_capacity` is non-terminal (the run is alive, waiting
+  // on the prober's resume) — same as `re_drive` for the workflow `catch`'s
+  // purpose: return normally, never re-throw into the worker's strand path.
+  if (disposition === "re_drive" || disposition === "pause_for_capacity") return reDriven();
   throw new WorkflowFinalizedError(disposition, error);
 }

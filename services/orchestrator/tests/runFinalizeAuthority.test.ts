@@ -38,29 +38,15 @@ describe("decideRunDisposition — RE-DRIVE: every random/transient/internal/cra
     );
   });
 
-  it("a usage-limit window-exhausted fault RE-DRIVES (the walker re-attempts after the window)", () => {
-    expect(
-      decideRunDisposition({ kind: "error", error: new CodexUsageLimitError("primary", "out") }, PROGRESS).bucket,
-    ).toBe("re_drive");
-  });
-
-  it("EVERY non-pass exit (writer-stall / window / convergence / gate / review) RE-DRIVES — the whack-a-mole park is gone", () => {
-    for (const detail of [
-      "window_exhausted",
-      "convergence_stalled",
-      "merge_gate_unsatisfied",
-      "review_stalled",
-      "halted",
-    ] as const) {
+  it("EVERY non-pass exit (writer-stall / convergence / gate / review) RE-DRIVES — the whack-a-mole park is gone (task #82: window_exhausted routes to pause_for_capacity instead)", () => {
+    for (const detail of ["convergence_stalled", "merge_gate_unsatisfied", "review_stalled", "halted"] as const) {
       const d = decideRunDisposition({ kind: "non_pass", detail }, PROGRESS);
       expect(d.bucket).toBe("re_drive");
     }
   });
 
-  it("a non-pass exit preserves its distinct run.outcome WHY (window/convergence) for the recovery surface", () => {
-    const w = decideRunDisposition({ kind: "non_pass", detail: "window_exhausted" }, PROGRESS);
+  it("a non-pass exit preserves its distinct run.outcome WHY (convergence) for the recovery surface", () => {
     const c = decideRunDisposition({ kind: "non_pass", detail: "convergence_stalled" }, PROGRESS);
-    expect(w).toMatchObject({ bucket: "re_drive", runOutcome: "window_exhausted" });
     expect(c).toMatchObject({ bucket: "re_drive", runOutcome: "convergence_stalled" });
   });
 
@@ -87,6 +73,29 @@ describe("decideRunDisposition — RE-DRIVE: every random/transient/internal/cra
       PROGRESS,
     );
     expect(d).toMatchObject({ bucket: "re_drive", failure: { code: "empty_writer_output" } });
+  });
+});
+
+describe("decideRunDisposition — PAUSE FOR CAPACITY (task #82, window-pause auto-resume)", () => {
+  it("a writer/preflight `window_exhausted` non-pass routes to the NEW pause_for_capacity bucket (NOT re_drive, never escalates)", () => {
+    const d = decideRunDisposition({ kind: "non_pass", detail: "window_exhausted" }, PROGRESS);
+    expect(d.bucket).toBe("pause_for_capacity");
+  });
+
+  it("a `usage_limit` thrown error (CodexUsageLimitError from the answerer path) ALSO routes to pause_for_capacity — one disposition for the whole window family", () => {
+    const d = decideRunDisposition({ kind: "error", error: new CodexUsageLimitError("primary", "out") }, PROGRESS);
+    expect(d.bucket).toBe("pause_for_capacity");
+  });
+
+  it("a window-pressure pause is UNBOUNDED — even at a fixed-point streak it stays in pause_for_capacity (NEVER escalates to needs_attention)", () => {
+    // The v62 wedge: pre-task-#82 the second `window_exhausted` re-drive read as
+    // an identical fixed point and the convergence detector escalated to
+    // `genuine_halt.persistent_failure` — exactly what this fix eradicates. Now
+    // both PROGRESS and FIXED_POINT facts yield pause_for_capacity.
+    for (const facts of [PROGRESS, FIXED_POINT]) {
+      const d = decideRunDisposition({ kind: "non_pass", detail: "window_exhausted" }, facts);
+      expect(d.bucket).toBe("pause_for_capacity");
+    }
   });
 });
 

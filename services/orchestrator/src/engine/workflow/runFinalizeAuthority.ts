@@ -80,8 +80,17 @@ export type TerminalOutcome =
   | { kind: "error"; error: unknown }
   // A non-pass planner-loop exit (the writer never converged / a window exhausted / a
   // convergence stall / a merge-gate budget spent / a review stall). ALL transient:
-  // the spec re-drives. The `detail` is a public-safe sub-reason for observability.
-  | { kind: "non_pass"; detail: NonPassDetail }
+  // the spec re-drives (or, for a `window_exhausted` detail, the run pauses — task
+  // #82). The `detail` is a public-safe sub-reason for observability. The
+  // OPTIONAL `window` snapshot rides a `window_exhausted` non-pass so the
+  // applier can stamp the `run.paused` event with the real provider/slot/percent
+  // the subtask loop observed (the diagnostic the prober reads to schedule
+  // its capacity re-probe). Absent on every other detail.
+  | {
+      kind: "non_pass";
+      detail: NonPassDetail;
+      window?: { provider: string; slot: string; usedPercent: number; resetsAt: string };
+    }
   // The merge stage's terminal outcome (see `MergeOutcomeKind`). `merged` converges;
   // a genuine HITL/changes-requested human-decision (`needs_attention`) genuine-halts;
   // every other hold/conflict/handoff re-drives.
@@ -133,6 +142,15 @@ export type GenuineHaltReason =
  * needs to drive the lifecycle writes (the run terminal status, the spec status, the
  * observable event). A pure value — the I/O (the run/spec UPDATE, the event append) is the
  * caller's, so this module stays a clock-free, DB-free decision core.
+ *
+ * task #82 (window-pause auto-resume): the FOURTH bucket — `pause_for_capacity` —
+ * is the doctrine extension. A provider whose usage window is currently exhausted
+ * is NOT dead (it is gated on a refresh signal that can land via the natural
+ * reset OR a free reset the provider awards at any time); routing it through
+ * `re_drive` would burn fresh runs / converge to `needs_attention` (the v62
+ * wedge). Instead the run flips to the NEW non-terminal `paused` status, the
+ * SPEC stays `in_flight`, and a background prober resumes it when capacity
+ * returns — sign-of-life, never a wall-clock deadline.
  */
 export type RunDisposition =
   | {
@@ -141,15 +159,31 @@ export type RunDisposition =
       // stage + a FIXED safe summary. `undefined` for a benign ancestor-wait (no fault).
       failure?: { code: RunFailureCode; stage: RunFailureStage; summary: string };
       // The recoverable run.outcome to persist — `halted` for most re-drives, but a
-      // `window_exhausted` / `convergence_stalled` non-pass preserves its distinct WHY on
-      // the run row (the recovery surface keys off it) while the SPEC still re-drives.
-      runOutcome: "halted" | "window_exhausted" | "convergence_stalled";
+      // `convergence_stalled` non-pass preserves its distinct WHY on the run row
+      // (the recovery surface keys off it) while the SPEC still re-drives.
+      runOutcome: "halted" | "convergence_stalled";
       // The public-safe sub-reason for the timeline (the old strand reasons as diagnostics).
       subReason: string;
       // The walker-honored cooldown before the spec is re-picked.
       backoffSeconds: number;
       // The consecutive-same-failure count (this failure included); 0 for a no-fault re-drive.
       consecutiveSameFailure: number;
+    }
+  | {
+      // task #82 — window-pause auto-resume. The run hit a provider usage-window
+      // exhaustion (writer's `window_exhausted` exit / answerer's
+      // `CodexUsageLimitError` / preflight pressure escalation). UNBOUNDED — a
+      // window pressure never escalates to `genuine_halt`; capacity always returns
+      // (natural reset or free reset). The applier writes the run to the
+      // NON-TERMINAL `paused` status, leaves the spec `in_flight`, and emits
+      // `run.paused`; the background prober owns the resume.
+      bucket: "pause_for_capacity";
+      // The provider hint (writer's CLI label, e.g. "codex") — diagnostic, not
+      // used by the convergence detector (window pressure has no fixed-point cap).
+      provider: string;
+      // A safe human-readable summary for the timeline ("the writer's usage
+      // window was exhausted mid-subtask" / "the planner hit the codex usage limit").
+      summary: string;
     }
   | {
       bucket: "genuine_halt";
@@ -210,10 +244,23 @@ export function decideRunDisposition(outcome: TerminalOutcome, facts: Convergenc
     return decideMergeOutcome(outcome.mergeOutcome);
   }
   if (outcome.kind === "non_pass") {
-    // A non-pass planner-loop exit (writer never converged / window exhausted / gate
-    // budget spent / review stalled). ALL transient: the spec re-drives, UNBOUNDED while
-    // the failure keeps changing; it escalates only at a fixed point (the SAME non-pass
-    // exit recurring). The distinct WHY rides the run.outcome so recovery keeps it.
+    // task #82: a `window_exhausted` non-pass routes to the NEW pause bucket
+    // (the writer/planner hit the provider's usage window) — UNBOUNDED, never
+    // escalates to genuine-halt; capacity always returns and the background
+    // prober resumes. Every OTHER non-pass detail (convergence/gate/review)
+    // stays on the existing re-drive bucket.
+    if (outcome.detail === "window_exhausted") {
+      return {
+        bucket: "pause_for_capacity",
+        provider: "agent",
+        summary: nonPassSummary(outcome.detail),
+      };
+    }
+    // A non-pass planner-loop exit (writer never converged / gate budget spent /
+    // review stalled). ALL transient: the spec re-drives, UNBOUNDED while the
+    // failure keeps changing; it escalates only at a fixed point (the SAME
+    // non-pass exit recurring). The distinct WHY rides the run.outcome so
+    // recovery keeps it.
     return decideFromCode(
       {
         code: "internal",
@@ -226,18 +273,34 @@ export function decideRunDisposition(outcome: TerminalOutcome, facts: Convergenc
     );
   }
   // A thrown run-error: classify it through the SAME closed vocabulary the public events
-  // use, then decide on the CODE (a credential misconfiguration genuine-halts; everything
-  // else re-drives while progressing, escalating only at a fixed point).
+  // use, then decide on the CODE (a credential misconfiguration genuine-halts;
+  // a usage-limit pauses for capacity; everything else re-drives while
+  // progressing, escalating only at a fixed point).
   const classified = classifyRunFailure(outcome.error);
+  if (classified.code === "usage_limit") {
+    // task #82: the answerer-path's `CodexUsageLimitError` (planner / checker /
+    // auditor hit the provider window). Routes to the SAME pause bucket as the
+    // writer's `window_exhausted` outcome — one disposition for the whole
+    // window-pressure family.
+    return {
+      bucket: "pause_for_capacity",
+      provider: "agent",
+      summary: classified.summary,
+    };
+  }
   return decideFromCode({ ...classified, runOutcome: "halted" }, classified.code, facts);
 }
 
-/** The classified failure facts the shared decide-core reasons over (error + non-pass). */
+/** The classified failure facts the shared decide-core reasons over (error + non-pass).
+ *
+ * task #82: `window_exhausted` is GONE from this union — a window-pressure
+ * outcome routes to the new `pause_for_capacity` bucket at the top of
+ * `decideRunDisposition`, never through the re-drive convergence detector. */
 interface FailureFacts {
   code: RunFailureCode;
   stage: RunFailureStage;
   summary: string;
-  runOutcome: "halted" | "window_exhausted" | "convergence_stalled";
+  runOutcome: "halted" | "convergence_stalled";
 }
 
 /** Decide the disposition for a classified failure (the error + non-pass shared core). */
@@ -265,13 +328,14 @@ function decideFromCode(failureFacts: FailureFacts, subReason: string, facts: Co
   // one (identical failure + identical work) surfaces as a human-decision.
   const atFixedPoint = priorSameFixedPoint >= 1;
   if (!atFixedPoint) {
-    // A usage-limit fault halts the run `window_exhausted` (the distinct recovery WHY) even
-    // when it arrives via the error path, not just a non-pass loop exit.
-    const effectiveRunOutcome = code === "usage_limit" ? "window_exhausted" : runOutcome;
+    // task #82: `usage_limit` is now routed UPSTREAM (in `decideRunDisposition`)
+    // to the `pause_for_capacity` bucket — never reaches this point. The
+    // `runOutcome` is the FailureFacts as-passed (`halted` or
+    // `convergence_stalled`).
     return {
       bucket: "re_drive",
       failure,
-      runOutcome: effectiveRunOutcome,
+      runOutcome,
       subReason,
       backoffSeconds: redriveBackoffSeconds(priorSameFixedPoint),
       consecutiveSameFailure: priorSameFixedPoint + 1,
@@ -323,9 +387,14 @@ function decideMergeOutcome(mergeOutcome: MergeOutcomeForDisposition): RunDispos
   };
 }
 
-/** The recoverable run.outcome a non-pass exit persists (preserves the distinct WHY for recovery). */
-function nonPassRunOutcome(detail: NonPassDetail): "halted" | "window_exhausted" | "convergence_stalled" {
-  if (detail === "window_exhausted") return "window_exhausted";
+/** The recoverable run.outcome a non-pass exit persists (preserves the distinct WHY for recovery).
+ *
+ * task #82: `window_exhausted` is routed to the `pause_for_capacity` bucket
+ * upstream, so this never sees it on the re-drive path (defense-in-depth: a
+ * future caller hitting this branch with `window_exhausted` would map to
+ * `halted` and slot back into the re-drive convergence detector — the prior
+ * behavior, never a regression). */
+function nonPassRunOutcome(detail: NonPassDetail): "halted" | "convergence_stalled" {
   if (detail === "convergence_stalled") return "convergence_stalled";
   return "halted";
 }
