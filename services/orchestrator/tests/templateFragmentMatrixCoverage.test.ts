@@ -36,6 +36,7 @@ import {
   VirtualFileSystem,
 } from "../src/engine/templates/index.js";
 import { assertComposedCiYmlParsesAsCiConfigV1 } from "./helpers/templateCiYmlSchemaCheck.js";
+import { assertJustfileBootstrapsFromFreshCheckout } from "./helpers/templateFreshBootstrapCheck.js";
 import {
   isIncompatibleCombination,
   type NormalizedCombo,
@@ -463,6 +464,10 @@ describe("template-fragment matrix coverage — every supported stack composes",
       // (7) ci.yml parses against the CiConfigV1 schema (task #80 — the apex v62
       // halt class: a base ci.yml emitted with non-schema tier vocabulary).
       assertComposedCiYmlParsesAsCiConfigV1(slug, vfs);
+      // (8) the composed scaffold bootstraps from a FRESH checkout — no frozen
+      // install primitive without a matching committed lockfile (task #84 —
+      // apex v63 ERR_PNPM_NO_LOCKFILE halt class).
+      assertJustfileBootstrapsFromFreshCheckout(slug, vfs);
 
       // Pin the test as assertion-bearing (vitest's no-standalone-expectations
       // rule). Every meaningful assertion above throws on failure.
