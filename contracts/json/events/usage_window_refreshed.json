@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "priorResetsAt": {
+      "type": "string"
+    },
+    "priorUsedPercent": {
+      "type": "number"
+    },
+    "provider": {
+      "type": "string"
+    },
+    "refreshSource": {
+      "enum": [
+        "post_reset",
+        "early_capacity"
+      ],
+      "type": "string"
+    },
+    "slot": {
+      "enum": [
+        "primary",
+        "secondary",
+        "tertiary"
+      ],
+      "type": "string"
+    },
+    "usedPercent": {
+      "type": "number"
+    }
+  },
+  "required": [
+    "provider",
+    "slot",
+    "usedPercent",
+    "refreshSource",
+    "priorUsedPercent",
+    "priorResetsAt"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.usage.window.refreshed"
+}

@@ -147,6 +147,7 @@ import {
   TaskFailedPayload,
   TaskQueuedPayload,
   TaskStartedPayload,
+  windowPauseEventRegistry,
 } from "./schemas/lifecycle.js";
 import {
   RecoveryInspectionOpenedPayload,
@@ -177,16 +178,18 @@ import {
   IntegrationRebasePayload,
 } from "./schemas/dag.js";
 
-// The EventRegistry is the single source of truth mapping event names to their typed Zod
-// payload schemas. Adding a new event name requires: (1) a Zod schema under events/schemas/,
-// (2) wiring it here, (3) Sensitivity tags for every payload field in sensitivityRules.ts,
-// (4) regenerating the events.event_type CHECK migration via codegen:events + db:generate.
+// Single source of truth mapping event names → typed Zod payload schemas.
+// To add a new event: (1) Zod schema under events/schemas/, (2) wire here,
+// (3) Sensitivity tags in sensitivityRules.ts, (4) regenerate
+// events.event_type CHECK via codegen:events + db:generate.
 export const EventRegistry = {
   // Run lifecycle
   "run.queued": RunQueuedPayload,
   "run.started": RunStartedPayload,
   "run.completed": RunCompletedPayload,
   "run.failed": RunFailedPayload,
+  // task #82 — window-pause auto-resume cycle.
+  ...windowPauseEventRegistry,
 
   // Task lifecycle
   "task.queued": TaskQueuedPayload,
@@ -230,7 +233,7 @@ export const EventRegistry = {
   // S3: posture-gate residual disposition; Loop 3: autonomous-run strand-findings preflight.
   "auditor.findings_routed": AuditorFindingsRoutedPayload,
   "audit.posture_strands_findings": AuditPostureStrandsFindingsPayload,
-  // Sub-registries split into their schema modules for the 500-line cap: spec-loop stages + entity-risk oracle (schemas/answerer.ts) + templating registry lifecycle (schemas/templates.ts).
+  // Sub-registries split into their schema modules for the 500-line cap.
   ...loopEventRegistry,
   ...templateEventRegistry,
   // Runner allocation (+ periodic-sweeper reclaim of a STUCK/LEAKED runner)
@@ -346,11 +349,9 @@ export const EventRegistry = {
   "merge.regate.gate_rework_routed": MergeReGateGateReworkRoutedPayload,
   // A transient/transport INFRA error blocked the batch check: bounded-retry then HOLD loud; no PR blamed.
   "merge.batch.infra_blocked": MergeBatchInfraBlockedPayload,
-  // Post-merge auto-issue creation (tempering.md dim A): after a run's PR merges
-  // onto default_branch, the watcher reads the post-merge CI on the base branch;
-  // a FAILURE records merge.post_merge_failed + auto-opens ONE tracking issue
-  // (issue.opened, which is also the per-merge idempotency marker — at most one
-  // issue per merge, never spammed on repeated checks).
+  // Post-merge auto-issue creation (tempering.md dim A): after a run's PR
+  // merges, a base-branch CI FAILURE auto-opens ONE tracking issue (the per-
+  // merge idempotency marker — never spammed on repeated checks).
   "merge.post_merge_failed": MergePostMergeFailedPayload,
   "issue.opened": IssueOpenedPayload,
 
@@ -379,10 +380,9 @@ export const EventRegistry = {
   // mergeSha) recorded DURABLY (vs a console-only log) so the operator + timeline see it.
   "deploy.skipped": DeploySkippedPayload,
 
-  // Demos-as-evidence (design doc § "Native Deployment And Demos"): after a deploy is
-  // VERIFIED, the demo engine exercises each spec BEHAVIOR against the deployed surface and
-  // records evidence PER behavior (demo.evidence.recorded) + a summary tally (demo.completed).
-  // Tied to the spec's behaviors, NOT the provider — every field non-secret (no token/body).
+  // Demos-as-evidence (design doc § "Native Deployment And Demos"): a verified
+  // deploy exercises each spec BEHAVIOR + records evidence per behavior
+  // (demo.evidence.recorded) + a summary tally (demo.completed).
   "demo.evidence.recorded": DemoEvidenceRecordedPayload,
   "demo.completed": DemoCompletedPayload,
 

@@ -149,3 +149,12 @@ export const RunCancelledPayload = z
     runnerReleased: z.boolean(),
   })
   .strict();
+
+// task #82 — window-pause auto-resume event schemas + registry live in
+// schemas/windowPause.ts. Re-exported for stable imports.
+export {
+  RunPausedPayload,
+  RunResumedPayload,
+  UsageWindowRefreshedPayload,
+  windowPauseEventRegistry,
+} from "./windowPause.js";

@@ -23,6 +23,7 @@ import { startIntake } from "../forge/intake/bootIntake.js";
 import { buildCiInsightsLoop } from "./buildCiInsightsLoop.js";
 import { buildNotificationDispatcher } from "../notifications/build.js";
 import { startNotificationSubscriber } from "../notifications/subscriber.js";
+import { startPausedRunResumeProber, type PausedRunResumeProber } from "../usage/pausedRunResumeProber.js";
 import type { DagWalkerSubscriber } from "../dag/subscriber.js";
 import type { MergeCoordinatorSubscriber } from "../merge/subscriber.js";
 import type { PostMergeSubscriber } from "../postMerge/subscriber.js";
@@ -75,6 +76,16 @@ export interface AutonomyLoops {
    * gate's quarantine read has fresh quarantines without an operator opening a page.
    */
   ciInsights: CiInsightsLoop;
+  /**
+   * task #82 — window-pause auto-resume: the sign-of-life prober that finds
+   * runs in the new non-terminal `paused` status (a `window_exhausted` writer
+   * outcome flipped them there) and resumes them when their provider's usage
+   * window refreshes. NOT a wall-clock waiter — capacity always returns,
+   * unbounded. The resume flips the paused run to `halted` + re-opens the
+   * spec, and the walker re-enqueues a successor; the new run's preflight is
+   * the actual capacity test (re-pauses on a still-exhausted window).
+   */
+  pausedRunResumeProber: PausedRunResumeProber;
   /** Drain every autonomy loop (the SIGTERM path); idempotent. */
   stop: () => Promise<void>;
 }
@@ -234,6 +245,18 @@ export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<Auton
     ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
   });
   log.info("CI-insights detect+quarantine + generative root-cause loop started (CI-intelligence PR2+PR3)");
+  // task #82: the window-pause auto-resume prober — a sign-of-life loop that
+  // finds runs in the NEW non-terminal `paused` status (a `window_exhausted`
+  // writer/answerer outcome routed them there via the `pause_for_capacity`
+  // bucket) and resumes them so the walker re-enqueues a successor run. Not a
+  // wall-clock waiter; the doctrine extension of timeout-eradication to
+  // provider usage windows. Probes every `DEFAULT_PROBE_INTERVAL_MS` (60s by
+  // default) — HOW OFTEN to ask "did capacity return", never a deadline.
+  const pausedRunResumeProber = startPausedRunResumeProber({
+    pool: deps.pool,
+    ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
+  });
+  log.info("paused-run resume prober started (task #82 — window-pause auto-resume)");
   const stop = async (): Promise<void> => {
     dagWalker.stop();
     mergeCoordinator.stop();
@@ -241,6 +264,7 @@ export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<Auton
     notifications.stop();
     intake.stop();
     ciInsights.stop();
+    pausedRunResumeProber.stop();
     await dagNotifyListener.close();
     await mergeNotifyListener.close();
     await postMergeNotifyListener.close();
@@ -253,6 +277,7 @@ export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<Auton
     notifications,
     intake,
     ciInsights,
+    pausedRunResumeProber,
     stop,
   };
 }
