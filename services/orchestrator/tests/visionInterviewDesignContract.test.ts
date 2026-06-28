@@ -19,11 +19,10 @@ import type { MaterializeTemplate } from "../src/engine/templates/index.js";
 import { createDeterministicInterviewAnswerer } from "./fixtures/forge/deterministicInterviewAnswerer.js";
 import { preparedDeploy, stubPool } from "./fixtures/forge/interviewDeriveStub.js";
 
+// PR-G (task #77) — opaque composed-template identifier; no GitHub repo at this ref.
 const stubMaterialize = (): MaterializeTemplate => async (input) => ({
-  templateRef: `tanren://composed/${input.config.slug}@deadbeef`,
-  repoRef: `cat-cave/tanren-tmpl-${input.config.slug}`,
+  templateRef: `tanren://composed/${input.config.slug}@deadbeefcafe1234`,
   validatedAt: "2026-06-09T00:00:00.000Z",
-  validatedSha: "deadbeef",
 });
 
 const TS_LIFECYCLE: CaptureLifecycle = {

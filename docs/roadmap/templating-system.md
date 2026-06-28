@@ -6,11 +6,22 @@ This is the doctrine-of-record for Tanren's project templating, and it is
 library). The doctrine is **owner-stated and enforced in code** — it is not
 aspirational.
 
-> **Status (PR-F, in flight).** The doctrine collapse to a single
-> fragment-only scaffold path is built: the dual `scaffoldOrigin` (project /
-> template_build) is gone, the agent-driven template-build DAG is gone, the
-> `templates` registry table is gone, the template-creation meta-flow is gone,
-> the template-maintenance scheduler is gone, the `template.*` event
+> **Status (PR-G — task #77, LANDED).** PR-F's fragment-only scaffold path
+> shipped, and PR-G collapsed the remaining intermediate: the per-stack
+> `tanren-tmpl-<slug>` template seed repo is GONE. The composed VFS now lands
+> **directly in the project repo** as its initial content; the run path no
+> longer clones a separate seed repo at workspace-prep. The materializer is a
+> single step (compose → push every composed file to the project repo's
+> default branch via the GitHub contents API), the per-stack template-repo
+> creation is gone, and the `templateRef` persisted on `projects.config` is
+> now a bare opaque identifier (`tanren://composed/<slug>@<contentHash>`) —
+> no GitHub repo exists at this ref.
+>
+> **Status (PR-F, LANDED — preserved here for context).** The doctrine collapse
+> to a single fragment-only scaffold path is built: the dual `scaffoldOrigin`
+> (project / template_build) is gone, the agent-driven template-build DAG is
+> gone, the `templates` registry table is gone, the template-creation meta-flow
+> is gone, the template-maintenance scheduler is gone, the `template.*` event
 > vocabulary is gone, and the `templateBuild` config marker is gone.
 > Replacing them: the fragment composer is the SOLE materialization path; a
 > missing fragment triggers the **per-fragment authoring DAG (F2)** that
@@ -49,16 +60,22 @@ capture
        - if any authoring fails (fixed point), throw FragmentAuthoringFailedError
          → 409 fragment_authoring_failed (loud halt; no silent skip)
        - else retry selectFragmentConfig against the augmented library
+   → createRepository (CodeHost.createRepo) — create the PROJECT repo, auto-init
    → composeTemplate(config, library) + materializeTemplate
-       - assembles the VFS, creates a fresh seed repo, pushes every composed file
-       - returns SeededTemplate { templateRef, repoRef, validatedAt, validatedSha }
-   → createProject + scaffold/build/deploy specs (the writer specializes the seed)
+       - assembles the VFS, then pushes EVERY composed file directly to the
+         just-created PROJECT repo's default branch (PR-G — no intermediate
+         tanren-tmpl-<slug> seed repo is created)
+       - returns SeededTemplate { templateRef, validatedAt } — opaque
+         identifier; no GitHub repo exists at this ref
+   → prepareDeploy + createProject + scaffold/build/deploy specs
+     (the writer specializes the seed already committed in the project repo)
 ```
 
 There is **no fallback path**: no `scaffoldOrigin: "template_build"` mode, no
 agent-template-build DAG, no `templates` registry, no template-maintenance
-scheduler, no "skip selection" wiring. Every project derive runs the same
-code; an unrecognized stack triggers authoring, never silent degradation.
+scheduler, no "skip selection" wiring, **no intermediate per-stack template
+seed repo (PR-G — task #77)**. Every project derive runs the same code; an
+unrecognized stack triggers authoring, never silent degradation.
 
 ---
 
@@ -92,15 +109,18 @@ a `VirtualFileSystem` — composed deterministically, validated by construction.
   either present in the library (→ `ready`) or absent (→ `missing-fragments`
   with `FragmentSpec[]`).
 
-**Materialization** (`engine/templates/fragments/materialize.ts`):
+**Materialization** (`engine/templates/fragments/materialize.ts` — PR-G — task #77):
 
-- `buildMaterializeTemplate({ createTemplateRepo, pushFile })` returns the
-  seam `derive.ts` calls. It composes the chosen config, creates a fresh
-  template seed repo on the forge, pushes every composed file, returns a
-  `SeededTemplate { templateRef, repoRef, validatedAt, validatedSha }`.
-- The seed reference rides on `projects.config.templateRef` so workspace-prep
-  (`engine/workspace/templateSeed.ts`) clones the seed into the project's
-  workspace BEFORE the writer runs.
+- `buildMaterializeTemplate({ pushFile })` returns the seam `derive.ts` calls.
+  It composes the chosen config, then pushes every composed file DIRECTLY to
+  the JUST-CREATED project repo's default branch via the GitHub contents API,
+  and returns a `SeededTemplate { templateRef, validatedAt }` where
+  `templateRef` is an opaque identifier of the form
+  `tanren://composed/<slug>@<sha256-prefix-over-composed-vfs>`.
+- There is **no intermediate `tanren-tmpl-<slug>` seed repo**. The composed
+  VFS IS the project repo's initial content; the run path no longer clones a
+  separate seed at workspace-prep. The persisted `projects.config.templateRef`
+  is a bare opaque string for observability — no GitHub repo exists at the ref.
 
 ---
 
@@ -249,9 +269,10 @@ The templating system sits **above** the stack-flexible contract (the
 - The **contract** is the generality mechanism — Tanren knows no stack; a
   project declares its lifecycle in a `justfile` + `.tanren/ci.yml` and
   Tanren runs it uniformly.
-- The **composed seed** is the validated, fragment-built repo a project
-  starts from. The fragment composer produces a real conforming repo (pushed
-  via the materializer) that already satisfies the contract.
+- The **composed seed** is the validated, fragment-built initial content of
+  the project repo. The fragment composer produces a VFS that already
+  satisfies the contract; the materializer pushes it directly into the
+  project repo's default branch (PR-G — task #77).
 
 > **Superseded line.** Earlier prose said "every project DAG seeds from a
 > validated _template_ selected from a registry, or just-in-time-created via
@@ -259,3 +280,10 @@ The templating system sits **above** the stack-flexible contract (the
 > fragment composition; what was "create a whole template repo via an
 > agent-driven DAG" is now "author each missing fragment via the F2 DAG, then
 > compose."
+>
+> **Superseded line (PR-G — task #77).** Earlier prose said the materializer
+> "creates a fresh template seed repo on the forge, pushes every composed
+> file [into the seed repo]" and the run path "clones the seed into the
+> project's workspace." The per-stack `tanren-tmpl-<slug>` seed repo is GONE.
+> The composed VFS lands directly in the project repo as its initial content;
+> the run path's separate seed-clone step is gone too.

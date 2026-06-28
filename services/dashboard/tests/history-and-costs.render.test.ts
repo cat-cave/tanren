@@ -216,9 +216,10 @@ describe("costs dashboard (/costs)", () => {
 
   it("renders all three pricing-model source cards", async () => {
     const app = await build();
-    // ?range=all so the source cards render regardless of how long ago the
-    // fixture recordedAt is vs the wall clock (same pattern as the sibling
-    // assertions below).
+    // ?range=all so the source cards (which render only when totalRecords > 0)
+    // are present regardless of how long ago the fixture's recordedAt is vs the
+    // wall clock. Mirrors the pin from PR #686 for two adjacent tests — the same
+    // fixture-drift class of flake.
     const html = await (await app.request("/costs?range=all")).text();
     expect(html).toContain("per-token · llm api");
     expect(html).toContain("subscription window");

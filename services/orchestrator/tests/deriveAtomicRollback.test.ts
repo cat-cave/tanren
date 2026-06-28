@@ -1,14 +1,19 @@
 // DERIVE TRANSACTIONAL ROLLBACK — task #78. Proves the greenfield derive is
-// ATOMIC across its external-resource creates (the materialized seed repo +
-// the project repo + the provisioned deploy app). When a step LATER in the
-// derive throws, every external resource created so far in the same call is
-// rolled back BEFORE the original error re-raises — so the operator's next
-// retry never collides on an orphan (apex v62: `cat-cave/linkly` was hand-
-// deleted to get past a 422 on the template repo create).
+// ATOMIC across its external-resource creates (the project repo + the
+// provisioned deploy app). When a step LATER in the derive throws, every
+// external resource created so far in the same call is rolled back BEFORE the
+// original error re-raises — so the operator's next retry never collides on
+// an orphan.
+//
+// PR-G (task #77) collapsed the intermediate `tanren-tmpl-<slug>` template
+// seed repo: the composed VFS is pushed DIRECTLY into the project repo as its
+// initial content. So there are now TWO external resources to rollback (the
+// project repo + the deploy app), not three (no separate seed repo).
 //
 // The doctrine:
-//   1. Compose+materialize succeeds → seed repo created → register compensation.
-//   2. resolveOrCreateGreenfieldRepo succeeds → project repo created → register.
+//   1. resolveOrCreateGreenfieldRepo succeeds → project repo created → register.
+//   2. Compose+materialize pushes the VFS into the project repo (no separate
+//      compensation — a failure here is covered by the project-repo rollback).
 //   3. prepareDeploy succeeds → deploy app provisioned → register.
 //   4. If ANYTHING after a successful compensation registration throws (deploy
 //      provisioning fails, createProject DB constraint, etc.), the compensation
@@ -69,24 +74,28 @@ const captureWithLifecycle = (): InterviewCapture => ({
   designContract: MINIMAL_DESIGN_CONTRACT,
 });
 
-// A seeded fixture template the stub materializer returns: the `repoRef` is the
-// `<owner>/<name>` slug a real materialize would have just created on GitHub.
+// PR-G — opaque templateRef (no GitHub repo at this ref).
 const SEED: SeededTemplate = {
-  templateRef: "tanren://composed/ts-pnpm@abc1234",
-  repoRef: "cat-cave/tanren-tmpl-ts-pnpm",
+  templateRef: "tanren://composed/ts-pnpm@deadbeefcafe1234",
   validatedAt: "2026-06-09T00:00:00.000Z",
-  validatedSha: "abc1234",
 };
 
 interface RecordedCreates {
   reposCreated: Array<{ owner: string; name: string }>;
   reposDeleted: Array<{ owner: string; name: string }>;
+  pushedRepos: string[];
   deploysProvisioned: Array<{ providerKind: string; appId: string }>;
   deploysDestroyed: Array<{ providerKind: string; appId: string }>;
 }
 
 function newRecorder(): RecordedCreates {
-  return { reposCreated: [], reposDeleted: [], deploysProvisioned: [], deploysDestroyed: [] };
+  return {
+    reposCreated: [],
+    reposDeleted: [],
+    pushedRepos: [],
+    deploysProvisioned: [],
+    deploysDestroyed: [],
+  };
 }
 
 function preparedFlyDeploy(): PreparedGreenfieldDeploy {
@@ -111,73 +120,69 @@ function preparedFlyDeploy(): PreparedGreenfieldDeploy {
   };
 }
 
-// A stub materialize that records the seed repo it minted (so the test can
-// assert the rollback deletes it) but does NOT touch any HTTP — the
-// production materializer would call CodeHost.createRepo + push files.
+// PR-G: a stub materialize that records the project repo it pushed into. The
+// real materializer would call `pushFile` once per composed VFS entry against
+// the same project repo's HTTPS clone URL.
 function recordingMaterialize(recorder: RecordedCreates): MaterializeTemplate {
-  return async () => {
-    const [owner, name] = SEED.repoRef.split("/", 2);
-    if (owner !== undefined && name !== undefined) {
-      recorder.reposCreated.push({ owner, name });
-    }
+  return async (input) => {
+    recorder.pushedRepos.push(input.projectRepo.fullName);
     return SEED;
   };
 }
 
-describe("derive — TRANSACTIONAL ROLLBACK across external resources (task #78)", () => {
-  it("ROLLBACK ON PROJECT-REPO CREATE FAILURE: seed repo was materialized → deleted on rollback", async () => {
-    // SCENARIO: the seed repo is materialized (registered), then the project-repo
-    // create THROWS (a 422-equivalent surfaced as a generic create failure for
-    // the test). The compensation stack walks LIFO and deletes the seed repo
-    // before the original error re-raises.
+describe("derive — TRANSACTIONAL ROLLBACK across external resources (task #78, PR-G)", () => {
+  it("NO INTERMEDIATE TEMPLATE REPO: the materializer pushes into the just-created project repo", async () => {
     const { pool, state } = stubPool();
     const rec = newRecorder();
-    await expect(
-      deriveFromCapture(
-        {
-          pool,
-          async prepareDeploy() {
-            return preparedFlyDeploy();
-          },
+    await deriveFromCapture(
+      {
+        pool,
+        async prepareDeploy() {
+          rec.deploysProvisioned.push({ providerKind: "deploy.flyio", appId: "org_a-linkly" });
+          return preparedFlyDeploy();
         },
-        {
-          orgId: "org_a",
-          capture: captureWithLifecycle(),
-          actor,
-          owner: "cat-cave",
-          deploy: { providerKind: "deploy.flyio" },
-          materializeTemplate: recordingMaterialize(rec),
-          createRepository: async () => {
-            // The project-repo create fails — simulates a generic create failure
-            // (e.g. transient network) after the seed repo was already materialized.
-            throw new Error("simulated: project repo create transient failure");
-          },
-          deleteRepository: async (target) => {
-            rec.reposDeleted.push(target);
-          },
-          destroyDeployApp: async (target) => {
-            rec.deploysDestroyed.push(target);
-          },
+      },
+      {
+        orgId: "org_a",
+        capture: captureWithLifecycle(),
+        actor,
+        owner: "cat-cave",
+        deploy: { providerKind: "deploy.flyio" },
+        materializeTemplate: recordingMaterialize(rec),
+        createRepository: async (input) => {
+          rec.reposCreated.push({ owner: input.owner, name: input.name });
+          return {
+            fullName: `${input.owner}/${input.name}`,
+            repoUrl: `https://github.com/${input.owner}/${input.name}`,
+            defaultBranch: "main",
+          };
         },
-      ),
-    ).rejects.toThrow(/project repo create transient failure/iu);
-
-    // The seed repo was materialized + then deleted by the rollback. NO project
-    // repo was created (the create threw before producing one), so nothing else
-    // to roll back.
-    expect(rec.reposCreated).toEqual([{ owner: "cat-cave", name: "tanren-tmpl-ts-pnpm" }]);
-    expect(rec.reposDeleted).toEqual([{ owner: "cat-cave", name: "tanren-tmpl-ts-pnpm" }]);
-    expect(rec.deploysProvisioned).toEqual([]);
+        deleteRepository: async (target) => {
+          rec.reposDeleted.push(target);
+        },
+        destroyDeployApp: async (target) => {
+          rec.deploysDestroyed.push(target);
+        },
+      },
+    );
+    // EXACTLY ONE repo was created — the project repo itself. No `tanren-tmpl-*`
+    // intermediate repo was created at any point.
+    expect(rec.reposCreated).toEqual([{ owner: "cat-cave", name: "linkly" }]);
+    for (const created of rec.reposCreated) {
+      expect(created.name).not.toMatch(/^tanren-tmpl-/u);
+    }
+    // The materializer pushed INTO the project repo.
+    expect(rec.pushedRepos).toEqual(["cat-cave/linkly"]);
+    // Success path — no rollbacks fired.
+    expect(rec.reposDeleted).toEqual([]);
     expect(rec.deploysDestroyed).toEqual([]);
-    // No project row landed — we never reached createProject.
-    expect(state.projects.size).toBe(0);
+    expect(state.projects.size).toBe(1);
   });
 
-  it("ROLLBACK ON DEPLOY FAILURE: seed + project repos created → BOTH deleted on rollback", async () => {
-    // SCENARIO: seed materialized (registered) + project repo created
-    // (registered) + prepareDeploy THROWS. The compensation stack walks LIFO:
-    // the project repo is deleted first, then the seed repo. Apex v62 in
-    // miniature: the operator never has to hand-delete `cat-cave/linkly`.
+  it("ROLLBACK ON DEPLOY FAILURE: project repo created → DELETED on rollback (only resource to undo)", async () => {
+    // SCENARIO: project repo created (registered) + compose pushed VFS into it
+    // + prepareDeploy THROWS. The compensation stack walks LIFO: only the
+    // project repo needs deletion (no separate seed repo to roll back per PR-G).
     const { pool, state } = stubPool();
     const rec = newRecorder();
     await expect(
@@ -186,7 +191,7 @@ describe("derive — TRANSACTIONAL ROLLBACK across external resources (task #78)
           pool,
           async prepareDeploy() {
             // The deploy provision fails — simulates a Fly quota exceeded or a
-            // transient provisioner error after BOTH repos were created.
+            // transient provisioner error after the project repo was created.
             throw new Error("simulated: deploy provision quota exceeded");
           },
         },
@@ -215,30 +220,23 @@ describe("derive — TRANSACTIONAL ROLLBACK across external resources (task #78)
       ),
     ).rejects.toThrow(/deploy provision quota exceeded/iu);
 
-    // BOTH repos created, BOTH deleted (LIFO: project repo first, then seed repo).
-    expect(rec.reposCreated).toEqual([
-      { owner: "cat-cave", name: "tanren-tmpl-ts-pnpm" },
-      { owner: "cat-cave", name: "linkly" },
-    ]);
-    expect(rec.reposDeleted).toEqual([
-      { owner: "cat-cave", name: "linkly" },
-      { owner: "cat-cave", name: "tanren-tmpl-ts-pnpm" },
-    ]);
+    // ONE project repo created, ONE deleted. No `tanren-tmpl-*` was ever created.
+    expect(rec.reposCreated).toEqual([{ owner: "cat-cave", name: "linkly" }]);
+    expect(rec.reposDeleted).toEqual([{ owner: "cat-cave", name: "linkly" }]);
+    expect(rec.pushedRepos).toEqual(["cat-cave/linkly"]);
     // The deploy provision threw — no deploy app was ever created.
     expect(rec.deploysProvisioned).toEqual([]);
     expect(rec.deploysDestroyed).toEqual([]);
     expect(state.projects.size).toBe(0);
   });
 
-  it("ROLLBACK ON CREATE-PROJECT FAILURE: ALL three external resources walked back", async () => {
+  it("ROLLBACK ON CREATE-PROJECT FAILURE: both external resources walked back (project repo + deploy)", async () => {
     // SCENARIO: every external resource provisions successfully, then the
     // `createProject` DB INSERT throws (e.g. a uniqueness violation). The
     // compensation stack walks LIFO: deploy app destroyed, then project repo
-    // deleted, then seed repo deleted.
+    // deleted. Per PR-G there are exactly TWO external resources, not three.
     const { pool, state } = stubPool();
-    // Inject a stub that throws on the project INSERT (the durable-row anchor) —
-    // this fails the createProject TRANSACTION inside the connected client (which
-    // is the path `createProject` uses, not the bare `pool.query`).
+    // Inject a stub that throws on the project INSERT (the durable-row anchor).
     type SqlQuery = (text: string, params?: unknown[]) => Promise<{ rows: unknown[]; rowCount: number }>;
     const originalConnect = pool.connect.bind(pool);
     (pool as unknown as { connect: () => Promise<{ query: SqlQuery; release: () => void }> }).connect = async () => {
@@ -291,27 +289,20 @@ describe("derive — TRANSACTIONAL ROLLBACK across external resources (task #78)
       ),
     ).rejects.toThrow(/duplicate key value violates projects_pkey/iu);
 
-    // ALL three external creates rolled back, in reverse order.
-    expect(rec.reposCreated).toEqual([
-      { owner: "cat-cave", name: "tanren-tmpl-ts-pnpm" },
-      { owner: "cat-cave", name: "linkly" },
-    ]);
+    // ONE project repo + ONE deploy app rolled back (LIFO: deploy first, then repo).
+    expect(rec.reposCreated).toEqual([{ owner: "cat-cave", name: "linkly" }]);
     expect(rec.deploysProvisioned).toEqual([{ providerKind: "deploy.flyio", appId: "org_a-linkly" }]);
-    // LIFO walk: deploy app first, then project repo, then seed repo.
     expect(rec.deploysDestroyed).toEqual([{ providerKind: "deploy.flyio", appId: "org_a-linkly" }]);
-    expect(rec.reposDeleted).toEqual([
-      { owner: "cat-cave", name: "linkly" },
-      { owner: "cat-cave", name: "tanren-tmpl-ts-pnpm" },
-    ]);
+    expect(rec.reposDeleted).toEqual([{ owner: "cat-cave", name: "linkly" }]);
     expect(state.projects.size).toBe(0);
   });
 
   it("DeriveRollbackError SURFACES rollback gaps: failed compensation rides on the error", async () => {
-    // SCENARIO: the seed repo was materialized + the project-repo create throws.
-    // The rollback walker tries to delete the seed repo but THAT delete ALSO
+    // SCENARIO: the project repo was created + the deploy prepare throws. The
+    // rollback walker tries to delete the project repo but THAT delete ALSO
     // throws (e.g. the credential lost administration:write between create +
     // rollback). The original failure is preserved on `cause`; the rollback gap
-    // names the specific resource that may be orphaned (the seed repo).
+    // names the specific resource that may be orphaned (the project repo).
     const { pool } = stubPool();
     const rec = newRecorder();
     let caught: unknown;
@@ -320,7 +311,7 @@ describe("derive — TRANSACTIONAL ROLLBACK across external resources (task #78)
         {
           pool,
           async prepareDeploy() {
-            return preparedFlyDeploy();
+            throw new Error("simulated: deploy provision failure");
           },
         },
         {
@@ -330,8 +321,13 @@ describe("derive — TRANSACTIONAL ROLLBACK across external resources (task #78)
           owner: "cat-cave",
           deploy: { providerKind: "deploy.flyio" },
           materializeTemplate: recordingMaterialize(rec),
-          createRepository: async () => {
-            throw new Error("simulated: project repo create failure");
+          createRepository: async (input) => {
+            rec.reposCreated.push({ owner: input.owner, name: input.name });
+            return {
+              fullName: `${input.owner}/${input.name}`,
+              repoUrl: `https://github.com/${input.owner}/${input.name}`,
+              defaultBranch: "main",
+            };
           },
           deleteRepository: async () => {
             throw new Error("simulated: delete forbidden — credential lacks administration:write");
@@ -347,11 +343,12 @@ describe("derive — TRANSACTIONAL ROLLBACK across external resources (task #78)
     const rb = caught as DeriveRollbackError;
     // The ORIGINAL failure rides on `cause` — the operator sees both.
     expect(rb.cause).toBeInstanceOf(Error);
-    expect((rb.cause as Error).message).toMatch(/project repo create failure/iu);
-    // The rollback gap names the orphaned resource specifically.
+    expect((rb.cause as Error).message).toMatch(/deploy provision failure/iu);
+    // The rollback gap names the orphaned PROJECT repo specifically (no
+    // `tanren-tmpl-*` because the intermediate template repo doesn't exist).
     expect(rb.compensationFailures).toHaveLength(1);
     expect(rb.compensationFailures[0]?.kind).toBe("github.repo");
-    expect(rb.compensationFailures[0]?.label).toBe("cat-cave/tanren-tmpl-ts-pnpm");
+    expect(rb.compensationFailures[0]?.label).toBe("cat-cave/linkly");
   });
 
   it("NO ROLLBACK ON SUCCESS: external resources stay intact when derive lands the project row", async () => {

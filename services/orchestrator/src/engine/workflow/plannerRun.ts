@@ -132,10 +132,8 @@ export interface PlannerRunContext {
   greenfield?: boolean;
   // cost PR-C: CONFIGURED per-credential credit→USD rate (from project/org `creditRates`). Absent ⇒ a real drawdown is NULL-and-loud.
   creditUsdRate?: number;
-  // DETERMINISTIC CONTRACT FILES (v27 fix): the `.tanren/ci.yml` + `justfile` workspace-prep materializes VERBATIM (write-iff-absent) from the captured lifecycle BEFORE the writer runs — so they are NEVER LLM-authored (the writer mangled the ci.yml shape on v27). Absent ⇒ no lifecycle (brownfield ships its own) ⇒ no-op.
+  // DETERMINISTIC CONTRACT FILES (v27 fix): the `.tanren/ci.yml` + `justfile` workspace-prep materializes VERBATIM (write-iff-absent) from the captured lifecycle BEFORE the writer runs — so they are NEVER LLM-authored (the writer mangled the ci.yml shape on v27). Absent ⇒ no lifecycle (brownfield ships its own) ⇒ no-op. On the greenfield path PR-G's composed-VFS push already landed these files on the default branch, so this materialization is a no-op write-iff-absent guard.
   contractFiles?: ReadonlyArray<ContractFile>;
-  // TEMPLATING WAVE 3 (templating-system.md §3): the SELECTED template's repo ref to SEED from (from `projectConfig.templateRef`). When set, the run clones the template's conforming files into the workspace BEFORE the writer — so the scaffold writer's "seed already committed" assertion holds and it specializes the seed instead of authoring from scratch. Absent ⇒ no match ⇒ the from-scratch contract-file path runs.
-  templateSeed?: { repoRef: string };
   // WS-A PR-4: the ordered ancestor stack this dependent speculative run is stacked on (from `runs.ancestor_stack`). With `WALKER_JJ_LOCAL_BASE` on + non-empty, the workspace bootstrap jj-assembles the base from these ancestor refs vs the legacy single-ref clone.
   ancestorStack?: AncestorStack;
 }

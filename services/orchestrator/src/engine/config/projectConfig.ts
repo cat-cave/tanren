@@ -62,32 +62,20 @@ export const ProjectProductVision = z
   .strict();
 export type ProjectProductVision = z.infer<typeof ProjectProductVision>;
 
-// Tanren-native templating (doctrine collapse) — the SEED REFERENCE recorded on a
-// project whose greenfield scaffold seeded from a fragment-composed template
-// (docs/roadmap/templating-system.md). Persisted here (not a new table) so the
-// decision is OBSERVABLE on the project config and the run path can clone the
-// composed seed's files as the scaffold base. ALWAYS present on a greenfield
-// project — the doctrine collapse removed the from-scratch project path; every
-// project DAG seeds from a composed template. `validatedAt`/`validatedSha`
-// capture the compose+materialize moment (durable evidence the seed came from a
-// real composed-by-construction template, not a hand-waved one).
-export const ProjectTemplateRef = z
-  .object({
-    // The composed seed's opaque identifier (form: `tanren://composed/<slug>@<sha>`).
-    templateRef: z.string().min(1),
-    // The seed repo the project's workspace cloned its conforming files from.
-    repoRef: z.string().min(1),
-    // When the seed was composed + materialized (ISO-8601).
-    validatedAt: z.string().min(1),
-    // The exact seed-repo commit the materialize push left at HEAD.
-    validatedSha: z.string().min(1),
-  })
-  .strict();
-export type ProjectTemplateRef = z.infer<typeof ProjectTemplateRef>;
+// Tanren-native templating (doctrine collapse + PR-G / task #77) — the OPAQUE
+// composed-template identifier recorded on a project whose greenfield scaffold
+// seeded from a fragment-composed template (docs/roadmap/templating-system.md).
+// Persisted here (not a new table) so the decision is OBSERVABLE on the project
+// config. ALWAYS present on a greenfield project — every project DAG seeds from
+// a composed template. PR-G collapsed the intermediate per-stack `tanren-tmpl-<slug>`
+// template seed repo: the composed VFS is pushed DIRECTLY into the project repo
+// as its initial content, so this field is a pure opaque identifier — there is
+// NO GitHub repo at this ref, and the run path no longer clones a separate seed.
+// Form: `tanren://composed/<config-slug>@<sha256-prefix-over-composed-vfs>`.
 
 // Environment management (environment-management.md §6 + §7 P3) — the ENVIRONMENT
 // BINDING recorded on a project: which `environments`-registry env its toolchain
-// resolved to (the env-layer counterpart of `ProjectTemplateRef`). Persisted on the
+// resolved to (the env-layer counterpart of `templateRef`). Persisted on the
 // project config (not a new column) so the resolution decision is OBSERVABLE.
 // Present ONLY when the project declared a toolchain (so an `envKey` was computed);
 // `environmentRef` is present ONLY on a registry MATCH (absent on the golden-base
@@ -342,12 +330,14 @@ export const ProjectConfigV1 = z
     // (keep-current on, 3-day cooldown). The generated upgrade node always runs the
     // full gate (§4.5) — this policy shapes WHEN work is generated, never bypasses it.
     upgradePolicy: ProjectUpgradePolicy.default(DEFAULT_UPGRADE_POLICY),
-    // TEMPLATING WAVE 3: the seed reference when the greenfield scaffold SEEDED from
-    // a validated template (see `ProjectTemplateRef`, templating-system.md §3).
-    // Persisted so the decision is observable + the run path can clone the
-    // template's conforming files as the scaffold base. Optional: absent ⇒ the
-    // from-scratch path (no template matched — the apex default).
-    templateRef: ProjectTemplateRef.optional(),
+    // TEMPLATING (PR-G / task #77): the OPAQUE composed-template identifier when the
+    // greenfield scaffold seeded from a fragment-composed template (templating-system.md).
+    // The composed VFS is pushed DIRECTLY into the project repo as its initial content,
+    // so this is purely OBSERVABILITY — no GitHub repo exists at this ref and the run
+    // path does NOT clone a separate seed. Form: `tanren://composed/<slug>@<contentHash>`.
+    // Optional: absent ⇒ no greenfield seed (a brownfield/HTTP project that already
+    // ships its own contract files).
+    templateRef: z.string().min(1).optional(),
     // Environment management (env P3): the ENVIRONMENT binding the project's
     // toolchain resolved to (see `ProjectEnvironmentRef`, environment-management.md
     // §6/§7 P3). Recorded by the per-project env-resolution at the image seam so the
