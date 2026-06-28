@@ -2,18 +2,22 @@
 //
 // THE ONE PATH (docs/roadmap/templating-system.md). Every project DAG's `scaffold`
 // spec is the SHRUNKEN instantiate-the-seed authoring: a fragment-composed
-// template has been materialized into a fresh seed repo (engine/templates/
-// fragments/materialize.ts), and the run path clones it into the project's
-// workspace BEFORE the writer starts. The writer's job is to specialize the seed
-// — rename product placeholders to the captured identity, wire the deploy/env to
-// the captured deploy command, update READMEs. The writer NEVER authors from
-// scratch and NEVER touches the contract files (the seed established them).
+// template has been materialized DIRECTLY into the project repo's default branch
+// (engine/templates/fragments/materialize.ts — PR-G — task #77), so by the time
+// the writer runs the contract files + working skeleton are ALREADY COMMITTED.
+// The writer's job is to specialize the seed — rename product placeholders to
+// the captured identity, wire the deploy/env to the captured deploy command,
+// update READMEs. The writer NEVER authors from scratch and NEVER touches the
+// contract files (the seed established them).
 //
 // The from-scratch authoring this module used to host (and the dual
 // project-vs-template_build branching) is GONE — there is no template_build
-// scaffoldOrigin, no agent template-build DAG. A missing fragment triggers the
-// per-fragment authoring DAG (selectFragmentConfig → missing-fragments → spawn
-// authoring runs → retry), not a whole-template author-from-scratch.
+// scaffoldOrigin, no agent template-build DAG. PR-G (task #77) further removed
+// the intermediate `tanren-tmpl-<slug>` template seed repo: the composed VFS
+// IS the project repo's initial content; there is no separate seed repo to
+// clone at run time. A missing fragment triggers the per-fragment authoring DAG
+// (selectFragmentConfig → missing-fragments → spawn authoring runs → retry),
+// not a whole-template author-from-scratch.
 
 import { SKELETON_CI_CONFIG_PATH, SKELETON_JUSTFILE_PATH } from "../scaffold/index.js";
 import type { SeededTemplate } from "../../templates/fragments/materialize.js";
@@ -33,18 +37,18 @@ export class MissingLifecycleError extends Error {
 
 /**
  * Build the SCAFFOLD spec description for a seed-instantiate authoring task. The
- * seed repo was composed from fragments + pushed before the writer runs; the
- * writer specializes it — never re-scaffolds the stack or re-authors the contract
- * files.
+ * composed VFS was pushed to the project repo's default branch BEFORE the writer
+ * runs (PR-G); the writer specializes it — never re-scaffolds the stack or
+ * re-authors the contract files.
  */
 export function buildSeedScaffoldDescription(lifecycle: CaptureLifecycle, seed: SeededTemplate): string {
   return [
-    `SEED FROM TEMPLATE — do NOT author the project from scratch. The greenfield repo was SEEDED from the ` +
-      `composed seed \`${seed.repoRef}\` (ref \`${seed.templateRef}\`, composed ${seed.validatedAt} @ ` +
-      `\`${seed.validatedSha}\`): its conforming files — the \`${SKELETON_JUSTFILE_PATH}\` + ` +
-      `\`${SKELETON_CI_CONFIG_PATH}\` contract and a working ${lifecycle.stack} skeleton — are ALREADY COMMITTED ` +
-      `as the scaffold base. The seed's gates are PROVEN by composition (base invariants re-checked, ci.yml ` +
-      "evidence block filled, every fragment validated in isolation); do NOT re-author or weaken them.",
+    `SEED FROM COMPOSED TEMPLATE — do NOT author the project from scratch. The greenfield repo's INITIAL ` +
+      `CONTENT was pushed from the composed seed \`${seed.templateRef}\` (composed ${seed.validatedAt}): its ` +
+      `conforming files — the \`${SKELETON_JUSTFILE_PATH}\` + \`${SKELETON_CI_CONFIG_PATH}\` contract and a ` +
+      `working ${lifecycle.stack} skeleton — are ALREADY COMMITTED on the default branch as the scaffold base. ` +
+      "The seed's gates are PROVEN by composition (base invariants re-checked, ci.yml evidence block filled, " +
+      "every fragment validated in isolation); do NOT re-author or weaken them.",
     "",
     "Your job is to INSTANTIATE the seed for THIS product — adapt only the product-specific surface:",
     "  - rename the placeholder package/app/slug to the product's identity,",
@@ -61,7 +65,7 @@ export function buildSeedScaffoldDescription(lifecycle: CaptureLifecycle, seed: 
  * from-scratch authoring. */
 export function buildSeedScaffoldAcceptanceCriteria(seed: SeededTemplate): string[] {
   return [
-    `given the template-seeded repo (from \`${seed.repoRef}\`), when the scaffold lands, then the product ` +
+    `given the seeded repo (composed from \`${seed.templateRef}\`), when the scaffold lands, then the product ` +
       "identity (package/app/slug, deploy/env wiring, READMEs) is adapted onto the seed — NOT a from-scratch rewrite",
     `given the seeded contract files, when the scaffold lands, then \`${SKELETON_JUSTFILE_PATH}\` and ` +
       `\`${SKELETON_CI_CONFIG_PATH}\` keep their composed SHAPE (the seed's proven gates are intact, not weakened)`,

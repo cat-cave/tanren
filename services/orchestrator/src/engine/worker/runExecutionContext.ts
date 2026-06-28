@@ -283,15 +283,6 @@ export async function loadRunExecutionContext(
     ...(projectConfig.lifecycle !== undefined && {
       contractFiles: materializeContractFiles(projectConfig.lifecycle),
     }),
-    // FRAGMENT-COMPOSED SEED (docs/roadmap/templating-system.md): every greenfield
-    // project DAG seeds from a composed template — its repo ref is persisted on the
-    // project config; thread it so workspace-prep SEEDS the template's conforming
-    // files into the repo BEFORE the writer runs. The writer's "seed already
-    // committed" assertion then holds; it specializes the seed instead of authoring
-    // from scratch.
-    ...(projectConfig.templateRef !== undefined && {
-      templateSeed: { repoRef: projectConfig.templateRef.repoRef },
-    }),
     // walker-jj-local-integration-design.md §2.1: re-hydrate the ordered ancestor stack
     // from `runs.ancestor_stack`. A non-empty stack means this is a DEPENDENT speculative
     // run; the workspace bootstrap jj-assembles its base from these ancestor PR-head refs

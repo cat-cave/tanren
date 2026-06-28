@@ -52,13 +52,12 @@ const completingAnswerer: InterviewAnswerer = {
 // A fixture seed the compose+materialize stub returns. DOCTRINE (docs/roadmap/
 // templating-system.md): every project DAG seeds from a fragment-composed
 // template — the route helper wires a `materializeTemplate` stub that returns
-// this fixture instead of touching GitHub for the seed-repo creation. A test
+// this fixture instead of touching GitHub for the per-file push. A test
 // that wants the bare wiring path overrides this with `materializeTemplate: undefined`.
+// PR-G (task #77) — opaque composed-template identifier; no GitHub repo at this ref.
 const seededTemplate: SeededTemplate = {
-  templateRef: "tanren://composed/test-fixture@abc1234",
-  repoRef: "cat-cave/tanren-tmpl-test-fixture",
+  templateRef: "tanren://composed/test-fixture@abc1234deadbeef",
   validatedAt: "2026-06-09T00:00:00.000Z",
-  validatedSha: "abc1234",
 };
 
 const stubMaterialize = (): MaterializeTemplate => async () => seededTemplate;

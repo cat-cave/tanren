@@ -30,12 +30,17 @@
 //      missing fragment, each producing a validated `Fragment` persisted into the
 //      org's `fragments` table). Wait, retry step 1. If authoring fails, halt loud
 //      with `FragmentAuthoringFailedError` (no silent skip).
-//   3. `composeTemplate(config, library)` assembles the VFS, then materialize it
-//      into a fresh seed repo. The seed reference rides on `projects.config` so the
-//      run path clones it into the project workspace.
+//   3. CREATE the project repo (`createRepository` — `CodeHost.createRepo`).
+//   4. `composeTemplate(config, library)` assembles the VFS, then `materializeTemplate`
+//      PUSHES every composed file directly to the just-created project repo's
+//      default branch — the project repo IS the artifact (PR-G — task #77).
+//      An opaque `templateRef` (`tanren://composed/<slug>@<contentHash>`) rides on
+//      `projects.config` for observability; there is NO `tanren-tmpl-<slug>` seed
+//      repo to clone at run time.
 //
 // There is NO dual scaffoldOrigin, NO `template_build` mode, NO agent template-build
-// DAG, NO template registry to query. Every project derive is the same path.
+// DAG, NO template registry to query, NO intermediate per-stack template seed repo.
+// Every project derive is the same path.
 
 import type pg from "pg";
 import type { ActorContext } from "../../../auth/schemas.js";
@@ -109,9 +114,10 @@ export interface DeriveInput {
   prepareDeploy?: PrepareDeployCallback;
   /**
    * THE COMPOSE+MATERIALIZE SEAM (docs/roadmap/templating-system.md). The derive
-   * composes a fragment-based template from the captured lifecycle and materializes
-   * it into a fresh seed repo via this seam. REQUIRED on the production path; tests
-   * may inject a stub. Absent in production is a wiring bug.
+   * composes a fragment-based template from the captured lifecycle and pushes the
+   * composed VFS DIRECTLY into the just-created project repo via this seam (PR-G —
+   * task #77; no intermediate `tanren-tmpl-<slug>` template seed repo). REQUIRED on
+   * the production path; tests may inject a stub. Absent in production is a wiring bug.
    */
   materializeTemplate?: MaterializeTemplate;
   /**
@@ -131,13 +137,13 @@ export interface DeriveInput {
   designAgent?: DesignAgent;
   /**
    * COMPENSATION (task #78 — derive atomic rollback). The route layer wires this
-   * against `CodeHost.deleteRepo` so each repo created during the derive
-   * (the template seed repo + the project repo) can be undone if a LATER step in
-   * the derive throws. REQUIRED whenever `createRepository` and/or
-   * `materializeTemplate` are wired (i.e. the production path) — an absent
-   * `deleteRepository` while creates are wired is a wiring bug (the derive
-   * would create resources it cannot roll back). Tests that don't exercise
-   * external resource creation may omit it.
+   * against `CodeHost.deleteRepo` so the project repo created during the derive
+   * can be undone if a LATER step in the derive throws. REQUIRED whenever
+   * `createRepository` is wired (i.e. the production path) — an absent
+   * `deleteRepository` while a create is wired is a wiring bug (the derive
+   * would create a resource it cannot roll back). Per PR-G (task #77) there is
+   * no longer a separate template seed repo to roll back; this covers the project
+   * repo only. Tests that don't exercise external resource creation may omit it.
    */
   deleteRepository?: DeleteRepositoryCallback;
   /**
@@ -173,24 +179,19 @@ export interface DeriveResult {
   behaviorIds: string[];
   milestoneIds: string[];
   designContractId?: string;
-  /** The fragment-composed seed the project was materialized from
-   * (docs/roadmap/templating-system.md). Always present on a fresh derive. */
+  /** The fragment-composed seed the project's initial content was materialized
+   * from (docs/roadmap/templating-system.md). Always present on a fresh derive;
+   * absent on a `resumeDerivedProject` return. Per PR-G the seed is opaque —
+   * no per-stack `tanren-tmpl-<slug>` GitHub repo exists. */
   templateSeed?: SeededTemplate;
 }
 
-// Project the seed reference onto the `projects.config.templateRef` shape the run
-// path reads at workspace-prep.
-function templateRefConfig(seed: SeededTemplate): {
-  templateRef: { templateRef: string; repoRef: string; validatedAt: string; validatedSha: string };
-} {
-  return {
-    templateRef: {
-      templateRef: seed.templateRef,
-      repoRef: seed.repoRef,
-      validatedAt: seed.validatedAt,
-      validatedSha: seed.validatedSha,
-    },
-  };
+// Project the seed reference onto the `projects.config.templateRef` field. The
+// persisted value is the OPAQUE composed-template identifier (no GitHub repo
+// exists at this ref — PR-G / task #77). Observability only; the run path no
+// longer reads it for a seed-repo clone.
+function templateRefConfig(seed: SeededTemplate): { templateRef: string } {
+  return { templateRef: seed.templateRef };
 }
 
 type RepoResolution =
@@ -286,7 +287,10 @@ async function composeAndMaterialize(
   lifecycle: CaptureLifecycle,
   config: TemplateConfig,
   library: FragmentLibrary,
-  compensation: DeriveCompensation,
+  projectRepoOwner: string,
+  projectRepoSlug: string,
+  repoUrl: string,
+  defaultBranch: string,
 ): Promise<SeededTemplate> {
   if (input.materializeTemplate === undefined) {
     throw new Error(
@@ -294,29 +298,21 @@ async function composeAndMaterialize(
         "the onboarding route. An absent seam is a wiring bug, not a degrade path.",
     );
   }
-  if (input.owner === undefined) {
-    throw new Error("greenfield derive requires `owner` to materialize the seed repo");
-  }
-  const seed = await input.materializeTemplate({ config, lifecycle, owner: input.owner, library });
-  // TRANSACTIONAL ROLLBACK (task #78): register a compensation to delete the
-  // freshly-materialized seed repo if a later step in this derive throws. The
-  // `repoRef` is the GitHub `<owner>/<name>` slug `materializeTemplate` minted.
-  // The materializer ALWAYS creates a fresh repo (no resume/re-attach path), so
-  // the compensation always fires on a partial-failure rollback. Absent
-  // `deleteRepository` callback ⇒ skip registration (test-only path; production
-  // wires it via the onboarding route).
-  if (input.deleteRepository !== undefined) {
-    const [seedOwner, seedName] = seed.repoRef.split("/", 2);
-    if (seedOwner !== undefined && seedName !== undefined && seedOwner !== "" && seedName !== "") {
-      const deleteRepository = input.deleteRepository;
-      compensation.register({
-        kind: "github.repo",
-        label: seed.repoRef,
-        rollback: () => deleteRepository({ owner: seedOwner, name: seedName }),
-      });
-    }
-  }
-  return seed;
+  // PR-G (task #77): the composed VFS lands DIRECTLY in the just-created project
+  // repo. No intermediate `tanren-tmpl-<slug>` seed repo — the project repo IS
+  // the artifact. No separate compensation: a failure here is covered by the
+  // project-repo compensation already registered by `resolveOrCreateGreenfieldRepo`
+  // (deleting the project repo wipes the partial push set).
+  return input.materializeTemplate({
+    config,
+    lifecycle,
+    projectRepo: {
+      fullName: `${projectRepoOwner}/${projectRepoSlug}`,
+      repoUrl,
+      defaultBranch,
+    },
+    library,
+  });
 }
 
 export type {
@@ -343,21 +339,19 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
   }
 
   // TASK #78 — TRANSACTIONAL ROLLBACK. Build a compensation stack covering every
-  // external resource derive creates (the materialized seed repo, the project
-  // repo, the deploy app). If ANY step from here to a durable project row throws,
-  // the stack walks in LIFO order + every resource is deleted before the original
-  // error re-raises — so the operator's next retry never collides on an orphan.
-  // The compensation is INTERNAL to this derive call (a recursive derive would
-  // build its own atomic unit). The compensation does NOT cover entity-graph
-  // creates after `createProject` succeeds: the project row is then the durable
-  // anchor + the existing `resumeDerivedProject` returns it idempotently.
+  // external resource derive creates (the project repo, the deploy app). If ANY
+  // step from here to a durable project row throws, the stack walks in LIFO order
+  // + every resource is deleted before the original error re-raises — so the
+  // operator's next retry never collides on an orphan. PR-G (task #77) reduced
+  // the scope by one: the per-stack `tanren-tmpl-<slug>` template seed repo is
+  // gone (the composed VFS pushes directly to the project repo). The compensation
+  // is INTERNAL to this derive call (a recursive derive would build its own
+  // atomic unit) and does NOT cover entity-graph creates after `createProject`
+  // succeeds: the project row is then the durable anchor + the existing
+  // `resumeDerivedProject` returns it idempotently.
   const compensation = newDeriveCompensation();
   try {
     const { config, library } = await resolveFragmentConfig(input.orgId, input, capture.lifecycle);
-
-    const seed = await composeAndMaterialize(input, capture.lifecycle, config, library, compensation);
-
-    const scaffoldSpecs = scaffoldSpecsFor(capture.lifecycle, seed);
 
     const autonomousOptIn = input.autonomy === "auto" || input.autonomy === "simulated";
     const baseConfig = autonomousOptIn
@@ -365,9 +359,31 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
       : { version: 1, greenfield: true };
     if (deploy === undefined || input.prepareDeploy === undefined) throw missingDeployProvisionerError();
 
+    // PR-G (task #77): create the project repo FIRST so the composed VFS can be
+    // pushed DIRECTLY into it (no intermediate `tanren-tmpl-<slug>` seed repo).
     const repoResolution = await resolveOrCreateGreenfieldRepo(pool, input, slug, compensation);
     if (repoResolution.kind === "resume") return repoResolution.result;
     const { repository, repoUrl } = repoResolution;
+
+    // PR-G — compose+push the VFS directly to the just-created project repo as
+    // its initial content. No separate compensation: a failure here is covered
+    // by the project-repo compensation registered above (deleting the project
+    // repo wipes the partial push set).
+    if (input.owner === undefined) {
+      throw new Error("greenfield derive requires `owner` to materialize the composed template into the project repo");
+    }
+    const seed = await composeAndMaterialize(
+      input,
+      capture.lifecycle,
+      config,
+      library,
+      input.owner,
+      slug,
+      repoUrl,
+      repository?.defaultBranch ?? "main",
+    );
+
+    const scaffoldSpecs = scaffoldSpecsFor(capture.lifecycle, seed);
 
     const preparedDeploy = await input.prepareDeploy({
       orgId: input.orgId,

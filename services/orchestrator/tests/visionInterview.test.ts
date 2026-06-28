@@ -66,16 +66,15 @@ const captureWithLifecycle = (): InterviewCapture => ({
   designContract: MINIMAL_DESIGN_CONTRACT,
 });
 
-// Doctrine-collapse seed: a fixed clock + a stub materialize seam. Every derive
-// composes a fragment-based template; the test stub records each compose call +
-// returns a deterministic SeededTemplate the derive persists onto the project.
+// PR-G (task #77) — the materializer pushes the composed VFS DIRECTLY into the
+// project repo (no intermediate `tanren-tmpl-*` seed repo). The stub returns a
+// deterministic opaque `SeededTemplate` (templateRef + validatedAt) the derive
+// persists onto the project config for observability.
 const SEED_NOW = "2026-06-09T00:00:00.000Z";
 function fixtureSeed(slug: string): SeededTemplate {
   return {
-    templateRef: `tanren://composed/${slug}@deadbeef`,
-    repoRef: `cat-cave/tanren-tmpl-${slug}`,
+    templateRef: `tanren://composed/${slug}@deadbeefcafe1234`,
     validatedAt: SEED_NOW,
-    validatedSha: "deadbeef",
   };
 }
 function stubMaterialize(): MaterializeTemplate {
@@ -239,7 +238,7 @@ describe("deriveFromCapture · creates the product graph (no migration)", () => 
     expect(deploy?.dependsOn).toEqual([buildId]);
   });
 
-  it("derives scaffold/build/deploy FROM the captured lifecycle + PERSISTS the lifecycle for deterministic contract materialization", async () => {
+  it("derives scaffold/build/deploy FROM the captured lifecycle + PERSISTS the lifecycle + opaque templateRef (PR-G)", async () => {
     // The deterministic answerer captures a TS/pnpm lifecycle; the lifecycle is
     // PERSISTED on the project config so the RUN materializes the contract files
     // deterministically (no LLM authoring), and the scaffold spec's WRITER
@@ -249,16 +248,17 @@ describe("deriveFromCapture · creates the product graph (no migration)", () => 
     const [scaffold, build, deploy] = derived.specIds.map((id) => state.specs.get(id));
 
     const config = configs.get(derived.projectId) as
-      | { lifecycle?: { stack?: string; bootstrap?: string }; templateRef?: { repoRef?: string } }
+      | { lifecycle?: { stack?: string; bootstrap?: string }; templateRef?: string }
       | undefined;
     expect(config?.lifecycle?.stack).toBe("ts/pnpm");
     expect(config?.lifecycle?.bootstrap).toBe("pnpm install");
-    // The fragment-composed seed reference is persisted onto the project config
-    // (the run path clones the seed repo at workspace-prep).
-    expect(config?.templateRef?.repoRef).toMatch(/^cat-cave\/tanren-tmpl-/u);
+    // PR-G — the OPAQUE composed-template identifier is persisted on the project
+    // config for observability. No GitHub repo exists at this ref; the composed
+    // VFS is already in the project repo as its initial content.
+    expect(config?.templateRef).toMatch(/^tanren:\/\/composed\//u);
 
     const desc = scaffold?.description ?? "";
-    expect(desc.toLowerCase()).toMatch(/seed from template|already committed|pre-committed|materialized/u);
+    expect(desc.toLowerCase()).toMatch(/seed from|already committed|pre-committed|materialized|composed seed/u);
     expect(desc).toContain("justfile");
     expect(desc).toContain(".tanren/ci.yml");
     // The green bar is bootstrap/tier-1/build — NOT the test tier.
