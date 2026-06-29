@@ -88,6 +88,10 @@ export async function buildEntityGraph(
           `given the repo, when ${def.title} lands, then the pipeline is green`,
         ],
         ...(dependsOn.length > 0 ? { dependsOn } : {}),
+        // Task #86 (v64 root cause): thread the writer-prompt mode from the scaffold-
+        // spec definition. The `scaffold` spec carries `specialize_seed`; `build`/
+        // `deploy` and every behavior/schema spec omit it and default to `from_scratch`.
+        ...(def.mode !== undefined && { mode: def.mode }),
       },
       actor,
     );

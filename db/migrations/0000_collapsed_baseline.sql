@@ -580,10 +580,12 @@ CREATE TABLE "specs" (
 	"depends_on" text[] DEFAULT '{}'::text[] NOT NULL,
 	"status" text DEFAULT 'open' NOT NULL,
 	"priority" text DEFAULT 'tbd' NOT NULL,
+	"mode" text DEFAULT 'from_scratch' NOT NULL,
 	"metadata" jsonb DEFAULT '{}'::jsonb NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	CONSTRAINT "specs_status_check" CHECK ("specs"."status" IN ('open','in_flight','review','merged','halted','cancelled','needs_attention')),
-	CONSTRAINT "specs_priority_check" CHECK ("specs"."priority" IN ('P0','P1','P2','tbd'))
+	CONSTRAINT "specs_priority_check" CHECK ("specs"."priority" IN ('P0','P1','P2','tbd')),
+	CONSTRAINT "specs_mode_check" CHECK ("specs"."mode" IN ('specialize_seed','from_scratch'))
 );
 --> statement-breakpoint
 CREATE TABLE "tasks" (

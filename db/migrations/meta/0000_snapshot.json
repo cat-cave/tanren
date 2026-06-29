@@ -5924,6 +5924,13 @@
           "notNull": true,
           "default": "'tbd'"
         },
+        "mode": {
+          "name": "mode",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'from_scratch'"
+        },
         "metadata": {
           "name": "metadata",
           "type": "jsonb",
@@ -5995,6 +6002,10 @@
         "specs_priority_check": {
           "name": "specs_priority_check",
           "value": "\"specs\".\"priority\" IN ('P0','P1','P2','tbd')"
+        },
+        "specs_mode_check": {
+          "name": "specs_mode_check",
+          "value": "\"specs\".\"mode\" IN ('specialize_seed','from_scratch')"
         }
       },
       "isRLSEnabled": false

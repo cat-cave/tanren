@@ -87,6 +87,15 @@ export const specs = pgTable(
     // time. NOT a state-machine value — these literals mirror the `SpecPriority`
     // Zod enum in services/orchestrator/src/engine/state/spec.ts.
     priority: text("priority").notNull().default("tbd"),
+    // WRITER-PROMPT MODE (task #86 — v64 root cause): selects which standing
+    // instructions `writerPromptFor()` emits for this spec's writer iterations.
+    // `from_scratch` (default) → today's brownfield/legacy authoring guidance
+    // ("Build everything ELSE — manifest/lockfile, sources, configs, tests"); the
+    // greenfield SCAFFOLD spec sets `specialize_seed` so the writer is told the
+    // composed seed is already in place + proven green and only product-identity
+    // surfaces should change. NOT a state-machine value — these literals mirror
+    // the `SpecMode` Zod enum in services/orchestrator/src/engine/state/spec.ts.
+    mode: text("mode").notNull().default("from_scratch"),
     metadata: jsonb("metadata")
       .notNull()
       // P3-0014: discovery provenance under `discovery` key
@@ -96,6 +105,7 @@ export const specs = pgTable(
   (table) => [
     enumCheck("specs_status_check", table.status, stateEnumLists.specs_status),
     enumCheck("specs_priority_check", table.priority, ["P0", "P1", "P2", "tbd"]),
+    enumCheck("specs_mode_check", table.mode, ["specialize_seed", "from_scratch"]),
     index("specs_org_id").on(table.orgId),
   ],
 );

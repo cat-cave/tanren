@@ -16,6 +16,7 @@ import type { OrgGithubAppInstallation } from "../config/orgConfig.js";
 import type { Allocator, ReleaseReason, RunnerHandle } from "../contracts/allocator.js";
 import type { BudgetGate } from "../contracts/dagWalker.js";
 import type { AncestorStack } from "../dag/ancestorStack.js";
+import type { SpecMode } from "../state/spec.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
@@ -107,6 +108,8 @@ export interface PlannerRunContext {
   behaviorContext?: ReadonlyArray<{ id: string; title: string; description: string }>;
   // WS-D2: HEAD `DesignContract` rendered for the writer prompt (designWriterContext.ts); absent ⇒ no design contract.
   designContextBlock?: string;
+  // Task #86 (v64 root cause): spec writer-prompt MODE; absent ⇒ `from_scratch`. See `engine/state/spec.ts`.
+  specMode?: SpecMode;
   runnerImage: string;
   identitySecretRef: string;
   githubCredentialRef: string;
@@ -367,6 +370,7 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
           workspacePath,
           baseSha,
           ...(context.designContextBlock !== undefined && { designContextBlock: context.designContextBlock }),
+          ...(context.specMode !== undefined && { specMode: context.specMode }),
         },
         usageProbe,
         budgetGate: iterationBudgetGate,
@@ -392,11 +396,8 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
         return { runId: context.runId, workspacePath, outcome };
       }
 
-      // Publish the cleaned draft PR + run the merge-authority `pre_merge` gate (extracted to
-      // `runPublishGateStage`, keeping this file under cap). Returns `rework` (re-author —
-      // `continue`), `halt` (bounded-out: finalized + parked LOUD), `merged` (gate passed —
-      // fall through to review), or `converged_empty` (v35 graceful empty-branch: the stage
-      // already converged the run merged — base work #586 — or threw the transient re-drive #582).
+      // Publish the cleaned draft PR + run the merge-authority `pre_merge` gate
+      // (`runPublishGateStage`): `rework`/`halt`/`merged`/`converged_empty` (v35).
       const stage = await runPublishGateStage(input, mergeGateCtx, context, {
         cloneHeadSha,
         bootstrapSha,

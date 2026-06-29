@@ -15,6 +15,35 @@ export type SpecPriority = z.infer<typeof SpecPriority>;
 /** The default priority a not-yet-triaged spec carries (matches the DB column default). */
 export const DEFAULT_SPEC_PRIORITY: SpecPriority = "tbd";
 
+/**
+ * The WRITER-PROMPT MODE for a spec (task #86 — v64 root cause). Selects which standing
+ * instructions `writerPromptFor()` emits for this spec's writer iterations:
+ *
+ * - `from_scratch` (default — brownfield + non-scaffold specs): the workspace is the
+ *   project's existing tree (or an empty repo). The writer scaffolds the manifest,
+ *   sources, configs, tests, regenerates the lockfile after manifest edits, etc.
+ * - `specialize_seed` (greenfield's scaffold spec, post-PR-G): the workspace's initial
+ *   commit IS the composed VFS — manifest, lockfile, tsconfig, contract files, source
+ *   skeleton are already in place AND proven green by composition. The writer
+ *   specializes the seed (renames product identity, wires deploy/env, updates READMEs)
+ *   and MUST NOT rebuild the manifest, regenerate the lockfile, edit configs, add new
+ *   tests/lint configs, etc. The contradictory `WRITER_GRADING_INSTRUCTION` ("Build
+ *   everything ELSE — the manifest/lockfile, sources, configs, tests, fixtures") was
+ *   v64's writer-checker non-convergence root cause (6 hours, 61 writer iterations,
+ *   ZERO merges — each iteration a different over-broad diff, so the fixed-point
+ *   detector never fired).
+ *
+ * The DB CHECK in `db/src/schemaCore.ts` mirrors these literals; the column default is
+ * `from_scratch` (backwards-compat — brownfield/legacy paths keep today's behavior).
+ */
+export const SpecMode = z.enum(["specialize_seed", "from_scratch"]);
+export type SpecMode = z.infer<typeof SpecMode>;
+
+/** The default spec mode (matches the DB column default): the from-scratch authoring
+ * the writer guidance was originally written for. Greenfield's scaffold spec opts INTO
+ * `specialize_seed` explicitly at `scaffoldSpecsFor()`. */
+export const DEFAULT_SPEC_MODE: SpecMode = "from_scratch";
+
 const SPEC_PRIORITY_RANK: Record<SpecPriority, number> = { P0: 0, P1: 1, P2: 2, tbd: 3 };
 
 /** Sortable rank for a priority — lower sorts first (P0=0 … tbd=3). */

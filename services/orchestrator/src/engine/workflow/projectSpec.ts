@@ -4,7 +4,7 @@ import type pg from "pg";
 import type { ActorContext } from "../../auth/schemas.js";
 import { type ProjectConfigV1, defaultProjectConfigV1, migrateProjectConfig } from "../config/index.js";
 import { PgEventStore } from "../eventStore.js";
-import { DEFAULT_SPEC_PRIORITY, type SpecPriority } from "../state/spec.js";
+import { DEFAULT_SPEC_MODE, DEFAULT_SPEC_PRIORITY, type SpecMode, type SpecPriority } from "../state/spec.js";
 import { assertProjectCreateConfigAllowed, type ProjectConfigWriteProof } from "./projectConfigWriteGuards.js";
 import {
   ProjectAccessDeniedError,
@@ -58,6 +58,8 @@ export interface CreateSpecInput {
   dependsOn?: string[];
   /** Execution priority (§1b); omitted ⇒ the `tbd` default the DagWalker schedules last. */
   priority?: SpecPriority;
+  /** Writer-prompt MODE (task #86); omitted ⇒ `from_scratch`. See `engine/state/spec.ts`. */
+  mode?: SpecMode;
 }
 
 export interface SpecContract {
@@ -69,6 +71,8 @@ export interface SpecContract {
   dependsOn: string[];
   status: string;
   priority: SpecPriority;
+  /** Writer-prompt MODE (task #86). */
+  mode: SpecMode;
 }
 
 export interface CreateSpecRunInput {
@@ -192,12 +196,13 @@ async function createSpecOnClient(
     dependsOn: input.dependsOn ?? [],
     status: "open",
     priority: input.priority ?? DEFAULT_SPEC_PRIORITY,
+    mode: input.mode ?? DEFAULT_SPEC_MODE,
   };
 
+  // org_id derived in-statement from the parent project (tanren tenancy).
   await client.query(
-    // org_id derived in-statement from the parent project (tanren tenancy).
-    `INSERT INTO specs (spec_id, project_id, org_id, title, description, acceptance_criteria, depends_on, status, priority)
-     VALUES ($1, $2, (SELECT org_id FROM projects WHERE project_id = $2), $3, $4, $5::jsonb, $6::text[], $7, $8)`,
+    `INSERT INTO specs (spec_id, project_id, org_id, title, description, acceptance_criteria, depends_on, status, priority, mode)
+     VALUES ($1, $2, (SELECT org_id FROM projects WHERE project_id = $2), $3, $4, $5::jsonb, $6::text[], $7, $8, $9)`,
     [
       spec.specId,
       spec.projectId,
@@ -207,10 +212,10 @@ async function createSpecOnClient(
       spec.dependsOn,
       spec.status,
       spec.priority,
+      spec.mode,
     ],
   );
-  // Wake the DagWalker for THIS project (see notifyDagChanged): a fresh DAG has
-  // open specs but zero runs, so the run channel never fires for it on its own.
+  // Wake the DagWalker (notifyDagChanged): a fresh DAG's run channel never fires on its own.
   await notifyDagChanged(client, spec.projectId);
   return spec;
 }
@@ -246,9 +251,8 @@ async function ensureProjectAccess(pool: QueryClient, projectId: string, actor?:
   const result = await pool.query<{ org_id: string | null }>("SELECT org_id FROM projects WHERE project_id = $1", [
     projectId,
   ]);
+  // org_id is mandatory (no null-org bypass): a project with no resolvable org is denied.
   const projectOrg = result.rows[0]?.org_id ?? null;
-  // org_id is mandatory (no null-org bypass): a project with no resolvable org
-  // is denied, never granted.
   if (projectOrg === null) {
     throw new ProjectAccessDeniedError(projectId);
   }
@@ -325,10 +329,8 @@ async function createQueuedRunFromSpecOnClient(
     spec: { ...loaded.spec, status: "in_flight" },
   };
 
-  // percolation columns — set only on a speculative start (`verified`/`pending` carried onto a re-execution run).
-  // The jj-local cutover: the walker/base-shift write ONLY `ancestor_stack` — the ordered stack
-  // is the SOLE base truth (the legacy `speculative_base` + `integrated_ancestor_shas` columns
-  // were dropped in WS-B PR-12's migration).
+  // Percolation columns set only on a speculative start; jj-local writes ONLY
+  // `ancestor_stack` (the SOLE base truth post-WS-B PR-12).
   const spec = input.speculative;
   await client.query(
     // org_id derived in-statement from the parent project (tanren tenancy).
@@ -414,10 +416,8 @@ async function ensureSpecDependenciesDone(client: pg.PoolClient, spec: SpecContr
   if (spec.dependsOn.length === 0) {
     return;
   }
-  // A dependency is SATISFIED when its spec reached the terminal-complete `merged` status
-  // (the walker's `done` phase + the lifecycle `merged` state). This gate MUST agree with
-  // the planner, or a dependent whose deps are all `merged` is rejected with
-  // SpecDependenciesBlockedError (which the walker tolerates as benign-transient).
+  // A dependency is SATISFIED when its spec reached the terminal-complete `merged` status.
+  // This gate MUST agree with the planner; SpecDependenciesBlockedError is benign-transient.
   const result = await client.query(
     "SELECT spec_id FROM specs WHERE project_id = $1 AND status = 'merged' AND spec_id = ANY($2::text[])",
     [spec.projectId, spec.dependsOn],
@@ -435,7 +435,7 @@ async function loadSpecWithProject(
 ): Promise<{ project: ProjectContract; spec: SpecContract }> {
   const result = await pool.query(
     `SELECT p.project_id, p.name, p.repo_url, p.default_branch, p.runner_image, p.allocator, p.config,
-            s.spec_id, s.title, s.description, s.acceptance_criteria, s.depends_on, s.status, s.priority
+            s.spec_id, s.title, s.description, s.acceptance_criteria, s.depends_on, s.status, s.priority, s.mode
        FROM specs s JOIN projects p ON p.project_id = s.project_id
       WHERE s.spec_id = $1`,
     [specId],
@@ -453,8 +453,7 @@ async function loadSpecWithProject(
       defaultBranch: decoded.default_branch,
       runnerImage: decoded.runner_image,
       allocator: decoded.allocator,
-      // Read-path parser: a row missing/unknown `version` raises a typed
-      // UnknownConfigVersionError out of migrateProjectConfig — no silent default.
+      // migrateProjectConfig fails LOUD on missing/unknown `version` — no silent default.
       config: migrateProjectConfig(decoded.config),
     },
     spec: {
@@ -466,6 +465,7 @@ async function loadSpecWithProject(
       dependsOn: decoded.depends_on,
       status: decoded.status,
       priority: decoded.priority,
+      mode: decoded.mode,
     },
   };
 }

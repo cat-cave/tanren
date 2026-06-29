@@ -32,6 +32,7 @@ import {
 // module (the lifecycle guard travels with the scaffold authoring it gates).
 export { MissingLifecycleError };
 import type { SeededTemplate } from "../../templates/fragments/materialize.js";
+import type { SpecMode } from "../../state/spec.js";
 import type { CaptureLifecycle } from "./types.js";
 
 export interface ScaffoldSpecDef {
@@ -42,6 +43,12 @@ export interface ScaffoldSpecDef {
   // When true, this spec `dependsOn` the PREVIOUS scaffold spec in the list — the
   // wiring that serializes the foundation into a chain instead of parallel roots.
   dependsOnPrev?: boolean;
+  // Task #86 (v64 root cause): the writer-prompt MODE the spec is created with.
+  // The `scaffold` spec sets `specialize_seed` (the composed seed is in place +
+  // proven green; the writer specializes ONLY product-identity surfaces); `build`/
+  // `deploy` and every other spec stay `from_scratch` (today's default — build the
+  // manifest/sources/configs/tests). Omitted ⇒ the default at `createSpec`.
+  mode?: SpecMode;
 }
 
 /**
@@ -49,12 +56,24 @@ export interface ScaffoldSpecDef {
  * fragment-composed seed. The `scaffold` spec INSTANTIATES the seed (the writer
  * specializes the seed for THIS product); `build` and `deploy` route through the
  * conventional `just build` / `just deploy` targets the seed established.
+ *
+ * MODE (task #86 — v64 root cause): the `scaffold` spec opts INTO `specialize_seed`
+ * mode so `writerPromptFor()` emits the seeded-mode standing instructions ("the
+ * composed seed is already in place + proven green; touch ONLY product-identity
+ * surfaces") instead of the brownfield/legacy "build everything ELSE — manifest/
+ * lockfile, sources, configs, tests" guidance that produced v64's 6-hour non-
+ * converging writer-checker loop. `build` and `deploy` stay `from_scratch` (they
+ * may legitimately edit configs / add tests / etc as the product grows).
  */
 export function scaffoldSpecsFor(lifecycle: CaptureLifecycle, seed: SeededTemplate): ScaffoldSpecDef[] {
   const scaffoldSpec: ScaffoldSpecDef = {
     title: "scaffold",
     description: buildSeedScaffoldDescription(lifecycle, seed),
     acceptanceCriteria: buildSeedScaffoldAcceptanceCriteria(seed),
+    // The composed seed (manifest, lockfile, configs, contract files, source skeleton)
+    // is ALREADY in place + proven green at this spec's first writer iteration; mode
+    // selects the standing instructions that say so.
+    mode: "specialize_seed",
   };
   return [
     scaffoldSpec,
