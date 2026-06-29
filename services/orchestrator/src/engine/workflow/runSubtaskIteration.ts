@@ -215,10 +215,7 @@ export async function runSubtaskIteration(ctx: SubtaskIterationContext): Promise
     ...(input.specValidator !== undefined && { specValidator: input.specValidator }),
     appendEvent,
   });
-  // Audit round-2 H1: preserve the parent's spec mode into each child remediation
-  // spec request so the child run carries the mode the parent ran in. Without this a
-  // child remediation from a `specialize_seed` parent would land `from_scratch`.
-  const newSpecs: NewSpecRequest[] = triage.routing.newSpecs.map((r) => routedToNewSpec(r, input.context.specMode));
+  const newSpecs: NewSpecRequest[] = triage.routing.newSpecs.map((r) => routedToNewSpec(r));
 
   // TRIAGE → PASSED: every finding became a NEW spec (none kept here).
   if (triage.routing.outcome === "passed") {
@@ -283,7 +280,7 @@ export async function runSubtaskIteration(ctx: SubtaskIterationContext): Promise
   }
   if (convergence.decision === "pass") {
     // Velocity policy: defer the mild kept leftovers as specs and ALLOW the pass.
-    const deferred: NewSpecRequest[] = triage.routing.tasksHere.map((r) => routedToNewSpec(r, input.context.specMode));
+    const deferred: NewSpecRequest[] = triage.routing.tasksHere.map((r) => routedToNewSpec(r));
     await markPlannerPassed(planCtx);
     return {
       kind: "terminal",

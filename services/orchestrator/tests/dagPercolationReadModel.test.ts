@@ -14,6 +14,7 @@ import type pg from "pg";
 import { describe, expect, it } from "vitest";
 import { InMemorySecretStore, type SecretValue } from "../src/engine/contracts/secretStore.js";
 import { PgPercolationReadModel } from "../src/engine/dag/percolationPg.js";
+import { InMemoryRunStateWriter } from "./fixtures/inMemoryRunStateWriter.js";
 import type { GitHubHttpClient, GitHubHttpRequest, GitHubHttpResponse } from "../src/engine/providers/github.js";
 
 /** A secret store that returns a stub `github_token` for any ref (so the head-sha read's
@@ -129,6 +130,9 @@ function makeReadModel(mergedSpecIds: string[]): PgPercolationReadModel {
     pool: new FakePool(new Set(mergedSpecIds)) as unknown as pg.Pool,
     githubHttp: fetchRefGitHubHttp,
     secrets: new TokenSecretStore(),
+    // Audit D-R3.2: writer is REQUIRED on the deps; these tests exercise
+    // `loadAncestorSignals` (no marker clear), so an in-memory writer suffices.
+    runStateWriter: new InMemoryRunStateWriter(),
   });
 }
 
@@ -270,10 +274,19 @@ class DependentsFakeClient {
 }
 
 function makeDependentsReadModel(pool: DependentsFakePool): PgPercolationReadModel {
+  // Audit D-R3.2: the stale-marker housekeeping clear now routes through the (REQUIRED)
+  // writer. Inject an in-memory writer whose `clearRunPercolationPending` forwards into
+  // the same `clearedRunIds` recorder the pool stub used to populate, so test assertions
+  // hold unchanged.
+  const writer = new InMemoryRunStateWriter();
+  writer.clearRunPercolationPending = async (input) => {
+    pool.clearedRunIds.push(input.runId);
+  };
   return new PgPercolationReadModel({
     pool: pool as unknown as pg.Pool,
     githubHttp: fetchRefGitHubHttp,
     secrets: new TokenSecretStore(),
+    runStateWriter: writer,
   });
 }
 

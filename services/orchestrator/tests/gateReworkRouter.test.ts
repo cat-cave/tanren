@@ -14,28 +14,23 @@ import {
   gateErrorSignature,
   type ReplanEnqueuer,
 } from "../src/engine/workflow/reviewMerge/conflictResolver/replanRouter.js";
+import { InMemoryRunStateWriter } from "./fixtures/inMemoryRunStateWriter.js";
 
 const ORG = "org_test";
 const PROJECT = "project_test";
 const RUN = "run_dependent";
 const SPEC = "spec_b";
 
-/** A recording pool that captures only the spec-status park UPDATE (the router's only DB write here). */
-function makeStatusPool(statusWrites: { specId: string; status: string }[]): pg.Pool {
-  // eslint-disable-next-line @typescript-eslint/require-await
-  const query = async (text: string, params?: unknown[]): Promise<{ rows: unknown[]; rowCount: number }> => {
-    const sql = String(text);
-    if (sql.includes("UPDATE specs SET status")) {
-      // The router passes the new status as $2 ($1 = specId).
-      statusWrites.push({ specId: String(params?.[0]), status: String(params?.[1]) });
-      return { rows: [], rowCount: 1 };
-    }
-    return { rows: [], rowCount: 0 };
-  };
+/** A no-op pool: the audit-D-R3.2 sweep routes the router's spec-status writes through the
+ * REQUIRED writer; the pool is only retained on the interface for the (unused-by-tests)
+ * fallback shape. */
+// eslint-disable-next-line @typescript-eslint/require-await
+const noopPoolQuery = async (): Promise<{ rows: unknown[]; rowCount: number }> => ({ rows: [], rowCount: 0 });
+function makeNoopPool(): pg.Pool {
   return {
-    query,
+    query: noopPoolQuery,
     // eslint-disable-next-line @typescript-eslint/require-await
-    connect: async () => ({ query, release: () => {} }),
+    connect: async () => ({ query: noopPoolQuery, release: () => {} }),
   } as unknown as pg.Pool;
 }
 
@@ -46,8 +41,25 @@ function makeRouter(opts: {
   events: FakeEventStore;
   statusWrites: { specId: string; status: string }[];
 }): SpecStatusGateReworkRouter {
+  // Audit D-R3.2: the writer is REQUIRED; the test's writer records both the bare
+  // `setSpecStatus` flips (degenerate path) and the atomic `updateSpecWithEvent` parks
+  // (the spec → `needs_attention` escalation), matching what the prior fake-pool UPDATE
+  // recorder captured. The atomic park's `dag.spec.needs_attention` event ALSO forwards
+  // into the FakeEventStore so the prior `events.events.find(...)` assertions still hold.
+  const writer = new InMemoryRunStateWriter({
+    forwardAppend: (event) => {
+      opts.events.append(event);
+    },
+    forwardSetSpecStatus: (input) => {
+      opts.statusWrites.push({ specId: input.specId, status: input.status });
+    },
+    forwardUpdateSpecWithEvent: (input) => {
+      opts.statusWrites.push({ specId: input.spec.specId, status: input.spec.status });
+    },
+  });
   return new SpecStatusGateReworkRouter({
-    pool: makeStatusPool(opts.statusWrites),
+    pool: makeNoopPool(),
+    runStateWriter: writer,
     orgId: ORG,
     eventStore: opts.events,
     runId: RUN,

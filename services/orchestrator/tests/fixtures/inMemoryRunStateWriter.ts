@@ -145,6 +145,21 @@ export class InMemoryRunStateWriter implements RunStateWriter {
        * `runs.auth_ref` stamps off the pool's SQL stub still sees them.
        */
       forwardSetRunAuthRef?: (input: SetRunAuthRefInput) => Promise<void> | void;
+      /**
+       * Optional `setSpecStatus` forwarder so a test harness that previously
+       * asserted on a fake-pool spec-status UPDATE (audit D-R3.2 sweep shifted
+       * the merge-stage rework router from a writer-undefined in-process
+       * fallback onto the REQUIRED writer) can still record the status flip
+       * in its existing structures without rewriting every assertion.
+       */
+      forwardSetSpecStatus?: (input: SetSpecStatusInput) => Promise<void> | void;
+      /**
+       * Optional `updateSpecWithEvent` forwarder so the same harnesses can
+       * record the atomic spec-park (status `needs_attention` + the matching
+       * `dag.spec.needs_attention` event in one transaction) the merge-stage
+       * router now drives through the writer instead of an in-process pool.
+       */
+      forwardUpdateSpecWithEvent?: (input: UpdateSpecWithEventInput) => Promise<void> | void;
     } = {},
   ) {}
 
@@ -278,7 +293,11 @@ export class InMemoryRunStateWriter implements RunStateWriter {
     return { auditId: input.runId };
   }
 
-  async setSpecStatus(_input: SetSpecStatusInput): Promise<void> {}
+  async setSpecStatus(input: SetSpecStatusInput): Promise<void> {
+    if (this.options.forwardSetSpecStatus !== undefined) {
+      await this.options.forwardSetSpecStatus(input);
+    }
+  }
 
   async setSpecMetadata(_input: SetSpecMetadataInput): Promise<void> {}
 
@@ -311,6 +330,9 @@ export class InMemoryRunStateWriter implements RunStateWriter {
     specPairSchema.parse(input);
     if (this.options.forwardAppend !== undefined) {
       await this.options.forwardAppend(input.event);
+    }
+    if (this.options.forwardUpdateSpecWithEvent !== undefined) {
+      await this.options.forwardUpdateSpecWithEvent(input);
     }
     return { flipped: true, alreadyTerminal: false };
   }

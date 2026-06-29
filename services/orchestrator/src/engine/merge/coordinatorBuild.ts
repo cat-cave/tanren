@@ -158,7 +158,7 @@ export function buildDriveMerge(deps: BuildMergeCoordinatorDeps): DriveMergeForQ
       githubHttp: deps.githubHttp,
       secrets: deps.secrets,
       ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
-      ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
+      runStateWriter: deps.runStateWriter,
       allocator: deps.allocator,
       ssh: deps.ssh,
       identitySecretRef: deps.identitySecretRef,
@@ -282,7 +282,7 @@ export function buildDriveMerge(deps: BuildMergeCoordinatorDeps): DriveMergeForQ
           // run; escalation on a genuine dead-end is the convergence detector's (no count).
           reGateGateRework: buildDriveReGateGateRework({
             pool: deps.pool,
-            ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
+            runStateWriter: deps.runStateWriter,
             orgId: facts.orgId,
             eventStore,
             runId,
@@ -355,20 +355,14 @@ export function buildDriveMerge(deps: BuildMergeCoordinatorDeps): DriveMergeForQ
  * place a native_queue spec reaches `merged`. The transition guard keeps it
  * idempotent (a spec already `merged`/`done` is left alone).
  */
-async function markSpecMerged(pool: pg.Pool, facts: RunFacts, runStateWriter?: RunStateWriter): Promise<void> {
-  // Plane-split: route the guarded merged-status finalize through the control plane
-  // when a writer is wired; else the in-process org-scoped UPDATE — byte-identical.
-  if (runStateWriter !== undefined) {
-    await runStateWriter.setSpecStatus({
-      specId: facts.specId,
-      orgId: facts.orgId,
-      status: "merged",
-      notFromStatuses: ["merged"],
-    });
-    return;
-  }
-  await runWithOrgScope(pool, facts.orgId, async (client) => {
-    await client.query(`UPDATE specs SET status = 'merged' WHERE spec_id = $1 AND status <> 'merged'`, [facts.specId]);
+async function markSpecMerged(_pool: pg.Pool, facts: RunFacts, runStateWriter: RunStateWriter): Promise<void> {
+  // Audit D-R3.2: REQUIRED writer — the in-process org-scoped UPDATE fallback was an
+  // unreachable half-measure once PR #714's `runStateWriterFromEnv` always returned one.
+  await runStateWriter.setSpecStatus({
+    specId: facts.specId,
+    orgId: facts.orgId,
+    status: "merged",
+    notFromStatuses: ["merged"],
   });
 }
 

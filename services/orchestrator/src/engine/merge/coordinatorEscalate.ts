@@ -13,12 +13,10 @@
 // There is NO producer of the escalation yet (the drive resolver still returns the
 // recoverable `conflict`) — this is the foundation the later resolver RETURNS into.
 
-import { runWithOrgScope } from "@tanren/db";
 import type pg from "pg";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { MergeQueueEntry } from "../contracts/mergeCoordinator.js";
 import { resolveProjectOrg } from "../dag/percolationWrites.js";
-import { applyUpdateSpecWithEvent } from "../worker/runStateLifecycleSql.js";
 
 /**
  * The seam both coordinators reuse to escalate a genuinely-irreconcilable spec. ONE
@@ -48,7 +46,7 @@ export interface SpecEscalator {
 export class PgSpecEscalator implements SpecEscalator {
   constructor(
     private readonly pool: pg.Pool,
-    private readonly runStateWriter?: RunStateWriter,
+    private readonly runStateWriter: RunStateWriter,
   ) {}
 
   async escalate(input: { projectId: string; entry: MergeQueueEntry; message: string }): Promise<void> {
@@ -65,7 +63,9 @@ export class PgSpecEscalator implements SpecEscalator {
     // (`parkSpec(...)` + `withScopedStore.append(...)`) issued two separate
     // writes; the partial-event landing was a silent strand surface. The
     // atomic seam (`updateSpecWithEvent` / `applyUpdateSpecWithEvent`)
-    // bundles them into ONE org-scoped transaction.
+    // bundles them into ONE org-scoped transaction. Audit D-R3.2: the writer
+    // is REQUIRED — the in-process `runWithOrgScope` fallback was an unreachable
+    // half-measure since PR #714's `runStateWriterFromEnv` always returns a writer.
     const event = {
       runId: input.entry.runId,
       specId: input.entry.specId,
@@ -85,10 +85,6 @@ export class PgSpecEscalator implements SpecEscalator {
       status: "needs_attention",
       notFromStatuses: ["merged", "needs_attention"],
     };
-    if (this.runStateWriter !== undefined) {
-      await this.runStateWriter.updateSpecWithEvent({ spec, event });
-      return;
-    }
-    await runWithOrgScope(this.pool, orgId, (client) => applyUpdateSpecWithEvent(client, { spec, event }));
+    await this.runStateWriter.updateSpecWithEvent({ spec, event });
   }
 }

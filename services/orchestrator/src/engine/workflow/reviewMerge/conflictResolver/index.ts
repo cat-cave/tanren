@@ -37,7 +37,12 @@ type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
 export interface DefaultConflictResolverDeps {
   pool: QueryClient;
-  runStateWriter?: RunStateWriter;
+  /**
+   * REQUIRED (audit D-R3.2 sweep): the writer is the single way to write under the
+   * de-privileged data plane. PR #714 made the writer-undefined fallback unreachable
+   * in production.
+   */
+  runStateWriter: RunStateWriter;
   eventStore: EventStore;
   ssh: CommandSubstrate;
   secrets: SecretStore;
@@ -154,7 +159,7 @@ export function buildDefaultConflictResolver(deps: DefaultConflictResolverDeps):
     // path + the base-shift coordinator's `recordReplanContext`).
     replan: new SpecStatusReplanRouter({
       pool: deps.pool,
-      ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
+      runStateWriter: deps.runStateWriter,
       ...(deps.orgId !== undefined && { orgId: deps.orgId }),
       eventStore: deps.eventStore,
       runId: deps.runId,
@@ -175,7 +180,7 @@ export function buildDefaultConflictResolver(deps: DefaultConflictResolverDeps):
     // which calls this same factory).
     gateRework: new SpecStatusGateReworkRouter({
       pool: deps.pool,
-      ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
+      runStateWriter: deps.runStateWriter,
       ...(deps.orgId !== undefined && { orgId: deps.orgId }),
       eventStore: deps.eventStore,
       runId: deps.runId,

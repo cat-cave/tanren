@@ -32,8 +32,7 @@ import type { BatchGateReworkRouter } from "../contracts/batchMergeCoordinator.j
 import type { MergeQueueEntry } from "../contracts/mergeCoordinator.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import { resolveProjectOrg } from "../dag/percolationWrites.js";
-import { type EventStore, PgEventStore } from "../eventStore.js";
-import { applyUpdateSpecWithEvent } from "../worker/runStateLifecycleSql.js";
+import type { EventStore } from "../eventStore.js";
 import type { AppendEventInput } from "../eventStore.js";
 import {
   atReplanFixedPoint,
@@ -48,7 +47,12 @@ const log = createLogger("batch-gate-rework");
 
 export interface BatchGateReworkRouterDeps {
   pool: pg.Pool;
-  runStateWriter?: RunStateWriter;
+  /**
+   * REQUIRED (audit D-R3.2 sweep): the writer is the single way to write under the
+   * de-privileged data plane. PR #714's `runStateWriterFromEnv` always returns one, so
+   * the old `runWithOrgScope + new PgEventStore` fallback was unreachable in production.
+   */
+  runStateWriter: RunStateWriter;
   /** Enqueues the writer-rework run (re-open + steering + run-create). Production wires `buildReplanEnqueuer`. */
   enqueuer?: ReplanEnqueuer;
   /** Reads the spec's prior gate-rework error signatures (the convergence-detector input). Production reads events. */
@@ -82,6 +86,7 @@ export class PgBatchGateReworkRouter implements BatchGateReworkRouter {
 
   constructor(private readonly deps: BatchGateReworkRouterDeps) {
     this.enqueuer = deps.enqueuer ?? buildReplanEnqueuer(deps.pool, deps.runStateWriter);
+    // runStateWriter is REQUIRED — the writer-undefined fallback is dropped.
     this.priorReworks = deps.priorReworks ?? ((input) => countPriorGateReworks(deps.pool, input));
     this.resolveOrg = deps.resolveOrg ?? ((projectId) => resolveProjectOrg(deps.pool, projectId));
   }
@@ -308,12 +313,11 @@ export class PgBatchGateReworkRouter implements BatchGateReworkRouter {
    * (the contract is exercised end-to-end in the conformance suite). */
   private async parkSpecAtomic(orgId: string, specId: string, event: AppendEventInput): Promise<void> {
     const spec = { specId, orgId, status: "needs_attention", notFromStatuses: ["merged", "needs_attention"] };
-    if (this.deps.runStateWriter !== undefined) {
-      await this.deps.runStateWriter.updateSpecWithEvent({ spec, event });
-      return;
-    }
+    // Audit D-R3.2: the writer (REQUIRED) is the single-source atomic park; the
+    // test-seam split is kept ONLY for `deps.appendEvent`-injected unit runs (no DB,
+    // no real writer attached on the test pool).
     if (this.deps.appendEvent !== undefined) {
-      // TEST SEAM split fallback (no DB / no real writer).
+      // TEST SEAM split fallback (no DB / no real writer wired on the test pool).
       await runWithOrgScope(this.deps.pool, orgId, async (client) => {
         await client.query(
           `UPDATE specs SET status = 'needs_attention' WHERE spec_id = $1 AND status NOT IN ('merged', 'needs_attention')`,
@@ -323,7 +327,7 @@ export class PgBatchGateReworkRouter implements BatchGateReworkRouter {
       await this.deps.appendEvent(orgId, event);
       return;
     }
-    await runWithOrgScope(this.deps.pool, orgId, (client) => applyUpdateSpecWithEvent(client, { spec, event }));
+    await this.deps.runStateWriter.updateSpecWithEvent({ spec, event });
   }
 
   private async withScopedStore(orgId: string, work: (store: EventStore) => Promise<void>): Promise<void> {
@@ -334,12 +338,8 @@ export class PgBatchGateReworkRouter implements BatchGateReworkRouter {
       await work({ append: (event) => appendEvent(orgId, event) });
       return;
     }
-    if (this.deps.runStateWriter !== undefined) {
-      const writer = this.deps.runStateWriter;
-      await runWithJobOrgId(orgId, () => work(writer));
-      return;
-    }
-    await runWithOrgScope(this.deps.pool, orgId, (client) => work(new PgEventStore(client)));
+    const writer = this.deps.runStateWriter;
+    await runWithJobOrgId(orgId, () => work(writer));
   }
 }
 

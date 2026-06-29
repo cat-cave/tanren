@@ -46,7 +46,6 @@ import {
   resolveManagedCapturer,
   resolveRunAdaptersWithBudgetPreflight,
   simulatedReviewSeam,
-  writerSeam,
 } from "./plannerRunAdapters.js";
 import { prepareRunWorkspace, type BootstrapStepInput, type CommitBootstrapStepInput } from "./plannerRunWorkspace.js";
 import type { ProvisionMiseToolchainInput } from "../workspace/bootstrap.js";
@@ -354,7 +353,7 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
       outcome = await runSubtaskLoop({
         pool: input.pool,
         eventStore,
-        ...writerSeam(input),
+        runStateWriter: input.runStateWriter,
         recorder,
         adapters,
         context: {
@@ -420,7 +419,7 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
       review = await pollReviewForRun({
         pool: input.pool,
         eventStore,
-        ...writerSeam(input),
+        runStateWriter: input.runStateWriter,
         secrets: input.secrets,
         githubHttp: input.githubHttp,
         runId: context.runId,
@@ -454,7 +453,7 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
     const merge = await mergeForRun({
       pool: input.pool,
       eventStore,
-      ...writerSeam(input),
+      runStateWriter: input.runStateWriter,
       secrets: input.secrets,
       githubHttp: input.githubHttp,
       runId: context.runId,

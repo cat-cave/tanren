@@ -74,6 +74,7 @@ describe("review polling stage", () => {
     const result = await pollReviewForRun({
       pool: pool.asPgPool(),
       eventStore: events,
+      runStateWriter: fakeMergeWriter(pool, events),
       secrets: new FakeSecretStore(),
       githubHttp: unusedHttp(),
       runId: "run_1",
@@ -108,6 +109,7 @@ describe("review polling stage", () => {
     const result = await pollReviewForRun({
       pool: pool.asPgPool(),
       eventStore: events,
+      runStateWriter: fakeMergeWriter(pool, events),
       secrets: new FakeSecretStore(),
       githubHttp: unusedHttp(),
       runId: "run_1",
@@ -115,7 +117,6 @@ describe("review polling stage", () => {
     });
 
     expect(result.verdict).toBe("approved");
-    // Still flips the PR out of draft for the merge, but never polls GitHub.
     expect(markedReady).toBe(true);
     expect(fetched).toBe(false);
     const types = events.events.map((e) => e.eventType);
@@ -128,7 +129,6 @@ describe("review polling stage", () => {
   });
 
   it("reviewPolicy: human (default) still polls GitHub for a verdict", async () => {
-    // Default reviewPolicy is human.
     const pool = new ReviewMergePool("direct_merge");
     const events = new FakeEventStore();
     let fetched = false;
@@ -143,6 +143,7 @@ describe("review polling stage", () => {
     const result = await pollReviewForRun({
       pool: pool.asPgPool(),
       eventStore: events,
+      runStateWriter: fakeMergeWriter(pool, events),
       secrets: new FakeSecretStore(),
       githubHttp: unusedHttp(),
       runId: "run_1",
@@ -150,7 +151,6 @@ describe("review polling stage", () => {
     });
 
     expect(result.verdict).toBe("approved");
-    // The human path polls.
     expect(fetched).toBe(true);
     const types = events.events.map((e) => e.eventType);
     expect(types).toContain("review.approved");
@@ -171,6 +171,7 @@ describe("review polling stage", () => {
     const result = await pollReviewForRun({
       pool: pool.asPgPool(),
       eventStore: events,
+      runStateWriter: fakeMergeWriter(pool, events),
       secrets: new FakeSecretStore(),
       githubHttp: unusedHttp(),
       runId: "run_1",

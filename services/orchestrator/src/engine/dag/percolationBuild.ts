@@ -29,7 +29,6 @@ import type { GitHubHttpClient } from "../providers/github.js";
 import type { WorkspaceVcsCore } from "../contracts/workspaceVcsCore.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
 import { orgScopingPool } from "../data/orgScopedDb.js";
-import { PgEventStore } from "../eventStore.js";
 import {
   type BaseShiftConflictResolver,
   type BaseShiftGateReworkRouter,
@@ -60,13 +59,13 @@ export interface BuildPercolationCoordinatorDeps {
   secrets: SecretStore;
   githubAppMinter?: GithubAppTokenMinter;
   /**
-   * Plane-split (autonomy loops): the control-plane run-state writer. When present
-   * (remote-writes on), the change-percolation coordinator routes its keep-run-row
-   * writes (`ancestor_stack` re-point, `verified_ancestor_shas`), its replan-context
-   * append, and its events through the control plane (the de-privileged data plane can
-   * no longer write those tables directly); absent, direct on the pool.
+   * REQUIRED (audit D-R3.2 sweep): the change-percolation coordinator routes its
+   * keep-run-row writes (`ancestor_stack` re-point, `verified_ancestor_shas`), its
+   * replan-context append, and its events through the writer — the de-privileged data
+   * plane cannot write those tables directly. PR #714's `runStateWriterFromEnv` always
+   * returns a writer, so the pool-only fallback was unreachable in production.
    */
-  runStateWriter?: RunStateWriter;
+  runStateWriter: RunStateWriter;
   /**
    * The LIVE base-shift seams. The autonomy loops wire them: the base-shift handler's
    * workspace/re-gate/resolver allocate a runner, rebase the dependent's branch in place
@@ -90,7 +89,7 @@ export interface BuildPercolationCoordinatorDeps {
 export class PgPercolationSettler implements PercolationSettler {
   constructor(
     private readonly pool: pg.Pool,
-    private readonly runStateWriter?: RunStateWriter,
+    private readonly runStateWriter: RunStateWriter,
   ) {}
 
   async absorb(input: {
@@ -296,8 +295,8 @@ function liveBaseShiftDeps(deps: BuildPercolationCoordinatorDeps): LiveBaseShift
     secrets: deps.secrets,
     githubHttp: deps.githubHttp,
     ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
-    ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
-    eventStore: deps.runStateWriter ?? new PgEventStore(scopedPool),
+    runStateWriter: deps.runStateWriter,
+    eventStore: deps.runStateWriter,
     identitySecretRef: deps.identitySecretRef,
   };
 }
@@ -311,9 +310,7 @@ export function buildPercolationCoordinator(deps: BuildPercolationCoordinatorDep
       githubHttp: deps.githubHttp,
       secrets: deps.secrets,
       ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
-      // Plane-split: route the stale-marker housekeeping clear (a `percolation_pending`
-      // left on a now-merged/done run) through the control plane when wired.
-      ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
+      runStateWriter: deps.runStateWriter,
     }),
     kickOff: new PercolatingKickOff({
       // jj-local (WS-B PR-9): the kick-off RE-RESOLVES the ordered unmerged-ancestor stack
@@ -330,7 +327,7 @@ export function buildPercolationCoordinator(deps: BuildPercolationCoordinatorDep
     settler: new PgPercolationSettler(deps.pool, deps.runStateWriter),
     events: new PgPercolationEventEmitter({
       pool: deps.pool,
-      ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
+      runStateWriter: deps.runStateWriter,
     }),
   });
 }

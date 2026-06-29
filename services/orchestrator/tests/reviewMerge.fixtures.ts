@@ -12,6 +12,7 @@ import type { AppendEventInput, EventStore } from "../src/engine/eventStore.js";
 import type {
   InsertTaskInput,
   RunStateWriter,
+  SetRunSpeculativeBaseInput,
   UpdateTaskInput,
   UpdateTaskWithEventInput,
   UpdateTaskWithEventOutcome,
@@ -435,6 +436,12 @@ export function fakeMergeWriter(pool: ReviewMergePool, events: EventStore): RunS
           failure_kind: input.task.failureKind,
         });
       }
+      // Audit D-R3.2: forward `priorEvents` (the atomic-pair seam D2 introduced) into the
+      // test event store so assertions on the pre-terminal `review.*` / similar event
+      // still see them — the review-task terminal seam now bundles them via priorEvents.
+      for (const prior of input.priorEvents ?? []) {
+        await events.append(prior);
+      }
       await events.append(input.event);
       return { alreadyTerminal: false };
     },
@@ -447,7 +454,13 @@ export function fakeMergeWriter(pool: ReviewMergePool, events: EventStore): RunS
     setSpecStatus: unsupported("setSpecStatus"),
     setSpecMetadata: unsupported("setSpecMetadata"),
     appendSpecSteering: unsupported("appendSpecSteering"),
-    setRunSpeculativeBase: unsupported("setRunSpeculativeBase"),
+    // Audit D-R3.2: the stacked-PR retarget now routes the ancestor_stack drop through
+    // the writer seam (the in-process pool UPDATE fallback was unreachable in production
+    // after PR #714). Forward the write into the same `ancestorStackWrites` recorder the
+    // pool stub used to populate, so the test assertions hold unchanged.
+    setRunSpeculativeBase: async (input: SetRunSpeculativeBaseInput) => {
+      pool.ancestorStackWrites.push({ runId: input.runId, stack: input.ancestorStack });
+    },
     setRunPercolationReexecId: unsupported("setRunPercolationReexecId"),
     clearRunPercolationPending: unsupported("clearRunPercolationPending"),
     mergeRunVerifiedAncestorSha: unsupported("mergeRunVerifiedAncestorSha"),

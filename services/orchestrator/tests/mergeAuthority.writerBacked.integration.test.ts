@@ -26,6 +26,7 @@ import {
 } from "./conformance/mergeAuthorityConformance.js";
 import { type LandFinalizer, MergeAuthorityImpl } from "../src/engine/merge/mergeAuthorityImpl.js";
 import { buildLandFinalizer, type LandFinalizeContext } from "../src/engine/merge/mergeAuthorityLandFinalizer.js";
+import { DirectRunStateWriter } from "../src/engine/worker/directRunStateWriter.js";
 import { resolveLandTimeSignals, resolveLandTimeFindings } from "../src/engine/merge/landSignals.js";
 import { authorizeAndLand } from "../src/engine/merge/mergeAuthorityGate.js";
 import { PgEventStore } from "../src/engine/eventStore.js";
@@ -108,7 +109,9 @@ describeDb("MergeAuthority — writer-backed LandFinalizer over real Postgres", 
   function buildAuthority(failFinalize: boolean): MergeAuthorityImpl {
     const host = new InMemoryCodeHost();
     host.seed(REPO, CONF_NODE.baseBranch, CONF_NODE.baseSha);
-    const real = buildLandFinalizer(ownerPool, landContext());
+    // Audit D-R3.2: buildLandFinalizer now requires the writer; the Direct writer over the
+    // same owner pool runs the byte-identical `applyFinalizeLand` org-scoped transaction.
+    const real = buildLandFinalizer(ownerPool, landContext(), new DirectRunStateWriter(ownerPool));
     // The failing variant wraps the real finalizer in a throw-after-land — a faithful
     // "the durable write failed AFTER the external land fired" (the reconcile case).
     const finalizer: LandFinalizer = failFinalize

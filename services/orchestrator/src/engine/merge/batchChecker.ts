@@ -33,11 +33,9 @@ import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { IntegrationAncestor, RepoRef, ResolvedVcsToken } from "../contracts/codeHostTypes.js";
 import type { CodeHost } from "../contracts/codeHost.js";
-import { orgScopingPool } from "../data/orgScopedDb.js";
 import { GitHubCodeHost, parseGitHubRepository } from "../providers/githubCodeHost.js";
 import type { GitHubHttpClient, GithubAppTokenMinter } from "../providers/github.js";
 import { resolveVcsToken } from "../credentials/vcsCredentials.js";
-import { PgEventStore } from "../eventStore.js";
 import { PgIntegrationNodeModel } from "../dag/integrationNodesPg.js";
 import { driveBatchThroughNode } from "./batchIntegrationNodeDrive.js";
 import { batchNodeGate, batchNodeResolveConfig } from "./batchNodeGate.js";
@@ -82,7 +80,7 @@ export interface PgBatchCheckerDeps {
   /** The runner identity key ref (same value the worker boot seeds). */
   identitySecretRef: string;
   githubAppMinter?: GithubAppTokenMinter;
-  runStateWriter?: RunStateWriter;
+  runStateWriter: RunStateWriter;
 }
 
 export class PgBatchChecker implements BatchChecker {
@@ -209,7 +207,7 @@ export class PgBatchChecker implements BatchChecker {
     const runnerImage = project.runner_image ?? DEFAULT_BATCH_RUNNER_IMAGE;
     const governancePosture = resolveGovernancePosture(project.project_config);
     const policyVersion = resolvePolicyVersion(project.project_config);
-    const eventStore = this.deps.runStateWriter ?? new PgEventStore(orgScopingPool(this.deps.pool));
+    const eventStore = this.deps.runStateWriter;
     const gateDeps = {
       ssh: this.deps.ssh,
       eventStore,

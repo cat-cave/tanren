@@ -25,9 +25,14 @@ type RunStateClient = Pick<pg.Pool | pg.PoolClient, "query">;
 export interface PublishDraftPullRequestInput {
   pool: RunStateClient;
   eventStore?: EventStore;
-  // route the `UPDATE runs SET pr_url` through the control plane
-  // when wired (remote-writes on) — else the byte-identical in-process write on
-  // `pool`. `orgId` scopes the remote write (present whenever the writer is).
+  /**
+   * The `UPDATE runs SET pr_url` routes through the writer when wired (the autonomy
+   * worker / merge-stage path, where the de-privileged data plane can't UPDATE `runs`);
+   * the in-process pool fallback is retained ONLY for the orchestrator HTTP API draft-PR
+   * endpoint (`publishDraftPullRequestForRun` in `mountRootApiRoutes`), which runs on the
+   * privileged orchestrator pool and has no writer wired through. Every merge-stage
+   * caller passes the writer (audit D-R3.2 sweep).
+   */
   runStateWriter?: RunStateWriter;
   orgId?: string | null;
   secrets: SecretStore;

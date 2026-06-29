@@ -7,6 +7,7 @@
 
 import type { Pool } from "pg";
 import { buildLandFinalizer } from "../src/engine/merge/mergeAuthorityLandFinalizer.js";
+import { DirectRunStateWriter } from "../src/engine/worker/directRunStateWriter.js";
 import { InMemoryCodeHost } from "./conformance/fakes/inMemoryCodeHost.js";
 import type { MergeAuthorityBundle } from "../src/engine/workflow/reviewMerge/mergeDispatchTypes.js";
 
@@ -20,10 +21,14 @@ export function lifecycleAuthorityBundle(input: {
   const host = new InMemoryCodeHost();
   host.seed(input.repo, "main", "sha-main");
   void host.pushRef({ repo: input.repo, localRef: "feat", remoteBranch: input.headBranch, sha: input.headSha });
+  // Audit D-R3.2: buildLandFinalizer now requires the writer (the in-process pool fallback
+  // was unreachable in production after PR #714). Use the Direct writer over the same pool —
+  // its `finalizeLand` runs the byte-identical `applyFinalizeLand` org-scoped transaction.
+  const writer = new DirectRunStateWriter(input.pool);
   return {
     codeHost: host,
     orgId: input.orgId,
-    finalizerFor: (context) => buildLandFinalizer(input.pool, context),
+    finalizerFor: (context) => buildLandFinalizer(input.pool, context, writer),
     gateConfigHash: "gc",
     policyVersion: "pv",
     gateOutcome: { passed: true, results: [] },

@@ -5,10 +5,10 @@
 // org-scoped store, an in-transaction one (the both-or-neither settle, audit RC-4 #3),
 // or the plane-split writer.
 
-import { runWithJobOrgId, runWithOrgScope, runWithSystemScope } from "@tanren/db";
+import { runWithJobOrgId, runWithSystemScope } from "@tanren/db";
 import type pg from "pg";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
-import { type EventStore, PgEventStore } from "../eventStore.js";
+import type { EventStore } from "../eventStore.js";
 import type { DequeueReason, MergeQueueEntry } from "../contracts/mergeCoordinator.js";
 import type { MergeQueueEventEmitter } from "./coordinator.js";
 
@@ -94,13 +94,13 @@ export class ClientBoundMergeQueueEventEmitter implements MergeQueueEventEmitter
  */
 export class PgMergeQueueEventEmitter implements MergeQueueEventEmitter {
   /**
-   * @param runStateWriter Plane-split (autonomy loops): when present, queue events
-   *   append through the control-plane writer (the de-privileged data plane can no
-   *   longer write `events` directly); absent, in-process via `PgEventStore`.
+   * @param runStateWriter REQUIRED (audit D-R3.2 sweep): queue events route through the
+   *   writer seam — the de-privileged data plane cannot write `events` directly. PR #714
+   *   made the writer-undefined arm unreachable in production.
    */
   constructor(
     private readonly pool: pg.Pool,
-    private readonly runStateWriter?: RunStateWriter,
+    private readonly runStateWriter: RunStateWriter,
   ) {}
 
   private async withScopedEmitter(
@@ -115,17 +115,8 @@ export class PgMergeQueueEventEmitter implements MergeQueueEventEmitter {
       return result.rows[0]?.org_id ?? null;
     });
     if (orgId === null) return;
-    // Plane-split: route the event append through the control plane when wired (the
-    // writer resolves the run's org from the ambient per-job org-id, so set it for
-    // the append); else append in-process under a short org scope — byte-identical.
-    if (this.runStateWriter !== undefined) {
-      const writer = this.runStateWriter;
-      await runWithJobOrgId(orgId, () => work(new ClientBoundMergeQueueEventEmitter(writer)));
-      return;
-    }
-    await runWithOrgScope(this.pool, orgId, (client) =>
-      work(new ClientBoundMergeQueueEventEmitter(new PgEventStore(client))),
-    );
+    const writer = this.runStateWriter;
+    await runWithJobOrgId(orgId, () => work(new ClientBoundMergeQueueEventEmitter(writer)));
   }
 
   async emitAdvanced(input: { projectId: string; entry: MergeQueueEntry; queueDepth: number }): Promise<void> {

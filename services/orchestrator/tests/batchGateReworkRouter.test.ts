@@ -13,6 +13,7 @@ import {
   type ReplanEnqueuer,
 } from "../src/engine/workflow/reviewMerge/conflictResolver/replanRouter.js";
 import type { MergeQueueEntry } from "../src/engine/contracts/mergeCoordinator.js";
+import { InMemoryRunStateWriter } from "./fixtures/inMemoryRunStateWriter.js";
 
 const ORG = "org_test";
 const PROJECT = "project_test";
@@ -64,6 +65,10 @@ function makeRouter(opts: {
 }): PgBatchGateReworkRouter {
   return new PgBatchGateReworkRouter({
     pool: makeStatusPool(opts.statusWrites),
+    // Audit D-R3.2: runStateWriter is REQUIRED on the type. The test's `appendEvent`
+    // injection still wins (the production routing path is exercised in the conformance
+    // suite), so the in-memory writer here only satisfies the type — it is never invoked.
+    runStateWriter: new InMemoryRunStateWriter(),
     enqueuer: opts.enqueuer,
     priorReworks: () => Promise.resolve(opts.priorReworks),
     resolveOrg: () => Promise.resolve(ORG),

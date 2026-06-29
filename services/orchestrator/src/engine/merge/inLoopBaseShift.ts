@@ -35,7 +35,7 @@ export interface InLoopBaseShiftDeps {
   ssh: CommandSubstrate;
   identitySecretRef: string;
   githubAppMinter?: GithubAppTokenMinter;
-  runStateWriter?: RunStateWriter;
+  runStateWriter: RunStateWriter;
 }
 
 /**
@@ -58,7 +58,7 @@ export function buildInLoopBaseShiftRebaseHook(deps: InLoopBaseShiftDeps): BaseS
       ssh: deps.ssh,
       identitySecretRef: deps.identitySecretRef,
       ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
-      ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
+      runStateWriter: deps.runStateWriter,
     },
     { suppressInFlightMarker: true },
   );

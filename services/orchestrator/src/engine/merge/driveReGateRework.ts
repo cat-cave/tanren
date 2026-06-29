@@ -20,7 +20,8 @@ import {
 
 export interface BuildDriveReGateGateReworkDeps {
   pool: pg.Pool;
-  runStateWriter?: RunStateWriter;
+  /** REQUIRED (audit D-R3.2 sweep): the writer is the single way to write under the de-privileged data plane. */
+  runStateWriter: RunStateWriter;
   eventStore: EventStore;
   orgId: string;
   runId: string;
@@ -32,7 +33,7 @@ export interface BuildDriveReGateGateReworkDeps {
 export function buildDriveReGateGateRework(deps: BuildDriveReGateGateReworkDeps): GateReworkRouter {
   return new SpecStatusGateReworkRouter({
     pool: deps.pool,
-    ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
+    runStateWriter: deps.runStateWriter,
     orgId: deps.orgId,
     eventStore: deps.eventStore,
     runId: deps.runId,

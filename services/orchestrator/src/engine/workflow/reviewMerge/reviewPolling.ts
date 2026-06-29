@@ -42,9 +42,12 @@ import {
 export interface PollReviewForRunInput {
   pool: RunStateClient;
   eventStore?: EventStore;
-  // route the review task INSERT/UPDATE through the control plane
-  // when wired (remote-writes on); absent, the in-process org-scoped write runs.
-  runStateWriter?: RunStateWriter;
+  /**
+   * REQUIRED (audit D-R3.2 sweep): the review task INSERT/UPDATE routes through the
+   * writer — the de-privileged data plane cannot write `tasks` directly. PR #714 made
+   * the writer-undefined fallback unreachable in production.
+   */
+  runStateWriter: RunStateWriter;
   secrets: SecretStore;
   /** The shared (timed) GitHub HTTP client the review stage's host seams build over. */
   githubHttp: GitHubHttpClient;
@@ -284,10 +287,10 @@ async function runSimulatedReview(
 
 async function finalizeReviewTask(
   pool: RunStateClient,
-  eventStore: EventStore,
+  _eventStore: EventStore,
   context: ReviewMergeRunContext,
   result: PollReviewForRunResult,
-  writer?: RunStateWriter,
+  writer: RunStateWriter,
 ): Promise<void> {
   const base = {
     runId: context.runId,
@@ -296,53 +299,20 @@ async function finalizeReviewTask(
     taskId: result.taskId,
   };
   if (result.verdict === "approved" || result.verdict === "changes_requested") {
-    // AUDIT FINDING #6 — the review-kind task terminal now routes through the
-    // doctrine helper `markReviewTaskDoneWithEvent` (the merge-kind sibling's
-    // shape): all three writes (row UPDATE + `review.*` + `task.completed`)
-    // flow through the writer seam, and the row + `task.completed` pair lands
-    // atomically via `updateTaskWithEvent`. The prior shape was three
-    // sequential pool/eventStore writes with no transaction — a crash between
-    // them stranded the terminal row with a missing `task.completed` (the
-    // §1c invariant the merge-kind fix closed). A `changes_requested` keeps
-    // closing the task as done/ok (the verdict steers the writer-rework path,
-    // which opens its own writer tasks). The WRITER-PRESENT path is the live
-    // production path; the writer-undefined branch below is the TEST-ONLY
-    // split-write seam (the helper itself is doctrine-pure, writer-required).
-    if (writer !== undefined) {
-      await markReviewTaskDoneWithEvent({
-        writer,
-        base,
-        verdict: result.verdict,
-        prUrl: result.prUrl,
-        prNumber: result.prNumber,
-        ...(result.reviewer !== undefined && { reviewer: result.reviewer }),
-        ...(result.feedback !== undefined && { feedback: result.feedback }),
-      });
-      return;
-    }
-    await markTaskDoneOk(pool, result.taskId, writer);
-    if (result.verdict === "approved") {
-      await eventStore.append({
-        ...base,
-        eventType: "review.approved",
-        payload: { prUrl: result.prUrl, prNumber: result.prNumber, reviewer: result.reviewer },
-      });
-    } else {
-      await eventStore.append({
-        ...base,
-        eventType: "review.changes_requested",
-        payload: {
-          prUrl: result.prUrl,
-          prNumber: result.prNumber,
-          reviewer: result.reviewer,
-          message: result.feedback,
-        },
-      });
-    }
-    await eventStore.append({
-      ...base,
-      eventType: "task.completed",
-      payload: { taskKind: "review", status: result.verdict },
+    // AUDIT FINDING #6 + D-R3.2 — the review-kind task terminal routes through the
+    // doctrine helper `markReviewTaskDoneWithEvent`: all three writes (row UPDATE +
+    // `review.*` + `task.completed`) flow through the REQUIRED writer seam, and the
+    // row + `task.completed` pair lands atomically via `updateTaskWithEvent`. The
+    // writer-undefined split-write fallback was unreachable in production after
+    // PR #714 and is now gone.
+    await markReviewTaskDoneWithEvent({
+      writer,
+      base,
+      verdict: result.verdict,
+      prUrl: result.prUrl,
+      prNumber: result.prNumber,
+      ...(result.reviewer !== undefined && { reviewer: result.reviewer }),
+      ...(result.feedback !== undefined && { feedback: result.feedback }),
     });
     return;
   }
@@ -356,17 +326,6 @@ async function finalizeReviewTask(
     { taskId: result.taskId, transition: "running_pending" },
     "UPDATE tasks SET status = 'running', outcome = 'pending', ended_at = NULL WHERE task_id = $1",
     [result.taskId],
-  );
-}
-
-/** The `task done/ok` write, routed remote when wired (review approved + changes-requested). */
-async function markTaskDoneOk(pool: RunStateClient, taskId: string, writer?: RunStateWriter): Promise<void> {
-  await routeTaskUpdate(
-    writer,
-    pool,
-    { taskId, transition: "done", outcome: "ok" },
-    "UPDATE tasks SET status = 'done', outcome = 'ok', ended_at = now() WHERE task_id = $1",
-    [taskId],
   );
 }
 
@@ -426,7 +385,7 @@ async function buildGitHubProbe(
 async function ensureReviewTask(
   pool: RunStateClient,
   context: ReviewMergeRunContext,
-  writer?: RunStateWriter,
+  writer: RunStateWriter,
 ): Promise<string> {
   return ensureSystemTask(pool, { runId: context.runId, kind: "review", title: "Poll pull request review" }, writer);
 }

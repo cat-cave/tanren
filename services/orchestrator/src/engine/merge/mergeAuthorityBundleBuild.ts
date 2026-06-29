@@ -37,12 +37,12 @@ export interface BuildMergeAuthorityBundleInput {
   /** The real pool the durable finalize opens its org-scoped transaction on (when no remote writer). */
   pool: pg.Pool;
   /**
-   * PLANE-SPLIT: the run-state writer the durable land finalize routes its
-   * `merge.completed` + spec `merged` flip through when remote-writes is on (the
-   * de-privileged data plane cannot write `events`/`specs` directly). Absent ⇒ the
-   * in-process finalize on `pool` (the dev path), byte-identical.
+   * REQUIRED (audit D-R3.2 sweep): the run-state writer the durable land finalize routes
+   * `merge.completed` + spec `merged` through. The de-privileged data plane cannot write
+   * `events`/`specs` directly; the in-process pool fallback was unreachable in production
+   * after PR #714.
    */
-  runStateWriter?: RunStateWriter;
+  runStateWriter: RunStateWriter;
   /** The shared (timed) GitHub HTTP client the land `CodeHost` is built over. */
   githubHttp: GitHubHttpClient;
   /** Resolve the active GitHub token (the SAME closure the merge probe resolves with). */
@@ -188,9 +188,9 @@ export async function buildBundleForMergeStage(
   const findings = await resolveLandTimeFindings(pool, row.org_id, context.runId);
   return buildMergeAuthorityBundle({
     pool,
-    // PLANE-SPLIT: route the durable land finalize through the control plane when a
-    // remote writer is wired (the de-privileged data plane can't write events/specs).
-    ...(input.runStateWriter !== undefined && { runStateWriter: input.runStateWriter }),
+    // PLANE-SPLIT (REQUIRED — audit D-R3.2): the durable land finalize routes through the
+    // control plane; the in-process fallback was unreachable after PR #714.
+    runStateWriter: input.runStateWriter,
     githubHttp: input.githubHttp,
     resolveToken: () =>
       resolveVcsToken(input.githubHttp, {

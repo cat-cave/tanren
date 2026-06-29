@@ -115,7 +115,12 @@ export interface DriveConflictResolveDeps {
   /** The shared (timed) GitHub HTTP client the run/merge host seams build over. */
   githubHttp: GitHubHttpClient;
   githubAppMinter?: GithubAppTokenMinter;
-  runStateWriter?: RunStateWriter;
+  /**
+   * REQUIRED (audit D-R3.2 sweep): the writer is the single way to write under the
+   * de-privileged data plane. PR #714 made the writer-undefined fallback unreachable
+   * in production.
+   */
+  runStateWriter: RunStateWriter;
   /** The merge-stage event store (control plane when wired, else org-scoped pg). */
   eventStore: EventStore;
   /** The runner identity key ref (same value the worker boot seeds). */
@@ -399,7 +404,7 @@ function buildResolverForDrive(
     // The jj applier the live workspace built (the sole workspace mechanism).
     applier,
     pool: deps.scopedPool,
-    ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
+    runStateWriter: deps.runStateWriter,
     eventStore: deps.eventStore,
     ssh: deps.ssh,
     secrets: deps.secrets,
