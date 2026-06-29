@@ -89,8 +89,10 @@ export {
 } from "./runtimeValidation.js";
 export {
   FragmentBodyParseError,
+  type FragmentOp,
   interpretOrgFragment,
   loadUnifiedFragmentLibrary,
   type LoadOrgFragments,
   type OrgFragmentSource,
+  parseFragmentBody,
 } from "./unifiedLibrary.js";

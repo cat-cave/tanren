@@ -113,6 +113,67 @@ describe("buildFragmentAuthoring — failure surfaces in failedIds (fixed-point 
   });
 });
 
+// Authorer that produces a node-only addon body (uses addPackageJsonDep) without
+// declaring a runtime dep on its own. The validator must DERIVE dependsOn from
+// the parsed ops (audit finding #11). The persisted source's dependsOn must
+// include runtime-node-pnpm even though the writer's body said nothing about it.
+const nodeOnlyAddonAuthorer: FragmentAuthorer = async (input) => {
+  const { spec: s } = input;
+  const lines: string[] = [
+    `import { type Fragment, type TemplateConfig, type VirtualFileSystem } from "../types.js";`,
+    ``,
+    `export const fragment: Fragment = {`,
+    `  id: "${s.id}",`,
+    `  version: "1.0.0",`,
+    `  kind: "${s.kind}",`,
+    `  contract: ${JSON.stringify(s.requiredContract)},`,
+    `  async apply(vfs: VirtualFileSystem, _config: TemplateConfig): Promise<void> {`,
+    `    vfs.write("docs/${s.id}.md", "${s.id} fragment\\n");`,
+    `    vfs.addPackageJsonDep("react", "^19.0.0");`,
+    `  },`,
+    `};`,
+    `export default fragment;`,
+  ];
+  return { bodyTs: lines.join("\n") };
+};
+
+describe("buildFragmentAuthoring — audit finding #11 (derive dependsOn from ops)", () => {
+  it("AUTO-DERIVES runtime-node-pnpm dependsOn for a fragment that uses addPackageJsonDep", async () => {
+    const { events } = recordingEvents();
+    const { persistence, created, validated } = inMemoryPersistence();
+    const runner = buildFragmentAuthoring({ authorer: nodeOnlyAddonAuthorer, persistence, events });
+    const result = await runner({
+      orgId: "org_a",
+      actor: { userId: "u", orgId: "org_a", projectId: null, scopes: ["platform:admin"], source: "session" },
+      missing: [spec("frontend", "foo")],
+      lifecycle: lifecycle(),
+    });
+    expect(result.failedIds).toEqual([]);
+    expect(created).toHaveLength(1);
+    expect(validated).toEqual(["org_a:frontend-foo:1.0.0"]);
+    // The PERSISTED dependsOn must include runtime-node-pnpm — derived from the
+    // body's `addPackageJsonDep` call, NOT from anything the writer declared.
+    // This is the explicit contract that closes audit finding #11's silent-drop class.
+    const createdInput = created[0] as { dependsOn: readonly string[] };
+    expect(createdInput.dependsOn).toEqual(["runtime-node-pnpm"]);
+  });
+
+  it("derives EMPTY dependsOn for a fragment that uses only vfs.write (no pkg.json ops)", async () => {
+    const { events } = recordingEvents();
+    const { persistence, created } = inMemoryPersistence();
+    const runner = buildFragmentAuthoring({ authorer: buildFakeFragmentAuthorer(), persistence, events });
+    const result = await runner({
+      orgId: "org_a",
+      actor: { userId: "u", orgId: "org_a", projectId: null, scopes: ["platform:admin"], source: "session" },
+      missing: [spec("addon", "spellcheck")],
+      lifecycle: lifecycle(),
+    });
+    expect(result.failedIds).toEqual([]);
+    const createdInput = created[0] as { dependsOn: readonly string[] };
+    expect(createdInput.dependsOn).toEqual([]);
+  });
+});
+
 describe("loadUnifiedFragmentLibrary — bundled + org-scoped shadowing", () => {
   it("returns the bundled library verbatim when no org fragments load", async () => {
     const library = await loadUnifiedFragmentLibrary("org_a", async () => []);

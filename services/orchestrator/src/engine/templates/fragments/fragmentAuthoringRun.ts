@@ -29,10 +29,16 @@
 
 import type { ActorContext } from "../../../auth/schemas.js";
 import { composeTemplate } from "./compose.js";
-import { BASE_FRAGMENT_ID, loadFragmentLibrary } from "./library/index.js";
+import { BASE_FRAGMENT_ID, loadFragmentLibrary, RUNTIME_NODE_PNPM_ID } from "./library/index.js";
 import { type Fragment, type FragmentLibrary, type TemplateConfig } from "./types.js";
 import type { FragmentSpec } from "./selectFragmentConfig.js";
-import { interpretOrgFragment, FragmentBodyParseError, type OrgFragmentSource } from "./unifiedLibrary.js";
+import {
+  type FragmentOp,
+  interpretOrgFragment,
+  FragmentBodyParseError,
+  type OrgFragmentSource,
+  parseFragmentBody,
+} from "./unifiedLibrary.js";
 import { type CaptureLifecycle } from "../../forge/interview/types.js";
 import { createLogger } from "../../observability/logger.js";
 
@@ -263,12 +269,41 @@ interface ValidationFailed {
 
 /** Parse + smoke-compose the authored body. A pass proves: the body's structure
  * is the constrained subset; `interpretOrgFragment` builds a real Fragment; that
- * Fragment composes with the bundled library at its declared phase slot. */
+ * Fragment composes with the bundled library at its declared phase slot. The
+ * persisted `dependsOn` is DERIVED from the parsed ops (audit finding #11) so a
+ * fragment that uses node-pnpm-only ops without declaring the runtime dep is
+ * caught here rather than silently dropping deps in a later compose. */
 async function validateFragmentBody(args: {
   spec: FragmentSpec;
   bodyTs: string;
 }): Promise<ValidationOk | ValidationFailed> {
-  // 1) Parse — rejects bodies that step outside the constrained subset.
+  // 1) Parse — rejects bodies that step outside the constrained subset. We pull
+  // ops separately to derive the implicit dependsOn (audit finding #11) and to
+  // build the smoke Fragment with the correct dependsOn so the cross-runtime
+  // pre-flight in `composeTemplate` sees the right shape.
+  let ops: FragmentOp[];
+  try {
+    ops = parseFragmentBody(args.bodyTs);
+  } catch (err) {
+    const reason =
+      err instanceof FragmentBodyParseError
+        ? `body parse rejected: ${err.message}`
+        : `body parse threw: ${err instanceof Error ? err.message : String(err)}`;
+    return { kind: "failed", reason };
+  }
+
+  // 2) Derive the implicit `dependsOn` from the ops (audit finding #11). Any
+  // `addPackageJsonDep` / `addPackageJsonDevDep` call ⇒ implicit
+  // `runtime-node-pnpm` dependency — pkg.json deps only land in the composed
+  // VFS when the active runtime is node-pnpm (the ruby-bundler runtime ships
+  // no package.json + `processDeps` early-returns on its absence), so this
+  // dep is structurally required.
+  const derivedDependsOn = deriveImplicitDependsOn(ops, args.spec);
+
+  // 3) Build the validated Fragment via `interpretOrgFragment`, carrying the
+  // derived dependsOn so the smoke compose's cross-runtime pre-flight sees the
+  // correct shape (and so a future compose that pairs this fragment with the
+  // wrong runtime fails loud via the existing `dependency_runtime_mismatch`).
   let fragment: Fragment;
   try {
     fragment = interpretOrgFragment({
@@ -278,7 +313,7 @@ async function validateFragmentBody(args: {
       version: "1.0.0",
       bodyTs: args.bodyTs,
       contract: args.spec.requiredContract,
-      dependsOn: [],
+      dependsOn: derivedDependsOn,
     });
   } catch (err) {
     const reason =
@@ -288,11 +323,28 @@ async function validateFragmentBody(args: {
     return { kind: "failed", reason };
   }
 
-  // 2) Smoke-compose — assemble the minimal config that exercises this fragment.
-  return runSmokeComposition(args.spec, fragment);
+  // 4) Smoke-compose — assemble the minimal config that exercises this fragment.
+  return runSmokeComposition(args.spec, fragment, derivedDependsOn);
 }
 
-async function runSmokeComposition(spec: FragmentSpec, fragment: Fragment): Promise<ValidationOk | ValidationFailed> {
+/** Derive the implicit `dependsOn` list from the parsed ops. The rule (audit
+ * finding #11): any `addPackageJsonDep` / `addPackageJsonDevDep` call implies
+ * the fragment requires `runtime-node-pnpm` (pkg.json deps only land in the
+ * composed VFS under that runtime). A `runtime` fragment is its own runtime —
+ * we never imply a self-dependency. */
+function deriveImplicitDependsOn(ops: readonly FragmentOp[], spec: FragmentSpec): readonly string[] {
+  const usesPackageJson = ops.some((op) => op.kind === "dep" || op.kind === "devDep");
+  if (!usesPackageJson) return [];
+  // A runtime fragment IS the runtime — don't synthesize a self-dependency.
+  if (spec.kind === "runtime") return [];
+  return [RUNTIME_NODE_PNPM_ID];
+}
+
+async function runSmokeComposition(
+  spec: FragmentSpec,
+  fragment: Fragment,
+  derivedDependsOn: readonly string[],
+): Promise<ValidationOk | ValidationFailed> {
   const library = loadFragmentLibrary();
   if (library.has(fragment.id)) {
     library.replaceForTests(fragment);
@@ -302,7 +354,7 @@ async function runSmokeComposition(spec: FragmentSpec, fragment: Fragment): Prom
   const config: TemplateConfig = configForSmoke(spec, fragment);
   try {
     await composeTemplate(config, library);
-    return { kind: "ok", dependsOn: [] };
+    return { kind: "ok", dependsOn: derivedDependsOn };
   } catch (err) {
     return {
       kind: "failed",
