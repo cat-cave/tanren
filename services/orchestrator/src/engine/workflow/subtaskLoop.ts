@@ -8,16 +8,13 @@
 //                                              → velocity → PASS
 //                                              → stall (N consecutive) → HALT
 //
-// HALT RULES (the redesign's core): there is NO retry-cap / per-spec rerun limit /
-// timeout HALT. The ONLY halts are (a) convergence stall (the convergence answerer,
-// after N CONSECUTIVE stalls — a stall counter, NOT a retry counter) and (b) budget
-// exhaustion (handled at the project/walker level, OUTSIDE this loop). A P0 finding, a
-// failed gate, an incomplete task are LOOPBACKS, not halts.
-//
-// Per-stage detail lives in subtaskStages.ts (writer/checker), auditorStage.ts, and
-// loopStages.ts (demo/triage/convergence); per-call cost in subtaskCost.ts; task-row
-// persistence in subtaskTasks.ts. This file stays focused on the loop topology under
-// the 500-line architecture cap.
+// HALT RULES (the redesign's core): NO retry-cap / rerun limit / timeout HALT. The ONLY
+// halts are (a) convergence stall (the convergence answerer, after N CONSECUTIVE stalls —
+// a stall counter, NOT a retry counter) and (b) budget exhaustion (handled at the
+// project/walker level, OUTSIDE this loop). A P0 finding, a failed gate, an incomplete
+// task are LOOPBACKS, not halts. Per-stage detail lives in subtaskStages.ts /
+// auditorStage.ts / loopStages.ts; cost in subtaskCost.ts; task-row persistence in
+// subtaskTasks.ts. This file stays focused on the loop topology under the 500-line cap.
 import { randomUUID } from "node:crypto";
 import type pg from "pg";
 import type {

@@ -8,8 +8,8 @@
       "type": "integer"
     },
     "consecutiveSameFailure": {
-      "exclusiveMinimum": 0,
       "maximum": 9007199254740991,
+      "minimum": 0,
       "type": "integer"
     },
     "failureCode": {
@@ -26,6 +26,13 @@
       "type": "string"
     },
     "runId": {
+      "type": "string"
+    },
+    "source": {
+      "enum": [
+        "workflow_redrive",
+        "prober_resume"
+      ],
       "type": "string"
     },
     "specId": {

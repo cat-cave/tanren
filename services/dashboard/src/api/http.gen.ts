@@ -90,7 +90,6 @@ export interface RunDetail {
       | "convergence_stalled"
       | "window_exhausted"
       | "window_paused"
-      | "provider_unhealthy"
       | "cancelled"
       | "failed"
       | null;
@@ -177,7 +176,6 @@ export interface RunListItem {
     | "convergence_stalled"
     | "window_exhausted"
     | "window_paused"
-    | "provider_unhealthy"
     | "cancelled"
     | "failed"
     | null;
@@ -212,7 +210,6 @@ export interface RunSummary {
     | "convergence_stalled"
     | "window_exhausted"
     | "window_paused"
-    | "provider_unhealthy"
     | "cancelled"
     | "failed"
     | null;
@@ -278,7 +275,6 @@ export interface SseStatusFrame {
     | "convergence_stalled"
     | "window_exhausted"
     | "window_paused"
-    | "provider_unhealthy"
     | "cancelled"
     | "failed"
     | null;

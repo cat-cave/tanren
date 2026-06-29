@@ -35,23 +35,24 @@
 // on `run.paused` is a FLOOR HINT, not a deadline: capacity can return
 // earlier (free reset) and the prober still catches it on its next tick.
 //
-// THE provider_unhealthy ESCALATION (a different beast):
+// PROVIDER-UNHEALTHY (a different beast):
 // The prober's resume path is for the WINDOW-PRESSURE class (the writer ran,
 // the provider acknowledged the call, the window is just spent). A DIFFERENT
 // class is the provider's probe ITSELF being broken — auth revoked, account
 // suspended, CLI binary missing — which surfaces as a preflight `usage.read_failed`
 // with a structural failure reason. That class is handled by the subtask
 // loop's preflight branch in {@link checkWindowPreflight}: a `failure.reason`
-// of `nonzero_exit` / `ssh_failure` is LOUD and surfaces as `usage.read_failed`.
-// This prober does NOT itself probe the provider — it relies on the next
-// run's preflight to surface either capacity (resume) or a structural read
-// failure (a typed failure the existing finalize path classifies). A future
-// extension can add an orchestrator-side health probe; the seam is intentionally open.
+// of `nonzero_exit` / `ssh_failure` is LOUD and surfaces as `usage.read_failed`,
+// which the standard finalize/convergence path classifies. This prober does
+// NOT itself probe the provider — the next run's preflight is the only health
+// signal in play. No "future extension can add a probe" seam is reserved here:
+// the orchestrator owns ONE path today, and an orchestrator-side health probe
+// (if it ever ships) lands as its own loop, not a paused-run terminal exit.
 
 import { runWithOrgScope, runWithSystemScope } from "@tanren/db";
 import type pg from "pg";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
-import { applyFinalizeRunWithEvent, applyUpdateSpecWithEvent } from "../worker/runStateAtomicSql.js";
+import { applyResumePausedRunAtomic } from "../worker/runStateAtomicSql.js";
 import { createLogger } from "../observability/logger.js";
 
 const log = createLogger("paused-run-resume-prober");
@@ -206,8 +207,14 @@ async function loadPausedRuns(pool: pg.Pool): Promise<PausedRunRow[]> {
   });
 }
 
-/** Resume one paused run: paused → halted + run.resumed (atomic), then spec →
- * open + dag.spec.redriven (atomic). The walker re-walks the project on the
+/** Resume one paused run as ONE atomic unit (audit finding #3): the run
+ * finalize (`paused → halted` + `run.resumed`) AND the spec flip
+ * (`in_flight → open` + `dag.spec.redriven`) land or fail TOGETHER in a
+ * single org-scoped transaction. Replaces the prior two-seam split that
+ * could strand `runs.status=halted` + `specs.status=in_flight` on a crash
+ * between them — the prober's `WHERE status='paused'` poll never re-matched
+ * that row, and the walker won't redrive an `in_flight` spec, so the spec
+ * was orphaned indefinitely. The walker re-walks the project on the
  * `run.resumed` notification and enqueues a successor run for the spec. */
 async function resumeOne(deps: PausedRunResumeProberDeps, row: PausedRunRow): Promise<void> {
   const pausedDurationSeconds = Math.max(0, Math.floor((Date.now() - row.pausedAt.getTime()) / 1000));
@@ -232,53 +239,58 @@ async function resumeOne(deps: PausedRunResumeProberDeps, row: PausedRunRow): Pr
       specId: row.specId,
       runId: row.runId,
       // `usage_limit` is the canonical RunFailureCode the dag.spec.redriven
-      // payload schema enumerates — keys the convergence detector's
-      // consecutive-same-failure history (a window-pressure pause is
-      // structurally a `usage_limit` re-drive). Stage `agent` because the
-      // pause originated in a writer/answerer/planner stage.
+      // payload schema enumerates — used as a placeholder only because the
+      // spec pair-schema requires SOME failure code for an `open` flip event.
+      // The `source: "prober_resume"` discriminator below tells the
+      // convergence history reader (`buildRedriveHistoryReader`) to FILTER
+      // this row out entirely (audit finding #13): a prober resume is NOT a
+      // structural re-drive and must not be folded into the fixed-point
+      // signature (otherwise an `internal, usage_limit, internal` sequence
+      // reads as "new state appeared" and masks a genuine stuck spec).
       failureCode: "usage_limit" as const,
       stage: "agent" as const,
-      // task #82: a resume is intentionally NOT counted against the
-      // convergence detector — window pressure NEVER escalates to
-      // `needs_attention`. A fresh successor that re-pauses goes through the
-      // pause bucket again, never accumulates fixed-point streaks.
+      // Carried for payload-shape uniformity only — the reader filters this
+      // row out via `source` before the streak is computed, so the counter
+      // never advances on a window-pressure resume. Window pressure NEVER
+      // escalates to `needs_attention`.
       consecutiveSameFailure: 0,
       backoffSeconds: 0,
+      // Audit finding #13: discriminator that excludes prober resumes from
+      // the structural-redrive convergence history (see
+      // `buildRedriveHistoryReader` in `plannerRunRedrive.ts`).
+      source: "prober_resume" as const,
     },
   };
+  const finalize = {
+    runId: row.runId,
+    orgId: row.orgId,
+    status: "halted" as const,
+    outcome: "window_paused" as const,
+    fromStatuses: ["paused"],
+  };
+  const spec = {
+    specId: row.specId,
+    orgId: row.orgId,
+    status: "open" as const,
+    notFromStatuses: ["merged", "needs_attention"],
+  };
   // Plane-split: route through the control plane when wired, else in-process
-  // atomic writes under the run's org scope.
+  // atomic apply under the run's org scope. Either way, ONE transaction.
   if (deps.runStateWriter !== undefined) {
-    await deps.runStateWriter.finalizeRunWithEvent({
-      finalize: {
-        runId: row.runId,
-        orgId: row.orgId,
-        status: "halted",
-        outcome: "window_paused",
-        fromStatuses: ["paused"],
-      },
-      event: resumedEvent,
-    });
-    await deps.runStateWriter.updateSpecWithEvent({
-      spec: { specId: row.specId, orgId: row.orgId, status: "open", notFromStatuses: ["merged", "needs_attention"] },
-      event: redrivenEvent,
+    await deps.runStateWriter.resumePausedRunAtomic({
+      finalize,
+      resumedEvent,
+      spec,
+      redrivenEvent,
     });
     return;
   }
   await runWithOrgScope(deps.pool, row.orgId, async (client) => {
-    await applyFinalizeRunWithEvent(client, {
-      finalize: {
-        runId: row.runId,
-        orgId: row.orgId,
-        status: "halted",
-        outcome: "window_paused",
-        fromStatuses: ["paused"],
-      },
-      event: resumedEvent,
-    });
-    await applyUpdateSpecWithEvent(client, {
-      spec: { specId: row.specId, orgId: row.orgId, status: "open", notFromStatuses: ["merged", "needs_attention"] },
-      event: redrivenEvent,
+    await applyResumePausedRunAtomic(client, {
+      finalize,
+      resumedEvent,
+      spec,
+      redrivenEvent,
     });
   });
 }

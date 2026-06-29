@@ -30,6 +30,8 @@ import type { AuditEnvelope } from "../events/schemas/audit.js";
 import type {
   FinalizeRunWithEventInput,
   FinalizeRunWithEventOutcome,
+  ResumePausedRunAtomicInput,
+  ResumePausedRunAtomicOutcome,
   UpdateSpecWithEventInput,
   UpdateSpecWithEventOutcome,
 } from "./runStateAtomicSeam.js";
@@ -94,14 +96,10 @@ export interface SetRunPrUrlInput {
   prUrl: string;
 }
 
-/**
- * Stamp `runs.auth_ref` (the per-run credential-dedup key) — the subtask-accounting
- * concurrent-credential drawdown stamp. The de-privileged data plane can no longer
- * `UPDATE runs` directly (migration 0035), so this routes through the control plane.
- * Idempotent: the same value every time (`WHERE auth_ref IS DISTINCT FROM $2`). Org
- * resolves from the ambient per-job scope when omitted (like the `tasks` ops), since
- * the subtask loop carries no explicit org on its context.
- */
+/** Stamp `runs.auth_ref` (per-run credential-dedup key) — subtask-accounting concurrent-
+ * credential drawdown stamp. De-privileged data plane routes through the control plane
+ * (migration 0035); idempotent (`WHERE auth_ref IS DISTINCT FROM $2`). Org resolves from
+ * the ambient per-job scope when omitted (like the `tasks` ops). */
 export interface SetRunAuthRefInput {
   runId: string;
   /** Resolve org from the ambient per-job scope when omitted (like {@link UpdateTaskInput}). */
@@ -249,11 +247,12 @@ export interface UpdateTaskWithEventInput {
   event: AppendEventInput;
 }
 
-// Task #48 atomic-seam types live in `./runStateAtomicSeam.ts` (the 500-line cap
-// keeps this file lean; re-exported from `./index.ts` so callers see one namespace).
+// Task #48 atomic-seam types live in `./runStateAtomicSeam.ts` (file-size cap); re-exported.
 export type {
   FinalizeRunWithEventInput,
   FinalizeRunWithEventOutcome,
+  ResumePausedRunAtomicInput,
+  ResumePausedRunAtomicOutcome,
   UpdateSpecWithEventInput,
   UpdateSpecWithEventOutcome,
 } from "./runStateAtomicSeam.js";
@@ -368,14 +367,11 @@ export interface CreateQueuedRunInput {
   actor: ActorContext;
 }
 
-/**
- * Plane-split (autonomy loops): the spec-CREATE write the autonomous INTAKE drives
- * — an `auto_routable` ingested item whose triage routes a brand-new spec into the
- * DAG (`createSpec`). A direct `INSERT INTO specs` from the de-privileged data
- * plane is rejected (migration 0035), so the auto-route insert routes through the
- * control plane. Carries the resolved `actor` so the server-side `createSpec` runs
- * under the SAME org scope.
- */
+/** Plane-split (autonomy loops): the spec-CREATE write the autonomous INTAKE drives — an
+ * `auto_routable` ingested item whose triage routes a brand-new spec into the DAG
+ * (`createSpec`). Direct `INSERT INTO specs` from the de-privileged data plane is rejected
+ * (migration 0035) so this routes through the control plane. Carries the resolved `actor`
+ * so the server-side `createSpec` runs under the SAME org scope. */
 export interface CreateSpecRemoteInput {
   input: CreateSpecInput;
   actor: ActorContext;
@@ -481,6 +477,11 @@ export interface RunStateWriter extends EventStore {
    * (task #48 — SPEC-LEVEL mirror). Recurring events on the spec side (no
    * partial unique index — Plan §3); `flipped: false` ⇒ caller skips event. */
   updateSpecWithEvent(input: UpdateSpecWithEventInput): Promise<UpdateSpecWithEventOutcome>;
+
+  /** Audit finding #3 — WINDOW-PAUSE RESUME atomic seam: run flip + spec
+   * flip + both paired events in ONE org-scoped tx. See
+   * `ResumePausedRunAtomicInput` for the full doctrine. */
+  resumePausedRunAtomic(input: ResumePausedRunAtomicInput): Promise<ResumePausedRunAtomicOutcome>;
 
   // --- Autonomy loops: the run/spec CREATE writes (explicit-actor, multi-table). ---
 

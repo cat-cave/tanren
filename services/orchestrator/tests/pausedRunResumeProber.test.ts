@@ -4,8 +4,8 @@
 //     ↳ disposition → pause_for_capacity bucket
 //     ↳ atomic seam flips run to `paused`, spec stays `in_flight`, emits run.paused
 //   probe tick 1 finds the paused run
-//     ↳ atomic seam flips run to `halted` + emits run.resumed
-//     ↳ atomic seam flips spec to `open` + emits dag.spec.redriven
+//     ↳ ONE atomic transaction (audit finding #3): paused → halted + run.resumed
+//       AND spec in_flight → open + dag.spec.redriven, all live-or-die together
 //   (the walker would now re-enqueue a successor; the next run's preflight is the
 //   actual capacity probe — if still exhausted, the new run re-pauses)
 //
@@ -20,11 +20,9 @@ import { describe, expect, it } from "vitest";
 import type {
   CreateQueuedRunInput,
   CreateSpecRemoteInput,
-  FinalizeRunWithEventInput,
-  FinalizeRunWithEventOutcome,
+  ResumePausedRunAtomicInput,
+  ResumePausedRunAtomicOutcome,
   RunStateWriter,
-  UpdateSpecWithEventInput,
-  UpdateSpecWithEventOutcome,
 } from "../src/engine/contracts/runStateWriter.js";
 import type { AppendEventInput } from "../src/engine/eventStore.js";
 import type { SpecContract, SpecRunContract } from "../src/engine/workflow/projectSpec.js";
@@ -43,17 +41,14 @@ interface RunRow {
   endedAt: Date | null;
 }
 
-interface FinalizeCall {
+interface ResumeCall {
   runId: string;
-  status: string;
-  outcome: string;
-  event: AppendEventInput;
-}
-
-interface SpecFlipCall {
   specId: string;
   status: string;
-  event: AppendEventInput;
+  outcome: string;
+  specStatus: string;
+  resumedEvent: AppendEventInput;
+  redrivenEvent: AppendEventInput;
 }
 
 /** Minimal pg.Pool fake the prober reads paused runs off of, swapping in for the
@@ -100,14 +95,15 @@ function buildPool(rows: RunRow[]): {
 }
 
 /** Recording RunStateWriter that flips the fake row state on each call. Models
- *  the production atomic seams without a real Postgres. */
+ *  the production atomic seams without a real Postgres. Audit finding #3:
+ *  the resume now routes through ONE atomic call `resumePausedRunAtomic`, so
+ *  the recording surface mirrors that single-transaction contract — either
+ *  both row+event pairs flip together or neither does. */
 function buildRecordingWriter(rows: RunRow[]): {
   writer: RunStateWriter;
-  finalizes: FinalizeCall[];
-  specFlips: SpecFlipCall[];
+  resumes: ResumeCall[];
 } {
-  const finalizes: FinalizeCall[] = [];
-  const specFlips: SpecFlipCall[] = [];
+  const resumes: ResumeCall[] = [];
   const writer: RunStateWriter = {
     append: async () => {},
     recordCost: async () => ({ id: 1, costRecord: {} as never }) as never,
@@ -130,31 +126,40 @@ function buildRecordingWriter(rows: RunRow[]): {
     updateTaskWithEvent: async () => ({ alreadyTerminal: false }),
     createQueuedRun: async (_: CreateQueuedRunInput): Promise<SpecRunContract> => ({}) as SpecRunContract,
     createSpec: async (_: CreateSpecRemoteInput): Promise<SpecContract> => ({}) as SpecContract,
-    finalizeRunWithEvent: async (input: FinalizeRunWithEventInput): Promise<FinalizeRunWithEventOutcome> => {
+    finalizeRunWithEvent: async () => ({ updated: false, alreadyTerminal: false }),
+    updateSpecWithEvent: async () => ({ flipped: false, alreadyTerminal: false }),
+    resumePausedRunAtomic: async (input: ResumePausedRunAtomicInput): Promise<ResumePausedRunAtomicOutcome> => {
       const row = rows.find((r) => r.runId === input.finalize.runId);
-      finalizes.push({
+      resumes.push({
         runId: input.finalize.runId,
+        specId: input.spec.specId,
         status: input.finalize.status,
         outcome: input.finalize.outcome,
-        event: input.event,
+        specStatus: input.spec.status,
+        resumedEvent: input.resumedEvent,
+        redrivenEvent: input.redrivenEvent,
       });
       if (row !== undefined && input.finalize.fromStatuses.includes(row.status)) {
+        // The atomic-apply contract: both flips live or die together. Mirror
+        // that by flipping the row state in the fake only on the through path.
         row.status = input.finalize.status;
         row.outcome = input.finalize.outcome;
-        return { updated: true, specId: row.specId, projectId: row.projectId };
+        return {
+          runFinalized: true,
+          runEventAlreadyTerminal: false,
+          specFlipped: true,
+          specId: row.specId,
+          projectId: row.projectId,
+        };
       }
-      return { updated: false };
-    },
-    updateSpecWithEvent: async (input: UpdateSpecWithEventInput): Promise<UpdateSpecWithEventOutcome> => {
-      specFlips.push({ specId: input.spec.specId, status: input.spec.status, event: input.event });
-      return { flipped: true };
+      return { runFinalized: false, runEventAlreadyTerminal: false, specFlipped: false };
     },
   };
-  return { writer, finalizes, specFlips };
+  return { writer, resumes };
 }
 
 describe("pausedRunResumeProber (task #82 — window-pause auto-resume)", () => {
-  it("RESUMES one paused run: paused → halted + run.resumed + spec → open + dag.spec.redriven (the walker re-drive path)", async () => {
+  it("RESUMES one paused run via ONE atomic call (paused → halted + run.resumed AND spec → open + dag.spec.redriven)", async () => {
     const rows: RunRow[] = [
       {
         runId: "run_paused_1",
@@ -167,7 +172,7 @@ describe("pausedRunResumeProber (task #82 — window-pause auto-resume)", () => 
       },
     ];
     const { pool } = buildPool(rows);
-    const { writer, finalizes, specFlips } = buildRecordingWriter(rows);
+    const { writer, resumes } = buildRecordingWriter(rows);
 
     // Long probeIntervalMs — we drive ticks manually via probeOnce().
     const prober = startPausedRunResumeProber({
@@ -183,28 +188,30 @@ describe("pausedRunResumeProber (task #82 — window-pause auto-resume)", () => 
     const result = await prober.probeOnce();
     prober.stop();
 
-    // The atomic seams ran in the right order: run finalize (paused → halted +
-    // run.resumed), then spec flip (in_flight → open + dag.spec.redriven). The
-    // walker now picks up the `open` spec and enqueues a successor run; that
-    // successor's preflight is the actual capacity test.
+    // Audit finding #3 fix: the prober now drives ONE atomic call carrying
+    // BOTH the run finalize (paused → halted + run.resumed) AND the spec
+    // flip (in_flight → open + dag.spec.redriven). A crash mid-apply rolls
+    // back the whole unit (no `halted` + `in_flight` split-write orphan).
     expect(result.resumedRunIds).toContain("run_paused_1");
-    expect(finalizes).toHaveLength(1);
-    expect(finalizes[0]).toMatchObject({
+    expect(resumes).toHaveLength(1);
+    expect(resumes[0]).toMatchObject({
       runId: "run_paused_1",
+      specId: "spec_1",
       status: "halted",
       outcome: "window_paused",
-      event: { eventType: "run.resumed" },
-    });
-    expect(specFlips).toHaveLength(1);
-    expect(specFlips[0]).toMatchObject({
-      specId: "spec_1",
-      status: "open",
-      event: { eventType: "dag.spec.redriven" },
+      specStatus: "open",
+      resumedEvent: { eventType: "run.resumed" },
+      redrivenEvent: { eventType: "dag.spec.redriven" },
     });
     // The resume event carries a positive pausedDurationSeconds (the row was
     // ended a minute ago); the prober's diagnostic.
-    const payload = finalizes[0]!.event.payload as { pausedDurationSeconds: number };
+    const payload = resumes[0]!.resumedEvent.payload as { pausedDurationSeconds: number };
     expect(payload.pausedDurationSeconds).toBeGreaterThan(0);
+    // Audit finding #13: the prober's redrive event carries the
+    // `prober_resume` source discriminator so `buildRedriveHistoryReader`
+    // filters it out of the structural convergence history.
+    const redrivenPayload = resumes[0]!.redrivenEvent.payload as { source?: string };
+    expect(redrivenPayload.source).toBe("prober_resume");
   });
 
   it("STAYS PAUSED while no paused runs exist (probe is a NO-OP, never spuriously emits resume events)", async () => {
@@ -221,7 +228,7 @@ describe("pausedRunResumeProber (task #82 — window-pause auto-resume)", () => 
       },
     ];
     const { pool } = buildPool(rows);
-    const { writer, finalizes, specFlips } = buildRecordingWriter(rows);
+    const { writer, resumes } = buildRecordingWriter(rows);
     const prober = startPausedRunResumeProber({
       pool,
       runStateWriter: writer,
@@ -232,8 +239,7 @@ describe("pausedRunResumeProber (task #82 — window-pause auto-resume)", () => 
     const result = await prober.probeOnce();
     prober.stop();
     expect(result.resumedRunIds).toEqual([]);
-    expect(finalizes).toEqual([]);
-    expect(specFlips).toEqual([]);
+    expect(resumes).toEqual([]);
   });
 
   it("CYCLES paused→resumed→paused: a probe ALWAYS resumes a paused run, even if it pauses AGAIN (UNBOUNDED, sign-of-life)", async () => {
@@ -253,7 +259,7 @@ describe("pausedRunResumeProber (task #82 — window-pause auto-resume)", () => 
       },
     ];
     const { pool } = buildPool(rows);
-    const { writer, finalizes, specFlips } = buildRecordingWriter(rows);
+    const { writer, resumes } = buildRecordingWriter(rows);
     const prober = startPausedRunResumeProber({
       pool,
       runStateWriter: writer,
@@ -274,7 +280,9 @@ describe("pausedRunResumeProber (task #82 — window-pause auto-resume)", () => 
     rows[0]!.outcome = "window_paused";
     await prober.probeOnce();
     prober.stop();
-    expect(finalizes.filter((f) => f.event.eventType === "run.resumed")).toHaveLength(2);
-    expect(specFlips.filter((s) => s.event.eventType === "dag.spec.redriven")).toHaveLength(2);
+    // Each tick drove ONE atomic resume call carrying BOTH pair-events.
+    expect(resumes).toHaveLength(2);
+    expect(resumes.every((r) => r.resumedEvent.eventType === "run.resumed")).toBe(true);
+    expect(resumes.every((r) => r.redrivenEvent.eventType === "dag.spec.redriven")).toBe(true);
   });
 });
