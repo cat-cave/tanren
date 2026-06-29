@@ -39,6 +39,19 @@ export {
   type ActiveRunIdSource,
 } from "./runWorkspaceReaper.js";
 export { startRunWorkspaceReaper, buildPgActiveRunIdSource } from "./buildRunWorkspaceReaper.js";
+// Task #9: the runner-row orphan sweeper — the orchestrator-side reconciler for
+// long-lived (static / manual_ssh) `runners` rows the in-memory release path
+// missed (orchestrator-crash-mid-run shape). Boot wiring lives next to its
+// allocator-kind gate; the type + the sweeper itself live in the allocators dir.
+export {
+  RunnerRowOrphanSweeper,
+  RUNNER_ROW_ORPHAN_SWEEPER_ALLOCATORS,
+  RUNNER_ROW_ORPHAN_TERMINAL_RUN_STATUSES,
+  type OrphanSweepSummary,
+  type ReclaimedOrphan,
+  type RunnerRowOrphanSweeperOptions,
+} from "../allocators/runnerRowOrphanSweeper.js";
+export { startRunnerRowOrphanSweeper } from "./buildRunnerRowOrphanSweeper.js";
 export {
   loadRunExecutionContext,
   RunExecutionContextNotFoundError,

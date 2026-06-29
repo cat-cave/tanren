@@ -26,8 +26,10 @@ import type { RunWorker } from "./runWorker.js";
 import {
   buildEnvCreationFromEnv,
   buildRunCredentialScoping,
+  startRunnerRowOrphanSweeper,
   startRunWorker,
   startRunWorkspaceReaper,
+  type RunnerRowOrphanSweeper,
   type RunWorkspaceReaper,
 } from "./lifecycle.js";
 
@@ -69,7 +71,15 @@ export interface BootedRunWorker {
    * ephemeral kinds whose sandbox dies with the container on release.
    */
   runWorkspaceReaper: RunWorkspaceReaper | undefined;
-  /** Drain the worker + reaper + autonomy loops + run-sandbox reaper (the SIGTERM path). */
+  /**
+   * The runner-row orphan sweeper (task #9): the orchestrator-side reconciler
+   * for `runners` rows the in-memory `release()` missed (orchestrator-crash-mid-
+   * run shape). Wired ONLY for the long-lived allocator kinds (static,
+   * manual-ssh) — cloud / sidecar kinds have their own teardown + sweeper
+   * paths. Undefined for the ephemeral kinds.
+   */
+  runnerRowOrphanSweeper: RunnerRowOrphanSweeper | undefined;
+  /** Drain the worker + reaper + autonomy loops + run-sandbox reaper + orphan sweeper (the SIGTERM path). */
   stop: () => Promise<void>;
 }
 
@@ -218,12 +228,19 @@ export async function bootRunWorker(mode: WorkerBootMode = "in-process"): Promis
   // whose sandbox is destroyed with its container on release. The per-run teardown
   // (layer 1, in the run's `finally`) runs for every kind regardless.
   const runWorkspaceReaper = startRunWorkspaceReaper({ pool, secrets, ssh, identitySecretRef });
+  // Runner-row orphan sweeper (task #9): reconciles `runners` rows the in-memory
+  // `release()` missed (orchestrator-crash-mid-run) for the long-lived allocator
+  // kinds. Wired conditionally inside the starter — it reads the SAME
+  // `resolveBootedAllocatorKind` the workspace reaper reads, so a typo'd kind
+  // fails LOUD there rather than silently disabling the sweeper.
+  const runnerRowOrphanSweeper = startRunnerRowOrphanSweeper({ pool });
   const stop = async (): Promise<void> => {
     await autonomy.stop();
-    // Await the reaper's in-flight tick (stop() now drains it) before tearing down
-    // the worker + pool, so no sweep outlives the resources it reads.
+    // Await both reapers' in-flight ticks (stop() drains them) before tearing
+    // down the worker + pool, so no sweep outlives the resources it reads.
     await runWorkspaceReaper?.stop();
+    await runnerRowOrphanSweeper?.stop();
     await Promise.all([worker.stop(), reaper.stop()]);
   };
-  return { worker, reaper, pool, secrets, autonomy, runWorkspaceReaper, stop };
+  return { worker, reaper, pool, secrets, autonomy, runWorkspaceReaper, runnerRowOrphanSweeper, stop };
 }
