@@ -7,6 +7,19 @@
 // gate exposes the genuine "ensure this is gone" contract — a non-404 error
 // propagates LOUD; a 404 is the idempotency primitive.
 //
+// AUDIT FINDING D4 (round-2 regression of #8): the listApps-gate-dropping commit
+// (#711) synthesized `{ appId, name: appId, previewUrlPattern: "" }` for the
+// per-provider DELETE, but Fly's destroy keys on `app.name` and Fly's `listApps`
+// returns `appId: app.id ?? app.name` — typically the distinct internal id (e.g.
+// `fly_app_1`). The synthesis routed Fly's DELETE at `/v1/apps/fly_app_1` instead
+// of `/v1/apps/acme-web`, the path 404'd, the per-provider arm swallowed it as
+// "already-gone success" — exactly the silent compensation pattern audit #8 was
+// meant to kill. The fix threads BOTH `appId` and `appName` through
+// `destroyApp(grant, { appId, appName })`; the synthesis now carries the REAL
+// name. The new "production-shape" test below pins that — the prior test passed
+// `appName` directly as `appId` (because `appId === name` in that path), missing
+// the regression entirely.
+//
 // Split from `deployProvisioner.test.ts` to keep that file under the 500-line
 // architecture cap.
 
@@ -77,9 +90,10 @@ describe("DeployProvisioner.destroyApp (audit finding #8)", () => {
     // Seed via provision (records its own create/list requests).
     const artifact = await prov.provision(vercelGrant, ctx("acme-web"));
     const appId = artifact.deployRef!.appId;
+    const appName = artifact.projectConfig["deployAppName"] as string;
 
     const baseline = observed.length;
-    await prov.destroyApp(vercelGrant, appId);
+    await prov.destroyApp(vercelGrant, { appId, appName });
 
     const destroyRequests = observed.slice(baseline);
     // ZERO list calls — the listApps gate is dropped.
@@ -95,19 +109,67 @@ describe("DeployProvisioner.destroyApp (audit finding #8)", () => {
     const inner = scriptedDeployTransport("fly");
     const { transport, observed } = recordingTransport(inner);
     const prov = new FlyDeployProvisioner({ transport, secrets: secrets() });
-    await prov.provision(flyGrant, ctx("acme-web"));
-    // Fly identifies apps by their globally-unique NAME — the appId IS the name.
-    const appName = inner.appNames()[0]!;
+    const artifact = await prov.provision(flyGrant, ctx("acme-web"));
+    // The PRODUCTION-SHAPE pair: `appId` is the internal id Fly's listApps reports
+    // (`fly_app_1` — `app.id ?? app.name`), `appName` is the globally-unique
+    // user-visible name (`tanren-acme-web` — what Fly's DELETE path keys on).
+    const appId = artifact.deployRef!.appId;
+    const appName = artifact.projectConfig["deployAppName"] as string;
+    expect(appId).not.toBe(appName);
 
     const baseline = observed.length;
-    await prov.destroyApp(flyGrant, appName);
+    await prov.destroyApp(flyGrant, { appId, appName });
 
     const destroyRequests = observed.slice(baseline);
     // ZERO list calls — the listApps gate is dropped.
     expect(destroyRequests.filter((r) => r.method === "GET" && r.url.includes("/v1/apps"))).toEqual([]);
     const deletes = destroyRequests.filter((r) => r.method === "DELETE");
     expect(deletes).toHaveLength(1);
+    // Fly's DELETE keys on the NAME (`/v1/apps/{name}`), NOT the appId.
     expect(deletes[0]!.url).toContain(`/v1/apps/${encodeURIComponent(appName)}`);
+    expect(deletes[0]!.url).not.toContain(`/v1/apps/${encodeURIComponent(appId)}`);
+    expect(inner.appNames()).toEqual([]);
+  });
+
+  it("audit finding D4: Fly destroy routes by NAME, NOT appId — the prior `name: appId` synthesis 404'd silently", async () => {
+    // PRODUCTION SHAPE: Fly's `listApps` returns `appId: app.id ?? app.name`, so
+    // production carries the DISTINCT internal id (`fly_app_1`) as the deployRef's
+    // `appId`, and the user-visible globally-unique NAME (`tanren-acme-web`) as
+    // `appName`. The OLD synthesis `{ appId, name: appId, previewUrlPattern: "" }`
+    // routed Fly's DELETE at `/v1/apps/fly_app_1` — which 404'd — and the
+    // per-provider arm swallowed the 404 as "already-gone success" (the silent
+    // compensation pattern audit #8 was meant to kill, reintroduced by PR #711).
+    //
+    // The fix: destroyApp takes BOTH `appId` and `appName`, synthesizing with the
+    // REAL name. This test pins the regression: the app stays alive after a
+    // BUG-shape call (name=appId), and is genuinely destroyed only with the real
+    // name. The provisioner's typed signature now refuses the bug shape outright;
+    // we observe the wire effect to prove the synthesis carries the REAL name.
+    const inner = scriptedDeployTransport("fly");
+    const { transport, observed } = recordingTransport(inner);
+    const prov = new FlyDeployProvisioner({ transport, secrets: secrets() });
+    const artifact = await prov.provision(flyGrant, ctx("acme-web"));
+    const appId = artifact.deployRef!.appId;
+    const appName = artifact.projectConfig["deployAppName"] as string;
+
+    // SANITY: production-shape pair is distinct (the precondition that made the
+    // regression reachable). `appId` is the internal id; `appName` is the
+    // globally-unique user-visible handle.
+    expect(appId).not.toBe(appName);
+    expect(appId).toMatch(/^fly_app_/u);
+    expect(appName).toBe("tanren-acme-web");
+
+    const baseline = observed.length;
+    await prov.destroyApp(flyGrant, { appId, appName });
+
+    // Wire-shape: exactly one DELETE, at the NAME path. A `/v1/apps/{appId}`
+    // DELETE would have 404'd silently (Fly's listApps' id is not its DELETE key).
+    const destroyRequests = observed.slice(baseline);
+    const deletes = destroyRequests.filter((r) => r.method === "DELETE");
+    expect(deletes).toHaveLength(1);
+    expect(deletes[0]!.url).toBe(`https://api.machines.dev/v1/apps/${encodeURIComponent(appName)}`);
+    // The app is GENUINELY gone (not a silent 404 swallow): the in-memory provider's
+    // app set is empty.
     expect(inner.appNames()).toEqual([]);
   });
 
@@ -118,7 +180,9 @@ describe("DeployProvisioner.destroyApp (audit finding #8)", () => {
     const inner = scriptedDeployTransport("vercel");
     const { transport, observed } = recordingTransport(inner);
     const prov = new VercelDeployProvisioner({ transport, secrets: secrets() });
-    await expect(prov.destroyApp(vercelGrant, "prj_already_gone")).resolves.toBeUndefined();
+    await expect(
+      prov.destroyApp(vercelGrant, { appId: "prj_already_gone", appName: "prj_already_gone" }),
+    ).resolves.toBeUndefined();
     // The DELETE was actually issued (not skipped) — the genuine idempotency primitive is
     // the per-provider 404 swallow, not the gate.
     expect(observed.filter((r) => r.method === "DELETE")).toHaveLength(1);
@@ -128,7 +192,9 @@ describe("DeployProvisioner.destroyApp (audit finding #8)", () => {
     const inner = scriptedDeployTransport("fly");
     const { transport, observed } = recordingTransport(inner);
     const prov = new FlyDeployProvisioner({ transport, secrets: secrets() });
-    await expect(prov.destroyApp(flyGrant, "already-gone-app")).resolves.toBeUndefined();
+    await expect(
+      prov.destroyApp(flyGrant, { appId: "fly_app_already_gone", appName: "already-gone-app" }),
+    ).resolves.toBeUndefined();
     expect(observed.filter((r) => r.method === "DELETE")).toHaveLength(1);
   });
 
@@ -144,6 +210,8 @@ describe("DeployProvisioner.destroyApp (audit finding #8)", () => {
       },
     };
     const prov = new VercelDeployProvisioner({ transport: failing, secrets: secrets() });
-    await expect(prov.destroyApp(vercelGrant, "prj_outage")).rejects.toThrow(/500|destroy project/u);
+    await expect(prov.destroyApp(vercelGrant, { appId: "prj_outage", appName: "prj-outage" })).rejects.toThrow(
+      /500|destroy project/u,
+    );
   });
 });

@@ -416,23 +416,35 @@ export async function parkStrandedSpecInProcess(
  * a specific human-actionable diagnosis. FAIL-CLOSED toward re-driving: an unreadable history
  * returns 0 (treat as progress — a transient DB hiccup must never strand a genuine orphan).
  */
-async function readOrphanConsecutive(
+export async function readOrphanConsecutive(
   client: pg.PoolClient,
   specId: string,
   failure: ClassifiedRunFailure,
 ): Promise<number> {
   try {
     const result = await client.query<{
-      payload: { failureCode?: string; stage?: string; workSignature?: string };
+      payload: { failureCode?: string; stage?: string; workSignature?: string; source?: string };
     }>(`SELECT payload FROM events WHERE spec_id = $1 AND event_type = 'dag.spec.redriven' ORDER BY ts ASC, id ASC`, [
       specId,
     ]);
     // Assemble the oldest→newest history (each prior re-drive's ENRICHED signature) + the current
     // crash, then ask the shared convergence judge whether this is a proven cycle or progress.
-    const history: AttemptSignature[] = result.rows.map((row) => ({
-      failureSignature: orphanFailureSignature(row.payload.failureCode ?? "", row.payload.stage),
-      ...(row.payload.workSignature !== undefined && { workSignature: row.payload.workSignature }),
-    }));
+    //
+    // Audit finding D1 (mirrors `plannerRunRedrive.ts`'s prober-resume filter — finding #13):
+    // `dag.spec.redriven` rows whose `payload.source === "prober_resume"` are the window-pause
+    // prober's atomic spec flip from `in_flight` → `open`; they carry a synthetic
+    // `failureCode: "usage_limit"` only because the spec pair-schema requires a code for an
+    // `open` flip. Folding them into THIS convergence history defeats cycle detection the
+    // same way the planner reader was vulnerable to (`internal@run, usage_limit@*, internal@run`
+    // reads as "a new state appeared between two structural re-drives"). Filter them out at
+    // assembly time so a paused-resumed spec whose runner crashes is still escalated when the
+    // structural crashes repeat.
+    const history: AttemptSignature[] = result.rows
+      .filter((row) => row.payload.source !== "prober_resume")
+      .map((row) => ({
+        failureSignature: orphanFailureSignature(row.payload.failureCode ?? "", row.payload.stage),
+        ...(row.payload.workSignature !== undefined && { workSignature: row.payload.workSignature }),
+      }));
     history.push({ failureSignature: orphanFailureSignature(failure.code, failure.stage) });
     const decision = await decideConvergence(history, (h) =>
       fixedPointRuleJudgment(

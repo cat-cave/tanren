@@ -370,15 +370,29 @@ export abstract class DeployProvisioner implements IntegrationProvisioner {
    * non-404 failure propagates LOUD so the compensation walker records + surfaces
    * the rollback gap. NEVER call from the regular run path.
    *
-   * The synthesized DeployApp carries `name: appId` (Fly identifies apps by
-   * their globally-unique name AND uses it as appId; Vercel uses appId for the
-   * DELETE path so name is irrelevant) and an empty `previewUrlPattern` (the
-   * destroy path reads neither name nor previewUrlPattern beyond the path
-   * construction above).
+   * The synthesized DeployApp carries the REAL `name` (captured at provision time
+   * and persisted alongside the `appId` on the project config — see
+   * {@link artifactFor}) and an empty `previewUrlPattern` (the destroy path reads
+   * neither beyond the path construction above).
+   *
+   * AUDIT FINDING D4: BOTH `appId` AND `appName` are required because the two
+   * providers key on different attributes — Vercel's DELETE goes to
+   * `/v9/projects/{id}`, Fly's to `/v1/apps/{name}`. Fly's `listApps` returns
+   * `appId: app.id ?? app.name`, typically the distinct internal id (e.g.
+   * `fly_app_1`), so the prior `{ appId, name: appId }` synthesis fed Fly's
+   * destroy the WRONG path component — the DELETE 404'd and was swallowed as
+   * "already-gone success", exactly the silent compensation pattern audit #8 was
+   * meant to kill. The caller (the derive's compensation register) reads both
+   * `deployAppId` + `deployAppName` off the persisted project config and passes
+   * them through verbatim.
    */
-  async destroyApp(grant: OrgGrant, appId: string): Promise<void> {
+  async destroyApp(grant: OrgGrant, target: { appId: string; appName: string }): Promise<void> {
     const token = await this.resolveToken(grant);
-    await this.api.destroyApp(grant, token, { appId, name: appId, previewUrlPattern: "" });
+    await this.api.destroyApp(grant, token, {
+      appId: target.appId,
+      name: target.appName,
+      previewUrlPattern: "",
+    });
   }
 
   /**
