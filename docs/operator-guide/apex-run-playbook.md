@@ -375,21 +375,21 @@ PROJ=$(jq -r '.projectId' <<<"$DERIVE")
 echo "PROJ=$PROJ"
 ```
 
-### 5b. The template gate fires here — DO NOT pre-create a template
+### 5b. The fragment composer fires here — DO NOT pre-seed fragments
 
-Project derivation runs the **template gate** (the templating doctrine —
-`docs/roadmap/templating-system.md`): the architecture step queries the registry
-for a validated template matching the captured capabilities, and on a **no-match**
-it triggers **just-in-time template creation** (research → author-from-scratch →
-build → validate-with-negative-controls → publish), then the scaffold **seeds
-from** the created template. There is **no from-scratch-into-a-project path**: a
-no-match either creates a validated template or **halts loud**
-(`TemplateRequiredError` → HTTP `409`).
-
-**Do NOT pre-create or pre-seed a template before an apex run.** apex MUST exercise
-template-creation-from-scratch; if that path breaks, that is exactly the bug apex
-exists to flush. Watch for the durable events `template.selection.no_match` and
-`template.creation.{started,published,failed}` in the run event stream.
+Project derivation runs the **fragment composer** (templating doctrine —
+`docs/roadmap/templating-system.md`): `selectFragmentConfig` over the captured
+lifecycle against the unified library (bundled core + org-scoped fragments from
+F2), then `composeTemplate + materializeTemplate` pushes a fresh seed repo. A
+missing fragment spawns the **per-fragment authoring DAG (F2)** — one
+writer→validate (BNF parse + smoke composition) loop per id, convergent by
+progress; fixed-point halts loud (`FragmentAuthoringFailedError` → HTTP `409
+fragment_authoring_failed`). PR-F #693 collapsed the prior
+`engine/templates/creation/` meta-flow + `template.*` event vocabulary into
+this single fragment-only path; **no from-scratch-into-a-project path, no
+silent skip. Do NOT pre-seed the org `fragments` table** — apex MUST exercise
+F2 end-to-end. Watch `fragment.authoring.{started,succeeded,failed}`, NOT the
+removed `template.selection.*` / `template.creation.*` events.
 
 ### 5b-postlude. The autonomous posture is already on the project (no §2.5 PUT needed)
 
@@ -456,10 +456,10 @@ parallel agent waves to lift the platform a quality tier, then rebuild from fres
 
 The trials (driven over this exact playbook, BYOK Codex, $0) have proven **live**:
 DAG-build from a real Forge interview (rough notes → a multi-spec DAG), walker
-auto-execution, the writer authoring a scaffold, just-in-time template creation,
-cost-discipline (loud NULL costs), `needs_attention` escalation + clean runner
-release, and the never-discard re-drive + recovery paths. Each halt root-caused a
-real bug fixed on `main` — early ones (bootstrap frozen-lockfile #496,
+auto-execution, the writer authoring a scaffold, JIT template materialization
+(pre-PR-F #693), cost-discipline (loud NULL costs), `needs_attention` escalation +
+clean runner release, and the never-discard re-drive + recovery paths. Each halt
+root-caused a real bug fixed on `main` — early ones (bootstrap frozen-lockfile #496,
 runner-sweeper #497, templating re-architecture #498), the non-convergence /
 merge-re-gate / timeout-eradication chain (#585–#609), and the v37–v46 cluster:
 runner-release org-scope leak (#636), writer must regenerate+commit derived

@@ -48,8 +48,12 @@ newest-mtime, which a lock-file heartbeat defeated (#640). Both are now fixed an
 lint extended to flag ssh2 `timeout:`. **apex v49 surfaced the doctrine's next
 extension — task #21**: derive's synchronous wait on the template-build child run
 had no inner-failure circuit breaker, so a downstream runner-INSERT retry loop
-presented as an 8-hour curl hang. The doctrine stands; disguised survivors are
-caught and fixed as found. See `docs/roadmap/timeout-eradication.md`. (2) **The
+presented as an 8-hour curl hang. Task #21A (runner-INSERT idempotency) shipped;
+the #21B child-run progress breaker was OBVIATED by PR-F #693, which collapsed
+templating to fragment-only composition + the in-process F2 authoring loop — the
+template-build child run + its synchronous-wait surface no longer exist. The
+doctrine stands; disguised survivors are caught and fixed (or obviated) as found.
+See `docs/roadmap/timeout-eradication.md`. (2) **The
 native DESIGN subsystem is BUILT + wired** (WS-D1..D4): a domain-general persisted
 `DesignContract` injected into the writer + a domain-aware design oracle re-driving
 the writer in the same DAG (no handoff seam), bound to first-class personas +
@@ -118,9 +122,14 @@ derive's synchronous wait. That close is exactly what apex still has to prove.
    governance API (see the playbook's §2.5 — a single PUT), kick off from rough
    notes, monitor for the next halt.
 3. **`docs/roadmap/templating-system.md`** — the **templating doctrine**: every
-   project DAG seeds from a VALIDATED template; a no-match triggers
-   template-creation just-in-time or halts loud — there is **no from-scratch into a
-   project**. DO NOT pre-create a template; apex must exercise creation-from-scratch.
+   project DAG seeds from a **fragment-composed template**; a missing fragment
+   spawns the per-fragment authoring DAG (F2 — writer → validate, fixed-point
+   convergent) or halts loud (`FragmentAuthoringFailedError` → `409
+   fragment_authoring_failed`). PR-F #693 collapsed the prior creation meta-flow
+   + `template.*` events into this single fragment-only path. DO NOT pre-seed
+   fragments; apex must exercise the F2 authoring path. Watch
+   `fragment.authoring.{started,succeeded,failed}`, never the removed
+   `template.*` events.
 
 The rest of the forward to-do (`ROADMAP.md` §4):
 
