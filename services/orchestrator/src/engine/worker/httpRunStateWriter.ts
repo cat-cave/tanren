@@ -28,6 +28,8 @@ import type {
   MergeRunVerifiedAncestorShaInput,
   RecordCostInput,
   ReconcileCostInput,
+  ResumePausedRunAtomicInput,
+  ResumePausedRunAtomicOutcome,
   RunStateWriter,
   SetRunAuthRefInput,
   SetRunPercolationReexecIdInput,
@@ -229,6 +231,20 @@ export class HttpRunStateWriter implements RunStateWriter {
         }
         return { flipped: true, alreadyTerminal: false };
       },
+    );
+  }
+
+  async resumePausedRunAtomic(input: ResumePausedRunAtomicInput): Promise<ResumePausedRunAtomicOutcome> {
+    // Audit finding #3 — the WINDOW-PAUSE RESUME atomic seam. Routes ALL FOUR
+    // writes (run finalize + run.resumed + spec flip + dag.spec.redriven) to
+    // ONE control-plane endpoint that COMMITs them in a single org-scoped
+    // transaction. The route ALWAYS returns 200 with the full outcome JSON
+    // (matching `/internal/finalize-run-with-event` — never a 204 that
+    // drops specId/projectId) so the caller can drive any follow-on writes.
+    return this.postWithStatus<ResumePausedRunAtomicOutcome>(
+      "/internal/resume-paused-run-atomic",
+      input,
+      (_status, body) => body as ResumePausedRunAtomicOutcome,
     );
   }
 

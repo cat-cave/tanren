@@ -59,3 +59,42 @@ export interface UpdateSpecWithEventOutcome {
   /** Reserved for parity; always false on the spec side (no partial unique index). */
   alreadyTerminal: boolean;
 }
+
+/**
+ * Audit finding #3 — the WINDOW-PAUSE RESUME atomic seam. The pause/resume
+ * doctrine needs BOTH writes to land or fail together: the run flip
+ * (`paused → halted` + `run.resumed`) AND the spec flip (`in_flight → open` +
+ * `dag.spec.redriven`). Two sequential atomic seams (the prior shape)
+ * stranded a run in `runs.status=halted` + `specs.status=in_flight` whenever
+ * a crash landed between them — the prober's `WHERE status='paused'` poll
+ * never re-matched the run and the walker never re-drove the `in_flight`
+ * spec. This input bundles all four writes through ONE org-scoped
+ * transaction so a partial apply is impossible.
+ *
+ * Same pairing-schema discipline as `finalizeRunWithEvent` /
+ * `updateSpecWithEvent`: the run side carries the `paused → halted` finalize
+ * + `run.resumed` event; the spec side carries the `in_flight → open` flip
+ * + `dag.spec.redriven` event. Both pair-shapes are validated at the seam
+ * via `resumePausedRunPairSchema` before any DB I/O.
+ */
+export interface ResumePausedRunAtomicInput {
+  finalize: FinalizeRunInput;
+  resumedEvent: AppendEventInput;
+  spec: SetSpecStatusInput;
+  redrivenEvent: AppendEventInput;
+}
+
+/** The outcome of an atomic window-pause resume. Pairs the per-seam outcomes
+ * the existing run-/spec-level appliers already surface. */
+export interface ResumePausedRunAtomicOutcome {
+  /** True when the run-finalize UPDATE matched a row (`paused`-guarded). */
+  runFinalized: boolean;
+  /** True when the `run.resumed` INSERT was deduped by the partial unique index. */
+  runEventAlreadyTerminal: boolean;
+  /** True when the spec-status UPDATE matched a row (`notFromStatuses`-guarded). */
+  specFlipped: boolean;
+  /** The resumed run's spec_id (the row UPDATE's RETURNING). */
+  specId?: string;
+  /** The resumed run's project_id (the row UPDATE's RETURNING). */
+  projectId?: string;
+}

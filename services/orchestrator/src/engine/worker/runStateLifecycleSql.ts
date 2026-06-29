@@ -383,12 +383,13 @@ export const terminalPairSchema = z
     path: ["event", "eventType"],
   });
 
-// Task #48 atomic seams: `applyFinalizeRunWithEvent` / `applyUpdateSpecWithEvent`
-// + their `runPairSchema` / `specPairSchema` live in `./runStateAtomicSql.ts`
+// Task #48 + audit-finding-#3 atomic seams live in `./runStateAtomicSql.ts`
 // (the 500-line cap keeps this file lean; re-exported here so callers see one namespace).
 export {
   applyFinalizeRunWithEvent,
+  applyResumePausedRunAtomic,
   applyUpdateSpecWithEvent,
+  resumePausedRunPairSchema,
   runPairSchema,
   specPairSchema,
 } from "./runStateAtomicSql.js";

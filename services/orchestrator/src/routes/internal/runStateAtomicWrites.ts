@@ -12,7 +12,9 @@ import type { Context, Hono } from "hono";
 import { z, ZodError } from "zod";
 import {
   applyFinalizeRunWithEvent,
+  applyResumePausedRunAtomic,
   applyUpdateSpecWithEvent,
+  resumePausedRunPairSchema,
   runPairSchema,
   specPairSchema,
 } from "../../engine/worker/runStateLifecycleSql.js";
@@ -158,4 +160,80 @@ export function registerRunStateAtomicRoutes(app: Hono, deps: RunStateWriteRoute
     }
     return c.json(outcome, 200);
   });
+
+  // Audit finding #3 — the WINDOW-PAUSE RESUME atomic endpoint. ALL FOUR
+  // writes (run finalize + run.resumed + spec flip + dag.spec.redriven) land
+  // in ONE org-scoped transaction. Always returns 200 with the full outcome
+  // JSON (matching the finalize-run-with-event endpoint's discipline) so the
+  // caller can drive any follow-on writes.
+  app.post("/internal/resume-paused-run-atomic", async (c) => {
+    if (!authnPeer(c)) {
+      return c.json({ error: "untrusted_peer" }, 401);
+    }
+    const routeParsed = resumePausedRunAtomicRouteShape.safeParse(await c.req.json().catch(() => {}));
+    if (!routeParsed.success) {
+      return c.json({ error: "invalid_resume_paused_run_atomic", issues: routeParsed.error.issues }, 400);
+    }
+    const pairParsed = resumePausedRunPairSchema.safeParse(routeParsed.data);
+    if (!pairParsed.success) {
+      return c.json({ error: "invalid_resume_paused_run_pair", issues: pairParsed.error.issues }, 422);
+    }
+    let outcome: Awaited<ReturnType<typeof applyResumePausedRunAtomic>>;
+    try {
+      outcome = await runWithOrgScope(deps.pool, routeParsed.data.finalize.orgId, (client) =>
+        applyResumePausedRunAtomic(client, routeParsed.data as Parameters<typeof applyResumePausedRunAtomic>[1]),
+      );
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return c.json({ error: "invalid_event_payload", issues: error.issues }, 422);
+      }
+      throw error;
+    }
+    return c.json(outcome, 200);
+  });
 }
+
+// Route shape for the WINDOW-PAUSE RESUME atomic endpoint (audit finding #3).
+// Same shape conventions as the other endpoints — the pair-schema enforces
+// the narrower paused→halted + in_flight→open semantics.
+const resumePausedRunAtomicRouteShape = z
+  .object({
+    finalize: z
+      .object({
+        runId: z.string().min(1),
+        orgId: z.string().min(1),
+        status: z.string().min(1),
+        outcome: z.string().min(1),
+        fromStatuses: z.array(z.string().min(1)),
+      })
+      .strict(),
+    resumedEvent: z
+      .object({
+        runId: z.string().min(1).optional(),
+        taskId: z.string().min(1).optional(),
+        specId: z.string().optional(),
+        projectId: z.string(),
+        eventType: z.string().min(1),
+        payload: z.record(z.string(), z.unknown()),
+      })
+      .strict(),
+    spec: z
+      .object({
+        specId: z.string().min(1),
+        orgId: z.string().min(1),
+        status: z.string().min(1),
+        notFromStatuses: z.array(z.string().min(1)).optional(),
+      })
+      .strict(),
+    redrivenEvent: z
+      .object({
+        runId: z.string().min(1).optional(),
+        taskId: z.string().min(1).optional(),
+        specId: z.string().min(1).optional(),
+        projectId: z.string().min(1),
+        eventType: z.string().min(1),
+        payload: z.record(z.string(), z.unknown()),
+      })
+      .strict(),
+  })
+  .strict();

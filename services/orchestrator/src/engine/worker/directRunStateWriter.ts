@@ -28,6 +28,8 @@ import type {
   MergeRunVerifiedAncestorShaInput,
   RecordCostInput,
   ReconcileCostInput,
+  ResumePausedRunAtomicInput,
+  ResumePausedRunAtomicOutcome,
   RunStateWriter,
   SetRunAuthRefInput,
   SetRunPercolationReexecIdInput,
@@ -57,6 +59,7 @@ import {
   applyFinalizeRunWithEvent,
   applyInsertTask,
   applyMergeRunVerifiedAncestorSha,
+  applyResumePausedRunAtomic,
   applySetRunAuthRef,
   applySetRunPercolationReexecId,
   applySetRunPrUrl,
@@ -68,6 +71,7 @@ import {
   applyUpdateSpecWithEvent,
   applyUpdateTask,
   applyUpdateTaskWithEvent,
+  resumePausedRunPairSchema,
   runPairSchema,
   specPairSchema,
   terminalPairSchema,
@@ -233,6 +237,16 @@ export class DirectRunStateWriter implements RunStateWriter {
     // matching disposition event), so a misuse is rejected BEFORE any DB I/O.
     specPairSchema.parse(input);
     return runWithOrgScope(this.pool, input.spec.orgId, (client) => applyUpdateSpecWithEvent(client, input));
+  }
+
+  async resumePausedRunAtomic(input: ResumePausedRunAtomicInput): Promise<ResumePausedRunAtomicOutcome> {
+    // Audit finding #3 — validate ALL FOUR writes' pair-shapes at the SEAM,
+    // so a misuse is rejected BEFORE any DB I/O (mirrors the existing atomic
+    // surfaces). The applier runs the run-finalize + run.resumed + spec flip
+    // + dag.spec.redriven in ONE org-scoped transaction so a crash mid-apply
+    // rolls back the whole unit (no `halted` + `in_flight` split-write orphan).
+    resumePausedRunPairSchema.parse(input);
+    return runWithOrgScope(this.pool, input.finalize.orgId, (client) => applyResumePausedRunAtomic(client, input));
   }
 
   // --- Autonomy loops: the run/spec CREATE writes (explicit-actor, multi-table). ---
