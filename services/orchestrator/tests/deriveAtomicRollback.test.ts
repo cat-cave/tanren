@@ -84,8 +84,8 @@ interface RecordedCreates {
   reposCreated: Array<{ owner: string; name: string }>;
   reposDeleted: Array<{ owner: string; name: string }>;
   pushedRepos: string[];
-  deploysProvisioned: Array<{ providerKind: string; appId: string }>;
-  deploysDestroyed: Array<{ providerKind: string; appId: string }>;
+  deploysProvisioned: Array<{ providerKind: string; appId: string; appName: string }>;
+  deploysDestroyed: Array<{ providerKind: string; appId: string; appName: string }>;
 }
 
 function newRecorder(): RecordedCreates {
@@ -98,6 +98,11 @@ function newRecorder(): RecordedCreates {
   };
 }
 
+// PRODUCTION SHAPE (audit finding D4): Fly's `listApps` returns
+// `appId: app.id ?? app.name` — typically the DISTINCT internal id (e.g.
+// `fly_app_42`), while the user-visible globally-unique name is the destroy-path
+// key. The prior fixture set `deployAppId === deployAppName`, masking the
+// regression entirely. Distinct values here reproduce the live shape.
 function preparedFlyDeploy(): PreparedGreenfieldDeploy {
   return {
     outcome: {
@@ -106,15 +111,15 @@ function preparedFlyDeploy(): PreparedGreenfieldDeploy {
       providerKind: "deploy.flyio",
       action: "provision",
       mode: "greenfield",
-      secretRefNames: ["secret://deploy/deploy.flyio/org_a-linkly/token"],
+      secretRefNames: ["secret://deploy/deploy.flyio/fly_app_42/token"],
       surfaces: {
-        projectConfigKeys: ["deployProvider", "deployAppId"],
-        deployRef: "deploy.flyio:org_a-linkly",
+        projectConfigKeys: ["deployProvider", "deployAppId", "deployAppName"],
+        deployRef: "deploy.flyio:fly_app_42",
       },
     },
     projectConfig: {
       deployProvider: "deploy.flyio",
-      deployAppId: "org_a-linkly",
+      deployAppId: "fly_app_42",
       deployAppName: "org_a-linkly",
     },
   };
@@ -138,7 +143,11 @@ describe("derive — TRANSACTIONAL ROLLBACK across external resources (task #78,
       {
         pool,
         async prepareDeploy() {
-          rec.deploysProvisioned.push({ providerKind: "deploy.flyio", appId: "org_a-linkly" });
+          rec.deploysProvisioned.push({
+            providerKind: "deploy.flyio",
+            appId: "fly_app_42",
+            appName: "org_a-linkly",
+          });
           return preparedFlyDeploy();
         },
       },
@@ -260,7 +269,11 @@ describe("derive — TRANSACTIONAL ROLLBACK across external resources (task #78,
         {
           pool,
           async prepareDeploy() {
-            rec.deploysProvisioned.push({ providerKind: "deploy.flyio", appId: "org_a-linkly" });
+            rec.deploysProvisioned.push({
+              providerKind: "deploy.flyio",
+              appId: "fly_app_42",
+              appName: "org_a-linkly",
+            });
             return preparedFlyDeploy();
           },
         },
@@ -290,9 +303,16 @@ describe("derive — TRANSACTIONAL ROLLBACK across external resources (task #78,
     ).rejects.toThrow(/duplicate key value violates projects_pkey/iu);
 
     // ONE project repo + ONE deploy app rolled back (LIFO: deploy first, then repo).
+    // Audit finding D4: the rollback carries BOTH `appId` (the internal Fly id) and
+    // `appName` (the globally-unique destroy-path key) — Fly's DELETE routes by name,
+    // and a missing/wrong name would 404 silently.
     expect(rec.reposCreated).toEqual([{ owner: "cat-cave", name: "linkly" }]);
-    expect(rec.deploysProvisioned).toEqual([{ providerKind: "deploy.flyio", appId: "org_a-linkly" }]);
-    expect(rec.deploysDestroyed).toEqual([{ providerKind: "deploy.flyio", appId: "org_a-linkly" }]);
+    expect(rec.deploysProvisioned).toEqual([
+      { providerKind: "deploy.flyio", appId: "fly_app_42", appName: "org_a-linkly" },
+    ]);
+    expect(rec.deploysDestroyed).toEqual([
+      { providerKind: "deploy.flyio", appId: "fly_app_42", appName: "org_a-linkly" },
+    ]);
     expect(rec.reposDeleted).toEqual([{ owner: "cat-cave", name: "linkly" }]);
     expect(state.projects.size).toBe(0);
   });
@@ -361,7 +381,11 @@ describe("derive — TRANSACTIONAL ROLLBACK across external resources (task #78,
       {
         pool,
         async prepareDeploy() {
-          rec.deploysProvisioned.push({ providerKind: "deploy.flyio", appId: "org_a-linkly" });
+          rec.deploysProvisioned.push({
+            providerKind: "deploy.flyio",
+            appId: "fly_app_42",
+            appName: "org_a-linkly",
+          });
           return preparedFlyDeploy();
         },
       },

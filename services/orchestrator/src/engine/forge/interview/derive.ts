@@ -402,18 +402,35 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
       throw new DeployNotLinkedError(preparedDeploy);
     }
     // TRANSACTIONAL ROLLBACK (task #78): register the deploy app compensation
-    // IMMEDIATELY after a successful provision. The `deployAppId` lives on the
-    // project-config keyset the prepareDeploy callback populated; the provider
-    // kind is the same `deploy` resolved above. Absent `destroyDeployApp` ⇒
-    // skip registration (test-only path; production wires it via the route).
+    // IMMEDIATELY after a successful provision. The `deployAppId` + `deployAppName`
+    // BOTH live on the project-config keyset the prepareDeploy callback populated
+    // (see `DeployProvisioner.artifactFor`); the provider kind is the same `deploy`
+    // resolved above. Absent `destroyDeployApp` ⇒ skip registration (test-only path;
+    // production wires it via the route).
+    //
+    // AUDIT FINDING D4: BOTH `appId` AND `appName` are required by the compensation
+    // — Fly's destroy keys on `app.name`, Vercel's on `app.appId`. Fly's `listApps`
+    // returns `appId: app.id ?? app.name` which is typically the distinct internal
+    // id (e.g. `fly_app_1`), so a synthesis that filled `name` from `appId` would
+    // route the DELETE at the wrong path and Fly would 404 — the per-provider arm
+    // would swallow that as "already-gone success" (the silent-compensation pattern
+    // audit #8 was meant to kill, reintroduced by PR #711). Threading the real
+    // `deployAppName` closes the regression.
     const appId = preparedDeploy.projectConfig["deployAppId"];
-    if (input.destroyDeployApp !== undefined && typeof appId === "string" && appId !== "") {
+    const appName = preparedDeploy.projectConfig["deployAppName"];
+    if (
+      input.destroyDeployApp !== undefined &&
+      typeof appId === "string" &&
+      appId !== "" &&
+      typeof appName === "string" &&
+      appName !== ""
+    ) {
       const destroyDeployApp = input.destroyDeployApp;
       const providerKind = deploy.providerKind;
       compensation.register({
         kind: "deploy.app",
-        label: `${providerKind}:${appId}`,
-        rollback: () => destroyDeployApp({ providerKind, appId }),
+        label: `${providerKind}:${appName}`,
+        rollback: () => destroyDeployApp({ providerKind, appId, appName }),
       });
     }
     const persistedConfig = {

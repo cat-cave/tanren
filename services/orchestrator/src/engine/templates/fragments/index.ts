@@ -72,6 +72,7 @@ export {
 } from "./selectFragmentConfig.js";
 export {
   buildFragmentAuthoring,
+  deriveImplicitDependsOn,
   type FragmentAuthoring,
   type FragmentAuthoringDeps,
   type FragmentAuthoringEvents,

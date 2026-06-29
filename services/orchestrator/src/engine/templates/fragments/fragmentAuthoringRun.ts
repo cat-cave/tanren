@@ -29,7 +29,12 @@
 
 import type { ActorContext } from "../../../auth/schemas.js";
 import { composeTemplate } from "./compose.js";
-import { BASE_FRAGMENT_ID, loadFragmentLibrary, RUNTIME_NODE_PNPM_ID } from "./library/index.js";
+import {
+  BASE_FRAGMENT_ID,
+  loadFragmentLibrary,
+  RUNTIME_NODE_PNPM_ID,
+  RUNTIME_RUBY_BUNDLER_ID,
+} from "./library/index.js";
 import {
   assertComposedCiYmlParsesAsCiConfigV1,
   assertScaffoldBootstrapsFromFreshCheckout,
@@ -332,16 +337,66 @@ async function validateFragmentBody(args: {
 }
 
 /** Derive the implicit `dependsOn` list from the parsed ops. The rule (audit
- * finding #11): any `addPackageJsonDep` / `addPackageJsonDevDep` call implies
- * the fragment requires `runtime-node-pnpm` (pkg.json deps only land in the
- * composed VFS under that runtime). A `runtime` fragment is its own runtime —
- * we never imply a self-dependency. */
-function deriveImplicitDependsOn(ops: readonly FragmentOp[], spec: FragmentSpec): readonly string[] {
-  const usesPackageJson = ops.some((op) => op.kind === "dep" || op.kind === "devDep");
-  if (!usesPackageJson) return [];
-  // A runtime fragment IS the runtime — don't synthesize a self-dependency.
+ * findings #11 + H2): any op whose effect implies a runtime MUST surface that
+ * runtime as a `dependsOn`. A runtime fragment is its own runtime — we never
+ * synthesize a self-dependency.
+ *
+ * The IMPLICATIONS are:
+ *  - `addPackageJsonDep` / `addPackageJsonDevDep` ⇒ runtime-node-pnpm
+ *    (pkg.json deps only land under that runtime).
+ *  - `vfs.write("package.json", …)` or `vfs.overwrite("package.json", …)` ⇒
+ *    runtime-node-pnpm (a fragment writing pkg.json directly bypasses the
+ *    addPackageJsonDep API but still requires the node runtime).
+ *  - `vfs.write("Gemfile", …)` or `vfs.overwrite("Gemfile", …)` ⇒
+ *    runtime-ruby-bundler (the Bundler manifest only exists under that runtime).
+ *  - `vfs.appendToJustfileTarget(target, lines)` whose `lines` contain a
+ *    pnpm / npm / yarn / npx / node token ⇒ runtime-node-pnpm.
+ *  - `vfs.appendToJustfileTarget(target, lines)` whose `lines` contain a
+ *    bundle / gem / ruby token ⇒ runtime-ruby-bundler.
+ *
+ * The derivation is the doctrine close on H2: a fragment whose ops imply a
+ * runtime MUST declare that runtime as a dependsOn. The composer's existing
+ * `dependency_runtime_mismatch` then fails LOUD if the surrounding template
+ * pairs the fragment with the wrong runtime, instead of silently dropping the
+ * mismatch + producing a broken composed VFS. */
+export function deriveImplicitDependsOn(ops: readonly FragmentOp[], spec: FragmentSpec): readonly string[] {
+  // A runtime fragment IS the runtime — never imply a self-dependency. Bail
+  // before the per-op walk so a runtime-fragment that happens to author its
+  // own package.json / Gemfile doesn't get a circular self-derived dep.
   if (spec.kind === "runtime") return [];
-  return [RUNTIME_NODE_PNPM_ID];
+  const implied = new Set<string>();
+  for (const op of ops) {
+    if (op.kind === "dep" || op.kind === "devDep") {
+      implied.add(RUNTIME_NODE_PNPM_ID);
+      continue;
+    }
+    if (op.kind === "write" || op.kind === "overwrite") {
+      if (op.path === "package.json") implied.add(RUNTIME_NODE_PNPM_ID);
+      else if (op.path === "Gemfile") implied.add(RUNTIME_RUBY_BUNDLER_ID);
+      continue;
+    }
+    if (op.kind === "just") {
+      if (op.lines.some((line) => lineHasNodeToolingToken(line))) implied.add(RUNTIME_NODE_PNPM_ID);
+      if (op.lines.some((line) => lineHasRubyToolingToken(line))) implied.add(RUNTIME_RUBY_BUNDLER_ID);
+    }
+  }
+  return [...implied];
+}
+
+/** A justfile line invokes node tooling — pnpm / npm / yarn / npx / node — as a
+ * whole-word token (not a substring match, so `node` does NOT match a directory
+ * called `linode`, and a line whose only word is e.g. `cathode` derives no
+ * runtime). The check is intentionally simple: a fragment that authors a
+ * just-target line with one of these tokens REQUIRES the node runtime. */
+function lineHasNodeToolingToken(line: string): boolean {
+  return /(?:^|[\s|;&"'`(])(?:pnpm|npm|yarn|npx|node)(?=$|[\s|;&"'`)])/u.test(line);
+}
+
+/** A justfile line invokes ruby tooling — bundle / gem / ruby — as a whole-word
+ * token. Mirrors {@link lineHasNodeToolingToken}: a fragment authoring a
+ * just-target line with one of these REQUIRES the ruby runtime. */
+function lineHasRubyToolingToken(line: string): boolean {
+  return /(?:^|[\s|;&"'`(])(?:bundle|gem|ruby)(?=$|[\s|;&"'`)])/u.test(line);
 }
 
 async function runSmokeComposition(

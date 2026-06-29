@@ -23,7 +23,13 @@ export interface GreenfieldDeployDestroyDeps {
   secrets: SecretStore;
   orgId: string;
   actorId: string;
-  target: { providerKind: "deploy.vercel" | "deploy.flyio"; appId: string };
+  /**
+   * Carries BOTH `appId` and `appName` (audit finding D4): Vercel keys destroy by
+   * id, Fly by name. The two are distinct under Fly's `listApps` shape (which
+   * returns `appId: app.id ?? app.name`), so dropping one silently mis-routes
+   * the DELETE and lets the 404 swallow hide the gap.
+   */
+  target: { providerKind: "deploy.vercel" | "deploy.flyio"; appId: string; appName: string };
 }
 
 /**
@@ -42,8 +48,8 @@ export async function destroyGreenfieldDeployApp(deps: GreenfieldDeployDestroyDe
   });
   if (grant === undefined) {
     throw new Error(
-      `${target.providerKind}: cannot destroy deploy app '${target.appId}' — the org grant is gone ` +
-        `(unlinked between provision + rollback). The deploy app may be orphaned and need manual cleanup.`,
+      `${target.providerKind}: cannot destroy deploy app '${target.appName}' (id '${target.appId}') — the org grant ` +
+        `is gone (unlinked between provision + rollback). The deploy app may be orphaned and need manual cleanup.`,
     );
   }
   const provisioner: IntegrationProvisioner = buildIntegrationProvisioner(
@@ -53,8 +59,8 @@ export async function destroyGreenfieldDeployApp(deps: GreenfieldDeployDestroyDe
   if (!(provisioner instanceof DeployProvisioner)) {
     throw new Error(
       `${target.providerKind}: registry returned a non-DeployProvisioner — cannot destroy deploy app ` +
-        `'${target.appId}' (rollback impossible; resource may be orphaned).`,
+        `'${target.appName}' (id '${target.appId}'; rollback impossible; resource may be orphaned).`,
     );
   }
-  await provisioner.destroyApp(grant, target.appId);
+  await provisioner.destroyApp(grant, { appId: target.appId, appName: target.appName });
 }
