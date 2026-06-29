@@ -118,7 +118,11 @@ export function interpretOrgFragment(source: OrgFragmentSource): Fragment {
  * The authoring DAG's writer emits this exact shape — the validate stage runs
  * PR-D's isolation test against the parsed fragment to prove it composes.
  */
-type FragmentOp =
+/** The constrained-subset operations a fragment body may declare. Exported so
+ * the fragment-authoring smoke validator can derive an IMPLICIT `dependsOn` from
+ * the parsed ops (audit finding #11 — any `addPackageJsonDep` /
+ * `addPackageJsonDevDep` call ⇒ implicit `runtime-node-pnpm` dependency). */
+export type FragmentOp =
   | { kind: "write"; path: string; content: string }
   | { kind: "overwrite"; path: string; content: string }
   | { kind: "dep"; name: string; version: string }
@@ -202,7 +206,11 @@ function splitArgs(rawArgs: string): string[] {
 
 const CALL_PATTERN = /^vfs\.([a-zA-Z]+)\s*\(([\s\S]*)\)\s*;?$/u;
 
-function parseFragmentBody(bodyTs: string): FragmentOp[] {
+/** Parse a fragment body's `apply()` block into the constrained-subset `FragmentOp`
+ * list. Exported so the fragment-authoring smoke validator can derive implicit
+ * runtime dependencies from the ops (audit finding #11). Throws
+ * `FragmentBodyParseError` on any unsupported call shape. */
+export function parseFragmentBody(bodyTs: string): FragmentOp[] {
   // The body MUST declare a recognizable `apply(...)` block — a body without one
   // is not a fragment module (rejects free-form strings the writer produced
   // outside the constrained subset). The signature may carry a return-type
