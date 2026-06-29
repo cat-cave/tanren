@@ -137,8 +137,11 @@ const harness = {
     };
   },
   // DO's documented terminal statuses — the allocator's `DO_TERMINAL_STATUSES`
-  // allowlist. Each fires `ProvisioningTerminalStateError` IMMEDIATELY.
-  expectedTerminalArms: ["off", "archive"] as const,
+  // allowlist. `archive` is the only remaining terminal arm — task #42 moved
+  // `off` to {@link DO_PROVISIONING_STATUSES} (snapshot-restore intermediate;
+  // see that constant's doc). A genuinely stuck `off` droplet still surfaces
+  // LOUD via the convergence detector's saturation gate, not via this arm.
+  expectedTerminalArms: ["archive"] as const,
 };
 
 // The per-allocator wrapper preserves the inner cause for the conformance suite.
@@ -158,7 +161,9 @@ describe("DigitalOceanAllocator — readiness convergence inner contract", () =>
   });
 
   it("wraps ProvisioningTerminalStateError as DigitalOceanAllocatorError with cause", async () => {
-    const { allocator, request } = harness.buildTerminalArm("off");
+    // task #42: `archive` is the only remaining DO terminal arm — `off` moved
+    // to provisioning (snapshot-restore intermediate; see digitalOceanAllocator.ts).
+    const { allocator, request } = harness.buildTerminalArm("archive");
     const caught = await allocator.allocate(request).catch((error: unknown) => error);
     expect(caught).toBeInstanceOf(DigitalOceanAllocatorError);
     expect((caught as { cause?: unknown }).cause).toBeInstanceOf(ProvisioningTerminalStateError);

@@ -23,15 +23,35 @@ const digitalOceanApiBase = "https://api.digitalocean.com/v2";
  * as an intermediate state on the path to `active`. Anything outside this set OR
  * {@link DO_TERMINAL_STATUSES} is treated as `unknown_state` — fail-closed ratchet
  * (a new DO status forces a code change here, never a silent infinite loop).
+ *
+ * Task #42 — `off` is INTERMEDIATE during a snapshot-restore image lifecycle.
+ * DigitalOcean's documented droplet statuses are the closed set `new`, `active`,
+ * `off`, `archive` (https://docs.digitalocean.com/reference/api/api-reference/),
+ * but the lifecycle a newly-created droplet ACTUALLY traces depends on its
+ * `image`: a base image goes `new` → `active`; a SNAPSHOT-RESTORE image (or any
+ * image whose creation path involves an internal snapshot-copy step) can land
+ * on a transient `off` mid-restore before resuming to `active`. The old
+ * allowlist classified `off` as terminal, which surfaced a false
+ * `terminal_error` for every snapshot-backed droplet — the allocator destroyed
+ * the droplet and escalated mid-restore. `off` lives here now; a genuinely
+ * stuck-powered-off droplet still surfaces LOUD via the convergence detector's
+ * saturation gate (an identical `off|no-ip` signature past the gate → typed
+ * `PersistentProvisioningOutageError`), so we lose no fail-loud coverage.
  */
-const DO_PROVISIONING_STATUSES: ReadonlySet<string> = new Set(["new", "active"]);
+const DO_PROVISIONING_STATUSES: ReadonlySet<string> = new Set(["new", "active", "off"]);
 
 /**
  * DigitalOcean documented terminal statuses — a droplet in these states cannot
- * recover by waiting (powered down / archived). Fires the `terminal_error` arm
- * immediately, never via the fixed-point gate.
+ * recover by waiting. Fires the `terminal_error` arm immediately, never via the
+ * fixed-point gate.
+ *
+ * Task #42 — only `archive` remains terminal. `archive` is a deliberate,
+ * durable powered-down state requested by the operator; a NEW droplet should
+ * never appear in `archive` mid-create, so observing it here is a real terminal
+ * fault. `off` moved to {@link DO_PROVISIONING_STATUSES} (snapshot-restore
+ * intermediate); see that constant's doc for the lifecycle reasoning.
  */
-const DO_TERMINAL_STATUSES: ReadonlySet<string> = new Set(["off", "archive"]);
+const DO_TERMINAL_STATUSES: ReadonlySet<string> = new Set(["archive"]);
 
 /**
  * Typed error for DigitalOcean provisioning failures, so callers (and tests)
