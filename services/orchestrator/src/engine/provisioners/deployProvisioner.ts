@@ -352,23 +352,33 @@ export abstract class DeployProvisioner implements IntegrationProvisioner {
 
   /**
    * DESTROY a deploy app (task #78 — derive atomic rollback). The high-level
-   * COMPENSATION primitive: resolves the org grant token, finds the app under the
-   * grant by its stable id, hands it to the provider's
-   * {@link DeployProviderApi.destroyApp}. IDEMPOTENT: an app that no longer exists
-   * (listApps reports nothing for the id) is a successful no-op (the rollback
-   * semantic is "ensure this is gone"). A provider DELETE failure propagates LOUD
-   * so the compensation walker records + surfaces the rollback gap. NEVER call
-   * from the regular run path — exists only to compensate a partially-failed derive.
+   * COMPENSATION primitive: resolves the org grant token, hands the appId
+   * directly to the provider's {@link DeployProviderApi.destroyApp} as a
+   * synthesized {@link DeployApp}.
+   *
+   * AUDIT FINDING #8 — listApps GATE DROPPED. The prior shape `listApps + find +
+   * skip-if-absent` looked like idempotency but hid THREE real failure classes
+   * behind a silent compensation-success: (1) a paginated listing where the
+   * target id isn't on page 1, (2) a token whose org scope diverged between
+   * provision and rollback, (3) a transient empty list. Each yielded
+   * `destroyApp → return` with the app still alive — the exact "compensation
+   * contract" PR #695 promised to make load-bearing. The per-provider DELETEs
+   * ALREADY 404-idempotently (`flyDeployProvisioner.ts:232`,
+   * `vercelDeployProvisioner.ts:268`), so the gate added zero safety on top.
+   * Now we call the provider DELETE directly; an already-gone app is a 404 the
+   * per-provider arm swallows (the genuine idempotency primitive), while a
+   * non-404 failure propagates LOUD so the compensation walker records + surfaces
+   * the rollback gap. NEVER call from the regular run path.
+   *
+   * The synthesized DeployApp carries `name: appId` (Fly identifies apps by
+   * their globally-unique name AND uses it as appId; Vercel uses appId for the
+   * DELETE path so name is irrelevant) and an empty `previewUrlPattern` (the
+   * destroy path reads neither name nor previewUrlPattern beyond the path
+   * construction above).
    */
   async destroyApp(grant: OrgGrant, appId: string): Promise<void> {
     const token = await this.resolveToken(grant);
-    const app = (await this.api.listApps(grant, token)).find((candidate) => candidate.appId === appId);
-    if (app === undefined) {
-      // The app is already gone — rollback satisfied. The compensation walker is
-      // free to call destroyApp a second time and have it be a clean no-op.
-      return;
-    }
-    await this.api.destroyApp(grant, token, app);
+    await this.api.destroyApp(grant, token, { appId, name: appId, previewUrlPattern: "" });
   }
 
   /**

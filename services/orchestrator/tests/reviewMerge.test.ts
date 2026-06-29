@@ -15,15 +15,16 @@ import {
 import { noopConflictResolver } from "./fixtures/noopConflictResolver.js";
 import { pollReviewForRun } from "../src/engine/workflow/reviewMerge/reviewPolling.js";
 import {
-  approvingReviewProbe,
   AUTHORITY_HEAD_SHA,
   AUTHORITY_MAIN_SHA,
   AUTHORITY_REPO,
+  FIXTURE_TANREN_LOGIN,
+  ReviewMergePool,
+  approvingReviewProbe,
   authorityBundle,
   authorityLand,
-  FIXTURE_TANREN_LOGIN,
+  fakeMergeWriter,
   recordingMergeProbe,
-  ReviewMergePool,
   tanrenSecrets,
   tanrenUserHttp,
   unusedHttp,
@@ -120,8 +121,7 @@ describe("review polling stage", () => {
     const types = events.events.map((e) => e.eventType);
     expect(types).toContain("github.pr.ready");
     expect(types).toContain("review.requested");
-    // The distinct auto marker AND the standard approved event (so downstream
-    // consumers keyed on review.approved react unchanged).
+    // The distinct auto marker AND the standard approved event (downstream consumers unchanged).
     expect(types).toContain("review.auto_approved");
     expect(types).toContain("review.approved");
     expect(pool.tasks.find((t) => t.kind === "review")?.status).toBe("done");
@@ -195,13 +195,13 @@ describe("merge dispatch stage", () => {
     const pool = new ReviewMergePool("direct_merge");
     const events = new FakeEventStore();
     const probe = recordingMergeProbe();
-    // The land is the unconditional `MergeAuthority` + CodeHost ff-only CAS (no host
-    // PR-merge): seed the host + bundle, then assert the landed ref.
+    // The land is the unconditional `MergeAuthority` + CodeHost ff-only CAS (no host PR-merge).
     const { host, landed } = authorityLand();
 
     const result = await mergeForRun({
       pool: pool.asPgPool(),
       eventStore: events,
+      runStateWriter: fakeMergeWriter(pool, events),
       secrets: new FakeSecretStore(),
       resolveConflict: noopConflictResolver,
       githubHttp: unusedHttp(),
@@ -212,9 +212,8 @@ describe("merge dispatch stage", () => {
 
     expect(result.outcome).toBe("merged");
     expect(result.mergeSha).toBe(AUTHORITY_HEAD_SHA);
-    // the authorized commit advanced `main` via the CAS, once. (The `merge.completed`
-    // durable record is the LandFinalizer's write, not a dispatcher event — so the land
-    // oracle is the advanced ref + the `merged` outcome + the finished task.)
+    // The authorized commit advanced `main` via the CAS, once (the LandFinalizer's write;
+    // the land oracle is the advanced ref + the `merged` outcome + the finished task).
     expect(landed).toEqual([AUTHORITY_HEAD_SHA]);
     expect(await host.fetchRef({ repo: AUTHORITY_REPO, remoteBranch: "main" })).toBe(AUTHORITY_HEAD_SHA);
     const types = events.events.map((e) => e.eventType);
@@ -232,6 +231,7 @@ describe("merge dispatch stage", () => {
     const result = await mergeForRun({
       pool: pool.asPgPool(),
       eventStore: events,
+      runStateWriter: fakeMergeWriter(pool, events),
       secrets: new FakeSecretStore(),
       resolveConflict: noopConflictResolver,
       githubHttp: unusedHttp(),
@@ -252,7 +252,6 @@ describe("merge dispatch stage", () => {
   it("merge conflict → merge.conflict + recoverable (running) task, resolver hook invoked", async () => {
     const pool = new ReviewMergePool("direct_merge");
     const events = new FakeEventStore();
-    // §5h: `behind` freshness (never `dirty`); the base-shift hook surfaces the conflict; the resolver declining holds it recoverably (no land).
     const probe = recordingMergeProbe({
       mergeability: { state: "behind", behind: true, baseBranch: "main", headBranch: "tanren/run_1" },
     });
@@ -262,6 +261,7 @@ describe("merge dispatch stage", () => {
     const result = await mergeForRun({
       pool: pool.asPgPool(),
       eventStore: events,
+      runStateWriter: fakeMergeWriter(pool, events),
       secrets: new FakeSecretStore(),
       githubHttp: unusedHttp(),
       runId: "run_1",
@@ -280,15 +280,13 @@ describe("merge dispatch stage", () => {
     expect(landed).toEqual([]);
     const conflict = events.events.find((e) => e.eventType === "merge.conflict");
     expect(conflict?.payload).toMatchObject({ baseBranch: "main", message: "branch conflicts with base" });
-    // recoverable: the merge task stays running for the recovery surface.
     expect(pool.tasks.find((t) => t.kind === "merge")?.status).toBe("running");
   });
 });
 
 describe("external-change detection", () => {
-  // MERGE-SAFETY (self-identity): the identity set is the default bot login PLUS the
-  // login RESOLVED from the active credential (here the apex PAT user `tanren-bot-user`).
-  // The old bogus `app/<appId>` entry is GONE — it was never a real GitHub login.
+  // MERGE-SAFETY (self-identity): identity = default bot login + the login resolved from
+  // the active credential (apex PAT user `tanren-bot-user`). No bogus `app/<appId>` entry.
   const identity = tanrenIdentity(["tanren[bot]", "tanren-bot-user"]);
 
   it("flags a non-Tanren login as an external change", () => {
@@ -351,18 +349,15 @@ describe("posture decision", () => {
 });
 
 describe("governance posture gate at the merge decision", () => {
-  // The PR carries a commit from the RESOLVED Tanren login plus a genuine external
-  // human push (`mallory`) — still blocks.
+  // External: a Tanren commit + a genuine external push (`mallory`) — blocks.
   const externalProbe: ContributorProbe = {
     listContributors: async () => ({ logins: [FIXTURE_TANREN_LOGIN, "mallory"] }),
   };
-  // MERGE-SAFETY (self-identity): a Tanren-only PR whose commits attribute to the
-  // login resolved from the active credential (`FIXTURE_TANREN_LOGIN`) — proceeds.
+  // Internal: a Tanren-only PR attributed to the active credential — proceeds.
   const internalProbe: ContributorProbe = {
     listContributors: async () => ({ logins: [FIXTURE_TANREN_LOGIN] }),
   };
-  // An unattributed external commit (a `.invalid`/unregistered email → `""` login)
-  // — still keys `<unknown>` → external → blocks loudly.
+  // Unattributed: a `.invalid`/unregistered email → `""` login → `<unknown>` external → blocks loudly.
   const unattributedProbe: ContributorProbe = {
     listContributors: async () => ({ logins: [FIXTURE_TANREN_LOGIN, ""] }),
   };
@@ -376,6 +371,7 @@ describe("governance posture gate at the merge decision", () => {
     const result = await mergeForRun({
       pool: pool.asPgPool(),
       eventStore: events,
+      runStateWriter: fakeMergeWriter(pool, events),
       secrets: await tanrenSecrets(),
       resolveConflict: noopConflictResolver,
       githubHttp: tanrenUserHttp(),
@@ -406,6 +402,7 @@ describe("governance posture gate at the merge decision", () => {
     const result = await mergeForRun({
       pool: pool.asPgPool(),
       eventStore: events,
+      runStateWriter: fakeMergeWriter(pool, events),
       secrets: await tanrenSecrets(),
       resolveConflict: noopConflictResolver,
       githubHttp: tanrenUserHttp(),
@@ -432,6 +429,7 @@ describe("governance posture gate at the merge decision", () => {
     const result = await mergeForRun({
       pool: pool.asPgPool(),
       eventStore: events,
+      runStateWriter: fakeMergeWriter(pool, events),
       secrets: await tanrenSecrets(),
       resolveConflict: noopConflictResolver,
       githubHttp: tanrenUserHttp(),
@@ -455,6 +453,7 @@ describe("governance posture gate at the merge decision", () => {
     const result = await mergeForRun({
       pool: pool.asPgPool(),
       eventStore: events,
+      runStateWriter: fakeMergeWriter(pool, events),
       secrets: await tanrenSecrets(),
       resolveConflict: noopConflictResolver,
       githubHttp: tanrenUserHttp(),
@@ -484,6 +483,7 @@ describe("governance posture gate at the merge decision", () => {
     const result = await mergeForRun({
       pool: pool.asPgPool(),
       eventStore: events,
+      runStateWriter: fakeMergeWriter(pool, events),
       secrets: new FakeSecretStore(),
       resolveConflict: noopConflictResolver,
       githubHttp: unusedHttp(),

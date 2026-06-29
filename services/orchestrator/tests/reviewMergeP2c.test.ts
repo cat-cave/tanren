@@ -23,6 +23,7 @@ import {
   AUTHORITY_HEAD_SHA,
   authorityBundle,
   authorityHost,
+  fakeMergeWriter,
   recordingMergeProbe,
   ReviewMergePool,
   unusedHttp,
@@ -101,6 +102,7 @@ describe("P2c-1 speculative-merge-hold (merge stage)", () => {
     const result = await mergeForRun({
       pool: pool.asPgPool(),
       eventStore: events,
+      runStateWriter: fakeMergeWriter(pool, events),
       secrets: new FakeSecretStore(),
       resolveConflict: noopConflictResolver,
       githubHttp: unusedHttp(),
@@ -142,6 +144,7 @@ describe("P2c-1 speculative-merge-hold (merge stage)", () => {
     const result = await mergeForRun({
       pool: pool.asPgPool(),
       eventStore: events,
+      runStateWriter: fakeMergeWriter(pool, events),
       secrets: new FakeSecretStore(),
       resolveConflict: noopConflictResolver,
       githubHttp: unusedHttp(),
@@ -187,6 +190,7 @@ describe("P2c-1 speculative-merge-hold (merge stage)", () => {
     const result = await mergeForRun({
       pool: pool.asPgPool(),
       eventStore: events,
+      runStateWriter: fakeMergeWriter(pool, events),
       secrets: new FakeSecretStore(),
       resolveConflict: noopConflictResolver,
       githubHttp: unusedHttp(),
@@ -258,6 +262,7 @@ describe("P2c-1 speculative-merge-hold (merge stage)", () => {
     const result = await mergeForRun({
       pool: pool.asPgPool(),
       eventStore: events,
+      runStateWriter: fakeMergeWriter(pool, events),
       secrets: new FakeSecretStore(),
       resolveConflict: noopConflictResolver,
       githubHttp: unusedHttp(),
@@ -299,6 +304,7 @@ describe("P2c-1 speculative-merge-hold (merge stage)", () => {
     const result = await mergeForRun({
       pool: pool.asPgPool(),
       eventStore: events,
+      runStateWriter: fakeMergeWriter(pool, events),
       secrets: new FakeSecretStore(),
       resolveConflict: noopConflictResolver,
       githubHttp: unusedHttp(),
@@ -343,6 +349,7 @@ describe("P2c-1 speculative-merge-hold (merge stage)", () => {
     const result = await mergeForRun({
       pool: pool.asPgPool(),
       eventStore: events,
+      runStateWriter: fakeMergeWriter(pool, events),
       secrets: new FakeSecretStore(),
       resolveConflict: noopConflictResolver,
       githubHttp: unusedHttp(),
@@ -374,6 +381,7 @@ describe("P2c-1 speculative-merge-hold (merge stage)", () => {
     const result = await mergeForRun({
       pool: pool.asPgPool(),
       eventStore: events,
+      runStateWriter: fakeMergeWriter(pool, events),
       secrets: new FakeSecretStore(),
       githubHttp: unusedHttp(),
       runId: "run_1",
@@ -408,6 +416,7 @@ describe("P2c-1 speculative-merge-hold (merge stage)", () => {
     const result = await mergeForRun({
       pool: pool.asPgPool(),
       eventStore: events,
+      runStateWriter: fakeMergeWriter(pool, events),
       secrets: new FakeSecretStore(),
       githubHttp: unusedHttp(),
       runId: "run_1",
@@ -440,6 +449,7 @@ describe("P2c-1 speculative-merge-hold (merge stage)", () => {
     const result = await mergeForRun({
       pool: pool.asPgPool(),
       eventStore: events,
+      runStateWriter: fakeMergeWriter(pool, events),
       secrets: new FakeSecretStore(),
       resolveConflict: noopConflictResolver,
       githubHttp: unusedHttp(),

@@ -177,16 +177,14 @@ export type SubtaskLoopOutcome =
       kind: "passed";
       plannerTaskId: string;
       subtasks: ReadonlyArray<PlanSubtask>;
-      // The new DAG specs triage emitted (routed-to-spec work items + any velocity-
-      // deferred kept items). The caller (workstream-1 spec-creating contract)
-      // materializes these; empty when none.
+      // The new DAG specs triage emitted (routed-to-spec + velocity-deferred kept items).
+      // The workstream-1 spec-creating caller materializes these; empty when none.
       newSpecs: ReadonlyArray<NewSpecRequest>;
       loopCount: number;
     }
   | {
       // SPEC-LOOP REDESIGN: replaces `retry_budget_exhausted`. The convergence answerer
-      // reported N CONSECUTIVE stalls — a human action (rework the spec / stronger
-      // model / fix the env) is the genuine next step.
+      // reported N CONSECUTIVE stalls — a human action is the genuine next step.
       kind: "convergence_stalled";
       loopCount: number;
       consecutiveStalls: number;
@@ -195,7 +193,7 @@ export type SubtaskLoopOutcome =
   | { kind: "halted"; loopCount: number; reason: string }
   | {
       // BUDGET PAUSE (audit §3.7a): the project crossed the configured ceiling (or the
-      // gate must fail closed) DURING this in-flight run — the per-iteration check stops an
+      // gate must fail closed) DURING this in-flight run — per-iteration check stops an
       // ALREADY-RUNNING cohort spending past the ceiling. Halts + parks the spec
       // (requeueable); raising the ceiling + requeue resumes it (escapable, never bricked).
       kind: "budget_paused";
@@ -242,13 +240,13 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
 
   const plannerTaskId = `task_${randomUUID()}`;
   const creditState: CreditState = { atStart: null };
-  // Absent-default: the BALANCED posture (block on P0/P1, park for a human); projects
-  // wanting autonomous posture set it via the governance API on the project config.
+  // Default: BALANCED posture (block on P0/P1, park for a human); autonomous-posture
+  // projects set it via the governance API.
   const posture = input.auditPosture ?? DEFAULT_AUDIT_POSTURE;
   const convergencePolicy = input.convergencePolicy ?? DEFAULT_CONVERGENCE_POLICY;
 
-  // finalize: run-end accounting + cost reconcile, routed through EVERY return so the
-  // terminal outcome is preserved on a best-effort reconcile blip (audit §3.7d).
+  // finalize: run-end accounting + cost reconcile through EVERY return — the terminal
+  // outcome is preserved on a best-effort reconcile blip (audit §3.7d).
   const finalize = async (outcome: SubtaskLoopOutcome): Promise<SubtaskLoopOutcome> => {
     try {
       await observeRunAccounting(input, appendEvent, plannerTaskId, creditState);
@@ -277,7 +275,9 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
     // it crosses the ceiling (or the gate fails closed); halt PARKS the spec, requeueable.
     const budgetPause = await checkIterationBudget(input);
     if (budgetPause !== null) {
-      await emitBudgetPause(input, appendEvent, plannerTaskId, budgetPause);
+      // Audit finding #4: pause routes through `markPlannerFailed` (atomic row +
+      // `task.failed`) — the sister site PR #705's six-site lift missed.
+      await emitBudgetPause(input, appendEvent, planCtx, budgetPause);
       return await finalize(budgetPausedOutcome(budgetPause, loopCount));
     }
     const windowOutcome = await checkWindowPreflight(input, appendEvent, plannerTaskId, loopCount, creditState);
@@ -458,8 +458,8 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
       });
     }
 
-    // progress → loop again. Seed the planner with the kept work as steering, carry the
-    // current findings forward as the next loop's prior, and re-plan.
+    // progress → loop. Seed the planner with the kept work as steering + carry the
+    // current findings forward as the next loop's prior.
     rejectionHistory.push(triageToRejection(triage.routing.tasksHere, plan.subtasks));
     priorFindings = findings;
     loopCount += 1;

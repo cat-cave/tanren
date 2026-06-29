@@ -18,11 +18,12 @@ import {
 } from "../src/engine/workflow/reviewMerge/index.js";
 import { noopConflictResolver } from "./fixtures/noopConflictResolver.js";
 import {
+  FIXTURE_TANREN_LOGIN,
+  ReviewMergePool,
   authorityBundle,
   authorityHost,
-  FIXTURE_TANREN_LOGIN,
+  fakeMergeWriter,
   recordingMergeProbe,
-  ReviewMergePool,
   tanrenSecrets,
   tanrenUserHttp,
 } from "./reviewMerge.fixtures.js";
@@ -81,6 +82,7 @@ describe("mergeForRun governance — autonomous-tier known-bot auto-approve (GAP
     const result = await mergeForRun({
       pool: pool.asPgPool(),
       eventStore: events,
+      runStateWriter: fakeMergeWriter(pool, events),
       secrets: await tanrenSecrets(),
       resolveConflict: noopConflictResolver,
       githubHttp: tanrenUserHttp(),
@@ -112,6 +114,7 @@ describe("mergeForRun governance — autonomous-tier known-bot auto-approve (GAP
     const result = await mergeForRun({
       pool: pool.asPgPool(),
       eventStore: events,
+      runStateWriter: fakeMergeWriter(pool, events),
       secrets: await tanrenSecrets(),
       resolveConflict: noopConflictResolver,
       githubHttp: tanrenUserHttp(),

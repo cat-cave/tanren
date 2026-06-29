@@ -73,6 +73,7 @@ import {
   context,
   fakePool,
   mergeability,
+  noopFinalizeWriter,
   reGate,
   recordingEventStore,
 } from "./fixtures/mergeDispatcherConflictFixtures.js";
@@ -107,6 +108,8 @@ function landDispatcher(args: {
     ...(args.staticBundle !== undefined && { mergeAuthority: args.staticBundle }),
     ...(args.buildBundle !== undefined && { buildMergeAuthority: args.buildBundle }),
     ...(args.baseShiftRebase !== undefined && { baseShiftRebase: args.baseShiftRebase }),
+    // Audit finding #5: the dispatcher's finalize requires a writer for the atomic terminal pair.
+    runStateWriter: noopFinalizeWriter(),
   } as unknown as MergeForRunInput;
   const deps: DispatcherDeps = {
     input,

@@ -23,6 +23,7 @@ import {
   context,
   fakePool,
   mergeability,
+  noopFinalizeWriter,
   recordingEventStore,
 } from "./fixtures/mergeDispatcherConflictFixtures.js";
 
@@ -81,6 +82,8 @@ function buildScenario(args: {
     reGateCi,
     ...(args.reGateGateRework !== undefined && { reGateGateRework: args.reGateGateRework }),
     buildMergeAuthority,
+    // Audit finding #5: the dispatcher's finalize requires a writer for the atomic terminal pair.
+    runStateWriter: noopFinalizeWriter(),
   } as unknown as MergeForRunInput;
   const deps: DispatcherDeps = {
     input,
@@ -170,6 +173,8 @@ describe("§5 v42: no re-gate when the gated head IS the current head (no needle
       },
       // The gate verdict IS for the live head (`sha-feat`) — the common, no-mismatch case.
       mergeAuthority: bundle(host, { landed, gatedHeadSha: "sha-feat" }),
+      // Audit finding #5: the dispatcher's finalize requires a writer for the atomic terminal pair.
+      runStateWriter: noopFinalizeWriter(),
     } as unknown as MergeForRunInput;
     const deps: DispatcherDeps = {
       input,
