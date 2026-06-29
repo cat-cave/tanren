@@ -13,7 +13,7 @@ import { CodexUsageLimitError } from "../providers/codex.js";
 import type { EventName, EventPayload } from "../events/index.js";
 import { removeRunWorkspaceDir, WorkspaceBootstrapError } from "../workspace/index.js";
 import { AncestorNotReadyError } from "../dag/jjLocalIntegration.js";
-import { applyTerminalOutcome, type DispositionSeams } from "./plannerRunRedrive.js";
+import { applyTerminalOutcome, type DispositionSeams, finalizeRedriveAtomicSeam } from "./plannerRunRedrive.js";
 import { finalizePauseAtomicSeam } from "./plannerRunPauseSeam.js";
 import type { NonPassDetail, TerminalOutcome } from "./runFinalizeAuthority.js";
 import { resolveWorkflowThrow, type WorkflowErrorDisposition } from "./workflowErrorDisposition.js";
@@ -206,6 +206,10 @@ function dispositionSeams(
     // task #82 — window-pause auto-resume: see `plannerRunPauseSeam.ts`.
     finalizePauseForCapacityAtomic: (event) =>
       finalizePauseAtomicSeam({ input, finalizeRunState, context, appendEvent, orgId }, event),
+    // apex v67 fixes #119 + #120 — RE-DRIVE halt observability (runs UPDATE +
+    // `run.failed` event + job_queue.failure_message): see `plannerRunRedriveSeam.ts`.
+    finalizeRedriveAtomic: (in_) =>
+      finalizeRedriveAtomicSeam({ input, finalizeRunState, context, appendEvent, orgId }, in_),
   };
 }
 
