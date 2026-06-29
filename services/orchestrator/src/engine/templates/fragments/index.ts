@@ -84,9 +84,15 @@ export {
 } from "./fragmentAuthoringRun.js";
 export { buildFragmentAuthorerPrompt, wrapProviderFragmentAuthorer } from "./providerFragmentAuthorer.js";
 export {
+  assertComposedCiYmlParsesAsCiConfigV1,
+  assertScaffoldBootstrapsFromFreshCheckout,
+} from "./runtimeValidation.js";
+export {
   FragmentBodyParseError,
+  type FragmentOp,
   interpretOrgFragment,
   loadUnifiedFragmentLibrary,
   type LoadOrgFragments,
   type OrgFragmentSource,
+  parseFragmentBody,
 } from "./unifiedLibrary.js";

@@ -128,24 +128,31 @@ not linked for the org, creation fails loudly with `deploy_provider_missing` or
 `deploy_not_linked`; Tanren must not create an apex project that has no real path
 to a live deploy.
 
-## Templating: every project DAG seeds from a VALIDATED template
+## Templating: every project DAG seeds from a fragment-composed template
 
 apex creates a greenfield project — and a greenfield project under Tanren's
 doctrine does **not** scaffold from scratch into an empty repo. EVERY project DAG
-executes against a known-solid **validated template**. On a no-template no-match,
-project init triggers **template-creation just-in-time** (research → author →
-build → validate-with-negative-controls → publish) and the scaffold **seeds from**
-the created template — or **halts loud** (`TemplateRequiredError` → `409`). The
-from-scratch authoring survives only as the BUILD step of template-creation:
-**"the from-scratch flow IS the create-a-new-template flow."** Full doctrine:
-`docs/roadmap/templating-system.md`.
+seeds from a **fragment-composed template**: derive runs `selectFragmentConfig`
+over the captured lifecycle against the unified library (bundled core fragments +
+the org-scoped fragments persisted by F2), composes the VFS deterministically, and
+materializes it into a fresh seed repo BEFORE the writer runs. When the composed
+config references a fragment the library doesn't have, derive spawns the
+**per-fragment authoring DAG (F2)** — one run per missing fragment, each a
+writer → validate (BNF parse + smoke composition) loop that converges by progress
+to a validated `Fragment` persisted into the org's `fragments` table. A
+fixed-point failure halts loud (`FragmentAuthoringFailedError` → `409
+fragment_authoring_failed`); there is **no silent skip** and **no from-scratch
+fallback**. Full doctrine: `docs/roadmap/templating-system.md` (PR-F #693
+collapsed templating to this single fragment-only scaffold path — the
+`engine/templates/creation/` meta-flow + the `template.*` event vocabulary are
+gone).
 
-**Do NOT pre-create a template before an apex run.** apex MUST exercise
-template-creation-from-scratch; if it breaks, that is the bug apex exists to flush
-(it is how #498 was found — an early run surfaced that the templating system had
-never been exercised; subsequent runs through v36 hardened creation/budget
-integrity, e.g. #592/#605). Let the no-match fire and watch
-`template.selection.no_match` + `template.creation.*` in the event stream.
+**Do NOT pre-seed fragments before an apex run.** apex MUST exercise the F2
+authoring path end-to-end; if it breaks, that is the bug apex exists to flush
+(the modern shape of how #498 was found — an early run surfaced that the
+templating system had never been exercised). Let the no-match fire and watch
+`fragment.authoring.{started,succeeded,failed}` in the event stream — NOT the
+removed `template.selection.*` / `template.creation.*` events.
 
 ## The run rhythm (drive → halt → fix-on-`main` → drain → rebuild → v(N+1))
 
@@ -189,7 +196,9 @@ autonomous software org**. The proofs:
 - **standing code-integrity** — the adversarial Codex audit over the platform code.
 
 The runs **through v49** advanced the autonomy-loop (DAG-build, walker
-auto-execution, template-creation, the never-discard re-drive + recovery paths),
+auto-execution, just-in-time template materialization — pre-PR-F #693, via the
+now-collapsed creation meta-flow; post-PR-F, via fragment composition + F2
+per-fragment authoring — and the never-discard re-drive + recovery paths),
 run-discipline, and code-integrity proofs. The loops **past a CI-green merged PR**
 (deploy → issue-loop → audits → CI-intelligence → notifications) remain to
 demonstrate live in the next run.

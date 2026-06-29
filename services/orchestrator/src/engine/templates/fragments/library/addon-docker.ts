@@ -1,6 +1,18 @@
 // ADDON — docker. Stack-agnostic: emits a Dockerfile + .dockerignore tuned to the
 // chosen runtime (node-pnpm vs ruby-bundler). No dependency on a specific runtime;
 // inspects `config.runtime` to choose the FROM image.
+//
+// FRESH-CHECKOUT BOOTSTRAP (audit finding #10 — extends task #84 / apex v63 to the
+// docker build surface). The Dockerfile's install line must use the GENERATING
+// primitive (e.g. `pnpm install --no-frozen-lockfile`, plain `bundle install`) —
+// `--frozen-lockfile` / `--deployment` would `ERR_PNPM_NO_LOCKFILE` (or bundler's
+// equivalent) on a freshly composed scaffold (no pnpm-lock.yaml / Gemfile.lock
+// committed yet). PR #704's seed-grading writer is explicitly forbidden from
+// regenerating or committing the lockfile, so a frozen install in the Dockerfile
+// reproduces the v63 halt class inside the docker build. The same
+// `assertScaffoldBootstrapsFromFreshCheckout` runtime helper (the lifted PR #701
+// helper) that protects the justfile bootstrap recipe now scans Dockerfile RUN
+// lines too — both surfaces share the same correctness contract.
 
 import { type Fragment, type TemplateConfig, type VirtualFileSystem } from "../types.js";
 
@@ -19,11 +31,14 @@ coverage
 
 function nodeDockerfile(): string {
   return `# Multi-stage node-pnpm build — runs the project's \`just build\` and ships the dist/.
+# Install line uses --no-frozen-lockfile so the first build (no committed lockfile
+# yet) succeeds; pnpm generates the lockfile and still respects it on subsequent runs.
+# See addon-docker.ts header comment for the audit-finding-#10 rationale.
 FROM node:24-alpine AS builder
 RUN corepack enable
 WORKDIR /app
 COPY package.json pnpm-lock.yaml* ./
-RUN pnpm install --frozen-lockfile
+RUN pnpm install --no-frozen-lockfile
 COPY . .
 RUN pnpm build
 
@@ -38,6 +53,8 @@ CMD ["node", "dist/index.js"]
 
 function rubyDockerfile(): string {
   return `# Ruby-bundler build — installs gems, exposes the rake-built artifact.
+# Plain \`bundle install\` (no --deployment / --frozen) — generates Gemfile.lock on
+# first run, matches the runtime fragment's \`just bootstrap\` recipe.
 FROM ruby:3.4-alpine
 RUN apk add --no-cache build-base
 WORKDIR /app

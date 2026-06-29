@@ -319,17 +319,22 @@ cite); the merge-engine cutover rationale is
   from-scratch-into-a-project; do NOT pre-create a template) is
   `docs/roadmap/templating-system.md`. It spends real credits under the $50 ceiling
   on already-provisioned Tier-1 creds (BYOK Codex runs at $0).
-- **The next tanren-code layer to fix on `main` (apex-v49 finding, task #21).** v49
-  drove past this session's env + code cleanups into the live writer-checker-auditor
-  LLM loop running real scaffold work and halted on a legitimate pre-session
-  tanren-code finding: a runner-INSERT retry loop
+- **The next tanren-code layer to fix on `main` (apex-v49 finding, task #21
+  — RESOLVED).** v49 drove past this session's env + code cleanups into the live
+  writer-checker-auditor LLM loop running real scaffold work and halted on a
+  legitimate pre-session tanren-code finding: a runner-INSERT retry loop
   (`duplicate key value violates unique constraint "runners_pkey"`) between the
-  run-executor and the job-reaper, compounded by derive's synchronous wait having no
-  inner-failure circuit breaker (8-hour curl hang). Task #21 tracks both fixes: (a)
-  make runner-INSERT idempotent so the reaper and the executor cannot race the same
-  primary key, (b) extend the timeout-eradication doctrine into derive's
-  synchronous-wait surface with a progress / sign-of-life-based circuit breaker (no
-  wall-clock kill; loud halt on a downstream stall). The doctrine extension lands in
+  run-executor and the job-reaper, compounded by derive's synchronous wait on the
+  template-build child run having no inner-failure circuit breaker (8-hour curl
+  hang). Both fixes have landed: (a) runner-INSERT idempotency in
+  `services/allocator/**` (task #21A), and (b) the derive synchronous-wait surface
+  was OBVIATED by PR-F #693, which collapsed templating to fragment-only
+  composition + the in-process F2 authoring loop — the template-build child run +
+  its `engine/templates/creation/childRunProgressProbe.ts` progress breaker were
+  deleted; derive's replacement synchronous wait on `runFragmentAuthoring` is the
+  F2 writer→validate fixed-point convergent loop, which is progress-based by
+  construction (no wall-clock kill; loud `FragmentAuthoringFailedError` at the
+  fixed point). The doctrine of record (with #21B reframed as OBVIATED) lives in
   `docs/roadmap/timeout-eradication.md`.
 - **tanren-owns-the-engine — cutover COMPLETE, §7 decomposition LANDED; one
   net-keep residual.** The cutover is the single live path (§1): the
@@ -388,10 +393,14 @@ cite); the merge-engine cutover rationale is
   **apex v49 surfaced the doctrine's next extension — task #21**: derive's
   synchronous wait on the template-build child run had no inner-failure circuit
   breaker, so a downstream runner-INSERT retry loop presented as an 8-hour curl
-  hang. Task #21 extends the progress / sign-of-life model into the derive
-  synchronous-wait surface (no wall-clock kill; loud halt on a downstream stall).
-  The doctrine stands: every safety / hang-detection mechanism must be PROGRESS /
-  SIGN-OF-LIFE based; disguised survivors are caught and fixed as found. The as-built
+  hang. #21A (runner-INSERT idempotency) shipped; **#21B was OBVIATED by PR-F
+  #693**, which collapsed templating to fragment-only composition + the in-process
+  F2 authoring loop — the template-build child run + its
+  `engine/templates/creation/childRunProgressProbe.ts` progress breaker were
+  deleted, and derive's replacement synchronous wait (`runFragmentAuthoring`) is
+  progress-based + fixed-point convergent by construction. The doctrine stands:
+  every safety / hang-detection mechanism must be PROGRESS / SIGN-OF-LIFE based;
+  disguised survivors are caught and fixed (or obviated) as found. The as-built
   inventory + doctrine of record is `docs/roadmap/timeout-eradication.md`.
 - **Type-aware lint strictness ratchet — `no-unsafe-type-assertion` tail (~310
   casts).** The type-aware pass (`oxlint --type-aware`, config
