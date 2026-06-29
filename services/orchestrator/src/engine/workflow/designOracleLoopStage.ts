@@ -5,6 +5,7 @@
 import { randomUUID } from "node:crypto";
 import type { ActorContext } from "../../auth/schemas.js";
 import type { ActorRef } from "../state/actor.js";
+import type { SpecMode } from "../state/spec.js";
 import type { DesignOracleAnswer } from "../answerers/schemas/index.js";
 import type { Finding } from "../contracts/findings.js";
 import { emitStageTiming } from "../observability/index.js";
@@ -26,6 +27,10 @@ export interface DesignOracleLoopStageInput extends StageBase {
   actor: ActorContext;
   actorRef: ActorRef;
   baselineSha: string;
+  // OPTIONAL spec writer-prompt MODE (audit round-2 H1) — threaded through to the
+  // oracle so a `specialize_seed` spec gets the seeded-mode tail block scoping the
+  // oracle off the pre-existing seed surfaces. Absent / `from_scratch` ⇒ no block.
+  specMode?: SpecMode;
 }
 
 /**
@@ -65,6 +70,7 @@ export async function runDesignOracleLoopStage(
       adapter: args.adapter,
       baselineSha: args.baselineSha,
       workspacePath: args.workspacePath,
+      ...(args.specMode !== undefined && { specMode: args.specMode }),
     }),
   );
   if (!result.hasContract) {

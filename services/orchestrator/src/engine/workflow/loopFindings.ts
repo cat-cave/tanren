@@ -10,6 +10,7 @@ import {
   type ValidateEmittedSpecsInput,
 } from "../forge/specQuality/index.js";
 import type { PlanSubtask } from "../answerers/schemas/index.js";
+import type { SpecMode } from "../state/spec.js";
 import type { PlannerRejectionFeedback } from "./planner/planner.js";
 import type { RoutedWorkItem } from "./loopPolicy.js";
 import type { NewSpecRequest } from "./subtaskLoop.js";
@@ -142,22 +143,37 @@ export async function gateTriagedSpecs(
   });
 }
 
-/** Map a triaged work item onto the `NewSpecRequest` the caller materializes as a DAG spec. */
-export function routedToNewSpec(r: {
-  item: {
-    id: string;
-    title: string;
-    body: string;
-    severity: NewSpecRequest["severity"];
-    findingIds: ReadonlyArray<string>;
-  };
-}): NewSpecRequest {
+/**
+ * Map a triaged work item onto the `NewSpecRequest` the caller materializes as a DAG spec.
+ *
+ * Audit round-2 H1: `parentSpecMode` is the PARENT spec's writer-prompt mode, preserved
+ * into the child remediation spec so the spec-creating contract that materializes it
+ * carries the mode into the new spec row's `mode` column. Without this, a child
+ * remediation spec from a `specialize_seed` parent would default to `from_scratch` and
+ * the writer/checker/auditor/oracle would all run with the wrong standing instructions
+ * — the same v64-class contradiction PR #708 closed at the prompt layer would re-emerge
+ * one level down. `undefined` ⇒ DEFAULT_SPEC_MODE on the consumer side (matching the
+ * parent's absent-default semantics).
+ */
+export function routedToNewSpec(
+  r: {
+    item: {
+      id: string;
+      title: string;
+      body: string;
+      severity: NewSpecRequest["severity"];
+      findingIds: ReadonlyArray<string>;
+    };
+  },
+  parentSpecMode?: SpecMode,
+): NewSpecRequest {
   return {
     id: r.item.id,
     title: r.item.title,
     body: r.item.body,
     severity: r.item.severity,
     findingIds: [...r.item.findingIds],
+    ...(parentSpecMode !== undefined && { parentSpecMode }),
   };
 }
 

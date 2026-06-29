@@ -2,10 +2,8 @@
 // TRIAGE, and CONVERGENCE. Each owns a single answerer invocation (task row, event
 // append, cost record) + maps the answer onto the deterministic loop decision. Split
 // out of subtaskLoop.ts so every module stays under the 500-line architecture cap.
-//
 // All three answerers are READ-ONLY + strict-JSON-schema: a malformed answer throws
-// AnswererSchemaValidationError (loud), exactly like the checker/auditor. The cost +
-// event + task-row accounting is preserved at every stage.
+// AnswererSchemaValidationError (loud); cost + event + task-row accounting preserved.
 import { randomUUID } from "node:crypto";
 import type pg from "pg";
 import type { ActorContext } from "../../auth/schemas.js";
@@ -20,6 +18,7 @@ import {
 } from "../answerers/schemas/index.js";
 import type { Finding, FindingSeverity } from "../contracts/findings.js";
 import type { ActorRef } from "../state/actor.js";
+import type { SpecMode } from "../state/spec.js";
 import { runDesignOracleLoopStage } from "./designOracleLoopStage.js";
 import type { AuditPostureConfig } from "../config/shared.js";
 import { emitStageTiming } from "../observability/index.js";
@@ -164,6 +163,10 @@ export interface PostAuditFindingStagesInput extends StageBase {
   // contract exists — no kill-switch). Both findings merge into the SAME triage input.
   demoRunEnabled: boolean;
   designOracleActor?: { actor: ActorContext; actorRef: ActorRef };
+  // OPTIONAL spec mode (audit round-2 H1) — threaded to the designOracle so a
+  // `specialize_seed` spec gets the seeded-mode tail block (mirrors PR #708's
+  // checker/auditor). Demo-run is "does it work" runtime — no specMode.
+  specMode?: SpecMode;
 }
 
 /**
@@ -210,6 +213,8 @@ export async function runPostAuditFindingStages(args: PostAuditFindingStagesInpu
       actorRef: args.designOracleActor.actorRef,
       baselineSha: args.baselineSha,
       appendEvent: args.appendEvent,
+      // Audit round-2 H1: thread specMode → seeded-mode tail block on the oracle.
+      ...(args.specMode !== undefined && { specMode: args.specMode }),
     });
     findings.push(...designOracle.findings);
   }
